@@ -557,6 +557,7 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/ansi.o \
                $(BUILD)/userland/shared/klineedit.o \
                $(BUILD)/userland/shared/completion.o \
+               $(BUILD)/userland/shared/histsearch.o \
                $(BUILD)/userland/shared/ttf.o \
                $(BUILD)/userland/shared/klineedit_cases.o \
                $(BUILD)/userland/shared/etc_config_cases.o \
@@ -783,6 +784,7 @@ uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
 # programs use it.
 ULIB_SO_sum = $(BUILD)/lib/libhash.so
 ULIB_SO_wget = $(LIBHTTP_SO) $(LIBSSL_SO)
+ULIB_SO_hwdata = $(LIBHTTP_SO) $(LIBSSL_SO)
 
 ulibso = $(ULIB_SO_$(notdir $(1)))
 

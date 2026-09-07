@@ -780,3 +780,43 @@ Eight things that bite:
   budget. `rm -r` then removes the collected directories in REVERSE,
   which is deepest-first -- a post-order walk with no recursive
   function.
+
+## CTRL-R IS ONE LOOP, COMPILED TWICE, AND HISTORY IS APPENDED
+
+`kernel/lib/histsearch.c` runs the incremental reverse search in both
+rings, behind a `struct histsearch_env` -- the same shape
+`completion.c` already uses for Tab, and for the same reason: two
+implementations of "what does Ctrl-R mean" drift, and the drift shows up
+as the two shells answering differently to the same key.
+
+**THE ENGINE OWNS THE SEARCH; A FRONT END OWNS THE SCREEN.** That is
+klineedit's split again. The two consoles paint very differently -- one
+has `vga_set_color()` and `vga_cols()`, the other has escape sequences
+-- and neither difference is a difference about the search. So `paint`
+is a callback and there is no drawing in the engine at all.
+
+**THE BLOCKER THAT STOPPED THIS FOR MONTHS HAD EXPIRED.** `tosh.c`'s
+`KLINE_SEARCH` arm said Ctrl-R "needs a second prompt line, which needs
+the caret control redraw() does not have". It needs neither: the kernel
+shell has always done it on ONE row, and both terminals parse `ESC[K`
+now. That is the same argument that had already killed the identical
+claim beside Ctrl-L. **When a comment explains why something is not
+built, check whether its reason is still true before believing it.**
+
+## RING-3 HISTORY PERSISTS, AND IT APPENDS RATHER THAN REWRITING
+
+`/etc/tosh_history`, and both halves of that are decisions.
+
+**A DIFFERENT FILE FROM THE KERNEL SHELL'S**, which writes
+`/etc/history`. bash and zsh keep separate histories for the same
+reason: they are different shells, and merging them would put `#`
+commands into a `$` shell's Ctrl-R where most of them do not exist.
+
+**APPENDED A LINE AT A TIME, never rewritten.** The kernel shell
+rewrites its file wholesale, which is safe for one console and would
+silently lose lines the moment a second shell did it -- and there are as
+many ring-3 shells as there are Terminal tabs. One line is one write, so
+this needs no locking; it is `shopt -s histappend` plus `history -a`,
+the arrangement every multi-window bash user ends up with. Nothing trims
+the file, and nothing needs to: `uhist_load()` streams it and the ring
+keeps the last `UHIST_MAX` lines for free.

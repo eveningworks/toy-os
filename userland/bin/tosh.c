@@ -33,7 +33,9 @@
 #include "lib/uhistory.h"
 #include "klineedit.h"
 #include "lib/ucomplete.h"
-#include "signal_abi.h" // SIGCHLD, struct k_sigaction -- see main()
+#include "histsearch.h" // the Ctrl-R loop, shared with the kernel shell
+#include "signal_abi.h" // SIGCHLD, SIGWINCH, struct k_sigaction -- see main()
+#include <stdio.h>     // snprintf -- redraw() builds two escape sequences
 #include <unistd.h>
 
 // Static, not local: `struct kline_edit` is ~1.2 KiB and `struct
@@ -59,10 +61,11 @@ static const struct kline_mem ed_mem = { ed_alloc, ed_free, TOSH_CMD_MAX - 1 };
 static struct uhistory   g_hist;
 static struct tosh       g_sh;
 
-// How much of the line the screen currently shows. Redrawing needs it
-// because erasing is done by overwriting with spaces, so the painter
-// has to know how far the last paint reached.
-static int g_shown;
+// Which SCREEN ROW of the last paint the caret was left on, counted from
+// the row the prompt starts on. Redrawing needs it to get back to the top
+// of a line that wrapped; erasing needs nothing, since ESC[J clears to
+// the end of the display.
+static int g_row_shown;
 
 static void out_fd1(void *ctx, const char *text, int len) {
     (void)ctx;
@@ -98,34 +101,74 @@ static const char *prompt(void) {
     return g_prompt;
 }
 
+// The terminal's width in columns, asked of the kernel rather than
+// assumed. A window that has been resized reports the new width, because
+// the emulator sends SYS_TCSETWINSZ on every resize -- and SIGWINCH is
+// what tells this shell to come back and ask again.
+static int term_cols(void) {
+    struct tty_winsize ws;
+    if (sys_tcgetwinsz(0, &ws) < 0 || ws.cols < 20) return 80;
+    return ws.cols;
+}
+
+static void cursor_up(int n) {
+    if (n <= 0) return;
+    char buf[16];
+    snprintf(buf, sizeof buf, "\x1b[%dA", n);
+    put(buf);
+}
+
 // Repaints prompt + line and leaves the caret at ed.cursor.
 //
-// TWO PASSES, using only '\r'. The kernel front end moves the caret
-// with vga_cursor_move(), which is a non-destructive seek a ring-3
-// process cannot reach -- there is no drawing syscall and there should
-// not be one. What fd 1 does carry is '\r' (vga.c's fb_putc sets col to
-// 0), so: return to column 0, paint the whole line plus enough spaces
-// to cover whatever the previous paint left behind, then return to
-// column 0 again and paint only the prefix. The caret ends up exactly
-// where the cursor is, having moved only by writing characters.
+// **IT COUNTS SCREEN ROWS, because a line can be wider than the window.**
+// This used to be two passes using only '\r', on the reasoning that a
+// ring-3 process cannot reach vga_cursor_move() and fd 1 carries no
+// cursor control. The first half is still true; the second stopped being
+// true when the TTY layer landed -- both terminals under this shell run
+// kernel/lib/ansi.c, so ESC[J, ESC[A and ESC[G are as available here as
+// the ESC[2J Ctrl-L already sends.
 //
-// THE LIMIT, stated because it is real: '\r' returns to the start of
-// the CURRENT ROW, so a prompt plus line longer than the console is
-// wide repaints wrongly. A terminal solves this with escape sequences
-// it parses itself, which is the TTY layer's job (docs/roadmap.md) --
-// not something to bolt onto vga_putc for one caller.
+// THE TRAP THIS SHAPE AVOIDS: the two terminals disagree about where the
+// caret sits after a row has been filled to its last column (this one
+// wraps lazily, on the next character), so nothing here may depend on an
+// automatic wrap. Rows are ended with an explicit '\n' and the caret is
+// then placed from a row/column this function computed itself.
+//
+// g_row_shown is how the NEXT repaint finds the top of this one; a path
+// that prints anything else must reset it (end_line(), fresh_prompt()).
 static void redraw(void) {
+    int w = term_cols();
+    const char *p = prompt();
+    int plen  = (int)strlen(p);
+    int total = plen + g_ed.len;
+    int cur   = plen + g_ed.cursor;
+
+    cursor_up(g_row_shown);
     put("\r");
-    put(prompt());
-    write(1, g_ed.buf, (size_t)g_ed.len);
+    put("\x1b[J");   // this row and every row below it
 
-    for (int i = g_ed.len; i < g_shown; i++) write(1, " ", 1);
+    int rows = total / w;   // one past the last content row when total
+                            // fills its last row exactly -- which is the
+                            // row the caret then belongs on
+    for (int r = 0; r <= rows; r++) {
+        int from = r * w, to = from + w;
+        if (to > total) to = total;
+        if (from < plen)
+            write(1, p + from, (size_t)((to < plen ? to : plen) - from));
+        if (to > plen) {
+            int a = from > plen ? from : plen;
+            write(1, g_ed.buf + (a - plen), (size_t)(to - a));
+        }
+        if (r < rows) put("\n");
+    }
 
-    put("\r");
-    put(prompt());
-    write(1, g_ed.buf, (size_t)g_ed.cursor);
+    int cur_row = cur / w;
+    cursor_up(rows - cur_row);
+    char col[16];
+    snprintf(col, sizeof col, "\x1b[%dG", cur % w + 1);
+    put(col);
 
-    g_shown = g_ed.len;
+    g_row_shown = cur_row;
 }
 
 // --- news from a background job ----------------------------------------
@@ -146,23 +189,26 @@ static volatile int g_child_news;
 
 static void on_sigchld(int sig) { (void)sig; g_child_news = 1; }
 
+// The window changed size. Same one-flag repertoire, and for the same
+// reason -- a handler may not print. What it costs is one interrupted
+// read(); the loop repaints on the way past.
+static volatile int g_size_news;
+
+static void on_sigwinch(int sig) { (void)sig; g_size_news = 1; }
+
 // What the flag means when the shell gets round to it: erase the line
 // being typed, print whatever the jobs did, and put the line back.
 //
-// **THE LINE HAS TO BE ERASED, NOT JUST SCROLLED PAST.** A report
-// printed on top of a half-typed command leaves the old characters on
-// screen with nothing to say they are stale, and redraw()'s two passes
-// only overwrite as far as g_shown -- they cannot know something else
-// wrote to the row in between. So the row is blanked first, by the same
-// '\r'-and-spaces means redraw() uses (this shell has no cursor
-// addressing; see redraw()'s comment on why).
+// **THE LINE HAS TO BE ERASED, NOT JUST SCROLLED PAST.** A report printed
+// on top of a half-typed command leaves the old characters on screen with
+// nothing to say they are stale, and the line may occupy several rows.
 static void reap_and_repaint(void) {
     g_child_news = 0;
 
+    cursor_up(g_row_shown);
     put("\r");
-    int width = (int)strlen(prompt()) + g_shown;
-    for (int i = 0; i < width; i++) put(" ");
-    put("\r");
+    put("\x1b[J");
+    g_row_shown = 0;
 
     tosh_reap_jobs(&g_sh);
     redraw();
@@ -174,18 +220,95 @@ static void reap_and_repaint(void) {
 // source the kernel shell runs; everything here is this shell's own idea
 // of how to show the result.
 //
-// **THE COLUMNS ARE FITTED TO THE REAL TERMINAL WIDTH**, which this
-// shell can ask for and the kernel shell cannot -- apps/shell.c prints a
-// fixed 4x16 grid and its own comment says that is because it "can't
-// actually query" the console width. A window that has been resized
-// reports the new width, because the emulator sends SYS_TCSETWINSZ on
-// every resize.
+// **THE COLUMNS ARE FITTED TO THE REAL TERMINAL WIDTH** (term_cols()),
+// which this shell can ask for and the kernel shell cannot -- apps/shell.c
+// prints a fixed 4x16 grid and its own comment says that is because it
+// "can't actually query" the console width.
 static void end_line(void);
 
-static int term_cols(void) {
-    struct tty_winsize ws;
-    if (sys_tcgetwinsz(0, &ws) < 0 || ws.cols < 20) return 80;
-    return ws.cols;
+// Ends the line and runs it. TWO CALLERS: Enter, and a Ctrl-R search the
+// user ended with Enter -- which in bash runs the match straight away
+// rather than merely recalling it. Extracted rather than duplicated,
+// because a second path into tosh_run_line() is a second place the
+// terminal has to be handed back correctly.
+static void fresh_prompt(void);
+
+static void accept_line(void) {
+    end_line();
+    if (g_ed.len > 0) {
+        uhist_add(&g_hist, g_ed.buf);
+        uhist_persist(g_ed.buf);
+        // THE TERMINAL GOES BACK TO HOW IT WAS FOR THE CHILD, and raw
+        // again afterwards. A child inherits this terminal, and a
+        // program that knows nothing about terminals -- `cat` with no
+        // arguments is the one that proves it -- needs canonical mode
+        // with echo: it is where Ctrl-D means end of input and where the
+        // person can see what they are typing. readline brackets a
+        // command exactly this way.
+        sys_tcsetattr(0, &g_tio_saved);
+        tosh_run_line(&g_sh, g_ed.buf);
+        sys_tty_raw(0);
+    }
+    fresh_prompt();
+}
+
+// Ctrl-R. THE LOOP IS SHARED (kernel/lib/histsearch.c) -- the kernel
+// shell runs the same one, so there is one answer to what Ctrl-R means.
+// What is here is the three things a front end owns: its history, its
+// blocking key read, and how the search row is painted.
+//
+// The blocker this replaces was real when it was written and had
+// expired: the comment here said Ctrl-R "needs a second prompt line,
+// which needs the caret control redraw() does not have". It needs
+// neither. The kernel shell has always done it on ONE row, and both
+// terminals under this shell parse ESC[K now -- the same argument that
+// let Ctrl-L send ESC[2J.
+static int hs_count(void *ctx) { (void)ctx; return uhist_count(&g_hist); }
+
+static const char *hs_entry(void *ctx, int i) {
+    (void)ctx;
+    return uhist_at(&g_hist, i);
+}
+
+static int hs_getkey(void *ctx) {
+    (void)ctx;
+    for (;;) {
+        char c;
+        int64_t n = read(0, &c, 1);
+        if (n == 1) return (unsigned char)c;
+        // A resize or a finished job lands here as EINTR. Neither ends a
+        // search: swallow it and read again, having repainted nothing --
+        // the next paint is one keystroke away and drawing the search row
+        // over a job report would be worse than the report scrolling.
+        if (n < 0 && sys_errno() == EINTR) continue;
+        return -1;
+    }
+}
+
+static void hs_paint(void *ctx, const char *pattern, const char *match) {
+    (void)ctx;
+    put("\r\x1b[K");
+    put("(reverse-i-search)`");
+    put(pattern);
+    put("': ");
+    if (match) put(match);
+}
+
+// Leaves the matched line in g_ed, and RUNS it when the user pressed
+// Enter -- both shells answer the same way because both ask the same
+// engine which key ended the search.
+static void reverse_search(void) {
+    static const struct histsearch_env env = {
+        0, hs_count, hs_entry, hs_getkey, hs_paint,
+    };
+    const char *match = 0;
+    enum histsearch_result r = histsearch_run(&env, &match);
+
+    put("\r\x1b[K");
+    g_row_shown = 0;
+    if (r != HISTSEARCH_CANCELLED && match) kline_set(&g_ed, match);
+    if (r == HISTSEARCH_ACCEPTED) accept_line();
+    else redraw();
 }
 
 static void complete_line(void) {
@@ -223,7 +346,7 @@ static void complete_line(void) {
     }
     if (r.truncated) put("... (more matches not shown)\n");
 
-    g_shown = 0;
+    g_row_shown = 0;
     redraw();
 }
 
@@ -231,11 +354,15 @@ static void complete_line(void) {
 // anything that prints (a command's output, ^C) so it does not land on
 // top of the line being edited.
 static void end_line(void) {
-    put("\r");
-    put(prompt());
-    write(1, g_ed.buf, (size_t)g_ed.len);
+    // Park the caret past the last character first: redraw() leaves it
+    // wherever ed.cursor is, and a '\n' from the middle of a wrapped
+    // line would start the next output on top of the rest of it.
+    int save = g_ed.cursor;
+    g_ed.cursor = g_ed.len;
+    redraw();
+    g_ed.cursor = save;
     put("\n");
-    g_shown = 0;
+    g_row_shown = 0;
 }
 
 // TELL THE TERMINAL WHERE THIS SHELL IS STANDING.
@@ -277,7 +404,7 @@ static void fresh_prompt(void) {
     kline_free(&g_ed);          // the previous line's buffer and undo stack
     kline_init_mem(&g_ed, &ed_mem);
     uhist_reset(&g_hist);
-    g_shown = 0;
+    g_row_shown = 0;
     redraw();
 }
 
@@ -328,6 +455,7 @@ int main(int argc, char **argv) {
     }
 
     uhist_init(&g_hist);
+    uhist_load(&g_hist);
 
     // --- job control, in two lines -----------------------------------
     //
@@ -389,6 +517,17 @@ int main(int argc, char **argv) {
     };
     sys_sigaction(SIGCHLD, &chld, 0);
 
+    // SIGWINCH, the same way and for the same reason. Without a handler
+    // installed the kernel does not raise it at all (its default action
+    // is to be ignored), so this is also what stops a window drag
+    // interrupting the read of every program that does not care.
+    struct k_sigaction winch = {
+        .handler  = (uint64_t)(uintptr_t)on_sigwinch,
+        .restorer = (uint64_t)(uintptr_t)__sigrestore,
+        .flags    = 0,
+    };
+    sys_sigaction(SIGWINCH, &winch, 0);
+
     // The console is CLAIMED BY READING IT, and the foreground group is
     // set at the same moment (kernel/tty.h) -- so nothing here has to
     // call tcsetpgrp: the first read(0, ...) below does it, and
@@ -429,6 +568,13 @@ int main(int argc, char **argv) {
         // kernel's delivery point, not anything this loop does.
         if (g_child_news) reap_and_repaint();
 
+        // A RESIZE ONLY EVER REPAINTS -- it never asks what changed.
+        // redraw() reads the width itself, so the flag's whole job is to
+        // say "come round again". The rows it erases first are the ones
+        // the OLD width produced, which is why the erase happens before
+        // anything is measured.
+        if (g_size_news) { g_size_news = 0; redraw(); }
+
         // Blocks. The kernel parks this process on SCHED_WAIT_KEY and
         // the keyboard IRQ releases it, so an idle shell costs nothing
         // -- `ps` shows it blocked, not ready.
@@ -439,10 +585,12 @@ int main(int argc, char **argv) {
         // nothing to do, and SIGCHLD is deliberately installed WITHOUT
         // SA_RESTART (see main()) so that it does: the read fails with
         // EINTR, the news gets printed, and the read is entered again.
+        // SIGWINCH rides the same path, for the same reason.
         // Without this branch the -1 would fall into the `n <= 0` exit
         // below and a finished background job would close the shell.
         if (n < 0 && sys_errno() == EINTR) {
             if (g_child_news) reap_and_repaint();
+            if (g_size_news) { g_size_news = 0; redraw(); }
             continue;
         }
         if (n <= 0) break; // a console has no EOF; this is an error
@@ -459,25 +607,9 @@ int main(int argc, char **argv) {
                 redraw();
                 break;
 
-            case KLINE_ACCEPT: {
-                end_line();
-                if (g_ed.len > 0) {
-                    uhist_add(&g_hist, g_ed.buf);
-                    // THE TERMINAL GOES BACK TO HOW IT WAS FOR THE
-                    // CHILD, and raw again afterwards. A child inherits
-                    // this terminal, and a program that knows nothing
-                    // about terminals -- `cat` with no arguments is the
-                    // one that proves it -- needs canonical mode with
-                    // echo: it is where Ctrl-D means end of input and
-                    // where the person can see what they are typing.
-                    // readline brackets a command exactly this way.
-                    sys_tcsetattr(0, &g_tio_saved);
-                    tosh_run_line(&g_sh, g_ed.buf);
-                    sys_tty_raw(0);
-                }
-                fresh_prompt();
+            case KLINE_ACCEPT:
+                accept_line();
                 break;
-            }
 
             case KLINE_CANCEL:
                 end_line();
@@ -529,7 +661,7 @@ int main(int argc, char **argv) {
                 // split klineedit.h describes: the core decides WHAT
                 // Ctrl-L means and each front end owns HOW.
                 put("\x1b[2J\x1b[H");
-                g_shown = 0;
+                g_row_shown = 0;
                 redraw();
                 break;
 
@@ -538,9 +670,7 @@ int main(int argc, char **argv) {
                 break;
 
             case KLINE_SEARCH:
-                // Ctrl-R needs a second prompt line to type the query
-                // into, which needs the caret control redraw() does not
-                // have. Also a roadmap item; ignored rather than faked.
+                reverse_search();
                 break;
 
             case KLINE_IGNORED:

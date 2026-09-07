@@ -701,6 +701,8 @@ whenever a headline here tells you something you did not already know.
 - **TWO PROCESSES SHARE MEMORY THROUGH A NAME, AND THE NAME IS THE HARD PART**
 - **SOUND IS MIXED BY A SERVICE, AND THE CARD IS STILL EXCLUSIVE**
 - **HTTPS IS TWO LIBRARIES, AND NEITHER MAY LIVE IN `userland/lib/`**
+- **A RESIZE IS A SIGNAL, AND ONLY WHEN THE SIZE ACTUALLY MOVED**
+- **A LINE LONGER THAN THE TERMINAL IS WIDE NEEDS ROWS, NOT `\r`**
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 
 ### GUI, Toykit and the desktop
@@ -857,6 +859,9 @@ whenever a headline here tells you something you did not already know.
 - **A WIDGET IS NAMED BY ITS ID, NEVER BY ITS POSITION IN THE ARRAY.**
 - **A TEST MUST NOT DERIVE GEOMETRY THE APP ALREADY KNOWS.**
 - **A PERSISTED VIEW STATE IS INHERITED BY EVERY LATER RUN.**
+- **THE TERMINAL HAS A SCROLLBAR, IN A RESERVED GUTTER, AND THE GRID NARROWS FOR IT.**
+- **A MOTION WITH NO BUTTON HELD IS IGNORED, NOT TREATED AS A RELEASE.**
+- **A SELECTION IS ANCHORED IN THE BUFFER, NOT ON THE SCREEN.**
 
 ### Storage, the filesystem, and /etc
 
@@ -933,6 +938,8 @@ whenever a headline here tells you something you did not already know.
 - **AN EVERYDAY COMMAND IS A `/bin` PROGRAM, NOT A BUILTIN, AND THE KERNEL'S OWN COPIES LIVE BEHIND ONE NAME: `rescue`.**
 - **A PROGRAM STARTED BY A BARE NAME PRINTS NOTHING EXTRA WHEN IT SUCCEEDS -- AND `run <name>` STILL DOES.**
 - **TAB COMPLETION IS ONE ENGINE COMPILED TWICE, AND A RING SUPPLIES A `struct completion_env`**
+- **CTRL-R IS ONE LOOP, COMPILED TWICE, AND HISTORY IS APPENDED**
+- **RING-3 HISTORY PERSISTS, AND IT APPENDS RATHER THAN REWRITING**
 - **TAB COMPLETION IN COMMAND POSITION IS BUILTINS PLUS ALL OF `PATH`, DEDUPLICATED AND SORTED, WITH NO DIRECTORIES.**
 - **`/bin/tosh -c <command>` RUNS ONE LINE AND EXITS**
 - **`#` IS RING 0 AND `$` IS RING 3, AND THE PROMPT IS WHERE THAT LIVES**
@@ -1427,7 +1434,8 @@ cost".
   `highmem_consume.py` (six processes holding 5 GiB of frames above
   4 GiB at once),
   `hires_test.py`, `https_test.py` (wget over TLS, and what it
-  refuses),
+  refuses), `hwdata_test.py` (the id databases refuse a bad download,
+  against a local server),
   `init_test.py`, `install_test.py`, `jobs_test.py`, `kbd_test.py`,
   `keyboard_paths_test.py`, `kvm_soak.py`, `live_boot_test.py`,
   `ls_test.py`, `mem_stress.py`, `mkpart_test.py`,

@@ -10,13 +10,13 @@
 // hold it at file scope: USERLAND_CFLAGS carries -Wframe-larger-than
 // and a big local array in ring 3 steps over the single guard page.
 //
-// It does NOT persist. The kernel shell writes /etc/history; doing the
-// same here would mean two writers of one file with no locking, and
-// the file is not the interesting half of this change. It is a named
-// roadmap item rather than a silent omission.
+// IT PERSISTS BY APPENDING, and to its own file. See the header for why
+// both halves of that are the answer rather than a shortcut.
 #include "lib/uhistory.h"
 #include <string.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 void uhist_init(struct uhistory *h) {
     h->count = 0;
@@ -87,4 +87,66 @@ void uhist_reset(struct uhistory *h) {
 const char *uhist_last(const struct uhistory *h) {
     if (h->count == 0) return 0;
     return h->entries[slot(h, 1)];
+}
+
+int uhist_count(const struct uhistory *h) { return h->count; }
+
+const char *uhist_at(const struct uhistory *h, int i) {
+    if (i < 0 || i >= h->count) return 0;
+    // Index 0 is the OLDEST, so it is `count` steps behind the newest.
+    return h->entries[slot(h, h->count - i)];
+}
+
+// --- the file ---------------------------------------------------------
+
+void uhist_persist(const char *line) {
+    if (!line || !line[0]) return;
+    int fd = open(UHIST_FILE, O_WRONLY | O_CREAT | O_APPEND);
+    if (fd < 0) return;   // a read-only or RAM-only root is not an error here
+    // ONE write, not two. The line and its terminator go out together so
+    // that two shells appending at the same moment cannot interleave
+    // half a line each -- which is the whole reason this appends rather
+    // than rewriting.
+    // Static: a ring-3 frame is budgeted at 2 KB and these two are not
+    // re-entrant -- one shell, one file.
+    static char buf[TOSH_HIST_LINE_MAX];
+    size_t n = strlen(line);
+    if (n > sizeof buf - 2) n = sizeof buf - 2;
+    memcpy(buf, line, n);
+    buf[n++] = '\n';
+    write(fd, buf, n);
+    close(fd);
+}
+
+void uhist_load(struct uhistory *h) {
+    int fd = open(UHIST_FILE, O_RDONLY);
+    if (fd < 0) return;
+
+    // STREAMED, not read whole: the file grows by a line per command
+    // forever and nothing trims it, so a buffer sized for "the history"
+    // would be sized for a guess. What is kept is the LAST UHIST_MAX
+    // lines, which uhist_add()'s own ring does for free -- every line is
+    // added and the early ones fall off the back.
+    static char chunk[512], line[TOSH_HIST_LINE_MAX];
+    int len = 0;
+    for (;;) {
+        long n = read(fd, chunk, sizeof chunk);
+        if (n <= 0) break;
+        for (long i = 0; i < n; i++) {
+            char c = chunk[i];
+            if (c == '\n') {
+                line[len] = '\0';
+                if (len) uhist_add(h, line);
+                len = 0;
+            } else if (len < (int)sizeof line - 1) {
+                line[len++] = c;
+            }
+            // A line longer than the buffer is TRUNCATED rather than
+            // split, because a split would put half a command in the
+            // ring as if it were a whole one.
+        }
+    }
+    if (len) { line[len] = '\0'; uhist_add(h, line); }
+    close(fd);
+    uhist_reset(h);
 }

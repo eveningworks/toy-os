@@ -42,7 +42,7 @@ in check_layout.py changes with it.)
 | `/bin/wm/system` | The desktop's own (`about`) | build | present |
 | `/bin/wm/apps` | Windowed applications (`calculator`, `notepad`, `uterm`) | build | present |
 | `/bin/wm/demos` | Things that exist to be looked at or tested (`shapes`, `uidemo`) | build | present |
-| `/etc` | Config: `toyos.conf`, `storage.conf`, `net.conf`, `timezones`, `history` | boot | present |
+| `/etc` | Config: `toyos.conf`, `storage.conf`, `net.conf`, `hwdata.conf`, `timezones`, `history` (the kernel shell's) and `tosh_history` (ring 3's, appended) | boot | present |
 | `/etc/kbs` | Generated keyboard layout data (`us`, `se`) | build | optional |
 | `/etc/config.d` | One descriptor per registered config file (`Name`/`Path`/`Description`) -- see `api/config_file.h` | boot | present |
 | `/etc/services.d` | One descriptor per service init starts (`Name`/`Exec`/`Target`/`Restart`) -- see `data/etc/services.d/README.md` | build | present |

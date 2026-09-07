@@ -60,4 +60,44 @@ void uhist_reset(struct uhistory *h);
 // needs the previous command's last word.
 const char *uhist_last(const struct uhistory *h);
 
+// --- reading the ring in order ----------------------------------------
+//
+// OLDEST FIRST, which is the order api/histsearch.h asks for: index 0 is
+// the oldest entry kept and count - 1 the newest. That is the opposite
+// of uhist_prev()'s walk and deliberately so -- browsing is relative to
+// where the user is, searching is over the whole ring.
+int         uhist_count(const struct uhistory *h);
+const char *uhist_at(const struct uhistory *h, int i);
+
+// --- the file -----------------------------------------------------------
+//
+// **EACH SHELL APPENDS ITS OWN LINES; NOBODY REWRITES THE FILE.** The
+// kernel shell rewrites /etc/history wholesale, which is safe for one
+// console and would silently lose lines the moment a second shell did
+// it -- and there are as many ring-3 shells as there are Terminal tabs.
+// Appending one line at a time is `shopt -s histappend` plus bash's
+// `history -a`, the arrangement every multi-window bash user ends up
+// with, and it needs no locking because a line is one write.
+//
+// A DIFFERENT FILE FROM THE KERNEL SHELL'S, for the same reason bash and
+// zsh keep separate ones: they are different shells with different
+// histories, and merging them would put `#` commands in a `$` shell's
+// Ctrl-R where most of them do not exist.
+#define UHIST_FILE "/etc/tosh_history"
+
+// The longest line the file carries. TOSH_CMD_MAX is what the shell can
+// run, and this matches it so that a command which ran can be recalled
+// -- a smaller number here would store commands back SHORTER than they
+// were typed, which is the exact failure that sized the editor's own
+// entries to their lines (see UHIST_MAX above).
+#define TOSH_HIST_LINE_MAX 1024
+
+// Fills the ring from UHIST_FILE, oldest first, keeping the last
+// UHIST_MAX lines. Missing file is not an error -- it is a fresh disk.
+void uhist_load(struct uhistory *h);
+
+// Appends one line. Called per accepted line rather than at exit,
+// because a Terminal tab is closed by a signal and has no exit to run at.
+void uhist_persist(const char *line);
+
 #endif

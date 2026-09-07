@@ -28,6 +28,7 @@
 #include "shell_internal.h"
 #include "apps.h"
 #include "shell_complete.h"
+#include "histsearch.h" // the Ctrl-R loop, shared with /bin/tosh
 
 // Ctrl-<letter> arrives as that letter's control code -- see keyboard.h
 // on the encoding. Only reverse_search() below has to name one
@@ -506,75 +507,48 @@ static void shell_complete_line(void) {
 }
 
 // Ctrl-R: incremental reverse history search, with bash's own prompt
-// shape. Runs its own key loop rather than becoming another mode inside
-// the editor core, because it genuinely IS a different editor -- the
-// keys build a search pattern, not the command line.
+// shape. THE LOOP IS SHARED (kernel/lib/histsearch.c) -- what is here is
+// the three things a console owns: its history, its blocking key read,
+// and how the search row is painted.
 //
-// Leaves the matched line (or the original, on cancel) in g_ed.
-// Returns 1 if the user pressed Enter, which in bash runs the match
-// immediately rather than just recalling it.
+// Leaves the matched line (or the original, on cancel) in g_ed. Returns
+// 1 if the user pressed Enter, which in bash runs the match immediately
+// rather than just recalling it.
+static int hs_count(void *ctx) { (void)ctx; return history_count; }
+
+static const char *hs_entry(void *ctx, int i) {
+    (void)ctx;
+    return (i >= 0 && i < history_count) ? history[i] : 0;
+}
+
+static int hs_getkey(void *ctx) { (void)ctx; return keyboard_getchar(); }
+
+// '\r' + a full row of spaces + '\r' clears the row without needing a
+// cursor-addressing primitive, and the whole row is repainted each time
+// because both the pattern and the match change length unpredictably.
+static void hs_paint(void *ctx, const char *pattern, const char *match) {
+    (void)ctx;
+    vga_putc('\r');
+    for (uint32_t i = 0; i + 1 < vga_cols(); i++) vga_putc(' ');
+    vga_putc('\r');
+    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    vga_write("(reverse-i-search)`");
+    vga_write(pattern);
+    vga_write("': ");
+    vga_set_color(shell_fg, VGA_BLACK);
+    if (match) vga_write(match);
+}
+
 static int reverse_search(void) {
-    static char pattern[LINE_MAX];   // one physical console; see g_ed
-    int plen = 0;
-    pattern[0] = '\0';
-
-    static char original[LINE_MAX];
-    k_strlcpy(original, g_ed.buf, sizeof(original));
-
-    int match = -1;               // index into history[], or -1 for none
-    int from = history_count - 1; // where the next search starts
-
-    for (;;) {
-        // Redraw the whole search line each time: both the pattern and
-        // the match change length unpredictably, so there's nothing
-        // worth updating incrementally. '\r' + spaces + '\r' clears the
-        // row without needing a cursor-addressing primitive.
-        vga_putc('\r');
-        for (uint32_t i = 0; i + 1 < vga_cols(); i++) vga_putc(' ');
-        vga_putc('\r');
-        vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
-        vga_write("(reverse-i-search)`");
-        vga_write(pattern);
-        vga_write("': ");
-        vga_set_color(shell_fg, VGA_BLACK);
-        if (match >= 0 && history[match]) vga_write(history[match]);
-
-        int key = keyboard_getchar();
-
-        if (key == '\r' || key == '\n') {
-            if (match >= 0 && history[match]) kline_set(&g_ed, history[match]);
-            vga_putc('\n');
-            return 1; // bash runs it straight away
-        }
-        if (key == 0x1B) { // Esc -- keep the match, but edit it instead of running
-            if (match >= 0 && history[match]) kline_set(&g_ed, history[match]);
-            vga_putc('\n');
-            return 0;
-        }
-        if (key == CTRL_KEY('c') || key == CTRL_KEY('g')) { // abandon the search
-            kline_set(&g_ed, original);
-            vga_putc('\n');
-            return 0;
-        }
-
-        if (key == CTRL_KEY('r')) {
-            from = (match >= 0) ? match - 1 : history_count - 1; // next older match
-        } else if (key == '\b' || key == 0x7F) {
-            if (plen > 0) pattern[--plen] = '\0';
-            from = history_count - 1; // a shorter pattern can match later entries again
-        } else if (IS_PRINTABLE_KEY(key) && plen < LINE_MAX - 1) {
-            pattern[plen++] = (char)key;
-            pattern[plen] = '\0';
-            from = history_count - 1;
-        } else {
-            continue; // anything else doesn't affect the search
-        }
-
-        match = -1;
-        for (int i = from; i >= 0; i--) {
-            if (history[i] && k_strstr(history[i], pattern)) { match = i; break; }
-        }
-    }
+    static const struct histsearch_env env = {
+        0, hs_count, hs_entry, hs_getkey, hs_paint,
+    };
+    const char *match = 0;
+    enum histsearch_result r = histsearch_run(&env, &match);
+    vga_putc('\n');
+    if (r == HISTSEARCH_CANCELLED) return 0;   // the line is untouched
+    if (match) kline_set(&g_ed, match);
+    return r == HISTSEARCH_ACCEPTED;
 }
 
 // Alt-.: insert the last word of the previous command, like bash's
