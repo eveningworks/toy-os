@@ -113,6 +113,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`dmesg`](dmesg.md)
 - [`font`](font.md)
 - [`heap`](heap.md)
+- [`hwdata`](hwdata.md)
 - [`kbd`](kbd.md)
 - [`kstack`](kstack.md)
 - [`lsblk`](lsblk.md)

@@ -6,7 +6,9 @@
 
 ## Synopsis
 
-    lsusb [-v] [-D]
+```
+lsusb [-v] [-D] [--update]
+```
 
 ## Options
 
@@ -15,6 +17,10 @@
   interface class, subclass and protocol.
 - `-D`, `--descriptors` -- hex-dump each device's configuration
   descriptor and decode it, one line per descriptor.
+- `--update` -- refresh the id database from the internet and exit,
+  printing nothing about the machine's own devices. It is
+  `hwdata update usb`, which it hands off to; see
+  [hwdata](hwdata.md) for where it fetches from and what it refuses.
 
 ## Description
 

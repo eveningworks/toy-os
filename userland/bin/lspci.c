@@ -37,6 +37,8 @@
 #include "pci.h" // struct pci_device only -- see this file's top comment
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdlib.h>   // system() -- see update_ids()
+#include "lib/cmd.h"
 
 static void put(const char *s) {
     write(1, s, strlen(s));
@@ -242,7 +244,23 @@ static void load_names(void) {
     close((int)fd);
 }
 
-int main(void) {
+// `lspci --update` is `hwdata update pci`, and it EXECS it rather than
+// repeating it. The fetch reaches TLS, and linking libhttp/libssl into
+// lspci would put mbedTLS behind a command whose whole job is to print
+// a table -- so the logic has one home (userland/bin/hwdata.c) and this
+// is a signpost to it from where somebody is standing when they notice
+// the names are stale.
+static int update_ids(void) {
+    return system("/bin/hwdata update pci");
+}
+
+int main(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--update")) return update_ids();
+        cmd_usage("lspci [--update]");
+        return 1;
+    }
+
     int64_t count = sys_pci_count();
     if (count <= 0) {
         put("No PCI devices found.\n");

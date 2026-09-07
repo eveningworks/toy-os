@@ -2754,3 +2754,60 @@ that setting. This does not reopen it. What it does retire is the half
 of that reasoning which said teaching the parser sections would change
 `etc_config_get(file, key)` at every call site — it did not, because the
 section is an added argument rather than a changed one.
+
+## Refreshing the id databases is a program, not `wget -O`
+
+`hwdata update` fetches `pci.ids` and `usb.ids` and replaces them. The
+obvious alternative was a line in `lspci`'s page saying to run
+`wget -O /usr/share/hwdata/pci.ids https://pci-ids.ucw.cz/v2.2/pci.ids`.
+That command works today and needs no code at all.
+
+It also opens the file with `O_TRUNC`. A download that dies halfway --
+which is the normal outcome on a flaky link, and the only outcome behind
+a captive portal -- leaves a **truncated database that still parses**.
+Both files are line-oriented and the readers stream them, so half a file
+is a valid file with half the vendors in it: some devices resolve, the
+rest show numbers, and nothing anywhere says why. The failure is
+indistinguishable from the file having been stale in the first place,
+which is the condition the person was trying to fix.
+
+So the download goes to `<path>.new` beside the target and is renamed
+over it only after it has been checked. `docs/update-design.md`
+prescribes exactly this shape for `/bin/update`, and a database refresh
+is a strict subset of its stage 3 -- one file, nothing mmaps it, no
+self-overwrite, no `/boot`.
+
+**The check is two numbers and neither is enough alone.** At least
+64 KiB, and at least 100 lines shaped like a vendor entry. The size
+floor rejects an error page, a redirect body or a portal splash; the
+vendor count rejects a page that is merely large, which a 4000-line HTML
+404 is. Counting only vendor lines and not device lines is deliberate: a
+file of nothing but indented device lines is malformed, and counting
+them would hide that.
+
+**The swap is three steps because `SYS_RENAME` refuses an existing
+target.** It is not POSIX `rename()`, which replaces. Making it replace
+is a filesystem change with journal credits behind it, so the program
+does the work instead: move the old copy to `<path>.old`, rename the new
+one into place, delete the old. If the middle step fails the old copy is
+renamed back, and there is never a moment when neither file exists under
+a name something can name.
+
+**The URLs are `/etc/hwdata.conf` rather than constants**, and the
+reason is testability as much as mirrors. `tools/hwdata_test.py` points
+`--from` at a Python `http.server` on the host, so the whole thing is
+checked -- including both refusals and the survival of the old file --
+with nothing leaving the machine.
+
+**Downloading at BUILD time is still refused**, and this does not
+reverse that decision ("pci.ids is bundled in `data/`" above). A build
+that reaches the network breaks offline builds and adds a supply-chain
+input; a command a person types on a running machine is a different
+thing entirely, and nothing here runs it on a timer.
+
+**Fetching is not distributing.** Both files are redistributed with this
+system under their BSD terms. A copy this command fetches is one the
+person running it obtained for themselves -- the same distinction
+`tools/fetch_extras.py` draws for the Doom IWAD, and the reason the
+fetch needs no licence prompt while publishing an image carrying the
+result would.

@@ -6,7 +6,16 @@
 
 ## Synopsis
 
-    lspci
+```
+lspci [--update]
+```
+
+## Options
+
+- `--update` -- refresh the id database from the internet and exit,
+  printing nothing about the machine's own devices. It is
+  `hwdata update pci`, which it hands off to; see
+  [hwdata](hwdata.md) for where it fetches from and what it refuses.
 
 ## Description
 
@@ -32,3 +41,14 @@ did not ask, or is not present at all:
 QEMU's AC97, e1000 and ich9-ahci models advertise neither capability, so
 those three show a bare `irq N` on any emulated boot however their
 drivers are written.
+
+## The names come from a file, and it goes stale
+
+The vendor and device names are read from `/usr/share/hwdata/pci.ids`,
+streamed a kilobyte at a time rather than held in memory -- it is 1.6 MB
+and the answer is usually a handful of lines from it. A missing file is
+not an error: `lspci` says so once on stderr and prints numeric ids.
+
+That file ships with the system, so it is as old as the build. A machine
+whose devices came out later shows numbers where a name should be, which
+is what `--update` is for.

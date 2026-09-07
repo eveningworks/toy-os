@@ -91,6 +91,9 @@ TOOLS = [
     # Needs openssl to make the certificates and SKIPS cleanly without it.
     ("https",       "https_test.py",           "wget over TLS, and what it refuses", False,
      ("openssl",    "needs openssl on PATH to make test certificates"),                       False),
+    # Same arrangement, no certificates needed: a plain http server on
+    # the host, so this too leaves nothing.
+    ("hwdata",      "hwdata_test.py",          "the id databases refuse a bad download", False, None,               False),
     # --- storage and boot -------------------------------------------
     ("partition",   "partition_test.py",       "mounting from an MBR/GPT partition", True,  None,                   False),
     ("fs_switch",   "fs_switch_test.py",       "format, remount, reboot persistence", True, None,                   False),

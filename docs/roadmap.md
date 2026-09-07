@@ -90,9 +90,10 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~A line discipline (line editing, echo control) separate from the shell's own input loop~~ DONE 2026-08-22 -- `kernel/tty/ldisc.c`
 - [x] ~~`klineedit.c` compiled a second time for ring 3, so both ring-3 shells share the keymap~~ DONE 2026-08-19
 - [x] ~~Tab completion in ring 3~~ DONE 2026-08-27 -- `kernel/lib/completion.c` compiled into both rings behind a `completion_env`
-- [ ] Ctrl-R reverse search in ring 3 -- needs a query line the console front end cannot yet paint
-- [ ] `/bin/tosh` history that persists -- the kernel shell writes `/etc/history`, ring 3 keeps its ring in memory
-- [ ] A console line longer than the screen is wide repaints wrongly in `/bin/tosh` -- `\r` returns to the start of the ROW
+- [x] ~~Ctrl-R reverse search in ring 3~~ DONE 2026-09-07 -- `kernel/lib/histsearch.c`, one loop compiled into both rings
+- [x] ~~`/bin/tosh` history that persists~~ DONE 2026-09-07 -- `/etc/tosh_history`, appended a line at a time so tabs keep each other's
+- [x] ~~A line longer than the screen is wide repaints wrongly in `/bin/tosh`~~ DONE 2026-09-07 -- it counts screen ROWS now
+- [x] ~~SIGWINCH, so a resize reaches the program in the window~~ DONE 2026-09-07 -- on the foreground group, only when the size MOVED
 - [x] ~~`Ctrl+Z` as a terminal signal~~ DONE 2026-08-22 -- SUSP in the line discipline, beside INTR
 - [ ] `Ctrl+D` as a terminal signal -- it ends a canonical read; it is still not a signal an app can act on
 - [x] ~~The concept of a foreground process for a terminal~~ DONE 2026-08-22 -- a foreground GROUP, `kernel/tty.h`, physical console only
@@ -594,6 +595,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Ctrl+click and Shift+click multi-select~~ DONE 2026-08-30 -- the modifiers ride in the mouse event (`WIN_MOUSE_MODS_SHIFT`)
 - [x] ~~System clipboard for TEXT, and paste into Notepad/Terminal~~ DONE 2026-09-07 -- a `kind` word, declared and never sniffed
 - [x] ~~Move the clipboard out of the kernel~~ DONE 2026-09-07 -- `/bin/clipboardd` owns a shared page; a paste costs no syscall
+- [x] ~~Mouse text selection in the Terminal, and copy from it~~ DONE 2026-09-07 -- drag/word/line, copy-on-select, Ctrl+Shift+C
+- [x] ~~A scrollbar on the Terminal, so the scrollback is visible~~ DONE 2026-09-07 -- a reserved gutter, Konsole's shape
 - [ ] Drag-and-drop between windows
 - [ ] Drag a file from the file manager (see Desktop productivity apps) into Notepad
 - [ ] A clipboard that survives `clipboardd` restarting
@@ -620,6 +623,9 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] CPU/memory history graphs in Task Manager
 - [ ] Per-app settings persisted via `/etc/<app>.conf` (the convention exists, only `desktop.conf` uses it)
 - [ ] `Terminal=true` on a `.desktop` entry, so a TUI program can be launched from the desktop
+- [ ] The Terminal's grid CROPS on a resize rather than reflowing -- Konsole and VTE rewrap, which needs a per-row "this line wrapped" bit
+- [ ] The Terminal's selection is DROPPED when the text scrolls under it, rather than following it
+- [ ] Dragging a Terminal selection past the edge scrolls only while the pointer MOVES -- autoscroll needs a tick this window has not got
 
 ## Hardware
 
@@ -722,6 +728,7 @@ run on, not by order.
 - [x] ~~USB Ethernet (CDC-ECM), and the BULK transfer type it needed~~ DONE 2026-08-31 -- `net_usb_ecm.c`; RX untested, see `docs/bugs.md`
 - [x] ~~Remote access: a shell and file transfer over the network~~ DONE 2026-08-31 -- `telnetd`, `tftpd`, `tools/remote.py`
 - [ ] `/bin/update`: a machine updates itself from an HTTP manifest, so nothing has to listen -- see `docs/update-design.md`
+- [x] ~~Refresh the PCI/USB id databases from the internet~~ DONE 2026-09-07 -- `/bin/hwdata`; `lspci --update` hands off to it
 - [x] ~~Per-volume state in filesystem backends~~ done -- `struct t3_state`/`fat32_state`/`ramfs_state`, switched at `FS_OP`
 - [x] ~~A self-hosted installer: partition, format, copy the running system, write the bootloader~~ done -- `/bin/install`
 - [ ] USB mass storage (bulk-only transport) -- the first non-disk-bus storage backend

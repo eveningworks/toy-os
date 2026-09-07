@@ -20,6 +20,7 @@
 #include "lib/cmd.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>   // system() -- the --update hand-off
 #include "query_abi.h"
 #include <fcntl.h>
 #include <unistd.h>
@@ -369,7 +370,11 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) verbose = 1;
         else if (!strcmp(argv[i], "-D") || !strcmp(argv[i], "--descriptors"))
             dump = 1;
-        else { cmd_usage("lsusb [-v] [-D]"); return 1; }
+        // See lspci.c: the fetch has ONE implementation and it is
+        // /bin/hwdata, because it reaches TLS and this command must not.
+        else if (!strcmp(argv[i], "--update"))
+            return system("/bin/hwdata update usb");
+        else { cmd_usage("lsusb [-v] [-D] [--update]"); return 1; }
     }
 
     for (int i = 0; i < MAX_DEVS; i++) {
