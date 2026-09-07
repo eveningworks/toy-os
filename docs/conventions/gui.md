@@ -3061,3 +3061,53 @@ labelled `" "` cannot be passed as a console token.
   what was last copied -- deliberate, because a terminal selection is
   made in order to be pasted essentially always. **`Ctrl+Shift+C`, never
   `Ctrl+C`**: `0x03` is INTR and has to reach the shell.
+
+- **A ROW-COUNT CHANGE SCROLLS THE GRID; IT DOES NOT JUST CLAMP THE
+  CURSOR.** Shrinking pushes the rows the cursor would fall past off the
+  TOP into scrollback, exactly as if the program had printed them, and
+  growing pulls them back out -- xterm's semantics, shared by Konsole and
+  VTE, and the property that makes shrink-then-grow a ROUND TRIP.
+
+  Clamping alone is what this did, and it fails in two visible ways:
+  shrinking drops the cursor onto text that did not move, so the prompt
+  lands in the middle of old output; and growing leaves it stranded
+  there with blank rows below, because nothing ever moves it back. The
+  second is the one that gets reported -- "resize it smaller then larger
+  and the prompt keeps the small window's position".
+
+  **THE WHOLE GRID MOVES BY THE SAME AMOUNT, and that is what keeps the
+  program on the other end correct.** A shell records how many rows
+  below its prompt the caret sits; a uniform shift preserves that
+  offset, so its own repaint still erases the right rows. A reflow that
+  moved rows by different amounts would not.
+
+  **The alternate screen is exempt**: it has no scrollback to scroll
+  into, and a full-screen program owns every row and redraws them all
+  when it hears the size changed.
+
+- **A FULL-SCREEN PROGRAM MUST HANDLE SIGWINCH, AND ASKING ONCE AT
+  STARTUP IS NOT ENOUGH.** `upager.c` read its terminal's size before
+  its key loop and then blocked in a read forever, so `doc` and `less`
+  in a resized window went on drawing the old page at the old width with
+  no way to notice -- and a keypress afterwards did not recover it
+  either, because the repaint was gated on the scroll position having
+  MOVED. A resize handler has to re-ask the size, re-size any buffer
+  derived from it, clamp the position to the new bottom, AND defeat that
+  cache.
+
+  The handler sets a flag and nothing else (async-signal-safety), the
+  action is installed with `sys_sigaction` and NO `SA_RESTART` -- the
+  interruption is the message, and `sys_signal()` would restart the read
+  and swallow it -- and EINTR from that read is a resize, not the
+  terminal going away. Treating it as the latter closes the pager on
+  every window drag.
+
+- **A WINDOW IS RESIZED IN A TEST BY `gui resize W H`, NEVER BY
+  DRAGGING THE GRIP.** The grip needs a real pointer the compositor
+  tracks across frames; injected input is not one, and neither is a
+  warped-cursor drag, because the frame drag is the WM's own and not a
+  client's. A check that dragged it reported the window as the same size
+  before and after and still passed both its assertions -- the exact
+  "it responds is not it happened" shape. The command routes through the
+  same `resize_ask()` the grip does, so it drives the real path
+  (propose, the client answers, adopt) rather than a second one.

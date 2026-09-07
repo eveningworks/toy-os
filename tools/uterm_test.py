@@ -1394,6 +1394,65 @@ def check_selection(dbg, qmp, tmp, res):
     dbg.settle()
 
 
+def check_resize(dbg, qmp, tmp, res):
+    """The prompt stays on the LAST ROW across a resize, both ways.
+
+    **THE LOAD-BEARING CHECK IS r3**, the grow. Shrinking looked fine
+    before this and growing did not: the cursor was merely CLAMPED into
+    the shorter window, so the text stayed where it was and the prompt
+    landed on top of old output -- and growing then left it stranded
+    there with blank rows below it, because nothing moved it back.
+
+    Asserted as "the cursor is on the last row", which is what a prompt
+    at the bottom of a full screen means, rather than as a pixel
+    position: the row count changes under the test, so a fixed y would
+    be asserting the arithmetic instead of the behaviour.
+    """
+    win = fresh_terminal(dbg, res, "r")
+    if not win:
+        return
+
+    fill_scrollback(dbg)   # a full screen, prompt at the bottom
+
+    def at_bottom():
+        rows = layout_field(dbg, "rows")
+        cols = layout_field(dbg, "cols")
+        cur = layout_field(dbg, "cursor")
+        if rows is None or not cols or cur is None:
+            return None, None
+        return cur // cols, rows
+
+    cr, rows0 = at_bottom()
+    res.check("r1. the prompt starts on the last row of a full screen",
+              cr is not None and cr == rows0 - 1, f"cursor row {cr} of {rows0}")
+    if cr is None:
+        return
+
+    # **`gui resize`, NOT A DRAG OF THE GRIP.** The grip needs a real
+    # pointer the compositor tracks across frames, which injected input
+    # cannot be -- an earlier version of this check dragged it and the
+    # window never moved at all, so both halves passed against a
+    # completely unchanged terminal. `gui resize` reaches the same
+    # resize_ask() the grip does.
+    c = win["content"]
+    dbg.send(f"gui resize {c['w']} {c['h'] - 200}")
+    dbg.settle()
+    cr, rows1 = at_bottom()
+    res.check("r2. shrinking keeps the prompt on the last row",
+              rows1 is not None and rows1 < rows0 and cr == rows1 - 1,
+              f"cursor row {cr} of {rows1} (was {rows0})")
+
+    dbg.send(f"gui resize {c['w']} {c['h']}")
+    dbg.settle()
+    cr, rows2 = at_bottom()
+    res.check("r3. ...and growing brings it back to the last row",
+              rows2 == rows0 and cr == rows2 - 1,
+              f"cursor row {cr} of {rows2} (started at {rows0})")
+
+    dbg.key("f4", mods="alt")
+    dbg.settle()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1421,6 +1480,7 @@ def main():
         check_completion(dbg, qmp, res)
         check_scrollbar(dbg, qmp, args.tmp, res)
         check_selection(dbg, qmp, args.tmp, res)
+        check_resize(dbg, qmp, args.tmp, res)
     finally:
         dbg.close()
 

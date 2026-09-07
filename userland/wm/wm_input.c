@@ -670,6 +670,8 @@ void wm_resize_shown(int idx, int size_changed) {
 
 // Point the ask at a window and give it a size. `w`/`h` are CONTENT
 // pixels -- a client knows nothing about chrome.
+void wm_resize_client(int idx, int w, int h);
+
 static void resize_ask(int idx, int w, int h) {
     if (idx != resize_ask_target()) {
         resize_ask_idx = idx;
@@ -681,6 +683,21 @@ static void resize_ask(int idx, int w, int h) {
     resize_want_w = w;
     resize_want_h = h;
     resize_pump();
+}
+
+// **A WINDOW CAN BE RESIZED WITHOUT A POINTER.** `gui resize` reaches
+// this; nothing else does. It exists because a test had no way to
+// resize a window at all -- dragging the grip needs a real pointer the
+// compositor tracks across frames, which is exactly the case gui_debug's
+// injected input cannot drive -- so every resize behaviour on the client
+// side was untestable, which is how a broken one shipped.
+//
+// The SAME resize_ask() the grip uses, so this drives the real path
+// (propose, the client answers, adopt) rather than a second one.
+void wm_resize_client(int idx, int w, int h) {
+    if (idx < 0 || idx >= window_count) return;
+    if (!wm_client_is_client_window(&windows[idx])) return;
+    resize_ask(idx, w, h);
 }
 
 void wm_update_drag_resize(int mx, int my, uint8_t buttons) {

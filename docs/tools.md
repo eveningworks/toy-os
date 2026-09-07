@@ -306,6 +306,15 @@ manual steps to be worth automating:
   Only a client needs this; both failures look identical from the
   outside, and identical to the app simply ignoring the drag.
 
+  **`gui resize W H` is the only way to resize a window**, and it is in
+  the WM rather than here for a reason worth stating: the frame's grip
+  needs a real pointer the compositor tracks across frames, and neither
+  injected input nor `drag_real` can be one for a frame drag. A check
+  that dragged the grip measured a window **988x498 before and after**
+  -- unchanged -- and both its halves passed against a terminal that had
+  never resized. Every client-side resize behaviour was untestable until
+  this existed, which is how a broken one shipped.
+
   **`warp_confirmed(qmp, x, y, check)` confirms a DIFFERENT claim**, and
   the difference matters: `warp_cursor` proves the pointer is where you
   aimed, not that where you aimed is what you meant. A list row is one

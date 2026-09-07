@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <keyboard.h>  // KEY_* -- specials arrive as these codes
 #include <unistd.h>
+#include "signal_abi.h" // SIGWINCH -- see g_resized
 
 // One escape sequence, or any short literal, to stdout.
 static void put(const char *s) { write(1, s, strlen(s)); }
@@ -218,6 +219,19 @@ int upager_term(int *rows, int *cols) {
     return fd;
 }
 
+// **THE WINDOW CHANGED SIZE.** The handler does nothing but say so --
+// the async-signal-safety rule, same as every other handler here: it may
+// not print, and it may not touch the page state the loop below is
+// halfway through.
+//
+// Without this the pager asked its terminal for a size ONCE, before the
+// loop, and then blocked in a read forever -- so `doc` and `less` in a
+// window that was resized went on drawing the old page at the old width
+// with no way to make them notice. It re-asks now.
+static volatile int g_resized;
+
+static void on_sigwinch(int sig) { (void)sig; g_resized = 1; }
+
 int upager_run(const char *text, int len, const char *label, int truncated) {
     if (len <= 0) return 0;
     if (!label) label = "pager";
@@ -261,6 +275,18 @@ int upager_run(const char *text, int len, const char *label, int truncated) {
     int restore = sys_tcgetattr(key_fd, &saved) == 0;
     if (restore) sys_tty_raw(key_fd);
 
+    // **NO SA_RESTART, AND THAT IS THE POINT.** With it the kernel
+    // rewinds the interrupted read and this loop never learns anything
+    // happened; the interruption IS the message. `sys_signal()` would
+    // set the flag, so the action is installed by hand.
+    struct k_sigaction winch = {
+        .handler  = (uint64_t)(uintptr_t)on_sigwinch,
+        .restorer = (uint64_t)(uintptr_t)__sigrestore,
+        .flags    = 0,
+    };
+    struct k_sigaction winch_saved;
+    int had_winch = sys_sigaction(SIGWINCH, &winch, &winch_saved) == 0;
+
     // THE ALTERNATE SCREEN, so quitting leaves the terminal exactly as
     // it was found. A terminal that does not implement it swallows the
     // sequence, so this is safe everywhere.
@@ -270,6 +296,33 @@ int upager_run(const char *text, int len, const char *label, int truncated) {
     int top = 0;
     int last_top = -1;
     for (;;) {
+        if (g_resized) {
+            g_resized = 0;
+            // Re-ask, re-size, redraw. The frame buffer is grown when
+            // the new page needs more room and KEPT when that fails --
+            // draw() stops when the next row would not fit, so a failed
+            // realloc costs rows off the bottom rather than a overrun.
+            int nr = rows, nc = cols;
+            upager_term(&nr, &nc);
+            int need = nr * (nc * 4 + 16) + 512;
+            if (need > p.frame_cap) {
+                char *bigger = realloc(p.frame, (size_t)need);
+                if (bigger) { frame = p.frame = bigger; p.frame_cap = need; }
+            }
+            rows = p.rows = nr;
+            cols = p.cols = nc;
+            page = rows - 1;
+            if (page < 1) page = 1;
+            // The bottom moved, so where the reader is may no longer be
+            // a legal position -- and `last_top` is reset either way,
+            // because the page has to be repainted even when `top` did
+            // not move. That cache is why a keypress after a resize was
+            // not enough to recover on its own.
+            int max_top = lines - page;
+            if (max_top < 0) max_top = 0;
+            if (top > max_top) top = max_top;
+            last_top = -1;
+        }
         if (top != last_top) { draw(&p, top); last_top = top; }
 
         // A BLOCKING read of one byte. Specials arrive as 0x91-0xA6,
@@ -278,6 +331,10 @@ int upager_run(const char *text, int len, const char *label, int truncated) {
         // editor relies on.
         unsigned char ch;
         int64_t n = read(key_fd, &ch, 1);
+        // INTERRUPTED, NOT BROKEN: a resize lands here as EINTR, and
+        // treating it as the terminal going away would close the pager
+        // on every window drag.
+        if (n < 0 && sys_errno() == EINTR) continue;
         if (n <= 0) break;   // the terminal went away -- do not spin on it
         int k = ch;
 
@@ -302,6 +359,7 @@ int upager_run(const char *text, int len, const char *label, int truncated) {
     // mode: leaving raw mode while still on the alternate screen would
     // show the shell's echo on a screen about to be thrown away.
     put("\x1b[?1049l");
+    if (had_winch) sys_sigaction(SIGWINCH, &winch_saved, 0);
     if (restore) sys_tcsetattr(key_fd, &saved);
     free(line);
     free(frame);

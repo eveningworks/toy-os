@@ -1196,6 +1196,25 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
 
     // `rest` is scanned for --json by wants_json(), which consumes it --
     // so grab positional arguments BEFORE asking about the flag.
+    // `gui resize <w> <h>` -- the FOCUSED window's CONTENT size, in
+    // pixels. The one way a test can resize a window: the grip needs a
+    // real pointer tracked across frames, which injected input cannot
+    // be (see wm_resize_client).
+    if (k_strcmp(sub, "resize") == 0) {
+        int w, h;
+        if (!parse_int(next_tok(&p), &w) || !parse_int(next_tok(&p), &h) ||
+            w < 1 || h < 1) {
+            dbg_out_write(o, "usage: gui resize W H\r\n");
+            return 1;
+        }
+        int idx = window_count - 1;   // topmost is the focused one
+        if (idx < 0) { dbg_out_write(o, "gui: no window\r\n"); return 1; }
+        wm_resize_client(idx, w, h);
+        dbg_out_printf(o, "gui: asked \"%s\" for %dx%d\r\n",
+                       windows[idx].title, w, h);
+        return 1;
+    }
+
     if (k_strcmp(sub, "windows") == 0)      { cmd_windows(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "menu") == 0)         { cmd_menu(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "ctxmenu") == 0)      { cmd_ctxmenu(o, wants_json(p)); return 1; }

@@ -417,6 +417,10 @@ enum wm_cursor_kind wm_cursor_kind_at(int mx, int my);
 void wm_handle_left_click(int mx, int my);
 void wm_update_drag_resize(int mx, int my, uint8_t buttons);
 
+// Resize a client window with no pointer involved -- `gui resize`, and
+// the only way a test can drive a resize. See wm_input.c.
+void wm_resize_client(int idx, int w, int h);
+
 // Pulls a window back somewhere its title bar can be grabbed, if it is
 // no longer reachable at all -- off the side, or entirely behind the
 // taskbar, both of which dragging deliberately allows. A window that is

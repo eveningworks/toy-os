@@ -328,11 +328,19 @@ static int bar_w(void) {
 // Where the bar is, given the window. The ONE geometry function draw,
 // hit-testing and the drag maths all call -- two derivations is the
 // classic way a scrollbar draws in one place and responds in another.
+//
+// **INSET BY THE SAME MARGIN THE TEXT USES**, on the right and at both
+// ends, so the track floats in the window rather than butting against
+// its edges -- which is what it looked like flush, a bar welded to the
+// frame. The width it RESERVES is unchanged, because size_changed()
+// already takes the margin off both sides before dividing into columns;
+// the gap costs no cells.
 static void bar_rect(int win_w, int win_h, int *x, int *y, int *w, int *h) {
     *w = bar_w();
-    *x = win_w - *w;
-    *y = chrome_h();
-    *h = win_h - *y;
+    *x = win_w - *w - MARGIN;
+    *y = chrome_h() + MARGIN;
+    *h = win_h - *y - MARGIN;
+    if (*h < 1) *h = 1;
 }
 
 // A thumb drag in progress: how far down the thumb the press landed, or
@@ -566,6 +574,63 @@ static void vt_putc_raw(struct session *s, char c) {
     cell->fg = (uint8_t)s->vt.fg;
     cell->bg = (uint8_t)s->vt.bg;
     s->cc++;
+}
+
+// --- what a row-count change does to the screen ------------------------
+//
+// **SHRINKING SCROLLS; GROWING PULLS BACK.** Merely clamping the cursor
+// into the shorter window -- which is what this did -- leaves the text
+// where it was and drops the cursor on top of it, so the prompt lands
+// in the middle of old output; and growing then leaves it stranded
+// there with blank rows below, because nothing ever moved it back. That
+// is what "resize it smaller then larger and the prompt keeps the small
+// window's position" is.
+//
+// xterm's semantics, which Konsole and VTE share: rows the cursor would
+// fall past scroll off the TOP into scrollback exactly as if the
+// program had printed them, and growing takes them back out again. That
+// makes the two a ROUND TRIP, which is the property the bug was the
+// absence of.
+//
+// **THE WHOLE GRID MOVES BY THE SAME AMOUNT**, which is what keeps a
+// shell's own idea of where its paint started valid across the resize:
+// the prompt row and the cursor row shift together, so the offset
+// between them -- the only thing the shell recorded -- still holds.
+//
+// Counts are passed in rather than read from g_rows, because this runs
+// while the old and new heights are both live.
+static void rows_shrunk(struct session *s, int old_rows, int new_rows) {
+    int over = s->cr - (new_rows - 1);
+    if (over <= 0) return;              // the cursor already fits
+    if (over > old_rows) over = old_rows;
+    size_t rowbytes = (size_t)g_cap_cols * sizeof(struct cell);
+    for (int i = 0; i < over; i++) {
+        if (s->sb_count == SB_ROWS) {
+            memmove(sb_row(s, 0), sb_row(s, 1), (size_t)(SB_ROWS - 1) * rowbytes);
+            s->sb_count--;
+        }
+        memcpy(sb_row(s, s->sb_count), grid_row(s, 0), rowbytes);
+        s->sb_count++;
+        memmove(grid_row(s, 0), grid_row(s, 1),
+                (size_t)(old_rows - 1) * rowbytes);
+        row_clear(grid_row(s, old_rows - 1), 0);
+    }
+    s->cr -= over;
+}
+
+static void rows_grown(struct session *s, int old_rows, int new_rows) {
+    int want = new_rows - old_rows;
+    int have = s->sb_count < want ? s->sb_count : want;
+    if (have <= 0) return;              // nothing kept to put back
+    size_t rowbytes = (size_t)g_cap_cols * sizeof(struct cell);
+    // Down first, from the bottom, so a row is read before it is
+    // overwritten -- the grid is one array and the two ranges overlap.
+    for (int r = old_rows - 1; r >= 0; r--)
+        memcpy(grid_row(s, r + have), grid_row(s, r), rowbytes);
+    for (int i = 0; i < have; i++)
+        memcpy(grid_row(s, have - 1 - i), sb_row(s, --s->sb_count), rowbytes);
+    for (int r = old_rows + have; r < new_rows; r++) row_clear(grid_row(s, r), 0);
+    s->cr += have;
 }
 
 static void clamp_cursor(struct session *s) {
@@ -1275,13 +1340,24 @@ static void size_changed(int w, int h) {
     }
     if (rows == g_rows && cols == g_cols) return;
 
+    int old_rows = g_rows;
     g_rows = rows;
     g_cols = cols;
     struct tty_winsize ws = { (uint16_t)rows, (uint16_t)cols };
     for (int i = 0; i < MAX_TABS; i++) {
         struct session *s = g_slot[i];
         if (!s || !s->live || s->master < 0) continue;
+        // THE ALTERNATE SCREEN IS NOT SCROLLED, because it has no
+        // scrollback to scroll into -- a full-screen program owns every
+        // row and redraws them all when it hears the size changed.
+        if (!s->alt) {
+            if (rows < old_rows)      rows_shrunk(s, old_rows, rows);
+            else if (rows > old_rows) rows_grown(s, old_rows, rows);
+        }
         clamp_cursor(s);
+        // LAST, because it raises SIGWINCH: the program on the other end
+        // repaints from where the cursor is, so the grid has to be in
+        // its final shape before it is told.
         sys_tcsetwinsz(s->master, &ws);
     }
 }
