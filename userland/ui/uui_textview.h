@@ -87,9 +87,14 @@ struct uui_textview {
     int panning;
 };
 
+// `buf`/`cap` are the text's storage, and they are the CALLER's for the
+// same reason utext.h gives: a view of a help page and a view of a
+// 1.6 MB file want very different numbers, and neither is this
+// widget's to choose. Storage last, as uui_fileview's entry array is.
 void uui_textview_init(struct uui_textview *tv, int x, int y, int w, int h,
                         uint32_t fg, uint32_t bg, uint32_t track_bg,
-                        uint32_t thumb_bg, uint32_t sel_bg);
+                        uint32_t thumb_bg, uint32_t sel_bg,
+                        char *buf, int cap);
 
 void uui_textview_set_geometry(struct uui_textview *tv, int x, int y, int w, int h);
 

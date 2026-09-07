@@ -36,6 +36,32 @@ enum ufile_result ufile_slurp(const char *path, size_t cap,
     return UFILE_OK;
 }
 
+enum ufile_result ufile_read_into(const char *path, void *buf, size_t cap,
+                                  size_t *out_len) {
+    if (out_len) *out_len = 0;
+
+    struct sys_stat st;
+    if (sys_stat(path, &st) < 0) return UFILE_NOENT;
+    if (st.size > (uint64_t)cap) return UFILE_TOO_BIG;
+
+    size_t len = (size_t)st.size;
+    int fd = sys_open(path, 0);
+    if (fd < 0) return UFILE_OPEN;
+
+    size_t got = 0;
+    while (got < len) {
+        int64_t n = sys_read(fd, (uint8_t *)buf + got, len - got);
+        if (n <= 0) break;
+        got += (size_t)n;
+    }
+    sys_close(fd);
+
+    if (out_len) *out_len = got;
+    // An EMPTY file is a legitimate document here, unlike for slurp's
+    // decoders -- opening one in an editor gives you an empty buffer.
+    return got == len ? UFILE_OK : UFILE_SHORT;
+}
+
 size_t ufile_read_head(const char *path, uint8_t *buf, size_t cap) {
     int fd = sys_open(path, 0);
     if (fd < 0) return 0;

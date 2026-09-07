@@ -16,8 +16,9 @@ static int default_bar_w(void) {
 
 void uui_textview_init(struct uui_textview *tv, int x, int y, int w, int h,
                         uint32_t fg, uint32_t bg, uint32_t track_bg,
-                        uint32_t thumb_bg, uint32_t sel_bg) {
-    utext_init(&tv->tb);
+                        uint32_t thumb_bg, uint32_t sel_bg,
+                        char *buf, int cap) {
+    utext_init_buf(&tv->tb, buf, cap);
     tv->x = x; tv->y = y; tv->w = w; tv->h = h;
     tv->policy = UUI_TEXTVIEW_AUTO;
     tv->body = UUI_TEXTVIEW_BODY_APP;

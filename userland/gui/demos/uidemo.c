@@ -181,6 +181,10 @@ static struct {
     char status[64];
 } g;
 
+// The scroll view's text storage: the caller's, as utext.h requires.
+// Twenty numbered lines, so a screenful is plenty.
+static char g_view_buf[1024];
+
 // Row origins, top to bottom. Functions rather than constants because
 // each depends on the live font metrics.
 static int row_buttons(void)  { return PAD; }
@@ -357,7 +361,7 @@ static void on_open(struct uapp *a) {
 
     uui_textview_init(&g.view, PAD, row_scroll(), VIEW_W, scroll_h(),
                       UTHEME_TEXT, UTHEME_WHITE, UTHEME_PANEL_BG,
-                      UTHEME_BUTTON_BG, SEL_BG);
+                      UTHEME_BUTTON_BG, SEL_BG, g_view_buf, (int)sizeof g_view_buf);
     // Body drags PAN this view: UI Demo has no cursor or selection of
     // its own, so nothing conflicts, and it makes the third input route
     // demonstrable. Notepad keeps the default (body presses are the

@@ -37,6 +37,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "rt/sys.h"
 #include "kpath.h"   // k_path_join/_dirname/_basename -- the kernel's, linked into ring 3
 #include "ui/ugfx.h"
@@ -46,6 +47,7 @@
 #include "ui/ulog.h"
 #include "ui/utext.h"
 #include "ui/utheme.h"
+#include "lib/ufile.h"
 #include "keyboard.h" // KEY_* codes, the same ones the WM delivers
 
 #define WIN_W 560
@@ -99,6 +101,39 @@
 
 static struct uapp *g_app;   // for the fileview's callbacks, which carry no uapp
 static struct utext g_text;
+
+// THE DOCUMENT'S STORAGE IS SIZED TO THE FILE, and it is this app's
+// rather than utext's (utext.h). Opening a file grows it to that file
+// plus room to type; it is never shrunk, because the next file is
+// usually about the same size and a realloc down buys nothing.
+//
+// The ceiling is a REFUSAL, not a truncation. It is what it is because
+// an edit costs two passes over the buffer -- the memmove that makes
+// room, and the wrap index rebuilt behind it -- so a document past a
+// few megabytes types perceptibly slowly rather than wrongly. pci.ids
+// (1.6 MB) is the file this number was chosen against.
+#define DOC_MAX_BYTES  (4 * 1024 * 1024)
+#define DOC_EDIT_SLACK 8192   // room past the file's end to type into
+
+static char *g_doc;
+static int g_doc_cap;
+
+// Grows the document buffer to hold `bytes` plus room to type. Returns
+// 0 if it could not, leaving the old buffer intact and usable.
+static int doc_reserve(int bytes) {
+    int want = bytes + DOC_EDIT_SLACK;
+    if (want <= g_doc_cap) return 1;
+    char *n = (char *)realloc(g_doc, (size_t)want);
+    if (!n) return 0;
+    g_doc = n;
+    g_doc_cap = want;
+    // The buffer MOVED, so the view has to be told where it lives now.
+    // Everything else in `g_text` -- the caret, the selection, the
+    // scroll -- survives, which is what makes this safe mid-session.
+    g_text.buf = g_doc;
+    g_text.cap = g_doc_cap;
+    return 1;
+}
 
 static char g_path[PATH_MAX_LEN];   // "" until saved/opened
 static char g_status[96];
@@ -241,30 +276,38 @@ static void recent_push(const char *path) {
 // here and is not in the kernel-space version.
 
 static int load_file(struct uapp *a, const char *path) {
-    int fd = sys_open(path, 0);
-    if (fd < 0) { set_status("open failed"); return 0; }
-
-    // A whole file, a chunk at a time, with the event loop stopped:
-    // say so before going quiet (ui/uapp.h).
-    uapp_busy_begin(a);
-
-    utext_clear(&g_text);
-    char chunk[512];
-    for (;;) {
-        int64_t n = sys_read(fd, chunk, sizeof chunk);
-        if (n <= 0) break;
-        for (int64_t i = 0; i < n; i++) utext_putc(&g_text, chunk[i]);
+    struct sys_stat st;
+    if (sys_stat(path, &st) < 0) { set_status("open failed"); return 0; }
+    if (st.size > (uint64_t)DOC_MAX_BYTES) {
+        // REFUSED, and the document on screen is left alone. The
+        // alternative this replaced kept the file's last 8 KB and set
+        // g_path anyway, so Ctrl-S wrote those 8 KB over the whole file.
+        snprintf(g_status, sizeof g_status, "too large: %u KB, limit %d KB",
+                  (unsigned)(st.size / 1024), DOC_MAX_BYTES / 1024);
+        return 0;
     }
-    sys_close(fd);
+    if (!doc_reserve((int)st.size)) { set_status("out of memory"); return 0; }
+
+    // A whole file with the event loop stopped: say so before going
+    // quiet (ui/uapp.h).
+    uapp_busy_begin(a);
+    utext_clear(&g_text);
+    size_t got = 0;
+    enum ufile_result r = ufile_read_into(path, g_doc, (size_t)g_doc_cap, &got);
     uapp_busy_end(a);
 
+    if (r != UFILE_OK && r != UFILE_SHORT) { set_status("open failed"); return 0; }
+    g_text.count = (int)got;
+    g_text.rev++;   // the bytes arrived behind utext's back; see utext.h
+    if (r == UFILE_SHORT) set_status("read ended early -- file changed?");
+    else set_status("opened");
+
     g_text.ed.cursor = 0;
-    g_text.scroll_offset = 0;
     utext_sel_clear(&g_text);
+    utext_scroll_top(&g_text);   // 0 is the BOTTOM (utext.h)
     strlcpy(g_path, path, PATH_MAX_LEN);
     g_dirty = 0;
     recent_push(path);
-    set_status("opened");
     return 1;
 }
 
@@ -561,11 +604,7 @@ static void do_command(struct uapp *a, int code) {
         break;
     }
     case CMD_SELECT_ALL:
-        // Ctrl-A reaches the editor as a control code and is handled by
-        // the shared keymap too; this is the MENU path to the same
-        // thing, which is why it calls the same core rather than
-        // re-implementing it out of cursor moves.
-        utext_key(&g_text, 0x01, 0);
+        utext_sel_all(&g_text);
         set_status("selected all");
         break;
     case CMD_DELETE:
@@ -574,12 +613,12 @@ static void do_command(struct uapp *a, int code) {
     case CMD_GOTO_TOP:
         g_text.ed.cursor = 0;
         utext_sel_clear(&g_text);
-        utext_scroll(&g_text, g_text.count); // clamps to the top
+        utext_scroll_top(&g_text);
         break;
     case CMD_GOTO_END:
         g_text.ed.cursor = g_text.count;
         utext_sel_clear(&g_text);
-        g_text.scroll_offset = 0; // 0 is pinned to the newest text
+        utext_scroll_bottom(&g_text);
         break;
     case CMD_STATUSBAR:
         g_show_status = !g_show_status;
@@ -837,7 +876,9 @@ static char g_arg_path[PATH_MAX_LEN];
 
 static void on_open_cb(struct uapp *a) {
     g_app = a;
-    utext_init(&g_text);
+    utext_init_buf(&g_text, NULL, 0);
+    doc_reserve(0);              // the empty document still needs somewhere to live
+    utext_init_buf(&g_text, g_doc, g_doc_cap);
     g_path[0] = '\0';
     set_status("F10 for the menu -- Ctrl-O open, Ctrl-S save, Alt+F4 quit");
 

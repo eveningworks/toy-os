@@ -3449,6 +3449,46 @@ window without going through it will find its layout polls timing out.
   ON DEMAND: it needs a host gcc, and the gate must not start requiring
   one.
 
+- **`utext_hostcheck.py`** -- compiles `userland/ui/utext.c` with the
+  host gcc, beside a NAIVE implementation of the same wrap rule written
+  out longhand in the driver, and requires the two to agree over a
+  corpus: this repository's own Markdown, a 4,000-line synthetic
+  document, a 60 KB paragraph with no newline in it at all, and
+  `data/pci.ids` when it is there.
+
+  **It exists because the editor's wrap is now ACCELERATED.** utext used
+  to rescan the document from character 0 on every draw, every metric
+  and every click; it keeps a sparse checkpoint table now (`struct
+  utext_wrap`) so that a 1.6 MB file costs a screenful of work per frame
+  instead of a documentful. An accelerator is exactly the code that is
+  right on the corpus somebody tried and wrong on the one they did not,
+  and its failure is a caret one character out -- invisible in a
+  screenshot, obvious against an oracle.
+
+  **The load-bearing check is a ROUND TRIP.** The point at which the
+  oracle says character `i` is drawn must hit-test back to `i`, for
+  every character on the screen, at five scroll positions from the top
+  of the document to the bottom -- so lookups that start from a
+  checkpoint deep in the file are exercised, not just the first screen.
+  That is what catches `draw()` and `index_at_point()` drifting apart.
+  It also checks the total line count at several widths, that
+  `utext_scroll_top`/`_bottom` reach the actual ends, that a selection
+  reports its TRUE length when the caller's buffer is too small for it,
+  that a paste drops `\r`, and that `utext_putc` REFUSES at capacity
+  rather than dropping the oldest character.
+
+  It found a pre-existing off-by-one the hour it was written:
+  `index_at_point()` tested "have we reached the target cell" BEFORE
+  applying a pending wrap, while `draw()` applies it first, so clicking
+  the first character of a wrapped continuation line placed the caret
+  one character late -- on every wrapped line, and only there.
+
+  `--positive-control` moves one checkpoint in the index by three
+  characters and requires the round trip to go red.
+
+  ON DEMAND: it needs a host gcc, and the gate must not start requiring
+  one.
+
 - **`doc_test.py`** -- `/bin/doc` in a guest, over the serial debug
   console. Boots its own VM.
 

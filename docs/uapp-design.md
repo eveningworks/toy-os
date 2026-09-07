@@ -541,8 +541,9 @@ opaque widgets with `uui_label_set_text()`. Pointer-binding is what makes
 the example fifteen lines; setters are more conventional and survive a
 widget wanting to cache measured metrics. Current lean: pointer-binding
 for plain text, setters for anything with internal state -- and note
-that `utext`/`ui_textview` deliberately cache nothing, which weakens the
-main argument for setters.
+that `utext` caches only a sparse WRAP INDEX, rebuilt whenever the text
+or the width changes rather than maintained, so it still holds no
+measured metric a setter would have to invalidate.
 
 ## What each client becomes
 

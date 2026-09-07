@@ -81,6 +81,10 @@ TOOLS = [
     # integers. gcc and the standard library only.
     ("divti3_host", "divti3_hostcheck.py",     "__udivti3 and friends against bignums", False,
      None,                                                                                   False),
+    # utext's sparse wrap index against the naive scan it replaced, over
+    # this repo's own Markdown and pci.ids. gcc and the standard library.
+    ("utext_host",  "utext_hostcheck.py",      "the editor's wrap index vs a naive scan", False,
+     None,                                                                                   False),
     # --- networking -------------------------------------------------
     # Launches its own guests against a COPY of disk.img and serves TLS
     # from the host, so wants_vm is False and nothing leaves the machine.

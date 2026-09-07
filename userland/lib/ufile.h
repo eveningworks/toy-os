@@ -52,4 +52,16 @@ enum ufile_result ufile_slurp(const char *path, size_t cap,
 // being written underneath it, which is not one to list either.
 size_t ufile_read_head(const char *path, uint8_t *buf, size_t cap);
 
+// The whole file into memory the CALLER already owns, refusing anything
+// larger than `cap` rather than reading a prefix -- the ring-3 twin of
+// the kernel's fs_read_into(), and the same rule for the same reason.
+//
+// It exists beside ufile_slurp() for the caller that cannot use a
+// fresh, exactly-sized allocation: an editor needs room past the end of
+// the file to type into, so it sizes its own buffer and fills it. That
+// caller still wants the short-read loop, which is the whole point of
+// this file.
+enum ufile_result ufile_read_into(const char *path, void *buf, size_t cap,
+                                  size_t *out_len);
+
 #endif // ULIB_UFILE_H

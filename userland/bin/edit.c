@@ -46,12 +46,17 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-// Static, not local: `struct utext` embeds an 8 KiB buffer, against
-// USERLAND_CFLAGS' -Wframe-larger-than=2048 and a 16 KiB ring-3 stack
-// with ONE guard page below it. The kernel version made the same call
-// for the same reason, and its comment records that a stack-local copy
-// blew the stack silently.
+// Static, not local: the document buffer and the I/O buffer are 8 KiB
+// each, against USERLAND_CFLAGS' -Wframe-larger-than=2048 and a 16 KiB
+// ring-3 stack with ONE guard page below it.
+//
+// A FIXED 8 KiB is this editor's deliberate ceiling. `edit` is the
+// console fallback -- it draws with escape sequences and repaints the
+// screen per keystroke -- so a file it cannot show is a file it should
+// not open; the GUI Notepad is the one that sizes its buffer to the
+// file (utext.h).
 static struct utext g_tb;
+static char g_doc[UTEXT_CAP];
 static char g_io[UTEXT_CAP + 1];
 
 static int g_rows = 25, g_cols = 80;
@@ -263,7 +268,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    utext_init(&g_tb);
+    utext_init_buf(&g_tb, g_doc, (int)sizeof g_doc);
     load(path);
     size_up();
 

@@ -1455,7 +1455,11 @@ cost".
   arbitrary-precision integers) and
   `umd_hostcheck.py` (the Markdown renderer over every
   `docs/commands/` page at three widths, with a
-  `--positive-control` that must go red) (this repo's
+  `--positive-control` that must go red),
+  `utext_hostcheck.py` (the editor's sparse wrap index against the naive
+  scan it replaced -- a round trip from the oracle's draw position back
+  through `index_at_point`, at five scroll positions, over this repo's
+  Markdown and `pci.ids`) (this repo's
   implementations against GLIBC, libjpeg, ffmpeg and hashlib/zlib -- an oracle sharing no code is what catches an
   EXPECTATION being wrong; the MP3 one carries a
   `--positive-control` that must go red), `pixel_probe.py`
