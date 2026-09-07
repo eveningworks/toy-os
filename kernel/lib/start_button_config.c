@@ -19,11 +19,11 @@
 // button has exactly one mark, and a second setting would be a second
 // thing that can point at a file that is not there.
 //
-// THE DEFAULT IS `text`, so a machine with nothing written looks
-// exactly as it did before this existed. That is deliberate rather than
-// a preference about which looks better: the Start button's width is
-// derived from what is IN it, so changing the default would move every
-// taskbar button on every screenshot-based GUI test at once.
+// THE DEFAULT IS `both`. It was `text` so that a machine with nothing
+// written looked exactly as it had before the setting existed -- a
+// migration argument, spent once the setting shipped. Changing it moves
+// every taskbar button, because the button's width is derived from what
+// is inside it.
 #include "setting.h"
 #include "etc_config.h"
 #include "string.h"
@@ -34,6 +34,11 @@
 // Ordered as they escalate -- text, then icon, then both -- so a UI
 // listing them reads as a progression rather than an arbitrary set.
 static const char *const g_modes[] = { "text", "icon", "both" };
+
+// What a machine with nothing written in /etc/desktop.conf gets. An
+// INDEX into g_modes rather than a string, so it cannot name a mode the
+// choice list does not offer.
+#define DEFAULT_MODE 2  // both
 
 static int mode_choice(int index, char *out, uint32_t out_size) {
     if (index < 0 || index >= (int)(sizeof g_modes / sizeof g_modes[0])) return 0;
@@ -47,7 +52,7 @@ static int mode_choice(int index, char *out, uint32_t out_size) {
 // registry means by "what is this set to".
 static void mode_get(char *out, uint32_t out_size) {
     if (!etc_config_get(DESKTOP_CONFIG_FILE, "start_button", out, out_size)) {
-        k_strlcpy(out, g_modes[0], out_size);
+        k_strlcpy(out, g_modes[DEFAULT_MODE], out_size);
     }
 }
 

@@ -89,9 +89,9 @@ int taskbar_default_h(void);
 // that -- so the mode has to be one answer three files agree on, the
 // same rule the icon column above states.
 enum start_button_mode {
-    START_BUTTON_TEXT,   // "Start", as it has always been -- the DEFAULT
+    START_BUTTON_TEXT,   // "Start" alone
     START_BUTTON_ICON,   // the mark alone, KDE Plasma's default
-    START_BUTTON_BOTH,   // mark then word, Windows 95's
+    START_BUTTON_BOTH,   // mark then word, Windows 95's -- the DEFAULT
 };
 enum start_button_mode taskbar_start_mode(void);
 

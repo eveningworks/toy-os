@@ -31,7 +31,7 @@ int taskbar_hidden(void) { return g_hidden; }
 // the registry knows the default and the legal values, so reading the
 // file here would put a second copy of the default in a second place
 // and the two would disagree the first time either moved.
-static enum start_button_mode g_start_mode = START_BUTTON_TEXT;
+static enum start_button_mode g_start_mode = START_BUTTON_BOTH;
 
 enum start_button_mode taskbar_start_mode(void) { return g_start_mode; }
 
@@ -81,7 +81,10 @@ void taskbar_poll_config(void) {
         wm_layout_changed();
     }
 
-    enum start_button_mode want = START_BUTTON_TEXT;
+    // The default when nothing is written; it must match
+    // start_button_config.c's DEFAULT_MODE, which is what the
+    // registry answers with and what System Settings shows.
+    enum start_button_mode want = START_BUTTON_BOTH;
     struct setting_msg msg;
     setting_get("desktop.start_button", &msg);
     if (msg.value[0]) {
