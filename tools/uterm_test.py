@@ -59,6 +59,20 @@ class Result:
             print(f"        {detail}")
 
 
+# THE MENU BAR'S TITLES, BY INDEX -- the layout log's vocabulary is
+# `menu.title N` with no label (ui/uui_describe.h), so a title can only
+# be named by where it sits.
+#
+# **THIS HAS BROKEN ONCE**: adding an Edit menu to the Terminal shifted
+# everything after File, and three checks failed pointing at Rename Tab
+# and the menu-bar toggle rather than at the menu that had moved. If you
+# add a title to the Terminal's bar, these move.
+#
+#   0 File   1 Edit   2 Terminal   3 View   4 Tabs
+MENU_TERMINAL = 2
+MENU_VIEW = 3
+
+
 def key(dbg, k):
     dbg.send(f"gui key {k}")
 
@@ -834,7 +848,7 @@ def check_chrome(dbg, qmp, res):
               f"tabs {before} -> {tab_count(dbg)}")
 
     # --- the fall-through triple -------------------------------------
-    term = rect(dbg, "menu.title", 1)      # "Terminal"; row 0 is Rename Tab
+    term = rect(dbg, "menu.title", MENU_TERMINAL)   # row 0 is Rename Tab
     res.check("c7. the Terminal title has a reported rect", term is not None)
     if not term:
         return
@@ -842,14 +856,29 @@ def check_chrome(dbg, qmp, res):
     count_before = tab_count(dbg)
     open_menu(dbg, win, term)
     row = item_rect(dbg, 0, 0)
-    tab0 = rect(dbg, "tabs.slot", 0)
-    covered = (row is not None and tab0 is not None
-               and row[1] < tab0[1] + tab0[3]
-               and row[0] < tab0[0] + tab0[2])
-    res.check("c8. that row really does cover tab 0",
-              covered, f"row {row} tab0 {tab0}")
-    res.check("c8pre. and tab 0 is NOT the selected one",
-              sel_before != 0, f"selected {sel_before}")
+
+    # WHICHEVER TAB THE ROW ACTUALLY SITS OVER, not tab 0 by name.
+    # **This used to name tab 0 and broke once**: adding an Edit menu to
+    # the Terminal moved the Terminal title to the right, its popup with
+    # it, and the row stopped overlapping the leftmost tab -- which
+    # failed as "that row really does cover tab 0" and said nothing
+    # about the fall-through this block exists to test. What the check
+    # needs is a tab under the row that is NOT the selected one, so that
+    # c8b can tell a swallowed click from one that landed.
+    under = None
+    for i in range(max(count_before, 1)):
+        slot = rect(dbg, "tabs.slot", i)
+        if (row is not None and slot is not None
+                and row[1] < slot[1] + slot[3]
+                and row[0] < slot[0] + slot[2]
+                and slot[0] < row[0] + row[2]):
+            under = i
+            break
+    res.check("c8. that row really does cover a tab",
+              under is not None, f"row {row} tabs {count_before}")
+    res.check("c8pre. and the tab under it is NOT the selected one",
+              under is not None and sel_before != under,
+              f"under {under}, selected {sel_before}")
     if not row:
         return
     dbg.click(*centre(win, row))
@@ -874,7 +903,7 @@ def check_chrome(dbg, qmp, res):
 
     # Hiding the bar, and F10 getting it back -- the half that makes the
     # toggle a toggle rather than a one-way door.
-    view = rect(dbg, "menu.title", 2)
+    view = rect(dbg, "menu.title", MENU_VIEW)
     res.check("c9. the View title has a reported rect", view is not None)
     if not view:
         return

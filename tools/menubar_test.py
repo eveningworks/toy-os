@@ -163,6 +163,23 @@ class Layout:
         return sorted(int(k.split()[1]) for k in self.r if k.startswith("menu.popup "))
 
 
+# THE VIEW MENU'S ROWS, BY INDEX -- and SEPARATORS COUNT, because the
+# layout log reports a rect for every item including them.
+#
+# **THIS IS THE FRAGILE PART OF THIS TOOL, and it has broken once.** The
+# log's vocabulary is `menu.item LEVEL INDEX` with no label
+# (ui/uui_describe.h), so a row can only be named by where it sits --
+# and adding two rows to Notepad's View menu silently moved "Go to" and
+# "Status bar", which failed as "hovering a submenu parent opens the
+# next level" and pointed at the menu widget rather than at the app's
+# menu. If you add a row to Notepad's View menu, these move.
+#
+#   0 Markdown preview   1 ---   2 Word wrap   3 ---
+#   4 Go to (submenu)    5 ---   6 Status bar
+VIEW_GOTO = "menu.item 0 4"
+VIEW_STATUSBAR = "menu.item 0 6"
+
+
 def npwin(dbg):
     for w in dbg.json("gui windows --json").get("windows", []):
         t = w.get("title", "").lstrip("*")
@@ -366,12 +383,12 @@ def run(dbg, qmp, tmp, res):
     dbg.settle()
     dbg.click(*lay.centre("menu.title 2"))   # View
     dbg.settle()
-    lay3 = wait_layout(dbg, content, lambda l: l.has("menu.item 0 0"))
-    if not lay3.has("menu.item 0 0"):
+    lay3 = wait_layout(dbg, content, lambda l: l.has(VIEW_GOTO))
+    if not lay3.has(VIEW_GOTO):
         res.check("hovering a submenu parent opens the next level", False,
                   "View menu did not open")
         return
-    go = lay3.rect("menu.item 0 0")          # "Go to"
+    go = lay3.rect(VIEW_GOTO)
     hover(dbg, qmp, go)
     lay4 = wait_layout(dbg, content, lambda l: l.popups() == [0, 1])
     res.check("hovering a submenu parent opens the next level",
@@ -412,9 +429,9 @@ def run(dbg, qmp, tmp, res):
     # from commit-on-press; see the positive control in the docstring.
     dbg.click(*lay.centre("menu.title 2"))
     dbg.settle()
-    lay5 = wait_layout(dbg, content, lambda l: l.has("menu.item 0 2"))
-    if lay5.has("menu.item 0 2"):
-        sb = lay5.rect("menu.item 0 2")      # "Status bar"
+    lay5 = wait_layout(dbg, content, lambda l: l.has(VIEW_STATUSBAR))
+    if lay5.has(VIEW_STATUSBAR):
+        sb = lay5.rect(VIEW_STATUSBAR)
         actions(dbg)
         tx, ty, tw, th = lay.rect("menu")
         dbg.drag(sb[0] + sb[2] // 2, sb[1] + sb[3] // 2,
@@ -456,8 +473,18 @@ def run(dbg, qmp, tmp, res):
 
     # F10 opens File with its first row highlighted. Right on a row that
     # is NOT a submenu walks to the next TITLE -- the Windows/KDE
-    # behaviour -- so File, Edit, View; and View's first row IS "Go to",
-    # so the third Right opens it. Three Rights, ending two levels deep.
+    # behaviour -- so two Rights reach View. Its first row is NOT a
+    # submenu, so getting to "Go to" means walking DOWN to it and then
+    # Right, which opens the second level.
+    #
+    # **THE PATH FOLLOWS NOTEPAD'S MENUS AND HAS BROKEN ONCE**: it used
+    # to be three Rights, because View's first row WAS "Go to" -- adding
+    # a Markdown preview row above it meant the third Right walked past
+    # View instead of opening anything, and this failed as "Esc closes
+    # ONE level at a time" while pointing at the menu widget.
+    #
+    #   View:  0 Markdown preview   1 ---   2 Word wrap
+    #          3 ---   4 Go to (submenu)   5 ---   6 Status bar
     #
     # Deliberately NOT routed through File > Recent files: it is disabled
     # until something has been saved, so the arrows correctly skip it,
@@ -465,8 +492,13 @@ def run(dbg, qmp, tmp, res):
     # through to Notepad's own Esc -- which QUITS. The first version of
     # this test killed the app here and every later check read stale
     # state. An arrow path has to be checked against what is enabled.
-    for _ in range(3):
-        dbg.send(f"gui key {RIGHT}")
+    for _ in range(2):
+        dbg.send(f"gui key {RIGHT}")     # File -> Edit -> View
+    dbg.settle()
+    for _ in range(2):
+        dbg.send(f"gui key {DOWN}")      # Markdown preview -> Word wrap -> Go to
+    dbg.settle()
+    dbg.send(f"gui key {RIGHT}")         # opens the submenu
     dbg.settle()
     depth_open = wait_layout(dbg, content, lambda l: l.popups() == [0, 1]).popups()
 
@@ -525,9 +557,9 @@ def run(dbg, qmp, tmp, res):
     # --- 12. a checkable item, round trip ------------------------------
     dbg.click(*lay.centre("menu.title 2"))
     dbg.settle()
-    lay6 = wait_layout(dbg, content, lambda l: l.has("menu.item 0 2"))
-    if lay6.has("menu.item 0 2"):
-        sb = lay6.rect("menu.item 0 2")
+    lay6 = wait_layout(dbg, content, lambda l: l.has(VIEW_STATUSBAR))
+    if lay6.has(VIEW_STATUSBAR):
+        sb = lay6.rect(VIEW_STATUSBAR)
         actions(dbg)
         dbg.click(sb[0] + sb[2] // 2, sb[1] + sb[3] // 2)
         dbg.settle()
@@ -541,9 +573,9 @@ def run(dbg, qmp, tmp, res):
 
         dbg.click(*lay.centre("menu.title 2"))
         dbg.settle()
-        lay7 = wait_layout(dbg, content, lambda l: l.has("menu.item 0 2"))
-        if lay7.has("menu.item 0 2"):
-            sb = lay7.rect("menu.item 0 2")
+        lay7 = wait_layout(dbg, content, lambda l: l.has(VIEW_STATUSBAR))
+        if lay7.has(VIEW_STATUSBAR):
+            sb = lay7.rect(VIEW_STATUSBAR)
             dbg.click(sb[0] + sb[2] // 2, sb[1] + sb[3] // 2)
             dbg.settle()
             wait_layout(dbg, content, lambda l: l.has("status"))
@@ -564,6 +596,8 @@ def run(dbg, qmp, tmp, res):
 
     dbg.click(*lay.centre("menu.title 0"))
     dbg.settle()
+    # The FILE menu here (title 0), whose rows this change did not move:
+    # 0 New, 1 Open..., 2 Recent files.
     lay8 = wait_layout(dbg, content, lambda l: l.has("menu.item 0 2"))
     if lay8.has("menu.item 0 2"):
         rec = lay8.rect("menu.item 0 2")
