@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <img src="screenshots/readme/desktop.png" alt="toy-os desktop: Image Viewer, Notepad, Minesweeper, the Audio Player and DOOM open at once" width="49%">
+  <img src="screenshots/readme/desktop.png" alt="toy-os desktop: the Image Viewer, the File Manager, Notepad, DOOM and a Terminal open at once" width="49%">
   <img src="screenshots/readme/shell.png" alt="toy-os kernel shell: about, df and the in-kernel test suite" width="49%">
 </p>
 

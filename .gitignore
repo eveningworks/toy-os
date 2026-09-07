@@ -5,6 +5,7 @@
 # The compact USB image (make usb-image) -- half a gigabyte of build
 # output, regenerated from seed/ and the kernel like any other medium.
 /toyos-usb.img
+/toyos-usb.img.gz
 # The LIVE ISO and its staging tree (make live-iso). This arrived after
 # the three lines above and was never added beside them, which is how
 # ~84 MB of build output -- toy-os-live.iso, iso-live/boot/live.img and
