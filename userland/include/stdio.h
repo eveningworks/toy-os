@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdarg.h>
+#include <sys/types.h> // ssize_t, for getline()/getdelim()
 #include <kfmt.h> // the toolkit's formatter; no name clash, unlike string.h's
 
 // The C library's stream layer and formatted output, for ring 3 only.
@@ -86,6 +87,9 @@ int   fflush(FILE *f);
 // It exists so a program can turn the buffering OFF -- without it there
 // is no escape hatch from a policy this layer chose.
 int   setvbuf(FILE *f, char *buf, int mode, size_t size);
+// setbuf() is setvbuf() with C's two fixed choices and no way to report
+// failure, which is why setvbuf() is the one to reach for.
+void  setbuf(FILE *f, char *buf);
 int   fileno(FILE *f);
 
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *f);
@@ -180,7 +184,41 @@ static inline size_t vsnprintf(char *out, size_t cap, const char *fmt, va_list a
 int   remove(const char *path);
 int   rename(const char *oldpath, const char *newpath);
 
-// DELIBERATELY ABSENT: freopen(), which the single-mode fd model has
-// nothing to do.
+// perror() writes "<s>: <strerror(errno)>" to stderr, and the errno it
+// reports is the one from BEFORE the call -- printing must not be able
+// to change the thing being printed.
+void  perror(const char *s);
+
+// fpos_t is an OPAQUE position, which is the difference between this
+// pair and fseek/ftell: C lets an implementation put more in it than a
+// byte offset. Here it is the offset, and saying so costs nothing --
+// but a caller must still treat it as a token to hand back.
+typedef long fpos_t;
+int   fgetpos(FILE *f, fpos_t *pos);
+int   fsetpos(FILE *f, const fpos_t *pos);
+
+// tmpnam() names a file in the volatile scratch directory, which is a
+// SETTING (api/tmppath.h) rather than a spelled path. The name carries
+// the pid and a counter, so neither two processes nor one process
+// asking twice can collide.
+#define L_tmpnam 64
+char *tmpnam(char *s);
+
+// getline()/getdelim() -- POSIX, not ISO C, and here because reading a
+// file a line at a time is what most C actually does. The buffer is
+// GROWN as needed: *lineptr may be NULL and *n 0 on the first call, and
+// the caller frees it at the end. Returns the byte count (the delimiter
+// included) or -1 at end of file.
+ssize_t getdelim(char **lineptr, size_t *n, int delim, FILE *f);
+ssize_t getline(char **lineptr, size_t *n, FILE *f);
+
+// DELIBERATELY ABSENT, both for the same reason: an open file here has
+// ONE mode, so `fopen` refuses `+` and no read-write stream can exist.
+// freopen() has nothing to do under that model, and tmpfile() is
+// specified to open in UPDATE mode -- a write-only version would look
+// like it worked until the first read, which is the failure this
+// library's `+` refusal exists to avoid. tmpnam() plus fopen() is the
+// honest spelling, and it is what a caller wanting a scratch file
+// should use.
 
 #endif

@@ -110,3 +110,22 @@ char *strndup(const char *s, size_t n) {
     p[len] = '\0';
     return p;
 }
+
+// --- collation, in the only locale there is ---------------------------
+//
+// strxfrm() returns strlen(src) and copies at most n-1 bytes plus a
+// NUL, so a caller sizing a buffer from the return value gets the same
+// answer it would from strcmp() on the originals. Truncation is
+// REPORTED rather than hidden: the return is what the length would have
+// been, which is what lets the standard two-call idiom work.
+int strcoll(const char *a, const char *b) { return strcmp(a, b); }
+
+size_t strxfrm(char *dst, const char *src, size_t n) {
+    size_t len = strlen(src);
+    if (n) {
+        size_t copy = len < n - 1 ? len : n - 1;
+        memcpy(dst, src, copy);
+        dst[copy] = '\0';
+    }
+    return len;
+}

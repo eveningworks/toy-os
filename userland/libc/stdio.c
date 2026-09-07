@@ -32,6 +32,10 @@
 #include <stdlib.h>
 #include "rt/sys.h"
 #include "syscall_abi.h"
+#include <errno.h>
+#include "tmppath.h"   // TMP_DIR_DEFAULT, and enum tmp_kind
+#include "kpath.h"     // k_path_join -- refuses rather than truncating
+#include "setting_abi.h"
 
 // --- the stream ------------------------------------------------------
 
@@ -470,3 +474,124 @@ int fclose(FILE *f) {
 int feof(FILE *f) { return f && (f->flags & F_EOF) ? 1 : 0; }
 int ferror(FILE *f) { return f && (f->flags & F_ERR) ? 1 : 0; }
 void clearerr(FILE *f) { if (f) f->flags &= (short)~(F_EOF | F_ERR); }
+
+// --- the rest of C's stdio surface -------------------------------------
+
+// ERRNO IS READ FIRST. Everything below this line can change it --
+// fputs, the write, strerror's own lookup -- so capturing it before any
+// of that runs is the difference between reporting the caller's failure
+// and reporting the report.
+void perror(const char *s) {
+    int e = errno;
+    if (s && *s) { fputs(s, stderr); fputs(": ", stderr); }
+    fputs(strerror(e), stderr);
+    fputc('\n', stderr);
+}
+
+// C's two-choice front end to setvbuf(), with no way to report failure.
+void setbuf(FILE *f, char *buf) {
+    setvbuf(f, buf, buf ? _IOFBF : _IONBF, BUFSIZ);
+}
+
+// fpos_t is the byte offset here, so these are ftell/fseek with the
+// position passed by pointer. Kept as their own functions rather than
+// macros because C allows the type to carry more than an offset, and a
+// caller written against that should keep compiling if it ever does.
+int fgetpos(FILE *f, fpos_t *pos) {
+    if (!pos) return -1;
+    long off = ftell(f);
+    if (off < 0) return -1;
+    *pos = (fpos_t)off;
+    return 0;
+}
+
+int fsetpos(FILE *f, const fpos_t *pos) {
+    if (!pos) return -1;
+    return fseek(f, (long)*pos, SEEK_SET) == 0 ? 0 : -1;
+}
+
+// --- temporary files ---------------------------------------------------
+//
+// THE DIRECTORY IS A SETTING, NEVER A SPELLED PATH (api/tmppath.h): a
+// literal "/tmp" keeps working on a default machine and silently
+// ignores `storage.tmpdir` on any other. TMP_VOLATILE, because a
+// temporary file is exactly what nobody wants surviving a reboot.
+//
+// The name carries the pid, so two processes cannot collide, and a
+// counter, so one process asking twice cannot either.
+// THE SETTING IS READ HERE RATHER THAN THROUGH tmppath(), and that is
+// a layering constraint, not a preference: tmppath()'s ring-3 half
+// (userland/lib/utmppath.c) lives in libuapp, the C library is linked
+// AFTER it, and libc calls nothing in Toykit. A syscall it may make
+// directly, so it makes the same one usetting_get() would.
+//
+// Cached for the reason utmppath.c caches: otherwise every call is a
+// round trip, and a program whose scratch directory changed halfway
+// through would leave half its files somewhere nobody looks.
+static const char *tmpdir(void) {
+    static char dir[64];
+    if (dir[0]) return dir;
+
+    struct setting_msg m;
+    memset(&m, 0, sizeof m);
+    m.op = SETTING_OP_GET;
+    strlcpy(m.name, "storage.tmpdir", sizeof m.name);
+    // Anything not absolute is refused rather than used: a relative
+    // scratch directory would resolve against whatever the process's
+    // cwd happens to be. A missing registry is not an error -- the
+    // compiled default is the directory the layout pass created.
+    if (sys_setting(&m) == 0 && m.value[0] == '/')
+        strlcpy(dir, m.value, sizeof dir);
+    else
+        strlcpy(dir, TMP_DIR_DEFAULT, sizeof dir);
+    return dir;
+}
+
+char *tmpnam(char *s) {
+    static char own[L_tmpnam];
+    static unsigned seq;
+    char name[32];
+    char *out = s ? s : own;
+
+    // The pid keeps two processes apart, the counter keeps one process
+    // asking twice apart.
+    snprintf(name, sizeof name, "tmp%d-%u", sys_getpid(), seq++);
+    if (!k_path_join(tmpdir(), name, out, L_tmpnam)) { out[0] = '\0'; return 0; }
+    return out;
+}
+
+// --- getline / getdelim ------------------------------------------------
+
+ssize_t getdelim(char **lineptr, size_t *n, int delim, FILE *f) {
+    if (!lineptr || !n || !f) { errno = EINVAL; return -1; }
+
+    size_t len = 0;
+    for (;;) {
+        // GROW BEFORE THE STORE, and keep room for the NUL: a caller
+        // may hand in a NULL buffer with *n = 0, which is the documented
+        // way to start.
+        if (len + 2 > *n) {
+            size_t want = *n ? *n * 2 : 128;
+            char *bigger = realloc(*lineptr, want);
+            if (!bigger) { errno = ENOMEM; return -1; }
+            *lineptr = bigger;
+            *n = want;
+        }
+        int c = fgetc(f);
+        if (c == EOF) {
+            // END OF FILE WITH BYTES IN HAND IS NOT A FAILURE -- a last
+            // line with no newline is still a line. Only an immediately
+            // empty read is -1.
+            if (len == 0) return -1;
+            break;
+        }
+        (*lineptr)[len++] = (char)c;
+        if (c == delim) break;
+    }
+    (*lineptr)[len] = '\0';
+    return (ssize_t)len;
+}
+
+ssize_t getline(char **lineptr, size_t *n, FILE *f) {
+    return getdelim(lineptr, n, '\n', f);
+}

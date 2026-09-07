@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <inttypes.h>
 #include <ctype.h>
 #include <errno.h>
 #include <setjmp.h>
@@ -81,6 +82,75 @@ int main(void) {
     utest_check(strtoull("-1", &end, 10) == ~0ULL, "strtoull(\"-1\") is ULLONG_MAX");
     utest_check(llabs(-9007199254740993LL) == 9007199254740993LL,
                 "llabs does not truncate to 32 bits");
+    utest_check(strtoimax("-42", &end, 10) == -42 && imaxabs((intmax_t)-7) == 7,
+                "the intmax_t parsers exist and agree");
+
+    // --- div, and the sign rule that makes it worth having ------------
+    //
+    // C99 pins `/` toward zero and `%` to the dividend's sign. -7/2 is
+    // -3 remainder -1, NOT -4 remainder 1 -- which is the answer a
+    // floor-division language gives and the one an open-coded pair
+    // drifts into.
+    div_t dv = div(-7, 2);
+    utest_check(dv.quot == -3 && dv.rem == -1, "div truncates toward zero");
+    ldiv_t ld = ldiv(7L, -2L);
+    utest_check(ld.quot == -3 && ld.rem == 1, "ldiv keeps the dividend's sign");
+    lldiv_t lld = lldiv(9007199254740993LL, 2LL);
+    utest_check(lld.quot == 4503599627370496LL && lld.rem == 1,
+                "lldiv works past 2^53");
+
+    // --- collation, in the only locale there is -----------------------
+    utest_check(strcoll("abc", "abd") < 0 && strcoll("abc", "abc") == 0,
+                "strcoll orders like strcmp");
+    {
+        char x[4];
+        // The RETURN is the untruncated length -- that is what makes
+        // the standard "call once to size, once to fill" idiom work.
+        size_t need = strxfrm(x, "abcdef", sizeof x);
+        utest_check(need == 6 && strcmp(x, "abc") == 0,
+                    "strxfrm truncates but reports the full length");
+    }
+
+    // --- tmpnam + getline ---------------------------------------------
+    //
+    // Two streams rather than one, because this library has no update
+    // mode (see <stdio.h>'s note on `+`). The last line deliberately has
+    // NO newline: a reader that only returns complete lines drops it,
+    // which is the most common getline() bug.
+    {
+        char path[L_tmpnam];
+        utest_check(tmpnam(path) != NULL && path[0] == '/',
+                    "tmpnam builds an absolute scratch path");
+        FILE *w = fopen(path, "w");
+        utest_check(w != NULL, "and a file can be created at it");
+        if (w) {
+            fputs("alpha\nbeta\nno-newline", w);
+            fclose(w);
+        }
+        FILE *t = fopen(path, "r");
+        if (t) {
+            fpos_t start;
+            utest_check(fgetpos(t, &start) == 0, "fgetpos reads a position");
+
+            char *line = NULL;
+            size_t cap = 0;
+            ssize_t n1 = getline(&line, &cap, t);
+            utest_check(n1 == 6 && strcmp(line, "alpha\n") == 0,
+                        "getline returns the line WITH its newline");
+            getline(&line, &cap, t);           // beta
+            ssize_t n3 = getline(&line, &cap, t);
+            utest_check(n3 == 10 && strcmp(line, "no-newline") == 0,
+                        "a final line with no newline is still a line");
+            utest_check(getline(&line, &cap, t) == -1, "and then EOF is -1");
+
+            utest_check(fsetpos(t, &start) == 0 &&
+                        getline(&line, &cap, t) == 6,
+                        "fsetpos returns to the saved position");
+            free(line);
+            fclose(t);
+        }
+        remove(path);
+    }
     utest_check(strtol("0x1f", &end, 16) == 31 && *end == '\0', "and its optional 0x");
     utest_check(strtol("0x20", &end, 0) == 32, "base 0 detects hex");
     utest_check(strtol("017", &end, 0) == 15, "and octal");

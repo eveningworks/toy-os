@@ -24,7 +24,8 @@ why this is tolibc and not musl.
 |---|---|
 | `stdio.c` | `FILE`, the buffering policy, `printf`, `sprintf` |
 | `scanf.c` | `sscanf`/`fscanf`/`scanf` over one scanner |
-| `stdlib.c` | `strtol`/`strtod`, `realloc`, `qsort`, `exit`/`atexit` |
+| `stdlib.c` | `strtol`/`strtod`, the `long long` parsers, `div`/`ldiv`/`lldiv`, `realloc`, `qsort`, `exit`/`atexit`/`_Exit`/`quick_exit` |
+| `inttypes.c` | `strtoimax`/`strtoumax`/`imaxabs`/`imaxdiv`. The PRI\*/SCN\* macros are deliberately absent -- see the header |
 | `string.c` | the half of `<string.h>` the toolkit has no equivalent of |
 | `time.c` | `struct tm`, `mktime`, `strftime`, `clock` |
 | `math.c` | the EXACT functions -- bit reasoning, no approximation |

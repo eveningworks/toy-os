@@ -130,6 +130,13 @@ static inline size_t strlcat(char *dst, const char *src, size_t n) { return k_st
 // this repo's shared-source rule exists to prevent.
 static inline char *strerror(int e) { return (char *)sys_strerror(e); }
 
+// THE "C" LOCALE IS THE ONLY LOCALE HERE, so collation is byte order
+// and strcoll() IS strcmp(). They exist because C requires them and
+// because a program written against them should not have to know that
+// -- not because they can do anything strcmp() cannot.
+int    strcoll(const char *a, const char *b);
+size_t strxfrm(char *dst, const char *src, size_t n);
+
 // <ctype.h>'s functions used to live here, which was always the wrong
 // header for them -- they are in <ctype.h> now, where C puts them, and
 // that file explains why only four of them are k_* wrappers.

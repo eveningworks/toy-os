@@ -156,6 +156,47 @@ unsigned long long strtoull(const char *nptr, char **endptr, int base) {
 
 long long atoll(const char *s) { return strtoll(s, 0, 10); }
 
+// --- _Exit, and C11's second exit list ---------------------------------
+
+// NO HANDLERS, NO FLUSH. A caller reaching for this has decided the
+// process must stop being itself immediately -- the usual reason is a
+// child that must not run its parent's atexit handlers a second time.
+void _Exit(int code) { sys_exit(code); }
+
+// A SEPARATE LIST FROM atexit's, which is the whole point of C11's
+// pair: quick_exit runs these and NOT the atexit ones, so a handler
+// registered here is for what must happen even when ordinary teardown
+// is skipped. It does not flush either.
+#define QUICK_MAX 32
+static void (*g_quick[QUICK_MAX])(void);
+static int g_quick_count;
+static int g_quick_exiting;
+
+int at_quick_exit(void (*fn)(void)) {
+    if (!fn || g_quick_count >= QUICK_MAX) return -1;
+    g_quick[g_quick_count++] = fn;
+    return 0;
+}
+
+void quick_exit(int code) {
+    // Same re-entry guard, and for the same reason as exit()'s: a
+    // handler that calls quick_exit() would otherwise restart the list.
+    if (!g_quick_exiting) {
+        g_quick_exiting = 1;
+        while (g_quick_count > 0) g_quick[--g_quick_count]();
+    }
+    sys_exit(code);
+}
+
+// --- div ---------------------------------------------------------------
+//
+// C99 pins `/` to truncate toward zero and `%` to take the dividend's
+// sign, so these are the plain operators -- the value is that the pair
+// is computed together and cannot disagree.
+div_t   div(int num, int den)             { div_t r   = { num / den, num % den }; return r; }
+ldiv_t  ldiv(long num, long den)          { ldiv_t r  = { num / den, num % den }; return r; }
+lldiv_t lldiv(long long num, long long den) { lldiv_t r = { num / den, num % den }; return r; }
+
 int       abs(int v)         { return v < 0 ? -v : v; }
 long      labs(long v)       { return v < 0 ? -v : v; }
 long long llabs(long long v) { return v < 0 ? -v : v; }

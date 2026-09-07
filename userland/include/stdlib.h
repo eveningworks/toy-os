@@ -72,6 +72,18 @@ int   abs(int v);
 long  labs(long v);
 long long llabs(long long v);
 
+// C's integer divisions. The point of them is that quotient and
+// remainder come back TOGETHER: `/` and `%` are two operations the
+// compiler usually fuses anyway, and C guarantees the pair is
+// consistent for negative operands, which is where an open-coded
+// version goes wrong.
+typedef struct { int quot, rem; }             div_t;
+typedef struct { long quot, rem; }            ldiv_t;
+typedef struct { long long quot, rem; }       lldiv_t;
+div_t   div(int num, int den);
+ldiv_t  ldiv(long num, long den);
+lldiv_t lldiv(long long num, long long den);
+
 // --- sorting and searching --------------------------------------------
 //
 // **qsort IS NOT STABLE**, and this matters here because both existing
@@ -139,6 +151,18 @@ void exit(int code) __attribute__((noreturn));
 // Returns 0, or -1 if the handler is NULL or the table (32 entries, C's
 // minimum) is full.
 int  atexit(void (*fn)(void));
+
+// _Exit() leaves WITHOUT running atexit handlers and without flushing.
+// It is what a child that has decided not to be its parent any more
+// calls, and what a handler calls to stop the rest of them running.
+void _Exit(int code) __attribute__((noreturn));
+
+// quick_exit()/at_quick_exit() are C11's SECOND, separate list. The
+// separation is the feature: a quick-exit handler is for the things
+// that must happen even when the ordinary teardown is being skipped,
+// so registering on one list never runs the other's.
+void quick_exit(int code) __attribute__((noreturn));
+int  at_quick_exit(void (*fn)(void));
 // Exits with 134 (128 + SIGABRT) WITHOUT flushing the buffered streams:
 // abort() means the state is not to be trusted, and committing a
 // half-written file is worse than losing it. stderr is unbuffered, so
