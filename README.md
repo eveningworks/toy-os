@@ -437,6 +437,17 @@ ships two media and a launcher:
 From either medium, `install --disk <name> confirm` writes toy-os to an
 internal drive and makes it boot. **Both media are BIOS/CSM only.**
 
+**On real hardware.** `dd` overwrites the device you name, completely
+and without asking — check it with `lsblk` first, and check the size.
+Expect the rough edges of a hobby kernel: it programs the display, USB
+and ACPI directly, so a machine it has not met before may hang partway
+through boot, and [docs/boot-flags.md](docs/boot-flags.md) lists the
+escape hatches (`nousb`, `noahci`, `nomsi`, `nogpe`, `nokaslr`). It does
+not flash firmware, write EFI variables or touch anything outside the
+disk you point it at, so the realistic worst case is a disk you told it
+to erase. The MIT licence's warranty disclaimer applies, as to
+everything here.
+
 Releases before v0.3.0 shipped `toy-os.iso` plus a gzipped `disk.img`
 instead; `run_release.sh` still understands that pair.
 
