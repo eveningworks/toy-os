@@ -15,7 +15,8 @@ can test it. `docs/devices.md` lists what already exists.
 
     lspci            on the machine: vendor:device, class, BARs, IRQ
     lsusb            the same for USB
-    lsdrv            which driver claimed what, and what claimed nothing
+    lsdrv            which driver claimed what
+    lsdrv -a         ...and what claimed nothing
 
 A device in `lspci` and not in `lsdrv` is the gap. Note the **class and
 prog-if** as well as the ID: matching a class drives every card of a

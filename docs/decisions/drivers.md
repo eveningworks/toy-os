@@ -2127,7 +2127,9 @@ its rule was written down.
 **The rule was "call it before you look for hardware", and it does not
 survive contact with a probe.** A driver that finds nothing must still
 appear: "compiled in but idle" is the answer no per-class registry can
-give, and it is the reason `lsdrv` exists. `ahci.c`, `xhci.c` and
+give, and it is the reason `lsdrv -a` exists -- the flag half of a
+command whose DEFAULT is the opposite question, what is driving
+something right now. `ahci.c`, `xhci.c` and
 `ac97.c` honoured that, the last with a comment saying why. `e1000.c`
 and `vmsvga.c` did not -- `e1000_init()` returns at `if (!pci) return;`
 ("the ordinary case on a machine without one") a hundred lines above its

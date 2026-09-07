@@ -3036,8 +3036,9 @@ design.
 
 It emits a `struct driver_decl` into the `.drivers` linker section --
 the same mechanism `KTEST()` uses, and Linux's initcalls before it -- so
-a driver is in `lsdrv` because it is in the IMAGE, not because a call
-was reached. It was a call inside `init()` until 2026-09-01, and where
+a driver is in `lsdrv -a` because it is in the IMAGE, not because a call
+was reached (a bare `lsdrv` lists only what BOUND something, which is a
+different question and the everyday one). It was a call inside `init()` until 2026-09-01, and where
 in the probe somebody put that call decided whether the driver appeared:
 `e1000_init()` returns at its "no card on this bus" check, so a build
 containing the driver listed no driver -- the exact question `lsdrv`

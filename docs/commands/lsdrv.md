@@ -7,22 +7,38 @@
 ## Synopsis
 
 ```
-lsdrv [-v]
+lsdrv [-a] [-v]
 ```
 
 ## Options
 
+- `-a` -- list **every** driver in the build, including the ones that
+  bound nothing. Without it only drivers that are actually driving
+  something are shown.
 - `-v` -- print the source file each driver declared itself in and its
   one-line description, with the devices it bound on a continuation
   line, instead of the single devices column.
 
 ## Description
 
-Lists the drivers **this build has**, and what each one is currently
-driving.
+Lists the drivers that are **actually driving something** on this
+machine, and what each one has bound.
 
 ```
 /$ lsdrv
+DRIVER         CLASS    DEVICES
+pit            clock    clock0
+ata            block    ata0
+vesafb         display  fb0
+i8042          input    ps2-keyboard ps2-mouse
+e1000          net      net-123456
+```
+
+**`-a` adds the ones that bound nothing**, which is the other half of
+the question and a real answer rather than a gap:
+
+```
+/$ lsdrv -a
 DRIVER         CLASS    DEVICES
 tsc            clock    (none)
 pit            clock    clock0
@@ -37,21 +53,32 @@ xhci           usb      (none)
 virtio-rng     rng      (none)
 ```
 
+The default is the everyday question -- what is running this machine --
+and on a QEMU guest more than half the rows bind nothing, which buried
+it. `lspci -k` makes the same choice, naming a driver only where one is
+in use.
+
 **It answers a question none of the other listings can.** `lsblk` says
 which disks are present, `lsusb` which devices are attached, `ifconfig`
 which cards are configured — all of them list *devices*. A driver that
 is compiled in and bound nothing appears in none of them, so nothing
-else can say whether virtio-blk is in this build, and which driver
-claimed a given USB device is otherwise only in the boot log, which
-scrolls away.
+else can say whether virtio-blk is in this build — which is what `-a`
+answers — and which driver claimed a given USB device is otherwise only
+in the boot log, which scrolls away.
 
-**`(none)` is a real answer, not a gap.** `tsc clock (none)` above means
-the TSC driver is in this build and is driving nothing on this machine —
+**`(none)` under `-a` is a real answer, not a gap.** `tsc clock (none)`
+above means the TSC driver is in this build and is driving nothing on
+this machine —
 which on a QEMU guest is exactly right, because the boot log says
 `clocksource: tsc not offered -- no invariant TSC on this CPU`. On
 hardware with an invariant TSC the same build shows `tsc clock clock0`.
 That distinction is the whole point: "absent" and "present but idle" look
-identical from every other command.
+identical from every other command. It is also why `-a` exists at all
+rather than the filtering being the only behaviour: nothing else in the
+system can say that a driver is *present but idle*.
+
+When nothing at all is bound, `lsdrv` says so in a sentence and names
+the count `-a` would show, rather than printing a header with no rows.
 
 **`-v` names the source file and says what the driver is:**
 
