@@ -8,6 +8,15 @@
 
     acpi [--dump <SIG> [--at N] [--len N]]
 
+## Options
+
+- `--dump <SIG>` -- hex-dump the table with that four-character
+  signature instead of printing the summary; the two do not mix.
+- `--at N` -- start the dump at byte offset `N`, decimal or `0x` hex;
+  only with `--dump`.
+- `--len N` -- dump `N` bytes rather than the rest of the table, decimal
+  or `0x` hex; only with `--dump`.
+
 ## Description
 
 `/bin/acpi` — what this machine's firmware described in its ACPI tables,
@@ -29,9 +38,8 @@ would change that.
 ## `--dump`: the raw bytes of one table
 
 `acpi --dump DSDT --at 0x1200 --len 256` hex-dumps a range of a table by
-its four-character signature. `--at` and `--len` take decimal or `0x`
-hex; without them you get the whole table, which for a real DSDT is tens
-of kilobytes.
+its four-character signature. With no range you get the whole table,
+which for a real DSDT is tens of kilobytes.
 
 It exists for the same reason `lsusb -D` does: **a parser for firmware
 data has to be tested against real firmware data**, and a hand-written
@@ -50,9 +58,9 @@ truncated, which reads as a successful dump. `tools/acpi_dump.py` reads
 it in ranges and verifies the ACPI checksum, which is the check that
 catches exactly that.
 
-**A real DSDT can be very large** — 103,006 bytes on the laptop this was
-written for, against QEMU's 8,605 — so dumping one by hand is not the
-way to move it. Where a whole table is genuinely needed, drive it with
+**A real DSDT can be very large** — 103,006 bytes on one laptop here,
+against QEMU's 8,605 — so dumping one by hand is not the way to move
+it. Where a whole table is genuinely needed, drive it with
 `tools/acpi_dump.py`; where the QUESTION is what the table says, it is
 usually cheaper to make the kernel answer it.
 

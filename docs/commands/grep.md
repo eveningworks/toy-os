@@ -13,6 +13,17 @@
       -c  print only a count of matching lines
       with no file, reads standard input
 
+## Options
+
+- `-i` -- ignore case.
+- `-n` -- print the line number before each line.
+- `-v` -- print the lines that do NOT match.
+- `-c` -- print only a count of matching lines, one count per file.
+- `--` -- end of flags, so a pattern beginning with `-` can be given.
+
+Flags may be bundled (`grep -in error log`). Any other flag is refused
+with the usage and exit status 2.
+
 ## Description
 
 Prints the lines of each file that match `pattern`. With no file, reads

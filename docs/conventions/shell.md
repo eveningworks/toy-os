@@ -179,6 +179,15 @@ this the obvious way), not from how much history it accumulated.
   the part that goes quietly wrong. `docs/commands.md` is the index and
   holds only what is true of the SHELL rather than of one command.
 
+  **AND SINCE `doc` RENDERS THEM ON THE MACHINE, A PAGE IS THE MANUAL,
+  NOT A NOTE.** Two consequences, both in `docs/commands/README.md`:
+  a page carries **NO HISTORY** -- "it defaulted to `/` until
+  2026-08-20" is true and useless to somebody asking what `ls` does
+  today -- and a command with flags carries an `## Options` section
+  listing every one, as a BULLET list rather than a table, because a
+  table renders as one `Header: value` block per cell. The flags come
+  from the program's argument parsing, never from the prose.
+
 - **AN EVERYDAY COMMAND IS A `/bin` PROGRAM, NOT A BUILTIN, AND THE
   KERNEL'S OWN COPIES LIVE BEHIND ONE NAME: `rescue`.**
   `cat`, `echo`, `rm`, `touch`, `mkdir`, `mv`, `ln`, `stat`,

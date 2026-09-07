@@ -9,6 +9,19 @@
     mount [-r] [-t <fstype>] [-o size=<n>[K|M|G]] <device|partition|none> <mountpoint>
            mount                  list what is mounted
 
+## Options
+
+- `-r` -- mount read-only. What `/boot` gets at boot.
+- `-t <fstype>` -- ask only that backend to claim the volume, instead
+  of letting every one probe it. A volume that backend does not
+  recognise is then refused rather than mounted as something else.
+- `-o size=<n>[K|M|G]` -- cap a ramfs mount's memory. A bare number is
+  MiB, rounded UP to a whole MiB; it is the only option there is, and a
+  disk filesystem accepts and ignores it.
+
+The flags come before the two operands; with no operands at all `mount`
+lists instead.
+
 ## Description
 
 `/bin/mount` attaches a filesystem at a path, and with no arguments lists what
@@ -27,11 +40,10 @@ only form that can reach a second disk. Every driver enumerates at boot and
 every device it finds is named (`kernel/include/kernel/block.h`), so a machine
 with two drives can mount either: `mount ahci0p1 /mnt`.
 
-A bare NUMBER is the older form and still works, but it can only ever mean a
-partition of the **root's** disk — `mount 2 /boot` is "the second partition of
-the disk the root came from". That was unambiguous when one disk was all the
-kernel could see. It no longer is, so prefer the name; the number is kept
-because it is what `parttable` prints and what existing scripts pass.
+A bare NUMBER also works, but it can only ever mean a partition of the
+**root's** disk — `mount 2 /boot` is "the second partition of the disk the
+root came from". It cannot name a second drive, so prefer the name; the
+number is what `parttable` prints and what existing scripts pass.
 
 A filesystem that needs no volume at all is named by type instead, with `none`
 as the source — `mount -t ramfs none /mnt` gives you a scratch filesystem in
@@ -105,10 +117,9 @@ mounted as something it is not.
   refused by name rather than silently repointing the first one. See
   `fs_ops.h`'s `max_mounts` for what raising it would take.
 
-  **This is what stops a second TFS3 disk being mounted**, now that a second
-  disk is reachable at all. The device resolves and the volume is read; the
-  backend is simply already in use by the root. Enumeration did not change
-  this and was not meant to — it changed whether the device could be NAMED.
+  **This is what stops a second TFS3 disk being mounted.** The device
+  resolves and the volume is read; the backend is simply already in use by
+  the root.
 - An operation naming two paths — `mv`, `ln` — is refused across a mount
   boundary. That is Unix's `EXDEV`, and `cp` is the answer.
 

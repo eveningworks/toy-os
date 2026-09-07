@@ -8,6 +8,16 @@
 
     inetd -p <port> [-c <children>] <program> [args...]
 
+## Options
+
+- `-p <port>` -- the TCP port to listen on, 1 to 65535. Required.
+- `-c <children>` -- how many handlers may run at once, 1 to 6, default
+  4. At the cap `inetd` stops accepting until one exits.
+
+Both must come before `<program>`: the first argument that is not one of
+them is taken as the handler to run, and everything after it is that
+handler's own arguments.
+
 ## Description
 
 `/bin/inetd` — accept connections on a port and hand each one to its own
@@ -32,12 +42,11 @@ spawn itself (`stdin_fd`/`stdout_fd` on `struct spawn_msg`) rather than
 kernel log, so a handler's diagnostics reach `dmesg` and never reach the
 client.
 
-`-c` bounds how many handlers run at once (default 4, maximum 6). At the
-cap `inetd` **stops accepting** until one exits, so the connection waits
-in the TCP backlog and, past that, the client's own SYN retransmission
-covers it — which is what the stack already does for a full backlog. The
-maximum is not a policy: `SOCK_MAX` and `TCP_MAX_CONNS` are 8 apiece and
-a listener costs one of each.
+**At the cap it stops accepting**, so the connection waits in the TCP
+backlog and, past that, the client's own SYN retransmission covers it —
+which is what the stack already does for a full backlog. The maximum of
+six is not a policy: `SOCK_MAX` and `TCP_MAX_CONNS` are 8 apiece and a
+listener costs one of each.
 
 Ctrl-C stops it. Handlers already running are not killed.
 

@@ -11,6 +11,28 @@
            doc -K <word>          search the full text of every page
            doc -l [-c <category>] list every page
 
+## Options
+
+- `-c <category>`, `--category <category>` -- look only in that
+  category, instead of in every one. It narrows `-k`, `-K` and `-l` as
+  well as a page lookup; an unknown name is refused and the categories
+  found are listed.
+- `-k <word>`, `--apropos <word>` -- list the pages whose name, title,
+  `Category` line or first Description sentence contains `<word>`.
+- `-K <word>`, `--search <word>` -- search the full text of every page
+  and print each matching line, with its markup stripped and its page
+  named. It outranks `-k`, and either outranks `-l`.
+- `-l`, `--list` -- list every page with its one-line summary. This is
+  also what `-c` alone does.
+- `--no-pager` -- write the text straight out instead of paging it.
+  Paging is off anyway when neither fd 0 nor fd 1 is a terminal.
+- `--color=<when>` -- `always`, `never`, or `auto` (the default:
+  styled to a terminal, plain to a pipe or a file).
+- `-h`, `--help` -- the usage above, plus the pager's keys.
+
+`-c`, `-k` and `-K` each need their word: without one the usage is
+printed and nothing is searched.
+
 ## Description
 
 `/bin/doc` is this system's manual. `doc ls` finds the page for `ls`,
@@ -84,8 +106,8 @@ each half of that separately.
 
 Long lines are CLIPPED by the pager rather than wrapped, so a page is
 rendered to the terminal's real width before it gets there. That
-matters because the escapes the styling emits occupy no columns, and
-measuring them as bytes is what used to cut coloured lines short.
+matters because the escapes the styling emits occupy no columns, so a
+width measured in bytes cuts coloured lines short.
 
 ## What it does not do
 

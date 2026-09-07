@@ -12,9 +12,7 @@
 
 `/bin/netd` is the network daemon: it decides **what each card is
 called** and **which cards get an address**. init starts it from
-`/etc/services.d/netd`, and it is what replaced the `dhcp` service.
-
-It owns two jobs that previously had no owner.
+`/etc/services.d/netd`. It takes no arguments.
 
 **Naming.** The kernel gives a card one name, made from the last three
 bytes of its MAC — `net-718ebf` — and that is a bootstrap, not a
@@ -24,12 +22,12 @@ through `SYS_NET_RENAME` and has no opinion about what it should be.
 That is udev renaming what the Linux kernel called `eth0`, and it is the
 same split this project already made for NTP, DHCP and DNS.
 
-**Addresses.** `dhcp -k` supervised exactly ONE card, so the second card
-on a two-NIC machine held a lease nothing renewed and its address
-expired at whatever hour the server chose. netd runs a lease per card in
-one loop: `udhcp_step()` advances one interface and returns when it
-wants to be called again, so the loop sleeps until the earliest deadline
-across every card and no card blocks another.
+**Addresses.** netd runs a lease per card in one loop: `udhcp_step()`
+advances one interface and returns when it wants to be called again, so
+the loop sleeps until the earliest deadline across every card and no
+card blocks another. `dhcp -k` supervises exactly ONE card, which is why
+the boot-time client is this and not that: on a two-NIC machine the
+second card's lease would be renewed by nobody.
 
 **It polls carrier rather than waiting on it.** `/bin/dhcp` waits up to
 ten seconds for the wire, which is right for a command typed at a
@@ -60,10 +58,9 @@ or when the card is unplugged and put back.
     dhcp = no           overrules the global `dhcp` for this card
 
 **A CARD IS A SECTION, AND THAT IS WHAT LETS IT CARRY MORE THAN A NAME.**
-The file used to key a card directly (`54:ee:75:71:8e:bf = lan`), so a
-card could hold exactly one fact — its own name — and `dhcp` could only
-ever be a machine-wide answer. The flat form is still read, so a file
-written by an earlier build keeps working.
+A card keyed directly, outside any section, is also read -- that form
+gives a card its name and nothing else, so `dhcp` there can only be a
+machine-wide answer.
 
     54:ee:75:71:8e:bf = lan       this exact card, wherever it is plugged
     pci3.0            = builtin   whatever card is in that slot
@@ -100,9 +97,9 @@ so that lease is not renewed until the next boot. `Restart=always` makes
 that reachable, and telling the two apart needs the lease file to record
 when it was granted, which it does not.
 
-**It is not `/bin/dhcp`.** That command still exists, runs the same
-library, and is the way to lease a card by hand. Running both at once
-means two clients on one port, and the second will fail to bind.
+**It is not `/bin/dhcp`.** That command runs the same library and is the
+way to lease a card by hand. Running both at once means two clients on
+one port, and the second will fail to bind.
 
 ## See also
 

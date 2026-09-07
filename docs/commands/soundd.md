@@ -19,14 +19,12 @@ starts it at boot and init restarts it if it crashes. Run it by hand
 only to see what it says.
 
 The kernel deliberately hands out **one exclusive stream** and never
-mixes — `docs/decisions/drivers.md` has why, and it is the same call
-ALSA, CoreAudio and WASAPI make. Before this daemon that meant the
-second program to ask for sound got `-EBUSY` and was **silent for the
-rest of its life**: starting Minesweeper while the Audio Player had the
-card left the game with no audio at all, and the only notice was a line
-in the log. A userspace server owning the device is how every real
-system answers that — ALSA's `dmix`, PulseAudio, PipeWire, Windows'
-audio engine.
+mixes -- `docs/decisions/drivers.md` has why, and it is the same call
+ALSA, CoreAudio and WASAPI make. With no daemon running, the second
+program to ask for sound gets `-EBUSY` and is silent for the rest of its
+life, the only notice being a line in the log. A userspace server owning
+the device is how every real system answers that -- ALSA's `dmix`,
+PulseAudio, PipeWire, Windows' audio engine.
 
 ## How a client finds it
 
@@ -41,9 +39,9 @@ There are no unix sockets here and no fd passing, so the rendezvous is a
 A program calling `usnd_init()` (`userland/lib/usnd.h`) opens the beacon;
 if it is there it creates its own ring and becomes a client, and if it is
 not it falls back to the kernel's stream. **No application code knows
-which it got** — that is what `usnd_sink.h`'s two rows are for, and it is
-why nothing in `aplay`, the Audio Player, Minesweeper or Doom changed
-when this arrived.
+which it got** -- that is what `usnd_sink.h`'s two rows are for, and it
+is why `aplay`, the Audio Player, Minesweeper and Doom carry no code of
+their own for either case.
 
 The rings are shared memory (`SYS_SHM_OPEN`, `MAP_SHARED`), the same
 shape as the kernel's own stream (`abi/sound_abi.h`), so the daemon
@@ -58,12 +56,10 @@ client reads `REFS 4`: its own descriptor and mapping, plus the
 daemon's.
 
 **An `(unlinked)` row is not a client.** The kernel releases an object's
-name when its creator dies, and the daemon ignores anything so marked —
-without that it went on holding a dead client's ring, and its own
-reference was then the only thing keeping that name alive, so it never
-noticed the loss and refused to adopt the live ring a recycled pid
-created behind it. The symptom was an `aplay` that played its file and
-never exited.
+name when its creator dies, and the daemon ignores anything so marked.
+Holding one instead would leave the daemon's own reference as the only
+thing keeping that name alive, so the loss would go unnoticed and the
+live ring a recycled pid creates behind it could never be adopted.
 
 ## What it deliberately does not do
 

@@ -7,9 +7,8 @@
 </p>
 
 <p align="center">
-  <em>Built with Claude Code. A human makes the design calls; Claude does the
-  implementation and the testing. Every change is built, tested in QEMU and
-  reviewed before it lands.</em>
+  <em>Written with Claude Code: a human makes the design calls, Claude does
+  the implementation and the testing.</em>
 </p>
 
 <p align="center">
@@ -18,13 +17,13 @@
   </a>
   <img alt="Language" src="https://img.shields.io/badge/language-C%20%2B%20NASM-blue">
   <img alt="Target" src="https://img.shields.io/badge/target-x86__64-lightgrey">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.3.0--dev-orange">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.3.0-blue">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
 <p align="center">
   <img src="screenshots/readme/desktop.png" alt="toy-os desktop: the Image Viewer, the File Manager, Notepad, DOOM and a Terminal open at once" width="49%">
-  <img src="screenshots/readme/shell.png" alt="toy-os kernel shell: about, df and the in-kernel test suite" width="49%">
+  <img src="screenshots/readme/shell.png" alt="toy-os Terminal: `doc ls` rendering the ls manual page, headings and code spans styled, paged" width="49%">
 </p>
 
 ---
@@ -32,11 +31,9 @@
 ## Contents
 
 - [What this is](#what-this-is)
-- [How this was built](#how-this-was-built)
 - [Project status](#project-status)
 - [Quick start](#quick-start)
-- [Highlights](#highlights)
-- [Architecture](#architecture)
+- [How this was built](#how-this-was-built)
 - [Development](#development)
 - [Documentation](#documentation)
 - [Releases](#releases)
@@ -48,138 +45,77 @@ A hobby OS built one subsystem at a time, with the reasoning for each
 decision written down as it happened. It boots on real hardware and under
 QEMU, and it does not stop at "hello world from the kernel":
 
-- **Real memory management** — a physical frame allocator, per-process
-  page tables, **demand-paged heaps** (`sbrk` reserves; the page arrives
-  on first touch), one allocator serving both `kmalloc` and ring-3
-  `malloc`, NX/W^X on both the kernel and userspace, SMEP/SMAP, stack
-  canaries and kernel ASLR.
-- **Real processes** — an ELF64 loader, ring-3 user mode, a table-driven
-  syscall layer, a preemptive scheduler, **an `init` as pid 1** that
-  adopts orphans and **supervises services** described by files in
-  `/etc/services.d` (the desktop is one, restarted if it dies), a process
-  tree with pipes and `spawn`/`waitpid`, **signals and job control**
-  (`Ctrl-C`, `Ctrl-Z`, `jobs`/`fg`/`bg`, `&`), **threads** sharing one
-  address space with `<pthread.h>` and real thread-local storage, and
-  per-process FPU state across context switches.
-- **A real terminal layer** — a terminal is an object with a line
-  discipline, a `termios`, an owner and a foreground process group, so
-  the physical console and a Terminal window are two clients of one
-  implementation. `/bin/tosh` runs on a pty in a window, so the shell in
-  it is a real process, and `Ctrl-C`, pipes, redirection and job control
-  are the same code in both places. Terminal has **tabs**, each its own
-  pty, shell, scrollback and title.
-- **A real filesystem, in a real partition, on a disk it boots itself**
-  — TFS3: block groups, inodes, hardlinks, journalled metadata (so
-  files survive a power cut), superblock backups and an `fsck`. The VFS
-  picks a backend by superblock probe and boot scans the MBR/GPT table
-  for a partition to mount. **The stock `disk.img` is a GPT with GRUB
-  in a BIOS boot partition, the kernel in a FAT32 `/boot`, and TFS3 in
-  the rest** — the way an installed OS looks, and QEMU boots the disk,
-  not a CD. (`/boot` is FAT32 because GRUB cannot read TFS3, the same
-  reason UEFI's ESP is FAT.)
-- **Two filesystems at once** — a mount table keyed by path prefix, so
-  TFS3 serves `/` and FAT32 serves `/boot` read-only. `mount`/`umount`
-  attach anything else (`mount -t ramfs none /mnt` is a RAM scratch
-  filesystem), `df` reports every mount, and a write to a read-only
-  mount is refused rather than quietly dropped. Every disk driver
-  enumerates into one device table (`ata0`, `ahci0`, `virtio0`;
-  partitions `ata0p3`), and `root=` on the boot line picks what carries
-  the root — Linux's split, and NT's.
-- **A real GUI, and it is not in the kernel** — the window manager is
-  itself a **ring-3 process**: movable, resizable windows, a taskbar, a
-  Start menu built from `.desktop` files, and a desktop of draggable
-  icons with rubber-band selection. Apps are ordinary ring-3 processes
-  too, owning their windows over **TWP**, the Toy Window Protocol,
-  served by **TWS** and programmed against with **Toykit**. The kernel
-  keeps the framebuffer and the protocol; everything above them is a
-  process, and killing the desktop is survivable. Pictures are ring-3
-  as well — a **baseline JPEG decoder** in the toolkit gives the desktop
-  a real wallpaper and an Image Viewer, with no image parser anywhere in
-  the kernel. The apps include a **File Manager** (two panes, Norton
-  Commander rather than Explorer, because copying between two visible
-  directories needs neither a clipboard nor drag-and-drop and this
-  system has neither; its dividers drag, it has a context menu, and
-  **Properties** is a separate process so that totalling a folder
-  cannot freeze it), **Disk Mark** (a CrystalDiskMark-shaped
-  benchmark whose work is a spawned `/bin/diskbench`, so a pass that
-  takes minutes cannot freeze the GUI), **Minesweeper** — which is
-  where the desktop learned to give a right-click to the application
-  under the cursor instead of keeping it for the window menu — and
-  **DOOM**, with sound and music, in a window like any other app.
-- **Sound, and the kernel does not mix it** — an AC'97, **Intel HD
-  Audio** (a laptop's own speakers and headphone jack) **and a USB
-  audio** driver behind a `sound_device` registry, and a PCM stream that
-  is a **mapped ring**
-  rather than a `write()` call: the app writes samples ahead of the
-  hardware and the kernel publishes the play position, so steady-state
-  playback costs **zero syscalls**. A consumed chunk is zeroed before
-  the position moves past it, which is what makes an abandoned stream
-  play silence instead of looping. Everything above that line is ring-3
-  (`userland/lib/usnd.h`): the file formats, the rate and channel
-  conversion, and a voice mixer with stereo gains. WAV and **MP3** —
-  the MPEG-1 Layer III decoder is written here, not vendored, and agrees
-  with ffmpeg to one part in 32768 across CBR, VBR, mono, stereo and
-  joint stereo. There is an **Audio Player** (which ships with a track
-  to play, synthesised by `tools/gen_music.py`), `/bin/aplay` for a
-  shell, sound effects in Minesweeper, and
-  DOOM's effects and **OPL music** — the music synthesised by Chocolate
-  Doom's own emulated Yamaha chip reading the WAD's GENMIDI instrument
-  bank, because doomgeneric turns out to *be* Chocolate Doom with the
-  sound removed. Two cards can be present at once: the **tray's volume
-  flyout** has a slider, a mute button and the output-device list, the
-  mouse wheel over its icon moves the level, and unplugging a USB card
-  mid-playback tells the app rather than going quietly silent. The
-  stream is exclusive and nothing mixes across processes yet; that
-  wants a sound daemon, and the sink interface it would plug into is
-  already there.
-- **Its own test suite** — `make test` boots the OS headless, runs
-  in-kernel tests including deliberate fault injection, and exits
-  non-zero on failure. A separate GUI suite drives the desktop over a
-  serial debug channel and asserts on pixels.
+- **The machine** — Multiboot2 and a long-mode transition done by hand, a
+  physical frame allocator and per-process page tables, NX/W^X, SMEP/SMAP,
+  stack canaries and kernel ASLR. ACPI tables are parsed, and the machine
+  powers off through its own firmware methods rather than a fixed port.
+- **Processes** — an ELF64 loader, a preemptive scheduler, an `init` as
+  pid 1 that supervises services, pipes and `spawn`/`waitpid`, signals and
+  job control, threads with real thread-local storage, and **dynamic
+  linking** against `/lib/libc.so` and `/lib/libuapp.so`.
+- **Storage** — TFS3, a journalling filesystem with `fsck`, beside FAT32
+  and a RAM filesystem, on MBR/GPT partitions the kernel reads and writes.
+  It **installs itself** onto another disk and that disk boots.
+- **Networking** — ARP, IPv4, ICMP, UDP and client-side TCP over five NIC
+  drivers, with DHCP, DNS, `ping`, `wget` and an `httpd` that serves this
+  machine's own filesystem.
+- **A desktop, and it is not in the kernel** — the window manager is a
+  ring-3 process and so is every app: a file manager, a terminal with tabs,
+  an image viewer, an audio player, Minesweeper and DOOM.
+- **Sound** — AC'97, Intel HD Audio and USB Audio behind one device class,
+  mixed by a ring-3 daemon; WAV and an MP3 decoder written here rather than
+  vendored.
+- **Its own manual** — `doc ls` on the machine renders the same page this
+  repository holds, wrapped to whatever the terminal actually is.
+- **Its own test suite** — in-kernel tests with deliberate fault injection,
+  ring-3 diagnostics, and a GUI suite that drives the desktop over a serial
+  channel and asserts on pixels.
 
-No cross-compiler is needed: host and target are both x86-64, so the
-system GCC works with `-ffreestanding` and kernel-appropriate flags.
+**[docs/features.md](docs/features.md) is the long version** — what each of
+those actually is, and where the interesting decisions were.
+**[docs/architecture.md](docs/architecture.md)** is the map of the tree.
 
-## How this was built
-
-toy-os is written with [Claude Code](https://claude.com/claude-code),
-Anthropic's agentic coding tool. A human makes the design calls; Claude does
-the implementation and the testing.
-
-The conventions it works under are in [CLAUDE.md](CLAUDE.md), the reasoning
-behind the design is in [docs/decisions.md](docs/decisions.md), and
-`tools/preflight.sh` is the gate every change passes before it lands.
+No cross-compiler is needed: host and target are both x86-64, so the system
+GCC works with `-ffreestanding` and kernel-appropriate flags.
 
 ## Project status
 
-**Version 0.3.0-dev.** A hobby project under active development, not
+**Version 0.3.0.** A hobby project under active development, not
 production software.
 
-**Works today** — booting on real hardware and QEMU; the shell and its
-line editor; both filesystems with `fsck` and live reformatting; the
-ring-3 window manager and its apps; fonts loaded and rasterized from
-disk at runtime; ring-3 processes with pipes, `spawn`/`waitpid`,
-signals, threads and job control; `mmap` with file-backed demand
-paging; dynamic linking, with tolibc shipped as `/lib/libc.so`; a TTY
-layer with pseudo-terminals, so `Ctrl-C` interrupts a job and a
-full-screen editor runs in a Terminal window; sound, including DOOM
-with music; networking, on two NIC drivers -- UDP, TCP, DHCP and DNS,
-so `wget` fetches a real page off the internet and `httpd` serves this
-machine's filesystem to a browser -- one connection per child process
+**Works today** — booting on real hardware and under QEMU; the shell and
+its line editor; three filesystems behind one mount table, with `fsck`
+and live reformatting; partitions read and written, and an installer that
+puts this system onto another disk; the ring-3 window manager and its
+apps; fonts loaded and rasterized from disk at runtime; ring-3 processes
+with pipes, `spawn`/`waitpid`, signals, threads and job control; `mmap`
+with file-backed demand paging; dynamic linking, with tolibc shipped as
+`/lib/libc.so`; a TTY layer with pseudo-terminals, so `Ctrl-C` interrupts
+a job and a full-screen editor runs in a Terminal window; USB — xHCI with
+hubs, hot-plug, HID, Ethernet and audio; sound on three device classes,
+mixed by `soundd`, including DOOM with music; an Intel display driver
+that reads the panel's EDID and programs the mode itself, with runtime
+resolution changes and backlight control; ACPI tables and firmware-driven
+shutdown; networking on five NIC drivers — UDP, TCP, DHCP and DNS, so
+`wget` fetches a real page off the internet and `httpd` serves this
+machine's filesystem to a browser — one connection per child process
 under `inetd`, which makes a handler an ordinary filter, and `netlog`
-saying what this machine has connected to and which program did it. And the test suite: a few hundred in-kernel tests, the
-ring-3 diagnostics, and the GUI tools `gui_regress.py` runs as one
-table.
+saying what this machine has connected to and which program did it; and
+`doc`, the manual, on the machine. And the test suite: the in-kernel
+tests, the ring-3 diagnostics, and the GUI tools `gui_regress.py` runs as
+one table.
 
-**Known gaps** — no SMP. Networking has no TLS, and TCP drops a
-segment that arrives out of order rather than reassembling it.
-USB is xHCI with a HID boot
-keyboard and mouse, hubs and hot-plug, but no mass storage and no HID
-report-descriptor parsing. Dynamic linking is eager-binding with no
-`dlopen`; `mmap` has no `MAP_SHARED` and no `mprotect`; there is no
-`fork`. Sound is one exclusive stream, so two programs cannot both be
-audible. **No privilege model**: no user accounts and no permission
-checks, so anything ring 3 can ask for, any process can ask for.
+**Known gaps** — **BIOS/CSM boot only; UEFI does not work.** GRUB's EFI
+build faults before the kernel runs, so a machine with CSM disabled will
+not boot this. No SMP: other cores are discovered through the MADT and
+every one of them reports offline. Networking has no TLS, and TCP drops a
+segment that arrives out of order rather than reassembling it. USB has no
+mass storage and no HID report-descriptor parsing. Dynamic linking is
+eager-binding with no `dlopen`; `mmap`'s `MAP_SHARED` works only over a
+named shared-memory object, and there is no `mprotect` and no `fork`.
+Swap has its area and its page-table encoding and nothing that pages out
+yet. **No privilege model**: no user accounts and no permission checks,
+so anything ring 3 can ask for, any process can ask for.
 [docs/roadmap.md](docs/roadmap.md) tracks all of it, with a candid
 known-issues list; `git log` and [docs/decisions.md](docs/decisions.md)
 carry how each piece arrived and why.
@@ -273,7 +209,7 @@ git config --local user.email 'noreply@toy-os.local'
 
 # 6. Confirm the machine before trusting a result from it
 bash tools/preflight.sh                        # build + boot + both suites
-python3 tools/gui_regress.py --logs /tmp/gui   # ~1.5 min, 25 GUI tools
+python3 tools/gui_regress.py --logs /tmp/gui   # every GUI tool, as one table
 
 # 7. gh, only for releases and `gh workflow run` -- not for push
 gh auth login                                  # choose SSH as the protocol
@@ -313,6 +249,7 @@ make            # kernel.bin + the userland ELF binaries
 make iso        # + toy-os.iso; also seeds disk.img and installs GRUB on it
 make run        # build + boot in QEMU with a graphical window
 make live-iso   # a Live CD that boots with no disk attached at all
+make usb-image  # a compact self-booting image to dd to a USB stick
 make debug      # boot frozen (-s -S) for GDB
 make test       # boot headless, run the in-kernel test suite
 make verify     # full gate: clean build + iso + boot test + test suite
@@ -343,6 +280,8 @@ make run WINDOW=fit     # a resizable window the guest is SCALED into
 make run NOGRAPHIC=1    # serial console only -- use this over SSH
 make run MENU=1         # show GRUB's menu instead of booting through
 make run MEM=512        # a smaller machine
+make run NET=virtio     # virtio-net instead of the e1000 (NET=none for no card)
+make run NODISK=1       # no disk attached at all
 make run LIVE=1         # the Live CD, no disk attached
 ```
 
@@ -382,288 +321,22 @@ every page's text. [docs/commands.md](docs/commands.md) is the same
 reference on the host; [docs/boot-flags.md](docs/boot-flags.md) covers
 what you can pass on the GRUB command line.
 
-## Highlights
+## How this was built
 
-**Boot and hardware.** Multiboot2 via GRUB2, with the 32→64-bit
-long-mode transition done by hand. Linear RGB framebuffer falling back
-to 80×25 VGA text. PS/2 keyboard and mouse sharing the 8042 through one
-dispatcher, with keyboard layouts as *data files* generated from Linux's
-own XKB data. PIT, CMOS RTC, PC speaker, MBR/GPT partition parsing.
+toy-os is written with [Claude Code](https://claude.com/claude-code),
+Anthropic's agentic coding tool. A human makes the design calls; Claude does
+the implementation and the testing.
 
-Three disk drivers behind one `block_device` registry the filesystems
-never look through: legacy IDE with Bus-Master DMA and a PIO fallback,
-**AHCI** off a mapped BAR5 with a per-page PRDT and interrupt-driven
-completion, and virtio-blk. The **virtio** stack underneath is PCI
-capability walking and 64-bit BAR decoding under a shared modern
-transport — `virtio-blk` as the preferred disk (~**10× ATA's write
-throughput under KVM**, because a virtqueue is shared memory with one
-doorbell where ATA is dense with port I/O and every one of those is a VM
-exit), `virtio-rng` feeding the entropy pool, **`virtio-gpu` as a real
-display driver** (resource, scanout, transfer-and-flush, its own cursor
-queue, and it programs the mode itself so `video=1920x1080` is honoured
-rather than left to GRUB), and **`virtio-input`**. One transport, so the
-next device is a driver rather than a bring-up project. On real
-hardware, **an Intel display driver** for a laptop's Broadwell GPU: it
-adopts the mode the firmware lit the panel with, puts the pointer on
-the cursor plane, and drives the backlight -- `system.brightness`, with
-a slider in the tray.
-
-Keyboards, mice and tablets from PS/2, virtio and USB all feed one
-**input core** whose canonical event is evdev-shaped. Its diagnostic
-(`kernel.kbdtap`, off by default) is what `kbd` prints as all four
-encodings of one keypress — scancode, keycode, character, modifiers —
-which is how a key that works on one keyboard and not another stops
-being a mystery.
-
-**USB**, because nothing built since roughly Skylake has a PS/2 port and
-QEMU is the only reason that has not bitten yet. An **xHCI** driver —
-command ring, event ring, doorbells, per-device contexts — with
-enumeration on top and a **HID boot-protocol keyboard and mouse** that
-register with the same input core, so they need no layout table of their
-own. A **composite device binds every boot interface** (a wireless
-receiver is a keyboard and a mouse on one plug), **USB2 hubs** work
-(route strings, per-port power and reset, TT fields for a low-speed
-mouse behind a high-speed hub), and **hot-plug** does too. Interrupt-
-driven on legacy INTx with an always-on polled backup, because this
-kernel has no Local APIC and therefore no MSI — and a BIOS-reported INTx
-line can be plausible and dead. `/bin/lsusb` names what is attached,
-from the ID database and the device's own string descriptors under `-v`.
-xHCI only, deliberately: UHCI and OHCI are a quarter of the code and run
-on nothing made this decade. `make run USB=xhci+mouse` reaches it —
-attaching a USB keyboard takes the keyboard *away* from PS/2, which is
-what makes its test suite self-controlling.
-
-**ACPI, as far as the tables and no further.** The RSDP comes from the
-multiboot2 tag (with a BIOS-area scan behind it), the RSDT or XSDT is
-walked and every table checksummed, and the FADT and MADT are decoded —
-so **the machine powers off through its own firmware's numbers**: the
-sleep type from the DSDT's `_S5_` object, the port from its own FADT,
-which is what makes shutdown work on VirtualBox and real hardware
-instead of only under QEMU, where the old hardcoded `outw(0x604,
-0x2000)` was accidentally correct. `reboot` tries the FADT's reset
-register before the 8042 pulse. Both are ladders with a halt at the
-bottom, and each rung logs which one ran — the machine stops either way,
-so the log is the only thing that can tell you. There is **no AML
-interpreter**, and `_S5_` is the one deliberate exception: a `Name`
-holding a `Package` of constants is data with a fixed grammar, and the
-scan refuses any shape it does not recognise rather than guessing at a
-sleep type. `/bin/acpi` prints the lot; the MADT half is SMP's first
-stage, so the processor list exists and every core reports `online: no`.
-
-**Memory hardening.** NX and W^X from each ELF segment's real `p_flags`,
-and the kernel's own identity map is W^X too — `.text` is the only
-executable range and is read-only, with CR0.WP set so ring 0 honours it.
-SMEP and SMAP wherever the CPU reports them, with kernel code reaching
-user memory only through copy helpers that go via the kernel's own map,
-so **EFLAGS.AC is never set anywhere** and there is no STAC/CLAC window.
-Guard pages below user stacks and kernel stacks, randomised stack
-canaries, heap red-zones behind a runtime switch, and **kernel ASLR** —
-the kernel relocates itself to a random base at boot and patches ~7,400
-of its own absolute references. A mapping records whether it OWNS its
-frame, so teardown cannot hand back memory somebody else is still using,
-and `meminfo audit` checks every live address space against the
-allocator.
-
-**Filesystems.** [TFS3](docs/tfs3-spec.md) is the root: block groups,
-128-byte checksummed inodes, hardlinks, atomic rename and truncation,
-32-slot journal transactions, ext-style superblock backups, ~590k files
-on a 9 GiB volume. It scales files to gigabytes through direct and
-single/double/triple-indirect pointers, batches ATA flushes, TRIMs freed
-blocks back to the host, and refuses to touch a disk whose superblock
-could not be read rather than destroying a possibly-good filesystem.
-FAT32 is the second on-disk backend — read-write, with VFAT long names —
-and exists because `/boot` is a FAT volume the machine boots from and
-could not read. It is a generic driver: nothing in it knows it holds a
-bootloader, and the read-only-by-default policy lives in the mount code,
-the same split Linux keeps between `fs/fat/` and an ESP in `fstab`.
-ramfs is the third, in the kernel heap, and is what a diskless boot gets
-for a root. A mount table resolves a path to a backend by longest prefix
-at a component boundary, so all three can be mounted at once.
-
-**Graphics and GUI.** Real fonts, two ways: eight sizes of JetBrains
-Mono baked to bitmaps at build time as the guaranteed fallback, and a
-fixed-point TrueType rasterizer that loads a `.ttf` from
-`/usr/share/fonts` at runtime — so any size works, and a proportional
-face gets genuine per-glyph advances and real kerning. A face is a
-*family*: bold is a second file, or synthesized by thickening the
-regular outlines where a family has none, which is what GDI does.
-Because the whole UI is font-*derived*, changing the face or size
-reflows everything, live, without restarting anything.
-
-Fonts come in **two tiers**. The session font is rasterized once in the
-kernel and mapped read-only into every window, so all text matches the
-desktop's setting by construction rather than by each app being
-careful. An app needing something that font cannot express rasterizes
-it *itself*, in ring 3, with the same rasterizer — what every Wayland
-client does. The honest limit: a loaded face is rasterized into the
-same 101-glyph set the baked one carries, so its other few thousand
-glyphs are parsed and unreachable until UTF-8 lands, and kerning comes
-from the legacy `kern` table only.
-
-**Images are decoded in ring 3, and the kernel never sees one.** A
-baseline JPEG decoder sits behind a codec table keyed on magic bytes,
-so a second format is a row and a file rather than a branch. All fixed
-point, since there is no floating point in either ring. Files it cannot
-handle — progressive, arithmetic-coded, 12-bit, CMYK — are refused *by
-name*, which is a different answer from "corrupt" and reads as one.
-That is the opposite of the call made for fonts, which are parsed in
-ring 0 because the console needs glyphs before any process exists;
-nothing in ring 0 needs a picture. What proves it works is libjpeg
-itself: the same source file is compiled on the host and compared
-against libjpeg over a couple of hundred images, and a GUI tool checks
-the framebuffer against libjpeg's decode of the wallpaper pixel for
-pixel.
-
-Double-buffered rendering with damage-region clipping, and a compositor
-whose damage invariant is enforced by a verification mode that
-re-renders each frame unrestricted and reports any pixel that changed
-without being declared. A *client's* content is another process's
-memory with no buffer-release handshake to hold it still, so those
-pixels are masked out rather than judged — the difference between a
-check that finds real bugs and one that reports twenty-two imaginary
-ones. Apps declare a layout rather than coordinates, and a page too big
-for its window scrolls.
-
-**Sound.** An AC'97, an Intel HD Audio and a USB Audio Class driver
-behind a `sound_device` registry, and a PCM
-stream that is a **mapped ring** rather than a `write()` call — a control
-page plus 64 KiB of samples at a fixed address, the app writing ahead of
-the hardware and the kernel publishing the play position on each
-completion interrupt. Steady state costs **zero syscalls**, and the
-buffer is physically contiguous so the card's descriptors point straight
-into it. A consumed chunk is **zeroed before the position passes it**,
-which is the one rule that makes underruns free: zero is silence in
-signed PCM, so a stalled or killed app degrades to quiet instead of
-looping its last third of a second. The kernel stops there — it never
-mixes, exactly as ALSA's dmix, PulseAudio and Windows' audio engine
-never do it in kernel space. **A USB card is the second implementer of
-that registry**, on an isochronous OUT endpoint the xHCI driver grew
-for it — the format is refused rather than resampled (48 kHz stereo
-s16, which is what the ABI fixes), the samples are copied into the
-driver's own packet frame because 192 bytes per USB frame divides
-neither the ring nor its chunks, and unplugging it mid-playback
-publishes `device_gone` so an app can tell that from being stopped.
-Which card plays is the first one discovered until somebody chooses in
-the tray's volume flyout, and that choice persists. Above the line,
-`userland/lib/usnd.h` is a
-codec table (WAV today; the rate, channel and width conversion happens
-once, in the library, never in a codec), a sixteen-voice mixer with
-stereo gains, and a sink interface a future sound daemon becomes a second
-row of. Its callers: an **Audio Player**, `/bin/aplay`, Minesweeper's
-effects, and **DOOM** — whose sound effects are WAD lumps decoded into
-voices, and whose **music is OPL synthesis**, Chocolate Doom's own
-emulated Yamaha chip driven by the WAD's GENMIDI instrument bank. All of
-it is judged on the host: QEMU records what the *device* emitted and the
-tests measure that, so a 44.1 kHz file played at the wrong pitch, a dead
-DMA engine and a broken zeroing each fail a different check.
-
-**Userland.** Every ring-3 program is just a `main()`: crt0 provides
-`_start` over the standard SysV stack layout, and libsys gives one typed
-wrapper per syscall. The shared kernel toolkit is compiled a second time
-under the C names, so a ring-3 `strlen` and the kernel's `k_strlen`
-cannot diverge — and the same rule gives ring 3 the kernel's own
-allocator as `malloc`/`free`, its line editor, and its ANSI parser — so
-both shells agree about what Ctrl-A does, and the console and a Terminal
-window agree about what `ESC[4;12H` means. Adding a program is a
-`.c` file with no Makefile edit. Beside that sits **tolibc**
-([docs/libc-design.md](docs/libc-design.md)) — stdio, math, time,
-dirent, setjmp and scanf — which is the one part of this tree that aims
-to be COMPLETE rather than minimal, because its audience is code that
-has not been written yet. It is also a **shared library**: the same
-sources build `/lib/libc.so` (a second `-fpic` compile, the
-compiled-twice pattern one axis over), `/lib/ld-toy.so` loads it into
-every `/bin` and GUI program, and it stays *ours* on purpose — porting
-musl was sized and declined, because musl is Linux-only by
-construction and the port is really a Linux-syscall-compat project
-(see `docs/decisions.md`).
-
-**Syscalls.** One table maps each number to its handler, and the handlers
-live with the subsystem that owns them — the shape Linux and NT both
-settled on. The same row carries what `strace` prints, so tracing and
-dispatch cannot disagree about which syscalls exist.
-
-**Introspection.** Kernel state reaches ring 3 through one self-describing
-registry rather than a `/proc` filesystem: a subsystem registers a
-provider for a fact, and a command formats it — `ps`, `df`, `lsblk`, `lspci`,
-`lsusb`, `lscpu`, `acpi`, `meminfo`, `pmap`, `kstack`, `tty`, `kbd`. Answering *"what did the
-machine actually do?"* is treated as a first-class job, distinct from a
-test asserting it did the right thing: `strace` decodes a syscall per
-line, `meminfo audit` compares every live address space against the
-allocator, `tty` names who is holding the keyboard, and `kbd` prints a
-keypress at every stage at once — PS/2 scancode, evdev keycode, the
-character the layout produced, and the modifiers held — which is how a
-key that works on one keyboard and not another stops being a mystery.
-The log behind that last one is **off by default** and wipes when
-switched off, because there is no privilege model here and a buffer of
-recent keystrokes is not something to keep without being asked.
-
-## Architecture
-
-Directories are subsystems, not filing cabinets — where a file lives says
-what kind of thing it is.
-
-```
-kernel/
-  arch/x86_64/  anything a different CPU would need rewritten: boot and
-                long mode, interrupts, GDT/TSS/IDT, PIC, paging, ASLR
-  core/         bring-up and whole-machine concerns: kernel_main,
-                multiboot, timers, serial + the debug console
-  mm/           physical frames, address spaces, the kernel heap
-  proc/         ELF64 loader, the syscall table, scheduler, window server
-  fs/           TFS3, FAT32 and ramfs behind the VFS and its mount table
-  tty/          the terminal object: line discipline, ptys, tty0
-  lib/          services with no hardware of their own: the shared
-                toolkit (strings, numbers, formatting, paths, line
-                editing), JSON, klog, /etc config, entropy, tunables
-  drivers/      one piece of hardware each, in the directory of the
-                REGISTRY it plugs into rather than the bus it sits on:
-                block/, display/, net/, sound/, input/, plus the shared
-                buses virtio/ and usb/ (see kernel/README.md)
-  test/         the KTEST harness itself
-  include/      split by audience and ENFORCED by include paths: api/
-                (what apps may use), abi/ (the kernel<->userland
-                contract), kernel/ (internal, off apps/'s path)
-
-apps/           kernel-space programs: the shell, tab completion.
-                No GUI lives here any more.
-
-userland/       ring-3 programs, split by ROLE:
-  rt/           crt0, libsys, the signal trampoline, linker scripts
-  libc/         tolibc -- the C library, aiming to be COMPLETE;
-                also built -fpic into /lib/libc.so
-  ldso/         /lib/ld-toy.so -- the dynamic loader, freestanding
-  dynlib/       shared-library sources (the Stage-2 proof lib)
-  ui/           Toykit -- the toolkit clients program against
-  lib/          non-UI libraries: the tosh shell, images, history
-  wm/           the window manager, itself a ring-3 program
-  gui/          windowed apps      -> seeded to /bin
-  bin/          command-line tools -> seeded to /bin
-  tests/        single-mechanism diagnostics -> seeded to /tests
-  ports/        vendored third-party source, kept separate on purpose
-  backends/     OUR side of a vendored port (backends/doom/),
-                deliberately outside ports/
-
-seed/, data/    what gets mirrored onto disk.img at build time
-tools/          build, test and delivery tooling (see Development)
-docs/           design records, specs, and the decision log
-```
-
-Source discovery is recursive, so a new file — or a whole directory —
-under `kernel/` or `apps/` needs no Makefile edit. Header dependencies
-are tracked, and `tools/check_deps.py` proves per build directory that
-the tracking is actually live.
-
-`kernel_main()` brings up the hardware and calls `apps_start()`, which
-launches the shell without naming it: the shell is simply the first
-entry in the app registry, and that seam keeps the kernel core ignorant
-of what apps exist.
+The conventions it works under are in [CLAUDE.md](CLAUDE.md), the reasoning
+behind the design is in [docs/decisions.md](docs/decisions.md), and
+`tools/preflight.sh` is the gate every change passes before it lands.
 
 ## Development
 
 ```bash
 make verify                     # the full gate: clean build + iso + boot test + ktest
-bash tools/preflight.sh         # same, plus a git status summary (~25s)
-python3 tools/gui_regress.py    # every GUI test tool as one table (~1.5 min)
+bash tools/preflight.sh         # same, plus a git status summary
+python3 tools/gui_regress.py    # every GUI test tool as one table
 ```
 
 Writing a test is a `KTEST()` block in a `*_test.c` next to the code it
@@ -697,7 +370,7 @@ Selected tools, each documented in its own docstring:
 | `pixel_probe.py` | Reads exact pixel values out of screenshots, so a rendering change is a number rather than an impression. |
 | `frame_balance.py`, `mem_stress.py` | Physical memory: does a process's teardown return exactly what it took, and does the machine survive running out? The patterns written are address-derived, so two mappings sharing one frame is detectable. |
 | `check_deps.py`, `check_layout.py`, `check_docs.py`, `check_dispatch.py`, `check_widget_ops.py`, `check_tool_commands.py` | The build's own invariants: header tracking is live, the disk matches its documented layout, the docs have no dead pointers, no dispatch chain has quietly grown big enough to want a table, no widget's ops table is missing a slot it needs, and no tool drives a guest command that has been renamed away. |
-| `ondemand_sweep.py` | Runs the ~21 test tools that neither the gate nor `gui_regress.py` covers, and reports which have rotted — two were found red by accident after failing for an unknown period. A skip is counted apart from a pass. Never a gate. |
+| `ondemand_sweep.py` | Runs the test tools that neither the gate nor `gui_regress.py` covers, and reports which have rotted — two were found red by accident after failing for an unknown period. A skip is counted apart from a pass. Never a gate. |
 | `predates.py` | Answers "was this already broken?" by measuring: stashes the tree, rebuilds at HEAD, runs the command, restores, compares. |
 | `qmp_test.py`, `gui_flow.py`, `shell_flow.py` | Drive the GUI over QEMU's QMP socket, with the mouse/keyboard gotchas already handled. |
 | `tfs3_writer.py` | Read, write, inspect and corrupt-for-testing files inside a `disk.img` from the host, without booting. `--at-lba`/`--sectors` reach a filesystem inside a partition. |
@@ -715,6 +388,8 @@ Selected tools, each documented in its own docstring:
 
 | Document | Contents |
 |---|---|
+| [docs/features.md](docs/features.md) | What is built, layer by layer, and where the interesting decisions were. The long version of "What this is". |
+| [docs/architecture.md](docs/architecture.md) | Which directory holds what, and why the boundaries are where they are. |
 | [docs/decisions.md](docs/decisions.md) | Topic-indexed answers to "why is this built this way?", over [docs/decisions/](docs/decisions/) — split by area. Start here when something looks odd. |
 | [docs/roadmap.md](docs/roadmap.md) | What's planned, grouped into layers from the kernel up, with a "ready now" list and the known issues. |
 | [docs/roadmap-details.md](docs/roadmap-details.md) | The per-item reasoning and test plans behind that list. |
@@ -724,6 +399,9 @@ Selected tools, each documented in its own docstring:
 | [docs/tools.md](docs/tools.md) | Every script in `tools/`: what it does, why it exists, and the traps it encodes. |
 | [docs/settings-and-queries.md](docs/settings-and-queries.md) | Facts vs settings vs tunables, and how an app reads or changes either. |
 | [docs/query-design.md](docs/query-design.md) | How kernel state reaches ring 3, and why it is not `/proc`: `SYS_QUERY`, a self-describing registry, and a provider per fact. |
+| [docs/dynlink-design.md](docs/dynlink-design.md) | Shared libraries: what they took, staged — and the honest case against them at this scale. |
+| [docs/driver-guide.md](docs/driver-guide.md) | How to write a driver, ordered by the task rather than by topic. |
+| [docs/devices.md](docs/devices.md) | Every driver in the tree, by class registry, and what each one claims. |
 | [docs/libc-design.md](docs/libc-design.md) | `tolibc`, the C library — what it covers, and why its bar for adding a function is the opposite of the rest of the project. |
 | [docs/commands.md](docs/commands.md) | The command index; [docs/commands/](docs/commands/) has one page each. |
 | [docs/smp-design.md](docs/smp-design.md) | More than one core, staged — ACPI/MADT, the Local APIC, application processors, one kernel lock first and then splitting it. Stage 1 (the tables and the processor list) is built; the rest is designed, with the case against. |
@@ -746,13 +424,20 @@ Selected tools, each documented in its own docstring:
 
 Tagged releases live on
 [GitHub Releases](https://github.com/eveningworks/toy-os/releases). Each
-ships `toy-os.iso`, a gzipped `disk.img.gz` and `run_release.sh`, a
-standalone launcher needing no checkout. The disk image matters: there is
-no installer yet, so the pre-seeded image is what puts `/bin/ls` and
-friends on the filesystem — the ISO alone boots into a near-empty one.
-Since the kernel moved onto the disk, `disk.img.gz` is bootable on its
-own too; `run_release.sh` still boots the ISO, so that one script runs an
-older release's disk image as well as a current one.
+ships two media and a launcher:
+
+| Asset | What it is |
+|---|---|
+| `toy-os-live.iso` | Boots with **no disk at all** — the filesystem rides in RAM as a GRUB module, and what you write to it is gone at power off. The one to try first. |
+| `toyos-usb.img.gz` | A real 512 MB disk image. `gunzip`, `dd` it to a stick, and a machine boots it — and **keeps** what you write, which the live ISO does not. |
+| `run_release.sh` | A standalone launcher needing no checkout. It picks whichever medium it finds beside it, so it runs an older release's assets as well as a current one. |
+| `SHA256SUMS` | Verify before you `dd`. |
+
+From either medium, `install --disk <name> confirm` writes toy-os to an
+internal drive and makes it boot. **Both media are BIOS/CSM only.**
+
+Releases before v0.3.0 shipped `toy-os.iso` plus a gzipped `disk.img`
+instead; `run_release.sh` still understands that pair.
 
 ## License
 

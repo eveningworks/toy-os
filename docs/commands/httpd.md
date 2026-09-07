@@ -8,15 +8,22 @@
 
     httpd [-p <port>] [-1] [<root>]
 
+## Options
+
+- `-p <port>` -- the port to listen on; the default is 80, and a value
+  outside 1-65535 is a usage error.
+- `-1` -- serve one connection already open on fd 0 and fd 1, then exit;
+  it binds nothing, so `-p` has no effect with it.
+
 ## Description
 
 `/bin/httpd` — serve files from this machine's own filesystem over HTTP.
-`wget` proved toy-os can reach out; this is the other half, and a
+`wget` is how this machine reaches out; this is the other half, and a
 browser on another machine can read the OS's disk.
 
-`<root>` is the directory to serve (default `/`), and `-p` sets the port
-(default 80). A request for a directory returns a page of links, so the
-whole tree is browsable from the top.
+`<root>` is the directory to serve, `/` by default. A request for a
+directory returns a page of links, so the whole tree is browsable from
+the top.
 
 **On its own it is one connection at a time**: accept, serve, close,
 accept again. A second client waits in the backlog rather than being
@@ -27,11 +34,10 @@ which is how an inetd service is written. Run it as
 
     inetd -p 80 /bin/httpd -1 /
 
-and each client gets its own process, so a slow one no longer holds the
-server. It binds nothing in this mode; exiting is what closes the
-connection. Note that `-1` **must not print to stdout**, because fd 1 is
-the client — the per-request log is suppressed there rather than landing
-in the middle of a response body.
+and each client gets its own process, so a slow one does not hold the
+server. Exiting is what closes the connection. Note that `-1` **must not
+print to stdout**, because fd 1 is the client — the per-request log is
+suppressed there rather than landing in the middle of a response body.
 
 Ctrl-C stops it.
 

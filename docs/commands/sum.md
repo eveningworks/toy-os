@@ -10,11 +10,18 @@
 sum [-a ALGORITHM] [-c LISTFILE] [FILE...]
 ```
 
+## Options
+
+- `-a <ALGORITHM>` -- which algorithm to use; the default is `crc32`,
+  and a name it does not know prints the list of the ones it has.
+- `-c <LISTFILE>` -- verify the files named in `<LISTFILE>` against the
+  sums recorded there instead of printing any; it takes no `FILE`
+  arguments of its own.
+
 ## Description
 
 Prints a checksum or digest of each `FILE`, or of standard input when
-no file is named (or when the file is `-`). `-a` picks the algorithm;
-without it, `crc32`.
+no file is named (or when the file is `-`).
 
 ```
 /$ sum /bin/hello

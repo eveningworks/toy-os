@@ -13,6 +13,17 @@
                      will not boot a GPT disk in legacy/CSM mode
       confirm        required -- this ERASES the target disk
 
+## Options
+
+- `--disk <name>` -- the target disk, named as `lsblk` names it. There
+  is no default, and the disk this machine is running from is refused.
+- `--esp <MiB>` -- size of the FAT32 `/boot` partition; 64 by default,
+  and anything under 8 MiB is refused.
+- `--mbr` -- write an MBR table instead of GPT, for firmware that will
+  not boot a GPT disk in legacy/CSM mode. Refused before anything is
+  erased on a build that staged no `core-msdos.img`.
+- `confirm` -- required, and it ERASES the target disk.
+
 ## Description
 
 `/bin/install` puts the running system onto another disk and makes that disk

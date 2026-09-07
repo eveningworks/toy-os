@@ -18,9 +18,7 @@ print because `QUERY_FSINFO` exists).
 comes from `QUERY_VERSION` — the kernel's own copy of what it is. This program's
 is compiled into it. They are the same on any machine installed from one image,
 and they diverge the moment one is updated without the other, which is what
-happens when a kernel or a binary is pushed over the network. Printing only the
-program's own version is what this used to do, and it misread a laptop by three
-commits.
+happens when a kernel or a binary is pushed over the network.
 
     /$ about
     toy-os v0.3.0-dev -- a small x86-64 hobby kernel

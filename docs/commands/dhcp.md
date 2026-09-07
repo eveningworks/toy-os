@@ -8,6 +8,14 @@
 
     dhcp [-k] [<device>]
 
+## Options
+
+- `-k` -- stay resident and renew the lease, rather than configuring
+  once and exiting; `/etc/services.d` passes it, and a resident run
+  sends its diagnostics to the kernel log.
+- `-1` -- configure once and exit. That is already the default, so this
+  is accepted and does nothing.
+
 ## Description
 
 `/bin/dhcp` — ask the network for an address. It runs the four-message
@@ -42,11 +50,9 @@ has an address to route by.
 
 **It does NOT run at boot.** `/bin/netd` does, and holds a lease per
 card; this is the tool for reaching in by hand — re-leasing one card,
-or asking again after unplugging something. There was a `dhcp` one-shot
-descriptor until 2026-09-06, and on a machine that still carried one it
-raced `netd` for port 68 and logged `dhcp: bind: device or resource
-busy` on the boot it lost. Only one program may hold the client port,
-so only one of them may be a service.
+or asking again after unplugging something. Only one program may hold
+the client port, so only one of them may be a service: a second one
+running gets `dhcp: bind: device or resource busy`.
 
 ## No server is not a failure
 
@@ -77,13 +83,9 @@ a down link either.
 
 It matters here because of when things happen at boot: init starts this
 about **1.5 s** in, and a USB Ethernet PHY does not report link until
-**4–6 s**. Before the carrier watch existed the wait happened *by
-accident* — `sendto()` on a down link returns `EAGAIN`, and the retry
-loop spent the DISCOVER's own four-second budget on it — so the attempt
-expired at about 5.45 s. That is a coin flip against a 4–6 s link, and
-it behaved like one: an address on some boots and link-local on others,
-with `dhcp net-718ebf` by hand always working afterwards because by then the
-wire was up.
+**4–6 s**. Without the wait, the DISCOVER goes out before the wire is
+up and the machine settles on link-local while a server was there all
+along.
 
 A driver that cannot report carrier (`link_known` 0) is **not** treated
 as down: waiting on an answer that will never come would turn a working
@@ -107,15 +109,13 @@ server gave to somebody else.
 carries the address in `ciaddr` and sends *neither* a server-id nor a
 requested-IP option; an acquisition does the opposite. Get that wrong
 and you have sent "I have no address, give me one" — and a server that
-cannot reuse an outstanding lease answers with a *different* address.
-That is exactly what an earlier version did, and the bare-metal laptop's
-address stepped `.104 → .105 → .106` in one afternoon without rebooting.
+cannot reuse an outstanding lease answers with a *different* address, so
+the machine's address walks every time it renews.
 
 **A failed renewal does not surrender the address.** It keeps retrying —
 at half the time remaining to the next milestone, floored at 60 seconds
-— and gives the address up only at expiry. An earlier version fell back
-to link-local at the *first* failure, throwing away a lease with 22
-hours left on it.
+— and gives the address up only at expiry. Falling back to link-local at
+the first failure would throw away a lease with hours left on it.
 
 **The lease is remembered, in `/var/dhcp-<device>.lease`.** On the next boot the
 client asks for the address it had (INIT-REBOOT: a broadcast REQUEST
@@ -135,35 +135,25 @@ remembered from a different network are worse than none.
 four-second budget (RFC 2131 §4.1). That is not a refinement: a switch
 port reports link *before* it forwards, so the first datagram out of a
 freshly-carrier-up interface goes nowhere, and a single-shot INIT-REBOOT
-lost the boot lease on real hardware every time. Measured on the
-bare-metal laptop: `asking for 192.168.200.107 again` at 1.46 s then
-`no usable answer` at 5.44 s, against the request now succeeding at
-4.44 s — two hundredths of a second before `net-718ebf link UP` is even
-logged. A network with genuinely no server costs exactly what it did
-before, since the budget is unchanged.
+would lose the boot lease on real hardware every time. A network with
+genuinely no server costs no more, since the budget is unchanged.
 
 A lease is state rather than config, so it lives under `/var` — the
 split the FHS makes and `dhclient` follows with
 `/var/lib/dhcp/dhclient.leases`.
 
-**One-shot is the default**; `-k` is what keeps it resident, and the
-service descriptor passes it. The other way round was tried and was
-wrong: `dhcp net-718ebf` typed at a prompt never returned, because the
-supervisor does not exit. A command that holds the terminal unless you
-know a flag is a worse default than one that needs a flag for the new
-behaviour. (`-1` is accepted as a no-op, since it is what the first
-version of this called the default.)
-
-Deciding it from `isatty()` was the other candidate — this program
-already uses that to choose *where diagnostics go* — and was rejected:
-getting the log destination wrong is cosmetic, getting this wrong hangs
-a prompt.
+**Staying resident is what has to be asked for.** The supervisor never
+exits, so a `dhcp net-718ebf` that stayed resident by default would hold
+the terminal it was typed at; a command that needs a flag for the new
+behaviour is the better default. It is not decided from `isatty()`
+either — getting the log destination wrong that way is cosmetic, getting
+this wrong hangs a prompt.
 
 Two honest limits. It does **not** request a lease *duration* (option
 51) — the length is whatever the server chooses, and with a correct
 renewal the address is stable at any length. And only the **first**
 device with a real lease is renewed; a second card would need its own
-timer, and no machine here has ever held two leases at once.
+timer, and no machine here holds two leases at once.
 
 **A link-local address is claimed and never defended.** RFC 3927 asks a
 host to keep watching for a conflicting ARP after it has taken an
@@ -201,34 +191,21 @@ worked, `host` for what the nameserver is for, and
 
 ## Its diagnostics go to the kernel log when it is a service
 
-A service started by init used to have **no stdout anybody reads**, so
-every `printf` here reached nothing — which is how a boot that fell back
-to link-local left no record of why, and why the first diagnosis of it
-had to be done by adding up timings from `dmesg`. It writes to fd 2 (the
-kernel log) when stdout is not a terminal, and to the terminal when it
-is, so `dmesg` carries the boot story and a prompt still shows you the
-answer. (A service's stdout **is** captured now — `SPAWN_FD_LOG`, tagged
-per service and persisted by `logd` — so a program written today would
-not need the fd 2 trick. This one keeps it because `netd`, not this,
-is what runs at boot.)
+It writes to fd 2 (the kernel log) when it is resident, and to the
+terminal when it is not, so `dmesg` carries the boot story and a prompt
+still shows you the answer. A service's stdout is captured as well
+(`SPAWN_FD_LOG`, tagged per service and persisted by `logd`), so a
+program written today would not need the fd 2 route.
 
 ## A descriptor has a size budget
 
-This applies to any descriptor, and it was found on this program's:
-`/etc/services.d/<name>` is read through
-`etc_config.c`'s buffer, **comments included**, and a file over that has
-its last keys silently ignored. It happened while writing the comment
-that used to explain all of the above, which is why the reasoning lives
-on this page instead.
+This applies to any descriptor, and it bites here first:
+`/etc/services.d/<name>` is read through `etc_config.c`'s buffer,
+**comments included**, and a file over that has its last keys silently
+ignored. The limit is `ETC_CONFIG_BUF_MAX`, **4096**, and
+`tools/check_config_size.py` fails the build before a descriptor can
+cross it.
 
-The limit is `ETC_CONFIG_BUF_MAX`, now **4096**. It was 1024, which a
-descriptor with a real comment on it reaches. Note there are *two*
-config constants and this is not the smaller one — an hour went into
-trimming this file against `ETC_CONFIG_MAX`, which is the **rewrite**
-path's buffer and never fires for a read. They are the same number now,
-and `tools/check_config_size.py` fails the build before either can bite
-again.
-
-**And arguments go in `Args=`, not on `Exec=`.** `Exec=/bin/dhcp -k` was
-reported as `dhcp failed to start`; the key that carries them is
-`Args=`, as `tftpd`'s descriptor has always shown.
+**And arguments go in `Args=`, not on `Exec=`.** An `Exec=/bin/dhcp -k`
+is reported as `dhcp failed to start`; the key that carries arguments is
+`Args=`.

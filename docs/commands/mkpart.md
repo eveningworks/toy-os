@@ -15,16 +15,33 @@
                      GRUB's core.img, or an ESP holding the kernel (/boot)
       confirm        required -- this destroys the disk's current contents
 
+## Options
+
+- `--disk <name>` -- which disk to write, named as `lsblk` names it
+  (`ata1`, `virtio0`); the disk this machine booted from by default. A
+  partition name is refused.
+- `--gpt` -- write a GPT. This is the default.
+- `--mbr` -- write a legacy MBR instead. Four partitions is the ceiling
+  either way, and MBR is where that limit comes from.
+- `<size>[K|M|G]` -- one partition of that size, in the order given. A
+  bare number is sectors; a suffix is bytes, rounded down to a whole
+  sector.
+- `rest` -- a partition taking everything left over. At most one.
+- `bios:`, `esp:` -- prefix a size to type that partition: a BIOS boot
+  partition for GRUB's `core.img`, or an ESP holding the kernel
+  (`/boot`). Everything else is basic data.
+- `confirm` -- required when the target is in use, and it destroys the
+  disk's current partition layout.
+
 ## Description
 
 `/bin/mkpart` writes a partition table to a disk. It is the write half of
 `parttable`, which reads one.
 
-**Which disk.** With no `--disk`, the one this machine booted from — which is
-all this command could reach at all until 2026-08-31, and is why the default is
-that rather than "the first one". `--disk` takes a name `lsblk` prints
-(`ata1`, `virtio0`); a **partition** name is refused, because a table written
-inside a partition describes windows into itself.
+**Which disk.** With no `--disk`, the one this machine booted from --
+the disk a person typing this command is most likely to mean, rather
+than "the first one". A **partition** name is refused, because a table
+written inside a partition describes windows into itself.
 
 Sizes are laid out end to end from LBA 2048 (the 1 MiB alignment every modern
 tool uses), in the order given, with no gaps and no reordering — what you type

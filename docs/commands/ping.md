@@ -8,6 +8,11 @@
 
     ping [-c count] <address>
 
+## Options
+
+- `-c <count>` -- how many echo requests to send; the default is four,
+  and a value below 1 is raised to 1.
+
 ## Description
 
 `/bin/ping` — send ICMP echo requests to an IPv4 address and report what
@@ -16,9 +21,9 @@ network works, and that is what it is for: one command exercises the NIC
 driver, ARP, the IPv4 header and checksum, ICMP, the socket layer and
 the scheduler's idle receive path. A reply means all of them are right.
 
-`-c` sets how many requests to send; the default is four. Each carries 56
-bytes of payload, which is what every other `ping` sends, so a capture
-taken on the host looks like the traffic anyone would expect.
+Each request carries 56 bytes of payload, which is what every other
+`ping` sends, so a capture taken on the host looks like the traffic
+anyone would expect.
 
 The exit status is the assertion worth scripting against: **0 if
 anything replied, 1 if nothing did.**

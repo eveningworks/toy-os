@@ -8,6 +8,18 @@
 
     font glyph <char> [--kernel] [--both]
 
+## Options
+
+- `--kernel` -- skip the client half: ring 0's facts and a 1-bit ink
+  map, which is the one view that needs no compositor. `--both`
+  overrides it and reads the client anyway.
+- `--both` -- both maps, both fact blocks and the hash comparison.
+
+Ring 0's facts print in every mode. With neither flag you get the
+client's coverage map, both fact blocks and the hash line -- and the
+client half needs a compositor, so it falls back to the ink map when
+there is none.
+
 ## Description
 
 What the machine is actually about to draw, for one character: its
@@ -39,12 +51,9 @@ coverage map, its line box, and whether there is any ink in it at all.
 
 A glyph that rasterised to nothing is pixel-identical on screen to a
 space, to a character the font does not carry, and to a font that failed
-to load. Nothing could tell those apart, and that ambiguity has already
-cost a hunt: a client read a session-font cell as entirely blank while
-the kernel had logged 101 of 101 glyphs built, and the session was gone
-before anyone could ask which of the four had happened.
+to load. Nothing else can tell those four apart.
 
-**`ink NONE` is the answer that hunt needed**, and `peak` is the harder
+**`ink NONE` is the answer to that**, and `peak` is the harder
 half of it — a glyph can have ink and still be far too faint to read,
 which no yes/no flag can express:
 
@@ -57,19 +66,14 @@ which no yes/no flag can express:
 
 A GUI client draws from its own read-only mapping of the atlas
 (`WIN_REQ_FONT`); ring 0 draws from the atlas itself. Those are
-different pieces of memory, and the bug above is exactly the case where
-they disagree — so this reads **both** and compares them.
+different pieces of memory, and a glyph that is present in one and blank
+in the other is exactly the case worth catching — so this reads **both**
+and compares them.
 
 The comparison is an FNV-1a hash over the coverage bytes rather than two
 pictures, because "these two bitmaps are identical" is not a question a
 person should answer by eye. `agree`, `DISAGREE`, or `DIFFERENT CELL
 SIZE` if the two are not even comparable.
-
-| | shows | needs |
-|---|---|---|
-| default | the client's coverage map, plus both fact blocks and the hash line | a compositor |
-| `--kernel` | ring 0's facts and a 1-bit ink map | nothing |
-| `--both` | both maps, both fact blocks, and the comparison | a compositor for the client half |
 
 **The two pictures are deliberately different depths.** The client view
 prints 8-bit coverage as a grayscale ramp, because how dark the ink is

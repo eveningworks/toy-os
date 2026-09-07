@@ -10,6 +10,12 @@
 lsdrv [-v]
 ```
 
+## Options
+
+- `-v` -- print the source file each driver declared itself in and its
+  one-line description, with the devices it bound on a continuation
+  line, instead of the single devices column.
+
 ## Description
 
 Lists the drivers **this build has**, and what each one is currently
@@ -34,10 +40,10 @@ virtio-rng     rng      (none)
 **It answers a question none of the other listings can.** `lsblk` says
 which disks are present, `lsusb` which devices are attached, `ifconfig`
 which cards are configured — all of them list *devices*. A driver that
-is compiled in and bound nothing appears in none of them, so "is
-virtio-blk in this build?" had no answer short of reading the source.
-And which driver claimed a given USB device was recorded only in the
-boot log, which scrolls away.
+is compiled in and bound nothing appears in none of them, so nothing
+else can say whether virtio-blk is in this build, and which driver
+claimed a given USB device is otherwise only in the boot log, which
+scrolls away.
 
 **`(none)` is a real answer, not a gap.** `tsc clock (none)` above means
 the TSC driver is in this build and is driving nothing on this machine —
@@ -87,12 +93,9 @@ saying at all. `lsmod`'s question does not exist here.
 **Not something a driver can fall out of by accident.** A driver
 declares itself at file scope (`DRIVER_DECLARE`, into the `.drivers`
 linker section), so it is listed because it is in the *image* — not
-because some line of its `init()` was reached. That distinction is not
-theoretical: the declaration used to be a call, and `e1000`'s sat after
-its "no card on this bus" return, so every guest without the card listed
-no e1000 driver at all. `tools/check_drivers.py` fails the build on a
-driver file carrying neither a declaration nor a `driver-none: <reason>`
-comment.
+because some line of its `init()` was reached. `tools/check_drivers.py`
+fails the build on a driver file carrying neither a declaration nor a
+`driver-none: <reason>` comment.
 
 **Still not exhaustive against a driver that binds without declaring.**
 That records the binding under class `?` and logs a line naming the

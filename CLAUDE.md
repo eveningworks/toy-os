@@ -923,6 +923,9 @@ whenever a headline here tells you something you did not already know.
   `userland/lib/umd.c`, paged by the pager `/bin/less` shares; there is
   no `man`
 - **EVERY COMMAND HAS A PAGE IN `docs/commands/`, AND THE BUILD CHECKS IT.**
+- **A PAGE IS THE MANUAL `doc` RENDERS, SO IT CARRIES NO HISTORY AND
+  LISTS ITS FLAGS** -- an `## Options` bullet list, from the program's
+  own argument parsing
 - **AN EVERYDAY COMMAND IS A `/bin` PROGRAM, NOT A BUILTIN, AND THE KERNEL'S OWN COPIES LIVE BEHIND ONE NAME: `rescue`.**
 - **A PROGRAM STARTED BY A BARE NAME PRINTS NOTHING EXTRA WHEN IT SUCCEEDS -- AND `run <name>` STILL DOES.**
 - **TAB COMPLETION IS ONE ENGINE COMPILED TWICE, AND A RING SUPPLIES A `struct completion_env`**

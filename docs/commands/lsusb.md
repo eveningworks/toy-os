@@ -8,6 +8,14 @@
 
     lsusb [-v] [-D]
 
+## Options
+
+- `-v`, `--verbose` -- also print what the device says about itself: its
+  `iManufacturer` and `iProduct` strings, its device class, and the
+  interface class, subclass and protocol.
+- `-D`, `--descriptors` -- hex-dump each device's configuration
+  descriptor and decode it, one line per descriptor.
+
 ## Description
 
 The USB devices the xHCI driver enumerated at boot, one paragraph each:

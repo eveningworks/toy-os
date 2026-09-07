@@ -10,4 +10,8 @@
 
 ## Description
 
-Each writes one LINE, terminated — `write` truncates first, `append` adds. Neither used to terminate, which made a multi-line file impossible to author from the shell at all. A line too long to fit is refused, not truncated.
+Each writes one LINE, terminated -- `write` truncates the file first,
+`append` adds to the end of it.
+
+A line longer than 254 characters is refused, not truncated: a silently
+shortened config line is a wrong value rather than a cosmetic problem.

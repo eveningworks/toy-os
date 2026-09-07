@@ -8,6 +8,11 @@
 
     config list
 
+## Options
+
+- `-h`, `--help` -- print the summary of every subcommand and exit; the
+  `help` subcommand and a bare `config` do the same.
+
 ## Description
 
 Every registered setting, its value, and **the file it lives in**. Flags any whose file no longer matches what is live.
@@ -38,8 +43,7 @@ list of settings and no list of categories, it asks
 setting registered anywhere in the kernel gains a sidebar home, a page
 and a `config` entry with no edit to any of them. It deliberately shows
 settings only, not facts: it is the "what can I change" screen, and
-read-only counters would bury the settings. (It was *Control Panel*
-until 2026-08-19 — that is Windows' name.)
+read-only counters would bury the settings.
 
 **Settings are named `<namespace>.<name>`** — the namespace being the
 registered name of the file the setting lives in, so `font_size` in

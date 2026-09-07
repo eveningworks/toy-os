@@ -8,6 +8,16 @@
 
     kbd [--last [count]] [--timeout <seconds>]
 
+## Options
+
+- `--last [count]` -- print the tail of what the tap already recorded
+  and exit, instead of following new events. `count` defaults to 20 and
+  is capped at 256. This form needs no scheduler slot, so it works
+  anywhere, including at a `#` prompt.
+- `--timeout <seconds>` -- how long live mode waits with no key event
+  before quitting on its own; 10 by default, and anything less than 1
+  becomes 10. It has no effect with `--last`, which does not wait.
+
 ## Description
 
 What the keyboard actually did, at every stage at once. One line per key
@@ -135,9 +145,10 @@ somebody asked for it.
 **Live mode needs a scheduler slot.** Started through the legacy `run`
 loader -- a bare `kbd` at the kernel's `#` prompt -- there is no slot to
 park in, so `SYS_SLEEP` is refused and the monotonic clock never
-advances. It refuses with a message rather than spinning, which is what
-it did before the guard existed, taking the machine with it. Use `spawn
-/bin/kbd`, or run it from a `$` prompt. `--last` needs none of this.
+advances. It refuses with a message rather than spinning against a
+deadline that can never arrive, which would take the machine with it.
+Use `spawn /bin/kbd`, or run it from a `$` prompt. `--last` needs none
+of this.
 
 **Keys typed during a live session still reach the shell afterwards**,
 exactly as they would during any other command, because nothing here

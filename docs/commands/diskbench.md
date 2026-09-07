@@ -8,6 +8,16 @@
 
     diskbench [--size MiB] [--path FILE] [--out FILE]
 
+## Options
+
+- `--size <MiB>` -- how much data each profile moves, 1 to 4096, default
+  64; outside that it refuses with `size-out-of-range`.
+- `--path <FILE>` -- the scratch file to write, created and removed by
+  the run. The default is in the PERSISTENT scratch directory, never the
+  RAM one, which a benchmark pointed at would measure `memcpy`.
+- `--out <FILE>` -- write the report to a file instead of stdout, and
+  rewrite the whole current state each time rather than appending.
+
 ## Description
 
 Times the filesystem's read and write paths and prints the result. Four
@@ -32,12 +42,10 @@ random, read and write — over a temp file it creates and removes.
 changes its SHAPE: a file gets the whole current state rewritten each
 time rather than an appended log.** That is what a poller needs: it
 re-reads the file in one `sys_read`, so an appended log would put the
-results, which come last, past where a poller ever reaches. Disk Mark
-sat at "Done." with four empty tiles for exactly that reason. The
-snapshot is bounded so it stays inside the reader's buffer, and a report
-that outgrew it would end with `diskbench: error report-truncated`
-rather than silently stopping — which is what it did when the `io` lines
-were added and the buffer was still sized for the results alone.
+results, which come last, past where a poller ever reaches. The snapshot
+is bounded so it stays inside the reader's buffer, and a report that
+outgrows it ends with `diskbench: error report-truncated` rather than
+silently stopping.
 A file rather than a pipe because `SYS_SPAWN`'s `stdout_fd` must be a
 pipe write end, and `PIPE_MAX` is 8 KiB kernel-wide — a GUI slow to
 drain would block the benchmark it is timing.
@@ -88,9 +96,8 @@ reports that this OS cannot deliver are stated rather than implied:
   of the bounce buffer the syscall copies through — and libsys loops to
   complete a bigger buffer. A "1 MiB transfer" is therefore 16 syscalls
   and the disk never sees one, so the profile is plain **SEQ** and the
-  program prints the size it actually used as `syscall-bytes`. (This
-  page said 1 KiB and **SEQ1K** for a while after the constant was
-  raised; the number a reader wants is the one on the line.)
+  program prints the size it actually used as `syscall-bytes`, which is
+  the number to read rather than any figure quoted elsewhere.
 - **Q1T1.** One request in flight, always: there is no asynchronous
   block interface and no threads here, so Q8T1 and Q32T1 have nothing to
   express.

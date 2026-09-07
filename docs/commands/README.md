@@ -21,11 +21,31 @@ build failure. Everything else is deliberately unchecked: the prose is
 the part only a person can write, and the syntax is the part that goes
 quietly wrong.
 
+## These pages ARE the manual, and that changed the bar
+
+`/bin/doc` renders this directory ON the machine: `doc ls` reads the
+same file as `ls.md` here. So a page is no longer an internal note --
+it is what somebody using the OS gets when they ask what a command does,
+and it is written for them.
+
+**NO HISTORY.** The rest of this repository records how things came to
+be; a manual page does not. `ls.md` opened by explaining that the
+command had defaulted to `/` until 2026-08-20 and that a builtin used to
+shadow it -- true, and useless to a reader who wants to know what `ls`
+does today. The test, sentence by sentence: **would this be true of the
+command even if nobody had ever got it wrong?** If not, cut it; `git
+log` and `docs/decisions.md` keep it.
+
+**LIST THE FLAGS.** A command that takes options gets an `## Options`
+section after the Synopsis, one bullet per flag, saying what each one
+does -- a BULLET LIST rather than a table, because a table renders in
+`doc` as one `Header: value` block per cell. The flags come from the
+program's own argument parsing, never from the prose around them.
+
 ## What a page is for
 
-The same bar the rest of this repo's docs use. A page should say what
-the command is FOR, what it deliberately does NOT do, and the trap in
-it -- not restate its output. Two examples of the kind of thing worth
+A page should say what the command is FOR, what it deliberately does NOT
+do, and the trap in it -- not restate its output. Two examples of the kind of thing worth
 writing down:
 
 - `heap check` distinguishes "no damage" from "nothing to check": with

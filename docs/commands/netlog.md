@@ -8,6 +8,14 @@
 
     netlog [-i|-o] [-n <count>] [-f]
 
+## Options
+
+- `-o` -- outgoing connections only.
+- `-i` -- incoming connections only; it and `-o` are exclusive, and the
+  last one given wins. Without either, both directions print.
+- `-n <count>` -- print only the last `<count>` matching records.
+- `-f` -- keep printing new records as they happen; Ctrl-C ends it.
+
 ## Description
 
 `/bin/netlog` — who this machine has talked to. One line per connection,
@@ -18,11 +26,6 @@ that asked, and the address at the other end.
 answer *what did this machine connect to, and which program did it*.
 The kernel keeps a ring of connection records (`QUERY_CONNLOG`) and this
 prints them.
-
-    -o   outgoing connections only
-    -i   incoming ones only
-    -n   print only the last <count> matching records
-    -f   keep printing new ones as they happen
 
 ## A connection, not a packet
 

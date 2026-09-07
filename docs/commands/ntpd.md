@@ -11,6 +11,16 @@
       -q        report the offset and change nothing
       -p port   the server's UDP port (default 123)
 
+## Options
+
+- `-1` -- sync once and exit, instead of staying resident.
+- `-q` -- report the offset and change nothing; given with `-1`, `-q`
+  wins and the clock is left alone.
+- `-p <port>` -- the server's UDP port, 1..65535; 123 by default.
+- `-h`, `--help` -- print the usage and exit.
+- `<server>` -- the host to ask, outranking `system.ntp_server` for this
+  run only. Both `-1` and `-q` ignore `system.ntp`.
+
 ## Description
 
 `/bin/ntpd` — ask a network time server what time it is, and set this
@@ -114,10 +124,10 @@ four seconds if nothing answers, inside an eight second budget.
 **Accuracy, measured the same day against `fi.pool.ntp.org`:** three
 different pool members put the laptop at −2 ms, +0 ms and −4 ms
 immediately after a sync, over round trips of 9 to 20 ms. That is the
-half-round-trip assumption working as well as it can on a local network.
-Before `SYS_SETTIME` carried nanoseconds the same machine sat a few
-hundred milliseconds behind after every sync, which is what that bug
-cost and why the fraction is not decoration.
+half-round-trip assumption working as well as it can on a local network,
+and it depends on `SYS_SETTIME` carrying nanoseconds -- a whole-second
+interface would leave the machine a few hundred milliseconds out after
+every sync.
 
 ## What is not built
 

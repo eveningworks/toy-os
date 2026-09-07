@@ -8,6 +8,13 @@
 
     wget [-O <file>] <url>
 
+## Options
+
+- `-O <file>` -- write the body to `<file>` rather than to standard
+  output, creating it or truncating it, and print the byte count when
+  the fetch finishes. The connecting line and any error still go to the
+  terminal.
+
 ## Description
 
 `/bin/wget` — fetch a URL over HTTP and print it, or save it with `-O`.

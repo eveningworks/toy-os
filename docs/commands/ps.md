@@ -8,11 +8,17 @@
 
     ps [--tree] [--threads]
 
+## Options
+
+- `--tree`, `-t` -- show the parent/child structure instead of a flat
+  listing, which is what makes reparenting to init visible.
+- `--threads`, `-T` -- include threads as rows of their own; they are
+  hidden without it.
+
 ## Description
 
 One line per process: pid, ppid, pgid, state, CPU time, memory, name.
-Reads `SYS_PROC_INFO`. `--tree` shows the parent/child structure
-instead, which is what makes reparenting to init visible.
+Reads `SYS_PROC_INFO`.
 
 **Threads are hidden unless you ask** (`--threads`, or `-T`), as in
 every Unix `ps`: a program's threads are that program's business, and a

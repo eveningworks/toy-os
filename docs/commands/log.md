@@ -10,6 +10,19 @@
            -n  show only the last <lines>       -u  only lines from <tag>
            -p  the PREVIOUS boot's log          -f  follow as it grows
 
+## Options
+
+- `-n <lines>` -- print only the last `<lines>` lines of the file; with
+  `-u` the tag filter applies within that tail, so what comes out is the
+  matching lines among the last `<lines>`, not the last `<lines>`
+  matching ones.
+- `-u <tag>` -- only lines from `<tag>`; the tag is matched exactly, not
+  as a substring.
+- `-p` -- read the PREVIOUS boot's log, `/var/log/toyos.log.1`, instead
+  of the current one.
+- `-f` -- print the file and keep printing as it grows, ignoring `-n`
+  and `-u`. It never returns; Ctrl-C ends it.
+
 ## Description
 
 `log` reads the persistent log that `logd` keeps in `/var/log/toyos.log` —
@@ -25,10 +38,9 @@ machine you have already rebooted has only the file.
 
 **`log -p` is why this exists.** The previous boot's log is kept as
 `/var/log/toyos.log.1`, so the question "what did it say before I rebooted
-it" has an answer. That question came up repeatedly while chasing an
-intermittent USB fault: the ring holds a few hundred lines, a driver
-logging once a second flushed an entire boot log inside five minutes, and
-the boot that mattered could not be examined at all.
+it" has an answer. The ring cannot answer it: it holds a few hundred
+lines, so a driver logging once a second flushes an entire boot's log
+inside five minutes.
 
 **`-u` matches the tag exactly**, not as a substring. `logd` writes the tag
 first and pads it to a fixed width, so `log -u netd` cannot be satisfied by
@@ -41,8 +53,7 @@ plain text:
     [kernel] [0.90] usb: port 2: connected, low-speed, enabled
 
 so `grep usb /var/log/toyos.log` works, and if this program is ever broken
-the log is still readable. That property is deliberate: every breakthrough
-in the USB investigation came from reading raw log text.
+the log is still readable. That property is deliberate.
 
 **`-f` is a poll**, not a notification — there is no inotify here and the
 file grows from another process, so the only honest way to watch it is to

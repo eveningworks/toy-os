@@ -8,6 +8,15 @@
 
     tftpd [-p <port>] [-r <root>] [-1]
 
+## Options
+
+- `-p <port>` -- the UDP port to serve on, 1..65535; 69 by default.
+- `-r <root>` -- the directory every request is resolved against; `/` by
+  default, so `/bin` is writable. At most 63 characters, and a longer
+  one is refused.
+- `-1` -- answer transfers from the request socket instead of a fresh
+  ephemeral port, at the cost of one transfer at a time. See below.
+
 ## Description
 
 `/bin/tftpd` — file transfer over the network, both directions
@@ -43,10 +52,10 @@ shared library, because `ld-toy` maps a `.so`'s segments *file-backed*,
 so overwriting one under a running program can fault in the new bytes
 beneath the old relocations.
 
-**An aborted transfer changes nothing.** A timeout, or a client that
-goes away, used to leave the target truncated: a failed push of
-`/boot/boot/kernel.bin` destroyed the kernel it was replacing. Now the
-partial file is removed and the original is untouched.
+**An aborted transfer changes nothing.** On a timeout, or a client that
+goes away, the partial file is removed and the original is untouched --
+which is what makes it safe to push a kernel over the one a machine
+boots from.
 
 **Publishing is three steps, not one, because `rename` here is
 create-only.** `fs_rename()` refuses an existing destination in all
@@ -65,10 +74,10 @@ stateful firewall sees a **new inbound flow** rather than a reply and
 drops it. Linux ships `nf_conntrack_tftp` for no other purpose than to
 teach conntrack about this.
 
-That is not a theory here: the ACKs left the guest (its `tx` counter
-climbed by exactly the retry count) and never reached a client one hop
-away, and `curl` failed identically — an independent client, so not this
-code. Answering from port 69 instead made the same transfer succeed.
+That is measured here, not assumed: ACKs leave the guest and never
+reach a client one hop away, and `curl` fails identically -- an
+independent client, so not this code. Answering from port 69 instead
+makes the same transfer succeed.
 
 `-1` is that: answer from the request socket, so the reply matches the
 tuple the client sent to and any filter accepts it. **The cost is one
@@ -117,11 +126,10 @@ trip delivered three blocks and retransmitted thirteen. Raising it
 means raising `SOCK_QUEUE` first.
 
 **Writes are buffered to 64 KiB.** Every `write()` is one complete TFS3
-transaction ending in two barriers, so a block per write made a 4.7 MB
-push over nine thousand of them. Measured on the bare-metal laptop
-before this: 32 ms per 512-byte block, of which ~1.8 ms was the network
-— the rest was a 10 ms scheduler tick per round trip and ~22 ms of
-filesystem. All three are what the numbers above address.
+transaction ending in two barriers, so a block per write would put a
+4.7 MB push through nine thousand of them -- at ~22 ms of filesystem and
+a 10 ms scheduler tick per round trip, against ~1.8 ms of network. The
+buffer, the block size and the window are all aimed at that split.
 
 ## What it is not
 
