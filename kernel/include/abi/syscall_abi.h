@@ -679,22 +679,11 @@ struct listdir_request {
                     // superblocks intact and the next probe mounted the
                     // corpse.
 
-#define SYS_WIN_CLIP 91 // RDI = pointer to a `struct win_clip_msg`
-                       // (abi/win_proto.h), in and out. Returns 1, or 0
-                       // when a SET does not fit.
-                       //
-                       // TWP's CLIPBOARD, carried on its own for the
-                       // reason SYS_WIN_DEBUG is: the payload is a
-                       // kilobyte, and widening SYS_WIN_REQUEST's
-                       // message to hold it would put that on the path
-                       // of every present.
-                       //
-                       // The server COPIES what it is given rather than
-                       // asking the source for it later, which is the
-                       // opposite of an X11 selection and of Wayland's
-                       // wl_data_source -- and is what makes the
-                       // clipboard survive the source exiting. See
-                       // abi/win_proto.h and docs/decisions.md.
+// 91 is UNUSED. It was SYS_WIN_CLIP, the kernel's clipboard; the
+// clipboard is a ring-3 service over shared memory now
+// (userland/lib/uclip_page.h). The number is left dead rather than
+// reused, so a stale binary calling it gets -ENOSYS rather than
+// something else's syscall.
 
 // The first syscalls added specifically so a real disk-hosted ELF64
 // binary (not just a kernel-space shell built-in) can do something

@@ -600,29 +600,42 @@ this the obvious way), not from how much history it accumulated.
   open-on-press exception in `docs/gui-guidelines.md` is about the
   primary button and does not carry over.
 
-- **THERE IS A SYSTEM CLIPBOARD, IT HOLDS FILES, AND THE SERVER KEEPS A
-  COPY.** `SYS_WIN_CLIP` with `WIN_REQ_CLIP_SET`/`_GET`; apps use
-  `userland/lib/uclip.h` rather than packing the payload themselves,
-  because two callers that pack it differently do not interoperate,
-  which is the one thing a clipboard exists to do. The entries are
-  absolute paths -- `text/uri-list`'s shape -- and the same buffer
-  carries text when something needs a text clipboard.
+- **THERE IS A SYSTEM CLIPBOARD, IT IS A RING-3 SERVICE
+  (`/bin/clipboardd`, `lib/uclip.h`), IT HOLDS FILES OR TEXT, AND A
+  PASTE COSTS NO SYSCALL.** Apps use `userland/lib/uclip.h` rather than
+  touching the page themselves, because two callers that pack the
+  payload differently do not interoperate -- which is the one thing a
+  clipboard exists to do -- and because the page is under a seqlock.
 
-  Five things to know. **THE SERVER COPIES; IT DOES NOT ASK THE SOURCE
-  LATER** -- the opposite of an X11 selection and of Wayland's
-  `wl_data_source`, and it is why closing the app you copied from does
-  not lose the clipboard here (`docs/decisions.md`). **A CUT MOVES
-  NOTHING UNTIL THE PASTE** (`WIN_CLIP_OP_CUT`), as in Explorer and
-  Dolphin, and **it is SPENT by that paste** -- the files are no longer
-  where the clipboard says they are, so a second paste must do nothing
-  rather than fail on every entry. **A SET THAT DOES NOT FIT IS
-  REFUSED**, never truncated: half a cut set pasted is files silently
-  left behind. **`WIN_EV_CLIPBOARD` IS BROADCAST** to every client and
-  the compositor, carrying the op and a SERIAL and NOT the payload -- an
-  app that wants the data asks, and most never do; `uapp_desc.on_clipboard`
-  is where it arrives. And **the keys are the APP's, not the WM's**:
-  `Ctrl+C` is INTR in a terminal, so a compositor that routed it
-  globally would take that away.
+  Seven things to know. **IT IS NOT IN THE KERNEL, and it used to be**
+  (`SYS_WIN_CLIP`, now a dead number): the daemon creates a named
+  shared-memory page and owns its LIFETIME, and clients read and write
+  it directly, so a paste is a memcpy rather than a syscall
+  (`docs/decisions.md` has why the kernel was the wrong home and why
+  the compositor was too). **A COPY IS A COPY, NOT A PROMISE** -- the
+  opposite of an X11 selection and of Wayland's `wl_data_source`, and
+  it is why closing the app you copied from does not lose the clipboard
+  here. **THE KIND IS DECLARED, NEVER SNIFFED**: `uclip_kind()` answers
+  FILES or TEXT and `uclip_text()` returns NULL for anything that is not
+  text, which is what stops a path being pasted into a document as a
+  line. **A CUT MOVES NOTHING UNTIL THE PASTE** (`UCLIP_CUT`), as in
+  Explorer and Dolphin, and **it is SPENT by that paste**; a cut of TEXT
+  is refused outright, so an editor's Cut copies and deletes its own
+  selection. **A COPY THAT DOES NOT FIT IS REFUSED**, never truncated:
+  half a cut set pasted is files silently left behind, and half a
+  paragraph is worse than none -- say so to the person, since silence is
+  the one outcome a Copy must never have. **THERE IS NO BROADCAST any
+  more** -- `WIN_EV_CLIPBOARD` is gone, because a client can read the
+  serial out of shared memory for free; `uapp` polls it and
+  `uapp_desc.on_clipboard` still fires. And **the keys are the APP's,
+  not the WM's**: `Ctrl+C` is INTR in a terminal, so a compositor that
+  routed it globally would take that away -- which is why Notepad binds
+  `Ctrl+C/X/V` and the Terminal binds `Ctrl+Shift+V`.
+
+  **HOLD A `struct uclip` STATICALLY.** It is a snapshot with the
+  payload in it, far past the ring-3 frame budget; a local is a build
+  warning rather than a crash, which is the only reason the struct is
+  allowed to stay that shape.
 
 - **`uui_splitter` IS THE DRAGGABLE DIVIDER, AND IT OWNS A FRACTION
   RATHER THAN A PIXEL COLUMN.** Qt's `QSplitter`, GTK's `GtkPaned`,

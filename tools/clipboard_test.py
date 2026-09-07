@@ -25,7 +25,13 @@ one needs:
      BAND -- the prompt row gains ink, a row above it does not -- rather
      than as a whole-screen difference, which anything at all would
      satisfy.
-  4. **An oversized copy is REFUSED, and does not disturb what is
+  4. **It survives the compositor.** The clipboard lived in the kernel
+     because a clipboard the compositor owned would be emptied by a
+     Force Quit, and this desktop kills its compositor on purpose. It
+     is a supervised ring-3 service now, so that claim needs a check
+     rather than a sentence: kill toywm, let init restart it, and the
+     text must still be there.
+  5. **An oversized copy is REFUSED, and does not disturb what is
      already there.** Opening pci.ids (1.6 MB) and pressing Ctrl-A
      Ctrl-C asks for far more than WIN_CLIP_BYTES. The clipboard must
      still hold what check 2 put there -- a truncating clipboard would
@@ -100,6 +106,30 @@ def changed(a, b, box):
     from PIL import ImageChops
     d = ImageChops.difference(a.crop(box), b.crop(box)).convert("L")
     return sum(1 for v in d.tobytes() if v > 8)
+
+
+def wm_pid(dbg):
+    """The compositor's pid, from `ps` -- a REAL /bin program, so it
+    needs the console's `sh` prefix. Without it the send returns
+    nothing and every caller silently finds no process."""
+    for line in (dbg.send("sh ps") or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].isdigit() and parts[-1] == "toywm":
+            return parts[0]
+    return None
+
+
+def wm_starts(dbg):
+    """How many times init has brought the desktop up, counted in the
+    log.
+
+    **NOT THE PID.** Supervision restarts the compositor fast enough to
+    reuse the dead process's slot, so the pid can be identical either
+    side of a kill -- which reported a compositor that had genuinely
+    died and come back as never having died at all. The log line init
+    writes per start cannot be reused that way. dmesg is cumulative, so
+    this is a count to COMPARE, never to read once."""
+    return (dbg.send("sh dmesg") or "").count("toywm is ready")
 
 
 def content_rect(dbg, title_starts):
@@ -192,7 +222,57 @@ def run(dbg, qmp, tmp, res):
         res.check(bool(rows) and max(rows) - min(rows) <= 1 and max(rows) < th // step // 3,
                   "and only in one band near the top -- the prompt (rows %s)" % rows)
 
-    # --- check 4: an oversized copy is refused, and changes nothing ---
+    # --- check 4: the clipboard outlives the compositor ---------------
+    #
+    # THE INHERITED REQUIREMENT. This is the property that kept the
+    # clipboard in ring 0, so a ring-3 service has to earn it rather
+    # than assert it.
+    #
+    # **THE KILL IS ESTABLISHED, NOT ASSUMED.** The compositor's pid
+    # must CHANGE across it: the first version of this check could not
+    # find the pid, killed nothing, and reported the clipboard as having
+    # survived an event that never happened.
+    before_pid = wm_pid(dbg)
+    before_starts = wm_starts(dbg)
+    res.check(before_pid is not None, "found the compositor's pid")
+    if before_pid:
+        dbg.send("sh kill " + before_pid)
+        starts = before_starts
+        for _ in range(20):      # init restarts it; Restart=on-failure
+            time.sleep(1.0)
+            starts = wm_starts(dbg)
+            if starts > before_starts:
+                break
+        res.check(starts > before_starts,
+                  "the compositor really died and init restarted it "
+                  "(%d -> %d starts logged)" % (before_starts, starts))
+        enter_gui(qmp, dbg.sock_path)
+        dbg.settle()
+
+        dbg.send("gui spawn " + NOTEPAD)
+        time.sleep(2.5)
+        dbg.settle()
+        srect = content_rect(dbg, "untitled")
+        if not srect:
+            res.check(False, "a Notepad opened after the compositor restarted")
+        else:
+            sx, sy, sw, sh = srect
+            qmp.click_at(sx + sw // 2, sy + sh // 2)
+            dbg.settle()
+            key(dbg, CTRL_V)
+            dbg.settle()
+            key(dbg, CTRL_S)
+            time.sleep(1.0)
+            dbg.settle()
+            type_text(dbg, SAVE_PATH + "3")
+            key(dbg, ENTER)
+            time.sleep(1.5)
+            dbg.settle()
+            out3 = dbg.send("sh cat " + SAVE_PATH + "3") or ""
+            res.check(PHRASE in out3,
+                      "the clipboard survived the compositor being killed")
+
+    # --- check 5: an oversized copy is refused, and changes nothing ---
     dbg.send("gui spawn %s %s" % (NOTEPAD, PCI_IDS))
     time.sleep(3.0)
     dbg.settle()

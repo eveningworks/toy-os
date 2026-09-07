@@ -444,7 +444,7 @@ first before re-litigating it from scratch.
 - [A splitter owns a FRACTION, and the size it decides is pinned on the layout ITEM](decisions/gui.md#a-splitter-owns-a-fraction-and-the-size-it-decides-is-pinned-on-the-layout-item)
 - [The resize cursors stopped being the frame's alone](decisions/gui.md#the-resize-cursors-stopped-being-the-frames-alone)
 - [Properties is a process, not a dialog](decisions/gui.md#properties-is-a-process-not-a-dialog)
-- [The clipboard is a copy the server holds, not a promise from the source](decisions/gui.md#the-clipboard-is-a-copy-the-server-holds-not-a-promise-from-the-source)
+- [The clipboard is a copy a SERVICE holds, not a promise from the source](decisions/gui.md#the-clipboard-is-a-copy-a-service-holds-not-a-promise-from-the-source)
 - [Ctrl+C is not the window manager's to route](decisions/gui.md#ctrlc-is-not-the-window-managers-to-route)
 - [File operations moved into the process, and what that cost](decisions/gui.md#file-operations-moved-into-the-process-and-what-that-cost)
 - [A conflict is a question the worker asks and the event loop answers](decisions/gui.md#a-conflict-is-a-question-the-worker-asks-and-the-event-loop-answers)

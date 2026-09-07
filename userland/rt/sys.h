@@ -858,10 +858,6 @@ int sys_win_request(struct win_request_msg *req);
 // SYS_WIN_DEBUG and WIN_REQ_DEBUG_TAKE.
 int sys_win_debug(struct win_debug_msg *msg);
 
-// TWP's clipboard: WIN_REQ_CLIP_SET replaces it, WIN_REQ_CLIP_GET reads
-// it back. Returns 1, or 0 when a SET does not fit -- a refusal, never a
-// truncation. Any client may do either.
-int sys_win_clip(struct win_clip_msg *msg);
 
 // Non-blocking. 1 if an event was written, 0 if the queue is empty.
 int sys_poll_event(struct win_event *out);

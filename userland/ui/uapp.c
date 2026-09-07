@@ -8,6 +8,7 @@
 #include <stdio.h>      // snprintf/vsnprintf, one layout line at a time
 #include <stdarg.h>
 #include "ui/utheme.h"
+#include "lib/uclip.h"   // clip_poll() -- the clipboard is shared memory now
 
 struct uapp {
     // WHICH OF THE WINDOW'S TWO BUFFERS THE COMPOSITOR IS READING. The
@@ -429,8 +430,31 @@ struct ugfx_surface *uapp_surface(struct uapp_draw *d) { return d->surface; }
 
 // --- event dispatch ---------------------------------------------------
 
+// THE CLIPBOARD IS POLLED, NOT BROADCAST, and that is a consequence of
+// it living in shared memory rather than in the kernel (lib/uclip.h).
+// There is no WIN_EV_CLIPBOARD any more because there is nobody in the
+// kernel left to send one -- and asking is a single shared-memory read,
+// which is cheaper than the event was. Checked on every event, so an
+// app hears about a change the moment anything at all happens to it.
+static unsigned g_clip_seen;
+static int g_clip_first = 1;
+
+static void clip_poll(struct uapp *a) {
+    const struct uapp_desc *d = a->desc;
+    if (!d->on_clipboard) return;
+    unsigned now = uclip_peek_serial();
+    if (g_clip_first) { g_clip_first = 0; g_clip_seen = now; return; }
+    if (now == g_clip_seen) return;
+    g_clip_seen = now;
+    // The op is not carried here: an app that cares reads the
+    // clipboard, which is what it had to do for the payload anyway.
+    d->on_clipboard(a, 0, now);
+}
+
 static void dispatch(struct uapp *a, const struct win_event *ev) {
     const struct uapp_desc *d = a->desc;
+
+    clip_poll(a);
 
     switch (ev->type) {
     case WIN_EV_PING: {
@@ -485,11 +509,6 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         // callback exists to prevent.
         if (d->on_font) d->on_font(a);
         a->dirty = 1;
-        break;
-
-    case WIN_EV_CLIPBOARD:
-        // A NOTIFICATION, not the data. An app that cares asks.
-        if (d->on_clipboard) d->on_clipboard(a, ev->a, (unsigned)ev->b);
         break;
 
     case WIN_EV_CLOSE:

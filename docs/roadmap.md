@@ -588,14 +588,16 @@ The desktop is in ring 3 already. These are what it still lacks.
 
 ### GUI clipboard + drag-and-drop
 
-- [x] ~~A clipboard buffer, FILES first (`WIN_REQ_CLIP_SET`/`GET`)~~ DONE 2026-08-30 -- the SERVER's, so it survives a Force Quit
+- [x] ~~A clipboard buffer, FILES first~~ DONE 2026-08-30 -- in the kernel then; a ring-3 service now
 - [x] ~~Ctrl+C/Ctrl+X/Ctrl+V in the File Manager over it; a cut stages and only moves on paste~~ DONE 2026-08-30
 - [x] ~~Draw a pending cut as DIMMED rows~~ DONE 2026-08-30 -- a dim bitmap on `uui_fileview`, applied by NAME on every reload
 - [x] ~~Ctrl+click and Shift+click multi-select~~ DONE 2026-08-30 -- the modifiers ride in the mouse event (`WIN_MOUSE_MODS_SHIFT`)
-- [ ] System clipboard for TEXT, and paste into Notepad/Terminal
+- [x] ~~System clipboard for TEXT, and paste into Notepad/Terminal~~ DONE 2026-09-07 -- a `kind` word, declared and never sniffed
+- [x] ~~Move the clipboard out of the kernel~~ DONE 2026-09-07 -- `/bin/clipboardd` owns a shared page; a paste costs no syscall
 - [ ] Drag-and-drop between windows
 - [ ] Drag a file from the file manager (see Desktop productivity apps) into Notepad
-- [ ] Typed clipboard formats (text vs. image), not just a text buffer
+- [ ] A clipboard that survives `clipboardd` restarting
+- [ ] Typed clipboard formats (an image kind), beyond files and text
 - [ ] A clipboard history ring
 
 ### Desktop productivity apps

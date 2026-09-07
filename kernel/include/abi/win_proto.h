@@ -174,14 +174,11 @@
                            // out; a client needs nothing, since its
                            // window is resized through WIN_EV_RESIZE
                            // like any other.
-#define WIN_EV_CLIPBOARD 31 // a: the new WIN_CLIP_OP_*, b: the serial.
-                            // THE CLIPBOARD WAS REPLACED, by anyone --
-                            // broadcast so a client drawing a pending
-                            // cut as dimmed rows stops the moment
-                            // somebody else copies. The payload is
-                            // deliberately NOT here: a client that wants
-                            // it asks (WIN_REQ_CLIP_GET), and most never
-                            // do -- which is also why there is no count.
+// 31 is UNUSED. It was WIN_EV_CLIPBOARD, broadcast when the kernel
+// held the clipboard; the clipboard is a ring-3 service now
+// (userland/lib/uclip_page.h) and a client reads its serial out of
+// shared memory instead. The number is left dead rather than reused,
+// so an old client cannot mistake a new event for it.
 
 #define WIN_EV_USER      30 // a, b: whatever the CLIENT put there. The
                             // only event a client can put on its OWN
@@ -868,89 +865,12 @@ struct win_event {
 #define WIN_CURSOR_RESIZE_V 4 // a divider that moves up/down
 #define WIN_CURSOR_COUNT    5
 
-// --- the clipboard ----------------------------------------------------
-//
-// ONE BUFFER, HELD BY THE SERVER, holding what was last copied or cut.
-// `WIN_REQ_CLIP_SET` replaces it, `WIN_REQ_CLIP_GET` reads it back, and
-// both carry `struct win_clip_msg` through SYS_WIN_CLIP rather than
-// widening `struct win_request_msg` -- the same rule the diagnostic
-// channel follows, and for the same reason: this payload is a kilobyte
-// and WIN_REQ_PRESENT is on the hot path.
-//
-// **THE SERVER COPIES THE DATA; IT DOES NOT ASK THE SOURCE FOR IT.**
-// That is the opposite of what X11 selections and Wayland's
-// `wl_data_source` do -- there the source app stays alive and serves the
-// bytes on demand, which is exactly why closing an app loses your
-// clipboard and why every desktop ships a clipboard manager to paper
-// over it. At this scale the payload is a kilobyte of paths, so copying
-// it is cheaper than the machinery for not copying it, and the data
-// then survives the source exiting AND the compositor being killed.
-// See docs/decisions.md.
-//
-// **TWO KINDS, ONE BUFFER**, named by `kind`: a packed list of absolute
-// paths (`text/uri-list`'s shape on a real desktop), or one run of
-// plain text. The kinds do not coexist -- a SET replaces whatever was
-// there, so copying text discards a pending cut of files and the
-// broadcast tells every client so. That is what X11, Wayland and Win32
-// all do for the CLIPBOARD selection.
-//
-// There is no type NEGOTIATION and no list of offered formats. Those
-// exist so a source can offer HTML and plain text and let the paster
-// pick; here the source knows what it copied and the payload is already
-// a copy in the server, so a `kind` field is the whole mechanism. It
-// occupies the word that was `reserved` for exactly this.
-#define WIN_REQ_CLIP_SET   26 // Replace the clipboard. Returns 0 if the
-                           // payload does not fit -- a REFUSAL, never a
-                           // truncation: half a cut set pasted is files
-                           // silently left behind.
-#define WIN_REQ_CLIP_GET   27 // Read it. `count` 0 means empty, which is
-                           // not an error.
-
-#define WIN_CLIP_OP_NONE 0 // nothing has been copied or cut
-#define WIN_CLIP_OP_COPY 1
-#define WIN_CLIP_OP_CUT  2 // a MOVE that has not happened yet -- the cut
-                           // acts on the paste, as in Explorer and
-                           // Dolphin, so the files are still where they
-                           // were until then.
-
-#define WIN_CLIP_KIND_FILES 0 // absolute paths, `count` of them
-#define WIN_CLIP_KIND_TEXT  1 // one NUL-terminated run of text, count 1
-
-// **A CEILING, AND A REFUSAL AT IT.** 64 KiB holds any list of paths
-// and any realistic text selection -- roughly eight hundred lines --
-// and a copy larger than this is refused with a message rather than
-// pasted short. Windows Notepad's historical file limit was the same
-// number for the same reason: somewhere a person can be told about.
-//
-// THE COST IS A STACK FRAME. `struct win_clip_msg` embeds the payload,
-// so a ring-3 caller must hold one STATICALLY -- a local is 64 KiB
-// against a 2 KiB frame budget and a 16 KiB stack. That is a build
-// failure (`-Wframe-larger-than`), not a silent one, which is why the
-// struct is allowed to stay this shape. The kernel side only ever puts
-// the 24-byte header on its stack.
-#define WIN_CLIP_BYTES 65536 // the packed payload's cap
-#define WIN_CLIP_MAX   64    // and how many entries it may name
-
-struct win_clip_msg {
-    uint32_t type;   // WIN_REQ_CLIP_SET / WIN_REQ_CLIP_GET
-    uint32_t op;     // WIN_CLIP_OP_*
-    uint32_t count;  // entries packed into `data`
-    uint32_t len;    // bytes of `data` in use, the NULs included
-
-    // BUMPED ON EVERY SET, and never reused. A client that has drawn a
-    // cut as dimmed rows needs to know when somebody else replaced the
-    // clipboard underneath it, and comparing the payload to decide that
-    // is both slower and wrong (copying the same file twice is a real
-    // change to the cut/copy mode).
-    uint32_t serial;
-    uint32_t kind;   // WIN_CLIP_KIND_*; FILES is 0, so a zeroed message
-                     // means what every caller before this field meant
-
-    // `count` NUL-terminated strings, packed end to end -- absolute
-    // paths when the kind is FILES, and a single run of text (count 1,
-    // its NUL included in `len`) when it is TEXT.
-    char data[WIN_CLIP_BYTES];
-};
+// THE CLIPBOARD IS NOT HERE ANY MORE. It was a buffer in
+// kernel/proc/win_server.c reached by SYS_WIN_CLIP, holding untrusted
+// user data and a piece of desktop policy in ring 0. It is a named
+// shared-memory object owned by /bin/clipboardd now, so it is a
+// userland<->userland contract and lives in userland/lib/uclip_page.h,
+// which records why. Request numbers 26 and 27 are left dead.
 
 #define WIN_REQ_FB_CURSOR  25 // COMPOSITOR ONLY. The hardware cursor
                            // plane (virtio-gpu's cursorq, vmsvga's

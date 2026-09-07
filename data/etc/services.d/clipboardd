@@ -1,0 +1,19 @@
+# The system clipboard. It owns the shared page every app copies into
+# and pastes out of; without it a Copy has nowhere to go and the apps
+# report that rather than failing silently.
+#
+# NO Target=, so it runs in `text` as well as `graphical`: nothing
+# graphical is required to have a clipboard, and a text-target machine
+# that later starts a desktop by hand should already have one.
+#
+# Ready=notify, so a service ordered after this one waits for the page
+# to actually exist rather than for the process to have been spawned --
+# the window between those is exactly when a client would map a page
+# whose magic is unset.
+#
+# See docs/commands/clipboardd.md.
+Name=clipboardd
+Description=Hold the system clipboard for every program
+Exec=/bin/clipboardd
+Restart=always
+Ready=notify

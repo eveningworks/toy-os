@@ -5651,7 +5651,7 @@ a formatter that will not fit and a parser that cannot be sure. A floor
 presented as a total is a wrong answer wearing a right answer's clothes.
 
 
-## The clipboard is a copy the server holds, not a promise from the source
+## The clipboard is a copy a SERVICE holds, not a promise from the source
 
 X11 selections and Wayland's `wl_data_source` both work the same way:
 the source application keeps the data and serves it on demand when
@@ -5659,41 +5659,75 @@ somebody pastes. That is why closing the app you copied from loses your
 clipboard, and why every desktop ships a clipboard manager whose entire
 job is to paste-and-re-copy in the background to work around it.
 
-toy-os copies instead. `WIN_REQ_CLIP_SET` hands the server a kilobyte
-and the server keeps it; the source may exit immediately and the paste
-still works.
+toy-os copies instead. A copy hands over the bytes and they stay handed
+over; the source may exit immediately and the paste still works.
 
 The trade is real and it is the right way round at this scale. Serving
 on demand exists because X11 clipboards can hold a bitmap and nobody
 wants a copy of it in the server, plus it lets the source offer several
-TYPES and the paster pick one. Here the payload is a list of paths --
-about a kilobyte at the cap -- so the copy is cheaper than the
+TYPES and the paster pick one. Here the payload is a list of paths or a
+run of text -- 64 KiB at the cap -- so the copy is cheaper than the
 machinery for avoiding it, and the type negotiation would be a protocol
-for one type.
+for two types the source already knows the answer to.
 
-**It is the SERVER's and not the compositor's**, which is the second
-half of the decision. The compositor is a process that gets killed on
-purpose here -- `compositor_death_test.py` exists -- and a clipboard a
-Force Quit could empty would be a poor one. It lives in `win_server.c`
-beside the other per-client protocol state the server already holds (a
-window's title, its cursor shape, its hints), because that is what it
-is: bytes held on behalf of clients, with no interpretation.
+**It is a RING-3 SERVICE, and it took two goes to get there.** It began
+as a buffer inside `kernel/proc/win_server.c` reached by `SYS_WIN_CLIP`,
+for a reason that was real: the compositor is a process this desktop
+kills on purpose (`compositor_death_test.py` exists), so a clipboard the
+compositor owned would be emptied by a Force Quit. The mistake was
+concluding that the only alternative to the compositor was the kernel.
+It put untrusted user data and a piece of desktop POLICY -- what a
+clipboard is, what a cut means, how large one may be -- in ring 0, which
+is the one thing CLAUDE.md says ring 0 must not contain, and it only
+ever grows: a history ring or an image format would have put megabytes
+there.
 
-**The payload is split from the header in the syscall, and that is not
-style.** One `struct win_clip_msg` copied in, acted on and copied back
--- the shape `SYS_WIN_DEBUG` uses -- puts 1048 bytes on the kernel
-stack, and `-Wframe-larger-than=1024` refuses it. A static scratch
-buffer would be worse than the warning it silenced: a ring-3 process is
-preemptible inside a syscall, so two clients pasting at once would
-overwrite each other's payload, which is precisely the re-entrancy bug
-`tfs3.c` carries a preemption guard for. So only the 24-byte header
-rides the stack and the payload is copied straight into the one buffer
-that has to exist anyway.
+Every system that has thought about this puts the clipboard in
+userspace. macOS has `pboard`, a daemon. Android's `ClipboardManager`
+lives in `system_server`. Windows is the outlier that copies into
+system-owned memory, and that design sat in `win32k.sys` in kernel mode
+and has been moving out ever since. The lifetime argument is answered by
+SUPERVISION rather than by privilege: `/bin/clipboardd` is an init
+service, so the clipboard outlives every app that copied into it and
+outlives the compositor -- which was the case that mattered.
 
-**A refusal, never a truncation.** A `SET` larger than the cap puts
-nothing on the clipboard and returns 0. Half a cut set pasted is files
-silently left behind in the source directory, which is the same failure
-mode this codebase's formatter and parser rules exist to prevent.
+**The service is not in the data path, and that is the part worth
+copying.** It creates a named shared-memory page and owns its lifetime;
+clients read and write the page themselves (`userland/lib/uclip.c`), so
+a paste costs no syscall and no context switch, and an app greying out
+its Paste item watches a serial for free. That is cheaper than the
+syscall it replaced, not a tax paid for the architecture. It also
+deleted the broadcast: `WIN_EV_CLIPBOARD` existed to tell clients the
+clipboard changed, and with the state in shared memory they can simply
+look.
+
+What the daemon does do is own the lifetime and break a lock whose
+holder died. It does NOT survive its own restart -- a fresh page is
+zeroed -- which is the same thing an X server dying does, and nothing
+has asked for more.
+
+**Readers use a seqlock; writers take a lock.** A seqlock alone assumes
+one writer and any app may copy, so there are two mechanisms and they do
+different jobs: the sequence number lets a reader detect that it read
+across an update and retry, with no syscall and no blocking, and a
+compare-exchange word keeps two copiers from interleaving. A writer that
+cannot take the lock REFUSES rather than forcing it, because forcing it
+would race a live holder; the daemon breaks a lock older than a couple
+of seconds, since the only way one stays taken that long is an owner
+that died inside it -- and if the sequence was left odd, the clipboard
+is emptied rather than left as half of something.
+
+**A refusal, never a truncation.** A copy larger than the cap puts
+nothing on the clipboard. Half a cut set pasted is files silently left
+behind in the source directory, and half a pasted paragraph is worse
+than none -- the same failure mode this codebase's formatter and parser
+rules exist to prevent.
+
+**Two kinds, declared and never sniffed.** `kind` is FILES or TEXT, the
+copier states it, and the paster asks. Sniffing -- guessing from the
+bytes whether they look like paths -- is the version of this that
+pastes `/etc/hostname` into a document as a line of text. FILES is 0 so
+that a zeroed page means what the file-only clipboard meant.
 
 ## Ctrl+C is not the window manager's to route
 

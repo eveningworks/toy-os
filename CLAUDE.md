@@ -740,7 +740,7 @@ whenever a headline here tells you something you did not already know.
 - **`uui_slider` is for an ORDERED enum**
 - **A DRAG NEEDS THE BUTTON STILL DOWN, AND THE POINTER GRAB IS NOT THAT FACT**
 - **`uui_scale` IS FOR A CONTINUOUS NUMBER; `uui_slider` IS FOR AN ORDERED ENUM**
-- **THERE IS A SYSTEM CLIPBOARD (`SYS_WIN_CLIP`, `lib/uclip.h`), IT HOLDS FILES, AND THE SERVER KEEPS A COPY**
+- **THERE IS A SYSTEM CLIPBOARD, IT IS A RING-3 SERVICE (`/bin/clipboardd`, `lib/uclip.h`), IT HOLDS FILES OR TEXT, AND A PASTE COSTS NO SYSCALL**
 - **A CUT MOVES NOTHING UNTIL THE PASTE, AND IS SPENT BY IT; THE CLIPBOARD KEYS ARE THE APP'S, NOT THE WM'S**
 - **`uui_splitter` IS THE DRAGGABLE DIVIDER, AND IT OWNS A FRACTION RATHER THAN A PIXEL COLUMN**
 - **A LAYOUT CHILD'S SIZE CAN BE PINNED FROM OUTSIDE: `uui_item.main_size` (LAST in the struct -- apps initialise it positionally)**

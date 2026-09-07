@@ -187,22 +187,6 @@ struct client_window {
 // space is captured here rather than looked up per call.
 static int g_comp_pid = 0;
 
-// --- the clipboard ---------------------------------------------------
-//
-// One buffer for the whole system, holding a COPY of what was last put
-// on it (abi/win_proto.h says why a copy and not a promise from the
-// source). It is the server's rather than the compositor's so that it
-// survives the compositor being killed -- which is a thing that happens
-// here on purpose, and a clipboard that a Force Quit could empty would
-// be a poor one.
-static struct {
-    uint32_t op;      // WIN_CLIP_OP_*
-    uint32_t count;
-    uint32_t len;     // bytes of `data` in use, NULs included
-    uint32_t serial;  // bumped per SET, never reused
-    uint32_t kind;    // WIN_CLIP_KIND_*
-    char data[WIN_CLIP_BYTES];
-} g_clip;
 
 
 // See win_proto.h's WIN_REQ_FB_CURSOR. Belongs to the ROLE, like the
@@ -1070,81 +1054,6 @@ static int debug_via_compositor(const char *line, char *out, int cap) {
         return 0; // empty, and deliberately NOT "unknown" -- see above
     }
     return debug_collect(out, cap);
-}
-
-// The clipboard, set and read. ANY client may do either: a clipboard
-// whose reads were privileged would be one nothing could paste from,
-// and every windowing system takes the same view.
-//
-// **SPLIT INTO A HEADER AND A BUFFER, on purpose.** The obvious shape
-// -- one `struct win_clip_msg` copied in, acted on, copied back, as
-// SYS_WIN_DEBUG does -- puts a kilobyte on the kernel stack, and
-// `-Wframe-larger-than=1024` says no. A static scratch buffer would be
-// worse: a ring-3 process is preemptible inside a syscall, so two
-// clients would overwrite each other's payload, which is the exact
-// re-entrancy bug tfs3.c carries a preemption guard for. So the caller
-// copies the payload straight in and out of the one buffer that has to
-// exist anyway, and only the 24-byte header rides the stack.
-void win_server_clip_get(uint32_t *op, uint32_t *count, uint32_t *len,
-                          uint32_t *serial, uint32_t *kind) {
-    if (op) *op = g_clip.op;
-    if (count) *count = g_clip.count;
-    if (len) *len = g_clip.len;
-    if (serial) *serial = g_clip.serial;
-    if (kind) *kind = g_clip.kind;
-}
-
-char *win_server_clip_buf(void) { return g_clip.data; }
-
-// Checked BEFORE the caller copies anything in, so a refusal cannot
-// leave half a payload in the buffer.
-int win_server_clip_would_fit(uint32_t op, uint32_t count, uint32_t len,
-                               uint32_t kind) {
-    if (len > WIN_CLIP_BYTES || count > WIN_CLIP_MAX) {
-        // REFUSED, not truncated. Half a cut set pasted is files
-        // silently left behind -- the same rule as a formatter that
-        // will not fit writing nothing.
-        klog_write("win: clipboard SET refused -- payload too large\n");
-        return 0;
-    }
-    if (kind != WIN_CLIP_KIND_FILES && kind != WIN_CLIP_KIND_TEXT) {
-        klog_write("win: clipboard SET refused -- unknown kind\n");
-        return 0;
-    }
-    // TEXT IS ONE ENTRY, and saying so here is what stops a client
-    // packing several runs into a payload nothing knows how to walk.
-    if (kind == WIN_CLIP_KIND_TEXT && count > 1) {
-        klog_write("win: clipboard SET refused -- text is one entry\n");
-        return 0;
-    }
-    // A CUT is a promise to MOVE, which means nothing for text: there
-    // is no source to remove it from once the copy is in the server.
-    if (kind == WIN_CLIP_KIND_TEXT && op == WIN_CLIP_OP_CUT) {
-        klog_write("win: clipboard SET refused -- text cannot be cut\n");
-        return 0;
-    }
-    return op == WIN_CLIP_OP_NONE || op == WIN_CLIP_OP_COPY ||
-           op == WIN_CLIP_OP_CUT;
-}
-
-// Called once the payload is in the buffer. Returns the new serial.
-uint32_t win_server_clip_commit(uint32_t op, uint32_t count, uint32_t len,
-                                 uint32_t kind) {
-    g_clip.op = op;
-    g_clip.count = count;
-    g_clip.len = len;
-    g_clip.kind = kind;
-    // Bumped per SET and never reused: it is how a client notices that
-    // somebody else replaced the clipboard under it. Comparing payloads
-    // would be slower and wrong -- copying the same file twice is a
-    // real change to the cut/copy mode.
-    g_clip.serial++;
-
-    // Every client hears, so a File Manager showing a pending cut stops
-    // showing it the moment another one copies.
-    win_server_broadcast(WIN_EV_CLIPBOARD, (int32_t)op,
-                          (int32_t)g_clip.serial, 0);
-    return g_clip.serial;
 }
 
 int win_server_debug(int pid, struct win_debug_msg *msg) {
