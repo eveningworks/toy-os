@@ -232,12 +232,64 @@ static void close_tid(int fd) {
 
 // --- WRQ: the client writes a file to us -------------------------------
 
+// A TRANSFER LANDS ON A TEMPORARY AND IS RENAMED OVER THE TARGET, and
+// that is not tidiness -- it is the difference between replacing a file
+// and destroying one.
+//
+// Writing into the target with O_TRUNC has two failure modes this
+// removes. A reader that opens the file mid-transfer gets a half-written
+// one, and ld-toy maps a library's segments FILE-BACKED, so overwriting
+// a live /lib/*.so under a running program can fault in the new bytes
+// beneath the old relocations. And an ABORTED transfer -- a timeout, a
+// client that goes away -- used to leave the target truncated, so a
+// failed push of /boot/boot/kernel.bin destroyed the kernel it was
+// replacing. Now the original is untouched until the last byte is in.
+//
+// This is dpkg's `.dpkg-new` plus a rename, for the same reason.
+//
+// RENAME HERE IS CREATE-ONLY, which is why publishing is three steps
+// rather than one. fs_rename() refuses an existing destination in all
+// three backends -- TFS3, FAT32 and ramfs each say "destination taken"
+// -- so a plain rename over the target would fail on every overwrite,
+// which is the normal case. The old file is moved aside first, the new
+// one takes the name, and only then is the old one dropped. Nothing is
+// destroyed until the replacement is in place, and a crash in the
+// two-operation gap leaves the original under a name that says what it
+// is rather than leaving nothing at all.
+#define WR_SUFFIX  ".tftp-new"
+#define OLD_SUFFIX ".tftp-old"
+
+// Builds "<path><suffix>", or 0 if it would not fit. REFUSED rather
+// than truncated: a truncated name is a different file, and renaming
+// that over the target would put the transfer somewhere nobody asked
+// for.
+static int suffixed(const char *path, const char *suffix,
+                    char *out, unsigned long cap) {
+    unsigned long n = strlen(path), sn = strlen(suffix);
+    if (n + sn + 1 > cap) return 0;
+    memcpy(out, path, n);
+    memcpy(out + n, suffix, sn + 1);
+    return 1;
+}
+
 static void do_write(uint32_t ip, uint16_t port, const char *path,
                      uint32_t oack_len) {
     int tid = open_tid();
     if (tid < 0) return;
 
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
+    char tmp[PATH_MAX_LEN + sizeof WR_SUFFIX];
+    char aside[PATH_MAX_LEN + sizeof OLD_SUFFIX];
+    if (!suffixed(path, WR_SUFFIX, tmp, sizeof tmp) ||
+        !suffixed(path, OLD_SUFFIX, aside, sizeof aside)) {
+        send_error(tid, ip, port, ERR_ACCESS, "path too long");
+        close_tid(tid);
+        return;
+    }
+    // A leftover from a crash would make the move-aside below fail and
+    // wedge every later push of this path.
+    remove(aside);
+
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC);
     if (fd < 0) {
         send_error(tid, ip, port, ERR_ACCESS, "cannot create");
         close_tid(tid);
@@ -304,6 +356,7 @@ static void do_write(uint32_t ip, uint16_t port, const char *path,
             if (g_wrbuf_len + len > WRBUF_MAX && !wrbuf_flush(fd)) {
                 send_error(tid, ip, port, ERR_FULL, "write failed");
                 close(fd); close_tid(tid);
+                remove(tmp);          // the target keeps what it had
                 return;
             }
             memcpy(g_wrbuf + g_wrbuf_len, g_rx + 4, len);
@@ -326,7 +379,28 @@ static void do_write(uint32_t ip, uint16_t port, const char *path,
     int ok = wrbuf_flush(fd);
     close(fd);
     close_tid(tid);
-    if (!ok) logf("tftpd: %s: final write failed\n", path);
+
+    // ONLY A TRANSFER THAT REACHED ITS LAST BLOCK IS PUBLISHED. The loop
+    // above also breaks on a timeout and on the client's own ERROR, and
+    // neither of those has the whole file -- so `final` is the condition
+    // rather than "we stopped receiving".
+    if (!ok || !final) {
+        remove(tmp);
+        logf("tftpd: %s: transfer did not complete (%llu bytes) -- the "
+             "existing file is unchanged\n", path, (unsigned long long)total);
+        return;
+    }
+    // Move the old one aside, publish, then drop it. Each step is undone
+    // if the next fails, so the target is never left missing on a path
+    // this code can see.
+    int had_old = (rename(path, aside) == 0);
+    if (rename(tmp, path) != 0) {
+        if (had_old) rename(aside, path);
+        remove(tmp);
+        logf("tftpd: %s: could not replace the file\n", path);
+        return;
+    }
+    if (had_old) remove(aside);
     logf("tftpd: wrote %s, %llu bytes (blksize %u, window %u)\n", path,
          (unsigned long long)total, g_blksize, g_window);
 }

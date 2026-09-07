@@ -31,6 +31,31 @@ HTTP `PUT` would each have been more code here for a worse client story.
 `-r` is the root every request is resolved against, `/` by default so
 that `/bin` is writable. Narrow it if a directory is all you need.
 
+## An upload replaces a file; it never truncates one
+
+A transfer lands on `<path>.tftp-new` and only takes the real name once
+its last block is in. Two things follow, and both matter for pushing a
+binary to a machine you are not sitting at.
+
+**A reader never sees a half-written file.** The old contents stay
+under the old name for the whole transfer — which matters most for a
+shared library, because `ld-toy` maps a `.so`'s segments *file-backed*,
+so overwriting one under a running program can fault in the new bytes
+beneath the old relocations.
+
+**An aborted transfer changes nothing.** A timeout, or a client that
+goes away, used to leave the target truncated: a failed push of
+`/boot/boot/kernel.bin` destroyed the kernel it was replacing. Now the
+partial file is removed and the original is untouched.
+
+**Publishing is three steps, not one, because `rename` here is
+create-only.** `fs_rename()` refuses an existing destination in all
+three backends — TFS3, FAT32 and ramfs each answer "destination taken"
+— so the old file is moved to `<path>.tftp-old`, the new one takes the
+name, and only then is the old one dropped; a failure at any step is
+undone. A `.tftp-old` left in a directory means a machine died between
+those two operations, and it holds the file that was there before.
+
 ## `-1`, and why a TFTP transfer fails across a firewall
 
 By default a transfer gets a fresh ephemeral port — RFC 1350's TID — and

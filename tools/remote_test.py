@@ -145,6 +145,43 @@ def main():
                     f"put={p.stdout.strip()} get={g.stdout.strip()} "
                     f"{len(got)} of {size} bytes")
 
+        # 5b. OVERWRITING AN EXISTING FILE, which is the normal case and
+        #     the one the atomic-replace path can break outright.
+        #     tftpd lands a transfer on `<path>.tftp-new` and renames it
+        #     into place, and fs_rename() REFUSES an existing
+        #     destination in all three backends -- so a naive
+        #     temp-then-rename fails every push after the first, while
+        #     the round-trip checks above only ever write a fresh path
+        #     and would stay green through it.
+        over = os.path.join(tmp, "over.bin")
+        back = os.path.join(tmp, "over_back.bin")
+        first = bytes(((i * 11) & 0xFF) for i in range(3000))
+        second = bytes(((i * 29 + 7) & 0xFF) for i in range(1500))
+        with open(over, "wb") as f:
+            f.write(first)
+        remote("put", over, "/tmp/rt_over.bin")
+        with open(over, "wb") as f:
+            f.write(second)
+        p = remote("put", over, "/tmp/rt_over.bin")
+        if os.path.exists(back):
+            os.unlink(back)
+        remote("get", "/tmp/rt_over.bin", back)
+        got = open(back, "rb").read() if os.path.exists(back) else b""
+        # Not just "it is not the first one" -- a failed overwrite that
+        # left the file EMPTY would pass that. It must be the second.
+        r.check("a file pushed over an existing one becomes the new one",
+                got == second,
+                f"put={p.stdout.strip()} {len(got)} bytes, "
+                f"wanted {len(second)}")
+
+        # ...and the machinery leaves nothing behind. A `.tftp-new` or
+        # `.tftp-old` still in the directory means a publish stopped
+        # half way, which the check above cannot see.
+        listing = vm("exec", "ls /tmp")
+        r.check("the replace leaves no .tftp-new or .tftp-old behind",
+                ".tftp-" not in listing.stdout,
+                listing.stdout.strip()[-300:])
+
         # 6. OPTION NEGOTIATION (RFC 2347/2348/7440), in BOTH directions
         #    and including the fallback -- which is the half that can
         #    break silently, because a transfer that quietly drops to
