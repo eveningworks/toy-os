@@ -457,8 +457,18 @@ static void raw_erase(struct utext *t, int start, int end) {
     t->rev++;
 }
 
+// **AN INSERT LEAVES NOTHING SELECTED**, and that is not cosmetic. A
+// CLICK arms a selection (utext_sel_start) whose anchor is the caret,
+// which is invisible only while the two are equal -- so anything that
+// then moves the caret without clearing turns the text it passed over
+// into a selection. Pasting after a click drew the pasted text
+// highlighted; pressing Enter after one highlighted the newline. The
+// shared keymap already clears on an ordinary keystroke
+// (uui_edit.c's insert path), so this is that same rule for the two
+// entry points that do not go through it.
 void utext_insert(struct utext *t, char c) {
     if (raw_insert(t, t->ed.cursor, c)) t->ed.cursor++;
+    utext_sel_clear(t);
 }
 
 void utext_delete(struct utext *t) { raw_erase(t, t->ed.cursor, t->ed.cursor + 1); }
@@ -558,6 +568,7 @@ int utext_insert_text(struct utext *t, const char *s, int n) {
         t->ed.cursor++;
         put++;
     }
+    utext_sel_clear(t);   // see utext_insert(): a paste selects nothing
     return put;
 }
 

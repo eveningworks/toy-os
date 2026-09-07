@@ -349,6 +349,29 @@ static void check_semantics(void) {
         fails++;
     }
 
+    // **A CLICK ARMS A SELECTION, AND AN INSERT MUST DISARM IT.**
+    // utext_sel_start() sets the anchor to the caret, which is
+    // invisible only while the two are equal -- so an insert that moved
+    // the caret without clearing turned the text it passed over into a
+    // selection. Reported as "pasted text comes out highlighted, but
+    // only when the caret was moved by CLICKING": the arrow keys go
+    // through the shared keymap, which already clears.
+    utext_init_buf(&t, b, (int)sizeof b);
+    utext_insert_text(&t, "abcdef", 6);
+    t.ed.cursor = 3;
+    utext_sel_start(&t);              // what a click leaves behind
+    utext_insert_text(&t, "XY", 2);
+    if (utext_sel_present(&t)) fail("paste after a click selects nothing", 1, 0);
+    if (t.ed.cursor != 5) fail("the caret lands after the paste", t.ed.cursor, 5);
+
+    // ...and the same for a single character, which is Enter's path.
+    utext_init_buf(&t, b, (int)sizeof b);
+    utext_insert_text(&t, "abcdef", 6);
+    t.ed.cursor = 3;
+    utext_sel_start(&t);
+    utext_insert(&t, '\n');
+    if (utext_sel_present(&t)) fail("Enter after a click selects nothing", 1, 0);
+
     // select-all spans the document whatever the caret was doing.
     utext_init_buf(&t, b, (int)sizeof b);
     utext_insert_text(&t, "one\ntwo", 7);
