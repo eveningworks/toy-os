@@ -406,8 +406,16 @@ void uui_markdown_draw(struct ugfx_surface *s, struct uui_markdown *m) {
     int tw = text_width(m);
 
     // MEASURED FIRST, with no surface: the scrollbar and the clamp both
-    // need the document's height before a single glyph is placed.
-    m->doc_h = walk(m, 0, tw, 0, 0);
+    // need the document's height before a single glyph is placed -- and
+    // only when something it depends on has changed, since the measure
+    // is a whole walk of the document and most frames change neither
+    // the text nor the width.
+    if (m->m_src != m->src || m->m_len != m->len || m->m_w != tw) {
+        m->doc_h = walk(m, 0, tw, 0, 0);
+        m->m_src = m->src;
+        m->m_len = m->len;
+        m->m_w = tw;
+    }
     clamp_scroll(m);
 
     // The document is drawn into a CLIPPED band, so a block that

@@ -27,6 +27,17 @@
 // dispatch no-ops on it, which is what the if/else chain's
 // fall-through did, and `strace` prints it as `syscall_<n>` with hex
 // arguments rather than hiding it.
+// A number that USED to be a syscall and is not one now. It keeps a row
+// rather than leaving a hole, because a hole is a NULL `fn` and dispatch
+// no-ops on that -- which a stale binary cannot tell from a syscall that
+// succeeded and returned 0. Refusing with -ENOSYS is the answer it can
+// act on, and the name keeps `strace` honest about what it asked for.
+// `syscall/no row is half-filled in` is the KTEST that insists on this.
+static int sys_removed(struct syscall_ctx *c) {
+    c->regs[14] = (uint64_t)(int64_t)-ENOSYS;
+    return 0;
+}
+
 static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_EXIT]          = { "exit",          sys_exit,          { A_INT } },
     [SYS_WRITE]         = { "write",         sys_write,         { A_FD, A_BUF, A_INT } },
@@ -150,6 +161,10 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_LISTEN]        = { "listen",        sys_listen,        { A_FD } },
     [SYS_ACCEPT]        = { "accept",        sys_accept,        { A_FD, A_HEX } },
     [SYS_WAIT_READY]    = { "wait_ready",    sys_wait_ready,    { A_INT } },
+    // 91 was SYS_WIN_CLIP, the kernel's clipboard. The clipboard is a
+    // ring-3 service over shared memory now (userland/lib/uclip_page.h);
+    // the number is refused rather than reused.
+    [91]                = { "win_clip[gone]", sys_removed,      { A_HEX } },
     [SYS_SHM_OPEN]      = { "shm_open",      sys_shm_open,      { A_HEX } },
     [SYS_SHM_UNLINK]    = { "shm_unlink",    sys_shm_unlink,    { A_PATH } },
 };

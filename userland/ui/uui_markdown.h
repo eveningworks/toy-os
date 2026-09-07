@@ -47,6 +47,14 @@ struct uui_markdown {
 
     int scroll;        // pixels from the top of the document
     int doc_h;         // its full height, from the last layout pass
+
+    // What `doc_h` was measured against. The height only changes when
+    // the text or the wrap width does, and measuring is a whole walk of
+    // the document -- so remembering these turns two walks per frame
+    // into one for every frame that changed neither.
+    const char *m_src;
+    int m_len;
+    int m_w;
     int bar_w;
     int thumb_grab;    // -1 when no drag is in progress
 

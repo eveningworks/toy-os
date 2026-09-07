@@ -679,11 +679,15 @@ struct listdir_request {
                     // superblocks intact and the next probe mounted the
                     // corpse.
 
-// 91 is UNUSED. It was SYS_WIN_CLIP, the kernel's clipboard; the
+// 91 is RETIRED. It was SYS_WIN_CLIP, the kernel's clipboard; the
 // clipboard is a ring-3 service over shared memory now
-// (userland/lib/uclip_page.h). The number is left dead rather than
-// reused, so a stale binary calling it gets -ENOSYS rather than
-// something else's syscall.
+// (userland/lib/uclip_page.h).
+//
+// It keeps a ROW in the syscall table that refuses with -ENOSYS, rather
+// than becoming a hole. A hole is a NULL handler, and dispatch no-ops
+// on those -- which a stale binary cannot tell from a call that
+// succeeded and returned 0. `syscall/no row is half-filled in` is the
+// KTEST that insists on the difference, and it caught this exact gap.
 
 // The first syscalls added specifically so a real disk-hosted ELF64
 // binary (not just a kernel-space shell built-in) can do something
