@@ -376,6 +376,21 @@ manual steps to be worth automating:
   binary compiled against the old one, and the machine then boots
   perfectly and cannot be given an address. `--kernel-only` skips it.
 
+  **AND IT HOLDS A SESSION OPEN ACROSS THE `/lib` SYNC, WHICH IS WHAT
+  LETS IT REBOOT ITSELF.** Replacing a shared library under a machine
+  still running the OLD kernel kills every LATER spawn the moment the
+  two disagree about a struct: `telnetd` accepts a connection and its
+  shell dies, so no fresh session can be made and nothing can reboot the
+  machine. That stranded both test laptops on 2026-09-07 and needed a
+  power button on each. A session opened BEFORE that write is already
+  running and survives it, and **`/bin/reboot` is statically linked**
+  (the Makefile's third exception, beside `init` and `toywm`) so the one
+  thing that session still has to spawn does not go through `/lib`.
+  Neither half works alone -- a static `reboot` with no live shell to
+  run it from is just as unreachable. Failing to hold the session is
+  not fatal: the flash still completes and ends at the old power-button
+  instruction.
+
   **It REFUSES while `grub.cfg` says `set timeout=0`.** That is the
   whole safety argument: the rescue entry exists on every installed
   machine, and with no timeout GRUB draws no menu, so it cannot be

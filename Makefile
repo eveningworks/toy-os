@@ -882,9 +882,18 @@ $(BUILD)/userland/tests/dynlibc_test.elf: $(BUILD)/userland/tests/dynlibc_test.o
 # codes. These two patterns beat the generic static rule below by
 # stem length (make picks the most specific match).
 #
-# TWO EXCEPTIONS, static on purpose:
+# THREE EXCEPTIONS, static on purpose:
 #   init   -- pid 1; the machine must reach a shell with /lib broken
 #             or missing, and init is what starts every service.
+#   reboot -- THE RESCUE LEVER, and it must not depend on the thing a
+#             rescue is usually needed for. `remote.py flash` replaces
+#             /lib while the machine still runs the OLD kernel, so
+#             between that write and the reboot every dynamic program
+#             is one ABI change away from dying at spawn -- telnetd
+#             included. A dynamic /bin/reboot is then the one command
+#             that cannot run at the one moment it is wanted, and the
+#             machine needs its power button pressed by hand. That
+#             happened to both test laptops on 2026-09-07.
 #   (toywm is outside USERLAND_PROGRAM_DIRS and stays static by
 #    construction -- same reasoning: the desktop is what a rescue
 #    happens on.)
@@ -895,6 +904,9 @@ $(BUILD)/userland/gui/%.elf: $(BUILD)/userland/gui/%.o $(USERLAND_RT) userland/r
 	$(DYN_LINK) -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(call ulibso,$*) $(LIBUAPP_SO) $(LIBC_NONSHARED) $(LIBC_SO)
 
 $(BUILD)/userland/bin/init.elf: $(BUILD)/userland/bin/init.o $(USERLAND_RT) userland/rt/link.ld $(LIBUAPP) $(LIBC)
+	$(LD) -n --gc-sections -T userland/rt/link.ld -nostdlib -o $@ $(BUILD)/userland/rt/crt0.o $< $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(LIBUAPP) $(LIBC)
+
+$(BUILD)/userland/bin/reboot.elf: $(BUILD)/userland/bin/reboot.o $(USERLAND_RT) userland/rt/link.ld $(LIBUAPP) $(LIBC)
 	$(LD) -n --gc-sections -T userland/rt/link.ld -nostdlib -o $@ $(BUILD)/userland/rt/crt0.o $< $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(LIBUAPP) $(LIBC)
 
 # --- dynamic linking (dynlink Stage 2, docs/dynlink-design.md) -------

@@ -670,14 +670,21 @@ def _sha256(sess, remote, timeout):
     return None
 
 
-def _verify_offline(host, tftp_port, local, want, timeout):
+def _verify_offline(host, tftp_port, local, want, timeout,
+                    rescue=None, reboot=False):
     """Verify the flashed kernel WITHOUT a shell, and say what to do.
 
-    Reached when the telnet session dies after the /lib sync -- see
+    Reached when a FRESH telnet session dies after the /lib sync -- see
     do_flash(). TFTP is a separate service and keeps working, so the
-    kernel can still be read back and checked; what cannot be done is
-    rebooting the machine, which is why this ends in an instruction
-    rather than an error.
+    kernel can still be read back and checked.
+
+    `rescue` is a session opened BEFORE /lib was replaced, if do_flash
+    managed to hold one. It can still reboot the machine because
+    /bin/reboot is statically linked (see the Makefile): the shell on
+    the far end is already running, and the one thing it has to spawn
+    does not go through /lib. Without it this ends in an instruction to
+    press the power button, which is where it ended for every flash
+    before 2026-09-07.
     """
     print("remote: the shell went away after the /lib sync -- verifying "
           "over TFTP instead", file=sys.stderr)
@@ -708,6 +715,26 @@ def _verify_offline(host, tftp_port, local, want, timeout):
 
     print(f"remote: flashed and verified {os.path.basename(local)} "
           f"({os.path.getsize(local)} bytes), over TFTP")
+
+    if reboot and rescue is not None:
+        print("remote: rebooting through the session held from before the "
+              "/lib sync")
+        try:
+            rescue.run("reboot", 3.0)
+        except (TimeoutError, EOFError, OSError):
+            pass              # the machine going away IS the reply
+        return 0
+
+    if rescue is not None:
+        # Held a session, but nobody asked for a reboot. Say what is
+        # true rather than the old blanket instruction: this machine
+        # CAN be rebooted from here, on request.
+        print("remote: the new kernel and userland are both in place. This "
+              "machine is\nremote: running the old kernel with the new "
+              "shared libraries, so re-run\nremote: with --reboot (or press "
+              "the power button) to come back matched.")
+        return 0
+
     print("remote: PRESS THE POWER BUTTON. The new kernel and userland are "
           "both in place,\nremote: but this machine is running the old "
           "kernel with the new shared\nremote: libraries, so nothing here "
@@ -742,6 +769,11 @@ def _verify_offline(host, tftp_port, local, want, timeout):
 USERLAND_TREES = (("bin", "/bin", False), ("tests", "/tests", False),
                   ("usr", "/usr", False), ("etc", "/etc", True),
                   ("lib", "/lib", False))
+
+# The tree whose replacement is the dangerous one -- see do_flash's
+# rescue session. Named rather than spelled at the comparison so the
+# two cannot drift from the table above.
+LIB_TREE = "/lib"
 
 
 def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
@@ -825,6 +857,17 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
     finally:
         sess.close()
 
+    # THE RESCUE SESSION, opened just before /lib is replaced and held
+    # open to the end. Replacing a shared library under a machine still
+    # running the OLD kernel kills every LATER spawn the moment the two
+    # disagree about an ABI struct -- telnetd accepts a connection and
+    # its shell dies, so a fresh session cannot be made and nothing can
+    # reboot the machine. A session made BEFORE that write is already
+    # running and survives, and /bin/reboot is statically linked so the
+    # one thing it still has to spawn does not go through /lib.
+    #
+    # That pair is what turned "press the power button" into a reboot.
+    rescue = None
     if not kernel_only:
         for sub, remote, new_only in USERLAND_TREES:
             local_dir = os.path.join(staging, sub)
@@ -832,14 +875,27 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
                 print(f"remote: no {local_dir} -- run `make iso` first",
                       file=sys.stderr)
                 return 1
+            if remote == LIB_TREE and rescue is None:
+                try:
+                    rescue = Session(host, telnet_port, timeout)
+                except (TimeoutError, EOFError, OSError):
+                    # Not fatal: the flash still works, it just ends at
+                    # the power button as it always used to.
+                    print("remote: could not hold a session before the "
+                          "/lib sync -- a reboot may need the power button",
+                          file=sys.stderr)
             if do_sync(host, telnet_port, tftp_port, local_dir, remote,
                        timeout, False, new_only):
                 print(f"remote: FAILED syncing {remote} -- the kernel has "
                       "NOT been written", file=sys.stderr)
+                if rescue is not None:
+                    rescue.close()
                 return 1
 
     rc = do_put(host, tftp_port, local, "/boot/boot/kernel.bin", timeout)
     if rc:
+        if rescue is not None:
+            rescue.close()
         return rc
 
     # THE VERIFY SESSION IS ON THE WRONG SIDE OF THE /lib SYNC, and that
@@ -858,7 +914,12 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
     try:
         sess = Session(host, telnet_port, timeout)
     except (TimeoutError, EOFError, OSError):
-        return _verify_offline(host, tftp_port, local, want, timeout)
+        try:
+            return _verify_offline(host, tftp_port, local, want, timeout,
+                                   rescue, reboot)
+        finally:
+            if rescue is not None:
+                rescue.close()
     try:
         sess.run("sync", timeout)
         got = _sha256(sess, "/boot/boot/kernel.bin", timeout)
@@ -878,12 +939,19 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
             except (TimeoutError, EOFError, OSError):
                 pass          # the machine going away IS the reply
     except (TimeoutError, EOFError, OSError):
-        return _verify_offline(host, tftp_port, local, want, timeout)
+        # The session died PART WAY THROUGH -- the /lib mismatch can
+        # take the shell out between two commands as easily as before
+        # the first one, so the rescue path is the same one here.
+        return _verify_offline(host, tftp_port, local, want, timeout,
+                               rescue, reboot)
     finally:
-        try:
-            sess.close()
-        except OSError:
-            pass
+        for open_sess in (sess, rescue):
+            if open_sess is None:
+                continue
+            try:
+                open_sess.close()
+            except OSError:
+                pass
     return 0
 
 
