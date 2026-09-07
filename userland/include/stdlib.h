@@ -46,11 +46,17 @@
 // tell "0" from "not a number" -- both return 0.
 long           strtol(const char *nptr, char **endptr, int base);
 unsigned long  strtoul(const char *nptr, char **endptr, int base);
+// The `long long` family. Same contract, and on this LP64 ABI the same
+// range -- they exist because C requires them, which is this library's
+// bar (see userland/libc/README.md), not because they can do more.
+long long          strtoll(const char *nptr, char **endptr, int base);
+unsigned long long strtoull(const char *nptr, char **endptr, int base);
 // atoi()/atol() are strtol() with the errors thrown away, which is
 // exactly what C says they are. They cannot report anything, so reach
 // for strtol() in new code.
 int            atoi(const char *s);
 long           atol(const char *s);
+long long      atoll(const char *s);
 
 // Floating point from text. THE SAME ACCURACY CAVEAT as printf's %f
 // (userland/libc/printf_float.c): digits are accumulated by
@@ -64,6 +70,7 @@ double         atof(const char *s);
 
 int   abs(int v);
 long  labs(long v);
+long long llabs(long long v);
 
 // --- sorting and searching --------------------------------------------
 //

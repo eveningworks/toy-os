@@ -66,6 +66,21 @@ int main(void) {
     utest_check(strtol("  -17rest", &end, 10) == -17 && strcmp(end, "rest") == 0,
           "skips space, takes a sign, and endptr is the first unused byte");
     utest_check(strtol("ff", &end, 16) == 255, "base 16");
+
+    // --- the long long family ----------------------------------------
+    //
+    // Their EXISTENCE is half the check: C requires them and they were
+    // simply absent, so any program calling one failed to link. The
+    // values chosen also need 64 bits, so a delegation to the `int`
+    // versions would be caught rather than passing by coincidence.
+    utest_check(atoll("9007199254740993") == 9007199254740993LL,
+                "atoll carries a value past 2^53");
+    utest_check(strtoll("-9223372036854775807", &end, 10) == -9223372036854775807LL
+                && *end == '\0', "strtoll reaches LLONG_MIN+1");
+    // C really does specify that the unsigned parsers negate.
+    utest_check(strtoull("-1", &end, 10) == ~0ULL, "strtoull(\"-1\") is ULLONG_MAX");
+    utest_check(llabs(-9007199254740993LL) == 9007199254740993LL,
+                "llabs does not truncate to 32 bits");
     utest_check(strtol("0x1f", &end, 16) == 31 && *end == '\0', "and its optional 0x");
     utest_check(strtol("0x20", &end, 0) == 32, "base 0 detects hex");
     utest_check(strtol("017", &end, 0) == 15, "and octal");

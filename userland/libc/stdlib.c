@@ -140,8 +140,25 @@ unsigned long strtoul(const char *nptr, char **endptr, int base) {
 int  atoi(const char *s) { return (int)strtol(s, 0, 10); }
 long atol(const char *s) { return strtol(s, 0, 10); }
 
-int  abs(int v)   { return v < 0 ? -v : v; }
-long labs(long v) { return v < 0 ? -v : v; }
+// THE `long long` FAMILY DELEGATES, and that is only correct because
+// this ABI is LP64: long and long long are both 64 bits, so the ranges
+// coincide and strtol()'s saturation and ERANGE are already the right
+// answers. On an ABI where long long is wider these need strto_core()'s
+// own accumulator against LLONG_MAX -- which is why they are written
+// out here rather than left as macros in the header.
+long long strtoll(const char *nptr, char **endptr, int base) {
+    return strtol(nptr, endptr, base);
+}
+
+unsigned long long strtoull(const char *nptr, char **endptr, int base) {
+    return strtoul(nptr, endptr, base);
+}
+
+long long atoll(const char *s) { return strtoll(s, 0, 10); }
+
+int       abs(int v)         { return v < 0 ? -v : v; }
+long      labs(long v)       { return v < 0 ? -v : v; }
+long long llabs(long long v) { return v < 0 ? -v : v; }
 
 // --- realloc ----------------------------------------------------------
 

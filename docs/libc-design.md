@@ -292,8 +292,10 @@ rather than the whole of stdio.
 
 ### Stage 3 -- the rest of the freestanding half -- DONE
 
-`strtol`/`strtoul`/`atoi`/`atol`, `realloc`, `qsort`/`bsearch`,
-`abs`/`labs`, `rand`/`srand`, `<ctype.h>`, `<assert.h>`, `<setjmp.h>`,
+`strtol`/`strtoul`/`atoi`/`atol` (and the `long long` family --
+`strtoll`/`strtoull`/`atoll`/`llabs`, added later, since C requires
+them and their absence was a LINK error for any caller), `realloc`,
+`qsort`/`bsearch`, `abs`/`labs`, `rand`/`srand`, `<ctype.h>`, `<assert.h>`, `<setjmp.h>`,
 `<dirent.h>`, `<unistd.h>`, and `errno` as an lvalue.
 (`exit`/`atexit`/`abort` moved to Stage 2 -- `exit()` has to flush, so
 stdio could not ship without them.)
