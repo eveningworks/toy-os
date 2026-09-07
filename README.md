@@ -3,7 +3,7 @@
 <p align="center">
   A hobby x86-64 operating system, written from scratch in C and assembly.<br>
   Boots via GRUB into a 64-bit kernel with a ring-3 desktop, networking,
-  USB, sound and a journalling disk-backed filesystem.
+  USB, sound and a journaling disk-backed filesystem.
 </p>
 
 <p align="center">
@@ -54,7 +54,7 @@ and under QEMU, and it does not stop at "hello world from the kernel":
   pid 1 that supervises services, pipes and `spawn`/`waitpid`, signals and
   job control, threads with real thread-local storage, and **dynamic
   linking** against `/lib/libc.so` and `/lib/libuapp.so`.
-- **Storage** — TFS3, a journalling filesystem with `fsck`, beside FAT32
+- **Storage** — TFS3, a journaling filesystem with `fsck`, beside FAT32
   and a RAM filesystem, on MBR/GPT partitions the kernel reads and writes.
   It **installs itself** onto another disk and that disk boots.
 - **Networking** — ARP, IPv4, ICMP, UDP and client-side TCP over five NIC
