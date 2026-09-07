@@ -1,8 +1,8 @@
 #!/bin/sh
 # Launches a downloaded toy-os release with the device and display
-# configuration the OS actually expects -- the Makefile's `run:` target
-# without a checkout to run it from. Ships AS a release asset, so
-# somebody with just the download boots it right the first time.
+# configuration the OS actually expects -- the Makefile's `run:` target,
+# for somebody who has the download and not the repository. Ships AS a
+# release asset, so a first try boots correctly.
 #
 # IT PICKS THE MEDIUM IT FINDS, in this order, because a release has
 # carried different ones over time and an older download must still

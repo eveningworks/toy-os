@@ -17,7 +17,7 @@
   </a>
   <img alt="Language" src="https://img.shields.io/badge/language-C%20%2B%20NASM-blue">
   <img alt="Target" src="https://img.shields.io/badge/target-x86__64-lightgrey">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.3.0-blue">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.4.0--dev-orange">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
@@ -80,8 +80,9 @@ GCC works with `-ffreestanding` and kernel-appropriate flags.
 
 ## Project status
 
-**Version 0.3.0.** A hobby project under active development, not
-production software.
+**Version 0.4.0-dev**; the latest release is
+[v0.3.0](https://github.com/eveningworks/toy-os/releases/tag/v0.3.0). A
+hobby project under active development, not production software.
 
 **Works today** — booting on real hardware and under QEMU; the shell and
 its line editor; three filesystems behind one mount table, with `fsck`
@@ -430,7 +431,7 @@ ships two media and a launcher:
 |---|---|
 | `toy-os-live.iso` | Boots with **no disk at all** — the filesystem rides in RAM as a GRUB module, and what you write to it is gone at power off. The one to try first. |
 | `toyos-usb.img.gz` | A real 512 MB disk image. `gunzip`, `dd` it to a stick, and a machine boots it — and **keeps** what you write, which the live ISO does not. |
-| `run_release.sh` | A standalone launcher needing no checkout. It picks whichever medium it finds beside it, so it runs an older release's assets as well as a current one. |
+| `run_release.sh` | Boots a download in QEMU with the right flags — nothing to clone or build. It picks whichever medium it finds beside it, so it runs an older release's assets as well as a current one. |
 | `SHA256SUMS` | Verify before you `dd`. |
 
 From either medium, `install --disk <name> confirm` writes toy-os to an
