@@ -153,83 +153,6 @@ installs on every push. The rest are package-name translations of the
 same requirements — corrections welcome.
 </details>
 
-<details>
-<summary>Setting up another machine (or a fork), end to end</summary>
-
-Everything that matters is in the repository — the build, the tools in
-`tools/`, and the docs — so a clone plus the packages above builds and
-tests. Three things are **not** in the clone, and one of them fails
-silently.
-
-```bash
-# 1. Packages (Arch/CachyOS; see the table above for other distributions)
-sudo pacman -S --needed base-devel nasm grub xorriso mtools qemu-full python
-
-# Optional. None are needed to build; each removes a rederive cost and
-# docs/tools.md explains what for. ccache is the one worth having first,
-# because the gate starts with `make clean` every time (2.37s -> 0.40s).
-sudo pacman -S --needed ccache bear ruff shellcheck github-cli python-pillow docker
-
-# 2. KVM, if you want tools/kvm_soak.py and the timing bugs TCG hides.
-#    Docker is only for tools/qemu_matrix.py.
-sudo usermod -aG kvm "$USER"
-sudo systemctl enable --now docker
-sudo usermod -aG docker "$USER"
-#    LOG OUT AND BACK IN -- group changes do not reach a running session.
-#    Then: [ -w /dev/kvm ] && echo "KVM ok"
-
-# 3. An SSH key, if you intend to push. (`gh auth login` can generate and
-#    upload one for you instead -- choose SSH when it asks.)
-ssh-keygen -t ed25519 -f ~/.ssh/github_key -C 'toy-os dev box'
-cat >> ~/.ssh/config <<EOF
-
-Host github.com
-    HostName github.com
-    User git
-    IdentityFile ~/.ssh/github_key
-    IdentitiesOnly yes
-EOF
-chmod 600 ~/.ssh/config ~/.ssh/github_key
-cat ~/.ssh/github_key.pub     # add to GitHub -> Settings -> SSH keys
-ssh -T git@github.com         # should greet you by name
-
-# 4. Clone (substitute your fork's URL if you have one)
-git clone git@github.com:eveningworks/toy-os.git
-cd toy-os
-
-# 5. THE COMMIT IDENTITY -- the step that fails silently.
-#    It is per-repository, so the clone did NOT bring one, and commits
-#    would use your GLOBAL identity: your real name and address. This
-#    project scrubbed exactly that out of every prior commit with a
-#    history rewrite, and nothing in git warns you beforehand.
-git config --local user.name  'toy-os'
-git config --local user.email 'noreply@toy-os.local'
-#    On a fork, your own name and address are fine -- the point is that
-#    it is a CHOICE rather than a leak. tools/preflight.sh refuses to run
-#    until SOME local identity is set, which is where the check lives
-#    because .git/hooks is not cloned either.
-
-# 6. Confirm the machine before trusting a result from it
-bash tools/preflight.sh                        # build + boot + both suites
-python3 tools/gui_regress.py --logs /tmp/gui   # every GUI tool, as one table
-
-# 7. gh, only for releases and `gh workflow run` -- not for push
-gh auth login                                  # choose SSH as the protocol
-```
-
-**What you do not copy.** `disk.img` is gitignored and reseeded by
-`make iso`; `build/`, `toy-os.iso` and `compile_commands.json` are all
-regenerated. Nothing needs a GitHub token in the environment — the whole
-build and test path is offline, so you can work for a week without
-authenticating and only need it to push.
-
-**On a dedicated box.** KVM wants bare metal rather than a nested VM —
-`tools/kvm_soak.py` exists for what TCG cannot show. And the host's QEMU
-version is a real variable: `tools/qemu_matrix.py` exists because a
-virtio-blk defect was invisible on one version and reproduced every time
-on another, so keeping two machines on the same distribution means a
-difference between them is your code rather than your toolchain.
-</details>
 
 ### Build and run
 
@@ -397,6 +320,7 @@ Selected tools, each documented in its own docstring:
 | [docs/roadmap-details.md](docs/roadmap-details.md) | The per-item reasoning and test plans behind that list. |
 | [docs/bugs.md](docs/bugs.md) | What is currently BROKEN, one line each, with the reproduction in roadmap-details. Separate from the roadmap because "not built yet" and "misbehaving" are different questions. |
 | [docs/conventions/](docs/conventions/) | The conventions `CLAUDE.md` indexes by headline, written up in full and split by area: kernel, GUI, storage, shell, build. |
+| [docs/development-setup.md](docs/development-setup.md) | Setting up another machine or a fork: the packages, KVM and Docker groups, the SSH key, and the commit identity that fails silently. |
 | [docs/testing.md](docs/testing.md) | How to run and drive this OS headlessly, the QMP mechanics, and what the emulator does not model. |
 | [docs/tools.md](docs/tools.md) | Every script in `tools/`: what it does, why it exists, and the traps it encodes. |
 | [docs/settings-and-queries.md](docs/settings-and-queries.md) | Facts vs settings vs tunables, and how an app reads or changes either. |

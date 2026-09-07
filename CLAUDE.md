@@ -1005,8 +1005,8 @@ Bash tools:
   `preflight.sh` refuses to run until SOME local identity is set --
   not this exact one, since demanding that would refuse a fork's own
   contributors; it notes the difference and proceeds. The guard is in
-  the gate because `.git/hooks` is not cloned either. README's "Setting
-  up another machine (or a fork)" has the full command sequence. **That
+  the gate because `.git/hooks` is not cloned either. `docs/development-setup.md`
+  has the full command sequence. **That
   identity is the standing privacy convention, not a default to
   override** -- never let a commit here carry the maintainer's real
   name or personal email (see `docs/decisions.md`'s entry on the
