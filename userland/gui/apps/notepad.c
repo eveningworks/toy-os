@@ -43,6 +43,7 @@
 #include "ui/ugfx.h"
 #include "ui/uui.h"
 #include "ui/uui_fileview.h"
+#include "ui/uui_markdown.h"
 #include "ui/uapp.h"
 #include "ui/ulog.h"
 #include "ui/utext.h"
@@ -74,6 +75,7 @@
 #define ID_DLG_LIST 4
 #define ID_DLG_NAME 5
 #define ID_CTX      6
+#define ID_MD       7
 
 // --- menu command codes -----------------------------------------------
 //
@@ -98,6 +100,7 @@
 #define CMD_COPY       17
 #define CMD_PASTE      18
 #define CMD_WORDWRAP   19
+#define CMD_MARKDOWN   20
 
 // The dialog's own codes -- a different widget, so a different space.
 #define CMD_DLG_OK     1
@@ -155,6 +158,15 @@ static int g_recent_count;
 
 static struct uui_menubar g_menu;
 static struct uui_menubar g_ctx;   // the context menu -- no bar of its own
+
+// THE MARKDOWN PREVIEW. A reusable widget (ui/uui_markdown.h) rather
+// than a mode of the editor: it re-walks the document every frame and
+// draws it as a document -- headings at real sizes, code on a tinted
+// ground -- while the buffer underneath stays exactly the text the
+// editor holds. Read-only, and Ctrl-E goes back to the source, which is
+// Obsidian's binding for the same toggle.
+static struct uui_markdown g_md;
+static int g_preview;
 static struct uui_statusbar g_statusbar;
 static char g_lncol[20];
 static char g_modflag[8];
@@ -209,6 +221,8 @@ static const struct uui_menu_item goto_items[] = {
 // after decades of it living under Format -- and where a reader looks,
 // since it changes what the document looks like and not what it says.
 static const struct uui_menu_item view_items[] = {
+    UUI_MENU("Markdown preview", CMD_MARKDOWN, "Ctrl-E"),
+    UUI_MENU_SEP,
     UUI_MENU("Word wrap",  CMD_WORDWRAP, "Ctrl-W"),
     UUI_MENU_SEP,
     UUI_SUBMENU("Go to", goto_items),
@@ -261,6 +275,7 @@ static struct uui_item g_widgets[] = {
     { .ops = &uui_statusbar_ops, .widget = &g_statusbar, .id = ID_STATUS, .name = "status" },
     // AFTER the bars, so it is hit-tested first: input order is the
     // reverse of draw order, and its popup covers whatever is under it.
+    { .ops = &uui_markdown_ops,  .widget = &g_md,        .id = ID_MD,     .name = "markdown", .hidden = 1 },
     { .ops = &uui_menubar_ops,   .widget = &g_ctx,       .id = ID_CTX,    .name = "ctxmenu" },
     { .ops = &uui_dialog_ops,    .widget = &g_dialog,    .id = ID_DIALOG, .name = "dialog" },
 };
@@ -274,6 +289,11 @@ static struct uui_item *item_by_id(struct uui_item *items, int n, int id) {
 #define DLG_ITEM(id) item_by_id(g_dlg_items, (int)(sizeof g_dlg_items / sizeof g_dlg_items[0]), (id))
 
 static void set_status(const char *s) { strlcpy(g_status, s, sizeof g_status); }
+
+// Defined with the rest of the preview, below the widget accessors it
+// needs; load_file() turns it on for a .md.
+static void set_preview(int on);
+static int looks_like_markdown(const char *path);
 
 // The title carries the filename and a dirty marker, so it changes as
 // the document does. Sent only when it ACTUALLY changed: this used to
@@ -337,6 +357,7 @@ static int load_file(struct uapp *a, const char *path) {
     g_text.ed.cursor = 0;
     utext_sel_clear(&g_text);
     utext_scroll_top(&g_text);   // 0 is the BOTTOM (utext.h)
+    set_preview(looks_like_markdown(path));
     strlcpy(g_path, path, PATH_MAX_LEN);
     g_dirty = 0;
     recent_push(path);
@@ -431,6 +452,14 @@ static void layout_chrome(int cw, int ch) {
     uui_menubar_set_bounds(&g_menu, 0, 0, cw, ch);
     uui_statusbar_set_geometry(&g_statusbar, 0, ch - statusbar_h(), cw, statusbar_h());
     WIDGET(ID_STATUS)->hidden = !g_show_status;
+    {
+        int tx, ty, tw, th;
+        text_rect_for(cw, ch, &tx, &ty, &tw, &th);
+        // The bar column too: this widget draws its own scrollbar, so
+        // the strip Notepad reserves for the editor's is the widget's
+        // to use.
+        uui_markdown_set_geometry(&g_md, tx, ty, tw + scrollbar_w(), th);
+    }
     uui_menubar_set_bounds(&g_ctx, 0, 0, cw, ch);
     uui_dialog_set_bounds(&g_dialog, 0, 0, cw, ch);
 }
@@ -519,6 +548,29 @@ static void do_paste(void) {
         snprintf(g_status, sizeof g_status, "pasted %d character%s", put, put == 1 ? "" : "s");
 }
 
+// --- the markdown preview ---------------------------------------------
+
+// The widget re-walks the document every frame, so "update the preview"
+// is just handing it the buffer again -- there is no parsed tree to
+// keep in sync with an edit.
+static void set_preview(int on) {
+    g_preview = on;
+    if (on) uui_markdown_set_text(&g_md, g_text.buf, g_text.count);
+    WIDGET(ID_MD)->hidden = !on;
+}
+
+// **.md OPENS AS A DOCUMENT, and every other extension as text.** A
+// preview that had to be asked for every time would be a feature nobody
+// found; one that cannot be turned off would be an editor that cannot
+// edit. Both, which is what the toggle is for.
+static int looks_like_markdown(const char *path) {
+    int n = 0;
+    while (path[n]) n++;
+    return n > 3 && path[n - 3] == '.' &&
+           (path[n - 2] == 'm' || path[n - 2] == 'M') &&
+           (path[n - 1] == 'd' || path[n - 1] == 'D');
+}
+
 // --- item state -------------------------------------------------------
 //
 // Asked for by the menu bar, per item, every draw and every hit test. So
@@ -538,7 +590,12 @@ static unsigned menu_item_flags(int code) {
     case CMD_STATUSBAR:
         return g_show_status ? UUI_MI_CHECKED : 0;
     case CMD_WORDWRAP:
+        // Meaningless while the preview is up: it reflows to the window
+        // whatever the editor's own setting is.
+        if (g_preview) return UUI_MI_DISABLED;
         return utext_get_wrap(&g_text) != UTEXT_WRAP_OFF ? UUI_MI_CHECKED : 0;
+    case CMD_MARKDOWN:
+        return g_preview ? UUI_MI_CHECKED : 0;
     case CMD_CUT:
     case CMD_COPY:
         return utext_sel_present(&g_text) ? 0 : UUI_MI_DISABLED;
@@ -766,7 +823,13 @@ static void do_command(struct uapp *a, int code) {
     case CMD_STATUSBAR:
         g_show_status = !g_show_status;
         break;
+    case CMD_MARKDOWN:
+        set_preview(!g_preview);
+        set_status(g_preview ? "markdown preview -- Ctrl-E for the source"
+                             : "editing the source");
+        break;
     case CMD_WORDWRAP: {
+        if (g_preview) break;
         int on = utext_get_wrap(&g_text) != UTEXT_WRAP_OFF;
         utext_set_wrap(&g_text, on ? UTEXT_WRAP_OFF : UTEXT_WRAP_WORD);
         set_status(on ? "word wrap off" : "word wrap on");
@@ -799,6 +862,7 @@ static int accelerator(struct uapp *a, int key) {
     case 0x03: do_command(a, CMD_COPY);       return 1; // Ctrl-C
     case 0x16: do_command(a, CMD_PASTE);      return 1; // Ctrl-V
     case 0x17: do_command(a, CMD_WORDWRAP);   return 1; // Ctrl-W
+    case 0x05: do_command(a, CMD_MARKDOWN);   return 1; // Ctrl-E
     default:   return 0;
     }
 }
@@ -865,7 +929,10 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     set_title(a);
     layout_chrome(d->surface->w, d->surface->h);
     if (g_show_status) update_indicators();
-    draw_document(uapp_surface(d), uapp_focused(a));
+    // The preview is a declared widget, so the ROUTER draws it -- and
+    // draws it over this. Skipping the document keeps the two from
+    // being painted one on top of the other for a frame.
+    if (!g_preview) draw_document(uapp_surface(d), uapp_focused(a));
     log_layout(a);
 }
 
@@ -930,6 +997,12 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // window is Alt+F4, which never reaches here: the WM takes it and
     // asks through the same handshake the X button uses, so this app's
     // on_close (uapp's default, accept) still decides.
+    // THE PREVIEW IS READ-ONLY. A keystroke that edited the buffer
+    // underneath a rendered document would change what is on screen
+    // with no caret to say where -- so typing does nothing until
+    // Ctrl-E comes back to the source.
+    if (g_preview) { uapp_redraw(a); return; }
+
     editor_key(key);
     // THE CARET STAYS ON SCREEN. Typing, arrowing or pasting somewhere
     // the view is not looking has to bring the view along -- without
@@ -1034,6 +1107,7 @@ static int hbar_press(int px, int py, int tx, int ty, int tw, int th) {
 }
 
 static void on_wheel(struct uapp *a, int notches) {
+    if (g_preview) return;   // the widget took it
     // Only reached when no widget took the wheel -- an open dialog or
     // menu absorbs it (ui/uui_route.h). Three lines a notch, the same
     // step the kernel-space scrollback uses. utext_scroll clamps for us.
@@ -1064,6 +1138,8 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
                   // selection that is already there, and collapsing it
                   // would leave Cut and Copy greyed the moment you ask.
     }
+
+    if (g_preview) return;   // the widget is routed; it owns its own input
 
     int tx, ty, tw, th;
     text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
@@ -1167,6 +1243,7 @@ static void on_open_cb(struct uapp *a) {
     g_menu.item_flags = menu_item_flags;
 
     // No bar of its own: uui_menubar_open_at() supplies the rows.
+    uui_markdown_init(&g_md);
     uui_menubar_init(&g_ctx, 0, 0);
     g_ctx.item_flags = menu_item_flags;
     clip_refresh();   // the broadcast only fires on a CHANGE, so ask once

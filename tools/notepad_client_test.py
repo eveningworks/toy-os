@@ -428,6 +428,83 @@ def run(dbg, qmp, tmp, shot_dir, res):
             break
     res.check("Alt+F4 closes the editor", gone)
 
+    markdown_checks(dbg, qmp, tmp, res)
+
+
+# --- the Markdown preview ---------------------------------------------
+
+def markdown_checks(dbg, qmp, tmp, res):
+    """A .md opens RENDERED, and Ctrl-E goes back to the source.
+
+    The load-bearing check is that the two look DIFFERENT: a preview
+    that silently fell back to drawing the raw text would satisfy "a
+    window appeared", "the widget reported a layout" and "typing does
+    nothing" all at once, and only the pixels can tell.
+    """
+    from PIL import Image
+
+    # ONE FILE UNDER TWO EXTENSIONS, which is what makes the control at
+    # the end airtight: the .md and the .txt differ in nothing but their
+    # name, so a preview that appeared for both could only be ignoring
+    # the extension. A real manual page is the fixture because it
+    # contains one of everything the renderer draws -- headings, bold,
+    # inline code, a code block, bullets and a table.
+    src = "/usr/share/doc/cmd/ls.md"
+    doc = "/var/tmp/np_md.md"
+    txt = "/var/tmp/np_md.txt"
+    dbg.send(f"sh rm {doc}")
+    dbg.send(f"sh rm {txt}")
+    dbg.send(f"sh cp {src} {doc}")
+    dbg.send(f"sh cp {src} {txt}")
+
+    dbg.send(f"gui spawn {SPAWN_PATH} {doc}")
+    deadline = time.time() + SPAWN_TIMEOUT_S
+    win = None
+    while time.time() < deadline and not win:
+        win = find_window(dbg, "np_md.md")
+    res.check("a .md opens in Notepad", win is not None)
+    if not win:
+        return
+    c = win["content"]
+    dbg.settle()
+
+    # THE WIDGET IS DECLARED AND VISIBLE: a hidden widget reports no
+    # layout line, so the line's presence is the app saying the preview
+    # is up -- asked, not guessed (docs/gui-guidelines.md).
+    lines = dbg.logs("notepad: layout markdown", clear=False)
+    res.check("a .md opens with the Markdown preview ON",
+              bool(lines), "no 'layout markdown' line")
+
+    band = (c["x"], c["y"], c["x"] + c["w"], c["y"] + c["h"])
+    rendered = Image.open(qmp.screenshot(os.path.join(tmp, "np_md_render.png"))
+                          ).convert("RGB").crop(band)
+
+    key(dbg, "0x05")          # Ctrl-E -- back to the source
+    dbg.settle()
+    time.sleep(0.5)
+    source = Image.open(qmp.screenshot(os.path.join(tmp, "np_md_source.png"))
+                        ).convert("RGB").crop(band)
+
+    diff = sum(1 for a, b in zip(rendered.tobytes(), source.tobytes()) if a != b)
+    res.check("the rendered document and the source do not look the same",
+              diff > 5000, f"{diff} bytes differ")
+
+    lines_after = dbg.logs("notepad: layout markdown", clear=False)
+    res.check("Ctrl-E hides the preview and shows the source",
+              len(lines_after) == len(lines), "the widget still reports a layout")
+
+    # A CONTROL: an ordinary .txt must NOT open rendered. Without this,
+    # a preview that was simply always on would pass everything above.
+    dbg.logs("notepad: layout markdown", clear=True)
+    dbg.send(f"gui spawn {SPAWN_PATH} {txt}")
+    deadline = time.time() + SPAWN_TIMEOUT_S
+    win2 = None
+    while time.time() < deadline and not win2:
+        win2 = find_window(dbg, "np_md.txt")
+    dbg.settle()
+    res.check("a .txt opens as TEXT, not rendered (the control)",
+              win2 is not None and not dbg.logs("notepad: layout markdown", clear=False))
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],

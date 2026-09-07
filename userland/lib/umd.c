@@ -124,10 +124,6 @@ static void e_ch(struct emit *e, char c) {
     e->ww++;
 }
 
-static void e_str(struct emit *e, const char *s) {
-    while (*s) e_ch(e, *s++);
-}
-
 // Re-specifies the whole style rather than closing one attribute, so
 // bold and code can nest in either order without a close undoing the
 // other. ESC[22m would be the narrower reset; a full re-specification
@@ -168,57 +164,60 @@ static void e_marker(struct emit *e, int ind, const char *marker) {
 
 // --------------------------------------------------------- inline text
 
-// Feeds `n` bytes of Markdown through the emitter, honouring `code`,
-// **bold** and [text](link) and transliterating anything above ASCII.
-// Whitespace ends a word; a newline is whitespace, which is what lets a
-// paragraph be fed one source line at a time with no buffer.
-static void inline_text(struct emit *e, const char *s, int n) {
+// **THE INLINE RULES LIVE HERE ONCE.** `code`, **bold**, [text](link),
+// the one backslash escape and the transliteration are walked by this
+// function and reported as STYLED CHARACTERS; the two renderers -- the
+// text one below and the GUI widget in ui/uui_markdown.c -- are both
+// callers. Splitting them would be two subtly different ideas of what
+// `**` means in a document nobody would think to check both ways.
+//
+// Whitespace is reported as-is rather than swallowed: a caller wrapping
+// text needs to see where a word ends, and a caller drawing it needs
+// the space. A newline is whitespace, which is what lets a paragraph be
+// fed one source line at a time with no buffer.
+void umd_inline_walk(const char *s, int n, umd_inline_fn emit, void *ctx) {
+    unsigned style = 0;
     for (int i = 0; i < n; ) {
         char c = s[i];
 
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-            e_word(e, 0);
-            i++;
-            continue;
-        }
         // The ONE backslash escape implemented, and only because a table
         // needs it: everything else written `\x` in these pages is
         // inside a code span, where a backslash is the text.
         if (c == '\\' && i + 1 < n && s[i + 1] == '|') {
-            e_ch(e, '|');
+            emit(ctx, '|', style);
             i += 2;
             continue;
         }
         if (c == '`') {
-            e->code = !e->code;
-            e_style(e);
+            style ^= UMD_STYLE_CODE;
             i++;
             continue;
         }
-        if (!e->code && c == '*' && i + 1 < n && s[i + 1] == '*') {
-            e->bold = !e->bold;
-            e_style(e);
+        if (!(style & UMD_STYLE_CODE) && c == '*' && i + 1 < n && s[i + 1] == '*') {
+            style ^= UMD_STYLE_BOLD;
             i += 2;
             continue;
         }
         // [text](url) -- the text is kept, the url dropped. Every link
         // in these pages points at a sibling page, which is a path on
         // the host and nothing a reader can follow from in here.
-        if (!e->code && c == '[') {
+        if (!(style & UMD_STYLE_CODE) && c == '[') {
             int j = i + 1;
             while (j < n && s[j] != ']' && s[j] != '\n') j++;
             if (j < n && s[j] == ']' && j + 1 < n && s[j + 1] == '(') {
                 int k = j + 2;
                 while (k < n && s[k] != ')' && s[k] != '\n') k++;
                 if (k < n && s[k] == ')') {
-                    inline_text(e, s + i + 1, j - i - 1);
+                    // The link TEXT, walked as ordinary inline content
+                    // -- it may carry its own code span or bold.
+                    umd_inline_walk(s + i + 1, j - i - 1, emit, ctx);
                     i = k + 1;
                     continue;
                 }
             }
         }
         if ((unsigned char)c < 0x80) {
-            e_ch(e, c);
+            emit(ctx, c, style);
             i++;
             continue;
         }
@@ -232,9 +231,28 @@ static void inline_text(struct emit *e, const char *s, int n) {
                 break;
             }
         }
-        e_str(e, rep);
+        for (const char *r = rep; *r; r++) emit(ctx, *r, style);
         i += L;
     }
+}
+
+// The text renderer's sink for the walk above: whitespace ends a word,
+// and a style CHANGE writes the escape that begins the next run.
+static void text_sink(void *ctx, char c, unsigned style) {
+    struct emit *e = (struct emit *)ctx;
+    unsigned was = (unsigned)(e->bold ? UMD_STYLE_BOLD : 0) |
+                    (unsigned)(e->code ? UMD_STYLE_CODE : 0);
+    if (style != was) {
+        e->bold = (style & UMD_STYLE_BOLD) != 0;
+        e->code = (style & UMD_STYLE_CODE) != 0;
+        e_style(e);
+    }
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') { e_word(e, 0); return; }
+    e_ch(e, c);
+}
+
+static void inline_text(struct emit *e, const char *s, int n) {
+    umd_inline_walk(s, n, text_sink, e);
 }
 
 // One whole line of a paragraph or list item. **THE LINE BREAK IS
@@ -367,6 +385,67 @@ static int table_cell(struct line l, int *pos, const char **cs, int *cn) {
     *cs = l.s + start;
     *cn = end - start;
     return (start < l.n) || (end > start);
+}
+
+// --- classification, exported ----------------------------------------
+//
+// The renderers ask THESE rather than re-deriving them (lib/umd.h says
+// why). The predicates above stay static and stay the definition; this
+// is one place that answers with them.
+
+int umd_next_line(const char *src, int len, int *i, const char **out) {
+    struct line l = next_line(src, len, i);
+    *out = l.s;
+    return l.n;
+}
+
+enum umd_block umd_classify(const char *line, int n, int *arg,
+                            const char **text, int *text_len) {
+    struct line l = { line, n };
+    int a = 0;
+    const char *t = line;
+    int tn = n;
+    enum umd_block kind = UMD_PARA;
+
+    if (starts(l, "```") || starts(l, "~~~")) {
+        kind = UMD_FENCE;
+    } else if (blank_line(l)) {
+        kind = UMD_BLANK;
+        tn = 0;
+    } else if ((a = heading_level(l)) != 0) {
+        kind = UMD_HEADING;
+        t = line + a + 1;
+        tn = n - a - 1;
+    } else if (table_row(l)) {
+        kind = UMD_TABLE;
+        a = table_rule(l);
+    } else if (bullet(l)) {
+        kind = UMD_BULLET;
+        a = 2;
+        t = line + 2;
+        tn = n - 2;
+    } else if (numbered(l, &a)) {
+        kind = UMD_NUMBERED;
+        a += 1;              // the marker plus its space
+        t = line + a;
+        tn = n - a;
+    } else if (starts(l, "---") || starts(l, "***") || starts(l, "___")) {
+        // A RULE ONLY IF THAT IS ALL IT IS. `--- a` is a paragraph that
+        // happens to begin with dashes, and these pages contain plenty.
+        int only = 1;
+        for (int i = 0; i < n; i++)
+            if (line[i] != line[0] && line[i] != ' ') { only = 0; break; }
+        if (only) { kind = UMD_RULE; tn = 0; }
+    } else if (starts(l, "    ")) {
+        kind = UMD_PRE;
+        t = line + 4;
+        tn = n - 4;
+    }
+
+    if (arg) *arg = a;
+    if (text) *text = t;
+    if (text_len) *text_len = tn < 0 ? 0 : tn;
+    return kind;
 }
 
 #define TABLE_MAX_COLS 8

@@ -807,7 +807,8 @@ whenever a headline here tells you something you did not already know.
 - **AN ICON ON A PANEL IS SYMBOLIC: IT TAKES THE PANEL'S INK, NOT ITS OWN**
 - **A WINDOW'S TITLE BAR CARRIES ITS APP ICON, AND `title_icon()` ANSWERS FOR BOTH DRAWING AND CLICKING**
 - **TEXT ON A WALLPAPER IS `ugfx_draw_string_shadowed()`, NEVER A GUESSED `bg`**
-- **`uui_image` IS THE ONLY WIDGET THAT OWNS MEMORY, AND IT MUST BE RELEASED.**
+- **TWO WIDGETS OWN MEMORY, AND BOTH MUST BE RELEASED: `uui_image` and `uui_markdown`**
+- **A MARKDOWN DOCUMENT IS A WIDGET, AND IT DOES NOT PARSE ANYTHING** -- `uui_markdown` draws, `lib/umd.h` decides what Markdown means
 - **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME**
 - **THE TASKBAR'S THICKNESS IS A REGISTERED SETTING: `desktop.taskbar_height`, in PIXELS, 24..96, default 40.**
 - **THE START BUTTON'S APPEARANCE IS A REGISTERED SETTING**

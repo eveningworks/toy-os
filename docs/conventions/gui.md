@@ -1528,9 +1528,10 @@ real scanout hardware does. Do not write a pixel assertion for one.
   playback is a WORKER THREAD's**, not an `on_tick`'s: a missed refill is
   audible and the ring is only 341 ms deep.
 
-- **`uui_image` IS THE ONLY WIDGET THAT OWNS MEMORY, AND IT MUST BE
-  RELEASED.** It borrows the `struct uimg` (the app decodes and owns
-  that) but owns the SCALED copy it caches, so an app that re-points one
+- **TWO WIDGETS OWN MEMORY, AND BOTH MUST BE RELEASED: `uui_image` and
+  `uui_markdown`.** The image borrows the `struct uimg` (the app decodes
+  and owns that) but owns the SCALED copy it caches, so an app that
+  re-points one
   at image after image without `uui_image_release()` leaks a screen's
   worth of pixels each time. The cache is the reason the widget exists at
   all rather than three lines of `ugfx_blit()` per app: resampling a
@@ -1539,6 +1540,30 @@ real scanout hardware does. Do not write a pixel assertion for one.
   files** -- natural size is the image's own, and `uui_layout` OVERFLOWS
   rather than shrinking, so a 4000px photograph otherwise asks for a
   4000px window and gets one.
+
+  `uui_markdown` owns three FONT ARENAS -- two heading sizes and a
+  monospace face, about 200 KB -- released by `uui_markdown_free()`. An
+  app that keeps one view for its lifetime never needs to call it; one
+  that creates and drops views does, and nothing will tell it so.
+
+- **A MARKDOWN DOCUMENT IS A WIDGET, AND IT DOES NOT PARSE ANYTHING.**
+  `uui_markdown` draws; `lib/umd.h` decides what Markdown MEANS --
+  `umd_classify()` for blocks and `umd_inline_walk()` for `code`,
+  **bold** and links. That split is the point: `/bin/doc` renders the
+  same pages to a TERMINAL through umd's other half, and a second parser
+  in the widget would be two subtly different ideas of what `**` means
+  in documents nobody would think to check both ways. Four things to
+  know. **It scrolls in PIXELS, not lines**, because a heading, a rule
+  and a code block are not the same height -- that is the difference
+  between it and `utext`, where every row is one character cell. **The
+  caller owns the text**; the widget keeps a pointer and re-walks it
+  every frame, so "update the preview" is handing it the buffer again
+  and there is no parsed tree to keep in sync with an edit. **One walk
+  measures AND draws**, because two would be two ideas of how tall a
+  heading is and the scrollbar would disagree with the page. And **a
+  font that fails to load is not an error** -- it falls back to the
+  session bold face, so a machine with no fonts on disk still renders a
+  readable document.
 
 - **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME.**
   `desktop.wallpaper` (a filename stem under `/usr/share/wallpapers`, or

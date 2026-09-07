@@ -38,6 +38,51 @@
 // arrive as three boxes each.
 #include <stddef.h>
 
+// --- the inline rules, for a SECOND renderer --------------------------
+//
+// `code`, **bold**, [text](link), the one backslash escape and the
+// transliteration of anything above ASCII. Walked here once and
+// reported as styled characters, because there are two renderers now --
+// this file's text one, and the GUI widget in ui/uui_markdown.c -- and
+// two implementations would be two subtly different ideas of what `**`
+// means in a document nobody would think to check both ways.
+//
+// Whitespace is reported as-is rather than swallowed: a caller wrapping
+// text needs to see where a word ends, and a caller drawing it needs
+// the space itself.
+#define UMD_STYLE_BOLD 1
+#define UMD_STYLE_CODE 2
+
+typedef void (*umd_inline_fn)(void *ctx, char c, unsigned style);
+
+void umd_inline_walk(const char *s, int n, umd_inline_fn emit, void *ctx);
+
+// --- line classification, for the same reason -------------------------
+//
+// What KIND of line this is. A block renderer needs exactly these
+// questions answered, and answering them a second time is how two
+// renderers disagree about whether `    x` is a code block.
+enum umd_block {
+    UMD_BLANK,
+    UMD_HEADING,   // `arg` is the level, 1..6
+    UMD_BULLET,    // `arg` is the bytes of marker to skip
+    UMD_NUMBERED,  // likewise
+    UMD_FENCE,     // ``` or ~~~ -- toggles a verbatim run
+    UMD_PRE,       // an indented (four-space) code line
+    UMD_TABLE,     // a `|`-delimited row; `arg` is 1 for the ---|--- rule
+    UMD_RULE,      // a horizontal rule
+    UMD_PARA,      // anything else
+};
+
+// `*text`/`*len` come back as the line's CONTENT with the marker
+// removed, so a caller draws what it is given.
+enum umd_block umd_classify(const char *line, int n, int *arg,
+                            const char **text, int *text_len);
+
+// One line of `src`, without its newline. `*i` advances past it.
+// Returns the line's length; `*out` points into `src`.
+int umd_next_line(const char *src, int len, int *i, const char **out);
+
 struct umd_opts {
     int cols;      // wrap to this many display columns
     int color;     // emit SGR for headings, bold and code

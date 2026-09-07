@@ -5729,6 +5729,55 @@ bytes whether they look like paths -- is the version of this that
 pastes `/etc/hostname` into a document as a line of text. FILES is 0 so
 that a zeroed page means what the file-only clipboard meant.
 
+## One Markdown parser, two renderers
+
+`/bin/doc` renders this repository's own `docs/commands/*.md` to a
+terminal, and Notepad now renders them to a window. Those are two very
+different jobs -- one wraps at a column count and emits SGR, the other
+wraps at a pixel width and picks font faces -- and the obvious way to
+get the second was to write a small Markdown parser inside the widget.
+
+That would have been two answers to "what does `**` mean here", in
+documents nobody would think to open both ways. So `lib/umd.h` gained
+two entry points instead: `umd_classify()` says what KIND a line is with
+its marker already removed, and `umd_inline_walk()` walks `code`,
+**bold**, `[text](link)`, the one backslash escape and the
+transliteration, reporting styled CHARACTERS. The text renderer became
+its first caller and the widget its second; `tools/umd_hostcheck.py`
+renders all 110 pages at three widths and came out byte-identical across
+the refactor, which is what made it safe to do at all.
+
+**What deliberately did NOT move is the line breaking.** Where a line
+breaks is a property of the renderer's medium -- umd's is columns and
+the widget's is pixels -- so each keeps its own, and what they share is
+only the parsing. Putting the wrap in umd would have meant a medium
+parameter threaded through a function that has no business knowing about
+fonts.
+
+**The widget scrolls in pixels, and `utext` scrolls in lines.** That is
+not an inconsistency: `utext` is a grid where every row is one character
+cell, and a document is not -- a heading, a rule and a code block are
+three different heights, so there is no line unit to count. It also
+means one walk has to both measure and draw, since two walks would be
+two ideas of how tall a heading is and the scrollbar would disagree with
+the page.
+
+## A preview that turns itself on, and can be turned off
+
+Notepad opens a `.md` rendered and everything else as text. Neither half
+of that is free: a preview that had to be asked for every time is a
+feature nobody finds, and one that cannot be turned off is an editor
+that cannot edit its own documents. Ctrl-E toggles, which is Obsidian's
+binding for the same thing -- VS Code's Ctrl+Shift+V was rejected
+because in an editor that combination conventionally means "paste as
+plain text", and this Notepad has a clipboard now.
+
+The preview is READ-ONLY. A keystroke that edited the buffer underneath
+a rendered document would change what is on screen with no caret to say
+where, so typing does nothing until Ctrl-E comes back to the source.
+Word wrap is greyed out while it is up for the same reason: a document
+reflows to the window whatever the editor's own setting is.
+
 ## Ctrl+C is not the window manager's to route
 
 The roadmap said the standard keybindings should be "routed through the
