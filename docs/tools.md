@@ -3330,6 +3330,36 @@ window without going through it will find its layout polls timing out.
   ON DEMAND: it needs a host gcc, and the gate must not start requiring
   one.
 
+- **`divti3_hostcheck.py`** -- compiles `userland/libc/divti3.c` with
+  the host gcc and judges the 128-bit division helpers against Python's
+  arbitrary-precision integers. 17,022 vectors: every pairing of
+  sixteen edge values (the 32-, 64- and 127-bit boundaries, powers of
+  two, all-ones) and then 4,000 random pairs whose two widths are drawn
+  INDEPENDENTLY, so `a/b` spans "both small", "both large" and "one of
+  each" -- which is what decides whether the 64-bit fast path or the
+  shift-subtract loop runs.
+
+  **The oracle is arbitrary precision**, so it is the answer by
+  construction rather than by a second implementation agreeing. Needs
+  nothing but gcc.
+
+  **One case is excluded and the exclusion is the interesting part.**
+  `INT128_MIN / -1` has no representable quotient, so C leaves it
+  undefined; Python's mathematically-correct `+2^127` would fail a
+  correct implementation. libgcc returns `INT128_MIN` there and so does
+  `divti3.c` -- confirmed against the host's libgcc rather than assumed.
+  Divide-by-zero is not covered either: it raises #DE by design, which
+  a process expecting to keep running cannot probe.
+
+  `--positive-control` breaks the 64-bit fast path in a COPY and
+  requires the sweep to go red. It is deliberately the FAST PATH rather
+  than the loop, so the control also proves the sweep reaches small
+  operands at all -- a sweep of large random values alone would never
+  enter that branch. Measured: 2,332 of 17,022 disagree under it.
+
+  ON DEMAND: it needs a host gcc, and the gate must not start requiring
+  one.
+
 - **`umd_hostcheck.py`** -- compiles `userland/lib/umd.c` with the host
   gcc and renders every `docs/commands/*.md` page through it at 40, 80
   and 132 columns, plus the three field lookups (`umd_title`,

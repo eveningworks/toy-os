@@ -1511,3 +1511,73 @@ clean run. A file in the wrong format parses as zero checked entries and
 zero failures, which is indistinguishable from everything passing -- the
 same "what would a broken version still pass" question the test
 conventions ask.
+
+## toy-os supplies its own compiler runtime, rather than linking libgcc
+
+`unsigned __int128` is not an exotic type on x86-64: `mulq` multiplies
+64x64 into 128 in one instruction, so a multiply compiles inline and
+costs nothing. There is no 128-bit DIVIDE instruction, so `/` and `%`
+on that type become calls to `__udivti3`, `__umodti3`, `__divti3` and
+`__modti3` -- names GCC emits and no source file mentions. They live in
+libgcc, which every link here deliberately omits (`-nostdlib`, no
+`-lgcc`), so the failure mode is an undefined symbol at link time with
+nothing in the source to point at.
+
+**The obvious fix is `-lgcc`, and it is refused.** libgcc is the
+compiler's runtime, built for a hosted target: it carries unwinding,
+soft-float, and transcendental support this OS has no use for, and
+linking it puts a second implementation of things tolibc already owns
+within reach of the linker. The whole point of `-nostdlib` here is that
+what ends up in a binary is code from this repository. Adding one
+library to get four arithmetic functions inverts that for a poor trade.
+
+**So `userland/libc/divti3.c` supplies them, and they are checked against
+an oracle with arbitrary precision.** `tools/divti3_hostcheck.py` judges
+17,022 vectors against Python's integers -- the answer by construction,
+not by a second implementation agreeing. The fast path (both operands
+under 64 bits, one `divq`) is what `--positive-control` breaks, because
+a sweep of large random values would never enter that branch and a
+control that reddens the loop would not have noticed.
+
+**`INT128_MIN / -1` is undefined and is excluded deliberately.** Its
+true quotient is `+2^127`, which no signed 128-bit type holds -- the
+`INT_MIN / -1` shape. libgcc returns `INT128_MIN`; so does this, and
+that was confirmed against the host's libgcc rather than assumed,
+because "matches libgcc" is the actual contract and the mathematically
+correct answer would have failed a correct implementation.
+
+In tolibc rather than `userland/rt/` -- where `__stack_chk_fail`, the
+other compiler-emitted symbol, lives -- because tolibc is linked by
+every program, static or dynamic, and these are arithmetic rather than
+process machinery. The one program that links neither is `ld-toy.so`,
+which does no 128-bit division.
+
+## `<limits.h>` includes nothing, and that is what makes `-nostdinc` possible
+
+GCC ships a freestanding `<limits.h>`, but it ends in `#include_next
+<limits.h>` to pick up the C library's. With no such header, a
+`-nostdinc` compile fails *inside GCC's own copy* -- which is why toy-os
+could not build anything with host headers excluded until tolibc grew
+one.
+
+That matters because `-nostdinc` is the only way to stop a host header
+leaking into a userland compile. Nothing here passed it, so any
+`#include <sys/socket.h>` in a vendored tree silently resolved to
+`/usr/include`'s -- and a library probing with `__has_include` does not
+care what the target is, only what is on the path. Combined with GCC
+predefining `__linux__` and `__unix__` for every toy-os compile, a
+portable third-party library concludes it is on Linux and reaches for
+interfaces this OS does not have.
+
+**Every integer limit is derived from GCC's own predefines** rather than
+written down, so nothing here is a second copy of a number. `CHAR_MIN`
+follows `__CHAR_UNSIGNED__` instead of assuming the x86-64 default,
+because a `-funsigned-char` build would otherwise be silently wrong.
+
+**`PATH_MAX` is the exception, and it is spelled out on purpose.**
+Deriving it from `api/fs.h`'s `FS_PATH_MAX` would mean `<limits.h>`
+including the filesystem API -- and this header is pulled in by nearly
+every translation unit, ported code earliest of all, so a dependency
+here reaches everywhere. `userland/libc/access.c` carries a
+`_Static_assert` that the two agree, which turns the duplication into a
+build error rather than a thing somebody has to remember.

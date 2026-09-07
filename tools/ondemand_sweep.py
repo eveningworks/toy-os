@@ -77,6 +77,10 @@ TOOLS = [
     # runs, at three widths. gcc and the standard library only.
     ("umd_host",    "umd_hostcheck.py",        "the Markdown renderer over every page", False,
      None,                                                                                   False),
+    # The 128-bit division helpers, against Python's arbitrary-precision
+    # integers. gcc and the standard library only.
+    ("divti3_host", "divti3_hostcheck.py",     "__udivti3 and friends against bignums", False,
+     None,                                                                                   False),
     # --- storage and boot -------------------------------------------
     ("partition",   "partition_test.py",       "mounting from an MBR/GPT partition", True,  None,                   False),
     ("fs_switch",   "fs_switch_test.py",       "format, remount, reboot persistence", True, None,                   False),

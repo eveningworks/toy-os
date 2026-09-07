@@ -130,6 +130,14 @@ static inline size_t strlcat(char *dst, const char *src, size_t n) { return k_st
 // this repo's shared-source rule exists to prevent.
 static inline char *strerror(int e) { return (char *)sys_strerror(e); }
 
+// A memset() the optimiser is not allowed to delete. An ordinary
+// memset() over a buffer that is dead afterwards -- a key, a
+// passphrase -- is a store nothing reads, and GCC is entitled to remove
+// it; that is why wiping a secret needs a name of its own rather than
+// care at the call site. BSD's spelling, and the one ported crypto code
+// reaches for.
+void explicit_bzero(void *p, size_t n);
+
 // THE "C" LOCALE IS THE ONLY LOCALE HERE, so collation is byte order
 // and strcoll() IS strcmp(). They exist because C requires them and
 // because a program written against them should not have to know that

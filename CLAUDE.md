@@ -1414,7 +1414,8 @@ cost".
   `ansi_cursor_test.py`, `audio_test.py`, `console_bleed_test.py`,
   `console_shell_test.py`, `ctrlc_test.py`, `cursor_ibeam_test.py`,
   `diskmark_test.py`, `doc_test.py`, `doom_test.py`,
-  `doom_sound_test.py`, `fat32_test.py`, `fileop_test.py`, `frame_balance.py`,
+  `divti3_hostcheck.py`, `doom_sound_test.py`, `fat32_test.py`,
+  `fileop_test.py`, `frame_balance.py`,
   `fs_switch_test.py`, `grep_test.py`, `guictl_test.py`,
   `hash_hostcheck.py`, `highmem_test.py` (the frame allocator on an
   8 GiB guest -- the one check `make test`'s 256 MiB boot SKIPS),
@@ -1447,7 +1448,9 @@ cost".
   `QMPSession.hmp()` (**the QEMU monitor -- the one oracle the guest
   cannot fake**; ask it BEFORE trusting anything the guest says about
   itself), `regex_hostcheck.py`, `uimg_hostcheck.py`,
-  `usnd_hostcheck.py`, `hash_hostcheck.py` and
+  `usnd_hostcheck.py`, `hash_hostcheck.py`,
+  `divti3_hostcheck.py` (the 128-bit division helpers against Python's
+  arbitrary-precision integers) and
   `umd_hostcheck.py` (the Markdown renderer over every
   `docs/commands/` page at three widths, with a
   `--positive-control` that must go red) (this repo's
