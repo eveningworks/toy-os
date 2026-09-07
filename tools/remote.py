@@ -1018,8 +1018,20 @@ def main():
     f = sub.add_parser("flash", help="replace the kernel on the machine's "
                                      "own boot partition")
     f.add_argument("kernel", nargs="?", default="build/kernel.bin")
-    f.add_argument("--reboot", action="store_true",
-                   help="reboot once the new kernel has verified")
+    # **REBOOTING IS THE DEFAULT, and it is the safe direction.** A
+    # flash that verifies a kernel and does NOT boot it leaves the
+    # machine running the OLD kernel against the NEW /lib -- the exact
+    # mismatch do_flash's rescue session exists to survive, and the one
+    # that strands a machine. So the dangerous state was what you got by
+    # FORGETTING a flag, which is the wrong way round; every session
+    # forgot it. `--reboot` is still accepted, and now says nothing.
+    f.add_argument("--no-reboot", dest="reboot", action="store_false",
+                   help="leave the machine on the OLD kernel -- it will be "
+                        "running that against the new /lib until something "
+                        "reboots it")
+    f.add_argument("--reboot", dest="reboot", action="store_true",
+                   help="(default; kept so an old command line still works)")
+    f.set_defaults(reboot=True)
     f.add_argument("--kernel-only", action="store_true",
                    help="do NOT sync /bin, /lib, /tests and /usr first. An "
                         "ABI change then leaves the machine unreachable")

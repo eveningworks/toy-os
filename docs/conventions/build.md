@@ -591,10 +591,17 @@ no address. So `flash` syncs /bin, /lib, /tests and /usr from
 `seed/sync` first, and `--kernel-only` is the deliberate way to skip
 that. The sync goes first because a failure there costs nothing.
 
-Two things it will not do. It does not EDIT `grub.cfg` for you -- a
+One thing it will not do: it does not EDIT `grub.cfg` for you -- a
 flash silently rewriting the bootloader config is a worse surprise than
-a refusal. And it does not reboot unless asked (`--reboot`), because a
-verify failure is exactly when you want the machine still up.
+a refusal.
+
+**It DOES reboot, and that is the default now.** The reboot happens only
+after the kernel has verified, so a verify failure still leaves the
+machine up, which was the original argument for making it opt-in. What
+that argument missed is the state it leaves behind on SUCCESS: a
+verified kernel that has not been booted means the machine is running
+the OLD one against the NEW `/lib`, which is the mismatch that makes
+`telnetd` accept a connection and close it. Opt out with `--no-reboot`.
 
 **`tosh` DOES NOT QUOTE**, which is a trap for anything driving a
 machine this way: it splits a line on whitespace and passes the pieces

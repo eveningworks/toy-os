@@ -368,8 +368,17 @@ manual steps to be worth automating:
   done by hand. It remounts the read-only `/boot` writable, rotates the
   RUNNING kernel to `/boot/boot/kernel.old` so the "previous kernel"
   entry in `grub.cfg` is known-good, writes the new one, and reads a
-  sha256 back off the partition. `--reboot` restarts the machine once
-  that verifies, and only then.
+  sha256 back off the partition, and then **REBOOTS -- which is the
+  DEFAULT**, and only ever after that verify succeeds. `--no-reboot`
+  leaves the machine up.
+
+  **The default is that way round because NOT rebooting is the
+  dangerous state.** A verified kernel that has not been booted leaves
+  the machine running the OLD one against the NEW `/lib` -- the exact
+  mismatch the rescue session below exists to survive, and the one that
+  makes `telnetd` accept a connection and close it. That state used to
+  be what you got by FORGETTING a flag, and every session forgot it.
+  `--reboot` is still accepted and now says nothing.
 
   **It SYNCS /bin, /lib, /tests and /usr FIRST**, because a kernel is
   half a build: an ABI struct that changes size moves fields under every
