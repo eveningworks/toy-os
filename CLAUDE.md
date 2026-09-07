@@ -869,6 +869,8 @@ whenever a headline here tells you something you did not already know.
 - **THERE ARE THREE WORDS FOR SYSTEM STATE AND THEY ARE FIXED: FACT, SETTING, TUNABLE.**
 - **Setting a setting to the value it already has does NOTHING**
 - **A RING-3 PROGRAM READS AND WRITES ONE SETTING THROUGH `userland/lib/usetting.h`, AND `usetting_set()` RETURNS THE REGISTRY'S THREE-WAY ANSWER.**
+- **A CONFIG FILE CAN HAVE `[SECTIONS]`, THE SECTION IS AN ARGUMENT, AND A NEW KEY LANDS AT THE END OF ITS OWN SECTION**
+- **A `.desktop` OR `mimeapps.conf` FILE READS WITH ITS HEADER OR WITHOUT**
 - **`etc_config.c` is SPLIT: the parser is shared, the file I/O is kernel-only.**
 - **EVERY DISK DRIVER RUNS, AND THE ROOT IS A SEPARATE CHOICE**
 - **THE DISK PRECEDENCE IS VIRTIO-BLK, THEN AHCI, THEN ATA, and each rung has a boot word that steps down to the next**

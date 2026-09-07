@@ -50,17 +50,23 @@ int uconf_load(const char *path, struct etc_config_buf *buf) {
 // functions with no ownership of the caller's context, and a shared
 // buffer here is the re-entrancy hazard etc_config.h's "the buffer is
 // the caller's" note exists to avoid.
-int uconf_get(const char *path, const char *key, char *out, uint32_t out_size) {
+int uconf_get_in(const char *path, const char *section, const char *key,
+                 char *out, uint32_t out_size) {
     struct etc_config_buf *buf = malloc(sizeof *buf);
     if (!buf) { if (out && out_size) out[0] = '\0'; return 0; }
     int ok = uconf_load(path, buf);
-    int rc = ok ? etc_config_buf_get(buf, key, out, out_size) : 0;
+    int rc = ok ? etc_config_buf_get_in(buf, section, key, out, out_size) : 0;
     if (!ok && out && out_size) out[0] = '\0';
     free(buf);
     return rc;
 }
 
-int uconf_set(const char *path, const char *key, const char *value) {
+int uconf_get(const char *path, const char *key, char *out, uint32_t out_size) {
+    return uconf_get_in(path, 0, key, out, out_size);
+}
+
+int uconf_set_in(const char *path, const char *section,
+                 const char *key, const char *value) {
     struct etc_config_buf *in = malloc(sizeof *in);
     char *out = malloc(ETC_CONFIG_MAX);
     int rc = 0;
@@ -75,8 +81,8 @@ int uconf_set(const char *path, const char *key, const char *value) {
         in->data[0] = '\0';
     }
 
-    uint32_t n = etc_config_buf_set(in->data, in->size, key, value,
-                                    out, ETC_CONFIG_MAX);
+    uint32_t n = etc_config_buf_set_in(in->data, in->size, section, key, value,
+                                       out, ETC_CONFIG_MAX);
     if (n == 0) goto done;
 
     // A WRITE THAT CHANGES NOTHING IS NOT PERFORMED, which is what
@@ -100,4 +106,8 @@ done:
     free(in);
     free(out);
     return rc;
+}
+
+int uconf_set(const char *path, const char *key, const char *value) {
+    return uconf_set_in(path, 0, key, value);
 }

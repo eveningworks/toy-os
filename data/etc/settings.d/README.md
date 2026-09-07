@@ -4,11 +4,11 @@ One file per setting, named by its **qualified name** —
 `<namespace>.<name>`, e.g. `system.mouse_speed` — because a setting's
 identity is that pair and two programs may each own a `theme`.
 
-The format is `etc_config`'s, unchanged: `name=value` lines, `#`
-comments, whitespace trimmed. No sections and no new parser — one file
-per setting is what removes the need for them, and it matches
-`/etc/services.d`, `/etc/config.d` and `/usr/wm/desktop`, which are all
-directories of small descriptors.
+The format is `etc_config`'s: `name=value` lines, `#` comments,
+whitespace trimmed. These files use **no section**, though the parser
+has them now — one file per setting is what removes the need, and it
+matches `/etc/services.d`, `/etc/config.d` and `/usr/wm/desktop`, which
+are all directories of small descriptors.
 
 ```
 # /etc/settings.d/system.mouse_speed

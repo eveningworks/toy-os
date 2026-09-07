@@ -98,9 +98,19 @@ static int cat_rank(const char *c) {
 // worst thing this file can do -- an unreachable app looks like a broken
 // system (see wm_reap_launched()'s comment for the last time that
 // happened). Showing it in both places with a log line is recoverable.
+// A `.desktop` key, from `[Desktop Entry]` or from the top level.
+//
+// The entries shipped here carry no header; freedesktop REQUIRES one,
+// so a file copied off a Linux box opens with `[Desktop Entry]`.
+// Reading both is what lets either drop in -- see etc_config.h.
+static int entry_get(const struct etc_config_buf *cfg, const char *key,
+                     char *out, uint32_t cap) {
+    return etc_config_buf_get_in_or_top(cfg, "Desktop Entry", key, out, cap);
+}
+
 static unsigned parse_show_in(const struct etc_config_buf *cfg, const char *file) {
     char raw[32];
-    if (!etc_config_buf_get(cfg, "ShowIn", raw, sizeof raw)) return GUI_SHOW_ALL;
+    if (!entry_get(cfg, "ShowIn", raw, sizeof raw)) return GUI_SHOW_ALL;
 
     unsigned bits = 0;
     const char *p = raw;
@@ -149,12 +159,12 @@ static void load_entry(const char *file) {
 
     char name[GUI_APP_NAME_MAX], exec[GUI_APP_EXEC_MAX];
     char cat[16], icon[GUI_APP_ICON_MAX], appid[GUI_APP_ICON_MAX], nodisplay[8];
-    if (!etc_config_buf_get(&cfg, "Name", name, sizeof name)) return;
-    if (!etc_config_buf_get(&cfg, "Exec", exec, sizeof exec)) return;
-    if (!etc_config_buf_get(&cfg, "Category", cat, sizeof cat)) k_strlcpy(cat, "apps", sizeof cat);
-    if (!etc_config_buf_get(&cfg, "Icon", icon, sizeof icon)) icon[0] = '\0';
-    if (!etc_config_buf_get(&cfg, "AppId", appid, sizeof appid)) appid[0] = '\0';
-    if (etc_config_buf_get(&cfg, "NoDisplay", nodisplay, sizeof nodisplay)
+    if (!entry_get(&cfg, "Name", name, sizeof name)) return;
+    if (!entry_get(&cfg, "Exec", exec, sizeof exec)) return;
+    if (!entry_get(&cfg, "Category", cat, sizeof cat)) k_strlcpy(cat, "apps", sizeof cat);
+    if (!entry_get(&cfg, "Icon", icon, sizeof icon)) icon[0] = '\0';
+    if (!entry_get(&cfg, "AppId", appid, sizeof appid)) appid[0] = '\0';
+    if (entry_get(&cfg, "NoDisplay", nodisplay, sizeof nodisplay)
         && nodisplay[0] == '1') return;
 
     int i = gui_app_registry_count;
@@ -187,7 +197,7 @@ static void load_entry(const char *file) {
     {
         char raw[16];
         a->remember_geometry = 1;
-        if (etc_config_buf_get(&cfg, "RememberGeometry", raw, sizeof raw) &&
+        if (entry_get(&cfg, "RememberGeometry", raw, sizeof raw) &&
             (k_strcmp(raw, "false") == 0 || k_strcmp(raw, "0") == 0 ||
              k_strcmp(raw, "no") == 0)) {
             a->remember_geometry = 0;

@@ -14,6 +14,28 @@
 // registry of known keys/files -- callers own their own key names and
 // validate values they get back themselves (tz_find_by_name()'s
 // lookup, gfx_set_font_size()'s range check, etc).
+//
+// ---- sections --------------------------------------------------------
+//
+// A `[name]` line opens a section; every key after it belongs to that
+// section until the next header or the end of the file. A key before
+// any header is at TOP LEVEL, which is what every file written before
+// sections existed is made of -- so the four unsuffixed calls below
+// mean "top level" and no existing file or call site changed meaning.
+//
+// The section is an ARGUMENT (`_in`), not a prefix baked into the key:
+// identity here is (section, key), the shape GKeyFile, systemd units
+// and NetworkManager keyfiles all use. A flattened "section.key" would
+// have collided with the dotted key names /etc/settings.d already uses
+// (`Choice.losangeles`), and the collision would be invisible at the
+// call site. See docs/decisions/storage.md.
+//
+// Sections earn their place where the NAME IS DATA -- a section per
+// network card, where the code does not know the names and asks the
+// file (etc_config_section_count/_name). Where the name is a fixed
+// schema word the payoff is compatibility: a `.desktop` file written
+// here carries no header and one copied off a Linux box carries
+// `[Desktop Entry]`, and etc_config_buf_get_in_or_top() reads both.
 
 // Looks up `key` in the config file at `path`. Copies the value into
 // `out` (up to out_size - 1 chars, always NUL-terminated; a value
@@ -23,6 +45,12 @@
 // is left as an empty string in the 0 case so callers can use it
 // without a separate check.
 int etc_config_get(const char *path, const char *key, char *out, uint32_t out_size);
+
+// The same, scoped to `[section]`. A NULL or empty `section` means top
+// level -- so etc_config_get() is this with NULL, and always was.
+// A section that is not in the file is a miss, not an error.
+int etc_config_get_in(const char *path, const char *section, const char *key,
+                      char *out, uint32_t out_size);
 
 // ---- reading several keys out of ONE file --------------------------
 //
@@ -89,8 +117,69 @@ uint32_t etc_config_buf_set(const char *in, uint32_t in_len,
                             const char *key, const char *value,
                             char *out, uint32_t out_cap);
 
+// The same, scoped to `[section]` (NULL or "" is top level).
+//
+// WHERE A NEW KEY LANDS, which is the whole of the writer's design: at
+// the END OF ITS OWN SECTION -- after that section's last `key=value`
+// line, before any trailing comment block, and before the next header.
+// Never at the end of the file, which would silently file the key under
+// whatever section happens to be last. A section that is not there yet
+// is appended with its header; a top-level key in a sectioned file goes
+// above the first header.
+//
+// A trailing comment block is skipped because in every INI-shaped
+// format a comment sitting immediately above a header belongs to the
+// section BELOW it.
+//
+// Removing the last key of a section leaves the header, and its
+// comments, in place: dropping them would delete what somebody wrote
+// in order to tidy up what the machine wrote.
+uint32_t etc_config_buf_set_in(const char *in, uint32_t in_len,
+                               const char *section,
+                               const char *key, const char *value,
+                               char *out, uint32_t out_cap);
+
 int etc_config_buf_get(const struct etc_config_buf *buf, const char *key,
                        char *out, uint32_t out_size);
+
+// The same, scoped to `[section]`; NULL or "" is top level.
+int etc_config_buf_get_in(const struct etc_config_buf *buf, const char *section,
+                          const char *key, char *out, uint32_t out_size);
+
+// `[section]` first, then TOP LEVEL -- for a document whose header is
+// OPTIONAL. That is the freedesktop shape: a `.desktop` entry written
+// here has no header and one copied off a Linux box opens with
+// `[Desktop Entry]`, and both must read. Prefer the plain `_in` where
+// the header is required; this one cannot tell a file that omits the
+// header from a file that misspells it.
+int etc_config_buf_get_in_or_top(const struct etc_config_buf *buf,
+                                 const char *section, const char *key,
+                                 char *out, uint32_t out_size);
+
+// ---- walking the sections a file DECLARES ---------------------------
+//
+// The half a section buys that a dotted key name does not: the code
+// asks the FILE which sections exist instead of knowing their names.
+// /etc/net.conf is the case -- one section per card, named by a MAC
+// address nothing in the source can predict.
+//
+// Names are DISTINCT and in first-appearance order: a name that opens
+// twice is one section (both runs are searched for a key), so a walk
+// cannot hand the same card back twice.
+
+// A section name longer than this is not a section -- the line is
+// ignored, exactly as a malformed one is. A cap rather than a
+// truncation is what lets a walk hand every name to `_get_in()` and
+// know the lookup means the same section it was given.
+#define ETC_CONFIG_SECTION_MAX 64
+
+int etc_config_section_count(const struct etc_config_buf *buf);
+
+// The `index`-th distinct section name. Returns 1 and NUL-terminates
+// `out`, or 0 for a bad index or a buffer under ETC_CONFIG_SECTION_MAX
+// -- never a truncated name, which would name a different section.
+int etc_config_section_name(const struct etc_config_buf *buf, int index,
+                            char *out, uint32_t out_size);
 
 // Sets `key=value` in the config file at `path`, creating the file if
 // it doesn't exist yet. If `key` is already present, its line is
@@ -113,6 +202,12 @@ int etc_config_set(const char *path, const char *key, const char *value);
 // which deleting the file wholesale could not do without taking every
 // other setting in it along.
 int etc_config_unset(const char *path, const char *key);
+
+// The section-scoped pair. Same contracts, `[section]` scope; NULL or
+// "" is top level, which is what the two above pass.
+int etc_config_set_in(const char *path, const char *section,
+                      const char *key, const char *value);
+int etc_config_unset_in(const char *path, const char *section, const char *key);
 
 // `enum setting_result` -- what a "change a setting and persist it"
 // call actually managed to do -- now lives in abi/setting_abi.h, which

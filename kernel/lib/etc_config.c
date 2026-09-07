@@ -8,9 +8,10 @@
 // runs to the end of the line -- a whole-line comment or a trailing
 // one after a real "key=value" are both stripped before parsing.
 // Blank lines are ignored. Leading/trailing spaces/tabs around the key
-// and the value are trimmed. There's no section syntax, no quoting,
-// and no escaping -- deliberately as plain as `/etc/timezone`'s old
-// bare-text format, just with a key attached and room for comments.
+// and the value are trimmed. A `[name]` line opens a SECTION and every
+// key after it belongs to it; a key before any header is at top level,
+// which is what every file predating sections is made of. There is no
+// quoting and no escaping, so a value runs to the end of its line.
 //
 // Stateless by design: every call re-reads and re-parses the whole
 // file, there's no open/parsed-in-memory handle to manage. Given how
@@ -106,6 +107,24 @@ static int parse_kv(const char *line_start, const char *line_end,
     return 1;
 }
 
+// Is this line a `[section]` header? Fills the trimmed name if so.
+// A name that is empty or longer than the cap is NOT a header -- the
+// line is ignored like any other malformed one, which is what lets a
+// walk hand every name it reports straight back to a lookup.
+static int parse_section(const char *line_start, const char *line_end,
+                         const char **name_start, uint32_t *name_len) {
+    const char *s = line_start, *e = strip_comment(line_start, line_end);
+    uint32_t len = trim(&s, e);
+    if (len < 2 || s[0] != '[' || s[len - 1] != ']') return 0;
+
+    const char *ns = s + 1, *ne = s + len - 1;
+    uint32_t n = trim(&ns, ne);
+    if (n == 0 || n >= ETC_CONFIG_SECTION_MAX) return 0;
+    *name_start = ns;
+    *name_len = n;
+    return 1;
+}
+
 static int key_matches(const char *key_start, uint32_t key_len, const char *key) {
     uint32_t klen = (uint32_t)k_strlen(key);
     if (klen != key_len) return 0;
@@ -115,16 +134,33 @@ static int key_matches(const char *key_start, uint32_t key_len, const char *key)
     return 1;
 }
 
+// A NULL or empty section means TOP LEVEL -- the keys before the first
+// header. Every unsuffixed entry point passes it, so a file with no
+// headers at all behaves exactly as it did before sections existed.
+#define WANT_TOP(sec) (!(sec) || !(sec)[0])
+
 // The shared scan. Both the read-per-call and the read-once entry
 // points below are this function plus a way of getting at the bytes --
 // one parser, so the two can never disagree about what a line means.
-static int find_key(const char *data, uint32_t size, const char *key,
-                    char *out, uint32_t out_size) {
+//
+// Every run of a repeated header is searched, in file order: a name is
+// a section, not a position, so `[a] x=1 ... [a] y=2` answers both.
+static int find_key(const char *data, uint32_t size, const char *section,
+                    const char *key, char *out, uint32_t out_size) {
     uint32_t pos = 0;
     const char *ls, *le;
+    int want_top = WANT_TOP(section);
+    int in_scope = want_top;
+
     while (next_line(data, size, &pos, &ls, &le)) {
-        const char *ks, *vs;
-        uint32_t klen, vlen;
+        const char *ns, *ks, *vs;
+        uint32_t nlen, klen, vlen;
+
+        if (parse_section(ls, le, &ns, &nlen)) {
+            in_scope = !want_top && key_matches(ns, nlen, section);
+            continue;
+        }
+        if (!in_scope) continue;
         if (!parse_kv(ls, le, &ks, &klen, &vs, &vlen)) continue;
         if (!key_matches(ks, klen, key)) continue;
 
@@ -136,17 +172,93 @@ static int find_key(const char *data, uint32_t size, const char *key,
     return 0;
 }
 
-int etc_config_buf_get(const struct etc_config_buf *buf, const char *key,
-                       char *out, uint32_t out_size) {
+int etc_config_buf_get_in(const struct etc_config_buf *buf, const char *section,
+                          const char *key, char *out, uint32_t out_size) {
     if (!out || out_size == 0) return 0;
     out[0] = '\0';
     if (!buf || !buf->valid || buf->size == 0) return 0;
-    return find_key(buf->data, buf->size, key, out, out_size);
+    return find_key(buf->data, buf->size, section, key, out, out_size);
+}
+
+int etc_config_buf_get(const struct etc_config_buf *buf, const char *key,
+                       char *out, uint32_t out_size) {
+    return etc_config_buf_get_in(buf, 0, key, out, out_size);
+}
+
+int etc_config_buf_get_in_or_top(const struct etc_config_buf *buf,
+                                 const char *section, const char *key,
+                                 char *out, uint32_t out_size) {
+    if (etc_config_buf_get_in(buf, section, key, out, out_size)) return 1;
+    return etc_config_buf_get_in(buf, 0, key, out, out_size);
+}
+
+// ---- walking the sections -------------------------------------------
+//
+// Distinct names in first-appearance order. The dedup is a re-scan of
+// the headers already passed rather than a table: a config file holds
+// a handful of sections, the buffer is 4 KiB, and a table here would
+// be either a fixed cap on how many sections a file may have or an
+// allocation in a function that has never needed one.
+static int section_at(const char *data, uint32_t size, int index,
+                      const char **name, uint32_t *name_len) {
+    uint32_t pos = 0;
+    const char *ls, *le;
+    int seen = 0;
+
+    while (next_line(data, size, &pos, &ls, &le)) {
+        const char *ns;
+        uint32_t nlen;
+        if (!parse_section(ls, le, &ns, &nlen)) continue;
+
+        int dup = 0;
+        uint32_t back = 0;
+        const char *bs, *be;
+        while (back < (uint32_t)(ls - data) && next_line(data, size, &back, &bs, &be)) {
+            const char *ps;
+            uint32_t plen;
+            if (!parse_section(bs, be, &ps, &plen) || plen != nlen) continue;
+            uint32_t i = 0;
+            while (i < nlen && ps[i] == ns[i]) i++;
+            if (i == nlen) { dup = 1; break; }
+        }
+        if (dup) continue;
+
+        if (seen == index) { *name = ns; *name_len = nlen; return 1; }
+        seen++;
+    }
+    return 0;
+}
+
+int etc_config_section_count(const struct etc_config_buf *buf) {
+    if (!buf || !buf->valid || buf->size == 0) return 0;
+    int n = 0;
+    const char *name;
+    uint32_t len;
+    while (section_at(buf->data, buf->size, n, &name, &len)) n++;
+    return n;
+}
+
+int etc_config_section_name(const struct etc_config_buf *buf, int index,
+                            char *out, uint32_t out_size) {
+    if (!out || out_size == 0) return 0;
+    out[0] = '\0';
+    if (!buf || !buf->valid || buf->size == 0 || index < 0) return 0;
+    // Under the cap the name cannot be truncated, so a caller that
+    // sizes its buffer by it never has to ask whether it was.
+    if (out_size < ETC_CONFIG_SECTION_MAX) return 0;
+
+    const char *name;
+    uint32_t len;
+    if (!section_at(buf->data, buf->size, index, &name, &len)) return 0;
+    k_memcpy(out, name, len);
+    out[len] = '\0';
+    return 1;
 }
 
 // Rewrites `in` with `key` set to `value`, or with `key` REMOVED when
-// `value` is NULL. Returns the new length, or 0 if it would not fit or
-// (for a removal) the key was not there.
+// `value` is NULL, inside `[section]` (NULL or "" = top level).
+// Returns the new length, or 0 if it would not fit or (for a removal)
+// the key was not there.
 //
 // Buffer to buffer, with no idea where either came from: that is what
 // makes it usable from ring 3, where the file I/O around it is libsys
@@ -158,53 +270,125 @@ int etc_config_buf_get(const struct etc_config_buf *buf, const char *key,
 // Every line that is not the key's own is copied VERBATIM, so comments
 // and ordering elsewhere survive. A comment on the key's own line does
 // not: the line is replaced wholesale.
-uint32_t etc_config_buf_set(const char *in, uint32_t in_len,
-                            const char *key, const char *value,
-                            char *out, uint32_t out_cap) {
-    if (!key || !out || out_cap == 0) return 0;
-    uint32_t out_len = 0;
-    int matched = 0;
-    uint32_t key_len = (uint32_t)k_strlen(key);
-    uint32_t value_len = value ? (uint32_t)k_strlen(value) : 0;
+//
+// Two passes, because where a NEW key lands cannot be known until the
+// whole document has been read: pass 1 finds the key's line, or else
+// the end of its section; pass 2 copies and splices. See the header for
+// where that end is and why it is not the end of the file.
+static int emit_bytes(char *out, uint32_t *len, uint32_t cap,
+                      const char *b, uint32_t n) {
+    if (*len + n + 1 > cap) return 0;   // +1: the terminating NUL
+    k_memcpy(out + *len, b, n);
+    *len += n;
+    return 1;
+}
 
-    if (in && in_len > 0) {
-        uint32_t pos = 0;
-        const char *ls, *le;
-        while (next_line(in, in_len, &pos, &ls, &le)) {
-            const char *ks, *vs;
-            uint32_t klen, vlen;
-            int is_kv = parse_kv(ls, le, &ks, &klen, &vs, &vlen);
+static int emit_kv(char *out, uint32_t *len, uint32_t cap,
+                   const char *key, const char *value) {
+    return emit_bytes(out, len, cap, key, (uint32_t)k_strlen(key))
+        && emit_bytes(out, len, cap, "=", 1)
+        && emit_bytes(out, len, cap, value, (uint32_t)k_strlen(value))
+        && emit_bytes(out, len, cap, "\n", 1);
+}
 
-            if (is_kv && key_matches(ks, klen, key)) {
-                matched = 1;
-                if (!value) continue; // a removal: drop the line
-                if (out_len + key_len + 1 + value_len + 1 >= out_cap) return 0;
-                k_memcpy(out + out_len, key, key_len); out_len += key_len;
-                out[out_len++] = '=';
-                k_memcpy(out + out_len, value, value_len); out_len += value_len;
-                out[out_len++] = '\n';
-            } else {
-                uint32_t line_len = (uint32_t)(le - ls);
-                if (out_len + line_len + 1 >= out_cap) return 0;
-                k_memcpy(out + out_len, ls, line_len); out_len += line_len;
-                out[out_len++] = '\n';
-            }
-        }
+// A section this writer would not be able to READ BACK is refused here
+// rather than written: `[` or `]` inside the name, a newline, a '#'
+// that would comment the header out, or a name over the cap all parse
+// as "not a header", so the key would land in whatever section came
+// before it.
+static int section_writable(const char *section) {
+    uint32_t n = (uint32_t)k_strlen(section);
+    if (n == 0 || n >= ETC_CONFIG_SECTION_MAX) return 0;
+    for (uint32_t i = 0; i < n; i++) {
+        char c = section[i];
+        if (c == '[' || c == ']' || c == '#' || c == '\n' || c == '\r') return 0;
     }
+    return 1;
+}
+
+uint32_t etc_config_buf_set_in(const char *in, uint32_t in_len,
+                               const char *section,
+                               const char *key, const char *value,
+                               char *out, uint32_t out_cap) {
+    if (!key || !*key || !out || out_cap == 0) return 0;
+    int want_top = WANT_TOP(section);
+    if (!want_top && !section_writable(section)) return 0;
+    if (!in) in_len = 0;
+
+    // ---- pass 1: find the key, or the end of its section ------------
+    int idx = 0, total = 0;
+    int match = -1;       // the key's own line, if it is already there
+    int header = -1;      // the section's opening line
+    int last_kv = -1;     // its last key=value line -- the insert point
+    int started = want_top, ended = 0, in_scope = want_top;
+    uint32_t pos = 0;
+    const char *ls, *le;
+
+    while (next_line(in, in_len, &pos, &ls, &le)) {
+        const char *ns, *ks, *vs;
+        uint32_t nlen, klen, vlen;
+
+        if (parse_section(ls, le, &ns, &nlen)) {
+            if (in_scope && started) ended = 1;   // the first run closes here
+            in_scope = !want_top && key_matches(ns, nlen, section);
+            if (in_scope && !started) { started = 1; header = idx; }
+        } else if (in_scope && parse_kv(ls, le, &ks, &klen, &vs, &vlen)) {
+            if (!ended) last_kv = idx;
+            if (match < 0 && key_matches(ks, klen, key)) match = idx;
+        }
+        idx++;
+    }
+    total = idx;
 
     // Removing a key that was not there changes nothing, and saying so
     // matters: the caller must not rewrite the file identically and
     // must not claim to have removed anything.
-    if (!value && !matched) return 0;
+    if (!value && match < 0) return 0;
 
-    if (value && !matched) {
-        if (out_len + key_len + 1 + value_len + 1 >= out_cap) return 0;
-        k_memcpy(out + out_len, key, key_len); out_len += key_len;
-        out[out_len++] = '=';
-        k_memcpy(out + out_len, value, value_len); out_len += value_len;
-        out[out_len++] = '\n';
+    int insert_at = -1;    // insert BEFORE this line index
+    int make_section = 0;  // ...or append the section itself
+    if (value && match < 0) {
+        if (!started) make_section = 1;
+        else insert_at = (last_kv >= 0 ? last_kv : header) + 1;
+    }
+
+    // ---- pass 2: copy, splicing at the point pass 1 found -----------
+    uint32_t out_len = 0;
+    idx = 0;
+    pos = 0;
+    while (next_line(in, in_len, &pos, &ls, &le)) {
+        if (idx == insert_at && !emit_kv(out, &out_len, out_cap, key, value))
+            return 0;
+        if (idx == match) {
+            if (value && !emit_kv(out, &out_len, out_cap, key, value)) return 0;
+        } else {
+            uint32_t n = (uint32_t)(le - ls);
+            if (!emit_bytes(out, &out_len, out_cap, ls, n)) return 0;
+            if (!emit_bytes(out, &out_len, out_cap, "\n", 1)) return 0;
+        }
+        idx++;
+    }
+    if (insert_at >= total && !emit_kv(out, &out_len, out_cap, key, value))
+        return 0;
+
+    if (make_section) {
+        // A blank line above the header, so an appended section is
+        // readable rather than jammed against what precedes it.
+        if (out_len > 0 && !(out_len >= 2 && out[out_len - 2] == '\n')
+            && !emit_bytes(out, &out_len, out_cap, "\n", 1)) return 0;
+        if (!emit_bytes(out, &out_len, out_cap, "[", 1)) return 0;
+        if (!emit_bytes(out, &out_len, out_cap, section, (uint32_t)k_strlen(section)))
+            return 0;
+        if (!emit_bytes(out, &out_len, out_cap, "]\n", 2)) return 0;
+        if (!emit_kv(out, &out_len, out_cap, key, value)) return 0;
     }
 
     out[out_len] = '\0';
     return out_len;
+}
+
+uint32_t etc_config_buf_set(const char *in, uint32_t in_len,
+                            const char *key, const char *value,
+                            char *out, uint32_t out_cap) {
+    return etc_config_buf_set_in(in, in_len, 0, key, value, out, out_cap);
 }

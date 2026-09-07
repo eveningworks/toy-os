@@ -40,7 +40,8 @@ static int entry_exec(const char *name, char *out, int cap) {
     struct etc_config_buf *cfg = malloc(sizeof *cfg);
     if (!cfg) return 0;
     int rc = uconf_load(entry, cfg)
-             && etc_config_buf_get(cfg, "Exec", out, (uint32_t)cap);
+             && etc_config_buf_get_in_or_top(cfg, UOPEN_ENTRY_SECTION, "Exec",
+                                             out, (uint32_t)cap);
     free(cfg);
     return rc ? 1 : 0;
 }
@@ -63,9 +64,11 @@ static int declared_exec(const char *ext, char *out, int cap) {
         // does not put a KiB of list on this frame.
         char list[128];
         int hit = uconf_load(entry, cfg)
-                  && etc_config_buf_get(cfg, "Handles", list, sizeof list)
+                  && etc_config_buf_get_in_or_top(cfg, UOPEN_ENTRY_SECTION,
+                                                  "Handles", list, sizeof list)
                   && handles_ext(list, ext)
-                  && etc_config_buf_get(cfg, "Exec", out, (uint32_t)cap);
+                  && etc_config_buf_get_in_or_top(cfg, UOPEN_ENTRY_SECTION,
+                                                  "Exec", out, (uint32_t)cap);
         free(cfg);
         if (hit) return 1;
     }
@@ -84,9 +87,22 @@ int uopen_resolve(const char *path, char *exec, int cap) {
         ext[n] = (char)tolower((unsigned char)dot[n]);
     ext[n] = '\0';
 
+    // `[Default Applications]` first, then the TOP LEVEL: a
+    // mimeapps.list copied off a Linux box carries the header, ours does
+    // not, and `open -s` keeps writing the flat form (uopen.h). Asking
+    // only the section would stop resolving every override already on
+    // disk. Loaded once rather than asked twice, since each ask is a
+    // whole-file read.
     char val[UOPEN_PATH_MAX];
-    if (uconf_get(UOPEN_CONF, ext, val, sizeof val) && val[0] &&
-        strcmp(val, "-") != 0) {
+    val[0] = '\0';
+    struct etc_config_buf *conf = malloc(sizeof *conf);
+    if (conf) {
+        if (uconf_load(UOPEN_CONF, conf))
+            etc_config_buf_get_in_or_top(conf, UOPEN_CONF_SECTION, ext,
+                                         val, sizeof val);
+        free(conf);
+    }
+    if (val[0] && strcmp(val, "-") != 0) {
         if (val[0] == '/') { // the literal-path escape hatch
             strlcpy(exec, val, (size_t)cap);
             return 1;

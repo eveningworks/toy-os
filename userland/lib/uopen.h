@@ -24,6 +24,18 @@
 
 #define UOPEN_CONF "/etc/mimeapps.conf"
 
+// FREEDESKTOP'S SECTION NAMES, READ BUT NOT WRITTEN. Both files are
+// read from their section first and then from the top level, so a
+// mimeapps.list or a .desktop copied off a Linux box -- where the
+// header is mandatory -- resolves here unchanged.
+//
+// `open -s` still WRITES the flat form. The alternative is a machine
+// whose existing flat file gains a sectioned duplicate of every key it
+// already holds, correct to read and untidy forever; a migration is not
+// worth it for a file the user can also edit by hand.
+#define UOPEN_CONF_SECTION  "Default Applications"
+#define UOPEN_ENTRY_SECTION "Desktop Entry"
+
 // The program that opens `path`, written into `exec`. Returns 1, or 0
 // when nothing claims the extension (or there is none). An override
 // naming an entry that no longer exists falls through to the

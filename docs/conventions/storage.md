@@ -195,6 +195,36 @@ this the obvious way), not from how much history it accumulated.
   reported as success is the lie `enum setting_result` exists to stop.
   Enumeration by index stays with `struct setting_msg` directly --
   System Settings and `config` want the whole record, not a name.
+- **A CONFIG FILE CAN HAVE `[SECTIONS]`, THE SECTION IS AN ARGUMENT, AND
+  A NEW KEY LANDS AT THE END OF ITS OWN SECTION.** `etc_config_get_in`/
+  `_set_in`/`_unset_in` and their `_buf_`/`uconf_` twins take a section;
+  a NULL or empty one means TOP LEVEL, which is what the unsuffixed
+  calls pass and what every file written before sections is made of.
+  **Do not flatten it into the key** -- `section.key` collides with the
+  dotted names `/etc/settings.d` already uses (`Choice.losangeles`), and
+  identity here is `(section, key)`, GKeyFile's shape. Five things to
+  know. **A repeated header is ONE section** -- both runs answer a
+  lookup, and `etc_config_section_count/_name` reports the name once, so
+  a walk cannot hand the same card back twice. **A new key goes after
+  its section's last `key=value` line**, before any trailing comment
+  block (a comment above a header belongs to the section below it) and
+  before the next header -- never at EOF, which would file it under
+  whatever section is last. **A missing section is appended with its
+  header; a top-level key goes ABOVE the first one.** **Removing a
+  section's last key leaves the header** and its comments. And **a
+  section name the parser could not read back is refused at the write**
+  (`[`, `]`, `#`, a newline, over `ETC_CONFIG_SECTION_MAX`), because the
+  key would otherwise land in the section before it. The cases live in
+  `api/etc_config_cases.h` and are asserted in BOTH rings; add one there
+  and both gain it. See `docs/decisions/storage.md`.
+- **A `.desktop` OR `mimeapps.conf` FILE READS WITH ITS HEADER OR
+  WITHOUT.** `etc_config_buf_get_in_or_top()` asks `[Desktop Entry]` /
+  `[Default Applications]` and then the top level, so an entry copied
+  off a Linux box -- where freedesktop makes the header mandatory --
+  drops in unchanged while ours carry none. The WRITER still emits the
+  flat form (`open -s`), deliberately: writing sectioned would leave
+  every existing machine with a sectioned duplicate of each key it
+  already holds, correct to read and untidy forever.
 - **`etc_config.c` is SPLIT: the parser is shared, the file I/O is
   kernel-only.** `kernel/lib/etc_config.c` holds the `name=value` parser
   plus the buffer accessors, is freestanding, and is compiled a second

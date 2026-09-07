@@ -3472,8 +3472,11 @@ hour the server chose.
 
 **THE RULES ARE `/etc/net.conf`, READ IN RING 3.** `scheme` (mac |
 location | driver | kernel) and `prefix` build a name for a card the
-file does not name; a line keyed by MAC, by location or by driver names
-one explicitly, most specific first. The kernel only validates and
+file does not name; a SECTION keyed by MAC, by location or by driver
+describes one explicitly, most specific first, and carries that card's
+`name` and its own `dhcp`. It was a flat line per card until config
+files gained sections (`docs/decisions/storage.md`), which capped a card
+at exactly one fact; the flat form is still read. The kernel only validates and
 applies through `SYS_NET_RENAME` and has no opinion about what a name
 should be -- udev renaming what Linux called `eth0`, and the same split
 already made for NTP, DHCP and DNS.

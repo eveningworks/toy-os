@@ -2978,14 +2978,19 @@ what makes a file safe for it: the compiled-in label is the floor, so a
 missing file costs one setting its extra text and nothing else, and the
 files can be added one at a time.
 
-**Why one file per setting** rather than sections in one file: the
-parser is compiled twice (kernel and ring 3) and shared with `.desktop`
-entries and `/etc/services.d`, so teaching it sections would change
-`etc_config_get(file, key)` at every call site and make identity
-(file, section, name) when the whole registry says (namespace, name).
-A directory of small descriptors needs no parser change and is the
-convention `/etc/services.d`, `/etc/config.d` and `/usr/wm/desktop`
-already teach.
+**Why one file per setting** rather than sections in one file: it would
+make identity (file, section, name) when the whole registry says
+(namespace, name), and a directory of small descriptors is what lets a
+setting's text be added one at a time and a malformed one cost exactly
+that setting. It is also the convention `/etc/services.d`,
+`/etc/config.d` and `/usr/wm/desktop` already teach.
+
+This entry also argued that teaching the parser sections would change
+`etc_config_get(file, key)` at every call site. That turned out to be
+wrong when sections were built: the section is an ADDED argument
+(`etc_config_get_in`), so not one existing call site moved. The rest of
+the reasoning stands and these files still carry no section — see
+`docs/decisions/storage.md`.
 
 **The display name is not the value.** `Choice.losangeles=Los Angeles`
 changes only what is shown; `losangeles` is still what is stored and

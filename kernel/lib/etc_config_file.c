@@ -64,7 +64,8 @@ int etc_config_load(const char *path, struct etc_config_buf *buf) {
 
 // Both of these are now read / rewrite / write, with the rewrite shared
 // (etc_config_buf_set). They used to carry a copy of that loop each.
-static int rewrite(const char *path, const char *key, const char *value) {
+static int rewrite(const char *path, const char *section,
+                   const char *key, const char *value) {
     // Heap, for the reason etc_config_get() above gives at length: two
     // KiB-sized locals here were a 1552-byte frame on the path that has
     // already overflowed a kernel stack once.
@@ -88,9 +89,10 @@ static int rewrite(const char *path, const char *key, const char *value) {
     // a file's only key produces an EMPTY document -- length 0, the same
     // answer as "not there". That refused every unset of a lone key.
     char probe[128];
-    int absent = !value && !(in->valid && etc_config_buf_get(in, key, probe, sizeof probe));
-    uint32_t n = absent ? 0 : etc_config_buf_set(in->data, in->size, key, value,
-                                                   out, ETC_CONFIG_MAX);
+    int absent = !value && !(in->valid &&
+                             etc_config_buf_get_in(in, section, key, probe, sizeof probe));
+    uint32_t n = absent ? 0 : etc_config_buf_set_in(in->data, in->size, section,
+                                                    key, value, out, ETC_CONFIG_MAX);
     int rc = 0;
     // A set that produced nothing would not fit; an unset of a present
     // key always writes, even the empty document.
@@ -100,8 +102,36 @@ static int rewrite(const char *path, const char *key, const char *value) {
     return rc;
 }
 
-int etc_config_unset(const char *path, const char *key) { return rewrite(path, key, 0); }
+int etc_config_unset(const char *path, const char *key) {
+    return rewrite(path, 0, key, 0);
+}
 
 int etc_config_set(const char *path, const char *key, const char *value) {
-    return rewrite(path, key, value);
+    return rewrite(path, 0, key, value);
+}
+
+int etc_config_unset_in(const char *path, const char *section, const char *key) {
+    return rewrite(path, section, key, 0);
+}
+
+int etc_config_set_in(const char *path, const char *section,
+                      const char *key, const char *value) {
+    return rewrite(path, section, key, value);
+}
+
+int etc_config_get_in(const char *path, const char *section, const char *key,
+                      char *out, uint32_t out_size) {
+    struct etc_config_buf *buf = kmalloc(sizeof *buf);
+    if (!buf) {
+        if (out && out_size) out[0] = '\0';
+        return 0;
+    }
+    int ok = 0;
+    if (etc_config_load(path, buf)) {
+        ok = etc_config_buf_get_in(buf, section, key, out, out_size);
+    } else if (out && out_size) {
+        out[0] = '\0';
+    }
+    kfree(buf);
+    return ok;
 }

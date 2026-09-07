@@ -95,6 +95,14 @@ THE PHASES, and what a broken build would still pass
      deleted. This checks that a wget, a ping and the boot-time DHCP
      each land in `netlog` attributed to the right program, and turns
      `system.conn_log` off to prove the records were not unconditional.
+ 15. THE NAMING RULES, from a SECTIONED /etc/net.conf. Two boots in
+     opposite directions, because "the card has no address" alone would
+     pass on a machine where DHCP merely failed: the sectioned boot has
+     `dhcp = no` under the card and must come up NAMED and UNADDRESSED,
+     the flat boot uses the pre-sections form and must come up named and
+     ADDRESSED. The file is written into a copy of the image from the
+     HOST, because netd applies a name once per card at discovery and
+     cannot un-take an address a previous run already had.
 
     python3 tools/net_test.py
     echo $?
@@ -116,6 +124,9 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
 from qmp_test import guarded_boot_args  # noqa: E402
+# The TFS3 volume is found by LOOKING, never by assuming partition 1 --
+# a bootable image puts GRUB's core.img in front of it.
+from mkpart_test import volume_of  # noqa: E402
 
 PROMPT = "dbg> "
 BOOT_TIMEOUT_S = 60.0
@@ -389,7 +400,8 @@ def nic_args(kind, pcap, extra="", quiet_port=None):
     raise ValueError(kind)
 
 
-def launch(disk, tmp, tag, kind, pcap=None, netdev_extra="", quiet_port=None):
+def launch(disk, tmp, tag, kind, pcap=None, netdev_extra="", quiet_port=None,
+           wait_addr=True):
     serial = os.path.abspath(os.path.join(tmp, f"net_{tag}.log"))
     sock = os.path.abspath(os.path.join(tmp, f"net_{tag}.serial"))
     pidfile = os.path.abspath(os.path.join(tmp, f"net_{tag}.pid"))
@@ -427,7 +439,10 @@ def launch(disk, tmp, tag, kind, pcap=None, netdev_extra="", quiet_port=None):
             # fails as `no such device`, which looks nothing like what
             # it is. `none` has no card and `quiet` has no server; both
             # are phases about exactly that, and wait for themselves.
-            if kind in ("e1000", "virtio", "both"):
+            # wait_addr=False for a guest whose config says NOT to lease
+            # this card: waiting for an address it must not have would
+            # spend the whole timeout and prove nothing.
+            if wait_addr and kind in ("e1000", "virtio", "both"):
                 wait_configured(sh)
             return sh, pidfile
         time.sleep(0.4)
@@ -1629,6 +1644,100 @@ def phase_inetd(r, disk, tmp):
         sh.close()
 
 
+# The rules file the two boots below are given. `e1000` is the DRIVER
+# key -- the third and least specific of the three a card can be
+# addressed by -- chosen because it is the only one of the three this
+# harness can predict: the MAC and the PCI location are QEMU's to pick.
+NET_CONF_SECTIONED = """scheme = mac
+prefix = net
+dhcp = all
+
+# The card gets a name AND a rule of its own. Before sections the card
+# was the key, so it could carry the name and nothing else.
+[e1000]
+name = lan
+dhcp = no
+"""
+
+NET_CONF_FLAT = """scheme = mac
+prefix = net
+dhcp = all
+e1000 = legacy
+"""
+
+
+def seed_net_conf(base_disk, tmp, tag, text):
+    """A copy of the image with /etc/net.conf replaced, written HOST-side.
+
+    Not written in the guest and followed by `service restart netd`: a
+    name is applied once per card AT DISCOVERY, and more to the point a
+    second netd cannot un-take an address the first one already leased,
+    so the `dhcp = no` half would be untestable that way.
+    """
+    img = os.path.join(tmp, f"net_{tag}.img")
+    subprocess.run(["cp", "--reflink=auto", "--sparse=always", base_disk, img],
+                   check=True)
+    src = os.path.join(tmp, f"{tag}.conf")
+    with open(src, "w") as f:
+        f.write(text)
+    base, sectors = volume_of(img)
+    subprocess.run([sys.executable, os.path.join(HERE, "tfs3_writer.py"), "write",
+                    img, src, "/etc/net.conf",
+                    "--at-lba", str(base), "--sectors", str(sectors)], check=True)
+    return img
+
+
+def iface_block(cfg, name):
+    """The `ifconfig` lines belonging to one interface, that one only."""
+    out, taking = [], False
+    for ln in cfg.splitlines():
+        if ln and not ln[0].isspace() and " mtu " in ln:
+            taking = ln.split(":", 1)[0] == name
+            if taking:
+                out.append(ln)
+            continue
+        if taking:
+            out.append(ln)
+    return "\n".join(out)
+
+
+def phase_naming(r, disk, tmp):
+    img = seed_net_conf(disk, tmp, "sec", NET_CONF_SECTIONED)
+    sh, pidfile = launch(img, tmp, "sec", "e1000", wait_addr=False)
+    try:
+        cfg = wait_for_addr(sh, "lan:", timeout=40.0)
+        r.check("[naming] a card is renamed from its own [section]",
+                "lan" in iface_names(cfg), cfg.strip()[-400:])
+
+        # netd settling FIRST, so "no address" cannot mean "not yet".
+        status = wait_service_settled(sh, "netd")
+        cfg = sh.run("ifconfig")
+        block = iface_block(cfg, "lan")
+        r.check("[naming] `dhcp = no` in a card's section overrules the global `all`",
+                "(unconfigured)" in block,
+                (block + "\n" + status).strip()[-400:])
+    finally:
+        kill(pidfile)
+        sh.close()
+
+    # THE CONTROL. Without it "unconfigured" above is equally what a
+    # guest whose DHCP simply failed would report. Same harness, same
+    # card, the pre-sections flat rule: named AND addressed.
+    img = seed_net_conf(disk, tmp, "flat", NET_CONF_FLAT)
+    sh, pidfile = launch(img, tmp, "flat", "e1000")
+    try:
+        cfg = wait_for_addr(sh, "legacy:", timeout=40.0)
+        r.check("[naming] the flat pre-sections rule still names a card",
+                "legacy" in iface_names(cfg), cfg.strip()[-400:])
+        block = iface_block(cfg, "legacy")
+        r.check("[naming] and that card IS addressed -- the control",
+                "netmask" in block and "(unconfigured)" not in block,
+                block.strip()[-400:])
+    finally:
+        kill(pidfile)
+        sh.close()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1672,6 +1781,8 @@ def main():
         phase_inetd(r, disk, tmp)
         print("Phase 14: the connection log, through real connections")
         phase_connlog(r, disk, tmp)
+        print("Phase 15: the naming rules, from a sectioned /etc/net.conf")
+        phase_naming(r, disk, tmp)
     finally:
         if not args.keep:
             shutil.rmtree(tmp, ignore_errors=True)

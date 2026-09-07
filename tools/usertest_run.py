@@ -169,6 +169,11 @@ TESTS = [
     # covers: klineedit.c has KTESTs, and they would pass whether or not
     # ring 3 could link a byte of it.
     ("klineedit_test", 0, None, None),
+    # The /etc parser's SECOND compilation, and the same gap again:
+    # etc_config.c has KTESTs over the identical shared case table, and
+    # every one would pass whether or not libuapp.a linked a byte of it
+    # -- which is what /bin/netd and the File Manager read /etc through.
+    ("etc_config_test", 0, None, None),
     # The SECOND BUILD of the formatter, not its logic -- the KTEST
     # beside it runs the identical cases in ring 0. What this pins is
     # that libc.a has the same kfmt at all, which is the gap a

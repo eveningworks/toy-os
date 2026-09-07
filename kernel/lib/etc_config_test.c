@@ -14,6 +14,8 @@
 #include "tmppath.h"
 #include "fs.h"
 #include "etc_config.h"
+#include "etc_config_cases.h"
+#include "kfmt.h"   // klog_printf, to name the case that failed
 #include "font_config.h"
 #include "cursor_config.h"
 #include "keyboard_config.h"
@@ -147,4 +149,80 @@ KTEST("etc_config", "an invalid argument is INVALID, not a failed save") {
     // merges them cannot word its message correctly.
     KTEST_ASSERT_EQ(cursor_config_save(VGA_CURSOR_STYLE_COUNT), SETTING_INVALID);
     KTEST_ASSERT_EQ(keyboard_config_save(""), SETTING_INVALID);
+}
+
+// ---- sections -------------------------------------------------------
+//
+// The table is shared with the ring-3 build (api/etc_config_cases.h);
+// these three walk it here, and userland/tests/etc_config_test.c walks
+// the same rows over libuapp.a's second compilation of the parser.
+//
+// FILE SCOPE, NOT LOCALS: a struct etc_config_buf is 4 KiB and the
+// rewrite buffer another 4, which is over the kernel's frame budget on
+// its own.
+static struct etc_config_buf g_case_buf;
+static char g_case_out[ETC_CONFIG_MAX];
+static char g_case_got[256];
+
+KTEST("etc_config", "the shared table: reading a section") {
+    KTEST_ASSERT(etc_get_case_count >= 10); // an empty table asserts nothing
+    for (int i = 0; i < etc_get_case_count; i++) {
+        int ok = etc_get_case_run(&etc_get_cases[i], &g_case_buf,
+                                  g_case_got, sizeof g_case_got);
+        if (!ok) klog_printf("etc_config: get case \"%s\" gave \"%s\"\n",
+                             etc_get_cases[i].name, g_case_got);
+        KTEST_ASSERT(ok);
+    }
+}
+
+KTEST("etc_config", "the shared table: writing into a section") {
+    KTEST_ASSERT(etc_set_case_count >= 10);
+    for (int i = 0; i < etc_set_case_count; i++) {
+        int ok = etc_set_case_run(&etc_set_cases[i], g_case_out, sizeof g_case_out,
+                                  g_case_got, sizeof g_case_got);
+        if (!ok) klog_printf("etc_config: set case \"%s\" gave \"%s\"\n",
+                             etc_set_cases[i].name, g_case_got);
+        KTEST_ASSERT(ok);
+    }
+}
+
+KTEST("etc_config", "the shared table: walking the sections") {
+    KTEST_ASSERT(etc_sections_case_count >= 4);
+    for (int i = 0; i < etc_sections_case_count; i++) {
+        int ok = etc_sections_case_run(&etc_sections_cases[i], &g_case_buf,
+                                       g_case_got, sizeof g_case_got);
+        if (!ok) klog_printf("etc_config: sections case \"%s\" gave \"%s\"\n",
+                             etc_sections_cases[i].name, g_case_got);
+        KTEST_ASSERT(ok);
+    }
+}
+
+// The cases above are buffer-to-buffer. This one goes through the FILE
+// half, which is a different set of entry points and the one a setting
+// actually persists through.
+KTEST("etc_config", "a sectioned file round-trips through the disk") {
+    fs_delete(SCRATCH);
+    KTEST_ASSERT_EQ(etc_config_set_in(SCRATCH, "ipv4", "method", "dhcp"), 1);
+    KTEST_ASSERT_EQ(etc_config_set_in(SCRATCH, "ipv4", "mtu", "1400"), 1);
+    KTEST_ASSERT_EQ(etc_config_set_in(SCRATCH, "ipv6", "method", "off"), 1);
+    KTEST_ASSERT_EQ(etc_config_set(SCRATCH, "version", "1"), 1);
+
+    char v[16];
+    KTEST_ASSERT_EQ(etc_config_get_in(SCRATCH, "ipv4", "method", v, sizeof v), 1);
+    KTEST_ASSERT_EQ(k_strcmp(v, "dhcp"), 0);
+    KTEST_ASSERT_EQ(etc_config_get_in(SCRATCH, "ipv6", "method", v, sizeof v), 1);
+    KTEST_ASSERT_EQ(k_strcmp(v, "off"), 0);
+    // The top-level key is not in either section, and neither section's
+    // key leaks to the top level.
+    KTEST_ASSERT_EQ(etc_config_get(SCRATCH, "version", v, sizeof v), 1);
+    KTEST_ASSERT_EQ(etc_config_get(SCRATCH, "method", v, sizeof v), 0);
+    KTEST_ASSERT_EQ(etc_config_get_in(SCRATCH, "ipv4", "version", v, sizeof v), 0);
+
+    // ...and removing one leaves its neighbour alone.
+    KTEST_ASSERT_EQ(etc_config_unset_in(SCRATCH, "ipv4", "mtu"), 1);
+    KTEST_ASSERT_EQ(etc_config_get_in(SCRATCH, "ipv4", "mtu", v, sizeof v), 0);
+    KTEST_ASSERT_EQ(etc_config_get_in(SCRATCH, "ipv4", "method", v, sizeof v), 1);
+    KTEST_ASSERT_EQ(etc_config_unset_in(SCRATCH, "ipv4", "mtu"), 0); // gone already
+
+    fs_delete(SCRATCH);
 }

@@ -43,10 +43,18 @@ int uconf_load(const char *path, struct etc_config_buf *buf);
 // cost 54 whole-file reads before anyone measured it.
 int uconf_get(const char *path, const char *key, char *out, uint32_t out_size);
 
+// The same, scoped to `[section]` -- NULL or "" is top level, which is
+// what the two unsuffixed calls pass. See etc_config.h for the format.
+int uconf_get_in(const char *path, const char *section, const char *key,
+                 char *out, uint32_t out_size);
+
 // Writes one key, rewriting the document around it. Creates the file if
 // it is missing. 0 if the write failed -- including a SHORT write,
 // which is a failure and not a partial success: a config file half
 // rewritten parses, with the tail of the document gone.
 int uconf_set(const char *path, const char *key, const char *value);
+
+int uconf_set_in(const char *path, const char *section,
+                 const char *key, const char *value);
 
 #endif // ULIB_UCONF_H

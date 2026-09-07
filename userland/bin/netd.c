@@ -65,14 +65,34 @@ static void mac_str(char *out, uint64_t mac) {
 // and the pass is seconds apart, and the alternative is a daemon that
 // has to be restarted to pick up an edit -- which is the thing a rules
 // file exists to avoid.
+// The `i`-th way this card can be addressed, most specific first. NULL
+// where the card cannot answer that one (a driver reporting no
+// location), which is a SKIP rather than the end of the list.
+// `slot` holds the MAC string, which has to outlive the call.
+static const char *card_key(const struct query_netdev *d, int i,
+                            char *slot, uint32_t cap) {
+    (void)cap;
+    if (i == 0) { mac_str(slot, d->mac); return slot; }
+    if (i == 1) return d->location[0] ? d->location : 0;
+    if (i == 2) return d->driver;
+    return 0;
+}
+#define CARD_KEYS 3
+
 static int rule_name(const struct etc_config_buf *buf,
                      const struct query_netdev *d, char *out, uint32_t cap) {
     char key[24];
-    mac_str(key, d->mac);
-    if (etc_config_buf_get(buf, key, out, cap) && out[0]) return 1;
-    if (d->location[0] && etc_config_buf_get(buf, d->location, out, cap) && out[0])
-        return 1;
-    if (etc_config_buf_get(buf, d->driver, out, cap) && out[0]) return 1;
+    for (int i = 0; i < CARD_KEYS; i++) {
+        const char *k = card_key(d, i, key, sizeof key);
+        if (!k || !*k) continue;
+        // A `[<key>]` section with a `name`, then the FLAT `<key> =
+        // <name>` line the file used before it had sections. Both are
+        // read: an /etc written by an earlier build is still somebody's
+        // machine, and a rule that silently stopped applying would show
+        // up as a card that renamed itself back.
+        if (etc_config_buf_get_in(buf, k, "name", out, cap) && out[0]) return 1;
+        if (etc_config_buf_get(buf, k, out, cap) && out[0]) return 1;
+    }
 
     // No explicit name: build one from the scheme. `kernel` is the
     // opt-out and is also what an unrecognised scheme falls back to --
@@ -113,6 +133,23 @@ static struct card *card_for(uint64_t mac) {
         if (g_cards[i].known && g_cards[i].mac == mac) return &g_cards[i];
     if (g_count >= MAX_CARDS) return 0;
     return &g_cards[g_count++];
+}
+
+// Does this card get a lease? Its own `dhcp = yes|no` if it declares
+// one, else the file's global `dhcp = all|none`.
+//
+// A per-card answer needs a per-card SECTION: before sections the card
+// WAS the key, so a card could carry exactly one fact -- its name.
+static int wants_dhcp(const struct etc_config_buf *buf,
+                      const struct query_netdev *d, const char *global) {
+    char key[24], v[8];
+    for (int i = 0; i < CARD_KEYS; i++) {
+        const char *k = card_key(d, i, key, sizeof key);
+        if (!k || !*k) continue;
+        if (!etc_config_buf_get_in(buf, k, "dhcp", v, sizeof v) || !v[0]) continue;
+        return strcmp(v, "no") != 0 && strcmp(v, "none") != 0 && strcmp(v, "0") != 0;
+    }
+    return strcmp(global, "all") == 0;
 }
 
 int main(int argc, char **argv) {
@@ -167,7 +204,7 @@ int main(int argc, char **argv) {
                 udhcp_init(&c->dhcp, c->name, mac);
             }
 
-            if (strcmp(want_dhcp, "all") != 0) continue;
+            if (!wants_dhcp(&conf, &d, want_dhcp)) continue;
 
             // CARRIER IS POLLED, NEVER WAITED ON. udhcp's own wait is
             // ten seconds, which is right for a command and would here

@@ -2690,3 +2690,67 @@ first, and so a refusal cannot leak the slot it took.
 reason, which meant an `O_TRUNC` open whose truncate failed handed back
 a descriptor over a file that still held its old contents. That is
 `-EIO` now.
+
+## A config file can have `[sections]`, and the section is an argument
+
+`etc_config` parses `[name]` headers now. Every key after one belongs to
+that section until the next header; a key before any header is at TOP
+LEVEL, which is what every file written before this is made of. The four
+unsuffixed entry points mean top level, so no existing file and no
+existing call site changed meaning.
+
+**Why an argument and not a dotted key.** git config parses sections and
+then flattens them: its API is one namespace, `section.key`. That was
+the cheaper option here by a wide margin — no new entry points, no call
+sites touched — and it was rejected because this project already spends
+the dot. `/etc/settings.d` files carry `Choice.losangeles=Los Angeles`
+and a setting is addressed `system.font_size`, so a flattened parser
+makes `[Choice] losangeles` and a literal `Choice.losangeles` the same
+query, with a precedence rule invisible at the call site. Identity here
+is `(section, key)`, and it is spelled that way: `etc_config_get_in`.
+That is GKeyFile's shape, and systemd units, NetworkManager keyfiles and
+`.desktop` entries are all read through it.
+
+**Sections earn their place where the NAME IS DATA.** Where a section
+name is a schema word the code already knows — `[Desktop Entry]`,
+`[Unit]` — a dotted key prefix does the same job, and the payoff is only
+compatibility with files written elsewhere. The case that could not be
+expressed any other way is `/etc/net.conf`: it keyed a card by its own
+MAC address, so a card could carry exactly one fact — its name — and
+`dhcp` could only ever be a machine-wide answer. A section per card
+carries `name` and its own `dhcp`, and `etc_config_section_count/_name`
+is how `/bin/netd` asks the FILE which cards it describes rather than
+knowing their names. Nothing else in the API needed enumeration; it was
+built with the parser rather than after it because retrofitting it would
+have meant a second pass over the writer.
+
+**A new key lands at the end of its own SECTION, not of the file.** The
+end is after that section's last `key=value` line — before any trailing
+comment block, because in every INI-shaped format a comment sitting
+above a header belongs to the section below it, and before the next
+header. Appending at EOF is the trivially correct rewriter and was
+rejected: it files the key under whatever section happens to be last, or
+grows a duplicate header per edit and forces the reader to declare
+first-wins or last-wins. A section that is not there yet is appended
+with its header; a top-level key in a sectioned file goes ABOVE the
+first header, which is the same rule stated for the top-level scope.
+
+Two things a caller has to know. **Removing the last key of a section
+leaves the header and its comments** — deleting what somebody wrote in
+order to tidy up what the machine wrote is the wrong trade. And a
+**section name the parser could not read back is refused at the write**
+(`[`, `]`, `#`, a newline, or over `ETC_CONFIG_SECTION_MAX`), because
+the key would otherwise land in whatever section came before it.
+
+**A repeated header is ONE section.** Both runs are searched for a key,
+and enumeration reports the name once, so a walk cannot hand the same
+card back twice. A name is a section, not a position.
+
+**One file per setting still stands.** `/etc/settings.d` was designed
+around not having sections, and the arguments for it were never only
+about the parser: a directory of small descriptors is what makes a
+setting's text addable one at a time and a malformed one cost exactly
+that setting. This does not reopen it. What it does retire is the half
+of that reasoning which said teaching the parser sections would change
+`etc_config_get(file, key)` at every call site — it did not, because the
+section is an added argument rather than a changed one.

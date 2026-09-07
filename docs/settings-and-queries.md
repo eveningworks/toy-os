@@ -248,7 +248,9 @@ to be unwieldy there gets its own `/etc/<name>.conf` and an
 
 The kernel says what a setting IS; `/etc/settings.d` says how it reads
 and looks. One file per setting, named by its qualified name, in
-`etc_config`'s ordinary `name=value` format — no sections, no new parser.
+`etc_config`'s ordinary `name=value` format. No section: the parser has
+them (`docs/decisions/storage.md`), and a directory of small descriptors
+is what removes the need for one here.
 
 ```
 # /etc/settings.d/system.mouse_accel

@@ -13,10 +13,11 @@
 // part that can be MISSING without breaking anything, which is what
 // makes a file safe here.
 //
-// THE FORMAT IS etc_config.c's, unchanged: `name=value` lines with `#`
-// comments. No sections, no new parser -- one file per setting is what
-// removes the need for them, and it is the convention this OS already
-// teaches with /etc/services.d, /etc/config.d and /usr/wm/desktop.
+// THE FORMAT IS etc_config.c's: `name=value` lines with `#` comments.
+// These files use NO section, even though the parser has them now -- one
+// file per setting is what removes the need, and it is the convention
+// this OS already teaches with /etc/services.d, /etc/config.d and
+// /usr/wm/desktop.
 //
 //   /etc/settings.d/system.mouse_speed
 //     Description=How far the pointer moves for a given hand movement

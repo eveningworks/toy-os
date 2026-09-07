@@ -55,6 +55,16 @@ or when the card is unplugged and put back.
     prefix = net        what a built name starts with
     dhcp   = all        which cards to lease for: all | none
 
+    [54:ee:75:71:8e:bf] one section per card, keyed by MAC, by
+    name = lan          location or by driver -- most specific wins
+    dhcp = no           overrules the global `dhcp` for this card
+
+**A CARD IS A SECTION, AND THAT IS WHAT LETS IT CARRY MORE THAN A NAME.**
+The file used to key a card directly (`54:ee:75:71:8e:bf = lan`), so a
+card could hold exactly one fact — its own name — and `dhcp` could only
+ever be a machine-wide answer. The flat form is still read, so a file
+written by an earlier build keeps working.
+
     54:ee:75:71:8e:bf = lan       this exact card, wherever it is plugged
     pci3.0            = builtin   whatever card is in that slot
     r8153             = usb       any card this driver claims
