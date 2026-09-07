@@ -946,7 +946,9 @@ void refresh_dim(void) {
     for (int i = 0; i < 2; i++) uui_fileview_clear_dimmed(&g_pane[i]);
     if (g_clip_op != UCLIP_CUT) return;
 
-    struct uclip c;
+    // STATIC: struct uclip embeds the whole 64 KiB payload, which is
+    // thirty times the ring-3 frame budget (lib/uclip.h).
+    static struct uclip c;
     uclip_load(&c);
     if (uclip_op(&c) != UCLIP_CUT) return;
 
@@ -1061,7 +1063,7 @@ int main(int argc, char **argv) {
     // app that opens after somebody else copied would show Paste greyed
     // until the next one.
     {
-        struct uclip c;
+        static struct uclip c;   // see refresh_dim() on why it is static
         uclip_load(&c);
         g_clip_op = uclip_op(&c);
     }

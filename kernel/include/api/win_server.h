@@ -218,10 +218,12 @@ int win_server_debug(int pid, struct win_debug_msg *msg);
 // The clipboard, as a header plus the buffer itself -- see the
 // definition for why it is not one message struct.
 void win_server_clip_get(uint32_t *op, uint32_t *count, uint32_t *len,
-                          uint32_t *serial);
+                          uint32_t *serial, uint32_t *kind);
 char *win_server_clip_buf(void);
-int win_server_clip_would_fit(uint32_t op, uint32_t count, uint32_t len);
-uint32_t win_server_clip_commit(uint32_t op, uint32_t count, uint32_t len);
+int win_server_clip_would_fit(uint32_t op, uint32_t count, uint32_t len,
+                               uint32_t kind);
+uint32_t win_server_clip_commit(uint32_t op, uint32_t count, uint32_t len,
+                                 uint32_t kind);
 
 // One event to every window AND to the compositor -- see the definition
 // for why the compositor needs saying separately.

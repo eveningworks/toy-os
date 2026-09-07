@@ -86,7 +86,9 @@ static int start_job(void);   // defined with the worker, below
 // do.
 static int clip_put(int op, const char *what) {
     struct uui_fileview *fv = active();
-    struct uclip c;
+    // STATIC: struct uclip embeds the whole 64 KiB payload, which is
+    // thirty times the ring-3 frame budget (lib/uclip.h).
+    static struct uclip c;
     uclip_begin(&c, op);
 
     int marks = uui_fileview_mark_count(fv);
@@ -121,7 +123,7 @@ void clip_cut(void)  { clip_put(UCLIP_CUT, "Cut"); }
 // The paste. The destination is the ACTIVE pane's directory -- where you
 // are -- which is both Explorer's rule and the commander's.
 void clip_paste(void) {
-    struct uclip c;
+    static struct uclip c;   // see clip_put() on why it is static
     uclip_load(&c);
     int op = uclip_op(&c), n = uclip_count(&c);
     ulogf("files: paste op=%d n=%d jobs=%d into %s\n", op, n, g_job_count,

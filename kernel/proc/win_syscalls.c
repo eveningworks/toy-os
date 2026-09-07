@@ -338,10 +338,10 @@ int sys_win_debug(struct syscall_ctx *c) {
     return 0;
 }
 
-// The clipboard. The message is a kilobyte, so the HEADER rides the
-// stack and the payload is copied straight in and out of the server's
-// own buffer -- see win_server_clip_get() for why neither a stack copy
-// nor a static scratch buffer would do.
+// The clipboard. The message is 64 KiB, so the HEADER rides the stack
+// and the payload is copied straight in and out of the server's own
+// buffer -- see win_server_clip_get() for why neither a stack copy nor
+// a static scratch buffer would do.
 #define CLIP_HDR_BYTES ((uint64_t)__builtin_offsetof(struct win_clip_msg, data))
 
 int sys_win_clip(struct syscall_ctx *c) {
@@ -360,7 +360,7 @@ int sys_win_clip(struct syscall_ctx *c) {
     // The whole message stays validated up front (above): a SET copies its
     // payload into the server's buffer BEFORE committing, and a refusal
     // must come before anything is half-copied.
-    struct { uint32_t type, op, count, len, serial, reserved; } hdr;
+    struct { uint32_t type, op, count, len, serial, kind; } hdr;
     if (!vmm_copy_from_user(pml4, &hdr, c->a0, sizeof hdr)) {
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
@@ -368,8 +368,8 @@ int sys_win_clip(struct syscall_ctx *c) {
 
     int rc = 0;
     if (hdr.type == WIN_REQ_CLIP_GET) {
-        win_server_clip_get(&hdr.op, &hdr.count, &hdr.len, &hdr.serial);
-        hdr.reserved = 0;
+        win_server_clip_get(&hdr.op, &hdr.count, &hdr.len, &hdr.serial,
+                             &hdr.kind);
         int ok = vmm_copy_to_user(pml4, c->a0, &hdr, sizeof hdr);
         if (ok && hdr.len)
             ok = vmm_copy_to_user(pml4, c->a0 + CLIP_HDR_BYTES,
@@ -378,13 +378,14 @@ int sys_win_clip(struct syscall_ctx *c) {
     } else if (hdr.type == WIN_REQ_CLIP_SET) {
         // Validated BEFORE anything is copied, so a refusal cannot
         // leave half a payload in the buffer.
-        if (win_server_clip_would_fit(hdr.op, hdr.count, hdr.len)) {
+        if (win_server_clip_would_fit(hdr.op, hdr.count, hdr.len, hdr.kind)) {
             if (!vmm_copy_from_user(pml4, win_server_clip_buf(),
                                      c->a0 + CLIP_HDR_BYTES, hdr.len)) {
                 c->regs[14] = (uint64_t)(int64_t)-EFAULT;
                 return 0;
             }
-            hdr.serial = win_server_clip_commit(hdr.op, hdr.count, hdr.len);
+            hdr.serial = win_server_clip_commit(hdr.op, hdr.count, hdr.len,
+                                                 hdr.kind);
             rc = vmm_copy_to_user(pml4, c->a0, &hdr, sizeof hdr) ? 1 : -EFAULT;
         }
     }

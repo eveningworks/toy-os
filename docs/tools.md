@@ -1671,6 +1671,37 @@ window without going through it will find its layout polls timing out.
   entry-shaped regex rather than `split()[-1]`; and a reference
   screenshot must park the caret first, since `load_file()` resets the
   cursor to 0 and a caret bar is a real pixel difference.
+- **`clipboard_test.py`** -- drives the system TEXT clipboard across two
+  apps, which is the claim that makes it a system clipboard rather than
+  a feature of one: text copied in Notepad pastes into the GUI Terminal,
+  which shares no code with it.
+
+  **Four checks, in an order where each leaves what the next needs.** A
+  paste with NOTHING on the clipboard runs first, while that is still
+  true, and must change the document not at all -- the check that a
+  `kind` field earns, since without one a file path would paste as a
+  line of text. Then a round trip through the DISK rather than through
+  pixels: copy, paste, save, and read the file back with `sh cat`, an
+  independent path that shares nothing with the editor that wrote it,
+  requiring the phrase TWICE. Then the cross-app paste, asserted as a
+  BAND -- the change must be contiguous and near the top, where a shell
+  prompt is, so a paste that scattered ink down the grid fails while
+  "something changed" would pass. Then an oversized copy: Select All in
+  `pci.ids` (1.6 MB) asks for far more than `WIN_CLIP_BYTES`, and the
+  clipboard must still hold what the round trip put there -- a
+  truncating clipboard would replace it with the first 64 KB of
+  pci.ids, which is the failure the refusal exists to prevent.
+
+  **A trap it encodes: counting dark pixels is backwards over the
+  Terminal**, whose grid is white on black -- there every pixel is
+  "ink" and text REDUCES the count, which reported a paste that had
+  plainly landed as nothing having happened. Anything over a dark app
+  compares two shots instead, which does not care which way round the
+  colours are.
+
+  Positive control: making `uclip_set_text()` return 0 without sending
+  reddens four of the five checks and leaves the empty-clipboard one
+  green, which is the right split.
 - **`uiclient_test.py`** -- drives `userland/tests/uiclient.c`, the ring-3
   client that renders real text with `userland/ui/ugfx.c`, and asserts on
   it (8 checks: text actually rendered, the button drew, a click and a

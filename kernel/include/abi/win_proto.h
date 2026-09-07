@@ -887,9 +887,18 @@ struct win_event {
 // then survives the source exiting AND the compositor being killed.
 // See docs/decisions.md.
 //
-// FILES, NOT TEXT, for now: the payload is a packed list of paths, the
-// shape `text/uri-list` has on a real desktop. A text clipboard is the
-// same buffer with a different `kind` when something needs one.
+// **TWO KINDS, ONE BUFFER**, named by `kind`: a packed list of absolute
+// paths (`text/uri-list`'s shape on a real desktop), or one run of
+// plain text. The kinds do not coexist -- a SET replaces whatever was
+// there, so copying text discards a pending cut of files and the
+// broadcast tells every client so. That is what X11, Wayland and Win32
+// all do for the CLIPBOARD selection.
+//
+// There is no type NEGOTIATION and no list of offered formats. Those
+// exist so a source can offer HTML and plain text and let the paster
+// pick; here the source knows what it copied and the payload is already
+// a copy in the server, so a `kind` field is the whole mechanism. It
+// occupies the word that was `reserved` for exactly this.
 #define WIN_REQ_CLIP_SET   26 // Replace the clipboard. Returns 0 if the
                            // payload does not fit -- a REFUSAL, never a
                            // truncation: half a cut set pasted is files
@@ -904,8 +913,23 @@ struct win_event {
                            // Dolphin, so the files are still where they
                            // were until then.
 
-#define WIN_CLIP_BYTES 1024 // the packed payload's cap
-#define WIN_CLIP_MAX   64   // and how many entries it may name
+#define WIN_CLIP_KIND_FILES 0 // absolute paths, `count` of them
+#define WIN_CLIP_KIND_TEXT  1 // one NUL-terminated run of text, count 1
+
+// **A CEILING, AND A REFUSAL AT IT.** 64 KiB holds any list of paths
+// and any realistic text selection -- roughly eight hundred lines --
+// and a copy larger than this is refused with a message rather than
+// pasted short. Windows Notepad's historical file limit was the same
+// number for the same reason: somewhere a person can be told about.
+//
+// THE COST IS A STACK FRAME. `struct win_clip_msg` embeds the payload,
+// so a ring-3 caller must hold one STATICALLY -- a local is 64 KiB
+// against a 2 KiB frame budget and a 16 KiB stack. That is a build
+// failure (`-Wframe-larger-than`), not a silent one, which is why the
+// struct is allowed to stay this shape. The kernel side only ever puts
+// the 24-byte header on its stack.
+#define WIN_CLIP_BYTES 65536 // the packed payload's cap
+#define WIN_CLIP_MAX   64    // and how many entries it may name
 
 struct win_clip_msg {
     uint32_t type;   // WIN_REQ_CLIP_SET / WIN_REQ_CLIP_GET
@@ -919,11 +943,12 @@ struct win_clip_msg {
     // is both slower and wrong (copying the same file twice is a real
     // change to the cut/copy mode).
     uint32_t serial;
-    uint32_t reserved; // must be 0; keeps the struct 8-byte aligned
+    uint32_t kind;   // WIN_CLIP_KIND_*; FILES is 0, so a zeroed message
+                     // means what every caller before this field meant
 
-    // `count` NUL-terminated strings, packed end to end. Absolute paths
-    // for the file kinds; the same field carries text when a text
-    // clipboard lands.
+    // `count` NUL-terminated strings, packed end to end -- absolute
+    // paths when the kind is FILES, and a single run of text (count 1,
+    // its NUL included in `len`) when it is TEXT.
     char data[WIN_CLIP_BYTES];
 };
 

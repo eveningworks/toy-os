@@ -200,6 +200,7 @@ static struct {
     uint32_t count;
     uint32_t len;     // bytes of `data` in use, NULs included
     uint32_t serial;  // bumped per SET, never reused
+    uint32_t kind;    // WIN_CLIP_KIND_*
     char data[WIN_CLIP_BYTES];
 } g_clip;
 
@@ -1085,18 +1086,20 @@ static int debug_via_compositor(const char *line, char *out, int cap) {
 // copies the payload straight in and out of the one buffer that has to
 // exist anyway, and only the 24-byte header rides the stack.
 void win_server_clip_get(uint32_t *op, uint32_t *count, uint32_t *len,
-                          uint32_t *serial) {
+                          uint32_t *serial, uint32_t *kind) {
     if (op) *op = g_clip.op;
     if (count) *count = g_clip.count;
     if (len) *len = g_clip.len;
     if (serial) *serial = g_clip.serial;
+    if (kind) *kind = g_clip.kind;
 }
 
 char *win_server_clip_buf(void) { return g_clip.data; }
 
 // Checked BEFORE the caller copies anything in, so a refusal cannot
 // leave half a payload in the buffer.
-int win_server_clip_would_fit(uint32_t op, uint32_t count, uint32_t len) {
+int win_server_clip_would_fit(uint32_t op, uint32_t count, uint32_t len,
+                               uint32_t kind) {
     if (len > WIN_CLIP_BYTES || count > WIN_CLIP_MAX) {
         // REFUSED, not truncated. Half a cut set pasted is files
         // silently left behind -- the same rule as a formatter that
@@ -1104,15 +1107,33 @@ int win_server_clip_would_fit(uint32_t op, uint32_t count, uint32_t len) {
         klog_write("win: clipboard SET refused -- payload too large\n");
         return 0;
     }
+    if (kind != WIN_CLIP_KIND_FILES && kind != WIN_CLIP_KIND_TEXT) {
+        klog_write("win: clipboard SET refused -- unknown kind\n");
+        return 0;
+    }
+    // TEXT IS ONE ENTRY, and saying so here is what stops a client
+    // packing several runs into a payload nothing knows how to walk.
+    if (kind == WIN_CLIP_KIND_TEXT && count > 1) {
+        klog_write("win: clipboard SET refused -- text is one entry\n");
+        return 0;
+    }
+    // A CUT is a promise to MOVE, which means nothing for text: there
+    // is no source to remove it from once the copy is in the server.
+    if (kind == WIN_CLIP_KIND_TEXT && op == WIN_CLIP_OP_CUT) {
+        klog_write("win: clipboard SET refused -- text cannot be cut\n");
+        return 0;
+    }
     return op == WIN_CLIP_OP_NONE || op == WIN_CLIP_OP_COPY ||
            op == WIN_CLIP_OP_CUT;
 }
 
 // Called once the payload is in the buffer. Returns the new serial.
-uint32_t win_server_clip_commit(uint32_t op, uint32_t count, uint32_t len) {
+uint32_t win_server_clip_commit(uint32_t op, uint32_t count, uint32_t len,
+                                 uint32_t kind) {
     g_clip.op = op;
     g_clip.count = count;
     g_clip.len = len;
+    g_clip.kind = kind;
     // Bumped per SET and never reused: it is how a client notices that
     // somebody else replaced the clipboard under it. Comparing payloads
     // would be slower and wrong -- copying the same file twice is a

@@ -48,6 +48,7 @@
 #include "ui/utext.h"
 #include "ui/utheme.h"
 #include "lib/ufile.h"
+#include "lib/uclip.h"
 #include "keyboard.h" // KEY_* codes, the same ones the WM delivers
 
 #define WIN_W 560
@@ -72,6 +73,7 @@
 #define ID_DIALOG   3
 #define ID_DLG_LIST 4
 #define ID_DLG_NAME 5
+#define ID_CTX      6
 
 // --- menu command codes -----------------------------------------------
 //
@@ -92,6 +94,9 @@
 #define CMD_GOTO_TOP   13
 #define CMD_GOTO_END   14
 #define CMD_STATUSBAR  15
+#define CMD_CUT        16
+#define CMD_COPY       17
+#define CMD_PASTE      18
 
 // The dialog's own codes -- a different widget, so a different space.
 #define CMD_DLG_OK     1
@@ -148,6 +153,7 @@ static char g_recent[RECENT_MAX][PATH_MAX_LEN];
 static int g_recent_count;
 
 static struct uui_menubar g_menu;
+static struct uui_menubar g_ctx;   // the context menu -- no bar of its own
 static struct uui_statusbar g_statusbar;
 static char g_lncol[20];
 static char g_modflag[8];
@@ -172,8 +178,25 @@ static const struct uui_menu_item file_items[] = {
 };
 
 static const struct uui_menu_item edit_items[] = {
+    UUI_MENU("Cut",              CMD_CUT,        "Ctrl-X"),
+    UUI_MENU("Copy",             CMD_COPY,       "Ctrl-C"),
+    UUI_MENU("Paste",            CMD_PASTE,      "Ctrl-V"),
+    UUI_MENU_SEP,
     UUI_MENU("Select All",       CMD_SELECT_ALL, "Ctrl-A"),
     UUI_MENU("Delete Selection", CMD_DELETE,     "Del"),
+};
+
+// THE CONTEXT MENU IS THE SAME WIDGET WITH NO BAR (ui/uui_menubar.h),
+// opened at the pointer. Its rows are the Edit menu's, because a
+// context menu offering a different set of the same verbs is how the
+// two drift apart -- and they are the rows every desktop puts there.
+static const struct uui_menu_item ctx_items[] = {
+    UUI_MENU("Cut",        CMD_CUT,        "Ctrl-X"),
+    UUI_MENU("Copy",       CMD_COPY,       "Ctrl-C"),
+    UUI_MENU("Paste",      CMD_PASTE,      "Ctrl-V"),
+    UUI_MENU_SEP,
+    UUI_MENU("Select All", CMD_SELECT_ALL, "Ctrl-A"),
+    UUI_MENU("Delete",     CMD_DELETE,     "Del"),
 };
 
 static const struct uui_menu_item goto_items[] = {
@@ -230,6 +253,9 @@ static const char *const g_dlg_rows[1] = { g_dlg_row };
 static struct uui_item g_widgets[] = {
     { .ops = &uui_menubar_ops,   .widget = &g_menu,      .id = ID_MENU,   .name = "menu" },
     { .ops = &uui_statusbar_ops, .widget = &g_statusbar, .id = ID_STATUS, .name = "status" },
+    // AFTER the bars, so it is hit-tested first: input order is the
+    // reverse of draw order, and its popup covers whatever is under it.
+    { .ops = &uui_menubar_ops,   .widget = &g_ctx,       .id = ID_CTX,    .name = "ctxmenu" },
     { .ops = &uui_dialog_ops,    .widget = &g_dialog,    .id = ID_DIALOG, .name = "dialog" },
 };
 
@@ -379,6 +405,7 @@ static void layout_chrome(int cw, int ch) {
     uui_menubar_set_bounds(&g_menu, 0, 0, cw, ch);
     uui_statusbar_set_geometry(&g_statusbar, 0, ch - statusbar_h(), cw, statusbar_h());
     WIDGET(ID_STATUS)->hidden = !g_show_status;
+    uui_menubar_set_bounds(&g_ctx, 0, 0, cw, ch);
     uui_dialog_set_bounds(&g_dialog, 0, 0, cw, ch);
 }
 
@@ -393,6 +420,77 @@ static void update_indicators(void) {
     }
     snprintf(g_lncol, sizeof g_lncol, "Ln %d, Col %d", line, col);
     strlcpy(g_modflag, g_dirty ? "MOD" : "--", sizeof g_modflag);
+}
+
+// --- the clipboard ----------------------------------------------------
+//
+// **THE KEYS ARE THIS APP'S, NOT THE WM's** (docs/decisions/gui.md):
+// Ctrl+C is INTR in a terminal, so a compositor that grabbed it would
+// take interrupt away from the GUI Terminal. Every client binds them
+// itself, and Windows takes the same view.
+
+// STATIC: struct uclip embeds the whole 64 KiB payload (lib/uclip.h).
+static struct uclip g_clip;
+
+// Whether the clipboard holds TEXT, kept current by on_clipboard().
+// Cached rather than asked, because menu_item_flags() runs on every
+// draw and every hit test, and a syscall per row per frame to grey out
+// one item would be absurd.
+static int g_clip_has_text;
+
+static void clip_refresh(void) {
+    uclip_load(&g_clip);
+    g_clip_has_text = uclip_text(&g_clip, NULL) != 0;
+}
+
+// Returns 1 if the selection actually reached the clipboard -- which is
+// what Cut has to know before it deletes anything.
+static int do_copy(void) {
+    if (!utext_sel_present(&g_text)) { set_status("nothing selected"); return 0; }
+    int n = utext_sel_text(&g_text, 0, 0);   // the TRUE length first
+    if (n > UCLIP_TEXT_MAX) {
+        // A REFUSAL SAID OUT LOUD. Silence is the one outcome a Copy
+        // must never have: the person pastes, gets whatever they copied
+        // an hour ago, and has nothing to explain it.
+        snprintf(g_status, sizeof g_status,
+                  "selection too large to copy: %d KB, limit %d KB",
+                  n / 1024, (UCLIP_TEXT_MAX + 1) / 1024);
+        return 0;
+    }
+    char *tmp = (char *)malloc((size_t)n + 1);
+    if (!tmp) { set_status("out of memory"); return 0; }
+    utext_sel_text(&g_text, tmp, n + 1);
+    int ok = uclip_set_text(tmp, n);
+    free(tmp);
+    if (!ok) { set_status("copy refused"); return 0; }
+    snprintf(g_status, sizeof g_status, "copied %d character%s", n, n == 1 ? "" : "s");
+    g_clip_has_text = 1;   // the broadcast confirms it; this is for THIS frame
+    return 1;
+}
+
+// CUT IS COPY THEN DELETE, and the delete happens only if the copy
+// landed -- a refused copy that still destroyed the selection would
+// lose the text outright. There is no UCLIP_CUT here: a cut of FILES is
+// a promise to move them on the paste, and text has no source left to
+// move once the server holds a copy of it.
+static void do_cut(void) {
+    if (!do_copy()) return;
+    utext_sel_delete(&g_text);
+    g_dirty = 1;
+    set_status("cut");
+}
+
+static void do_paste(void) {
+    clip_refresh();
+    int n = 0;
+    const char *txt = uclip_text(&g_clip, &n);
+    if (!txt || n == 0) { set_status("clipboard holds no text"); return; }
+    int put = utext_insert_text(&g_text, txt, n);
+    g_dirty = 1;
+    if (put < n)
+        snprintf(g_status, sizeof g_status, "pasted %d of %d -- document full", put, n);
+    else
+        snprintf(g_status, sizeof g_status, "pasted %d character%s", put, put == 1 ? "" : "s");
 }
 
 // --- item state -------------------------------------------------------
@@ -413,6 +511,11 @@ static unsigned menu_item_flags(int code) {
     case CMD_RECENT_2: return g_recent_count > 2 ? 0 : UUI_MI_DISABLED;
     case CMD_STATUSBAR:
         return g_show_status ? UUI_MI_CHECKED : 0;
+    case CMD_CUT:
+    case CMD_COPY:
+        return utext_sel_present(&g_text) ? 0 : UUI_MI_DISABLED;
+    case CMD_PASTE:
+        return g_clip_has_text ? 0 : UUI_MI_DISABLED;
     default:
         return 0;
     }
@@ -460,7 +563,8 @@ static void draw_document(struct ugfx_surface *s, int focused) {
                 // taking input that is going somewhere else -- see TWP's
                 // WIN_EV_FOCUS.
                 UTHEME_TEXT, UTHEME_WHITE, ugfx_rgb(205, 220, 240),
-                focused && !uui_dialog_is_open(&g_dialog) && !uui_menubar_is_open(&g_menu));
+                focused && !uui_dialog_is_open(&g_dialog) &&
+                    !uui_menubar_is_open(&g_menu) && !uui_menubar_is_open(&g_ctx));
     draw_scrollbar(s, tx, ty, tw, th);
 }
 
@@ -623,6 +727,15 @@ static void do_command(struct uapp *a, int code) {
     case CMD_STATUSBAR:
         g_show_status = !g_show_status;
         break;
+    case CMD_CUT:
+        do_cut();
+        break;
+    case CMD_COPY:
+        do_copy();
+        break;
+    case CMD_PASTE:
+        do_paste();
+        break;
     default:
         break;
     }
@@ -637,6 +750,9 @@ static int accelerator(struct uapp *a, int key) {
     case 0x0F: do_command(a, CMD_OPEN);       return 1; // Ctrl-O
     case 0x13: do_command(a, CMD_SAVE);       return 1; // Ctrl-S
     case 0x01: do_command(a, CMD_SELECT_ALL); return 1; // Ctrl-A
+    case 0x18: do_command(a, CMD_CUT);        return 1; // Ctrl-X
+    case 0x03: do_command(a, CMD_COPY);       return 1; // Ctrl-C
+    case 0x16: do_command(a, CMD_PASTE);      return 1; // Ctrl-V
     default:   return 0;
     }
 }
@@ -712,6 +828,11 @@ static void on_widget(struct uapp *a, int id, int reason) {
         if (code > 0) do_command(a, code);
         break;
     }
+    case ID_CTX: {
+        int code = uui_menubar_take_code(&g_ctx);
+        if (code > 0) do_command(a, code);
+        break;
+    }
     case ID_DIALOG: {
         int code = uui_dialog_take_code(&g_dialog);
         if (code > 0) dialog_answer(a, code);
@@ -734,7 +855,15 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // An open dialog never reaches here: the router hands it every key
     // first (ui/uui_route.h). An open menu does -- its ops table has
     // no key slot -- and when closed it takes only F10.
+    // AN OPEN POPUP TAKES THE KEY, wherever the app thinks it is
+    // (CLAUDE.md). The context menu is asked first; the bar is closed
+    // whenever this one is open.
     int code = 0;
+    if (uui_menubar_key(&g_ctx, key, &code)) {
+        if (code > 0) do_command(a, code);
+        uapp_redraw(a);
+        return;
+    }
     if (uui_menubar_key(&g_menu, key, &code)) {
         if (code > 0) do_command(a, code);
         uapp_redraw(a);
@@ -752,6 +881,13 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // asks through the same handshake the X button uses, so this app's
     // on_close (uapp's default, accept) still decides.
     editor_key(key);
+    // THE CARET STAYS ON SCREEN. Typing, arrowing or pasting somewhere
+    // the view is not looking has to bring the view along -- without
+    // this, typing at the caret after scrolling elsewhere changes the
+    // document with nothing visible happening.
+    int tx, ty, tw, th;
+    text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
+    utext_reveal_cursor(&g_text, tw, th);
     uapp_redraw(a);
 }
 
@@ -809,10 +945,29 @@ static void on_wheel(struct uapp *a, int notches) {
     uapp_redraw(a);
 }
 
+// A SECONDARY CLICK ARMS THE CONTEXT MENU; it opens on the RELEASE, as
+// ui/uui_menubar.h requires and every desktop does.
+static int g_ctx_armed;
+static int g_ctx_x, g_ctx_y;
+
 static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
-    (void)buttons;
     if (g_press_taken) { g_press_taken = 0; return; }
     if (uui_dialog_is_open(&g_dialog)) return; // a secondary press; the modal keeps it
+
+    if (buttons & 0x2) {
+        if (uui_menubar_is_open(&g_ctx)) {
+            uui_menubar_close(&g_ctx);   // a second right-click dismisses
+        } else {
+            uui_menubar_close(&g_menu);  // one popup at a time
+            g_ctx_armed = 1;
+            g_ctx_x = x;
+            g_ctx_y = y;
+        }
+        uapp_redraw(a);
+        return;   // NEVER moves the caret: a secondary click acts on the
+                  // selection that is already there, and collapsing it
+                  // would leave Cut and Copy greyed the moment you ask.
+    }
 
     int tx, ty, tw, th;
     text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
@@ -865,6 +1020,13 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
     (void)x; (void)y; (void)buttons;
     g_dragging = 0;
     g_scrollbar_drag = 0;
+    if (g_ctx_armed) {
+        g_ctx_armed = 0;
+        if (!uui_dialog_is_open(&g_dialog))
+            uui_menubar_open_at(&g_ctx, ctx_items,
+                                 (int)(sizeof ctx_items / sizeof ctx_items[0]),
+                                 g_ctx_x, g_ctx_y);
+    }
     uapp_redraw(a);
 }
 
@@ -873,6 +1035,14 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
 // File Manager started spawning this with a path (a .desktop `Handles=`
 // entry claims .txt and friends, see data/wm/desktop/README.md).
 static char g_arg_path[PATH_MAX_LEN];
+
+// Somebody replaced the clipboard -- possibly this app. Paste greys and
+// ungreys with it, which is the whole reason the event exists.
+static void on_clipboard_cb(struct uapp *a, int op, unsigned serial) {
+    (void)op; (void)serial;
+    clip_refresh();
+    uapp_redraw(a);
+}
 
 static void on_open_cb(struct uapp *a) {
     g_app = a;
@@ -886,6 +1056,11 @@ static void on_open_cb(struct uapp *a) {
 
     uui_menubar_init(&g_menu, menu_bar, (int)(sizeof menu_bar / sizeof menu_bar[0]));
     g_menu.item_flags = menu_item_flags;
+
+    // No bar of its own: uui_menubar_open_at() supplies the rows.
+    uui_menubar_init(&g_ctx, 0, 0);
+    g_ctx.item_flags = menu_item_flags;
+    clip_refresh();   // the broadcast only fires on a CHANGE, so ask once
 
     uui_statusbar_init(&g_statusbar);
     g_statusbar.count = 3;
@@ -942,6 +1117,7 @@ int main(int argc, char **argv) {
         .on_motion    = on_motion,
         .on_release   = on_release,
         .on_wheel     = on_wheel,
+        .on_clipboard = on_clipboard_cb,
     };
     return uapp_run(&desc);
 }

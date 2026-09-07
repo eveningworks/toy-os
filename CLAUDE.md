@@ -1397,6 +1397,7 @@ cost".
 - **GUI tools**, all run by `gui_regress.py` -- `blank_window_test.py`,
   `brightness_test.py`, `modeset_test.py`,
   `calculator_client_test.py`, `calendar_test.py`,
+  `clipboard_test.py`,
   `compositor_test.py`, `compositor_death_test.py`, `crashtest_test.py`,
   `cursor_theme_test.py`, `desktop_entries_test.py`, `dialog_test.py`,
   `filemanager_test.py`, `font_test.py`, `forcequit_test.py`,

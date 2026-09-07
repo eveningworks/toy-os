@@ -74,6 +74,7 @@
 #include "ui/uui.h"
 #include "ui/uapp.h"
 #include "ui/utheme.h"
+#include "lib/uclip.h"
 #include "ui/ulog.h"
 #include "ui/uui_tabs.h"
 #include "ui/uui_menubar.h"
@@ -201,10 +202,18 @@ static int g_ntabs;
 
 // --- the menu bar -----------------------------------------------------
 //
-// **THERE IS NO EDIT MENU, AND THAT IS NOT AN OVERSIGHT.** Copy and
-// Paste are what an Edit menu is for and this OS has no clipboard at
-// all (docs/conventions/gui.md), so the menu would be two permanently
-// greyed rows advertising something that does not exist.
+// **THE EDIT MENU IS PASTE AND ONLY PASTE.** There is a system text
+// clipboard now (lib/uclip.h), and pasting into a terminal is typing:
+// the characters go to the pty as bytes, so the shell's own line editor
+// sees them exactly as it would a fast typist. COPY is missing because
+// this terminal has no SELECTION -- the grid can be read but not
+// marked, and a Copy row that could only ever copy nothing would be
+// worse than no row. Selecting text in the grid is a roadmap item.
+//
+// **Ctrl+Shift+V, not Ctrl+V**, because Ctrl+V is a control code the
+// shell may want (and in a full-screen program certainly does). Konsole,
+// GNOME Terminal and Windows Terminal all shift the paste binding for
+// the same reason.
 //
 // The bar can be hidden, as Konsole's can, because a terminal is the one
 // app where a row of chrome is a row of the product. **F10 brings it
@@ -212,7 +221,7 @@ static int g_ntabs;
 // folds 'M' to 0x0D and the binding would be indistinguishable from
 // Shift+Enter (api/keyboard.h).
 enum {
-    CMD_NEW_TAB = 1, CMD_CLOSE_TAB, CMD_EXIT,
+    CMD_NEW_TAB = 1, CMD_CLOSE_TAB, CMD_EXIT, CMD_PASTE,
     CMD_RENAME, CMD_CLEAR_SCREEN, CMD_CLEAR_SB, CMD_RESET,
     CMD_INTR, CMD_EOF,
     CMD_TOP, CMD_BOTTOM, CMD_MENUBAR,
@@ -237,6 +246,10 @@ static const struct uui_menu_item term_items[] = {
     UUI_MENU("Send EOF",       CMD_EOF,  "Ctrl-D"),
 };
 
+static const struct uui_menu_item edit_items[] = {
+    UUI_MENU("Paste", CMD_PASTE, "Ctrl+Shift+V"),
+};
+
 static const struct uui_menu_item view_items[] = {
     UUI_MENU("Scroll to Top",    CMD_TOP,    "PgUp"),
     UUI_MENU("Scroll to Bottom", CMD_BOTTOM, "PgDn"),
@@ -251,6 +264,7 @@ static const struct uui_menu_item tabs_items[] = {
 
 static const struct uui_menu_item menu_bar[] = {
     UUI_SUBMENU("File",     file_items),
+    UUI_SUBMENU("Edit",     edit_items),
     UUI_SUBMENU("Terminal", term_items),
     UUI_SUBMENU("View",     view_items),
     UUI_SUBMENU("Tabs",     tabs_items),
@@ -1181,6 +1195,7 @@ static void reap_dead_tabs(void) {
 // plus Shift is the only way to spell these here.
 #define CTRL_SHIFT_T 0x14
 #define CTRL_SHIFT_W 0x17
+#define CTRL_SHIFT_V 0x16
 
 // One byte to the shell, the way a keystroke would arrive. THE MENU
 // SENDS THE SAME BYTE THE KEY DOES rather than reaching for
@@ -1191,11 +1206,39 @@ static void send_byte(char b) {
     if (s && s->master >= 0) sys_write(s->master, &b, 1);
 }
 
+// PASTING INTO A TERMINAL IS TYPING. The characters go to the pty as
+// bytes, so the shell's line editor sees them exactly as it would a
+// very fast typist -- there is nothing terminal-specific to do, and
+// nothing to interpret on this side.
+//
+// STATIC: struct uclip embeds the whole 64 KiB payload (lib/uclip.h).
+static struct uclip g_clip;
+static int g_clip_has_text;
+
+static void clip_refresh(void) {
+    uclip_load(&g_clip);
+    g_clip_has_text = uclip_text(&g_clip, NULL) != 0;
+}
+
+static void do_paste(void) {
+    struct session *s = active();
+    if (!s || s->master < 0) return;
+    clip_refresh();
+    int n = 0;
+    const char *txt = uclip_text(&g_clip, &n);
+    if (!txt || n == 0) return;
+    // ONE write, not one per character: a syscall per byte for a
+    // pasted paragraph is thousands of kernel entries, and the pty
+    // takes the run happily.
+    sys_write(s->master, txt, (size_t)n);
+}
+
 static unsigned menu_item_flags(int code) {
     switch (code) {
     case CMD_MENUBAR:   return g_menu_shown ? UUI_MI_CHECKED : 0;
     case CMD_NEXT_TAB:
     case CMD_PREV_TAB:  return g_ntabs > 1 ? 0 : UUI_MI_DISABLED;
+    case CMD_PASTE:     return g_clip_has_text ? 0 : UUI_MI_DISABLED;
     default:            return 0;
     }
 }
@@ -1206,6 +1249,14 @@ static void step_tab(int delta) {
     if (next < 0) next = g_ntabs - 1;          // wraps, as Konsole does
     if (next >= g_ntabs) next = 0;
     uui_tabs_select(&g_strip, next);
+}
+
+// Somebody replaced the clipboard. Paste greys and ungreys with it,
+// which is the whole reason the event exists.
+static void on_clipboard_cb(struct uapp *a, int op, unsigned serial) {
+    (void)op; (void)serial;
+    clip_refresh();
+    uapp_redraw(a);
 }
 
 static void do_command(struct uapp *a, int code) {
@@ -1234,6 +1285,7 @@ static void do_command(struct uapp *a, int code) {
             s->sb_view = 0;
         }
         break;
+    case CMD_PASTE:     do_paste(); break;
     case CMD_INTR:      send_byte(0x03); break;
     case CMD_EOF:       send_byte(0x04); break;
     case CMD_TOP:       if (s) s->sb_view = s->sb_count; break;
@@ -1279,6 +1331,11 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // --- the tab bindings, which are Konsole's ------------------------
     if ((mods & KEY_MOD_SHIFT) && key == CTRL_SHIFT_T) {
         if (open_tab()) uapp_redraw(a);
+        return;
+    }
+    if ((mods & KEY_MOD_SHIFT) && key == CTRL_SHIFT_V) {
+        do_paste();
+        uapp_redraw(a);
         return;
     }
     if ((mods & KEY_MOD_SHIFT) && key == CTRL_SHIFT_W) {
@@ -1397,6 +1454,7 @@ static void on_open_cb(struct uapp *a) {
     g_strip.show_new  = 1;
     g_strip.numbered  = 1;   // every tab in one directory reports the same title
 
+    clip_refresh();   // the broadcast only fires on a CHANGE, so ask once
     uui_menubar_init(&g_menu, menu_bar,
                       (int)(sizeof menu_bar / sizeof menu_bar[0]));
     g_menu.item_flags = menu_item_flags;
@@ -1449,6 +1507,7 @@ int main(void) {
         .on_widget = on_widget,
         .on_press = on_press,
         .on_key  = on_key,
+        .on_clipboard = on_clipboard_cb,
         .on_user = on_user,
         .on_wheel = on_wheel,
         .on_resize = on_resize,
