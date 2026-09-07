@@ -165,8 +165,17 @@ void tty_get_winsize(struct tty *t, struct tty_winsize *out) {
     *out = t->ws;
 }
 
+// **A RESIZE IS A SIGNAL, and only when the size actually MOVED.** A
+// terminal emulator calls this on every window event it gets, so raising
+// SIGWINCH unconditionally would interrupt the foreground program's
+// blocking read once per frame of a drag.
+//
+// The whole GROUP, as with SIGTTIN: a pipeline is resized, not a process.
 void tty_set_winsize(struct tty *t, const struct tty_winsize *ws) {
-    if (t && ws) t->ws = *ws;
+    if (!t || !ws) return;
+    int moved = (t->ws.rows != ws->rows || t->ws.cols != ws->cols);
+    t->ws = *ws;
+    if (moved && t->fg_pgid) signal_send_group(t->fg_pgid, SIGWINCH);
 }
 
 void tty_get_termios(const struct tty *t, struct tty_termios *out) {

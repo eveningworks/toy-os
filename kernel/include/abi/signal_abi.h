@@ -47,6 +47,9 @@
 #define SIGTTIN 21  // a BACKGROUND process tried to read the terminal.
                     // Default action: stop, so it waits its turn
                     // instead of stealing the keyboard from the shell
+#define SIGWINCH 28 // the terminal's size changed. Default action:
+                    // IGNORE, as on Unix -- a program that does not
+                    // redraw must not die of a window drag
 
 // The highest signal number this kernel accepts. The pending set is a
 // uint32_t bitmask, so 31 is the ceiling the representation allows and

@@ -39,12 +39,14 @@
 
 // Does `sig`'s DEFAULT action terminate the process?
 //
-// One entry differs and it is the one that matters: SIGCHLD's default is
-// to be ignored, which is what makes it safe to send on every child exit
-// without every existing program having to learn about it. Unix made the
-// same call, and for the same reason.
+// TWO entries differ, and both are signals the system raises on its own
+// rather than at anybody's request: SIGCHLD on every child exit and
+// SIGWINCH on every window drag. Ignoring them by default is what makes
+// them safe to send to programs that have never heard of them. Unix made
+// the same call, for the same reason.
 static int default_terminates(int sig) {
-    return sig != SIGCHLD && !SIGNAL_STOPS(sig) && !SIGNAL_CONTINUES(sig);
+    return sig != SIGCHLD && sig != SIGWINCH &&
+           !SIGNAL_STOPS(sig) && !SIGNAL_CONTINUES(sig);
 }
 
 int signal_send(int pid, int sig) {
@@ -110,12 +112,11 @@ int signal_send(int pid, int sig) {
     // it dropped the signal for a process that had installed a HANDLER
     // and let one through for a process that had explicitly set SIG_IGN
     // (where scheduler_signal_raise() then dropped it anyway, so the
-    // second half was merely wasted work). SIGCHLD is the only signal
-    // that can reach this branch -- stop and continue return above, and
-    // everything else terminates -- and nothing sent a SIGCHLD until the
-    // scheduler started doing it on every child death, so the inversion
-    // sat here unexercised. Found by the first check that asked a
-    // handler to run.
+    // second half was merely wasted work). Only SIGCHLD and SIGWINCH
+    // reach this branch -- stop and continue return above, and everything
+    // else terminates -- and nothing sent a SIGCHLD until the scheduler
+    // started doing it on every child death, so the inversion sat here
+    // unexercised. Found by the first check that asked a handler to run.
     if (!default_terminates(sig)) {
         struct k_sigaction act;
         if (!scheduler_signal_action(pid, sig, &act) ||

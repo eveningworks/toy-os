@@ -1714,9 +1714,14 @@ struct sys_stat {
                           // kernel already has is the copy that goes
                           // stale when the font size changes.
                           //
-                          // POSIX would raise SIGWINCH here. There is
-                          // no such signal yet (docs/roadmap.md); a
-                          // program that cares re-asks.
+                          // IT RAISES SIGWINCH on the terminal's
+                          // foreground group, and only when the size
+                          // actually MOVED -- an emulator calls this on
+                          // every window event, so an unconditional
+                          // signal would interrupt the foreground
+                          // program's read once per frame of a drag.
+                          // A program with no handler is unaffected:
+                          // SIGWINCH's default action is to be ignored.
 
 // HOW MANY BYTES `int $0x80` IS, so that a restart can rewind over it.
 //

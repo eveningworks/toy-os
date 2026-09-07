@@ -3606,3 +3606,44 @@ https. A program opts in with `ULIB_SO_<name>` in the Makefile.
   of its `mmap()` calls. Exhausting it fails in the loader on the LAST
   library, naming the one that ran out rather than the one that filled
   it.
+
+## A RESIZE IS A SIGNAL, AND ONLY WHEN THE SIZE ACTUALLY MOVED
+
+`SIGWINCH` is 28, POSIX's number, and its default action is to be
+IGNORED -- the second signal here with that default, beside `SIGCHLD`,
+and for the same reason: both are raised by the system rather than at
+anybody's request, so a program that has never heard of them must not
+die of one. `default_terminates()` in `kernel/proc/signal.c` is the one
+place that says so.
+
+`tty_set_winsize()` raises it on the terminal's foreground GROUP, as
+`SIGTTIN` is raised: a pipeline is resized, not a process.
+
+**AND ONLY WHEN THE ROWS OR COLUMNS ACTUALLY CHANGED.** A terminal
+emulator calls `SYS_TCSETWINSZ` on every window event it gets -- the GUI
+Terminal calls it from `on_draw`, because that is the first moment the
+surface exists and because the FONT can change without the window doing
+so. An unconditional signal would interrupt the foreground program's
+blocking read once per frame of a drag.
+
+The pairing that makes it cheap: `signal_send()` drops a signal whose
+default is to be ignored when the target has installed no handler, so a
+window drag wakes only the processes that asked to know.
+
+## A LINE LONGER THAN THE TERMINAL IS WIDE NEEDS ROWS, NOT `\r`
+
+`/bin/tosh`'s `redraw()` counted characters and repainted with `\r`
+plus spaces, on the reasoning that a ring-3 process cannot reach
+`vga_cursor_move()` and fd 1 carries no cursor control. The first half
+is still true. The second stopped being true when the TTY layer landed:
+both terminals under this shell run `kernel/lib/ansi.c`, so `ESC[J`,
+`ESC[A` and `ESC[G` are as available as the `ESC[2J` Ctrl-L already
+sends. It counts SCREEN ROWS now and remembers which one the caret was
+left on.
+
+**THE TRAP IS THE AUTOMATIC WRAP.** The two terminals disagree about
+where the caret sits after a row has been filled to its last column --
+the GUI one wraps LAZILY, on the next character written. So nothing in
+that repaint may depend on a wrap happening: rows are ended with an
+explicit `\n` and the caret is then placed from a row and column the
+shell computed itself.

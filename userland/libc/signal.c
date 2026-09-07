@@ -79,6 +79,7 @@ static const char *const g_names[SIGNAL_MAX + 1] = {
     [SIGSTOP] = "Stopped (signal)",
     [SIGTSTP] = "Stopped",
     [SIGTTIN] = "Stopped (tty input)",
+    [SIGWINCH]= "Window changed",
 };
 
 const char *strsignal(int sig) {
