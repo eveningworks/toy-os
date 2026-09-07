@@ -38,6 +38,12 @@ struct md_ctx {
     unsigned st[WORD_CAP];
     int wn;
     int w_px;                 // the pending word's width
+
+    // The heading level being flowed, 0 for body text. IN THE CONTEXT
+    // rather than a file static: two of these widgets in one app would
+    // otherwise share it, and a static that is only safe because two
+    // walks never interleave is a trap waiting for the day one does.
+    int level;
 };
 
 // --- fonts ------------------------------------------------------------
@@ -127,17 +133,15 @@ static void put_run(struct md_ctx *c, int x, int y, const char *txt,
 // umd because WHERE a line breaks is a property of the renderer's
 // medium, and umd's is columns.
 
-static int g_level;   // the heading level being drawn, 0 for body text
-
 static int line_height(struct md_ctx *c) {
-    return font_h(style_font(c->m, 0, g_level)) + (g_level ? 2 : 1);
+    return font_h(style_font(c->m, 0, c->level)) + (c->level ? 2 : 1);
 }
 
 static void flush_word(struct md_ctx *c, int space_first) {
     if (c->wn == 0) return;
     int space = 0;
     if (c->open && space_first)
-        space = char_px(style_font(c->m, 0, g_level), ' ');
+        space = char_px(style_font(c->m, 0, c->level), ' ');
     if (c->open && c->pen_x + space + c->w_px > c->right) {
         c->pen_y += line_height(c);
         c->pen_x = c->hang;
@@ -146,7 +150,7 @@ static void flush_word(struct md_ctx *c, int space_first) {
         c->open = 1;
         space = 0;
     }
-    put_run(c, c->pen_x + space, c->pen_y, c->w, c->st, c->wn, g_level);
+    put_run(c, c->pen_x + space, c->pen_y, c->w, c->st, c->wn, c->level);
     c->pen_x += space + c->w_px;
     c->wn = 0;
     c->w_px = 0;
@@ -163,7 +167,7 @@ static void md_sink(void *ctx, char ch, unsigned style) {
     c->w[c->wn] = ch;
     c->st[c->wn] = style;
     c->wn++;
-    c->w_px += char_px(style_font(c->m, style, g_level), ch);
+    c->w_px += char_px(style_font(c->m, style, c->level), ch);
 }
 
 // Ends the current flowed block and leaves the pen on a fresh line.
@@ -256,10 +260,10 @@ static int walk(struct uui_markdown *m, struct ugfx_surface *s,
         case UMD_HEADING: {
             end_block(&c);
             c.pen_y += gap;
-            g_level = arg;
+            c.level = arg;
             feed(&c, txt, tn);
             end_block(&c);
-            g_level = 0;
+            c.level = 0;
             // A RULE UNDER THE TOP TWO LEVELS, which is what makes a
             // long page scannable -- GitHub, and every Markdown style
             // sheet since, draws one.
@@ -317,7 +321,7 @@ static int walk(struct uui_markdown *m, struct ugfx_surface *s,
             cols -= 1;
             int cw = (c.right - c.left) / (cols > 0 ? cols : 1);
             int col = 0, k = 1;
-            g_level = table_row == 0 ? 3 : 0;   // the header row is bold
+            c.level = table_row == 0 ? 3 : 0;   // the header row is bold
             while (k <= n && col < cols) {
                 int start = k;
                 while (k < n && ln[k] != '|') k++;
@@ -330,7 +334,7 @@ static int walk(struct uui_markdown *m, struct ugfx_surface *s,
                 col++;
                 k++;
             }
-            g_level = 0;
+            c.level = 0;
             c.open = 1;
             end_block(&c);
             table_row++;
