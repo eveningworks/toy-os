@@ -400,6 +400,38 @@ manual steps to be worth automating:
   That run is what the two paragraphs above describe; before it they
   were an argument.
 
+  **NEVER PIPE A FLASH, AND NEVER PUT A `timeout` IN FRONT OF ONE.** The
+  exit status of `remote.py flash | tail` is TAIL'S, so a flash that was
+  killed reports success; and a `timeout` that fires mid-run kills it
+  between the two halves of the job. Both happened at once on
+  2026-09-07: the run was cut after the `/bin` sync, printed `sent 97
+  file(s)` as its last line, and reported exit 0 -- while `/lib` was
+  still the old build and the kernel had never been written. A machine
+  in that state looks exactly like the `/lib`-sync hazard above,
+  `connection closed` on every session, which sends you looking for an
+  ABI mismatch that is really a half-finished copy.
+
+  **THE RECOVERY IS TFTP, and it needs no shell.** TFTP is a separate
+  service and keeps answering when `telnetd` cannot spawn:
+
+      python3 tools/remote.py --host H get /boot/boot/kernel.bin /tmp/k
+      sha256sum /tmp/k build/kernel.bin     # do they match?
+      python3 tools/remote.py --host H put build/kernel.bin /boot/boot/kernel.bin
+      python3 tools/remote.py --host H put seed/sync/lib/libc.so /lib/libc.so   # ...and each of the rest
+
+  Read every file back with `get` and compare hashes -- that is the only
+  confirmation available with no shell to ask. The machine still needs a
+  POWER CYCLE afterwards, because rebooting it is the one thing TFTP
+  cannot do and the held session died with the interrupted run.
+
+  **A FLASH DOES NOT SYNC `/etc`, and that is deliberate.** The trees it
+  copies are the ones the build owns; `/etc` holds what the MACHINE
+  owns -- which services are enabled, its address -- and clobbering that
+  would turn off the `telnetd` the next flash needs. The cost is that a
+  NEW service descriptor never arrives on its own: push it by hand
+  (`put data/etc/services.d/<name> /etc/services.d/<name>`) or the
+  service simply never starts there, with nothing to say why.
+
   **It REFUSES while `grub.cfg` says `set timeout=0`.** That is the
   whole safety argument: the rescue entry exists on every installed
   machine, and with no timeout GRUB draws no menu, so it cannot be
