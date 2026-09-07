@@ -178,7 +178,8 @@ void clip_paste(void) {
 static pthread_t g_worker;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct ufileop g_engine;     // ~30 KB; the worker's alone
-static struct uapp *g_app;          // for uapp_post from the worker
+// g_app is fm_internal.h's now -- one app pointer, set in on_open(),
+// used here for uapp_post and by files.c for uapp_spawn.
 
 static volatile int g_running;      // a job is in flight
 static volatile int g_cancel;       // the main thread asked it to stop

@@ -1400,6 +1400,24 @@ def run(dbg, qmp, tmp, res):
         if w2["title"] != TITLE:
             dbg.send(f"gui close {w2['z']}")
             time.sleep(0.3)
+
+    # A LAUNCHED PROGRAM IS REAPED WHEN IT EXITS. A process that exits
+    # stays a zombie until somebody polls it, and the File Manager is
+    # the parent of everything it opens -- so before the toolkit reaped
+    # them, every open-and-close of a file left a row in `ps` and in
+    # Task Manager until the File Manager itself exited. Asked after the
+    # close above, which is the exact sequence that leaked.
+    zombies = []
+    deadline = time.time() + 6.0
+    while time.time() < deadline:
+        zombies = [ln for ln in (dbg.send("sh ps") or "").splitlines()
+                   if "zombie" in ln]
+        if not zombies:
+            break
+        time.sleep(0.5)
+    res.check("closing a file the manager opened leaves no zombie",
+              not zombies, "; ".join(z.strip() for z in zombies))
+
     dbg.send(f"sh rm -r {EDIT}")
     dbg.key(K_CTRL_L)
     wait_layout(dbg, win, lambda l: l.addr and l.addr[0] == 0)

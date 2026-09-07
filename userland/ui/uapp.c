@@ -451,10 +451,48 @@ static void clip_poll(struct uapp *a) {
     d->on_clipboard(a, 0, now);
 }
 
+// --- children this app launched --------------------------------------
+//
+// See uapp.h. Sixteen is more programs than any app here launches at
+// once, and a full table costs one un-reaped slot rather than a failed
+// launch -- which is the honest trade, and the same one the desktop's
+// larger table makes.
+#define UAPP_CHILDREN 16
+static int g_children[UAPP_CHILDREN];
+
+void uapp_track_child(struct uapp *a, int pid) {
+    (void)a;
+    if (pid <= 0) return;
+    for (int i = 0; i < UAPP_CHILDREN; i++)
+        if (!g_children[i]) { g_children[i] = pid; return; }
+    ulogf("uapp: child table full -- pid %d will not be reaped\n", pid);
+}
+
+int uapp_spawn(struct uapp *a, const char *path, const char *args) {
+    int pid = sys_spawn(path, args, -1);
+    if (pid > 0) uapp_track_child(a, pid);
+    return pid;
+}
+
+static void reap_children(void) {
+    for (int i = 0; i < UAPP_CHILDREN; i++) {
+        if (!g_children[i]) continue;
+        int code = 0;
+        // NOHANG, and that distinction is the whole app: the blocking
+        // sys_waitpid() parks until the child exits, so reaping one
+        // that is merely RUNNING would freeze the window for as long as
+        // somebody had the launched program open. SYS_RETRY means
+        // "still running" here rather than "ask again".
+        if (sys_waitpid_nohang(g_children[i], &code) != SYS_RETRY)
+            g_children[i] = 0;
+    }
+}
+
 static void dispatch(struct uapp *a, const struct win_event *ev) {
     const struct uapp_desc *d = a->desc;
 
     clip_poll(a);
+    reap_children();
 
     switch (ev->type) {
     case WIN_EV_PING: {

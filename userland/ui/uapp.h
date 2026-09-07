@@ -390,6 +390,33 @@ void uapp_logf_layout(const char *fmt, ...) __attribute__((format(printf, 1, 2))
 void uapp_flush(struct uapp *a);
 
 void uapp_quit(struct uapp *a, int status);
+
+// --- launching another program ----------------------------------------
+//
+// **A CHILD NOBODY WAITS FOR IS A ZOMBIE, AND IT IS VISIBLE.** A process
+// that exits stays SCHED_ZOMBIE until somebody polls it (scheduler.h),
+// so an app that spawns a program and forgets it leaves a row in `ps`
+// and in Task Manager for the rest of the session -- which is what the
+// File Manager did for every file it opened.
+//
+// Spawn through these and the toolkit polls them, on the event loop,
+// with sys_waitpid_NOHANG -- never the blocking sys_waitpid(), which
+// would park the whole app until the child exited. The desktop learned
+// this the hard way and carries the same table (userland/wm/wm.c); this
+// is that, for every other app.
+//
+// Reaping happens on any event, and every client is PINGED on a cadence
+// (abi/win_proto.h), so an idle app still reaps within a ping rather
+// than waiting for somebody to touch its window.
+//
+// Returns the pid, or negative -- the caller still reports a failed
+// launch, because only it knows what it was trying to start.
+int uapp_spawn(struct uapp *a, const char *path, const char *args);
+
+// The same tracking for a pid obtained some other way -- uopen_path(),
+// where choosing the program is the library's job and starting it is
+// one call inside it.
+void uapp_track_child(struct uapp *a, int pid);
 int uapp_set_title(struct uapp *a, const char *title);
 
 // Name the WIN_CURSOR_* for this window's content area. THE ESCAPE

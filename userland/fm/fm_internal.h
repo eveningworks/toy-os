@@ -92,6 +92,12 @@ extern int g_single;             // one pane shown, not two
 extern int g_tree_on;
 extern struct uui_menubar g_menu;
 extern struct uui_menubar g_ctx; // the context menu -- no bar of its own
+
+// THIS APP, for the code that has no `struct uapp *` of its own: the
+// fileview's callbacks are the widget's and carry only `ctx`, and the
+// worker thread has no call stack from the event loop at all. Set once
+// in on_open().
+extern struct uapp *g_app;
 extern int g_ctx_rows;           // rows in the open popup, separators included
 struct uui_dialog;
 extern struct uui_dialog g_dialog;

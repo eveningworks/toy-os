@@ -86,6 +86,7 @@ int g_tree_on;
 
 struct uui_menubar g_menu;
 struct uui_menubar g_ctx;   // the context menu -- no bar of its own
+struct uapp *g_app;         // for the widget callbacks, which carry none
 struct uui_toolbar g_toolbar;
 struct uui_statusbar g_status;
 
@@ -453,7 +454,7 @@ void do_command(struct uapp *a, int code) {
             set_note("nothing selected");
             break;
         }
-        if (sys_spawn(NOTEPAD_EXEC, path, -1) < 0) {
+        if (uapp_spawn(a, NOTEPAD_EXEC, path) < 0) {
             set_note("could not start Notepad");
             ulogf("files: edit %s -- spawn %s FAILED\n", path, NOTEPAD_EXEC);
         } else {
@@ -471,7 +472,7 @@ void do_command(struct uapp *a, int code) {
         // total it up, which is work no event loop should be doing --
         // and a Properties window you can leave open beside the listing
         // is what Explorer and Dolphin both give you.
-        if (sys_spawn(PROPERTIES_EXEC, path, -1) < 0) {
+        if (uapp_spawn(a, PROPERTIES_EXEC, path) < 0) {
             set_note("could not open Properties");
             ulogf("files: spawn %s FAILED\n", PROPERTIES_EXEC);
         }
@@ -794,10 +795,12 @@ static void on_pane_open(void *ctx, const char *path) {
         ulogf("files: open %s -- no handler\n", path);
         return;
     }
-    // NOT a tracked job: this is a launch, not an operation on files.
-    // Waiting for a text editor to exit would freeze the manager for as
-    // long as someone was editing.
-    if (sys_spawn(exec, path, -1) < 0) {
+    // NOT a tracked JOB -- this is a launch, not an operation on files,
+    // and waiting for a text editor to exit would freeze the manager
+    // for as long as somebody was editing. It IS a tracked CHILD, which
+    // is a different thing: uapp reaps it when it exits, so opening and
+    // closing files does not fill `ps` with zombies (ui/uapp.h).
+    if (uapp_spawn(g_app, exec, path) < 0) {
         snprintf(g_stat_note, sizeof g_stat_note, "could not start %s", exec);
         ulogf("files: open %s -- spawn %s FAILED\n", path, exec);
     } else {
@@ -973,6 +976,7 @@ static void on_clipboard(struct uapp *a, int op, unsigned serial) {
 }
 
 static void on_open(struct uapp *a) {
+    g_app = a;
     layout_all(uapp_width(a), uapp_height(a));
     refresh_status();
 }
