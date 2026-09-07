@@ -433,13 +433,16 @@ manual steps to be worth automating:
   POWER CYCLE afterwards, because rebooting it is the one thing TFTP
   cannot do and the held session died with the interrupted run.
 
-  **A FLASH DOES NOT SYNC `/etc`, and that is deliberate.** The trees it
-  copies are the ones the build owns; `/etc` holds what the MACHINE
-  owns -- which services are enabled, its address -- and clobbering that
-  would turn off the `telnetd` the next flash needs. The cost is that a
-  NEW service descriptor never arrives on its own: push it by hand
-  (`put data/etc/services.d/<name> /etc/services.d/<name>`) or the
-  service simply never starts there, with nothing to say why.
+  **`/etc` IS SYNCED, but NEW FILES ONLY** (`USERLAND_TREES`), so a new
+  service descriptor does arrive while the machine's own configuration
+  -- which services are enabled, its address -- is never overwritten.
+  What that means for an INTERRUPTED flash is worth knowing, because it
+  is how this was misdiagnosed once: the trees go `bin`, `tests`, `usr`,
+  `etc`, `lib`, so a run cut short after `/bin` leaves NEITHER the new
+  `/etc` file NOR the new `/lib`. The missing service then looks like a
+  policy ("flash must not touch /etc") rather than like the half-copy it
+  is. If you are repairing one by hand, push the descriptor too:
+  `put data/etc/services.d/<name> /etc/services.d/<name>`.
 
   **It REFUSES while `grub.cfg` says `set timeout=0`.** That is the
   whole safety argument: the rescue entry exists on every installed
