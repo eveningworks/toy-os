@@ -3330,6 +3330,94 @@ window without going through it will find its layout polls timing out.
   ON DEMAND: it needs a host gcc, and the gate must not start requiring
   one.
 
+- **`umd_hostcheck.py`** -- compiles `userland/lib/umd.c` with the host
+  gcc and renders every `docs/commands/*.md` page through it at 40, 80
+  and 132 columns, plus the three field lookups (`umd_title`,
+  `umd_field`, `umd_section_para`). No guest, no Pillow, no oracle
+  beyond the pages themselves.
+
+  **What it asserts is invariants, not an expected rendering.** A
+  golden file for 109 pages would have to be regenerated every time
+  anyone edits prose, and nobody would read the diff. Instead: the
+  output is pure ASCII; every line fits the requested width unless it
+  was COPIED verbatim rather than wrapped (a code block, or one word
+  longer than the screen -- neither of which a wrapper may break);
+  `**` does not survive into wrapped prose; the Synopsis block --
+  the text `check_docs.py` already pins to the program's `cmd_usage()`
+  -- comes out intact; and the lead paragraph of every Description has
+  BALANCED backticks.
+
+  **Comparison is on letters and digits only.** The renderer changes
+  punctuation on purpose (backticks and asterisks go, an em dash
+  becomes `--`), so comparing raw text would report every one of those
+  as a wrapping failure.
+
+  It found five real bugs the day it was written -- a paragraph's line
+  break not being fed as whitespace, so the last word of one line and
+  the first of the next were joined; unwrapped headings; a table of
+  empty headers read as a rule row, which made the first DATA row the
+  header for every row after it; a code block re-opened per line; and a
+  cell splitting at a `\|` inside its own code span. It also found the
+  SIX PAGES whose Description opened with a fragment of a table cell,
+  unclosed backtick and all, since the day they were written.
+
+  `--positive-control` renders every page with the wrap disabled and
+  requires the width check to fail. Measured: 667 violations.
+
+  ON DEMAND: it needs a host gcc, and the gate must not start requiring
+  one.
+
+- **`doc_test.py`** -- `/bin/doc` in a guest, over the serial debug
+  console. Boots its own VM.
+
+  **The load-bearing check is the pair of searches.** `-k` and `-K`
+  would both pass a test that only asked "did anything come back", so
+  the tool finds -- ON THE HOST, from the pages themselves -- a word
+  that appears in some page's BODY and in no page's name, title,
+  category or first sentence, then requires `-K` to find it and `-k`
+  not to. A `doc` with both flags wired to the same code passes
+  everything else here. Choosing the word on the host rather than
+  naming one is what stops the check quietly ceasing to discriminate
+  as the pages are edited.
+
+  It also proves the pages REACHED THE IMAGE, which is a different
+  thing from being staged (CLAUDE.md's rule about `seed/sync/`), and
+  that a name that does not exist SUGGESTS rather than only refusing.
+
+  **What it deliberately cannot see**, said in its own docstring rather
+  than faked: the "not a terminal" half -- that `doc ls > out.txt`
+  dumps and drops its colour. The kernel debug console has no
+  redirection and quotes do not survive it, so `tosh -c` is out of
+  reach, and ANSI escapes never arrive as text anyway because
+  `kernel/lib/ansi.c` parses them first -- the same reason
+  `ls_test.py` cannot assert on colour.
+
+- **`pager_test.py`** -- `userland/lib/upager.c` under BOTH its front
+  ends, by driving a GUI Terminal. `/bin/less` had no test at all until
+  its paging moved into a library for `/bin/doc` to share.
+
+  **The load-bearing check is the STATUS BAR.** Everything else passes
+  with the pager replaced by `cat`: text appears, the screen changes
+  when a key is typed (that key echoes at the prompt), the window
+  survives. What only a running pager produces is a reverse-video band
+  across the bottom row. Measured with a positive control that makes
+  `upager_run()` dump instead of paging: the bar check goes red for
+  both front ends and the other five stay green, which is exactly why
+  the docstring names it.
+
+  Two things the measurement had to get right, and the first version
+  got both wrong. **The background is uniform too**, so "the widest run
+  of one colour" is satisfied by an empty row -- the background is
+  found as the commonest colour in the band and excluded. And it is
+  COVERAGE rather than a run: reverse video paints the bar in the
+  foreground colour and its text in the background one, so the longest
+  unbroken run across a padded bar is one character wide.
+
+  **It picks the LONGEST page on the host** for the `doc` half. The
+  first version used `doc ls`, which renders to 25 lines and fits one
+  screen -- so "space turns the page" was asking a correct pager to do
+  something it must not.
+
 - **`sum_test.py`** -- `/bin/sum` itself, in a guest, against digests
   computed on the HOST. It ATTACHES to a running `vm.py` guest.
 

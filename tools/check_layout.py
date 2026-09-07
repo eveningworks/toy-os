@@ -212,6 +212,9 @@ SEED_SOURCES = {
     "usr/share/fonts":   "data/fonts",
     "usr/share/wallpapers": "data/wallpapers",
     "usr/share/cursors": "data/cursors",
+    # The one staged tree whose source is NOT under data/: the command
+    # pages are the repository's own docs, seeded unconverted.
+    "usr/share/doc/cmd": "docs/commands",
 }
 
 

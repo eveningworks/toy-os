@@ -1211,6 +1211,13 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LI
 	    --kernel $(KERNEL) --grub-cfg $(BUILD)/grub-disk.cfg
 	mkdir -p $(SEED_DIR)/sync/usr/share/doc
 	cp data/usr/share/doc/toy-os.txt $(SEED_DIR)/sync/usr/share/doc/toy-os.txt
+	# The command pages, staged UNCONVERTED from docs/commands/ -- the
+	# same Markdown the repository is written in, rendered at display
+	# time by /bin/doc (userland/lib/umd.h says why not at build time).
+	# README.md is the generated host-side index, not a page.
+	mkdir -p $(SEED_DIR)/sync/usr/share/doc/cmd
+	cp docs/commands/*.md $(SEED_DIR)/sync/usr/share/doc/cmd/
+	rm -f $(SEED_DIR)/sync/usr/share/doc/cmd/README.md
 	cp data/tests/sample.txt $(SEED_DIR)/sync/tests/sample.txt
 	# Desktop entries -- what the Start menu and the desktop icons are
 	# built FROM (see docs/filesystem-layout.md). Hand-authored and

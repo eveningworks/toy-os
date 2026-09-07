@@ -10,4 +10,4 @@
 
 ## Description
 
-underline\ | beam\ | reverse>` | The console cursor's style. The default tints its cell so the character underneath stays readable.
+The console cursor's style. The default tints its cell so the character underneath stays readable.

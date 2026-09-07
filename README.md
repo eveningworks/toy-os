@@ -374,9 +374,12 @@ userland ELF have real DWARF symbols.
 
 ### Using it
 
-Type `help` at the prompt. [docs/commands.md](docs/commands.md) indexes
-one page per command under [docs/commands/](docs/commands/), and is the
-full command reference; [docs/boot-flags.md](docs/boot-flags.md) covers
+Type `help` at the prompt, then `doc <command>` for the page --
+those pages ship ON the machine, so `doc ls` reads the same file as
+[docs/commands/ls.md](docs/commands/ls.md) here.
+`doc -k <word>` searches names and summaries, `doc -K <word>` searches
+every page's text. [docs/commands.md](docs/commands.md) is the same
+reference on the host; [docs/boot-flags.md](docs/boot-flags.md) covers
 what you can pass on the GRUB command line.
 
 ## Highlights

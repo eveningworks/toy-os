@@ -1256,3 +1256,121 @@ multiplier was gone.
 pointers without freeing them -- a leak per line, in a shell that never
 exits. Both front ends re-init per line; both were written without the
 free, and a code review found it before either shipped.
+
+## The manual is `doc`, its pages are the repository's own Markdown, and a category is a directory
+
+Three decisions, taken together because each one is only defensible with
+the others.
+
+**NO `man`.** The obvious move was `doc` plus a `man` alias, and the
+obvious way to spell an alias is a symlink. This filesystem has none:
+`ln` creates hard links only, and `tfs3.c` reserves a symlink type it
+deliberately does not follow mid-path. That left a duplicated binary
+(~170 KB, and two things to keep in step), a `sync` verb the host seeder
+does not have, or a shell alias -- which is what `nano` and `gui3` are,
+and which cannot help a ring-3 program. None of those is free, and the
+name is not worth paying for: `man` is short for roff manual pages in
+numbered sections, none of which exists here, and every command in this
+system already has exactly one page under exactly one name. One name for
+one thing.
+
+**A CATEGORY IS A DIRECTORY, NOT A NUMBER.** man's sections are
+numbered because a 1971 filesystem indexed them that way, and the cost
+is that everyone has to remember that 1 is commands and 8 is
+administration. `doc -c cmd ls` reads `/usr/share/doc/cmd/ls.md`. The
+mechanism is the one this repo already uses for cursor themes, fonts and
+wallpapers -- a directory is the unit, and a new one is a directory
+rather than a code change. Without `-c` the name is looked for in every
+category, which is what keeps `doc ls` working without anyone learning
+where `ls` is filed.
+
+**RENDERING HAPPENS AT DISPLAY TIME, and that is the decision a build
+step would have been wrong about.** The alternative was a
+`tools/gen_docs.py` turning each page into pre-wrapped text, which is
+smaller in the OS and lets the host's Python do the hard parsing. What
+it cannot do is answer the only question that matters at the moment of
+reading: how wide is this terminal? `sys_tcgetwinsz()` knows a moment
+before the page is drawn and a build does not, so one pre-wrapped file
+is right on the 80-column console and wrong in every Terminal window.
+man makes the same call -- roff is rendered per invocation, and
+preformatted cat pages are a CACHE of that rather than the source.
+`glow`, `mdcat` and `gh help` render Markdown live for the same reason.
+
+The consequence is a Markdown parser in ring 3, and the bound on it is
+what makes that affordable: `userland/lib/umd.c` implements the subset
+the pages MEASURABLY use, and the measurement is in its header. No
+blockquotes, no horizontal rules, no nested lists, no images -- not one
+page has any. `_x_` is deliberately not italic, because all 65
+underscore pairs in these pages are identifiers (`SYS_NET_*`,
+`_MONOTONIC_`) and emphasis would eat the underscores out of the names
+the pages exist to document. The one backslash escape implemented is
+`\|`, because a table cell needs it and a cell that splits at its own
+text is a wrong table rather than an ugly one.
+
+**AND A TABLE IS RENDERED AS ONE BLOCK PER ROW.** Aligning columns needs
+the whole table buffered to measure it, and these tables would not fit
+anyway: `config.md` has a 250-character cell against an 80-column
+console, so alignment would produce two columns of one word each.
+`Header: value` with a hanging indent reads correctly at every width,
+needs nothing buffered but the header row, and puts the label on its own
+line when it would leave less than half the width for its value.
+
+The seeding follows from all of it: `make iso` copies `docs/commands/`
+into `/usr/share/doc/cmd/` wholesale, so the page a session writes on
+the host IS the page a person reads on the machine. It is the only
+staged tree whose source is not under `data/`, which
+`tools/check_layout.py`'s `SEED_SOURCES` records so the "staged file
+with no tracked source" guard still covers it.
+
+## `-k` and `-K` are man's split, and neither reads an index
+
+`doc -k` matches four short fields -- a page's name, its title, its
+category and the first sentence of its Description. `doc -K` matches
+every line of every page. They are separate flags because they answer
+separate questions: `-k` is for a half-remembered NAME and `-K` is for a
+remembered SENTENCE, and a single combined search is worse at both --
+it buries the four exact matches under forty prose hits.
+
+The names are man's (`apropos` and `man -K`) rather than invented,
+because somebody who has used a Unix already knows them and the cost of
+borrowing is zero.
+
+**NEITHER READS AN INDEX, and that is a deliberate refusal.** man keeps
+a `whatis` database precisely so `apropos` need not open every page. The
+reason not to build one here is the reason a `whatis` goes stale:
+generating it puts a second copy of every summary on the disk, which
+somebody then has to keep true. What it would buy is measured rather
+than assumed -- about a hundred files of two kilobytes each, well under
+a second on this filesystem. A slow answer is better than a wrong one.
+
+The summary is taken from the page rather than declared: the first
+sentence of the `## Description` section, cut to one line. That means
+adding a page requires nothing new, and it is why
+`umd_section_para()` asks for a section BY NAME -- "the first paragraph
+of the file" would be one of the `**field:**` lines that every page
+opens with. Which section that is belongs to `doc`, not to Markdown.
+
+## The pager is a library with two front ends
+
+`/bin/less` held the paging, and `/bin/doc` wanted the same thing. Two
+pagers would be two keymaps, two status bars and two ideas of what a
+page is -- the shape `klineedit.c` and `ansi.c` already avoid by being
+compiled twice, and the shape `kernel/lib/` exists to stop.
+
+**THE LIBRARY OWNS NO TEXT BUFFER**, and that is the seam. `less` holds
+its input in a 256 KiB static buffer because a pipe cannot be rewound;
+`doc` renders Markdown into a malloc'd one sized from the page. A buffer
+inside `upager.c` would be `.bss` in `libuapp.so`, which every `/bin`
+and GUI program links -- 64 KB per process for a feature two of them
+use. What it does allocate is sized from the input and the real terminal
+and freed before it returns; if that fails it writes the text through,
+because a pager that cannot page still owes its caller the text.
+
+**AND WIDTH IS MEASURED IN DISPLAY COLUMNS, NOT BYTES.** A line is
+clipped to the terminal rather than wrapped, because a wrapped line
+pushes the status row off the bottom and makes the page height silently
+wrong. The clip counted bytes, and an ANSI escape costs bytes and no
+columns -- so `ls --color=always | less` lost the tail of every coloured
+line. Nobody had noticed because `less`'s only other input was plain.
+`doc` emits styled text by default, which is what turned a latent bug
+into a visible one.

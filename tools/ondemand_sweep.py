@@ -73,6 +73,10 @@ TOOLS = [
     # are the oracle -- so it has no `needs` gate at all.
     ("hash_host",   "hash_hostcheck.py",       "crc32/sha256 against hashlib and zlib", False,
      None,                                                                                   False),
+    # Renders every docs/commands page through the same umd.c the guest
+    # runs, at three widths. gcc and the standard library only.
+    ("umd_host",    "umd_hostcheck.py",        "the Markdown renderer over every page", False,
+     None,                                                                                   False),
     # --- storage and boot -------------------------------------------
     ("partition",   "partition_test.py",       "mounting from an MBR/GPT partition", True,  None,                   False),
     ("fs_switch",   "fs_switch_test.py",       "format, remount, reboot persistence", True, None,                   False),
@@ -114,6 +118,7 @@ TOOLS = [
     # console's for the same subcommand.
     ("guictl",      "guictl_test.py",          "/bin/guictl against the console's `gui`", False, None,                True),
     ("grep",        "grep_test.py",            "/bin/grep through a real shell",     True,  None,                   True),
+    ("doc",         "doc_test.py",             "/bin/doc finds and renders a page",  True,  None,                   False),
     ("ansi",        "ansi_cursor_test.py",     "ANSI cursor movement, as pixels",    True,  None,                   False),
 
     # --- networking ---------------------------------------------------

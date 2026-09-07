@@ -946,14 +946,14 @@ split. One line per pair here; the site lists are in roadmap-details.
 ### In-OS documentation
 **Needs:** TTY / virtual terminals, for the front end.
 
-- [ ] A `man <topic>` command reading from `/usr/share/man`
-- [ ] A simple page format -- the pages are Markdown today, read on the host; an in-OS renderer still needs one
+- [x] ~~A `man <topic>` command reading from `/usr/share/man`~~ DONE 2026-09-07 -- it is `doc`, over `/usr/share/doc/cmd/`
+- [x] ~~A simple page format -- an in-OS renderer needs one~~ DONE 2026-09-07 -- Markdown IS the format, rendered by `userland/lib/umd.c`
 - [x] ~~Pages for every shell builtin~~ DONE 2026-08-20 -- one hand-written page per command in `docs/commands/`
 - [x] ~~Pages for each `/bin` binary~~ DONE 2026-08-20 -- the same folder covers programs and builtins alike
-- [ ] `apropos`/`man -k` keyword search across page titles
-- [ ] Paging through the existing `console_page()` helper
-- [ ] Seed the pages at build time via `tools/seed_disk.py`, like `/bin` already is
-- [ ] A GUI documentation viewer reusing the scrollback widget
+- [x] ~~`apropos`/`man -k` keyword search across page titles~~ DONE 2026-09-07 -- `doc -k`, plus `doc -K` over full text
+- [x] ~~Paging through the existing `console_page()` helper~~ DONE 2026-09-07 -- `userland/lib/upager.c`, shared with `/bin/less`
+- [x] ~~Seed the pages at build time via `tools/seed_disk.py`~~ DONE 2026-09-07 -- `docs/commands/` staged into `/usr/share/doc/cmd/`
+- [ ] A GUI documentation viewer over `userland/lib/umd.c` -- it needs a STYLED text widget, which `uui_textview` is not
 - [x] ~~A check that every builtin actually has a page, run in CI~~ DONE 2026-08-20 -- `tools/check_docs.py`
 ## Not built yet, and deliberately so
 

@@ -118,6 +118,7 @@ TOOLS = [
     ("keyup", "keyup_test.py", "key RELEASES reaching a ring-3 client"),
     ("hover", "hover_test.py", "a hover change REPAINTS, not just damages"),
     ("scrollbar", "scrollbar_test.py", "scrollbar behaviour, per the guidelines"),
+    ("pager", "pager_test.py", "the shared pager under /bin/less and /bin/doc"),
     ("menubar", "menubar_test.py", "menu bar, submenus and the status bar"),
     ("forcequit", "forcequit_test.py", "not-responding detection and force quit"),
     ("dialog", "dialog_test.py", "the confirm dialog, by pixel value"),

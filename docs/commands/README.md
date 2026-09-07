@@ -53,6 +53,10 @@ a command), and the `gui3`/`nano` aliases.
      below this marker by hand; the category comes from each
      page's own `**Category:**` line. -->
 
+### Documentation
+
+- [`doc`](doc.md)
+
 ### Files and the filesystem
 
 - [`append`](append.md)

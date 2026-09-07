@@ -918,6 +918,10 @@ whenever a headline here tells you something you did not already know.
 
 `docs/conventions/shell.md`
 
+- **THE MANUAL IS `doc`, THE PAGES ARE THE REPOSITORY'S OWN MARKDOWN,
+  AND A CATEGORY IS A DIRECTORY** -- rendered at display time by
+  `userland/lib/umd.c`, paged by the pager `/bin/less` shares; there is
+  no `man`
 - **EVERY COMMAND HAS A PAGE IN `docs/commands/`, AND THE BUILD CHECKS IT.**
 - **AN EVERYDAY COMMAND IS A `/bin` PROGRAM, NOT A BUILTIN, AND THE KERNEL'S OWN COPIES LIVE BEHIND ONE NAME: `rescue`.**
 - **A PROGRAM STARTED BY A BARE NAME PRINTS NOTHING EXTRA WHEN IT SUCCEEDS -- AND `run <name>` STILL DOES.**
@@ -1397,6 +1401,7 @@ cost".
   `imgview_test.py`, `keyup_test.py`, `menubar_test.py`,
   `mines_test.py`, `notepad_client_test.py`, `osk_test.py`,
   `player_test.py`,
+  `pager_test.py`,
   `sched_gui_test.py`, `screen_surface_test.py`, `scrollbar_test.py`,
   `settings_test.py`, `single_instance_test.py`, `taskmgr_test.py`,
   `uapp_test.py`, `uiclient_test.py`, `uidemo_test.py`,
@@ -1405,7 +1410,7 @@ cost".
 - **Run on demand, not in the gate** -- `ahci_test.py`,
   `ansi_cursor_test.py`, `audio_test.py`, `console_bleed_test.py`,
   `console_shell_test.py`, `ctrlc_test.py`, `cursor_ibeam_test.py`,
-  `diskmark_test.py`, `doom_test.py`,
+  `diskmark_test.py`, `doc_test.py`, `doom_test.py`,
   `doom_sound_test.py`, `fat32_test.py`, `fileop_test.py`, `frame_balance.py`,
   `fs_switch_test.py`, `grep_test.py`, `guictl_test.py`,
   `hash_hostcheck.py`, `highmem_test.py` (the frame allocator on an
@@ -1439,7 +1444,10 @@ cost".
   `QMPSession.hmp()` (**the QEMU monitor -- the one oracle the guest
   cannot fake**; ask it BEFORE trusting anything the guest says about
   itself), `regex_hostcheck.py`, `uimg_hostcheck.py`,
-  `usnd_hostcheck.py` and `hash_hostcheck.py` (this repo's
+  `usnd_hostcheck.py`, `hash_hostcheck.py` and
+  `umd_hostcheck.py` (the Markdown renderer over every
+  `docs/commands/` page at three widths, with a
+  `--positive-control` that must go red) (this repo's
   implementations against GLIBC, libjpeg, ffmpeg and hashlib/zlib -- an oracle sharing no code is what catches an
   EXPECTATION being wrong; the MP3 one carries a
   `--positive-control` that must go red), `pixel_probe.py`

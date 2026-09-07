@@ -46,6 +46,7 @@ MARKER = "## Every command"
 # this list only decides what comes FIRST, which is a judgement about
 # what a reader is most likely looking for.
 ORDER = [
+    "Documentation",
     "Files and the filesystem",
     "System information",
     "Processes and programs",

@@ -30,10 +30,14 @@ this the obvious way), not from how much history it accumulated.
   its bright form is white rather than off the end of the palette.
   **Sequences this console cannot honour are SWALLOWED, not printed**,
   which is what a terminal declining something is supposed to do rather
-  than spraying `[2J` on screen. **There is no `isatty()`**, so a
-  program cannot tell a terminal from a pipe and `--color=auto` does not
-  exist -- `/bin/ls` offers `never`/`always` and defaults to
-  one-entry-per-line output, which is the parseable shape. And **a
+  than spraying `[2J` on screen. **`--color=auto` IS THE DEFAULT, and
+  `sys_isatty(1)` is what decides it** -- coloured to a terminal, plain
+  to a pipe or a file. (This entry said "there is no `isatty()`" until
+  2026-09-07, and it had been wrong since a terminal became a real
+  object: `sys_isatty()` sits over `SYS_FSTAT`'s `SYS_STAT_TTY`
+  (`userland/rt/sys.c`), `/bin/ls` has defaulted to `auto` since
+  2026-08-22, and `/bin/less` picks the fd it reads keys from with it.
+  The code won.) And **a
   program's flags are its own**: re-parsing a child's flags into a fixed
   buffer mangled `--color=never` into `--color=`; `apps/shell_sys.c`
   forwards them verbatim now and only resolves the path against the
@@ -126,6 +130,45 @@ this the obvious way), not from how much history it accumulated.
   **injected keystrokes are only a valid channel for a tool that has
   established a desktop is NOT up**, and a tool asserting on kernel
   output should prefer the serial console outright.
+
+- **THE MANUAL IS `doc`, THE PAGES ARE THE REPOSITORY'S OWN MARKDOWN,
+  AND A CATEGORY IS A DIRECTORY.** `/bin/doc ls` renders
+  `/usr/share/doc/cmd/ls.md`, which IS `docs/commands/ls.md` seeded
+  unconverted -- so the page a session writes on the host is the page a
+  person reads on the machine, with no second format between them and
+  nothing to keep in sync. **There is no `man`**: the name is short for
+  roff pages in numbered sections, which this system does not have, and
+  a second name for one program is not free here anyway (`ln` makes
+  hard links only, `tfs3.c` does not follow a symlink mid-path). Four
+  things to know.
+
+  **A CATEGORY IS A SUBDIRECTORY OF `/usr/share/doc`**, so a new one is
+  a directory and no code -- man's sections with the number spelled as a
+  word. `cmd` is the only one today. A LOOSE file under `/usr/share/doc`
+  is not a page and is not listed; `toy-os.txt` is read with `less`.
+
+  **RENDERING HAPPENS AT DISPLAY TIME, and that is the whole argument
+  against a build step.** `userland/lib/umd.c` wraps to whatever
+  `sys_tcgetwinsz()` reports a moment before the page is drawn, so one
+  page fits an 80-column console and a Terminal window of any width; a
+  pre-wrapped file freezes the column at build time. It implements the
+  subset the pages MEASURABLY use and says so in its header -- and
+  `_x_` is deliberately NOT italic, because all 65 underscore pairs in
+  these pages are identifiers.
+
+  **`-k` AND `-K` ARE MAN'S SPLIT AND ANSWER DIFFERENT QUESTIONS**:
+  `-k` matches a page's name, title, category and first sentence (what
+  `apropos` does, for a half-remembered NAME), `-K` matches every line
+  (for a remembered SENTENCE). Neither reads an index -- both open the
+  pages, because a second copy of every summary on the disk buys under a
+  second and can go stale.
+
+  **THE PAGER IS SHARED WITH `/bin/less`** (`userland/lib/upager.c`), so
+  the keys are one keymap and `upager_keys()` is the one place they are
+  spelled. It clips a line by DISPLAY COLUMNS rather than bytes, which
+  an escape sequence costs nothing of; measuring bytes cut every
+  coloured line short. Adding a page is `docs/commands/<name>.md` and
+  nothing else -- `make iso` stages the directory wholesale.
 
 - **EVERY COMMAND HAS A PAGE IN `docs/commands/`, AND THE BUILD CHECKS
   IT.** One page per `/bin` program and per `dispatch()` builtin;
