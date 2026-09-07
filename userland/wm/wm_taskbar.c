@@ -82,15 +82,22 @@ void taskbar_poll_config(void) {
     }
 
     // The default when nothing is written; it must match
-    // start_button_config.c's DEFAULT_MODE, which is what the
-    // registry answers with and what System Settings shows.
+    // start_button_config.c's DEFAULT_MODE, which is what the registry
+    // answers with and what System Settings shows.
+    //
+    // **EVERY MODE IS NAMED, including the default one.** This tested
+    // only `icon` and `both` and let `text` fall through to the
+    // initialiser, which was silently the same value -- so moving the
+    // default made `text` unreachable while both other modes still
+    // worked, and the taskbar simply ignored the setting for one of its
+    // three values. Found by icons_test, which had been passing that
+    // case for the wrong reason.
     enum start_button_mode want = START_BUTTON_BOTH;
     struct setting_msg msg;
     setting_get("desktop.start_button", &msg);
-    if (msg.value[0]) {
-        if (k_strcmp(msg.value, "icon") == 0) want = START_BUTTON_ICON;
-        else if (k_strcmp(msg.value, "both") == 0) want = START_BUTTON_BOTH;
-    }
+    if (k_strcmp(msg.value, "text") == 0)      want = START_BUTTON_TEXT;
+    else if (k_strcmp(msg.value, "icon") == 0) want = START_BUTTON_ICON;
+    else if (k_strcmp(msg.value, "both") == 0) want = START_BUTTON_BOTH;
     if (want == g_start_mode) return;
 
     g_start_mode = want;

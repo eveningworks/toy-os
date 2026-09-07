@@ -500,19 +500,40 @@ def run(dbg, qmp, tmp, res):
         j = taskbar_json()
         return j["start"]["w"] if j else None
 
+    # ESTABLISH THE STARTING POINT rather than assume it. The loop below
+    # waits for the width to CHANGE, which needs a value to change FROM
+    # -- and the first mode had none, so `w0 not in widths.values()` was
+    # trivially true on the first poll and the measurement recorded
+    # whatever was on screen before the WM had adopted anything. That
+    # passed only while the default happened to BE the first mode tested
+    # (it was `text` until 2026-09-07), which is a fixture the test did
+    # not establish wearing the costume of a working check.
+    dbg.send("sh config set desktop.start_button icon")
+    prev = None
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        j = taskbar_json()
+        if j and j["start"].get("mark") and j["start"]["w"]:
+            prev = j["start"]["w"]
+            break
+        time.sleep(0.4)
+    res.check("the Start button can be put in a known mode to measure from",
+              prev is not None, f"start: {(taskbar_json() or {}).get('start')}")
+
     widths = {}
     for mode in ("text", "icon", "both"):
         dbg.send(f"sh config set desktop.start_button {mode}")
         # The WM adopts it on its next generation poll, so wait for the
-        # OBSERVABLE (the strip moved) rather than sleeping a guess --
-        # except for the first mode, where nothing has moved yet.
+        # OBSERVABLE (the strip moved) rather than sleeping a guess. All
+        # three widths differ, so "changed from the previous one" is a
+        # sound wait at every step.
         deadline = time.time() + 8
         while time.time() < deadline:
             w0 = start_w()
-            if w0 is not None and w0 not in widths.values():
+            if w0 is not None and w0 != prev:
                 break
             time.sleep(0.4)
-        widths[mode] = start_w()
+        widths[mode] = prev = start_w()
     res.check("every Start button mode lays the strip out differently",
               len(set(v for v in widths.values() if v is not None)) == 3,
               f"Start button widths: {widths}")
