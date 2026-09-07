@@ -255,7 +255,7 @@ static void about_draw(struct uapp *a, struct uapp_draw *d) {
                              g_title, UTHEME_TEXT, UTHEME_PANEL_BG);
     ugfx_set_font(was);
     ugfx_draw_string_clipped(d->surface, text_x, MARGIN + 6 + line_h(),
-                             right - text_x, "a small x86-64 operating system",
+                             right - text_x, "a hobby x86-64 operating system",
                              UTHEME_BORDER, UTHEME_PANEL_BG);
 
     int head = LOGO > 2 * ugfx_char_h() ? LOGO : 2 * ugfx_char_h();

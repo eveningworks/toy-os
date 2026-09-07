@@ -31,7 +31,7 @@ int main(int argc, char **argv) {
 
     char line[160];
     snprintf(line, sizeof line,
-             "toy-os v%s -- a small x86-64 hobby kernel\n", TOYOS_VERSION);
+             "toy-os v%s -- an x86-64 hobby kernel\n", TOYOS_VERSION);
     sys_print(line);
 
     struct query_version kv;

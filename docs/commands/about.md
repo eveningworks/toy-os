@@ -21,7 +21,7 @@ and they diverge the moment one is updated without the other, which is what
 happens when a kernel or a binary is pushed over the network.
 
     /$ about
-    toy-os v0.3.0-dev -- a small x86-64 hobby kernel
+    toy-os v0.3.0 -- an x86-64 hobby kernel
       kernel:   0.3.0-dev (426601f)  built 2026-09-01 10:39:12
       userland: 0.3.0-dev (214d29e)  built 2026-08-31
       ** kernel and userland are from different builds **

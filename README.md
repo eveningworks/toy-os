@@ -1,9 +1,9 @@
 <h1 align="center">toy-os</h1>
 
 <p align="center">
-  A small x86-64 operating system, written from scratch in C and assembly.<br>
-  Boots via GRUB into a 64-bit kernel with a shell, a window manager, and a
-  journaling disk-backed filesystem.
+  A hobby x86-64 operating system, written from scratch in C and assembly.<br>
+  Boots via GRUB into a 64-bit kernel with a ring-3 desktop, networking,
+  USB, sound and a journalling disk-backed filesystem.
 </p>
 
 <p align="center">
@@ -41,9 +41,10 @@
 
 ## What this is
 
-A hobby OS built one subsystem at a time, with the reasoning for each
-decision written down as it happened. It boots on real hardware and under
-QEMU, and it does not stop at "hello world from the kernel":
+A hobby operating system with a paper trail: every subsystem built one at
+a time, and every design decision written down with the reasoning behind
+it -- including the ones that turned out wrong. It boots on real hardware
+and under QEMU, and it does not stop at "hello world from the kernel":
 
 - **The machine** — Multiboot2 and a long-mode transition done by hand, a
   physical frame allocator and per-process page tables, NX/W^X, SMEP/SMAP,

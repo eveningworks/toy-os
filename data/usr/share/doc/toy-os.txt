@@ -1,7 +1,7 @@
 toy-os
 ======
 
-A small x86-64 operating system, written from scratch. This file ships
+A hobby x86-64 operating system, written from scratch. This file ships
 on the machine it describes; `less /usr/share/doc/toy-os.txt` from any
 shell.
 

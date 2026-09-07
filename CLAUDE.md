@@ -10,7 +10,7 @@ conventions that are easy to violate by accident.
 
 ## What this is
 
-A small x86-64 OS (Multiboot2/GRUB-booted, freestanding C + NASM) with
+A hobby x86-64 OS (Multiboot2/GRUB-booted, freestanding C + NASM) with
 ring0/ring3 separation, per-process paging, an ELF64 loader, syscalls,
 a preemptive scheduler, a kernel-space window manager, and two
 disk-backed filesystem (TFS3, mounted from an MBR/GPT partition or
