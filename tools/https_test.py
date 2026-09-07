@@ -259,6 +259,27 @@ def main():
         c.ok("plain http still works", "hello over TLS from the host" in out,
              out.strip()[:120])
 
+        # 7. the scheme guess. A bare host tries https first and falls
+        # back only when 443 does not answer -- and the fallback must be
+        # ANNOUNCED, because the user never asked for plaintext.
+        out = sh.run(f"wget --weak-entropy {GATEWAY}/x")
+        c.ok("a bare host falls back to http when 443 is not listening",
+             "falling back to http" in out, out.strip()[:140])
+
+        # An explicit non-443 port cancels the guess, so a plain server
+        # on an odd port just works instead of failing at a handshake it
+        # is not having.
+        out = sh.run(f"wget {GATEWAY}:{PORT_PLAIN}/x")
+        c.ok("a bare host:port uses http and does not guess https",
+             "hello over TLS from the host" in out and "falling back" not in out,
+             out.strip()[:140])
+
+        # A scheme this does not speak is REFUSED rather than treated as
+        # a hostname -- "ftp://x" is not a host called "ftp:".
+        out = sh.run("wget ftp://10.0.2.2/x")
+        c.ok("an unknown scheme is refused, not guessed at",
+             "cannot parse" in out, out.strip()[:140])
+
         # 2 and 3 need the store changed, so the guest is rebooted with
         # a different one rather than the file being edited underneath a
         # running kernel.

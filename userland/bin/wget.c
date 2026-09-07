@@ -21,6 +21,10 @@
 
 #define USAGE "wget [-O <file>] [-k] [--weak-entropy] <url>"
 
+// A URL with no scheme is tried as https FIRST and falls back to
+// http only when 443 does not answer -- never on a certificate or
+// handshake failure. See <uhttp.h>.
+
 struct out {
     int  fd;          // -1 means stdout
     int  insecure;    // for the warning printed on connect
@@ -53,6 +57,14 @@ static void on_connect(void *ctx, uint32_t ip, const char *ver, const char *ciph
         printf("wget: WARNING: the server's identity was NOT verified\n");
 }
 
+// A downgrade the user did not ask for must not be silent: they typed a
+// bare host, so they never chose plaintext, and the line that says so is
+// the only chance they get to notice.
+static void on_fallback(void *ctx, const char *host) {
+    (void)ctx;
+    printf("wget: no https on %s, falling back to http (not encrypted)\n", host);
+}
+
 int main(int argc, char **argv) {
     const char *url = 0, *out_path = 0;
     struct uhttp_request req;
@@ -76,7 +88,8 @@ int main(int argc, char **argv) {
     req.url        = url;
     req.sink       = sink;
     req.sink_ctx   = &o;
-    req.on_connect = on_connect;
+    req.on_connect  = on_connect;
+    req.on_fallback = on_fallback;
 
     int rc = uhttp_fetch(&req);
     if (rc != 0) {

@@ -34,11 +34,20 @@ struct uhttp_url {
     char     host[UHTTP_HOST_MAX];
     char     path[UHTTP_PATH_MAX];
     uint16_t port;
-    int      tls;    // https
+    int      tls;          // https
+
+    // A URL with NO scheme ("example.com") parses with tls=1 and port
+    // 443, and these two say so. `uhttp_fetch()` then tries https and
+    // falls back to http -- but ONLY when 443 does not connect, which
+    // is the whole reason the caller has to be able to tell the two
+    // apart. See the fetch's comment.
+    int      scheme_given;
+    int      port_given;
 };
 
 // 0 on success, -1 on a URL this cannot represent. REJECTS rather than
-// guessing: a host that does not fit is an error, never a prefix.
+// guessing about anything but the SCHEME: a host that does not fit is
+// an error, never a prefix.
 int uhttp_parse_url(const char *url, struct uhttp_url *out);
 
 // Called with each chunk of the body as it arrives. Return 0 to carry
@@ -64,13 +73,21 @@ struct uhttp_request {
     const char *ca_dir; // NULL = UTLS_DEFAULT_CA_DIR
 
     // Called once, after the connection is up and before the body, so a
-    // caller can print what it connected to. Either may be NULL.
+    // caller can print what it connected to. `tls_version` is NULL on a
+    // plain connection. Either may be NULL.
     void (*on_connect)(void *ctx, uint32_t ip, const char *tls_version,
                        const char *tls_cipher);
+
+    // Called when a scheme-less URL's https attempt could not CONNECT
+    // and http is about to be tried instead. A downgrade the user did
+    // not ask for should not be silent, so this exists to be printed --
+    // it is not a debug hook.
+    void (*on_fallback)(void *ctx, const char *host);
 
     // --- out ---
     int           status;      // the HTTP status, or 0 if none was read
     unsigned long body_bytes;  // what reached the sink
+    int           used_tls;    // whether the fetch that SUCCEEDED was https
     char          err[UHTTP_ERR_MAX];
 };
 

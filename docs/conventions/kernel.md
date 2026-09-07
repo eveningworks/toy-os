@@ -3586,6 +3586,15 @@ https. A program opts in with `ULIB_SO_<name>` in the Makefile.
   report one. Under QEMU without virtio-rng the source is TSC jitter and
   every https fetch refuses until `--weak-entropy`. See
   `docs/decisions.md`.
+- **A URL WITH NO SCHEME IS TRIED AS https FIRST, AND FALLS BACK ONLY ON
+  A REFUSED CONNECTION.** `wget example.com` upgrades the way a browser
+  does with a typed address; GNU wget and curl both default to
+  plaintext. The fallback fires ONLY when port 443 does not answer --
+  never on a certificate or handshake failure, and never on the entropy
+  refusal, because falling back there converts "this server's identity
+  is wrong" into "let us use plaintext instead". It is ANNOUNCED, since
+  a downgrade nobody asked for should not be silent. An explicit port
+  cancels the guess unless it is 443, which is also Chrome's rule.
 - **A SOCKET READ RETURNS AT MOST `SYS_NET_MSG_MAX` (1472) BYTES**
   whatever buffer it is handed, so a 16 KiB TLS record arrives over a
   dozen reads and the blank line ending HTTP headers can straddle any

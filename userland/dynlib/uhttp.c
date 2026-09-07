@@ -49,13 +49,23 @@ int uhttp_parse_url(const char *url, struct uhttp_url *out) {
     if (!strncmp(p, "https://", 8)) {
         out->tls = 1;
         out->port = 443;
+        out->scheme_given = 1;
         p += 8;
     } else if (!strncmp(p, "http://", 7)) {
         out->tls = 0;
         out->port = 80;
+        out->scheme_given = 1;
         p += 7;
+    } else if (strstr(p, "://")) {
+        return -1; // a scheme this does not speak, not a bare host
     } else {
-        return -1;
+        // NO SCHEME: guess https, and let the fetch fall back. Browsers
+        // upgrade a typed address this way; GNU wget and curl both
+        // default to plaintext instead, which is the older answer to a
+        // question the web has since settled.
+        out->tls = 1;
+        out->port = 443;
+        out->scheme_given = 0;
     }
 
     // host[:port], up to the first '/'. An IPv6 literal in brackets is
@@ -80,6 +90,16 @@ int uhttp_parse_url(const char *url, struct uhttp_url *out) {
         }
         if (port == 0) return -1;
         out->port = (uint16_t)port;
+        out->port_given = 1;
+
+        // AN EXPLICIT PORT CANCELS THE https GUESS, unless it is 443.
+        // Chrome upgrades a typed address only on the default port, and
+        // the reason is the same here: `host:8080` is overwhelmingly a
+        // plain server, and guessing https for it fails at the
+        // handshake -- which must NOT fall back, since that is
+        // indistinguishable from a server whose certificate is wrong.
+        // Somebody who wants https on an odd port can say so.
+        if (!out->scheme_given) out->tls = (out->port == 443);
     }
 
     const char *path = slash ? slash : "/";
@@ -133,47 +153,31 @@ static void fail(struct uhttp_request *r, const char *fmt, ...) {
     va_end(ap);
 }
 
-int uhttp_fetch(struct uhttp_request *req) {
-    if (!req || !req->url) return -1;
-    req->err[0] = '\0';
+// One attempt at one scheme. THREE-VALUED, and the middle value is the
+// whole point: only "nothing is listening on that port" may be retried
+// over http, because falling back on a TLS or certificate failure would
+// turn "this server's identity is wrong" into "let us use plaintext
+// instead" -- the downgrade HSTS exists to stop.
+enum attempt { ATTEMPT_OK, ATTEMPT_NO_CONNECT, ATTEMPT_FAILED };
+
+static enum attempt attempt_fetch(struct uhttp_request *req,
+                                  const struct uhttp_url *up, uint32_t ip) {
+    const struct uhttp_url u = *up;
+
     req->status = 0;
     req->body_bytes = 0;
-
-    struct uhttp_url u;
-    if (uhttp_parse_url(req->url, &u) != 0) {
-        fail(req, "cannot parse '%s' as an http:// or https:// URL", req->url);
-        return -1;
-    }
-
-    if (u.tls && !utls_available()) {
-        fail(req, "this build has no TLS, so https is not available");
-        return -1;
-    }
-
-    uint32_t ip = 0;
-    if (!uresolv_parse_ip(u.host, &ip)) { // 1 = it was a dotted quad already
-        int rc = uresolv_lookup(u.host, 0, &ip);
-        if (rc == -ENODEV) {
-            fail(req, "no nameserver configured -- run `netd`, or set one in /etc/resolv.conf");
-            return -1;
-        }
-        if (rc != 0) {
-            fail(req, "%s: not found", u.host);
-            return -1;
-        }
-    }
 
     struct transport t = { .fd = -1, .tls = NULL };
     t.fd = sys_socket(NET_ABI_AF_INET, NET_ABI_SOCK_STREAM, NET_ABI_IPPROTO_TCP);
     if (t.fd < 0) {
         fail(req, "cannot open a socket");
-        return -1;
+        return ATTEMPT_FAILED;
     }
 
     if (sys_connect(t.fd, ip, u.port, 0) < 0) {
         fail(req, "cannot connect to %s port %u", u.host, (unsigned)u.port);
         close(t.fd);
-        return -1;
+        return ATTEMPT_NO_CONNECT;
     }
 
     if (u.tls) {
@@ -187,11 +191,14 @@ int uhttp_fetch(struct uhttp_request *req) {
         char terr[UHTTP_ERR_MAX];
         t.tls = utls_connect(t.fd, &cfg, terr, sizeof terr);
         if (!t.tls) {
+            // NOT ATTEMPT_NO_CONNECT: the port answered and TLS failed,
+            // which is a reason to stop rather than to try plaintext.
             fail(req, "%s", terr);
             close(t.fd);
-            return -1;
+            return ATTEMPT_FAILED;
         }
     }
+    req->used_tls = (t.tls != NULL);
 
     if (req->on_connect)
         req->on_connect(req->sink_ctx, ip,
@@ -255,10 +262,64 @@ int uhttp_fetch(struct uhttp_request *req) {
 
     if (t.tls) utls_close(t.tls);
     close(t.fd);
-    return 0;
+    return ATTEMPT_OK;
 
 done_err:
     if (t.tls) utls_close(t.tls);
     close(t.fd);
-    return -1;
+    return ATTEMPT_FAILED;
+}
+
+int uhttp_fetch(struct uhttp_request *req) {
+    if (!req || !req->url) return -1;
+    req->err[0] = '\0';
+    req->status = 0;
+    req->body_bytes = 0;
+    req->used_tls = 0;
+
+    struct uhttp_url u;
+    if (uhttp_parse_url(req->url, &u) != 0) {
+        fail(req, "cannot parse '%s' as a URL", req->url);
+        return -1;
+    }
+
+    if (u.tls && !utls_available()) {
+        if (u.scheme_given) {
+            fail(req, "this build has no TLS, so https is not available");
+            return -1;
+        }
+        u.tls = 0; // guessed https on a build without it; http is the answer
+        if (!u.port_given) u.port = 80;
+    }
+
+    // Resolved ONCE. The fallback changes the scheme and the port, never
+    // the host, so a second lookup would ask a question already answered
+    // -- and could answer it differently, which is worse than slow.
+    uint32_t ip = 0;
+    if (!uresolv_parse_ip(u.host, &ip)) { // 1 = it was a dotted quad already
+        int rc = uresolv_lookup(u.host, 0, &ip);
+        if (rc == -ENODEV) {
+            fail(req, "no nameserver configured -- run `netd`, or set one in /etc/resolv.conf");
+            return -1;
+        }
+        if (rc != 0) {
+            fail(req, "%s: not found", u.host);
+            return -1;
+        }
+    }
+
+    enum attempt r = attempt_fetch(req, &u, ip);
+
+    // THE FALLBACK, and its three conditions are all necessary. Only a
+    // GUESSED scheme may be downgraded (an explicit https:// that will
+    // not connect is an error, not an invitation); only from https; and
+    // only when the port did not answer at all.
+    if (r == ATTEMPT_NO_CONNECT && !u.scheme_given && u.tls) {
+        if (req->on_fallback) req->on_fallback(req->sink_ctx, u.host);
+        u.tls = 0;
+        if (!u.port_given) u.port = 80;
+        r = attempt_fetch(req, &u, ip);
+    }
+
+    return r == ATTEMPT_OK ? 0 : -1;
 }

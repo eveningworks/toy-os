@@ -32,6 +32,36 @@ where the body goes, and words the failures. That split exists because
 there were about to be three copies of a URL parser and a header scan —
 this, `httpd`, and the `update` that `docs/update-design.md` designs.
 
+## The scheme may be left off
+
+`wget example.com` tries **https first** and falls back to http, which
+is what a browser does with a typed address — Chrome auto-upgrades,
+Firefox has HTTPS-Only Mode. GNU wget and curl both default to plaintext
+instead; that is the older answer to a question the web has since
+settled.
+
+**It falls back only when port 443 does not answer.** Never on a
+certificate failure, never on a handshake failure, and never on the
+entropy refusal — because falling back there would turn "this server's
+identity is wrong" into "let us talk in plaintext instead", which is the
+downgrade HSTS exists to stop. So the fallback means "this host does not
+speak https", never "https did not go well".
+
+**The fallback is announced**, since a downgrade nobody asked for should
+not be silent:
+
+    $ wget example.invalid
+    wget: no https on example.invalid, falling back to http (not encrypted)
+
+**An explicit port cancels the guess unless it is 443.** `host:8080` is
+overwhelmingly a plain server, and Chrome likewise upgrades only on the
+default port. Say `https://host:8443` when you want TLS on an odd port.
+
+A scheme this does not speak — `ftp://` — is refused rather than treated
+as a hostname.
+
+## HTTP/1.0
+
 **HTTP/1.0 with `Connection: close`**, deliberately. That makes the
 *server* end the body by closing the connection, so there is no chunked
 decoding, no `Content-Length` arithmetic and no persistent-connection
@@ -115,6 +145,7 @@ is. Other failures:
 | `no nameserver configured` | run `netd`, or set one in `/etc/resolv.conf` |
 | `not found` | DNS answered, and the name does not exist |
 | `cannot connect to <host> port <n>` | nothing is listening, or the interface has no address yet |
+| `cannot parse '<url>' as a URL` | a scheme this does not speak, or a host/path too long to hold |
 
 ## See also
 
