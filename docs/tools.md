@@ -380,6 +380,19 @@ manual steps to be worth automating:
   be what you got by FORGETTING a flag, and every session forgot it.
   `--reboot` is still accepted and now says nothing.
 
+  **IT HOLDS ONE SESSION FOR THE WHOLE FLASH, opened before the first
+  write.** The comparison each tree needs is a shell -- it lists and
+  hashes the remote tree -- and a flash replaces the programs that shell
+  is made of. The session used to be opened just before `/lib`, on the
+  theory that `/lib` was the only dangerous tree; `/bin` breaks a shell
+  SOONER, because its new binaries are linked against libraries that
+  have not been sent yet. So the sync opened a fresh session per tree,
+  got `connection closed` on the one after `/bin`, and gave up having
+  written no kernel -- leaving `/bin` new, `/lib` old and the machine
+  reachable only over TFTP. Both laptops ended up there on 2026-09-07.
+  A session opened before any write survives all of them and reboots at
+  the end.
+
   **It SYNCS /bin, /lib, /tests and /usr FIRST**, because a kernel is
   half a build: an ABI struct that changes size moves fields under every
   binary compiled against the old one, and the machine then boots
@@ -409,18 +422,27 @@ manual steps to be worth automating:
   That run is what the two paragraphs above describe; before it they
   were an argument.
 
-  **NEVER PIPE A FLASH, AND NEVER PUT A `timeout` IN FRONT OF ONE.** The
-  exit status of `remote.py flash | tail` is TAIL'S, so a flash that was
-  killed reports success; and a `timeout` that fires mid-run kills it
-  between the two halves of the job. Both happened at once on
-  2026-09-07: the run was cut after the `/bin` sync, printed `sent 97
-  file(s)` as its last line, and reported exit 0 -- while `/lib` was
-  still the old build and the kernel had never been written. A machine
-  in that state looks exactly like the `/lib`-sync hazard above,
-  `connection closed` on every session, which sends you looking for an
-  ABI mismatch that is really a half-finished copy.
+  **NEVER PIPE A FLASH.** The exit status of `remote.py flash | tail` is
+  TAIL'S, so a flash that FAILED reports success. That is not a
+  hypothetical: on 2026-09-07 a flash piped through `tail` ended after
+  the `/bin` sync with `sent 97 file(s)` as its last line and exit 0,
+  and was reported as done. It had not written the kernel. The same
+  flash run un-piped a few hours later printed `FAILED syncing /tests`
+  and returned 1 -- the same failure, finally visible.
 
-  **THE RECOVERY IS TFTP, and it needs no shell.** TFTP is a separate
+  Redirect (`> log 2>&1`) rather than pipe: that preserves the status.
+  And note that **stderr is unbuffered while stdout is not**, so in such
+  a log the error lines appear at the TOP, before the output that
+  preceded them; read it by content, not by position.
+
+  **What that failure actually was** is the `/bin`-before-`/lib` hazard
+  now handled by the single held session (above) -- the first diagnosis
+  here blamed a `timeout` wrapper, which was wrong, and the wrong story
+  survived one commit.
+
+  **THE RECOVERY IS TFTP, and it needs no shell.** (Still worth knowing
+  even with the session fix: a flash interrupted any other way leaves
+  the same state.) TFTP is a separate
   service and keeps answering when `telnetd` cannot spawn:
 
       python3 tools/remote.py --host H get /boot/boot/kernel.bin /tmp/k

@@ -558,13 +558,23 @@ def _remote_mismatches(sess, host, tftp_port, remote_dir, want, timeout,
 
 
 def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
-            dry_run=False, missing_only=False):
+            dry_run=False, missing_only=False, sess=None):
     """`missing_only` sends only what the machine does NOT already have.
 
     That is dpkg's conffile rule, and it is what /etc needs: a new
     service or setting descriptor has to ARRIVE, while a file the
     machine already has is its CONFIGURATION -- overwriting it would
     throw away whatever was set on that machine.
+
+    **`sess` LETS A CALLER SUPPLY THE SESSION, and do_flash must.** The
+    comparison needs a shell -- it lists and hashes the remote tree --
+    and a flash REPLACES the programs that shell is made of. Opening a
+    fresh session per tree therefore works exactly until the first tree
+    lands: with a new /bin against the still-old /lib, `tosh` cannot
+    start, telnetd accepts a connection and closes it, and the flash
+    fails on the NEXT tree having written no kernel. One session opened
+    before any write survives all of it, which is the same property the
+    rescue session relies on.
     """
     if not os.path.isdir(local_dir):
         print(f"remote: {local_dir} is not a directory", file=sys.stderr)
@@ -575,11 +585,13 @@ def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
         print(f"remote: {local_dir} is empty", file=sys.stderr)
         return 1
 
-    try:
-        sess = Session(host, telnet_port, timeout)
-    except OSError as e:
-        print(f"remote: {e}", file=sys.stderr)
-        return 1
+    own_session = sess is None
+    if own_session:
+        try:
+            sess = Session(host, telnet_port, timeout)
+        except OSError as e:
+            print(f"remote: {e}", file=sys.stderr)
+            return 1
 
     try:
         todo = _remote_mismatches(sess, host, tftp_port, remote_dir, want,
@@ -614,7 +626,8 @@ def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
         print(f"remote: {e}", file=sys.stderr)
         return 1
     finally:
-        sess.close()
+        if own_session:
+            sess.close()   # a BORROWED session is the caller's to close
 
     sent = 0
     for r in todo:
@@ -765,15 +778,17 @@ def _verify_offline(host, tftp_port, local, want, timeout,
 # it, which is how it was found. Doing it last keeps the window between
 # "libraries replaced" and "rebooted into the matching kernel" as small
 # as this can make it.
+#
+# **/bin FIRST IS ITS OWN HAZARD, and the order does not fix it.** The
+# new binaries in /bin are linked against the new libraries, so from the
+# moment /bin lands until /lib follows, nothing dynamic on the machine
+# can start -- including the shell every later step needs. There is no
+# ordering that avoids that; what makes the flash survive it is holding
+# ONE session opened before the first write (do_flash).
 # (staged subdirectory, path on the machine, new files only)
 USERLAND_TREES = (("bin", "/bin", False), ("tests", "/tests", False),
                   ("usr", "/usr", False), ("etc", "/etc", True),
                   ("lib", "/lib", False))
-
-# The tree whose replacement is the dangerous one -- see do_flash's
-# rescue session. Named rather than spelled at the comparison so the
-# two cannot drift from the table above.
-LIB_TREE = "/lib"
 
 
 def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
@@ -857,35 +872,48 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
     finally:
         sess.close()
 
-    # THE RESCUE SESSION, opened just before /lib is replaced and held
-    # open to the end. Replacing a shared library under a machine still
-    # running the OLD kernel kills every LATER spawn the moment the two
-    # disagree about an ABI struct -- telnetd accepts a connection and
-    # its shell dies, so a fresh session cannot be made and nothing can
-    # reboot the machine. A session made BEFORE that write is already
-    # running and survives, and /bin/reboot is statically linked so the
-    # one thing it still has to spawn does not go through /lib.
+    # ONE SESSION FOR THE WHOLE FLASH, opened before the FIRST write and
+    # held to the end. Replacing what a running machine's programs are
+    # made of kills every LATER spawn the moment the pieces disagree
+    # about an ABI struct: telnetd accepts a connection and its shell
+    # dies, so a FRESH session cannot be made. A session opened before
+    # any of that is already running and survives it, and /bin/reboot is
+    # statically linked so the one thing it still has to spawn does not
+    # go through /lib.
     #
-    # That pair is what turned "press the power button" into a reboot.
+    # **IT USED TO BE OPENED JUST BEFORE /lib, AND THAT WAS TOO LATE.**
+    # /bin breaks a shell sooner: its new binaries are linked against
+    # the new libraries, which are sent LAST, so `tosh` stops starting
+    # the moment /bin lands. do_sync then opened a fresh session per
+    # tree, got "connection closed" on the very next one, and the flash
+    # gave up having written no kernel -- leaving /bin new, /lib old and
+    # the machine reachable only over TFTP. Both laptops were left in
+    # that state on 2026-09-07, which is how this was found.
+    #
+    # So the session is opened first and LENT to every sync (do_sync's
+    # `sess`), which is also what turned "press the power button" into
+    # a reboot.
     rescue = None
     if not kernel_only:
+        try:
+            rescue = Session(host, telnet_port, timeout)
+        except (TimeoutError, EOFError, OSError):
+            # Not fatal where nothing that breaks a shell gets written
+            # (a machine already up to date). It IS fatal for a real
+            # update, and the sync says so when it cannot list a tree.
+            print("remote: could not hold a session before the sync -- if "
+                  "this flash replaces /bin or /lib it will not complete, "
+                  "and a reboot may need the power button", file=sys.stderr)
         for sub, remote, new_only in USERLAND_TREES:
             local_dir = os.path.join(staging, sub)
             if not os.path.isdir(local_dir):
                 print(f"remote: no {local_dir} -- run `make iso` first",
                       file=sys.stderr)
+                if rescue is not None:
+                    rescue.close()
                 return 1
-            if remote == LIB_TREE and rescue is None:
-                try:
-                    rescue = Session(host, telnet_port, timeout)
-                except (TimeoutError, EOFError, OSError):
-                    # Not fatal: the flash still works, it just ends at
-                    # the power button as it always used to.
-                    print("remote: could not hold a session before the "
-                          "/lib sync -- a reboot may need the power button",
-                          file=sys.stderr)
             if do_sync(host, telnet_port, tftp_port, local_dir, remote,
-                       timeout, False, new_only):
+                       timeout, False, new_only, sess=rescue):
                 print(f"remote: FAILED syncing {remote} -- the kernel has "
                       "NOT been written", file=sys.stderr)
                 if rescue is not None:
