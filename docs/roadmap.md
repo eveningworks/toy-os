@@ -761,6 +761,10 @@ run on, not by order.
 - [ ] A routing table -- routing is "my subnet, or the gateway", per device
 - [ ] `/etc/hosts`, and a resolver cache -- every lookup goes to the wire
 - [x] ~~An HTTP client (`wget`-shaped), the first thing that makes the stack useful rather than demonstrable~~ DONE 2026-08-29
+- [x] ~~HTTPS: a TLS client~~ DONE 2026-09-07 -- mbedTLS 3.6 vendored; `/lib/libssl.so` and `/lib/libhttp.so`; TLS 1.3, chain verification
+- [ ] A TLS *server*, so `httpd` can speak https -- needs a private key on disk and a decision about where it lives
+- [ ] Certificate revocation: nothing reads a CRL or speaks OCSP, so a revoked certificate still verifies
+- [ ] `wget` following redirects, which most https URLs now answer with
 - [x] ~~A second NIC driver, to prove the interface isn't shaped around the first~~ DONE 2026-08-29 -- both landed together
 
 ### Sound

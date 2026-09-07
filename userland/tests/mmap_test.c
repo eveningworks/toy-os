@@ -17,6 +17,7 @@
 #include <errno.h>
 #include <sys/mman.h>
 #include "syscall_abi.h"
+#include <scheduler.h> // MMAP_MAX_REGIONS -- the bound, never a literal
 #include "tmppath.h"
 
 // Console AND /tmp/mmap_test.out (UTEST_VERDICT_FILE): this test is
@@ -206,22 +207,31 @@ int main(void) {
           sys_errno() == EINVAL, "munmap of a hole is EINVAL");
 
     // --- the region table's bound ------------------------------------
-    // Fill all 16 slots (15 singles beside one 3-pager), then require
-    // the 17th mapping AND a middle split -- which needs a free slot
-    // for the tail -- to refuse without half-applying.
+    // Fill every slot (one 3-pager beside singles), then require one
+    // MORE mapping AND a middle split -- which needs a free slot for
+    // the tail -- to refuse without half-applying.
+    //
+    // THE COUNT IS DERIVED FROM `MMAP_MAX_REGIONS`, NEVER WRITTEN DOWN.
+    // It was 15/16/17 here, against a ceiling of 16, and raising that
+    // ceiling turned this into a test asserting the OLD limit -- which
+    // fails as "a seventeenth region is ENOMEM" and reads like a
+    // regression in mmap rather than a bound that went stale with the
+    // map it was written against.
     uint8_t *three = sys_mmap(0, 3 * 4096, PROT_READ | PROT_WRITE,
                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    uint8_t *slots[15];
+    uint8_t *slots[MMAP_MAX_REGIONS - 1];
+    const int singles = MMAP_MAX_REGIONS - 1;
     int got = 0;
-    for (int i = 0; i < 15; i++) {
+    for (int i = 0; i < singles; i++) {
         slots[i] = sys_mmap(0, 4096, PROT_READ | PROT_WRITE,
                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (in_arena(slots[i])) got++;
     }
-    utest_check(in_arena(three) && got == 15, "sixteen regions coexist");
+    utest_check(in_arena(three) && got == singles,
+          "every region slot can be filled at once");
     e = sys_mmap(0, 4096, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     utest_check(e == MAP_FAILED && sys_errno() == ENOMEM,
-          "a seventeenth region is ENOMEM");
+          "one region past the table is ENOMEM");
     if (in_arena(three)) {
         fill(three, 3 * 4096);
         utest_check(sys_munmap(three + 4096, 4096) == -1 && sys_errno() == ENOMEM,
@@ -233,7 +243,7 @@ int main(void) {
         utest_check(0, "a middle split with a full table refuses whole");
         utest_check(0, "...and the refused region kept every byte");
     }
-    for (int i = 0; i < 15; i++)
+    for (int i = 0; i < singles; i++)
         if (in_arena(slots[i])) sys_munmap(slots[i], 4096);
 
     // --- the libc face -----------------------------------------------

@@ -782,6 +782,7 @@ uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
 # nothing in any other, so the code sits in /lib once however many
 # programs use it.
 ULIB_SO_sum = $(BUILD)/lib/libhash.so
+ULIB_SO_wget = $(LIBHTTP_SO) $(LIBSSL_SO)
 
 ulibso = $(ULIB_SO_$(notdir $(1)))
 
@@ -923,7 +924,7 @@ $(BUILD)/userland/bin/reboot.elf: $(BUILD)/userland/bin/reboot.o $(USERLAND_RT) 
 # 2 MiB-aligned .so's offsets are not page-congruent under 4 KiB
 # pages -- ld-toy refuses such a file by name).
 LDSO    = $(BUILD)/lib/ld-toy.so
-DYNLIBS = $(BUILD)/lib/libhello.so $(BUILD)/lib/libhash.so
+DYNLIBS = $(BUILD)/lib/libhello.so $(BUILD)/lib/libhash.so $(LIBSSL_SO) $(LIBHTTP_SO)
 
 $(BUILD)/userland/dynlib/%.o: USERLAND_CFLAGS := $(subst -fpie,-fpic,$(USERLAND_CFLAGS))
 
@@ -945,6 +946,100 @@ $(BUILD)/lib/libhash.so: $(BUILD)/userland/dynlib/uhash.o $(BUILD)/userland-pic/
 	@mkdir -p $(dir $@)
 	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libhash.so -o $@ \
 	      $(BUILD)/userland/dynlib/uhash.o $(BUILD)/userland-pic/shared/kcrc.o $(LIBC_SO)
+
+# libssl.so -- mbedTLS, vendored, as one shared object.
+#
+# A SHARED library rather than linked into wget, which is the opposite
+# of the Doom/cJSON precedent and for a licence reason that runs the
+# other way: doomgeneric is GPL-2 in an MIT tree, so the per-binary link
+# is what keeps anything else from depending on it. mbedTLS is
+# Apache-2.0, aggregates freely, and has three callers coming (wget,
+# update, and whatever speaks HTTPS next) -- 355 KB of text once in /lib
+# rather than once per program.
+#
+# THE VENDORED TREE IS NOT EDITED. Everything it needs is here, as
+# flags:
+#
+#   -nostdinc + -isystem $(GCC_FREESTANDING_INC)
+#       Nothing else in this build passes -nostdinc, so a header tolibc
+#       lacks silently resolves to /usr/include's. mbedTLS asks
+#       `__has_include(<sys/socket.h>)` and takes the host's if it is
+#       there, which then conflicts with our own <sys/types.h>. The
+#       -isystem restores stddef.h/stdint.h/stdarg.h, which are the
+#       COMPILER's rather than the C library's. This is also why tolibc
+#       needed a <limits.h>: GCC's ends in `#include_next <limits.h>`,
+#       so without one -nostdinc fails inside GCC's own header.
+#
+#   -Uunix -U__unix -U__unix__ -U__linux__ -U__gnu_linux__
+#       GCC predefines all of these for every toy-os compile, because
+#       the host triple is Linux. mbedTLS reads them (library/common.h)
+#       and concludes it may include <unistd.h> and <sys/time.h> for
+#       getpid()-based fork protection. toy-os has no fork, so the
+#       block is meaningless as well as unbuildable.
+#
+# Warnings off for the vendored tree and the frame warning KEPT, the
+# same split and the same reason as DOOM_CFLAGS above.
+GCC_FREESTANDING_INC := $(shell gcc -print-file-name=include)
+
+MBEDTLS_CFLAGS = $(subst -Wextra,,$(subst -Wall,-w,$(LIBC_PIC_CFLAGS))) \
+                 -nostdinc -isystem $(GCC_FREESTANDING_INC) \
+                 -Uunix -U__unix -U__unix__ -U__linux__ -U__gnu_linux__ \
+                 -DMBEDTLS_CONFIG_FILE='"toyos_mbedtls_config.h"' \
+                 -Iuserland/backends/mbedtls \
+                 -Iuserland/ports/mbedtls/include \
+                 -Iuserland/ports/mbedtls/library
+
+# WILDCARDED, unlike EXTRA_OBJS_toywm's hand-written list, and for the
+# reason the Doom rules give: this is upstream's file set, so curating
+# it by hand would mean keeping a second copy of somebody else's build
+# in step. net_sockets.c and timing.c are the two exclusions -- both are
+# POSIX host glue this OS has no equivalent for, and neither is reachable
+# from the configuration (see that directory's README).
+MBEDTLS_SRCS = $(filter-out %/net_sockets.c %/timing.c, \
+                 $(wildcard userland/ports/mbedtls/library/*.c))
+MBEDTLS_OBJS = $(patsubst userland/%.c,$(BUILD)/userland-pic/%.o,$(MBEDTLS_SRCS))
+
+$(BUILD)/userland-pic/ports/mbedtls/library/%.o: userland/ports/mbedtls/library/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(MBEDTLS_CFLAGS) $< -o $@
+
+# OUR backend keeps every warning, exactly as userland/backends/doom/
+# does. It needs mbedTLS's headers and the same -nostdinc treatment,
+# because it includes them.
+$(BUILD)/userland-pic/backends/mbedtls/%.o: userland/backends/mbedtls/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(subst -Wframe-larger-than=2048,-Wframe-larger-than=2048,$(LIBC_PIC_CFLAGS)) \
+	      -nostdinc -isystem $(GCC_FREESTANDING_INC) \
+	      -Uunix -U__unix -U__unix__ -U__linux__ -U__gnu_linux__ \
+	      -DMBEDTLS_CONFIG_FILE='"toyos_mbedtls_config.h"' \
+	      -Iuserland/backends/mbedtls -Iuserland/ports/mbedtls/include \
+	      -Iuserland/ports/mbedtls/library $< -o $@
+
+MBEDTLS_BACKEND_SRCS = $(shell find userland/backends/mbedtls -name '*.c' 2>/dev/null | sort)
+MBEDTLS_BACKEND_OBJS = $(patsubst userland/%.c,$(BUILD)/userland-pic/%.o,$(MBEDTLS_BACKEND_SRCS))
+
+LIBSSL_SO = $(BUILD)/lib/libssl.so
+$(LIBSSL_SO): $(MBEDTLS_OBJS) $(MBEDTLS_BACKEND_OBJS) $(LIBC_SO)
+	@mkdir -p $(dir $@)
+	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libssl.so -o $@ \
+	      $(MBEDTLS_OBJS) $(MBEDTLS_BACKEND_OBJS) $(LIBC_SO)
+
+# libhttp.so -- the HTTP client, over a plain socket or a TLS session.
+#
+# SEPARATE FROM libssl.so, which is the split the two headers already
+# describe: <utls.h> names no engine and <uhttp.h> names no cipher. It
+# links libssl.so for the TLS half and libuapp.so for uresolv -- the DNS
+# resolver lives in userland/lib, which is globbed into the toolkit, and
+# every program loads libuapp.so anyway.
+#
+# uhttp.c is in userland/dynlib/ rather than userland/lib/ ON PURPOSE:
+# that directory is globbed wholesale into libuapp, so putting it there
+# would give every binary in the system a dependency on mbedTLS.
+LIBHTTP_SO = $(BUILD)/lib/libhttp.so
+$(LIBHTTP_SO): $(BUILD)/userland/dynlib/uhttp.o $(LIBSSL_SO) $(LIBUAPP_SO) $(LIBC_SO)
+	@mkdir -p $(dir $@)
+	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libhttp.so -o $@ \
+	      $(BUILD)/userland/dynlib/uhttp.o $(LIBSSL_SO) $(LIBUAPP_SO) $(LIBC_SO)
 
 # The one test with its own link line: a DYNAMIC executable.
 # link-dyn.ld adds the .interp/.dynamic/GOT/PLT homes the static script
@@ -1326,6 +1421,15 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LI
 	# rules file is that it can be edited on the machine.
 	@for f in data/etc/*.conf; do \
 	    if [ -f "$$f" ]; then cp "$$f" $(SEED_DIR)/sync/etc/; fi; \
+	done
+	# The TLS trust store: one PEM per anchor, EMPTY by default. An empty
+	# store is a supported state -- nothing is verifiable, so https
+	# refuses rather than connecting to something it cannot vouch for.
+	# `make iso EXTRAS=1` is what puts the Mozilla bundle in it.
+	mkdir -p $(SEED_DIR)/sync/etc/ssl/certs
+	@for f in data/etc/ssl/certs/*; do \
+	    if [ -f "$$f" ] && [ "$$(basename $$f)" != "README.md" ]; then \
+	        cp "$$f" $(SEED_DIR)/sync/etc/ssl/certs/; fi; \
 	done
 	# AVAILABLE services, which init never reads: /usr/share/services is
 	# the descriptor a `service enable` copies into /etc/services.d. The

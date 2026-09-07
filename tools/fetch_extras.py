@@ -100,6 +100,28 @@ EXTRAS = [
         dest="data/doom/doom1.wad",
         fetch=[sys.executable, os.path.join(HERE, "fetch_wad.py")],
     ),
+    Extra(
+        name="ca-bundle",
+        what="Mozilla's CA root certificates -- the trust anchors that let "
+             "`wget https://` verify a public server. Without them the trust "
+             "store is empty and https refuses by name.",
+        licence="MPL-2.0 (Mozilla Public License 2.0)",
+        summary=(
+            "MPL-2.0 is FILE-SCOPED copyleft: it reaches the covered file "
+            "and nothing that merely reads it, and section 3.3 permits "
+            "distributing it inside a larger work under other terms. So it "
+            "sits beside MIT code without affecting any of it -- far weaker "
+            "than the Doom engine's GPL, and it is DATA rather than linked "
+            "code, so there is no linking question at all. The obligation "
+            "is to keep the notice and offer the file's source, which the "
+            "file itself is. curl ships the same conversion and is MIT."
+        ),
+        source="https://curl.se/ca/cacert.pem -- curl's PEM conversion of "
+               "Mozilla's certdata.txt (see tools/fetch_ca_bundle.py for "
+               "why not certdata.txt directly)",
+        dest="data/etc/ssl/certs/mozilla-roots.pem",
+        fetch=[sys.executable, os.path.join(HERE, "fetch_ca_bundle.py")],
+    ),
 ]
 
 

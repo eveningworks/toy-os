@@ -81,6 +81,12 @@ TOOLS = [
     # integers. gcc and the standard library only.
     ("divti3_host", "divti3_hostcheck.py",     "__udivti3 and friends against bignums", False,
      None,                                                                                   False),
+    # --- networking -------------------------------------------------
+    # Launches its own guests against a COPY of disk.img and serves TLS
+    # from the host, so wants_vm is False and nothing leaves the machine.
+    # Needs openssl to make the certificates and SKIPS cleanly without it.
+    ("https",       "https_test.py",           "wget over TLS, and what it refuses", False,
+     ("openssl",    "needs openssl on PATH to make test certificates"),                       False),
     # --- storage and boot -------------------------------------------
     ("partition",   "partition_test.py",       "mounting from an MBR/GPT partition", True,  None,                   False),
     ("fs_switch",   "fs_switch_test.py",       "format, remount, reboot persistence", True, None,                   False),
@@ -260,6 +266,12 @@ def precondition_met(kind):
         # must not start requiring lame and ffmpeg on every checkout,
         # the same rule that keeps Docker out of preflight.
         return all(shutil.which(t) for t in ("gcc", "lame", "ffmpeg")), why
+    if key == "openssl":
+        # The test certificates are made with `openssl req -x509`.
+        # Missing it is a skip for the same reason lame and ffmpeg are:
+        # a check that cannot pass on a clean checkout is one people
+        # learn to ignore.
+        return shutil.which("openssl") is not None, why
     if key == "live_iso":
         # A separate ISO that `make iso` does not build. Missing it is a
         # precondition, not a failure -- reporting it as red would train

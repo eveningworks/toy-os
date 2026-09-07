@@ -6496,3 +6496,70 @@ worth it when tickless idle arrives and not before. And `pit_ticks()`
 kept its name through this change even though the PIT no longer feeds
 it -- 163 call sites in 43 files, renamed separately so the interesting
 diff stayed readable.
+
+## A TLS client asks how good the randomness is, and refuses rather than warning
+
+`SYS_GETRANDOM` always answers and deliberately never grades its answer.
+`abi/syscall_abi.h` says why: a ring-3 program handed a quality flag
+"would mostly use it to decide to carry on anyway". That reasoning holds
+for the general case and breaks for exactly one caller -- a private key.
+
+Under an emulator with no virtio-rng the source is TSC jitter, where the
+"hardware" being timed is itself software. A TLS key drawn from it is
+not secret from anyone who can model the emulator, and the connection
+that key protects is theatre.
+
+**So the grade is read from `QUERY_RANDOM`, not from the syscall**, and
+nothing about `SYS_GETRANDOM` changed. The two answer different
+questions -- "are these bytes usable?" asked per draw by code, versus
+"what is this machine's entropy source?" asked once -- and the fact
+class already existed for the second. Adding a quality flag to the
+syscall would have attached a promise to it that this kernel cannot
+keep, for one caller's benefit.
+
+**It REFUSES rather than warning.** A warning printed above a page of
+HTML is a warning nobody reads, and the failure mode it guards against
+is silent by construction: a weak key produces a handshake that
+completes perfectly. `/bin/wget --weak-entropy` is the override, and the
+threshold is `>= QUERY_RANDOM_VIRTIO` rather than a list, because the
+enum is ordered by trust -- a stronger source added later needs no
+change here.
+
+**The library states the condition and the program names the flag.**
+`utls_connect()` says the randomness is too weak and what would fix it;
+it does not mention `--weak-entropy`, because `<utls.h>` has three
+callers coming and `-k` is already wget's spelling for something else
+entirely. A library naming a particular program's flags is a wrong
+sentence waiting for the second caller.
+
+## HTTP and TLS are separate libraries, and neither may live in `userland/lib/`
+
+`/lib/libhttp.so` (`<uhttp.h>`) speaks HTTP over a transport;
+`/lib/libssl.so` (`<utls.h>`) is that transport when the scheme is
+https. The split is visible in the headers: **`<utls.h>` names no engine
+and `<uhttp.h>` names no cipher.** Replacing mbedTLS is a backend change
+rather than a change to every caller -- not hypothetical tidiness, since
+BearSSL was measured against it first and the loser lost on maintenance,
+which can change.
+
+**Neither can live in `userland/lib/`, and the reason is a build fact
+rather than taste.** That directory is globbed wholesale into
+`libuapp.a` and `libuapp.so`, which every program links -- so a TLS call
+there would put mbedTLS behind every binary in the system, including
+`init` and the window manager. `userland/dynlib/` is where a shared
+library's implementation goes, and a program opts in with
+`ULIB_SO_<name>`.
+
+The same argument, one layer in, kept `ufile_slurp()` out of
+`utls_mbedtls.c`: it lives in `libuapp`, and a crypto library depending
+on the widget toolkit is backwards. The anchors are read with `fopen`
+and `fread`, which are the C library rather than a hand-rolled loop.
+
+**`MMAP_MAX_REGIONS` had to double for this, and the arithmetic is worth
+knowing.** ld-toy carves each `PT_LOAD` into its own `MAP_FIXED` region
+and ld gives a `.so` four of them, so the ceiling is mostly a program's
+DT_NEEDED list rather than a count of the `mmap()` calls it makes -- a
+program calling `mmap()` never can still exhaust it. wget's fourth
+library took it past 16, and the loader failed on the LAST one with
+"segment map failed", naming the library that ran out rather than the
+one that filled it.

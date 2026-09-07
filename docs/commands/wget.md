@@ -6,7 +6,7 @@
 
 ## Synopsis
 
-    wget [-O <file>] <url>
+    wget [-O <file>] [-k] [--weak-entropy] <url>
 
 ## Options
 
@@ -14,59 +14,112 @@
   output, creating it or truncating it, and print the byte count when
   the fetch finishes. The connecting line and any error still go to the
   terminal.
+- `-k` -- do not verify the server's certificate. The connection is
+  still encrypted; it is no longer *authenticated*, so a warning is
+  printed. https only.
+- `--weak-entropy` -- key the connection even when this machine's
+  randomness is only TSC jitter. https only, and see below.
 
 ## Description
 
-`/bin/wget` — fetch a URL over HTTP and print it, or save it with `-O`.
+`/bin/wget` — fetch a URL over HTTP or HTTPS and print it, or save it
+with `-O`.
 
-It is the program that makes the network useful rather than
-demonstrable, and it is the proof that TCP works: one command resolves a
-name through DNS, opens a TCP connection with retransmission underneath
-it, writes a request, and reads the body back through `read()` on an
-ordinary descriptor.
+The protocol is not in this program. It lives in `/lib/libhttp.so`
+(`<uhttp.h>`), which reaches `/lib/libssl.so` (`<utls.h>`, mbedTLS) for
+the https half; wget is the front end that parses arguments, decides
+where the body goes, and words the failures. That split exists because
+there were about to be three copies of a URL parser and a header scan —
+this, `httpd`, and the `update` that `docs/update-design.md` designs.
 
 **HTTP/1.0 with `Connection: close`**, deliberately. That makes the
 *server* end the body by closing the connection, so there is no chunked
 decoding, no `Content-Length` arithmetic and no persistent-connection
-state to keep — the end of the stream is the end of the response. The
-cost is one connection per fetch, which is the right trade for a client
-with no second request to make.
+state to keep — the end of the stream is the end of the response. A
+`Host:` header is sent anyway, because name-based virtual hosting is
+universal and a server given no name serves the wrong site.
+
+## HTTPS
+
+**TLS 1.3 and 1.2, ECDHE with AES-GCM or ChaCha20-Poly1305.** No CBC, no
+RC4, no static RSA, no 3DES — every suite offered is authenticated
+encryption with forward secrecy, so a server key that leaks later cannot
+decrypt traffic recorded today.
+
+**The certificate is verified by default**, against the PEM files in
+`/etc/ssl/certs`. Three outcomes, deliberately worded differently
+because they send you to different places:
+
+| Message | What it means |
+|---|---|
+| `no trust anchors in /etc/ssl/certs` | This machine was never told whom to trust. Build with `EXTRAS=1`, or drop a PEM in |
+| `certificate verification failed: ...` | The store has anchors and none of them vouches for this server |
+| `WARNING: the server's identity was NOT verified` | You passed `-k`; the traffic is encrypted and nobody checked who is on the other end |
+
+**The trust store is empty on a default build, and that is a state, not
+an oversight.** `make iso EXTRAS=1` fetches Mozilla's CA bundle
+(MPL-2.0) into it after showing the licence. Without anchors, `https://`
+refuses by name rather than connecting to something it cannot vouch for.
+
+## Randomness, and why a fetch may refuse
+
+A TLS private key is only as secret as the randomness it came from.
+`QUERY_RANDOM` reports what this machine's source actually is, and wget
+**refuses** below virtio-rng:
+
+    $ wget https://example.com/
+    wget: this machine's randomness is TSC jitter, which is too weak to
+      key a connection with -- give the guest a virtio-rng device, or
+      accept it explicitly
+    wget: pass --weak-entropy to accept it anyway
+
+Under plain QEMU the source is TSC jitter — software timing software —
+so this fires on every emulated boot. On real hardware with
+RDSEED/RDRAND, or a guest given `-device virtio-rng-pci`, it does not.
+`random` says which source you have.
 
 ## What it is not
 
-**No HTTPS.** TLS is a different project; a URL naming it is refused by
-name rather than attempted and failed.
-
 **No redirects, no cookies, no resume, no recursion.** A non-2xx status
 is reported and the body is still printed, because an error page is
-usually the explanation.
+usually the explanation; the exit status is what a script reads.
 
 **Not a downloader.** There is no progress bar and no retry: a failed
-fetch is a failed fetch, and the exit status says so.
+fetch is a failed fetch.
+
+**No client certificates**, and no TLS *server* anywhere in toy-os —
+`httpd` speaks plaintext, because giving it TLS means a private key on
+disk and a decision about where it lives.
 
 ## Output
 
     $ wget http://10.0.2.2:8000/hello
-    connecting to 10.0.2.2 (10.0.2.2) port 8000
+    connecting to 10.0.2.2
     hello from the host
 
-    $ wget -O /tmp/page.html http://example.com/
-    connecting to example.com (172.66.147.243) port 80
-    saved 513 bytes to /tmp/page.html
+    $ wget https://example.com/
+    connecting to 104.20.23.154 -- TLSv1.3, TLS1-3-CHACHA20-POLY1305-SHA256
+    <!doctype html>...
 
-The address is printed before connecting, so a response from an
-unexpected host is attributable. Failures name which step did not
-happen, because they send you to different places:
+    $ wget -O /tmp/page.html https://example.com/
+    connecting to 104.20.23.154 -- TLSv1.3, TLS1-3-CHACHA20-POLY1305-SHA256
+    saved 4547 bytes to /tmp/page.html
+
+The address is printed before the body so a response from an unexpected
+host is attributable, and on https the negotiated version and suite are
+printed beside it — the two facts that say what the encryption actually
+is. Other failures:
 
 | Message | What it means |
 |---|---|
-| `no nameserver configured` | run `dhcp`, or set one in `/etc/resolv.conf` |
+| `no nameserver configured` | run `netd`, or set one in `/etc/resolv.conf` |
 | `not found` | DNS answered, and the name does not exist |
-| `connection refused` | the host is there and nothing is listening on that port |
-| `connection reset by peer` | it answered and then gave up, or never answered at all |
+| `cannot connect to <host> port <n>` | nothing is listening, or the interface has no address yet |
 
 ## See also
 
-`host` for resolution on its own, `dhcp` for where the nameserver comes
-from, `ifconfig` for the counters, and `docs/conventions/kernel.md`'s
-networking entry for what the stack under this does and does not do.
+`host` for resolution on its own, `netd` for where the nameserver comes
+from, `ifconfig` for the counters and whether the card is configured,
+`random` for the entropy source, and
+`docs/conventions/kernel.md`'s networking entry for what the stack under
+this does and does not do.

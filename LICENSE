@@ -57,7 +57,7 @@ with the font.
 
 Third-party code
 
-This repository vendors two third-party programs. Neither is covered by
+This repository vendors three third-party programs. None is covered by
 the MIT License above, and each keeps its own license file in its own
 directory.
 
@@ -98,6 +98,28 @@ directory.
                           userland/ports/cjson/LICENSE. Its copyright
                           notice is separate from toy-os's above and
                           must be preserved.
+
+  userland/ports/mbedtls/ Mbed TLS, Copyright The Mbed TLS Contributors,
+                          dual licensed Apache License 2.0 OR (at your
+                          option) the GNU General Public License,
+                          version 2 or later. Full text:
+                          userland/ports/mbedtls/LICENSE.
+
+        TOY-OS TAKES THE APACHE-2.0 OPTION, which the dual licence
+        explicitly permits the recipient to choose. Apache-2.0 is a
+        permissive licence and aggregates with the MIT code above
+        without reaching any of it, so -- unlike the Doom port -- there
+        is no reason to confine it to a single binary, and it is built
+        as a shared library (/lib/libssl.so) that several programs
+        link. Its copyright notices and the NOTICE-style attribution in
+        each file are separate from toy-os's and must be preserved.
+
+        WHAT IS NOT VENDORED. The Mozilla CA certificate bundle is not
+        in this repository. `make iso EXTRAS=1` fetches it, shows its
+        licence (MPL-2.0) before doing so, and records the acceptance;
+        a default build ships an empty trust store. Fetching is not
+        distributing -- an image built with EXTRAS=1 carries
+        /usr/share/licenses/extras.txt saying what is inside it.
 
 ---
 

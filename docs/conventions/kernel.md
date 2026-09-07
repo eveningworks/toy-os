@@ -3557,3 +3557,42 @@ client, and its own reference is then the only thing keeping that name
 in the namespace. It never notices the loss, and refuses to adopt the
 live ring a recycled pid creates behind it. That deadlock is what made
 an `aplay` play its file and never exit.
+
+## HTTPS IS TWO LIBRARIES, AND NEITHER MAY LIVE IN `userland/lib/`
+
+`/lib/libhttp.so` (`<uhttp.h>`) is the HTTP client; `/lib/libssl.so`
+(`<utls.h>`, mbedTLS) is the TLS transport under it when the scheme is
+https. A program opts in with `ULIB_SO_<name>` in the Makefile.
+
+- **`userland/lib/` IS GLOBBED INTO `libuapp`, WHICH EVERY PROGRAM
+  LINKS.** Putting either there would put mbedTLS behind every binary in
+  the system, `init` and the window manager included. A shared library's
+  implementation goes in `userland/dynlib/`; the mbedTLS-specific half
+  goes in `userland/backends/mbedtls/`, on the far side of the
+  directory boundary from the vendored tree.
+- **`<utls.h>` NAMES NO ENGINE AND `<uhttp.h>` NAMES NO CIPHER.**
+  Swapping the TLS implementation is a backend change rather than a
+  change to every caller. BearSSL was measured against mbedTLS before
+  this was written, and lost on maintenance rather than fit -- which can
+  change.
+- **THE CERTIFICATE IS VERIFIED BY DEFAULT, AND AN EMPTY TRUST STORE IS
+  A DIFFERENT ANSWER FROM A FAILED ONE.** `/etc/ssl/certs` is empty on a
+  default build, so `https://` refuses by name; `make iso EXTRAS=1`
+  stages Mozilla's bundle. "No trust anchors" and "not signed by a
+  trusted CA" send you to different places and are worded differently on
+  purpose.
+- **A TLS FETCH REFUSES ON WEAK RANDOMNESS.** The grade comes from
+  `QUERY_RANDOM`, not from `SYS_GETRANDOM`, which deliberately does not
+  report one. Under QEMU without virtio-rng the source is TSC jitter and
+  every https fetch refuses until `--weak-entropy`. See
+  `docs/decisions.md`.
+- **A SOCKET READ RETURNS AT MOST `SYS_NET_MSG_MAX` (1472) BYTES**
+  whatever buffer it is handed, so a 16 KiB TLS record arrives over a
+  dozen reads and the blank line ending HTTP headers can straddle any
+  two of them. `uhttp.c` carries a three-byte tail across reads for
+  exactly that.
+- **A `.so` COSTS FOUR `MMAP_MAX_REGIONS` SLOTS**, one per `PT_LOAD`, so
+  that ceiling is mostly a program's DT_NEEDED list rather than a count
+  of its `mmap()` calls. Exhausting it fails in the loader on the LAST
+  library, naming the one that ran out rather than the one that filled
+  it.

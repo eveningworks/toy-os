@@ -1581,3 +1581,88 @@ every translation unit, ported code earliest of all, so a dependency
 here reaches everywhere. `userland/libc/access.c` carries a
 `_Static_assert` that the two agree, which turns the duplication into a
 build error rather than a thing somebody has to remember.
+
+## mbedTLS is vendored for TLS, and BearSSL was measured and declined
+
+`userland/ports/mbedtls/` is Mbed TLS 3.6 LTS, and the candidate it beat
+was BearSSL -- which fits this project better on every axis except the
+one that decided it.
+
+**BearSSL was the better technical fit, measured rather than assumed.**
+293 of its 294 source files compile against tolibc with zero edits (the
+one failure is its system RNG seeder, which a backend replaces anyway);
+it needs five libc symbols; its generated state machines are committed
+so no build step is required; and it is 378 KB of text against mbedTLS's
+711 KB on the same compiler flags. mbedTLS needed a jinja2 build step, a
+platform port, `MBEDTLS_FS_IO` decisions, and a libgcc symbol this build
+does not link.
+
+**It lost on MAINTENANCE, which is the axis that matters for a TLS
+implementation.** BearSSL is one author -- 158 of 158 commits -- with
+nine commits in four years and no release since 2018. The author still
+fixes real bugs (two security fixes in April 2026), and there is no
+second reviewer, no advisory process, and no cadence. mbedTLS has a
+funded maintainer organisation, published security advisories and many
+reviewers. For a library whose entire job is to be correct against a
+hostile peer, "somebody is looking at this" outranks 300 KB.
+
+**It also has no TLS 1.3**, which was found by reading
+`inc/bearssl_ssl.h` rather than its README -- `BR_TLS12 0x0303` is the
+ceiling, and the "1.3" in its documentation is BearSSL's own version
+number. That was a second reason, not the first.
+
+wolfSSL was eliminated on licence: GPLv3-or-commercial. The Doom port
+survives in an MIT tree because it links into exactly one binary, and a
+*shared* TLS library that `wget`, `update` and `httpd` all link cannot
+be contained that way.
+
+### What a freestanding build needed, and neither was obvious
+
+**`-nostdinc`.** Nothing else in this build passes it, so a header
+tolibc lacks resolves silently to `/usr/include`'s.
+`library/x509_crt.c` asks `__has_include(<sys/socket.h>)` to borrow the
+host's `inet_pton`, and `__has_include` cares only whether the file is
+on the path -- not what the target is. This is what forced tolibc to
+grow a `<limits.h>`, since GCC's own ends in `#include_next <limits.h>`.
+
+**`-Uunix -U__unix -U__unix__ -U__linux__ -U__gnu_linux__`.** GCC
+predefines all five for every toy-os userland compile, because the host
+triple is Linux. `library/common.h` reads them, defines
+`MBEDTLS_PLATFORM_IS_UNIXLIKE`, and `psa_crypto_random.c` then includes
+`<sys/time.h>` for `gettimeofday()`-based fork protection -- meaningless
+here, since toy-os has no `fork()`. **This applies to any portable
+library vendored into this tree**, not just this one.
+
+### Five generated files are committed, and that is the point
+
+Upstream ships templates, not sources, for `error.c`,
+`version_features.c`, `psa_crypto_driver_wrappers.{h,c}` and
+`ssl_debug_helpers_generated.c` -- produced by Python-with-Jinja2 and
+Perl. They are committed so **no toy-os build ever needs Python, jinja2,
+jsonschema or Perl**. A gate that starts requiring a package a fresh
+checkout may not have is the failure that keeps Docker out of
+`preflight.sh`. BearSSL commits its T0 output for the same reason, which
+is where the idea came from.
+
+### The configuration is written from scratch, and it is the security posture
+
+`userland/backends/mbedtls/toyos_mbedtls_config.h` enables what a client
+needs and nothing else. Starting from upstream's default and disabling
+would have been quicker and leaves DES, Camellia, ARIA, DTLS and the
+whole server side enabled -- and `--gc-sections` drops those from the
+BINARY but not from the HANDSHAKE. **A suite the config enables is a
+suite the client offers and will accept**, so the enabled set belongs
+somewhere a person can read it. Measured: 711 KB of text on the default
+config against 355 KB on this one.
+
+**A configuration that compiles is not one that interoperates**, and
+that cost a debugging session. `MBEDTLS_PKCS1_V21` gives the library
+RSA-PSS; `MBEDTLS_X509_RSASSA_PSS_SUPPORT` is what puts
+`rsa_pss_rsae_*` in the `signature_algorithms` extension, and
+`ssl_tls.c` gates that list on the second macro. TLS 1.3 forbids PKCS#1
+v1.5 in CertificateVerify, so without it the client offered only
+`rsa_pkcs1_*` for RSA and every TLS 1.3 server holding an RSA
+certificate answered with a handshake_failure alert. It built, linked
+and could not talk to most of the web. The server's own log
+(`tls_choose_sigalg: no suitable signature algorithm`) named it in one
+line, after reasoning had not.

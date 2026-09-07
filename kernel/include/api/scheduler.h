@@ -220,7 +220,25 @@ struct mmap_region {
 
 // Per address space, not per slot: a thread resolves to its group's
 // sched_mm the same way the heap does, so the group shares one list.
-#define MMAP_MAX_REGIONS 16
+//
+// **A DYNAMIC PROGRAM SPENDS FOUR OF THESE PER SHARED LIBRARY.** ld-toy
+// carves each PT_LOAD into its own MAP_FIXED region, and ld links a .so
+// with four of them (`-z separate-code` splits R / RX / R / RW), plus an
+// anonymous one where .bss runs past the file. So the ceiling is not a
+// count of mmap() CALLS a program makes -- it is mostly its DT_NEEDED
+// list, and a program never calling mmap() can still exhaust it.
+//
+// 16 was enough until /bin/wget grew libhttp.so and libssl.so beside
+// libuapp.so and libc.so: four libraries is 16 regions before .bss, and
+// the loader failed on the LAST one with "segment map failed", which
+// names the library that ran out rather than the one that filled it.
+// 32 leaves room for a fifth.
+//
+// The cheaper alternative was linking the libraries `-z
+// noseparate-code` for two PT_LOADs each. Not taken: it lets a page
+// hold both code and data, and ~107 KB of .bss (104 bytes a region,
+// 64 slots) is the lesser cost.
+#define MMAP_MAX_REGIONS 32
 
 struct sched_mm {
     // The page after this process's loaded image ends -- where its heap

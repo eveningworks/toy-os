@@ -11,14 +11,17 @@ Testing this OS's network stack can reach real hosts on the internet
 through QEMU's user-mode networking. The maintainer's machine is the one
 that makes those connections, from their address, on their connection.
 
-**Every commit whose testing left the machine names every external host
-it reached, at the end of the message.** Not in a session summary, not
-in the chat: in the commit, because that is what survives.
+**Every session whose testing left the machine names every external host
+it reached, in the final response to the maintainer.** NOT in the commit
+message -- that was the rule until 2026-09-07 and the maintainer changed
+it: the commit records what changed, and a list of hosts a test happened
+to touch is not that. It is something the person wants to SEE, once,
+while the session is in front of them.
 
 ## The rule
 
-A commit message ends with this block whenever testing sent a packet to
-anything outside the local machine:
+The final response ends with this block whenever testing sent a packet
+to anything outside the local machine:
 
     External hosts contacted during testing:
       example.com (172.66.147.243, 104.20.23.154) -- HTTP GET, /bin/wget
@@ -63,8 +66,9 @@ only when the internet is genuinely the thing under test, and say so.
 ## Red flags
 
 - "It was only a DNS lookup" -- that left the machine. List it.
-- "The address is in the chat already" -- the chat is not the record.
-- "It's the same host as last commit" -- each commit stands alone.
+- "It's in the commit message" -- it does not go there any more, and a
+  reader of the commit is not the audience for it.
+- "It's the same host as last time" -- each session stands alone.
 - "The test skips when offline, so it might not have run" -- it ran here.
 
 ## Real-world impact
@@ -73,3 +77,10 @@ The rule exists because three commits in one session (`c50cff4`,
 `caeb3b5`, `7a4a645`) reached `example.com` for DNS, ICMP and HTTP, and
 none of them said so. The maintainer had to ask what their machine had
 been talking to.
+
+**Where it goes changed on 2026-09-07 and the reason is worth keeping.**
+It lived in the commit message first, on the argument that a commit is
+what survives. The maintainer's call was that a commit should record the
+CHANGE, and that a host list belongs in front of the person while they
+can still act on it. What did not change is the obligation to say it, or
+to list addresses rather than only names.

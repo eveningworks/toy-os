@@ -139,6 +139,10 @@ ci-virtio.img
 # project's git history is a different act, and not one this repo needs
 # to perform to work. See docs/decisions.md.
 /data/doom/
+# Fetched by `make iso EXTRAS=1`, never vendored: Mozilla's CA roots are
+# MPL-2.0. Only the fetched file -- the README beside it is ours and is
+# tracked.
+/data/etc/ssl/certs/mozilla-roots.pem
 /seed/sync/usr/share/doom/
 
 # Work images written by tools/partition_test.py. It defaults to a temp

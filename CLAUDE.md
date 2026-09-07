@@ -700,6 +700,7 @@ whenever a headline here tells you something you did not already know.
 - **A NETWORK DEVICE CAN BE REMOVED NOW, AND REMOVAL HAS TO UNDO THREE THINGS**
 - **TWO PROCESSES SHARE MEMORY THROUGH A NAME, AND THE NAME IS THE HARD PART**
 - **SOUND IS MIXED BY A SERVICE, AND THE CARD IS STILL EXCLUSIVE**
+- **HTTPS IS TWO LIBRARIES, AND NEITHER MAY LIVE IN `userland/lib/`**
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 
 ### GUI, Toykit and the desktop
@@ -1421,7 +1422,8 @@ cost".
   8 GiB guest -- the one check `make test`'s 256 MiB boot SKIPS),
   `highmem_consume.py` (six processes holding 5 GiB of frames above
   4 GiB at once),
-  `hires_test.py`,
+  `hires_test.py`, `https_test.py` (wget over TLS, and what it
+  refuses),
   `init_test.py`, `install_test.py`, `jobs_test.py`, `kbd_test.py`,
   `keyboard_paths_test.py`, `kvm_soak.py`, `live_boot_test.py`,
   `ls_test.py`, `mem_stress.py`, `mkpart_test.py`,
@@ -1466,6 +1468,7 @@ cost".
 - **Generated data and the build** -- `gen_version.sh` /
   `set_version.sh`, `genfont.py` / `genttf.py`, `gen_kbs.py`,
   `gen_cursors.py`, `gen_imgdata.py`, `gen_audio.py`, `gen_music.py`,
+  `fetch_ca_bundle.py` (Mozilla's CA roots, behind `EXTRAS=1`),
   `gen_mp3_tables.py` (**verifies two independent sources agree before
   it writes**), `gen_icons.py`,
   `genrelocs.py`, `gen_syms.py`, `gen_decisions_index.py`,
@@ -1807,19 +1810,21 @@ pointed at the person rather than at the code: the file list says what
 changed, the diagram says what the system now looks like, and this says
 what is different when you boot it.
 
-**AND IF TESTING LEFT THIS MACHINE, THE COMMIT NAMES EVERY EXTERNAL
-HOST IT REACHED** (standing project instruction, 2026-08-29). Network
-testing here can reach real hosts through QEMU's user-mode networking,
-from the maintainer's address and connection -- so a commit whose
-testing sent a packet outside the local machine ends with an
-`External hosts contacted during testing:` block listing each host, its
-resolved ADDRESSES, the protocol, and what did it. Say `none (SLIRP and
-localhost only)` when that is the answer. **SLIRP's 10.0.2.3 is a
-FORWARDER, not a resolver**: a DNS lookup through it leaves the machine
-even though the address looks local. Prefer a server on loopback so the
-disclosure stays short and the suite never depends on connectivity --
-`tools/net_test.py` fetches from a local `http.server` and SKIPS its DNS
-checks offline. Full rule and format:
+**AND IF TESTING LEFT THIS MACHINE, REPORT EVERY EXTERNAL HOST IT
+REACHED -- IN THE CHAT, NOT IN THE COMMIT** (standing project
+instruction, changed 2026-09-07; it used to require a block in the
+commit message). Network testing here can reach real hosts through
+QEMU's user-mode networking, from the maintainer's address and
+connection. So when a session's testing sent a packet outside the local
+machine, the final response ends with an `External hosts contacted
+during testing:` list -- each host, its resolved ADDRESSES, the
+protocol, and what did it. Say `none (SLIRP and localhost only)` when
+that is the answer. **SLIRP's 10.0.2.3 is a FORWARDER, not a resolver**:
+a DNS lookup through it leaves the machine even though the address looks
+local. Prefer a server on loopback so the report stays short and the
+suite never depends on connectivity -- `tools/net_test.py` and
+`tools/https_test.py` both fetch from a local server and need no
+network at all. Full rule and format:
 `.claude/skills/network-egress-disclosure/`.
 
 List every file added or edited in the final response, as a compact

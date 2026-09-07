@@ -3360,6 +3360,58 @@ window without going through it will find its layout polls timing out.
   ON DEMAND: it needs a host gcc, and the gate must not start requiring
   one.
 
+- **`https_test.py`** -- drives `/bin/wget`'s HTTPS path against a TLS
+  server on this machine: a threaded Python `http.server` with a
+  self-signed certificate, reached through SLIRP's 10.0.2.2. **Nothing
+  leaves the machine**, which is what lets it run offline; verifying
+  against a PUBLIC certificate is a different question and is not this
+  tool's.
+
+  Nine checks, and the ORDER is the design -- each is only meaningful
+  because the one before it can fail. A verified fetch returns the body
+  over TLS 1.3 with no warning; the same fetch is REFUSED when the store
+  holds the wrong anchor; refused DIFFERENTLY when the store is empty
+  (a machine that was never told whom to trust is not the same as a
+  certificate nobody vouches for); `-k` fetches and says so; the entropy
+  gate refuses TSC jitter by name; and plain `http://` still works,
+  which is the regression check for routing wget through the library.
+
+  **It reboots between the three trust-store states** rather than
+  editing `/etc/ssl/certs` under a running kernel, and it clears the
+  store by LISTING it rather than by deleting the names it wrote -- an
+  image built with `EXTRAS=1` already holds 121 Mozilla roots, and
+  leaving those behind turns the "empty store" check into a verification
+  failure, which is a fixture the test did not establish wearing the
+  costume of a regression. It drives a COPY of `disk.img`, sparsely
+  copied.
+
+  `--positive-control` trusts the WRONG anchor while still expecting the
+  verified fetch to succeed; three checks must go red, and a run that
+  stays green is a run where the certificate is not being verified at
+  all. Measured: 6 of 9 pass under it.
+
+  ON DEMAND: it needs `openssl` to make the certificates and SKIPS
+  cleanly without it.
+
+- **`fetch_ca_bundle.py`** -- fetches Mozilla's CA roots into
+  `data/etc/ssl/certs/mozilla-roots.pem`, as the `ca-bundle` row of
+  `fetch_extras.py`'s table, so `make iso EXTRAS=1` stages a real trust
+  store. Not vendored: the bundle is MPL-2.0, and fetching is not
+  distributing.
+
+  **It takes curl's PEM conversion rather than Mozilla's own
+  `certdata.txt`**, which is an NSS source file in a bespoke format
+  needing a parser. The trade is explicit -- one more party in the
+  chain, against writing and maintaining a certdata parser here.
+
+  **The fetch itself is verified against the host's trust store.**
+  Downloading a root store over an unauthenticated connection would be a
+  joke at its own expense. It also refuses a file too small or too large
+  to be a root store and counts BEGIN/END blocks before writing, because
+  a captive-portal page is the shape of thing that otherwise lands here;
+  and it writes to a temporary name and renames, so an interrupted build
+  cannot leave a truncated store that fails for only some sites.
+
 - **`umd_hostcheck.py`** -- compiles `userland/lib/umd.c` with the host
   gcc and renders every `docs/commands/*.md` page through it at 40, 80
   and 132 columns, plus the three field lookups (`umd_title`,
