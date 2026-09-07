@@ -611,6 +611,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Move the WM's file picker onto `uui_fileview` -- Notepad's dialog did, 2026-09-04
 - [x] ~~Desktop calendar widget~~ DONE 2026-08-24 -- a panel popup on the tray clock, not an app
 - [x] ~~Control panel with pluggable applets~~ done
+- [x] ~~Word wrap as a toggle in Notepad~~ DONE 2026-09-07 -- View > Word wrap, and a horizontal scrollbar when it is off
 - [ ] Find/replace in Notepad
 - [x] ~~An image viewer~~ DONE 2026-08-23 -- Image Viewer browses a directory rather than opening a file dialog
 - [ ] Scientific mode for Calculator

@@ -97,6 +97,7 @@
 #define CMD_CUT        16
 #define CMD_COPY       17
 #define CMD_PASTE      18
+#define CMD_WORDWRAP   19
 
 // The dialog's own codes -- a different widget, so a different space.
 #define CMD_DLG_OK     1
@@ -204,7 +205,12 @@ static const struct uui_menu_item goto_items[] = {
     UUI_MENU("Bottom of file", CMD_GOTO_END, 0),
 };
 
+// Word wrap sits in VIEW, which is where Windows 11's Notepad put it
+// after decades of it living under Format -- and where a reader looks,
+// since it changes what the document looks like and not what it says.
 static const struct uui_menu_item view_items[] = {
+    UUI_MENU("Word wrap",  CMD_WORDWRAP, "Ctrl-W"),
+    UUI_MENU_SEP,
     UUI_SUBMENU("Go to", goto_items),
     UUI_MENU_SEP,
     UUI_MENU("Status bar", CMD_STATUSBAR, 0),
@@ -386,6 +392,15 @@ static int scrollbar_w(void) {
     return w;
 }
 
+// The horizontal bar exists only when the document is NOT wrapped:
+// wrapping puts nothing to the right of the view, so a bar there would
+// be a permanently full thumb taking a row off the document. Windows
+// Notepad hides it for exactly this reason.
+static int hbar_h(void) {
+    if (utext_get_wrap(&g_text) != UTEXT_WRAP_OFF) return 0;
+    return scrollbar_w();   // square: the strip's thickness is the same either way
+}
+
 // Derived from the content SIZE rather than from a surface, because the
 // event callbacks need it too and they never hold one. That it derives
 // at all is what makes this app resizable with no resize code: a bigger
@@ -394,7 +409,18 @@ static void text_rect_for(int cw, int ch, int *x, int *y, int *w, int *h) {
     *x = TEXT_PAD;
     *y = menubar_h();
     *w = cw - TEXT_PAD - scrollbar_w(); // scrollbar sits flush at the right edge
-    *h = ch - *y - statusbar_h();
+    *h = ch - *y - statusbar_h() - hbar_h();
+}
+
+// The horizontal strip, under the text and left of the vertical bar's
+// column -- so the two never overlap and the corner between them stays
+// empty, as it is in every toolkit.
+static void hbar_rect(int tx, int ty, int tw, int th,
+                       int *bx, int *by, int *bw, int *bh) {
+    *bx = tx;
+    *by = ty + th;
+    *bw = tw;
+    *bh = hbar_h();
 }
 
 // Placed against the CONTENT rect, which is also the popup bounds handed
@@ -511,6 +537,8 @@ static unsigned menu_item_flags(int code) {
     case CMD_RECENT_2: return g_recent_count > 2 ? 0 : UUI_MI_DISABLED;
     case CMD_STATUSBAR:
         return g_show_status ? UUI_MI_CHECKED : 0;
+    case CMD_WORDWRAP:
+        return utext_get_wrap(&g_text) != UTEXT_WRAP_OFF ? UUI_MI_CHECKED : 0;
     case CMD_CUT:
     case CMD_COPY:
         return utext_sel_present(&g_text) ? 0 : UUI_MI_DISABLED;
@@ -566,6 +594,17 @@ static void draw_document(struct ugfx_surface *s, int focused) {
                 focused && !uui_dialog_is_open(&g_dialog) &&
                     !uui_menubar_is_open(&g_menu) && !uui_menubar_is_open(&g_ctx));
     draw_scrollbar(s, tx, ty, tw, th);
+
+    if (hbar_h() > 0) {
+        int bx, by, bw, bh;
+        hbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
+        int cols = tw / ugfx_char_w();
+        uui_scrollbar_draw(s, bx, by, bw, bh,
+                            utext_widest_line(&g_text, tw, th), cols,
+                            g_text.hscroll,
+                            ugfx_rgb(225, 225, 230), ugfx_rgb(150, 155, 165),
+                            NP_SCROLLBAR_FLAGS | UUI_SCROLLBAR_HORIZ);
+    }
 }
 
 // --- the dialog's behaviour -------------------------------------------
@@ -727,6 +766,12 @@ static void do_command(struct uapp *a, int code) {
     case CMD_STATUSBAR:
         g_show_status = !g_show_status;
         break;
+    case CMD_WORDWRAP: {
+        int on = utext_get_wrap(&g_text) != UTEXT_WRAP_OFF;
+        utext_set_wrap(&g_text, on ? UTEXT_WRAP_OFF : UTEXT_WRAP_WORD);
+        set_status(on ? "word wrap off" : "word wrap on");
+        break;
+    }
     case CMD_CUT:
         do_cut();
         break;
@@ -753,6 +798,7 @@ static int accelerator(struct uapp *a, int key) {
     case 0x18: do_command(a, CMD_CUT);        return 1; // Ctrl-X
     case 0x03: do_command(a, CMD_COPY);       return 1; // Ctrl-C
     case 0x16: do_command(a, CMD_PASTE);      return 1; // Ctrl-V
+    case 0x17: do_command(a, CMD_WORDWRAP);   return 1; // Ctrl-W
     default:   return 0;
     }
 }
@@ -808,6 +854,10 @@ static void log_layout(struct uapp *a) {
     scrollbar_rect(tx, ty, tw, th, &x, &y, &w, &h);
     uapp_logf_layout("notepad: layout scrollbar %d %d %d %d\n", x, y, w, h);
     uapp_logf_layout("notepad: layout text %d %d %d %d\n", tx, ty, tw, th);
+    if (hbar_h() > 0) {
+        hbar_rect(tx, ty, tw, th, &x, &y, &w, &h);
+        uapp_logf_layout("notepad: layout hscrollbar %d %d %d %d\n", x, y, w, h);
+    }
     uapp_log_layout(a, "notepad");
 }
 
@@ -937,6 +987,52 @@ static int scrollbar_press(int px, int py, int tx, int ty, int tw, int th) {
     return 1;
 }
 
+// hscroll is the app's to clamp: utext keeps the value but has no view
+// to measure it against outside a draw.
+static void clamp_hscroll(int tw, int th) {
+    int cols = tw / ugfx_char_w();
+    int max = utext_widest_line(&g_text, tw, th) - cols;
+    if (max < 0) max = 0;
+    if (g_text.hscroll > max) g_text.hscroll = max;
+    if (g_text.hscroll < 0) g_text.hscroll = 0;
+}
+
+// The horizontal twin of scrollbar_press(). The widget classifies the
+// click on either axis, so the arrows, the thumb and the trough cannot
+// disagree with what was drawn.
+static int g_hbar_drag;
+static int g_hbar_grab;
+
+static int hbar_press(int px, int py, int tx, int ty, int tw, int th) {
+    if (hbar_h() <= 0) return 0;
+    int bx, by, bw, bh;
+    hbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
+
+    int cols = tw / ugfx_char_w();
+    int total = utext_widest_line(&g_text, tw, th);
+    unsigned flags = NP_SCROLLBAR_FLAGS | UUI_SCROLLBAR_HORIZ;
+
+    enum uui_scrollbar_zone z =
+        uui_scrollbar_hit(bx, by, bw, bh, total, cols, g_text.hscroll, px, py, flags);
+    switch (z) {
+    case UUI_SB_NONE:  return 0;
+    case UUI_SB_UP:    g_text.hscroll -= 1;    break;   // the LEFT arrow
+    case UUI_SB_DOWN:  g_text.hscroll += 1;    break;
+    case UUI_SB_ABOVE: g_text.hscroll -= cols; break;   // the track, left of the thumb
+    case UUI_SB_BELOW: g_text.hscroll += cols; break;
+    case UUI_SB_THUMB: {
+        int thumb_x, thumb_w;
+        uui_scrollbar_thumb_rect(bx, bw, total, cols, g_text.hscroll,
+                                  &thumb_x, &thumb_w, bh, flags);
+        g_hbar_grab = px - thumb_x;
+        g_hbar_drag = 1;
+        return 1;
+    }
+    }
+    clamp_hscroll(tw, th);
+    return 1;
+}
+
 static void on_wheel(struct uapp *a, int notches) {
     // Only reached when no widget took the wheel -- an open dialog or
     // menu absorbs it (ui/uui_route.h). Three lines a notch, the same
@@ -973,6 +1069,8 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
     text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
     if (scrollbar_press(x, y, tx, ty, tw, th)) {
         // handled: jumped to the clicked position
+    } else if (hbar_press(x, y, tx, ty, tw, th)) {
+        // handled: moved sideways
     } else if (x >= tx && x < tx + tw && y >= ty && y < ty + th) {
         g_text.ed.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, x, y);
         utext_sel_start(&g_text);
@@ -1010,6 +1108,16 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
                                                bw, NP_SCROLLBAR_FLAGS);
             uapp_redraw(a);
         }
+    } else if (g_hbar_drag) {
+        int bx, by, bw, bh;
+        hbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
+        int cols = tw / ugfx_char_w();
+        g_text.hscroll =
+            uui_scrollbar_offset_for_drag(bx, bw,
+                                           utext_widest_line(&g_text, tw, th), cols,
+                                           x, g_hbar_grab, bh,
+                                           NP_SCROLLBAR_FLAGS | UUI_SCROLLBAR_HORIZ);
+        uapp_redraw(a);
     } else if (g_dragging) {
         g_text.ed.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, x, y);
         uapp_redraw(a);
@@ -1020,6 +1128,7 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
     (void)x; (void)y; (void)buttons;
     g_dragging = 0;
     g_scrollbar_drag = 0;
+    g_hbar_drag = 0;
     if (g_ctx_armed) {
         g_ctx_armed = 0;
         if (!uui_dialog_is_open(&g_dialog))

@@ -734,6 +734,8 @@ whenever a headline here tells you something you did not already know.
 - **An app refuses its OWN second copy -- the launcher never does.**
 - **`uui_table` sorts on a header click, and an app supplies only a COMPARATOR.**
 - **A WIDGET WITH A SCROLLBAR ANSWERS `hit` WITH ITS WHOLE RECT, AND `_hit()` KEEPS THE ROW QUESTION**
+- **A SCROLLBAR CAN LIE DOWN (`UUI_SCROLLBAR_HORIZ`), AND ITS OFFSET THEN RUNS THE OTHER WAY**
+- **`utext` HAS A WRAP MODE, AND THE CALLER OWNS ITS STORAGE**
 - **A `uui_scrollview` NOTICES when its content's item list changes**
 - **A STRING SETTING GETS A TEXT FIELD IN SYSTEM SETTINGS, AND ITS `staged` IS A CHANGED FLAG RATHER THAN AN INDEX**
 - **`uui_spinbox` IS FOR A NUMBER; `uui_slider` IS FOR AN ORDERED ENUM.**

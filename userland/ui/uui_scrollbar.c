@@ -43,6 +43,16 @@ static void fill_capsule(struct ugfx_surface *s, int x, int y, int w, int h, uin
     ugfx_fill_rect(s, x + 1, y + h - 1, w - 2, 1, c); // bottom, inset
 }
 
+// The same capsule lying down: the trimmed corners move to the ends, so
+// a horizontal thumb reads as a capsule rather than as a bar with two
+// notches bitten out of its long edges.
+static void fill_capsule_h(struct ugfx_surface *s, int x, int y, int w, int h, uint32_t c) {
+    if (w <= 2 || h <= 2) { ugfx_fill_rect(s, x, y, w, h, c); return; }
+    ugfx_fill_rect(s, x + 1, y, w - 2, h, c);
+    ugfx_fill_rect(s, x, y + 1, 1, h - 2, c);
+    ugfx_fill_rect(s, x + w - 1, y + 1, 1, h - 2, c);
+}
+
 // A small solid triangle, for a stepper arrow. `dir` is -1 for up.
 static void fill_arrow(struct ugfx_surface *s, int x, int y, int w, int h,
                         int dir, uint32_t c) {
@@ -56,11 +66,25 @@ static void fill_arrow(struct ugfx_surface *s, int x, int y, int w, int h,
     }
 }
 
+// The same triangle pointing left or right: columns instead of rows.
+static void fill_arrow_h(struct ugfx_surface *s, int x, int y, int w, int h,
+                          int dir, uint32_t c) {
+    int cy = y + h / 2;
+    int cols = w / 2;
+    if (cols < 2) cols = 2;
+    int left = x + (w - cols) / 2;
+    for (int i = 0; i < cols; i++) {
+        int half = (dir < 0) ? i : cols - 1 - i;
+        ugfx_fill_rect(s, left + i, cy - half, 1, 2 * half + 1, c);
+    }
+}
+
 // THE shared geometry. Thumb size and position depend only on the line
 // counts, never on x -- computing it once here is what stops draw(),
 // hit() and the drag maths disagreeing about where the thumb is.
 static void sb_geometry(int y, int h, int total_lines, int visible_rows, int scroll_offset,
-                         int *out_thumb_y, int *out_thumb_h, int *out_max_scroll) {
+                         int *out_thumb_y, int *out_thumb_h, int *out_max_scroll,
+                         unsigned flags) {
     int max_scroll = total_lines > visible_rows ? total_lines - visible_rows : 0;
 
     int thumb_h = (total_lines > 0) ? h * visible_rows / total_lines : h;
@@ -70,9 +94,12 @@ static void sb_geometry(int y, int h, int total_lines, int visible_rows, int scr
     int track_range = h - thumb_h;
     int thumb_y = y;
     if (max_scroll > 0 && track_range > 0) {
-        // offset 0 (pinned to newest) -> thumb at the BOTTOM;
-        // offset max_scroll (oldest) -> thumb at the top.
-        thumb_y = y + track_range - track_range * scroll_offset / max_scroll;
+        // THE TWO AXES MEASURE FROM OPPOSITE ENDS (ui/uui_scrollbar.h).
+        // Vertically, offset 0 is pinned to the NEWEST text, so the
+        // thumb sits at the bottom; horizontally, 0 is the left margin.
+        thumb_y = (flags & UUI_SCROLLBAR_HORIZ)
+                    ? y + track_range * scroll_offset / max_scroll
+                    : y + track_range - track_range * scroll_offset / max_scroll;
     }
 
     *out_thumb_y = thumb_y;
@@ -99,27 +126,38 @@ void uui_scrollbar_draw(struct ugfx_surface *s, int x, int y, int w, int h,
     // this widget deliberately keeps no hover state of its own.)
     ugfx_fill_rect(s, x, y, w, h, track_bg);
 
+    // ONE implementation, two axes: `pos`/`len` are the scrolled axis
+    // and `thick` the other, so everything below is written once.
+    int horiz = (flags & UUI_SCROLLBAR_HORIZ) != 0;
+    int pos = horiz ? x : y, len = horiz ? w : h, thick = horiz ? h : w;
+
     int tky, tkh;
-    sb_track(y, h, w, flags, &tky, &tkh);
+    sb_track(pos, len, thick, flags, &tky, &tkh);
 
     if (flags & UUI_SCROLLBAR_ARROWS) {
-        int a = uui_scrollbar_arrow_h(w);
-        if (tkh < h) { // arrows actually fitted
-            fill_arrow(s, x, y, w, a, -1, thumb_bg);
-            fill_arrow(s, x, y + h - a, w, a, +1, thumb_bg);
+        int a = uui_scrollbar_arrow_h(thick);
+        if (tkh < len) { // arrows actually fitted
+            if (horiz) {
+                fill_arrow_h(s, x, y, a, h, -1, thumb_bg);
+                fill_arrow_h(s, x + w - a, y, a, h, +1, thumb_bg);
+            } else {
+                fill_arrow(s, x, y, w, a, -1, thumb_bg);
+                fill_arrow(s, x, y + h - a, w, a, +1, thumb_bg);
+            }
         }
     }
 
     if (total_lines <= visible_rows) return; // it all fits -- no thumb
 
     int ty, th, ms;
-    sb_geometry(tky, tkh, total_lines, visible_rows, scroll_offset, &ty, &th, &ms);
+    sb_geometry(tky, tkh, total_lines, visible_rows, scroll_offset, &ty, &th, &ms, flags);
     // Inset each side so the track shows around the capsule -- that gap
     // is most of what reads as "modern" rather than "a grey block
     // filling a groove". Width-derived, so a wider bar gets a wider
     // gutter instead of a fatter block; see uui_scrollbar_thumb_inset().
-    int in = uui_scrollbar_thumb_inset(w);
-    fill_capsule(s, x + in, ty, w - 2 * in, th, thumb_bg);
+    int in = uui_scrollbar_thumb_inset(thick);
+    if (horiz) fill_capsule_h(s, ty, y + in, th, h - 2 * in, thumb_bg);
+    else       fill_capsule(s, x + in, ty, w - 2 * in, th, thumb_bg);
 }
 
 enum uui_scrollbar_zone uui_scrollbar_hit(int x, int y, int w, int h,
@@ -128,20 +166,24 @@ enum uui_scrollbar_zone uui_scrollbar_hit(int x, int y, int w, int h,
                                            unsigned flags) {
     if (!uui_hit(x, y, w, h, px, py)) return UUI_SB_NONE;
 
+    int horiz = (flags & UUI_SCROLLBAR_HORIZ) != 0;
+    int pos = horiz ? x : y, len = horiz ? w : h, thick = horiz ? h : w;
+    int p = horiz ? px : py;
+
     int tky, tkh;
-    sb_track(y, h, w, flags, &tky, &tkh);
+    sb_track(pos, len, thick, flags, &tky, &tkh);
     // Arrows answer even when everything fits, so a click on one is
     // never mistaken for a click on the track behind it.
-    if (tkh < h) {
-        if (py < tky) return UUI_SB_UP;
-        if (py >= tky + tkh) return UUI_SB_DOWN;
+    if (tkh < len) {
+        if (p < tky) return UUI_SB_UP;
+        if (p >= tky + tkh) return UUI_SB_DOWN;
     }
     if (total_lines <= visible_rows) return UUI_SB_NONE;
 
     int ty, th, ms;
-    sb_geometry(tky, tkh, total_lines, visible_rows, scroll_offset, &ty, &th, &ms);
-    if (py < ty) return UUI_SB_ABOVE;
-    if (py >= ty + th) return UUI_SB_BELOW;
+    sb_geometry(tky, tkh, total_lines, visible_rows, scroll_offset, &ty, &th, &ms, flags);
+    if (p < ty) return UUI_SB_ABOVE;
+    if (p >= ty + th) return UUI_SB_BELOW;
     return UUI_SB_THUMB;
 }
 
@@ -151,7 +193,7 @@ void uui_scrollbar_thumb_rect(int y, int h, int total_lines, int visible_rows,
     int tky, tkh, ms;
     sb_track(y, h, bar_w, flags, &tky, &tkh);
     sb_geometry(tky, tkh, total_lines, visible_rows, scroll_offset,
-                 out_thumb_y, out_thumb_h, &ms);
+                 out_thumb_y, out_thumb_h, &ms, flags);
 }
 
 int uui_scrollbar_offset_for_drag(int y, int h, int total_lines, int visible_rows,
@@ -161,7 +203,7 @@ int uui_scrollbar_offset_for_drag(int y, int h, int total_lines, int visible_row
     sb_track(y, h, bar_w, flags, &y, &h); // drag in TRACK coordinates
     // The 0 here is arbitrary: only thumb_h and max_scroll are used, and
     // the drag itself determines the new position.
-    sb_geometry(y, h, total_lines, visible_rows, 0, &ty, &th, &max_scroll);
+    sb_geometry(y, h, total_lines, visible_rows, 0, &ty, &th, &max_scroll, flags);
     if (max_scroll <= 0) return 0;
 
     int track_range = h - th;
@@ -171,7 +213,11 @@ int uui_scrollbar_offset_for_drag(int y, int h, int total_lines, int visible_row
     if (new_y < y) new_y = y;
     if (new_y > y + track_range) new_y = y + track_range;
 
-    int offset = max_scroll - (new_y - y) * max_scroll / track_range;
+    // Mirrors sb_geometry's two directions: the drag must invert the
+    // same mapping the thumb was drawn with, or it runs backwards.
+    int offset = (flags & UUI_SCROLLBAR_HORIZ)
+                   ? (new_y - y) * max_scroll / track_range
+                   : max_scroll - (new_y - y) * max_scroll / track_range;
     if (offset < 0) offset = 0;
     if (offset > max_scroll) offset = max_scroll;
     return offset;

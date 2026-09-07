@@ -17,11 +17,12 @@
 //      cache below, which is an accelerator and never an answer.
 //
 //   2. measure / draw / index_at_point all share ONE wrap accounting
-//      (wrap_step below). They cannot disagree about where a line
-//      breaks -- which matters because index_at_point() is the exact
-//      inverse of draw()'s placement, and a click landing one character
-//      off is the classic symptom of two copies of that arithmetic
-//      drifting.
+//      (line_span below, which answers "where does the line starting
+//      here end, and where does the next one begin"). They cannot
+//      disagree about where a line breaks -- which matters because
+//      index_at_point() is the exact inverse of draw()'s placement, and
+//      a click landing one character off is the classic symptom of two
+//      copies of that arithmetic drifting.
 //
 //   3. There is no "lines" concept in storage. '\n' is an ordinary
 //      character and the cursor_up/down/home/end calls scan for the
@@ -42,6 +43,15 @@
 
 #define UTEXT_CAP 8192 // the size a SMALL editor should hand it
 
+// WORD WRAP IS A MODE, and it is Windows Notepad's View > Word wrap.
+//
+// ON breaks at a SPACE, not mid-word -- a long word still breaks hard,
+// because a word wider than the window has nowhere else to go. OFF does
+// not break at all: a line runs until its '\n' and the view scrolls
+// SIDEWAYS, which is why utext carries a horizontal offset at all.
+#define UTEXT_WRAP_OFF  0
+#define UTEXT_WRAP_WORD 1
+
 // Sparse line index: `idx[k]` is the character index at which wrapped
 // line `k * stride` begins. It is REBUILT, not maintained -- one O(n)
 // pass whenever the text or the wrap width changes -- so it cannot
@@ -57,6 +67,8 @@
 struct utext_wrap {
     int      valid;
     int      cols;        // the wrap width this was built for
+    int      wrap;        // and the wrap MODE -- changing it relines
+                          // the whole document, so it is part of the key
     unsigned rev;         // the text revision it was built from
     int      total_lines;
     int      n;           // checkpoints in use
@@ -83,13 +95,23 @@ struct utext {
     // how every file Notepad opened arrived scrolled to its end.
     int scroll_offset;
 
+    // UTEXT_WRAP_*. Word wrap by default: a document is read, and a
+    // reader should not have to scroll sideways for it.
+    int wrap;
+
+    // First VISIBLE column, for the unwrapped mode. Always 0 while
+    // wrapping, because there is nothing to the right to scroll to --
+    // and reset when wrapping is turned back on, or a document would
+    // come back sideways with no way to say so.
+    int hscroll;
+
     // Caret and selection, plus the keymap that goes with them, come
     // from the shared edit core (ui/uui_edit.h) -- the same one the
     // single-line uui_textbox uses, so a field and a document cannot
     // disagree about what Ctrl+A or Shift+Left does.
     struct uui_edit ed;
 
-    struct utext_wrap wrap;
+    struct utext_wrap wrap_cache;
 };
 
 // `buf` must stay alive for as long as `t` is used, and holds `cap`
@@ -117,6 +139,15 @@ void utext_scroll(struct utext *t, int delta_lines);
 // `utext_scroll(t, t->count)` by luck -- it is that clamp stated once.
 void utext_scroll_top(struct utext *t);
 void utext_scroll_bottom(struct utext *t);
+
+void utext_set_wrap(struct utext *t, int mode);
+int  utext_get_wrap(const struct utext *t);
+
+// The widest line in COLUMNS, and the caret's column -- what a
+// horizontal scrollbar needs, and meaningless while wrapping (both are
+// bounded by the view then). O(n): a caller should ask once per draw,
+// not once per row.
+int  utext_widest_line(struct utext *t, int w, int h);
 
 // Total wrapped lines and visible rows for a `w` x `h` box, without
 // drawing. Also clamps t->scroll_offset, so after this the caller has

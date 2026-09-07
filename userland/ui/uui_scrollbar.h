@@ -23,6 +23,25 @@
 // scrolled.
 #define UUI_SCROLLBAR_ARROWS 0x01
 
+// A HORIZONTAL bar. Every function below then reads `y`/`h` as the
+// cross axis and `x`/`w` as the one being scrolled, and `total_lines`/
+// `visible_rows` as COLUMNS -- so one implementation serves both and a
+// thumb cannot be drawn in one place and hit-tested in another.
+//
+// **THE OFFSET RUNS THE OTHER WAY, and that is not an accident of the
+// implementation.** A vertical bar here is a SCROLLBACK: 0 is pinned to
+// the newest text at the bottom, because that is what a terminal and an
+// editor's view want. Horizontally there is no "newest" -- 0 is the
+// LEFT MARGIN, as it is in every toolkit -- so a horizontal bar
+// measures its offset from the start. Passing a vertical offset to a
+// horizontal bar therefore draws the thumb at the wrong end rather than
+// merely sideways.
+#define UUI_SCROLLBAR_HORIZ  0x02
+
+// The zones keep their vertical names on a horizontal bar: UUI_SB_UP is
+// the LEFT arrow and UUI_SB_ABOVE the track left of the thumb. Renaming
+// them would have meant two enums for one set of answers.
+
 enum uui_scrollbar_zone {
     UUI_SB_NONE = 0,
     UUI_SB_ABOVE,  // the track above the thumb -- page up
@@ -33,8 +52,8 @@ enum uui_scrollbar_zone {
 };
 
 // How tall each arrow button is, when UUI_SCROLLBAR_ARROWS is set:
-// square, so it follows the bar's width and stays proportional to the
-// font like everything else.
+// square, so it follows the bar's thickness and stays proportional to
+// the font like everything else.
 #define uui_scrollbar_arrow_h(w) (w)
 
 // Preferred minimum: the strip's width; no height preference -- a
@@ -62,6 +81,8 @@ enum uui_scrollbar_zone uui_scrollbar_hit(int x, int y, int w, int h,
                                            int scroll_offset, int px, int py,
                                            unsigned flags);
 
+// The thumb's extent ALONG THE SCROLLED AXIS: (y, h) vertically, and
+// (x, w) horizontally when UUI_SCROLLBAR_HORIZ is set.
 void uui_scrollbar_thumb_rect(int y, int h, int total_lines, int visible_rows,
                                int scroll_offset, int *out_thumb_y, int *out_thumb_h,
                                int bar_w, unsigned flags);

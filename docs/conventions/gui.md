@@ -475,6 +475,38 @@ this the obvious way), not from how much history it accumulated.
   meant header and scrollbar presses reached nothing), and anything
   comparing `selected` against `top` is mixing an app row with a view
   offset. See `docs/decisions.md`.
+- **A SCROLLBAR CAN LIE DOWN (`UUI_SCROLLBAR_HORIZ`), AND ITS OFFSET
+  THEN RUNS THE OTHER WAY.** One implementation serves both axes -- the
+  functions read `x`/`w` as the scrolled axis when the flag is set, and
+  `total_lines`/`visible_rows` as columns -- so a thumb cannot be drawn
+  in one place and hit-tested in another. **The direction is the trap.**
+  A vertical bar here is a SCROLLBACK: offset 0 is pinned to the NEWEST
+  text at the bottom, because that is what a terminal and an editor's
+  view want. Horizontally there is no "newest", so 0 is the LEFT MARGIN
+  as it is in every toolkit -- which means passing a vertical offset to
+  a horizontal bar puts the thumb at the wrong END, not merely
+  sideways. The zone names stay vertical (`UUI_SB_UP` is the LEFT
+  arrow); two enums for one set of answers would have been worse.
+
+- **`utext` HAS A WRAP MODE, AND THE CALLER OWNS ITS STORAGE.**
+  `UTEXT_WRAP_WORD` breaks at a space, never mid-word, and falls back to
+  a hard break for a word wider than the view because such a word has
+  nowhere else to go; `UTEXT_WRAP_OFF` does not break at all and the
+  view scrolls SIDEWAYS instead, which is Windows Notepad's View > Word
+  wrap and why `utext` carries an `hscroll` at all. Four things to know.
+  **The buffer is the CALLER's** (`utext_init_buf`) -- utext allocates
+  nothing, so a small editor hands it a static `UTEXT_CAP` array and
+  Notepad sizes one to the file it is opening. **Wrapping is DERIVED,
+  never stored**, and what is cached is a sparse checkpoint index
+  rebuilt whenever the text, the width or the mode changes -- which is
+  what makes a 1.6 MB document cost a screenful of work per frame rather
+  than a documentful. **`line_span()` is the one place a break is
+  decided**, and draw, measure and hit-testing all walk it, because two
+  copies of that arithmetic is how a click lands one character off.
+  And **the horizontal bar is hidden while wrapping**, since a wrapped
+  document has nothing to the right of the view and the bar would be a
+  permanently full thumb taking a row off the page.
+
 - **A WIDGET WITH A SCROLLBAR ANSWERS `hit` WITH ITS WHOLE RECT, AND
   `_hit()` KEEPS THE ROW QUESTION.** `uui_route.c` gates press AND wheel
   on `ops->hit`, so a widget that routes on its row hit -- which

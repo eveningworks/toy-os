@@ -20,11 +20,13 @@ void utext_init_buf(struct utext *t, char *buf, int cap) {
     t->cap = buf ? cap : 0;
     t->count = 0;
     t->rev = 0;
+    t->wrap = UTEXT_WRAP_WORD;
+    t->hscroll = 0;
     t->scroll_offset = 0;
     t->ed.cursor = 0;
     t->ed.sel_anchor = 0;
     t->ed.sel_active = 0;
-    t->wrap.valid = 0;
+    t->wrap_cache.valid = 0;
 }
 
 void utext_clear(struct utext *t) {
@@ -47,36 +49,100 @@ int utext_putc(struct utext *t, char c) {
 // --- the ONE wrap accounting ------------------------------------------
 //
 // Every pass over the document -- building the index, finding a line,
-// drawing, hit-testing -- steps through this and nothing else. Two
-// copies of it is how draw() and index_at_point() end up one character
-// apart on a wrapped line.
+// drawing, hit-testing -- goes through line_span() and nothing else.
+// Two copies of it is how draw() and index_at_point() end up one
+// character apart on a wrapped line.
 
-struct wrapst { int line, col; };
+// Where the visual line beginning at `start` ends.
+//
+//   *draw_end  one past the last character DRAWN on it
+//   *next      where the NEXT visual line begins
+//
+// The two differ by whatever the break consumed: a '\n' is not drawn,
+// and neither are the spaces a word wrap breaks at -- which is what
+// stops a wrapped line beginning with the blanks that ended the last
+// one.
+static void line_span(const struct utext *t, int cols, int start,
+                       int *draw_end, int *next) {
+    if (cols < 1) cols = 1;
 
-// Places character `c` (at index `i`) and advances `st`. Returns the
-// index at which a NEW line begins because of it, or -1 for neither: a
-// '\n' is not drawn and its successor starts the next line, while a
-// wrap happens BEFORE `c` is placed, so `c` is the new line's first
-// character.
-static int wrap_step(struct wrapst *st, char c, int i, int cols) {
-    if (c == '\n') { st->line++; st->col = 0; return i + 1; }
-    if (st->col >= cols) { st->line++; st->col = 1; return i; }
-    st->col++;
-    return -1;
+    // NO WRAP: a line is exactly what the author typed. It may be far
+    // wider than the view; that is what hscroll is for.
+    if (t->wrap == UTEXT_WRAP_OFF) {
+        int i = start;
+        while (i < t->count && t->buf[i] != '\n') i++;
+        *draw_end = i;
+        *next = i < t->count ? i + 1 : i;
+        return;
+    }
+
+    int col = 0;
+    int run = -1;        // first character of the current run of spaces
+    int cand_end = -1;   // best break so far: draw to here...
+    int cand_next = -1;  // ...and resume there
+    for (int i = start; i < t->count; i++) {
+        char c = t->buf[i];
+        if (c == '\n') { *draw_end = i; *next = i + 1; return; }
+
+        if (c == ' ' || c == '\t') {
+            // A SPACE NEVER TRIGGERS A BREAK. Trailing blanks are
+            // invisible, so pushing a line over the edge with them
+            // would break before a word that fits perfectly well.
+            if (run < 0) run = i;
+            col++;
+            continue;
+        }
+
+        // The first character after a run of spaces completes a break
+        // candidate. Not one at `start` -- breaking there would make no
+        // progress and the caller would loop forever on the same line.
+        if (run > start) { cand_end = run; cand_next = i; }
+        run = -1;
+
+        if (col >= cols) {
+            if (cand_end > start) { *draw_end = cand_end; *next = cand_next; return; }
+            // A WORD WIDER THAN THE VIEW. It has nowhere else to go, so
+            // it breaks hard -- as it does in every editor, and as this
+            // widget did for every word before word wrap existed.
+            *draw_end = i;
+            *next = i;
+            return;
+        }
+        col++;
+    }
+    *draw_end = t->count;
+    *next = t->count;
+}
+
+// **WHERE THE WALK STOPS, STATED ONCE.** A span is the last one when it
+// reached the end of the text AND the break consumed nothing -- because
+// a break that DID consume something (a '\n', or the spaces a word wrap
+// swallowed) leaves a real, empty line after it, which an editor shows
+// and a caret can sit on. Getting this wrong counts a phantom line at
+// the end of every document, which then shifts the scroll clamp and the
+// whole visible window by a row.
+static int last_span(const struct utext *t, int draw_end, int next) {
+    return next >= t->count && next == draw_end;
 }
 
 static void wrap_build(struct utext *t, int cols) {
-    struct utext_wrap *w = &t->wrap;
+    struct utext_wrap *w = &t->wrap_cache;
     w->cols = cols;
     w->rev = t->rev;
+    w->wrap = t->wrap;
     w->stride = 1;
     w->n = 0;
     w->idx[w->n++] = 0; // line 0 begins at 0, whatever the text is
 
-    struct wrapst st = { 0, 0 };
-    for (int i = 0; i < t->count; i++) {
-        int start = wrap_step(&st, t->buf[i], i, cols);
-        if (start < 0 || st.line % w->stride) continue;
+    int line = 0, i = 0;
+    for (;;) {
+        int draw_end, next;
+        line_span(t, cols, i, &draw_end, &next);
+        if (last_span(t, draw_end, next)) break;
+        if (next <= i) break;   // line_span never fails to advance; belt and braces
+        i = next;
+        line++;
+        if (line % w->stride) continue;
         if (w->n == UTEXT_CKPTS) {
             // Full: keep every second entry and double the stride, so
             // idx[k] still names line k * stride. One pass, no second
@@ -84,60 +150,64 @@ static void wrap_build(struct utext *t, int cols) {
             for (int k = 0; k * 2 < w->n; k++) w->idx[k] = w->idx[k * 2];
             w->n = (w->n + 1) / 2;
             w->stride *= 2;
-            if (st.line % w->stride) continue;
+            if (line % w->stride) continue;
         }
-        w->idx[w->n++] = start;
+        w->idx[w->n++] = i;
     }
-    w->total_lines = st.line + 1;
+    w->total_lines = line + 1;
     w->valid = 1;
 }
 
 static void wrap_ensure(struct utext *t, int cols) {
-    struct utext_wrap *w = &t->wrap;
-    if (w->valid && w->cols == cols && w->rev == t->rev) return;
+    struct utext_wrap *w = &t->wrap_cache;
+    if (w->valid && w->cols == cols && w->rev == t->rev && w->wrap == t->wrap) return;
     wrap_build(t, cols);
 }
 
-// The character index at which wrapped line `line` begins. Scans from
+// The character index at which visual line `line` begins. Scans from
 // the nearest checkpoint at or before it -- at most `stride` lines.
 static int line_begin(struct utext *t, int cols, int line) {
-    struct utext_wrap *w = &t->wrap;
+    struct utext_wrap *w = &t->wrap_cache;
     if (line <= 0) return 0;
     int k = line / w->stride;
     if (k >= w->n) k = w->n - 1;
-    struct wrapst st = { k * w->stride, 0 };
-    if (st.line >= line) return w->idx[k];
-    for (int i = w->idx[k]; i < t->count; i++) {
-        int start = wrap_step(&st, t->buf[i], i, cols);
-        if (start >= 0 && st.line >= line) return start;
+    int cur = k * w->stride;
+    int i = w->idx[k];
+    while (cur < line) {
+        int draw_end, next;
+        line_span(t, cols, i, &draw_end, &next);
+        if (last_span(t, draw_end, next) || next <= i) break;
+        i = next;
+        cur++;
     }
-    return t->count;
+    return i;
 }
 
-// Where character index `target` is drawn -- and therefore where a
-// caret sitting at it belongs, since a caret marks the cell the next
-// character will occupy.
-//
-// **THE PENDING WRAP IS APPLIED BEFORE ANSWERING.** Stepping the
-// characters before `target` can leave `col` sitting AT the wrap
-// column, a position no character is ever drawn at; draw() resolves
-// that when it places the next character, so this has to resolve it
-// too or the caret sits one column past the right margin while the
-// character it precedes is on the following row.
+// Where character index `target` is drawn: its visual line, and its
+// column WITHIN that line. A target sitting in the gap a break consumed
+// -- a '\n', or the spaces a word wrap swallowed -- reports the end of
+// the line it belongs to, which is where a caret there should sit.
 static void pos_of_index(struct utext *t, int cols, int target,
                           int *out_line, int *out_col) {
-    struct utext_wrap *w = &t->wrap;
+    struct utext_wrap *w = &t->wrap_cache;
     int lo = 0, hi = w->n - 1, k = 0;
     while (lo <= hi) {
         int m = (lo + hi) / 2;
         if (w->idx[m] <= target) { k = m; lo = m + 1; } else hi = m - 1;
     }
-    struct wrapst st = { k * w->stride, 0 };
-    for (int i = w->idx[k]; i < t->count && i < target; i++)
-        wrap_step(&st, t->buf[i], i, cols);
-    if (st.col >= cols) { st.line++; st.col = 0; }
-    *out_line = st.line;
-    *out_col = st.col;
+    int line = k * w->stride;
+    int i = w->idx[k];
+    for (;;) {
+        int draw_end, next;
+        line_span(t, cols, i, &draw_end, &next);
+        if (target <= draw_end || last_span(t, draw_end, next) || next <= i) {
+            *out_line = line;
+            *out_col = (target < i ? 0 : (target > draw_end ? draw_end : target) - i);
+            return;
+        }
+        i = next;
+        line++;
+    }
 }
 
 static void grid(int w, int h, int *max_cols, int *visible_rows) {
@@ -173,8 +243,8 @@ void utext_metrics(struct utext *t, int w, int h,
     int max_cols, visible_rows;
     grid(w, h, &max_cols, &visible_rows);
     wrap_ensure(t, max_cols);
-    clamp_scroll(t, t->wrap.total_lines, visible_rows);
-    if (out_total_lines) *out_total_lines = t->wrap.total_lines;
+    clamp_scroll(t, t->wrap_cache.total_lines, visible_rows);
+    if (out_total_lines) *out_total_lines = t->wrap_cache.total_lines;
     if (out_visible_rows) *out_visible_rows = visible_rows;
 }
 
@@ -182,11 +252,21 @@ void utext_reveal_cursor(struct utext *t, int w, int h) {
     int max_cols, visible_rows;
     grid(w, h, &max_cols, &visible_rows);
     wrap_ensure(t, max_cols);
-    int total = t->wrap.total_lines;
+    int total = t->wrap_cache.total_lines;
     int first = clamp_scroll(t, total, visible_rows);
 
     int cl, cc;
     pos_of_index(t, max_cols, t->ed.cursor, &cl, &cc);
+
+    // SIDEWAYS TOO, when there is a sideways. Without this, typing past
+    // the right edge of an unwrapped document changes text nobody can
+    // see -- the caret is off-screen and the view never follows it.
+    if (t->wrap == UTEXT_WRAP_OFF) {
+        if (cc < t->hscroll) t->hscroll = cc;
+        else if (cc >= t->hscroll + max_cols) t->hscroll = cc - max_cols + 1;
+        if (t->hscroll < 0) t->hscroll = 0;
+    }
+
     int want = first;
     if (cl < first) want = cl;
     else if (cl >= first + visible_rows) want = cl - visible_rows + 1;
@@ -206,51 +286,49 @@ void utext_draw(struct utext *t, struct ugfx_surface *s,
     ugfx_fill_rect(s, x, y, w, h, bg);
 
     wrap_ensure(t, max_cols);
-    int first_line = clamp_scroll(t, t->wrap.total_lines, visible_rows);
+    int first_line = clamp_scroll(t, t->wrap_cache.total_lines, visible_rows);
 
     int sel_start = 0, sel_end = 0;
     int has_sel = utext_sel_present(t);
     if (has_sel) utext_sel_range(t, &sel_start, &sel_end);
 
-    // From the first VISIBLE character, not from index 0: this loop is
-    // the reason a big document costs a screenful of work per frame
-    // instead of a documentful.
-    int line = first_line, col = 0;
-    for (int i = line_begin(t, max_cols, first_line); i < t->count; i++) {
-        char c = t->buf[i];
-        int selected = has_sel && i >= sel_start && i < sel_end;
+    // ROW BY ROW, from the first VISIBLE line -- which is why a
+    // document of any size costs a screenful of work per frame rather
+    // than a documentful.
+    int i = line_begin(t, max_cols, first_line);
+    for (int row = 0; row < visible_rows && i <= t->count; row++) {
+        int draw_end, next;
+        line_span(t, max_cols, i, &draw_end, &next);
 
-        if (c == '\n') {
-            // A newline is not a glyph, but a selection running through
-            // it should still read as reaching the end of the line --
-            // so paint a cell's worth of highlight past the last real
-            // character rather than stopping short.
-            if (selected)
-                ugfx_fill_rect(s, x + col * char_w, y + (line - first_line) * char_h,
-                                char_w, char_h, sel_bg);
-            line++;
-            col = 0;
-            if (line - first_line >= visible_rows) break;
-            continue;
+        int ry = y + row * char_h;
+        for (int k = i; k < draw_end; k++) {
+            int col = k - i - t->hscroll;   // hscroll is 0 while wrapping
+            if (col < 0) continue;
+            if (col >= max_cols) break;
+            int selected = has_sel && k >= sel_start && k < sel_end;
+            int rx = x + col * char_w;
+            if (selected) ugfx_fill_rect(s, rx, ry, char_w, char_h, sel_bg);
+            ugfx_draw_char(s, rx, ry, t->buf[k], fg, selected ? sel_bg : bg);
+        }
+        // A selection running THROUGH a line break should read as
+        // reaching the end of the line, so paint one cell past the last
+        // character rather than stopping short.
+        if (has_sel && draw_end >= sel_start && draw_end < sel_end) {
+            int col = draw_end - i - t->hscroll;
+            if (col >= 0 && col < max_cols)
+                ugfx_fill_rect(s, x + col * char_w, ry, char_w, char_h, sel_bg);
         }
 
-        if (col >= max_cols) {
-            line++;
-            col = 0;
-            if (line - first_line >= visible_rows) break;
-        }
-
-        int rx = x + col * char_w;
-        int ry = y + (line - first_line) * char_h;
-        if (selected) ugfx_fill_rect(s, rx, ry, char_w, char_h, sel_bg);
-        ugfx_draw_char(s, rx, ry, c, fg, selected ? sel_bg : bg);
-        col++;
+        if (last_span(t, draw_end, next) || next <= i) break;
+        i = next;
     }
 
     if (show_cursor) {
         int cl, cc;
         pos_of_index(t, max_cols, t->ed.cursor, &cl, &cc);
-        if (cl >= first_line && cl - first_line < visible_rows)
+        cc -= t->hscroll;
+        if (cl >= first_line && cl - first_line < visible_rows &&
+            cc >= 0 && cc <= max_cols)
             ugfx_fill_rect(s, x + cc * char_w, y + (cl - first_line) * char_h,
                             CURSOR_BAR_W, char_h, fg);
     }
@@ -262,39 +340,62 @@ int utext_index_at_point(struct utext *t, int x, int y, int w, int h, int px, in
     int char_w = ugfx_char_w(), char_h = ugfx_char_h();
 
     wrap_ensure(t, max_cols);
-    int first_line = clamp_scroll(t, t->wrap.total_lines, visible_rows);
+    int first_line = clamp_scroll(t, t->wrap_cache.total_lines, visible_rows);
 
     int want_row = (py - y) / char_h;
     if (want_row < 0) want_row = 0;
-    int want_line = first_line + want_row;
-    int want_col = (px - x) / char_w;
+    if (want_row >= visible_rows) want_row = visible_rows - 1;
+    int want_col = (px - x) / char_w + t->hscroll;
     if (want_col < 0) want_col = 0;
 
-    // The SAME accounting draw() uses, from the same starting point --
-    // and IN THE SAME ORDER. The target is tested only after a pending
-    // wrap has been applied, because that is when draw() decides which
-    // row a character is on; testing first put the caret one character
-    // late on every wrapped continuation line, and only there.
-    //
-    // Anything past the end of the wanted line lands at that line's
-    // end, which is what makes clicking in the blank space after a
-    // short line behave.
-    int line = first_line, col = 0;
-    for (int i = line_begin(t, max_cols, first_line); i < t->count; i++) {
-        char c = t->buf[i];
-        if (c == '\n') {
-            if (line == want_line) return i; // clicked past this line's text
-            line++;
-            col = 0;
-            continue;
+    // The SAME spans draw() used, walked the same way. Clicking past a
+    // line's end lands at that end, which is what makes clicking in the
+    // blank space after a short line behave.
+    int i = line_begin(t, max_cols, first_line);
+    for (int row = 0; row <= want_row; row++) {
+        int draw_end, next;
+        line_span(t, max_cols, i, &draw_end, &next);
+        if (row == want_row) {
+            int at = i + want_col;
+            return at > draw_end ? draw_end : at;
         }
-        if (col >= max_cols) { line++; col = 0; }
-        if (line > want_line) return i;      // the wanted line ended first
-        if (line == want_line && col >= want_col) return i;
-        col++;
+        if (last_span(t, draw_end, next) || next <= i)
+            return draw_end;   // clicked below the last line
+        i = next;
     }
-    return t->count; // below the last line, or past the end
+    return t->count;
 }
+
+int utext_widest_line(struct utext *t, int w, int h) {
+    int max_cols, visible_rows;
+    grid(w, h, &max_cols, &visible_rows);
+    wrap_ensure(t, max_cols);
+    // While wrapping there is nothing to the right of the view by
+    // construction, so the honest answer is the view's own width.
+    if (t->wrap != UTEXT_WRAP_OFF) return max_cols;
+
+    int widest = 0;
+    for (int i = 0;;) {
+        int draw_end, next;
+        line_span(t, max_cols, i, &draw_end, &next);
+        if (draw_end - i > widest) widest = draw_end - i;
+        if (last_span(t, draw_end, next) || next <= i) break;
+        i = next;
+    }
+    return widest;
+}
+
+void utext_set_wrap(struct utext *t, int mode) {
+    if (t->wrap == mode) return;
+    t->wrap = mode;
+    // A DOCUMENT COMING BACK SIDEWAYS with no way to say so is what an
+    // hscroll left set would look like: wrapping puts nothing to the
+    // right of the view, so the scrollbar that moved it is gone too.
+    if (mode != UTEXT_WRAP_OFF) t->hscroll = 0;
+    t->wrap_cache.valid = 0;
+}
+
+int utext_get_wrap(const struct utext *t) { return t->wrap; }
 
 // --- cursor movement ---------------------------------------------------
 
