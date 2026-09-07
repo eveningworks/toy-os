@@ -221,7 +221,8 @@ static int g_ntabs;
 // folds 'M' to 0x0D and the binding would be indistinguishable from
 // Shift+Enter (api/keyboard.h).
 enum {
-    CMD_NEW_TAB = 1, CMD_CLOSE_TAB, CMD_EXIT, CMD_PASTE,
+    CMD_NEW_TAB = 1, CMD_CLOSE_TAB, CMD_EXIT, CMD_PASTE, CMD_COPY,
+    CMD_SELECT_ALL,
     CMD_RENAME, CMD_CLEAR_SCREEN, CMD_CLEAR_SB, CMD_RESET,
     CMD_INTR, CMD_EOF,
     CMD_TOP, CMD_BOTTOM, CMD_MENUBAR,
@@ -247,7 +248,10 @@ static const struct uui_menu_item term_items[] = {
 };
 
 static const struct uui_menu_item edit_items[] = {
-    UUI_MENU("Paste", CMD_PASTE, "Ctrl+Shift+V"),
+    UUI_MENU("Copy",       CMD_COPY,       "Ctrl+Shift+C"),
+    UUI_MENU("Paste",      CMD_PASTE,      "Ctrl+Shift+V"),
+    UUI_MENU_SEP,
+    UUI_MENU("Select All", CMD_SELECT_ALL, 0),
 };
 
 static const struct uui_menu_item view_items[] = {
@@ -303,6 +307,66 @@ static struct uui_item g_widgets[] = {
 static struct uapp *g_app;
 static int g_rows = 24, g_cols = 80;  // one window, so one size for all
 
+// --- the scrollbar ----------------------------------------------------
+//
+// A RESERVED GUTTER, not an overlay: the grid narrows by the bar's width
+// and text never sits under it. Konsole, xterm and GNOME Terminal all do
+// this, and the alternative -- a bar over the last columns -- costs the
+// shell nothing but puts an indicator on top of its output.
+//
+// The width comes from the widget (uui_scrollbar_natural_size()), so it
+// tracks the font like everything else here; hardcoding one is what gave
+// Notepad an 8px strip that was genuinely hard to click.
+static int chrome_h(void);
+
+static int bar_w(void) {
+    int w = 0, h = 0;
+    uui_scrollbar_natural_size(&w, &h);
+    return w;
+}
+
+// Where the bar is, given the window. The ONE geometry function draw,
+// hit-testing and the drag maths all call -- two derivations is the
+// classic way a scrollbar draws in one place and responds in another.
+static void bar_rect(int win_w, int win_h, int *x, int *y, int *w, int *h) {
+    *w = bar_w();
+    *x = win_w - *w;
+    *y = chrome_h();
+    *h = win_h - *y;
+}
+
+// A thumb drag in progress: how far down the thumb the press landed, or
+// -1 for no drag. Point 1 of docs/gui-guidelines.md's scrollbar section
+// -- passing 0 here makes the thumb leap so its TOP sits under the
+// cursor, and the control is then usable only by catching its top edge.
+static int g_bar_grab = -1;
+
+// --- selection --------------------------------------------------------
+//
+// A POINT IS A LINE IN THE SESSION'S VIRTUAL BUFFER, not a screen row:
+// lines 0..sb_count-1 are scrollback and sb_count..sb_count+g_rows-1 are
+// the screen, so view row `r` is line `sb_count - sb_view + r` whichever
+// half it comes from. That single expression is why scrolling during a
+// drag keeps the anchor on the text it was put on rather than on the row
+// it happened to be over.
+//
+// `col` may be g_cols -- one past the last cell -- so a selection can
+// reach a line's break, which is what makes a multi-line copy end its
+// lines rather than run them together.
+struct selpoint { int line, col; };
+
+static struct selpoint g_sel_a, g_sel_b;
+static int g_selecting;   // a drag is live: motion extends g_sel_b
+static int g_sel_on;      // there is a selection to draw and copy
+
+// **THE SELECTION IS DROPPED WHEN THE TEXT MOVES UNDER IT.** vt_scroll()
+// shifts every line by one once the scrollback is full, and a program
+// clearing the screen replaces what was selected outright -- so rather
+// than tracking the text through both, the selection goes. Konsole keeps
+// it, at the cost of a line identity this terminal's scrollback (a ring
+// of evicted rows) does not carry.
+static void sel_clear(void) { g_sel_on = 0; g_selecting = 0; }
+
 // The ALLOCATED geometry every session's buffers share, and the draw
 // scratch sized to it. Grows in grow_caps(), never shrinks.
 static int g_cap_rows, g_cap_cols;
@@ -341,6 +405,51 @@ static struct cell *sb_row(struct session *s, int r) {
 }
 static struct cell *saved_row(struct session *s, int r) {
     return s->saved + (size_t)r * g_cap_cols;
+}
+
+// --- the virtual buffer, and what is selected in it -------------------
+
+// The line a view row shows. One expression for both halves -- see the
+// note beside struct selpoint.
+static int virt_of_row(const struct session *s, int r) {
+    return s->sb_count - s->sb_view + r;
+}
+
+// The cells of a virtual line, or NULL when it is off either end.
+static const struct cell *virt_row(struct session *s, int line) {
+    if (line < 0) return 0;
+    if (line < s->sb_count) return sb_row(s, line);
+    int r = line - s->sb_count;
+    if (r >= g_rows) return 0;
+    return grid_row(s, r);
+}
+
+// Reading order: is `a` before `b`?
+static int sel_before(struct selpoint a, struct selpoint b) {
+    return a.line < b.line || (a.line == b.line && a.col < b.col);
+}
+
+// The selection, sorted. Returns 0 when there is nothing selected --
+// which includes an anchor and a cursor at the same point, the state a
+// plain click leaves behind.
+static int sel_range(struct selpoint *from, struct selpoint *to) {
+    if (!g_sel_on) return 0;
+    if (sel_before(g_sel_b, g_sel_a)) { *from = g_sel_b; *to = g_sel_a; }
+    else                              { *from = g_sel_a; *to = g_sel_b; }
+    return sel_before(*from, *to);
+}
+
+// The columns of `line` that are selected, as [*c0, *c1). Zero-width
+// when none of it is.
+static void sel_cols(int line, int *c0, int *c1) {
+    struct selpoint from, to;
+    *c0 = *c1 = 0;
+    if (!sel_range(&from, &to)) return;
+    if (line < from.line || line > to.line) return;
+    *c0 = (line == from.line) ? from.col : 0;
+    *c1 = (line == to.line)   ? to.col   : g_cols;
+    if (*c1 > g_cols) *c1 = g_cols;
+    if (*c0 > *c1) *c0 = *c1;
 }
 
 static struct cell *cells_new(int rows, int cols) {
@@ -413,6 +522,7 @@ static void row_clear(struct cell *row, int from) {
 }
 
 static void vt_reset_screen(struct session *s) {
+    sel_clear();
     for (int r = 0; r < g_cap_rows; r++) row_clear(grid_row(s, r), 0);
     s->cr = s->cc = 0;
 }
@@ -421,6 +531,7 @@ static void vt_reset_screen(struct session *s) {
 // STREAM STILL EXISTS -- and it is the right place: scrollback is a
 // record of what went past, while the screen is a thing being drawn on.
 static void vt_scroll(struct session *s) {
+    sel_clear();
     size_t rowbytes = (size_t)g_cap_cols * sizeof(struct cell);
     if (s->sb_count == SB_ROWS) {
         memmove(sb_row(s, 0), sb_row(s, 1), (size_t)(SB_ROWS - 1) * rowbytes);
@@ -868,21 +979,33 @@ static void draw_run(struct ugfx_surface *s, int x, int y,
     ugfx_draw_string(s, x, y, buf, VGA_RGB[fg & 15], VGA_RGB[bg & 15]);
 }
 
-static void draw_row(struct ugfx_surface *s, const struct cell *row, int y) {
+// `sc0`/`sc1` are the selected columns of this row, as a half-open
+// range; equal means none. A SELECTED CELL SWAPS ITS OWN COLOURS rather
+// than taking a highlight colour, which is what every terminal does and
+// what keeps a coloured `ls` legible inside a selection.
+static void draw_row(struct ugfx_surface *s, const struct cell *row, int y,
+                     int sc0, int sc1) {
     int cw = ugfx_char_w();
     int i = 0;
     while (i < g_cols) {
+        int sel = (i >= sc0 && i < sc1);
+        // A run ends where the colours change OR where the selection
+        // starts or stops, because the two halves are drawn differently.
+        int j = i;
+        while (j < g_cols && row[j].fg == row[i].fg && row[j].bg == row[i].bg &&
+               (j >= sc0 && j < sc1) == sel) j++;
         // TRAILING BLANKS IN THE DEFAULT COLOURS ARE NOT DRAWN -- the
         // surface is already that colour, and drawing them would cost a
-        // full row of glyphs per line for nothing.
-        int j = i;
-        while (j < g_cols && row[j].fg == row[i].fg && row[j].bg == row[i].bg) j++;
+        // full row of glyphs per line for nothing. A SELECTED blank IS
+        // drawn: it is what shows the selection reaching the line end.
         int blank = 1;
         for (int k = i; k < j; k++) if (row[k].ch != ' ') { blank = 0; break; }
-        if (!(blank && row[i].bg == VT_BG) && g_rowbuf) {
+        if ((sel || !(blank && row[i].bg == VT_BG)) && g_rowbuf) {
             char *run = g_rowbuf;
             for (int k = i; k < j; k++) run[k - i] = row[k].ch;
-            draw_run(s, MARGIN + i * cw, y, run, j - i, row[i].fg, row[i].bg);
+            draw_run(s, MARGIN + i * cw, y, run, j - i,
+                      sel ? row[i].bg : row[i].fg,
+                      sel ? row[i].fg : row[i].bg);
         }
         i = j;
     }
@@ -904,17 +1027,30 @@ static void draw(struct ugfx_surface *s, int focused) {
     // grid of cells. That is the payoff of scrollback being made of
     // evicted ROWS rather than of a character stream.
     for (int r = 0; r < g_rows; r++) {
-        int back = ses->sb_view - r;      // >0 means this row is history
-        const struct cell *row;
-        if (back > 0) {
-            int idx = ses->sb_count - back;
-            if (idx < 0) continue;        // before the oldest line we kept
-            row = sb_row(ses, idx);
-        } else {
-            row = grid_row(ses, -back);
-        }
-        draw_row(s, row, top + MARGIN + r * ch);
+        int line = virt_of_row(ses, r);
+        const struct cell *row = virt_row(ses, line);
+        if (!row) continue;   // before the oldest line we kept
+        int sc0, sc1;
+        sel_cols(line, &sc0, &sc1);
+        draw_row(s, row, top + MARGIN + r * ch, sc0, sc1);
     }
+
+    // The scrollbar. TOTAL is the whole virtual buffer -- scrollback plus
+    // the screen -- and the offset is sb_view unconverted, because a
+    // vertical bar here already counts from the bottom (uui_scrollbar.h).
+    // The track is drawn whether or not there is anything to scroll: it
+    // is an indicator as well as a handle (gui-guidelines point 8).
+    //
+    // Its colours are Breeze's DARK pair (#31363b track, #76797c thumb),
+    // not the toolkit theme's. This page is the ANSI palette on black by
+    // definition, and the near-white bar Notepad draws would be the
+    // brightest thing on the window -- which is what Konsole's own dark
+    // scheme avoids by doing exactly this.
+    int bx, by, bw, bh;
+    bar_rect(s->w, s->h, &bx, &by, &bw, &bh);
+    uui_scrollbar_draw(s, bx, by, bw, bh,
+                        ses->sb_count + g_rows, g_rows, ses->sb_view,
+                        ugfx_rgb(49, 54, 59), ugfx_rgb(118, 121, 124), 0);
 
     // The caret, only while FOCUSED and only while the program wants it
     // shown (`ESC[?25l` hides it -- a full-screen program parking the
@@ -957,6 +1093,8 @@ static int chrome_moved(void) {
     return 1;
 }
 
+static int sel_measure(struct session *s, char *out, int cap);
+
 static void log_layout(void) {
     struct session *s = active();
     if (!s) return;
@@ -964,15 +1102,23 @@ static void log_layout(void) {
     // has to stay one**: tools/uterm_test.py reads it with
     // `split()[0]`, so a row/column PAIR there parses as neither. Extra
     // fields are safe after it and are what a tabbed window adds.
-    char b[96];
+    char b[192];
     // The CHROME's height, so a pixel check aiming at the grid does not
     // guess where it starts -- the menu bar's arrival moved that edge
     // and a hardcoded band would have gone on comparing the strip.
+    //
+    // `sbview`/`sbcount` are the SCROLL POSITION and how far back it can
+    // go, and `selbytes` how much text is selected. All three so a check
+    // can assert the view MOVED and the selection EXISTS without reading
+    // pixels -- which for a scrollbar is the assertion that matters
+    // (docs/gui-guidelines.md's point 9) and for a selection is the only
+    // one that distinguishes "highlighted" from "would be copied".
     snprintf(b, sizeof b,
              "uterm: layout cursor %d rows %d cols %d tabs %d sel %d menu %d "
-             "chrome %d rename %d\n",
+             "chrome %d rename %d sbview %d sbcount %d selbytes %d\n",
              s->cr * g_cols + s->cc, g_rows, g_cols, g_ntabs,
-             g_strip.selected, g_menu_shown, chrome_h(), g_rename_open);
+             g_strip.selected, g_menu_shown, chrome_h(), g_rename_open,
+             s->sb_view, s->sb_count, sel_measure(s, 0, 0));
     uapp_log_layout_line(b);
 
     // The chrome's rects, the same grammar Notepad reports -- a test
@@ -998,6 +1144,13 @@ static void log_layout(void) {
     // shell it holds, so a test checking that a new tab was APPENDED
     // rather than dropped into a recycled slot's hole needs this.
     uapp_log_layout(g_app, "uterm");
+    if (g_app) {
+        int bx, by, bw, bh;
+        bar_rect(uapp_width(g_app), uapp_height(g_app), &bx, &by, &bw, &bh);
+        char r[64];
+        snprintf(r, sizeof r, "uterm: layout bar %d %d %d %d\n", bx, by, bw, bh);
+        uapp_log_layout_line(r);
+    }
     for (int i = 0; i < g_ntabs; i++) {
         char b[64];
         snprintf(b, sizeof b, "uterm: layout tabslot %d %d\n", i, g_tab_slot[i]);
@@ -1108,7 +1261,10 @@ static void size_changed(int w, int h) {
     int cw = ugfx_char_w(), ch = ugfx_char_h();
     if (cw <= 0 || ch <= 0) return;
     int rows = (h - chrome_h() - 2 * MARGIN) / ch;
-    int cols = (w - 2 * MARGIN) / cw;
+    // THE GUTTER COMES OFF THE WIDTH, and default_size() adds it back --
+    // the two are inverses and a bar counted in only one of them is a
+    // window that opens one column narrower than it asks for.
+    int cols = (w - 2 * MARGIN - bar_w()) / cw;
     if (rows < 2) rows = 2;
     if (cols < 8) cols = 8;
     // Grow the buffers to fit; on a failed malloc keep the old
@@ -1146,19 +1302,137 @@ static void on_resize(struct uapp *a, int w, int h) {
 // and away means BACK INTO HISTORY.
 #define WHEEL_LINES 3
 
+static void scroll_to(struct uapp *a, int want);
+
 static void on_wheel(struct uapp *a, int notches) {
     struct session *s = active();
     if (!s) return;
-    int want = s->sb_view + notches * WHEEL_LINES;
-    // Clamped rather than wrapped, and clamped at BOTH ends: scrolling
-    // past the oldest line must stop there, and scrolling forward past
-    // the live screen must land exactly on it (0) rather than going
-    // negative, which would index above the top of the buffer.
+    scroll_to(a, s->sb_view + notches * WHEEL_LINES);
+}
+
+// Move the view and repaint only if it moved. Shared by the wheel, the
+// keys and the scrollbar, so the three cannot disagree about where the
+// ends are.
+//
+// CLAMPED AT BOTH ENDS, not wrapped: scrolling past the oldest line must
+// stop there, and scrolling forward past the live screen must land
+// exactly on it (0) rather than going negative, which would index above
+// the top of the buffer.
+static void scroll_to(struct uapp *a, int want) {
+    struct session *s = active();
+    if (!s) return;
     if (want > s->sb_count) want = s->sb_count;
     if (want < 0) want = 0;
-    if (want == s->sb_view) return;   // nothing moved -- do not repaint
+    if (want == s->sb_view) return;
     s->sb_view = want;
     uapp_redraw(a);
+}
+
+// --- the pointer ------------------------------------------------------
+//
+// The cell under a pixel. Clamped rather than refused, so a drag that
+// runs off the window keeps selecting to the edge -- the pointer grab
+// (ui/uui_route.h) keeps delivering motion once the cursor has left.
+// The column may come back as g_cols, which is the "past the end of the
+// line" position a selection needs to include the break.
+static struct selpoint point_at(struct session *s, int x, int y) {
+    int cw = ugfx_char_w(), ch = ugfx_char_h();
+    int r = (y - chrome_h() - MARGIN) / ch;
+    if (r < 0) r = 0;
+    if (r >= g_rows) r = g_rows - 1;
+    // Snapped to the nearest gap, not to the cell: clicking a glyph's
+    // right half puts the caret after it, as uui_textbox_index_at_x()
+    // does for a text field.
+    int c = (x - MARGIN + cw / 2) / cw;
+    if (c < 0) c = 0;
+    if (c > g_cols) c = g_cols;
+    struct selpoint p = { virt_of_row(s, r), c };
+    return p;
+}
+
+// What counts as one word for a double-click. Konsole's default set
+// (`:word_characters`) is letters, digits and `_-.,/`; this is the
+// conservative half of it, which is what makes double-clicking a path
+// stop at a `/` rather than swallowing the line.
+static int word_char(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+// Grow a point out to its whole word. Returns 0 when there is no word
+// under it, which leaves the caret where the click put it.
+static int sel_word(struct session *s, struct selpoint p) {
+    const struct cell *row = virt_row(s, p.line);
+    if (!row) return 0;
+    int c = p.col;
+    if (c >= g_cols) c = g_cols - 1;
+    if (c < 0 || !word_char(row[c].ch)) return 0;
+    int a = c, b = c;
+    while (a > 0 && word_char(row[a - 1].ch)) a--;
+    while (b + 1 < g_cols && word_char(row[b + 1].ch)) b++;
+    g_sel_a.line = g_sel_b.line = p.line;
+    g_sel_a.col = a;
+    g_sel_b.col = b + 1;
+    g_sel_on = 1;
+    return 1;
+}
+
+// The whole line, break included -- so a triple-click copy of two lines
+// running together is impossible.
+static void sel_line(struct selpoint p) {
+    g_sel_a.line = p.line; g_sel_a.col = 0;
+    g_sel_b.line = p.line; g_sel_b.col = g_cols;
+    g_sel_on = 1;
+}
+
+// --- copying ----------------------------------------------------------
+
+// The selected text, laid out the way a person would retype it: trailing
+// blanks dropped from every line but the last, and a newline where the
+// selection crosses a line break.
+//
+// TWO PASSES, and the first one is what makes a refusal possible: a copy
+// that does not fit is refused rather than truncated (lib/uclip.h), and
+// half a command line pasted into a shell is worse than none.
+static int sel_measure(struct session *s, char *out, int cap) {
+    struct selpoint from, to;
+    if (!sel_range(&from, &to)) return 0;
+    int n = 0;
+    for (int line = from.line; line <= to.line; line++) {
+        const struct cell *row = virt_row(s, line);
+        int c0, c1;
+        sel_cols(line, &c0, &c1);
+        int end = c1;
+        if (row && line < to.line)          // trailing blanks are padding,
+            while (end > c0 && row[end - 1].ch == ' ') end--;   // not text
+        for (int c = c0; row && c < end; c++) {
+            if (out && n < cap) out[n] = row[c].ch;
+            n++;
+        }
+        if (line < to.line) { if (out && n < cap) out[n] = '\n'; n++; }
+    }
+    if (out && n < cap) out[n] = '\0';
+    return n;
+}
+
+// Puts the selection on the clipboard. SAYS SO EITHER WAY -- silence is
+// the one outcome a Copy must never have (lib/uclip.h).
+static void do_copy(void) {
+    struct session *s = active();
+    if (!s || !g_sel_on) return;
+    int n = sel_measure(s, 0, 0);
+    if (n <= 0) return;
+    if (n > UCLIP_TEXT_MAX) {
+        ulogf("uterm: selection is %d bytes, over the clipboard's %d -- not copied\n",
+              n, UCLIP_TEXT_MAX);
+        return;
+    }
+    char *buf = malloc((size_t)n + 1);
+    if (!buf) { ulog("uterm: out of memory copying the selection\n"); return; }
+    sel_measure(s, buf, n + 1);
+    if (!uclip_set_text(buf, n))
+        ulog("uterm: the clipboard refused the copy -- is clipboardd running?\n");
+    free(buf);
 }
 
 // Every ring, not just the visible one: a background tab must keep up,
@@ -1196,6 +1470,7 @@ static void reap_dead_tabs(void) {
 #define CTRL_SHIFT_T 0x14
 #define CTRL_SHIFT_W 0x17
 #define CTRL_SHIFT_V 0x16
+#define CTRL_SHIFT_C 0x03
 
 // One byte to the shell, the way a keystroke would arrive. THE MENU
 // SENDS THE SAME BYTE THE KEY DOES rather than reaching for
@@ -1239,6 +1514,7 @@ static unsigned menu_item_flags(int code) {
     case CMD_NEXT_TAB:
     case CMD_PREV_TAB:  return g_ntabs > 1 ? 0 : UUI_MI_DISABLED;
     case CMD_PASTE:     return g_clip_has_text ? 0 : UUI_MI_DISABLED;
+    case CMD_COPY:      return g_sel_on ? 0 : UUI_MI_DISABLED;
     default:            return 0;
     }
 }
@@ -1286,6 +1562,18 @@ static void do_command(struct uapp *a, int code) {
         }
         break;
     case CMD_PASTE:     do_paste(); break;
+    case CMD_COPY:      do_copy();  break;
+    case CMD_SELECT_ALL: {
+        struct session *ses = active();
+        if (!ses) break;
+        // The whole virtual buffer -- scrollback and screen -- because
+        // that is what the window is showing you a part of.
+        g_sel_a.line = 0; g_sel_a.col = 0;
+        g_sel_b.line = ses->sb_count + g_rows - 1; g_sel_b.col = g_cols;
+        g_sel_on = 1;
+        do_copy();
+        break;
+    }
     case CMD_INTR:      send_byte(0x03); break;
     case CMD_EOF:       send_byte(0x04); break;
     case CMD_TOP:       if (s) s->sb_view = s->sb_count; break;
@@ -1336,6 +1624,13 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     if ((mods & KEY_MOD_SHIFT) && key == CTRL_SHIFT_V) {
         do_paste();
         uapp_redraw(a);
+        return;
+    }
+    // Ctrl+Shift+C, not Ctrl+C: 0x03 IS the INTR byte, which has to keep
+    // reaching the shell. Konsole and GNOME Terminal make the same
+    // choice for the same reason.
+    if ((mods & KEY_MOD_SHIFT) && key == CTRL_SHIFT_C) {
+        do_copy();
         return;
     }
     if ((mods & KEY_MOD_SHIFT) && key == CTRL_SHIFT_W) {
@@ -1400,6 +1695,10 @@ static int on_user(struct uapp *a, int a0, int a1) {
 
 static void tab_selected(void *ctx, int index) {
     (void)ctx; (void)index;
+    // The selection names lines in the session it was made in, and every
+    // session has its own scrollback -- so carrying it across a switch
+    // would highlight whatever happened to be at those line numbers.
+    sel_clear();
     if (g_app) uapp_redraw(g_app);
 }
 
@@ -1427,16 +1726,156 @@ static void on_widget(struct uapp *a, int id, int reason) {
 
 // A press the router did not consume. Its only job is the rename prompt:
 // clicking away cancels, and clicking IN it places the caret.
+// How close in time and space two presses must be to count as a
+// double-click. 400 ms is Windows' default and within a pixel of KDE's;
+// the distance gate is what stops two deliberate clicks in different
+// places being read as one gesture.
+#define MULTICLICK_MS 400
+#define MULTICLICK_PX 4
+
+static unsigned long long g_last_click_ns;
+static int g_last_click_x, g_last_click_y;
+static int g_click_run;    // 1 = single, 2 = double, 3 = triple
+
+static int click_run(int x, int y) {
+    unsigned long long now = sys_monotonic_ns();
+    int dx = x - g_last_click_x, dy = y - g_last_click_y;
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    int near = dx <= MULTICLICK_PX && dy <= MULTICLICK_PX;
+    // The FIRST click has no predecessor, and an unsigned subtraction
+    // from a zero g_last_click_ns would be an enormous interval rather
+    // than a negative one -- which is the answer this wants anyway.
+    int soon = g_last_click_ns &&
+               now - g_last_click_ns < (unsigned long long)MULTICLICK_MS * 1000000ull;
+    g_click_run = (near && soon) ? g_click_run + 1 : 1;
+    if (g_click_run > 3) g_click_run = 1;   // a fourth click starts over
+    g_last_click_ns = now;
+    g_last_click_x = x;
+    g_last_click_y = y;
+    return g_click_run;
+}
+
 static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
-    (void)buttons;
-    if (!g_rename_open) return;
-    int fx, fy, fw, fh;
-    rename_rect(uapp_width(a), uapp_height(a), &fx, &fy, &fw, &fh);
-    uui_textbox_set_geometry(&g_rename, fx, fy, fw, fh);
-    if (uui_textbox_hit(&g_rename, x, y))
-        g_rename.ed.cursor = uui_textbox_index_at_x(&g_rename, x);
-    else
-        { g_rename_open = 0; g_rename_slot = -1; }
+    if (g_rename_open) {
+        int fx, fy, fw, fh;
+        rename_rect(uapp_width(a), uapp_height(a), &fx, &fy, &fw, &fh);
+        uui_textbox_set_geometry(&g_rename, fx, fy, fw, fh);
+        if (uui_textbox_hit(&g_rename, x, y))
+            g_rename.ed.cursor = uui_textbox_index_at_x(&g_rename, x);
+        else
+            { g_rename_open = 0; g_rename_slot = -1; }
+        uapp_redraw(a);
+        return;
+    }
+
+    // The PRIMARY button only. A secondary click inside the content area
+    // is the client's (docs/conventions/gui.md) and this app has no
+    // context menu yet -- it must not clear a selection somebody is
+    // about to reach for.
+    if (!(WIN_MOUSE_BUTTONS(buttons) & 0x1)) return;
+
+    struct session *ses = active();
+    if (!ses) return;
+    if (y < chrome_h()) return;   // the strips route themselves
+
+    int bx, by, bw, bh;
+    bar_rect(uapp_width(a), uapp_height(a), &bx, &by, &bw, &bh);
+    if (x >= bx) {
+        int total = ses->sb_count + g_rows;
+        switch (uui_scrollbar_hit(bx, by, bw, bh, total, g_rows,
+                                   ses->sb_view, x, y, 0)) {
+        case UUI_SB_THUMB: {
+            // WHERE IN THE THUMB the press landed, subtracted on every
+            // motion -- point 1 of the scrollbar spec. Passing 0 makes
+            // the thumb leap so its top sits under the cursor.
+            int ty, th;
+            uui_scrollbar_thumb_rect(by, bh, total, g_rows, ses->sb_view,
+                                      &ty, &th, bw, 0);
+            g_bar_grab = y - ty;
+            break;
+        }
+        // The trough PAGES; it does not jump to the clicked position.
+        // Above the thumb is further back in history, which is up.
+        case UUI_SB_ABOVE: scroll_to(a, ses->sb_view + g_rows - 1); break;
+        case UUI_SB_BELOW: scroll_to(a, ses->sb_view - g_rows + 1); break;
+        default: break;
+        }
+        return;
+    }
+
+    struct selpoint p = point_at(ses, x, y);
+    switch (click_run(x, y)) {
+    case 2:
+        if (!sel_word(ses, p)) sel_clear();
+        break;
+    case 3:
+        sel_line(p);
+        break;
+    default:
+        // Shift EXTENDS an existing selection instead of starting one,
+        // which is what every terminal and every list here does.
+        if ((WIN_MOUSE_MODS(buttons) & KEY_MOD_SHIFT) && g_sel_on) {
+            g_sel_b = p;
+        } else {
+            g_sel_a = g_sel_b = p;
+            g_sel_on = 1;   // armed but empty until the drag moves
+        }
+        g_selecting = 1;
+        break;
+    }
+    uapp_redraw(a);
+}
+
+static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
+    struct session *ses = active();
+    if (!ses) return;
+
+    if (g_bar_grab >= 0) {
+        int bx, by, bw, bh;
+        bar_rect(uapp_width(a), uapp_height(a), &bx, &by, &bw, &bh);
+        scroll_to(a, uui_scrollbar_offset_for_drag(by, bh,
+                        ses->sb_count + g_rows, g_rows, y, g_bar_grab, bw, 0));
+        return;
+    }
+
+    if (!g_selecting) return;
+    // **A MOTION WITH NO BUTTON HELD IS IGNORED, NOT TREATED AS A
+    // RELEASE**, and the difference is the whole of why drag-select did
+    // not work at first. `docs/conventions/gui.md` says to test the
+    // buttons mask, and it is right that a button-up motion must not
+    // move anything -- but ENDING the drag on one is wrong here,
+    // because the compositor sends exactly such a motion immediately
+    // after every press: a leave at (-1,-1) telling the window it is no
+    // longer hovered (wm_input.c's wm_update_content_hover, where hover
+    // is suppressed the moment something is pressed). Ending on it
+    // discarded every real drag motion that followed. on_release is
+    // what ends a selection.
+    if (!(WIN_MOUSE_BUTTONS(buttons) & 0x1)) return;
+
+    // Dragging past an edge scrolls, one line per motion event. A real
+    // terminal autoscrolls on a timer while the pointer is held still at
+    // the edge; this window deliberately has no tick (see uapp_desc), so
+    // it scrolls while the pointer keeps moving instead.
+    if (y < chrome_h() + MARGIN)                 scroll_to(a, ses->sb_view + 1);
+    else if (y >= chrome_h() + MARGIN + g_rows * ugfx_char_h())
+                                                 scroll_to(a, ses->sb_view - 1);
+
+    g_sel_b = point_at(ses, x, y);
+    uapp_redraw(a);
+}
+
+static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
+    (void)x; (void)y; (void)buttons;
+    g_bar_grab = -1;
+    if (!g_selecting) return;
+    g_selecting = 0;
+    // **COPY ON SELECT**, which X11 calls the PRIMARY selection and
+    // Konsole offers as an option. There is one clipboard here, so this
+    // does overwrite whatever was last copied -- deliberate, and the
+    // reason it is worth having anyway is that a terminal selection is
+    // made in order to be pasted, essentially always.
+    do_copy();
     uapp_redraw(a);
 }
 
@@ -1479,7 +1918,7 @@ static int on_close_cb(struct uapp *a) {
 // g_menu -- chrome_h() is safe only because both halves of it are pure
 // font arithmetic.
 static void default_size(int *w, int *h) {
-    *w = WIN_COLS * ugfx_char_w() + 2 * MARGIN;
+    *w = WIN_COLS * ugfx_char_w() + 2 * MARGIN + bar_w();
     *h = WIN_ROWS * ugfx_char_h() + chrome_h() + 2 * MARGIN;
 }
 
@@ -1506,6 +1945,8 @@ int main(void) {
         .on_draw_over = on_draw_over,
         .on_widget = on_widget,
         .on_press = on_press,
+        .on_motion = on_motion,
+        .on_release = on_release,
         .on_key  = on_key,
         .on_clipboard = on_clipboard_cb,
         .on_user = on_user,

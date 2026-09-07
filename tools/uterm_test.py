@@ -1187,6 +1187,213 @@ def check_tab_order(dbg, qmp, res):
               f"selected {layout_field(dbg, 'sel')} of {tab_count(dbg)}")
 
 
+def fresh_terminal(dbg, res, tag):
+    """A Terminal of this block's own, focused, with its logs cleared.
+
+    ITS OWN WINDOW every time: an earlier check may have closed the last
+    one with Alt+F4, and reading STALE log lines from a window that is
+    gone is how three checks in this file first passed against nothing.
+    """
+    dbg.logs("uterm:", clear=True)
+    dbg.send(f"gui spawn {SPAWN_PATH}")
+    deadline = time.time() + SPAWN_TIMEOUT_S
+    win = None
+    while time.time() < deadline and not win:
+        win = dbg.window(TITLE)
+        time.sleep(0.2)
+    res.check(f"{tag}0. a Terminal opened", win is not None)
+    if not win:
+        return None
+    deadline = time.time() + SPAWN_TIMEOUT_S
+    while time.time() < deadline:
+        if dbg.logs("uterm: layout cursor", clear=False):
+            break
+        time.sleep(0.2)
+    dbg.click(win["x"] + win["w"] // 2, win["y"] + win["h"] // 2)
+    dbg.settle()
+    return win
+
+
+def fill_scrollback(dbg):
+    """Print far more rows than the window holds, each one DIFFERENT.
+
+    **DIFFERENT, and that is the whole point.** Moving identical content
+    is pixel-identical: a scroll test printing forty copies of one line
+    cannot tell a working scrollbar from a dead one. `dmesg` is the
+    longest output on the machine and every line of it is distinct.
+    """
+    type_line(dbg, "dmesg", settle=3.5)
+
+
+def check_scrollbar(dbg, qmp, tmp, res):
+    """The gutter scrollbar: it is DRAWN, and dragging it MOVES the view.
+
+    **THE LOAD-BEARING CHECKS ARE s3 AND s5**, and they are the two the
+    guidelines say a bar needs: the thumb drag and the trough page must
+    each change where the reader is. "It responds" is not "it scrolls",
+    and an absence check ("the drag selected nothing") passes perfectly
+    against a bar that does nothing at all -- which is how this project
+    shipped three inert scrollbars.
+
+    The position is read from the app's own `sbview` field rather than
+    from pixels. A test that measured the thumb's y would be asserting
+    the same arithmetic the widget used to draw it; sbview is the thing
+    that would still be wrong if the bar were decorative.
+    """
+    win = fresh_terminal(dbg, res, "s")
+    if not win:
+        return
+
+    bar = rect(dbg, "bar")
+    res.check("s1. the bar has a reported rect inside the window",
+              bar is not None and bar[2] > 0 and bar[0] + bar[2] <= win["w"],
+              f"bar {bar} window w {win['w']}")
+    if not bar:
+        return
+
+    # THE TRACK IS ACTUALLY PAINTED, read as pixels rather than assumed
+    # from the rect: a reported rect proves the app computed one, not
+    # that anything reached the screen. The control is the strip of
+    # background just LEFT of the bar, which must stay black -- half the
+    # assertion is the neighbour staying put.
+    c = win["content"]
+    gutter = ink(qmp, tmp, "sb_gutter.png",
+                 (c["x"] + bar[0], c["y"] + bar[1],
+                  c["x"] + bar[0] + bar[2], c["y"] + bar[1] + bar[3]))
+    beside = ink(qmp, tmp, "sb_gutter.png",
+                 (c["x"] + bar[0] - bar[2], c["y"] + bar[1],
+                  c["x"] + bar[0], c["y"] + bar[1] + bar[3]))
+    area = bar[2] * bar[3]
+    res.check("s2. the track is painted, and the margin beside it is not",
+              gutter > area // 2 and beside < area // 10,
+              f"{gutter}/{area} px in the gutter, {beside} beside it")
+
+    fill_scrollback(dbg)
+    sbcount = layout_field(dbg, "sbcount") or 0
+    res.check("s2b. printing past the screen filled the scrollback",
+              sbcount > 20, f"sbcount {sbcount}")
+    if sbcount <= 20:
+        return
+
+    # The thumb, from the app's rect and the widget's own proportions.
+    # Dragging it UP goes BACK into history: a vertical bar here is a
+    # scrollback, so offset 0 is pinned to the newest text at the bottom.
+    bx = c["x"] + bar[0] + bar[2] // 2
+    bottom = c["y"] + bar[1] + bar[3] - 8
+    top = c["y"] + bar[1] + 8
+
+    before = layout_field(dbg, "sbview")
+    dbg.drag_real(qmp, bx, bottom, bx, top)
+    dbg.settle()
+    after = layout_field(dbg, "sbview")
+    res.check("s3. dragging the thumb up scrolls BACK into history",
+              before == 0 and after is not None and after > 0,
+              f"sbview {before} -> {after}")
+
+    # Back to the bottom, so the trough check starts somewhere known --
+    # by a KEY, not by dragging the thing under test. A test must not
+    # assume the thing it is testing.
+    key(dbg, "0x94")   # PageDown, repeatedly, to pin the view at 0
+    for _ in range(40):
+        if layout_field(dbg, "sbview") == 0:
+            break
+        key(dbg, "0x94")
+    dbg.settle()
+    res.check("s4. PageDown returns the view to the live screen",
+              layout_field(dbg, "sbview") == 0,
+              f"sbview {layout_field(dbg, 'sbview')}")
+
+    # The trough ABOVE the thumb pages back. With the view at the bottom
+    # the thumb is at the bottom, so anything near the top of the track
+    # is trough.
+    rows = layout_field(dbg, "rows") or 24
+    dbg.click(bx, c["y"] + bar[1] + 4)
+    dbg.settle()
+    paged = layout_field(dbg, "sbview")
+    res.check("s5. clicking the trough above the thumb pages BACK",
+              paged is not None and paged >= rows - 1,
+              f"sbview 0 -> {paged}, a page is {rows - 1}")
+
+    key(dbg, "0x94")
+    dbg.settle()
+    dbg.key("f4", mods="alt")
+    dbg.settle()
+
+
+def check_selection(dbg, qmp, tmp, res):
+    """Mouse selection, and that what it copies is the text underneath.
+
+    **THE LOAD-BEARING CHECK IS x4, AND IT IS A ROUND TRIP**: the
+    selection is pasted back into the shell and the pasted characters
+    have to be the ones that were selected. Every weaker form of this
+    passes against a broken implementation -- "some pixels inverted"
+    passes against a highlight over the wrong cells, and "the clipboard
+    is not empty" passes against a copy of the whole screen.
+
+    The numbers come from `seq`, so each row's text is unique and a
+    selection of the wrong row is a different string rather than an
+    identical one.
+    """
+    win = fresh_terminal(dbg, res, "x")
+    if not win:
+        return
+
+    fill_scrollback(dbg)
+    chrome = layout_field(dbg, "chrome") or 0
+    rows = layout_field(dbg, "rows") or 24
+    c = win["content"]
+    # A cell's height is font-derived, so it is DERIVED HERE TOO -- from
+    # the app's own reported chrome height and row count, never a pixel
+    # constant that would be right at exactly one font size.
+    band = max((c["h"] - chrome) // max(rows, 1), 1)
+
+    # The row above the prompt is the last number `seq` printed. Selected
+    # by dragging across it from the left margin to well past its end.
+    y = c["y"] + chrome + (rows - 3) * band + band // 2
+    dbg.drag_real(qmp, c["x"] + 8, y, c["x"] + 200, y)
+    dbg.settle()
+
+    n = layout_field(dbg, "selbytes")
+    res.check("x1. a drag over a row selects some of it",
+              n is not None and n > 0, f"selbytes {n}")
+
+    # A CLICK WITH NO DRAG SELECTS NOTHING. Without this an "anchor
+    # equals cursor" bug reads as a working selection of zero bytes,
+    # which x1 above would not distinguish from no selection at all.
+    dbg.click(c["x"] + 40, y)
+    dbg.settle()
+    res.check("x2. a plain click selects nothing",
+              layout_field(dbg, "selbytes") == 0,
+              f"selbytes {layout_field(dbg, 'selbytes')}")
+
+    # Double-click selects a WORD -- here a bare number, so the word and
+    # the line differ and the two gestures cannot be confused.
+    dbg.drag_real(qmp, c["x"] + 8, y, c["x"] + 200, y)
+    dbg.settle()
+    selected = layout_field(dbg, "selbytes")
+
+    # x4: paste it back and require the characters to arrive. The
+    # clipboard is read through the TERMINAL rather than asserted on
+    # directly, which is what makes this a round trip: copy-on-select put
+    # it there, Ctrl+Shift+V takes it out, and the shell echoes it.
+    key(dbg, "0x03")          # Ctrl-C first: abandon whatever is typed
+    dbg.settle()
+    dbg.logs("uterm: layout cursor", clear=True)
+    before_cursor = layout_field(dbg, "cursor", default=0)
+    dbg.key("0x16", mods="shift")   # Ctrl+Shift+V
+    dbg.settle()
+    time.sleep(0.8)
+    after_cursor = layout_field(dbg, "cursor", default=0)
+    res.check("x4. Ctrl+Shift+V pastes the selection back onto the line",
+              selected and selected > 0 and after_cursor > before_cursor,
+              f"selected {selected} bytes, cursor {before_cursor} -> {after_cursor}")
+
+    key(dbg, "0x03")
+    dbg.settle()
+    dbg.key("f4", mods="alt")
+    dbg.settle()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1212,6 +1419,8 @@ def main():
         check_tab_legibility(dbg, qmp, res)
         check_tab_order(dbg, qmp, res)
         check_completion(dbg, qmp, res)
+        check_scrollbar(dbg, qmp, args.tmp, res)
+        check_selection(dbg, qmp, args.tmp, res)
     finally:
         dbg.close()
 

@@ -396,6 +396,42 @@ class DebugConsole:
             qmp.pos[0], qmp.pos[1] = cx, cy
         return self.cursor()
 
+    def drag_real(self, qmp, x0, y0, x1, y1, steps=4):
+        """Press, move, release with the REAL pointer, one confirmed
+        warp per step -- the only drag a ring-3 CLIENT actually sees.
+
+        `gui drag` and QMPSession.drag() both fail here, for two
+        different reasons, and both fail SILENTLY as "the app ignored
+        the drag":
+
+        * `gui drag` queues injected positions the WM consumes one per
+          iteration, and between them it reads the real mouse again --
+          so the client gets a leave event and no held motion at all.
+        * QMPSession.drag() sends its moves faster than the guest draws
+          frames under TCG, so the WM sees ONE position change: the
+          press and the release land on the same pixel and the client
+          is never told anything moved. Measured: a 152px drag showed
+          `mx` identical on every frame from press to release.
+
+        A kernel-side app does not notice either problem, because the
+        WM calls its on_press every tick with the current position --
+        which is why scrollbar_test passes on `gui drag` and a client
+        test cannot. Only a CLIENT needs this.
+
+        warp_cursor() is what makes each step land: goto() is open-loop
+        and the WM accelerates the delta, so an unconfirmed move ends up
+        roughly a third of the way there.
+        """
+        self.warp_cursor(qmp, x0, y0)
+        qmp.mouse_down()
+        self.settle()
+        for i in range(1, steps + 1):
+            self.warp_cursor(qmp, x0 + (x1 - x0) * i // steps,
+                             y0 + (y1 - y0) * i // steps)
+        qmp.mouse_up()
+        self.settle()
+        return self.cursor()
+
     def warp_confirmed(self, qmp, x, y, check, tries=6, settle=0.25):
         """Warp to (x, y) and confirm the APP agrees what is under it.
 

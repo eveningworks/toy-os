@@ -1618,10 +1618,11 @@ real scanout hardware does. Do not write a pixel assertion for one.
   the FILE. Three choices rather than a boolean because that is XFCE's
   Whisker Menu verbatim (Icon / Title / Icon and title) and KDE's
   launcher option, and because a boolean cannot say `both`, which is
-  what Windows 95 through 7 shipped. **The default is `text`, and that
-  is a testing decision as much as a taste one**: the button's width is
-  derived from what is in it and every window button starts to the right
-  of it, so changing the default would move the whole strip under every
+  what Windows 95 through 7 shipped, and what the default is. **It was
+  `text` until 2026-09-07**, so that a machine with nothing written
+  looked as it had before the setting existed; the cost of moving it is
+  that the button's width is derived from what is in it and every window
+  button starts to the right of it, so the whole strip shifts under every
   pixel-based GUI check at once. **The mark is `/usr/share/icons/start.qoi`**,
   a name like any other icon (`START_ICON`), drawn by
   `tools/gen_icons.py`; it is deliberately NOT an app pictogram, since
@@ -3013,3 +3014,50 @@ as a dead control.
 any keycap's box**, so a test never derives a cap's position; the caps
 are named (`Space`, `Left`, `Enter`) partly for that reason, since a cap
 labelled `" "` cannot be passed as a console token.
+
+- **THE TERMINAL HAS A SCROLLBAR, IN A RESERVED GUTTER, AND THE GRID
+  NARROWS FOR IT.** Konsole, xterm and GNOME Terminal all reserve rather
+  than overlay; an overlay costs no columns and puts an indicator on top
+  of the shell's output. `size_changed()` subtracts the bar's width and
+  `default_size()` adds it back -- **the two are inverses, and a bar
+  counted in only one of them is a window that opens a column narrower
+  than it asked for.** The width comes from
+  `uui_scrollbar_natural_size()`, never a literal.
+
+  Three things follow. **`sb_view` already counts from the BOTTOM**,
+  which is what a vertical `uui_scrollbar`'s offset means
+  (`uui_scrollbar.h`), so unlike `uui_listbox` there is no conversion --
+  and a conversion added "for symmetry" would put the thumb at the wrong
+  end. **The colours are Breeze's DARK pair** (`#31363b` track,
+  `#76797c` thumb) rather than the toolkit theme's: this page is the
+  ANSI palette on black by definition, and Notepad's near-white bar down
+  the side of it would be the brightest thing on the window. And **the
+  trough PAGES, the thumb drags, and both had to be written** -- this
+  project has shipped four bars that drew and did nothing.
+
+- **A MOTION WITH NO BUTTON HELD IS IGNORED, NOT TREATED AS A RELEASE.**
+  The convention above says to test the `buttons` mask on a drag, and it
+  is right that a button-up motion must not move anything. ENDING the
+  drag on one is a different act and is wrong: the compositor sends
+  exactly such a motion immediately after every press -- a leave at
+  `(-1, -1)` telling the window it is no longer hovered, because
+  `wm_update_content_hover()` suppresses hover the moment anything is
+  pressed. A handler that ends its drag there discards every real motion
+  that follows, and the symptom is a selection that never grows past
+  zero bytes with the press and the release both arriving correctly.
+  `on_release` is what ends a drag.
+
+- **A SELECTION IS ANCHORED IN THE BUFFER, NOT ON THE SCREEN.** The
+  Terminal's selection points are lines in a VIRTUAL buffer -- scrollback
+  then screen, so view row `r` is line `sb_count - sb_view + r` whichever
+  half it comes from -- which is what keeps an anchor on the text it was
+  put on when the view scrolls during a drag. It is DROPPED when the text
+  moves under it (`vt_scroll()`, a screen clear) rather than tracked
+  through, because this scrollback is a ring of evicted rows and carries
+  no line identity to follow; Konsole keeps it and has one.
+
+  **COPY-ON-SELECT is on**, which is X11's PRIMARY habit and a Konsole
+  option. There is one clipboard here, so releasing a drag does overwrite
+  what was last copied -- deliberate, because a terminal selection is
+  made in order to be pasted essentially always. **`Ctrl+Shift+C`, never
+  `Ctrl+C`**: `0x03` is INTR and has to reach the shell.

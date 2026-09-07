@@ -289,6 +289,23 @@ manual steps to be worth automating:
   around it -- settled captures, and a REST frame with the pointer
   parked somewhere real, since the cursor sprite is part of the screen.
 
+  **`drag_real(qmp, x0, y0, x1, y1)` is the only drag a ring-3 CLIENT
+  actually sees**, and neither of the two obvious ones works on one.
+  `gui drag` queues injected positions the WM consumes one per
+  iteration, reading the real mouse in between -- so the client gets a
+  leave event and no held motion at all. `QMPSession.drag()` sends its
+  moves faster than the guest draws frames under TCG, so the WM sees ONE
+  position change: measured, a 152px drag reported an identical `mx` on
+  every frame from press to release, and the client was never told
+  anything moved. This warps the real cursor once per step, CONFIRMED,
+  so each step costs the guest a frame and the client sees motion.
+
+  A kernel-side app notices neither problem, because the WM calls its
+  `on_press` every tick with the current position -- which is why
+  `scrollbar_test.py` passes on `gui drag` and a client test cannot.
+  Only a client needs this; both failures look identical from the
+  outside, and identical to the app simply ignoring the drag.
+
   **`warp_confirmed(qmp, x, y, check)` confirms a DIFFERENT claim**, and
   the difference matters: `warp_cursor` proves the pointer is where you
   aimed, not that where you aimed is what you meant. A list row is one
@@ -3489,6 +3506,33 @@ window without going through it will find its layout polls timing out.
 
   ON DEMAND: it needs `openssl` to make the certificates and SKIPS
   cleanly without it.
+
+- **`hwdata_test.py`** -- drives `hwdata update` against a plain
+  `http.server` on this machine, reached through SLIRP's 10.0.2.2, the
+  same arrangement `https_test.py` uses. **Nothing leaves the machine**;
+  whether pci-ids.ucw.cz still serves what it used to is not this tool's
+  question and could not be answered offline anyway.
+
+  Twelve checks, and the load-bearing one is the SECOND: a truncated
+  body is refused and the old database survives byte for byte. That is
+  the whole reason the command exists rather than a note saying to run
+  `wget -O <path>`, which opens with `O_TRUNC` and leaves a half-file
+  that still parses. A large ERROR PAGE is refused separately, because
+  the size floor alone would pass it and the vendor-line count is what
+  does not.
+
+  The survival checks compare a `sum` of the file taken through an
+  INDEPENDENT program, not the byte count the updater printed -- and the
+  final one `cat`s the new file, because "hwdata says it wrote 1.6 MB"
+  proves it wrote a file, not that the file is the one `lspci` reads.
+  The served body carries a marker vendor the real database does not
+  have, so that check cannot be satisfied by the copy already there.
+
+  `--positive-control` serves the TRUNCATED body to the good-fetch check
+  as well; four checks must go red. Measured: 8 of 12 pass under it.
+
+  ON DEMAND: it launches its own guest against a sparse copy of
+  `disk.img` and needs no host tools.
 
 - **`fetch_ca_bundle.py`** -- fetches Mozilla's CA roots into
   `data/etc/ssl/certs/mozilla-roots.pem`, as the `ca-bundle` row of

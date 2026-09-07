@@ -4233,7 +4233,7 @@ the alternative reads as a dropped click. The clock itself is the third
 case and is swallowed, which is what makes a second click on it a toggle
 instead of a reopen.
 
-## The Start button's appearance is three choices, not two, and the default is the boring one
+## The Start button's appearance is three choices, not two
 
 `desktop.start_button` takes `text`, `icon` or `both`. A boolean was the
 obvious shape and is wrong: it cannot express `both`, which is what
@@ -4243,12 +4243,15 @@ they hear "Start button". XFCE's Whisker Menu offers exactly these three
 "Icon and text" against an icon-only default, so three is the mainstream
 shape rather than an invention here.
 
-**The default is `text` for a testing reason, not a taste one.** The
-Start button's width is derived from what is inside it, and every window
-button on the strip starts to the right of that -- so changing the
-default would move the entire taskbar under every pixel-based GUI check
-in one commit. Opt-in costs nothing; a moved baseline costs a day of
-re-reading tools that failed for a reason unrelated to what they test.
+**The default is `both`, and it was `text` first for a testing reason
+rather than a taste one.** The Start button's width is derived from what
+is inside it, and every window button on the strip starts to the right of
+that -- so the default moving shifts the entire taskbar under every
+pixel-based GUI check in one commit. Shipping `text` meant the setting
+arrived without that churn, and the argument was a migration one: it
+expired once the setting existed and the checks had been read. `both` is
+what Windows shipped and what the maintainer asked for; the churn was
+paid once, deliberately, rather than avoided forever.
 
 **One decision, three readers.** `start_mark()` decides whether a mark
 is shown at all; `start_btn_w()`, `draw_taskbar()` and
