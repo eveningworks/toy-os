@@ -391,6 +391,15 @@ manual steps to be worth automating:
   not fatal: the flash still completes and ends at the old power-button
   instruction.
 
+  **MEASURED, not reasoned.** The pair shipped (`de533a5d`) with the
+  rescue path untested, because a build whose `.so` files are unchanged
+  never reaches it. A later flash carrying a real `libc.so` change
+  (`d5489356`) did: the fresh session died after the `/lib` sync, the
+  kernel was verified over TFTP instead, and the held session rebooted
+  the machine -- which came back in ~12s with no power button pressed.
+  That run is what the two paragraphs above describe; before it they
+  were an argument.
+
   **It REFUSES while `grub.cfg` says `set timeout=0`.** That is the
   whole safety argument: the rescue entry exists on every installed
   machine, and with no timeout GRUB draws no menu, so it cannot be
