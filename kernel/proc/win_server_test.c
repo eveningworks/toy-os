@@ -308,7 +308,7 @@ KTEST("winshare", "destroying a window leaves the compositor no mapping of a fre
     KTEST_ASSERT_EQ(seen2, 0);
 }
 
-KTEST("winshare", "destroying a window poisons the compositor's mapping") {
+KTEST("winshare", "a destroyed window's pixels survive until the compositor lets go") {
     struct fixture f = {0};
     SKIP_IF_ROLE_HELD;
     if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
@@ -317,26 +317,92 @@ KTEST("winshare", "destroying a window poisons the compositor's mapping") {
     KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
     KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
 
-    // A marker the compositor can only still see through the ORIGINAL
-    // frames, so "reads zero" below distinguishes a poisoned slot from
-    // one left pointing at freed memory. Without it the check passes
-    // against the use-after-free it exists to rule out.
+    // A marker only the ORIGINAL frames carry, so the reads below tell
+    // "still the client's pixels" apart from a slot pointing at
+    // whatever the allocator handed out next.
     uint32_t marker = 0xDEADBEEF;
     KTEST_ASSERT(vmm_copy_to_user(f.client_as, win_buffer_vaddr(f.id),
                                    &marker, sizeof marker));
+    uint64_t frame_before = vmm_user_phys(f.comp_as, cvaddr);
+    KTEST_ASSERT(frame_before != 0);
 
+    int owner = f.client_pid;
     KTEST_ASSERT(win_server_destroy_raw(f.client_pid, f.id));
 
-    // Ask the PAGE TABLES, not the flag -- the flag is the thing that
-    // would be wrong if this were broken. Still mapped (no fault for a
-    // compositor mid-frame), and no longer the client's pixels.
+    // Ask the PAGE TABLES, not the flag. Still mapped -- a hole here is
+    // a fault in a compositor mid-frame -- and still THE SAME FRAMES
+    // carrying the last picture the window drew. This used to read as 0:
+    // the frames were freed and the slot remapped to the poison page,
+    // which is a black flash on every close. The mapping holds a
+    // reference now, so there is nothing to hide.
+    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
+    KTEST_ASSERT_EQ(vmm_user_phys(f.comp_as, cvaddr), frame_before);
+    uint32_t seen = 0;
+    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
+    KTEST_ASSERT_EQ(seen, marker);
+
+    // The release is what takes them away, and the slot with them.
+    KTEST_ASSERT(win_server_unmap_from_compositor(f.comp_pid, owner, f.id));
+    KTEST_ASSERT_EQ(vmm_user_phys(f.comp_as, cvaddr), 0);
+    KTEST_ASSERT(!win_server_is_mapped_to_compositor(owner, f.id));
+
+    f.id = 0; // already destroyed; don't destroy a live window's slot
+    f.client_pid = 0;
+    win_server_set_compositor(0, 0);
+    if (f.client_as) vmm_destroy_address_space(f.client_as);
+    if (f.comp_as) vmm_destroy_address_space(f.comp_as);
+}
+
+KTEST("winshare", "a slot the compositor never released is reclaimed as POISON") {
+    // THE FALLBACK PATH, and the reason it must stay reachable: a
+    // destroyed window's slot is held until the compositor releases it,
+    // so a client that closes and reopens faster than the compositor
+    // drains its queue can find every slot held. Taking one back is
+    // right; taking it back as a HOLE would fault the compositor
+    // mid-frame, which is what the poison page exists for.
+    struct fixture f = {0};
+    SKIP_IF_ROLE_HELD;
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+
+    int owner = f.client_pid;
+    uint32_t ids[WIN_CLIENT_MAX];
+    ids[0] = f.id;
+    int made = 1;
+    for (; made < WIN_CLIENT_MAX; made++)
+        if (!win_server_create_raw(owner, f.client_as, WIN_W, WIN_H, &ids[made]))
+            break;
+    if (made < WIN_CLIENT_MAX) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+
+    uint64_t cvaddr = 0;
+    for (int i = 0; i < WIN_CLIENT_MAX; i++)
+        KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, owner, ids[i], &cvaddr));
+    cvaddr = win_compositor_vaddr(owner, ids[0]);
+
+    uint32_t marker = 0xABCDEF01;
+    KTEST_ASSERT(vmm_copy_to_user(f.client_as, win_buffer_vaddr(ids[0]),
+                                   &marker, sizeof marker));
+
+    // Every slot destroyed while mapped, so every slot is retired and
+    // none is free.
+    for (int i = 0; i < WIN_CLIENT_MAX; i++)
+        KTEST_ASSERT(win_server_destroy_raw(owner, ids[i]));
+
+    // One more window has nowhere to go but a retired slot.
+    uint32_t extra = 0;
+    KTEST_ASSERT(win_server_create_raw(owner, f.client_as, WIN_W, WIN_H, &extra));
+
+    // The reclaimed slot is still MAPPED -- no hole -- and no longer
+    // carries the dead window's pixels. Both halves matter: the first
+    // is what stops the compositor faulting, the second is what proves
+    // the frames really went back.
     KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
     uint32_t seen = 0xFFFFFFFF;
     KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
     KTEST_ASSERT_EQ(seen, 0);
-    KTEST_ASSERT(!win_server_is_mapped_to_compositor(f.client_pid, f.id));
 
-    f.id = 0; // already destroyed; don't destroy a live window's slot
+    win_server_destroy_raw(owner, extra);
+    f.id = 0;
+    f.client_pid = 0;
     win_server_set_compositor(0, 0);
     if (f.client_as) vmm_destroy_address_space(f.client_as);
     if (f.comp_as) vmm_destroy_address_space(f.comp_as);
@@ -356,17 +422,25 @@ KTEST("winshare", "a client dying revokes it too") {
     KTEST_ASSERT(vmm_copy_to_user(f.client_as, win_buffer_vaddr(f.id),
                                    &marker, sizeof marker));
 
+    int owner = f.client_pid;
     win_server_client_gone(f.client_pid);
 
-    // Poisoned, not unmapped -- see the previous test's comment. This is
-    // the path a force quit takes, where the compositor is the process
-    // that ASKED for the kill and returns from the syscall still holding
-    // the dead window in its list.
+    // A CRASH IS NOT A SPECIAL CASE: the slot stays mapped and still
+    // carries the dead client's last frame, exactly as an orderly
+    // destroy does. This is the path a force quit takes, where the
+    // compositor is the process that ASKED for the kill and returns
+    // from the syscall still holding the dead window in its list.
     KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
-    uint32_t seen = 0xFFFFFFFF;
+    uint32_t seen = 0;
     KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
-    KTEST_ASSERT_EQ(seen, 0);
-    KTEST_ASSERT_EQ(win_server_window_count(f.client_pid), 0);
+    KTEST_ASSERT_EQ(seen, marker);
+    KTEST_ASSERT_EQ(win_server_window_count(owner), 0);
+
+    // The frames outlive the ADDRESS SPACE they were mapped into, which
+    // is the property the reference buys: the client's pml4 is gone and
+    // the compositor is still reading.
+    KTEST_ASSERT(win_server_unmap_from_compositor(f.comp_pid, owner, f.id));
+    KTEST_ASSERT_EQ(vmm_user_phys(f.comp_as, cvaddr), 0);
 
     f.id = 0;
     win_server_set_compositor(0, 0);

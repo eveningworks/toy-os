@@ -4,7 +4,7 @@ A staged plan, in the shape `docs/query-design.md` and
 `docs/wm-ring3-design.md` used. It answers "what is still in ring 0 that
 belongs to the compositor, and in what order does it leave?"
 
-`docs/wm-ring3-design.md` closed Milestone 41: the *presentation* half
+`docs/wm-ring3-design.md` closed the GUI-in-ring-3 milestone: the *presentation* half
 of TWS became a process (`userland/wm/`) and `apps/wm/` was deleted.
 What that milestone deliberately did not move is the *memory* half --
 `kernel/proc/win_server.c` and the files beside it -- and that is what
@@ -113,22 +113,36 @@ make one.
 What it buys beyond the fragmentation fix: the frames are **refcounted**,
 which is the mechanism stage 2 needs.
 
-### Stage 2 -- the compositor holds its own reference
+### Stage 2 -- the compositor holds its own reference -- DONE 2026-09-08
 
-Today the kernel revokes the compositor's view of a dying or shrinking
-window synchronously, and the compositor may still blit that slot before
-it drains the event -- so the slot is remapped to a shared read-only
-poison page rather than left as a hole (`comp_poison()`, `comp_span`,
-`comp_poisoned`, several hundred lines of the invariant plus its
-comments).
+The kernel revoked the compositor's view of a dying window
+synchronously, and the compositor may still blit that slot before it
+drains `WIN_EV_CLIENT_DESTROYED` -- so the slot was remapped to a shared
+read-only poison page rather than left as a hole, and read as BLACK for
+a frame on every close.
 
-That is the problem `wl_buffer.release` exists for, and the answer is
-the same: the compositor takes a reference to the object and the frames
-do not go until it lets go. The poison machinery retires with it.
+The compositor's mapping takes a reference to the window's shm object
+now, and the frames go at the last one. A destroyed window's slot is
+RETIRED: still mapped, still carrying the last frame the window drew,
+and out of use until the compositor sends `WIN_REQ_UNMAP_WINDOW`. That
+request is what `win_server_unmap_from_compositor()` had been waiting
+for since stage 1 -- it existed with no protocol path and no caller.
+This is `wl_buffer.release`.
 
-**Needs:** the compositor to be able to hold an shm reference for a
-window it did not create, which is stage 3's channel or a narrower
-request in the meantime.
+**The poison page did NOT retire, and that is the honest finding.** The
+slot address is derived from (pid, window id) and the slots are recycled,
+so a client that closes and reopens faster than the compositor drains
+its queue can find every slot retired. Taking one back is right; taking
+it back as a HOLE would fault the compositor mid-frame. So the reclaim
+path poisons, exactly as every close used to -- it is the rare path now
+instead of the common one, and it has a KTEST of its own because an
+unreachable fallback is a guess.
+
+**The trap, found by a test:** the compositor's reference records WHICH
+object it was taken on. A resize replaces the object while the reference
+is still held on the old one, so releasing `bufs[b].shm` puts the NEW
+object and frees it under a live mapping. `comp_ref_shm[]` is that
+record.
 
 ### Stage 3 -- the general named channel
 

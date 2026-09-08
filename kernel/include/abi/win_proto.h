@@ -759,11 +759,37 @@ struct win_event {
                            // rule left it UNVALIDATED against real use.
                            // This is that path.
                            //
-                           // The mapping is REVOKED wherever the frames
-                           // are freed or replaced (destroy, resize,
-                           // client death), so a compositor re-maps on
-                           // WIN_EV_CLIENT_RESIZED rather than assuming
-                           // its pointer survived.
+                           // A RESIZE still revokes the mapping, so a
+                           // compositor re-maps on WIN_EV_CLIENT_RESIZED
+                           // rather than assuming its pointer survived.
+                           // A DESTROY does not -- see
+                           // WIN_REQ_UNMAP_WINDOW.
+#define WIN_REQ_UNMAP_WINDOW 26 // Release a mapping this compositor took
+                           // with WIN_REQ_MAP_WINDOW.
+                           //   a      = owning pid (in)
+                           //   window = its window id (in)
+                           //
+                           // **THE MAPPING IS WHAT KEEPS THE FRAMES
+                           // ALIVE**, so this is not tidying: a window's
+                           // pixels are an shm object, the compositor's
+                           // mapping holds a reference to it, and the
+                           // frames go at the last one. A compositor
+                           // that never sends this leaks a window's
+                           // memory for as long as it runs -- visible
+                           // as a stranded `(anon)` row in `lsshm`.
+                           //
+                           // It exists because a destroyed window's
+                           // buffer used to be freed under a compositor
+                           // that had not yet drained
+                           // WIN_EV_CLIENT_DESTROYED, so its slot was
+                           // remapped to a read-only zero page and read
+                           // as BLACK for a frame. Holding the frames
+                           // until the reader lets go is what
+                           // wl_buffer.release does, and for this
+                           // reason.
+                           //
+                           // Sent after handling WIN_EV_CLIENT_DESTROYED.
+                           // The pixels are still readable until then.
 #define WIN_REQ_WINDOW_INFO 19 // Read one client window's details.
                            //   a      = owning pid (in)
                            //   window = its window id (in)

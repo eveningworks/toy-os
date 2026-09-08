@@ -556,6 +556,35 @@ left as a hole. A compositor that holds its own reference does not need
 that, which is the same answer `wl_buffer.release` gives. See
 `docs/winserver-ring3-design.md`'s stage 2.
 
+## A dead window's pixels are kept alive by whoever is reading them
+
+Destroying a window freed its frames at once, while the compositor is a
+process that learns about it from a QUEUED event and may blit the slot
+before it drains one. So the slot was remapped to a shared read-only
+poison page -- not a hole, because a hole is a page fault in the
+desktop. The cost was a black frame on every close.
+
+The compositor's mapping holds a reference to the window's shm object
+now (`WIN_REQ_UNMAP_WINDOW` releases it), so the frames outlive the
+window and the compositor goes on reading the last picture it drew.
+That is `wl_buffer.release`, and it is here for the same reason: a
+compositor cannot be stopped mid-frame to be told a buffer is gone.
+
+**The poison page did not retire with it**, which is worth stating
+because the obvious reading of the change is that it did. A window's
+address in the compositor is DERIVED from its (pid, slot), and slots are
+recycled -- so a client that closes and reopens faster than the
+compositor drains its queue can find every slot still held. The reclaim
+takes one back and poisons it, which is exactly the old behaviour, now
+on the rare path. Retiring the poison page entirely needs the address to
+stop being derived, which is this plan's later stage.
+
+The trap, and it was found by an existing test rather than by reading:
+the reference records WHICH object it was taken on, because a resize
+replaces the object while the reference is still held on the old one.
+Releasing `bufs[b].shm` would put the NEW object and free it under a
+live mapping.
+
 ## The TWP transport seam has exactly one implementation, so it is UNVALIDATED
 
 Milestone 41's stage 3 added `struct win_transport`

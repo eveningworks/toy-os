@@ -540,6 +540,18 @@ static void query_app_id(int pid, uint32_t id, char *out, unsigned cap,
 // Maps a client's buffer into this process, so the compositor can read
 // its pixels. Idempotent, and must be re-done after a resize: the frames
 // are reallocated, and the old mapping is revoked with them.
+// Releases a mapping taken above. THE MAPPING IS WHAT KEEPS A DEAD
+// WINDOW'S FRAMES ALIVE, so skipping this leaks them for as long as this
+// process runs -- see WIN_REQ_UNMAP_WINDOW.
+static void unmap_client_window(int pid, uint32_t id) {
+    struct win_request_msg q;
+    k_memset(&q, 0, sizeof q);
+    q.type = WIN_REQ_UNMAP_WINDOW;
+    q.a = pid;
+    q.window = id;
+    sys_win_request(&q);
+}
+
 static uint32_t *map_client_window(int pid, uint32_t id) {
     struct win_request_msg q;
     k_memset(&q, 0, sizeof q);
@@ -642,12 +654,13 @@ int wm_client_handle_event(const struct win_event *ev) {
                           WIN_PRESENT_W(ev->mods), WIN_PRESENT_H(ev->mods));
         break;
     case WIN_EV_CLIENT_DESTROYED:
-        // The buffer is ALREADY freed by the time this arrives, unlike
-        // the ring-0 callback which ran while it was still valid (see
-        // win_proto.h). The handler only drops the window from the list,
-        // so that is safe -- but do not add anything here that reads the
-        // pixels.
+        // The pixels are STILL READABLE here: this process's mapping
+        // holds a reference to the frames, and the release below is what
+        // drops it (win_proto.h, WIN_REQ_UNMAP_WINDOW). The release must
+        // come after the handler, which is the last thing that could
+        // read them.
         on_window_destroyed(pid, id);
+        unmap_client_window(pid, id);
         break;
     case WIN_EV_CLIENT_TITLE: {
         char title[WIN_TITLE_LEN];

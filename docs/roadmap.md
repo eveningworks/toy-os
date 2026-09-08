@@ -530,7 +530,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 
 - [x] ~~shm objects sized for a window buffer~~ DONE 2026-09-08 -- the frame array is allocated to the size asked for
 - [x] ~~A window's pixels are an shm object, refcounted, and nameless so no process can map another's window~~ DONE 2026-09-08
-- [ ] The compositor holds its own reference to a window's frames, retiring the poison page and `comp_span`
+- [x] ~~The compositor holds its own reference to a window's frames~~ DONE 2026-09-08 -- `WIN_REQ_UNMAP_WINDOW`, `wl_buffer.release`'s shape
+- [ ] Retire the poison page: it survives as the slot-reclaim fallback while a window's compositor address is derived from its slot
 - [ ] A general named channel: async messages plus a reply slot, which `/bin/service`'s `/run/init.ctl` + `SIGHUP` can retire onto
 - [ ] Presentation state moves to the compositor -- `title`, `app_id`, `hint_flags`, `cursor`, and `WIN_REQ_WINDOW_INFO` with them
 - [ ] The client allocates its own buffer, retiring `win_buffer_vaddr()` and the carved per-pid compositor region
