@@ -326,26 +326,31 @@ together, and every window on screen goes through them.
   index instead of frames it allocated. The kernel stops owning window
   memory, and every mapping path is untouched.
 
-  **ATTEMPTED AND BACKED OUT, 2026-09-08, and what stopped it is worth
-  knowing before the next attempt.** The client half is small: only
-  `ugfx_surface_for_window_buf()` derives a drawing surface, and giving
-  it a caller-owned variant plus an allocator in `uapp.c` was
-  straightforward. The KERNEL half is not, for a reason that is not
-  about the mapping at all:
+  **DONE 2026-09-08.** The client creates its buffers as named shm
+  objects it owns; `create_window()` adopts them by name and checks the
+  object's CREATOR is the requesting client, which is the access control
+  that makes a guessable name safe. The kernel allocates nothing and
+  maps nothing into a client.
 
-  **`win_server_create_raw()` has no client.** It is what
-  `kernel/proc/win_server_test.c`'s fixture builds windows with, from
-  the kernel context, and a window whose pixels are allocated by its
-  client cannot be made that way. So adopting client objects means
-  either a second creation path in the most safety-critical function in
-  the file -- which is the redundant-path shape this repo has been
-  caught by before, where a positive control passes because the test
-  never reached the branch -- or teaching the KTEST fixture to create
-  and name shm objects itself.
+  Three things the build established that the design had not:
 
-  **Do the fixture first.** Deciding how a KTEST makes a window without
-  a client is the actual prerequisite, and it is cheaper to settle on
-  its own than in the middle of the create path.
+  - **`WIN_REQ_BUFFER` was needed.** The kernel grew the stale half at
+    PRESENT time, opportunistically; it cannot, because only the client
+    can replace an object it created. The client says it replaced one.
+  - **`WIN_REQ_RESIZE` carries WHICH buffer was prepared.** Both sides
+    deriving it from `front` disagree the moment a present lands between
+    the client's replace and the request.
+  - **`win_server_create_raw()`/`resize_raw()` stand in for a client**,
+    including its mmap, so the KTEST fixture needs no second creation
+    path -- which was the prerequisite this plan named.
+
+  **THE BUG THAT COST THE MOST, recorded because it was in none of the
+  four places it was looked for:** `SYS_MUNMAP` requires a PAGE-ALIGNED
+  length and a window is `w * h * 4`, which almost never is. Every unmap
+  was silently refused, so each resize leaked a buffer's frames and the
+  run's biggest allocation -- maximize -- was the one that failed. Found
+  by `lswin` showing the shm indices climb where they should be reused.
+
 - **5b -- the kernel stops mapping.** The compositor opens the name
   itself, and `comp_map`, `comp_span`, `comp_poisoned`, the poison page,
   `win_compositor_vaddr()` and `WIN_REQ_MAP_WINDOW`/`UNMAP_WINDOW` all

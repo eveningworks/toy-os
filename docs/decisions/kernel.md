@@ -556,6 +556,37 @@ left as a hole. A compositor that holds its own reference does not need
 that, which is the same answer `wl_buffer.release` gives. See
 `docs/winserver-ring3-design.md`'s stage 2.
 
+## A length that is not page-aligned makes munmap fail SILENTLY
+
+`SYS_MUNMAP` takes a page-aligned length and refuses anything else. A
+window's buffer is `w * h * 4`, which almost never is one -- 320x200x4
+is 62.5 pages -- so when window memory moved to the client, every unmap
+of a replaced buffer was refused, the old mapping outlived its
+replacement, and each resize leaked a buffer's worth of frames. Twelve
+objects after three drags.
+
+**What made it expensive is where it surfaced.** Not at the unmap, which
+returned an error nobody read, but at the run's LARGEST allocation --
+maximizing a window, the last check in `tools/uapp_test.py` -- because
+that is where the leaked frames finally ran the guest out. Four
+hypotheses were written and disproved before the leak was even
+suspected: the kernel refusing (it was not), the extra syscall (it was
+not), the two sides disagreeing about which buffer is the back one (they
+were not), and the WM's lag heuristic (identical on both sides).
+
+What found it was a COLUMN: `lswin`'s shm index, climbing on the branch
+where it was reused on main. The general lesson is the one this repo
+already states about probes -- an unread return value is not a
+diagnostic, and the cheapest instrument is often the one that prints
+state you can compare against a known-good build rather than one that
+explains itself.
+
+The paired mistake is worth keeping too: the fix rounded the length in
+the allocator and not in the comparison that decides whether to
+reallocate, so the sizes never matched and every present replaced the
+buffer -- handing the app a freshly zeroed one each frame. Round in one
+place or compare in the same units.
+
 ## The window protocol already had wl_buffer; it just never named it
 
 Moving a window's pixels to the client raised what looked like a new
