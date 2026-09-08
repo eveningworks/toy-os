@@ -54,7 +54,14 @@ static int child_main(void) {
     sys_mmap(0, 4096, SYS_PROT_READ | SYS_PROT_WRITE,
              SYS_MAP_PRIVATE | SYS_MAP_ANONYMOUS, -1, 0);
 
-    struct page *p = map_shared(0);
+    // RETRIED: a named object belongs to its creator, and the parent
+    // cannot grant before spawning because it does not know this pid
+    // yet. The first opens fail with EPERM, legitimately.
+    struct page *p = 0;
+    for (int i = 0; i < 200 && !p; i++) {
+        p = map_shared(0);
+        if (!p) sys_sleep_ms(10);
+    }
     if (!p) return 2;
     p->child_at = (uint64_t)(uintptr_t)p;
     p->ready = 1;
@@ -85,6 +92,9 @@ int main(int argc, char **argv) {
     int pid = sys_spawn("/tests/futex_test", "child", -1);
     utest_check(pid > 0, "the child spawns");
     if (pid <= 0) return utest_end();
+    // The child is let in by name; before objects had an owner it simply
+    // opened the page, which anything could.
+    utest_check(sys_shm_grant(SHM_NAME, pid) == 0, "the child is granted");
 
     // Wait for the child to reach its park. Polled rather than slept:
     // "it has set ready" is the observable, and a fixed sleep would be

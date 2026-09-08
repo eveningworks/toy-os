@@ -2002,6 +2002,19 @@ struct sys_stat {
                            // an shm page reach the same futex at
                            // whatever address each of them mapped it.
 
+#define SYS_SHM_GRANT 104  // RDI = a name this process created, RSI = a
+                           // pid that may now open it. Returns 0, -ENOENT
+                           // if there is no such object, -EPERM from
+                           // anyone but the creator, -ENOSPC past the
+                           // grant limit. SYS_SHM_OPEN answers -EPERM
+                           // to a process with no claim on the name.
+                           //
+                           // A CAPABILITY, not a mode: it names ONE
+                           // process rather than a class of them. When
+                           // this system gains users a mode arrives
+                           // beside it, the way Linux has both file
+                           // permissions and fd passing.
+
 #define SYS_WAKEWORD  103  // RDI = a 4-byte-aligned user address, or 0
                            // to deregister. Names ONE word this process
                            // waits on for everything: the kernel bumps
@@ -2042,6 +2055,19 @@ struct sys_stat {
 
 #define SHM_CREATE 0x1 // make it if it does not exist
 #define SHM_EXCL   0x2 // with CREATE: refuse (-EEXIST) if it does
+#define SHM_PUBLIC 0x4 // with CREATE: ANY process may open it. For a
+                        // BEACON -- a rendezvous every client has to be
+                        // able to find. Without it an object belongs to
+                        // its creator, who grants others with
+                        // SYS_SHM_GRANT.
+                        //
+                        // PRIVATE IS THE DEFAULT, and deliberately: a
+                        // permission model added later cannot make
+                        // existing callers private retroactively, so the
+                        // sharing has to be the thing that is asked for.
+                        // It also is not a hypothetical -- `lsshm` lists
+                        // every name, so before this any process could
+                        // open another's audio ring or window buffer.
 
 struct shm_open_msg {
     const char *name;   // no '/' and no '..'; SHM_NAME_MAX bytes

@@ -168,6 +168,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_FUTEX_WAIT]    = { "futex_wait",    sys_futex_wait,    { A_HEX, A_INT, A_INT } },
     [SYS_FUTEX_WAKE]    = { "futex_wake",    sys_futex_wake,    { A_HEX, A_INT } },
     [SYS_WAKEWORD]      = { "wakeword",      sys_wakeword,      { A_HEX } },
+    [SYS_SHM_GRANT]     = { "shm_grant",     sys_shm_grant,     { A_PATH, A_INT } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

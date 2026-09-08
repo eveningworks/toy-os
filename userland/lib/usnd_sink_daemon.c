@@ -17,6 +17,7 @@
 #include "lib/usnd.h"
 #include "lib/usnd_sink.h"
 #include "rt/sys.h"
+#include "query_abi.h"
 #include "sound_abi.h"
 #include "syscall_abi.h"
 
@@ -41,6 +42,18 @@ static int daemon_open(void) {
     sys_shm_unlink(g_name);
     g_fd = sys_shm_open(g_name, SND_CLIENT_BYTES, SHM_CREATE | SHM_EXCL);
     if (g_fd < 0) return -sys_errno();
+
+    // THE DAEMON IS LET IN, AND ONLY IT. This ring is one client's audio
+    // and is private like any other named object; before objects had an
+    // owner, any process could open it from `lsshm` and write into
+    // somebody else's playback. Its pid is the beacon's creator, which
+    // is what SND_SERVER_NAME's own comment says QUERY_SHM reports.
+    struct query_shm rec;
+    QUERY_FOREACH(QUERY_SHM, rec, qi) {
+        if (strcmp(rec.name, SND_SERVER_NAME) != 0) continue;
+        sys_shm_grant(g_name, rec.creator_pid);
+        break;
+    }
 
     void *p = sys_mmap(0, SND_CLIENT_BYTES, SYS_PROT_READ | SYS_PROT_WRITE,
                        SYS_MAP_SHARED, g_fd, 0);

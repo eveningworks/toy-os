@@ -514,6 +514,11 @@ int sys_futex_wait(volatile uint32_t *word, uint32_t expected, int timeout_ms) {
                               expected, (uint64_t)timeout_ms));
 }
 
+int sys_shm_grant(const char *name, int pid) {
+    return (int)err(syscall2(SYS_SHM_GRANT, (uint64_t)(uintptr_t)name,
+                              (uint64_t)pid));
+}
+
 int sys_wakeword(volatile uint32_t *word) {
     return (int)err(syscall1(SYS_WAKEWORD, (uint64_t)(uintptr_t)word));
 }

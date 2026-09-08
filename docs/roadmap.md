@@ -542,6 +542,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~A client's TITLE reaches the compositor directly, with its payload~~ DONE 2026-09-08 -- `lib/uwmchan.h`
 - [x] ~~Drop the kernel's title, hints and cursor, and shrink `WIN_REQ_WINDOW_INFO` to geometry~~ DONE 2026-09-08
 - [ ] `app_id` stays for now -- it rides CREATE so a window is never nameless, which ACTIVATE depends on
+- [x] ~~Named shared memory has an owner: private by default, `SHM_PUBLIC` for a beacon, `SYS_SHM_GRANT` for the rest~~ DONE 2026-09-08
+- [ ] Stage 5: the client allocates its own window buffer and grants the compositor -- now unblocked
 - [ ] The client allocates its own buffer, retiring `win_buffer_vaddr()` and the carved per-pid compositor region
 - [ ] Delete the kernel's window table, leaving ring 0 the framebuffer grant and raw input
 

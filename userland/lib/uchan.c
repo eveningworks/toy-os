@@ -10,6 +10,17 @@
 
 #define RING_BYTES ((uint64_t)sizeof(struct uchan_ring))
 
+// A BEACON is public: every client has to be able to find it. Its rings
+// are not -- see uchan_client_open().
+static void *map_public(const char *name, uint64_t bytes) {
+    int fd = sys_shm_open(name, bytes, SHM_CREATE | SHM_PUBLIC);
+    if (fd < 0) return 0;
+    void *p = sys_mmap(0, bytes, SYS_PROT_READ | SYS_PROT_WRITE,
+                       SYS_MAP_SHARED, fd, 0);
+    sys_close(fd);
+    return p == (void *)-1 ? 0 : p;
+}
+
 static void *map_object(const char *name, uint64_t bytes, int create) {
     int fd = sys_shm_open(name, create ? bytes : 0, create ? SHM_CREATE : 0);
     if (fd < 0) return 0;
@@ -29,7 +40,7 @@ int uchan_server_open(struct uchan_server *s, const char *name) {
     // Unlink first: a previous server that died left its beacon behind,
     // and a client opening THAT would wake a pid that no longer exists.
     sys_shm_unlink(name);
-    s->beacon = map_object(name, sizeof(struct uchan_beacon), 1);
+    s->beacon = map_public(name, sizeof(struct uchan_beacon));
     if (!s->beacon) return -1;
 
     s->beacon->wake = 0;
@@ -183,6 +194,11 @@ int uchan_client_open(struct uchan_client *c, const char *name) {
     c->ring->slot_bytes = UCHAN_SLOT_BYTES;
     c->ring->slots = UCHAN_SLOTS;
     c->ring->client_pid = sys_getpid();
+    // THE SERVER IS LET IN EXPLICITLY. A ring is a channel between two
+    // processes and is private like any other named object, so the one
+    // that has to read it is granted by name -- and nobody else can,
+    // which before this any process could do by reading `lsshm`.
+    sys_shm_grant(c->ring_name, c->beacon->server_pid);
     c->ring->magic = UCHAN_MAGIC;   // last: the server's admission check
     return 0;
 }

@@ -80,8 +80,10 @@ int main(void) {
     // daemon would hand out a second, empty clipboard to whoever
     // happened to map it, which reads as the first one losing data.
     sys_shm_unlink(CLIP_SHM_NAME);
+    // PUBLIC: every app reads the clipboard, which is what a
+    // clipboard IS -- shared by design rather than by omission.
     int fd = sys_shm_open(CLIP_SHM_NAME, sizeof(struct clip_page),
-                           SHM_CREATE | SHM_EXCL);
+                           SHM_CREATE | SHM_EXCL | SHM_PUBLIC);
     if (fd < 0) {
         printf("clipboardd: cannot create \"%s\" -- another instance?\n",
                 CLIP_SHM_NAME);

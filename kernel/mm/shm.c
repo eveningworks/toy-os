@@ -46,6 +46,8 @@
 #define SHM_MAX       288
 #define SHM_BYTES_MAX (32ULL * 1024 * 1024)
 #define SHM_PAGES_MAX (SHM_BYTES_MAX / 4096)
+#define SHM_GRANTS_MAX 4  // a private object is a channel between two
+                           // processes; four is slack, not a design
 #define SHM_MAPS_MAX  640 // live mappings, kernel-wide: a client and a
                            // compositor each map every window
 
@@ -54,6 +56,32 @@ struct shm_object {
     uint32_t npages;
     int      refs;      // descriptors + mappings; 0 = the slot is free
     int      unlinked;  // no new openers; the frames still live
+    // WHO MAY OPEN IT. A named object is the CREATOR's unless it says
+    // otherwise: `public` is asked for at creation (SHM_PUBLIC) and is
+    // what a beacon wants -- a rendezvous point every client must be
+    // able to find. Everything else is a private channel between two
+    // processes, and a name anyone could open makes it a private channel
+    // in name only. `lsshm` lists every name, so guessing is not even
+    // required.
+    //
+    // WHEN THIS SYSTEM GAINS USERS, none of it is wasted: `pub` is the
+    // degenerate case of a MODE (public is 0666, private 0600) and the
+    // creator pid gains a uid beside it. The GRANT is the part POSIX has
+    // no equivalent for -- it is a capability, and it coexists with a
+    // mode the way Linux has both file permissions and fd passing: the
+    // mode is the coarse policy and the grant is the fine one. What
+    // would have aged badly is defaulting to PUBLIC, because a
+    // permission model added afterwards cannot retroactively make
+    // existing callers private -- which is why every beacon has to ask.
+    //
+    // THE GRANT IS BY PID, and a pid can be REUSED. The window is small
+    // -- a grant lives only as long as the object, and an object dies
+    // with its creator -- but it is real, and a capability that survived
+    // its holder is the thing to look for if this ever misbehaves.
+    int      pub;
+    int      granted[SHM_GRANTS_MAX];
+    int      ngrants;
+
     int      anon;      // not in the NAMESPACE at all: shm_lookup()
                          // refuses it, so no process can name its way to
                          // one. Window buffers are anonymous for exactly
@@ -85,6 +113,16 @@ static void obj_free(struct shm_object *o) {
         if (o->frames[i]) pmm_free_frame(o->frames[i]);
     kfree(o->frames);
     k_memset(o, 0, sizeof *o);
+}
+
+// May `pid` open object `i`? The creator always may; a public object is
+// open to everyone; otherwise the creator must have said so.
+static int may_open(int i, int pid) {
+    struct shm_object *o = &g_obj[i];
+    if (o->pub) return 1;
+    if (o->creator == pid) return 1;
+    for (int g = 0; g < o->ngrants; g++) if (o->granted[g] == pid) return 1;
+    return 0;
 }
 
 int shm_lookup(const char *name) {
@@ -232,18 +270,27 @@ int sys_shm_open(struct syscall_ctx *c) {
     if (!vmm_copy_string_from_user(c->pml4, name, (uint64_t)(uintptr_t)m.name,
                                    sizeof name)) { ret = -EFAULT; goto out; }
     if (!name_ok(name)) { ret = -EINVAL; goto out; }
-    if (m.flags & ~(SHM_CREATE | SHM_EXCL)) { ret = -EINVAL; goto out; }
+    if (m.flags & ~(SHM_CREATE | SHM_EXCL | SHM_PUBLIC)) { ret = -EINVAL; goto out; }
 
+    int pid = scheduler_current_pid();
     int idx = shm_lookup(name);
     if (idx >= 0) {
         if ((m.flags & SHM_CREATE) && (m.flags & SHM_EXCL)) { ret = -EEXIST; goto out; }
+        // REFUSED, not "no such name": a caller told ENOENT would
+        // conclude the name is free and create a SECOND object behind
+        // it -- which is exactly the failure that reads as a server
+        // mixing the wrong client's ring. EPERM because that is this
+        // errno table's "not allowed to ask"; there is no EACCES here
+        // and one caller does not earn one.
+        if (!may_open(idx, pid)) { ret = -EPERM; goto out; }
         shm_get(idx);
     } else {
         if (!(m.flags & SHM_CREATE)) { ret = -ENOENT; goto out; }
         uint64_t npages = (m.length + 4095) / 4096;
         if (!npages || npages > SHM_PAGES_MAX) { ret = -EINVAL; goto out; }
-        idx = obj_create(name, npages, scheduler_current_pid(), c->pml4);
+        idx = obj_create(name, npages, pid, c->pml4);
         if (idx < 0) { ret = idx; goto out; }
+        g_obj[idx].pub = (m.flags & SHM_PUBLIC) ? 1 : 0;
     }
 
     // A DESCRIPTION plus a descriptor naming it, fs_syscalls.c's pairing:
@@ -254,6 +301,31 @@ int sys_shm_open(struct syscall_ctx *c) {
     int fd = fd_install(c->pml4, di);
     if (fd < 0) { fd_desc_unref(di); ret = -EMFILE; goto out; }
     ret = fd;
+out:
+    c->regs[14] = (uint64_t)ret;
+    return 0;
+}
+
+// Lets `pid` open an object this process created. The creator only --
+// a grant is the owner's to give, and a third party handing out access
+// to somebody else's channel is the whole thing this prevents.
+int sys_shm_grant(struct syscall_ctx *c) {
+    char name[SHM_NAME_MAX];
+    int64_t ret;
+    if (!vmm_copy_string_from_user(c->pml4, name, c->a0, sizeof name)) {
+        ret = -EFAULT; goto out;
+    }
+    int idx = shm_lookup(name);
+    if (idx < 0) { ret = -ENOENT; goto out; }
+    if (g_obj[idx].creator != scheduler_current_pid()) { ret = -EPERM; goto out; }
+
+    int target = (int)c->a1;
+    if (target < 1) { ret = -EINVAL; goto out; }
+    for (int g = 0; g < g_obj[idx].ngrants; g++)
+        if (g_obj[idx].granted[g] == target) { ret = 0; goto out; }  // already
+    if (g_obj[idx].ngrants >= SHM_GRANTS_MAX) { ret = -ENOSPC; goto out; }
+    g_obj[idx].granted[g_obj[idx].ngrants++] = target;
+    ret = 0;
 out:
     c->regs[14] = (uint64_t)ret;
     return 0;

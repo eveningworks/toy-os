@@ -348,6 +348,11 @@ int sys_futex_wake(volatile uint32_t *word, int count);
 // sources -- its event queue and its clients' messages -- with no poll()
 // here to wait on both. See SYS_WAKEWORD in abi/syscall_abi.h.
 int sys_wakeword(volatile uint32_t *word);
+
+// Lets `pid` open a named object THIS process created. The creator's to
+// give: a private object is a channel between two processes, and this is
+// how the second one is let in. Returns 0, or -1 with the reason.
+int sys_shm_grant(const char *name, int pid);
 int sys_shm_unlink(const char *name);
 
 // --- sockets ---------------------------------------------------------

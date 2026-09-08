@@ -556,6 +556,40 @@ left as a hole. A compositor that holds its own reference does not need
 that, which is the same answer `wl_buffer.release` gives. See
 `docs/winserver-ring3-design.md`'s stage 2.
 
+## A named shm object belongs to its creator, and PRIVATE is the default
+
+`SYS_SHM_OPEN` had no access control at all -- its own comment said so:
+"this system has no users, so any process may open any name". That
+reasoning conflates two things. No USERS does not mean no isolation
+between PROCESSES, and `lsshm` lists every name, so guessing was not
+even required: any process could open `snd.<pid>` and write into another
+program's audio ring.
+
+An object now records its creator, who may grant others by pid
+(`SYS_SHM_GRANT`). `SHM_PUBLIC` at creation opts out, for a BEACON --
+the rendezvous every client has to be able to find.
+
+**PRIVATE IS THE DEFAULT, and that is the load-bearing choice.** A
+permission model added later cannot make existing callers private
+retroactively; the sharing has to be the thing that is asked for. The
+cost was paid immediately and is the evidence it was doing something:
+every existing caller had to declare itself, and the one that was missed
+-- the clipboard page, where the comment was added and the flag was not
+-- broke every app's clipboard AND the terminal's copy, which is one
+regression wearing two symptoms.
+
+**WHEN THIS SYSTEM GAINS USERS none of it is wasted.** `pub` is the
+degenerate case of a MODE (public 0666, private 0600) and the creator
+pid gains a uid beside it. The GRANT is the part POSIX has no equivalent
+for: it is a capability naming ONE process, and it coexists with a mode
+the way Linux has both file permissions and fd passing -- the mode is
+the coarse policy, the grant the fine one.
+
+The grant is by PID and a pid can be REUSED. The window is small -- a
+grant lives only as long as the object, and an object dies with its
+creator -- but a capability outliving its holder is what to look for if
+this ever misbehaves.
+
 ## A futex is keyed on the FRAME, not on the caller's pointer
 
 `SYS_FUTEX_WAIT`/`WAKE` sit straight on the scheduler's existing

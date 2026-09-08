@@ -202,7 +202,8 @@ int main(void) {
 
     // The beacon goes up only once the card is ours: a client that sees
     // it must not then be told the daemon has no output.
-    g_beacon = sys_shm_open(SND_SERVER_NAME, 4096, SHM_CREATE);
+    // PUBLIC: a beacon is the rendezvous every client has to find.
+    g_beacon = sys_shm_open(SND_SERVER_NAME, 4096, SHM_CREATE | SHM_PUBLIC);
     if (g_beacon < 0) {
         fprintf(stderr, "soundd: could not claim %s -- another daemon?\n",
                 SND_SERVER_NAME);

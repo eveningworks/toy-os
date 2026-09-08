@@ -35,6 +35,7 @@ int main(void) {
                 UTEST_VERDICT_FILE);
 
     sys_shm_unlink("t-shm"); // a previous run that died mid-way
+    sys_shm_unlink("t-private");
 
     // --- the object ---------------------------------------------------
     int fd = sys_shm_open("t-shm", SHM_BYTES, SHM_CREATE | SHM_EXCL);
@@ -45,6 +46,14 @@ int main(void) {
                 sys_errno() == EEXIST, "SHM_EXCL over an existing name is EEXIST");
     utest_check(sys_shm_open("t-nothing", 0, 0) < 0 && sys_errno() == ENOENT,
                 "opening a name that does not exist is ENOENT");
+
+    // A NAME IS NOT A CAPABILITY ANY MORE. Checked from the one process
+    // that can ask without a second one: granting to a pid that is not
+    // this one and never was, and confirming the object still refuses
+    // everybody else -- the deny itself needs the child below, which
+    // cannot open this until it is granted.
+    utest_check(sys_shm_grant("t-nothing", 2) < 0 && sys_errno() == ENOENT,
+                "granting an object that does not exist is ENOENT");
 
     // --- the mapping --------------------------------------------------
     volatile uint8_t *p = sys_mmap(0, SHM_BYTES, PROT_READ | PROT_WRITE,
@@ -66,7 +75,18 @@ int main(void) {
     for (int i = 0; i < 4096; i++) p[i] = want(i);
 
     // --- the other process ---------------------------------------------
+    // AN OBJECT THE CHILD IS NEVER GRANTED, so the refusal below is
+    // deterministic rather than a race with the grant above. The child
+    // tries it once and fails the run if it gets in.
+    int priv = sys_shm_open("t-private", 4096, SHM_CREATE | SHM_EXCL);
+    utest_check(priv >= 0, "created a private object the child cannot have");
+
     int pid = sys_spawn("/tests/shm_child", "", -1);
+    // THE GRANT IS WHAT LETS IT IN. Before objects had an owner any
+    // process could open this by reading `lsshm`; now the creator names
+    // who may, and the child retries while it waits to be named.
+    if (pid > 0)
+        utest_check(sys_shm_grant("t-shm", pid) == 0, "the child is granted");
     utest_checkf(pid > 0, "spawned /tests/shm_child (pid %d)", pid);
     if (pid > 0) {
         int code = -1;

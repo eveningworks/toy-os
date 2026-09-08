@@ -23,7 +23,23 @@ static uint8_t reply(int i) { return (uint8_t)(i * 17 + 3); }
 int main(void) {
     int fails = 0;
 
-    int fd = sys_shm_open("t-shm", 0, 0); // no SHM_CREATE: it must exist
+    // **THE REFUSAL, CHECKED FIRST.** The parent created "t-private" and
+    // never granted this process, so opening it must fail. If it
+    // succeeds, a name is a capability again and every window buffer and
+    // audio ring in the system is readable by anything that can run
+    // `lsshm` -- so this ends the run rather than counting a failure.
+    int nope = sys_shm_open("t-private", 0, 0);
+    if (nope >= 0) { sys_close(nope); return 3; }
+
+    // RETRIED, because a named object is its CREATOR's and this process
+    // has to be let in: the parent cannot grant before spawning (it does
+    // not know the pid yet), so the first opens legitimately fail with
+    // EPERM. A single attempt would race the grant.
+    int fd = -1;
+    for (int i = 0; i < 200 && fd < 0; i++) {
+        fd = sys_shm_open("t-shm", 0, 0); // no SHM_CREATE: it must exist
+        if (fd < 0) sys_sleep_ms(10);
+    }
     if (fd < 0) return 1;
 
     volatile uint8_t *p = sys_mmap(0, SHM_BYTES, PROT_READ | PROT_WRITE,
