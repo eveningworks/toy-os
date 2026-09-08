@@ -283,7 +283,9 @@ the ABI in `abi/win_proto.h`):
   current -- the same argument `win_server_ops` makes about taking
   `pid` -- and it is what makes the whole path reachable from a KTEST,
   which has no processes to look up.
-- `win_compositor_vaddr(pid, window)` is the derived address, so a
+- `win_compositor_vaddr(pid, window)` is the derived address (RETIRED
+  2026-09-08 -- the compositor opens a client's buffer by name and maps
+  it itself; see `docs/winserver-ring3-design.md`'s stage 5b), so a
   resize re-maps at the SAME place and the compositor is never told its
   pixels moved -- the trick that made client-side resize simple, reused.
   It also means the kernel can revoke without being told where the
@@ -988,7 +990,8 @@ two things at once:
   of `single_instance_test.py`'s nine checks, including the one that
   identifies the raised window by `client_pid` rather than by title.
 
-`WIN_REQ_MAP_WINDOW` landed with it, and is worth noting on its own:
+`WIN_REQ_MAP_WINDOW` landed with it (and is RETIRED as of 2026-09-08),
+and is worth noting on its own:
 `win_server_map_to_compositor()` has existed since stage 1 with only
 KTESTs calling it -- a primitive with no protocol path, which by this
 repo's own rule left it unvalidated against real use. A ring-3

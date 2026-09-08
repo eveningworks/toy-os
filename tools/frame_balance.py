@@ -46,11 +46,10 @@ import time
 sys.path.insert(0, "tools")
 from gui_debug import DebugConsole  # noqa: E402
 
-# A one-time cost is not a leak: the compositor allocates a permanent
-# shared zero page (win_server.c's poison_frame()) and a page table for
-# it the first time a window goes away. That is charged once, on the
-# first GUI cycle of a boot, and never again -- so the first GUI cycle
-# is allowed to differ and later ones are not.
+# A one-time cost is not a leak: a first GUI cycle allocates page tables
+# and per-process structures that later cycles reuse, charged once on
+# the first cycle of a boot and never again -- so the first GUI cycle is
+# allowed to differ and later ones are not.
 FIRST_CYCLE_SLACK = 8
 
 

@@ -489,9 +489,10 @@ this the obvious way), not from how much history it accumulated.
   mapping site is **who calls `pmm_free_frame()` for this frame?** -- if
   the answer is not "this address space's teardown", it is borrowed.
   Five sites were wrong, including the font (pages of the KERNEL IMAGE,
-  mapped read-only into every GUI client) and the poison page -- one
-  frame mapped at every page of a slot, so an owning teardown freed a
-  permanent singleton dozens of times.
+  mapped read-only into every GUI client) and the compositor's poison
+  page -- one frame mapped at every page of a slot, so an owning
+  teardown freed a permanent singleton dozens of times. (That page is
+  gone now: a compositor maps a client's buffer itself.)
   **The trap in MEASURING it: an over-free fires ONCE and then goes
   quiet**, because `pmm_free_frame()` only counts a frame that was
   marked used -- so `+4, +0, +0` reads as noise then health, and is not.

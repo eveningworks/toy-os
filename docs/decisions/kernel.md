@@ -830,21 +830,22 @@ window and the compositor goes on reading the last picture it drew.
 That is `wl_buffer.release`, and it is here for the same reason: a
 compositor cannot be stopped mid-frame to be told a buffer is gone.
 
-**The poison page did not retire with it**, which is worth stating
-because the obvious reading of the change is that it did. A window's
-address in the compositor is DERIVED from its (pid, slot), and slots are
-recycled -- so a client that closes and reopens faster than the
-compositor drains its queue can find every slot still held. The reclaim
-takes one back and poisons it, which is exactly the old behaviour, now
-on the rare path. Retiring the poison page entirely needs the address to
-stop being derived, which is this plan's later stage.
+**The poison page did not retire with it**, and did later. It survived
+because a window's address in the compositor was DERIVED from its
+(pid, slot) and slots are recycled, so a client that closed and reopened
+faster than the compositor drained its queue could find every slot still
+held; the reclaim took one back and poisoned it. **Both went with the
+derived address** -- see "The compositor opens a client's buffer by
+name" below. Nothing can revoke a mapping the compositor made itself,
+so there is no hole to fill and no slot to retire.
 
-The trap, and it was found by an existing test rather than by reading:
-the reference records WHICH object it was taken on, because a resize
+The trap, found by an existing test rather than by reading: the
+recorded reference named WHICH object it was taken on, because a resize
 replaces the object while the reference is still held on the old one.
-Releasing `bufs[b].shm` would put the NEW object and free it under a
-live mapping.
-
+Releasing `bufs[b].shm` would have put the NEW object and freed it under
+a live mapping. It is not a hazard any more -- the compositor's mapping
+IS its reference -- but it is the shape to expect from any bookkeeping
+that mirrors an owner's state instead of holding it.
 ## The TWP transport seam has exactly one implementation, so it is UNVALIDATED
 
 Milestone 41's stage 3 added `struct win_transport`
@@ -6888,3 +6889,80 @@ program calling `mmap()` never can still exhaust it. wget's fourth
 library took it past 16, and the loader failed on the LAST one with
 "segment map failed", naming the library that ran out rather than the
 one that filled it.
+
+## The compositor opens a client's buffer by name, and the client is what grants it
+
+Stage 5b of `docs/winserver-ring3-design.md`. A window's pixels were the
+client's own shm object already (5a), but the KERNEL still mapped them
+into the compositor at an address it carved per (pid, window) --
+`comp_map()`, `WIN_REQ_MAP_WINDOW`, and the machinery that had grown
+around revoking that mapping safely: `comp_span`, `comp_poisoned`, the
+poison page, a retired slot, a recorded reference. The compositor opens
+the name itself now and maps it wherever its own `mmap` puts it, and all
+of that is gone with `adopt_buf()` beside it. `struct win_buf` is
+`{ w, h, gen }`.
+
+**THE CLIENT GRANTS, NOT THE KERNEL**, and the alternative was close.
+A kernel-side `shm_grant()` at create time is strictly safer today: it
+happens inside the syscall so it cannot be missed or arrive late, and it
+needs no beacon. It was rejected because stage 6 deletes the hook it
+hangs on -- once a client's create goes to the compositor over the
+channel, the kernel never sees a window being created and has no moment
+at which to grant anything. The client granting is Wayland's shape (a
+client passes an fd; here it names a pid) and is the version that
+survives.
+
+The argument that nearly decided it the other way was wrong, and
+checking it is what changed the answer: a kernel grant was supposed to
+survive a compositor HANDOVER, re-granting every live window as the role
+moved. It buys nothing. TWP has no window-enumeration request, so a
+compositor only ever learns about windows through
+`WIN_EV_CLIENT_CREATED` -- a handover with live windows was already
+unsupported, and had been since the role existed.
+
+**THE COST IS THAT A CLIENT WITH NO COMPOSITOR CHANNEL CANNOT OPEN A
+WINDOW AT ALL**, where before it merely had no title. Toykit refuses the
+create rather than opening a window that draws, presents and never
+appears -- the loud version of the same failure, and what stage 6 makes
+unavoidable anyway.
+
+**A GRANT LIVES ON THE OBJECT, NOT ON THE NAME.** A resize unlinks the
+object and creates a new one under the same name, and the new one's
+grant list is empty. So the grant belongs beside every create, in
+`buf_make()`, not once at startup: missed, the first resize would be the
+last frame the compositor ever saw of that window.
+
+**THE GENERATION IS ON THE PRESENT, not an event of its own.** The name
+identifies the slot and never changes; the object under it does. So a
+present carries which buffer is now front AND that buffer's generation,
+packed into one `int32_t` (`WIN_PRESENT_B`), and a compositor holding a
+different one re-opens the name. Three things follow. It is STATE rather
+than a notification, so a lost or coalesced event costs one frame
+instead of leaving a compositor reading a freed object forever -- which
+matters here because the event queue is 32 deep and sheds the oldest
+under a present flood. The compositor only ever reads the FRONT buffer,
+so it maps lazily and never has to hear about a back buffer being
+replaced. And the field belongs to the present MESSAGE rather than to a
+carriage: after stage 6 that message travels on the channel instead, and
+it goes with it unchanged.
+
+**AND THE SIZE IS NOT A PROXY FOR THE OBJECT.** The generation goes up
+whenever a client says it replaced a buffer, never only when the
+dimensions changed: re-creating at the same size makes a new object
+under the same name, and a compositor left on the old one shows a window
+frozen at its last frame. A drag proposing the size a window already
+has, and a restored geometry that matches, both reach it.
+
+**THE SIZE CHECK MOVED TO THE READER, AND MAPPING IT IS THE CHECK.** The
+kernel used to refuse a window whose object was smaller than the size
+claimed; holding no object, it cannot. The compositor asks `mmap` for
+exactly the extent the present claims, and `SYS_MMAP` already refuses a
+length past an shm object's own pages -- so the check lives in the one
+place that knows both numbers, with no new syscall and nothing to keep
+in step. A client that lies costs its own window a frame.
+
+What this removes from the ring-3 address map is worth stating, because
+the map is read as a whole: `WIN_CLIENT_BASE`'s 64 MiB-per-window region
+and `WIN_COMPOSITOR_BASE`'s 16 GiB of one slot per (pid, window) both
+go. What is left above the stack is the font mapping and the
+framebuffer grant.

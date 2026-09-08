@@ -269,66 +269,41 @@ int win_server_window_count(int pid);
 // reachable from a KTEST, which has no processes to look up.
 //
 // Returns 1 on success, 0 for a pid outside the supported range.
-// Registering a different compositor, or clearing it, drops every
-// mapping the previous one held.
 int win_server_set_compositor(int pid, uint64_t pml4);
 
 // The registered compositor's pid, or 0 if none.
 int win_server_compositor_pid(void);
 
-// Maps `owner_pid`'s window `id` into the compositor's address space.
-// `requester_pid` must BE the registered compositor -- that check is the
-// access control, and it is why this takes a requester at all.
-//
-// Idempotent: mapping a window that is already mapped succeeds and
-// reports the same address, so a compositor may ask again after a
-// resize without unmapping first (it does not need to -- see below --
-// but asking twice must not be an error).
-//
-// On success `*out_vaddr` is win_compositor_vaddr(owner_pid, id), which
-// the caller could have computed itself; it is returned so the address
-// has exactly one definition at the call site rather than two.
-// Returns 1 on success, 0 if refused.
-int win_server_map_to_compositor(int requester_pid, int owner_pid, uint32_t id,
-                                  uint64_t *out_vaddr);
+// **THERE IS NO MAP/UNMAP PAIR ANY MORE.** A compositor opens a
+// client's buffer object by NAME and maps it itself, so the kernel has
+// no window mapping to make, revoke or poison -- see
+// docs/winserver-ring3-design.md's stage 5b.
 
-// Drops that mapping. Returns 1 if one was removed, 0 if there was
-// nothing mapped (not an error -- the same contract
-// vmm_unmap_user_page() uses).
-int win_server_unmap_from_compositor(int requester_pid, int owner_pid, uint32_t id);
-
-// Whether `owner_pid`'s window `id` is mapped into the compositor right
-// now. For tests and for `gui state`; a compositor knows its own state.
-int win_server_is_mapped_to_compositor(int owner_pid, uint32_t id);
-
-// Creates a window for `pid` in the address space `pml4`, with no live
-// process and without going through the protocol.
+// Creates a window for `pid` with no live process and without going
+// through the protocol.
 //
-// **For KTESTs.** The mapping and revocation paths above are otherwise
-// reachable only by spawning a real client and driving TWP at it, which
-// a test running inside the kernel cannot do -- and the property most
-// worth testing (a destroyed window's mapping is gone) is exactly the
-// one that is invisible from userland. Returns 1 and fills `*out_id` on
-// success.
+// **For KTESTs**, which have no client to create the buffer objects a
+// real window's pixels live in -- and need none, since the kernel holds
+// neither the objects nor a mapping of them. Returns 1 and fills
+// `*out_id` on success.
 //
 // Not a back door around the guard: everything it produces is an
 // ordinary window, subject to the same ownership checks as any other.
-int win_server_create_raw(int pid, uint64_t pml4, int w, int h, uint32_t *out_id);
-
-// Destroys a window created by win_server_create_raw(). Same teardown
+int win_server_create_raw(int pid, int w, int h, uint32_t *out_id);// Destroys a window created by win_server_create_raw(). Same teardown
 // the protocol's WIN_REQ_DESTROY performs, addressable from a test.
 int win_server_destroy_raw(int pid, uint32_t id);
 
-// Resizes one, running the same reallocate-and-remap the protocol's
-// WIN_REQ_RESIZE runs. Separate from the request path for one blunt
-// reason: win_server_request() refuses EVERYTHING when no presentation
-// layer is registered, and a `ktest` run has no desktop -- so a test
-// driving resize through the protocol tests only that refusal.
+// Resizes one, running the same size-and-generation update the
+// protocol's WIN_REQ_RESIZE runs.
 int win_server_resize_raw(int pid, uint32_t id, int w, int h);
 
 // A buffer's own pixel count (w * h), 0 if the window does not have it.
 // For a KTEST asserting WHICH of the two a resize touched -- the other
 // is the client's to replace, not the server's to grow.
 int win_server_buf_size(int pid, uint32_t id, int buf);
+
+// WHICH OBJECT a buffer is on: the generation a present reports, which
+// goes up each time the client replaces the object behind the name.
+uint32_t win_server_buf_gen(int pid, uint32_t id, int buf);
 
 #endif

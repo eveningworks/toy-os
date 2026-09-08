@@ -85,11 +85,11 @@ struct window {
     // the client is a separate process that draws on its own schedule
     // and tells the WM when it's done (WIN_REQ_PRESENT).
     //
-    // `client_buf` is a kernel-visible pointer to client_w * client_h
-    // 32bpp pixels -- the same memory the client itself sees mapped at
-    // win_buffer_vaddr(client_win). It stays valid until
-    // window_destroyed() returns; see kernel/proc/win_server.c, which
-    // owns the frames behind it.
+    // `client_buf` points at client_w * client_h 32bpp pixels -- the
+    // client's OWN memory, a named shm object this process opened and
+    // mapped (abi/win_proto.h's WIN_BUF_NAME_FMT). It stays valid as
+    // long as this mapping does, whatever happens to the window: the
+    // object's reference count is what keeps the frames alive.
     // What this window IS, as its own client named it -- "taskmgr", not
     // a path and not the title. Empty for a kernel-space app window and
     // for any client that did not give one. Matched byte for byte by
@@ -119,12 +119,16 @@ struct window {
     // not-responding check -- is unchanged: the only code that knows
     // there are two buffers is the present handler that moves this.
     uint32_t *client_buf;
-    // The base of the pair, because `client_buf` moves and a resize has
-    // to remap from somewhere fixed.
-    uint32_t *client_base;
-    // Which half `client_buf` is, 0 or 1. Kept because a resize remaps
-    // the pair without changing which one is in front -- the pointer
-    // alone cannot be recomputed from the base without it.
+    // The two buffers as this process mapped them, and WHICH OBJECT
+    // each mapping is of. A client replaces the object behind a name on
+    // a resize; the present that first shows it carries a higher
+    // generation, and that is when the name is re-opened. The old
+    // mapping stays readable until then -- it holds the old object
+    // alive by itself, which is wl_buffer.release.
+    uint32_t *client_px[2];
+    uint64_t  client_bytes[2];   // what was mapped, page-rounded
+    uint32_t  client_gen[2];     // 0 until the buffer has been opened
+    int client_mapped[2];        // client_px[b] may legitimately be 0
     int client_front;
     // THE FRONT BUFFER'S SIZE, which is the size of the pixels on
     // screen. A client that has accepted a new size has not necessarily

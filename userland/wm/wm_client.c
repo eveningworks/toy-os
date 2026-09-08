@@ -72,7 +72,10 @@ static int find_client_window(int pid, uint32_t id) {
 _Static_assert(WIN_APP_ID_MAX == WIN_APP_ID_LEN,
                 "wm.h's WIN_APP_ID_MAX must match abi/win_proto.h's WIN_APP_ID_LEN");
 
-static int on_window_created(int pid, uint32_t id, uint32_t *buf,
+static int map_buf(struct window *win, int b, uint32_t gen, int w, int h);
+static void unmap_client_window(struct window *win);
+
+static int on_window_created(int pid, uint32_t id,
                               int w, int h, int x, int y,
                               const char *app_id, int app_identity) {
     // Grow the table instead of refusing at a fixed count. A refusal is
@@ -107,11 +110,17 @@ static int on_window_created(int pid, uint32_t id, uint32_t *buf,
     win->open = 1;
     win->client_pid = pid;
     win->client_win = id;
-    win->client_buf = buf;
-    win->client_base = buf;   // front is 0 until the first present
-    win->client_front = 0;
+    win->client_front = 0;    // until the first present
     win->client_w = w;
     win->client_h = h;
+    // BUFFER 0 AT GENERATION 0: a window's first object under each of
+    // its two names. The other one is opened when a present first
+    // points at it, which is also how every later object is picked up.
+    if (!map_buf(win, 0, 0, w, h)) {
+        wm_logf("wm: client pid %d window %u -- cannot open its buffer\n", pid, id);
+        return 0;
+    }
+    win->client_buf = win->client_px[0];
     win->client_last_mx = INT32_MIN; // nothing delivered yet
     win->client_last_my = INT32_MIN;
 
@@ -159,19 +168,22 @@ static int on_window_created(int pid, uint32_t id, uint32_t *buf,
 // pixels -- the kernel flipped it inside WIN_REQ_PRESENT, before this
 // event was queued, so by the time this runs the client is already
 // drawing into the other one.
-static void on_window_present(int pid, uint32_t id, int front, int w, int h) {
+static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
+                              int w, int h) {
     int idx = find_client_window(pid, id);
     if (idx < 0) return;
 
     struct window *win = &windows[idx];
 
-    // Point at the finished buffer. A single-buffered window (its
-    // second allocation failed) always reports 0, so this is a no-op
-    // there and the old behaviour is preserved exactly.
+    // **THE GENERATION IS WHAT SAYS "RE-OPEN THE NAME".** The name is
+    // the slot and never changes; the object under it does, on every
+    // resize. Getting a stale one costs a frame; not noticing at all
+    // would be this process blitting an object nobody is drawing into.
+    // A failed open leaves the last good frame on screen -- see
+    // map_buf() on why the size is checked by mapping it.
+    if (!map_buf(win, front, gen, w, h)) return;
     win->client_front = front;
-    if (win->client_base)
-        win->client_buf = win->client_base + (front ? WIN_BUFFER_HALF / 4 : 0);
-
+    win->client_buf = win->client_px[front];
     // THE FRAME BRINGS ITS OWN SIZE, and this is where a resize lands.
     // Adopting it when the client ACCEPTED the proposal instead would
     // put the chrome around a buffer with nothing in it yet -- a whole
@@ -205,10 +217,11 @@ static void on_window_destroyed(int pid, uint32_t id) {
     int idx = find_client_window(pid, id);
     if (idx < 0) return;
 
-    // Drop the pointer BEFORE close_window() so nothing can composite
-    // from a buffer whose frames are about to be freed -- win_server.c
-    // frees them the moment this returns.
-    windows[idx].client_buf = 0;
+    // The pixels stay readable until this process lets go: the object
+    // is the client's and this mapping holds it alive, whatever the
+    // kernel's window table does. Dropping it here rather than later is
+    // still right -- nothing composites a closed window.
+    unmap_client_window(&windows[idx]);
     windows[idx].client_pid = 0;
     close_window(idx);
     wm_logf("wm: client pid %d closed window %u\n", pid, id);
@@ -259,23 +272,6 @@ static void on_window_hints(int pid, uint32_t id, unsigned flags, int min_w, int
     // has to be repainted -- the frame only, not the content.
     wm_damage_rect(windows[idx].x, windows[idx].y, windows[idx].w, windows[idx].h);
     redraw_pending = 1;
-}
-
-// The client ACCEPTED a WIN_EV_RESIZE proposal: its back buffer is now
-// this size and its frames moved, so the mapping is re-taken here.
-//
-// **THE SIZE IS NOT ADOPTED HERE.** What is on screen is still the front
-// buffer at the old size, and it stays that way until the client has
-// drawn the new one -- on_window_present() above does the adopting, with
-// the pixels in hand. Doing it here is what made a resize flash black.
-static void on_window_resized(int pid, uint32_t id, uint32_t *buf, int w, int h) {
-    (void)w; (void)h;
-    int idx = find_client_window(pid, id);
-    if (idx < 0) return;
-    struct window *win = &windows[idx];
-
-    win->client_base = buf;
-    win->client_buf = buf + (win->client_front ? WIN_BUFFER_HALF / 4 : 0);
 }
 
 // Defined below with the rest of the liveness code, which reads more
@@ -578,29 +574,76 @@ void wm_client_chan_pump(void) {
     }
 }
 
-// Releases a mapping taken above. THE MAPPING IS WHAT KEEPS A DEAD
-// WINDOW'S FRAMES ALIVE, so skipping this leaks them for as long as this
-// process runs -- see WIN_REQ_UNMAP_WINDOW.
-static void unmap_client_window(int pid, uint32_t id) {
-    struct win_request_msg q;
-    k_memset(&q, 0, sizeof q);
-    q.type = WIN_REQ_UNMAP_WINDOW;
-    q.a = pid;
-    q.window = id;
-    sys_win_request(&q);
+// --- a client's pixels, opened by NAME --------------------------------
+//
+// The kernel does not map a window into this process any more: the
+// buffer is an shm object its client created and granted to us, and
+// this opens it like any other. Nothing can be revoked underneath a
+// mapping made here, which is what retired the poison page -- the
+// object stays alive until this process munmaps it, however dead its
+// window is.
+
+// Drops one buffer's mapping. **THE MAPPING IS WHAT KEEPS A DEAD
+// WINDOW'S FRAMES ALIVE**, so skipping it leaks them for as long as
+// this process runs -- visible as a stranded row in `lsshm`.
+static void unmap_buf(struct window *win, int b) {
+    if (!win->client_mapped[b]) return;
+    // PAGE-ROUNDED, because SYS_MUNMAP refuses anything else and a
+    // window is w * h * 4 -- which is almost never a whole number of
+    // pages. The same trap cost the client side a leaked buffer per
+    // resize; `client_bytes` is the rounded length that was mapped.
+    sys_munmap(win->client_px[b], win->client_bytes[b]);
+    win->client_px[b] = 0;
+    win->client_bytes[b] = 0;
+    win->client_mapped[b] = 0;
 }
 
-static uint32_t *map_client_window(int pid, uint32_t id) {
-    struct win_request_msg q;
-    k_memset(&q, 0, sizeof q);
-    q.type = WIN_REQ_MAP_WINDOW;
-    q.a = pid;
-    q.window = id;
-    if (sys_win_request(&q) != 0) return 0;
-    // The address is DERIVED, not returned -- see win_proto.h. A fixed
-    // per-(pid, window) address is one a test can assert about; one the
-    // kernel returned would vary per boot.
-    return (uint32_t *)(uintptr_t)win_compositor_vaddr(pid, id);
+static void unmap_client_window(struct window *win) {
+    for (int b = 0; b < 2; b++) unmap_buf(win, b);
+    win->client_buf = 0;
+}
+
+// Makes sure buffer `b` of this window is mapped at generation `gen`,
+// big enough for `w` x `h`. A different generation means the client
+// replaced the object behind the name, so the old mapping is dropped
+// and the name re-opened.
+//
+// **THE SIZE IS CHECKED BY MAPPING IT.** The kernel takes a client's
+// word for how big its buffer is -- it does not hold the object -- so a
+// claim larger than the object would walk this process off the end of
+// it. Asking mmap for exactly the claimed extent puts the check in the
+// one place that knows both numbers: SYS_MMAP refuses a length past an
+// shm object's own pages (-EINVAL), so a lying client costs its own
+// window a frame and nothing else.
+static int map_buf(struct window *win, int b, uint32_t gen, int w, int h) {
+    uint64_t bytes = ((uint64_t)w * (uint64_t)h * 4 + 4095) & ~4095ULL;
+    if (win->client_mapped[b] && win->client_gen[b] == gen
+        && win->client_bytes[b] >= bytes) return 1;
+    unmap_buf(win, b);
+    if (!bytes) return 0;
+
+    char nm[WIN_BUF_NAME_MAX];
+    k_snprintf(nm, sizeof nm, WIN_BUF_NAME_FMT,
+               win->client_pid, (int)win->client_win, b);
+    int fd = sys_shm_open(nm, 0, 0);
+    if (fd < 0) return 0;
+    // READ-ONLY, as the kernel's mapping was: a compositor composites
+    // OUT of a client buffer and never writes one, so a write here is a
+    // bug worth faulting on rather than a client's pixels quietly
+    // changing under it.
+    void *p = sys_mmap(0, bytes, SYS_PROT_READ, SYS_MAP_SHARED, fd, 0);
+    sys_close(fd);
+    if (p == (void *)-1) {
+        wm_logf("wm: pid %d window %u buffer %d: %dx%d does not fit its object\n",
+                win->client_pid, win->client_win, b, w, h);
+        return 0;
+    }
+
+    win->client_px[b] = (uint32_t *)p;
+    win->client_bytes[b] = bytes;
+    win->client_gen[b] = gen;
+    win->client_mapped[b] = 1;
+    return 1;
 }
 
 // One event in, one callback out. Returns 1 if the event was a client
@@ -676,8 +719,6 @@ int wm_client_handle_event(const struct win_event *ev) {
         // window is briefly untitled and unconstrained, which is what
         // the placeholder in on_window_created() is for.
         int w = ev->b, h = (int)ev->mods;
-        uint32_t *buf = map_client_window(pid, id);
-        if (!buf) return 1;
         // The app id came through as "" until WIN_REQ_WINDOW_APPID
         // existed, which left every window on this desktop anonymous --
         // see query_app_id().
@@ -687,35 +728,34 @@ int wm_client_handle_event(const struct win_event *ev) {
         // x/y are the compositor's to choose -- the kernel never had an
         // opinion about placement, it only forwarded what the client
         // asked for. 0,0 lets the existing handler place it.
-        on_window_created(pid, id, buf, w, h, 0, 0, app_id, identity);
+        on_window_created(pid, id, w, h, 0, 0, app_id, identity);
         break;
     }
     case WIN_EV_CLIENT_PRESENT:
-        on_window_present(pid, id, (int)ev->b,
+        on_window_present(pid, id, WIN_PRESENT_BUF(ev->b),
+                          WIN_PRESENT_GEN(ev->b),
                           WIN_PRESENT_W(ev->mods), WIN_PRESENT_H(ev->mods));
         break;
     case WIN_EV_CLIENT_DESTROYED:
-        // The pixels are STILL READABLE here: this process's mapping
-        // holds a reference to the frames, and the release below is what
-        // drops it (win_proto.h, WIN_REQ_UNMAP_WINDOW). The release must
-        // come after the handler, which is the last thing that could
-        // read them.
+        // The pixels are STILL READABLE here: this process's own
+        // mapping holds the object alive, and on_window_destroyed()
+        // drops it -- after the handler, which is the last thing that
+        // could read them.
         on_window_destroyed(pid, id);
-        unmap_client_window(pid, id);
         break;
     // WIN_EV_CLIENT_TITLE / _HINTS / _CURSOR are not delivered any more:
     // those requests reach this process over the channel with their
     // payloads (lib/uwmchan.h), so there is nothing to be told about and
     // nothing to read back.
-    case WIN_EV_CLIENT_RESIZED: {
-        // Re-map before telling the handler: the frames were
-        // reallocated, so the old mapping was revoked with them and the
-        // pointer the window list holds is stale.
-        uint32_t *buf = map_client_window(pid, id);
-        if (!buf) return 1;
-        on_window_resized(pid, id, buf, ev->b, (int)ev->mods);
+    case WIN_EV_CLIENT_RESIZED:
+        // **NOTHING TO DO, AND THAT IS THE POINT.** The client accepted
+        // a proposal and rebuilt its back buffer; the new object is
+        // opened by the present that first SHOWS it, which carries its
+        // generation. Re-mapping here instead would point this process
+        // at memory nobody has drawn into yet -- and what is on screen
+        // until then is the front buffer at the old size, which is what
+        // stops a resize flashing black.
         break;
-    }
     case WIN_EV_CLIENT_CURSOR:
         on_window_cursor(pid, id, (int)ev->b);
         break;

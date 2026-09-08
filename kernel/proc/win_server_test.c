@@ -1,59 +1,36 @@
-// Tests for cross-process window-buffer sharing -- Milestone 41's
-// stage 1 (docs/wm-ring3-design.md).
+// Tests for what the kernel still knows about a client window.
 //
-// WHY THESE ARE KTESTS AND NOT A GUI TEST
-// ---------------------------------------
-// The property that matters here is invisible from userland and
-// invisible on screen: after a window is destroyed, the compositor's
-// MAPPING of its pixels must be gone. Nothing a client or a test tool
-// can observe distinguishes "the mapping was revoked" from "the
-// mapping still resolves and the frames happen to be untouched so far"
-// -- the difference only shows up later, as another allocation's data
-// appearing inside a window, which reads as a compositing bug.
+// **IT NO LONGER KNOWS WHERE THE PIXELS ARE.** A window buffer is a
+// named shm object the client creates and grants to the compositor,
+// which opens it itself (docs/winserver-ring3-design.md, stage 5b) --
+// so the mapping, revocation and poisoning these tests used to walk
+// page tables for are gone, and with them the argument for reaching
+// into two address spaces here. What is left in ring 0 is bookkeeping:
+// which slot, which buffer is front, how big each one is, and WHICH
+// OBJECT is behind it. That last one is the generation, and it is the
+// only thing a compositor has to be told to re-open a name.
 //
-// Asking the page tables directly is the only honest check, and that
-// means running inside the kernel.
+// So these drive win_server_request() the way a client does and read
+// the events a compositor would get, with win_events_pop(). Asserting
+// on the EVENT rather than on the internal field is the point: the
+// event is the contract, and the packing (WIN_PRESENT_B) is a place the
+// two sides can disagree.
 //
-// HOW A TEST GETS A WINDOW WITHOUT A PROCESS
-// ------------------------------------------
-// `win_server_create_raw()` (see win_server.h) makes a window in an
-// address space the test built with vmm_create_address_space(). No
-// process, no protocol, no desktop -- but an ORDINARY window as far as
-// every path under test is concerned, subject to the same ownership
-// checks as any other.
+// POSITIVE CONTROL: drop the `wb->gen++` from rebuild_buffer(). Exactly
+// the two generation checks go red ("a present carries the front
+// buffer's generation" and "a resize bumps only the buffer it
+// rebuilds"), on the event's own value. Re-run it after any change
+// here; a clean run of tests that cannot fail is worth nothing.
 //
-// POSITIVE CONTROL, re-run when the poison contract landed: change
-// destroy_window()'s comp_poison() back to comp_unmap() and rebuild.
-// Exactly two checks go red -- "destroying a window poisons the
-// compositor's mapping" and "a client dying revokes it too" -- and they
-// fail on vmm_validate_user_range() rather than on the bookkeeping flag,
-// which is the pair worth having. The other five stay green, which is
-// itself informative: destroy, resize and unregister each have their OWN
-// revocation call, so breaking one does not implicate the others.
-// Do this again before trusting a clean run after any change here.
-//
-// WHAT THESE CANNOT PROVE, stated rather than implied: anything about
-// the TLB. Every check here reaches a frame by WALKING the page tables
-// from a pml4 the test built, so a PTE that is right while a live
-// address space still caches the old translation reads as correct.
-// comp_map()'s comp_unpoison() call exists for exactly that hazard --
-// mapping over a present entry does not invalidate anything -- and a
-// KTEST written for it passed with the call commented out. It was
-// deleted rather than committed looking green; the reasoning lives in
-// comp_map()'s comment instead, which is where an edit would meet it.
-//
-// The reads and writes below go through vmm_copy_to_user() /
-// vmm_copy_from_user() against a specific address space. That is not
-// just the sanctioned way for kernel code to touch user memory (vmm.h)
-// -- it is also the strongest available form of the assertion, because
-// those helpers WALK THE PAGE TABLES to reach the frame. A successful
-// copy proves the mapping resolves in that address space; a failed one
-// proves it does not. Nothing here dereferences a user pointer, so
-// nothing here depends on which CR3 is loaded.
+// WHAT THESE CANNOT PROVE, stated rather than implied: that the
+// compositor's mapping of a client's object is correct. That is two
+// ring-3 processes and an shm grant, with no kernel state in the middle
+// -- tools/window_resize_probe.py and the GUI suite are where it is
+// checked.
 #include "ktest.h"
 #include "win_server.h"
-#include "vmm.h"
-#include "pmm.h"
+#include "win_events.h"
+#include "win_proto.h"
 #include "scheduler.h"
 #include <stddef.h>
 
@@ -75,13 +52,12 @@ static int spare_pids(int *client, int *comp) {
 }
 
 // THE COMPOSITOR ROLE IS ONE GLOBAL, SHARED WITH THE LIVE DESKTOP.
-// Taking it revokes that desktop's framebuffer grant and drops every
-// mapping it holds (win_server_set_compositor()); giving it up asks its
-// clients to close and toywm exits. Neither is undoable by restoring
-// the role afterwards, because the damage is done on the way IN. So
-// these refuse to run while anyone holds it, and tools/ktest_run.py
-// frees the role before the suite -- which is how the gate still
-// exercises them without the default graphical boot destroying itself.
+// Taking it revokes that desktop's framebuffer grant (and, on the way
+// out, asks its clients to close). Neither is undoable by restoring the
+// role afterwards, because the damage is done on the way IN. So these
+// refuse to run while anyone holds it, and tools/ktest_run.py frees the
+// role before the suite -- which is how the gate still exercises them
+// without the default graphical boot destroying itself.
 #define SKIP_IF_ROLE_HELD                                                     \
     do {                                                                      \
         if (win_server_compositor_pid())                                      \
@@ -91,12 +67,10 @@ static int spare_pids(int *client, int *comp) {
 #define WIN_W 64
 #define WIN_H 32
 
-// A fixture: two address spaces, one window. Every test needs the same
-// three lines and the same teardown, and a leaked address space here is
-// a leak in the live kernel the suite is running inside.
+// A fixture: a client pid with one window, and a compositor pid whose
+// event queue the assertions read. No address spaces: nothing here maps
+// anything any more.
 struct fixture {
-    uint64_t client_as;
-    uint64_t comp_as;
     uint32_t id;
     int client_pid;
     int comp_pid;
@@ -104,507 +78,233 @@ struct fixture {
 
 static int fixture_up(struct fixture *f) {
     if (!spare_pids(&f->client_pid, &f->comp_pid)) return 0;
-    f->client_as = vmm_create_address_space();
-    f->comp_as = vmm_create_address_space();
-    if (!f->client_as || !f->comp_as) return 0;
-    if (!win_server_create_raw(f->client_pid, f->client_as, WIN_W, WIN_H, &f->id)) return 0;
-    if (!win_server_set_compositor(f->comp_pid, f->comp_as)) return 0;
+    if (!win_server_set_compositor(f->comp_pid, 0)) return 0;
+    if (!win_server_create_raw(f->client_pid, WIN_W, WIN_H, &f->id)) return 0;
     return 1;
 }
 
 static void fixture_down(struct fixture *f) {
     if (f->client_pid) win_server_destroy_raw(f->client_pid, f->id);
-    // Clear the registration before the address space goes away, so no
-    // stale pml4 is left registered for the next test. Safe to clear
-    // unconditionally only because SKIP_IF_ROLE_HELD proved the role was
-    // free before the fixture took it.
+    // Safe to clear unconditionally only because SKIP_IF_ROLE_HELD
+    // proved the role was free before the fixture took it.
     win_server_set_compositor(0, 0);
-    if (f->client_as) vmm_destroy_address_space(f->client_as);
-    if (f->comp_as) vmm_destroy_address_space(f->comp_as);
+    win_events_reset(f->comp_pid);
 }
 
-// A window's pixels are CPU-only -- the compositor reads them, the
-// client writes them, and nothing DMAs from them -- so they take frames
-// from PMM_ZONE_ANY ("More than 4 GiB of RAM", stage 3). Asked of the
-// page table rather than of pmm, so it fails if create_window() were
-// changed back.
-KTEST("winshare", "a window's buffer comes from the high zone") {
-    struct fixture f = {0};
-    SKIP_IF_ROLE_HELD;
-    if (pmm_zone_free_frames(PMM_ZONE_ANY) == 0)
-        KTEST_SKIP("guest has no memory above 4 GiB");
-    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+// **A FAILING ASSERT RETURNS FROM THE TEST**, so nothing after it runs
+// -- including the teardown that gives the compositor role back. One
+// red test would then skip every later one in this file with "a
+// compositor holds the role", turning one failure into a silent eight.
+// (Found by running this file's own positive control.) These tear the
+// fixture down first, and evaluate the value ONCE into a temporary, so
+// a request under test is never issued twice.
+#define FIX_ASSERT(f, cond)                                                   \
+    do {                                                                      \
+        if (!(cond)) {                                                        \
+            fixture_down(f);                                                  \
+            ktest_fail(ctx, #cond, __FILE__, __LINE__);                       \
+            return;                                                           \
+        }                                                                     \
+    } while (0)
 
-    uint64_t four_gib = (uint64_t)4 * 1024 * 1024 * 1024;
-    uint64_t phys = vmm_user_phys(f.client_as, win_buffer_vaddr(f.id));
-    fixture_down(&f);
+#define FIX_ASSERT_EQ(f, got, expected)                                       \
+    do {                                                                      \
+        int64_t fix_g_ = (int64_t)(got);                                      \
+        int64_t fix_e_ = (int64_t)(expected);                                 \
+        if (fix_g_ != fix_e_) {                                               \
+            fixture_down(f);                                                  \
+            ktest_fail_eq(ctx, #got, fix_g_, fix_e_, __FILE__, __LINE__);     \
+            return;                                                           \
+        }                                                                     \
+    } while (0)
 
-    KTEST_ASSERT(phys != 0);
-    KTEST_ASSERT(phys >= four_gib);
+// Drains the compositor's queue down to the newest event of `type`.
+static int last_event(int pid, uint32_t type, struct win_event *out) {
+    struct win_event ev;
+    int got = 0;
+    while (win_events_pop(pid, &ev)) {
+        if (ev.type != type) continue;
+        *out = ev;
+        got = 1;
+    }
+    return got;
 }
 
-KTEST("winshare", "a window maps into the compositor at its derived address") {
+KTEST("winshare", "a window is created at the size the client claims") {
     struct fixture f = {0};
     SKIP_IF_ROLE_HELD;
-    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("no unused pids"); }
 
-    uint64_t vaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &vaddr));
-    // The address is DERIVED, so the server and the compositor cannot
-    // disagree about it -- this asserts the returned value is the one
-    // the formula gives rather than something the server chose.
-    KTEST_ASSERT_EQ(vaddr, win_compositor_vaddr(f.client_pid, f.id));
-    KTEST_ASSERT(win_server_is_mapped_to_compositor(f.client_pid, f.id));
-    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, vaddr, 4096));
+    // BOTH buffers, because the client made both before it asked. The
+    // kernel takes its word for it: it holds neither object, so there
+    // is nothing to look at -- the compositor checks the size against
+    // the mapping it actually made, which is the only side that can.
+    FIX_ASSERT_EQ(&f, win_server_buf_size(f.client_pid, f.id, 0), WIN_W * WIN_H);
+    FIX_ASSERT_EQ(&f, win_server_buf_size(f.client_pid, f.id, 1), WIN_W * WIN_H);
+    FIX_ASSERT_EQ(&f, win_server_window_count(f.client_pid), 1);
 
-    fixture_down(&f);
-}
-
-KTEST("winshare", "both address spaces see the SAME pixels, not a copy") {
-    struct fixture f = {0};
-    SKIP_IF_ROLE_HELD;
-    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
-
-    uint64_t cvaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
-
-    // Write as the CLIENT would (into its own mapping), read as the
-    // compositor. A copy would pass a same-value check made any other
-    // way; going through two different address spaces is what makes
-    // this about sharing rather than about memory working.
-    uint32_t pixel = 0xC0FFEE01;
-    KTEST_ASSERT(vmm_copy_to_user(f.client_as, win_buffer_vaddr(f.id),
-                                   &pixel, sizeof pixel));
-    uint32_t seen = 0;
-    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
-    KTEST_ASSERT_EQ(seen, 0xC0FFEE01);
-
-    // And the other direction: a compositor that only ever reads is the
-    // normal case, but the mapping is writable and a one-way test would
-    // not notice if it silently were not.
-    pixel = 0x0BADF00D;
-    KTEST_ASSERT(vmm_copy_to_user(f.comp_as, cvaddr, &pixel, sizeof pixel));
-    seen = 0;
-    KTEST_ASSERT(vmm_copy_from_user(f.client_as, &seen,
-                                     win_buffer_vaddr(f.id), sizeof seen));
-    KTEST_ASSERT_EQ(seen, 0x0BADF00D);
+    struct win_event ev;
+    FIX_ASSERT(&f, last_event(f.comp_pid, WIN_EV_CLIENT_CREATED, &ev));
+    FIX_ASSERT_EQ(&f, ev.a, f.client_pid);
+    FIX_ASSERT_EQ(&f, ev.b, WIN_W);
+    FIX_ASSERT_EQ(&f, (int)ev.mods, WIN_H);
 
     fixture_down(&f);
 }
 
-// THE TEARING INVARIANT: while a window has two buffers, the one the
-// client draws into is never the one the compositor reads.
-//
-// Asserted as MEMORY rather than as a flicker, deliberately. Catching a
-// torn frame means sampling the screen fast enough to land inside one
-// client redraw, which is timing-dependent, flaky, and gets FASTER to
-// miss as the machine gets quicker -- a check that passes more often
-// the less it is true. What actually has to hold is that two pointers
-// differ, and that is decidable.
+KTEST("winshare", "the client's proposed slot is honoured, and a taken one refused") {
+    struct fixture f = {0};
+    SKIP_IF_ROLE_HELD;
+    if (!spare_pids(&f.client_pid, &f.comp_pid)) KTEST_SKIP("no unused pids");
+    if (!win_server_set_compositor(f.comp_pid, 0)) KTEST_SKIP("cannot take the role");
+
+    // THE CLIENT PICKS THE SLOT because its buffer objects are already
+    // named after it (abi/win_proto.h's WIN_BUF_NAME_FMT). A slot the
+    // kernel chose instead would name objects that do not exist.
+    struct win_request_msg req = {0};
+    req.type = WIN_REQ_CREATE;
+    req.window = 2;
+    req.a = WIN_W; req.b = WIN_H;
+    FIX_ASSERT_EQ(&f, win_server_request(f.client_pid, &req), 1);
+    f.id = req.window;   // so a failure below still tears it down
+    FIX_ASSERT_EQ(&f, f.id, 2u);
+    // The same slot again is REFUSED rather than silently moved: a
+    // client whose window landed somewhere else would go on drawing
+    // into the object it named after the slot it asked for.
+    struct win_request_msg again = {0};
+    again.type = WIN_REQ_CREATE;
+    again.window = 2;
+    again.a = WIN_W; again.b = WIN_H;
+    FIX_ASSERT_EQ(&f, win_server_request(f.client_pid, &again), 0);
+
+    fixture_down(&f);
+}
 KTEST("winshare", "a present flips the buffer, so the two never collide") {
     struct fixture f = {0};
     SKIP_IF_ROLE_HELD;
-    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("no unused pids"); }
 
-    uint64_t cvaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
-
-    // A window starts at front 0, so the client draws into buffer 1.
-    // Both offsets come from the ABI's own helpers -- if a caller
-    // computed them by hand the test would be checking its own
-    // arithmetic rather than the contract.
-    KTEST_ASSERT(win_buffer_front_offset(0) != win_buffer_back_offset(0));
-    KTEST_ASSERT(win_buffer_front_offset(1) != win_buffer_back_offset(1));
-
-    // Write a marker into the BACK buffer as the client, and confirm the
-    // compositor's FRONT view does not see it. This is the whole
-    // property: a half-finished frame is invisible until it is
-    // presented.
-    uint32_t drawing = 0xDEADBEEF;
-    KTEST_ASSERT(vmm_copy_to_user(f.client_as,
-                                   win_buffer_vaddr(f.id) + win_buffer_back_offset(0),
-                                   &drawing, sizeof drawing));
-    uint32_t seen = 0xFFFFFFFF;
-    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen,
-                                     cvaddr + win_buffer_front_offset(0),
-                                     sizeof seen));
-    KTEST_ASSERT(seen != 0xDEADBEEF);
-
-    // Now present. The server flips, and the marker becomes visible
-    // through the compositor's front view -- the same bytes, reached
-    // from the other address space, which is what makes this about the
-    // FLIP rather than about two unrelated pages.
-    struct win_request_msg req;
-    for (unsigned i = 0; i < sizeof req; i++) ((uint8_t *)&req)[i] = 0;
+    struct win_request_msg req = {0};
     req.type = WIN_REQ_PRESENT;
     req.window = f.id;
-    int rc = win_server_request(f.client_pid, &req);
-    // 1 or 2: the new front index, biased so 0 still means refused.
-    KTEST_ASSERT(rc > 0);
-    int front = rc - 1;
 
-    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen,
-                                     cvaddr + win_buffer_front_offset(front),
-                                     sizeof seen));
-    KTEST_ASSERT_EQ(seen, 0xDEADBEEF);
+    // The return is the new FRONT index biased by one, so 0 can still
+    // mean refused -- and it must ALTERNATE, which is the whole of
+    // double buffering: the client draws into whichever this does not
+    // name.
+    FIX_ASSERT_EQ(&f, win_server_request(f.client_pid, &req), 2); // front 1
+    FIX_ASSERT_EQ(&f, win_server_request(f.client_pid, &req), 1); // front 0
 
-    // ...and the client is now pointed somewhere ELSE, which is the
-    // half that stops the next frame landing on the one being read.
-    KTEST_ASSERT(win_buffer_back_offset(front) != win_buffer_front_offset(front));
+    struct win_event ev;
+    FIX_ASSERT(&f, last_event(f.comp_pid, WIN_EV_CLIENT_PRESENT, &ev));
+    FIX_ASSERT_EQ(&f, WIN_PRESENT_BUF(ev.b), 0);
+    // THE SIZE TRAVELS WITH THE FRAME, packed beside it.
+    FIX_ASSERT_EQ(&f, WIN_PRESENT_W(ev.mods), WIN_W);
+    FIX_ASSERT_EQ(&f, WIN_PRESENT_H(ev.mods), WIN_H);
 
     fixture_down(&f);
 }
 
-// THE ONE THAT MATTERS. A revocation bug leaves the compositor reading
-// frames the allocator has already handed to something else.
-//
-// What "revoked" means changed with comp_poison() (win_server.c): the
-// slot stays MAPPED, at the shared zero page, because a compositor is a
-// process that learns of the death from a queued event and may blit the
-// slot once more before it does -- and a hole there is a page fault,
-// i.e. the desktop dying. So the assertion is not "nothing is mapped"
-// but "the client's pixels are gone", which is the property that was
-// ever worth having.
-// THE CHECK THAT ASKS THE WHOLE SLOT, and the one whose absence let the
-// second buffer go un-revoked for months. Every other check here names
-// ONE address, and the fixture's windows are a single page, so a range
-// nobody names is a range nobody tests -- while comp_map() has always
-// mapped a second one at +WIN_BUFFER_HALF. vmm_audit_space() needs no
-// address at all: it walks the compositor's whole address space and
-// reports any mapping pointing at a frame the allocator has taken back.
-//
-// Positive control: drop the `for (int b ...)` loop in comp_clear() back
-// to buffer 0 and this goes red with `dangling` equal to the window's
-// page count, while every other check here stays green.
-KTEST("winshare", "destroying a window leaves the compositor no mapping of a freed frame") {
+KTEST("winshare", "a present carries the front buffer's generation") {
     struct fixture f = {0};
     SKIP_IF_ROLE_HELD;
-    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("no unused pids"); }
 
-    uint64_t cvaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
-    // Both halves of the slot are mapped while the window lives -- which
-    // is what makes the second one something that has to be revoked.
-    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
-    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr + WIN_BUFFER_HALF, 4096));
+    // A fresh window's objects are the first ones under their names.
+    FIX_ASSERT_EQ(&f, win_server_buf_gen(f.client_pid, f.id, 0), 0u);
 
-    KTEST_ASSERT(win_server_destroy_raw(f.client_pid, f.id));
+    // The client replaced buffer 0's object -- unlinked it and made a
+    // new one under the same name. Only it can, so only it can say so.
+    struct win_request_msg buf = {0};
+    buf.type = WIN_REQ_BUFFER;
+    buf.window = f.id;
+    buf.a = 0;
+    buf.b = WIN_W * 2; buf.c = WIN_H * 2;
+    FIX_ASSERT_EQ(&f, win_server_request(f.client_pid, &buf), 1);
+    FIX_ASSERT_EQ(&f, win_server_buf_gen(f.client_pid, f.id, 0), 1u);
+    FIX_ASSERT_EQ(&f, win_server_buf_gen(f.client_pid, f.id, 1), 0u);
 
-    struct vmm_audit a;
-    uint64_t dangling = vmm_audit_space(f.comp_as, &a);
+    // **THE SAME SIZE STILL COUNTS.** A client re-creating a buffer at
+    // the size it already had makes a NEW object under the same name,
+    // and a kernel that inferred "replaced" from the dimensions would
+    // leave the compositor mapping memory nobody draws into -- a window
+    // frozen on its last frame. Reachable from a drag that proposes the
+    // size a window already has.
+    FIX_ASSERT_EQ(&f, win_server_request(f.client_pid, &buf), 1);
+    FIX_ASSERT_EQ(&f, win_server_buf_gen(f.client_pid, f.id, 0), 2u);
 
-    // And the second half reads as poison rather than as the dead
-    // window's pixels, the same contract the first half has.
-    uint32_t seen2 = 0xFFFFFFFF;
-    int got2 = vmm_copy_from_user(f.comp_as, &seen2, cvaddr + WIN_BUFFER_HALF, sizeof seen2);
+    // Two presents to bring buffer 0 back to the front, then read what
+    // the compositor was actually told -- the packing is a place the
+    // two sides can disagree, so the assertion is on the event.
+    struct win_request_msg req = {0};
+    req.type = WIN_REQ_PRESENT;
+    req.window = f.id;
+    FIX_ASSERT_EQ(&f, win_server_request(f.client_pid, &req), 2);
+    FIX_ASSERT_EQ(&f, win_server_request(f.client_pid, &req), 1);
 
-    f.id = 0;
-    win_server_set_compositor(0, 0);
-    if (f.client_as) vmm_destroy_address_space(f.client_as);
-    if (f.comp_as) vmm_destroy_address_space(f.comp_as);
+    struct win_event ev;
+    FIX_ASSERT(&f, last_event(f.comp_pid, WIN_EV_CLIENT_PRESENT, &ev));
+    FIX_ASSERT_EQ(&f, WIN_PRESENT_BUF(ev.b), 0);
+    FIX_ASSERT_EQ(&f, WIN_PRESENT_GEN(ev.b), 2u);
+    FIX_ASSERT_EQ(&f, WIN_PRESENT_W(ev.mods), WIN_W * 2);
 
-    KTEST_ASSERT_EQ((int)dangling, 0);
-    KTEST_ASSERT(got2);
-    KTEST_ASSERT_EQ(seen2, 0);
+    fixture_down(&f);
 }
 
-KTEST("winshare", "a destroyed window's pixels survive until the compositor lets go") {
+KTEST("winshare", "a resize rebuilds only the buffer the client names") {
     struct fixture f = {0};
     SKIP_IF_ROLE_HELD;
-    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("no unused pids"); }
 
-    uint64_t cvaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
-    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
+    // The FRONT buffer still holds the last finished frame at the size
+    // it was drawn at, and a resize must leave it alone -- rebuilding
+    // it is the window of black the configure/ack handshake exists to
+    // avoid. win_server_resize_raw() picks the back one, as a client
+    // with nothing in flight would.
+    int front = 0;
+    FIX_ASSERT(&f, win_server_resize_raw(f.client_pid, f.id, WIN_W * 3, WIN_H * 3));
 
-    // A marker only the ORIGINAL frames carry, so the reads below tell
-    // "still the client's pixels" apart from a slot pointing at
-    // whatever the allocator handed out next.
-    uint32_t marker = 0xDEADBEEF;
-    KTEST_ASSERT(vmm_copy_to_user(f.client_as, win_buffer_vaddr(f.id),
-                                   &marker, sizeof marker));
-    uint64_t frame_before = vmm_user_phys(f.comp_as, cvaddr);
-    KTEST_ASSERT(frame_before != 0);
+    FIX_ASSERT_EQ(&f, win_server_buf_size(f.client_pid, f.id, front ^ 1),
+                    WIN_W * 3 * WIN_H * 3);
+    FIX_ASSERT_EQ(&f, win_server_buf_size(f.client_pid, f.id, front), WIN_W * WIN_H);
+    // And the generation went up on that one ALONE: a compositor
+    // re-opening the front buffer's name here would drop the frame it
+    // is showing for a new, empty object.
+    FIX_ASSERT_EQ(&f, win_server_buf_gen(f.client_pid, f.id, front ^ 1), 1u);
+    FIX_ASSERT_EQ(&f, win_server_buf_gen(f.client_pid, f.id, front), 0u);
 
-    int owner = f.client_pid;
-    KTEST_ASSERT(win_server_destroy_raw(f.client_pid, f.id));
+    struct win_event ev;
+    FIX_ASSERT(&f, last_event(f.comp_pid, WIN_EV_CLIENT_RESIZED, &ev));
+    FIX_ASSERT_EQ(&f, ev.b, WIN_W * 3);
 
-    // Ask the PAGE TABLES, not the flag. Still mapped -- a hole here is
-    // a fault in a compositor mid-frame -- and still THE SAME FRAMES
-    // carrying the last picture the window drew. This used to read as 0:
-    // the frames were freed and the slot remapped to the poison page,
-    // which is a black flash on every close. The mapping holds a
-    // reference now, so there is nothing to hide.
-    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
-    KTEST_ASSERT_EQ(vmm_user_phys(f.comp_as, cvaddr), frame_before);
-    uint32_t seen = 0;
-    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
-    KTEST_ASSERT_EQ(seen, marker);
-
-    // The release is what takes them away, and the slot with them.
-    KTEST_ASSERT(win_server_unmap_from_compositor(f.comp_pid, owner, f.id));
-    KTEST_ASSERT_EQ(vmm_user_phys(f.comp_as, cvaddr), 0);
-    KTEST_ASSERT(!win_server_is_mapped_to_compositor(owner, f.id));
-
-    f.id = 0; // already destroyed; don't destroy a live window's slot
-    f.client_pid = 0;
-    win_server_set_compositor(0, 0);
-    if (f.client_as) vmm_destroy_address_space(f.client_as);
-    if (f.comp_as) vmm_destroy_address_space(f.comp_as);
+    fixture_down(&f);
 }
 
-KTEST("winshare", "a slot the compositor never released is reclaimed as POISON") {
-    // THE FALLBACK PATH, and the reason it must stay reachable: a
-    // destroyed window's slot is held until the compositor releases it,
-    // so a client that closes and reopens faster than the compositor
-    // drains its queue can find every slot held. Taking one back is
-    // right; taking it back as a HOLE would fault the compositor
-    // mid-frame, which is what the poison page exists for.
+KTEST("winshare", "a destroyed window frees its slot, and the client's death takes the rest") {
     struct fixture f = {0};
     SKIP_IF_ROLE_HELD;
-    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("no unused pids"); }
 
-    int owner = f.client_pid;
-    uint32_t ids[WIN_CLIENT_MAX];
-    ids[0] = f.id;
-    int made = 1;
-    for (; made < WIN_CLIENT_MAX; made++)
-        if (!win_server_create_raw(owner, f.client_as, WIN_W, WIN_H, &ids[made]))
-            break;
-    if (made < WIN_CLIENT_MAX) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+    FIX_ASSERT(&f, win_server_destroy_raw(f.client_pid, f.id));
+    FIX_ASSERT_EQ(&f, win_server_window_count(f.client_pid), 0);
 
-    uint64_t cvaddr = 0;
-    for (int i = 0; i < WIN_CLIENT_MAX; i++)
-        KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, owner, ids[i], &cvaddr));
-    cvaddr = win_compositor_vaddr(owner, ids[0]);
+    struct win_event ev;
+    FIX_ASSERT(&f, last_event(f.comp_pid, WIN_EV_CLIENT_DESTROYED, &ev));
 
-    uint32_t marker = 0xABCDEF01;
-    KTEST_ASSERT(vmm_copy_to_user(f.client_as, win_buffer_vaddr(ids[0]),
-                                   &marker, sizeof marker));
+    // The SAME slot is immediately reusable. It used to be RETIRED --
+    // held until the compositor released its mapping -- which is a
+    // state that cannot exist now that the mapping is the compositor's
+    // own: the object stays alive under it by reference, whatever the
+    // window table does.
+    uint32_t again = 0;
+    FIX_ASSERT(&f, win_server_create_raw(f.client_pid, WIN_W, WIN_H, &again));
+    FIX_ASSERT_EQ(&f, again, f.id);
 
-    // Every slot destroyed while mapped, so every slot is retired and
-    // none is free.
-    for (int i = 0; i < WIN_CLIENT_MAX; i++)
-        KTEST_ASSERT(win_server_destroy_raw(owner, ids[i]));
-
-    // One more window has nowhere to go but a retired slot.
-    uint32_t extra = 0;
-    KTEST_ASSERT(win_server_create_raw(owner, f.client_as, WIN_W, WIN_H, &extra));
-
-    // The reclaimed slot is still MAPPED -- no hole -- and no longer
-    // carries the dead window's pixels. Both halves matter: the first
-    // is what stops the compositor faulting, the second is what proves
-    // the frames really went back.
-    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
-    uint32_t seen = 0xFFFFFFFF;
-    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
-    KTEST_ASSERT_EQ(seen, 0);
-
-    win_server_destroy_raw(owner, extra);
-    f.id = 0;
-    f.client_pid = 0;
-    win_server_set_compositor(0, 0);
-    if (f.client_as) vmm_destroy_address_space(f.client_as);
-    if (f.comp_as) vmm_destroy_address_space(f.comp_as);
-}
-
-KTEST("winshare", "a client dying revokes it too") {
-    struct fixture f = {0};
-    SKIP_IF_ROLE_HELD;
-    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
-
-    uint64_t cvaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
-
-    // The path a real crash takes, which is NOT the same code as an
-    // orderly WIN_REQ_DESTROY -- process teardown calls this directly.
-    uint32_t marker = 0xDEADBEEF;
-    KTEST_ASSERT(vmm_copy_to_user(f.client_as, win_buffer_vaddr(f.id),
-                                   &marker, sizeof marker));
-
-    int owner = f.client_pid;
+    // And a client dying takes its windows with it.
     win_server_client_gone(f.client_pid);
+    FIX_ASSERT_EQ(&f, win_server_window_count(f.client_pid), 0);
 
-    // A CRASH IS NOT A SPECIAL CASE: the slot stays mapped and still
-    // carries the dead client's last frame, exactly as an orderly
-    // destroy does. This is the path a force quit takes, where the
-    // compositor is the process that ASKED for the kill and returns
-    // from the syscall still holding the dead window in its list.
-    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
-    uint32_t seen = 0;
-    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
-    KTEST_ASSERT_EQ(seen, marker);
-    KTEST_ASSERT_EQ(win_server_window_count(owner), 0);
-
-    // The frames outlive the ADDRESS SPACE they were mapped into, which
-    // is the property the reference buys: the client's pml4 is gone and
-    // the compositor is still reading.
-    KTEST_ASSERT(win_server_unmap_from_compositor(f.comp_pid, owner, f.id));
-    KTEST_ASSERT_EQ(vmm_user_phys(f.comp_as, cvaddr), 0);
-
-    f.id = 0;
-    win_server_set_compositor(0, 0);
-    if (f.client_as) vmm_destroy_address_space(f.client_as);
-    if (f.comp_as) vmm_destroy_address_space(f.comp_as);
-}
-
-// THE PROPERTY THAT STOPS A RESIZE FLASHING BLACK, stated as memory:
-// the buffer the compositor is reading still holds the last frame after
-// the resize, and only the one the client is about to draw into moved.
-//
-// Positive control: rebuild both buffers in resize_window() (pass
-// `cw->front` as well as `back`) and the first assertion goes red with
-// `seen` at 0, which is precisely the blank window.
-KTEST("winshare", "a resize leaves the FRONT frame showing and rebuilds the back") {
-    struct fixture f = {0};
-    SKIP_IF_ROLE_HELD;
-    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
-
-    uint64_t cvaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
-
-    // A window starts at front 0, so the compositor reads buffer 0 and
-    // the client draws into buffer 1. Mark both, through the address
-    // space that owns each one.
-    uint32_t shown = 0xDEADBEEF, drawing = 0xFEEDFACE;
-    KTEST_ASSERT(vmm_copy_to_user(f.comp_as, cvaddr + win_buffer_front_offset(0),
-                                   &shown, sizeof shown));
-    KTEST_ASSERT(vmm_copy_to_user(f.client_as,
-                                   win_buffer_vaddr(f.id) + win_buffer_back_offset(0),
-                                   &drawing, sizeof drawing));
-
-    // Not through win_server_request(): that refuses everything when no
-    // presentation layer is registered, and a `ktest` run has no
-    // desktop. This is the same resize_window() the protocol calls.
-    KTEST_ASSERT(win_server_resize_raw(f.client_pid, f.id, WIN_W * 3, WIN_H * 3));
-
-    // Still mapped, still at the same address -- that is the whole
-    // point of deriving it (a compositor is never told pixels moved).
-    KTEST_ASSERT(win_server_is_mapped_to_compositor(f.client_pid, f.id));
-    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
-
-    // THE FRONT FRAME SURVIVED: same frames, same pixels, so there is
-    // something real to composite for the whole of the client's repaint.
-    uint32_t seen = 0;
-    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen,
-                                     cvaddr + win_buffer_front_offset(0),
-                                     sizeof seen));
-    KTEST_ASSERT_EQ(seen, 0xDEADBEEF);
-
-    // ...and the BACK one is new frames, zeroed. If the old marker were
-    // still readable there, the mapping would be pointing at frames the
-    // resize freed -- the use-after-free half of this test.
-    seen = 0xFFFFFFFF;
-    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen,
-                                     cvaddr + win_buffer_back_offset(0),
-                                     sizeof seen));
-    KTEST_ASSERT_EQ(seen, 0);
-
-    // And it is genuinely the client's new buffer: write through the
-    // client's view and see it through the compositor's.
-    uint32_t pixel = 0x11223344;
-    KTEST_ASSERT(vmm_copy_to_user(f.client_as,
-                                   win_buffer_vaddr(f.id) + win_buffer_back_offset(0),
-                                   &pixel, sizeof pixel));
-    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen,
-                                     cvaddr + win_buffer_back_offset(0),
-                                     sizeof seen));
-    KTEST_ASSERT_EQ(seen, 0x11223344);
-
-    fixture_down(&f);
-}
-
-// The other half: the new size arrives WITH the frame drawn at it.
-// A resize that never completes is as bad as one that flashes, and the
-// two are one code path -- the present is what rebuilds the buffer left
-// at the old size.
-KTEST("winshare", "the present after a resize hands over the new size") {
-    struct fixture f = {0};
-    SKIP_IF_ROLE_HELD;
-    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
-
-    uint64_t cvaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
-    KTEST_ASSERT(win_server_resize_raw(f.client_pid, f.id, WIN_W * 3, WIN_H * 3));
-
-    // The client draws its first frame at the new size -- far enough in
-    // to be past the OLD buffer's last pixel, so a present that handed
-    // over a buffer still the old size could not answer this.
-    uint64_t far = (uint64_t)(WIN_W * WIN_H) * 4 + 4096;
-    uint32_t pixel = 0xC0FFEE00;
-    KTEST_ASSERT(vmm_copy_to_user(f.client_as,
-                                   win_buffer_vaddr(f.id) + win_buffer_back_offset(0) + far,
-                                   &pixel, sizeof pixel));
-
-    struct win_request_msg req;
-    for (unsigned i = 0; i < sizeof req; i++) ((uint8_t *)&req)[i] = 0;
-    req.type = WIN_REQ_PRESENT;
-    req.window = f.id;
-    int rc = win_server_request(f.client_pid, &req);
-    KTEST_ASSERT(rc > 0);
-    int front = rc - 1;
-
-    uint32_t seen = 0;
-    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen,
-                                     cvaddr + win_buffer_front_offset(front) + far,
-                                     sizeof seen));
-    KTEST_ASSERT_EQ(seen, 0xC0FFEE00);
-
-    // **THE OTHER BUFFER IS NOT THE SERVER'S TO GROW ANY MORE**, and
-    // this used to assert that it was. A present rebuilt the stale half
-    // here, opportunistically, which stopped being possible when a
-    // window's pixels became the CLIENT's objects: only the client can
-    // replace one it created. It does that before it draws
-    // (WIN_REQ_BUFFER), so what is still true -- and what this asserts
-    // instead -- is that the buffer just handed over IS the new size,
-    // which the read above proves, and that the other one is still
-    // whatever it was rather than silently resized underneath.
-    KTEST_ASSERT_EQ(win_server_buf_size(f.client_pid, f.id, front), WIN_W * 3 * WIN_H * 3);
-    KTEST_ASSERT_EQ(win_server_buf_size(f.client_pid, f.id, front ^ 1), WIN_W * WIN_H);
-
-    fixture_down(&f);
-}
-
-KTEST("winshare", "only the registered compositor may map a window") {
-    struct fixture f = {0};
-    SKIP_IF_ROLE_HELD;
-    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
-
-    uint64_t vaddr = 0;
-    // A process that is not the compositor, asking for someone else's
-    // pixels. This is the request that must never succeed -- a window
-    // buffer is private memory, and mapping it into an arbitrary
-    // process is a hole rather than a feature.
-    KTEST_ASSERT(!win_server_map_to_compositor(f.client_pid, f.client_pid, f.id, &vaddr));
-    KTEST_ASSERT(!win_server_is_mapped_to_compositor(f.client_pid, f.id));
-
-    // Nor may the compositor map a window that does not exist.
-    KTEST_ASSERT(!win_server_map_to_compositor(f.comp_pid, f.client_pid, WIN_CLIENT_MAX, &vaddr));
-    // Nor one belonging to a pid outside the table.
-    KTEST_ASSERT(!win_server_map_to_compositor(f.comp_pid, 0, 0, &vaddr));
-
-    fixture_down(&f);
-}
-
-KTEST("winshare", "clearing the compositor drops its mappings") {
-    struct fixture f = {0};
-    SKIP_IF_ROLE_HELD;
-    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
-
-    uint64_t cvaddr = 0;
-    KTEST_ASSERT(win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
-
-    // A compositor exiting is the case this protects: its address space
-    // is about to be destroyed, and a mapping flag left set would make
-    // the next unmap walk a pml4 that no longer exists.
-    KTEST_ASSERT(win_server_set_compositor(0, 0));
-    KTEST_ASSERT(!win_server_is_mapped_to_compositor(f.client_pid, f.id));
-    KTEST_ASSERT(!vmm_validate_user_range(f.comp_as, cvaddr, 4096));
-
-    // And a map request with nobody registered is refused rather than
-    // mapping into whatever pml4 was there last.
-    KTEST_ASSERT(!win_server_map_to_compositor(f.comp_pid, f.client_pid, f.id, &cvaddr));
-
+    f.client_pid = 0;   // nothing left for fixture_down() to destroy
     fixture_down(&f);
 }
 

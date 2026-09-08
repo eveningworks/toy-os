@@ -66,17 +66,6 @@ struct ugfx_surface ugfx_surface_for_pixels(void *pixels, int w, int h) {
     return s;
 }
 
-struct ugfx_surface ugfx_surface_for_window_buf(uint32_t window, int w, int h,
-                                                 int front) {
-    return ugfx_surface_for_pixels(
-        (void *)(uintptr_t)(win_buffer_vaddr(window)
-                            + win_buffer_back_offset(front)), w, h);
-}
-
-struct ugfx_surface ugfx_surface_for_window(uint32_t window, int w, int h) {
-    return ugfx_surface_for_window_buf(window, w, h, 0);
-}
-
 // --- clip and damage --------------------------------------------------
 
 void ugfx_set_clip_rect(struct ugfx_surface *s, int x, int y, int w, int h) {

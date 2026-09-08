@@ -26,58 +26,22 @@
 #include "kerrno.h"  // EBUSY -- the diagnostic channel is one slot
 #include "mouse.h"    // mouse_get_state() -- park the plane where the pointer is
 #include "heap.h"     // kmalloc/kfree -- the DEFINE sprite bounce buffer
-#include "shm.h"      // the frames behind a window buffer
-#include "syscall_abi.h" // SHM_NAME_MAX -- a buffer object is named
-#include "kfmt.h"     // k_snprintf, for that name
 #include "initcall.h"
 #include "query_abi.h"
 #include "query.h"
 
 #define WIN_SERVER_MAX_PIDS SCHED_MAX_PROCS
 
-// A CLIENT'S BUFFER IS ITS OWN OBJECT, and this is where both sides
-// agree what it is called. The NAME identifies the slot; the object in
-// it is replaced on a resize (docs/winserver-ring3-design.md, stage 5).
-// Derived rather than carried, so nothing has to be added to a message
-// on the hot path -- and guessable names are harmless because an object
-// belongs to its creator (abi/syscall_abi.h's SHM_PUBLIC).
-static void win_buf_name(char *out, int cap, int pid, int slot, int buf) {
-    k_snprintf(out, (uint32_t)cap, "win.%d.%d.%d", pid, slot, buf);
-}
-
-// Adopts the object a client created for buffer `buf` of its window at
-// `slot`, taking a reference. Returns the index, or -1.
-//
-// **THE CREATOR IS CHECKED, and that is the access control**: without
-// it a client could name ANY object -- another window's buffer, a
-// service's private page -- and have the kernel map it to the
-// compositor, which reads it and puts it on screen.
-static int adopt_buf(int pid, int slot, int buf, uint32_t pages) {
-    char nm[SHM_NAME_MAX];
-    win_buf_name(nm, sizeof nm, pid, slot, buf);
-    int idx = shm_lookup(nm);
-    if (idx < 0) return -1;
-    if (shm_creator(idx) != pid) return -1;
-    if (shm_npages(idx) < pages) return -1;   // too small for the size asked
-    shm_get(idx);
-    return idx;
-}
-
-// The compositor's address region is carved per (pid, window) and its
-// pid count is an ABI constant (abi/win_proto.h), so it cannot include
-// the scheduler's header. Checked here instead of trusted: a pid past
-// the region's end would compute an address overlapping another
-// process's window.
-_Static_assert(WIN_COMPOSITOR_MAX_PIDS >= SCHED_MAX_PROCS,
-               "win_compositor_vaddr() has no room for every process");
-
-// How many buffers a window's compositor slot can hold, and the offset
-// of each: buffer `b` lives at `b * WIN_BUFFER_HALF`, which is what
-// win_buffer_offset() encodes for the client side. Every slot helper
-// below loops over this rather than taking a range from its caller --
-// a call site that has to remember there are two is how the second one
-// stopped being revoked.
-#define COMP_BUFS 2
+// **THE KERNEL DOES NOT TOUCH A WINDOW'S PIXELS.** A buffer is a named
+// shm object the client creates and grants to the compositor
+// (abi/win_proto.h's WIN_BUF_NAME_FMT), and the compositor opens the
+// name itself -- so there is nothing here to allocate, adopt, map or
+// free. What is left of a buffer in this file is its SIZE and its
+// GENERATION, which is what a present has to carry.
+// How many buffers a window has. Every loop over them takes this
+// rather than a range from its caller -- a call site that has to
+// remember there are two is how the second one stopped being revoked.
+#define WIN_BUFS 2
 
 // ONE BUFFER, WITH ITS OWN SIZE. The dimensions belong to the BUFFER
 // rather than to the window, which is what lets a resize rebuild the
@@ -87,40 +51,36 @@ _Static_assert(WIN_COMPOSITOR_MAX_PIDS >= SCHED_MAX_PROCS,
 // window's own w/h below is the CLIENT's current size; the front
 // buffer catches up at the next present.
 struct win_buf {
-    // THE FRAMES, as a nameless shm object (kernel/shm.h). Anonymous
-    // rather than named because the shm namespace has no permissions:
-    // a name any process could pass to SYS_SHM_OPEN would be a way to
-    // map somebody else's window. `pages` is the presence test -- 0 is
-    // a buffer this window does not have, which is a working window
-    // and not an error (see below).
-    int      shm;
-    uint32_t pages;   // frames it spans
-    int w, h;         // what was drawn into it
+    int w, h;         // what the client says it built this one at; 0x0
+                       // is a buffer this window does not have, which is
+                       // a working window and not an error (see below)
+
+    // WHICH OBJECT IS BEHIND THE NAME. The name identifies the slot and
+    // never changes; the client replaces the object under it on a
+    // resize and this goes up. A present carries it, and a compositor
+    // holding a different one re-opens the name -- see
+    // WIN_EV_CLIENT_PRESENT.
+    uint32_t gen;
 };
 
 struct client_window {
     int used;
     int pid;
-    uint32_t id;      // index into the owner's slots, so
-                       // win_buffer_vaddr(id) is stable per window
-    uint64_t pml4;    // the owner's address space, needed to unmap
-    uint64_t vaddr;   // where the client sees buffer 0
+    uint32_t id;      // index into the owner's slots, and the slot
+                       // the client named its buffer objects after
 
-    // THE TWO BUFFERS. `bufs[1].pages` is 0 when this window is
-    // single-buffered.
-    //
-    // A window is double-buffered so the compositor never reads memory
-    // a client is drawing into (see WIN_BUFFER_HALF in abi/win_proto.h).
-    // `front` says which of the two the compositor should read; the
-    // client draws into the other. WIN_REQ_PRESENT flips it.
-    //
-    // **NO SECOND BUFFER IS A WORKING WINDOW, NOT AN ERROR.** Memory
-    // running out for the second one makes the window single-buffered
-    // rather than making it not exist.
-    // It then tears exactly as every window did before this, which is
-    // strictly better than refusing to open. `front` stays 0 and the
-    // flip is a no-op.
-    struct win_buf bufs[COMP_BUFS];
+    // THE TWO BUFFERS, and the kernel takes the client's word that both
+    // exist: it holds neither object and cannot look. **NO CLIENT
+    // PRODUCES A SINGLE-BUFFERED WINDOW ANY MORE** -- Toykit makes both
+    // objects or opens no window -- so `bufs[1].w == 0` is a state
+    // nothing reaches today. The flip below still tests for it, because
+    // the alternative is a protocol that cannot express a client with
+    // one buffer at all.
+    //    // A window is double-buffered so the compositor never reads memory
+    // a client is drawing into. `front` says which of the two it should
+    // read; the client draws into the other, and WIN_REQ_PRESENT flips
+    // it.
+    struct win_buf bufs[WIN_BUFS];
     int front;        // 0 or 1: which buffer the compositor reads
 
     // THE CLIENT'S CURRENT SIZE -- what it draws and what the BACK
@@ -128,63 +88,6 @@ struct client_window {
     // size, so a caller that means "the pixels the compositor is
     // reading" must ask bufs[front], not this.
     int w, h;
-    // Is this window's buffer currently mapped into the compositor's
-    // address space? Tracked per window rather than inferred, because
-    // the ONLY safe moment to revoke is inside the operation that frees
-    // or replaces the frames -- and that operation has a window, not a
-    // list of mappings.
-    int comp_mapped;
-
-    // How many pages of this window's compositor mapping currently hold
-    // the POISON page (see comp_poison()). Non-zero only while the real
-    // frames are gone but the compositor may still blit the slot; the
-    // count is the OLD window's page span, which is what has to be
-    // unmapped again before the slot can be mapped for real.
-    // Per buffer -- see COMP_BUFS.
-    uint32_t comp_poisoned[COMP_BUFS];
-
-    // How many pages of this window's compositor slot currently have a
-    // PTE AT ALL -- real frames plus any poison beyond them. It is the
-    // HIGH-WATER MARK of every size this window has ever been, and it
-    // never shrinks while the window lives.
-    //
-    // **THIS IS WHAT MAKES A SHRINK SAFE.** comp_poison()'s invariant --
-    // a live window's slot is never a hole -- was written for a window
-    // being DESTROYED and quietly did not cover one being made SMALLER.
-    // A shrink remaps the slot to fewer pages while the compositor is
-    // still holding the OLD width and height (it does not learn the new
-    // ones until it drains WIN_EV_CLIENT_RESIZED, and it is a process,
-    // so that is some frames later). Its very next blit then reads past
-    // the new mapping into nothing and the desktop dies -- measured as
-    // a page fault in ugfx_blit() at exactly the pixel where the old
-    // size ran past the new one.
-    //
-    // Keeping the tail mapped to the poison page turns that into one
-    // frame of black at the bottom of a shrinking window, which the
-    // compositor corrects the moment it adopts the new size. Costs only
-    // PTEs: every poison page in the system is the same borrowed frame.
-    uint32_t comp_span[COMP_BUFS];
-
-    // Does the compositor's mapping hold a REFERENCE to buffer `b`'s shm
-    // object, and to WHICH object? Taken when real frames are mapped,
-    // dropped when they are unmapped -- so the frames outlive the window
-    // if the compositor is still reading them.
-    //
-    // THE INDEX IS RECORDED, NOT RE-READ FROM bufs[b].shm, and that is
-    // the trap: a resize replaces the object while the compositor still
-    // holds a reference to the OLD one, so releasing `bufs[b].shm` would
-    // put the NEW object and free it under a live mapping. A flag
-    // beside it, because slot 0 is a valid index and these slots are
-    // reused from zeroed memory.
-    int comp_ref[COMP_BUFS];
-    int comp_ref_shm[COMP_BUFS];
-
-    // THE WINDOW IS GONE BUT ITS MAPPING IS NOT. Set by
-    // destroy_window() while the compositor still holds the slot: the
-    // pixels stay readable and the slot stays out of use until
-    // WIN_REQ_UNMAP_WINDOW arrives. `used` is already 0, so lookup()
-    // cannot see it -- only the release path and the slot search can.
-    int comp_retired;
 
     // THE ONLY THING A CLIENT SAYS THAT THE KERNEL STILL KEEPS. The
     // title, the hints and the cursor shape all left for the channel
@@ -232,13 +135,11 @@ struct client_window {
     // legacy loader), which therefore matches nothing -- the safe
     // direction.
     int app_identity;
-
-
 };
 
-// The registered compositor: which process may map other processes'
-// windows, and where those mappings go. See win_server.h -- the address
-// space is captured here rather than looked up per call.
+// The registered compositor: the one process raw input is delivered
+// to, and the one the framebuffer is granted to. It no longer maps
+// anything through the kernel -- see win_server.h.
 static int g_comp_pid = 0;
 
 
@@ -311,11 +212,6 @@ static struct client_window *lookup(int pid, uint32_t id) {
     return cw;
 }
 
-// One shared, zero-filled frame, mapped READ-ONLY wherever a
-// compositor mapping has to survive the frames behind it going away.
-// Allocated on first use and never freed -- there is exactly one, and
-// the whole point is that it is always available at the moment a window
-// dies.
 // --- application identity ---------------------------------------------
 //
 // Spawn paths, interned so a window can carry a small comparable number
@@ -346,271 +242,25 @@ static int app_identity_for(const char *path) {
     return g_app_count++;
 }
 
-static uint64_t g_poison_frame;
-
-static uint64_t poison_frame(void) {
-    if (!g_poison_frame) {
-        uint64_t f = pmm_alloc_frame(PMM_ZONE_ANY);
-        if (!f) return 0;
-        k_memset((void *)(uintptr_t)f, 0, 4096);
-        g_poison_frame = f;
-    }
-    return g_poison_frame;
-}
-
-// Takes a poisoned slot's zero-page mappings back out. Must run before
-// anything maps real frames there, and before the compositor's address
-// space goes away.
-// Takes EVERY page of the slot back out -- real frames and poison alike
-// -- leaving it with no PTEs at all. The only caller that may leave it
-// that way is the teardown of the compositor's address space itself;
-// every other one maps something back immediately.
-//
-// It walks `comp_span`, not `pages`, because the two differ exactly
-// when this matters: after a shrink the slot spans more pages than the
-// window now needs, and unmapping only `pages` of them would strand the
-// tail's PTEs pointing at the poison page forever.
-static void comp_clear(struct client_window *cw) {
-    uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
-    for (int b = 0; b < COMP_BUFS; b++) {
-        if (g_comp_pml4) {
-            uint64_t base = vaddr + (uint64_t)b * WIN_BUFFER_HALF;
-            for (uint32_t i = 0; i < cw->comp_span[b]; i++) {
-                vmm_unmap_user_page(g_comp_pml4, base + (uint64_t)i * 4096);
-            }
-        }
-        cw->comp_span[b] = 0;
-        cw->comp_poisoned[b] = 0;
-        if (cw->comp_ref[b]) {
-            shm_put(cw->comp_ref_shm[b]);
-            cw->comp_ref[b] = 0;
-        }
-    }
-    cw->comp_mapped = 0;
-    cw->comp_retired = 0;
-}
-
-// Maps the poison page over [from, to) of BUFFER `b`'s half of the
-// slot. Returns how many pages it managed; the caller decides whether a
-// short result matters.
-static uint32_t comp_poison_range(struct client_window *cw, int b,
-                                  uint32_t from, uint32_t to) {
-    if (to <= from) return 0;
-    uint64_t phys = poison_frame();
-    if (!phys) return 0;               // out of memory: a hole, as before
-    uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id)
-                   + (uint64_t)b * WIN_BUFFER_HALF;
-    uint32_t n = 0;
-    for (uint32_t i = from; i < to; i++) {
-        // BORROWED, and doubly so: one frame mapped at every page of the
-        // slot, so an owning teardown would free the same frame `pages`
-        // times -- and it is a permanent singleton nothing ever frees.
-        if (!vmm_map_user_borrowed(g_comp_pml4, vaddr + (uint64_t)i * 4096,
-                                   phys, 0, 0, VMM_MT_NORMAL)) {
-            break;
-        }
-        n++;
-    }
-    return n;
-}
-
-// The frame of page `i` of buffer `b`, or 0 when the window does not
-// have that buffer. Buffer 1 is absent on a single-buffered window,
-// which is a working window and not an error (see the struct).
-static uint64_t buf_frame(const struct client_window *cw, int b, uint32_t i) {
-    if (!cw->bufs[b].pages) return 0;
-    return shm_frame(cw->bufs[b].shm, i);
-}
-
-// Maps a window's frames into the compositor at its derived address.
-// Returns 1 on success (including "already mapped"), 0 if the mapping
-// could not be built -- in which case nothing is left half-mapped.
-//
-// ONE LOOP OVER EVERY BUFFER, and that is the point rather than a
-// tidying: the slot holds two, and a version that mapped both here
-// while the teardown paths described one left the compositor holding
-// writable PTEs into buffer 1's freed frames after every window close.
-static int comp_map(struct client_window *cw) {
-    if (!g_comp_pid || !g_comp_pml4) return 0;
-    uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
-
-    // The slot's extent never shrinks while the window lives -- see
-    // comp_span. Remember it before clearing, because the tail beyond
-    // the new frames has to be poisoned back over, not left as a hole.
-    // A buffer this window does not have keeps its high-water mark and
-    // gains nothing, so a window that has never been double-buffered
-    // spends no PTEs on the half it never uses -- while one that just
-    // LOST its second buffer still gets that half poisoned, for the
-    // same reason a shrink does.
-    uint32_t span[COMP_BUFS];
-    for (int b = 0; b < COMP_BUFS; b++) {
-        span[b] = cw->comp_span[b];
-        if (cw->bufs[b].pages && span[b] < cw->bufs[b].pages)
-            span[b] = cw->bufs[b].pages;
-    }
-
-    // A poisoned slot has PRESENT page-table entries pointing at the
-    // zero page, and mapping over a present entry does NOT invalidate
-    // the TLB (vmm_map_user_page_type() only counts it) -- so the
-    // compositor would go on reading zeros from a live window. Unmap
-    // first, which does invalidate.
-    comp_clear(cw);
-
-    for (int b = 0; b < COMP_BUFS; b++) {
-        uint32_t have = cw->bufs[b].pages;
-        uint64_t base = vaddr + (uint64_t)b * WIN_BUFFER_HALF;
-        uint32_t done = 0;
-        // BORROWED: these frames belong to the shm object (allocated in
-        // create_window(), released in destroy_window()). The compositor
-        // only gets to look at them.
-        for (; done < have; done++) {
-            if (!vmm_map_user_borrowed(g_comp_pml4, base + (uint64_t)done * 4096,
-                                        buf_frame(cw, b, done),
-                                        1, 0, VMM_MT_NORMAL))
-                break;
-        }
-        if (done < have) {
-            // Never left half-mapped. Buffer 0 failing is fatal to the
-            // whole mapping; buffer 1 failing only makes the window
-            // single-buffered, which is what it would have been if the
-            // second allocation had failed in the first place.
-            for (uint32_t j = 0; j < done; j++)
-                vmm_unmap_user_page(g_comp_pml4, base + (uint64_t)j * 4096);
-            done = 0;
-            if (b == 0) {
-                klog_write("win_server: compositor mapping failed\n");
-                return 0;   // comp_clear() above already zeroed the spans
-            }
-            klog_write("win_server: compositor second-buffer mapping failed -- "
-                       "window reads as single-buffered\n");
-            cw->front = 0;
-        }
-        cw->comp_span[b] = done;
-        // The reader's own reference, so the frames cannot go while it
-        // can still read them (abi/win_proto.h, WIN_REQ_UNMAP_WINDOW).
-        if (done && !cw->comp_ref[b]) {
-            shm_get(cw->bufs[b].shm);
-            cw->comp_ref_shm[b] = cw->bufs[b].shm;
-            cw->comp_ref[b] = 1;
-        }
-
-        // THE TAIL. Everything this half of the slot used to cover and
-        // no longer does reads as black rather than faulting, for as
-        // long as it takes the compositor to notice.
-        cw->comp_poisoned[b] = comp_poison_range(cw, b, done, span[b]);
-        cw->comp_span[b] += cw->comp_poisoned[b];
-    }
-
-    cw->comp_mapped = 1;
-    return 1;
-}
-
-// Revokes it. Safe to call unconditionally; that is the point, since
-// every path that frees or replaces frames has to call it and none of
-// them should have to know whether a mapping exists.
-static void comp_unmap(struct client_window *cw) {
-    if (!cw->comp_mapped) return;
-    comp_clear(cw);
-}
-
-// THE INVARIANT: while a compositor is registered, a window buffer's
-// slot in its address space is never a HOLE. Frames that go away are
-// replaced by the read-only zero page rather than unmapped, because the
-// compositor is a process and cannot be stopped mid-frame: it learns a
-// window died from a QUEUED event (WIN_EV_CLIENT_DESTROYED), and until
-// it drains that event its window list still names the slot. A hole
-// there is a page fault in the compositor, i.e. the desktop dying --
-// which is exactly what Force Quit did, since a ring-3 WM triggers the
-// teardown from inside its own sys_kill() and blits the dead window on
-// the very next frame.
-//
-// Poison reads as black for at most one frame, and the frames really
-// are freed, so this is not a use-after-free -- the alternative that
-// keeps the mapping live IS one.
-//
-// Read-only on purpose: a compositor composites OUT of a client buffer
-// and never writes one, so a write here is a bug worth faulting on
-// rather than silently absorbing into a page every dead window shares.
-static void comp_poison(struct client_window *cw) {
-    if (!cw->comp_mapped) return;
-    // The WHOLE span of EVERY buffer, not just the live frames: a slot
-    // that has been shrunk already has a poisoned tail, and the
-    // compositor may still blit out to the largest size this window
-    // ever was.
-    uint32_t span[COMP_BUFS];
-    for (int b = 0; b < COMP_BUFS; b++) span[b] = cw->comp_span[b];
-    comp_clear(cw);                    // also invalidates the TLB
-    for (int b = 0; b < COMP_BUFS; b++) {
-        cw->comp_poisoned[b] = comp_poison_range(cw, b, 0, span[b]);
-        cw->comp_span[b] = cw->comp_poisoned[b];
-    }
-}
-
-// Frees a window's frames and unmaps them from its owner's address
-// space. The presentation layer is told FIRST (while `buf` is still
-// valid), so it can drop the window from its list before the memory
-// behind it goes away.
+// Ends a window. THE PIXELS SURVIVE IT: they are the client's object,
+// and whoever still has it mapped -- the compositor, until it drains
+// the event below -- holds it alive by reference. Nothing here has a
+// mapping to revoke, which is what retired the poison page.
 static void destroy_window(struct client_window *cw) {
     if (!cw->used) return;
 
     if (g_ops && g_ops->window_destroyed) g_ops->window_destroyed(cw->pid, cw->id);
-    // The buffer is STILL READABLE when this arrives, if the compositor
-    // has it mapped: its mapping holds a reference to the frames, and it
-    // releases them with WIN_REQ_UNMAP_WINDOW when it is done. The
-    // ring-0 callback above ran synchronously and this event is queued,
-    // which is the asymmetry win_proto.h documents.
     tell_compositor(WIN_EV_CLIENT_DESTROYED, cw->pid, cw->id, 0, 0);
 
-    // THE SLOT OUTLIVES THE WINDOW while a compositor holds it. Nothing
-    // is poisoned and nothing is unmapped: the compositor goes on
-    // reading the last frame this window drew until it drains the event
-    // above and releases the slot. Poisoning here instead read as BLACK
-    // for a frame, because the frames really were freed underneath it.
-    int retired = cw->comp_mapped;
-
-    // Both buffers, each at its OWN page count -- they can differ while
-    // a resize is in flight. The OWNER's mapping goes now either way;
-    // only the compositor's is allowed to outlive the window.
-    for (int b = 0; b < COMP_BUFS; b++) {
-        struct win_buf *wb = &cw->bufs[b];
-        if (!wb->pages) continue;
-        // NOTHING IS UNMAPPED FROM THE CLIENT: it mapped these itself
-        // and unmaps them itself. What the kernel drops is the
-        // reference it took when it adopted the object.
-        shm_put(wb->shm);          // the WINDOW's reference; the
-                                    // compositor's, if any, remains
-        if (!cw->comp_ref[b]) {
-            wb->shm = -1;
-            wb->pages = 0;
-        }
-        wb->w = wb->h = 0;
-    }
+    for (int b = 0; b < WIN_BUFS; b++) cw->bufs[b].w = cw->bufs[b].h = 0;
     cw->used = 0;
     cw->front = 0;
-    cw->comp_retired = retired;
 }
 
-// Releases a slot the compositor was still holding after its window
-// died. The frames go here, at the last reference.
-static void comp_release_retired(struct client_window *cw) {
-    if (!cw->comp_retired) return;
-    comp_clear(cw);                 // unmaps, and puts every held reference
-    for (int b = 0; b < COMP_BUFS; b++) {
-        cw->bufs[b].shm = -1;
-        cw->bufs[b].pages = 0;
-    }
-}
-
-// `pml4` is passed in rather than read from vmm_current_pml4() here.
-// The protocol path passes the caller's own address space (a syscall
-// does not switch CR3, so that is the client's); win_server_create_raw()
-// passes one a KTEST made. Making it a parameter is also the honest
-// shape: this function maps into an address space, and which one should
-// not depend on when it happens to be called.
 // `want_slot` is the slot the CLIENT proposed -- its buffers are named
-// after it, so the kernel cannot choose a different one. Negative means
-// "any", which is what the KTEST entry point passes.
-static int create_window(int pid, uint64_t pml4, int want_slot,
+// after it (abi/win_proto.h), so the kernel cannot choose a different
+// one. Negative means "any", which is what the KTEST entry point passes.
+static int create_window(int pid, int want_slot,
                          int w, int h, int x, int y,
                           const char *app_id, uint32_t *out_id) {
     if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return 0;
@@ -622,88 +272,33 @@ static int create_window(int pid, uint64_t pml4, int want_slot,
 
     int slot = -1;
     if (want_slot >= 0) {
-        // THE CLIENT'S CHOICE, honoured or refused -- never silently
-        // changed. Its buffers are already named after this slot, so a
-        // different one would leave the kernel adopting objects that do
-        // not exist.
         if (want_slot >= WIN_CLIENT_MAX) return 0;
-        struct client_window *c = &windows[pid - 1][want_slot];
-        if (c->used || c->comp_retired) {
+        if (windows[pid - 1][want_slot].used) {
             klog_write("win_server: create refused -- that slot is in use\n");
             return 0;
         }
         slot = want_slot;
     }
-    for (int i = 0; slot < 0 && i < WIN_CLIENT_MAX; i++) {
-        struct client_window *c = &windows[pid - 1][i];
-        if (!c->used && !c->comp_retired) { slot = i; break; }
-    }
-    if (slot < 0) {
-        // Every slot is taken, but some may only be RETIRED -- held by a
-        // compositor that has not drained the destroy event yet. Take
-        // one back rather than refusing a window over a lag the client
-        // cannot see. Poisoned, not unmapped: the compositor may still
-        // blit the slot, and a hole there is a page fault in the
-        // desktop. This is the pre-2026-09-08 behaviour, now the rare
-        // path instead of every close.
-        for (int i = 0; i < WIN_CLIENT_MAX; i++) {
-            struct client_window *c = &windows[pid - 1][i];
-            if (c->used || !c->comp_retired) continue;
-            comp_poison(c);           // drops the held references
-            for (int b = 0; b < COMP_BUFS; b++) {
-                c->bufs[b].shm = -1;
-                c->bufs[b].pages = 0;
-            }
-            slot = i;
-            break;
-        }
-    }
+    for (int i = 0; slot < 0 && i < WIN_CLIENT_MAX; i++)
+        if (!windows[pid - 1][i].used) slot = i;
     if (slot < 0) {
         klog_write("win_server: create refused -- client already holds WIN_CLIENT_MAX windows\n");
         return 0;
     }
 
     struct client_window *cw = &windows[pid - 1][slot];
-    uint64_t vaddr = win_buffer_vaddr((uint32_t)slot);
-    uint32_t bytes = (uint32_t)w * (uint32_t)h * 4;
-    uint32_t pages = (bytes + 4095) / 4096;
-
-    // THE CLIENT ALREADY MADE THESE, and mapped them where its own mmap
-    // put them. The kernel adopts the objects -- it allocates nothing,
-    // and maps nothing into the client, which is what stage 5 is: a
-    // window's pixels are its client's memory.
-    //
-    // Buffer 1 missing is a working window, not an error: it is
-    // single-buffered and tears the way every window did before double
-    // buffering, which is strictly better than refusing to open.
-    int shm0 = adopt_buf(pid, slot, 0, pages);
-    if (shm0 < 0) {
-        klog_write("win_server: create refused -- no buffer object from the client\n");
-        return 0;
-    }
-    int shm1 = adopt_buf(pid, slot, 1, pages);
-
+    k_memset(cw, 0, sizeof *cw);
     cw->used = 1;
     cw->pid = pid;
     cw->id = (uint32_t)slot;
-    cw->pml4 = pml4;
-    cw->bufs[0].shm = shm0;
-    cw->bufs[0].pages = pages;
-    cw->bufs[0].w = w;
-    cw->bufs[0].h = h;
-    cw->bufs[1].shm = shm1;
-    cw->bufs[1].pages = shm1 >= 0 ? pages : 0;
-    cw->bufs[1].w = shm1 >= 0 ? w : 0;
-    cw->bufs[1].h = shm1 >= 0 ? h : 0;
-    cw->front = 0;
-    cw->vaddr = vaddr;
+    // BOTH BUFFERS ARE ASSUMED PRESENT at the created size. The client
+    // makes them before it asks, and a window whose second one could not
+    // be made says so with WIN_REQ_BUFFER; the kernel cannot look,
+    // because looking would mean holding the object.
+    for (int b = 0; b < WIN_BUFS; b++) { cw->bufs[b].w = w; cw->bufs[b].h = h; }
     cw->w = w;
     cw->h = h;
-    cw->comp_mapped = 0;
 
-    // The presentation layer gets the last word: if it has no room in
-    // its window list, the whole create fails and the memory goes back
-    // rather than leaving a buffer nothing will ever draw.
     // Everything the kernel was handed and used to forward without
     // keeping. The compositor reads it back with WIN_REQ_WINDOW_APPID.
     k_strlcpy(cw->app_id, app_id ? app_id : "", sizeof cw->app_id);
@@ -719,20 +314,6 @@ static int create_window(int pid, uint64_t pml4, int want_slot,
 
     if (g_ops && g_ops->window_created) {
         if (!g_ops->window_created(pid, cw->id, w, h, x, y, app_id)) {
-            // Not destroy_window() -- that would call window_destroyed()
-            // for a window the presentation layer just refused and never
-            // recorded. BOTH buffers, unmapped before released: the
-            // second one's pages are live PTEs into frames shm_put() is
-            // about to hand back.
-            for (int b = 0; b < COMP_BUFS; b++) {
-                if (!cw->bufs[b].pages) continue;
-                uint64_t base = vaddr + (uint64_t)b * WIN_BUFFER_HALF;
-                for (uint32_t i = 0; i < cw->bufs[b].pages; i++)
-                    vmm_unmap_user_page(pml4, base + (uint64_t)i * 4096);
-                shm_put(cw->bufs[b].shm);
-                cw->bufs[b].shm = -1;
-                cw->bufs[b].pages = 0;
-            }
             cw->used = 0;
             klog_write("win_server: create refused -- no room in the window list\n");
             return 0;
@@ -861,52 +442,24 @@ static int map_font(int pid, struct win_request_msg *req) {
     return 1;
 }
 
-// Rebuild ONE of a window's buffers at a new size, at the same virtual
-// address it already has -- win_buffer_vaddr() derives that from the
-// window id plus the buffer index, so the client's pointer never moves
-// and it is never told its pixels went anywhere.
+// Records that the client replaced ONE of its buffers. The object is
+// the client's -- it unlinked the old one and created a new one under
+// the same name, and the old one stays alive under whatever still maps
+// it, which is the promise shm_unlink already makes. All the kernel
+// does is bump the GENERATION, which is what tells the compositor on
+// the next present to re-open the name.
 //
-// Ordering is chosen so a FAILURE leaves the buffer exactly as it was:
-// the new frames are allocated and zeroed BEFORE anything is unmapped,
-// and a half-built mapping puts the original frames back (they are
-// still allocated -- nothing has freed them yet). A refusal is a normal
-// outcome of this call, not an error path -- see abi/win_proto.h.
-//
-// The COMPOSITOR's view is deliberately NOT touched here: the caller
-// remaps the whole slot once, because poisoning the front buffer to
-// rebuild the back one is exactly the black frame this file is shaped
-// to avoid.
+// **UNCONDITIONALLY, because the SIZE IS NOT A PROXY for the object.**
+// A client re-created at the size it already had is a new object under
+// the same name, and skipping the bump there would leave the compositor
+// mapping memory nobody draws into any more -- a window frozen on its
+// last frame. It is reachable: a drag proposing the size a window
+// already has, or a restored geometry that matches, both send this.
 static int rebuild_buffer(struct client_window *cw, int b, int w, int h) {
     struct win_buf *wb = &cw->bufs[b];
-    uint32_t bytes = (uint32_t)w * (uint32_t)h * 4;
-    uint32_t pages = (bytes + 4095) / 4096;
-
-    // **THE CLIENT REPLACED THE OBJECT BEFORE ASKING.** A buffer is its
-    // own object now (docs/winserver-ring3-design.md's stage 5): the
-    // client unlinks the old one and creates a new one under the SAME
-    // name, so this re-adopts by name and gets the new memory. The old
-    // object stays alive under whatever still maps it -- the
-    // compositor, until it re-maps -- which is the promise shm_unlink
-    // already makes and is why nothing has to be handed over.
-    int shm_new = adopt_buf(cw->pid, (int)cw->id, b, pages);
-    if (shm_new < 0) {
-        klog_write("win_server: buffer rebuild refused -- no new object from the client\n");
-        return 0;
-    }
-    if (shm_new == wb->shm) {
-        // The SAME object: the client asked for a size it already fits,
-        // so there is nothing to swap. Drop the reference just taken.
-        shm_put(shm_new);
-        wb->w = w;
-        wb->h = h;
-        return 1;
-    }
-
-    if (wb->pages) shm_put(wb->shm);   // the window's reference on the old
-    wb->shm = shm_new;
-    wb->pages = pages;
     wb->w = w;
     wb->h = h;
+    wb->gen++;
     return 1;
 }
 
@@ -935,22 +488,12 @@ static int resize_window(struct client_window *cw, int w, int h, int want_buf) {
     // answer separately, and they disagree the moment a present lands
     // between the client's replace and this request. The result was a
     // resize that worked once and then silently stopped.
-    int back = cw->bufs[1].pages ? (cw->front ^ 1) : cw->front;
-    if (want_buf >= 0 && want_buf < COMP_BUFS) back = want_buf;
+    int back = cw->bufs[1].w ? (cw->front ^ 1) : cw->front;
+    if (want_buf >= 0 && want_buf < WIN_BUFS) back = want_buf;
     if (!rebuild_buffer(cw, back, w, h)) return 0;
 
     cw->w = w;
     cw->h = h;
-
-    // The compositor's mapping still describes the old frames of the
-    // buffer that just changed. Revoke and rebuild the whole slot --
-    // both halves, because comp_map() is the only thing that knows how
-    // to poison a shrunken tail. This runs inside the client's syscall,
-    // so the compositor cannot composite between the two.
-    if (cw->comp_mapped) {
-        comp_poison(cw);  // never a hole while the window lives
-        comp_map(cw);
-    }
 
     tell_compositor(WIN_EV_CLIENT_RESIZED, cw->pid, cw->id, w, (uint32_t)h);
     if (g_ops && g_ops->window_resized) {
@@ -969,7 +512,7 @@ static int win_q_count(void) {
     int n = 0;
     for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++)
         for (int i = 0; i < WIN_CLIENT_MAX; i++)
-            if (windows[p][i].used || windows[p][i].comp_retired) n++;
+            if (windows[p][i].used) n++;
     return n;
 }
 
@@ -978,7 +521,7 @@ static int win_q_fill(int index, void *out) {
     for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++) {
         for (int i = 0; i < WIN_CLIENT_MAX; i++) {
             struct client_window *cw = &windows[p][i];
-            if (!cw->used && !cw->comp_retired) continue;
+            if (!cw->used) continue;
             if (n++ != index) continue;
             struct query_window *r = out;
             k_memset(r, 0, sizeof *r);
@@ -987,14 +530,11 @@ static int win_q_fill(int index, void *out) {
             r->w = cw->w;
             r->h = cw->h;
             r->front = (uint32_t)cw->front;
-            for (int b = 0; b < COMP_BUFS && b < 2; b++) {
+            for (int b = 0; b < WIN_BUFS && b < 2; b++) {
                 r->buf_w[b] = cw->bufs[b].w;
                 r->buf_h[b] = cw->bufs[b].h;
-                r->buf_pages[b] = cw->bufs[b].pages;
-                r->buf_shm[b] = cw->bufs[b].pages ? cw->bufs[b].shm : -1;
+                r->buf_gen[b] = cw->bufs[b].gen;
             }
-            r->comp_mapped = (uint32_t)cw->comp_mapped;
-            r->comp_retired = (uint32_t)cw->comp_retired;
             return 1;
         }
     }
@@ -1546,12 +1086,10 @@ int win_server_request(int pid, struct win_request_msg *req) {
         // window that never opens.
         char app_id[WIN_APP_ID_LEN];
         copy_text(app_id, req->text, WIN_APP_ID_LEN);
-        // vmm_current_pml4() IS the calling client's address space: a
-        // syscall does not switch CR3 on entry (see vmm.h).
         // `window` is an OUTPUT on this request and free as an input,
-        // which is what carries the slot the client picked -- see
-        // win_buf_name() on why the kernel cannot choose a different one.
-        if (!create_window(pid, vmm_current_pml4(), (int)req->window,
+        // which is what carries the slot the client picked -- its
+        // buffers are already named after it (abi/win_proto.h).
+        if (!create_window(pid, (int)req->window,
                            req->a, req->b, req->c, req->d, app_id, &id))
             return 0;
         req->window = id;
@@ -1577,13 +1115,16 @@ int win_server_request(int pid, struct win_request_msg *req) {
         // would have to grow is one only the client can replace. The
         // client replaces it before drawing and says so with
         // WIN_REQ_BUFFER, which is what re-adopts it here.
-        if (cw->bufs[1].pages) cw->front ^= 1;
+        if (cw->bufs[1].w) cw->front ^= 1;
         // THE SIZE TRAVELS WITH THE FRAME. `mods` carries the front
         // buffer's own dimensions so the compositor adopts the geometry
         // of the pixels it is about to show, never a size it was
         // promised earlier -- see WIN_EV_CLIENT_PRESENT.
+        // `b` CARRIES THE GENERATION TOO: the buffer's name is stable
+        // and the object under it is not, so this is how a compositor
+        // holding the previous one learns to re-open the name.
         tell_compositor(WIN_EV_CLIENT_PRESENT, pid, cw->id,
-                        (uint32_t)cw->front,
+                        WIN_PRESENT_B(cw->front, cw->bufs[cw->front].gen),
                         WIN_PRESENT_SIZE(cw->bufs[cw->front].w,
                                          cw->bufs[cw->front].h));
         if (g_ops && g_ops->window_present) g_ops->window_present(pid, cw->id);
@@ -1680,34 +1221,19 @@ int win_server_request(int pid, struct win_request_msg *req) {
         req->c = g_comp_pid;
         return 0;
     }
-    case WIN_REQ_MAP_WINDOW: {
-        if (!g_comp_pid || pid != g_comp_pid) return -1;
-        uint64_t vaddr = 0;
-        // The access control lives inside that call rather than here: it
-        // checks the requester IS the compositor and that the window
-        // really belongs to the pid named. See win_server.h.
-        if (!win_server_map_to_compositor(pid, req->a, req->window, &vaddr)) return -1;
-        return 0;
-    }
     case WIN_REQ_BUFFER: {
         struct client_window *cw = lookup(pid, req->window);
         if (!cw) return 0;
         int b = req->a;
-        if (b < 0 || b >= COMP_BUFS) return 0;
+        if (b < 0 || b >= WIN_BUFS) return 0;
         if (req->b <= 0 || req->c <= 0) return 0;
         if (req->b > WIN_CLIENT_MAX_W || req->c > WIN_CLIENT_MAX_H) return 0;
         if (!rebuild_buffer(cw, b, req->b, req->c)) return 0;
-        // The compositor's view of this slot describes the OLD object.
-        // Revoke and rebuild it, exactly as a resize does.
-        if (cw->comp_mapped) { comp_poison(cw); comp_map(cw); }
         return 1;
     }
-    case WIN_REQ_UNMAP_WINDOW: {
-        if (!g_comp_pid || pid != g_comp_pid) return -1;
-        if (!win_server_unmap_from_compositor(pid, (int)req->a, req->window))
-            return -1;
-        return 0;
-    }
+    // WIN_REQ_MAP_WINDOW AND _UNMAP_WINDOW ARE RETIRED. The compositor
+    // opens a client's buffer by NAME and maps it itself, so there is
+    // nothing to ask for and no kernel-held mapping to release.
     // WIN_REQ_WINDOW_INFO IS RETIRED. It answered a window's geometry,
     // and its last caller was the compositor asking for a size the
     // WIN_EV_CLIENT_CREATED event had just carried to it -- a round trip
@@ -1876,26 +1402,10 @@ static void compositor_gone(void) {
 int win_server_set_compositor(int pid, uint64_t pml4) {
     if (pid < 0 || pid > WIN_SERVER_MAX_PIDS) return 0;
 
-    // Changing or clearing the compositor drops every mapping the old
-    // one held. Skipping this would leave bookkeeping claiming a
-    // mapping exists in an address space nobody composites from -- and
-    // if that pml4 is later destroyed and its frames reused, a stale
-    // `comp_mapped` makes the next unmap walk whatever now lives there.
+    // NO MAPPINGS TO DROP: a compositor's view of a window is its own
+    // mmap of the client's object, and it goes when that process's
+    // address space does.
     if (g_comp_pid && g_comp_pml4) {
-        for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++) {
-            for (int i = 0; i < WIN_CLIENT_MAX; i++) {
-                // comp_clear() takes real frames AND poison in one
-                // pass, which is what this needs: a shrunk window's slot
-                // holds both. Both live in the OLD compositor's address
-                // space, and the record of them must not outlive it. A
-                // RETIRED slot goes through the release path instead, so
-                // the frames its mapping was keeping alive are freed
-                // rather than stranded -- there is no reader left.
-                struct client_window *c = &windows[p][i];
-                if (c->comp_retired) comp_release_retired(c);
-                else comp_clear(c);
-            }
-        }
         // The framebuffer grant goes the same way and for the same
         // reason: it belongs to the ROLE, not to the process. This is
         // the one place the role is cleared -- deregistration, a kill
@@ -1938,122 +1448,18 @@ int win_server_set_compositor(int pid, uint64_t pml4) {
     return 1;
 }
 
-int win_server_map_to_compositor(int requester_pid, int owner_pid, uint32_t id,
-                                  uint64_t *out_vaddr) {
-    // The access control, in one place: only the registered compositor,
-    // and only for a window that really exists and really belongs to
-    // the pid named. A window buffer is a client's private memory.
-    if (!g_comp_pid || requester_pid != g_comp_pid) return 0;
-    if (owner_pid < 1 || owner_pid > WIN_COMPOSITOR_MAX_PIDS) return 0;
+// --- stand-ins for a client, for the KTESTs ---------------------------
+//
+// A window's pixels are its client's objects, and these entry points
+// have no client. They no longer have to make any: the kernel neither
+// maps nor holds a buffer, so a window is exactly its size and its
+// generation, and a fixture supplying those is supplying everything.
 
-    struct client_window *cw = lookup(owner_pid, id);
-    if (!cw) return 0;
-
-    if (!cw->comp_mapped && !comp_map(cw)) return 0;
-    if (out_vaddr) *out_vaddr = win_compositor_vaddr(owner_pid, id);
-    return 1;
-}
-
-int win_server_unmap_from_compositor(int requester_pid, int owner_pid, uint32_t id) {
-    if (!g_comp_pid || requester_pid != g_comp_pid) return 0;
-    if (owner_pid < 1 || owner_pid > WIN_SERVER_MAX_PIDS) return 0;
-    if (id >= WIN_CLIENT_MAX) return 0;
-    // NOT lookup(), which hides a slot whose window is gone -- and a
-    // retired slot is the whole reason this exists.
-    struct client_window *cw = &windows[owner_pid - 1][id];
-    if (!cw->comp_mapped) return 0;
-    if (cw->comp_retired) comp_release_retired(cw);
-    else comp_unmap(cw);
-    return 1;
-}
-
-int win_server_is_mapped_to_compositor(int owner_pid, uint32_t id) {
-    struct client_window *cw = lookup(owner_pid, id);
-    return cw && cw->comp_mapped;
-}
-
-// Maps a stand-in client's buffer where a real client's mmap would have
-// put it -- win_buffer_vaddr(slot), the address the KTESTs read and
-// write through. Only the raw entry points use it: a real client maps
-// its own memory and the kernel never touches its address space.
-static void fixture_map_buf(uint64_t pml4, int slot, int b, int idx,
-                            uint32_t pages) {
-    if (idx < 0) return;
-    uint64_t base = win_buffer_vaddr((uint32_t)slot) + (uint64_t)b * WIN_BUFFER_HALF;
-    for (uint32_t i = 0; i < pages; i++)
-        vmm_map_user_borrowed(pml4, base + (uint64_t)i * 4096,
-                              shm_frame(idx, i), 1, 0, VMM_MT_NORMAL);
-}
-
-int win_server_create_raw(int pid, uint64_t pml4, int w, int h, uint32_t *out_id) {
+int win_server_create_raw(int pid, int w, int h, uint32_t *out_id) {
     uint32_t id = 0;
-
-    // **THIS STANDS IN FOR A CLIENT.** A window's pixels are its
-    // client's objects now, and this entry point has no client -- it is
-    // what win_server_test.c's fixture builds windows for pids that do
-    // not exist with. So it makes the objects a client would have made,
-    // under the names the kernel will look for, and then takes the SAME
-    // path a real request does. Not a second creation path: the
-    // adoption below is the only one.
-    uint32_t bytes = (uint32_t)w * (uint32_t)h * 4;
-    uint32_t pages = (bytes + 4095) / 4096;
-    // The same search create_window() does, because the slot has to be
-    // known BEFORE the objects can be named after it. A RETIRED slot is
-    // eligible: create_window() reclaims one when nothing else is free,
-    // and refusing here would make that path unreachable from the KTEST
-    // that covers it.
-    int slot = -1;
-    for (int i = 0; i < WIN_CLIENT_MAX; i++) {
-        struct client_window *c = &windows[pid - 1][i];
-        if (!c->used && !c->comp_retired) { slot = i; break; }
-    }
-    for (int i = 0; slot < 0 && i < WIN_CLIENT_MAX; i++) {
-        struct client_window *c = &windows[pid - 1][i];
-        if (!c->used && c->comp_retired) slot = i;
-    }
-    if (slot < 0) return 0;
-
-    // **RECLAIMED BEFORE THE NEW OBJECTS EXIST, and the order is the
-    // point.** Reclaiming drops the compositor's reference to the OLD
-    // objects; creating first can hand the new ones the very slots the
-    // old ones are about to vacate, so the release lands on the new
-    // object instead. Same hazard as any create-then-free pair over a
-    // recycled index.
-    {
-        struct client_window *c = &windows[pid - 1][slot];
-        if (c->comp_retired) {
-            comp_poison(c);
-            for (int b = 0; b < COMP_BUFS; b++) {
-                c->bufs[b].shm = -1;
-                c->bufs[b].pages = 0;
-            }
-            c->comp_retired = 0;
-        }
-    }
-
-    int made[COMP_BUFS];
-    for (int b = 0; b < COMP_BUFS; b++) {
-        char nm[SHM_NAME_MAX];
-        win_buf_name(nm, sizeof nm, pid, slot, b);
-        // A RECLAIMED slot still carries the previous window's names,
-        // so clear them first -- the client's own buf_make() does the
-        // same, and for the same reason: a create under a live name is
-        // refused, not silently reused.
-        shm_unlink_named(nm);
-        made[b] = shm_create_named(nm, pages, pid);
-        fixture_map_buf(pml4, slot, b, made[b], pages);
-    }
     // No app id: a test window that claimed one could be raised by a
     // real app asking for its twin.
-    if (!create_window(pid, pml4, slot, w, h, 0, 0, "", &id)) {
-        for (int b = 0; b < COMP_BUFS; b++)
-            if (made[b] >= 0) shm_put(made[b]);
-        return 0;
-    }
-    // The creator's reference goes: the window holds its own, exactly
-    // as a real client's would once the client dropped its descriptor.
-    for (int b = 0; b < COMP_BUFS; b++)
-        if (made[b] >= 0) shm_put(made[b]);
+    if (!create_window(pid, -1, w, h, 0, 0, "", &id)) return 0;
     if (out_id) *out_id = id;
     return 1;
 }
@@ -2069,31 +1475,23 @@ int win_server_destroy_raw(int pid, uint32_t id) {
 // resize touched. 0 for a buffer this window does not have.
 int win_server_buf_size(int pid, uint32_t id, int buf) {
     struct client_window *cw = lookup(pid, id);
-    if (!cw || buf < 0 || buf >= COMP_BUFS) return 0;
+    if (!cw || buf < 0 || buf >= WIN_BUFS) return 0;
     return cw->bufs[buf].w * cw->bufs[buf].h;
+}
+
+// Which OBJECT a buffer is on, as a present would report it.
+uint32_t win_server_buf_gen(int pid, uint32_t id, int buf) {
+    struct client_window *cw = lookup(pid, id);
+    if (!cw || buf < 0 || buf >= WIN_BUFS) return 0;
+    return cw->bufs[buf].gen;
 }
 
 int win_server_resize_raw(int pid, uint32_t id, int w, int h) {
     struct client_window *cw = lookup(pid, id);
     if (!cw) return 0;
-    // **STANDS IN FOR A CLIENT, as win_server_create_raw() does.** A
-    // buffer is the client's object and a resize REPLACES it; this entry
-    // point has no client, so it makes the replacement itself under the
-    // name the adopt will look for. Without it the adopt finds the old,
-    // too-small object and the resize is refused.
-    int back = cw->bufs[1].pages ? (cw->front ^ 1) : cw->front;
-    uint32_t pages = ((uint32_t)w * (uint32_t)h * 4 + 4095) / 4096;
-    char nm[SHM_NAME_MAX];
-    win_buf_name(nm, sizeof nm, cw->pid, (int)cw->id, back);
-    shm_unlink_named(nm);
-    int made = shm_create_named(nm, pages, cw->pid);
-    if (made < 0) return 0;
-    // Remapped at the new size, over whatever the old object left --
-    // the client's mmap would have done exactly this.
-    fixture_map_buf(cw->pml4, (int)cw->id, back, made, pages);
-    int ok = resize_window(cw, w, h, back);
-    shm_put(made);   // the creator's reference; the window holds its own
-    return ok;
+    // -1: let the server pick the back buffer, as a client with nothing
+    // in flight would.
+    return resize_window(cw, w, h, -1);
 }
 
 int win_server_window_count(int pid) {

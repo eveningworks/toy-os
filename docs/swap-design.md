@@ -124,9 +124,8 @@ disqualifies it:
 | borrowed mapping | why it must never be evicted |
 |---|---|
 | the sound PCM ring (`kernel/drivers/sound/sound.c`) | a live DMA target, and DMA32-contiguous |
-| window buffers (`kernel/proc/win_server.c`) | `pmm_alloc_contiguous()` runs — a per-page evictor cannot free one page out of a run |
+| window buffers | shm objects the CLIENT owns, mapped in two processes |
 | the shared font (`win_server.c`) | pages of the kernel image |
-| the compositor's poison page (`win_server.c`'s `poison_frame()`) | many PTEs, one frame |
 | shm frames, the `/lib` image cache (`kernel/mm/mmap.c`) | shared between processes |
 
 That alignment is not a coincidence to lean on quietly — it is the

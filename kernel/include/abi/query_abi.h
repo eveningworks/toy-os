@@ -469,10 +469,10 @@ struct query_window {
     uint32_t front;        // which buffer the compositor is told to read
     int32_t  buf_w[2];     // each buffer's OWN size -- they differ while
     int32_t  buf_h[2];     // a resize is in flight, which is the point
-    uint32_t buf_pages[2]; // 0 for a buffer this window does not have
-    int32_t  buf_shm[2];   // the shm object behind it, -1 for none
-    uint32_t comp_mapped;  // is it mapped into the compositor right now
-    uint32_t comp_retired; // the window is gone, the mapping is not
+    uint32_t buf_gen[2];   // which OBJECT is behind the buffer's name:
+                            // goes up each time the client replaces it,
+                            // and a present carries it so a compositor
+                            // knows to re-open (abi/win_proto.h)
     uint32_t reserved;
 };
 

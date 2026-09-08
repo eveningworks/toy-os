@@ -58,21 +58,10 @@ struct ugfx_surface {
     int dirty_x0, dirty_y0, dirty_x1, dirty_y1;
 };
 
-// Wraps a window's buffer as a drawable surface. `window` is the id
-// WIN_REQ_CREATE handed back. Clip inactive, damage empty.
 // A surface over memory the CALLER owns -- a client's own window buffer,
-// allocated by it and mapped where its mmap put it.
+// allocated by it and mapped where its mmap put it. Clip inactive,
+// damage empty.
 struct ugfx_surface ugfx_surface_for_pixels(void *pixels, int w, int h);
-
-struct ugfx_surface ugfx_surface_for_window(uint32_t window, int w, int h);
-
-// The same, for a window whose FRONT buffer is not 0 -- i.e. after a
-// present. A client draws into the back one; passing the front index
-// keeps that arithmetic in one place (win_buffer_back_offset()) rather
-// than in every caller.
-struct ugfx_surface ugfx_surface_for_window_buf(uint32_t window, int w, int h,
-                                                 int front);
-
 // --- clipping ---------------------------------------------------------
 //
 // Restricts what subsequent drawing MAY touch. The same contract as the

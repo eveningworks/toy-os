@@ -15,11 +15,11 @@
 #include "lib/uclip.h"   // clip_poll() -- the clipboard is shared memory now
 
 // THE CLIENT'S OWN WINDOW MEMORY. A buffer is a named shm object this
-// process creates, so the pixels are ITS memory rather than something
-// the kernel allocated and handed back at an address derived from a
-// window id. The NAME identifies the slot; the OBJECT in it is replaced
-// on a resize, which is what lets the compositor go on reading the old
-// one until it re-maps (docs/winserver-ring3-design.md, stage 5).
+// process creates and GRANTS to the compositor, which opens the name
+// itself -- the kernel neither allocates it nor maps it. The name
+// identifies the slot; the object in it is replaced on a resize, and
+// the old one stays alive under whoever still maps it until they let go
+// (docs/winserver-ring3-design.md, stage 5).
 #define UAPP_BUFS 2
 
 static void *g_px[UAPP_BUFS];
@@ -27,7 +27,19 @@ static uint64_t g_px_bytes[UAPP_BUFS];
 static int g_slot;
 
 static void buf_name(char *out, unsigned cap, int slot, int buf) {
-    snprintf(out, cap, "win.%d.%d.%d", sys_getpid(), slot, buf);
+    snprintf(out, cap, WIN_BUF_NAME_FMT, sys_getpid(), slot, buf);
+}
+
+// Lets the compositor open this object. **PER OBJECT, NOT PER NAME**: a
+// grant lives on the object, and a resize creates a NEW one under the
+// same name with an empty grant list -- so this belongs beside every
+// create, not once at startup. Without it the first resize is the last
+// frame the compositor ever sees of the window.
+static int comp_pid(void);
+
+static void buf_grant(const char *nm) {
+    int pid = comp_pid();
+    if (pid > 0) sys_shm_grant(nm, pid);
 }
 
 // Creates (or REPLACES) one buffer at `bytes`. A replace unlinks the old
@@ -43,7 +55,7 @@ static int buf_make(int slot, int buf, uint64_t bytes) {
     // Twelve objects after three drags, and then the biggest allocation
     // in the run is the one that fails.
     bytes = (bytes + 4095) & ~4095ULL;
-    char nm[32];
+    char nm[WIN_BUF_NAME_MAX];
     buf_name(nm, sizeof nm, slot, buf);
     if (g_px[buf]) {
         sys_munmap(g_px[buf], g_px_bytes[buf]);
@@ -52,6 +64,7 @@ static int buf_make(int slot, int buf, uint64_t bytes) {
     sys_shm_unlink(nm);
     int fd = sys_shm_open(nm, bytes, SHM_CREATE | SHM_EXCL);
     if (fd < 0) return 0;
+    buf_grant(nm);
     void *p = sys_mmap(0, bytes, SYS_PROT_READ | SYS_PROT_WRITE,
                        SYS_MAP_SHARED, fd, 0);
     sys_close(fd);
@@ -102,7 +115,7 @@ static int buf_ensure(uint32_t window, int buf, int w, int h) {
 static void bufs_release(void) {
     for (int b = 0; b < UAPP_BUFS; b++) {
         if (!g_px[b]) continue;
-        char nm[32];
+        char nm[WIN_BUF_NAME_MAX];
         buf_name(nm, sizeof nm, g_slot, b);
         sys_munmap(g_px[b], g_px_bytes[b]);
         sys_shm_unlink(nm);
@@ -477,11 +490,8 @@ int uapp_resize(struct uapp *a, int w, int h) {
     if (req_send(&req) != 1) return 0;
 
     // The server hands back what it actually granted rather than what
-    // was asked for, and the buffer is at the same virtual address as
-    // before -- win_buffer_vaddr() derives it from the window id, so
-    // the pointer never moves. Rebuilding the surface is only about the
-    // new width being the new row stride.
-    //
+    // was asked for. The surface is rebuilt because buf_make() mapped a
+    // NEW object, at a new address and a new row stride.    //
     // STILL THE BACK BUFFER FOR THE CURRENT FRONT: only that one was
     // rebuilt at the new size, and the front is still showing the last
     // frame at the old one (abi/win_proto.h's configure/ack).
@@ -502,6 +512,14 @@ static int wmchan(void) {
     if (g_wmchan_state) return g_wmchan_state > 0;
     g_wmchan_state = uchan_client_open(&g_wmchan, WMCHAN_SERVICE) == 0 ? 1 : -1;
     return g_wmchan_state > 0;
+}
+
+// WHO TO GRANT A WINDOW BUFFER TO. The beacon this channel is already
+// opened through carries the server's pid, so a client needs no new way
+// to learn it -- and a compositor with no beacon is one that could not
+// be sent a title either.
+static int comp_pid(void) {
+    return wmchan() ? g_wmchan.beacon->server_pid : 0;
 }
 
 // Sends one request over the channel. Returns 1 if it went, 0 if the
@@ -940,11 +958,20 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     else if (desc->layout) uui_layout_natural_size(desc->layout, &a->w, &a->h);
     if (a->w <= 0 || a->h <= 0) return 0;
 
+    // **NO COMPOSITOR CHANNEL, NO WINDOW.** The pixels are this
+    // process's own memory and the compositor gets at them only because
+    // this grants it -- so without the beacon that names it, a window
+    // would open, draw, present and never appear. Refusing here is the
+    // loud version of that, and it is what stage 6 does anyway: no
+    // compositor, no window.
+    if (comp_pid() <= 0) return 0;
+
     struct win_request_msg req;
     req_clear(&req);
     // THE CLIENT ALLOCATES, AND PROPOSES ITS OWN SLOT. `window` is an
     // output on CREATE and free as an input, which is what lets the
-    // buffers be NAMED before the kernel has answered.
+    // buffers be NAMED, granted and mapped before the kernel has
+    // answered.
     if (!bufs_create(0, a->w, a->h)) return 0;
 
     req.type = WIN_REQ_CREATE;
@@ -983,10 +1010,9 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
         // behaviour instead of an app that never ticks.
         a->timer_armed = (req_send(&req) == 1);
     }
-    // THE BACK BUFFER, which with front 0 is buffer 1 -- the same thing
-    // win_buffer_back_offset(0) returned. Starting on buffer 0 paints
-    // into the half the compositor is not showing, which reads as a
-    // window that opens and draws nothing.
+    // THE BACK BUFFER, which with front 0 is buffer 1. Starting on
+    // buffer 0 paints into the one the compositor IS showing, which
+    // reads as a window that opens and draws nothing.
     a->surface = ugfx_surface_for_pixels(g_px[a->front ^ 1], a->w, a->h);
 
     // Now that the content size is settled, place everything in it.

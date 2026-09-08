@@ -303,6 +303,13 @@ static void cmd_windows(struct dbg_out *o, int json) {
             // client's own and a test looking for the suffix in it finds
             // nothing. Report the fact and let the test assert on that.
             dbg_out_printf(o, "\"not_responding\":%s,", w->not_responding ? "true" : "false");
+            // WHICH BUFFER OBJECT THIS PROCESS IS ACTUALLY READING.
+            // `lswin` reports the same pair from the kernel's side, and
+            // the generation is what a compositor that failed to re-open
+            // a replaced buffer would disagree about -- see
+            // docs/commands/lswin.md on reading the two together.
+            dbg_out_printf(o, "\"buf\":{\"front\":%d,\"gen\":%u},",
+                         w->client_front, w->client_gen[w->client_front]);
             dbg_out_printf(o, "\"state\":\"%s\",\"focused\":%s,\"resizable\":%s}",
                          state_name(w->state),
                          (i == window_count - 1) ? "true" : "false",

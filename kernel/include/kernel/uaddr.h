@@ -73,8 +73,10 @@
 // a 1080p back buffer but not that AND the damage-verify scratch copy
 // at the same time (8.3 + 8.3 > 14).
 //
-// It is 0x807FF00000 now, one MiB below WIN_CLIENT_BASE, which the same
-// change moved to 0x8080000000. That leaves ~2038 MiB of heap -- more
+// It is 0x807FF00000 now. That was one MiB below WIN_CLIENT_BASE, the
+// base of a per-window buffer region that no longer exists -- a client
+// mmaps its own pixels (abi/win_proto.h) -- so what is above it now is
+// free until the font mapping at 0x8090000000. That leaves ~2038 MiB of heap -- more
 // than any machine this OS boots on has, which is the point: the limit
 // stops being an arbitrary constant somebody has to keep raising and
 // becomes physical memory. It is affordable only because neither sbrk
@@ -192,13 +194,17 @@
 // --- the mmap arena ---------------------------------------------------
 //
 // Where SYS_MMAP places mappings: its own range, ABOVE everything else
-// a process has -- the image/heap/stack below 0x8080000000, the window
-// regions (abi/win_proto.h) up through WIN_FB_VADDR at 0x8500000000.
+// a process has -- the image/heap/stack below 0x8080000000, the font
+// mapping and the framebuffer grant (abi/win_proto.h) up through
+// WIN_FB_VADDR at 0x8500000000.
 // A separate range rather than holes in the existing map because every
 // region below is either per-process-movable (heap_base, stack_bottom)
-// or DERIVED (the window regions' spans multiply out to gigabytes), and
-// carving between them is how the compositor's back buffer got landed
-// on twice -- see WIN_COMPOSITOR_BASE's comment.
+// or DERIVED, and carving between them is how the compositor's back
+// buffer got landed on twice: the region it collided with had a base
+// that looked isolated and a span of gigabytes, so the END is what the
+// next thing has to clear. Both window regions are gone now (the
+// per-client buffers and the compositor's view of them), which is what
+// makes the map above short again.
 //
 // 32 GiB of address space. A reservation like the heap and stack:
 // pages arrive on touch, so the size costs nothing and bounds only how
@@ -207,7 +213,7 @@
 // samples, mapped BORROWED into whichever process holds the stream
 // open. The VALUE lives in abi/sound_abi.h (the app computes with it,
 // like GUI_FB_VADDR); this alias keeps the address-space map readable
-// in one file. Sits in the gap between the last window region and the
+// in one file. Sits in the gap between the framebuffer grant and the
 // mmap arena.
 #define UADDR_SND_BASE   SND_MAP_VADDR
 

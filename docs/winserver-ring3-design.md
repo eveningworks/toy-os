@@ -15,14 +15,15 @@ the top of this file.
 
 ## What already exists, measured
 
-`kernel/proc/win_*.c`, tests excluded, 2026-09-08:
+`kernel/proc/win_*.c`, tests excluded, re-measured after stage 5b
+(2026-09-08):
 
 | file | lines | what it owns |
 |---|---|---|
-| `win_server.c` | 1912 | window ids, pixel buffers, per-process mappings, ownership, teardown |
-| `win_syscalls.c` | 443 | `SYS_WIN_REQUEST`, the event queue syscalls, and a legacy single-window path |
+| `win_server.c` | 1498 | window ids, buffer sizes and generations, ownership, teardown |
+| `win_syscalls.c` | 282 | `SYS_WIN_REQUEST`, the event queue syscalls, and a legacy single-window path |
 | `win_surface.c` | 195 | the compositor's framebuffer grant |
-| `win_events.c` | 151 | the per-process event queue |
+| `win_events.c` | 156 | the per-process event queue |
 | `win_input.c` | 126 | raw input to whoever holds the compositor role |
 | `win_transport.c` | 59 | the carriage registry |
 
@@ -142,7 +143,13 @@ path poisons, exactly as every close used to -- it is the rare path now
 instead of the common one, and it has a KTEST of its own because an
 unreachable fallback is a guess.
 
-**The trap, found by a test:** the compositor's reference records WHICH
+**ALL OF THIS RETIRED IN 5b**, and the entry is kept for the reasoning
+rather than the mechanism: the compositor maps a client's object itself
+now, so it holds a real reference by mapping rather than a recorded one,
+nothing can be revoked underneath it, and neither the poison page nor a
+retired slot has anything left to protect against.
+
+**The trap, found by a test:** the compositor's reference recorded WHICH
 object it was taken on. A resize replaces the object while the reference
 is still held on the old one, so releasing `bufs[b].shm` puts the NEW
 object and frees it under a live mapping. `comp_ref_shm[]` is that
@@ -284,15 +291,15 @@ a window is, rather than a reader of the kernel's copy.
 scheduler at create time precisely because a client must not be able to
 declare it.
 
-### Stage 5 -- the client allocates its own buffer
+### Stage 5 -- the client allocates its own buffer -- DONE 2026-09-08
 
-`win_buffer_vaddr(id)` derives the client's buffer address from the
-window id, which `docs/decisions/kernel.md` records as deliberate --
-"there is no address to re-negotiate when the transport changes". Once
-the client creates the shm object itself and names it to the compositor,
-the address is whatever `mmap` returned, and `win_compositor_vaddr()`'s
-carved per-pid region goes with it. This is `wl_shm_pool`.
-
+`win_buffer_vaddr(id)` derived the client's buffer address from the
+window id, which `docs/decisions/kernel.md` recorded as deliberate --
+"there is no address to re-negotiate when the transport changes". The
+client creates the shm object itself and names it to the compositor
+now, so the address is whatever `mmap` returned, and both carved
+regions are gone: `WIN_CLIENT_BASE`'s per-window slots and
+`WIN_COMPOSITOR_BASE`'s per-(pid, window) ones. This is `wl_shm_pool`.
 **UNBLOCKED 2026-09-08.** It needed shm objects to have an owner, which
 they now do -- without that, a client naming its pixel buffer would make
 every window world-readable, which is the hole stage 1 avoided by making
@@ -351,12 +358,79 @@ together, and every window on screen goes through them.
   run's biggest allocation -- maximize -- was the one that failed. Found
   by `lswin` showing the shm indices climb where they should be reused.
 
-- **5b -- the kernel stops mapping.** The compositor opens the name
-  itself, and `comp_map`, `comp_span`, `comp_poisoned`, the poison page,
-  `win_compositor_vaddr()` and `WIN_REQ_MAP_WINDOW`/`UNMAP_WINDOW` all
-  retire together.
+- **5b -- the kernel stops mapping. DONE 2026-09-08.** The compositor
+  opens the name itself. `comp_map`, `comp_unmap`, `comp_poison`,
+  `comp_span`, `comp_poisoned`, `comp_ref`, `comp_retired`, the poison
+  page, `win_compositor_vaddr()`, `WIN_REQ_MAP_WINDOW` and
+  `WIN_REQ_UNMAP_WINDOW` are gone -- and so is `adopt_buf()`, which the
+  build found had nothing left to protect. `struct win_buf` is
+  `{ w, h, gen }`; the kernel holds no shm object, no reference and no
+  mapping for a window, and `win_server.c` is ~1900 lines down to ~1500.
 
-#### Resize: this protocol ALREADY HAS buffer identity, implicitly
+  **THE CLIENT GRANTS, which is the decision that shaped it.** A
+  kernel-side grant at create time is safer TODAY -- it cannot be
+  missed, and no beacon is needed -- but stage 6 deletes the hook it
+  would hang on, because the kernel then never sees a window being
+  created. So the grant is `sys_shm_grant()` in the client, with the pid
+  from the `toywm` beacon it already opens, and Toykit REFUSES to create
+  a window when that beacon is absent: without it the window would open,
+  draw, present and never appear. Loud beats invisible, and it is what
+  stage 6 does anyway -- no compositor, no window.
+
+  What was checked before choosing it, and changed the answer: the
+  argument FOR a kernel grant was that it survives a compositor
+  handover. It buys nothing, because TWP has no window-enumeration
+  request -- a compositor only ever learns about windows through
+  `WIN_EV_CLIENT_CREATED`, so a handover with live windows was already
+  unsupported.
+
+  **A GRANT LIVES ON THE OBJECT, NOT ON THE NAME.** A resize unlinks and
+  re-creates under the same name, and the new object's grant list is
+  empty -- so the grant belongs beside every create in `buf_make()`, not
+  once at startup. Missed, the first resize would be the last frame the
+  compositor ever saw of that window.
+
+  **THE GENERATION RIDES THE PRESENT, packed beside the front index in
+  `WIN_EV_CLIENT_PRESENT`'s `b`.** It belongs to that message rather
+  than to a carriage: today the present is a kernel event and after
+  stage 6 it is a channel message, and the field travels with it either
+  way. An invalidation EVENT of its own was rejected for a specific
+  reason -- the event queue is 32 deep and sheds the oldest under a
+  present flood, so a lost one is a compositor blitting a freed object
+  forever, where a stale generation costs one frame.
+
+  **THE SIZE CHECK MOVED TO THE READER, AND MAPPING IT IS THE CHECK.**
+  The kernel used to refuse a window whose object was too small for the
+  size claimed; it cannot now, holding no object. The compositor asks
+  `mmap` for exactly the extent the present claims, and `SYS_MMAP`
+  already refuses a length past an shm object's pages -- so the check
+  sits in the one place that knows both numbers, and a lying client
+  costs its own window a frame.
+
+  **THE SIZE IS NOT A PROXY FOR THE OBJECT**, and the first version of
+  this bumped the generation only when the dimensions changed. A client
+  re-creating a buffer at the size it already had makes a NEW object
+  under the same name, so the compositor would have gone on mapping
+  memory nobody draws into -- a window frozen on its last frame. It is
+  reachable: a drag proposing the size a window already has, or a
+  restored geometry that matches, both send the request. Found in
+  review rather than by a test, which is why there is now a test.
+
+  Two things the build established:
+
+  - **The poison page retired for free, along with `comp_retired`.**
+    Nothing can revoke a mapping the compositor made itself, so the
+    shrink hazard that `comp_span` existed for cannot arise, and a
+    destroyed window's pixels stay readable by reference rather than by
+    the window table holding its slot.
+  - **A FAILING KTEST ASSERT SKIPPED EVERY LATER TEST IN THE FILE.** An
+    assert returns from the test, so the teardown that gives the
+    compositor role back never ran -- and one red test became one red
+    and eight skipped. Found by running the file's own positive
+    control, which is what a positive control is for. `FIX_ASSERT`
+    tears down first.
+
+#### Resize: this protocol ALREADY HAS buffer identity, implicitly#### Resize: this protocol ALREADY HAS buffer identity, implicitly
 
 Designed 2026-09-08, before 5a starts, because it decides the shape.
 
@@ -402,6 +476,15 @@ What is left in ring 0 is what must be: the framebuffer grant
 holds the compositor role (`win_input.c`, evdev's job). `win_server.c`'s
 window table, `win_server_ops` and the dead ring-0 presentation layer go.
 
+After 5b the table holds a size, a front index, a generation and an app
+identity per window, and forwards six events. Two things decide whether
+that can simply move: **`app_identity` is taken from the SCHEDULER**, so
+whatever holds it has to be able to ask the kernel who a process is (a
+`QUERY_` provider would do); and **`WIN_REQ_CREATE` is what allocates a
+slot**, so a client's create has to reach the compositor over the
+channel instead -- at which point the channel is on the critical path
+for a window existing, which 5b already made true by refusing a window
+without one.
 ## Out of scope
 
 - **Moving input.** A compositor reading raw devices itself is what
@@ -413,7 +496,7 @@ window table, `win_server_ops` and the dead ring-0 presentation layer go.
 
 ## Revision history
 
-- 2026-09-08: written. Stages 0 and 1 built the same day. The carriage
+- 2026-09-08: written. Stages 0 through 5b built the same day. The carriage
   and the ordering were settled with the maintainer before any code
   changed; the argument that decided it was that only two of eight TWP
   requests need a reply, which rules out a synchronous carriage for the

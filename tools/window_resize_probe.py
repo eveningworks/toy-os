@@ -73,7 +73,7 @@ def main():
     main.prev_asked = dbg.state().get("resizes_asked", 0)
 
     print(f"{'drag':>4}  {'asked':>11}  {'compositor':>11}  {'kernel':>11}  "
-          f"{'lag':>5} {'paint':>7} {'props':>5}  buffers")
+          f"{'comp buf':>9}  {'lag':>5} {'paint':>7} {'props':>5}  kernel buffers")
     for n in range(args.drags + 1):
         if n:
             win = dbg.window(args.title)
@@ -99,6 +99,13 @@ def main():
 
         w = dbg.window(args.title)
         comp = f'{w["content"]["w"]}x{w["content"]["h"]}' if w else "gone"
+        # WHICH OBJECT EACH SIDE IS ON. A window's buffer is a named shm
+        # object whose contents are replaced on every resize, and the
+        # GENERATION is which replacement -- so the compositor sitting a
+        # generation behind the kernel is a re-open that did not happen,
+        # which the sizes alone need not show.
+        cbuf = w.get("buf") if w else None
+        comp_gen = f'b{cbuf["front"]} g{cbuf["gen"]}' if cbuf else "?"
         # MATCHED BY PID, never "the first row". Two windows with the
         # same title -- a previous run's client still open -- would
         # otherwise compare one window's compositor view against
@@ -143,7 +150,7 @@ def main():
         asked = "-" if not n else f"+{args.dx},+{args.dy}"
         flag = "" if comp == kern else "   <-- DISAGREE"
         print(f"{n:>4}  {asked:>11}  {comp:>11}  {kern:>11}  "
-              f"{lag:>5} {paint:>7} {props:>5}  {bufs}{flag}")
+              f"{comp_gen:>9}  {lag:>5} {paint:>7} {props:>5}  {bufs}{flag}")
 
     return 0
 

@@ -241,17 +241,34 @@
 // win_server_ops calls were skipped when nothing had registered.
 #define WIN_EV_CLIENT_CREATED   15 // a: pid. A window exists; read it.
 #define WIN_EV_CLIENT_PRESENT   16 // a: pid, b: the FRONT buffer index
-                                    // (0 or 1), mods: that buffer's own
-                                    // WIDTH and HEIGHT, packed by
-                                    // WIN_PRESENT_SIZE(). Its buffer has
-                                    // new pixels, and `b` says which of
-                                    // the two to read -- see
-                                    // WIN_BUFFER_HALF. A compositor
+                                    // and that buffer's GENERATION,
+                                    // packed by WIN_PRESENT_B(); mods:
+                                    // that buffer's own WIDTH and
+                                    // HEIGHT, packed by
+                                    // WIN_PRESENT_SIZE(). A compositor
                                     // remembers this per window,
                                     // because it also repaints for its
                                     // own reasons (the clock, another
                                     // window) when no present has
                                     // arrived.
+                                    //
+                                    // **THE GENERATION NAMES THE
+                                    // MEMORY.** The buffer's NAME
+                                    // identifies the slot and never
+                                    // changes; the object in it is
+                                    // replaced on a resize, and the
+                                    // generation goes up when it is. A
+                                    // compositor holding a different one
+                                    // re-opens the name; the object it
+                                    // was reading stays alive under its
+                                    // own mapping until it lets go,
+                                    // which is wl_buffer.release. It
+                                    // rides the present rather than an
+                                    // event of its own because it is
+                                    // STATE: a lost invalidation event
+                                    // would be a compositor reading a
+                                    // freed object forever, where a
+                                    // stale generation costs one frame.
                                     //
                                     // **THE SIZE IS THE FRAME'S, NOT THE
                                     // WINDOW'S.** It is what makes a
@@ -261,20 +278,22 @@
                                     // has to guess whether this frame
                                     // was drawn before or after a
                                     // resize it proposed.
-#define WIN_EV_CLIENT_DESTROYED 17 // a: pid. It is going away. The
-                                    // buffer is ALREADY freed when this
-                                    // arrives -- unlike the ring-0
-                                    // callback, which ran while it was
-                                    // still valid, because there is no
-                                    // way to hold a ring-3 process
-                                    // inside a kernel teardown.
+#define WIN_EV_CLIENT_DESTROYED 17 // a: pid. It is going away. THE
+                                    // PIXELS ARE STILL READABLE: the
+                                    // compositor's own mapping holds a
+                                    // reference to the object, so the
+                                    // frames go when it munmaps, not
+                                    // when the window does
+                                    // (wl_buffer.release).
 #define WIN_EV_CLIENT_TITLE     18 // a: pid. Title changed; re-read it.
 #define WIN_EV_CLIENT_HINTS     19 // a: pid. Hints changed; re-read.
 #define WIN_EV_CLIENT_RESIZED   20 // a: pid, b: new w, mods: new h. The
                                     // client ACCEPTED a proposal: its
-                                    // BACK buffer is now this size and
-                                    // was reallocated, so the compositor
-                                    // must re-map it. **Not the moment
+                                    // BACK buffer is now this size.
+                                    // Nothing to re-map here -- the new
+                                    // object is picked up by the
+                                    // generation on the present that
+                                    // first shows it. **Not the moment
                                     // to adopt the size** -- the front
                                     // buffer still holds the last frame
                                     // at the old one, and that frame is
@@ -407,10 +426,11 @@ struct win_event {
 #define WIN_REQ_CREATE  1 // a: width, b: height, c: x, d: y (screen);
                            // `text`: this window's APP ID, or "" for
                            // none (see WIN_REQ_ACTIVATE).
-                           // On success `window` is filled in with the
-                           // new window's id and the client's buffer is
-                           // mapped at win_buffer_vaddr(id).
-                           //
+                           // `window` IN is the SLOT the client
+                           // picked (0..WIN_CLIENT_MAX-1), whose buffer
+                           // objects it has already created and granted;
+                           // OUT it is the window's id, which is that
+                           // slot. Refused if the slot is taken.                           //
                            // The app id rides CREATE rather than being
                            // a message of its own so that a window can
                            // never exist without it: an id registered a
@@ -424,10 +444,7 @@ struct win_event {
                            //
                            // **RETURNS THE NEW FRONT INDEX** (0 or 1),
                            // or a negative errno. The client draws into
-                           // the other one from here on --
-                           // win_buffer_back_offset() turns that index
-                           // into the offset to draw at. A
-                           // single-buffered window (its second
+                           // the other one from here on. A                           // single-buffered window (its second
                            // allocation failed) always answers 0, so a
                            // client needs no special case for it.
                            //
@@ -435,8 +452,9 @@ struct win_event {
                            // compositor gets round to reading, because
                            // a client must know which buffer is safe to
                            // draw into the moment this returns.
-#define WIN_REQ_DESTROY 3 // `window`: which one. Closes it and unmaps
-                           // the buffer.
+#define WIN_REQ_DESTROY 3 // `window`: which one. Closes it; the
+                           // client's buffer objects are its own to
+                           // unlink.
 #define WIN_REQ_TITLE   4 // `window`: which one; the title comes from
                            // the request's `text` field.
 #define WIN_REQ_HINTS   6 // How this window should BEHAVE. a: WIN_HINT_*
@@ -449,15 +467,16 @@ struct win_event {
                            // window's size or its title. Same principle
                            // as fs_ops.caps and display_driver's
                            // capability bits.
-#define WIN_REQ_RESIZE  7 // a/b: requested content w/h. Reallocates this
-                           // window's buffer and remaps it AT THE SAME
-                           // VIRTUAL ADDRESS, so the client's pointer
-                           // stays valid across the call -- see
-                           // win_buffer_vaddr() below, which derives
-                           // that address from the window id rather
-                           // than returning it. On success a/b come
-                           // back as the size actually granted.
+#define WIN_REQ_RESIZE  7 // a/b: requested content w/h, c: which BUFFER
+                           // the client has already rebuilt at that
+                           // size (-1 for "you choose"). On success a/b
+                           // come back as the size actually granted.
                            //
+                           // The client replaces the object BEFORE
+                           // sending this, and names which one it
+                           // replaced: both sides deriving it from
+                           // `front` disagree the moment a present
+                           // lands in between.                           //
                            // A client resizes ITSELF. The server never
                            // reallocates a buffer underneath a running
                            // client; it asks, with WIN_EV_RESIZE, and
@@ -738,32 +757,12 @@ struct win_event {
                            // the same reason the push is: it is the only
                            // process with any business knowing how far
                            // behind another one is.
-#define WIN_REQ_MAP_WINDOW 20 // Map another process's window buffer into
-                           // the compositor.
-                           //   a      = owning pid (in)
-                           //   window = its window id (in)
-                           // Returns 0; the buffer appears at
-                           // win_compositor_vaddr(pid, id), which the
-                           // caller computes itself -- so there is
-                           // nothing to return but success.
-                           //
-                           // Refused to anyone but the registered
-                           // compositor: a window buffer is a client's
-                           // private memory, and this is the request
-                           // that hands it to somebody else.
-                           //
-                           // The kernel side (win_server_map_to_
-                           // compositor()) landed in stage 1 with only
-                           // KTESTs calling it -- a primitive with no
-                           // protocol path, which by this repo's own
-                           // rule left it UNVALIDATED against real use.
-                           // This is that path.
-                           //
-                           // A RESIZE still revokes the mapping, so a
-                           // compositor re-maps on WIN_EV_CLIENT_RESIZED
-                           // rather than assuming its pointer survived.
-                           // A DESTROY does not -- see
-                           // WIN_REQ_UNMAP_WINDOW.
+// **20 IS RETIRED, NOT FREE.** It was WIN_REQ_MAP_WINDOW: the kernel
+// mapping a client's pixels into the compositor at an address it carved
+// per (pid, window). The compositor opens the buffer's NAME itself now
+// and maps it wherever its own mmap puts it, so there is nothing to ask
+// the kernel for -- and no kernel-held mapping to revoke, which is what
+// retired the poison page with it. Retired 2026-09-08.
 #define WIN_REQ_BUFFER 27  // `window`: which one; a: which BUFFER (0 or
                            // 1); b, c: its new width and height.
                            //
@@ -786,32 +785,11 @@ struct win_event {
                            // frame, and taking it away is the window of
                            // black the configure/ack handshake exists to
                            // avoid.
-#define WIN_REQ_UNMAP_WINDOW 26 // Release a mapping this compositor took
-                           // with WIN_REQ_MAP_WINDOW.
-                           //   a      = owning pid (in)
-                           //   window = its window id (in)
-                           //
-                           // **THE MAPPING IS WHAT KEEPS THE FRAMES
-                           // ALIVE**, so this is not tidying: a window's
-                           // pixels are an shm object, the compositor's
-                           // mapping holds a reference to it, and the
-                           // frames go at the last one. A compositor
-                           // that never sends this leaks a window's
-                           // memory for as long as it runs -- visible
-                           // as a stranded `(anon)` row in `lsshm`.
-                           //
-                           // It exists because a destroyed window's
-                           // buffer used to be freed under a compositor
-                           // that had not yet drained
-                           // WIN_EV_CLIENT_DESTROYED, so its slot was
-                           // remapped to a read-only zero page and read
-                           // as BLACK for a frame. Holding the frames
-                           // until the reader lets go is what
-                           // wl_buffer.release does, and for this
-                           // reason.
-                           //
-                           // Sent after handling WIN_EV_CLIENT_DESTROYED.
-                           // The pixels are still readable until then.
+// **26 IS RETIRED, NOT FREE.** It was WIN_REQ_UNMAP_WINDOW, the release
+// half of the pair above: the compositor's mapping held the frames of a
+// destroyed window alive, so it had to tell the kernel when it was done
+// with them. It munmaps its own mapping now, and the shm object's own
+// reference count does the rest. Retired 2026-09-08.
 // **WIN_REQ_TITLE, _HINTS AND _CURSOR ARE NOT CARRIED BY THE KERNEL.**
 // They travel client -> compositor over a channel
 // (userland/lib/uwmchan.h), keeping their numbers and their meanings --
@@ -1202,85 +1180,34 @@ struct win_request_msg {
     char     text[WIN_TITLE_LEN]; // WIN_REQ_TITLE only; NUL-terminated
 };
 
-// A client's window buffers are mapped at fixed, per-window addresses
-// so a client never has to be told where its buffer landed -- it can
-// compute the address from the window id the server handed back.
+// --- a window's pixels: a NAMED OBJECT, not an address ----------------
 //
-// Spaced WIN_BUFFER_STRIDE apart, which is comfortably more than the
-// largest buffer WIN_CLIENT_MAX_W * WIN_CLIENT_MAX_H * 4 can need, so
-// two windows' mappings can never overlap regardless of their sizes.
-// The stride is the SECOND cap on window size and the one that is easy
-// to miss -- it bounded windows to 2 MiB of pixels no matter what
-// WIN_CLIENT_MAX_* said.
+// A window buffer is a shared-memory object (SYS_SHM_OPEN) the CLIENT
+// creates, maps wherever its own mmap put it, and grants to the
+// compositor with SYS_SHM_GRANT. Neither side derives an address: the
+// client knows where it mapped its own, and the compositor opens the
+// name. This is wl_shm_pool -- the buffer is the client's, handed over
+// rather than reached into.
 //
-// **It is 64 MiB so that a 4K window is an allocator question rather
-// than an addressing one.** 3840x2160x4 is 31.6 MiB, which the previous
-// 8 MiB stride could not hold however the other caps were set -- so
-// every future step toward a 4K desktop would have had to move these
-// addresses first. Address space is the cheap part; it is reserved now
-// and nothing is spent until a window is actually that big. What still
-// bounds a 4K window is `pmm_alloc_contiguous()` (31.6 MiB is 8192
-// CONTIGUOUS frames, which fragmentation can refuse, silently and by
-// design) and WIN_CLIENT_MAX_W/H below -- see docs/roadmap.md.
+// **THE NAME IDENTIFIES THE SLOT; THE GENERATION IDENTIFIES THE
+// MEMORY.** A resize unlinks the object and creates a new one under the
+// same name, so the name is stable for the life of the window while the
+// object behind it is not -- see WIN_EV_CLIENT_PRESENT. The name is
+// guessable and that is harmless: an object belongs to its creator
+// (abi/syscall_abi.h's SHM_PUBLIC), so nothing but a grant gets in.
 //
-// Kept at a comfortable multiple rather than the tight fit, since
-// virtual address space costs nothing
-// here: nothing else in a client's address space lives above
-// WIN_CLIENT_BASE (the stack tops out just below it, the heap below
-// that), so the whole region and the font above it are free to grow.
-//
-// **This address is what bounds the HEAP, and it has been moved up once
-// already for exactly that reason.** It was 0x8001000000, which left a
-// process ~14 MiB of heap -- enough for a 1080p compositor back buffer
-// and not much else, and a hard ceiling with no mechanism behind it.
-// Moving it to 0x8080000000 leaves ~2 GiB, which is more than any
-// machine this OS boots on has, so PHYSICAL memory is the limit now
-// rather than a constant. It stays below WIN_FB_VADDR (0x8100000000)
-// with the font region in between; see kernel/uaddr.h for the map.
-#define WIN_CLIENT_BASE   0x8080000000ULL
-#define WIN_BUFFER_STRIDE 0x0004000000ULL // 64 MiB per window slot
+// A FORMAT rather than a function because the two sides that build it
+// are in different rings with different snprintf()s, and because the
+// kernel builds it at all any more.
+#define WIN_BUF_NAME_FMT "win.%d.%d.%d"  // owner pid, window id, buffer
+#define WIN_BUF_NAME_MAX 32              // and <= SHM_NAME_MAX
 
-// **A WINDOW HAS TWO BUFFERS, AND THIS IS THE SECOND ONE'S OFFSET.**
-//
-// The client draws into whichever is the BACK buffer and the compositor
-// reads whichever is the FRONT; WIN_REQ_PRESENT swaps them. That is
-// Wayland's model (attach a buffer, commit) and it exists for exactly
-// the reason it does there: with one buffer the compositor reads the
-// same memory the client is drawing into, and it composites on its own
-// cadence -- the taskbar clock alone forces a repaint every second --
-// so it will eventually catch a frame halfway through. An app that
-// clears its surface before drawing then flashes its background, which
-// is what the File Manager did on every selection.
-//
-// **BOTH BUFFERS STAY MAPPED, IN BOTH ADDRESS SPACES**, at `base` and
-// `base + WIN_BUFFER_HALF`. The obvious implementation -- remap the one
-// address to the other buffer on each present -- costs a page-table
-// edit and a TLB flush per frame, in two address spaces, on the hot
-// path. Mapping both once and passing an INDEX makes a flip a number in
-// a message. The slot is 64 MiB and the largest buffer
-// WIN_CLIENT_MAX_W * WIN_CLIENT_MAX_H * 4 is 8 MiB, so two fit with
-// room to spare; address space is not the scarce thing here.
-//
-// **THE SCARCE THING IS CONTIGUOUS PHYSICAL MEMORY.** Each buffer is a
-// pmm_alloc_contiguous() run, so a window now needs two of them, and
-// that allocation is already what refuses a window when memory
-// fragments. A window whose SECOND allocation fails is created
-// single-buffered rather than refused: it tears exactly as it did
-// before, which is strictly better than not existing. `front` is then
-// always 0 and the flip is a no-op.
-#define WIN_BUFFER_HALF   0x0002000000ULL // 32 MiB: where buffer 1 starts
-
-// Which buffer a client should DRAW into, given the front index the
-// server last reported. Stated as a function so the arithmetic lives in
-// one place rather than in the toolkit and the compositor separately.
-static inline uint64_t win_buffer_back_offset(int front) {
-    return front ? 0 : WIN_BUFFER_HALF;
-}
-
-// ...and which one the compositor should READ.
-static inline uint64_t win_buffer_front_offset(int front) {
-    return front ? WIN_BUFFER_HALF : 0;
-}
+// The addresses these buffers used to live at are GONE: WIN_CLIENT_BASE
+// with its 64 MiB per-window stride, WIN_BUFFER_HALF's second-buffer
+// offset, and WIN_COMPOSITOR_BASE's 16 GiB carve-out of one slot per
+// (pid, window). A client mmaps its own pixels and a compositor mmaps
+// what it was granted, so a fixed address would only be something for
+// the two to disagree about.
 
 // A PRESENT EVENT'S `mods`: the front buffer's own size, width in the
 // high half and height in the low one. Both are bounded by
@@ -1293,14 +1220,21 @@ static inline uint64_t win_buffer_front_offset(int front) {
 #define WIN_PRESENT_H(m)       ((int)((uint32_t)(m) & 0xFFFFu))
 #define WIN_CLIENT_MAX    4 // windows one client may hold at once
 
-static inline uint64_t win_buffer_vaddr(uint32_t window) {
-    return WIN_CLIENT_BASE + (uint64_t)window * WIN_BUFFER_STRIDE;
-}
+// A PRESENT EVENT'S `b`: which buffer is now the front one, and that
+// buffer's GENERATION -- the number that goes up each time the client
+// replaces the object behind the name. One field because struct
+// win_event has no spare one, and a buffer index is one bit.
+#define WIN_PRESENT_B(buf, gen) ((int32_t)(((uint32_t)(gen) << 1) \
+                                            | ((uint32_t)(buf) & 1u)))
+#define WIN_PRESENT_BUF(b)      ((int)((uint32_t)(b) & 1u))
+#define WIN_PRESENT_GEN(b)      ((uint32_t)(b) >> 1)
 
-// Where WIN_REQ_FONT maps the shared glyph data. Placed above every
-// window's buffer slot so the two regions can never collide however
-// many windows a client opens.
-#define WIN_FONT_VADDR (WIN_CLIENT_BASE + (uint64_t)WIN_CLIENT_MAX * WIN_BUFFER_STRIDE)
+
+// Where WIN_REQ_FONT maps the shared glyph data. A literal since the
+// window region it used to be derived from went away; it stays where it
+// was so a client built against either side of that change maps the
+// font at the same address.
+#define WIN_FONT_VADDR 0x8090000000ULL
 
 // The weights a client may ask for, and the stride between their
 // mappings. Both are mapped AT ONCE and stay mapped -- that is what
@@ -1312,8 +1246,7 @@ static inline uint64_t win_buffer_vaddr(uint32_t window) {
 
 // 4 MiB per weight, which is font_face.c's whole atlas cache budget --
 // so no single atlas can overrun its slot. Costs nothing but address
-// space: the gap between WIN_FONT_VADDR and WIN_COMPOSITOR_BASE is
-// 256 MiB, and nothing is mapped until a client asks.
+// space: nothing is mapped until a client asks.
 #define WIN_FONT_STRIDE  0x0000400000ULL
 
 static inline uint64_t win_font_vaddr(int weight) {
@@ -1342,49 +1275,6 @@ static inline int win_font_kern(const signed char *kern, int count,
     return kern[left_slot * count + right_slot];
 }
 
-// --- the compositor's view of OTHER processes' windows ----------------
-//
-// A ring-3 compositor has to read the pixels of windows it does not own,
-// which is the one thing the addresses above cannot express: they are
-// per-CLIENT, and two clients both hold window 0. So a compositor sees
-// every window in a region of its own, at an address DERIVED from the
-// pair (owner pid, window id) exactly as a client's own buffer is
-// derived from the id alone.
-//
-// **Derived rather than returned, for the same reason it was a good
-// idea the first time.** A resize reallocates a window's frames and
-// re-maps them AT THE SAME ADDRESS, so the compositor's pointer stays
-// valid across a resize it did not initiate and never has to be told
-// where the pixels moved. It also means the kernel can revoke a mapping
-// without being told where it is -- it computes the address the same
-// way -- which is what makes "the mapping is gone after the client
-// dies" checkable rather than a matter of bookkeeping the two sides
-// might disagree about.
-//
-// Placed well above the font so the three regions cannot collide: a
-// client's own buffers end at WIN_FONT_VADDR, and this starts far
-// enough above that the whole compositor region (MAX_PROCS x
-// WIN_CLIENT_MAX slots) fits underneath the next round address. Virtual
-// space costs nothing here.
-//
-// It was 0x8010000000, and that is the trap this whole map has to be
-// read as a whole to avoid: the region below it looked spare, and it
-// was not -- 64 pids x 4 windows x the stride is GIGABYTES, so the
-// region's END is what the next thing has to clear, never its base. A
-// change that grew the heap into 0x8080000000 landed inside it.
-#define WIN_COMPOSITOR_BASE 0x80A0000000ULL
-
-// How many processes' windows the region has room for. Must be >=
-// SCHED_MAX_PROCS (api/scheduler.h) -- win_server.c static_asserts
-// exactly that, since this header is ABI and cannot include a kernel
-// one. The server refuses a pid outside it rather than computing an
-// address that overlaps someone else's.
-//
-// Costs nothing but virtual address space: 64 x WIN_CLIENT_MAX x the
-// 64 MiB stride is 16 GiB of vaddr in a region with nothing mapped in
-// it until a window exists.
-#define WIN_COMPOSITOR_MAX_PIDS 64
-
 // --- the compositor's framebuffer grant -------------------------------
 //
 // Where WIN_REQ_FB_MAP maps the real linear framebuffer. Above the
@@ -1406,14 +1296,8 @@ static inline int win_font_kern(const signed char *kern, int count,
 // here. uaddr.h carries a pointer to it.
 #define WIN_FB_VADDR 0x8500000000ULL
 // Scanout i of the grant is at WIN_FB_VADDR + i * this. 64 MiB holds a
-// 4K buffer (31.6 MiB) with room, and matches the per-window stride.
+// 4K buffer (31.6 MiB) with room.
 #define WIN_FB_BUFFER_STRIDE 0x4000000ULL
-
-static inline uint64_t win_compositor_vaddr(int pid, uint32_t window) {
-    return WIN_COMPOSITOR_BASE
-         + ((uint64_t)(pid - 1) * WIN_CLIENT_MAX + (uint64_t)window)
-           * WIN_BUFFER_STRIDE;
-}
 
 // Glyph layout in that mapping, so a client can index it without being
 // told anything beyond the metrics WIN_REQ_FONT returns: glyphs are
