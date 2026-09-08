@@ -49,7 +49,13 @@ KTEST("syscall", "no row is half-filled in") {
         KTEST_ASSERT(!d->fn == !d->name);
         // A gap means a number was defined without a row -- dispatch
         // silently no-ops it, which looks to a caller exactly like a
-        // syscall that returned 0.
+        // syscall that returned 0. A RETIRED number is the one gap that
+        // is meant: its syscall was deleted and the hole is kept so an
+        // old binary's call cannot land on something else.
+        if (syscall_is_retired(i)) {
+            KTEST_ASSERT(d->fn == 0 && d->name == 0);
+            continue;
+        }
         KTEST_ASSERT(d->fn != 0);
         KTEST_ASSERT(d->name[0] != '\0');
     }

@@ -130,7 +130,8 @@ scheduler-managed. Built as planned:
   process pending, stranding the whole window) or touching the
   framebuffer/its own window directly -- not assumed safe by name alone.
   Excluded: `echo` (loops on `SYS_READ_KEY` waiting for Esc, which never
-  arrives), `gui_test`/`win_test` (framebuffer/own-window takeover),
+  arrives), `gui_test` (framebuffer takeover; `win_test` was here too
+  until it was deleted on 2026-09-08 with the path it exercised),
   `counter_a`/`counter_b` (infinite-loop-by-design `schedtest` demo
   processes, not real commands). `crash_test` deliberately faults --
   verified safe anyway: `idt.c`'s fault handler was already
@@ -2208,9 +2209,12 @@ comment.
   and uses no timeslices at all. `SYS_READ_KEY` stays non-blocking (its
   contract is published and `echo.c` depends on it); new code should
   use the event API instead.
-- ~~**One window per process at a fixed vaddr**~~ -- superseded.
-  `SYS_WIN_CREATE`/`SYS_WIN_PRESENT` remain for `userland/tests/win_test.c`
-  (modal, outside the window list); new clients use `SYS_WIN_REQUEST`.
+- ~~**One window per process at a fixed vaddr**~~ -- GONE. It survived
+  as `SYS_WIN_CREATE`/`SYS_WIN_PRESENT` with one caller, its own test,
+  and with the kernel compositing that window itself -- a title bar, a
+  close button and a per-pixel blit through `gfx_*` from inside a
+  syscall. Deleted 2026-09-08, the last GUI drawing in ring 0; the
+  numbers are retired rather than reused. Clients use `SYS_WIN_REQUEST`.
 - **4-process table, one 4KB stack page, no growth, no IPC, no
   `fork`/`exec`.**
 - **Drawing lived in the kernel** -- half addressed. `userland/ui/ugfx.c`

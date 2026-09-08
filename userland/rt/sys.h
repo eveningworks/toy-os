@@ -731,8 +731,6 @@ int sys_set_color(int fg, int bg);
 
 int sys_gui_init(struct gui_info *out);
 int sys_gui_poll_key(void);
-int sys_win_create(struct win_request *req);
-int sys_win_present(void);
 
 // --- processes and pipes ----------------------------------------------
 

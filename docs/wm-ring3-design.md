@@ -72,9 +72,11 @@ building:
 - **A ring-3 process can already map the real framebuffer.**
   `SYS_GUI_INIT` (`kernel/proc/syscall.c`) fills a `struct gui_info`
   and maps the linear framebuffer into the caller at `GUI_FB_VADDR`.
-  It is a legacy path (`userland/tests/win_test.c` uses it), unguarded
-  and with no double-buffering or damage -- but the primitive a
-  compositor needs exists and works.
+  It is unguarded and has no double-buffering or damage -- but the
+  primitive a compositor needs exists and works. (This used to name a
+  `win_test` program as its user, which was wrong twice over: that
+  program exercised `SYS_WIN_CREATE`, not this, and it was deleted with
+  that path on 2026-09-08. `gui_test.c` is the caller.)
 - **A ring-3 rasteriser exists**: `userland/ui/ugfx.c`, with the
   kernel's own font tables mapped READ-ONLY through `WIN_REQ_FONT`
   rather than copied, so client text cannot drift from the desktop's.

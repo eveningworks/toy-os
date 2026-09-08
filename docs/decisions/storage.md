@@ -1303,7 +1303,7 @@ allocation -- so there was no reason to keep it special-cased.
 
 `apps/terminal.c`'s GUI Terminal window still blocks `run` wholesale,
 not per-target. Several of the newly-independent `/bin` binaries
-(`gui_test`, `win_test`, `echo_test`) have the same hazards inside a
+(`gui_test`, `echo_test`) have the same hazards inside a
 GUI window the old dedicated commands were blocked for (drawing
 straight to the physical framebuffer, blocking forever without
 yielding back to the window manager) -- a per-target allowlist was

@@ -374,7 +374,6 @@ EXCLUDED = [
                           "kernel/proc/cputime_test.c's KTEST spawns it properly"),
     ("echo_test",        "blocks forever reading a serial port with nothing on the far end"),
     ("gui_test",         "takes over the real screen; see apps/README.md on its scope"),
-    ("win_test",         "modal window, outside the window list"),
     ("winclient",        "windowed TWP client -- tools/winclient_test.py"),
     ("uiclient",         "windowed ugfx client -- tools/uiclient_test.py"),
     ("hangclient",       "wedges on purpose -- tools/forcequit_test.py"),

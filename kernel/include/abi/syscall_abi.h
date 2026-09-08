@@ -195,20 +195,15 @@ struct win_request {
 #define WIN_MAX_W 640 // caps the buffer at 640x480x4 bytes = 300 pages,
 #define WIN_MAX_H 480 // an amount syscall.c is happy to track per-page
 
-#define SYS_WIN_CREATE  7 // RDI = pointer to a struct win_request
-                           // (in/out). Allocates + maps a private,
-                           // zeroed w*h*4-byte pixel buffer at
-                           // WIN_BUF_VADDR; also records x/y for
-                           // SYS_WIN_PRESENT to use. Returns 0 (RAX) on
-                           // success; -EFAULT for a bad pointer, -EINVAL
-                           // for a size of zero or over WIN_MAX_W/H,
-                           // -ENOMEM when out of physical memory.
-#define SYS_WIN_PRESENT 8 // No arguments. Composites the buffer from
-                           // SYS_WIN_CREATE onto the real screen at the
-                           // position given there, kernel-drawn title
-                           // bar + close button included. Returns 0
-                           // (RAX), or -EPERM if the calling process
-                           // never called SYS_WIN_CREATE.
+// **7 AND 8 ARE RETIRED, NOT FREE.** They were SYS_WIN_CREATE and
+// SYS_WIN_PRESENT: a single-window-at-a-time path, predating the window
+// server, in which the KERNEL composited the window and drew its title
+// bar and close button. Deleted 2026-09-08 with the last GUI drawing in
+// ring 0. A ring-3 client's path is SYS_WIN_REQUEST. Do not reuse the
+// numbers -- an old binary calling one should find nothing, not
+// something else. Declared in kernel/proc/syscall_table.c's
+// SYSCALL_RETIRED, so the table's KTEST can still fail on an
+// ACCIDENTAL gap.
 
 // Real file I/O against the in-memory filesystem (fs.c) -- the piece a
 // future libc's fopen()/fread()/fwrite() would sit on top of (see the

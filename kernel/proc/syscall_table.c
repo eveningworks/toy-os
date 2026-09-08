@@ -54,8 +54,6 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_MUNMAP]        = { "munmap",        sys_munmap,        { A_HEX, A_INT } },
     [SYS_SND_OPEN]      = { "snd_open",      sys_snd_open,      { 0 }, 0 },
     [SYS_SND_CTL]       = { "snd_ctl",       sys_snd_ctl,       { 0 }, 0 },
-    [SYS_WIN_CREATE]    = { "win_create",    sys_win_create,    { A_HEX } },
-    [SYS_WIN_PRESENT]   = { "win_present",   sys_win_present,   { A_END } },
     // read()'s buffer isn't filled until the handler runs, and the
     // trace line is formatted before that (see strace.c's top comment),
     // so it prints as a pointer rather than as a string -- same for
@@ -173,6 +171,25 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])
+
+// **RETIRED NUMBERS, WHICH ARE NOT FREE NUMBERS.** A syscall that is
+// deleted leaves a hole: reusing the number would make an old binary's
+// call land on something else, and renumbering everything above it
+// would break every other caller to tidy one gap. So the hole stays and
+// is DECLARED here, where the table's own KTEST can tell a deliberate
+// one from the accident it exists to catch -- a number defined with no
+// row, which dispatch silently no-ops in a way indistinguishable from a
+// syscall returning 0.
+static const uint64_t SYSCALL_RETIRED[] = {
+    7,   // SYS_WIN_CREATE  -- the kernel composited a window itself
+    8,   // SYS_WIN_PRESENT -- deleted 2026-09-08, see abi/syscall_abi.h
+};
+
+int syscall_is_retired(uint64_t nr) {
+    for (uint64_t i = 0; i < sizeof SYSCALL_RETIRED / sizeof SYSCALL_RETIRED[0]; i++)
+        if (SYSCALL_RETIRED[i] == nr) return 1;
+    return 0;
+}
 
 const struct syscall_desc *syscall_desc_at(uint64_t nr) {
     if (nr >= SYSCALL_TABLE_COUNT) return NULL;

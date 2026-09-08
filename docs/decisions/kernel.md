@@ -2393,7 +2393,8 @@ assert CR4 against CPUID rather than asserting the bits are on, so they
 are meaningful under both models and can fail under either. What they
 CANNOT show is enforcement: the helpers never touch a user mapping, so
 they behave identically with SMAP on or off. That was proved separately
-by putting one raw dereference back into `SYS_WIN_CREATE` -- ring-0
+by putting one raw dereference back into `SYS_WIN_CREATE` (since
+deleted) -- ring-0
 `#PF`, `CR2` pointing at the client's stack, `error_code=0x1`, under
 `--cpu max`, while the same build ran clean on `qemu64`.
 

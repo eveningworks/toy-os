@@ -306,8 +306,6 @@ void uheap_fault_init(void);
 int sys_gui_init(struct syscall_ctx *c);
 int sys_gui_poll_key(struct syscall_ctx *c);
 int sys_read_key(struct syscall_ctx *c);
-int sys_win_create(struct syscall_ctx *c);
-int sys_win_present(struct syscall_ctx *c);
 int sys_poll_event(struct syscall_ctx *c);
 int sys_wait_event(struct syscall_ctx *c);
 int sys_wait_ready(struct syscall_ctx *c);

@@ -324,8 +324,9 @@ window) rather than "has anyone flagged this specific one as unsafe
 yet." Every entry was checked against its own `userland/*.c` source, not
 added by assumption -- see the commit that added it for
 exactly which binaries and why each excluded one was excluded
-(`echo`'s `SYS_READ_KEY` loop, `gui_test`/`win_test`'s framebuffer/
-window takeover, `counter_a`/`counter_b`'s intentionally-infinite
+(`echo`'s `SYS_READ_KEY` loop, `gui_test`'s framebuffer takeover
+-- `win_test`'s window takeover too, until that program was deleted
+on 2026-09-08 -- `counter_a`/`counter_b`'s intentionally-infinite
 `schedtest` demo loop).
 
 ## `kapi.h` is the only header apps/ includes
@@ -451,8 +452,9 @@ next. A tracer names the child AT THE SPAWN (`SPAWN_TRACE` on
 consumes it as the address space is built, and
 `syscall_process_exit_cleanup()` releases it, so a recycled CR3 cannot
 inherit a stale trace. This is the same single-slot compare-CR3 pattern
-`SYS_SBRK`'s heap arming and `SYS_WIN_CREATE`'s window state already use
-in `syscall.c`.
+`SYS_SBRK`'s heap arming already uses in `syscall.c`. (`SYS_WIN_CREATE`'s
+window state was the other example and went with that syscall on
+2026-09-08.)
 
 **This paragraph used to describe a bare `strace_arm()` meaning "the
 next process created ANYWHERE", and that had a race in it** -- an

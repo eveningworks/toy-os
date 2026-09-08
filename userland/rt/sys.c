@@ -784,11 +784,6 @@ int sys_gui_init(struct gui_info *out) {
 
 int sys_gui_poll_key(void) { return (int)syscall0(SYS_GUI_POLL_KEY); }
 
-int sys_win_create(struct win_request *req) {
-    return (int)err(syscall1(SYS_WIN_CREATE, (uint64_t)(uintptr_t)req));
-}
-
-int sys_win_present(void) { return (int)err(syscall0(SYS_WIN_PRESENT)); }
 
 // --- processes and pipes ----------------------------------------------
 

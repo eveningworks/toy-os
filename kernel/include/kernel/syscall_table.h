@@ -73,4 +73,11 @@ struct syscall_desc {
 // treats it as a no-op, and `strace` still names it if it has a name.
 const struct syscall_desc *syscall_desc_at(uint64_t nr);
 
+// Was this number DELETED rather than never used? A retired number keeps
+// its hole for ever: reusing it would land an old binary's call on
+// something else. The table's KTEST asks so it can still fail on an
+// accidental gap, which is the thing that looks exactly like a syscall
+// returning 0.
+int syscall_is_retired(uint64_t nr);
+
 #endif

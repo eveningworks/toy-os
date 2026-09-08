@@ -1,10 +1,16 @@
-// The windowing syscalls: the legacy single-window path, the event
-// queue, TWP's carriage (SYS_WIN_REQUEST) and its debug channel.
+// The windowing syscalls: the event queue, TWP's carriage
+// (SYS_WIN_REQUEST) and its debug channel.
 //
-// The legacy SYS_GUI_*/SYS_WIN_CREATE/SYS_WIN_PRESENT state below
-// predates the window server and is single-process-at-a-time; the real
-// windowing path for a ring-3 client is SYS_WIN_REQUEST, which carries
-// a typed TWP message (abi/win_proto.h).
+// **THE KERNEL DRAWS NO WINDOW.** SYS_WIN_CREATE and SYS_WIN_PRESENT
+// used to composite one here -- a title bar, a close button and a
+// per-pixel blit, all through gfx_* from inside a syscall -- and were
+// the last GUI DRAWING in ring 0. They predated the window server,
+// served one process at a time, and had no caller but their own test.
+// A ring-3 client's windowing path is SYS_WIN_REQUEST, which carries a
+// typed TWP message (abi/win_proto.h).
+//
+// SYS_GUI_INIT survives and is a different thing: it maps the real
+// framebuffer to a ring-3 caller and draws nothing itself.
 #include "syscalls.h"
 #include "syscall_abi.h"
 #include "errno.h"
@@ -19,105 +25,6 @@
 #include "win_transport.h"
 #include "clocksource.h" // clocksource_now_ns() -- the timed wait's deadline
 #include <stddef.h>
-
-// SYS_WIN_* state -- like the heap above, single-window/single-process
-// at a time (see syscall_abi.h's comment on SYS_WIN_CREATE). Unlike the
-// heap, this doesn't need an explicit "arm" call from whoever spawns
-// the process: SYS_WIN_CREATE itself sets g_win_pml4 to the CALLING
-// process's own CR3, so it's self-arming, and SYS_WIN_PRESENT's
-// pml4-mismatch check (same trick as SYS_SBRK's) rejects any process
-// that calls it without having created a window first, including a
-// later, unrelated process that happens to run after this one exits.
-//
-// g_win_frames tracks each backing page's PHYSICAL address individually
-// rather than assuming the run pmm_alloc_frame() hands back is
-// contiguous (it usually is, for a fresh process with nothing else
-// allocating concurrently, but pmm.h makes no such promise) -- so
-// SYS_WIN_PRESENT can read the buffer directly via each frame's
-// identity-mapped physical address without trusting that.
-#define WIN_MAX_PAGES ((WIN_MAX_W * WIN_MAX_H * 4 + 4095) / 4096)
-static uint64_t g_win_pml4 = 0;
-static uint64_t g_win_frames[WIN_MAX_PAGES];
-static uint32_t g_win_pages = 0;
-static uint32_t g_win_w = 0, g_win_h = 0, g_win_pitch = 0;
-static int32_t g_win_x = 0, g_win_y = 0;
-
-#define WIN_TITLEBAR_H (gfx_char_h() + 8)
-
-static int win_close_size(void) {
-    int s = WIN_TITLEBAR_H - 6;
-    return s < 14 ? 14 : s;
-}
-
-// Same hand-drawn diagonal cross as apps/wm.c's draw_close_icon() (see
-// the git history for why a font glyph doesn't work in a small button) --
-// duplicated rather than shared, since wm.c's version is `static` in a
-// completely different translation unit (the GUI app layer), and
-// kernel/core has no existing reason to link against apps/.
-static void win_draw_close_icon(int x, int y, int size, uint32_t color) {
-    int pad = size / 4;
-    if (pad < 2) pad = 2;
-    int thick = size >= 24 ? 1 : 0;
-    for (int i = pad; i < size - pad; i++) {
-        for (int t = -thick; t <= thick; t++) {
-            gfx_put_pixel(x + i + t, y + i, color);
-            gfx_put_pixel(x + i, y + i + t, color);
-            gfx_put_pixel(x + i + t, y + (size - 1 - i), color);
-            gfx_put_pixel(x + i, y + (size - 1 - i) + t, color);
-        }
-    }
-}
-
-// Reads one already-native-packed pixel (see userland/win_test.c's
-// comment on why it can write raw values with no gfx_rgb()-equivalent
-// of its own) out of the process's private window buffer.
-// byte_offset is always a multiple of 4 (pitch is w*4, no padding), and
-// 4096 is itself a multiple of 4, so a 4-byte pixel read here never
-// straddles a page boundary -- each one lives entirely in exactly one
-// tracked frame.
-static uint32_t win_buf_read_pixel(uint64_t byte_offset) {
-    uint32_t page = (uint32_t)(byte_offset / 4096);
-    uint32_t off = (uint32_t)(byte_offset % 4096);
-    if (page >= g_win_pages) return 0;
-    return *(volatile uint32_t *)(uintptr_t)(g_win_frames[page] + off);
-}
-
-// The "server" half of the protocol: composites the current window
-// buffer plus kernel-drawn chrome onto the real screen. Runs entirely
-// in kernel space (this is a syscall handler), so -- unlike the
-// process that owns the buffer -- it can call gfx_* directly with no
-// syscall of its own needed to reach the real framebuffer.
-static void win_present(void) {
-    int titlebar_h = WIN_TITLEBAR_H;
-    int close_size = win_close_size();
-    uint32_t border = gfx_rgb(60, 60, 60);
-    uint32_t titlebar = gfx_rgb(70, 110, 180);
-    uint32_t titletext = gfx_rgb(255, 255, 255);
-    uint32_t winbg = gfx_rgb(235, 235, 235);
-
-    int win_w = (int)g_win_w;
-    int win_h = (int)g_win_h;
-    int total_h = titlebar_h + win_h;
-
-    gfx_fill_rect(g_win_x, g_win_y, win_w, total_h, winbg);
-    gfx_draw_rect(g_win_x, g_win_y, win_w, total_h, border);
-    gfx_fill_rect(g_win_x + 1, g_win_y + 1, win_w - 2, titlebar_h, titlebar);
-    gfx_draw_string(g_win_x + 6, g_win_y + (titlebar_h - gfx_char_h()) / 2,
-                     "App", titletext, titlebar);
-
-    int close_x = g_win_x + win_w - 6 - close_size;
-    int close_y = g_win_y + (titlebar_h - close_size) / 2;
-    gfx_fill_rect(close_x, close_y, close_size, close_size, gfx_rgb(190, 60, 60));
-    win_draw_close_icon(close_x, close_y, close_size, gfx_rgb(255, 255, 255));
-
-    int content_y = g_win_y + titlebar_h;
-    for (int y = 0; y < win_h; y++) {
-        for (int x = 0; x < win_w; x++) {
-            uint32_t pixel = win_buf_read_pixel((uint64_t)y * g_win_pitch + (uint64_t)x * 4);
-            gfx_put_pixel(g_win_x + x, content_y + y, pixel);
-        }
-    }
-}
 
 int sys_gui_init(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
@@ -174,70 +81,6 @@ int sys_read_key(struct syscall_ctx *c) {
     // global first.
     int key = keyboard_try_getchar();
     c->regs[14] = (uint64_t)(int64_t)key;
-    return 0;
-}
-
-int sys_win_create(struct syscall_ctx *c) {
-    uint64_t pml4 = c->pml4;
-
-    struct win_request req;
-    if (!vmm_copy_from_user(pml4, &req, c->a0, sizeof req)) {
-        klog_write("syscall: win_create() rejected -- invalid request pointer\n");
-        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
-    } else {
-        int bad_size = (req.w == 0 || req.h == 0 || req.w > WIN_MAX_W || req.h > WIN_MAX_H);
-
-        if (bad_size) {
-            klog_write("syscall: win_create() rejected -- bad size\n");
-            c->regs[14] = (uint64_t)(int64_t)-EINVAL;
-        } else {
-            uint64_t size = (uint64_t)req.w * 4 * req.h;
-            uint32_t pages_needed = (uint32_t)((size + 4095) / 4096);
-            uint32_t i;
-            int ok = 1;
-
-            for (i = 0; i < pages_needed; i++) {
-                uint64_t frame = pmm_alloc_frame(PMM_ZONE_ANY);
-                if (!frame) { ok = 0; break; }
-                for (size_t b = 0; b < 4096; b++) ((uint8_t *)(uintptr_t)frame)[b] = 0;
-                if (!vmm_map_user_page(pml4, WIN_BUF_VADDR + (uint64_t)i * 4096, frame)) {
-                    pmm_free_frame(frame);
-                    ok = 0;
-                    break;
-                }
-                g_win_frames[i] = frame;
-            }
-
-            if (!ok) {
-                for (uint32_t j = 0; j < i; j++) pmm_free_frame(g_win_frames[j]);
-                klog_write("syscall: win_create() rejected -- out of physical memory\n");
-                c->regs[14] = (uint64_t)(int64_t)-ENOMEM;
-            } else {
-                g_win_pml4 = pml4;
-                g_win_pages = pages_needed;
-                g_win_w = req.w;
-                g_win_h = req.h;
-                g_win_pitch = req.w * 4;
-                g_win_x = req.x;
-                g_win_y = req.y;
-
-                req.pitch = g_win_pitch;
-                req.bpp = 32;
-                c->regs[14] = vmm_copy_to_user(pml4, c->a0, &req, sizeof req) ? 0 : (uint64_t)(int64_t)-EFAULT;
-            }
-        }
-    }
-    return 0;
-}
-
-int sys_win_present(struct syscall_ctx *c) {
-    uint64_t pml4 = c->pml4;
-    if (g_win_pml4 == 0 || pml4 != g_win_pml4) {
-        c->regs[14] = (uint64_t)(int64_t)-EPERM; // not this process's window
-    } else {
-        win_present();
-        c->regs[14] = 0;
-    }
     return 0;
 }
 
@@ -431,13 +274,9 @@ int sys_wait_ready(struct syscall_ctx *c) {
 // tearing the address space down does not clear it. The pixel buffer's
 // pages ARE part of the address space and are freed with it.
 void win_syscall_release(uint64_t pml4_phys) {
-    if (g_win_pml4 == pml4_phys) {
-        g_win_pml4 = 0;
-        g_win_pages = 0;
-        g_win_w = 0;
-        g_win_h = 0;
-        g_win_pitch = 0;
-        g_win_x = 0;
-        g_win_y = 0;
-    }
+    // NOTHING LEFT TO RELEASE. It held the legacy single-window path's
+    // globals, which went with that path; the hook stays because
+    // syscall.c calls it on every address-space teardown and a future
+    // per-process window global would want exactly this seam.
+    (void)pml4_phys;
 }
