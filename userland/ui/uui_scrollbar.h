@@ -56,6 +56,27 @@ enum uui_scrollbar_zone {
 // the font like everything else.
 #define uui_scrollbar_arrow_h(w) (w)
 
+// --- the SHAPE --------------------------------------------------------
+//
+// A radius per part, because the shape of a scrollbar is the APP's
+// decision and not this widget's: it is `border-radius` on
+// `::-webkit-scrollbar-thumb` in CSS, and the radius a Qt style hands
+// `drawRoundedRect()`. UUI_SB_CAPSULE is half the short axis -- Breeze
+// passes exactly `0.5 * width` for its groove and its handle -- and any
+// radius is clamped to that, since a corner larger than the rect is not
+// a shape.
+#define UUI_SB_CAPSULE (-1)
+
+struct uui_scrollbar_style {
+    int track_radius;   // the groove
+    int thumb_radius;   // the handle
+};
+
+// What a bar looks like when the app does not say: Breeze's capsule at
+// both ends of both parts. A caller wanting something squarer passes
+// its own style rather than opting in to this one.
+extern const struct uui_scrollbar_style uui_scrollbar_style_default;
+
 // Preferred minimum: the strip's width; no height preference -- a
 // scrollbar is as tall as whatever it scrolls. See uui_primitives.h.
 //
@@ -72,9 +93,18 @@ void uui_scrollbar_natural_size(int *out_w, int *out_h);
 // test, mainly) would otherwise re-derive it and drift.
 int uui_scrollbar_thumb_inset(int w);
 
+// Draws in uui_scrollbar_style_default. This is the whole API for a
+// caller with no opinion about the shape, which is most of them.
 void uui_scrollbar_draw(struct ugfx_surface *s, int x, int y, int w, int h,
                          int total_lines, int visible_rows, int scroll_offset,
                          uint32_t track_bg, uint32_t thumb_bg, unsigned flags);
+
+// The same, with the shape named. `style` NULL is the default one, so
+// the call above is this one with nothing to say.
+void uui_scrollbar_draw_styled(struct ugfx_surface *s, int x, int y, int w, int h,
+                                int total_lines, int visible_rows, int scroll_offset,
+                                uint32_t track_bg, uint32_t thumb_bg, unsigned flags,
+                                const struct uui_scrollbar_style *style);
 
 enum uui_scrollbar_zone uui_scrollbar_hit(int x, int y, int w, int h,
                                            int total_lines, int visible_rows,

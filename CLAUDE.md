@@ -737,6 +737,7 @@ whenever a headline here tells you something you did not already know.
 - **`uui_table` sorts on a header click, and an app supplies only a COMPARATOR.**
 - **A WIDGET WITH A SCROLLBAR ANSWERS `hit` WITH ITS WHOLE RECT, AND `_hit()` KEEPS THE ROW QUESTION**
 - **A SCROLLBAR CAN LIE DOWN (`UUI_SCROLLBAR_HORIZ`), AND ITS OFFSET THEN RUNS THE OTHER WAY**
+- **A SCROLLBAR'S SHAPE IS A RADIUS THE APP CHOOSES, AND THE DEFAULT IS A CAPSULE** -- `struct uui_scrollbar_style`, `UUI_SB_CAPSULE`, and the arc is blended against what the caller already painted
 - **`utext` HAS A WRAP MODE, AND THE CALLER OWNS ITS STORAGE**
 - **A `uui_scrollview` NOTICES when its content's item list changes**
 - **A STRING SETTING GETS A TEXT FIELD IN SYSTEM SETTINGS, AND ITS `staged` IS A CHANGED FLAG RATHER THAN AN INDEX**

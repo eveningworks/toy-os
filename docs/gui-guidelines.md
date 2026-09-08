@@ -300,6 +300,14 @@ that control in the same change, and a check that asserts the view
 MOVED. "It responds" is not "it scrolls", and an absence check ("the
 drag changed no selection") passes happily against a dead bar.
 
+**Looks, as distinct from the nine behaviours above: the SHAPE is the
+app's.** `struct uui_scrollbar_style` carries a radius per part, and the
+default is `UUI_SB_CAPSULE` on both -- Breeze's groove and handle, which
+is what Konsole shows. An app that wants something squarer passes its
+own style to `uui_scrollbar_draw_styled()`; nothing about the nine
+points changes with it, and the hit test stays rectangular, so a click
+on a rounded-away corner still belongs to the bar.
+
 `tools/scrollbar_test.py` asserts points 1, 2, 3 and 6 against the
 ring-3 Notepad; `tools/uidemo_test.py` asserts 1, 2, 3 and 9 against the
 listbox and the dropdown popup. Run both after touching either

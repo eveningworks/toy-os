@@ -32,25 +32,63 @@ int uui_scrollbar_thumb_inset(int w) {
     return inset;
 }
 
-// A rounded rectangle -- the capsule shape a modern scrollbar thumb
-// has. Just the four corner pixels trimmed: at 8-14px wide, that is the
-// whole difference between "capsule" and "block", and it needs no
-// anti-aliasing or new drawing machinery to read correctly.
-static void fill_capsule(struct ugfx_surface *s, int x, int y, int w, int h, uint32_t c) {
-    if (w <= 2 || h <= 2) { ugfx_fill_rect(s, x, y, w, h, c); return; }
-    ugfx_fill_rect(s, x, y + 1, w, h - 2, c);       // the body
-    ugfx_fill_rect(s, x + 1, y, w - 2, 1, c);       // top, inset
-    ugfx_fill_rect(s, x + 1, y + h - 1, w - 2, 1, c); // bottom, inset
+// THE SHAPE, in one rasteriser for both parts and both axes.
+//
+// Coverage of pixel (px, py) -- counted inward from a corner's outer
+// edge, 0 being the outermost row/column -- by a disc of radius `r`
+// centred on the arc centre (r, r), in 0..255. Sixteen sub-samples per
+// pixel, the same arithmetic wm_render.c's window corners use; r is a
+// handful of pixels, so a corner is a few hundred compares.
+static uint8_t arc_coverage(int r, int px, int py) {
+    int in = 0;
+    for (int sy = 0; sy < 4; sy++) {
+        for (int sx = 0; sx < 4; sx++) {
+            int cx = 8 * px + 2 * sx + 1 - 8 * r;
+            int cy = 8 * py + 2 * sy + 1 - 8 * r;
+            if (cx * cx + cy * cy <= 64 * r * r) in++;
+        }
+    }
+    return (uint8_t)(in * 255 / 16);
 }
 
-// The same capsule lying down: the trimmed corners move to the ends, so
-// a horizontal thumb reads as a capsule rather than as a bar with two
-// notches bitten out of its long edges.
-static void fill_capsule_h(struct ugfx_surface *s, int x, int y, int w, int h, uint32_t c) {
-    if (w <= 2 || h <= 2) { ugfx_fill_rect(s, x, y, w, h, c); return; }
-    ugfx_fill_rect(s, x + 1, y, w - 2, h, c);
-    ugfx_fill_rect(s, x, y + 1, 1, h - 2, c);
-    ugfx_fill_rect(s, x + w - 1, y + 1, 1, h - 2, c);
+// A requested radius resolved against the rect it has to fit in. Half
+// the SHORT axis is the ceiling, which is what makes UUI_SB_CAPSULE and
+// "any radius too big for this bar" the same answer -- and what lets one
+// function round a vertical thumb and a horizontal one without knowing
+// which it has.
+static int sb_radius(int req, int w, int h) {
+    int max = (w < h ? w : h) / 2;
+    if (req < 0 || req > max) return max;   // UUI_SB_CAPSULE, or clamped
+    return req;
+}
+
+// **THE ARC IS BLENDED AGAINST WHAT IS ALREADY ON THE SURFACE, so the
+// caller must have painted under the bar in this same pass** -- every
+// one does today (uapp.c clears the window, and each container fills its
+// own rect first). Blending against a stale back buffer would darken the
+// corner a little every frame, which is the drift wm_render.c's
+// corner_in_clip() guards against on the compositor side.
+static void fill_round_rect(struct ugfx_surface *s, int x, int y, int w, int h,
+                             int radius, uint32_t c) {
+    if (w <= 0 || h <= 0) return;
+    int r = sb_radius(radius, w, h);
+    if (r < 1) { ugfx_fill_rect(s, x, y, w, h, c); return; }
+
+    ugfx_fill_rect(s, x, y + r, w, h - 2 * r, c);          // the waist
+    ugfx_fill_rect(s, x + r, y, w - 2 * r, r, c);          // between the top corners
+    ugfx_fill_rect(s, x + r, y + h - r, w - 2 * r, r, c);  // and the bottom ones
+
+    for (int q = 0; q < 4; q++) {
+        for (int py = 0; py < r; py++) {
+            for (int px = 0; px < r; px++) {
+                uint8_t cov = arc_coverage(r, px, py);
+                if (!cov) continue;
+                int sx = (q & 1) ? x + w - 1 - px : x + px;
+                int sy = (q & 2) ? y + h - 1 - py : y + py;
+                ugfx_blend_pixel(s, sx, sy, c, cov);
+            }
+        }
+    }
 }
 
 // A small solid triangle, for a stepper arrow. `dir` is -1 for up.
@@ -116,15 +154,30 @@ void uui_scrollbar_natural_size(int *out_w, int *out_h) {
     if (out_h) *out_h = 0; // no preference: as tall as its content area
 }
 
+const struct uui_scrollbar_style uui_scrollbar_style_default = {
+    .track_radius = UUI_SB_CAPSULE,
+    .thumb_radius = UUI_SB_CAPSULE,
+};
+
 void uui_scrollbar_draw(struct ugfx_surface *s, int x, int y, int w, int h,
                          int total_lines, int visible_rows, int scroll_offset,
                          uint32_t track_bg, uint32_t thumb_bg, unsigned flags) {
+    uui_scrollbar_draw_styled(s, x, y, w, h, total_lines, visible_rows,
+                               scroll_offset, track_bg, thumb_bg, flags, 0);
+}
+
+void uui_scrollbar_draw_styled(struct ugfx_surface *s, int x, int y, int w, int h,
+                                int total_lines, int visible_rows, int scroll_offset,
+                                uint32_t track_bg, uint32_t thumb_bg, unsigned flags,
+                                const struct uui_scrollbar_style *style) {
+    if (!style) style = &uui_scrollbar_style_default;
+
     // The track is drawn whether or not there is anything to scroll: a
     // visible groove tells you the scrollbar is THERE before you go
     // looking for it, which matters at this font size. (The quieter
     // near-invisible style needs hover-to-expand to compensate, and
     // this widget deliberately keeps no hover state of its own.)
-    ugfx_fill_rect(s, x, y, w, h, track_bg);
+    fill_round_rect(s, x, y, w, h, style->track_radius, track_bg);
 
     // ONE implementation, two axes: `pos`/`len` are the scrolled axis
     // and `thick` the other, so everything below is written once.
@@ -151,13 +204,13 @@ void uui_scrollbar_draw(struct ugfx_surface *s, int x, int y, int w, int h,
 
     int ty, th, ms;
     sb_geometry(tky, tkh, total_lines, visible_rows, scroll_offset, &ty, &th, &ms, flags);
-    // Inset each side so the track shows around the capsule -- that gap
+    // Inset each side so the track shows around the thumb -- that gap
     // is most of what reads as "modern" rather than "a grey block
     // filling a groove". Width-derived, so a wider bar gets a wider
     // gutter instead of a fatter block; see uui_scrollbar_thumb_inset().
     int in = uui_scrollbar_thumb_inset(thick);
-    if (horiz) fill_capsule_h(s, ty, y + in, th, h - 2 * in, thumb_bg);
-    else       fill_capsule(s, x + in, ty, w - 2 * in, th, thumb_bg);
+    if (horiz) fill_round_rect(s, ty, y + in, th, h - 2 * in, style->thumb_radius, thumb_bg);
+    else       fill_round_rect(s, x + in, ty, w - 2 * in, th, style->thumb_radius, thumb_bg);
 }
 
 enum uui_scrollbar_zone uui_scrollbar_hit(int x, int y, int w, int h,

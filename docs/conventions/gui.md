@@ -488,6 +488,25 @@ this the obvious way), not from how much history it accumulated.
   sideways. The zone names stay vertical (`UUI_SB_UP` is the LEFT
   arrow); two enums for one set of answers would have been worse.
 
+- **A SCROLLBAR'S SHAPE IS A RADIUS THE APP CHOOSES, AND THE DEFAULT IS
+  A CAPSULE.** `struct uui_scrollbar_style` carries a `track_radius` and
+  a `thumb_radius` in pixels; `UUI_SB_CAPSULE` means half the short axis,
+  and any radius is clamped to that. `uui_scrollbar_draw()` is
+  `uui_scrollbar_draw_styled()` with `uui_scrollbar_style_default` --
+  capsule on both parts, which is Breeze's groove and handle
+  (`drawRoundedRect(rect, 0.5 * w, 0.5 * w)`) and what Konsole therefore
+  shows. A radius per part rather than a round/square flag because that
+  is what the systems this copies actually express: `border-radius` on
+  `::-webkit-scrollbar-thumb`, GTK's CSS, the radius a Qt style passes
+  its painter. **The arc is BLENDED against what is already on the
+  surface**, so a caller must paint under the bar in the same pass --
+  every one does (`uapp.c` clears the window, and each container fills
+  its own rect first), and blending against a stale back buffer would
+  darken the corner a little every frame. Only the drawing knows about
+  the radius: `uui_scrollbar_hit()` and the drag maths still work on the
+  rectangle, as they do in every toolkit, so a click on a rounded-away
+  corner pixel still belongs to the bar.
+
 - **`utext` HAS A WRAP MODE, AND THE CALLER OWNS ITS STORAGE.**
   `UTEXT_WRAP_WORD` breaks at a space, never mid-word, and falls back to
   a hard break for a word wider than the view because such a word has

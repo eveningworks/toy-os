@@ -45,6 +45,10 @@ SPAWN_TIMEOUT_S = 15.0
 
 # The terminal draws light text on black, so "ink" is anything not black.
 BG = (0, 0, 0)
+
+# terminal.c's scrollbar colours -- Breeze's dark pair.
+TRACK = (49, 54, 59)
+
 HEX = {" ": "0x20", "/": "0x2f", ".": "0x2e", "-": "0x2d", "_": "0x5f"}
 
 
@@ -172,6 +176,35 @@ def ink(qmp, tmp, name, box):
                     or abs(raw[i + 2] - BG[2]) > 30):
                 n += 1
     return n
+
+
+def corner_shape(qmp, tmp, name, box, fill):
+    """How square the four corners of `box` are, for a rect filled with
+    `fill`.
+
+    Returns (corners, middles): how many of the four corner pixels carry
+    the fill colour, and how many of the four edge MIDPOINTS do. A square
+    rect answers (4, 4); a capsule answers (0, 4) -- the corners are
+    rounded away while the arc still reaches each edge's centre.
+
+    The pair is what makes this an assertion about SHAPE rather than
+    about size: a bar that simply shrank, or one that was not drawn at
+    all, fails the second half while passing the first.
+    """
+    from PIL import Image
+    p = os.path.abspath(os.path.join(tmp, name))
+    qmp.screenshot(p)
+    x0, y0, x1, y1 = box
+    cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+    with Image.open(p) as im:
+        rgb = im.convert("RGB")
+        def is_fill(x, y):
+            px = rgb.getpixel((x, y))
+            return all(abs(px[i] - fill[i]) <= 8 for i in range(3))
+        corners = sum(is_fill(x, y) for x in (x0, x1 - 1) for y in (y0, y1 - 1))
+        middles = (is_fill(cx, y0) + is_fill(cx, y1 - 1)
+                   + is_fill(x0, cy) + is_fill(x1 - 1, cy))
+    return corners, middles
 
 
 def run(dbg, qmp, tmp, shot_dir, res):
@@ -1267,6 +1300,18 @@ def check_scrollbar(dbg, qmp, tmp, res):
     res.check("s2. the track is painted, and the margin beside it is not",
               gutter > area // 2 and beside < area // 10,
               f"{gutter}/{area} px in the gutter, {beside} beside it")
+
+    # THE SHAPE, read as pixels: the groove is a capsule
+    # (uui_scrollbar_style_default), so its four corners are background
+    # and the middle of each of its four edges is still track. Asserting
+    # only the corners would pass against a bar that was never drawn.
+    corners, middles = corner_shape(
+        qmp, tmp, "sb_shape.png",
+        (c["x"] + bar[0], c["y"] + bar[1],
+         c["x"] + bar[0] + bar[2], c["y"] + bar[1] + bar[3]), TRACK)
+    res.check("s2a. the track's corners are rounded away, its edges are not",
+              corners == 0 and middles == 4,
+              f"{corners}/4 corners still track-coloured, {middles}/4 edge midpoints")
 
     fill_scrollback(dbg)
     sbcount = layout_field(dbg, "sbcount") or 0
