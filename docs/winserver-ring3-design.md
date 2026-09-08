@@ -174,9 +174,22 @@ It retires a roadmap item with two callers of its own: tolibc's mutex
 spins and yields today, and a detached thread's stack cannot be
 reclaimed without one.
 
-**Still owed for this stage:** the ring and its ABI, and ONE WAIT that
-covers a channel message AND the event queue -- without it a compositor
-cannot block on both, and there is no `poll()` here to build that from.
+**THE RING IS BUILT (2026-09-08), and it needed no kernel support at
+all** -- `userland/lib/uchan.h` over shm, the futex and the wakeword,
+each of which exists for its own reasons. That is Wayland's split: the
+transport is general, the protocol on top is not, and the compositor is
+a process like any other.
+
+TWO OBJECTS per service, `/bin/soundd`'s shape because the same two
+problems recur: a BEACON (`<service>`) holding the word a client wakes
+the server through, and ONE RING PER CLIENT (`<service>.<pid>`), which
+the server finds by walking `QUERY_SHM`. A ring per client is what makes
+it lock-free -- one writer and one reader each, so `head` and `tail` are
+each written by a single process and neither side needs a
+compare-and-swap, which this system does not have.
+
+Asynchronous by default; `uchan_call()` is the explicit round trip, for
+the few messages that have an answer.
 
 ### Stage 3b -- one wait over both -- THE PRIMITIVE IS BUILT, 2026-09-08
 

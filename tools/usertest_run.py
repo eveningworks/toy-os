@@ -109,6 +109,12 @@ TESTS = [
     # parent in waitpid, neither of which the legacy `run` loader has a
     # scheduler slot to do.
     ("futex_test", None, None, None),
+    # The message channel two ring-3 processes talk over, which is shm
+    # plus a futex plus a wakeword and no kernel support of its own.
+    # SPAWNED (exit code None) because the server half PARKS -- and a
+    # message waking it out of that park is the check the whole file
+    # exists for, which the legacy `run` loader has no slot to do.
+    ("chan_test", None, None, None),
     # Tab completion's engine, built for ring 3. The KTESTs cover the
     # same source through the KERNEL shell's environment and would pass
     # whether or not a byte of it linked into libuapp.a -- this is the

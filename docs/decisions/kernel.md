@@ -597,6 +597,41 @@ two addresses differ before believing the wake. The KTEST beside
 `futex_key()` covers the property directly, by mapping one frame twice
 in one address space.
 
+## The message channel is a LIBRARY, not a kernel object
+
+`userland/lib/uchan.h` is a channel between two ring-3 processes and the
+kernel knows nothing about it. It is named shared memory (`SYS_SHM_OPEN`)
+for the pages, a futex to park on and a wakeword to be woken through --
+three primitives that each exist for their own reasons, none of which
+was added for this.
+
+That is deliberate and it is Wayland's split: the transport is general
+and the protocol on top is not. A kernel channel object was the
+alternative -- Mach ports, Binder -- and it buys ordering and atomicity
+for free at the price of the kernel copying every message and having an
+opinion about what a message is. With a per-frame path in prospect, the
+copy is the thing to avoid.
+
+**A RING PER CLIENT, not one ring per service**, which is what makes it
+lock-free: each ring has exactly one writer and one reader, so `head`
+and `tail` are each written by a single process and neither side needs a
+compare-and-swap. There is no CAS in this codebase to build the shared
+ring on, and adding one to serve a second writer would be a worse trade
+than a few pages per client. `/bin/soundd` reached the same arrangement
+first, for the same reason.
+
+The counters are FREE-RUNNING rather than indices, so `head - tail` is
+the depth and full is never mistaken for empty -- an index pair only
+manages that by wasting a slot.
+
+**The bump before the wake is the ordering that matters.** A sender
+increments the beacon word and then wakes it; a server that sampled the
+word before the message and parks after it finds the value already moved
+and does not park. A wake alone lands in that window and is lost. The
+same rule appears three times now -- here, in `futex_note_ready()` and
+in `SYS_FUTEX_WAIT`'s own -EAGAIN -- because it is the one thing a
+wait/wake pair always gets wrong.
+
 ## One wakeword per process, because there is no poll()
 
 A futex waits on ONE word. A compositor has two sources -- its event
