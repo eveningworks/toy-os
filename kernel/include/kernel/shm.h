@@ -31,6 +31,10 @@ int shm_create_anon(uint64_t npages);
 // Returns an index holding one reference, or -errno.
 int shm_create_named(const char *name, uint64_t npages, int owner_pid);
 
+// Takes a name out of the namespace. The other half of shm_create_named()
+// for a caller replacing an object on a process's behalf.
+void shm_unlink_named(const char *name);
+
 // Which process created `idx`, or 0. What the window server checks
 // before adopting an object a client named: a client must not be able
 // to hand over somebody else's memory to be mapped to the compositor.

@@ -550,13 +550,17 @@ KTEST("winshare", "the present after a resize hands over the new size") {
                                      sizeof seen));
     KTEST_ASSERT_EQ(seen, 0xC0FFEE00);
 
-    // And the buffer the client draws into NEXT is the new size too --
-    // it was the front one a moment ago and still held the old size, so
-    // a present that forgot to rebuild it would hand the client a
-    // buffer it overruns on its very next frame.
-    KTEST_ASSERT(vmm_validate_user_range(
-        f.client_as,
-        win_buffer_vaddr(f.id) + win_buffer_back_offset(front) + far, 4096));
+    // **THE OTHER BUFFER IS NOT THE SERVER'S TO GROW ANY MORE**, and
+    // this used to assert that it was. A present rebuilt the stale half
+    // here, opportunistically, which stopped being possible when a
+    // window's pixels became the CLIENT's objects: only the client can
+    // replace one it created. It does that before it draws
+    // (WIN_REQ_BUFFER), so what is still true -- and what this asserts
+    // instead -- is that the buffer just handed over IS the new size,
+    // which the read above proves, and that the other one is still
+    // whatever it was rather than silently resized underneath.
+    KTEST_ASSERT_EQ(win_server_buf_size(f.client_pid, f.id, front), WIN_W * 3 * WIN_H * 3);
+    KTEST_ASSERT_EQ(win_server_buf_size(f.client_pid, f.id, front ^ 1), WIN_W * WIN_H);
 
     fixture_down(&f);
 }

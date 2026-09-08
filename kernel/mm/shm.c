@@ -153,6 +153,15 @@ int shm_create_named(const char *name, uint64_t npages, int owner_pid) {
     return obj_create(name, npages, owner_pid, 0);
 }
 
+// Takes a name out of the namespace, for a caller standing in for a
+// process. Same audience as shm_create_named(): a fixture replacing an
+// object a real client would have replaced. The frames go with the last
+// holder, exactly as SYS_SHM_UNLINK leaves them.
+void shm_unlink_named(const char *name) {
+    int idx = shm_lookup(name);
+    if (idx >= 0) g_obj[idx].unlinked = 1;
+}
+
 // An object with no name, for a kernel subsystem that maps both sides
 // itself and needs the frames refcounted rather than owned by one
 // caller. The reference returned is the caller's to shm_put().

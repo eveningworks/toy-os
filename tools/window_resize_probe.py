@@ -40,6 +40,8 @@ def main():
     # whether the WM repaints the window live during a drag or draws an
     # outline and proposes once on release, and a resize bug that only
     # appears in one of them is invisible to the other.
+    ap.add_argument("--steps", type=int, default=12,
+                    help="pointer steps per drag; more means more proposals")
     ap.add_argument("--mode", default=None,
                     choices=["live", "outline", "auto"],
                     help="desktop.resize_mode to set before dragging")
@@ -55,13 +57,23 @@ def main():
     dbg.spawn(args.app)
     time.sleep(1.5)
 
-    win = dbg.window(args.title)
-    if not win:
-        print(f"window_resize_probe: no window titled {args.title!r}")
+    # **REFUSED, NOT GUESSED, WHEN A TITLE IS AMBIGUOUS.** Two clients
+    # with one title -- a previous run's still open -- made this compare
+    # one window's compositor view against another's kernel row and
+    # report a disagreement that was the probe's own. Twice. A tool
+    # whose failure mode looks exactly like the bug it hunts has to say
+    # so instead of picking.
+    matches = [w for w in dbg.windows() if w["title"] == args.title]
+    if len(matches) != 1:
+        print(f"window_resize_probe: {len(matches)} windows titled "
+              f"{args.title!r} -- need exactly one. Restart the guest, or "
+              f"pass --title.")
         return 1
+    win = matches[0]
+    main.prev_asked = dbg.state().get("resizes_asked", 0)
 
     print(f"{'drag':>4}  {'asked':>11}  {'compositor':>11}  {'kernel':>11}  "
-          f"{'lag':>5} {'paint':>7}  buffers")
+          f"{'lag':>5} {'paint':>7} {'props':>5}  buffers")
     for n in range(args.drags + 1):
         if n:
             win = dbg.window(args.title)
@@ -72,9 +84,16 @@ def main():
             # what a person drags. Taken from the WM's own geometry
             # rather than computed here -- a hardcoded offset is the
             # thing that rots when the chrome changes.
-            gx = win["x"] + win["w"] - 3
-            gy = win["y"] + win["h"] - 3
-            qmp.drag(gx, gy, gx + args.dx, gy + args.dy)
+            # **INJECTED INPUT, NOT THE REAL MOUSE.** dbg.drag() pushes
+            # events the WM drains as fast as it iterates, so a live
+            # drag proposes many times; qmp.drag() moves the physical
+            # pointer, which the WM samples once a frame and which
+            # therefore proposes ONCE however many steps it is given.
+            # Using the wrong one made live and outline mode look
+            # identical and hid the difference this tool exists to show.
+            gx = win["x"] + win["w"] - 2
+            gy = win["y"] + win["h"] - 2
+            dbg.drag(gx, gy, gx + args.dx, gy + args.dy, steps=args.steps)
             dbg.settle()
             time.sleep(0.6)
 
@@ -86,7 +105,13 @@ def main():
         # another's kernel row and report a disagreement that is the
         # PROBE's, which is exactly the class of bug this tool exists to
         # avoid producing.
-        want_pid = w.get("pid") if w else None
+        # `client_pid`, which is what the WM calls it. Reading a key
+        # that is not there silently disabled this match once already.
+        want_pid = w.get("client_pid") if w else None
+        if w and want_pid is None:
+            print("window_resize_probe: no client_pid in `gui windows` -- "
+                  "cannot correlate the two views")
+            return 1
         kern, bufs = "?", ""
         for l in dbg.send("sh lswin").splitlines():
             f = l.split()
@@ -105,11 +130,20 @@ def main():
         st = dbg.state()
         lag = st.get("resize_lag_ms", "?")
         paint = st.get("resize_paint", "?")
+        # PROPOSALS PER DRAG, as a delta. `resizes_asked` is cumulative,
+        # so the interesting number is how many this drag caused: live
+        # mode proposes continuously while the pointer moves and outline
+        # proposes ONCE on release, so a live drag reporting one
+        # proposal is behaving like an outline drag whatever the mode
+        # says.
+        asked_now = st.get("resizes_asked", 0)
+        props = asked_now - main.prev_asked
+        main.prev_asked = asked_now
 
         asked = "-" if not n else f"+{args.dx},+{args.dy}"
         flag = "" if comp == kern else "   <-- DISAGREE"
         print(f"{n:>4}  {asked:>11}  {comp:>11}  {kern:>11}  "
-              f"{lag:>5} {paint:>7}  {bufs}{flag}")
+              f"{lag:>5} {paint:>7} {props:>5}  {bufs}{flag}")
 
     return 0
 

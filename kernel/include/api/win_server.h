@@ -326,4 +326,9 @@ int win_server_destroy_raw(int pid, uint32_t id);
 // driving resize through the protocol tests only that refusal.
 int win_server_resize_raw(int pid, uint32_t id, int w, int h);
 
+// A buffer's own pixel count (w * h), 0 if the window does not have it.
+// For a KTEST asserting WHICH of the two a resize touched -- the other
+// is the client's to replace, not the server's to grow.
+int win_server_buf_size(int pid, uint32_t id, int buf);
+
 #endif

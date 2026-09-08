@@ -35,6 +35,14 @@ static void buf_name(char *out, unsigned cap, int slot, int buf) {
 // alive for whoever still maps it, which is exactly what stops a resize
 // pulling the pixels out from under the compositor.
 static int buf_make(int slot, int buf, uint64_t bytes) {
+    // **PAGE-ALIGNED, because SYS_MUNMAP requires it** (abi/syscall_abi.h)
+    // and refuses anything else. A window's pixels are w*h*4, which is
+    // almost never a whole number of pages -- so the unrounded length
+    // made every unmap fail silently, the old mapping outlive its
+    // replacement, and each resize leak a buffer's worth of frames.
+    // Twelve objects after three drags, and then the biggest allocation
+    // in the run is the one that fails.
+    bytes = (bytes + 4095) & ~4095ULL;
     char nm[32];
     buf_name(nm, sizeof nm, slot, buf);
     if (g_px[buf]) {
@@ -73,7 +81,11 @@ static void req_clear(struct win_request_msg *r);
 static int req_send(struct win_request_msg *r);
 
 static int buf_ensure(uint32_t window, int buf, int w, int h) {
-    uint64_t want = (uint64_t)w * (uint64_t)h * 4;
+    // ROUNDED THE SAME WAY buf_make() rounds, or the comparison never
+    // matches and this replaces the buffer on EVERY present -- handing
+    // the app a freshly zeroed one each frame, which shows up as a
+    // scene that will not hold still.
+    uint64_t want = ((uint64_t)w * (uint64_t)h * 4 + 4095) & ~4095ULL;
     if (g_px[buf] && g_px_bytes[buf] == want) return 1;
     if (!buf_make(g_slot, buf, want)) return 0;
 

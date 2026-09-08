@@ -1972,6 +1972,19 @@ int win_server_is_mapped_to_compositor(int owner_pid, uint32_t id) {
     return cw && cw->comp_mapped;
 }
 
+// Maps a stand-in client's buffer where a real client's mmap would have
+// put it -- win_buffer_vaddr(slot), the address the KTESTs read and
+// write through. Only the raw entry points use it: a real client maps
+// its own memory and the kernel never touches its address space.
+static void fixture_map_buf(uint64_t pml4, int slot, int b, int idx,
+                            uint32_t pages) {
+    if (idx < 0) return;
+    uint64_t base = win_buffer_vaddr((uint32_t)slot) + (uint64_t)b * WIN_BUFFER_HALF;
+    for (uint32_t i = 0; i < pages; i++)
+        vmm_map_user_borrowed(pml4, base + (uint64_t)i * 4096,
+                              shm_frame(idx, i), 1, 0, VMM_MT_NORMAL);
+}
+
 int win_server_create_raw(int pid, uint64_t pml4, int w, int h, uint32_t *out_id) {
     uint32_t id = 0;
 
@@ -1984,18 +1997,51 @@ int win_server_create_raw(int pid, uint64_t pml4, int w, int h, uint32_t *out_id
     // adoption below is the only one.
     uint32_t bytes = (uint32_t)w * (uint32_t)h * 4;
     uint32_t pages = (bytes + 4095) / 4096;
+    // The same search create_window() does, because the slot has to be
+    // known BEFORE the objects can be named after it. A RETIRED slot is
+    // eligible: create_window() reclaims one when nothing else is free,
+    // and refusing here would make that path unreachable from the KTEST
+    // that covers it.
     int slot = -1;
     for (int i = 0; i < WIN_CLIENT_MAX; i++) {
         struct client_window *c = &windows[pid - 1][i];
         if (!c->used && !c->comp_retired) { slot = i; break; }
     }
+    for (int i = 0; slot < 0 && i < WIN_CLIENT_MAX; i++) {
+        struct client_window *c = &windows[pid - 1][i];
+        if (!c->used && c->comp_retired) slot = i;
+    }
     if (slot < 0) return 0;
+
+    // **RECLAIMED BEFORE THE NEW OBJECTS EXIST, and the order is the
+    // point.** Reclaiming drops the compositor's reference to the OLD
+    // objects; creating first can hand the new ones the very slots the
+    // old ones are about to vacate, so the release lands on the new
+    // object instead. Same hazard as any create-then-free pair over a
+    // recycled index.
+    {
+        struct client_window *c = &windows[pid - 1][slot];
+        if (c->comp_retired) {
+            comp_poison(c);
+            for (int b = 0; b < COMP_BUFS; b++) {
+                c->bufs[b].shm = -1;
+                c->bufs[b].pages = 0;
+            }
+            c->comp_retired = 0;
+        }
+    }
 
     int made[COMP_BUFS];
     for (int b = 0; b < COMP_BUFS; b++) {
         char nm[SHM_NAME_MAX];
         win_buf_name(nm, sizeof nm, pid, slot, b);
+        // A RECLAIMED slot still carries the previous window's names,
+        // so clear them first -- the client's own buf_make() does the
+        // same, and for the same reason: a create under a live name is
+        // refused, not silently reused.
+        shm_unlink_named(nm);
         made[b] = shm_create_named(nm, pages, pid);
+        fixture_map_buf(pml4, slot, b, made[b], pages);
     }
     // No app id: a test window that claimed one could be raised by a
     // real app asking for its twin.
@@ -2019,10 +2065,35 @@ int win_server_destroy_raw(int pid, uint32_t id) {
     return 1;
 }
 
+// A buffer's own pixel count, for a KTEST asserting which of the two a
+// resize touched. 0 for a buffer this window does not have.
+int win_server_buf_size(int pid, uint32_t id, int buf) {
+    struct client_window *cw = lookup(pid, id);
+    if (!cw || buf < 0 || buf >= COMP_BUFS) return 0;
+    return cw->bufs[buf].w * cw->bufs[buf].h;
+}
+
 int win_server_resize_raw(int pid, uint32_t id, int w, int h) {
     struct client_window *cw = lookup(pid, id);
     if (!cw) return 0;
-    return resize_window(cw, w, h, -1);   // the KTEST path names none
+    // **STANDS IN FOR A CLIENT, as win_server_create_raw() does.** A
+    // buffer is the client's object and a resize REPLACES it; this entry
+    // point has no client, so it makes the replacement itself under the
+    // name the adopt will look for. Without it the adopt finds the old,
+    // too-small object and the resize is refused.
+    int back = cw->bufs[1].pages ? (cw->front ^ 1) : cw->front;
+    uint32_t pages = ((uint32_t)w * (uint32_t)h * 4 + 4095) / 4096;
+    char nm[SHM_NAME_MAX];
+    win_buf_name(nm, sizeof nm, cw->pid, (int)cw->id, back);
+    shm_unlink_named(nm);
+    int made = shm_create_named(nm, pages, cw->pid);
+    if (made < 0) return 0;
+    // Remapped at the new size, over whatever the old object left --
+    // the client's mmap would have done exactly this.
+    fixture_map_buf(cw->pml4, (int)cw->id, back, made, pages);
+    int ok = resize_window(cw, w, h, back);
+    shm_put(made);   // the creator's reference; the window holds its own
+    return ok;
 }
 
 int win_server_window_count(int pid) {
