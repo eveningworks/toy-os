@@ -174,6 +174,30 @@ static void deliver(struct buf *b, const char *label, const struct opts *o) {
     }
 }
 
+// **WHAT LETS A PAGE RE-WRAP WHEN ITS WINDOW IS RESIZED.** The pager
+// re-pages on its own but cannot re-wrap text it did not produce, so it
+// asks for the page again at the new width (lib/upager.h). The SOURCE
+// therefore has to outlive the render, which is the only reason it is
+// held here rather than freed the moment umd_render() returns.
+struct render_ctx {
+    const char *src;
+    int         src_len;
+    int         color;
+    char       *buf;      // this function's, and the pager never frees it
+    int         cap;
+    int         overflow;
+};
+
+static int render_at(void *ctx, int cols, const char **out) {
+    struct render_ctx *r = ctx;
+    struct umd_opts mo = { .cols = cols, .color = r->color, .indent = 3 };
+    struct umd_out o = { r->buf, r->cap, 0, 0 };
+    umd_render(r->src, r->src_len, &mo, &o);
+    r->overflow = o.overflow;
+    *out = r->buf;
+    return o.len;
+}
+
 static int show(const char *cat, const char *name, const struct opts *o) {
     size_t len = 0;
     char *src = load(cat, name, &len);
@@ -183,21 +207,28 @@ static int show(const char *cat, const char *name, const struct opts *o) {
     // spaces, neither of which can multiply a page sixfold. An
     // undersized buffer would truncate the page rather than fail, which
     // is why umd_out reports the overflow instead of leaving it silent.
+    // The allowance covers a re-render at a NARROWER width too, which
+    // costs a line break per wrap and nothing else.
     int cap = (int)len * 6 + 8192;
     char *rendered = malloc((size_t)cap);
     if (!rendered) { free(src); sys_print("doc: out of memory\n"); return 0; }
 
-    struct umd_opts mo = { .cols = o->cols, .color = o->color, .indent = 3 };
-    struct umd_out out = { rendered, cap, 0, 0 };
-    umd_render(src, (int)len, &mo, &out);
-    free(src);
+    struct render_ctx rc = { src, (int)len, o->color, rendered, cap, 0 };
+    const char *first = 0;
+    int n = render_at(&rc, o->cols, &first);
 
     char label[80];
     snprintf(label, sizeof label, "doc %s/%s", cat, name);
-    struct buf b = { rendered, out.len, cap };
-    deliver(&b, label, o);
-    if (out.overflow) sys_print("doc: page truncated (rendered larger than expected)\n");
+    if (o->pager) {
+        struct upager_source usrc = { render_at, &rc };
+        upager_run_src(rendered, n, label, 0, &usrc);
+    } else {
+        struct buf b = { rendered, n, cap };
+        deliver(&b, label, o);
+    }
+    if (rc.overflow) sys_print("doc: page truncated (rendered larger than expected)\n");
     free(rendered);
+    free(src);
     return 1;
 }
 

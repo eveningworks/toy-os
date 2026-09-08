@@ -232,7 +232,31 @@ static volatile int g_resized;
 
 static void on_sigwinch(int sig) { (void)sig; g_resized = 1; }
 
+// Byte offset of each line, into `line` (capacity `cap`). Returns how
+// many there are. A trailing newline produces a final empty line index;
+// harmless, and dropping it would make the last real line unreachable
+// at the bottom of the file.
+static int index_lines(const char *text, int len, int *line, int cap) {
+    int lines = 0;
+    line[lines++] = 0;
+    for (int i = 0; i < len && lines < cap; i++)
+        if (text[i] == '\n' && i + 1 <= len) line[lines++] = i + 1;
+    return lines;
+}
+
+// How many lines `len` bytes can hold, for the index's capacity.
+static int count_lines(const char *text, int len) {
+    int nl = 1;
+    for (int i = 0; i < len; i++) if (text[i] == '\n' && i + 1 <= len) nl++;
+    return nl;
+}
+
 int upager_run(const char *text, int len, const char *label, int truncated) {
+    return upager_run_src(text, len, label, truncated, 0);
+}
+
+int upager_run_src(const char *text, int len, const char *label, int truncated,
+                   const struct upager_source *src) {
     if (len <= 0) return 0;
     if (!label) label = "pager";
 
@@ -240,9 +264,15 @@ int upager_run(const char *text, int len, const char *label, int truncated) {
     int key_fd = upager_term(&rows, &cols);
     if (key_fd < 0) return dump(text, len);
 
-    int nl = 1;
-    for (int i = 0; i < len; i++) if (text[i] == '\n' && i + 1 <= len) nl++;
+    // **RENDERED AT THE PAGER'S OWN WIDTH FIRST**, so a caller need not
+    // measure the terminal itself and then hope the two agree.
+    if (src && src->render) {
+        const char *fresh = 0;
+        int n = src->render(src->ctx, cols, &fresh);
+        if (n > 0 && fresh) { text = fresh; len = n; }
+    }
 
+    int nl = count_lines(text, len);
     // Sized from the input and from the real terminal rather than from
     // a ceiling, and freed before this returns. A frame row can be
     // longer in BYTES than in columns (escapes cost bytes and no
@@ -257,14 +287,7 @@ int upager_run(const char *text, int len, const char *label, int truncated) {
         return dump(text, len);   // no memory to page with: still deliver it
     }
 
-    int lines = 0;
-    line[lines++] = 0;
-    for (int i = 0; i < len && lines < nl; i++)
-        if (text[i] == '\n' && i + 1 <= len) line[lines++] = i + 1;
-    // A trailing newline produces a final empty line index; harmless,
-    // and dropping it would make the last real line unreachable at the
-    // bottom of the file.
-
+    int lines = index_lines(text, len, line, nl);
     struct pager p = {
         .text = text, .len = len, .line = line, .lines = lines,
         .frame = frame, .frame_cap = fcap, .label = label,
@@ -304,8 +327,41 @@ int upager_run(const char *text, int len, const char *label, int truncated) {
             // realloc costs rows off the bottom rather than a overrun.
             int nr = rows, nc = cols;
             upager_term(&nr, &nc);
-            int need = nr * (nc * 4 + 16) + 512;
-            if (need > p.frame_cap) {
+
+            // **THE TEXT IS RE-WRAPPED HERE, or not at all.** The pager
+            // re-pages on its own -- new rows, new page, redraw -- but
+            // the wrapping belongs to whoever RENDERED the text, at the
+            // width the terminal was when they asked. Without this a
+            // widened window showed the old narrow paragraphs with the
+            // rest of the window empty. A caller with nothing to
+            // re-render (less) supplies no source and this is skipped.
+            if (src && src->render && nc != cols) {
+                const char *fresh = 0;
+                int n = src->render(src->ctx, nc, &fresh);
+                if (n > 0 && fresh) {
+                    // The index is sized to the NEW text: a narrower
+                    // width wraps into more lines than the old one had,
+                    // and re-indexing into the old array would stop at
+                    // its capacity and hide the tail of the page.
+                    int nnl = count_lines(fresh, n);
+                    int *bigger = (nnl > nl)
+                        ? realloc(line, (size_t)nnl * sizeof(int)) : line;
+                    if (bigger) {
+                        line = p.line = bigger;
+                        if (nnl > nl) nl = nnl;
+                        p.text = fresh;
+                        p.len = n;
+                        lines = p.lines = index_lines(fresh, n, line, nl);
+                        // WHERE THE READER WAS is a line number in text
+                        // that no longer exists. Clamping is all that
+                        // can be honestly done -- keeping a byte offset
+                        // would need the renderer to map old to new.
+                        if (top > lines) top = lines;
+                    }
+                }
+            }
+
+            int need = nr * (nc * 4 + 16) + 512;            if (need > p.frame_cap) {
                 char *bigger = realloc(p.frame, (size_t)need);
                 if (bigger) { frame = p.frame = bigger; p.frame_cap = need; }
             }

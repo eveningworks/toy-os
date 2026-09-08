@@ -191,6 +191,30 @@ def run(dbg, qmp, res):
         ok = len(parts) == 4 and (int(parts[0]), int(parts[1])) == moved_geom
     res.check("a dragged window's new position is recorded on close", ok,
               f"window ended at {moved_geom}, file says {line}")
+    close_all(dbg)
+
+    # 6. A FIXED-SIZE APP KEEPS ITS OWN SIZE, whatever the file says.
+    #    Geometry is restored as a PROPOSAL and a client that never
+    #    declared itself resizable declines it -- without that, one
+    #    wrong size is permanent, since it is written back on every
+    #    close. The position is still honoured: only the size is the
+    #    app's to refuse.
+    #
+    #    Calculator is the fixed-size app; the saved size below is
+    #    far larger than its natural one, so a window that accepted it
+    #    is obvious rather than marginal -- but still small enough not
+    #    to trip the on-screen clamp, which check 2 covers and which
+    #    would move the POSITION as well and confuse this check.
+    dbg.send(f"sh write {CONF} calculator=180,120,700,500")
+    time.sleep(0.5)
+    w = open_and_read(dbg, app="Calculator")
+    pos = (w["x"], w["y"]) if w else None
+    size = (w["w"], w["h"]) if w else None
+    res.check("a fixed-size app refuses a saved size", bool(w) and size != (700, 500),
+              f"opened at {size}, the file asked for (700, 500)")
+    res.check("...and still takes the saved position", pos == (180, 120),
+              f"opened at {pos}")
+    close_all(dbg)
 
 
 def main():

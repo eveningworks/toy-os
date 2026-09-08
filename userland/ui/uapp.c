@@ -730,6 +730,25 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         // and the answer is to keep the size we had and repaint
         // nothing: the window is unchanged, so there is nothing to
         // show.
+        //
+        // **A FIXED-SIZE APP DECLINES**, and the proposal is the WM's to
+        // make either way -- a client commits its own size, which is
+        // Wayland's rule for a configure. Without this, any single wrong
+        // size becomes permanent: geometry is remembered per app and
+        // restored as a proposal, so one bad value (a `gui resize`, a
+        // font change moving the natural size) reopens the app that way
+        // for ever, with the layout adrift in the extra room.
+        if (!(d->flags & WIN_HINT_RESIZABLE)) {
+            // **REFUSING SILENTLY IS NOT ENOUGH.** The WM has already
+            // moved its frame to the size it proposed, so a client that
+            // just ignores the event leaves a window drawn at its real
+            // size inside a bigger frame -- the whitespace this whole
+            // thing is about. Presenting is the answer the protocol
+            // already has: the frame carries the front buffer's own
+            // dimensions and the compositor adopts THOSE.
+            a->dirty = 1;
+            break;
+        }
         if (uapp_resize(a, ev->a, ev->b)) {
             if (d->on_resize) d->on_resize(a, a->w, a->h);
             a->dirty = 1;

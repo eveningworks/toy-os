@@ -144,24 +144,35 @@ void wm_geometry_restore(int idx) {
     if (x < 0) x = 0;
     if (y < 0) y = 0;   // the title bar must be reachable
 
-    win->x = x; win->y = y; win->w = w; win->h = h;
+    win->x = x; win->y = y;
+
+    // A CLIENT OWNS ITS OWN BUFFER, so its size is a REQUEST, not an
+    // assignment: the WM cannot widen a window whose pixels the client
+    // allocated, and **a client may DECLINE** -- a fixed-size app
+    // always does. So the frame keeps the size it has until a present
+    // answers, which carries the buffer's real dimensions and is
+    // adopted in on_window_present() for an accepted resize and a
+    // refused one alike.
+    //
+    // Assigning it here as well was the bug: a declined proposal left
+    // the frame at the saved size with the client still drawing its
+    // own, i.e. a small window painted into the top-left corner of a
+    // big one, and nothing afterwards could correct it -- the present
+    // that would have carried the truth matched `client_w/h`, which
+    // this had not touched.
+    if (wm_client_is_client_window(win)) {
+        int content_w = w - 2;
+        int content_h = h - WM_TITLEBAR_H - 2;
+        if (content_w > 0 && content_h > 0 &&
+            (content_w != win->client_w || content_h != win->client_h)) {
+            wm_client_send_resize(win, content_w, content_h);
+        }
+    } else {
+        win->w = w; win->h = h;
+    }
 
     // Belt and braces: the clamp above is arithmetic on this window,
     // wm_ensure_reachable() is the WM's own invariant. If they ever
     // disagree the WM's wins.
     wm_ensure_reachable(idx);
-
-    // A CLIENT OWNS ITS OWN BUFFER, so its size is a REQUEST, not an
-    // assignment: the WM cannot simply widen a window whose pixels the
-    // client allocated. Ask through the same path a user's resize drag
-    // uses -- the client reallocates and acks through
-    // on_window_resized(), which is what actually sets win->w/h.
-    if (wm_client_is_client_window(win)) {
-        int content_w = win->w - 2;
-        int content_h = win->h - WM_TITLEBAR_H - 2;
-        if (content_w > 0 && content_h > 0 &&
-            (content_w != win->client_w || content_h != win->client_h)) {
-            wm_client_send_resize(win, content_w, content_h);
-        }
-    }
 }

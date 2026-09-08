@@ -1398,9 +1398,25 @@ string.
 **Saving belongs at the close, not where geometry changes.** Five call
 sites write x/y/w/h and a drag writes them every frame.
 
-**A client's size is a request.** It owns its buffer, so a restore asks
-via `wm_client_send_resize()` and the client acks; the WM cannot just
-assign `win->w`.
+**A client's size is a request, AND A CLIENT MAY SAY NO.** It owns its
+buffer, so a restore asks via `wm_client_send_resize()` and the client
+answers; the WM must not assign `win->w` for a client window at all.
+Assigning it as well as asking is a bug with a delayed fuse: a
+FIXED-SIZE app declines (Toykit refuses a `WIN_EV_RESIZE` unless the app
+declared `WIN_HINT_RESIZABLE`), and the frame then sits at a size the
+client never adopted -- a small window painted into the corner of a big
+one, with nothing able to correct it, since the present that would carry
+the truth matches the `client_w/h` the restore never touched. The frame
+follows the PRESENT, for an accepted resize and a refused one alike.
+
+**A declining client still has to answer**, by presenting: the WM has
+already been told a size, and a present carries the buffer's own
+dimensions. Ignoring the event leaves the same stale frame.
+
+**Which means one wrong size is otherwise permanent**, because the file
+is rewritten from the frame on every close. A `gui resize` on a
+fixed-size app, or a font change moving its natural size, would reopen
+it that way for ever.
 
 
 
@@ -3120,6 +3136,17 @@ labelled `" "` cannot be passed as a console token.
   and swallow it -- and EINTR from that read is a resize, not the
   terminal going away. Treating it as the latter closes the pager on
   every window drag.
+
+  **AND RE-PAGING IS NOT RE-WRAPPING.** The pager owns the page; it does
+  not own the wrapping, which belongs to whoever RENDERED the text at
+  whatever width the terminal was when they asked. So `doc` in a widened
+  window still showed 62-column paragraphs with the rest of the window
+  empty, while every row count and percentage was correct.
+  `upager_run_src()` takes a `struct upager_source` for that: a callback
+  the pager asks for the text again at the new width, whose buffer stays
+  the CALLER's. A caller that pages bytes it merely read (`less`)
+  supplies none. The index has to be rebuilt with the text, and sized to
+  it -- a narrower width wraps into more lines than the old array holds.
 
 - **A WINDOW IS RESIZED IN A TEST BY `gui resize W H`, NEVER BY
   DRAGGING THE GRIP.** The grip needs a real pointer the compositor

@@ -28,6 +28,29 @@
 // keypress that can never come. Returns 0, or -1 if the write failed.
 int upager_run(const char *text, int len, const char *label, int truncated);
 
+// **WHAT THE PAGER CANNOT DO FOR ITSELF: RE-WRAP.** It re-pages on a
+// window resize -- new rows, new page, redraw -- but the TEXT was
+// wrapped by whoever rendered it, at the width the terminal was when
+// they asked. So `doc` in a widened window went on showing 62-column
+// paragraphs with the rest of the window empty.
+//
+// A caller that RENDERS its text supplies this and gets re-wrapped on
+// every resize; one that pages bytes it merely read (less) supplies
+// nothing and is unaffected.
+//
+// `render` returns the new length and leaves the bytes in `*out`. **THE
+// BUFFER STAYS THE CALLBACK'S**, as the original text is: the pager
+// frees neither, and a caller that reallocates simply hands back the
+// new pointer. Returning <= 0 keeps what is already on screen, which is
+// the right answer for a re-render that could not allocate.
+struct upager_source {
+    int (*render)(void *ctx, int cols, const char **out);
+    void *ctx;
+};
+
+int upager_run_src(const char *text, int len, const char *label, int truncated,
+                   const struct upager_source *src);
+
 // The keymap, spelled out, for a caller's --help. One list rather than
 // one per front end: the status line and every usage message read from
 // here, so a key added in upager.c cannot go unmentioned.
