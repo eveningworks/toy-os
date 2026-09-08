@@ -1988,6 +1988,32 @@ struct sys_stat {
                           // minus a mode: this system has no users, so
                           // any process may open any name.
 
+#define SYS_FUTEX_WAIT 101 // RDI = a 4-byte-aligned user address, RSI =
+                           // the value it is expected to still hold,
+                           // RDX = a timeout in milliseconds (0 = no
+                           // deadline). Parks the caller until
+                           // SYS_FUTEX_WAKE names that word, or the
+                           // timeout passes. Returns 0 when woken;
+                           // -EAGAIN if the word ALREADY HOLDS
+                           // SOMETHING ELSE, which is not an error but
+                           // the answer -- it closes the lost-wakeup
+                           // race, since a caller that parked on a
+                           // stale read would wait for a wake that had
+                           // already happened. -EINVAL for a misaligned
+                           // address, -EFAULT for one nothing maps.
+                           //
+                           // THE WORD IS NAMED BY ITS FRAME, not by the
+                           // caller's pointer, so two processes sharing
+                           // an shm page reach the same futex at
+                           // whatever address each of them mapped it.
+
+#define SYS_FUTEX_WAKE 102 // RDI = the same address, RSI = how many
+                           // waiters to release (0 = all). Returns the
+                           // number actually woken. A lock's unlock
+                           // passes 1: releasing every waiter so that
+                           // all but one park again is a thundering
+                           // herd.
+
 #define SYS_SHM_UNLINK 100 // RDI = a name. Removes it from the
                            // namespace; the frames go when the last
                            // descriptor and mapping do, so unlinking

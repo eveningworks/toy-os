@@ -509,6 +509,16 @@ int sys_munmap(void *addr, uint64_t length) {
     return (int)err(syscall2(SYS_MUNMAP, (uint64_t)(uintptr_t)addr, length));
 }
 
+int sys_futex_wait(volatile uint32_t *word, uint32_t expected, int timeout_ms) {
+    return (int)err(syscall3(SYS_FUTEX_WAIT, (uint64_t)(uintptr_t)word,
+                              expected, (uint64_t)timeout_ms));
+}
+
+int sys_futex_wake(volatile uint32_t *word, int count) {
+    return (int)err(syscall2(SYS_FUTEX_WAKE, (uint64_t)(uintptr_t)word,
+                              (uint64_t)count));
+}
+
 int sys_shm_open(const char *name, uint64_t length, int flags) {
     struct shm_open_msg m = {
         .name = name, .length = length, .flags = flags, .reserved = 0,

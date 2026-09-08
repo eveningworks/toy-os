@@ -502,6 +502,8 @@ const void *scheduler_wait_chan_pid(int pid);
 #define SCHED_WAIT_TIMER 4 // a deadline this process asked to sleep until
 #define SCHED_WAIT_KEY   5 // a keystroke on a terminal this process reads
 #define SCHED_WAIT_THREAD 7 // a thread of this process, being joined
+#define SCHED_WAIT_FUTEX 9 // a word in memory another process has
+                            // promised to change (SYS_FUTEX_WAIT)
 #define SCHED_WAIT_NET   8 // a datagram on a socket this process reads.
                            // ONE channel for the whole stack, not one
                            // per socket: the waker is a driver's
@@ -910,6 +912,12 @@ int scheduler_block_current_until(uint64_t *regs, const void *chan, int reason,
 // never touches g_next_kernel_rsp, so the woken process runs at the
 // next ordinary tick rather than being switched to from inside an IRQ.
 int scheduler_wake(const void *chan, int64_t value);
+
+// The same, waking at most `max` of them (0 = every one). A futex's
+// wake takes a count for a reason: releasing every waiter on a
+// contended lock so all but one park again is the herd this mechanism
+// exists to avoid.
+int scheduler_wake_n(const void *chan, int64_t value, int max);
 
 // --- TEST SUPPORT, for kernel/proc/sched_test.c ----------------------
 //

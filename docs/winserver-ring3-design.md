@@ -146,14 +146,41 @@ record.
 
 ### Stage 3 -- the general named channel
 
-A named channel object: a ring of fixed-size messages in shared memory,
-a wakeup when it goes non-empty, and a reply slot for the messages that
-need one. Async by default. The compositor waits on it in the loop it
-already has.
+A ring of fixed-size messages in shared memory, a wakeup when it goes
+non-empty, and a reply slot for the messages that need one. Async by
+default.
 
-**Needs:** deciding whether the wakeup is the existing event queue or a
-mechanism of its own; that choice is what makes this a general channel
-rather than a window one.
+**The wakeup is a FUTEX -- BUILT 2026-09-08.** `SYS_FUTEX_WAIT` /
+`SYS_FUTEX_WAKE`, sitting straight on the scheduler's existing
+address-keyed block (`api/scheduler.h`: "a channel is just an address").
+It was chosen over posting to the receiver's event queue because that
+queue is the WINDOW system's, and a channel woken through it could not
+serve `/bin/service` -- which is the caller that makes this general
+rather than window-shaped.
+
+**The key is the PHYSICAL address**, which is the whole of the design:
+two processes map a shm page at addresses nothing makes equal, so a key
+built from the caller's pointer parks them on two unrelated channels and
+a wake reaches nobody. Linux keys a shared futex on (inode, offset) for
+the same reason. `scheduler_wake_n()` gained a count at the same time,
+because releasing every waiter on a contended lock so all but one parks
+again is the herd this channel mechanism exists to avoid.
+
+It retires a roadmap item with two callers of its own: tolibc's mutex
+spins and yields today, and a detached thread's stack cannot be
+reclaimed without one.
+
+**Still owed for this stage:** the ring and its ABI, and ONE WAIT that
+covers a channel message AND the event queue -- without it a compositor
+cannot block on both, and there is no `poll()` here to build that from.
+
+### Stage 3b -- one wait over both
+
+`SYS_WAIT_READY` parks on the process's event queue; a futex parks on a
+word. A compositor needs to wake on either. The shape that fits is the
+event queue's readiness becoming a futex word too, so one wait covers
+both -- which is what makes the channel usable by the window system
+rather than only by services.
 
 ### Stage 4 -- presentation state moves
 

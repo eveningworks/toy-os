@@ -1092,6 +1092,7 @@ static uint32_t reported_wait_reason(int reason) {
     case SCHED_WAIT_TTY:   return PROC_WAIT_TTY;
     case SCHED_WAIT_THREAD: return PROC_WAIT_THREAD;
     case SCHED_WAIT_NET:   return PROC_WAIT_NET;
+    case SCHED_WAIT_FUTEX: return PROC_WAIT_FUTEX;
     default:               return PROC_WAIT_NONE;
     }
 }
@@ -1490,6 +1491,7 @@ const char *sched_wait_reason_name(int reason) {
     case SCHED_WAIT_TTY:   return "tty";
     case SCHED_WAIT_THREAD: return "join";
     case SCHED_WAIT_NET:   return "net";
+    case SCHED_WAIT_FUTEX: return "futex";
     default:               return "?";
     }
 }
@@ -1614,8 +1616,18 @@ int scheduler_wake_timers(uint64_t now_ns) {
 // to switch directly to the woken process is exactly the reentrancy
 // this design exists to avoid.
 int scheduler_wake(const void *chan, int64_t value) {
+    return scheduler_wake_n(chan, value, 0);
+}
+
+// `max` waiters, or every one of them when it is 0. A bound exists
+// because a futex has one: waking every waiter on a contended mutex so
+// that all but one park again is the thundering herd this channel
+// mechanism was built to avoid (see api/scheduler.h), and a lock's
+// unlock wants exactly one.
+int scheduler_wake_n(const void *chan, int64_t value, int max) {
     int woken = 0;
     for (int i = 0; i < MAX_PROCS; i++) {
+        if (max && woken >= max) break;
         if (procs[i].state != SCHED_BLOCKED) continue;
         if (procs[i].wait_chan != chan) continue;
 

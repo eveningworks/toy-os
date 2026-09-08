@@ -101,6 +101,14 @@ TESTS = [
     # (exit code None) because it blocks in waitpid for /tests/shm_child,
     # which the legacy `run` loader has no scheduler slot to do.
     ("shm_test", None, None, None),
+    # A futex parking and waking ACROSS two processes, through a shared
+    # page. The KTESTs beside sys_futex_wait() cover key derivation and
+    # every refusal and cannot cover this -- they run on the kernel
+    # context, which has nobody to be woken by. SPAWNED (exit code None)
+    # because both halves block: the child parks in the futex and the
+    # parent in waitpid, neither of which the legacy `run` loader has a
+    # scheduler slot to do.
+    ("futex_test", None, None, None),
     # Tab completion's engine, built for ring 3. The KTESTs cover the
     # same source through the KERNEL shell's environment and would pass
     # whether or not a byte of it linked into libuapp.a -- this is the

@@ -67,6 +67,7 @@
                            // waiting for a master that has fallen behind
 #define PROC_WAIT_THREAD 7 // a thread of the same process, being joined
 #define PROC_WAIT_NET    8 // a datagram on a socket it reads
+#define PROC_WAIT_FUTEX  9 // a word in memory somebody will change
 
 struct proc_info {
     int32_t  pid;         // 0 means "this slot is empty"; see SYS_PROC_INFO

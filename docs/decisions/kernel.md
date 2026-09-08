@@ -556,6 +556,47 @@ left as a hole. A compositor that holds its own reference does not need
 that, which is the same answer `wl_buffer.release` gives. See
 `docs/winserver-ring3-design.md`'s stage 2.
 
+## A futex is keyed on the FRAME, not on the caller's pointer
+
+`SYS_FUTEX_WAIT`/`WAKE` sit straight on the scheduler's existing
+address-keyed block -- "a blocked process waits on a channel, and a
+channel is just an address" (`api/scheduler.h`) -- so the only real
+decision was what address to use.
+
+The caller's own pointer is the obvious answer and is wrong for the case
+the futex exists to serve. Two processes sharing an shm page map it
+wherever their own arenas happen to land, so a key built from the
+pointer parks them on two unrelated channels and a wake reaches nobody.
+The physical address is what they agree on, and the page walk already
+computes it. Linux keys a shared futex on (inode, offset) for exactly
+this; here the physical address IS that pair. The private case falls out
+right at no cost, since two processes' private pages are different
+frames.
+
+A user frame's physical address cannot collide with the kernel objects
+already used as channels: those live in the kernel image and the kernel
+heap, whose frames are never handed to a user mapping.
+
+**`scheduler_wake_n()` gained a count in the same change**, because a
+futex's wake takes one and the reason is this scheduler's own: releasing
+every waiter on a contended lock so that all but one parks again is the
+thundering herd the per-object channel mechanism was built to avoid.
+
+The compare-then-park is safe here only because a syscall handler runs
+with interrupts off, so nothing observes the word in between. That is a
+property of this kernel being single-core rather than of the design, and
+the comment above `sys_futex_wait()` says so -- an SMP port needs a real
+lock around the pair.
+
+**What the tests could and could not show.** The cross-process round trip
+is only testable from ring 3, and the first version of that test passed
+with the kernel keying on the VIRTUAL address -- because both halves are
+one binary and mapped the page at the same place, so the property under
+test never reached the code. It maps a spacer first now and asserts the
+two addresses differ before believing the wake. The KTEST beside
+`futex_key()` covers the property directly, by mapping one frame twice
+in one address space.
+
 ## A dead window's pixels are kept alive by whoever is reading them
 
 Destroying a window freed its frames at once, while the compositor is a

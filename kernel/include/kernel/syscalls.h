@@ -256,7 +256,9 @@ int sys_sbrk(struct syscall_ctx *c);
 int sys_mmap(struct syscall_ctx *c);   // kernel/mm/mmap.c
 int sys_munmap(struct syscall_ctx *c); // kernel/mm/mmap.c
 int sys_shm_open(struct syscall_ctx *c);   // kernel/mm/shm.c
-int sys_shm_unlink(struct syscall_ctx *c); // kernel/mm/shm.c
+int sys_shm_unlink(struct syscall_ctx *c);
+int sys_futex_wait(struct syscall_ctx *c);
+int sys_futex_wake(struct syscall_ctx *c); // kernel/mm/shm.c
 int sys_snd_open(struct syscall_ctx *c); // kernel/drivers/sound/sound.c
 int sys_snd_ctl(struct syscall_ctx *c);  // kernel/drivers/sound/sound.c
 int sys_spawn(struct syscall_ctx *c);

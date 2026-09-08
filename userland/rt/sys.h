@@ -325,6 +325,20 @@ int sys_munmap(void *addr, uint64_t length);
 // function with that name would take arguments meaning something else.
 // See docs/roadmap.md's IPC track.
 int sys_shm_open(const char *name, uint64_t length, int flags);
+
+// Park until somebody changes *word and says so, or `timeout_ms` passes
+// (0 = no deadline). Returns 0 when woken, -EAGAIN if *word already
+// holds something other than `expected` -- which is the answer, not an
+// error: it is what stops a caller parking on a stale read and waiting
+// for a wake that already happened.
+//
+// THE WORD IS NAMED BY ITS FRAME, so two processes sharing an shm page
+// meet on one futex at whatever address each of them mapped it.
+int sys_futex_wait(volatile uint32_t *word, uint32_t expected, int timeout_ms);
+
+// Release up to `count` waiters on that word (0 = all); returns how
+// many were woken. A lock's unlock passes 1.
+int sys_futex_wake(volatile uint32_t *word, int count);
 int sys_shm_unlink(const char *name);
 
 // --- sockets ---------------------------------------------------------

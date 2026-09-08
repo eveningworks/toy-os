@@ -256,7 +256,8 @@ everything libc-shaped is waiting on it. Full plan and staging:
 - [ ] Kernel threads (a scheduler entity without an address space of its own)
 - [x] ~~User threads (a second thread sharing one address space)~~ DONE 2026-08-26 -- a slot whose `tgid` names another
 - [x] ~~Thread-local storage (FS.base)~~ DONE 2026-08-26 -- `__thread` in ring 3, a per-thread errno, reloaded on every switch
-- [ ] A futex, so a mutex can BLOCK -- today's spins and yields, and a detached thread's stack needs one to be reclaimable
+- [x] ~~A futex, so a mutex can BLOCK~~ DONE 2026-09-08 -- `SYS_FUTEX_WAIT`/`WAKE`, keyed on the FRAME so shm works
+- [ ] Put tolibc's mutex and a detached thread's stack reclaim on the futex -- both still spin and yield
 - [ ] Image Viewer decodes on a worker thread, so its window keeps painting through a JPEG
 - [x] ~~The GUI Terminal reads its pty on a thread, not a 30 ms poll~~ DONE 2026-08-26 -- one reader per tab, no cadence left
 - [ ] More than eight Terminal tabs, which needs a scrolling strip rather than a wider one
@@ -532,7 +533,9 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~A window's pixels are an shm object, refcounted, and nameless so no process can map another's window~~ DONE 2026-09-08
 - [x] ~~The compositor holds its own reference to a window's frames~~ DONE 2026-09-08 -- `WIN_REQ_UNMAP_WINDOW`, `wl_buffer.release`'s shape
 - [ ] Retire the poison page: it survives as the slot-reclaim fallback while a window's compositor address is derived from its slot
-- [ ] A general named channel: async messages plus a reply slot, which `/bin/service`'s `/run/init.ctl` + `SIGHUP` can retire onto
+- [x] ~~A futex under the channel, so a wait is not a poll~~ DONE 2026-09-08 -- `docs/winserver-ring3-design.md` stage 3
+- [ ] The channel itself: a shm ring of async messages plus a reply slot, which `/bin/service` can retire onto
+- [ ] One wait covering a channel AND the event queue, so a compositor can block on both
 - [ ] Presentation state moves to the compositor -- `title`, `app_id`, `hint_flags`, `cursor`, and `WIN_REQ_WINDOW_INFO` with them
 - [ ] The client allocates its own buffer, retiring `win_buffer_vaddr()` and the carved per-pid compositor region
 - [ ] Delete the kernel's window table, leaving ring 0 the framebuffer grant and raw input
