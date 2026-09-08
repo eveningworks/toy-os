@@ -324,7 +324,28 @@ together, and every window on screen goes through them.
   client creates and mmaps the object and passes the name; the kernel
   adopts it and drives `comp_map()` exactly as now, keyed on the shm
   index instead of frames it allocated. The kernel stops owning window
-  memory, and every mapping path is untouched. Committable on its own.
+  memory, and every mapping path is untouched.
+
+  **ATTEMPTED AND BACKED OUT, 2026-09-08, and what stopped it is worth
+  knowing before the next attempt.** The client half is small: only
+  `ugfx_surface_for_window_buf()` derives a drawing surface, and giving
+  it a caller-owned variant plus an allocator in `uapp.c` was
+  straightforward. The KERNEL half is not, for a reason that is not
+  about the mapping at all:
+
+  **`win_server_create_raw()` has no client.** It is what
+  `kernel/proc/win_server_test.c`'s fixture builds windows with, from
+  the kernel context, and a window whose pixels are allocated by its
+  client cannot be made that way. So adopting client objects means
+  either a second creation path in the most safety-critical function in
+  the file -- which is the redundant-path shape this repo has been
+  caught by before, where a positive control passes because the test
+  never reached the branch -- or teaching the KTEST fixture to create
+  and name shm objects itself.
+
+  **Do the fixture first.** Deciding how a KTEST makes a window without
+  a client is the actual prerequisite, and it is cheaper to settle on
+  its own than in the middle of the create path.
 - **5b -- the kernel stops mapping.** The compositor opens the name
   itself, and `comp_map`, `comp_span`, `comp_poisoned`, the poison page,
   `win_compositor_vaddr()` and `WIN_REQ_MAP_WINDOW`/`UNMAP_WINDOW` all
