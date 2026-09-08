@@ -86,10 +86,10 @@ machine that has no users and no passwords.
 ## How it reaches init
 
 **The read half asks init nothing, once there is a file.** `list` and
-`status` read `/tmp/init.status`. That file is the only thing that can
+`status` read `/run/init.status`. That file is the only thing that can
 say a service is down *on purpose* — the process table shows an absence,
 and an absence cannot tell `stopped` from `crash-loop` from *never
-declared*. It is plain text on purpose, so `cat /tmp/init.status` is a
+declared*. It is plain text on purpose, so `cat /run/init.status` is a
 working `service list` on a machine where `/bin` is damaged.
 
 **init publishes it on demand**, and this program rings the doorbell
@@ -105,7 +105,7 @@ stalled COM1 consumer, and the write only supplied the log volume. The
 disk-traffic reason above is the whole of it.
 
 **The write half is a file plus a doorbell.** `start` and `stop` append
-a line to `/tmp/init.ctl` and then send `SIGHUP` to init, which is what
+a line to `/run/init.ctl` and then send `SIGHUP` to init, which is what
 wakes it out of `waitpid(-1)` to read the file. That is runit's
 `supervise/control` object plus SysV's `kill -HUP 1`; systemd's D-Bus
 and `/run/initctl`'s FIFO both need transports this system has not got

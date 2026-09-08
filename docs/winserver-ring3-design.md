@@ -72,8 +72,12 @@ Binder is not used for buffer submission.
 
 A general Binder-shaped IPC port is still worth having -- `/bin/service`
 implements `start`/`stop` by appending to `/run/init.ctl` and sending
-`SIGHUP`, with a source comment saying it is that shape because the
-transport does not exist, and it cannot report a result at all. The
+`SIGHUP`, with a source comment naming what it would rather have been:
+"systemd's D-Bus and `/run/initctl`'s FIFO both need transports this
+system has not got". It does report an outcome, by polling
+`/run/init.status` until the state changes -- an earlier revision of
+this file said it could not, which its own header disproves. What a
+channel replaces is the file plus the doorbell, not the reporting. The
 decision is that the ring is built as a **general named channel** --
 async messages plus a reply slot -- rather than something window-shaped,
 so that caller can retire onto it later without a second mechanism.

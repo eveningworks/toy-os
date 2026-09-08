@@ -5315,7 +5315,7 @@ unrelated program started minutes later could open. What is left is the
 filesystem and signals -- so the request is a FILE and the signal is a
 DOORBELL, which is runit's object plus SysV's `kill -HUP 1`.
 
-`/bin/service` appends `<verb> <name>` to `/tmp/init.ctl` and sends
+`/bin/service` appends `<verb> <name>` to `/run/init.ctl` and sends
 `SIGHUP`; init reads every line on its next pass, acts, and deletes the
 file. **The signal cannot be the message** -- it carries no payload, and
 a handler may do nothing but set a flag -- and the file cannot be the
@@ -5323,12 +5323,12 @@ signal, because with a service running init BLOCKS in `waitpid(-1)` and
 would not read it until something died. Each half is doing the thing the
 other cannot.
 
-**The answer comes back the same way, as `/tmp/init.status`** -- one line
+**The answer comes back the same way, as `/run/init.status`** -- one line
 per service. init is the only thing that knows a service is down on
 purpose: the process table shows an absence, and an absence cannot tell
 `stopped` from `crash-loop` from "never declared". runit writes the same
 file per service. This one is text rather than runit's packed binary, so
-`cat /tmp/init.status` works on a machine whose `/bin` is damaged, which
+`cat /run/init.status` works on a machine whose `/bin` is damaged, which
 is exactly when somebody wants it.
 
 **It is published ON DEMAND and only when the machine is SETTLED, which

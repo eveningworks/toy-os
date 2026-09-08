@@ -381,13 +381,13 @@ this the obvious way), not from how much history it accumulated.
 - **A SERVICE IS CONTROLLED BY A FILE PLUS A DOORBELL, AND `/bin/service`
   IS THE LEVER.** `service [list] | status <name> | start <name> | stop
   <name> | reload`. The READ half asks init nothing once the file
-  exists -- it reads `/tmp/init.status`, one line per service, because
+  exists -- it reads `/run/init.status`, one line per service, because
   init is the only thing that can say a service is down ON PURPOSE (the
   process table shows an absence, and an absence cannot tell `stopped`
   from `crash-loop` from "never declared"). That file is PUBLISHED ON
   DEMAND -- nothing until a doorbell has arrived, so the first reader
   rings it -- and only on a SETTLED pass, never while a service is in a
-  backoff or yet to announce itself. The WRITE half appends `<verb> <name>` to `/tmp/init.ctl`
+  backoff or yet to announce itself. The WRITE half appends `<verb> <name>` to `/run/init.ctl`
   and sends `SIGHUP`, which is runit's `supervise/control` plus SysV's
   `kill -HUP 1`; D-Bus and a FIFO both need transports this system has
   not got. Five things to know:
