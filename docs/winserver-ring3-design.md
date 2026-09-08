@@ -330,15 +330,44 @@ together, and every window on screen goes through them.
   `win_compositor_vaddr()` and `WIN_REQ_MAP_WINDOW`/`UNMAP_WINDOW` all
   retire together.
 
-**RESIZE IS THE AWKWARD HALF and should be designed before 5a starts.**
-Today the kernel rebuilds the back buffer and leaves the front one
-alone, which is what stops a resize showing a frame of black (Wayland's
-rule that a buffer carries its own dimensions). With client-owned
-memory the client rebuilds it -- so it needs to hand the compositor a
-new object while the old one is still being read, which is a second
-buffer identity rather than a resize of one. That is `wl_buffer`, and it
-is the point at which this protocol either grows buffer objects or
-admits it has them implicitly.
+#### Resize: this protocol ALREADY HAS buffer identity, implicitly
+
+Designed 2026-09-08, before 5a starts, because it decides the shape.
+
+The question looked like "does the protocol grow `wl_buffer`?" and the
+answer is that it already has one and does not name it. `struct win_buf`
+carries its OWN `w`/`h` -- "the dimensions belong to the BUFFER rather
+than to the window" -- and a resize rebuilds only the BACK buffer,
+leaving the front holding the last finished frame at its old size until
+a present swaps them. Two slots, each with an identity and a size, one
+of them named as current. That is `wl_buffer` with the object left
+anonymous.
+
+So client-owned memory does not introduce the problem; it makes the
+existing thing explicit:
+
+- **A buffer IS an object**, `win.<pid>.<slot>.<buf>`. The name is
+  STABLE -- it identifies the slot, not the memory in it.
+- **A GENERATION identifies the memory.** Replacing a buffer is
+  `shm_unlink` plus a fresh create under the same name, and the
+  generation for that slot goes up.
+- **A present carries the front index, its size AND its generation.**
+  A compositor holding a different generation re-opens the name and gets
+  the new object; the one it was reading stays alive under its own
+  mapping until it lets go.
+
+**That last property is not a lucky accident -- it is what `shm_unlink`
+already promises**: "an object somebody is still using survives its own
+unlink", with the frames going at the last holder. It is exactly
+`wl_buffer.release`, reached from the other direction, and it is the
+same mechanism stage 2 used to stop a destroyed window flashing black.
+
+The alternative considered and rejected: allocate with headroom so an
+ordinary resize keeps one object and only a growth past capacity swaps.
+It is less code and it does not remove the swap -- it makes it rare,
+which is worse, because a path taken once in a hundred resizes is a path
+that breaks unnoticed. This repo's own rule about producible fallbacks
+says the same thing from the other side.
 
 ### Stage 6 -- delete the kernel's window table
 

@@ -543,7 +543,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Drop the kernel's title, hints and cursor, and shrink `WIN_REQ_WINDOW_INFO` to geometry~~ DONE 2026-09-08
 - [ ] `app_id` stays for now -- it rides CREATE so a window is never nameless, which ACTIVATE depends on
 - [x] ~~Named shared memory has an owner: private by default, `SHM_PUBLIC` for a beacon, `SYS_SHM_GRANT` for the rest~~ DONE 2026-09-08
-- [ ] Stage 5a: the client owns its window memory and the kernel adopts it -- naming settled, resize is the open question
+- [ ] Stage 5a: the client owns its window memory and the kernel adopts it -- naming and resize both settled
 - [ ] Stage 5b: the compositor opens it directly, retiring the poison page and the carved per-pid region
 - [ ] The client allocates its own buffer, retiring `win_buffer_vaddr()` and the carved per-pid compositor region
 - [ ] Delete the kernel's window table, leaving ring 0 the framebuffer grant and raw input

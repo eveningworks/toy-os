@@ -556,6 +556,40 @@ left as a hole. A compositor that holds its own reference does not need
 that, which is the same answer `wl_buffer.release` gives. See
 `docs/winserver-ring3-design.md`'s stage 2.
 
+## The window protocol already had wl_buffer; it just never named it
+
+Moving a window's pixels to the client raised what looked like a new
+question -- how do you hand over a resized buffer while the compositor
+is still reading the old one? -- and the answer is that this protocol
+solved it years ago without giving the thing a name.
+
+`struct win_buf` carries its own `w`/`h`, deliberately: "the dimensions
+belong to the BUFFER rather than to the window". A resize rebuilds only
+the BACK buffer and leaves the front holding the last finished frame at
+its old size, so the compositor keeps showing real pixels for the whole
+round trip instead of a freshly zeroed window -- measured at 100-240 ms
+of black under TCG before that. Two slots, each with an identity and a
+size, one of them named as current: that is `wl_buffer`, anonymous.
+
+Client-owned memory makes it explicit. A buffer becomes a named shm
+object; the NAME identifies the slot and a GENERATION identifies the
+memory in it, so replacing one is an unlink plus a create under the same
+name, and a present carries the generation the compositor should be
+holding.
+
+**The release semantics come free, and from a promise `shm_unlink`
+already made**: an object somebody is still using survives its own
+unlink, and its frames go at the last holder. So the compositor goes on
+reading the buffer it has until it re-opens the name -- which is
+`wl_buffer.release`, and the same mechanism that stopped a destroyed
+window flashing black.
+
+Rejected: allocating with headroom so an ordinary resize keeps one
+object and only a growth past capacity swaps. It does not remove the
+swap, it makes it RARE -- and a path taken once in a hundred resizes is
+one that breaks without anybody noticing, which is what this repo's rule
+about keeping fallbacks producible says from the other side.
+
 ## A named shm object belongs to its creator, and PRIVATE is the default
 
 `SYS_SHM_OPEN` had no access control at all -- its own comment said so:
