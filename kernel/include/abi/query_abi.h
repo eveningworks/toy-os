@@ -451,6 +451,31 @@ struct query_fsstat {
 // records it has not seen and compares `oldest` against what it wanted,
 // so a gap is visible rather than silent. Same guarantee QUERY_KLOG's
 // absolute offset gives, in the shape a record list needs.
+// THE KERNEL'S OWN VIEW OF A CLIENT WINDOW, which is the one thing
+// about the window system nothing could see. `guictl windows` reports
+// the COMPOSITOR's window list; this reports what win_server.c believes
+// -- and a bug in the window protocol is very often the two disagreeing
+// rather than either being wrong on its own. Per buffer, because a
+// buffer carries its own size (abi/win_proto.h) and a resize changes
+// one of the two.
+//
+// LIST, one record per live window.
+#define QUERY_WINDOWS 38
+
+struct query_window {
+    int32_t  pid;          // the owning client
+    uint32_t id;           // its window id, which is also its slot
+    int32_t  w, h;         // the size the CLIENT last asked for
+    uint32_t front;        // which buffer the compositor is told to read
+    int32_t  buf_w[2];     // each buffer's OWN size -- they differ while
+    int32_t  buf_h[2];     // a resize is in flight, which is the point
+    uint32_t buf_pages[2]; // 0 for a buffer this window does not have
+    int32_t  buf_shm[2];   // the shm object behind it, -1 for none
+    uint32_t comp_mapped;  // is it mapped into the compositor right now
+    uint32_t comp_retired; // the window is gone, the mapping is not
+    uint32_t reserved;
+};
+
 #define QUERY_APPLOG 37
 
 struct query_applog {
