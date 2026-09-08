@@ -27,6 +27,9 @@
 #include "mouse.h"    // mouse_get_state() -- park the plane where the pointer is
 #include "heap.h"     // kmalloc/kfree -- the DEFINE sprite bounce buffer
 #include "shm.h"      // the frames behind a window buffer
+#include "initcall.h"
+#include "query_abi.h"
+#include "query.h"
 
 #define WIN_SERVER_MAX_PIDS SCHED_MAX_PROCS
 
@@ -953,6 +956,62 @@ static int resize_window(struct client_window *cw, int w, int h) {
     }
     return 1;
 }
+
+// --- QUERY_WINDOWS: what the KERNEL thinks a window is ----------------
+//
+// The compositor's list is reported by `guictl windows`; this is the
+// other half, and the pair is what makes a disagreement visible instead
+// of inferred.
+
+static int win_q_count(void) {
+    int n = 0;
+    for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++)
+        for (int i = 0; i < WIN_CLIENT_MAX; i++)
+            if (windows[p][i].used || windows[p][i].comp_retired) n++;
+    return n;
+}
+
+static int win_q_fill(int index, void *out) {
+    int n = 0;
+    for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++) {
+        for (int i = 0; i < WIN_CLIENT_MAX; i++) {
+            struct client_window *cw = &windows[p][i];
+            if (!cw->used && !cw->comp_retired) continue;
+            if (n++ != index) continue;
+            struct query_window *r = out;
+            k_memset(r, 0, sizeof *r);
+            r->pid = cw->pid;
+            r->id = cw->id;
+            r->w = cw->w;
+            r->h = cw->h;
+            r->front = (uint32_t)cw->front;
+            for (int b = 0; b < COMP_BUFS && b < 2; b++) {
+                r->buf_w[b] = cw->bufs[b].w;
+                r->buf_h[b] = cw->bufs[b].h;
+                r->buf_pages[b] = cw->bufs[b].pages;
+                r->buf_shm[b] = cw->bufs[b].pages ? cw->bufs[b].shm : -1;
+            }
+            r->comp_mapped = (uint32_t)cw->comp_mapped;
+            r->comp_retired = (uint32_t)cw->comp_retired;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static const struct query_provider win_q_provider = {
+    .cls = QUERY_WINDOWS,
+    .name = "windows",
+    .record_size = sizeof(struct query_window),
+    .flags = QUERY_F_LIST,
+    .count = win_q_count,
+    .fill = win_q_fill,
+    .fields = NULL,
+    .field_count = 0,
+};
+
+static void win_query_init(void) { query_register(&win_q_provider); }
+INITCALL(win_query_init, INIT_QUERY);
 
 // --- the diagnostic channel (Milestone 41, stage 3) -------------------
 //
