@@ -1271,6 +1271,24 @@ window without going through it will find its layout polls timing out.
   lowest free slot" in the same instant get the same answer, so it
   narrows the window and `assert_ports_free()` at the launch catches the
   residue. `TOYOS_ALLOW_PORT_CLASH=1` bypasses it deliberately.
+- **`window_resize_probe.py`** -- drags a client window's resize grip
+  repeatedly and prints BOTH views of it after each drag: `guictl
+  windows` (the compositor's list) beside `lswin` (the window server's,
+  per buffer). **The pair is the point.** A window-protocol bug is
+  usually the two disagreeing rather than either being wrong alone, and
+  reading only one of them is how three wrong hypotheses about a resize
+  bug got written in an afternoon.
+
+  `--mode live|outline|auto` sets `desktop.resize_mode` first, because a
+  drag is not one path: the WM either repaints the window live or draws
+  an outline and proposes once on release, and a bug in one is invisible
+  to the other. `--app`/`--title` point it at a different client.
+
+  It needs a guest already running (`vm.py start`), matches the two
+  views BY PID rather than taking the first row -- two windows sharing a
+  title would otherwise report a disagreement that is the probe's own --
+  and has no verdict, so no runner names it. A diagnostic, like
+  `pixel_probe.py` beside it.
 - **`pixel_probe.py`** -- reads exact pixel values out of screenshots,
   and tabulates the same points across several (`--compare a.png b.png
   --at 85,100 --at 215,100`), flagging which moved and which didn't.

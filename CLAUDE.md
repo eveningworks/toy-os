@@ -1468,7 +1468,9 @@ cost".
   itself), `regex_hostcheck.py`, `uimg_hostcheck.py`,
   `usnd_hostcheck.py`, `hash_hostcheck.py`,
   `divti3_hostcheck.py` (the 128-bit division helpers against Python's
-  arbitrary-precision integers) and
+  arbitrary-precision integers), `window_resize_probe.py` (**both**
+  views of a window -- the compositor's and the kernel's -- across a
+  drag, since a window bug is usually the two disagreeing) and
   `umd_hostcheck.py` (the Markdown renderer over every
   `docs/commands/` page at three widths, with a
   `--positive-control` that must go red),
