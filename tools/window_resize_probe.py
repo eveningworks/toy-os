@@ -60,7 +60,8 @@ def main():
         print(f"window_resize_probe: no window titled {args.title!r}")
         return 1
 
-    print(f"{'drag':>4}  {'asked':>11}  {'compositor':>11}  {'kernel':>11}  buffers")
+    print(f"{'drag':>4}  {'asked':>11}  {'compositor':>11}  {'kernel':>11}  "
+          f"{'lag':>5} {'paint':>7}  buffers")
     for n in range(args.drags + 1):
         if n:
             win = dbg.window(args.title)
@@ -96,9 +97,19 @@ def main():
             kern = f"{f[2]}x{f[3]}"
             bufs = " ".join(f[5:])
             break
+        # THE WM'S OWN LAG MEASUREMENT, which is what `auto` mode
+        # decides on: it watches how long a client takes to answer a
+        # resize and falls back to an outline when that grows. A change
+        # to the resize path that costs the client time shows up HERE
+        # before it shows up as a failing check.
+        st = dbg.state()
+        lag = st.get("resize_lag_ms", "?")
+        paint = st.get("resize_paint", "?")
+
         asked = "-" if not n else f"+{args.dx},+{args.dy}"
         flag = "" if comp == kern else "   <-- DISAGREE"
-        print(f"{n:>4}  {asked:>11}  {comp:>11}  {kern:>11}  {bufs}{flag}")
+        print(f"{n:>4}  {asked:>11}  {comp:>11}  {kern:>11}  "
+              f"{lag:>5} {paint:>7}  {bufs}{flag}")
 
     return 0
 
