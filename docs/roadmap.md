@@ -288,7 +288,8 @@ Staged in `docs/dynlink-design.md`, including the case against.
 
 - [ ] UTF-8 decode/encode helpers in `string.c`
 - [ ] Console + `gfx_draw_string()` decoding multi-byte sequences
-- [ ] A font atlas keyed by codepoint rather than by byte
+- [ ] A font atlas keyed by codepoint rather than by byte -- `font_ttf_extra_codepoints` is `unsigned char`, so Latin-1 is the ceiling
+- [ ] Box-drawing for `ps --tree`, which draws `pstree -A`'s ASCII because U+2500's block is unreachable -- the first concrete caller
 - [ ] Keyboard layout files emitting codepoints, not Latin-1 bytes
 - [ ] Filesystem path handling (both backends) audited for multi-byte names
 - [ ] A migration story for existing Latin-1 content on disk

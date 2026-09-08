@@ -1961,6 +1961,27 @@ the item list:
 
 ### UTF-8 migration
 
+**A CONCRETE CALLER EXISTS NOW: `ps --tree`.** It draws `pstree -A`'s
+ASCII (`|--`, a backtick, `|`) because the box-drawing block is
+unreachable, and the reason is worth stating precisely rather than as
+"no Unicode": `font_ttf_extra_codepoints` is an `unsigned char` array,
+so the six glyphs baked past ASCII are Latin-1 codepoints and nothing
+above 0xFF can be named at all. Ring 3 cannot even address those six --
+`ugfx.c`'s `glyph_index()` maps `c - WIN_FONT_FIRST_CHAR` and rejects
+anything past the ASCII count.
+
+CP437's byte positions were considered and declined (2026-09-08): they
+would draw correctly on the toy-os console and produce mojibake
+everywhere text leaves the machine -- over telnet, over serial, or
+redirected to a file -- and reading `ps` over telnet is how the
+bare-metal machine is checked.
+
+One objection recorded in `ugfx.c` does NOT survive inspection, and is
+worth noting before the work starts: it says ring 3 cannot have the
+extra-codepoint table without "a second copy of a table the kernel
+already owns". That is true of a copy and not of a MOVE -- the table
+belongs in an `abi/` header, where both rings read one of it.
+
 toy-os is Latin-1 end to end, deliberately (see `docs/decisions.md`:
 one byte per character keeps the console, the font atlas, and the
 filesystem's fixed-width path field all trivially indexable, and it was
