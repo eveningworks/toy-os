@@ -54,12 +54,23 @@ int uchan_server_open(struct uchan_server *s, const char *name);
 void uchan_server_scan(struct uchan_server *s);
 
 // The next message from any client, round-robin. Returns the sending
-// pid and fills `out` (UCHAN_SLOT_BYTES), or 0 when every ring is empty.
-int uchan_server_recv(struct uchan_server *s, void *out);
+// pid and fills at most `cap` bytes of `out`, or 0 when every ring is
+// empty.
+//
+// **`cap` IS NOT OPTIONAL AND IS NOT THE SLOT SIZE.** A slot is
+// UCHAN_SLOT_BYTES and a message struct is usually smaller; a version of
+// this that copied a whole slot regardless wrote past every caller's
+// buffer, which the ring-3 stack canary caught as a compositor exiting
+// with code 2 the instant a client connected. Sized here so a protocol
+// whose messages are 40 bytes cannot be handed 64.
+int uchan_server_recv(struct uchan_server *s, void *out, unsigned long cap);
 
 // Answers the message just received from `pid`. Optional -- only the
-// messages that ask for one.
-void uchan_server_reply(struct uchan_server *s, int pid, const void *msg);
+// messages that ask for one. `len` bytes are sent and the rest of the
+// slot is zeroed, so a reader asking for more sees zeros rather than
+// whatever the last message left.
+void uchan_server_reply(struct uchan_server *s, int pid, const void *msg,
+                        unsigned long len);
 
 // Parks until a client sends, the kernel queues an event, or `timeout_ms`
 // passes. Returns immediately if anything is already waiting.
@@ -78,12 +89,12 @@ int uchan_client_open(struct uchan_client *c, const char *name);
 // or -1 if the ring is FULL -- which is a real outcome, not an error to
 // swallow: a server that has stopped draining is exactly what a client
 // needs to find out about.
-int uchan_send(struct uchan_client *c, const void *msg);
+int uchan_send(struct uchan_client *c, const void *msg, unsigned long len);
 
 // Send, then wait for the server's answer. The explicit round trip, for
 // the few messages that have one. Returns 0, or -1 on timeout.
-int uchan_call(struct uchan_client *c, const void *msg, void *reply,
-               int timeout_ms);
+int uchan_call(struct uchan_client *c, const void *msg, unsigned long len,
+               void *reply, unsigned long reply_cap, int timeout_ms);
 
 void uchan_client_close(struct uchan_client *c);
 

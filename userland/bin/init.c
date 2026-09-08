@@ -1039,7 +1039,7 @@ static int serve_channel(void) {
 
     int acted = 0, from;
     struct initctl_msg m;
-    while ((from = uchan_server_recv(&g_chan, &m)) != 0) {
+    while ((from = uchan_server_recv(&g_chan, &m, sizeof m)) != 0) {
         // FROM HERE ON THERE IS A READER, exactly as the doorbell means
         // it: somebody is watching, so the status file is worth writing.
         g_publish = 1;
@@ -1053,7 +1053,7 @@ static int serve_channel(void) {
         k_memset(&reply, 0, sizeof reply);
         reply.verb = m.verb;
         reply.result = (uint32_t)r;
-        uchan_server_reply(&g_chan, from, &reply);
+        uchan_server_reply(&g_chan, from, &reply, sizeof reply);
         acted++;
     }
     return acted;

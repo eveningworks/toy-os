@@ -848,6 +848,9 @@ void wm_run(void) {
     // (SYS_WIN_REQUEST returns -1) instead of drawing into a buffer
     // nothing will ever composite -- see wm_client.c.
     wm_client_init();
+    // AFTER the compositor role is claimed, so a client that finds the
+    // beacon has a compositor able to serve it.
+    wm_client_chan_open();
 
     // Build the app list from /usr/wm/desktop/ before anything draws a
     // menu or an icon. Data on disk, not a compiled-in table -- see
@@ -925,7 +928,11 @@ void wm_run(void) {
             }
             if (redraw_pending || wm_debug_work_pending()) wait_ms = 0;
 
-            sys_wait_ready(wait_ms);
+            // Through the channel when there is one, so a client's
+            // message defeats this park exactly as a kernel event does
+            // -- one wait over both, which is what the wakeword is for.
+            if (wm_client_chan_ready()) wm_client_chan_wait((int)wait_ms);
+            else sys_wait_ready(wait_ms);
         }
 
         // Everything from here to wmwd_frame_end() is this frame's WORK.
@@ -981,6 +988,10 @@ void wm_run(void) {
         // wm_rawin.c on why partial draining backs up.
         wmwd_phase("input");
         wm_rawin_pump();
+        // AFTER the event queue, never before: a window is created
+        // through the kernel and announced there, while its title
+        // arrives on the channel. See lib/uwmchan.h.
+        wm_client_chan_pump();
         wm_rawin_mouse(&mx, &my, &buttons);
 
 

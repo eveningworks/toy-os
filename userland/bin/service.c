@@ -192,7 +192,7 @@ static int send_over_channel(const char *verb, const char *name, int *result) {
     m.verb = strcmp(verb, "start") == 0 ? INITCTL_START : INITCTL_STOP;
     snprintf(m.name, sizeof m.name, "%s", name);
 
-    int ok = uchan_call(&c, &m, &reply, CHAN_REPLY_MS) == 0;
+    int ok = uchan_call(&c, &m, sizeof m, &reply, sizeof reply, CHAN_REPLY_MS) == 0;
     uchan_client_close(&c);
     if (!ok) return 0;          // init has the beacon up but did not answer
     *result = (int)reply.result;

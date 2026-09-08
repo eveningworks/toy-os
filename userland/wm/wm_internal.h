@@ -307,6 +307,14 @@ extern int wm_ping_interval_ticks;
 
 void wm_client_ping(struct window *win);
 
+// TWP over a channel (lib/uwmchan.h): open it at startup, pump it AFTER
+// the event queue every frame, and wait through it so a client's message
+// and a kernel event both defeat the same park.
+void wm_client_chan_open(void);
+int  wm_client_chan_ready(void);
+void wm_client_chan_pump(void);
+void wm_client_chan_wait(int timeout_ms);
+
 // Remember a pid this desktop launched, so wm_run() reaps its slot when
 // it exits. See wm.c -- without this a Start-menu launch leaked a
 // scheduler slot per open/close and the desktop stopped launching

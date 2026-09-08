@@ -97,7 +97,13 @@ void uchan_server_scan(struct uchan_server *s) {
     }
 }
 
-int uchan_server_recv(struct uchan_server *s, void *out) {
+// The bytes actually moved: never more than the slot holds, never more
+// than the caller's buffer takes.
+static unsigned long clamp_len(unsigned long n) {
+    return n > UCHAN_SLOT_BYTES ? UCHAN_SLOT_BYTES : n;
+}
+
+int uchan_server_recv(struct uchan_server *s, void *out, unsigned long cap) {
     if (!s->beacon || s->count <= 0) return 0;
     // ROUND-ROBIN from where the last one left off, so a client sending
     // continuously cannot hold the others off forever.
@@ -106,7 +112,7 @@ int uchan_server_recv(struct uchan_server *s, void *out) {
         struct uchan_ring *r = s->ring[i];
         if (r->head == r->tail) continue;
         uint32_t slot = r->tail % UCHAN_SLOTS;
-        memcpy(out, r->slot[slot], UCHAN_SLOT_BYTES);
+        memcpy(out, r->slot[slot], clamp_len(cap));
         // The copy BEFORE the tail bump: the client is free to refill
         // this slot the moment it sees the space, and a bump first is a
         // message read half from the old sender and half from the new.
@@ -117,11 +123,17 @@ int uchan_server_recv(struct uchan_server *s, void *out) {
     return 0;
 }
 
-void uchan_server_reply(struct uchan_server *s, int pid, const void *msg) {
+void uchan_server_reply(struct uchan_server *s, int pid, const void *msg,
+                        unsigned long len) {
     int i = ring_index(s, pid);
     if (i < 0) return;
     struct uchan_ring *r = s->ring[i];
-    memcpy((void *)r->reply, msg, UCHAN_SLOT_BYTES);
+    len = clamp_len(len);
+    memcpy((void *)r->reply, msg, len);
+    // The tail of the slot is ZEROED, not left as it was: a reader
+    // asking for more than this message carries must see zeros rather
+    // than the previous message's bytes.
+    memset((void *)r->reply + len, 0, UCHAN_SLOT_BYTES - len);
     r->reply_seq++;   // last, so a client that sees it sees the payload
     sys_futex_wake(&r->reply_seq, 0);
 }
@@ -175,10 +187,13 @@ int uchan_client_open(struct uchan_client *c, const char *name) {
     return 0;
 }
 
-int uchan_send(struct uchan_client *c, const void *msg) {
+int uchan_send(struct uchan_client *c, const void *msg, unsigned long len) {
     if (!c->ring || !c->beacon) return -1;
     if (c->ring->head - c->ring->tail >= UCHAN_SLOTS) return -1;  // full
-    memcpy(c->ring->slot[c->ring->head % UCHAN_SLOTS], msg, UCHAN_SLOT_BYTES);
+    len = clamp_len(len);
+    uint8_t *slot = c->ring->slot[c->ring->head % UCHAN_SLOTS];
+    memcpy(slot, msg, len);
+    memset(slot + len, 0, UCHAN_SLOT_BYTES - len);
     c->ring->head++;   // after the payload, for the reader's sake
 
     // THE BUMP, THEN THE WAKE, and the order is what closes the race: a
@@ -190,11 +205,11 @@ int uchan_send(struct uchan_client *c, const void *msg) {
     return 0;
 }
 
-int uchan_call(struct uchan_client *c, const void *msg, void *reply,
-               int timeout_ms) {
+int uchan_call(struct uchan_client *c, const void *msg, unsigned long len,
+               void *reply, unsigned long reply_cap, int timeout_ms) {
     if (!c->ring) return -1;
     uint32_t seq = c->ring->reply_seq;
-    if (uchan_send(c, msg) < 0) return -1;
+    if (uchan_send(c, msg, len) < 0) return -1;
     // Sampled BEFORE the send, so an answer that arrives while this is
     // still in uchan_send() is not waited for a second time.
     while (c->ring->reply_seq == seq) {
@@ -202,7 +217,7 @@ int uchan_call(struct uchan_client *c, const void *msg, void *reply,
             c->ring->reply_seq == seq)
             return -1;   // -EAGAIN means it moved; anything else is the timeout
     }
-    memcpy(reply, (const void *)c->ring->reply, UCHAN_SLOT_BYTES);
+    memcpy(reply, (const void *)c->ring->reply, clamp_len(reply_cap));
     return 0;
 }
 

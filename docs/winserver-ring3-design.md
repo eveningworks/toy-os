@@ -230,7 +230,29 @@ removed), but the caller it exists for is the compositor, and the
 compositor gains nothing from it until there is a channel to wait on as
 well. That arrives with the ring below.
 
-### Stage 4 -- presentation state moves
+### Stage 4 -- presentation state moves -- TITLE DONE 2026-09-08
+
+`WIN_REQ_TITLE` travels over the channel with its payload
+(`userland/lib/uwmchan.h`), so the compositor is handed the string
+instead of being told "it changed" and reading it back with
+`WIN_REQ_WINDOW_INFO`. **The message keeps its `WIN_REQ_*` number**:
+the protocol is still TWP and only the carriage differs, which is the
+bet `abi/win_proto.h` describes.
+
+**ORDERING IS THE TRAP, and it is handled by drain order.** A window is
+created through the KERNEL and announced on the event queue; its title
+arrives on the channel. Two carriages have no order between them, so the
+compositor drains the EVENT QUEUE FIRST every frame -- enough, because a
+client cannot send a title before its create returned.
+
+Both paths are proven independently: with the kernel fallback removed
+the title still arrives, and with the channel disabled it still arrives.
+
+**The kernel still stores `title`**, because the fallback needs it.
+Removing the field is the next step and is what this stage is actually
+for; what is done is the carriage.
+
+### Stage 4 -- the rest of the presentation state
 
 `TITLE`, `HINTS`, `CURSOR`, `TIMER`, `PONG` and `ACTIVATE` travel over
 the channel with their payloads. The kernel drops `title`, `app_id`,

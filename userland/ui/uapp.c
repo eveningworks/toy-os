@@ -1,6 +1,10 @@
 // See ui/uapp.h for what this is and why.
 #include "rt/sys.h"   // TWP messages, sys_win_request(), sys_wait_event()
 #include "ui/uapp.h"
+#include <string.h>
+#include <stdio.h>
+#include "lib/uchan.h"
+#include "lib/uwmchan.h"
 #include "ui/uui_route.h"
 #include "ui/uui_focus.h"   // desc.focus -- keyboard focus ring
 #include "ui/ulog.h"        // uapp_log_layout()
@@ -396,7 +400,35 @@ void uapp_busy_end(struct uapp *a) {
     uapp_set_cursor(a, a->cursor_before_busy);
 }
 
+// THE COMPOSITOR'S CHANNEL, opened once and kept. Lazily, because a
+// client that never sets a title should not publish a ring, and because
+// the compositor may not have its beacon up when an app starts.
+static struct uchan_client g_wmchan;
+static int g_wmchan_state;   // 0 untried, 1 open, -1 no compositor channel
+
+static int wmchan(void) {
+    if (g_wmchan_state) return g_wmchan_state > 0;
+    g_wmchan_state = uchan_client_open(&g_wmchan, WMCHAN_SERVICE) == 0 ? 1 : -1;
+    return g_wmchan_state > 0;
+}
+
 int uapp_set_title(struct uapp *a, const char *title) {
+    // OVER THE CHANNEL, which carries the string itself. The kernel path
+    // below can only say "it changed" -- struct win_event is 24 bytes --
+    // so the compositor has to read the title back out of the kernel,
+    // which is why the kernel stores one at all.
+    if (wmchan()) {
+        struct wmchan_msg m;
+        memset(&m, 0, sizeof m);
+        m.type = WIN_REQ_TITLE;
+        m.window = a->window;
+        snprintf(m.text, sizeof m.text, "%s", title ? title : "");
+        if (uchan_send(&g_wmchan, &m, sizeof m) == 0) return 1;
+        // A FULL RING IS NOT A REASON TO DROP THE TITLE. Fall through:
+        // the kernel path is slower and still works, which is the whole
+        // reason it is kept.
+    }
+
     struct win_request_msg req;
     req_clear(&req);
     req.type = WIN_REQ_TITLE;

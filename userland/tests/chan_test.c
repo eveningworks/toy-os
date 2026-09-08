@@ -43,20 +43,20 @@ static int child_main(void) {
     m.kind = KIND_NOTE;
     m.value = 41;
     snprintf(m.text, sizeof m.text, "hello");
-    if (uchan_send(&c, &m) < 0) return 3;
+    if (uchan_send(&c, &m, sizeof m) < 0) return 3;
 
     // Let the server park, so the NEXT message has to wake it rather
     // than being found by a poll. That is the check this delay exists
     // for; without it the test cannot tell the two apart.
     sys_sleep_ms(300);
     m.value = 42;
-    if (uchan_send(&c, &m) < 0) return 4;
+    if (uchan_send(&c, &m, sizeof m) < 0) return 4;
 
     struct msg reply;
     memset(&m, 0, sizeof m);
     m.kind = KIND_ASK;
     m.value = 7;
-    if (uchan_call(&c, &m, &reply, 5000) < 0) return 5;
+    if (uchan_call(&c, &m, sizeof m, &reply, sizeof reply, 5000) < 0) return 5;
     if (reply.value != 8) return 6;
 
     uchan_client_close(&c);
@@ -89,7 +89,7 @@ int main(int argc, char **argv) {
         uint64_t waited_ms = (sys_monotonic_ns() - before) / 1000000ull;
 
         int from;
-        while ((from = uchan_server_recv(&s, &m)) != 0) {
+        while ((from = uchan_server_recv(&s, &m, sizeof m)) != 0) {
             if (m.kind == KIND_NOTE) {
                 got_note++;
                 if (m.value == 41 && !strcmp(m.text, "hello")) got_41 = 1;
@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
                 memset(&r, 0, sizeof r);
                 r.kind = m.kind;
                 r.value = m.value + 1;
-                uchan_server_reply(&s, from, &r);
+                uchan_server_reply(&s, from, &r, sizeof r);
                 answered++;
             }
         }
@@ -131,7 +131,7 @@ int main(int argc, char **argv) {
         struct msg junk;
         memset(&junk, 0, sizeof junk);
         int sent = 0;
-        while (uchan_send(&self, &junk) == 0 && sent < UCHAN_SLOTS * 4) sent++;
+        while (uchan_send(&self, &junk, sizeof junk) == 0 && sent < UCHAN_SLOTS * 4) sent++;
         utest_checkf(sent == UCHAN_SLOTS,
                      "a full ring refuses rather than dropping (took %d of %d)",
                      sent, UCHAN_SLOTS);

@@ -627,6 +627,27 @@ unanswered. Moving the word is what makes the restarted wait return.
 `waitpid` needed no such thing because it has an interruptible variant;
 a futex wait does not.
 
+## A channel API that copies a whole SLOT is a stack smash waiting
+
+`uchan_server_recv()` copied `UCHAN_SLOT_BYTES` into whatever pointer it
+was handed. Every caller passes a message STRUCT, and a protocol's
+message is usually smaller than a slot -- `struct wmchan_msg` is 40
+bytes against a 64-byte slot -- so every receive wrote 24 bytes past the
+caller's buffer.
+
+It surfaced as the compositor exiting with code 2 the instant a client
+connected, which is `userland/rt/stack_chk.c`'s deliberate "caught by
+the canary" code rather than any fault, so there was no crash report to
+read. The two callers that shipped before it (`chan_test`, init's
+control loop) had been overwriting other locals and getting away with
+it.
+
+Every entry point takes a LENGTH now, and a send zero-fills the rest of
+the slot so a reader asking for more sees zeros rather than the previous
+message. The general rule: an API that moves a fixed-size unit into a
+caller's buffer must be told how big that buffer is, and "the slot size"
+is not an answer the caller can check.
+
 ## The message channel is a LIBRARY, not a kernel object
 
 `userland/lib/uchan.h` is a channel between two ring-3 processes and the

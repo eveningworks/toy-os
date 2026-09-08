@@ -15,6 +15,8 @@
 // produced desktop.c/start_menu.c/file_picker.c. See wm.c's top
 // comment.
 #include "wm_internal.h"
+#include "lib/uchan.h"
+#include "lib/uwmchan.h"
 #include "wm_geometry.h"
 #include "wm_rawin.h"
 #include "wm_debug.h" // the diagnostic channel's WM end, below
@@ -540,6 +542,64 @@ static void query_app_id(int pid, uint32_t id, char *out, unsigned cap,
 // Maps a client's buffer into this process, so the compositor can read
 // its pixels. Idempotent, and must be re-done after a resize: the frames
 // are reallocated, and the old mapping is revoked with them.
+// --- TWP over a channel ----------------------------------------------
+//
+// See lib/uwmchan.h. A request that arrives here reached this process
+// directly, carrying its payload -- no kernel copy and no read-back.
+static struct uchan_server g_chan;
+
+void wm_client_chan_open(void) {
+    if (uchan_server_open(&g_chan, WMCHAN_SERVICE) < 0)
+        wm_logf("wm: no client channel -- requests take the kernel path\n");
+}
+
+int wm_client_chan_ready(void) { return g_chan.beacon != 0; }
+
+void wm_client_chan_wait(int timeout_ms) {
+    // **ZERO MEANS DO NOT PARK, AND THE TWO CALLS BELOW DISAGREE ABOUT
+    // THAT.** sys_wait_ready(0) returns at once; sys_futex_wait(w, v, 0)
+    // means NO DEADLINE and parks until somebody wakes it. The WM asks
+    // for 0 on every frame it already owes a repaint, so passing it
+    // through parked the compositor until a client happened to send
+    // something -- the desktop stalled, the watchdog fired, and init
+    // restarted it in a loop.
+    if (timeout_ms <= 0) return;
+
+    // THE EVENT QUEUE IS CHECKED FIRST, and not parking when it has
+    // something is the whole of what this adds over uchan_server_wait():
+    // that call watches the rings and the wakeword, and an event queued
+    // just before it would otherwise wait out the whole timeout.
+    if (sys_wait_ready(0)) return;
+    uchan_server_wait(&g_chan, timeout_ms);
+}
+
+// Drains everything queued. Called AFTER the event queue is pumped --
+// see lib/uwmchan.h on why that order is load-bearing rather than
+// tidy.
+void wm_client_chan_pump(void) {
+    if (!g_chan.beacon) return;
+    uchan_server_scan(&g_chan);
+
+    int from;
+    struct wmchan_msg m;
+    while ((from = uchan_server_recv(&g_chan, &m, sizeof m)) != 0) {
+        m.text[sizeof m.text - 1] = '\0';
+        switch (m.type) {
+        case WIN_REQ_TITLE:
+            // The payload is HERE, which is the point: the kernel path
+            // queues a "it changed" event and the title is then read
+            // back with WIN_REQ_WINDOW_INFO.
+            on_window_title(from, m.window, m.text);
+            break;
+        default:
+            // A message this build does not know. Dropped rather than
+            // guessed at -- a client speaking a later protocol is not
+            // an error the compositor can fix.
+            break;
+        }
+    }
+}
+
 // Releases a mapping taken above. THE MAPPING IS WHAT KEEPS A DEAD
 // WINDOW'S FRAMES ALIVE, so skipping this leaks them for as long as this
 // process runs -- see WIN_REQ_UNMAP_WINDOW.
