@@ -53,6 +53,7 @@ static const char *wait_name(uint32_t w) {
         case PROC_WAIT_TTY:   return "tty";
         case PROC_WAIT_THREAD: return "thread";
         case PROC_WAIT_NET:   return "net";
+        case PROC_WAIT_FUTEX: return "futex";
         default:              return "?";
     }
 }
@@ -89,13 +90,20 @@ static void fmt_cpu(uint64_t ns, char *out, int cap) {
              (unsigned)((cs / 10) % 10), (unsigned)(cs % 10));
 }
 
-static void print_row(const struct proc_info *p, int depth) {
+// The branch drawn in front of a name in --tree. `prefix` is what every
+// ANCESTOR contributed -- a vertical guide where that ancestor still has
+// siblings below it, blanks where it was the last -- and the caller adds
+// this row's own connector. ASCII, not the box-drawing characters this
+// would otherwise want: the font draws 101 glyphs (api/font_ttf.h) and
+// none of them is a line, so `|` and a backtick is the whole palette.
+// pstree -A is the same drawing for the same reason.
+static void print_row(const struct proc_info *p, const char *prefix) {
     // Every column goes through %Ns, including the numeric ones: kfmt's
     // numeric width ZERO-pads (`%5u` of 1 is "00001"), which is right
     // for a timestamp and wrong for a table. Formatting the number
     // first and padding it as a STRING is how you get a right-aligned
     // column here.
-    char pid[12], ppid[12], pgid[12], state[16], cpu[24], mem[24], line[160], indent[24];
+    char pid[12], ppid[12], pgid[12], state[16], cpu[24], mem[24], line[224];
     snprintf(pid, sizeof pid, "%u", (unsigned)p->pid);
     snprintf(ppid, sizeof ppid, "%u", (unsigned)p->ppid);
     snprintf(pgid, sizeof pgid, "%u", (unsigned)p->pgid);
@@ -103,17 +111,12 @@ static void print_row(const struct proc_info *p, int depth) {
     fmt_cpu(p->cpu_ns, cpu, sizeof cpu);
     snprintf(mem, sizeof mem, "%u", (unsigned)(p->mem_bytes / 1024));
 
-    int n = depth * 2;
-    if (n > (int)sizeof indent - 1) n = (int)sizeof indent - 1;
-    for (int i = 0; i < n; i++) indent[i] = ' ';
-    indent[n] = '\0';
-
     // A THREAD IS NAMED IN BRACES, because it has no name of its own:
     // it carries its leader's, so `tosh` twice in a listing would look
     // like two shells rather than one with a thread. `htop` colours
     // them instead, which a text column cannot.
     snprintf(line, sizeof line, "%5s %5s %5s %-12s %8s %8s  %s%s%s%s\n",
-             pid, ppid, pgid, state, cpu, mem, indent,
+             pid, ppid, pgid, state, cpu, mem, prefix ? prefix : "",
              p->tgid == p->pid ? "" : "{", p->name,
              p->tgid == p->pid ? "" : "}");
     put(line);
@@ -154,15 +157,44 @@ static int snapshot(struct proc_info *out, int cap, int with_threads) {
 // Depth-first, printing every child of `parent` under it. O(n^2) over a
 // table bounded at SYS_PROC_MAX, which is 64 -- a real tree walk would
 // need a child list the ABI does not carry.
-static void print_tree(struct proc_info *procs, int n, int parent, int depth) {
+// THE LAST CHILD IS DRAWN DIFFERENTLY, which is the whole reason to draw
+// branches rather than indent: a backtick closes a subtree, so a reader
+// can see where one ends. Plain indentation cannot express that at all.
+// Finding it needs a look ahead, since the ABI carries no child list.
+static int last_child(const struct proc_info *procs, int n, int parent, int i) {
+    for (int j = i + 1; j < n; j++)
+        if (procs[j].ppid == parent) return 0;
+    return 1;
+}
+
+static void print_tree(struct proc_info *procs, int n, int parent, int depth,
+                       const char *prefix) {
+    char self[64], next[64];
     for (int i = 0; i < n; i++) {
         if (procs[i].ppid != parent) continue;
-        print_row(&procs[i], depth);
+        int last = last_child(procs, n, parent, i);
+
+        // A ROOT HAS NO CONNECTOR. Drawing one would put a branch in
+        // front of init with nothing above it to branch from.
+        if (depth == 0) {
+            print_row(&procs[i], "");
+            k_snprintf(next, sizeof next, "%s", "");
+        } else {
+            k_snprintf(self, sizeof self, "%s%s", prefix, last ? "`-- " : "|-- ");
+            print_row(&procs[i], self);
+            // What this row contributes to its OWN children's prefix: a
+            // guide while it still has siblings coming, blanks once it
+            // is the last -- otherwise a vertical line runs down the
+            // page past a subtree that has already closed.
+            k_snprintf(next, sizeof next, "%s%s", prefix, last ? "    " : "|   ");
+        }
+
         // A process cannot be its own parent (scheduler_reparent()
         // refuses it), so this cannot recurse forever -- but bound the
         // depth anyway rather than trusting a value that crossed the
-        // syscall boundary.
-        if (depth < 8) print_tree(procs, n, procs[i].pid, depth + 1);
+        // syscall boundary. The prefix is bounded with it: 8 levels of
+        // four characters fits `next` with room to spare.
+        if (depth < 8) print_tree(procs, n, procs[i].pid, depth + 1, next);
     }
 }
 
@@ -184,7 +216,7 @@ int main(int argc, char **argv) {
 
     header();
     if (!tree) {
-        for (int i = 0; i < n; i++) print_row(&procs[i], 0);
+        for (int i = 0; i < n; i++) print_row(&procs[i], "");
         return 0;
     }
 
@@ -193,12 +225,12 @@ int main(int argc, char **argv) {
     // than dropped: a row whose parent is not in the table would
     // otherwise vanish, which is the one failure mode a process listing
     // must not have.
-    print_tree(procs, n, 0, 0);
+    print_tree(procs, n, 0, 0, "");
     for (int i = 0; i < n; i++) {
         if (procs[i].ppid == 0) continue;
         int seen = 0;
         for (int j = 0; j < n; j++) if (procs[j].pid == procs[i].ppid) seen = 1;
-        if (!seen) print_row(&procs[i], 0);
+        if (!seen) print_row(&procs[i], "");
     }
     return 0;
 }

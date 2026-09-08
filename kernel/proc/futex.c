@@ -266,6 +266,41 @@ KTEST("futex", "queueing an EVENT bumps the waiter's wakeword") {
     futex_fixture_down(&f);
 }
 
+KTEST("futex", "a SECOND source bumps the same wakeword") {
+    // THE GENERALITY CLAIM, checked rather than asserted: the wakeword
+    // is supposed to be one word EVERY source bumps, so that a process
+    // waiting on several things needs only one wait. A window event was
+    // the first source; a child dying is the second, and it is what lets
+    // a supervisor serve requests and reap children in one loop.
+    //
+    // If this is ever the only source left that works, a supervisor
+    // parked on its wakeword stops noticing deaths -- which reads as a
+    // service that exited and was never restarted.
+    struct futex_fixture f = {0};
+    if (!futex_fixture_up(&f)) { futex_fixture_down(&f); KTEST_SKIP("out of memory"); }
+
+    int pid = 0;
+    for (int p = SCHED_MAX_PROCS - 1; p > 0; p--)
+        if (!scheduler_pid_valid(p)) { pid = p; break; }
+    if (!pid) { futex_fixture_down(&f); KTEST_SKIP("no spare pid"); }
+
+    const void *key = NULL;
+    KTEST_ASSERT_EQ(futex_key(f.as, FUTEX_TEST_VADDR, &key), 0);
+    g_wakeword[pid - 1].phys = (uint64_t)(uintptr_t)key;
+    g_wakeword[pid - 1].pml4 = f.as;
+    futex_set(&f, 0);
+
+    // THE HELPER, NOT THE CALL SITE, and that gap is worth stating: a
+    // real child death cannot be provoked from a KTEST, so what proves
+    // scheduler.c's notify_parent() actually calls this is init serving
+    // its channel while reaping -- an end-to-end check, not this one.
+    futex_note_ready(pid);
+    KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f.frame, 1u);
+
+    futex_wakeword_release(f.as);
+    futex_fixture_down(&f);
+}
+
 KTEST("futex", "the SAME frame at two addresses is ONE channel") {
     // THE PROPERTY THE WHOLE DESIGN EXISTS FOR: two processes map an shm
     // page wherever they like, and must still meet on one channel. A key

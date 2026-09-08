@@ -115,6 +115,23 @@
 // /run is not emptied at boot, so a request left by a machine that lost
 // power would otherwise be obeyed by the next boot: init deletes the
 // control file at startup for that reason.
+#include "lib/uchan.h"
+#include "lib/uinitctl.h"
+
+// How long init parks when nothing is due. A BACKSTOP, not a poll --
+// a child dying and a client's request both wake it -- so it is long
+// enough to cost nothing and short enough that a missed wake is a pause
+// rather than a hang.
+// The LONGEST init parks when nothing is due. A backstop -- a child
+// dying and a client's request both wake it -- so it is long enough to
+// cost nothing while idle. It is CLAMPED by the next scheduled deadline
+// (next_due_ms below), which is the part that is not optional: a
+// service whose restart backoff expires during the park would otherwise
+// wait out the whole of it, which is how a 2 s value here failed four
+// of tools/init_test.py's readiness checks. The compositor clamps its
+// own wait the same way, against its clients' timers.
+#define CHAN_WAIT_MS 2000
+
 #define CONTROL_PATH   TMP_RUNDIR "/init.ctl"
 #define STATUS_PATH    TMP_RUNDIR "/init.status"
 
@@ -899,9 +916,26 @@ static void poll_readiness(void) {
 // so reading a file, spawning or logging from inside it would run in
 // the middle of whatever the loop was halfway through -- and `malloc`
 // here is not async-signal-safe (its lock is not recursive).
+// THE CHANNEL, beside the request file rather than instead of it. A
+// client that finds no beacon uses the file and the doorbell, so the
+// older path stays reachable rather than becoming a guess.
+static struct uchan_server g_chan;
+
+extern int g_publish;   // defined with the status writer below
 static volatile int g_hup;
 
-static void on_hup(int sig) { (void)sig; g_hup = 1; }
+static void on_hup(int sig) {
+    (void)sig;
+    g_hup = 1;
+    // AND BUMP THE WAKEWORD, because the wait this interrupts is
+    // RESTARTED rather than failed: a signal rewinds RIP over the
+    // syscall (kernel/proc/scheduler.c), so a futex wait re-runs, finds
+    // its word unchanged and parks again with the doorbell unanswered.
+    // Moving the word is what makes the restarted wait return at once.
+    // The waitpid path below needs no such thing -- it uses the
+    // interruptible variant, which is what NO SA_RESTART buys it.
+    if (g_chan.beacon) g_chan.beacon->wake++;
+}
 
 // NO SA_RESTART, and that is the entire point of using sigaction()
 // here rather than sys_signal(): a restarted waitpid(-1) goes straight
@@ -926,15 +960,17 @@ static struct service *find_service(const char *name) {
     return 0;
 }
 
-static void control_start(const char *name) {
+// Returns an INITCTL_* code, which the channel path sends back and the
+// file path throws away -- a line in a file has nobody to answer.
+static int control_start(const char *name) {
     struct service *s = find_service(name);
-    if (!s) { logf1("init: start: no service named %s\n", name); return; }
+    if (!s) { logf1("init: start: no service named %s\n", name); return INITCTL_NO_SUCH; }
     if (s->disabled) {
         logf1("init: start: %s has no descriptor -- put one back in "
               SERVICES_DIR "\n", s->name);
-        return;
+        return INITCTL_REFUSED;
     }
-    if (s->pid) { logf1("init: start: %s is already running\n", s->name); return; }
+    if (s->pid) { logf1("init: start: %s is already running\n", s->name); return INITCTL_OK; }
 
     // EVERY reason it is down is cleared, which is what makes `start`
     // mean "start it" rather than "start it unless something earlier
@@ -952,17 +988,18 @@ static void control_start(const char *name) {
     // it is cleared too.
     s->started_once  = 0;
     logf1("init: start: %s\n", s->name);
+    return INITCTL_OK;
 }
 
-static void control_stop(const char *name) {
+static int control_stop(const char *name) {
     struct service *s = find_service(name);
-    if (!s) { logf1("init: stop: no service named %s\n", name); return; }
+    if (!s) { logf1("init: stop: no service named %s\n", name); return INITCTL_NO_SUCH; }
 
     // SET BEFORE THE SIGNAL, never after: the child's death is what
     // wakes the loop, and a flag set after sending it races the exit
     // handling that would otherwise restart the service.
     s->admin_stopped = 1;
-    if (!s->pid) { logf1("init: stop: %s is not running\n", s->name); return; }
+    if (!s->pid) { logf1("init: stop: %s is not running\n", s->name); return INITCTL_OK; }
 
     // SIGTERM, and no escalation to SIGKILL after a timeout the way
     // systemd does. A service that ignores it stays up and says so in
@@ -973,6 +1010,53 @@ static void control_stop(const char *name) {
              s->name, s->pid);
     sys_eprint(g_msg);
     sys_kill(s->pid, SIGTERM);
+    // OK means the request was accepted, not that the service is down:
+    // it dies when it chooses to, and the status file is where an
+    // operator watches that happen.
+    return INITCTL_OK;
+}
+
+// One pass: adopt any new client, answer everything queued. Returns how
+// many requests it acted on, so the caller knows the pass did work.
+// How long until the soonest thing init has scheduled, or CHAN_WAIT_MS
+// when nothing is. Only backoffs are on a clock; everything else that
+// should wake this wakes it.
+static int next_due_ms(void) {
+    unsigned long long now = now_ms(), best = 0;
+    for (int i = 0; i < g_svc_count; i++) {
+        unsigned long long d = g_svc[i].due_ms;
+        if (!d || d <= now) continue;
+        if (!best || d < best) best = d;
+    }
+    if (!best) return CHAN_WAIT_MS;
+    unsigned long long in = best - now;
+    return in < CHAN_WAIT_MS ? (int)in : CHAN_WAIT_MS;
+}
+
+static int serve_channel(void) {
+    if (!g_chan.beacon) return 0;
+    uchan_server_scan(&g_chan);
+
+    int acted = 0, from;
+    struct initctl_msg m;
+    while ((from = uchan_server_recv(&g_chan, &m)) != 0) {
+        // FROM HERE ON THERE IS A READER, exactly as the doorbell means
+        // it: somebody is watching, so the status file is worth writing.
+        g_publish = 1;
+        int r = INITCTL_REFUSED;
+        m.name[sizeof m.name - 1] = '\0';
+        if (m.verb == INITCTL_START)      r = control_start(m.name);
+        else if (m.verb == INITCTL_STOP)  r = control_stop(m.name);
+        else logf1("init: unknown control verb over the channel\n", "");
+
+        struct initctl_msg reply;
+        k_memset(&reply, 0, sizeof reply);
+        reply.verb = m.verb;
+        reply.result = (uint32_t)r;
+        uchan_server_reply(&g_chan, from, &reply);
+        acted++;
+    }
+    return acted;
 }
 
 // Reads and obeys the request file. Deleted afterwards WHETHER OR NOT
@@ -1061,7 +1145,7 @@ static const char *svc_ready(const struct service *s) {
 // machine.
 static char g_status[2048];
 static char g_status_prev[2048];
-static int g_publish;
+int g_publish;
 
 static void write_status(int settled) {
     if (!g_publish || !settled) return;
@@ -1160,6 +1244,14 @@ int main(void) {
 
     seed_environment();
     install_hup_handler();
+
+    // THE CHANNEL, if it can be had. A failure here is not fatal and is
+    // not silent: init keeps the request file and the doorbell, which is
+    // what every `service` falls back to when it finds no beacon.
+    if (uchan_server_open(&g_chan, INITCTL_SERVICE) < 0)
+        sys_eprint("init: no control channel -- the request file and "
+                   "SIGHUP still work\n");
+
     // NEITHER FILE SURVIVES A BOOT. /run is not emptied here, which is
     // the one way it differs from /run being a tmpfs on a real system:
     // a request left behind by a machine that lost power would
@@ -1223,10 +1315,25 @@ int main(void) {
                 sys_sleep_ms(POLL_SLEEP_MS);
                 continue;
             }
+        } else if (g_chan.beacon) {
+            // ONE WAIT OVER BOTH, which is what the wakeword is for: a
+            // client's request bumps it and so does a child dying
+            // (notify_parent(), kernel/proc/scheduler.c), so this parks
+            // for either. Without it a supervisor has to choose which of
+            // the two it is willing to notice.
+            //
+            // The deadline is a backstop, not a poll: everything that
+            // should wake this wakes it.
+            uchan_server_wait(&g_chan, next_due_ms());
+            if (serve_channel()) continue;   // acted; re-run the pass
+            pid = sys_waitpid_nohang(-1, &code);
+            if (pid == SYS_RETRY || pid < 0) continue;
         } else {
-            // INTERRUPTIBLE, because a control request is not a child
-            // exiting: sys_waitpid() retries -EINTR and would park init
-            // again with the doorbell unanswered.
+            // NO CHANNEL -- the older path, still exercised whenever the
+            // beacon could not be published. INTERRUPTIBLE, because a
+            // control request is not a child exiting: sys_waitpid()
+            // retries -EINTR and would park init again with the doorbell
+            // unanswered.
             pid = sys_waitpid_intr(-1, &code);
         }
 

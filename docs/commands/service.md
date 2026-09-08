@@ -104,6 +104,17 @@ startup; it is not -- that stall was `serial_putc()` waiting on a
 stalled COM1 consumer, and the write only supplied the log volume. The
 disk-traffic reason above is the whole of it.
 
+**`start` and `stop` GO OVER A CHANNEL NOW** (`lib/uinitctl.h`): init
+publishes a beacon, this sends one message and gets a RESULT back,
+rather than writing a file and ringing a bell. What has not changed is
+what happens after -- `stop` is still a `SIGTERM` the service obeys when
+it chooses to, so the outcome is still watched through the status file.
+
+**The file and the doorbell are still there**, and are used whenever no
+beacon is published -- an init that could not open its channel. A
+fallback nothing can reach is a guess, so that path stays producible and
+is tested by stopping init's channel and re-running the same commands.
+
 **The write half is a file plus a doorbell.** `start` and `stop` append
 a line to `/run/init.ctl` and then send `SIGHUP` to init, which is what
 wakes it out of `waitpid(-1)` to read the file. That is runit's

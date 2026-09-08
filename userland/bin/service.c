@@ -37,6 +37,8 @@
 #include <stdio.h>
 #include <string.h>
 #include "etc_config.h"
+#include "lib/uchan.h"
+#include "lib/uinitctl.h"
 #include "syscall_abi.h"
 #include <fcntl.h>
 #include <unistd.h>
@@ -44,6 +46,11 @@
 
 #define CONTROL_PATH TMP_RUNDIR "/init.ctl"
 #define STATUS_PATH  TMP_RUNDIR "/init.status"
+
+// How long to wait for init's answer over the channel. Generous: init
+// acts on its next pass, and a machine mid-backoff answers late rather
+// than never -- the same reason SETTLE_MS is what it is.
+#define CHAN_REPLY_MS 4000
 #define SERVICES_DIR "/etc/services.d"
 
 // How long to wait for init to act on a request before reporting
@@ -166,6 +173,30 @@ static const char *read_status(void) {
         if (st) return st;
     }
     return 0;
+}
+
+// THE CHANNEL, tried first. init publishes a beacon (lib/uinitctl.h)
+// and answers on it, so this is one round trip with a RESULT rather
+// than a file and a signal followed by a poll of the status file.
+//
+// Returns 1 if the channel carried it, 0 if there is no channel to
+// carry it on -- which is not a failure: the caller falls through to
+// the file and the doorbell, and that path stays exercised on any boot
+// where init could not open its channel.
+static int send_over_channel(const char *verb, const char *name, int *result) {
+    struct uchan_client c;
+    if (uchan_client_open(&c, INITCTL_SERVICE) < 0) return 0;
+
+    struct initctl_msg m, reply;
+    memset(&m, 0, sizeof m);
+    m.verb = strcmp(verb, "start") == 0 ? INITCTL_START : INITCTL_STOP;
+    snprintf(m.name, sizeof m.name, "%s", name);
+
+    int ok = uchan_call(&c, &m, &reply, CHAN_REPLY_MS) == 0;
+    uchan_client_close(&c);
+    if (!ok) return 0;          // init has the beacon up but did not answer
+    *result = (int)reply.result;
+    return 1;
 }
 
 // Appends one request and rings the doorbell. APPEND rather than
@@ -447,7 +478,24 @@ int main(int argc, char **argv) {
         return cmd_status(argv[2]);
     }
 
-    if (!send_request(start ? "start" : "stop", argv[2])) return 1;
+    // THE CHANNEL FIRST, the file and the doorbell if there is none.
+    // init's answer says whether the request was ACCEPTED; what the
+    // service then does is still watched through the status file, since
+    // "stop" means a SIGTERM the service obeys when it chooses to.
+    const char *verb = start ? "start" : "stop";
+    int result = INITCTL_OK;
+    if (send_over_channel(verb, argv[2], &result)) {
+        if (result == INITCTL_NO_SUCH) {
+            sys_print("service: no service by that name\n");
+            return 1;
+        }
+        if (result != INITCTL_OK) {
+            sys_print("service: init refused the request\n");
+            return 1;
+        }
+    } else if (!send_request(verb, argv[2])) {
+        return 1;
+    }
     settle_and_report(argv[2], before);
     return 0;
 }

@@ -30,9 +30,26 @@ with five threads. Its PID column is its TID, and its PPID is the
 process it belongs to, which is also what nests it under that process
 in `--tree`.
 
+**`--tree` DRAWS BRANCHES**, `pstree -A`'s shape: `|--` for a child,
+a backtick for the LAST one, and a `|` guide continuing down past any
+ancestor that still has siblings to come.
+
+    1     0 block(futex)   init
+    2     1 block(timer)   |-- clipboardd
+    8     1 block(event)   `-- toywm
+   10     8 block(event)       |-- uterm
+    6    10 block(key)         |   `-- tosh
+   13     8 block(event)       `-- mines
+
+The backtick is the part that earns its place: indentation alone cannot
+say where a subtree ENDS, so a deep listing gives no way to tell a
+sibling from a nephew. ASCII rather than the box-drawing characters this
+would otherwise want -- the font draws 101 glyphs and none of them is a
+line, which is the same reason `pstree` has an `-A` mode at all.
+
 **The STATE column says what a blocked process is waiting FOR** --
 `block(pipe)`, `block(key)`, `block(child)`, `block(timer)`,
-`block(event)`. A process listing where half the machine reads `block`
+`block(event)`, `block(futex)`. A process listing where half the machine reads `block`
 tells you nothing; those five words are the difference between "waiting
 for input that is never coming" and "waiting for a child that has
 already exited". Linux puts this in a separate `WCHAN` column naming the

@@ -597,6 +597,36 @@ two addresses differ before believing the wake. The KTEST beside
 `futex_key()` covers the property directly, by mapping one frame twice
 in one address space.
 
+## init serves a channel AND keeps the file and the doorbell
+
+`/bin/service`'s request was a line appended to `/run/init.ctl` plus a
+`SIGHUP`, because neither half could do the job alone: a signal carries
+no payload, and a file could not be noticed because init BLOCKS waiting
+for children. A channel is both halves at once and can answer, so
+`start` and `stop` travel over one now.
+
+**The old path is kept, not replaced**, and used whenever no beacon is
+published. This repo's rule is that an unreachable path is a guess
+(`ata nodma`, `nopat`, TFS3 v1), so it stays producible: stopping init's
+channel and re-running the same commands exercises it, which is how it
+was tested.
+
+**What made this possible is the wakeword's SECOND source.** init could
+not serve requests and reap children at once: it parked in
+`waitpid(-1)`, and a channel wakes nobody parked there. A child's death
+bumps the wakeword now, from `notify_parent()` -- the one function both
+kinds of death funnel through -- so a single wait covers both. That is
+the generality the wakeword was built for, and building it is what
+turned the claim into something exercised rather than asserted.
+
+**The SIGHUP handler bumps the wakeword too**, and the reason is not
+obvious: a signal wakes a parked process by REWINDING RIP over the
+syscall, so the wait is RESTARTED rather than failed. A restarted futex
+wait finds its word unchanged and parks again with the doorbell
+unanswered. Moving the word is what makes the restarted wait return.
+`waitpid` needed no such thing because it has an interruptible variant;
+a futex wait does not.
+
 ## The message channel is a LIBRARY, not a kernel object
 
 `userland/lib/uchan.h` is a channel between two ring-3 processes and the

@@ -626,7 +626,7 @@ whenever a headline here tells you something you did not already know.
 - **THERE IS AN INIT, IT HOLDS PID 1, AND IT CANNOT BE KILLED.**
 - **INIT STARTS AND SUPERVISES THE DESKTOP, and the desktop is a SERVICE.**
 - **A SERVICE CAN SAY IT IS READY, AND `After=` THEN MEANS "USABLE" RATHER THAN "SPAWNED".**
-- **A SERVICE IS CONTROLLED BY A FILE PLUS A DOORBELL, AND `/bin/service` IS THE LEVER**
+- **A SERVICE IS CONTROLLED OVER A CHANNEL, WITH THE FILE PLUS DOORBELL AS THE FALLBACK, AND `/bin/service` IS THE LEVER**
 - **INIT CANNOT BE KILLED BY A SIGNAL IT HAS NOT CAUGHT, and the guard is in `do_default_action()`, not only `scheduler_kill()`**
 - **`SYS_SLEEP` exists, and a caller with no scheduler slot gets -1.**
 - **`ps` is a REAL `/bin` PROGRAM, not a builtin**

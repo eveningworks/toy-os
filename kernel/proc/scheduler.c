@@ -89,6 +89,7 @@
 // only the mechanism that used to keep it that way (a flag flipped
 // off) changed to a different one (an empty table).
 #include "scheduler.h"
+#include "futex.h"
 #include "syscalls.h" // the fd table: a child inherits its parent's descriptors
 #include "vmm.h"
 #include "pmm.h"
@@ -1689,6 +1690,12 @@ int scheduler_wake_n(const void *chan, int64_t value, int max) {
 static void notify_parent(int ppid) {
     scheduler_wake(scheduler_wait_chan_pid(ppid), SYS_RETRY);
     signal_send(ppid, SIGCHLD);
+    // THE THIRD ROUTE, for a parent that is waiting on SEVERAL things at
+    // once and so is parked on neither this child's channel nor in a
+    // signal. A supervisor serving requests as well as reaping children
+    // is exactly that (kernel/futex.h); it costs a compare for every
+    // parent that never registered one.
+    futex_note_ready(ppid);
 }
 
 // Free a slot outright, keeping the live count honest whichever state

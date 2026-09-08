@@ -503,7 +503,12 @@ const void *scheduler_wait_chan_pid(int pid);
 #define SCHED_WAIT_KEY   5 // a keystroke on a terminal this process reads
 #define SCHED_WAIT_THREAD 7 // a thread of this process, being joined
 #define SCHED_WAIT_FUTEX 9 // a word in memory another process has
-                            // promised to change (SYS_FUTEX_WAIT)
+                            // promised to change (SYS_FUTEX_WAIT).
+                            // Adding this one found a FOURTH site the
+                            // list above does not name: /bin/ps has its
+                            // own PROC_WAIT_* -> word table, and a
+                            // missing row there reports a perfectly
+                            // ordinary wait as `block(?)`.
 #define SCHED_WAIT_NET   8 // a datagram on a socket this process reads.
                            // ONE channel for the whole stack, not one
                            // per socket: the waker is a driver's

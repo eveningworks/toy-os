@@ -191,6 +191,19 @@ compare-and-swap, which this system does not have.
 Asynchronous by default; `uchan_call()` is the explicit round trip, for
 the few messages that have an answer.
 
+**IT HAS A PRODUCTION CALLER (2026-09-08): init.** `/bin/service`'s
+`start` and `stop` travel over a channel and get a result back, instead
+of appending to `/run/init.ctl` and ringing `SIGHUP`. That caller is
+deliberately NOT the window system: it validates the channel, the
+wakeword and the futex together, on something whose failure is a service
+that will not start rather than a desktop that will not draw. The old
+file-and-doorbell path is kept and stays producible.
+
+It also gave the wakeword its second source. init could not serve
+requests and reap children at once -- it parked in `waitpid(-1)`, which
+a channel cannot wake -- so a child's death bumps the wakeword now, from
+the one function both kinds of death funnel through.
+
 ### Stage 3b -- one wait over both -- THE PRIMITIVE IS BUILT, 2026-09-08
 
 `SYS_WAIT_READY` parks on the process's event queue; a futex parks on a

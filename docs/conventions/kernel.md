@@ -378,7 +378,8 @@ this the obvious way), not from how much history it accumulated.
   role straight back. Both had passed for months on the accidental
   interlock that `gui` blocking the shell provided -- **automating a
   lifecycle removes interlocks somebody depended on**; look for them.
-- **A SERVICE IS CONTROLLED BY A FILE PLUS A DOORBELL, AND `/bin/service`
+- **A SERVICE IS CONTROLLED OVER A CHANNEL, WITH THE FILE PLUS DOORBELL
+  AS THE FALLBACK, AND `/bin/service`
   IS THE LEVER.** `service [list] | status <name> | start <name> | stop
   <name> | reload`. The READ half asks init nothing once the file
   exists -- it reads `/run/init.status`, one line per service, because
