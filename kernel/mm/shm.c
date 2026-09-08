@@ -105,6 +105,7 @@ static struct shm_map    g_map[SHM_MAPS_MAX];
 
 // --- objects ---------------------------------------------------------
 
+static int name_ok(const char *n);
 static int obj_create(const char *name, uint64_t npages, int pid,
                       uint64_t pml4);
 
@@ -134,6 +135,24 @@ int shm_lookup(const char *name) {
     return -1;
 }
 
+// A NAMED object owned by `owner_pid`, created on that process's behalf.
+//
+// **THIS IS FOR A CALLER STANDING IN FOR A PROCESS**, and there is one:
+// kernel/proc/win_server_test.c's fixture builds windows for pids that
+// do not exist, and a window's pixels are its CLIENT's object now -- so
+// a fixture with no client has to make one. Not reachable from ring 3,
+// where a process creates its own objects and owns them by doing so.
+//
+// It is not a second creation path: obj_create() is the only one, and
+// this only chooses the owner a syscall would have taken from the
+// caller.
+int shm_create_named(const char *name, uint64_t npages, int owner_pid) {
+    if (!name || !name[0] || !name_ok(name)) return -EINVAL;
+    if (!npages || npages > SHM_PAGES_MAX) return -EINVAL;
+    if (shm_lookup(name) >= 0) return -EEXIST;
+    return obj_create(name, npages, owner_pid, 0);
+}
+
 // An object with no name, for a kernel subsystem that maps both sides
 // itself and needs the frames refcounted rather than owned by one
 // caller. The reference returned is the caller's to shm_put().
@@ -151,6 +170,11 @@ void shm_get(int idx) {
 void shm_put(int idx) {
     if (idx < 0 || idx >= SHM_MAX || !g_obj[idx].refs) return;
     if (--g_obj[idx].refs == 0) obj_free(&g_obj[idx]);
+}
+
+int shm_creator(int idx) {
+    if (idx < 0 || idx >= SHM_MAX || !g_obj[idx].refs) return 0;
+    return g_obj[idx].creator;
 }
 
 uint64_t shm_npages(int idx) {

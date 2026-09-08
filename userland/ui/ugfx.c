@@ -54,15 +54,23 @@ static int g_bold_mapped;
 // server last reported -- 0 for a window that has never presented, and
 // for a single-buffered one, which is why a caller needs no special
 // case for either.
-struct ugfx_surface ugfx_surface_for_window_buf(uint32_t window, int w, int h,
-                                                 int front) {
+// A surface over memory the CALLER owns. Every window surface is one
+// now: a client allocates its own pixels and knows where it mapped
+// them, so there is nothing to derive from a window id.
+struct ugfx_surface ugfx_surface_for_pixels(void *pixels, int w, int h) {
     struct ugfx_surface s;
     for (unsigned i = 0; i < sizeof s; i++) ((uint8_t *)&s)[i] = 0;
-    s.pixels = (uint32_t *)(uintptr_t)(win_buffer_vaddr(window)
-                                        + win_buffer_back_offset(front));
+    s.pixels = (uint32_t *)pixels;
     s.w = w;
     s.h = h;
     return s;
+}
+
+struct ugfx_surface ugfx_surface_for_window_buf(uint32_t window, int w, int h,
+                                                 int front) {
+    return ugfx_surface_for_pixels(
+        (void *)(uintptr_t)(win_buffer_vaddr(window)
+                            + win_buffer_back_offset(front)), w, h);
 }
 
 struct ugfx_surface ugfx_surface_for_window(uint32_t window, int w, int h) {

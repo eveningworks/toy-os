@@ -764,6 +764,28 @@ struct win_event {
                            // rather than assuming its pointer survived.
                            // A DESTROY does not -- see
                            // WIN_REQ_UNMAP_WINDOW.
+#define WIN_REQ_BUFFER 27  // `window`: which one; a: which BUFFER (0 or
+                           // 1); b, c: its new width and height.
+                           //
+                           // **THE CLIENT REPLACED THAT BUFFER'S
+                           // OBJECT** -- unlinked the old one and made a
+                           // new one under the same name -- and this is
+                           // what makes the server re-adopt it. The name
+                           // identifies the SLOT; the object in it is
+                           // what changes, which is why the server
+                           // cannot notice on its own.
+                           //
+                           // The server used to grow the stale buffer
+                           // itself at present time. It cannot: the
+                           // memory is the client's, and only the client
+                           // can replace an object it created.
+                           //
+                           // A buffer is replaced BEFORE it is drawn
+                           // into, never while it is the front one --
+                           // the front still holds the last finished
+                           // frame, and taking it away is the window of
+                           // black the configure/ack handshake exists to
+                           // avoid.
 #define WIN_REQ_UNMAP_WINDOW 26 // Release a mapping this compositor took
                            // with WIN_REQ_MAP_WINDOW.
                            //   a      = owning pid (in)

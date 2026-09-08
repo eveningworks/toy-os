@@ -24,6 +24,18 @@ int shm_lookup(const char *name);
 // could also map. Returns an index holding one reference, or -errno.
 int shm_create_anon(uint64_t npages);
 
+// A NAMED object owned by `owner_pid`, made on that process's behalf.
+// For a caller standing in for a process that does not exist -- the
+// window-server KTEST fixture, which builds windows for fake pids whose
+// pixels a real client would have allocated. Unreachable from ring 3.
+// Returns an index holding one reference, or -errno.
+int shm_create_named(const char *name, uint64_t npages, int owner_pid);
+
+// Which process created `idx`, or 0. What the window server checks
+// before adopting an object a client named: a client must not be able
+// to hand over somebody else's memory to be mapped to the compositor.
+int shm_creator(int idx);
+
 // +1 / -1 on the object's reference count. `shm_put` frees its frames
 // at zero, so every `shm_get` must be paired.
 void shm_get(int idx);

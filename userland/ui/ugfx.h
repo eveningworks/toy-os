@@ -60,6 +60,10 @@ struct ugfx_surface {
 
 // Wraps a window's buffer as a drawable surface. `window` is the id
 // WIN_REQ_CREATE handed back. Clip inactive, damage empty.
+// A surface over memory the CALLER owns -- a client's own window buffer,
+// allocated by it and mapped where its mmap put it.
+struct ugfx_surface ugfx_surface_for_pixels(void *pixels, int w, int h);
+
 struct ugfx_surface ugfx_surface_for_window(uint32_t window, int w, int h);
 
 // The same, for a window whose FRONT buffer is not 0 -- i.e. after a

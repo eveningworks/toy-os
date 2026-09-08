@@ -14,6 +14,90 @@
 #include "ui/utheme.h"
 #include "lib/uclip.h"   // clip_poll() -- the clipboard is shared memory now
 
+// THE CLIENT'S OWN WINDOW MEMORY. A buffer is a named shm object this
+// process creates, so the pixels are ITS memory rather than something
+// the kernel allocated and handed back at an address derived from a
+// window id. The NAME identifies the slot; the OBJECT in it is replaced
+// on a resize, which is what lets the compositor go on reading the old
+// one until it re-maps (docs/winserver-ring3-design.md, stage 5).
+#define UAPP_BUFS 2
+
+static void *g_px[UAPP_BUFS];
+static uint64_t g_px_bytes[UAPP_BUFS];
+static int g_slot;
+
+static void buf_name(char *out, unsigned cap, int slot, int buf) {
+    snprintf(out, cap, "win.%d.%d.%d", sys_getpid(), slot, buf);
+}
+
+// Creates (or REPLACES) one buffer at `bytes`. A replace unlinks the old
+// name first and creates a new object under it -- the old one stays
+// alive for whoever still maps it, which is exactly what stops a resize
+// pulling the pixels out from under the compositor.
+static int buf_make(int slot, int buf, uint64_t bytes) {
+    char nm[32];
+    buf_name(nm, sizeof nm, slot, buf);
+    if (g_px[buf]) {
+        sys_munmap(g_px[buf], g_px_bytes[buf]);
+        g_px[buf] = 0;
+    }
+    sys_shm_unlink(nm);
+    int fd = sys_shm_open(nm, bytes, SHM_CREATE | SHM_EXCL);
+    if (fd < 0) return 0;
+    void *p = sys_mmap(0, bytes, SYS_PROT_READ | SYS_PROT_WRITE,
+                       SYS_MAP_SHARED, fd, 0);
+    sys_close(fd);
+    if (p == (void *)-1) return 0;
+    g_px[buf] = p;
+    g_px_bytes[buf] = bytes;
+    return 1;
+}
+
+static int bufs_create(int slot, int w, int h) {
+    uint64_t bytes = (uint64_t)w * (uint64_t)h * 4;
+    if (!bytes) return 0;
+    g_slot = slot;
+    for (int b = 0; b < UAPP_BUFS; b++)
+        if (!buf_make(slot, b, bytes)) return 0;
+    return 1;
+}
+
+// Makes sure buffer `buf` is `w` x `h` before the client draws into it,
+// replacing the object and telling the server if it is not.
+//
+// **THE STALE HALF IS THE CLIENT'S PROBLEM NOW.** A resize replaces only
+// the buffer being drawn into; the other one is still the old size and
+// is the one the client draws into NEXT. The server used to grow it at
+// present time and cannot any more -- the memory belongs to the client.
+static void req_clear(struct win_request_msg *r);
+static int req_send(struct win_request_msg *r);
+
+static int buf_ensure(uint32_t window, int buf, int w, int h) {
+    uint64_t want = (uint64_t)w * (uint64_t)h * 4;
+    if (g_px[buf] && g_px_bytes[buf] == want) return 1;
+    if (!buf_make(g_slot, buf, want)) return 0;
+
+    struct win_request_msg req;
+    req_clear(&req);
+    req.type = WIN_REQ_BUFFER;
+    req.window = window;
+    req.a = buf;
+    req.b = w;
+    req.c = h;
+    return req_send(&req) == 1;
+}
+
+static void bufs_release(void) {
+    for (int b = 0; b < UAPP_BUFS; b++) {
+        if (!g_px[b]) continue;
+        char nm[32];
+        buf_name(nm, sizeof nm, g_slot, b);
+        sys_munmap(g_px[b], g_px_bytes[b]);
+        sys_shm_unlink(nm);
+        g_px[b] = 0;
+    }
+}
+
 struct uapp {
     // WHICH OF THE WINDOW'S TWO BUFFERS THE COMPOSITOR IS READING. The
     // surface always points at the OTHER one -- see present(). 0 until
@@ -90,7 +174,12 @@ static void present(struct uapp *a) {
     // the present did not happen, neither did the flip.
     if (rc > 0) {
         a->front = rc - 1;
-        a->surface = ugfx_surface_for_window_buf(a->window, a->w, a->h, a->front);
+        // The BACK buffer for the new front: the other of the two. It
+        // may still be the pre-resize size, so make it current before
+        // handing it over as a surface.
+        int back = a->front ^ 1;
+        if (!buf_ensure(a->window, back, a->w, a->h)) return;
+        a->surface = ugfx_surface_for_pixels(g_px[back], a->w, a->h);
     }
 }
 
@@ -352,10 +441,27 @@ int uapp_height(const struct uapp *a) { return a->h; }
 int uapp_resize(struct uapp *a, int w, int h) {
     struct win_request_msg req;
     req_clear(&req);
+    // THE BUFFER IS REPLACED BEFORE THE REQUEST, because the kernel
+    // re-adopts by name and has to find the NEW object there. Only the
+    // BACK one: the front is still showing the last finished frame at
+    // the old size, and replacing it would be the window of black this
+    // whole handshake exists to avoid (abi/win_proto.h).
+    // NO WIN_REQ_BUFFER HERE, and that is not an oversight: the resize
+    // request below re-adopts the buffer by name itself, so telling the
+    // server twice costs a second syscall on a path a live drag takes
+    // per mouse move -- enough for the WM's own lag measurement to
+    // decide the client cannot keep up and fall back to an outline.
+    int back = a->front ^ 1;
+    if (!buf_make(g_slot, back, (uint64_t)w * (uint64_t)h * 4)) return 0;
+
     req.type = WIN_REQ_RESIZE;
     req.window = a->window;
     req.a = w;
     req.b = h;
+    // WHICH BUFFER WAS PREPARED. Both sides deriving it from `front`
+    // separately is a disagreement waiting for a present to land in
+    // between -- and it did.
+    req.c = back;
     if (req_send(&req) != 1) return 0;
 
     // The server hands back what it actually granted rather than what
@@ -369,7 +475,7 @@ int uapp_resize(struct uapp *a, int w, int h) {
     // frame at the old one (abi/win_proto.h's configure/ack).
     a->w = req.a;
     a->h = req.b;
-    a->surface = ugfx_surface_for_window_buf(a->window, a->w, a->h, a->front);
+    a->surface = ugfx_surface_for_pixels(g_px[a->front ^ 1], a->w, a->h);
     if (a->desc->layout) uui_layout_run(a->desc->layout, 0, 0, a->w, a->h);
     return 1;
 }
@@ -824,7 +930,13 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
 
     struct win_request_msg req;
     req_clear(&req);
+    // THE CLIENT ALLOCATES, AND PROPOSES ITS OWN SLOT. `window` is an
+    // output on CREATE and free as an input, which is what lets the
+    // buffers be NAMED before the kernel has answered.
+    if (!bufs_create(0, a->w, a->h)) return 0;
+
     req.type = WIN_REQ_CREATE;
+    req.window = 0;
     req.a = a->w;
     req.b = a->h;
     // 0/0 takes TWS's own cascade rather than stacking every client on
@@ -832,7 +944,7 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     req.c = desc->x;
     req.d = desc->y;
     copy_text(req.text, desc->app_id);
-    if (req_send(&req) != 1) return 0;
+    if (req_send(&req) != 1) { bufs_release(); return 0; }
     a->window = req.window;
 
     if (desc->title) uapp_set_title(a, desc->title);
@@ -859,7 +971,11 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
         // behaviour instead of an app that never ticks.
         a->timer_armed = (req_send(&req) == 1);
     }
-    a->surface = ugfx_surface_for_window(a->window, a->w, a->h);
+    // THE BACK BUFFER, which with front 0 is buffer 1 -- the same thing
+    // win_buffer_back_offset(0) returned. Starting on buffer 0 paints
+    // into the half the compositor is not showing, which reads as a
+    // window that opens and draws nothing.
+    a->surface = ugfx_surface_for_pixels(g_px[a->front ^ 1], a->w, a->h);
 
     // Now that the content size is settled, place everything in it.
     // Re-run rather than trusting the natural-size pass: the window may
