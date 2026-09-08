@@ -3139,7 +3139,11 @@ labelled `" "` cannot be passed as a console token.
 
   **AND RE-PAGING IS NOT RE-WRAPPING.** The pager owns the page; it does
   not own the wrapping, which belongs to whoever RENDERED the text at
-  whatever width the terminal was when they asked. So `doc` in a widened
+  whatever width the terminal was when they asked. The signal pair --
+  the kernel raising SIGWINCH on the foreground group (d50fa0c) and the
+  pager handling it (f42eadf6) -- delivers the resize and stops there,
+  which is worth knowing because "we built a signal for that" is the
+  natural reason to assume the whole problem was solved. So `doc` in a widened
   window still showed 62-column paragraphs with the rest of the window
   empty, while every row count and percentage was correct.
   `upager_run_src()` takes a `struct upager_source` for that: a callback
