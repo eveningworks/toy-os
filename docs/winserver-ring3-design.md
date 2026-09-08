@@ -476,15 +476,68 @@ What is left in ring 0 is what must be: the framebuffer grant
 holds the compositor role (`win_input.c`, evdev's job). `win_server.c`'s
 window table, `win_server_ops` and the dead ring-0 presentation layer go.
 
-After 5b the table holds a size, a front index, a generation and an app
-identity per window, and forwards six events. Two things decide whether
-that can simply move: **`app_identity` is taken from the SCHEDULER**, so
-whatever holds it has to be able to ask the kernel who a process is (a
-`QUERY_` provider would do); and **`WIN_REQ_CREATE` is what allocates a
-slot**, so a client's create has to reach the compositor over the
-channel instead -- at which point the channel is on the critical path
-for a window existing, which 5b already made true by refusing a window
-without one.
+#### What the table still backs, measured after 5b
+
+`win_server.c` is 1504 lines and serves eleven requests. Five things
+keep the table alive, and they do not move as one piece:
+
+1. **Slot allocation.** `WIN_REQ_CREATE` accepts or refuses the slot a
+   client proposes, and the client's buffer objects are named after it.
+2. **A buffer's size, front index and generation**, which is what a
+   present carries.
+3. **Teardown.** `win_server_client_gone()` closes a dead client's
+   windows.
+4. **`app_identity`**, interned from the owning process's spawn path,
+   taken from the SCHEDULER and never from anything the client said.
+   The compositor groups taskbar buttons by it.
+5. **`WIN_REQ_ACTIVATE`**, which the kernel answers ITSELF by scanning
+   the table for a window whose identity matches the ASKING process's.
+   This is the whole of single instance, and it is load-bearing in both
+   directions: a wrong "no" opens a duplicate window, a wrong "yes"
+   makes an app exit without ever drawing.
+
+The first three move with the requests that carry them. **4 and 5 are
+the decisions**, and they are open.
+
+#### The three questions, put to the maintainer 2026-09-08, UNDECIDED
+
+Recorded so the next session starts from the options rather than
+re-deriving them. Nothing here is settled.
+
+- **How does the compositor learn what PROGRAM a client is?** A
+  `QUERY_` provider answering pid -> spawn path keeps the kernel the
+  source of truth (it is the only party that knows) while holding no
+  window state, and `WIN_REQ_ACTIVATE` becomes the compositor's again:
+  it asks who the ASKING pid is and compares against what it recorded
+  per window, so the guarantee is unchanged. The alternatives are
+  keeping ACTIVATE in ring 0 -- which leaves per-window state and does
+  not finish the stage -- or deriving identity from the `.desktop` entry
+  the launcher used, which covers only apps started FROM the launcher
+  and fails silently for anything else.
+- **How does the compositor learn a client died?** `uchan`'s server
+  scan already drops a ring whose name no longer resolves, and an shm
+  object's name goes when its creator dies -- so the signal is in the
+  transport the compositor polls every frame, needing only that the scan
+  report WHICH client went instead of silently reclaiming the slot. The
+  alternatives are a kernel event (prompt, but per-client state in the
+  file this stage exists to empty, and sheddable under load) or polling
+  `QUERY_PROCESSES` (no new mechanism, but a scan per frame duplicating
+  what the channel carries).
+- **How far in one go?** 6a moving CREATE / DESTROY / RESIZE / BUFFER
+  and the identity question to the channel, leaving PRESENT on the
+  kernel event path so the hot path and the generation protocol stay
+  put; then 6b moving PRESENT and deleting the table. Or one change.
+
+#### What does NOT move, and why it is not a compromise
+
+**The event queue stays**, and so does `WIN_REQ_EVENT_PUSH`. Input is
+the kernel's by design (see Out of scope below), and a client's
+keystrokes and pointer events reach it through that queue -- so the
+queue is a transport for something ring 0 legitimately owns, not a
+remnant of the window system. The same is true of the compositor ROLE:
+`win_input.c` and `win_surface.c` both key off it, and neither is
+window state.
+
 ## Out of scope
 
 - **Moving input.** A compositor reading raw devices itself is what

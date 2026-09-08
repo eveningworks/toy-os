@@ -25,6 +25,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] Finish the app-deduplication pass: the smaller survey items, all three branches landed  *(The GUI in ring 3)*
+- [ ] Delete the kernel's window table, leaving ring 0 the framebuffer grant and raw input  *(The window server out of the kernel)*
 - [ ] An I/O APIC and the MADT interrupt source overrides, so the legacy lines stop going through the 8259  *(virtio, and a real GPU driver)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
@@ -546,7 +547,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Stage 5a: the client owns its window memory and the kernel adopts it~~ DONE 2026-09-08
 - [x] ~~Stage 5b: the compositor opens it directly~~ DONE 2026-09-08 -- the client grants; a generation says when to re-open
 - [x] ~~The client allocates its own buffer~~ DONE 2026-09-08 -- both carved window regions are gone from the ring-3 map
-- [ ] Delete the kernel's window table, leaving ring 0 the framebuffer grant and raw input
+- [ ] **NEXT** Delete the kernel's window table, leaving ring 0 the framebuffer grant and raw input
 
 ### A layout engine for the GUI
 
