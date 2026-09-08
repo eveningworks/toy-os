@@ -585,11 +585,18 @@ void wm_client_chan_pump(void) {
     while ((from = uchan_server_recv(&g_chan, &m, sizeof m)) != 0) {
         m.text[sizeof m.text - 1] = '\0';
         switch (m.type) {
+        // THE PAYLOAD IS HERE, which is the point: each of these took a
+        // "something changed" event through the kernel and then a
+        // WIN_REQ_WINDOW_INFO to read the detail back, because struct
+        // win_event is 24 bytes and none of them fits.
         case WIN_REQ_TITLE:
-            // The payload is HERE, which is the point: the kernel path
-            // queues a "it changed" event and the title is then read
-            // back with WIN_REQ_WINDOW_INFO.
             on_window_title(from, m.window, m.text);
+            break;
+        case WIN_REQ_HINTS:
+            on_window_hints(from, m.window, (unsigned)m.a, m.b, m.c);
+            break;
+        case WIN_REQ_CURSOR:
+            on_window_cursor(from, m.window, m.a);
             break;
         default:
             // A message this build does not know. Dropped rather than
@@ -722,19 +729,10 @@ int wm_client_handle_event(const struct win_event *ev) {
         on_window_destroyed(pid, id);
         unmap_client_window(pid, id);
         break;
-    case WIN_EV_CLIENT_TITLE: {
-        char title[WIN_TITLE_LEN];
-        if (!query_window(pid, id, 0, 0, 0, 0, 0, title, sizeof title)) return 1;
-        on_window_title(pid, id, title);
-        break;
-    }
-    case WIN_EV_CLIENT_HINTS: {
-        unsigned flags = 0;
-        int min_w = 0, min_h = 0;
-        if (!query_window(pid, id, 0, 0, &flags, &min_w, &min_h, 0, 0)) return 1;
-        on_window_hints(pid, id, flags, min_w, min_h);
-        break;
-    }
+    // WIN_EV_CLIENT_TITLE / _HINTS / _CURSOR are not delivered any more:
+    // those requests reach this process over the channel with their
+    // payloads (lib/uwmchan.h), so there is nothing to be told about and
+    // nothing to read back.
     case WIN_EV_CLIENT_RESIZED: {
         // Re-map before telling the handler: the frames were
         // reallocated, so the old mapping was revoked with them and the

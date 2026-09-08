@@ -790,7 +790,19 @@ struct win_event {
                            //
                            // Sent after handling WIN_EV_CLIENT_DESTROYED.
                            // The pixels are still readable until then.
-#define WIN_REQ_WINDOW_INFO 19 // Read one client window's details.
+// **WIN_REQ_TITLE, _HINTS AND _CURSOR ARE NOT CARRIED BY THE KERNEL.**
+// They travel client -> compositor over a channel
+// (userland/lib/uwmchan.h), keeping their numbers and their meanings --
+// the protocol is TWP either way, and which carriage a message takes is
+// exactly what this header says is expected to change.
+//
+// They moved because the kernel was STORING them. A payload does not fit
+// in a 24-byte struct win_event, so the kernel kept the title, the hints
+// and the cursor shape only to hand them back through
+// WIN_REQ_WINDOW_INFO -- state it had no use for, held so that a
+// compositor could ask a second time for something a client had already
+// said.
+#define WIN_REQ_WINDOW_INFO 19 // Read one client window's GEOMETRY.
                            //   a      = owning pid (in)
                            //   window = its window id (in)
                            // and on return:

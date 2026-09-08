@@ -374,18 +374,40 @@ int uapp_resize(struct uapp *a, int w, int h) {
     return 1;
 }
 
+// THE COMPOSITOR'S CHANNEL, opened once and kept. Lazily, because a
+// client that never sets a title should not publish a ring, and because
+// the compositor may not have its beacon up when an app starts.
+static struct uchan_client g_wmchan;
+static int g_wmchan_state;   // 0 untried, 1 open, -1 no compositor channel
+
+static int wmchan(void) {
+    if (g_wmchan_state) return g_wmchan_state > 0;
+    g_wmchan_state = uchan_client_open(&g_wmchan, WMCHAN_SERVICE) == 0 ? 1 : -1;
+    return g_wmchan_state > 0;
+}
+
+// Sends one request over the channel. Returns 1 if it went, 0 if the
+// caller should take the kernel path -- there is no compositor channel,
+// or its ring is full, and neither is a reason to drop the request.
+static int wmchan_send(uint32_t type, uint32_t window,
+                       int aa, int bb, int cc, const char *text) {
+    if (!wmchan()) return 0;
+    struct wmchan_msg m;
+    memset(&m, 0, sizeof m);
+    m.type = type;
+    m.window = window;
+    m.a = aa; m.b = bb; m.c = cc;
+    if (text) snprintf(m.text, sizeof m.text, "%s", text);
+    return uchan_send(&g_wmchan, &m, sizeof m) == 0;
+}
+
 void uapp_set_cursor(struct uapp *a, int cursor) {
     if (cursor < 0 || cursor >= WIN_CURSOR_COUNT) return;
     if (a->cursor == cursor) return;
-    struct win_request_msg req;
-    req_clear(&req);
-    req.type = WIN_REQ_CURSOR;
-    req.window = a->window;
-    req.a = cursor;
     // Either way: a server that refuses this (one built before the
     // request existed) must not be asked again on every motion.
     a->cursor = cursor;
-    req_send(&req);
+    wmchan_send(WIN_REQ_CURSOR, a->window, cursor, 0, 0, 0);
 }
 
 void uapp_busy_begin(struct uapp *a) {
@@ -400,41 +422,15 @@ void uapp_busy_end(struct uapp *a) {
     uapp_set_cursor(a, a->cursor_before_busy);
 }
 
-// THE COMPOSITOR'S CHANNEL, opened once and kept. Lazily, because a
-// client that never sets a title should not publish a ring, and because
-// the compositor may not have its beacon up when an app starts.
-static struct uchan_client g_wmchan;
-static int g_wmchan_state;   // 0 untried, 1 open, -1 no compositor channel
-
-static int wmchan(void) {
-    if (g_wmchan_state) return g_wmchan_state > 0;
-    g_wmchan_state = uchan_client_open(&g_wmchan, WMCHAN_SERVICE) == 0 ? 1 : -1;
-    return g_wmchan_state > 0;
-}
-
 int uapp_set_title(struct uapp *a, const char *title) {
     // OVER THE CHANNEL, which carries the string itself. The kernel path
     // below can only say "it changed" -- struct win_event is 24 bytes --
     // so the compositor has to read the title back out of the kernel,
     // which is why the kernel stores one at all.
-    if (wmchan()) {
-        struct wmchan_msg m;
-        memset(&m, 0, sizeof m);
-        m.type = WIN_REQ_TITLE;
-        m.window = a->window;
-        snprintf(m.text, sizeof m.text, "%s", title ? title : "");
-        if (uchan_send(&g_wmchan, &m, sizeof m) == 0) return 1;
-        // A FULL RING IS NOT A REASON TO DROP THE TITLE. Fall through:
-        // the kernel path is slower and still works, which is the whole
-        // reason it is kept.
-    }
-
-    struct win_request_msg req;
-    req_clear(&req);
-    req.type = WIN_REQ_TITLE;
-    req.window = a->window;
-    copy_text(req.text, title);
-    return req_send(&req);
+    // THE CHANNEL IS THE ONLY PATH NOW. The kernel used to take this
+    // request, store the string and tell the compositor to read it back;
+    // it stores nothing of the sort any more.
+    return wmchan_send(WIN_REQ_TITLE, a->window, 0, 0, 0, title ? title : "");
 }
 
 // Asks the window manager to close every window belonging to `pid` --
@@ -845,13 +841,8 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     // asked for nothing: "fixed size, no minimum" is a statement, and
     // leaving TWS to assume it would be the inference this protocol
     // deliberately avoids.
-    req_clear(&req);
-    req.type = WIN_REQ_HINTS;
-    req.window = a->window;
-    req.a = (int)desc->flags;
-    req.b = desc->min_w;
-    req.c = desc->min_h;
-    req_send(&req);
+    wmchan_send(WIN_REQ_HINTS, a->window, (int)desc->flags,
+                desc->min_w, desc->min_h, 0);
 
     // Arm the repeating timer, if the app asked for one. Only useful
     // alongside an on_tick, which is the only thing it drives -- arming

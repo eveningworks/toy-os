@@ -31,10 +31,13 @@
 
 #define WMCHAN_SERVICE "toywm"
 
+// The same shape as `struct win_request_msg`, deliberately: a request
+// that moves to this carriage should not also change what it says.
 struct wmchan_msg {
-    uint32_t type;      // WIN_REQ_TITLE today
+    uint32_t type;      // WIN_REQ_TITLE / _HINTS / _CURSOR
     uint32_t window;    // which of the sender's windows
-    char     text[WIN_TITLE_LEN];
+    int32_t  a, b, c;   // HINTS: flags, min_w, min_h. CURSOR: a shape.
+    char     text[WIN_TITLE_LEN];   // TITLE
 };
 
 _Static_assert(sizeof(struct wmchan_msg) <= UCHAN_SLOT_BYTES,

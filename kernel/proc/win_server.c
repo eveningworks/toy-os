@@ -160,7 +160,6 @@ struct client_window {
     // arrives. Holding it also lets the kernel answer the one question
     // that used to need a round trip into the WM: does a window with
     // this app_id exist? (WIN_REQ_ACTIVATE.)
-    char title[WIN_TITLE_LEN];
 
     // The client's own NAME for what this window is ("notepad"). A
     // display string and a hint -- **NOT the identity**. See app_path
@@ -201,12 +200,7 @@ struct client_window {
     // direction.
     int app_identity;
 
-    unsigned hint_flags;
-    int min_w, min_h;
 
-    // WIN_CURSOR_*: the shape this window wants under the pointer. Held
-    // here because the compositor is a process and has to be told.
-    int cursor;
 };
 
 // The registered compositor: which process may map other processes'
@@ -701,7 +695,6 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     // rather than leaving a buffer nothing will ever draw.
     // Everything the kernel was handed and used to forward without
     // keeping. WIN_REQ_WINDOW_INFO reads it back.
-    k_strlcpy(cw->title, "", sizeof cw->title);
     k_strlcpy(cw->app_id, app_id ? app_id : "", sizeof cw->app_id);
     // THE IDENTITY, and it comes from the scheduler rather than from
     // anything the client said -- see the field's comment.
@@ -710,10 +703,6 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
         cw->app_identity = scheduler_exec_path(pid, path, sizeof path)
                             ? app_identity_for(path) : APP_IDENTITY_NONE;
     }
-    cw->hint_flags = 0;
-    cw->min_w = 0;
-    cw->min_h = 0;
-    cw->cursor = WIN_CURSOR_DEFAULT; // slots are reused; don't inherit
 
     tell_compositor(WIN_EV_CLIENT_CREATED, pid, cw->id, w, (uint32_t)h);
 
@@ -1561,40 +1550,12 @@ int win_server_request(int pid, struct win_request_msg *req) {
         destroy_window(cw);
         return 1;
     }
-    case WIN_REQ_TITLE: {
-        struct client_window *cw = lookup(pid, req->window);
-        if (!cw) return 0;
-        // Truncate rather than refuse -- a too-long title is cosmetic.
-        char title[WIN_TITLE_LEN];
-        copy_text(title, req->text, WIN_TITLE_LEN);
-        k_strlcpy(cw->title, title, sizeof cw->title);
-        tell_compositor(WIN_EV_CLIENT_TITLE, pid, cw->id, 0, 0);
-        if (g_ops && g_ops->window_title) g_ops->window_title(pid, cw->id, title);
-        return 1;
-    }
-    case WIN_REQ_HINTS: {
-        struct client_window *cw = lookup(pid, req->window);
-        if (!cw) return 0;
-        cw->hint_flags = (unsigned)req->a;
-        cw->min_w = req->b;
-        cw->min_h = req->c;
-        tell_compositor(WIN_EV_CLIENT_HINTS, pid, cw->id, 0, 0);
-        if (g_ops && g_ops->window_hints) {
-            g_ops->window_hints(pid, cw->id, (unsigned)req->a, req->b, req->c);
-        }
-        return 1;
-    }
-    case WIN_REQ_CURSOR: {
-        struct client_window *cw = lookup(pid, req->window);
-        if (!cw) return 0;
-        // Refuse, don't clamp: a client built against a later
-        // WIN_CURSOR_* should find out.
-        if (req->a < 0 || req->a >= WIN_CURSOR_COUNT) return 0;
-        if (cw->cursor == req->a) return 1; // no-op, and no event
-        cw->cursor = req->a;
-        tell_compositor(WIN_EV_CLIENT_CURSOR, pid, cw->id, req->a, 0);
-        return 1;
-    }
+    // WIN_REQ_TITLE, _HINTS and _CURSOR ARE NOT HERE ANY MORE. They go
+    // straight to the compositor over a channel (userland/lib/uwmchan.h)
+    // carrying their payloads, so the kernel neither stores them nor
+    // relays a "something changed" event for them. It never had a use
+    // for any of it -- the storage existed because struct win_event is
+    // 24 bytes and none of those payloads fits.
     case WIN_REQ_RESIZE: {
         struct client_window *cw = lookup(pid, req->window);
         if (!cw) return 0;
@@ -1694,13 +1655,11 @@ int win_server_request(int pid, struct win_request_msg *req) {
         // a window between the event and this call. Dropping the window
         // is the right response, not retrying.
         if (!cw) return -1;
+        // GEOMETRY ONLY NOW. The title and the hints left with the
+        // requests that set them; what is still the kernel's to answer
+        // is the size, because the kernel owns the buffer.
         req->a = cw->w;
         req->b = cw->h;
-        req->c = (int32_t)cw->hint_flags;
-        // Two 16-bit values in one field rather than widening the
-        // message: a minimum size larger than 65535 is not a thing.
-        req->d = (int32_t)(((uint32_t)cw->min_h << 16) | ((uint32_t)cw->min_w & 0xFFFF));
-        copy_text(req->text, cw->title, WIN_TITLE_LEN);
         return 0;
     }
     case WIN_REQ_WINDOW_APPID: {

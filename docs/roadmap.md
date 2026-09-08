@@ -540,8 +540,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~One wait covering a channel AND the event queue~~ DONE 2026-09-08 -- `SYS_WAKEWORD`, eventfd's shape
 - [ ] Put the compositor on the wakeword and a channel -- init is the first caller; the desktop is the one they exist for
 - [x] ~~A client's TITLE reaches the compositor directly, with its payload~~ DONE 2026-09-08 -- `lib/uwmchan.h`
-- [ ] Drop the kernel's `title` field and its read-back, once the fallback goes
-- [ ] The rest: `app_id`, `hint_flags`, `cursor`, and `WIN_REQ_WINDOW_INFO` with them
+- [x] ~~Drop the kernel's title, hints and cursor, and shrink `WIN_REQ_WINDOW_INFO` to geometry~~ DONE 2026-09-08
+- [ ] `app_id` stays for now -- it rides CREATE so a window is never nameless, which ACTIVATE depends on
 - [ ] The client allocates its own buffer, retiring `win_buffer_vaddr()` and the carved per-pid compositor region
 - [ ] Delete the kernel's window table, leaving ring 0 the framebuffer grant and raw input
 

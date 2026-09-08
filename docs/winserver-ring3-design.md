@@ -248,9 +248,22 @@ client cannot send a title before its create returned.
 Both paths are proven independently: with the kernel fallback removed
 the title still arrives, and with the channel disabled it still arrives.
 
-**The kernel still stores `title`**, because the fallback needs it.
-Removing the field is the next step and is what this stage is actually
-for; what is done is the carriage.
+**THE KERNEL STORES NONE OF IT NOW (2026-09-08).** `title`,
+`hint_flags`, `min_w`, `min_h` and `cursor` are gone from `struct
+client_window`, the three request handlers are gone from
+`win_server_request()`, the three `WIN_EV_CLIENT_*` notifications are
+gone, and `WIN_REQ_WINDOW_INFO` answers GEOMETRY only -- the size, which
+is the kernel's because it owns the buffer.
+
+`app_id` stays, and deliberately: it rides `WIN_REQ_CREATE` so a window
+can never exist without one, and `WIN_REQ_ACTIVATE` matches on it. A
+window briefly nameless is the gap that makes a single-instance app miss
+its own twin and exit without ever drawing.
+
+The Toykit fallback is gone with the storage. A client whose channel
+could not open now has no title, hints or cursor shape rather than a
+slower path -- which in practice means the compositor published no
+beacon, and that is a desktop that is not working anyway.
 
 ### Stage 4 -- the rest of the presentation state
 
