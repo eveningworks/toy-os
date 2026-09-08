@@ -32,6 +32,8 @@
 #include "ktest.h"
 #include "pmm.h"
 #include "string.h"
+#include "futex.h"
+#include "win_events.h" // the event post the wakeword rides
 #include <stddef.h>
 
 // The word is 32 bits and must be aligned, so a key names one word
@@ -83,6 +85,59 @@ int sys_futex_wake(struct syscall_ctx *c) {
     if (ret < 0) { c->regs[14] = (uint64_t)ret; return 0; }
     // a1 = how many to release, 0 for all. A lock's unlock wants one.
     c->regs[14] = (uint64_t)(int64_t)scheduler_wake_n(key, 0, (int)c->a1);
+    return 0;
+}
+
+
+// --- the wakeword ----------------------------------------------------
+//
+// See kernel/futex.h for what this is for. Kept here rather than in the
+// scheduler because it is the futex's key derivation that makes it
+// work: the word is named by its FRAME, so the kernel can bump it from
+// any context without caring which address space is loaded.
+
+static struct {
+    uint64_t phys;   // 0 = this process registered none
+    uint64_t pml4;   // whose it is, so a teardown can drop it
+} g_wakeword[SCHED_MAX_PROCS];
+
+void futex_note_ready(int pid) {
+    if (pid < 1 || pid > SCHED_MAX_PROCS) return;
+    uint64_t phys = g_wakeword[pid - 1].phys;
+    if (!phys) return;
+    // The bump is what closes the lost-wakeup race, not the wake: a
+    // waiter that sampled the word before this and parks after it finds
+    // the value already moved and does not park at all.
+    (*(volatile uint32_t *)(uintptr_t)phys)++;
+    scheduler_wake_n((const void *)(uintptr_t)phys, 0, 0);
+}
+
+void futex_wakeword_release(uint64_t pml4_phys) {
+    for (int i = 0; i < SCHED_MAX_PROCS; i++)
+        if (g_wakeword[i].pml4 == pml4_phys) {
+            g_wakeword[i].phys = 0;
+            g_wakeword[i].pml4 = 0;
+        }
+}
+
+int sys_wakeword(struct syscall_ctx *c) {
+    int pid = scheduler_current_pid();
+    if (pid < 1 || pid > SCHED_MAX_PROCS) {
+        c->regs[14] = (uint64_t)(int64_t)-EPERM;
+        return 0;
+    }
+    if (!c->a0) {                     // 0 deregisters
+        g_wakeword[pid - 1].phys = 0;
+        g_wakeword[pid - 1].pml4 = 0;
+        c->regs[14] = 0;
+        return 0;
+    }
+    const void *key;
+    int64_t ret = futex_key(c->pml4, c->a0, &key);
+    if (ret < 0) { c->regs[14] = (uint64_t)ret; return 0; }
+    g_wakeword[pid - 1].phys = (uint64_t)(uintptr_t)key;
+    g_wakeword[pid - 1].pml4 = c->pml4;
+    c->regs[14] = 0;
     return 0;
 }
 
@@ -167,6 +222,47 @@ KTEST("futex", "two words in ONE page are two different channels") {
     KTEST_ASSERT_EQ(futex_key(f.as, FUTEX_TEST_VADDR, &k0), 0);
     KTEST_ASSERT_EQ(futex_key(f.as, FUTEX_TEST_VADDR + 4, &k1), 0);
     KTEST_ASSERT(k0 && k1 && k0 != k1);
+    futex_fixture_down(&f);
+}
+
+KTEST("futex", "queueing an EVENT bumps the waiter's wakeword") {
+    // THE WIRING, and the only check that covers it: a futex waits on
+    // one word, so a process waiting for a message and for a window
+    // event needs both to touch the SAME word. If the event path stops
+    // bumping it, a compositor blocks on a channel and stops seeing
+    // input -- and nothing else here would notice.
+    struct futex_fixture f = {0};
+    if (!futex_fixture_up(&f)) { futex_fixture_down(&f); KTEST_SKIP("out of memory"); }
+
+    // A pid nothing is using, so the event lands in a queue no live
+    // process is draining.
+    int pid = 0;
+    for (int p = SCHED_MAX_PROCS - 1; p > 0; p--)
+        if (!scheduler_pid_valid(p)) { pid = p; break; }
+    if (!pid) { futex_fixture_down(&f); KTEST_SKIP("no spare pid"); }
+
+    const void *key = NULL;
+    KTEST_ASSERT_EQ(futex_key(f.as, FUTEX_TEST_VADDR, &key), 0);
+    g_wakeword[pid - 1].phys = (uint64_t)(uintptr_t)key;
+    g_wakeword[pid - 1].pml4 = f.as;
+    futex_set(&f, 0);
+
+    struct win_event ev = { .type = WIN_EV_KEY, .a = 'x' };
+    KTEST_ASSERT(win_events_push(pid, &ev));
+    KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f.frame, 1u);
+
+    // A SECOND event moves it again -- a word that only ever reached 1
+    // would let a waiter that sampled 1 park through everything after.
+    KTEST_ASSERT(win_events_push(pid, &ev));
+    KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f.frame, 2u);
+
+    // And the registration goes with the address space, or the kernel
+    // writes into whatever the allocator hands out next.
+    futex_wakeword_release(f.as);
+    KTEST_ASSERT(win_events_push(pid, &ev));
+    KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f.frame, 2u);
+
+    win_events_reset(pid);
     futex_fixture_down(&f);
 }
 

@@ -535,7 +535,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Retire the poison page: it survives as the slot-reclaim fallback while a window's compositor address is derived from its slot
 - [x] ~~A futex under the channel, so a wait is not a poll~~ DONE 2026-09-08 -- `docs/winserver-ring3-design.md` stage 3
 - [ ] The channel itself: a shm ring of async messages plus a reply slot, which `/bin/service` can retire onto
-- [ ] One wait covering a channel AND the event queue, so a compositor can block on both
+- [x] ~~One wait covering a channel AND the event queue~~ DONE 2026-09-08 -- `SYS_WAKEWORD`, eventfd's shape
+- [ ] Put the compositor on the wakeword -- the primitive has no production caller until the ring exists
 - [ ] Presentation state moves to the compositor -- `title`, `app_id`, `hint_flags`, `cursor`, and `WIN_REQ_WINDOW_INFO` with them
 - [ ] The client allocates its own buffer, retiring `win_buffer_vaddr()` and the carved per-pid compositor region
 - [ ] Delete the kernel's window table, leaving ring 0 the framebuffer grant and raw input

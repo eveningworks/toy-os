@@ -174,13 +174,31 @@ reclaimed without one.
 covers a channel message AND the event queue -- without it a compositor
 cannot block on both, and there is no `poll()` here to build that from.
 
-### Stage 3b -- one wait over both
+### Stage 3b -- one wait over both -- THE PRIMITIVE IS BUILT, 2026-09-08
 
 `SYS_WAIT_READY` parks on the process's event queue; a futex parks on a
-word. A compositor needs to wake on either. The shape that fits is the
-event queue's readiness becoming a futex word too, so one wait covers
-both -- which is what makes the channel usable by the window system
-rather than only by services.
+word; a compositor needs to wake on either, and there is no `poll()`
+here to build that from.
+
+**`SYS_WAKEWORD` names ONE word a process waits on for everything.** The
+kernel bumps it and wakes it whenever it queues a window or input event;
+anything sharing the page -- a channel sender in another process -- does
+the same. The waiter parks on that single word and, when it wakes, looks
+at all of its sources. This is the self-pipe trick, or eventfd, in futex
+form: what an event loop without a unified poll turns into. A third
+source later (a signal, a timer) bumps the same word and needs nothing.
+
+`poll()` over file descriptors is what Linux does and what every Wayland
+compositor and the X server actually call. It was considered and is the
+bigger job by a long way: neither the event queue nor a channel is a
+file descriptor here, and both would have to become one first.
+
+**IT HAS NO PRODUCTION CALLER YET, which makes it unvalidated by this
+repo's own rule** -- the same thing `win_transport.h` says about itself.
+A KTEST proves the event path bumps it (and reddens when that call is
+removed), but the caller it exists for is the compositor, and the
+compositor gains nothing from it until there is a channel to wait on as
+well. That arrives with the ring below.
 
 ### Stage 4 -- presentation state moves
 

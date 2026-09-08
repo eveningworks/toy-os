@@ -8,6 +8,7 @@
 // state in an interrupt. Static storage costs a few KB and removes the
 // question entirely.
 #include "win_events.h"
+#include "futex.h"
 #include "scheduler.h"
 #include <stddef.h>
 
@@ -89,6 +90,7 @@ int win_events_push(int pid, const struct win_event *ev) {
         if (last->type == ev->type && last->window == ev->window && last->mods == ev->mods) {
             *last = *ev;
             scheduler_wake(q, 0);
+            futex_note_ready(pid);
             return 1;
         }
     }
@@ -123,6 +125,9 @@ int win_events_push(int pid, const struct win_event *ev) {
     // to pop an empty queue and park again. That is the thundering herd,
     // on the busiest path in the system: every mouse MOVE hit it.
     scheduler_wake(q, 0);
+    // ...and the wakeword beside it, for a receiver waiting on SEVERAL
+    // sources at once rather than on this queue alone (kernel/futex.h).
+    futex_note_ready(pid);
     return 1;
 }
 

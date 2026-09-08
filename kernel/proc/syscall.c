@@ -13,6 +13,7 @@
 // 16 KiB per-process kernel stack. It is 96 bytes now.
 #include "syscall.h"
 #include "syscalls.h"
+#include "futex.h"
 #include "syscall_table.h"
 #include "vmm.h"
 #include "scheduler.h"
@@ -44,6 +45,7 @@ static void release_process_state(uint64_t pml4_phys) {
     win_syscall_release(pml4_phys);
     sound_process_gone(pml4_phys);
     shm_process_gone(pml4_phys);
+    futex_wakeword_release(pml4_phys);
 }
 
 void syscall_process_exit_cleanup(uint64_t pml4_phys) {

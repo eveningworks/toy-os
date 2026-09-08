@@ -339,6 +339,15 @@ int sys_futex_wait(volatile uint32_t *word, uint32_t expected, int timeout_ms);
 // Release up to `count` waiters on that word (0 = all); returns how
 // many were woken. A lock's unlock passes 1.
 int sys_futex_wake(volatile uint32_t *word, int count);
+
+// Names ONE word this process waits on for everything: the kernel bumps
+// it and wakes it whenever it queues a window/input event, and anything
+// sharing the page may do the same. 0 deregisters.
+//
+// It exists because a futex waits on one word and a compositor has two
+// sources -- its event queue and its clients' messages -- with no poll()
+// here to wait on both. See SYS_WAKEWORD in abi/syscall_abi.h.
+int sys_wakeword(volatile uint32_t *word);
 int sys_shm_unlink(const char *name);
 
 // --- sockets ---------------------------------------------------------

@@ -597,6 +597,40 @@ two addresses differ before believing the wake. The KTEST beside
 `futex_key()` covers the property directly, by mapping one frame twice
 in one address space.
 
+## One wakeword per process, because there is no poll()
+
+A futex waits on ONE word. A compositor has two sources -- its event
+queue and, once the channel exists, its clients' messages -- and no way
+to wait on both: there is no `poll()` here, and neither the event queue
+nor a channel is a file descriptor to build one over.
+
+So instead of one wait over many objects, there is one WORD that many
+sources bump. `SYS_WAKEWORD` names it; the kernel bumps it and wakes it
+whenever it queues an event, and anything sharing the page does the
+same. The waiter parks on that word and, on waking, looks at all of its
+sources. That is the self-pipe trick, or eventfd -- what an event loop
+without a unified poll turns into, and the reason both of those exist.
+
+**The bump is what closes the race, not the wake.** A waiter that
+sampled the word before an event and parks after it finds the value
+already moved and does not park at all. A wake alone would be lost in
+that window.
+
+`poll()` over file descriptors is the conventional answer -- Linux's,
+and what every Wayland compositor and the X server call. It is
+deliberately not what this is, and the reason is cost rather than taste:
+the event queue and the channel would both have to become file
+descriptors first, which is a larger change than the thing it enables.
+Worth revisiting if a third and fourth source appear, because that is
+the point where scanning every source on every wake stops being free.
+
+**It has no production caller yet**, which by this repo's own rule
+leaves it unvalidated -- the same admission `win_transport.h` makes
+about the transport seam. A KTEST proves the event path bumps it, and
+reddens when that call is removed; the caller it exists for is the
+compositor, which gains nothing until there is a channel to wait on
+beside its queue.
+
 ## A dead window's pixels are kept alive by whoever is reading them
 
 Destroying a window freed its frames at once, while the compositor is a

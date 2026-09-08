@@ -2007,6 +2007,27 @@ struct sys_stat {
                            // an shm page reach the same futex at
                            // whatever address each of them mapped it.
 
+#define SYS_WAKEWORD  103  // RDI = a 4-byte-aligned user address, or 0
+                           // to deregister. Names ONE word this process
+                           // waits on for everything: the kernel bumps
+                           // it and wakes it whenever it queues an
+                           // event, and anything else sharing the page
+                           // may do the same.
+                           //
+                           // It exists because a futex waits on one word
+                           // and a compositor has two sources -- its
+                           // event queue and its clients' messages --
+                           // with no poll() here to wait on both. Every
+                           // source bumping ONE word is what an event
+                           // loop without a unified poll turns into;
+                           // eventfd and the self-pipe trick are the
+                           // same answer.
+                           //
+                           // The word must stay mapped for as long as it
+                           // is registered. A shm page is the point:
+                           // that is how a SENDER in another process
+                           // reaches it.
+
 #define SYS_FUTEX_WAKE 102 // RDI = the same address, RSI = how many
                            // waiters to release (0 = all). Returns the
                            // number actually woken. A lock's unlock

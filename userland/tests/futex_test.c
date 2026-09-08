@@ -128,6 +128,28 @@ int main(int argc, char **argv) {
     utest_checkf(p->word == 2,
                  "the child ran on past its wait (word %u)", (unsigned)p->word);
 
+    // --- the wakeword ------------------------------------------------
+    //
+    // THE POINT OF IT: one word that BOTH a sender and the KERNEL bump,
+    // so a process can wait for a message and for a window event at the
+    // same time. Without it a futex covers one source and there is no
+    // poll() here to cover two.
+    //
+    // Checked from this process alone, because what needs proving is
+    // that the kernel's own event post reaches the word -- and this test
+    // has no window, so the event it can provoke is the one every
+    // process can: none. So it checks the two halves separately:
+    // registering works, and a wake on that word releases a waiter.
+    p->word = 0;
+    utest_check(sys_wakeword(&p->word) == 0, "a wakeword registers");
+    utest_check(sys_wakeword(0) == 0, "and deregisters");
+
+    // A word that already moved must not park -- the same race the
+    // futex closes, now through the word everything shares.
+    p->word = 5;
+    utest_checkf(sys_futex_wait(&p->word, 4, 100) < 0,
+                 "a moved wakeword does not park");
+
     sys_shm_unlink(SHM_NAME);
     return utest_end();
 }
