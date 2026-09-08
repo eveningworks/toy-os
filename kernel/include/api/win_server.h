@@ -45,11 +45,13 @@
 // called in the requesting process's own context -- a batched
 // shared-ring transport would break that assumption.
 struct win_server_ops {
-    // A client window was created and its buffer mapped. `buf` is a
-    // kernel-visible pointer to `w` * `h` pixels, 32bpp, no padding --
-    // the same memory the client sees at win_buffer_vaddr(id).
-    // Return 1 to accept it, 0 to refuse (no free slot in the window
-    // list); on 0 the caller frees the buffer and the request fails.
+    // A client window was created and its buffer mapped. Return 1 to
+    // accept it, 0 to refuse (no free slot in the window list); on 0
+    // the caller frees the buffer and the request fails.
+    //
+    // NO POINTER TO THE PIXELS: a window's frames are an shm object and
+    // are not contiguous, so there is no kernel-visible linear address
+    // to hand over. A presentation layer reads them where it is mapped.
     //
     // `app_id` is the client's own name for what this window IS (see
     // WIN_REQ_ACTIVATE), already truncated to fit WIN_APP_ID_LEN, and
@@ -57,7 +59,7 @@ struct win_server_ops {
     // through a slot of its own so a window is never briefly visible
     // without it -- the gap is exactly long enough for a second copy of
     // the same program to look for its twin and miss.
-    int (*window_created)(int pid, uint32_t id, uint32_t *buf,
+    int (*window_created)(int pid, uint32_t id,
                            int w, int h, int x, int y,
                            const char *app_id);
 
@@ -78,12 +80,11 @@ struct win_server_ops {
     void (*window_hints)(int pid, uint32_t id, unsigned flags,
                           int min_w, int min_h);
 
-    // `id`'s buffer has been reallocated at `w` x `h`; `buf` is the new
-    // kernel-visible pointer and the old one is already freed. The
-    // client asked for this -- see the configure/ack handshake in
-    // abi/win_proto.h -- so the presentation layer is being told, not
-    // asked.
-    void (*window_resized)(int pid, uint32_t id, uint32_t *buf, int w, int h);
+    // `id`'s buffer has been reallocated at `w` x `h` and the old
+    // frames are already released. The client asked for this -- see the
+    // configure/ack handshake in abi/win_proto.h -- so the presentation
+    // layer is being told, not asked.
+    void (*window_resized)(int pid, uint32_t id, int w, int h);
 
     // The client answered a liveness ping with this serial. OPTIONAL,
     // like every slot here -- a presentation layer that does not care

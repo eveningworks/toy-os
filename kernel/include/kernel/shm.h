@@ -18,6 +18,12 @@ struct sched_mm;
 // a stale pointer would not say so.
 int shm_lookup(const char *name);
 
+// A NAMELESS object, for a kernel subsystem that maps both sides itself.
+// It is unreachable through SYS_SHM_OPEN, which is the point: this
+// namespace has no permissions, so anything a process could name it
+// could also map. Returns an index holding one reference, or -errno.
+int shm_create_anon(uint64_t npages);
+
 // +1 / -1 on the object's reference count. `shm_put` frees its frames
 // at zero, so every `shm_get` must be paired.
 void shm_get(int idx);

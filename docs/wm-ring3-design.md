@@ -443,6 +443,9 @@ Settled with the maintainer before stage 2 shipped, recorded here so the
 next session starts from it rather than re-opening it:
 
 - **Build the abstraction and the `gui` forwarding. DEFER the ring.**
+  (Scoped for THIS stage, and still correct for it. The ring is a
+  prerequisite for taking the window server's memory half out of ring 0,
+  which is a later question -- see `docs/winserver-ring3-design.md`.)
   The shared-memory ring is a performance item, not a prerequisite:
   stage 4 needs the WM to talk over *something*, and the syscall
   transport already does. The `gui` forwarding is the load-bearing half

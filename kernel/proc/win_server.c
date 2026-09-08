@@ -26,6 +26,7 @@
 #include "kerrno.h"  // EBUSY -- the diagnostic channel is one slot
 #include "mouse.h"    // mouse_get_state() -- park the plane where the pointer is
 #include "heap.h"     // kmalloc/kfree -- the DEFINE sprite bounce buffer
+#include "shm.h"      // the frames behind a window buffer
 
 #define WIN_SERVER_MAX_PIDS SCHED_MAX_PROCS
 
@@ -53,7 +54,13 @@ _Static_assert(WIN_COMPOSITOR_MAX_PIDS >= SCHED_MAX_PROCS,
 // window's own w/h below is the CLIENT's current size; the front
 // buffer catches up at the next present.
 struct win_buf {
-    uint32_t *phys;   // kernel-visible (identity-mapped) pixels, NULL if absent
+    // THE FRAMES, as a nameless shm object (kernel/shm.h). Anonymous
+    // rather than named because the shm namespace has no permissions:
+    // a name any process could pass to SYS_SHM_OPEN would be a way to
+    // map somebody else's window. `pages` is the presence test -- 0 is
+    // a buffer this window does not have, which is a working window
+    // and not an error (see below).
+    int      shm;
     uint32_t pages;   // frames it spans
     int w, h;         // what was drawn into it
 };
@@ -66,7 +73,7 @@ struct client_window {
     uint64_t pml4;    // the owner's address space, needed to unmap
     uint64_t vaddr;   // where the client sees buffer 0
 
-    // THE TWO BUFFERS. `bufs[1].phys` is NULL when this window is
+    // THE TWO BUFFERS. `bufs[1].pages` is 0 when this window is
     // single-buffered.
     //
     // A window is double-buffered so the compositor never reads memory
@@ -74,10 +81,9 @@ struct client_window {
     // `front` says which of the two the compositor should read; the
     // client draws into the other. WIN_REQ_PRESENT flips it.
     //
-    // **NULL IS A WORKING WINDOW, NOT AN ERROR.** Each buffer is a
-    // contiguous run, and that allocation is already what refuses a
-    // window when physical memory fragments -- so a second one failing
-    // makes the window single-buffered rather than making it not exist.
+    // **NO SECOND BUFFER IS A WORKING WINDOW, NOT AN ERROR.** Memory
+    // running out for the second one makes the window single-buffered
+    // rather than making it not exist.
     // It then tears exactly as every window did before this, which is
     // strictly better than refusing to open. `front` stays 0 and the
     // flip is a no-op.
@@ -355,11 +361,12 @@ static uint32_t comp_poison_range(struct client_window *cw, int b,
     return n;
 }
 
-// The physical base of buffer `b`, or 0 when the window does not have
-// one. Buffer 1 is absent on a single-buffered window, which is a
-// working window and not an error (see the struct).
-static uint64_t comp_buf_phys(const struct client_window *cw, int b) {
-    return (uint64_t)(uintptr_t)cw->bufs[b].phys;
+// The frame of page `i` of buffer `b`, or 0 when the window does not
+// have that buffer. Buffer 1 is absent on a single-buffered window,
+// which is a working window and not an error (see the struct).
+static uint64_t buf_frame(const struct client_window *cw, int b, uint32_t i) {
+    if (!cw->bufs[b].pages) return 0;
+    return shm_frame(cw->bufs[b].shm, i);
 }
 
 // Maps a window's frames into the compositor at its derived address.
@@ -385,7 +392,7 @@ static int comp_map(struct client_window *cw) {
     uint32_t span[COMP_BUFS];
     for (int b = 0; b < COMP_BUFS; b++) {
         span[b] = cw->comp_span[b];
-        if (comp_buf_phys(cw, b) && span[b] < cw->bufs[b].pages)
+        if (cw->bufs[b].pages && span[b] < cw->bufs[b].pages)
             span[b] = cw->bufs[b].pages;
     }
 
@@ -397,19 +404,19 @@ static int comp_map(struct client_window *cw) {
     comp_clear(cw);
 
     for (int b = 0; b < COMP_BUFS; b++) {
-        uint64_t phys = comp_buf_phys(cw, b);
+        uint32_t have = cw->bufs[b].pages;
         uint64_t base = vaddr + (uint64_t)b * WIN_BUFFER_HALF;
         uint32_t done = 0;
-        // BORROWED: these frames are the window server's (allocated in
-        // create_window(), freed in destroy_window()). The compositor
+        // BORROWED: these frames belong to the shm object (allocated in
+        // create_window(), released in destroy_window()). The compositor
         // only gets to look at them.
-        for (; phys && done < cw->bufs[b].pages; done++) {
+        for (; done < have; done++) {
             if (!vmm_map_user_borrowed(g_comp_pml4, base + (uint64_t)done * 4096,
-                                        phys + (uint64_t)done * 4096,
+                                        buf_frame(cw, b, done),
                                         1, 0, VMM_MT_NORMAL))
                 break;
         }
-        if (phys && done < cw->bufs[b].pages) {
+        if (done < have) {
             // Never left half-mapped. Buffer 0 failing is fatal to the
             // whole mapping; buffer 1 failing only makes the window
             // single-buffered, which is what it would have been if the
@@ -509,15 +516,12 @@ static void destroy_window(struct client_window *cw) {
     // allocator hands out next.
     for (int b = 0; b < COMP_BUFS; b++) {
         struct win_buf *wb = &cw->bufs[b];
-        if (!wb->phys) continue;
+        if (!wb->pages) continue;
         uint64_t base = cw->vaddr + (uint64_t)b * WIN_BUFFER_HALF;
         for (uint32_t i = 0; i < wb->pages; i++)
             vmm_unmap_user_page(cw->pml4, base + (uint64_t)i * 4096);
-        // pmm_free_contiguous(), not a pmm_free_frame() loop -- the
-        // buffer came from pmm_alloc_contiguous() and the two allocators
-        // are not interchangeable (see api/pmm.h).
-        pmm_free_contiguous((uint64_t)(uintptr_t)wb->phys, wb->pages);
-        wb->phys = NULL;
+        shm_put(wb->shm);
+        wb->shm = -1;
         wb->pages = 0;
         wb->w = wb->h = 0;
     }
@@ -554,32 +558,26 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     uint32_t bytes = (uint32_t)w * (uint32_t)h * 4;
     uint32_t pages = (bytes + 4095) / 4096;
 
-    // Contiguous frames, so the kernel-visible pointer can be a plain
-    // uint32_t* over the whole buffer instead of a per-page walk on
-    // every composite. pmm_alloc_contiguous() already exists for the
-    // same reason drivers need it.
-    uint64_t phys = pmm_alloc_contiguous(pages, PMM_ZONE_ANY);
-    if (!phys) {
-        klog_write("win_server: create refused -- out of contiguous memory\n");
+    // An shm object rather than one contiguous run: nothing needs these
+    // frames adjacent (every mapping below is page-granular), and
+    // demanding it let a fragmented allocator refuse a large window
+    // while plenty of memory was free. shm zeroes at creation, so a
+    // fresh window cannot show what the previous owner left behind.
+    int shm0 = shm_create_anon(pages);
+    if (shm0 < 0) {
+        klog_write("win_server: create refused -- out of memory\n");
         return 0;
     }
 
-    // Zero it before the client ever sees it: a fresh window must not
-    // show whatever the previous owner of these frames left behind.
-    // k_memset() rather than the byte loop this used to be -- a
-    // full-screen window is 3.5 MiB, and the same loop runs again on
-    // every resize.
-    k_memset((void *)(uintptr_t)phys, 0, (size_t)pages * 4096);
-
     for (uint32_t i = 0; i < pages; i++) {
-        // BORROWED: pmm_alloc_contiguous() above made these the window
-        // server's, and destroy_window() frees them. A client's teardown
-        // freeing them too would hand live frames back to the allocator.
+        // BORROWED: the frames belong to the shm object, and
+        // destroy_window() releases it. A client's teardown freeing them
+        // too would hand live frames back to the allocator.
         if (!vmm_map_user_borrowed(pml4, vaddr + (uint64_t)i * 4096,
-                                    phys + (uint64_t)i * 4096, 1, 0, VMM_MT_NORMAL)) {
+                                    shm_frame(shm0, i), 1, 0, VMM_MT_NORMAL)) {
             // Unwind the pages already mapped, then the frames.
             for (uint32_t j = 0; j < i; j++) vmm_unmap_user_page(pml4, vaddr + (uint64_t)j * 4096);
-            pmm_free_contiguous(phys, pages);
+            shm_put(shm0);
             klog_write("win_server: create refused -- mapping failed\n");
             return 0;
         }
@@ -591,27 +589,26 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     // did before double buffering existed. Refusing to open a window
     // because the tear-free path is unavailable would be trading a
     // cosmetic problem for a functional one.
-    uint64_t phys2 = pmm_alloc_contiguous(pages, PMM_ZONE_ANY);
-    if (phys2) {
-        k_memset((void *)(uintptr_t)phys2, 0, (size_t)pages * 4096);
+    int shm1 = shm_create_anon(pages);
+    if (shm1 >= 0) {
         uint64_t v2 = vaddr + WIN_BUFFER_HALF;
         uint32_t done = 0;
         for (; done < pages; done++) {
             if (!vmm_map_user_borrowed(pml4, v2 + (uint64_t)done * 4096,
-                                        phys2 + (uint64_t)done * 4096, 1, 0,
+                                        shm_frame(shm1, done), 1, 0,
                                         VMM_MT_NORMAL))
                 break;
         }
         if (done < pages) {
             for (uint32_t j = 0; j < done; j++)
                 vmm_unmap_user_page(pml4, v2 + (uint64_t)j * 4096);
-            pmm_free_contiguous(phys2, pages);
-            phys2 = 0;
+            shm_put(shm1);
+            shm1 = -1;
             klog_write("win_server: second buffer unmapped -- window is "
                        "single-buffered\n");
         }
     } else {
-        klog_write("win_server: no contiguous memory for a second buffer -- "
+        klog_write("win_server: no memory for a second buffer -- "
                    "window is single-buffered\n");
     }
 
@@ -619,14 +616,14 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     cw->pid = pid;
     cw->id = (uint32_t)slot;
     cw->pml4 = pml4;
-    cw->bufs[0].phys = (uint32_t *)(uintptr_t)phys;
+    cw->bufs[0].shm = shm0;
     cw->bufs[0].pages = pages;
     cw->bufs[0].w = w;
     cw->bufs[0].h = h;
-    cw->bufs[1].phys = (uint32_t *)(uintptr_t)phys2;
-    cw->bufs[1].pages = phys2 ? pages : 0;
-    cw->bufs[1].w = phys2 ? w : 0;
-    cw->bufs[1].h = phys2 ? h : 0;
+    cw->bufs[1].shm = shm1;
+    cw->bufs[1].pages = shm1 >= 0 ? pages : 0;
+    cw->bufs[1].w = shm1 >= 0 ? w : 0;
+    cw->bufs[1].h = shm1 >= 0 ? h : 0;
     cw->front = 0;
     cw->vaddr = vaddr;
     cw->w = w;
@@ -655,14 +652,21 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     tell_compositor(WIN_EV_CLIENT_CREATED, pid, cw->id, w, (uint32_t)h);
 
     if (g_ops && g_ops->window_created) {
-        if (!g_ops->window_created(pid, cw->id, cw->bufs[0].phys, w, h, x, y, app_id)) {
+        if (!g_ops->window_created(pid, cw->id, w, h, x, y, app_id)) {
             // Not destroy_window() -- that would call window_destroyed()
             // for a window the presentation layer just refused and never
-            // recorded.
-            for (uint32_t i = 0; i < pages; i++) {
-                vmm_unmap_user_page(pml4, vaddr + (uint64_t)i * 4096);
+            // recorded. BOTH buffers, unmapped before released: the
+            // second one's pages are live PTEs into frames shm_put() is
+            // about to hand back.
+            for (int b = 0; b < COMP_BUFS; b++) {
+                if (!cw->bufs[b].pages) continue;
+                uint64_t base = vaddr + (uint64_t)b * WIN_BUFFER_HALF;
+                for (uint32_t i = 0; i < cw->bufs[b].pages; i++)
+                    vmm_unmap_user_page(pml4, base + (uint64_t)i * 4096);
+                shm_put(cw->bufs[b].shm);
+                cw->bufs[b].shm = -1;
+                cw->bufs[b].pages = 0;
             }
-            pmm_free_contiguous(phys, pages);
             cw->used = 0;
             klog_write("win_server: create refused -- no room in the window list\n");
             return 0;
@@ -812,14 +816,13 @@ static int rebuild_buffer(struct client_window *cw, int b, int w, int h) {
     uint32_t pages = (bytes + 4095) / 4096;
     uint64_t base = cw->vaddr + (uint64_t)b * WIN_BUFFER_HALF;
 
-    uint64_t phys = pmm_alloc_contiguous(pages, PMM_ZONE_ANY);
-    if (!phys) {
-        klog_write("win_server: buffer rebuild refused -- out of contiguous memory\n");
+    // shm zeroes at creation, so the client cannot see what these
+    // frames held for another process a moment ago.
+    int shm_new = shm_create_anon(pages);
+    if (shm_new < 0) {
+        klog_write("win_server: buffer rebuild refused -- out of memory\n");
         return 0;
     }
-    // Zeroed before the client ever sees it: these frames may have been
-    // another process's a moment ago.
-    k_memset((void *)(uintptr_t)phys, 0, (size_t)pages * 4096);
 
     uint32_t old_pages = wb->pages;
     for (uint32_t i = 0; i < old_pages; i++)
@@ -830,7 +833,7 @@ static int rebuild_buffer(struct client_window *cw, int b, int w, int h) {
         // destroy_window() and by this function. A mapping that owned
         // them would have the client's teardown free them too.
         if (vmm_map_user_borrowed(cw->pml4, base + (uint64_t)i * 4096,
-                                   phys + (uint64_t)i * 4096, 1, 0, VMM_MT_NORMAL))
+                                   shm_frame(shm_new, i), 1, 0, VMM_MT_NORMAL))
             continue;
         // Half-mapped and the old frames are already unmapped: put the
         // ORIGINAL buffer back rather than leaving the client with an
@@ -840,15 +843,14 @@ static int rebuild_buffer(struct client_window *cw, int b, int w, int h) {
             vmm_unmap_user_page(cw->pml4, base + (uint64_t)j * 4096);
         for (uint32_t j = 0; j < old_pages; j++)
             vmm_map_user_borrowed(cw->pml4, base + (uint64_t)j * 4096,
-                                   (uint64_t)(uintptr_t)wb->phys + (uint64_t)j * 4096,
-                                   1, 0, VMM_MT_NORMAL);
-        pmm_free_contiguous(phys, pages);
+                                   shm_frame(wb->shm, j), 1, 0, VMM_MT_NORMAL);
+        shm_put(shm_new);
         klog_write("win_server: buffer rebuild refused -- mapping failed\n");
         return 0;
     }
 
-    if (wb->phys) pmm_free_contiguous((uint64_t)(uintptr_t)wb->phys, old_pages);
-    wb->phys = (uint32_t *)(uintptr_t)phys;
+    if (old_pages) shm_put(wb->shm);
+    wb->shm = shm_new;
     wb->pages = pages;
     wb->w = w;
     wb->h = h;
@@ -874,7 +876,7 @@ static int rebuild_buffer(struct client_window *cw, int b, int w, int h) {
 static int resize_window(struct client_window *cw, int w, int h) {
     if (w <= 0 || h <= 0 || w > WIN_CLIENT_MAX_W || h > WIN_CLIENT_MAX_H) return 0;
 
-    int back = cw->bufs[1].phys ? (cw->front ^ 1) : cw->front;
+    int back = cw->bufs[1].pages ? (cw->front ^ 1) : cw->front;
     if (!rebuild_buffer(cw, back, w, h)) return 0;
 
     cw->w = w;
@@ -892,7 +894,7 @@ static int resize_window(struct client_window *cw, int w, int h) {
 
     tell_compositor(WIN_EV_CLIENT_RESIZED, cw->pid, cw->id, w, (uint32_t)h);
     if (g_ops && g_ops->window_resized) {
-        g_ops->window_resized(cw->pid, cw->id, cw->bufs[0].phys, w, h);
+        g_ops->window_resized(cw->pid, cw->id, w, h);
     }
     return 1;
 }
@@ -1448,7 +1450,7 @@ int win_server_request(int pid, struct win_request_msg *req) {
         // so the client keeps drawing where it was and the compositor
         // keeps reading the same place. That is the old behaviour, and
         // the caller needs no special case for it.
-        if (cw->bufs[1].phys) {
+        if (cw->bufs[1].pages) {
             // THE BUFFER ABOUT TO BECOME THE BACK ONE IS THE STALE ONE.
             // A resize rebuilt only the buffer the client drew this
             // frame into (see resize_window()), so the other half is

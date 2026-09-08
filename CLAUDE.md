@@ -1703,6 +1703,14 @@ detail there, and keep the pointer here to a line. What each file is:
   and every `fs_*` call fails), and a `ramfs` backend has to land BEFORE
   a flat volume can be refused, or the refusal's failure path is a
   machine with no filesystem at all.
+- **`docs/winserver-ring3-design.md`** -- the window server's MEMORY
+  half leaving ring 0, staged. Stages 0 and 1 are BUILT (a window's
+  pixels are a nameless shm object now, not a contiguous run). **Read it
+  before touching `kernel/proc/win_*.c`**, and note the finding that
+  decided its shape: only two of TWP's requests need a reply, so a
+  synchronous carriage would make every frame wait for the compositor --
+  which is why the carriage is a ring, as in Wayland and Android's
+  BufferQueue, and not a Binder-shaped port.
 - **`docs/commands.md`** -- the INDEX over `docs/commands/`, which holds
   ONE PAGE PER COMMAND (every `/bin` program and every shell builtin).
   The index keeps only what is true of the shell rather than of any one

@@ -528,6 +528,34 @@ cannot reach, since `kernel/include/kernel` is off its include path),
 input routing), and they meet at a registered `struct win_server_ops`
 -- the same registry pattern as `display.h`'s `display_driver`.
 
+## A window's pixels are a NAMELESS shared-memory object
+
+`create_window()` took its frames from `pmm_alloc_contiguous()`. Nothing
+needed them adjacent -- the client's mapping and the compositor's are
+both built a page at a time -- and the demand was itself the failure
+mode: a fragmented allocator refused a large window, silently, in a way
+indistinguishable from a client declining to open one.
+
+The one thing that wanted a linear kernel pointer was
+`win_server_ops`'s `window_created(..., uint32_t *buf, ...)`, and that
+is the ring-0 presentation layer, which nothing has registered since the
+WM became a process. The argument dropped with it.
+
+**Nameless rather than named, and that is the load-bearing half.** The
+shm namespace has no permissions -- `SYS_SHM_OPEN`'s own comment says
+"this system has no users, so any process may open any name" -- so a
+window buffer with a name would be a way for any process to map anybody
+else's window. `shm_lookup()` refuses an anonymous object, and
+`shm_create_anon()` is the only way to make one.
+
+What it buys beyond the fragmentation fix is a REFERENCE COUNT on a
+window's frames, which is what the poison page exists to stand in for:
+the compositor may still blit a slot whose frames the kernel has already
+freed, so the slot is remapped to a shared read-only page rather than
+left as a hole. A compositor that holds its own reference does not need
+that, which is the same answer `wl_buffer.release` gives. See
+`docs/winserver-ring3-design.md`'s stage 2.
+
 ## The TWP transport seam has exactly one implementation, so it is UNVALIDATED
 
 Milestone 41's stage 3 added `struct win_transport`
@@ -565,6 +593,13 @@ Deliberately NOT built in this stage: the shared-memory ring. It is a
 performance item, not a prerequisite -- stage 4 needs the WM to talk
 over *something*, and the syscall path already does. See
 `docs/wm-ring3-design.md`'s "Scope DECIDED" note.
+
+That scoping is still right for the stage it was written about, and it
+does NOT generalise: taking the window server's memory half out of ring 0
+needs a carriage that can carry a payload the 24-byte `struct win_event`
+has no room for, and one that does not make a per-frame present wait for
+the compositor. There the ring is the mechanism, not an optimisation.
+`docs/winserver-ring3-design.md` carries that argument.
 
 ## `gui` output goes to a caller-supplied sink, not through a klog redirect
 

@@ -30,26 +30,39 @@
 #include "scheduler.h"
 #include "vmm.h"
 #include "pmm.h"
+#include "heap.h"
 #include "string.h"
 #include "initcall.h"
 #include "ktest.h"
 #include <stddef.h>
 
-// 16 objects of at most 64 pages (256 KiB). The frame array is the
-// whole cost -- 16 * 64 * 8 = 8 KiB of BSS -- and 64 pages is four
-// audio rings, so raising either is a number, not a redesign.
-#define SHM_MAX       16
-#define SHM_PAGES_MAX 64
-#define SHM_MAPS_MAX  32 // live mappings, kernel-wide
+// SIZED FOR A WINDOW BUFFER, which is what stopped the frame array
+// being a fixed member: 256 is every window this kernel can hold
+// (win_server.c's windows[64][4]) plus room for the services beside
+// them, and one object must admit a 1920x1080 window's two buffers
+// (~16 MiB). A fixed array for that would cost every slot 32 KiB
+// whether or not it ever held a window, so `frames` is allocated to
+// the size actually asked for.
+#define SHM_MAX       288
+#define SHM_BYTES_MAX (32ULL * 1024 * 1024)
+#define SHM_PAGES_MAX (SHM_BYTES_MAX / 4096)
+#define SHM_MAPS_MAX  640 // live mappings, kernel-wide: a client and a
+                           // compositor each map every window
 
 struct shm_object {
     char     name[SHM_NAME_MAX];
     uint32_t npages;
     int      refs;      // descriptors + mappings; 0 = the slot is free
     int      unlinked;  // no new openers; the frames still live
+    int      anon;      // not in the NAMESPACE at all: shm_lookup()
+                         // refuses it, so no process can name its way to
+                         // one. Window buffers are anonymous for exactly
+                         // that reason -- this namespace has no
+                         // permissions, and a name would be a way to map
+                         // somebody else's window.
     int      creator;   // pid, for QUERY_SHM
     uint64_t creator_mm; // its address space, so death can be noticed
-    uint64_t frames[SHM_PAGES_MAX];
+    uint64_t *frames;   // npages entries, kmalloc'd by obj_create()
 };
 
 struct shm_map {
@@ -64,17 +77,33 @@ static struct shm_map    g_map[SHM_MAPS_MAX];
 
 // --- objects ---------------------------------------------------------
 
+static int obj_create(const char *name, uint64_t npages, int pid,
+                      uint64_t pml4);
+
 static void obj_free(struct shm_object *o) {
     for (uint32_t i = 0; i < o->npages; i++)
         if (o->frames[i]) pmm_free_frame(o->frames[i]);
+    kfree(o->frames);
     k_memset(o, 0, sizeof *o);
 }
 
 int shm_lookup(const char *name) {
+    if (!name || !name[0]) return -1;
     for (int i = 0; i < SHM_MAX; i++)
-        if (g_obj[i].refs && !g_obj[i].unlinked && !k_strcmp(g_obj[i].name, name))
+        if (g_obj[i].refs && !g_obj[i].unlinked && !g_obj[i].anon &&
+            !k_strcmp(g_obj[i].name, name))
             return i;
     return -1;
+}
+
+// An object with no name, for a kernel subsystem that maps both sides
+// itself and needs the frames refcounted rather than owned by one
+// caller. The reference returned is the caller's to shm_put().
+int shm_create_anon(uint64_t npages) {
+    if (!npages || npages > SHM_PAGES_MAX) return -EINVAL;
+    int idx = obj_create("", npages, 0, 0);
+    if (idx >= 0) g_obj[idx].anon = 1;
+    return idx;
 }
 
 void shm_get(int idx) {
@@ -167,10 +196,14 @@ static int obj_create(const char *name, uint64_t npages, int pid,
         if (g_obj[i].refs) continue;
         struct shm_object *o = &g_obj[i];
         k_memset(o, 0, sizeof *o);
+        o->frames = kmalloc(npages * sizeof *o->frames);
+        if (!o->frames) return -ENOMEM;
+        k_memset(o->frames, 0, npages * sizeof *o->frames);
         for (uint64_t p = 0; p < npages; p++) {
             uint64_t f = pmm_alloc_frame(PMM_ZONE_ANY);
             if (!f) {
                 for (uint64_t q = 0; q < p; q++) pmm_free_frame(o->frames[q]);
+                kfree(o->frames);
                 k_memset(o, 0, sizeof *o);
                 return -ENOMEM;
             }
@@ -260,7 +293,8 @@ static int shm_q_fill(int index, void *out) {
         if (n++ != index) continue;
         struct query_shm *r = out;
         k_memset(r, 0, sizeof *r);
-        k_strlcpy(r->name, g_obj[i].name, sizeof r->name);
+        k_strlcpy(r->name, g_obj[i].anon ? "(anon)" : g_obj[i].name,
+                  sizeof r->name);
         r->bytes = (uint64_t)g_obj[i].npages * 4096ULL;
         r->refs = (uint32_t)g_obj[i].refs;
         r->creator_pid = (int32_t)g_obj[i].creator;
@@ -318,6 +352,27 @@ KTEST("shm", "two frames of one object are distinct and zeroed") {
     ((uint8_t *)(uintptr_t)a)[7] = 0xAB;
     KTEST_ASSERT_EQ(((uint8_t *)(uintptr_t)b)[7], 0);
     shm_put(idx);
+}
+
+KTEST("shm", "an object can be bigger than one allocation of frames") {
+    // The size a window buffer needs. 96 pages is past the 64 the fixed
+    // frame array used to cap every object at, so this fails outright
+    // against the old shape rather than merely being slower.
+    const uint64_t pages = 96;
+    int idx = obj_create("ktest-shm-big", pages, 0, 0);
+    KTEST_ASSERT(idx >= 0);
+    KTEST_ASSERT_EQ((int)shm_npages(idx), (int)pages);
+    // Every page is a distinct frame, checked at both ends and across
+    // the old boundary -- an off-by-one in the allocation loop would
+    // leave the tail zero and read as "no frame here".
+    KTEST_ASSERT(shm_frame(idx, 0) != 0);
+    KTEST_ASSERT(shm_frame(idx, 63) != 0);
+    KTEST_ASSERT(shm_frame(idx, 64) != 0);
+    KTEST_ASSERT(shm_frame(idx, pages - 1) != 0);
+    KTEST_ASSERT(shm_frame(idx, pages) == 0);
+    KTEST_ASSERT(shm_frame(idx, 0) != shm_frame(idx, pages - 1));
+    shm_put(idx);
+    KTEST_ASSERT_EQ((int)shm_npages(idx), 0);
 }
 
 KTEST("shm", "a name is refused before a slot is spent on it") {

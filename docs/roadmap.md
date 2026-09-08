@@ -488,9 +488,10 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Event SOURCES: route real keyboard and mouse input to the client that owns the focused window~~ done
 - [x] ~~Client windows in the WM's own window list, with real chrome, focus, z-order and a taskbar button~~ done
 - [x] ~~An app model for clients (`uapp`)~~ done
-- [ ] Growable client buffers
+- [x] ~~A window's pixels need not be CONTIGUOUS~~ DONE 2026-09-08 -- a nameless shm object, not one contiguous run
+- [ ] Growable client buffers: the rest of it -- the buffer is still mapped up front, and `WIN_BUFFER_STRIDE` still caps a window below 4K
 - [ ] Multiple windows per process: the protocol already carries window ids and `win_server.c` already tracks
-- [ ] Move the transport from one-message-per-syscall to a shared-memory ring the client maps once
+- [ ] Move the transport to a shared-memory ring the client maps once -- `docs/winserver-ring3-design.md` stage 3
 - [x] ~~Force-close an unresponsive client~~ done
 - [x] ~~Client-side window resize~~ done
 - [x] ~~Empty ring 0 of applications first~~ done
@@ -522,6 +523,18 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Make the ring-3 apps reachable from the desktop~~ done
 - [x] ~~Remove the kernel-space Calculator once the ring-3 one is the default~~ DONE 2026-08-18 -- `apps/` holds no GUI at all
 - [x] ~~ELF loader hardening~~ DONE 2026-08-18
+
+### The window server out of the kernel
+
+**Needs:** `docs/winserver-ring3-design.md`, which stages this and says why the carriage is a ring.
+
+- [x] ~~shm objects sized for a window buffer~~ DONE 2026-09-08 -- the frame array is allocated to the size asked for
+- [x] ~~A window's pixels are an shm object, refcounted, and nameless so no process can map another's window~~ DONE 2026-09-08
+- [ ] The compositor holds its own reference to a window's frames, retiring the poison page and `comp_span`
+- [ ] A general named channel: async messages plus a reply slot, which `/bin/service`'s `/run/init.ctl` + `SIGHUP` can retire onto
+- [ ] Presentation state moves to the compositor -- `title`, `app_id`, `hint_flags`, `cursor`, and `WIN_REQ_WINDOW_INFO` with them
+- [ ] The client allocates its own buffer, retiring `win_buffer_vaddr()` and the carved per-pid compositor region
+- [ ] Delete the kernel's window table, leaving ring 0 the framebuffer grant and raw input
 
 ### A layout engine for the GUI
 
