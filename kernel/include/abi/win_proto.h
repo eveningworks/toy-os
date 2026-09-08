@@ -802,28 +802,14 @@ struct win_event {
 // WIN_REQ_WINDOW_INFO -- state it had no use for, held so that a
 // compositor could ask a second time for something a client had already
 // said.
-#define WIN_REQ_WINDOW_INFO 19 // Read one client window's GEOMETRY.
-                           //   a      = owning pid (in)
-                           //   window = its window id (in)
-                           // and on return:
-                           //   a, b   = width, height
-                           //   c      = WIN_HINT_* flags
-                           //   d      = min_w in the low 16 bits,
-                           //            min_h in the high 16
-                           //   text   = the title, NUL-terminated
-                           //
-                           // The compositor's half of the thin events
-                           // above: it is told a window changed and
-                           // reads what it needs. Refused to anyone but
-                           // the registered compositor -- these are
-                           // another process's window's details.
-                           //
-                           // Returns 0, or -1 if there is no such window
-                           // (which is not an error the compositor can
-                           // avoid: a client may destroy a window
-                           // between the event and this call, and the
-                           // right response is to drop the window rather
-                           // than to retry).
+// **19 IS RETIRED, NOT FREE.** It was WIN_REQ_WINDOW_INFO: a window's
+// title, hints and geometry, read back by a compositor that had been
+// told only that something changed. The title and the hints went to the
+// channel with their payloads; the geometry was the last thing left, and
+// its only caller was asking for a size WIN_EV_CLIENT_CREATED had
+// already handed it. Retired 2026-09-08. A number reused here would
+// land an old client's request on a different message, which is the
+// same reason abi/syscall_abi.h keeps its own holes.
 #define WIN_REQ_WINDOW_APPID 23 // Read one client window's IDENTITY.
                            //   a      = owning pid (in)
                            //   window = its window id (in)

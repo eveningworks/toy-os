@@ -265,6 +265,13 @@ could not open now has no title, hints or cursor shape rather than a
 slower path -- which in practice means the compositor published no
 beacon, and that is a desktop that is not working anyway.
 
+**`WIN_REQ_WINDOW_INFO` IS RETIRED (2026-09-08).** Once the title and
+the hints left, its only caller was the compositor asking for a size
+`WIN_EV_CLIENT_CREATED` had already carried to it in the same event --
+a round trip that existed only because the one message used to fetch
+all three. The number is retired rather than reused, as the deleted
+syscalls' are.
+
 ### Stage 4 -- the rest of the presentation state
 
 `TITLE`, `HINTS`, `CURSOR`, `TIMER`, `PONG` and `ACTIVATE` travel over

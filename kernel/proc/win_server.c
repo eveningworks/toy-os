@@ -153,13 +153,13 @@ struct client_window {
     // cannot see it -- only the release path and the slot search can.
     int comp_retired;
 
-    // What the kernel used to receive and throw away, passing it
-    // straight through to a ring-0 WM. A ring-3 one is TOLD a window
-    // changed and reads the detail back (WIN_REQ_WINDOW_INFO), so the
-    // detail has to live somewhere -- and the kernel is where it already
-    // arrives. Holding it also lets the kernel answer the one question
-    // that used to need a round trip into the WM: does a window with
-    // this app_id exist? (WIN_REQ_ACTIVATE.)
+    // THE ONLY THING A CLIENT SAYS THAT THE KERNEL STILL KEEPS. The
+    // title, the hints and the cursor shape all left for the channel
+    // (userland/lib/uwmchan.h); this stayed because it rides
+    // WIN_REQ_CREATE, so a window can never exist without one -- and
+    // WIN_REQ_ACTIVATE matches on it, where a window briefly nameless is
+    // the gap that makes a single-instance app miss its own twin and
+    // exit without ever drawing.
 
     // The client's own NAME for what this window is ("notepad"). A
     // display string and a hint -- **NOT the identity**. See app_path
@@ -694,7 +694,7 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     // its window list, the whole create fails and the memory goes back
     // rather than leaving a buffer nothing will ever draw.
     // Everything the kernel was handed and used to forward without
-    // keeping. WIN_REQ_WINDOW_INFO reads it back.
+    // keeping. The compositor reads it back with WIN_REQ_WINDOW_APPID.
     k_strlcpy(cw->app_id, app_id ? app_id : "", sizeof cw->app_id);
     // THE IDENTITY, and it comes from the scheduler rather than from
     // anything the client said -- see the field's comment.
@@ -1647,21 +1647,11 @@ int win_server_request(int pid, struct win_request_msg *req) {
             return -1;
         return 0;
     }
-    case WIN_REQ_WINDOW_INFO: {
-        // Another process's window's details, so: compositor only.
-        if (!g_comp_pid || pid != g_comp_pid) return -1;
-        struct client_window *cw = lookup(req->a, req->window);
-        // Not an error the compositor can avoid -- a client may destroy
-        // a window between the event and this call. Dropping the window
-        // is the right response, not retrying.
-        if (!cw) return -1;
-        // GEOMETRY ONLY NOW. The title and the hints left with the
-        // requests that set them; what is still the kernel's to answer
-        // is the size, because the kernel owns the buffer.
-        req->a = cw->w;
-        req->b = cw->h;
-        return 0;
-    }
+    // WIN_REQ_WINDOW_INFO IS RETIRED. It answered a window's geometry,
+    // and its last caller was the compositor asking for a size the
+    // WIN_EV_CLIENT_CREATED event had just carried to it -- a round trip
+    // that only existed because the same message used to fetch the title
+    // and the hints too, and those left with the state behind them.
     case WIN_REQ_WINDOW_APPID: {
         // Same access rule and same "gone is not an error" contract as
         // WIN_REQ_WINDOW_INFO above -- see win_proto.h for why this

@@ -485,35 +485,6 @@ void wm_client_check_timers(void) {
 // needs it. The kernel already HAS these facts (it received them), so
 // it keeps them and answers WIN_REQ_WINDOW_INFO.
 
-// Fills in a window's current size, hints and title. 0 if the window is
-// gone -- which is not a race the compositor can avoid, since a client
-// may destroy a window between the event and this call. Dropping the
-// window is the right answer; retrying is not.
-static int query_window(int pid, uint32_t id, int *w, int *h,
-                         unsigned *flags, int *min_w, int *min_h,
-                         char *title, unsigned title_cap) {
-    struct win_request_msg q;
-    k_memset(&q, 0, sizeof q);
-    q.type = WIN_REQ_WINDOW_INFO;
-    q.a = pid;
-    q.window = id;
-    if (sys_win_request(&q) != 0) return 0;
-    if (w) *w = q.a;
-    if (h) *h = q.b;
-    if (flags) *flags = (unsigned)q.c;
-    // min_w in the low 16 bits, min_h in the high -- see win_proto.h.
-    if (min_w) *min_w = (int)((uint32_t)q.d & 0xFFFF);
-    if (min_h) *min_h = (int)(((uint32_t)q.d >> 16) & 0xFFFF);
-    if (title && title_cap) {
-        unsigned n = 0;
-        while (n + 1 < title_cap && n < WIN_TITLE_LEN && q.text[n]) {
-            title[n] = q.text[n];
-            n++;
-        }
-        title[n] = '\0';
-    }
-    return 1;
-}
 
 // The window's APP ID -- what its client called itself. Asked once, at
 // create: an app id never changes, unlike the title, and it needs its
@@ -697,11 +668,14 @@ int wm_client_handle_event(const struct win_event *ev) {
 
     switch (ev->type) {
     case WIN_EV_CLIENT_CREATED: {
-        int w = 0, h = 0, min_w = 0, min_h = 0;
-        unsigned flags = 0;
-        char title[WIN_TITLE_LEN];
-        if (!query_window(pid, id, &w, &h, &flags, &min_w, &min_h,
-                          title, sizeof title)) return 1;
+        // THE SIZE IS IN THE EVENT, and always was. This used to ask the
+        // kernel for it with WIN_REQ_WINDOW_INFO -- a round trip for
+        // something it had just been handed -- because the same call
+        // fetched the title and the hints, which no longer live there.
+        // The title and hints arrive on the channel a moment later; a
+        // window is briefly untitled and unconstrained, which is what
+        // the placeholder in on_window_created() is for.
+        int w = ev->b, h = (int)ev->mods;
         uint32_t *buf = map_client_window(pid, id);
         if (!buf) return 1;
         // The app id came through as "" until WIN_REQ_WINDOW_APPID
