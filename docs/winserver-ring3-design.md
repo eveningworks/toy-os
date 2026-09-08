@@ -293,7 +293,52 @@ the client creates the shm object itself and names it to the compositor,
 the address is whatever `mmap` returned, and `win_compositor_vaddr()`'s
 carved per-pid region goes with it. This is `wl_shm_pool`.
 
-**Needs:** stage 3, since the name has to reach the compositor.
+**UNBLOCKED 2026-09-08.** It needed shm objects to have an owner, which
+they now do -- without that, a client naming its pixel buffer would make
+every window world-readable, which is the hole stage 1 avoided by making
+those objects anonymous.
+
+#### The naming decision, settled
+
+**THE CLIENT PROPOSES ITS OWN SLOT, and the buffer is `win.<pid>.<slot>`.**
+`struct win_request_msg`'s `window` field is an OUTPUT on
+`WIN_REQ_CREATE` and free as an input, so the client picks a slot in
+0..WIN_CLIENT_MAX-1 and the kernel accepts it or refuses it as taken.
+That leaves `text` carrying `app_id`, which must keep riding CREATE so a
+window is never briefly nameless (`WIN_REQ_ACTIVATE` matches on it), and
+it means no field has to be added to the hot-path message.
+
+The name is guessable, and that is now harmless: an object belongs to
+its creator, and the compositor gets in because the client GRANTS it --
+`sys_shm_grant()` with the pid from the `toywm` beacon, which Toykit
+already opens for the channel.
+
+#### Why it splits in two, and where the difficulty is
+
+Only ONE place in a client computes its drawing surface
+(`userland/ui/ugfx.c`'s `s.pixels`), which is less than it sounds like:
+the hard part is that ALLOCATION, RESIZE and TEARDOWN have to move
+together, and every window on screen goes through them.
+
+- **5a -- the client OWNS the memory, the kernel still maps it.** The
+  client creates and mmaps the object and passes the name; the kernel
+  adopts it and drives `comp_map()` exactly as now, keyed on the shm
+  index instead of frames it allocated. The kernel stops owning window
+  memory, and every mapping path is untouched. Committable on its own.
+- **5b -- the kernel stops mapping.** The compositor opens the name
+  itself, and `comp_map`, `comp_span`, `comp_poisoned`, the poison page,
+  `win_compositor_vaddr()` and `WIN_REQ_MAP_WINDOW`/`UNMAP_WINDOW` all
+  retire together.
+
+**RESIZE IS THE AWKWARD HALF and should be designed before 5a starts.**
+Today the kernel rebuilds the back buffer and leaves the front one
+alone, which is what stops a resize showing a frame of black (Wayland's
+rule that a buffer carries its own dimensions). With client-owned
+memory the client rebuilds it -- so it needs to hand the compositor a
+new object while the old one is still being read, which is a second
+buffer identity rather than a resize of one. That is `wl_buffer`, and it
+is the point at which this protocol either grows buffer objects or
+admits it has them implicitly.
 
 ### Stage 6 -- delete the kernel's window table
 
