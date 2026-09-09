@@ -879,10 +879,12 @@ int sys_sleep_ms(int ms);
 // One typed message in, one out. See abi/win_proto.h.
 int sys_win_request(struct win_request_msg *req);
 
-// TWP's diagnostic channel -- the `gui` commands the test tools drive
-// the desktop with. Only the registered compositor may use it; see
-// SYS_WIN_DEBUG and WIN_REQ_DEBUG_TAKE.
-int sys_win_debug(struct win_debug_msg *msg);
+
+// SYS_DIAG -- ask a NAMED ring-3 service a question, or answer as one.
+// See abi/diag_abi.h. Returns 1 on success, 0 when refused, -EBUSY when
+// another caller holds the channel.
+struct diag_msg;
+int sys_diag(struct diag_msg *msg);
 
 
 // Non-blocking. 1 if an event was written, 0 if the queue is empty.

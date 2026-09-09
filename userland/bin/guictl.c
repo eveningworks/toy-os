@@ -24,6 +24,7 @@
 // one's bytes (kernel/proc/win_server.c). That is a real answer, not a
 // failure to try again around.
 #include "rt/sys.h"
+#include "diag_abi.h"
 #include "lib/cmd.h"
 #include "win_proto.h"
 #include <unistd.h>
@@ -33,14 +34,14 @@
 #define USAGE "guictl <command> [args...]   (try `guictl help`)"
 
 // The console's own bound, and for the same reason: a transport that
-// answered with WIN_DEBUG_F_MORE permanently set would otherwise spin
+// answered with DIAG_F_MORE permanently set would otherwise spin
 // forever, and this is a diagnostic tool -- it must fail rather than
 // hang on a wedged desktop. 64 chunks is 32 KB, far past any real reply.
 #define MAX_CHUNKS 64
 
 // THE WAIT IS OURS, and that is the design rather than an accident. The
 // window manager is a process too, so the kernel POSTS our command to
-// it and hands back WIN_DEBUG_F_PENDING immediately -- it may not park a
+// it and hands back DIAG_F_PENDING immediately -- it may not park a
 // syscall in place (api/scheduler.h), and it faulted when it tried. So
 // we poll. 2 ms a turn for up to 2 s: a `gui state` answers on the
 // compositor's next frame, which is at most WM_IDLE_WAIT_MS away.
@@ -49,9 +50,9 @@
 
 // .bss, not the stack: the struct is 528 bytes and the ring-3 frame
 // budget is 2 KiB.
-static struct win_debug_msg g_msg;
+static struct diag_msg g_msg;
 
-static void emit(const struct win_debug_msg *m) {
+static void emit(const struct diag_msg *m) {
     if (m->len) write(1, m->text, m->len);
 }
 
@@ -63,7 +64,7 @@ int main(int argc, char **argv) {
 
     // argv joined with spaces -- the WM parses its own line, so a
     // subcommand this program has never heard of passes through intact.
-    char line[WIN_DEBUG_CMD_LEN];
+    char line[DIAG_CMD_LEN];
     size_t n = 0;
     for (int i = 1; i < argc && n < sizeof line - 1; i++) {
         if (i > 1) line[n++] = ' ';
@@ -73,10 +74,14 @@ int main(int argc, char **argv) {
     line[n] = '\0';
 
     memset(&g_msg, 0, sizeof g_msg);
-    g_msg.type = WIN_REQ_DEBUG_CMD;
-    strncpy(g_msg.text, line, WIN_DEBUG_CMD_LEN - 1);
+    g_msg.type = DIAG_CMD;
+    // The provider this program speaks to. `guictl` is the window
+    // manager's front end; `diag` at the serial console reaches any of
+    // them by name (abi/diag_abi.h).
+    strncpy(g_msg.name, "gui", DIAG_NAME_LEN - 1);
+    strncpy(g_msg.text, line, DIAG_CMD_LEN - 1);
 
-    int rc = sys_win_debug(&g_msg);
+    int rc = sys_diag(&g_msg);
     if (rc == -EBUSY) {
         sys_print("guictl: busy -- another diagnostic is in flight\n");
         return 1;
@@ -89,31 +94,31 @@ int main(int argc, char **argv) {
 
     // Wait out the post, if there was one.
     int tries = 0;
-    while (g_msg.flags & WIN_DEBUG_F_PENDING) {
+    while (g_msg.flags & DIAG_F_PENDING) {
         if (++tries > POLL_TRIES) {
             sys_print("guictl: the window manager did not answer\n");
             return 1;
         }
         usleep(POLL_MS * 1000);
         memset(&g_msg, 0, sizeof g_msg);
-        g_msg.type = WIN_REQ_DEBUG_MORE;
-        if (sys_win_debug(&g_msg) <= 0) {
+        g_msg.type = DIAG_MORE;
+        if (sys_diag(&g_msg) <= 0) {
             sys_print("guictl: the window manager stopped answering\n");
             return 1;
         }
     }
 
-    if (g_msg.flags & WIN_DEBUG_F_UNKNOWN) {
+    if (g_msg.flags & DIAG_F_UNKNOWN) {
         sys_print("guictl: unknown command -- try `guictl help`\n");
         return 1;
     }
 
     emit(&g_msg);
     for (int guard = 0; guard < MAX_CHUNKS; guard++) {
-        if (!(g_msg.flags & WIN_DEBUG_F_MORE)) break;
+        if (!(g_msg.flags & DIAG_F_MORE)) break;
         memset(&g_msg, 0, sizeof g_msg);
-        g_msg.type = WIN_REQ_DEBUG_MORE;
-        if (sys_win_debug(&g_msg) <= 0) break;
+        g_msg.type = DIAG_MORE;
+        if (sys_diag(&g_msg) <= 0) break;
         emit(&g_msg);
     }
     return 0;

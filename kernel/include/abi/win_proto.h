@@ -223,27 +223,7 @@
                             // driver's wheel is a read-and-reset
                             // accumulator, not part of the level state.
 
-#define WIN_EV_DEBUG_OUT 13 // One chunk of a `gui` command's reply. Rides
-                            // struct win_debug_msg rather than struct
-                            // win_event -- the text does not fit in 24
-                            // bytes; see the diagnostic channel section
-                            // below. Listed here so the event namespace
-                            // stays one list.
-
-// --- client requests, delivered TO THE COMPOSITOR (M41 stage 4d) ------
-//
-// The inbound half of the inversion. Each of these says "this client did
-// something to this window"; `a` is the client's pid and `window` is its
-// window id, so the compositor can name the window in the query below.
-//
-// Deliberately thin. The detail lives in the kernel -- which received it
-// in the first place -- and is fetched with WIN_REQ_WINDOW_INFO, rather
-// than being crammed into a 24-byte event that would have to grow for
-// the first 32-byte title. A compositor that only needs to know
-// SOMETHING changed does not pay for the detail.
-//
-// Delivered only to the registered compositor, and only while there is
-// one: with no compositor these are dropped.
+// 13 -- WIN_EV_DEBUG_OUT, retired with the channel (abi/diag_abi.h).
 #define WIN_EV_CLIENT_CREATED   15 // a: pid. A window exists; read it.
 #define WIN_EV_CLIENT_PRESENT   16 // a: pid, b: the FRONT buffer index
                                     // and that buffer's GENERATION,
@@ -337,19 +317,8 @@
                            // the server does not re-lay-out anybody, it
                            // says the metrics moved and each client
                            // decides what that means for it.
-#define WIN_EV_CLIENT_DEBUG     25 // No payload. A `gui` command is
-                                    // waiting; fetch it with
-                                    // WIN_REQ_DEBUG_TAKE and answer with
-                                    // WIN_REQ_DEBUG_REPLY. Thin like the
-                                    // rest because the command is 128
-                                    // bytes and this struct is 24.
-                                    //
-                                    // **The sender is BLOCKED until the
-                                    // reply arrives or the deadline
-                                    // passes.** Unlike every other event
-                                    // here, taking your time has a cost
-                                    // somebody can see: the console is
-                                    // holding the line.
+// 25 -- WIN_EV_CLIENT_DEBUG, retired: a provider is woken through its
+// WAKEWORD now, which a service with no window also has.
 #define WIN_EV_CLIENT_CURSOR    29 // a: pid, b: the WIN_CURSOR_* shape.
                                     // The VALUE rides the event, unlike
                                     // the thin ones above: it is one int
@@ -961,119 +930,12 @@ struct win_event {
                            // same reasoning as the event queue dropping
                            // the OLDEST rather than the newest.
 
-#define WIN_REQ_DEBUG_CMD  10 // Run one `gui` diagnostic command. The
-                           // command text and the reply both ride
-                           // struct win_debug_msg, not this struct --
-                           // see that struct for why.
-#define WIN_REQ_DEBUG_MORE 11 // Fetch the next chunk of the reply the
-                           // previous DEBUG_CMD started. No inputs.
-#define WIN_REQ_DEBUG_TAKE 21 // Compositor only. Copies the pending
-                           // `gui` command into `text` and clears it, so
-                           // a second TAKE gets nothing rather than
-                           // running the same command twice.
-                           // Returns 1 with the command, 0 if none is
-                           // pending.
-#define WIN_REQ_DEBUG_REPLY 22 // Compositor only. `text`/`len` are the
-                           // command's output; `flags` may carry
-                           // WIN_DEBUG_F_UNKNOWN for a command the
-                           // compositor did not recognise, which the
-                           // caller must be able to tell from one that
-                           // legitimately printed nothing.
-                           //
-                           // Unblocks whoever asked. A reply with no
-                           // pending command is ignored rather than
-                           // refused -- it means the deadline already
-                           // passed, and the compositor has no way to
-                           // have known that.
-
-// --- the diagnostic channel (Milestone 41, stage 3) -------------------
-//
-// The `gui` commands the GUI test tools drive the desktop with, carried
-// as protocol messages instead of a direct call from the kernel's serial
-// console into WM internals. Every GUI tool reaches the WM this way, so
-// the ~240 checks that prove the desktop works have to cross the
-// transport before the WM itself can move to ring 3 (stage 4).
-//
-// **A message, not a side channel.** These are ordinary WIN_REQ_*/
-// WIN_EV_* types on the one transport, so a ring-3 window server
-// inherits the diagnostic path with nothing to re-plumb -- the same bet
-// WIN_REQ_SET_COMPOSITOR made. A separate channel was considered (a
-// diagnostic is not app-facing traffic) and rejected as a second
-// mechanism to maintain and move.
-//
-// **Why its own struct rather than widening the two above.** A reply is
-// text and runs to kilobytes -- `gui help` alone is ~1.8 KB and
-// `gui windows --json` grows with the window count. struct win_event is
-// a fixed 24 bytes and struct win_request_msg carries text[32], so
-// neither can hold one; widening either would put a kilobyte-sized copy
-// on the path of EVERY request, and WIN_REQ_PRESENT is the hot path --
-// once per client frame. So the diagnostic pair carries its own payload
-// and the hot path keeps its 56-byte message. Same fixed-layout, no
-// pointer discipline as the other two, for the same reason: these bytes
-// must work unchanged whether a syscall copies them or a client reads
-// them straight out of a shared ring.
-#define WIN_DEBUG_CMD_LEN 128 // longest command, including the NUL. The
-                              // longest one any tool sends today is a
-                              // `spawn` with arguments, ~40 bytes.
-#define WIN_DEBUG_CHUNK   512 // reply bytes per message, excluding the
-                              // NUL. Sized so a typical one-line answer
-                              // fits in a single round trip while the
-                              // struct stays well under a page.
-
-// The longest reply a `gui` command may produce, in total. One MESSAGE
-// carries WIN_DEBUG_CHUNK bytes, so a reply larger than that arrives in
-// several -- in both directions now: the kernel already chunked it out
-// to the console, and a ring-3 compositor chunks it IN the same way,
-// setting WIN_DEBUG_F_MORE on every piece but the last.
-//
-// In the ABI rather than private to win_server.c because both ends size
-// a buffer by it, and two ends disagreeing about a maximum is how a
-// reply gets silently truncated at whichever end guessed smaller.
-//
-// **IT WAS 4096, and that is about twenty-five windows' worth of
-// `gui windows --json`** -- past which the reply was cut mid-object and
-// every tool asking for the window list got a parse error rather than a
-// short answer. Two separate things were wrong and both are fixed: the
-// emitters reserve room for their own ending and roll back a partial
-// element (dbg_out_reserve()/dbg_out_rollback()), so what comes back is
-// always VALID and says `"truncated":true`; and this bound is now
-// 16 KiB, which is roughly a hundred windows. The first fix is the one
-// that matters -- a bound can always be reached, and a reply that
-// cannot be parsed at its bound is a bug at any size.
-#define WIN_DEBUG_REPLY_MAX 16384
-
-#define WIN_DEBUG_F_MORE  0x01 // set on a reply when more chunks follow:
-                               // ask again with WIN_REQ_DEBUG_MORE. The
-                               // reply is NOT self-delimiting -- a chunk
-                               // that exactly fills the buffer is
-                               // indistinguishable from a truncated one
-                               // otherwise, which is the trap a
-                               // "read until short" convention sets.
-// A RING-3 CALLER IS NEVER MADE TO WAIT IN THE KERNEL. When the
-// answering window manager is itself a ring-3 process, the command is
-// POSTED to it and this flag comes straight back with no reply text:
-// ask again with WIN_REQ_DEBUG_MORE until it clears. The serial console
-// does not see it -- it has no scheduler slot, so it can and does wait
-// in place, which a syscall may not (api/scheduler.h: waiting in place
-// with interrupts on "was tried, and hangs after one event"). Handing a
-// process that same wait is a #GP inside isr_common, measured.
-#define WIN_DEBUG_F_PENDING 0x04 // no answer yet; poll with DEBUG_MORE
-
-#define WIN_DEBUG_F_UNKNOWN 0x02 // the WM did not recognise the
-                               // subcommand; `text` holds nothing. Kept
-                               // distinct from an empty reply, since a
-                               // command that legitimately prints
-                               // nothing is not an error.
-
-struct win_debug_msg {
-    uint32_t type;  // WIN_REQ_DEBUG_CMD / WIN_REQ_DEBUG_MORE going in,
-                    // WIN_EV_DEBUG_OUT coming back
-    uint32_t flags; // WIN_DEBUG_F_*, reply only
-    uint32_t len;   // bytes valid in `text`, reply only
-    uint32_t reserved; // must be 0; keeps the struct 8-byte aligned
-    char text[WIN_DEBUG_CHUNK + 1]; // command in / reply chunk out,
-                                    // always NUL-terminated
-};
+// 10, 11, 21, 22 -- WIN_REQ_DEBUG_CMD/MORE/TAKE/REPLY, and the whole
+// diagnostic channel that rode them, RETIRED 2026-09-09 with
+// SYS_WIN_DEBUG. It is the diagnostic REGISTRY now (abi/diag_abi.h), and
+// it is not window protocol: the compositor is one provider named `gui`
+// among several, and a service with no window answers the same way. The
+// numbers are retired rather than reused.
 
 // --- window behaviour hints (WIN_REQ_HINTS's `a`) ---------------------
 #define WIN_HINT_RESIZABLE 0x01 // the user may resize this window

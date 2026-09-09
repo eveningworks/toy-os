@@ -29,11 +29,6 @@
 // a process. The ring-0 layer is gone and so is the narrow predicate.
 int win_server_any(void);
 
-// `pid` for a request originating in the kernel itself rather than in a
-// scheduled process -- the serial debug console is the only such client.
-// Distinct from 0, which win_server_debug() already treats as "not a
-// scheduled process" and refuses.
-#define WIN_PID_KERNEL (-1)
 
 // Is the hardware cursor plane armed (compositor sent
 // WIN_FB_CURSOR_SHOW)? Asked by win_input.c on every pointer event --
@@ -59,19 +54,6 @@ void win_server_screen_changed(int w, int h);
 // from SYS_WIN_REQUEST; there is no carriage in between.
 int win_server_request(int pid, struct win_request_msg *req);
 
-// Handles one diagnostic message -- WIN_REQ_DEBUG_CMD runs `msg->text`
-// and answers with the first chunk of its reply; WIN_REQ_DEBUG_MORE
-// answers with the next one. On return `msg` is a WIN_EV_DEBUG_OUT
-// carrying `len` bytes and WIN_DEBUG_F_* flags.
-//
-// The reply is buffered HERE, between the compositor that formatted it
-// and the caller, because chunking is a property of the carriage and not
-// of the diagnostic. This is also the one path a caller in ring 0 takes:
-// the serial console asks with WIN_PID_KERNEL and has no syscall to
-// make.
-//
-// Returns 1 on success, 0 if no compositor holds the role.
-int win_server_debug(int pid, struct win_debug_msg *msg);
 
 // One event to every WINDOWING CLIENT -- every process that has waited
 // for a window event (win_events_is_client). `window` is 0 on every

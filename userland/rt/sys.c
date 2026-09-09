@@ -764,8 +764,9 @@ int sys_umount(const char *point) {
     return (int)err(syscall1(SYS_UMOUNT, (uint64_t)(uintptr_t)point));
 }
 
-int sys_win_debug(struct win_debug_msg *msg) {
-    return (int)err(syscall1(SYS_WIN_DEBUG, (uint64_t)(uintptr_t)msg));
+
+int sys_diag(struct diag_msg *msg) {
+    return (int)err(syscall1(SYS_DIAG, (uint64_t)(uintptr_t)msg));
 }
 
 int sys_poweroff(int reboot) {

@@ -95,7 +95,6 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_INSTALL_BOOT]  = { "install_boot",  sys_install_boot,  { A_HEX } },
     [SYS_CRASHTEST]     = { "crashtest",     sys_crashtest,     { A_HEX } },
     [SYS_POWEROFF]      = { "poweroff",      sys_poweroff,      { A_INT } },
-    [SYS_WIN_DEBUG]     = { "win_debug",     sys_win_debug,     { A_HEX } },
     [SYS_DUP]           = { "dup",           sys_dup,           { A_FD } },
     [SYS_DUP2]          = { "dup2",          sys_dup2,          { A_FD, A_FD } },
     [SYS_CONSOLE_SIZE]  = { "console_size",  sys_console_size,  { A_END } },
@@ -169,6 +168,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_FUTEX_WAKE]    = { "futex_wake",    sys_futex_wake,    { A_HEX, A_INT } },
     [SYS_WAKEWORD]      = { "wakeword",      sys_wakeword,      { A_HEX } },
     [SYS_SHM_GRANT]     = { "shm_grant",     sys_shm_grant,     { A_PATH, A_INT } },
+    [SYS_DIAG]          = { "diag",          sys_diag,          { A_HEX } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])
@@ -184,6 +184,8 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
 static const uint64_t SYSCALL_RETIRED[] = {
     7,   // SYS_WIN_CREATE  -- the kernel composited a window itself
     8,   // SYS_WIN_PRESENT -- deleted 2026-09-08, see abi/syscall_abi.h
+    39,  // SYS_WIN_DEBUG   -- deleted 2026-09-09; the `gui` relay became
+         //                    the diagnostic registry, SYS_DIAG
 };
 
 int syscall_is_retired(uint64_t nr) {

@@ -101,6 +101,7 @@
 #include "win_server.h"
 #include "syscall.h" // syscall_process_kill_cleanup()
 #include "win_input.h" // raw input to a ring-3 compositor // win_server_client_gone() -- see scheduler_on_exit()
+#include "diag.h"     // diag_provider_gone() -- drop a dead service's name
 #include "netdev.h"    // net_poll() -- the idle half of the receive path
 #include "pipe.h"      // pipe_close_writer() when a piped child exits
 #include "kstack.h"    // the guard page, canary and poison fill
@@ -1751,6 +1752,7 @@ void scheduler_on_exit(int code) {
     // draws stale pixels and answers no input. A no-op when no server
     // is registered, which is every non-GUI boot.
     win_server_client_gone(leader + 1);
+    diag_provider_gone(leader + 1);
 
     // Its children lose their parent before anything can reuse this
     // slot -- see reparent_children() for why that ordering matters.
@@ -2538,6 +2540,7 @@ int scheduler_kill(int pid, int exit_code) {
     // off the screen now rather than at reap, or a dead process leaves a
     // window drawing stale pixels and answering no input.
     win_server_client_gone(pid);
+    diag_provider_gone(pid);   // ...and any diagnostic name it held
     notify_parent(procs[slot].ppid);
 
     // The victim's memory goes NOW, not at reap. A zombie exists to

@@ -39,7 +39,7 @@
 // These used to write straight to sys_eprint(), i.e. to whatever the
 // serial debug console was connected to, which made the reply
 // unavailable to anything but that console. It is a PAYLOAD now: the
-// console asks win_server_debug() and a message carries bytes, not side
+// console asks the `gui` diagnostic provider and a message carries bytes, not side
 // effects on a serial port.
 //
 // A caller-supplied sink rather than a klog capture/redirect, which was

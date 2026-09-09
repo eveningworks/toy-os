@@ -3471,7 +3471,7 @@ window without going through it will find its layout polls timing out.
   guest and needs a desktop up.
 
   **Its load-bearing check asks the same subcommand twice** -- once
-  through `guictl` (ring 3, `SYS_WIN_DEBUG`, polled) and once through
+  through `guictl` (ring 3, `SYS_DIAG`, polled) and once through
   the serial debug console's own `gui` (ring 0, waits in place) -- and
   requires the two answers to match. A guictl-only check would pass
   against a program that printed a plausible answer of its own; the

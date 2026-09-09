@@ -105,7 +105,7 @@ def gui_json(dbg, command):
     A RING-3 desktop can die mid-test -- which is exactly the bug this
     tool was used to find (a force quit unmapped the compositor's view
     of the dying client's buffer and the WM faulted blitting it). The
-    console then answers "gui: no window manager running", which is not
+    console then answers a "no provider named" refusal, which is not
     JSON, and letting that raise replaced the whole pass/fail table with
     a traceback naming `gui windows` rather than the failure. Returning
     {} lets the remaining checks report, and "the desktop survives a

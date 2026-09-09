@@ -261,6 +261,7 @@ int sys_futex_wait(struct syscall_ctx *c);
 int sys_futex_wake(struct syscall_ctx *c);
 int sys_wakeword(struct syscall_ctx *c);
 int sys_shm_grant(struct syscall_ctx *c); // kernel/mm/shm.c
+int sys_diag(struct syscall_ctx *c);      // kernel/core/diag.c
 int sys_snd_open(struct syscall_ctx *c); // kernel/drivers/sound/sound.c
 int sys_snd_ctl(struct syscall_ctx *c);  // kernel/drivers/sound/sound.c
 int sys_spawn(struct syscall_ctx *c);
@@ -311,7 +312,6 @@ int sys_poll_event(struct syscall_ctx *c);
 int sys_wait_event(struct syscall_ctx *c);
 int sys_wait_ready(struct syscall_ctx *c);
 int sys_win_request(struct syscall_ctx *c);
-int sys_win_debug(struct syscall_ctx *c);
 
 // kernel/core/sys_syscalls.c -- the machine: hardware, settings, power
 int sys_gettime(struct syscall_ctx *c);

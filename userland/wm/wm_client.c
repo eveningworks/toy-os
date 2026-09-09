@@ -15,6 +15,7 @@
 // produced desktop.c/start_menu.c/file_picker.c. See wm.c's top
 // comment.
 #include "wm_internal.h"
+#include "diag_abi.h"
 #include "lib/uchan.h"
 #include "lib/uwmchan.h"
 #include "wm_geometry.h"
@@ -419,7 +420,7 @@ static void on_window_pong(int pid, uint32_t id, uint32_t serial);
 // of surfacing as an unused-function warning that reads like dead code.
 // See docs/wm-ring3-design.md.
 int wm_client_debug_command(const char *line, char *out, int cap) {
-    char buf[WIN_DEBUG_CMD_LEN];
+    char buf[DIAG_CMD_LEN];
     k_strlcpy(buf, line ? line : "", sizeof buf);
 
     struct dbg_out o = { .buf = out, .cap = cap, .len = 0, .overflow = 0 };
@@ -925,44 +926,60 @@ static int map_buf(struct window *win, int b, uint32_t gen, int w, int h) {
 // share a lossy queue with ordinary traffic whose rate a CLIENT
 // controls. Polling costs one request per frame and cannot be starved.
 //
-// WIN_REQ_DEBUG_TAKE answers 0 when nothing is pending, which is the
-// common case and the whole cost.
+// DIAG_TAKE answers 0 when nothing is pending, which is the common case
+// and the whole cost.
+//
+// **THE COMPOSITOR IS A REGISTERED PROVIDER NAMED `gui`**, not a
+// hardwired endpoint -- see abi/diag_abi.h. The claim is made here on
+// the first poll rather than at startup, so it survives the kernel
+// forgetting it (a provider is dropped when its pid dies, and a
+// restarted desktop is a new pid).
 void wm_client_poll_debug(void) {
-    struct win_debug_msg q;
-    k_memset(&q, 0, sizeof q);
-    q.type = WIN_REQ_DEBUG_TAKE;
-    if (sys_win_debug(&q) != 1) return; // nothing waiting
+    static int claimed;
+    if (!claimed) {
+        struct diag_msg c;
+        k_memset(&c, 0, sizeof c);
+        c.type = DIAG_CLAIM;
+        k_strlcpy(c.name, "gui", DIAG_NAME_LEN);
+        claimed = sys_diag(&c) == 1;
+        if (!claimed) return;
+    }
 
-    static char reply[WIN_DEBUG_REPLY_MAX];
+    struct diag_msg q;
+    k_memset(&q, 0, sizeof q);
+    q.type = DIAG_TAKE;
+    if (sys_diag(&q) != 1) return; // nothing waiting
+
+    static char reply[DIAG_REPLY_MAX];
     int n = wm_client_debug_command(q.text, reply, sizeof reply);
 
-    struct win_debug_msg r;
+    struct diag_msg r;
     if (n < 0) {
         // Unrecognised, which a caller must be able to tell from a
         // command that legitimately printed nothing.
-        for (unsigned i = 0; i < sizeof r; i++) ((uint8_t *)&r)[i] = 0;
-        r.type = WIN_REQ_DEBUG_REPLY;
-        r.flags = WIN_DEBUG_F_UNKNOWN;
+        k_memset(&r, 0, sizeof r);
+        r.type = DIAG_REPLY;
+        r.flags = DIAG_F_UNKNOWN;
         r.len = 0;
-        sys_win_debug(&r);
+        sys_diag(&r);
         return;
     }
 
-    // Chunked: one message carries WIN_DEBUG_CHUNK bytes and a `gui
-    // windows --json` is routinely longer. WIN_DEBUG_F_MORE on every
-    // piece but the last, which is what releases the waiting console.
+    // Chunked: one message carries DIAG_CHUNK bytes and a `gui windows
+    // --json` is routinely longer. DIAG_F_MORE on every piece but the
+    // last, which is what releases the waiting caller.
     int sent = 0;
     do {
         int piece = n - sent;
-        if (piece > WIN_DEBUG_CHUNK) piece = WIN_DEBUG_CHUNK;
-        for (unsigned i = 0; i < sizeof r; i++) ((uint8_t *)&r)[i] = 0;
-        r.type = WIN_REQ_DEBUG_REPLY;
+        if (piece > DIAG_CHUNK) piece = DIAG_CHUNK;
+        k_memset(&r, 0, sizeof r);
+        r.type = DIAG_REPLY;
         for (int i = 0; i < piece; i++) r.text[i] = reply[sent + i];
         r.text[piece] = '\0';
         r.len = (uint32_t)piece;
         sent += piece;
-        if (sent < n) r.flags = WIN_DEBUG_F_MORE;
-        sys_win_debug(&r);
+        if (sent < n) r.flags = DIAG_F_MORE;
+        sys_diag(&r);
     } while (sent < n);
 }
 

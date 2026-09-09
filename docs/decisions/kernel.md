@@ -910,6 +910,48 @@ protocol itself -- `abi/win_proto.h`, typed messages -- which is exactly
 what let the traffic move rings without a rewrite, and which is the half
 this entry should have been about.
 
+## Diagnostics are a NAMED REGISTRY in the kernel, not a window-server relay
+
+The `gui` command channel was built into `win_server.c` when the
+compositor was the only ring-3 thing anybody wanted to interrogate. By
+2026-09-09 it was not: `/bin/soundd`, `/bin/netd`, `/bin/clipboardd` and
+init are all services with state worth reading, and a font daemon was
+about to be a fifth. Every one of them would have needed its own relay.
+
+So the endpoint became a NAME. `kernel/core/diag.c` holds a table of
+providers, a service claims one (`DIAG_CLAIM`), and `diag <name> <cmd>`
+at the serial console or `sys_diag()` from ring 3 reaches any of them.
+The compositor is the provider `gui`, and `/bin/guictl` is its front end
+rather than a special case. `win_server.c` lost 315 lines and the window
+protocol lost four request types, two event types and a message struct.
+
+**Why the table is the KERNEL's, when the obvious answer is a channel.**
+`uchan` already carries `/bin/service`'s conversation with init, and a
+diagnostic is the same shape. It cannot serve this one, because the
+caller that matters most is the kernel's own serial debug console: ring
+0 has no channel client, and reaching a wedged service when no shell is
+available is the entire reason a kernel-side path exists. A channel
+would serve the ring-3 half and leave the kernel half needing a second
+mechanism, which is two paths doing one job.
+
+**Why the wakeword rather than an event.** The old relay posted
+`WIN_EV_CLIENT_DEBUG` to the compositor's event queue -- a door only a
+windowing client has. `futex_note_ready()` bumps any process's wakeword,
+so a service with no window is reachable identically. That queue was the
+wrong door for a second reason recorded at the time: it is 32 deep and
+sheds the OLDEST, so a client presenting every frame could flood the
+diagnostic out of it, and the console timed out forever while the
+desktop drew perfectly. The compositor therefore POLLS once per frame
+instead, which cannot be starved and costs one refused request.
+
+**What was NOT done, and why.** The relay was not moved to ring 3, and
+the ring-3 half was not split onto a channel while the kernel kept its
+own. Both were considered. The first cannot serve the serial console;
+the second leaves two implementations of one conversation, which is the
+shape this repo keeps deleting. Generalising the endpoint gets the
+window-specific code out of ring 0 -- which was the actual goal -- while
+leaving in the kernel the one capability only the kernel has.
+
 ## `gui` output goes to a caller-supplied sink, not through a klog redirect
 
 `userland/wm/wm_debug.c` wrote its answers with 143 `klog_write()` /

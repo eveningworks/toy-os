@@ -27,7 +27,7 @@ static uint64_t table_len(void) {
 }
 
 KTEST("syscall", "the table bounds-checks, and index 0 is unused") {
-    KTEST_ASSERT(table_len() > SYS_WIN_DEBUG); // the highest number today
+    KTEST_ASSERT(table_len() > SYS_DIAG); // the highest number today
     KTEST_ASSERT(syscall_desc_at(table_len()) == 0);
     KTEST_ASSERT(syscall_desc_at((uint64_t)-1) == 0);
 
@@ -80,7 +80,7 @@ KTEST("syscall", "strace names come from the table") {
     // A spot check against the real names, so a table of empty strings
     // could not satisfy the loop above.
     KTEST_ASSERT(k_strcmp(strace_syscall_name(SYS_WRITE), "write") == 0);
-    KTEST_ASSERT(k_strcmp(strace_syscall_name(SYS_WIN_DEBUG), "win_debug") == 0);
+    KTEST_ASSERT(k_strcmp(strace_syscall_name(SYS_DIAG), "diag") == 0);
 }
 
 KTEST("syscall", "an argument list ends at A_END") {

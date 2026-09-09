@@ -2736,46 +2736,65 @@ one of them would rename the tab. The title itself is TRUNCATED at
 and deliberately, since a title is decoration and losing its tail beats
 losing the whole thing.
 
-## THE `gui` DIAGNOSTICS ARE REACHABLE FROM RING 3 NOW: `/bin/guictl`
+## DIAGNOSTICS ARE A NAMED REGISTRY: THE COMPOSITOR IS THE PROVIDER `gui`
 
 The window manager's whole `gui` vocabulary -- `state`, `windows`,
-`compositor`, `taskbar`, `probe`, the input verbs -- used to be
-reachable from ONE place, the serial debug console. A machine with no
-COM port in use could not be asked anything about its desktop.
-`/bin/guictl` sends the same `WIN_REQ_DEBUG_CMD` over `SYS_WIN_DEBUG`,
-which was already ring-3 reachable and already ungated for that request
-type. **It parses nothing**: a subcommand added to
-`userland/wm/wm_debug.c` works there the day it lands.
+`compositor`, `taskbar`, `probe`, the input verbs -- reaches it from
+either ring: `gui <sub>` and `diag gui <sub>` at the serial console,
+`/bin/guictl <sub>` from ring 3. Neither parses anything, so a
+subcommand added to `userland/wm/wm_debug.c` works everywhere the day it
+lands.
 
-Three things to know before touching that path.
+**THE ENDPOINT IS A NAME, NOT THE COMPOSITOR.** This was
+`WIN_REQ_DEBUG_*` on the window protocol, hardwired to whoever held the
+compositor role. It is `SYS_DIAG` over `abi/diag_abi.h` now, and the
+kernel holds a table of named providers: a service CLAIMS a name, and
+`diag` with no arguments lists what is registered. The compositor is one
+provider called `gui`; a service with no window is reachable the same
+way. See `docs/decisions.md`.
 
-**A RING-3 CALLER IS NEVER MADE TO WAIT IN THE KERNEL.** When the
-answering window manager is itself a process, the kernel posts the
-command and returns `WIN_DEBUG_F_PENDING` immediately; the caller polls
-with `WIN_REQ_DEBUG_MORE`. The serial console keeps its `sti; hlt` wait
+**A PROVIDER IS WOKEN THROUGH ITS WAKEWORD.** The old path posted a
+window event, which only a windowing client has. Every process has a
+wakeword (`futex_note_ready`), which is what makes this general. The
+compositor still POLLS once per frame rather than waiting on an event,
+and that is deliberate: a client presents every frame, the event queue
+is 32 deep and sheds the oldest, so a busy client used to flood the
+diagnostic out of the queue and the console timed out forever while the
+desktop drew perfectly. Polling costs one refused request per frame and
+cannot be starved.
+
+Four things to know before touching that path.
+
+**A RING-3 CALLER IS NEVER MADE TO WAIT IN THE KERNEL.** The kernel
+posts the command and returns `DIAG_F_PENDING` immediately; the caller
+polls with `DIAG_MORE`. The serial console keeps its `sti; hlt` wait
 because it is NOT a scheduled process -- `api/scheduler.h` says a
 blocking syscall "MUST go through" `scheduler_block_current()` rather
 than waiting in place with interrupts on, and "that was tried". Handing
 a process the console's wait faults inside `isr_common`, measured, on
 the first run.
 
-**THE CHANNEL IS ONE SLOT, AND THE SECOND CALLER IS REFUSED.**
-`g_dbg_reply`/`g_dbg_sent` and the ring-3 leg are single -- fine with
-one client, not with two. A command arriving mid-drain gets `-EBUSY`;
-the claim is per-pid and LAPSES after three seconds, because a client
-killed between its command and its last chunk would otherwise hold the
-channel until reboot.
+**THE CHANNEL IS ONE SLOT, AND THE SECOND CALLER IS REFUSED.** The reply
+buffer and the pending command are single -- fine with one client, not
+with two. A command arriving mid-drain gets `-EBUSY`; the claim is
+per-pid and LAPSES after three seconds, because a client killed between
+its command and its last chunk would otherwise hold the channel until
+reboot.
 
-**`flags` IS AN OUT-PARAMETER EXCEPT ON ONE REQUEST, AND THAT COST A
-FEATURE.** `win_server_debug()` clears `msg->flags` at entry, which is
-right for every path but `WIN_REQ_DEBUG_REPLY`, where the compositor is
-telling the kernel what its answer IS. The clear ran first, so that
-handler read zero: `WIN_DEBUG_F_UNKNOWN` was dropped and `gui
-nosuchthing` printed NOTHING from the day the desktop became a process,
-looking exactly like a command with no output. `WIN_DEBUG_F_MORE` was
-dropped with it, so `g_dbg_reply_ready` was set on the FIRST chunk of a
-multi-chunk reply -- a race that had not been lost only because the
-compositor sends its chunks back to back without yielding.
+**`flags` IS AN OUT-PARAMETER EXCEPT ON THE REPLY, AND THAT COST A
+FEATURE.** `diag_request()` clears `msg->flags` at entry, which is right
+for every path but `DIAG_REPLY`, where the provider is telling the
+kernel what its answer IS -- so the incoming flags are read BEFORE the
+clear. When that was got wrong, `DIAG_F_UNKNOWN` was dropped and `gui
+nosuchthing` printed NOTHING, looking exactly like a command with no
+output; `DIAG_F_MORE` went with it, setting "reply ready" on the FIRST
+chunk of a multi-chunk answer -- a race that had not been lost only
+because the compositor sends its chunks back to back without yielding.
+
+**A NAME NOBODY HOLDS AND A WEDGED PROVIDER ARE DIFFERENT FACTS.** The
+console says which, and lists what IS registered, because "no answer"
+otherwise reads as "not running" and sends the reader looking in the
+wrong place.
 
 ## DAMAGING A RECT DOES NOT ASK FOR A FRAME -- SET `redraw_pending` TOO
 

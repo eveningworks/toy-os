@@ -17,6 +17,12 @@ Runs one window-manager diagnostic and prints the reply. It is the same
 a program -- so a machine with **no serial console attached** can still
 be asked what its desktop is doing.
 
+It is one front end onto the **diagnostic registry**: the compositor
+registers as the provider named `gui`, and `diag <name> <cmd>` at the
+serial console reaches that or any other registered service. `guictl`
+names `gui` for you, so it stays the shortest way to ask the window
+manager something.
+
 That is the whole reason it exists. The bare-metal test laptop has no
 COM port in use, so until now `gui state` could only be typed at a
 machine somebody was sitting in front of. `guictl state` over telnet

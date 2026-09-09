@@ -1232,28 +1232,11 @@ struct spawn_msg {
                           // the KERNEL fault.
                           // Returns 0, or -1 for a bad pointer or op.
 
-#define SYS_WIN_DEBUG 39 // RDI = pointer to a `struct win_debug_msg`
-                          // (abi/win_proto.h), in and out.
-                          //
-                          // TWP's DIAGNOSTIC channel, which needs its
-                          // own carriage for the reason that struct
-                          // exists at all: a `gui` command is 128 bytes
-                          // and its reply up to 512, and widening
-                          // SYS_WIN_REQUEST's message to fit would put
-                          // that on the path of every request -- and
-                          // WIN_REQ_PRESENT is the hot path.
-                          //
-                          // It was kernel-internal until now: the serial
-                          // console called the window server directly.
-                          // A ring-3 compositor has to answer these, so
-                          // it needs a way to be handed the command and
-                          // send the output back (WIN_REQ_DEBUG_TAKE /
-                          // WIN_REQ_DEBUG_REPLY), and both are refused
-                          // to anyone but the registered compositor.
-                          //
-                          // Returns what the server returned, or -1 for
-                          // a bad pointer.
-
+// 39 -- SYS_WIN_DEBUG, RETIRED 2026-09-09. The window server's `gui`
+// relay became the diagnostic REGISTRY (SYS_DIAG, abi/diag_abi.h): the
+// endpoint is a registered name rather than the compositor, so a service
+// with no window is reachable too. The number is retired rather than
+// reused, as the other deleted syscalls' are.
 #define SYS_POWEROFF  38 // RDI = 0 to power off, 1 to reboot. Does not
                           // return on success.
                           //
@@ -2001,6 +1984,18 @@ struct sys_stat {
                            // caller's pointer, so two processes sharing
                            // an shm page reach the same futex at
                            // whatever address each of them mapped it.
+
+#define SYS_DIAG      105  // RDI = pointer to a `struct diag_msg`
+                           // (abi/diag_abi.h). Asks a NAMED ring-3
+                           // service a question, or -- from the service
+                           // side -- claims that name and answers.
+                           //
+                           // The window server's `gui` relay
+                           // generalised: the endpoint is a registered
+                           // name rather than the compositor, so a
+                           // service with no window is reachable too.
+                           // Copy in, act, copy back, like every other
+                           // message-carrying syscall here.
 
 #define SYS_SHM_GRANT 104  // RDI = a name this process created, RSI = a
                            // pid that may now open it. Returns 0, -ENOENT

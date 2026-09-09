@@ -215,8 +215,11 @@ def run_ring3(dbg, desktop_pid):
           next((l for l in after.split("\n") if "console restored" in l), "no line"))
 
     # The role must be free afterwards. With no desktop there is nothing
-    # to answer `gui`, and that refusal IS the observation: the message
-    # means neither a ring-0 layer nor a compositor is registered.
+    # to answer `gui`, and that refusal IS the observation: the provider
+    # named `gui` is gone from the diagnostic registry with the process
+    # that claimed it (abi/diag_abi.h). The console distinguishes a name
+    # nobody holds from a provider that is wedged, and this is the first
+    # of those.
     #
     # This only holds because unsupervise() ran first -- see its comment.
     # Without it init restarts the desktop with a ZERO backoff and the
@@ -224,7 +227,7 @@ def run_ring3(dbg, desktop_pid):
     # process's slot so even the pid looks unchanged.
     gone = dbg.send("gui compositor")
     check("the compositor role is released",
-          "no window manager running" in gone, gone.strip()[:60])
+          "no provider named" in gone, gone.strip()[:60])
 
     # And the half that makes "survivable" mean anything: a desktop that
     # cannot be restarted after a crash has not survived in any useful

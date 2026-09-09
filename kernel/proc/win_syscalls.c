@@ -139,27 +139,6 @@ int sys_win_request(struct syscall_ctx *c) {
     return 0;
 }
 
-int sys_win_debug(struct syscall_ctx *c) {
-    // TWP's diagnostic channel, reachable from ring 3 so a ring-3
-    // compositor can answer `gui` commands. Same copy-in / act /
-    // copy-back discipline as SYS_WIN_REQUEST above, and for the
-    // same reason: the client shares the page and could otherwise
-    // change a field between validation and use.
-    uint64_t pml4 = c->pml4;
-    int pid = scheduler_current_tgid(); // the process -- see sys_win_request()
-    struct win_debug_msg msg;
-    if (!vmm_copy_from_user(pml4, &msg, c->a0, sizeof msg)) {
-        klog_write("syscall: win_debug() rejected -- invalid user pointer\n");
-        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
-    } else if (pid == 0) {
-        c->regs[14] = (uint64_t)(int64_t)-EPERM;
-    } else {
-        int rc = win_server_debug(pid, &msg);
-        if (!vmm_copy_to_user(pml4, c->a0, &msg, sizeof msg)) rc = -EFAULT;
-        c->regs[14] = (uint64_t)(int64_t)rc;
-    }
-    return 0;
-}
 
 // SYS_POLL_EVENT and SYS_WAIT_EVENT share everything except what
 // happens when the queue is empty, so they share a body rather than

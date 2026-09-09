@@ -29,7 +29,8 @@
 #include "sound.h"    // lsdev names the sound devices and which is active
 #include "input.h"    // ...and every registered input source
 #include "virtio_input.h" // ...and whether virtio input is actually delivering
-#include "win_server.h" // `gui` travels as a protocol message now
+#include "win_server.h"
+#include "diag.h"       // `gui` is one provider on the diagnostic registry
 #include "kfmt.h"
 #include "string.h"
 #include "pmm.h"
@@ -58,6 +59,7 @@ static void dbg_cmd_help(void) {
     klog_write("  ktest [suite] - run the in-kernel test suite\r\n");
     klog_write("  sh <command>  - run any shell command, output back here\r\n");
     klog_write("  gui <sub>     - inspect/drive the window manager (`gui help`)\r\n");
+    klog_write("  diag [name [cmd]] - ask any registered service; no args lists them\r\n");
 }
 
 // The one command here that isn't read-only inspection. This console's
@@ -319,13 +321,18 @@ static void dbg_cmd_lsfs(const char *arg) {
 // flag permanently set would otherwise hang the console, and the console
 // is the only way to talk to a wedged desktop. The bound is generous
 // enough that no real reply reaches it.
-static void dbg_cmd_gui(const char *args) {
-    struct win_debug_msg msg;
+// `diag <name> <command>`, and `gui ...` is the same thing against the
+// provider named `gui`. The kernel holds the name table because THIS
+// caller cannot be a ring-3 client: reaching a wedged service when no
+// shell is available is the whole reason a kernel-side path exists.
+static void dbg_cmd_diag(const char *name, const char *args) {
+    struct diag_msg msg;
     k_memset(&msg, 0, sizeof msg);
-    msg.type = WIN_REQ_DEBUG_CMD;
-    k_strlcpy(msg.text, args ? args : "", WIN_DEBUG_CMD_LEN);
+    msg.type = DIAG_CMD;
+    k_strlcpy(msg.name, name, DIAG_NAME_LEN);
+    k_strlcpy(msg.text, args ? args : "", DIAG_CMD_LEN);
 
-    int rc = win_server_debug(WIN_PID_KERNEL, &msg);
+    int rc = diag_request(DIAG_PID_KERNEL, &msg);
     if (rc == -EBUSY) {
         // /bin/guictl issues the same command from ring 3 and the
         // channel is one slot, so a refusal here means somebody else is
@@ -334,23 +341,53 @@ static void dbg_cmd_gui(const char *args) {
         return;
     }
     if (!rc) {
-        klog_write("gui: no window manager running\r\n");
+        // A NAME NOBODY HOLDS AND A WEDGED PROVIDER ARE DIFFERENT FACTS,
+        // and saying so is what stops "no answer" being read as "not
+        // running".
+        if (!diag_have_provider(name)) {
+            char have[128];
+            int n = diag_list(have, sizeof have);
+            klog_printf("diag: no provider named `%s'\r\n", name);
+            if (n > 0) klog_printf("      registered: %s\r\n", have);
+            else klog_write("      none registered\r\n");
+        } else {
+            klog_printf("diag: %s did not answer\r\n", name);
+        }
         return;
     }
-    if (msg.flags & WIN_DEBUG_F_UNKNOWN) {
-        klog_write("unknown gui subcommand -- try `gui help`\r\n");
+    if (msg.flags & DIAG_F_UNKNOWN) {
+        klog_printf("unknown %s subcommand -- try `%s help`\r\n", name, name);
         return;
     }
 
     for (int guard = 0; guard < 64; guard++) {
         if (msg.len) klog_write(msg.text);
-        if (!(msg.flags & WIN_DEBUG_F_MORE)) return;
+        if (!(msg.flags & DIAG_F_MORE)) return;
 
         k_memset(&msg, 0, sizeof msg);
-        msg.type = WIN_REQ_DEBUG_MORE;
-        if (!win_server_debug(WIN_PID_KERNEL, &msg)) return;
+        msg.type = DIAG_MORE;
+        if (!diag_request(DIAG_PID_KERNEL, &msg)) return;
     }
-    klog_write("\r\ngui: (reply too long, stopped)\r\n");
+    klog_write("\r\ndiag: (reply too long, stopped)\r\n");
+}
+
+static void dbg_cmd_gui(const char *args) { dbg_cmd_diag("gui", args); }
+
+// `diag` alone lists the providers; `diag <name> <cmd>` asks one.
+static void dbg_cmd_diag_cmd(char *line) {
+    if (!line || !line[0]) {
+        char have[128];
+        int n = diag_list(have, sizeof have);
+        if (n > 0) klog_printf("providers: %s\r\n", have);
+        else klog_write("no diagnostic providers registered\r\n");
+        return;
+    }
+    char name[DIAG_NAME_LEN];
+    int i = 0;
+    while (line[i] && line[i] != ' ' && i < (int)sizeof(name) - 1) { name[i] = line[i]; i++; }
+    name[i] = '\0';
+    while (line[i] == ' ') i++;
+    dbg_cmd_diag(name, line + i);
 }
 
 static void dbg_dispatch(char *line) {
@@ -361,18 +398,20 @@ static void dbg_dispatch(char *line) {
     const char *arg = had_space ? line + i + 1 : "";
 
     if (k_strcmp(line, "gui") == 0) {
-        // Sent as a PROTOCOL MESSAGE over the window transport, not
-        // called into userland/wm/ directly (Milestone 41, stage 3). This
-        // file used to call wm_debug_dispatch() across the kernel/apps
-        // boundary; every GUI test tool drives the desktop through here,
-        // so that call is exactly what had to stop before the WM can
-        // become a ring-3 process. What changes in stage 4 is the
-        // transport underneath, not this code.
+        // Asked of the PROVIDER named `gui` (abi/diag_abi.h), never
+        // called into userland/wm/ directly -- this file used to do that
+        // across the kernel/apps boundary, and every GUI test tool
+        // arrives here, so that call is what had to stop before the WM
+        // could become a process.
         //
         // NOT the same as `sh gui`, which is blocked: that would try to
         // ENTER GUI mode from inside the console and never return. These
-        // subcommands inspect and drive a desktop that is already up.
+        // subcommands inspect a desktop that is already up.
         dbg_cmd_gui(had_space ? line + i + 1 : line + i);
+        return;
+    }
+    if (k_strcmp(line, "diag") == 0) {
+        dbg_cmd_diag_cmd(had_space ? line + i + 1 : line + i);
         return;
     }
     if (k_strcmp(line, "help") == 0) dbg_cmd_help();
