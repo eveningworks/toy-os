@@ -795,7 +795,7 @@ whenever a headline here tells you something you did not already know.
 - **Super/Win toggles the Start menu, and Alt+F4 closes a window**
 - **A window may be dragged off the left/right/bottom edges and UNDER the taskbar**
 - **The window manager lives in `userland/wm/`**
-- **`win_server_active()` MEANS A RING-0 LAYER, and the desktop is not one.**
+- **THERE IS ONE KIND OF WINDOW SERVER, AND `win_server_any()` IS HOW YOU ASK FOR IT**
 - **THE DESKTOP IS A RING-3 PROCESS.**
 - **Killing the desktop is survivable, and that is the milestone's exit criterion**
 - **A GUI tool that needs the compositor role must ASK WHO HOLDS IT**

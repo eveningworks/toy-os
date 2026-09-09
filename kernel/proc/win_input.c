@@ -61,9 +61,6 @@ static void push(uint32_t type, int32_t a, int32_t b, uint32_t mods) {
 void win_input_poll(void) {
     int pid = win_server_compositor_pid();
     if (!pid) return;
-    // A ring-0 presentation layer is still driving the devices itself.
-    // Reading them here would consume its keys and wheel notches.
-    if (win_server_active()) return;
 
     // THE DEVICE HAS TO BE STARTED, and this is the only place left that
     // can. The ring-0 WM called mouse_init()/mouse_set_bounds() itself;

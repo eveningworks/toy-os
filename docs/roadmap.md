@@ -503,7 +503,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Let TFS3 blocks-per-group vary for small volumes
 - [x] ~~Raw input to the compositor~~ DONE 2026-08-18
 - [x] ~~A ring-3 allocator, and four smaller syscalls~~ DONE 2026-08-18
-- [x] ~~An abstract transport behind that protocol~~ DONE 2026-08-18 -- `struct win_transport`
+- [x] ~~An abstract transport behind that protocol~~ DONE 2026-08-18 -- `struct win_transport`, deleted 2026-09-09 unvalidated
 - [x] ~~A bigger process table (4 slots)~~ DONE 2026-08-18 -- `SCHED_MAX_PROCS` is 64
 - [x] ~~`tosh` improvements once the kernel supports them: pipelines, redirection, Ctrl-C~~ DONE 2026-08-19/22 -- all three
 - [x] ~~A GROWABLE user stack~~ DONE 2026-08-23

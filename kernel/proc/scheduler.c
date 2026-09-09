@@ -2637,8 +2637,8 @@ void scheduler_idle(void) {
     // IRQ-driven, so this costs a loop over two NULLs on a machine with
     // no other input hardware. See kernel/include/kernel/input.h.
     input_poll_sources();
-    // Raw input to a ring-3 compositor. Silent unless one is registered
-    // AND no ring-0 presentation layer is -- see win_input.c. It lives
+    // Raw input to a ring-3 compositor. Silent unless one holds the role
+    // -- see win_input.c. It lives
     // here because this is the kernel's one owner of idle work, so
     // every waiting loop feeds the desktop without knowing it does.
     win_input_poll();

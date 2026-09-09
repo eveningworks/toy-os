@@ -1079,7 +1079,8 @@ returning one cached frame reports a beautifully steady desktop and
 passes.
 
 **A PREDICATE NAMED AFTER THE ONLY IMPLEMENTATION IT EVER HAD.**
-`win_server_active()` means "a RING-0 presentation layer is registered".
+`win_server_active()` meant "a RING-0 presentation layer is registered"
+(the predicate and that layer are both deleted now).
 The desktop stopped being one when it became a process, and three KTESTs
 that guarded themselves with it -- so they would SKIP while a desktop was
 up -- quietly stopped skipping, with their comments still claiming they

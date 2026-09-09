@@ -225,21 +225,10 @@ KTEST("win_events", "SYS_WAIT_READY times out, wakes early, and consumes nothing
 // win_server.c's refusal paths, which are its access-control story and
 // are worth pinning down independently of anything drawing.
 //
-// Narrow ON PURPOSE: the interesting cases (create, present, ownership
-// isolation between two clients) need a registered presentation layer,
-// and registering a stub here would clobber the real window manager if
-// this suite is ever run while the desktop is up. Those paths are
-// covered end-to-end by tools/winclient_test.py instead, which drives a
-// real ring-3 client against the real WM -- stronger evidence than a
-// stub would give, and with nothing to clobber.
+// Narrow ON PURPOSE: create, present and ownership isolation are the
+// compositor's now, and are covered end to end by
+// tools/winclient_test.py driving a real ring-3 client.
 KTEST("win_server", "requests are refused when no server is registered") {
-    // EITHER KIND OF SERVER counts. This guard read `win_server_active()`
-    // alone, which answers "is a RING-0 presentation layer registered" --
-    // and the desktop stopped being one when it became a ring-3
-    // compositor, so the skip silently stopped firing while its comment
-    // went on claiming it did. Nothing noticed until init started the
-    // desktop at boot (docs/init-design.md stage 2) and `make test`
-    // finally ran with one up.
     if (win_server_any()) KTEST_SKIP("a window server is registered (desktop is up)");
 
     struct win_request_msg req = {0};

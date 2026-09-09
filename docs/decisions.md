@@ -60,7 +60,7 @@ first before re-litigating it from scratch.
 - [The message channel is a LIBRARY, not a kernel object](decisions/kernel.md#the-message-channel-is-a-library-not-a-kernel-object)
 - [One wakeword per process, because there is no poll()](decisions/kernel.md#one-wakeword-per-process-because-there-is-no-poll)
 - [A dead window's pixels are kept alive by whoever is reading them](decisions/kernel.md#a-dead-windows-pixels-are-kept-alive-by-whoever-is-reading-them)
-- [The TWP transport seam has exactly one implementation, so it is UNVALIDATED](decisions/kernel.md#the-twp-transport-seam-has-exactly-one-implementation-so-it-is-unvalidated)
+- [The TWP transport seam never got a second implementation, and was deleted](decisions/kernel.md#the-twp-transport-seam-never-got-a-second-implementation-and-was-deleted)
 - [`gui` output goes to a caller-supplied sink, not through a klog redirect](decisions/kernel.md#gui-output-goes-to-a-caller-supplied-sink-not-through-a-klog-redirect)
 - [The diagnostic channel carries its own payload struct, so presents stay cheap](decisions/kernel.md#the-diagnostic-channel-carries-its-own-payload-struct-so-presents-stay-cheap)
 - [A client window's close button is a handshake, not a seizure](decisions/kernel.md#a-client-windows-close-button-is-a-handshake-not-a-seizure)

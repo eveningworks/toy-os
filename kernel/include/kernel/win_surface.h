@@ -7,13 +7,11 @@
 // 4a, the capability a ring-3 window manager needs and the one thing
 // SYS_GUI_INIT was already doing without a guard.
 //
-// Its own file rather than more of win_server.c on purpose. That file
-// owns window ids, pixel buffers, their mappings and their teardown;
-// this owns one screen-sized mapping and the publish that follows a
-// write to it. Same split as the win_server_ops boundary already draws
-// between memory and presentation -- and this is the file that gains a
-// second implementation if the framebuffer ever stops being a single
-// linear range.
+// Its own file rather than more of win_server.c on purpose: that file
+// owns the compositor role and the event queue, this owns one
+// screen-sized mapping and the publish that follows a write to it. This
+// is the file that gains a second implementation if the framebuffer ever
+// stops being a single linear range.
 //
 // The invariant the whole thing rests on: **a grant belongs to the
 // ROLE, not to the process.** Whoever is the registered compositor may

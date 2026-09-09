@@ -243,8 +243,7 @@
 // SOMETHING changed does not pay for the detail.
 //
 // Delivered only to the registered compositor, and only while there is
-// one: with no compositor these are dropped, exactly as the ring-0
-// win_server_ops calls were skipped when nothing had registered.
+// one: with no compositor these are dropped.
 #define WIN_EV_CLIENT_CREATED   15 // a: pid. A window exists; read it.
 #define WIN_EV_CLIENT_PRESENT   16 // a: pid, b: the FRONT buffer index
                                     // and that buffer's GENERATION,
@@ -504,17 +503,14 @@ struct win_event {
                            // bet -- see the header comment. That costs
                            // one exception, made in two places and
                            // worth knowing about: every other request
-                           // is refused outright when no presentation
-                           // layer is registered (syscall.c's
-                           // win_server_active() gate, and
-                           // win_server_request()'s own !g_ops guard),
-                           // and this one must work without one. In
-                           // stage 4 the ring-3 WM IS the compositor,
-                           // so there is no kernel-side presentation
-                           // layer left to register first -- gating
-                           // this behind one would make it permanently
-                           // unreachable at exactly the point it
-                           // matters.
+                           // is refused outright when no compositor
+                           // holds the role (win_syscalls.c's
+                           // win_server_any() gate, and
+                           // win_server_request()'s own), and this one
+                           // must work without one -- it is what
+                           // claims the role. Gating it behind one
+                           // would make it permanently unreachable at
+                           // exactly the point it matters.
                            //
                            // Claiming replaces any previous holder and
                            // revokes every mapping it held; dying

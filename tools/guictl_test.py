@@ -1,9 +1,10 @@
 """/bin/guictl -- the window manager's diagnostics, asked from ring 3.
 
-WHAT ONLY THIS CAN CHECK. kernel/proc/win_transport_test.c covers the
-one-slot refusal and the chunking inside the kernel; neither runs the
-PROGRAM, and neither exercises the path that made this hard -- a ring-3
-caller whose answer comes from a ring-3 window manager.
+WHAT ONLY THIS CAN CHECK. The kernel-side chunking and one-slot refusal
+used to have KTESTs of their own; they went with the ring-0 presentation
+layer they had to register to reach it. Nothing else runs the PROGRAM, or
+exercises the path that made this hard -- a ring-3 caller whose answer
+comes from a ring-3 window manager.
 
 THE LOAD-BEARING CHECK IS THE CROSS-PATH ONE. The same subcommand is
 asked twice, once through /bin/guictl (ring 3, SYS_WIN_DEBUG, polled)

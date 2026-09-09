@@ -1014,10 +1014,12 @@ this the obvious way), not from how much history it accumulated.
   `ugfx_`, `uapp_`, `WIN_REQ_*`); a toolkit's name and its prefix need
   not match. See `docs/decisions.md`.
 
-  **How a TWP message is CARRIED is its own seam** -- `struct
-  win_transport` (`kernel/include/kernel/win_transport.h`), with
-  `SYS_WIN_REQUEST` as one implementation rather than the only path. Two
-  things follow. The `gui` debug commands are protocol messages
+  **How a TWP message is CARRIED is not the protocol.** A client's
+  window requests ride `uchan` to the compositor and never enter the
+  kernel; what is left on `SYS_WIN_REQUEST` is the role, the framebuffer
+  and the font. The `win_transport` registry that used to abstract this
+  was deleted in stage 6c, having only ever had the one implementation.
+  Two things still follow. The `gui` debug commands are protocol messages
   (`WIN_REQ_DEBUG_CMD`/`WIN_EV_DEBUG_OUT`), so `debug_console.c` does
   NOT call into `userland/wm/` -- add a new `gui` subcommand in
   `wm_debug.c` as before, but write its output through its `struct
@@ -1302,11 +1304,11 @@ this the obvious way), not from how much history it accumulated.
   it. **Every client operation is a typed MESSAGE carried by the one
   `SYS_WIN_REQUEST` syscall, never a syscall of its own** -- that is
   what keeps the boundary a protocol; see `docs/decisions.md`. And
-  **the split is memory vs. presentation**: `win_server.c` owns
-  ids/buffers/mappings/teardown (page tables and the frame allocator),
-  `wm_client.c` owns the window list, chrome, z-order and input routing,
-  and they meet at a registered `struct win_server_ops` -- the same
-  registry pattern as `display_driver`. **A client draws with
+  **the split is no longer memory vs. presentation**: `wm_client.c` owns
+  the whole window -- the list, its buffers, chrome, z-order and input
+  routing -- and `win_server.c` owns the compositor ROLE, the
+  framebuffer, the font and the event queue. They met at a registered
+  `struct win_server_ops` until stage 6c deleted it. **A client draws with
   `userland/ui/ugfx.c`**, not with syscalls -- there is no drawing
   syscall and there shouldn't be, since only the framebuffer is
   privileged, not drawing. The one thing a client can't produce for
@@ -1391,16 +1393,18 @@ this the obvious way), not from how much history it accumulated.
   `context_menu.c`, `confirm_dialog.c`, `file_picker.c`, `wm_tray.c`,
   `cursor_theme.c`, `wm_client.c`. Split by concern for readability --
   it's still one tightly-coupled event loop, not decoupled components.
-- **`win_server_active()` MEANS A RING-0 LAYER, and the desktop is not
-  one.** Use **`win_server_any()`** for "is there a window server at
-  all" -- either a ring-0 presentation layer or a registered compositor,
-  which is what `win_server_request()` itself gates on. Three places
-  open-coded this and two got it wrong by omitting the compositor half:
-  two KTESTs guarded themselves with `win_server_active()` so they would
-  SKIP while the desktop was up, and quietly stopped skipping the moment
-  the desktop became a process. **A predicate named for the thing that
-  used to be the only implementation is worth re-reading whenever that
-  stops being true.**
+- **THERE IS ONE KIND OF WINDOW SERVER, AND `win_server_any()` IS HOW
+  YOU ASK FOR IT.** It means "a ring-3 compositor holds the role", which
+  is what `win_server_request()` gates on and what `vga.c` means by "is
+  anything else painting the screen". There used to be a second kind, a
+  registered ring-0 presentation layer, with a narrower
+  `win_server_active()` beside it; that layer and that predicate were
+  deleted in stage 6c (`docs/winserver-ring3-design.md`). **The pair is
+  worth remembering as a shape rather than as an API**: two KTESTs
+  guarded themselves with the narrow one so they would SKIP while the
+  desktop was up, and quietly stopped skipping the moment the desktop
+  became a process. A predicate named for what used to be the only
+  implementation is worth re-reading whenever that stops being true.
 - **THE DESKTOP IS A RING-3 PROCESS.** `/bin/wm/system/toywm` is
   `userland/wm/` compiled as a ring-3 program, spawned and waited on by
   `apps/gui3.c`; `gui` starts it. It claims the compositor role, takes

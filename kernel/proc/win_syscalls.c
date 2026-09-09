@@ -22,7 +22,6 @@
 #include "scheduler.h"
 #include "win_events.h"
 #include "win_server.h"
-#include "win_transport.h"
 #include "clocksource.h" // clocksource_now_ns() -- the timed wait's deadline
 #include <stddef.h>
 
@@ -110,17 +109,8 @@ int sys_win_request(struct syscall_ctx *c) {
         // gate below, because that gate now has a typed exception
         // and the type is only knowable from the copy.
 
-        // "Is there a window server?" has two answers now. A
-        // registered ring-0 presentation layer is one; a REGISTERED
-        // COMPOSITOR is the other, and with the WM in ring 3 it is
-        // the only one there will ever be -- there is no kernel-side
-        // layer to register at all.
-        //
-        // Gating on win_server_active() alone rejected every request
-        // a ring-3 WM made after claiming the role, starting with
-        // the framebuffer grant, so the desktop exited before
-        // drawing a pixel. SET_COMPOSITOR was already exempt for the
-        // same reason; that exemption was just one request short.
+        // "Is there a window server?" means "does a compositor hold the
+        // role?" -- the only kind there is.
         if (!win_server_any() && req.type != WIN_REQ_SET_COMPOSITOR) {
             // No desktop running. Refused rather than silently
             // succeeding, so a client started outside GUI mode finds
@@ -128,17 +118,11 @@ int sys_win_request(struct syscall_ctx *c) {
             // will ever composite.
             //
             // SET_COMPOSITOR is exempt: claiming the role is what a
-            // ring-3 window server does BEFORE there is a
-            // presentation layer, and in stage 4 there is never a
-            // kernel-side one. See abi/win_proto.h.
+            // window server does before it is one. See abi/win_proto.h.
             klog_write("syscall: win_request() rejected -- no window server registered\n");
             c->regs[14] = (uint64_t)(int64_t)-ENODEV;
         } else {
-            // Over the transport rather than straight into the
-            // server: SYS_WIN_REQUEST is now ONE carriage for TWP,
-            // not the only one (Milestone 41, stage 3). See
-            // kernel/win_transport.h.
-            int rc = win_transport_request(pid, &req);
+            int rc = win_server_request(pid, &req);
 
             // Only copy back a request the server actually looked at
             // -- a malformed one leaves the client's buffer as sent.
@@ -170,10 +154,6 @@ int sys_win_debug(struct syscall_ctx *c) {
     } else if (pid == 0) {
         c->regs[14] = (uint64_t)(int64_t)-EPERM;
     } else {
-        // Straight to the server, not over the transport: the
-        // transport carries messages TO the window server, and this
-        // is the server's own client answering it. Routing it back
-        // out through the transport would be a loop.
         int rc = win_server_debug(pid, &msg);
         if (!vmm_copy_to_user(pml4, c->a0, &msg, sizeof msg)) rc = -EFAULT;
         c->regs[14] = (uint64_t)(int64_t)rc;

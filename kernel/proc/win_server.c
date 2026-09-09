@@ -1,10 +1,8 @@
-// Client windows, kernel side: ids, pixel buffers, per-process
-// mappings, ownership and teardown. See win_server.h for why the split
-// between this and the registered presentation layer falls where it
-// does.
-// **TWS -- the Toy Window Server**, memory half. See
+// **TWS -- the Toy Window Server**, what is left of it in ring 0: the
+// compositor role, the framebuffer grant keyed on it, the font mapped
+// into a client, and the `gui` diagnostic channel. No window. See
 // abi/win_proto.h for TWP, the protocol it serves, and
-// userland/wm/wm_client.c for the presentation half.
+// userland/wm/wm_client.c for the compositor that owns the windows.
 #include "win_server.h"
 #include "keyboard.h" // keyboard_suspend_blocking() -- who owns the keyboard follows the compositor role
 #include "vmm.h"
@@ -178,30 +176,12 @@ static int map_font(int pid, struct win_request_msg *req) {
     return 1;
 }
 
-static const struct win_server_ops *g_ops = NULL;
-
-void win_server_register(const struct win_server_ops *ops) {
-    g_ops = ops;
-}
-
-const struct win_server_ops *win_server_ops_current(void) {
-    return g_ops;
-}
-
-int win_server_active(void) {
-    return g_ops != NULL;
-}
-
-int win_server_any(void) { return win_server_active() || g_comp_pid != 0; }
+int win_server_any(void) { return g_comp_pid != 0; }
 
 // Tells the registered compositor that a client did something.
 //
-// A no-op when nothing has registered, which is the ring-0 desktop's
-// whole lifetime today -- exactly as the win_server_ops calls beside it
-// are skipped when `g_ops` is NULL. So both halves of the inversion can
-// be live at once during the migration without either disturbing the
-// other, which is the property every stage of this plan has been shaped
-// to keep.
+// A no-op when no compositor holds the role, which is every boot before
+// the desktop starts.
 //
 // Fire and forget: no reply, no blocking. Nothing here needs an answer
 // -- activate, the one request that did, is the compositor's now.
@@ -490,13 +470,10 @@ int win_server_debug(int pid, struct win_debug_msg *msg) {
 
     msg->text[WIN_DEBUG_CMD_LEN - 1] = '\0'; // the command is client data
 
-    // A ring-0 WM answers directly; a ring-3 one is asked and waited for.
-    // Both are live during the migration, and the ring-0 one wins while
-    // it exists -- it is still the desktop being driven.
+    // The compositor is asked and waited for. Which of the two branches
+    // below applies is about the CALLER's ring, not about the WM.
     int n;
-    if (g_ops && g_ops->debug_command) {
-        n = g_ops->debug_command(msg->text, g_dbg_reply, sizeof g_dbg_reply);
-    } else if (g_comp_pid && pid > 0) {
+    if (g_comp_pid && pid > 0) {
         // pid > 0 is A PROCESS. The serial console passes
         // WIN_PID_KERNEL (-1) and sys_win_debug() refuses 0, so this is
         // exactly "somebody who can be scheduled" -- tested that way
@@ -545,11 +522,9 @@ int win_server_debug(int pid, struct win_debug_msg *msg) {
 int win_server_request(int pid, struct win_request_msg *req) {
     if (!req) return -1;
 
-    // Deliberately ABOVE the !g_ops guard: claiming the compositor role
-    // must not require a registered presentation layer, because in
-    // stage 4 the ring-3 WM is both and there is no kernel-side one left
-    // to register first. Gating it here would make it unreachable at
-    // exactly the point of the milestone. See WIN_REQ_SET_COMPOSITOR.
+    // Deliberately ABOVE the "is there a compositor" guard: claiming the
+    // role is what a window server does before it is one, so gating it
+    // on the role would make it unreachable. See WIN_REQ_SET_COMPOSITOR.
     if (req->type == WIN_REQ_SET_COMPOSITOR) {
         if (req->a) return win_server_set_compositor(pid, vmm_current_pml4());
         // Releasing is only yours to do. Without this any process could
@@ -560,10 +535,7 @@ int win_server_request(int pid, struct win_request_msg *req) {
     }
 
     // The framebuffer grant, gated on the same role and handled beside
-    // it -- also above the !g_ops guard, for the reason given there: in
-    // stage 4 the ring-3 WM IS the presentation layer, so requiring one
-    // to already be registered would make the grant unreachable at
-    // exactly the point of the milestone.
+    // it.
     //
     // The access control lives HERE rather than in win_surface.c, the
     // same way it lives here for the per-window compositor mappings --
@@ -643,18 +615,11 @@ int win_server_request(int pid, struct win_request_msg *req) {
         }
     }
 
-    // A window server is EITHER a registered ring-0 presentation layer
-    // or a registered ring-3 compositor. This used to demand the first,
-    // which refused every request below the moment the WM moved out of
-    // the kernel -- the font (so the desktop drew no text, and every
-    // font-derived measurement collapsed with it) and window creation
-    // (so no client could ever get a window). Silently, because the
-    // refusal is a bare -1 that nothing logs.
-    //
-    // Everything past here therefore has to tolerate g_ops being NULL;
-    // the calls below are all guarded individually rather than by this
-    // one, which is what that used to buy.
-    if (!g_ops && !g_comp_pid) return -1;
+    // A window server is a registered ring-3 compositor, and there is no
+    // longer a second kind. The refusal is a bare -1 that nothing logs,
+    // so the calls below are each guarded on their own rather than
+    // leaning on this one.
+    if (!g_comp_pid) return -1;
 
     // **NO REQUEST BELOW NAMES A WINDOW**, and that is stage 6b in one
     // sentence. Create, present, destroy, resize, buffer, title, hints,
@@ -815,28 +780,6 @@ int win_server_compositor_pid(void) { return g_comp_pid; }
 // and nothing compositing it. That is a leak, not a crash, and it is the
 // right way round -- the alternative trades a leak for a fault.
 static void compositor_gone(void) {
-    // IS THIS COMPOSITOR THE DESKTOP? That is the question the whole
-    // function is conditional on, and getting it wrong is not subtle.
-    //
-    // `win_server_active()` is true while a presentation layer is
-    // registered, which today means the RING-0 WM owns the screen and
-    // the window list. In that world a compositor releasing the role is
-    // a SECOND consumer leaving (stage 2's design -- compclient and
-    // screenclient come and go routinely), not the desktop dying. Asking
-    // every client to close there tears down live windows the WM is
-    // still drawing: `compositor_test.py` caught exactly that, as UI Demo
-    // going silent the moment the test compositor released the role.
-    //
-    // When the WM itself IS the ring-3 compositor there is no registered
-    // presentation layer, so this proceeds and the user lands at a text
-    // shell -- the milestone's exit criterion. The guard costs nothing
-    // then and can go with the ring-0 WM.
-    if (win_server_active()) {
-        klog_write("win: compositor left, but the ring-0 WM still owns the "
-                   "screen -- clients and console untouched\n");
-        return;
-    }
-
     // EVERY WINDOWING CLIENT, asked through the event queue that makes
     // it one. The window table used to be this list; a process that
     // waits for window events is the same set without any window state

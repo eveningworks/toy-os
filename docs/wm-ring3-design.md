@@ -1,5 +1,13 @@
 # The WM in ring 3 -- finishing Milestone 41
 
+**READ THIS AS A RECORD OF A FINISHED MILESTONE, not as a description of
+the code.** Two things it describes at length were deleted afterwards:
+the ring-0 presentation layer it registers through (`struct
+win_server_ops`) and the carriage seam beneath it (`struct
+win_transport`). Both went in stage 6c of
+`docs/winserver-ring3-design.md`, which is the current word on what ring
+0 still owns.
+
 **Status: THE SWITCHOVER HAPPENED (2026-08-18). The desktop is a ring-3
 process by default -- `gui` starts `/bin/wm/system/toywm`, and all 23
 GUI tools pass against it. Stages 0-3 landed 2026-08-16, 4a on

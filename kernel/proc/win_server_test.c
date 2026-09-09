@@ -155,21 +155,12 @@ KTEST("winshare", "only the holder may release the compositor role") {
     scheduler_preempt_enable();
 }
 
-KTEST("winshare", "claiming needs no registered presentation layer") {
-    // THE stage-4 property: the ring-3 WM is itself the compositor, so
-    // there is no kernel-side presentation layer for it to wait on. Every
-    // other request is refused outright when none is registered; this one
-    // must not be. Skipped when the desktop is up, since the condition
-    // under test is then not present -- `make test` runs before GUI mode,
-    // which is when this actually means something.
-    // EITHER KIND OF SERVER counts. This guard read `win_server_active()`
-    // alone, which answers "is a RING-0 presentation layer registered" --
-    // and the desktop stopped being one when it became a ring-3
-    // compositor, so the skip silently stopped firing while its comment
-    // went on claiming it did. Nothing noticed until init started the
-    // desktop at boot (docs/init-design.md stage 2) and `make test`
-    // finally ran with one up.
-    if (win_server_any()) KTEST_SKIP("desktop is up -- no !g_ops regime to test");
+KTEST("winshare", "claiming the role needs no window server") {
+    // Every other request is refused outright when no compositor holds
+    // the role; SET_COMPOSITOR must not be, or nothing could ever claim
+    // it. Skipped once the desktop is up, since the condition under test
+    // is then not present.
+    if (win_server_any()) KTEST_SKIP("desktop is up -- no unclaimed role to test");
 
     int cpid, other;
     if (!spare_pids(&cpid, &other)) KTEST_SKIP("no unused pids");

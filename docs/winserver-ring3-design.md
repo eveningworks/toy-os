@@ -628,6 +628,52 @@ remnant of the window system. The same is true of the compositor ROLE:
 `win_input.c` and `win_surface.c` both key off it, and neither is
 window state.
 
+#### 6c -- DONE (2026-09-09). The presentation layer and the carriage
+
+**STAGE 6 SAID `win_server_ops` WENT WITH THE TABLE, AND IT DID NOT.**
+6a and 6b took the window state and left the registry that used to serve
+it, so this file claimed a removal the code had not made -- found by
+reading the two against each other rather than by any check, since
+nothing fails when a doc is wrong.
+
+What went, and why each was dead rather than merely unused:
+
+- **`struct win_server_ops`, `win_server_register()`,
+  `win_server_ops_current()` and `win_server_active()`.** The struct was
+  down to one slot, `debug_command`, and its header argued that the slot
+  survived because the `gui` channel is still the kernel's. The channel
+  is; the CALLBACK was the ring-0 WM's way of answering it, and a ring-3
+  compositor answers through `debug_via_compositor()` instead. Nothing
+  outside a KTEST had registered ops since `apps/wm/` was deleted.
+- **`win_server_active()`'s three live branches**, each always false: the
+  early return in `win_input_poll()` that kept a ring-0 WM's keys from
+  being eaten, the desktop-versus-second-consumer guard in
+  `compositor_gone()` (whose own comment said it could go with the ring-0
+  WM), and the `!g_ops` half of `win_server_request()`'s gate.
+  `win_server_any()` keeps its name and is now `g_comp_pid != 0`.
+- **`win_transport.c` and its header.** A registry whose one
+  implementation was a pair of direct calls, kept as the seam a second
+  carriage would plug into. That carriage arrived and is `uchan`, in ring
+  3, reaching the compositor without passing through ring 0 at all -- so
+  the seam was never used for the thing it was built for, and the two
+  callers left (`SYS_WIN_REQUEST` and the serial console) call
+  `win_server_request()` and `win_server_debug()` directly.
+  `WIN_PID_KERNEL` moved to `api/win_server.h` with them.
+
+**WHAT WAS LOST, stated rather than glossed.** Seven `wintransport`
+KTESTs went. Six drove the debug chunker -- a short reply, a long one
+reassembled byte for byte, one that exactly fills a chunk, an
+unrecognised subcommand against an empty one, a second caller mid-drain,
+and the same caller twice -- by registering a stub through the dead
+ring-0 path, which is the only way a KTEST could reach it. The seventh
+asserted that a transport with a missing slot is refused, which is a
+property of a registry that no longer exists. The chunker itself is
+unchanged and is exercised by every `gui` command the ring-3 tools send,
+so it is not uncovered; what is gone is coverage AT the chunk
+boundaries, and rewiring those six onto the compositor path (a test that
+claims the role and plays compositor with `DEBUG_TAKE`/`DEBUG_REPLY`)
+was considered and declined as more than this change was worth.
+
 ### Stage 7 -- popup surfaces -- DONE 2026-09-09
 
 Not in the original staging: it became possible the moment stage 6b
@@ -653,6 +699,9 @@ event queue carries `window` already, and the shm name carried the slot.
 
 ## Revision history
 
+- 2026-09-09 (later still): stage 6c -- the ring-0 presentation layer
+  and the transport registry deleted. Stage 6 had claimed the first of
+  those already.
 - 2026-09-09 (later): stage 7, popup surfaces -- the first thing built
   ON the emptied kernel rather than to empty it.
 - 2026-09-09: stages 6a and 6b built -- the kernel's window table is

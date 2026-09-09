@@ -810,8 +810,8 @@ Worth revisiting if a third and fourth source appear, because that is
 the point where scanning every source on every wake stops being free.
 
 **It has no production caller yet**, which by this repo's own rule
-leaves it unvalidated -- the same admission `win_transport.h` makes
-about the transport seam. A KTEST proves the event path bumps it, and
+leaves it unvalidated -- the same admission the TWP transport seam made
+about itself, above. A KTEST proves the event path bumps it, and
 reddens when that call is removed; the caller it exists for is the
 compositor, which gains nothing until there is a channel to wait on
 beside its queue.
@@ -846,14 +846,15 @@ Releasing `bufs[b].shm` would have put the NEW object and freed it under
 a live mapping. It is not a hazard any more -- the compositor's mapping
 IS its reference -- but it is the shape to expect from any bookkeeping
 that mirrors an owner's state instead of holding it.
-## The TWP transport seam has exactly one implementation, so it is UNVALIDATED
+## The TWP transport seam never got a second implementation, and was deleted
 
-Milestone 41's stage 3 added `struct win_transport`
-(`kernel/include/kernel/win_transport.h`) -- the same
+Milestone 41's stage 3 added `struct win_transport` -- the same
 one-struct-of-function-pointers registry as `display_driver` and the VFS
-backend probe -- and there is exactly ONE implementation behind it, the
-`direct` one that calls `win_server_request()`/`win_server_debug()` in
-process. So nothing proves the interface is not simply syscall-shaped.
+backend probe -- and it had exactly ONE implementation behind it for its
+whole life, the `direct` one calling
+`win_server_request()`/`win_server_debug()` in process. So nothing ever
+proved the interface was not simply syscall-shaped. What follows is the
+argument as it stood; how it resolved is at the end.
 
 That matters because this repo's standing rule is the opposite: an
 unreachable path is a guess, which is why `ata nodma`, `nopat` and TFS3
@@ -890,6 +891,24 @@ needs a carriage that can carry a payload the 24-byte `struct win_event`
 has no room for, and one that does not make a per-frame present wait for
 the compositor. There the ring is the mechanism, not an optimisation.
 `docs/winserver-ring3-design.md` carries that argument.
+
+**HOW IT ACTUALLY ENDED (2026-09-09), which is the part worth keeping.**
+The real second implementation arrived, and it did not plug in here. It
+is `uchan`, a shared-memory ring in RING 3: a client's window requests
+reach the compositor without entering the kernel at all, so there was
+never a second `struct win_transport` to register. The seam was built to
+let a carriage be swapped underneath `SYS_WIN_REQUEST`, and what happened
+instead was that the traffic left the syscall. It was deleted in stage
+6c with its one implementation inlined back into its two callers.
+
+**The lesson is about WHERE an abstraction is placed, not whether to
+build one.** The prediction that the seam might be "simply syscall-
+shaped" was right, and understated: it was syscall-*sited*. An
+indirection inside the thing being replaced cannot survive the
+replacement, however well shaped it is. The seam that did survive is the
+protocol itself -- `abi/win_proto.h`, typed messages -- which is exactly
+what let the traffic move rings without a rewrite, and which is the half
+this entry should have been about.
 
 ## `gui` output goes to a caller-supplied sink, not through a klog redirect
 
@@ -1648,10 +1667,10 @@ A syscall for the one operation a ring-3 window server needs most would
 have been the exact shape the protocol was designed to avoid.
 
 The argument against it was real, though, and worth recording because it
-looked fatal at first: every other request is refused outright when no
-presentation layer is registered, in TWO places -- `syscall.c`'s
-`win_server_active()` gate and `win_server_request()`'s own `!g_ops`
-guard. A compositor could therefore never register before the WM did.
+looked fatal at first: every other request was refused outright when no
+presentation layer was registered, in TWO places -- the syscall's own
+gate and `win_server_request()`'s. A compositor could therefore never
+register before the WM did.
 That is harmless in stages 2 and 3, where the ring-0 WM is always
 registered, and fatal in stage 4, where the ring-3 WM *is* the
 compositor and there is no kernel-side presentation layer left to

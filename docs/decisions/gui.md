@@ -911,8 +911,9 @@ red, on the page-table assertion) is in
 **Why the compositor's address space is captured at registration**
 rather than looked up per call: a mapping must not depend on which
 process happens to be current when the request arrives, since a batched
-or shared-ring transport breaks that assumption -- the same argument
-`win_server_ops` makes about taking `pid` explicitly. It also makes the
+or shared-ring transport breaks that assumption -- the same argument the
+since-deleted `win_server_ops` made about taking `pid` explicitly. It
+also makes the
 path reachable from a KTEST, which has no processes to look up, and
 that is the only reason these properties are tested at all.
 

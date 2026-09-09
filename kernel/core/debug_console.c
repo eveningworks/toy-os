@@ -29,7 +29,7 @@
 #include "sound.h"    // lsdev names the sound devices and which is active
 #include "input.h"    // ...and every registered input source
 #include "virtio_input.h" // ...and whether virtio input is actually delivering
-#include "win_transport.h" // `gui` travels as a protocol message now
+#include "win_server.h" // `gui` travels as a protocol message now
 #include "kfmt.h"
 #include "string.h"
 #include "pmm.h"
@@ -325,7 +325,7 @@ static void dbg_cmd_gui(const char *args) {
     msg.type = WIN_REQ_DEBUG_CMD;
     k_strlcpy(msg.text, args ? args : "", WIN_DEBUG_CMD_LEN);
 
-    int rc = win_transport_debug(WIN_PID_KERNEL, &msg);
+    int rc = win_server_debug(WIN_PID_KERNEL, &msg);
     if (rc == -EBUSY) {
         // /bin/guictl issues the same command from ring 3 and the
         // channel is one slot, so a refusal here means somebody else is
@@ -348,7 +348,7 @@ static void dbg_cmd_gui(const char *args) {
 
         k_memset(&msg, 0, sizeof msg);
         msg.type = WIN_REQ_DEBUG_MORE;
-        if (!win_transport_debug(WIN_PID_KERNEL, &msg)) return;
+        if (!win_server_debug(WIN_PID_KERNEL, &msg)) return;
     }
     klog_write("\r\ngui: (reply too long, stopped)\r\n");
 }

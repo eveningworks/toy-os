@@ -407,17 +407,13 @@ static void on_window_pong(int pid, uint32_t id, uint32_t serial);
 // boundary -- which is what has to stop before the WM can be a process.
 //
 // The command line is copied because wm_debug_dispatch_out() tokenises
-// it IN PLACE, and what arrives is the transport's message buffer.
-// NOT static, and not yet called from anywhere -- the one piece of the
-// inversion still missing.
+// it IN PLACE, and what arrives is the message buffer.
 //
-// In ring 0 the kernel calls this through win_server_ops when a `gui`
-// command arrives over the serial console. A ring-3 WM has to be sent
-// the command and send the OUTPUT BACK, and unlike every other callback
-// here that reply is not optional: all 22 GUI test tools read it, so
-// the desktop is unverifiable without it. It is also the only remaining
-// path that genuinely wants a round trip, because the console is waiting
-// on the answer.
+// The ring-0 WM answered a `gui` command by being called back; a ring-3
+// one is SENT the command and sends the OUTPUT BACK. That reply is not
+// optional -- every GUI test tool reads it, so the desktop is
+// unverifiable without it -- and it is the one path here that genuinely
+// wants a round trip, because the console is waiting on the answer.
 //
 // Exported rather than deleted so the gap is stated once, here, instead
 // of surfacing as an unused-function warning that reads like dead code.
@@ -612,10 +608,10 @@ void wm_client_check_timers(void) {
 // wm_rawin.c for the input half.
 // --- client requests, received (M41 stage 4d) -------------------------
 //
-// The inbound half of the inversion. In ring 0 the kernel CALLED the
-// eleven win_server_ops slots below; a ring-3 compositor is TOLD, one
-// WIN_EV_CLIENT_* event per callback, and reads back the detail it
-// needs. The handlers are unchanged -- only who invokes them is.
+// The inbound half of the inversion. The kernel used to CALL a ring-0
+// presentation layer's callbacks; a ring-3 compositor is TOLD instead,
+// one WIN_EV_CLIENT_* event per callback, and reads back the detail it
+// needs.
 //
 // Why the events are thin and this asks for the rest: struct win_event
 // is 24 bytes and a title is 32, so carrying the detail inline would

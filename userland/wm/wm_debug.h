@@ -36,12 +36,11 @@
 
 // --- where a `gui` command's output goes ------------------------------
 //
-// Milestone 41, stage 3. These used to write straight to sys_eprint(),
-// i.e. to whatever the serial debug console was connected to, which made
-// the reply unavailable to anything but that console. It has to become a
-// PAYLOAD now: the console reaches the WM over the transport (see
-// kernel/win_transport.h), and a message carries bytes, not side effects
-// on a serial port.
+// These used to write straight to sys_eprint(), i.e. to whatever the
+// serial debug console was connected to, which made the reply
+// unavailable to anything but that console. It is a PAYLOAD now: the
+// console asks win_server_debug() and a message carries bytes, not side
+// effects on a serial port.
 //
 // A caller-supplied sink rather than a klog capture/redirect, which was
 // the cheaper option and is the wrong one: a redirect is global, so
