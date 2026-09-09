@@ -673,7 +673,7 @@ run on, not by order.
 - [ ] Intel blitter acceleration on the BCS ring -- measured 2026-09-03: a software copy is 1.6 ms a screen, not worth it at 1080p
 - [x] ~~Runtime mode switching: a display driver can set a mode after boot~~ DONE 2026-09-02 -- `config set resolution`, every QEMU adapter
 - [ ] Initcall levels: drivers declare a boot slot instead of being called by name from `kernel_main()`
-- [ ] Loadable drivers: an export table and `modload` with a hello module, then one PCI driver, then `/etc/modules` -- `docs/modules-design.md`
+- [ ] Loadable drivers: `modload` with a hello module, then one PCI driver, then `/etc/modules` -- `docs/modules-design.md`
 - [ ] `virtio-net`: a NIC on the same transport, likely easier than e1000 once virtqueues exist
 - [x] ~~Every interrupt-taking driver on a vector where its device offers one~~ DONE 2026-09-05
 - [x] ~~`virtio-blk`: a block device that isn't ATA~~
