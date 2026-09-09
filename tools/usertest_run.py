@@ -200,6 +200,14 @@ TESTS = [
     # require a pass line that only appears when there is a font.
     ("ttf_test", 0,
      ["ttf_test:"], ["FAIL"]),
+    # THE RING-3 ATLAS AGAINST THE KERNEL'S, slot by slot. This is what
+    # makes moving font rasterisation out of ring 0 checkable rather than
+    # hoped for: one implementation compiled twice has to produce the
+    # same bytes on both sides, and QUERY_FONTGLYPH is the kernel's own
+    # hash to compare against. SKIPS ITSELF when no face is loaded, since
+    # the baked tables are not built by that code path at all.
+    ("font_atlas_test", 0,
+     ["font_atlas_test:"], ["FAIL"]),
     ("newsyscalls_test", 0,
      ["newsyscalls_test: all phases passed"], ["FAILED"]),
     ("file_test", 0,
