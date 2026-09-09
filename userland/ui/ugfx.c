@@ -981,6 +981,12 @@ void ugfx_fill_ellipse(struct ugfx_surface *s, int cx, int cy, int rx, int ry,
     geom_fill_ellipse(&t, cx, cy, rx, ry, color);
 }
 
+void ugfx_fill_polygon(struct ugfx_surface *s, const int *xs, const int *ys,
+                        int count, uint32_t color) {
+    struct geom_target t = target_for(s);
+    geom_fill_polygon(&t, xs, ys, count, color);
+}
+
 // --- the screen -------------------------------------------------------
 //
 // See ugfx.h for the three properties this has to respect. The one that

@@ -210,6 +210,70 @@ KTEST("geom", "a filled ellipse covers its centre and stops at its edge") {
     KTEST_ASSERT(!rec_has(70, 40));
 }
 
+KTEST("geom", "a filled square covers exactly the block its corners name") {
+    struct geom_target t = rec_target();
+    int xs[4] = { 10, 20, 20, 10 }, ys[4] = { 10, 10, 20, 20 };
+    geom_fill_polygon(&t, xs, ys, 4, 0xFFFFFF);
+    KTEST_ASSERT(rec_has(10, 10));
+    KTEST_ASSERT(rec_has(19, 19));
+    KTEST_ASSERT(!rec_has(20, 15));     // the right edge is out...
+    KTEST_ASSERT(!rec_has(15, 20));     // ...and so is the bottom one
+    KTEST_ASSERT(!rec_has(9, 15));
+    KTEST_ASSERT_EQ(g_rec.n, 100);      // every pixel once: no seam, no gap
+}
+
+KTEST("geom", "a filled polygon is even-odd, so a notch stays empty") {
+    struct geom_target t = rec_target();
+    // A U: 30 wide, 30 tall, with a 10-wide slot cut from the top.
+    int xs[8] = { 0, 10, 10, 20, 20, 30, 30, 0 };
+    int ys[8] = { 0,  0, 20, 20,  0,  0, 30, 30 };
+    geom_fill_polygon(&t, xs, ys, 8, 0xFFFFFF);
+    KTEST_ASSERT(rec_has(5, 5));        // the left arm
+    KTEST_ASSERT(rec_has(25, 5));       // the right arm
+    KTEST_ASSERT(rec_has(15, 25));      // the base
+    KTEST_ASSERT(!rec_has(15, 5));      // the slot
+    KTEST_ASSERT(!rec_has(15, 19));     // right down to its floor
+    KTEST_ASSERT(rec_has(15, 20));      // which is where the base starts
+}
+
+KTEST("geom", "a polygon with too many vertices is refused, not overrun") {
+    struct geom_target t = rec_target();
+    int xs[GEOM_POLY_MAX + 1], ys[GEOM_POLY_MAX + 1];
+    for (int i = 0; i <= GEOM_POLY_MAX; i++) { xs[i] = i; ys[i] = (i & 1) * 50; }
+    geom_fill_polygon(&t, xs, ys, GEOM_POLY_MAX + 1, 0xFFFFFF);
+    KTEST_ASSERT_EQ(g_rec.n, 0);
+}
+
+KTEST("geom", "a face normal points where the winding says") {
+    // The front face of a cube 160 units across, wound counter-
+    // clockwise on screen: the header promises a normal toward the eye
+    // (negative z), and the size is the one that overflowed Q16.16
+    // before the largest-component scaling.
+    struct geom_pt3 a = { fx_from_int(-80), fx_from_int(-80), fx_from_int(-80) };
+    struct geom_pt3 b = { fx_from_int(-80), fx_from_int( 80), fx_from_int(-80) };
+    struct geom_pt3 c = { fx_from_int( 80), fx_from_int( 80), fx_from_int(-80) };
+    struct geom_pt3 n = geom_face_normal3(a, b, c);
+    KTEST_ASSERT_EQ(n.x, 0);
+    KTEST_ASSERT_EQ(n.y, 0);
+    KTEST_ASSERT_EQ(n.z, -FX_ONE);
+    // The other winding is the other way.
+    n = geom_face_normal3(a, c, b);
+    KTEST_ASSERT_EQ(n.z, FX_ONE);
+}
+
+KTEST("geom", "Lambert: lit head-on is full, edge-on and turned away are dark") {
+    struct geom_pt3 n = { 0, 0, -FX_ONE };
+    struct geom_pt3 head_on = { 0, 0, -fx_from_int(7) };   // any length
+    struct geom_pt3 edge_on = { FX_ONE, 0, 0 };
+    struct geom_pt3 behind  = { 0, 0, FX_ONE };
+    struct geom_pt3 oblique = { -FX_ONE, 0, -FX_ONE };     // 45 degrees off
+    KTEST_ASSERT_EQ(geom_shade(n, head_on), 255);
+    KTEST_ASSERT_EQ(geom_shade(n, edge_on), 0);
+    KTEST_ASSERT_EQ(geom_shade(n, behind), 0);
+    int s = geom_shade(n, oblique);                        // cos 45 = 0.707
+    KTEST_ASSERT(s >= 179 && s <= 181);
+}
+
 KTEST("geom", "a degenerate shape is a point, not a crash") {
     struct geom_target t = rec_target();
     geom_circle(&t, 5, 5, 0, 0xFFFFFF, GEOM_ALIASED);

@@ -171,6 +171,48 @@ void geom_fill_ellipse(const struct geom_target *t, int cx, int cy, int rx, int 
     }
 }
 
+void geom_fill_polygon(const struct geom_target *t, const int *xs, const int *ys,
+                        int count, uint32_t color) {
+    if (!t || !t->plot || !xs || !ys || count < 3 || count > GEOM_POLY_MAX) return;
+
+    int ymin = ys[0], ymax = ys[0];
+    for (int i = 1; i < count; i++) {
+        if (ys[i] < ymin) ymin = ys[i];
+        if (ys[i] > ymax) ymax = ys[i];
+    }
+
+    for (int y = ymin; y < ymax; y++) {
+        // Where each edge crosses this row's centre line, Q16.16. An
+        // edge counts on [min(y0,y1), max(y0,y1)) -- half-open, so a
+        // vertex shared by two edges is crossed once, not twice.
+        fx_t xc[GEOM_POLY_MAX];
+        int n = 0;
+        fx_t ysample = fx_from_int(y) + FX_HALF;
+        for (int i = 0; i < count; i++) {
+            int j = (i + 1) % count;
+            int y0 = ys[i], y1 = ys[j];
+            if (y0 == y1) continue;
+            int lo = y0 < y1 ? y0 : y1, hi = y0 < y1 ? y1 : y0;
+            if (ysample < fx_from_int(lo) || ysample >= fx_from_int(hi)) continue;
+            int64_t num = (int64_t)(ysample - fx_from_int(y0)) * (xs[j] - xs[i]);
+            xc[n++] = fx_from_int(xs[i]) + (fx_t)(num / (y1 - y0));
+        }
+        for (int i = 1; i < n; i++) {          // insertion sort: n is tiny
+            fx_t v = xc[i];
+            int k = i;
+            while (k > 0 && xc[k - 1] > v) { xc[k] = xc[k - 1]; k--; }
+            xc[k] = v;
+        }
+        // Pixel x is inside when its centre lies in [xa, xb): the first
+        // such x is ceil(xa - 0.5), the last is ceil(xb - 0.5) - 1.
+        for (int i = 0; i + 1 < n; i += 2) {
+            int xa = fx_to_int(xc[i] - FX_HALF + FX_ONE - 1);
+            int xb = fx_to_int(xc[i + 1] - FX_HALF + FX_ONE - 1);
+            for (int x = xa; x < xb; x++) put(t, x, y, color, 255);
+        }
+    }
+}
+
 void geom_fill_circle(const struct geom_target *t, int cx, int cy, int r,
                        uint32_t color) {
     geom_fill_ellipse(t, cx, cy, r, r, color);
@@ -303,4 +345,60 @@ void geom_transform3(const struct geom_pt3 *pts, int count,
         out_xs[i] = cx + fx_round(q.x);
         out_ys[i] = cy + fx_round(q.y);
     }
+}
+
+// Largest-component scaling, shared by the normal and the shade: the
+// cross product of two 160-unit edges is 25600 units, which is already
+// past what Q16.16 holds, so the direction is kept and the length is
+// not. Vectors are scaled in int64 and only then narrowed.
+static struct geom_pt3 unit_by_max(int64_t x, int64_t y, int64_t z) {
+    int64_t m = x < 0 ? -x : x;
+    int64_t ay = y < 0 ? -y : y, az = z < 0 ? -z : z;
+    if (ay > m) m = ay;
+    if (az > m) m = az;
+    struct geom_pt3 r = { 0, 0, 0 };
+    if (m == 0) return r;
+    r.x = (fx_t)(x * FX_ONE / m);
+    r.y = (fx_t)(y * FX_ONE / m);
+    r.z = (fx_t)(z * FX_ONE / m);
+    return r;
+}
+
+struct geom_pt3 geom_face_normal3(struct geom_pt3 a, struct geom_pt3 b,
+                                   struct geom_pt3 c) {
+    int64_t ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
+    int64_t vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
+    return unit_by_max(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+}
+
+static uint64_t isqrt64(uint64_t n) {
+    uint64_t root = 0, rem = n, place = 1ull << 62;
+    while (place > rem) place >>= 2;
+    while (place) {
+        if (rem >= root + place) {
+            rem -= root + place;
+            root += place << 1;
+        }
+        root >>= 1;
+        place >>= 2;
+    }
+    return root;
+}
+
+int geom_shade(struct geom_pt3 n, struct geom_pt3 light) {
+    // Both scaled to |component| <= 1.0 first, so every product below
+    // fits: a term is at most 2^32 and a sum of three at most 3 * 2^32.
+    n = unit_by_max(n.x, n.y, n.z);
+    light = unit_by_max(light.x, light.y, light.z);
+    int64_t dot = (int64_t)n.x * light.x + (int64_t)n.y * light.y + (int64_t)n.z * light.z;
+    if (dot <= 0) return 0;
+    uint64_t nn = (uint64_t)((int64_t)n.x * n.x + (int64_t)n.y * n.y + (int64_t)n.z * n.z);
+    uint64_t ll = (uint64_t)((int64_t)light.x * light.x + (int64_t)light.y * light.y +
+                             (int64_t)light.z * light.z);
+    // sqrt(nn) * sqrt(ll), never sqrt(nn * ll): the product of the two
+    // squares does not fit in 64 bits, the product of the roots does.
+    int64_t den = (int64_t)(isqrt64(nn) * isqrt64(ll));
+    if (den <= 0) return 0;
+    int64_t shade = (dot * 255 + den / 2) / den;
+    return shade > 255 ? 255 : (int)shade;
 }

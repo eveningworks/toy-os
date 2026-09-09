@@ -1,8 +1,8 @@
 // Shapes -- a ring-3 client demonstrating the geometry primitives.
 //
-// A wireframe triangle and an ellipse, both rotating, drawn with the
-// shared geometry module (kernel/lib/geom.c) through the canvas widget
-// (userland/uwidgets.c). Every pixel here comes from code the KERNEL
+// A wireframe triangle and an ellipse, both rotating, and a cube that
+// is a wireframe or a lit solid, drawn with the shared geometry module
+// (kernel/lib/geom.c) through the canvas widget (ui/uui_canvas.h). Every pixel here comes from code the KERNEL
 // also uses -- the same Bresenham, the same ellipse rasteriser, the
 // same fixed-point trig -- compiled a second time for ring 3.
 //
@@ -53,6 +53,9 @@ static struct uui_button_group g_bar;
 // disagreeing with what is drawn. `g_aa` and `g_checkbox_hover` were two
 // separate globals the widget had to be handed on every call.
 static struct uui_checkbox g_aa_check;
+// The cube's second toggle: filled and lit, or the wireframe it started
+// as. Same single-store rule as the anti-aliasing box.
+static struct uui_checkbox g_shade_check;
 static fx_t g_angle;            // in turns; wraps naturally
 static int g_speed = 3;         // angle steps per frame, in 1/1024 turns
 static int g_frames;
@@ -104,6 +107,26 @@ static const uint8_t CUBE_EDGES[12][2] = {
     {4,5},{5,6},{6,7},{7,4},   // z = +half
     {0,4},{1,5},{2,6},{3,7},   // the struts
 };
+
+// The six faces, each wound so geom_face_normal3() points OUT of the
+// cube (geom.h states the rule): a face is drawn when its normal has a
+// component toward the eye, and a convex solid needs no other hidden-
+// surface work at all -- what is behind it is exactly the faces that
+// face away.
+static const uint8_t CUBE_FACES[6][4] = {
+    {0,3,2,1},   // z = -half, nearest the eye at rest
+    {4,5,6,7},   // z = +half
+    {0,1,5,4},   // y = -half, the top
+    {3,7,6,2},   // y = +half
+    {0,4,7,3},   // x = -half
+    {1,2,6,5},   // x = +half
+};
+
+// Where the light comes from: above, to the left, and in front of the
+// cube (y is down, z is away). Fixed in the world, not on the cube, so
+// a face brightens and dims as it turns through the beam -- which is
+// what makes the rotation legible as a solid.
+static const struct geom_pt3 LIGHT = { -FX_ONE, -FX_ONE * 3 / 2, -FX_ONE };
 
 
 // Appends a decimal integer. There is no printf in ring 3 yet (see
@@ -206,8 +229,52 @@ static void draw_cube(struct ugfx_surface *s, int cx, int cy, enum geom_aa aa) {
     // yawing alone shows the same silhouette four times per turn, and a
     // pitch of exactly half the yaw repeats on a short cycle too. Both
     // make it look like a much simpler shape than it is.
-    geom_transform3(CUBE, 8, g_angle, fx_mul(g_angle, 24248 /* ~0.37 */), 0,
-                     FX_ONE, CUBE_DIST, cx, cy, xs, ys, z);
+    fx_t yaw = g_angle, pitch = fx_mul(g_angle, 24248 /* ~0.37 */);
+    geom_transform3(CUBE, 8, yaw, pitch, 0, FX_ONE, CUBE_DIST, cx, cy, xs, ys, z);
+
+    if (g_shade_check.checked) {
+        // The rotated corners again, in 3D this time: a face's normal
+        // needs all three coordinates and geom_transform3() hands back
+        // only the depth. Same rotation, same call, so the two cannot
+        // disagree about where a corner went.
+        struct geom_pt3 r[8];
+        for (int i = 0; i < 8; i++) r[i] = geom_rotate3(CUBE[i], yaw, pitch, 0);
+
+        for (int f = 0; f < 6; f++) {
+            const uint8_t *q = CUBE_FACES[f];
+            struct geom_pt3 n = geom_face_normal3(r[q[0]], r[q[1]], r[q[2]]);
+            // Front-facing when the normal has a component toward the
+            // eye, which sits at (0, 0, -dist): the view vector from a
+            // corner to it, dotted with the normal. Perspective makes
+            // this differ from a plain "n.z < 0" for a face seen
+            // nearly edge-on, and the difference is a face that would
+            // otherwise be drawn over a nearer one.
+            int64_t vx = -r[q[0]].x, vy = -r[q[0]].y, vz = -(int64_t)CUBE_DIST - r[q[0]].z;
+            if ((int64_t)n.x * vx + (int64_t)n.y * vy + (int64_t)n.z * vz <= 0) continue;
+
+            // Lambert over an ambient floor, so a face turned from the
+            // light is dim rather than black -- black would read as a
+            // hole.
+            int lit = geom_shade(n, LIGHT);
+            int k = 70 + lit * 185 / 255;                  // 70..255
+            uint32_t color = ugfx_rgb((uint8_t)(90 * k / 255),
+                                      (uint8_t)(200 * k / 255),
+                                      (uint8_t)(250 * k / 255));
+            int fx4[4], fy4[4];
+            for (int i = 0; i < 4; i++) {
+                fx4[i] = xs[q[i]] - g_canvas.x;
+                fy4[i] = ys[q[i]] - g_canvas.y;
+            }
+            uui_canvas_fill_polygon(s, &g_canvas, fx4, fy4, 4, color);
+            // Its outline, over the fill: the seam between two lit
+            // faces is where the eye reads the corner, and two flat
+            // colours meeting without a line look like one bent sheet.
+            int ox[4], oy[4];
+            for (int i = 0; i < 4; i++) { ox[i] = xs[q[i]]; oy[i] = ys[q[i]]; }
+            uui_canvas_polyline(s, &g_canvas, ox, oy, 4, 1, ugfx_rgb(24, 40, 60), aa);
+        }
+        return;   // no wireframe through a solid, and no corner dots
+    }
 
     for (int e = 0; e < 12; e++) {
         int a = CUBE_EDGES[e][0], b = CUBE_EDGES[e][1];
@@ -312,6 +379,10 @@ static void draw(struct ugfx_surface *s) {
 
     uui_checkbox_set_geometry(&g_aa_check, MARGIN, checkbox_y());
     uui_checkbox_draw(s, &g_aa_check);
+    int aw = 0, ah = 0;
+    uui_checkbox_natural_size(&g_aa_check, &aw, &ah);
+    uui_checkbox_set_geometry(&g_shade_check, MARGIN + aw + 3 * ugfx_char_w(), checkbox_y());
+    uui_checkbox_draw(s, &g_shade_check);
 
     // Readout, right-aligned so it does not jump around as digits change.
     char info[48];
@@ -360,6 +431,10 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         g_scene = (g_scene == SCENE_3D) ? SCENE_2D : SCENE_3D;
         log_scene();
     }
+    if (key == 'f' || key == 'F') {
+        ulog(uui_checkbox_toggle(&g_shade_check)
+                  ? "gfxdemo: shaded on\n" : "gfxdemo: shaded off\n");
+    }
     if (key == '+' || key == '=') { if (g_speed < 40) { g_speed++; log_speed(); } }
     if (key == '-') { if (g_speed > 0) { g_speed--; log_speed(); } }
 }
@@ -374,11 +449,18 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
         ulog(uui_checkbox_toggle(&g_aa_check)
                   ? "gfxdemo: aa on\n" : "gfxdemo: aa off\n");
     }
+    if (uui_checkbox_hit(&g_shade_check, x, y)) {
+        ulog(uui_checkbox_toggle(&g_shade_check)
+                  ? "gfxdemo: shaded on\n" : "gfxdemo: shaded off\n");
+    }
 }
 
 static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     (void)a;
-    if (!buttons) uui_checkbox_hover(&g_aa_check, x, y);
+    if (!buttons) {
+        uui_checkbox_hover(&g_aa_check, x, y);
+        uui_checkbox_hover(&g_shade_check, x, y);
+    }
 }
 
 // A button COMMITTED -- pressed and released on the same control. The
@@ -412,12 +494,17 @@ static void on_open(struct uapp *a) {
     // Anti-aliasing starts on, and the checkbox holds that fact -- see
     // g_aa_check's declaration.
     uui_checkbox_init(&g_aa_check, MARGIN, checkbox_y(), ugfx_char_h(),
-                       "anti-aliased  (A)   scene: S", UTHEME_PANEL_BG, UTHEME_TEXT);
+                       "anti-aliased (A)", UTHEME_PANEL_BG, UTHEME_TEXT);
     g_aa_check.checked = 1;
+    // Off at first: the wireframe is the demo's proof that the
+    // projection is real, and a solid hides the far edges that show it.
+    uui_checkbox_init(&g_shade_check, 0, checkbox_y(), ugfx_char_h(),
+                       "shaded (F)   scene: S", UTHEME_PANEL_BG, UTHEME_TEXT);
     layout();
 
     ulog("gfxdemo: ready\n");
     ulog("gfxdemo: aa on\n");
+    ulog("gfxdemo: shaded off\n");
     log_layout();
     log_buttons();
     log_speed();

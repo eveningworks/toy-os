@@ -120,8 +120,10 @@ trips them before it knows to look anything up.
     full rotation and `fx_sin(FX_ONE/4)` is exactly 1. There is no
     floating point in this kernel (`-mno-sse`).
   - **`geom.h` is deliberately NOT a 3D engine** -- no matrices, faces,
-    depth buffer or clipping planes. Its `geom_rotate3` is yaw then
-    pitch then roll, a fixed order because rotations don't commute.
+    depth buffer or clipping planes; the face list is the CALLER's, and
+    what geom lends it is `geom_face_normal3()` + `geom_shade()` (see
+    `docs/decisions.md`). Its `geom_rotate3` is yaw then pitch then
+    roll, a fixed order because rotations don't commute.
   - **`krandom.h` is deliberately NOT a CSPRNG, and
     `krandom_quality()` is how a caller finds that out** instead of
     assuming. The quality enum is ORDERED BY TRUST, and a source that

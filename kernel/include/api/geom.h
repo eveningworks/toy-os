@@ -95,6 +95,19 @@ void geom_fill_circle(const struct geom_target *t, int cx, int cy, int r,
 // ANGLES ARE TURNS (fixed.h), and turn 0 is at 3 o'clock with positive
 // turns going CLOCKWISE on screen, because y grows downward. A gauge
 // that wants to start at the top passes `from = -FX_ONE / 4`.
+// --- filled polygons -------------------------------------------------
+//
+// Scanline fill, EVEN-ODD, sampled at pixel centres: pixel (x, y) is
+// inside when (x + 0.5, y + 0.5) is. That rule is what makes two faces
+// sharing an edge tile without a gap or a double-covered seam, and it
+// makes a square from (10,10) to (20,20) cover exactly the 10x10 block
+// geom_fill_rect would -- the right edge and bottom edge are OUT.
+// Convex or concave, up to GEOM_POLY_MAX vertices; more is refused.
+// Edges are aliased: a face is filled and then outlined by the caller.
+#define GEOM_POLY_MAX 32
+void geom_fill_polygon(const struct geom_target *t, const int *xs, const int *ys,
+                        int count, uint32_t color);
+
 void geom_fill_ring(const struct geom_target *t, int cx, int cy,
                      int r_outer, int r_inner, fx_t from, fx_t to,
                      uint32_t color);
@@ -126,7 +139,9 @@ void geom_transform(const struct geom_pt *pts, int count,
 // beside it, and what this file owns is the part every caller would
 // otherwise re-derive identically -- three axis rotations and a
 // perspective divide, in Q16.16, with angles in TURNS like everything
-// else here.
+// else here -- plus the two sums a caller's own face list needs to be
+// lit: a face's normal and a Lambert shade. The FACE LIST stays the
+// caller's, which is the line between "helpers" and "engine".
 //
 // It lives in geom.c rather than in the one app that wanted it because
 // this file IS the shared geometry home: it is compiled twice, so the
@@ -167,5 +182,20 @@ void geom_transform3(const struct geom_pt3 *pts, int count,
                       fx_t yaw, fx_t pitch, fx_t roll, fx_t scale,
                       fx_t dist, int cx, int cy,
                       int *out_xs, int *out_ys, fx_t *out_z);
+
+// The normal of the face through a, b, c: (b - a) x (c - a), DIRECTION
+// ONLY -- scaled so its largest component is exactly +-1.0, whatever the
+// model's units, so a 160-unit face cannot overflow Q16.16 and the
+// result compares across faces. With x right, y down and z away from
+// the eye, a face wound CLOCKWISE on screen has a normal pointing AWAY
+// (positive z); wind a model's faces so their normals point out of it
+// and a face is front-facing when its normal points at the eye.
+struct geom_pt3 geom_face_normal3(struct geom_pt3 a, struct geom_pt3 b,
+                                   struct geom_pt3 c);
+
+// Lambert: how lit a face with normal `n` is by light arriving FROM
+// direction `light`, 0..255 -- the cosine between them, 0 for a face
+// turned away. Neither vector need be unit length.
+int geom_shade(struct geom_pt3 n, struct geom_pt3 light);
 
 #endif

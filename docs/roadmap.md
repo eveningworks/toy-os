@@ -518,7 +518,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~A not-responding timeout and a way to force-quit a client that ignores `WIN_EV_CLOSE`~~ done
 - [x] ~~`WIN_REQ_POPUP` -- a popup SURFACE, so a menu can leave its window~~ DONE 2026-09-09 -- placed by the compositor
 - [ ] `uui_dropdown`'s list and `uui_toolbar`'s tooltip onto popup surfaces -- the next callers of `ui/uui_popup.h`
-- [ ] Fill a POLYGON, not just an ellipse
+- [x] ~~Fill a POLYGON, not just an ellipse~~ DONE 2026-09-09 -- `geom_fill_polygon`, even-odd at pixel centres; Shapes' lit cube
 - [x] ~~Clipping RECTANGLES as a first-class concept in `ugfx`~~ DONE 2026-08-18
 - [x] ~~An animation/timer event, so a client does not have to poll~~ DONE 2026-08-18 -- `tick_ms` / `WIN_EV_TIMER`
 - [x] ~~The toolkit as a real shared library rather than static per client~~ DONE 2026-09-04 -- `/lib/libuapp.so`

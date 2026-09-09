@@ -62,6 +62,7 @@ DEFAULT_SOCK = ".vm.serial"
 # `gui key` splits its arguments on whitespace and parses ints that way.
 K_A = "0x61"        # toggle anti-aliasing
 K_S = "0x73"        # toggle the 2D / 3D scene
+K_F = "0x66"        # toggle the shaded (filled, lit) cube
 K_MINUS = "0x2d"    # slower
 K_PLUS = "0x2b"     # faster
 K_Q = "0x71"        # quit
@@ -317,6 +318,39 @@ def check_cube(d):
             "2D one, both aliased -- a per-edge depth shade is the only thing "
             "that can add them, and it needs a real projection to exist")
 
+    # The SHADED cube, on the same still frame. Three properties, each
+    # chosen so the wireframe -- or a fill that ignores the light --
+    # cannot pass it: a solid inks several times the pixels a wireframe
+    # does; two faces lit from one fixed direction come out as two
+    # different flat colours, each covering a face's worth of pixels
+    # (an edge is a few hundred pixels at most, a face is thousands);
+    # and switching back restores the wireframe EXACTLY, since nothing
+    # else moved.
+    bg = (16, 18, 24)   # the canvas background gfxdemo.c paints
+    def ink(img):
+        return sum(n for n, c in (img.getcolors(1 << 24) or []) if c != bg)
+    def big_colors(img, floor=1000):
+        return [c for n, c in (img.getcolors(1 << 24) or []) if c != bg and n >= floor]
+    got = d.key_until(K_F, "gfxdemo: shaded on")
+    d.check_log("pressing F fills the cube", got, "gfxdemo: shaded on")
+    time.sleep(0.5)
+    solid = d.canvas_image("scene-3d-shaded")
+    wire_ink, solid_ink = ink(cube), ink(solid)
+    print(f"        ({wire_ink} inked pixels as a wireframe, {solid_ink} shaded)")
+    d.check("a shaded cube is a solid, not an outline",
+            solid_ink > 3 * wire_ink,
+            f"{solid_ink} inked pixels shaded vs {wire_ink} as a wireframe")
+    d.check("a wireframe has no face-sized flat colour",
+            len(big_colors(cube)) == 0,
+            f"{big_colors(cube)} -- the control: an outline must not trip the face check")
+    got = d.key_until(K_F, "gfxdemo: shaded off")
+    d.check_log("pressing F again restores the wireframe", got, "gfxdemo: shaded off")
+    time.sleep(0.5)
+    wire_again = d.canvas_image("scene-3d-wire-again")
+    d.check("the wireframe comes back pixel-identical",
+            d.differing_fraction(cube, wire_again) == 0.0,
+            "the fill left something behind, or the angle moved at speed 0")
+
     # Round trip, taken NOW rather than at the end of this function: the
     # claim is "the same angle draws the same pixels", so nothing between
     # the two captures may advance the angle. The first draft ran the
@@ -342,6 +376,26 @@ def check_cube(d):
     b = d.canvas_image("cube-spin-b")
     d.check("the cube is rotating", d.differing_fraction(a, b) > 0.01,
             "the cube did not move between frames")
+
+    # LIT, not merely filled: every face is painted from ONE base
+    # colour, so at any angle an unlit fill shows one flat colour and
+    # only a light can make the big faces differ from one moment to the
+    # next as the cube turns through it. Compared over a spin rather
+    # than at one angle because a face-on cube shows a single face, and
+    # that angle is whichever one the speed happened to reach 0 at.
+    got = d.key_until(K_F, "gfxdemo: shaded on")
+    d.check_log("F fills the spinning cube", got, "gfxdemo: shaded on")
+    time.sleep(0.4)
+    lit_a = set(big_colors(d.canvas_image("cube-lit-a")))
+    time.sleep(0.7)
+    lit_b = set(big_colors(d.canvas_image("cube-lit-b")))
+    print(f"        (face colours {sorted(lit_a)} then {sorted(lit_b)})")
+    d.check("a face's colour changes as it turns through the light",
+            lit_a and lit_b and lit_a != lit_b,
+            f"{sorted(lit_a)} then {sorted(lit_b)} -- one base colour and a "
+            "fixed light must shade a turning face differently over time")
+    got = d.key_until(K_F, "gfxdemo: shaded off")
+    d.check_log("F restores the wireframe", got, "gfxdemo: shaded off")
 
     d.check("the cube stops at speed 0", d.set_speed(0))
     time.sleep(0.5)

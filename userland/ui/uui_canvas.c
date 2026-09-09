@@ -100,3 +100,13 @@ void uui_canvas_fill_ellipse(struct ugfx_surface *s, const struct uui_canvas *c,
     struct geom_target t = canvas_target(&cc, s, c);
     geom_fill_ellipse(&t, c->x + cx, c->y + cy, rx, ry, color);
 }
+
+void uui_canvas_fill_polygon(struct ugfx_surface *s, const struct uui_canvas *c,
+                              const int *xs, const int *ys, int count, uint32_t color) {
+    if (count < 3 || count > GEOM_POLY_MAX) return;
+    int sx[GEOM_POLY_MAX], sy[GEOM_POLY_MAX];
+    for (int i = 0; i < count; i++) { sx[i] = c->x + xs[i]; sy[i] = c->y + ys[i]; }
+    struct canvas_clip cc;
+    struct geom_target t = canvas_target(&cc, s, c);
+    geom_fill_polygon(&t, sx, sy, count, color);
+}

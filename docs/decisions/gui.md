@@ -6695,3 +6695,41 @@ And **the surface serves one widget so far.** `uui_dropdown`'s list and
 callers (`docs/roadmap.md`); the tooltip is the second copy of
 flip/clamp in the toolkit and the one that flips against the surface's
 own size.
+
+## A face is lit by two geom helpers, and the face list stays the caller's
+
+`geom.h`'s 3D section says it is not an engine -- no matrices, no
+faces, no depth buffer -- and Shapes' shaded cube (2026-09-09) is the
+first thing that could have argued otherwise. What it needed was a
+polygon fill, a face normal and a Lambert shade; what it did NOT need
+was for geom to know what a face is.
+
+**What real renderers do.** Flat shading with back-face culling is the
+whole of a Quake-era software renderer's lighting for a convex solid:
+one cross product per face, one dot with the light, and no sort at all,
+because on a convex body the faces that face away are exactly the ones
+that are hidden. A mesh type (vertices + faces + per-face colour +
+`draw_mesh()`) is what every small 3D library grows next, and then a
+depth buffer, and then clipping planes.
+
+**What toy-os does.** `geom_fill_polygon()` is the roadmap's polygon
+fill, even-odd and sampled at PIXEL CENTRES so two faces sharing an
+edge tile with no seam and no double coverage -- a square from (10,10)
+to (20,20) covers the same 100 pixels a rect fill would. `geom_face_
+normal3()` and `geom_shade()` are the two sums a caller's own face list
+needs; both scale by the largest component before anything is
+multiplied, because the cross product of two 160-unit edges is already
+past Q16.16. The FACE LIST, the winding, the culling test and the
+painter's order stay in the app, and that is the line: geom answers a
+geometric question about three points, it never walks a model. Declined:
+a `geom_mesh` drawn by one call (the engine geom.h refuses, and its
+first caller is a demo), and lighting inside `gfxdemo.c` alone (the
+cross product and the overflow are exactly what a second 3D caller
+would re-derive wrong).
+
+The one convention it adds is the winding rule, stated in `geom.h`:
+with x right, y down and z away from the eye, a face wound clockwise on
+screen has a normal pointing away, so a model winds its faces so the
+normals point OUT and tests visibility against the eye. Gouraud was
+declined for the cube specifically -- averaging a corner's three face
+normals smooths the one thing a cube has, its edges.

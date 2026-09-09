@@ -441,6 +441,11 @@ void ugfx_draw_ellipse(struct ugfx_surface *s, int cx, int cy, int rx, int ry,
 void ugfx_fill_circle(struct ugfx_surface *s, int cx, int cy, int r, uint32_t color);
 void ugfx_fill_ellipse(struct ugfx_surface *s, int cx, int cy, int rx, int ry,
                         uint32_t color);
+// Even-odd scanline fill of a polygon, at most GEOM_POLY_MAX vertices --
+// see geom_fill_polygon() for the pixel-centre rule that lets two faces
+// share an edge without a seam.
+void ugfx_fill_polygon(struct ugfx_surface *s, const int *xs, const int *ys,
+                        int count, uint32_t color);
 
 // A filled annulus sector -- what a ring gauge is made of. Angles are
 // TURNS (fixed.h), turn 0 at 3 o'clock, positive going clockwise on

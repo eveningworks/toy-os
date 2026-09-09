@@ -52,6 +52,8 @@ void uui_canvas_circle(struct ugfx_surface *s, const struct uui_canvas *c,
                         int cx, int cy, int r, uint32_t color, enum geom_aa aa);
 void uui_canvas_fill_ellipse(struct ugfx_surface *s, const struct uui_canvas *c,
                               int cx, int cy, int rx, int ry, uint32_t color);
+void uui_canvas_fill_polygon(struct ugfx_surface *s, const struct uui_canvas *c,
+                              const int *xs, const int *ys, int count, uint32_t color);
 
 int uui_canvas_hit(const struct uui_canvas *c, int cx, int cy);
 
