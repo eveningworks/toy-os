@@ -1203,9 +1203,16 @@ font task. A `.ttf` is untrusted input being parsed in the kernel -- the
 surface Windows spent a decade of GDI CVEs on before Windows 10 moved it
 to `fontdrvhost` -- and `ttf.c` is bounds-checked throughout because of
 it. Actually moving it needs a way to hand a rasterized atlas from a
-ring-3 process to the compositor and the console, i.e. shared memory this
-OS does not have. Doing it without that would mean copying an atlas
-through a syscall per font change, which is the wrong shape.
+ring-3 process to the compositor and the console.
+
+**THAT BLOCKER IS GONE (2026-09-09).** This entry said the atlas needed
+"shared memory this OS does not have"; the window-server migration built
+it. An atlas becomes a named shm object the font process creates and
+grants (`SYS_SHM_OPEN` / `SYS_SHM_GRANT`), which is the shape
+`/bin/soundd` and `/bin/clipboardd` already use for a large buffer one
+process produces and others read. What is still owed is the CONSOLE's
+copy: ring 0 draws text before any ring-3 process exists, so the baked
+tables stay as the boot font whatever happens to the session font.
 
 **Composite 2x2 transforms** are skipped: a component glyph is placed by
 its offset and drawn at natural size. Every accent in both shipped faces
