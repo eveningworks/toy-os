@@ -41,9 +41,6 @@ static int sys_removed(struct syscall_ctx *c) {
 static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_EXIT]          = { "exit",          sys_exit,          { A_INT } },
     [SYS_WRITE]         = { "write",         sys_write,         { A_FD, A_BUF, A_INT } },
-    [SYS_GUI_INIT]      = { "gui_init",      sys_gui_init,      { A_HEX } },
-    [SYS_GUI_POLL_KEY]  = { "gui_poll_key",  sys_gui_poll_key,  { A_END } },
-    [SYS_READ_KEY]      = { "read_key",      sys_read_key,      { A_END } },
     // The one syscall returning a pointer rather than a count/status --
     // and the reason a handler reports "I parked" separately from its
     // return value, since no 64-bit value is free to mean anything else.
@@ -182,6 +179,9 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
 // row, which dispatch silently no-ops in a way indistinguishable from a
 // syscall returning 0.
 static const uint64_t SYSCALL_RETIRED[] = {
+    3,   // SYS_GUI_INIT     -- mapped the whole framebuffer to ANY caller
+    4,   // SYS_GUI_POLL_KEY -- deleted 2026-09-09 with their one caller
+    5,   // SYS_READ_KEY     -- fd 0 blocks now; see abi/syscall_abi.h
     7,   // SYS_WIN_CREATE  -- the kernel composited a window itself
     8,   // SYS_WIN_PRESENT -- deleted 2026-09-08, see abi/syscall_abi.h
     39,  // SYS_WIN_DEBUG   -- deleted 2026-09-09; the `gui` relay became

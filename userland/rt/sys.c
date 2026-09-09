@@ -470,8 +470,6 @@ int64_t sys_eprint(const char *s) {
 
 // --- input and time --------------------------------------------------
 
-int sys_read_key(void) { return (int)syscall0(SYS_READ_KEY); }
-
 int sys_gettime(struct rtc_time *out) {
     return (int)err(syscall1(SYS_GETTIME, (uint64_t)(uintptr_t)out));
 }
@@ -781,15 +779,6 @@ int sys_kill(int pid, int sig) {
 int sys_set_color(int fg, int bg) {
     return (int)err(syscall2(SYS_SET_COLOR, (uint64_t)(int64_t)fg, (uint64_t)(int64_t)bg));
 }
-
-// --- the older, modal GUI syscalls -----------------------------------
-
-int sys_gui_init(struct gui_info *out) {
-    return (int)err(syscall1(SYS_GUI_INIT, (uint64_t)(uintptr_t)out));
-}
-
-int sys_gui_poll_key(void) { return (int)syscall0(SYS_GUI_POLL_KEY); }
-
 
 // --- processes and pipes ----------------------------------------------
 

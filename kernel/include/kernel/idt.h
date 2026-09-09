@@ -28,9 +28,10 @@ void idt_set_ring3_fault_hook(ring3_fault_hook_fn hook);
 // It is NOT safe to `sti` then block (`hlt` or otherwise) when this
 // returns true. g_next_kernel_rsp (this file) is a single global
 // "where to resume" pointer, unconditionally overwritten by every
-// isr_dispatch() call including a nested one -- see the SYS_READ_KEY
-// comment in syscall.c for the exact failure this caused the one time
-// it was tried anyway (worked for one keystroke, then hung). Fixing
+// isr_dispatch() call including a nested one, so a nested IRQ handler
+// clobbers the outer syscall's resume point and its epilogue returns
+// into a stale frame (a blocking keyboard syscall was tried that way:
+// it worked for one keystroke, then hung). Fixing
 // that reentrancy is its own separate, not-yet-done item (README.md's
 // "Ideas for what's next") -- this function exists so callers can
 // route AROUND the hazard instead (poll instead of block) rather than

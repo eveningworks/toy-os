@@ -1360,8 +1360,8 @@ static void scheduler_rotate(uint64_t *regs) {
 // The obvious implementation of a blocking syscall -- `sti`, then spin
 // or `hlt` inside the handler until the thing you're waiting for
 // arrives -- was tried in this kernel and is genuinely unsafe here, not
-// merely slow. syscall.c's SYS_READ_KEY comment has the full autopsy:
-// it worked for exactly one keystroke and then hung, because
+// merely slow. A blocking keyboard read was built that way once: it
+// worked for exactly one keystroke and then hung, because
 // g_next_kernel_rsp (idt.c) is a single global "where to resume"
 // pointer. It is correct for the scheduler's own use but was never
 // meant to be reentrant, so a nested IRQ handler overwrites it while

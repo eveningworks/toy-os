@@ -55,10 +55,9 @@
 // still sitting here after a hundred successful calls.
 //
 // WHICH CALLS SET IT: every wrapper below whose failure value is -1 --
-// which since the polarity flip is ALL of them except the ones where
-// -1 is not a failure: sys_read_key() and sys_gui_poll_key() return -1
-// for "no key waiting". sys_sbrk() is the exception in the other
-// direction: it keeps returning (void *)-1 and sets this to ENOMEM.
+// which since the polarity flip is ALL of them. sys_sbrk() is the
+// exception in the other direction: it keeps returning (void *)-1 and
+// sets this to ENOMEM.
 int sys_errno(void);
 
 // The message for a code -- what a program prints when it has to tell a
@@ -273,11 +272,6 @@ int64_t sys_print(const char *s);
 int64_t sys_eprint(const char *s);
 
 // --- input and time --------------------------------------------------
-
-// Non-blocking: returns the next queued key, or -1 if none. See
-// syscall_abi.h for why there is no blocking variant of THIS call --
-// use sys_wait_event() instead for anything new.
-int sys_read_key(void);
 
 // The console's size in text cells. Returns rows, and stores columns
 // through `cols` when it is non-NULL. Never fails.
@@ -725,17 +719,6 @@ int sys_crashtest(struct crash_msg *msg);
 // Sets the console colours this process writes in. Both are
 // `enum vga_color` values; out-of-range is refused, not clamped.
 int sys_set_color(int fg, int bg);
-
-// --- the older, modal GUI syscalls -----------------------------------
-//
-// Superseded by the windowing protocol below for anything new -- these
-// map the whole framebuffer (or one kernel-composited buffer) to a
-// single process and take over the screen. Kept because
-// userland/gui_test.c and win_test.c are what prove those paths still
-// work. See syscall_abi.h.
-
-int sys_gui_init(struct gui_info *out);
-int sys_gui_poll_key(void);
 
 // --- processes and pipes ----------------------------------------------
 

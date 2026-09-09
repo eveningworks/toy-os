@@ -498,9 +498,9 @@ sys_do_read_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
 //
 // The counterpart of sys_do_write_console() below, and the reason
 // /bin/tosh can exist: a ring-3 shell needs somewhere to read a line
-// from, and until this there was nowhere. SYS_READ_KEY is the only
-// other way in and is non-blocking BY REQUIREMENT (see its handler in
-// win_syscalls.c), so a program wanting a keystroke had to spin.
+// from, and until this there was nowhere: the non-blocking key read
+// that preceded it (SYS_READ_KEY, retired) made a program wanting a
+// keystroke spin.
 //
 // Blocking here is safe for the reason the pipe path above is safe: the
 // handler does not WAIT, it PARKS and returns. keyboard.c's ring_push()

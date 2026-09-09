@@ -562,7 +562,7 @@ void scheduler_set_init_pid(int pid);
 // A blocking syscall in this kernel MUST go through this rather than
 // waiting in place with interrupts on -- that was tried, and hangs
 // after one event because g_next_kernel_rsp isn't reentrant (see
-// syscall.c's SYS_READ_KEY comment and scheduler.c's own writeup here).
+// idt.h's isr_in_progress() and scheduler.c's own writeup here).
 //
 // Returns 1 if the caller was parked, in which case the syscall handler
 // must return WITHOUT setting a return value: the wake writes it into

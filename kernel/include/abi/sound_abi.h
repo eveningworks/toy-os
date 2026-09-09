@@ -37,7 +37,7 @@
 #define SND_RING_BYTES  (SND_CHUNKS * SND_CHUNK_BYTES)
 
 // Where SYS_SND_OPEN maps the control page (the ring follows on the
-// next page) -- fixed, like GUI_FB_VADDR and the window buffers, so an
+// next page) -- fixed, like WIN_FB_VADDR, so an
 // app computes addresses instead of being told them.
 #define SND_MAP_VADDR 0x8F00000000ULL
 

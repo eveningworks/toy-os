@@ -685,11 +685,11 @@ struct win_event {
                            //
                            // REFUSED unless the caller is the
                            // registered compositor (WIN_REQ_SET_
-                           // COMPOSITOR). That is the whole difference
-                           // between this and the legacy SYS_GUI_INIT,
-                           // which any process may call: this one is a
-                           // grant tied to a role, revoked when the
-                           // role is dropped or the process dies.
+                           // COMPOSITOR). A grant tied to a role,
+                           // revoked when the role is dropped or the
+                           // process dies -- never a map any process
+                           // may ask for, which is what its retired
+                           // predecessor SYS_GUI_INIT was.
                            //
                            // The mapping is WRITE-COMBINING. Writes
                            // coalesce into burst transfers; reads are

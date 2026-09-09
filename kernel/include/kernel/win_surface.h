@@ -4,8 +4,8 @@
 #include <stdint.h>
 
 // The registered compositor's FRAMEBUFFER GRANT -- Milestone 41 stage
-// 4a, the capability a ring-3 window manager needs and the one thing
-// SYS_GUI_INIT was already doing without a guard.
+// 4a, the capability a ring-3 window manager needs: the real
+// framebuffer, mapped into ONE process, gated on the compositor role.
 //
 // Its own file rather than more of win_server.c on purpose: that file
 // owns the compositor role and the event queue, this owns one

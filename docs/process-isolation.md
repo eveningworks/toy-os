@@ -233,7 +233,9 @@ time -- see its header comment); and there's still no memory allocation,
 file I/O, or general input syscall -- so a real interactive program
 still couldn't do much.
 
-**A first, deliberately narrow step toward GUI in user space:** two more
+**A first, deliberately narrow step toward GUI in user space** (retired
+2026-09-09 -- the compositor's role-gated `WIN_REQ_FB_MAP` replaced it,
+and an unguarded map of the screen for any process was a hole): two more
 syscalls, `SYS_GUI_INIT` (maps the real linear framebuffer directly into
 the calling process's own address space) and `SYS_GUI_POLL_KEY`
 (non-blocking keyboard read). `userland/tests/gui_test.c` (GRUB's fifth

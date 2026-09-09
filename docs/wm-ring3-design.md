@@ -84,7 +84,9 @@ building:
   primitive a compositor needs exists and works. (This used to name a
   `win_test` program as its user, which was wrong twice over: that
   program exercised `SYS_WIN_CREATE`, not this, and it was deleted with
-  that path on 2026-09-08. `gui_test.c` is the caller.)
+  that path on 2026-09-08. `gui_test.c` was the caller -- and the
+  whole unguarded path went with it on 2026-09-09, once the guarded
+  successor below had been the only one in use for months.)
 - **A ring-3 rasteriser exists**: `userland/ui/ugfx.c`, with the
   kernel's own font tables mapped READ-ONLY through `WIN_REQ_FONT`
   rather than copied, so client text cannot drift from the desktop's.

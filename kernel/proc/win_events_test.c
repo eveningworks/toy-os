@@ -4,8 +4,8 @@
 //
 // The blocking half is the part worth testing hard. A blocking syscall
 // in this kernel cannot wait in place -- that was tried and hangs after
-// one event, because g_next_kernel_rsp isn't reentrant (see syscall.c's
-// SYS_READ_KEY comment) -- so it deschedules instead, and "descheduled,
+// one event, because g_next_kernel_rsp isn't reentrant (see idt.h's
+// isr_in_progress()) -- so it deschedules instead, and "descheduled,
 // then woken, then resumed with the right value in RAX" is a chain with
 // several places to get it silently wrong. The end-to-end test below
 // drives a real ring-3 process through all of it and checks the one

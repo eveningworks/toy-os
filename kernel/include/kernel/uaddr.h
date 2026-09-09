@@ -212,7 +212,7 @@
 // The PCM stream's shared ring: a control page and SND_RING_BYTES of
 // samples, mapped BORROWED into whichever process holds the stream
 // open. The VALUE lives in abi/sound_abi.h (the app computes with it,
-// like GUI_FB_VADDR); this alias keeps the address-space map readable
+// like WIN_FB_VADDR); this alias keeps the address-space map readable
 // in one file. Sits in the gap between the framebuffer grant and the
 // mmap arena.
 #define UADDR_SND_BASE   SND_MAP_VADDR

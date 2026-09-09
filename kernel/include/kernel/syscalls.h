@@ -304,10 +304,7 @@ int sys_sleep(struct syscall_ctx *c);
 // any other unmapped access is.
 void uheap_fault_init(void);
 
-// kernel/proc/win_syscalls.c -- windows, events, and the raw keyboard
-int sys_gui_init(struct syscall_ctx *c);
-int sys_gui_poll_key(struct syscall_ctx *c);
-int sys_read_key(struct syscall_ctx *c);
+// kernel/proc/win_syscalls.c -- the event queue and TWP's carriage
 int sys_poll_event(struct syscall_ctx *c);
 int sys_wait_event(struct syscall_ctx *c);
 int sys_wait_ready(struct syscall_ctx *c);

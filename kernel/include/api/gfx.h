@@ -163,10 +163,9 @@ int gfx_width(void);
 int gfx_height(void);
 
 // Physical address, pitch (bytes per row), and bits-per-pixel of the
-// real linear framebuffer -- used by the experimental userspace-GUI
-// syscalls (SYS_GUI_INIT, see syscall.c) to map real screen memory
-// directly into a ring-3 process, so it can draw without going through
-// kernel-space code at all. Only meaningful after a successful
+// real linear framebuffer -- what the compositor's framebuffer grant
+// (win_surface.c, WIN_REQ_FB_MAP) maps into the one ring-3 process
+// that holds the role. Only meaningful after a successful
 // gfx_init(). Since the kernel identity-maps its own memory (no
 // higher-half split), this physical address is numerically the same
 // value gfx.c's own internal pointer uses.

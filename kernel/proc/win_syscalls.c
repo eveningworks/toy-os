@@ -1,87 +1,17 @@
-// The windowing syscalls: the event queue, TWP's carriage
-// (SYS_WIN_REQUEST) and its debug channel.
-//
-// **THE KERNEL DRAWS NO WINDOW.** SYS_WIN_CREATE and SYS_WIN_PRESENT
-// used to composite one here -- a title bar, a close button and a
-// per-pixel blit, all through gfx_* from inside a syscall -- and were
-// the last GUI DRAWING in ring 0. They predated the window server,
-// served one process at a time, and had no caller but their own test.
-// A ring-3 client's windowing path is SYS_WIN_REQUEST, which carries a
-// typed TWP message (abi/win_proto.h).
-//
-// SYS_GUI_INIT survives and is a different thing: it maps the real
-// framebuffer to a ring-3 caller and draws nothing itself.
+// The windowing syscalls: the event queue and TWP's carriage
+// (SYS_WIN_REQUEST). The kernel draws no window and maps no
+// framebuffer here -- a client's path is a typed TWP message
+// (abi/win_proto.h), and the compositor's grant is WIN_REQ_FB_MAP.
 #include "syscalls.h"
 #include "syscall_abi.h"
 #include "errno.h"
 #include "klog.h"
 #include "vmm.h"
-#include "pmm.h"
-#include "gfx.h"
-#include "keyboard.h"
 #include "scheduler.h"
 #include "win_events.h"
 #include "win_server.h"
 #include "clocksource.h" // clocksource_now_ns() -- the timed wait's deadline
 #include <stddef.h>
-
-int sys_gui_init(struct syscall_ctx *c) {
-    uint64_t pml4 = c->pml4;
-
-    struct gui_info info;
-    info.width = (uint32_t)gfx_width();
-    info.height = (uint32_t)gfx_height();
-    info.pitch = gfx_framebuffer_pitch();
-    info.bpp = gfx_framebuffer_bpp();
-    if (!vmm_copy_to_user(pml4, c->a0, &info, sizeof info)) {
-        klog_write("syscall: gui_init() rejected -- invalid info pointer\n");
-        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
-    } else {
-
-        uint64_t fb_phys = gfx_framebuffer_phys();
-        uint64_t fb_size = (uint64_t)info.pitch * info.height;
-        uint64_t pages = (fb_size + 4095) / 4096;
-
-        int ok = 1;
-        for (uint64_t i = 0; i < pages; i++) {
-            if (!vmm_map_user_page(pml4, GUI_FB_VADDR + i * 4096, fb_phys + i * 4096)) {
-                ok = 0;
-                break;
-            }
-        }
-        klog_write(ok ? "syscall: gui_init() mapped the framebuffer\n"
-                         : "syscall: gui_init() failed to map the framebuffer\n");
-        c->regs[14] = ok ? 0 : (uint64_t)(int64_t)-ENOMEM;
-    }
-    return 0;
-}
-
-int sys_gui_poll_key(struct syscall_ctx *c) {
-    int key = keyboard_try_getchar(); // already non-blocking
-    c->regs[14] = (uint64_t)(int64_t)key;
-    return 0;
-}
-
-int sys_read_key(struct syscall_ctx *c) {
-    // Non-blocking, same as SYS_GUI_POLL_KEY above (echo.c spins,
-    // calling this again if it gets -1) -- NOT a design choice,
-    // a hard requirement. A genuinely blocking version was tried
-    // first: `sti` then keyboard_getchar()'s `hlt` loop, so a real
-    // keyboard IRQ could land while this syscall was still on the
-    // stack. It worked for exactly one keystroke and then hung --
-    // g_next_kernel_rsp (idt.c) is a single global "where to resume"
-    // pointer, correct for the scheduler's use (see scheduler.c's
-    // design comment) but never meant to be reentrant: the nested
-    // IRQ1 handler overwrites it while the outer int-0x80 handler
-    // is still executing, so by the time THIS handler's own
-    // isr_common epilogue runs, it resumes into a stale frame
-    // instead of back into ring 3. Never make a syscall handler
-    // block-with-interrupts-on in this codebase without fixing that
-    // global first.
-    int key = keyboard_try_getchar();
-    c->regs[14] = (uint64_t)(int64_t)key;
-    return 0;
-}
 
 int sys_win_request(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;

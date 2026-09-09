@@ -3,13 +3,9 @@
 // with ordinary chrome, a taskbar button, focus and z-order, alongside
 // the kernel-space apps.
 //
-// This is the app-shaped counterpart to the two older experiments:
-//   gui_test.c  maps the whole physical framebuffer and draws straight
-//               onto the screen -- modal, no window at all.
-//   win_test.c  gets a private buffer the kernel composites with a
-//               hand-drawn title bar -- a real client/server split, but
-//               still modal, single-window, and outside the WM's list.
-// This one is a TWP client: it asks TWS for a window, draws into the
+// The two experiments before it -- a whole-framebuffer map and a
+// kernel-composited single window -- are both retired; this is the one
+// that survived. It is a TWP client: it asks TWS for a window, draws into the
 // shared buffer it gets back, and BLOCKS waiting for input rather than
 // polling. While it waits it consumes no CPU at all.
 //
@@ -33,8 +29,7 @@
 #define WIN_H 200
 
 // 0xRRGGBB straight into the buffer -- this project's fixed target
-// (QEMU -vga std, 32bpp) matches that layout, the same assumption
-// gui_test.c and win_test.c already make.
+// (QEMU -vga std, 32bpp) matches that layout.
 static const uint32_t COLORS[] = {
     0x2E4053, 0x7D3C98, 0x1E8449, 0xB03A2E, 0xB7950B,
 };

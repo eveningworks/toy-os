@@ -1,19 +1,8 @@
-// A freestanding userland program that exercises two syscalls no
-// earlier test used: SYS_READ_KEY (keyboard input straight into ring 3)
-// and SYS_SBRK (a per-process heap). It reads one character at a time
-// and echoes it straight back via SYS_WRITE -- so unlike
-// write_test.c/write_bad_test.c, which just prove a syscall works and
-// then exit, this one stays interactive until you press Esc.
-//
-// SYS_READ_KEY is non-blocking (see syscall_abi.h for why), so this
-// spins, calling it again whenever it gets -1, until a key shows up.
-// That's a busy-wait, not a real blocking read -- fine for a demo
-// program with nothing else to do, but the honest thing to note.
-//
-// The line buffer it types into is allocated with sbrk() rather than
-// living in .bss, purely so this program actually demonstrates SYS_SBRK
-// doing something -- a fixed-size static array would work just as well
-// functionally.
+// A freestanding userland program that reads the console one byte at a
+// time through fd 0 -- a BLOCKING read, so it holds no CPU while it
+// waits -- and echoes each byte back through SYS_WRITE, staying
+// interactive until Esc. Its line buffer comes from sbrk() rather than
+// .bss purely so the program demonstrates SYS_SBRK doing something.
 #include <stdint.h>
 #include "rt/sys.h"
 
@@ -50,7 +39,7 @@ static uint64_t my_strlen(const char *s) {
 int main(void) {
     const char *banner =
         "echo: type to see it echoed back by this ring-3 process itself\n"
-        "(via SYS_READ_KEY + SYS_WRITE). Backspace works. Esc quits.\n\n";
+        "(via a blocking read of fd 0 + SYS_WRITE). Backspace works. Esc quits.\n\n";
     sys_write(1, banner, my_strlen(banner));
 
     char *line = (char *)sys_sbrk(LINE_CAP);
@@ -62,10 +51,9 @@ int main(void) {
     uint64_t pos = 0;
 
     for (;;) {
-        int64_t key;
-        do {
-            key = sys_read_key();
-        } while (key == -1);
+        unsigned char byte;
+        if (sys_read(0, &byte, 1) != 1) break; // the console has no EOF; anything else is a failure
+        int64_t key = byte;
 
         if (key == 27) { // Esc
             const char *bye = "\n[echo: exiting]\n";

@@ -113,45 +113,13 @@
 // above, which is the same mistake as using 0.
 #define SYS_RETRY (-4095)
 
-// Experimental userspace-GUI syscalls (see kernel/core/gui_test.c /
-// apps/README.md's "GUI in user space" note for the honest scope of
-// this: modal only -- one ring-3 process gets the real screen to
-// itself while it runs, there's no scheduler yet for it to coexist
-// with the kernel-space window manager).
-#define SYS_GUI_INIT     3 // RDI = pointer to a `struct gui_info` (out).
-                            // Maps the real linear framebuffer directly
-                            // into the caller's address space at
-                            // GUI_FB_VADDR. Returns 0 (RAX) on success;
-                            // -EFAULT for a bad pointer, -ENOMEM when a
-                            // mapping ran out of memory.
-#define SYS_GUI_POLL_KEY 4 // No arguments. Returns (RAX, sign-extended)
-                            // a queued key same as keyboard_getchar()
-                            // would, or -1 if none is waiting yet --
-                            // never blocks.
+// **3, 4 AND 5 ARE RETIRED, NOT FREE.** They were SYS_GUI_INIT (mapped
+// the WHOLE framebuffer into any caller, with no role gate -- the
+// compositor's grant is WIN_REQ_FB_MAP, held by one process),
+// SYS_GUI_POLL_KEY and SYS_READ_KEY (non-blocking keyboard reads from
+// before fd 0 could block). Deleted 2026-09-09 with their one caller.
+// Declared in kernel/proc/syscall_table.c's SYSCALL_RETIRED.
 
-#define GUI_FB_VADDR 0x8000300000ULL // where SYS_GUI_INIT maps the framebuffer
-
-struct gui_info {
-    uint32_t width;
-    uint32_t height;
-    uint32_t pitch; // bytes per row -- may exceed width*(bpp/8)
-    uint32_t bpp;
-};
-
-// General-purpose syscalls, usable by any ring-3 process (not just the
-// experimental GUI ones above) -- see kernel/proc/syscall.c for the
-// implementation and userland/echo.c for a program that uses both.
-#define SYS_READ_KEY 5 // No arguments. Non-blocking, same contract (and
-                        // for the same reason) as SYS_GUI_POLL_KEY above
-                        // -- returns (RAX, sign-extended) a queued key,
-                        // or -1 if none is waiting. A real blocking
-                        // version (sti, then keyboard_getchar()'s hlt
-                        // loop) was tried and breaks after exactly one
-                        // key: see the long comment in syscall.c's
-                        // handler for why blocking-with-interrupts-on
-                        // isn't safe inside this dispatcher yet. Callers
-                        // that want blocking behavior spin-poll instead
-                        // (see userland/echo.c).
 #define SYS_SBRK     6 // RDI = increment in bytes (a plain heap bump,
                         // not "true" sbrk's signed shrink support -- 0
                         // or positive only). Returns (RAX) the previous
@@ -160,40 +128,6 @@ struct gui_info {
                         // process never had its heap set up (see
                         // syscall_reset_mm() in syscall.h) or ran out
                         // of physical memory while mapping new pages.
-
-// A real per-window protocol, built on top of SYS_READ_KEY above -- see
-// kernel/core/win_test.c and userland/win_test.c. Genuinely different
-// from SYS_GUI_INIT: a SYS_GUI_INIT process gets the ENTIRE real
-// framebuffer mapped into its own address space and draws straight onto
-// the real screen; a SYS_WIN_CREATE process never touches the real
-// framebuffer at all -- it only ever sees its own private w*h pixel
-// buffer, and the kernel (in SYS_WIN_PRESENT) is the one that composites
-// that buffer onto the real screen, drawing a real title bar and close
-// button around it. That's a genuine client/server split -- the
-// process is a "client" that only knows about its own content, same
-// shape as a real windowing protocol.
-//
-// Still modal, though, same limitation as SYS_GUI_INIT: there's no
-// concurrency between this and the kernel-space window manager (wm.c),
-// so only one of these can be on screen at a time and it isn't a
-// window inside wm.c's own window list. Making that concurrent needs
-// the scheduler to give the kernel-space WM loop and a scheduled
-// ring-3 process fair turns, which scheduler.c's current design
-// doesn't do (once any process is READY, kernel-space code doesn't get
-// scheduled again until every process exits -- see scheduler_tick()'s
-// comment). See README's "Ideas for what's next".
-struct win_request {
-    // in: desired content size + top-left position on the real screen
-    uint32_t w, h;
-    int32_t x, y;
-    // out: how the buffer mapped at WIN_BUF_VADDR is laid out
-    uint32_t pitch; // bytes per row -- always w * 4, no padding
-    uint32_t bpp;   // always 32
-};
-
-#define WIN_BUF_VADDR 0x8000400000ULL // where SYS_WIN_CREATE maps the buffer
-#define WIN_MAX_W 640 // caps the buffer at 640x480x4 bytes = 300 pages,
-#define WIN_MAX_H 480 // an amount syscall.c is happy to track per-page
 
 // **7 AND 8 ARE RETIRED, NOT FREE.** They were SYS_WIN_CREATE and
 // SYS_WIN_PRESENT: a single-window-at-a-time path, predating the window
@@ -226,8 +160,7 @@ struct win_request {
 //
 // fd numbers start at 3, following the same convention libc expects --
 // fd 0/1/2 (stdin/stdout/stderr) stay reserved for SYS_WRITE's console
-// path above (SYS_READ doesn't support fd 0 yet -- that's SYS_READ_KEY's
-// job, kept separate rather than conflated with file reads).
+// path above.
 #define SYS_O_WRITE 1 // open for writing (default: read-only)
 #define SYS_O_CREAT 2 // create the file if it doesn't exist (write only)
 #define SYS_O_TRUNC 4 // truncate to empty on open (write only)

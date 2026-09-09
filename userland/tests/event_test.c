@@ -3,9 +3,9 @@
 // SYS_WAIT_EVENT and exits with the number of them it actually
 // received.
 //
-// Everything before this either polled (`echo.c` spins on
-// SYS_READ_KEY, which is non-blocking by hard necessity -- see
-// syscall.c's comment on why) or never waited at all. A process parked
+// Everything before this either polled (`echo.c` spun on a
+// non-blocking key read, before fd 0 could block) or never waited at
+// all. A process parked
 // in SYS_WAIT_EVENT consumes no timeslices whatsoever; it is
 // descheduled, not looping.
 //
