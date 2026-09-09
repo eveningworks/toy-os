@@ -301,6 +301,14 @@ def check_cube(d):
     flat_2d = d.canvas_image("scene-2d")
     colors_2d = d.distinct_colors(flat_2d)
 
+    # Shading belongs to the cube: in the 2D scene the box is greyed and
+    # F is refused, logged so this can see the refusal rather than infer
+    # it from silence.
+    got = d.key_until(K_F, "gfxdemo: shaded ignored")
+    d.check_log("F in the 2D scene is refused, not applied", got, "gfxdemo: shaded ignored")
+    d.check("...and nothing was toggled", not any("shaded on" in l for l in got),
+            f"{[l for l in got if 'shaded' in l]}")
+
     got = d.key_until(K_S, "gfxdemo: scene 3d")
     d.check_log("pressing S switches to the 3D scene", got, "gfxdemo: scene 3d")
     time.sleep(0.5)

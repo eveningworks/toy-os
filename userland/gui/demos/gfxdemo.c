@@ -26,9 +26,16 @@
 #include "fixed.h"
 #include "keyboard.h"
 
-#define WIN_W 520
-#define WIN_H 400
+// The window is sized from the FONT (on_size below): these are the
+// floor, what the default 8-px face gets. A larger face widens it so
+// the button row and the checkbox row never run into each other or off
+// the edge -- which they did, under the session font, on the laptop.
+#define WIN_W_MIN 520
+#define WIN_H_MIN 400
 #define MARGIN 10
+#define ROW_GAP 10      // between the button bar and the checkbox row
+#define BTN_CHARS 11    // "2D / 3D (S)"
+static int g_w = WIN_W_MIN, g_h = WIN_H_MIN;
 
 // Controls along the bottom.
 #define BTN_SLOWER 1
@@ -197,16 +204,38 @@ static void log_scene(void) {
     ulog(g_scene == SCENE_3D ? "gfxdemo: scene 3d\n" : "gfxdemo: scene 2d\n");
 }
 
-static int checkbox_y(void) { return WIN_H - MARGIN - ugfx_char_h() - 8; }
+static int checkbox_y(void) { return g_h - MARGIN - ugfx_char_h() - 8; }
+
+// The width the two rows below the canvas need, measured rather than
+// assumed, so a wider face widens the window instead of the rows.
+static void on_size(int *w, int *h) {
+    int cw = ugfx_char_w();
+    // The boxes are measured before on_open() has made them: give them
+    // their labels here, once. on_open() re-inits with the same values.
+    uui_checkbox_init(&g_aa_check, 0, 0, 0, "anti-aliased (A)", 0, 0);
+    uui_checkbox_init(&g_shade_check, 0, 0, 0, "shaded (F)", 0, 0);
+    int bar_w = 2 * MARGIN + 4 * (BTN_CHARS * cw) + 3 * 6;
+    int aa_w = 0, sh_w = 0, hh = 0;
+    uui_checkbox_natural_size(&g_aa_check, &aa_w, &hh);
+    uui_checkbox_natural_size(&g_shade_check, &sh_w, &hh);
+    int row_w = 2 * MARGIN + aa_w + 3 * cw + sh_w + 3 * cw + ugfx_text_width("speed 40");
+    g_w = WIN_W_MIN;
+    if (bar_w > g_w) g_w = bar_w;
+    if (row_w > g_w) g_w = row_w;
+    // Taller with the font too, so the canvas keeps its share.
+    g_h = WIN_H_MIN + 3 * (ugfx_char_h() - 8 > 0 ? ugfx_char_h() - 8 : 0);
+    *w = g_w;
+    *h = g_h;
+}
 
 static void layout(void) {
     int bar_h = ugfx_char_h() + 14;
-    int cw = WIN_W - 2 * MARGIN;
-    int ch = WIN_H - 2 * MARGIN - bar_h - 8 - ugfx_char_h() - 8;
+    int cw = g_w - 2 * MARGIN;
+    int ch = g_h - 2 * MARGIN - bar_h - 8 - ROW_GAP - ugfx_char_h() - 8;
     uui_canvas_init(&g_canvas, MARGIN, MARGIN, cw, ch,
                      ugfx_rgb(16, 18, 24), ugfx_rgb(70, 78, 92));
 
-    int bw = 9 * ugfx_char_w();
+    int bw = BTN_CHARS * ugfx_char_w();
     int by = MARGIN + ch + 8;
     for (int i = 0; i < 4; i++) {
         uui_button_set_geometry(&g_buttons[i], MARGIN + i * (bw + 6), by, bw, bar_h);
@@ -262,17 +291,16 @@ static void draw_cube(struct ugfx_surface *s, int cx, int cy, enum geom_aa aa) {
                                       (uint8_t)(250 * k / 255));
             int fx4[4], fy4[4];
             for (int i = 0; i < 4; i++) {
-                fx4[i] = xs[q[i]] - g_canvas.x;
-                fy4[i] = ys[q[i]] - g_canvas.y;
+                // Canvas-LOCAL, like every other coordinate handed to
+                // the canvas: it adds its own origin.
+                fx4[i] = xs[q[i]];
+                fy4[i] = ys[q[i]];
             }
+            // No outline: two lit faces meet at a change of shade, and a
+            // line there read as the wireframe showing through.
             uui_canvas_fill_polygon(s, &g_canvas, fx4, fy4, 4, color);
-            // Its outline, over the fill: the seam between two lit
-            // faces is where the eye reads the corner, and two flat
-            // colours meeting without a line look like one bent sheet.
-            int ox[4], oy[4];
-            for (int i = 0; i < 4; i++) { ox[i] = xs[q[i]]; oy[i] = ys[q[i]]; }
-            uui_canvas_polyline(s, &g_canvas, ox, oy, 4, 1, ugfx_rgb(24, 40, 60), aa);
         }
+        (void)aa;
         return;   // no wireframe through a solid, and no corner dots
     }
 
@@ -307,7 +335,7 @@ static void draw_cube(struct ugfx_surface *s, int cx, int cy, enum geom_aa aa) {
         fx_t nearness = fx_div(fx_from_int(CUBE_HALF) - z[i], fx_from_int(2 * CUBE_HALF));
         int r = 2 + fx_round(fx_mul(nearness, fx_from_int(4)));
         if (r < 2) r = 2;
-        uui_canvas_fill_ellipse(s, &g_canvas, xs[i] - g_canvas.x, ys[i] - g_canvas.y,
+        uui_canvas_fill_ellipse(s, &g_canvas, xs[i], ys[i],
                                  r, r, ugfx_rgb(250, 230, 180));
     }
 }
@@ -356,7 +384,7 @@ static void draw_shapes_2d(struct ugfx_surface *s, int cx, int cy, enum geom_aa 
         // A dot at each vertex, so the filled-ellipse path is on screen
         // too rather than only the outlines.
         for (int i = 0; i < 3; i++) {
-            uui_canvas_fill_ellipse(s, &g_canvas, xs[i] - g_canvas.x, ys[i] - g_canvas.y,
+            uui_canvas_fill_ellipse(s, &g_canvas, xs[i], ys[i],
                                      4, 4, ugfx_rgb(250, 230, 180));
         }
     }
@@ -381,6 +409,9 @@ static void draw(struct ugfx_surface *s) {
     uui_checkbox_draw(s, &g_aa_check);
     int aw = 0, ah = 0;
     uui_checkbox_natural_size(&g_aa_check, &aw, &ah);
+    // Shading is a property of the cube: with the 2D scene up the box
+    // is greyed and takes no click or key (see shade_toggle()).
+    g_shade_check.disabled = g_scene != SCENE_3D;
     uui_checkbox_set_geometry(&g_shade_check, MARGIN + aw + 3 * ugfx_char_w(), checkbox_y());
     uui_checkbox_draw(s, &g_shade_check);
 
@@ -396,7 +427,7 @@ static void draw(struct ugfx_surface *s) {
     while (v > 0) { d[dn++] = (char)('0' + v % 10); v /= 10; }
     while (dn > 0) info[n++] = d[--dn];
     info[n] = '\0';
-    int ix = WIN_W - MARGIN - ugfx_text_width(info);
+    int ix = g_w - MARGIN - ugfx_text_width(info);
     ugfx_draw_string(s, ix, checkbox_y(), info, ugfx_rgb(110, 120, 135), UTHEME_PANEL_BG);
 }
 
@@ -420,6 +451,12 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     draw(uapp_surface(d));
 }
 
+static void shade_toggle(void) {
+    if (g_scene != SCENE_3D) { ulog("gfxdemo: shaded ignored -- 2d scene\n"); return; }
+    ulog(uui_checkbox_toggle(&g_shade_check)
+              ? "gfxdemo: shaded on\n" : "gfxdemo: shaded off\n");
+}
+
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
     if (key == 'q') { uapp_quit(a, 0); return; } // Esc no longer closes -- Alt+F4 does
@@ -431,10 +468,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         g_scene = (g_scene == SCENE_3D) ? SCENE_2D : SCENE_3D;
         log_scene();
     }
-    if (key == 'f' || key == 'F') {
-        ulog(uui_checkbox_toggle(&g_shade_check)
-                  ? "gfxdemo: shaded on\n" : "gfxdemo: shaded off\n");
-    }
+    if (key == 'f' || key == 'F') shade_toggle();
     if (key == '+' || key == '=') { if (g_speed < 40) { g_speed++; log_speed(); } }
     if (key == '-') { if (g_speed > 0) { g_speed--; log_speed(); } }
 }
@@ -449,10 +483,7 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
         ulog(uui_checkbox_toggle(&g_aa_check)
                   ? "gfxdemo: aa on\n" : "gfxdemo: aa off\n");
     }
-    if (uui_checkbox_hit(&g_shade_check, x, y)) {
-        ulog(uui_checkbox_toggle(&g_shade_check)
-                  ? "gfxdemo: shaded on\n" : "gfxdemo: shaded off\n");
-    }
+    if (uui_checkbox_hit(&g_shade_check, x, y)) shade_toggle();
 }
 
 static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
@@ -488,7 +519,7 @@ static void on_open(struct uapp *a) {
     // The label says what pressing it GIVES you, not what is showing --
     // a button reading "2D" while the 2D scene is up is the ambiguity
     // every toggle-labelled-with-its-own-state has.
-    uui_button_init(&g_buttons[3], 0, 0, 0, 0, "2D / 3D", bg, fg, BTN_SCENE);
+    uui_button_init(&g_buttons[3], 0, 0, 0, 0, "2D / 3D (S)", bg, fg, BTN_SCENE);
     uui_button_group_init(&g_bar, g_buttons, 4);
 
     // Anti-aliasing starts on, and the checkbox holds that fact -- see
@@ -499,7 +530,7 @@ static void on_open(struct uapp *a) {
     // Off at first: the wireframe is the demo's proof that the
     // projection is real, and a solid hides the far edges that show it.
     uui_checkbox_init(&g_shade_check, 0, checkbox_y(), ugfx_char_h(),
-                       "shaded (F)   scene: S", UTHEME_PANEL_BG, UTHEME_TEXT);
+                       "shaded (F)", UTHEME_PANEL_BG, UTHEME_TEXT);
     layout();
 
     ulog("gfxdemo: ready\n");
@@ -515,8 +546,9 @@ int main(void) {
     struct uapp_desc desc = {
         .title     = "Shapes",
         .app_id    = "gfxdemo",
-        .w         = WIN_W,
-        .h         = WIN_H,
+        .w         = WIN_W_MIN,
+        .h         = WIN_H_MIN,
+        .on_size   = on_size,
         .x         = 220,
         .y         = 110,
         .buttons   = &g_bar,
