@@ -1708,6 +1708,12 @@ detail there, and keep the pointer here to a line. What each file is:
   the rest: the BKL is what makes SMP shippable before the locking audit
   is done. It carries the measurement of what is single-core in the tree
   today, and the honest case AGAINST.
+- **`docs/modules-design.md`** -- loadable drivers, staged: an export
+  table and `modload` with a hello module, then one PCI driver, then
+  `/etc/modules` and a match-driven load. Designed, not built. **Read it
+  before anything module-shaped**: it records why modules are compiled
+  `-mcmodel=large` (kmalloc memory may sit above 4 GiB, out of a
+  kernel-model module's reach) and why the export table is a list.
 - **`docs/update-design.md`** -- how a machine should keep ITSELF up to
   date: an HTTP manifest of files and checksums, and a `/bin/update`
   that PULLS. Designed, not built. **Read it before doing anything
