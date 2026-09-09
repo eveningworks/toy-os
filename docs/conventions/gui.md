@@ -2911,6 +2911,18 @@ So the size travels with the pixels:
   A failure there means NO FLIP -- the compositor keeps the frame it has
   and the next present retries -- rather than handing the client a
   buffer it would overrun.
+- **AND "REBUILT" IS DECIDED BY THE DIMENSIONS, NEVER BY THE LENGTH.**
+  A buffer is page-rounded, so a one-pixel resize usually leaves the
+  rounded byte count identical. Toykit's `buf_ensure()` compared
+  lengths, read a real resize as "already the right size", and so
+  neither replaced the object nor sent `WIN_REQ_BUFFER` -- leaving the
+  server holding the old width for a buffer the client was drawing at
+  the new one. The next frame out of it was composited one pixel short
+  per row: a window sheared into a diagonal, which STAYS until some
+  later resize happens to cross a page boundary. Compare w and h;
+  replace the object only when the rounded length moved; tell the
+  server either way. `tools/resize_stride_test.py` sweeps sixteen
+  one-pixel steps and asserts both buffers match the window.
 - **A SINGLE-BUFFERED window still flashes**, because it has nowhere to
   hide the change. That is the same degradation it already accepts for
   tearing.

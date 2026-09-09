@@ -24,6 +24,13 @@
 
 static void *g_px[UAPP_BUFS];
 static uint64_t g_px_bytes[UAPP_BUFS];
+// WHAT EACH BUFFER IS CURRENTLY SIZED FOR. **NOT derivable from
+// g_px_bytes**, which is page-rounded: a one-pixel width change usually
+// leaves the rounded length identical, so a comparison on bytes reports
+// a real resize as "nothing to do" -- and the server then holds the old
+// width while the client draws at the new one, which the compositor
+// blits as a diagonal shear.
+static int g_px_w[UAPP_BUFS], g_px_h[UAPP_BUFS];
 static int g_slot;
 
 static void buf_name(char *out, unsigned cap, int slot, int buf) {
@@ -46,7 +53,7 @@ static void buf_grant(const char *nm) {
 // name first and creates a new object under it -- the old one stays
 // alive for whoever still maps it, which is exactly what stops a resize
 // pulling the pixels out from under the compositor.
-static int buf_make(int slot, int buf, uint64_t bytes) {
+static int buf_make(int slot, int buf, int w, int h) {
     // **PAGE-ALIGNED, because SYS_MUNMAP requires it** (abi/syscall_abi.h)
     // and refuses anything else. A window's pixels are w*h*4, which is
     // almost never a whole number of pages -- so the unrounded length
@@ -54,7 +61,7 @@ static int buf_make(int slot, int buf, uint64_t bytes) {
     // replacement, and each resize leak a buffer's worth of frames.
     // Twelve objects after three drags, and then the biggest allocation
     // in the run is the one that fails.
-    bytes = (bytes + 4095) & ~4095ULL;
+    uint64_t bytes = ((uint64_t)w * (uint64_t)h * 4 + 4095) & ~4095ULL;
     char nm[WIN_BUF_NAME_MAX];
     buf_name(nm, sizeof nm, slot, buf);
     if (g_px[buf]) {
@@ -71,15 +78,16 @@ static int buf_make(int slot, int buf, uint64_t bytes) {
     if (p == (void *)-1) return 0;
     g_px[buf] = p;
     g_px_bytes[buf] = bytes;
+    g_px_w[buf] = w;
+    g_px_h[buf] = h;
     return 1;
 }
 
 static int bufs_create(int slot, int w, int h) {
-    uint64_t bytes = (uint64_t)w * (uint64_t)h * 4;
-    if (!bytes) return 0;
+    if (w <= 0 || h <= 0) return 0;
     g_slot = slot;
     for (int b = 0; b < UAPP_BUFS; b++)
-        if (!buf_make(slot, b, bytes)) return 0;
+        if (!buf_make(slot, b, w, h)) return 0;
     return 1;
 }
 
@@ -94,13 +102,25 @@ static void req_clear(struct win_request_msg *r);
 static int req_send(struct win_request_msg *r);
 
 static int buf_ensure(uint32_t window, int buf, int w, int h) {
-    // ROUNDED THE SAME WAY buf_make() rounds, or the comparison never
-    // matches and this replaces the buffer on EVERY present -- handing
-    // the app a freshly zeroed one each frame, which shows up as a
-    // scene that will not hold still.
+    // **THE DIMENSIONS DECIDE, NOT THE LENGTH.** Comparing page-rounded
+    // byte counts here made a one-pixel resize look like no resize at
+    // all: the object stayed, the server was never told, and the next
+    // frame out of this buffer was drawn at one stride and composited at
+    // another -- a window sheared one pixel per row.
+    if (g_px[buf] && g_px_w[buf] == w && g_px_h[buf] == h) return 1;
+
+    // The OBJECT is replaced only when the rounded length actually
+    // moved; rebuilding on every present would hand the app a freshly
+    // zeroed buffer each frame, which shows up as a scene that will not
+    // hold still. The server is told either way -- that is the half
+    // that was missing.
     uint64_t want = ((uint64_t)w * (uint64_t)h * 4 + 4095) & ~4095ULL;
-    if (g_px[buf] && g_px_bytes[buf] == want) return 1;
-    if (!buf_make(g_slot, buf, want)) return 0;
+    if (!g_px[buf] || g_px_bytes[buf] != want) {
+        if (!buf_make(g_slot, buf, w, h)) return 0;
+    } else {
+        g_px_w[buf] = w;
+        g_px_h[buf] = h;
+    }
 
     struct win_request_msg req;
     req_clear(&req);
@@ -477,7 +497,7 @@ int uapp_resize(struct uapp *a, int w, int h) {
     // per mouse move -- enough for the WM's own lag measurement to
     // decide the client cannot keep up and fall back to an outline.
     int back = a->front ^ 1;
-    if (!buf_make(g_slot, back, (uint64_t)w * (uint64_t)h * 4)) return 0;
+    if (!buf_make(g_slot, back, w, h)) return 0;
 
     req.type = WIN_REQ_RESIZE;
     req.window = a->window;

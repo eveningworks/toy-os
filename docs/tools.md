@@ -2774,6 +2774,15 @@ window without going through it will find its layout polls timing out.
   be mid-command; seven tools "failed" that way in one run here, none of
   them at fault. An flock rather than a pidfile check, so a run killed
   with -9 leaves nothing to clean up.
+- **`resize_stride_test.py`** -- a resized window's two buffers agree
+  with the size the client is drawing at. 4 checks. **THE ASSERTION IS
+  TWO NUMBERS, NOT PIXELS**: the shear it hunts is the server and the
+  client disagreeing about one buffer's width, which `lswin` already
+  prints, and a diagonal in a screenshot is both harder to detect and
+  weaker evidence. **It steps by ONE pixel and that is load-bearing** --
+  a buffer's length is page-rounded, so a larger step crosses a page
+  boundary and the bug hides. `--control` prints the edit that reddens
+  it (measured: 8 of 16 steps).
 - **`uapp_test.py`** -- the TWP resize handshake and focus events, via
   `winclient` (which contains no resize code -- it sets
   `.flags = UAPP_RESIZABLE` and nothing else, so what is under test is

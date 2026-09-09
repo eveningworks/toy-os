@@ -853,6 +853,7 @@ whenever a headline here tells you something you did not already know.
 - **A WINDOW HAS TWO BUFFERS, AND THE COMPOSITOR NEVER READS THE ONE BEING DRAWN.**
 - **A DRAG'S APPEARANCE IS A SETTING, AND `auto` LEARNS RATHER THAN GUESSES** -- `desktop.resize_mode` / `desktop.move_mode`, and the WM remembers each window's measured lag
 - **A WINDOW'S SIZE BELONGS TO ITS BUFFER, AND THE COMPOSITOR ADOPTS IT ON THE PRESENT** -- a resize rebuilds only the BACK buffer, so nothing goes black; and a client's window follows the drag, one proposal in flight
+- **A BUFFER IS RESIZED BY ITS DIMENSIONS, NOT BY ITS LENGTH** -- a page-rounded byte count hides a one-pixel resize, and the frame after it is sheared
 - **THE LAYOUT LOG IS OFF UNLESS A TEST TURNS IT ON, AND DEDUPED WHEN IT IS.**
 - **THE TERMINAL SCROLLS BY WHEEL AS WELL AS BY KEY, AND BOTH MOVE THE SAME STATE.**
 - **`uui_dialog` IS THE MODAL QUESTION, AND IT SWALLOWS EVERY KEY WHILE IT IS UP.**
@@ -1421,6 +1422,7 @@ cost".
   `mines_test.py`, `notepad_client_test.py`, `osk_test.py`,
   `player_test.py`,
   `pager_test.py`,
+  `resize_stride_test.py`,
   `sched_gui_test.py`, `screen_surface_test.py`, `scrollbar_test.py`,
   `settings_test.py`, `single_instance_test.py`, `taskmgr_test.py`,
   `uapp_test.py`, `uiclient_test.py`, `uidemo_test.py`,
