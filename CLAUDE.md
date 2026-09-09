@@ -1382,7 +1382,12 @@ cost".
 - **Drive the BARE-METAL machine** -- `remote.py` (`exec` runs commands
   and returns text, `put`/`get` move files, `sync` copies a whole tree
   and sends only what differs, `flash` replaces the KERNEL on its own
-  boot partition AND syncs the userland with it -- a kernel alone is
+  boot partition AND syncs the userland with it -- but **`/etc` gets NEW
+  FILES ONLY**, deliberately, so a flash never clobbers a machine's own
+  configuration. The cost is that an EDIT to an existing config file
+  never arrives: a changed service descriptor needs an explicit `put`,
+  and until it gets one the machine runs new code under old settings,
+  which reads as the change not working -- a kernel alone is
   half a build, and an ABI struct that changes size leaves a machine
   booting perfectly with no way to give it an address; it also refuses
   while `grub.cfg` has no timeout, since the rescue entry would be
