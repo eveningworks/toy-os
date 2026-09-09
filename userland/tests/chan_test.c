@@ -80,7 +80,7 @@ int main(int argc, char **argv) {
     struct msg m;
 
     for (int frame = 0; frame < 400 && answered < 1; frame++) {
-        uchan_server_scan(&s);
+        uchan_server_scan(&s, 0, 0);
 
         // Park. After the first message this returns only when the
         // client sends again -- which is the wakeup under test.

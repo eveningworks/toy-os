@@ -854,7 +854,8 @@ whenever a headline here tells you something you did not already know.
 - **A WINDOW HAS TWO BUFFERS, AND THE COMPOSITOR NEVER READS THE ONE BEING DRAWN.**
 - **A DRAG'S APPEARANCE IS A SETTING, AND `auto` LEARNS RATHER THAN GUESSES** -- `desktop.resize_mode` / `desktop.move_mode`, and the WM remembers each window's measured lag
 - **A WINDOW'S SIZE BELONGS TO ITS BUFFER, AND THE COMPOSITOR ADOPTS IT ON THE PRESENT** -- a resize rebuilds only the BACK buffer, so nothing goes black; and a client's window follows the drag, one proposal in flight
-- **A BUFFER IS RESIZED BY ITS DIMENSIONS, NOT BY ITS LENGTH** -- a page-rounded byte count hides a one-pixel resize, and the frame after it is sheared
+- **A BUFFER IS RESIZED BY ITS DIMENSIONS, NOT BY ITS LENGTH** -- a page-rounded byte count hides a one-pixel resize
+- **A FRAME CARRIES ITS OWN BUFFER, GENERATION AND SIZE, AND THE KERNEL HOLDS NO WINDOW STATE AT ALL** -- every client request reaches the compositor over its channel; `guictl windows` is the window list, and there is no second view to disagree with it
 - **THE LAYOUT LOG IS OFF UNLESS A TEST TURNS IT ON, AND DEDUPED WHEN IT IS.**
 - **THE TERMINAL SCROLLS BY WHEEL AS WELL AS BY KEY, AND BOTH MOVE THE SAME STATE.**
 - **`uui_dialog` IS THE MODAL QUESTION, AND IT SWALLOWS EVERY KEY WHILE IT IS UP.**

@@ -253,12 +253,6 @@ KTEST("win_server", "requests are refused when no server is registered") {
     KTEST_ASSERT_EQ(win_server_request(1, &req), -1);
 }
 
-KTEST("win_server", "a bad pid owns nothing") {
-    KTEST_ASSERT_EQ(win_server_window_count(0), 0);
-    KTEST_ASSERT_EQ(win_server_window_count(-1), 0);
-    KTEST_ASSERT_EQ(win_server_window_count(99), 0);
-}
-
 // --- every scheduled process has a queue ------------------------------
 //
 // This table read `4` long after SCHED_MAX_PROCS became 64, so a client

@@ -2928,16 +2928,17 @@ So the size travels with the pixels:
   buffer it would overrun.
 - **AND "REBUILT" IS DECIDED BY THE DIMENSIONS, NEVER BY THE LENGTH.**
   A buffer is page-rounded, so a one-pixel resize usually leaves the
-  rounded byte count identical. Toykit's `buf_ensure()` compared
-  lengths, read a real resize as "already the right size", and so
-  neither replaced the object nor sent `WIN_REQ_BUFFER` -- leaving the
-  server holding the old width for a buffer the client was drawing at
-  the new one. The next frame out of it was composited one pixel short
-  per row: a window sheared into a diagonal, which STAYS until some
-  later resize happens to cross a page boundary. Compare w and h;
-  replace the object only when the rounded length moved; tell the
-  server either way. `tools/resize_stride_test.py` sweeps sixteen
-  one-pixel steps and asserts both buffers match the window.
+  rounded byte count identical -- and Toykit's `buf_ensure()` compared
+  lengths, so it read a real resize as "already the right size" and did
+  not replace the object. That is still the rule: compare w and h.
+  **The consequence it used to have is designed out** -- there was a
+  second record of every buffer's size, in the kernel, that the client
+  had to keep in step with `WIN_REQ_BUFFER`, and skipping the update
+  left a frame drawn at one stride and composited at another (a window
+  sheared one pixel per row, permanently). The frame carries its own
+  size now, so the only thing that can still shear a window is a present
+  that lies about it. `tools/resize_stride_test.py` sweeps sixteen
+  one-pixel resizes and asserts the composited size is the drawn one.
 - **A SINGLE-BUFFERED window still flashes**, because it has nowhere to
   hide the change. That is the same degradation it already accepts for
   tearing.

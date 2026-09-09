@@ -1035,7 +1035,7 @@ static int next_due_ms(void) {
 
 static int serve_channel(void) {
     if (!g_chan.beacon) return 0;
-    uchan_server_scan(&g_chan);
+    uchan_server_scan(&g_chan, 0, 0);
 
     int acted = 0, from;
     struct initctl_msg m;

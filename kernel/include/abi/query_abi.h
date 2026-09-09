@@ -441,40 +441,12 @@ struct query_fsstat {
 // mapper is a client that has not started yet or has gone away.
 #define QUERY_SHM 36
 
-// WHAT A PROCESS SAID, one record per write, tagged with the program
-// that wrote it (api/applog.h). A LIST. This is what `logd` drains to
-// give /var/log a per-service tag, and it is separate from QUERY_KLOG
-// because the two rings are separate -- a chatty program must not be
-// able to flush kernel evidence, which is a thing that has happened.
-//
-// The SEQUENCE is the interface, not the index: a reader asks for the
-// records it has not seen and compares `oldest` against what it wanted,
-// so a gap is visible rather than silent. Same guarantee QUERY_KLOG's
-// absolute offset gives, in the shape a record list needs.
-// THE KERNEL'S OWN VIEW OF A CLIENT WINDOW, which is the one thing
-// about the window system nothing could see. `guictl windows` reports
-// the COMPOSITOR's window list; this reports what win_server.c believes
-// -- and a bug in the window protocol is very often the two disagreeing
-// rather than either being wrong on its own. Per buffer, because a
-// buffer carries its own size (abi/win_proto.h) and a resize changes
-// one of the two.
-//
-// LIST, one record per live window.
-#define QUERY_WINDOWS 38
-
-struct query_window {
-    int32_t  pid;          // the owning client
-    uint32_t id;           // its window id, which is also its slot
-    int32_t  w, h;         // the size the CLIENT last asked for
-    uint32_t front;        // which buffer the compositor is told to read
-    int32_t  buf_w[2];     // each buffer's OWN size -- they differ while
-    int32_t  buf_h[2];     // a resize is in flight, which is the point
-    uint32_t buf_gen[2];   // which OBJECT is behind the buffer's name:
-                            // goes up each time the client replaces it,
-                            // and a present carries it so a compositor
-                            // knows to re-open (abi/win_proto.h)
-    uint32_t reserved;
-};
+// 38 WAS QUERY_WINDOWS, and is RETIRED rather than reused. It reported
+// what win_server.c believed about each window, beside `guictl windows`
+// -- a pair that made a disagreement between the two visible instead of
+// inferred. Stage 6b left one believer: the kernel holds no window
+// state, so there is nothing to disagree with. `guictl windows` is the
+// window list now, and /bin/lswin went with this.
 
 // QUERY_PROCPATH -- what PROGRAM each live process is running.
 //

@@ -6544,3 +6544,49 @@ synchronous carriage would ruin is untouched. No channel, or no answer
 inside the timeout, is read as "no twin": the asymmetry is deliberate,
 since a false yes hides an app completely and a false no opens a window
 the user can see and close.
+
+## A frame carries its own size, so nothing has to remember to say so
+
+A window's two buffers can be different sizes: a resize rebuilds only
+the one the client is about to draw into, so the front keeps showing the
+last finished frame at the size it was drawn at. That is Wayland's rule
+and it is what stops a resize flashing a window of black.
+
+It follows that the compositor must know how big the buffer it is about
+to show actually is, or it walks the pixels with the wrong row stride --
+which draws the window sheared one pixel per row, and leaves it that way
+until some later resize happens to correct it.
+
+For several stages the kernel held that size, one record per buffer, and
+a present answered from the record. Keeping it true was the client's
+job: `WIN_REQ_RESIZE` and `WIN_REQ_BUFFER` existed for nothing else. So
+the correctness of every frame depended on a message being sent, and one
+day it was not -- Toykit decided whether a buffer needed rebuilding by
+comparing PAGE-ROUNDED byte counts, a one-pixel resize left the count
+unchanged, and the update was skipped. The window sheared.
+
+The fix was to compare dimensions. The **design** answer is that the
+frame should carry its own geometry, which is what stage 6b did:
+`WIN_REQ_PRESENT` names the buffer, its generation and its width and
+height, and the compositor adopts what it is about to show. Both
+messages that existed to maintain the second copy are retired, because
+there is no second copy.
+
+Three things this decides beyond the bug:
+
+- **The generation belongs to the object's creator.** The client
+  replaces the shm object; only it can say which replacement this is.
+  The kernel was counting on its behalf, from a message.
+- **The front index is the client's too.** It knows which buffer it just
+  drew. The kernel flipped and answered, which made every present a
+  round trip for a fact the caller already had.
+- **The table had nothing else load-bearing left**, which is why 6b
+  could delete it rather than shrink it.
+
+The general form, and the reason this earns an entry: **a second record
+of a fact, kept in step by remembering to send a message, is a record
+that will go stale.** Prefer carrying the fact with the thing it
+describes. The alternatives here were a validating handshake (more
+messages, same failure mode) or having the compositor measure the object
+itself -- which it cannot, since an shm object's page count is rounded
+and does not name a width.

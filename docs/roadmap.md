@@ -25,7 +25,6 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] Finish the app-deduplication pass: the smaller survey items, all three branches landed  *(The GUI in ring 3)*
-- [ ] Delete the kernel's window table, leaving ring 0 the framebuffer grant and raw input  *(The window server out of the kernel)*
 - [ ] An I/O APIC and the MADT interrupt source overrides, so the legacy lines stop going through the 8259  *(virtio, and a real GPU driver)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
@@ -539,15 +538,15 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~The channel itself: a shm ring plus a reply slot~~ DONE 2026-09-08 -- `userland/lib/uchan.h`, no kernel support of its own
 - [x] ~~Retire `/bin/service`'s `/run/init.ctl` + `SIGHUP` onto a channel~~ DONE 2026-09-08 -- the old path kept as the fallback
 - [x] ~~One wait covering a channel AND the event queue~~ DONE 2026-09-08 -- `SYS_WAKEWORD`, eventfd's shape
-- [ ] Put the compositor on the wakeword and a channel -- init is the first caller; the desktop is the one they exist for
+- [x] ~~Put the compositor on the wakeword and a channel~~ DONE 2026-09-09 -- every client request rides it now, stage 6b
 - [x] ~~A client's TITLE reaches the compositor directly, with its payload~~ DONE 2026-09-08 -- `lib/uwmchan.h`
 - [x] ~~Drop the kernel's title, hints and cursor, and shrink `WIN_REQ_WINDOW_INFO` to geometry~~ DONE 2026-09-08
-- [ ] `app_id` stays for now -- it rides CREATE so a window is never nameless, which ACTIVATE depends on
+- [x] ~~`app_id` stays for now, since ACTIVATE depends on it~~ DONE 2026-09-09 -- ACTIVATE matches on the spawn path now, stage 6a
 - [x] ~~Named shared memory has an owner: private by default, `SHM_PUBLIC` for a beacon, `SYS_SHM_GRANT` for the rest~~ DONE 2026-09-08
 - [x] ~~Stage 5a: the client owns its window memory and the kernel adopts it~~ DONE 2026-09-08
 - [x] ~~Stage 5b: the compositor opens it directly~~ DONE 2026-09-08 -- the client grants; a generation says when to re-open
 - [x] ~~The client allocates its own buffer~~ DONE 2026-09-08 -- both carved window regions are gone from the ring-3 map
-- [ ] **NEXT** Delete the kernel's window table, leaving ring 0 the framebuffer grant and raw input
+- [x] ~~Delete the kernel's window table, leaving ring 0 the framebuffer grant and raw input~~ DONE 2026-09-09 -- stages 6a and 6b
 
 ### A layout engine for the GUI
 

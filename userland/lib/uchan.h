@@ -51,7 +51,14 @@ int uchan_server_open(struct uchan_server *s, const char *name);
 
 // Adopts any client ring that has appeared and drops any whose client
 // has gone. Cheap enough to call once a frame; it walks QUERY_SHM.
-void uchan_server_scan(struct uchan_server *s);
+//
+// **RETURNS HOW MANY CLIENTS DEPARTED**, and writes their pids into
+// `gone` (at most `gone_cap`; pass NULL to ignore them). A server that
+// holds state per client needs this: a dead client's name stops
+// resolving, and if the slot is reclaimed silently, whatever that
+// client owned is left with nothing to retire it. The compositor's
+// windows are exactly that.
+int uchan_server_scan(struct uchan_server *s, int *gone, int gone_cap);
 
 // The next message from any client, round-robin. Returns the sending
 // pid and fills at most `cap` bytes of `out`, or 0 when every ring is

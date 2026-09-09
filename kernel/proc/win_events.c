@@ -39,6 +39,22 @@ struct event_queue {
     int head;    // next slot to pop
     int count;   // how many are queued
     int dropped; // overflow drops since the last reset
+
+    // **HAS THIS PROCESS EVER ASKED FOR A WINDOW EVENT?** Nothing else
+    // calls SYS_WAIT_EVENT or SYS_POLL_EVENT, so this is "is it a
+    // windowing client" -- the one question the kernel's window table
+    // used to answer that is not window state. Two things need it and
+    // neither cares about a window: the font broadcast, and asking
+    // every client to close when the compositor dies.
+    //
+    // **THE COMPOSITOR IS NOT IN THIS SET.** It parks on its channel's
+    // futex rather than on a window event, so both callers reach it
+    // separately -- see win_server_broadcast(), where forgetting that
+    // has now cost a font change twice.
+    //
+    // Cleared with the queue at spawn, so a reused slot never inherits
+    // the last tenant's answer.
+    int client;
 };
 
 static struct event_queue queues[WIN_EVENTS_MAX_PIDS];
@@ -54,6 +70,7 @@ void win_events_reset(int pid) {
     q->head = 0;
     q->count = 0;
     q->dropped = 0;
+    q->client = 0;
 }
 
 // Input is what a full queue sheds -- the compositor's raw events and a
@@ -134,6 +151,16 @@ int win_events_push(int pid, const struct win_event *ev) {
 // This client's wait channel -- see scheduler.h. The queue's own
 // address, so a wake reaches exactly the process whose queue grew.
 const void *win_events_wait_chan(int pid) { return queue_for(pid); }
+
+void win_events_mark_client(int pid) {
+    struct event_queue *q = queue_for(pid);
+    if (q) q->client = 1;
+}
+
+int win_events_is_client(int pid) {
+    struct event_queue *q = queue_for(pid);
+    return q ? q->client : 0;
+}
 
 int win_events_pop(int pid, struct win_event *out) {
     struct event_queue *q = queue_for(pid);

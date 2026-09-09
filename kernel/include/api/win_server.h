@@ -40,97 +40,32 @@
 // promotion trigger -- a header starts in kernel/ and moves here once
 // an app genuinely needs it -- rather than a hole in the boundary.
 
-// Presentation callbacks. Every one takes `pid` explicitly rather than
-// consulting the scheduler, so a server never has to assume it is being
-// called in the requesting process's own context -- a batched
-// shared-ring transport would break that assumption.
+// **ONE SLOT IS LEFT, AND THE STRUCT IS A REMNANT.** This was the
+// ring-0 presentation layer's interface -- eleven callbacks the kernel
+// invoked as it served a client's window requests. It serves none: the
+// requests reach the compositor over its own channel and the window
+// table is gone (stage 6b), so ten of the eleven had no call site left.
+// They are removed rather than kept "in case", because a slot nothing
+// can reach is a slot a future reader will fill and wonder about.
+//
+// `debug_command` survives because the `gui` diagnostic channel is
+// genuinely still the kernel's: a serial console types a command and
+// the reply is chunked back through win_transport.h.
 struct win_server_ops {
-    // A client window was created and its buffer mapped. Return 1 to
-    // accept it, 0 to refuse (no free slot in the window list); on 0
-    // the caller frees the buffer and the request fails.
-    //
-    // NO POINTER TO THE PIXELS: a window's frames are an shm object and
-    // are not contiguous, so there is no kernel-visible linear address
-    // to hand over. A presentation layer reads them where it is mapped.
-    //
-    // `app_id` is the client's own name for what this window IS -- an
-    // icon hint and a label, already truncated to fit WIN_APP_ID_LEN,
-    // and "" when the client did not give one.
-    int (*window_created)(int pid, uint32_t id,
-                           int w, int h, int x, int y,
-                           const char *app_id);
-
-    // The client finished drawing into `id`'s buffer.
-    void (*window_present)(int pid, uint32_t id);
-
-    // `id` is going away -- drop it from the window list. Called both
-    // for an explicit WIN_REQ_DESTROY and for every window still open
-    // when a client dies. `buf` stays valid until this returns.
-    void (*window_destroyed)(int pid, uint32_t id);
-
-    // Set `id`'s title (already truncated to fit WIN_TITLE_LEN).
-    void (*window_title)(int pid, uint32_t id, const char *title);
-
-    // The client declared how this window should behave --
-    // WIN_HINT_* flags plus a minimum content size. Behaviour is
-    // DECLARED, never inferred (see abi/win_proto.h).
-    void (*window_hints)(int pid, uint32_t id, unsigned flags,
-                          int min_w, int min_h);
-
-    // `id`'s buffer has been reallocated at `w` x `h` and the old
-    // frames are already released. The client asked for this -- see the
-    // configure/ack handshake in abi/win_proto.h -- so the presentation
-    // layer is being told, not asked.
-    void (*window_resized)(int pid, uint32_t id, int w, int h);
-
-    // The client answered a liveness ping with this serial. OPTIONAL,
-    // like every slot here -- a presentation layer that does not care
-    // about liveness leaves it NULL and clients simply never get
-    // pinged, because nothing asks.
-    //
-    // Note which side owns what: win_server relays the pong (it owns
-    // the protocol), and the WM decides what a missing one MEANS (it
-    // owns presentation -- the title, the dialog, the policy). The
-    // timeout is not in here for that reason.
-    void (*window_pong)(int pid, uint32_t id, uint32_t serial);
-
     // Run one `gui` diagnostic command and write its reply into `out`
     // (`cap` bytes including the NUL). Returns the number of bytes
     // written, or -1 if the subcommand was not recognised.
     //
-    // OPTIONAL, like every slot here: a presentation layer with no
-    // diagnostics leaves it NULL and the channel answers "no window
-    // manager", rather than this file having to know what a `gui`
-    // command is. It does not -- the reply is opaque text, and which
-    // subcommands exist is entirely the WM's business.
+    // OPTIONAL: a presentation layer with no diagnostics leaves it NULL
+    // and the channel answers "no window manager", rather than this file
+    // having to know what a `gui` command is. It does not -- the reply
+    // is opaque text, and which subcommands exist is the WM's business.
     //
     // The WHOLE reply is produced in one call and chunked by the caller.
     // The alternative -- letting the WM stream chunks as it formats --
     // would make every `gui` command re-entrant with respect to the
     // transport, and these are dispatched from inside wm_run() itself.
     int (*debug_command)(const char *line, char *out, int cap);
-
-    // Ask every window belonging to `pid` to close, through whatever
-    // path the presentation layer already uses for its own close button
-    // -- so a client may refuse, and there is no second close policy.
-    // Returns how many windows were asked. OPTIONAL like every slot.
-    int (*close_pid)(int pid);
-
-    // window_activate IS GONE. Single instance is settled entirely
-    // between the client and the compositor now, over the channel --
-    // the kernel neither decides it nor forwards it (see
-    // WIN_REQ_ACTIVATE in abi/win_proto.h).
-
-    // Arm (or, with ms == 0, cancel) this window's repeating timer.
-    // OPTIONAL like every slot: a presentation layer without one simply
-    // never delivers WIN_EV_TIMER, and a client that asked for one waits
-    // forever -- which is why Toykit falls back to polling rather than
-    // assuming the event will come.
-    //
-    // The INTERVAL lives with the presentation layer because that is
-    // what has a frame loop to check it against; win_server owns no
-    // clock of its own.
-    void (*window_timer)(int pid, uint32_t id, unsigned ms);
 };
 
 // Registers the presentation layer. The WM calls this with its ops as
@@ -207,19 +142,17 @@ int win_server_request(int pid, struct win_request_msg *req);
 // offers no debug_command.
 int win_server_debug(int pid, struct win_debug_msg *msg);
 
-// One event to every window AND to the compositor -- see the definition
-// for why the compositor needs saying separately.
+// One event to every WINDOWING CLIENT -- every process that has waited
+// for a window event (win_events_is_client). `window` is 0 on every
+// copy: what rides this (WIN_EV_FONT, WIN_EV_SCREEN) is about the
+// session, never about one window.
 void win_server_broadcast(uint32_t type, int32_t a, int32_t b,
                            uint32_t mods);
 
-// Destroys every window `pid` still owns, freeing and unmapping their
-// buffers. Called from process teardown -- a dead client's windows must
-// leave the screen immediately, or they sit there drawing stale pixels
-// and answering no input.
+// The compositor role's teardown, when `pid` dies. There are no windows
+// to destroy here any more -- a client's windows belong to the
+// compositor, which learns of the death from its own channel scan.
 void win_server_client_gone(int pid);
-
-// How many windows `pid` currently owns. For tests and `gui state`.
-int win_server_window_count(int pid);
 
 // --- cross-process buffer sharing (Milestone 41, stage 1) ------------
 //
@@ -269,31 +202,9 @@ int win_server_compositor_pid(void);
 // no window mapping to make, revoke or poison -- see
 // docs/winserver-ring3-design.md's stage 5b.
 
-// Creates a window for `pid` with no live process and without going
-// through the protocol.
-//
-// **For KTESTs**, which have no client to create the buffer objects a
-// real window's pixels live in -- and need none, since the kernel holds
-// neither the objects nor a mapping of them. Returns 1 and fills
-// `*out_id` on success.
-//
-// Not a back door around the guard: everything it produces is an
-// ordinary window, subject to the same ownership checks as any other.
-int win_server_create_raw(int pid, int w, int h, uint32_t *out_id);// Destroys a window created by win_server_create_raw(). Same teardown
-// the protocol's WIN_REQ_DESTROY performs, addressable from a test.
-int win_server_destroy_raw(int pid, uint32_t id);
-
-// Resizes one, running the same size-and-generation update the
-// protocol's WIN_REQ_RESIZE runs.
-int win_server_resize_raw(int pid, uint32_t id, int w, int h);
-
-// A buffer's own pixel count (w * h), 0 if the window does not have it.
-// For a KTEST asserting WHICH of the two a resize touched -- the other
-// is the client's to replace, not the server's to grow.
-int win_server_buf_size(int pid, uint32_t id, int buf);
-
-// WHICH OBJECT a buffer is on: the generation a present reports, which
-// goes up each time the client replaces the object behind the name.
-uint32_t win_server_buf_gen(int pid, uint32_t id, int buf);
+// THE KTEST STAND-INS ARE GONE. They made a window with no client
+// behind it so a kernel test could exercise the table; there is no
+// table. What they covered is the compositor's now, and is checked from
+// ring 3 -- see win_server_test.c, which names the tools.
 
 #endif

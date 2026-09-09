@@ -178,7 +178,6 @@ a command), and the `gui3`/`nano` aliases.
 - [`guictl`](guictl.md)
 - [`ktest`](ktest.md)
 - [`lsshm`](lsshm.md)
-- [`lswin`](lswin.md)
 - [`random`](random.md)
 - [`reboot`](reboot.md)
 - [`ring3test`](ring3test.md)

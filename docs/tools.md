@@ -1272,22 +1272,25 @@ window without going through it will find its layout polls timing out.
   narrows the window and `assert_ports_free()` at the launch catches the
   residue. `TOYOS_ALLOW_PORT_CLASH=1` bypasses it deliberately.
 - **`window_resize_probe.py`** -- drags a client window's resize grip
-  repeatedly and prints BOTH views of it after each drag: `guictl
-  windows` (the compositor's list) beside `lswin` (the window server's,
-  per buffer). **The pair is the point.** A window-protocol bug is
-  usually the two disagreeing rather than either being wrong alone, and
-  reading only one of them is how three wrong hypotheses about a resize
-  bug got written in an afternoon.
+  repeatedly and prints what the compositor believes about it after each
+  drag: the content size, which buffer and generation it is showing, the
+  WM's own measured resize lag, and how many proposals the drag caused.
+  **IT USED TO PRINT TWO VIEWS.** The kernel kept its own record of
+  every window and `lswin` reported it beside this one, because a
+  window-protocol bug was usually the two disagreeing -- reading only
+  one of them is how three wrong hypotheses about a resize bug got
+  written in an afternoon. Stage 6b deleted the kernel's record, so
+  there is one view and nothing to disagree with it.
 
   `--mode live|outline|auto` sets `desktop.resize_mode` first, because a
   drag is not one path: the WM either repaints the window live or draws
   an outline and proposes once on release, and a bug in one is invisible
   to the other. `--app`/`--title` point it at a different client.
 
-  It needs a guest already running (`vm.py start`), matches the two
-  views BY PID rather than taking the first row -- two windows sharing a
-  title would otherwise report a disagreement that is the probe's own --
-  and has no verdict, so no runner names it. A diagnostic, like
+  It needs a guest already running (`vm.py start`), REFUSES an ambiguous
+  title rather than picking -- two clients sharing one made it compare
+  two different windows and report a disagreement that was its own,
+  twice -- and has no verdict, so no runner names it. A diagnostic, like
   `pixel_probe.py` beside it.
 - **`pixel_probe.py`** -- reads exact pixel values out of screenshots,
   and tabulates the same points across several (`--compare a.png b.png
@@ -2774,15 +2777,18 @@ window without going through it will find its layout polls timing out.
   be mid-command; seven tools "failed" that way in one run here, none of
   them at fault. An flock rather than a pidfile check, so a run killed
   with -9 leaves nothing to clean up.
-- **`resize_stride_test.py`** -- a resized window's two buffers agree
-  with the size the client is drawing at. 4 checks. **THE ASSERTION IS
-  TWO NUMBERS, NOT PIXELS**: the shear it hunts is the server and the
-  client disagreeing about one buffer's width, which `lswin` already
-  prints, and a diagonal in a screenshot is both harder to detect and
-  weaker evidence. **It steps by ONE pixel and that is load-bearing** --
-  a buffer's length is page-rounded, so a larger step crosses a page
-  boundary and the bug hides. `--control` prints the edit that reddens
-  it (measured: 8 of 16 steps).
+- **`resize_stride_test.py`** -- a resized window is composited at the
+  size it was DRAWN at. 4 checks. **THE ASSERTION IS TWO NUMBERS, NOT
+  PIXELS**: a shear is a stride disagreement, and reading the numbers
+  beats hunting a diagonal in a PNG. It originally compared the kernel's
+  record of each buffer against the compositor's; stage 6b deleted the
+  kernel's record, so it now checks that the compositor's content size
+  tracks every one-pixel step -- which it can only know from the frame
+  -- with the buffer's GENERATION moving as the control that the buffer
+  was really replaced. **It steps by ONE pixel and that is
+  load-bearing**: a buffer's length is page-rounded, so a larger step
+  takes a different path through the client's buffer handling.
+  `--control` prints the edit that reddens it.
 - **`uapp_test.py`** -- the TWP resize handshake and focus events, via
   `winclient` (which contains no resize code -- it sets
   `.flags = UAPP_RESIZABLE` and nothing else, so what is under test is

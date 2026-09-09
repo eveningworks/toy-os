@@ -200,6 +200,14 @@ static int event_get(struct syscall_ctx *c, int blocking) {
         klog_write("syscall: event() rejected -- caller has no event queue\n");
         c->regs[14] = (uint64_t)(int64_t)-EPERM;
     } else {
+        // **ASKING FOR A WINDOW EVENT IS THE DECLARATION.** Nothing but
+        // a windowing client calls either of these, so this is where
+        // the kernel learns which processes to reach with a broadcast
+        // -- the question the window table used to answer. Marked on
+        // the POLLING path too: an app with a tick and no timer never
+        // blocks, and would otherwise never hear the font change.
+        win_events_mark_client(pid);
+
         struct win_event ev;
         if (win_events_pop(pid, &ev)) {
             // Validated above BEFORE the pop, so a bad pointer cannot

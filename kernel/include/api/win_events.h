@@ -40,6 +40,23 @@ const void *win_events_wait_chan(int pid);
 // `gui state`, not for delivery decisions.
 int win_events_pending(int pid);
 
+// Is `pid` a WINDOWING CLIENT -- has it ever waited for a window event?
+//
+// The kernel's answer to "who are the GUI processes", which it needs in
+// exactly two places and in neither of them because of a window: the
+// font broadcast, and asking everyone to close when the compositor
+// dies. Both used to walk the window table; the table is gone, and this
+// is the part of it that was never really about windows.
+//
+// A process that waited once and no longer has a window still answers
+// yes. That is the safe direction for both callers -- a font event it
+// ignores costs nothing, and a close it ignores is what a close is.
+int win_events_is_client(int pid);
+
+// Records that `pid` asked for a window event. Called from the two
+// syscalls that do; nothing else should.
+void win_events_mark_client(int pid);
+
 // How many events have been dropped to overflow for `pid` since its
 // last reset. A client that sees this climbing is not keeping up --
 // worth surfacing rather than losing silently, which is exactly the

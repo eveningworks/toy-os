@@ -1,50 +1,54 @@
 #!/usr/bin/env python3
-"""tools/resize_stride_test.py -- a resized window's buffers agree with
-the size the client is drawing at.
+"""tools/resize_stride_test.py -- a resized window is composited at the
+size it was DRAWN at.
 
 WHAT THIS COVERS
 ----------------
 A window has two buffers, and only the one being drawn into is rebuilt
-on a resize (`abi/win_proto.h`'s configure/ack). The other is the
-client's to bring up to date before it draws into it next, which
-Toykit's `buf_ensure()` does -- replacing the object if it needs to, and
-telling the server the new dimensions with `WIN_REQ_BUFFER`.
+on a resize (`abi/win_proto.h`'s configure/ack). The compositor has to
+know how big the buffer it is about to show actually is, or it walks the
+pixels with the wrong row stride and the window shears one pixel per row
+-- a diagonal that STAYS until some later resize happens to correct it.
 
-When that second half does not happen, the client draws at one stride
-and the compositor composites at another, because a present carries the
-SERVER's record of the front buffer's size. The window is then sheared
-one pixel per row, and it stays sheared until a further resize happens
-to correct the record -- which is exactly what a person reports as
-"resizing sometimes skews the window".
+The two ways that has gone wrong are different, and this covers the
+second:
+
+* **A second record going stale.** The kernel used to keep each buffer's
+  size and a present answered from that copy, which the client had to
+  remember to update. It did not, whenever a one-pixel resize left the
+  buffer's page count unchanged. Fixed, then designed out: stage 6b put
+  the size ON the frame, so there is no second record.
+* **The frame carrying the wrong size.** That is what is left, and what
+  this checks: `WIN_REQ_PRESENT` names the buffer, its generation and
+  its dimensions, and a client that sends any of the three wrongly
+  composites at the wrong stride exactly as before.
 
 THE ASSERTION
 -------------
-At rest, after the client has repainted, `lswin` must report BOTH of a
-window's buffers at the window's own size. This is not a pixel test on
-purpose: the shear is a disagreement between two numbers the kernel
-already prints, and reading them is both sharper and cheaper than
-looking for a diagonal in a screenshot.
+Sweep sixteen ONE-PIXEL resizes. After each, the compositor's content
+size must equal the size the WM asked for -- it can only know that from
+the frame -- and across the sweep the front buffer's GENERATION must
+move, which is what says the buffer was really replaced rather than the
+numbers merely agreeing.
+
+Not a pixel test, on purpose: the shear is two numbers disagreeing, and
+reading them is sharper and cheaper than hunting a diagonal in a PNG.
 
 WHY IT STEPS BY ONE PIXEL
 -------------------------
-The bug is invisible at any larger step. A buffer's length is page
-rounded, and the old check compared lengths -- so it caught a resize
-that crossed a page boundary and missed one that did not. A 7-pixel
-drag moves w*h*4 by enough to cross one nearly every time; a 1-pixel
-drag usually does not. Whatever replaces this check, the sweep has to
-keep single-pixel steps or it measures nothing.
+Inherited from the bug that produced this file and still the right
+choice. A buffer's length is page rounded, so a larger step crosses a
+page boundary and takes a different path through the client's buffer
+handling; single-pixel steps are the ones that do not.
 
 POSITIVE CONTROL
 ----------------
-Run with --control for the exact edit. MEASURED against the pre-fix
-build: 8 of the 16 sweep steps went red on a 986-wide Terminal, in the
-alternating pattern page rounding predicts, and the "size held" check
-went red with them.
+Run with --control for the exact edit. MEASURED: sending `a->w - 1` as
+the present's width reddens the sweep on every step.
 """
 
 import argparse
 import os
-import re
 import sys
 import time
 
@@ -56,20 +60,14 @@ import port_guard                                 # noqa: E402
 TITLE = "Terminal"
 STEPS = 16
 
-CONTROL = """In userland/ui/uapp.c's buf_ensure(), put the length
-comparison back in place of the dimension one:
+CONTROL = """In userland/ui/uapp.c's present(), lie about the width:
 
-    uint64_t want = ((uint64_t)w * (uint64_t)h * 4 + 4095) & ~4095ULL;
-    if (g_px[buf] && g_px_bytes[buf] == want) return 1;
+    WIN_PRESENT_SIZE(a->w - 1, a->h)
 
-then `make iso` and re-run. Roughly half the sweep steps must go red.
+then `make iso` and re-run. Every sweep step must go red -- the
+compositor adopts what the frame says, so the window it reports is one
+pixel narrower than the one the client drew.
 """
-
-# `lswin`'s rows: pid, window, w, h, front, then w x h and a generation
-# per buffer. Matched rather than split on whitespace so a changed
-# column count fails loudly here instead of shifting an index silently.
-ROW = re.compile(r"^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+"
-                 r"(\d+)x(\d+)\s+g(\d+)\s+(\d+)x(\d+)\s+g(\d+)\s*$")
 
 
 class Result:
@@ -83,17 +81,6 @@ class Result:
             print(f"        {detail}")
 
 
-def lswin_row(dbg, pid):
-    """The kernel's row for `pid`'s window: (w, h, front, bufs)."""
-    for line in dbg.send("sh lswin").replace("\r", "").split("\n"):
-        m = ROW.match(line)
-        if not m or int(m.group(1)) != pid:
-            continue
-        g = [int(x) for x in m.groups()]
-        return g[2], g[3], g[4], [(g[5], g[6]), (g[8], g[9])]
-    return None
-
-
 def run(dbg, res):
     if not dbg.window(TITLE):
         dbg.open_app(TITLE)
@@ -103,41 +90,42 @@ def run(dbg, res):
     if not win:
         return
 
-    pid = win.get("client_pid")
-    res.check("the window reports its client pid", pid is not None,
-              "no client_pid in `gui windows` -- cannot find its lswin row")
-    if pid is None:
-        return
-
     w0, h0 = win["content"]["w"], win["content"]["h"]
-    bad = []
+    bad, gens = [], set()
     for i in range(STEPS):
         want_w = w0 + i
         dbg.send(f"gui resize {want_w} {h0}")
         time.sleep(1.0)
         dbg.settle()
-        row = lswin_row(dbg, pid)
-        if row is None:
-            bad.append(f"{want_w}: no lswin row")
+        win = dbg.window(TITLE)
+        if not win:
+            bad.append(f"{want_w}: window gone")
             continue
-        kw, kh, _front, bufs = row
-        if kw != want_w or kh != h0:
-            # The client declined or the WM clamped -- not this test's
-            # subject, and asserting on it would fail for the wrong
-            # reason at the screen edge.
-            continue
-        if any(b != (kw, kh) for b in bufs):
-            bad.append(f"{kw}x{kh}: buffers {bufs}")
+        got = win["content"]["w"]
+        # A client may legitimately decline (a fixed-size app, or the
+        # screen edge). Terminal does neither at these sizes, so a
+        # mismatch here IS the frame carrying a wrong size.
+        if got != want_w:
+            bad.append(f"asked {want_w}, composited {got}")
+        buf = win.get("buf")
+        if buf:
+            gens.add(buf.get("gen"))
 
-    res.check(f"both buffers match the window at every size ({STEPS} 1px steps)",
-              not bad, "; ".join(bad))
+    res.check(f"the composited size matches the drawn size at every step "
+              f"({STEPS} 1px resizes)", not bad, "; ".join(bad))
 
-    # The window really did move, so the sweep above was not asserting
-    # over a client that ignored every proposal.
+    # THE CONTROL FOR THE CHECK ABOVE. Sizes that agree while the buffer
+    # was never replaced would mean the sweep proved nothing about the
+    # frame -- the client would be reporting numbers it never drew at.
+    res.check("the buffer really was replaced across the sweep",
+              len(gens) > 1,
+              f"generations seen: {sorted(gens)} -- expected more than one")
+
     win = dbg.window(TITLE)
     res.check("the sweep actually resized the window",
               win is not None and win["content"]["w"] == w0 + STEPS - 1,
-              f"ended at {win['content'] if win else None}, wanted w={w0 + STEPS - 1}")
+              f"ended at {win['content'] if win else None}, "
+              f"wanted w={w0 + STEPS - 1}")
 
 
 def main():

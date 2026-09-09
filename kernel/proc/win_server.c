@@ -37,74 +37,21 @@
 // name itself -- so there is nothing here to allocate, adopt, map or
 // free. What is left of a buffer in this file is its SIZE and its
 // GENERATION, which is what a present has to carry.
-// How many buffers a window has. Every loop over them takes this
-// rather than a range from its caller -- a call site that has to
-// remember there are two is how the second one stopped being revoked.
-#define WIN_BUFS 2
+// **THERE IS NO WINDOW TABLE.** Stage 6b took it: a window's slot, its
+// two buffers, their sizes and their generations were all state the
+// kernel kept in order to answer requests it no longer receives. Every
+// one of those requests reaches the compositor over its own channel
+// now, carrying its payload, and the compositor owns the list.
+//
+// What is left in this file is what ring 0 must own: the compositor
+// ROLE, the framebuffer grant keyed on it, the font it maps into a
+// client, and the per-process event queue that carries input outward.
+// None of it knows that a window exists.
 
-// ONE BUFFER, WITH ITS OWN SIZE. The dimensions belong to the BUFFER
-// rather than to the window, which is what lets a resize rebuild the
-// back buffer while the front still holds the last finished frame at
-// the size it was drawn at -- Wayland's model, where a wl_buffer
-// carries its dimensions and the surface adopts them on commit. The
-// window's own w/h below is the CLIENT's current size; the front
-// buffer catches up at the next present.
-struct win_buf {
-    int w, h;         // what the client says it built this one at; 0x0
-                       // is a buffer this window does not have, which is
-                       // a working window and not an error (see below)
-
-    // WHICH OBJECT IS BEHIND THE NAME. The name identifies the slot and
-    // never changes; the client replaces the object under it on a
-    // resize and this goes up. A present carries it, and a compositor
-    // holding a different one re-opens the name -- see
-    // WIN_EV_CLIENT_PRESENT.
-    uint32_t gen;
-};
-
-struct client_window {
-    int used;
-    int pid;
-    uint32_t id;      // index into the owner's slots, and the slot
-                       // the client named its buffer objects after
-
-    // THE TWO BUFFERS, and the kernel takes the client's word that both
-    // exist: it holds neither object and cannot look. **NO CLIENT
-    // PRODUCES A SINGLE-BUFFERED WINDOW ANY MORE** -- Toykit makes both
-    // objects or opens no window -- so `bufs[1].w == 0` is a state
-    // nothing reaches today. The flip below still tests for it, because
-    // the alternative is a protocol that cannot express a client with
-    // one buffer at all.
-    //    // A window is double-buffered so the compositor never reads memory
-    // a client is drawing into. `front` says which of the two it should
-    // read; the client draws into the other, and WIN_REQ_PRESENT flips
-    // it.
-    struct win_buf bufs[WIN_BUFS];
-    int front;        // 0 or 1: which buffer the compositor reads
-
-    // THE CLIENT'S CURRENT SIZE -- what it draws and what the BACK
-    // buffer is built to. The front buffer may still be the previous
-    // size, so a caller that means "the pixels the compositor is
-    // reading" must ask bufs[front], not this.
-    int w, h;
-
-    // THE ONLY THING A CLIENT SAYS THAT THE KERNEL STILL KEEPS: its own
-    // NAME for what this window is ("notepad"). A display string and an
-    // icon hint, and **NOT the identity** -- the compositor derives
-    // that from the owning process's spawn path (QUERY_PROCPATH), which
-    // is the one thing a client cannot get wrong. The title, the hints
-    // and the cursor shape all left for the channel
-    // (userland/lib/uwmchan.h); this stayed because it rides
-    // WIN_REQ_CREATE, so a window can never exist without one.
-    char app_id[WIN_APP_ID_LEN];
-};
-
-// The registered compositor: the one process raw input is delivered
-// to, and the one the framebuffer is granted to. It no longer maps
-// anything through the kernel -- see win_server.h.
+// The registered compositor: the one process raw input is delivered to,
+// and the one the framebuffer is granted to.
 static int g_comp_pid = 0;
-
-
+static uint64_t g_comp_pml4 = 0;
 
 // See win_proto.h's WIN_REQ_FB_CURSOR. Belongs to the ROLE, like the
 // framebuffer grant: cleared in win_server_set_compositor(), the one
@@ -112,141 +59,6 @@ static int g_comp_pid = 0;
 static int g_hw_cursor_armed = 0;
 
 int win_server_hw_cursor_armed(void) { return g_hw_cursor_armed; }
-static uint64_t g_comp_pml4 = 0;
-
-// [pid - 1][window id]. A flat table rather than a list: WIN_CLIENT_MAX
-// windows across MAX_PROCS processes is 16 entries, and a fixed table
-// makes "is this window really that client's?" a bounds check instead
-// of a walk -- which matters, because that question is the entire
-// access-control story for this protocol.
-static struct client_window windows[WIN_SERVER_MAX_PIDS][WIN_CLIENT_MAX];
-
-static const struct win_server_ops *g_ops = NULL;
-
-void win_server_register(const struct win_server_ops *ops) {
-    g_ops = ops;
-}
-
-const struct win_server_ops *win_server_ops_current(void) {
-    return g_ops;
-}
-
-int win_server_active(void) {
-    return g_ops != NULL;
-}
-
-int win_server_any(void) { return win_server_active() || g_comp_pid != 0; }
-
-// Tells the registered compositor that a client did something.
-//
-// A no-op when nothing has registered, which is the ring-0 desktop's
-// whole lifetime today -- exactly as the win_server_ops calls beside it
-// are skipped when `g_ops` is NULL. So both halves of the inversion can
-// be live at once during the migration without either disturbing the
-// other, which is the property every stage of this plan has been shaped
-// to keep.
-//
-// Fire and forget: no reply, no blocking. Nothing here needs an answer
-// -- activate, the one request that did, is the compositor's now.
-static void tell_compositor(uint32_t type, int pid, uint32_t id,
-                             int32_t b, uint32_t mods) {
-    if (!g_comp_pid) return;
-    struct win_event ev;
-    k_memset(&ev, 0, sizeof ev);
-    ev.type = type;
-    ev.window = id;
-    ev.a = pid;
-    ev.b = b;
-    ev.mods = mods;
-    win_events_push(g_comp_pid, &ev);
-}
-
-// The one place that answers "does `pid` own `id`?". Everything that
-// acts on a client-named window goes through this, so a client cannot
-// present, retitle or destroy a window belonging to another process by
-// guessing an id.
-static struct client_window *lookup(int pid, uint32_t id) {
-    if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return NULL;
-    if (id >= WIN_CLIENT_MAX) return NULL;
-    struct client_window *cw = &windows[pid - 1][id];
-    if (!cw->used || cw->pid != pid) return NULL;
-    return cw;
-}
-
-// Ends a window. THE PIXELS SURVIVE IT: they are the client's object,
-// and whoever still has it mapped -- the compositor, until it drains
-// the event below -- holds it alive by reference. Nothing here has a
-// mapping to revoke, which is what retired the poison page.
-static void destroy_window(struct client_window *cw) {
-    if (!cw->used) return;
-
-    if (g_ops && g_ops->window_destroyed) g_ops->window_destroyed(cw->pid, cw->id);
-    tell_compositor(WIN_EV_CLIENT_DESTROYED, cw->pid, cw->id, 0, 0);
-
-    for (int b = 0; b < WIN_BUFS; b++) cw->bufs[b].w = cw->bufs[b].h = 0;
-    cw->used = 0;
-    cw->front = 0;
-}
-
-// `want_slot` is the slot the CLIENT proposed -- its buffers are named
-// after it (abi/win_proto.h), so the kernel cannot choose a different
-// one. Negative means "any", which is what the KTEST entry point passes.
-static int create_window(int pid, int want_slot,
-                         int w, int h, int x, int y,
-                          const char *app_id, uint32_t *out_id) {
-    if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return 0;
-
-    if (w <= 0 || h <= 0 || w > WIN_CLIENT_MAX_W || h > WIN_CLIENT_MAX_H) {
-        klog_write("win_server: create refused -- bad size\n");
-        return 0;
-    }
-
-    int slot = -1;
-    if (want_slot >= 0) {
-        if (want_slot >= WIN_CLIENT_MAX) return 0;
-        if (windows[pid - 1][want_slot].used) {
-            klog_write("win_server: create refused -- that slot is in use\n");
-            return 0;
-        }
-        slot = want_slot;
-    }
-    for (int i = 0; slot < 0 && i < WIN_CLIENT_MAX; i++)
-        if (!windows[pid - 1][i].used) slot = i;
-    if (slot < 0) {
-        klog_write("win_server: create refused -- client already holds WIN_CLIENT_MAX windows\n");
-        return 0;
-    }
-
-    struct client_window *cw = &windows[pid - 1][slot];
-    k_memset(cw, 0, sizeof *cw);
-    cw->used = 1;
-    cw->pid = pid;
-    cw->id = (uint32_t)slot;
-    // BOTH BUFFERS ARE ASSUMED PRESENT at the created size. The client
-    // makes them before it asks, and a window whose second one could not
-    // be made says so with WIN_REQ_BUFFER; the kernel cannot look,
-    // because looking would mean holding the object.
-    for (int b = 0; b < WIN_BUFS; b++) { cw->bufs[b].w = w; cw->bufs[b].h = h; }
-    cw->w = w;
-    cw->h = h;
-
-    // Everything the kernel was handed and used to forward without
-    // keeping. The compositor reads it back with WIN_REQ_WINDOW_APPID.
-    k_strlcpy(cw->app_id, app_id ? app_id : "", sizeof cw->app_id);
-
-    tell_compositor(WIN_EV_CLIENT_CREATED, pid, cw->id, w, (uint32_t)h);
-
-    if (g_ops && g_ops->window_created) {
-        if (!g_ops->window_created(pid, cw->id, w, h, x, y, app_id)) {
-            cw->used = 0;
-            klog_write("win_server: create refused -- no room in the window list\n");
-            return 0;
-        }
-    }
-
-    *out_id = cw->id;
-    return 1;
-}
 
 // Maps the desktop's active font read-only into the caller and reports
 // its metrics. See WIN_REQ_FONT in abi/win_proto.h for why the server
@@ -366,118 +178,51 @@ static int map_font(int pid, struct win_request_msg *req) {
     return 1;
 }
 
-// Records that the client replaced ONE of its buffers. The object is
-// the client's -- it unlinked the old one and created a new one under
-// the same name, and the old one stays alive under whatever still maps
-// it, which is the promise shm_unlink already makes. All the kernel
-// does is bump the GENERATION, which is what tells the compositor on
-// the next present to re-open the name.
-//
-// **UNCONDITIONALLY, because the SIZE IS NOT A PROXY for the object.**
-// A client re-created at the size it already had is a new object under
-// the same name, and skipping the bump there would leave the compositor
-// mapping memory nobody draws into any more -- a window frozen on its
-// last frame. It is reachable: a drag proposing the size a window
-// already has, or a restored geometry that matches, both send this.
-static int rebuild_buffer(struct client_window *cw, int b, int w, int h) {
-    struct win_buf *wb = &cw->bufs[b];
-    wb->w = w;
-    wb->h = h;
-    wb->gen++;
-    return 1;
+static const struct win_server_ops *g_ops = NULL;
+
+void win_server_register(const struct win_server_ops *ops) {
+    g_ops = ops;
 }
 
-// A client accepted a proposed size: rebuild the buffer it is about to
-// draw into, and LEAVE THE FRONT ONE ALONE.
-//
-// That asymmetry is the whole of it. The front buffer still holds the
-// last finished frame, at the size it was drawn at, so the compositor
-// goes on showing real pixels for the rest of the round trip instead of
-// a freshly zeroed buffer -- which is a whole window of black for as
-// long as the client takes to repaint (measured at 100-240 ms under
-// TCG). The new size arrives with the frame drawn at it, at the next
-// present. That is Wayland's rule that a buffer carries its own
-// dimensions; X11's server-resizes-then-app-repaints is the shape this
-// used to have, flicker included.
-//
-// A SINGLE-BUFFERED window has nowhere to hide the change and rebuilds
-// the one buffer it has, blank frame and all -- the same degradation it
-// already accepts for tearing.
-static int resize_window(struct client_window *cw, int w, int h, int want_buf) {
-    if (w <= 0 || h <= 0 || w > WIN_CLIENT_MAX_W || h > WIN_CLIENT_MAX_H) return 0;
-
-    // **THE CLIENT SAYS WHICH BUFFER IT PREPARED.** It replaced that
-    // object before asking, and the server must rebuild the SAME one --
-    // computing it here from `front` means both sides deriving the
-    // answer separately, and they disagree the moment a present lands
-    // between the client's replace and this request. The result was a
-    // resize that worked once and then silently stopped.
-    int back = cw->bufs[1].w ? (cw->front ^ 1) : cw->front;
-    if (want_buf >= 0 && want_buf < WIN_BUFS) back = want_buf;
-    if (!rebuild_buffer(cw, back, w, h)) return 0;
-
-    cw->w = w;
-    cw->h = h;
-
-    tell_compositor(WIN_EV_CLIENT_RESIZED, cw->pid, cw->id, w, (uint32_t)h);
-    if (g_ops && g_ops->window_resized) {
-        g_ops->window_resized(cw->pid, cw->id, w, h);
-    }
-    return 1;
+const struct win_server_ops *win_server_ops_current(void) {
+    return g_ops;
 }
 
-// --- QUERY_WINDOWS: what the KERNEL thinks a window is ----------------
+int win_server_active(void) {
+    return g_ops != NULL;
+}
+
+int win_server_any(void) { return win_server_active() || g_comp_pid != 0; }
+
+// Tells the registered compositor that a client did something.
 //
-// The compositor's list is reported by `guictl windows`; this is the
-// other half, and the pair is what makes a disagreement visible instead
-// of inferred.
-
-static int win_q_count(void) {
-    int n = 0;
-    for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++)
-        for (int i = 0; i < WIN_CLIENT_MAX; i++)
-            if (windows[p][i].used) n++;
-    return n;
+// A no-op when nothing has registered, which is the ring-0 desktop's
+// whole lifetime today -- exactly as the win_server_ops calls beside it
+// are skipped when `g_ops` is NULL. So both halves of the inversion can
+// be live at once during the migration without either disturbing the
+// other, which is the property every stage of this plan has been shaped
+// to keep.
+//
+// Fire and forget: no reply, no blocking. Nothing here needs an answer
+// -- activate, the one request that did, is the compositor's now.
+static void tell_compositor(uint32_t type, int pid, uint32_t id,
+                             int32_t b, uint32_t mods) {
+    if (!g_comp_pid) return;
+    struct win_event ev;
+    k_memset(&ev, 0, sizeof ev);
+    ev.type = type;
+    ev.window = id;
+    ev.a = pid;
+    ev.b = b;
+    ev.mods = mods;
+    win_events_push(g_comp_pid, &ev);
 }
 
-static int win_q_fill(int index, void *out) {
-    int n = 0;
-    for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++) {
-        for (int i = 0; i < WIN_CLIENT_MAX; i++) {
-            struct client_window *cw = &windows[p][i];
-            if (!cw->used) continue;
-            if (n++ != index) continue;
-            struct query_window *r = out;
-            k_memset(r, 0, sizeof *r);
-            r->pid = cw->pid;
-            r->id = cw->id;
-            r->w = cw->w;
-            r->h = cw->h;
-            r->front = (uint32_t)cw->front;
-            for (int b = 0; b < WIN_BUFS && b < 2; b++) {
-                r->buf_w[b] = cw->bufs[b].w;
-                r->buf_h[b] = cw->bufs[b].h;
-                r->buf_gen[b] = cw->bufs[b].gen;
-            }
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static const struct query_provider win_q_provider = {
-    .cls = QUERY_WINDOWS,
-    .name = "windows",
-    .record_size = sizeof(struct query_window),
-    .flags = QUERY_F_LIST,
-    .count = win_q_count,
-    .fill = win_q_fill,
-    .fields = NULL,
-    .field_count = 0,
-};
-
-static void win_query_init(void) { query_register(&win_q_provider); }
-INITCALL(win_query_init, INIT_QUERY);
+// **QUERY_WINDOWS IS RETIRED WITH THE TABLE.** It reported what
+// win_server.c believed about each window, beside `guictl windows`'s
+// report of what the compositor believed -- a pair that made a
+// disagreement visible instead of inferred. There is nothing left to
+// disagree: one process holds the list, and `guictl windows` is it.
 
 // --- the diagnostic channel (Milestone 41, stage 3) -------------------
 //
@@ -797,17 +542,6 @@ int win_server_debug(int pid, struct win_debug_msg *msg) {
     return 1;
 }
 
-// Copy one of `text`'s NUL-terminated strings out of a request into a
-// kernel buffer of `cap` bytes, truncating to fit. `req->text` is a
-// fixed array with no guarantee of a terminator, so this bounds on BOTH
-// ends -- a client that fills all 32 bytes with no NUL gets a truncated
-// string rather than a read past the field.
-static void copy_text(char *dst, const char *src, int cap) {
-    int i = 0;
-    for (; i < cap - 1 && i < WIN_TITLE_LEN && src[i]; i++) dst[i] = src[i];
-    dst[i] = '\0';
-}
-
 int win_server_request(int pid, struct win_request_msg *req) {
     if (!req) return -1;
 
@@ -922,136 +656,16 @@ int win_server_request(int pid, struct win_request_msg *req) {
     // one, which is what that used to buy.
     if (!g_ops && !g_comp_pid) return -1;
 
-    // Not addressed to one of the CALLER's own windows -- it names
-    // another process entirely, so it skips the lookup() ownership
-    // check every other request below goes through. That is the whole
-    // point of it (a task manager acts on other processes) and is why
-    // the header documents it as unprivileged rather than leaving the
-    // missing check to be discovered.
-    if (req->type == WIN_REQ_CLOSE_PID) {
-        // The compositor is TOLD; the kernel answers from its own
-        // table, because "does that pid own any windows" is a fact it
-        // already holds and does not need to ask for.
-        int owned = 0;
-        if (req->a >= 1 && req->a <= WIN_SERVER_MAX_PIDS) {
-            for (int i = 0; i < WIN_CLIENT_MAX; i++) {
-                if (windows[req->a - 1][i].used) owned++;
-            }
-        }
-        if (owned) tell_compositor(WIN_EV_CLIENT_CLOSE, req->a, 0, 0, 0);
-        if (g_ops && g_ops->close_pid) return g_ops->close_pid(req->a) > 0 ? 1 : 0;
-        return owned > 0;
-    }
-
-    // WIN_REQ_ACTIVATE IS NOT HERE ANY MORE. "Is a window of my program
-    // already open?" is the compositor's question -- it owns the window
-    // list -- and it asks QUERY_PROCPATH who the asking pid is rather
-    // than being told by the client. The kernel answered it only
-    // because it happened to hold an identity per window, which is the
-    // state this stage removes (docs/winserver-ring3-design.md, 6a).
+    // **NO REQUEST BELOW NAMES A WINDOW**, and that is stage 6b in one
+    // sentence. Create, present, destroy, resize, buffer, title, hints,
+    // cursor, timer, pong, close-pid and activate all reach the
+    // compositor over its own channel now, carrying their payloads; the
+    // kernel has no window table to look one up in and nothing left to
+    // check ownership against. What survives here is what the kernel
+    // genuinely owns -- a client's event QUEUE, the font it maps, and
+    // the framebuffer grant above.
 
     switch (req->type) {
-    case WIN_REQ_CREATE: {
-        uint32_t id = 0;
-        // Truncate rather than refuse, exactly as WIN_REQ_TITLE does:
-        // an over-long id is the client's mistake to notice, and
-        // failing the create over it would turn a cosmetic slip into a
-        // window that never opens.
-        char app_id[WIN_APP_ID_LEN];
-        copy_text(app_id, req->text, WIN_APP_ID_LEN);
-        // `window` is an OUTPUT on this request and free as an input,
-        // which is what carries the slot the client picked -- its
-        // buffers are already named after it (abi/win_proto.h).
-        if (!create_window(pid, (int)req->window,
-                           req->a, req->b, req->c, req->d, app_id, &id))
-            return 0;
-        req->window = id;
-        return 1;
-    }
-    case WIN_REQ_PRESENT: {
-        struct client_window *cw = lookup(pid, req->window);
-        if (!cw) return 0;
-        // THE FLIP HAPPENS HERE, before anybody is told. A client must
-        // know which buffer is safe to draw into the moment this
-        // returns, and the compositor must never be pointed at a buffer
-        // the client has already started on -- doing it in the other
-        // order leaves a window where both are true at once.
-        //
-        // A single-buffered window (no second allocation) stays at 0,
-        // so the client keeps drawing where it was and the compositor
-        // keeps reading the same place. That is the old behaviour, and
-        // the caller needs no special case for it.
-        // **THE KERNEL DOES NOT REBUILD A BUFFER HERE ANY MORE.** It
-        // used to resize the stale half at this point, where the pixels
-        // it held had just stopped being needed -- opportunistic, and
-        // impossible once the memory is the CLIENT's: the object it
-        // would have to grow is one only the client can replace. The
-        // client replaces it before drawing and says so with
-        // WIN_REQ_BUFFER, which is what re-adopts it here.
-        if (cw->bufs[1].w) cw->front ^= 1;
-        // THE SIZE TRAVELS WITH THE FRAME. `mods` carries the front
-        // buffer's own dimensions so the compositor adopts the geometry
-        // of the pixels it is about to show, never a size it was
-        // promised earlier -- see WIN_EV_CLIENT_PRESENT.
-        // `b` CARRIES THE GENERATION TOO: the buffer's name is stable
-        // and the object under it is not, so this is how a compositor
-        // holding the previous one learns to re-open the name.
-        tell_compositor(WIN_EV_CLIENT_PRESENT, pid, cw->id,
-                        WIN_PRESENT_B(cw->front, cw->bufs[cw->front].gen),
-                        WIN_PRESENT_SIZE(cw->bufs[cw->front].w,
-                                         cw->bufs[cw->front].h));
-        if (g_ops && g_ops->window_present) g_ops->window_present(pid, cw->id);
-        // The new FRONT index: what the compositor will read, and
-        // therefore what the client must NOT draw into.
-        return cw->front + 1;   // 1 or 2, so 0 stays "refused"
-    }
-    case WIN_REQ_DESTROY: {
-        struct client_window *cw = lookup(pid, req->window);
-        if (!cw) return 0;
-        destroy_window(cw);
-        return 1;
-    }
-    // WIN_REQ_TITLE, _HINTS and _CURSOR ARE NOT HERE ANY MORE. They go
-    // straight to the compositor over a channel (userland/lib/uwmchan.h)
-    // carrying their payloads, so the kernel neither stores them nor
-    // relays a "something changed" event for them. It never had a use
-    // for any of it -- the storage existed because struct win_event is
-    // 24 bytes and none of those payloads fits.
-    case WIN_REQ_RESIZE: {
-        struct client_window *cw = lookup(pid, req->window);
-        if (!cw) return 0;
-        // c: which buffer the client prepared, -1 for "you choose".
-        if (!resize_window(cw, req->a, req->b, req->c)) return 0;
-        // Hand back what was actually granted, so a client never has to
-        // assume it got what it asked for.
-        req->a = cw->w;
-        req->b = cw->h;
-        return 1;
-    }
-    case WIN_REQ_TIMER: {
-        struct client_window *cw = lookup(pid, req->window);
-        if (!cw) return 0;
-        // A timer with nobody to service it is refused, as before --
-        // but "nobody" now means neither a ring-0 layer NOR a ring-3
-        // compositor, and the compositor is told through the event
-        // beside this call rather than through a slot.
-        if (!g_comp_pid && (!g_ops || !g_ops->window_timer)) return 0;
-        // Negative is nonsense rather than "cancel" -- 0 already means
-        // that, and silently reinterpreting a bad value hides the bug.
-        if (req->a < 0) return 0;
-        tell_compositor(WIN_EV_CLIENT_TIMER, pid, cw->id, req->a, 0);
-        if (g_ops && g_ops->window_timer) g_ops->window_timer(pid, cw->id, (unsigned)req->a);
-        return 1;
-    }
-    case WIN_REQ_PONG: {
-        struct client_window *cw = lookup(pid, req->window);
-        if (!cw) return 0;
-        // Relayed, not interpreted. Whether a late pong or a missing
-        // one means anything is the WM's call -- see win_server.h.
-        tell_compositor(WIN_EV_CLIENT_PONG, pid, req->window, req->a, 0);
-    if (g_ops && g_ops->window_pong) g_ops->window_pong(pid, req->window, req->a);
-        return 1;
-    }
     case WIN_REQ_EVENT_PUSH: {
         // Only the compositor may put events on ANOTHER process's
         // queue. Without this any client could synthesise a keystroke
@@ -1094,40 +708,12 @@ int win_server_request(int pid, struct win_request_msg *req) {
         req->c = g_comp_pid;
         return 0;
     }
-    case WIN_REQ_BUFFER: {
-        struct client_window *cw = lookup(pid, req->window);
-        if (!cw) return 0;
-        int b = req->a;
-        if (b < 0 || b >= WIN_BUFS) return 0;
-        if (req->b <= 0 || req->c <= 0) return 0;
-        if (req->b > WIN_CLIENT_MAX_W || req->c > WIN_CLIENT_MAX_H) return 0;
-        if (!rebuild_buffer(cw, b, req->b, req->c)) return 0;
-        return 1;
-    }
-    // WIN_REQ_MAP_WINDOW AND _UNMAP_WINDOW ARE RETIRED. The compositor
-    // opens a client's buffer by NAME and maps it itself, so there is
-    // nothing to ask for and no kernel-held mapping to release.
-    // WIN_REQ_WINDOW_INFO IS RETIRED. It answered a window's geometry,
-    // and its last caller was the compositor asking for a size the
-    // WIN_EV_CLIENT_CREATED event had just carried to it -- a round trip
-    // that only existed because the same message used to fetch the title
-    // and the hints too, and those left with the state behind them.
-    case WIN_REQ_WINDOW_APPID: {
-        // Same access rule and same "gone is not an error" contract as
-        // WIN_REQ_WINDOW_INFO above -- see win_proto.h for why this
-        // needs its own request rather than a field on that one.
-        //
-        // The app_id the CLIENT declared -- a display string and an
-        // icon hint, nothing keyed on it. The window's IDENTITY used to
-        // ride here too and does not: the compositor derives that from
-        // QUERY_PROCPATH now, so an identity the kernel stores per
-        // window has no reader.
-        if (!g_comp_pid || pid != g_comp_pid) return -1;
-        struct client_window *cw = lookup(req->a, req->window);
-        if (!cw) return -1;
-        copy_text(req->text, cw->app_id, WIN_APP_ID_LEN);
-        return 0;
-    }
+    // WIN_REQ_BUFFER AND WIN_REQ_WINDOW_APPID ARE RETIRED WITH THE
+    // TABLE. The first told the kernel a buffer's new size, which only
+    // mattered because a present answered from that record; a present
+    // carries its own geometry now. The second read back an app_id the
+    // kernel was holding for the compositor, which receives it with the
+    // create.
     case WIN_REQ_FONT:
         return map_font(pid, req);
     default:
@@ -1135,32 +721,37 @@ int win_server_request(int pid, struct win_request_msg *req) {
     }
 }
 
-// One event to EVERY window, and to the compositor.
+// One event to EVERY windowing client, and to the compositor.
 //
-// THE COMPOSITOR FIRST, AND SEPARATELY -- it is not in windows[][]. It
-// owns no window of its own (it draws the screen), so a broadcast that
-// only walked the window table reached every client and missed the one
-// process that draws the chrome, the taskbar and the icons. That is
-// exactly how the font broadcast first looked like it was never
-// delivered at all.
+// **THE COMPOSITOR FIRST, AND SEPARATELY.** It does not block in
+// SYS_WAIT_EVENT -- it parks on its channel's futex, so that it wakes
+// for a client's message and a kernel event alike -- which means it is
+// not in the set below. A broadcast that only walked that set reached
+// every client and missed the one process that draws the chrome, the
+// taskbar and the icons, and the font change looked like it was never
+// delivered at all. That is the SECOND time this has happened: the
+// walk used to be over the window table, which it is also not in.
+//
+// **WHO ELSE IS A CLIENT IS THE EVENT QUEUE'S ANSWER NOW**
+// (win_events_is_client), not the window table's. This never cared
+// which WINDOW anything had, only which PROCESS to wake, and a process
+// that waits for window events is exactly that.
+//
+// `window` is 0 on every copy. It used to name each client's window,
+// which meant a client with two would get two; nothing that rides this
+// (WIN_EV_FONT, WIN_EV_SCREEN) is about a particular window.
 void win_server_broadcast(uint32_t type, int32_t a, int32_t b, uint32_t mods) {
-    // The compositor's own copy names its window as 0 -- it has none,
-    // which is the whole point of telling it separately.
     tell_compositor(type, 0, 0, b, mods);
 
-    for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++) {
-        for (int i = 0; i < WIN_CLIENT_MAX; i++) {
-            struct client_window *cw = &windows[p][i];
-            if (!cw->used) continue;
-            struct win_event ev;
-            k_memset(&ev, 0, sizeof ev);
-            ev.type = type;
-            ev.window = cw->id;
-            ev.a = a;
-            ev.b = b;
-            ev.mods = mods;
-            win_events_push(cw->pid, &ev);
-        }
+    for (int pid = 1; pid <= WIN_SERVER_MAX_PIDS; pid++) {
+        if (pid == g_comp_pid || !win_events_is_client(pid)) continue;
+        struct win_event ev;
+        k_memset(&ev, 0, sizeof ev);
+        ev.type = type;
+        ev.a = a;
+        ev.b = b;
+        ev.mods = mods;
+        win_events_push(pid, &ev);
     }
 }
 
@@ -1189,10 +780,11 @@ void win_server_client_gone(int pid) {
     // exists.
     if (pid == g_comp_pid) win_server_set_compositor(0, 0);
 
-    for (int i = 0; i < WIN_CLIENT_MAX; i++) {
-        struct client_window *cw = &windows[pid - 1][i];
-        if (cw->used) destroy_window(cw);
-    }
+    // **NOTHING ELSE TO TEAR DOWN.** A client's windows were entries in
+    // a table here; they are the compositor's now, and it learns of the
+    // death from its own channel scan -- the client's ring is an shm
+    // object the kernel unlinks with every other one this process owned
+    // (docs/winserver-ring3-design.md, stage 6b).
 }
 
 // --- cross-process buffer sharing (see win_server.h) -----------------
@@ -1245,18 +837,23 @@ static void compositor_gone(void) {
         return;
     }
 
+    // EVERY WINDOWING CLIENT, asked through the event queue that makes
+    // it one. The window table used to be this list; a process that
+    // waits for window events is the same set without any window state
+    // behind it (win_events_is_client).
+    //
+    // `window` is 0, where it used to name each window. A client with
+    // one window -- which is all any of them has -- sees no difference,
+    // and Toykit acts on the CLOSE rather than on which window it
+    // names.
     int asked = 0;
-    for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++) {
-        for (int i = 0; i < WIN_CLIENT_MAX; i++) {
-            struct client_window *cw = &windows[p][i];
-            if (!cw->used) continue;
-            struct win_event ev;
-            k_memset(&ev, 0, sizeof ev);
-            ev.type = WIN_EV_CLOSE;
-            ev.window = cw->id;
-            win_events_push(cw->pid, &ev);
-            asked++;
-        }
+    for (int pid = 1; pid <= WIN_SERVER_MAX_PIDS; pid++) {
+        if (pid == g_comp_pid || !win_events_is_client(pid)) continue;
+        struct win_event ev;
+        k_memset(&ev, 0, sizeof ev);
+        ev.type = WIN_EV_CLOSE;
+        win_events_push(pid, &ev);
+        asked++;
     }
 
     // Hand the screen back. Reaching here means nobody else is drawing
@@ -1319,57 +916,10 @@ int win_server_set_compositor(int pid, uint64_t pml4) {
     return 1;
 }
 
-// --- stand-ins for a client, for the KTESTs ---------------------------
-//
-// A window's pixels are its client's objects, and these entry points
-// have no client. They no longer have to make any: the kernel neither
-// maps nor holds a buffer, so a window is exactly its size and its
-// generation, and a fixture supplying those is supplying everything.
-
-int win_server_create_raw(int pid, int w, int h, uint32_t *out_id) {
-    uint32_t id = 0;
-    // No app id: a test window that claimed one could be raised by a
-    // real app asking for its twin.
-    if (!create_window(pid, -1, w, h, 0, 0, "", &id)) return 0;
-    if (out_id) *out_id = id;
-    return 1;
-}
-
-int win_server_destroy_raw(int pid, uint32_t id) {
-    struct client_window *cw = lookup(pid, id);
-    if (!cw) return 0;
-    destroy_window(cw);
-    return 1;
-}
-
-// A buffer's own pixel count, for a KTEST asserting which of the two a
-// resize touched. 0 for a buffer this window does not have.
-int win_server_buf_size(int pid, uint32_t id, int buf) {
-    struct client_window *cw = lookup(pid, id);
-    if (!cw || buf < 0 || buf >= WIN_BUFS) return 0;
-    return cw->bufs[buf].w * cw->bufs[buf].h;
-}
-
-// Which OBJECT a buffer is on, as a present would report it.
-uint32_t win_server_buf_gen(int pid, uint32_t id, int buf) {
-    struct client_window *cw = lookup(pid, id);
-    if (!cw || buf < 0 || buf >= WIN_BUFS) return 0;
-    return cw->bufs[buf].gen;
-}
-
-int win_server_resize_raw(int pid, uint32_t id, int w, int h) {
-    struct client_window *cw = lookup(pid, id);
-    if (!cw) return 0;
-    // -1: let the server pick the back buffer, as a client with nothing
-    // in flight would.
-    return resize_window(cw, w, h, -1);
-}
-
-int win_server_window_count(int pid) {
-    if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return 0;
-    int n = 0;
-    for (int i = 0; i < WIN_CLIENT_MAX; i++) {
-        if (windows[pid - 1][i].used) n++;
-    }
-    return n;
-}
+// **THE KTEST STAND-INS ARE GONE WITH THE TABLE.** They existed so a
+// kernel test could make a window with no client behind it; there is no
+// window in ring 0 to make. What they covered -- slot allocation, the
+// buffer flip, a resize touching the back buffer only, a dead client's
+// windows closing -- is now the compositor's, and is covered from ring
+// 3 by tools/single_instance_test.py, tools/uapp_test.py,
+// tools/winclient_test.py and tools/resize_stride_test.py.

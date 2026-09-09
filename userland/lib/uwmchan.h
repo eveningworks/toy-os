@@ -14,42 +14,64 @@
 // how it is carried". A request that moves to this channel keeps its
 // number and its meaning.
 //
-// WHY ANY OF IT MOVES. The kernel stores `title` for each window and
-// answers WIN_REQ_WINDOW_INFO with it, purely because `struct
-// win_event` is a fixed 24 bytes and a 32-byte title does not fit --
-// so a compositor is told "the title changed" and reads it back. The
-// kernel has no use for the string. A channel has room for the payload,
-// so the round trip and the kernel's copy both go.
+// **EVERY REQUEST A CLIENT MAKES OF THE COMPOSITOR IS HERE NOW** (stage
+// 6b). The kernel holds no window state at all: it carries EVENTS to
+// clients, delivers raw input to whoever holds the compositor role, and
+// grants the framebuffer. Nothing it does requires it to know that a
+// window exists.
 //
-// **ORDERING IS THE TRAP.** A window is created through the KERNEL
-// (WIN_REQ_CREATE allocates its pixels) and announced on the event
-// queue; a title arrives on this channel. Two carriages have no order
-// between them, so a compositor that drained this first could be handed
-// a title for a window it has never heard of. It drains the EVENT QUEUE
-// FIRST, every frame, which is enough: a client cannot send a title
-// before its create returned, and the create was queued before that.
+// The set, and which two wait for an answer:
+//
+//   CREATE     window = the slot the client proposes; a/b = w/h;
+//              text = its app_id. REPLIES with the granted slot in `a`,
+//              or -1. The one request that must round-trip, because the
+//              client cannot name its buffers until it has a slot --
+//              except it already did, which is why it PROPOSES one.
+//   ACTIVATE   no inputs. REPLIES 1 (a twin was raised) or 0.
+//   PRESENT    a = WIN_PRESENT_B(buf, gen), b = WIN_PRESENT_SIZE(w, h).
+//   DESTROY    window.
+//   TITLE / HINTS / CURSOR / TIMER / PONG / CLOSE_PID -- as before.
+//
+// **A PRESENT CARRIES ITS OWN GEOMETRY, AND THAT IS WHY RESIZE AND
+// BUFFER ARE GONE.** Both existed to keep a SECOND record of each
+// buffer's size in step with the client's; the compositor reads the
+// size off the frame it is about to show, so the second record had one
+// reader and no purpose. A record kept in step by remembering to send a
+// message is a record that goes stale -- it did, as a window sheared
+// one pixel per row whenever a resize happened not to change the
+// buffer's page count.
+//
+// **ORDERING IS NO LONGER A TRAP.** A create and a title used to travel
+// on two carriages with no order between them, so a compositor could be
+// handed a title for a window it had never heard of; the fix was to
+// drain the kernel's event queue first, every frame. One ring per
+// client orders everything that client says, and the kernel's queue now
+// carries nothing about windows at all.
 
 #define WMCHAN_SERVICE "toywm"
 
-// **ONE MESSAGE HERE WAITS FOR AN ANSWER, AND IT IS WIN_REQ_ACTIVATE.**
-// Everything else is fire-and-forget, which is what the carriage is
-// shaped for; activate is the explicit round trip `uchan_call()` exists
-// for. It costs one scheduler hop, ONCE, before a single-instance app
-// opens anything -- and the alternative was the kernel keeping an
-// identity per window in order to answer it (stage 6a).
+// **TWO MESSAGES WAIT FOR AN ANSWER: CREATE AND ACTIVATE.** Everything
+// else is fire-and-forget, which is what the carriage is shaped for --
+// a present runs once per frame per client and must never round-trip.
+// The two that do are both once-per-window, at startup.
 //
-// The reply is a `struct wmchan_msg` whose `a` is 1 (a twin was found
-// and raised) or 0 (nobody there). No channel, or no answer inside the
-// timeout, means 0: a false "yes" makes an app exit without drawing.
+// A reply is a `struct wmchan_msg` whose `a` carries the answer. No
+// channel, or no answer inside the timeout, is read as a refusal by
+// both: a window that never opens is visible, where an app told its
+// twin exists simply disappears.
 
 // The same shape as `struct win_request_msg`, deliberately: a request
 // that moves to this carriage should not also change what it says.
 struct wmchan_msg {
-    uint32_t type;      // WIN_REQ_TITLE / _HINTS / _CURSOR / _ACTIVATE
-    uint32_t window;    // which of the sender's windows; unused by ACTIVATE
-    int32_t  a, b, c;   // HINTS: flags, min_w, min_h. CURSOR: a shape.
-                        // In an ACTIVATE REPLY, `a` is the answer.
-    char     text[WIN_TITLE_LEN];   // TITLE
+    uint32_t type;      // a WIN_REQ_*
+    uint32_t window;    // which of the sender's windows; on CREATE the
+                        // slot it PROPOSES, and its buffers are already
+                        // named after that
+    int32_t  a, b, c;   // CREATE: w, h. PRESENT: WIN_PRESENT_B(buf,gen),
+                        // WIN_PRESENT_SIZE(w,h). HINTS: flags, min_w,
+                        // min_h. CURSOR/TIMER/PONG/CLOSE_PID: a.
+                        // In a REPLY, `a` is the answer.
+    char     text[WIN_TITLE_LEN];   // TITLE, and CREATE's app_id
 };
 
 _Static_assert(sizeof(struct wmchan_msg) <= UCHAN_SLOT_BYTES,

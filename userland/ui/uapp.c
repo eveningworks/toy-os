@@ -31,6 +31,13 @@ static uint64_t g_px_bytes[UAPP_BUFS];
 // width while the client draws at the new one, which the compositor
 // blits as a diagonal shear.
 static int g_px_w[UAPP_BUFS], g_px_h[UAPP_BUFS];
+// WHICH OBJECT IS BEHIND EACH BUFFER'S NAME. The name is the slot and
+// never changes; the object under it is replaced on every resize, and
+// this is how the compositor knows to re-open. **THE CREATOR COUNTS
+// IT** -- the kernel used to, from a message the client had to remember
+// to send, which is one record too many for a fact only this side can
+// observe.
+static uint32_t g_px_gen[UAPP_BUFS];
 static int g_slot;
 
 static void buf_name(char *out, unsigned cap, int slot, int buf) {
@@ -80,6 +87,12 @@ static int buf_make(int slot, int buf, int w, int h) {
     g_px_bytes[buf] = bytes;
     g_px_w[buf] = w;
     g_px_h[buf] = h;
+    // A NEW OBJECT, WHATEVER ITS SIZE. Bumping only on a size change
+    // would leave the compositor mapping an object nobody draws into
+    // when a client re-creates a buffer at the size it already had --
+    // a window frozen on its last frame, and reachable from a drag that
+    // proposes the size the window has.
+    g_px_gen[buf]++;
     return 1;
 }
 
@@ -91,45 +104,29 @@ static int bufs_create(int slot, int w, int h) {
     return 1;
 }
 
-// Makes sure buffer `buf` is `w` x `h` before the client draws into it,
-// replacing the object and telling the server if it is not.
+// Makes sure buffer `buf` is `w` x `h` before the client draws into it.
 //
-// **THE STALE HALF IS THE CLIENT'S PROBLEM NOW.** A resize replaces only
-// the buffer being drawn into; the other one is still the old size and
-// is the one the client draws into NEXT. The server used to grow it at
-// present time and cannot any more -- the memory belongs to the client.
-static void req_clear(struct win_request_msg *r);
-static int req_send(struct win_request_msg *r);
+// **THE STALE HALF IS THE CLIENT'S PROBLEM.** A resize replaces only the
+// buffer being drawn into; the other one is still the old size and is
+// the one the client draws into NEXT.
 
-static int buf_ensure(uint32_t window, int buf, int w, int h) {
+static int buf_ensure(int buf, int w, int h) {
     // **THE DIMENSIONS DECIDE, NOT THE LENGTH.** Comparing page-rounded
     // byte counts here made a one-pixel resize look like no resize at
-    // all: the object stayed, the server was never told, and the next
-    // frame out of this buffer was drawn at one stride and composited at
-    // another -- a window sheared one pixel per row.
+    // all -- and NOBODY WAS TOLD, because the size lived in a second
+    // record the client had to keep in step. It does not any more: the
+    // present carries it, so this only has to make the memory right.
     if (g_px[buf] && g_px_w[buf] == w && g_px_h[buf] == h) return 1;
 
     // The OBJECT is replaced only when the rounded length actually
     // moved; rebuilding on every present would hand the app a freshly
     // zeroed buffer each frame, which shows up as a scene that will not
-    // hold still. The server is told either way -- that is the half
-    // that was missing.
+    // hold still.
     uint64_t want = ((uint64_t)w * (uint64_t)h * 4 + 4095) & ~4095ULL;
-    if (!g_px[buf] || g_px_bytes[buf] != want) {
-        if (!buf_make(g_slot, buf, w, h)) return 0;
-    } else {
-        g_px_w[buf] = w;
-        g_px_h[buf] = h;
-    }
-
-    struct win_request_msg req;
-    req_clear(&req);
-    req.type = WIN_REQ_BUFFER;
-    req.window = window;
-    req.a = buf;
-    req.b = w;
-    req.c = h;
-    return req_send(&req) == 1;
+    if (!g_px[buf] || g_px_bytes[buf] != want) return buf_make(g_slot, buf, w, h);
+    g_px_w[buf] = w;
+    g_px_h[buf] = h;
+    return 1;
 }
 
 static void bufs_release(void) {
@@ -203,29 +200,37 @@ static void copy_text(char *dst, const char *src) {
 }
 
 static void layout_log_flush(void);
+static int wmchan_send(uint32_t type, uint32_t window,
+                       int aa, int bb, int cc, const char *text);
 
+// **THE FRAME NAMES ITSELF.** A present says which buffer holds the
+// finished pixels, which OBJECT is behind it, and how big it is -- so
+// the compositor adopts the geometry of what it is about to show and
+// never a size it was promised earlier. The kernel used to hold that
+// per buffer and answer from its copy; nothing does now.
+//
+// FIRE AND FORGET, which is what lets it run once a frame per client.
+// The flip is this side's: the buffer just handed over is the one the
+// compositor reads, so the next frame goes into the other.
 static void present(struct uapp *a) {
-    struct win_request_msg req;
-    req_clear(&req);
-    req.type = WIN_REQ_PRESENT;
-    req.window = a->window;
-    int rc = req_send(&req);
-    // THE SERVER ANSWERS WITH THE NEW FRONT INDEX, biased by one so 0
-    // can still mean "refused" (abi/win_proto.h). The next frame must
-    // go into the OTHER buffer -- drawing into the one just handed to
-    // the compositor is precisely the tearing this exists to remove.
-    //
-    // A refusal leaves the surface where it was, which is correct: if
-    // the present did not happen, neither did the flip.
-    if (rc > 0) {
-        a->front = rc - 1;
-        // The BACK buffer for the new front: the other of the two. It
-        // may still be the pre-resize size, so make it current before
-        // handing it over as a surface.
-        int back = a->front ^ 1;
-        if (!buf_ensure(a->window, back, a->w, a->h)) return;
-        a->surface = ugfx_surface_for_pixels(g_px[back], a->w, a->h);
-    }
+    int shown = a->front ^ 1;   // the one flush() has been drawing into
+    if (!g_px[shown]) return;
+
+    // A FULL RING MEANS NO FLIP. Dropping the frame is fine -- the next
+    // present supersedes it -- but flipping anyway would leave the
+    // compositor reading the buffer this process is about to draw into,
+    // which is the tearing double buffering exists to remove.
+    if (!wmchan_send(WIN_REQ_PRESENT, a->window,
+                     WIN_PRESENT_B(shown, g_px_gen[shown]),
+                     (int)WIN_PRESENT_SIZE(a->w, a->h), 0, 0)) return;
+
+    a->front = shown;
+    // The BACK buffer for the new front: the other of the two. It may
+    // still be the pre-resize size, so make it current before handing
+    // it over as a surface.
+    int back = a->front ^ 1;
+    if (!buf_ensure(back, a->w, a->h)) return;
+    a->surface = ugfx_surface_for_pixels(g_px[back], a->w, a->h);
 }
 
 // Draw + present, but only if something actually asked. This is the
@@ -483,41 +488,31 @@ int uapp_focused(const struct uapp *a) { return a->focused; }
 int uapp_width(const struct uapp *a) { return a->w; }
 int uapp_height(const struct uapp *a) { return a->h; }
 
+// **A RESIZE SENDS NOTHING.** It rebuilds the buffer the client is about
+// to draw into and re-lays the page out; the new size reaches the
+// compositor on the next PRESENT, drawn at it. WIN_REQ_RESIZE existed
+// to keep the server's second copy of each buffer's size in step, and
+// there is no second copy.
+//
+// Only the BACK buffer: the front is still showing the last finished
+// frame at the old size, and replacing it would be the window of black
+// this whole handshake exists to avoid (abi/win_proto.h's
+// configure/ack).
+//
+// **THE CLIENT CLAMPS ITS OWN SIZE NOW.** The kernel refused an
+// oversized window because it was allocating the memory; the memory is
+// this process's, so the bound is checked where the allocation is.
 int uapp_resize(struct uapp *a, int w, int h) {
-    struct win_request_msg req;
-    req_clear(&req);
-    // THE BUFFER IS REPLACED BEFORE THE REQUEST, because the kernel
-    // re-adopts by name and has to find the NEW object there. Only the
-    // BACK one: the front is still showing the last finished frame at
-    // the old size, and replacing it would be the window of black this
-    // whole handshake exists to avoid (abi/win_proto.h).
-    // NO WIN_REQ_BUFFER HERE, and that is not an oversight: the resize
-    // request below re-adopts the buffer by name itself, so telling the
-    // server twice costs a second syscall on a path a live drag takes
-    // per mouse move -- enough for the WM's own lag measurement to
-    // decide the client cannot keep up and fall back to an outline.
+    if (w <= 0 || h <= 0) return 0;
+    if (w > WIN_CLIENT_MAX_W) w = WIN_CLIENT_MAX_W;
+    if (h > WIN_CLIENT_MAX_H) h = WIN_CLIENT_MAX_H;
+
     int back = a->front ^ 1;
     if (!buf_make(g_slot, back, w, h)) return 0;
 
-    req.type = WIN_REQ_RESIZE;
-    req.window = a->window;
-    req.a = w;
-    req.b = h;
-    // WHICH BUFFER WAS PREPARED. Both sides deriving it from `front`
-    // separately is a disagreement waiting for a present to land in
-    // between -- and it did.
-    req.c = back;
-    if (req_send(&req) != 1) return 0;
-
-    // The server hands back what it actually granted rather than what
-    // was asked for. The surface is rebuilt because buf_make() mapped a
-    // NEW object, at a new address and a new row stride.    //
-    // STILL THE BACK BUFFER FOR THE CURRENT FRONT: only that one was
-    // rebuilt at the new size, and the front is still showing the last
-    // frame at the old one (abi/win_proto.h's configure/ack).
-    a->w = req.a;
-    a->h = req.b;
-    a->surface = ugfx_surface_for_pixels(g_px[a->front ^ 1], a->w, a->h);
+    a->w = w;
+    a->h = h;
+    a->surface = ugfx_surface_for_pixels(g_px[back], a->w, a->h);
     if (a->desc->layout) uui_layout_run(a->desc->layout, 0, 0, a->w, a->h);
     return 1;
 }
@@ -527,6 +522,12 @@ int uapp_resize(struct uapp *a, int w, int h) {
 // the compositor may not have its beacon up when an app starts.
 static struct uchan_client g_wmchan;
 static int g_wmchan_state;   // 0 untried, 1 open, -1 no compositor channel
+
+// How long a round trip waits. Generous because the cost of being wrong
+// is one-sided in both places: giving up early opens a duplicate window
+// or an app with none, where waiting only delays a startup. Nothing but
+// a wedged compositor spends it.
+#define UAPP_CALL_TIMEOUT_MS 1000
 
 static int wmchan(void) {
     if (g_wmchan_state) return g_wmchan_state > 0;
@@ -542,9 +543,8 @@ static int comp_pid(void) {
     return wmchan() ? g_wmchan.beacon->server_pid : 0;
 }
 
-// Sends one request over the channel. Returns 1 if it went, 0 if the
-// caller should take the kernel path -- there is no compositor channel,
-// or its ring is full, and neither is a reason to drop the request.
+// Sends one request over the channel. Returns 1 if it went, 0 if there
+// is no compositor channel or its ring is full.
 static int wmchan_send(uint32_t type, uint32_t window,
                        int aa, int bb, int cc, const char *text) {
     if (!wmchan()) return 0;
@@ -555,6 +555,24 @@ static int wmchan_send(uint32_t type, uint32_t window,
     m.a = aa; m.b = bb; m.c = cc;
     if (text) snprintf(m.text, sizeof m.text, "%s", text);
     return uchan_send(&g_wmchan, &m, sizeof m) == 0;
+}
+
+// The two requests that need an answer (lib/uwmchan.h). Returns the
+// compositor's `a`, or `fail` when there is no channel or no reply --
+// both of which the callers read as a refusal.
+static int wmchan_call(uint32_t type, uint32_t window, int aa, int bb,
+                       const char *text, int fail) {
+    if (!wmchan()) return fail;
+    struct wmchan_msg m, r;
+    memset(&m, 0, sizeof m);
+    m.type = type;
+    m.window = window;
+    m.a = aa;
+    m.b = bb;
+    if (text) snprintf(m.text, sizeof m.text, "%s", text);
+    if (uchan_call(&g_wmchan, &m, sizeof m, &r, sizeof r,
+                   UAPP_CALL_TIMEOUT_MS) < 0) return fail;
+    return r.a;
 }
 
 void uapp_set_cursor(struct uapp *a, int cursor) {
@@ -601,11 +619,11 @@ int uapp_set_title(struct uapp *a, const char *title) {
 // have done something).
 int uapp_request_close_pid(struct uapp *a, int pid) {
     (void)a; // not about this app's own window
-    struct win_request_msg req;
-    req_clear(&req);
-    req.type = WIN_REQ_CLOSE_PID;
-    req.a = pid;
-    return req_send(&req) == 1;
+    // FIRE AND FORGET, so the 1 here means "asked", not "a window was
+    // found" -- the compositor owns the list and this side cannot see
+    // it. The caller reports the ask; Task Manager's own list is what
+    // tells the user whether anything went.
+    return wmchan_send(WIN_REQ_CLOSE_PID, 0, pid, 0, 0, 0);
 }
 
 // --- public: drawing --------------------------------------------------
@@ -691,12 +709,7 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         // line only runs if the loop is turning. An app stuck inside its
         // own on_draw or on_key never reaches it, which is precisely
         // what "not responding" should mean.
-        struct win_request_msg req;
-        req_clear(&req);
-        req.type = WIN_REQ_PONG;
-        req.window = a->window;
-        req.a = ev->a; // the serial, echoed unchanged
-        req_send(&req);
+        wmchan_send(WIN_REQ_PONG, a->window, (int)ev->a, 0, 0, 0);
         break;
     }
 
@@ -947,10 +960,6 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
 
 // --- lifecycle --------------------------------------------------------
 
-// How long to wait for the compositor's answer. Generous because the
-// cost of being wrong is one-sided: waiting delays a second copy's
-// startup, giving up early opens a duplicate window.
-#define UAPP_ACTIVATE_TIMEOUT_MS 1000
 
 // For UAPP_SINGLE_INSTANCE: is a copy of this app already on screen? If
 // so the compositor raises its window and this returns 1, meaning "you
@@ -972,14 +981,7 @@ static int activate_existing(const struct uapp_desc *desc) {
     // direction here is a false "yes", which makes a single-instance
     // app exit without ever drawing; a false "no" opens a second
     // window, which the user can see and close.
-    if (!wmchan()) return 0;
-    struct wmchan_msg m;
-    memset(&m, 0, sizeof m);
-    m.type = WIN_REQ_ACTIVATE;
-    struct wmchan_msg r;
-    if (uchan_call(&g_wmchan, &m, sizeof m, &r, sizeof r,
-                   UAPP_ACTIVATE_TIMEOUT_MS) < 0) return 0;
-    return r.a == 1;
+    return wmchan_call(WIN_REQ_ACTIVATE, 0, 0, 0, 0, 0) == 1;
 }
 
 static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
@@ -1016,25 +1018,17 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     // compositor, no window.
     if (comp_pid() <= 0) return 0;
 
-    struct win_request_msg req;
-    req_clear(&req);
-    // THE CLIENT ALLOCATES, AND PROPOSES ITS OWN SLOT. `window` is an
-    // output on CREATE and free as an input, which is what lets the
-    // buffers be NAMED, granted and mapped before the kernel has
-    // answered.
+    // THE CLIENT ALLOCATES, AND PROPOSES ITS OWN SLOT -- which is what
+    // lets the buffers be NAMED, granted and mapped before anyone has
+    // answered. One window per process, so the proposal is always 0.
     if (!bufs_create(0, a->w, a->h)) return 0;
 
-    req.type = WIN_REQ_CREATE;
-    req.window = 0;
-    req.a = a->w;
-    req.b = a->h;
-    // 0/0 takes TWS's own cascade rather than stacking every client on
-    // the origin -- see win_server.c's on_window_created().
-    req.c = desc->x;
-    req.d = desc->y;
-    copy_text(req.text, desc->app_id);
-    if (req_send(&req) != 1) { bufs_release(); return 0; }
-    a->window = req.window;
+    // The x/y an app used to ask for are GONE from this message: the
+    // compositor has always placed windows itself (a cascade), and a
+    // field nobody reads is a field that eventually gets believed.
+    int slot = wmchan_call(WIN_REQ_CREATE, 0, a->w, a->h, desc->app_id, -1);
+    if (slot < 0) { bufs_release(); return 0; }
+    a->window = (uint32_t)slot;
 
     if (desc->title) uapp_set_title(a, desc->title);
 
@@ -1050,15 +1044,12 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     // it without one would wake the process to do nothing, which is a
     // slower version of the problem it exists to solve.
     if (desc->tick_ms && desc->on_tick) {
-        req_clear(&req);
-        req.type = WIN_REQ_TIMER;
-        req.window = a->window;
-        req.a = (int)desc->tick_ms;
         // A refusal is survivable and deliberately not fatal: uapp_run()
         // checks the same condition and falls back to polling, so an
         // older server that has never heard of this simply gets the old
         // behaviour instead of an app that never ticks.
-        a->timer_armed = (req_send(&req) == 1);
+        a->timer_armed = wmchan_send(WIN_REQ_TIMER, a->window,
+                                     (int)desc->tick_ms, 0, 0, 0);
     }
     // THE BACK BUFFER, which with front 0 is buffer 1. Starting on
     // buffer 0 paints into the one the compositor IS showing, which
@@ -1097,11 +1088,7 @@ static int uapp_pump(struct uapp *a, int block) {
 }
 
 static void uapp_close(struct uapp *a) {
-    struct win_request_msg req;
-    req_clear(&req);
-    req.type = WIN_REQ_DESTROY;
-    req.window = a->window;
-    req_send(&req);
+    wmchan_send(WIN_REQ_DESTROY, a->window, 0, 0, 0, 0);
 }
 
 int uapp_run(const struct uapp_desc *desc) {

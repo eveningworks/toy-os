@@ -60,8 +60,9 @@ static int ring_index(struct uchan_server *s, int pid) {
     return -1;
 }
 
-void uchan_server_scan(struct uchan_server *s) {
-    if (!s->beacon) return;
+int uchan_server_scan(struct uchan_server *s, int *gone, int gone_cap) {
+    int ngone = 0;
+    if (!s->beacon) return 0;
     char prefix[UCHAN_NAME_MAX + 2];
     snprintf(prefix, sizeof prefix, "%s.", s->name);
     size_t plen = strlen(prefix);
@@ -101,11 +102,20 @@ void uchan_server_scan(struct uchan_server *s) {
         snprintf(nm, sizeof nm, "%s.%d", s->name, s->pid[k]);
         int fd = sys_shm_open(nm, 0, 0);
         if (fd >= 0) { sys_close(fd); k++; continue; }
+        // **WHICH CLIENT WENT IS REPORTED, NOT JUST RECLAIMED.** A
+        // server usually holds state per client -- the compositor holds
+        // a window -- and reclaiming the slot silently leaves that
+        // state with nothing to retire it. Overflow drops the extra
+        // names rather than the ring: the next scan finds them gone
+        // just the same, one pass later.
+        if (gone && ngone < gone_cap) gone[ngone] = s->pid[k];
+        if (ngone < gone_cap || !gone) ngone++;
         sys_munmap(s->ring[k], RING_BYTES);
         s->ring[k] = s->ring[s->count - 1];
         s->pid[k] = s->pid[s->count - 1];
         s->count--;
     }
+    return ngone;
 }
 
 // The bytes actually moved: never more than the slot holds, never more

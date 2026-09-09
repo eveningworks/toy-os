@@ -500,26 +500,9 @@ void wm_client_check_timers(void) {
 // it keeps them and answers WIN_REQ_WINDOW_INFO.
 
 
-// The window's APP ID -- what its client called itself. Asked once, at
-// create: an app id never changes, unlike the title, and it needs its
-// own request because WIN_REQ_WINDOW_INFO's single `text` is already the
-// title (win_proto.h). Leaves `out` empty rather than failing if the
-// window is already gone; an empty id groups with nothing, which is the
-// safe direction.
-static void query_app_id(int pid, uint32_t id, char *out, unsigned cap) {
-    if (out && cap) out[0] = '\0';
-    struct win_request_msg q;
-    k_memset(&q, 0, sizeof q);
-    q.type = WIN_REQ_WINDOW_APPID;
-    q.a = pid;
-    q.window = id;
-    if (sys_win_request(&q) != 0) return;
-    if (out && cap) {
-        unsigned n = 0;
-        while (n + 1 < cap && n < WIN_APP_ID_LEN && q.text[n]) { out[n] = q.text[n]; n++; }
-        out[n] = '\0';
-    }
-}
+// query_app_id() IS GONE with WIN_REQ_WINDOW_APPID. The app id was read
+// back from the kernel because a create EVENT is 24 bytes and could not
+// carry it; a create MESSAGE can, so it arrives with the window.
 
 // --- application identity ---------------------------------------------
 //
@@ -604,7 +587,29 @@ void wm_client_chan_wait(int timeout_ms) {
 // tidy.
 void wm_client_chan_pump(void) {
     if (!g_chan.beacon) return;
-    uchan_server_scan(&g_chan);
+
+    // **THE SCAN IS HOW A DEAD CLIENT'S WINDOWS CLOSE.** A client's ring
+    // is an shm object it created, and the kernel unlinks a dead
+    // creator's objects -- so a name that no longer resolves IS the
+    // death notification, arriving on the transport this process
+    // already polls every frame. The kernel used to send an event,
+    // which meant it had to know a window existed; it does not any more
+    // (docs/winserver-ring3-design.md, stage 6b).
+    //
+    // A SMALL FIXED CAP, because the window list grows on demand and
+    // this runs every frame. More than this many GUI clients dying
+    // between two frames is a desktop restart rather than an app
+    // closing, and the ones that overflow are found gone by the next
+    // scan -- one frame later, which nothing can see.
+    #define WM_CHAN_GONE_MAX 16
+    int gone[WM_CHAN_GONE_MAX];
+    int n = uchan_server_scan(&g_chan, gone, WM_CHAN_GONE_MAX);
+    if (n > WM_CHAN_GONE_MAX) n = WM_CHAN_GONE_MAX;
+    for (int i = 0; i < n; i++) {
+        for (int w = window_count - 1; w >= 0; w--)
+            if (windows[w].client_pid == gone[i])
+                on_window_destroyed(gone[i], windows[w].client_win);
+    }
 
     int from;
     struct wmchan_msg m;
@@ -623,6 +628,51 @@ void wm_client_chan_pump(void) {
             break;
         case WIN_REQ_CURSOR:
             on_window_cursor(from, m.window, m.a);
+            break;
+        // **CREATE IS THE ONLY REQUEST THAT ALLOCATES.** The client
+        // proposes a slot -- its buffer objects are already named after
+        // it -- and this accepts unless that (pid, slot) is already
+        // open. Refusing is a -1 rather than silence: a client with no
+        // answer would sit out its whole timeout and then open nothing,
+        // which is the same outcome reached slowly.
+        case WIN_REQ_CREATE: {
+            struct wmchan_msg r;
+            k_memset(&r, 0, sizeof r);
+            r.type = WIN_REQ_CREATE;
+            r.a = -1;
+            if (find_client_window(from, m.window) < 0 &&
+                on_window_created(from, m.window, m.a, m.b, 0, 0,
+                                  m.text, identity_for_pid(from)))
+                r.a = (int)m.window;
+            uchan_server_reply(&g_chan, from, &r, sizeof r);
+            break;
+        }
+        // **THE FRAME BRINGS ITS OWN GEOMETRY**, which is what retired
+        // WIN_REQ_RESIZE and WIN_REQ_BUFFER: there is no second record
+        // of a buffer's size to keep in step, so there is none to go
+        // stale. Ownership is checked the way every request here is --
+        // `from` is the ring's pid and cannot be forged.
+        case WIN_REQ_PRESENT:
+            on_window_present(from, m.window, WIN_PRESENT_BUF(m.a),
+                              WIN_PRESENT_GEN(m.a),
+                              WIN_PRESENT_W((uint32_t)m.b),
+                              WIN_PRESENT_H((uint32_t)m.b));
+            break;
+        case WIN_REQ_DESTROY:
+            on_window_destroyed(from, m.window);
+            break;
+        case WIN_REQ_TIMER:
+            on_window_timer(from, m.window, (unsigned)m.a);
+            break;
+        case WIN_REQ_PONG:
+            on_window_pong(from, m.window, (uint32_t)m.a);
+            break;
+        case WIN_REQ_CLOSE_PID:
+            // NOT about the sender's own window: it names another
+            // process. Unprivileged, as it was through the kernel, and
+            // strictly weaker than SYS_KILL -- every window it reaches
+            // is ASKED, and may refuse.
+            on_close_pid(m.a);
             break;
         case WIN_REQ_ACTIVATE: {
             // **THE ONE MESSAGE HERE THAT ANSWERS.** A single-instance
@@ -778,74 +828,14 @@ void wm_client_poll_debug(void) {
 
 int wm_client_handle_event(const struct win_event *ev) {
     if (!ev) return 0;
-    int pid = ev->a;
-    uint32_t id = ev->window;
 
     switch (ev->type) {
-    case WIN_EV_CLIENT_CREATED: {
-        // THE SIZE IS IN THE EVENT, and always was. This used to ask the
-        // kernel for it with WIN_REQ_WINDOW_INFO -- a round trip for
-        // something it had just been handed -- because the same call
-        // fetched the title and the hints, which no longer live there.
-        // The title and hints arrive on the channel a moment later; a
-        // window is briefly untitled and unconstrained, which is what
-        // the placeholder in on_window_created() is for.
-        int w = ev->b, h = (int)ev->mods;
-        // The app id came through as "" until WIN_REQ_WINDOW_APPID
-        // existed, which left every window on this desktop anonymous --
-        // see query_app_id().
-        char app_id[WIN_APP_ID_MAX];
-        query_app_id(pid, id, app_id, sizeof app_id);
-        // THE IDENTITY IS THE OWNING PROCESS'S, asked of the kernel
-        // rather than read off the window -- see identity_for_pid().
-        int identity = identity_for_pid(pid);
-        // x/y are the compositor's to choose -- the kernel never had an
-        // opinion about placement, it only forwarded what the client
-        // asked for. 0,0 lets the existing handler place it.
-        on_window_created(pid, id, w, h, 0, 0, app_id, identity);
-        break;
-    }
-    case WIN_EV_CLIENT_PRESENT:
-        on_window_present(pid, id, WIN_PRESENT_BUF(ev->b),
-                          WIN_PRESENT_GEN(ev->b),
-                          WIN_PRESENT_W(ev->mods), WIN_PRESENT_H(ev->mods));
-        break;
-    case WIN_EV_CLIENT_DESTROYED:
-        // The pixels are STILL READABLE here: this process's own
-        // mapping holds the object alive, and on_window_destroyed()
-        // drops it -- after the handler, which is the last thing that
-        // could read them.
-        on_window_destroyed(pid, id);
-        break;
-    // WIN_EV_CLIENT_TITLE / _HINTS / _CURSOR are not delivered any more:
-    // those requests reach this process over the channel with their
-    // payloads (lib/uwmchan.h), so there is nothing to be told about and
-    // nothing to read back.
-    case WIN_EV_CLIENT_RESIZED:
-        // **NOTHING TO DO, AND THAT IS THE POINT.** The client accepted
-        // a proposal and rebuilt its back buffer; the new object is
-        // opened by the present that first SHOWS it, which carries its
-        // generation. Re-mapping here instead would point this process
-        // at memory nobody has drawn into yet -- and what is on screen
-        // until then is the front buffer at the old size, which is what
-        // stops a resize flashing black.
-        break;
-    case WIN_EV_CLIENT_CURSOR:
-        on_window_cursor(pid, id, (int)ev->b);
-        break;
-    case WIN_EV_CLIENT_PONG:
-        on_window_pong(pid, id, (uint32_t)ev->b);
-        break;
-    case WIN_EV_CLIENT_TIMER:
-        on_window_timer(pid, id, (unsigned)ev->b);
-        break;
-    case WIN_EV_CLIENT_CLOSE:
-        on_close_pid(pid);
-        break;
-    // WIN_EV_CLIENT_ACTIVATE IS NOT DELIVERED ANY MORE. It existed so
-    // the kernel could tell this process WHICH window it had decided to
-    // raise; the decision is back here (activate_twin_of), and it
-    // arrives on the channel with a reply.
+    // **NO WIN_EV_CLIENT_* ARM SURVIVES.** Every request a client makes
+    // of this process arrives on its own channel ring now, carrying its
+    // payload (lib/uwmchan.h) -- create, present, destroy, title, hints,
+    // cursor, timer, pong, close-pid and activate alike. What the
+    // kernel's queue still carries is what the KERNEL owns: raw input,
+    // the font moving, the screen changing mode, and a `gui` command.
     case WIN_EV_FONT:
         // The metrics moved under us. Everything this compositor draws
         // is derived from ugfx_char_w()/ugfx_char_h() FRESH each frame

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Drag a client window's resize grip repeatedly, printing BOTH views of
-the window after each drag.
+"""Drag a client window's resize grip repeatedly, printing what the
+compositor believes about the window after each drag.
 
-**WHY BOTH.** A window-protocol bug is usually the compositor and the
-window server disagreeing rather than either being wrong alone -- so
-this prints `guictl windows` (the compositor's list) beside `lswin` (the
-kernel's, per buffer). Reading one of them was how three wrong
-hypotheses about a resize bug got written in an afternoon.
+**IT USED TO PRINT TWO VIEWS, and there is only one now.** The kernel
+kept its own record of every window and `lswin` reported it beside the
+compositor's list, because a window-protocol bug was usually the two
+disagreeing. Stage 6b deleted the kernel's record: a present carries its
+own buffer index, generation and size, so the compositor's list is the
+only list. That removes the disagreement this tool was built to show,
+and leaves the half that still measures something real -- what a drag
+costs the client, and whether the window actually tracks the pointer.
 
 **WHY A DRAG RATHER THAN `guictl resize`.** They are not the same path:
 `guictl resize` proposes a size directly, while a drag proposes one the
@@ -72,8 +75,8 @@ def main():
     win = matches[0]
     main.prev_asked = dbg.state().get("resizes_asked", 0)
 
-    print(f"{'drag':>4}  {'asked':>11}  {'compositor':>11}  {'kernel':>11}  "
-          f"{'comp buf':>9}  {'lag':>5} {'paint':>7} {'props':>5}  kernel buffers")
+    print(f"{'drag':>4}  {'asked':>11}  {'compositor':>11}  {'pid':>5}  "
+          f"{'buffer':>9}  {'lag':>5} {'paint':>7} {'props':>5}")
     for n in range(args.drags + 1):
         if n:
             win = dbg.window(args.title)
@@ -99,11 +102,11 @@ def main():
 
         w = dbg.window(args.title)
         comp = f'{w["content"]["w"]}x{w["content"]["h"]}' if w else "gone"
-        # WHICH OBJECT EACH SIDE IS ON. A window's buffer is a named shm
-        # object whose contents are replaced on every resize, and the
-        # GENERATION is which replacement -- so the compositor sitting a
-        # generation behind the kernel is a re-open that did not happen,
-        # which the sizes alone need not show.
+        # WHICH OBJECT THE COMPOSITOR IS ON. A window's buffer is a named
+        # shm object replaced on every resize, and the GENERATION is
+        # which replacement -- so a generation that does NOT move across
+        # a drag is a re-open that did not happen, which the sizes alone
+        # need not show.
         cbuf = w.get("buf") if w else None
         comp_gen = f'b{cbuf["front"]} g{cbuf["gen"]}' if cbuf else "?"
         # MATCHED BY PID, never "the first row". Two windows with the
@@ -113,22 +116,10 @@ def main():
         # PROBE's, which is exactly the class of bug this tool exists to
         # avoid producing.
         # `client_pid`, which is what the WM calls it. Reading a key
-        # that is not there silently disabled this match once already.
-        want_pid = w.get("client_pid") if w else None
-        if w and want_pid is None:
-            print("window_resize_probe: no client_pid in `gui windows` -- "
-                  "cannot correlate the two views")
-            return 1
-        kern, bufs = "?", ""
-        for l in dbg.send("sh lswin").splitlines():
-            f = l.split()
-            if len(f) < 6 or not f[0].isdigit():
-                continue
-            if want_pid is not None and int(f[0]) != want_pid:
-                continue
-            kern = f"{f[2]}x{f[3]}"
-            bufs = " ".join(f[5:])
-            break
+        # that is not there silently disabled the old two-view match
+        # once already; it is printed now so a run against two clients
+        # of the same title is visibly about one of them.
+        want_pid = w.get("client_pid") if w else "?"
         # THE WM'S OWN LAG MEASUREMENT, which is what `auto` mode
         # decides on: it watches how long a client takes to answer a
         # resize and falls back to an outline when that grows. A change
@@ -148,9 +139,8 @@ def main():
         main.prev_asked = asked_now
 
         asked = "-" if not n else f"+{args.dx},+{args.dy}"
-        flag = "" if comp == kern else "   <-- DISAGREE"
-        print(f"{n:>4}  {asked:>11}  {comp:>11}  {kern:>11}  "
-              f"{comp_gen:>9}  {lag:>5} {paint:>7} {props:>5}  {bufs}{flag}")
+        print(f"{n:>4}  {asked:>11}  {comp:>11}  {str(want_pid):>5}  "
+              f"{comp_gen:>9}  {lag:>5} {paint:>7} {props:>5}")
 
     return 0
 

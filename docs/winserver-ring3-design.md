@@ -569,6 +569,55 @@ single-instance app opens anything, and it is what removes an identity
 per window from ring 0. The traffic that must not round-trip (a present,
 every frame, per client) is untouched.
 
+#### 6b -- DONE (2026-09-09). The table is gone
+
+`win_server.c` is 916 lines, down from 1504. **It contains no window.**
+
+What moved, and the one thing that made it possible:
+
+- **A PRESENT CARRIES ITS OWN GEOMETRY.** `WIN_REQ_PRESENT` names the
+  buffer, its generation and its dimensions. That is the change
+  everything else follows from: the kernel kept a per-buffer size only
+  so a present could answer from it, and `WIN_REQ_RESIZE` and
+  `WIN_REQ_BUFFER` existed only to keep that copy in step. Both are
+  RETIRED -- not moved. A record kept true by remembering to send a
+  message is a record that goes stale, and this one did, as a window
+  sheared one pixel per row (fixed in 8c07f3a2, designed out here).
+- **The client owns its front index and its generations.** It knows
+  which buffer it drew and which object it replaced; the kernel was
+  answering both from a copy.
+- **CREATE, DESTROY, TIMER, PONG and CLOSE_PID join TITLE, HINTS,
+  CURSOR and ACTIVATE on the channel.** Create replies with the granted
+  slot; everything else is fire-and-forget.
+- **A dead client is found by the channel scan.** `uchan_server_scan()`
+  reports which pids departed rather than reclaiming their slots
+  silently -- the signal was already in the transport the compositor
+  polls every frame, since an shm object's name goes when its creator
+  dies.
+
+**WHAT THE TABLE WAS DOING THAT IS NOT ABOUT WINDOWS.** Two callers
+walked it to answer "who are the GUI processes": the font broadcast and
+the ask-everyone-to-close when the compositor dies. Neither cares which
+window anything has. `win_events_is_client()` answers it now -- a
+process that has waited for a window event -- which is transport state
+the kernel already owns, with no window behind it.
+
+**WHAT WAS LOST, stated rather than glossed.** Six KTESTs went with the
+table (a window at the claimed size, slot proposal and refusal, the
+buffer flip, a present's generation, a resize touching only the back
+buffer, a destroyed window freeing its slot). Their subject is in ring 3
+now and is covered from outside by `winclient_test.py`,
+`uapp_test.py`, `resize_stride_test.py`, `single_instance_test.py` and
+`compositor_death_test.py` -- seconds each in a booted desktop, against
+microseconds in the kernel. `QUERY_WINDOWS` and `/bin/lswin` went too:
+they existed to show the kernel's view BESIDE the compositor's, and
+there is no second view to disagree.
+
+**Access control did not weaken, it moved.** `lookup(pid, id)` answered
+"does this process own this window?"; the channel answers it by
+construction, because `uchan_server_recv()` reports the ring's owner and
+a client cannot write another's ring.
+
 #### What does NOT move, and why it is not a compromise
 
 **The event queue stays**, and so does `WIN_REQ_EVENT_PUSH`. Input is
@@ -590,8 +639,8 @@ window state.
 
 ## Revision history
 
-- 2026-09-09: stage 6a built -- identity leaves the kernel. The
-  6a/6b boundary moved, and why is under 6a's own heading.
+- 2026-09-09: stages 6a and 6b built -- the kernel's window table is
+  gone. The 6a/6b boundary moved, and why is under 6a's own heading.
 - 2026-09-08: written. Stages 0 through 5b built the same day. The carriage
   and the ordering were settled with the maintainer before any code
   changed; the argument that decided it was that only two of eight TWP
