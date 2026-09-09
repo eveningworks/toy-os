@@ -34,7 +34,7 @@
 #define WIN_H_MIN 400
 #define MARGIN 10
 #define ROW_GAP 10      // between the button bar and the checkbox row
-#define BTN_CHARS 11    // "2D / 3D (S)"
+static const char *const BTN_LABELS[4] = { "Slower", "Faster", "Reset", "2D / 3D (S)" };
 static int g_w = WIN_W_MIN, g_h = WIN_H_MIN;
 
 // Controls along the bottom.
@@ -206,6 +206,18 @@ static void log_scene(void) {
 
 static int checkbox_y(void) { return g_h - MARGIN - ugfx_char_h() - 8; }
 
+// One width for all four buttons: the widest label, measured, plus a
+// character of air each side -- a label that exactly fills its button
+// reads as cramped.
+static int button_w(void) {
+    int w = 0;
+    for (int i = 0; i < 4; i++) {
+        int tw = ugfx_text_width(BTN_LABELS[i]);
+        if (tw > w) w = tw;
+    }
+    return w + 2 * ugfx_char_w();
+}
+
 // The width the two rows below the canvas need, measured rather than
 // assumed, so a wider face widens the window instead of the rows.
 static void on_size(int *w, int *h) {
@@ -214,7 +226,7 @@ static void on_size(int *w, int *h) {
     // their labels here, once. on_open() re-inits with the same values.
     uui_checkbox_init(&g_aa_check, 0, 0, 0, "anti-aliased (A)", 0, 0);
     uui_checkbox_init(&g_shade_check, 0, 0, 0, "shaded (F)", 0, 0);
-    int bar_w = 2 * MARGIN + 4 * (BTN_CHARS * cw) + 3 * 6;
+    int bar_w = 2 * MARGIN + 4 * button_w() + 3 * 6;
     int aa_w = 0, sh_w = 0, hh = 0;
     uui_checkbox_natural_size(&g_aa_check, &aa_w, &hh);
     uui_checkbox_natural_size(&g_shade_check, &sh_w, &hh);
@@ -235,7 +247,7 @@ static void layout(void) {
     uui_canvas_init(&g_canvas, MARGIN, MARGIN, cw, ch,
                      ugfx_rgb(16, 18, 24), ugfx_rgb(70, 78, 92));
 
-    int bw = BTN_CHARS * ugfx_char_w();
+    int bw = button_w();
     int by = MARGIN + ch + 8;
     for (int i = 0; i < 4; i++) {
         uui_button_set_geometry(&g_buttons[i], MARGIN + i * (bw + 6), by, bw, bar_h);
@@ -513,13 +525,12 @@ static void on_action(struct uapp *a, int code) {
 static void on_open(struct uapp *a) {
     (void)a;
     uint32_t fg = UTHEME_TEXT, bg = UTHEME_BUTTON_BG;
-    uui_button_init(&g_buttons[0], 0, 0, 0, 0, "Slower", bg, fg, BTN_SLOWER);
-    uui_button_init(&g_buttons[1], 0, 0, 0, 0, "Faster", bg, fg, BTN_FASTER);
-    uui_button_init(&g_buttons[2], 0, 0, 0, 0, "Reset",  bg, fg, BTN_RESET);
-    // The label says what pressing it GIVES you, not what is showing --
-    // a button reading "2D" while the 2D scene is up is the ambiguity
-    // every toggle-labelled-with-its-own-state has.
-    uui_button_init(&g_buttons[3], 0, 0, 0, 0, "2D / 3D (S)", bg, fg, BTN_SCENE);
+    // The last label says what pressing it GIVES you, not what is
+    // showing -- a button reading "2D" while the 2D scene is up is the
+    // ambiguity every toggle-labelled-with-its-own-state has.
+    static const int codes[4] = { BTN_SLOWER, BTN_FASTER, BTN_RESET, BTN_SCENE };
+    for (int i = 0; i < 4; i++)
+        uui_button_init(&g_buttons[i], 0, 0, 0, 0, BTN_LABELS[i], bg, fg, codes[i]);
     uui_button_group_init(&g_bar, g_buttons, 4);
 
     // Anti-aliasing starts on, and the checkbox holds that fact -- see
