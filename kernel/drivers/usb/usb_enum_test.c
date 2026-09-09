@@ -112,3 +112,53 @@ KTEST("usb-enum", "interfaces past the cap are counted and dropped whole") {
     KTEST_ASSERT_EQ(ifs[USB_MAX_INTERFACES - 1].ep,
                     0x81 + USB_MAX_INTERFACES - 1);
 }
+
+// --- one socket, two port numbers -------------------------------------
+//
+// The pairing is a HEURISTIC (xhci.c's companion_port): the controller
+// declares two port RANGES and never says which port of one is the same
+// socket as which port of the other. These pin the arithmetic, not the
+// premise -- what would falsify the premise is the map logged at boot
+// disagreeing with the physical machine.
+
+// The ASUS UX305FA's own numbers, from its boot log: USB 2.0 ports
+// 1..11, USB 3.0 ports 12..15. Stated as a fixture so the case that
+// produced this code is the case that is checked.
+#define ASUS 1, 11, 12, 4
+
+KTEST("usb-sockets", "the observed pair is the one this derives") {
+    // A UE300 was seen at port 3 (full-speed) and, after a replug, at
+    // port 14 (SuperSpeed). Index 3 of each range.
+    KTEST_ASSERT_EQ(xhci_companion_in(ASUS, 3), 14);
+    KTEST_ASSERT_EQ(xhci_companion_in(ASUS, 14), 3);
+}
+
+KTEST("usb-sockets", "the pairing is symmetric across every socket") {
+    for (unsigned ss = 12; ss <= 15; ss++) {
+        unsigned hs = (unsigned)xhci_companion_in(ASUS, ss);
+        KTEST_ASSERT(hs != 0);
+        KTEST_ASSERT_EQ((int)xhci_companion_in(ASUS, hs), (int)ss);
+    }
+}
+
+KTEST("usb-sockets", "a USB2 port past the shorter range has no companion") {
+    // Eleven USB2 ports against four USB3 ones: ports 5..11 are
+    // USB2-only, which is the ordinary case (webcams, Bluetooth).
+    for (unsigned p = 5; p <= 11; p++)
+        KTEST_ASSERT_EQ(xhci_companion_in(ASUS, p), 0);
+}
+
+KTEST("usb-sockets", "a port in neither range, and a controller with no USB3") {
+    KTEST_ASSERT_EQ(xhci_companion_in(ASUS, 16), 0);
+    KTEST_ASSERT_EQ(xhci_companion_in(ASUS, 0), 0);
+    // QEMU declares no USB3 range on the machines this is tested on, so
+    // the whole feature must be inert there rather than guessing.
+    KTEST_ASSERT_EQ(xhci_companion_in(1, 11, 0, 0, 3), 0);
+}
+
+KTEST("usb-sockets", "ranges in the other order still pair") {
+    // Nothing says USB2 comes first. A controller declaring USB3 at
+    // 1..4 and USB2 at 5..15 must pair 1 with 5, not with itself.
+    KTEST_ASSERT_EQ(xhci_companion_in(5, 11, 1, 4, 1), 5);
+    KTEST_ASSERT_EQ(xhci_companion_in(5, 11, 1, 4, 5), 1);
+}

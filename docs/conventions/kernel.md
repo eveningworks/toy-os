@@ -2217,6 +2217,42 @@ merely corrupt: the lock is not recursive, so a signal handler that
 allocates while its own thread holds it deadlocks. That is true of every
 libc's malloc, glibc's included.
 
+## ONE USB3 SOCKET IS TWO PORT NUMBERS, AND THE CONTROLLER DOES NOT SAY WHICH PAIR
+
+A USB3 socket appears to an xHCI twice: once in its USB2 port range and
+once in its USB3 range. Which number a device shows up on depends on
+whether its SuperSpeed link trained -- so **the same adapter reports a
+different port across reboots**, which read as the adapter having moved
+(`ifconfig` printed one UE300 as `usb3` or `usb14`).
+
+**The Supported Protocol capability gives two RANGES and no pairing.**
+Compatible Port Offset and Count say "USB 2.0 is ports 1..11" and "USB
+3.0 is 12..15"; nothing in xHCI says port 3 and port 14 are one socket.
+The authority is ACPI `_PLD`, which is what Linux matches on
+(`match_location()` in `usb/core/port.c`); this kernel's AML layer is a
+declaration walk with no interpreter, so `_PLD` is out of reach.
+
+So the pairing is Linux's own fallback -- **the Nth port of one range is
+the Nth of the other** -- and three things follow:
+
+- **NEITHER RANGE COMES FIRST.** The ASUS declares USB2 at 1..11 and
+  USB3 at 12..15; QEMU declares USB3 at 1..4 and USB2 at 5..8. Code that
+  assumes an order is right on one machine and silently wrong on the
+  other. `xhci_companion_in()` takes both ranges and is symmetric.
+- **THE MAP IS LOGGED AT BOOT** (`usb: socket N = usbX + usbY`), because
+  a guessed pairing that nobody can see is one nobody can falsify.
+- **A device with no companion is the ordinary case**, not an error:
+  eleven USB2 ports against four USB3 ones leaves seven USB2-only ports
+  (webcams, Bluetooth, card readers).
+
+**WHAT THE PAIRING IS FOR, beyond reporting: a warm reset on the
+companion.** When a SuperSpeed device fails to train it falls back to
+the USB2 number -- so the USB3 port is EMPTY and "look at the companion"
+finds nothing. What the companion is good for is `PORTSC.WPR`, the only
+lever that re-runs link training; a USB2 hot reset cannot. That runs
+when a USB2 port gives up, and it is an EXPERIMENT rather than a fix:
+one observation, no rate (`docs/bugs.md`).
+
 ## AN INTEL xHCI'S USB2 PORTS MAY BE ROUTED TO AN EHCI, AND SWITCHING THEM IS A SECOND QUIRK
 
 On an Intel PCH the USB2 ports are physically shared between the xHC

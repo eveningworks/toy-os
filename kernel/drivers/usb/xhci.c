@@ -54,6 +54,18 @@ struct xhci_port_state {
     uint8_t speed;
 };
 
+// ONE PROTOCOL'S PORT RANGE, from a Supported Protocol capability.
+//
+// **THE CAPABILITY GIVES RANGES, NOT PAIRS.** Compatible Port Offset
+// and Count say "USB 2.0 is ports 1..11" and "USB 3.0 is 12..15" and
+// nothing more -- there is no field anywhere in xHCI saying which USB2
+// port is the same SOCKET as which USB3 one. See companion_port().
+struct xhci_proto_range {
+    uint8_t major;   // 2 or 3
+    uint8_t first;   // 1-based port number
+    uint8_t count;
+};
+
 struct xhci_hc {
     const struct pci_device *pci;
     volatile uint8_t *cap;
@@ -118,6 +130,12 @@ struct xhci_hc {
     uint32_t ep_recoveries;
 
     struct xhci_port_state ports[XHCI_MAX_PORTS];
+
+    // The USB2 and USB3 port ranges. Two, because a controller declares
+    // one Supported Protocol capability per USB major version; a third
+    // would be a generation this driver does not know and is ignored
+    // rather than guessed at.
+    struct xhci_proto_range usb2, usb3;
 };
 
 // One addressed device. The contexts are the controller's view of it,
@@ -341,9 +359,21 @@ static void walk_xecp(uint32_t hcc1) {
             uint32_t name  = mr32(g_hc.cap, off + 4);
             uint32_t ports = mr32(g_hc.cap, off + 8);
             uint32_t first = ports & 0xFFu, cnt = (ports >> 8) & 0xFFu;
+            uint32_t major = (v >> 24) & 0xFFu;
             klog_printf("usb:  xECP %u supported-protocol USB %u.%u, ports %u..%u\n",
-                        id, (v >> 24) & 0xFFu, (v >> 16) & 0xFFu,
+                        id, major, (v >> 16) & 0xFFu,
                         first, first + cnt - 1);
+            // KEPT, where it used to be logged and dropped. The ranges
+            // are what companion_port() pairs, and without them a
+            // device that moves between the two port numbers of one
+            // socket looks like it moved sockets.
+            struct xhci_proto_range *r = major == 2 ? &g_hc.usb2
+                                       : major == 3 ? &g_hc.usb3 : 0;
+            if (r && first && cnt) {
+                r->major = (uint8_t)major;
+                r->first = (uint8_t)first;
+                r->count = (uint8_t)cnt;
+            }
             (void)name;
         } else if (id == XHCI_XECP_ID_LEGACY) {
             g_hc.legsup_off = off;   // the handoff below needs to find it again
@@ -1552,6 +1582,90 @@ static struct input_source g_hc_source;
 
 // --- ports ------------------------------------------------------------
 
+// --- one socket, two port numbers -------------------------------------
+//
+// A USB3 socket appears to the controller TWICE: once in the USB2 port
+// range and once in the USB3 range. A SuperSpeed device that trains its
+// link shows up on the USB3 number; one that does not FALLS BACK to the
+// USB2 number, and the same adapter then reports a different port. That
+// is not cosmetic -- `ifconfig` printed one adapter as `usb3` or
+// `usb14` depending on which happened (docs/bugs.md).
+//
+// **THE CONTROLLER DOES NOT SAY WHICH PAIRS WITH WHICH.** The Supported
+// Protocol capability gives two RANGES and no pairing; the authority is
+// ACPI `_PLD`, which is what Linux matches on (`match_location()` in
+// usb/core/port.c), falling back to position when ACPI is absent. This
+// kernel's AML layer is a declaration WALK with no interpreter
+// (kernel/include/kernel/aml.h), so `_PLD` is out of reach today.
+//
+// **SO THIS IS THE FALLBACK, AND IT IS A HEURISTIC**: the Nth port of
+// the USB3 range is the same socket as the Nth of the USB2 range. It is
+// what Linux does without ACPI, and it matches the one pair actually
+// observed here (a UE300 seen at port 3 and at port 14 on a controller
+// with USB2 1..11 and USB3 12..15 -- index 3 of each). One observation
+// is not a proof, which is why log_socket_map() prints the whole map at
+// init: a wrong pairing is then visible against the physical machine
+// rather than silently believed.
+//
+// **NEITHER RANGE COMES FIRST.** The ASUS puts USB2 at 1..11 and USB3
+// at 12..15; QEMU puts USB3 at 1..4 and USB2 at 5..8. Code that assumed
+// an order would be right on one and silently wrong on the other.
+//
+// Ports beyond the shorter range have no companion, which is the
+// ordinary case -- 11 USB2 ports against 4 USB3 ones means seven
+// USB2-only ports (internal webcams, Bluetooth, card readers).
+//
+// **THE RULE IS ARITHMETIC AND TAKES NO CONTROLLER**, which is why it
+// is a separate function: it can then be tested against the two ranges
+// a machine reports without one, and a KTEST can state the ASUS's own
+// numbers as a fixture (usb_enum_test.c). Everything is 1-BASED here,
+// as the capability and every port number a user sees are; 0 means "no
+// companion".
+int xhci_companion_in(unsigned first2, unsigned count2,
+                      unsigned first3, unsigned count3, unsigned port) {
+    if (!count2 || !count3 || !port) return 0;
+    if (port >= first2 && port < first2 + count2) {
+        unsigned idx = port - first2;
+        return idx < count3 ? first3 + idx : 0;
+    }
+    if (port >= first3 && port < first3 + count3) {
+        unsigned idx = port - first3;
+        return idx < count2 ? first2 + idx : 0;
+    }
+    return 0;   // a port in neither range: nothing declared it
+}
+
+// 0-BASED in and out, as every port helper inside this file is; -1 for
+// "no companion".
+static int companion_port(uint32_t p) {
+    int c = xhci_companion_in(g_hc.usb2.first, g_hc.usb2.count,
+                              g_hc.usb3.first, g_hc.usb3.count, p + 1);
+    return c ? c - 1 : -1;
+}
+
+int xhci_companion_port(unsigned port) {
+    if (!g_hc.present || !port || port > XHCI_MAX_PORTS) return 0;
+    return xhci_companion_in(g_hc.usb2.first, g_hc.usb2.count,
+                             g_hc.usb3.first, g_hc.usb3.count, port);
+}
+
+// Prints the derived map once, so it can be CHECKED rather than
+// trusted. A pairing this driver guessed wrong is otherwise invisible
+// until it reports the wrong socket for a device somebody is looking
+// at.
+static void log_socket_map(void) {
+    if (!g_hc.usb2.count || !g_hc.usb3.count) {
+        klog_printf("usb: no socket map -- USB%s port range not declared\n",
+                    g_hc.usb2.count ? "3" : "2");
+        return;
+    }
+    for (uint32_t i = 0; i < g_hc.usb3.count; i++) {
+        uint32_t ss = g_hc.usb3.first + i;
+        int hs = xhci_companion_port(ss);
+        if (hs) klog_printf("usb: socket %u = usb%d + usb%u\n", i + 1, hs, ss);
+    }
+}
+
 static void reset_port(uint32_t p, int force) {
     uint32_t sc = mr32(g_hc.op, XHCI_PORTSC(p));
     if (!(sc & XHCI_PORTSC_CCS)) return;
@@ -1632,6 +1746,71 @@ static void reset_port(uint32_t p, int force) {
 // re-measuring if the failure rate ever drops.
 #define ATTACH_ATTEMPTS 3
 
+// A LAST RESORT FOR A DEVICE THAT FELL BACK TO USB2 AND THEN FAILED:
+// warm-reset the SuperSpeed side of the same socket.
+//
+// **WHY THIS IS NOT "LOOK AT THE COMPANION".** When a SuperSpeed device
+// gives up on its link and falls back, the USB3 port shows NO
+// CONNECTION -- there is nothing there to look at, and the first draft
+// of this idea would have found an empty port. What the companion is
+// good for is the one lever that re-runs LINK TRAINING: a warm reset
+// (PORTSC.WPR), which a USB2 hot reset cannot do. Either the device
+// comes back on the SuperSpeed side, or it re-attaches on the USB2 side
+// having redone the handshake it botched.
+//
+// THE EVIDENCE, and its size: on 2026-09-09 a UE300 came up on the
+// ASUS's port 3 as FULL-speed -- wrong for its class, it is a
+// high-speed device at worst -- and `address device` failed all three
+// attempts with no control transfer even attempted. A replug put it on
+// port 14 at SuperSpeed and it bound first try. That is ONE
+// observation, so this is an experiment with a fix's shape, and
+// `tools/boot_rate.py --grep "GAVE UP"` is how it gets a number.
+//
+// Refused on anything but a USB2 port with a declared companion, so a
+// controller whose ranges this driver could not read does nothing new.
+static void warm_reset_companion(uint32_t p) {
+    int c = companion_port(p);
+    if (c < 0) return;
+    // Only ever the USB3 half: WPR is meaningless on a USB2 port, and
+    // asserting a reserved bit is not a diagnostic.
+    if (!g_hc.usb3.count) return;
+    uint32_t cp = (uint32_t)c;
+    if (cp + 1 < g_hc.usb3.first ||
+        cp + 1 >= (uint32_t)g_hc.usb3.first + g_hc.usb3.count) return;
+
+    klog_printf("usb: port %u gave up -- warm-resetting its SuperSpeed "
+                "companion, port %u\n", p + 1, cp + 1);
+    portsc_write(cp, XHCI_PORTSC_WPR, XHCI_PORTSC_CSC);
+
+    // WRC is the warm reset's own change bit. **QEMU IS NOT EXEMPT FROM
+    // THIS PATH**, which the first draft of this comment claimed: it
+    // declares both ranges (USB 3.0 at ports 1..4 and USB 2.0 at 5..8,
+    // the opposite order from the ASUS), so a give-up there reaches
+    // here too. What is NOT known is whether it implements WPR; if it
+    // does not, this waits out the deadline and logs, which costs half
+    // a second on a port that had already failed three times.
+    struct xhci_wait w; xhci_wait_start(&w, 500);
+    for (;;) {
+        uint32_t v = mr32(g_hc.op, XHCI_PORTSC(cp));
+        if (v & XHCI_PORTSC_WRC) break;
+        if (xhci_wait_over(&w)) {
+            klog_printf("usb: port %u warm reset did not complete, "
+                        "portsc 0x%x\n", cp + 1, v);
+            return;
+        }
+    }
+    portsc_write(cp, 0, XHCI_PORTSC_WRC | XHCI_PORTSC_CSC | XHCI_PORTSC_PEC);
+    // The device re-attaches on ONE of the two ports, and which is its
+    // decision. Both are left to scan_ports(), which is already the one
+    // place that notices a connect -- doing it here would be a second
+    // attach path, and this driver has been bitten by two of those.
+    xhci_delay_ms(20);
+    klog_printf("usb: port %u: after warm reset portsc 0x%x; companion "
+                "port %u portsc 0x%x\n",
+                cp + 1, mr32(g_hc.op, XHCI_PORTSC(cp)),
+                p + 1, mr32(g_hc.op, XHCI_PORTSC(p)));
+}
+
 static void attach_root_port(uint32_t p) {
     // One mark for the whole attach, so the dump carries every attempt
     // -- the interesting comparison is what the retry did DIFFERENTLY,
@@ -1707,7 +1886,13 @@ static void attach_root_port(uint32_t p) {
         // ONLY ON THE WAY OUT. A retry that is about to try again does
         // not need its history printed; a port being lost does, and it
         // is the one case where the log lines are worth their space.
-        if (gave_up) usb_trace_dump(trace_mark, (uint8_t)(p + 1));
+        if (gave_up) {
+            usb_trace_dump(trace_mark, (uint8_t)(p + 1));
+            // AFTER the dump, so the trace covers the attempts that
+            // failed rather than the recovery -- and the recovery's own
+            // lines then follow it in order.
+            warm_reset_companion(p);
+        }
     }
 }
 
@@ -2076,6 +2261,7 @@ static void usb_probe(const struct pci_device *d) {
         klog_printf("usb: running, %s\n",
                     g_hc.irq ? "interrupt-driven" : "polled");
 
+    log_socket_map();
     usb_query_init();
     power_ports();
     scan_ports();

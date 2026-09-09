@@ -81,6 +81,12 @@
 #define XHCI_PORTSC_PLS(v)  (((v) >> 5) & 0xFu)   // Port Link State
 #define XHCI_PORTSC_PP      (1u << 9)   // Port Power
 #define XHCI_PORTSC_SPEED(v) (((v) >> 10) & 0xFu)
+// WARM PORT RESET, and it is USB3-ONLY. A hot reset (PR) re-runs the
+// USB2 handshake; a warm reset re-runs SuperSpeed LINK TRAINING, which
+// is the only lever for a device whose SS link came up wrong -- and a
+// device that trained badly falls back to the USB2 companion port,
+// where the failure shows up as something else entirely.
+#define XHCI_PORTSC_WPR     (1u << 31)  // Warm Port Reset (USB3 ports)
 #define XHCI_PORTSC_CSC     (1u << 17)  // Connect Status Change   -- RW1C
 #define XHCI_PORTSC_PEC     (1u << 18)  // Port Enabled Change     -- RW1C
 #define XHCI_PORTSC_WRC     (1u << 19)  // Warm Reset Change       -- RW1C

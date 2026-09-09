@@ -23,6 +23,7 @@
 #include "kfmt.h"   // klog_printf
 #include "string.h"
 #include "errno.h"
+#include "usb.h"  // xhci_companion_port() -- one socket, two port numbers
 #include "driver.h" // driver_bound() -- `lsdrv`
 #include "initcall.h"
 
@@ -63,10 +64,25 @@ void net_location_pci(struct net_device *dev, uint8_t bus, uint8_t device,
 }
 
 // "usb<root port>", with ".<port>" when the device hangs off a hub.
+//
+// **THE SOCKET, WHERE THE CONTROLLER HAS ONE.** A USB3 socket is two
+// port numbers -- one in the controller's USB2 range and one in its
+// USB3 range -- and which of them a device lands on depends on whether
+// its SuperSpeed link trained. Reporting the raw port therefore names
+// ONE ADAPTER two different things across reboots (measured: a UE300
+// read `usb3` at full speed and `usb14` at 5 Gb/s), which reads as the
+// adapter having moved. The socket is stable, so it leads; the port is
+// kept beside it because it is what every other USB line in the log
+// says.
 void net_location_usb(struct net_device *dev, uint8_t root_port, uint8_t port) {
     if (!dev) return;
-    if (port && port != root_port)
+    if (port && port != root_port) {
         k_snprintf(dev->location, NET_LOC_MAX, "usb%u.%u", root_port, port);
+        return;
+    }
+    int peer = xhci_companion_port(root_port);
+    if (peer)
+        k_snprintf(dev->location, NET_LOC_MAX, "usb%u+%u", root_port, peer);
     else
         k_snprintf(dev->location, NET_LOC_MAX, "usb%u", root_port);
 }

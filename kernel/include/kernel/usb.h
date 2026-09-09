@@ -264,4 +264,22 @@ void usb_dump(void);
 // Returns 1 if the device enumerated. Ports are 1-based, as logged.
 int usb_diag_reset_port(unsigned port);
 
+// The OTHER port number of `port`'s physical socket, or 0 if it has
+// none. Both are 1-based, as every port number a user sees is.
+//
+// A USB3 socket is two ports to the controller -- one in its USB2 range
+// and one in its USB3 range -- and which one a device appears on is
+// decided by whether its SuperSpeed link trained. **THE CONTROLLER
+// DOES NOT SAY WHICH PAIRS WITH WHICH**; this is derived by position
+// within the two ranges, which is Linux's fallback when ACPI `_PLD` is
+// unavailable, and it is logged at init so a wrong guess is visible.
+// See companion_port() in xhci.c.
+int xhci_companion_port(unsigned port);
+
+// The same rule with the ranges passed IN, so it can be checked without
+// a controller. All 1-based; 0 for "no companion" and for a port in
+// neither range.
+int xhci_companion_in(unsigned first2, unsigned count2,
+                      unsigned first3, unsigned count3, unsigned port);
+
 #endif
