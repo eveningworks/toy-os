@@ -1312,11 +1312,15 @@ opening it:
   **Every tool takes `--instance N` now** (`port_guard.add_instance_args()`),
   which derives the QMP port AND the serial socket from one number so
   they cannot name two guests; a lone `--qmp-port` is mapped to its
-  slot and says so. **Use `--instance auto` (or `--instance N`) whenever
-  anything else might be running** -- `gui_regress.py` holds slots `0..DEFAULT_JOBS-1`
-  while it runs (up to 8, i.e. QMP 4445-4452), so don't hand-pick a low
-  slot; `auto` probes for the lowest free one and prints it, which is
-  what makes the run replayable. **What it does NOT fix is CPU contention**: a tool
+  slot and says so. **`auto` belongs to whatever LAUNCHES the guest, and
+  only there**: `python3 tools/vm.py --instance auto start` takes the
+  lowest FREE slot and PRINTS it, which is what makes the run replayable
+  -- then drive it with `--instance <that number>`. A tool that connects
+  to an already-running guest must name the slot the guest is ON, so
+  `auto` there would pick an empty one; `port_guard`'s `--instance` is
+  a number for exactly that reason. **Name a slot whenever anything else
+  might be running** -- `gui_regress.py` holds `0..DEFAULT_JOBS-1` while
+  it runs (up to 8, i.e. QMP 4445-4452), so don't hand-pick a low one. **What it does NOT fix is CPU contention**: a tool
   run beside the full suite is port-safe and still competes for cores,
   and an app that ANIMATES can fail a settled-frame comparison under
   that load. So a concurrent run is fine for getting an answer, and not
