@@ -82,9 +82,18 @@ static int cur_bold;
 // here by gfx_kern(), which has to sit beside the weight state it reads.
 static int font_ttf_glyph_index(int c);
 
-static const struct font_atlas *active_atlas(void) {
-    return font_face_atlas_weight(cur_bold ? FONT_WEIGHT_BOLD : FONT_WEIGHT_REGULAR);
-}
+// **RING 0 DRAWS FROM THE BAKED TABLES AND NOTHING ELSE.** There is no
+// runtime face here any more: a `.ttf` is untrusted input and parsing it
+// moved to /bin/fontd (docs/commands/fontd.md), which serves the
+// DESKTOP. The console, the kernel shell and a panic report all have to
+// draw before any process exists, so their glyphs are compiled into the
+// image -- the same split Windows makes, where the bugcheck screen uses
+// a built-in font rather than the font host.
+//
+// The consequence, stated where it will be noticed: the text console and
+// the desktop genuinely render in different typefaces, and `fontface`
+// no longer changes this one.
+static const struct font_atlas *active_atlas(void) { return 0; }
 
 int gfx_set_bold(int on) {
     int prev = cur_bold;
@@ -158,22 +167,11 @@ int gfx_font_px(void) { return cur_font_px; }
 // Returns 1 if the size took effect. A failed atlas build (see
 // font_face_build) leaves the previous size in place and returns 0
 // rather than dropping the machine back to the baked font mid-session.
+// SNAPS TO A BAKED SIZE, always. An arbitrary pixel size needs a
+// rasteriser and ring 0 has none; the desktop still gets any size it
+// asks for, because fontd rasterizes it (abi/font_shm.h).
 int gfx_set_font_px(int px) {
     if (px < 1 || px > 256) return 0;
-    if (font_face_active()[0]) {
-        if (!font_face_build(px, FONT_WEIGHT_REGULAR)) return 0;
-        // BOTH WEIGHTS, EAGERLY, AND THE BOLD ONE MAY FAIL WITHOUT
-        // FAILING THE SIZE. Building it lazily on the first bold draw
-        // would put a ~10 ms rasterization of 101 glyphs inside a paint,
-        // and a size change is exactly when the machine is already
-        // reflowing everything. A bold build that runs out of cache
-        // leaves gfx_set_bold() drawing regular, which is degraded
-        // rather than broken.
-        font_face_build(px, FONT_WEIGHT_BOLD);
-        cur_font_px = px;
-        cur_font_size = nearest_baked(px);
-        return 1;
-    }
     cur_font_size = nearest_baked(px);
     cur_font_px = baked_px(cur_font_size);
     return 1;

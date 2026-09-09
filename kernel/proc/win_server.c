@@ -81,9 +81,13 @@ static int map_font(int pid, struct win_request_msg *req) {
     // the whole reason this request exists (see WIN_REQ_FONT in
     // abi/win_proto.h): a client carrying its own copy would keep
     // rendering the old face after `fontface` changed it.
-    const struct font_atlas *atlas =
-        font_face_atlas_weight(weight == WIN_FONT_BOLD ? FONT_WEIGHT_BOLD
-                                                        : FONT_WEIGHT_REGULAR);
+    // **THIS HANDS OUT THE BAKED TABLES, and that is all it can.** A
+    // runtime face is /bin/fontd's now, published as shared memory a
+    // client maps itself (abi/font_shm.h) -- ring 0 parses no font. What
+    // is left here is the FALLBACK a client uses before fontd has
+    // published, so a window that opens early still draws text; it
+    // upgrades itself when the atlas appears (ugfx_font_recheck).
+    const struct font_atlas *atlas = 0;
     const struct font_ttf_variant *fv = &font_ttf_variants[gfx_font_size()];
 
     // THE BAKED FONT HAS ONE WEIGHT, so a bold request against it is

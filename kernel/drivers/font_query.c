@@ -20,7 +20,6 @@
 // than under kernel/core/, because a provider belongs to whoever owns
 // the fact (api/query.h) and the fact here is the font's.
 #include "query.h"
-#include "font_face.h"
 #include "font_ttf.h"
 #include "gfx.h"
 #include "string.h"
@@ -67,27 +66,20 @@ static int fontglyph_fill(int index, void *out) {
     // Resolved the way gfx.c resolves it, at the weight gfx.c is
     // currently set to -- so `fontface`, `fontsize` and a `gfx_set_bold`
     // in flight all move this together with the screen.
-    const struct font_atlas *a =
-        font_face_atlas_weight(gfx_bold() ? FONT_WEIGHT_BOLD : FONT_WEIGHT_REGULAR);
+    // **RING 0 HAS NO RUNTIME FACE, so this reports what the CONSOLE
+    // draws** -- the tables baked into the image. The DESKTOP's font is
+    // /bin/fontd's and is reported by `diag font`; the two genuinely
+    // differ now, which is the split rather than a fault.
+    //
+    // QUERY_FONTGLYPH_FACE is therefore never set here any more. A
+    // reader that treated its absence as "no font" would be wrong: it
+    // means "the baked one", which is a font.
     const struct font_ttf_variant *fv = &font_ttf_variants[gfx_font_size()];
 
     const uint8_t *cell;
     int cw, ch;
-    if (a) {
-        if (index >= a->count) return 0;
-        cw = a->cell_w;
-        ch = a->cell_h;
-        cell = a->glyphs + (size_t)index * (size_t)cw * (size_t)ch;
-        q->line_h   = (uint16_t)a->line_h;
-        q->baseline = (uint16_t)a->baseline;
-        q->advance  = (uint16_t)(a->advances ? a->advances[index] : a->cell_w);
-        q->px       = (uint16_t)a->px;
-        q->count    = (uint16_t)a->count;
-        q->weight   = (uint8_t)a->weight;
-        q->flags   |= QUERY_FONTGLYPH_FACE;
-        if (a->synthetic) q->flags |= QUERY_FONTGLYPH_SYNTHETIC;
-    } else {
-        // THE BAKED FALLBACK HAS NO SEPARATE LINE BOX AND NO ADVANCES.
+    {
+        // THE BAKED TABLES HAVE NO SEPARATE LINE BOX AND NO ADVANCES.
         // Reported as cell_h and cell_w rather than left at zero: they
         // are the true answers for that font, and a reader comparing a
         // baked machine against a face machine must not have to know
@@ -100,7 +92,7 @@ static int fontglyph_fill(int index, void *out) {
         q->advance  = (uint16_t)cw;
         q->px       = (uint16_t)gfx_font_px();
         q->count    = FONT_TTF_GLYPH_COUNT;
-        q->weight   = FONT_WEIGHT_REGULAR;
+        q->weight   = 0; // the baked tables have ONE weight
     }
 
     q->slot      = (uint32_t)index;

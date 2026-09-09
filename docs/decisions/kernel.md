@@ -910,6 +910,57 @@ protocol itself -- `abi/win_proto.h`, typed messages -- which is exactly
 what let the traffic move rings without a rewrite, and which is the half
 this entry should have been about.
 
+## Ring 0 parses no font: the console is baked, the desktop is fontd's
+
+A `.ttf` is attacker-shaped data with a lot of offsets in it, and until
+2026-09-09 it was parsed in ring 0 -- the surface Windows spent a decade
+of GDI CVEs on before Windows 10 moved it to `fontdrvhost`. It is
+`/bin/fontd` now, and the kernel image contains no TrueType parser at
+all: `nm build/kernel.bin` finds no `ttf_*`, `font_atlas_*` or
+`font_face_*` symbol.
+
+**THE KERNEL IS NOT A CONSUMER EITHER, and that is the part worth
+recording.** The first design had fontd hand its atlas back so the
+kernel could go on serving glyphs to clients. The maintainer proposed
+the simpler split instead: ring 0 draws its console, its shell and its
+panic reports from the bitmap tables compiled into the image, and ring 3
+gets TrueType. That deletes more -- the atlas cache, the contiguous
+frame allocation and the request that mapped kernel glyphs into a client
+all go with the parser -- and it removes a dependency the other design
+keeps, because the kernel's glyphs then live in memory no ring-3 process
+can free.
+
+It is also the split Windows actually makes. Its bugcheck screen uses a
+built-in font, not the font host.
+
+**WHY THE BAKED TABLES CANNOT SIMPLY GO.** Three windows have no process
+to ask: every line of the boot log before the scheduler exists, the
+INIT_CONFIG stage where the setting is read, and a panic -- which must
+draw with a process possibly already faulted. A console that cannot draw
+until a service starts is a console that cannot report why that service
+did not start.
+
+**WHAT THIS COSTS, stated rather than glossed.** The text console and
+the desktop render in DIFFERENT TYPEFACES: JetBrains Mono baked in
+versus whatever face is selected. `fontface` no longer changes the
+console, and `fontsize` there snaps to the five baked sizes because an
+arbitrary size needs a rasteriser ring 0 no longer has. The desktop
+still gets any size, because fontd rasterizes it.
+
+**The BIOS font was considered and does not work here.** GRUB puts this
+kernel in a linear framebuffer rather than VGA text mode, so there is no
+hardware glyph rendering to borrow, and a UEFI boot has no VGA BIOS ROM
+at all. The baked tables are the same idea done at build time, and
+better for it: five sizes, anti-aliased, and six Latin-1 letters ASCII
+does not have.
+
+**What ring 0 kept is the SETTING, not the font.** `system.font_face`
+lives in /etc/toyos.conf like every other one, and the registry needs a
+list of valid choices -- so `font_faces.c` lists a directory and
+validates a name against it. It opens no file. Whether a `.ttf` actually
+parses is fontd's question, which is the honest limit of what ring 0 can
+answer about a font it never reads.
+
 ## Diagnostics are a NAMED REGISTRY in the kernel, not a window-server relay
 
 The `gui` command channel was built into `win_server.c` when the

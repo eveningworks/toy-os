@@ -12,7 +12,8 @@
 // records which face -- or the literal `builtin` for the baked glyphs.
 #include "font_config.h"
 #include "gfx.h"
-#include "font_face.h"
+#include "font_faces.h" // the directory listing -- ring 0 parses no font
+#include "fs.h"
 #include "knum.h"
 #include "kfmt.h"
 #include "string.h"
@@ -55,15 +56,14 @@
 void font_config_init(void) {
     char value[FONT_FACE_NAME_LEN];
 
-    font_face_init(); // scan /usr/share/fonts -- a listing, nothing opened
-
-    if (etc_config_get(FONT_CONFIG_FILE, FACE_CONFIG_KEY, value, sizeof(value))) {
-        // A face that has gone missing (an image reseeded without it) is
-        // not an error worth stopping for: the baked font is right here.
-        if (k_strcmp(value, FACE_BUILTIN) != 0) font_face_select(value);
-    } else {
-        font_face_select(FACE_DEFAULT); // absent key: the default, if it exists
-    }
+    // **RING 0 NO LONGER LOADS A FACE.** It records which one is
+    // SELECTED and nothing more: /bin/fontd reads the same setting,
+    // parses the file and publishes the atlas the desktop draws from.
+    // The console keeps the baked tables whatever this says.
+    if (etc_config_get(FONT_CONFIG_FILE, FACE_CONFIG_KEY, value, sizeof(value)))
+        font_faces_set_selected(value);
+    else
+        font_faces_set_selected(FACE_DEFAULT);
 
     // **A SELECTED FACE STILL HAS TO BE BUILT, AND THAT IS WHAT A
     // MISSING SIZE KEY USED TO SKIP.** font_face_select() only loads and
@@ -126,12 +126,15 @@ int font_config_apply_px(int px) {
 
 int font_config_apply_face(const char *name) {
     int builtin = !name || !name[0] || k_strcmp(name, FACE_BUILTIN) == 0;
-    if (!font_face_select(builtin ? "" : name)) return SETTING_INVALID;
-    // Re-rasterize at the size already in effect. A face swap that left
-    // the old face's atlas in use would look like the setting had
-    // silently failed.
-    gfx_set_font_px(gfx_font_px());
+    // REFUSED IF THE FILE IS NOT THERE, which is as much validation as
+    // ring 0 can honestly do now: whether a `.ttf` is well formed is a
+    // question only the parser can answer, and the parser is in ring 3.
+    // A face that will not parse is fontd's to report.
+    if (!builtin && !font_faces_have(name)) return SETTING_INVALID;
+    font_faces_set_selected(builtin ? FACE_BUILTIN : name);
     int r = font_config_save_face(builtin ? "" : name);
+    // The clients cache metrics, and fontd will republish when it
+    // notices the setting -- this is what makes them look again.
     win_server_font_changed();
     return r;
 }
@@ -178,15 +181,11 @@ static int font_apply(const char *value) {
 
 static int face_choice(int index, char *out, uint32_t out_size) {
     if (index == 0) { k_strlcpy(out, FACE_BUILTIN, out_size); return 1; }
-    struct font_face_info info;
-    if (!font_face_info(index - 1, &info)) return 0;
-    k_strlcpy(out, info.name, out_size);
-    return 1;
+    return font_faces_name(index - 1, out, out_size);
 }
 
 static void face_get(char *out, uint32_t out_size) {
-    const char *active = font_face_active();
-    k_strlcpy(out, active[0] ? active : FACE_BUILTIN, out_size);
+    k_strlcpy(out, font_faces_selected(), out_size);
 }
 
 static int face_apply(const char *value) {

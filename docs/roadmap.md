@@ -583,7 +583,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] A numeric setting gets a spinbox but no SLIDER -- `uui_scale` exists now; System Settings does not offer it as a `Widget=`
 - [x] ~~A `/usr/share/fonts` convention and a command to list what loaded~~ DONE 2026-08-20 -- `fontface`
 - [x] ~~Keep the baked font as the guaranteed fallback, so the console works with no disk font~~ DONE 2026-08-20
-- [ ] Move the SESSION font's parsing out of ring 0 -- Windows 10's `fontdrvhost`; an app already rasterizes its own
+- [x] ~~Move the SESSION font's parsing out of ring 0~~ DONE 2026-09-09 -- `/bin/fontd`; the kernel image contains no TrueType parser
 - [ ] Apply a composite glyph's 2x2 transform instead of skipping it (accents are pure translations, so nothing needs it yet)
 - [ ] Note the boundary: complex-script shaping
 

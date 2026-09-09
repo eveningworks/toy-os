@@ -10,6 +10,7 @@
 #include "shell_internal.h"
 #include "shell.h"
 #include "tmppath.h"
+#include "font_faces.h" // the face list `fontface` shows and validates
 #include "fs.h" // shell_path_find()
 #include "apps.h"
 
@@ -1029,8 +1030,11 @@ static void print_fontsize_choices(void) {
 void cmd_fontsize(const char *args) {
     if (!args || k_strlen(args) == 0) {
         vga_printf("usage: fontsize <points>  (currently: %d", gfx_font_px());
-        if (font_face_active()[0]) vga_printf(", %s", font_face_active());
-        else {
+        {
+            // THIS CONSOLE HAS THE BAKED SIZES AND NOTHING ELSE. An
+            // arbitrary size needs a rasteriser, and ring 0 has none --
+            // the DESKTOP still gets any size, because /bin/fontd
+            // rasterizes it.
             vga_write(", built-in sizes only: ");
             print_fontsize_choices();
         }
@@ -1069,18 +1073,17 @@ void cmd_fontsize(const char *args) {
 // and nothing has to parse a font's internal name table to answer it.
 void cmd_fontface(const char *args) {
     if (!args || k_strlen(args) == 0) {
-        int n = font_face_count();
-        const char *active = font_face_active();
-        vga_printf("Font faces in /usr/share/fonts (%d):\n", n);
+        int n = font_faces_count();
+        const char *active = font_faces_selected();
+        vga_printf("Font faces in %s (%d):\n", FONT_FACE_DIR, n);
         vga_printf("  %-24s %s%s\n", "builtin",
-                   "baked into the kernel image",
-                   active[0] ? "" : "  <- active");
+                   "baked in -- what THIS console draws",
+                   k_strcmp(active, "builtin") == 0 ? "  <- selected" : "");
         for (int i = 0; i < n; i++) {
-            struct font_face_info info;
-            if (!font_face_info(i, &info)) continue;
-            vga_printf("  %-24s %uKB%s\n", info.name,
-                       (unsigned)(info.size / 1024),
-                       k_strcmp(info.name, active) == 0 ? "  <- active" : "");
+            char name[FONT_FACE_NAME_LEN];
+            if (!font_faces_name(i, name, sizeof name)) continue;
+            vga_printf("  %-24s %s%s\n", name, "rasterized by /bin/fontd",
+                       k_strcmp(name, active) == 0 ? "  <- selected" : "");
         }
         if (n == 0) vga_write("  (none -- the built-in font is the only one)\n");
         return;

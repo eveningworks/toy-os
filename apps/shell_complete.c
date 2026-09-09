@@ -8,6 +8,7 @@
 // usually, three lines; it deliberately isn't a registration mechanism,
 // because a table of function pointers for a dozen completers would be
 // more machinery than the thing it's automating.
+#include "font_faces.h" // the face list `fontface` completes against
 #include "shell_complete.h"
 #include "shell.h"
 #include "apps.h"
@@ -101,9 +102,9 @@ static enum completion_domain shell_arg_domain(struct completion_collector *c,
         // stop matching the moment somebody dropped a font in. `builtin`
         // is offered too, since it is a legal value and not a file.
         completion_add(c, "builtin");
-        for (int i = 0; i < font_face_count(); i++) {
-            struct font_face_info info;
-            if (font_face_info(i, &info)) completion_add(c, info.name);
+        for (int i = 0; i < font_faces_count(); i++) {
+            char name[FONT_FACE_NAME_LEN];
+            if (font_faces_name(i, name, sizeof name)) completion_add(c, name);
         }
         return COMPLETION_FILLED;
     }
