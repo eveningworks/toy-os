@@ -63,4 +63,30 @@ struct font_shm {
     char face[32];
 };
 
+// --- the beacon -------------------------------------------------------
+//
+// **A REPUBLISH MAKES A NEW OBJECT, SO A CLIENT'S MAPPING CANNOT TELL IT
+// ANYTHING.** fontd unlinks and re-creates on a face or size change (see
+// above), which means the generation a client already has mapped never
+// moves -- it is reading the OLD atlas, faithfully, forever.
+//
+// So there is a second, tiny object that is only ever written IN PLACE.
+// A client maps its one page once and reads `generation` as an ordinary
+// memory access, no syscall, so checking every frame is free; when it
+// moves, the client re-opens the atlas by name.
+//
+// The alternative was to order the change notification against fontd's
+// republish, and that cannot be made reliable: the setting is applied by
+// whoever changed it and fontd notices on its own poll, so the event
+// arrives BEFORE the new atlas exists. A client that re-opened then
+// would map the old object again and stay there. Polling a word has no
+// ordering to get wrong. This is `/bin/soundd`'s beacon, same shape.
+#define FONT_BEACON_NAME  "font.beacon"
+#define FONT_BEACON_MAGIC 0x464E4243u // 'FNBC'
+
+struct font_beacon {
+    uint32_t magic;      // FONT_BEACON_MAGIC
+    uint32_t generation; // bumped AFTER every weight has been republished
+};
+
 #endif

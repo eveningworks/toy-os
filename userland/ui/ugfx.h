@@ -215,6 +215,11 @@ struct ugfx_font {
 // re-reads the metrics and the mapping is idempotent.
 int ugfx_font_init(void);
 
+// Whether /bin/fontd has republished the session font since the last
+// call, re-mapping it if so. A memory read rather than a syscall, so an
+// app may ask every frame; uapp does. See abi/font_shm.h's beacon.
+int ugfx_font_recheck(void);
+
 // Font metrics, valid once ugfx_font_init() has succeeded. Both are 0
 // before that, which is what makes a forgotten init show up as text
 // that doesn't draw rather than as a wild pointer.

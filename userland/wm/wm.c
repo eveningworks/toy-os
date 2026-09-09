@@ -1022,6 +1022,19 @@ void wm_run(void) {
         // wm_client_poll_debug(). Every GUI test tool arrives here.
         wm_client_poll_debug();
 
+        // ...and so is the session font, for the same reason: WIN_EV_FONT
+        // fires when the SETTING changes and fontd rebuilds a moment
+        // later, so the event alone re-maps the atlas about to be
+        // replaced. A memory read per frame (abi/font_shm.h's beacon).
+        if (ugfx_font_recheck()) {
+            // The same job WIN_EV_FONT does: everything this compositor
+            // draws is derived from the cell FRESH each frame, so one
+            // unconditional repaint is the whole of it.
+            wm_render_reset();
+            wm_logf("wm: font changed -- %dx%d cell\n",
+                    ugfx_char_w(), ugfx_char_h());
+        }
+
         // Synthetic input from the serial debug console's `gui click` /
         // `gui drag` (apps/wm/wm_debug.c), consumed at most one event
         // per iteration so each becomes its own tick -- which is what

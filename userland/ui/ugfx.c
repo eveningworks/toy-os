@@ -5,7 +5,10 @@
 #include "syscall_abi.h"
 #include "rt/sys.h" // sys_sbrk, sys_win_request -- the screen half, below
 #include "ttf.h"    // the SAME rasterizer the kernel uses -- see ugfx_font_load
+#include "font_shm.h" // the session atlas /bin/fontd publishes
+#include "ui/ulog.h"  // which source a client got its glyphs from
 #include <stdlib.h>
+#include <stdio.h>   // snprintf -- the shm object's name
 
 static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
     int64_t ret;
@@ -273,8 +276,93 @@ static int glyph_index(unsigned char c) {
     return idx;
 }
 
+// --- the session font, from /bin/fontd -------------------------------
+//
+// THE ATLAS IS RASTERIZED IN RING 3 NOW, by a service, and a client maps
+// it read-only out of shared memory (abi/font_shm.h). The kernel is not
+// in this path: it draws its own console from the baked tables and never
+// parses a font.
+//
+// The kernel request below is the FALLBACK, and it is a real one rather
+// than a leftover -- a `builtin` face publishes nothing, and a machine
+// whose fontd has not started yet still has to draw. What it hands out
+// is the baked tables, which is what the console is using anyway.
+static uint32_t g_shm_generation[UGFX_FONT_WEIGHTS];
+
+// The beacon, mapped once. Reading it is a memory access rather than a
+// syscall, which is what lets a client check on every frame -- see
+// abi/font_shm.h on why the atlas objects cannot answer this themselves.
+static const struct font_beacon *g_beacon;
+static uint32_t g_seen_beacon;
+
+static void beacon_map(void) {
+    if (g_beacon) return;
+    int fd = sys_shm_open(FONT_BEACON_NAME, 0, 0);
+    if (fd < 0) return;
+    void *p = sys_mmap(0, sizeof(struct font_beacon), SYS_PROT_READ,
+                       SYS_MAP_SHARED, fd, 0);
+    sys_close(fd);
+    if (!p) return;
+    const struct font_beacon *b = (const struct font_beacon *)p;
+    if (b->magic != FONT_BEACON_MAGIC) { sys_munmap(p, sizeof *b); return; }
+    g_beacon = b;
+    g_seen_beacon = b->generation;
+}
+
+static int map_fontd_font(int weight, struct ugfx_font *out) {
+    char name[SHM_NAME_MAX];
+    snprintf(name, sizeof name, FONT_SHM_NAME_FMT, weight);
+
+    int fd = sys_shm_open(name, 0, 0);   // open existing, never create
+    if (fd < 0) return 0;
+
+    // MAP ONE PAGE FIRST to learn the size, then the whole object. An
+    // shm object is MAPPED, not read -- sys_read() on this fd answers
+    // nothing -- and guessing a length instead either truncates a large
+    // atlas or asks for pages that are not there, which SYS_MMAP refuses.
+    struct font_shm hdr;
+    void *probe = sys_mmap(0, 4096, SYS_PROT_READ, SYS_MAP_SHARED, fd, 0);
+    if (!probe) { sys_close(fd); return 0; }
+    hdr = *(const struct font_shm *)probe;
+    sys_munmap(probe, 4096);
+
+    if (hdr.magic != FONT_SHM_MAGIC || hdr.version != FONT_SHM_VERSION ||
+        !hdr.generation || !hdr.count || !hdr.cell_w || !hdr.cell_h) {
+        // Not ready, or a fontd newer than this client. Fall back rather
+        // than read fields that may have moved.
+        sys_close(fd);
+        return 0;
+    }
+
+    void *base = sys_mmap(0, hdr.bytes, SYS_PROT_READ, SYS_MAP_SHARED, fd, 0);
+    sys_close(fd);   // the mapping holds its own reference
+    if (!base) return 0;
+
+    const struct font_shm *h = (const struct font_shm *)base;
+    out->char_w   = (int)h->cell_w;
+    out->char_h   = (int)h->cell_h;
+    out->line_h   = (int)h->line_h;
+    out->count    = (int)h->count;
+    out->glyphs   = (const unsigned char *)base + h->glyph_off;
+    out->advances = (const unsigned char *)base + h->adv_off;
+    out->kern     = (const signed char *)((const unsigned char *)base + h->kern_off);
+    g_shm_generation[weight] = h->generation;
+    beacon_map();
+
+    // SAID ONCE PER WEIGHT, because fontd and the kernel produce the
+    // SAME bytes -- so nothing on screen can tell you which one a client
+    // is drawing from, and "it looks right" is not evidence that this
+    // path ran at all.
+    ulogf("ugfx: session font %d from fontd -- %ux%u cell, line %u, gen %u\n",
+          weight, h->cell_w, h->cell_h, h->line_h, h->generation);
+    return 1;
+}
+
 // Asks the server for one weight and fills `out`. Returns 1 on success.
 static int map_session_font(int weight, struct ugfx_font *out) {
+    if (map_fontd_font(weight, out)) return 1;
+    ulogf("ugfx: session font %d from the KERNEL (no fontd atlas)\n", weight);
+
     struct win_request_msg req;
     for (unsigned i = 0; i < sizeof(req); i++) ((uint8_t *)&req)[i] = 0;
     req.type = WIN_REQ_FONT;
@@ -304,6 +392,21 @@ static int map_session_font(int weight, struct ugfx_font *out) {
     // place that arithmetic is written down.
     uint64_t koff = win_font_kern_offset(req.mods, req.c);
     out->kern = koff ? (const signed char *)(uintptr_t)(base + koff) : 0;
+    return 1;
+}
+
+// HAS THE SESSION FONT BEEN REPUBLISHED? A memory read, not a syscall,
+// so an app may ask on every frame. Returns 1 when it re-mapped, which
+// is the caller's cue to re-measure everything.
+//
+// It exists because WIN_EV_FONT arrives when the SETTING changes and
+// fontd republishes on its own poll a moment later -- so an app that
+// only re-mapped on the event would map the OLD atlas again and keep it.
+int ugfx_font_recheck(void) {
+    beacon_map();
+    if (!g_beacon || g_beacon->generation == g_seen_beacon) return 0;
+    g_seen_beacon = g_beacon->generation;
+    ugfx_font_init();
     return 1;
 }
 

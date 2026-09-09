@@ -53,6 +53,32 @@ struct published {
 };
 static struct published g_pub[FONT_WEIGHT_COUNT];
 
+// The beacon: one page, created once, written IN PLACE. It is how a
+// client notices a republish at all -- see abi/font_shm.h on why the
+// atlas objects themselves cannot say.
+static struct font_beacon *g_beacon;
+
+static void beacon_init(void) {
+    sys_shm_unlink(FONT_BEACON_NAME);
+    int fd = sys_shm_open(FONT_BEACON_NAME, sizeof(struct font_beacon),
+                          SHM_CREATE | SHM_EXCL | SHM_PUBLIC);
+    if (fd < 0) { printf("fontd: cannot create the beacon (%d)\n", fd); return; }
+    void *p = sys_mmap(0, sizeof(struct font_beacon),
+                       SYS_PROT_READ | SYS_PROT_WRITE, SYS_MAP_SHARED, fd, 0);
+    sys_close(fd);
+    if (!p) { printf("fontd: cannot map the beacon\n"); return; }
+    g_beacon = (struct font_beacon *)p;
+    g_beacon->generation = 0;
+    g_beacon->magic = FONT_BEACON_MAGIC;
+}
+
+// AFTER both weights, never between them: a client that re-opened on a
+// half-done republish would take the new regular and the old bold, and
+// draw a heading in the wrong face.
+static void beacon_bump(void) {
+    if (g_beacon) g_beacon->generation = g_generation;
+}
+
 static void unpublish(int weight) {
     struct published *p = &g_pub[weight];
     if (p->base) sys_munmap(p->base, p->bytes);
@@ -198,6 +224,8 @@ static int settings_changed(void) {
                 unpublish(w);
             }
             g_face[0] = '\0';
+            g_generation++;
+            beacon_bump();
         }
         return 0;
     }
@@ -260,9 +288,11 @@ int main(void) {
     strlcpy(c.name, "font", DIAG_NAME_LEN);
     sys_diag(&c);
 
+    beacon_init();
     if (settings_changed()) {
         publish(FONT_WEIGHT_REGULAR);
         publish(FONT_WEIGHT_BOLD);
+        beacon_bump();
     }
 
     // READY EVEN WITH NOTHING PUBLISHED. A machine whose face is
@@ -275,6 +305,7 @@ int main(void) {
         if (settings_changed()) {
             publish(FONT_WEIGHT_REGULAR);
             publish(FONT_WEIGHT_BOLD);
+            beacon_bump();
         }
         answer_diag();
         sys_sleep_ms(POLL_MS);

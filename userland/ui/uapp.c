@@ -915,6 +915,15 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         // is the entire point: the same callback, without the process
         // being runnable the whole time in between.
         if (d->on_tick && d->on_tick(a)) a->dirty = 1;
+        // THE SESSION FONT MAY HAVE BEEN REPUBLISHED. Asked here rather
+        // than only on WIN_EV_FONT because that event fires when the
+        // SETTING changes and fontd rebuilds a moment later -- so the
+        // event alone re-maps the atlas that is about to be replaced.
+        if (ugfx_font_recheck()) {
+            if (d->layout) uui_layout_run(d->layout, 0, 0, a->w, a->h);
+            if (d->on_font) d->on_font(a);
+            a->dirty = 1;
+        }
         break;
 
     case WIN_EV_FONT:
