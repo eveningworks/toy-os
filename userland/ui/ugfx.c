@@ -295,6 +295,25 @@ static uint32_t g_shm_generation[UGFX_FONT_WEIGHTS];
 static const struct font_beacon *g_beacon;
 static uint32_t g_seen_beacon;
 
+// What this process currently has mapped for each weight, so a
+// republish can give it back.
+static void *g_map_base[UGFX_FONT_WEIGHTS];
+static uint64_t g_map_bytes[UGFX_FONT_WEIGHTS];
+
+static void fontd_unmap(int weight) {
+    if (!g_map_base[weight]) return;
+    sys_munmap(g_map_base[weight], g_map_bytes[weight]);
+    g_map_base[weight] = 0;
+    g_map_bytes[weight] = 0;
+}
+
+// **SYS_MMAP FAILS WITH (void *)-1, NOT NULL** -- mmap's own contract,
+// stated in rt/sys.h. Testing for NULL passes a failed mapping straight
+// through, and the first read of it faults; that is what took the
+// compositor down after a few font switches, which is also what made
+// mmap start failing (see fontd_unmap below).
+#define MAP_BAD(p) ((p) == 0 || (p) == (void *)(intptr_t)-1)
+
 static void beacon_map(void) {
     if (g_beacon) return;
     int fd = sys_shm_open(FONT_BEACON_NAME, 0, 0);
@@ -302,7 +321,7 @@ static void beacon_map(void) {
     void *p = sys_mmap(0, sizeof(struct font_beacon), SYS_PROT_READ,
                        SYS_MAP_SHARED, fd, 0);
     sys_close(fd);
-    if (!p) return;
+    if (MAP_BAD(p)) return;
     const struct font_beacon *b = (const struct font_beacon *)p;
     if (b->magic != FONT_BEACON_MAGIC) { sys_munmap(p, sizeof *b); return; }
     g_beacon = b;
@@ -322,7 +341,7 @@ static int map_fontd_font(int weight, struct ugfx_font *out) {
     // atlas or asks for pages that are not there, which SYS_MMAP refuses.
     struct font_shm hdr;
     void *probe = sys_mmap(0, 4096, SYS_PROT_READ, SYS_MAP_SHARED, fd, 0);
-    if (!probe) { sys_close(fd); return 0; }
+    if (MAP_BAD(probe)) { sys_close(fd); return 0; }
     hdr = *(const struct font_shm *)probe;
     sys_munmap(probe, 4096);
 
@@ -336,7 +355,17 @@ static int map_fontd_font(int weight, struct ugfx_font *out) {
 
     void *base = sys_mmap(0, hdr.bytes, SYS_PROT_READ, SYS_MAP_SHARED, fd, 0);
     sys_close(fd);   // the mapping holds its own reference
-    if (!base) return 0;
+    if (MAP_BAD(base)) return 0;
+
+    // **THE PREVIOUS ATLAS IS UNMAPPED, and forgetting to was not a
+    // leak that merely wasted memory.** A republish makes a NEW object,
+    // so every font change added a whole atlas to this process's address
+    // space -- and a few switches in System Settings were enough for the
+    // next mmap to fail, which the missing MAP_FAILED check above then
+    // turned into a page fault in the compositor.
+    fontd_unmap(weight);
+    g_map_base[weight] = base;
+    g_map_bytes[weight] = hdr.bytes;
 
     const struct font_shm *h = (const struct font_shm *)base;
     out->char_w   = (int)h->cell_w;
@@ -422,6 +451,11 @@ int ugfx_font_init(void) {
     // A startup cost paid by every client for a feature used by a few is
     // the wrong trade even when it is small, and it is the shape that
     // gets blamed on something else when it finally matters.
+    // BOLD'S OWN MAPPING GOES BACK HERE. It is about to be replaced by a
+    // copy of regular's, so keeping it would strand a whole atlas in
+    // this address space on every font change -- the leak that made
+    // mmap fail and took the compositor down.
+    fontd_unmap(UGFX_FONT_BOLD);
     g_session[UGFX_FONT_BOLD] = g_session[UGFX_FONT_REGULAR];
     g_bold_mapped = 0;
 

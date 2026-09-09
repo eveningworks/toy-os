@@ -30,6 +30,7 @@ Usage (the VM must already be up):
 
 import argparse
 import os
+import re
 import sys
 import tempfile
 import time
@@ -53,10 +54,18 @@ PROP = "liberation-sans"
 # show (those are clipped to the icon cell, so a narrower font mostly
 # just un-truncates them).
 TEXT_X0, TEXT_X1 = 700, 1280
-# The rows just above the taskbar, where desktop.c draws the version text.
-# Set from the guest's own strip height in main(): the band used to be
-# fixed at 655..690 and read the strip itself as ink once it grew.
+# The rows just above the taskbar, where desktop.c draws the version
+# text. TEXT_Y1 is the taskbar's top, set from the guest in main().
+#
+# **THE BAND IS ONE LINE, AND THAT IS THE WHOLE POINT.** It was 35 rows,
+# which at any of these font sizes is TWO AND A HALF lines -- so it
+# swallowed the version text's FIRST line, which is longer than the
+# second and made of different characters. "Leftmost ink" then measured
+# that line rather than the one being compared, and a proportional face
+# that is visibly NARROWER on screen read as wider. Confirmed by eye on
+# real hardware before the band was believed.
 TEXT_Y0, TEXT_Y1 = 655, 690
+LINE_H = 16          # replaced per measurement -- see set_band()
 BG = (24, 60, 90)
 
 checks = []
@@ -67,10 +76,28 @@ def check(name, ok, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"   {detail}" if detail else ""))
 
 
-def text_left(qmp, tag):
-    """Leftmost inked column of the right-aligned version text, and ink.
+def set_band(line_h):
+    """The last line of the version text, and nothing else.
 
-    Uses a SETTLED frame: a face change is a client-side repaint two
+    A line above it is LONGER and made of different characters, so
+    including it measures the wrong string -- see TEXT_Y0's comment. Two
+    rows of margin below, to stay off the taskbar's top edge.
+    """
+    global TEXT_Y0, LINE_H
+    LINE_H = max(8, int(line_h))
+    TEXT_Y0 = TEXT_Y1 - 2 - LINE_H
+
+
+def cell_h_from(log_line):
+    """The line pitch out of `wm: font changed -- WxH cell`, or None."""
+    m = re.search(r"--\s*(\d+)x(\d+)\s*cell", log_line or "")
+    return int(m.group(2)) if m else None
+
+
+def _text_left_once(qmp, tag):
+    """One measurement of the right-aligned version text.
+
+    Uses a SETTLED frame: a face change is a client-side repaint several
     process hops away from the setting being written, and a capture
     landing mid-paint compares two half-drawn desktops.
     """
@@ -90,6 +117,31 @@ def text_left(qmp, tag):
                 if x < left:
                     left = x
     return TEXT_X0 + left, ink
+
+
+def text_left(qmp, tag, differs_from=None, timeout=8.0):
+    """...and WAIT for it to actually change when it is supposed to.
+
+    **SETTLED IS NOT CAUGHT UP.** The font now arrives from /bin/fontd,
+    which notices the setting on its own poll and republishes; the
+    compositor and every client then re-map on the next frame. So the
+    desktop can be perfectly stable while still showing the PREVIOUS
+    face, and two identical reads of a screen that has not repainted yet
+    are as identical as any other.
+
+    Measured without this, each capture returned the face before the one
+    it was labelled with -- so a narrower proportional font read as
+    WIDER, which is the opposite of what is on screen. Waiting on the
+    observable is the fix; the frame being stable is not the observable.
+    """
+    deadline = time.time() + timeout
+    last = _text_left_once(qmp, tag)
+    if differs_from is None:
+        return last
+    while time.time() < deadline and last[0] == differs_from:
+        time.sleep(0.2)
+        last = _text_left_once(qmp, tag)
+    return last
 
 
 def set_font_setting(dbg, key, value, timeout=8.0):
@@ -534,7 +586,7 @@ def main():
     global TEXT_Y0, TEXT_Y1
     st = dbg.state()
     TEXT_Y1 = st["screen"]["h"] - st["taskbar_h"]
-    TEXT_Y0 = TEXT_Y1 - 35
+    set_band(LINE_H)
     print("runtime fonts")
 
     # --- FIRST, before anything is set ---------------------------------
@@ -567,6 +619,7 @@ def main():
     check("a face rasterizes from /usr/share/fonts and reaches the compositor",
           "cell" in mono_cell, mono_cell)
 
+    set_band(cell_h_from(mono_cell) or LINE_H)
     mono_left, mono_ink = text_left(qmp, "mono")
     check("the desktop draws text with it", mono_ink > 200,
           f"left={mono_left} ink={mono_ink}")
@@ -581,6 +634,7 @@ def main():
     check("the two faces do not have the same cell", prop_cell != mono_cell,
           f"{mono_cell!r} -> {prop_cell!r}")
 
+    set_band(cell_h_from(prop_cell) or LINE_H)
     prop_left, prop_ink = text_left(qmp, "prop")
     check("the switch reached the screen without a restart",
           prop_left != mono_left or abs(prop_ink - mono_ink) > 100,
@@ -615,7 +669,7 @@ def main():
     # frame that has not started repainting are still identical. A
     # settled frame is not the same thing as the RIGHT frame.
     wait_log(dbg, "font changed")
-    builtin_left, builtin_ink = text_left(qmp, "builtin")
+    builtin_left, builtin_ink = text_left(qmp, "builtin", differs_from=prop_left)
     check("the baked font still draws when no face is selected",
           builtin_ink > 200, f"left={builtin_left} ink={builtin_ink}")
     check("the baked font is not the face we just left",
