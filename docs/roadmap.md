@@ -548,6 +548,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Stage 5b: the compositor opens it directly~~ DONE 2026-09-08 -- the client grants; a generation says when to re-open
 - [x] ~~The client allocates its own buffer~~ DONE 2026-09-08 -- both carved window regions are gone from the ring-3 map
 - [x] ~~Delete the kernel's window table, leaving ring 0 the framebuffer grant and raw input~~ DONE 2026-09-09 -- stages 6a and 6b
+- [x] ~~A client's events on its own ring, and the kernel queue the compositor's alone~~ DONE 2026-09-09 -- stage 8; `win_events.c` is gone
 
 ### A layout engine for the GUI
 

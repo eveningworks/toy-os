@@ -1,16 +1,16 @@
-#ifndef WIN_SERVER_H
-#define WIN_SERVER_H
+#ifndef WIN_ROLE_H
+#define WIN_ROLE_H
 
 #include <stdint.h>
 #include "win_proto.h"
 
-// The windowing protocol, kernel side.
-//
-// **THIS FILE KNOWS OF NO WINDOW.** What is left to ring 0 is the
-// compositor ROLE, the framebuffer grant keyed on it, the font mapped
-// into a client, the per-process event queue and the `gui` diagnostic
-// channel. A window's memory is the client's own shm object and its
-// geometry is the compositor's; see docs/winserver-ring3-design.md.
+// The compositor ROLE -- DRM master's shape. What ring 0 keeps of the
+// window system is keyed on it: the framebuffer grant, the input queue,
+// the font mapped into a client and the `gui` diagnostic channel.
+// **THIS FILE KNOWS OF NO WINDOW AND NO CLIENT**: a window's memory is
+// the client's own shm object, its geometry is the compositor's, and
+// its events ride the client's own channel ring;
+// see docs/winserver-ring3-design.md.
 //
 // This header lives in api/ rather than kernel/ because userland/wm/ is the
 // thing that drives it, and kernel/ is deliberately off apps/'s
@@ -35,10 +35,10 @@ int win_server_any(void);
 // the one caller the arm exists for.
 int win_server_hw_cursor_armed(void);
 
-// Broadcasts WIN_EV_FONT to every window: the active face or size has
-// changed and every client's cached metrics are stale. Called from
-// font_config.c, which is the one place a font change is applied for the
-// machine as a whole -- see WIN_EV_FONT in abi/win_proto.h.
+// WIN_EV_FONT to the compositor, which forwards it to its clients: the
+// active face or size has changed and every cached metric is stale.
+// Called from font_config.c, the one place a font change is applied
+// for the machine as a whole -- see WIN_EV_FONT in abi/win_proto.h.
 void win_server_font_changed(void);
 // The screen's size changed (WIN_EV_SCREEN, a = w, b = h). One caller:
 // screen_set_mode().
@@ -55,16 +55,9 @@ void win_server_screen_changed(int w, int h);
 int win_server_request(int pid, struct win_request_msg *req);
 
 
-// One event to every WINDOWING CLIENT -- every process that has waited
-// for a window event (win_events_is_client). `window` is 0 on every
-// copy: what rides this (WIN_EV_FONT, WIN_EV_SCREEN) is about the
-// session, never about one window.
-void win_server_broadcast(uint32_t type, int32_t a, int32_t b,
-                           uint32_t mods);
-
-// The compositor role's teardown, when `pid` dies. There are no windows
-// to destroy here any more -- a client's windows belong to the
-// compositor, which learns of the death from its own channel scan.
+// When `pid` dies: the role is dropped if it held it. A CLIENT dying
+// needs nothing here -- its windows are the compositor's, which learns
+// of the death from its own channel scan.
 void win_server_client_gone(int pid);
 
 // --- the compositor role -------------------------------------------

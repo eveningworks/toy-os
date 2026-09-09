@@ -770,7 +770,7 @@ this the obvious way), not from how much history it accumulated.
   `scheduler_block_current(regs, chan, reason)` parks on an address and
   `scheduler_wake(chan, value)` releases exactly the processes parked on
   that one -- so a waker names THE OBJECT that changed (`pipe_wait_chan(i)`,
-  `win_events_wait_chan(pid)`, `scheduler_wait_chan_pid(pid)`) and
+  `win_input_wait_chan()`, `scheduler_wait_chan_pid(pid)`) and
   nobody else is disturbed. It is FreeBSD's `tsleep`/`wakeup`; the
   `SCHED_WAIT_*` values that used to decide a wake are now LABELS for
   the `kstack` debug surface and are never matched. Four things to know.

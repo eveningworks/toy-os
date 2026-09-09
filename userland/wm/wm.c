@@ -26,8 +26,7 @@
 #include "wm_internal.h"
 #include "wm_geometry.h"
 #include "wm_debug.h"
-#include "win_server.h"
-#include "win_events.h"
+#include "win_role.h"
 #include "start_menu.h"
 #include "context_menu.h"
 #include "calendar_popup.h"
@@ -470,10 +469,10 @@ static void wm_force_quit_yes(void) {
     if (!g_force_quit_pid) return;
     wm_logf("wm: force-quitting pid %d\r\n", g_force_quit_pid);
 
-    // Killing the process is what takes the window down: scheduler_kill
-    // calls win_server_client_gone(), which destroys the client's
-    // windows through the same path a normal exit uses. Removing the
-    // window here as well would be a second teardown of the same thing.
+    // Killing the process is what takes the window down: its channel
+    // ring is unlinked with it, and the next scan closes its windows
+    // through the same path a normal exit uses. Removing the window
+    // here as well would be a second teardown of the same thing.
     // SIGKILL: a client that has stopped answering its event queue is
     // exactly the case a catchable signal cannot reach.
     sys_kill(g_force_quit_pid, SIGKILL);
@@ -1125,6 +1124,7 @@ void wm_run(void) {
         // Client timers, once per frame. This is what a client blocks
         // on instead of polling -- see WIN_REQ_TIMER.
         wm_client_check_timers();
+        wm_client_flush_pending();
 
         // Liveness, once per frame. Only reports a window that has gone
         // unresponsive WHILE being asked to close -- see

@@ -9,7 +9,7 @@
 // in SYS_WAIT_EVENT consumes no timeslices whatsoever; it is
 // descheduled, not looping.
 //
-// Driven by kernel/proc/win_events_test.c, which spawns it, pushes a
+// Driven by kernel/proc/win_input_test.c, which spawns it, pushes a
 // known number of events, and asserts the exit code matches. The exit
 // code IS the assertion, which is why this prints nothing: the KTEST
 // report it runs under is parsed off the same serial console (same
@@ -63,6 +63,9 @@ int main(int argc, char **argv) {
     while (got < want) {
         struct win_event ev;
         if (wait_event(&ev) != 1) break; // refused -- exit with what we have
+        // Holding the compositor role for the test means the devices
+        // may report too; only what the KTEST pushed is counted.
+        if (ev.type == WIN_EV_RAW_MOUSE || ev.type == WIN_EV_RAW_WHEEL) continue;
         if (ev.type != WIN_EV_NONE) got++;
     }
 

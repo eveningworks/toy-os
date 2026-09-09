@@ -48,7 +48,7 @@ WHAT THE KERNEL MUST DO
 3. ASK every client window to close (WIN_EV_CLOSE) rather than
    destroying it. Destroying frees the client's own buffer pages, so a
    client mid-draw would fault -- the compositor dying would cascade.
-   See win_server.c's compositor_gone().
+   See win_role.c's compositor_gone().
 4. Let the next compositor register. A role that cannot be re-claimed
    after a crash is a desktop that cannot be restarted.
 
@@ -196,10 +196,16 @@ def run_ring3(dbg, desktop_pid):
 
     # Asked, not destroyed -- destroying frees the client's own buffer
     # pages, so a client mid-draw would fault and the desktop dying
-    # would cascade into every app dying with it.
+    # would cascade into every app dying with it. THE CLIENT NOTICES,
+    # the kernel does not announce (stage 8): a client parked on its
+    # ring waits out one interval, finds the beacon's pid gone, and asks
+    # its own app -- so the line is the client's, up to half a second
+    # after the kill, and winclient's refusal is the other half of it.
+    time.sleep(1.5)
+    after += "\n" + "\n".join(dbg.logs())
     check("client windows are ASKED to close",
-          "asked to close" in after,
-          next((l for l in after.split("\n") if "compositor gone" in l), "no line"))
+          "asked to close" in after or "close refused" in after,
+          next((l for l in after.split("\n") if "asked to close" in l or "close refused" in l), "no line"))
 
     # ...and the proof that asking is not destroying: winclient declined,
     # so its process must still be there. `kstack slots` lists live

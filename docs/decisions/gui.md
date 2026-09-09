@@ -6733,3 +6733,63 @@ screen has a normal pointing away, so a model winds its faces so the
 normals point OUT and tests visibility against the eye. Gouraud was
 declined for the cube specifically -- averaging a corner's three face
 normals smooths the one thing a cube has, its edges.
+
+## A client's events ride its own channel ring, and the kernel queue serves one reader
+
+Stage 8 of `docs/winserver-ring3-design.md` (2026-09-09). Before it,
+the compositor delivered every key, motion, resize and close by asking
+the kernel to put it on the client's per-process queue
+(`WIN_REQ_EVENT_PUSH`), and the client parked in `SYS_WAIT_EVENT`.
+
+**What real systems do.** Linux keeps evdev in the kernel and nothing
+else of a display server's traffic: a Wayland client's events cross a
+Unix socket the compositor writes and the kernel merely carries.
+Windows keeps a per-thread message queue in win32k and `PostMessage`
+writes into it -- exactly the shape toy-os had, and the one Microsoft
+has spent two decades paying for (win32k is the kernel's largest
+attack surface). Stage 8 moves toy-os from the NT shape to the Wayland
+shape, with shared memory in place of the socket because that is what
+the channel already was.
+
+**Why the inbox is inside the client's existing ring.** A second shm
+object per client would double the compositor's per-frame name scan
+and duplicate the head/tail/futex logic beside `uchan`. The client's
+ring object grew a second single-writer ring the other way round, so
+one object, one lifetime and one scan serve both directions; `uchan`
+is where the SPSC discipline lives, and the compositor is its second
+server-side user only by being the first to write back.
+
+**Why a state is re-sent and input is dropped.** The kernel queue
+could evict the oldest input to make room for a notification because
+it owned both ends. A ring's writer cannot reach past the reader's
+tail. Two answers were weighed: a bigger ring that drops the newest of
+everything (simplest, and loses the invariant that a stuck client
+still hears its close), or treating the notifications as what they
+are -- STATES, whose latest value is all that matters -- and re-sending
+them from a per-window pending mask when room appears. The second is
+`xdg_surface.configure`'s model and was chosen; input is dropped-new
+and counted, because a client 64 events behind is not one that wants
+the backlog.
+
+**Why the kernel does not announce its own death to clients.** It
+would need the client list it just stopped keeping. A client that has
+had nothing to read for one wait interval checks that the beacon's
+live pid is the one its ring was granted to; a successor compositor
+has a different pid and no knowledge of the window, so "the name
+resolves" alone would be wrong. This is what a closed socket tells a
+Wayland client, arriving on a timer instead of at once.
+
+**Why `uapp_post()` has a spinlock and the ring does not.** A worker
+posting from another thread is a second writer, and the inbox's
+head belongs to the compositor. The post queue is private to the
+process, guarded by an `xchg` spinlock, and wakes the loop by bumping
+the inbox word with `lock xadd` -- the one word in the page with two
+writers, stated in `uchan_page.h`. `WIN_EV_USER` is now an event the
+client synthesises for itself and nothing else ever carries.
+
+**Declined:** keeping `EVENT_PUSH` for self-posts only (a per-client
+queue in the kernel for one message type); a kernel "creator died"
+signal to clients (per-client state again, and sheddable under load);
+and measuring latency by anything other than the ping the compositor
+already sends (`tools/ping_rtt.py`), since a synthetic probe would
+have measured the probe.

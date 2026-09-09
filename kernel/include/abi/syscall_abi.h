@@ -677,30 +677,29 @@ struct listdir_request {
                          // the mistake userland/lspci.c's own copy of
                          // the PCI class table already demonstrates.
 
-// The windowing protocol's delivery syscalls -- see abi/win_proto.h for
-// the message format, which is the part meant to outlive this transport
-// (a shared-memory ring is the intended successor; the event bytes
-// don't change when it lands).
+// The COMPOSITOR's queue -- raw input and the kernel's notices to it
+// (abi/win_proto.h has the message format). **A CLIENT NEVER CALLS
+// THESE**: its events are written by the compositor into the client's
+// own channel ring (lib/uwmchan.h), evdev-then-a-socket as on Linux.
+// Every one of the three answers -EPERM to a process that does not hold
+// the compositor role (WIN_REQ_SET_COMPOSITOR).
 #include "win_proto.h" // struct win_event
 
 #define SYS_POLL_EVENT 23 // RDI = pointer to a `struct win_event` (out).
                            // Never blocks. Returns 1 if an event was
-                           // written, 0 if the queue is empty, -1 on a
-                           // bad pointer or from a process that has no
-                           // event queue (kernel code, or the legacy
-                           // process_run_ring3() path -- neither has a
-                           // scheduler slot to own one).
+                           // written, 0 if the queue is empty, -EFAULT
+                           // on a bad pointer, -EPERM from anyone but
+                           // the compositor.
 
 #define SYS_WAIT_EVENT 24 // RDI = pointer to a `struct win_event` (out).
                            // Returns 1 with an event written, or 0
                            // meaning "you were woken, ask again" -- see
-                           // below. -1 on a bad pointer, or from a
-                           // process with no queue (same cases as
-                           // SYS_POLL_EVENT), which is also what a
-                           // caller that cannot be parked gets, so a
-                           // non-schedulable caller fails loudly rather
-                           // than spinning forever on a syscall that
-                           // silently never blocks.
+                           // below. -EFAULT on a bad pointer, -EPERM
+                           // from anyone but the compositor -- which is
+                           // also what a caller that cannot be parked
+                           // gets, so a non-schedulable caller fails
+                           // loudly rather than spinning forever on a
+                           // syscall that silently never blocks.
                            //
                            // CALLERS MUST LOOP. A 0 return does not
                            // mean "no event" -- it means the process
@@ -737,10 +736,9 @@ struct listdir_request {
                            // or that long has passed, whichever comes
                            // first, and CONSUMES NOTHING. Returns 1 if
                            // an event was already queued (it does not
-                           // block then), 0 otherwise; -EPERM from a
-                           // caller with no queue, the same refusal
-                           // SYS_WAIT_EVENT gives and for the same
-                           // reason.
+                           // block then), 0 otherwise; -EPERM from
+                           // anyone but the compositor, the same
+                           // refusal SYS_WAIT_EVENT gives.
                            //
                            // READINESS, NOT DELIVERY -- this is `poll()`
                            // and SYS_WAIT_EVENT is `read()`. A caller

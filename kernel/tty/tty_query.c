@@ -27,7 +27,7 @@
 #include "query.h"
 #include "tty.h"
 #include "keyboard.h"
-#include "win_server.h"
+#include "win_role.h"
 #include "string.h"
 #include <stddef.h>
 #include "initcall.h"

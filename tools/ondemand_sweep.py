@@ -129,6 +129,7 @@ TOOLS = [
     # says to start one first), and without it dies instantly on the
     # serial socket -- the sweep's fault, per the note above.
     ("stdin",       "stdin_test.py",           "blocking fd 0 and /bin/tosh",        True,  None,                   True),
+    ("ping_rtt",    "ping_rtt.py",             "the compositor<->client round trip", True,  None,                   True),
     ("terminal",    "terminal_probe.py",       "the GUI Terminal's keys and paging", True,  None,                   True),
     # ATTACHES to a running guest and needs a desktop up. Its
     # load-bearing check compares its answer against the SERIAL

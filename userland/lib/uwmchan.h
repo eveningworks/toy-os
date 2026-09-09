@@ -55,6 +55,16 @@
 
 #define WMCHAN_SERVICE "toywm"
 
+// **EVENTS COME BACK ON THE SAME RING** (stage 8): a `struct win_event`
+// in the inbox, one per slot, written by the compositor and read by the
+// client's own loop -- the kernel carries none of them. Input that the
+// inbox cannot hold is DROPPED (a client 64 events behind is not
+// keeping up); a STATE -- close, resize, focus, font, screen, a popup's
+// dismissal -- is kept and re-sent when there is room, since the
+// latest one is all a client needs (xdg_surface.configure's shape).
+_Static_assert(sizeof(struct win_event) <= UCHAN_IN_BYTES,
+               "an event must fit one inbox slot");
+
 // **THREE MESSAGES WAIT FOR AN ANSWER: CREATE, ACTIVATE AND POPUP.**
 // Everything else is fire-and-forget, which is what the carriage is
 // shaped for -- a present runs once per frame per client and must never

@@ -160,8 +160,8 @@ int main(void) {
     }
 
     // Releasing explicitly rather than relying on exit, so the release
-    // path (which win_server_client_gone() would otherwise cover) is
-    // exercised too -- and so a `dropped` count read after this program
+    // path (which the exit's win_server_client_gone() would otherwise
+    // cover) is exercised too -- and so a `dropped` count read after this program
     // ends reflects a compositor that left cleanly.
     if (set_compositor(0) == 1) sys_eprint("compclient: released\n");
     sys_eprint("compclient: exit\n");

@@ -85,6 +85,24 @@ void uchan_server_wait(struct uchan_server *s, int timeout_ms);
 
 void uchan_server_close(struct uchan_server *s);
 
+// --- server -> client: the inbox -------------------------------------
+//
+// The other direction, on the same ring. Asynchronous like a send:
+// the server writes a slot and wakes the client. A compositor's events
+// ride this, which is the Wayland shape -- one connection per client,
+// carrying both ways, and the kernel in neither.
+
+// Queues one message (at most UCHAN_IN_BYTES) for `pid` and wakes it.
+// Returns 0, or -1 when `pid` has no ring or its inbox is FULL -- a
+// real outcome, since the server cannot evict what the client has not
+// read: drop the message, or keep it and try again next frame
+// (uchan_server_room() says which is coming).
+int uchan_server_send(struct uchan_server *s, int pid, const void *msg,
+                      unsigned long len);
+
+// Free inbox slots for `pid`; 0 for a pid with no ring.
+int uchan_server_room(struct uchan_server *s, int pid);
+
 // --- client ----------------------------------------------------------
 
 // Finds `name`'s beacon and publishes this process's ring. Returns 0, or
@@ -104,5 +122,33 @@ int uchan_call(struct uchan_client *c, const void *msg, unsigned long len,
                void *reply, unsigned long reply_cap, int timeout_ms);
 
 void uchan_client_close(struct uchan_client *c);
+
+// The next inbox message, at most `cap` bytes into `out`. 1 if one was
+// copied, 0 when the inbox is empty.
+int uchan_client_recv(struct uchan_client *c, void *out, unsigned long cap);
+
+// How many inbox messages are waiting.
+int uchan_client_pending(const struct uchan_client *c);
+
+// Parks until the inbox has something, another thread kicks, or
+// `timeout_ms` passes -- and returns at once if it already has
+// something. `timeout_ms` <= 0 does not park at all (the futex reads 0
+// as NO deadline, and a caller that meant "do not wait" would park
+// until somebody happened to send).
+void uchan_client_wait(struct uchan_client *c, int timeout_ms);
+
+// Wakes a thread parked in uchan_client_wait() from ANOTHER thread of
+// the same process. The one thing a worker may do to the loop.
+void uchan_client_kick(struct uchan_client *c);
+
+// Messages the server could not fit since the ring was opened.
+uint32_t uchan_client_dropped(const struct uchan_client *c);
+
+// Is the server this ring was opened against still there? Its beacon
+// is unlinked when it dies and re-made by a successor with a new pid,
+// so "the name resolves" is not enough: the pid has to be the one the
+// ring was granted to. Cheap enough to ask on a wait timeout, not on
+// every wake.
+int uchan_client_server_alive(const struct uchan_client *c);
 
 #endif

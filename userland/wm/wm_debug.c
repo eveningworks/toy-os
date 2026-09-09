@@ -15,8 +15,7 @@
 #include "file_picker.h"
 #include "gui_apps.h"
 #include "kapi.h"
-#include "win_server.h"
-#include "win_events.h"
+#include "win_role.h"
 #include <stdarg.h> // dbg_out_printf()'s varargs
 #include "rt/sys.h"
 #include "wm/wm_rawin.h"
@@ -1138,14 +1137,22 @@ static void cmd_compositor(struct dbg_out *o, int json) {
         pid = q.c;
     }
 
+    unsigned long long last_us, max_us, avg_us;
+    unsigned pings;
+    wm_client_ping_stats(&last_us, &max_us, &avg_us, &pings);
+    unsigned long long last_cyc, max_cyc, avg_cyc;
+    wm_client_ping_cycles(&last_cyc, &max_cyc, &avg_cyc);
+
     if (json) {
-        dbg_out_printf(o, "{\"pid\":%d,\"pending\":%d,\"dropped\":%d}\r\n",
-                    pid, pending, dropped);
+        dbg_out_printf(o, "{\"pid\":%d,\"pending\":%d,\"dropped\":%d,"
+                          "\"pings\":%u,\"ping_us_last\":%llu,\"ping_us_max\":%llu,\"ping_us_avg\":%llu,"
+                          "\"ping_cyc_last\":%llu,\"ping_cyc_max\":%llu,\"ping_cyc_avg\":%llu}\r\n",
+                    pid, pending, dropped, pings, last_us, max_us, avg_us, last_cyc, max_cyc, avg_cyc);
     } else if (!pid) {
         dbg_out_write(o, "compositor: none registered\r\n");
     } else {
-        dbg_out_printf(o, "compositor: pid %d  pending %d  dropped %d\r\n",
-                    pid, pending, dropped);
+        dbg_out_printf(o, "compositor: pid %d  pending %d  dropped %d  ping rtt us last %llu max %llu avg %llu over %u\r\n",
+                    pid, pending, dropped, last_us, max_us, avg_us, pings);
     }
 }
 

@@ -29,7 +29,7 @@
 #include "sound.h"    // lsdev names the sound devices and which is active
 #include "input.h"    // ...and every registered input source
 #include "virtio_input.h" // ...and whether virtio input is actually delivering
-#include "win_server.h"
+#include "win_role.h"
 #include "diag.h"       // `gui` is one provider on the diagnostic registry
 #include "kfmt.h"
 #include "string.h"

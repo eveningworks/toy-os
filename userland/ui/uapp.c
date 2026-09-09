@@ -1,5 +1,5 @@
 // See ui/uapp.h for what this is and why.
-#include "rt/sys.h"   // TWP messages, sys_win_request(), sys_wait_event()
+#include "rt/sys.h"   // TWP messages, sys_win_request()
 #include "ui/uapp.h"
 #include <string.h>
 #include <stdio.h>
@@ -332,22 +332,48 @@ static void flush(struct uapp *a) {
 
 void uapp_redraw(struct uapp *a) { a->dirty = 1; }
 
-int uapp_post(struct uapp *a, int a0, int a1) {
-    // NOT `a->window`, and not a->anything: this runs on a WORKER
-    // THREAD, where reading toolkit state is the exact thing uapp.h
-    // says not to do. The request needs no window -- the compositor
-    // routes a self-post by pid -- so the parameter is here for symmetry
-    // with every other call in this header and is deliberately unread.
-    (void)a;
-    struct win_request_msg req;
-    for (unsigned i = 0; i < sizeof req; i++) ((char *)&req)[i] = 0;
-    req.type = WIN_REQ_EVENT_PUSH;
-    req.a = 0;              // 0 = "me", the only target a client may name
-    req.b = WIN_EV_USER;    // and the only type it may send
-    req.c = a0;
-    req.d = a1;
-    return req_send(&req);
+// --- posts: the one thing a worker thread may do -----------------------
+//
+// A private queue in this process, NOT the compositor's inbox: that ring
+// has one writer, the compositor, and a second one would race it. The
+// worker appends under a spinlock and kicks the loop's wait word;
+// the loop drains this before the inbox. Bounded because a worker
+// that posts faster than the loop drains is the bug, not the queue.
+#define UAPP_POST_MAX 32
+static struct { int a0, a1; } g_posts[UAPP_POST_MAX];
+static unsigned g_post_head, g_post_tail;   // free-running, like uchan's
+static volatile int g_post_lock;
+static void loop_kick(void);
+
+static void post_lock(void)   { while (__atomic_exchange_n(&g_post_lock, 1, __ATOMIC_ACQUIRE)) sys_yield(); }
+static void post_unlock(void) { __atomic_store_n(&g_post_lock, 0, __ATOMIC_RELEASE); }
+
+static int post_take(int *a0, int *a1) {
+    post_lock();
+    int have = g_post_head != g_post_tail;
+    if (have) {
+        *a0 = g_posts[g_post_tail % UAPP_POST_MAX].a0;
+        *a1 = g_posts[g_post_tail % UAPP_POST_MAX].a1;
+        g_post_tail++;
+    }
+    post_unlock();
+    return have;
 }
+
+int uapp_post(struct uapp *a, int a0, int a1) {
+    (void)a;
+    post_lock();
+    int room = g_post_head - g_post_tail < UAPP_POST_MAX;
+    if (room) {
+        g_posts[g_post_head % UAPP_POST_MAX].a0 = a0;
+        g_posts[g_post_head % UAPP_POST_MAX].a1 = a1;
+        g_post_head++;
+    }
+    post_unlock();
+    if (room) loop_kick();
+    return room;
+}
+
 
 // --- the layout log ---------------------------------------------------
 //
@@ -573,6 +599,8 @@ int uapp_resize(struct uapp *a, int w, int h) {
 // the compositor may not have its beacon up when an app starts.
 static struct uchan_client g_wmchan;
 static int g_wmchan_state;   // 0 untried, 1 open, -1 no compositor channel
+
+static void loop_kick(void) { uchan_client_kick(&g_wmchan); }
 
 // How long a round trip waits. Generous because the cost of being wrong
 // is one-sided in both places: giving up early opens a duplicate window
@@ -1270,19 +1298,67 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     return 1;
 }
 
+// How long one park lasts before the loop looks around. Not a cadence
+// anything is delivered on -- an event wakes it at once -- but the
+// interval at which a client with nothing to do notices the compositor
+// has died (uchan_client_server_alive), which is what a WIN_EV_CLOSE
+// from the kernel used to say.
+#define UAPP_WAIT_MS 500
+
+// The next event: a post from this process's own worker first, then the
+// compositor's inbox. Returns 1 with `ev` filled, 0 when both are empty.
+static int next_event(struct win_event *ev) {
+    int a0, a1;
+    if (post_take(&a0, &a1)) {
+        memset(ev, 0, sizeof *ev);
+        ev->type = WIN_EV_USER;
+        ev->window = g_app.window;
+        ev->a = a0;
+        ev->b = a1;
+        return 1;
+    }
+    return uchan_client_recv(&g_wmchan, ev, sizeof *ev);
+}
+
 static int uapp_pump(struct uapp *a, int block) {
     struct win_event ev;
+    static uint32_t dropped_seen;
+    static int asked_to_close;   // the compositor's death is asked about ONCE
 
     if (block) {
-        // sys_wait_event() already absorbs the SYS_RETRY sentinel, so a
-        // 0 here is a real refusal rather than "ask again".
-        if (sys_wait_event(&ev) != 1) return 0;
-        dispatch(a, &ev);
+        while (!uchan_client_pending(&g_wmchan) && g_post_head == g_post_tail) {
+            uchan_client_wait(&g_wmchan, UAPP_WAIT_MS);
+            if (uchan_client_pending(&g_wmchan) || g_post_head != g_post_tail) break;
+            // Nothing arrived in a whole wait: is anyone still there to
+            // send? A dead compositor's beacon is unlinked with it, so
+            // this is the close the desktop can no longer ask for.
+            if (!asked_to_close && !uchan_client_server_alive(&g_wmchan)) {
+                // ASKED, not destroyed -- the same courtesy the desktop
+                // extends when it is alive. An app that refuses lingers
+                // with no window, which is a leak and not a fault, and
+                // is what it asked for; it is not asked again.
+                asked_to_close = 1;
+                ulog("uapp: the compositor is gone -- asked to close\n");
+                memset(&ev, 0, sizeof ev);
+                ev.type = WIN_EV_CLOSE;
+                ev.window = a->window;
+                dispatch(a, &ev);
+                if (!a->running) return 0;
+            }
+        }
     }
-    // Drain whatever else is queued, blocking or not: one wake often
-    // carries several events, and handling them together is what makes
-    // the single coalesced present below correct rather than laggy.
-    while (a->running && sys_poll_event(&ev) == 1) dispatch(a, &ev);
+    // Drain everything queued, blocking or not: one wake often carries
+    // several events, and handling them together is what makes the
+    // single coalesced present below correct rather than laggy.
+    while (a->running && next_event(&ev)) dispatch(a, &ev);
+
+    // Input the inbox could not hold went missing, and that is worth
+    // one line per rise: a client that sees this is not keeping up.
+    uint32_t dropped = uchan_client_dropped(&g_wmchan);
+    if (dropped != dropped_seen) {
+        ulogf("uapp: %u event(s) dropped -- the loop is behind\n", (unsigned)(dropped - dropped_seen));
+        dropped_seen = dropped;
+    }
 
     flush(a);
     return a->running;

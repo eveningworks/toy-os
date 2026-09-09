@@ -19,7 +19,7 @@
 #include "string.h"
 #include "etc_config.h"
 #include "setting.h"
-#include "win_server.h" // win_server_font_changed() -- clients cache the metrics
+#include "win_role.h" // win_server_font_changed() -- clients cache the metrics
 #include "initcall.h"
 
 #define FONT_CONFIG_FILE "/etc/toyos.conf"

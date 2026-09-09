@@ -475,6 +475,8 @@ What is left in ring 0 is what must be: the framebuffer grant
 (`win_surface.c`, a device mapping) and raw input delivery to whoever
 holds the compositor role (`win_input.c`, evdev's job). `win_server.c`'s
 window table, `win_server_ops` and the dead ring-0 presentation layer go.
+(Stage 8, below, found one more thing that was not "what must be": the
+per-client event queue, and took it too.)
 
 #### What the table still backs, measured after 5b
 
@@ -688,6 +690,75 @@ taught) are written in full in `docs/decisions.md`, "A popup is a
 surface of its client". What it needed from the kernel: nothing. The
 event queue carries `window` already, and the shm name carried the slot.
 
+### Stage 8 -- a client's events on its own ring -- DONE 2026-09-09
+
+Not in the original staging either. Stage 6 wrote "the event queue
+stays, and so does `WIN_REQ_EVENT_PUSH`: input is the kernel's by
+design" -- and that covered only half of what the queue carried. The
+compositor's inbound half is evdev's shape and stays. The OUTBOUND
+half -- the compositor asking the kernel to put a key, a resize or a
+close on a client's queue, and the client parking in `SYS_WAIT_EVENT`
+for it -- was Windows' shape (a per-thread message queue in win32k),
+not Linux's, where a client's events cross a socket the kernel does
+not read. Three things in ring 0 existed only for it: a queue per
+process (49 KB of static rings, indexed by pid), the "is this process
+a windowing client" bit the font broadcast and `compositor_gone()`
+walked, and the one request that reached across into another
+process's queue.
+
+**What was built.** The channel ring a client already publishes
+(`toywm.<pid>`) grew an INBOX: a second single-writer ring in the same
+object, `in_head` the compositor's and `in_tail` the client's, plus a
+word the client parks on (`lib/uchan_page.h`, `uchan_server_send()`,
+`uchan_client_wait()`). Toykit's loop drains that ring and its own
+worker posts; `uapp_post()` appends to a private queue and kicks the
+word with an atomic add, so a worker thread wakes the loop without the
+kernel. The compositor writes every event it used to push. The kernel
+keeps ONE queue, the compositor's (`win_input.c`, which absorbed
+`win_events.c`), resets it on a role change, and answers -EPERM to any
+other process asking the event syscalls.
+
+**The one thing a single writer cannot do, and what replaced it.** The
+kernel queue evicted the oldest INPUT when full and kept a notification.
+A ring writer cannot touch what its reader has not consumed, so the
+compositor cannot evict. Input the inbox cannot take is dropped and
+counted; a STATE -- close, resize, focus, font, screen, a popup's
+dismissal -- is remembered as a bit on the window and re-sent next
+frame with the state as it is then (`wm_client_flush_pending()`). That
+is `xdg_surface.configure`: the latest configure is the only one that
+matters, and a client that missed three of them missed nothing.
+
+**A dead compositor is noticed rather than announced.** The kernel used
+to ask every client to close when the role was dropped, which needed
+the client list. A client that waits out `UAPP_WAIT_MS` with nothing
+arriving now asks whether the beacon's live pid is still the one its
+ring was granted to (`uchan_client_server_alive()`), and closes itself
+-- a Wayland client seeing its socket close. `WIN_EV_FONT` and
+`WIN_EV_SCREEN` reach the compositor on its queue and it forwards them
+to its clients, the way a DRM hotplug uevent reaches the compositor and
+not every client.
+
+**Measured.** `tools/ping_rtt.py` reads the compositor's ping round trip
+(event path out, request path back) from `gui compositor --json`, which
+gained `ping_us_last/max/avg`. Before and after are in the commit that
+landed this; the figure to compare is the mean over the same host and
+the same apps, and the claim the measurement had to settle was only
+that the ring is not WORSE than a kernel wake -- it crosses the same
+number of syscalls (one futex wake per delivery in place of one
+`EVENT_PUSH`).
+
+What is in ring 0 after it, `kernel/proc/win_*.c` tests excluded:
+
+| file | lines | what it owns |
+|---|---|---|
+| `win_role.c` | ~450 | the compositor ROLE: claim/release, the FB and cursor-plane gates, the font map, the `gui` channel |
+| `win_syscalls.c` | ~170 | `SYS_WIN_REQUEST` and the compositor's three event syscalls |
+| `win_surface.c` | 195 | the framebuffer grant |
+| `win_input.c` | ~200 | the devices, and the one queue between them and the compositor |
+
+Each is a Linux subsystem in shape -- DRM master, KMS, evdev -- and none
+knows what a window or a client is.
+
 ## Out of scope
 
 - **Moving input.** A compositor reading raw devices itself is what
@@ -699,6 +770,9 @@ event queue carries `window` already, and the shm name carried the slot.
 
 ## Revision history
 
+- 2026-09-09 (latest): stage 8 -- a client's events on its own ring, the
+  kernel queue the compositor's alone, `win_server.c` renamed to what
+  it is (`win_role.c`) and `win_events.c` folded into `win_input.c`.
 - 2026-09-09 (later still): stage 6c -- the ring-0 presentation layer
   and the transport registry deleted. Stage 6 had claimed the first of
   those already.

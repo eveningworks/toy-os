@@ -10,6 +10,17 @@
 
 #define RING_BYTES ((uint64_t)sizeof(struct uchan_ring))
 
+// **AN UNMAP IS THE WHOLE REGION OR NOTHING.** sys_munmap() refuses a
+// shared mapping that is not exactly the page-rounded region, and it
+// refuses SILENTLY to a caller that ignores the return -- so an unmap
+// with the object's byte size (20 for a beacon) leaked the mapping
+// every time, and a client that probed the beacon every half second
+// ran its address space out of mappings and read that as the server
+// having died. Every unmap here goes through this.
+static void unmap(void *p, uint64_t bytes) {
+    if (p) sys_munmap(p, (bytes + 4095) & ~4095ull);
+}
+
 // A BEACON is public: every client has to be able to find it. Its rings
 // are not -- see uchan_client_open().
 static void *map_public(const char *name, uint64_t bytes) {
@@ -85,7 +96,7 @@ int uchan_server_scan(struct uchan_server *s, int *gone, int gone_cap) {
         // but a mis-sized read would scribble past the mapping.
         if (r->magic != UCHAN_MAGIC || r->slot_bytes != UCHAN_SLOT_BYTES ||
             r->slots != UCHAN_SLOTS) {
-            sys_munmap(r, RING_BYTES);
+            unmap(r, RING_BYTES);
             continue;
         }
         s->ring[s->count] = r;
@@ -110,7 +121,7 @@ int uchan_server_scan(struct uchan_server *s, int *gone, int gone_cap) {
         // just the same, one pass later.
         if (gone && ngone < gone_cap) gone[ngone] = s->pid[k];
         if (ngone < gone_cap || !gone) ngone++;
-        sys_munmap(s->ring[k], RING_BYTES);
+        unmap(s->ring[k], RING_BYTES);
         s->ring[k] = s->ring[s->count - 1];
         s->pid[k] = s->pid[s->count - 1];
         s->count--;
@@ -170,12 +181,41 @@ void uchan_server_wait(struct uchan_server *s, int timeout_ms) {
     sys_futex_wait(&s->beacon->wake, seen, timeout_ms);
 }
 
+int uchan_server_room(struct uchan_server *s, int pid) {
+    int i = ring_index(s, pid);
+    if (i < 0) return 0;
+    struct uchan_ring *r = s->ring[i];
+    return (int)(UCHAN_IN_SLOTS - (r->in_head - r->in_tail));
+}
+
+int uchan_server_send(struct uchan_server *s, int pid, const void *msg,
+                      unsigned long len) {
+    int i = ring_index(s, pid);
+    if (i < 0) return -1;
+    struct uchan_ring *r = s->ring[i];
+    if (r->in_head - r->in_tail >= UCHAN_IN_SLOTS) {
+        r->in_dropped++;
+        return -1;
+    }
+    if (len > UCHAN_IN_BYTES) len = UCHAN_IN_BYTES;
+    uint8_t *slot = r->in_slot[r->in_head % UCHAN_IN_SLOTS];
+    memcpy(slot, msg, len);
+    memset(slot + len, 0, UCHAN_IN_BYTES - len);
+    r->in_head++;   // after the payload, for the reader's sake
+    // Bump, then wake -- the same order uchan_send() keeps, for the
+    // same lost-wakeup reason. Atomic because the client's own threads
+    // bump this word too (uchan_client_kick).
+    __atomic_fetch_add(&r->in_wake, 1, __ATOMIC_SEQ_CST);
+    sys_futex_wake((void *)&r->in_wake, 0);
+    return 0;
+}
+
 void uchan_server_close(struct uchan_server *s) {
     if (!s->beacon) return;
     sys_wakeword(0);
-    for (int i = 0; i < s->count; i++) sys_munmap(s->ring[i], RING_BYTES);
+    for (int i = 0; i < s->count; i++) unmap(s->ring[i], RING_BYTES);
     sys_shm_unlink(s->name);
-    sys_munmap(s->beacon, sizeof(struct uchan_beacon));
+    unmap(s->beacon, sizeof(struct uchan_beacon));
     memset(s, 0, sizeof *s);
 }
 
@@ -188,7 +228,7 @@ int uchan_client_open(struct uchan_client *c, const char *name) {
     c->beacon = map_object(name, sizeof(struct uchan_beacon), 0);
     if (!c->beacon) return -1;              // no server
     if (c->beacon->magic != UCHAN_MAGIC) {
-        sys_munmap(c->beacon, sizeof(struct uchan_beacon));
+        unmap(c->beacon, sizeof(struct uchan_beacon));
         c->beacon = 0;
         return -1;
     }
@@ -197,7 +237,7 @@ int uchan_client_open(struct uchan_client *c, const char *name) {
     sys_shm_unlink(c->ring_name);   // a previous holder of this pid
     c->ring = map_object(c->ring_name, RING_BYTES, 1);
     if (!c->ring) {
-        sys_munmap(c->beacon, sizeof(struct uchan_beacon));
+        unmap(c->beacon, sizeof(struct uchan_beacon));
         c->beacon = 0;
         return -1;
     }
@@ -250,8 +290,63 @@ int uchan_call(struct uchan_client *c, const void *msg, unsigned long len,
 void uchan_client_close(struct uchan_client *c) {
     if (c->ring) {
         sys_shm_unlink(c->ring_name);
-        sys_munmap(c->ring, RING_BYTES);
+        unmap(c->ring, RING_BYTES);
     }
-    if (c->beacon) sys_munmap(c->beacon, sizeof(struct uchan_beacon));
+    if (c->beacon) unmap(c->beacon, sizeof(struct uchan_beacon));
     memset(c, 0, sizeof *c);
+}
+
+// --- client: the inbox ----------------------------------------------
+
+int uchan_client_pending(const struct uchan_client *c) {
+    if (!c->ring) return 0;
+    return (int)(c->ring->in_head - c->ring->in_tail);
+}
+
+int uchan_client_recv(struct uchan_client *c, void *out, unsigned long cap) {
+    if (!c->ring) return 0;
+    struct uchan_ring *r = c->ring;
+    if (r->in_head == r->in_tail) return 0;
+    if (cap > UCHAN_IN_BYTES) cap = UCHAN_IN_BYTES;
+    memcpy(out, r->in_slot[r->in_tail % UCHAN_IN_SLOTS], cap);
+    r->in_tail++;   // the copy first -- the server refills on seeing space
+    return 1;
+}
+
+void uchan_client_wait(struct uchan_client *c, int timeout_ms) {
+    if (!c->ring || timeout_ms <= 0) return;
+    uint32_t seen = c->ring->in_wake;
+    // Sampled BEFORE the emptiness test, so a message landing between
+    // the two moves the word and the wait returns at once.
+    if (c->ring->in_head != c->ring->in_tail) return;
+    sys_futex_wait((void *)&c->ring->in_wake, seen, timeout_ms);
+}
+
+void uchan_client_kick(struct uchan_client *c) {
+    if (!c->ring) return;
+    __atomic_fetch_add(&c->ring->in_wake, 1, __ATOMIC_SEQ_CST);
+    sys_futex_wake((void *)&c->ring->in_wake, 0);
+}
+
+uint32_t uchan_client_dropped(const struct uchan_client *c) {
+    return c->ring ? c->ring->in_dropped : 0;
+}
+
+int uchan_client_server_alive(const struct uchan_client *c) {
+    if (!c->beacon) return 0;
+    // THE NAME, NOT THE MAPPING: this process's view of the beacon is
+    // the old page whatever happened, so the live object is opened
+    // afresh and its pid compared. A successor compositor has a new
+    // pid, and a ring granted to the old one is nothing to it.
+    char name[UCHAN_NAME_MAX];
+    const char *dot = strchr(c->ring_name, '.');
+    unsigned long n = dot ? (unsigned long)(dot - c->ring_name) : 0;
+    if (!n || n >= sizeof name) return 0;
+    memcpy(name, c->ring_name, n);
+    name[n] = '\0';
+    struct uchan_beacon *b = map_object(name, sizeof *b, 0);
+    if (!b) return 0;
+    int alive = b->magic == UCHAN_MAGIC && b->server_pid == c->beacon->server_pid;
+    unmap(b, sizeof *b);
+    return alive;
 }

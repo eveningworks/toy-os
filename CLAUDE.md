@@ -782,12 +782,13 @@ whenever a headline here tells you something you did not already know.
 - **A CLIENT NAMES ITS POINTER SHAPE, AND THE COMPOSITOR CLAMPS IT TO THE CONTENT AREA**
 - **THE BUSY POINTER HAS TWO SOURCES**
 - **MOUSE MOTION IS A STATE, NOT A BACKLOG, AND A FULL EVENT QUEUE SHEDS INPUT BEFORE A NOTIFICATION**
+- **A CLIENT'S EVENTS ARRIVE ON ITS OWN RING, THE KERNEL QUEUE IS THE COMPOSITOR'S ALONE, AND A STATE THE INBOX CANNOT TAKE IS RE-SENT** -- stage 8; `SYS_WAIT_EVENT` answers -EPERM to a client
 - **EVERY CLIENT IS PINGED ON A CADENCE**
 - **The cursor's shapes are DATA FILES, and a theme is a directory.**
 - **The cursor's drawn extent is DERIVED, not a constant.**
 - **THE POINTER RIDES THE HARDWARE CURSOR PLANE WHEN THE DRIVER HAS ONE**
 - **A compositor's view of a dead window is POISONED, not unmapped**
-- **A ring-3 compositor delivers events through TWP, not by calling the kernel.**
+- **A ring-3 compositor delivers events by WRITING THEM, not by calling the kernel.**
 - **`SYS_FS_GENERATION` is how ring 3 asks "has the filesystem changed?"**
 - **A ring-3 process can own a real window**
 - **`Exec=builtin:` is GONE, and ring 0 contains no applications.**
@@ -1462,7 +1463,9 @@ cost".
   `ls_test.py`, `mem_stress.py`, `mkpart_test.py`,
   `multidisk_test.py`, `net_test.py`, `partition_test.py`,
   `poweroff_test.py`, `qemu_matrix.py`, `remote_test.py`, `serial_backpressure_test.py`, `soundd_test.py`, `stdin_test.py`,
-  `msi_test.py`, `ntp_test.py`, `sum_test.py`, `taskbar_test.py`,
+  `msi_test.py`, `ntp_test.py`, `ping_rtt.py` (the compositor<->client
+  round trip in microseconds -- the number behind stage 8),
+  `sum_test.py`, `taskbar_test.py`,
   `terminal_probe.py`, `tfs3_v1_test.py`,
   `usb_audio_test.py`, `usb_test.py`, `virtio_boot_test.py`,
   `virtio_gpu_test.py`, `virtio_input_test.py`.

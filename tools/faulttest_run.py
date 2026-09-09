@@ -27,7 +27,7 @@ THE COMMAND GOES OVER COM1, NOT THE KEYBOARD, and that is the whole
 reason this tool works at all. It used to type `run <name>` at the
 physical shell over QMP, which stopped working the day the desktop began
 starting at boot: a compositor holding the role parks every ring-0
-blocking reader (kernel/proc/win_server.c's keyboard_suspend_blocking()),
+blocking reader (kernel/proc/win_role.c's keyboard_suspend_blocking()),
 so the keystrokes went to the desktop and all three entries failed
 identically, having never run. A serial console does not care who owns
 the screen -- the same reason `console=ttyS0` is what kernel developers

@@ -20,7 +20,7 @@
 #include "gui3.h"
 #include "kapi.h"
 #include "apps.h"
-#include "win_server.h" // win_server_compositor_pid() -- is a desktop already up?
+#include "win_role.h" // win_server_compositor_pid() -- is a desktop already up?
 
 #define TOYWM_PATH "/bin/wm/system/toywm"
 

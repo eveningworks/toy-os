@@ -1301,6 +1301,15 @@ window without going through it will find its layout polls timing out.
   include a point that should NOT change -- half the assertion is the
   neighbour staying put. `--box N` averages a square, for anti-aliased
   edges where a single pixel is a coin toss.
+- **`ping_rtt.py`** -- the compositor<->client ROUND TRIP in
+  microseconds, read from the ping every client is already sent
+  (`gui compositor --json`'s `ping_us_last/max/avg`). Attaches to a
+  running guest, opens three apps and waits for a dozen answers. It
+  exists because stage 8 of `docs/winserver-ring3-design.md` moved a
+  client's events off a kernel queue onto its own ring, and the one
+  thing a kernel wake is plausibly better at is latency -- so the move
+  carries a number on each side. Quote DIFFERENCES on one host; the
+  absolute figure is a TCG guest's. On demand (`ondemand_sweep.py`).
 - **`kvm_soak.py`** -- the desktop under KVM, across FRESH BOOTS, failing
   on the symptoms that appear only there: a WM frame over a threshold, a
   file that exists but will not read, an incomplete cursor-theme load, a
@@ -1836,7 +1845,7 @@ window without going through it will find its layout polls timing out.
   window behind it does NOT change, the close handshake completes, the
   desktop survives). Geometry comes from `gui windows` and content from
   PIXEL VALUES with a control point, per `docs/gui-guidelines.md`. Run
-  it after touching `userland/wm/wm_client.c`, `kernel/proc/win_server.c`,
+  it after touching `userland/wm/wm_client.c`, `kernel/proc/win_role.c`,
   or anything in `abi/win_proto.h`.
 - **`sched_gui_test.py`** -- proves the desktop stays ALIVE while a
   ring-3 process runs, the end-to-end counterpart to
@@ -2590,7 +2599,7 @@ window without going through it will find its layout polls timing out.
   received the click" is equally satisfied by an implementation that
   stole the input stream outright -- and stage 2's whole shape is that
   both paths run at once. Run it after touching `userland/wm/wm.c`'s loop,
-  `win_server.c`'s compositor registration, or the `WIN_EV_RAW_*`
+  `win_role.c`'s compositor registration, or the `WIN_EV_RAW_*`
   events. In `gui_regress.py`.
 - **`screen_surface_test.py`** -- a ring-3 compositor's SCREEN surface
   (M41 stage 4b): the back buffer, the clip rect, the damage box, the

@@ -10,7 +10,7 @@
 #include "ansi.h"
 #include "io.h"
 #include "gfx.h"
-#include "win_server.h" // win_server_any() -- is anything else painting the screen?
+#include "win_role.h" // win_server_any() -- is anything else painting the screen?
 #include "timer.h"
 #include "klog.h"
 #include "knum.h"

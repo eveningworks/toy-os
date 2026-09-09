@@ -154,7 +154,7 @@ def main():
     dbg.send("sh rm /etc/services.d/toywm")
     time.sleep(0.5)
     # KILLED rather than asked through the Start menu. Both land in
-    # win_server.c's compositor_gone(), which is the path under test, and
+    # win_role.c's compositor_gone(), which is the path under test, and
     # a kill needs no menu row to be found, hovered and hit -- one less
     # thing that can fail for a reason this tool is not about.
     procs = dbg.processes_named("toywm")

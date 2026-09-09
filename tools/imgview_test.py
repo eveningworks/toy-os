@@ -507,7 +507,7 @@ def check_resize_never_blanks(dbg, qmp, tmp, res, win):
     dumps, which is precisely a way of skipping the frames in question.
 
     Positive control, run when this was written: rebuild BOTH buffers in
-    win_server.c's resize_window() (pass `cw->front` as well as `back`)
+    win_role.c's resize_window() (pass `cw->front` as well as `back`)
     and this goes red with several all-black samples.
     """
     from PIL import Image

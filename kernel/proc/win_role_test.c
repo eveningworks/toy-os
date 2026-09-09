@@ -1,35 +1,12 @@
-// Tests for what the kernel still knows about a client window.
+// Tests for the compositor role (win_role.c).
 //
-// **IT NO LONGER KNOWS WHERE THE PIXELS ARE.** A window buffer is a
-// named shm object the client creates and grants to the compositor,
-// which opens it itself (docs/winserver-ring3-design.md, stage 5b) --
-// so the mapping, revocation and poisoning these tests used to walk
-// page tables for are gone, and with them the argument for reaching
-// into two address spaces here. What is left in ring 0 is bookkeeping:
-// which slot, which buffer is front, how big each one is, and WHICH
-// OBJECT is behind it. That last one is the generation, and it is the
-// only thing a compositor has to be told to re-open a name.
-//
-// So these drive win_server_request() the way a client does and read
-// the events a compositor would get, with win_events_pop(). Asserting
-// on the EVENT rather than on the internal field is the point: the
-// event is the contract, and the packing (WIN_PRESENT_B) is a place the
-// two sides can disagree.
-//
-// POSITIVE CONTROL: drop the `wb->gen++` from rebuild_buffer(). Exactly
-// the two generation checks go red ("a present carries the front
-// buffer's generation" and "a resize bumps only the buffer it
-// rebuilds"), on the event's own value. Re-run it after any change
-// here; a clean run of tests that cannot fail is worth nothing.
-//
-// WHAT THESE CANNOT PROVE, stated rather than implied: that the
-// compositor's mapping of a client's object is correct. That is two
-// ring-3 processes and an shm grant, with no kernel state in the middle
-// -- tools/window_resize_probe.py and the GUI suite are where it is
-// checked.
+// What is left to test here is the ROLE: who may claim it, who may
+// release it, and that nothing else is served without it. Everything
+// about a window is the compositor's and is checked from ring 3
+// (tools/winclient_test.py, tools/uapp_test.py, tools/resize_stride_test.py).
 #include "ktest.h"
-#include "win_server.h"
-#include "win_events.h"
+#include "win_role.h"
+#include "win_input.h"
 #include "win_proto.h"
 #include "scheduler.h"
 #include <stddef.h>
@@ -178,3 +155,13 @@ KTEST("winshare", "claiming the role needs no window server") {
     KTEST_ASSERT_EQ(win_server_request(cpid, &req), 1);
 }
 
+
+KTEST("winshare", "requests are refused when no server is registered") {
+    if (win_server_any()) KTEST_SKIP("a window server is registered (desktop is up)");
+
+    struct win_request_msg req = {0};
+    req.type = WIN_REQ_FB_MAP;
+    // -1, not 0: "there is no server" is a different answer from "the
+    // server said no", and a client needs to be able to tell them apart.
+    KTEST_ASSERT_EQ(win_server_request(1, &req), -1);
+}

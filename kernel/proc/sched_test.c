@@ -12,10 +12,11 @@
 // it's on debug_console.c's DBG_BLOCKED_CMDS list, so it can't be
 // driven from the serial console that CI runs through at all.
 #include "ktest.h"
+#include "win_input.h"
 #include "scheduler.h"
 #include "tty.h"
 #include "pipe.h"        // pipe_wait_chan() -- one channel per pipe
-#include "win_events.h" // win_events_wait_chan() -- one channel per client
+#include "win_input.h"  // win_input_wait_chan() -- the compositor's own channel
 #include "proc_info.h"  // PROC_STATE_*
 #include <stddef.h>
 #include "timer.h"
@@ -272,7 +273,7 @@ KTEST("sched", "every waitable object has its own channel") {
     // differ -- a per-object wake whose objects share an address is the
     // category wake again, wearing a pointer.
     KTEST_ASSERT(scheduler_wait_chan_pid(1) != scheduler_wait_chan_pid(2));
-    KTEST_ASSERT(win_events_wait_chan(1) != win_events_wait_chan(2));
+    KTEST_ASSERT(win_input_wait_chan() != scheduler_wait_chan_pid(1));
     // The console terminal's channel, rather than a global "a key
     // happened" one -- there is no such thing now that a terminal is an
     // object, and a per-terminal channel is what stops a keystroke in

@@ -339,6 +339,19 @@ int wm_launched_max(void);
 uint64_t wm_client_next_timer_due(void);
 
 void wm_client_check_timers(void);
+// Re-sends the state events a client's inbox had no room for last time.
+// Once per frame, after the timers.
+void wm_client_flush_pending(void);
+// The ping round trip, microseconds: the last, the worst, and the mean
+// over `n` answers since the desktop started. What tools/ping_rtt.py
+// reads through `gui compositor --json`.
+void wm_client_ping_stats(unsigned long long *last_us, unsigned long long *max_us,
+                          unsigned long long *avg_us, unsigned *n);
+// The same round trip in TSC cycles: comparable across two builds on
+// one host, and finer than the clocksource under an emulator, where
+// the ns figure is quantised to a 10 ms tick.
+void wm_client_ping_cycles(unsigned long long *last, unsigned long long *max,
+                           unsigned long long *avg);
 
 // Once per frame. Returns the index of a window that has just gone
 // unresponsive while being asked to close (the only case worth a

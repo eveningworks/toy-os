@@ -113,8 +113,8 @@ static void *poster(void *arg) {
     (void)arg;
     // Deliberately not touching g_app for anything but the parameter --
     // see ui/uapp.h. Sleeping first is what makes the post arrive while
-    // the main thread is parked in SYS_WAIT_EVENT rather than still
-    // inside on_key.
+    // the main thread is parked on its inbox rather than still inside
+    // on_key.
     sys_sleep_ms(50);
     uapp_post(g_app, 42, sys_gettid());
     return NULL;

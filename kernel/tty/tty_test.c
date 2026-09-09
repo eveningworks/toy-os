@@ -11,7 +11,7 @@
 #include "query.h"
 #include "tty.h"
 #include "keyboard.h"
-#include "win_server.h"
+#include "win_role.h"
 #include "scheduler.h"
 #include "string.h"
 #include "pty.h"

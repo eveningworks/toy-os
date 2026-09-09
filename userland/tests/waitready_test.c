@@ -1,6 +1,6 @@
 // SYS_WAIT_READY: a wait with a deadline that CONSUMES NOTHING.
 //
-// Driven by kernel/proc/win_events_test.c, which spawns this, gives it a
+// Driven by kernel/proc/win_input_test.c, which spawns this, gives it a
 // head start with an empty queue, then pushes exactly one event. The
 // exit code IS the assertion -- a BITMASK of the sub-checks that passed,
 // so a partial failure names WHICH one (a count cannot: 3 of 4 is four
@@ -24,6 +24,10 @@
 
 int main(void) {
     int passed = 0; // bit per sub-check, 1<<0 .. 1<<3
+
+    // Holding the compositor role for the test means the devices may
+    // have reported already; the queue has to be EMPTY for check 1.
+    { struct win_event drain; while (sys_poll_event(&drain) == 1) { } }
 
     // 1. IT TIMES OUT. Nothing is queued yet, so this must block for
     //    about the whole timeout and report "not ready".

@@ -1,9 +1,11 @@
-// **TWS -- the Toy Window Server**, what is left of it in ring 0: the
-// compositor role, the framebuffer grant keyed on it, the font mapped
-// into a client, and the `gui` diagnostic channel. No window. See
-// abi/win_proto.h for TWP, the protocol it serves, and
-// userland/wm/wm_client.c for the compositor that owns the windows.
-#include "win_server.h"
+// THE COMPOSITOR ROLE -- DRM master's shape: which one process owns the
+// display. Everything ring 0 keeps for the window system keys off it:
+// the framebuffer grant (win_surface.c), the input queue (win_input.c),
+// the font mapped into a client, and the `gui` diagnostic channel. No
+// window, no client state: a window is the compositor's
+// (userland/wm/wm_client.c) and a client's events ride its own channel
+// ring (lib/uwmchan.h). abi/win_proto.h is TWP, the protocol.
+#include "win_role.h"
 #include "keyboard.h" // keyboard_suspend_blocking() -- who owns the keyboard follows the compositor role
 #include "vmm.h"
 #include "pmm.h"
@@ -14,7 +16,7 @@
 #include "gfx.h"      // gfx_font_size() -- which variant is active
 #include "win_surface.h" // the compositor's framebuffer grant (M41 stage 4a)
 #include "timer.h"       // pit_ticks() -- the ring-3 debug leg's deadline
-#include "win_events.h"  // WIN_EV_CLOSE to clients when the desktop dies (R7)
+#include "win_input.h"   // the compositor's queue -- tell_compositor(), and reset with the role
 #include "vga.h"         // vga_resume() -- hand the screen back (R7)
 #include "kfmt.h"        // klog_printf
 #include <stddef.h>
@@ -35,16 +37,11 @@
 // name itself -- so there is nothing here to allocate, adopt, map or
 // free. What is left of a buffer in this file is its SIZE and its
 // GENERATION, which is what a present has to carry.
-// **THERE IS NO WINDOW TABLE.** Stage 6b took it: a window's slot, its
-// two buffers, their sizes and their generations were all state the
-// kernel kept in order to answer requests it no longer receives. Every
-// one of those requests reaches the compositor over its own channel
-// now, carrying its payload, and the compositor owns the list.
-//
-// What is left in this file is what ring 0 must own: the compositor
-// ROLE, the framebuffer grant keyed on it, the font it maps into a
-// client, and the per-process event queue that carries input outward.
-// None of it knows that a window exists.
+// **THERE IS NO WINDOW TABLE AND NO CLIENT TABLE.** A window's slot,
+// buffers and geometry are the compositor's (stage 6b); a client's
+// events are written by the compositor into the client's own ring
+// (stage 8). What is left is what one process must be granted by the
+// kernel: the role, the screen, the devices, the font.
 
 // The registered compositor: the one process raw input is delivered to,
 // and the one the framebuffer is granted to.
@@ -199,7 +196,7 @@ static void tell_compositor(uint32_t type, int pid, uint32_t id,
     ev.a = pid;
     ev.b = b;
     ev.mods = mods;
-    win_events_push(g_comp_pid, &ev);
+    win_input_push(&ev);
 }
 
 // **QUERY_WINDOWS IS RETIRED WITH THE TABLE.** It reported what
@@ -310,55 +307,18 @@ int win_server_request(int pid, struct win_request_msg *req) {
     // leaning on this one.
     if (!g_comp_pid) return -1;
 
-    // **NO REQUEST BELOW NAMES A WINDOW**, and that is stage 6b in one
-    // sentence. Create, present, destroy, resize, buffer, title, hints,
-    // cursor, timer, pong, close-pid and activate all reach the
-    // compositor over its own channel now, carrying their payloads; the
-    // kernel has no window table to look one up in and nothing left to
-    // check ownership against. What survives here is what the kernel
-    // genuinely owns -- a client's event QUEUE, the font it maps, and
-    // the framebuffer grant above.
+    // **NO REQUEST BELOW NAMES A WINDOW OR A CLIENT.** Every request a
+    // client makes reaches the compositor over its own channel, and
+    // every event the compositor sends comes back the same way. What
+    // survives here is what the kernel genuinely owns: the compositor's
+    // input queue, the font it maps, and the framebuffer grant above.
 
     switch (req->type) {
-    case WIN_REQ_EVENT_PUSH: {
-        // Only the compositor may put events on ANOTHER process's
-        // queue. Without this any client could synthesise a keystroke
-        // into any other -- the protocol's whole access-control story is
-        // that a window belongs to a process, and this is the one
-        // request that reaches ACROSS processes.
-        //
-        // **A CLIENT MAY POST TO ITSELF**, which is the one exception
-        // and is bounded twice: the target must be 0 ("me") and the
-        // type must be WIN_EV_USER. A process can already do anything
-        // it likes to its own state, so posting itself an event grants
-        // nothing new -- what it buys is the ability to WAKE ITSELF,
-        // which a worker thread has no other way to do. Restricting the
-        // type as well as the target is what keeps "a client cannot
-        // synthesise input" true of its own queue too, so a stray post
-        // can never be mistaken for a keystroke.
-        int self_post = (req->a == 0 && (uint32_t)req->b == WIN_EV_USER);
-        if (!self_post && (!g_comp_pid || pid != g_comp_pid)) return -1;
-        if (self_post) req->a = pid;
-        if (req->a < 1 || req->a > WIN_SERVER_MAX_PIDS) return -1;
-
-        struct win_event ev;
-        k_memset(&ev, 0, sizeof ev);
-        ev.type = (uint32_t)req->b;
-        ev.window = req->window;
-        ev.a = req->c;
-        ev.b = req->d;
-        ev.mods = req->mods;
-        return win_events_push(req->a, &ev) ? 0 : -1;
-    }
     case WIN_REQ_EVENT_STATS: {
+        // The compositor's OWN queue -- the only one there is.
         if (!g_comp_pid || pid != g_comp_pid) return -1;
-        // 0 means "me". A compositor has no way to learn its own pid
-        // otherwise (there is no getpid), and it is the only pid it can
-        // reasonably ask about without being told one.
-        int target = req->a ? req->a : pid;
-        if (target < 1 || target > WIN_SERVER_MAX_PIDS) return -1;
-        req->a = win_events_pending(target);
-        req->b = win_events_dropped(target);
+        req->a = win_input_pending();
+        req->b = win_input_dropped();
         req->c = g_comp_pid;
         return 0;
     }
@@ -375,53 +335,26 @@ int win_server_request(int pid, struct win_request_msg *req) {
     }
 }
 
-// One event to EVERY windowing client, and to the compositor.
-//
-// **THE COMPOSITOR FIRST, AND SEPARATELY.** It does not block in
-// SYS_WAIT_EVENT -- it parks on its channel's futex, so that it wakes
-// for a client's message and a kernel event alike -- which means it is
-// not in the set below. A broadcast that only walked that set reached
-// every client and missed the one process that draws the chrome, the
-// taskbar and the icons, and the font change looked like it was never
-// delivered at all. That is the SECOND time this has happened: the
-// walk used to be over the window table, which it is also not in.
-//
-// **WHO ELSE IS A CLIENT IS THE EVENT QUEUE'S ANSWER NOW**
-// (win_events_is_client), not the window table's. This never cared
-// which WINDOW anything had, only which PROCESS to wake, and a process
-// that waits for window events is exactly that.
-//
-// `window` is 0 on every copy. It used to name each client's window,
-// which meant a client with two would get two; nothing that rides this
-// (WIN_EV_FONT, WIN_EV_SCREEN) is about a particular window.
-void win_server_broadcast(uint32_t type, int32_t a, int32_t b, uint32_t mods) {
-    tell_compositor(type, 0, 0, b, mods);
-
-    for (int pid = 1; pid <= WIN_SERVER_MAX_PIDS; pid++) {
-        if (pid == g_comp_pid || !win_events_is_client(pid)) continue;
-        struct win_event ev;
-        k_memset(&ev, 0, sizeof ev);
-        ev.type = type;
-        ev.a = a;
-        ev.b = b;
-        ev.mods = mods;
-        win_events_push(pid, &ev);
-    }
+// A session fact changed. THE COMPOSITOR IS TOLD, AND IT TELLS ITS
+// CLIENTS -- the kernel has no list of them, the same way a DRM
+// hotplug uevent reaches the compositor and not every X client.
+static void broadcast(uint32_t type, int32_t a, int32_t b) {
+    if (!g_comp_pid) return;
+    struct win_event ev;
+    k_memset(&ev, 0, sizeof ev);
+    ev.type = type;
+    ev.a = a;
+    ev.b = b;
+    win_input_push(&ev);
 }
 
-// Tells every window the font moved. See WIN_EV_FONT in
-// abi/win_proto.h for why this is a notification rather than the server
-// doing anything about it, and font_config.c for the one place that
-// calls it.
-void win_server_font_changed(void) {
-    win_server_broadcast(WIN_EV_FONT, 0, 0, 0);
-}
+// The font moved. See WIN_EV_FONT in abi/win_proto.h for why this is a
+// notification rather than the kernel doing anything about it;
+// font_config.c is the one caller.
+void win_server_font_changed(void) { broadcast(WIN_EV_FONT, 0, 0); }
 
-// The screen changed size. Same discipline: screen_set_mode() is the
-// one caller.
-void win_server_screen_changed(int w, int h) {
-    win_server_broadcast(WIN_EV_SCREEN, w, h, 0);
-}
+// The screen changed size. screen_set_mode() is the one caller.
+void win_server_screen_changed(int w, int h) { broadcast(WIN_EV_SCREEN, w, h); }
 
 void win_server_client_gone(int pid) {
     if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return;
@@ -441,62 +374,26 @@ void win_server_client_gone(int pid) {
     // (docs/winserver-ring3-design.md, stage 6b).
 }
 
-// --- cross-process buffer sharing (see win_server.h) -----------------
+// --- cross-process buffer sharing (see win_role.h) --------------------
 
 int win_server_compositor_pid(void) { return g_comp_pid; }
 
-// What happens when the desktop goes away (M41's R7).
+// What happens when the desktop goes away.
 //
 // Reached from ONE place -- the role being cleared below -- so a clean
 // deregistration, a `kill`, and the compositor faulting are the same
-// path. That is the property this whole stage is built on: the exit
-// criterion of the milestone is that killing the WM is SURVIVABLE, and
-// three teardown paths that could drift is how one of them ends up not
-// being.
-//
-// **Client windows are ASKED to close, not destroyed.** R7 originally
-// said "drops every client window", which is what a reader expects until
-// you notice that destroy_window() unmaps and frees the CLIENT's own
-// buffer pages -- so a client that happened to be mid-draw would take a
-// page fault, and the compositor dying would cascade into every app
-// dying with it. That is the opposite of survivable. WIN_EV_CLOSE is
-// already the protocol's "the server wants this window gone"; a
-// well-behaved client exits and its windows are freed through the
-// ordinary win_server_client_gone() path a moment later.
-//
-// The cost, stated rather than hidden: a client that IGNORES the event
-// lingers as a process holding its own buffer, with no window on screen
-// and nothing compositing it. That is a leak, not a crash, and it is the
-// right way round -- the alternative trades a leak for a fault.
+// path. Its clients are NOT told from here: a client parked on its own
+// ring notices the compositor's beacon has gone (uchan_client_server_
+// alive) and closes itself, the way a Wayland client sees its socket
+// close. The kernel keeps no list to tell.
 static void compositor_gone(void) {
-    // EVERY WINDOWING CLIENT, asked through the event queue that makes
-    // it one. The window table used to be this list; a process that
-    // waits for window events is the same set without any window state
-    // behind it (win_events_is_client).
-    //
-    // `window` is 0, where it used to name each window. A client with
-    // one window -- which is all any of them has -- sees no difference,
-    // and Toykit acts on the CLOSE rather than on which window it
-    // names.
-    int asked = 0;
-    for (int pid = 1; pid <= WIN_SERVER_MAX_PIDS; pid++) {
-        if (pid == g_comp_pid || !win_events_is_client(pid)) continue;
-        struct win_event ev;
-        k_memset(&ev, 0, sizeof ev);
-        ev.type = WIN_EV_CLOSE;
-        win_events_push(pid, &ev);
-        asked++;
-    }
-
     // Hand the screen back. Reaching here means nobody else is drawing
-    // it (see the guard at the top), so the last frame the dead desktop
-    // left is all the user would otherwise have -- indistinguishable
-    // from a hang. The console owns its own double buffering, so this
-    // repaints rather than inheriting whatever state the compositor left.
+    // it, so the last frame the dead desktop left is all the user would
+    // otherwise have -- indistinguishable from a hang. The console owns
+    // its own double buffering, so this repaints rather than inheriting
+    // whatever state the compositor left.
     vga_resume();
-
-    klog_printf("win: compositor gone -- %d client window(s) asked to close, "
-                "console restored\n", asked);
+    klog_write("win: compositor gone -- console restored\n");
 }
 
 int win_server_set_compositor(int pid, uint64_t pml4) {
@@ -531,6 +428,9 @@ int win_server_set_compositor(int pid, uint64_t pml4) {
 
     g_comp_pid = pid;
     g_comp_pml4 = pid ? pml4 : 0;
+    // The queue belongs to the ROLE: a successor must not inherit a
+    // predecessor's keystrokes, or a `gui` command meant for it.
+    win_input_reset();
 
     // WHO OWNS THE KEYBOARD follows the role, and this is the one place
     // the role changes -- so registering, deregistering, a kill and a

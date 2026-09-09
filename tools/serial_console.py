@@ -8,7 +8,7 @@ Two harnesses need the same thing and had written half of it each.
 `faulttest_run.py` needs the same channel because the thing it used
 instead -- typing at the physical shell over QMP -- stopped working the
 day the desktop began starting at boot (a compositor holds the keyboard,
-see kernel/proc/win_server.c's keyboard_suspend_blocking() call, so every
+see kernel/proc/win_role.c's keyboard_suspend_blocking() call, so every
 ring-0 blocking reader is parked and the keystrokes go to the desktop).
 
 A serial console is the standard answer to exactly this problem, and for

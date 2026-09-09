@@ -26,10 +26,11 @@
 // protocol -- and every call site has to be rewritten instead.
 //
 // So: what a message says lives here and is expected to outlive how it
-// is carried. Today it is carried by SYS_WAIT_EVENT/SYS_POLL_EVENT
-// copying one struct at a time (see syscall_abi.h); the intended next
-// carrier is a shared-memory ring the client maps once. Nothing in this
-// header should need to change for that.
+// is carried -- and it did. A client's events used to be carried by
+// SYS_WAIT_EVENT copying one struct at a time; they ride a shared-memory
+// ring the client maps once now (lib/uwmchan.h), and nothing in this
+// header changed for it. The kernel's own queue (SYS_WAIT_EVENT) serves
+// the compositor alone: raw input and the kernel's notices to it.
 
 #define WIN_EV_NONE       0
 #define WIN_EV_KEY        1 // a: key code (api/keyboard.h), mods: KEY_MOD_*
@@ -180,25 +181,16 @@
 // shared memory instead. The number is left dead rather than reused,
 // so an old client cannot mistake a new event for it.
 
-#define WIN_EV_USER      30 // a, b: whatever the CLIENT put there. The
-                            // only event a client can put on its OWN
-                            // queue (WIN_REQ_EVENT_PUSH with a target of
-                            // 0), and the reason it exists is threads: a
-                            // worker that has finished has no other way
-                            // to wake a main thread parked in
-                            // SYS_WAIT_EVENT, and polling for it on a
-                            // tick is the cadence this whole mechanism
-                            // is meant to delete.
-                            //
-                            // Qt's postEvent, GTK's g_idle_add, Win32's
+#define WIN_EV_USER      30 // a, b: whatever the CLIENT put there. Never
+                            // carried by anyone but the client itself:
+                            // a worker thread posts it into its own
+                            // process's loop (ui/uapp.h's uapp_post),
+                            // which is how a finished worker wakes a
+                            // main thread parked on its inbox. Qt's
+                            // postEvent, GTK's g_idle_add, Win32's
                             // PostMessage, and the eventfd a Wayland
                             // client puts in its poll set are all this.
-                            //
-                            // The COMPOSITOR never sends one, and no
-                            // client can send one to anybody else -- see
-                            // WIN_REQ_EVENT_PUSH, where restricting the
-                            // TYPE as well as the target is what keeps
-                            // "a client cannot synthesise input" true.
+                            // The COMPOSITOR never sends one.
 #define WIN_EV_KEY_UP    27
 #define WIN_EV_POPUP_DONE 33 // `window`: a popup of this client the compositor
                              // DISMISSED -- a press landed outside every
@@ -699,43 +691,21 @@ struct win_event {
                            //
                            // Mapping it does not make it visible on
                            // every adapter -- see WIN_REQ_FB_PRESENT.
-#define WIN_REQ_EVENT_PUSH 17 // Deliver one event to a client.
-                           //   a      = target pid
-                           //   window = the target's window id
-                           //   b      = WIN_EV_* type
-                           //   c, d   = the event's a and b
-                           //   mods   = the event's mods
-                           //
-                           // REFUSED unless the caller is the registered
-                           // compositor. Routing input is the
-                           // compositor's job by definition -- it is the
-                           // one process that knows what is on top of
-                           // what -- so this is the request that lets a
-                           // RING-3 one do it. In ring 0 the WM called
-                           // win_events_push() directly, which is not a
-                           // thing a process can do.
-                           //
-                           // The event is spelled out field by field
-                           // rather than copied as a struct, so the
-                           // message stays a message: fixed-layout,
-                           // pointer-free, and readable in a log.
-                           //
-                           // Returns 0 on success, -1 if refused or the
-                           // target's queue is full. A FULL QUEUE IS NOT
-                           // AN ERROR the compositor can fix -- the
-                           // client is not draining -- so it is reported
-                           // rather than retried.
-#define WIN_REQ_EVENT_STATS 18 // Queue depth for a pid.
-                           //   a = pid to ask about, or 0 for "me"
-                           // and on return:
+// **17 IS RETIRED, NOT FREE.** It was WIN_REQ_EVENT_PUSH: the compositor
+// asking the kernel to put an event on a client's queue, and a client
+// asking for a WIN_EV_USER on its own. Both went with the per-process
+// queue (stage 8, 2026-09-09): the compositor writes a client's events
+// into the client's channel ring itself (lib/uwmchan.h), and a worker
+// thread wakes its own loop without the kernel (ui/uapp.h's
+// uapp_post). Do not reuse the number.
+#define WIN_REQ_EVENT_STATS 18 // The compositor's own queue depth. No
+                           // inputs; on return:
                            //   a = events pending, b = events dropped,
                            //   c = the registered compositor's pid
                            //
                            // For `gui compositor`, which reports exactly
-                           // these. Readable by the compositor only, for
-                           // the same reason the push is: it is the only
-                           // process with any business knowing how far
-                           // behind another one is.
+                           // these. Compositor only: it is the one queue
+                           // there is.
 // **20 IS RETIRED, NOT FREE.** It was WIN_REQ_MAP_WINDOW: the kernel
 // mapping a client's pixels into the compositor at an address it carved
 // per (pid, window). The compositor opens the buffer's NAME itself now

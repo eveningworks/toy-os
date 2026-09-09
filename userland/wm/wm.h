@@ -168,7 +168,22 @@ struct window {
 
     uint32_t ping_serial;
     uint64_t ping_sent_tick;
+    uint64_t ping_sent_ns;
+    uint64_t ping_sent_tsc;  // rdtsc, for a figure finer than the clocksource under an emulator   // for the round-trip figure `gui compositor` reports
     int not_responding;   // no answer within WM_PING_TIMEOUT_TICKS
+
+    // --- events the client's inbox could not take (stage 8) --------
+    //
+    // The inbox is a ring this process writes and only the client
+    // drains, so a full one cannot be evicted from. Input is dropped
+    // (counted in `ev_dropped`); a STATE is kept as a bit here and sent
+    // again next frame, with whatever the state is by then -- the latest
+    // one is all the client needs. `ev_popup_done` is per popup SLOT,
+    // held on the toplevel because the popup's own row is gone by then.
+    uint32_t ev_pending;      // WM_PEND_* bits
+    uint32_t ev_popup_done;   // bit per client slot
+    int ev_resize_w, ev_resize_h;
+    unsigned ev_dropped;
 
     // When this window was ASKED to close (0 = not asked). A client is
     // entitled to take its time, or to refuse outright, so this alone

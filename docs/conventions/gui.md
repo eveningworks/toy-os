@@ -1006,8 +1006,8 @@ this the obvious way), not from how much history it accumulated.
   missing-initializer warning was the only thing that noticed.
 - **The GUI stack has names -- use them.** **TWP** (Toy Window Protocol,
   `abi/win_proto.h`) is the client<->server contract; **TWS** (Toy Window
-  Server, `kernel/proc/win_server.c` + `userland/wm/wm_client.c`)
-  implements it; **Toykit** (`userland/ui/`) is the client toolkit an app
+  Server, `userland/wm/wm_client.c`, with `kernel/proc/win_role.c`
+  holding the role it runs under) implements it; **Toykit** (`userland/ui/`) is the client toolkit an app
   programs against -- roughly Wayland, its compositor, and GTK. Three
   names rather than one because the protocol is meant to outlive this
   server. Symbol prefixes are unchanged and stay that way (`uui_`,
@@ -1216,9 +1216,11 @@ this the obvious way), not from how much history it accumulated.
   distinguishable and a test must keep them apart: `/tests/hangclient`
   has a `b` key that is busy AND alive for exactly that reason.
 - **MOUSE MOTION IS A STATE, NOT A BACKLOG, AND A FULL EVENT QUEUE SHEDS
-  INPUT BEFORE A NOTIFICATION.** `win_events_push()` merges a move into
-  the NEWEST queued move when the buttons (and, for a client, the
-  window) match, so motion never holds more than one of the 32 slots --
+  INPUT BEFORE A NOTIFICATION.** `win_input_push()` -- the compositor's
+  kernel queue, the only one there is since stage 8 -- merges a move
+  into the NEWEST queued move when the buttons match, so motion never
+  holds more than one of the 32 slots (a client's motion is deduped by
+  the compositor before it is written, `client_last_mx`) --
   Windows keeps one `WM_MOUSEMOVE` per queue and X compresses
   `MotionNotify` for the same reason. When the queue still overflows,
   the oldest INPUT event goes (raw or delivered: keys, buttons, wheel),
@@ -1286,12 +1288,44 @@ this the obvious way), not from how much history it accumulated.
   (`comp_unpoison()`, from `comp_map()`) before real frames go over it,
   or a live compositor reads zeros from a window that draws perfectly.
   See `docs/decisions.md`.
-- **A ring-3 compositor delivers events through TWP, not by calling the
-  kernel.** `WIN_REQ_EVENT_PUSH` (put an event on a client's queue) and
-  `WIN_REQ_EVENT_STATS` (queue depth), both **refused to anyone but the
-  registered compositor** -- this is the one request that reaches across
-  into another process's queue, and without that check any client could
-  synthesise a keystroke into any other.
+- **A ring-3 compositor delivers events by WRITING THEM, not by calling
+  the kernel.** `wm_client.c` writes a `struct win_event` into the
+  client's channel ring (`uchan_server_send()`, the inbox in
+  `lib/uchan_page.h`) and wakes it through the ring's own futex word;
+  no syscall names another process's queue any more. `WIN_REQ_EVENT_
+  PUSH` is retired; `WIN_REQ_EVENT_STATS` reports the compositor's OWN
+  kernel queue. Access control did not weaken, it moved: a client's
+  inbox is a page only the compositor was granted, so "a client cannot
+  synthesise input into another" holds by construction.
+- **A CLIENT'S EVENTS ARRIVE ON ITS OWN RING, THE KERNEL QUEUE IS THE
+  COMPOSITOR'S ALONE, AND A STATE THE INBOX CANNOT TAKE IS RE-SENT.**
+  Stage 8 of `docs/winserver-ring3-design.md`. Linux keeps evdev in the
+  kernel and gives every Wayland client a socket the compositor writes;
+  Windows keeps a per-thread message queue IN the kernel, which is what
+  toy-os had. Now: `win_input.c` is the one queue and it serves the one
+  process holding the compositor role -- `SYS_WAIT_EVENT`/`SYS_POLL_
+  EVENT`/`SYS_WAIT_READY` answer -EPERM to anyone else -- and Toykit
+  parks on its inbox's futex (`uchan_client_wait()`) with no kernel
+  queue behind it. Four things to know. **A single writer cannot evict**:
+  the compositor's ring writer can never touch what the client has not
+  read, so the kernel's shed-oldest-input trick is impossible there.
+  Input the inbox cannot take is DROPPED and counted (`ev_dropped` on
+  the window, one `wm:` line per client); a STATE -- close, resize,
+  focus, font, screen, a popup's dismissal -- is remembered as a bit on
+  the window (`ev_pending`) and sent by `wm_client_flush_pending()`
+  next frame with the state as it is THEN, which is
+  `xdg_surface.configure`'s "latest wins". **A ping the inbox refused
+  was never asked**: no serial is left outstanding, and a client whose
+  inbox stays full is found unresponsive by exactly that route. **A
+  dead compositor is noticed, not announced**: the kernel no longer
+  asks clients to close; a client that waits out `UAPP_WAIT_MS` with
+  nothing arriving asks `uchan_client_server_alive()` -- the beacon's
+  live pid against the one its ring was granted to -- and closes itself,
+  as a Wayland client sees its socket close. And **`uapp_post()` never
+  enters the kernel**: a worker appends to a private queue and kicks
+  the inbox word (`uchan_client_kick()`, an atomic add because two
+  writers bump it). `WIN_EV_FONT`/`WIN_EV_SCREEN` reach the compositor
+  on its queue and it forwards them, DRM-hotplug-uevent style.
 - **`SYS_FS_GENERATION` is how ring 3 asks "has the filesystem
   changed?"** -- no arguments, the counter in RAX. Its own syscall
   rather than a `SYS_SYSINFO` field on purpose: the desktop polls it
@@ -1299,15 +1333,15 @@ this the obvious way), not from how much history it accumulated.
   free poll is the entire reason the counter exists instead of a
   directory scan. It says something changed, never what.
 - **A ring-3 process can own a real window** (`userland/wm/wm_client.c` +
-  `kernel/proc/win_server.c`, protocol in
+  `kernel/proc/win_role.c`, protocol in
   `kernel/include/abi/win_proto.h`). Two rules matter before touching
   it. **Every client operation is a typed MESSAGE carried by the one
   `SYS_WIN_REQUEST` syscall, never a syscall of its own** -- that is
   what keeps the boundary a protocol; see `docs/decisions.md`. And
   **the split is no longer memory vs. presentation**: `wm_client.c` owns
   the whole window -- the list, its buffers, chrome, z-order and input
-  routing -- and `win_server.c` owns the compositor ROLE, the
-  framebuffer, the font and the event queue. They met at a registered
+  routing -- and `win_role.c` owns the compositor ROLE, the
+  framebuffer, the font and the compositor's input queue. They met at a registered
   `struct win_server_ops` until stage 6c deleted it. **A client draws with
   `userland/ui/ugfx.c`**, not with syscalls -- there is no drawing
   syscall and there shouldn't be, since only the framebuffer is

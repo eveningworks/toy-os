@@ -8,8 +8,8 @@
 #include "klog.h"
 #include "vmm.h"
 #include "scheduler.h"
-#include "win_events.h"
-#include "win_server.h"
+#include "win_input.h"
+#include "win_role.h"
 #include "clocksource.h" // clocksource_now_ns() -- the timed wait's deadline
 #include <stddef.h>
 
@@ -70,6 +70,21 @@ int sys_win_request(struct syscall_ctx *c) {
 }
 
 
+// **THE QUEUE IS THE COMPOSITOR'S.** Anyone else asking is refused
+// with -EPERM -- a client's events are on its own channel ring, and a
+// stale binary still asking here should find out at once rather than
+// park forever on a queue nothing feeds. Logged once, not per call.
+static int compositor_only(int pid, const char *what) {
+    if (pid && pid == win_server_compositor_pid()) return 1;
+    static int said;
+    if (!said++) {
+        klog_write("syscall: ");
+        klog_write(what);
+        klog_write("() rejected -- only the compositor has an event queue\n");
+    }
+    return 0;
+}
+
 // SYS_POLL_EVENT and SYS_WAIT_EVENT share everything except what
 // happens when the queue is empty, so they share a body rather than
 // duplicating the validation and the copy-out. Whether to block is a
@@ -81,24 +96,11 @@ static int event_get(struct syscall_ctx *c, int blocking) {
     if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct win_event))) {
         klog_write("syscall: event() rejected -- invalid user pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
-    } else if (pid == 0) {
-        // No scheduler slot, so no event queue and nowhere to park.
-        // Refused rather than silently degraded to a never-blocking
-        // call, which would turn the documented `while (... != 1)`
-        // client loop into a busy spin.
-        klog_write("syscall: event() rejected -- caller has no event queue\n");
+    } else if (!compositor_only(pid, "event")) {
         c->regs[14] = (uint64_t)(int64_t)-EPERM;
     } else {
-        // **ASKING FOR A WINDOW EVENT IS THE DECLARATION.** Nothing but
-        // a windowing client calls either of these, so this is where
-        // the kernel learns which processes to reach with a broadcast
-        // -- the question the window table used to answer. Marked on
-        // the POLLING path too: an app with a tick and no timer never
-        // blocks, and would otherwise never hear the font change.
-        win_events_mark_client(pid);
-
         struct win_event ev;
-        if (win_events_pop(pid, &ev)) {
+        if (win_input_pop(&ev)) {
             // Validated above BEFORE the pop, so a bad pointer cannot
             // lose an event; a copy that still fails says so.
             c->regs[14] = vmm_copy_to_user(pml4, c->a0, &ev, sizeof ev) ? 1 : (uint64_t)(int64_t)-EFAULT;
@@ -117,7 +119,7 @@ static int event_get(struct syscall_ctx *c, int blocking) {
             // write the return value (0, "ask again") straight into
             // the trapframe saved here. Writing it now would
             // clobber that.
-            if (!scheduler_block_current(c->regs, win_events_wait_chan(pid), SCHED_WAIT_EVENT)) {
+            if (!scheduler_block_current(c->regs, win_input_wait_chan(), SCHED_WAIT_EVENT)) {
                 c->regs[14] = (uint64_t)(int64_t)-EPERM; // couldn't park -- see above
             } else {
                 // Parked. c->regs[14] is NOT this call's return value
@@ -146,19 +148,18 @@ int sys_wait_event(struct syscall_ctx *c) { return event_get(c, 1); }
 // the check cannot be hoisted into a helper that returns first.
 int sys_wait_ready(struct syscall_ctx *c) {
     int pid = scheduler_current_tgid();
-    if (pid == 0) {
-        klog_write("syscall: wait_ready() rejected -- caller has no event queue\n");
+    if (!compositor_only(pid, "wait_ready")) {
         c->regs[14] = (uint64_t)(int64_t)-EPERM;
         return 0;
     }
-    if (win_events_pending(pid)) { c->regs[14] = 1; return 0; }
+    if (win_input_pending()) { c->regs[14] = 1; return 0; }
 
     uint64_t ms = c->a0;
     if (!ms) { c->regs[14] = 0; return 0; }
     if (ms > SYS_SLEEP_MAX_MS) ms = SYS_SLEEP_MAX_MS;
 
     uint64_t deadline = clocksource_now_ns() + ms * 1000000ull;
-    if (!scheduler_block_current_until(c->regs, win_events_wait_chan(pid),
+    if (!scheduler_block_current_until(c->regs, win_input_wait_chan(),
                                        SCHED_WAIT_EVENT, deadline)) {
         c->regs[14] = (uint64_t)(int64_t)-EPERM;
         return 0;

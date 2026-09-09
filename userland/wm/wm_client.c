@@ -22,38 +22,112 @@
 #include "wm_overlay.h" // WM_POPUP_MARGIN -- a client popup keeps the same edge gap
 #include "wm_rawin.h"
 #include "wm_debug.h" // the diagnostic channel's WM end, below
-#include "win_server.h"
+#include "win_role.h"
 #include "kapi.h"
 #include "ui/utheme.h"
 #include "ui/uui_primitives.h" // uui_hit() -- the popup route walk
 #include "rt/sys.h"
 #include "wm/wm_log.h"
 
-// --- delivering events to clients (M41 stage 4c) ----------------------
+// --- delivering events to clients ------------------------------------
 //
-// The ring-0 WM called win_events_push() -- a kernel function -- to put
-// an event on a client's queue. A process cannot do that, so it ASKS:
-// WIN_REQ_EVENT_PUSH, refused to anyone but the registered compositor,
-// because this is the one request that reaches across into another
-// process's queue.
-//
-// Same signature as the kernel function it replaces, so every call site
-// is unchanged. Returns 1 on success, 0 if the request was refused or
-// the target's queue is full -- and a full queue is not something the
-// compositor can fix (the client is not draining), so it is reported
-// rather than retried.
+// Into the client's INBOX on its own channel ring (lib/uwmchan.h) --
+// this process writes, the client drains, and the kernel carries
+// nothing. Returns 1 on success, 0 when the inbox is full or the client
+// has no ring. A full inbox is the client not keeping up, which the
+// compositor cannot fix; what it decides is whether the event is worth
+// keeping until there is room (send_state below) or not (input).
+static struct uchan_server g_chan;
+
 static int win_events_push(int pid, const struct win_event *ev) {
     if (!ev) return 0;
-    struct win_request_msg req;
-    for (unsigned i = 0; i < sizeof req; i++) ((uint8_t *)&req)[i] = 0;
-    req.type = WIN_REQ_EVENT_PUSH;
-    req.a = pid;
-    req.window = ev->window;
-    req.b = (int32_t)ev->type;
-    req.c = ev->a;
-    req.d = ev->b;
-    req.mods = ev->mods;
-    return sys_win_request(&req) == 0;
+    return uchan_server_send(&g_chan, pid, ev, sizeof *ev) == 0;
+}
+
+// Input to a client that could not take it. Counted on the window so
+// `gui windows` can name the client that is behind, and logged once
+// per window rather than per event.
+static void note_dropped(struct window *win) {
+    if (!win->ev_dropped++)
+        wm_logf("wm: client pid %d is not draining its events\n", win->client_pid);
+}
+
+// A STATE event: sent now if there is room, otherwise remembered and
+// sent by wm_client_flush_pending() with the state as it is THEN. The
+// caller fills the payload fields on the window before calling.
+enum {
+    WM_PEND_CLOSE  = 1 << 0,
+    WM_PEND_RESIZE = 1 << 1,
+    WM_PEND_FOCUS  = 1 << 2,
+    WM_PEND_FONT   = 1 << 3,
+    WM_PEND_SCREEN = 1 << 4,
+};
+
+static int send_state(struct window *win, const struct win_event *ev, uint32_t bit) {
+    if (win_events_push(win->client_pid, ev)) {
+        win->ev_pending &= ~bit;
+        return 1;
+    }
+    win->ev_pending |= bit;
+    return 0;
+}
+
+static void send_popup_done(struct window *toplevel, uint32_t slot) {
+    struct win_event ev = {0};
+    ev.type = WIN_EV_POPUP_DONE;
+    ev.window = slot;
+    if (win_events_push(toplevel->client_pid, &ev)) toplevel->ev_popup_done &= ~(1u << slot);
+    else toplevel->ev_popup_done |= 1u << slot;
+}
+
+static int find_client_window(int pid, uint32_t id);
+
+void wm_client_flush_pending(void) {
+    for (int i = 0; i < window_count; i++) {
+        struct window *win = &windows[i];
+        if (!wm_client_is_client_window(win)) continue;
+        if (!win->ev_pending && !win->ev_popup_done) continue;
+        struct win_event ev = {0};
+        ev.window = win->client_win;
+        if (win->ev_pending & WM_PEND_CLOSE) {
+            ev.type = WIN_EV_CLOSE;
+            if (!send_state(win, &ev, WM_PEND_CLOSE)) continue;
+        }
+        if (win->ev_pending & WM_PEND_RESIZE) {
+            ev.type = WIN_EV_RESIZE; ev.a = win->ev_resize_w; ev.b = win->ev_resize_h;
+            if (!send_state(win, &ev, WM_PEND_RESIZE)) continue;
+        }
+        if (win->ev_pending & WM_PEND_FOCUS) {
+            ev.type = WIN_EV_FOCUS; ev.a = (wm_focus_index() == i) ? 1 : 0; ev.b = 0;
+            if (!send_state(win, &ev, WM_PEND_FOCUS)) continue;
+        }
+        if (win->ev_pending & WM_PEND_SCREEN) {
+            ev.type = WIN_EV_SCREEN; ev.a = screen_w; ev.b = screen_h;
+            if (!send_state(win, &ev, WM_PEND_SCREEN)) continue;
+        }
+        if (win->ev_pending & WM_PEND_FONT) {
+            ev.type = WIN_EV_FONT; ev.a = 0; ev.b = 0;
+            if (!send_state(win, &ev, WM_PEND_FONT)) continue;
+        }
+        for (uint32_t slot = 1; slot < 32 && win->ev_popup_done; slot++)
+            if (win->ev_popup_done & (1u << slot)) send_popup_done(win, slot);
+    }
+}
+
+// The session changed under every client -- the font, or the screen.
+// One event per PROCESS: its popups are surfaces of the same app, and
+// the toplevel's row is the one that outlives them.
+static void broadcast_state(uint32_t type, int32_t a, int32_t b, uint32_t bit) {
+    for (int i = 0; i < window_count; i++) {
+        struct window *win = &windows[i];
+        if (!wm_client_is_client_window(win) || win->popup) continue;
+        struct win_event ev = {0};
+        ev.type = type;
+        ev.window = win->client_win;
+        ev.a = a;
+        ev.b = b;
+        send_state(win, &ev, bit);
+    }
 }
 
 // Finds the windows[] slot for one client window, or -1. Linear over at
@@ -133,6 +207,9 @@ static int on_window_created(int pid, uint32_t id,
     win->client_buf = win->client_px[0];
     win->client_last_mx = INT32_MIN; // nothing delivered yet
     win->client_last_my = INT32_MIN;
+    win->ev_pending = 0;
+    win->ev_popup_done = 0;
+    win->ev_dropped = 0;
 
     // The IDENTITY the taskbar groups by -- see wm.h. -1 means "no
     // identity", which groups with nothing.
@@ -280,10 +357,10 @@ void wm_client_popups_dismiss(int owner) {
         if (i >= window_count) continue;
         struct window *w = &windows[i];
         if (!w->popup || w->client_pid != owner) continue;
-        struct win_event ev = {0};
-        ev.type = WIN_EV_POPUP_DONE;
-        ev.window = w->client_win;
-        win_events_push(owner, &ev);
+        // Through the TOPLEVEL's bookkeeping: this row is about to go,
+        // and a dismissal the inbox had no room for must still arrive.
+        int top = find_client_window(owner, 0);
+        if (top >= 0) send_popup_done(&windows[top], w->client_win);
         unmap_client_window(w);
         w->client_pid = 0;
         close_window(i);
@@ -588,7 +665,7 @@ void wm_client_check_timers(void) {
         struct win_event ev = {0};
         ev.type = WIN_EV_TIMER;
         ev.window = win->client_win;
-        win_events_push(win->client_pid, &ev);
+        if (!win_events_push(win->client_pid, &ev)) note_dropped(win);
         win->timer_due = now + win->timer_ticks;
     }
 }
@@ -676,11 +753,9 @@ static int identity_for_pid(int pid) {
 //
 // See lib/uwmchan.h. A request that arrives here reached this process
 // directly, carrying its payload -- no kernel copy and no read-back.
-static struct uchan_server g_chan;
-
 void wm_client_chan_open(void) {
     if (uchan_server_open(&g_chan, WMCHAN_SERVICE) < 0)
-        wm_logf("wm: no client channel -- requests take the kernel path\n");
+        wm_logf("wm: no client channel -- no client can open a window\n");
 }
 
 int wm_client_chan_ready(void) { return g_chan.beacon != 0; }
@@ -1004,9 +1079,12 @@ int wm_client_handle_event(const struct win_event *ev) {
         ugfx_font_init();
         wm_render_reset();
         wm_logf("wm: font changed -- %dx%d cell\n", ugfx_char_w(), ugfx_char_h());
+        // And every client's, which the kernel told only this process.
+        broadcast_state(WIN_EV_FONT, 0, 0, WM_PEND_FONT);
         break;
     case WIN_EV_SCREEN:
         wm_screen_changed();
+        broadcast_state(WIN_EV_SCREEN, screen_w, screen_h, WM_PEND_SCREEN);
         break;
     default:
         return 0; // not ours -- raw input, see wm_rawin.c
@@ -1067,7 +1145,7 @@ void wm_client_send_key(struct window *win, int key, unsigned mods) {
     ev.window = win->client_win;
     ev.a = key;
     ev.mods = mods;
-    win_events_push(win->client_pid, &ev);
+    if (!win_events_push(win->client_pid, &ev)) note_dropped(win);
 }
 
 // The other edge. A separate function rather than a `down` flag on the
@@ -1082,7 +1160,7 @@ void wm_client_send_key_up(struct window *win, int key, unsigned mods) {
     ev.window = win->client_win;
     ev.a = key;
     ev.mods = mods;
-    win_events_push(win->client_pid, &ev);
+    if (!win_events_push(win->client_pid, &ev)) note_dropped(win);
 }
 
 void wm_client_send_mouse(struct window *win, int type, int x, int y, unsigned buttons) {
@@ -1113,7 +1191,11 @@ void wm_client_send_mouse(struct window *win, int type, int x, int y, unsigned b
     // in because every caller would otherwise read the same global.
     ev.mods = WIN_MOUSE_BUTTONS(buttons) |
               ((unsigned)wm_rawin_mods_now() << WIN_MOUSE_MODS_SHIFT);
-    win_events_push(win->client_pid, &ev);
+    if (!win_events_push(win->client_pid, &ev)) {
+        note_dropped(win);
+        // So the next motion is not read as "already delivered".
+        if (type == WIN_EV_MOUSE_MOVE) win->client_last_mx = INT32_MIN;
+    }
 }
 
 // Propose a new CONTENT size. Deliberately a proposal: the WM does not
@@ -1135,7 +1217,9 @@ void wm_client_send_resize(struct window *win, int w, int h) {
     ev.window = win->client_win;
     ev.a = w;
     ev.b = h;
-    win_events_push(win->client_pid, &ev);
+    win->ev_resize_w = w;
+    win->ev_resize_h = h;
+    send_state(win, &ev, WM_PEND_RESIZE);
 }
 
 // Keyboard focus arrived or left. Only a client needs telling: a
@@ -1148,7 +1232,7 @@ void wm_client_send_focus(struct window *win, int focused) {
     ev.type = WIN_EV_FOCUS;
     ev.window = win->client_win;
     ev.a = focused ? 1 : 0;
-    win_events_push(win->client_pid, &ev);
+    send_state(win, &ev, WM_PEND_FOCUS);
 }
 
 // Wheel notches, to the focused client. Same focus rule as keys: who
@@ -1160,7 +1244,7 @@ void wm_client_send_wheel(struct window *win, int notches) {
     ev.type = WIN_EV_WHEEL;
     ev.window = win->client_win;
     ev.a = notches;
-    win_events_push(win->client_pid, &ev);
+    if (!win_events_push(win->client_pid, &ev)) note_dropped(win);
 }
 
 void wm_client_send_close(struct window *win) {
@@ -1168,7 +1252,7 @@ void wm_client_send_close(struct window *win) {
     struct win_event ev = {0};
     ev.type = WIN_EV_CLOSE;
     ev.window = win->client_win;
-    win_events_push(win->client_pid, &ev);
+    send_state(win, &ev, WM_PEND_CLOSE);
 
     // Ask whether it is even listening, at the same moment. A close that
     // goes unanswered means one of two very different things -- the app
@@ -1210,14 +1294,39 @@ void wm_client_ping(struct window *win) {
     if (win->ping_serial) return; // one outstanding at a time
 
     if (++g_next_serial == 0) g_next_serial = 1; // 0 means "none"
-    win->ping_serial = g_next_serial;
-    win->ping_sent_tick = sys_ticks();
 
     struct win_event ev = {0};
     ev.type = WIN_EV_PING;
     ev.window = win->client_win;
-    ev.a = (int)win->ping_serial;
-    win_events_push(win->client_pid, &ev);
+    ev.a = (int)g_next_serial;
+    // A ping the inbox could not take was never asked, so no serial is
+    // left outstanding: the liveness check simply asks again next time
+    // -- and a client whose inbox stays full is found unresponsive by
+    // exactly that route.
+    if (!win_events_push(win->client_pid, &ev)) return;
+    win->ping_serial = g_next_serial;
+    win->ping_sent_tick = sys_ticks();
+    win->ping_sent_ns = sys_monotonic_ns();
+    win->ping_sent_tsc = __builtin_ia32_rdtsc();
+}
+
+static unsigned long long g_ping_last_us, g_ping_max_us, g_ping_sum_us;
+static unsigned long long g_ping_last_cyc, g_ping_max_cyc, g_ping_sum_cyc;
+static unsigned g_ping_n;
+
+void wm_client_ping_stats(unsigned long long *last_us, unsigned long long *max_us,
+                          unsigned long long *avg_us, unsigned *n) {
+    *last_us = g_ping_last_us;
+    *max_us = g_ping_max_us;
+    *avg_us = g_ping_n ? g_ping_sum_us / g_ping_n : 0;
+    *n = g_ping_n;
+}
+
+void wm_client_ping_cycles(unsigned long long *last, unsigned long long *max,
+                           unsigned long long *avg) {
+    *last = g_ping_last_cyc;
+    *max = g_ping_max_cyc;
+    *avg = g_ping_n ? g_ping_sum_cyc / g_ping_n : 0;
 }
 
 static void on_window_pong(int pid, uint32_t id, uint32_t serial) {
@@ -1226,6 +1335,15 @@ static void on_window_pong(int pid, uint32_t id, uint32_t serial) {
     struct window *w = &windows[idx];
     if (serial != w->ping_serial) return; // stale -- see above
     w->ping_serial = 0;
+    unsigned long long rtt = (sys_monotonic_ns() - w->ping_sent_ns) / 1000;
+    unsigned long long cyc = __builtin_ia32_rdtsc() - w->ping_sent_tsc;
+    g_ping_last_us = rtt;
+    if (rtt > g_ping_max_us) g_ping_max_us = rtt;
+    g_ping_sum_us += rtt;
+    g_ping_last_cyc = cyc;
+    if (cyc > g_ping_max_cyc) g_ping_max_cyc = cyc;
+    g_ping_sum_cyc += cyc;
+    g_ping_n++;
     if (w->not_responding) {
         w->not_responding = 0;
         redraw_pending = 1; // the title bar said "(Not Responding)"

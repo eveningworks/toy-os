@@ -33,7 +33,8 @@
 #include "pmm.h"
 #include "string.h"
 #include "futex.h"
-#include "win_events.h" // the event post the wakeword rides
+#include "win_input.h"   // the event post the wakeword rides
+#include "win_role.h"    // the KTEST below gives a spare pid the role
 #include <stddef.h>
 
 // The word is 32 bits and must be aligned, so a key names one word
@@ -241,28 +242,33 @@ KTEST("futex", "queueing an EVENT bumps the waiter's wakeword") {
         if (!scheduler_pid_valid(p)) { pid = p; break; }
     if (!pid) { futex_fixture_down(&f); KTEST_SKIP("no spare pid"); }
 
+    // The queue is the compositor's, so the spare pid has to BE the
+    // compositor for the duration -- which a live desktop forbids.
+    if (win_server_compositor_pid()) { futex_fixture_down(&f); KTEST_SKIP("a compositor holds the role"); }
+
     const void *key = NULL;
     KTEST_ASSERT_EQ(futex_key(f.as, FUTEX_TEST_VADDR, &key), 0);
     g_wakeword[pid - 1].phys = (uint64_t)(uintptr_t)key;
     g_wakeword[pid - 1].pml4 = f.as;
     futex_set(&f, 0);
+    win_server_set_compositor(pid, 0);
 
-    struct win_event ev = { .type = WIN_EV_KEY, .a = 'x' };
-    KTEST_ASSERT(win_events_push(pid, &ev));
+    struct win_event ev = { .type = WIN_EV_RAW_KEY, .a = 'x' };
+    KTEST_ASSERT(win_input_push(&ev));
     KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f.frame, 1u);
 
     // A SECOND event moves it again -- a word that only ever reached 1
     // would let a waiter that sampled 1 park through everything after.
-    KTEST_ASSERT(win_events_push(pid, &ev));
+    KTEST_ASSERT(win_input_push(&ev));
     KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f.frame, 2u);
 
     // And the registration goes with the address space, or the kernel
     // writes into whatever the allocator hands out next.
     futex_wakeword_release(f.as);
-    KTEST_ASSERT(win_events_push(pid, &ev));
+    KTEST_ASSERT(win_input_push(&ev));
     KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f.frame, 2u);
 
-    win_events_reset(pid);
+    win_server_set_compositor(0, 0);
     futex_fixture_down(&f);
 }
 

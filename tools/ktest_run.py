@@ -101,7 +101,7 @@ def main():
 
         # FREE THE COMPOSITOR ROLE BEFORE THE SUITE. It is one global,
         # and on a graphical boot the ring-3 desktop holds it -- so the
-        # winshare KTESTs refuse to take it (win_server_test.c) and the
+        # winshare KTESTs refuse to take it (win_role_test.c) and the
         # gate would lose that coverage. `service stop` rather than
         # deleting the descriptor: init keeps `admin_stopped` in memory
         # and the request file is in /tmp, so nothing survives to the

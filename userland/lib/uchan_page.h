@@ -35,6 +35,8 @@
 #define UCHAN_SLOT_BYTES 64           // one message
 #define UCHAN_SLOTS      32           // messages in flight
 #define UCHAN_NAME_MAX   24           // a service name, inside SHM_NAME_MAX
+#define UCHAN_IN_BYTES   32           // one INBOX message (server -> client)
+#define UCHAN_IN_SLOTS   64
 
 // The server's beacon page.
 struct uchan_beacon {
@@ -78,6 +80,25 @@ struct uchan_ring {
     uint8_t  reply[UCHAN_SLOT_BYTES];
 
     uint8_t  slot[UCHAN_SLOTS][UCHAN_SLOT_BYTES];
+
+    // --- THE INBOX: the server's messages to this client -------------
+    //
+    // The same ring the other way round, in the same object, so one
+    // scan finds both directions and one lifetime ends both. `in_head`
+    // is written ONLY by the server, `in_tail` ONLY by the client --
+    // the single-writer rule above, which is what keeps this lock-free.
+    // A full inbox is the SERVER's problem to decide about: it cannot
+    // reach past `in_tail` to evict, so it drops or keeps the message
+    // (uchan_server_send()).
+    volatile uint32_t in_head;
+    volatile uint32_t in_tail;
+    // THE WORD THE CLIENT PARKS ON. Bumped by the server after a
+    // message and by the client's OWN other threads (uchan_client_kick),
+    // so unlike `wake` above it has two writers and the bump is an
+    // atomic add.
+    volatile uint32_t in_wake;
+    volatile uint32_t in_dropped;  // messages the server could not fit
+    uint8_t  in_slot[UCHAN_IN_SLOTS][UCHAN_IN_BYTES];
 };
 
 #endif

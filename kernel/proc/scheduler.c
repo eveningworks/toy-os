@@ -97,8 +97,7 @@
 #include "auxv.h" // the dynamic handoff, see spawn_from_fs()
 #include "elf_run.h"
 #include "process.h" // process_context_is_armed() -- see kernel_slot_runnable()
-#include "win_events.h" // win_events_reset() at spawn -- see scheduler_spawn()
-#include "win_server.h"
+#include "win_role.h"
 #include "syscall.h" // syscall_process_kill_cleanup()
 #include "win_input.h" // raw input to a ring-3 compositor // win_server_client_gone() -- see scheduler_on_exit()
 #include "diag.h"     // diag_provider_gone() -- drop a dead service's name
@@ -1882,7 +1881,6 @@ int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
     // that drifts.
     k_memset(&procs[slot].mm, 0, sizeof procs[slot].mm);
     procs[slot].cwd.path[0] = '\0';
-    win_events_reset(slot + 1); // the previous tenant's, see spawn
     procs[slot].state = SCHED_READY;
     alive_count++;
     return slot + 1;
@@ -2100,10 +2098,6 @@ int scheduler_spawn_group(const char *path, const char *args, int pipe_idx,
 
     // Clear any events left over from the previous tenant of this slot.
     // Doing it at spawn rather than at reap is what makes this the only
-    // lifecycle call the scheduler owes the windowing layer: a recycled
-    // pid can't inherit stale events if the queue is emptied before the
-    // new process can ever look at it.
-    win_events_reset(slot + 1);
     return slot + 1; // 1-based pid (see scheduler.h)
 }
 
