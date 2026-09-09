@@ -239,6 +239,10 @@ void wm_damage_rect(int x, int y, int w, int h);
 // Window lifecycle -- defined in wm.c, used by wm_input.c (opening from
 // the Start menu, closing via the title-bar X).
 void bring_to_front(int idx);
+// The topmost TOPLEVEL (never a popup), or -1; and the window a key to
+// that toplevel actually reaches -- its topmost popup, if it has one.
+int wm_focus_index(void);
+int wm_key_target(int focus);
 void open_app(const struct gui_app *app);
 void close_window(int idx);
 
@@ -519,6 +523,16 @@ void wm_client_send_close(struct window *win);
 
 // Tell a client its window gained (1) or lost (0) keyboard focus.
 void wm_client_send_focus(struct window *win, int focused);
+
+// THE POPUP GRAB (abi/win_proto.h's WIN_REQ_POPUP). `owner` is the pid
+// whose popup is topmost, or 0 when none is up. `route` says where a
+// press at (mx, my) lands for that owner: 1 = in one of its popups,
+// 2 = in the content of another of its windows, 0 = anywhere else --
+// and 0 is what `dismiss` is for, which closes every popup of the pid
+// and tells it with WIN_EV_POPUP_DONE.
+int wm_client_popup_owner(void);
+int wm_client_popup_route(int owner, int mx, int my);
+void wm_client_popups_dismiss(int owner);
 
 // Deliver wheel notches to a client (WIN_EV_WHEEL).
 void wm_client_send_wheel(struct window *win, int notches);

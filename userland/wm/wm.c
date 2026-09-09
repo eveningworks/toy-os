@@ -160,10 +160,33 @@ int redraw_pending = 1;
 void window_set_state(struct window *win, void *state) { win->app_state = state; }
 void *window_get_state(struct window *win) { return win->app_state; }
 
-int window_content_x(const struct window *win) { return win->x + 1; }
-int window_content_y(const struct window *win) { return win->y + WM_TITLEBAR_H + 1; }
-int window_content_w(const struct window *win) { return win->w - 2; }
-int window_content_h(const struct window *win) { return win->h - WM_TITLEBAR_H - 2; }
+// A POPUP HAS NO CHROME, and these four are the one place that fact
+// lives: the blit, the hit-tests, the damage and the client coordinate
+// translation all go through them, so nothing else needs to know.
+int window_content_x(const struct window *win) { return win->popup ? win->x : win->x + 1; }
+int window_content_y(const struct window *win) { return win->popup ? win->y : win->y + WM_TITLEBAR_H + 1; }
+int window_content_w(const struct window *win) { return win->popup ? win->w : win->w - 2; }
+int window_content_h(const struct window *win) { return win->popup ? win->h : win->h - WM_TITLEBAR_H - 2; }
+
+// THE FOCUSED WINDOW IS THE TOPMOST TOPLEVEL, not the topmost entry: a
+// popup sits above its parent and the parent keeps the active title
+// bar, its taskbar button and the WM shortcuts (Alt+F4 must not ask a
+// menu to close). -1 with nothing to focus.
+int wm_focus_index(void) {
+    for (int i = window_count - 1; i >= 0; i--)
+        if (windows[i].state != WIN_MINIMIZED && !windows[i].popup) return i;
+    return -1;
+}
+
+// Where a KEY goes: the focused toplevel's topmost popup if it has one
+// up -- an open menu owns the keyboard, as xdg_popup's grab gives the
+// popup keyboard focus -- else the toplevel itself.
+int wm_key_target(int focus) {
+    if (focus < 0) return -1;
+    for (int i = window_count - 1; i > focus; i--)
+        if (windows[i].popup && windows[i].client_pid == windows[focus].client_pid) return i;
+    return focus;
+}
 
 void window_invalidate(struct window *win) {
     wm_damage_rect(win->x, win->y, win->w, win->h);
@@ -533,7 +556,7 @@ void close_window(int idx) {
     // rewrites per drag. This is the one chokepoint that sees the final
     // answer, and it still has the live slot -- the array shift at the
     // bottom of this function is what would lose it.
-    wm_geometry_save(&windows[idx]);
+    if (!windows[idx].popup) wm_geometry_save(&windows[idx]);
 
     // If the FRONT window is going away, whatever ends up frontmost
     // gains keyboard focus -- and a client has to be told, since it
@@ -1221,10 +1244,8 @@ void wm_run(void) {
                 // repaint same as other dialogs (see wm_render.c's
                 // damage-region comment)
             } else {
-                int f = -1;
-                for (int i = window_count - 1; i >= 0; i--) {
-                    if (windows[i].state != WIN_MINIMIZED) { f = i; break; }
-                }
+                int f = wm_focus_index();
+                int kt = wm_key_target(f); // a popup of f's client, or f
 
                 // Alt+F4 closes the focused window, and is handled HERE
                 // rather than delivered to the app -- a window-manager
@@ -1269,9 +1290,9 @@ void wm_run(void) {
                     // the same: an X11 grab produces exactly this shape.
                     // Tracking held keys means ignoring an up you have no
                     // down for, which is the sane implementation anyway.
-                    if (f >= 0 && !file_picker_open &&
-                        wm_client_is_client_window(&windows[f])) {
-                        wm_client_send_key_up(&windows[f], key, key_mods);
+                    if (kt >= 0 && !file_picker_open &&
+                        wm_client_is_client_window(&windows[kt])) {
+                        wm_client_send_key_up(&windows[kt], key, key_mods);
                     }
                 } else if (key == KEY_SUPER) {
                     if (!confirm_dialog_open && !file_picker_open) {
@@ -1284,13 +1305,13 @@ void wm_run(void) {
                 } else if (key == KEY_F4 && (key_mods & KEY_MOD_ALT) && f >= 0 && !file_picker_open) {
                     wm_request_close(f); // may shift windows[] -- f is dead after this
                     redraw_pending = 1;
-                } else if (f >= 0 && key != -1 && !file_picker_open && wm_client_is_client_window(&windows[f])) {
+                } else if (kt >= 0 && key != -1 && !file_picker_open && wm_client_is_client_window(&windows[kt])) {
                     // Focused window belongs to a ring-3 client: the
                     // key becomes a protocol message rather than a
                     // callback. Same focus rule either way -- who gets
                     // the key is the WM's decision, and it doesn't
                     // change because the recipient is a process.
-                    wm_client_send_key(&windows[f], key, key_mods);
+                    wm_client_send_key(&windows[kt], key, key_mods);
                     redraw_pending = 1;
                 } else if (f >= 0 && key != -1 && !file_picker_open && windows[f].app && windows[f].app->on_key) {
                     windows[f].app->on_key(&windows[f], key, key_mods);
@@ -1300,8 +1321,8 @@ void wm_run(void) {
                     // TWP carried a wheel event, only kernel-space apps
                     // could scroll -- so Notepad drew a scrollbar it
                     // could never move.
-                    if (wm_client_is_client_window(&windows[f])) {
-                        wm_client_send_wheel(&windows[f], wheel);
+                    if (wm_client_is_client_window(&windows[kt])) {
+                        wm_client_send_wheel(&windows[kt], wheel);
                     } else if (windows[f].app && windows[f].app->on_wheel) {
                         windows[f].app->on_wheel(&windows[f], wheel);
                     }

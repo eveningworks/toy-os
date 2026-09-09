@@ -1,5 +1,6 @@
 // menu bar + nested pull-down menus. See ui/uui_menubar.h for the design.
 #include "ui/uui_menubar.h"
+#include "ui/uui_popup.h" // each level is a popup surface when one is granted
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 #include <string.h>
 #include <ctype.h> // tolower() -- the toolkit's, over k_tolower
@@ -127,9 +128,59 @@ static void place(const struct uui_menubar *m, int ax, int ay, int aw, int ah,
 // opening and closing
 // ---------------------------------------------------------------------
 
+// EVERY PATH THAT SHORTENS THE CHAIN GOES THROUGH HERE, because a level
+// may own a popup surface and dropping the count alone would leave the
+// compositor showing a menu nothing hit-tests any more.
+static void set_depth(struct uui_menubar *m, int n) {
+    if (n < 0) n = 0;
+    for (int l = n; l < m->depth; l++) {
+        if (m->level[l].surf) uui_popup_close(m->level[l].surf);
+        m->level[l].surf = 0;
+    }
+    m->depth = n;
+}
+
 void uui_menubar_close(struct uui_menubar *m) {
     m->open_root = -1;
-    m->depth = 0;
+    set_depth(m, 0);
+}
+
+// The compositor dismissed the chain -- a press outside every surface of
+// this process (abi/win_proto.h's WIN_EV_POPUP_DONE). The ids are dead
+// already; closing here is bookkeeping, and uui_popup_close() on a dead
+// id is a no-op.
+static void level_done(void *owner) {
+    uui_menubar_close((struct uui_menubar *)owner);
+}
+
+// Opens level `l` on `items`, anchored to a rect: as a POPUP SURFACE
+// when the provider grants one, drawn in-window against the bounds
+// otherwise. `side` 0 = below the anchor (a title, the cursor), 1 = to
+// its right (a submenu, whose first row lines up with its parent row --
+// hence the anchor is nudged up by the popup's 1px border).
+static void open_level(struct uui_menubar *m, int l,
+                        const struct uui_menu_item *items, int count,
+                        int ax, int ay, int aw, int ah, int side, int parent) {
+    set_depth(m, l);
+
+    int w, h;
+    level_size(items, count, &w, &h);
+
+    int px, py;
+    int surf = uui_popup_open(ax, side ? ay - 1 : ay, aw, ah, w, h,
+                              side ? UUI_POPUP_RIGHT : UUI_POPUP_BELOW,
+                              level_done, m, &px, &py);
+    if (!surf) place(m, ax, ay, aw, ah, w, h, side, &px, &py);
+
+    struct uui_menu_level *lv = &m->level[l];
+    lv->items = items;
+    lv->count = count;
+    lv->x = px; lv->y = py;
+    lv->w = w;  lv->h = h;
+    lv->hot = -1;
+    lv->parent = parent;
+    lv->surf = surf;
+    m->depth = l + 1;
 }
 
 // Next selectable row from `from` in direction `dir`, wrapping. -1 if the
@@ -147,7 +198,7 @@ static int step_sel(const struct uui_menubar *m, const struct uui_menu_item *ite
 
 static void open_root(struct uui_menubar *m, int index) {
     m->open_root = index;
-    m->depth = 0;
+    set_depth(m, 0);
     if (index < 0 || index >= m->count) return;
 
     const struct uui_menu_item *it = &m->items[index];
@@ -155,20 +206,7 @@ static void open_root(struct uui_menubar *m, int index) {
 
     int tx, ty, tw, th;
     uui_menubar_title_rect(m, index, &tx, &ty, &tw, &th);
-
-    int w, h;
-    level_size(it->sub, it->sub_count, &w, &h);
-
-    int px, py;
-    place(m, tx, ty, tw, th, w, h, 0, &px, &py);
-
-    m->level[0].items = it->sub;
-    m->level[0].count = it->sub_count;
-    m->level[0].x = px; m->level[0].y = py;
-    m->level[0].w = w;  m->level[0].h = h;
-    m->level[0].hot = -1;
-    m->level[0].parent = index;
-    m->depth = 1;
+    open_level(m, 0, it->sub, it->sub_count, tx, ty, tw, th, 0, index);
 }
 
 // See the header: a context menu is level 0 with no title behind it, so
@@ -177,22 +215,9 @@ static void open_root(struct uui_menubar *m, int index) {
 void uui_menubar_open_at(struct uui_menubar *m, const struct uui_menu_item *items,
                           int count, int x, int y) {
     m->open_root = -1;
-    m->depth = 0;
+    set_depth(m, 0);
     if (!items || count <= 0) return;
-
-    int w, h;
-    level_size(items, count, &w, &h);
-
-    int px, py;
-    place(m, x, y, 1, 1, w, h, 0, &px, &py); // a 1x1 anchor: the cursor
-
-    m->level[0].items = items;
-    m->level[0].count = count;
-    m->level[0].x = px; m->level[0].y = py;
-    m->level[0].w = w;  m->level[0].h = h;
-    m->level[0].hot = -1;
-    m->level[0].parent = -1;
-    m->depth = 1;
+    open_level(m, 0, items, count, x, y, 1, 1, 0, -1); // a 1x1 anchor: the cursor
 }
 
 // Opens level `lvl + 1` from row `index` of level `lvl`.
@@ -204,21 +229,7 @@ static void open_sub(struct uui_menubar *m, int lvl, int index) {
 
     int ax, ay, aw, ah;
     uui_menubar_item_rect(m, lvl, index, &ax, &ay, &aw, &ah);
-
-    int w, h;
-    level_size(it->sub, it->sub_count, &w, &h);
-
-    int px, py;
-    place(m, ax, ay, aw, ah, w, h, 1, &px, &py);
-
-    struct uui_menu_level *lv = &m->level[lvl + 1];
-    lv->items = it->sub;
-    lv->count = it->sub_count;
-    lv->x = px; lv->y = py;
-    lv->w = w;  lv->h = h;
-    lv->hot = -1;
-    lv->parent = index;
-    m->depth = lvl + 2;
+    open_level(m, lvl + 1, it->sub, it->sub_count, ax, ay, aw, ah, 1, index);
 }
 
 // ---------------------------------------------------------------------
@@ -233,6 +244,7 @@ void uui_menubar_init(struct uui_menubar *m, const struct uui_menu_item *items,
     m->open_root = -1;
     m->hot_root = -1;
     m->depth = 0;
+    for (int l = 0; l < UUI_MENU_MAX_DEPTH; l++) m->level[l].surf = 0;
     m->bx = m->by = 0;
     m->bw = m->bh = 0;
     m->item_flags = 0;
@@ -366,18 +378,22 @@ void uui_menubar_draw(struct ugfx_surface *s, const struct uui_menubar *m) {
     }
 }
 
-static void draw_level(struct ugfx_surface *s, const struct uui_menubar *m,
-                        const struct uui_menu_level *lv) {
-    ugfx_fill_rect(s, lv->x, lv->y, lv->w, lv->h, m->popup_bg);
-    ugfx_draw_rect(s, lv->x, lv->y, lv->w, lv->h, m->border);
+// One level, with its origin moved by (-ox, -oy): 0,0 when it is drawn
+// into the window it hit-tests in, the level's own x/y when it is drawn
+// into its popup surface, whose top-left IS the level's.
+static void draw_level_at(struct ugfx_surface *s, const struct uui_menubar *m,
+                           const struct uui_menu_level *lv, int ox, int oy) {
+    int lx = lv->x - ox, ly = lv->y - oy;
+    ugfx_fill_rect(s, lx, ly, lv->w, lv->h, m->popup_bg);
+    ugfx_draw_rect(s, lx, ly, lv->w, lv->h, m->border);
 
-    int y = lv->y + 1;
+    int y = ly + 1;
     for (int i = 0; i < lv->count; i++) {
         const struct uui_menu_item *it = &lv->items[i];
         int h = item_height(it);
 
         if (is_sep(it)) {
-            ugfx_fill_rect(s, lv->x + pad(), y + h / 2, lv->w - 2 * pad(), 1, m->border);
+            ugfx_fill_rect(s, lx + pad(), y + h / 2, lv->w - 2 * pad(), 1, m->border);
             y += h;
             continue;
         }
@@ -387,15 +403,15 @@ static void draw_level(struct ugfx_surface *s, const struct uui_menubar *m,
         uint32_t bg = m->popup_bg;
         if (i == lv->hot && !off) {
             bg = m->hot_bg;
-            ugfx_fill_rect(s, lv->x + 1, y, lv->w - 2, h, bg);
+            ugfx_fill_rect(s, lx + 1, y, lv->w - 2, h, bg);
         }
         uint32_t fg = off ? m->disabled_fg : m->fg;
         int ty = y + (h - ugfx_char_h()) / 2;
 
-        if (f & UUI_MI_CHECKED) draw_tick(s, lv->x + 1 + pad(), ty, fg);
+        if (f & UUI_MI_CHECKED) draw_tick(s, lx + 1 + pad(), ty, fg);
 
-        int label_x = lv->x + 1 + pad() + gutter();
-        int right = lv->x + lv->w - 1 - pad() - arrow_col();
+        int label_x = lx + 1 + pad() + gutter();
+        int right = lx + lv->w - 1 - pad() - arrow_col();
         int avail = right - label_x;
 
         if (is_sub(it)) {
@@ -412,9 +428,19 @@ static void draw_level(struct ugfx_surface *s, const struct uui_menubar *m,
     }
 }
 
+static void draw_level(struct ugfx_surface *s, const struct uui_menubar *m,
+                        const struct uui_menu_level *lv) {
+    if (lv->surf) {
+        struct ugfx_surface *ps = uui_popup_surface(lv->surf);
+        if (ps) { draw_level_at(ps, m, lv, lv->x, lv->y); return; }
+    }
+    draw_level_at(s, m, lv, 0, 0);
+}
+
 void uui_menubar_draw_popup(struct ugfx_surface *s, const struct uui_menubar *m) {
     // Outermost first: a child overlaps its parent's right edge, so call
-    // order IS z-order here too.
+    // order IS z-order here too (and the compositor stacks the surfaces
+    // in the order they were opened, which is the same order).
     for (int l = 0; l < m->depth; l++) draw_level(s, m, &m->level[l]);
 }
 
@@ -480,13 +506,12 @@ int uui_menubar_motion(struct uui_menubar *m, int cx, int cy) {
             // repaint continuously, which is the on_hover contract's
             // "return 1 only when it actually changed" in another guise.
             if (m->depth <= l + 1 || m->level[l + 1].parent != idx) {
-                m->depth = l + 1;
-                open_sub(m, l, idx);
+                open_sub(m, l, idx);   // closes anything deeper first
                 changed = 1;
             }
             want = m->depth;
         }
-        if (m->depth != want) { m->depth = want; changed = 1; }
+        if (m->depth != want) { set_depth(m, want); changed = 1; }
         return changed;
     }
 
@@ -594,7 +619,7 @@ int uui_menubar_key(struct uui_menubar *m, int key, int *out_code) {
 
     switch (key) {
     case 0x1B: // Esc closes the deepest menu, not the whole chain
-        if (m->depth > 1) m->depth--;
+        if (m->depth > 1) set_depth(m, m->depth - 1);
         else uui_menubar_close(m);
         return 1;
 
@@ -618,7 +643,7 @@ int uui_menubar_key(struct uui_menubar *m, int key, int *out_code) {
     }
 
     case KEY_ARROW_LEFT:
-        if (m->depth > 1) { m->depth--; return 1; }
+        if (m->depth > 1) { set_depth(m, m->depth - 1); return 1; }
         move_root(m, -1);
         return 1;
 

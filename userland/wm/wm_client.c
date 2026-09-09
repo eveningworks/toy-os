@@ -18,11 +18,13 @@
 #include "lib/uchan.h"
 #include "lib/uwmchan.h"
 #include "wm_geometry.h"
+#include "wm_overlay.h" // WM_POPUP_MARGIN -- a client popup keeps the same edge gap
 #include "wm_rawin.h"
 #include "wm_debug.h" // the diagnostic channel's WM end, below
 #include "win_server.h"
 #include "kapi.h"
 #include "ui/utheme.h"
+#include "ui/uui_primitives.h" // uui_hit() -- the popup route walk
 #include "rt/sys.h"
 #include "wm/wm_log.h"
 
@@ -75,6 +77,16 @@ _Static_assert(WIN_APP_ID_MAX == WIN_APP_ID_LEN,
 static int map_buf(struct window *win, int b, uint32_t gen, int w, int h);
 static void unmap_client_window(struct window *win);
 
+// The frame around a content size: chrome for a toplevel, none for a
+// popup. The two adopt sites (create, present) must agree with
+// window_content_*() in wm.c, and this is how they do.
+static void adopt_content_size(struct window *win, int w, int h) {
+    win->client_w = w;
+    win->client_h = h;
+    win->w = win->popup ? w : w + 2;
+    win->h = win->popup ? h : h + WM_TITLEBAR_H + 2;
+}
+
 static int on_window_created(int pid, uint32_t id,
                               int w, int h, int x, int y,
                               const char *app_id, int app_identity) {
@@ -103,16 +115,13 @@ static int on_window_created(int pid, uint32_t id,
     int cascade = (window_count % 5) * 24;
     win->x = (x > 0) ? x : 60 + cascade;
     win->y = (y > 0) ? y : 40 + cascade;
-    win->w = w + 2;
-    win->h = h + WM_TITLEBAR_H + 2;
+    adopt_content_size(win, w, h);
     win->state = WIN_NORMAL;
     win->app = 0;        // a client window has no gui_app -- see wm.h
     win->open = 1;
     win->client_pid = pid;
     win->client_win = id;
     win->client_front = 0;    // until the first present
-    win->client_w = w;
-    win->client_h = h;
     // BUFFER 0 AT GENERATION 0: a window's first object under each of
     // its two names. The other one is opened when a present first
     // points at it, which is also how every later object is picked up.
@@ -164,6 +173,123 @@ static int on_window_created(int pid, uint32_t id,
     return 1;
 }
 
+// --- popup surfaces (abi/win_proto.h's WIN_REQ_POPUP) -----------------
+//
+// The positioner, resolved here rather than in the client because only
+// this process knows where the parent is and where the taskbar is. Flip
+// to the other side of the anchor when the preferred side does not fit,
+// slide along the other axis, clamp last -- the arithmetic
+// ui/uui_menubar.c resolves against a window, against the WORK AREA. The
+// right and bottom edges keep WM_POPUP_MARGIN like every WM popup
+// (wm_popup_place()); the left and top do not, so a menu dropping from a
+// title flush against the screen edge is not nudged off its title.
+static void place_popup(const struct window *parent, const struct win_popup_pos *p,
+                        int w, int h, int *out_x, int *out_y) {
+    int ax = window_content_x(parent) + p->ax;
+    int ay = window_content_y(parent) + p->ay;
+    int aw = p->aw, ah = p->ah;
+    int x1 = screen_w - WM_POPUP_MARGIN;
+    int y1 = screen_h - taskbar_h - WM_POPUP_MARGIN;
+    int x, y;
+    if (p->gravity == WIN_POPUP_RIGHT) {
+        x = ax + aw;
+        y = ay;
+        if (x + w > x1 && ax - w >= 0) x = ax - w;   // flip left
+    } else {
+        x = ax;
+        y = ay + ah;
+        if (y + h > y1 && ay - h >= 0) y = ay - h;   // flip above
+    }
+    if (x + w > x1) x = x1 - w;                      // slide
+    if (x < 0) x = 0;                                // clamp
+    if (y + h > y1) y = y1 - h;
+    if (y < 0) y = 0;
+    *out_x = x;
+    *out_y = y;
+}
+
+// A popup joins windows[] AT THE TOP, as an ordinary client window with
+// `popup` set: it inherits the blit, the damage tracking, the ping and
+// the dead-client sweep for nothing, and the four accessors in wm.c make
+// it chromeless. Nothing is told about focus -- the parent keeps it, see
+// wm_focus_index() -- and no geometry is restored or saved.
+static int on_popup_created(int pid, uint32_t id, uint32_t parent_id, int w, int h,
+                            const struct win_popup_pos *pos, int *out_x, int *out_y) {
+    if (w <= 0 || h <= 0) return 0;
+    if (find_client_window(pid, parent_id) < 0) return 0;
+    if (!wm_windows_reserve(window_count + 1)) return 0;
+    // AFTER the reserve, which may move the array.
+    const struct window *parent = &windows[find_client_window(pid, parent_id)];
+
+    int sx, sy;
+    place_popup(parent, pos, w, h, &sx, &sy);
+    *out_x = sx - window_content_x(parent);
+    *out_y = sy - window_content_y(parent);
+
+    struct window *win = &windows[window_count];
+    k_memset(win, 0, sizeof(*win));
+    win->popup = 1;
+    win->popup_parent = parent_id;
+    win->x = sx;
+    win->y = sy;
+    adopt_content_size(win, w, h);
+    win->state = WIN_NORMAL;
+    win->open = 1;
+    win->client_pid = pid;
+    win->client_win = id;
+    win->app_identity = parent->app_identity;
+    if (!map_buf(win, 0, 0, w, h)) {
+        wm_logf("wm: client pid %d popup %u -- cannot open its buffer\n", pid, id);
+        return 0;
+    }
+    win->client_buf = win->client_px[0];
+    win->client_last_mx = INT32_MIN;
+    win->client_last_my = INT32_MIN;
+    k_strlcpy(win->title, "Popup", sizeof win->title);
+
+    window_count++;
+    redraw_pending = 1;  // compute_window_damage() sees a new rect
+    return 1;
+}
+
+int wm_client_popup_owner(void) {
+    for (int i = window_count - 1; i >= 0; i--)
+        if (windows[i].popup) return windows[i].client_pid;
+    return 0;
+}
+
+// The same topmost-first walk wm_handle_left_click() does, so the two
+// agree on which window a press is "in".
+int wm_client_popup_route(int owner, int mx, int my) {
+    for (int i = window_count - 1; i >= 0; i--) {
+        const struct window *w = &windows[i];
+        if (w->state == WIN_MINIMIZED) continue;
+        if (!uui_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
+        if (w->client_pid != owner) return 0;
+        if (w->popup) return 1;
+        return uui_hit(window_content_x(w), window_content_y(w),
+                       window_content_w(w), window_content_h(w), mx, my) ? 2 : 0;
+    }
+    return 0;
+}
+
+// Downward, because close_window() shifts everything above the slot.
+void wm_client_popups_dismiss(int owner) {
+    for (int i = window_count - 1; i >= 0; i--) {
+        if (i >= window_count) continue;
+        struct window *w = &windows[i];
+        if (!w->popup || w->client_pid != owner) continue;
+        struct win_event ev = {0};
+        ev.type = WIN_EV_POPUP_DONE;
+        ev.window = w->client_win;
+        win_events_push(owner, &ev);
+        unmap_client_window(w);
+        w->client_pid = 0;
+        close_window(i);
+    }
+    redraw_pending = 1;
+}
+
 // `front` is which of the window's two buffers now holds finished
 // pixels -- the kernel flipped it inside WIN_REQ_PRESENT, before this
 // event was queued, so by the time this runs the client is already
@@ -191,10 +317,7 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     // abi/win_proto.h's configure/ack.
     if (w > 0 && h > 0 && (w != win->client_w || h != win->client_h)) {
         wm_damage_rect(win->x, win->y, win->w, win->h);   // the rect being left
-        win->client_w = w;
-        win->client_h = h;
-        win->w = w + 2;
-        win->h = h + WM_TITLEBAR_H + 2;
+        adopt_content_size(win, w, h);
         wm_damage_rect(win->x, win->y, win->w, win->h);
         redraw_pending = 1;
         // An interactive resize sends its next proposal now: one FRAME
@@ -322,6 +445,7 @@ static int on_close_pid(int pid) {
     for (int i = window_count - 1; i >= 0; i--) {
         if (i >= window_count) continue;      // the list shrank under us
         if (windows[i].client_pid != pid) continue;
+        if (windows[i].popup) continue;       // asking a menu to close means nothing
         wm_request_close(i);
         asked++;
     }
@@ -658,6 +782,26 @@ void wm_client_chan_pump(void) {
                               WIN_PRESENT_W((uint32_t)m.b),
                               WIN_PRESENT_H((uint32_t)m.b));
             break;
+        case WIN_REQ_POPUP: {
+            // The third round trip: the client draws its menu at the
+            // answer, so it has to have one. Refused as -1 for a parent
+            // that is not the sender's, a slot already open, or nothing
+            // to map.
+            struct wmchan_msg r;
+            k_memset(&r, 0, sizeof r);
+            r.type = WIN_REQ_POPUP;
+            r.a = -1;
+            int px = 0, py = 0;
+            if (find_client_window(from, m.window) < 0 &&
+                on_popup_created(from, m.window, (uint32_t)m.c, m.a, m.b,
+                                 &m.pos, &px, &py)) {
+                r.a = (int)m.window;
+                r.b = px;
+                r.c = py;
+            }
+            uchan_server_reply(&g_chan, from, &r, sizeof r);
+            break;
+        }
         case WIN_REQ_DESTROY:
             on_window_destroyed(from, m.window);
             break;

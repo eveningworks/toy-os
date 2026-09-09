@@ -122,6 +122,7 @@ TOOLS = [
     ("scrollbar", "scrollbar_test.py", "scrollbar behaviour, per the guidelines"),
     ("pager", "pager_test.py", "the shared pager under /bin/less and /bin/doc"),
     ("menubar", "menubar_test.py", "menu bar, submenus and the status bar"),
+    ("popup", "popup_test.py", "a menu leaves its window: popup surfaces"),
     ("forcequit", "forcequit_test.py", "not-responding detection and force quit"),
     ("dialog", "dialog_test.py", "the confirm dialog, by pixel value"),
     ("sched", "sched_gui_test.py", "the desktop stays live while a process runs"),
@@ -193,6 +194,7 @@ COST_S = {
     "files": 31,       # measured 2026-08-23, first run
     "forcequit": 35,
     "menubar": 32,
+    "popup": 30,       # a resize, a drag, five settled frames
     "idle": 10,        # eight captures a third of a second apart
     "imgview": 30,     # two decodes, several settled frames, a wallpaper hop
     "wallpaper": 30,   # a resolution change out and back, plus five settled frames

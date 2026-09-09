@@ -98,23 +98,27 @@ this the obvious way), not from how much history it accumulated.
   with a single buffer it eventually catches a frame halfway through,
   and an app that clears its surface first then flashes its background.
   That was the File Manager's flicker on every selection. Five things:
-  - **BOTH BUFFERS STAY MAPPED, IN BOTH ADDRESS SPACES**, at `base` and
-    `base + WIN_BUFFER_HALF`. Remapping one address per present would
-    cost a page-table edit and a TLB flush per frame in two address
-    spaces, on the hot path; mapping both once makes a flip a number in
-    a message.
-  - **THE SCARCE THING IS CONTIGUOUS PHYSICAL MEMORY**, not address
-    space -- the slot is 64 MiB and the largest buffer is 8 MiB. Each
-    buffer is a `pmm_alloc_contiguous()` run, and that is already what
-    refuses a window when memory fragments.
-  - **A FAILED SECOND ALLOCATION IS A SINGLE-BUFFERED WINDOW, NOT A
-    REFUSED ONE.** It then tears exactly as every window did before,
-    which is strictly better than not opening. `front` stays 0 and the
-    flip is a no-op, so no caller needs a special case.
-  - **THE FLIP HAPPENS INSIDE THE REQUEST**, before anyone is told: a
-    client must know which buffer is safe the moment present returns,
-    and the compositor must never be pointed at one the client has
-    already started on.
+  - **BOTH BUFFERS STAY MAPPED, IN BOTH PROCESSES.** Each is a named shm
+    object the CLIENT creates (`WIN_BUF_NAME_FMT`: pid, slot, buffer)
+    and grants to the compositor, which maps it once and re-opens the
+    name only when a present carries a higher generation (a resize
+    replaced the object). Remapping per present would cost a page-table
+    edit and a TLB flush per frame in two address spaces, on the hot
+    path; mapping both once makes a flip a number in a message.
+  - **THE MEMORY IS THE CLIENT'S, SO THE CLIENT CLAMPS.** The kernel
+    used to refuse an oversized window because it was doing the
+    allocating; `uapp_resize()` bounds the size where the allocation is
+    now (`WIN_CLIENT_MAX_W/H`). Nothing is contiguous any more -- the
+    frames behind an shm object are whatever the allocator has.
+  - **A FAILED SECOND BUFFER IS A SINGLE-BUFFERED WINDOW, NOT A REFUSED
+    ONE.** It then tears exactly as every window did before, which is
+    strictly better than not opening. `front` stays 0 and the flip is a
+    no-op, so no caller needs a special case.
+  - **THE FLIP IS THE CLIENT'S, AND THE FRAME NAMES ITSELF**: a present
+    says which buffer, which object (its generation) and how big, so the
+    compositor adopts the geometry of what it is about to show and the
+    client knows which buffer is free the moment it has sent. There is
+    no second record of a buffer's size anywhere (`lib/uwmchan.h`).
   - **THE INVARIANT IS TESTED AS MEMORY, NOT AS A FLICKER.** Catching a
     torn frame means sampling fast enough to land inside one redraw --
     timing-dependent, and a check that passes more often the faster the
@@ -666,6 +670,49 @@ this the obvious way), not from how much history it accumulated.
   open-on-press exception in `docs/gui-guidelines.md` is about the
   primary button and does not carry over.
 
+- **A POPUP IS A SURFACE OF ITS CLIENT, PLACED BY THE COMPOSITOR, AND A
+  PRESS OUTSIDE THE CLIENT'S SURFACES DISMISSES IT.** `WIN_REQ_POPUP`
+  (`abi/win_proto.h`) opens a second window of the same client, anchored
+  to a rect of its parent in the PARENT's content coordinates, with the
+  side it prefers; the compositor flips/slides/clamps it against the work
+  area and replies with where it landed, in the same coordinates. No
+  chrome, no taskbar button, no saved geometry; the parent keeps the
+  active title bar and Alt+F4, the popup gets the keys. A press inside
+  one of the client's popups or inside its own window's content is
+  delivered; a press anywhere else closes every popup of that client
+  with `WIN_EV_POPUP_DONE` and is consumed. `docs/decisions.md` has the
+  comparison with `xdg_popup` and Win32 and the six calls. Five things
+  to know when touching it:
+  - **COORDINATES STAY THE PARENT'S; ONLY THE DRAWING MOVES.** A widget
+    keeps its popup rect in the window's content coordinates (the reply)
+    and draws with the level's origin SUBTRACTED into the surface
+    `uui_popup_surface()` hands back; uapp adds the offset back to any
+    pointer event that arrives on the popup slot. Hit-testing,
+    `describe` and every test rect are therefore untouched. Do not
+    convert rects to popup-local anywhere else -- two coordinate spaces
+    in one widget is how a click lands one row off.
+  - **A LEAVE CARRIES NO POSITION.** The compositor's "the pointer left
+    you" is a move to (-1,-1) in the surface's own coordinates; for a
+    popup, translated, that is a REAL point one pixel above-left of it
+    (Notepad's menu bar, so every submenu hover switched menus). uapp
+    drops a popup's out-of-bounds move, as `wl_pointer.leave` has no
+    coordinates. Keep it that way.
+  - **EVERY PATH THAT SHORTENS A MENU CHAIN GOES THROUGH `set_depth()`**
+    (`uui_menubar.c`). A level may own a surface, and writing `depth--`
+    leaves the compositor showing a menu nothing hit-tests any more.
+  - **AN EVENT FOR A SLOT NOT IN USE IS STALE AND IS DROPPED** -- the
+    client closed the popup while the press was in flight. Read as the
+    toplevel's it lands, with raw coordinates, on whatever is at that
+    point in the window.
+  - **A POPUP IS A ROW IN `windows[]`, NOT A `wm_overlay`**, so it
+    inherits the blit, the damage, the ping and the dead-client sweep,
+    and `gui windows --json` lists it (`popup: true`, `parent: <slot>`).
+    The four `window_content_*()` accessors are the one place "no
+    chrome" lives; `wm_focus_index()` is "the focused toplevel" and is
+    what every "frontmost" test in the WM now asks. `uui_popup.h` is the
+    seam a second widget (the dropdown, the tooltip) plugs into; a
+    refusal there means "draw it in the window", and every widget must
+    keep that path.
 - **THERE IS A SYSTEM CLIPBOARD, IT IS A RING-3 SERVICE
   (`/bin/clipboardd`, `lib/uclip.h`), IT HOLDS FILES OR TEXT, AND A
   PASTE COSTS NO SYSCALL.** Apps use `userland/lib/uclip.h` rather than
@@ -1275,9 +1322,9 @@ this the obvious way), not from how much history it accumulated.
   **`uui_statusbar`**. Three things to know: **the menu bar opens on
   PRESS**, the one deliberate bend in the commit-on-release rule (the
   item still commits on release -- see `docs/decisions.md`); **a popup
-  is clamped to a bounds rect the app passes in**, which is the client's
-  window today and becomes the screen when `WIN_REQ_POPUP` lands, so the
-  flip/slide/clamp code is already the right code; and **there are no
+  is a SURFACE of its own now** (the entry below; the bounds rect the app
+  passes in is the in-window fallback when no surface is granted); and
+  **there are no
   Alt+letter mnemonics on purpose** -- Alt is an ESC prefix here, so
   Alt-F is ambiguous with Esc, and `KEY_F10` focuses the bar instead.
   **A file needed by both the kernel and a client is COMPILED TWICE,

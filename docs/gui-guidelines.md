@@ -418,13 +418,14 @@ a file manager deletes the wrong file.
 every draw and hit test. There is deliberately no "refresh the menu"
 call to forget.
 
-**Where a popup is allowed to go is a parameter.** Windows constrains a
-menu against the monitor work area and KDE lets the compositor resolve
-an `xdg_popup` positioner; a TWP client can draw only inside its own
-window, so the widget resolves the same flip/slide/clamp against a
-bounds rectangle the app supplies. Pass it the content rect. See
-`docs/decisions.md` for why that divergence is the whole difference and
-what changes when TWP grows a popup surface.
+**A menu is its own surface, placed by the compositor.** Windows
+constrains a menu against the monitor work area and KDE lets the
+compositor resolve an `xdg_popup` positioner; a TWP client's menu is a
+popup surface (`WIN_REQ_POPUP`) the compositor flips/slides/clamps
+against the work area, so it may leave the window, and a press outside
+the client's surfaces dismisses it and is consumed. Still pass
+`uui_menubar_set_bounds()` the content rect: it is the in-window
+fallback when no surface is granted. See `docs/decisions.md`.
 
 **Alt+letter mnemonics do not exist here and should not be added while
 Alt is an ESC prefix** (`api/keyboard.h`): Alt-F arrives as ESC then

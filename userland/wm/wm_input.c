@@ -134,6 +134,21 @@ void wm_handle_left_click(int mx, int my) {
     // and the tray hit-test never runs.
     if (wm_overlay_click(mx, my)) return;
 
+    // THE POPUP GRAB, before the taskbar and the windows: a press
+    // anywhere but one of the owning client's own surfaces dismisses its
+    // popups and goes no further -- Wayland's and Win32's rule both, and
+    // what makes a click on the desktop behind an open menu close the
+    // menu instead of also selecting an icon. A press inside the client's
+    // other windows falls through and is delivered; the client decides
+    // what it means, as it always has (ui/uui_menubar.c's press).
+    {
+        int owner = wm_client_popup_owner();
+        if (owner && wm_client_popup_route(owner, mx, my) == 0) {
+            wm_client_popups_dismiss(owner);
+            return;
+        }
+    }
+
     if (my >= screen_h - taskbar_h) {
         int ty = screen_h - taskbar_h;
         int sbw = start_btn_w();
@@ -207,7 +222,7 @@ void wm_handle_left_click(int mx, int my) {
         if (w->state == WIN_MINIMIZED) continue;
         if (!uui_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
 
-        if (my < w->y + WM_TITLEBAR_H) {
+        if (!w->popup && my < w->y + WM_TITLEBAR_H) {
             struct btn_rects r = title_buttons(w);
             // Windows/KDE-style delayed commit: mouse-down here only
             // ARMS the button (shows a pressed visual) -- the actual
@@ -482,6 +497,16 @@ void wm_handle_right_click(int mx, int my) {
     }
 
     wm_overlay_close_others(0); // a right-click anywhere dismisses a popup, as a menu does
+
+    // And a client's popup, by the same rule as the primary button --
+    // see wm_handle_left_click().
+    {
+        int owner = wm_client_popup_owner();
+        if (owner && wm_client_popup_route(owner, mx, my) == 0) {
+            wm_client_popups_dismiss(owner);
+            return;
+        }
+    }
 
     if (my >= screen_h - taskbar_h) {
         taskbar_handle_right_click(mx, my);
@@ -966,12 +991,17 @@ void wm_update_content_hover(int mx, int my, uint8_t buttons) {
 
     int now = -1;
     if (!suppressed) {
+        // While a client has a popup up, motion reaches only ITS
+        // surfaces (the grab, abi/win_proto.h): sliding along its menu
+        // bar still switches menus, but nothing else lights up.
+        int owner = wm_client_popup_owner();
         for (int i = window_count - 1; i >= 0; i--) {
             struct window *w = &windows[i];
             if (w->state == WIN_MINIMIZED) continue;
             if (!uui_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
+            if (owner && w->client_pid != owner) break;
             // Over this window, but the title bar isn't app content.
-            if (my >= w->y + WM_TITLEBAR_H) now = i;
+            if (w->popup || my >= w->y + WM_TITLEBAR_H) now = i;
             break; // topmost hit wins either way -- windows below are covered
         }
     }

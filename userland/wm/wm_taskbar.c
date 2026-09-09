@@ -140,8 +140,16 @@ static int same_app(int a, int b) {
 // member, which is what keeps a button from jumping left along the
 // strip every time one of its siblings is raised.
 static int starts_group(int i) {
+    if (windows[i].popup) return 0; // a menu is not a window the strip lists
     for (int j = 0; j < i; j++) if (same_app(i, j)) return 0;
     return 1;
+}
+
+// How many windows the strip has to fit -- popups are not among them.
+static int listed_count(void) {
+    int n = 0;
+    for (int i = 0; i < window_count; i++) if (!windows[i].popup) n++;
+    return n;
 }
 
 static int group_count(void) {
@@ -156,13 +164,15 @@ static int group_count(void) {
 // like whichever of its windows happened to open first.
 static int group_front(int i) {
     int front = i;
-    for (int j = i + 1; j < window_count; j++) if (same_app(i, j)) front = j;
+    for (int j = i + 1; j < window_count; j++)
+        if (!windows[j].popup && same_app(i, j)) front = j;
     return front;
 }
 
 static int group_size(int i) {
     int n = 1;
-    for (int j = i + 1; j < window_count; j++) if (same_app(i, j)) n++;
+    for (int j = i + 1; j < window_count; j++)
+        if (!windows[j].popup && same_app(i, j)) n++;
     return n;
 }
 
@@ -223,18 +233,19 @@ static void make_label(char *dst, int cap, const char *src, int w, int count) {
 
 int taskbar_layout(struct taskbar_button *out, int max) {
     g_hidden = 0;
-    if (!out || max <= 0 || window_count <= 0) { g_hidden = window_count > 0 ? window_count : 0; return 0; }
+    int listed = listed_count();
+    if (!out || max <= 0 || listed <= 0) { g_hidden = listed; return 0; }
 
     int x0 = 4 + start_btn_w() + 8;
     int x1 = tray_left() - 8;
     int avail = x1 - x0;
     int natural = win_btn_w(), floor_w = btn_floor();
-    if (avail < floor_w) { g_hidden = window_count; return 0; }
+    if (avail < floor_w) { g_hidden = listed; return 0; }
 
     // Shrink first, group only if shrinking is not enough. Two windows
     // of the same app stay two buttons while there is room for two --
     // grouping is a response to pressure, not a policy.
-    int n = window_count, grouped = 0;
+    int n = listed, grouped = 0;
     int w = fit_width(avail, n, natural);
     if (w < floor_w) {
         n = group_count();
@@ -266,6 +277,7 @@ int taskbar_layout(struct taskbar_button *out, int max) {
 
     int count = 0;
     for (int i = 0; i < window_count; i++) {
+        if (windows[i].popup) continue;
         if (grouped && !starts_group(i)) continue;
         int x = x0 + count * (w + TB_GAP);
         int members = grouped ? group_size(i) : 1;
@@ -357,7 +369,7 @@ static void activate(int i) {
         // the user cannot see does nothing they can perceive, and this
         // button is the only handle such a window has left.
         bring_to_front(i);
-    } else if (i == window_count - 1) {
+    } else if (i == wm_focus_index()) {
         windows[i].state = WIN_MINIMIZED;
     } else {
         bring_to_front(i);

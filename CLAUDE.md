@@ -729,6 +729,7 @@ whenever a headline here tells you something you did not already know.
 - **A TOOLBAR IS `uui_toolbar`, AND ITS STATE CALLBACK IS THE MENU BAR'S**
 - **A MENU BAR IN AN APP WITH ROUTED WIDGETS MUST BE `uui_menubar_ops`, NOT HAND-ROUTED**
 - **ONE MENU WIDGET SERVES A BAR AND A CONTEXT MENU: `uui_menubar_open_at()`, opened on the secondary RELEASE**
+- **A POPUP IS A SURFACE OF ITS CLIENT, PLACED BY THE COMPOSITOR, AND A PRESS OUTSIDE THE CLIENT'S SURFACES DISMISSES IT** -- `WIN_REQ_POPUP`/`WIN_EV_POPUP_DONE`, `ui/uui_popup.h`; coordinates stay the parent's and only the drawing moves, a leave carries no position
 - **A TAB IS A SESSION, AND `uui_tabs` IS THE STRIP**
 - **A TITLE COMES FROM THE SHELL, AS AN OSC**
 - **TERMINAL IS A TERMINAL EMULATOR, NOT A SHELL WITH A WINDOW**
@@ -1427,7 +1428,7 @@ cost".
   `idle_desktop_test.py`,
   `imgview_test.py`, `keyup_test.py`, `menubar_test.py`,
   `mines_test.py`, `notepad_client_test.py`, `osk_test.py`,
-  `player_test.py`,
+  `player_test.py`, `popup_test.py`,
   `pager_test.py`,
   `resize_stride_test.py`,
   `sched_gui_test.py`, `screen_surface_test.py`, `scrollbar_test.py`,

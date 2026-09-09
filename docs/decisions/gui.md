@@ -1293,13 +1293,18 @@ other axis, clamp last -- against a BOUNDS RECTANGLE the caller passes
 in (`uui_menubar_set_bounds`), and Notepad passes its content rect.
 
 The point of writing it that way rather than hardcoding the window: that
-rectangle is the entire difference. When TWP grows a popup surface
-(`docs/roadmap.md`, M41's `WIN_REQ_POPUP`) the widget is handed the
-screen rect instead and the placement code is already correct -- one
-rect, not a rewrite. The divergence is visible only on a window small
-enough that a menu would have overflowed it, which is why shipping the
-widget first and the protocol second was the phasing chosen rather than
-building both at once.
+rectangle is the entire difference. The divergence was visible only on a
+window small enough that a menu would have overflowed it, which is why
+shipping the widget first and the protocol second was the phasing chosen
+rather than building both at once.
+
+**The protocol landed on 2026-09-09** -- see "A popup is a surface of
+its client" below. The bounds rectangle is now the FALLBACK: the level
+is drawn in-window against it only when no popup surface is granted.
+What changed in the widget was not the placement (the compositor does
+that now) but the drawing, which was the half this entry did not
+foresee: a level's rect stays in the window's coordinates and the draw
+call subtracts it.
 
 ## A menu bar opens on press, which is the one place the commit-on-release rule bends
 
@@ -6590,3 +6595,102 @@ describes. The alternatives here were a validating handshake (more
 messages, same failure mode) or having the compositor measure the object
 itself -- which it cannot, since an shm object's page count is rounded
 and does not name a width.
+
+## A popup is a surface of its client, placed by the compositor, and a press outside the client's surfaces dismisses it
+
+`abi/win_proto.h` (`WIN_REQ_POPUP`, `struct win_popup_pos`,
+`WIN_EV_POPUP_DONE`), `userland/wm/wm_client.c` (`on_popup_created()`,
+`place_popup()`, `wm_client_popup_route()`), `userland/ui/uui_popup.h`,
+`userland/ui/uapp.c`, `userland/ui/uui_menubar.c`; landed 2026-09-09.
+`tools/popup_test.py` is the check.
+
+**What real systems do.** Under Wayland a menu is an `xdg_popup`: a
+child surface with an `xdg_positioner` -- an anchor rect in the PARENT's
+coordinates, a gravity, and flip/slide/resize constraint adjustments --
+that the COMPOSITOR resolves against the work area, answering with a
+`configure` that says where it landed. `xdg_popup.grab` gives the popup
+keyboard focus and a pointer grab; a press outside dismisses the whole
+chain with `popup_done`, and that press is consumed. wlroots and KWin
+stack popups as children of the parent's scene node. On Windows a menu
+is an owned `#32768` HWND kept above its owner, `TrackPopupMenu`
+captures the mouse, and a click outside cancels via `WM_CANCELMODE` --
+consumed. Neither is bounded by its parent window, neither has chrome or
+a taskbar button, and in both the OWNER stays the active window.
+
+toy-os follows that shape. Six calls, each with the obvious alternative
+it declined:
+
+1. **The compositor places the popup.** The client sends the anchor in
+   its parent's content coordinates and the side it prefers; the reply
+   says where the popup landed, in the same coordinates. The alternative
+   was the client resolving placement against the screen, which needs
+   the compositor to push the window's screen position on every move --
+   X11's shape, a new event on the drag path, and a race between the
+   move and the menu. A client here never learns its screen position,
+   and `place_popup()` is the widget's own flip/slide/clamp against the
+   work area instead of the window, so a menu keeps clear of the taskbar
+   the widget cannot see.
+2. **A popup is a row in `windows[]`, not a `wm_overlay`.** As a window
+   with `popup` set it inherits the blit, the damage tracking, the ping,
+   the dead-client sweep and the buffer mapping for nothing; the four
+   `window_content_*()` accessors answer the whole rect, which is the one
+   place "no chrome" lives, and the taskbar and the geometry file skip it.
+   An overlay would have meant painting a client's pixels from WM-owned
+   draw code and a full-screen repaint every frame while open (the cost
+   the Start menu was converted away from). What it gives up: a popup is
+   drawn below the taskbar and cannot cover it. WM popups already keep
+   clear of it (`wm_popup_place()`), so nothing on this desktop does.
+3. **Where a press lands decides three ways, and the middle one is the
+   subtle one.** Inside one of the owner's popups: delivered there.
+   Inside another surface OF THE SAME CLIENT (its window's content):
+   delivered normally, and the compositor dismisses nothing -- the client
+   decides, which is how sliding to another menu title switches menus
+   and how `uui_menubar_press()`'s "anything else closes" keeps working
+   unchanged. Anywhere else -- another window, the desktop, the taskbar,
+   the parent's own title bar: every popup of that client is closed,
+   each is told with `WIN_EV_POPUP_DONE`, and the press goes no further.
+   That is wlroots' rule exactly (a `wlr_seat_pointer_send_button` that
+   reaches a surface of the grabbing client returns a serial; one that
+   reaches nobody ends the grab), and it was chosen over "deliver the
+   dismissing press to the parent too", which makes a button behind a
+   menu fire on the click that closed the menu. Motion follows the same
+   split: while a grab is up, hover reaches only the owner's surfaces.
+4. **The parent keeps focus; the popup gets the keys.** `wm_focus_index()`
+   is the topmost TOPLEVEL, so the active title bar, the taskbar tint
+   and Alt+F4 stay the parent's (Alt+F4 must not ask a menu to close),
+   while `wm_key_target()` routes the keys to the client's topmost popup,
+   as `xdg_popup.grab` does. No focus event is sent to the parent when a
+   popup opens: it did not lose anything.
+5. **In the toolkit, coordinates stay the parent's and only the drawing
+   moves.** `ui/uui_popup.h` is the seam (GTK's `GdkPopup`): a provider
+   uapp installs, a widget asks through, and a refusal means "draw it in
+   the window". A `uui_menu_level` keeps its rect in the window's content
+   coordinates -- the compositor's reply -- so hit-testing, `describe`
+   and every test rect are untouched; `draw_level_at()` subtracts the
+   level's origin when the target is the popup's own surface. uapp does
+   the inverse on the way in: a pointer event arriving on a popup slot is
+   moved by that slot's offset before any widget sees it. Two rules fell
+   out of the first run. **A LEAVE CARRIES NO POSITION**: the
+   compositor says "the pointer left you" as a move to (-1,-1) in the
+   surface's coordinates, harmless on the toplevel and a REAL point one
+   pixel above-left of a popup once translated -- the menu bar, in
+   Notepad's case, so every submenu hover switched menus. It is dropped
+   for a popup, as `wl_pointer.leave` has no coordinates. And **AN EVENT
+   FOR A SLOT NOT IN USE IS STALE** -- the client closed the popup while
+   the press was in flight -- and is dropped rather than read as the
+   toplevel's with raw coordinates.
+6. **A popup is not drawn until its first present.** The buffer opened
+   at create holds whatever the client has drawn so far, which for one
+   frame is nothing; Wayland maps a surface on its first commit for the
+   same reason. `on_window_created()` still has the flash for toplevels
+   and is left alone -- a window opening is a different moment from a
+   menu dropping.
+
+Two consequences worth stating. **`WIN_CLIENT_MAX` is 8 now and it sizes
+the CLIENT's table only** -- the compositor grows its list on demand and
+never enforced it; a toplevel plus a five-deep menu is six surfaces.
+And **the surface serves one widget so far.** `uui_dropdown`'s list and
+`uui_toolbar`'s tooltip still draw in-window and are the next two
+callers (`docs/roadmap.md`); the tooltip is the second copy of
+flip/clamp in the toolkit and the one that flips against the surface's
+own size.

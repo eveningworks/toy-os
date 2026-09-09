@@ -628,6 +628,20 @@ remnant of the window system. The same is true of the compositor ROLE:
 `win_input.c` and `win_surface.c` both key off it, and neither is
 window state.
 
+### Stage 7 -- popup surfaces -- DONE 2026-09-09
+
+Not in the original staging: it became possible the moment stage 6b
+left the compositor as the only party that knows what a window is.
+`WIN_REQ_POPUP` is the third round trip -- a second surface of the same
+client, anchored to a rect of its parent, placed by the compositor
+against the work area, dismissed with `WIN_EV_POPUP_DONE` by a press
+outside every surface of the client. The design calls (why the
+compositor places it, why it is a row in `windows[]` and not an overlay,
+the three-way delivery rule, and the two toolkit rules the first run
+taught) are written in full in `docs/decisions.md`, "A popup is a
+surface of its client". What it needed from the kernel: nothing. The
+event queue carries `window` already, and the shm name carried the slot.
+
 ## Out of scope
 
 - **Moving input.** A compositor reading raw devices itself is what
@@ -639,6 +653,8 @@ window state.
 
 ## Revision history
 
+- 2026-09-09 (later): stage 7, popup surfaces -- the first thing built
+  ON the emptied kernel rather than to empty it.
 - 2026-09-09: stages 6a and 6b built -- the kernel's window table is
   gone. The 6a/6b boundary moved, and why is under 6a's own heading.
 - 2026-09-08: written. Stages 0 through 5b built the same day. The carriage

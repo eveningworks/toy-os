@@ -200,6 +200,12 @@
                             // TYPE as well as the target is what keeps
                             // "a client cannot synthesise input" true.
 #define WIN_EV_KEY_UP    27
+#define WIN_EV_POPUP_DONE 33 // `window`: a popup of this client the compositor
+                             // DISMISSED -- a press landed outside every
+                             // surface of the client's. It is already off the
+                             // screen; the client releases its buffers and
+                             // closes whatever the popup was showing. Never
+                             // sent for a popup the client destroyed itself.
 
 #define WIN_EV_RAW_MOUSE 10 // a, b: SCREEN position; mods: button bits
                             // (bit0 = left, bit1 = right), level state.
@@ -401,8 +407,8 @@
 // read straight out of a shared ring by the client.
 struct win_event {
     uint32_t type;      // WIN_EV_*
-    uint32_t window;    // which of this client's windows (0 until a
-                        // client can own more than one -- see M41)
+    uint32_t window;    // which of this client's windows: 0 is the
+                        // toplevel a uapp opens, higher slots its popups
     int32_t  a;         // type-dependent, see the WIN_EV_* comments
     int32_t  b;
     uint32_t mods;      // KEY_MOD_* / button bits, per event type
@@ -1076,6 +1082,43 @@ struct win_debug_msg {
 // --- window behaviour hints (WIN_REQ_HINTS's `a`) ---------------------
 #define WIN_HINT_RESIZABLE 0x01 // the user may resize this window
 
+// --- popup surfaces (WIN_REQ_POPUP) ------------------------------------
+//
+// A POPUP IS A SECOND SURFACE OF THE SAME CLIENT, anchored to a rect of
+// one of its windows and composited above it -- xdg_popup with an
+// xdg_positioner, Win32's #32768 menu HWND. It has no chrome, no taskbar
+// button and no saved geometry, and the COMPOSITOR places it: the client
+// says where the anchor is in its PARENT's content coordinates and which
+// side it prefers, and the reply says where the popup landed, in the
+// same coordinates. A client never learns its own screen position.
+//
+// The adjustment is fixed -- flip to the other side when the preferred
+// one does not fit, then slide along the other axis, then clamp -- which
+// is the vocabulary every menu here already resolved against its own
+// window (ui/uui_menubar.c). `reserved` is where flags go if a second
+// caller ever wants a different one.
+//
+// THE GRAB IS THE COMPOSITOR'S. While a client has a popup up, a press
+// inside one of its popups is delivered there; a press inside another
+// of that client's windows is delivered normally (the client decides,
+// as GTK does under a Wayland grab); a press anywhere else dismisses
+// every popup of that client with WIN_EV_POPUP_DONE and is CONSUMED.
+// Motion reaches only that client's surfaces meanwhile.
+#define WIN_REQ_POPUP 28 // `window`: the slot the client PROPOSES for the
+                          // popup, its buffers already named after it (as
+                          // CREATE); a/b: w/h; c: the PARENT slot; `pos`
+                          // (lib/uwmchan.h): the positioner below. REPLIES
+                          // a = the granted slot or -1, b/c = the popup's
+                          // x/y relative to the parent's content origin.
+
+struct win_popup_pos {
+    int32_t  ax, ay, aw, ah;  // the anchor rect, in the PARENT's content coords
+    uint32_t gravity;         // WIN_POPUP_*
+    uint32_t reserved;        // must be 0
+};
+#define WIN_POPUP_BELOW 0 // left edges aligned, below the anchor; flips above
+#define WIN_POPUP_RIGHT 1 // top edges aligned, right of the anchor; flips left
+
 // --- resize is a CONFIGURE/ACK HANDSHAKE ------------------------------
 //
 // The obvious implementation -- the server resizes the window when the
@@ -1226,7 +1269,10 @@ struct win_request_msg {
                                  ((uint32_t)(h) & 0xFFFFu))
 #define WIN_PRESENT_W(m)       ((int)(((uint32_t)(m) >> 16) & 0xFFFFu))
 #define WIN_PRESENT_H(m)       ((int)((uint32_t)(m) & 0xFFFFu))
-#define WIN_CLIENT_MAX    4 // windows one client may hold at once
+#define WIN_CLIENT_MAX    8 // surfaces one client may hold at once: a
+                            // toplevel plus its popups. Sizes the client's
+                            // own table (ui/uapp.c); the compositor grows
+                            // its list on demand and does not enforce it
 
 // A PRESENT EVENT'S `b`: which buffer is now the front one, and that
 // buffer's GENERATION -- the number that goes up each time the client

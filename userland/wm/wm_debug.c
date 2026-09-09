@@ -258,7 +258,7 @@ static void cmd_windows(struct dbg_out *o, int json) {
     if (json) {
         dbg_out_write(o, "{\"count\":");
         dbg_out_printf(o, "%d,\"focused\":%d,\"windows\":[", window_count,
-                     window_count > 0 ? window_count - 1 : -1);
+                     wm_focus_index());
         // Enough for `],"listed":NNN,"truncated":true}` whatever happens
         // in the loop -- see dbg_out_reserve(). `count` above is the real
         // total, so a caller can always tell how much it is missing.
@@ -282,6 +282,12 @@ static void cmd_windows(struct dbg_out *o, int json) {
             // so a test asserting "this really is a ring-3 client" would
             // have nothing to read.
             dbg_out_printf(o, "\"client_pid\":%d,", w->client_pid);
+            // A POPUP SURFACE and the slot it hangs off (abi/win_proto.h's
+            // WIN_REQ_POPUP); -1 for an ordinary window. This is how a
+            // test tells a menu that left its window from a window.
+            dbg_out_printf(o, "\"popup\":%s,\"parent\":%d,",
+                         w->popup ? "true" : "false",
+                         w->popup ? (int)w->popup_parent : -1);
             // The TITLE-BAR ICON'S OWN RECT, not a formula a tool can
             // re-derive: which square is drawn AND which square is
             // clickable is one answer (title_icon(), see
@@ -312,7 +318,7 @@ static void cmd_windows(struct dbg_out *o, int json) {
                          w->client_front, w->client_gen[w->client_front]);
             dbg_out_printf(o, "\"state\":\"%s\",\"focused\":%s,\"resizable\":%s}",
                          state_name(w->state),
-                         (i == window_count - 1) ? "true" : "false",
+                         (i == wm_focus_index()) ? "true" : "false",
                          w->resizable ? "true" : "false");
             // ALL OR NOTHING: a half-written element in front of the
             // closing bracket is as unparseable as no bracket at all.
@@ -342,7 +348,8 @@ static void cmd_windows(struct dbg_out *o, int json) {
         col_int(o, window_content_w(w), 5); col_int(o, window_content_h(w), 5);
         dbg_out_write(o, " ");
         dbg_out_write(o, state_name(w->state));
-        dbg_out_write(o, (i == window_count - 1) ? " (focused)\r\n" : "\r\n");
+        if (w->popup) dbg_out_write(o, " popup");
+        dbg_out_write(o, (i == wm_focus_index()) ? " (focused)\r\n" : "\r\n");
     }
 }
 
@@ -821,7 +828,7 @@ static void cmd_state(struct dbg_out *o, int json) {
         // -1 when there are no windows at all.
         dbg_out_printf(o, "\"windows\":%d,\"front_pid\":%d,",
                      window_count,
-                     window_count > 0 ? windows[window_count - 1].client_pid : -1);
+                     wm_focus_index() >= 0 ? windows[wm_focus_index()].client_pid : -1);
         // `shape` is the resolved WM_CURSOR_* (wm_internal.h), which is
         // how a test checks what a client asked for without having to
         // recognise a sprite in a screenshot.
@@ -1214,7 +1221,7 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
             dbg_out_write(o, "usage: gui resize W H\r\n");
             return 1;
         }
-        int idx = window_count - 1;   // topmost is the focused one
+        int idx = wm_focus_index();   // the focused TOPLEVEL, never a popup
         if (idx < 0) { dbg_out_write(o, "gui: no window\r\n"); return 1; }
         wm_resize_client(idx, w, h);
         dbg_out_printf(o, "gui: asked \"%s\" for %dx%d\r\n",

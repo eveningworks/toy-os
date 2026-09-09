@@ -77,6 +77,7 @@ static int parse_geom(const char *s, int *x, int *y, int *w, int *h) {
 }
 
 void wm_geometry_save(const struct window *win) {
+    if (win->popup) return; // placed by the compositor every time, never remembered
     const char *key = geom_key(win);
     if (!key || !remembers(key)) return;
 

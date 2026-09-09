@@ -1087,7 +1087,7 @@ static void draw_taskbar(void) {
     int nb = taskbar_layout(btns, 64);
     for (int b = 0; b < nb; b++) {
         int i = btns[b].first;
-        int is_front_and_visible = (i == window_count - 1 && windows[i].state != WIN_MINIMIZED);
+        int is_front_and_visible = (i == wm_focus_index() && windows[i].state != WIN_MINIMIZED);
         uint32_t wbg = is_front_and_visible ? ugfx_rgb(70, 70, 90) : ugfx_rgb(50, 50, 60);
 
         // AN ICON WHERE THERE IS ONE, and the label shifted past it --
@@ -1323,11 +1323,24 @@ static void render_scene(int mx, int my, int has_damage) {
     // window's rect too, not just the newly-promoted one -- that gap
     // was harmless before this skip existed (the call still happened,
     // just clipped away) and became a real visible bug once it didn't.
+    int focus = wm_focus_index(); // the topmost TOPLEVEL -- a popup's parent stays active
     for (int i = 0; i < window_count; i++) {
         if (windows[i].state == WIN_MINIMIZED) continue;
         if (has_damage && !window_intersects_damage(&windows[i])) continue;
+        if (windows[i].popup) {
+            // NO CHROME, NO CORNERS, NO GRIP -- and nothing at all until
+            // the client's first present: the buffer opened at create is
+            // whatever the client has drawn so far, which for one frame
+            // is nothing, and a menu that flashes black before it
+            // appears is the flash Wayland's map-on-first-commit avoids.
+            if (windows[i].client_gen[windows[i].client_front] == 0) continue;
+            clip_to_window_content(&windows[i], has_damage);
+            wm_client_draw(&windows[i]);
+            apply_scene_clip(has_damage);
+            continue;
+        }
         corners_save(&windows[i]);   // what is beneath, before this window covers it
-        draw_window_chrome(&windows[i], i, i == window_count - 1);
+        draw_window_chrome(&windows[i], i, i == focus);
         if (windows[i].app && windows[i].app->on_draw) {
             // Only the app's own draw is confined to its content area.
             // The chrome above and the grip below are the WM's own

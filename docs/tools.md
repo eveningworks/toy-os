@@ -1898,6 +1898,23 @@ window without going through it will find its layout polls timing out.
   exactly the drag-off check, and a dismissing click that falls through
   leaves "the menu closed" GREEN and reddens only the caret measurement.
   Run it after touching either widget.
+- **`popup_test.py`** -- a menu LEAVES its window: popup surfaces
+  (`WIN_REQ_POPUP`, `userland/wm/wm_client.c`, `ui/uui_popup.h`),
+  driven through Notepad shrunk to its minimum. 18 checks: the
+  compositor lists the open menu as a popup entry of Notepad's, its rect
+  leaves the parent's content, the popup background is on screen at a
+  point the parent does not own (sampled as NOT that colour before the
+  menu opened), a row beyond the parent's edge still commits, a press on
+  another window closes the menu and does NOT raise that window, a press
+  on the desktop dismisses through the compositor and the client agrees
+  (`WIN_EV_POPUP_DONE`), and near the taskbar the menu flips above its
+  title and stays clear of the panel. Two positive controls in its
+  docstring: a provider that refuses every surface reddens the surface
+  checks and nothing else (the menu still works in-window, so a check
+  green under it was measuring the menu); a grab that delivers every
+  press reddens the three "another window" checks. Run it after
+  touching `wm_client.c`'s popup path, `uapp.c`'s surface table or
+  `uui_menubar.c`'s open/close paths.
 - **`forcequit_test.py`** -- not-responding detection and force quit
   (TWP's ping/pong, `scheduler_kill()`, the dialog, and the slot
   reaping). 15 checks. The design point it encodes: a client that

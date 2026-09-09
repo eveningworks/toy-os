@@ -188,6 +188,17 @@ struct window {
     // CONTENT area (client_cursor_at(), wm_render.c) -- that clamp is
     // what stops a wedged client stranding a shape over the desktop.
     int client_cursor;
+
+    // A POPUP SURFACE (abi/win_proto.h's WIN_REQ_POPUP): a second window
+    // of the same client with NO CHROME -- window_content_*() answer the
+    // whole rect -- no taskbar button, no saved geometry, placed by the
+    // compositor against the work area and dismissed by a press outside
+    // every surface of its client. `popup_parent` is the slot it was
+    // anchored to. Created at the top of the list; it never needs to
+    // follow its parent because the press that would move the parent
+    // dismisses it first.
+    int popup;
+    uint32_t popup_parent;
 };
 
 // Height of a window's title bar in pixels. NOT the taskbar's, which is

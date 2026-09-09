@@ -491,9 +491,9 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Client windows in the WM's own window list, with real chrome, focus, z-order and a taskbar button~~ done
 - [x] ~~An app model for clients (`uapp`)~~ done
 - [x] ~~A window's pixels need not be CONTIGUOUS~~ DONE 2026-09-08 -- a nameless shm object, not one contiguous run
-- [ ] Growable client buffers: the rest of it -- the buffer is still mapped up front, and `WIN_BUFFER_STRIDE` still caps a window below 4K
-- [ ] Multiple windows per process: the protocol already carries window ids and `win_server.c` already tracks
-- [ ] Move the transport to a shared-memory ring the client maps once -- `docs/winserver-ring3-design.md` stage 3
+- [x] ~~Growable client buffers: the rest of it~~ DONE 2026-09-08 -- a buffer is the client's own shm object; the stride is gone
+- [x] ~~Multiple windows per process~~ DONE 2026-09-09 -- a popup is the second surface; `WIN_CLIENT_MAX` is 8
+- [x] ~~Move the transport to a shared-memory ring the client maps once~~ DONE 2026-09-09 -- `lib/uwmchan.h`, stage 6b
 - [x] ~~Force-close an unresponsive client~~ done
 - [x] ~~Client-side window resize~~ done
 - [x] ~~Empty ring 0 of applications first~~ done
@@ -516,7 +516,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Migrate Terminal to `userland/`~~ done
 - [x] ~~Geometry primitives, so a client can draw more than rectangles and text~~ done
 - [x] ~~A not-responding timeout and a way to force-quit a client that ignores `WIN_EV_CLOSE`~~ done
-- [ ] `WIN_REQ_POPUP` -- a popup SURFACE, so a menu can leave its window
+- [x] ~~`WIN_REQ_POPUP` -- a popup SURFACE, so a menu can leave its window~~ DONE 2026-09-09 -- placed by the compositor
+- [ ] `uui_dropdown`'s list and `uui_toolbar`'s tooltip onto popup surfaces -- the next callers of `ui/uui_popup.h`
 - [ ] Fill a POLYGON, not just an ellipse
 - [x] ~~Clipping RECTANGLES as a first-class concept in `ugfx`~~ DONE 2026-08-18
 - [x] ~~An animation/timer event, so a client does not have to poll~~ DONE 2026-08-18 -- `tick_ms` / `WIN_EV_TIMER`

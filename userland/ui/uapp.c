@@ -6,6 +6,7 @@
 #include "lib/uchan.h"
 #include "lib/uwmchan.h"
 #include "ui/uui_route.h"
+#include "ui/uui_popup.h"   // the popup-surface provider, installed at open
 #include "ui/uui_focus.h"   // desc.focus -- keyboard focus ring
 #include "ui/ulog.h"        // uapp_log_layout()
 #include "setting_abi.h" // desktop.layout_log -- the gate below
@@ -22,23 +23,46 @@
 // (docs/winserver-ring3-design.md, stage 5).
 #define UAPP_BUFS 2
 
-static void *g_px[UAPP_BUFS];
-static uint64_t g_px_bytes[UAPP_BUFS];
-// WHAT EACH BUFFER IS CURRENTLY SIZED FOR. **NOT derivable from
-// g_px_bytes**, which is page-rounded: a one-pixel width change usually
-// leaves the rounded length identical, so a comparison on bytes reports
-// a real resize as "nothing to do" -- and the server then holds the old
-// width while the client draws at the new one, which the compositor
-// blits as a diagonal shear.
-static int g_px_w[UAPP_BUFS], g_px_h[UAPP_BUFS];
-// WHICH OBJECT IS BEHIND EACH BUFFER'S NAME. The name is the slot and
-// never changes; the object under it is replaced on every resize, and
-// this is how the compositor knows to re-open. **THE CREATOR COUNTS
-// IT** -- the kernel used to, from a message the client had to remember
-// to send, which is one record too many for a fact only this side can
-// observe.
-static uint32_t g_px_gen[UAPP_BUFS];
-static int g_slot;
+// ONE SURFACE THE COMPOSITOR SHOWS: the toplevel window in slot 0, a
+// popup (ui/uui_popup.h) in any other. Indexed by SLOT, which is also
+// the `window` every event names and the number in the buffer's shm
+// name -- one number, three uses, nothing to keep in step.
+struct uapp_surf {
+    int used;
+    void *px[UAPP_BUFS];
+    uint64_t px_bytes[UAPP_BUFS];
+    // WHAT EACH BUFFER IS CURRENTLY SIZED FOR. **NOT derivable from
+    // px_bytes**, which is page-rounded: a one-pixel width change usually
+    // leaves the rounded length identical, so a comparison on bytes
+    // reports a real resize as "nothing to do" -- and the server then
+    // holds the old width while the client draws at the new one, which
+    // the compositor blits as a diagonal shear.
+    int px_w[UAPP_BUFS], px_h[UAPP_BUFS];
+    // WHICH OBJECT IS BEHIND EACH BUFFER'S NAME. The name is the slot and
+    // never changes; the object under it is replaced on every resize,
+    // and this is how the compositor knows to re-open. **THE CREATOR
+    // COUNTS IT** -- the kernel used to, from a message the client had
+    // to remember to send, which is one record too many for a fact only
+    // this side can observe.
+    uint32_t px_gen[UAPP_BUFS];
+    // WHICH BUFFER THE COMPOSITOR IS READING. The surface handed out
+    // always points at the OTHER one -- see present(). 0 until the first
+    // present, and 0 forever for a single-buffered surface.
+    int front;
+    int w, h;
+    struct ugfx_surface surface;  // the back buffer, sized w x h
+    int dirty;                    // a popup: drawn into since its last present
+    // A POPUP'S PLACE relative to the toplevel's content origin, from
+    // the compositor's reply -- what turns popup-local input back into
+    // the coordinates every widget hit-tests in (ui/uui_popup.h).
+    int ox, oy;
+    void (*done)(void *owner);    // the widget to tell when the compositor dismisses it
+    void *owner;
+};
+static struct uapp_surf g_surf[WIN_CLIENT_MAX];
+#define TOPLEVEL (&g_surf[0])
+
+static int slot_of(const struct uapp_surf *s) { return (int)(s - g_surf); }
 
 static void buf_name(char *out, unsigned cap, int slot, int buf) {
     snprintf(out, cap, WIN_BUF_NAME_FMT, sys_getpid(), slot, buf);
@@ -60,7 +84,8 @@ static void buf_grant(const char *nm) {
 // name first and creates a new object under it -- the old one stays
 // alive for whoever still maps it, which is exactly what stops a resize
 // pulling the pixels out from under the compositor.
-static int buf_make(int slot, int buf, int w, int h) {
+static int buf_make(struct uapp_surf *s, int buf, int w, int h) {
+    int slot = slot_of(s);
     // **PAGE-ALIGNED, because SYS_MUNMAP requires it** (abi/syscall_abi.h)
     // and refuses anything else. A window's pixels are w*h*4, which is
     // almost never a whole number of pages -- so the unrounded length
@@ -71,9 +96,9 @@ static int buf_make(int slot, int buf, int w, int h) {
     uint64_t bytes = ((uint64_t)w * (uint64_t)h * 4 + 4095) & ~4095ULL;
     char nm[WIN_BUF_NAME_MAX];
     buf_name(nm, sizeof nm, slot, buf);
-    if (g_px[buf]) {
-        sys_munmap(g_px[buf], g_px_bytes[buf]);
-        g_px[buf] = 0;
+    if (s->px[buf]) {
+        sys_munmap(s->px[buf], s->px_bytes[buf]);
+        s->px[buf] = 0;
     }
     sys_shm_unlink(nm);
     int fd = sys_shm_open(nm, bytes, SHM_CREATE | SHM_EXCL);
@@ -83,24 +108,31 @@ static int buf_make(int slot, int buf, int w, int h) {
                        SYS_MAP_SHARED, fd, 0);
     sys_close(fd);
     if (p == (void *)-1) return 0;
-    g_px[buf] = p;
-    g_px_bytes[buf] = bytes;
-    g_px_w[buf] = w;
-    g_px_h[buf] = h;
+    s->px[buf] = p;
+    s->px_bytes[buf] = bytes;
+    s->px_w[buf] = w;
+    s->px_h[buf] = h;
     // A NEW OBJECT, WHATEVER ITS SIZE. Bumping only on a size change
     // would leave the compositor mapping an object nobody draws into
     // when a client re-creates a buffer at the size it already had --
     // a window frozen on its last frame, and reachable from a drag that
     // proposes the size the window has.
-    g_px_gen[buf]++;
+    s->px_gen[buf]++;
     return 1;
 }
 
-static int bufs_create(int slot, int w, int h) {
-    if (w <= 0 || h <= 0) return 0;
-    g_slot = slot;
+static void bufs_release(struct uapp_surf *s);
+
+// Claims slot `slot` for a surface of w x h and makes both its buffers.
+static int bufs_create(struct uapp_surf *s, int w, int h) {
+    if (w <= 0 || h <= 0 || s->used) return 0;
+    s->used = 1;
+    s->front = 0;
+    s->w = w;
+    s->h = h;
+    s->dirty = 0;
     for (int b = 0; b < UAPP_BUFS; b++)
-        if (!buf_make(slot, b, w, h)) return 0;
+        if (!buf_make(s, b, w, h)) { bufs_release(s); return 0; }
     return 1;
 }
 
@@ -110,45 +142,46 @@ static int bufs_create(int slot, int w, int h) {
 // buffer being drawn into; the other one is still the old size and is
 // the one the client draws into NEXT.
 
-static int buf_ensure(int buf, int w, int h) {
+static int buf_ensure(struct uapp_surf *s, int buf, int w, int h) {
     // **THE DIMENSIONS DECIDE, NOT THE LENGTH.** Comparing page-rounded
     // byte counts here made a one-pixel resize look like no resize at
     // all -- and NOBODY WAS TOLD, because the size lived in a second
     // record the client had to keep in step. It does not any more: the
     // present carries it, so this only has to make the memory right.
-    if (g_px[buf] && g_px_w[buf] == w && g_px_h[buf] == h) return 1;
+    if (s->px[buf] && s->px_w[buf] == w && s->px_h[buf] == h) return 1;
 
     // The OBJECT is replaced only when the rounded length actually
     // moved; rebuilding on every present would hand the app a freshly
     // zeroed buffer each frame, which shows up as a scene that will not
     // hold still.
     uint64_t want = ((uint64_t)w * (uint64_t)h * 4 + 4095) & ~4095ULL;
-    if (!g_px[buf] || g_px_bytes[buf] != want) return buf_make(g_slot, buf, w, h);
-    g_px_w[buf] = w;
-    g_px_h[buf] = h;
+    if (!s->px[buf] || s->px_bytes[buf] != want) return buf_make(s, buf, w, h);
+    s->px_w[buf] = w;
+    s->px_h[buf] = h;
     return 1;
 }
 
-static void bufs_release(void) {
+static void bufs_release(struct uapp_surf *s) {
     for (int b = 0; b < UAPP_BUFS; b++) {
-        if (!g_px[b]) continue;
+        if (!s->px[b]) continue;
         char nm[WIN_BUF_NAME_MAX];
-        buf_name(nm, sizeof nm, g_slot, b);
-        sys_munmap(g_px[b], g_px_bytes[b]);
+        buf_name(nm, sizeof nm, slot_of(s), b);
+        sys_munmap(s->px[b], s->px_bytes[b]);
         sys_shm_unlink(nm);
-        g_px[b] = 0;
+        s->px[b] = 0;
     }
+    s->used = 0;
+    s->done = 0;
+    s->owner = 0;
 }
 
 struct uapp {
-    // WHICH OF THE WINDOW'S TWO BUFFERS THE COMPOSITOR IS READING. The
-    // surface always points at the OTHER one -- see present(). 0 until
-    // the first present, and 0 forever for a single-buffered window,
-    // so nothing here needs to know which kind it has.
-    int front;
     const struct uapp_desc *desc;
     uint32_t window;
     int w, h;
+    // The TOPLEVEL's back buffer -- a copy of TOPLEVEL->surface kept
+    // here because every draw callback is handed `&a->surface` and the
+    // two are refreshed together in present() and uapp_resize().
     struct ugfx_surface surface;
     int dirty;    // something asked for a repaint since the last present
     int focused;  // keyboard focus, per WIN_EV_FOCUS
@@ -171,13 +204,13 @@ struct uapp {
     int cursor_before_busy;
 };
 
-// One process, one window -- which is what every client does today, and
-// what WIN_CLIENT_MAX being untested above 1 means (docs/roadmap.md's
-// M41). A single static instance rather than a heap allocation: there
-// is no allocator in libsys, and one window per process makes the
-// multi-instance machinery the kernel-space apps need unnecessary here.
-// The handle is opaque precisely so a future uapp_window_create() can
-// appear without this API changing shape.
+// One process, one TOPLEVEL -- plus its popups, which are surfaces of
+// the same app (g_surf[] above) rather than apps of their own. A single
+// static instance rather than a heap allocation: there is no allocator
+// in libsys, and one toplevel per process makes the multi-instance
+// machinery the kernel-space apps need unnecessary here. The handle is
+// opaque precisely so a future uapp_window_create() can appear without
+// this API changing shape.
 static struct uapp g_app;
 
 // --- TWP plumbing, in one place instead of once per client ------------
@@ -212,25 +245,39 @@ static int wmchan_send(uint32_t type, uint32_t window,
 // FIRE AND FORGET, which is what lets it run once a frame per client.
 // The flip is this side's: the buffer just handed over is the one the
 // compositor reads, so the next frame goes into the other.
-static void present(struct uapp *a) {
-    int shown = a->front ^ 1;   // the one flush() has been drawing into
-    if (!g_px[shown]) return;
+static int surf_present(struct uapp_surf *s) {
+    int shown = s->front ^ 1;   // the one that has been drawn into
+    if (!s->px[shown]) return 0;
 
     // A FULL RING MEANS NO FLIP. Dropping the frame is fine -- the next
     // present supersedes it -- but flipping anyway would leave the
     // compositor reading the buffer this process is about to draw into,
     // which is the tearing double buffering exists to remove.
-    if (!wmchan_send(WIN_REQ_PRESENT, a->window,
-                     WIN_PRESENT_B(shown, g_px_gen[shown]),
-                     (int)WIN_PRESENT_SIZE(a->w, a->h), 0, 0)) return;
+    if (!wmchan_send(WIN_REQ_PRESENT, (uint32_t)slot_of(s),
+                     WIN_PRESENT_B(shown, s->px_gen[shown]),
+                     (int)WIN_PRESENT_SIZE(s->w, s->h), 0, 0)) return 0;
 
-    a->front = shown;
+    s->front = shown;
+    s->dirty = 0;
     // The BACK buffer for the new front: the other of the two. It may
     // still be the pre-resize size, so make it current before handing
     // it over as a surface.
-    int back = a->front ^ 1;
-    if (!buf_ensure(back, a->w, a->h)) return;
-    a->surface = ugfx_surface_for_pixels(g_px[back], a->w, a->h);
+    int back = s->front ^ 1;
+    if (!buf_ensure(s, back, s->w, s->h)) return 0;
+    s->surface = ugfx_surface_for_pixels(s->px[back], s->w, s->h);
+    return 1;
+}
+
+static void present(struct uapp *a) {
+    TOPLEVEL->w = a->w;
+    TOPLEVEL->h = a->h;
+    if (surf_present(TOPLEVEL)) a->surface = TOPLEVEL->surface;
+    // THE POPUPS AFTER THE TOPLEVEL, in slot order -- the order they
+    // were opened, which is the order the compositor stacks them. Only
+    // those drawn into this frame: a menu nobody hovered is unchanged
+    // and re-presenting it would be a wake-up for nothing.
+    for (int i = 1; i < WIN_CLIENT_MAX; i++)
+        if (g_surf[i].used && g_surf[i].dirty) surf_present(&g_surf[i]);
 }
 
 // Draw + present, but only if something actually asked. This is the
@@ -507,15 +554,19 @@ int uapp_resize(struct uapp *a, int w, int h) {
     if (w > WIN_CLIENT_MAX_W) w = WIN_CLIENT_MAX_W;
     if (h > WIN_CLIENT_MAX_H) h = WIN_CLIENT_MAX_H;
 
-    int back = a->front ^ 1;
-    if (!buf_make(g_slot, back, w, h)) return 0;
+    int back = TOPLEVEL->front ^ 1;
+    if (!buf_make(TOPLEVEL, back, w, h)) return 0;
 
     a->w = w;
     a->h = h;
-    a->surface = ugfx_surface_for_pixels(g_px[back], a->w, a->h);
+    TOPLEVEL->w = w;
+    TOPLEVEL->h = h;
+    TOPLEVEL->surface = ugfx_surface_for_pixels(TOPLEVEL->px[back], w, h);
+    a->surface = TOPLEVEL->surface;
     if (a->desc->layout) uui_layout_run(a->desc->layout, 0, 0, a->w, a->h);
     return 1;
 }
+
 
 // THE COMPOSITOR'S CHANNEL, opened once and kept. Lazily, because a
 // client that never sets a title should not publish a ring, and because
@@ -573,6 +624,90 @@ static int wmchan_call(uint32_t type, uint32_t window, int aa, int bb,
     if (uchan_call(&g_wmchan, &m, sizeof m, &r, sizeof r,
                    UAPP_CALL_TIMEOUT_MS) < 0) return fail;
     return r.a;
+}
+
+// --- popup surfaces: the provider ui/uui_popup.h asks through --------
+//
+// A popup is a slot above 0 with its own two buffers, opened by the
+// third round trip (WIN_REQ_POPUP) and placed by the compositor; the
+// reply's offset is what turns its input back into toplevel coordinates
+// in dispatch(). Widgets never see a slot: they get an id, which IS the
+// slot, and a surface to draw into.
+
+static int popup_open(void *ctx, int ax, int ay, int aw, int ah, int w, int h,
+                      int gravity, void (*done)(void *owner), void *owner,
+                      int *out_x, int *out_y) {
+    (void)ctx;
+    if (w <= 0 || h <= 0 || comp_pid() <= 0) return 0;
+    if (w > WIN_CLIENT_MAX_W) w = WIN_CLIENT_MAX_W;
+    if (h > WIN_CLIENT_MAX_H) h = WIN_CLIENT_MAX_H;
+    struct uapp_surf *s = 0;
+    for (int i = 1; i < WIN_CLIENT_MAX; i++)
+        if (!g_surf[i].used) { s = &g_surf[i]; break; }
+    if (!s) return 0;
+    if (!bufs_create(s, w, h)) return 0;
+
+    struct wmchan_msg m, r;
+    memset(&m, 0, sizeof m);
+    m.type = WIN_REQ_POPUP;
+    m.window = (uint32_t)slot_of(s);
+    m.a = w;
+    m.b = h;
+    m.c = (int32_t)g_app.window;   // anchored to the toplevel
+    m.pos.ax = ax; m.pos.ay = ay; m.pos.aw = aw; m.pos.ah = ah;
+    m.pos.gravity = gravity == UUI_POPUP_RIGHT ? WIN_POPUP_RIGHT : WIN_POPUP_BELOW;
+    if (!wmchan() ||
+        uchan_call(&g_wmchan, &m, sizeof m, &r, sizeof r, UAPP_CALL_TIMEOUT_MS) < 0 ||
+        r.a < 0) {
+        bufs_release(s);
+        return 0;
+    }
+    s->ox = r.b;
+    s->oy = r.c;
+    s->done = done;
+    s->owner = owner;
+    s->surface = ugfx_surface_for_pixels(s->px[s->front ^ 1], w, h);
+    if (out_x) *out_x = r.b;
+    if (out_y) *out_y = r.c;
+    return slot_of(s);
+}
+
+static void popup_close(void *ctx, int id) {
+    (void)ctx;
+    if (id <= 0 || id >= WIN_CLIENT_MAX || !g_surf[id].used) return;
+    wmchan_send(WIN_REQ_DESTROY, (uint32_t)id, 0, 0, 0, 0);
+    bufs_release(&g_surf[id]);
+    g_app.dirty = 1;   // the widget that owned it repaints its own state
+}
+
+static struct ugfx_surface *popup_surface(void *ctx, int id) {
+    (void)ctx;
+    if (id <= 0 || id >= WIN_CLIENT_MAX || !g_surf[id].used) return 0;
+    struct uapp_surf *s = &g_surf[id];
+    if (!buf_ensure(s, s->front ^ 1, s->w, s->h)) return 0;
+    s->surface = ugfx_surface_for_pixels(s->px[s->front ^ 1], s->w, s->h);
+    s->dirty = 1;   // present() sends it after the toplevel
+    return &s->surface;
+}
+
+static const struct uui_popup_ops g_popup_ops = {
+    .open = popup_open,
+    .close = popup_close,
+    .surface = popup_surface,
+};
+
+// The compositor dismissed popup `id` (WIN_EV_POPUP_DONE) -- or asked it
+// to close, which for a popup means the same. The window is already
+// gone, so no DESTROY goes back; the widget is told and the buffers
+// released.
+static void popup_dismissed(int id) {
+    if (id <= 0 || id >= WIN_CLIENT_MAX || !g_surf[id].used) return;
+    struct uapp_surf *s = &g_surf[id];
+    void (*done)(void *) = s->done;
+    void *owner = s->owner;
+    bufs_release(s);
+    if (done) done(owner);
+    g_app.dirty = 1;
 }
 
 void uapp_set_cursor(struct uapp *a, int cursor) {
@@ -690,11 +825,64 @@ static void reap_children(void) {
     }
 }
 
-static void dispatch(struct uapp *a, const struct win_event *ev) {
+static void dispatch(struct uapp *a, const struct win_event *in) {
     const struct uapp_desc *d = a->desc;
 
     clip_poll(a);
     reap_children();
+
+    // AN EVENT ON A POPUP IS THE TOPLEVEL'S, TRANSLATED. The widgets
+    // hit-test one coordinate space -- the toplevel's content -- and a
+    // popup's place in it is known from the compositor's reply, so a
+    // pointer event arriving popup-local is moved by that offset and
+    // then handled exactly as if it had landed on the toplevel; the
+    // menu that is open takes it first (ui/uui_route.h). Keys need no
+    // translation. What a popup does NOT share: focus (the toplevel
+    // keeps it), resize (a popup has one size) and close (which for a
+    // popup is a dismissal).
+    struct win_event copy = *in;
+    const struct win_event *ev = in;
+    if (in->window != a->window) {
+        // STALE IF THE SLOT IS NOT IN USE: the compositor answered a
+        // popup this side has since closed (a menu switched titles while
+        // a press was in flight). Read as the toplevel's, its raw
+        // coordinates would land on whatever sits at that point in the
+        // window -- which was the menu bar.
+        if (in->window >= WIN_CLIENT_MAX || !g_surf[in->window].used) return;
+        struct uapp_surf *s = &g_surf[in->window];
+        switch (in->type) {
+        case WIN_EV_MOUSE_MOVE:
+            // A LEAVE CARRIES NO POSITION. The compositor says "the
+            // pointer left you" as a move to (-1,-1) in the surface's own
+            // coordinates, which for the toplevel hit-tests as nothing;
+            // moved by a popup's offset it is a REAL point one pixel
+            // above-left of the popup, and a menu bar there switched
+            // menus every time a submenu was left. wl_pointer.leave has
+            // no coordinates for this reason.
+            if (in->a < 0 || in->b < 0 || in->a >= s->w || in->b >= s->h) return;
+            /* fallthrough */
+        case WIN_EV_MOUSE_DOWN:
+        case WIN_EV_MOUSE_UP:
+            copy.a += s->ox;
+            copy.b += s->oy;
+            ev = &copy;
+            break;
+        case WIN_EV_PING:
+            wmchan_send(WIN_REQ_PONG, in->window, (int)in->a, 0, 0, 0);
+            return;
+        case WIN_EV_POPUP_DONE:
+        case WIN_EV_CLOSE:
+            popup_dismissed((int)in->window);
+            return;
+        case WIN_EV_FOCUS:
+        case WIN_EV_RESIZE:
+            return;
+        default:
+            break;
+        }
+    } else if (in->type == WIN_EV_POPUP_DONE) {
+        return;   // never for the toplevel
+    }
 
     switch (ev->type) {
     case WIN_EV_PING: {
@@ -1020,15 +1208,17 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
 
     // THE CLIENT ALLOCATES, AND PROPOSES ITS OWN SLOT -- which is what
     // lets the buffers be NAMED, granted and mapped before anyone has
-    // answered. One window per process, so the proposal is always 0.
-    if (!bufs_create(0, a->w, a->h)) return 0;
+    // answered. One toplevel per process, so the proposal is always 0;
+    // its popups take the slots above (popup_open()).
+    if (!bufs_create(TOPLEVEL, a->w, a->h)) return 0;
 
     // The x/y an app used to ask for are GONE from this message: the
     // compositor has always placed windows itself (a cascade), and a
     // field nobody reads is a field that eventually gets believed.
     int slot = wmchan_call(WIN_REQ_CREATE, 0, a->w, a->h, desc->app_id, -1);
-    if (slot < 0) { bufs_release(); return 0; }
+    if (slot < 0) { bufs_release(TOPLEVEL); return 0; }
     a->window = (uint32_t)slot;
+    uui_popup_set_provider(&g_popup_ops, a);
 
     if (desc->title) uapp_set_title(a, desc->title);
 
@@ -1054,7 +1244,8 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     // THE BACK BUFFER, which with front 0 is buffer 1. Starting on
     // buffer 0 paints into the one the compositor IS showing, which
     // reads as a window that opens and draws nothing.
-    a->surface = ugfx_surface_for_pixels(g_px[a->front ^ 1], a->w, a->h);
+    TOPLEVEL->surface = ugfx_surface_for_pixels(TOPLEVEL->px[TOPLEVEL->front ^ 1], a->w, a->h);
+    a->surface = TOPLEVEL->surface;
 
     // Now that the content size is settled, place everything in it.
     // Re-run rather than trusting the natural-size pass: the window may
@@ -1088,6 +1279,8 @@ static int uapp_pump(struct uapp *a, int block) {
 }
 
 static void uapp_close(struct uapp *a) {
+    for (int i = 1; i < WIN_CLIENT_MAX; i++)
+        if (g_surf[i].used) popup_close(0, i);
     wmchan_send(WIN_REQ_DESTROY, a->window, 0, 0, 0, 0);
 }
 

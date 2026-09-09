@@ -31,6 +31,11 @@
 //   PRESENT    a = WIN_PRESENT_B(buf, gen), b = WIN_PRESENT_SIZE(w, h).
 //   DESTROY    window.
 //   TITLE / HINTS / CURSOR / TIMER / PONG / CLOSE_PID -- as before.
+//   POPUP      window = the proposed slot; a/b = w/h; c = the parent
+//              slot; `pos` = the positioner (abi/win_proto.h). REPLIES
+//              the granted slot in `a` and where it landed in `b`/`c`,
+//              relative to the parent's content origin, or a = -1. The
+//              third round trip: a menu is drawn at the answer.
 //
 // **A PRESENT CARRIES ITS OWN GEOMETRY, AND THAT IS WHY RESIZE AND
 // BUFFER ARE GONE.** Both existed to keep a SECOND record of each
@@ -50,10 +55,11 @@
 
 #define WMCHAN_SERVICE "toywm"
 
-// **TWO MESSAGES WAIT FOR AN ANSWER: CREATE AND ACTIVATE.** Everything
-// else is fire-and-forget, which is what the carriage is shaped for --
-// a present runs once per frame per client and must never round-trip.
-// The two that do are both once-per-window, at startup.
+// **THREE MESSAGES WAIT FOR AN ANSWER: CREATE, ACTIVATE AND POPUP.**
+// Everything else is fire-and-forget, which is what the carriage is
+// shaped for -- a present runs once per frame per client and must never
+// round-trip. The three that do are each once per surface, when it
+// opens.
 //
 // A reply is a `struct wmchan_msg` whose `a` carries the answer. No
 // channel, or no answer inside the timeout, is read as a refusal by
@@ -71,8 +77,14 @@ struct wmchan_msg {
                         // WIN_PRESENT_SIZE(w,h). HINTS: flags, min_w,
                         // min_h. CURSOR/TIMER/PONG/CLOSE_PID: a.
                         // In a REPLY, `a` is the answer.
-    char     text[WIN_TITLE_LEN];   // TITLE, and CREATE's app_id
+    union {
+        char text[WIN_TITLE_LEN];   // TITLE, and CREATE's app_id
+        struct win_popup_pos pos;   // POPUP's positioner
+    };
 };
+
+_Static_assert(sizeof(struct win_popup_pos) <= WIN_TITLE_LEN,
+               "the positioner rides the text field and must fit it");
 
 _Static_assert(sizeof(struct wmchan_msg) <= UCHAN_SLOT_BYTES,
                "a wmchan message must fit one channel slot");

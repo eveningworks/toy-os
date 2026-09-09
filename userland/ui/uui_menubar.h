@@ -45,30 +45,29 @@
 // than Win32's EnableMenuItem(), and it means an app can never forget to
 // update the menu -- there is nothing to update.
 //
-// WHERE THE POPUP GOES, AND THE ONE DIVERGENCE FROM A REAL DESKTOP
-// ----------------------------------------------------------------
+// WHERE THE POPUP GOES
+// --------------------
 // On Windows a popped-up menu is a real HWND of the built-in #32768
 // class, positioned in SCREEN coordinates and constrained against the
 // monitor work area; on KDE it is a Qt::Popup toplevel, which under
-// Wayland is literally an xdg_popup with a positioner (anchor rect,
-// gravity, and flip/slide/resize constraint adjustments) that the
-// compositor resolves. In both, the menu is its own surface and may
-// extend far outside the window that owns it.
+// Wayland is an xdg_popup with a positioner the compositor resolves. In
+// both, the menu is its own surface and may extend far outside the
+// window that owns it.
 //
-// A TWP client cannot do that: it draws into its own window buffer and
-// nothing else, which is enforced (docs/gui-guidelines.md). So the
-// placement here implements the same vocabulary -- flip when it will not
-// fit on the preferred side, slide when it will not fit along the other
-// axis, clamp as the last resort -- against a BOUNDS RECTANGLE the
-// caller supplies (uui_menubar_set_bounds), which today is the window's
-// own content area.
+// Each open level here is such a surface (ui/uui_popup.h): the widget
+// hands the compositor the anchor -- a title, a row, the cursor -- and
+// the side it prefers, and is told where the popup landed, in the same
+// content coordinates every rect here is already in. So `level[].x/y`
+// mean what they always did, hit-testing and `describe` are untouched,
+// and only draw_level() moves: it paints into the popup's own surface
+// with the level's origin subtracted.
 //
-// That rectangle is the whole of the difference. When TWP gains a popup
-// surface (docs/roadmap.md, M41), this widget is handed the screen rect
-// instead and the placement maths is already the right maths -- the
-// change is one rect, not a rewrite. Sizing a menu against the window is
-// a real divergence in the meantime, and it is visible only on a window
-// small enough that a menu would have overflowed it.
+// WITH NO PROVIDER -- no compositor popup, or a refusal -- the level is
+// drawn inside the window instead, placed by the same flip/slide/clamp
+// against the BOUNDS RECTANGLE the caller supplies
+// (uui_menubar_set_bounds), which is the window's content area. That is
+// the whole of the fallback, and it is the behaviour every menu here had
+// until the surface existed.
 
 // --- an item -----------------------------------------------------------
 
@@ -110,9 +109,10 @@ struct uui_menu_item {
 struct uui_menu_level {
     const struct uui_menu_item *items;
     int count;
-    int x, y, w, h;
+    int x, y, w, h;   // content coordinates, whichever surface it is drawn on
     int hot;      // highlighted row, or -1
     int parent;   // index in the level above that opened this one
+    int surf;     // its popup surface (ui/uui_popup.h), or 0 = in-window
 };
 
 struct uui_menubar {
@@ -129,8 +129,8 @@ struct uui_menubar {
     struct uui_menu_level level[UUI_MENU_MAX_DEPTH];
     int depth;     // open popups; 0 when closed
 
-    // Where popups are allowed to be. See the header comment -- this is
-    // the line that changes when TWP grows a popup surface.
+    // Where an IN-WINDOW popup is allowed to be -- the fallback when no
+    // popup surface is granted. See the header comment.
     int bx, by, bw, bh;
 
     // Asked per item; NULL means every item is enabled and unticked.
