@@ -362,9 +362,7 @@ void fm_job_finished(void) {
     snprintf(g_stat_note, sizeof g_stat_note, "%s %s", g_job_what,
               g_cancel ? "cancelled" : (g_job_failures ? "FAILED" : "done"));
     g_job_count = g_job_at = 0;
-    uui_fileview_reload(&g_pane[0]);
-    uui_fileview_reload(&g_pane[1]);
-    refresh_dim();   // a reload drops the dim bits; see refresh_dim()
+    reload_panes();
     refresh_status();
 }
 
@@ -433,7 +431,7 @@ void commit_mkdir(const char *name) {
         snprintf(g_stat_note, sizeof g_stat_note, "could not create %s", name);
     } else {
         set_note("created");
-        uui_fileview_reload(active());
+        reload_pane(active());
         uui_fileview_select_name(active(), name);
     }
     refresh_status();
@@ -452,7 +450,7 @@ void commit_rename(const char *name) {
         snprintf(g_stat_note, sizeof g_stat_note, "could not rename to %s", name);
     } else {
         set_note("renamed");
-        uui_fileview_reload(active());
+        reload_pane(active());
         uui_fileview_select_name(active(), name);
     }
     refresh_status();

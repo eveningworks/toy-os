@@ -646,9 +646,24 @@ int uui_fileview_band_active(const struct uui_fileview *fv) {
     return fv->band.armed;
 }
 
+// A staged cut's artwork, taken HALFWAY TO THE BACKGROUND -- Explorer's
+// and Dolphin's translucent icon. The table fades its TEXT instead
+// (uui_table.c's fade), because a text row has no artwork to fade.
+static void ic_wash(struct ugfx_surface *s, int x, int y, int w, int h,
+                    uint32_t bg) {
+    for (int yy = y; yy < y + h; yy++)
+        for (int xx = x; xx < x + w; xx++)
+            ugfx_blend_pixel(s, xx, yy, bg, 128);
+}
+
 static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
     const struct uui_table *t = &fv->table;
     ugfx_fill_rect(s, t->x, t->y, t->w, t->h, t->bg);
+
+    // THE BOTTOM ROW IS DELIBERATELY PARTIAL (`last`, below), so this
+    // must clip or that row paints over whatever follows the pane -- the
+    // File Manager's status bar, which is what it did.
+    ugfx_set_clip_rect(s, t->x, t->y, t->w, t->h);
 
     int rows = uui_fileview_row_count(fv);
     int cols = ic_cols(fv), vis = ic_vis_rows(fv);
@@ -682,9 +697,11 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
         const struct uimg *thumb = 0;
         if (!is_dir && e && fv->thumb)
             thumb = fv->thumb(fv->thumb_ctx, fv->dir, e, px);
+        int ax = x, ay = y + 2, aw = cw, ah = px; // the artwork, for ic_wash
         if (thumb) {
             int tx2 = x + (cw - thumb->w) / 2;
             int ty2 = y + 2 + (px - thumb->h) / 2;
+            ax = tx2; ay = ty2; aw = thumb->w; ah = thumb->h;
             if (thumb->has_alpha)
                 ugfx_blit_alpha(s, tx2, ty2, thumb->w, thumb->h, thumb->px, thumb->w);
             else
@@ -696,6 +713,7 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
         } else {
             const struct uimg *ico = icon_get(is_dir ? "folder" : "file", px);
             int ix = x + (cw - px) / 2;
+            ax = ix; ay = y + 2; aw = px; ah = px;
             if (ico) {
                 ugfx_blit_alpha(s, ix, y + 2, ico->w, ico->h, ico->px, ico->w);
             } else {
@@ -708,6 +726,10 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
                                   ugfx_rgb(230, 230, 235), ugfx_rgb(60, 90, 130));
             }
         }
+
+        // The LABEL stays at full strength: it is how the file is
+        // identified, and Explorer and Dolphin both fade only the icon.
+        if (uui_fileview_is_dimmed(fv, src)) ic_wash(s, ax, ay, aw, ah, bg);
 
         int max_w = cw - 6;
         int tw = ugfx_text_width(name);
@@ -731,6 +753,8 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
         if (sel_x >= 0) uui_focus_ring(s, sel_x, sel_y, cw - 2, chh - 2);
         else            uui_focus_ring(s, t->x, t->y, t->w, t->h);
     }
+
+    ugfx_clear_clip_rect(s);
 }
 
 static int ic_hover(struct uui_fileview *fv, int cx, int cy) {

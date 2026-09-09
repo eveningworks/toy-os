@@ -83,6 +83,10 @@ int uclip_kind(const struct uclip *c);
 // since copying 64 KiB to answer it would be absurd.
 unsigned uclip_peek_serial(void);
 
+// The current op, read from the shared page without loading the payload.
+// UCLIP_NONE when the clipboard is empty or unreachable.
+int uclip_peek_op(void);
+
 // Entry `i`, or NULL past the end. Points into `c` -- it does not
 // outlive the next uclip_load() on the same object.
 const char *uclip_path(const struct uclip *c, int i);

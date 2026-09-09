@@ -479,8 +479,7 @@ void do_command(struct uapp *a, int code) {
         break;
     }
     case CMD_REFRESH:
-        uui_fileview_reload(&g_pane[0]);
-        uui_fileview_reload(&g_pane[1]);
+        reload_panes();
         set_note("refreshed");
         break;
     case CMD_SWAP:
@@ -771,8 +770,7 @@ static int on_tick(struct uapp *a) {
     unsigned long long gen = sys_fs_generation();
     if (gen != g_seen_generation) {
         g_seen_generation = gen;
-        uui_fileview_reload(&g_pane[0]);
-        uui_fileview_reload(&g_pane[1]);
+        reload_panes();
         if (g_tree_on) tree_rebuild(); // a dir can have appeared or gone
         refresh_status();
         changed = 1;
@@ -966,6 +964,17 @@ void refresh_dim(void) {
             if (row >= 0) uui_fileview_set_dimmed(&g_pane[i], row, 1);
         }
     }
+}
+
+void reload_pane(struct uui_fileview *fv) {
+    uui_fileview_reload(fv);
+    refresh_dim();
+}
+
+void reload_panes(void) {
+    uui_fileview_reload(&g_pane[0]);
+    uui_fileview_reload(&g_pane[1]);
+    refresh_dim();
 }
 
 static void on_clipboard(struct uapp *a, int op, unsigned serial) {

@@ -783,9 +783,10 @@ static void clip_poll(struct uapp *a) {
     if (g_clip_first) { g_clip_first = 0; g_clip_seen = now; return; }
     if (now == g_clip_seen) return;
     g_clip_seen = now;
-    // The op is not carried here: an app that cares reads the
-    // clipboard, which is what it had to do for the payload anyway.
-    d->on_clipboard(a, 0, now);
+    // THE REAL OP, peeked rather than loaded. It was hardcoded to 0
+    // while uapp.h promised a UCLIP_*, so the one app that believed the
+    // header saw every cut as UCLIP_NONE and never drew one as staged.
+    d->on_clipboard(a, uclip_peek_op(), now);
 }
 
 // --- children this app launched --------------------------------------

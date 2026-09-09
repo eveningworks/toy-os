@@ -75,6 +75,14 @@ unsigned uclip_peek_serial(void) {
     return pg ? __atomic_load_n(&pg->serial, __ATOMIC_ACQUIRE) : 0;
 }
 
+// The op WITHOUT the payload. uclip_load() copies the whole 64 KiB
+// object, which is far too much to spend telling an app that a cut it
+// is drawing has been replaced by somebody else's copy.
+int uclip_peek_op(void) {
+    volatile struct clip_page *pg = page();
+    return pg ? (int)__atomic_load_n(&pg->op, __ATOMIC_ACQUIRE) : UCLIP_NONE;
+}
+
 const char *uclip_path(const struct uclip *c, int i) {
     if (!c || c->kind != UCLIP_KIND_FILES) return 0;
     if (i < 0 || i >= (int)c->count) return 0;

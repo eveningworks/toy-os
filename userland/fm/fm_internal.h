@@ -142,6 +142,13 @@ struct uui_fileview *other(void);
 void set_note(const char *s);
 void refresh_dim(void);
 void refresh_status(void);
+
+// RELOAD THROUGH THESE, never uui_fileview_reload() directly. A reload
+// drops the dim bits (ui/uui_fileview.h) and re-applying them is what
+// three of the four call sites forgot, so a staged cut stopped being
+// drawn the moment anything touched the filesystem.
+void reload_pane(struct uui_fileview *fv);
+void reload_panes(void);
 void do_command(struct uapp *a, int code);
 
 // A divider's position, written when a drag ENDS rather than per motion:
