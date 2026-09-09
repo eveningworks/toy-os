@@ -6502,3 +6502,45 @@ since the fold has already happened by the time the key arrives. An OSK
 that passed the bit instead would draw correctly, respond to every
 click, and leave Ctrl-C doing nothing in the Terminal -- which is most
 of what a machine with no keyboard needs it for.
+
+## A client's identity is its spawn path, asked of the kernel, not kept per window
+
+Single instance and taskbar grouping both key on "what program is this
+client?", and both fail silently when that is wrong -- a wrong merge
+puts two programs on one taskbar button, and a wrong match makes an app
+exit without ever drawing, because a single-instance app reads "your
+twin is up" as "go away". So the answer has to be something a client
+cannot influence, which rules out the `app_id` it declares about itself:
+two apps choosing one string is indistinguishable from two copies of one
+program, which MUST match.
+
+The kernel is the only party that knows a process's spawn path, so for
+one stage it also answered the question -- `WIN_REQ_ACTIVATE` scanned
+the window table for a window whose identity matched the asking process
+and told the compositor which one to raise. That worked, and it is why
+`struct client_window` carried an `app_identity` at all. It is also the
+last thing keeping presentation state in ring 0 that PRESENT does not
+need, so stage 6a split the two halves apart:
+
+- **The kernel answers the FACT**, `QUERY_PROCPATH` -- pid and spawn
+  path, one record per live process, no window state anywhere in it.
+- **The compositor answers the QUESTION.** It owns the window list, so
+  it is the party that can; it interns each client's path at window
+  create and matches on the interned int.
+
+Both real systems anchor identity the same way and for the same reason:
+Windows falls back to the executable behind an AppUserModelID, macOS to
+the bundle, and Wayland's `app_id` is only dependable because a
+compositor matches it against a `.desktop` FILE rather than trusting the
+string. Deriving it from the `.desktop` entry the launcher used was
+considered and declined here: it covers only apps started FROM the
+launcher, and fails silently for anything spawned another way.
+
+**The cost is one round trip, and it is bounded.** Activate is now the
+only message on the compositor channel that waits for a reply
+(`uchan_call()`), where it used to be a syscall. It happens ONCE, before
+a single-instance app opens anything -- the per-frame traffic a
+synchronous carriage would ruin is untouched. No channel, or no answer
+inside the timeout, is read as "no twin": the asymmetry is deliberate,
+since a false yes hides an app completely and a false no opens a window
+the user can see and close.

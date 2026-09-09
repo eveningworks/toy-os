@@ -92,19 +92,18 @@ struct window {
     // object's reference count is what keeps the frames alive.
     // What this window IS, as its own client named it -- "taskmgr", not
     // a path and not the title. Empty for a kernel-space app window and
-    // for any client that did not give one. Matched byte for byte by
-    // WIN_REQ_ACTIVATE, which is the whole reason it is stored; nothing
-    // draws it.
+    // for any client that did not give one. The saved geometry is keyed
+    // on it and the taskbar labels a group with it; nothing MATCHES on
+    // it -- see app_identity below.
     char app_id[WIN_APP_ID_MAX];
 
-    // WHAT THIS WINDOW'S APPLICATION IS, as an opaque number the kernel
-    // derived from the owning process's spawn path -- equal for two
-    // windows of the same PROGRAM, different otherwise, -1 for a window
-    // with no identity (a kernel-space app window, or a client with no
-    // scheduler slot). The taskbar groups by THIS, not by app_id: an
-    // identity an app declares about itself is one two apps can collide
-    // on, and the collision is silent. See abi/win_proto.h's
-    // WIN_REQ_WINDOW_APPID.
+    // WHAT THIS WINDOW'S APPLICATION IS, as an opaque number interned
+    // from the owning process's SPAWN PATH (QUERY_PROCPATH) -- equal for
+    // two windows of the same PROGRAM, different otherwise, -1 for a
+    // process the kernel has no path for. The taskbar groups by THIS and
+    // single instance matches on it, not on app_id: an identity an app
+    // declares about itself is one two apps can collide on, and the
+    // collision is silent. See wm_client.c's identity_for_pid().
     int app_identity;
 
     int client_pid;

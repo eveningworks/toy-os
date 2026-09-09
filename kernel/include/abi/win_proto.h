@@ -354,15 +354,13 @@
                                     // re-reading, which the compositor's
                                     // content-area clamp bounds.
 
-#define WIN_EV_CLIENT_ACTIVATE  24 // a: pid. RAISE this window: a second
-                                    // copy of a single-instance app
-                                    // asked for its twin, the kernel
-                                    // found it, and this is the action
-                                    // half. The ANSWER already went back
-                                    // to the asking client, so the
-                                    // compositor is being told, not
-                                    // asked -- which is what removes the
-                                    // round trip.
+// 24 WAS WIN_EV_CLIENT_ACTIVATE, and is RETIRED rather than reused. It
+// told the compositor which window the kernel had decided to raise for
+// a single-instance app's twin. The kernel could only decide that while
+// it kept an identity per window, and it does not (stage 6a) -- the
+// question and the raise are both the compositor's now, over the
+// channel. The number stays spent: a client built against an older
+// header must not find a live event where it expects that one.
 
 #define WIN_EV_TIMER     14 // This window's repeating timer is due. No
                             // payload: a client that wanted to know the
@@ -643,10 +641,20 @@ struct win_event {
                            // means "my twin is up, exit now", the second
                            // app simply never appeared. No runtime check
                            // could catch it either: two copies of ONE
-                           // program are SUPPOSED to match. The kernel
-                           // answers from the caller's own spawn path
-                           // now (win_server.c's app_identity_for()),
+                           // program are SUPPOSED to match. The answer
+                           // comes from the caller's own SPAWN PATH,
                            // which is a fact the asker cannot influence.
+                           //
+                           // **IT TRAVELS ON THE CHANNEL, NOT THROUGH
+                           // THE KERNEL** (userland/lib/uwmchan.h), and
+                           // it is the one channel message with a reply.
+                           // The compositor owns the window list, so it
+                           // is the party that can answer; it learns
+                           // which program a pid is from QUERY_PROCPATH.
+                           // The kernel answered this for one stage,
+                           // which is why it kept an identity per
+                           // window at all -- see
+                           // docs/winserver-ring3-design.md's stage 6a.
                            //
                            // The caller's own windows are skipped, or
                            // every single-instance app would refuse its

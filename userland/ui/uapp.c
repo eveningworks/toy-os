@@ -947,28 +947,39 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
 
 // --- lifecycle --------------------------------------------------------
 
+// How long to wait for the compositor's answer. Generous because the
+// cost of being wrong is one-sided: waiting delays a second copy's
+// startup, giving up early opens a duplicate window.
+#define UAPP_ACTIVATE_TIMEOUT_MS 1000
+
 // For UAPP_SINGLE_INSTANCE: is a copy of this app already on screen? If
-// so TWS raises its window and this returns 1, meaning "you are the
-// second copy, go away quietly".
+// so the compositor raises its window and this returns 1, meaning "you
+// are the second copy, go away quietly".
 //
 // Asked BEFORE the window is created, and before the font is mapped,
 // so the redundant copy costs one round trip and never appears -- a
 // window that flashes up and vanishes is worse than no single-instance
 // support at all.
-//
-// An app with the flag but no id gets 0: nothing to match on, so it
-// opens normally rather than silently refusing to start. That is the
-// safer direction of the two.
 static int activate_existing(const struct uapp_desc *desc) {
     if (!(desc->flags & UAPP_SINGLE_INSTANCE)) return 0;
-    // NOTHING IS SENT. The server answers from this process's own spawn
-    // path, so the flag alone is the whole declaration -- an app_id is
-    // no longer required, and cannot be got wrong. See
-    // WIN_REQ_ACTIVATE.
-    struct win_request_msg req;
-    req_clear(&req);
-    req.type = WIN_REQ_ACTIVATE;
-    return req_send(&req) == 1;
+    // **ASKED OF THE COMPOSITOR, AND THE ONLY CHANNEL MESSAGE THAT
+    // WAITS.** It carries no name: the compositor asks the kernel what
+    // program the ASKING pid is (QUERY_PROCPATH) and compares that
+    // against what it recorded per window, so the answer cannot depend
+    // on a string an app declares about itself.
+    //
+    // NO CHANNEL, NO TWIN -- and a timeout says the same. The wrong
+    // direction here is a false "yes", which makes a single-instance
+    // app exit without ever drawing; a false "no" opens a second
+    // window, which the user can see and close.
+    if (!wmchan()) return 0;
+    struct wmchan_msg m;
+    memset(&m, 0, sizeof m);
+    m.type = WIN_REQ_ACTIVATE;
+    struct wmchan_msg r;
+    if (uchan_call(&g_wmchan, &m, sizeof m, &r, sizeof r,
+                   UAPP_ACTIVATE_TIMEOUT_MS) < 0) return 0;
+    return r.a == 1;
 }
 
 static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {

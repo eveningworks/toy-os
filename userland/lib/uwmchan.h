@@ -31,12 +31,24 @@
 
 #define WMCHAN_SERVICE "toywm"
 
+// **ONE MESSAGE HERE WAITS FOR AN ANSWER, AND IT IS WIN_REQ_ACTIVATE.**
+// Everything else is fire-and-forget, which is what the carriage is
+// shaped for; activate is the explicit round trip `uchan_call()` exists
+// for. It costs one scheduler hop, ONCE, before a single-instance app
+// opens anything -- and the alternative was the kernel keeping an
+// identity per window in order to answer it (stage 6a).
+//
+// The reply is a `struct wmchan_msg` whose `a` is 1 (a twin was found
+// and raised) or 0 (nobody there). No channel, or no answer inside the
+// timeout, means 0: a false "yes" makes an app exit without drawing.
+
 // The same shape as `struct win_request_msg`, deliberately: a request
 // that moves to this carriage should not also change what it says.
 struct wmchan_msg {
-    uint32_t type;      // WIN_REQ_TITLE / _HINTS / _CURSOR
-    uint32_t window;    // which of the sender's windows
+    uint32_t type;      // WIN_REQ_TITLE / _HINTS / _CURSOR / _ACTIVATE
+    uint32_t window;    // which of the sender's windows; unused by ACTIVATE
     int32_t  a, b, c;   // HINTS: flags, min_w, min_h. CURSOR: a shape.
+                        // In an ACTIVATE REPLY, `a` is the answer.
     char     text[WIN_TITLE_LEN];   // TITLE
 };
 

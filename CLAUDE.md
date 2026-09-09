@@ -734,6 +734,7 @@ whenever a headline here tells you something you did not already know.
 - **THE TERMINAL'S SCREEN IS A GRID, AND THE ANSI PARSER IS THE KERNEL'S COMPILED TWICE**
 - **An app with a cadence sets `tick_ms` and BLOCKS between frames.**
 - **An app refuses its OWN second copy -- the launcher never does.**
+- **WHAT PROGRAM A CLIENT IS COMES FROM ITS SPAWN PATH (`QUERY_PROCPATH`), THE COMPOSITOR ASKS FOR IT, AND `WIN_REQ_ACTIVATE` IS THE ONE CHANNEL MESSAGE WITH A REPLY**
 - **`uui_table` sorts on a header click, and an app supplies only a COMPARATOR.**
 - **A WIDGET WITH A SCROLLBAR ANSWERS `hit` WITH ITS WHOLE RECT, AND `_hit()` KEEPS THE ROW QUESTION**
 - **A SCROLLBAR CAN LIE DOWN (`UUI_SCROLLBAR_HORIZ`), AND ITS OFFSET THEN RUNS THE OTHER WAY**

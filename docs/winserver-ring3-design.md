@@ -430,7 +430,7 @@ together, and every window on screen goes through them.
     control, which is what a positive control is for. `FIX_ASSERT`
     tears down first.
 
-#### Resize: this protocol ALREADY HAS buffer identity, implicitly#### Resize: this protocol ALREADY HAS buffer identity, implicitly
+#### Resize: this protocol ALREADY HAS buffer identity, implicitly
 
 Designed 2026-09-08, before 5a starts, because it decides the shape.
 
@@ -499,34 +499,75 @@ keep the table alive, and they do not move as one piece:
 The first three move with the requests that carry them. **4 and 5 are
 the decisions**, and they are open.
 
-#### The three questions, put to the maintainer 2026-09-08, UNDECIDED
-
-Recorded so the next session starts from the options rather than
-re-deriving them. Nothing here is settled.
+#### The three questions, ANSWERED 2026-09-09
 
 - **How does the compositor learn what PROGRAM a client is?** A
-  `QUERY_` provider answering pid -> spawn path keeps the kernel the
-  source of truth (it is the only party that knows) while holding no
-  window state, and `WIN_REQ_ACTIVATE` becomes the compositor's again:
-  it asks who the ASKING pid is and compares against what it recorded
-  per window, so the guarantee is unchanged. The alternatives are
-  keeping ACTIVATE in ring 0 -- which leaves per-window state and does
-  not finish the stage -- or deriving identity from the `.desktop` entry
-  the launcher used, which covers only apps started FROM the launcher
-  and fails silently for anything else.
+  `QUERY_` provider, `QUERY_PROCPATH` -- one record per live process,
+  pid and spawn path. The kernel stays the source of truth (it is the
+  only party that knows) and holds no window state to do it. The
+  alternatives declined: keeping `WIN_REQ_ACTIVATE` in ring 0, which
+  leaves per-window state and does not finish the stage; and deriving
+  identity from the `.desktop` entry the launcher used, which covers
+  only apps started FROM the launcher and fails silently for anything
+  else.
 - **How does the compositor learn a client died?** `uchan`'s server
-  scan already drops a ring whose name no longer resolves, and an shm
-  object's name goes when its creator dies -- so the signal is in the
-  transport the compositor polls every frame, needing only that the scan
-  report WHICH client went instead of silently reclaiming the slot. The
-  alternatives are a kernel event (prompt, but per-client state in the
-  file this stage exists to empty, and sheddable under load) or polling
-  `QUERY_PROCESSES` (no new mechanism, but a scan per frame duplicating
-  what the channel carries).
-- **How far in one go?** 6a moving CREATE / DESTROY / RESIZE / BUFFER
-  and the identity question to the channel, leaving PRESENT on the
-  kernel event path so the hot path and the generation protocol stay
-  put; then 6b moving PRESENT and deleting the table. Or one change.
+  scan, which already drops a ring whose name no longer resolves --
+  needing only that it report WHICH client went instead of silently
+  reclaiming the slot. Declined: a kernel event (prompt, but per-client
+  state in the file this stage exists to empty, and sheddable under
+  load) and polling `QUERY_PROCESSES` (no new mechanism, but a scan per
+  frame duplicating what the channel carries). **NOT BUILT YET** -- it
+  belongs with 6b, where it REPLACES `WIN_EV_CLIENT_DESTROYED` rather
+  than running beside it; a second path that closes a window is two
+  chances to close it twice.
+- **How far in one go?** Two halves, 6a then 6b.
+
+#### 6a -- DONE (2026-09-09). Identity, and the boundary that moved
+
+**THE SPLIT THIS FILE ORIGINALLY PROPOSED DOES NOT HOLD, and the reason
+is worth keeping.** 6a was written as "move CREATE / DESTROY / RESIZE /
+BUFFER to the channel, leave PRESENT on the kernel event path". It
+cannot be done in that order: `WIN_REQ_PRESENT` looks its window up in
+the table, flips `front`, and reads `bufs[front]`'s size and generation.
+Everything CREATE, RESIZE and BUFFER maintain is exactly what PRESENT
+reads -- so those four cannot leave while PRESENT stays without the
+kernel being handed the same numbers twice.
+
+So the halves are drawn where the state actually divides:
+
+- **6a takes out what PRESENT does not need.** `app_identity`, the
+  interned path table, and `WIN_REQ_ACTIVATE` are gone from
+  `win_server.c`. What is left in `struct client_window` is the slot,
+  the front index, the two buffers' sizes and generations, and the
+  client's declared `app_id` -- which rides `WIN_REQ_CREATE` and leaves
+  with it in 6b.
+- **6b takes the rest**, because it can only be done as one piece: the
+  present carries its own w/h/gen, CREATE / DESTROY / RESIZE / BUFFER
+  move to the channel, the death signal moves to the channel scan, and
+  the table goes.
+
+What 6a built:
+
+- **`QUERY_PROCPATH`** (`kernel/proc/procpath_query.c`) -- pid, spawn
+  path, one record per live process.
+- **The compositor derives identity itself.** `wm_client.c` interns the
+  owning process's path at window create, into the same shape the kernel
+  used to keep -- a small never-reclaimed table, because the readers
+  COMPARE identities rather than print them.
+- **`WIN_REQ_ACTIVATE` is a channel message with a REPLY**, the only
+  one. `uchan_call()` already existed for exactly this. The client sends
+  no name, as before; the compositor asks who the ASKING pid is and
+  matches against its own list, so the guarantee is unchanged and the
+  string an app declares about itself is still not part of it.
+- **No channel and no answer both mean "no twin".** The asymmetry is the
+  design: a false "yes" makes a single-instance app exit without ever
+  drawing, a false "no" opens a window the user can see and close.
+
+**AND THE SIZE OF THE ROUND TRIP IS THE POINT.** This adds a scheduler
+hop where there used to be a syscall -- but it happens ONCE, before a
+single-instance app opens anything, and it is what removes an identity
+per window from ring 0. The traffic that must not round-trip (a present,
+every frame, per client) is untouched.
 
 #### What does NOT move, and why it is not a compromise
 
@@ -549,6 +590,8 @@ window state.
 
 ## Revision history
 
+- 2026-09-09: stage 6a built -- identity leaves the kernel. The
+  6a/6b boundary moved, and why is under 6a's own heading.
 - 2026-09-08: written. Stages 0 through 5b built the same day. The carriage
   and the ordering were settled with the maintainer before any code
   changed; the argument that decided it was that only two of eight TWP

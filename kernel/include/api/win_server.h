@@ -53,12 +53,9 @@ struct win_server_ops {
     // are not contiguous, so there is no kernel-visible linear address
     // to hand over. A presentation layer reads them where it is mapped.
     //
-    // `app_id` is the client's own name for what this window IS (see
-    // WIN_REQ_ACTIVATE), already truncated to fit WIN_APP_ID_LEN, and
-    // "" when the client did not give one. Passed HERE rather than
-    // through a slot of its own so a window is never briefly visible
-    // without it -- the gap is exactly long enough for a second copy of
-    // the same program to look for its twin and miss.
+    // `app_id` is the client's own name for what this window IS -- an
+    // icon hint and a label, already truncated to fit WIN_APP_ID_LEN,
+    // and "" when the client did not give one.
     int (*window_created)(int pid, uint32_t id,
                            int w, int h, int x, int y,
                            const char *app_id);
@@ -119,17 +116,10 @@ struct win_server_ops {
     // Returns how many windows were asked. OPTIONAL like every slot.
     int (*close_pid)(int pid);
 
-    // Raise the window carrying `app_id` -- un-minimize it, bring it to
-    // the front and focus it -- and return 1. Return 0 if no window has
-    // that id. OPTIONAL like every slot here; a presentation layer that
-    // leaves it NULL simply answers "nobody there", which degrades to
-    // today's behaviour (every launch opens a new copy) rather than to
-    // an error.
-    //
-    // The MATCH is here and the POLICY is in the client: this says
-    // nothing about whether a second copy may run, only where the first
-    // one is. See WIN_REQ_ACTIVATE in abi/win_proto.h.
-    int (*window_activate)(const char *app_id);
+    // window_activate IS GONE. Single instance is settled entirely
+    // between the client and the compositor now, over the channel --
+    // the kernel neither decides it nor forwards it (see
+    // WIN_REQ_ACTIVATE in abi/win_proto.h).
 
     // Arm (or, with ms == 0, cancel) this window's repeating timer.
     // OPTIONAL like every slot: a presentation layer without one simply

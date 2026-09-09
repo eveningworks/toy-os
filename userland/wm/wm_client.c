@@ -376,19 +376,37 @@ static int raise_window_at(int i) {
     return 1;
 }
 
-// on_window_activate(const char *app_id) is GONE. It searched this WM's
-// own window list by app id -- the question the KERNEL answers now. It
-// received every app_id at create time and keeps them, so it finds the
-// twin itself and sends the window it found. What is left for the
-// compositor is the action, below.
+static int identity_for_pid(int pid);   // below, with the identity table
 
-// The ring-3 door: the kernel already decided WHICH window, so this only
-// has to find it in the list and raise it.
-static int on_window_activate_window(int pid, uint32_t id) {
-    int i = find_client_window(pid, id);
-    if (i < 0 || !raise_window_at(i)) return 0;
-    wm_logf("wm: activated existing window (pid %d, window %u)\n", pid, id);
-    return 1;
+// **THE DECIDING HALF AND THE RAISING HALF ARE BOTH HERE NOW.** The
+// kernel answered this while it held an identity per window; with that
+// gone (stage 6a) the question is the compositor's again, and it is the
+// same question the ring-0 WM used to answer -- only the identity comes
+// from the process rather than from a string the client declared.
+//
+// Searches from the FRONT, so if two windows somehow share an identity
+// the one the user saw most recently is the one that comes back. The
+// asker's OWN windows are skipped: it is asking whether a TWIN exists,
+// and matching itself would make every single-instance app refuse its
+// own first window.
+//
+// Returns 1 if a twin was found and raised, 0 if nobody is there. The
+// caller reads a 1 as "you are the second copy, exit quietly", so a
+// wrong 1 is an app that never appears -- which is why an unknown
+// identity (-1) matches nothing rather than everything.
+static int activate_twin_of(int asking_pid) {
+    int self = identity_for_pid(asking_pid);
+    if (self < 0) return 0;
+    for (int i = window_count - 1; i >= 0; i--) {
+        if (!windows[i].open) continue;
+        if (windows[i].client_pid == asking_pid) continue;
+        if (windows[i].app_identity != self) continue;
+        if (!raise_window_at(i)) continue;
+        wm_logf("wm: raised the existing window of pid %d for pid %d\n",
+                windows[i].client_pid, asking_pid);
+        return 1;
+    }
+    return 0;
 }
 
 // The client arming or cancelling its repeating timer (WIN_REQ_TIMER).
@@ -488,22 +506,63 @@ void wm_client_check_timers(void) {
 // title (win_proto.h). Leaves `out` empty rather than failing if the
 // window is already gone; an empty id groups with nothing, which is the
 // safe direction.
-static void query_app_id(int pid, uint32_t id, char *out, unsigned cap,
-                          int *out_identity) {
+static void query_app_id(int pid, uint32_t id, char *out, unsigned cap) {
     if (out && cap) out[0] = '\0';
-    if (out_identity) *out_identity = -1;
     struct win_request_msg q;
     k_memset(&q, 0, sizeof q);
     q.type = WIN_REQ_WINDOW_APPID;
     q.a = pid;
     q.window = id;
     if (sys_win_request(&q) != 0) return;
-    if (out_identity) *out_identity = q.a;
     if (out && cap) {
         unsigned n = 0;
         while (n + 1 < cap && n < WIN_APP_ID_LEN && q.text[n]) { out[n] = q.text[n]; n++; }
         out[n] = '\0';
     }
+}
+
+// --- application identity ---------------------------------------------
+//
+// WHAT PROGRAM A CLIENT IS, which is the taskbar's grouping key and the
+// whole of single instance. It comes from the process's SPAWN PATH
+// (QUERY_PROCPATH), never from anything the client said: two apps
+// declaring the same app_id would otherwise raise each other's windows,
+// and a single-instance app told its twin is up exits without ever
+// drawing.
+//
+// Interned to an int because both readers COMPARE it, and because the
+// paths are FS_PATH_MAX and a window is not the place to keep 64 bytes
+// of string. Never reclaimed: entries are program paths, of which a
+// running system has a handful, and a refcount would exist to save
+// nothing. Full means the next new program is ungrouped, which is a
+// degradation rather than a failure.
+#define WM_IDENTITY_MAX 32
+
+static char g_ident_path[WM_IDENTITY_MAX][QUERY_PROCPATH_MAX];
+static int  g_ident_count;
+
+static int intern_identity(const char *path) {
+    if (!path || !path[0]) return -1;
+    for (int i = 0; i < g_ident_count; i++)
+        if (k_strcmp(g_ident_path[i], path) == 0) return i;
+    if (g_ident_count >= WM_IDENTITY_MAX) {
+        wm_logf("wm: identity table full -- window ungrouped\n");
+        return -1;
+    }
+    k_strlcpy(g_ident_path[g_ident_count], path, QUERY_PROCPATH_MAX);
+    return g_ident_count++;
+}
+
+// A LINEAR SCAN of the process list per call, and that is fine: it runs
+// when a window is created and when a single-instance app starts, never
+// per frame. -1 for a process the kernel has no path for, which matches
+// nothing -- the safe direction for both readers.
+static int identity_for_pid(int pid) {
+    struct query_procpath r;
+    QUERY_FOREACH(QUERY_PROCPATH, r, i) {
+        if (r.pid == pid) return intern_identity(r.path);
+    }
+    return -1;
 }
 
 // Maps a client's buffer into this process, so the compositor can read
@@ -565,6 +624,19 @@ void wm_client_chan_pump(void) {
         case WIN_REQ_CURSOR:
             on_window_cursor(from, m.window, m.a);
             break;
+        case WIN_REQ_ACTIVATE: {
+            // **THE ONE MESSAGE HERE THAT ANSWERS.** A single-instance
+            // app asks this before it opens anything; the reply decides
+            // whether it draws or exits, so it is always sent, including
+            // the "nobody there" case -- a client left waiting spends
+            // its whole timeout and then opens a duplicate.
+            struct wmchan_msg r;
+            k_memset(&r, 0, sizeof r);
+            r.type = WIN_REQ_ACTIVATE;
+            r.a = activate_twin_of(from);
+            uchan_server_reply(&g_chan, from, &r, sizeof r);
+            break;
+        }
         default:
             // A message this build does not know. Dropped rather than
             // guessed at -- a client speaking a later protocol is not
@@ -723,8 +795,10 @@ int wm_client_handle_event(const struct win_event *ev) {
         // existed, which left every window on this desktop anonymous --
         // see query_app_id().
         char app_id[WIN_APP_ID_MAX];
-        int identity = -1;
-        query_app_id(pid, id, app_id, sizeof app_id, &identity);
+        query_app_id(pid, id, app_id, sizeof app_id);
+        // THE IDENTITY IS THE OWNING PROCESS'S, asked of the kernel
+        // rather than read off the window -- see identity_for_pid().
+        int identity = identity_for_pid(pid);
         // x/y are the compositor's to choose -- the kernel never had an
         // opinion about placement, it only forwarded what the client
         // asked for. 0,0 lets the existing handler place it.
@@ -768,11 +842,10 @@ int wm_client_handle_event(const struct win_event *ev) {
     case WIN_EV_CLIENT_CLOSE:
         on_close_pid(pid);
         break;
-    case WIN_EV_CLIENT_ACTIVATE:
-        // Told, not asked: the kernel already answered the asking client
-        // (it holds the app_ids), so this is only the action.
-        on_window_activate_window(pid, id);
-        break;
+    // WIN_EV_CLIENT_ACTIVATE IS NOT DELIVERED ANY MORE. It existed so
+    // the kernel could tell this process WHICH window it had decided to
+    // raise; the decision is back here (activate_twin_of), and it
+    // arrives on the channel with a reply.
     case WIN_EV_FONT:
         // The metrics moved under us. Everything this compositor draws
         // is derived from ugfx_char_w()/ugfx_char_h() FRESH each frame

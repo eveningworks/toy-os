@@ -21,8 +21,7 @@
 #include "kfmt.h"        // klog_printf
 #include <stddef.h>
 
-#include "scheduler.h" // SCHED_MAX_PROCS, scheduler_exec_path() -- see app_path
-#include "fs.h"       // FS_PATH_MAX, the size of that path
+#include "scheduler.h" // SCHED_MAX_PROCS
 #include "kerrno.h"  // EBUSY -- the diagnostic channel is one slot
 #include "mouse.h"    // mouse_get_state() -- park the plane where the pointer is
 #include "heap.h"     // kmalloc/kfree -- the DEFINE sprite bounce buffer
@@ -89,52 +88,15 @@ struct client_window {
     // reading" must ask bufs[front], not this.
     int w, h;
 
-    // THE ONLY THING A CLIENT SAYS THAT THE KERNEL STILL KEEPS. The
-    // title, the hints and the cursor shape all left for the channel
+    // THE ONLY THING A CLIENT SAYS THAT THE KERNEL STILL KEEPS: its own
+    // NAME for what this window is ("notepad"). A display string and an
+    // icon hint, and **NOT the identity** -- the compositor derives
+    // that from the owning process's spawn path (QUERY_PROCPATH), which
+    // is the one thing a client cannot get wrong. The title, the hints
+    // and the cursor shape all left for the channel
     // (userland/lib/uwmchan.h); this stayed because it rides
-    // WIN_REQ_CREATE, so a window can never exist without one -- and
-    // WIN_REQ_ACTIVATE matches on it, where a window briefly nameless is
-    // the gap that makes a single-instance app miss its own twin and
-    // exit without ever drawing.
-
-    // The client's own NAME for what this window is ("notepad"). A
-    // display string and a hint -- **NOT the identity**. See app_path
-    // below for why, and abi/win_proto.h's WIN_REQ_CREATE.
+    // WIN_REQ_CREATE, so a window can never exist without one.
     char app_id[WIN_APP_ID_LEN];
-
-    // WHAT THIS WINDOW'S APPLICATION ACTUALLY IS: an index into
-    // g_app_paths, interned from the full path its owning process was
-    // spawned from -- taken from the SCHEDULER at create time and never
-    // from anything the client said.
-    //
-    // Identity has to be something a client cannot get wrong, because
-    // the two things keyed on it both fail silently when it is wrong.
-    // Two apps declaring the same app_id would raise each other's
-    // windows through WIN_REQ_ACTIVATE -- a single-instance app told
-    // "your twin is already up" exits without ever drawing, so the
-    // symptom is an app that simply does not start -- and a taskbar
-    // grouping by it would merge two unrelated programs into one
-    // button. No runtime check can catch that either, because two
-    // copies of ONE program legitimately share an identity and look
-    // identical to any such check.
-    //
-    // A path the kernel derives cannot be misdeclared, and every real
-    // system anchors identity the same way: Windows falls back to the
-    // executable behind an AppUserModelID, macOS to the bundle, and
-    // Wayland's app_id is only dependable because a compositor matches
-    // it against a .desktop FILE rather than trusting the string.
-    // A NUMBER rather than the path itself, for two reasons. The
-    // compositor has to compare these, and `struct win_request_msg`'s
-    // only string field is WIN_TITLE_LEN (32) while a path is
-    // FS_PATH_MAX (64) -- so shipping the path would truncate it, and
-    // two long paths sharing a prefix would collide silently, which is
-    // the very failure this replaced. And an integer is what a
-    // comparison actually wants.
-    //
-    // APP_IDENTITY_NONE for a process with no scheduler slot (the
-    // legacy loader), which therefore matches nothing -- the safe
-    // direction.
-    int app_identity;
 };
 
 // The registered compositor: the one process raw input is delivered
@@ -184,9 +146,8 @@ int win_server_any(void) { return win_server_active() || g_comp_pid != 0; }
 // other, which is the property every stage of this plan has been shaped
 // to keep.
 //
-// Fire and forget: no reply, no blocking. The one caller that needed an
-// ANSWER (activate) is answered by the kernel itself now -- see
-// WIN_REQ_ACTIVATE.
+// Fire and forget: no reply, no blocking. Nothing here needs an answer
+// -- activate, the one request that did, is the compositor's now.
 static void tell_compositor(uint32_t type, int pid, uint32_t id,
                              int32_t b, uint32_t mods) {
     if (!g_comp_pid) return;
@@ -210,36 +171,6 @@ static struct client_window *lookup(int pid, uint32_t id) {
     struct client_window *cw = &windows[pid - 1][id];
     if (!cw->used || cw->pid != pid) return NULL;
     return cw;
-}
-
-// --- application identity ---------------------------------------------
-//
-// Spawn paths, interned so a window can carry a small comparable number
-// instead of a string (see struct client_window::app_identity).
-//
-// Never reclaimed. A bounded, never-shrinking table is the right shape
-// here: entries are program paths, of which a running system has a
-// handful, and freeing one would need a reference count whose only
-// purpose would be to save 64 bytes. Full means the next new program
-// gets APP_IDENTITY_NONE -- it groups with nothing and single-instance
-// stops working for it, which is a degradation rather than a failure.
-#define APP_IDENTITY_NONE (-1)
-#define APP_IDENTITY_MAX  32
-
-static char g_app_paths[APP_IDENTITY_MAX][FS_PATH_MAX];
-static int  g_app_count;
-
-static int app_identity_for(const char *path) {
-    if (!path || !path[0]) return APP_IDENTITY_NONE;
-    for (int i = 0; i < g_app_count; i++) {
-        if (k_strcmp(g_app_paths[i], path) == 0) return i;
-    }
-    if (g_app_count >= APP_IDENTITY_MAX) {
-        klog_write("win_server: app identity table full -- window ungrouped\n");
-        return APP_IDENTITY_NONE;
-    }
-    k_strlcpy(g_app_paths[g_app_count], path, FS_PATH_MAX);
-    return g_app_count++;
 }
 
 // Ends a window. THE PIXELS SURVIVE IT: they are the client's object,
@@ -302,13 +233,6 @@ static int create_window(int pid, int want_slot,
     // Everything the kernel was handed and used to forward without
     // keeping. The compositor reads it back with WIN_REQ_WINDOW_APPID.
     k_strlcpy(cw->app_id, app_id ? app_id : "", sizeof cw->app_id);
-    // THE IDENTITY, and it comes from the scheduler rather than from
-    // anything the client said -- see the field's comment.
-    {
-        char path[FS_PATH_MAX];
-        cw->app_identity = scheduler_exec_path(pid, path, sizeof path)
-                            ? app_identity_for(path) : APP_IDENTITY_NONE;
-    }
 
     tell_compositor(WIN_EV_CLIENT_CREATED, pid, cw->id, w, (uint32_t)h);
 
@@ -1019,63 +943,12 @@ int win_server_request(int pid, struct win_request_msg *req) {
         return owned > 0;
     }
 
-    // Also not addressed to one of the caller's own windows -- it names
-    // an app id, and the window carrying it belongs to somebody else by
-    // definition (a client asking about its OWN window learns nothing).
-    // Same unprivileged reasoning as CLOSE_PID above, and weaker still:
-    // the worst outcome is raising a window the user can already see.
-    if (req->type == WIN_REQ_ACTIVATE) {
-        // **THE CALLER NAMES NOTHING.** This asks "is a window of MY
-        // program already open?", and the kernel answers from the
-        // caller's own spawn path -- see struct client_window::app_path.
-        //
-        // It used to take an app id in `text`, which made the answer
-        // depend on a string each app declared about itself: two apps
-        // declaring the same one raised each other's windows, and the
-        // single-instance caller reads a "yes" as "my twin is up, exit
-        // now" -- so the app simply never appeared. Nothing could check
-        // for that either, because two copies of one program are
-        // SUPPOSED to match. A question whose answer the asker cannot
-        // influence has no such failure mode.
-        char self_path[FS_PATH_MAX];
-        if (!scheduler_exec_path(pid, self_path, sizeof self_path)) return 0;
-        int self_id = app_identity_for(self_path);
-        if (self_id == APP_IDENTITY_NONE) return 0;   // matches nothing
-
-        // **THE KERNEL ANSWERS THIS ONE ITSELF**, and that is what
-        // removes the last thing needing a round trip into ring 3.
-        //
-        // The answer is load-bearing: a second copy of a single-instance
-        // app exits 0 only if told its twin was raised, so getting a
-        // "no" wrong opens a duplicate window and getting a "yes" wrong
-        // makes the app vanish. In ring 0 the WM answered because it
-        // owned the window list. But the kernel RECEIVES every app_id at
-        // create time and now keeps it, so "does a twin exist?" is a
-        // fact it already holds -- and the compositor is left with the
-        // ACTION, raising the window, which needs no answer at all.
-        //
-        // Search order is deliberate: the first match wins, and with one
-        // window per program by construction (that is what single
-        // instance MEANS) there is never a second.
-        //
-        // The caller's OWN windows are skipped. It is asking whether a
-        // twin exists, and matching itself would make every
-        // single-instance app refuse its own first window.
-        for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++) {
-            for (int i = 0; i < WIN_CLIENT_MAX; i++) {
-                struct client_window *cw = &windows[p][i];
-                if (!cw->used) continue;
-                if (cw->pid == pid) continue;
-                if (cw->app_identity != self_id) continue;
-                tell_compositor(WIN_EV_CLIENT_ACTIVATE, cw->pid, cw->id, 0, 0);
-                // The ring-0 WM still raises it through its own callback
-                // while it exists; both run, neither disturbs the other.
-                if (g_ops && g_ops->window_activate) g_ops->window_activate(cw->app_id);
-                return 1;
-            }
-        }
-        return 0;
-    }
+    // WIN_REQ_ACTIVATE IS NOT HERE ANY MORE. "Is a window of my program
+    // already open?" is the compositor's question -- it owns the window
+    // list -- and it asks QUERY_PROCPATH who the asking pid is rather
+    // than being told by the client. The kernel answered it only
+    // because it happened to hold an identity per window, which is the
+    // state this stage removes (docs/winserver-ring3-design.md, 6a).
 
     switch (req->type) {
     case WIN_REQ_CREATE: {
@@ -1244,16 +1117,14 @@ int win_server_request(int pid, struct win_request_msg *req) {
         // WIN_REQ_WINDOW_INFO above -- see win_proto.h for why this
         // needs its own request rather than a field on that one.
         //
-        // Answers with the window's IDENTITY (its owner's spawn path),
-        // not with the app_id the client declared: the compositor groups
-        // taskbar buttons by this, and grouping must not be something an
-        // app can get wrong. `text` is WIN_TITLE_LEN and a path is
-        // FS_PATH_MAX -- both 64 today, and the copy is bounded by the
-        // smaller either way.
+        // The app_id the CLIENT declared -- a display string and an
+        // icon hint, nothing keyed on it. The window's IDENTITY used to
+        // ride here too and does not: the compositor derives that from
+        // QUERY_PROCPATH now, so an identity the kernel stores per
+        // window has no reader.
         if (!g_comp_pid || pid != g_comp_pid) return -1;
         struct client_window *cw = lookup(req->a, req->window);
         if (!cw) return -1;
-        req->a = cw->app_identity;
         copy_text(req->text, cw->app_id, WIN_APP_ID_LEN);
         return 0;
     }

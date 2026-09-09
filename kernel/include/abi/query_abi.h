@@ -476,6 +476,34 @@ struct query_window {
     uint32_t reserved;
 };
 
+// QUERY_PROCPATH -- what PROGRAM each live process is running.
+//
+// The full path a process was spawned from, taken from the scheduler
+// and never from anything the process said. That is the one identity a
+// client cannot misdeclare, and the compositor keys single instance and
+// taskbar grouping on it -- which is why the window table stopped
+// holding a copy (docs/winserver-ring3-design.md, stage 6a). The kernel
+// is the only party that knows this; answering it here costs it no
+// window state.
+//
+// NOT QUERY_PROCESSES' `name`, which is a display string truncated to
+// PROC_NAME_MAX: two programs in different directories can share one,
+// and grouping on that merges two unrelated apps into one taskbar
+// button.
+//
+// LIST, one record per live process.
+#define QUERY_PROCPATH 39
+
+#define QUERY_PROCPATH_MAX 64  // FS_PATH_MAX (api/fs.h)
+
+struct query_procpath {
+    int32_t pid;
+    // "" for a process the scheduler has no path for -- the legacy
+    // loader. An empty path matches nothing, which is the safe
+    // direction for both readers.
+    char    path[QUERY_PROCPATH_MAX];
+};
+
 #define QUERY_APPLOG 37
 
 struct query_applog {

@@ -451,17 +451,32 @@ this the obvious way), not from how much history it accumulated.
   accumulates a backlog of overdue firings; and there is ONE timer per
   window. See `docs/decisions.md`.
 - **An app refuses its OWN second copy -- the launcher never does.** A
-  `uapp_desc` with an `app_id` and `UAPP_SINGLE_INSTANCE` sends
-  `WIN_REQ_ACTIVATE` before creating anything: TWS raises the window
-  already carrying that id and the second copy exits 0 without ever
-  appearing. Three things to know. The id rides `WIN_REQ_CREATE`'s
-  `text` field so a window can never exist without it (a later "register
-  my id" message leaves a gap exactly long enough for a second copy to
-  miss its twin). It is an opaque token -- `"taskmgr"`, not a path and
-  not the title. And **it is not a lock**: two launches in the same
-  instant can both be told "nobody there", which is recorded rather than
-  fixed because every launch path here is a human clicking a menu. See
-  `docs/decisions.md`.
+  `uapp_desc` with `UAPP_SINGLE_INSTANCE` sends `WIN_REQ_ACTIVATE`
+  before creating anything: the compositor raises the twin and the
+  second copy exits 0 without ever appearing. Four things to know.
+  **The request CARRIES NOTHING** -- the compositor asks the kernel what
+  program the ASKING pid is and compares that, so the answer cannot
+  depend on a string an app declares about itself (two apps declaring
+  one `app_id` used to raise each other's windows, and a "yes" means
+  "exit now", so the second app simply never appeared). **It is the one
+  channel message with a REPLY**, `uchan_call()`, and it is the only
+  round trip in the protocol; no channel and no answer both mean "no
+  twin", because a false yes hides an app and a false no shows a window
+  the user can close. `app_id` is still declared and still rides
+  `WIN_REQ_CREATE`, but nothing MATCHES on it any more -- it labels a
+  taskbar group and picks an icon. And **it is not a lock**: two
+  launches in the same instant can both be told "nobody there", which is
+  recorded rather than fixed because every launch path here is a human
+  clicking a menu. See `docs/decisions.md`.
+- **WHAT PROGRAM A CLIENT IS COMES FROM ITS SPAWN PATH, AND THE
+  COMPOSITOR ASKS THE KERNEL FOR IT** -- `QUERY_PROCPATH`, one record
+  per live process, interned to an int by `wm_client.c`'s
+  `identity_for_pid()`. It is the grouping key for the taskbar and the
+  match for single instance, and both fail SILENTLY when it is wrong: a
+  wrong merge puts two programs on one button, a wrong match makes an
+  app exit without drawing. A path the kernel derives cannot be
+  misdeclared, which is the property neither `app_id` nor a `.desktop`
+  entry has. -1 (no path) matches nothing, which is the safe direction.
 - **`uui_table` sorts on a header click, and an app supplies only a
   COMPARATOR.** `uui_table_set_compare()` + `uui_table_set_sort()`; the
   widget owns the ordering (an `int order[]` permutation), the clickable
