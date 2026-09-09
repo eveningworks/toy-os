@@ -13,10 +13,16 @@
 # abandoned rather than spun forever.
 #
 # See data/etc/services.d/README.md for the format.
+# NO Target=, so it runs on a graphical boot too -- and that is what
+# makes the Start menu's "Exit to shell" land in the RING-3 shell rather
+# than the kernel's. It costs nothing while the desktop is up: a
+# compositor holding the role MUTES the console's line discipline
+# (keyboard.c's tty_set_bypass), so this blocks on fd 0 until the
+# desktop exits and then has the keyboard. `rescue` starts no services
+# at all, which is where the kernel shell gets the console back.
 Name=tosh
 Description=The console shell
 Exec=/bin/tosh
-Target=text
 Restart=always
 # THE ONE SERVICE THAT MUST NOT LOG ITS STDOUT: this is an interactive
 # shell and fd 1 is where its prompt and every command's output goes.

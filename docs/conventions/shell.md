@@ -42,9 +42,20 @@ this the obvious way), not from how much history it accumulated.
   buffer mangled `--color=never` into `--color=`; `apps/shell_sys.c`
   forwards them verbatim now and only resolves the path against the
   shell's cwd.
-- **A `text` BOOT REACHES A RING-3 SHELL, AND THE KERNEL SHELL STANDS
-  DOWN FOR IT.** `data/etc/services.d/tosh` (`Target=text`,
-  `Restart=always`) makes `/bin/tosh` a service, so init starts it as
+- **EVERY ORDINARY BOOT REACHES A RING-3 SHELL, AND THE KERNEL SHELL IS
+  THE `rescue` TARGET.** `data/etc/services.d/tosh` has NO `Target=`, so
+  init starts `/bin/tosh` on a graphical boot as well as a text one --
+  which is what makes the Start menu's "Exit to shell" land in ring 3
+  rather than at the `#` prompt. It costs nothing while the desktop is
+  up: a compositor holding the role MUTES the console's line discipline
+  (`keyboard.c`'s `tty_set_bypass`), so tosh simply blocks on fd 0 until
+  the desktop exits and then has the keyboard, with no new mechanism and
+  no second consumer of the same keys. **`target=rescue` starts NO
+  services at all** and is where the kernel shell gets the console back
+  -- the shell that still works when the filesystem is too broken for
+  `/bin/tosh` to load, and the one carrying the kernel introspection
+  commands ring 3 has no equivalent for. systemd's `rescue.target`.
+  `Restart=always` makes tosh a service, so init starts it as
   systemd starts a getty and puts a new prompt back when Ctrl-D ends
   the old one. `apps/apps.c` then skips the ring-0 REPL entirely: no
   prompt drawn, no keys taken, and every one of its commands still

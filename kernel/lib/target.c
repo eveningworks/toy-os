@@ -13,7 +13,8 @@
 #define TARGET_KEY  "default_target"
 
 // Registry-choice order, and the order `config` lists them in.
-static const char *const TARGET_NAMES[] = { TARGET_TEXT, TARGET_GRAPHICAL };
+static const char *const TARGET_NAMES[] = { TARGET_TEXT, TARGET_GRAPHICAL,
+                                            TARGET_RESCUE };
 #define TARGET_COUNT ((int)(sizeof TARGET_NAMES / sizeof TARGET_NAMES[0]))
 
 // Graphical by default: this OS boots to a desktop, and a machine whose

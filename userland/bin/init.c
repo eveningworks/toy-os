@@ -71,6 +71,7 @@
 //     waiter. Both are bounded -- a backoff by its table, a barrier by
 //     ReadyTimeout= -- so this state ends on its own.
 #include "rt/sys.h"
+#include "target.h"   // TARGET_RESCUE
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -631,6 +632,24 @@ static void build_order(void) {
 // `announce` keeps the boot message off every subsequent rescan.
 static void load_services(int announce) {
     for (int i = 0; i < g_svc_count; i++) g_svc[i].seen = 0;
+
+    // **RESCUE STARTS NOTHING, and that is the whole of what it is.**
+    // No desktop, no console shell, no daemons -- so the KERNEL's own
+    // shell owns the console, which is the shell that still works when
+    // the filesystem is too broken for /bin/tosh to load and the one
+    // carrying the kernel introspection commands ring 3 has no
+    // equivalent for. systemd's rescue.target.
+    //
+    // Enforced HERE rather than by a Target= on every descriptor,
+    // because "no Target= means every target" is the useful default for
+    // an ordinary service and would otherwise make rescue the one target
+    // every one of them had to name.
+    if (k_strcmp(g_target, TARGET_RESCUE) == 0) {
+        if (announce)
+            sys_eprint("init: target rescue -- starting no services; the "
+                       "kernel shell owns the console\n");
+        return;
+    }
 
     int n = sys_listdir(SERVICES_DIR, g_ents,
                         (int)(sizeof g_ents / sizeof g_ents[0]));

@@ -31,6 +31,14 @@
 #define TARGET_TEXT      "text"
 #define TARGET_GRAPHICAL "graphical"
 
+// RECOVERY. Starts NO services at all, so the KERNEL's own shell owns
+// the console -- which is the point: it is the shell that works when the
+// filesystem is too broken for /bin/tosh to load, and it carries the
+// kernel introspection commands nothing in ring 3 has. systemd's
+// rescue.target, and reached the same way: `target=rescue` on the GRUB
+// line, or `config set system.default_target rescue`.
+#define TARGET_RESCUE    "rescue"
+
 // Called from kernel_main() after fs_init(), beside tz_init() and the
 // other /etc readers -- and BEFORE the init process is spawned, since
 // init asks for this value as its first act. Loads `default_target`
