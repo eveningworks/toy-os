@@ -4436,9 +4436,10 @@ written a sleep type the firmware never named.
 
 ## An RTL8153 vendor driver for USB Ethernet
 
-**BUILT 2026-08-31** -- `kernel/drivers/net/net_usb_r8153.c`. What is left
-here is what a later session would otherwise re-derive: what was
-measured, and what was not.
+**BUILT 2026-08-31** -- `kernel/drivers/net/net_usb_r8153.c`, split on
+2026-09-09 into the `rtl_usb.c` core and `rtl8153.c` when the RTL8156
+arrived. What is left here is what a later session would otherwise
+re-derive: what was measured, and what was not.
 
 **The hardware.** A TP-Link UE300 (`2357:0601`, RTL8153, chip version
 0x5c20), passed through to a guest:
@@ -4461,9 +4462,10 @@ stream is a bulk transfer completing.
   ure(4) clears it, so the device sends one frame per transfer. The
   walk handles a packed transfer and its KTESTs feed it one, but no
   device has produced one here.
-- **Anything but a 5C20 stepping.** The version check REFUSES an
-  RTL8153B, an RTL8156 and an RTL8152: those want a different init
-  sequence and there is nothing here to test one against.
+- **Anything but a 5C20 stepping among the 8153s.** The version gate
+  REFUSES an RTL8153B and an RTL8152: those want a different init
+  sequence and there is nothing here to test one against. (The RTL8156
+  has its own chip file since 2026-09-09 -- see its heading below.)
 - ~~**SuperSpeed.**~~ PROVEN 2026-08-31 on the bare-metal laptop, where
   the adapter sits on a USB 3 root port: `port 13: connected,
   super-speed`, bound with `1024 B/packet` (against 512 at high speed),
@@ -4776,3 +4778,59 @@ per-directory boundary, `lib/tosh.c` and `bin/ntpd.c` the only mixes),
 `gui move` vs `hover_frames()` (the five raw `gui move` sites all
 deliberately want the one-iteration semantics), `gui_flow.py`'s pixel
 constants, the single `run` target, and the single version source.
+
+## An RTL8156 driver, the 2.5G USB part
+
+**BUILT 2026-09-09** -- `kernel/drivers/net/rtl8156.c`, a `struct
+rtl_usb_ops` over the `rtl_usb.c` core; the sequence is ure(4)'s
+`ure_rtl8153b_init()`/`ure_rtl8153b_nic_reset()` with the 8156 and
+8156B branches kept and the 8153B-only ones dropped. Proven on a Realtek
+`0BDA:8156` (version `0x7410`, an RTL8156B) passed through to QEMU with
+`vm.py --usb-host 0bda:8156`: super-speed enumeration into the vendor
+configuration, `link UP 2500M` three seconds after bind, a DHCP lease
+from the real LAN once carrier came up, ICMP to the laptop, and HTTP
+fetches of 1 MB and 4 MB from a Linux server on the development host
+(`python3 -m http.server`), checksummed. `ifconfig` prints `2.5 Gb/s`
+rather than rounding it to 2.
+
+**What the bring-up measured.** With the 8153's four buffers per
+direction, a download's ACK stream had a THIRD of its transmits refused
+(`tx … 654 dropped` of 2155 for 1 MB): every buffer was still on the
+wire awaiting its completion. The peer read the silence as loss and
+retransmitted -- 5.8 MB received for a 4 MB file -- and a 16 MB fetch
+wedged. Sixteen buffers per direction (`RTL_BUFS`) took transmit drops
+to zero and the 4 MB fetch to about 16 s; the peer still retransmits
+about a tenth, so frames are still being lost on the RECEIVE side --
+not in the descriptor walk (`rx_dropped` stays 0) but before it, which
+is the device with nowhere to put a frame. **A 16 MB fetch still
+stalls** at that loss rate, because toy-os's TCP drops any segment past
+`rcv_nxt` and every loss costs a round trip of retransmission; that is
+the roadmap's NEXT item (out-of-order reassembly), not this driver's.
+The same server-side fragility is why fetches from toy-os's own `httpd`
+truncated on BOTH the e1000 path (3.8 MB of 8) and this one: the
+in-order stack on either end.
+
+**What is NOT proven.** Receive aggregation is OFF here where the
+reference turns it on, so throughput is bounded by one frame per bulk
+transfer -- a roadmap item with a before/after, and the likely cure for
+the receive-side loss above (larger transfers, fewer of them). The
+RTL8156 "A" (`0x7020`/`0x7030`) path is written from the reference and
+has had no device. Hot unplug of a bound 8156, and the 8156 on the
+bare-metal laptops (neither has one plugged in).
+
+## A transmit the driver refuses is a DROPPED frame
+
+Measured 2026-09-09 on the RTL8156 bring-up: `net_device.transmit()`
+returns -ENOSPC when every transmit buffer is still on the wire, and
+the stack has no queue behind it, so the frame is simply gone --
+`ifconfig` counts it as `tx … dropped`. With four buffers a 2.5 Gb/s
+download refused a third of its own ACKs (654 of 2155 transmits for
+1 MB), the peer read that as loss and retransmitted 40% of the data,
+and a 16 MB fetch wedged. Sixteen buffers took the count to zero for
+that load, which is a bigger bucket, not a fix: a burst larger than the
+ring drops again, silently except for the counter. What a real stack
+does is queue -- Linux's `qdisc` in front of the driver, and the driver
+stopping the queue (`netif_stop_queue`) until a completion frees a
+slot. The shape for toy-os is a small per-device transmit queue in
+`net.c` drained on completion, so a refusal is a wait rather than a
+loss; `e1000` and `r8169` have the same seam.

@@ -125,11 +125,13 @@ directory.
 
 Adapted code
 
-The RTL8152/RTL8153 USB Ethernet driver -- named by what it is as well
-as by where it lives, kernel/drivers/net/net_usb_r8153.c, because the
-file has moved once already -- is original work under the MIT License
-above, written against FreeBSD's ure(4) driver (sys/dev/usb/net/if_ure.c
-and if_urereg.h) as its reference.
+The Realtek USB Ethernet driver -- named by what it is as well as by
+where it lives, kernel/drivers/net/rtl_usb.c with rtl8153.c and
+rtl8156.c beside it, because the file has moved once already -- is
+original work under the MIT License above, written against FreeBSD's
+ure(4) driver (sys/dev/usb/net/if_ure.c and if_urereg.h) as its
+reference; the RTL8156/8156B sequence was adapted from the same file on
+2026-09-09.
 
 Register addresses, bit definitions and descriptor layouts are facts
 about the Realtek hardware and carry no notice. What this notice covers

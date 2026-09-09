@@ -928,7 +928,8 @@ past its BAR, and `pci_msi.c` refuses an MSI-X table past its BAR.
 class driver (`usb_hub.c`, part of the topology rather than a device on
 it). **Everything that RIDES the bus lives with its class registry** --
 `input/input_usbhid.c`, `sound/sound_usb.c`, `net/net_usb_ecm.c` and
-`net/net_usb_r8153.c` -- and enumeration reaches each through the
+`net/rtl_usb.c` (with a chip file per Realtek part beside it) -- and
+enumeration reaches each through the
 `_bind`/`_unbind` pair `usb.h` declares. See `kernel/README.md` and
 `docs/decisions.md`.
 UHCI/OHCI/EHCI are found by prog_if, named in the log
@@ -1252,10 +1253,18 @@ under MSI-X, which is not what the spec would lead you to expect.
 
 ## A VENDOR CONFIGURATION NEEDS A DRIVER THAT NAMES THE DEVICE, AND AN RTL8153 IS FRAMED RATHER THAN RAW
 
-`kernel/drivers/net/net_usb_r8153.c` drives the Realtek RTL8152/8153 in its
+`kernel/drivers/net/rtl_usb.c` drives the Realtek USB parts in their
 own configuration, because the UE300's standards-based one does not
 receive and neither does Linux's `cdc_ether` there (`docs/bugs.md`).
-Six things:
+**It is a TRANSPORT CORE plus a chip file per part** -- `rtl8153.c` for
+the 8153 "A" steppings, `rtl8156.c` for the 2.5G RTL8156/8156B -- each
+a `struct rtl_usb_ops` (init, reset-and-thresholds, advertise, a
+link-up hook) chosen by the version register, `r8152.c`'s `rtl_ops`
+shape. A version no chip file claims is REFUSED, not driven with a
+neighbour's sequence; the RTL8153B is still in that set. Nothing here
+is shared with the PCI Realtek driver (`r8169.c`): another transport,
+another register map, as Linux and FreeBSD also keep them. Seven
+things:
 
 - **CLASS 0xFF DESCRIBES NOTHING, so an id table is the gate.** A
   vendor-specific interface counts as driveable only when

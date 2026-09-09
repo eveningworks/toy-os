@@ -189,7 +189,7 @@ int usb_net_bind(struct usb_device_info *info, const uint8_t *cfg,
 // Releases the device on `slot`, if it is the bound one.
 void usb_net_unbind(uint8_t slot);
 
-// --- RTL8153, the vendor protocol (drivers/net/net_usb_r8153.c) -------
+// --- Realtek USB Ethernet, the vendor protocol (drivers/net/rtl_usb.c) --
 
 // Is this a device the Realtek driver claims? Asked by enumeration
 // BEFORE a configuration is chosen, because the vendor configuration is
@@ -197,7 +197,7 @@ void usb_net_unbind(uint8_t slot);
 // nothing about what is behind it.
 int usb_r8153_claims(uint16_t vid, uint16_t pid);
 
-// Binds the vendor configuration of an RTL8152/8153 and registers a
+// Binds the vendor configuration of an RTL8153 or RTL8156 and registers a
 // `net_device`. Takes the raw configuration for the same reason
 // usb_net_bind() does. Returns 1 when it took the device.
 int usb_r8153_bind(struct usb_device_info *info, const uint8_t *cfg,

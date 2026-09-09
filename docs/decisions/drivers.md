@@ -2016,9 +2016,9 @@ sounds like silence rather than like a bug.
 ## A per-chip vendor driver, in a kernel whose rule is "a class, not a device"
 
 `net_usb_ecm.c` speaks CDC-ECM, the standard, and every other USB driver
-here is a class driver on purpose. `net_usb_r8153.c` is a per-chip register
-map for one Realtek family, which is the opposite. It exists because
-the standard did not work on the hardware.
+here is a class driver on purpose. `rtl_usb.c` (then `net_usb_r8153.c`)
+is a per-chip register map for one Realtek family, which is the
+opposite. It exists because the standard did not work on the hardware.
 
 **The measurement that decided it.** The TP-Link UE300 offers Realtek's
 protocol as configuration 1 and CDC-ECM as configuration 2. In
@@ -2072,7 +2072,7 @@ on is one line once somebody wants the throughput.
 `net/`, `sound/`, `input/` -- with `virtio/` and `usb/` holding the
 shared buses and nothing that rides on them. So USB HID is
 `input/input_usbhid.c`, USB audio is `sound/sound_usb.c`, and both USB
-Ethernet adapters are `net/net_usb_ecm.c` and `net/net_usb_r8153.c`.
+Ethernet adapters are `net/net_usb_ecm.c` and `net/rtl_usb.c`.
 
 **This was the other way round until 2026-08-31**, and the move is
 worth recording because the two obvious references disagree flatly.
@@ -2080,7 +2080,7 @@ Linux files by function first: `drivers/net/usb/r8152.c`, `sound/usb/`,
 `drivers/hid/usbhid/`, with `drivers/usb/` holding only `core/` and
 `host/`. FreeBSD files by bus first: `sys/dev/usb/net/if_ure.c`,
 `sys/dev/usb/input/` -- and `if_ure.c` is the very file
-`net_usb_r8153.c` was written against, so "follow the reference" argued
+`rtl_usb.c` was written against, so "follow the reference" argued
 for staying put.
 
 **What decided it is that a class registry is the extension point.**
@@ -2353,7 +2353,7 @@ What it does instead is split. The descriptor rules -- what a transmit
 `opts1` must carry, what a completed receive `opts1` means -- are three
 functions in `kernel/include/kernel/r8169.h` with no register access in
 them, and `r8169_test.c` KTESTs them in QEMU like anything else. That
-is `net_usb_r8153.c`'s shape, and it is chosen for the same reason: the
+is `rtl_usb.c`'s shape, and it is chosen for the same reason: the
 silent bugs live there. A receive length used as reported delivers four
 bytes of Ethernet FCS as payload, which every checksum above then fails
 on; a transmit ring with EOR nowhere sends the engine off the end of
@@ -2387,3 +2387,41 @@ this file would have to get right, and neither can be tested here --
 claiming hardware on the strength of a family resemblance is how a
 driver writes to somebody else's registers.
 
+
+## A Realtek USB chip is an ops table over one transport core, and shares nothing with the PCI parts
+
+The RTL8156 (2.5G, 2026-09-09) was the second Realtek USB chip to
+drive, and the question it forced was what the family shares.
+
+**What real systems do.** Linux's `r8152.c` is one driver for every
+RTL815x with a `struct rtl_ops` per chip version -- init, enable,
+disable, up, down, PHY config -- selected from the version register;
+FreeBSD's `ure(4)` is one file with `if (flags & 8156)` branches through
+the same functions. Neither shares a line with its PCI Realtek driver
+(`r8169.c`, `re(4)`): a different transport (MMIO against vendor
+control transfers), a different register map, and only the PHY in
+common -- which Linux keeps in phylib, a layer toy-os does not have.
+
+**What toy-os does.** `rtl_usb.c` is the core: the four-bytes-behind-a-
+byte-enable register layer, the OCP PHY window, the 8/24-byte framing
+walk, the bulk pair, link polling, binding. `rtl8153.c` and `rtl8156.c`
+each fill a `struct rtl_usb_ops` and name the versions they drive; the
+core refuses any version no file claims. The ops shape rather than
+FreeBSD's flag branches because every later chip would add branches to
+every function of one growing file, where a table adds a file -- and
+because the 8156's init and reset genuinely are different sequences
+sharing only helpers (`rtl_hw_reset`, `rtl_disable_teredo`,
+`rtl_phy_status`), which is what a table expresses and a branch hides.
+
+**Two consequences.** A future RTL8153B is `rtl8153b.c` and one row in
+`rtl_usb_chip_for()`, with its own DRIVER_DECLARE so `lsdrv` names it.
+And nothing was factored towards `r8169.c`: a "Realtek PHY" layer would
+be the first thing shared, and that waits for a second PCI part
+(RTL8125) to need it -- the second-real-caller bar, as everywhere here.
+
+**Declined:** branches in one file (the reference's shape; the 8156
+would have taken the file past 1,500 lines and the next chip further),
+and receive aggregation on the 8156 at first bring-up -- the reference
+enables it with 48 KiB buffers, and one frame per transfer is what
+keeps a dead receive path and a broken descriptor walk distinguishable.
+It is a roadmap item with a before/after to measure.

@@ -95,6 +95,10 @@ static int show(void) {
             char speed[32];
             if (!d.link_up)
                 snprintf(speed, sizeof speed, "down");
+            else if (d.link_bps >= 1000000000ULL && d.link_bps % 1000000000ULL)
+                snprintf(speed, sizeof speed, "up, %llu.%llu Gb/s",   // 2.5 Gb/s is not 2
+                         (unsigned long long)(d.link_bps / 1000000000ULL),
+                         (unsigned long long)(d.link_bps % 1000000000ULL / 100000000ULL));
             else if (d.link_bps >= 1000000000ULL)
                 snprintf(speed, sizeof speed, "up, %llu Gb/s",
                          (unsigned long long)(d.link_bps / 1000000000ULL));

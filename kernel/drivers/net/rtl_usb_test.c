@@ -7,6 +7,7 @@
 // 8-byte padding delivers the first frame correctly and garbage after
 // it, which is exactly the failure a single-frame fixture cannot see.
 #include "usb.h"
+#include "rtl_usb.h"
 #include "ktest.h"
 #include "netdev.h"
 #include "string.h"
@@ -120,4 +121,15 @@ KTEST("usb-r8153", "only listed devices claim a vendor configuration") {
     KTEST_ASSERT(usb_r8153_claims(0x0BDA, 0x8153));
     KTEST_ASSERT(!usb_r8153_claims(0x2357, 0x0000));
     KTEST_ASSERT(!usb_r8153_claims(0x041E, 0x3256));  // a Sound Blaster G6
+}
+
+// The gate that keeps an untested part from being driven with a
+// neighbour's sequence: the 2.5G part is named, the 8153B is refused.
+KTEST("usb-r8153", "the version gate names the 8156B and refuses the 8153B") {
+    KTEST_ASSERT(rtl_usb_chip_for(0x5C20) == &rtl8153_ops);
+    KTEST_ASSERT(rtl_usb_chip_for(0x7410) == &rtl8156_ops);
+    KTEST_ASSERT(rtl_usb_chip_for(0x7020) == &rtl8156_ops);
+    KTEST_ASSERT(rtl_usb_chip_for(0x6000) == 0);   // RTL8153B: nothing here has driven one
+    KTEST_ASSERT(rtl_usb_chip_for(0x0000) == 0);   // registers that did not read
+    KTEST_ASSERT(usb_r8153_claims(0x0BDA, 0x8156));
 }
