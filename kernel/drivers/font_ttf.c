@@ -16705,7 +16705,3 @@ const struct font_ttf_variant font_ttf_variants[FONT_SIZE_COUNT] = {
     { &font_ttf_20[0][0][0], 12, 23, "20" },
     { &font_ttf_24[0][0][0], 14, 27, "24" },
 };
-
-const unsigned char font_ttf_extra_codepoints[FONT_TTF_EXTRA_COUNT] = {
-    0xC4, 0xD6, 0xC5, 0xE4, 0xF6, 0xE5,
-};

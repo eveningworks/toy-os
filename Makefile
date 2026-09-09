@@ -559,6 +559,7 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/completion.o \
                $(BUILD)/userland/shared/histsearch.o \
                $(BUILD)/userland/shared/ttf.o \
+               $(BUILD)/userland/shared/font_slots.o \
                $(BUILD)/userland/shared/klineedit_cases.o \
                $(BUILD)/userland/shared/etc_config_cases.o \
                $(BUILD)/userland/shared/tmppath.o
