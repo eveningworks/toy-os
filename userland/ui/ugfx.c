@@ -294,11 +294,16 @@ static uint32_t g_shm_generation[UGFX_FONT_WEIGHTS];
 // abi/font_shm.h on why the atlas objects cannot answer this themselves.
 static const struct font_beacon *g_beacon;
 static uint32_t g_seen_beacon;
+static uint32_t g_tried_gen = 0xFFFFFFFFu; // no upgrade attempted yet
 
 // What this process currently has mapped for each weight, so a
 // republish can give it back.
 static void *g_map_base[UGFX_FONT_WEIGHTS];
 static uint64_t g_map_bytes[UGFX_FONT_WEIGHTS];
+
+// Whether this weight is currently drawn from fontd's atlas, as opposed
+// to the kernel's baked fallback.
+static int g_from_fontd[UGFX_FONT_WEIGHTS];
 
 static void fontd_unmap(int weight) {
     if (!g_map_base[weight]) return;
@@ -366,6 +371,7 @@ static int map_fontd_font(int weight, struct ugfx_font *out) {
     fontd_unmap(weight);
     g_map_base[weight] = base;
     g_map_bytes[weight] = hdr.bytes;
+    g_from_fontd[weight] = 1;
 
     const struct font_shm *h = (const struct font_shm *)base;
     out->char_w   = (int)h->cell_w;
@@ -390,6 +396,7 @@ static int map_fontd_font(int weight, struct ugfx_font *out) {
 // Asks the server for one weight and fills `out`. Returns 1 on success.
 static int map_session_font(int weight, struct ugfx_font *out) {
     if (map_fontd_font(weight, out)) return 1;
+    g_from_fontd[weight] = 0;
     ulogf("ugfx: session font %d from the KERNEL (no fontd atlas)\n", weight);
 
     struct win_request_msg req;
@@ -433,7 +440,28 @@ static int map_session_font(int weight, struct ugfx_font *out) {
 // only re-mapped on the event would map the OLD atlas again and keep it.
 int ugfx_font_recheck(void) {
     beacon_map();
-    if (!g_beacon || g_beacon->generation == g_seen_beacon) return 0;
+    if (!g_beacon) return 0;
+
+    // **A CLIENT THAT STARTED BEFORE fontd IS STUCK OTHERWISE.** It fell
+    // back to the kernel's baked tables, and the first beacon read
+    // records whatever generation is already there -- so nothing ever
+    // looks like it moved and the client draws the boot font forever,
+    // in a different typeface from every window beside it. Asking
+    // whether we are ON the atlas is the condition that covers both
+    // that and an ordinary republish.
+    // ONCE PER REPUBLISH, NOT ONCE PER TICK. A machine whose face is
+    // `builtin` publishes nothing on purpose, so this condition is
+    // permanently true there -- retrying every frame re-maps the font
+    // and resets the current weight on each one, which is a storm, not
+    // a fallback.
+    if (!g_from_fontd[UGFX_FONT_REGULAR]) {
+        if (g_beacon->generation == g_tried_gen) return 0;
+        g_tried_gen = g_beacon->generation;
+        g_seen_beacon = g_beacon->generation;
+        return ugfx_font_init() && g_from_fontd[UGFX_FONT_REGULAR];
+    }
+
+    if (g_beacon->generation == g_seen_beacon) return 0;
     g_seen_beacon = g_beacon->generation;
     ugfx_font_init();
     return 1;
