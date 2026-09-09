@@ -1,0 +1,22 @@
+# The session font, parsed and rasterized in RING 3.
+#
+# A .ttf is attacker-shaped data and this is where it is parsed, so a
+# malformed font crashes a restartable service instead of the kernel --
+# the split Windows made when it moved font parsing to fontdrvhost.
+#
+# NO Target=, so it runs in `text` as well as `graphical`: the GUI
+# Terminal and every windowed app want the session face, and a machine
+# that starts a desktop by hand later should already have one published.
+#
+# Ready=notify, so a service ordered after this one waits for the atlas
+# to actually exist. It notifies even when it published NOTHING (a
+# `builtin` face, or a missing file): the desktop works on the baked
+# tables either way, and refusing to come up would take the session down
+# over a cosmetic problem.
+#
+# See docs/commands/fontd.md.
+Name=fontd
+Description=Rasterize the session font for every client
+Exec=/bin/fontd
+Restart=always
+Ready=notify

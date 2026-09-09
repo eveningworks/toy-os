@@ -209,6 +209,7 @@ a command), and the `gui3`/`nano` aliases.
 ### Services and the system
 
 - [`clipboardd`](clipboardd.md)
+- [`fontd`](fontd.md)
 - [`soundd`](soundd.md)
 
 ### Storage
