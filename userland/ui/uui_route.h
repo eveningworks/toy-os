@@ -134,6 +134,16 @@ const struct uui_drag *uui_router_dropped(const struct uui_router *r);
 // Esc: the source hears drag_end(0), the target a leave, nothing drops.
 void uui_router_drag_cancel(struct uui_router *r);
 
+// A drag from ANOTHER window (WIN_EV_DRAG_OVER/LEAVE/DROP): the same
+// target ops, with a payload whose `source` is NULL and whose files are
+// in the drag slot. `over` returns 1 while some widget accepts; `drop`
+// returns the id of the widget that took it (0 for none), readable
+// through uui_router_dropped() as after a local drop.
+int  uui_router_extern_over(struct uui_router *r, int cx, int cy, unsigned mods,
+                            const char *dir, int count, const char *label);
+void uui_router_extern_leave(struct uui_router *r);
+int  uui_router_extern_drop(struct uui_router *r, int cx, int cy, unsigned mods);
+
 // The WIN_CURSOR_* the widget tree wants at (cx, cy): deepest declaring
 // widget wins, open popup first, DEFAULT when nothing asks.
 //

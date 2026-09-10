@@ -1326,11 +1326,11 @@ What remains, and what each needs:
   target highlights in the accent, move by default and copy with Ctrl.
   `filemanager_test.py` drives it with a confirmed row aim and a
   waypoint drag, and reads the drop through the shell's listing.
-- **Drag-and-drop BETWEEN windows** -- extends the above with a WM-level
-  "carrying a payload" state, since the pointer leaves the source
-  client's content area and the target must learn what is being offered
-  before the release. This is where the clipboard's typed formats get
-  reused rather than a second mechanism invented.
+- **Drag-and-drop BETWEEN windows** -- BUILT 2026-09-10: `wm_dnd.c`
+  carries the payload state, offers `WIN_EV_DRAG_OVER/LEAVE/DROP` to the
+  window under the held pointer, and the desktop is a source and a
+  target. The payload rides a DRAG SLOT beside the clipboard in the
+  same page (`docs/decisions/gui.md`), not the clipboard itself.
 - **A clipboard history ring**, once there is more than one format.
 
 ### Runtime + interop

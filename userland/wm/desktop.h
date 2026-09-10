@@ -110,6 +110,10 @@ int desktop_icon_geometry(int i, const char **name, int *x, int *y, int *w, int 
 int desktop_icon_count(void);              // launchers plus the folder's entries
 // Ctrl+C/X/V and Delete when no window has the focus. 1 if consumed.
 int desktop_handle_key(int key, unsigned mods);
+// A drop from another window landed on the desktop background: the
+// drag slot's files move (or copy, with Ctrl) into /home/desktop.
+// Returns 1 if it took them.
+int desktop_drop_here(int mx, int my);
 int desktop_icon_px(void);                 // the current size in pixels
 const char *desktop_icon_size_word(void);  // and the setting's word
 

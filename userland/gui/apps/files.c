@@ -579,6 +579,9 @@ static void on_widget(struct uapp *a, int id, int reason) {
         // asked for a copy. The source pane stays the active one.
         const struct uui_drag *d = uapp_drag(a);
         if (!d || d->kind != UUI_DRAG_FILES) return;
+        // No source widget: the drag came from ANOTHER window (or the
+        // desktop), and its files are in the drag slot.
+        int extern_drop = d->source == 0;
         struct uui_fileview *src = d->source == &g_pane[1] ? &g_pane[1] : &g_pane[0];
         const char *dest = 0;
         if (id == ID_LEFT || id == ID_RIGHT) {
@@ -587,7 +590,10 @@ static void on_widget(struct uapp *a, int id, int reason) {
             int nid = uui_tree_drop_id(&g_tree);
             if (nid >= 0 && nid < g_tree_count) dest = g_tree_path[nid];
         }
-        if (dest && dest[0]) do_drop(src, dest, d->copy);
+        if (dest && dest[0]) {
+            if (extern_drop) do_drop_extern(dest, d->copy);
+            else do_drop(src, dest, d->copy);
+        }
         refresh_status();
         uapp_redraw(a);
         return;

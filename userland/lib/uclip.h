@@ -129,4 +129,24 @@ int uclip_set_text(const char *s, int n);
 // `*out_len` gets the length without the NUL. Points into `c`.
 const char *uclip_text(const struct uclip *c, int *out_len);
 
+// --- the drag slot (uclip_page.h) ------------------------------------
+//
+// A drag in flight carries its files HERE, beside the clipboard: the
+// source fills it when the drag starts (`uclip_drag_begin`, then
+// `uclip_add`, then `uclip_drag_commit`), the window the compositor
+// offers the drag to reads it with `uclip_drag_load`, and
+// `uclip_drag_clear` empties it when the drag ends. Loaded into an
+// ordinary `struct uclip` with `op` UCLIP_COPY, so `uclip_path()` and
+// `uclip_count()` read it. Capped at CLIP_DRAG_BYTES.
+//
+// IT IS NOT CLEARED WHEN THE DRAG ENDS. The drop reaches its target as
+// an event, after the source's release, so a source that cleared on
+// release handed the target nothing. The next drag's begin overwrites
+// it, and only WIN_EV_DRAG_OVER/DROP ever read it. `uclip_drag_clear`
+// exists for a source that wants a payload gone NOW (nothing does yet).
+void uclip_drag_begin(struct uclip *c);
+int  uclip_drag_commit(struct uclip *c);
+int  uclip_drag_load(struct uclip *c);
+int  uclip_drag_clear(void);
+
 #endif // ULIB_UCLIP_H

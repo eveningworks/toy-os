@@ -581,9 +581,14 @@ def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
         return 1
 
     want = _local_manifest(local_dir)
-    if not want:
-        print(f"remote: {local_dir} is empty", file=sys.stderr)
-        return 1
+    # An EMPTY tree is a tree: /home/desktop ships empty by design, and
+    # the machine still needs the directory. Its subdirectories come
+    # from the local walk below, files or not.
+    local_dirs = set()
+    for root, subdirs, _files in os.walk(local_dir):
+        for d in subdirs:
+            rel = os.path.relpath(os.path.join(root, d), local_dir)
+            local_dirs.add(rel.replace(os.sep, "/"))
 
     own_session = sess is None
     if own_session:
@@ -617,6 +622,8 @@ def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
             while d:
                 dirs.add(f"{base}/{d}")
                 d = os.path.dirname(d)
+        for d in local_dirs:
+            dirs.add(f"{base}/{d}")
         dirs = sorted(dirs, key=lambda x: x.count("/"))
         bytes_todo = sum(want[r][1] for r in todo)
         print(f"remote: {len(want)} file(s), {len(todo)} to send "

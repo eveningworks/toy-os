@@ -190,6 +190,47 @@ int uui_router_take_drop(struct uui_router *r) {
     return id;
 }
 
+int uui_router_extern_over(struct uui_router *r, int cx, int cy, unsigned mods,
+                           const char *dir, int count, const char *label) {
+    if (r->dragging) return 0;   // a local drag owns the pointer
+    r->drag.kind = UUI_DRAG_FILES;
+    r->drag.source = NULL;
+    r->drag.source_id = 0;
+    r->drag.dir = dir;
+    r->drag.count = count;
+    r->drag.label = label;
+    drag_motion(r, cx, cy, mods);
+    return r->drag.accepted;
+}
+
+void uui_router_extern_leave(struct uui_router *r) {
+    if (r->dragging) return;
+    if (r->target && r->target_ops->drag_over)
+        r->target_ops->drag_over(r->target, UUI_NOWHERE, UUI_NOWHERE, &r->drag);
+    r->target = NULL;
+    r->target_ops = NULL;
+    r->target_id = 0;
+    r->drag.kind = UUI_DRAG_NONE;
+}
+
+int uui_router_extern_drop(struct uui_router *r, int cx, int cy, unsigned mods) {
+    if (r->dragging) return 0;
+    drag_motion(r, cx, cy, mods);
+    int id = 0;
+    if (r->target && r->drag.accepted && r->target_ops->drop &&
+        r->target_ops->drop(r->target, cx, cy, &r->drag)) {
+        id = r->target_id;
+        r->dropped = r->drag;
+    } else if (r->target && r->target_ops->drag_over) {
+        r->target_ops->drag_over(r->target, UUI_NOWHERE, UUI_NOWHERE, &r->drag);
+    }
+    r->target = NULL;
+    r->target_ops = NULL;
+    r->target_id = 0;
+    r->drag.kind = UUI_DRAG_NONE;
+    return id;
+}
+
 void uui_router_drag_cancel(struct uui_router *r) {
     if (!r->dragging) return;
     if (r->target && r->target_ops->drag_over)

@@ -1,5 +1,6 @@
 // See ui/uapp.h for what this is and why.
 #include "rt/sys.h"   // TWP messages, sys_win_request()
+#include "kpath.h"    // k_path_dirname/_basename -- a drag from another window
 #include "ui/uapp.h"
 #include <string.h>
 #include <stdio.h>
@@ -939,6 +940,35 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         break;
     }
 
+    case WIN_EV_DRAG_OVER:
+    case WIN_EV_DROP: {
+        // A drag from ANOTHER window. The files are in the drag slot;
+        // the directory they are in and the count come from it, so the
+        // fileview's own refusal ("their own directory") still works.
+        if (!a->router.count) break;
+        static struct uclip c;   // 64 KiB, lib/uclip.h says why static
+        static char dir[80], label[80];
+        uclip_drag_load(&c);
+        int n = uclip_count(&c);
+        if (n <= 0 || uclip_kind(&c) != UCLIP_KIND_FILES) break;
+        const char *first = uclip_path(&c, 0);
+        k_path_dirname(first, dir, sizeof dir);
+        if (n == 1) snprintf(label, sizeof label, "%s", k_path_basename(first));
+        else snprintf(label, sizeof label, "%d items", n);
+        unsigned mods = WIN_MOUSE_MODS(ev->mods);
+        if (ev->type == WIN_EV_DRAG_OVER) {
+            uui_router_extern_over(&a->router, ev->a, ev->b, mods, dir, n, label);
+        } else {
+            int id = uui_router_extern_drop(&a->router, ev->a, ev->b, mods);
+            if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_DROP);
+        }
+        a->dirty = 1;
+        break;
+    }
+    case WIN_EV_DRAG_LEAVE:
+        if (a->router.count) { uui_router_extern_leave(&a->router); a->dirty = 1; }
+        break;
+
     case WIN_EV_USER:
         // Posted by this program itself, almost always from a worker
         // thread -- see uapp_post(). Nothing in the toolkit interprets
@@ -1062,6 +1092,7 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         // pointer is still held, so nothing else can be meant by it.
         if (a->router.count && ev->a == 0x1B && uui_router_drag_active(&a->router)) {
             uui_router_drag_cancel(&a->router);
+            wmchan_send(WIN_REQ_DRAG_END, 0, 0, 0, 0, 0);
             a->dirty = 1;
             break;
         }
@@ -1156,10 +1187,18 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             // The GRAB lives here: while a button is held this goes to
             // whoever took the press, wherever the cursor now is, which
             // is what makes a drag work with no app state at all.
+            int was_dragging = uui_router_drag_active(&a->router);
             int id = uui_router_motion(&a->router, ev->a, ev->b, held,
                                        WIN_MOUSE_MODS(ev->mods), &changed);
             if (changed) a->dirty = 1;
             if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_MOTION);
+            // A drag just began: tell the compositor, so it can offer it
+            // to whatever the pointer leaves this window for. The source
+            // widget has filled the drag slot (lib/uclip.h) in drag_start.
+            if (!was_dragging && uui_router_drag_active(&a->router)) {
+                const struct uui_drag *dg = uui_router_drag(&a->router);
+                wmchan_send(WIN_REQ_DRAG_START, 0, dg ? dg->count : 1, 0, 0, 0);
+            }
         }
         if (d->buttons) {
             int changed = held ? uui_button_group_press(d->buttons, ev->a, ev->b)
@@ -1178,9 +1217,13 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         a->mouse_y = ev->b;
         if (a->router.count) {
             int changed = 0;
+            int was_dragging = uui_router_drag_active(&a->router);
             int id = uui_router_release(&a->router, ev->a, ev->b, &changed);
             if (changed) a->dirty = 1;
             if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_RELEASE);
+            // The slot stays: a target in another window reads it AFTER
+            // this release reaches the compositor (wm_dnd.c says why).
+            if (was_dragging) wmchan_send(WIN_REQ_DRAG_END, 0, 0, 0, 0, 0);
             // A release that DROPPED names the target instead. The
             // payload is still readable through uapp_drag() here and
             // nowhere later -- the router has already let go of it.

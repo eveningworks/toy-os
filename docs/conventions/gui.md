@@ -3461,3 +3461,37 @@ nowhere else. And a right-click over an icon SELECTS it first and opens
 that icon's menu -- Open for a launcher; Open, Cut, Copy, Delete for a
 file -- the rule every file manager has. The per-icon identity
 `desktop.h` once said was missing is a file's path.
+
+## A DRAG BETWEEN WINDOWS IS BROKERED BY THE COMPOSITOR, AND ITS PAYLOAD RIDES A SLOT BESIDE THE CLIPBOARD
+
+`userland/wm/wm_dnd.c`. A client's toolkit drag cannot see past its
+window, so when one starts the client says `WIN_REQ_DRAG_START`
+(having put the files in the clipboard page's DRAG SLOT,
+`uclip_drag_begin/add/commit`), and the compositor offers the drag to
+whatever the held pointer is over that is not the source:
+`WIN_EV_DRAG_OVER` while it hovers, `DRAG_LEAVE` when it moves on,
+`DROP` on the release. In the receiving client `uapp` turns those into
+the router's `uui_router_extern_over/leave/drop`, so a widget's
+`drag_over`/`drop` ops serve a drag from anywhere -- the File Manager's
+panes and tree accept a drop from the desktop with no code of their
+own beyond `do_drop_extern()`, which reads the slot. The desktop is a
+target (files land in `/home/desktop`, Ctrl copies) and a source (a file
+icon dragged onto a window; the icon stays in its cell when a window
+took the drop). Wayland's `wl_data_device` is this shape; X11's XDND
+made the two windows talk directly, which every compositor since has
+undone.
+
+**THE SLOT IS SEPARATE FROM THE CLIPBOARD AND IS NOT CLEARED ON THE
+RELEASE.** Separate, because a drag must not clobber what was copied
+(`XdndSelection` and Wayland's data source are separate for the same
+reason). Not cleared, because the DROP reaches its target as an event
+after the source's release: the first version cleared it on the
+release and the pane accepted mid-drag and then moved nothing. The
+next drag's begin overwrites it, and nothing reads it between drags.
+
+The source keeps its own session throughout: it still gets
+`MOUSE_MOVE`/`MOUSE_UP` with the button held, so a drop back in its own
+window is its own toolkit's, and a drop elsewhere reaches it as a
+release nothing accepted while the file has moved anyway. Outside the
+source the compositor draws the ghost (a count), since a client's ghost
+stops at its window edge.

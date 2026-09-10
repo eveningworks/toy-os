@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include "keyboard.h"   // KEY_* codes, as delivered by WIN_EV_KEY
 #include "ui/uui_label.h" // uui_label_wrap_next -- the icon caption
+#include "lib/uclip.h"     // the drag slot -- a drag that leaves the window
 #include "ui/uui_route.h" // UUI_NOWHERE -- a drag_over's leave
 
 // Column indices in DETAILS mode. LIST mode declares only the first.
@@ -1318,6 +1319,19 @@ static int fv_ops_drag_start(void *w, int cx, int cy, struct uui_drag *d) {
     d->dir = fv->dir;
     d->count = n;
     d->label = fv->drag_label;
+
+    // THE DRAG SLOT, for a drop in ANOTHER window: the paths, as the
+    // clipboard would carry them. Local targets never read it.
+    static struct uclip c;   // 64 KiB, lib/uclip.h says why static
+    uclip_drag_begin(&c);
+    char path[UUI_FILEVIEW_PATH_MAX];
+    if (fv->mark_count) {
+        for (int i = 0; i < fv->mark_count; i++)
+            if (uui_fileview_marked_path(fv, i, path, sizeof path)) uclip_add(&c, path);
+    } else if (uui_fileview_selected_path(fv, path, sizeof path)) {
+        uclip_add(&c, path);
+    }
+    (void)uclip_drag_commit(&c);
     return 1;
 }
 

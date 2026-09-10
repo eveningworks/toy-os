@@ -15,6 +15,7 @@
 // produced desktop.c/start_menu.c/file_picker.c. See wm.c's top
 // comment.
 #include "wm_internal.h"
+#include "wm_dnd.h"
 #include "diag_abi.h"
 #include "lib/uchan.h"
 #include "lib/uwmchan.h"
@@ -824,6 +825,12 @@ void wm_client_chan_pump(void) {
             break;
         case WIN_REQ_CURSOR:
             on_window_cursor(from, m.window, m.a);
+            break;
+        case WIN_REQ_DRAG_START:
+            wm_dnd_start(from, m.a);
+            break;
+        case WIN_REQ_DRAG_END:
+            wm_dnd_end(from);
             break;
         // **CREATE IS THE ONLY REQUEST THAT ALLOCATES.** The client
         // proposes a slot -- its buffer objects are already named after

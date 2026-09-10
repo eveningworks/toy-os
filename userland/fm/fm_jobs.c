@@ -78,6 +78,44 @@ static int queue_from_selection(int op, const char *what) {
 
 static int start_job(void);   // defined with the worker, below
 
+// The queue from a list of PATHS -- a drop whose source is another
+// window, whose files are in the drag slot rather than in a pane.
+static int queue_from_paths(int op, const char *what, const struct uclip *c,
+                            const char *dest) {
+    if (g_job_count > 0) { set_note("busy"); return 0; }
+    g_job_count = g_job_at = g_job_failures = 0;
+    g_job_op = op;
+    strlcpy(g_job_what, what, sizeof g_job_what);
+    strlcpy(g_job_dest, dest, sizeof g_job_dest);
+    for (int i = 0; i < uclip_count(c) && g_job_count < JOB_MAX; i++) {
+        const char *p = uclip_path(c, i);
+        if (!p) break;
+        strlcpy(g_job_path[g_job_count], p, PATH_MAX_LEN);
+        struct sys_stat st;
+        g_job_isdir[g_job_count] = sys_stat(p, &st) == 0 && st.is_dir;
+        g_job_count++;
+    }
+    if (g_job_count == 0) { set_note("nothing to drop"); return 0; }
+    return 1;
+}
+
+void do_drop_extern(const char *dest, int copy) {
+    static struct uclip c;
+    uclip_drag_load(&c);
+    if (!queue_from_paths(copy ? CMD_COPY : CMD_MOVE, copy ? "Copy" : "Move", &c, dest))
+        return;
+    for (int i = 0; i < g_job_count; i++) {
+        size_t n = strlen(g_job_path[i]);
+        if (strncmp(g_job_dest, g_job_path[i], n) == 0 &&
+            (g_job_dest[n] == '\0' || g_job_dest[n] == '/')) {
+            g_job_count = 0;
+            set_note("cannot move a folder into itself");
+            return;
+        }
+    }
+    start_job();
+}
+
 void do_drop(struct uui_fileview *src, const char *dest, int copy) {
     if (!queue_from(copy ? CMD_COPY : CMD_MOVE, copy ? "Copy" : "Move", src, dest))
         return;

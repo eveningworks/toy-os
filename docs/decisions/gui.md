@@ -6838,3 +6838,39 @@ source client's surface, so the compositor must carry a payload the
 target learns of before the release -- the clipboard's typed formats
 are the vocabulary for that, and it is a roadmap item, not a toolkit
 extension.
+
+## Cross-window drag is the compositor's, carried by a drag slot in the clipboard page
+
+Dragging a file from the File Manager onto the desktop, or a desktop
+icon into a pane (2026-09-10), needed something no client can do: know
+what window the pointer is over once it leaves its own. Three shapes.
+
+**Clients talk to each other** -- X11's XDND: the source finds the
+window under the pointer through the server and sends it client
+messages, the data travels as a selection. Every step is a round trip
+between two processes that do not trust each other, and it needs a
+"which window is at (x, y)" query toy-os deliberately does not expose to
+clients. Rejected.
+
+**The compositor brokers, the data rides shared memory** -- Wayland's
+`wl_data_device`: the source starts a drag, the compositor sends
+enter/motion/leave/drop to whichever surface is under the pointer, the
+data source is separate from the clipboard. Chosen, minus the MIME
+negotiation: there is one kind of payload here. The compositor already
+had the state a drag hangs off (`content_pressed`, a held pointer
+delivering motion to one window) and the hit test (topmost window under
+the pointer), so `wm_dnd.c` is a hundred lines beside them.
+
+**Reuse the clipboard as the carrier** -- put the dragged paths where
+Ctrl+C puts them. Rejected because a drag then destroys what the user
+copied, which every desktop treats as a bug; the page grew a second,
+smaller slot instead (8 KiB: paths, not text), with the same seqlock
+and writer lock. The slot is deliberately NOT cleared when the drag
+ends: the drop reaches its target as a queued event, after the source
+has seen its release, and the first version's release-time clear
+handed the File Manager an empty payload. A stale slot costs nothing,
+since only a drag's own events ever read it.
+
+What is not built: a drag INTO Notepad or another app that has no
+drop target (the router will offer it; nobody accepts), a drag cursor
+shape, and offering the drag to a client's popup surfaces.

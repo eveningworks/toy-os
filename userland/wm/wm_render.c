@@ -7,6 +7,7 @@
 // this file only draws the taskbar Start BUTTON that opens it, a
 // separate piece of chrome.
 #include "wm_internal.h"
+#include "wm_dnd.h"
 #include "start_menu.h"
 #include "context_menu.h"
 #include "calendar_popup.h"
@@ -1368,6 +1369,7 @@ static void render_scene(int mx, int my, int has_damage) {
     // be spelled out here and again, backwards, in wm_input.c -- two
     // lists that had to agree and nothing that made them.
     wm_overlay_draw(mx, my);
+    wm_dnd_draw(mx, my);   // the cross-window drag's ghost, above everything
 
     // The cursor is always drawn full/unclipped, regardless of the scene
     // damage rect above -- it doesn't track its own screen position

@@ -19,6 +19,7 @@
 #include "ui/uui_label.h"  // uui_label_wrap_next() -- the caption's wrap
 #include "lib/uclip.h"      // the desktop's Copy/Cut/Paste ride the system clipboard
 #include "confirm_dialog.h" // Delete asks first
+#include "wm_dnd.h"         // a file icon dragged onto a window
 #include "kpath.h"
 #include <stdint.h>
 
@@ -70,9 +71,10 @@ static int g_file_count;
 // (a shrinking band deselects, Ctrl adds, a plain click on empty space
 // clears) are KTESTed with no desktop involved at all.
 static struct rubberband sel;
+#define PATH_BUF 80
 static void item_activate(int i);
 static void reflow_overflow(void);
-#define PATH_BUF 80
+static int selected_paths(char paths[][PATH_BUF], int cap);
 
 // The band's rect as it was last DRAWN, so a motion can damage the union
 // of where it was and where it now is. Same bookkeeping-at-the-point-of-
@@ -980,7 +982,22 @@ void desktop_update_drag(int mx, int my, uint8_t buttons) {
         // release, below), so a shaky hand must not silently drag.
         if (!drag_moved) {
             int ddx = drag_px - drag_origin_px, ddy = drag_py - drag_origin_py;
-            if (ddx * ddx + ddy * ddy > 9) drag_moved = 1;
+            if (ddx * ddx + ddy * ddy > 9) {
+                drag_moved = 1;
+                // A FILE icon leaving its cell is also a drag the
+                // compositor can offer to a window: its files go in
+                // the drag slot now (the selection, if it is in it).
+                if (item_is_file(drag.index)) {
+                    static struct uclip c;
+                    static char paths[DESKTOP_FILES_MAX][PATH_BUF];
+                    int n = 0;
+                    if (rb_is_selected(&sel, drag.index)) n = selected_paths(paths, DESKTOP_FILES_MAX);
+                    if (n == 0) { item_path(drag.index, paths[0], PATH_BUF); n = 1; }
+                    uclip_drag_begin(&c);
+                    for (int i = 0; i < n; i++) uclip_add(&c, paths[i]);
+                    if (uclip_drag_commit(&c)) wm_dnd_start_desktop(n);
+                }
+            }
         }
         struct icon_grid g = current_grid();
         if (group_drag) {
@@ -998,6 +1015,17 @@ void desktop_update_drag(int mx, int my, uint8_t buttons) {
     }
 
     struct icon_grid g = current_grid();
+
+    // A WINDOW TOOK THE DROP (wm_dnd.c): the file moved or copied
+    // there, and the icon goes back to its cell -- the drag was not a
+    // rearrangement. The folder re-lists on the next generation poll.
+    if (wm_dnd_took_drop()) {
+        wm_damage_rect(0, 0, screen_w, screen_h - taskbar_h);
+        icon_drag_end(&drag);
+        group_drag = 0;
+        redraw_pending = 1;
+        return;
+    }
 
     // Group drop: move every selected icon by the primary's cell delta,
     // then settle each into the nearest free cell so a group landing
@@ -1113,15 +1141,37 @@ static void clip_put(int op) {
 static void menu_copy(void *ctx) { (void)ctx; clip_put(UCLIP_COPY); }
 static void menu_cut(void *ctx)  { (void)ctx; clip_put(UCLIP_CUT); }
 
+// Paste's engine, over any loaded payload: the clipboard's (Paste,
+// Ctrl+V) or the drag slot's (a drop from another window).
+static void paste_from(const struct uclip *c, int op);
+
 static void menu_paste(void *ctx) {
     (void)ctx;
     static struct uclip c;
     uclip_load(&c);
     int op = uclip_op(&c);
     if (op == UCLIP_NONE || uclip_kind(&c) != UCLIP_KIND_FILES) return;
+    paste_from(&c, op);
+    // A CUT IS SPENT BY THE PASTE, the File Manager's rule (fm_jobs.c).
+    if (op == UCLIP_CUT) (void)uclip_clear();
+}
+
+// A drop from ANOTHER window onto the desktop background: the files in
+// the drag slot move here, or copy with Ctrl (the toolkit's rule).
+int desktop_drop_here(int mx, int my) {
+    (void)mx; (void)my;
+    static struct uclip c;
+    uclip_drag_load(&c);
+    if (uclip_count(&c) <= 0 || uclip_kind(&c) != UCLIP_KIND_FILES) return 0;
+    int copy = (wm_rawin_mods_now() & KEY_MOD_CTRL) != 0;
+    paste_from(&c, copy ? UCLIP_COPY : UCLIP_CUT);
+    return 1;
+}
+
+static void paste_from(const struct uclip *c, int op) {
     static char src[PATH_BUF];
-    for (int i = 0; i < uclip_count(&c); i++) {
-        const char *p = uclip_path(&c, i);
+    for (int i = 0; i < uclip_count(c); i++) {
+        const char *p = uclip_path(c, i);
         if (!p) break;
         k_strlcpy(src, p, sizeof src);
         // Already on the desktop: nothing to do, and `cp` onto itself
@@ -1137,8 +1187,6 @@ static void menu_paste(void *ctx) {
             spawn_argv(argv);
         }
     }
-    // A CUT IS SPENT BY THE PASTE, the File Manager's rule (fm_jobs.c).
-    if (op == UCLIP_CUT) (void)uclip_clear();
 }
 
 // Delete asks first, through the WM's own confirm dialog. The paths are

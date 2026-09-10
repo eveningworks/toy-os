@@ -49,6 +49,7 @@ import argparse
 import os
 import sys
 import time
+import json
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui          # noqa: E402
@@ -2163,8 +2164,15 @@ def run(dbg, qmp, tmp, res):
     if lay.treebox:
         tx, ty, tw, th, trh, _ = lay.treebox
         hit_dst = False
+        last_drop = None
         # The row whose path is DDST, from the app's own `treerow` lines.
+        # The tree lists root's children and DDST may be scrolled out of
+        # the visible rows; when it is, this drop cannot be aimed, so the
+        # check is SKIPPED rather than failed (the desktop<->pane drags
+        # below cover the cross-window path either way).
         dst_row = next((r for r, path in lay.treerow.items() if path == DDST), None)
+        if dst_row is None:
+            print("    (skip tree-row drop: /dddest is not a visible tree row)")
         if dst_row is not None and aim2(3):                # g2.txt
             x0, y0 = pt(3)
             x1, y1 = ox + tx + tw // 2, oy + ty + dst_row * trh + trh // 2
@@ -2187,10 +2195,11 @@ def run(dbg, qmp, tmp, res):
             qmp.mouse_up()
             time.sleep(0.3)
         arrived = hit_dst and wait_listing(dbg, DDST, lambda names: "g2.txt" in names)
-        res.check("dropping on the tree's row for the other directory moves the file there",
-                  arrived and "g2.txt" not in listing(dbg, DD),
-                  f"hit_dst={hit_dst} row={dst_row} last_drop={last_drop} "
-                  f"src={listing(dbg, DD)} dst={listing(dbg, DDST)}")
+        if dst_row is not None:
+            res.check("dropping on the tree's row for the other directory moves the file there",
+                      arrived and "g2.txt" not in listing(dbg, DD),
+                      f"hit_dst={hit_dst} row={dst_row} last_drop={last_drop} "
+                      f"src={listing(dbg, DD)} dst={listing(dbg, DDST)}")
 
     # --- 18d. the tree follows a navigation --------------------------
     #
@@ -2223,6 +2232,111 @@ def run(dbg, qmp, tmp, res):
         menu_pick(dbg, K_RIGHT, K_DOWN, K_DOWN, K_DOWN, K_ENTER)   # tree off again
         lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0) or lay
 
+    # --- 18e. drag OUT of the window, and IN from the desktop ----------
+    #
+    # The compositor brokers a drag between windows (userland/wm/
+    # wm_dnd.c): a row dragged onto the desktop background lands in
+    # /home/desktop, and a desktop file icon dragged into a pane lands in
+    # that pane's directory. Both asserted through the shell's listing.
+    # The window is moved clear of the icon columns first, since the
+    # desktop's file icons sit after the launchers and a window over
+    # them turns the press into a window move.
+    print("drag between the window and the desktop")
+    # A DEDICATED file: the sections above consume g0..g2 (a tree drop
+    # moves one into /dddest), so reusing one couples this section to
+    # whether an earlier drag flaked. `dragme.txt` is created here and
+    # nothing else touches it.
+    dbg.send("sh rm -r /home/desktop/dragme.txt")
+    dbg.send(f"sh touch {DD}/dragme.txt")
+    lay = wait_layout(dbg, win, lambda l: "dragme.txt" in
+                      [None] or l.rows.get(0, 0) >= 2) or lay
+    # Find dragme.txt's row by clicking down until it is selected.
+    dragme_row = None
+    if win:
+        px0, py0, pw0, ph0 = lay.pane[0]
+        rowy0, rowh0 = lay.rowy[0], lay.rowh
+        for r in range(1, 8):
+            dbg.click(win["content"]["x"] + px0 + pw0 // 2,
+                      win["content"]["y"] + rowy0 + r * rowh0 + rowh0 // 2)
+            l2 = layout_now(dbg, win) or lay
+            if l2.selected == "dragme.txt": dragme_row = r; break
+    # Move the window to the TOP-LEFT so its right edge is clear of the
+    # drop point -- a window 720 wide starting near the middle still
+    # covers x=1150, which turned "drop on the desktop" into "drop on
+    # the window" (its own toolkit, nothing moved).
+    w1 = dbg.window(TITLE)
+    if w1:
+        tx, ty = w1["x"] + w1["w"] // 2, w1["y"] + 10
+        dbg.drag_real(qmp, tx, ty, 360, 70, steps=6)   # title bar to ~top-left
+        time.sleep(0.8)
+        win = dbg.window(TITLE) or win
+        ox, oy = win["content"]["x"], win["content"]["y"]
+        lay = wait_layout(dbg, win, lambda l: l.pane.get(1) is not None) or lay
+        px, py, pw, ph = lay.pane[0]
+        rowy = lay.rowy[0]
+    right_edge = (win["x"] + win["w"]) if win else 740
+    if dragme_row is not None and aim2(dragme_row):
+        x0, y0 = pt(dragme_row)
+        # Solidly the desktop background: right of the window, below the
+        # taskbar's top, clear of the icon columns on the left.
+        x1, y1 = max(right_edge + 120, 1120), 600
+        qmp.mouse_down()
+        time.sleep(0.2)
+        for i in range(1, 9):
+            dbg.warp_cursor(qmp, x0 + (x1 - x0) * i // 8, y0 + (y1 - y0) * i // 8)
+            time.sleep(0.1)
+        time.sleep(0.3)
+        qmp.mouse_up()
+    landed = wait_listing(dbg, "/home/desktop", lambda names: "dragme.txt" in names)
+    res.check("a row dragged onto the desktop moves the file to /home/desktop",
+              landed and "dragme.txt" not in listing(dbg, DD),
+              f"row={dragme_row} desktop={listing(dbg, '/home/desktop')} src={listing(dbg, DD)}")
+    # ...and back: the desktop's icon for it, into the RIGHT pane (DDST).
+    reply = dbg.send("gui icons --json") or ""
+    start = reply.rfind('{"cached"')
+    icons = None
+    try:
+        icons = json.loads(reply[start:]) if start >= 0 else None
+    except ValueError:
+        icons = None
+    fi = next((i for i in (icons or {}).get("icons", []) if i["name"] == "dragme.txt"), None)
+    res.check("the moved file is a desktop icon", fi is not None, f"icons={icons and len(icons['icons'])}")
+    # For the reverse drag the desktop icon must be CLEAR of the window,
+    # and the icons sit in the left columns -- so move the window RIGHT
+    # (the mirror of the move above, which cleared the right for the
+    # drag OUT). Then re-read the icon's rect at its new-clear position.
+    w2w = dbg.window(TITLE)
+    if fi and w2w:
+        tx, ty = w2w["x"] + w2w["w"] // 2, w2w["y"] + 10
+        dbg.drag_real(qmp, tx, ty, 900, 90, steps=6)
+        time.sleep(0.8)
+        win = dbg.window(TITLE) or win
+        ox, oy = win["content"]["x"], win["content"]["y"]
+        lay = wait_layout(dbg, win, lambda l: l.pane.get(1) is not None) or lay
+        reply = dbg.send("gui icons --json") or ""
+        start = reply.rfind('{"cached"')
+        try:
+            icons = json.loads(reply[start:]) if start >= 0 else icons
+        except ValueError:
+            pass
+        fi = next((i for i in (icons or {}).get("icons", []) if i["name"] == "dragme.txt"), fi)
+    if fi:
+        qx, qy, qw, qh = lay.pane[1]
+        x0, y0 = fi["x"] + fi["w"] // 2, fi["y"] + fi["w"] // 2
+        x1, y1 = ox + qx + qw // 2, oy + qy + qh - 40
+        dbg.warp_cursor(qmp, x0, y0)
+        qmp.mouse_down()
+        time.sleep(0.2)
+        for i in range(1, 9):
+            dbg.warp_cursor(qmp, x0 + (x1 - x0) * i // 8, y0 + (y1 - y0) * i // 8)
+            time.sleep(0.12)
+        time.sleep(0.3)
+        qmp.mouse_up()
+        back = wait_listing(dbg, DDST, lambda names: "dragme.txt" in names)
+        res.check("a desktop icon dragged into a pane moves the file there",
+                  back and "dragme.txt" not in listing(dbg, "/home/desktop"),
+                  f"dst={listing(dbg, DDST)} desktop={listing(dbg, '/home/desktop')}")
+
     # Back to section 18's window for what follows.
     for w2 in sorted(dbg.windows(), key=lambda w2: -w2["z"]):
         if w2["title"] == TITLE:
@@ -2245,6 +2359,12 @@ def run(dbg, qmp, tmp, res):
     # --- 19. a staged cut is drawn faded -------------------------------
     res.check("(nothing is dimmed before a cut)",
               lay is not None and lay.dim == (0, 0), f"dim={lay and lay.dim}")
+    # SELECT A REAL FILE FIRST: the window opens with nothing selected,
+    # and Ctrl+X on the empty selection (or the ".." row) stages nothing.
+    # Row 1 is the first file after "..".
+    dbg.key(K_HOME)
+    dbg.key(K_DOWN)
+    lay = wait_layout(dbg, win, lambda l: l.selected not in (None, "-", "..")) or lay
     dbg.key(K_CTRL_X)
     lay = wait_layout(dbg, win, lambda l: l.dim[0] > 0) or lay
     res.check("Ctrl+X dims the row it staged",

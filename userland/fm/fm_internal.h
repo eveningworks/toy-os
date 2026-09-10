@@ -192,6 +192,8 @@ void do_move(void);
 // A DROP: `src`'s operands (its marks, else its selection) into `dest`,
 // moved -- or copied when `copy` (Ctrl held, the toolkit's convention).
 void do_drop(struct uui_fileview *src, const char *dest, int copy);
+// A drop from ANOTHER window: the files are in the drag slot (lib/uclip.h).
+void do_drop_extern(const char *dest, int copy);
 void do_delete(void);     // opens the dialog; commit_delete() acts
 void commit_delete(void);
 void commit_mkdir(const char *name);

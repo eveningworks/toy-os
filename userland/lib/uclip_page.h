@@ -37,6 +37,7 @@
 
 #define CLIP_BYTES 65536 // the packed payload's cap
 #define CLIP_MAX   64    // and how many entries it may name
+#define CLIP_DRAG_BYTES 8192 // the drag slot's payload cap -- paths, not text
 
 #define CLIP_OP_NONE 0
 #define CLIP_OP_COPY 1
@@ -93,6 +94,20 @@ struct clip_page {
     // when the kind is FILES, one run of text (count 1, its NUL
     // included in `len`) when it is TEXT.
     char data[CLIP_BYTES];
+
+    // THE DRAG SLOT: what a drag in flight is carrying, beside the
+    // clipboard and never in it -- X11's XdndSelection and Wayland's
+    // data source are separate from the clipboard for the same reason,
+    // that a drag must not clobber what was copied. Written by the
+    // SOURCE when its drag starts, read by whatever the compositor
+    // offers it to, cleared when the drag ends. Same seqlock and lock
+    // as the clipboard: one writer at a time, readers retry.
+    uint32_t drag_kind;    // CLIP_KIND_*
+    uint32_t drag_count;
+    uint32_t drag_len;
+    uint32_t drag_serial;
+    uint32_t drag_pid;     // who is dragging; 0 for nobody
+    char drag_data[CLIP_DRAG_BYTES];
 };
 
 #endif // ULIB_UCLIP_PAGE_H

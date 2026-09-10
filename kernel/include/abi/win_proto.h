@@ -192,6 +192,18 @@
                             // client puts in its poll set are all this.
                             // The COMPOSITOR never sends one.
 #define WIN_EV_KEY_UP    27
+// A DRAG FROM ANOTHER WINDOW IS OVER THIS ONE. The compositor sends
+// these to the window under a held pointer while some client (or the
+// desktop) has declared a drag with WIN_REQ_DRAG_START; the payload is
+// in the clipboard page's DRAG SLOT (lib/uclip.h). a, b: content-
+// relative pointer; mods: KEY_MOD_* held (Ctrl = copy). DRAG_LEAVE
+// clears a highlight; DROP is the release over this window. Within
+// its own window a client sees none of these -- its toolkit's own
+// session runs on MOUSE_MOVE as before. Wayland's wl_data_device
+// enter/motion/leave/drop, without the type negotiation.
+#define WIN_EV_DRAG_OVER  34
+#define WIN_EV_DRAG_LEAVE 35
+#define WIN_EV_DROP       36
 #define WIN_EV_POPUP_DONE 33 // `window`: a popup of this client the compositor
                              // DISMISSED -- a press landed outside every
                              // surface of the client's. It is already off the
@@ -865,6 +877,13 @@ struct win_event {
 #define WIN_FB_CURSOR_DEFINE 2
 #define WIN_FB_CURSOR_QUERY  3
 
+// THE CLIENT IS DRAGGING (its toolkit's drag session started, and the
+// drag slot holds what). The compositor then offers it to the window
+// under the pointer once the pointer leaves this one, and to the
+// desktop. a: the item count. DRAG_END says it is over (dropped in its
+// own window, or cancelled); a release ends it too.
+#define WIN_REQ_DRAG_START 29
+#define WIN_REQ_DRAG_END   30
 #define WIN_REQ_CURSOR     24 // `window`: which one; a: a WIN_CURSOR_*.
                            // Honoured only inside that window's content
                            // area, so a client that never resets cannot

@@ -7,6 +7,7 @@
 #include <string.h>
 
 static volatile struct clip_page *g_page;
+static int g_out_is_drag;   // uclip_add() stages for the drag slot
 static int g_fd = -1;
 
 // Maps the clipboard, once. Returns NULL when the service is not
@@ -178,7 +179,7 @@ int uclip_add(struct uclip *c, const char *path) {
     if (!path || !*path) return 0;
     uint32_t n = (uint32_t)strlen(path) + 1;      // the NUL is payload
     if (g_out.count >= CLIP_MAX) return 0;
-    if (g_out.len + n > CLIP_BYTES) return 0;
+    if (g_out.len + n > (g_out_is_drag ? CLIP_DRAG_BYTES : CLIP_BYTES)) return 0;
     memcpy(g_out.data + g_out.len, path, n);
     g_out.len += n;
     g_out.count++;
@@ -189,6 +190,66 @@ int uclip_commit(struct uclip *c) {
     (void)c;
     if (g_out.count == 0) return 0;
     return commit();
+}
+
+// --- the drag slot ----------------------------------------------------
+
+void uclip_drag_begin(struct uclip *c) {
+    uclip_begin(c, UCLIP_COPY);
+    g_out_is_drag = 1;
+}
+
+static int commit_drag(void) {
+    volatile struct clip_page *pg = page();
+    if (!pg) return 0;
+    if (g_out.len > CLIP_DRAG_BYTES || g_out.count > CLIP_MAX) return 0;
+    if (!lock_page(pg)) return 0;
+    __atomic_store_n(&pg->seq, pg->seq + 1u, __ATOMIC_RELEASE);
+    pg->drag_kind = g_out.kind;
+    pg->drag_count = g_out.count;
+    pg->drag_len = g_out.len;
+    pg->drag_pid = g_out.count ? (uint32_t)sys_getpid() : 0;
+    for (uint32_t i = 0; i < g_out.len; i++) pg->drag_data[i] = g_out.data[i];
+    pg->drag_serial++;
+    __atomic_store_n(&pg->seq, pg->seq + 1u, __ATOMIC_RELEASE);
+    unlock_page(pg);
+    return 1;
+}
+
+int uclip_drag_commit(struct uclip *c) {
+    (void)c;
+    g_out_is_drag = 0;
+    if (g_out.count == 0) return 0;
+    return commit_drag();
+}
+
+int uclip_drag_clear(void) {
+    memset(&g_out, 0, sizeof g_out);
+    g_out.kind = UCLIP_KIND_FILES;
+    g_out_is_drag = 0;
+    return commit_drag();
+}
+
+int uclip_drag_load(struct uclip *c) {
+    if (!c) return 0;
+    memset(c, 0, sizeof *c);
+    volatile struct clip_page *pg = page();
+    if (!pg) return 1;
+    for (int tries = 0; tries < 64; tries++) {
+        uint32_t s1 = __atomic_load_n(&pg->seq, __ATOMIC_ACQUIRE);
+        if (s1 & 1u) continue;
+        c->op = pg->drag_count ? UCLIP_COPY : UCLIP_NONE;
+        c->kind = pg->drag_kind;
+        c->count = pg->drag_count;
+        c->len = pg->drag_len;
+        c->serial = pg->drag_serial;
+        if (c->len > CLIP_DRAG_BYTES) c->len = CLIP_DRAG_BYTES;
+        for (uint32_t i = 0; i < c->len; i++) c->data[i] = pg->drag_data[i];
+        uint32_t s2 = __atomic_load_n(&pg->seq, __ATOMIC_ACQUIRE);
+        if (s1 == s2) return 1;
+    }
+    memset(c, 0, sizeof *c);
+    return 1;
 }
 
 int uclip_clear(void) {
