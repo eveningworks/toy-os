@@ -3876,3 +3876,29 @@ the GUI one wraps LAZILY, on the next character written. So nothing in
 that repaint may depend on a wrap happening: rows are ended with an
 explicit `\n` and the caret is then placed from a row and column the
 shell computed itself.
+
+## A SPAWN CARRIES AN ARGV VECTOR WITH A LENGTH, AND THE STRING FORM IS SPLIT AT THE EDGE
+
+`struct spawn_msg.args` has two forms, told apart by `SPAWN_ARGV`: the
+whitespace-separated string every older caller passes, and a vector of
+NUL-terminated strings `args_len` bytes long, argv[0] first, carried
+as-is. The kernel's own representation is the VECTOR: `spawn_from_fs()`
+and `elf_build_argv_on_stack()` take one, and the string form is split
+in exactly two places on the way in -- `sys_spawn()` for ring 3 and
+`scheduler_spawn_env()`/`elf_run_from_fs()` for kernel callers -- by
+`elf_argv_from_string()`. A caller with a real `argv` uses
+`sys_spawn_opts.argv` and never joins it into a string.
+
+**THE VECTOR IS SIZED BY A LENGTH, NOT BY `env`'s DOUBLE NUL, and that
+is the trap.** An argument may be empty, and the empty string IS the
+double-NUL terminator -- the first version used `env`'s shape and
+`prog "" x` arrived as `prog`, which is the ambiguity Linux's
+`/proc/<pid>/cmdline` is known for. An environment entry is never
+empty, so `env` keeps its shape. An empty vector is refused rather than
+entering `main()` with `argc == 0`, and a vector whose last byte is not
+a NUL is refused rather than closed for the caller.
+
+The stack builder has no per-entry array any more: it measures both
+blobs, places the SysV block, and writes each pointer as its string
+lands -- so `argc` is bounded by the one stack page, not by a
+`-Wframe-larger-than` budget that would have capped a globbing shell.

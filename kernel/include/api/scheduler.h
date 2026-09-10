@@ -2,6 +2,7 @@
 #define SCHEDULER_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include "proc_info.h" // struct proc_info -- scheduler_proc_info() below
 #include "signal_abi.h" // struct k_sigaction -- the per-process action table below
 
@@ -394,8 +395,12 @@ int scheduler_spawn_env(const char *path, const char *args, int pipe_idx,
 // `stdin_desc` is the same shape as `pipe_idx` (which is really the
 // child's fd 1): a description index to install, or -1 to leave what
 // inheritance gave it. Both are applied AFTER fd_inherit(), so they win.
-int scheduler_spawn_group(const char *path, const char *args, int pipe_idx,
-                           int stdin_desc, const char *env, int pgid,
+// `argv` is the child's argument VECTOR -- `argv_len` bytes of
+// NUL-terminated strings, the form elf_build_argv_on_stack() takes --
+// NOT the string the wrappers above take; they split it with
+// elf_argv_from_string() on the way here.
+int scheduler_spawn_group(const char *path, const char *argv, size_t argv_len,
+                           int pipe_idx, int stdin_desc, const char *env, int pgid,
                            uint64_t parent_pml4);
 
 

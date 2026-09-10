@@ -7160,3 +7160,46 @@ right length and the wrong bytes in 5 runs of 14, the damage being one
 MSS-sized window holding the stream's own data from a few hundred bytes
 earlier. Nothing reported anything — no error, no short read, no log
 line. Zero in 12 with the guard.
+
+## The argv vector is a flag on `SYS_SPAWN` and is sized by a length, not a terminator
+
+`tosh` gained quoting on 2026-09-10, and quoting is worthless if the
+kernel re-splits the result: `spawn_msg.args` was a space-joined string
+the loader tokenised, so `echo "a b"` could parse perfectly in the shell
+and still arrive as two arguments. Three ways to fix that were on the
+table.
+
+**Escape the string** -- backslash spaces, have the kernel unescape.
+Smallest change, and the design `CreateProcess` has: a command LINE, with
+every program (and `CommandLineToArgvW`) re-parsing it by rules nobody
+quite agrees on. Every future spawner would have to learn the escape.
+Rejected.
+
+**A new field, or a new syscall.** `spawn_msg` grew a `flags` word
+precisely so a capability of the act of starting a process could be
+added without a second spawn; the file's own comment says the next
+thing goes in the struct. A FLAG (`SPAWN_ARGV`) reinterpreting the
+existing `args` pointer, plus one length field read only when it is
+set, leaves every caller that predates it byte-for-byte unchanged --
+and an old kernel refuses the unknown flag rather than silently
+splitting the vector, which is what the "unknown bits are -EINVAL" rule
+was for. Chosen.
+
+**A vector, execve's shape,** was never in doubt; what its ENCODING
+should be was got wrong once. The first version copied `env`'s
+"a\0b\0\0" run, and the test's empty argument silently ended the
+vector: `"a b", "", "c"` arrived as `"a b"`. The empty string is the
+terminator, so the format cannot express it -- a known ambiguity of
+Linux's `/proc/<pid>/cmdline`. `args_len` replaced the terminator; the
+environment keeps its shape because an environment entry is never
+empty. The vector includes argv[0], as execve's does, so a shell can
+one day set it to what was typed rather than the path.
+
+The kernel-internal representation became the vector as well, rather
+than threading an "is this a string?" flag down to the loader: the
+string form is split at the two edges it enters (`sys_spawn()` and the
+kernel-side `scheduler_spawn_env()`/`elf_run_from_fs()` wrappers), and
+`spawn_from_fs()`, `scheduler_spawn_group()` and
+`elf_build_argv_on_stack()` know only vectors. Splitting once at the
+edge is the same call as `elf_argv_from_string()` being one function:
+two tokenisers would be two places to disagree about what a space is.

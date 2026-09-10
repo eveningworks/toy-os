@@ -22,6 +22,7 @@
 #include "uaddr.h"
 #include "string.h"
 #include "strace.h"
+#include "elf_run.h"  // elf_argv_from_string -- the string form is split here
 #include "tty.h"      // tty_set_fg_pgid -- SPAWN_FOREGROUND     // strace_arm_for_current() -- SYS_SPAWN's SPAWN_TRACE
 #include <stddef.h>
 
@@ -521,11 +522,11 @@ int sys_spawn(struct syscall_ctx *c) {
     // buffer means a second process spawning concurrently overwrites
     // the first's arguments and its child is launched with them.
     //
-    // NOTE the copy TRUNCATES rather than rejects:
+    // NOTE the STRING form's copy TRUNCATES rather than rejects:
     // vmm_copy_string_from_user() terminates at max-1 and returns 1, so
     // an over-long argument string reaches the child shortened. The
-    // real ceiling elf_build_argv_on_stack() enforces (one stack page)
-    // is never reached, because it only ever sees this copy.
+    // VECTOR form (SPAWN_ARGV) carries its length and is refused past
+    // SPAWN_ARGS_MAX.
 
     // The message struct, copied whole before anything in it is
     // trusted -- see abi/syscall_abi.h for why spawn outgrew three
@@ -584,12 +585,52 @@ int sys_spawn(struct syscall_ctx *c) {
         klog_write("syscall: spawn() rejected -- invalid path pointer\n");
         spawn_rc = -EFAULT;
     } else {
+        // `args` becomes the VECTOR spawn_from_fs() carries. With
+        // SPAWN_ARGV it arrives as one (copied like the environment,
+        // with the same "must end" check); otherwise the string form is
+        // split here -- the ring-3 edge is the one place that happens.
         const char *args = 0;
-        if (msg.args) {
-            argbuf = kmalloc(SPAWN_ARGS_MAX);
-            if (argbuf && vmm_copy_string_from_user(pml4, argbuf,
-                                                    (uint64_t)(uintptr_t)msg.args,
-                                                    SPAWN_ARGS_MAX)) args = argbuf;
+        size_t args_len = 0;
+        int args_bad = 0;
+        if ((msg.flags & SPAWN_ARGV) ? (!msg.args || msg.args_len == 0 ||
+                                        msg.args_len > SPAWN_ARGS_MAX)
+                                     : msg.args_len != 0) {
+            args_bad = 1;   // a length without the flag, or no vector with it
+        } else if (msg.args) {
+            argbuf = kmalloc(SPAWN_ARGS_MAX + FS_PATH_MAX);
+            if (!argbuf) {
+                args_bad = 1;
+            } else if (msg.flags & SPAWN_ARGV) {
+                // Exactly `args_len` bytes, the last of which must be a
+                // NUL -- a vector whose final entry runs off its end is
+                // refused, not closed for the caller.
+                if (vmm_copy_from_user(pml4, argbuf, (uint64_t)(uintptr_t)msg.args,
+                                       msg.args_len) &&
+                    argbuf[msg.args_len - 1] == '\0') {
+                    args = argbuf;
+                    args_len = msg.args_len;
+                } else {
+                    args_bad = 1;
+                }
+            } else {
+                char *str = kmalloc(SPAWN_ARGS_MAX);
+                if (str && vmm_copy_string_from_user(pml4, str,
+                                                     (uint64_t)(uintptr_t)msg.args,
+                                                     SPAWN_ARGS_MAX) &&
+                    elf_argv_from_string(path, str, argbuf, SPAWN_ARGS_MAX + FS_PATH_MAX,
+                                         &args_len))
+                    args = argbuf;
+                else
+                    args_bad = 1;
+                if (str) kfree(str);
+            }
+        }
+        if (args_bad) {
+            klog_write("syscall: spawn() rejected -- bad or oversized arguments\n");
+            if (envbuf) kfree(envbuf);
+            if (argbuf) kfree(argbuf);
+            c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+            return 0;
         }
 
         // The child's stdin/stdout overrides, as DESCRIPTION indices
@@ -641,8 +682,8 @@ int sys_spawn(struct syscall_ctx *c) {
             // else's spawn can collect it. The disarm covers the spawn
             // having failed before an address space existed.
             if (msg.flags & SPAWN_TRACE) strace_arm_for_current();
-            int pid = scheduler_spawn_group(path, args, stdout_desc, stdin_desc,
-                                             env, msg.pgid, c->pml4);
+            int pid = scheduler_spawn_group(path, args, args_len, stdout_desc,
+                                             stdin_desc, env, msg.pgid, c->pml4);
             strace_disarm();
             if (pid > 0) spawn_rc = pid;
             // SPAWN_FOREGROUND: the child's group in front of OUR fd 0,

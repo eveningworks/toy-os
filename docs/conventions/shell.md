@@ -831,3 +831,27 @@ this needs no locking; it is `shopt -s histappend` plus `history -a`,
 the arrangement every multi-window bash user ends up with. Nothing trims
 the file, and nothing needs to: `uhist_load()` streams it and the ring
 keeps the last `UHIST_MAX` lines for free.
+
+## QUOTING IS DECIDED IN ONE LEXER, AND A QUOTED WORD SURVIVES THE SPAWN ONLY BECAUSE THE SPAWN CARRIES A VECTOR
+
+`/bin/tosh` splits a line ONCE (`lex()` in `userland/lib/tosh.c`) into
+words and operators, and quoting is resolved there and nowhere else:
+`"a b"` and `'a b'` are one word, `\ ` is a space, a quoted `|` or `>`
+is a character. Everything after -- redirections, pipeline stages, `&`,
+the command word -- works on that list. It replaced three scans of the
+raw string, each of which would have had to learn quoting on its own
+and drifted. dash and bash have the same shape.
+
+**THE TRAP IS THAT THE LEXER ALONE CHANGES NOTHING THE PROGRAM CAN
+SEE.** `SYS_SPAWN`'s string form is re-split by the kernel on spaces,
+so a shell that quoted perfectly and then joined its words back into a
+string handed `echo "a b"` two arguments, exactly as before. The shell
+spawns with `sys_spawn_opts.argv` -- the vector, `SPAWN_ARGV` -- and a
+test of quoting must read the child's `argv`, not the shell's parse
+(`/tests/argv_test` does, through a pipe).
+
+Two limits worth knowing. An operator needs no spaces now (`ls >f`),
+and `&` is still trailing-only -- `a & b` is refused, not half-run,
+until `;`-style sequencing exists. And the shell's diagnostics go to
+its stdout (its sink), so a `tosh -c` with a bad line writes the error
+where the output would have gone.

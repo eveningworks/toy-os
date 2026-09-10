@@ -2740,7 +2740,7 @@ durability and structure -- integrity checking, snapshots, mount points
 
 - [ ] **An environment passed to a child.** `crt0.asm` already reads `envp` off the stack per SysV; the kernel always passes an empty one. `export` cannot mean anything until a child receives it.
 
-- [ ] Quoting/escaping, `&&`/`||`/`;`, globbing, aliases, `$?`/`$1`, and a history buffer. All parsing and string work over syscalls that already exist.
+- [ ] `&&`/`||`/`;`, globbing, aliases, `$?`/`$1`, and a history buffer. All parsing and string work over syscalls that already exist. Quoting landed 2026-09-10 and needed one kernel change after all: `SYS_SPAWN` took a space-joined string, so a quoted argument was re-split at the kernel until `SPAWN_ARGV` carried a vector.
 
 - [ ] Line editing. Worth noting `kernel/lib/klineedit.c` is freestanding and could be compiled for userland through the shared-source rule (`build/userland/shared/`) rather than reimplemented -- the same trick that keeps one arithmetic engine behind both Calculators.
 
@@ -3067,6 +3067,58 @@ those three.
 Mostly a *capstone* over Fuzzing & property-based testing-16 rather than new ground -- see
 its Details entry for what each of those already covers and what's left
 that nothing else owns.
+
+## A ported POSIX shell
+
+**Needs:** either `fork()`/`exec()`-style process model, or BusyBox's
+no-fork re-exec path over `SYS_SPAWN`.
+
+What porting BusyBox `ash` would take, measured against the tree on
+2026-09-10 rather than assumed. The port PATTERN is the easy half and
+already settled by Doom: vendored in-tree under `userland/ports/`, GPL-2
+so linked into exactly one binary, warnings off but the frame budget
+on, platform glue in `userland/backends/`, a `LICENSE` entry for
+`check_licenses.py`. What is missing is underneath it.
+
+**The process model.** ash's evaluator forks for subshells, `(...)`,
+`$(...)`, pipelines and `&`, and toy-os has no `fork()` and no `exec()`
+of any kind -- `SYS_SPAWN` is `posix_spawn`-shaped on purpose
+(`docs/init-design.md`, `userland/libc/README.md`). Two no-fork
+platforms already run ash, and that is the precedent to follow rather
+than building `fork()` for one program: BusyBox's own NOMMU build
+(uClinux) re-executes the shell binary with its state serialised
+instead of forking, and busybox-w32 does the same over `CreateProcess`.
+Either way the shell needs to start a second copy of itself and hand it
+state, which is an `exec` that replaces the image or a spawn-self with
+a blob -- and `tosh` documents the same collision at its `&` handling.
+
+**The C library.** ash's `INTOFF`/`INTON` critical sections are built on
+`sigprocmask`/`sigsuspend`, which `signal.h` refuses on purpose (there
+is no syscall to block a signal outside its handler). `stat`/`lstat`/
+`fstat` and `struct stat` are absent by decision (`sys/stat.h`: a
+struct of invented zeroes lets ported code compile and then take wrong
+branches on `st_mode`). `fcntl`, `ioctl`, `umask`, `getppid`, `times`,
+`glob`/`fnmatch` (ash globs itself, over `opendir`), `<pwd.h>` and
+`<err.h>` do not exist. `SIGTTOU` does not exist in the kernel and
+`SIGQUIT` cannot be caught.
+
+**The argument vector** was the one item every option needed and the
+one that also unblocked `tosh`: `SYS_SPAWN` took a space-joined string,
+so no shell could pass `"a b"` as one argument. Done as `SPAWN_ARGV`.
+
+**Changing the shell.** Nothing names "the shell" today; `/bin/tosh` is
+a compile-time constant in four places (the GUI Terminal, `telnetd`,
+init's `tosh` service unit, libc's `system()`). Linux keeps it in
+`/etc/passwd` with `chsh` and terminals honour `$SHELL`; Windows
+Terminal keeps it per profile. Here the shape is a `system.shell`
+string setting those four read. It is independent of the port and
+could land first.
+
+**Alternatives weighed.** `dash` is the same ash lineage, BSD-licensed
+and free of BusyBox's Kconfig and applet framework, but has no no-fork
+mode, so it only makes sense after a real `fork()`. Growing `tosh` is
+the roadmap's stated direction and is what was chosen for now; the
+items above are what a port would still need if that changes.
 
 ## Layer 7 -- The GUI
 

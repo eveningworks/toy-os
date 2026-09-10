@@ -108,21 +108,15 @@ static void bi_cd(struct tosh *sh, const char *arg) {
 
 // --- redirection -------------------------------------------------------
 //
-// `cmd > file`, `cmd >> file`, `cmd < file`, parsed off the END of the
-// line and applied by pointing THIS SHELL's own fd 0/1 at the file
-// around the spawn, then putting them back:
+// `cmd > file`, `cmd >> file`, `cmd < file`, opened by parse() below in
+// the order written and applied by pointing THIS SHELL's own fd 0/1 at
+// the file around the spawn, then putting them back:
 //
 //     saved = dup(1); dup2(file, 1); spawn(...); dup2(saved, 1); close(saved);
 //
 // That is the dance fork() normally exists to allow, done without one
 // because a spawned child INHERITS this table (abi/syscall_abi.h's
 // SYS_SPAWN). The child needs no cooperation and runs no setup code.
-//
-// The parser is deliberately crude and matches this shell's existing
-// level: operators must be space-separated, so `ls >x` is not
-// recognised. A shell that quietly half-parses redirection is worse
-// than one that plainly does not, since the difference only shows up
-// as a file that was never written.
 struct tosh_redir {
     int out_fd;     // the file opened for >, or -1
     int in_fd;      // the file opened for <, or -1
@@ -132,89 +126,6 @@ struct tosh_redir {
 
 static void redir_init(struct tosh_redir *r) {
     r->out_fd = r->in_fd = r->saved_out = r->saved_in = -1;
-}
-
-// Strips the operators off `line` IN PLACE and opens what they name.
-// Returns 0 on success, -1 if a file could not be opened -- in which
-// case nothing is left open and the command must not run, exactly as a
-// real shell refuses to run `catin < missing`.
-//
-// LEFT TO RIGHT, which is observable. The first version scanned for the
-// LAST operator and worked backwards, so `catin < missing > out`
-// created `out` before it ever looked at the input -- leaving a file
-// behind for a command that never ran. bash processes redirections in
-// order and stops at the first failure; so does this.
-#define TOSH_REDIR_MAX 4
-
-static int redir_parse(struct tosh *sh, char *line, struct tosh_redir *r) {
-    redir_init(r);
-
-    // Offsets, not pointers into a line being edited. Terminating each
-    // name in place overwrote the SPACE before the next operator, and
-    // the scan's own "an operator must follow a space" rule then
-    // skipped that operator -- so `catin < a > b` silently lost its
-    // `> b` and wrote to the console instead of the file.
-    struct { int op; int at, len; } found[TOSH_REDIR_MAX];
-    int n = 0;
-    int cut = -1; // where the command text ends
-
-    for (int i = 0; line[i]; i++) {
-        if (line[i] != '>' && line[i] != '<') continue;
-        if (i > 0 && line[i - 1] != ' ') continue; // must be its own word
-        int op = line[i] == '<' ? 3 : (line[i + 1] == '>' ? 2 : 1);
-        int at = i + (op == 2 ? 2 : 1);
-        while (line[at] == ' ') at++;
-        if (!line[at]) {
-            emit(sh, "tosh: expected a filename after the redirect\n");
-            return -1;
-        }
-        if (cut < 0) cut = i;
-
-        int end = at;
-        while (line[end] && line[end] != ' ') end++;
-        if (n < TOSH_REDIR_MAX) {
-            found[n].op = op; found[n].at = at; found[n].len = end - at; n++;
-        }
-        i = end - 1; // the for's i++ lands on the space, or the NUL
-    }
-
-    if (cut >= 0) {
-        line[cut] = '\0';
-        // Trim what the operator left behind: `ls / > f` would
-        // otherwise hand `ls` the argument "/ ", and a listdir of "/ "
-        // reports zero entries rather than an error -- so the redirect
-        // "worked" and produced an empty file.
-        while (cut > 0 && line[cut - 1] == ' ') line[--cut] = '\0';
-    }
-
-    for (int i = 0; i < n; i++) {
-        char name[TOSH_PATH_MAX];
-        int len = found[i].len;
-        if (len > TOSH_PATH_MAX - 1) len = TOSH_PATH_MAX - 1;
-        for (int j = 0; j < len; j++) name[j] = line[found[i].at + j];
-        name[len] = '\0';
-
-        const char *path = name;
-        int fd;
-        if (found[i].op == 3) {
-            fd = sys_open(path, 0);
-            if (fd < 0) { emit(sh, "tosh: cannot read "); emit(sh, path); emit(sh, "\n"); return -1; }
-            if (r->in_fd >= 0) sys_close(r->in_fd);
-            r->in_fd = fd;
-        } else {
-            // `>` truncates and writes from the start; `>>` appends.
-            // Both flags are now REQUIRED to say so: a write used to
-            // append unconditionally, so `>>` got its behaviour by
-            // saying nothing, and SYS_LSEEK gave the fd's position a
-            // meaning for writes that made that silence wrong.
-            fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT |
-                                (found[i].op == 1 ? SYS_O_TRUNC : SYS_O_APPEND));
-            if (fd < 0) { emit(sh, "tosh: cannot write "); emit(sh, path); emit(sh, "\n"); return -1; }
-            if (r->out_fd >= 0) sys_close(r->out_fd);
-            r->out_fd = fd;
-        }
-    }
-    return 0;
 }
 
 // Points this shell's own 0/1 at the redirected files, remembering
@@ -391,10 +302,8 @@ static void job_backgrounded(struct tosh *sh, int pgid, const int *pids,
     emit(sh, "\n");
 }
 
-static int run_external(struct tosh *sh, const char *path, const char *args,
-                        const char *label, int background,
-                        int stdout_redirected) {
-    (void)stdout_redirected; // both cases are the same now -- see below
+static int run_external(struct tosh *sh, const char *path, const char **argv,
+                        const char *label, int background) {
 
     // **THE CHILD INHERITS THIS SHELL'S fd 1, ALWAYS.** It used to be
     // captured through a pipe and re-emitted through `sh->out`, because
@@ -422,8 +331,13 @@ static int run_external(struct tosh *sh, const char *path, const char *args,
     // can win -- its first read beat the call by a whole timeslice
     // once spawns got slower, and the job stopped on its own SIGTTIN
     // looking exactly like a broken program. See abi/syscall_abi.h.
-    int pid = sys_spawn_flags(path, args, -1, environ, PGID_NEW,
-                              background ? 0 : SPAWN_FOREGROUND);
+    struct sys_spawn_opts o;
+    sys_spawn_opts_init(&o);
+    o.argv = (char *const *)argv; // the VECTOR, so a quoted word stays one
+    o.env = environ;
+    o.pgid = PGID_NEW;
+    o.flags = background ? 0 : SPAWN_FOREGROUND;
+    int pid = sys_spawn_opts(path, &o);
     if (pid < 0) return -1;
     int pgid = sys_getpgid(pid);
 
@@ -635,38 +549,208 @@ void tosh_reap_jobs(struct tosh *sh) {
     }
 }
 
-// Declared here because run_stripped() refuses to background one, and
-// the definition lives with the pipeline code that is its other caller.
-static int stage_is_builtin(const char *cmd);
+// --- the parser --------------------------------------------------------
+//
+// ONE LEXER, then a tree -- dash's shape, at this shell's scale. The
+// line is split ONCE into words and operators, with quoting decided
+// there and nowhere else, and everything after it -- redirections,
+// pipeline stages, the command word, `&` -- works on that list. It
+// replaced three scans of the raw string (for `&`, for `>`, for `|`),
+// each of which would have had to learn quoting separately.
+//
+// A word's text is UNQUOTED into `sh->unq`: `"a b"` becomes one word
+// holding a space, `'|'` is a word and not an operator, `\ ` is a
+// space. Inside double quotes only `\"` and `\\` are escapes, as in
+// POSIX; inside single quotes nothing is. An operator needs no spaces
+// around it now, so `ls >f` works.
+//
+// **A QUOTED ARGUMENT REACHES THE PROGRAM WHOLE ONLY BECAUSE THE SPAWN
+// CARRIES A VECTOR** (SPAWN_ARGV, abi/syscall_abi.h). The string form
+// would split it again at the kernel, and this lexer would have been a
+// lie about what the child sees.
+enum { W_WORD, W_PIPE, W_IN, W_OUT, W_APPEND, W_AMP };
 
-// The body, once redirection has been stripped off and applied. Split
-// out so every `return` below cannot forget to put fd 0/1 back -- the
-// one thing in this file that leaks a descriptor if it is missed.
-static int run_stripped(struct tosh *sh, const char *line, int background,
-                        int stdout_redirected) {
-    // Split into command and the rest. Everything after the first space
-    // is handed to the program verbatim -- there is no quoting or
-    // globbing here, and pretending otherwise would be worse than not
-    // having it.
-    char cmd[TOSH_PATH_MAX];
-    int i = 0;
-    while (line[i] == ' ') i++;
-    int c = 0;
-    while (line[i] && line[i] != ' ' && c < TOSH_PATH_MAX - 1) cmd[c++] = line[i++];
-    cmd[c] = '\0';
-    while (line[i] == ' ') i++;
-    const char *args = line[i] ? line + i : 0;
+static int op_kind(const char *p) {
+    switch (*p) {
+    case '|': return W_PIPE;
+    case '<': return W_IN;
+    case '&': return W_AMP;
+    case '>': return p[1] == '>' ? W_APPEND : W_OUT;
+    default:  return W_WORD;
+    }
+}
 
-    if (!cmd[0]) return 0;
+static int is_blank(char c) { return c == ' ' || c == '\t'; }
+
+// Fills sh->words from `line`, unquoting into sh->unq. Returns the
+// count, or -1 after saying why -- an unterminated quote is refused
+// rather than closed for the user, because the version that "helps"
+// runs a command the user did not finish typing.
+static int lex(struct tosh *sh, const char *in) {
+    int n = 0;
+    char *out = sh->unq;
+    char *end = sh->unq + sizeof sh->unq;
+    for (;;) {
+        while (is_blank(*in)) in++;
+        if (!*in) return n;
+        if (n >= TOSH_WORD_MAX) {
+            emit(sh, "tosh: too many words on one line\n");
+            return -1;
+        }
+        int kind = op_kind(in);
+        if (kind != W_WORD) {
+            sh->words[n].text = 0;
+            sh->words[n].kind = kind;
+            n++;
+            in += kind == W_APPEND ? 2 : 1;
+            continue;
+        }
+        char *start = out;
+        while (*in && !is_blank(*in) && op_kind(in) == W_WORD) {
+            char q = *in;
+            if (q == '\\') {
+                if (!in[1]) { emit(sh, "tosh: nothing after the backslash\n"); return -1; }
+                in++;
+            } else if (q == '\'' || q == '"') {
+                in++;
+                while (*in && *in != q) {
+                    if (q == '"' && *in == '\\' && (in[1] == '"' || in[1] == '\\')) in++;
+                    if (out >= end - 1) goto full;
+                    *out++ = *in++;
+                }
+                if (!*in) { emit(sh, "tosh: unterminated quote\n"); return -1; }
+                in++;
+                continue;
+            }
+            if (out >= end - 1) goto full;
+            *out++ = *in++;
+        }
+        *out++ = '\0';
+        sh->words[n].text = start;
+        sh->words[n].kind = W_WORD;
+        n++;
+    }
+full:
+    emit(sh, "tosh: line too long\n");
+    return -1;
+}
+
+// The command word of a stage, for deciding builtin vs external.
+static int stage_is_builtin(const char *w) {
+    return seq(w, "cd") || seq(w, "pwd") || seq(w, "help") ||
+           seq(w, "jobs") || seq(w, "fg") || seq(w, "bg");
+}
+
+// A stage is a run of words between `|`s: its argv, and the pipe ends
+// run_pipeline() gives it.
+#define TOSH_STAGE_MAX 4
+
+struct tosh_stage {
+    int first, last;   // into sh->words, inclusive; a redirection's words in between are skipped
+    int in_fd, out_fd; // -1 = inherit whatever the shell has
+    int pid;           // -1 = a builtin, run in pass 2
+};
+
+// Walks the word list: redirections are opened in order and removed
+// from consideration, `&` must be last, and what remains is split into
+// stages at each `|`. Returns the stage count or -1 after saying why.
+//
+// LEFT TO RIGHT for the redirections, which is observable: `catin <
+// missing > out` must not create `out` for a command that never runs.
+// bash processes them in order and stops at the first failure.
+static int parse(struct tosh *sh, int nwords, struct tosh_stage *st,
+                 struct tosh_redir *r, int *background) {
+    int nst = 0;
+    int cur_first = -1, cur_last = -1;  // the stage being collected, or none
+    *background = 0;
+    for (int i = 0; i < nwords; i++) {
+        int kind = sh->words[i].kind;
+        if (kind == W_WORD) {
+            if (cur_first < 0) cur_first = i;
+            cur_last = i;
+            continue;
+        }
+        if (kind == W_AMP) {
+            // TRAILING ONLY: `a & b` is two commands in a real shell,
+            // and without `;`-style sequencing it is refused rather than
+            // half-run (docs/roadmap.md).
+            if (i != nwords - 1) { emit(sh, "tosh: `&` is only supported at the end of a line\n"); return -1; }
+            *background = 1;
+            continue;
+        }
+        if (kind == W_PIPE) {
+            if (cur_first < 0) { emit(sh, "tosh: empty pipeline stage\n"); return -1; }
+            if (nst >= TOSH_STAGE_MAX) { emit(sh, "tosh: too many pipeline stages\n"); return -1; }
+            st[nst].first = cur_first; st[nst].last = cur_last;
+            st[nst].in_fd = st[nst].out_fd = -1; st[nst].pid = -1;
+            nst++;
+            cur_first = cur_last = -1;
+            continue;
+        }
+        // A redirection: the operator and the word after it.
+        if (i + 1 >= nwords || sh->words[i + 1].kind != W_WORD) {
+            emit(sh, "tosh: expected a filename after the redirect\n");
+            return -1;
+        }
+        const char *path = sh->words[++i].text;
+        // The name is a WORD and may sit inside a stage's span (`cmd >
+        // f arg`): re-tag it so stage_argv() leaves it out.
+        sh->words[i].kind = W_IN;
+        int fd;
+        if (kind == W_IN) {
+            fd = sys_open(path, 0);
+            if (fd < 0) { emit(sh, "tosh: cannot read "); emit(sh, path); emit(sh, "\n"); return -1; }
+            if (r->in_fd >= 0) sys_close(r->in_fd);
+            r->in_fd = fd;
+        } else {
+            // `>` truncates and writes from the start; `>>` appends.
+            // Both flags are REQUIRED to say so: a write used to append
+            // unconditionally, and SYS_LSEEK gave the fd's position a
+            // meaning for writes that made that silence wrong.
+            fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT |
+                                (kind == W_OUT ? SYS_O_TRUNC : SYS_O_APPEND));
+            if (fd < 0) { emit(sh, "tosh: cannot write "); emit(sh, path); emit(sh, "\n"); return -1; }
+            if (r->out_fd >= 0) sys_close(r->out_fd);
+            r->out_fd = fd;
+        }
+    }
+    if (cur_first < 0) {
+        if (nst > 0) { emit(sh, "tosh: empty pipeline stage\n"); return -1; }
+        return 0; // a blank line, or only redirections
+    }
+    if (nst >= TOSH_STAGE_MAX) { emit(sh, "tosh: too many pipeline stages\n"); return -1; }
+    st[nst].first = cur_first; st[nst].last = cur_last;
+    st[nst].in_fd = st[nst].out_fd = -1; st[nst].pid = -1;
+    return nst + 1;
+}
+
+// A stage's argv, NULL-terminated, from its run of words -- the words a
+// redirection consumed are no longer W_WORD and are skipped. Returns
+// argc.
+static int stage_argv(struct tosh *sh, const struct tosh_stage *s,
+                      const char **argv, int cap) {
+    int argc = 0;
+    for (int i = s->first; i <= s->last && argc < cap - 1; i++) {
+        // The span may hold a redirection parse() consumed: only words.
+        if (sh->words[i].kind == W_WORD) argv[argc++] = sh->words[i].text;
+    }
+    argv[argc] = 0;
+    return argc;
+}
+
+// One simple command: a builtin in this process, or a program spawned
+// with `argv`. `background` and the pipe ends are the caller's.
+static int run_simple(struct tosh *sh, const char **argv, int argc,
+                      const char *label, int background) {
+    if (argc == 0) return 0;
+    const char *cmd = argv[0];
+    const char *arg1 = argc > 1 ? argv[1] : 0;
 
     // **A BUILTIN CANNOT BE BACKGROUNDED, AND IT IS REFUSED RATHER THAN
     // QUIETLY RUN IN FRONT.** bash backgrounds one by forking a
     // subshell; with no fork there is no second copy of this shell to
     // run it in, and running it in the foreground while the user asked
-    // for `&` would be a silent difference in meaning. `cd dir &` is
-    // almost certainly a typo anyway -- the version that "worked" would
-    // change this shell's directory, which is the opposite of what
-    // backgrounding it implies.
+    // for `&` would be a silent difference in meaning.
     if (background && stage_is_builtin(cmd)) {
         emit(sh, cmd);
         emit(sh, ": cannot be backgrounded -- it runs inside this shell\n");
@@ -674,10 +758,10 @@ static int run_stripped(struct tosh *sh, const char *line, int background,
         return -1;
     }
 
-    if (seq(cmd, "cd"))   { bi_cd(sh, args);  return 0; }
+    if (seq(cmd, "cd"))   { bi_cd(sh, arg1);  return 0; }
     if (seq(cmd, "jobs")) { bi_jobs(sh);       return 0; }
-    if (seq(cmd, "fg"))   { return bi_fg(sh, args); }
-    if (seq(cmd, "bg"))   { return bi_bg(sh, args); }
+    if (seq(cmd, "fg"))   { return bi_fg(sh, arg1); }
+    if (seq(cmd, "bg"))   { return bi_bg(sh, arg1); }
     if (seq(cmd, "pwd"))  {
         char here[TOSH_PATH_MAX];
         if (sys_getcwd(here, sizeof here) < 0) scopy(here, "?", sizeof here);
@@ -688,6 +772,7 @@ static int run_stripped(struct tosh *sh, const char *line, int background,
     if (seq(cmd, "help")) {
         emit(sh, "tosh -- the toy-os shell, running in ring 3.\n"
                  "builtins: cd pwd jobs fg bg help  (everything else is a program)\n"
+                 "quoting: \"a b\" and 'a b' are one argument, \\ escapes one character\n"
                  "redirection: cmd > file, cmd >> file, cmd < file\n"
                  "job control: cmd & backgrounds, Ctrl-Z suspends, `jobs` lists,\n"
                  "             `fg [n]` resumes in front, `bg [n]` behind\n"
@@ -712,7 +797,7 @@ static int run_stripped(struct tosh *sh, const char *line, int background,
         return -1;
     }
 
-    int code = run_external(sh, path, args, line, background, stdout_redirected);
+    int code = run_external(sh, path, argv, label, background);
     sh->last_status = code;
     // A STOP IS NOT AN EXIT, and `[exit 276]` for a job the user just
     // suspended would be a lie about a process that is still there.
@@ -741,70 +826,19 @@ static int run_stripped(struct tosh *sh, const char *line, int background,
 // stage waiting forever for a producer that has already exited.
 //
 // And a BUILTIN stage runs inside this shell, synchronously. Since a
-// full pipe now BLOCKS its writer (api/pipe.h), a builtin producing
-// more than 4 KiB before its reader exists would block the shell
-// against a stage it has not spawned yet -- a deadlock with itself. So
-// builtins are spawned-last: every external stage is running and
-// draining before any builtin writes a byte.
-#define TOSH_STAGE_MAX 4
-
-struct tosh_stage {
-    const char *cmd;   // into the caller's mutable line
-    int in_fd, out_fd; // -1 = inherit whatever the shell has
-    int pid;           // -1 = a builtin, run in pass 2
-};
-
-// Splits on `|` IN PLACE. Returns the stage count, or -1 if there are
-// too many or one is empty (`a |` and `| b` are errors, not silence).
-static int split_stages(struct tosh *sh, char *line, struct tosh_stage *st) {
-    int n = 0;
-    char *p = line;
-    for (;;) {
-        if (n >= TOSH_STAGE_MAX) {
-            emit(sh, "tosh: too many pipeline stages\n");
-            return -1;
-        }
-        char *bar = 0;
-        for (char *q = p; *q; q++) if (*q == '|') { bar = q; break; }
-        if (bar) *bar = '\0';
-
-        while (*p == ' ') p++;
-        int len = slen(p);
-        while (len > 0 && p[len - 1] == ' ') p[--len] = '\0';
-        if (!p[0]) {
-            emit(sh, "tosh: empty pipeline stage\n");
-            return -1;
-        }
-        st[n].cmd = p;
-        st[n].in_fd = st[n].out_fd = -1;
-        st[n].pid = -1;
-        n++;
-        if (!bar) return n;
-        p = bar + 1;
-    }
-}
-
-// The command word of a stage, for deciding builtin vs external.
-static int stage_is_builtin(const char *cmd) {
-    char w[TOSH_PATH_MAX];
-    int i = 0, c = 0;
-    while (cmd[i] == ' ') i++;
-    while (cmd[i] && cmd[i] != ' ' && c < TOSH_PATH_MAX - 1) w[c++] = cmd[i++];
-    w[c] = '\0';
-    return seq(w, "cd") || seq(w, "pwd") || seq(w, "help") ||
-           seq(w, "jobs") || seq(w, "fg") || seq(w, "bg");
-}
-
+// full pipe BLOCKS its writer (api/pipe.h), a builtin producing more
+// than 4 KiB before its reader exists would block the shell against a
+// stage it has not spawned yet -- a deadlock with itself. So builtins
+// are spawned-last: every external stage is running and draining
+// before any builtin writes a byte.
 static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
-                        const char *label, int background,
-                        int stdout_redirected) {
+                        const char *label, int background) {
     // Stage i's output goes to a fresh pipe, whose read end becomes
-    // stage i+1's input. The LAST stage keeps the shell's own fd 1 --
-    // which is a `>` file if the line had one, and otherwise whatever
-    // run_stage() below arranges for capture.
-    // THE FIRST STAGE HAS NO UPSTREAM, so it INHERITS this shell's fd 0
-    // -- which is the terminal this shell is reading, and is exactly
-    // right. Every later stage reads the pipe from the one before it.
+    // stage i+1's input. THE FIRST STAGE HAS NO UPSTREAM, so it inherits
+    // this shell's fd 0 -- the terminal this shell is reading -- and
+    // THE LAST STAGE KEEPS THIS SHELL'S fd 1, which is a terminal (or
+    // the `>` file); capturing it through a pipe made `isatty(1)` false
+    // for the last stage of every pipeline.
     int prev_read = -1;
     for (int i = 0; i < n; i++) {
         st[i].in_fd = prev_read;
@@ -817,37 +851,21 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
         }
     }
 
-    // **THE LAST STAGE KEEPS THIS SHELL'S fd 1**, which is a terminal.
-    // It used to be captured into a pipe and re-emitted, for the reason
-    // run_external() above records at length -- and with the same cost:
-    // a pipe is not a terminal, so `isatty(1)` was false for the last
-    // stage of every pipeline and `ls | cat` behaved differently from
-    // `ls` for reasons no user could see.
-    (void)stdout_redirected;
-
     // ONE GROUP FOR THE WHOLE PIPELINE -- the first external stage
     // leads it (PGID_NEW), every later stage joins. That is what makes
     // one Ctrl-C end `cat big | grep x | less` rather than only its last
-    // stage, which would leave two processes running and this shell
-    // still waiting on them. See job_foreground() above.
+    // stage. See job_foreground() above.
     int job_pgid = 0;
 
     // Pass 1: the external stages, in order.
     for (int i = 0; i < n; i++) {
-        if (stage_is_builtin(st[i].cmd)) continue;
+        const char *argv[TOSH_WORD_MAX + 1];
+        int argc = stage_argv(sh, &st[i], argv, TOSH_WORD_MAX + 1);
+        if (argc == 0 || stage_is_builtin(argv[0])) continue;
 
         char path[TOSH_PATH_MAX];
-        char cmd[TOSH_PATH_MAX];
-        int k = 0, c = 0;
-        while (st[i].cmd[k] == ' ') k++;
-        while (st[i].cmd[k] && st[i].cmd[k] != ' ' && c < TOSH_PATH_MAX - 1)
-            cmd[c++] = st[i].cmd[k++];
-        cmd[c] = '\0';
-        while (st[i].cmd[k] == ' ') k++;
-        const char *args = st[i].cmd[k] ? st[i].cmd + k : 0;
-
-        if (!upath_find_program(cmd, path, TOSH_PATH_MAX)) {
-            emit(sh, cmd);
+        if (upath_find_program(argv[0], path, TOSH_PATH_MAX) <= 0) {
+            emit(sh, argv[0]);
             emit(sh, ": not found\n");
             continue; // its stage simply produces nothing
         }
@@ -856,16 +874,16 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
         if (st[i].in_fd  >= 0) { saved_in  = sys_dup(0); sys_dup2(st[i].in_fd, 0); }
         if (st[i].out_fd >= 0) { saved_out = sys_dup(1); sys_dup2(st[i].out_fd, 1); }
 
-        // -1 = inherit the fds we just set. The GROUP is explicit: the
-        // first stage leads, the rest join it.
         // The FIRST stage leads the group and -- unless backgrounded --
         // takes the terminal atomically with its creation
-        // (SPAWN_FOREGROUND, see the simple command above); the rest
-        // join a group that is already in front.
-        st[i].pid = sys_spawn_flags(path, args, -1, environ,
-                                     job_pgid > 0 ? job_pgid : PGID_NEW,
-                                     job_pgid > 0 || background
-                                         ? 0 : SPAWN_FOREGROUND);
+        // (SPAWN_FOREGROUND); the rest join a group already in front.
+        struct sys_spawn_opts o;
+        sys_spawn_opts_init(&o);
+        o.argv = (char *const *)argv;
+        o.env = environ;
+        o.pgid = job_pgid > 0 ? job_pgid : PGID_NEW;
+        o.flags = job_pgid > 0 || background ? 0 : SPAWN_FOREGROUND;
+        st[i].pid = sys_spawn_opts(path, &o);
         if (st[i].pid > 0 && job_pgid <= 0)
             job_pgid = sys_getpgid(st[i].pid);
 
@@ -875,35 +893,28 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
 
     // Every pipe end this shell still holds must go NOW, before anything
     // is waited for: each spawned stage has its own copy, and a stage
-    // reading a pipe this shell still writes would never see EOF.
-    //
-    // The ONE exception is a builtin's own output end, which this shell
-    // is about to write through in pass 2. It is closed immediately
-    // after that builtin runs, which is the same rule -- close as soon
-    // as the writer is finished with it -- applied to a writer that
-    // happens to be us.
+    // reading a pipe this shell still writes would never see EOF. The
+    // ONE exception is a builtin's own output end, which this shell is
+    // about to write through in pass 2 and closes right after.
     for (int i = 0; i < n; i++) {
         if (st[i].in_fd  >= 0) { sys_close(st[i].in_fd);  st[i].in_fd  = -1; }
-        int builtin_producer = stage_is_builtin(st[i].cmd) && st[i].pid <= 0;
+        int builtin_producer = st[i].pid <= 0 &&
+                               stage_is_builtin(sh->words[st[i].first].text);
         if (st[i].out_fd >= 0 && !builtin_producer) {
             sys_close(st[i].out_fd);
             st[i].out_fd = -1;
         }
     }
 
-    // Pass 2: the builtins, LAST, and that ordering is the point. A
-    // builtin runs inside this shell, synchronously, and a full pipe now
-    // blocks its writer -- so a builtin producing more than 4 KiB before
-    // its reader existed would block the shell against a stage it had
-    // not spawned yet. By here every external stage is running and
-    // draining, so it cannot deadlock against itself.
+    // Pass 2: the builtins, LAST -- see the deadlock note above.
     for (int i = 0; i < n; i++) {
-        if (!stage_is_builtin(st[i].cmd) || st[i].pid > 0) continue;
+        const char *argv[TOSH_WORD_MAX + 1];
+        int argc = stage_argv(sh, &st[i], argv, TOSH_WORD_MAX + 1);
+        if (argc == 0 || !stage_is_builtin(argv[0]) || st[i].pid > 0) continue;
 
-        // Its output goes to its stage's pipe, not to the shell's sink.
-        // A builtin prints through sh->out (the GUI Terminal's draws
-        // into a window), so pointing fd 1 somewhere would miss it --
-        // the same reason `>` swaps the sink rather than only dup2ing.
+        // Its output goes to its stage's pipe, not to the shell's sink:
+        // a builtin prints through sh->out, so pointing fd 1 somewhere
+        // would miss it -- the same reason `>` swaps the sink.
         tosh_out_fn prev = sh->out;
         void *prev_ctx = sh->ctx;
         if (st[i].out_fd >= 0) {
@@ -911,7 +922,7 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
             sh->ctx = (void *)(long)st[i].out_fd;
         }
 
-        run_stripped(sh, st[i].cmd, 0, stdout_redirected);
+        run_simple(sh, argv, argc, label, 0);
 
         sh->out = prev;
         sh->ctx = prev_ctx;
@@ -923,18 +934,6 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
         }
     }
 
-    // Drain the last stage into this shell's sink. AFTER the builtins
-    // and BEFORE the waits, and both halves of that are deadlocks
-    // avoided rather than style. Draining before pass 2 would block
-    // this shell on output from a pipeline whose first stage -- a
-    // builtin, run by this same shell -- had not started. Waiting
-    // before draining would block on a stage that is itself blocked
-    // writing into a capture pipe nobody is emptying.
-
-
-    // NOT WAITED FOR, and announced under the LAST stage's pid -- which
-    // is the pid whose status the pipeline reports when it ends, and so
-    // the one tosh_reap_jobs() has to ask after.
     // THE SPAWNED STAGES, in pipeline order. A stage that failed to
     // start has no pid and is skipped -- it produced nothing and there
     // is nothing to wait for.
@@ -954,42 +953,22 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
     return job_wait(sh, job_pgid, pids, npid, label);
 }
 
-// A trailing `&` means BACKGROUND. Removed from the line in place, so
-// nothing downstream has to know about it.
-//
-// TRAILING ONLY, and this shell will not pretend otherwise: `a & b` is
-// two commands in a real shell and one malformed one here, because
-// there is no `;`-style sequencing yet (docs/roadmap.md). A `&` in the
-// middle stays in the line and reaches the program as an argument,
-// which is wrong but VISIBLY wrong -- silently splitting on it would
-// run half of what was typed.
-static int strip_background(char *s) {
-    int n = 0;
-    while (s[n]) n++;
-    while (n > 0 && s[n - 1] == ' ') n--;
-    if (n == 0 || s[n - 1] != '&') return 0;
-    s[n - 1] = '\0';
-    // ...and the spaces before it, so the label a job is listed under
-    // is `sleep 5` rather than `sleep 5 `.
-    for (n--; n > 0 && s[n - 1] == ' '; n--) s[n - 1] = '\0';
-    return 1;
-}
-
 int tosh_run_line(struct tosh *sh, const char *line) {
-    // A MUTABLE copy: redirection is stripped off the line in place,
-    // and the caller's buffer is not ours to edit (the GUI Terminal
-    // hands us its editor's live buffer).
-    char work[TOSH_CMD_MAX];
-    scopy(work, line, TOSH_CMD_MAX);
+    int nwords = lex(sh, line);
+    if (nwords < 0) { sh->last_status = -1; return -1; }
 
-    // BEFORE the redirection parse, because `&` comes after `> file`
-    // and stripping it first is what leaves an ordinary line behind.
-    int background = strip_background(work);
+    // THE LABEL IS THE LINE AS TYPED -- what `jobs` lists a job under.
+    char label[TOSH_JOB_CMD_MAX];
+    scopy(label, line, TOSH_JOB_CMD_MAX);
 
     struct tosh_redir r;
-    if (redir_parse(sh, work, &r) < 0) {
-        // Nothing was opened and nothing runs -- `cat < missing` must
-        // not execute `cat` against the console.
+    redir_init(&r);
+    struct tosh_stage st[TOSH_STAGE_MAX];
+    int background = 0;
+    int nst = parse(sh, nwords, st, &r, &background);
+    if (nst < 0) {
+        // Nothing runs -- `cat < missing` must not execute `cat`
+        // against the console -- and whatever was opened is closed.
         redir_undo(&r);
         sh->last_status = -1;
         return -1;
@@ -997,33 +976,22 @@ int tosh_run_line(struct tosh *sh, const char *line) {
     redir_apply(&r);
 
     // A builtin prints through sh->out, so redirecting fd 1 alone would
-    // miss it in the GUI Terminal, whose sink draws into a window.
-    // Swapping the sink is what makes `ls > f` mean one thing in both
-    // front ends.
+    // miss it in a front end whose sink is not fd 1. Swapping the sink
+    // is what makes `ls > f` mean one thing everywhere.
     tosh_out_fn saved_out = sh->out;
     void *saved_ctx = sh->ctx;
     if (r.out_fd >= 0) { sh->out = fd_sink; sh->ctx = (void *)(long)1; }
 
-    // A PIPELINE if the line has a `|`, otherwise the single-command
-    // path. Split after redirection was stripped, so `a | b > f`
-    // redirects the LAST stage -- which is what a real shell does,
-    // because `>` binds to the whole pipeline's output.
-    // THE LABEL IS TAKEN BEFORE THE SPLIT, because split_stages() cuts
-    // the line in place -- every `|` becomes a NUL, so afterwards
-    // `work` is only the first stage and a job would be listed under a
-    // third of its own name.
-    char label[TOSH_JOB_CMD_MAX];
-    scopy(label, work, TOSH_JOB_CMD_MAX);
-
-    struct tosh_stage st[TOSH_STAGE_MAX];
-    int nst = split_stages(sh, work, st);
-    int code;
-    if (nst < 0) {
-        code = -1;
-    } else if (nst > 1) {
-        code = run_pipeline(sh, st, nst, label, background, r.out_fd >= 0);
-    } else {
-        code = run_stripped(sh, work, background, r.out_fd >= 0);
+    // `>` binds to the whole pipeline's output and `<` to its input, as
+    // in a real shell: both are applied to this shell's own 0/1 around
+    // the run, and the stages inherit them at the ends.
+    int code = 0;
+    if (nst > 1) {
+        code = run_pipeline(sh, st, nst, label, background);
+    } else if (nst == 1) {
+        const char *argv[TOSH_WORD_MAX + 1];
+        int argc = stage_argv(sh, &st[0], argv, TOSH_WORD_MAX + 1);
+        code = run_simple(sh, argv, argc, label, background);
     }
 
     sh->out = saved_out;

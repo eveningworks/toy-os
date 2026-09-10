@@ -828,8 +828,27 @@ int sys_spawn_flags(const char *path, const char *args, int stdout_fd,
     return sys_spawn_opts(path, &o);
 }
 
+// The argv vector, flattened: "a\0b\0", sized by LENGTH rather than
+// env's double NUL, because an argument may be empty. Static for
+// flatten_env()'s reason -- libsys sits below the allocator. Returns
+// the length, 0 if it does not fit or the vector is empty.
+static char g_argblob[SPAWN_ARGS_MAX];
+
+static size_t flatten_argv(char *const *argv) {
+    size_t n = 0;
+    for (int i = 0; argv[i]; i++) {
+        const char *a = argv[i];
+        size_t len = 0;
+        while (a[len]) len++;
+        if (n + len + 1 > sizeof g_argblob) return 0;
+        for (size_t k = 0; k <= len; k++) g_argblob[n++] = a[k];
+    }
+    return n;
+}
+
 void sys_spawn_opts_init(struct sys_spawn_opts *o) {
     o->args = 0;
+    o->argv = 0;
     o->env = 0;
     o->stdin_fd = -1;
     o->stdout_fd = -1;
@@ -842,6 +861,15 @@ int sys_spawn_opts(const char *path, const struct sys_spawn_opts *o) {
     struct spawn_msg msg;
     msg.path = path;
     msg.args = o->args;
+    unsigned flags = o->flags;
+    msg.args_len = 0;
+    if (o->argv) {
+        size_t len = flatten_argv(o->argv);
+        if (!len) { g_errno = E2BIG; return -1; }
+        msg.args = g_argblob;
+        msg.args_len = (uint32_t)len;
+        flags |= SPAWN_ARGV;
+    }
     // An EMPTY environment is still an environment: the blob is the
     // single terminating NUL, and the child gets envp[0] == NULL rather
     // than no envp at all. Passing NULL here would be "no environment",
@@ -851,7 +879,7 @@ int sys_spawn_opts(const char *path, const struct sys_spawn_opts *o) {
     msg.stdout_fd = o->stdout_fd;
     msg.stdin_fd = o->stdin_fd;
     msg.pgid = o->pgid;
-    msg.flags = o->flags;
+    msg.flags = flags;
     return (int)err(syscall1(SYS_SPAWN, (uint64_t)(uintptr_t)&msg));
 }
 

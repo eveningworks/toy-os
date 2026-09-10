@@ -129,7 +129,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~Ctrl-C~~ DONE 2026-08-22 -- each job in its own group, `tcsetpgrp` around it
 - [ ] **`#!` handling**, which is the loader's job, not the shell's: `elf_load()` rejects a non-ELF file
 - [x] ~~`|` pipes between two commands~~ DONE 2026-08-19 -- N stages, not two
-- [ ] Quoting/escaping, `&&`/`||`/`;`, globbing, aliases, `$?`/`$1`, and a history buffer
+- [ ] `&&`/`||`/`;`, globbing, aliases, `$?`/`$1`, and a history buffer
 - [x] ~~Line editing~~ DONE -- `kernel/lib/klineedit.c`, compiled twice so both rings edit with the same code
 - [x] ~~`>`/`<`/`>>` redirection~~ DONE 2026-08-19 -- in `/bin/tosh` and the GUI Terminal
 - [x] ~~`Ctrl-Z`, `jobs` and `fg`~~ DONE 2026-08-22 -- a job table in the shell, over a STOPPED process in the kernel
@@ -138,7 +138,7 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] Globbing (`*`, `?`) expanded by the shell, not each command
 - [ ] An `export` builtin -- the environment itself is done (a `SYS_SPAWN` blob, `getenv`/`setenv`, `/tests/env_test`); no shell can SET one
 - [ ] `&&`, `||`, `;` command sequencing
-- [ ] Quoting/escaping (`"..."`, `'...'`, `\`) -- the parser splits on spaces today, so no argument can contain one
+- [x] ~~Quoting/escaping (`"..."`, `'...'`, `\`)~~ DONE 2026-09-10 -- one lexer, and `SPAWN_ARGV` carries the words whole
 - [ ] Shell scripts, including `#!` handling in `run`
 - [ ] Aliases
 
@@ -329,6 +329,19 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [x] ~~Prove it: build and run a real ported program nobody here wrote~~ DONE twice -- cJSON, then Doom (libc-design.md)
 - [ ] `/bin`'s output moves from `sys_print` to stdio -- see `docs/roadmap-details.md`
 - [ ] Decide, in writing, what is deliberately NOT pursued
+
+### A ported POSIX shell
+**Needs:** either `fork()`/`exec()`-style process model, or BusyBox's no-fork re-exec path over `SYS_SPAWN` -- the list below is what a BusyBox `ash` port was measured to need (2026-09-10), in the order it blocks.
+
+- [x] ~~An argv VECTOR across a spawn, so a quoted argument survives it~~ DONE 2026-09-10 -- `SPAWN_ARGV`
+- [ ] A shell running a second copy of itself with its state: `fork()`, or `exec` plus BusyBox's NOMMU re-exec
+- [ ] `sigprocmask`/`sigsuspend`/`sigsetjmp` -- ash's `INTOFF`/`INTON` critical sections
+- [ ] POSIX `stat`/`fstat`/`lstat` with a truthful `struct stat` -- `test -x`, command hashing
+- [ ] `fcntl` (`F_DUPFD`, `FD_CLOEXEC`), `umask`, `getppid`, `times`
+- [ ] `SIGTTOU`, and a catchable `SIGQUIT`
+- [ ] `#!` handling in the loader -- listed under Shell pipes & job control
+- [ ] The port itself: `userland/ports/busybox/`, ash only, GPL-2 into ONE binary as Doom is
+- [ ] A `system.shell` setting, read by the four places that hardcode `/bin/tosh` today
 
 ## Tracks -- no dependency on the phases above
 

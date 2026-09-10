@@ -62,11 +62,10 @@ implement BRE, so adding the flag is a line if a POSIX script ever needs it.
 
 ## Traps
 
-**The shell eats `|` before grep sees it.** `/bin/tosh` splits on `|` first
-and has no quoting, so `grep -c "(a|b)" f` runs `grep -c "(a` piped into
-`b)" f`. Until tosh grows quoting (`docs/roadmap.md`), use a bracket
-expression — `[ab]` — or a pattern without alternation. This is a shell
-limitation, not a grep one.
+**Quote a pattern with `|` in it.** `/bin/tosh` treats an unquoted `|`
+as a pipe, so `grep -c (a|b) f` runs `grep -c (a` piped into `b) f`.
+Written `grep -c "(a|b)" f` it reaches grep as one argument, as it
+would in any shell.
 
 **A very long line is matched in full but printed truncated**, with
 ` [truncated]` appended, at 1024 bytes. Silently cutting it would make grep

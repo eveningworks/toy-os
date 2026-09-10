@@ -29,6 +29,18 @@
 // it are bounded separately by TOSH_PATH_MAX.
 #define TOSH_CMD_MAX 1024
 
+// The most words (arguments plus operators) one line may lex into. A
+// line of TOSH_CMD_MAX bytes cannot hold more than half that in
+// one-character words; this is the bound the parser's arrays carry.
+#define TOSH_WORD_MAX 128
+
+// One lexed token: a word (`text` into `struct tosh.unq`, unquoted) or
+// an operator (`text` NULL). See tosh.c's parser section.
+struct tosh_word {
+    char *text;
+    unsigned char kind;
+};
+
 // Receives output as it is produced -- streamed, not accumulated, so a
 // long-running program's output appears while it runs rather than all
 // at once when it exits.
@@ -52,6 +64,11 @@ struct tosh {
     void *ctx;
     int last_status; // exit code of the last external command
 
+    // The parser's scratch, IN THE OBJECT rather than on the stack: a
+    // ring-3 frame is budgeted at 2 KiB and these are 2.5 KiB. One line
+    // is parsed at a time, so there is nothing to be re-entrant about.
+    char unq[TOSH_CMD_MAX];                // the words, unquoted
+    struct tosh_word words[TOSH_WORD_MAX];
 };
 
 void tosh_init(struct tosh *sh, tosh_out_fn out, void *ctx);

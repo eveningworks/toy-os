@@ -819,10 +819,9 @@ static void switch_to_kernel(void) {
 // than GRUB modules (this used to be spawn_from_module(int
 // module_index), sourcing bytes via multiboot_get_module() -- replaced
 // outright rather than kept alongside once nothing needed it anymore,
-// see docs/decisions.md). `args` is the same optional, space-separated
-// argument string elf_run_from_fs() takes (NULL/"" for none -- both
-// `schedtest` counters still pass NULL, unaffected by this parameter's
-// addition) -- laid out via elf_build_argv_on_stack() (elf_run.h) into
+// see docs/decisions.md). `argvec` is the child's argument VECTOR in
+// elf_build_argv_on_stack()'s blob form (NULL for argv = {path}; the
+// string-taking wrappers below convert) -- laid out via that function into
 // this process's own stack page, the same layout elf_run_from_fs() uses
 // for a legacy-blocking process, so a scheduler-managed one gets a real
 // argv[0]/argc too instead of the rdi=rsi=0/bare-top-of-page RSP this
@@ -830,9 +829,9 @@ static void switch_to_kernel(void) {
 // (>= 0) or -1 on any failure (no free slot, missing/unreadable file,
 // `args` too long to fit the one stack page, or the same allocation
 // failures every other ELF-loading path already handles the same way).
-static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
-                          int stdin_desc, const char *env, int want_pgid,
-                          uint64_t parent_pml4) {
+static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len,
+                          int stdout_desc, int stdin_desc, const char *env,
+                          int want_pgid, uint64_t parent_pml4) {
     int slot = -1;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state == SCHED_UNUSED) { slot = i; break; }
@@ -940,7 +939,7 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc,
     }
 
     uint64_t argc = 0, argv = 0, user_rsp = 0;
-    if (!elf_build_argv_on_stack(stack_phys, UADDR_STACK_VADDR, path, args, env,
+    if (!elf_build_argv_on_stack(stack_phys, UADDR_STACK_VADDR, path, argvec, argvec_len, env,
                                   auxc ? auxv : 0, auxc,
                                   &argc, &argv, &user_rsp)) {
         vmm_destroy_address_space(as);
@@ -2091,17 +2090,27 @@ int scheduler_spawn_piped(const char *path, const char *args, int pipe_idx) {
 
 int scheduler_spawn_env(const char *path, const char *args, int pipe_idx,
                          const char *env) {
-    // 0 = inherit the spawner's group, which is what every kernel-side
-    // caller wants: init's services and the demo's counters belong with
-    // whatever started them. Parent 0 too: a kernel-side caller's child
-    // gets the standard three fds (see spawn_from_fs()'s fd_inherit).
-    return scheduler_spawn_group(path, args, pipe_idx, -1, env, 0, 0);
+    // THE STRING FORM ENDS HERE: split into the vector everything below
+    // carries. On the heap, since SPAWN_ARGS_MAX does not fit a frame.
+    char *vec = kmalloc(SPAWN_ARGS_MAX + FS_PATH_MAX);
+    if (!vec) return 0;
+    int pid = 0;
+    size_t vec_len = 0;
+    if (elf_argv_from_string(path, args, vec, SPAWN_ARGS_MAX + FS_PATH_MAX, &vec_len)) {
+        // 0 = inherit the spawner's group, which is what every kernel-side
+        // caller wants: init's services and the demo's counters belong with
+        // whatever started them. Parent 0 too: a kernel-side caller's child
+        // gets the standard three fds (see spawn_from_fs()'s fd_inherit).
+        pid = scheduler_spawn_group(path, vec, vec_len, pipe_idx, -1, env, 0, 0);
+    }
+    kfree(vec);
+    return pid;
 }
 
-int scheduler_spawn_group(const char *path, const char *args, int pipe_idx,
-                           int stdin_desc, const char *env, int pgid,
+int scheduler_spawn_group(const char *path, const char *argv, size_t argv_len,
+                           int pipe_idx, int stdin_desc, const char *env, int pgid,
                            uint64_t parent_pml4) {
-    int slot = spawn_from_fs(path, args, pipe_idx, stdin_desc, env, pgid,
+    int slot = spawn_from_fs(path, argv, argv_len, pipe_idx, stdin_desc, env, pgid,
                               parent_pml4);
     if (slot < 0) return 0;
 
@@ -2591,8 +2600,8 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code) {
 }
 
 void scheduler_demo_run(void) {
-    int a = spawn_from_fs("/bin/counter_a", NULL, -1, -1, 0, 0, 0);
-    int b = spawn_from_fs("/bin/counter_b", NULL, -1, -1, 0, 0, 0);
+    int a = spawn_from_fs("/bin/counter_a", NULL, 0, -1, -1, 0, 0, 0);
+    int b = spawn_from_fs("/bin/counter_b", NULL, 0, -1, -1, 0, 0, 0);
     if (a < 0 || b < 0) {
         vga_write("schedtest: failed to spawn one or both counter processes --\n");
         vga_write("were /bin/counter_a and /bin/counter_b seeded onto disk.img?\n");

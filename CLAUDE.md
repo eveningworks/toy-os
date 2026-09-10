@@ -710,6 +710,7 @@ whenever a headline here tells you something you did not already know.
 - **A RESIZE IS A SIGNAL, AND ONLY WHEN THE SIZE ACTUALLY MOVED**
 - **A LINE LONGER THAN THE TERMINAL IS WIDE NEEDS ROWS, NOT `\r`**
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
+- **A SPAWN CARRIES AN ARGV VECTOR WITH A LENGTH, AND THE STRING FORM IS SPLIT AT THE EDGE** -- `SPAWN_ARGV`; sized by length, not `env`'s double NUL, because an argument may be empty
 
 ### GUI, Toykit and the desktop
 
@@ -974,6 +975,7 @@ whenever a headline here tells you something you did not already know.
 - **RING 3 CAN READ THE CONSOLE -- fd 0, and it BLOCKS.**
 - **A QMP TEST THAT TYPES PUNCTUATION MUST PIN THE GUEST'S KEYBOARD LAYOUT.**
 - **RING 0's BLOCKING KEYBOARD READERS ARE SUSPENDED WHILE A COMPOSITOR HOLDS THE ROLE**
+- **QUOTING IS DECIDED IN ONE LEXER, AND A QUOTED WORD SURVIVES THE SPAWN ONLY BECAUSE THE SPAWN CARRIES A VECTOR** -- test quoting by reading the child's `argv`, never the shell's parse
 
 ### The build, the userland layout, and releases
 

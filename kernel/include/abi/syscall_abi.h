@@ -830,7 +830,12 @@ struct listdir_request {
 
 struct spawn_msg {
     const char *path;
-    const char *args;      // whitespace-separated, or NULL
+    // The child's arguments, or NULL for none. Two forms, chosen by
+    // SPAWN_ARGV below: without it a whitespace-separated STRING the
+    // kernel splits (argv[0] is `path`); with it a VECTOR of
+    // NUL-terminated strings, `args_len` bytes long, carried as-is --
+    // so an argument may hold a space, or be empty.
+    const char *args;
     const char *env;       // "K=V\0K=V\0\0", or NULL
     // A pipe write end or socket this process owns, or -1 for the
     // console, or SPAWN_FD_LOG for the application log.
@@ -878,6 +883,16 @@ struct spawn_msg {
     // an old kernel would accept a new flag and do nothing, which is the
     // worst of both answers.
     uint32_t flags;
+
+    // With SPAWN_ARGV: the byte length of the vector `args` points at,
+    // every entry's NUL included, 1..SPAWN_ARGS_MAX. Without it: 0.
+    //
+    // A LENGTH, NOT `env`'s DOUBLE-NUL TERMINATOR, because an argument
+    // may legitimately be empty and the empty string IS that terminator
+    // -- `prog "" x` would arrive as `prog` (the ambiguity Linux's
+    // /proc/<pid>/cmdline is known for). An environment entry is never
+    // empty, so `env` keeps its shape.
+    uint32_t args_len;
 };
 
 // The child is TRACED: every syscall it makes is decoded and printed
@@ -905,8 +920,19 @@ struct spawn_msg {
 // after-the-fact tcsetpgrp was.
 #define SPAWN_FOREGROUND 2
 
+// `args` is an argv VECTOR -- NUL-terminated strings back to back,
+// `args_len` bytes in all, at most SPAWN_ARGS_MAX -- and the kernel
+// splits nothing.
+// The string form cannot carry a space inside one argument, which is
+// what a shell with quoting needs to do; CreateProcess passes a line
+// and every program re-parses it, execve passes a vector. A FLAG rather
+// than a second field, so a caller that predates it is unchanged.
+// The vector INCLUDES argv[0], as execve's does; an empty vector is
+// refused, since a program entered with argc == 0 dereferences NULL.
+#define SPAWN_ARGV 4
+
 // Every flag this kernel knows. Anything outside it is -EINVAL.
-#define SPAWN_FLAGS_ALL (SPAWN_TRACE | SPAWN_FOREGROUND)
+#define SPAWN_FLAGS_ALL (SPAWN_TRACE | SPAWN_FOREGROUND | SPAWN_ARGV)
 
 // The most an environment blob may be, including its terminator. It has
 // to fit the child's single argv/env stack page alongside the strings

@@ -76,6 +76,10 @@ VM = os.path.join(REPO, "tools", "vm.py")
 # "all phases passed" and exit code 0.
 TESTS = [
     ("libc_test", 0, None, None),
+    # The argv VECTOR across a spawn (SPAWN_ARGV) and tosh's quoting on
+    # top of it. SPAWNED (exit code None): it reads pipes its children
+    # write, which the legacy `run` loader cannot block on.
+    ("argv_test", None, None, None),
     # SPAWN_FD_LOG: a child's stdout landing in the application log,
     # tagged with the CHILD's name. SPAWNED (exit code None) because the
     # thing under test is a spawn -- it waits for two children, which the

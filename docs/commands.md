@@ -48,8 +48,12 @@ the builtin `echo` ignored `-n`. Removing each made the command behave
 the same however it was reached, which is the whole point
 (`docs/conventions/shell.md`). tosh does have
 REDIRECTION, which this one does not: `cmd > file`, `cmd >> file`
-and `cmd < file`, plus `a | b | c` pipelines (up to four stages), with
-the operators space-separated. A builtin may appear anywhere in a
+and `cmd < file`, plus `a | b | c` pipelines (up to four stages); an
+operator needs no spaces around it. It also has QUOTING: `"a b"` and
+`'a b'` are one argument, `\ ` is a literal space, and a quoted `|` or
+`>` is a character rather than an operator -- and the argument reaches
+the program whole, because the spawn carries an argv VECTOR
+(`docs/conventions/shell.md`). A builtin may appear anywhere in a
 pipeline; it runs inside the shell, after every external stage is
 already draining.
 

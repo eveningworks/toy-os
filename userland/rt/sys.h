@@ -787,7 +787,12 @@ int sys_spawn_flags(const char *path, const char *args, int stdout_fd,
 // a handler spawned per connection reads and writes the client as an
 // ordinary filter (userland/bin/inetd.c).
 struct sys_spawn_opts {
-    const char *args;   // whitespace-separated, or NULL
+    const char *args;   // whitespace-separated, or NULL; ignored if `argv` is set
+    // The child's argv as a NULL-terminated VECTOR, argv[0] included --
+    // execv's shape. Carried whole (SPAWN_ARGV), so an entry may hold a
+    // space or be empty; `args` is the string form the kernel splits.
+    // Refused with E2BIG if the flattened vector exceeds SPAWN_ARGS_MAX.
+    char *const *argv;
     char      **env;    // NULL for an empty environment, not for `environ`
     int         stdin_fd;   // pipe read end or socket, or -1
     int         stdout_fd;  // pipe write end or socket, or -1
