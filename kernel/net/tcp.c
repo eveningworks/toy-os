@@ -43,6 +43,9 @@
 // segments, so alternating loss can leave at most three holes; four is
 // past that without being a number anyone has to think about.
 #define TCP_OFO_MAX   4
+// What a peer that sends no MSS option is entitled to assume of us, and
+// what we assume of it (RFC 1122).
+#define TCP_MSS_DEFAULT 536
 
 #define TCP_RTO_MIN_MS  200    // BSD's fast timer, and the floor here
 #define TCP_RTO_MAX_MS  4000
@@ -91,6 +94,7 @@ struct tcp_conn {
     uint32_t iss, snd_una, snd_nxt;
     uint32_t irs, rcv_nxt;
     uint32_t snd_wnd;      // what the peer said it will take
+    uint32_t snd_mss;      // the peer's MSS: its option, or RFC 1122's 536
 
     uint8_t snd[TCP_SND_BUF];
     uint32_t snd_len;      // unsent + unacked bytes, starting at snd_una
@@ -120,6 +124,26 @@ static uint8_t g_seg[sizeof(struct tcp_header) + TCP_MSS];
 static uint32_t g_isn_counter;
 
 // --- helpers ----------------------------------------------------------
+
+// The peer's MSS option, or TCP_MSS_DEFAULT when it sent none. The walk
+// is bounded by the option length in every branch: a zero-length option
+// in a hostile SYN would otherwise never advance.
+static uint32_t peer_mss(const uint8_t *opt, uint32_t len) {
+    for (uint32_t i = 0; i + 1 < len; ) {
+        uint8_t kind = opt[i];
+        if (kind == 0) break;                       // end of options
+        if (kind == 1) { i++; continue; }           // no-op padding
+        uint8_t olen = opt[i + 1];
+        if (olen < 2 || i + olen > len) break;
+        if (kind == 2 && olen == 4) {
+            uint32_t m = ((uint32_t)opt[i + 2] << 8) | opt[i + 3];
+            if (m < 88) m = 88;                     // absurd; RFC 1122's floor
+            return m < TCP_MSS ? m : TCP_MSS;       // never above our own
+        }
+        i += olen;
+    }
+    return TCP_MSS_DEFAULT;
+}
 
 // Sequence comparison is MODULAR: the space wraps, so "later" is a
 // difference with the sign bit clear, never a plain <. Getting this
@@ -216,11 +240,22 @@ static int send_segment(struct tcp_conn *c, uint8_t flags, uint32_t seq,
     if (data_len > TCP_MSS) data_len = TCP_MSS;
 
     struct tcp_header *h = (struct tcp_header *)g_seg;
+    // AN MSS OPTION RIDES EVERY SYN, and leaving it off is not a missing
+    // optimisation but a wrong answer: RFC 1122 requires a sender that
+    // received no MSS to assume 536, so every peer sent 536-byte
+    // segments -- 2.7x the frames for the same bytes.
+    uint32_t optlen = 0;
+    if (flags & TH_SYN) {
+        uint8_t *o = g_seg + sizeof *h;
+        o[0] = 2; o[1] = 4;                      // kind, length
+        o[2] = (uint8_t)(TCP_MSS >> 8); o[3] = (uint8_t)TCP_MSS;
+        optlen = 4;
+    }
     h->src_port = net_htons(c->local_port);
     h->dst_port = net_htons(c->remote_port);
     h->seq = net_htonl(seq);
     h->ack = net_htonl(c->rcv_nxt);
-    h->offset = (uint8_t)(5 << 4);       // 20 bytes, no options
+    h->offset = (uint8_t)(((sizeof *h + optlen) / 4) << 4);
     h->flags = flags;
     // What we will accept: the free space in the receive buffer. A
     // window advertised larger than the buffer is how a stack loses
@@ -228,9 +263,9 @@ static int send_segment(struct tcp_conn *c, uint8_t flags, uint32_t seq,
     h->window = net_htons((uint16_t)(TCP_RCV_BUF - c->rcv_len));
     h->checksum = 0;
     h->urgent = 0;
-    if (data_len) k_memcpy(g_seg + sizeof *h, data, data_len);
+    if (data_len) k_memcpy(g_seg + sizeof *h + optlen, data, data_len);
 
-    uint32_t total = (uint32_t)sizeof *h + data_len;
+    uint32_t total = (uint32_t)sizeof *h + optlen + data_len;
     uint32_t src = local_ip_for(c->remote_ip);
     uint16_t sum = tcp_checksum(src, c->remote_ip, g_seg, total);
     h->checksum = net_htons(sum ? sum : 0xFFFF);
@@ -269,7 +304,7 @@ static uint32_t send_pending(struct tcp_conn *c) {
     uint32_t window = c->snd_wnd > in_flight ? c->snd_wnd - in_flight : 0;
     if (!window) return 0;                       // the peer is full; the timer probes
     uint32_t n = ready < window ? ready : window;
-    if (n > TCP_MSS) n = TCP_MSS;
+    if (n > c->snd_mss) n = c->snd_mss;
 
     if (send_segment(c, TH_ACK | TH_PSH, c->snd_nxt, c->snd + in_flight, n) < 0) return 0;
     c->snd_nxt += n;
@@ -353,6 +388,7 @@ int tcp_connect(int idx, uint32_t ip, uint16_t port) {
     c->remote_ip = ip;
     c->remote_port = port;
     c->snd_wnd = TCP_MSS;         // until the peer tells us otherwise
+    c->snd_mss = TCP_MSS_DEFAULT; // ditto, and RFC 1122 names the value
     c->state = TCP_STATE_SYN_SENT;
     c->rto_ms = TCP_RTO_MIN_MS;
     c->rto_at_ns = 0;
@@ -577,7 +613,8 @@ static int backlog_depth(uint16_t port) {
 // The listener is untouched -- it goes on listening, and this block
 // carries the connection from here.
 static void passive_open(struct tcp_conn *lis, uint32_t src_ip, uint16_t src_port,
-                         uint32_t seq, uint16_t window) {
+                         uint32_t seq, uint16_t window,
+                         const uint8_t *opt, uint32_t optlen) {
     if (backlog_depth(lis->local_port) >= TCP_BACKLOG) {
         // FULL: say nothing. The client's own SYN retransmission brings
         // it back when a slot frees, so a brief burst succeeds slightly
@@ -598,6 +635,7 @@ static void passive_open(struct tcp_conn *lis, uint32_t src_ip, uint16_t src_por
     c->snd_una = c->iss;
     c->snd_nxt = c->iss + 1;    // our SYN takes a sequence number
     c->snd_wnd = window ? window : TCP_MSS;
+    c->snd_mss = peer_mss(opt, optlen);
     c->state = TCP_STATE_SYN_RCVD;
     c->rto_ms = TCP_RTO_MIN_MS;
 
@@ -625,7 +663,8 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
         // conversation this stack is not having.
         struct tcp_conn *lis = find_listener(dport);
         if (lis && (h.flags & TH_SYN) && !(h.flags & TH_ACK)) {
-            passive_open(lis, src_ip, sport, seq_in, net_ntohs(h.window));
+            passive_open(lis, src_ip, sport, seq_in, net_ntohs(h.window),
+                         pkt + sizeof h, doff - (uint32_t)sizeof h);
             return 1;
         }
         return 0;
@@ -664,6 +703,7 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
         c->rcv_nxt = seq + 1;
         c->snd_una = ack;
         c->snd_wnd = net_ntohs(h.window);
+        c->snd_mss = peer_mss(pkt + sizeof h, doff - (uint32_t)sizeof h);
         c->state = TCP_STATE_ESTABLISHED;
         c->rto_at_ns = 0;
         c->rto_ms = TCP_RTO_MIN_MS;
