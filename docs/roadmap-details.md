@@ -4846,3 +4846,48 @@ stopping the queue (`netif_stop_queue`) until a completion frees a
 slot. The shape for toy-os is a small per-device transmit queue in
 `net.c` drained on completion, so a refusal is a wait rather than a
 loss; `e1000` and `r8169` have the same seam.
+
+## Protecting kernel memory from device DMA
+
+A device reads and writes PHYSICAL addresses. It never walks a page
+table, so unmapping a page does not stop a DMA into it and the kernel's
+own address space protects nothing — which is why FireWire and
+Thunderbolt DMA attacks worked, and why Linux ships `intel_iommu=on` by
+default on most distributions and Windows calls its equivalent Kernel
+DMA Protection. Ordered cheapest first, and the split worth keeping in
+mind is that **the first two DETECT a scribble after the fact; only the
+third prevents one.**
+
+- **DMA guard canaries.** A poison word either side of every DMA region,
+  checked after the transfer that used it. Cheap, and it is the idiom
+  this kernel already uses for kernel stacks (a guard page plus a
+  canary), so it adds a mechanism nobody has to learn. What it cannot do
+  is stop the write: by the time the canary is wrong the memory is
+  already gone. Its value is turning a corruption that surfaces
+  somewhere else entirely into a named fault at the moment it happens.
+
+- **A DMA region registry.** Every `pmm_alloc_contiguous(...,
+  PMM_ZONE_DMA32)` taken for a device records its owner and range, and
+  the allocator refuses an overlap. This catches the ALLOCATOR handing
+  the same physical range to two drivers, not a driver programming a
+  device with a wrong address — a narrower fault than the canaries, and
+  detected before any transfer rather than after. It is the shape
+  `meminfo audit` already has for page-tables-against-allocator.
+
+- **An IOMMU (Intel VT-d).** The actual prevention: parse the ACPI DMAR
+  table, build per-device page tables, and map only what a driver
+  explicitly hands the device, so a DMA outside that mapping raises a
+  fault instead of corrupting RAM. The scaffolding is in place —
+  `kernel/acpi/` walks tables already and the PCI layer names every
+  device — and QEMU emulates one (`-device intel-iommu`), so it is
+  testable headlessly rather than being hardware-only. The cost is that
+  every driver's buffer has to go through a map/unmap seam, which is the
+  DMA API Linux grew for exactly this reason.
+
+**Why this is on the list.** A 16 MB download to disk comes back corrupt
+about half the time (`docs/bugs.md`), and the search for it spent a
+session eliminating suspects one 16 MB fetch at a time. Any of the three
+above would have answered "is something scribbling on memory it does not
+own?" directly. Note the honest caveat: DMA overlap was suspected and
+then RULED OUT for that bug, so this is not its fix — it is the
+instrument whose absence made the question expensive to ask.

@@ -873,6 +873,16 @@ measurement of what is single-core in the tree today.
 - [ ] TLB shootdown on address-space changes
 - [ ] A real spinlock primitive, plus an audit of everything currently assuming single-threaded
 
+### Protecting kernel memory from device DMA
+
+A device DMAs to PHYSICAL addresses and never consults a page table, so
+nothing in the kernel's own map protects RAM from a driver's mistake.
+Ordered cheapest first: the first two DETECT, only the third prevents.
+
+- [ ] DMA guard canaries: poison either side of every DMA region and check them after a transfer
+- [ ] A DMA region registry, so `pmm_alloc_contiguous(PMM_ZONE_DMA32)` refuses an overlap between drivers
+- [ ] An IOMMU (Intel VT-d): the ACPI DMAR table, per-device page tables, and a driver mapping what it hands out
+
 ## Tooling and docs
 
 Always available to pick up, and the reason several bugs in this file
