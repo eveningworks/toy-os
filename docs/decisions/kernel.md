@@ -7078,3 +7078,45 @@ the map is read as a whole: `WIN_CLIENT_BASE`'s 64 MiB-per-window region
 and `WIN_COMPOSITOR_BASE`'s 16 GiB of one slot per (pid, window) both
 go. What is left above the stack is the font mapping and the
 framebuffer grant.
+
+## Out-of-order segments live in the receive buffer, not in a queue beside it
+
+Linux holds them in a separate structure -- `tp->out_of_order_queue`, a
+list until 4.4 and an rbtree since, one entry per skb -- and every
+textbook draws reassembly as a hole list with its own storage. toy-os
+does not, and the reason is an equivalence the textbook version does not
+have available.
+
+The window this stack advertises is exactly the free space in the
+receive buffer (`TCP_RCV_BUF - rcv_len`). So the sequence range the peer
+is permitted to send, `[rcv_nxt, rcv_nxt + window)`, maps one-to-one
+onto the free bytes of `rcv`: a byte the window admits ALWAYS has an
+offset waiting for it, `rcv_len + (seq - rcv_nxt)`, and that offset is
+never occupied by anything else. Out-of-order data is therefore not
+something to store somewhere -- it is already home the moment it is
+copied. What is left to remember is which ranges are filled, which is
+`ofo[]`: four pairs of sequence numbers, 32 bytes per connection.
+
+That buys three things. **Nothing allocates**, so there is no queue to
+size, no per-segment metadata, and no failure mode where reassembly
+works until memory is tight. **No payload is ever copied twice** --
+`ofo_drain()` raises `rcv_len` and `rcv_nxt` together and deletes a
+range; the bytes do not move. And **the window cannot overcommit**: a
+stack with a separate queue advertises space it may not be able to keep,
+which is why Linux prunes and collapses its queue under pressure. Here
+the promise and the storage are the same number.
+
+The cost is real and worth stating. A separate queue can hold a segment
+the window would refuse; this cannot, so a peer that runs ahead of the
+window loses those bytes and resends them. And the offset identity has
+to be maintained by everything that touches the buffer -- which is the
+whole reason `tcp_recv()` compacts `rcv_len + ofo_span()` bytes rather
+than `rcv_len`. Compacting only the in-order part leaves the held bytes
+displaced by however much the reader took, and they are then delivered
+as WRONG DATA rather than as a short read: the failure is silent, and a
+test that only reads everything at once cannot see it.
+
+The bound is `TCP_OFO_MAX` disjoint ranges, not bytes. An 8 KiB window
+is under six full segments, so alternating loss cannot leave more than
+three holes; a fourth range is refused and re-acked, which is the same
+answer the stack gave to everything out of order before this existed.

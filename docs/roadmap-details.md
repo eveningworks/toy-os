@@ -2910,7 +2910,7 @@ Listed with the honest reason each is or isn't attractive.
 
 - [x] ~~**TCP**~~ -- client side. `kernel/net/tcp.c`: an active open, an in-order byte stream, retransmission with exponential backoff, and an orderly close. `/bin/wget` is the proof, and `tools/net_test.py`'s tenth phase fetches from python's own `http.server` on the host -- an implementation that will not complete a handshake this OS gets wrong.
 
-  Three things it deliberately does not do, each recorded where it happens: no listen/accept, no out-of-order reassembly (a segment past `rcv_nxt` is dropped and re-acked, so the peer resends it), and no RTT estimate. The timers ride the blocking receive, which is what a kernel with no softirq and no kernel threads has available -- and the honest gap is that a connection nobody is reading has nobody to wake it.
+  Three things it deliberately does not do, each recorded where it happens: no listen/accept, no out-of-order reassembly (built later, 2026-09-10), and no RTT estimate. The timers ride the blocking receive, which is what a kernel with no softirq and no kernel threads has available -- and the honest gap is that a connection nobody is reading has nobody to wake it.
 
   It found one design bug worth recording: a closed socket's connection block outlives the socket, because the peer is still owed a FIN. With nothing to reclaim it, four dead connections held the whole pool until reboot -- the seventh KTEST got `-ENOSPC`. An orphan is now released at CLOSED or after a 2 s linger.
 
@@ -2918,7 +2918,11 @@ Listed with the honest reason each is or isn't attractive.
 
 - [x] ~~**A connection per child process**~~ DONE 2026-08-29 -- `/bin/inetd`, and the one concurrency this kernel can express without `fork`. NOT the `dup2`-before-the-spawn this entry predicted: with no fork there is no child-side window to redirect in, so the parent would have to point its OWN fd 0/1 at the connection and put them back, and anything it printed in between would go to the client. `struct spawn_msg` gained `stdin_fd` instead, and both it and `stdout_fd` accept a connected SOCKET -- posix_spawn's file_actions in miniature. A handler is now an ordinary filter (`inetd -p 7 /bin/cat` is an echo server, with no networking code in `cat`), and `/bin/httpd -1` serves one connection on fd 0/1 and exits, which is how an inetd service is written.
 
-- [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked, so the peer resends it. Correct and slow on a path that reorders; a hole list is what it would take.
+- [x] ~~Out-of-order reassembly~~ **BUILT 2026-09-10.** A segment past `rcv_nxt` is copied into `rcv` at `rcv_len + (seq - rcv_nxt)` and its range recorded in `ofo[]`; the hole filling only moves the boundary, so no payload is ever copied twice and there is no second buffer to size. The advertised window IS the free space, so a byte the window admits always has an offset -- that equivalence is the whole design. What still will not fit (a sequence past the window, or a `TCP_OFO_MAX`th disjoint range) is dropped and re-acked as before. A FIN arriving over a hole is parked in `fin_seq` rather than acted on, or a lost segment near the end of a fetch would report end-of-stream in front of the data still coming.
+
+  **Proven on the real path, not the LAN.** Six KTESTs in `kernel/net/net_test.c` (`tcp_frame_at()` gives each segment a payload naming its own stream offset, so a byte delivered in the wrong place is a wrong LETTER, not a wrong length), each with a positive control that reddened the right assertion: dropping held ranges, compacting only `rcv_len` on a read, acting on a FIN early, and absorbing a whole overlapped range instead of the part past `rcv_nxt`. End to end, a 10 MB HTTP fetch from `speedtest.tele2.net` over the passed-through RTL8156 held and reassembled three out-of-order segments and matched the host's SHA-256 exactly. **The LAN could not prove it**: a 16 MB fetch from a server on this machine produced ZERO out-of-order segments and zero window drops over three runs, because that path loses nothing.
+
+  **What did NOT change, and the roadmap line that was wrong.** The item claimed "one loss stalls every large fetch today". Measured 2026-09-10 against the pre-change kernel (`git stash`, rebuild, same file, same adapter): the 16 MB fetch COMPLETED in ~69.6 s, against ~70.7 s after -- no stall, and no measurable difference in bytes received. Whatever wedged on 2026-09-09 did not reproduce, and this change should not be credited with fixing it. What it fixes is the class: a path that reorders no longer costs a round trip per hole.
 
 - [ ] An RTT estimate, and Nagle -- the retransmit timeout is a fixed 200 ms floor with exponential backoff, and every write goes out at once.
 
@@ -4461,7 +4465,12 @@ stream is a bulk transfer completing.
 - **Aggregation.** `USB_USB_CTRL`'s `RX_AGG_DISABLE` is SET, where
   ure(4) clears it, so the device sends one frame per transfer. The
   walk handles a packed transfer and its KTESTs feed it one, but no
-  device has produced one here.
+  device has produced one here. **MEASURED 2026-09-10, and it is the
+  throughput ceiling**: a 16 MB fetch over the RTL8156 moved ~33,900
+  frames in ~70 s -- about 450 frames a second, or ~2.2 ms per frame,
+  which is a USB bulk round trip and not a link at 2.5 Gb/s. `--kvm`
+  changed it by under 8%, so the guest's emulated CPU is not the bound;
+  one frame per transfer is.
 - **Anything but a 5C20 stepping among the 8153s.** The version gate
   REFUSES an RTL8153B and an RTL8152: those want a different init
   sequence and there is nothing here to test one against. (The RTL8156
@@ -4802,10 +4811,13 @@ wedged. Sixteen buffers per direction (`RTL_BUFS`) took transmit drops
 to zero and the 4 MB fetch to about 16 s; the peer still retransmits
 about a tenth, so frames are still being lost on the RECEIVE side --
 not in the descriptor walk (`rx_dropped` stays 0) but before it, which
-is the device with nowhere to put a frame. **A 16 MB fetch still
-stalls** at that loss rate, because toy-os's TCP drops any segment past
-`rcv_nxt` and every loss costs a round trip of retransmission; that is
-the roadmap's NEXT item (out-of-order reassembly), not this driver's.
+is the device with nowhere to put a frame. **The 16 MB fetch that
+wedged has not reproduced since**: re-measured 2026-09-10 on this same
+adapter and server it completed in ~70 s both before and after
+out-of-order reassembly was built, with no out-of-order segments seen
+at all. The loss that day was real and the stall was real; what caused
+it was never established, so do not treat either as a standing
+property of this driver.
 The same server-side fragility is why fetches from toy-os's own `httpd`
 truncated on BOTH the e1000 path (3.8 MB of 8) and this one: the
 in-order stack on either end.

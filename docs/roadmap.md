@@ -27,10 +27,9 @@ buildable now. Something that MISBEHAVES is not here -- that is
 - [ ] Finish the app-deduplication pass: the smaller survey items, all three branches landed  *(The GUI in ring 3)*
 - [ ] An I/O APIC and the MADT interrupt source overrides, so the legacy lines stop going through the 8259  *(virtio, and a real GPU driver)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
+- [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
-- [ ] TCP out-of-order reassembly: keep a segment past `rcv_nxt` instead of dropping it -- one loss stalls every large fetch today  *(Networking)*
-- [ ] Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today  *(Networking)*
 - [ ] A panic RAM store, pstore-shaped, AND a panic that warm-resets after a countdown -- a power cycle loses RAM  *(Crash reporting & postmortem debugging)*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
@@ -754,7 +753,7 @@ run on, not by order.
 - [x] ~~An AML namespace walk, Method bodies skipped~~ DONE 2026-08-31 -- `kernel/acpi/aml.c`, stage 1 of `docs/aml-design.md`
 - [x] ~~An RTL8153 vendor driver for USB Ethernet~~ DONE 2026-08-31 -- `rtl_usb.c` + `rtl8153.c` now; DHCP, ICMP, 730 KB of HTTP on a UE300
 - [x] ~~An RTL8156 driver, the 2.5G USB part~~ DONE 2026-09-09 -- `rtl8156.c`, an ops table over the core; 2.5G link, DHCP, a fetch
-- [ ] Receive aggregation on the RTL8156: the reference turns it on, ours is one frame per transfer -- measure it
+- [ ] **NEXT** Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured
 - [ ] **NEXT** `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`
 - [ ] **NEXT** The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN
 - [x] ~~USB Ethernet (CDC-ECM), and the BULK transfer type it needed~~ DONE 2026-08-31 -- `net_usb_ecm.c`; RX untested, see `docs/bugs.md`
@@ -783,14 +782,13 @@ run on, not by order.
 - [x] ~~DNS resolver~~ DONE 2026-08-29 -- `userland/lib/uresolv.c`, `/bin/host`, and `ping` by name
 - [x] ~~**A blocking receive**~~ DONE 2026-08-29 -- one wait channel, woken from the driver's ISR; the deadline lives on the socket
 - [x] ~~**TCP**~~ DONE 2026-08-29 -- client side: active open, in-order stream, retransmission, orderly close
-- [ ] **NEXT** TCP out-of-order reassembly: keep a segment past `rcv_nxt` instead of dropping it -- one loss stalls every large fetch today
+- [x] ~~Out-of-order reassembly -- hold a segment past `rcv_nxt`~~ DONE 2026-09-10 -- held in `rcv` at its own offset
 - [ ] A transmit the driver refuses is a DROPPED frame (`rtl_usb` says -ENOSPC with every buffer busy) -- queue it in the stack
 - [x] ~~**A passive open: listen and accept**, so something can connect TO toy-os~~ DONE 2026-08-29 -- `/bin/httpd` serves the filesystem
 - [x] ~~**A connection per child process**~~ DONE 2026-08-29 -- `/bin/inetd`; the spawn NAMES fd 0/1, so `inetd -p 7 /bin/cat` echoes
 - [x] ~~An RTL8111/8168 driver, for the Ethernet built into most laptops~~ DONE 2026-09-05 -- `r8169.c`; DHCP and 5.5 MB of TFTP
 - [x] ~~Remove a network device when it is unplugged~~ DONE 2026-09-05 -- `net_unregister()`; net was the last class registry without one
 - [x] ~~`/bin/netd`: naming rules from `/etc/net.conf`, and a lease per card~~ DONE 2026-09-05 -- replaced the `dhcp` service
-- [ ] **NEXT** Out-of-order reassembly -- a segment past `rcv_nxt` is dropped and re-acked today
 - [ ] An RTT estimate, and Nagle -- the retransmit timeout is a fixed floor with backoff
 - [x] ~~Run `dhcp` at boot~~ DONE 2026-08-29 -- init's `dhcp` one-shot; the kernel invents no address at all now
 - [x] ~~A link-local address when no server answers~~ DONE 2026-08-29 -- RFC 3927 / APIPA, probed over `SYS_NET_ARP_PROBE`

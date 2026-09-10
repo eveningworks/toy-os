@@ -1,13 +1,18 @@
 // TCP, client side: an active open, an in-order byte stream, and
 // retransmission. What a socket needs to fetch something.
 //
-// WHAT THIS DELIBERATELY IS NOT. No out-of-order reassembly: a segment that is not at rcv_nxt is DROPPED
-// and the peer retransmits it, which is legal, costs throughput on a
-// lossy path, and removes the hole list that is most of a real
-// receive queue. No window scaling, no SACK, no timestamps, no Nagle
-// (every write goes out at once) and no delayed ACK (every segment is
-// acknowledged immediately). Each of those is a throughput
-// optimisation, and this stack has no throughput problem to solve yet.
+// OUT-OF-ORDER SEGMENTS ARE HELD, NOT DROPPED, and they are held in
+// the receive buffer itself: the window advertised is the buffer's free
+// space, so a byte the window admits always has an offset to sit at.
+// `ofo` names the ranges filled ahead of rcv_nxt; nothing else is
+// allocated. What does NOT fit -- a range list already full, or a
+// sequence past the window -- is dropped and re-acked, as before.
+//
+// WHAT THIS DELIBERATELY IS NOT. No SACK, so a hole costs the peer a
+// retransmit timeout or three duplicate ACKs to notice; no window
+// scaling, no timestamps, no RTT estimate, no Nagle (every write goes
+// out at once) and no delayed ACK (every segment is acknowledged
+// immediately).
 //
 // THE TIMERS RIDE THE BLOCKING RECEIVE. There is no softirq here and no
 // kernel thread, so nothing services a connection on its own. A socket
@@ -34,6 +39,10 @@
 // Conservative for a 1500-byte MTU: 1500 - 20 (IP) - 20 (TCP) = 1460,
 // and nothing here emits options after the SYN.
 #define TCP_MSS       1460
+// Disjoint ranges held ahead of rcv_nxt. An 8 KiB window is under six
+// segments, so alternating loss can leave at most three holes; four is
+// past that without being a number anyone has to think about.
+#define TCP_OFO_MAX   4
 
 #define TCP_RTO_MIN_MS  200    // BSD's fast timer, and the floor here
 #define TCP_RTO_MAX_MS  4000
@@ -87,6 +96,13 @@ struct tcp_conn {
     uint32_t snd_len;      // unsent + unacked bytes, starting at snd_una
     uint8_t rcv[TCP_RCV_BUF];
     uint32_t rcv_len;      // in-order bytes a reader has not taken
+    // Bytes past rcv_nxt already sitting in `rcv` at their own offset,
+    // named by the sequence range each covers. The list is DISJOINT:
+    // an arriving segment merges into everything it touches.
+    struct { uint32_t start, end; } ofo[TCP_OFO_MAX];
+    uint8_t ofo_count;
+    uint8_t fin_seen;      // a FIN arrived over a hole; act on it at fin_seq
+    uint32_t fin_seq;      // the sequence number that FIN occupies
 
     uint64_t rto_at_ns;    // 0 when nothing is outstanding
     uint32_t rto_ms;
@@ -110,6 +126,69 @@ static uint32_t g_isn_counter;
 // wrong works perfectly until a connection crosses 2^32.
 static inline int seq_lt(uint32_t a, uint32_t b) { return (int32_t)(a - b) < 0; }
 static inline int seq_le(uint32_t a, uint32_t b) { return (int32_t)(a - b) <= 0; }
+
+// --- out-of-order ranges ----------------------------------------------
+//
+// A held range's bytes are ALREADY in `rcv`, at rcv_len + (start -
+// rcv_nxt). That offset survives both a read (which moves the whole
+// occupied region down and drops rcv_len by the same amount) and an
+// absorb (which raises rcv_len and rcv_nxt together), so nothing here
+// ever copies payload -- it only moves the boundary between "in order"
+// and "held".
+
+// How far past rcv_nxt the furthest held byte sits; 0 when nothing is
+// held. `rcv` is occupied up to rcv_len + this, which is what a read
+// has to move rather than rcv_len alone.
+static uint32_t ofo_span(const struct tcp_conn *c) {
+    uint32_t span = 0;
+    for (uint8_t i = 0; i < c->ofo_count; i++) {
+        uint32_t end = c->ofo[i].end - c->rcv_nxt;
+        if (end > span) span = end;
+    }
+    return span;
+}
+
+// Remember [start, end), merged into every range it touches or
+// overlaps -- a segment bridging two holes collapses all three into
+// one. Returns 0 when the list is full, which makes the segment a drop
+// the peer will resend.
+static int ofo_record(struct tcp_conn *c, uint32_t start, uint32_t end) {
+    for (uint8_t i = 0; i < c->ofo_count; ) {
+        if (seq_le(c->ofo[i].start, end) && seq_le(start, c->ofo[i].end)) {
+            if (seq_lt(c->ofo[i].start, start)) start = c->ofo[i].start;
+            if (seq_lt(end, c->ofo[i].end)) end = c->ofo[i].end;
+            c->ofo[i] = c->ofo[--c->ofo_count];   // and re-test this slot
+            continue;
+        }
+        i++;
+    }
+    if (c->ofo_count >= TCP_OFO_MAX) return 0;
+    c->ofo[c->ofo_count].start = start;
+    c->ofo[c->ofo_count].end = end;
+    c->ofo_count++;
+    return 1;
+}
+
+// The hole in front of the held ranges just filled: hand whatever now
+// reaches rcv_nxt to the reader. A range the stream has already passed
+// is discarded rather than absorbed, which is what an overlapping
+// retransmission leaves behind.
+static void ofo_drain(struct tcp_conn *c) {
+    for (int moved = 1; moved; ) {
+        moved = 0;
+        for (uint8_t i = 0; i < c->ofo_count; i++) {
+            if (!seq_le(c->ofo[i].start, c->rcv_nxt)) continue;
+            if (seq_lt(c->rcv_nxt, c->ofo[i].end)) {
+                uint32_t n = c->ofo[i].end - c->rcv_nxt;
+                c->rcv_len += n;
+                c->rcv_nxt += n;
+            }
+            c->ofo[i] = c->ofo[--c->ofo_count];
+            moved = 1;
+            break;
+        }
+    }
+}
 
 static uint16_t tcp_checksum(uint32_t src, uint32_t dst, const uint8_t *seg, uint32_t len) {
     uint8_t pseudo[12];
@@ -342,8 +421,11 @@ int tcp_recv(int idx, void *buf, uint32_t cap) {
         // A ring would avoid this move; a linear buffer plus a memmove
         // is chosen because the reader almost always takes everything,
         // which makes the move free and the code obviously correct.
-        if (n < c->rcv_len) {
-            for (uint32_t i = 0; i < c->rcv_len - n; i++) c->rcv[i] = c->rcv[n + i];
+        // HELD RANGES MOVE WITH IT -- they live past rcv_len in the same
+        // buffer, and leaving them behind would deliver them shifted.
+        uint32_t occupied = c->rcv_len + ofo_span(c);
+        if (n < occupied) {
+            for (uint32_t i = 0; i < occupied - n; i++) c->rcv[i] = c->rcv[n + i];
         }
         c->rcv_len -= n;
         // The window just opened. Telling the peer costs one segment
@@ -633,22 +715,47 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
         c->snd_wnd = net_ntohs(h.window);
     }
 
-    // IN ORDER ONLY. A segment starting anywhere but rcv_nxt is dropped
-    // and re-acked, so the peer sends it again -- no hole list, and the
-    // cost is a retransmit on a path that reorders.
+    // The window is the free space in `rcv`, so a byte the window admits
+    // has an offset waiting for it whether or not it is the next one:
+    // in-order bytes extend rcv_len, the rest are copied into place and
+    // their range remembered until the hole ahead of them fills.
     int took = 0;
-    if (data_len && seq == c->rcv_nxt) {
-        uint32_t room = TCP_RCV_BUF - c->rcv_len;
-        uint32_t n = data_len < room ? data_len : room;
+    uint32_t fin_seq = seq + data_len;      // where a FIN in this segment sits
+    if (data_len) {
+        const uint8_t *p = data;
+        uint32_t s = seq, n = data_len;
+        if (seq_lt(s, c->rcv_nxt)) {        // a prefix we already have
+            uint32_t skip = c->rcv_nxt - s;
+            if (skip >= n) n = 0;
+            else { p += skip; s += skip; n -= skip; }
+        }
+        uint32_t window = TCP_RCV_BUF - c->rcv_len;
+        if (n && !seq_lt(s, c->rcv_nxt + window)) n = 0;   // past what we promised
         if (n) {
-            k_memcpy(c->rcv + c->rcv_len, data, n);
-            c->rcv_len += n;
-            c->rcv_nxt += n;
-            took = 1;
+            uint32_t off = c->rcv_len + (s - c->rcv_nxt);
+            uint32_t room = TCP_RCV_BUF - off;
+            if (n > room) n = room;
+            k_memcpy(c->rcv + off, p, n);
+            if (s == c->rcv_nxt) {
+                c->rcv_len += n;
+                c->rcv_nxt += n;
+                ofo_drain(c);
+                took = 1;
+            } else if (ofo_record(c, s, s + n)) {
+                took = 1;
+            }
         }
     }
 
-    if ((h.flags & TH_FIN) && seq + data_len == c->rcv_nxt) {
+    // A FIN SITS AFTER THE SEGMENT'S LAST BYTE, so one that arrives over
+    // a hole is remembered and acted on when the stream reaches it --
+    // ending the stream early would hide data still on its way.
+    if ((h.flags & TH_FIN) && !c->peer_fin && seq_le(c->rcv_nxt, fin_seq)) {
+        c->fin_seq = fin_seq;
+        c->fin_seen = 1;
+    }
+    if (c->fin_seen && c->rcv_nxt == c->fin_seq) {
+        c->fin_seen = 0;
         c->peer_fin = 1;
         c->rcv_nxt++;
         took = 1;

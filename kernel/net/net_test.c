@@ -224,9 +224,12 @@ static uint32_t udp_frame(struct net_device *dev, uint32_t dst_ip, uint16_t dpor
 
 // An IPv4 + TCP segment from the peer. `flags` is the TCP flag byte;
 // `seq`/`ack` are absolute; `payload_len` bytes of pattern follow.
-static uint32_t tcp_frame(struct net_device *dev, uint16_t sport, uint16_t dport,
-                          uint8_t flags, uint32_t seq, uint32_t ack,
-                          uint32_t payload_len, int corrupt) {
+// `at` is the payload's offset in the STREAM, and every byte names it:
+// byte i is 'A' + ((at + i) % 26). A reassembly test whose segments all
+// carry the same bytes cannot tell a correct order from a wrong one.
+static uint32_t tcp_frame_at(struct net_device *dev, uint16_t sport, uint16_t dport,
+                             uint8_t flags, uint32_t seq, uint32_t ack,
+                             uint32_t payload_len, int corrupt, uint32_t at) {
     uint32_t n = eth_frame(dev, 0, ETH_TYPE_IPV4);
     uint8_t *ip = g_frame + n;
     uint32_t tcp_len = 20 + payload_len;
@@ -255,7 +258,7 @@ static uint32_t tcp_frame(struct net_device *dev, uint16_t sport, uint16_t dport
     tcp[12] = 5 << 4;
     tcp[13] = flags;
     tcp[14] = 0x20; tcp[15] = 0x00;      // a 8192-byte window
-    for (uint32_t i = 0; i < payload_len; i++) tcp[20 + i] = (uint8_t)('A' + (i % 26));
+    for (uint32_t i = 0; i < payload_len; i++) tcp[20 + i] = (uint8_t)('A' + ((at + i) % 26));
 
     uint8_t pseudo[12];
     pseudo[0] = (uint8_t)(src >> 24); pseudo[1] = (uint8_t)(src >> 16);
@@ -272,6 +275,12 @@ static uint32_t tcp_frame(struct net_device *dev, uint16_t sport, uint16_t dport
     if (corrupt) tcp[17] ^= 0xFF;
 
     return n + 20 + tcp_len;
+}
+
+static uint32_t tcp_frame(struct net_device *dev, uint16_t sport, uint16_t dport,
+                          uint8_t flags, uint32_t seq, uint32_t ack,
+                          uint32_t payload_len, int corrupt) {
+    return tcp_frame_at(dev, sport, dport, flags, seq, ack, payload_len, corrupt, 0);
 }
 
 // The captured segment's flag byte and sequence, for asserting on what
@@ -687,27 +696,174 @@ KTEST("tcp", "data arrives in order, is acknowledged, and reads back") {
     finish_close(dev, &p);
 }
 
-KTEST("tcp", "an out-of-order segment is dropped and re-acked, not delivered") {
+// One segment of the fake peer's stream, `len` bytes at stream offset
+// `at`. The payload names its own offset, so a byte delivered in the
+// wrong place is visible as the wrong letter rather than as a length.
+static uint32_t seg_at(struct net_device *dev, struct fake_peer *p,
+                       uint8_t flags, uint32_t at, uint32_t len) {
+    uint32_t n = tcp_frame_at(dev, 8080, p->our_port, flags,
+                              p->peer_seq + at, p->our_seq, len, 0, at);
+    eth_input(dev, g_frame, n);
+    return n;
+}
+
+// What the stack acknowledged in response to one segment, as an offset
+// into the peer's stream -- which is rcv_nxt, and so says exactly how
+// much of the stream is contiguous.
+static uint32_t acked_at(struct net_device *dev, struct fake_peer *p,
+                         uint8_t flags, uint32_t at, uint32_t len) {
+    capture_begin(dev);
+    seg_at(dev, p, flags, at, len);
+    uint32_t acked = sent_tcp_ack();
+    capture_end(dev);
+    return acked - p->peer_seq;
+}
+
+KTEST("tcp", "a segment past rcv_nxt is held, and delivered when the hole fills") {
     struct net_device *dev = addressed_device();
     if (!dev) KTEST_SKIP("no network device with an address");
 
     struct fake_peer p;
     if (!establish(dev, &p, ctx)) return;
 
-    // A segment 100 bytes PAST what is expected. Reassembly is
-    // deliberately not implemented, so this must not be delivered --
-    // and the acknowledgement must still name rcv_nxt, which is what
-    // makes the peer retransmit the piece that is missing.
-    capture_begin(dev);
-    uint32_t len = tcp_frame(dev, 8080, p.our_port, 0x18,
-                             p.peer_seq + 100, p.our_seq, 10, 0);
-    eth_input(dev, g_frame, len);
-    uint32_t acked = sent_tcp_ack();
-    capture_end(dev);
-
-    KTEST_ASSERT_EQ(acked, p.peer_seq);
-    uint8_t buf[32];
+    // The second segment first. It is HELD, not delivered: the
+    // acknowledgement must still name rcv_nxt -- a duplicate ACK, which
+    // is the only thing this stack can say to ask for the hole, having
+    // no SACK to describe what it already has.
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 10, 10), 0);
+    uint8_t buf[64];
     KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, sizeof buf), -EAGAIN);
+
+    // The hole fills, and BOTH segments become readable at once.
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 0, 10), 20);
+    KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, sizeof buf), 20);
+    KTEST_ASSERT_EQ(buf[0], 'A');       // stream offset 0
+    KTEST_ASSERT_EQ(buf[9], 'J');
+    KTEST_ASSERT_EQ(buf[10], 'K');      // stream offset 10, the held segment
+    KTEST_ASSERT_EQ(buf[19], 'T');
+    // finish_close()'s FIN has to sit exactly at rcv_nxt, so the peer's
+    // view of its own stream has to move with what it sent -- a FIN
+    // behind rcv_nxt is rejected and the block lingers out the pool.
+    p.peer_seq += 20;
+    finish_close(dev, &p);
+}
+
+KTEST("tcp", "segments arriving in reverse order reassemble into one stream") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 20, 10), 0);
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 10, 10), 0);
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 0, 10), 30);
+
+    uint8_t buf[64];
+    KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, sizeof buf), 30);
+    for (int i = 0; i < 30; i++) KTEST_ASSERT_EQ(buf[i], 'A' + (i % 26));
+    p.peer_seq += 30;
+    finish_close(dev, &p);
+}
+
+KTEST("tcp", "a FIN arriving over a hole does not end the stream early") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+
+    // The last segment of a download carries the FIN, so this is what a
+    // single loss near the end of a fetch looks like. Reporting the end
+    // of stream here would truncate the file and look like a short read.
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x19 /* ACK|PSH|FIN */, 10, 10), 0);
+    uint8_t buf[64];
+    KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, sizeof buf), -EAGAIN);
+
+    // The hole fills: the data first, and the FIN only after it.
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 0, 10), 21);   // 20 bytes + the FIN
+    KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, sizeof buf), 20);
+    KTEST_ASSERT_EQ(buf[19], 'T');
+    KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, sizeof buf), 0);
+    p.peer_seq += 21;                   // 20 bytes, and the FIN's own number
+    finish_close(dev, &p);
+}
+
+KTEST("tcp", "a retransmission overlapping held bytes delivers them once") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 10, 10), 0);
+    // A peer with no SACK to read resends from the hole, and its
+    // segment boundaries need not line up with the held range -- so the
+    // retransmission covers the hole and PART of what is already held.
+    // The stream must be 20 bytes, not 25: only the part past rcv_nxt
+    // is still owed, and an overlap counted twice is a corrupted file.
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 0, 15), 20);
+
+    uint8_t buf[64];
+    KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, sizeof buf), 20);
+    for (int i = 0; i < 20; i++) KTEST_ASSERT_EQ(buf[i], 'A' + (i % 26));
+    p.peer_seq += 20;
+    finish_close(dev, &p);
+}
+
+KTEST("tcp", "a partial read moves the held bytes with it") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+
+    // Held bytes live PAST the in-order ones in the same buffer, so a
+    // read that compacts only the in-order part leaves them offset by
+    // what it took -- delivered later as the wrong bytes rather than as
+    // a wrong length, which no length assertion would catch.
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 0, 10), 10);
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 20, 10), 10);   // a hole at 10
+
+    uint8_t buf[64];
+    KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, 4), 4);
+    KTEST_ASSERT_EQ(buf[0], 'A');
+    KTEST_ASSERT_EQ(buf[3], 'D');
+
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 10, 10), 30);
+    KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, sizeof buf), 26);
+    for (int i = 0; i < 26; i++) KTEST_ASSERT_EQ(buf[i], 'A' + ((4 + i) % 26));
+    p.peer_seq += 30;
+    finish_close(dev, &p);
+}
+
+KTEST("tcp", "more holes than the range list holds are dropped, not mis-delivered") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+
+    // TCP_OFO_MAX disjoint ranges, which fills the list.
+    for (uint32_t at = 20; at <= 80; at += 20)
+        KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, at, 10), 0);
+    // A fifth has nowhere to go. Dropping it is legal -- the peer still
+    // holds it -- and the check that it was really dropped is that it
+    // never appears in the stream below.
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 100, 10), 0);
+
+    // Fill every hole the list did record.
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 0, 20), 30);
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 30, 10), 50);
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 50, 10), 70);
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 70, 10), 90);
+
+    // 90, not 110: the range at offset 100 was refused rather than kept
+    // and silently spliced on past a hole at 90.
+    uint8_t buf[160];
+    KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, sizeof buf), 90);
+    for (int i = 0; i < 90; i++) KTEST_ASSERT_EQ(buf[i], 'A' + (i % 26));
+    p.peer_seq += 90;
     finish_close(dev, &p);
 }
 

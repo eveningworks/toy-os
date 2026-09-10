@@ -2766,7 +2766,7 @@ program is where an address comes from, as on Linux.
   learns from a conflicting frame without noticing that it conflicts,
   and there is no channel to report one on. Roadmap.
 
-## TCP IS CLIENT-SIDE, IN-ORDER ONLY, AND ITS TIMERS RIDE THE BLOCKING RECEIVE
+## TCP IS CLIENT-SIDE, REASSEMBLES IN THE RECEIVE BUFFER, AND ITS TIMERS RIDE THE BLOCKING RECEIVE
 
 `kernel/net/tcp.c`. An active open, a byte stream, retransmission, and
 an orderly close — what a client needs and no more.
@@ -2801,11 +2801,28 @@ an orderly close — what a client needs and no more.
   is reading has nobody to wake it**, so its retransmits wait for the
   idle loop. Survivable for a client, and exactly what a server could
   not do.
-- **IN ORDER ONLY: a segment that is not at `rcv_nxt` is DROPPED and
-  re-acked**, so the peer sends it again. No hole list, no reassembly
-  queue; the cost is a retransmit on a path that reorders. The
-  acknowledgement must still name `rcv_nxt` — that is what makes the
-  peer resend the missing piece rather than assume it landed.
+- **AN OUT-OF-ORDER SEGMENT IS HELD IN `rcv` ITSELF, AT THE OFFSET ITS
+  SEQUENCE NUMBER GIVES IT.** The window advertised is the buffer's free
+  space (`TCP_RCV_BUF - rcv_len`), so the sequence range the peer may
+  send maps ONE-TO-ONE onto the free bytes — a byte the window admits
+  always has somewhere to sit, and there is no second queue to size.
+  `ofo[]` names the filled ranges and nothing else is stored;
+  `ofo_drain()` only moves the boundary between "in order" and "held",
+  never payload. **A held range's offset is `rcv_len + (start -
+  rcv_nxt)`, and BOTH a read and an absorb keep it true** — which is why
+  `tcp_recv()` compacts `rcv_len + ofo_span()` bytes rather than
+  `rcv_len`. Compacting only the in-order part delivers the held bytes
+  shifted by whatever the reader took: wrong data, not a wrong length.
+- **WHAT WILL NOT FIT IS STILL DROPPED AND RE-ACKED** — a sequence past
+  the window, or a `TCP_OFO_MAX`th disjoint range. The acknowledgement
+  names `rcv_nxt` either way, which is the only thing this stack can say
+  to ask for a hole: there is no SACK, so the peer needs a retransmit
+  timeout or three duplicate ACKs to notice.
+- **A FIN OVER A HOLE IS REMEMBERED, NOT ACTED ON.** It occupies the
+  sequence after the segment's last byte, so `fin_seq`/`fin_seen` park
+  it until the stream reaches it. Ending the stream when the FIN arrives
+  would report end-of-file in front of data still on its way — a
+  truncated download that reads as a short file rather than an error.
 - **SEQUENCE COMPARISON IS MODULAR.** `seq_lt()` is a signed difference,
   never a plain `<`: the space wraps, and getting this wrong works
   perfectly until a connection crosses 2^32.
