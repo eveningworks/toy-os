@@ -147,6 +147,9 @@
                    // the same reason EPIPE is.
 
 #define ENOSYS 38  // the call exists and does nothing yet
+#define ENOEXEC 8  // not something that can be loaded: a module that is
+                   // not a relocatable x86-64 object, is truncated, or
+                   // carries a relocation the loader does not handle
 #define ENOTSUP 95 // the thing exists but does not support being asked
                    // THIS way -- a query class that is a LIST has no
                    // single value, so `config get providers` is not the

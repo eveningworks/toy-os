@@ -1917,6 +1917,13 @@ struct sys_stat {
                            // whatever address each of them mapped it.
 
 #define SYS_DIAG      105  // RDI = pointer to a `struct diag_msg`
+
+// Loadable kernel modules (kernel/core/module.c). RDI = a path (MODLOAD)
+// or a module name (MODUNLOAD). Returns 0 or -errno; the reason is in
+// the kernel log (`dmesg`), since a load can fail a dozen ways and
+// naming the unexported symbol is worth more than a code.
+#define SYS_MODLOAD   106
+#define SYS_MODUNLOAD 107
                            // (abi/diag_abi.h). Asks a NAMED ring-3
                            // service a question, or -- from the service
                            // side -- claims that name and answers.

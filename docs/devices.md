@@ -15,7 +15,7 @@ person has to keep true.
 
 | Driver | Claims | Notes |
 |---|---|---|
-| `e1000` | Intel 82540EM (`8086:100E`) | QEMU's default NIC. Legacy descriptors, no offload. |
+| `e1000` | Intel 82540EM (`8086:100E`) | QEMU's default NIC. Legacy descriptors, no offload. Built as a MODULE by default (`drivers.conf`), loaded at boot by PCI match; the one driver with a `remove()`, so it can be unloaded and reloaded. |
 | `r8169` | Realtek `10EC:8168` (RTL8111/8168/8211/8411), `10EC:8136` (RTL8101/8102/8106) | The Ethernet built into most x86 laptops. No emulator models it — see `docs/decisions.md`. |
 | `virtio-net` | virtio net, modern and transitional | |
 | `r8153` | Realtek `0BDA:8152`, `0BDA:8153`, TP-Link UE300 `2357:0601` | USB, Realtek's own vendor protocol rather than a class driver; the RTL8153 "A" steppings (`rtl8153.c` over the `rtl_usb.c` core). |

@@ -2425,3 +2425,60 @@ and receive aggregation on the 8156 at first bring-up -- the reference
 enables it with 48 KiB buffers, and one frame per transfer is what
 keeps a dead receive path and a broken descriptor walk distinguishable.
 It is a roadmap item with a before/after to measure.
+
+## A module is a relocatable object linked against one export list, and a config file says which drivers are built that way
+
+Loadable drivers (2026-09-10, `docs/modules-design.md`) forced four
+decisions the staged plan had left open or got wrong.
+
+**What real systems do.** Linux's `.ko` is an ELF relocatable linked
+in-kernel against `EXPORT_SYMBOL`s placed beside each definition;
+`.config` says `=y` or `=m` per driver; `depmod` writes `modules.alias`
+from the objects and udev loads by `modalias`. Windows loads `.sys`
+images by INF hardware id, boot-start or demand-start from the
+registry. FreeBSD's kernel config file lists `device` lines with the
+rest as `kld` modules.
+
+**The export list is one file, not beside each definition.** Linux
+puts `EXPORT_SYMBOL` under the function; toy-os puts every one in
+`kernel/core/kexports.c`, grouped by header. The reason is what the
+list IS here: with one author and one tree the export set is a
+deliberate contract of a few dozen names, and a file that reads as the
+module ABI in one screen is worth more than exports travelling with
+their code. A stale export is a compile error in that one file either
+way. `tools/gen_modalias.py` checks every `.ko`'s imports against it at
+build time so the runtime refusal (by name) is never the first notice.
+
+**`drivers.conf` rather than a Makefile variable.** `MODULES=e1000` on
+the command line was the obvious shape and the wrong one: the choice
+is a property of the BUILD, meant to be read and edited like Linux's
+`.config`, not retyped per invocation. One tracked file,
+`<name> = builtin | module`, unlisted meaning builtin, and the name is
+a source file's basename so nothing maps names to paths. `e1000 =
+module` ships as the default so that every QEMU boot exercises the
+loader, autoload and re-bind -- a module path only a test switches on
+is a path that rots.
+
+**`modules.alias` is generated at build time, not scanned at boot.**
+The kernel could parse every `.ko` in `/lib/modules` at boot for its
+match tables -- it has the parser -- but `depmod`'s shape is right:
+derived from the objects by the same build that ships them, so it
+cannot go stale relative to them, and the boot reads one small text
+file instead of every module. The alias line carries all five match
+fields (`*` for `PCI_ANY`), so a class match works as well as an id.
+
+**Two corrections to the design doc, recorded because both would be
+re-derived.** The plan put boot-time loading "at the level PCI binding
+runs"; `INIT_BUS` precedes `INIT_FS`, so nothing on disk is readable
+there -- it is `INIT_CONFIG`, followed by `pci_rebind()`. And the plan
+allocated module memory with `kmalloc`: the identity map's RAM is NX
+(`paging_enforce_wx()`), so a module's text needs its own frames and
+`paging_set_kernel_exec()`, or it faults on the first instruction.
+
+**What was deliberately not built.** A use count a module raises for
+itself: a bound PCI device is the one thing that pins a module today
+(`pci_driver_table_bound()`), so a module registering into some other
+class with no inverse could be unloaded under it. The second module
+that needs it gets `module_get()`/`module_put()`. Module-to-module
+imports (only the kernel exports), versioning and signing -- one
+author, one tree, one build.

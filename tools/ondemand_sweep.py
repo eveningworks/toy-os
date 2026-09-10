@@ -120,6 +120,9 @@ TOOLS = [
     # ATTACHES to a running guest: it only types at the debug console and
     # compares against digests it computes on the host.
     ("sum",         "sum_test.py",             "/bin/sum and /lib/libhash.so",       False, None,                   True),
+    # ATTACHES like sum_test; unloads and reloads the e1000 module and
+    # waits for netd to lease again, so it takes ~30 s.
+    ("module",      "module_test.py",          "loadable modules: hello, refusals, an e1000 reload", False, None,     True),
 
     # --- shell, console, terminal ------------------------------------
     ("console",     "console_shell_test.py",   "a text boot reaching a ring-3 shell", True, None,                   False),

@@ -1,9 +1,13 @@
 # Loadable drivers: kernel modules, staged
 
-**Status: designed 2026-09-09, NOT built.** The maintainer chose the
-staged route below and asked for it to be written down rather than
-started. Read this before starting any of it; the research that shaped
-it is recorded here so it is not re-derived.
+**Status: all three stages BUILT 2026-09-10.** `kernel/core/module.c`
+is the loader, `kernel/core/kexports.c` the export list, `drivers.conf`
+says which drivers are modules (`e1000` by default), and
+`modload`/`modunload`/`lsmod` are the commands. The rule is in
+`docs/conventions/kernel.md` ("A DRIVER CAN BE A MODULE...") and the
+decisions in `docs/decisions/drivers.md`. Two things below were WRONG
+when this was designed and are corrected in place, marked **(corrected)**;
+the rest is the research that shaped it, kept so it is not re-derived.
 
 ## What real systems do
 
@@ -47,11 +51,17 @@ More than half of a loader, pointed in the wrong direction:
   from `__ktext_start`/`__kdata_start` at boot, and `vmm.h`'s mapping
   helpers take `writable`/`executable`.
 
-**What is missing:** an in-kernel linker for `.o` relocations, an
-EXPORT table (which symbols a module may reference, at RUNTIME
-addresses -- with KASLR the baked `.ksyms` values carry the boot's
-delta), per-module RX/RW memory, unload with a use count, and the
-Makefile split saying which drivers are modules.
+**What was missing (all built now):** an in-kernel linker for `.o`
+relocations, an EXPORT table (which symbols a module may reference, at
+RUNTIME addresses -- with KASLR the baked `.ksyms` values carry the
+boot's delta), per-module RX/RW memory, unload with a use count, and
+the Makefile split saying which drivers are modules.
+
+**(corrected)** Per-module RX memory is not a `kmalloc` allocation: the
+identity map's RAM is NX after `paging_enforce_wx()`, so a module's
+text needs its own page-aligned frames and `paging_set_kernel_exec()`
+to flip them -- the loader takes one `pmm_alloc_contiguous()` run,
+text first.
 
 ## Two findings that decide the shape
 
@@ -115,6 +125,11 @@ Each ships and is tested on its own; none is started.
   a PCI match -- a `modalias`-shaped table generated at build time from
   every module's match list, so an unbound device names the module that
   would take it. `docs/filesystem-layout.md` gains `/lib/modules`.
+  **(corrected)** Not at the level PCI binding runs: `INIT_BUS` precedes
+  `INIT_FS`, so nothing on disk is readable there. Boot loading is at
+  `INIT_CONFIG`, and the loader re-binds unclaimed devices afterwards
+  (`pci_rebind()`). The table is `/lib/modules/modules.alias`, written
+  by `tools/gen_modalias.py`.
 
 ## Out of scope
 

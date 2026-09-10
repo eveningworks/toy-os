@@ -1,0 +1,4 @@
+# /etc/modules -- kernel modules to load at boot, one name per line,
+# from /lib/modules/<name>.ko. Loaded BEFORE the match-driven loads, in
+# this order. A driver whose device is present needs no line here:
+# modules.alias loads it by PCI id. Lines starting with # are ignored.

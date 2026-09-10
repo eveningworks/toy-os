@@ -113,9 +113,11 @@ driver still plugs into `block_device`, `display_driver`, `clocksource`
 and the rest to actually be used. Registering wrongly makes a *report*
 wrong; it cannot make a device fail.
 
-**Not a module list.** There is nothing to load or unload: every driver
-here is compiled into the kernel, which is why "present but idle" needs
-saying at all. `lsmod`'s question does not exist here.
+**Not a module list.** A driver built as a module (`drivers.conf`)
+appears here the moment it loads and leaves when it unloads, exactly
+like a built-in one -- its `DRIVER_DECLARE` lands in the same
+registry. Which MODULES are loaded, how big they are and whether they
+can be unloaded is [`lsmod`](lsmod.md)'s question.
 
 **Not something a driver can fall out of by accident.** A driver
 declares itself at file scope (`DRIVER_DECLARE`, into the `.drivers`

@@ -324,4 +324,8 @@ int sys_set_color(struct syscall_ctx *c);
 int sys_poweroff(struct syscall_ctx *c);
 int sys_crashtest(struct syscall_ctx *c);
 
+// kernel/core/module.c -- loadable modules
+int sys_modload(struct syscall_ctx *c);
+int sys_modunload(struct syscall_ctx *c);
+
 #endif

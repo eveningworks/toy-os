@@ -322,4 +322,31 @@ static void e1000_probe(const struct pci_device *pci) {
 
     if (!net_register(&g_dev)) g_present = 0;
 }
-PCI_DRIVER("e1000", e1000_matches, e1000_probe);
+
+// The inverse: interrupts masked FIRST, so the handler can be
+// unregistered with nothing in flight; then the rings stopped, the
+// device taken out of the stack, and the frames given back. The
+// static state is reset so a re-probe starts from nothing -- this is
+// what lets the module be unloaded and loaded again.
+static void e1000_remove(const struct pci_device *pci) {
+    if (!g_probed) return;
+    struct e1000 *e = &g_e1000;
+    if (e->mmio) {
+        reg_write(REG_IMC, 0xFFFFFFFFu);
+        reg_read(REG_ICR);
+        reg_write(REG_RCTL, 0);
+        reg_write(REG_TCTL, 0);
+    }
+    g_present = 0;
+    if (g_msi_vector) { pci_msi_release(pci, g_msi_vector); g_msi_vector = 0; }
+    else if (e->irq) irq_unregister_handler(e->irq, e1000_irq);
+    net_unregister(&g_dev);
+    if (e->rx) pmm_free_contiguous((uint64_t)(uintptr_t)e->rx, 1);
+    if (e->tx) pmm_free_contiguous((uint64_t)(uintptr_t)e->tx, 1);
+    if (e->rx_buf) pmm_free_contiguous(e->rx_buf_phys, (RX_DESCS * BUF_SIZE) / 4096);
+    if (e->tx_buf) pmm_free_contiguous(e->tx_buf_phys, (TX_DESCS * BUF_SIZE) / 4096);
+    k_memset(e, 0, sizeof *e);
+    k_memset(&g_dev, 0, sizeof g_dev);
+    g_probed = 0;
+}
+PCI_DRIVER_REMOVABLE("e1000", e1000_matches, e1000_probe, e1000_remove);

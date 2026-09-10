@@ -54,6 +54,17 @@ int paging_unmap_kernel_page(uint64_t vaddr);
 
 uint64_t paging_kernel_leaf(uint64_t vaddr);
 
+// Makes [phys, phys+size) of the identity map EXECUTABLE and read-only
+// (exec=1), or writable and NX again (exec=0) -- the permissions of a
+// loaded module's text, which paging_enforce_wx() gave the blanket
+// "RAM: writable, NX". Splits the covering 2 MiB leaves on first use,
+// siblings keeping what they had. Page-granular: `phys` and `size`
+// must be 4 KiB multiples. Returns 0 when the range is outside the
+// identity map or the split pool is spent -- and a 0 on exec=1 means
+// the code there will #PF on its first instruction, so the caller
+// must not run it.
+int paging_set_kernel_exec(uint64_t phys, uint64_t size, int exec);
+
 // Undoes paging_set_write_combining() over a range (PAT only; an MTRR
 // range stays). For a TEST that types a frame and must give it back
 // cached; nothing in normal operation clears a type.

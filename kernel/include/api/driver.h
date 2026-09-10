@@ -110,6 +110,12 @@ const char *driver_file_at(int i);
 const char *driver_desc_at(int i);      // "" when it declared none
 const char *driver_devices_at(int i);   // "" when it bound nothing
 
+// A `.drivers` table that is not in the image -- a loaded module's.
+// Its declarations appear in every listing after the image's, until
+// the table is removed (the module unloading). At most 4 per table.
+int driver_add_table(const struct driver_decl *decls, int n);
+int driver_remove_table(const struct driver_decl *decls);
+
 void driver_query_init(void); // QUERY_DRIVER
 
 #endif // DRIVER_H

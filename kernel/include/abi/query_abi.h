@@ -468,6 +468,10 @@ struct query_fsstat {
 
 #define QUERY_PROCPATH_MAX 64  // FS_PATH_MAX (api/fs.h)
 
+// LIST, one record per loaded kernel module (kernel/core/module.c) --
+// `lsmod`. The record is struct query_module.
+#define QUERY_MODULE 40
+
 struct query_procpath {
     int32_t pid;
     // "" for a process the scheduler has no path for -- the legacy
@@ -781,6 +785,17 @@ struct query_driver {
     char file[64];      // the source file it declared itself in, for -v
     char desc[48];      // one line saying what it is, or "" -- also -v
     char devices[64];   // "enp3s0 usb:13", or "" for none
+};
+
+// QUERY_MODULE: one record per loaded module (kernel/core/module.c).
+struct query_module {
+    char     name[16];      // "e1000" -- the .ko's basename
+    uint64_t base;          // where its frames start
+    uint32_t text_bytes;    // page-rounded
+    uint32_t data_bytes;
+    uint32_t drivers;       // DRIVER_DECLAREs it carries
+    uint32_t bound;         // PCI devices its drivers currently hold
+    uint32_t removable;     // 0 when a driver holds devices it cannot release
 };
 
 struct query_version {

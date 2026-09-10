@@ -65,6 +65,17 @@ see it.
 `INIT_BUS`. **A second controller is a second `probe()` call**, not a
 silent skip — say so if you only drive one.
 
+**The same file can be built as a MODULE** -- `<name> = module` in
+`drivers.conf`, where the name is your file's basename -- with no
+change to the declarations: the loader runs and registers the same
+three tables. Two things then matter. Every kernel function you call
+must be an `EXPORT_SYMBOL` in `kernel/core/kexports.c` (the build
+names any that is not), and a driver that should be UNLOADABLE
+declares a `remove()` through `PCI_DRIVER_REMOVABLE` -- mask
+interrupts first, then unregister from the class, then free what
+`probe()` allocated, then reset your statics so a re-probe starts from
+nothing. Without one, the module is pinned while the device is bound.
+
 ## 4. Reach the hardware
 
 **Which BAR.** `pci_bar_mem_addr(dev, n)` — *not* `pci_bar_addr()`,

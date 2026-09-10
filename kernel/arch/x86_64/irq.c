@@ -61,6 +61,18 @@ void irq_register_handler(uint8_t irq, irq_handler_fn handler) {
     }
 }
 
+void irq_unregister_handler(uint8_t irq, irq_handler_fn handler) {
+    if (irq >= 16 || !handler) return;
+    for (int i = 0; i < MAX_HANDLERS_PER_IRQ; i++) {
+        if (handlers[irq][i] != handler) continue;
+        // Dispatch stops at the first NULL, so the tail moves down.
+        for (int j = i; j + 1 < MAX_HANDLERS_PER_IRQ; j++)
+            handlers[irq][j] = handlers[irq][j + 1];
+        handlers[irq][MAX_HANDLERS_PER_IRQ - 1] = 0;
+        return;
+    }
+}
+
 void irq_dispatch(uint8_t irq, uint64_t *regs) {
     if (irq < 16) {
         // EVERY handler on the line runs, in registration order, and

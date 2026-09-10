@@ -3178,6 +3178,67 @@ relies on being accepted.** A rule that looks obviously right is exactly
 the kind that contradicts a deliberate, documented use somewhere else --
 and this one had a comment at the assignment saying why.
 
+
+## A DRIVER CAN BE A MODULE, `drivers.conf` SAYS WHICH, AND A MODULE MAY LINK ONLY AGAINST `kernel/core/kexports.c`
+
+`kernel/include/kernel/module.h`, `kernel/core/module.c`,
+`docs/modules-design.md`. A module is the driver's own `.c` compiled to
+a relocatable `.ko` (`-mcmodel=large -fno-pic`, otherwise the kernel's
+flags) and linked into the running kernel by the loader: sections laid
+out in fresh frames, relocations applied against its own sections and
+the export table, text flipped executable, and then the SAME three
+tables a built-in driver carries -- `.initcalls`, `.drivers`,
+`.pci_drivers` -- run and registered. `PCI_DRIVER`, `DRIVER_DECLARE`
+and `INITCALL` are unchanged; a driver does not know which way it was
+built. Six things to know.
+
+**`drivers.conf` at the repo root decides**, `<name> = builtin |
+module`, where the name is the source file's basename under
+`kernel/drivers/`; unlisted is builtin, an unknown name fails the build
+(`tools/drivers_conf.py`). `modules/*.c` are always modules and live
+OUTSIDE `kernel/` because every `.c` under it is in the image.
+
+**THE EXPORT TABLE IS THE MODULE ABI, AND IT IS ONE FILE.**
+`EXPORT_SYMBOL(fn)` in `kernel/core/kexports.c` drops a name and an
+address into `.kexports`; a `.ko`'s undefined symbols resolve there and
+nowhere else. An unexported import is refused at LOAD with the symbol
+named in the log (`-EINVAL`), and refused at BUILD by
+`tools/gen_modalias.py`, which also writes `modules.alias`. Add an
+export to its header's group -- not a whole header at once.
+
+**THE IDENTITY MAP'S RAM IS NX, SO MODULE TEXT IS NOT `kmalloc`
+MEMORY.** `paging_enforce_wx()` leaves every RAM page writable and NX;
+a module's frames come from `pmm_alloc_contiguous(PMM_ZONE_ANY)`, text
+first, and `paging_set_kernel_exec()` flips the text pages to RX (its
+own split pool, like the guard pages'). Anywhere is fine because of the
+large code model: every external reference is an `R_X86_64_64` through
+a `movabs`, so the loader handles exactly that and `PC32`/`PLT32` for a
+module's own jumps, and refuses anything else BY NAME.
+
+**BOOT LOADING IS AT `INIT_CONFIG`, NOT `INIT_BUS`**, because the files
+are on the root filesystem and `INIT_FS` runs after the bus. So a
+module's driver arrives after `pci_bind()`: the loader calls
+`pci_rebind()`, which probes only devices no driver has claimed. The
+order is `/etc/modules` (names, one per line), then `modules.alias`
+against every unclaimed device. A diskless boot loads nothing and logs
+one line.
+
+**A DRIVER WITHOUT `remove()` PINS ITS MODULE.** `pci_driver` gained an
+optional `remove` (`PCI_DRIVER_REMOVABLE`); `modunload` calls it for
+every device the module's drivers hold, and refuses `-EBUSY` -- before
+releasing any -- if one driver has none. `e1000` has one, which is what
+makes "reload the driver without a reboot" true; `net_unregister()`,
+`irq_unregister_handler()` and `pci_msi_release()` are the three
+inverses it needed, and `/bin/netd` re-leases a card whose kernel-side
+address vanished.
+
+**THE REGISTRIES WALK THE IMAGE'S SECTION AND THEN A LIST OF TABLES**
+(`driver_add_table()`, `pci_driver_add_table()`), image first, so a
+module never outranks a built-in driver for a device both match. A
+panic in module code symbolizes as `<module>+off` (`module_symbolize()`
+behind `ksyms_lookup()`); `tools/panic_resolve.py` finishes it with the
+`.ko`.
+
 ## A LEASE IS RENEWED, NOT RE-ASKED, AND A SINGLE SLEEP IS SILENTLY CAPPED
 
 Two rules from one bug, and the second is not about networking at all.

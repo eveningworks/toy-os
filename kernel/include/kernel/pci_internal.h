@@ -149,6 +149,12 @@ void pci_msix_disable(const struct pci_device *dev);
 // is usable, and what to do when it is not, stays with the driver.
 uint8_t pci_msi_request(const struct pci_device *dev, void (*handler)(uint64_t *regs));
 
+// The inverse of pci_msi_request(): the message capability off (MSI-X
+// or MSI, whichever took the vector), INTx back on, the vector freed.
+// A driver leaving -- a module unloading -- calls it after masking the
+// device's own interrupt sources, so no message is in flight.
+void pci_msi_release(const struct pci_device *dev, uint8_t vector);
+
 // Records the vector a device was given, for `lspci`. Called by
 // pci_msi.c only; a driver reads it back as pci_device.irq_vector.
 void pci_note_vector(const struct pci_device *dev, uint8_t vector, int msix);

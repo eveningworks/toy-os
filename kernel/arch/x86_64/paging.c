@@ -602,6 +602,54 @@ static int pat_apply(uint64_t phys, uint64_t size) {
     return PAGING_WC_PAT;
 }
 
+// --- module text (kernel/core/module.c) --------------------------------
+//
+// The identity map's RAM is NX, so a loaded module's code needs its
+// pages flipped to executable -- and read-only, or it would be the one
+// W+X range in the kernel map. Its own pool, like the guard pages': the
+// split is permanent (a module's frames go back to the allocator as
+// writable NX pages under the same 4 KiB table).
+#define MAX_MOD_TABLES 8
+static uint64_t mod_tables[MAX_MOD_TABLES][512] __attribute__((aligned(4096)));
+static int mod_table_pde[MAX_MOD_TABLES];
+static int mod_table_count = 0;
+
+static uint64_t *mod_split(uint64_t *pdep, uint64_t addr) {
+    uint64_t pde = *pdep;
+    if (!(pde & PAGE_HUGE)) return (uint64_t *)(uintptr_t)(pde & ADDR_MASK);
+    int pde_index = (int)(addr >> 21);
+    for (int i = 0; i < mod_table_count; i++)
+        if (mod_table_pde[i] == pde_index) return mod_tables[i];
+    if (mod_table_count >= MAX_MOD_TABLES) return 0;
+    uint64_t *pt = mod_tables[mod_table_count];
+    mod_table_pde[mod_table_count] = pde_index;
+    mod_table_count++;
+    uint64_t base = (uint64_t)pde_index * HUGE_SIZE;
+    uint64_t type = (pde & PAGE_PAT_HUGE) ? PAGE_PAT_4K : (pde & (PAGE_PCD | PAGE_PWT));
+    for (int i = 0; i < 512; i++) {
+        uint64_t a = base + (uint64_t)i * 4096;
+        pt[i] = a | wx_page_flags(a) | type;
+    }
+    *pdep = (uint64_t)(uintptr_t)pt | PAGE_PRESENT | PAGE_WRITABLE;
+    return pt;
+}
+
+int paging_set_kernel_exec(uint64_t phys, uint64_t size, int exec) {
+    if (size == 0 || (phys & 0xFFF) || (size & 0xFFF)) return 0;
+    if (phys + size < phys || phys + size > g_identity_limit) return 0;
+    for (uint64_t a = phys; a < phys + size; a += 4096) {
+        uint64_t *pdep = pde_ptr(a);
+        if (!pdep || !(*pdep & PAGE_PRESENT)) return 0;
+        uint64_t *pt = mod_split(pdep, a);
+        if (!pt) return 0;
+        uint64_t *e = &pt[(a >> 12) & 0x1FF];
+        if (exec) *e = (*e & ~(PAGE_NX | PAGE_WRITABLE));
+        else      *e = (*e | PAGE_NX | PAGE_WRITABLE);
+    }
+    flush_tlb();
+    return 1;
+}
+
 int paging_clear_write_combining(uint64_t phys, uint64_t size) {
     if (size == 0 || phys + size > g_identity_limit) return 0;
     uint32_t edx = cpuid_edx1();

@@ -40,6 +40,10 @@ typedef void (*irq_handler_fn)(uint64_t *regs);
 // sends its own.
 void irq_register_handler(uint8_t irq, irq_handler_fn handler);
 
+// The inverse, for a driver that is going away (a module unloading).
+// Closes the gap so the chain stays contiguous; unknown is a no-op.
+void irq_unregister_handler(uint8_t irq, irq_handler_fn handler);
+
 // Called by idt.c's isr_dispatch() for every hardware-IRQ vector
 // (32-47, i.e. `irq` in 0-15): looks up and calls whatever's
 // registered for `irq`, then unconditionally sends the PIC

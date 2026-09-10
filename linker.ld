@@ -124,6 +124,19 @@ SECTIONS
         __pci_drivers_end = .;
     } :rodata
 
+    /* The module export table. EXPORT_SYMBOL() (kernel/include/kernel/
+       kexport.h) drops one struct kexport -- a name and an address --
+       per exported symbol, and the module loader resolves a .ko's
+       undefined symbols against nothing else. Same mechanism and
+       placement reasoning as .drivers above. */
+    . = ALIGN(8);
+    .kexports :
+    {
+        __kexports_start = .;
+        KEEP(*(.kexports))
+        __kexports_end = .;
+    } :rodata
+
     . = ALIGN(4096);
     __kdata_start = .;
 

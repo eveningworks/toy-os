@@ -696,6 +696,7 @@ whenever a headline here tells you something you did not already know.
 - **A LEASE IS RENEWED, NOT RE-ASKED, AND A SINGLE SLEEP IS SILENTLY CAPPED**
 - **A NETWORK CLIENT WAITS FOR CARRIER, AND A CONFIG FILE MUST FIT THE PARSER'S BUFFER**
 - **A DRIVER DECLARES ITSELF AS DATA, AND THE CLASS REGISTRY NAMES EACH DEVICE IT BINDS**
+- **A DRIVER CAN BE A MODULE, `drivers.conf` SAYS WHICH, AND A MODULE MAY LINK ONLY AGAINST `kernel/core/kexports.c`** -- a `.ko` is the driver's `.o` compiled `-mcmodel=large`, loaded at boot by PCI match (`modules.alias`) or by `modload`; the identity map's RAM is NX, so module text needs `paging_set_kernel_exec()`; a driver without `remove()` pins its module
 - **A SEND WINDOW MAY NOT EXCEED THE RECEIVER'S SOCKET QUEUE, OR IT IS SLOWER THAN NO WINDOW**
 - **AN MTU-SIZED DATAGRAM IS THE CEILING, BECAUSE NOTHING FRAGMENTS**
 - **A CONNECTION IS LOGGED WHERE IT IS OPENED, AND THE NAME COMES FROM THE RESOLVER**
@@ -1464,6 +1465,8 @@ cost".
   `ls_test.py`, `mem_stress.py`, `mkpart_test.py`,
   `multidisk_test.py`, `net_test.py`, `partition_test.py`,
   `poweroff_test.py`, `qemu_matrix.py`, `remote_test.py`, `serial_backpressure_test.py`, `soundd_test.py`, `stdin_test.py`,
+  `module_test.py` (loadable modules: hello, the refusals, an e1000
+  unload and reload with the network coming back),
   `msi_test.py`, `ntp_test.py`, `ping_rtt.py` (the compositor<->client
   round trip in microseconds -- the number behind stage 8),
   `sum_test.py`, `taskbar_test.py`,
@@ -1516,7 +1519,10 @@ cost".
   `fetch_ca_bundle.py` (Mozilla's CA roots, behind `EXTRAS=1`),
   `gen_mp3_tables.py` (**verifies two independent sources agree before
   it writes**), `gen_icons.py`,
-  `genrelocs.py`, `gen_syms.py`, `gen_decisions_index.py`,
+  `genrelocs.py`, `gen_syms.py`, `drivers_conf.py` (`drivers.conf`
+  -> which drivers are modules), `gen_modalias.py` (`modules.alias`
+  from the `.ko` files, and it FAILS the build on an unexported
+  import), `gen_decisions_index.py`,
   `gen_commands_index.py`, `gen_next_up.py`.
 - **The repo itself** -- `backup_repo.sh` (run it before ANY change to
   the repo's identity or history -- a mirror clone is not a backup

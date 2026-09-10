@@ -1382,6 +1382,24 @@ window without going through it will find its layout polls timing out.
   layer of the compositor-stall investigation in one command.
   **Sample a distribution, never one reading** -- it stops the vCPU, so
   a mostly-idle guest reads as halted every single time.
+- **`drivers_conf.py`** -- resolves `drivers.conf` (`<name> = builtin |
+  module`) into the source files the Makefile builds as `.ko` modules.
+  A name is a file's basename under `kernel/drivers/`, found by walking
+  that tree so there is no name-to-path table; an unknown, ambiguous or
+  misspelt name is an ERROR rather than a driver silently becoming
+  builtin.
+- **`gen_modalias.py`** -- writes `/lib/modules/modules.alias` from the
+  built `.ko` files (one `pci <vendor> <device> <class> <subclass>
+  <progif> <module>` line per PCI match in each module's
+  `.pci_drivers`), which is what the kernel loads modules BY at boot --
+  Linux's `depmod` output, derived from the objects themselves so it
+  cannot disagree with them. It also FAILS THE BUILD on a module whose
+  undefined symbols are not all `EXPORT_SYMBOL`s in
+  `kernel/core/kexports.c` (the load would be refused at runtime;
+  this names the symbol at build time) and on a relocation type the
+  loader does not handle (a module compiled without `-mcmodel=large`).
+  `modules/unexported.c` is the deliberate exception. Hand-rolled ELF64
+  parse, so the build needs no pyelftools.
 - **`gen_syms.py`** -- bakes the kernel's function symbol table into the
   image so a panic can name the function instead of printing an address
   nobody can resolve (the kernel relocates itself, so a raw RIP is
@@ -3766,6 +3784,14 @@ window without going through it will find its layout polls timing out.
   screen -- so "space turns the page" was asking a correct pager to do
   something it must not.
 
+- **`module_test.py`** -- loadable kernel modules the way a person uses
+  them: `modload`/`modunload`/`lsmod` on `hello.ko`, the two refusals
+  (an unexported symbol named in the log, a truncated file), and the
+  check no KTEST can make -- unloading the e1000 MODULE takes the
+  network away and loading it again brings it back, with `/bin/netd`
+  re-leasing on its own. Asserts the DOWN half before the UP half, since
+  a reload that silently did nothing would pass on the boot-time lease.
+  ATTACHES to a running `vm.py` guest; ~30 s.
 - **`sum_test.py`** -- `/bin/sum` itself, in a guest, against digests
   computed on the HOST. It ATTACHES to a running `vm.py` guest.
 

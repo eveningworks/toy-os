@@ -206,6 +206,16 @@ int main(int argc, char **argv) {
 
             if (!wants_dhcp(&conf, &d, want_dhcp)) continue;
 
+            // A card holding a lease whose kernel-side address is gone
+            // is a card that LEFT AND CAME BACK -- its driver was
+            // unloaded and reloaded -- and the lease is for a device
+            // that no longer exists. Start it over.
+            if (!d.ip && c->dhcp.state == UDHCP_BOUND) {
+                uint8_t mac[6];
+                for (int b = 0; b < 6; b++) mac[b] = (uint8_t)(d.mac >> (b * 8));
+                udhcp_init(&c->dhcp, c->name, mac);
+            }
+
             // CARRIER IS POLLED, NEVER WAITED ON. udhcp's own wait is
             // ten seconds, which is right for a command and would here
             // stall every other card behind a port with no cable in it.

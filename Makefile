@@ -324,7 +324,27 @@ USB_IDS = data/usb.ids
 # The one thing to know: a .c file anywhere under kernel/ or apps/ is
 # now IN the kernel image. There's no "scratch file in the source tree"
 # that the build ignores -- put throwaway code somewhere else.
-C_SOURCES   = $(shell find kernel apps -name '*.c' | sort)
+# --- loadable modules (docs/modules-design.md) ----------------------
+# drivers.conf says which drivers are MODULES (a .ko in /lib/modules,
+# loaded at boot by PCI match, from /etc/modules, or by `modload`);
+# everything else is in the image. tools/drivers_conf.py resolves the
+# names to files and REFUSES an unknown one. modules/*.c -- the test
+# modules -- are always modules; they are outside kernel/ because every
+# .c under kernel/ is in the image. Evaluated once (:=): a python call
+# per reference would be paid dozens of times.
+DRIVERS_CONF ?= drivers.conf
+MODULE_DRIVER_SOURCES := $(shell python3 tools/drivers_conf.py $(DRIVERS_CONF) || echo DRIVERS_CONF_ERROR)
+ifneq ($(filter DRIVERS_CONF_ERROR,$(MODULE_DRIVER_SOURCES)),)
+$(error $(DRIVERS_CONF): see the message above)
+endif
+MODULE_SOURCES := $(MODULE_DRIVER_SOURCES) $(sort $(wildcard modules/*.c))
+MODULE_KOS     := $(foreach s,$(MODULE_SOURCES),$(BUILD)/modules/$(basename $(notdir $(s))).ko)
+MODULE_ALIAS   := $(BUILD)/modules/modules.alias
+# The large code model is what lets a module's frames sit anywhere
+# (kernel/include/kernel/module.h); every other flag is the kernel's.
+MODULE_CFLAGS = $(subst -mcmodel=kernel,-mcmodel=large,$(CFLAGS))
+
+C_SOURCES   = $(filter-out $(MODULE_SOURCES),$(shell find kernel apps -name '*.c' | sort))
 ASM_SOURCES = $(shell find kernel -name '*.asm' | sort)
 
 C_OBJECTS   = $(patsubst %.c,   $(BUILD)/%.o, $(C_SOURCES))
@@ -378,7 +398,25 @@ VERSION_GEN := $(shell sh tools/gen_version.sh >/dev/null 2>&1 && echo ok)
 version:
 	@sh tools/gen_version.sh
 
-all: $(KERNEL) $(USERLAND_ELVES) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LIBUAPP_SO)
+all: $(KERNEL) $(USERLAND_ELVES) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LIBUAPP_SO) $(MODULE_KOS) $(MODULE_ALIAS)
+
+# One explicit rule per module source, because the sources come from
+# two trees (kernel/drivers/ and modules/) and a pattern rule cannot
+# say that. The .ko is the .o with its DWARF stripped -- the loader
+# needs the symbol table and nothing else, and /lib/modules is on the
+# disk.
+define MODULE_RULE
+$$(BUILD)/modules/$(basename $(notdir $(1))).o: $(1)
+	@mkdir -p $$(dir $$@)
+	$$(CC) $$(MODULE_CFLAGS) $$< -o $$@
+endef
+$(foreach s,$(MODULE_SOURCES),$(eval $(call MODULE_RULE,$(s))))
+
+$(BUILD)/modules/%.ko: $(BUILD)/modules/%.o
+	objcopy --strip-debug $< $@
+
+$(MODULE_ALIAS): $(MODULE_KOS) kernel/core/kexports.c tools/gen_modalias.py
+	python3 tools/gen_modalias.py --exports kernel/core/kexports.c --out $@ $(MODULE_KOS)
 
 help:
 	@echo "toy-os -- available targets:"
@@ -1245,13 +1283,16 @@ $(DISK_IMG):
 # holds the registry and the reasoning.
 EXTRAS ?=
 LICENSE ?=
-seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LIBUAPP_SO)
+seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LIBUAPP_SO) $(MODULE_KOS) $(MODULE_ALIAS)
 	$(if $(EXTRAS),TOYOS_LICENSE=$(LICENSE) python3 tools/fetch_extras.py,@true)
 	mkdir -p $(SEED_DIR)/sync/bin $(SEED_DIR)/sync/tests
 	# The dynamic loader and the shared libraries -- /lib is theirs
 	# (docs/filesystem-layout.md).
 	mkdir -p $(SEED_DIR)/sync/lib
 	cp $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LIBUAPP_SO) $(SEED_DIR)/sync/lib/
+	# The loadable modules and their alias table (docs/modules-design.md).
+	mkdir -p $(SEED_DIR)/sync/lib/modules
+	cp $(MODULE_KOS) $(MODULE_ALIAS) $(SEED_DIR)/sync/lib/modules/
 	# Destination comes from the SOURCE DIRECTORY, not from a list:
 	# build/userland/{gui,bin}/x.elf -> /bin/x, build/userland/tests/x.elf
 	# -> /tests/x, with $(call seed_name,...) applying the three renames.
@@ -1424,6 +1465,8 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LI
 	@for f in data/etc/*.conf; do \
 	    if [ -f "$$f" ]; then cp "$$f" $(SEED_DIR)/sync/etc/; fi; \
 	done
+	# /etc/modules: the boot-time module list, comments only by default.
+	cp data/etc/modules $(SEED_DIR)/sync/etc/modules
 	# The TLS trust store: one PEM per anchor, EMPTY by default. An empty
 	# store is a supported state -- nothing is verifiable, so https
 	# refuses rather than connecting to something it cannot vouch for.

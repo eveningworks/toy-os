@@ -214,3 +214,20 @@ uint8_t pci_msi_request(const struct pci_device *dev, void (*handler)(uint64_t *
     lapic_free_vector(vector);
     return 0;
 }
+
+static void pci_msi_disable(const struct pci_device *dev) {
+    uint8_t cap = pci_capability_find(dev, PCI_CAP_ID_MSI, 0);
+    if (!cap) return;
+    uint16_t ctl = pci_config_read16(dev, (uint8_t)(cap + MSI_CTL));
+    pci_config_write16(dev, (uint8_t)(cap + MSI_CTL),
+                       (uint16_t)(ctl & ~MSI_CTL_ENABLE));
+    pci_command_update(dev, 0, PCI_CMD_INTX_DISABLE);
+    pci_note_vector(dev, 0, 0);
+}
+
+void pci_msi_release(const struct pci_device *dev, uint8_t vector) {
+    if (!dev || !vector) return;
+    if (dev->irq_msix) pci_msix_disable(dev);
+    else pci_msi_disable(dev);
+    lapic_free_vector(vector);
+}

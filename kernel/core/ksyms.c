@@ -10,6 +10,7 @@
 
 #include "ksyms.h"
 #include "reloc.h"
+#include "module.h"
 
 extern const unsigned char __ksyms_start[];
 extern const unsigned char __ksyms_end[];
@@ -49,6 +50,12 @@ uint32_t ksyms_count(void) {
 
 const char *ksyms_lookup(uint64_t addr, uint32_t *out_off) {
     if (out_off) *out_off = 0;
+
+    // A loaded module's code is not in the image's table; it answers
+    // as `<module>+off`, which tools/panic_resolve.py finishes with
+    // the .ko's own symbols.
+    const char *mod = module_symbolize(addr, out_off);
+    if (mod) return mod;
 
     uint32_t count = 0, strings = 0;
     const unsigned char *t = table(&count, &strings);

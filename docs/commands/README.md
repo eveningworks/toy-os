@@ -120,6 +120,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`lscpu`](lscpu.md)
 - [`lsdisplay`](lsdisplay.md)
 - [`lsdrv`](lsdrv.md)
+- [`lsmod`](lsmod.md)
 - [`lspci`](lspci.md)
 - [`lsusb`](lsusb.md)
 - [`meminfo`](meminfo.md)
@@ -219,6 +220,11 @@ a command), and the `gui3`/`nano` aliases.
 - [`mkpart`](mkpart.md)
 - [`mount`](mount.md)
 - [`umount`](umount.md)
+
+### System administration
+
+- [`modload`](modload.md)
+- [`modunload`](modunload.md)
 
 ### Text processing
 

@@ -166,6 +166,8 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_WAKEWORD]      = { "wakeword",      sys_wakeword,      { A_HEX } },
     [SYS_SHM_GRANT]     = { "shm_grant",     sys_shm_grant,     { A_PATH, A_INT } },
     [SYS_DIAG]          = { "diag",          sys_diag,          { A_HEX } },
+    [SYS_MODLOAD]       = { "modload",       sys_modload,       { A_PATH } },
+    [SYS_MODUNLOAD]     = { "modunload",     sys_modunload,     { A_PATH } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

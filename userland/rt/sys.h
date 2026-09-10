@@ -869,6 +869,10 @@ int sys_win_request(struct win_request_msg *req);
 struct diag_msg;
 int sys_diag(struct diag_msg *msg);
 
+// Loadable kernel modules. 0 or -errno; the reason is in `dmesg`.
+int sys_modload(const char *path);
+int sys_modunload(const char *name);
+
 
 // Non-blocking. 1 if an event was written, 0 if the queue is empty.
 int sys_poll_event(struct win_event *out);

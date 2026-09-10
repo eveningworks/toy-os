@@ -128,6 +128,7 @@ static const struct { int code; const char *msg; } g_errmsg[] = {
     { ENAMETOOLONG, "path too long" },
     { ENOTSUP, "not a single value" },
     { ENOSYS, "not implemented" },
+    { ENOEXEC, "exec format error" },
     { EAGAIN, "try again" },
     { EBUSY,  "device or resource busy" },
     { EINTR,  "interrupted by a signal" },
@@ -765,6 +766,14 @@ int sys_umount(const char *point) {
 
 int sys_diag(struct diag_msg *msg) {
     return (int)err(syscall1(SYS_DIAG, (uint64_t)(uintptr_t)msg));
+}
+
+int sys_modload(const char *path) {
+    return (int)err(syscall1(SYS_MODLOAD, (uint64_t)(uintptr_t)path));
+}
+
+int sys_modunload(const char *name) {
+    return (int)err(syscall1(SYS_MODUNLOAD, (uint64_t)(uintptr_t)name));
 }
 
 int sys_poweroff(int reboot) {
