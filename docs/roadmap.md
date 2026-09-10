@@ -1052,6 +1052,7 @@ this to be better?".
 - [ ] Make the GUI test tooling RESOLUTION-AGNOSTIC
 - [ ] Retire `uui_button_group` once nothing needs it
 - [ ] **NEXT** System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons
+- [ ] Audit the bare `redraw_pending = 1` sites in `userland/wm/` for a rect they could damage -- a focus change's title colour is next
 - [ ] Disk Mark's dropdown cannot be typed at while CLOSED -- the app routes no keys, so only the overlay path reaches it
 - [ ] On a machine with no invariant TSC, CPU percentages round to 0% for sub-tick work
 - [ ] `gfxbench`'s numbers are only meaningful under KVM or on real hardware

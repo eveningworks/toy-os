@@ -2864,6 +2864,23 @@ and dropped the `redraw_pending = 1` the per-overlay code had carried,
 while fixing this exact symptom on the volume flyout. `wm_overlay_hover()`
 RETURNS whether the hover changed; the call site ignored it.
 
+
+**AND THE INVERSE: `redraw_pending` WITHOUT DAMAGE IS A FULL REPAINT
+ONLY IN A QUIET FRAME.** The full-screen fallback fires when the damage
+box is EMPTY; a client presenting a frame (Shapes, every tick) has
+already declared its rect in the same iteration, so the render is
+clipped to that rect and a state change elsewhere is never painted --
+or never un-painted, which is a close button stuck red on a window
+nobody points at. It presented on every flipping display and under
+KVM, where presents are frequent, and mostly not on `-vga std` under
+TCG, where the race is usually lost. A state change that knows its
+rect DAMAGES it (`wm_damage_rect()`) and sets the flag; the title-bar
+buttons' hover and press do now (`damage_title_buttons()`), as the
+tray and Start menu always did. `tools/hover_test.py`'s animating-
+window check is the regression, and it discriminates on `--vga
+virtio`. Bare `redraw_pending = 1` sites beside a possible client
+present are the audit `docs/roadmap.md` lists.
+
 ## THE COMPOSITOR SLEEPS BETWEEN FRAMES, AND TWO THINGS MUST DEFEAT THE WAIT.
 
 `wm.c`'s frame loop no longer calls `sys_yield()` -- that returned

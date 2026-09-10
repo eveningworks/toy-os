@@ -132,6 +132,44 @@ def main():
     check("a move over nothing does not repaint the scene", gained <= 1,
           f"{gained} scene repaints for 8 moves with no overlay open")
 
+    # --- a title-bar button on an ANIMATING window ---------------------
+    #
+    # Shapes presents a frame every tick, so every iteration already
+    # carries the client's own damage rect. A hover or press change that
+    # only set redraw_pending was clipped out of the render by that rect
+    # and never reached the screen (or never left it). The pointer is
+    # PLACED by hover_frames() -- `gui move` overrides one iteration and
+    # snaps back -- and the pixel read is 3 px left of the centre, off
+    # the pointer's own hotspot. On `-vga std` the collision is a race a
+    # slow TCG client mostly loses; on `--vga virtio` (three scanouts,
+    # frequent presents) it failed every time before the fix.
+    import tempfile
+    from PIL import Image
+    tmp = tempfile.mkdtemp(prefix="hover_anim_")
+    dbg.open_app("Shapes")
+    dbg.settle()
+    shapes = dbg.window("Shapes")
+    if not shapes:
+        check("Shapes opened for the animating-window hover", 0, "no window titled Shapes")
+    else:
+        x, y, w, h = shapes["x"], shapes["y"], shapes["w"], shapes["h"]
+        close = (x + w - 14, y + 12)            # the close button's centre
+        sample = (close[0] - 3, close[1])
+        park = (x + w // 2, y + h + 60)
+        rest, hot = dbg.hover_frames(qmp, tmp, park, close, prefix="anim")
+        at_rest = Image.open(rest).convert("RGB").getpixel(sample)
+        at_hot = Image.open(hot).convert("RGB").getpixel(sample)
+        check("hovering an animating window's close button highlights it",
+              at_hot != at_rest and at_hot[0] > at_hot[1] + 60,
+              f"rest {at_rest} hot {at_hot} (a red close is the hover state)")
+        # And it LEAVES with the pointer: the same iteration-collision
+        # dropped the un-hover too, which is what stuck a red close
+        # button to a window nobody was pointing at.
+        left, _ = dbg.hover_frames(qmp, tmp, park, park, prefix="anim_left")
+        at_left = Image.open(left).convert("RGB").getpixel(sample)
+        check("...and the highlight leaves with the pointer",
+              at_left == at_rest, f"rest {at_rest} after leaving {at_left}")
+
     passed = sum(1 for _, ok in results if ok)
     print(f"hover_test: {passed}/{len(results)} checks passed")
     return 0 if passed == len(results) else 1

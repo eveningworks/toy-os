@@ -77,6 +77,8 @@ static int mode_is_auto(const char *name) {
 // untouched) if the point isn't over any window's title-bar button --
 // including when it's over a window's title bar but not a button, or
 // over the window body below the title bar entirely.
+static void damage_title_buttons(int win);
+
 static int title_btn_hit_test(int mx, int my, int *out_kind) {
     for (int i = window_count - 1; i >= 0; i--) {
         struct window *w = &windows[i];
@@ -236,6 +238,7 @@ void wm_handle_left_click(int mx, int my) {
             // side effect at all, not even a restack.
             if (uui_hit(r.min_x, r.y, r.size, r.size, mx, my)) {
                 title_btn_armed_win = i;
+                damage_title_buttons(i);   // the pressed look arrives
                 title_btn_armed_kind = 0;
                 title_btn_pressed_active = 1;
                 title_hover_win = -1;
@@ -245,6 +248,7 @@ void wm_handle_left_click(int mx, int my) {
             }
             if (uui_hit(r.max_x, r.y, r.size, r.size, mx, my)) {
                 title_btn_armed_win = i;
+                damage_title_buttons(i);   // the pressed look arrives
                 title_btn_armed_kind = 1;
                 title_btn_pressed_active = 1;
                 title_hover_win = -1;
@@ -254,6 +258,7 @@ void wm_handle_left_click(int mx, int my) {
             }
             if (uui_hit(r.close_x, r.y, r.size, r.size, mx, my)) {
                 title_btn_armed_win = i;
+                damage_title_buttons(i);   // the pressed look arrives
                 title_btn_armed_kind = 2;
                 title_btn_pressed_active = 1;
                 title_hover_win = -1;
@@ -923,6 +928,7 @@ void wm_update_title_btn_press(int mx, int my, uint8_t buttons) {
     if (buttons & 0x1) {
         if (now_over != title_btn_pressed_active) {
             title_btn_pressed_active = now_over;
+            damage_title_buttons(title_btn_armed_win);
             redraw_pending = 1;
         }
         return;
@@ -966,6 +972,7 @@ void wm_update_title_btn_press(int mx, int my, uint8_t buttons) {
         }
     }
 
+    damage_title_buttons(title_btn_armed_win);   // the pressed look leaves
     title_btn_armed_win = -1;
     title_btn_armed_kind = -1;
     title_btn_pressed_active = 0;
@@ -1040,11 +1047,27 @@ void wm_update_content_hover(int mx, int my, uint8_t buttons) {
 // Recomputes title_hover_win/kind from the live mouse position -- see
 // wm_internal.h's comment on title_hover_win. A no-op while a button's
 // armed (the press visual owns the drawing then, not hover).
+// A TITLE-BUTTON STATE CHANGE MUST DAMAGE ITS RECT, not only ask for a
+// frame. `redraw_pending` alone repaints everything ONLY when nothing
+// else declared damage that iteration; a client presenting a frame
+// (Shapes, every tick) declares its own rect, the render is clipped to
+// it, and a hover or press on that window's title bar was never
+// painted -- or a highlight that had been painted never left. Seen on
+// every flipping display and under KVM, where client presents are
+// frequent enough to collide every time.
+static void damage_title_buttons(int win) {
+    if (win < 0 || win >= window_count) return;
+    struct btn_rects r = title_buttons(&windows[win]);
+    wm_damage_rect(r.min_x, r.y, (r.close_x + r.size) - r.min_x, r.size);
+}
+
 void wm_update_title_hover(int mx, int my) {
     if (title_btn_armed_win >= 0) return;
     int kind = -1;
     int win = title_btn_hit_test(mx, my, &kind);
     if (win != title_hover_win || kind != title_hover_kind) {
+        damage_title_buttons(title_hover_win);   // the one losing its highlight
+        damage_title_buttons(win);               // the one gaining it
         title_hover_win = win;
         title_hover_kind = kind;
         redraw_pending = 1;

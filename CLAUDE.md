@@ -825,7 +825,7 @@ whenever a headline here tells you something you did not already know.
 - **THE TASKBAR'S THICKNESS IS A REGISTERED SETTING: `desktop.taskbar_height`, in PIXELS, 24..96, default 40.**
 - **THE START BUTTON'S APPEARANCE IS A REGISTERED SETTING**
 - **DIAGNOSTICS ARE A NAMED REGISTRY, AND THE COMPOSITOR IS THE PROVIDER `gui`** -- `SYS_DIAG`, `diag <name> <cmd>`, `/bin/guictl`
-- **DAMAGING A RECT DOES NOT ASK FOR A FRAME -- SET `redraw_pending` TOO**
+- **DAMAGING A RECT DOES NOT ASK FOR A FRAME -- SET `redraw_pending` TOO** -- and the inverse: `redraw_pending` WITHOUT damage repaints everything only in a QUIET frame; beside an animating client the render is clipped to the client's rect and the change is lost (a close button stuck red)
 - **THE COMPOSITOR SLEEPS BETWEEN FRAMES, AND TWO THINGS MUST DEFEAT THE WAIT**
 - **AN OVERLAY IS A ROW IN A TABLE, AND THE TABLE DRIVES DRAWING, CLICKS AND HOVER**
 - **A DISMISSABLE OVERLAY DECLARES `close`, AND AN OPEN PATH CALLS `wm_overlay_close_others()` RATHER THAN NAMING ITS PEERS**
