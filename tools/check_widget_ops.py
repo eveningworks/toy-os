@@ -45,6 +45,11 @@ THE RULES, and each names the failure it prevents:
      uui_sidebar and uui_tree still had it in 2026-09-03. Answer the
      WHOLE rect here (`uui_hit(x, y, w, h, ...)`) and keep `_hit()` for
      the row question. `>= 0` remains right for a widget with no bar.
+  6. A table with `drop` must have `drag_over`, and one with
+     `drag_start` must have `drag_end`. uui_route.c offers a drop only
+     to a widget whose drag_over ACCEPTED, so a drop with no drag_over
+     is a target nothing can reach; and a source with no drag_end never
+     learns its drag ended (a highlight, a deferred clear, left set).
   3. A table with `key` must have `accepts_focus`. The focus ring SKIPS
      a widget that refuses focus (uui_focus.c), so a widget that takes
      keys but never says whether it wants them is relying on the
@@ -123,6 +128,16 @@ def check_file(path):
                 (name, "has no .accepts_focus",
                  "the focus ring skips a widget that refuses focus, and a "
                  "widget that takes keys must say whether it wants them"))
+        if "drop" in slots and "drag_over" not in slots:
+            problems.append(
+                (name, "has no .drag_over",
+                 "uui_route.c offers a drop only to a widget whose "
+                 "drag_over accepted, so this target can never be reached"))
+        if "drag_start" in slots and "drag_end" not in slots:
+            problems.append(
+                (name, "has no .drag_end",
+                 "a source that is never told its drag ended keeps whatever "
+                 "state the press armed"))
         if "uui_scrollbar_draw(" in src and row_hit_routed(src, body):
             problems.append(
                 (name, "routes .hit through the ROW hit",

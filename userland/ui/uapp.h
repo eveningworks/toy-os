@@ -430,6 +430,14 @@ int uapp_set_title(struct uapp *a, const char *title);
 // tree, so an app has the last word over its own window.
 void uapp_set_cursor(struct uapp *a, int cursor);
 
+// The drag in progress, or -- inside on_widget(id, UUI_REASON_DROP) --
+// the one that just dropped. NULL for neither. What a drop handler
+// reads to learn the source widget, the count and the copy/move bit;
+// the TARGET widget records where (uui_fileview_drop_target(),
+// uui_tree_drop_id()).
+const struct uui_drag *uapp_drag(struct uapp *a);
+int uapp_drag_active(struct uapp *a);   // a drag is in flight right now
+
 // Bracket a blocking stretch: the busy pointer, then whatever was there
 // before. The toolkit remembers, because "restore to what" is a
 // question every app would otherwise answer differently and wrongly.

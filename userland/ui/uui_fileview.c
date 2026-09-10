@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "keyboard.h"   // KEY_* codes, as delivered by WIN_EV_KEY
+#include "ui/uui_route.h" // UUI_NOWHERE -- a drag_over's leave
 
 // Column indices in DETAILS mode. LIST mode declares only the first.
 #define FV_COL_NAME 0
@@ -267,6 +268,8 @@ void uui_fileview_init(struct uui_fileview *fv, int x, int y, int w, int h,
                         struct sys_dirent *storage, int cap) {
     memset(fv, 0, sizeof *fv);
     fv->anchor = -1;
+    fv->press_row = -1;
+    fv->drop_row = -2;
     fv->entries = storage;
     fv->cap = cap;
     fv->last_click_row = -1;
@@ -343,6 +346,25 @@ int uui_fileview_reload(struct uui_fileview *fv) {
     keep[0] = '\0';
     const char *sel = uui_fileview_selected_name(fv);
     if (sel) snprintf(keep, sizeof keep, "%s", sel);
+    // NOTHING selected stays nothing: an empty-space click deselects,
+    // and a refresh half a second later must not undo it.
+    int had_none = fv->table.selected < 0;
+
+    // THE MARKS SURVIVE BY NAME TOO. A mark names a ROW and the rows
+    // are re-read, so the bitmap cannot be kept -- but the NAMES can,
+    // and re-marking by name is how Explorer and Dolphin keep a
+    // selection across a refresh. Without this, any write anywhere on
+    // the volume (the app's own config file included) had the next
+    // tick's reload silently unmark everything -- which is what made
+    // "Insert marks files" flaky for weeks. STATIC scratch: the list is
+    // larger than a ring-3 frame allows, and reload is not re-entrant.
+    static char kept_marks[UUI_FILEVIEW_KEEP_MARKS][64];
+    int nkept = 0;
+    for (int n = 0; n < fv->mark_count && nkept < UUI_FILEVIEW_KEEP_MARKS; n++) {
+        char path[UUI_FILEVIEW_PATH_MAX];
+        if (!uui_fileview_marked_path(fv, n, path, sizeof path)) continue;
+        snprintf(kept_marks[nkept++], sizeof kept_marks[0], "%s", k_path_basename(path));
+    }
 
     fv->count = 0;
     fv->truncated = 0;
@@ -383,9 +405,15 @@ int uui_fileview_reload(struct uui_fileview *fv) {
 
     if (keep[0] && uui_fileview_select_name(fv, keep)) {
         /* kept */
+    } else if (had_none) {
+        fv->table.selected = -1;
     } else {
         fv->table.selected = uui_fileview_row_count(fv) > 0
                               ? uui_table_source_row(&fv->table, 0) : -1;
+    }
+    for (int i = 0; i < nkept; i++) {
+        int row = uui_fileview_row_of(fv, kept_marks[i]);
+        if (row >= 0) uui_fileview_toggle_mark(fv, row);
     }
     fv->last_click_row = -1;
     if (fv->mode == UUI_FILEVIEW_ICONS) ic_reveal(fv);
@@ -401,6 +429,10 @@ int uui_fileview_set_dir(struct uui_fileview *fv, const char *dir) {
     fv->table.top = 0;
     fv->icon_top = 0;
     int ok = uui_fileview_reload(fv);
+    // A directory just entered starts on its first row (reload keeps
+    // "nothing selected" only for a refresh of the same one).
+    if (fv->table.selected < 0 && uui_fileview_row_count(fv) > 0)
+        fv->table.selected = uui_table_source_row(&fv->table, 0);
     if (fv->on_dir_changed) fv->on_dir_changed(fv->ctx, fv->dir);
     return ok;
 }
@@ -646,6 +678,48 @@ int uui_fileview_band_active(const struct uui_fileview *fv) {
     return fv->band.armed;
 }
 
+// The band's rects in the TABLE modes: a view row is the full row
+// width at its screen y, so the same rubberband.h engine marks rows.
+static void tb_rb_rect(void *ctx, int index, int *x, int *y, int *w, int *h) {
+    const struct uui_fileview *fv = (const struct uui_fileview *)ctx;
+    const struct uui_table *t = &fv->table;
+    int bar = uui_table_scrollbar_visible(t) ? t->bar_w : 0;
+    *x = t->x;
+    *y = t->y + uui_table_header_h(t) + (index - t->top) * uui_table_row_h(t);
+    *w = t->w - bar;
+    *h = uui_table_row_h(t);
+}
+
+// A PRESS ON EMPTY SPACE, any view: the selection goes -- marks and the
+// cursor row both, Explorer's and Dolphin's rule -- unless Ctrl/Shift
+// says the band that may follow should ADD (what KDE, Windows and this
+// desktop's own icons all do on that gesture). Deciding the deselect
+// here rather than at rb_end() is what makes it the same in the table
+// modes, which have no band-clear to fall out of.
+static void fv_empty_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
+    int add = (mods & (KEY_MOD_CTRL | KEY_MOD_SHIFT)) != 0;
+    if (!add) {
+        uui_fileview_clear_marks(fv);
+        fv->anchor = -1;
+        fv->table.selected = -1;
+    }
+    rb_begin(&fv->band, cx, cy, add ? RB_ADD : RB_REPLACE);
+}
+
+static int fv_apply_mods(struct uui_fileview *fv, int row, unsigned mods);
+
+// The press half of fv_apply_mods(): a PLAIN press on a row already in
+// the marked set leaves the set alone until the release says it was a
+// click (see `deferred_clear`), so a drag from it carries the set.
+static int fv_press_mods(struct uui_fileview *fv, int row, unsigned mods) {
+    if (!(mods & (KEY_MOD_CTRL | KEY_MOD_SHIFT)) &&
+        uui_fileview_is_marked(fv, row)) {
+        fv->deferred_clear = 1;
+        return 0;
+    }
+    return fv_apply_mods(fv, row, mods);
+}
+
 // A staged cut's artwork, taken HALFWAY TO THE BACKGROUND -- Explorer's
 // and Dolphin's translucent icon. The table fades its TEXT instead
 // (uui_table.c's fade), because a text row has no artwork to fade.
@@ -765,8 +839,6 @@ static int ic_hover(struct uui_fileview *fv, int cx, int cy) {
     return 1;
 }
 
-static int fv_apply_mods(struct uui_fileview *fv, int row, unsigned mods);
-
 static int ic_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
     struct uui_table *t = &fv->table;
     if (!uui_hit(t->x, t->y, t->w, t->h, cx, cy)) return 0;
@@ -791,22 +863,19 @@ static int ic_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
     }
 
     int view = ic_hit_view(fv, cx, cy);
+    fv->press_row = -1;
+    fv->deferred_clear = 0;
     if (view < 0) {
-        // Empty space: maybe a band, maybe a deselecting click --
-        // rb_end() tells them apart, so nothing is decided here.
-        // Ctrl or Shift makes the band ADD to what is already marked,
-        // which is what the desktop's icons already do (desktop.c) and
-        // what both KDE and Windows do on the same gesture.
-        rb_begin(&fv->band, cx, cy,
-                 (mods & (KEY_MOD_CTRL | KEY_MOD_SHIFT)) ? RB_ADD : RB_REPLACE);
+        fv_empty_press(fv, cx, cy, mods);
         return 1;
     }
 
     int src = uui_table_source_row(t, view);
+    fv->press_row = src;
     int changed = (t->selected != src);
     t->selected = src;
 
-    fv_apply_mods(fv, src, mods);
+    fv_press_mods(fv, src, mods);
     if (mods & (KEY_MOD_CTRL | KEY_MOD_SHIFT)) {
         if (changed) fv_report_select(fv);
         fv->last_click_row = -1;
@@ -819,7 +888,7 @@ static int ic_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
     fv->last_click_tick = now;
     fv->last_click_row = is_double ? -1 : src;
 
-    if (is_double) return uui_fileview_activate(fv) || 1;
+    if (is_double) { fv->deferred_clear = 0; return uui_fileview_activate(fv) || 1; }
     if (changed) fv_report_select(fv);
     return 1;
 }
@@ -844,9 +913,6 @@ static int ic_drag(struct uui_fileview *fv, int cx, int cy) {
 static void ic_drag_end(struct uui_fileview *fv) {
     fv->table.thumb_grab = -1;
     if (fv->band.armed) {
-        // A plain click on empty space clears the band's selection
-        // (rubberband.h's rule), so this apply is also "click empty
-        // space to unmark everything".
         rb_end(&fv->band);
         ic_apply_band(fv);
     }
@@ -901,9 +967,46 @@ void uui_fileview_set_active_mark(struct uui_fileview *fv, int on, uint32_t colo
     fv->active_mark_color = color;
 }
 
+// The drop target's outline: the directory row under the pointer, or
+// the whole pane when the drop is "into here". The focus ring's
+// accent, so it reads as "this one" in the theme's own colour.
+static void fv_draw_drop(struct ugfx_surface *s, const struct uui_fileview *fv) {
+    const struct uui_table *t = &fv->table;
+    if (fv->drop_row == -2) return;
+    if (fv->drop_row == -1) {
+        uui_focus_ring(s, t->x + 2, t->y + 2, t->w - 4, t->h - 4);
+        return;
+    }
+    int view = uui_table_view_row(t, fv->drop_row);
+    if (view < 0) return;
+    int x, y, w, h;
+    if (fv->mode == UUI_FILEVIEW_ICONS) {
+        if (!uui_fileview_cell_rect(fv, view, &x, &y, &w, &h)) return;
+        uui_focus_ring(s, x, y, w - 2, h - 2);
+        return;
+    }
+    if (view < t->top || view >= t->top + uui_table_visible_rows(t)) return;
+    tb_rb_rect((void *)fv, view, &x, &y, &w, &h);
+    uui_focus_ring(s, x, y, w, h);
+}
+
 void uui_fileview_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
-    if (fv->mode == UUI_FILEVIEW_ICONS) ic_draw(s, fv);
-    else uui_table_draw(s, &fv->table);
+    if (fv->mode == UUI_FILEVIEW_ICONS) {
+        ic_draw(s, fv);
+    } else {
+        uui_table_draw(s, &fv->table);
+        // The band, over the rows and clipped to them (ic_draw does its
+        // own inside its clip).
+        int bx, by, bw, bh;
+        if (rb_rect(&fv->band, &bx, &by, &bw, &bh)) {
+            const struct uui_table *t = &fv->table;
+            int hh = uui_table_header_h(t);
+            ugfx_set_clip_rect(s, t->x, t->y + hh, t->w, t->h - hh);
+            ugfx_draw_rect(s, bx, by, bw, bh, t->fg);
+            ugfx_clear_clip_rect(s);
+        }
+    }
+    fv_draw_drop(s, fv);
     if (fv->active_mark) {
         const struct uui_table *t = &fv->table;
         ugfx_draw_rect(s, t->x, t->y, t->w, t->h, fv->active_mark_color);
@@ -983,17 +1086,26 @@ int uui_fileview_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
     if (fv->mode == UUI_FILEVIEW_ICONS) return ic_press(fv, cx, cy, mods);
 
     int inside = uui_hit(fv->table.x, fv->table.y, fv->table.w, fv->table.h, cx, cy);
+    fv->press_row = -1;
+    fv->deferred_clear = 0;
 
     if (uui_table_press(&fv->table, cx, cy)) return 1; // the scrollbar
 
     int row = uui_table_hit(&fv->table, cx, cy);
     int changed = uui_table_click(&fv->table, cx, cy);
-    if (row < 0) return changed || inside;
+    if (row < 0) {
+        // The header sorts; anywhere else inside is empty space.
+        if (uui_table_header_hit(&fv->table, cx, cy) >= 0 || !inside)
+            return changed || inside;
+        fv_empty_press(fv, cx, cy, mods);
+        return 1;
+    }
+    fv->press_row = row;
 
     // The modifiers act on the SET; the click still moves the cursor.
     // Ctrl+click deliberately does NOT count toward a double click --
     // toggling a row twice is not an "open".
-    int set_changed = fv_apply_mods(fv, row, mods);
+    int set_changed = fv_press_mods(fv, row, mods);
     if (mods & (KEY_MOD_CTRL | KEY_MOD_SHIFT)) {
         if (changed) fv_report_select(fv);
         fv->last_click_row = -1;
@@ -1008,7 +1120,7 @@ int uui_fileview_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
     // double -- the same guard the desktop's icons carry.
     fv->last_click_row = is_double ? -1 : row;
 
-    if (is_double) return uui_fileview_activate(fv) || changed;
+    if (is_double) { fv->deferred_clear = 0; return uui_fileview_activate(fv) || changed; }
     if (changed) fv_report_select(fv);
     return set_changed || changed || inside;
 }
@@ -1038,12 +1150,23 @@ int uui_fileview_select_at(struct uui_fileview *fv, int cx, int cy) {
 
 int uui_fileview_drag(struct uui_fileview *fv, int cx, int cy) {
     if (fv->mode == UUI_FILEVIEW_ICONS) return ic_drag(fv, cx, cy);
-    return uui_table_drag(&fv->table, cx, cy);
+    if (uui_table_drag(&fv->table, cx, cy)) return 1;
+    if (fv->band.armed) {
+        struct rb_ops ops = { ic_rb_count, tb_rb_rect };
+        rb_motion(&fv->band, cx, cy, &ops, fv);
+        ic_apply_band(fv);
+        return 1;
+    }
+    return 0;
 }
 
 void uui_fileview_drag_end(struct uui_fileview *fv) {
     if (fv->mode == UUI_FILEVIEW_ICONS) { ic_drag_end(fv); return; }
     uui_table_drag_end(&fv->table);
+    if (fv->band.armed) {
+        rb_end(&fv->band);
+        ic_apply_band(fv);
+    }
 }
 
 int uui_fileview_wheel(struct uui_fileview *fv, int notches) {
@@ -1128,8 +1251,124 @@ static int fv_ops_motion(void *w, int cx, int cy, unsigned buttons) {
 
 static int fv_ops_release(void *w, int cx, int cy) {
     (void)cx; (void)cy;
-    uui_fileview_drag_end((struct uui_fileview *)w);
+    struct uui_fileview *fv = (struct uui_fileview *)w;
+    uui_fileview_drag_end(fv);
+    // The press was a click after all: the deferred plain-click clear.
+    if (fv->deferred_clear && fv->press_row >= 0) {
+        fv->deferred_clear = 0;
+        return fv_apply_mods(fv, fv->press_row, 0);
+    }
+    fv->deferred_clear = 0;
     return 0;
+}
+
+// --- drag and drop ----------------------------------------------------
+
+static int fv_ops_drag_start(void *w, int cx, int cy, struct uui_drag *d) {
+    (void)cx; (void)cy;
+    struct uui_fileview *fv = (struct uui_fileview *)w;
+    int row = fv->press_row;
+    if (row < 0 || fv_is_up_row(fv, row)) return 0;   // empty space: a band
+
+    // This press is a drag now, not a click: no band, no deferred
+    // clear, and the next click is not a double.
+    rb_clear(&fv->band);
+    fv->deferred_clear = 0;
+    fv->last_click_row = -1;
+
+    // The set, or the row alone (made the whole selection, so the
+    // app's operand rule names exactly what is carried).
+    if (!uui_fileview_is_marked(fv, row)) {
+        uui_fileview_clear_marks(fv);
+        fv->anchor = row;
+        fv->table.selected = row;
+    }
+    int n = fv->mark_count > 0 ? fv->mark_count : 1;
+    if (n == 1) {
+        char one[UUI_FILEVIEW_PATH_MAX];
+        const struct sys_dirent *e = fv_entry(fv, row);
+        if (fv->mark_count && uui_fileview_marked_path(fv, 0, one, sizeof one))
+            snprintf(fv->drag_label, sizeof fv->drag_label, "%s", k_path_basename(one));
+        else
+            snprintf(fv->drag_label, sizeof fv->drag_label, "%s", e ? e->name : "?");
+    } else {
+        snprintf(fv->drag_label, sizeof fv->drag_label, "%d items", n);
+    }
+    d->kind = UUI_DRAG_FILES;
+    d->dir = fv->dir;
+    d->count = n;
+    d->label = fv->drag_label;
+    return 1;
+}
+
+static void fv_ops_drag_end(void *w, int dropped) {
+    (void)dropped;
+    ((struct uui_fileview *)w)->deferred_clear = 0;
+}
+
+static int fv_ops_drag_over(void *w, int cx, int cy, const struct uui_drag *d) {
+    struct uui_fileview *fv = (struct uui_fileview *)w;
+    fv->drop_row = -2;
+    if (d->kind != UUI_DRAG_FILES || cx == UUI_NOWHERE) return 0;
+
+    int row = uui_fileview_hit(fv, cx, cy);
+    int trow = -1;
+    char target[UUI_FILEVIEW_PATH_MAX];
+    if (row >= 0 && fv_is_up_row(fv, row)) {
+        trow = row;
+        if (!k_path_dirname(fv->dir, target, sizeof target)) return 0;
+    } else if (row >= 0 && fv_entry(fv, row) && fv_entry(fv, row)->is_dir) {
+        trow = row;
+        if (!k_path_join(fv->dir, fv_entry(fv, row)->name, target, sizeof target))
+            return 0;
+    } else {
+        snprintf(target, sizeof target, "%s", fv->dir);
+    }
+    // Their own directory is a no-op, and one of the dragged items is
+    // not a place to put them.
+    if (strcmp(target, d->dir) == 0) return 0;
+    if (d->source == fv && trow >= 0 &&
+        (uui_fileview_is_marked(fv, trow) || trow == fv->table.selected))
+        return 0;
+    fv->drop_row = trow;
+    snprintf(fv->drop_target, sizeof fv->drop_target, "%s", target);
+    return 1;
+}
+
+static int fv_ops_drop(void *w, int cx, int cy, const struct uui_drag *d) {
+    (void)cx; (void)cy; (void)d;
+    struct uui_fileview *fv = (struct uui_fileview *)w;
+    if (fv->drop_row == -2) return 0;
+    fv->drop_row = -2;   // the highlight goes; drop_target stays for the app
+    return 1;
+}
+
+const char *uui_fileview_drop_target(const struct uui_fileview *fv) {
+    return fv->drop_target;
+}
+
+// The ghost: icon and label beside the pointer, a "+" when Ctrl says
+// copy -- the feedback Explorer and Dolphin give, minus their cursor.
+static void fv_ops_drag_draw(struct ugfx_surface *s, const void *w, const struct uui_drag *d) {
+    const struct uui_fileview *fv = (const struct uui_fileview *)w;
+    const struct uui_table *t = &fv->table;
+    int px = ugfx_char_h();
+    int is_dir = 0;
+    if (d->count == 1) {
+        if (fv->mark_count) is_dir = uui_fileview_marked_is_dir(fv, 0);
+        else if (fv_entry(fv, t->selected)) is_dir = fv_entry(fv, t->selected)->is_dir;
+    }
+    const struct uimg *ico = icon_get(is_dir ? "folder" : "file", px);
+    int tw = ugfx_text_width(d->label);
+    int gx = d->x + 12, gy = d->y + 12;
+    int gw = px + 6 + tw + 8, gh = px + 6;
+    ugfx_fill_rect(s, gx, gy, gw, gh, t->sel_bg);
+    ugfx_draw_rect(s, gx, gy, gw, gh, t->fg);
+    if (ico) ugfx_blit_alpha(s, gx + 3, gy + 3, ico->w, ico->h, ico->px, ico->w);
+    ugfx_draw_string(s, gx + px + 6, gy + (gh - ugfx_char_h()) / 2, d->label,
+                     t->sel_fg, t->sel_bg);
+    if (d->copy)
+        ugfx_draw_string(s, gx + gw + 2, gy, "+", t->fg, t->bg);
 }
 
 static int fv_ops_wheel(void *w, int notches) {
@@ -1154,4 +1393,9 @@ const struct uui_widget_ops uui_fileview_ops = {
     .release = fv_ops_release,
     .wheel = fv_ops_wheel,
     .describe     = ops_describe,
+    .drag_start = fv_ops_drag_start,
+    .drag_end   = fv_ops_drag_end,
+    .drag_over  = fv_ops_drag_over,
+    .drop       = fv_ops_drop,
+    .drag_draw  = fv_ops_drag_draw,
 };

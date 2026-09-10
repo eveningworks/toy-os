@@ -6793,3 +6793,48 @@ signal to clients (per-client state again, and sheddable under load);
 and measuring latency by anything other than the ping the compositor
 already sends (`tools/ping_rtt.py`), since a synthetic probe would
 have measured the probe.
+
+## Drag-and-drop is a toolkit session, not File Manager code, and the move-or-copy bit is the router's
+
+The File Manager needed a file dragged between its panes and onto its
+folder tree (2026-09-10). The router's pointer GRAB was the obstacle:
+whichever widget consumes a press gets every motion and the release,
+so the other pane and the tree were never offered anything. Two ways to
+get past it.
+
+**Track the drag in files.c** from the raw `on_motion`/`on_release`
+the app still receives, with its own `pane_at()`. Smaller, and a
+one-off: the tree widget could not be a target without the app
+hit-testing rows on its behalf, and the next app wanting a drop
+(Notepad, a file onto its window) would write the same thing again.
+
+**A session in `uui_route.c`** -- the grab holder is asked once, past a
+threshold, whether this press is a drag; if so the router hands motion
+to the widget under the pointer as `drag_over` and the release as
+`drop`, and names the target to the app. Qt (QDrag, dragEnterEvent/
+dropEvent) and GTK (drag-motion, drag-drop) both put this in the
+toolkit, and Wayland's `wl_data_device` is the same seam one level up.
+Chosen: it costs one walk the router already had (`cursor_item()`'s),
+and the fileview and tree each implement a target in a dozen lines.
+
+**Move by default, copy with Ctrl, decided by the router.** Explorer
+moves within a volume and copies across with Ctrl forcing a copy;
+Dolphin asks Copy/Move/Link with a menu on every drop. toy-os has one
+volume, so Explorer's within-volume case is the only case, and a
+question on every drop would be the menu for a choice with one answer.
+The bit lives on the payload (`d->copy`) and is set by the ROUTER from
+the modifiers, not by the source or the target, so the ghost's "+" and
+the drop's verb cannot disagree. A target that wants Dolphin's menu can
+still open one from its `drop`.
+
+**No drag cursor.** The cursor theme has five shapes and none of them
+is a grabbing hand; adding one is a theme change on every machine for
+a hint the ghost already gives. The ghost (icon, label, "+") is drawn
+by the source after every overlay. Revisit if a second drag kind
+arrives that has no natural ghost.
+
+**Between windows is deliberately not here.** The pointer leaves the
+source client's surface, so the compositor must carry a payload the
+target learns of before the release -- the clipboard's typed formats
+are the vocabulary for that, and it is a roadmap item, not a toolkit
+extension.

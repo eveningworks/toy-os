@@ -42,6 +42,9 @@
 // the file picker each defined for themselves before this widget was the
 // one place to define it.
 #define UUI_FILEVIEW_DOUBLE_CLICK_TICKS 30
+// How many marked NAMES a reload carries across (see uui_fileview.c's
+// reload); a larger set keeps its first this many.
+#define UUI_FILEVIEW_KEEP_MARKS 64
 
 enum uui_fileview_mode {
     // Names only, no header -- a narrow sidebar or a picker's list.
@@ -54,8 +57,6 @@ enum uui_fileview_mode {
     // widget's own here, over icon_grid.h's cell math -- but the
     // SELECTION, the marks, the sort order and every path accessor stay
     // the table's state, so a caller sees one widget whatever the mode.
-    // Dragging empty space sweeps a rubber band that MARKS what it
-    // covers (rubberband.h's second caller, as designed).
     UUI_FILEVIEW_ICONS,
 };
 
@@ -120,11 +121,13 @@ struct uui_fileview {
     // the listing, and the off-by-one that would put the last row's
     // mark one word past the end.
     //
-    // CLEARED BY EVERY RELOAD, deliberately: a mark names a ROW, the
-    // rows are re-read from the filesystem, and a mark surviving a
-    // reload would point at whatever landed in that slot -- which is
-    // how a delete ends up pointed at the wrong file. A caller acting
-    // on marks must therefore SNAPSHOT the paths before it starts.
+    // RE-APPLIED BY NAME ON EVERY RELOAD: a mark names a ROW, the rows
+    // are re-read from the filesystem, and a mark kept as a row would
+    // point at whatever landed in that slot -- which is how a delete
+    // ends up pointed at the wrong file. So reload() remembers the
+    // names (up to UUI_FILEVIEW_KEEP_MARKS) and marks those rows again.
+    // A caller acting on marks still SNAPSHOTS the paths before it
+    // starts: the set can change under a long operation.
     uint32_t marks[(SYS_LISTDIR_MAX + 1 + 31) / 32];
     int mark_count;
     uint32_t mark_bg;
@@ -145,10 +148,26 @@ struct uui_fileview {
     // Double-click state, in sys_ticks(). OWNED.
     int last_click_row;
     unsigned long last_click_tick;
+    // THE PRESSED ROW, kept until the release: a plain press on a row
+    // that is already MARKED must not clear the set on the way down, or
+    // a drag could never carry more than one file -- the clear is
+    // deferred to a release that turned out to be a click (Explorer's
+    // and Dolphin's rule). A source row, or -1.
+    int press_row;
+    int deferred_clear;
+    // --- a drop target's state (ui/uui_widget.h's drag ops) ----------
+    // -2 nothing hovering; -1 the directory itself; a source row that
+    // is a directory. Drawn as an accent outline.
+    int drop_row;
+    char drop_target[UUI_FILEVIEW_PATH_MAX]; // resolved at the drop
+    char drag_label[UUI_FILEVIEW_PATH_MAX];  // what the ghost says
 
     // --- icons mode only (see enum uui_fileview_mode) ---------------
     int icon_top;            // first visible grid ROW; OWNED
-    struct rubberband band;  // empty-space drag -> marks; OWNED
+    // A drag from EMPTY SPACE sweeps a rubber band that MARKS what it
+    // covers, in every view (rubberband.h's second caller); a plain
+    // click there clears the selection, which is the band's own rule.
+    struct rubberband band;  // OWNED
 
     // A 2px border in `active_mark_color`, drawn by the WIDGET as the
     // last step of its own draw -- which is what keeps it under a menu
@@ -250,7 +269,7 @@ void uui_fileview_clear_dimmed(struct uui_fileview *fv);
 // walks, since it holds names and this holds rows.
 int  uui_fileview_row_of(const struct uui_fileview *fv, const char *name);
 
-// A rubber-band drag is in progress (icons mode). A caller that reloads
+// A rubber-band drag is in progress. A caller that reloads
 // on a timer must skip the reload while this is set: a reload clears the
 // marks the band is mid-way through choosing (the desktop's
 // desktop_drag_active() rule).
@@ -298,6 +317,18 @@ int  uui_fileview_wheel(struct uui_fileview *fv, int notches);
 // (up) and Insert/Space (toggle a mark and step down). Returns 1 if the
 // view consumed the key.
 int  uui_fileview_key(struct uui_fileview *fv, int key);
+
+// --- drag and drop (routed: ui/uui_route.h's third rule) -------------
+//
+// AS A SOURCE: a press on a row that moves past the threshold drags
+// the marked set if the row is in it, else that row alone, with the
+// selection made to match -- so the app's usual "marks, else the
+// selection" operand rule names exactly what was carried.
+// AS A TARGET: a directory row (".." included) is a drop onto it; a
+// file row or empty space is a drop into this directory. Refused when
+// that is the items' own directory or one of the items themselves.
+// After a drop, the resolved directory:
+const char *uui_fileview_drop_target(const struct uui_fileview *fv);
 
 struct uui_widget_ops;
 extern const struct uui_widget_ops uui_fileview_ops;

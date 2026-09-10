@@ -123,6 +123,10 @@ class Layout:
         self.cellgrid = {}    # pane -> [x0, y0, cell_w, cell_h, cols]
         self.toolbar = None   # the strip [x, y, w, h]
         self.tbitems = {}     # item index -> [x, y, w, h]
+        self.treesel = None   # (selected node's path, visible tree rows)
+        self.treerow = {}     # visible tree row -> the node's path
+        self.drag = None      # (in flight, count, copy) -- a drag session
+        self.drop = None      # (pane0 drop row, pane1 drop row, tree node PATH or "-")
         self.active = None
         self.selected = None
         self.modal = None
@@ -208,6 +212,14 @@ class Layout:
             self.toolbar = [int(v) for v in p[1:5]]
         elif p[0] == "tbitem" and len(p) >= 6:
             self.tbitems[int(p[1])] = [int(v) for v in p[2:6]]
+        elif p[0] == "treesel" and len(p) >= 3:
+            self.treesel = (p[1], int(p[2]))
+        elif p[0] == "treerow" and len(p) >= 3:
+            self.treerow[int(p[1])] = p[2]
+        elif p[0] == "drag" and len(p) >= 4:
+            self.drag = tuple(int(v) for v in p[1:4])
+        elif p[0] == "drop" and len(p) >= 4:
+            self.drop = (int(p[1]), int(p[2]), p[3])
 
     def complete(self):
         return 0 in self.pane and 1 in self.pane and self.active is not None
@@ -1986,6 +1998,249 @@ def run(dbg, qmp, tmp, res):
     lay = wait_layout(dbg, win, lambda l: l.marked[0] == 0) or lay
     res.check("a plain click REPLACES the set",
               lay is not None and lay.marked[0] == 0, f"marked={lay and lay.marked}")
+
+    # --- 18b. a window of its own: deselect, band, drag and drop, tree --
+    #
+    # Sections 18b-18d share a fresh File Manager over their own two
+    # directories, both panes in Details from the toolbar, because
+    # every check below aims at rows and drops between KNOWN panes --
+    # section 18's window shows one directory in both.
+    DD, DDST = "/ddtest", "/dddest"
+    for d in (DD, DDST):
+        dbg.send(f"sh rm -r {d}")
+        dbg.send(f"sh mkdir {d}")
+    for n in range(3):
+        dbg.send(f"sh cp /etc/toyos.conf {DD}/g{n}.txt")
+    dbg.send(f"sh mkdir {DD}/deep")
+    dbg.send(f"sh mkdir {DD}/deep/er")
+    wait_listing(dbg, DD, lambda names: "g2.txt" in names and "deep" in names)
+    for w2 in sorted(dbg.windows(), key=lambda w2: -w2["z"]):
+        if w2["title"] == TITLE:
+            dbg.send(f"gui close {w2['z']}")
+            time.sleep(0.4)
+    dbg.send(f"gui spawn {FILES_EXEC} {DD} {DDST}")
+    win = None
+    deadline = time.time() + 15.0
+    while time.time() < deadline and not win:
+        win = dbg.window(TITLE)
+        if not win:
+            time.sleep(0.3)
+    ox, oy = win["content"]["x"], win["content"]["y"]
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == DD and l.tbitems and
+                       l.rows.get(0, 0) >= 5) or lay
+    for i in (1, 0):
+        dbg.click(*lay.pane_centre(i))
+        lay = wait_layout(dbg, win, lambda l, i=i: l.active == i) or lay
+        if lay.view and lay.view[i] != 1:
+            x, y, w, h = lay.tbitems[9]              # Details (8 is a separator)
+            sure_click(dbg, qmp, lay.ox + x + w // 2, lay.oy + y + h // 2)
+            lay = wait_layout(dbg, win, lambda l, i=i: l.view and l.view[i] == 1) or lay
+    res.check("(a fresh window over its own directories, both panes in Details)",
+              lay.view is not None and lay.view[0] == 1 and lay.view[1] == 1 and
+              lay.dir.get(0) == DD and lay.dir.get(1) == DDST,
+              f"view={lay.view} dir={lay.dir}")
+    px, py, pw, ph = lay.pane[0]
+    rowy, rowh = lay.rowy[0], lay.rowh
+
+    def pt(view_row):
+        return (ox + px + pw // 2, oy + rowy + view_row * rowh + rowh // 2)
+
+    def aim2(view_row):
+        got = None
+        for _ in range(6):
+            dbg.warp_cursor(qmp, *pt(view_row))
+            got = layout_now(dbg, win)
+            if got and got.hoverv.get(0) == view_row:
+                return True
+        return False
+
+    # Rows: ".." 0, deep 1, g0 2, g1 3, g2 4 (directories first, by name).
+    # A plain click below the last row clears BOTH the marks and the
+    # cursor row (Explorer's and Dolphin's rule); a band swept from
+    # there marks the rows it crosses -- the icons view's gesture alone
+    # until 2026-09-10.
+    print("an empty-space click deselects, and the band works in Details")
+    if aim2(2):
+        qmp.key_down("ctrl"); qmp.click(); qmp.key_up("ctrl")
+    lay = wait_layout(dbg, win, lambda l: l.marked[0] >= 1) or lay
+    empty = (ox + px + pw // 2, oy + py + ph - 10)
+    sure_click(dbg, qmp, *empty)
+    lay = wait_layout(dbg, win, lambda l: l.selected == "-" and l.marked[0] == 0) or lay
+    res.check("a click on empty space clears the marks AND the cursor row",
+              lay is not None and lay.selected == "-" and lay.marked[0] == 0,
+              f"selected={lay and lay.selected} marked={lay and lay.marked}")
+    # The band's far corner is CONFIRMED before the release: the app's
+    # `marked` count rises as the band crosses rows, so a sweep that
+    # reads two marks mid-drag has really reached them. band_drag()
+    # releases open-loop, and the icons view's sweep in section 11
+    # shows what that costs.
+    dbg.warp_cursor(qmp, ox + px + pw - 30, oy + py + ph - 10)
+    qmp.mouse_down()
+    time.sleep(0.2)
+    mid = None
+    for i in range(1, 9):
+        dbg.warp_cursor(qmp, ox + px + pw - 30 - (pw - 40) * i // 8,
+                         oy + py + ph - 10 - (py + ph - 10 - (rowy + 2 * rowh + 4)) * i // 8)
+        if i >= 6:
+            time.sleep(0.15)
+            mid = layout_now(dbg, win) or mid
+            if mid and mid.marked[0] >= 2:
+                break
+    qmp.mouse_up()
+    time.sleep(0.3)
+    # A FRESH FRAME, forced: the block after the release can be
+    # byte-identical to the mid-drag one (the band's rect is not
+    # logged), and the app dedupes identical blocks -- so a wait for
+    # "marked >= 2" after the release can time out on a working band.
+    # Hovering a row changes the block.
+    dbg.warp_cursor(qmp, *pt(1))
+    after = layout_now(dbg, win)
+    res.check("a rubber band swept in Details marks the rows it crosses",
+              after is not None and after.marked[0] >= 2,
+              f"after={after and after.marked} mid={mid and mid.marked}")
+    lay = after or lay
+    sure_click(dbg, qmp, *empty)
+    lay = wait_layout(dbg, win, lambda l: l.marked[0] == 0) or lay
+
+    # --- 18c. drag and drop: between the panes, and onto the tree ------
+    #
+    # A drag from a row past the threshold is a toolkit drag session
+    # (ui/uui_route.h's third rule): the ghost is reported as `drag`,
+    # the pane under the pointer as `drop`, and the release MOVES --
+    # or COPIES with Ctrl. Asserted through the SHELL's listing, which
+    # is the independent witness.
+    print("drag and drop")
+
+    def drag_rows(view_row, x1, y1, ctrl=False):
+        """Press on `view_row` (confirmed), carry the pointer to (x1, y1)
+        through waypoints -- warp_cursor is open-loop for a big jump --
+        read the mid-drag report there, release."""
+        if not aim2(view_row):
+            return None
+        x0, y0 = pt(view_row)
+        if ctrl:
+            qmp.key_down("ctrl")
+        qmp.mouse_down()
+        time.sleep(0.2)
+        mid = None
+        for i in range(1, 7):
+            dbg.warp_cursor(qmp, x0 + (x1 - x0) * i // 6, y0 + (y1 - y0) * i // 6)
+            if i == 6:
+                time.sleep(0.25)
+                mid = layout_now(dbg, win)
+        qmp.mouse_up()
+        if ctrl:
+            qmp.key_up("ctrl")
+        time.sleep(0.3)
+        return mid
+
+    qx, qy, qw, qh = lay.pane[1]
+    dst_pt = (ox + qx + qw // 2, oy + qy + qh - 10)   # empty space, right pane
+    mid = drag_rows(2, *dst_pt)                        # g0.txt
+    res.check("mid-drag: the app reports one item in flight and the right pane as the target",
+              mid is not None and mid.drag == (1, 1, 0) and mid.drop and
+              mid.drop[1] == -1,
+              f"drag={mid and mid.drag} drop={mid and mid.drop}")
+    moved = wait_listing(dbg, DDST, lambda names: "g0.txt" in names)
+    res.check("dropping a file on the other pane MOVES it",
+              moved and "g0.txt" not in listing(dbg, DD),
+              f"src={listing(dbg, DD)} dst={listing(dbg, DDST)}")
+    lay = wait_layout(dbg, win, lambda l: l.rows.get(0) == 4) or lay
+    mid = drag_rows(2, *dst_pt, ctrl=True)             # g1.txt now on row 2
+    res.check("mid-drag with Ctrl: the copy bit is set",
+              mid is not None and mid.drag == (1, 1, 1), f"drag={mid and mid.drag}")
+    copied = wait_listing(dbg, DDST, lambda names: "g1.txt" in names)
+    res.check("dropping with Ctrl held COPIES it",
+              copied and "g1.txt" in listing(dbg, DD),
+              f"src={listing(dbg, DD)} dst={listing(dbg, DDST)}")
+
+    # Onto the TREE: View > Folder tree, then a live drag hovered down
+    # its rows until the app names DDST as the node under the pointer.
+    menu_pick(dbg, K_RIGHT, K_DOWN, K_DOWN, K_DOWN, K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 1 and l.treebox) or lay
+    px, py, pw, ph = lay.pane[0]          # the panes moved right for the tree
+    rowy = lay.rowy[0]
+    if lay.treebox:
+        tx, ty, tw, th, trh, _ = lay.treebox
+        hit_dst = False
+        # The row whose path is DDST, from the app's own `treerow` lines.
+        dst_row = next((r for r, path in lay.treerow.items() if path == DDST), None)
+        if dst_row is not None and aim2(3):                # g2.txt
+            x0, y0 = pt(3)
+            x1, y1 = ox + tx + tw // 2, oy + ty + dst_row * trh + trh // 2
+            qmp.mouse_down()
+            time.sleep(0.2)
+            for i in range(1, 7):
+                dbg.warp_cursor(qmp, x0 + (x1 - x0) * i // 6, y0 + (y1 - y0) * i // 6)
+            # CONFIRMED before the release: the app names the node under
+            # the pointer, and a warp that landed a row off would drop
+            # into a neighbour.
+            last_drop = None
+            for _ in range(6):
+                time.sleep(0.15)
+                got = layout_now(dbg, win)
+                last_drop = got and got.drop
+                if got and got.drop and got.drop[2] == DDST:
+                    hit_dst = True
+                    break
+                dbg.warp_cursor(qmp, x1, y1)
+            qmp.mouse_up()
+            time.sleep(0.3)
+        arrived = hit_dst and wait_listing(dbg, DDST, lambda names: "g2.txt" in names)
+        res.check("dropping on the tree's row for the other directory moves the file there",
+                  arrived and "g2.txt" not in listing(dbg, DD),
+                  f"hit_dst={hit_dst} row={dst_row} last_drop={last_drop} "
+                  f"src={listing(dbg, DD)} dst={listing(dbg, DDST)}")
+
+    # --- 18d. the tree follows a navigation --------------------------
+    #
+    # Descending into a directory selects its node, opening its
+    # ancestors; a branch the user collapses stays collapsed until the
+    # NEXT navigation (the reverted version fought that collapse).
+    print("the tree follows the active pane on a navigation")
+    if lay.treebox:
+        dbg.click(*lay.pane_centre(0))
+        lay = wait_layout(dbg, win, lambda l: l.active == 0) or lay
+        dbg.key(K_HOME)
+        dbg.key(K_DOWN)                    # "deep", the one directory
+        lay = wait_layout(dbg, win, lambda l: l.selected == "deep") or lay
+        dbg.key(K_ENTER)
+        lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == f"{DD}/deep") or lay
+        dbg.key(K_HOME)
+        dbg.key(K_DOWN)
+        dbg.key(K_ENTER)
+        lay = wait_layout(dbg, win, lambda l: l.treesel and
+                          l.treesel[0] == f"{DD}/deep/er") or lay
+        res.check("descending two levels selects that node, ancestors opened",
+                  lay is not None and lay.treesel and lay.treesel[0] == f"{DD}/deep/er",
+                  f"treesel={lay and lay.treesel} dir={lay and lay.dir}")
+        dbg.key(K_BACKSPACE)
+        dbg.key(K_BACKSPACE)
+        lay = wait_layout(dbg, win, lambda l: l.treesel and l.treesel[0] == DD) or lay
+        res.check("...and coming back up follows too",
+                  lay is not None and lay.treesel and lay.treesel[0] == DD,
+                  f"treesel={lay and lay.treesel}")
+        menu_pick(dbg, K_RIGHT, K_DOWN, K_DOWN, K_DOWN, K_ENTER)   # tree off again
+        lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0) or lay
+
+    # Back to section 18's window for what follows.
+    for w2 in sorted(dbg.windows(), key=lambda w2: -w2["z"]):
+        if w2["title"] == TITLE:
+            dbg.send(f"gui close {w2['z']}")
+            time.sleep(0.4)
+    dbg.send(f"sh rm -r {DD}")
+    dbg.send(f"sh rm -r {DDST}")
+    dbg.send(f"gui spawn {FILES_EXEC} {MS} {MS}")
+    win = None
+    deadline = time.time() + 15.0
+    while time.time() < deadline and not win:
+        win = dbg.window(TITLE)
+        if not win:
+            time.sleep(0.3)
+    ox, oy = win["content"]["x"], win["content"]["y"]
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == MS and
+                       l.rows.get(0, 0) >= 7) or lay
+    px, py, pw, ph = lay.pane[0]
 
     # --- 19. a staged cut is drawn faded -------------------------------
     res.check("(nothing is dimmed before a cut)",

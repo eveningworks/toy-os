@@ -573,6 +573,25 @@ static void on_widget(struct uapp *a, int id, int reason) {
         uapp_redraw(a);
         return;
     }
+    if (reason == UUI_REASON_DROP) {
+        // Files dropped on a pane or a tree row: the TARGET widget says
+        // where, the payload says from which pane and whether Ctrl
+        // asked for a copy. The source pane stays the active one.
+        const struct uui_drag *d = uapp_drag(a);
+        if (!d || d->kind != UUI_DRAG_FILES) return;
+        struct uui_fileview *src = d->source == &g_pane[1] ? &g_pane[1] : &g_pane[0];
+        const char *dest = 0;
+        if (id == ID_LEFT || id == ID_RIGHT) {
+            dest = uui_fileview_drop_target(&g_pane[id == ID_RIGHT]);
+        } else if (id == ID_TREE) {
+            int nid = uui_tree_drop_id(&g_tree);
+            if (nid >= 0 && nid < g_tree_count) dest = g_tree_path[nid];
+        }
+        if (dest && dest[0]) do_drop(src, dest, d->copy);
+        refresh_status();
+        uapp_redraw(a);
+        return;
+    }
     if (reason != UUI_REASON_RELEASE) return;
 
     if (id == ID_LEFT || id == ID_RIGHT) {
@@ -836,9 +855,11 @@ static void on_pane_dir(void *ctx, const char *dir) {
     // is skipped, until the next change moves the counter again.
     g_seen_generation = sys_fs_generation();
 
-    // The tree follows the ACTIVE pane, Explorer's rule -- but only to a
-    // node that is already visible; navigating does not force dirs open.
-    if (g_tree_on && i == g_active) tree_select_path(dir);
+    // The tree follows the ACTIVE pane on a NAVIGATION: ancestors
+    // opened, the node selected and scrolled to. Never on a toggle, so
+    // a branch collapsed while standing in it stays collapsed until the
+    // next directory change (fm_tree.c's tree_reveal_path).
+    if (g_tree_on && i == g_active) tree_reveal_path(dir);
 
     refresh_status();
 }

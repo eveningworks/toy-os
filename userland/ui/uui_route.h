@@ -31,6 +31,17 @@
 // release (and so can decline to commit, per the commit-on-release
 // rule).
 //
+// **3. A DRAG IS A SESSION THE ROUTER RUNS**, between a source widget
+// and whichever widget is under the pointer. A press is a click until
+// the pointer moves UUI_DRAG_THRESHOLD with the button held; then the
+// grab holder is asked `drag_start` once, and if it fills a payload the
+// grab becomes a drag: every motion goes to the widget under the
+// pointer as `drag_over` (with a leave to the last one), the release
+// becomes `drop` on a target that accepted, and the source hears
+// `drag_end`. Within ONE window only -- across windows is the
+// compositor's, as `wl_data_device` is Wayland's and not a toolkit's.
+// Qt's QDrag/QDropEvent and GTK's drag-motion/drag-drop have this shape.
+//
 // **2. Input order is the REVERSE of draw order.** Items are hit-tested
 // back to front, and a widget with an ACTIVE OVERLAY (an open dropdown
 // popup) is offered the press before any hit-testing at all -- its own
@@ -58,6 +69,8 @@ enum uui_reason {
     UUI_REASON_RELEASE,
     UUI_REASON_WHEEL,
     UUI_REASON_KEY,
+    UUI_REASON_DROP,   // something was dropped ON this widget; read what
+                       // it recorded, and uapp_drag() for the payload
 };
 
 struct uui_router {
@@ -69,7 +82,30 @@ struct uui_router {
     void *grab;
     const struct uui_widget_ops *grab_ops;
     int grab_id;
+
+    // --- the drag session (rule 3) -------------------------------------
+    int press_x, press_y;      // where the grab's press landed
+    int dragging;              // a source's drag_start said yes
+    struct uui_drag drag;      // its payload, live
+    void *target;              // the widget whose drag_over was last asked
+    const struct uui_widget_ops *target_ops;
+    int target_id;
+    int drop_id;               // set by a release that dropped; read once
+                               // through uui_router_take_drop()
+    struct uui_drag dropped;   // the payload of that drop -- the live one
+                               // is reset with the grab, and the app's
+                               // handler runs after
 };
+
+// Pointer motion past this many pixels from the press, with the button
+// held, is a drag rather than a click -- Windows' SM_CXDRAG is 4, Qt's
+// startDragDistance 10; 6 suits an accelerated pointer without eating a
+// sloppy click.
+#define UUI_DRAG_THRESHOLD 6
+
+// A POINT NO WIDGET CAN CONTAIN, handed to a widget the pointer has
+// left so it can clear a highlight (see uui_route.c).
+#define UUI_NOWHERE (-(1 << 20))
 
 void uui_router_init(struct uui_router *r, struct uui_item *items, int count);
 
@@ -81,9 +117,22 @@ void uui_router_init(struct uui_router *r, struct uui_item *items, int count);
 // are already gone (uapp.c splits the event; see WIN_MOUSE_MODS).
 int uui_router_press(struct uui_router *r, int cx, int cy, unsigned mods,
                       int *out_changed);
+// `mods` is the KEY_MOD_* bits held NOW, for a drag's copy/move.
 int uui_router_motion(struct uui_router *r, int cx, int cy, unsigned buttons,
-                       int *out_changed);
+                       unsigned mods, int *out_changed);
 int uui_router_release(struct uui_router *r, int cx, int cy, int *out_changed);
+
+// --- the drag session -------------------------------------------------
+int  uui_router_drag_active(const struct uui_router *r);
+const struct uui_drag *uui_router_drag(const struct uui_router *r);
+// The id of the widget a release just dropped on, or 0; cleared by the
+// read. uapp turns it into on_widget(id, UUI_REASON_DROP).
+int  uui_router_take_drop(struct uui_router *r);
+// The payload of the drop take_drop() just reported; valid until the
+// next press.
+const struct uui_drag *uui_router_dropped(const struct uui_router *r);
+// Esc: the source hears drag_end(0), the target a leave, nothing drops.
+void uui_router_drag_cancel(struct uui_router *r);
 
 // The WIN_CURSOR_* the widget tree wants at (cx, cy): deepest declaring
 // widget wins, open popup first, DEFAULT when nothing asks.

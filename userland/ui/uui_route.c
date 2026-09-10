@@ -2,6 +2,7 @@
 // rules it implements.
 #include "ui/uui_route.h"
 #include "ui/uui_layout.h"
+#include "keyboard.h"   // KEY_MOD_CTRL -- the drag's copy/move bit
 #include <stddef.h>
 
 void uui_router_init(struct uui_router *r, struct uui_item *items, int count) {
@@ -14,6 +15,13 @@ void uui_router_reset(struct uui_router *r) {
     r->grab = NULL;
     r->grab_ops = NULL;
     r->grab_id = 0;
+    r->dragging = 0;
+    r->drag.kind = UUI_DRAG_NONE;
+    r->target = NULL;
+    r->target_ops = NULL;
+    r->target_id = 0;
+    // NOT drop_id: it is set by the release that resets everything
+    // else, and read by uapp right after.
 }
 
 // A nested layout is routed by recursing into ITS items, so a container
@@ -104,18 +112,91 @@ int uui_router_press(struct uui_router *r, int cx, int cy, unsigned mods,
         r->grab = taken->widget;
         r->grab_ops = taken->ops;
         r->grab_id = taken->id;
+        r->press_x = cx;
+        r->press_y = cy;
     }
     if (out_changed) *out_changed = changed;
     return taken ? taken->id : 0;
 }
 
-// A POINT NO WIDGET CAN CONTAIN. A widget the cursor has left still has
-// to HEAR the move, or its highlight stays lit after the pointer has
-// gone; this is what a subtree is told when the cursor is outside the
-// container that clips it. uui_hit() is a half-open range test, so any
-// coordinate this far negative misses everything without a widget
-// needing to know about the convention.
-#define UUI_NOWHERE (-(1 << 20))
+// UUI_NOWHERE (uui_route.h): a point no widget can contain. A widget
+// the cursor has left still has to HEAR the move, or its highlight
+// stays lit after the pointer has gone; this is what a subtree is told
+// when the cursor is outside the container that clips it. uui_hit() is
+// a half-open range test, so any coordinate this far negative misses
+// everything without a widget needing to know about the convention.
+
+// --- the drag session (rule 3) ----------------------------------------
+
+// The deepest widget under (cx, cy) that declares drag_over, back to
+// front through containers -- the same walk as cursor_item(). The grab
+// holder is NOT excluded: a pane can be its own target (a file dropped
+// on a sub-folder row of the pane it came from).
+static struct uui_item *target_item(struct uui_item *it, int cx, int cy) {
+    if (it->hidden) return NULL;
+    int n = 0;
+    struct uui_item *sub = nested(it, &n);
+    if (sub) {
+        if (!container_admits(it, cx, cy)) return NULL;
+        for (int i = n - 1; i >= 0; i--) {
+            struct uui_item *hit = target_item(&sub[i], cx, cy);
+            if (hit) return hit;
+        }
+    }
+    if (!it->ops || !it->ops->drag_over) return NULL;
+    if (it->ops->hit && !it->ops->hit(it->widget, cx, cy)) return NULL;
+    return it;
+}
+
+static struct uui_item *target_under(struct uui_router *r, int cx, int cy) {
+    for (int i = r->count - 1; i >= 0; i--) {
+        struct uui_item *hit = target_item(&r->items[i], cx, cy);
+        if (hit) return hit;
+    }
+    return NULL;
+}
+
+// One motion while dragging: the target under the pointer is asked, the
+// one being left is told so. Always a repaint -- the ghost moved.
+static void drag_motion(struct uui_router *r, int cx, int cy, unsigned mods) {
+    r->drag.x = cx;
+    r->drag.y = cy;
+    r->drag.mods = mods;
+    r->drag.copy = (mods & KEY_MOD_CTRL) != 0;
+    struct uui_item *t = target_under(r, cx, cy);
+    void *tw = t ? t->widget : NULL;
+    if (r->target && r->target != tw) {
+        r->target_ops->drag_over(r->target, UUI_NOWHERE, UUI_NOWHERE, &r->drag);
+    }
+    r->target = tw;
+    r->target_ops = t ? t->ops : NULL;
+    r->target_id = t ? t->id : 0;
+    r->drag.accepted = t ? t->ops->drag_over(tw, cx, cy, &r->drag) : 0;
+}
+
+int uui_router_drag_active(const struct uui_router *r) { return r->dragging; }
+
+const struct uui_drag *uui_router_drag(const struct uui_router *r) {
+    return r->dragging ? &r->drag : NULL;
+}
+
+const struct uui_drag *uui_router_dropped(const struct uui_router *r) {
+    return &r->dropped;
+}
+
+int uui_router_take_drop(struct uui_router *r) {
+    int id = r->drop_id;
+    r->drop_id = 0;
+    return id;
+}
+
+void uui_router_drag_cancel(struct uui_router *r) {
+    if (!r->dragging) return;
+    if (r->target && r->target_ops->drag_over)
+        r->target_ops->drag_over(r->target, UUI_NOWHERE, UUI_NOWHERE, &r->drag);
+    if (r->grab_ops && r->grab_ops->drag_end) r->grab_ops->drag_end(r->grab, 0);
+    uui_router_reset(r);
+}
 
 // One item, and everything nested inside it. Every widget hears the
 // move -- unlike a press, which stops at the first taker -- because
@@ -156,15 +237,47 @@ static int motion_item(struct uui_item *it, int cx, int cy, unsigned buttons,
 }
 
 int uui_router_motion(struct uui_router *r, int cx, int cy, unsigned buttons,
-                       int *out_changed) {
+                       unsigned mods, int *out_changed) {
     int changed = 0;
     int id = 0;
+
+    // A DRAG IN PROGRESS: the target under the pointer hears it, not
+    // the grab holder (rule 3).
+    if (r->dragging) {
+        drag_motion(r, cx, cy, mods);
+        if (out_changed) *out_changed = 1;
+        return r->grab_id;
+    }
 
     // The GRAB: while a button is held, motion belongs to whoever took
     // the press, even far outside its rect. Without this a thumb drag
     // stops the moment the cursor leaves the scrollbar.
-    if (r->grab && r->grab_ops && r->grab_ops->motion) {
-        if (r->grab_ops->motion(r->grab, cx, cy, buttons)) changed = 1;
+    if (r->grab && r->grab_ops) {
+        // Past the threshold, a source is asked ONCE whether this is a
+        // drag. Asked before its ordinary motion, so a band that would
+        // otherwise start on the same motion never does.
+        if ((buttons & 1) && r->grab_ops->drag_start &&
+            r->drag.kind == UUI_DRAG_NONE) {
+            int dx = cx - r->press_x, dy = cy - r->press_y;
+            if (dx < 0) dx = -dx;
+            if (dy < 0) dy = -dy;
+            if (dx >= UUI_DRAG_THRESHOLD || dy >= UUI_DRAG_THRESHOLD) {
+                r->drag.source = r->grab;
+                r->drag.source_id = r->grab_id;
+                r->drag.accepted = 0;
+                if (r->grab_ops->drag_start(r->grab, r->press_x, r->press_y, &r->drag)) {
+                    r->dragging = 1;
+                    drag_motion(r, cx, cy, mods);
+                    if (out_changed) *out_changed = 1;
+                    return r->grab_id;
+                }
+                // Declined: remembered by `kind` staying NONE... which
+                // would ask again. Mark it asked.
+                r->drag.kind = -1;
+            }
+        }
+        if (r->grab_ops->motion && r->grab_ops->motion(r->grab, cx, cy, buttons))
+            changed = 1;
         id = r->grab_id;
         if (out_changed) *out_changed = changed;
         return id;
@@ -275,6 +388,25 @@ int uui_router_overlay_key(struct uui_router *r, int key, unsigned mods,
 int uui_router_release(struct uui_router *r, int cx, int cy, int *out_changed) {
     int changed = 0;
     int id = 0;
+    if (r->dragging) {
+        // The DROP: on a target that accepted, then the source is told
+        // the session is over. The grab holder gets no `release` -- its
+        // press became a drag, not a click -- and the id reported is
+        // the target's, through take_drop(), never the source's.
+        int dropped = 0;
+        if (r->target && r->drag.accepted && r->target_ops->drop &&
+            r->target_ops->drop(r->target, cx, cy, &r->drag)) {
+            dropped = 1;
+            r->drop_id = r->target_id;
+            r->dropped = r->drag;
+        } else if (r->target && r->target_ops->drag_over) {
+            r->target_ops->drag_over(r->target, UUI_NOWHERE, UUI_NOWHERE, &r->drag);
+        }
+        if (r->grab_ops->drag_end) r->grab_ops->drag_end(r->grab, dropped);
+        uui_router_reset(r);
+        if (out_changed) *out_changed = 1;
+        return 0;
+    }
     if (r->grab && r->grab_ops && r->grab_ops->release) {
         if (r->grab_ops->release(r->grab, cx, cy)) changed = 1;
         id = r->grab_id;
@@ -322,6 +454,9 @@ static void draw_overlays(struct ugfx_surface *s, struct uui_item *items, int co
 void uui_router_draw(struct uui_router *r, struct ugfx_surface *s) {
     draw_items(s, r->items, r->count);
     draw_overlays(s, r->items, r->count);
+    // The ghost, above everything: what is being carried, at the pointer.
+    if (r->dragging && r->grab_ops->drag_draw)
+        r->grab_ops->drag_draw(s, r->grab, &r->drag);
 }
 
 static int wheel_item(struct uui_item *it, int cx, int cy, int notches,

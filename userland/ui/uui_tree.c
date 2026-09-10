@@ -1,6 +1,7 @@
 // tree -- see ui/uui_tree.h for the contract and why the nodes are the
 // app's flat const array.
 #include "ui/uui_tree.h"
+#include "ui/uui_route.h" // UUI_NOWHERE -- a drag_over's leave
 #include "ui/uui_widget.h"
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
@@ -15,6 +16,8 @@ void uui_tree_init(struct uui_tree *t, int x, int y, int w, int h,
     t->count = count;
     t->selected = count > 0 ? 0 : -1;
     t->hovered = -1;
+    t->drop_node = -1;
+    t->dropped_node = -1;
     t->top = 0;
     t->row_h = 0; // derive from the font
     t->bar_w = 8;
@@ -36,6 +39,7 @@ void uui_tree_set_nodes(struct uui_tree *t, const struct uui_tree_node *nodes, i
     t->count = count;
     if (t->selected >= count) t->selected = count > 0 ? count - 1 : -1;
     t->hovered = -1;
+    t->drop_node = -1;
     t->top = 0;
     // Collapsed state is DROPPED with the nodes it described: bit 3 of
     // an old tree means nothing about a new one, and keeping it would
@@ -181,9 +185,24 @@ int uui_tree_select_id(struct uui_tree *t, int id) {
             }
         }
         t->selected = i;
+        // INTO VIEW, as every tree's ensureVisible does: a selection
+        // the widget made and then scrolled away from is one the user
+        // cannot see moved.
+        int row = row_of_node(t, i);
+        int vis = uui_tree_visible_rows(t);
+        if (row >= 0 && vis > 0) {
+            if (row < t->top) t->top = row;
+            else if (row >= t->top + vis) t->top = row - vis + 1;
+            tree_clamp(t);
+        }
         return 1;
     }
     return 0;
+}
+
+int uui_tree_drop_id(const struct uui_tree *t) {
+    int n = t->dropped_node;
+    return (n >= 0 && n < t->count) ? t->nodes[n].id : -1;
 }
 
 // --- geometry ---------------------------------------------------------
@@ -280,6 +299,9 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
         else if (node == t->hovered)
             ugfx_fill_rect(s, t->x, ry, t->w - bar, rh,
                             uui_state_bg(t->bg, UUI_STATE_HOVER));
+        // The drop target, in the accent -- the same outline the
+        // fileview draws, so a drag reads the same over both.
+        if (node == t->drop_node) uui_focus_ring(s, t->x, ry, t->w - bar, rh);
 
         if (uui_tree_is_parent(t, node)) {
             draw_expander(s, t->x + UUI_TREE_PAD_X +
@@ -543,6 +565,28 @@ static void tree_describe_op(const void *w, const struct uui_describe *d) {
     uui_describe_int(d, "selected", t->selected);
 }
 
+// --- a drop target (ui/uui_route.h's third rule) ------------------------
+//
+// Every node accepts: a tree's rows are all places (a folder tree lists
+// only directories). The app decides at the drop whether the node is
+// somewhere the payload can go.
+static int tree_drag_over_op(void *w, int cx, int cy, const struct uui_drag *d) {
+    struct uui_tree *t = (struct uui_tree *)w;
+    int node = (d->kind == UUI_DRAG_FILES && cx != UUI_NOWHERE)
+                   ? uui_tree_hit(t, cx, cy) : -1;
+    t->drop_node = node;
+    return node >= 0;
+}
+
+static int tree_drop_op(void *w, int cx, int cy, const struct uui_drag *d) {
+    (void)cx; (void)cy; (void)d;
+    struct uui_tree *t = (struct uui_tree *)w;
+    if (t->drop_node < 0) return 0;
+    t->dropped_node = t->drop_node;
+    t->drop_node = -1;
+    return 1;
+}
+
 const struct uui_widget_ops uui_tree_ops = {
     .draw = tree_draw_op,
     .bounds = tree_bounds_op,
@@ -557,4 +601,6 @@ const struct uui_widget_ops uui_tree_ops = {
     .natural_size = tree_natural_op,
     .set_geometry = tree_set_geometry_op,
     .describe     = tree_describe_op,
+    .drag_over    = tree_drag_over_op,
+    .drop         = tree_drop_op,
 };

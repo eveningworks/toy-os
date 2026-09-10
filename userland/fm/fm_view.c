@@ -169,6 +169,26 @@ void log_layout(void) {
     }
     const char *sel = uui_fileview_selected_name(active());
     uapp_logf_layout("files: layout active %d\n", g_active);
+    // EARLY in the block, before the tree's per-row lines: an overflow
+    // drops what comes LAST, and these are what a drag test reads.
+    // A drag in flight: its size and copy bit, and each pane's drop
+    // row (-2 none, -1 the pane, else the row) plus the tree node
+    // under it as a PATH ("-" for none), so a test names its target.
+    {
+        const struct uui_drag *dg = uapp_drag(g_app);
+        int live = dg && dg->kind == UUI_DRAG_FILES && uapp_drag_active(g_app);
+        int tn = g_tree.drop_node;
+        // ...with the pointer, so every motion of a drag is a NEW block:
+        // the dedupe would otherwise emit nothing while the pointer
+        // moves within one target, and a test confirming "the pointer
+        // is over the row for /x" would read no frame at all.
+        uapp_logf_layout("files: layout drag %d %d %d %d %d\n", live,
+                          live ? dg->count : 0, live ? dg->copy : 0,
+                          live ? dg->x : -1, live ? dg->y : -1);
+        uapp_logf_layout("files: layout drop %d %d %s\n", g_pane[0].drop_row,
+                          g_pane[1].drop_row,
+                          tn >= 0 && tn < g_tree_count ? g_tree_path[tn] : "-");
+    }
     // THE ROW HEIGHT, because a test aiming at "row 2" otherwise
     // guesses it -- and a guess that is a few pixels out lands on empty
     // space below the last row, which selects nothing and reads exactly
@@ -199,6 +219,21 @@ void log_layout(void) {
         uui_tree_ops.bounds(&g_tree, &x, &y, &w, &h);
         uapp_logf_layout("files: layout treebox %d %d %d %d %d %d\n", x, y, w, h,
               uui_tree_row_h(&g_tree), uui_tree_selected_id(&g_tree));
+        // The selected node as a PATH, and the visible-row count -- a
+        // test asserting "the tree followed" needs the path, and "it
+        // expanded" needs the rows.
+        int tid = uui_tree_selected_id(&g_tree);
+        uapp_logf_layout("files: layout treesel %s %d\n",
+              tid >= 0 && tid < g_tree_count ? g_tree_path[tid] : "-",
+              uui_tree_visible_count(&g_tree));
+        // Each VISIBLE row's path, so a test can aim at "the row for
+        // /x" rather than hover down the rows reading hits back.
+        int vis = uui_tree_visible_rows(&g_tree);
+        for (int r = 0; r < vis; r++) {
+            int node = uui_tree_node_at_row(&g_tree, g_tree.top + r);
+            if (node < 0 || node >= g_tree_count) break;
+            uapp_logf_layout("files: layout treerow %d %s\n", r, g_tree_path[node]);
+        }
     }
     uapp_logf_layout("files: layout selected %s\n", sel ? sel : "-");
     uapp_logf_layout("files: layout modal %d\n", (int)g_modal);

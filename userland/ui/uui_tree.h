@@ -73,6 +73,11 @@ struct uui_tree {
     int row_h;       // 0 = derive from the font
     int bar_w;
     int thumb_grab;  // -1 when no drag is in progress; OWNED
+    // A drop target's state (ui/uui_widget.h's drag ops): the NODE a
+    // drag is hovering, -1 for none, drawn as an accent outline; and
+    // the node the last drop landed on, for uui_tree_drop_id(). OWNED.
+    int drop_node;
+    int dropped_node;
 
     // One bit per node: 1 = collapsed, so its descendants are hidden.
     // A BITMAP rather than a flag on the node, because the nodes are
@@ -128,10 +133,15 @@ void uui_tree_set_on_toggle(struct uui_tree *t,
 // not a row: rows move as things collapse, ids do not. Anything an app
 // stores must be an id.
 int  uui_tree_selected_id(const struct uui_tree *t);
-// Select by id, expanding whatever was hiding it. Returns 1 if the
-// selection moved. This is how an app restores a selection -- selecting
-// a hidden node and leaving it hidden would look like nothing happened.
+// Select by id, expanding whatever was hiding it and SCROLLING it into
+// view. Returns 1 if the selection moved. This is how an app restores a
+// selection -- selecting a hidden node and leaving it hidden, or
+// selected below the fold, would look like nothing happened.
 int  uui_tree_select_id(struct uui_tree *t, int id);
+// The id of the node the last drop landed on, or -1 -- read from
+// on_widget(id, UUI_REASON_DROP). Every node is a drop target; what a
+// drop MEANS is the app's (a folder tree moves files into the node).
+int  uui_tree_drop_id(const struct uui_tree *t);
 
 int  uui_tree_is_parent(const struct uui_tree *t, int node);
 int  uui_tree_is_collapsed(const struct uui_tree *t, int node);

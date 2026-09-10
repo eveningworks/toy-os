@@ -168,6 +168,7 @@ extern int g_tree_count;
 
 void tree_init(void);
 void tree_select_path(const char *path);
+void tree_reveal_path(const char *path);   // ancestors opened, then selected
 void tree_rebuild(void);
 void tree_toggle(void *ctx, int id, int expand);
 
@@ -188,6 +189,9 @@ extern int g_job_at, g_job_count;
 
 void do_copy(void);
 void do_move(void);
+// A DROP: `src`'s operands (its marks, else its selection) into `dest`,
+// moved -- or copied when `copy` (Ctrl held, the toolkit's convention).
+void do_drop(struct uui_fileview *src, const char *dest, int copy);
 void do_delete(void);     // opens the dialog; commit_delete() acts
 void commit_delete(void);
 void commit_mkdir(const char *name);

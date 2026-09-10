@@ -1319,13 +1319,12 @@ What remains, and what each needs:
 - **Text on the clipboard**, and paste into Notepad/Terminal. Typed
   formats first (`text` vs `files`), since a paste has to know what it
   is getting.
-- **Drag-and-drop within one window** -- the honest first step, and
-  bigger than it looks. `uui_fileview` already owns press-and-move on
-  empty space for the rubber band, so a drag on a ROW has to be told
-  apart from a band on empty space; then a drop target that highlights,
-  and a move-vs-copy rule (Windows: move within a volume, copy across;
-  KDE asks with a menu). Testing it needs a click aimed at a chosen row,
-  which the harness cannot yet do reliably -- see the Shift+click item.
+- **Drag-and-drop within one window** -- BUILT 2026-09-10 as a router
+  session (`docs/conventions/gui.md`, `docs/decisions/gui.md`): a row
+  press past a threshold is a drag, empty space is still the band, a
+  target highlights in the accent, move by default and copy with Ctrl.
+  `filemanager_test.py` drives it with a confirmed row aim and a
+  waypoint drag, and reads the drop through the shell's listing.
 - **Drag-and-drop BETWEEN windows** -- extends the above with a WM-level
   "carrying a payload" state, since the pointer leaves the source
   client's content area and the target must learn what is being offered

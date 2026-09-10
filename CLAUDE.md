@@ -878,6 +878,10 @@ whenever a headline here tells you something you did not already know.
 - **A ROW-COUNT CHANGE SCROLLS THE GRID; IT DOES NOT JUST CLAMP THE CURSOR.**
 - **A WINDOW IS RESIZED IN A TEST BY `gui resize W H`, NEVER BY DRAGGING THE GRIP.**
 - **A FULL-SCREEN PROGRAM MUST HANDLE SIGWINCH, AND ASKING ONCE AT STARTUP IS NOT ENOUGH.**
+- **A DRAG IS A ROUTER SESSION BETWEEN A SOURCE AND THE WIDGET UNDER THE POINTER, AND IT STAYS INSIDE ONE WINDOW** -- `drag_start`/`drag_over`/`drop`/`drag_end`, `UUI_REASON_DROP`; Ctrl = copy is the router's; a plain press on a marked row must DEFER its clear or a drag carries one file
+- **AN EMPTY-SPACE CLICK DESELECTS, AND THE RUBBER BAND WORKS IN EVERY VIEW**
+- **THE FOLDER TREE FOLLOWS A NAVIGATION, NEVER A TOGGLE**
+- **MARKS SURVIVE A RELOAD BY NAME, BECAUSE THE VOLUME'S GENERATION NEVER STOPS MOVING** -- a tick reload that cleared them was the "marking does nothing" cluster
 
 ### Storage, the filesystem, and /etc
 

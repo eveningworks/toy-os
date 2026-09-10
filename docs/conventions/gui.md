@@ -3310,3 +3310,81 @@ labelled `" "` cannot be passed as a console token.
   "it responds is not it happened" shape. The command routes through the
   same `resize_ask()` the grip does, so it drives the real path
   (propose, the client answers, adopt) rather than a second one.
+
+## A DRAG IS A ROUTER SESSION BETWEEN A SOURCE AND THE WIDGET UNDER THE POINTER, AND IT STAYS INSIDE ONE WINDOW
+
+`uui_route.c`'s third rule (2026-09-10). A press is a click until the
+pointer moves `UUI_DRAG_THRESHOLD` with the button held; then the grab
+holder is asked `drag_start` ONCE, and if it fills a `struct uui_drag`
+the grab becomes a drag: every motion goes to the widget under the
+pointer as `drag_over` (with a leave, `UUI_NOWHERE`, to the one being
+left), the release becomes `drop` on a target whose last `drag_over`
+accepted, the source hears `drag_end`, and the app is told with
+`on_widget(id, UUI_REASON_DROP)` naming the TARGET -- it reads the
+payload with `uapp_drag()` and where from the widget
+(`uui_fileview_drop_target()`, `uui_tree_drop_id()`). Esc cancels.
+Qt's QDrag/QDropEvent and GTK's drag-motion/drag-drop have this shape.
+
+**THREE THINGS THAT ARE NOT THE APP'S.** The copy/move bit: `d->copy`
+is Ctrl held, set by the router, so every source and target agree
+(Explorer's rule; Dolphin asks with a menu on drop, which a target is
+free to do instead). The ghost: the source's `drag_draw`, painted after
+every overlay, because there is no drag cursor shape. And the
+threshold, so a sloppy click never moves a file.
+
+**THE TRAP IS THE PRESS.** A plain press used to clear the marked set
+on the way DOWN, so a drag could never carry more than one file. The
+fileview defers that clear to a release that turned out to be a click
+(`deferred_clear`); `drag_start` cancels it. A widget copied from the
+fileview inherits the deferral only if it copies that too.
+
+Between WINDOWS is the compositor's, not the toolkit's -- the pointer
+leaves the source client's surface -- as `wl_data_device` is Wayland's;
+`docs/roadmap.md` has it. `tools/check_widget_ops.py` refuses a `drop`
+without a `drag_over` and a `drag_start` without a `drag_end`.
+
+## AN EMPTY-SPACE CLICK DESELECTS, AND THE RUBBER BAND WORKS IN EVERY VIEW
+
+A plain press on a fileview's empty space clears the marks AND the
+cursor row (`selected = -1`, an already-legal state) -- Explorer's and
+Dolphin's rule -- and arms a band; Ctrl or Shift keeps the set and
+makes the band ADD. Decided at the PRESS (`fv_empty_press()`), not at
+`rb_end()`, which is what makes it identical in Details and List: those
+views had no band and so no band-clear to fall out of. The band's rects
+there are the table's rows (`tb_rb_rect()`), the same rubberband.h
+engine as the icons grid.
+
+## THE FOLDER TREE FOLLOWS A NAVIGATION, NEVER A TOGGLE
+
+`tree_reveal_path()` (userland/fm/fm_tree.c) opens every ANCESTOR of
+the active pane's new directory, rebuilds, selects the node and
+`uui_tree_select_id()` scrolls it into view. It runs from
+`on_pane_dir()` and nowhere else. The first version was reverted for
+fighting a branch the user collapsed while standing in it; the fix is
+the trigger, not the mechanism: a collapse changes no directory, so the
+collapse stays until the next navigation re-reveals -- which is what
+Dolphin's folder panel does, and what Explorer's "expand to current
+folder" option does when it is on. The node itself is NOT opened, only
+its ancestors.
+
+## MARKS SURVIVE A RELOAD BY NAME, BECAUSE THE VOLUME'S GENERATION NEVER STOPS MOVING
+
+`uui_fileview_reload()` remembers the marked NAMES (up to
+`UUI_FILEVIEW_KEEP_MARKS`) and an empty selection, re-reads the rows,
+and marks the same names again -- the selection already survived that
+way. It used to clear the set, on the sound reasoning that a mark
+names a row and the rows are being replaced; what that missed is WHEN
+a reload happens. The File Manager reloads on a tick whenever
+`SYS_FS_GENERATION` moved, and on a running desktop it moves every
+second or so (service logs are files), so marks vanished about half a
+second after they were made unless the user happened to be mid-band.
+That was the whole of the "marking files does nothing" cluster in
+`docs/bugs.md`: Insert marked the row, the next tick unmarked it, and
+the tool read the second state. Found with a return-address log in
+`clear_marks()`, resolved through `pmap` and `addr2line`.
+
+**THE TRAP THAT REMAINS**: a caller acting on marks still snapshots the
+paths before a long operation (`queue_from()` does) -- a name can be
+re-marked on a row that no longer means the same file only if the
+file was replaced under the same name, which is the case a snapshot
+cannot help with either.

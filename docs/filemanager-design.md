@@ -28,11 +28,13 @@ pane, icons, and copy/paste. Measured against this tree, that plan is
 blocked on two things toy-os does not have and would each be a milestone
 of their own:
 
-- **There is no clipboard.** Nothing in `kernel/` or `userland/` mentions
-  one; `docs/roadmap.md`'s "GUI clipboard + drag-and-drop" is where it
-  lives, unstarted.
-- **There is no drag-and-drop.** Same milestone. Windows are dragged;
-  payloads are not.
+- **The clipboard is a ring-3 service now** (`/bin/clipboardd`,
+  `lib/uclip.h`, since 2026-08-30); this file said there was none, and
+  the code wins.
+- **Drag-and-drop stays inside the window** (between the panes and onto
+  the tree, since 2026-09-10); across windows is the same milestone.
+  Windows are dragged across the desktop; a payload does not leave its
+  window yet.
 
 Copy and paste, and drag a file onto a window, ARE Explorer's two
 primary verbs. Building that shape first means shipping a file manager

@@ -43,14 +43,14 @@ static int g_job_failures;
 // by this OS's own tools and do not contain one, but that is a limit of
 // the spawn ABI rather than a property of the filesystem -- worth
 // knowing before someone adds a rename that can produce one.
-static int queue_from_selection(int op, const char *what) {
+static int queue_from(int op, const char *what, struct uui_fileview *fv,
+                      const char *dest) {
     if (g_job_count > 0) { set_note("busy"); return 0; }
 
-    struct uui_fileview *fv = active();
     g_job_count = g_job_at = g_job_failures = 0;
     g_job_op = op;
     strlcpy(g_job_what, what, sizeof g_job_what);
-    strlcpy(g_job_dest, uui_fileview_dir(other()), sizeof g_job_dest);
+    strlcpy(g_job_dest, dest, sizeof g_job_dest);
 
     int marks = uui_fileview_mark_count(fv);
     if (marks > 0) {
@@ -71,7 +71,39 @@ static int queue_from_selection(int op, const char *what) {
     return 1;
 }
 
+// The commander's verbs: the ACTIVE pane's operands into the OTHER pane.
+static int queue_from_selection(int op, const char *what) {
+    return queue_from(op, what, active(), uui_fileview_dir(other()));
+}
+
 static int start_job(void);   // defined with the worker, below
+
+void do_drop(struct uui_fileview *src, const char *dest, int copy) {
+    if (!queue_from(copy ? CMD_COPY : CMD_MOVE, copy ? "Copy" : "Move", src, dest))
+        return;
+    // A FOLDER INTO ITSELF is refused before a byte moves: the engine
+    // would copy the tree into its own child until the disk filled.
+    // Its own directory is refused by the target already; this is the
+    // case the target cannot see -- a drop on a tree node under the
+    // folder being dragged.
+    for (int i = 0; i < g_job_count; i++) {
+        size_t n = strlen(g_job_path[i]);
+        if (strncmp(g_job_dest, g_job_path[i], n) == 0 &&
+            (g_job_dest[n] == '\0' || g_job_dest[n] == '/')) {
+            g_job_count = 0;
+            set_note("cannot move a folder into itself");
+            return;
+        }
+    }
+    // ...and where they already are is a no-op said out loud, for the
+    // one target (a tree node) that does not know the items' directory.
+    if (strcmp(g_job_dest, uui_fileview_dir(src)) == 0) {
+        g_job_count = 0;
+        set_note("already there");
+        return;
+    }
+    start_job();
+}
 
 // --- the clipboard ----------------------------------------------------
 //

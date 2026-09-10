@@ -426,7 +426,7 @@ static int layout_log_enabled(void) {
 // is reserved so it cannot itself be the line that will not fit, and it
 // goes INSIDE the block so the dedupe covers it: outside, it would
 // print every frame.
-#define LAYOUT_BLOCK_MAX 2048
+#define LAYOUT_BLOCK_MAX 8192
 #define LAYOUT_BLOCK_MARK "uapp: layout log TRUNCATED -- raise LAYOUT_BLOCK_MAX\n"
 #define LAYOUT_BLOCK_USABLE (LAYOUT_BLOCK_MAX - (int)sizeof(LAYOUT_BLOCK_MARK))
 static char g_block[LAYOUT_BLOCK_MAX];
@@ -736,6 +736,15 @@ static void popup_dismissed(int id) {
     bufs_release(s);
     if (done) done(owner);
     g_app.dirty = 1;
+}
+
+int uapp_drag_active(struct uapp *a) {
+    return uui_router_drag_active(&a->router);
+}
+
+const struct uui_drag *uapp_drag(struct uapp *a) {
+    if (uui_router_drag_active(&a->router)) return uui_router_drag(&a->router);
+    return uui_router_dropped(&a->router);
 }
 
 void uapp_set_cursor(struct uapp *a, int cursor) {
@@ -1049,6 +1058,13 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         // the overlay rule the pointer already follows, and what makes
         // typing in a dropdown work in an app with no focus ring at
         // all. See ui/uui_route.h.
+        // ESC CANCELS A DRAG before anything else sees the key: the
+        // pointer is still held, so nothing else can be meant by it.
+        if (a->router.count && ev->a == 0x1B && uui_router_drag_active(&a->router)) {
+            uui_router_drag_cancel(&a->router);
+            a->dirty = 1;
+            break;
+        }
         if (a->router.count) {
             int changed = 0;
             int id = uui_router_overlay_key(&a->router, ev->a, ev->mods, &changed);
@@ -1140,7 +1156,8 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             // The GRAB lives here: while a button is held this goes to
             // whoever took the press, wherever the cursor now is, which
             // is what makes a drag work with no app state at all.
-            int id = uui_router_motion(&a->router, ev->a, ev->b, held, &changed);
+            int id = uui_router_motion(&a->router, ev->a, ev->b, held,
+                                       WIN_MOUSE_MODS(ev->mods), &changed);
             if (changed) a->dirty = 1;
             if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_MOTION);
         }
@@ -1164,6 +1181,11 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             int id = uui_router_release(&a->router, ev->a, ev->b, &changed);
             if (changed) a->dirty = 1;
             if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_RELEASE);
+            // A release that DROPPED names the target instead. The
+            // payload is still readable through uapp_drag() here and
+            // nowhere later -- the router has already let go of it.
+            int drop = uui_router_take_drop(&a->router);
+            if (drop && d->on_widget) d->on_widget(a, drop, UUI_REASON_DROP);
         }
         if (d->buttons) {
             // The commit point. A press dragged off its button was

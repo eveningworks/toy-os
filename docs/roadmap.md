@@ -636,6 +636,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Move the clipboard out of the kernel~~ DONE 2026-09-07 -- `/bin/clipboardd` owns a shared page; a paste costs no syscall
 - [x] ~~Mouse text selection in the Terminal, and copy from it~~ DONE 2026-09-07 -- drag/word/line, copy-on-select, Ctrl+Shift+C
 - [x] ~~A scrollbar on the Terminal, so the scrollback is visible~~ DONE 2026-09-07 -- a reserved gutter, Konsole's shape
+- [x] ~~Drag-and-drop within one window~~ DONE 2026-09-10 -- a router session; between the panes and onto the tree, Ctrl copies
 - [ ] Drag-and-drop between windows
 - [ ] Drag a file from the file manager (see Desktop productivity apps) into Notepad
 - [ ] A clipboard that survives `clipboardd` restarting
@@ -649,7 +650,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~File manager app~~ DONE 2026-08-23 -- two panes, marks, and file operations as spawned children
 - [x] ~~File operations in-process, with a conflict dialog~~ DONE 2026-08-30 -- `lib/ufileop.h` on a worker thread
 - [ ] An automated check for Shift+click's range -- aiming a click at a chosen list row is not reliable yet (`filemanager_test.py`'s `aim`)
-- [ ] The folder tree follows the active pane -- built and REVERTED: it fights a branch the user collapsed while standing in it
+- [x] ~~The folder tree follows the active pane~~ DONE 2026-09-10 -- on a NAVIGATION only, so a collapsed branch stays collapsed
 - [ ] Move the WM's file picker onto `uui_fileview` -- Notepad's dialog did, 2026-09-04
 - [x] ~~Desktop calendar widget~~ DONE 2026-08-24 -- a panel popup on the tray clock, not an app
 - [x] ~~Control panel with pluggable applets~~ done

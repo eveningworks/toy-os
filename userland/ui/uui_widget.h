@@ -21,6 +21,37 @@
 // same rule uapp's callbacks follow, and it is what lets a new
 // capability arrive as a new slot without touching a widget that does
 // not want it.
+// --- a drag session's payload (ui/uui_route.h's third rule) ------------
+//
+// What is being dragged, filled in by the SOURCE widget's drag_start and
+// read by every target's drag_over/drop. The toolkit owns the struct;
+// the strings it points at are the source's and stay valid until its
+// drag_end -- a target that needs them later copies them in drop().
+//
+// `kind` says what the payload is; a target refuses a kind it does not
+// take. Only files exist today. Adding a kind is adding an enum row.
+enum uui_drag_kind {
+    UUI_DRAG_NONE = 0,
+    UUI_DRAG_FILES,   // `dir` + the source widget's marked set or selection
+};
+
+struct uui_drag {
+    int kind;
+    void *source;        // the widget that started it -- a target may
+                         // refuse to drop onto the thing being dragged
+    int source_id;
+    const char *dir;     // UUI_DRAG_FILES: the directory the items are in
+    int count;           // ... and how many
+    const char *label;   // one item's name, or a "N items" the source wrote
+    // Live, updated by the router on every motion:
+    int x, y;            // the pointer, content-relative
+    unsigned mods;       // KEY_MOD_* held now
+    int copy;            // Ctrl is held: the toolkit's copy/move convention
+                         // (Explorer's and Dolphin's), derived from `mods`
+                         // so every source and target agree on it
+    int accepted;        // the widget under the pointer said yes
+};
+
 struct uui_widget_ops {
     // The preferred minimum -- see uui_primitives.h. 0 in either axis
     // means "no preference", and a container reads that as "give me
@@ -130,6 +161,31 @@ struct uui_widget_ops {
     // Bounds are reported by the walk from `bounds`; this is for what
     // bounds cannot say. Optional.
     void (*describe)(const void *w, const struct uui_describe *d);
+
+    // --- drag and drop, a ROUTER session (ui/uui_route.h) ------------
+    //
+    // A SOURCE fills `drag_start`: asked once, when the pointer has
+    // moved past the drag threshold with the button still down after a
+    // press this widget consumed. Fill `d` and return 1 to start a
+    // drag -- the widget's ordinary press gesture is then over (cancel
+    // a band or a double-click arm here); return 0 to keep the plain
+    // grab, which is what a thumb drag or a rubber band wants.
+    int (*drag_start)(void *w, int cx, int cy, struct uui_drag *d);
+    // The session ended: dropped somewhere (1) or cancelled (0).
+    void (*drag_end)(void *w, int dropped);
+    // A TARGET fills `drag_over` and `drop`. drag_over is asked on every
+    // motion while the pointer is over this widget, and once with
+    // UUI_NOWHERE when it leaves, so a highlight can clear; return 1 to
+    // accept a drop HERE. `drop` is called only on a widget whose last
+    // drag_over accepted; the router then names it to the app with
+    // UUI_REASON_DROP, and the app reads what the widget recorded.
+    // tools/check_widget_ops.py: a table with `drop` needs `drag_over`.
+    int (*drag_over)(void *w, int cx, int cy, const struct uui_drag *d);
+    int (*drop)(void *w, int cx, int cy, const struct uui_drag *d);
+    // The source paints what is being carried, at d->x/y, after every
+    // overlay -- the toolkit has no drag cursor shape, so the ghost is
+    // the whole feedback.
+    void (*drag_draw)(struct ugfx_surface *s, const void *w, const struct uui_drag *d);
 };
 
 // One thing in a container. `widget` is whatever `ops` expects, not

@@ -77,6 +77,27 @@ void tree_select_path(const char *path) {
     if (i >= 0) uui_tree_select_id(&g_tree, i);
 }
 
+// Open every ANCESTOR of `path` (not the node itself), rebuild, select.
+// Called on a NAVIGATION and never on a toggle, which is what keeps it
+// from fighting a branch the user collapsed while standing in it: the
+// collapse stays until the next directory change (Dolphin's folder
+// panel behaves this way; Explorer's "expand to current folder" is the
+// same, as an option).
+void tree_reveal_path(const char *path) {
+    if (!path || path[0] != '/') return;
+    char prefix[PATH_MAX_LEN];
+    int len = (int)strlen(path);
+    for (int i = 1; i < len && i < PATH_MAX_LEN; i++) {
+        if (path[i] != '/') continue;
+        memcpy(prefix, path, (size_t)i);
+        prefix[i] = '\0';
+        tree_set_open(prefix, 1);
+    }
+    tree_set_open("/", 1);
+    tree_rebuild();
+    tree_select_path(path);
+}
+
 // Rebuild the node array from the open set. Each open directory's
 // subdirectories are INSERTED right after it and the scan continues
 // forward, which reaches them in DFS (display) order with no recursion
