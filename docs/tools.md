@@ -570,7 +570,7 @@ manual steps to be worth automating:
   is no list of apps in the file to keep in sync, and there was one
   until 2026-08-20. `APP_ORDER` mirrored the WM's desktop entries and
   the menu's top edge was DERIVED from its length, so when `Crash Test`
-  was added to `/usr/wm/desktop/` and not to the list, two things broke
+  was added to `/usr/wm/applications/` and not to the list, two things broke
   at once: every later app's index, and the computed origin. The visible
   symptom was `open_app("System Settings")` opening Task Manager.
 
@@ -1337,7 +1337,7 @@ window without going through it will find its layout polls timing out.
   VFS, the scheduler's preemption handling, or anything the WM reads
   from disk -- and whenever a user reports something this environment
   cannot reproduce. SKIPS loudly without KVM rather than passing
-  quietly. **Its workload CHURNS `/usr/wm/desktop` on purpose**: the
+  quietly. **Its workload CHURNS `/usr/wm/applications` on purpose**: the
   desktop only re-reads when that directory changed and a cached read
   never reaches the drive, so without it the tool does almost no disk
   I/O -- verified by disarming the VFS preemption guard entirely and
@@ -3065,7 +3065,7 @@ window without going through it will find its layout polls timing out.
   A trim-past-the-end became a corrupt-the-beginning, and the two
   errors together produced a plausible-looking `punched N blocks` line.
 
-  What it destroyed: `/usr/wm/desktop`, `/etc/services.d` and
+  What it destroyed: `/usr/wm/applications`, `/etc/services.d` and
   `/usr/wm/startup`. So the live CD booted with a full `/bin`, a
   working shell, and a **desktop with no apps** -- the Start menu is
   built from those `.desktop` files. Reported from real hardware.

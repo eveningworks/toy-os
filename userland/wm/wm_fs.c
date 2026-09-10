@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 
-// Enough for any directory this WM reads: /usr/wm/desktop (nine
+// Enough for any directory this WM reads: /usr/wm/applications (nine
 // entries), /usr/share/cursors (a handful of themes), and whatever the
 // file picker is pointed at. A directory larger than this is truncated
 // by SYS_LISTDIR itself, which is why callers treat a full result as

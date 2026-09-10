@@ -1329,7 +1329,7 @@ this the obvious way), not from how much history it accumulated.
 - **`SYS_FS_GENERATION` is how ring 3 asks "has the filesystem
   changed?"** -- no arguments, the counter in RAX. Its own syscall
   rather than a `SYS_SYSINFO` field on purpose: the desktop polls it
-  ONCE PER FRAME to decide whether to re-read `/usr/wm/desktop/`, and a
+  ONCE PER FRAME to decide whether to re-read `/usr/wm/applications/`, and a
   free poll is the entire reason the counter exists instead of a
   directory scan. It says something changed, never what.
 - **A ring-3 process can own a real window** (`userland/wm/wm_client.c` +
@@ -1377,16 +1377,16 @@ this the obvious way), not from how much history it accumulated.
   `desktop_entries_test.py` asserts the property that makes it
   unreachable, so a kernel-space app coming back turns that check red
   instead of producing a mystery rebinding bug.
-- **The Start menu and desktop icons are built from FILES**, one
-  `.desktop`-style entry per app in `/usr/wm/desktop/` (source of truth:
-  `data/wm/desktop/`, format documented in its README). `gui_apps.c`
-  scans that directory at desktop startup, so **adding an app to the
-  desktop is dropping a file there**, not editing a table -- and it is
-  picked up LIVE, no restart: the WM watches `fs_generation()` and
-  re-reads the directory when it moves. **One directory feeds BOTH
-  surfaces**, with `ShowIn=desktop startmenu` choosing which; a second
-  directory per surface was rejected because an app wanted in both would
-  have its file duplicated and the copies drift. **Anything positional
+- **The Start menu is built from FILES**, one `.desktop`-style entry
+  per app in `/usr/wm/applications/` (source of truth:
+  `data/wm/applications/`, format documented in its README). `gui_apps.c`
+  scans that directory at desktop startup, so **adding an app is
+  dropping a file there**, not editing a table -- and it is picked up
+  LIVE, no restart: the WM watches `fs_generation()` and re-reads the
+  directory when it moves. **One directory feeds the Start menu and the
+  desktop menu's Open > submenu**, with `ShowIn=desktop startmenu`
+  choosing which; the desktop's own icons come from `/home/desktop`
+  (the entry above), never from here. **Anything positional
   must go through `gui_app_visible_count()`/`_at()`** -- the Start
   menu's rows are indexed by position, so filtering the draw while
   hit-testing the unfiltered registry lands every click on the wrong app
@@ -3434,16 +3434,26 @@ the next stage.
 onto a submenu row did not land (`icons_test.py` measured it); the
 injected `dbg.click(x, y)` at the reported row centre does.
 
-## THE DESKTOP IS A FOLDER TOO: `/home/desktop`'S ENTRIES ARE ICONS AFTER THE LAUNCHERS, AND EVERY VERB IS A CHILD PROCESS
+## THE DESKTOP IS `/home/desktop` AND NOTHING ELSE: A `.desktop` FILE THERE IS A LAUNCHER, THE APPLICATION DATABASE IS `/usr/wm/applications`, AND EVERY VERB IS A CHILD PROCESS
 
-One index space in `userland/wm/desktop.c`: items below
-`gui_app_registry_count` are launchers, the rest are `/home/desktop`'s
-entries in name order, directories first -- KDE's Folder View and the
-Windows desktop are folders with the shortcuts in them. The folder is
-re-listed on the same generation poll as the wallpaper, and a change
-re-derives the grid (positions are saved under `file:<name>`, so a file
-and a launcher of one name never share a cell). A file opens through
-`/bin/open` (its association), a directory in the File Manager.
+Every icon in `userland/wm/desktop.c` is an entry of `/home/desktop`, in
+name order, directories first -- KDE's Folder View and the Windows
+desktop are folders with the shortcuts in them. A `.desktop` file there
+is drawn as the launcher it describes (`gui_app_read_entry()`, the same
+parser the application database uses) and opens through the registry
+entry with its `AppId`, or runs its `Exec=` directly when the database
+no longer has one. It is cut, copied, dragged and deleted like any
+file. **The application database (`/usr/wm/applications`, formerly
+`/usr/wm/desktop`) puts NOTHING on the desktop**: it feeds the Start
+menu and the desktop menu's Open > submenu, and a Start menu row's
+right-click offers "Add to desktop", which writes `<app_id>.desktop`
+into the folder. Five launchers are seeded ONCE (`seed/once/`, copied
+only when missing), so deleting one sticks across `make iso`. The
+folder is re-listed on the same generation poll as the wallpaper, and
+a change re-derives the grid (positions are saved under
+`file:<filename>`, so a launcher keeps its cell whatever its `Name=`).
+A plain file opens through `/bin/open` (its association), a directory
+in the File Manager.
 
 **THE COMPOSITOR DOES NO FILE WORK.** Copy and Cut put the selected
 files' paths on the system clipboard (`lib/uclip.h`, the File

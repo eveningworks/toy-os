@@ -8,7 +8,7 @@
 #include "kpath.h"   // k_path_basename, for AppId's default
 
 // The Start menu and the desktop icons are built from DATA ON DISK --
-// one file per app in /usr/wm/desktop/, scanned at desktop startup.
+// one file per app in /usr/wm/applications/, scanned at desktop startup.
 // Adding an app to the desktop is dropping a file there; it is not
 // editing this table and rebuilding the kernel.
 //
@@ -18,7 +18,7 @@
 // deliberate small subset of freedesktop.org's .desktop files: same
 // idea, same key names where they overlap, none of the localisation or
 // MIME machinery that has nothing to attach to here. See
-// data/wm/desktop/README.md.
+// data/wm/applications/README.md.
 //
 // TWO KINDS OF ENTRY, and the reason the file format has to know:
 //
@@ -33,7 +33,7 @@
 // entry still carrying `builtin:` now names no binary and is refused
 // by the loader below like any other bad path.
 
-#define DESKTOP_DIR "/usr/wm/desktop"
+#define DESKTOP_DIR "/usr/wm/applications"
 
 // The live registry. Not const any more: it is filled in at startup from
 // the directory above. Everything that reads it (start_menu.c,
@@ -138,83 +138,72 @@ static unsigned parse_show_in(const struct etc_config_buf *cfg, const char *file
     return bits;
 }
 
-static void load_entry(const char *file) {
-    char path[64];
-    k_snprintf(path, sizeof path, "%s/%s", DESKTOP_DIR, file);
-
-    // ONE read, six questions. This used to be six etc_config_get()
-    // calls, each of which re-reads the whole file -- so a nine-entry
-    // reload cost 54 whole-file reads, ran on every filesystem change
-    // (sys_fs_generation() is global, so saving an unrelated setting
-    // triggers it), and froze the desktop for 2.5s under KVM, where
-    // each port-I/O instruction is a VM exit. It measured 40ms under
-    // TCG, which is why it went unnoticed: every test here runs TCG.
-    // STATIC, for the reason the dirent arrays above are: a whole
-    // config document is 4 KiB now and a ring-3 frame budget is 2, so a
-    // local one steps over the guard page rather than merely warning.
-    // Safe here on the same grounds -- the WM is one event loop and
-    // this does not recurse.
+int gui_app_read_entry(const char *path, struct gui_app_entry *e) {
+    // ONE read, six questions: etc_config_get() re-reads the whole file
+    // per key, and a reload runs on every filesystem change. STATIC
+    // because a whole config document is 4 KiB and a ring-3 frame
+    // budget is 2; safe since the WM is one event loop.
     static struct etc_config_buf cfg;
-    if (!wm_conf_load(path, &cfg)) return;
+    if (!wm_conf_load(path, &cfg)) return 0;
+    const char *file = k_path_basename(path);
 
-    char name[GUI_APP_NAME_MAX], exec[GUI_APP_EXEC_MAX];
-    char cat[16], icon[GUI_APP_ICON_MAX], appid[GUI_APP_ICON_MAX], nodisplay[8];
-    if (!entry_get(&cfg, "Name", name, sizeof name)) return;
-    if (!entry_get(&cfg, "Exec", exec, sizeof exec)) return;
-    if (!entry_get(&cfg, "Category", cat, sizeof cat)) k_strlcpy(cat, "apps", sizeof cat);
+    char icon[GUI_APP_ICON_MAX], appid[GUI_APP_ICON_MAX], nodisplay[8], raw[16];
+    if (!entry_get(&cfg, "Name", e->name, sizeof e->name)) return 0;
+    if (!entry_get(&cfg, "Exec", e->exec, sizeof e->exec)) return 0;
+    if (!entry_get(&cfg, "Category", e->category, sizeof e->category))
+        k_strlcpy(e->category, "apps", sizeof e->category);
     if (!entry_get(&cfg, "Icon", icon, sizeof icon)) icon[0] = '\0';
     if (!entry_get(&cfg, "AppId", appid, sizeof appid)) appid[0] = '\0';
     if (entry_get(&cfg, "NoDisplay", nodisplay, sizeof nodisplay)
-        && nodisplay[0] == '1') return;
+        && nodisplay[0] == '1') return 0;
+
+    // A one-character Icon= is a GLYPH, anything longer is a NAME. Both
+    // are kept; drawing prefers the file and falls back to the character.
+    k_strlcpy(e->icon, icon[0] && icon[1] ? icon : "", sizeof e->icon);
+    e->glyph = icon[0];
+    // AppId defaults to the basename of Exec, which is right everywhere
+    // but Shapes -- see gui_apps.h on why the entry gets to say.
+    k_strlcpy(e->app_id, appid[0] ? appid : k_path_basename(e->exec), sizeof e->app_id);
+    // DEFAULT ON, so only `RememberGeometry=false` turns it off: a typo
+    // is harmless rather than silently disabling a behaviour.
+    e->remember_geometry = 1;
+    if (entry_get(&cfg, "RememberGeometry", raw, sizeof raw) &&
+        (k_strcmp(raw, "false") == 0 || k_strcmp(raw, "0") == 0 || k_strcmp(raw, "no") == 0))
+        e->remember_geometry = 0;
+    e->show_in = parse_show_in(&cfg, file);
+
+    // Every app is a ring-3 binary now; the retired `builtin:` form is
+    // refused LOUDLY rather than shown as a row that does nothing.
+    if (k_strncmp(e->exec, "builtin:", 8) == 0) {
+        wm_logf("wm: %s uses the retired builtin: form -- ignored\n", file);
+        return 0;
+    }
+    return 1;
+}
+
+static void load_entry(const char *file) {
+    char path[64];
+    k_snprintf(path, sizeof path, "%s/%s", DESKTOP_DIR, file);
+    struct gui_app_entry e;
+    if (!gui_app_read_entry(path, &e)) return;
 
     int i = gui_app_registry_count;
     if (i >= GUI_APP_MAX) return;
-
-    k_strlcpy(g_names[i], name, GUI_APP_NAME_MAX);
-    k_strlcpy(g_execs[i], exec, GUI_APP_EXEC_MAX);
-    k_strlcpy(g_cats[i], cat, sizeof g_cats[0]);
-    // A one-character Icon= is a GLYPH, anything longer is a NAME. Both
-    // are stored; the drawing code prefers the file and falls back to
-    // the character (see gui_apps.h).
-    k_strlcpy(g_icons[i], icon[0] && icon[1] ? icon : "", sizeof g_icons[0]);
-    // AppId defaults to the basename of Exec, which is right everywhere
-    // but Shapes -- see gui_apps.h on why the entry gets to say.
-    k_strlcpy(g_appids[i], appid[0] ? appid : k_path_basename(exec),
-              sizeof g_appids[0]);
+    k_strlcpy(g_names[i], e.name, GUI_APP_NAME_MAX);
+    k_strlcpy(g_execs[i], e.exec, GUI_APP_EXEC_MAX);
+    k_strlcpy(g_cats[i], e.category, sizeof g_cats[0]);
+    k_strlcpy(g_icons[i], e.icon, sizeof g_icons[0]);
+    k_strlcpy(g_appids[i], e.app_id, sizeof g_appids[0]);
 
     struct gui_app *a = &gui_app_registry[i];
     k_memset(a, 0, sizeof *a);
     a->name = g_names[i];
-    a->icon = icon[0];
+    a->icon = e.glyph;
     a->icon_name = g_icons[i];
     a->app_id = g_appids[i];
     a->resizable = 1;
-    // DEFAULT ON, so only `RememberGeometry=false` turns it off. A
-    // missing key, an empty one, or anything unrecognised means yes --
-    // the same tolerance ShowIn= has, pointed the way round that makes
-    // a typo harmless rather than silently disabling a behaviour the
-    // entry never mentioned.
-    {
-        char raw[16];
-        a->remember_geometry = 1;
-        if (entry_get(&cfg, "RememberGeometry", raw, sizeof raw) &&
-            (k_strcmp(raw, "false") == 0 || k_strcmp(raw, "0") == 0 ||
-             k_strcmp(raw, "no") == 0)) {
-            a->remember_geometry = 0;
-        }
-    }
-    a->show_in = parse_show_in(&cfg, file);
-
-    // Every app is a ring-3 binary now. An entry still naming the
-    // retired `builtin:` form is refused LOUDLY rather than shown as a
-    // menu row that does nothing when clicked -- the same treatment an
-    // unknown builtin always got, kept because an old entry file can
-    // outlive the mechanism it named.
-    if (k_strncmp(g_execs[i], "builtin:", 8) == 0) {
-        wm_logf("wm: %s uses the retired builtin: form -- ignored\n", file);
-        return;
-    }
-
+    a->remember_geometry = e.remember_geometry;
+    a->show_in = e.show_in;
     a->exec_path = g_execs[i];
     gui_app_registry_count++;
 }

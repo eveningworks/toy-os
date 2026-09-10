@@ -695,7 +695,7 @@ def run(dbg, qmp, tmp, res):
 
     # --- the desktop folder ---------------------------------------------
     #
-    # A file in /home/desktop is an icon after the launchers; its menu
+    # A file in /home/desktop is an icon like the seeded launchers; its menu
     # is the file's; New folder creates; Delete asks and then removes.
     # Asserted through the shell's listing where a file changes hands.
     print("the desktop folder: a file is an icon, and the verbs act on it")

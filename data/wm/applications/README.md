@@ -1,9 +1,13 @@
-# Desktop entries -- what the desktop and Start menu are built FROM
+# Application entries -- what the Start menu is built FROM
 
-One file per launchable thing, seeded to `/usr/wm/desktop/`. The window
-manager scans that directory at startup and builds its app list from it,
-so **adding an app to the desktop is dropping a file here** rather than
-editing `apps/gui_apps.c` and rebuilding the kernel.
+One file per installed app, seeded to `/usr/wm/applications/` (the
+`/usr/share/applications` of this system). The window manager scans
+that directory at startup and builds its app list from it, so **adding
+an app to the Start menu is dropping a file here** rather than editing
+a table. The DESKTOP shows `/home/desktop`, not this directory: a copy
+of one of these files there is a desktop launcher, which is what the
+Start menu's "Add to desktop" writes, and `about`, `files`, `notepad`,
+`settings` and `terminal` are seeded there once by the Makefile.
 
 The format is `name=value` lines with `#` comments -- the same one
 `/etc/toyos.conf` uses, read by `kernel/lib/etc_config.c`, because a

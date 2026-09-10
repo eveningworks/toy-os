@@ -33,7 +33,7 @@ name rather than guessed at.
 ## The trap
 
 An override names a *desktop entry*, not a program: `.txt=imgview`
-means `/usr/wm/desktop/imgview.desktop`'s `Exec=`. A dangling override
+means `/usr/wm/applications/imgview.desktop`'s `Exec=`. A dangling override
 (entry since removed) falls through to the declarations rather than
 making the type unopenable -- so a wrong `-s` degrades, silently, to
 the default rather than to an error you would notice.

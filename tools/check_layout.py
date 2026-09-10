@@ -205,7 +205,10 @@ def orphans_on_image(disk, writer_dir, seed_root):
 #
 # Neither failure is loud. This is the check that makes it loud.
 SEED_SOURCES = {
-    "usr/wm/desktop":    "data/wm/desktop",
+    "usr/wm/applications":    "data/wm/applications",
+    # The desktop's seeded launchers are copies of application entries,
+    # staged under seed/once/ (copied only when missing) -- see unsourced_staged_files().
+    "../once/home/desktop": "data/wm/applications",
     "usr/wm/startup":    "data/wm/startup",
     "usr/share/icons":   "data/icons",
     "usr/share/music":   "data/usr/share/music",

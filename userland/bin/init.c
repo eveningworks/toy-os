@@ -44,7 +44,7 @@
 //
 // WHY A DIRECTORY OF FILES rather than a compiled-in list: it is the
 // same call the Start menu already made when it stopped being a C table
-// and became /usr/wm/desktop. Adding a service is dropping a file, and
+// and became /usr/wm/applications. Adding a service is dropping a file, and
 // the format is the parser every other config file here uses. See
 // data/etc/services.d/README.md.
 //

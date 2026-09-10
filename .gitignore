@@ -54,6 +54,7 @@
 # A future seed/once/ (hand-authored config seed files) would NOT be
 # ignored -- only add an entry here if once/ ever needs one too.
 /seed/sync/
+/seed/once/
 
 # QEMU/QMP test scratch, if run from the repo root (see tools/qmp_test.py)
 *.ppm

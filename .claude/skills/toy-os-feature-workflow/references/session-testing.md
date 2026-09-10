@@ -571,7 +571,7 @@ was.** `kvm_soak.py` passed cleanly with the VFS preemption guard
 disarmed entirely -- because the OTHER two fixes had independently
 removed the disk pressure its workload depended on. Two consequences
 worth carrying: forcing real work matters (it now churns
-`/usr/wm/desktop` so the desktop genuinely re-reads every entry, since
+`/usr/wm/applications` so the desktop genuinely re-reads every entry, since
 the reload is skipped when the directory is unchanged and a cached read
 never reaches the drive), and **when reintroducing one bug does not
 reproduce the symptom, the right control is the ORIGINAL TREE** -- build

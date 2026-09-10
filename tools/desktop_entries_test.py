@@ -3,8 +3,8 @@
 
 WHAT IS UNDER TEST
 ------------------
-One directory (/usr/wm/desktop) feeds two surfaces -- the desktop icons
-and the Start menu -- and two behaviours were added on top of it:
+One directory (/usr/wm/applications) is the application database -- the Start
+menu and the Open > submenu -- and two behaviours were added on top of it:
 
   1. `ShowIn=` puts an entry on one surface, the other, or both.
   2. The window manager notices the directory changing and re-reads it,
@@ -44,7 +44,7 @@ from qmp_test import QMPSession             # noqa: E402
 import port_guard  # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
-ENTRY_DIR = "/usr/wm/desktop"
+ENTRY_DIR = "/usr/wm/applications"
 
 # Named so it sorts last within its category, which keeps it off the end
 # of an existing row's coordinates and makes a stray match obvious.

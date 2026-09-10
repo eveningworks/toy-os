@@ -33,7 +33,7 @@ QMP, this mirrors the kernel's own math with numbers instead of live
 gfx_char_w()/gfx_char_h() calls).
 
 Menu rows are found BY LABEL, from the kernel's own geometry -- there is
-no list of apps in this file to keep in step with /usr/wm/desktop/. See
+no list of apps in this file to keep in step with /usr/wm/applications/. See
 the note above `class GuiFlow` for the bug that came of having one.
 
 Usage:
@@ -76,7 +76,7 @@ START_BTN = (50, 703)  # inside the taskbar's Start button, safely off any edge
 
 # THERE IS NO MIRRORED LIST OF APPS HERE ANY MORE, and there was one
 # until 2026-08-20. `APP_ORDER` copied what the WM builds from
-# /usr/wm/desktop/, and the Start menu's top edge was DERIVED from its
+# /usr/wm/applications/, and the Start menu's top edge was DERIVED from its
 # length (the menu grows upward from the taskbar, so every app added
 # moves it). "Crash Test" was added to the desktop entries and not to
 # the list, which did two things at once: the index of every app after

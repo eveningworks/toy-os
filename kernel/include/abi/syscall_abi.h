@@ -1232,7 +1232,7 @@ struct spawn_msg {
                           // Deliberately its own syscall rather than a
                           // field in SYS_SYSINFO: the desktop polls
                           // this ONCE PER FRAME to decide whether to
-                          // re-read /usr/wm/desktop, and a free poll is
+                          // re-read /usr/wm/applications, and a free poll is
                           // the entire reason the counter exists. A
                           // sysinfo field would cost a validated struct
                           // copy per frame for figures nobody asked

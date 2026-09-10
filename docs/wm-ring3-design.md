@@ -721,7 +721,7 @@ did-it-change test alone would have shipped.
 
   One counter the VFS bumps on every change;
 the WM compares it once per frame to decide whether to re-read
-`/usr/wm/desktop/` (`wm.c:600`). There is no syscall for it, and
+`/usr/wm/applications/` (`wm.c:600`). There is no syscall for it, and
 without one the live `.desktop` reload either dies or degrades into
 re-listing a directory every frame -- which is real I/O in the
 compositor loop, the exact thing the counter exists to avoid.

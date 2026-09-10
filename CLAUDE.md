@@ -480,7 +480,7 @@ trips them before it knows to look anything up.
   shapes, and a new app's `.desktop` entry went missing so the app was
   installed and unlaunchable while its binary and icon -- which come
   from `build/` and `data/` -- were both present. A Start-menu entry
-  goes in `data/wm/desktop/`, an icon in `tools/gen_icons.py` ->
+  goes in `data/wm/applications/`, an icon in `tools/gen_icons.py` ->
   `data/icons/`, a font/wallpaper/cursor theme in its own `data/`
   directory; `make iso` stages them. `tools/check_layout.py` FAILS the
   build on a staged file with no tracked source behind it and names the
@@ -796,7 +796,7 @@ whenever a headline here tells you something you did not already know.
 - **`SYS_FS_GENERATION` is how ring 3 asks "has the filesystem changed?"**
 - **A ring-3 process can own a real window**
 - **`Exec=builtin:` is GONE, and ring 0 contains no applications.**
-- **The Start menu and desktop icons are built from FILES**
+- **The Start menu is built from FILES**
 - **A Start-menu entry launches a RING-3 program**
 - **There is no limit on open windows**
 - **Super/Win toggles the Start menu, and Alt+F4 closes a window**
@@ -884,7 +884,7 @@ whenever a headline here tells you something you did not already know.
 - **THE DESKTOP'S ICON SIZE IS A NAMED SETTING, THE ICONS ARE CENTRED, AND A CAPTION IS TWO LINES** -- `desktop.icon_size`; `icon_box()` is the one place an icon's rect comes from, and `gui icons --json` reports it
 - **THE WM CONTEXT MENU HAS ONE LEVEL OF SUBMENU, A SEPARATOR AND A TICK, AND THE DESKTOP'S MENU IS WINDOWS' SHAPE**
 - **A DRAG BETWEEN WINDOWS IS BROKERED BY THE COMPOSITOR, AND ITS PAYLOAD RIDES A SLOT BESIDE THE CLIPBOARD** -- `wm_dnd.c`, `WIN_REQ_DRAG_START`, `WIN_EV_DRAG_OVER/LEAVE/DROP`; the slot is NOT cleared on the release, the drop reads it later
-- **THE DESKTOP IS A FOLDER TOO: `/home/desktop`'S ENTRIES ARE ICONS AFTER THE LAUNCHERS, AND EVERY VERB IS A CHILD PROCESS** -- Copy/Cut/Paste ride the system clipboard, so the File Manager and the desktop exchange files either way
+- **THE DESKTOP IS `/home/desktop` AND NOTHING ELSE: A `.desktop` FILE THERE IS A LAUNCHER, THE APPLICATION DATABASE IS `/usr/wm/applications`, AND EVERY VERB IS A CHILD PROCESS** -- the database feeds the Start menu only; "Add to desktop" writes a launcher file; Copy/Cut/Paste ride the system clipboard
 - **MARKS SURVIVE A RELOAD BY NAME, BECAUSE THE VOLUME'S GENERATION NEVER STOPS MOVING** -- a tick reload that cleared them was the "marking does nothing" cluster
 
 ### Storage, the filesystem, and /etc

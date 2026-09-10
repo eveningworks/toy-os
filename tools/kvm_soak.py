@@ -201,7 +201,7 @@ def drive_workload(dbg, qmp, rounds):
     # exist is deliberately not hardcoded, the registry is meant to grow.
     #
     # THE DIRECTORY CHURN IS LOAD-BEARING, not decoration. The desktop
-    # only re-reads /usr/wm/desktop when that directory actually
+    # only re-reads /usr/wm/applications when that directory actually
     # changed (gui_apps_dir_fingerprint()), and a cached read never
     # reaches the drive -- so without forcing a real reload this
     # workload does almost no disk I/O and cannot exercise the paths
@@ -240,9 +240,9 @@ def drive_workload(dbg, qmp, rounds):
             time.sleep(0.6)
             # Force a genuine reload of every entry, concurrent with
             # whatever the key just made System Settings write.
-            dbg.send(f"sh write /usr/wm/desktop/zz{n}{which}.desktop x")
+            dbg.send(f"sh write /usr/wm/applications/zz{n}{which}.desktop x")
             time.sleep(0.9)
-            dbg.send(f"sh rm /usr/wm/desktop/zz{n}{which}.desktop")
+            dbg.send(f"sh rm /usr/wm/applications/zz{n}{which}.desktop")
             time.sleep(0.9)
         seen.extend(l.strip() for l in dbg.logs())
         changes += sum(1 for l in seen[mark:] if l.startswith("settings: set "))

@@ -3780,7 +3780,7 @@ one observation of a failed write and no mechanism.
 Why it is worth recording anyway: since init starts the desktop, EVERY
 ktest run now has a compositing process doing its own file I/O
 concurrently, and `etc_config_set()` bumping `fs_generation()` is exactly
-what makes the desktop re-read `/usr/wm/desktop`. That is a legitimate
+what makes the desktop re-read `/usr/wm/applications`. That is a legitimate
 thing for an OS to support -- it is what Notepad saving a file does --
 but it is newly the default during the test suite. If a write failure
 recurs, this is the interaction to instrument first, and

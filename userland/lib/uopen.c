@@ -13,7 +13,7 @@
 #include <ctype.h>
 
 #define UOPEN_PATH_MAX 64 // FS_PATH_MAX
-#define DESKTOP_ENTRY_DIR "/usr/wm/desktop"
+#define DESKTOP_ENTRY_DIR "/usr/wm/applications"
 
 // A space/comma-separated list, matched whole -- ".md" must not match
 // ".mdx", which a substring search would.

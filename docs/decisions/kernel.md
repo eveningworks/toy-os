@@ -1628,7 +1628,7 @@ not built yet. This is the layer it would sit on.
 
 ## One desktop-entry directory with a `ShowIn` key, not a second directory per surface
 
-`/usr/wm/desktop/` feeds BOTH the desktop icons and the Start menu. Asked
+`/usr/wm/applications/` feeds BOTH the desktop icons and the Start menu. Asked
 for a separate `/usr/wm/startmenu/` so an app could appear in one place
 and not the other, the answer is a KEY on the existing entry instead:
 `ShowIn=desktop startmenu`, defaulting to both.
@@ -3448,7 +3448,7 @@ init reads `/etc/services.d/<name>` -- `Name`/`Exec`/`Target`/`Restart`,
 the same `name=value` parser every other config file here uses -- and
 starts the ones whose target matches. The alternative was a compiled-in
 list of one, and this is the same call the Start menu already made when
-it stopped being a C table and became `/usr/wm/desktop`: adding a
+it stopped being a C table and became `/usr/wm/applications`: adding a
 service is dropping a file.
 
 What is deliberately NOT copied from systemd is everything that needs a

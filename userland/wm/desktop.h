@@ -48,7 +48,7 @@ void desktop_draw(void);
 // is how the wallpaper Image Viewer just set appears without either
 // program knowing about the other. One integer compare when nothing has
 // changed -- the same mechanism, and the same reasoning, as wm.c's live
-// reload of /usr/wm/desktop.
+// reload of /usr/wm/applications.
 void desktop_poll_config(void);
 
 // Per-tick update for an icon drag in progress -- called from wm.c's
@@ -107,7 +107,9 @@ void desktop_entries_changed(void);
 // clicks what the app says is there rather than hardcoding a grid.
 int desktop_icon_geometry(int i, const char **name, int *x, int *y, int *w, int *h,
                           int *lines, const char **kind);   // kind: app | dir | file
-int desktop_icon_count(void);              // launchers plus the folder's entries
+int desktop_icon_count(void);              // the folder's entries, launchers included
+struct gui_app;
+void desktop_add_launcher(const struct gui_app *app);   // writes <app_id>.desktop into /home/desktop
 // Ctrl+C/X/V and Delete when no window has the focus. 1 if consumed.
 int desktop_handle_key(int key, unsigned mods);
 // A drop from another window landed on the desktop background: the

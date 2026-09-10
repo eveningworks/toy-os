@@ -17,7 +17,7 @@
 // These files use NO section, even though the parser has them now -- one
 // file per setting is what removes the need, and it is the convention
 // this OS already teaches with /etc/services.d, /etc/config.d and
-// /usr/wm/desktop.
+// /usr/wm/applications.
 //
 //   /etc/settings.d/system.mouse_speed
 //     Description=How far the pointer moves for a given hand movement

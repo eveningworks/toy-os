@@ -43,17 +43,20 @@ static int row_h(void) { return icon_px() + 4 + label_h() + 10; } // icon + gap 
 // with a ".." marker rather than widening every column to fit it.
 #define DESKTOP_ICON_LABEL_CHARS 13
 #define DESKTOP_DOUBLE_CLICK_TICKS 30 // ~300ms at the PIT's 100Hz -- same order of magnitude as start_menu.c's flash
-#define DESKTOP_MAX_ICONS 64 // launchers plus the folder's entries, together
+#define DESKTOP_MAX_ICONS 64
 #define DESKTOP_CONF_PATH "/etc/desktop.conf"
-// THE DESKTOP FOLDER. An icon is either a LAUNCHER (a registry entry)
-// or a FILE here, in one index space: items 0..registry_count-1 are the
-// launchers, the rest are this directory's entries in name order,
-// directories first -- what KDE's Folder View and the Windows desktop
-// both show, a folder with the shortcuts in it. Read on the same
-// generation poll as the wallpaper; a change re-derives the grid.
+// THE DESKTOP FOLDER IS THE DESKTOP. Every icon is an entry of this
+// directory, in name order with directories first -- KDE's Folder View
+// and the Windows desktop, a folder with the shortcuts in it. A
+// `.desktop` file here is a LAUNCHER: drawn with its Name= and Icon=,
+// opened as the app it names (g_launch[i], see desktop_files_parse()).
+// The application database (/usr/wm/applications) feeds the Start menu
+// and the Open > submenu, never an icon. Read on the same generation
+// poll as the wallpaper; a change re-derives the grid.
 #define DESKTOP_DIR "/home/desktop"
-#define DESKTOP_FILES_MAX 40
+#define DESKTOP_FILES_MAX DESKTOP_MAX_ICONS
 static struct sys_dirent g_files[DESKTOP_FILES_MAX];
+static struct gui_app_entry g_launch[DESKTOP_FILES_MAX];   // name[0] == 0: a plain file
 static int g_file_count;
 // The plain background, shown when there is no wallpaper and behind a
 // letterboxed one.
@@ -85,7 +88,7 @@ static int band_x, band_y, band_w, band_h;
 static int last_click_index = -1;
 static uint64_t last_click_tick = 0;
 
-// Per-icon grid position, indexed the same as gui_app_registry[] --
+// Per-icon grid position, indexed the same as g_files[] --
 // see desktop.h's top comment. Loaded from DESKTOP_CONF_PATH (or
 // defaulted) on first use by desktop_load_positions().
 static int icon_col[DESKTOP_MAX_ICONS];
@@ -197,31 +200,39 @@ static void format_pos(char *out, int col, int row) {
     out[n] = '\0';
 }
 
-// --- the item space: launchers, then the folder's files ----------------
-static int item_count(void) {
-    int n = gui_app_registry_count + g_file_count;
-    return n > DESKTOP_MAX_ICONS ? DESKTOP_MAX_ICONS : n;
-}
-static int item_is_file(int i) { return i >= gui_app_registry_count; }
-static const struct sys_dirent *item_file(int i) {
-    return item_is_file(i) ? &g_files[i - gui_app_registry_count] : 0;
-}
+// --- the item space: the folder's entries -------------------------------
+static int item_count(void) { return g_file_count; }
+static int item_is_launcher(int i) { return g_launch[i].name[0] != '\0'; }
+static int item_is_dir(int i) { return g_files[i].is_dir; }
 static const char *item_name(int i) {
-    return item_is_file(i) ? item_file(i)->name : gui_app_registry[i].name;
+    return item_is_launcher(i) ? g_launch[i].name : g_files[i].name;
 }
-static int item_visible(int i) {
-    if (i < 0 || i >= item_count()) return 0;
-    return item_is_file(i) || gui_app_shows_in(&gui_app_registry[i], GUI_SHOW_DESKTOP);
-}
-// The saved-position key: a launcher by its name, a file by "file:" +
-// its name, so an app and a file called the same never share a cell.
+static int item_visible(int i) { return i >= 0 && i < item_count(); }
+// The saved-position key is the FILENAME, so a launcher keeps its cell
+// whatever its Name= says (the "file:" prefix is what older configs
+// keyed files by, kept so their cells survive).
 static const char *item_key(int i, char *buf, int cap) {
-    if (!item_is_file(i)) return item_name(i);
-    k_snprintf(buf, (size_t)cap, "file:%s", item_name(i));
+    k_snprintf(buf, (size_t)cap, "file:%s", g_files[i].name);
     return buf;
 }
 static void item_path(int i, char *out, int cap) {
-    k_snprintf(out, (size_t)cap, DESKTOP_DIR "/%s", item_name(i));
+    k_snprintf(out, (size_t)cap, DESKTOP_DIR "/%s", g_files[i].name);
+}
+static int is_desktop_file(const char *name) {
+    size_t n = k_strlen(name);
+    return n > 8 && k_strcmp(name + n - 8, ".desktop") == 0;
+}
+// Re-reads every launcher file. Only when the set of names changed, or
+// on Refresh: a same-name edit is not seen until then, the trade the
+// application database's fingerprint makes too.
+static void desktop_files_parse(void) {
+    for (int i = 0; i < g_file_count; i++) {
+        g_launch[i].name[0] = '\0';
+        if (item_is_dir(i) || !is_desktop_file(g_files[i].name)) continue;
+        char path[PATH_BUF];
+        item_path(i, path, sizeof path);
+        if (!gui_app_read_entry(path, &g_launch[i])) g_launch[i].name[0] = '\0';
+    }
 }
 
 // Re-lists the folder. Returns 1 if the set of names changed, which
@@ -249,6 +260,7 @@ static int desktop_files_reload(void) {
     if (!changed) return 0;
     for (int i = 0; i < n; i++) g_files[i] = fresh[i];
     g_file_count = n;
+    desktop_files_parse();
     return 1;
 }
 
@@ -557,7 +569,7 @@ int desktop_icon_geometry(int i, const char **name, int *x, int *y, int *w, int 
     icon_box(&g, i, x, y, w, h);
     if (name) *name = item_name(i);
     if (lines) *lines = label_lines(item_name(i));
-    if (kind) *kind = !item_is_file(i) ? "app" : item_file(i)->is_dir ? "dir" : "file";
+    if (kind) *kind = item_is_launcher(i) ? "app" : item_is_dir(i) ? "dir" : "file";
     return 1;
 }
 
@@ -617,9 +629,9 @@ void desktop_draw(void) {
         // waited for a codec with alpha.
         // A launcher's own artwork; a file's is the File Manager's
         // "folder"/"file", so the two views of one folder agree.
-        const struct uimg *ico = item_is_file(i)
-            ? icon_get(item_file(i)->is_dir ? "folder" : "file", px)
-            : icon_get(gui_app_registry[i].icon_name, px);
+        const struct uimg *ico = item_is_launcher(i)
+            ? icon_get(g_launch[i].icon, px)
+            : icon_get(item_is_dir(i) ? "folder" : "file", px);
         if (ico) {
             ugfx_blit_alpha(wm_surface(), x, y, ico->w, ico->h, ico->px, ico->w);
         } else {
@@ -630,7 +642,7 @@ void desktop_draw(void) {
             // first letter -- which is what this drew before desktop
             // entries existed, so an entry with no Icon= looks exactly
             // as it did.
-            char ic = item_is_file(i) ? 0 : gui_app_registry[i].icon;
+            char ic = item_is_launcher(i) ? g_launch[i].glyph : 0;
             char initial[2] = { ic ? ic : item_name(i)[0], '\0' };
             int gx = x + (px - ugfx_char_w()) / 2;
             int gy = y + (px - ugfx_char_h()) / 2;
@@ -728,7 +740,7 @@ int desktop_drag_active(void) { return drag.active || sel.armed; }
 
 void desktop_entries_changed(void) {
     icon_cache_invalidate(); // an entry's artwork can have arrived with it
-    desktop_files_reload();  // the folder half of the item space
+    if (!desktop_files_reload()) desktop_files_parse();   // same names: re-read the launchers
     positions_loaded = 0;   // re-read from DESKTOP_CONF_PATH, keyed by name
     rb_clear(&sel);         // indices into a table that just changed
     group_drag = 0;         // its snapshot indexes the table that changed
@@ -906,10 +918,9 @@ static void damage_icon_row(const struct icon_grid *g, int y) {
                    g->cell_h + DESKTOP_DRAG_DAMAGE_MARGIN);
 }
 
-// The items the band tests against: every icon actually ON the desktop,
-// at the rect the draw and the hit test already agree on. Indices are
-// REGISTRY indices, so rb_is_selected(i) lines up with
-// gui_app_registry[i] without a second mapping to keep in step.
+// The items the band tests against: every icon on the desktop, at the
+// rect the draw and the hit test already agree on. Indices are g_files
+// indices, so rb_is_selected(i) needs no second mapping.
 static int band_count(void *ctx) {
     (void)ctx;
     return item_count();
@@ -918,13 +929,6 @@ static int band_count(void *ctx) {
 static void band_item_rect(void *ctx, int i, int *x, int *y, int *w, int *h) {
     (void)ctx;
     struct icon_grid g = current_grid();
-    if (!gui_app_shows_in(&gui_app_registry[i], GUI_SHOW_DESKTOP)) {
-        // Hidden entries keep their index but occupy nothing, so the
-        // band can never select something that is not on screen.
-        *x = *y = 0;
-        *w = *h = 0;
-        return;
-    }
     icon_box(&g, i, x, y, w, h);   // icon plus its label, as hit-tested
 }
 
@@ -984,10 +988,10 @@ void desktop_update_drag(int mx, int my, uint8_t buttons) {
             int ddx = drag_px - drag_origin_px, ddy = drag_py - drag_origin_py;
             if (ddx * ddx + ddy * ddy > 9) {
                 drag_moved = 1;
-                // A FILE icon leaving its cell is also a drag the
+                // An icon leaving its cell is also a drag the
                 // compositor can offer to a window: its files go in
                 // the drag slot now (the selection, if it is in it).
-                if (item_is_file(drag.index)) {
+                {
                     static struct uclip c;
                     static char paths[DESKTOP_FILES_MAX][PATH_BUF];
                     int n = 0;
@@ -1104,12 +1108,42 @@ static void spawn_argv(char *const *argv) {
     else wm_track_launched(pid);
 }
 
+// A launcher opens through the registry when the application database
+// has its AppId -- single-instance and geometry rules live there -- and
+// runs its Exec= directly when it does not (a launcher can outlive its
+// entry).
+static void launch_entry(const struct gui_app_entry *e) {
+    for (int k = 0; k < gui_app_registry_count; k++)
+        if (k_strcmp(gui_app_registry[k].app_id, e->app_id) == 0) {
+            open_app(&gui_app_registry[k]);
+            return;
+        }
+    char *const argv[] = { (char *)e->exec, 0 };
+    spawn_argv(argv);
+}
+
+// The Start menu's "Add to desktop": a launcher file in the folder, as
+// KDE copies the .desktop into ~/Desktop. Written from the registry's
+// fields rather than copied, since the registry keeps no source
+// filename; the folder poll picks it up like any new file.
+void desktop_add_launcher(const struct gui_app *a) {
+    char path[PATH_BUF], text[256], glyph[2] = { a->icon, '\0' };
+    k_snprintf(path, sizeof path, DESKTOP_DIR "/%s.desktop", a->app_id);
+    int n = k_snprintf(text, sizeof text, "Name=%s\nExec=%s\nIcon=%s\nAppId=%s\n",
+                       a->name, a->exec_path, a->icon_name[0] ? a->icon_name : glyph, a->app_id);
+    if (n <= 0 || n >= (int)sizeof text) return;
+    int fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+    if (fd < 0) { wm_logf("desktop: cannot write %s", path); return; }
+    if (sys_write(fd, text, (size_t)n) != n) wm_logf("desktop: short write to %s", path);
+    sys_close(fd);
+}
+
 static void item_activate(int i) {
     if (!item_visible(i)) return;
-    if (!item_is_file(i)) { open_app(&gui_app_registry[i]); return; }
+    if (item_is_launcher(i)) { launch_entry(&g_launch[i]); return; }
     static char path[PATH_BUF];
     item_path(i, path, sizeof path);
-    if (item_file(i)->is_dir) {
+    if (item_is_dir(i)) {
         // A folder opens in the File Manager, both panes there.
         char *const argv[] = { "/bin/wm/apps/files", path, path, 0 };
         spawn_argv(argv);
@@ -1120,11 +1154,11 @@ static void item_activate(int i) {
     }
 }
 
-// The selected FILES' paths, for the clipboard and the verbs. Launchers
-// in the selection are skipped: they are not files.
+// The selection's paths, for the clipboard and the verbs. A launcher is
+// a file here like any other: cut, copied and deleted as one.
 static int selected_paths(char paths[][PATH_BUF], int cap) {
     int n = 0;
-    for (int i = gui_app_registry_count; i < item_count() && n < cap; i++)
+    for (int i = 0; i < item_count() && n < cap; i++)
         if (rb_is_selected(&sel, i)) item_path(i, paths[n++], PATH_BUF);
     return n;
 }
@@ -1250,8 +1284,8 @@ int desktop_handle_key(int key, unsigned mods) {
 // way to the settings page. Static rows because context_menu_open_at()
 // only borrows the pointer for as long as the menu stays open.
 //
-// OVER AN ICON the menu is that icon's -- Open, and for a file Cut,
-// Copy, Delete -- and the click SELECTS it first (the rule every file
+// OVER AN ICON the menu is that icon's -- Open, Cut, Copy, Delete,
+// a launcher being a file too -- and the click SELECTS it first (the rule every file
 // manager has, docs/conventions/gui.md), so the verbs act on what was
 // pointed at. That is the per-icon identity desktop.h's top comment
 // once said was missing: a file has one, a launcher's is "open it".
@@ -1324,13 +1358,11 @@ void desktop_handle_right_click(int mx, int my) {
         redraw_pending = 1;
         items[k++] = (struct context_menu_item){ .label = "Open", .on_select = menu_open_item,
                                                  .ctx = (void *)(intptr_t)idx };
-        if (item_is_file(idx)) {
-            items[k++] = (struct context_menu_item){ .separator = 1 };
-            items[k++] = (struct context_menu_item){ .label = "Cut", .on_select = menu_cut };
-            items[k++] = (struct context_menu_item){ .label = "Copy", .on_select = menu_copy };
-            items[k++] = (struct context_menu_item){ .separator = 1 };
-            items[k++] = (struct context_menu_item){ .label = "Delete", .on_select = menu_delete };
-        }
+        items[k++] = (struct context_menu_item){ .separator = 1 };
+        items[k++] = (struct context_menu_item){ .label = "Cut", .on_select = menu_cut };
+        items[k++] = (struct context_menu_item){ .label = "Copy", .on_select = menu_copy };
+        items[k++] = (struct context_menu_item){ .separator = 1 };
+        items[k++] = (struct context_menu_item){ .label = "Delete", .on_select = menu_delete };
         context_menu_open_at(mx, my, items, k);
         return;
     }

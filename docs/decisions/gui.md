@@ -590,14 +590,14 @@ that the kernel otherwise knows nothing about beyond a path to spawn.
 With M41 moving the apps out of ring 0 one at a time, that table was
 also the thing that would need editing on every single stage.
 
-The list is `/usr/wm/desktop/*.desktop` now, one entry per app, scanned
+The list is `/usr/wm/applications/*.desktop` now, one entry per app, scanned
 at desktop startup: freedesktop's idea, and near enough its file format
 that the entries are readable to anyone who has seen a Linux one
 (`Name=`, `Exec=`, `Icon=`, `Categories=`). The parser is
 `etc_config`'s, already in the tree for `/etc/toyos.conf` -- key=value
 lines with `#` comments is exactly the format, so no second parser
 exists. **Adding an app to the desktop is dropping a file in
-`data/wm/desktop/`.**
+`data/wm/applications/`.**
 
 `Exec=builtin:taskmgr` is the deliberate bridge: it names a
 kernel-space app's callbacks rather than a binary, so the two apps that
@@ -2989,7 +2989,7 @@ make identity (file, section, name) when the whole registry says
 (namespace, name), and a directory of small descriptors is what lets a
 setting's text be added one at a time and a malformed one cost exactly
 that setting. It is also the convention `/etc/services.d`,
-`/etc/config.d` and `/usr/wm/desktop` already teach.
+`/etc/config.d` and `/usr/wm/applications` already teach.
 
 This entry also argued that teaching the parser sections would change
 `etc_config_get(file, key)` at every call site. That turned out to be
@@ -6874,3 +6874,43 @@ since only a drag's own events ever read it.
 What is not built: a drag INTO Notepad or another app that has no
 drop target (the router will offer it; nobody accepts), a drag cursor
 shape, and offering the drag to a client's popup surfaces.
+
+## The desktop shows its folder and nothing else, and the application database is a separate directory
+
+Until 2026-09-10 `/usr/wm/desktop` did two jobs: it was the list of
+installed applications (the Start menu) AND every entry in it was an
+icon on the desktop, with `ShowIn=` the only way off. When
+`/home/desktop` arrived the desktop became two lists glued into one
+index space, and the maintainer's reading was the right one: two
+directories both called "desktop", neither doing what its name said.
+
+**What real systems do.** Linux keeps the application database in
+`/usr/share/applications` and the desktop in `~/Desktop`; KDE's Folder
+View and GNOME's (now retired) desktop icons show that folder, and
+putting an app on the desktop is copying its `.desktop` file there.
+Windows is the same shape: the Start menu is built from the Programs
+folders, the desktop shows the Desktop folder, and "Pin to" or "Create
+shortcut" adds a file. Nobody shows every installed application on
+the desktop, and nobody has for twenty years.
+
+**toy-os follows.** The database is `/usr/wm/applications`, the desktop
+is exactly `/home/desktop`, a `.desktop` file there is a launcher read
+by the same parser (`gui_app_read_entry()`), and "Add to desktop" on a
+Start menu row writes one. A launcher on the desktop opens through the
+registry entry with the same `AppId` so single-instance and remembered
+geometry still apply, and falls back to its own `Exec=` so a launcher
+outlives an uninstalled entry rather than going dead.
+
+**Seeding once, not syncing.** Five launchers are put on a fresh
+desktop so it is not blank, but through the seed writer's `once/`
+mode, which copies a file only when it is missing. The `sync/` tree
+would put a deleted launcher back on every `make iso` -- the exact
+trap CLAUDE.md records for `seed/sync/` -- and a desktop the user
+cannot clear is not a desktop. The cost is that a CHANGED default
+launcher does not reach an existing image either, which is the right
+side to err on for a file the user is expected to own.
+
+**The one thing lost**: `ShowIn=desktop` no longer hides or shows an
+icon; it now only governs the desktop menu's Open > submenu. Kept
+rather than removed because the parser, the test and the entries all
+carry it and the submenu is a real second surface.

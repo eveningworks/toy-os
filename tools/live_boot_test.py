@@ -338,7 +338,7 @@ def main():
         #     punched holes at a VOLUME-relative offset through the raw
         #     fd, so on a partitioned image every punch landed one
         #     partition-start early -- on blocks that were in use. It
-        #     emptied /usr/wm/desktop, /etc/services.d and
+        #     emptied /usr/wm/applications, /etc/services.d and
         #     /usr/wm/startup in every live image, and the live CD then
         #     booted with a full /bin and a desktop with NO APPS.
         #
@@ -347,7 +347,7 @@ def main():
         #     names the three that did not -- a corruption that lands
         #     somewhere specific needs a check that looks THERE, and
         #     "some directory is readable" is not that check.
-        for d, want in (("/usr/wm/desktop", ".desktop"),
+        for d, want in (("/usr/wm/applications", ".desktop"),
                         ("/etc/services.d", "toywm"),
                         ("/usr/wm/startup", "")):
             got = sh.run(f"sh ls {d}")

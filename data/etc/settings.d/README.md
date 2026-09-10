@@ -7,7 +7,7 @@ identity is that pair and two programs may each own a `theme`.
 The format is `etc_config`'s: `name=value` lines, `#` comments,
 whitespace trimmed. These files use **no section**, though the parser
 has them now — one file per setting is what removes the need, and it
-matches `/etc/services.d`, `/etc/config.d` and `/usr/wm/desktop`, which
+matches `/etc/services.d`, `/etc/config.d` and `/usr/wm/applications`, which
 are all directories of small descriptors.
 
 ```

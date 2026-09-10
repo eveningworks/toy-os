@@ -1218,7 +1218,7 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
 // A file named on the command line, opened once the window exists.
 // Empty when there was no argument -- which is every launch until the
 // File Manager started spawning this with a path (a .desktop `Handles=`
-// entry claims .txt and friends, see data/wm/desktop/README.md).
+// entry claims .txt and friends, see data/wm/applications/README.md).
 static char g_arg_path[PATH_MAX_LEN];
 
 // Somebody replaced the clipboard -- possibly this app. Paste greys and

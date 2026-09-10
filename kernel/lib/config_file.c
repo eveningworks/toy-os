@@ -118,7 +118,7 @@ static struct etc_config_buf g_scan_buf;
                          "Remembered window positions and sizes", 1);
     config_file_register("keymaps", "/etc/kbs",
                          "Keyboard layout tables (dir)", 1);
-    config_file_register("apps", "/usr/wm/desktop",
+    config_file_register("apps", "/usr/wm/applications",
                          "Start-menu/desktop entries (dir)", 1);
     // The one namespace with NO file. Registered like the others so
     // that `kernel.heap_debug` resolves through the same path lookup

@@ -1021,7 +1021,7 @@ def cmd_trim(args):
     landed one partition-start early -- 1 MiB, 256 blocks -- on blocks
     that were in use.
 
-    It destroyed `/usr/wm/desktop`, `/etc/services.d` and
+    It destroyed `/usr/wm/applications`, `/etc/services.d` and
     `/usr/wm/startup` in every live image built after disk.img became
     partitioned: the live CD booted with a full /bin and a desktop with
     NO APPS, because the .desktop entries the Start menu is built from

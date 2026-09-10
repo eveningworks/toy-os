@@ -305,8 +305,8 @@ struct gui_app {
 #define GUI_APP_ICON_MAX 24
 #define GUI_APP_EXEC_MAX 64
 
-// The registry, BUILT AT STARTUP from /usr/wm/desktop/ -- see
-// gui_apps.c's top comment and data/wm/desktop/README.md. Not const any
+// The registry, BUILT AT STARTUP from /usr/wm/applications/ -- see
+// gui_apps.c's top comment and data/wm/applications/README.md. Not const any
 // more, and not a compiled-in list: adding an app to the desktop is
 // dropping a file there, not editing this file and rebuilding the
 // kernel.
@@ -316,7 +316,7 @@ extern int gui_app_registry_count;
 // --- which SURFACE an entry appears on --------------------------------
 //
 // The desktop icons and the Start menu are built from ONE directory
-// (/usr/wm/desktop), and an entry appears on both unless its ShowIn=
+// (/usr/wm/applications), and an entry appears on both unless its ShowIn=
 // key says otherwise. A second directory was the obvious alternative and
 // is rejected: an app wanted in both places would need its file
 // duplicated, and the two copies drift -- a renamed app or a changed
@@ -342,6 +342,23 @@ extern int gui_app_registry_count;
 // gui_app_visible_at() returns NULL for an out-of-range index rather
 // than clamping, so a stale index is a visible no-op instead of a
 // launch of whatever happens to be last.
+// ONE PARSED .desktop FILE, as either surface reads it: the application
+// database builds its registry from these, and the desktop reads a
+// launcher dropped in /home/desktop the same way (desktop.c).
+struct gui_app_entry {
+    char name[GUI_APP_NAME_MAX];
+    char exec[GUI_APP_EXEC_MAX];
+    char icon[GUI_APP_ICON_MAX];   // "" when Icon= was a bare character
+    char glyph;                    // that character, else 0
+    char app_id[GUI_APP_ICON_MAX];
+    char category[16];
+    unsigned show_in;
+    int remember_geometry;
+};
+// Reads `path` into *e. 0 when the file is missing, has no Name= or
+// Exec=, says NoDisplay=1, or still names the retired builtin: form.
+int gui_app_read_entry(const char *path, struct gui_app_entry *e);
+
 int gui_app_visible_count(unsigned surface);
 struct gui_app *gui_app_visible_at(unsigned surface, int n);
 

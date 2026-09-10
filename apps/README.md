@@ -116,7 +116,7 @@ Where each thing lives now:
 | was | is |
 |---|---|
 | `apps/wm/*` (event loop, chrome, compositing, the `gui` debug commands) | `userland/wm/*`, built as `/bin/wm/system/toywm` |
-| `apps/gui_apps.c` (the app registry) | `userland/wm/gui_apps.c`, still reading `/usr/wm/desktop/*.desktop` |
+| `apps/gui_apps.c` (the app registry) | `userland/wm/gui_apps.c`, still reading `/usr/wm/applications/*.desktop` |
 | `apps/ui/*` (buttons, primitives, focus ring, scrollbar, textbox, radio list, icon grid) | `userland/ui/uui_*` -- Toykit, which is what a client programs against |
 | `apps/ui/ui_scrollback.*` and `apps/editor.*` (the `edit` command) | `/bin/edit`, over `userland/ui/utext.c` -- the model Notepad already used |
 | the GUI apps themselves | `userland/gui/{system,apps,demos}/` |

@@ -133,7 +133,7 @@ Four pieces, bottom to top:
     userland/ui/uui_fileview.{c,h}      the directory listing, as a widget
     userland/bin/cp.c                   copy a file or a tree
     userland/gui/apps/files.c           the two-pane manager
-    data/wm/desktop/files.desktop       + Handles= associations
+    data/wm/applications/files.desktop       + Handles= associations
 
 ### `uui_fileview` -- the widget
 

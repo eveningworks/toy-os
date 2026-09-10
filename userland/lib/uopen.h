@@ -7,7 +7,7 @@
 //
 //   1. /etc/mimeapps.conf -- the USER's choice per extension:
 //      `.jpg=imgview`, where the value names a DESKTOP ENTRY (the
-//      filename stem under /usr/wm/desktop), or a literal /path as the
+//      filename stem under /usr/wm/applications), or a literal /path as the
 //      escape hatch, or `-` for "cleared". mimeapps.list's
 //      [Default Applications] role. `/bin/open -s` edits it.
 //   2. `Handles=` on the .desktop entries -- what each app DECLARES,

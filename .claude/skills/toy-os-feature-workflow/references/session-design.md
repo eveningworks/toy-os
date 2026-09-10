@@ -440,8 +440,8 @@ desktop or the filesystem -- most of it invalidates older advice above.**
   kernel-side (they need syscalls ring 3 lacks, which is stage 4's job).
   `apps/ui/` lost four widgets and is SHRINKING -- add a widget to
   `userland/ui/` unless the WM itself needs it.
-- **The Start menu is built from FILES**, `/usr/wm/desktop/*.desktop`
-  (source: `data/wm/desktop/`). Adding an app is dropping a file, not
+- **The Start menu is built from FILES**, `/usr/wm/applications/*.desktop`
+  (source: `data/wm/applications/`). Adding an app is dropping a file, not
   editing `gui_apps.c`. Windowed binaries live in
   `/bin/wm/{system,apps,demos}/`, the class coming from
   `userland/gui/<class>/`.
@@ -696,7 +696,7 @@ false: `git add -A` had skipped it.
 
 | what you are adding | write it here |
 |---|---|
-| a Start-menu / desktop entry | `data/wm/desktop/*.desktop` |
+| a Start-menu / desktop entry | `data/wm/applications/*.desktop` |
 | a startup entry | `data/wm/startup/` |
 | an app icon | `tools/gen_icons.py` -> `data/icons/` |
 | a font, wallpaper, cursor theme | `data/fonts/`, `data/wallpapers/`, `data/cursors/` |

@@ -446,6 +446,7 @@ static void ctx_toggle_maximize_window(void *ctx) {
 }
 
 static void ctx_open_app(void *ctx) { open_app((const struct gui_app *)ctx); }
+static void ctx_add_to_desktop(void *ctx) { desktop_add_launcher((const struct gui_app *)ctx); }
 
 // THE WINDOW MENU: one menu for the whole window, mirroring the
 // title-bar buttons' actions rather than requiring a click to land
@@ -492,11 +493,14 @@ void wm_handle_right_click(int mx, int my) {
                       ? (my - menu_y) / item_h : -1;
         start_menu_close();
         if (hit_row >= 0 && hit_row < gui_app_registry_count) {
-            static struct context_menu_item item[1];
+            static struct context_menu_item item[2];
             item[0].label = "Open";
             item[0].on_select = ctx_open_app;
             item[0].ctx = (void *)&gui_app_registry[hit_row];
-            context_menu_open_at(mx, my, item, 1);
+            item[1].label = "Add to desktop";
+            item[1].on_select = ctx_add_to_desktop;
+            item[1].ctx = item[0].ctx;
+            context_menu_open_at(mx, my, item, 2);
         }
         return;
     }

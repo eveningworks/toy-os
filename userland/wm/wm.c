@@ -636,7 +636,7 @@ void close_window(int idx) {
 // the registered compositor, so that call forwarded input to itself.
 // Input now arrives the other way round: see wm_rawin.c.
 
-// ---- live reload of /usr/wm/desktop ----
+// ---- live reload of /usr/wm/applications ----
 //
 // Drop a .desktop file in and it appears, the way KDE and Explorer watch
 // their desktop folders. There is no inotify here, so the mechanism is
@@ -650,7 +650,7 @@ void close_window(int idx) {
 // the opposite of subtle.
 //
 // The counter is global, so any filesystem change wakes this, not just
-// one in /usr/wm/desktop. A Notepad save costs one small directory read
+// one in /usr/wm/applications. A Notepad save costs one small directory read
 // and finds nothing changed. That is the deliberate trade: per-path
 // watches would need a registry, a lifetime and an eviction policy to
 // save a read that only happens when something already changed.
@@ -875,7 +875,7 @@ void wm_run(void) {
     // beacon has a compositor able to serve it.
     wm_client_chan_open();
 
-    // Build the app list from /usr/wm/desktop/ before anything draws a
+    // Build the app list from /usr/wm/applications/ before anything draws a
     // menu or an icon. Data on disk, not a compiled-in table -- see
     // apps/gui_apps.c.
     gui_apps_load();
