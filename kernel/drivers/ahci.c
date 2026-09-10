@@ -576,18 +576,18 @@ static void ahci_probe(const struct pci_device *dev) {
     // A vector if the controller offers one, else the pin. QEMU's
     // ich9-ahci advertises neither capability, so this takes the pin
     // on every emulated boot; a real ICH9-and-later part has MSI.
-    uint8_t line = g_pci->interrupt_line;
+    uint8_t line = pci_irq_line(g_pci);
     g_msi_vector = pci_msi_request(g_pci, irq_handler);
     if (g_msi_vector) {
         px_w(g_preg, PX_IE, PXIE_MASK);
         hba_w(HBA_GHC, hba_r(HBA_GHC) | GHC_IE);
-    } else if (line != 0xFF && line != 0 && line < 16) {
+    } else if (line != IRQ_NONE) {
         g_irq = line;
         irq_register_handler(g_irq, irq_handler);
         px_w(g_preg, PX_IE, PXIE_MASK);
         hba_w(HBA_GHC, hba_r(HBA_GHC) | GHC_IE);
         pci_command_update(g_pci, 0, PCI_CMD_INTX_DISABLE);
-        pic_clear_mask(g_irq);
+        irq_unmask(g_irq);
     }
 
     klog_printf("ahci: port %u: \"%s\", %u sectors, LBA%s, %d sectors/transfer, %s\n",

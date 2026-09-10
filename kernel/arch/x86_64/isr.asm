@@ -70,12 +70,13 @@ ISR_ERR   30
 ISR_NOERR 31
 
 ; IRQs remapped to 32-47, then the MSI vectors at 48-63 (lapic.h's
-; LAPIC_VECTOR_BASE..LAST). One stub apiece either way -- the vector
-; number is what tells isr_dispatch() which controller to acknowledge,
-; so the two ranges must not overlap and this %rep is where that is
-; decided.
+; LAPIC_VECTOR_BASE..LAST), then 64-71 for the I/O APIC's inputs above
+; the ISA range (GSI 16-23, irq.h's irq_vector()). One stub apiece
+; either way -- the vector number is what tells isr_dispatch() which
+; controller to acknowledge, so the ranges must not overlap and this
+; %rep is where that is decided.
 %assign i 32
-%rep 32
+%rep 40
 ISR_NOERR i
 %assign i i+1
 %endrep

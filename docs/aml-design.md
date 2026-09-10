@@ -1,7 +1,15 @@
 # AML: a namespace this kernel can walk, staged
 
-**Status: STAGES 0 AND 1 ARE BUILT (2026-08-31); STAGES 2-3 ARE
-DESIGNED, NOT BUILT.** A table can be captured and checksum-verified
+**Status: STAGES 0 AND 1 ARE BUILT (2026-08-31); STAGE 2 IS BUILT AS
+FAR AS `_PRT` NEEDS IT (2026-09-10: integers, strings, buffers,
+packages and NameStrings decoded and resolved, `kernel/acpi/aml_data.c`);
+STAGE 3 IS DESIGNED, NOT BUILT.** The first consumer of stage 2 is PCI
+interrupt routing (`kernel/acpi/acpi_prt.c`), which reads `_PRT` by its
+measured shapes and evaluates nothing but one flag -- the line this
+document draws holds; see `docs/decisions/drivers.md`. Two things the
+walk got wrong were found by it: a `Scope` re-opens an existing object
+rather than declaring a second one, and the namespace is built at boot
+now, in `acpi_init()`. A table can be captured and checksum-verified
 (`acpi --dump`, `tools/acpi_dump.py`), and `kernel/acpi/aml.c` walks the
 DSDT and SSDTs into a namespace of declarations -- 336 nodes and 53
 devices on QEMU's DSDT, with nothing refused. Nothing is executed and no

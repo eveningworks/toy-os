@@ -2199,13 +2199,13 @@ static void usb_probe(const struct pci_device *d) {
     // Falling back is the ordinary path, not an error: no LAPIC (an
     // older CPU, or `nomsi` on the GRUB line) and no MSI capability
     // both mean the pin, exactly as before.
-    uint8_t line = d->interrupt_line;
+    uint8_t line = pci_irq_line(d);
     g_hc.msi_vector = pci_msi_request(d, xhci_irq_handler);
     g_hc.msix = d->irq_msix;
 
     if (g_hc.msi_vector) {
         g_hc.irq = 0;   // nothing on a line any more
-    } else if (line == 0xFF || line == 0 || line >= 16) {
+    } else if (line == IRQ_NONE) {
         klog_printf("usb: no usable INTx line (pin reports %u) -- polling\n", line);
         g_hc.irq = 0;
     } else {

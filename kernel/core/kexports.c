@@ -17,7 +17,6 @@
 #include "pci_internal.h"
 #include "pci_driver.h"
 #include "irq.h"
-#include "pic.h"
 #include "netdev.h"
 #include "driver.h"
 #include "ktest.h"
@@ -59,11 +58,13 @@ EXPORT_SYMBOL(pci_enable_bus_master);
 EXPORT_SYMBOL(pci_command_update);
 EXPORT_SYMBOL(pci_msi_request);
 EXPORT_SYMBOL(pci_msi_release);
+EXPORT_SYMBOL(pci_irq_line);
 
-// --- irq.h / pic.h -----------------------------------------------------
+// --- irq.h -------------------------------------------------------------
 EXPORT_SYMBOL(irq_register_handler);
 EXPORT_SYMBOL(irq_unregister_handler);
-EXPORT_SYMBOL(pic_clear_mask);
+EXPORT_SYMBOL(irq_unmask);
+EXPORT_SYMBOL(irq_mask);
 
 // --- netdev.h ----------------------------------------------------------
 EXPORT_SYMBOL(net_register);

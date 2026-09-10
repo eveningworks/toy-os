@@ -674,6 +674,7 @@ whenever a headline here tells you something you did not already know.
 - **THE MONITOR'S EDID IS A DISPLAY-LAYER FACT READ ONCE AT PROBE, AND THE INTEL DRIVER READS ITS FIRMWARE TIMINGS BACK BEFORE IT MAY WRITE ANY**
 - **A BOUNDED WAIT USES A DEADLINE WHERE THE CLOCK ADVANCES WITH INTERRUPTS OFF, AND A POLL COUNT WHERE IT DOES NOT**
 - **THERE IS A LOCAL APIC NOW, AND A DEVICE MAY BE ON A VECTOR INSTEAD OF A LINE**
+- **THE I/O APIC DELIVERS EVERY LINE, THE MADT SAYS WHERE AN ISA IRQ ARRIVES, AND A PCI PIN IS ROUTED BY `_PRT`** -- drivers call `irq_unmask()` and `pci_irq_line()` and never learn which controller is live; `_PRT` is READ (one assumption: a `PIC*` name is 1), never executed; `noioapic` keeps the 8259
 - **THE TICK IS A CLOCKEVENT, AND ON A MACHINE WITH A LAPIC IT IS NOT THE PIT**
 - **A VIRTIO DEVICE TAKES MSI-X ONLY, ITS QUEUE VECTORS ARE WRITTEN BY `virtqueue_setup()`, AND ITS ARMING WRITE IS `DRIVER_OK`**
 - **A USB ETHERNET ADAPTER IS A `net_device`, AND ITS CONFIGURATION IS A CHOICE**
@@ -1487,6 +1488,10 @@ cost".
   from DWARF, ring 3 included; **never hand-roll `nm`**),
   `acpi_dump.py` (a whole ACPI table out of a guest, checksum-verified
   -- ranged because a big table's hex OUTRUNS the debug console),
+  `aml_walk.py` (a DSDT dump on the HOST: how its `_PRT` is written --
+  the measurement behind the kernel's reader, and the oracle for its
+  constant-object decoder; for a laptop, `acpi --dump DSDT >
+  /var/tmp/dsdt.txt` then `remote.py get`),
   `QMPSession.hmp()` (**the QEMU monitor -- the one oracle the guest
   cannot fake**; ask it BEFORE trusting anything the guest says about
   itself), `regex_hostcheck.py`, `uimg_hostcheck.py`,

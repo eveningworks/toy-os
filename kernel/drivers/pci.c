@@ -142,6 +142,9 @@ void pci_init(void) {
                 d->class_code = config_read8((uint8_t)bus, (uint8_t)device, (uint8_t)function, 0x0B);
                 d->header_type = config_read8((uint8_t)bus, (uint8_t)device, (uint8_t)function, 0x0E);
                 d->interrupt_line = config_read8((uint8_t)bus, (uint8_t)device, (uint8_t)function, 0x3C);
+                d->interrupt_pin = config_read8((uint8_t)bus, (uint8_t)device, (uint8_t)function, 0x3D);
+                d->secondary_bus = (d->header_type & 0x7F) == 1
+                    ? config_read8((uint8_t)bus, (uint8_t)device, (uint8_t)function, 0x19) : 0;
                 for (int i = 0; i < 6; i++) {
                     d->bar[i] = config_read32((uint8_t)bus, (uint8_t)device, (uint8_t)function, (uint8_t)(0x10 + i * 4));
                     d->bar_size[i] = 0;
@@ -192,6 +195,14 @@ int pci_device_count(void) {
     // misdirection bootstage.h exists for.
     BOOT_REQUIRE(BOOT_SUB_PCI);
     return g_count;
+}
+
+const struct pci_device *pci_bridge_for_bus(uint8_t bus) {
+    if (!bus) return 0;
+    for (int i = 0; i < g_count; i++)
+        if ((g_devices[i].header_type & 0x7F) == 1 && g_devices[i].secondary_bus == bus)
+            return &g_devices[i];
+    return 0;
 }
 
 const struct pci_device *pci_device_at(int index) {

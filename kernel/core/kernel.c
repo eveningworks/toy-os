@@ -35,6 +35,7 @@
 #include "font_config.h"
 #include "setting.h"
 #include "lapic.h"  // lapic_init() -- the LAPIC, and the vectors MSI uses
+#include "ioapic.h" // ioapic_init() -- the lines, off the 8259
 #include "clockevent.h" // clockevent_init_lapic() -- the tick, per core
 #include "acpi.h"   // acpi_init() -- the firmware tables, and what poweroff needs from them
 #include "query.h"   // the fact registry -- query_init() and the core's providers
@@ -214,6 +215,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // any PCI driver looks for an MSI vector to claim. A machine with no
     // APIC, or one booted with `nomsi`, simply stays on the PIC.
     lapic_init();
+    ioapic_init();   // every line moves off the 8259 here -- kernel/arch/x86_64/ioapic.c
 
     // Monotonic time, on the PIT to begin with. Before anything wants a
     // timestamp and before cpu_info_init() below, which calibrates the

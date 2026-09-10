@@ -79,6 +79,17 @@ int signal_send_group(int pgid, int sig);
 // May not return in the ordinary sense: terminating the CURRENT process
 // hands the CPU to something else through scheduler_on_exit(), exactly
 // as SYS_EXIT does.
+// WHERE THE TRAP STANDS relative to the interrupted syscall -- the
+// third argument. TRAP_DONE: whatever it was has produced its result.
+// AT_SYSCALL_ENTRY: the syscall has not run, and the frame can be
+// rewound over the `int $0x80` (SA_RESTART) or given -EINTR.
+// BEFORE_REISSUE: a signal wake already rewound the frame onto the
+// `int $0x80` and a hardware interrupt landed before it executed --
+// the syscall has not run either, but the frame must be stepped
+// FORWARD for -EINTR and left alone for SA_RESTART.
+#define SIG_TRAP_DONE        0
+#define SIG_AT_SYSCALL_ENTRY 1
+#define SIG_BEFORE_REISSUE   2
 int signal_deliver_pending(int pid, uint64_t *regs, int at_syscall_entry);
 
 // A SYNCHRONOUS fault, offered to the process that caused it. Returns 1

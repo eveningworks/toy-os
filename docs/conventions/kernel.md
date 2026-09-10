@@ -1131,6 +1131,75 @@ Ask through `virtio_irq_is_ours()` anyway -- the emulator's incidental
 behaviour is not something to build on -- but do not claim the trap has
 been demonstrated, because it has not been.
 
+
+## THE I/O APIC DELIVERS EVERY LINE, THE MADT SAYS WHERE AN ISA IRQ ARRIVES, AND A PCI PIN IS ROUTED BY `_PRT`
+
+`kernel/arch/x86_64/ioapic.c`, `irq.c`, `kernel/acpi/acpi_prt.c`,
+`kernel/drivers/pci_irq.c`. Once `lapic_init()` has run, `ioapic_init()`
+re-routes every line the 8259 was delivering onto the I/O APIC, masks
+the 8259 and closes LINT0; from then on a line is a redirection entry,
+its EOI goes to the LAPIC, and the machine has 24 inputs instead of 15.
+Six things to know.
+
+**A DRIVER ASKS `irq_unmask(line)` AND NEVER LEARNS WHICH CONTROLLER IS
+LIVE** -- Linux's `irq_chip` in one call. `pic_clear_mask()` is the
+8259's own driver and nothing outside `irq.c` calls it. A PCI driver
+gets its line from `pci_irq_line(dev)`, which is the one function that
+knows both halves: the `_PRT` GSI when the I/O APIC delivers, the
+BIOS's `interrupt_line` otherwise, and `IRQ_NONE` when nothing is
+usable -- so `if (line != IRQ_NONE) { register; irq_unmask(line); }`
+is the whole of a driver's INTx path.
+
+**AN ISA IRQ NUMBER IS NOT AN I/O APIC INPUT.** The MADT's interrupt
+source overrides say where each one arrives: IRQ 0 is GSI 2 on every
+PC, and the SCI (IRQ 9) is level-triggered. `ioapic_gsi_for_isa()` is
+the only place that translation lives; ignoring it boots on QEMU's
+default machine and hangs on the first tick on real hardware. A line
+with no override is edge/high unless the chipset's ELCR says the BIOS
+routed a level (PCI) source there -- Linux's rule too.
+
+**A PCI INTx PIN IS ROUTED BY THE FIRMWARE'S `_PRT`, READ AND NOT
+EXECUTED.** Measured on four machines with `tools/aml_walk.py`: an
+APIC-mode `_PRT` is a constant package, reached through
+`If (PICx) Return (A) else Return (B)` on the laptops and q35, through
+`Return (^^A)` on the Lenovo, and outright on i440fx. The reader in
+`acpi_prt.c` follows exactly those shapes and ONE assumption -- a
+name beginning `PIC` reads as 1, the value `\_PIC(1)` would have set
+-- and refuses anything else with `-ENOTSUP`. A link device counts
+only if its `_CRS` is a constant buffer; i440fx's links read PIRQ
+registers, so i440fx falls back to `interrupt_line`, which is right
+there because its GSI handler fans a PIRQ out to the same input.
+
+**`Scope (\_SB.PCI0)` RE-OPENS THE DEVICE.** The namespace walk used to
+add a second `PCI0` for it, so an object declared in a later scope
+hung under a duplicate and `aml_child(root, "_PRT")` found nothing
+(q35's `_PRT` was invisible for exactly that reason). `container()`
+resolves a Scope's full name now. And **the namespace is built in
+`acpi_init()`**, because `pci_bind()` asks it before any driver unmasks
+a line; before this it was built only by the `aml` console command.
+
+**A GSI ABOVE 15 IS LEVEL/LOW UNLESS ITS LINK SAID OTHERWISE**, and it
+raises a vector in 64-71 (`irq_vector()`); ISA lines keep 32-47. The
+`.rep` in `isr.asm` and `isr_table[]` grew by eight together -- the
+vector ranges must not overlap, and that file is where it is decided.
+
+**THE PIT IS IN MODE 2, AND MODE 3 IS THE TRAP.** A square wave (mode
+3) has two output transitions per period; through QEMU's I/O APIC that
+counted as ~2x the tick rate -- the LAPIC timer calibrated against it
+to half its count, so the clock ran twice as fast and every `sched`
+test that waits on ticks timed out. The 8259 had counted one edge per
+period, which is why nothing noticed for months. A rate generator
+(mode 2) is one pulse per period on either controller, and what
+Linux's PIT clockevent programs. `timer.c` says so beside the write.
+
+**`noioapic` KEEPS THE PIC PATH ALIVE**, which it has to, since a CPU
+with no APIC takes it anyway (`nomsi` turns off both). The bring-up
+order is load-bearing: `idt_init()` unmasks the tick, keyboard and
+serial on the 8259, `ioapic_init()` migrates whatever is unmasked at
+that moment and silences the PIC AFTER the entries are live, so no
+tick falls in the gap -- the PIT calibrates the LAPIC timer through
+the I/O APIC on every boot, which is the check.
+
 ## THE TICK IS A CLOCKEVENT, AND ON A MACHINE WITH A LAPIC IT IS NOT THE PIT
 
 `kernel/clockevent.h` is the device that decides WHEN to interrupt --
@@ -1911,6 +1980,22 @@ scheduler just switched away from is still what CR3 points at --
 and `syscall_process_kill_cleanup()`, which can only ask the second
 question, refused the teardown and logged it. Ask the first, then move
 CR3 to the kernel's before killing.
+
+
+**A SIGNAL WAKE REWINDS THE SYSCALL, AND THE ONE INSTRUCTION BEFORE
+THE RE-ISSUE IS A WINDOW** (found 2026-09-10, when the I/O APIC
+changed interrupt timing enough to land in it about one full suite in
+two). A signal that wakes a parked process puts its RIP back on the
+`int $0x80` so the syscall-entry trap can fail the call with `-EINTR`
+or restart it. A hardware interrupt arriving before that instruction
+executes reaches the OTHER delivery site, where a trap is "finished"
+-- and a handler pushed there returns into the syscall, which then
+runs as if nothing had happened. `sched_proc.syscall_reissue` records
+the window: set by the wake, cleared at the next syscall entry, and
+honoured by `SIG_BEFORE_REISSUE` in `push_signal_frame()`, which steps
+RIP OVER the pending `int $0x80` for `-EINTR` and leaves it for
+`SA_RESTART`. `signal_test`'s "without it: the interrupted read fails
+with EINTR" is the check, and only the full suite reaches the window.
 
 ## A CHILD'S DEATH RAISES SIGCHLD, AND THE NOTIFICATION HAS ONE HOME.
 

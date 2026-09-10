@@ -950,7 +950,7 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
 
     // Interrupts: a vector if the machine has one, else the pin. The
     // handler exists before either is armed; registration is last.
-    uint8_t line = d->interrupt_line;
+    uint8_t line = pci_irq_line(d);
     h->msi_vector = pci_msi_request(d, hda_irq);
     if (!h->msi_vector) {
         if (line == 0xFF || line == 0 || line >= 16) {
@@ -960,7 +960,7 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
         h->irq = line;
         irq_register_handler(line, hda_irq);
         pci_command_update(d, 0, PCI_CMD_INTX_DISABLE);
-        pic_clear_mask(line);
+        irq_unmask(line);
     }
     mw32(h, HDA_INTCTL, INTCTL_GIE | INTCTL_CIE); // jack events from here on
 

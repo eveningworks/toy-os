@@ -714,6 +714,13 @@ uint32_t scheduler_signal_pending(int pid);
 // committing.
 int scheduler_signal_deliverable(int pid);
 
+// Whether `pid` is between a signal wake that rewound its syscall and
+// the re-issue of that syscall -- a window one instruction wide in ring
+// 3, which a hardware interrupt can land in. idt.c asks at the finished-
+// trap delivery site, and clears it at every syscall entry.
+int  scheduler_syscall_reissue_pending(int pid);
+void scheduler_syscall_entered(int pid);
+
 // Takes the lowest deliverable signal and clears JUST THAT BIT,
 // returning its number (0 when there is nothing to take).
 //

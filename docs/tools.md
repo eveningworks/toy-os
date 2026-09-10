@@ -64,6 +64,17 @@ manual steps to be worth automating:
   into a KTEST, which is the point: `docs/aml-design.md` needs a real
   DSDT, and a hand-written one would only ever agree with the parser
   written beside it.
+- **`aml_walk.py`** -- a DSDT dump on the HOST, classified: how its
+  `_PRT` is written (a static package, a method returning one, a method
+  choosing between two by a `PIC` flag, a method returning a reference),
+  every entry decoded, and whether each link device's `_CRS` is a
+  constant or a method that reads hardware. It is the measurement the
+  kernel's `_PRT` reader was designed from, and the oracle for
+  `kernel/acpi/aml_data.c` -- the two share no code. No AML disassembler
+  is installed on this host; this is the one that exists. Refuses a dump
+  whose ACPI checksum fails (a console dump loses bytes in transit; for
+  a laptop write it to a file and `remote.py get` it). `--tree` prints
+  the namespace.
 - **`qemu_matrix.py`** -- runs the kernel test suite against SEVERAL
   QEMU versions in Docker (6.2, 7.2, 8.2 -- the last is what GitHub's
   runner has). Nothing is BUILT in the container: the ISO comes from

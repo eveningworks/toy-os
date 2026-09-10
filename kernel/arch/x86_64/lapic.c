@@ -149,6 +149,11 @@ void lapic_eoi(void) {
     if (g_base) lapic_write(LAPIC_REG_EOI, 0);
 }
 
+void lapic_mask_lint0(void) {
+    if (g_base) lapic_write(LAPIC_REG_LVT_LINT0, LVT_MASKED);
+}
+
+
 uint8_t lapic_alloc_vector(void (*handler)(uint64_t *regs)) {
     if (!g_base || !handler) return 0;
     for (int i = 0; i < LAPIC_VECTOR_COUNT; i++) {

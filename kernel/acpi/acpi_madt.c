@@ -18,6 +18,7 @@ static struct acpi_cpu g_cpus[ACPI_CPU_MAX];
 
 #define MADT_LAPIC        0
 #define MADT_IOAPIC       1
+#define MADT_ISO          2
 #define MADT_LAPIC_OVERRIDE 5
 #define MADT_X2APIC       9
 
@@ -79,7 +80,23 @@ void acpi_madt_init(void) {
             for (int i = 3; i >= 0; i--) uid = (uid << 8) | b[off + 12 + i];
             add_cpu(uid, apic, f, 1);
         } else if (type == MADT_IOAPIC && len >= 12) {
+            if (s->ioapic_count < ACPI_IOAPIC_MAX) {
+                struct acpi_ioapic *io = &s->ioapics[s->ioapic_count];
+                io->id = b[off + 2];
+                io->phys = 0; io->gsi_base = 0;
+                for (int i = 3; i >= 0; i--) io->phys = (io->phys << 8) | b[off + 4 + i];
+                for (int i = 3; i >= 0; i--) io->gsi_base = (io->gsi_base << 8) | b[off + 8 + i];
+            }
             s->ioapic_count++;
+        } else if (type == MADT_ISO && len >= 10) {
+            if (s->iso_count < ACPI_ISO_MAX) {
+                struct acpi_iso *iso = &s->isos[s->iso_count++];
+                iso->bus = b[off + 2];
+                iso->irq = b[off + 3];
+                iso->gsi = 0;
+                for (int i = 3; i >= 0; i--) iso->gsi = (iso->gsi << 8) | b[off + 4 + i];
+                iso->flags = (uint16_t)(b[off + 8] | (b[off + 9] << 8));
+            }
         } else if (type == MADT_LAPIC_OVERRIDE && len >= 12) {
             // A 64-bit override of the address at offset 36. It exists
             // because that field is 32 bits and the register block can
@@ -94,4 +111,10 @@ void acpi_madt_init(void) {
 
     klog_printf("acpi: MADT lists %d processor(s), %d I/O APIC(s), LAPIC at 0x%x\n",
                 (int)s->cpu_count, (int)s->ioapic_count, (uint32_t)s->lapic_phys);
+    for (uint32_t i = 0; i < s->iso_count; i++) {
+        const struct acpi_iso *iso = &s->isos[i];
+        klog_printf("acpi: IRQ %u -> GSI %u (%s, %s)\n", iso->irq, iso->gsi,
+                    ACPI_ISO_TRIGGER(iso->flags) == ACPI_ISO_LEVEL ? "level" : "edge",
+                    ACPI_ISO_POLARITY(iso->flags) == ACPI_ISO_ACTIVE_LOW ? "low" : "high");
+    }
 }

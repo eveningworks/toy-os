@@ -16,6 +16,7 @@
 // appear in a scope has its own rule below, and anything else is
 // refused and counted.
 #include "aml.h"
+#include "aml_data.h"
 #include "acpi.h"
 #include "acpi_internal.h"
 #include "klog.h"
@@ -75,7 +76,7 @@ const struct aml_node *aml_node_at(int index) {
 }
 
 static int node_add(const char *seg, uint16_t parent, uint8_t kind,
-                    const uint8_t *data) {
+                    const uint8_t *data, uint32_t len) {
     if (g_count >= AML_MAX_NODES) { g_dropped++; return -1; }
     struct aml_node *n = &g_nodes[g_count];
     k_memcpy(n->name, seg, 4);
@@ -83,7 +84,16 @@ static int node_add(const char *seg, uint16_t parent, uint8_t kind,
     n->kind = kind;
     n->depth = (uint8_t)(parent < g_count ? g_nodes[parent].depth + 1 : 0);
     n->data = data;
+    n->len = len;
     return g_count++;
+}
+
+int aml_child(int parent, const char *seg) {
+    if (parent < 0 || parent >= g_count || !seg) return -1;
+    for (int i = 0; i < g_count; i++)
+        if (g_nodes[i].parent == parent && i != parent && k_memcmp(g_nodes[i].name, seg, 4) == 0)
+            return i;
+    return -1;
 }
 
 // --- the encodings ----------------------------------------------------
@@ -205,9 +215,20 @@ static uint32_t container(const uint8_t *p, uint32_t avail, uint16_t parent,
     uint32_t body = plen_used + nlen + trailer;
     if (body > plen) return 0;
 
-    // `Scope(\)` re-opens the root rather than declaring anything.
-    int me = (named == 2) ? (int)parent
-                          : node_add(seg, parent, kind, p + body);
+    // A SCOPE RE-OPENS AN EXISTING OBJECT -- `Scope (\_SB.PCI0)` adds
+    // declarations to the device of that name, it does not declare a
+    // second PCI0. Resolved by the full name; a scope naming nothing
+    // yet known becomes a node of its own, which is what firmware
+    // opening a scope before its SSDT declares it looks like.
+    // `Scope(\)` re-opens the root.
+    int me = -1;
+    if (named == 2) me = (int)parent;
+    else if (kind == AML_KIND_SCOPE) {
+        struct aml_name nm;
+        if (aml_name_parse(p + plen_used, plen - plen_used, &nm))
+            me = aml_resolve(parent, &nm);
+    }
+    if (me < 0) me = node_add(seg, parent, kind, p + body, plen - body);
     // A node that did not fit still has its body walked, under its
     // parent: dropping a subtree because one name overflowed would lose
     // far more than it saves.
@@ -242,7 +263,8 @@ static int parse_terms(const uint8_t *p, uint32_t len, uint16_t parent,
             uint32_t nlen = 0;
             int up = 0, root = 0;
             if (name_string(p + o + 1 + used, plen - used, seg, &nlen, &up, &root))
-                node_add(seg, parent, AML_KIND_METHOD, p + o + 1 + used + nlen);
+                node_add(seg, parent, AML_KIND_METHOD, p + o + 1 + used + nlen,
+                         plen - used - nlen);
             o += 1 + plen;
         } else if (op == OP_NAME) {
             char seg[4];
@@ -255,7 +277,7 @@ static int parse_terms(const uint8_t *p, uint32_t len, uint16_t parent,
             const uint8_t *val = p + o + 1 + nlen;
             uint32_t dlen = data_object_len(val, len - (uint32_t)(val - p));
             if (!dlen) { g_refused++; return 0; }   // an expression: not ours
-            node_add(seg, parent, AML_KIND_NAME, val);
+            node_add(seg, parent, AML_KIND_NAME, val, dlen);
             o += 1 + nlen + dlen;
         } else if (op == OP_ALIAS || op == OP_EXTERNAL) {
             // NameString(s) then a fixed trailer. Alias is a second
@@ -313,7 +335,7 @@ static int parse_terms(const uint8_t *p, uint32_t len, uint16_t parent,
                 uint32_t b = data_object_len(q + at + a,
                                              qav > at + a ? qav - at - a : 0);
                 if (!b) { g_refused++; return 0; }
-                node_add(seg, parent, AML_KIND_OTHER, q);
+                node_add(seg, parent, AML_KIND_OTHER, q, 0);
                 step = at + a + b;
             } else if (ext == EXT_MUTEX || ext == EXT_EVENT) {
                 char seg[4];
@@ -323,7 +345,7 @@ static int parse_terms(const uint8_t *p, uint32_t len, uint16_t parent,
                     g_refused++;
                     return 0;
                 }
-                node_add(seg, parent, AML_KIND_OTHER, q);
+                node_add(seg, parent, AML_KIND_OTHER, q, 0);
                 step = nlen + (ext == EXT_MUTEX ? 1u : 0u);
             } else {
                 g_refused++;
@@ -351,7 +373,7 @@ void aml_reset(void) {
     g_dropped = 0;
     g_refused = 0;
     k_memset(g_nodes, 0, sizeof g_nodes);
-    node_add("\\___", AML_ROOT, AML_KIND_ROOT, 0);
+    node_add("\\___", AML_ROOT, AML_KIND_ROOT, 0, 0);
 }
 
 int aml_build(void) {

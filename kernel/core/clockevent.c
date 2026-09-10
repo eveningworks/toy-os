@@ -3,7 +3,7 @@
 #include "clockevent.h"
 #include "timer.h"      // timer_tick_advance(), PIT_HZ
 #include "scheduler.h"  // scheduler_tick()
-#include "pic.h"
+#include "irq.h"
 #include "klog.h"
 #include "kfmt.h"
 
@@ -62,7 +62,7 @@ int clockevent_summary(char *buf, uint32_t cap) {
 // the tick" means for something routed through the 8259.
 static int pit_ce_start(uint32_t hz) {
     pit_init(hz);
-    pic_clear_mask(0);
+    irq_unmask(0);
     return 1;
 }
 
@@ -70,7 +70,7 @@ static void pit_ce_stop(void) {
     // Masked, not stopped. Channel 0 keeps counting so that anything
     // calibrating against the PIT still can, and re-taking the tick is
     // one write rather than a reprogram.
-    pic_set_mask(0);
+    irq_mask(0);
 }
 
 static const struct clockevent g_pit_ce = {

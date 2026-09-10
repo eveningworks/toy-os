@@ -304,16 +304,16 @@ static void e1000_probe(const struct pci_device *pci) {
     // QEMU's 82540EM advertises neither capability -- so does Linux's
     // `e1000` driver, which is INTx-only for the same parts; MSI-X
     // arrived with e1000e, which this driver does not match.
-    uint8_t line = pci->interrupt_line;
+    uint8_t line = pci_irq_line(pci);
     g_msi_vector = pci_msi_request(pci, e1000_irq);
     if (g_msi_vector) {
         reg_write(REG_IMS, ICR_RXT0 | ICR_RXDMT0 | ICR_RXO);
         klog_printf("e1000: on %s vector %u\n",
                     pci->irq_msix ? "MSI-X" : "MSI", g_msi_vector);
-    } else if (line != 0xFF && line < 16) {
+    } else if (line != IRQ_NONE) {
         g_e1000.irq = line;
         irq_register_handler(line, e1000_irq);
-        pic_clear_mask(line);
+        irq_unmask(line);
         reg_write(REG_IMS, ICR_RXT0 | ICR_RXDMT0 | ICR_RXO);
     } else {
         g_dev.poll = e1000_poll;

@@ -41,6 +41,9 @@ struct acpi_sdt_header {
 // memory and 1 is system I/O; this kernel handles those two and refuses
 // the rest (PCI config space, SMBus, and the embedded controller all
 // need a driver that does not exist here).
+#define ACPI_IOAPIC_MAX 4
+#define ACPI_ISO_MAX    16
+
 struct acpi_gas {
     uint8_t  space_id;
     uint8_t  bit_width;
@@ -127,7 +130,24 @@ struct acpi_state {
     uint64_t lapic_phys;   // MADT's Local APIC address (with the type-5 override applied)
     uint32_t ioapic_count;
     uint32_t cpu_count;
+
+    // The I/O APICs (MADT type 1) and the INTERRUPT SOURCE OVERRIDES
+    // (type 2): an ISA IRQ whose I/O APIC input is not the same number,
+    // or whose trigger/polarity is not ISA's edge/high. IRQ 0 -> GSI 2
+    // is on every PC; the SCI is the usual level/low one. Ignoring these
+    // works on QEMU's default machine and fails on real hardware.
+    struct acpi_ioapic { uint8_t id; uint32_t phys; uint32_t gsi_base; } ioapics[ACPI_IOAPIC_MAX];
+    struct acpi_iso { uint8_t bus, irq; uint32_t gsi; uint16_t flags; } isos[ACPI_ISO_MAX];
+    uint32_t iso_count;
 };
+
+// MPS INTI flags, the low nibble of an override's flags: polarity in
+// bits 0-1, trigger in bits 2-3, 0 meaning "as the bus does" (ISA:
+// active-high, edge).
+#define ACPI_ISO_POLARITY(f) ((f) & 3)
+#define ACPI_ISO_TRIGGER(f)  (((f) >> 2) & 3)
+#define ACPI_ISO_ACTIVE_LOW  3
+#define ACPI_ISO_LEVEL       3
 
 const struct acpi_state *acpi_get_state(void);
 

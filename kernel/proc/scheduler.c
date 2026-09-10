@@ -319,6 +319,15 @@ struct sched_process {
     // interruptible sleeper to stop it promptly. When interruptible
     // syscalls land here, this is the decision to revisit.
     uint8_t stopped;
+    // A SYSCALL REWOUND TO BE RE-ISSUED, NOT RUN YET. Set when a signal
+    // wakes this process out of a park (its RIP is put back on the
+    // `int $0x80`), cleared when it next enters a syscall. A signal
+    // delivered at ANY trap in between -- a tick landing on the one
+    // instruction before the re-issue -- must treat the syscall as not
+    // run: without this a handler ran there and the read then completed
+    // normally, which read as "the interrupted read was not interrupted"
+    // in about one full suite in two. See signal.c's push_signal_frame().
+    uint8_t syscall_reissue;
     // Has the parent been told about this stop yet? SYS_WUNTRACED
     // reports a stop ONCE, exactly as POSIX does -- otherwise a shell
     // looping on waitpid() would be handed the same suspension forever
@@ -2477,7 +2486,7 @@ int scheduler_signal_raise(int pid, int sig) {
     // mean calling the heap from the keyboard IRQ.
     if (p->state == SCHED_BLOCKED) {
         uint64_t *tf = (uint64_t *)(uintptr_t)p->kernel_rsp;
-        if (tf[TF_VECTOR] == 0x80) tf[TF_RIP] -= SYSCALL_INSN_LEN;
+        if (tf[TF_VECTOR] == 0x80) { tf[TF_RIP] -= SYSCALL_INSN_LEN; p->syscall_reissue = 1; }
         else                       tf[TF_RAX] = (uint64_t)(int64_t)-EINTR;
         p->state = SCHED_READY;
         p->wait_chan = 0;
@@ -2657,4 +2666,16 @@ void scheduler_idle(void) {
     // machine with nothing to do still behaves like a host on the
     // network. Costs one compare when no card is registered.
     net_poll();
+}
+
+// --- the rewound-syscall window (see struct sched_proc.syscall_reissue) --
+
+int scheduler_syscall_reissue_pending(int pid) {
+    if (pid < 1 || pid > MAX_PROCS) return 0;
+    return procs[pid - 1].syscall_reissue;
+}
+
+void scheduler_syscall_entered(int pid) {
+    if (pid < 1 || pid > MAX_PROCS) return;
+    procs[pid - 1].syscall_reissue = 0;
 }

@@ -4,6 +4,7 @@
 // for the boundary this deliberately stops at.
 #include "acpi.h"
 #include "acpi_internal.h"
+#include "aml.h"
 #include "multiboot.h"
 #include "bootstage.h"
 #include "klog.h"
@@ -229,6 +230,10 @@ void acpi_init(void) {
 
     acpi_fadt_init();
     acpi_madt_init();
+
+    // The namespace, walked once here: pci_bind() asks it for `_PRT`
+    // routing before any driver unmasks a line (kernel/acpi/acpi_prt.c).
+    aml_build();
 
     boot_subsystem_up(BOOT_SUB_ACPI);
     acpi_query_init();

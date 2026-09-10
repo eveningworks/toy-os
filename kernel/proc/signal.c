@@ -209,9 +209,19 @@ static int push_signal_frame(int pid, int sig, const struct k_sigaction *act,
     // again from scratch. Without the flag the call fails instead, with
     // the -EINTR abi/errno.h has always promised and nothing had ever
     // been in a position to observe.
-    if (restartable) {
+    if (restartable == SIG_AT_SYSCALL_ENTRY) {
         if (act->flags & SA_RESTART) f.regs[SCHED_TF_RIP] -= SYSCALL_INSN_LEN;
         else f.regs[SCHED_TF_RAX] = (uint64_t)(int64_t)-EINTR;
+    } else if (restartable == SIG_BEFORE_REISSUE) {
+        // RIP already sits ON the `int $0x80` (the wake put it there).
+        // SA_RESTART leaves it to execute; -EINTR must STEP OVER it, or
+        // the handler returns straight into the call it was meant to
+        // have failed. Either way the window is closed.
+        if (!(act->flags & SA_RESTART)) {
+            f.regs[SCHED_TF_RIP] += SYSCALL_INSN_LEN;
+            f.regs[SCHED_TF_RAX] = (uint64_t)(int64_t)-EINTR;
+        }
+        scheduler_syscall_entered(pid);
     }
 
     f.restorer_ret = act->restorer;

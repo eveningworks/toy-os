@@ -66,6 +66,14 @@ extern void isr48(void); extern void isr49(void); extern void isr50(void); exter
 extern void isr52(void); extern void isr53(void); extern void isr54(void); extern void isr55(void);
 extern void isr56(void); extern void isr57(void); extern void isr58(void); extern void isr59(void);
 extern void isr60(void); extern void isr61(void); extern void isr62(void); extern void isr63(void);
+extern void isr64(void);
+extern void isr65(void);
+extern void isr66(void);
+extern void isr67(void);
+extern void isr68(void);
+extern void isr69(void);
+extern void isr70(void);
+extern void isr71(void);
 extern void isr255(void);
 
 // Syscall entry (int 0x80) -- see isr.asm's comment there for why it's
@@ -83,7 +91,7 @@ void idt_set_gate(uint8_t vector, void (*handler)(void), uint8_t ist, uint8_t ty
     idt[vector].zero = 0;
 }
 
-static void (*const isr_table[64])(void) = {
+static void (*const isr_table[72])(void) = {
     isr0, isr1, isr2, isr3, isr4, isr5, isr6, isr7,
     isr8, isr9, isr10, isr11, isr12, isr13, isr14, isr15,
     isr16, isr17, isr18, isr19, isr20, isr21, isr22, isr23,
@@ -92,6 +100,7 @@ static void (*const isr_table[64])(void) = {
     isr40, isr41, isr42, isr43, isr44, isr45, isr46, isr47,
     isr48, isr49, isr50, isr51, isr52, isr53, isr54, isr55,
     isr56, isr57, isr58, isr59, isr60, isr61, isr62, isr63,
+    isr64, isr65, isr66, isr67, isr68, isr69, isr70, isr71,
 };
 
 static const char *exception_names[32] = {
@@ -140,7 +149,7 @@ static void mouse_irq_handler(uint64_t *regs) {
 }
 
 void idt_init(void) {
-    for (int i = 0; i < 64; i++) {
+    for (int i = 0; i < 72; i++) {
         idt_set_gate(i, isr_table[i], 0, 0x8E); // present, ring0, 64-bit interrupt gate
     }
 
@@ -181,9 +190,9 @@ void idt_init(void) {
     // IRQ0. Every machine boots on it; kernel_main() offers the LAPIC
     // timer later, once there is something to calibrate against.
     clockevent_init();
-    pic_clear_mask(1);
-    pic_clear_mask(2);
-    pic_clear_mask(12);
+    irq_unmask(1);
+    irq_unmask(2);
+    irq_unmask(12);
 
     __asm__ volatile ("sti");
 }
@@ -362,6 +371,10 @@ void isr_dispatch(uint64_t *regs) {
         // still calls scheduler_tick(), just from inside its own
         // registered handler now rather than as a separate line here.
         irq_dispatch((uint8_t)(vector - 32), regs);
+    } else if (vector >= 64 && vector < 72) {
+        // An I/O APIC input above the ISA range -- a PCI INTx pin a
+        // `_PRT` entry routed to GSI 16-23. Same table, one line each.
+        irq_dispatch((uint8_t)(16 + vector - 64), regs);
     } else if (vector >= LAPIC_VECTOR_BASE && vector <= LAPIC_VECTOR_LAST) {
         // AN MSI. Acknowledged to the LAPIC, never to the 8259 -- a PIC
         // EOI here would clear an in-service bit belonging to whichever
@@ -411,8 +424,9 @@ void isr_dispatch(uint64_t *regs) {
         // may pass it: the syscall has not run yet, so the frame saved
         // here can be rewound over the `int $0x80` and the call made
         // again after the handler returns. See kernel/signal.h.
+        if (sig_pid) scheduler_syscall_entered(sig_pid); // the re-issue window is closed
         if (sig_pid && scheduler_signal_deliverable(sig_pid) &&
-            signal_deliver_pending(sig_pid, regs, 1)) {
+            signal_deliver_pending(sig_pid, regs, SIG_AT_SYSCALL_ENTRY)) {
             sig_pid = 0; // acted on; the check at the bottom must not repeat it
         } else {
             // Software interrupt from ring 3 (int 0x80) -- not a hardware
@@ -686,5 +700,12 @@ void isr_dispatch(uint64_t *regs) {
     // 0, not 1: whatever trap this was, it is FINISHED. A syscall here
     // has already produced its result, and rewinding it would run it a
     // second time.
-    if (sig_pid) signal_deliver_pending(sig_pid, regs, 0);
+    // ...unless the trap landed on the one instruction between a signal
+    // wake and the syscall it rewound: that syscall has NOT run, and the
+    // delivery must say so or it runs after the handler as if never
+    // interrupted.
+    if (sig_pid)
+        signal_deliver_pending(sig_pid, regs,
+                               scheduler_syscall_reissue_pending(sig_pid) ? SIG_BEFORE_REISSUE
+                                                                          : SIG_TRAP_DONE);
 }

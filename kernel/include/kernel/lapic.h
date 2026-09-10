@@ -63,6 +63,8 @@ int lapic_present(void);
 // sending this instead would leave the PIC's in-service bit set
 // forever.
 void lapic_eoi(void);
+// Closes the 8259's path in (LINT0/ExtINT) once the I/O APIC delivers.
+void lapic_mask_lint0(void);
 
 // This CPU's LAPIC id, which is what an MSI message address names as
 // its destination.

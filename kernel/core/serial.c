@@ -69,7 +69,7 @@ void serial_init(void) {
 // existed.
 void serial_irq_init(void) {
     irq_register_handler(COM1_IRQ, serial_irq_handler);
-    pic_clear_mask(COM1_IRQ);
+    irq_unmask(COM1_IRQ);
     // serial_init()'s outb(COM1 + 1, 0x00) deliberately leaves the
     // UART's own Interrupt Enable Register at 0 -- interrupts disabled
     // at the chip itself, not just masked at the PIC -- since it runs

@@ -2484,3 +2484,44 @@ way. A bound PCI device pins through `pci_driver_table_bound()` without
 it. **Deliberately not built:** module-to-module imports (only the
 kernel exports), versioning and signing -- one author, one tree, one
 build.
+
+## The I/O APIC is programmed from the MADT, and `_PRT` is read by its shape rather than executed
+
+Routing the legacy lines through the I/O APIC (2026-09-10, the second
+half of `docs/smp-design.md`'s stage 2) forced three decisions.
+
+**What real systems do.** Linux programs the redirection table from
+the MADT (ISA IRQ n -> GSI n unless a source override says otherwise),
+masks the 8259, and routes PCI INTx through ACPICA's evaluation of
+`_PRT` after calling `\_PIC(1)`; with no ACPI it falls back to the
+BIOS's PIRQ routing and the ELCR for the trigger. Windows' HAL does the
+same from the MADT and `_PRT`. Both have a full AML interpreter.
+
+**One call for a driver, not one per controller.** `irq_unmask()` and
+`pci_irq_line()` are the whole driver-facing surface; `pic_clear_mask()`
+became the 8259's private business. The alternative -- keep
+`pic_clear_mask()` as a facade that forwards -- was cheaper for a day
+and misnamed forever, and the twelve call sites were one mechanical
+edit. This is `irq_chip`'s shape, sized for one chip at a time.
+
+**`_PRT` by shape, with one stated assumption, rather than an
+interpreter or nothing.** The tables were MEASURED first
+(`tools/aml_walk.py`, on QEMU i440fx and q35 and both laptops): every
+APIC-mode `_PRT` is a constant package behind one of four fixed shapes,
+and the only non-constant in the way is the `PICx` flag `\_PIC(1)`
+sets. So the reader recognises those shapes, reads any name beginning
+`PIC` as 1, follows `Return (name)` references, and refuses everything
+else -- a link whose `_CRS` reads hardware included -- with the BIOS's
+`interrupt_line` as the fallback. The honest case against a `_PRT`
+interpreter (`docs/aml-design.md`) stands; this is not one. The cost is
+stated in `acpi_prt.h`: a firmware that decides APIC routing through
+anything but that flag gets the fallback, silently correct on QEMU and
+merely PIC-shaped on hardware, and `acpi_prt`'s live KTEST says how
+many devices each machine routes.
+
+**i440fx keeps `interrupt_line` on purpose.** Its `_PRT` names PIRQ
+link devices whose `_CRS` methods read the chipset, which is exactly
+the PIC-mode table a firmware hands an OS that never called `_PIC` --
+and QEMU's GSI handler fans every PIRQ out to the same-numbered I/O
+APIC input, so the BIOS's line IS the input. Making the reader execute
+`_CRS` to reach the same number would be the interpreter for no gain.

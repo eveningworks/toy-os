@@ -39,7 +39,12 @@ struct aml_node {
     uint8_t  kind;       // enum aml_kind
     uint8_t  depth;
     const uint8_t *data; // the object's body, for the stages that decode it
+    uint32_t len;        // bytes at `data`: a Name's DataObject, a Method's
+                         // flags byte plus body, a container's term list
 };
+
+// The child of `parent` named `seg` (four characters), or -1.
+int aml_child(int parent, const char *seg);
 
 // Empties the namespace to just the root. Separate from aml_build()
 // because that one PARSES THIS MACHINE'S FIRMWARE, so a test that wanted

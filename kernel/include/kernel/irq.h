@@ -40,6 +40,32 @@ typedef void (*irq_handler_fn)(uint64_t *regs);
 // sends its own.
 void irq_register_handler(uint8_t irq, irq_handler_fn handler);
 
+// --- which controller a line is on is NOT the driver's business --------
+//
+// A line is 0-15 for an ISA IRQ (translated to its I/O APIC input by
+// the MADT's overrides when that controller is live) or 16-23 for a
+// GSI a PCI device's `_PRT` entry named (pci_irq_line()). irq_unmask()
+// programs whichever controller owns the machine; on the 8259 a GSI
+// above 15 does not exist and is refused with -ENODEV, which
+// pci_irq_line() already accounts for. Linux's irq_chip, in one call.
+#define IRQ_MAX 24
+#define IRQ_NONE 0xFF
+int  irq_unmask(uint8_t irq);
+void irq_mask(uint8_t irq);
+int  irq_is_unmasked(uint8_t irq);
+uint8_t irq_vector(uint8_t irq);   // 32+irq below 16, 64+(irq-16) above
+
+// For a GSI above 15: how the wire behaves, from the `_PRT` link's
+// resource descriptor. The default -- and the rule for a bare GSI -- is
+// PCI's level-triggered, active-low. Set BEFORE irq_unmask().
+void irq_set_trigger(uint8_t irq, int level, int low);
+
+// Called once by ioapic_init(): re-routes every line the PIC was
+// delivering, silences the PIC, and makes every later unmask an I/O
+// APIC entry. Not for drivers.
+void irq_switch_to_ioapic(void);
+int  irq_on_ioapic(void);
+
 // The inverse, for a driver that is going away (a module unloading).
 // Closes the gap so the chain stays contiguous; unknown is a no-op.
 void irq_unregister_handler(uint8_t irq, irq_handler_fn handler);

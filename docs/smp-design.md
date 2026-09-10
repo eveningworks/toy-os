@@ -162,12 +162,13 @@ clockevent per core. The calibration is against the PIT, which is why it
 happens in `kernel_main()` and not in `lapic_init()` -- it needs
 interrupts already on.
 
-**What is left in this stage is the I/O APIC**, and with it the
-interrupt source overrides. `acpi_madt_init()` currently COUNTS type-1
-entries and discards the address, and does not look at type-2 at all;
-both have to land before a redirection entry can be programmed. That is
-also the step that retires virtual wire mode, and the one that can
-silently kill the timer, the keyboard and the disk together.
+**The I/O APIC landed 2026-09-10 and this stage is DONE.**
+`acpi_madt_init()` records the type-1 controllers and every type-2
+override, `kernel/arch/x86_64/ioapic.c` programs the redirection table
+and `irq.c` migrates every unmasked line off the 8259 (virtual wire
+mode retired, LINT0 closed), and PCI INTx pins are routed by the
+firmware's `_PRT` (`kernel/acpi/acpi_prt.c`) -- see
+`docs/conventions/kernel.md` and `docs/decisions/drivers.md`.
 
 This is worth landing alone even if SMP stops here: it is what MSI-X
 needs (`docs/roadmap.md`'s Local APIC item), it gives more than 16

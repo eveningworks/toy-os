@@ -582,7 +582,7 @@ static void ata_init_dma(void) {
     g_dma_buf_frames = buf_frames;
 
     irq_register_handler(ATA_PRIMARY_IRQ, ata_irq_handler);
-    pic_clear_mask(ATA_PRIMARY_IRQ);
+    irq_unmask(ATA_PRIMARY_IRQ);
 
     g_dma_available = 1;
     klog_write("ata: Bus-Master DMA available, IRQ14-driven, ");

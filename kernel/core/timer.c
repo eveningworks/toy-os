@@ -10,7 +10,13 @@ static volatile uint64_t ticks = 0;
 
 void pit_init(uint32_t frequency_hz) {
     uint32_t divisor = PIT_BASE_FREQ / frequency_hz;
-    outb(PIT_COMMAND, 0x36); // channel 0, lobyte/hibyte, mode 3 (square wave)
+    // MODE 2 (rate generator), NOT MODE 3. A square wave has two output
+    // transitions per period; through the I/O APIC that was measured as
+    // ~2x the tick rate on QEMU (the LAPIC timer calibrated to half its
+    // count and the clock ran twice as fast), where the 8259 had counted
+    // one. A rate generator is one pulse per period on any controller,
+    // and what Linux programs for the same job.
+    outb(PIT_COMMAND, 0x34); // channel 0, lobyte/hibyte, mode 2
     outb(PIT_CHANNEL0, (uint8_t)(divisor & 0xFF));
     outb(PIT_CHANNEL0, (uint8_t)((divisor >> 8) & 0xFF));
 }

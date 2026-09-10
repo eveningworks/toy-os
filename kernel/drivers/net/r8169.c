@@ -411,16 +411,16 @@ static void r8169_probe(const struct pci_device *pci) {
     uint16_t mask = ISR_ROK | ISR_RER | ISR_RDU |
                     ISR_LINKCHG | ISR_FOVW | ISR_SYSERR;
 
-    uint8_t line = pci->interrupt_line;
+    uint8_t line = pci_irq_line(pci);
     uint8_t vector = pci_msi_request(pci, r8169_irq);
     if (vector) {
         reg_write16(REG_IMR, mask);
         klog_printf("r8169: xid %x, on %s vector %u\n", xid,
                     pci->irq_msix ? "MSI-X" : "MSI", vector);
-    } else if (line != 0xFF && line < 16) {
+    } else if (line != IRQ_NONE) {
         g_r.irq = line;
         irq_register_handler(line, r8169_irq);
-        pic_clear_mask(line);
+        irq_unmask(line);
         reg_write16(REG_IMR, mask);
         klog_printf("r8169: xid %x, on IRQ %u\n", xid, line);
     } else {

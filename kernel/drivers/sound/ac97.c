@@ -177,7 +177,7 @@ static void ac97_probe(const struct pci_device *dev) {
     // line is unmasked, and registration is last. A vector if the
     // device offers one, else the pin -- QEMU's AC97 advertises
     // neither capability, so this is the pin on every emulated boot.
-    uint8_t line = g_pci->interrupt_line;
+    uint8_t line = pci_irq_line(g_pci);
     g_msi_vector = pci_msi_request(g_pci, ac97_irq);
     if (!g_msi_vector) {
         if (line == 0xFF || line == 0 || line >= 16) {
@@ -192,7 +192,7 @@ static void ac97_probe(const struct pci_device *dev) {
         // forever -- measured as a 2.8s recording whose tail never went
         // quiet.
         pci_command_update(g_pci, 0, PCI_CMD_INTX_DISABLE);
-        pic_clear_mask(line);
+        irq_unmask(line);
     }
 
     if (!sound_register(&ac97_dev, ring, ring_phys)) return;

@@ -32,6 +32,8 @@ struct pci_device {
     uint8_t class_code, subclass, prog_if, revision;
     uint8_t header_type;
     uint8_t interrupt_line; // 0xFF conventionally means "not connected"
+    uint8_t interrupt_pin;  // 1-4 for INTA-INTD, 0 for no pin
+    uint8_t secondary_bus;  // a type-1 bridge: the bus behind it; 0 otherwise
     // Raw BAR values (offsets 0x10-0x24), decoded only as far as
     // "I/O or memory, and the base address" -- see pci.c's
     // pci_bar_is_io()/pci_bar_addr() for the decode.
@@ -73,6 +75,10 @@ void pci_init(void);
 // Number of devices pci_init() found (and could fit within
 // PCI_MAX_DEVICES).
 int pci_device_count(void);
+
+// The PCI-to-PCI bridge whose secondary bus is `bus`, or NULL -- what a
+// device's interrupt routing climbs through (kernel/acpi/acpi_prt.c).
+const struct pci_device *pci_bridge_for_bus(uint8_t bus);
 
 // The Nth recorded device (0-indexed, N < pci_device_count()). Returns
 // NULL if `index` is out of range.

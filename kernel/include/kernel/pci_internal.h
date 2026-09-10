@@ -159,4 +159,14 @@ void pci_msi_release(const struct pci_device *dev, uint8_t vector);
 // pci_msi.c only; a driver reads it back as pci_device.irq_vector.
 void pci_note_vector(const struct pci_device *dev, uint8_t vector, int msix);
 
+// --- the INTx pin (kernel/drivers/pci_irq.c) ---------------------------
+//
+// THE LINE A DRIVER SHOULD REGISTER FOR when it has no vector: the GSI
+// the firmware's `_PRT` names for this device's pin once the I/O APIC
+// delivers, else the `interrupt_line` the BIOS programmed for the 8259.
+// IRQ_NONE when there is nothing usable -- the driver's cue to poll.
+// Whatever it returns, irq_unmask() will accept; the trigger for a GSI
+// above 15 is already set.
+uint8_t pci_irq_line(const struct pci_device *dev);
+
 #endif
