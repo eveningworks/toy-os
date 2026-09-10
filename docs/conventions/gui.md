@@ -3398,7 +3398,12 @@ at once by the context menu. Named sizes rather than a pixel count
 because a menu can list three names with a tick and System Settings
 draws an ordered enum unaided (Windows' View > Large/Medium/Small
 icons; KDE names its steps too). The pixel value of a name is the
-DESKTOP's, not the registry's.
+DESKTOP's, not the registry's. **A SIZE CHANGE REFLOWS ONLY WHAT NO
+LONGER FITS**: a saved cell is a (column, row), and rows that fit at 48
+px do not at 64, so a full column's tail went under the taskbar on the
+laptop. `reflow_overflow()` moves those icons to the nearest free cell
+above the taskbar (`nearest_free_cell()` is bounded by
+`rows_that_fit()` now) and saves them; everything that still fits stays.
 
 The icon sits centred in its column and the caption is up to two
 word-wrapped lines under it, centred, the second cut with `..` when
@@ -3428,3 +3433,31 @@ the next stage.
 **THE TRAP FOR A TEST**: a real-mouse click after a `warp_cursor()`
 onto a submenu row did not land (`icons_test.py` measured it); the
 injected `dbg.click(x, y)` at the reported row centre does.
+
+## THE DESKTOP IS A FOLDER TOO: `/home/desktop`'S ENTRIES ARE ICONS AFTER THE LAUNCHERS, AND EVERY VERB IS A CHILD PROCESS
+
+One index space in `userland/wm/desktop.c`: items below
+`gui_app_registry_count` are launchers, the rest are `/home/desktop`'s
+entries in name order, directories first -- KDE's Folder View and the
+Windows desktop are folders with the shortcuts in them. The folder is
+re-listed on the same generation poll as the wallpaper, and a change
+re-derives the grid (positions are saved under `file:<name>`, so a file
+and a launcher of one name never share a cell). A file opens through
+`/bin/open` (its association), a directory in the File Manager.
+
+**THE COMPOSITOR DOES NO FILE WORK.** Copy and Cut put the selected
+files' paths on the system clipboard (`lib/uclip.h`, the File
+Manager's own carrier, so the two exchange freely: Ctrl+C on a desktop
+icon then Ctrl+V in a pane, or Ctrl+C in a pane then Paste on the
+desktop). Paste spawns `/bin/cp -r` or `/bin/mv` per item with an argv;
+Delete asks through the WM's confirm dialog and spawns `/bin/rm -r`;
+only "New folder" is a syscall, because `mkdir` is one. A long
+operation in the compositor's loop would freeze every window
+(docs/conventions/gui.md, "LONG WORK BELONGS IN A CHILD PROCESS").
+
+**The desktop is the keyboard focus when no window is** (`wm.c`'s
+dispatch): Ctrl+C/X/V and Delete reach `desktop_handle_key()` there and
+nowhere else. And a right-click over an icon SELECTS it first and opens
+that icon's menu -- Open for a launcher; Open, Cut, Copy, Delete for a
+file -- the rule every file manager has. The per-icon identity
+`desktop.h` once said was missing is a file's path.

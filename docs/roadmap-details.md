@@ -1069,9 +1069,10 @@ future file manager's icon view (Desktop productivity apps) as a second caller i
 mind, not desktop-only. Positions persist across reboot in
 `/etc/desktop.conf`, keyed by app name.
 
-Per-icon desktop context menus (Rename/Properties/etc) -- needs icons to
-have real per-icon identity/state beyond "which registry index" first;
-see `docs/decisions.md`.
+Per-icon desktop context menus -- BUILT 2026-09-10 for what has an
+identity: a file icon (an entry of `/home/desktop`) offers Open, Cut,
+Copy, Delete, a launcher offers Open. Rename and Properties on the
+desktop are still open; the File Manager has both.
 
 More compositor work beyond `gfx_present()`'s dirty-pixel blit and the
 cursor-sprite save/restore path -- partially done now, see

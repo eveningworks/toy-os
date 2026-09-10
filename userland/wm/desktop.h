@@ -106,7 +106,10 @@ void desktop_entries_changed(void);
 // desktop. The debug console's `gui icons` reports these, so a test
 // clicks what the app says is there rather than hardcoding a grid.
 int desktop_icon_geometry(int i, const char **name, int *x, int *y, int *w, int *h,
-                          int *lines);
+                          int *lines, const char **kind);   // kind: app | dir | file
+int desktop_icon_count(void);              // launchers plus the folder's entries
+// Ctrl+C/X/V and Delete when no window has the focus. 1 if consumed.
+int desktop_handle_key(int key, unsigned mods);
 int desktop_icon_px(void);                 // the current size in pixels
 const char *desktop_icon_size_word(void);  // and the setting's word
 

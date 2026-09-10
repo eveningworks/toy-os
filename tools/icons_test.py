@@ -77,6 +77,7 @@ import os
 import sys
 import tempfile
 import time
+import json
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui        # noqa: E402
@@ -691,6 +692,72 @@ def run(dbg, qmp, tmp, res):
         res.check("the menu closed on the pick", not (ctx() or {}).get("open"), "")
     dbg.send("sh config set desktop.icon_size medium")
     time.sleep(0.8)
+
+    # --- the desktop folder ---------------------------------------------
+    #
+    # A file in /home/desktop is an icon after the launchers; its menu
+    # is the file's; New folder creates; Delete asks and then removes.
+    # Asserted through the shell's listing where a file changes hands.
+    print("the desktop folder: a file is an icon, and the verbs act on it")
+    # Nothing may cover the icon column: the sections above leave a
+    # window open, and a right-click or a Delete under it is the
+    # window's, not the desktop's.
+    for w2 in sorted(dbg.windows(), key=lambda w2: -w2["z"]):
+        dbg.send(f"gui close {w2['z']}")
+        time.sleep(0.3)
+    dbg.send("sh rm -r /home/desktop/icontest.txt")
+    dbg.send("sh rm -r '/home/desktop/New folder'")
+    dbg.send("sh touch /home/desktop/icontest.txt")
+    time.sleep(1.5)
+    rep = desktop_report(dbg)
+    fi = icon_rect(rep, "icontest.txt")
+    res.check("a file in /home/desktop is a desktop icon of kind file",
+              fi is not None and fi.get("kind") == "file", f"icon={fi}")
+    if fi:
+        dbg.rclick(fi["x"] + fi["w"] // 2, fi["y"] + fi["w"] // 2)
+        time.sleep(0.4)
+        m = ctx()
+        rows = [r["label"] for r in (m or {}).get("rows", [])]
+        res.check("right-click on a file icon opens Open, Cut, Copy, Delete",
+                  {"Open", "Cut", "Copy", "Delete"} <= set(rows), f"rows={rows}")
+        dbg.click(1150, 250)
+        time.sleep(0.3)
+    dbg.rclick(1150, 250)
+    time.sleep(0.4)
+    m = ctx()
+    nf = [r for r in (m or {}).get("rows", []) if r["label"] == "New folder"]
+    if nf:
+        dbg.click(m["x"] + m["w"] // 2, nf[0]["cy"])
+        time.sleep(1.5)
+    listing = (dbg.send("sh ls /home/desktop") or "")
+    res.check("New folder creates one, and it is a dir icon",
+              bool(nf) and "New folder" in listing and
+              (icon_rect(desktop_report(dbg), "New folder") or {}).get("kind") == "dir",
+              f"rows={[r['label'] for r in (m or {}).get('rows', [])]} ls={listing.strip()[:80]}")
+    fi = icon_rect(desktop_report(dbg), "icontest.txt")
+    if fi:
+        dbg.click(fi["x"] + fi["w"] // 2, fi["y"] + fi["w"] // 2)
+        time.sleep(0.3)
+        dbg.key("0x99")   # Delete
+        time.sleep(0.5)
+        reply = dbg.send("gui dialog --json") or ""
+        start = reply.rfind('{"open"')
+        dlg = None
+        try:
+            dlg = json.loads(reply[start:]) if start >= 0 else None
+        except ValueError:
+            dlg = None
+        res.check("Delete on a selected file icon asks first",
+                  dlg is not None and dlg.get("open") and "icontest.txt" in dlg.get("message", ""),
+                  f"dialog={dlg}")
+        if dlg and dlg.get("open"):
+            yes = dlg["buttons"][0]
+            dbg.click(yes["cx"], yes["cy"])
+            time.sleep(1.5)
+        listing = (dbg.send("sh ls /home/desktop") or "")
+        res.check("...and confirming removes it", "icontest.txt" not in listing,
+                  f"ls={listing.strip()[:80]}")
+    dbg.send("sh rm -r '/home/desktop/New folder'")
 
 
 def main():

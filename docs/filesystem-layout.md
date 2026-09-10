@@ -43,6 +43,8 @@ in check_layout.py changes with it.)
 | `/bin/wm/apps` | Windowed applications (`calculator`, `notepad`, `uterm`) | build | present |
 | `/bin/wm/demos` | Things that exist to be looked at or tested (`shapes`, `uidemo`) | build | present |
 | `/etc` | Config: `toyos.conf`, `storage.conf`, `net.conf`, `hwdata.conf`, `timezones`, `history` (the kernel shell's) and `tosh_history` (ring 3's, appended) | boot | present |
+| `/home` | The one user's home. toy-os has no accounts, so there is no `/home/<user>`: what a multi-user system keeps per user lives one level up | build | present |
+| `/home/desktop` | THE DESKTOP FOLDER: a file or directory here is an icon on the desktop, after the launchers (`userland/wm/desktop.c`). A drop, a paste or "New folder" on the desktop lands here, and the File Manager browses it like any directory. Empty on a fresh image, as `~/Desktop` is | build | present |
 | `/etc/kbs` | Generated keyboard layout data (`us`, `se`) | build | optional |
 | `/etc/config.d` | One descriptor per registered config file (`Name`/`Path`/`Description`) -- see `api/config_file.h` | boot | present |
 | `/etc/services.d` | One descriptor per service init starts (`Name`/`Exec`/`Target`/`Restart`) -- see `data/etc/services.d/README.md` | build | present |

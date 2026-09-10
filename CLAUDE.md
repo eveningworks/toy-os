@@ -883,6 +883,7 @@ whenever a headline here tells you something you did not already know.
 - **THE FOLDER TREE FOLLOWS A NAVIGATION, NEVER A TOGGLE**
 - **THE DESKTOP'S ICON SIZE IS A NAMED SETTING, THE ICONS ARE CENTRED, AND A CAPTION IS TWO LINES** -- `desktop.icon_size`; `icon_box()` is the one place an icon's rect comes from, and `gui icons --json` reports it
 - **THE WM CONTEXT MENU HAS ONE LEVEL OF SUBMENU, A SEPARATOR AND A TICK, AND THE DESKTOP'S MENU IS WINDOWS' SHAPE**
+- **THE DESKTOP IS A FOLDER TOO: `/home/desktop`'S ENTRIES ARE ICONS AFTER THE LAUNCHERS, AND EVERY VERB IS A CHILD PROCESS** -- Copy/Cut/Paste ride the system clipboard, so the File Manager and the desktop exchange files either way
 - **MARKS SURVIVE A RELOAD BY NAME, BECAUSE THE VOLUME'S GENERATION NEVER STOPS MOVING** -- a tick reload that cleared them was the "marking does nothing" cluster
 
 ### Storage, the filesystem, and /etc

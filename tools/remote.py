@@ -791,9 +791,11 @@ def _verify_offline(host, tftp_port, local, want, timeout,
 # ordering that avoids that; what makes the flash survive it is holding
 # ONE session opened before the first write (do_flash).
 # (staged subdirectory, path on the machine, new files only)
+# /home is NEW FILES ONLY like /etc: the desktop folder has to EXIST on
+# the machine, and what a person put in it is theirs.
 USERLAND_TREES = (("bin", "/bin", False), ("tests", "/tests", False),
                   ("usr", "/usr", False), ("etc", "/etc", True),
-                  ("lib", "/lib", False))
+                  ("home", "/home", True), ("lib", "/lib", False))
 
 
 def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,

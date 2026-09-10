@@ -637,6 +637,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Mouse text selection in the Terminal, and copy from it~~ DONE 2026-09-07 -- drag/word/line, copy-on-select, Ctrl+Shift+C
 - [x] ~~A scrollbar on the Terminal, so the scrollback is visible~~ DONE 2026-09-07 -- a reserved gutter, Konsole's shape
 - [x] ~~Drag-and-drop within one window~~ DONE 2026-09-10 -- a router session; between the panes and onto the tree, Ctrl copies
+- [x] ~~Copy and move files between the desktop and the File Manager~~ DONE 2026-09-10 -- `/home/desktop`, over the clipboard both ways
 - [ ] Drag-and-drop between windows
 - [ ] Drag a file from the file manager (see Desktop productivity apps) into Notepad
 - [ ] A clipboard that survives `clipboardd` restarting

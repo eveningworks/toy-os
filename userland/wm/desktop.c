@@ -17,6 +17,10 @@
 #include "lib/uimg.h"
 #include "ui/uui_image.h"
 #include "ui/uui_label.h"  // uui_label_wrap_next() -- the caption's wrap
+#include "lib/uclip.h"      // the desktop's Copy/Cut/Paste ride the system clipboard
+#include "confirm_dialog.h" // Delete asks first
+#include "kpath.h"
+#include <stdint.h>
 
 // THE ICON SIZE IS A SETTING (`desktop.icon_size`, small|medium|large ->
 // 32/48/64 px), read on the same generation poll as the wallpaper; the
@@ -38,8 +42,18 @@ static int row_h(void) { return icon_px() + 4 + label_h() + 10; } // icon + gap 
 // with a ".." marker rather than widening every column to fit it.
 #define DESKTOP_ICON_LABEL_CHARS 13
 #define DESKTOP_DOUBLE_CLICK_TICKS 30 // ~300ms at the PIT's 100Hz -- same order of magnitude as start_menu.c's flash
-#define DESKTOP_MAX_ICONS 32 // sanity cap on gui_app_registry_count -- registry currently holds 11 entries
+#define DESKTOP_MAX_ICONS 64 // launchers plus the folder's entries, together
 #define DESKTOP_CONF_PATH "/etc/desktop.conf"
+// THE DESKTOP FOLDER. An icon is either a LAUNCHER (a registry entry)
+// or a FILE here, in one index space: items 0..registry_count-1 are the
+// launchers, the rest are this directory's entries in name order,
+// directories first -- what KDE's Folder View and the Windows desktop
+// both show, a folder with the shortcuts in it. Read on the same
+// generation poll as the wallpaper; a change re-derives the grid.
+#define DESKTOP_DIR "/home/desktop"
+#define DESKTOP_FILES_MAX 40
+static struct sys_dirent g_files[DESKTOP_FILES_MAX];
+static int g_file_count;
 // The plain background, shown when there is no wallpaper and behind a
 // letterboxed one.
 #define DESKTOP_BG ugfx_rgb(24, 60, 90)
@@ -56,6 +70,9 @@ static int row_h(void) { return icon_px() + 4 + label_h() + 10; } // icon + gap 
 // (a shrinking band deselects, Ctrl adds, a plain click on empty space
 // clears) are KTESTed with no desktop involved at all.
 static struct rubberband sel;
+static void item_activate(int i);
+static void reflow_overflow(void);
+#define PATH_BUF 80
 
 // The band's rect as it was last DRAWN, so a motion can damage the union
 // of where it was and where it now is. Same bookkeeping-at-the-point-of-
@@ -135,6 +152,15 @@ static int icon_col_w(void) {
 // the drag and the saved positions speak.
 static int icon_dx(void) { return (icon_col_w() - icon_px()) / 2; }
 
+// Rows that fit above the taskbar at the current size -- what the
+// default layout wraps at, and what a reflow after a size change keeps
+// every icon within.
+static int rows_that_fit(void) {
+    int usable_h = (screen_h - taskbar_h) - DESKTOP_ICON_START_Y;
+    int per_col = usable_h / row_h();
+    return per_col < 1 ? 1 : per_col;
+}
+
 static struct icon_grid current_grid(void) {
     struct icon_grid g;
     g.origin_x = DESKTOP_ICON_X;
@@ -169,10 +195,65 @@ static void format_pos(char *out, int col, int row) {
     out[n] = '\0';
 }
 
+// --- the item space: launchers, then the folder's files ----------------
+static int item_count(void) {
+    int n = gui_app_registry_count + g_file_count;
+    return n > DESKTOP_MAX_ICONS ? DESKTOP_MAX_ICONS : n;
+}
+static int item_is_file(int i) { return i >= gui_app_registry_count; }
+static const struct sys_dirent *item_file(int i) {
+    return item_is_file(i) ? &g_files[i - gui_app_registry_count] : 0;
+}
+static const char *item_name(int i) {
+    return item_is_file(i) ? item_file(i)->name : gui_app_registry[i].name;
+}
+static int item_visible(int i) {
+    if (i < 0 || i >= item_count()) return 0;
+    return item_is_file(i) || gui_app_shows_in(&gui_app_registry[i], GUI_SHOW_DESKTOP);
+}
+// The saved-position key: a launcher by its name, a file by "file:" +
+// its name, so an app and a file called the same never share a cell.
+static const char *item_key(int i, char *buf, int cap) {
+    if (!item_is_file(i)) return item_name(i);
+    k_snprintf(buf, (size_t)cap, "file:%s", item_name(i));
+    return buf;
+}
+static void item_path(int i, char *out, int cap) {
+    k_snprintf(out, (size_t)cap, DESKTOP_DIR "/%s", item_name(i));
+}
+
+// Re-lists the folder. Returns 1 if the set of names changed, which
+// is what a caller uses to re-derive positions and drop a selection
+// that indexed the old list.
+static int desktop_files_reload(void) {
+    static struct sys_dirent fresh[DESKTOP_FILES_MAX];
+    int n = sys_listdir(DESKTOP_DIR, fresh, DESKTOP_FILES_MAX);
+    if (n < 0) n = 0;
+    // Directories first, then by name -- the File Manager's order.
+    for (int i = 1; i < n; i++) {
+        struct sys_dirent t = fresh[i];
+        int j = i - 1;
+        while (j >= 0 && (( !fresh[j].is_dir && t.is_dir) ||
+                          (fresh[j].is_dir == t.is_dir && k_strcmp(fresh[j].name, t.name) > 0))) {
+            fresh[j + 1] = fresh[j];
+            j--;
+        }
+        fresh[j + 1] = t;
+    }
+    int changed = (n != g_file_count);
+    for (int i = 0; !changed && i < n; i++)
+        if (k_strcmp(fresh[i].name, g_files[i].name) != 0 || fresh[i].is_dir != g_files[i].is_dir)
+            changed = 1;
+    if (!changed) return 0;
+    for (int i = 0; i < n; i++) g_files[i] = fresh[i];
+    g_file_count = n;
+    return 1;
+}
+
 static void save_position(int i) {
-    char value[16];
+    char value[16], keybuf[80];
     format_pos(value, icon_col[i], icon_row[i]);
-    wm_conf_set(DESKTOP_CONF_PATH, gui_app_registry[i].name, value);
+    wm_conf_set(DESKTOP_CONF_PATH, item_key(i, keybuf, sizeof keybuf), value);
 }
 
 // Loads every icon's position from DESKTOP_CONF_PATH, defaulting to
@@ -186,8 +267,7 @@ static void desktop_load_positions(void) {
     if (positions_loaded) return;
     positions_loaded = 1;
 
-    int n = gui_app_registry_count;
-    if (n > DESKTOP_MAX_ICONS) n = DESKTOP_MAX_ICONS;
+    int n = item_count();
 
     // How many icons fit in one column before running off the bottom.
     // The default layout WRAPS into a second column rather than being a
@@ -197,15 +277,13 @@ static void desktop_load_positions(void) {
     // launchers). Icons past the edge are not just invisible -- they are
     // unclickable, so an app can be in the registry and unreachable from
     // the desktop with nothing to indicate why.
-    int usable_h = (screen_h - taskbar_h) - DESKTOP_ICON_START_Y;
-    int per_col = usable_h / row_h();
-    if (per_col < 1) per_col = 1;   // a tiny screen still gets one per column
+    int per_col = rows_that_fit();
 
     // `slot` counts icons actually PLACED, not registry entries, so an
     // entry hidden by ShowIn= leaves no gap in the default grid.
     int slot = 0;
     for (int i = 0; i < n; i++) {
-        if (!gui_app_shows_in(&gui_app_registry[i], GUI_SHOW_DESKTOP)) {
+        if (!item_visible(i)) {
             icon_col[i] = icon_row[i] = -1; // never drawn, never hit-tested
             continue;
         }
@@ -213,8 +291,8 @@ static void desktop_load_positions(void) {
         icon_row[i] = slot % per_col;
         slot++;
 
-        char value[16];
-        if (!wm_conf_get(DESKTOP_CONF_PATH, gui_app_registry[i].name, value, sizeof(value))) continue;
+        char value[16], keybuf[80];
+        if (!wm_conf_get(DESKTOP_CONF_PATH, item_key(i, keybuf, sizeof keybuf), value, sizeof(value))) continue;
 
         // "<col>,<row>" -- split on the comma, then let knum.h's bounded
         // parser handle each half. Stricter than the digit loops this
@@ -359,6 +437,7 @@ static void icon_size_reload(void) {
     k_strlcpy(g_icon_size, word, sizeof g_icon_size);
     g_icon_px = k_strcmp(word, "small") == 0 ? 32 :
                 k_strcmp(word, "large") == 0 ? 64 : 48;
+    reflow_overflow();
     redraw_pending = 1;
     wm_damage_rect(0, 0, screen_w, screen_h);
 }
@@ -378,12 +457,16 @@ void desktop_poll_config(void) {
         seen_gen = gen;
         icon_size_reload();
         wallpaper_reload();      // the first call is the initial load
+        if (desktop_files_reload()) positions_loaded = 0;
         return;
     }
     if (gen == seen_gen) return;
     seen_gen = gen;
     icon_size_reload();
     wallpaper_reload();
+    // The folder, unless a band or a drag indexes the current list --
+    // the same rule the .desktop-entry reload follows (wm.c).
+    if (!desktop_drag_active() && desktop_files_reload()) desktop_entries_changed();
 }
 
 // Paints the background: the wallpaper if there is one, the plain colour
@@ -465,16 +548,18 @@ static void draw_label(int cell_x, int label_y, const char *name, uint32_t fg) {
 }
 
 int desktop_icon_geometry(int i, const char **name, int *x, int *y, int *w, int *h,
-                          int *lines) {
+                          int *lines, const char **kind) {
     desktop_load_positions();
-    if (i < 0 || i >= gui_app_registry_count || i >= DESKTOP_MAX_ICONS) return 0;
-    if (!gui_app_shows_in(&gui_app_registry[i], GUI_SHOW_DESKTOP)) return 0;
+    if (!item_visible(i)) return 0;
     struct icon_grid g = current_grid();
     icon_box(&g, i, x, y, w, h);
-    if (name) *name = gui_app_registry[i].name;
-    if (lines) *lines = label_lines(gui_app_registry[i].name);
+    if (name) *name = item_name(i);
+    if (lines) *lines = label_lines(item_name(i));
+    if (kind) *kind = !item_is_file(i) ? "app" : item_file(i)->is_dir ? "dir" : "file";
     return 1;
 }
+
+int desktop_icon_count(void) { return item_count(); }
 
 int desktop_icon_px(void) { return icon_px(); }
 
@@ -497,8 +582,8 @@ void desktop_draw(void) {
         gdy = drag_py - drag_origin_py;
     }
 
-    for (int i = 0; i < gui_app_registry_count; i++) {
-        if (!gui_app_shows_in(&gui_app_registry[i], GUI_SHOW_DESKTOP)) continue;
+    for (int i = 0; i < item_count(); i++) {
+        if (!item_visible(i)) continue;
         int x, y;
         if (drag.active && drag.index == i) {
             x = drag_px;
@@ -528,7 +613,11 @@ void desktop_draw(void) {
         // rounded outline), so it sits on the wallpaper rather than in a
         // rectangle of its own -- which is the entire reason icons
         // waited for a codec with alpha.
-        const struct uimg *ico = icon_get(gui_app_registry[i].icon_name, px);
+        // A launcher's own artwork; a file's is the File Manager's
+        // "folder"/"file", so the two views of one folder agree.
+        const struct uimg *ico = item_is_file(i)
+            ? icon_get(item_file(i)->is_dir ? "folder" : "file", px)
+            : icon_get(gui_app_registry[i].icon_name, px);
         if (ico) {
             ugfx_blit_alpha(wm_surface(), x, y, ico->w, ico->h, ico->px, ico->w);
         } else {
@@ -539,8 +628,8 @@ void desktop_draw(void) {
             // first letter -- which is what this drew before desktop
             // entries existed, so an entry with no Icon= looks exactly
             // as it did.
-            char ic = gui_app_registry[i].icon;
-            char initial[2] = { ic ? ic : gui_app_registry[i].name[0], '\0' };
+            char ic = item_is_file(i) ? 0 : gui_app_registry[i].icon;
+            char initial[2] = { ic ? ic : item_name(i)[0], '\0' };
             int gx = x + (px - ugfx_char_w()) / 2;
             int gy = y + (px - ugfx_char_h()) / 2;
             ugfx_draw_string(wm_surface(), gx, gy, initial, icon_fg, ugfx_rgb(60, 90, 130));
@@ -563,7 +652,7 @@ void desktop_draw(void) {
         // it. Every desktop shadows or outlines these -- macOS, GNOME
         // and KDE shadow, Windows outlines -- because no single ink is
         // legible on every photograph a person might choose.
-        draw_label(cell_x, y + px + 4, gui_app_registry[i].name, label_fg);
+        draw_label(cell_x, y + px + 4, item_name(i), label_fg);
     }
 
     // Version watermark, bottom right -- what build am I looking at, at
@@ -637,6 +726,7 @@ int desktop_drag_active(void) { return drag.active || sel.armed; }
 
 void desktop_entries_changed(void) {
     icon_cache_invalidate(); // an entry's artwork can have arrived with it
+    desktop_files_reload();  // the folder half of the item space
     positions_loaded = 0;   // re-read from DESKTOP_CONF_PATH, keyed by name
     rb_clear(&sel);         // indices into a table that just changed
     group_drag = 0;         // its snapshot indexes the table that changed
@@ -650,8 +740,8 @@ void desktop_entries_changed(void) {
 static int icon_hit_test(int mx, int my) {
     desktop_load_positions();
     struct icon_grid g = current_grid();
-    for (int i = 0; i < gui_app_registry_count; i++) {
-        if (!gui_app_shows_in(&gui_app_registry[i], GUI_SHOW_DESKTOP)) continue;
+    for (int i = 0; i < item_count(); i++) {
+        if (!item_visible(i)) continue;
         int x, y, w, h;
         icon_box(&g, i, &x, &y, &w, &h);
         if (uui_hit(x, y, w, h, mx, my)) return i;
@@ -685,7 +775,7 @@ void desktop_handle_click(int mx, int my) {
 
     int launched = 0;
     if (idx == last_click_index && now - last_click_tick <= DESKTOP_DOUBLE_CLICK_TICKS) {
-        open_app(&gui_app_registry[idx]);
+        item_activate(idx);
         last_click_index = -1; // avoid a third click within the window re-triggering as a double
         launched = 1;
     } else {
@@ -724,7 +814,7 @@ void desktop_handle_click(int mx, int my) {
     group_drag = (!launched && drag.active &&
                   rb_is_selected(&sel, idx) && rb_selected_count(&sel) > 1);
     if (group_drag) {
-        for (int i = 0; i < gui_app_registry_count && i < DESKTOP_MAX_ICONS; i++) {
+        for (int i = 0; i < item_count(); i++) {
             drag_start_col[i] = icon_col[i];
             drag_start_row[i] = icon_row[i];
         }
@@ -734,10 +824,10 @@ void desktop_handle_click(int mx, int my) {
 }
 
 // Whether (col, row) already belongs to some OTHER icon (not `exclude`,
-// the one currently being dropped) -- O(gui_app_registry_count), fine
+// the one currently being dropped) -- O(item_count()), fine
 // at this scale (a handful of icons).
 static int cell_taken(int col, int row, int exclude) {
-    for (int i = 0; i < gui_app_registry_count; i++) {
+    for (int i = 0; i < item_count(); i++) {
         if (i == exclude) continue;
         if (icon_col[i] == col && icon_row[i] == row) return 1;
     }
@@ -763,12 +853,33 @@ static void nearest_free_cell(const struct icon_grid *g, int col, int row,
                 // Skip the interior -- already checked at a smaller radius.
                 if (dc > -radius && dc < radius && dr > -radius && dr < radius) continue;
                 int c = col + dc, r = row + dr;
-                if (c < 0 || c >= g->cols || r < 0) continue;
+                if (c < 0 || c >= g->cols || r < 0 || r >= rows_that_fit()) continue;
                 if (!cell_taken(c, r, exclude)) { *out_col = c; *out_row = r; return; }
             }
         }
     }
     *out_col = col; *out_row = row; // unreachable in practice -- see comment above
+}
+
+// AFTER A SIZE CHANGE, the cells that no longer fit above the taskbar
+// move to the nearest free cell that does; everything that still fits
+// stays put. Taller rows at a bigger size are what pushed a full
+// column's tail off the screen (found on the laptop, medium -> large
+// with a full column). A moved icon's position is SAVED, so the layout
+// is the same after a reboot as it looked when it settled.
+static void reflow_overflow(void) {
+    if (!positions_loaded) return;   // the default layout already fits
+    struct icon_grid g = current_grid();
+    int limit = rows_that_fit();
+    for (int i = 0; i < item_count(); i++) {
+        if (!item_visible(i) || icon_row[i] < limit) continue;
+        int col = icon_col[i] >= g.cols ? g.cols - 1 : icon_col[i];
+        int fc, fr;
+        nearest_free_cell(&g, col, limit - 1, i, &fc, &fr);
+        icon_col[i] = fc;
+        icon_row[i] = fr;
+        save_position(i);
+    }
 }
 
 // Extra top margin damage_icon_row()/desktop_update_drag() pad their
@@ -799,7 +910,7 @@ static void damage_icon_row(const struct icon_grid *g, int y) {
 // gui_app_registry[i] without a second mapping to keep in step.
 static int band_count(void *ctx) {
     (void)ctx;
-    return gui_app_registry_count;
+    return item_count();
 }
 
 static void band_item_rect(void *ctx, int i, int *x, int *y, int *w, int *h) {
@@ -905,12 +1016,12 @@ void desktop_update_drag(int mx, int my, uint8_t buttons) {
             int drow = prow - drag_start_row[drag.index];
             // Clear the movers first so a member's OLD cell never blocks
             // another member's target during nearest_free_cell().
-            for (int i = 0; i < gui_app_registry_count && i < DESKTOP_MAX_ICONS; i++) {
+            for (int i = 0; i < item_count(); i++) {
                 if (rb_is_selected(&sel, i)) { icon_col[i] = -1; icon_row[i] = -1; }
             }
-            for (int i = 0; i < gui_app_registry_count && i < DESKTOP_MAX_ICONS; i++) {
+            for (int i = 0; i < item_count(); i++) {
                 if (!rb_is_selected(&sel, i)) continue;
-                if (!gui_app_shows_in(&gui_app_registry[i], GUI_SHOW_DESKTOP)) continue;
+                if (!item_visible(i)) continue;
                 int wc = drag_start_col[i] + dcol;
                 int wr = drag_start_row[i] + drow;
                 if (wc < 0) wc = 0;
@@ -946,12 +1057,156 @@ void desktop_update_drag(int mx, int my, uint8_t buttons) {
     redraw_pending = 1;
 }
 
+// --- the desktop's verbs: open, copy, cut, paste, delete, new folder ----
+//
+// THE DESKTOP DOES NO FILE WORK ITSELF. A copy or a move is `/bin/cp -r`
+// or `/bin/mv` spawned with an argv, a delete is `/bin/rm -r`, an open
+// is `/bin/open` -- the compositor must not block on a file operation,
+// and those programs already exist (docs/conventions/gui.md, "long
+// work belongs in a child process"). Only mkdir is a syscall, because
+// it is one.
+
+static void spawn_argv(char *const *argv) {
+    struct sys_spawn_opts o;
+    sys_spawn_opts_init(&o);
+    o.argv = argv;
+    o.env = environ;
+    int pid = sys_spawn_opts(argv[0], &o);
+    if (pid <= 0) wm_logf("desktop: could not run %s", argv[0]);
+    else wm_track_launched(pid);
+}
+
+static void item_activate(int i) {
+    if (!item_visible(i)) return;
+    if (!item_is_file(i)) { open_app(&gui_app_registry[i]); return; }
+    static char path[PATH_BUF];
+    item_path(i, path, sizeof path);
+    if (item_file(i)->is_dir) {
+        // A folder opens in the File Manager, both panes there.
+        char *const argv[] = { "/bin/wm/apps/files", path, path, 0 };
+        spawn_argv(argv);
+    } else {
+        // A file opens by its association (`/bin/open`, mimeapps.conf).
+        char *const argv[] = { "/bin/open", path, 0 };
+        spawn_argv(argv);
+    }
+}
+
+// The selected FILES' paths, for the clipboard and the verbs. Launchers
+// in the selection are skipped: they are not files.
+static int selected_paths(char paths[][PATH_BUF], int cap) {
+    int n = 0;
+    for (int i = gui_app_registry_count; i < item_count() && n < cap; i++)
+        if (rb_is_selected(&sel, i)) item_path(i, paths[n++], PATH_BUF);
+    return n;
+}
+
+static void clip_put(int op) {
+    static struct uclip c;   // 64 KiB: lib/uclip.h says why static
+    static char paths[DESKTOP_FILES_MAX][PATH_BUF];
+    int n = selected_paths(paths, DESKTOP_FILES_MAX);
+    if (n == 0) return;
+    uclip_begin(&c, op);
+    for (int i = 0; i < n; i++) uclip_add(&c, paths[i]);
+    if (!uclip_commit(&c)) wm_logf("desktop: clipboard refused %d item(s)", n);
+}
+static void menu_copy(void *ctx) { (void)ctx; clip_put(UCLIP_COPY); }
+static void menu_cut(void *ctx)  { (void)ctx; clip_put(UCLIP_CUT); }
+
+static void menu_paste(void *ctx) {
+    (void)ctx;
+    static struct uclip c;
+    uclip_load(&c);
+    int op = uclip_op(&c);
+    if (op == UCLIP_NONE || uclip_kind(&c) != UCLIP_KIND_FILES) return;
+    static char src[PATH_BUF];
+    for (int i = 0; i < uclip_count(&c); i++) {
+        const char *p = uclip_path(&c, i);
+        if (!p) break;
+        k_strlcpy(src, p, sizeof src);
+        // Already on the desktop: nothing to do, and `cp` onto itself
+        // would be an error said in a log nobody reads.
+        char dir[PATH_BUF];
+        k_path_dirname(src, dir, sizeof dir);
+        if (k_strcmp(dir, DESKTOP_DIR) == 0) continue;
+        if (op == UCLIP_CUT) {
+            char *const argv[] = { "/bin/mv", src, DESKTOP_DIR, 0 };
+            spawn_argv(argv);
+        } else {
+            char *const argv[] = { "/bin/cp", "-r", src, DESKTOP_DIR, 0 };
+            spawn_argv(argv);
+        }
+    }
+    // A CUT IS SPENT BY THE PASTE, the File Manager's rule (fm_jobs.c).
+    if (op == UCLIP_CUT) (void)uclip_clear();
+}
+
+// Delete asks first, through the WM's own confirm dialog. The paths are
+// snapshotted when the dialog opens: the selection may change under it.
+static char g_del_paths[DESKTOP_FILES_MAX][PATH_BUF];
+static int g_del_count;
+static char g_del_msg[64];
+static void delete_confirmed(void) {
+    static char *argv[DESKTOP_FILES_MAX + 3];
+    int k = 0;
+    argv[k++] = "/bin/rm";
+    argv[k++] = "-r";
+    for (int i = 0; i < g_del_count; i++) argv[k++] = g_del_paths[i];
+    argv[k] = 0;
+    spawn_argv(argv);
+    g_del_count = 0;
+}
+static void menu_delete(void *ctx) {
+    (void)ctx;
+    g_del_count = selected_paths(g_del_paths, DESKTOP_FILES_MAX);
+    if (g_del_count == 0) return;
+    if (g_del_count == 1)
+        k_snprintf(g_del_msg, sizeof g_del_msg, "Delete %s?", k_path_basename(g_del_paths[0]));
+    else
+        k_snprintf(g_del_msg, sizeof g_del_msg, "Delete %d items from the desktop?", g_del_count);
+    confirm_dialog_open_labelled(g_del_msg, "Delete", "Cancel", delete_confirmed, 0);
+}
+
+// "New folder", then "New folder 2", ... -- Explorer's and Dolphin's
+// naming. A syscall rather than a child: mkdir is one operation.
+static void menu_new_folder(void *ctx) {
+    (void)ctx;
+    char path[PATH_BUF];
+    for (int n = 1; n < 100; n++) {
+        if (n == 1) k_snprintf(path, sizeof path, DESKTOP_DIR "/New folder");
+        else        k_snprintf(path, sizeof path, DESKTOP_DIR "/New folder %d", n);
+        struct sys_stat st;
+        if (sys_stat(path, &st) == 0) continue;
+        if (sys_mkdir(path) < 0) wm_logf("desktop: mkdir %s failed", path);
+        return;
+    }
+}
+
+static void menu_open_item(void *ctx) { item_activate((int)(intptr_t)ctx); }
+
+// The keyboard's half: Ctrl+C / Ctrl+X / Ctrl+V and Delete when no
+// window has the focus. Returns 1 if the key was the desktop's.
+int desktop_handle_key(int key, unsigned mods) {
+    if (key == KEY_DELETE) { menu_delete(0); return 1; }
+    if (!(mods & KEY_MOD_CTRL)) return 0;
+    if (key == 'c' || key == 'C' || key == 0x03) { menu_copy(0);  return 1; }
+    if (key == 'x' || key == 'X' || key == 0x18) { menu_cut(0);   return 1; }
+    if (key == 'v' || key == 'V' || key == 0x16) { menu_paste(0); return 1; }
+    return 0;
+}
+
 // --- the desktop's context menu ---------------------------------------
 //
 // Windows' and KDE's shape: Open > (the launchers), then the desktop's
 // own verbs, then Icon size > with a tick on the current one, then the
 // way to the settings page. Static rows because context_menu_open_at()
 // only borrows the pointer for as long as the menu stays open.
+//
+// OVER AN ICON the menu is that icon's -- Open, and for a file Cut,
+// Copy, Delete -- and the click SELECTS it first (the rule every file
+// manager has, docs/conventions/gui.md), so the verbs act on what was
+// pointed at. That is the per-icon identity desktop.h's top comment
+// once said was missing: a file has one, a launcher's is "open it".
 
 static void launch_from_menu(void *ctx) {
     open_app((const struct gui_app *)ctx);
@@ -971,8 +1226,8 @@ static void set_icon_size(void *ctx) {
     icon_size_reload();   // now, not on the next generation poll
 }
 
-// Refresh: re-read the entries, drop the icon cache, repaint. What
-// F5 does on every desktop.
+// Refresh: re-read the entries and the folder, drop the icon cache,
+// repaint. What F5 does on every desktop.
 static void menu_refresh(void *ctx) {
     (void)ctx;
     desktop_entries_changed();
@@ -981,14 +1236,15 @@ static void menu_refresh(void *ctx) {
 }
 
 // Sort by name: the default layout, re-derived and SAVED, so a desktop
-// rearranged by hand goes back to columns in registry (name) order.
+// rearranged by hand goes back to columns in name order.
 static void menu_sort(void *ctx) {
     (void)ctx;
-    for (int i = 0; i < gui_app_registry_count && i < DESKTOP_MAX_ICONS; i++)
-        wm_conf_set(DESKTOP_CONF_PATH, gui_app_registry[i].name, "");
+    char keybuf[80];
+    for (int i = 0; i < item_count(); i++)
+        wm_conf_set(DESKTOP_CONF_PATH, item_key(i, keybuf, sizeof keybuf), "");
     positions_loaded = 0;
     desktop_load_positions();
-    for (int i = 0; i < gui_app_registry_count && i < DESKTOP_MAX_ICONS; i++)
+    for (int i = 0; i < item_count(); i++)
         if (icon_col[i] >= 0) save_position(i);
     wm_damage_rect(0, 0, screen_w, screen_h);
     redraw_pending = 1;
@@ -1007,11 +1263,29 @@ static void menu_settings(void *ctx) {
 }
 
 void desktop_handle_right_click(int mx, int my) {
-    (void)icon_hit_test; // per-icon menu is a future refinement, see desktop.h's top comment
-
     static struct context_menu_item launchers[16];
     static struct context_menu_item sizes[3];
-    static struct context_menu_item items[8];
+    static struct context_menu_item items[12];
+    int k = 0;
+
+    int idx = icon_hit_test(mx, my);
+    if (idx >= 0) {
+        // The click selects the icon first, unless it is already in the
+        // set -- right-clicking one of five must offer to act on five.
+        if (!rb_is_selected(&sel, idx)) { rb_clear(&sel); rb_select(&sel, idx, 1); }
+        redraw_pending = 1;
+        items[k++] = (struct context_menu_item){ .label = "Open", .on_select = menu_open_item,
+                                                 .ctx = (void *)(intptr_t)idx };
+        if (item_is_file(idx)) {
+            items[k++] = (struct context_menu_item){ .separator = 1 };
+            items[k++] = (struct context_menu_item){ .label = "Cut", .on_select = menu_cut };
+            items[k++] = (struct context_menu_item){ .label = "Copy", .on_select = menu_copy };
+            items[k++] = (struct context_menu_item){ .separator = 1 };
+            items[k++] = (struct context_menu_item){ .label = "Delete", .on_select = menu_delete };
+        }
+        context_menu_open_at(mx, my, items, k);
+        return;
+    }
 
     // Open > -- the desktop's own entries, so an entry hidden from this
     // surface by ShowIn= is not launchable from here either.
@@ -1032,8 +1306,10 @@ void desktop_handle_right_click(int mx, int my) {
                                                .checked = k_strcmp(g_icon_size, words[i]) == 0 };
     }
 
-    int k = 0;
     items[k++] = (struct context_menu_item){ .label = "Open", .sub = launchers, .sub_count = n };
+    items[k++] = (struct context_menu_item){ .separator = 1 };
+    items[k++] = (struct context_menu_item){ .label = "New folder", .on_select = menu_new_folder };
+    items[k++] = (struct context_menu_item){ .label = "Paste", .on_select = menu_paste };
     items[k++] = (struct context_menu_item){ .separator = 1 };
     items[k++] = (struct context_menu_item){ .label = "Refresh", .on_select = menu_refresh };
     items[k++] = (struct context_menu_item){ .label = "Sort by name", .on_select = menu_sort };

@@ -1328,6 +1328,10 @@ void wm_run(void) {
                     redraw_pending = 1;
                 } else if (f >= 0 && key != -1 && !file_picker_open && windows[f].app && windows[f].app->on_key) {
                     windows[f].app->on_key(&windows[f], key, key_mods);
+                } else if (f < 0 && key != -1 && !file_picker_open && !confirm_dialog_open) {
+                    // No window has the focus: the DESKTOP is the focus,
+                    // and its icons take Ctrl+C/X/V and Delete.
+                    if (desktop_handle_key(key, key_mods)) redraw_pending = 1;
                 }
                 if (f >= 0 && wheel != 0 && !file_picker_open) {
                     // A client gets the same notches as a message. Until

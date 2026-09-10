@@ -1472,6 +1472,9 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LI
 	# refuses rather than connecting to something it cannot vouch for.
 	# `make iso EXTRAS=1` is what puts the Mozilla bundle in it.
 	mkdir -p $(SEED_DIR)/sync/etc/ssl/certs
+	# The desktop's FOLDER: the icons a person puts on the desktop live
+	# here (userland/wm/desktop.c). Empty by design, like ~/Desktop.
+	mkdir -p $(SEED_DIR)/sync/home/desktop
 	@for f in data/etc/ssl/certs/*; do \
 	    if [ -f "$$f" ] && [ "$$(basename $$f)" != "README.md" ]; then \
 	        cp "$$f" $(SEED_DIR)/sync/etc/ssl/certs/; fi; \
