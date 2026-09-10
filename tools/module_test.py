@@ -105,6 +105,15 @@ def main():
 
     out = run("modload e1000", "lsmod")
     check("modload e1000 binds the card again", "1 device" in out, out[-300:])
+
+    # -r in one process: the log must show BOTH halves, since lsmod
+    # alone reads the same after a reload that did nothing.
+    before = dmesg().count("module: e1000 unloaded")
+    out = run("modload -r e1000")
+    log = dmesg()
+    check("modload -r unloads and loads again in one process",
+          "exit 1" not in out and log.count("module: e1000 unloaded") == before + 1
+          and "bound a device" in log.split("module: e1000 unloaded")[-1], out[-300:])
     deadline = time.time() + 40
     inet = ""
     while time.time() < deadline:

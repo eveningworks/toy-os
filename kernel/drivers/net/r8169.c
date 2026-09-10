@@ -148,25 +148,8 @@ static void reg_write64(uint32_t o, uint64_t v) {
 
 // --- the descriptor rules, the half a KTEST can reach ------------------
 
-#define DESC_OWN      0x80000000u
-#define DESC_EOR      0x40000000u
-#define DESC_FS       0x20000000u
-#define DESC_LS       0x10000000u
-#define DESC_RXERRSUM 0x00200000u
-#define DESC_FRAGLEN  0x00003FFFu
 
-uint32_t r8169_tx_opts1(uint32_t len, int last) {
-    return DESC_OWN | DESC_FS | DESC_LS | (last ? DESC_EOR : 0) | (len & 0xFFFFu);
-}
-
-uint32_t r8169_rx_frame_len(uint32_t opts1) {
-    if (opts1 & DESC_OWN) return 0;                       // still the device's
-    if ((opts1 & (DESC_FS | DESC_LS)) != (DESC_FS | DESC_LS)) return 0;
-    if (opts1 & DESC_RXERRSUM) return 0;
-    uint32_t total = opts1 & DESC_FRAGLEN;
-    if (total < 4 + 14 || total > R8169_RX_BUF) return 0;
-    return total - 4;                                     // drop the FCS
-}
+// r8169_tx_opts1() and r8169_rx_frame_len() are inline in r8169.h.
 
 // --- the PHY -----------------------------------------------------------
 
@@ -233,14 +216,14 @@ static void rx_hand_back(uint32_t i) {
     d->opts2 = 0;
     d->addr = g_r.rx_buf_phys + (uint64_t)i * BUF_SIZE;
     kbarrier();   // the address must be visible before the device owns it
-    d->opts1 = DESC_OWN | (i == RX_DESCS - 1 ? DESC_EOR : 0) | BUF_SIZE;
+    d->opts1 = R8169_DESC_OWN | (i == RX_DESCS - 1 ? R8169_DESC_EOR : 0) | BUF_SIZE;
 }
 
 static void drain_rx(struct net_device *dev) {
     for (;;) {
         struct rl_desc *d = &g_r.rx[g_r.rx_cur];
         uint32_t opts1 = d->opts1;
-        if (opts1 & DESC_OWN) break;
+        if (opts1 & R8169_DESC_OWN) break;
 
         uint32_t len = r8169_rx_frame_len(opts1);
         if (len) net_rx(dev, g_r.rx_buf + (uint64_t)g_r.rx_cur * BUF_SIZE, len);
@@ -266,7 +249,7 @@ static void r8169_irq(uint64_t *regs) {
 static int r8169_transmit(struct net_device *dev, const void *frame, uint32_t len) {
     (void)dev;
     struct rl_desc *d = &g_r.tx[g_r.tx_cur];
-    if (d->opts1 & DESC_OWN) return -ENOSPC;   // the device has not sent it yet
+    if (d->opts1 & R8169_DESC_OWN) return -ENOSPC;   // the device has not sent it yet
 
     uint32_t padded = r8169_tx_pad(len);
     uint8_t *buf = g_r.tx_buf + (uint64_t)g_r.tx_cur * BUF_SIZE;
@@ -318,7 +301,7 @@ static int alloc_rings(void) {
     // EOR on the last transmit slot before the device is running: it
     // may prefetch past a descriptor it does not own, and nothing else
     // would tell it where the ring wraps.
-    g_r.tx[TX_DESCS - 1].opts1 = DESC_EOR;
+    g_r.tx[TX_DESCS - 1].opts1 = R8169_DESC_EOR;
     return 1;
 }
 
@@ -450,4 +433,29 @@ static void r8169_probe(const struct pci_device *pci) {
     update_link(&g_dev);
     if (!g_dev.link_up) phy_kick();
 }
-PCI_DRIVER("r8169", r8169_matches, r8169_probe);
+
+// The inverse, in the order that keeps the handler safe: the chip's
+// interrupt mask off first, then the handler unhooked, then the rings
+// stopped by a reset, the device out of the stack, the frames back.
+// Statics are reset so a re-probe starts from nothing -- what lets the
+// module be unloaded and loaded again on the machine.
+static void r8169_remove(const struct pci_device *pci) {
+    if (!g_probed) return;
+    if (g_r.mmio) {
+        reg_write16(REG_IMR, 0);
+        reg_write16(REG_ISR, 0xFFFF);
+    }
+    g_present = 0;
+    if (pci->irq_vector) pci_msi_release(pci, pci->irq_vector);
+    else if (g_r.irq) irq_unregister_handler(g_r.irq, r8169_irq);
+    if (g_r.mmio) chip_reset();
+    net_unregister(&g_dev);
+    if (g_r.rx) pmm_free_contiguous((uint64_t)(uintptr_t)g_r.rx, 1);
+    if (g_r.tx) pmm_free_contiguous((uint64_t)(uintptr_t)g_r.tx, 1);
+    if (g_r.rx_buf) pmm_free_contiguous(g_r.rx_buf_phys, (RX_DESCS * BUF_SIZE) / 4096);
+    if (g_r.tx_buf) pmm_free_contiguous(g_r.tx_buf_phys, (TX_DESCS * BUF_SIZE) / 4096);
+    k_memset(&g_r, 0, sizeof g_r);
+    k_memset(&g_dev, 0, sizeof g_dev);
+    g_probed = 0;
+}
+PCI_DRIVER_REMOVABLE("r8169", r8169_matches, r8169_probe, r8169_remove);

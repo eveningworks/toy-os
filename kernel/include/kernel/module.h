@@ -38,6 +38,7 @@ struct kmodule {
     const struct driver_decl *drivers; int ndrivers;
     const struct pci_driver  *pci;     int npci;
     const struct initcall    *exits;   int nexits;
+    int pins;                         // module_get() minus module_put()
 };
 
 // Runs `fn` when the module is unloaded -- the inverse of INITCALL.
@@ -65,6 +66,16 @@ int module_load_image(const char *name, const void *image, uint32_t len);
 // holds a device and has no remove(). Runs its MODULE_EXIT, drops its
 // tables from every registry, restores the pages and frees them.
 int module_unload(const char *name);
+
+// PINS A MODULE so it cannot be unloaded from under a live user.
+// Addressed by ANY address inside the module -- `module_get(&g_dev)`
+// from the module's own file is THIS_MODULE without a handle -- or by a
+// registry that holds one of its callbacks. A bound PCI device pins its
+// driver's module through pci_driver_table_bound() without this; this
+// is for everything else a module registers that has no inverse the
+// loader can see. -ENOENT when `addr` is in no module.
+int module_get(const void *addr_in_module);
+int module_put(const void *addr_in_module);
 
 int module_count(void);
 const struct kmodule *module_at(int i);

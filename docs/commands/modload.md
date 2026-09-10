@@ -7,13 +7,18 @@
 ## Synopsis
 
 ```
-modload <name | path>
+modload [-r] <name | path>
 ```
 
 ## Options
 
-None. A bare name loads `/lib/modules/<name>.ko`; an argument
-containing a `/` is used as the path.
+- `-r` -- reload: unload the module first if it is loaded (refused the
+  way `modunload` refuses), then load it. One process, so it works over
+  a network session that the unload itself takes away -- the reason it
+  exists.
+
+A bare name loads `/lib/modules/<name>.ko`; an argument containing a
+`/` is used as the path.
 
 ## Description
 
@@ -44,6 +49,11 @@ module: unexported: unknown symbol scheduler_kill (not exported -- see kernel/co
 The other refusals: `No such file`, `Exec format error` for anything
 that is not a relocatable x86-64 object (a truncated file included),
 `No space left` when the module table is full.
+
+**Reloading the driver of the NIC you are logged in through** is
+`spawn modload -r r8169`: the session dies with the unload, the spawned
+process finishes the load on its own, and `netd` leases an address
+again within a few seconds.
 
 Most modules never need this command: at boot the kernel loads every
 name in `/etc/modules`, then every module whose `modules.alias` line

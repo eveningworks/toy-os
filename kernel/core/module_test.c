@@ -62,6 +62,24 @@ KTEST("module", "hello.ko loads, is listed, symbolizes, runs its exit, and unloa
     KTEST_ASSERT((after & (1ULL << 63)) && (after & 2));
 }
 
+KTEST("module", "a pinned module refuses to unload until it is put") {
+    if (!fs_exists(HELLO)) KTEST_SKIP("no /lib/modules/hello.ko on this image");
+    if (module_find("hello")) module_unload("hello");
+    KTEST_ASSERT_EQ(module_load(HELLO), 0);
+    const struct kmodule *m = module_find("hello");
+    KTEST_ASSERT(m != NULL);
+    const void *inside = (const void *)(uintptr_t)(m->base + 16);
+    KTEST_ASSERT_EQ(module_get(inside), 0);
+    KTEST_ASSERT_EQ(module_get(inside), 0);
+    KTEST_ASSERT_EQ(m->pins, 2);
+    KTEST_ASSERT_EQ(module_unload("hello"), -EBUSY);
+    KTEST_ASSERT_EQ(module_put(inside), 0);
+    KTEST_ASSERT_EQ(module_unload("hello"), -EBUSY);
+    KTEST_ASSERT_EQ(module_put(inside), 0);
+    KTEST_ASSERT_EQ(module_unload("hello"), 0);
+    KTEST_ASSERT_EQ(module_get(&ktest_fail), -ENOENT);   // an address in the image
+}
+
 KTEST("module", "an unexported symbol is refused by name, before anything is registered") {
     const char *path = MODULE_DIR "/unexported.ko";
     if (!fs_exists(path)) KTEST_SKIP("no /lib/modules/unexported.ko on this image");

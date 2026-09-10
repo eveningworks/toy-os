@@ -21,6 +21,8 @@
 #include "netdev.h"
 #include "driver.h"
 #include "ktest.h"
+#include "module.h"
+#include "multiboot.h"
 #include <stddef.h>
 
 // --- the stack protector: every module function carries a canary -----
@@ -40,6 +42,7 @@ EXPORT_SYMBOL(k_memcmp);
 EXPORT_SYMBOL(k_strlen);
 EXPORT_SYMBOL(k_strcmp);
 EXPORT_SYMBOL(k_strlcpy);
+EXPORT_SYMBOL(k_strstr);
 
 // --- pmm.h / heap.h ----------------------------------------------------
 EXPORT_SYMBOL(pmm_alloc_contiguous);
@@ -53,6 +56,7 @@ EXPORT_SYMBOL(pci_bar_is_io);
 EXPORT_SYMBOL(pci_bar_mem_addr);
 EXPORT_SYMBOL(pci_bar_mem_size);
 EXPORT_SYMBOL(pci_enable_bus_master);
+EXPORT_SYMBOL(pci_command_update);
 EXPORT_SYMBOL(pci_msi_request);
 EXPORT_SYMBOL(pci_msi_release);
 
@@ -70,6 +74,13 @@ EXPORT_SYMBOL(net_rx);
 // --- driver.h ----------------------------------------------------------
 EXPORT_SYMBOL(driver_bound);
 EXPORT_SYMBOL(driver_unbound);
+
+// --- module.h: a module pins itself ------------------------------------
+EXPORT_SYMBOL(module_get);
+EXPORT_SYMBOL(module_put);
+
+// --- multiboot.h: the boot line, for a driver's `noXXX` word ------------
+EXPORT_SYMBOL(multiboot_cmdline);
 
 // --- the table ---------------------------------------------------------
 extern const struct kexport __kexports_start[];

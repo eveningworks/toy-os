@@ -29,9 +29,12 @@ int main(int argc, char **argv) {
             printf("%-14s %6u K  %#llx  text %u K, data %u K, %u driver(s)\n",
                    m.name, kib, (unsigned long long)m.base,
                    m.text_bytes / 1024, m.data_bytes / 1024, m.drivers);
-        } else if (m.bound) {
-            printf("%-14s %6u K  %u device(s)%s\n", m.name, kib, m.bound,
-                   m.removable ? "" : " (cannot unload)");
+        } else if (m.bound || m.pins) {
+            printf("%-14s %6u K  ", m.name, kib);
+            if (m.bound) printf("%u device(s)", m.bound);
+            if (m.bound && m.pins) printf(", ");
+            if (m.pins) printf("pinned %u", m.pins);
+            printf("%s\n", m.removable ? "" : " (cannot unload)");
         } else {
             printf("%-14s %6u K  -\n", m.name, kib);
         }

@@ -111,6 +111,29 @@ const struct kmodule *module_find(const char *name) {
     return name ? slot_find(name) : NULL;
 }
 
+static struct kmodule *slot_by_addr(const void *addr) {
+    uint64_t a = (uint64_t)(uintptr_t)addr;
+    for (int k = 0; k < MODULE_MAX; k++) {
+        struct kmodule *m = &g_mods[k];
+        if (g_mod_used[k] && a >= m->base && a < m->base + (uint64_t)m->pages * PAGE) return m;
+    }
+    return NULL;
+}
+
+int module_get(const void *addr) {
+    struct kmodule *m = slot_by_addr(addr);
+    if (!m) return -ENOENT;
+    m->pins++;
+    return 0;
+}
+
+int module_put(const void *addr) {
+    struct kmodule *m = slot_by_addr(addr);
+    if (!m) return -ENOENT;
+    if (m->pins > 0) m->pins--;
+    return 0;
+}
+
 const char *module_symbolize(uint64_t addr, uint32_t *out_off) {
     for (int k = 0; k < MODULE_MAX; k++) {
         const struct kmodule *m = &g_mods[k];
@@ -455,6 +478,7 @@ int module_unload(const char *name) {
     struct kmodule *m = name ? slot_find(name) : NULL;
     if (!m) return -ENOENT;
 
+    if (m->pins > 0) { klog_printf("module: %s is pinned (%d)\n", name, m->pins); return -EBUSY; }
     if (m->npci) {
         int rc = pci_driver_remove_table(m->pci);
         if (rc == -EBUSY) { klog_printf("module: %s is in use\n", name); return -EBUSY; }
@@ -632,6 +656,7 @@ static int mod_fill(int index, void *out) {
     q->bound = m->npci ? (uint32_t)pci_driver_table_bound(m->pci) : 0;
     q->removable = 1;
     for (int i = 0; i < m->npci; i++) if (!m->pci[i].remove) q->removable = 0;
+    q->pins = (uint32_t)m->pins;
     return 1;
 }
 

@@ -29,7 +29,8 @@ hello               8 K  -
 
 A module holding a device it cannot release -- a driver with no
 `remove()` -- shows `(cannot unload)`, which is what `modunload` will
-say too.
+say too. `pinned N` is a module that pinned itself (`module_get()`),
+refused the same way until it lets go.
 
 The question `lsdrv` answers is a different one: which drivers this
 build has and what each bound, for modules and built-in drivers alike.

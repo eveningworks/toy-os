@@ -2475,10 +2475,12 @@ allocated module memory with `kmalloc`: the identity map's RAM is NX
 (`paging_enforce_wx()`), so a module's text needs its own frames and
 `paging_set_kernel_exec()`, or it faults on the first instruction.
 
-**What was deliberately not built.** A use count a module raises for
-itself: a bound PCI device is the one thing that pins a module today
-(`pci_driver_table_bound()`), so a module registering into some other
-class with no inverse could be unloaded under it. The second module
-that needs it gets `module_get()`/`module_put()`. Module-to-module
-imports (only the kernel exports), versioning and signing -- one
-author, one tree, one build.
+**The use count is addressed by ADDRESS, not by handle.** Linux's
+`try_module_get(THIS_MODULE)` needs a per-module struct the build
+emits; here `module_get(&any_static_in_this_file)` resolves the module
+by the address's frames, so a module pins itself with no handle and no
+macro, and a registry holding one of its callbacks can pin it the same
+way. A bound PCI device pins through `pci_driver_table_bound()` without
+it. **Deliberately not built:** module-to-module imports (only the
+kernel exports), versioning and signing -- one author, one tree, one
+build.

@@ -3213,7 +3213,9 @@ first, and `paging_set_kernel_exec()` flips the text pages to RX (its
 own split pool, like the guard pages'). Anywhere is fine because of the
 large code model: every external reference is an `R_X86_64_64` through
 a `movabs`, so the loader handles exactly that and `PC32`/`PLT32` for a
-module's own jumps, and refuses anything else BY NAME.
+module's own jumps, and refuses anything else BY NAME. Measured on the
+Lenovo (8 GiB): `r8169.ko` loads at `0x100eb1000` and drives the card
+from there.
 
 **BOOT LOADING IS AT `INIT_CONFIG`, NOT `INIT_BUS`**, because the files
 are on the root filesystem and `INIT_FS` runs after the bus. So a
@@ -3223,14 +3225,18 @@ order is `/etc/modules` (names, one per line), then `modules.alias`
 against every unclaimed device. A diskless boot loads nothing and logs
 one line.
 
-**A DRIVER WITHOUT `remove()` PINS ITS MODULE.** `pci_driver` gained an
-optional `remove` (`PCI_DRIVER_REMOVABLE`); `modunload` calls it for
-every device the module's drivers hold, and refuses `-EBUSY` -- before
-releasing any -- if one driver has none. `e1000` has one, which is what
+**A DRIVER WITHOUT `remove()` PINS ITS MODULE, AND SO DOES
+`module_get()`.** `pci_driver` gained an optional `remove`
+(`PCI_DRIVER_REMOVABLE`); `modunload` calls it for every device the
+module's drivers hold, and refuses `-EBUSY` -- before releasing any --
+if one driver has none. `e1000` and `r8169` have one, which is what
 makes "reload the driver without a reboot" true; `net_unregister()`,
 `irq_unregister_handler()` and `pci_msi_release()` are the three
-inverses it needed, and `/bin/netd` re-leases a card whose kernel-side
-address vanished.
+inverses they needed, and `/bin/netd` re-leases a card whose
+kernel-side address vanished. Anything ELSE a module registers with no
+inverse the loader can see pins the module itself:
+`module_get(&any_static_in_this_file)` is `THIS_MODULE` without a
+handle, `module_put()` the inverse, and `lsmod` shows the count.
 
 **THE REGISTRIES WALK THE IMAGE'S SECTION AND THEN A LIST OF TABLES**
 (`driver_add_table()`, `pci_driver_add_table()`), image first, so a

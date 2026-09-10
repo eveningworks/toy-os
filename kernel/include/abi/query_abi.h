@@ -796,6 +796,7 @@ struct query_module {
     uint32_t drivers;       // DRIVER_DECLAREs it carries
     uint32_t bound;         // PCI devices its drivers currently hold
     uint32_t removable;     // 0 when a driver holds devices it cannot release
+    uint32_t pins;          // module_get() holds -- unload is refused while > 0
 };
 
 struct query_version {

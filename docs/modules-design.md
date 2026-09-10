@@ -2,7 +2,7 @@
 
 **Status: all three stages BUILT 2026-09-10.** `kernel/core/module.c`
 is the loader, `kernel/core/kexports.c` the export list, `drivers.conf`
-says which drivers are modules (`e1000` by default), and
+says which drivers are modules (`e1000` and `r8169` by default), and
 `modload`/`modunload`/`lsmod` are the commands. The rule is in
 `docs/conventions/kernel.md` ("A DRIVER CAN BE A MODULE...") and the
 decisions in `docs/decisions/drivers.md`. Two things below were WRONG
