@@ -63,7 +63,10 @@ def main():
     ap.add_argument("--iso", default="toy-os.iso")
     ap.add_argument("--disk", default="disk.img")
     ap.add_argument("--suite", default="", help="run only this suite (e.g. fs, mm, lib)")
-    ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT,
+                    help="seconds allowed for the boot, and again for the "
+                         "suite from the moment it is sent (a hang guard, "
+                         "not a budget for both)")
     ap.add_argument("--virtio-disk", default=None,
                     help="also attach PATH as a virtio-blk disk. With the `virtioblk` "
                          "boot flag baked into the ISO, the filesystem then lives on "
@@ -118,6 +121,14 @@ def main():
 
         if not guest.send(f"ktest {args.suite}".strip()):
             return fail("could not send the ktest command", guest.diagnostics())
+
+        # THE SUITE GETS ITS OWN BUDGET, from the moment it is sent. One
+        # deadline from QEMU start covered the boot, the desktop wait,
+        # the `service stop` AND the suite -- and once the suite reached
+        # ~40s the verdict landed at second 61 on a slow boot and a
+        # PASSED transcript was reported as "no verdict" (2 runs in 2,
+        # 2026-09-10). A hang guard is sized against the thing it guards.
+        deadline = time.time() + args.timeout
 
         while time.time() < deadline and guest.sock is not None:
             guest.pump()

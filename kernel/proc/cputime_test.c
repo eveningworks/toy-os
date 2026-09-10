@@ -62,8 +62,17 @@ KTEST("sched", "a yielding process is not billed more ticks than elapsed") {
 // check discriminating: work done here must land in `kernel_ns`, and a
 // version that billed everything to `proc_ns` would look perfectly
 // plausible on a busy machine and be wrong on this one.
+//
+// THE SPIN IS UNDER A PREEMPTION GUARD, and that is the precondition,
+// not a shortcut: scheduler_rotate() hands the CPU to any runnable
+// ring-3 process on every tick, so beside a busy desktop the kernel
+// context gets alternate ticks and the accounting CORRECTLY reports
+// half the wall time here (measured: dk=30ms dp=30ms wall=60ms). With
+// a tick-granular clocksource one lost tick already fails the strict
+// threshold. The guard is what makes "this context did the work" true.
 KTEST("sched", "the machine-wide CPU split advances and lands in the right bucket") {
     uint64_t p0 = 0, k0 = 0, p1 = 0, k1 = 0;
+    scheduler_preempt_disable();
     scheduler_cpu_time(&p0, &k0);
 
     // Long enough to be several timer ticks at 100 Hz, so the result
@@ -74,6 +83,8 @@ KTEST("sched", "the machine-wide CPU split advances and lands in the right bucke
     (void)sink;
 
     scheduler_cpu_time(&p1, &k1);
+    uint64_t wall = clocksource_now_ns() - start;
+    scheduler_preempt_enable();
 
     // Neither counter may go backwards -- they are cumulative since boot.
     KTEST_ASSERT(p1 >= p0);
@@ -88,7 +99,7 @@ KTEST("sched", "the machine-wide CPU split advances and lands in the right bucke
 
     // And the two together cannot exceed the wall clock: a slice
     // charged to both buckets, or charged twice, shows up here.
-    KTEST_ASSERT(dk + dp <= (clocksource_now_ns() - start) + 10ull * 1000 * 1000);
+    KTEST_ASSERT(dk + dp <= wall + 10ull * 1000 * 1000);
 }
 
 // The reading is FRESH: scheduler_cpu_time() bills the slice in
@@ -97,11 +108,13 @@ KTEST("sched", "the machine-wide CPU split advances and lands in the right bucke
 // forced between them.
 KTEST("sched", "the CPU split includes the slice still running") {
     uint64_t k0 = 0, k1 = 0;
+    scheduler_preempt_disable();   // same precondition as above
     scheduler_cpu_time(0, &k0);
     uint64_t start = clocksource_now_ns();
     volatile uint64_t sink = 0;
     while (clocksource_now_ns() - start < 20ull * 1000 * 1000) sink++;
     (void)sink;
     scheduler_cpu_time(0, &k1);
+    scheduler_preempt_enable();
     KTEST_ASSERT(k1 - k0 > 15ull * 1000 * 1000);
 }
