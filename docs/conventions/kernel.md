@@ -2823,6 +2823,19 @@ an orderly close — what a client needs and no more.
   it until the stream reaches it. Ending the stream when the FIN arrives
   would report end-of-file in front of data still on its way — a
   truncated download that reads as a short file rather than an error.
+- **THE RECEIVE BUFFER IS NOT RE-ENTRANT, AND BOTH ENDS HOLD A
+  PREEMPTION GUARD.** `tcp_recv()` compacts `rcv` with a memmove and
+  `tcp_input()` writes segments into it, both in SYSCALL context — and a
+  ring-3 process is preemptible inside a syscall while `net_poll()`
+  (which runs `tcp_input()`) is reached from `scheduler_idle()` and from
+  a dozen syscalls. Preempted between the copy-out and the compaction, a
+  reader resumes and shifts a segment that landed meanwhile. **The
+  symptom is silent and far away**: one MSS of a downloaded file holds
+  the stream's own bytes from a few hundred bytes earlier, the length is
+  exact, and nothing reports anything — measured at 5 corrupt runs in 14
+  on a 16 MB fetch before the guard, 0 in 12 after. Same guard, same
+  reason, as `vfs.c`'s `FS_OP()`; it needs BOTH ends, because either
+  side being preempted mid-write is enough.
 - **SEQUENCE COMPARISON IS MODULAR.** `seq_lt()` is a signed difference,
   never a plain `<`: the space wraps, and getting this wrong works
   perfectly until a connection crosses 2^32.

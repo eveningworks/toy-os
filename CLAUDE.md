@@ -684,6 +684,7 @@ whenever a headline here tells you something you did not already know.
 - **AN ISOCHRONOUS ENDPOINT DOES NOT HALT, AND ITS RING RUNNING DRY IS NORMAL**
 - **THERE IS A NETWORK DEVICE CLASS, THE STACK IS IN THE KERNEL, AND THE RECEIVE PATH IS SPLIT ACROSS AN INTERRUPT**
 - **TCP IS CLIENT-SIDE, REASSEMBLES IN THE RECEIVE BUFFER, AND ITS TIMERS RIDE THE BLOCKING RECEIVE**
+- **THE TCP RECEIVE BUFFER IS NOT RE-ENTRANT, AND BOTH ENDS HOLD A PREEMPTION GUARD**
 - **A SOCKET RECEIVE BLOCKS, ONE CHANNEL SERVES THE WHOLE STACK, AND THE DEADLINE LIVES ON THE SOCKET**
 - **UDP IS A PORT DEMUX, DHCP AND DNS ARE RING-3 PROGRAMS, AND A NAME IS RESOLVED BY A LIBRARY**
 - **NOTHING INVENTS AN ADDRESS: A CARD COMES UP UNCONFIGURED, `/bin/netd` RUNS AT BOOT, AND NO SERVER MEANS LINK-LOCAL**
@@ -1488,7 +1489,9 @@ cost".
   itself), `regex_hostcheck.py`, `uimg_hostcheck.py`,
   `usnd_hostcheck.py`, `hash_hostcheck.py`,
   `divti3_hostcheck.py` (the 128-bit division helpers against Python's
-  arbitrary-precision integers), `window_resize_probe.py` (**both**
+  arbitrary-precision integers), `corrupt_diff.py` (**HOW two copies of
+  a file differ** -- aligned or not, zeros, or a run copied from
+  elsewhere in the same file; a checksum only says "wrong"), `window_resize_probe.py` (**both**
   views of a window -- the compositor's and the kernel's -- across a
   drag, since a window bug is usually the two disagreeing) and
   `umd_hostcheck.py` (the Markdown renderer over every

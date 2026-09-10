@@ -7120,3 +7120,43 @@ The bound is `TCP_OFO_MAX` disjoint ranges, not bytes. An 8 KiB window
 is under six full segments, so alternating loss cannot leave more than
 three holes; a fourth range is refused and re-acked, which is the same
 answer the stack gave to everything out of order before this existed.
+
+## The TCP receive buffer is guarded by disabling preemption, not by a lock
+
+`tcp_recv()` compacts the receive buffer with a memmove; `tcp_input()`
+writes arriving segments into the same buffer. Both run in SYSCALL
+context, and a ring-3 process is preemptible inside a syscall — so a
+reader can be stopped between copying bytes out and shifting the rest
+down, and `net_poll()` (reached from `scheduler_idle()` and from a dozen
+syscalls) can run `tcp_input()` into that buffer before it resumes. The
+reader then shifts a segment that was never there when it measured.
+
+The obvious answer is a lock per connection. It is the wrong one HERE
+for the same reason `vfs.c` reached for the same guard: this kernel is
+single-core, so the only concurrency is the scheduler, and a mutex would
+have to be a sleeping one (a spinlock cannot be held by a process that
+can be descheduled). A sleeping lock introduces a wait where the
+existing code has none, needs a wakeup path, and can be held by a
+process that then blocks — turning a data race into a lifetime problem.
+Turning preemption off for the few hundred instructions of a memmove
+costs nothing and cannot deadlock.
+
+**BOTH ends need it, and that is not belt-and-braces.** Guarding only
+the reader stops the reader being interrupted, but a writer preempted
+midway through placing a segment leaves the same torn state for a reader
+that starts afterwards. Either side alone is a half-closed race.
+
+**What this buys and what it does not.** It makes the buffer's
+manipulation atomic with respect to the scheduler, which is the whole
+hazard on one core. It is NOT a lock and will not survive SMP:
+`docs/smp-design.md`'s big-kernel-lock stage is where this becomes a
+real lock, and the guard is one of the places that has to be revisited
+then. It is also not the filesystem's guard — `FS_OP()` protects the
+backend's module-level scratch across a whole call; this protects one
+connection's buffer across one manipulation.
+
+The cost of NOT having it, measured: a 16 MB download came back with the
+right length and the wrong bytes in 5 runs of 14, the damage being one
+MSS-sized window holding the stream's own data from a few hundred bytes
+earlier. Nothing reported anything — no error, no short read, no log
+line. Zero in 12 with the guard.

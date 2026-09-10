@@ -2973,6 +2973,21 @@ window without going through it will find its layout polls timing out.
   screenshots with a pass/fail `--threshold` (default 0.2%) and an
   optional `--out` diff-highlight image, for catching a rendering
   regression manual eyeballing might miss.
+- **`corrupt_diff.py`** -- characterises HOW two copies of a file
+  differ, which is what a checksum cannot say. Prints every differing
+  run, whether it is block-ALIGNED (512/4096/8192), and what the bad
+  bytes ARE: zeros (a lost block), a run copied from elsewhere in the
+  same file (a block served from the wrong place -- it reports the
+  source offset and the delta), or neither. Written for the silent
+  download corruption: a checksum said "wrong", and this said "1458
+  bytes, in ONE 1460-byte window, holding the stream's own data from
+  832 bytes earlier" -- which named the layer in one run after a
+  session of counting checksums. **Extract the file with
+  `tfs3_writer.py read` rather than serving it out of the guest**: the
+  first attempt came through the guest's own `httpd`, which truncated
+  and returned two different lengths, so the analysis would have
+  measured the extraction. The check is that the extracted file's
+  digest matches what the guest itself reported.
 - **`tfs2_writer.py`** -- **REMOVED** along with the TFS2 backend, and
   nothing guards against a TFS2 disk any more: one booted today is read
   as blank and REFORMATTED. To read one, check out a commit before the

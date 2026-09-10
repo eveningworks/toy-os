@@ -27,6 +27,7 @@
 #include "clocksource.h"
 #include "string.h"
 #include "errno.h"
+#include "scheduler.h" // preemption guard -- see tcp_recv()/tcp_input()
 
 // One listener plus several live connections, and each block carries
 // 12 KiB of buffers -- so this number is 96 KiB of .bss, not a free
@@ -452,6 +453,16 @@ int tcp_recv(int idx, void *buf, uint32_t cap) {
     struct tcp_conn *c = &g_conns[idx];
 
     if (c->rcv_len) {
+        // THE RECEIVE BUFFER IS NOT RE-ENTRANT, and this is the same
+        // guard `vfs.c` holds for the same reason. A ring-3 process is
+        // preemptible inside a syscall, and `net_poll()` -- which runs
+        // `tcp_input()` into THIS buffer -- is reached from
+        // scheduler_idle() and from a dozen syscalls. Preempted between
+        // the copy-out and the compaction, a reader resumes and shifts
+        // a segment that arrived meanwhile: one MSS of the stream comes
+        // out holding bytes from a few hundred bytes earlier, and
+        // nothing reports anything.
+        scheduler_preempt_disable();
         uint32_t n = c->rcv_len < cap ? c->rcv_len : cap;
         k_memcpy(buf, c->rcv, n);
         // A ring would avoid this move; a linear buffer plus a memmove
@@ -464,6 +475,7 @@ int tcp_recv(int idx, void *buf, uint32_t cap) {
             for (uint32_t i = 0; i < occupied - n; i++) c->rcv[i] = c->rcv[n + i];
         }
         c->rcv_len -= n;
+        scheduler_preempt_enable();
         // The window just opened. Telling the peer costs one segment
         // and is what stops a transfer stalling at a closed window.
         send_segment(c, TH_ACK, c->snd_nxt, 0, 0);
@@ -761,6 +773,9 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
     // their range remembered until the hole ahead of them fills.
     int took = 0;
     uint32_t fin_seq = seq + data_len;      // where a FIN in this segment sits
+    // The other half of tcp_recv()'s guard: this writes into the same
+    // buffer a reader compacts, and it is equally preemptible.
+    scheduler_preempt_disable();
     if (data_len) {
         const uint8_t *p = data;
         uint32_t s = seq, n = data_len;
@@ -794,6 +809,8 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
         c->fin_seq = fin_seq;
         c->fin_seen = 1;
     }
+    scheduler_preempt_enable();
+
     if (c->fin_seen && c->rcv_nxt == c->fin_seq) {
         c->fin_seen = 0;
         c->peer_fin = 1;
