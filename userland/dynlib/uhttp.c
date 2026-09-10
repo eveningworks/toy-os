@@ -119,7 +119,41 @@ struct hdr_scan {
     char tail[3]; // the three bytes before the one being examined
     int  have;    // how many of them are real yet
     int  done;
+    // The header LINE being assembled, so a name can be recognised
+    // across a read boundary -- the same straddling hazard the blank
+    // line has, and the reason this is state rather than a scan of
+    // `buf`. A line longer than this is truncated for MATCHING only:
+    // the names looked for here are short, and the body offset comes
+    // from the blank-line walk above regardless.
+    char line[160];
+    int  line_len;
+    unsigned long content_length;   // 0 = the server did not say
 };
+
+static int hdr_prefix(const char *line, const char *name) {
+    while (*name) {
+        char a = *line++, b = *name++;
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
+// One completed header line. Only Content-Length is read: it is what a
+// progress meter needs, and a header nobody consumes is a parser to
+// keep correct for nothing.
+static void hdr_line(struct hdr_scan *s) {
+    s->line[s->line_len] = 0;
+    if (hdr_prefix(s->line, "content-length:")) {
+        const char *v = s->line + sizeof "content-length:" - 1;
+        while (*v == ' ' || *v == '\t') v++;
+        unsigned long n = 0;
+        int any = 0;
+        for (; *v >= '0' && *v <= '9'; v++) { n = n * 10 + (unsigned long)(*v - '0'); any = 1; }
+        if (any) s->content_length = n;
+    }
+    s->line_len = 0;
+}
 
 // Returns the offset in `buf` at which the BODY starts, or -1 if the
 // blank line has not been seen yet.
@@ -137,6 +171,10 @@ static long find_body(struct hdr_scan *s, const char *buf, size_t n) {
         s->tail[1] = s->tail[2];
         s->tail[2] = c;
         if (s->have < 3) s->have++;
+
+        if (c == '\n') hdr_line(s);
+        else if (c != '\r' && s->line_len < (int)sizeof s->line - 1)
+            s->line[s->line_len++] = c;
 
         if (crlf || lflf) {
             s->done = 1;
@@ -249,6 +287,8 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
             long body = find_body(&scan, buf, (size_t)got);
             if (body < 0) continue; // still in the headers
             off = (size_t)body;
+            if (req->on_headers)
+                req->on_headers(req->sink_ctx, req->status, scan.content_length);
         }
 
         if (off < (size_t)got && req->sink) {

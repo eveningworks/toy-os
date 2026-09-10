@@ -661,7 +661,9 @@ manual steps to be worth automating:
   has a BLANK NEIGHBOUR -- "something was drawn" is satisfied by a
   console that ignores cursor movement entirely. Run on demand.
 - **`shell_flow.py`** -- the same idea as `gui_flow.py`, for the
-  PHYSICAL (pre-`gui`) shell instead of the GUI: `ShellFlow.
+  PHYSICAL (pre-`gui`) shell instead of the GUI (though
+  `type_command()` alone drives anything keystrokes reach, the GUI
+  Terminal included): `ShellFlow.
   run_command(cmd, subdir=...)` types a full command -- including
   spaces/hyphens/underscores/a few other punctuation chars
   `qmp_test.py`'s `send_text()` can't handle on its own, and

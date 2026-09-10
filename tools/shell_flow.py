@@ -92,6 +92,13 @@ _SPECIAL_CHARS = {
     # Backgrounding. Shift+7 on a US layout -- and the same physical-key
     # caveat applies, which on `se` is where a quotation mark lives.
     "&": lambda s: s.combo(["shift", "7"]),
+    # A URL needs these three: `http://host:port/path`. Shifted
+    # semicolon, 6 and 5 on a US layout, so the same physical-key
+    # caveat as everything above applies -- on `se` the shifted 6 is
+    # where an ampersand lives.
+    ":": lambda s: s.combo(["shift", "semicolon"]),
+    "^": lambda s: s.combo(["shift", "6"]),
+    "%": lambda s: s.combo(["shift", "5"]),
 }
 
 

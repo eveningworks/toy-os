@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "lib/cmd.h"
+#include "lib/uprogress.h"
 #include "uhttp.h"
 
 #define USAGE "wget [-O <file>] [-k] [--weak-entropy] <url>"
@@ -28,11 +29,13 @@
 struct out {
     int  fd;          // -1 means stdout
     int  insecure;    // for the warning printed on connect
+    struct uprogress prog;
 };
 
 static int sink(void *ctx, const void *data, size_t len) {
     struct out *o = ctx;
     const char *p = data;
+    size_t len_in = len;
     while (len) {
         long w = (o->fd < 0) ? (long)fwrite(p, 1, len, stdout)
                              : write(o->fd, p, len);
@@ -40,6 +43,7 @@ static int sink(void *ctx, const void *data, size_t len) {
         p += w;
         len -= (size_t)w;
     }
+    uprogress_add(&o->prog, len_in);
     return 0;
 }
 
@@ -65,6 +69,16 @@ static void on_fallback(void *ctx, const char *host) {
     printf("wget: no https on %s, falling back to http (not encrypted)\n", host);
 }
 
+// THE METER GOES TO fd 2, NEVER fd 1: without -O the body IS stdout,
+// so a meter there would corrupt every redirected download. It draws
+// only when fd 2 is a terminal, which is what keeps a captured stderr
+// free of repaint junk (GNU wget and curl both do this).
+static void on_headers(void *ctx, int status, unsigned long content_length) {
+    struct out *o = ctx;
+    if (status >= 200 && status <= 299)
+        uprogress_begin(&o->prog, 2, content_length);
+}
+
 int main(int argc, char **argv) {
     const char *url = 0, *out_path = 0;
     struct uhttp_request req;
@@ -79,7 +93,7 @@ int main(int argc, char **argv) {
     }
     if (!url) { cmd_usage(USAGE); return 1; }
 
-    struct out o = { .fd = -1, .insecure = req.insecure };
+    struct out o = { .fd = -1, .insecure = req.insecure, .prog = { .fd = -1 } };
     if (out_path) {
         o.fd = open(out_path, O_WRONLY | O_CREAT | O_TRUNC);
         if (o.fd < 0) { cmd_fail("wget", out_path); return 1; }
@@ -90,8 +104,10 @@ int main(int argc, char **argv) {
     req.sink_ctx   = &o;
     req.on_connect  = on_connect;
     req.on_fallback = on_fallback;
+    req.on_headers  = on_headers;
 
     int rc = uhttp_fetch(&req);
+    uprogress_end(&o.prog);
     if (rc != 0) {
         printf("wget: %s\n", req.err);
         // The library states the condition; naming the flag that

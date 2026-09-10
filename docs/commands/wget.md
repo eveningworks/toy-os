@@ -69,6 +69,35 @@ state to keep — the end of the stream is the end of the response. A
 `Host:` header is sent anyway, because name-based virtual hosting is
 universal and a server given no name serves the wrong site.
 
+`Content-Length` **is** read, but only to size the progress meter below.
+Nothing frames the body with it: the close is still what ends the
+response, so a server that omits the header costs you the bar and
+nothing else.
+
+## The progress meter
+
+A transfer draws a one-line meter, redrawn in place four times a second:
+
+    [=========>          ]  47%  4.7M/10.0M  241K/s eta 22s
+
+Without a `Content-Length` there is no bar and no percentage, because
+neither can be known — it shows what has arrived, the rate, and how long
+it has been going:
+
+    4.7M 241K/s in 20s
+
+The rate is the **average over the whole transfer**, not a recent
+window. It is steadier to read, but it lags a connection whose speed
+changes — so the ETA of a transfer that has just stalled is optimistic
+for a while.
+
+**It is drawn on standard error, and only when that is a terminal.**
+Both halves matter. Without `-O` the body *is* standard output, so a
+meter there would corrupt every `wget URL > file`; and a redirected
+standard error — a service log, a test harness — would otherwise fill
+with carriage returns. GNU wget and curl both make the same two choices.
+So a meter appears when you are watching, and never lands in a file.
+
 ## HTTPS
 
 **TLS 1.3 and 1.2, ECDHE with AES-GCM or ChaCha20-Poly1305.** No CBC, no

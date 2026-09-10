@@ -84,6 +84,14 @@ struct uhttp_request {
     // it is not a debug hook.
     void (*on_fallback)(void *ctx, const char *host);
 
+    // Called once, after the response headers and before the first
+    // sink() call, so a caller can size a progress meter or refuse a
+    // body before reading it. `content_length` is 0 when the server did
+    // not say -- which is not an error and not an empty body: this is
+    // an HTTP/1.0 `Connection: close` request, so a server is entitled
+    // to end the body by closing and many do. May be NULL.
+    void (*on_headers)(void *ctx, int status, unsigned long content_length);
+
     // --- out ---
     int           status;      // the HTTP status, or 0 if none was read
     unsigned long body_bytes;  // what reached the sink
