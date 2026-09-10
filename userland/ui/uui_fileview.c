@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "keyboard.h"   // KEY_* codes, as delivered by WIN_EV_KEY
+#include "ui/uui_label.h" // uui_label_wrap_next -- the icon caption
 #include "ui/uui_route.h" // UUI_NOWHERE -- a drag_over's leave
 
 // Column indices in DETAILS mode. LIST mode declares only the first.
@@ -540,7 +541,10 @@ static int ic_cell_w(void) {
     return w < m ? m : w;
 }
 
-static int ic_cell_h(void) { return ic_px() + ugfx_char_h() + 10; }
+// Two label lines under the icon, the desktop's DESKTOP_LABEL_LINES and
+// KDE's/Windows' default; the second is cut with ".." when a name runs on.
+#define IC_LABEL_LINES 2
+static int ic_cell_h(void) { return ic_px() + IC_LABEL_LINES * (ugfx_char_h() + 1) + 10; }
 
 static int ic_cols(const struct uui_fileview *fv) {
     int n = (fv->table.w - fv->table.bar_w - 2 * ic_pad()) / ic_cell_w();
@@ -805,11 +809,27 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
         // identified, and Explorer and Dolphin both fade only the icon.
         if (uui_fileview_is_dimmed(fv, src)) ic_wash(s, ax, ay, aw, ah, bg);
 
+        // Word-wrapped into IC_LABEL_LINES centred lines, the last cut
+        // with ".." -- the desktop's draw_label(), over the toolkit's
+        // wrap helper.
         int max_w = cw - 6;
-        int tw = ugfx_text_width(name);
-        int lx = tw < max_w ? x + (cw - tw) / 2 : x + 3;
-        ugfx_draw_string_clipped(s, lx, y + 2 + px + 2, max_w, name,
-                                  selected ? t->sel_fg : t->fg, bg);
+        const char *rest = name;
+        char line[64];
+        for (int n = 0; n < IC_LABEL_LINES && *rest; n++) {
+            rest = uui_label_wrap_next(rest, max_w, line, sizeof line);
+            int ly = y + 2 + px + 2 + n * (ugfx_char_h() + 1);
+            int cut = (n == IC_LABEL_LINES - 1) && *rest;
+            int avail = cut ? max_w - 2 * ugfx_char_w() : max_w;
+            if (avail < ugfx_char_w()) avail = ugfx_char_w();
+            int tw = ugfx_text_width(line);
+            if (tw > avail) tw = avail;
+            int lx = x + 3 + (max_w - (tw + (cut ? 2 * ugfx_char_w() : 0))) / 2;
+            if (lx < x + 3) lx = x + 3;
+            ugfx_draw_string_clipped(s, lx, ly, avail, line,
+                                      selected ? t->sel_fg : t->fg, bg);
+            if (cut) ugfx_draw_string_clipped(s, lx + tw, ly, 2 * ugfx_char_w(), "..",
+                                              selected ? t->sel_fg : t->fg, bg);
+        }
     }
 
     if (ic_bar_visible(fv))

@@ -1,5 +1,6 @@
 // See wm_debug.h for what this is for and why it lives here.
 #include "wm_internal.h"
+#include "desktop.h"   // desktop_icon_geometry -- `gui icons`
 #include "wm_taskbar.h"
 #include "lib/icon_cache.h"
 #include "wm_tray.h"
@@ -429,14 +430,30 @@ static void cmd_ctxmenu(struct dbg_out *o, int json) {
     int rows = context_menu_geometry(&x, &y, &w, &ih);
 
     if (json) {
+        // Row tops come from the menu itself: a separator is half a row,
+        // so `y + i * item_h` stopped being true when they arrived.
         dbg_out_printf(o, "{\"open\":%s,\"x\":%d,\"y\":%d,\"w\":%d,\"item_h\":%d,\"rows\":[",
                      rows ? "true" : "false", x, y, w, ih);
         for (int i = 0; i < rows; i++) {
+            int ry = context_menu_row_top(i);
             dbg_out_printf(o, "%s{\"label\":\"%s\",\"y\":%d,\"cy\":%d}",
-                         i ? "," : "", context_menu_row_label(i),
-                         y + i * ih, y + i * ih + ih / 2);
+                         i ? "," : "", context_menu_row_label(i), ry, ry + ih / 2);
         }
-        dbg_out_write(o, "]}\r\n");
+        dbg_out_write(o, "]");
+        // The open SUBMENU, if any, in the same shape.
+        int sx = 0, sy = 0, sw = 0, sih = 0;
+        int srows = context_menu_sub_geometry(&sx, &sy, &sw, &sih);
+        if (srows) {
+            dbg_out_printf(o, ",\"sub\":{\"x\":%d,\"y\":%d,\"w\":%d,\"item_h\":%d,\"rows\":[",
+                           sx, sy, sw, sih);
+            for (int i = 0; i < srows; i++) {
+                int ry = context_menu_sub_row_top(i);
+                dbg_out_printf(o, "%s{\"label\":\"%s\",\"y\":%d,\"cy\":%d}",
+                               i ? "," : "", context_menu_sub_row_label(i), ry, ry + ih / 2);
+            }
+            dbg_out_write(o, "]}");
+        }
+        dbg_out_write(o, "}\r\n");
         return;
     }
 
@@ -445,7 +462,7 @@ static void cmd_ctxmenu(struct dbg_out *o, int json) {
                  x, y, w, ih, rows);
     for (int i = 0; i < rows; i++) {
         dbg_out_write(o, "  row "); col_int(o, i, 3);
-        dbg_out_write(o, "centre="); col_int(o, y + i * ih + ih / 2, 6);
+        dbg_out_write(o, "centre="); col_int(o, context_menu_row_top(i) + ih / 2, 6);
         dbg_out_write(o, context_menu_row_label(i));
         dbg_out_write(o, "\r\n");
     }
@@ -1202,8 +1219,21 @@ static void usage(struct dbg_out *o) {
 static void cmd_icons(struct dbg_out *o, int json) {
     int n = icon_cache_count();
     if (json) {
-        dbg_out_printf(o, "{\"cached\":%d,\"evictions\":%d}\r\n",
-                       n, icon_cache_evictions());
+        // ...and the desktop's icons themselves: rect and label line
+        // count per visible entry, from the same function the hit test
+        // uses, so a test clicks what the desktop says is there.
+        dbg_out_printf(o, "{\"cached\":%d,\"evictions\":%d,\"size\":%d,\"size_word\":\"%s\",\"icons\":[",
+                       n, icon_cache_evictions(), desktop_icon_px(),
+                       desktop_icon_size_word());
+        int first = 1;
+        for (int i = 0; i < gui_app_registry_count; i++) {
+            const char *name; int x, y, w, h, lines;
+            if (!desktop_icon_geometry(i, &name, &x, &y, &w, &h, &lines)) continue;
+            dbg_out_printf(o, "%s{\"name\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"lines\":%d}",
+                           first ? "" : ",", name, x, y, w, h, lines);
+            first = 0;
+        }
+        dbg_out_write(o, "]}\r\n");
         return;
     }
     dbg_out_printf(o, "icons: %d cached (name,size pairs decoded and scaled), "

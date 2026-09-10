@@ -558,7 +558,7 @@ def _remote_mismatches(sess, host, tftp_port, remote_dir, want, timeout,
 
 
 def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
-            dry_run=False, missing_only=False, sess=None):
+            dry_run=False, missing_only=False, sess=None, force=False):
     """`missing_only` sends only what the machine does NOT already have.
 
     That is dpkg's conffile rule, and it is what /etc needs: a new
@@ -594,7 +594,12 @@ def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
             return 1
 
     try:
-        todo = _remote_mismatches(sess, host, tftp_port, remote_dir, want,
+        # `force` sends the whole tree, comparing nothing: the comparison
+        # runs the MACHINE's `sum`, and the laptop's is wrong on large
+        # files (docs/bugs.md) -- a flash that trusts it can leave a
+        # binary behind that the new kernel then cannot run.
+        todo = sorted(want) if force else \
+               _remote_mismatches(sess, host, tftp_port, remote_dir, want,
                                   timeout, missing_only)
 
         # Every directory a file needs, THE ROOT INCLUDED, parents
@@ -792,7 +797,7 @@ USERLAND_TREES = (("bin", "/bin", False), ("tests", "/tests", False),
 
 
 def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
-             kernel_only=False, staging="seed/sync"):
+             kernel_only=False, staging="seed/sync", force=False):
     """Replace the kernel on the machine's own boot partition.
 
     THE RESCUE ENTRY IS THE POINT. grub.cfg already offers "toy-os
@@ -913,7 +918,8 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
                     rescue.close()
                 return 1
             if do_sync(host, telnet_port, tftp_port, local_dir, remote,
-                       timeout, False, new_only, sess=rescue):
+                       timeout, False, new_only, sess=rescue,
+                       force=force and not new_only):
                 print(f"remote: FAILED syncing {remote} -- the kernel has "
                       "NOT been written", file=sys.stderr)
                 if rescue is not None:
@@ -1042,6 +1048,10 @@ def main():
     y.add_argument("--new-only", action="store_true",
                    help="send only files the machine does NOT have, never "
                         "overwrite one it does -- what /etc needs")
+    y.add_argument("--force", action="store_true",
+                   help="send EVERY file, comparing nothing -- the machine's "
+                        "`sum` is what the comparison trusts, and the "
+                        "laptop's is wrong on large files (docs/bugs.md)")
 
     f = sub.add_parser("flash", help="replace the kernel on the machine's "
                                      "own boot partition")
@@ -1065,6 +1075,8 @@ def main():
                         "ABI change then leaves the machine unreachable")
     f.add_argument("--staging", default="seed/sync",
                    help="what `make iso` staged (default: seed/sync)")
+    f.add_argument("--force", action="store_true",
+                   help="sync every file, comparing nothing (see sync --force)")
 
     sub.add_parser("shell", help="an interactive session (Ctrl-] quits)")
 
@@ -1079,11 +1091,11 @@ def main():
         if a.cmd == "sync":
             return do_sync(a.host, a.telnet_port, a.tftp_port,
                            a.local, a.remote, a.timeout, a.dry_run,
-                           a.new_only)
+                           a.new_only, force=a.force)
         if a.cmd == "flash":
             return do_flash(a.host, a.telnet_port, a.tftp_port,
                             a.kernel, a.timeout, a.reboot,
-                            a.kernel_only, a.staging)
+                            a.kernel_only, a.staging, force=a.force)
         if a.cmd == "shell":
             return do_shell(a.host, a.telnet_port, a.timeout)
     except (OSError, RuntimeError) as ex:

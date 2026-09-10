@@ -885,7 +885,9 @@ struct spawn_msg {
     uint32_t flags;
 
     // With SPAWN_ARGV: the byte length of the vector `args` points at,
-    // every entry's NUL included, 1..SPAWN_ARGS_MAX. Without it: 0.
+    // every entry's NUL included, 1..SPAWN_ARGS_MAX. Without the flag it
+    // is NOT READ: a binary built before this field existed passes a
+    // shorter struct, and what lies past it is its stack.
     //
     // A LENGTH, NOT `env`'s DOUBLE-NUL TERMINATOR, because an argument
     // may legitimately be empty and the empty string IS that terminator

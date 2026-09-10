@@ -17,16 +17,31 @@
 // desktop.c grows real icon identity beyond "click launches app X").
 //
 // Deliberately minimal, same philosophy as every widget in this
-// codebase: a flat list of label+callback rows, click-to-select,
-// click-elsewhere-to-dismiss. No submenus, no icons, no
-// keyboard navigation (arrow keys/Enter) -- add those only once a real
-// need shows up.
+// codebase: a list of label+callback rows, click-to-select,
+// click-elsewhere-to-dismiss, plus the three things a desktop menu
+// could not do without (2026-09-10): one level of submenu, a
+// separator, and a tick. No icons, no keyboard navigation (arrow
+// keys/Enter) -- add those only once a real need shows up.
 
 struct context_menu_item {
     const char *label;
     void (*on_select)(void *ctx); // ctx is this same item's `ctx` field below, passed back untouched
     void *ctx; // caller-defined -- e.g. a gui_app pointer (desktop quick-launch) or a window
                // index packed into the pointer (taskbar "Close window") -- NULL if unused
+
+    // --- optional, zero for a plain row (every existing caller) -------
+    //
+    // ONE LEVEL OF SUBMENU: a row with `sub` opens `sub_count` rows to
+    // its right on hover or click, and its own on_select is never run.
+    // The desktop's "Open >" and "Icon size >" are the callers; Windows'
+    // and KDE's desktop menus are shaped this way. Owned by the caller
+    // like `items` itself.
+    const struct context_menu_item *sub;
+    int sub_count;
+    // Drawn with a tick in the gutter -- the current icon size.
+    int checked;
+    // A separator: a rule, half a row tall, not hoverable, never selected.
+    int separator;
 };
 
 // Whether a context menu is currently open -- read by wm_render.c (draw
@@ -80,5 +95,13 @@ int context_menu_handle_click(int mx, int my);
 // their handshake while the X button beside it did the right thing.
 int context_menu_geometry(int *x, int *y, int *w, int *item_h);
 const char *context_menu_row_label(int index);
+// The OPEN SUBMENU's geometry and labels, same contract; 0 when none
+// is open. `gui ctxmenu` reports it beside the main menu.
+int context_menu_sub_geometry(int *x, int *y, int *w, int *item_h);
+const char *context_menu_sub_row_label(int index);
+// The y a row's TOP sits at within its menu -- separators are half a
+// row, so rows are no longer at index * item_h.
+int context_menu_row_top(int index);
+int context_menu_sub_row_top(int index);
 
 #endif

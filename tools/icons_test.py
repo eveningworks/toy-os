@@ -87,11 +87,10 @@ DEFAULT_SOCK = ".vm.serial"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ICON_DIR = os.path.join(ROOT, "data", "icons")
 
-DESKTOP_ICON_SIZE = 48
-# The desktop's own grid constants (userland/wm/desktop.c). Read from the
-# guest instead where possible; these are only the origin, which the WM
-# does not report.
-ICON_X0, ICON_Y0 = 16, 16
+# The icon size and the grid come from the GUEST (`gui icons --json`),
+# not from constants: the size is a setting now (`desktop.icon_size`)
+# and the icons are centred in a font-derived column, so a hardcoded
+# 48 at (16, 16) would sample wallpaper. `desktop_report()` below.
 
 # How far a guest pixel may sit from the host's decode of the same file.
 # The guest scales 64->48 with a box filter and Pillow is asked for the
@@ -202,7 +201,7 @@ def cached_count(dbg):
     """
     import json as _json
     reply = dbg.send("gui icons --json") or ""
-    start = reply.rfind("{")
+    start = reply.rfind('{"cached"')
     if start < 0:
         return -1
     try:
@@ -211,10 +210,34 @@ def cached_count(dbg):
         return -1
 
 
+def desktop_report(dbg):
+    """`gui icons --json` whole: size, size_word and the per-icon rects."""
+    import json as _json
+    reply = dbg.send("gui icons --json") or ""
+    # The report holds NESTED objects now, so "the last {" is an icon's,
+    # not the report's: anchor on the report's first key.
+    start = reply.rfind('{"cached"')
+    if start < 0:
+        return None
+    try:
+        return _json.loads(reply[start:])
+    except ValueError:
+        return None
+
+
+def icon_rect(report, name):
+    for it in (report or {}).get("icons", []):
+        if it["name"] == name:
+            return it
+    return None
+
+
 def run(dbg, qmp, tmp, res):
-    # A KNOWN wallpaper, so the composite below has a known backdrop. Set
-    # through the kernel shell rather than `gui`, which would repaint.
+    # A KNOWN wallpaper, so the composite below has a known backdrop, and
+    # a KNOWN icon size. Set through the kernel shell rather than `gui`,
+    # which would repaint.
     dbg.send("sh config set desktop.wallpaper aurora")
+    dbg.send("sh config set desktop.icon_size medium")
     time.sleep(2.0)
     dbg.warp_cursor(qmp, 1180, 640)
     dbg.settle()
@@ -223,10 +246,18 @@ def run(dbg, qmp, tmp, res):
 
     # --- 1 & 2. the desktop icons ------------------------------------
     #
-    # The grid is one column of DESKTOP_ICON_ROW_H, and the WM reports no
-    # per-icon rect today, so the row pitch comes from the two icons this
-    # tool actually looks at rather than from a formula: About is first
-    # and its tile is at the grid origin.
+    # WHERE the About icon is comes from the desktop itself -- the same
+    # function its hit test uses -- so this tool samples the tile the
+    # desktop says it drew, at the size the setting says.
+    rep = desktop_report(dbg)
+    about = icon_rect(rep, "About")
+    res.check("the desktop reports its icons' rects and the size",
+              rep is not None and about is not None and rep.get("size") == 48,
+              f"report={rep and {k: rep[k] for k in ('size', 'size_word')}} about={about}")
+    if not about:
+        return
+    DESKTOP_ICON_SIZE = rep["size"]
+    ICON_X0, ICON_Y0 = about["x"], about["y"]
     want = host_icon("about", DESKTOP_ICON_SIZE)
     px = im.load()
     # SAMPLED ON THE PLATE, not in the middle of the pictogram. Every
@@ -608,6 +639,58 @@ def run(dbg, qmp, tmp, res):
     res.check("repainting does not decode again -- the cache holds",
               n1 > 0 and n1 == n2, f"cached {n1} before, {n2} after 12 repaints")
     print("        (%d icons cached)" % n2)
+
+    # --- the desktop's context menu, icon sizes, and label wrapping --
+    #
+    # Right-click on empty desktop: the menu has Icon size > with the
+    # current size ticked; picking Small applies through the setting and
+    # the reported rects shrink. A long name wraps to two lines
+    # (`lines` in the report), which is what KDE and Windows do.
+    print("the desktop menu: Icon size > and two-line labels")
+    import json as _json
+
+    def ctx():
+        reply = dbg.send("gui ctxmenu --json") or ""
+        start = reply.rfind('{"open"')
+        try:
+            return _json.loads(reply[start:]) if start >= 0 else None
+        except ValueError:
+            return None
+
+    settings_icon = icon_rect(rep, "System Settings")
+    res.check("a two-word name wraps to two label lines",
+              settings_icon is not None and settings_icon.get("lines") == 2,
+              f"System Settings={settings_icon}")
+    dbg.rclick(640, 400)
+    time.sleep(0.4)
+    menu = ctx()
+    labels = [r["label"] for r in (menu or {}).get("rows", [])]
+    res.check("right-click on the desktop opens a menu with Open, Refresh, Icon size and settings",
+              menu is not None and menu.get("open") and
+              {"Open", "Refresh", "Icon size", "Desktop settings"} <= set(labels),
+              f"rows={labels}")
+    sub = None
+    if menu and "Icon size" in labels:
+        row = [r for r in menu["rows"] if r["label"] == "Icon size"][0]
+        dbg.warp_cursor(qmp, menu["x"] + menu["w"] // 2, row["cy"])
+        time.sleep(0.4)
+        sub = (ctx() or {}).get("sub")
+    sub_labels = [r["label"] for r in (sub or {}).get("rows", [])]
+    res.check("hovering Icon size opens a submenu of Small, Medium, Large",
+              sub_labels == ["Small", "Medium", "Large"], f"sub={sub_labels}")
+    if sub:
+        small = [r for r in sub["rows"] if r["label"] == "Small"][0]
+        dbg.click(sub["x"] + sub["w"] // 2, small["cy"])
+        time.sleep(0.8)
+        rep2 = desktop_report(dbg)
+        about2 = icon_rect(rep2, "About")
+        res.check("picking Small applies: the icons are 32 px and the setting says small",
+                  rep2 is not None and rep2.get("size") == 32 and
+                  rep2.get("size_word") == "small" and about2 and about2["w"] == 32,
+                  f"report={rep2 and {k: rep2[k] for k in ('size', 'size_word')}} about={about2}")
+        res.check("the menu closed on the pick", not (ctx() or {}).get("open"), "")
+    dbg.send("sh config set desktop.icon_size medium")
+    time.sleep(0.8)
 
 
 def main():

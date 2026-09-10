@@ -595,6 +595,20 @@ One thing it will not do: it does not EDIT `grub.cfg` for you -- a
 flash silently rewriting the bootloader config is a worse surprise than
 a refusal.
 
+**THE SYNC TRUSTS THE MACHINE'S `sum`, AND `--force` IS FOR WHEN IT
+SHOULD NOT.** `remote.py sync` and `flash` ask the machine to checksum
+its own tree and send only what differs. The laptop's `sum` is wrong
+(`docs/bugs.md`), and on 2026-09-10 that passed stale application
+binaries as identical while the kernel and `libuapp.so` changed under
+them -- File Manager and Notepad then jumped through a garbage function
+pointer (`rip: 0xc` in `/var/crash`) and every service looped. `flash
+--force` (and `sync --force`) sends every file, comparing nothing; use
+it after any change to a struct a program embeds, or whenever the
+machine's checksums are in doubt. What neither can do is run without a
+shell on the machine: the trees are created with `mkdir` through the
+session, so a machine whose shell cannot spawn needs the kernel shell
+(`target=rescue` on the GRUB line) or a `put` per file.
+
 **It DOES reboot, and that is the default now.** The reboot happens only
 after the kernel has verified, so a verify failure still leaves the
 machine up, which was the original argument for making it opt-in. What

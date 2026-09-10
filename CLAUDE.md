@@ -710,7 +710,7 @@ whenever a headline here tells you something you did not already know.
 - **A RESIZE IS A SIGNAL, AND ONLY WHEN THE SIZE ACTUALLY MOVED**
 - **A LINE LONGER THAN THE TERMINAL IS WIDE NEEDS ROWS, NOT `\r`**
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
-- **A SPAWN CARRIES AN ARGV VECTOR WITH A LENGTH, AND THE STRING FORM IS SPLIT AT THE EDGE** -- `SPAWN_ARGV`; sized by length, not `env`'s double NUL, because an argument may be empty
+- **A SPAWN CARRIES AN ARGV VECTOR WITH A LENGTH, AND THE STRING FORM IS SPLIT AT THE EDGE** -- `SPAWN_ARGV`; sized by length, not `env`'s double NUL, because an argument may be empty; both sides tolerate the other being older (libsys retries in the string form)
 
 ### GUI, Toykit and the desktop
 
@@ -881,6 +881,8 @@ whenever a headline here tells you something you did not already know.
 - **A DRAG IS A ROUTER SESSION BETWEEN A SOURCE AND THE WIDGET UNDER THE POINTER, AND IT STAYS INSIDE ONE WINDOW** -- `drag_start`/`drag_over`/`drop`/`drag_end`, `UUI_REASON_DROP`; Ctrl = copy is the router's; a plain press on a marked row must DEFER its clear or a drag carries one file
 - **AN EMPTY-SPACE CLICK DESELECTS, AND THE RUBBER BAND WORKS IN EVERY VIEW**
 - **THE FOLDER TREE FOLLOWS A NAVIGATION, NEVER A TOGGLE**
+- **THE DESKTOP'S ICON SIZE IS A NAMED SETTING, THE ICONS ARE CENTRED, AND A CAPTION IS TWO LINES** -- `desktop.icon_size`; `icon_box()` is the one place an icon's rect comes from, and `gui icons --json` reports it
+- **THE WM CONTEXT MENU HAS ONE LEVEL OF SUBMENU, A SEPARATOR AND A TICK, AND THE DESKTOP'S MENU IS WINDOWS' SHAPE**
 - **MARKS SURVIVE A RELOAD BY NAME, BECAUSE THE VOLUME'S GENERATION NEVER STOPS MOVING** -- a tick reload that cleared them was the "marking does nothing" cluster
 
 ### Storage, the filesystem, and /etc
@@ -1009,7 +1011,7 @@ whenever a headline here tells you something you did not already know.
 - **`kernel/include/api/version.h` is GENERATED, not hand-edited**
 - **Versioning is semver + a `-dev` suffix, not a per-change build number.**
 - **A SHARED LIBRARY IS `userland/dynlib/` PLUS ONE MAKEFILE LINE, AND A PROGRAM OPTS IN**
-- **THE BARE-METAL KERNEL IS REPLACED WITH `remote.py flash`, AND THE RESCUE ENTRY NEEDS A GRUB TIMEOUT**
+- **THE BARE-METAL KERNEL IS REPLACED WITH `remote.py flash`, AND THE RESCUE ENTRY NEEDS A GRUB TIMEOUT** -- and `--force` after any change to a struct a program embeds, since the sync trusts the machine's `sum`
 - **A GitHub Release's notes follow ONE shape, and it is terse.**
 
 ## This checkout, and the repo it pushes to

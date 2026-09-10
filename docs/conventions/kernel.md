@@ -3902,3 +3902,13 @@ The stack builder has no per-entry array any more: it measures both
 blobs, places the SysV block, and writes each pointer as its string
 lands -- so `argc` is bounded by the one stack page, not by a
 `-Wframe-larger-than` budget that would have capped a globbing shell.
+
+**AND BOTH SIDES TOLERATE THE OTHER BEING OLDER, because a flash once
+left them mismatched.** The kernel reads `args_len` only with the flag
+set: a binary built before the field passes a shorter struct, and what
+lies past it is its stack. libsys retries a spawn the kernel refused
+with `-EINVAL` in the string form, argv[1..] joined by spaces, so a new
+userland on an old kernel spawns as it always did and only an argument
+holding a space is worse off. On 2026-09-10 the laptop had the new
+`tosh` on the old kernel and could not run a single command, which
+also took away the shell `remote.py flash` needs to replace the kernel.

@@ -880,7 +880,29 @@ int sys_spawn_opts(const char *path, const struct sys_spawn_opts *o) {
     msg.stdin_fd = o->stdin_fd;
     msg.pgid = o->pgid;
     msg.flags = flags;
-    return (int)err(syscall1(SYS_SPAWN, (uint64_t)(uintptr_t)&msg));
+    int64_t rc = syscall1(SYS_SPAWN, (uint64_t)(uintptr_t)&msg);
+
+    // A KERNEL THAT PREDATES SPAWN_ARGV REFUSES THE FLAG (-EINVAL, its
+    // rule for unknown bits). Fall back to the string form it does
+    // know -- argv[1..] joined by spaces -- so a new userland on an old
+    // kernel spawns as it always did instead of failing every command,
+    // which is what stranded a machine mid-flash on 2026-09-10. What
+    // the fallback loses is exactly what the vector added: an argument
+    // holding a space arrives split.
+    if (rc == -EINVAL && (flags & SPAWN_ARGV)) {
+        size_t n = 0;
+        for (int i = 1; o->argv[i]; i++) {
+            const char *a = o->argv[i];
+            if (i > 1) { if (n + 1 >= sizeof g_argblob) break; g_argblob[n++] = ' '; }
+            for (size_t k = 0; a[k] && n + 1 < sizeof g_argblob; k++) g_argblob[n++] = a[k];
+        }
+        g_argblob[n] = '\0';
+        msg.args = n ? g_argblob : 0;
+        msg.args_len = 0;
+        msg.flags = flags & ~(unsigned)SPAWN_ARGV;
+        rc = syscall1(SYS_SPAWN, (uint64_t)(uintptr_t)&msg);
+    }
+    return (int)err(rc);
 }
 
 

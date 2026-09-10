@@ -922,7 +922,7 @@ hand as a throwaway probe during a real hunt (see roadmap-details).
 - [x] ~~Move the existing boot self-tests behind it, so a normal boot stops paying for them~~ done
 - [ ] Coverage honesty: a list of what has NO test
 - [ ] A scriptable POINTER, not a one-frame override -- `gui move` lasts ONE `wm_run()` iteration, so hover needs the real mouse
-- [ ] `gui icons [--json]` reports a CACHE COUNT, not desktop icon GEOMETRY -- the name is taken, the fact a test wants is not there
+- [x] ~~`gui icons [--json]` reports a CACHE COUNT, not desktop icon GEOMETRY~~ DONE 2026-09-10 -- per-icon rects and label lines
 - [ ] Finer `gui drag` interpolation
 - [ ] `klineedit_test.c`'s 12 oversized-frame warnings bury the frame budget's signal in that file
 - [x] ~~`gfxdemo_test`'s two scene-restore checks fail under heavy parallel load~~ DONE 2026-08-19 -- it polls for the log line now

@@ -16,11 +16,22 @@
 #include "wm/wm_log.h"
 #include "lib/uimg.h"
 #include "ui/uui_image.h"
+#include "ui/uui_label.h"  // uui_label_wrap_next() -- the caption's wrap
 
-#define DESKTOP_ICON_SIZE 48
+// THE ICON SIZE IS A SETTING (`desktop.icon_size`, small|medium|large ->
+// 32/48/64 px), read on the same generation poll as the wallpaper; the
+// column pitch stays font-derived. Labels get TWO lines under the icon
+// (DESKTOP_LABEL_LINES), word-wrapped and centred, the second cut with
+// ".." when there is more -- KDE's and Windows' default.
 #define DESKTOP_ICON_X 16
 #define DESKTOP_ICON_START_Y 16
-#define DESKTOP_ICON_ROW_H (DESKTOP_ICON_SIZE + 28) // icon + label + gap to the next row
+#define DESKTOP_LABEL_LINES 2
+static int g_icon_px = 48;
+static char g_icon_size[16];   // the setting's word, to notice a change
+static int icon_px(void) { return g_icon_px; }
+static int label_line_h(void) { return ugfx_char_h() + 1; }
+static int label_h(void) { return DESKTOP_LABEL_LINES * label_line_h(); }
+static int row_h(void) { return icon_px() + 4 + label_h() + 10; } // icon + gap + label + gap to the next row
 // Column pitch, in CHARACTERS of the active font -- see icon_col_w().
 // 13 is "Control Panel"/"Task Manager", the longest labels that should
 // never be truncated; anything longer (the "(ring 3)" launchers) is cut
@@ -116,15 +127,20 @@ static int drag_start_row[DESKTOP_MAX_ICONS];
 // widened to fit a real label, and clipping handles what still doesn't.
 static int icon_col_w(void) {
     int w = DESKTOP_ICON_LABEL_CHARS * ugfx_char_w() + 8;
-    return w < DESKTOP_ICON_SIZE + 8 ? DESKTOP_ICON_SIZE + 8 : w;
+    return w < icon_px() + 8 ? icon_px() + 8 : w;
 }
+
+// The icon is CENTRED in its column (every desktop's arrangement); the
+// cell's own x stays the column's left edge, which is what the grid,
+// the drag and the saved positions speak.
+static int icon_dx(void) { return (icon_col_w() - icon_px()) / 2; }
 
 static struct icon_grid current_grid(void) {
     struct icon_grid g;
     g.origin_x = DESKTOP_ICON_X;
     g.origin_y = DESKTOP_ICON_START_Y;
     g.cell_w = icon_col_w();
-    g.cell_h = DESKTOP_ICON_ROW_H;
+    g.cell_h = row_h();
     g.cols = screen_w / icon_col_w();
     if (g.cols < 1) g.cols = 1;
     return g;
@@ -182,7 +198,7 @@ static void desktop_load_positions(void) {
     // unclickable, so an app can be in the registry and unreachable from
     // the desktop with nothing to indicate why.
     int usable_h = (screen_h - taskbar_h) - DESKTOP_ICON_START_Y;
-    int per_col = usable_h / DESKTOP_ICON_ROW_H;
+    int per_col = usable_h / row_h();
     if (per_col < 1) per_col = 1;   // a tiny screen still gets one per column
 
     // `slot` counts icons actually PLACED, not registry entries, so an
@@ -329,6 +345,26 @@ static void wallpaper_reload(void) {
             (unsigned)(sys_ticks() - t0));
 }
 
+// `desktop.icon_size`, the same way: the registry knows the words, the
+// desktop knows the pixels. A change repaints the whole desktop; saved
+// cell positions are kept, since a cell is a (col, row) and not a pixel.
+static void icon_size_reload(void) {
+    struct setting_msg msg;
+    for (unsigned i = 0; i < sizeof msg; i++) ((uint8_t *)&msg)[i] = 0;
+    msg.op = SETTING_OP_GET;
+    k_strlcpy(msg.name, "desktop.icon_size", sizeof msg.name);
+    const char *word = "medium";
+    if (sys_setting(&msg) == 0 && msg.value[0]) word = msg.value;
+    if (k_strcmp(word, g_icon_size) == 0) return;
+    k_strlcpy(g_icon_size, word, sizeof g_icon_size);
+    g_icon_px = k_strcmp(word, "small") == 0 ? 32 :
+                k_strcmp(word, "large") == 0 ? 64 : 48;
+    redraw_pending = 1;
+    wm_damage_rect(0, 0, screen_w, screen_h);
+}
+
+const char *desktop_icon_size_word(void) { return g_icon_size; }
+
 // Called once per frame from wm.c, beside the .desktop-entry poll and
 // for the same reason: there is no inotify here, so a global generation
 // counter is what says "something on disk changed, ask again". The idle
@@ -340,11 +376,13 @@ void desktop_poll_config(void) {
     if (!primed) {
         primed = 1;
         seen_gen = gen;
+        icon_size_reload();
         wallpaper_reload();      // the first call is the initial load
         return;
     }
     if (gen == seen_gen) return;
     seen_gen = gen;
+    icon_size_reload();
     wallpaper_reload();
 }
 
@@ -363,6 +401,82 @@ static void draw_background(void) {
     }
     ugfx_fill(wm_surface(), DESKTOP_BG);
 }
+
+// The rect a press or a band tests against: the centred icon box plus
+// its label lines. One function, so drawing, hit-testing and the debug
+// console's `gui icons` cannot disagree about where an icon is.
+static void icon_box(const struct icon_grid *g, int i, int *x, int *y, int *w, int *h) {
+    int cx, cy;
+    icon_grid_cell_rect(g, icon_col[i], icon_row[i], &cx, &cy);
+    *x = cx + icon_dx();
+    *y = cy;
+    *w = icon_px();
+    *h = icon_px() + 4 + label_h();
+}
+
+// How many label lines `name` takes at the column's width, capped at
+// DESKTOP_LABEL_LINES -- what `gui icons` reports, so a test can assert
+// a long name WRAPPED rather than reading pixels.
+static int label_lines(const char *name) {
+    int max_w = icon_col_w() - 4;
+    char line[64];
+    const char *rest = name;
+    int n = 0;
+    while (*rest && n < DESKTOP_LABEL_LINES) {
+        rest = uui_label_wrap_next(rest, max_w, line, sizeof line);
+        n++;
+    }
+    return n;
+}
+
+// The caption: up to DESKTOP_LABEL_LINES word-wrapped lines centred
+// under the icon, the last cut with ".." when the name runs on --
+// KDE's and Windows' default. ".." rather than U+2026: the font is
+// indexed from ASCII 32 (kernel/drivers/font_ttf.c), so an ellipsis
+// glyph would draw as nothing. Clipped, always (docs/gui-guidelines.md).
+static void draw_label(int cell_x, int label_y, const char *name, uint32_t fg) {
+    int max_w = icon_col_w() - 4;
+    int left = cell_x + 2;
+    char line[64];
+    const char *rest = name;
+    for (int n = 0; n < DESKTOP_LABEL_LINES && *rest; n++) {
+        rest = uui_label_wrap_next(rest, max_w, line, sizeof line);
+        int y = label_y + n * label_line_h();
+        int last = (n == DESKTOP_LABEL_LINES - 1) && *rest;
+        if (!last) {
+            int tw = ugfx_text_width(line);
+            int lx = tw < max_w ? left + (max_w - tw) / 2 : left;
+            ugfx_draw_string_clipped_shadowed(wm_surface(), lx, y, max_w, line, fg);
+            continue;
+        }
+        // More than fits: this line is cut two characters short and
+        // marked, so a truncated caption reads AS truncated rather than
+        // as a differently-named app.
+        int cut_w = max_w - 2 * ugfx_char_w();
+        if (cut_w < ugfx_char_w()) cut_w = ugfx_char_w();
+        int tw = ugfx_text_width(line);
+        if (tw > cut_w) tw = cut_w;
+        int lx = left + (max_w - (tw + 2 * ugfx_char_w())) / 2;
+        if (lx < left) lx = left;
+        ugfx_draw_string_clipped_shadowed(wm_surface(), lx, y, cut_w, line, fg);
+        ugfx_draw_string_clipped_shadowed(wm_surface(), lx + tw, y,
+                                          2 * ugfx_char_w(), "..", fg);
+    }
+}
+
+int desktop_icon_geometry(int i, const char **name, int *x, int *y, int *w, int *h,
+                          int *lines) {
+    desktop_load_positions();
+    if (i < 0 || i >= gui_app_registry_count || i >= DESKTOP_MAX_ICONS) return 0;
+    if (!gui_app_shows_in(&gui_app_registry[i], GUI_SHOW_DESKTOP)) return 0;
+    struct icon_grid g = current_grid();
+    icon_box(&g, i, x, y, w, h);
+    if (name) *name = gui_app_registry[i].name;
+    if (lines) *lines = label_lines(gui_app_registry[i].name);
+    return 1;
+}
+
+int desktop_icon_px(void) { return icon_px(); }
 
 void desktop_draw(void) {
     desktop_load_positions();
@@ -397,9 +511,16 @@ void desktop_draw(void) {
             icon_grid_cell_rect(&g, icon_col[i], icon_row[i], &x, &y);
         }
 
+        // The cell's x is the column's left; the icon sits centred.
+        int cell_x = x;
+        int px = icon_px();
+        x += icon_dx();
+
         if (rb_is_selected(&sel, i)) {
-            ugfx_fill_rect(wm_surface(), x - 4, y - 4, DESKTOP_ICON_SIZE + 8,
-                           DESKTOP_ICON_SIZE + 8 + 18, icon_selected_bg);
+            // The whole caption block, icon and both label lines, as on
+            // Windows and KDE -- a highlight the width of the column.
+            ugfx_fill_rect(wm_surface(), cell_x + 2, y - 4, icon_col_w() - 4,
+                           px + 4 + label_h() + 6, icon_selected_bg);
         }
 
         // A REAL ICON IF THERE IS ONE, the letter tile if there is not.
@@ -407,14 +528,12 @@ void desktop_draw(void) {
         // rounded outline), so it sits on the wallpaper rather than in a
         // rectangle of its own -- which is the entire reason icons
         // waited for a codec with alpha.
-        const struct uimg *ico = icon_get(gui_app_registry[i].icon_name,
-                                          DESKTOP_ICON_SIZE);
+        const struct uimg *ico = icon_get(gui_app_registry[i].icon_name, px);
         if (ico) {
             ugfx_blit_alpha(wm_surface(), x, y, ico->w, ico->h, ico->px, ico->w);
         } else {
-            ugfx_fill_rect(wm_surface(), x, y, DESKTOP_ICON_SIZE, DESKTOP_ICON_SIZE,
-                           ugfx_rgb(60, 90, 130));
-            ugfx_draw_rect(wm_surface(), x, y, DESKTOP_ICON_SIZE, DESKTOP_ICON_SIZE, icon_fg);
+            ugfx_fill_rect(wm_surface(), x, y, px, px, ugfx_rgb(60, 90, 130));
+            ugfx_draw_rect(wm_surface(), x, y, px, px, icon_fg);
 
             // The entry's Icon= character, falling back to the name's
             // first letter -- which is what this drew before desktop
@@ -422,8 +541,8 @@ void desktop_draw(void) {
             // as it did.
             char ic = gui_app_registry[i].icon;
             char initial[2] = { ic ? ic : gui_app_registry[i].name[0], '\0' };
-            int gx = x + (DESKTOP_ICON_SIZE - ugfx_char_w()) / 2;
-            int gy = y + (DESKTOP_ICON_SIZE - ugfx_char_h()) / 2;
+            int gx = x + (px - ugfx_char_w()) / 2;
+            int gy = y + (px - ugfx_char_h()) / 2;
             ugfx_draw_string(wm_surface(), gx, gy, initial, icon_fg, ugfx_rgb(60, 90, 130));
         }
 
@@ -438,35 +557,13 @@ void desktop_draw(void) {
         // docs/gui-guidelines.md names first -- gfx_draw_string() does
         // not clip, so anything in a fixed box needs the _clipped()
         // form.
-        int label_y = y + DESKTOP_ICON_SIZE + 4;
-        int label_max_w = icon_col_w() - 4; // -4: a gap, so adjacent labels never touch
-        const char *label = gui_app_registry[i].name;
-
         // SHADOWED, for the same reason the watermark below is: an icon
         // label sits on a wallpaper, and the flat DESKTOP_BG it used to
         // blend its anti-aliasing against stopped being what is behind
         // it. Every desktop shadows or outlines these -- macOS, GNOME
         // and KDE shadow, Windows outlines -- because no single ink is
         // legible on every photograph a person might choose.
-        if (ugfx_text_width(label) <= label_max_w) {
-            ugfx_draw_string_clipped_shadowed(wm_surface(), x, label_y, label_max_w, label, label_fg);
-        } else {
-            // Too long: cut it two characters short and mark the cut, so
-            // a truncated label reads AS truncated rather than as a
-            // differently-named app -- "Calculator" and "Calculator
-            // (ring 3)" both cut to "Calculat" otherwise, which is worse
-            // than useless on a desktop that now shows both.
-            //
-            // ".." rather than a single ellipsis character: the font is
-            // indexed from ASCII 32 (kernel/drivers/font_ttf.c), so
-            // U+2026 -- and Latin-1 0x85 -- have no glyph and would draw
-            // as nothing at all.
-            int cut_w = label_max_w - 2 * ugfx_char_w();
-            if (cut_w < ugfx_char_w()) cut_w = ugfx_char_w(); // always show at least one char
-            ugfx_draw_string_clipped_shadowed(wm_surface(), x, label_y, cut_w, label, label_fg);
-            ugfx_draw_string_clipped_shadowed(wm_surface(), x + cut_w, label_y,
-                                              2 * ugfx_char_w(), "..", label_fg);
-        }
+        draw_label(cell_x, y + px + 4, gui_app_registry[i].name, label_fg);
     }
 
     // Version watermark, bottom right -- what build am I looking at, at
@@ -555,9 +652,9 @@ static int icon_hit_test(int mx, int my) {
     struct icon_grid g = current_grid();
     for (int i = 0; i < gui_app_registry_count; i++) {
         if (!gui_app_shows_in(&gui_app_registry[i], GUI_SHOW_DESKTOP)) continue;
-        int x, y;
-        icon_grid_cell_rect(&g, icon_col[i], icon_row[i], &x, &y);
-        if (uui_hit(x, y, DESKTOP_ICON_SIZE, DESKTOP_ICON_SIZE + 18, mx, my)) return i;
+        int x, y, w, h;
+        icon_box(&g, i, &x, &y, &w, &h);
+        if (uui_hit(x, y, w, h, mx, my)) return i;
     }
     return -1;
 }
@@ -715,9 +812,7 @@ static void band_item_rect(void *ctx, int i, int *x, int *y, int *w, int *h) {
         *w = *h = 0;
         return;
     }
-    icon_grid_cell_rect(&g, icon_col[i], icon_row[i], x, y);
-    *w = DESKTOP_ICON_SIZE;
-    *h = DESKTOP_ICON_SIZE + 18; // icon box plus its label, as hit-tested
+    icon_box(&g, i, x, y, w, h);   // icon plus its label, as hit-tested
 }
 
 static const struct rb_ops BAND_OPS = { band_count, band_item_rect };
@@ -851,33 +946,99 @@ void desktop_update_drag(int mx, int my, uint8_t buttons) {
     redraw_pending = 1;
 }
 
-// Trampoline for context_menu_item's on_select(ctx) -- ctx is the
-// gui_app this row launches, cast back from the void* it was stored as.
+// --- the desktop's context menu ---------------------------------------
+//
+// Windows' and KDE's shape: Open > (the launchers), then the desktop's
+// own verbs, then Icon size > with a tick on the current one, then the
+// way to the settings page. Static rows because context_menu_open_at()
+// only borrows the pointer for as long as the menu stays open.
+
 static void launch_from_menu(void *ctx) {
     open_app((const struct gui_app *)ctx);
+}
+
+static void set_icon_size(void *ctx) {
+    const char *word = (const char *)ctx;
+    struct setting_msg msg;
+    for (unsigned i = 0; i < sizeof msg; i++) ((uint8_t *)&msg)[i] = 0;
+    msg.op = SETTING_OP_SET;
+    k_strlcpy(msg.name, "desktop.icon_size", sizeof msg.name);
+    k_strlcpy(msg.value, word, sizeof msg.value);
+    if (sys_setting(&msg) != 0) {
+        wm_logf("desktop: icon size %s refused", word);
+        return;
+    }
+    icon_size_reload();   // now, not on the next generation poll
+}
+
+// Refresh: re-read the entries, drop the icon cache, repaint. What
+// F5 does on every desktop.
+static void menu_refresh(void *ctx) {
+    (void)ctx;
+    desktop_entries_changed();
+    wm_damage_rect(0, 0, screen_w, screen_h);
+    redraw_pending = 1;
+}
+
+// Sort by name: the default layout, re-derived and SAVED, so a desktop
+// rearranged by hand goes back to columns in registry (name) order.
+static void menu_sort(void *ctx) {
+    (void)ctx;
+    for (int i = 0; i < gui_app_registry_count && i < DESKTOP_MAX_ICONS; i++)
+        wm_conf_set(DESKTOP_CONF_PATH, gui_app_registry[i].name, "");
+    positions_loaded = 0;
+    desktop_load_positions();
+    for (int i = 0; i < gui_app_registry_count && i < DESKTOP_MAX_ICONS; i++)
+        if (icon_col[i] >= 0) save_position(i);
+    wm_damage_rect(0, 0, screen_w, screen_h);
+    redraw_pending = 1;
+}
+
+// Desktop settings: System Settings, found by its app id so a renamed
+// entry still opens it. Both Windows ("Personalize") and KDE
+// ("Configure Desktop and Wallpaper") end their menu this way.
+static void menu_settings(void *ctx) {
+    (void)ctx;
+    for (int i = 0; i < gui_app_registry_count; i++) {
+        const struct gui_app *app = &gui_app_registry[i];
+        if (app->app_id && k_strcmp(app->app_id, "settings") == 0) { open_app(app); return; }
+    }
+    wm_logf("desktop: no System Settings entry to open");
 }
 
 void desktop_handle_right_click(int mx, int my) {
     (void)icon_hit_test; // per-icon menu is a future refinement, see desktop.h's top comment
 
-    // A static array sized for the current registry, filled fresh each
-    // open -- context_menu_open_at() only borrows the pointer for as
-    // long as the menu stays open, and nothing here runs again before
-    // the menu closes (single-threaded event loop), so a static scratch
-    // array is safe the same way g_walk_scratch-style buffers are
-    // elsewhere in this codebase.
-    static struct context_menu_item items[16];
-    // The desktop's own menu, so it shows what the desktop shows -- an
-    // entry hidden from this surface by ShowIn= must not be launchable
-    // from here either, or "hidden" would mean "hidden unless you
-    // right-click".
+    static struct context_menu_item launchers[16];
+    static struct context_menu_item sizes[3];
+    static struct context_menu_item items[8];
+
+    // Open > -- the desktop's own entries, so an entry hidden from this
+    // surface by ShowIn= is not launchable from here either.
     int n = gui_app_visible_count(GUI_SHOW_DESKTOP);
-    if (n > 16) n = 16; // sanity cap; the registry holds ~8 entries today
+    if (n > 16) n = 16;
     for (int i = 0; i < n; i++) {
         struct gui_app *app = gui_app_visible_at(GUI_SHOW_DESKTOP, i);
-        items[i].label = app->name;
-        items[i].on_select = launch_from_menu;
-        items[i].ctx = (void *)app;
+        launchers[i] = (struct context_menu_item){ .label = app->name,
+                                                   .on_select = launch_from_menu,
+                                                   .ctx = (void *)app };
     }
-    context_menu_open_at(mx, my, items, n);
+    static const char *const words[3] = { "small", "medium", "large" };
+    static const char *const labels[3] = { "Small", "Medium", "Large" };
+    for (int i = 0; i < 3; i++) {
+        sizes[i] = (struct context_menu_item){ .label = labels[i],
+                                               .on_select = set_icon_size,
+                                               .ctx = (void *)words[i],
+                                               .checked = k_strcmp(g_icon_size, words[i]) == 0 };
+    }
+
+    int k = 0;
+    items[k++] = (struct context_menu_item){ .label = "Open", .sub = launchers, .sub_count = n };
+    items[k++] = (struct context_menu_item){ .separator = 1 };
+    items[k++] = (struct context_menu_item){ .label = "Refresh", .on_select = menu_refresh };
+    items[k++] = (struct context_menu_item){ .label = "Sort by name", .on_select = menu_sort };
+    items[k++] = (struct context_menu_item){ .label = "Icon size", .sub = sizes, .sub_count = 3 };
+    items[k++] = (struct context_menu_item){ .separator = 1 };
+    items[k++] = (struct context_menu_item){ .label = "Desktop settings", .on_select = menu_settings };
+    context_menu_open_at(mx, my, items, k);
 }

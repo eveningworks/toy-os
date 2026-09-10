@@ -589,13 +589,16 @@ int sys_spawn(struct syscall_ctx *c) {
         // SPAWN_ARGV it arrives as one (copied like the environment,
         // with the same "must end" check); otherwise the string form is
         // split here -- the ring-3 edge is the one place that happens.
+        // `args_len` is READ ONLY WITH THE FLAG. A binary built before the
+        // field existed passes a shorter struct, and the bytes past it
+        // are whatever its stack held -- refusing on them is how a
+        // machine with a new kernel and one old program stops spawning.
         const char *args = 0;
         size_t args_len = 0;
         int args_bad = 0;
-        if ((msg.flags & SPAWN_ARGV) ? (!msg.args || msg.args_len == 0 ||
-                                        msg.args_len > SPAWN_ARGS_MAX)
-                                     : msg.args_len != 0) {
-            args_bad = 1;   // a length without the flag, or no vector with it
+        if ((msg.flags & SPAWN_ARGV) &&
+            (!msg.args || msg.args_len == 0 || msg.args_len > SPAWN_ARGS_MAX)) {
+            args_bad = 1;   // the flag with no vector, or one past the cap
         } else if (msg.args) {
             argbuf = kmalloc(SPAWN_ARGS_MAX + FS_PATH_MAX);
             if (!argbuf) {

@@ -1,0 +1,5 @@
+Description=How big the icons on the desktop are
+Widget=radio
+Choice.small=Small
+Choice.medium=Medium
+Choice.large=Large

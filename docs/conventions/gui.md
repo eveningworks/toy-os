@@ -3388,3 +3388,43 @@ paths before a long operation (`queue_from()` does) -- a name can be
 re-marked on a row that no longer means the same file only if the
 file was replaced under the same name, which is the case a snapshot
 cannot help with either.
+
+## THE DESKTOP'S ICON SIZE IS A NAMED SETTING, THE ICONS ARE CENTRED, AND A CAPTION IS TWO LINES
+
+`desktop.icon_size` = `small` | `medium` | `large` (32/48/64 px),
+registered in `kernel/lib/icon_size_config.c`, persist-only, read by
+the desktop on the same generation poll as the wallpaper and applied
+at once by the context menu. Named sizes rather than a pixel count
+because a menu can list three names with a tick and System Settings
+draws an ordered enum unaided (Windows' View > Large/Medium/Small
+icons; KDE names its steps too). The pixel value of a name is the
+DESKTOP's, not the registry's.
+
+The icon sits centred in its column and the caption is up to two
+word-wrapped lines under it, centred, the second cut with `..` when
+the name runs on -- KDE's and Windows' default -- through the toolkit's
+`uui_label_wrap_next()`. The File Manager's icon view does the same
+with the same helper. `icon_box()` is the ONE function that says where
+an icon is: drawing, the hit test, the rubber band and `gui icons
+--json` all read it, which is what lets a test click what the desktop
+reports instead of hardcoding a 48 px tile at (16, 16). The cell's own
+x stays the column's left edge, which is what the grid, the drag and
+the saved positions speak; only the drawing and the hit box are offset.
+
+## THE WM CONTEXT MENU HAS ONE LEVEL OF SUBMENU, A SEPARATOR AND A TICK, AND THE DESKTOP'S MENU IS WINDOWS' SHAPE
+
+`struct context_menu_item` grew four optional fields (`sub`,
+`sub_count`, `checked`, `separator`), zero for every existing caller.
+A row with `sub` opens its rows to the right on hover or click and
+never runs its own action; a separator is half a row and not
+hoverable; a tick is drawn in a gutter every row reserves. `gui ctxmenu
+--json` reports row tops from the menu (`context_menu_row_top()`), not
+`y + i * item_h`, and the open submenu under `sub`. The desktop's menu
+is Open > (the launchers), Refresh, Sort by name, Icon size > (ticked),
+Desktop settings -- what a right-click on the Windows or KDE desktop
+offers, minus what needs a desktop folder (Paste, New folder), which is
+the next stage.
+
+**THE TRAP FOR A TEST**: a real-mouse click after a `warp_cursor()`
+onto a submenu row did not land (`icons_test.py` measured it); the
+injected `dbg.click(x, y)` at the reported row centre does.

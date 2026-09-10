@@ -101,4 +101,13 @@ int desktop_drag_active(void);
 // turn "open Notepad" into "open whatever is now in slot 3".
 void desktop_entries_changed(void);
 
+// A visible icon's rect (icon box plus label lines) and label line
+// count, by registry index; 0 for an index with no icon on the
+// desktop. The debug console's `gui icons` reports these, so a test
+// clicks what the app says is there rather than hardcoding a grid.
+int desktop_icon_geometry(int i, const char **name, int *x, int *y, int *w, int *h,
+                          int *lines);
+int desktop_icon_px(void);                 // the current size in pixels
+const char *desktop_icon_size_word(void);  // and the setting's word
+
 #endif
