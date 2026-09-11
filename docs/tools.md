@@ -2755,6 +2755,21 @@ window without going through it will find its layout polls timing out.
   control list means either a page with no controls or a page that never
   opened. `click()` refuses a point outside the content area outright,
   with a check naming the coordinate, so the whole class fails loudly.
+- **`screensaver_test.py`** -- the idle clock in the compositor, the
+  two settings, and the savers it spawns. A saver is a PROCESS, so
+  `gui idle` reports its pid and the checks ask for that rather than
+  guessing from pixels; the window it owns has to reach the screen's
+  size before anything is asserted about it, because a pid is not a
+  window and a window is not yet a fullscreen one. Both input paths are
+  driven separately -- a key and a pointer move arrive at different
+  places in the frame loop, and a clock reset wired to only one would
+  look correct from whichever the test happened to use. The blank saver
+  is checked as PIXELS, since "a window opened" is not "the screen is
+  dark". **The lever is `gui idle start`**, which skips the WAIT and
+  nothing else: the shortest timeout a person can configure is one
+  minute, and it still refuses while the timeout is zero, so "off means
+  off" stays testable. It puts both settings back, including after a
+  failed check.
 - **`settings_harness_hostcheck.py`** -- `settings_test.py`'s own
   geometry and waits, on the host against a scripted console: a sidebar
   row is aimed at where it IS rather than where it would be unscrolled

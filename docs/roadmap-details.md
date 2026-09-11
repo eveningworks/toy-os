@@ -5064,3 +5064,188 @@ above would have answered "is something scribbling on memory it does not
 own?" directly. Note the honest caveat: DMA overlap was suspected and
 then RULED OUT for that bug, so this is not its fix — it is the
 instrument whose absence made the question expensive to ask.
+
+## TFS3: A FAILED TRANSACTION CAN LEAVE LIVE REFERENCES TO FREED BLOCKS
+
+**The mechanism.** `txn_commit()` (`kernel/fs/tfs3.c:1257`) writes the
+journal, marks it committed, and then writes the targets. If a target
+write fails it returns 0 -- but the journal is already COMMITTED, so
+the next mount replays it. `do_write()` (`:1680`) reads that 0 as "the
+write failed" and rolls its allocations back, freeing the blocks the
+committed transaction is about to point an inode at. Replay then
+installs an inode referencing freed blocks, which may by then have been
+handed to something else.
+
+Two smaller edges in the same place. A second transaction can overwrite
+an outstanding journal before it is replayed. And a FAILED replay
+(`:1305`) does not stop `init()` from mounting the volume writable,
+so a filesystem whose recovery did not work is used as if it had.
+
+**What the fix has to distinguish** is "failed BEFORE the commit point"
+from "committed, needs recovery". Before it, rolling back is right.
+After it, the allocations must be preserved and the journal must not be
+reused until recovery finishes -- the transaction is going to happen
+whether or not this call returns success.
+
+**Reported by inspection on 2026-09-11 and NOT reproduced.** The test
+that would prove it is a fault injected at each journal phase
+separately -- `kernel/include/kernel/fault_inject.h` can already fail
+the next N writes -- asserting after each that a remount either replays
+the whole transaction or none of it, and that `fsck` finds no block
+both free and referenced. Per-phase failure tests are the highest-value
+thing missing here; they would catch more than any structural cleanup
+of a 3,600-line file.
+
+## TFS3: A LARGE FILE OFFSET CAN RUN PAST THE POINTER TABLES
+
+**The mechanism.** `map_get_or_alloc_tables()` (`kernel/fs/tfs3.c:1463`)
+walks direct, then single, then double indirect, and treats EVERYTHING
+past double indirect as triple indirect without checking that the index
+fits the triple-indirect range. An index beyond
+12 + 1024 + 1024^2 + 1024^3 blocks indexes a table out of bounds. A
+larger offset again can wrap when narrowed to `uint32_t`.
+
+**What the fix needs** is one stated maximum file size, checked on read,
+on write, on truncate and against the size an inode carries off disk --
+with `offset + len` evaluated so the check itself cannot overflow, and
+the bounds retained inside the mapping helpers rather than only at the
+callers.
+
+**Reported by inspection on 2026-09-11 and NOT reproduced.** Note the
+trap this shares with the existing truncate tests: a fixture whose data
+never reaches the branch leaves a positive control green, which already
+happened here when 16 KB of test data fit inside the twelve DIRECT
+pointers. A test has to reach each addressing limit -- the last direct
+block, the first single-indirect, the first double, the first triple and
+one past the last -- rather than writing something merely large.
+
+## TFS3: SHRINKING THEN REGROWING A FILE EXPOSES THE OLD BYTES
+
+**The mechanism.** `tfs3_truncate()` (`kernel/fs/tfs3.c:3067`)
+deliberately keeps the bytes after the new EOF in the retained final
+block. Growing the file again makes them readable, which contradicts
+the zero-fill the API promises for a gap.
+
+    write "ABCDEFGH"      -> 8 bytes
+    truncate to 3         -> "ABC"
+    grow to 8             -> must be "ABC" + five zero bytes
+                             the implementation returns "ABCDEFGH"
+
+**The fix** is to zero the newly exposed part of an already-allocated
+block, with a path for the write failing.
+
+**Why the existing test does not catch it:** it inspects a DISTANT hole
+rather than the bytes immediately after the old EOF, and a distant hole
+is a block that was never allocated, which is zero-filled for a
+different reason. Extend it to read at the old EOF.
+
+## TFS3: A STEPPED APPEND CAN ERASE THE FILE'S EXISTING PREFIX
+
+**The mechanism.** `tfs3_write_range_step()` (`kernel/fs/tfs3.c:3136`)
+zeroes the whole block when `file_off >= st->node.size`. An append AT
+EOF satisfies that even when the block already holds valid data, so the
+prefix in that block is erased.
+
+    write  "AAAA"                    -> 4 bytes
+    append "BBBB" via the stepped API -> takes the erasing branch
+                                         and loses "AAAA"
+
+**The fix** is the check the ordinary write path already has, which
+tests the block START rather than the file size. The two should share
+one helper rather than carrying two spellings of the same condition.
+
+**The test both APIs need** is a partial-block append: write a few
+bytes, append a few more inside the same block, and read the whole file
+back. A boundary test shared by the normal and stepped paths is worth
+more than either alone, because the bug is precisely that they diverged.
+
+## TFS3: A FAILED INDIRECT-TABLE READ IS RETURNED AS ZEROS
+
+**The mechanism.** `block_for_index()` (`kernel/fs/tfs3.c:668`) returns
+0 for a block that is not mapped AND for a pointer-table read that
+failed. `read_range_impl()` (`:2479`) reads 0 as a sparse hole and
+supplies zeros. An I/O error on an indirect table is therefore delivered
+to the caller as a successful read of fabricated data, which is the
+worst direction for a storage error to fail in.
+
+**The fix** is three outcomes where there are two: mapped, hole, and
+error. Only the first two may produce bytes.
+
+**Reported by inspection on 2026-09-11 and NOT reproduced.** The test is
+a failure injected specifically while reading an INDIRECT TABLE -- not
+just any read, since a failed DATA read already reports correctly --
+requiring a short read or an error rather than zeros. Sparse-file tests
+around every addressing limit belong beside it.
+
+## TFS3: the five fixes, in order
+
+The five entries above are the findings. This is how to work through
+them, recorded with them so the order and its reasoning do not have to
+be reconstructed. **Each fix starts with the regression test**, shown
+FAILING on the current code and then passing -- which is this repo's
+standing rule and matters more than usual here, because three of the
+five produce plausible-looking data rather than an error.
+
+**Use disposable images throughout.** `tools/tfs3_writer.py` and
+`vm.py --disk <copy>` make one per run, and a fix to the journal is
+exactly the change whose failure mode is an image you cannot mount
+again.
+
+**The order, and why:** journal recovery, then bounds, then the
+truncate and extension zeroing, then the stepped write, then the
+read-error path. Recovery comes first because a test for any of the
+others can corrupt an image if the journal is unsafe, and the bounds
+come second because the later tests want to write at the addressing
+limits. **Keep each fix separately reviewable, and postpone any
+restructuring of the 3,600-line file until these behaviours are
+covered** -- a cleanup landing first makes every one of these diffs
+unreadable.
+
+**1. Make journal failures safe.** Map the transaction lifecycle
+first: staging, commit durability, the target writes, and clearing the
+journal. Replace the success/failure return with explicit outcomes that
+separate an ABORTED operation from a COMMITTED transaction awaiting
+recovery. After the commit point, preserve the referenced allocations,
+block new mutations until recovery succeeds, and never overwrite the
+outstanding journal. Make replay return a status, and refuse a writable
+mount when committed work cannot be recovered. Audit every allocation
+rollback caller, including indirect-table updates already written
+before the failure. Test a failure at every journal write and flush
+boundary, each followed by a retry and a reboot, checking file
+contents, namespace consistency and allocation ownership.
+
+**2. Enforce the size and addressing limits.** Derive one maximum file
+size from the direct/single/double/triple layout in 64-bit arithmetic.
+Validate offsets, lengths and truncate sizes BEFORE anything is
+allocated or modified, using subtraction-based comparisons so the check
+cannot itself overflow. Add defensive index checks inside both mapping
+helpers, and validate the size an inode carries off disk. Test the last
+valid block, the first invalid one, a write crossing that boundary, and
+values near `UINT64_MAX`; a rejected operation must leave the file
+unchanged.
+
+**3. Restore zero-fill after a truncation.** Add the regression first:
+write `ABCDEFGH`, shrink to three, grow to eight, require `ABC` and
+five zeros. Zero the stale bytes in an allocated EOF block before
+publishing an extension that exposes them. Cover truncate-growth and a
+write starting beyond EOF, through both the normal and stepped paths,
+within a block and across one, and after a remount. A failure must
+leave the original visible prefix intact.
+
+**4. Fix the stepped append.** Reproduce `AAAA` then a stepped append of
+`BBBB` first. Share the normal path's partial-block preparation with
+the stepped path rather than repairing the condition twice, and
+preserve existing bytes whenever the block holds data before EOF. Run
+identical cases through both APIs: a small append, repeated appends, one
+crossing a block boundary, and injected read and write failures.
+
+**5. Separate a sparse hole from a read failure.** Change the block
+lookup to return distinct outcomes for mapped, hole, invalid metadata
+and I/O failure, and update the callers so only a genuine hole produces
+zeros, propagating the rest through the existing read-result contract.
+Test a failed pointer-table read at EACH indirect level, beside real
+sparse holes that must still read as zeros.
+
+**After each fix:** run the filesystem suite against TFS3 v1 and v2,
+exercise both strict and batched journal modes
+(`storage.sync`), and `fsck` a disposable image after a remount.

@@ -24,6 +24,7 @@
 // with nothing else changing -- cheap without needing real dirty-rect
 // tracking of the scene: see wm_render_cursor_move() in wm_render.c.
 #include "wm_internal.h"
+#include "wm_idle.h"
 #include "wm_dnd.h"
 #include "wm_geometry.h"
 #include "wm_debug.h"
@@ -1362,6 +1363,12 @@ void wm_run(void) {
             }
             redraw_pending = 1;
         }
+
+        // THE IDLE CLOCK, once every input source has been read. Any of
+        // them resets it and stops a running saver; a quiet machine
+        // starts one after the configured minutes (wm_idle.h).
+        wm_idle_poll(mouse_moved || buttons != prev_buttons ||
+                     key != -1 || wheel != 0);
 
         prev_mx = mx; prev_my = my; prev_buttons = buttons;
 

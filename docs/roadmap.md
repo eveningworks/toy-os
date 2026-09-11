@@ -27,6 +27,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 - [ ] Measure desktop and input latency during heavy disk I/O, and keep that workload as the yardstick for the three items below  *(Scheduler: blocking, priorities, classes)*
 - [ ] **Interruptible syscalls** -- a trap gate plus retiring `g_next_kernel_rsp` as a single global  *(Scheduler: blocking, priorities, classes)*
 - [ ] Replace the preemption guard with a real sleeping lock -- **Needs:** interruptible syscalls, above  *(Scheduler: blocking, priorities, classes)*
+- [ ] Journal failures: an aborted operation and a committed transaction awaiting recovery are not the same outcome  *(TFS3 correctness: the five findings)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
@@ -390,6 +391,21 @@ No dependency on the phases above; ordered among themselves.
 - [ ] More than one time server, and discarding the outlier -- one server is trusted completely today
 - [ ] Authenticated NTP (NTS) -- a forged reply can set this machine to any time at all
 - [ ] Write the RTC's century register, which `rtc_read()` does not consult either
+
+### TFS3 correctness: the five findings
+
+**Needs:** nothing. Each is a separate fix that starts with its own regression test -- see the long form for the order and why it is that order.
+
+- [ ] **NEXT** Journal failures: an aborted operation and a committed transaction awaiting recovery are not the same outcome
+- [ ] File-size and addressing limits, validated before anything is allocated
+- [ ] Zero-fill after a truncation, so a shrink and regrow cannot expose the old bytes
+- [ ] The stepped append, which erases a block's existing prefix
+- [ ] A failed indirect-table read, currently returned as zeros
+
+### Screen power, below the screensaver
+**Needs:** a TRANSIENT display-power control -- `system.brightness` persists, so using it would overwrite what the user chose and leave a dark screen behind a crash. DPMS and brightness are different things in every system that has both.
+
+- [ ] Turn the BACKLIGHT off after a longer timeout -- a saver darkens pixels, and the lamp is most of a laptop's power
 
 ### Timezones out of the kernel
 

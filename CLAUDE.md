@@ -764,6 +764,7 @@ whenever a headline here tells you something you did not already know.
 - **A LAYOUT CHILD'S SIZE CAN BE PINNED FROM OUTSIDE: `uui_item.main_size` (LAST in the struct -- apps initialise it positionally)**
 - **A CLIENT MAY ASK FOR A RESIZE CURSOR NOW: `WIN_CURSOR_RESIZE_H`/`_RESIZE_V`, and the compositor still wins on a window edge**
 - **A CONTROL BELOW THE FOLD IS UNREACHABLE, not merely hard to hit** -- and the clip is at the VIEWPORT EDGE, so a control STRADDLING it is half routable
+- **A SCREENSAVER IS A PROGRAM IN `/bin/wm/savers` AND THE COMPOSITOR OWNS THE IDLE CLOCK** -- a saver must declare `UAPP_RESIZABLE` and a non-zero size, or it silently stays a small box
 - **A CLICK THAT MISSES THE WINDOW LANDS ON WHATEVER IS BEHIND IT, AND AT THE BOTTOM OF THE SCREEN THAT IS THE TASKBAR** -- which MINIMIZES the window, after which the app reports nothing at all
 - **`on_draw` RUNS BEFORE THE WIDGETS; `on_draw_over` RUNS AFTER.**
 - **`uui_meter` IS THE READING WIDGET, AND IT RESERVES EVERY ROW IT COULD USE**
@@ -1460,7 +1461,8 @@ cost".
   `player_test.py`, `popup_test.py`,
   `pager_test.py`,
   `resize_stride_test.py`,
-  `sched_gui_test.py`, `screen_surface_test.py`, `scrollbar_test.py`,
+  `sched_gui_test.py`, `screen_surface_test.py`, `screensaver_test.py`,
+  `scrollbar_test.py`,
   `settings_test.py`, `single_instance_test.py`, `taskmgr_test.py`,
   `uapp_test.py`, `fullscreen_test.py`, `uiclient_test.py`, `uidemo_test.py`,
   `uterm_test.py`, `volume_test.py`, `wallpaper_mode_test.py`,

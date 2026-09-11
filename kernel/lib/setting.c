@@ -22,6 +22,7 @@
 #include "wallpaper_config.h"
 #include "start_button_config.h"
 #include "taskbar_config.h"
+#include "screensaver_config.h"
 #include "week_start_config.h"
 #include "icon_size_config.h"
 #include "window_drag_config.h"
@@ -32,6 +33,9 @@
 #include "config_file.h"
 #include "fs.h"
 
+// Defined below, beside the three choice sources it asks about.
+static int setting_has_choices(const struct setting *s);
+
 static const struct setting *g_settings[SETTING_MAX];
 static int g_count = 0;
 static uint32_t g_generation = 0;
@@ -41,7 +45,7 @@ int setting_register(const struct setting *s) {
     // An ENUM with no way to list its options would render as an empty
     // picker -- a control that draws and cannot be used, which this
     // project has shipped before. Refuse at registration instead.
-    if (s->type == SETTING_TYPE_ENUM && !s->choice && !s->choice_file) return 0;
+    if (s->type == SETTING_TYPE_ENUM && !setting_has_choices(s)) return 0;
     // An INT with no usable range would accept everything, which is a
     // STRING wearing the wrong type -- and every UI reading imin/imax
     // would lay out a control with no ends. Refused at registration, so
@@ -313,6 +317,32 @@ static int choice_file_field(const char *path, int index, int want,
     return 0;
 }
 
+// A CHOICE LIST THAT IS A DIRECTORY (setting.h's `choice_dir`).
+//
+// NOT cached, where choice_file is: fs_list() walks in the backend and
+// the whole answer is one name, so there is no buffer to keep warm. The
+// cost is a walk per index, which is why the 92-row timezone list is a
+// FILE -- a directory of savers or themes is single digits.
+static int cd_want, cd_seen;
+static char cd_found[SETTING_VALUE_MAX];
+
+static void choice_dir_cb(const char *name, uint32_t size, int is_dir) {
+    (void)size;
+    if (is_dir) return;
+    if (cd_seen == cd_want) k_strlcpy(cd_found, name, sizeof cd_found);
+    cd_seen++;
+}
+
+static int choice_dir_at(const char *dir, int index, char *out, uint32_t out_size) {
+    cd_want = index;
+    cd_seen = 0;
+    cd_found[0] = '\0';
+    fs_list(dir, choice_dir_cb);
+    if (!cd_found[0]) return 0;
+    k_strlcpy(out, cd_found, out_size);
+    return 1;
+}
+
 // The `index`-th choice of an ENUM setting, from whichever source it
 // declared. One place, so the four callers cannot disagree about which
 // settings have a choice list.
@@ -322,11 +352,13 @@ static int setting_choice_at(const struct setting *s, int index,
     if (s->choice) return s->choice(index, out, out_size);
     if (s->choice_file)
         return choice_file_field(s->choice_file, index, 0, out, out_size);
+    if (s->choice_dir) return choice_dir_at(s->choice_dir, index, out, out_size);
     return 0;
 }
 
 static int setting_has_choices(const struct setting *s) {
-    return s && s->type == SETTING_TYPE_ENUM && (s->choice || s->choice_file);
+    return s && s->type == SETTING_TYPE_ENUM
+           && (s->choice || s->choice_file || s->choice_dir);
 }
 
 // Whether `value` is one of the setting's choices.
@@ -684,6 +716,7 @@ void settings_init(void) {
     wallpaper_setting_register();
     start_button_setting_register();
     taskbar_setting_register();
+    screensaver_setting_register();
     week_start_setting_register();
     icon_size_setting_register();
     window_drag_setting_register();

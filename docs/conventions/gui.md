@@ -841,6 +841,20 @@ this the obvious way), not from how much history it accumulated.
   because its lower half -- the down stepper -- hung past the scroll
   view. Scroll until the whole rect is inside, not until the top of it
   is.
+- **A SCREENSAVER IS A PROGRAM IN `/bin/wm/savers`, AND THE COMPOSITOR
+  OWNS THE CLOCK.** `wm_idle.c` counts ticks since the last input and
+  spawns the configured saver as an ordinary FULLSCREEN CLIENT; a saver
+  is a `.c` file in `userland/gui/savers/` with no Makefile edit, and
+  the setting's choice list IS that directory (`choice_dir`), so
+  dropping one in gives it a row in System Settings. Three things bite.
+  **A saver must declare `UAPP_RESIZABLE` and a non-zero `w`/`h`**: the
+  compositor refuses fullscreen to a window that is not resizable, and
+  `uapp_open()` refuses a window with no size at all -- the symptom of
+  either is a saver that quietly stays a small box in the corner.
+  **It is KILLED, never asked**, because `wm_request_close()` may be
+  refused and this is the one window where that must not be possible.
+  And **the timeout of zero is the enable**, so there is no second
+  switch to disagree with it. See `docs/decisions.md`.
 - **A CLICK THAT MISSES THE WINDOW LANDS ON WHATEVER IS BEHIND IT, AND
   AT THE BOTTOM OF THE SCREEN THAT IS THE TASKBAR.** The taskbar's
   button for the focused window MINIMIZES it, and a minimized client

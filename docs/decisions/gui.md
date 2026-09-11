@@ -7005,3 +7005,58 @@ one of this compositor's earlier frames. After a lease they hold the
 client's, and the rotation index moved; `ugfx_screen_forget()` resets
 both, so the first present after a lease is a whole screen. A partial
 one showed the client's last frame through the desktop.
+
+## A screensaver is a PROCESS the compositor spawns, and the timeout is what turns it on
+
+**The split.** The compositor owns the idle clock; a saver owns the
+pixels and nothing else. `wm_idle.c` counts the ticks since the last
+input and spawns a program out of `/bin/wm/savers` when the machine has
+been quiet for the configured minutes; the program is an ordinary
+fullscreen client with no idea what it is being used for, and running
+it by hand is a program that draws stars.
+
+**Why not an overlay.** The on-screen keyboard and both tray flyouts are
+overlays inside the compositor, and that was the cheaper option -- no
+spawn, no descriptor, no process. It was declined because every new
+saver would then be a compositor edit and every saver bug a compositor
+bug. That is the argument X11 settled decades ago: the server blanks and
+XScreenSaver draws in its own process, explicitly so a saver cannot take
+the session down with it. Windows reached the same place from the other
+direction, with a `.scr` the shell runs. Wayland moved only the CLOCK
+into the compositor and exposes it through `ext-idle-notify-v1`, leaving
+the drawing to a client -- which is exactly this arrangement.
+
+**A saver is KILLED, not asked.** `wm_request_close()` lets a client
+refuse, and every user-facing close goes through it -- correctly, for a
+document with unsaved work. A screensaver is the one window where
+refusing must not be possible: the user has touched the keyboard and
+wants the machine back, and a saver that could decline would be a way to
+lose it.
+
+**No lock screen, deliberately.** toy-os has no accounts and no
+passwords. A screen that demanded one would stop nobody and would cost a
+way back in, which is a worse trade than the protection is worth. If
+accounts ever exist, the locker is a separate program from the saver --
+that separation is the whole lesson of XScreenSaver's history.
+
+**The timeout is the enable.** Zero minutes means never, so there is no
+second boolean that can disagree with it. Windows folds the same state
+into its dropdown's "(None)"; the invalid combination simply cannot be
+expressed here.
+
+**Only this feature's own settings interrupt a running saver.** Every
+setting in the system shares one generation counter, and the first
+version stopped the saver on any change at all -- which killed it
+whenever anything else was written, including the write that had just
+selected it, so choosing a saver and starting it in one breath never
+worked. The poll compares the two values it cares about instead. For
+the same reason the idle clock is NOT reset by a settings write: a
+script polling a setting is not a person at the keyboard.
+
+**What is NOT built: turning the backlight off.** A saver darkens
+pixels; on a laptop the lamp stays on, which is most of the power. Doing
+it properly needs a TRANSIENT display-power control, because
+`system.brightness` is a persisted setting -- using it would overwrite
+what the user chose and leave a dark screen behind any crash that
+skipped the restore. That is DPMS, which is a different thing from
+brightness in every system that has both, and it is on `docs/roadmap.md`.

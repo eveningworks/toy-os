@@ -133,6 +133,7 @@ TOOLS = [
     ("screen", "screen_surface_test.py", "a ring-3 compositor's screen surface"),
     ("compdeath", "compositor_death_test.py", "the compositor death path (R7)"),
     ("cursor", "cursor_theme_test.py", "cursor themes: shapes as data files, size, fallback"),
+    ("saver", "screensaver_test.py", "the idle clock, and the savers it spawns"),
     ("crash", "crashtest_test.py", "fault paths: ring-3 crashes, and the gate on kernel panics"),
     ("entries", "desktop_entries_test.py", "ShowIn= and live .desktop reload"),
     ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),
@@ -203,6 +204,7 @@ COST_S = {
     "font": 19,        # two face switches and a size change, each settled
     "gfxdemo": 24,
     "cursor": 21,
+    "saver": 22,
     "uapp": 19,
     "taskmgr": 19,
     "uidemo": 17,

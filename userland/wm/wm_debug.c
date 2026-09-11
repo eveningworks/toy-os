@@ -1,5 +1,6 @@
 // See wm_debug.h for what this is for and why it lives here.
 #include "wm_internal.h"
+#include "wm_idle.h"
 #include "desktop.h"   // desktop_icon_geometry -- `gui icons`
 #include "wm_taskbar.h"
 #include "lib/icon_cache.h"
@@ -1200,6 +1201,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  drag X1 Y1 X2 Y2 [N]  synthetic press, N interpolated moves, release\r\n");
     dbg_out_write(o, "  key <c|0xNN>          synthetic keypress to the focused window\r\n");
     dbg_out_write(o, "  wheel <n>             synthetic wheel notches (+up / -down)\r\n");
+    dbg_out_write(o, "  idle [start|stop]     the idle clock and the screensaver, as JSON\r\n");
     dbg_out_write(o, "  icons                 how many app icons are decoded and cached\r\n");
     dbg_out_write(o, "  watchdog [<ms>|off]   slow-frame threshold, and how often it fired\r\n");
     dbg_out_write(o, "  pingtimeout [<ticks>] not-responding timeout (a TEST lever)\r\n");
@@ -1490,6 +1492,33 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
     if (k_strcmp(sub, "wheel") == 0) {
         dbg_out_write(o, cmd_wheel(next_tok(&p)) ? "gui: queued wheel\r\n"
                                             : "gui: bad or dropped wheel delta\r\n");
+        return 1;
+    }
+
+    // THE IDLE CLOCK AND THE SCREENSAVER (wm_idle.h). `start` and
+    // `stop` exist because the shortest configurable timeout is ONE
+    // MINUTE: a test that waited for it would take a minute per check,
+    // which is how a tool stops being run. The clock itself is still
+    // the thing under test -- `gui idle` reports it, and nothing here
+    // fakes a quiet machine.
+    if (k_strcmp(sub, "idle") == 0) {
+        const char *arg = next_tok(&p);
+        if (arg && k_strcmp(arg, "start") == 0) {
+            dbg_out_write(o, wm_idle_force_start() ? "gui: screensaver started\r\n"
+                                                   : "gui: screensaver did not start\r\n");
+            return 1;
+        }
+        if (arg && k_strcmp(arg, "stop") == 0) {
+            wm_idle_force_stop();
+            dbg_out_write(o, "gui: screensaver stopped\r\n");
+            return 1;
+        }
+        char buf[160];
+        k_snprintf(buf, sizeof buf,
+                   "{\"seconds\":%u,\"pid\":%d,\"saver\":\"%s\",\"minutes\":%d}\r\n",
+                   (unsigned)wm_idle_seconds(), wm_idle_saver_pid(),
+                   wm_idle_saver_name(), wm_idle_minutes());
+        dbg_out_write(o, buf);
         return 1;
     }
 

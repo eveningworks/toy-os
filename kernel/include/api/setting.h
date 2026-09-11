@@ -179,6 +179,16 @@ struct setting {
     // needing to.
     const char *choice_file;
 
+    // OPTIONAL, ENUM only, and the third form: the options are the FILE
+    // ENTRIES of this directory, in whatever order the filesystem walks
+    // them. `/bin/wm/savers` is a set of programs to the compositor and
+    // a list of names here, so dropping a saver in gives it a row with
+    // no code change -- the rule the cursor themes and the keyboard
+    // layouts already follow with a hand-rolled `choice` each.
+    //
+    // Directories are skipped: a choice is a name a value can be.
+    const char *choice_dir;
+
     // OPTIONAL, ENUM only: the DISPLAY name for choice `index` --
     // "Los Angeles" where `choice` gives `losangeles`. NULL (the
     // default, and what most settings want) means the value is already
