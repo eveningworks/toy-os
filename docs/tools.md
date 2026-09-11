@@ -2110,8 +2110,23 @@ window without going through it will find its layout polls timing out.
   old mode, an unlisted mode must be refused with the screen untouched,
   and the boot mode must come back. It restores the setting, because a
   stored resolution is applied at the next boot. In `gui_regress.py`.
+- **`filemanager_harness_hostcheck.py`** -- `filemanager_test.py`'s own
+  wait and toolbar logic, on the host against a scripted console and a
+  click-recording QMP stand-in: a toolbar item the app did not report
+  records a failed check and clicks nothing (it once raised `KeyError`
+  out of the suite); a report split across two serial sweeps parses
+  whole; a wait whose predicate never holds returns None rather than
+  the layout it rejected; and a state the app already reported answers
+  a later wait after a grace period, since the app dedupes its whole
+  report block and repeats nothing. Seconds, no guest.
 - **`filemanager_test.py`** -- the File Manager: two panes, marking, and
-  real file operations. **It puts both panes in Details first** (from the
+  real file operations. **A check runs only after its prerequisite**:
+  the view toggles are driven through `toolbar_click()`, which requires
+  the item's reported rect, and a step whose prerequisite failed is
+  printed as `SKIP` with the reason rather than attempted -- the
+  two-pane, tree-hidden view is restored (and verified) before anything
+  later runs, and the run stops with a failing summary if it cannot be.
+  **It puts both panes in Details first** (from the
   toolbar, which is itself a check): the app opens in icons view, and
   every row this tool aims at is row-height arithmetic. **The result of every operation is checked
   through `ls`, not through the app** -- the manager is the thing under

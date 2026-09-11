@@ -77,6 +77,11 @@ TOOLS = [
     # runs, at three widths. gcc and the standard library only.
     ("umd_host",    "umd_hostcheck.py",        "the Markdown renderer over every page", False,
      None,                                                                                   False),
+    # filemanager_test.py's own wait/toolbar logic against a scripted
+    # console: a missing item, a split report, an expired wait. Standard
+    # library only.
+    ("fm_harness",  "filemanager_harness_hostcheck.py", "the File Manager harness's own logic", False,
+     None,                                                                                   False),
     # The 128-bit division helpers, against Python's arbitrary-precision
     # integers. gcc and the standard library only.
     ("divti3_host", "divti3_hostcheck.py",     "__udivti3 and friends against bignums", False,

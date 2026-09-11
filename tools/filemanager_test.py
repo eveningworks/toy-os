@@ -243,13 +243,21 @@ class Layout:
 
 class Result:
     def __init__(self):
-        self.passes, self.fails = [], []
+        self.passes, self.fails, self.skips = [], [], []
 
     def check(self, name, ok, detail=""):
         print(f"  {'PASS' if ok else 'FAIL'}  {name}")
         (self.passes if ok else self.fails).append(name)
         if not ok and detail:
             print(f"        {detail}")
+
+    def skip(self, name, why):
+        """A check whose PREREQUISITE failed. Named rather than silently
+        absent, so the count of what was not measured is in the summary;
+        the exit status is already failing on the prerequisite."""
+        print(f"  SKIP  {name}")
+        print(f"        {why}")
+        self.skips.append(name)
 
 
 def listing(dbg, path):
@@ -285,9 +293,22 @@ def listing(dbg, path):
 # nothing, because Layout() already keeps only the last complete frame.
 _LAST_BUF = []
 _ALL_BUF = []
+# The last COMPLETE layout any poll parsed. The app dedupes a whole
+# report block (uapp.c), so when it stays silent this IS its current
+# state -- which is what lets a wait answer from it after a grace
+# period instead of timing out on a report the app will never repeat.
+_LAST_LAYOUT = None
+
+
+def last_layout():
+    """The most recent complete layout observed, for a failure's evidence."""
+    return _LAST_LAYOUT
 
 
 def _collect(dbg, buf):
+    """Sweep fresh `files:` lines into `buf`. Returns how many ARRIVED
+    on this poll -- not `buf`, which is truthy forever after the first
+    line and cannot say whether anything new came."""
     fresh = dbg.logs("files:", clear=True)
     buf.extend(fresh)
     # `_LAST_BUF` is whichever poll ran last, so a line the app logged
@@ -296,7 +317,16 @@ def _collect(dbg, buf):
     # transcript, and it is what a failure detail should quote.
     _ALL_BUF.extend(fresh)
     _LAST_BUF[:] = buf
-    return buf
+    return len(fresh)
+
+
+def _parse(win, buf):
+    global _LAST_LAYOUT
+    lay = Layout(win["content"], buf)
+    if lay.complete():
+        _LAST_LAYOUT = lay
+        return lay
+    return None
 
 
 def layout_now(dbg, win, tries=25):
@@ -307,29 +337,83 @@ def layout_now(dbg, win, tries=25):
         # the report we want may already be in the buffer -- an
         # unconditional clear here threw away the only frame the app had
         # logged and reported a working window as silent.
-        if _collect(dbg, buf):
-            lay = Layout(win["content"], buf)
-            if lay.complete():
+        _collect(dbg, buf)
+        if buf:
+            lay = _parse(win, buf)
+            if lay:
                 return lay
         time.sleep(0.2)
     return None
 
 
-def wait_layout(dbg, win, pred, timeout=12.0):
+def wait_layout(dbg, win, pred, timeout=12.0, grace=1.0):
     """Poll the app's own report until `pred` holds. Waiting on the
-    OBSERVABLE rather than on a fixed sleep (CLAUDE.md)."""
+    OBSERVABLE rather than on a fixed sleep (CLAUDE.md).
+
+    Returns the layout that SATISFIED `pred`, or None when the deadline
+    passed with it never true -- never a layout the predicate rejected,
+    which a caller then read as the state it asked for. The last frame
+    seen is `last_layout()`, for the failure detail.
+
+    Partial reads accumulate within the wait, so a report split across
+    two serial sweeps is parsed whole. And after `grace` seconds with
+    no fresh report at all, the last layout ANY wait observed answers if
+    it satisfies `pred`: the app repeats nothing it already said, so a
+    state reached before this wait began would otherwise time out.
+    """
     deadline = time.time() + timeout
-    last = None
+    quiet_since = time.time()
     buf = []
     while time.time() < deadline:
         if _collect(dbg, buf):
-            lay = Layout(win["content"], buf)
-            if lay.complete():
-                last = lay
-                if pred(lay):
-                    return lay
+            quiet_since = time.time()
+            lay = _parse(win, buf)
+            if lay and pred(lay):
+                return lay
+        elif (_LAST_LAYOUT is not None and time.time() - quiet_since >= grace
+              and pred(_LAST_LAYOUT)):
+            return _LAST_LAYOUT
         time.sleep(0.2)
-    return last
+    return None
+
+
+def _toolbar_evidence(i, seen):
+    """What a failed toolbar lookup should say: the id asked for, the ids
+    the app reported, the view state, and the last report lines -- which
+    tells missing GEOMETRY from a transition that did not happen."""
+    have = sorted(seen.tbitems) if seen else None
+    state = (f"view={seen.view} treebox={seen.treebox} ctx={seen.ctx} "
+             f"panes={sorted(seen.pane)}") if seen else "no layout observed"
+    recent = [l.strip() for l in _ALL_BUF[-8:] if "layout" in l]
+    return (f"requested tbitem {i}; reported {have}; {state}; "
+            f"recent: {' | '.join(recent) or '(none)'}")
+
+
+def toolbar_layout(dbg, win, lay, i, res, what):
+    """A layout reporting toolbar item `i` with a usable rect, or None
+    with a FAILED check recorded and NO click made. `lay` is reused when
+    it already has the item; otherwise the report is waited for and the
+    condition rechecked on what arrives."""
+    def usable(l):
+        r = l.tbitems.get(i)
+        return bool(r) and r[2] > 0 and r[3] > 0
+    got = lay if (lay is not None and usable(lay)) else wait_layout(dbg, win, usable, timeout=6.0)
+    if got is None:
+        res.check(f"{what}: toolbar item {i} is reported with a usable rect", False,
+                  _toolbar_evidence(i, last_layout() or lay))
+        return None
+    return got
+
+
+def toolbar_click(dbg, qmp, win, lay, i, res, what):
+    """Click toolbar item `i` at the centre the app reported. Returns the
+    layout the click was aimed from, or None (check recorded, no click)."""
+    got = toolbar_layout(dbg, win, lay, i, res, what)
+    if got is None:
+        return None
+    x, y, w, h = got.tbitems[i]
+    sure_click(dbg, qmp, got.ox + x + w // 2, got.oy + y + h // 2)
+    return got
 
 
 def wait_listing(dbg, path, pred, timeout=25.0):
@@ -490,8 +574,8 @@ def run(dbg, qmp, tmp, res):
     for i in (1, 0):
         dbg.click(*lay.pane_centre(i))
         lay = wait_layout(dbg, win, lambda l, i=i: l.active == i) or lay
-        x, y, w, h = lay.tbitems[9]              # Details (8 is a separator)
-        sure_click(dbg, qmp, lay.ox + x + w // 2, lay.oy + y + h // 2)
+        # Details is item 9 (8 is a separator)
+        lay = toolbar_click(dbg, qmp, win, lay, 9, res, "Details") or lay
         lay = wait_layout(dbg, win, lambda l, i=i: l.view and l.view[i] == 1) or lay
     res.check("the toolbar's Details button switches each pane in turn",
               lay.view is not None and lay.view[0] == 1 and lay.view[1] == 1,
@@ -1864,41 +1948,79 @@ def run(dbg, qmp, tmp, res):
     TB_PANES, TB_TREE = 12, 13
     lay = wait_layout(dbg, win, lambda l: len(l.tbitems) == 14) or lay
 
-    def toolbar_click(i):
-        x, y, w, h = lay.tbitems[i]
-        sure_click(dbg, qmp, ox + x + w // 2, oy + y + h // 2)
+    def tb(i, what):
+        """Click item `i`, adopting the layout it was aimed from; False
+        when the item was not reported (a failed check is recorded)."""
+        nonlocal lay
+        got = toolbar_click(dbg, qmp, win, lay, i, res, what)
+        if got is None:
+            return False
+        lay = got
+        return True
 
-    toolbar_click(TB_PANES)                      # second pane OFF
-    lay = wait_layout(dbg, win, lambda l: l.view and l.view[2] == 1) or lay
-    res.check("Second pane off leaves ONE pane",
-              lay is not None and lay.view and lay.view[2] == 1,
-              f"view={lay and lay.view}")
+    N_ONE = "Second pane off leaves ONE pane"
+    N_CTX = "...and a right-click STILL opens the context menu"
+    N_ESC = "Escape closes the context menu again"
+    N_TREE = "Folder tree on shows the TREE, not some other widget"
+    N_BOTH = "(both toggles restored)"
 
-    px, py, pw, ph = lay.pane[0]
-    rh = lay.rowh or 16
-    sure_rclick(dbg, qmp, ox + px + pw // 2, oy + py + rh * 2 + rh // 2)
-    lay = wait_layout(dbg, win, lambda l: l.ctx == 1) or lay
-    res.check("...and a right-click STILL opens the context menu",
-              lay is not None and lay.ctx == 1,
-              f"ctx={lay and lay.ctx} -- the widget slots shifted "
-              f"(see fm_internal.h's widget_by_id)")
-    dbg.key(K_ESC)
-    wait_layout(dbg, win, lambda l: l.ctx == 0)
+    single = False
+    if tb(TB_PANES, "second pane off"):
+        got = wait_layout(dbg, win, lambda l: bool(l.view) and l.view[2] == 1)
+        single = got is not None
+        res.check(N_ONE, single, f"view={(last_layout() or lay).view}")
+        lay = got or lay
+    else:
+        res.skip(N_ONE, "the toolbar item was not reported, so it was not clicked")
 
-    toolbar_click(TB_TREE)                       # tree ON
-    lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 1 and
-                       l.treebox) or lay
-    res.check("Folder tree on shows the TREE, not some other widget",
-              lay is not None and lay.view and lay.view[3] == 1 and
-              lay.treebox is not None and lay.treebox[2] > 0,
-              f"view={lay and lay.view} treebox={lay and lay.treebox}")
-    toolbar_click(TB_TREE)                       # ...and off again
-    lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0) or lay
-    toolbar_click(TB_PANES)                      # second pane back on
-    lay = wait_layout(dbg, win, lambda l: l.view and l.view[2] == 0) or lay
-    res.check("(both toggles restored)",
-              lay is not None and lay.view and lay.view[2] == 0 and
-              lay.view[3] == 0, f"view={lay and lay.view}")
+    menu_closed = False
+    if single:
+        px, py, pw, ph = lay.pane[0]
+        rh = lay.rowh or 16
+        sure_rclick(dbg, qmp, ox + px + pw // 2, oy + py + rh * 2 + rh // 2)
+        got = wait_layout(dbg, win, lambda l: l.ctx == 1)
+        res.check(N_CTX, got is not None, f"ctx={(last_layout() or lay).ctx}")
+        if got is not None:
+            lay = got
+            dbg.key(K_ESC)
+            # KEEP what the wait returns: the tree toggle below must not
+            # be attempted with the menu still up, and if it is still up
+            # that is the state to report, not a guess about why.
+            closed = wait_layout(dbg, win, lambda l: l.ctx == 0)
+            menu_closed = closed is not None
+            res.check(N_ESC, menu_closed,
+                      f"ctx={(last_layout() or lay).ctx} ctxbox={(last_layout() or lay).ctxbox}")
+            lay = closed or lay
+        else:
+            res.skip(N_ESC, "no context menu opened, so there was nothing to close")
+    else:
+        res.skip(N_CTX, "single-pane view was not reached")
+        res.skip(N_ESC, "single-pane view was not reached")
+
+    if single and menu_closed and tb(TB_TREE, "folder tree on"):
+        got = wait_layout(dbg, win, lambda l: bool(l.view) and l.view[3] == 1 and bool(l.treebox))
+        seen = got or last_layout() or lay
+        res.check(N_TREE, got is not None and seen.treebox is not None and seen.treebox[2] > 0,
+                  f"view={seen.view} treebox={seen.treebox}")
+        lay = got or lay
+    elif not (single and menu_closed):
+        res.skip(N_TREE, "its prerequisite (one pane, menu closed) was not reached")
+
+    # RESTORE the two-pane, tree-hidden view before anything else runs:
+    # the view state PERSISTS (files.conf), so a respawn inherits it.
+    # Each toggle is applied only if the app reports it as needed.
+    if lay.view and lay.view[3] == 1 and tb(TB_TREE, "folder tree off"):
+        lay = wait_layout(dbg, win, lambda l: bool(l.view) and l.view[3] == 0) or lay
+    if lay.view and lay.view[2] == 1 and tb(TB_PANES, "second pane on"):
+        lay = wait_layout(dbg, win, lambda l: bool(l.view) and l.view[2] == 0) or lay
+    seen = last_layout() or lay
+    restored = bool(seen.view) and seen.view[2] == 0 and seen.view[3] == 0
+    res.check(N_BOTH, restored, f"view={seen.view}")
+    if not restored:
+        print("  filemanager_test: the two-pane, tree-hidden view could not be restored; "
+              "every later check depends on it, so the run stops here")
+        return
+    lay = seen
 
     # --- 18. Ctrl / Shift multi-select ---------------------------------
     #
@@ -2407,7 +2529,8 @@ def main():
     finally:
         dbg.close()
 
-    print(f"\nfilemanager_test: {len(res.passes)} passed, {len(res.fails)} failed")
+    print(f"\nfilemanager_test: {len(res.passes)} passed, {len(res.fails)} failed, "
+          f"{len(res.skips)} skipped")
     for f in res.fails:
         print(f"  FAILED: {f}")
     return 1 if res.fails else 0

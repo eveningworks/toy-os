@@ -1468,7 +1468,8 @@ cost".
   `console_shell_test.py`, `ctrlc_test.py`, `cursor_ibeam_test.py`,
   `diskmark_test.py`, `doc_test.py`, `doom_test.py`,
   `divti3_hostcheck.py`, `doom_sound_test.py`, `fat32_test.py`,
-  `fileop_test.py`, `frame_balance.py`,
+  `fileop_test.py`, `filemanager_harness_hostcheck.py` (the File
+  Manager harness's own wait/toolbar logic, no guest), `frame_balance.py`,
   `fs_switch_test.py`, `grep_test.py`, `guictl_test.py`,
   `hash_hostcheck.py`, `highmem_test.py` (the frame allocator on an
   8 GiB guest -- the one check `make test`'s 256 MiB boot SKIPS),
