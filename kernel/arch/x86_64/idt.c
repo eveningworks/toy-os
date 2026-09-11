@@ -457,7 +457,7 @@ void isr_dispatch(uint64_t *regs) {
             // break -- falls through to the report exactly as before.
             // So this cannot swallow a real fault: it can only satisfy
             // one the process was entitled to.
-            if ((cs & 3) == 3 && vmm_fault_in(vmm_current_pml4(), cr2)) return;
+            if ((cs & 3) == 3 && vmm_fault_in(vmm_current_pml4(), cr2, error_code)) return;
         }
 
         // A ring-3 fault is recoverable -- tear the process down and

@@ -80,6 +80,9 @@ TESTS = [
     # top of it. SPAWNED (exit code None): it reads pipes its children
     # write, which the legacy `run` loader cannot block on.
     ("argv_test", None, None, None),
+    # fork() and exec(): SPAWNED (exit code None) because a fork needs a
+    # scheduler slot, which the legacy `run` loader has not got.
+    ("fork_test", None, None, None),
     # SPAWN_FD_LOG: a child's stdout landing in the application log,
     # tagged with the CHILD's name. SPAWNED (exit code None) because the
     # thing under test is a spawn -- it waits for two children, which the

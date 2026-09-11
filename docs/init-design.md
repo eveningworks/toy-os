@@ -419,8 +419,9 @@ the test suite.
   redirects itself around the spawn. That is why `posix_spawn()` exists
   too. Windows has
   only `CreateProcess`, and POSIX added `posix_spawn()` precisely
-  because fork+exec is awkward to implement well. It stays where the
-  roadmap has it.
+  because fork+exec is awkward to implement well. It stayed where the
+  roadmap had it until 2026-09-11, when a ported shell needed it
+  (`docs/fork-design.md`); init still spawns.
 - **Signals.** An init that supervises wants them eventually, and
   `SYS_KILL` is a force-kill rather than a signal today. The roadmap
   has "Signals & process control" and it needs the blocking scheduler

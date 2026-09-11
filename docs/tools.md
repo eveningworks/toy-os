@@ -843,7 +843,10 @@ manual steps to be worth automating:
   pages of kernel `.rodata`, see `docs/decisions.md`). **It boots its
   own VM because an over-free fires only ONCE**: the second exit finds
   those frames already free, so any run that reuses a booted VM
-  measures nothing. The non-GUI control must stay flat -- if it drifts,
+  measures nothing. A `fork` cycle (`/tests/fork_test --forks 20`)
+  sits between the control and the GUI cycles: twenty copy-on-write
+  children and their parent must return every frame, which is the
+  refcount's own balance check. The non-GUI control must stay flat -- if it drifts,
   the fault is in ordinary teardown or in the harness, not in the
   borrowed-mapping path. Run it after touching `vmm.c`'s mapping or
   teardown paths, or after adding any mapping of memory a process does

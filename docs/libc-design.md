@@ -334,8 +334,9 @@ min(old, new) bytes and only the allocator knows the first -- copying
 region and into an unmapped page. That is a real requirement rather than
 a convenience, which is why it was added despite having one caller.
 
-**`<unistd.h>` omits rather than stubs.** No `fork`, no `exec`, no
-`select`. A `fork()` that always failed would be worse than a link
+**`<unistd.h>` omits rather than stubs.** No `select`, no `poll` (and,
+until 2026-09-11, no `fork` or `exec` -- both exist now, see
+`docs/fork-design.md`). A `fork()` that always failed would be worse than a link
 error: the link error says "this program needs something this OS does
 not have", which is exactly true and exactly what a porter needs to
 read. `SYS_SPAWN` is `posix_spawn`-shaped on purpose
@@ -734,9 +735,10 @@ looks exactly like the call underneath working, which it is.
   rule exists to prevent.
 - **`<unistd.h>` gained** `getpid`, `pipe`, `setpgid`/`getpgid`/`getpgrp`,
   `tcgetpgrp`/`tcsetpgrp` (POSIX puts those here, not in `<termios.h>`),
-  `sleep`/`usleep`, `_exit` and `set_nonblock`. **There is still no
-  `fork()` or `exec*()`**, and that is a decision with its own entry
-  rather than a gap.
+  `sleep`/`usleep`, `_exit` and `set_nonblock`. `fork()`, `execv`/
+  `execve`/`execvp`, `getppid` and `<spawn.h>`'s `posix_spawn` arrived
+  on 2026-09-11 (`docs/fork-design.md`); spawn is still what a program
+  written for toy-os should use.
 
 **WHAT THE TEST FOUND, and it is the usual shape.** Its first termios
 check asserted that a terminal starts in `TTY_LFLAG_DEFAULT` -- true of

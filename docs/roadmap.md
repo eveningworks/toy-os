@@ -158,9 +158,9 @@ is the bookkeeping that makes any other kind of mapping possible.
 - [ ] Lazy zero-filling: one shared zero page mapped read-only until first write
 - [x] ~~File-backed `mmap`~~ DONE 2026-08-28 -- the fault-in REFUSES inside an FS_OP; see `docs/decisions.md`
 - [ ] Shared read-only text pages between instances of the same binary
-- [ ] A per-frame reference count
+- [x] ~~A per-frame reference count~~ DONE 2026-09-11 -- `pmm_frame_ref()`, and `pmm_free_frame()` decrements
 - [x] ~~`MAP_SHARED` memory between two processes~~ DONE 2026-09-06 -- `SYS_SHM_OPEN` names an object, `MAP_SHARED` maps it
-- [ ] Copy-on-write, shared between this and `fork()`
+- [x] ~~Copy-on-write, shared between this and `fork()`~~ DONE 2026-09-11 -- `PAGE_COW`, `vmm_fork_address_space()`/`vmm_cow_break()`
 - [ ] Guard pages around USER and THREAD stacks -- kernel stacks have them; a thread stack is ring 3's own allocation and has none
 - [x] ~~A frame-size bound for ring 3~~ DONE 2026-08-18
 - [x] ~~A check on the ~1 MiB between a ring-3 image and its heap~~ DONE 2026-08-18
@@ -192,17 +192,17 @@ Needs phase 2: copy-on-write is what `fork()` actually is, and it is the
 only expensive part of it.
 
 ### `fork()`/`exec()`-style process model
-**Needs:** a per-frame refcount in `pmm` -- copy-on-write is what makes `fork()` cheap, and demand paging (landed 2026-08-18) was only half of it.
+**Needs:** nothing -- `fork()` and `exec()` landed 2026-09-11 (`docs/fork-design.md`); what is left below is the FP/PID work that shares the heading.
 
 - [x] ~~Hardware floating point / SSE for ring-3 processes~~ done
 - [ ] A `kernel_fpu_begin()`/`kernel_fpu_end()` bracket
 - [ ] AVX/XSAVE support
-- [ ] `fork()`-style address-space duplication (copy-on-write)
-- [ ] `exec()`-style in-place process replacement
+- [x] ~~`fork()`-style address-space duplication (copy-on-write)~~ DONE 2026-09-11 -- `SYS_FORK`, `/tests/fork_test`
+- [x] ~~`exec()`-style in-place process replacement~~ DONE 2026-09-11 -- `SYS_EXEC` takes `struct spawn_msg`; loads before it tears down
 - [x] ~~`wait()`/exit-status reporting for a parent process~~ DONE -- `SYS_WAITPID` takes an out-parameter for the exit code
 - [ ] Real PID allocation rather than a fixed table -- `SCHED_MAX_PROCS` is 64, not the 4 this line claimed for a long time
 - [x] ~~Larger/growable user stack~~ DONE 2026-08-23 -- 8 MiB reserved, grown on fault; four pages is the starting working set
-- [ ] Copy-on-write page-fault handler -- the piece `fork()` above needs to not copy the whole address space eagerly
+- [x] ~~Copy-on-write page-fault handler~~ DONE 2026-09-11 -- `vmm_fault_in()` carries the error code; `copy_user()` un-shares too
 - [x] ~~`argv`/`envp` passed to a new process~~ DONE -- `SYS_SPAWN` takes both (an env BLOB), and crt0 lands on an argc/argv stack
 - [x] ~~Zombie reaping + parent PID tracking~~ DONE -- `ppid`, reparenting to init, and `waitpid(-1)`
 - [x] ~~`brk`-style growable per-process heap~~ DONE -- `SYS_SBRK` reserves and `uheap_fault()` maps on touch; the heap is per process
@@ -330,10 +330,10 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [ ] Decide, in writing, what is deliberately NOT pursued
 
 ### A ported POSIX shell
-**Needs:** either `fork()`/`exec()`-style process model, or BusyBox's no-fork re-exec path over `SYS_SPAWN` -- the list below is what a BusyBox `ash` port was measured to need (2026-09-10), in the order it blocks.
+**Needs:** nothing for the process model any more -- `fork()`/`exec()` landed 2026-09-11; the list below is what a BusyBox `ash` port was measured to need (2026-09-10), in the order it blocks.
 
 - [x] ~~An argv VECTOR across a spawn, so a quoted argument survives it~~ DONE 2026-09-10 -- `SPAWN_ARGV`
-- [ ] A shell running a second copy of itself with its state: `fork()`, or `exec` plus BusyBox's NOMMU re-exec
+- [x] ~~A shell running a second copy of itself with its state~~ DONE 2026-09-11 -- `fork()` and `execv`/`execve`/`execvp`
 - [ ] `sigprocmask`/`sigsuspend`/`sigsetjmp` -- ash's `INTOFF`/`INTON` critical sections
 - [ ] POSIX `stat`/`fstat`/`lstat` with a truthful `struct stat` -- `test -x`, command hashing
 - [ ] `fcntl` (`F_DUPFD`, `FD_CLOEXEC`), `umask`, `getppid`, `times`

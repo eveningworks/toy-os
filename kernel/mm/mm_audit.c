@@ -26,7 +26,7 @@
 #include "kfmt.h"
 
 uint64_t mm_audit_report(void) {
-    uint64_t pages = 0, borrowed = 0, unmanaged = 0, dangling = 0, swapped = 0;
+    uint64_t pages = 0, borrowed = 0, unmanaged = 0, dangling = 0, swapped = 0, cow = 0;
     int spaces = 0;
 
     vga_write("Auditing live address spaces against the frame allocator...\n");
@@ -60,14 +60,15 @@ uint64_t mm_audit_report(void) {
         unmanaged += a.unmanaged;
         dangling += a.dangling;
         swapped += a.swapped;
+        cow += a.cow;
     }
 
     if (dangling) {
         vga_printf("  %d space(s), %lu pages -- %lu DANGLING, a live mapping "
                     "points at a free frame\n", spaces, pages, dangling);
     } else {
-        vga_printf("  %d space(s), %lu pages (%lu borrowed, %lu unmanaged) "
-                    "-- no dangling mappings\n", spaces, pages, borrowed, unmanaged);
+        vga_printf("  %d space(s), %lu pages (%lu borrowed, %lu unmanaged, %lu cow) "
+                    "-- no dangling mappings\n", spaces, pages, borrowed, unmanaged, cow);
     }
     // SAID SEPARATELY, AND ONLY WHEN THERE ARE ANY. A swapped page has
     // no frame, so this walk's invariant cannot cover it; reporting the

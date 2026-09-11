@@ -140,6 +140,13 @@ carries on the roadmap, so the two arrive together or not at all. The
 alternative was to build rmap first, for a machine with nothing to
 disambiguate, and carry it unexercised until fork lands.
 
+*Fork landed on 2026-09-11 with that refcount, and the premise was
+kept rather than replaced: `vmm_set_swap_entry()` refuses a frame with
+more than one owner. A shared frame is simply not a candidate, which
+is what a machine with no reverse map can honestly say; the rmap is
+still deferred, now until page-out is real and a forked shell's pages
+are what it wants to evict (see "fork shares frames..." below).*
+
 See `docs/swap-design.md` for the staged plan this belongs to.
 
 ## An ANY allocation stops at a DMA32 floor rather than draining it
@@ -7203,3 +7210,96 @@ kernel-side `scheduler_spawn_env()`/`elf_run_from_fs()` wrappers), and
 `elf_build_argv_on_stack()` know only vectors. Splitting once at the
 edge is the same call as `elf_argv_from_string()` being one function:
 two tokenisers would be two places to disagree about what a space is.
+
+## fork shares frames through a refcount in `pmm`, and a shared frame is never swapped
+
+Asked and answered 2026-09-11, when `fork()` was built (`docs/fork-design.md`).
+The obvious way to fork is to copy every page; the way every real
+system does it is copy-on-write, which needs to know how many address
+spaces reference a frame. Linux keeps that count in `struct page` and a
+reverse map beside it; NT in the PFN database. toy-os had two bitmaps
+and nothing per frame.
+
+**The count lives in `pmm`, and `pmm_free_frame()` DECREMENTS.** A
+`uint16_t` per frame beside the bitmaps, set to 1 by every allocation,
+raised by `pmm_frame_ref()`, and the last owner's free is the one that
+frees. Putting the decrement inside the existing free call -- rather
+than adding a `pmm_unref()` for shared frames -- is what made every
+teardown walk correct with no edit: `destroy_pt()`,
+`vmm_release_user_page()` and `vmm_set_swap_entry()` all call
+`pmm_free_frame()` and none of them can tell a shared frame from a
+private one, which is exactly the property wanted. A double free, which
+used to be a silent no-op, is logged now for the same reason.
+
+**No reverse map, still.** The swap entry above records why none was
+built; fork keeps that premise by refusing a frame with two owners as a
+victim. The cost is that a forked process's shared pages cannot be
+evicted until one side un-shares them -- acceptable while page-out is
+a debug command, and the entry to revisit when it is not.
+
+**The COW bit is in the PTE, not a side table**, for the reason
+`PAGE_BORROWED` is: the teardown and fault walks have the PTE in hand
+and nothing else. Bit 11 was the last free software bit.
+
+## A fork copies eagerly what the kernel holds a physical pointer into
+
+The futex is keyed by the WORD's PHYSICAL address (`futex_key()`,
+`kernel/proc/futex.c`), a waiter parks on that address as its channel,
+and the wakeword is bumped through one. Copy-on-write breaks that
+quietly: the parent forks, its waiter stays parked on frame P, the
+parent writes the page and is moved to a private copy P' -- and every
+later wake in the parent keys to P', finds nobody, and the waiter never
+runs. A lost wakeup, in the process that did nothing unusual.
+
+Linux does not have this problem because a private futex is keyed by
+`(mm, vaddr)`, and a shared one by the page's `struct page` -- the key
+survives a COW break. Re-keying here would mean either that (a futex
+namespace per address space, which is a real change to a working
+mechanism) or a hook from `vmm_cow_break()` back into the scheduler to
+move channels, for one consumer.
+
+**Chosen: the fork walk takes a list of PINNED frames and copies those
+eagerly for the child**, so the parent is never un-shared away from
+them. `scheduler_fork()` pins the wakeword's frame and every frame a
+parked thread of the group has as its `wait_chan`. It is a list rather
+than a rule because the scheduler is the only thing that knows where its
+waiters are parked, and vmm should not learn. The cost is one extra
+page copy per parked waiter at fork time -- and the one hazard left is
+documented in `docs/fork-design.md`: until the child un-shares such a
+page, a wait in the child joins the parent's waiters, which is a
+spurious wakeup and not a lost one.
+
+## An exec builds the new image before it touches the old one
+
+POSIX says a failed `exec` returns -1 with the process unchanged, and
+Linux honours it up to `flush_old_exec()` -- the point of no return is
+as late as the checks can be pushed. toy-os pushes it later still: the
+whole new address space, interpreter and stack are built by
+`build_image()` (the half `spawn_from_fs()` already had) into a FRESH
+PML4 while the caller's is untouched, and only a fully loaded image is
+swapped in. A missing file, an unreadable ELF or an absent interpreter
+all return `-errno` to a caller still running its old code; the
+`fork_test` check "exec of a missing path returns -1/ENOENT to a live
+process" is the positive statement of it.
+
+**Why a fresh PML4 rather than reloading into the caller's:** the fd
+table, the strace arm, shm maps, the futex wakeword and the accounting
+are all keyed by the PML4's physical address, and every one of them
+already has a "process gone" hook. Keeping the CR3 value would have
+avoided `fd_rekey()` and `strace_rekey()` -- two small functions --
+at the price of tearing down first, which is the failure mode above.
+
+**`SYS_EXEC` takes `struct spawn_msg`.** An exec is a spawn into the
+caller's own slot, and giving it a second message shape would have
+been a second copy of the argv/env carriage and its refusals. The
+fields only a child can take -- a stream, a group, `SPAWN_FOREGROUND`,
+`SPAWN_TRACE` -- are refused with `-EINVAL` rather than ignored, the
+same rule the flags word has always had.
+
+**And no `CLOEXEC`.** A fork copies the whole descriptor table, an
+exec keeps it, and nothing can mark one to close. The decision that
+capped `spawn`'s inheritance at 0/1/2 already said a future fork would
+copy everything; `fcntl(F_DUPFD, FD_CLOEXEC)` is on the ported-shell
+list and the flag is one bit in `struct fd_space` when a program needs
+it. A shell written against fork closes what it must in the child, as
+every shell does.

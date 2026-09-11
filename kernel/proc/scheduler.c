@@ -90,6 +90,9 @@
 // off) changed to a different one (an empty table).
 #include "scheduler.h"
 #include "futex.h"
+#include "mmap.h"   // a fork's view of the mmap arena
+#include "shm.h"    // shm_process_gone() -- undoing a half-inherited arena, and an exec
+#include "sound.h"  // sound_process_gone() -- an exec drops the stream
 #include "syscalls.h" // the fd table: a child inherits its parent's descriptors
 #include "vmm.h"
 #include "pmm.h"
@@ -829,30 +832,29 @@ static void switch_to_kernel(void) {
 // (>= 0) or -1 on any failure (no free slot, missing/unreadable file,
 // `args` too long to fit the one stack page, or the same allocation
 // failures every other ELF-loading path already handles the same way).
-static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len,
-                          int stdout_desc, int stdin_desc, const char *env,
-                          int want_pgid, uint64_t parent_pml4) {
-    int slot = -1;
-    for (int i = 0; i < MAX_PROCS; i++) {
-        if (procs[i].state == SCHED_UNUSED) { slot = i; break; }
-    }
-    if (slot < 0) return -1;
-
+// THE IMAGE HALF OF A SPAWN, shared with exec (docs/fork-design.md):
+// read the ELF, create the address space, load it and its interpreter,
+// map the initial stack and lay argv/env/auxv out on it. On success
+// `*out_as` holds an address space nothing else refers to yet; on
+// failure nothing is held. `*out_image_end` is where the heap starts.
+static int build_image(const char *path, const char *argvec, size_t argvec_len,
+                       const char *env, uint64_t *out_as, uint64_t *out_entry,
+                       uint64_t *out_rsp, uint64_t *out_image_end) {
     // THE IMAGE IS READ INTO MEMORY THIS FUNCTION OWNS (fs_read_into),
     // never the backend's staging buffer: this runs in the kernel
     // context as well as under a syscall, and a ring-3 file read could
     // free that buffer under elf_load(). kmalloc memory is identity-
     // mapped, so elf_load() takes its address directly (elf_run.c).
     uint64_t fsz = fs_size(path);
-    if (fsz == 0 || fsz > 0xFFFFFFFFu - 1) return -1;
+    if (fsz == 0 || fsz > 0xFFFFFFFFu - 1) return 0;
     char *data = kmalloc((size_t)fsz + 1);
-    if (!data) return -1;
+    if (!data) return 0;
     uint32_t size = fs_read_into(path, data, (uint32_t)fsz + 1);
-    if (size == 0) { kfree(data); return -1; }
+    if (size == 0) { kfree(data); return 0; }
     uint64_t elf_phys = (uint64_t)(uintptr_t)data;
 
     uint64_t as = vmm_create_address_space();
-    if (!as) { kfree(data); return -1; }
+    if (!as) { kfree(data); return 0; }
 
     // Same one-line hook elf_run_from_fs() has -- a no-op unless the
     // shell's `strace` armed tracing, which keeps the mechanism
@@ -870,7 +872,7 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
     if (!elf_load(elf_phys, size, as, &entry, &image_end, &dyn)) {
         vmm_destroy_address_space(as);
         kfree(data);
-        return -1;
+        return 0;
     }
     kfree(data);   // everything the process needs from it is in the address space now
 
@@ -889,7 +891,7 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
             klog_printf("spawn: %s reaches %#lx, into the interpreter -- refused\n",
                         path, image_end);
             vmm_destroy_address_space(as);
-            return -1;
+            return 0;
         }
         uint64_t ifsz = fs_size(dyn.interp);
         char *idata = ifsz && ifsz < 0xFFFFFFFFu - 1 ? kmalloc((size_t)ifsz + 1) : 0;
@@ -898,7 +900,7 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
             klog_printf("spawn: interpreter %s missing\n", dyn.interp);
             if (idata) kfree(idata);
             vmm_destroy_address_space(as);
-            return -1;
+            return 0;
         }
         uint64_t ientry = 0, iend = 0;
         int iok = elf_load((uint64_t)(uintptr_t)idata, isize, as, &ientry, &iend, 0);
@@ -906,7 +908,7 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
         if (!iok) {
             klog_printf("spawn: interpreter %s did not load\n", dyn.interp);
             vmm_destroy_address_space(as);
-            return -1;
+            return 0;
         }
         if (iend > image_end) image_end = iend; // the heap starts after BOTH
 
@@ -925,7 +927,7 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
     uint64_t stack_phys = 0;
     for (int pg = 0; pg < UADDR_STACK_INIT_PAGES; pg++) {
         uint64_t frame = pmm_alloc_frame(PMM_ZONE_ANY);
-        if (!frame) { vmm_destroy_address_space(as); return -1; }
+        if (!frame) { vmm_destroy_address_space(as); return 0; }
         uint64_t va = UADDR_STACK_VADDR - (uint64_t)pg * 4096;
         if (!vmm_map_user_page(as, va, frame)) {
             // The frame is not mapped, so destroying the address space
@@ -933,7 +935,7 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
             // space take everything that IS mapped.
             pmm_free_frame(frame);
             vmm_destroy_address_space(as);
-            return -1;
+            return 0;
         }
         if (pg == 0) stack_phys = frame;
     }
@@ -943,8 +945,43 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
                                   auxc ? auxv : 0, auxc,
                                   &argc, &argv, &user_rsp)) {
         vmm_destroy_address_space(as);
-        return -1;
+        return 0;
     }
+    (void)argc; (void)argv; // argc/argv reach the process on its STACK
+    *out_as = as;
+    *out_entry = entry;
+    *out_rsp = user_rsp;
+    *out_image_end = image_end;
+    return 1;
+}
+
+// The per-address-space half of a slot's memory state, from a freshly
+// built image: the heap starts where the image ends (elf.c's
+// out_image_end, which is what lets a ring-3 binary be any size), the
+// stack has its initial working set, and no mmap region exists yet. A
+// recycled slot still holds its previous owner's regions, and the
+// frames behind them are long freed, so the wipe is load-bearing.
+static void mm_reset(int slot, uint64_t image_end) {
+    uint64_t heap_base = image_end > UADDR_HEAP_MIN_BASE
+                              ? image_end : UADDR_HEAP_MIN_BASE;
+    procs[slot].mm.heap_base    = heap_base;
+    procs[slot].mm.brk          = heap_base;
+    procs[slot].mm.stack_bottom = UADDR_STACK_INIT_BOTTOM;
+    k_memset(procs[slot].mm.regions, 0, sizeof procs[slot].mm.regions);
+}
+
+static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len,
+                          int stdout_desc, int stdin_desc, const char *env,
+                          int want_pgid, uint64_t parent_pml4) {
+    int slot = -1;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].state == SCHED_UNUSED) { slot = i; break; }
+    }
+    if (slot < 0) return -1;
+
+    uint64_t as = 0, entry = 0, user_rsp = 0, image_end = 0;
+    if (!build_image(path, argvec, argvec_len, env, &as, &entry, &user_rsp, &image_end))
+        return -1;
 
     // Synthesize this process's very first trapframe, at the top of its
     // own dedicated kernel stack -- laid out exactly like a real one
@@ -952,11 +989,9 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
     // it the first time exactly the same way it resumes it later.
     uint64_t *tf = (uint64_t *)(kernel_stack_top(slot) - TRAPFRAME_WORDS * 8);
     for (int i = 0; i < TF_VECTOR; i++) tf[i] = 0; // r15..rax start at 0
-    // rdi/rsi stay 0: argc/argv reach the process on its STACK now, in
-    // the SysV layout elf_build_argv_on_stack() built and
-    // userland/crt0.asm reads (user_rsp below points at argc). They used
-    // to be seeded here for a C _start that took them as parameters.
-    (void)argc; (void)argv;
+    // rdi/rsi stay 0: argc/argv reach the process on its STACK, in the
+    // SysV layout elf_build_argv_on_stack() built and crt0.asm reads
+    // (user_rsp points at argc).
     tf[TF_VECTOR]  = 0; // unused -- epilogue discards vector+error_code
     tf[TF_ERRCODE] = 0; //          via `add rsp, 16` without reading them
     tf[TF_RIP]     = entry;
@@ -1060,15 +1095,7 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
     // The max() is belt and braces: elf_load() cannot report an end
     // below ELF_IMAGE_BASE, but a heap starting under the floor would be
     // a silent aliasing bug rather than a loud one.
-    uint64_t heap_base = image_end > UADDR_HEAP_MIN_BASE
-                              ? image_end : UADDR_HEAP_MIN_BASE;
-    procs[slot].mm.heap_base   = heap_base;
-    procs[slot].mm.brk         = heap_base;
-    procs[slot].mm.stack_bottom = UADDR_STACK_INIT_BOTTOM;
-    // A recycled slot still holds the previous owner's mmap regions;
-    // the frames behind them are long freed, so a stale entry would
-    // answer a wild pointer with a read of some unrelated file.
-    k_memset(procs[slot].mm.regions, 0, sizeof procs[slot].mm.regions);
+    mm_reset(slot, image_end);
     // INHERITED, unlike the name and the CPU time above: the cwd is the
     // one piece of a parent's state a child is supposed to start with,
     // which is what makes `mkdir docs` from a shell standing in /tmp
@@ -1892,6 +1919,151 @@ int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
     procs[slot].state = SCHED_READY;
     alive_count++;
     return slot + 1;
+}
+
+// --- fork ------------------------------------------------------------
+//
+// What a fork copies is stated once, in docs/fork-design.md's table;
+// this function is that table in order. Two things are not obvious
+// from the table. THE FRAMES THE KERNEL HOLDS A PHYSICAL POINTER INTO
+// ARE COPIED EAGERLY, not shared: a futex waiter is parked on its
+// word's physical address and the wakeword is written by one, so if the
+// parent un-shared such a page its waiters would be keyed to the frame
+// the child now owns -- a lost wakeup. And the FP state is the
+// caller's LIVE registers (the kernel is -mno-sse, so they are still in
+// the CPU), which is what a fork means.
+static int fork_inherits_borrowed(void *ctx, uint64_t va) {
+    return mmap_inherits_at(ctx, va);
+}
+
+int scheduler_fork(const uint64_t *regs) {
+    if (current_index < 0) return -EPERM; // the kernel context, or the legacy loader
+    int caller = current_index;
+    int leader = leader_index(caller);
+
+    int slot = -1;
+    for (int i = 0; i < MAX_PROCS; i++)
+        if (procs[i].state == SCHED_UNUSED) { slot = i; break; }
+    if (slot < 0) return -EAGAIN;
+
+    uint64_t pinned[MAX_PROCS + 1];
+    int npin = 0;
+    uint64_t ww = futex_wakeword_phys(leader + 1);
+    if (ww) pinned[npin++] = ww;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].state != SCHED_BLOCKED || procs[i].tgid != leader + 1) continue;
+        if (procs[i].wait_chan) pinned[npin++] = (uint64_t)(uintptr_t)procs[i].wait_chan;
+    }
+    struct vmm_fork_opts o = { pinned, npin, fork_inherits_borrowed, &procs[leader].mm };
+    uint64_t as = vmm_fork_address_space(procs[leader].pml4_phys, &o);
+    if (!as) return -ENOMEM;
+    if (mmap_inherit_shm(as, &procs[leader].mm) < 0) {
+        vmm_destroy_address_space(as);
+        return -ENOMEM;
+    }
+
+    // The caller's trapframe, verbatim, on the child's own kernel stack
+    // -- so the child resumes at the instruction after the `int $0x80`
+    // with every register the parent had, except the one that tells
+    // them apart.
+    uint64_t *tf = (uint64_t *)(kernel_stack_top(slot) - TRAPFRAME_WORDS * 8);
+    for (int i = 0; i < TRAPFRAME_WORDS; i++) tf[i] = regs[i];
+    tf[TF_RAX] = 0;
+
+    procs[slot].pml4_phys  = as;
+    procs[slot].kernel_rsp = (uint64_t)tf;
+    kstack_arm_slot(slot);
+    fpu_save(procs[slot].fpu);
+    procs[slot].wait_chan   = 0;
+    procs[slot].wait_reason = 0;
+    procs[slot].wake_at_ns  = 0;
+    procs[slot].tgid     = slot + 1;
+    procs[slot].fs_base  = procs[caller].fs_base;
+    procs[slot].detached = 0;
+    fd_clone(as, procs[leader].pml4_phys);
+    procs[slot].ppid = leader + 1;
+    signal_state_reset(slot);
+    for (int i = 0; i <= SIGNAL_MAX; i++)
+        procs[slot].actions[i] = procs[caller].actions[i];
+    procs[slot].blocked = procs[caller].blocked;
+    procs[slot].syscall_reissue = 0;
+    procs[slot].ready   = 0;
+    procs[slot].pgid    = procs[leader].pgid;
+    k_strlcpy(procs[slot].name, procs[leader].name, sizeof procs[slot].name);
+    k_strlcpy(procs[slot].exec_path, procs[leader].exec_path,
+              sizeof procs[slot].exec_path);
+    procs[slot].cpu_ns = 0;
+    k_memcpy(&procs[slot].mm, &procs[leader].mm, sizeof procs[slot].mm);
+    k_memcpy(&procs[slot].cwd, &procs[leader].cwd, sizeof procs[slot].cwd);
+    procs[slot].state = SCHED_READY;
+    alive_count++;
+    return slot + 1;
+}
+
+// --- exec ------------------------------------------------------------
+//
+// The caller's slot keeps its pid, parent, group, cwd and descriptors
+// and gets a new image. THE NEW ADDRESS SPACE IS BUILT BEFORE THE OLD
+// ONE IS TOUCHED, so a program that cannot be loaded is reported to a
+// caller that still exists (POSIX: exec fails in place). Everything
+// keyed by the old address space is either re-keyed (descriptors, the
+// trace) or dropped through the same hooks an exit uses (shared
+// mappings, the wakeword, windows, sound) -- an exec'd program has no
+// idea it holds any of them. Returns 0 into a rewritten trapframe, or
+// -errno with nothing changed.
+int scheduler_exec(const char *path, const char *argvec, size_t argvec_len,
+                   const char *env, uint64_t *regs) {
+    if (current_index < 0) return -EPERM;
+    int me = current_index;
+    if (is_thread(me)) {
+        // POSIX makes the exec'ing thread the leader, pid and all. Not
+        // worth a second exit path: refuse, loudly.
+        klog_printf("exec: refused from thread %d -- only a process may exec\n", me + 1);
+        return -EPERM;
+    }
+    uint64_t as = 0, entry = 0, user_rsp = 0, image_end = 0;
+    if (!build_image(path, argvec, argvec_len, env, &as, &entry, &user_rsp, &image_end))
+        return -ENOENT;
+
+    uint64_t old = procs[me].pml4_phys;
+    group_release_threads(me);
+    strace_rekey(old, as);
+    fd_rekey(old, as);
+    proc_syscall_release(old);
+    win_server_client_gone(me + 1);
+    diag_provider_gone(me + 1);
+    sound_process_gone(old);
+    shm_process_gone(old);
+    futex_wakeword_release(old);
+
+    // A caught signal goes back to its default; an ignored one stays
+    // ignored (POSIX). The pending set and the blocked mask are kept.
+    for (int i = 0; i <= SIGNAL_MAX; i++)
+        if (procs[me].actions[i].handler > SIG_IGN)
+            procs[me].actions[i] = (struct k_sigaction){ 0, 0, 0, 0 };
+    procs[me].syscall_reissue = 0;
+    procs[me].ready = 0;
+    procs[me].fs_base = 0;
+    arch_set_fs_base(0);            // this return does not go through switch_to()
+    fpu_init_state(procs[me].fpu);
+    fpu_restore(procs[me].fpu);     // ...so the CPU's state is loaded here too
+    mm_reset(me, image_end);
+    proc_name_from_path(procs[me].name, sizeof procs[me].name, path);
+    k_strlcpy(procs[me].exec_path, path ? path : "", sizeof procs[me].exec_path);
+
+    // The caller's own trapframe, rewritten: it resumes at the new
+    // image's entry with every register clear, as a spawn's first frame.
+    for (int i = 0; i < TF_VECTOR; i++) regs[i] = 0;
+    regs[TF_RIP]    = entry;
+    regs[TF_CS]     = SEL_USER_CODE;
+    regs[TF_RFLAGS] = 0x200;
+    regs[TF_RSP]    = user_rsp;
+    regs[TF_SS]     = SEL_USER_DATA;
+
+    procs[me].pml4_phys = as;
+    vmm_switch_address_space(as);   // CR3 first -- see vmm_destroy_address_space()
+    vmm_destroy_address_space(old);
+    return 0;
 }
 
 // One THREAD ends; the process does not.

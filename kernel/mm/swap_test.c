@@ -465,3 +465,29 @@ KTEST("swap", "a process that dies swapped gives its slots back") {
     KTEST_ASSERT_EQ(used_swapped, used_before + 3);
     KTEST_ASSERT_EQ(used_after, used_before);
 }
+
+// A swapped page has no frame to share, and fork's walk refuses rather
+// than guessing (docs/fork-design.md): the child must be gone, the
+// parent whole, and the slot still the parent's to give back.
+KTEST("swap", "fork refuses an address space with a swapped page") {
+    struct scratch s;
+    if (!scratch_begin(&s)) { scratch_end(&s); KTEST_SKIP("no scratch disk"); }
+    const char *why = "";
+    int on = swap_format(blk_active(), &why) && swap_on(blk_active(), &why);
+    uint64_t parent = on ? vmm_create_address_space() : 0;
+    uint64_t f = parent ? pmm_alloc_frame(PMM_ZONE_ANY) : 0;
+    int mapped = f && vmm_map_user_page(parent, UADDR_IMAGE_BASE, f);
+    uint32_t slot = mapped ? swap_slot_alloc() : 0;
+    int swapped = slot && swap_write_page(slot, f) &&
+                  vmm_set_swap_entry(parent, UADDR_IMAGE_BASE, slot);
+    uint64_t before = pmm_free_frames();
+    uint64_t child = swapped ? vmm_fork_address_space(parent, 0) : 0;
+    uint64_t after = pmm_free_frames();
+    uint32_t still = swapped ? vmm_swap_entry(parent, UADDR_IMAGE_BASE) : 0;
+    if (parent) vmm_destroy_address_space(parent); // gives the slot back
+    scratch_end(&s);
+    KTEST_ASSERT(swapped);
+    KTEST_ASSERT_EQ(child, 0ull);
+    KTEST_ASSERT_EQ(after, before);
+    KTEST_ASSERT_EQ(still, slot);
+}

@@ -135,6 +135,7 @@ struct vmm_audit {
     // below. Counted rather than skipped so that "the audit found
     // nothing" and "the audit could not look" are different answers.
     uint64_t swapped;
+    uint64_t cow;             // copy-on-write leaves: shared after a fork, W cleared
     uint64_t dangling;        // present mappings of a FREE frame -- the violation
     uint64_t first_bad_va;    // where the first one was, for reporting
     uint64_t first_bad_frame;
@@ -263,9 +264,43 @@ int vmm_validate_user_range(uint64_t pml4_phys, uint64_t vaddr, uint64_t len);
 typedef int (*vmm_fault_fn)(uint64_t pml4_phys, uint64_t vaddr);
 void vmm_set_fault_handler(vmm_fault_fn fn);
 
-// Asks the registered handler to fault `vaddr` in. 0 when there is no
-// handler, which is what every path saw before demand paging existed.
-int vmm_fault_in(uint64_t pml4_phys, uint64_t vaddr);
+// Asks for `vaddr` to be made accessible. `err` is the #PF error code
+// (0 from a walk that found nothing): a fault on a page that is already
+// PRESENT is answered only when it is a WRITE to a copy-on-write page,
+// and never handed to the registered handler -- whose heap branch would
+// map a zeroed frame over live data. 0 means the access stays fatal.
+int vmm_fault_in(uint64_t pml4_phys, uint64_t vaddr, uint64_t err);
+
+// --- fork: sharing one address space's pages with a second ------------
+//
+// See docs/fork-design.md. The child gets every present leaf of the
+// parent: a read-only page shared outright, a writable one shared with
+// W cleared and PAGE_COW set IN BOTH, the frame's refcount raised. A
+// BORROWED leaf is repeated only where the caller says so.
+struct vmm_fork_opts {
+    // Frames the KERNEL holds a physical pointer into -- a futex word a
+    // thread of the parent is parked on, its wakeword. Copied EAGERLY
+    // so the parent never un-shares them and the pointer stays true.
+    const uint64_t *pinned;
+    int             npinned;
+    // Whether the BORROWED leaf at `va` is repeated in the child (a
+    // shared-memory or file-cache mapping the caller re-references) or
+    // skipped (a window buffer, a grant -- capabilities of the parent).
+    int  (*inherit_borrowed)(void *ctx, uint64_t va);
+    void  *ctx;
+};
+
+// A new PML4 sharing `parent`'s pages, or 0. REFUSES a parent with a
+// swapped or huge leaf (logged) rather than guessing what a copy of
+// either means. On any failure the half-built child is destroyed and
+// the parent is left consistent -- some of its pages COW with one owner,
+// which the next write quietly restores.
+uint64_t vmm_fork_address_space(uint64_t parent, const struct vmm_fork_opts *o);
+
+// Makes the COW page at `vaddr` private and writable again: the last
+// owner just gets W back, anyone else gets a copy. 1 if it did, 0 if
+// the page is not COW or no frame could be had.
+int vmm_cow_break(uint64_t pml4_phys, uint64_t vaddr);
 
 // **The ONLY sanctioned way for kernel code to touch user memory.**
 //

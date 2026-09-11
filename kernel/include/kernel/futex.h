@@ -28,5 +28,9 @@ void futex_note_ready(int pid);
 // word is a user page; a stale physical address here would be a write
 // into whatever the allocator handed out next.
 void futex_wakeword_release(uint64_t pml4_phys);
+// The frame a process's wakeword lives in (0 for none) -- what a fork
+// must copy eagerly rather than share, since this file writes to it by
+// physical address.
+uint64_t futex_wakeword_phys(int pid);
 
 #endif

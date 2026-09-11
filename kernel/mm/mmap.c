@@ -290,6 +290,23 @@ static uint64_t imgcache_get(const char *path, uint64_t off) {
     return frame;
 }
 
+int mmap_inherits_at(void *mm, uint64_t va) {
+    struct mmap_region *r = region_of((struct sched_mm *)mm, va);
+    return r && (r->kind == MMAP_KIND_SHM || r->kind == MMAP_KIND_FILE);
+}
+
+int mmap_inherit_shm(uint64_t child_pml4, const struct sched_mm *mm) {
+    for (int i = 0; i < MMAP_MAX_REGIONS; i++) {
+        const struct mmap_region *r = &mm->regions[i];
+        if (!r->base || r->kind != MMAP_KIND_SHM) continue;
+        if (shm_map_add(child_pml4, r->shm_idx, r->base, r->npages) < 0) {
+            shm_process_gone(child_pml4); // drops what this loop took
+            return -ENOMEM;
+        }
+    }
+    return 0;
+}
+
 int mmap_fault_in(struct sched_mm *mm, uint64_t pml4_phys, uint64_t vaddr) {
     uint64_t page = vaddr & ~0xFFFULL;
     struct mmap_region *r = region_of(mm, page);

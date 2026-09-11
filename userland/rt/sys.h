@@ -156,6 +156,13 @@ int     sys_fstat(int fd, struct sys_stat *out);
 // table SLOT, so a process had no way to find its own row -- which is
 // what clock() needs to read its own cpu_ns.
 int     sys_getpid(void);
+// fork(): the child's pid, 0 in the child, -1 with errno (EPERM under
+// the legacy loader, EAGAIN with no free slot, ENOMEM). See unistd.h.
+int     sys_fork(void);
+// execve(): replace this program with `path`. `argv` is NULL-terminated
+// (NULL = {path}); `envp` likewise (NULL = an empty environment). Does
+// not return on success; -1 with errno otherwise, the program intact.
+int     sys_execve(const char *path, char *const argv[], char *const envp[]);
 
 // --- thread-local storage (userland/rt/tls.c) ------------------------
 //

@@ -11,13 +11,12 @@
 // link error says "this program needs something this OS does not have",
 // which is exactly true and exactly what a porter needs to read.
 //
-// So there is no fork/exec/pipe2/select/poll here, and sleep() is here
-// but cannot be INTERRUPTED by a signal -- it returns 0 always, rather
-// than POSIX's seconds-remaining, because there is no case in which
-// that number could be anything else. SYS_SPAWN is posix_spawn-shaped
-// rather than fork-shaped, deliberately (docs/init-design.md), and
-// pretending otherwise in a header is how that decision would get
-// quietly reversed.
+// So there is no pipe2/select/poll here, and sleep() is here but cannot
+// be INTERRUPTED by a signal -- it returns 0 always, rather than POSIX's
+// seconds-remaining, because there is no case in which that number
+// could be anything else. fork() and exec*() ARE here (below), built
+// for a ported shell; SYS_SPAWN and <spawn.h> stay the way a program
+// written for toy-os starts another (docs/fork-design.md).
 #include <stddef.h>
 #include <stdint.h>
 #include "rt/sys.h"
@@ -80,11 +79,19 @@ static inline int isatty(int fd) {
 // --- processes --------------------------------------------------------
 
 static inline pid_t getpid(void)                  { return sys_getpid(); }
+pid_t getppid(void);   // 0 for a process the kernel started
 
-// THERE IS NO fork(). SYS_SPAWN is posix_spawn-shaped, which is a
-// decision with its own entry in docs/decisions.md rather than a gap --
-// so there is no exec* family either, and nothing here pretends
-// otherwise. Use sys_spawn()/sys_spawn_env() in "rt/sys.h".
+// fork() and exec*() exist for the program that cannot be written any
+// other way -- a ported POSIX shell. Everything else should keep using
+// sys_spawn()/posix_spawn(): one syscall, no address-space copy, and the
+// child's streams and group named up front (docs/fork-design.md).
+// A fork shares memory copy-on-write and copies the WHOLE descriptor
+// table (there is no CLOEXEC); an exec keeps the descriptors, the cwd,
+// the group and the parent, and resets caught signals.
+static inline pid_t fork(void)                    { return sys_fork(); }
+int execve(const char *path, char *const argv[], char *const envp[]);
+int execv(const char *path, char *const argv[]);   // environ
+int execvp(const char *file, char *const argv[]);  // PATH walk, then environ
 
 static inline int pipe(int fds[2])                { return sys_pipe(fds); }
 static inline int setpgid(pid_t pid, pid_t pgid)  { return sys_setpgid(pid, pgid); }

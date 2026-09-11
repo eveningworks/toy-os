@@ -71,9 +71,9 @@ here, and this one serves code that has not been written yet.
 **What is still absent is absent for a REASON, not for lack of time**,
 and each says so in its header:
 
-- **`fork`/`exec`** -- toy-os's process model is `posix_spawn`-shaped on
-  purpose (`docs/init-design.md`). A `fork()` here would be a lie about
-  the kernel, not a convenience.
+- ~~**`fork`/`exec`**~~ -- present since 2026-09-11 (`docs/fork-design.md`),
+  built for a ported shell; `posix_spawn()` (`<spawn.h>`) over
+  `SYS_SPAWN` is still what everything else should call.
 - **locales and wide characters** -- listed as deliberately not pursued
   in `docs/roadmap-details.md`. **Threads came off this list**
   (2026-08-26): `<pthread.h>` is here now, over the kernel's four thread

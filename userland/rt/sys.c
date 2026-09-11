@@ -342,6 +342,7 @@ long long sys_lseek(int fd, long long offset, int whence) {
 }
 
 int sys_getpid(void) { return (int)syscall0(SYS_GETPID); }
+int sys_fork(void)   { return (int)err(syscall0(SYS_FORK)); }
 int sys_notify_ready(void) { return (int)err(syscall0(SYS_NOTIFY_READY)); }
 
 // --- the environment --------------------------------------------------
@@ -909,6 +910,29 @@ int sys_spawn_opts(const char *path, const struct sys_spawn_opts *o) {
 // `pid` may be -1 for "any child of mine" (SYS_WAITPID's ABI comment).
 // Note the -1 RETURN then means "no children at all", which is
 // permanent -- looping on it waits for something that cannot happen.
+// SYS_EXEC takes SYS_SPAWN's message; the child-only fields stay at
+// their "none" values, which the kernel insists on.
+int sys_execve(const char *path, char *const argv[], char *const envp[]) {
+    if (!flatten_env(envp)) { g_errno = E2BIG; return -1; }
+    struct spawn_msg msg;
+    msg.path = path;
+    msg.args = 0;
+    msg.args_len = 0;
+    msg.flags = 0;
+    if (argv && argv[0]) {
+        size_t len = flatten_argv(argv);
+        if (!len) { g_errno = E2BIG; return -1; }
+        msg.args = g_argblob;
+        msg.args_len = (uint32_t)len;
+        msg.flags = SPAWN_ARGV;
+    }
+    msg.env = g_envblob;
+    msg.stdout_fd = -1;
+    msg.stdin_fd = -1;
+    msg.pgid = 0;
+    return (int)err(syscall1(SYS_EXEC, (uint64_t)(uintptr_t)&msg));
+}
+
 int sys_waitpid(int pid, int *out_code) {
     int64_t r;
     // Same retry contract as sys_wait_event(): a 0 return means the

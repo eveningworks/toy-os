@@ -38,10 +38,20 @@ void pmm_init(void);
 // (and marks it used), or 0 if none are left there.
 uint64_t pmm_alloc_frame(enum pmm_zone zone);
 
-// Marks a frame as free again. `phys_addr` should be a value previously
-// returned by pmm_alloc_frame() -- freeing an address pmm doesn't
-// recognize as an allocated frame is a no-op.
+// Drops one REFERENCE to a frame, and frees it when the last one goes.
+// A fresh allocation holds one, pmm_frame_ref() adds one, so for every
+// caller that never shares a frame this is the plain "free" it always
+// was. Freeing an address pmm doesn't recognize as an allocated frame
+// is a no-op -- logged, since it is the shape a double free takes.
 void pmm_free_frame(uint64_t phys_addr);
+
+// A SECOND OWNER of a frame -- a copy-on-write share, a page two
+// address spaces map. Each owner's pmm_free_frame() drops one; the
+// frame goes back to the pool at zero. A reserved frame (the image, the
+// books) carries no count and cannot be shared.
+void pmm_frame_ref(uint64_t phys_addr);
+// How many owners a frame has: 0 for a free or reserved frame.
+unsigned pmm_frame_refs(uint64_t phys_addr);
 
 // Returns the physical address of the first frame of `count` physically
 // CONTIGUOUS free 4KiB frames (marking all of them used), or 0 if no

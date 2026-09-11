@@ -186,6 +186,13 @@ int  fd_set_desc(uint64_t pml4, int fd, int di);
 // description. What a spawned process inherits, and the reason a shell
 // can redirect a child without running code in it.
 void fd_inherit(uint64_t child, uint64_t parent);
+// A fork's table: the parent's WHOLE table, every description shared.
+// Unix's rule, and safe here only because a fork has a child side that
+// can close what it must not keep (docs/fork-design.md).
+void fd_clone(uint64_t child, uint64_t parent);
+// An exec's table: the same descriptors, now keyed by the new address
+// space. Nothing is opened or closed.
+void fd_rekey(uint64_t old_pml4, uint64_t new_pml4);
 
 // --- what a dying process leaves behind ------------------------------
 //
@@ -287,6 +294,8 @@ int sys_tcgetattr(struct syscall_ctx *c);
 int sys_tcsetattr(struct syscall_ctx *c);
 int sys_proc_info(struct syscall_ctx *c);
 int sys_getpid(struct syscall_ctx *c);
+int sys_fork(struct syscall_ctx *c);
+int sys_exec(struct syscall_ctx *c);
 int sys_gettid(struct syscall_ctx *c);
 int sys_thread_create(struct syscall_ctx *c);
 int sys_thread_exit(struct syscall_ctx *c);

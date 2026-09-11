@@ -286,6 +286,29 @@ void fd_inherit(uint64_t child, uint64_t parent) {
     }
 }
 
+void fd_clone(uint64_t child, uint64_t parent) {
+    if (!child) return;
+    struct fd_space *ps = parent ? space_find(parent) : NULL;
+    if (fd_space_open(child) < 0) return;
+    struct fd_space *cs = space_find(child);
+    if (!cs || !ps) return;
+    for (int i = 0; i < FD_MAX; i++) {
+        if (cs->d[i] >= 0) { fd_desc_unref(cs->d[i]); cs->d[i] = -1; }
+        int di = ps->d[i];
+        if (di < 0 || !fd_desc[di].refs) continue;
+        fd_desc[di].refs++;
+        cs->d[i] = (short)di;
+    }
+}
+
+void fd_rekey(uint64_t old_pml4, uint64_t new_pml4) {
+    struct fd_space *sp = space_find(old_pml4);
+    if (!sp || !new_pml4) return;
+    // The console claim follows the process, not the tables.
+    if (g_console_owner_pml4 == old_pml4) g_console_owner_pml4 = new_pml4;
+    sp->pml4 = new_pml4;
+}
+
 // Returns 1 if the caller was PARKED (its syscall has no return value
 // yet -- the wake writes it), 0 otherwise. That is the one thing the
 // dispatcher still needs to know, so it is the return value rather than

@@ -392,6 +392,12 @@ int sys_yield(struct syscall_ctx *c) {
     return 0;
 }
 
+int sys_fork(struct syscall_ctx *c) {
+    int r = scheduler_fork(c->regs);
+    c->regs[14] = (uint64_t)(int64_t)r;
+    return 0;
+}
+
 int sys_getpid(struct syscall_ctx *c) {
     // THE PROCESS, not the thread: every thread of one program answers
     // the same pid, which is what getpid() means and what SYS_GETTID is
@@ -509,24 +515,94 @@ static int spawn_std_desc(uint64_t pml4, int fd, enum fd_kind want) {
     return fd_desc_index(pml4, fd);
 }
 
+// The three things a program is started with -- path, argument vector,
+// environment -- copied out of the caller's address space into memory
+// the kernel owns, for a spawn and for an exec alike (an exec's copies
+// outlive the address space they came from). `envbuf`/`argbuf` are
+// kmalloc'd, on the heap for the reason SYS_ENV_MAX and SPAWN_ARGS_MAX
+// give: neither belongs on a 16 KiB kernel stack, and a STATIC buffer
+// held across an ELF load would be overwritten by a concurrent spawn.
+// 0 or -errno; on an error nothing is held.
+struct spawn_args {
+    char        path[FS_PATH_MAX];
+    char       *envbuf;
+    const char *env;
+    char       *argbuf;
+    const char *args;
+    size_t      args_len;
+};
+
+static void spawn_args_free(struct spawn_args *a) {
+    if (a->envbuf) kfree(a->envbuf);
+    if (a->argbuf) kfree(a->argbuf);
+    a->envbuf = a->argbuf = 0;
+}
+
+static int spawn_args_collect(uint64_t pml4, const struct spawn_msg *msg,
+                              struct spawn_args *a, const char *who) {
+    k_memset(a, 0, sizeof *a);
+    if (msg->env) {
+        a->envbuf = kmalloc(SYS_ENV_MAX);
+        if (!a->envbuf) return -ENOMEM;
+        if (!copy_env_from_user(pml4, (uint64_t)(uintptr_t)msg->env, a->envbuf, SYS_ENV_MAX)) {
+            klog_printf("syscall: %s() rejected -- bad or oversized environment\n", who);
+            spawn_args_free(a);
+            return -EINVAL;
+        }
+        a->env = a->envbuf;
+    }
+    if (!vmm_copy_string_from_user(pml4, a->path, (uint64_t)(uintptr_t)msg->path, FS_PATH_MAX)) {
+        klog_printf("syscall: %s() rejected -- invalid path pointer\n", who);
+        spawn_args_free(a);
+        return -EFAULT;
+    }
+    // `args` becomes the VECTOR the loader carries. With SPAWN_ARGV it
+    // arrives as one (copied like the environment, and refused past the
+    // cap or without its final NUL); otherwise the string form is split
+    // here -- the ring-3 edge is the one place that happens. NOTE the
+    // string form TRUNCATES rather than rejects an over-long argument
+    // (vmm_copy_string_from_user() terminates at max-1).
+    // `args_len` is READ ONLY WITH THE FLAG: a binary built before the
+    // field existed passes a shorter struct.
+    int bad = 0;
+    if ((msg->flags & SPAWN_ARGV) &&
+        (!msg->args || msg->args_len == 0 || msg->args_len > SPAWN_ARGS_MAX)) {
+        bad = 1;
+    } else if (msg->args) {
+        a->argbuf = kmalloc(SPAWN_ARGS_MAX + FS_PATH_MAX);
+        if (!a->argbuf) {
+            bad = 1;
+        } else if (msg->flags & SPAWN_ARGV) {
+            if (vmm_copy_from_user(pml4, a->argbuf, (uint64_t)(uintptr_t)msg->args, msg->args_len) &&
+                a->argbuf[msg->args_len - 1] == '\0') {
+                a->args = a->argbuf;
+                a->args_len = msg->args_len;
+            } else {
+                bad = 1;
+            }
+        } else {
+            char *str = kmalloc(SPAWN_ARGS_MAX);
+            if (str && vmm_copy_string_from_user(pml4, str, (uint64_t)(uintptr_t)msg->args,
+                                                 SPAWN_ARGS_MAX) &&
+                elf_argv_from_string(a->path, str, a->argbuf, SPAWN_ARGS_MAX + FS_PATH_MAX,
+                                     &a->args_len))
+                a->args = a->argbuf;
+            else
+                bad = 1;
+            if (str) kfree(str);
+        }
+    }
+    if (bad) {
+        klog_printf("syscall: %s() rejected -- bad or oversized arguments\n", who);
+        spawn_args_free(a);
+        return -EINVAL;
+    }
+    return 0;
+}
+
 int sys_spawn(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     int64_t spawn_rc = -ENOENT; // no such program, unless something below says otherwise
-    char path[FS_PATH_MAX];
-    char *argbuf = 0;
-    // ON THE HEAP, for both of the reasons the environment below is:
-    // SPAWN_ARGS_MAX does not belong on a 16 KiB kernel stack, and a
-    // STATIC buffer would be worse than either. `args` points into it
-    // and is held across the ELF load -- two fs_read()s and per-frame
-    // allocation, none of it under a preemption guard -- so one static
-    // buffer means a second process spawning concurrently overwrites
-    // the first's arguments and its child is launched with them.
-    //
-    // NOTE the STRING form's copy TRUNCATES rather than rejects:
-    // vmm_copy_string_from_user() terminates at max-1 and returns 1, so
-    // an over-long argument string reaches the child shortened. The
-    // VECTOR form (SPAWN_ARGV) carries its length and is refused past
-    // SPAWN_ARGS_MAX.
 
     // The message struct, copied whole before anything in it is
     // trusted -- see abi/syscall_abi.h for why spawn outgrew three
@@ -561,146 +637,104 @@ int sys_spawn(struct syscall_ctx *c) {
         return 0;
     }
 
-    // The environment lives on the HEAP, not this frame: SYS_ENV_MAX is
-    // 2 KiB and syscall_dispatch()'s frame is already the one this
-    // kernel measures (see CLAUDE.md's note on -fstack-usage).
-    char *envbuf = 0;
-    const char *env = 0;
-    if (msg.env) {
-        envbuf = kmalloc(SYS_ENV_MAX);
-        if (!envbuf) {
-            c->regs[14] = (uint64_t)(int64_t)-ENOMEM;
-            return 0;
-        }
-        if (!copy_env_from_user(pml4, (uint64_t)(uintptr_t)msg.env, envbuf, SYS_ENV_MAX)) {
-            klog_write("syscall: spawn() rejected -- bad or oversized environment\n");
-            kfree(envbuf);
-            c->regs[14] = (uint64_t)(int64_t)-EINVAL;
-            return 0;
-        }
-        env = envbuf;
+    struct spawn_args a;
+    int rc = spawn_args_collect(pml4, &msg, &a, "spawn");
+    if (rc < 0) {
+        c->regs[14] = (uint64_t)(int64_t)rc;
+        return 0;
     }
 
-    if (!vmm_copy_string_from_user(pml4, path, (uint64_t)(uintptr_t)msg.path, FS_PATH_MAX)) {
-        klog_write("syscall: spawn() rejected -- invalid path pointer\n");
-        spawn_rc = -EFAULT;
-    } else {
-        // `args` becomes the VECTOR spawn_from_fs() carries. With
-        // SPAWN_ARGV it arrives as one (copied like the environment,
-        // with the same "must end" check); otherwise the string form is
-        // split here -- the ring-3 edge is the one place that happens.
-        // `args_len` is READ ONLY WITH THE FLAG. A binary built before the
-        // field existed passes a shorter struct, and the bytes past it
-        // are whatever its stack held -- refusing on them is how a
-        // machine with a new kernel and one old program stops spawning.
-        const char *args = 0;
-        size_t args_len = 0;
-        int args_bad = 0;
-        if ((msg.flags & SPAWN_ARGV) &&
-            (!msg.args || msg.args_len == 0 || msg.args_len > SPAWN_ARGS_MAX)) {
-            args_bad = 1;   // the flag with no vector, or one past the cap
-        } else if (msg.args) {
-            argbuf = kmalloc(SPAWN_ARGS_MAX + FS_PATH_MAX);
-            if (!argbuf) {
-                args_bad = 1;
-            } else if (msg.flags & SPAWN_ARGV) {
-                // Exactly `args_len` bytes, the last of which must be a
-                // NUL -- a vector whose final entry runs off its end is
-                // refused, not closed for the caller.
-                if (vmm_copy_from_user(pml4, argbuf, (uint64_t)(uintptr_t)msg.args,
-                                       msg.args_len) &&
-                    argbuf[msg.args_len - 1] == '\0') {
-                    args = argbuf;
-                    args_len = msg.args_len;
-                } else {
-                    args_bad = 1;
-                }
-            } else {
-                char *str = kmalloc(SPAWN_ARGS_MAX);
-                if (str && vmm_copy_string_from_user(pml4, str,
-                                                     (uint64_t)(uintptr_t)msg.args,
-                                                     SPAWN_ARGS_MAX) &&
-                    elf_argv_from_string(path, str, argbuf, SPAWN_ARGS_MAX + FS_PATH_MAX,
-                                         &args_len))
-                    args = argbuf;
-                else
-                    args_bad = 1;
-                if (str) kfree(str);
-            }
-        }
-        if (args_bad) {
-            klog_write("syscall: spawn() rejected -- bad or oversized arguments\n");
-            if (envbuf) kfree(envbuf);
-            if (argbuf) kfree(argbuf);
-            c->regs[14] = (uint64_t)(int64_t)-EINVAL;
-            return 0;
-        }
-
-        // The child's stdin/stdout overrides, as DESCRIPTION indices
-        // rather than pipe indices: the child's fd will simply name the
-        // same open file, which is the general mechanism and not a pipe
-        // special case. An fd that isn't one of the kinds below is
-        // REFUSED rather than quietly ignored -- spawning with console
-        // output instead would leave the parent blocked on a pipe
-        // nothing will ever write to.
-        //
-        // THE TEST IS `!= -1`, NOT `>= 0`: -1 is the only value meaning
-        // "the console", and every other negative is a sentinel or a
-        // mistake. Written as `>= 0` it silently swallowed
-        // SPAWN_FD_LOG, so a service spawned onto the log printed to the
-        // console with nothing refused and nothing logged.
-        int stdout_desc = -1, stdin_desc = -1;
-        int ok = 1;
-        if (msg.stdout_fd != -1) {
-            stdout_desc = spawn_std_desc(pml4, (int)msg.stdout_fd, FD_KIND_PIPE_W);
-            if (stdout_desc < 0) {
-                klog_write("syscall: spawn() rejected -- stdout fd isn't this process's pipe write end or socket\n");
-                spawn_rc = -EBADF;
-                ok = 0;
-            }
-        }
-        if (ok && msg.stdin_fd != -1) {
-            stdin_desc = spawn_std_desc(pml4, (int)msg.stdin_fd, FD_KIND_PIPE_R);
-            if (stdin_desc < 0) {
-                klog_write("syscall: spawn() rejected -- stdin fd isn't this process's pipe read end or socket\n");
-                spawn_rc = -EBADF;
-                ok = 0;
-            }
-        }
-        if (ok) {
-            // No pipe_add_writer() here any more: the child taking a
-            // reference to the DESCRIPTION is what makes it a second
-            // writer, and fd_set_desc() does that. Doing both counted
-            // the child twice, so the pipe never reached EOF.
-            // scheduler_spawn_piped() reports one failure value for
-            // "no such file", "not an ELF" and "no free slot" alike, so
-            // the code stays the default ENOENT rather than inventing a
-            // distinction the layer below does not make. Splitting it
-            // means giving that function a reason to return first.
-            // 0 = inherit the caller's group, which is what every
-            // spawn that predates process groups passes.
-            // TRACING IS ARMED HERE AND CONSUMED BY THE SPAWN ITSELF.
-            // The arm records THIS process (kernel/strace.h), so the
-            // window between these two lines is not a race: nobody
-            // else's spawn can collect it. The disarm covers the spawn
-            // having failed before an address space existed.
-            if (msg.flags & SPAWN_TRACE) strace_arm_for_current();
-            int pid = scheduler_spawn_group(path, args, args_len, stdout_desc,
-                                             stdin_desc, env, msg.pgid, c->pml4);
-            strace_disarm();
-            if (pid > 0) spawn_rc = pid;
-            // SPAWN_FOREGROUND: the child's group in front of OUR fd 0,
-            // before the child can possibly read -- it is this syscall
-            // that creates it, so there is no window. Failure is a
-            // no-op by contract (not a terminal, not the owner): the
-            // after-the-fact tcsetpgrp this replaces behaved the same.
-            if (pid > 0 && (msg.flags & SPAWN_FOREGROUND))
-                tty_set_fg_pgid(fd_tty(pml4, 0), scheduler_pgid(pid));
+    // The child's stdin/stdout overrides, as DESCRIPTION indices
+    // rather than pipe indices: the child's fd will simply name the
+    // same open file, which is the general mechanism and not a pipe
+    // special case. An fd that isn't one of the kinds below is
+    // REFUSED rather than quietly ignored -- spawning with console
+    // output instead would leave the parent blocked on a pipe
+    // nothing will ever write to.
+    //
+    // THE TEST IS `!= -1`, NOT `>= 0`: -1 is the only value meaning
+    // "the console", and every other negative is a sentinel or a
+    // mistake. Written as `>= 0` it silently swallowed
+    // SPAWN_FD_LOG, so a service spawned onto the log printed to the
+    // console with nothing refused and nothing logged.
+    int stdout_desc = -1, stdin_desc = -1;
+    int ok = 1;
+    if (msg.stdout_fd != -1) {
+        stdout_desc = spawn_std_desc(pml4, (int)msg.stdout_fd, FD_KIND_PIPE_W);
+        if (stdout_desc < 0) {
+            klog_write("syscall: spawn() rejected -- stdout fd isn't this process's pipe write end or socket\n");
+            spawn_rc = -EBADF;
+            ok = 0;
         }
     }
-    if (envbuf) kfree(envbuf);
-    if (argbuf) kfree(argbuf);
+    if (ok && msg.stdin_fd != -1) {
+        stdin_desc = spawn_std_desc(pml4, (int)msg.stdin_fd, FD_KIND_PIPE_R);
+        if (stdin_desc < 0) {
+            klog_write("syscall: spawn() rejected -- stdin fd isn't this process's pipe read end or socket\n");
+            spawn_rc = -EBADF;
+            ok = 0;
+        }
+    }
+    if (ok) {
+        // No pipe_add_writer() here any more: the child taking a
+        // reference to the DESCRIPTION is what makes it a second
+        // writer, and fd_set_desc() does that. Doing both counted
+        // the child twice, so the pipe never reached EOF.
+        // scheduler_spawn_piped() reports one failure value for
+        // "no such file", "not an ELF" and "no free slot" alike, so
+        // the code stays the default ENOENT rather than inventing a
+        // distinction the layer below does not make. Splitting it
+        // means giving that function a reason to return first.
+        // 0 = inherit the caller's group, which is what every
+        // spawn that predates process groups passes.
+        // TRACING IS ARMED HERE AND CONSUMED BY THE SPAWN ITSELF.
+        // The arm records THIS process (kernel/strace.h), so the
+        // window between these two lines is not a race: nobody
+        // else's spawn can collect it. The disarm covers the spawn
+        // having failed before an address space existed.
+        if (msg.flags & SPAWN_TRACE) strace_arm_for_current();
+        int pid = scheduler_spawn_group(a.path, a.args, a.args_len, stdout_desc,
+                                         stdin_desc, a.env, msg.pgid, c->pml4);
+        strace_disarm();
+        if (pid > 0) spawn_rc = pid;
+        // SPAWN_FOREGROUND: the child's group in front of OUR fd 0,
+        // before the child can possibly read -- it is this syscall
+        // that creates it, so there is no window. Failure is a
+        // no-op by contract (not a terminal, not the owner): the
+        // after-the-fact tcsetpgrp this replaces behaved the same.
+        if (pid > 0 && (msg.flags & SPAWN_FOREGROUND))
+            tty_set_fg_pgid(fd_tty(pml4, 0), scheduler_pgid(pid));
+    }
+    spawn_args_free(&a);
     c->regs[14] = (uint64_t)(int64_t)spawn_rc;
+    return 0;
+}
+
+// An exec is a spawn into the caller's own slot, and takes the same
+// message so there is one shape (abi/syscall_abi.h). The fields that
+// only mean something for a CHILD are refused rather than ignored.
+int sys_exec(struct syscall_ctx *c) {
+    uint64_t pml4 = c->pml4;
+    struct spawn_msg msg;
+    if (!vmm_copy_from_user(pml4, &msg, c->a0, sizeof msg)) {
+        klog_write("syscall: exec() rejected -- invalid message pointer\n");
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    if (msg.stdin_fd != -1 || msg.stdout_fd != -1 || msg.pgid != 0 ||
+        (msg.flags & ~(uint32_t)SPAWN_ARGV)) {
+        klog_write("syscall: exec() rejected -- a stream, group or flag that only a child could take\n");
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+        return 0;
+    }
+    struct spawn_args a;
+    int rc = spawn_args_collect(pml4, &msg, &a, "exec");
+    if (rc == 0) rc = scheduler_exec(a.path, a.args, a.args_len, a.env, c->regs);
+    spawn_args_free(&a);
+    // On success the trapframe already holds the new image's entry and
+    // RAX is one of the registers it clears -- there is nobody to
+    // return a value to.
+    if (rc < 0) c->regs[14] = (uint64_t)(int64_t)rc;
     return 0;
 }
 

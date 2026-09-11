@@ -451,6 +451,10 @@ static void sink_write(const char *line) {
     klog_write(line);
 }
 
+void strace_rekey(uint64_t old_pml4, uint64_t new_pml4) {
+    if (g_traced_pml4 && g_traced_pml4 == old_pml4) g_traced_pml4 = new_pml4;
+}
+
 void strace_release(uint64_t pml4_phys) {
     if (!g_traced_pml4 || g_traced_pml4 != pml4_phys) return;
     g_traced_pml4 = 0;

@@ -17,4 +17,12 @@ struct sched_mm;
 // both stay fatal to the toucher.
 int mmap_fault_in(struct sched_mm *mm, uint64_t pml4_phys, uint64_t vaddr);
 
+// The two halves of a fork's view of the arena. `mmap_inherits_at` is
+// vmm_fork_opts.inherit_borrowed: a borrowed leaf inside a SHM or FILE
+// region is the child's too. `mmap_inherit_shm` takes the child's own
+// reference on every SHM object `mm` maps, so its teardown drops one
+// it holds; -ENOMEM leaves nothing taken.
+int mmap_inherits_at(void *mm, uint64_t va);
+int mmap_inherit_shm(uint64_t child_pml4, const struct sched_mm *mm);
+
 #endif

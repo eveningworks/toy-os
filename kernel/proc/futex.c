@@ -113,6 +113,11 @@ void futex_note_ready(int pid) {
     scheduler_wake_n((const void *)(uintptr_t)phys, 0, 0);
 }
 
+uint64_t futex_wakeword_phys(int pid) {
+    if (pid < 1 || pid > SCHED_MAX_PROCS) return 0;
+    return g_wakeword[pid - 1].phys & ~0xFFFULL;
+}
+
 void futex_wakeword_release(uint64_t pml4_phys) {
     for (int i = 0; i < SCHED_MAX_PROCS; i++)
         if (g_wakeword[i].pml4 == pml4_phys) {

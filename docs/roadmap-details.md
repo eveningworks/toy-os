@@ -614,6 +614,12 @@ a `fork()`-specific special case would mean writing it twice.
 
 ### `fork()`/`exec()`-style process model
 
+**BUILT 2026-09-11: `fork()`, `exec()` and copy-on-write are in**, and
+`docs/fork-design.md` is the design and the record of what each stage
+found. The breakdown below is kept as it was written; the first two
+items were the ones it got right, and "real PID allocation" is still
+open. Note `MAX_PROCS` is 64 now, not the 4 the text quotes.
+
 New milestone, lightly scoped. Today's only way to start a ring-3 process
 is `spawn_from_fs()`/`elf_run_from_fs()` -- load a fresh ELF from disk and
 jump straight to its entry point; there's no way for a running process to

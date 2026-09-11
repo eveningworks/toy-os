@@ -19,6 +19,35 @@ KTEST("mm", "pmm contiguous alloc/free (legacy selftest)") {
     KTEST_ASSERT(pmm_selftest() == 1);
 }
 
+// The refcount is what makes a frame shareable between two address
+// spaces (docs/fork-design.md): the last owner's free is the one that
+// frees. The double-free at the end is the case that was silent before
+// the count existed.
+KTEST("mm", "pmm frame refcount frees on the last drop") {
+    uint64_t before = pmm_free_frames();
+    uint64_t f = pmm_alloc_frame(PMM_ZONE_ANY);
+    KTEST_ASSERT(f != 0);
+    KTEST_ASSERT_EQ(pmm_frame_refs(f), 1u);
+    pmm_frame_ref(f);
+    KTEST_ASSERT_EQ(pmm_frame_refs(f), 2u);
+    pmm_free_frame(f);                       // one owner gone
+    KTEST_ASSERT_EQ(pmm_frame_refs(f), 1u);
+    KTEST_ASSERT(pmm_frame_is_used(f));
+    KTEST_ASSERT_EQ(pmm_free_frames(), before - 1);
+    pmm_free_frame(f);                       // the last one
+    KTEST_ASSERT_EQ(pmm_frame_refs(f), 0u);
+    KTEST_ASSERT(!pmm_frame_is_used(f));
+    KTEST_ASSERT_EQ(pmm_free_frames(), before);
+    pmm_free_frame(f);                       // a double free: no-op
+    KTEST_ASSERT_EQ(pmm_free_frames(), before);
+    // A contiguous run starts at one owner per frame too.
+    uint64_t run = pmm_alloc_contiguous(3, PMM_ZONE_DMA32);
+    KTEST_ASSERT(run != 0);
+    KTEST_ASSERT_EQ(pmm_frame_refs(run + 8192), 1u);
+    pmm_free_contiguous(run, 3);
+    KTEST_ASSERT_EQ(pmm_frame_refs(run), 0u);
+}
+
 // Needs a guest with more than 4 GiB (`ktest_run.py --mem 8192`); on
 // the ordinary 256 MiB boot it skips, and a skip is reported as one.
 // The FAIL branch is what a wrong cap looks like: the firmware map
@@ -112,6 +141,80 @@ KTEST("mm", "a user address space's page tables come from the high zone") {
     KTEST_ASSERT(vmm_user_phys(as, va) == frame);
 
     vmm_destroy_address_space(as); // frees the mapped frame too
+}
+
+// The copy-on-write walk behind fork() (docs/fork-design.md), on two
+// synthetic address spaces: a writable page is shared with W cleared
+// in BOTH and the frame counted twice; a read-only page is shared as it
+// is; the first write-side break copies, the last owner's break only
+// restores W. The pinned page is the futex case: copied eagerly so the
+// parent's frame -- which the kernel holds a pointer into -- never
+// changes under it.
+KTEST("mm", "fork shares pages copy-on-write and a write un-shares") {
+    uint64_t parent = vmm_create_address_space();
+    KTEST_ASSERT(parent != 0);
+    uint64_t va_rw = UADDR_IMAGE_BASE, va_ro = va_rw + 4096, va_pin = va_rw + 8192;
+    uint64_t f_rw = pmm_alloc_frame(PMM_ZONE_ANY), f_ro = pmm_alloc_frame(PMM_ZONE_ANY),
+             f_pin = pmm_alloc_frame(PMM_ZONE_ANY);
+    KTEST_ASSERT(f_rw && f_ro && f_pin);
+    *(volatile uint32_t *)(uintptr_t)f_rw = 0x11111111u;
+    *(volatile uint32_t *)(uintptr_t)f_pin = 0x33333333u;
+    KTEST_ASSERT(vmm_map_user_page(parent, va_rw, f_rw));
+    KTEST_ASSERT(vmm_map_user_page_flags(parent, va_ro, f_ro, 0, 0));
+    KTEST_ASSERT(vmm_map_user_page(parent, va_pin, f_pin));
+
+    uint64_t pinned[1] = { f_pin };
+    struct vmm_fork_opts o = { pinned, 1, 0, 0 };
+    uint64_t child = vmm_fork_address_space(parent, &o);
+    KTEST_ASSERT(child != 0);
+
+    // Shared, both sides, counted twice; the read-only one likewise.
+    KTEST_ASSERT_EQ(vmm_user_phys(child, va_rw), f_rw);
+    KTEST_ASSERT_EQ(vmm_user_phys(child, va_ro), f_ro);
+    KTEST_ASSERT_EQ(pmm_frame_refs(f_rw), 2u);
+    KTEST_ASSERT_EQ(pmm_frame_refs(f_ro), 2u);
+    struct vmm_audit a;
+    vmm_audit_space(parent, &a);
+    KTEST_ASSERT_EQ(a.cow, 1u);
+    vmm_audit_space(child, &a);
+    KTEST_ASSERT_EQ(a.cow, 1u);
+    // The pinned page was copied, not shared: the parent keeps its frame.
+    uint64_t f_pin_child = vmm_user_phys(child, va_pin);
+    KTEST_ASSERT(f_pin_child != 0 && f_pin_child != f_pin);
+    KTEST_ASSERT_EQ(pmm_frame_refs(f_pin), 1u);
+    KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f_pin_child, 0x33333333u);
+
+    // A write-side fault with the error code's write bit: the child gets
+    // its own copy, the parent's frame is untouched, one owner each.
+    KTEST_ASSERT(vmm_fault_in(child, va_rw, 2));
+    uint64_t f_child = vmm_user_phys(child, va_rw);
+    KTEST_ASSERT(f_child != 0 && f_child != f_rw);
+    KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f_child, 0x11111111u);
+    KTEST_ASSERT_EQ(pmm_frame_refs(f_rw), 1u);
+    KTEST_ASSERT_EQ(pmm_frame_refs(f_child), 1u);
+    // The parent is now the last owner: its break restores W in place.
+    KTEST_ASSERT(vmm_fault_in(parent, va_rw, 2));
+    KTEST_ASSERT_EQ(vmm_user_phys(parent, va_rw), f_rw);
+    vmm_audit_space(parent, &a);
+    KTEST_ASSERT_EQ(a.cow, 0u);
+    // A READ fault on a present page is nobody's to answer; nor is a
+    // write to the read-only page.
+    KTEST_ASSERT(!vmm_fault_in(parent, va_rw, 0));
+    KTEST_ASSERT(!vmm_fault_in(child, va_ro, 2));
+    // The kernel writing into the child's still-shared read-only page
+    // must refuse, and into the un-shared one must land privately.
+    uint32_t v = 0x22222222u;
+    KTEST_ASSERT(vmm_copy_to_user(child, va_rw, &v, sizeof v));
+    KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f_child, 0x22222222u);
+    KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f_rw, 0x11111111u);
+
+    vmm_destroy_address_space(child);
+    KTEST_ASSERT_EQ(pmm_frame_refs(f_ro), 1u);
+    KTEST_ASSERT(pmm_frame_is_used(f_ro));
+    vmm_destroy_address_space(parent);
+    KTEST_ASSERT(!pmm_frame_is_used(f_ro));
+    KTEST_ASSERT(!pmm_frame_is_used(f_rw));
+    KTEST_ASSERT(!pmm_frame_is_used(f_pin));
 }
 
 KTEST("mm", "a demand-paged mmap page comes from the high zone") {

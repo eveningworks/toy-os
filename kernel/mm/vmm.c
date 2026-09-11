@@ -2,6 +2,7 @@
 #include "pmm.h"
 #include "swap.h"
 #include "string.h" // k_memcpy() -- the user-copy helpers below
+#include "kfmt.h"   // klog_printf() -- the fork walk's refusals
 #include <stddef.h>
 
 // The kernel's own top-level page table, from boot.asm. Every process's
@@ -21,6 +22,12 @@ extern uint64_t p4_table[512];
 // CLEAR: the page is swapped out and the rest of the entry holds its
 // slot, not a frame. See the swap-entry section further down.
 #define PAGE_SWAPPED  (1ULL << 10)
+// The third: this leaf WAS writable and is shared with another address
+// space after a fork; a write fault copies (or, for the last owner,
+// restores W). Only ever set with PRESENT set and WRITABLE clear.
+#define PAGE_COW      (1ULL << 11)
+// #PF error-code bit 1: the access was a write.
+#define PF_WRITE      (1ULL << 1)
 #define PAGE_NX       (1ULL << 63) // requires EFER.NXE, set once in boot.asm
 // Selects PAT slot 4 (paging.c points it at write-combining at boot).
 // Bit 7 on a 4KiB PTE -- note that is the same bit PAGE_HUGE uses at the
@@ -327,15 +334,19 @@ static uint64_t swap_pte(uint32_t slot) {
 }
 
 // The page table holding `vaddr`, or NULL. Walks without creating: an
-// absent level means the address was never mapped.
+// absent level means the address was never mapped. USER is required at
+// every level and a huge leaf is refused, because this is asked about
+// ANY address a syscall was handed -- a low one lands in the kernel's
+// identity map, whose PD entries are 2 MiB leaves, and reading one as
+// a table would hand back RAM to be edited as PTEs.
 static uint64_t *pt_for(uint64_t pml4_phys, uint64_t vaddr) {
-    uint64_t *pml4 = table_at(pml4_phys);
-    if (!(pml4[(vaddr >> 39) & 0x1FF] & PAGE_PRESENT)) return 0;
-    uint64_t *pdpt = table_at(pml4[(vaddr >> 39) & 0x1FF] & ADDR_MASK);
-    if (!(pdpt[(vaddr >> 30) & 0x1FF] & PAGE_PRESENT)) return 0;
-    uint64_t *pd = table_at(pdpt[(vaddr >> 30) & 0x1FF] & ADDR_MASK);
-    if (!(pd[(vaddr >> 21) & 0x1FF] & PAGE_PRESENT)) return 0;
-    return table_at(pd[(vaddr >> 21) & 0x1FF] & ADDR_MASK);
+    uint64_t e = table_at(pml4_phys)[(vaddr >> 39) & 0x1FF];
+    if (!(e & PAGE_PRESENT) || !(e & PAGE_USER)) return 0;
+    e = table_at(e & ADDR_MASK)[(vaddr >> 30) & 0x1FF];
+    if (!(e & PAGE_PRESENT) || !(e & PAGE_USER) || (e & PAGE_HUGE)) return 0;
+    e = table_at(e & ADDR_MASK)[(vaddr >> 21) & 0x1FF];
+    if (!(e & PAGE_PRESENT) || !(e & PAGE_USER) || (e & PAGE_HUGE)) return 0;
+    return table_at(e & ADDR_MASK);
 }
 
 // THIS FUNCTION IS WHERE "WHAT MAY BE EVICTED" IS DECIDED, and it is
@@ -357,6 +368,10 @@ int vmm_set_swap_entry(uint64_t pml4_phys, uint64_t vaddr, uint32_t slot) {
     if (pte & PAGE_BORROWED) return 0;
     uint64_t frame = pte & ADDR_MASK;
     if (!pmm_frame_is_managed(frame)) return 0;
+    // A frame two address spaces share after a fork: the other owner's
+    // PTE would keep pointing at a frame this call frees, and there is
+    // no reverse map to find it by. Not a candidate (docs/fork-design.md).
+    if (pmm_frame_refs(frame) > 1) return 0;
 
     pt[i] = swap_pte(slot);
     if (vmm_current_pml4() == pml4_phys) {
@@ -457,6 +472,153 @@ void vmm_destroy_address_space(uint64_t pml4_phys) {
     }
 }
 
+// --- fork: copy-on-write sharing ---------------------------------------
+
+static void flush_if_live(uint64_t pml4_phys, uint64_t vaddr) {
+    if (vmm_current_pml4() == pml4_phys)
+        __asm__ volatile ("invlpg (%0)" : : "r"(vaddr) : "memory");
+}
+
+static int frame_pinned(const struct vmm_fork_opts *o, uint64_t frame) {
+    for (int i = 0; i < o->npinned; i++)
+        if ((o->pinned[i] & ADDR_MASK) == frame) return 1;
+    return 0;
+}
+
+// Writes one leaf into the child, building the tables above it.
+static int child_set_leaf(uint64_t child, uint64_t va, uint64_t pte) {
+    uint64_t pdpt = ensure_next_level(table_at(child), (int)((va >> 39) & 0x1FF));
+    if (!pdpt) return 0;
+    uint64_t pd = ensure_next_level(table_at(pdpt), (int)((va >> 30) & 0x1FF));
+    if (!pd) return 0;
+    uint64_t pt = ensure_next_level(table_at(pd), (int)((va >> 21) & 0x1FF));
+    if (!pt) return 0;
+    table_at(pt)[(va >> 12) & 0x1FF] = pte;
+    int a = acct_slot(child, 1);
+    if (a >= 0) g_acct[a].pages++;
+    return 1;
+}
+
+// One present, OWNED leaf of the parent, into the child. The refcount is
+// raised BEFORE the child's leaf exists, so a failure part way leaves
+// the frame with one owner too many rather than one too few -- the
+// child's teardown puts the count back; the other order would have it
+// free a frame the parent still maps.
+static int fork_leaf(uint64_t parent, uint64_t child, uint64_t *ppte, uint64_t va,
+                     int live, const struct vmm_fork_opts *o) {
+    uint64_t pte = *ppte;
+    uint64_t frame = pte & ADDR_MASK;
+
+    if ((pte & PAGE_WRITABLE) && frame_pinned(o, frame)) {
+        uint64_t nf = pmm_alloc_frame(PMM_ZONE_ANY);
+        if (!nf) return 0;
+        k_memcpy(table_at(nf), table_at(frame), 4096);
+        if (!child_set_leaf(child, va, (pte & ~ADDR_MASK) | nf)) {
+            pmm_free_frame(nf);
+            return 0;
+        }
+        return 1;
+    }
+
+    uint64_t npte = pte;
+    if (pte & PAGE_WRITABLE) npte = (pte & ~PAGE_WRITABLE) | PAGE_COW;
+    pmm_frame_ref(frame);
+    if (!child_set_leaf(child, va, npte)) {
+        pmm_free_frame(frame);
+        return 0;
+    }
+    if (npte != pte) {
+        *ppte = npte;
+        if (live) flush_if_live(parent, va);
+    }
+    return 1;
+}
+
+uint64_t vmm_fork_address_space(uint64_t parent, const struct vmm_fork_opts *o) {
+    static const struct vmm_fork_opts none = {0};
+    if (!o) o = &none;
+    uint64_t child = vmm_create_address_space();
+    if (!child) return 0;
+    int live = vmm_current_pml4() == parent;
+    const char *why = 0;
+
+    uint64_t *pml4 = table_at(parent);
+    for (int i = 1; i < 512 && !why; i++) {
+        if (!(pml4[i] & PAGE_PRESENT)) continue;
+        uint64_t *pdpt = table_at(pml4[i] & ADDR_MASK);
+        for (int j = 0; j < 512 && !why; j++) {
+            if (!(pdpt[j] & PAGE_PRESENT)) continue;
+            if (pdpt[j] & PAGE_HUGE) { why = "a 1 GiB leaf"; break; }
+            uint64_t *pd = table_at(pdpt[j] & ADDR_MASK);
+            for (int k = 0; k < 512 && !why; k++) {
+                if (!(pd[k] & PAGE_PRESENT)) continue;
+                if (pd[k] & PAGE_HUGE) { why = "a 2 MiB leaf"; break; }
+                uint64_t *pt = table_at(pd[k] & ADDR_MASK);
+                uint64_t base = ((uint64_t)i << 39) | ((uint64_t)j << 30) | ((uint64_t)k << 21);
+                for (int l = 0; l < 512; l++) {
+                    uint64_t pte = pt[l];
+                    uint64_t va = base | ((uint64_t)l << 12);
+                    if (!(pte & PAGE_PRESENT)) {
+                        if (pte & PAGE_SWAPPED) { why = "a swapped page"; break; }
+                        continue;
+                    }
+                    if (pte & PAGE_BORROWED) {
+                        // Somebody else's frame: repeated only where the
+                        // caller vouches for it, and never refcounted.
+                        if (o->inherit_borrowed && o->inherit_borrowed(o->ctx, va) &&
+                            !child_set_leaf(child, va, pte)) { why = "no memory"; break; }
+                        continue;
+                    }
+                    if (!pmm_frame_is_managed(pte & ADDR_MASK)) continue; // a device grant
+                    if (!fork_leaf(parent, child, &pt[l], va, live, o)) { why = "no memory"; break; }
+                }
+            }
+        }
+    }
+    if (why) {
+        klog_printf("vmm: fork of %#lx refused -- %s\n", parent, why);
+        vmm_destroy_address_space(child);
+        return 0;
+    }
+    return child;
+}
+
+int vmm_cow_break(uint64_t pml4_phys, uint64_t vaddr) {
+    uint64_t *pt = pt_for(pml4_phys, vaddr);
+    if (!pt) return 0;
+    int i = (int)((vaddr >> 12) & 0x1FF);
+    uint64_t pte = pt[i];
+    if (!(pte & PAGE_PRESENT) || !(pte & PAGE_COW)) return 0;
+    uint64_t frame = pte & ADDR_MASK;
+
+    if (pmm_frame_refs(frame) <= 1) {
+        // The other owner has gone: this page is private again.
+        pt[i] = (pte & ~PAGE_COW) | PAGE_WRITABLE;
+        flush_if_live(pml4_phys, vaddr & ~0xFFFULL);
+        return 1;
+    }
+    uint64_t nf = pmm_alloc_frame(PMM_ZONE_ANY);
+    if (!nf) {
+        klog_printf("mm: no frame to un-share %#lx -- the process dies here\n", vaddr);
+        return 0;
+    }
+    k_memcpy(table_at(nf), table_at(frame), 4096);
+    pt[i] = (pte & ~(PAGE_COW | ADDR_MASK)) | nf | PAGE_WRITABLE;
+    flush_if_live(pml4_phys, vaddr & ~0xFFFULL);
+    pmm_free_frame(frame); // one owner fewer
+    return 1;
+}
+
+// Before the kernel WRITES into a user page: the page must be private.
+// Returns 0 only when it is COW and could not be un-shared.
+static int unshare_for_write(uint64_t pml4_phys, uint64_t vaddr) {
+    uint64_t *pt = pt_for(pml4_phys, vaddr);
+    if (!pt) return 1;
+    uint64_t pte = pt[(vaddr >> 12) & 0x1FF];
+    if (!(pte & PAGE_PRESENT) || !(pte & PAGE_COW)) return 1;
+    return vmm_cow_break(pml4_phys, vaddr);
+}
+
 // --- auditing page tables against the allocator ----------------------
 //
 // The invariant: every frame a live mapping points at must be one the
@@ -506,6 +668,7 @@ static void audit_pt(uint64_t pt_phys, uint64_t base_va, struct audit_ctx *c) {
         uint64_t va = base_va + (uint64_t)i * 4096;
         a->pages++;
         if (pt[i] & PAGE_BORROWED) a->borrowed++;
+        if (pt[i] & PAGE_COW) a->cow++;
         if (!pmm_frame_is_managed(frame)) {
             // MMIO, or memory the firmware never reported as RAM -- a
             // framebuffer is the usual one. Not pmm's to account for,
@@ -617,7 +780,7 @@ uint64_t vmm_user_phys(uint64_t pml4_phys, uint64_t vaddr) {
 static uint64_t user_phys_of(uint64_t pml4_phys, uint64_t vaddr) {
     uint64_t phys = user_phys_of_walk(pml4_phys, vaddr);
     if (phys) return phys;
-    if (!vmm_fault_in(pml4_phys, vaddr & ~0xFFFULL)) return 0;
+    if (!vmm_fault_in(pml4_phys, vaddr & ~0xFFFULL, 0)) return 0;
     return user_phys_of_walk(pml4_phys, vaddr);
 }
 
@@ -656,6 +819,10 @@ static int copy_user(uint64_t pml4_phys, uint64_t uaddr, void *kbuf,
 
     uint8_t *k = (uint8_t *)kbuf;
     while (len) {
+        // A write must land in a page this address space owns alone --
+        // the identity-map copy below never faults, so the un-share the
+        // #PF path would do has to happen here (docs/fork-design.md).
+        if (dir == COPY_TO_USER && !unshare_for_write(pml4_phys, uaddr)) return 0;
         uint64_t phys = user_phys_of(pml4_phys, uaddr);
         if (!phys) return 0;
 
@@ -739,7 +906,15 @@ static vmm_fault_fn g_fault_fn = 0;
 
 void vmm_set_fault_handler(vmm_fault_fn fn) { g_fault_fn = fn; }
 
-int vmm_fault_in(uint64_t pml4_phys, uint64_t vaddr) {
+int vmm_fault_in(uint64_t pml4_phys, uint64_t vaddr, uint64_t err) {
+    uint64_t *pt = pt_for(pml4_phys, vaddr);
+    if (pt && (pt[(vaddr >> 12) & 0x1FF] & PAGE_PRESENT)) {
+        // Present already: a protection fault, not a missing page. The
+        // one kind this layer answers is a write to a COW page.
+        if ((err & PF_WRITE) && (pt[(vaddr >> 12) & 0x1FF] & PAGE_COW))
+            return vmm_cow_break(pml4_phys, vaddr);
+        return 0;
+    }
     if (!g_fault_fn) return 0;
     return g_fault_fn(pml4_phys, vaddr);
 }
@@ -760,7 +935,7 @@ int vmm_validate_user_range(uint64_t pml4_phys, uint64_t vaddr, uint64_t len) {
         // something and still leaves the walk failing is a bug in the
         // handler, and retrying would spin.
         if (!page_is_valid_user(pml4_phys, page)) {
-            if (!vmm_fault_in(pml4_phys, page)) return 0;
+            if (!vmm_fault_in(pml4_phys, page, 0)) return 0;
             if (!page_is_valid_user(pml4_phys, page)) return 0;
         }
         if (page == last_page) break;

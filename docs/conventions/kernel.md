@@ -3918,3 +3918,53 @@ userland on an old kernel spawns as it always did and only an argument
 holding a space is worse off. On 2026-09-10 the laptop had the new
 `tosh` on the old kernel and could not run a single command, which
 also took away the shell `remote.py flash` needs to replace the kernel.
+
+## THERE IS A `fork()` NOW, IT SHARES COPY-ON-WRITE, AND SPAWN IS STILL THE DOOR
+
+`SYS_FORK` (`scheduler_fork()`, `kernel/proc/scheduler.c`) duplicates the
+calling thread into a new slot: the address space through
+`vmm_fork_address_space()` -- every present leaf shared, a writable one
+with W cleared and `PAGE_COW` (PTE bit 11) set in BOTH, the frame's
+refcount raised -- the WHOLE descriptor table (`fd_clone()`; there is
+no `CLOEXEC`), the cwd, the group, the dispositions and the thread
+pointer; nothing pending, nothing stopped. The parent gets the child's
+pid, the child gets 0 in the same trapframe. `docs/fork-design.md` is
+the design and the table of what is copied.
+
+**Three traps.** A write fault on a PRESENT page reaches
+`vmm_fault_in(pml4, va, err)` and is answered only when `err` says
+WRITE and the PTE says COW -- it is never handed to `uheap_fault()`,
+whose heap branch would map a zeroed frame over live data. The copy
+helpers are the second entry: `copy_user()` in the TO_USER direction
+un-shares first, because a `read()` into a shared buffer never faults.
+And **a frame the kernel holds a physical pointer into is copied
+EAGERLY, not shared** -- a futex waiter is parked on its word's
+physical address and the wakeword is written by one, so a parent that
+un-shared such a page would leave its waiters keyed to the child's
+frame. `scheduler_fork()` pins every parked `wait_chan` of the group
+and the wakeword.
+
+**What is not inherited, and why:** a BORROWED mapping outside an SHM
+or FILE region (a window buffer, the framebuffer grant, the glyph
+tables -- per-pid capabilities, not memory), the futex wakeword, the
+strace arm, windows, the sound stream. A parent with a SWAPPED page is
+refused (`-EAGAIN`), and a frame with two owners is never a swap
+victim (`vmm_set_swap_entry()`), which is the whole reverse map this
+kernel has.
+
+## AN EXEC LOADS BEFORE IT TEARS DOWN, TAKES `struct spawn_msg`, AND KEEPS THE SLOT
+
+`SYS_EXEC` (`scheduler_exec()`) takes the SAME message `SYS_SPAWN` does
+-- `path`, `args` with or without `SPAWN_ARGV`, `env` -- and refuses
+the fields only a child could take (a stream, a group, any other flag).
+The new image is built into a FRESH address space by the same
+`build_image()` a spawn uses, so a program that cannot be loaded is
+reported to a caller that still exists; only then are the descriptors
+re-keyed (`fd_rekey()`), the trace followed (`strace_rekey()`), shared
+mappings, the wakeword, windows and the sound stream dropped through
+the exit hooks, other threads ended, caught signals reset to default
+(ignored ones stay ignored), the trapframe rewritten in place, CR3
+switched and the old space destroyed -- the exit path's ordering. A
+non-leader thread is refused (`-EPERM`) rather than given POSIX's
+pid swap. In ring 3: `execv`/`execve`/`execvp`, and `posix_spawn()`
+over `sys_spawn_opts()` for everything that is not a ported shell.

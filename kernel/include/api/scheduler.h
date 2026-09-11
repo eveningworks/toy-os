@@ -119,6 +119,21 @@ int scheduler_tgid(int pid);
 int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
                              uint64_t fs_base, int detached);
 
+// fork(): a second process from the calling one -- its address space
+// shared copy-on-write, its descriptors, cwd, group, signal
+// dispositions and thread pointer copied, its trapframe a copy of
+// `regs` (the caller's own, SCHED_TF_SLOTS words) with RAX = 0. Returns
+// the child's pid, or -errno. Only the calling THREAD is duplicated.
+// docs/fork-design.md.
+int scheduler_fork(const uint64_t *regs);
+
+// exec(): replaces the CALLER's image with `path`, keeping its slot.
+// `argvec`/`env` as scheduler_spawn_group() takes them; `regs` is the
+// caller's trapframe, rewritten in place on success. 0, or -errno with
+// the caller untouched. docs/fork-design.md.
+int scheduler_exec(const char *path, const char *argvec, size_t argvec_len,
+                   const char *env, uint64_t *regs);
+
 // Ends the calling THREAD. The process survives unless the caller is
 // the group leader, which exits the process instead -- see the function
 // for why. Does not return.

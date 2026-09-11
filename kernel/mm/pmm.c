@@ -1,7 +1,9 @@
 // Bitmap-based physical frame allocator. One bit per 4KiB frame, 1 =
-// used/reserved, 0 = free. Built once at boot from the Multiboot2
-// memory map (see multiboot.c) and never resized -- deliberately
-// simple: correct and easy to reason about, not optimized.
+// used/reserved, 0 = free, plus a 16-bit owner count per frame so two
+// address spaces can share one (docs/fork-design.md). Built once at
+// boot from the Multiboot2 memory map (see multiboot.c) and never
+// resized -- deliberately simple: correct and easy to reason about,
+// not optimized.
 //
 // THE BITMAPS ARE SIZED FROM THE MEMORY MAP AND LIVE IN LOW RAM THEY
 // RESERVE FOR THEMSELVES. They used to be two static 128 KiB arrays
@@ -39,6 +41,11 @@ static uint8_t *bitmap;   // 1 = used or reserved
 // map, never cleared. `bitmap` alone cannot tell an unmanaged frame
 // (MMIO, a framebuffer) from an allocated one: both are a set bit.
 static uint8_t *managed;
+// Owners per frame, for a frame two address spaces share (copy-on-write
+// after a fork, docs/fork-design.md). 1 for an ordinary allocation, 0
+// for a free frame and for one reserved at boot -- the image and the
+// books are "used, refcount 0" and can never be shared or freed.
+static uint16_t *refs;
 static uint64_t max_frames = 0;    // frames the bitmaps cover
 static uint64_t bitmap_bytes = 0;  // per bitmap
 static uint64_t zone_total[ZONE_COUNT]; // managed frames per zone
@@ -129,8 +136,8 @@ static int hits_reserved(uint64_t start, uint64_t end, uint64_t *bump) {
     return 0;
 }
 
-static uint64_t bitmap_home = 0;  // physical address of both bitmaps, back to back
-static uint64_t bitmap_need = 0;  // bytes for both
+static uint64_t bitmap_home = 0;  // physical address of the books: both bitmaps, then the refcounts
+static uint64_t bitmap_need = 0;  // bytes for all three
 
 static void place_cb(const struct multiboot_mmap_region *region) {
     if (bitmap_home || region->type != 1) return;
@@ -210,7 +217,7 @@ void pmm_init(void) {
 
     max_frames = highest_usable / FRAME_SIZE;
     bitmap_bytes = (max_frames + 7) / 8;
-    bitmap_need = align_up(bitmap_bytes * 2);
+    bitmap_need = align_up(bitmap_bytes * 2 + max_frames * sizeof(uint16_t));
     bitmap_home = 0;
     multiboot_mmap_foreach(place_cb);
     if (!bitmap_home) {
@@ -224,8 +231,10 @@ void pmm_init(void) {
     }
     bitmap = (uint8_t *)(uintptr_t)bitmap_home;
     managed = bitmap + bitmap_bytes;
+    refs = (uint16_t *)(bitmap + bitmap_bytes * 2);
     k_memset(bitmap, 0xFF, bitmap_bytes); // start fully reserved
     k_memset(managed, 0, bitmap_bytes);
+    k_memset(refs, 0, max_frames * sizeof(uint16_t));
     for (int z = 0; z < ZONE_COUNT; z++) zone_total[z] = zone_free[z] = zone_hint[z] = 0;
 
     multiboot_mmap_foreach(mark_available_cb);
@@ -261,7 +270,7 @@ void pmm_init(void) {
     dma32_reserve = reserve_policy(zone_total[0], zone_total[1]);
 
     klog_printf("pmm: %lu frames managed (%lu above 4 GiB, %lu reserved for DMA32), "
-                "bitmaps %lu KiB at 0x%lx\n",
+                "books %lu KiB at 0x%lx\n",
                 zone_total[0] + zone_total[1], zone_total[1], dma32_reserve,
                 bitmap_need / 1024, bitmap_home);
 
@@ -297,6 +306,7 @@ static uint64_t alloc_one_in(int z, uint64_t floor) {
         uint64_t f = lo + (start - lo + i) % span;
         if (!bit_is_used(f)) {
             mark_used_bit(f);
+            refs[f] = 1;
             zone_free[z]--;
             zone_hint[z] = f + 1;
             return f * FRAME_SIZE;
@@ -318,14 +328,47 @@ uint64_t pmm_alloc_frame(enum pmm_zone zone) {
     return alloc_one_in(0, 0);
 }
 
+// One owner lets go of frame `f`. The frame is freed only when the
+// count reaches zero; a reserved frame (count 0, bit set) is freed as
+// it always was, since nothing can have shared it.
+//
+// A FREE OF A FREE FRAME IS LOGGED, not just ignored: it is the shape a
+// double free takes, and before the count existed it was silent -- the
+// first of two owners returned a frame the second was still mapping.
+// Capped, so a buggy loop cannot flood the ring.
+static void free_one(uint64_t f) {
+    if (f >= max_frames) return;
+    if (!bit_is_used(f)) {
+        static int reported;
+        if (reported < 4) {
+            reported++;
+            klog_printf("pmm: free of frame %#lx, which is already free\n",
+                        f * FRAME_SIZE);
+        }
+        return;
+    }
+    if (refs[f] > 1) { refs[f]--; return; }
+    refs[f] = 0;
+    mark_free_bit(f);
+    zone_free[zone_of(f)]++;
+}
+
 void pmm_free_frame(uint64_t phys_addr) {
     BOOT_REQUIRE(BOOT_SUB_PMM);
+    free_one(phys_addr / FRAME_SIZE);
+}
+
+void pmm_frame_ref(uint64_t phys_addr) {
     uint64_t f = phys_addr / FRAME_SIZE;
-    if (f >= max_frames) return;
-    if (bit_is_used(f)) {
-        mark_free_bit(f);
-        zone_free[zone_of(f)]++;
-    }
+    if (f >= max_frames || !bit_is_used(f) || refs[f] == 0) return;
+    if (refs[f] == 0xFFFF) return; // saturated: the frame is simply never freed
+    refs[f]++;
+}
+
+unsigned pmm_frame_refs(uint64_t phys_addr) {
+    uint64_t f = phys_addr / FRAME_SIZE;
+    if (f >= max_frames || !bit_is_used(f)) return 0;
+    return refs[f];
 }
 
 static uint64_t alloc_run_in(int z, uint64_t count, uint64_t floor) {
@@ -337,7 +380,10 @@ static uint64_t alloc_run_in(int z, uint64_t count, uint64_t floor) {
         if (!bit_is_used(f)) {
             if (run_len == 0) run_start = f;
             if (++run_len == count) {
-                for (uint64_t i = 0; i < count; i++) mark_used_bit(run_start + i);
+                for (uint64_t i = 0; i < count; i++) {
+                    mark_used_bit(run_start + i);
+                    refs[run_start + i] = 1;
+                }
                 zone_free[z] -= count;
                 zone_hint[z] = run_start + count; // keep the single-frame hint sensible too
                 return run_start * FRAME_SIZE;
@@ -368,10 +414,7 @@ void pmm_free_contiguous(uint64_t phys_addr, uint64_t count) {
     uint64_t f = phys_addr / FRAME_SIZE;
     for (uint64_t i = 0; i < count; i++) {
         if (f + i >= max_frames) break;
-        if (bit_is_used(f + i)) {
-            mark_free_bit(f + i);
-            zone_free[zone_of(f + i)]++;
-        }
+        free_one(f + i);
     }
 }
 

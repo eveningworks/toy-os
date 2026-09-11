@@ -711,6 +711,8 @@ whenever a headline here tells you something you did not already know.
 - **A LINE LONGER THAN THE TERMINAL IS WIDE NEEDS ROWS, NOT `\r`**
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 - **A SPAWN CARRIES AN ARGV VECTOR WITH A LENGTH, AND THE STRING FORM IS SPLIT AT THE EDGE** -- `SPAWN_ARGV`; sized by length, not `env`'s double NUL, because an argument may be empty; both sides tolerate the other being older (libsys retries in the string form)
+- **THERE IS A `fork()` NOW, IT SHARES COPY-ON-WRITE, AND SPAWN IS STILL THE DOOR** -- `PAGE_COW` is PTE bit 11 and `pmm` counts owners per frame; a present-page fault is answered only as a COW write, `copy_user()` un-shares before it writes, and a frame the kernel holds a physical pointer into (a futex word) is copied eagerly; a shared frame is never a swap victim
+- **AN EXEC LOADS BEFORE IT TEARS DOWN, TAKES `struct spawn_msg`, AND KEEPS THE SLOT** -- a failed load returns to a caller that still exists; fds survive, caught signals reset, a non-leader thread is refused
 
 ### GUI, Toykit and the desktop
 

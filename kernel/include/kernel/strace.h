@@ -47,6 +47,9 @@ void strace_claim(uint64_t pml4_phys);
 // moment the kernel knows the traced process is finished and still
 // knows where its trace was going.
 void strace_release(uint64_t pml4_phys);
+// An exec'd process keeps its trace: the address space changed, the
+// process did not.
+void strace_rekey(uint64_t old_pml4, uint64_t new_pml4);
 
 // Is the CURRENTLY running address space (CR3) being traced? One read
 // of a global plus a compare -- what an untraced process pays per

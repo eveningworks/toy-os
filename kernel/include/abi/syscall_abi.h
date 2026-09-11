@@ -2131,4 +2131,29 @@ struct mmap_msg {
 // boundary.
 #define SYS_GETRANDOM_MAX 4096
 
+// --- fork and exec ---------------------------------------------------
+//
+// The compatibility pair beside SYS_SPAWN, which stays the primitive
+// every program here uses (docs/fork-design.md). A ported POSIX shell
+// is what needs these; nothing else should reach for them.
+#define SYS_FORK 108 // No arguments. Returns the child's pid to the
+                     // caller and 0 to the child, whose address space
+                     // is the caller's shared copy-on-write, whose fd
+                     // table is the caller's WHOLE table (there is no
+                     // CLOEXEC), and whose pending signals are none.
+                     // A caller with no scheduler slot gets -EPERM;
+                     // a full process table -EAGAIN; no memory -ENOMEM.
+#define SYS_EXEC 109 // RDI = pointer to a `struct spawn_msg`: `path`,
+                     // `args` (with or without SPAWN_ARGV) and `env`
+                     // as for SYS_SPAWN. Replaces the CALLER's image
+                     // with that program and does not return on
+                     // success; on failure returns -errno with the
+                     // caller untouched. stdin_fd/stdout_fd must be
+                     // -1, pgid 0 and no flag but SPAWN_ARGV set --
+                     // an exec has no child to redirect. Descriptors,
+                     // the cwd, the group and the parent survive;
+                     // caught signals go back to their default, other
+                     // threads of the caller end, and a non-leader
+                     // thread is refused (-EPERM).
+
 #endif

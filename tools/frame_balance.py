@@ -82,6 +82,20 @@ def cycle_plain(con):
     con.settle()
 
 
+def cycle_fork(con):
+    """A process that forks twenty children, each exiting, then exits.
+
+    fork() shares every page copy-on-write and raises the frame
+    refcount; the children's teardowns must decrement rather than free,
+    and the parent's must free what is then private. A miscount in
+    either direction shows here as a moved count, and nothing about it
+    is GUI-shaped -- it is a control on the refcount itself.
+    """
+    con.send("gui spawn /tests/fork_test --forks 20")
+    time.sleep(2.0)
+    con.settle()
+
+
 def cycle_kill(con):
     """Open a GUI client and KILL it, rather than letting it exit.
 
@@ -135,7 +149,8 @@ def main():
                 failures.append("a non-GUI process's teardown moved the count by %+d" % delta)
             prev = now
 
-        for label, run in (("GUI exit", cycle_gui), ("GUI kill", cycle_kill)):
+        for label, run in (("fork", cycle_fork), ("GUI exit", cycle_gui),
+                           ("GUI kill", cycle_kill)):
             first = True
             for i in range(args.cycles):
                 run(con)
