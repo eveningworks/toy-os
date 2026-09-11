@@ -2116,16 +2116,22 @@ window without going through it will find its layout polls timing out.
   records a failed check and clicks nothing (it once raised `KeyError`
   out of the suite); a report split across two serial sweeps parses
   whole; a wait whose predicate never holds returns None rather than
-  the layout it rejected; and a state the app already reported answers
+  the layout it rejected; a state the app already reported answers
   a later wait after a grace period, since the app dedupes its whole
-  report block and repeats nothing. Seconds, no guest.
+  report block and repeats nothing; and that cached answer is OFF once
+  a newer report has begun, so a frame whose tail has not arrived
+  cannot let the previous one answer for a state the app has left.
+  Seconds, no guest.
 - **`filemanager_test.py`** -- the File Manager: two panes, marking, and
   real file operations. **A check runs only after its prerequisite**:
   the view toggles are driven through `toolbar_click()`, which requires
   the item's reported rect, and a step whose prerequisite failed is
   printed as `SKIP` with the reason rather than attempted -- the
   two-pane, tree-hidden view is restored (and verified) before anything
-  later runs, and the run stops with a failing summary if it cannot be.
+  later runs, and the run stops with a failing summary if it cannot be
+  -- including when the context menu was never confirmed closed, since
+  an open menu takes the press wherever it lands and a restoring
+  toolbar click would dismiss it rather than toggle anything.
   **It puts both panes in Details first** (from the
   toolbar, which is itself a check): the app opens in icons view, and
   every row this tool aims at is row-height arithmetic. **The result of every operation is checked

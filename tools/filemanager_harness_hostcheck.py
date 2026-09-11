@@ -11,7 +11,10 @@ scripted debug console and a QMP stand-in that records every click:
   - a wait whose predicate never holds returns None -- never the layout
     it rejected -- and the last frame seen stays available as evidence;
     and a state the app already reported answers a later wait after the
-    grace period, since the app repeats nothing it already said.
+    grace period, since the app repeats nothing it already said;
+  - but that cached answer is OFF once a newer report has begun, so a
+    frame whose tail has not arrived cannot let the previous one answer
+    for a state the app has already left.
 
 Deterministic and a few seconds long. Named by ondemand_sweep.py.
 """
@@ -138,6 +141,41 @@ reset()
 dbg = FakeDbg([FRAME_HEAD + ["files: layout tbitem 13 3", "files: layout tbitem 5 12 4 dbg> 22"] + FRAME_TAIL])
 got = fm.layout_now(dbg, WIN, tries=2)
 check("a torn report line is skipped, not fatal", got is not None and 13 not in got.tbitems)
+
+# --- 7. a newer report in flight retires the cached frame ---------------
+#
+# The frame the app is CURRENTLY sending is the one a wait cares about,
+# and until its tail arrives the newest COMPLETE frame is the one before
+# it. Answering from that after the grace period is how a wait for one
+# pane succeeded against the two-pane layout it replaced.
+reset()
+OLD = FRAME_HEAD + tbitems(14) + FRAME_TAIL          # two panes, tree off
+NEW_HEAD = ["files: layout pane 0 0 40 600 340", "files: layout dir 0 /fmtest"]
+NEW_TAIL = ["files: layout pane 1 0 0 0 0", "files: layout active 0",
+            "files: layout view 1 1 single 1 tree 0 0"]
+
+dbg = FakeDbg([OLD])
+base = fm.layout_now(dbg, WIN, tries=2)
+check("the two-pane frame is the cached one", base is not None and base.view[2] == 0)
+
+dbg = FakeDbg([NEW_HEAD])              # a report begins, and its tail never lands
+t0 = time.time()
+got = fm.wait_layout(dbg, WIN, lambda l: l.view[2] == 0, timeout=1.5, grace=0.3)
+check("a partial newer report stops the cached frame answering", got is None,
+      f"got view={got and got.view}")
+check("...and the wait runs to its deadline rather than the grace period",
+      1.4 <= time.time() - t0 < 4.0, f"{time.time() - t0:.1f}s")
+
+# The discriminating half: a predicate true of BOTH frames. Answering it
+# from the cache is indistinguishable from answering it correctly unless
+# the layout that comes back is the one still arriving.
+reset()
+dbg = FakeDbg([OLD])
+fm.layout_now(dbg, WIN, tries=2)
+dbg = FakeDbg([NEW_HEAD, [], [], NEW_TAIL])
+got = fm.wait_layout(dbg, WIN, lambda l: bool(l.view), timeout=6.0, grace=0.3)
+check("a wait satisfied by either frame answers with the one arriving",
+      got is not None and got.view[2] == 1, f"got view={got and got.view}")
 
 print(f"\nfilemanager_harness_hostcheck: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

@@ -360,17 +360,28 @@ def wait_layout(dbg, win, pred, timeout=12.0, grace=1.0):
     no fresh report at all, the last layout ANY wait observed answers if
     it satisfies `pred`: the app repeats nothing it already said, so a
     state reached before this wait began would otherwise time out.
+
+    THAT CACHED ANSWER IS OFF THE MOMENT THE APP SAYS ANYTHING HERE. A
+    newer report beginning means the state has moved, while the cached
+    frame still describes the one before it -- and a report whose tail
+    has not arrived leaves that frame the newest COMPLETE one, so the
+    grace period expires against it and the wait succeeds with the old
+    state (an old two-pane layout answering a wait for one pane). Once
+    a line has arrived, only a frame this wait parses may answer.
     """
     deadline = time.time() + timeout
     quiet_since = time.time()
+    spoke = False
     buf = []
     while time.time() < deadline:
         if _collect(dbg, buf):
             quiet_since = time.time()
+            spoke = True
             lay = _parse(win, buf)
             if lay and pred(lay):
                 return lay
-        elif (_LAST_LAYOUT is not None and time.time() - quiet_since >= grace
+        elif (not spoke and _LAST_LAYOUT is not None
+              and time.time() - quiet_since >= grace
               and pred(_LAST_LAYOUT)):
             return _LAST_LAYOUT
         time.sleep(0.2)
@@ -1973,7 +1984,7 @@ def run(dbg, qmp, tmp, res):
     else:
         res.skip(N_ONE, "the toolbar item was not reported, so it was not clicked")
 
-    menu_closed = False
+    menu_closed = menu_up = False
     if single:
         px, py, pw, ph = lay.pane[0]
         rh = lay.rowh or 16
@@ -1982,12 +1993,14 @@ def run(dbg, qmp, tmp, res):
         res.check(N_CTX, got is not None, f"ctx={(last_layout() or lay).ctx}")
         if got is not None:
             lay = got
+            menu_up = True
             dbg.key(K_ESC)
             # KEEP what the wait returns: the tree toggle below must not
             # be attempted with the menu still up, and if it is still up
             # that is the state to report, not a guess about why.
             closed = wait_layout(dbg, win, lambda l: l.ctx == 0)
             menu_closed = closed is not None
+            menu_up = not menu_closed
             res.check(N_ESC, menu_closed,
                       f"ctx={(last_layout() or lay).ctx} ctxbox={(last_layout() or lay).ctxbox}")
             lay = closed or lay
@@ -2005,6 +2018,16 @@ def run(dbg, qmp, tmp, res):
         lay = got or lay
     elif not (single and menu_closed):
         res.skip(N_TREE, "its prerequisite (one pane, menu closed) was not reached")
+
+    # AND NOT WITH THE MENU STILL UP. An open context menu takes the
+    # press wherever it lands, so a restoring toolbar click would dismiss
+    # the menu instead of toggling anything -- and the view it then
+    # reports is the one nobody asked for, checked as if it were.
+    if menu_up:
+        res.skip(N_BOTH, "the context menu did not close, so no restoring click was made")
+        print("  filemanager_test: the context menu is still open, so a toolbar click "
+              "would land in it rather than on the toolbar; the run stops here")
+        return
 
     # RESTORE the two-pane, tree-hidden view before anything else runs:
     # the view state PERSISTS (files.conf), so a respawn inherits it.
