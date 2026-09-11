@@ -37,6 +37,12 @@
 //
 // Stated once here rather than edited into two dozen comments that would
 // then have to be kept true individually.
+//
+// A NUMBER WITH NO HANDLER RETURNS -ENOSYS: an empty row, a retired
+// number, or one past the table's end, all through the ordinary exit
+// path. That is what lets a program probe for a call and fall back
+// (Linux's ENOSYS, NT's STATUS_INVALID_SYSTEM_SERVICE). It used to leave
+// RAX untouched, handing back the number asked for.
 
 #define SYS_EXIT  1 // RDI = exit code
 #define SYS_WRITE 2 // RDI = fd, RSI = buffer pointer, RDX = length;

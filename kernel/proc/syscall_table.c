@@ -24,15 +24,13 @@
 // buy the same two things -- see docs/decisions.md.
 //
 // A number with no row (or a row with a NULL `fn`) is unimplemented:
-// dispatch no-ops on it, which is what the if/else chain's
-// fall-through did, and `strace` prints it as `syscall_<n>` with hex
-// arguments rather than hiding it.
-// A number that USED to be a syscall and is not one now. It keeps a row
-// rather than leaving a hole, because a hole is a NULL `fn` and dispatch
-// no-ops on that -- which a stale binary cannot tell from a syscall that
-// succeeded and returned 0. Refusing with -ENOSYS is the answer it can
-// act on, and the name keeps `strace` honest about what it asked for.
-// `syscall/no row is half-filled in` is the KTEST that insists on this.
+// dispatch answers -ENOSYS (syscall.c), and `strace` prints it as
+// `syscall_<n>` with hex arguments rather than hiding it.
+// A number that USED to be a syscall and is not one now. A hole gets
+// -ENOSYS from the dispatcher like any other, so what this row adds is
+// the NAME: `strace` then says what a stale binary asked for. Retired
+// numbers without a row are declared in SYSCALL_RETIRED below;
+// `syscall/no row is half-filled in` is the KTEST that insists on it.
 static int sys_removed(struct syscall_ctx *c) {
     c->regs[14] = (uint64_t)(int64_t)-ENOSYS;
     return 0;
@@ -180,8 +178,8 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
 // would break every other caller to tidy one gap. So the hole stays and
 // is DECLARED here, where the table's own KTEST can tell a deliberate
 // one from the accident it exists to catch -- a number defined with no
-// row, which dispatch silently no-ops in a way indistinguishable from a
-// syscall returning 0.
+// row, which would look to a caller exactly like a syscall that does not
+// exist yet -- which is what it is, and the KTEST keeps the two apart.
 static const uint64_t SYSCALL_RETIRED[] = {
     3,   // SYS_GUI_INIT     -- mapped the whole framebuffer to ANY caller
     4,   // SYS_GUI_POLL_KEY -- deleted 2026-09-09 with their one caller

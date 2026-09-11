@@ -195,6 +195,24 @@ int main(void) {
     utest_check(sys_waitpid(-1, 0) < 0, "waitpid(-1) with no children fails");
     check_errno(sys_errno(), ECHILD, "waitpid(-1) with no children at all");
 
+    // --- ENOSYS: a number with nothing behind it ----------------------
+    // Three shapes, through the RAW entry because a wrapper cannot ask
+    // for a number it does not know: index 0 (a table row with no
+    // handler), a retired number (3 was SYS_GUI_INIT; its row is a
+    // deliberate hole), and one past the table's end. Each must say
+    // ENOSYS, and none may hand back the number it was asked for --
+    // which is what a fall-through that leaves RAX alone does, and what
+    // a program probing for a call would read as success.
+    utest_check(sys_call(0, 0, 0, 0) == -ENOSYS, "syscall 0 (an empty table row) fails with ENOSYS");
+    utest_check(sys_call(3, 0, 0, 0) == -ENOSYS, "syscall 3 (retired) fails with ENOSYS");
+    utest_check(sys_call(UINT64_MAX, 0, 0, 0) == -ENOSYS, "a syscall number past the table fails with ENOSYS");
+    // And the process is intact afterwards: an implemented call still works.
+    // Raw again, and one that answers under the legacy loader too (no
+    // scheduler slot there, so getpid is not a valid probe).
+    struct rtc_time after;
+    utest_check(sys_call(SYS_GETTIME, (uint64_t)(uintptr_t)&after, 0, 0) == 0,
+                "an implemented call still works after the refused ones");
+
     // --- strerror ------------------------------------------------------
     utest_check(strerror(ENOENT)[0] != '\0', "strerror(ENOENT) is a real message");
     utest_check(strerror(4242)[0] != '\0', "strerror() of an unknown code still says something");

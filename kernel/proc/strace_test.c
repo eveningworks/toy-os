@@ -92,6 +92,16 @@ KTEST("strace", "return values: decimal, negative, and sbrk's pointer") {
     KTEST_ASSERT(eq(buf, " = -1"));
 }
 
+// The dispatcher answers a number with no handler with -ENOSYS, and the
+// trace line has to say so for a number the table cannot name.
+KTEST("strace", "an unknown syscall's ENOSYS result is named") {
+    char buf[64];
+    strace_format_ret(buf, sizeof(buf), 999, (uint64_t)(int64_t)-ENOSYS);
+    KTEST_ASSERT(eq(buf, " = -38 ENOSYS"));
+    strace_format_ret(buf, sizeof(buf), 0, (uint64_t)(int64_t)-ENOSYS);
+    KTEST_ASSERT(eq(buf, " = -38 ENOSYS"));
+}
+
 KTEST("strace", "a too-small buffer truncates instead of overrunning") {
     // A 16-byte buffer, but only the first 8 declared usable -- so the
     // back half is a canary for "did it write past the cap it was

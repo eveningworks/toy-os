@@ -4831,19 +4831,6 @@ wheel event not reaching the widget at all. The cheap next step is
 larger than its viewport, since a scroll view with nothing to scroll
 behaves exactly like this.
 
-## An unknown syscall number returns itself
-
-`syscall_dispatch()` looks the number up in `syscall_table.c` and, for a
-miss, does nothing: `isr_common`'s epilogue restores the registers as
-they were, so `rax` still holds the number the caller loaded. Linux and
-NT both answer `-ENOSYS` (NT: `STATUS_INVALID_SYSTEM_SERVICE`), which
-is what lets a program probe for a call and fall back. Reproduce with a
-`/tests` program that loads a number past the table's end (and one
-inside it with no handler), issues `int 0x80`, and prints `rax`: today
-it prints the number. Established by reading the dispatcher
-(2026-09-11), not by that run yet -- write the test first, watch it
-print the number, then add the miss branch.
-
 ## `damage_sweep.py` reports one violation on `start-menu dismiss`
 
 Measured 2026-09-02 on 540dd6e5 and again with the rounded-corner

@@ -127,11 +127,14 @@ void syscall_dispatch(uint64_t *regs) {
         }
     }
 
-    // An unknown number is a no-op: isr_dispatch returns normally,
-    // isr_common's usual epilogue runs, and ring 3 resumes right after
-    // its `int 0x80`. That is what the old chain's fall-through did.
+    // A number with no handler -- an empty row, a retired one, or one
+    // past the table -- answers -ENOSYS through the same exit path as
+    // any failure, so the tracer and the stack tracker see it. Leaving
+    // RAX alone handed the caller the number it asked for, which a
+    // program probing for a call reads as success (abi/syscall_abi.h).
     const struct syscall_desc *d = syscall_desc_at(nr);
     if (d && d->fn) blocked = d->fn(&c);
+    else c.regs[14] = (uint64_t)(int64_t)-ENOSYS;
 
     // Diagnostic only, and a no-op unless `kstack track on` armed it.
     // Here rather than at entry because the point is how deep the
