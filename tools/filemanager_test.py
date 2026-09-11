@@ -289,57 +289,104 @@ def listing(dbg, path):
 # mid-block hands back a frame missing everything after the split. Parse
 # each read on its own and that frame is the only one you will ever get:
 # the poll then spins until it times out while the app sits there having
-# already reported exactly what was asked for. Accumulating costs
-# nothing, because Layout() already keeps only the last complete frame.
+# already reported exactly what was asked for. Accumulation is bounded
+# to ONE block, so a partial report is never merged into the frame
+# before it and a field the newer block omits cannot survive into it.
 _LAST_BUF = []
 _ALL_BUF = []
-# The last COMPLETE layout any poll parsed. The app dedupes a whole
-# report block (uapp.c), so when it stays silent this IS its current
-# state -- which is what lets a wait answer from it after a grace
-# period instead of timing out on a report the app will never repeat.
+# The report block being received, which OUTLIVES the wait that started
+# reading it: a wait ending mid-block used to drop its lines, and the
+# tail then arrived alone and could complete nothing.
+_PENDING = []
+# The last COMPLETE layout any poll parsed, and whether it still
+# describes the app. The app dedupes a whole report block (uapp.c), so
+# while it stays silent that layout IS its current state -- which is
+# what lets a wait answer from it after a grace period instead of timing
+# out on a report the app will never repeat.
 _LAST_LAYOUT = None
+_LAST_CURRENT = False
+
+# A report opens with pane 0 (fm_view.c's log_layout), so this line is
+# where one block ends and the next begins -- the only point at which
+# the app can be said to have moved on from what it last reported.
+_BLOCK_START = "layout pane 0 "
 
 
 def last_layout():
-    """The most recent complete layout observed, for a failure's evidence."""
+    """The most recent complete layout observed, for a failure's
+    evidence. It may be a state the app has already left -- see
+    `layout_is_current()`, which is what a WAIT has to ask."""
     return _LAST_LAYOUT
 
 
-def _collect(dbg, buf):
-    """Sweep fresh `files:` lines into `buf`. Returns how many ARRIVED
-    on this poll -- not `buf`, which is truthy forever after the first
-    line and cannot say whether anything new came."""
+def layout_is_current():
+    """Whether `last_layout()` may still answer for the app NOW: true
+    only while no newer report has begun since it was parsed."""
+    return _LAST_CURRENT
+
+
+def reset_layout():
+    """Forget what the app has reported. A window that has been closed
+    and respawned is a DIFFERENT surface -- new origin, new panes, new
+    toolbar -- so a frame from the old one is not stale geometry, it is
+    somebody else's."""
+    global _LAST_LAYOUT, _LAST_CURRENT
+    _LAST_LAYOUT = None
+    _LAST_CURRENT = False
+    _PENDING[:] = []
+    _LAST_BUF[:] = []
+
+
+def _collect(dbg):
+    """Sweep fresh `files:` lines into the block being received. Returns
+    how many ARRIVED on this poll -- not the buffer, which is truthy
+    forever after the first line and cannot say whether anything new
+    came."""
+    global _LAST_CURRENT
     fresh = dbg.logs("files:", clear=True)
-    buf.extend(fresh)
-    # `_LAST_BUF` is whichever poll ran last, so a line the app logged
-    # during an EARLIER wait is gone by the time a check fails -- which
-    # reads as an app that logged nothing at all. `_ALL_BUF` is the whole
-    # transcript, and it is what a failure detail should quote.
+    # `_ALL_BUF` is the whole transcript: a line the app logged during an
+    # EARLIER wait is gone by the time a check fails, which reads as an
+    # app that logged nothing at all. It is what a failure should quote.
     _ALL_BUF.extend(fresh)
-    _LAST_BUF[:] = buf
+    for line in fresh:
+        if _BLOCK_START in line:
+            # A NEWER REPORT. What came before it belongs to the block
+            # that ended, and the cached layout is now the state the app
+            # HAD -- it may not answer a wait again until a block parses
+            # complete, however many waits that takes.
+            _PENDING[:] = []
+            _LAST_CURRENT = False
+        _PENDING.append(line)
+    _LAST_BUF[:] = _PENDING
     return len(fresh)
 
 
-def _parse(win, buf):
-    global _LAST_LAYOUT
-    lay = Layout(win["content"], buf)
+def _parse(win):
+    """Parse the block received so far; a complete one becomes the
+    cached layout and is current again."""
+    global _LAST_LAYOUT, _LAST_CURRENT
+    lay = Layout(win["content"], _PENDING)
     if lay.complete():
         _LAST_LAYOUT = lay
+        _LAST_CURRENT = True
         return lay
     return None
 
 
 def layout_now(dbg, win, tries=25):
-    """The app's CURRENT layout report, polled rather than slept for."""
-    buf = []
+    """The app's CURRENT layout report, polled rather than slept for.
+
+    Only lines arriving DURING this call answer it: the cached block is
+    what a drag's confirmation loop would otherwise read back instead of
+    the frame it is waiting for.
+    """
     for _ in range(tries):
-        # NOT cleared first: the app draws when something happens, so
-        # the report we want may already be in the buffer -- an
-        # unconditional clear here threw away the only frame the app had
+        # The console is NOT cleared first: the app draws when something
+        # happens, so the report we want may already be waiting there --
+        # an unconditional clear threw away the only frame the app had
         # logged and reported a working window as silent.
-        _collect(dbg, buf)
-        if buf:
-            lay = _parse(win, buf)
+        if _collect(dbg):
+            lay = _parse(win)
             if lay:
                 return lay
         time.sleep(0.2)
@@ -361,26 +408,25 @@ def wait_layout(dbg, win, pred, timeout=12.0, grace=1.0):
     it satisfies `pred`: the app repeats nothing it already said, so a
     state reached before this wait began would otherwise time out.
 
-    THAT CACHED ANSWER IS OFF THE MOMENT THE APP SAYS ANYTHING HERE. A
-    newer report beginning means the state has moved, while the cached
-    frame still describes the one before it -- and a report whose tail
-    has not arrived leaves that frame the newest COMPLETE one, so the
-    grace period expires against it and the wait succeeds with the old
-    state (an old two-pane layout answering a wait for one pane). Once
-    a line has arrived, only a frame this wait parses may answer.
+    THAT CACHED ANSWER IS OFF FROM THE MOMENT A NEWER REPORT BEGINS
+    UNTIL ONE PARSES COMPLETE, however many waits that spans. A report
+    whose tail has not arrived leaves the previous frame the newest
+    COMPLETE one, so the grace period expires against a state the app
+    has left -- an old two-pane layout answering a wait for one pane.
+    The eligibility is `layout_is_current()`, which is deliberately NOT
+    per-wait: this wait timing out changes nothing about the app, so a
+    later one must not treat the same frame as current again merely
+    because the app has gone quiet in the meantime.
     """
     deadline = time.time() + timeout
     quiet_since = time.time()
-    spoke = False
-    buf = []
     while time.time() < deadline:
-        if _collect(dbg, buf):
+        if _collect(dbg):
             quiet_since = time.time()
-            spoke = True
-            lay = _parse(win, buf)
+            lay = _parse(win)
             if lay and pred(lay):
                 return lay
-        elif (not spoke and _LAST_LAYOUT is not None
+        elif (_LAST_CURRENT and _LAST_LAYOUT is not None
               and time.time() - quiet_since >= grace
               and pred(_LAST_LAYOUT)):
             return _LAST_LAYOUT
@@ -1568,6 +1614,7 @@ def run(dbg, qmp, tmp, res):
             dbg.send(f"gui close {w2['z']}")
             time.sleep(0.4)
     dbg.send(f"gui spawn {FILES_EXEC} {CLIP} {CLIP}/dst")
+    reset_layout()
     win = None
     deadline = time.time() + 15.0
     while time.time() < deadline and not win:
@@ -1657,6 +1704,7 @@ def run(dbg, qmp, tmp, res):
                 dbg.send(f"gui close {w2['z']}")
                 time.sleep(0.4)
         dbg.send(f"gui spawn {FILES_EXEC} {CLIP} {CLIP}/dst")
+        reset_layout()
         w = None
         deadline = time.time() + 15.0
         while time.time() < deadline and not w:
@@ -1773,6 +1821,7 @@ def run(dbg, qmp, tmp, res):
             dbg.send(f"gui close {w2['z']}")
             time.sleep(0.4)
     dbg.send(f"gui spawn {FILES_EXEC} / /")
+    reset_layout()
     win = None
     deadline = time.time() + 15.0
     while time.time() < deadline and not win:
@@ -2062,6 +2111,7 @@ def run(dbg, qmp, tmp, res):
             dbg.send(f"gui close {w2['z']}")
             time.sleep(0.4)
     dbg.send(f"gui spawn {FILES_EXEC} {MS} {MS}")
+    reset_layout()
     win = None
     deadline = time.time() + 15.0
     while time.time() < deadline and not win:
@@ -2165,6 +2215,7 @@ def run(dbg, qmp, tmp, res):
             dbg.send(f"gui close {w2['z']}")
             time.sleep(0.4)
     dbg.send(f"gui spawn {FILES_EXEC} {DD} {DDST}")
+    reset_layout()
     win = None
     deadline = time.time() + 15.0
     while time.time() < deadline and not win:
@@ -2490,6 +2541,7 @@ def run(dbg, qmp, tmp, res):
     dbg.send(f"sh rm -r {DD}")
     dbg.send(f"sh rm -r {DDST}")
     dbg.send(f"gui spawn {FILES_EXEC} {MS} {MS}")
+    reset_layout()
     win = None
     deadline = time.time() + 15.0
     while time.time() < deadline and not win:

@@ -14,7 +14,9 @@ scripted debug console and a QMP stand-in that records every click:
     grace period, since the app repeats nothing it already said;
   - but that cached answer is OFF once a newer report has begun, so a
     frame whose tail has not arrived cannot let the previous one answer
-    for a state the app has already left.
+    for a state the app has already left -- and it STAYS off across the
+    waits that follow, until a block parses complete or the window is
+    replaced.
 
 Deterministic and a few seconds long. Named by ondemand_sweep.py.
 """
@@ -73,7 +75,7 @@ def check(name, ok, detail=""):
 
 
 def reset():
-    fm._LAST_LAYOUT = None
+    fm.reset_layout()
     fm._ALL_BUF[:] = []
 
 
@@ -176,6 +178,65 @@ dbg = FakeDbg([NEW_HEAD, [], [], NEW_TAIL])
 got = fm.wait_layout(dbg, WIN, lambda l: bool(l.view), timeout=6.0, grace=0.3)
 check("a wait satisfied by either frame answers with the one arriving",
       got is not None and got.view[2] == 1, f"got view={got and got.view}")
+
+# --- 8. the invalidation OUTLIVES the wait that saw the partial --------
+#
+# A wait timing out changes nothing about the app, so the frame it
+# refused to answer with is no more current afterwards than it was
+# during. Held per wait, the rule lapsed at the next call: the app went
+# quiet, the grace period expired, and the retired frame answered.
+reset()
+dbg = FakeDbg([OLD])
+fm.layout_now(dbg, WIN, tries=2)
+check("a complete frame is cached and current",
+      fm.last_layout() is not None and fm.layout_is_current())
+
+dbg = FakeDbg([NEW_HEAD])
+got = fm.wait_layout(dbg, WIN, lambda l: l.view[2] == 0, timeout=1.2, grace=0.3)
+check("the wait that sees the partial report times out", got is None)
+check("...leaving the cached frame NOT current", not fm.layout_is_current())
+check("...but still available as evidence",
+      fm.last_layout() is not None and fm.last_layout().view[2] == 0)
+
+dbg = FakeDbg([])                      # the app says nothing for this whole wait
+got = fm.wait_layout(dbg, WIN, lambda l: l.view[2] == 0, timeout=1.2, grace=0.3)
+check("a LATER silent wait does not answer from the retired frame", got is None,
+      f"got view={got and got.view}")
+
+dbg = FakeDbg([NEW_TAIL])              # the tail lands at last
+got = fm.wait_layout(dbg, WIN, lambda l: l.view[2] == 1, timeout=3.0, grace=0.3)
+check("the tail completes the block the earlier wait began",
+      got is not None and got.view[2] == 1, f"got view={got and got.view}")
+check("...and that frame is current", fm.layout_is_current())
+dbg = FakeDbg([])
+got = fm.wait_layout(dbg, WIN, lambda l: l.view[2] == 1, timeout=3.0, grace=0.3)
+check("...so silence answers from it again, the rule having re-armed",
+      got is fm.last_layout(), f"got={got}")
+
+# --- 9. layout_now consumes a partial report on the same terms ---------
+reset()
+dbg = FakeDbg([OLD])
+fm.layout_now(dbg, WIN, tries=2)
+dbg = FakeDbg([NEW_HEAD])
+check("layout_now answers None while the report is partial",
+      fm.layout_now(dbg, WIN, tries=2) is None)
+check("...and retires the cached frame for the waits after it",
+      not fm.layout_is_current())
+dbg = FakeDbg([])
+check("...so a silent wait for the old state times out",
+      fm.wait_layout(dbg, WIN, lambda l: l.view[2] == 0, timeout=1.2, grace=0.3) is None)
+dbg = FakeDbg([NEW_TAIL])
+got = fm.wait_layout(dbg, WIN, lambda l: l.view[2] == 1, timeout=3.0, grace=0.3)
+check("...and the lines it consumed still complete the block later",
+      got is not None and got.view[2] == 1, f"got view={got and got.view}")
+
+# --- 10. a respawned window inherits nothing from the old one ----------
+fm.reset_layout()
+check("reset_layout forgets the frame and its currency",
+      fm.last_layout() is None and not fm.layout_is_current())
+dbg = FakeDbg([])
+check("...so nothing answers a wait until the new window reports",
+      fm.wait_layout(dbg, WIN, lambda l: True, timeout=0.9, grace=0.3) is None)
 
 print(f"\nfilemanager_harness_hostcheck: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

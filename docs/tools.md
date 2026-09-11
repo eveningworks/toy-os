@@ -2118,10 +2118,12 @@ window without going through it will find its layout polls timing out.
   whole; a wait whose predicate never holds returns None rather than
   the layout it rejected; a state the app already reported answers
   a later wait after a grace period, since the app dedupes its whole
-  report block and repeats nothing; and that cached answer is OFF once
-  a newer report has begun, so a frame whose tail has not arrived
-  cannot let the previous one answer for a state the app has left.
-  Seconds, no guest.
+  report block and repeats nothing; that cached answer is OFF once a
+  newer report has begun, so a frame whose tail has not arrived cannot
+  let the previous one answer for a state the app has left; the same
+  frame STAYS ineligible across the waits that follow, since a wait
+  timing out changes nothing about the app; and a respawned window
+  inherits none of the old one's geometry. Seconds, no guest.
 - **`filemanager_test.py`** -- the File Manager: two panes, marking, and
   real file operations. **A check runs only after its prerequisite**:
   the view toggles are driven through `toolbar_click()`, which requires
