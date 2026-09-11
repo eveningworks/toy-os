@@ -3598,6 +3598,18 @@ measurement.
 
 ## Kernel test harness
 
+### Restore trust in the GUI suite: harness faults first, then the deterministic reds, intermittents kept with a rate
+
+Four tools are red while the feature under each works (`docs/bugs.md`,
+2026-09-09): `settings_test` (6 of 65, a harness fault -- the app
+scrolls by hand), `font_test` (6 of 30, asserting the retired
+kernel-font architecture), `taskbar_test` (no grouping, a real bug),
+and `popup_test` (one pixel sampled at the wrong shade). A source
+review (2026-09-11) put this ahead of new features: a suite with known
+reds hides a new one. Order: the two harness faults, then the two
+deterministic reds, and every intermittent stays listed with its
+measured rate rather than being re-run until green.
+
 *The heading used to be struck through as "completed 2026-08-13" while
 five boxes below it were unchecked. That is the milestone lying about
 itself: what shipped is the harness -- registration, `make test`, CI,
@@ -4876,6 +4888,16 @@ child, paint, and assert the new child reports a non-zero rect through
 its `bounds` op.
 
 ## Convention drift: rules that live only in prose
+
+### A compact capability table in README, since `check_docs.py` checks structure and its claims drift
+
+The README's known-gaps paragraph said no TLS, no fork and no TCP
+reassembly on 2026-09-11 while the tree had all three, and the doc
+check passed because it verifies links, pages and indexes, never a
+claim. A short table of what is BUILT, each row naming the convention
+or decision entry that carries it, is the shape that stays true:
+history goes to `docs/decisions/`, and the same split applies to long
+source comments.
 
 An audit on 2026-09-03 looked for places where two ways of doing one
 thing coexist in live, non-test code, such that a new session could
