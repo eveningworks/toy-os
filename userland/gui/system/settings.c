@@ -43,6 +43,7 @@
 #include "ui/uui_checkbox.h"
 #include "ui/uui_textbox.h"
 #include "ui/uui_button.h"
+#include "screensaver_config.h"
 #include "ui/uui_button_group.h"
 #include "ui/uui_statusbar.h"
 #include "ui/uui_scrollview.h"
@@ -79,7 +80,7 @@ _Static_assert(UUI_TEXTBOX_MAX >= SETTING_ABI_VALUE_MAX,
 // struct slot's `kind`.
 enum { CTRL_RADIO = 0, CTRL_COMBO, CTRL_SLIDER, CTRL_SPIN, CTRL_TEXT };
 
-enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_BUTTONS, ID_STATUS,
+enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST, ID_BUTTONS, ID_STATUS,
        ID_CONTROL_BASE = 100 }; // + slot, so a control names its own row
 
 // NON-ZERO on purpose: uui_button_group_take_activated() returns 0 for
@@ -239,6 +240,17 @@ static int g_slot_count;
 static struct uui_label     g_page_title;
 static struct uui_label     g_page_desc;
 static struct uui_checkbox  g_advanced_cb;
+// THE SCREENSAVER'S "Test" BUTTON, which is Windows' Preview by another
+// name. Page-specific, like the System Information page above it: a
+// setting is a value and this is an ACTION, and the registry has no way
+// to declare one. Shown only where it means something -- `g_test_has`.
+//
+// It spawns the saver and nothing else. The compositor recognises a
+// client out of the savers directory and dismisses it on the first
+// input exactly as it dismisses its own (wm_idle.h), so this needs no
+// protocol of its own and cannot stick.
+static struct uui_button    g_test_btn;
+static int g_test_has;
 static struct uui_sidebar   g_tree;
 static struct uui_button    g_btn[3];
 static struct uui_button_group g_buttons;
@@ -703,6 +715,15 @@ static void open_group(int g) {
     if (sys_setting(&m) == 0 && m.description[0])
         strlcpy(g_page_desc_text, m.description, sizeof g_page_desc_text);
 
+    // THE TEST BUTTON BELONGS TO THE PAGE THAT CARRIES THE SAVER, found
+    // by the setting it holds rather than by the page's NAME: a page
+    // renamed in /etc/settings.d would otherwise silently lose it.
+    g_test_has = 0;
+    for (int i = 0; i < g_slot_count; i++)
+        if (g_slot[i].setting >= 0 &&
+            strcmp(g_name[g_slot[i].setting], "desktop.screensaver") == 0)
+            g_test_has = 1;
+
     g_advanced_cb.checked = g_show_advanced;
     // The checkbox appears only where there is something to reveal --
     // an "advanced" toggle on a page with no advanced settings is a
@@ -1055,6 +1076,8 @@ static void relayout_page(void) {
     }
     PAGE[n++] = (struct uui_item){ .ops = &uui_checkbox_ops, .widget = &g_advanced_cb,
                                     .id = ID_ADVANCED, .hidden = !g_advanced_has };
+    PAGE[n++] = (struct uui_item){ .ops = &uui_button_ops, .widget = &g_test_btn,
+                                    .id = ID_TEST, .hidden = !g_test_has };
     PAGE_COUNT = n;
     PAGE_LAYOUT.count = n;
     // The widgets the ring pointed at may have been re-inited by
@@ -1198,6 +1221,26 @@ static void on_widget(struct uapp *a, int id, int reason) {
         g_show_advanced = g_advanced_cb.checked;
         if (g_page_group >= 0) open_group(g_page_group);
         break;
+    case ID_TEST: {
+        // THE SAVER AS IT IS CONFIGURED RIGHT NOW, staged value and all
+        // -- previewing what is on disk rather than what is on screen
+        // would answer a question nobody asked.
+        const char *name = 0;
+        for (int i = 0; i < g_slot_count && !name; i++) {
+            struct slot *sl = &g_slot[i];
+            if (sl->setting >= 0 &&
+                strcmp(g_name[sl->setting], "desktop.screensaver") == 0)
+                name = staged_value(sl);
+        }
+        if (!name || !name[0]) break;
+        char path[128];
+        snprintf(path, sizeof path, "%s/%s", SCREENSAVER_DIR, name);
+        int pid = sys_spawn(path, 0, -1);
+        if (pid > 0) snprintf(g_status, sizeof g_status, "Testing %s", name);
+        else         snprintf(g_status, sizeof g_status, "Could not start %s", name);
+        ulogf("settings: screensaver test %s pid %d\n", name, pid);
+        break;
+    }
     case ID_BUTTONS: {
         // The router names the WIDGET, and the group is one widget
         // holding all three -- so which one committed is collected from
@@ -1415,6 +1458,11 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
                       sl->choice_raw[sl->staged], sl->choice[sl->staged]);
             }
         }
+        // The Test button's rect, on the same terms as the toggle below
+        // it: a test aims at what the app reports, never at arithmetic
+        // of its own (docs/gui-guidelines.md).
+        ulogf("settings: test_button %d %d %d %d shown %d\n",
+              g_test_btn.x, g_test_btn.y, g_test_btn.w, g_test_btn.h, g_test_has);
         ulogf("settings: advanced_toggle %d %d %d %d shown %d\n",
               g_advanced_cb.x, g_advanced_cb.y, g_advanced_cb.w, g_advanced_cb.h,
               g_advanced_has);
@@ -1599,6 +1647,7 @@ int main(void) {
         g_slot[i].slider.bg = UTHEME_PANEL_BG;
         g_slot[i].slider.fg = UTHEME_TEXT;
     }
+    uui_button_init(&g_test_btn, 0, 0, 0, 0, "Test", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);
     uui_checkbox_init(&g_advanced_cb, 0, 0, 0, "Show advanced settings",
                        UTHEME_PANEL_BG, UTHEME_TEXT);
 

@@ -3,6 +3,7 @@
 #include "wm_idle.h"
 #include "wm/wm_conf.h"
 #include "wm_log.h"
+#include "wm_rawin.h"
 #include "rt/sys.h"
 #include "screensaver_config.h"
 #include "string.h"
@@ -45,6 +46,21 @@ static void stop_saver(void) {
     g_saver_pid = 0;
 }
 
+// THE SPRITE THAT IS ALREADY ON SCREEN. draw_cursor_at() skips the
+// pointer while a saver runs, but skipping is not erasing: the arrow
+// drawn before the saver started stays in the framebuffer until
+// something repaints that region, and on a quiet machine nothing does.
+// So a saver starting damages where the pointer is and asks for a
+// frame -- the pair CLAUDE.md insists on, because damage alone does not
+// request one.
+static void forget_cursor(void) {
+    int mx, my;
+    uint8_t buttons;
+    wm_rawin_mouse(&mx, &my, &buttons);
+    wm_damage_rect(mx - 4, my - 4, 40, 48);
+    redraw_pending = 1;
+}
+
 static void start_saver(void) {
     char path[128];
     snprintf(path, sizeof path, "%s/%s", SCREENSAVER_DIR, g_saver);
@@ -52,6 +68,7 @@ static void start_saver(void) {
     if (pid > 0) {
         g_saver_pid = pid;
         wm_track_launched(pid);   // so wm.c's reaper owns the zombie
+        forget_cursor();
         wm_logf("wm: screensaver %s started as pid %d\n", g_saver, pid);
         return;
     }
@@ -142,4 +159,18 @@ int wm_idle_force_start(void) {
 void wm_idle_force_stop(void) {
     stop_saver();
     g_last_input = sys_ticks();
+}
+
+void wm_idle_adopt_saver(int pid) {
+    if (pid <= 0) return;
+    // ALREADY OURS -- the idle clock spawned it and is tracking it, so
+    // the window it has just opened is the one we were waiting for.
+    if (pid == g_saver_pid) return;
+    // Somebody else's. Stop whatever we had, because two savers on
+    // screen is not a state with a right answer, and take this one.
+    stop_saver();
+    g_saver_pid = pid;
+    g_last_input = sys_ticks();   // it is on screen NOW, not in a minute
+    forget_cursor();
+    wm_logf("wm: adopted screensaver pid %d (started elsewhere)\n", pid);
 }

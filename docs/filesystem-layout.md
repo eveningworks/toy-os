@@ -42,7 +42,7 @@ in check_layout.py changes with it.)
 | `/bin/wm/system` | The desktop's own (`about`) | build | present |
 | `/bin/wm/apps` | Windowed applications (`calculator`, `notepad`, `uterm`) | build | present |
 | `/bin/wm/demos` | Things that exist to be looked at or tested (`shapes`, `uidemo`) | build | present |
-| `/bin/wm/savers` | Screensavers (`blank`, `starfield`) -- ordinary fullscreen clients the compositor spawns when the machine goes quiet, and the CHOICE LIST of `desktop.screensaver` is this directory | build | present |
+| `/bin/wm/savers` | Screensavers (`blank`, `bounce`, `matrix`, `plasma`, `solid`, `starfield`) -- ordinary fullscreen clients the compositor spawns when the machine goes quiet, and the CHOICE LIST of `desktop.screensaver` is this directory | build | present |
 | `/etc` | Config: `toyos.conf`, `storage.conf`, `net.conf`, `hwdata.conf`, `timezones` (the city database, SHIPPED -- tracked in `data/etc` and staged by the build, unlike its neighbours here), `history` (the kernel shell's) and `tosh_history` (ring 3's, appended) | boot | present |
 | `/home` | The one user's home. toy-os has no accounts, so there is no `/home/<user>`: what a multi-user system keeps per user lives one level up | build | present |
 | `/home/desktop` | THE DESKTOP: every icon is an entry here (`userland/wm/desktop.c`); a `.desktop` file is a launcher, drawn and opened as the app it names. A drop, a paste, "New folder" or the Start menu's "Add to desktop" lands here, and the File Manager browses it like any directory. Five launchers seeded ONCE (`seed/once/`), so a deleted one stays deleted | build | present |

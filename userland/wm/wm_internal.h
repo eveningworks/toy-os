@@ -587,6 +587,7 @@ int  wm_hwcursor_available(void);
 int  wm_hwcursor_sync(enum wm_cursor_kind kind);
 int  wm_hwcursor_active(void);
 void wm_hwcursor_invalidate(void);
+void wm_hwcursor_hide(void);
 
 // wm_render.c: the built-in arrow's coverage masks, for the plane --
 // the only built-in shape that exists as masks rather than draw calls.

@@ -94,6 +94,12 @@ static void build_sprite(const unsigned char *outline, const unsigned char *fill
     *out_h = dh;
 }
 
+// Turn the plane off and say so. Used where the compositor wants NO
+// pointer at all rather than a different shape -- over a screensaver,
+// where the sprite is not part of the composited image and so cannot be
+// hidden by simply not drawing it.
+void wm_hwcursor_hide(void) { hwc_hide(); }
+
 int wm_hwcursor_sync(enum wm_cursor_kind kind) {
     if (!wm_hwcursor_available()) return 0;
 

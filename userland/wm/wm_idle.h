@@ -37,6 +37,18 @@ uint32_t wm_idle_seconds(void);
 const char *wm_idle_saver_name(void);
 int wm_idle_minutes(void);
 
+// A CLIENT OUT OF /bin/wm/savers HAS JUST OPENED A WINDOW, whoever
+// started it: this compositor's own idle clock, System Settings' Test
+// button, or a person at a shell prompt. Adopting it is what makes all
+// three behave the same -- fullscreen, and gone on the first key --
+// rather than the last two leaving a saver on screen that nothing
+// dismisses, which is a way to lose the machine.
+//
+// The compositor learns the program from the client's SPAWN PATH
+// (QUERY_PROCPATH), never from anything the client said, so nothing can
+// claim to be a screensaver by naming itself one.
+void wm_idle_adopt_saver(int pid);
+
 // START AND STOP IT NOW, for `gui idle start|stop`. The shortest
 // timeout a person can configure is one minute, so a test that waited
 // for the clock would cost a minute a check -- these skip the WAIT and

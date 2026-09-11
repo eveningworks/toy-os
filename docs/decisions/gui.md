@@ -7053,6 +7053,22 @@ worked. The poll compares the two values it cares about instead. For
 the same reason the idle clock is NOT reset by a settings write: a
 script polling a setting is not a person at the keyboard.
 
+**The Test button is a spawn, and nothing else.** Windows' Preview by
+another name, and it needed no protocol: System Settings runs the
+configured saver, and the compositor adopts any client whose SPAWN PATH
+is in the savers directory. So a previewed saver is dismissed by input
+exactly like one the idle clock started -- and a preview that could not
+be dismissed would be a way to lose the machine, which is the failure
+this arrangement makes impossible rather than merely unlikely. It also
+means running a saver from a shell prompt behaves the same way.
+
+**No pointer over a saver**, and on a machine with a hardware cursor
+plane that has to be said rather than simply not drawn: the sprite is
+not part of the composited image, so skipping the draw leaves it
+exactly where it was. Starting a saver also damages where the pointer
+is and asks for a frame, because skipping is not erasing and on a quiet
+machine nothing else would repaint that region.
+
 **What is NOT built: turning the backlight off.** A saver darkens
 pixels; on a laptop the lamp stays on, which is most of the power. Doing
 it properly needs a TRANSIENT display-power control, because

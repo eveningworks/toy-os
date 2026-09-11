@@ -16,24 +16,35 @@
 #include <stdlib.h>
 #include <time.h>
 
-#define STARS 220
+#define STARS 420
 #define DEPTH 1024           // the z a star is born at, and dies past
 #define SPEED 14             // z units a frame -- about 1.3 s to cross
 
 static struct { int x, y, z; } g_star[STARS];
 static int g_seeded;
+// The surface the field was spread over. A saver opens at its
+// descriptor's size and is resized to the screen a frame later, so a
+// field seeded once fills a 640x480 box in the middle of a 1280x720
+// screen.
+static int g_for_w, g_for_h;
 
-// A star's x and y are in a box the width of the screen, so the field
-// fills the frame at every depth rather than being a cone in the
-// middle. Reborn far away when it passes the viewer.
+// A star is born in a box HALF the screen's size, not the whole of it.
+//
+// The projection divides by depth, so a star at its birth depth is
+// drawn at half its model offset and spreads outward as it approaches.
+// Born across the full width, most of them therefore start already off
+// screen and are never seen: the first version drew about eighty pixels
+// of a four-hundred-star field. Born across half, the field is dense
+// in the middle and streams outward, which is what it should look like.
 static void respawn(int i, int w, int h, int z) {
-    g_star[i].x = (int)((unsigned)rand() % (unsigned)(w * 2)) - w;
-    g_star[i].y = (int)((unsigned)rand() % (unsigned)(h * 2)) - h;
+    g_star[i].x = (int)((unsigned)rand() % (unsigned)w) - w / 2;
+    g_star[i].y = (int)((unsigned)rand() % (unsigned)h) - h / 2;
     g_star[i].z = z;
 }
 
 static void seed(int w, int h) {
-    srand((unsigned)time(0));
+    if (!g_seeded) srand((unsigned)time(0));
+    g_for_w = w; g_for_h = h;
     for (int i = 0; i < STARS; i++)
         respawn(i, w, h, 1 + (int)((unsigned)rand() % DEPTH));
     g_seeded = 1;
@@ -43,7 +54,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     (void)a;
     struct ugfx_surface *s = d->surface;
     int w = s->w, h = s->h, cx = w / 2, cy = h / 2;
-    if (!g_seeded) seed(w, h);
+    if (!g_seeded || w != g_for_w || h != g_for_h) seed(w, h);
     ugfx_fill_rect(s, 0, 0, w, h, 0x000000);
 
     for (int i = 0; i < STARS; i++) {

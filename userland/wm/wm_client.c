@@ -15,6 +15,8 @@
 // produced desktop.c/start_menu.c/file_picker.c. See wm.c's top
 // comment.
 #include "wm_internal.h"
+#include "screensaver_config.h"
+#include "wm_idle.h"
 #include "wm_dnd.h"
 #include "diag_abi.h"
 #include "lib/uchan.h"
@@ -749,6 +751,20 @@ static int identity_for_pid(int pid) {
     return -1;
 }
 
+// Whether `pid` was spawned out of the screensaver directory. The same
+// linear scan and the same rule as identity_for_pid() above: what a
+// program IS comes from the path it was spawned from, never from
+// anything it said about itself.
+static int pid_is_screensaver(int pid) {
+    struct query_procpath r;
+    uint32_t n = (uint32_t)k_strlen(SCREENSAVER_DIR);
+    QUERY_FOREACH(QUERY_PROCPATH, r, i) {
+        if (r.pid != pid) continue;
+        return k_strncmp(r.path, SCREENSAVER_DIR, n) == 0 && r.path[n] == '/';
+    }
+    return 0;
+}
+
 // Maps a client's buffer into this process, so the compositor can read
 // its pixels. Idempotent, and must be re-done after a resize: the frames
 // are reallocated, and the old mapping is revoked with them.
@@ -852,8 +868,13 @@ void wm_client_chan_pump(void) {
             r.a = -1;
             if (find_client_window(from, m.window) < 0 &&
                 on_window_created(from, m.window, m.a, m.b, 0, 0,
-                                  m.text, identity_for_pid(from)))
+                                  m.text, identity_for_pid(from))) {
                 r.a = (int)m.window;
+                // A SAVER IS A SAVER WHOEVER STARTED IT (wm_idle.h), so
+                // the Test button and a shell prompt get the same
+                // dismiss-on-input the idle clock's own does.
+                if (pid_is_screensaver(from)) wm_idle_adopt_saver(from);
+            }
             uchan_server_reply(&g_chan, from, &r, sizeof r);
             break;
         }

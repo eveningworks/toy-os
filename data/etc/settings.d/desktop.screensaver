@@ -1,0 +1,8 @@
+Description=What to show once the machine has been idle. Any key or a mouse movement ends it.
+Widget=dropdown
+Choice.blank=Blank screen
+Choice.bounce=Bouncing logo
+Choice.matrix=Matrix rain
+Choice.plasma=Plasma
+Choice.solid=Tumbling solid
+Choice.starfield=Starfield

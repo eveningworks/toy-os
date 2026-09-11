@@ -7,6 +7,7 @@
 // this file only draws the taskbar Start BUTTON that opens it, a
 // separate piece of chrome.
 #include "wm_internal.h"
+#include "wm_idle.h"
 #include "wm_dnd.h"
 #include "start_menu.h"
 #include "context_menu.h"
@@ -787,6 +788,24 @@ static int drawn_cursor_kind = -1;
 
 static void draw_cursor_at(int x, int y) {
     draw_drag_outline();
+    // NO POINTER OVER A SCREENSAVER. An arrow sitting on top of the
+    // stars is what every version of this feature has hidden since
+    // Windows 3.1, and it is not cosmetic here: the pointer is the one
+    // thing on screen that says the machine is awake.
+    //
+    // THE PLANE HAS TO BE TOLD. On a machine with a hardware cursor the
+    // sprite is not part of the composited image, so not drawing it
+    // leaves it exactly where it was -- which is the bug this fixes,
+    // reported from the ASUS where the plane is live.
+    //
+    // Both render paths funnel through here, so this is the whole of
+    // it: the cheap move path has already restored what was under the
+    // sprite by the time it calls this.
+    if (wm_idle_saver_pid()) {
+        wm_hwcursor_hide();
+        drawn_cursor_kind = -1;
+        return;
+    }
     enum wm_cursor_kind kind = resolve_cursor_kind(x, y);
     if (wm_hwcursor_sync(kind)) {
         // The plane shows the pointer: nothing saved, nothing drawn.

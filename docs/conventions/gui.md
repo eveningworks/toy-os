@@ -855,6 +855,15 @@ this the obvious way), not from how much history it accumulated.
   refused and this is the one window where that must not be possible.
   And **the timeout of zero is the enable**, so there is no second
   switch to disagree with it. See `docs/decisions.md`.
+
+  **A saver that caches the screen size must re-read it**, because it
+  opens at its descriptor's size and is resized to the screen a frame
+  later -- two of them built their grid once and covered a 640x480
+  corner of a 1280x720 screen, which looks like a saver that half
+  works. And **a saver is spawned by anything, not only the idle
+  clock**: the compositor recognises a client by its SPAWN PATH and
+  adopts it, so System Settings' Test button and a shell prompt both
+  get dismiss-on-input for free, and neither can strand the screen.
 - **A CLICK THAT MISSES THE WINDOW LANDS ON WHATEVER IS BEHIND IT, AND
   AT THE BOTTOM OF THE SCREEN THAT IS THE TASKBAR.** The taskbar's
   button for the focused window MINIMIZES it, and a minimized client
