@@ -24,10 +24,14 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
+- [ ] Measure desktop and input latency during heavy disk I/O, and keep that workload as the yardstick for the three items below  *(Scheduler: blocking, priorities, classes)*
+- [ ] **Interruptible syscalls** -- a trap gate plus retiring `g_next_kernel_rsp` as a single global  *(Scheduler: blocking, priorities, classes)*
+- [ ] Replace the preemption guard with a real sleeping lock -- **Needs:** interruptible syscalls, above  *(Scheduler: blocking, priorities, classes)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
+- [ ] Restore trust in the GUI suite: harness faults first, then the deterministic reds, intermittents kept with a rate  *(Kernel test harness)*
 - [ ] A panic RAM store, pstore-shaped, AND a panic that warm-resets after a countdown -- a power cycle loses RAM  *(Crash reporting & postmortem debugging)*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
@@ -63,8 +67,9 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~Blocking + wait queues~~ DONE 2026-08-20 -- a wait channel is an ADDRESS, so a wake reaches one pipe/client, not a category
 - [ ] Retire `uapp_desc.tick_ms` as a REQUIREMENT
 - [ ] Two scheduling classes, Linux-shaped
-- [ ] **Interruptible syscalls** -- a trap gate plus retiring `g_next_kernel_rsp` as a single global
-- [ ] Replace the preemption guard with a real sleeping lock -- **Needs:** interruptible syscalls, above
+- [ ] **NEXT** Measure desktop and input latency during heavy disk I/O, and keep that workload as the yardstick for the three items below
+- [ ] **NEXT** **Interruptible syscalls** -- a trap gate plus retiring `g_next_kernel_rsp` as a single global
+- [ ] **NEXT** Replace the preemption guard with a real sleeping lock -- **Needs:** interruptible syscalls, above
 - [ ] Bound how long a frame can block on I/O
 
 ### Signals & process control
@@ -934,6 +939,7 @@ hand as a throwaway probe during a real hunt (see roadmap-details).
 - [ ] A `ktest -v` that reports each assertion, not just pass/fail
 - [ ] Tests for the boundary this kernel enforces by include path
 - [ ] A golden-image baseline for the GUI, diffed automatically
+- [ ] **NEXT** Restore trust in the GUI suite: harness faults first, then the deterministic reds, intermittents kept with a rate
 
 ### Convention drift: rules that live only in prose
 
@@ -950,6 +956,8 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [x] ~~Files, Task Manager, Settings and UI Demo onto the layout log's vocabulary~~ DONE 2026-09-03 -- and eight widgets gained `bounds`
 - [x] ~~Two unclipped string draws in fixed boxes, and the tray's `strlen * char_w` hit box~~ DONE 2026-09-03
 - [ ] Calculator sets `.layout` without `.widgets` and lives on `uui_button_group`; a checker for "layout but no router"
+- [ ] A compact capability table in README, since `check_docs.py` checks structure and its claims drift
+- [ ] A scheduled clean-checkout CI run (`build.yml` on a cron, not per push), so environmental drift is caught before a release tag
 - [x] ~~`k_strcpy` vs `k_strlcpy` with no rule written anywhere~~ DONE 2026-09-03 -- `k_strcpy` deleted (it was 30 vs 206)
 - [x] ~~`write_dec`/`write_hex` chains beside `*_printf`~~ DONE 2026-09-03 -- frozen per file by `check_chains.py`
 - [x] ~~26 copy-to/from-user calls discard their result under a "validated above" comment~~ DONE 2026-09-03 -- the checker refuses it

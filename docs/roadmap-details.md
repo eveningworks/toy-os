@@ -4195,6 +4195,19 @@ refer to them by number.
       end, in the two lines of assembly that adjust `rsp` and the call
       target.
 
+### Measure desktop and input latency during heavy disk I/O, and keep that workload as the yardstick for the three items below
+
+A source review (2026-09-11) put responsiveness under I/O ahead of more
+hardware support: the syscall gate runs with interrupts off and the
+preemption guard is global, so a long filesystem operation stalls
+pointer and keyboard delivery for its whole length. Nothing here
+measures that yet. The measurement wanted is pointer-to-cursor and
+key-to-echo latency while `stress` or a large copy runs, taken before
+any of the three scheduler items land and again after each, so the
+work is judged by the number it was started for. `tools/ping_rtt.py`
+is the shape (a round trip in microseconds, printed), pointed at input
+instead of the compositor channel.
+
 ### Interruptible syscalls
 
 `int 0x80` runs through an INTERRUPT gate (`idt_set_gate(128, isr128, 0,
@@ -4805,6 +4818,19 @@ wheel event not reaching the widget at all. The cheap next step is
 `uapp_log_layout()` on the sidebar to see whether its content extent is
 larger than its viewport, since a scroll view with nothing to scroll
 behaves exactly like this.
+
+## An unknown syscall number returns itself
+
+`syscall_dispatch()` looks the number up in `syscall_table.c` and, for a
+miss, does nothing: `isr_common`'s epilogue restores the registers as
+they were, so `rax` still holds the number the caller loaded. Linux and
+NT both answer `-ENOSYS` (NT: `STATUS_INVALID_SYSTEM_SERVICE`), which
+is what lets a program probe for a call and fall back. Reproduce with a
+`/tests` program that loads a number past the table's end (and one
+inside it with no handler), issues `int 0x80`, and prints `rax`: today
+it prints the number. Established by reading the dispatcher
+(2026-09-11), not by that run yet -- write the test first, watch it
+print the number, then add the miss branch.
 
 ## `damage_sweep.py` reports one violation on `start-menu dismiss`
 
