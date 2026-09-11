@@ -1094,7 +1094,16 @@ static void trim_run(uint32_t first_blk, uint32_t count) {
 // write targets, FLUSH, clear header (no barrier -- a stale committed
 // header just replays idempotently).
 
-static void txn_reset(void) { g_txn_count = 0; g_txn_credits = 0; }
+// A DEFERRED transaction is never reset here: it holds other operations'
+// completed writes, and only txn_flush_deferred() -- which clears the
+// flag first -- may commit or drop it. Every other caller that resets
+// on failure is unwinding its OWN transaction, and after a refused
+// txn_begin() it has none.
+static void txn_reset(void) {
+    if (g_txn_deferred) return;
+    g_txn_count = 0;
+    g_txn_credits = 0;
+}
 
 // Open a transaction that will stage at most `credits` DISTINCT blocks,
 // jbd2's reservation discipline in miniature: an operation that cannot
@@ -1133,8 +1142,9 @@ static int txn_commit(void);
 // nothing open. Returns 0 only if the commit itself failed.
 static int txn_flush_deferred(void) {
     if (!g_txn_deferred) return 1;
-    g_txn_deferred = 0;
     struct t3_state *owner = g_txn_owner;
+    int count = g_txn_count, credits = g_txn_credits;
+    g_txn_deferred = 0;
     g_txn_owner = 0;
     if (!owner) { txn_reset(); return 1; }
     // txn_commit() reads S->vol and S->jrn_seq, so the owner has to be
@@ -1144,12 +1154,26 @@ static int txn_flush_deferred(void) {
     S = owner;
     int ok = txn_commit();
     S = save;
+    if (!ok) {
+        // KEEP THE STAGED WORK. txn_commit() zeroed the count, but the
+        // images are intact and the targets are either untouched or
+        // left committed for replay, so the next flush can retry.
+        // Dropping them here lost another process's completed writes
+        // whenever an unrelated operation failed its journal write:
+        // blocks allocated, inode never updated, a leak at fsck.
+        g_txn_count = count;
+        g_txn_credits = credits;
+        g_txn_deferred = 1;
+        g_txn_owner = owner;
+    }
     return ok;
 }
 
 static int txn_begin(int credits) {
-    // See the hazard note above: never discard staged work.
-    if (g_txn_deferred) txn_flush_deferred();
+    // See the hazard note above: never discard staged work -- and a
+    // flush that FAILS keeps it, so the new operation is refused rather
+    // than staged on top of it.
+    if (g_txn_deferred && !txn_flush_deferred()) return 0;
     g_txn_count = 0;
     g_txn_credits = 0;
     if (credits <= 0 || credits > (int)S->jslots) return 0;
@@ -1633,7 +1657,12 @@ static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
             if (!txn_begin((int)S->jslots)) return 0;
             g_txn_deferred = 1;
             g_txn_owner = S;
-            if (!txn_stage_inode(ino, node)) { txn_reset(); return 0; }
+            if (!txn_stage_inode(ino, node)) {
+                g_txn_deferred = 0;   // a fresh transaction: nothing to keep
+                g_txn_owner = 0;
+                txn_reset();
+                return 0;
+            }
         }
         return 1;   // durable at the next commit -- see txn_flush_deferred()
     }
@@ -2325,7 +2354,14 @@ static void unmount_state(void) {
     // Anything still staged has to land before the state it describes
     // is freed -- after this the journal could not be replayed against
     // a mount that no longer exists.
-    if (g_txn_deferred && g_txn_owner == S) txn_flush_deferred();
+    if (g_txn_deferred && g_txn_owner == S) {
+        txn_flush_deferred();
+        // A flush that failed here has nowhere left to retry: the state
+        // it belongs to is about to go. Drop it rather than keep a
+        // transaction whose owner is freed.
+        g_txn_deferred = 0;
+        g_txn_owner = 0;
+    }
     if (S->gd) { kfree(S->gd); S->gd = 0; }
     if (S->bbm) { kfree(S->bbm); S->bbm = 0; }
     if (S->ibm) { kfree(S->ibm); S->ibm = 0; }

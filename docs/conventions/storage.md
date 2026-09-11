@@ -436,7 +436,7 @@ which is why `F_FULLFSYNC` exists and every database there works around
 it.
 
 
-## `storage.sync = batched` HOLDS A TRANSACTION OPEN, AND THREE THINGS MUST KEEP IT HONEST
+## `storage.sync = batched` HOLDS A TRANSACTION OPEN, AND FOUR THINGS MUST KEEP IT HONEST
 
 **It is the DEFAULT since 2026-09-04.** The transaction covers the
 INODE BLOCK only -- data and bitmaps are on disk before it opens -- so
@@ -444,7 +444,7 @@ deferring the commit risks a lost size update and a leak `fsck`
 reclaims, not an unreplayable journal. `storage.sync = strict` restores
 commit-per-write.
 
-If you touch this, know the three:
+If you touch this, know the four:
 
 - **`txn_begin()` commits any deferred transaction first.** It zeroes
   `g_txn_count`, so an operation opening its own would discard every
@@ -456,6 +456,17 @@ If you touch this, know the three:
 - **Reads consult the staged image at `vol_read_sectors()`**, not at
   `read_block()` -- `read_inode()` reads one SECTOR, so a block-level
   overlay misses the only read that matters.
+- **A flush that FAILS keeps the staged work, and `txn_reset()` never
+  touches a deferred transaction.** The deferred transaction holds
+  OTHER operations' completed writes, so when the operation that
+  happens to open the next commit fails its journal write, dropping the
+  staging area discards them: blocks allocated, inodes never updated,
+  five leaked blocks at the next `fsck` and a log file missing its
+  tail. `txn_flush_deferred()` restores the count on failure and
+  `txn_begin()` refuses the new operation instead; the next flush
+  retries. Found because logd's appends shared the transaction with
+  the fault-injection KTESTs (2026-09-11); `fs_test.c`'s "a failed
+  operation keeps another write's deferred inode update" is the check.
 
 - **The idle path is what bounds how LONG a commit can sit.**
   `fs_ops.idle` -> `tfs3_idle()`, from `scheduler_idle()` beside
@@ -474,7 +485,7 @@ disabled entirely.
 ## `storage.sync = lazy` TURNS OFF THE JOURNAL'S BARRIERS, AND THAT IS ext4's `nobarrier`
 
 Every `fs_write*()` call is one TFS3 transaction ending in two real
-device flushes. `storage.sync` (default `strict`) is the switch;
+device flushes. `storage.sync` (default `batched`, above) is the switch;
 `txn_barrier()` in `tfs3.c` is the one place both barriers go through.
 
 **`lazy` risks corruption, not just lost writes.** Both barriers order

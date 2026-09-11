@@ -39,7 +39,12 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from serial_console import DEFAULT_PORT, SerialGuest  # noqa: E402
 
-DEFAULT_TIMEOUT = 60.0
+# A HANG GUARD, sized in HOST seconds against a suite that reports ~40 s
+# of GUEST time: under TCG the guest clock lags a loaded host, and a
+# 60 s guard once expired at 65 s host time on a transcript that already
+# held "ktest: PASSED ... in 40.3s" (1 run in 6, 2026-09-11). Twice the
+# suite's own reading is still a hang guard, not a budget.
+DEFAULT_TIMEOUT = 120.0
 
 
 def fail(message, facts):
@@ -118,6 +123,54 @@ def main():
         guest.wait_for("toywm is ready", min(deadline, time.time() + 20))
         guest.send("sh service stop toywm")
         guest.wait_for("toywm stopped", min(deadline, time.time() + 10))
+
+        # AND QUIESCE THE DISK. logd persists every kernel-log line to
+        # /var/log/toyos.log once a second, and the suite logs hundreds
+        # (~48 KB over one run, measured 2026-09-11), so its appends land
+        # between a test's two disk-usage reads, dirty sectors between
+        # a test's two flushes, and share TFS3's deferred transaction
+        # with a test that fails on purpose. Measured on fresh seeds:
+        # 4 red runs in 6 with logd up, 0 in 6 with it stopped. Same
+        # mechanism as the desktop stop above, and just as forgotten by
+        # the next boot.
+        guest.send("sh service stop logd")
+        guest.wait_for("logd stopped", min(deadline, time.time() + 10))
+
+        # THE OTHER WRITER IS THE DHCP ONE-SHOT, which writes
+        # /etc/resolv.conf when the lease lands a few seconds into the
+        # boot -- inside the fs suite when `--suite fs` starts it at
+        # once (a truncate test's usage moved by one block, 2026-09-11),
+        # after it when the full suite reaches those tests. The lease
+        # line follows the write. A boot with no network never prints
+        # it, and the bounded wait falls through with nothing pending.
+        guest.wait_for("dhcp: lease", min(deadline, time.time() + 15))
+
+        # AND START FROM A CLEAN VOLUME. Under `storage.sync = batched`
+        # a guest killed with an inode update still deferred leaks the
+        # blocks past it -- the documented crash cost, `fsck` reclaims
+        # -- and every harness here kills its guest: the smoke test
+        # boots this same image just before `make test` in preflight,
+        # and left 2 leaked blocks 3 boots in 3 when killed where it
+        # stops. The suite's first fsck asserts clean, so the
+        # precondition is established here and REPORTED rather than
+        # inherited: a count is printed whenever anything was reclaimed.
+        mark = len(guest.transcript)
+        guest.send("sh fsck repair")
+        fsck_deadline = min(deadline, time.time() + 20)
+        while time.time() < fsck_deadline and guest.sock is not None:
+            guest.pump()
+            tail = guest.transcript[mark:]
+            # The count is a separate write after the label, so wait for
+            # the line's closing "KB)" rather than for the label alone.
+            if "fsck: clean." in tail:
+                break
+            if "blocks reclaimed:" in tail and "KB)" in tail.split("blocks reclaimed:", 1)[1]:
+                break
+        reclaimed = next((l.strip() for l in guest.transcript[mark:].splitlines()
+                          if "blocks reclaimed:" in l), "")
+        if reclaimed and not reclaimed.endswith(" 0 (0 KB)"):
+            print(f"ktest_run: fsck before the suite -- {reclaimed} "
+                  "(left by a previous boot that was killed)")
 
         if not guest.send(f"ktest {args.suite}".strip()):
             return fail("could not send the ktest command", guest.diagnostics())

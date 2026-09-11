@@ -112,11 +112,10 @@ one table.
 **Known gaps** — **BIOS/CSM boot only; UEFI does not work.** GRUB's EFI
 build faults before the kernel runs, so a machine with CSM disabled will
 not boot this. No SMP: other cores are discovered through the MADT and
-every one of them reports offline. Networking has no TLS, and TCP drops a
-segment that arrives out of order rather than reassembling it. USB has no
-mass storage and no HID report-descriptor parsing. Dynamic linking is
+every one of them reports offline. USB has no mass storage and no HID report-descriptor parsing. Dynamic linking is
 eager-binding with no `dlopen`; `mmap`'s `MAP_SHARED` works only over a
-named shared-memory object, and there is no `mprotect` and no `fork`.
+named shared-memory object, and there is no `mprotect`; `fork` is
+copy-on-write but `spawn` is still the door every program uses.
 Swap has its area and its page-table encoding and nothing that pages out
 yet. **No privilege model**: no user accounts and no permission checks,
 so anything ring 3 can ask for, any process can ask for.

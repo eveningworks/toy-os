@@ -31,7 +31,17 @@ waiting for init to report it ready, because the winshare KTESTs need
 the compositor role and refuse to take it from a live desktop; nothing
 about that stop survives to the next boot, and the run FAILS if the
 role was still held when the suite ran, so a silently-skipped suite
-cannot read as a pass), `vm.py`
+cannot read as a pass. **It stops `logd` too, and waits for the DHCP
+lease**, because the suite needs a QUIET DISK: the `fs` and `atac`
+tests compare disk usage and flush counts against themselves, and
+`logd` persisting the suite's own kernel-log lines landed between
+those reads on 4 fresh boots in 6, while the dhcp one-shot writes
+`/etc/resolv.conf` a few seconds into the boot. **And it runs `fsck
+repair` first, printing what it reclaimed**: a guest killed with a
+`batched` inode update still deferred leaks the blocks past it by
+design, every harness here kills its guest, and the suite's first fsck
+asserts clean -- so the precondition is established rather than
+inherited from whichever tool booted the image last), `vm.py`
 (start a headless VM and run shell commands against it, getting text
 back, `--virtio-disk` likewise; `--usb xhci|xhci+mouse` attaches an
 xHCI controller and USB HID devices, off by default because attaching a

@@ -125,5 +125,8 @@ KTEST("driver", "unbinding something not bound changes nothing") {
     driver_unbound("ktest-unbind2", "enp1s1");
     driver_unbound("ktest-nosuchdriver", "enp1s0");
     KTEST_ASSERT(k_strcmp(devs_of("ktest-unbind2"), "enp1s0") == 0);
+    // Leave the registry as found, or a second `ktest` in the same boot
+    // sees "enp1s0 enp1s0" here and fails.
+    driver_unbound("ktest-unbind2", "enp1s0");
 }
 

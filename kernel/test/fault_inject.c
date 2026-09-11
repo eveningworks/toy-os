@@ -7,6 +7,16 @@
 // cares about, and none of it belongs in the injection points
 // themselves, which sit on hot paths.
 #include "fault_inject.h"
+#include "scheduler.h"
+#include "kfmt.h"
+
+// WHO ARMED THE COUNTER, so a failure consumed by somebody else is
+// visible: the counters are global, a ring-3 process can be scheduled
+// between a test's arm and its call, and its write would then fail in
+// the test's place. Logged, bounded, never seen in ~20 runs beside a
+// live logd -- so no scoping (Linux's `fail*/task-filter`) until it is.
+static int g_armer = -1;
+static int g_foreign_logged;
 
 static uint32_t g_ata_writes;
 static uint32_t g_ata_reads;
@@ -18,11 +28,11 @@ static uint32_t g_blk_writes;
 static uint32_t g_blk_reads;
 static uint32_t g_allocs;
 
-void fault_fail_next_ata_writes(uint32_t count) { g_ata_writes = count; }
-void fault_fail_next_ata_reads(uint32_t count)  { g_ata_reads = count; }
-void fault_fail_next_block_writes(uint32_t count) { g_blk_writes = count; }
-void fault_fail_next_block_reads(uint32_t count)  { g_blk_reads = count; }
-void fault_fail_next_allocs(uint32_t count)     { g_allocs = count; }
+void fault_fail_next_ata_writes(uint32_t count) { if (count) g_armer = scheduler_current_pid(); g_ata_writes = count; }
+void fault_fail_next_ata_reads(uint32_t count) { if (count) g_armer = scheduler_current_pid(); g_ata_reads = count; }
+void fault_fail_next_block_writes(uint32_t count) { if (count) g_armer = scheduler_current_pid(); g_blk_writes = count; }
+void fault_fail_next_block_reads(uint32_t count) { if (count) g_armer = scheduler_current_pid(); g_blk_reads = count; }
+void fault_fail_next_allocs(uint32_t count) { if (count) g_armer = scheduler_current_pid(); g_allocs = count; }
 
 int fault_any_armed(void) {
     return g_ata_writes != 0 || g_ata_reads != 0
@@ -33,6 +43,12 @@ int fault_any_armed(void) {
 static int consume(uint32_t *counter) {
     if (*counter == 0) return 0;
     (*counter)--;
+    int me = scheduler_current_pid();
+    if (me != g_armer && g_foreign_logged < 16) {
+        g_foreign_logged++;
+        klog_printf("fault: injected failure consumed by pid %d (armed by pid %d, %u left)\n",
+                    me, g_armer, (unsigned)*counter);
+    }
     return 1;
 }
 

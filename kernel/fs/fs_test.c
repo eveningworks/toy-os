@@ -12,6 +12,7 @@
 #include "kapi.h"
 #include "tfs3.h" // the caps-declaration test below reads tfs3_ops directly
 #include "block.h" // blk_sector_count() -- the geometry test at the bottom
+#include "storage_config.h" // storage_sync_batched() -- the deferred-commit test
 
 
 // One path per test, not one shared path, and every test asserts its
@@ -790,6 +791,52 @@ KTEST("fs", "a failed rename leaves both names as they were") {
     KTEST_ASSERT(k_strcmp(data, "keepme") == 0);
 
     fs_delete("/.ktest_mvf_a");
+}
+
+// A FAILED OPERATION MUST NOT DISCARD ANOTHER WRITER'S DEFERRED UPDATE.
+// Under `batched` a write's inode update sits staged until the next
+// commit, and that commit is opened by whatever operation comes next --
+// here one that is made to fail. The staged update has to survive the
+// failure. This is the shape logd's appends took beside the failed-
+// rename test above, and it presented as five leaked blocks at the next
+// fsck: blocks allocated, inode never updated.
+//
+// THE FAILING OPERATION IS A RENAME ON PURPOSE. A create flushes its
+// allocation bitmap BEFORE it opens a transaction, so under the fault
+// it fails there and never reaches the deferred flush -- a version of
+// this test built on fs_touch() stayed green with the fix reverted.
+// Rename's first write IS the deferred commit.
+KTEST("fs", "a failed operation keeps another write's deferred inode update") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    if (!storage_sync_batched()) KTEST_SKIP("only `storage.sync = batched` defers a commit");
+    FRESH("/.ktest_keep");
+    FRESH("/.ktest_mv_a");
+    FRESH("/.ktest_mv_b");
+    KTEST_ASSERT(fs_write("/.ktest_mv_a", "movable", 0) == 1);
+    KTEST_ASSERT_EQ(fs_sync(NULL), 1);           // start with nothing deferred
+
+    static char chunk[4096];
+    for (int i = 0; i < 4096; i++) chunk[i] = 'k';
+    KTEST_ASSERT(fs_write_range("/.ktest_keep", 0, chunk, sizeof(chunk)) == 1); // staged, not committed
+
+    fault_fail_next_block_writes(64);
+    int moved = fs_rename("/.ktest_mv_a", "/.ktest_mv_b");
+    fault_fail_next_block_writes(0);
+    KTEST_ASSERT_EQ(moved, 0);
+
+    // The earlier write is still the truth, and it lands on the next
+    // commit rather than having been thrown away with the failure.
+    KTEST_ASSERT_EQ((int64_t)fs_size("/.ktest_keep"), 4096);
+    KTEST_ASSERT_EQ(fs_sync(NULL), 1);
+    struct fs_check_result r;
+    KTEST_ASSERT(fs_check(0, &r) == 1);
+    KTEST_ASSERT_EQ(r.leaked, 0);
+    static char back[4096];
+    KTEST_ASSERT_EQ(fs_read_range("/.ktest_keep", 0, back, sizeof(back)), 4096u);
+    KTEST_ASSERT(k_memcmp(back, chunk, sizeof(back)) == 0);
+
+    fs_delete("/.ktest_keep");
+    fs_delete("/.ktest_mv_a");
 }
 
 KTEST("fs", "fsck reports a clean filesystem") {
