@@ -261,11 +261,12 @@ void fs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, i
 // Linux's VFS plays for FAT. Callers may compare inos for identity
 // within one boot of one filesystem; nothing more is promised.
 //
-// `created`/`modified` are SECONDS SINCE THE UNIX EPOCH -- but derived
-// from local civil time (tz.c's rtc_read_local(), converted via
-// tz_rtc_to_epoch()), with no zone recorded. That makes timestamps
-// arithmetic-comparable, which the old broken-down struct rtc_time
-// shape wasn't; it does NOT make them UTC. A backend that stores civil
+// `created`/`modified` are SECONDS SINCE THE UNIX EPOCH, **UTC** --
+// ktime_read() converted through cal_rtc_to_epoch(). They were
+// local-derived until the timezone left ring 0 (api/tz.h), which made
+// them arithmetic-comparable but not comparable with anything else;
+// they are ordinary epochs now, and a display converts in ring 3. A
+// backend that stores civil
 // time on disk (TFS2's 7-byte RTC fields, format unchanged) converts
 // at stat time; a backend that stores epoch natively (TFS3) reports it
 // straight through -- see FS_CAP_EPOCH_TIME below. Display formatting

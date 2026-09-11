@@ -2553,10 +2553,14 @@ real scanout hardware does. Do not write a pixel assertion for one.
   height tells them apart.
 
 - **A SETTING WHOSE CHOICES ARE DATA NAMES THEM ITSELF:
-  `choice_label`.** `/etc/settings.d`'s `Choice.<value>=` lines cover a
-  list a file's author can see; they cannot cover one that is COMPUTED
-  (the timezones from `/etc/timezones`, the keyboard layouts from a
-  directory) without regenerating the file whenever the data changes.
+  `choice_label`, or `choice_file` when the data IS a file.**
+  `/etc/settings.d`'s `Choice.<value>=` lines cover a list a file's
+  author can see; they cannot cover one that is COMPUTED (the keyboard
+  layouts from a directory) without regenerating the file whenever the
+  data changes. `choice_file` is the third form: the registry reads the
+  named file's lines, first comma-separated field the value and last the
+  label, and knows nothing else about them -- which is how the timezone
+  dropdown survived the city database leaving ring 0.
   Three sources, most specific first: `/etc/settings.d`, then
   `choice_label`, then the value itself -- so a client draws the ABI's
   `label` unconditionally and never decides, and an installation can

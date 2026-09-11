@@ -3990,7 +3990,7 @@ upward, no caller naming the hardware.
       context switch, so sub-tick work stops reading 0% -- would be the
       second real caller.
 
-      Two cautions. `rtc_read_local()`/`tz_rtc_to_epoch()` is WALL CLOCK
+      Two cautions. The wall clock is WALL CLOCK
       and does not belong behind the same interface; Linux keeps
       clocksource and RTC separate deliberately, and merging them here
       would be the mistake this entry is meant to prevent. And

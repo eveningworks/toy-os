@@ -273,10 +273,12 @@ Unchanged from v1. Matches `struct rtc_time` in
 | 4 | 1 byte | month | 1–12 |
 | 5 | 2 bytes (uint16 LE) | year | full year, e.g. `2026` |
 
-**This is broken-down local time, not a Unix epoch integer** -- read
-via `rtc_read_local()` (`kernel/lib/tz.c`), which applies the
-timezone/DST offset the toy-os user had selected (via the shell's
-`timezone` command) at the moment the timestamp was written. There's
+**This is broken-down civil time, not a Unix epoch integer** -- and it
+is UTC on anything written since 2026-09-11, when the timezone left the
+kernel (`docs/decisions.md`). Records written before that carry the
+LOCAL time of whatever city was selected when they were written, with
+nothing to say which; the two are indistinguishable in the format.
+There's
 no timezone/UTC-offset field stored anywhere in the record or the
 superblock -- if a browsing tool wants to show these fields
 meaningfully alongside a real-world reference, it should just display

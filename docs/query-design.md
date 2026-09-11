@@ -531,12 +531,18 @@ perfectly consistent when only one side is shown.
 Added 2026-09-03, alongside the software wall clock, and it exists for
 one reason: **nothing in ring 3 could read UTC at all.**
 
-`SYS_GETTIME` hands back broken-down LOCAL civil time — the kernel
-applies the configured city's offset before it answers — and libc's
-`time()` returns a local-derived epoch, deliberately, so that it is
-comparable against the filesystem's stored timestamps. Neither can be
-compared against a timestamp that arrived off the wire, which is exactly
-what `/bin/ntpd` has to do to report an offset.
+`SYS_GETTIME` handed back broken-down LOCAL civil time — the kernel
+applied the configured city's offset before it answered — and libc's
+`time()` returned a local-derived epoch, so that it was comparable
+against the filesystem's stored timestamps. Neither could be compared
+against a timestamp that arrived off the wire, which is exactly what
+`/bin/ntpd` has to do to report an offset.
+
+**That is no longer why it exists.** The timezone left the kernel on
+2026-09-11 and `SYS_GETTIME` answers in UTC, so ring 3 can read UTC
+through the ordinary call. `QUERY_CLOCK` stays because it reports what
+`SYS_GETTIME` cannot: the clocksource behind the wall clock, and
+whether the clock has ever been set.
 
 **A fact rather than a syscall, and rather than bending `SYS_GETTIME`.**
 Changing what `SYS_GETTIME` returns would silently move `/bin/time`, the

@@ -305,6 +305,12 @@ TESTS = [
     # every expected value was checked against the host's Python
     # datetime rather than against the code under test.
     ("libc5_test", 0, None, None),
+    # The timezone conversion, which is libc's since the city database
+    # left ring 0 (api/tz.h): the offset, both DST rules and their
+    # transition days. It WRITES `system.timezone` and puts it back,
+    # including on a failed check -- a test that leaves a setting behind
+    # changes the machine for every later tool.
+    ("utz_test", 0, None, None),
     ("stdio_test", 0,
      ["stdio_test: all checks passed", "atexit:BA"], ["FAIL"]),
     # SYS_QUERY from ring 3. Runs fine under `run`: it spawns nothing and

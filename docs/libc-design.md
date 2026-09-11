@@ -413,18 +413,21 @@ the DST rules and the persisted city choice -- so it reaches for `fs.h`,
 `days_from_civil` in userland, which is the duplication the whole
 shared-source rule exists to prevent.
 
-**`gmtime()` AND `localtime()` ARE THE SAME FUNCTION HERE, and `time()`
-is not UTC.** That is deliberate and it keeps the system honest. The RTC
-is read as local civil time with the city's offset and DST already
-applied, and the filesystem stores epochs derived from that same
-reckoning. So `time()` returns an epoch directly comparable with a
-file's `st.modified` -- which is what programs actually do with it.
-Making `time()` return true UTC while the filesystem's epochs stayed
-local would have put a silent skew between two numbers that look
-comparable, which is strictly worse than a documented simplification.
-The fix is the system-wide stored-UTC-offset item on the roadmap, not a
-libc patch; when it lands these two become genuinely different and
-nothing else in the header changes.
+**`time()` IS UTC AND `localtime()` IS A REAL CONVERSION** -- since
+2026-09-11, when the timezone left the kernel. `userland/libc/tz.c`
+reads `/etc/timezones`, applies the selected city's offset and its DST
+rule, and `tzset()` re-reads the selection. `timegm()` is the UTC
+counterpart of `mktime()`, and `tz_localize()` does the same for the
+broken-down time `SYS_GETTIME` returns. That is glibc's arrangement:
+the kernel knows UTC, the C library owns the zone database.
+
+Until then `gmtime()` and `localtime()` WERE the same function and
+`time()` was not UTC -- the kernel converted at the syscall boundary, so
+the filesystem's epochs were local-derived and a libc that returned true
+UTC would have put a silent skew between two numbers that look
+comparable. This section predicted the fix would be system-wide rather
+than a libc patch, and that when it landed these two would become
+genuinely different. Both held.
 
 **`clock()` IS ABSENT**, and the reason is a missing capability rather
 than a decision about time: C says it reports PROCESSOR time, the kernel

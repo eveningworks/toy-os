@@ -392,10 +392,9 @@ No dependency on the phases above; ordered among themselves.
 - [ ] Write the RTC's century register, which `rtc_read()` does not consult either
 
 ### Timezones out of the kernel
-**Needs:** a ring-3 timezone library -- the kernel already hands out UTC internally (`api/ktime.h`).
 
-- [ ] The kernel returns UTC, not local time -- `fs_stat` converts at the syscall boundary today
-- [ ] A ring-3 timezone library reading `/etc/timezones`, so the city database and the DST rules leave the kernel
+- [x] ~~The kernel returns UTC, not local time~~ DONE 2026-09-11 -- `SYS_GETTIME` and every filesystem timestamp
+- [x] ~~A ring-3 timezone library reading `/etc/timezones`~~ DONE 2026-09-11 -- `userland/libc/tz.c`; `kernel/lib/tz.c` went 663 lines to 58
 - [ ] More DST rules than EU/US/none, which is what a bigger city list needs to stop being wrong about the southern hemisphere
 
 ### Real mount points

@@ -59,6 +59,8 @@
 #include "fs_ops.h"
 #include "block.h" // struct block_device -- the ops signatures take one
 #include "ramfs.h"
+#include "ktime.h"
+#include "caltime.h"
 #include "mount.h" // MOUNT_MAX -- the mount limit this backend declares
 #include "heap.h"
 #include "klog.h"
@@ -133,8 +135,8 @@ static void ramfs_log_budget(const char *why) {
 
 static uint64_t now_epoch(void) {
     struct rtc_time t;
-    rtc_read_local(&t);
-    return tz_rtc_to_epoch(&t);
+    ktime_read(&t);
+    return cal_rtc_to_epoch(&t);
 }
 
 // ---- the budget -----------------------------------------------------

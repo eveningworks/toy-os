@@ -15,9 +15,10 @@
 // rather than in whole-second steps.
 //
 // **THIS CLOCK IS UTC.** The RTC is assumed to hold UTC (the convention
-// every Unix follows and Windows does not), tz.h applies the configured
-// city's offset for display, and nothing here knows what a timezone is.
-// A caller wanting local civil time asks rtc_read_local().
+// every Unix follows and Windows does not), and nothing in the kernel
+// knows what a timezone is. A caller wanting local civil time converts
+// in ring 3 (userland/lib/utz.h), which is where the city database and
+// the DST rules live.
 //
 // WHY THIS IS NOT A `struct clocksource`. clocksource.h refuses a wall
 // clock on purpose: a clocksource must be monotonic, and this one jumps
@@ -35,7 +36,7 @@ uint64_t ktime_now_sec(void);
 uint64_t ktime_now_ns(void);
 
 // The clock as broken-down UTC civil time -- rtc_read()'s shape, and
-// what rtc_read_local() adds the timezone offset to.
+// what SYS_GETTIME hands to ring 3.
 void ktime_read(struct rtc_time *out);
 
 // Steps the clock to `sec` seconds plus `nsec` nanoseconds since

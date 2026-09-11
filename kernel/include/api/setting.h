@@ -167,6 +167,18 @@ struct setting {
     // layouts are files in a directory, not a compiled-in enum.
     int (*choice)(int index, char *out, uint32_t out_size);
 
+    // OPTIONAL, ENUM only, and an ALTERNATIVE to `choice`: the options
+    // are the LINES of this file. The first comma-separated field of a
+    // line is the value; the last is its display name, when the line
+    // has more than one field. Blank lines are skipped.
+    //
+    // This is what lets the registry enumerate a list it knows nothing
+    // about. /etc/timezones is a city database with offsets and DST
+    // rules to the ring-3 library that reads it, and an opaque list of
+    // names here -- the kernel stopped carrying the table, and stopped
+    // needing to.
+    const char *choice_file;
+
     // OPTIONAL, ENUM only: the DISPLAY name for choice `index` --
     // "Los Angeles" where `choice` gives `losangeles`. NULL (the
     // default, and what most settings want) means the value is already

@@ -2,6 +2,7 @@
 #define TIMER_H
 
 #include <stdint.h>
+#include "rtctime.h"
 
 // The rate the system timer actually runs at, so code converting
 // between ticks and real time says so instead of repeating 100. It was
@@ -21,14 +22,8 @@ void pit_init(uint32_t frequency_hz);
 void timer_tick_advance(void);
 uint64_t pit_ticks(void);
 
-struct rtc_time {
-    uint8_t hour;
-    uint8_t minute;
-    uint8_t second;
-    uint8_t day;
-    uint8_t month;
-    uint16_t year;
-};
+// `struct rtc_time` is abi/rtctime.h: the TYPE crosses into ring 3, the
+// functions below do not.
 
 void rtc_read(struct rtc_time *t);
 

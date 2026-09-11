@@ -780,7 +780,7 @@ to get wrong. See the commit that added it.
 
 ## A setting reports whether it PERSISTED, separately from whether it applied
 
-`tz_set_index()`, `font_config_save()`, `cursor_config_save()` and
+the timezone saver, `font_config_save()`, `cursor_config_save()` and
 `keyboard_config_save()` return `enum setting_result`
 (`kernel/include/api/etc_config.h`): `SETTING_INVALID`,
 `SETTING_SAVED`, `SETTING_UNSAVED`. Three values rather than a bool
@@ -788,7 +788,7 @@ because a caller has three different things to say -- and the four
 shell commands do say them, through one shared `print_save_result()`.
 
 This replaced three `void` returns and one that answered a different
-question (`tz_set_index()` returned 1 for a valid index whether or not
+question (the timezone saver returned 1 for a valid city whether or not
 the write landed). The symptom was `timezone Helsinki` printing
 `Timezone set to helsinki.` on a filesystem with no `/etc` and writing
 nothing -- a lie the user only discovers after a reboot. Note the
@@ -798,7 +798,7 @@ that can fail and whose caller returns `void` is a silent failure
 waiting for a reason to happen.**
 
 `SETTING_UNSAVED` is deliberately non-zero so the existing
-`if (!tz_set_index(i))` idiom still reads as "did it apply?" -- adding
+`if (!save(...))` idiom still reads as "did it apply?" -- adding
 a distinction should not force every caller to care about it.
 
 ## A setting's identity is (namespace, name), and the namespace is its FILE

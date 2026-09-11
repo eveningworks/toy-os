@@ -109,8 +109,8 @@ int k_isblank(char c);
 //
 // That limit is the deliberate part. These were written once before,
 // found to have no caller and deleted; they came back for
-// tz_find_by_name(), so `timezone Helsinki` works -- and nothing in the
-// timezone database, or any other name compared this way, is non-ASCII.
+// a city name typed in any case, and nothing in the timezone database
+// -- or any other name compared this way -- is non-ASCII.
 // Folding Latin-1 as well would have been range added ahead of a
 // caller, and it isn't free to get right: `char` is signed here, so
 // every byte >= 0x80 arrives negative. Widening later means folding

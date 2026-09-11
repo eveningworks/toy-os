@@ -325,10 +325,13 @@ struct listdir_request {
                         // not returned since it grew errnos).
 
 #define SYS_GETTIME 14 // RDI = pointer to a `struct rtc_time` (out, see
-                        // timer.h). Wraps rtc_read_local() (tz.c) --
-                        // the same timezone-adjusted wall-clock time the
-                        // shell's `time` command and the taskbar clock
-                        // show, not raw UTC hardware time. Returns 0
+                        // abi/rtctime.h). **UTC**, from the software
+                        // clock (api/ktime.h). A local time is the
+                        // CALLER's to compute -- userland/lib/utz.h
+                        // reads /etc/timezones and does it, and the
+                        // taskbar clock and `time` go through that.
+                        // It used to return local time, which meant the
+                        // kernel carried a city database. Returns 0
                         // (RAX) on success, -EFAULT on a bad pointer.
 
 #define SYS_YIELD 15 // No arguments. Cooperatively gives up the rest of

@@ -12,6 +12,7 @@
 #include "klog.h"
 #include "vmm.h"
 #include "fs.h"
+#include "caltime.h"
 #include "string.h"
 #include "tz.h"
 #include "kpath.h"    // k_path_resolve() -- one resolution rule, kernel-side
@@ -81,7 +82,7 @@ static void listdir_collect(const char *name, uint32_t size, int is_dir) {
         // rtc_time -- the epoch shape is kernel-internal (fs.h's
         // fs_stat_info), converted back to civil time right here at
         // the boundary so userland (ls -l) is untouched.
-        tz_epoch_to_rtc(st.modified, &e->modified);
+        cal_epoch_to_rtc(st.modified, &e->modified);
     } else {
         k_memset(&e->modified, 0, sizeof(e->modified));
     }
@@ -476,8 +477,8 @@ int sys_stat(struct syscall_ctx *c) {
         out.ino = st.ino;
         // Epoch is kernel-internal (fs.h); civil time crosses the
         // boundary, exactly as struct sys_dirent's `modified` does.
-        tz_epoch_to_rtc(st.created, &out.created);
-        tz_epoch_to_rtc(st.modified, &out.modified);
+        cal_epoch_to_rtc(st.created, &out.created);
+        cal_epoch_to_rtc(st.modified, &out.modified);
     }
     // Only the implicit root reaches fs_stat() failing, and its zeroed
     // timestamps are the honest answer: it has no entry to carry any.

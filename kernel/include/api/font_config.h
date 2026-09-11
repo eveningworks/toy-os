@@ -10,7 +10,7 @@
 // kernel/lib/font_config.c's top comment for the exact key.
 
 // Call once at boot, after fs_init()/fs_mkdir("/etc") (same ordering as
-// tz_init() -- see kernel.c) -- loads the persisted font_size key if
+// an INIT_CONFIG initcall, see kernel.c) -- loads the persisted font_size key if
 // present and applies it via gfx_set_font_size(). Does nothing (keeps
 // gfx.c's compiled-in default) if no config exists yet or its value
 // isn't one of the recognized size names (the point-size numbers
@@ -19,7 +19,7 @@ void font_config_init(void);
 
 // Persists `size` as /etc/toyos.conf's "font_size=<n>" key so it
 // survives a reboot. Does NOT call gfx_set_font_size() itself -- same
-// split as tz_set_index() (selects + persists) vs rtc_read_local()
+// split as a setting's apply (selects + persists) vs a plain read
 // (applies); callers that want to change the active size call
 // gfx_set_font_size() themselves and this separately (see the shell's
 // `fontsize` command).

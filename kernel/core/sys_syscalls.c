@@ -81,8 +81,10 @@ SYSCALL_HANDLER sys_do_setting(uint64_t *regs, uint64_t rdi) {
 
 int sys_gettime(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
+    // UTC. Converting to a local time is ring 3's (userland/lib/utz.h);
+    // the kernel has not known a zone since the database left it.
     struct rtc_time t;
-    rtc_read_local(&t);
+    ktime_read(&t);
     if (!vmm_copy_to_user(pml4, c->a0, &t, sizeof t)) {
         klog_write("syscall: gettime() rejected -- invalid pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;

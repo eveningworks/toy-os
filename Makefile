@@ -1451,6 +1451,11 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LI
 	done
 	# /etc/modules: the boot-time module list, comments only by default.
 	cp data/etc/modules $(SEED_DIR)/sync/etc/modules
+	# /etc/timezones: the city database, one "name,offset,dst,Label" row
+	# per line. SHIPPED DATA, so it syncs like pci.ids rather than being
+	# seeded once -- the kernel used to carry the table and write the
+	# file itself, and nothing in ring 0 reads the offsets now.
+	cp data/etc/timezones $(SEED_DIR)/sync/etc/timezones
 	# The TLS trust store: one PEM per anchor, EMPTY by default. An empty
 	# store is a supported state -- nothing is verifiable, so https
 	# refuses rather than connecting to something it cannot vouch for.

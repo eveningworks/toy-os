@@ -32,7 +32,7 @@ const char *const COMPLETION_COMMANDS[] = {
     "fputest", "fsck", "fsformat", "gui", "help", "ktest", "history", "keyboard",
     "nano", "pwd", "rescue",
     "ring3test", "run", "schedtest", "steptest", "stress",
-    "path", "timezone", "write",
+    "path", "write",
     0
 };
 
@@ -118,11 +118,6 @@ static enum completion_domain shell_arg_domain(struct completion_collector *c,
 
     if (k_strcmp(cmd, "help") == 0) {
         completion_add(c, "tests");
-        return COMPLETION_FILLED;
-    }
-    if (k_strcmp(cmd, "timezone") == 0) {
-        int n = tz_city_count();
-        for (int i = 0; i < n; i++) completion_add(c, tz_city_name(i));
         return COMPLETION_FILLED;
     }
     if (k_strcmp(cmd, "ata") == 0) {

@@ -599,7 +599,8 @@ whenever a headline here tells you something you did not already know.
 `docs/conventions/kernel.md`
 
 - **Monotonic time is an INTERFACE, and wall clock is not one of its implementations.**
-- **THE WALL CLOCK IS A SOFTWARE CLOCK ANCHORED TO THE CLOCKSOURCE, AND THE RTC IS READ ONCE AT BOOT -- `ktime` is UTC, `SYS_GETTIME` is LOCAL, and libc's `time()` is a local-derived epoch**
+- **THE WALL CLOCK IS A SOFTWARE CLOCK ANCHORED TO THE CLOCKSOURCE, AND THE RTC IS READ ONCE AT BOOT -- everything the kernel hands out is UTC, and a LOCAL time is ring 3's to compute**
+- **THE TIMEZONE IS RING 3's: the city database, the DST rules and the conversion are in libc (`tzset`/`localtime`/`tz_localize`), and the kernel keeps only the SELECTION**
 - **SETTING THE CLOCK IS `SYS_SETTIME`, AND SPEAKING NTP IS A RING-3 PROGRAM'S JOB**
 - **The kernel's idle work has ONE owner: `scheduler_idle()`**
 - **EVERY KEY REPORTS SOMETHING, AND THE KEYPAD REPORTS CHARACTERS**

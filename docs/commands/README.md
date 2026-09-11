@@ -128,7 +128,6 @@ a command), and the `gui3`/`nano` aliases.
 - [`pmap`](pmap.md)
 - [`ps`](ps.md)
 - [`time`](time.md)
-- [`timezone`](timezone.md)
 - [`tty`](tty.md)
 - [`uptime`](uptime.md)
 

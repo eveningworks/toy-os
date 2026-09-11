@@ -7303,3 +7303,63 @@ copy everything; `fcntl(F_DUPFD, FD_CLOEXEC)` is on the ported-shell
 list and the flag is one bit in `struct fd_space` when a program needs
 it. A shell written against fork closes what it must in the child, as
 every shell does.
+
+## The timezone left the kernel, and what stayed behind is the SELECTION
+
+**What moved.** The city database, the two DST rules and every
+conversion from UTC to a local time are ring 3's, in the C library
+(`userland/libc/tz.c`). `kernel/lib/tz.c` went from 663 lines to 58.
+The kernel's clock was already UTC; what it did with that was convert
+at the syscall boundary, so `SYS_GETTIME` answered in local civil time
+and every filesystem timestamp was a local-derived epoch.
+
+**Why.** Three reckonings that looked alike. `ktime` was UTC,
+`SYS_GETTIME` was local, `SYS_SETTIME` took UTC and libc's `time()` was
+local-derived -- so a client that read the clock, added a second and
+passed it back moved the machine by the timezone offset, and
+`QUERY_CLOCK` existed only because nothing else could report UTC at
+all. One reckoning removes the whole class. And a 92-city table with
+two legislatures' daylight-saving rules is policy, which is the same
+argument that moved the font rasteriser, the image decoders and the
+audio mixer out: the kernel is where mechanism goes.
+
+**What a C library does.** This is glibc's shape, not an invention.
+Linux's kernel knows UTC and an offset it is told; the zoneinfo
+database is read by libc, and `tzset()` is the call that re-reads it.
+toy-os was the outlier, and the roadmap had said so for months.
+
+**What stayed, and why it is not a half-move.** One registered setting,
+`system.timezone`, whose value is a city name. The kernel does no time
+arithmetic with it and never reads an offset or a rule -- but System
+Settings still needs a dropdown of 92 cities, and the registry is
+kernel-side.
+
+**So a setting's choices can be a FILE** (`setting.h`'s `choice_file`).
+The registry reads the lines of a named file, takes the first
+comma-separated field as the value and the last as the label, and
+knows nothing else about them. `/etc/timezones` is a city database with
+offsets and DST rules to the library that reads it, and an opaque list
+of names to the kernel. The alternative -- keeping a name table in ring
+0 purely to enumerate it -- is the database again, smaller.
+
+It is cached on the filesystem generation, because enumerating is
+O(choices) by construction: System Settings asks for all 92 rows to
+fill one dropdown, and a whole-file read per row is the shape that made
+a nine-entry desktop reload cost 54 of them. The mechanism generalises
+to the next setting whose options are data rather than an enum, which
+`cursor_theme_config.c` says in its own first paragraph it wants.
+
+**And the registry became the gate for an enum's value.** An enum with
+a choice list now refuses a value that is not one of them, in
+`setting_set()`, for the same reason the integer range is checked
+there: `config set` and a hand-edited `/etc` file reach it without
+passing through any control. It used to be each setting's own `apply`
+that refused an unknown value, which worked only for the ones that
+remembered to.
+
+**The two costs, stated.** A FAT32 timestamp is now written in UTC,
+where the format specifies local time -- that is Linux's `tz=UTC` vfat
+option made the only behaviour, because a filesystem write cannot ask a
+ring-3 library for an offset. And a disk written before this change has
+local-derived timestamps mixed with UTC ones; nothing converts them,
+and on a hobby OS with a seeded image that is a `make clean-disk` away.

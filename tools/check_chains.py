@@ -27,7 +27,7 @@ REPO = os.path.dirname(HERE)
 BASELINE = {
     "apps/shell_fs.c": 3,
     "apps/shell_rescue.c": 1,
-    "apps/shell_sys.c": 62,
+    "apps/shell_sys.c": 61,
     "kernel/core/kernel.c": 1,
     "kernel/core/multiboot.c": 5,
     "kernel/drivers/ata.c": 11,

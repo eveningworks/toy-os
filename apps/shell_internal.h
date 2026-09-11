@@ -83,7 +83,6 @@ void cmd_stat(const char *name);
 
 // System-info/settings commands -- defined in shell_sys.c.
 void cmd_help(const char *args);
-void cmd_timezone(const char *args);
 void cmd_beep(void);
 void cmd_df(void);   // shell_sys.c -- only reachable through `rescue df` now
 void cmd_fsck(const char *args);

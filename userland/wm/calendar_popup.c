@@ -1,5 +1,6 @@
 // See calendar_popup.h for what this is and why the panel owns it.
 #include "wm_internal.h"
+#include <time.h>
 #include "calendar_popup.h"
 #include "wm_tray.h"
 #include "wm_overlay.h"
@@ -39,7 +40,8 @@ const char *calendar_month_name(int month) {
 
 void calendar_today(int *out_year, int *out_month, int *out_day) {
     struct rtc_time t;
-    sys_gettime(&t); // local time for the selected `timezone`, not raw UTC
+    sys_gettime(&t);   // UTC
+    tz_localize(&t);   // ...localised here (userland/libc/tz.c)
     if (out_year) *out_year = (int)t.year;
     if (out_month) *out_month = (int)t.month;
     if (out_day) *out_day = (int)t.day;

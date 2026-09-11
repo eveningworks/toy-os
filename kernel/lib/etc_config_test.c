@@ -4,7 +4,7 @@
 //
 // The bug these come from: `timezone Helsinki` on a filesystem with no
 // /etc printed "Timezone set to helsinki." and wrote nothing, because
-// tz_set_index() ignored etc_config_set()'s return value and three
+// the timezone saver ignored etc_config_set()'s return value and three
 // sibling savers returned void. Nothing was broken about the writer --
 // it correctly reported failure to a caller that did not look. So the
 // assertion worth having is not "the writer works", it is "the failure

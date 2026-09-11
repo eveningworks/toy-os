@@ -142,8 +142,6 @@ static const char *const HELP_LINES[] = {
     "  (paths may be relative to cwd or absolute, e.g. /docs/todo.txt)\n",
     "\n",
     "System info:\n",
-    "  timezone      - show/pick your timezone (interactive list)\n",
-    "  timezone <c>  - set timezone directly, e.g. `timezone helsinki`\n",
     "  rescue        - the kernel's own copies of the file commands, for\n",
     "                  when /bin is missing or damaged. `rescue` alone\n",
     "                  lists them; they never shadow a real program\n",
@@ -235,102 +233,8 @@ void cmd_help(const char *args) {
     }
 }
 
-// `timezone` alone: numbered list, prompts for a choice.
-// `timezone <name>`: sets directly, matching tz_city_name() as a whole
-// but ignoring ASCII case, so `timezone losangeles` and `timezone
-// LosAngeles` both work. Still an exact match otherwise -- no prefixes,
-// no fuzzy matching. `color <name>` remains case-sensitive; nothing has
-// asked for it, and its names are typed lowercase.
-// One place for the "...and it did not actually persist" tail every
-// setting command needs, so the wording can't drift between four of
-// them. Prints nothing on a clean save. The settings themselves are
-// applied either way -- this is only about surviving a reboot, and
-// saying so beats an unqualified success message that turns out to be
-// half true only after the machine is restarted (see etc_config.h's
-// enum setting_result for the bug that prompted it).
-static void print_save_result(int r) {
-    if (r == SETTING_UNSAVED) {
-        vga_write(" (NOT saved -- /etc unwritable, see dmesg)");
-    }
-}
 
-// A row in either listing: the display name, and the TOKEN beside it
-// where they differ -- because the token is what `timezone <name>` and
-// /etc/toyos.conf take, so a list that showed only "Los Angeles" would
-// be a list you cannot type from.
-static void print_city_row(int i) {
-    const char *name = tz_city_name(i);
-    const char *label = tz_city_label(i);
-    vga_write(label ? label : name);
-    if (label && name && k_strcmp(label, name) != 0) {
-        vga_write(" (");
-        vga_write(name);
-        vga_write(")");
-    }
-}
 
-void cmd_timezone(const char *args) {
-    if (args && k_strlen(args) > 0) {
-        int idx = tz_find_by_name(args);
-        if (idx < 0) {
-            vga_write("Unknown timezone. Run `timezone` with no arguments to see the list.\n");
-            return;
-        }
-        int r = tz_set_index(idx);
-        vga_write("Timezone set to ");
-        vga_write(tz_city_name(idx));
-        print_save_result(r);
-        vga_write(".\n");
-        return;
-    }
-
-    // The no-args branch below blocks on keyboard_read_line() waiting
-    // for a numbered choice -- fine for the interactive console loop
-    // (shell_main() calls its own keyboard_getchar() in a loop already),
-    // fatal for a non-blocking GUI callback driving this through a sink
-    // (see shell_dispatch()'s comment). Print the list plus a pointer to
-    // the direct-set form instead of blocking.
-    if (vga_sink_active()) {
-        vga_write("Interactive timezone picker isn't available here --\n");
-        vga_write("use `timezone <city>` instead. Cities:\n");
-        int n = tz_city_count();
-        for (int i = 0; i < n; i++) {
-            vga_write("  ");
-            print_city_row(i);
-            vga_putc('\n');
-        }
-        return;
-    }
-
-    int count = tz_city_count();
-    int current = tz_current_index();
-    for (int i = 0; i < count; i++) {
-        vga_write_dec((uint32_t)(i + 1));
-        vga_write(i == current ? ") * " : ")   ");
-        print_city_row(i);
-        vga_putc('\n');
-    }
-    vga_write("Enter a number (blank to cancel): ");
-
-    char buf[8];
-    keyboard_read_line(buf, sizeof(buf));
-    if (k_strlen(buf) == 0) {
-        vga_write("Cancelled.\n");
-        return;
-    }
-
-    uint32_t parsed = 0;
-    int choice = k_parse_u32(buf, &parsed) ? (int)parsed : -1;
-    if (choice < 1 || choice > count) {
-        vga_write("Not a valid choice.\n");
-        return;
-    }
-    int r = tz_set_index(choice - 1);
-    vga_write("Timezone set to ");
-    vga_write(tz_city_name(choice - 1));
-    print_save_result(r);
-    vga_write(".\n");
-}
 
 // Milestone 25 (docs/roadmap.md): "the simplest possible output" -- a
 // fixed tone, not a freq/duration-adjustable command, by explicit
@@ -891,6 +795,18 @@ static void dmesg_putc_cb(char c) {
     vga_write("\n");
     dmesg_rows_shown = 0;
     if (key == 'q' || key == 'Q') dmesg_quit = 1;
+}
+
+// One place for the "...and it did not actually persist" tail every
+// setting command needs, so the wording can't drift between them.
+// Prints nothing on a clean save. The setting itself is applied either
+// way -- this is only about surviving a reboot, and saying so beats an
+// unqualified success message that turns out to be half true only after
+// the machine is restarted (see api/etc_config.h's enum setting_result).
+static void print_save_result(int r) {
+    if (r == SETTING_UNSAVED) {
+        vga_write(" (NOT saved -- /etc unwritable, see dmesg)");
+    }
 }
 
 void cmd_dmesg(void) {

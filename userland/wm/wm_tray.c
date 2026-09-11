@@ -8,6 +8,8 @@
 // register later get whatever slot is free, not necessarily in order,
 // so `active` is what actually matters, not slot index continuity.
 #include "wm_internal.h"
+#include <time.h>
+#include "wm/wm_conf.h"   // wm_setting_generation()
 #include "rt/sys.h"
 #include "wm_tray.h"
 #include "wm_taskbar.h"     // taskbar_h
@@ -117,8 +119,23 @@ void tray_init(void) {
 
 void tray_update_clock(void) {
     if (clock_tray_id < 0) return;
+    // UTC from the kernel, localised here: the city database and the DST
+    // rules are libc's now (userland/libc/tz.c), and the compositor is
+    // an ordinary client of them.
+    //
+    // tzset() ON A SETTINGS CHANGE, not on every tick: libc caches the
+    // selected city, so a clock that never re-read it would keep showing
+    // the old zone until the desktop was restarted. One compare per
+    // second, the same shape cursor_theme_poll() uses.
+    static uint32_t seen_gen;
+    uint32_t gen = wm_setting_generation();
+    if (gen != seen_gen) {
+        seen_gen = gen;
+        tzset();
+    }
     struct rtc_time t;
-    sys_gettime(&t); // local time for the selected `timezone`, not raw UTC
+    sys_gettime(&t);
+    tz_localize(&t);
 
     char buf[9];
     buf[0] = '0' + (t.hour / 10);

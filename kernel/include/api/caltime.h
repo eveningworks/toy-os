@@ -20,15 +20,24 @@
 // **THE EPOCH HERE IS UNITLESS ABOUT TIMEZONES.** These convert a
 // calendar date to a day count and back; whether the date you hand in
 // is UTC or local is the CALLER's business, and the answer is in the
-// same reckoning. toy-os feeds these LOCAL times throughout (see tz.h),
-// so its stored epochs are local-derived -- deliberately, and it is
-// what makes timestamps arithmetic-comparable rather than an invention
-// of UTC handling the system does not have.
+// same reckoning. toy-os feeds these UTC throughout: the kernel's
+// clock is UTC, every filesystem timestamp is a UTC epoch, and the
+// conversion to a local time happens in ring 3 (userland/lib/utz.h).
 //
 // The algorithm is Hinnant's, valid for any year the int range holds
 // and correct across the 100/400 leap rules -- not a table of month
 // lengths with special cases, which is where hand-rolled calendar code
 // goes wrong.
+
+// The same conversion over a `struct rtc_time` (api/timer.h), which is
+// the shape the clock and the filesystem both speak. Forward-declared
+// rather than included, so this header stays free of the timer API.
+//
+// UNITLESS ABOUT TIMEZONES, exactly as the day-count pair below: what
+// goes in decides what comes out. The kernel feeds these UTC now.
+struct rtc_time;
+uint64_t cal_rtc_to_epoch(const struct rtc_time *t);
+void cal_epoch_to_rtc(uint64_t epoch, struct rtc_time *out);
 
 int cal_is_leap(int year);
 // 1..12 -> 28..31. Returns 0 for a month outside 1..12 rather than

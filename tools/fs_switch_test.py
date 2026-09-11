@@ -119,9 +119,13 @@ def main():
         # The assertion that matters more than the directories existing:
         # a setting written after the reformat actually lands on disk.
         # A missing /etc failed this while the command still said "set".
-        out = vm_exec("timezone Helsinki", "rescue cat /etc/toyos.conf")
+        # `fontsize`, not `timezone`: the timezone is a registered setting
+        # with no builtin any more (its database left ring 0 -- api/tz.h),
+        # and a freshly formatted image has no /bin to run `config` from.
+        # Any setting a KERNEL-side command persists answers the question.
+        out = vm_exec("fontsize 20", "rescue cat /etc/toyos.conf")
         check("a setting persists after a live reformat",
-              "timezone=helsinki" in out and "NOT saved" not in out, out[-300:])
+              "font_size=20" in out and "NOT saved" not in out, out[-300:])
 
         vm_exec("write /switch.txt made-after-reformat")
         out = vm_exec("rescue cat /switch.txt")

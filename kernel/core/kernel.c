@@ -325,8 +325,8 @@ void kernel_main(uint64_t multiboot_info_addr) {
     initcalls_run(INIT_CONFIG); // /etc readers: timezone, font, cursor, mouse, volume, keyboard, boot target
     vga_reflow(); // apply it to the console's cell layout (no-op if nothing was persisted)
     // Announce those four to the settings registry, AFTER their own
-    // init(): a timezone registered before tz_init() would offer an
-    // empty city list, since the choices ARE the loaded database.
+    // init(), because a setting registered before the /etc reader that
+    // backs it would answer from nothing.
     // The FACT registry, before settings_init() only because a setting
     // may later want to read one. Each subsystem announces its own
     // providers; the core registers the registry's self-description.
@@ -338,12 +338,11 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // line -- proves the hardware clock is readable and shows what it
     // says at boot. Deliberately NOT logged from rtc_read() itself
     // (timer.c) -- that function is called continuously by the taskbar
-    // clock/tz code every time it redraws, so logging there would flood
-    // the ring buffer; this is the one call site that only ever runs
-    // once. Raw rtc_read(), not tz.h's rtc_read_local() -- this is
-    // "what the hardware says," unadjusted for timezone/DST, matching
-    // what a real kernel's own RTC probe logs before any timezone
-    // config is even in the picture.
+    // clock reads it every time it redraws, so logging there would
+    // flood the ring buffer; this is the one call site that only ever
+    // runs once. Raw rtc_read() rather than the software clock: this is
+    // "what the hardware says", which is what a real kernel's own RTC
+    // probe logs.
     struct rtc_time boot_time;
     rtc_read(&boot_time);
     klog_write("rtc: hardware clock reads ");

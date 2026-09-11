@@ -79,7 +79,7 @@ at this prompt, in `/bin/tosh` and in the GUI Terminal. So are `ls`,
 
 What is left as a builtin is what a builtin is FOR — commands that
 change the shell's own state (`cd`, `pwd`, `path`, `history`, `color`),
-the console's (`clear`, `cursor`, `fontsize`, `keyboard`, `timezone`),
+the console's (`clear`, `cursor`, `fontsize`, `keyboard`),
 or that reach kernel state no syscall exposes yet.
 
 Three are held back by one thing: `heap`, `ata` and `kstack` each have
@@ -124,7 +124,7 @@ arrives through a `struct completion_env`.
 What each shell offers past that is not identical, because their command
 sets are not. The **kernel shell** adds argument sets for commands that
 only exist at a `#` prompt (`run`, `color`, `debug`, `keyboard`,
-`timezone`, `fontsize`, `fsck`, `fsformat`, `cursor`, `help`) and its
+`fontsize`, `fsck`, `fsformat`, `cursor`, `help`) and its
 console app registry. **`/bin/tosh`** has six builtins and one argument
 rule: `cd` offers **directories only**, as bash and zsh do.
 

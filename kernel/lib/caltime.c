@@ -7,6 +7,7 @@
 // calendar -- which is exactly the split that made this a separate file
 // in the first place.
 #include "caltime.h"
+#include "rtctime.h"
 
 int cal_is_leap(int year) {
     return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
@@ -65,4 +66,31 @@ void cal_civil_from_days(int64_t days, int *year, int *month, int *day) {
 int cal_day_of_year(int year, int month, int day) {
     return (int)(cal_days_from_civil(year, month, day) -
                  cal_days_from_civil(year, 1, 1));
+}
+
+uint64_t cal_rtc_to_epoch(const struct rtc_time *t) {
+    int64_t days = cal_days_from_civil((int)t->year, (int)t->month, (int)t->day);
+    // Years below 1970 cannot come off this hardware path (the RTC
+    // reports a real current date); clamp rather than underflow the
+    // unsigned result. cal_days_from_civil() returns a SIGNED day count
+    // precisely so this decision is the caller's.
+    if (days < 0) return 0;
+    return (uint64_t)days * 86400u
+         + (uint64_t)t->hour * 3600u
+         + (uint64_t)t->minute * 60u
+         + (uint64_t)t->second;
+}
+
+void cal_epoch_to_rtc(uint64_t epoch, struct rtc_time *out) {
+    uint64_t days = epoch / 86400u;
+    uint32_t rem = (uint32_t)(epoch % 86400u);
+    out->hour = (uint8_t)(rem / 3600u);
+    out->minute = (uint8_t)((rem % 3600u) / 60u);
+    out->second = (uint8_t)(rem % 60u);
+
+    int y, m, d;
+    cal_civil_from_days((int64_t)days, &y, &m, &d);
+    out->year = (uint16_t)y;
+    out->month = (uint8_t)m;
+    out->day = (uint8_t)d;
 }

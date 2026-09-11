@@ -17,7 +17,7 @@
 // asking a clock how much time had passed, so a yield -- microseconds
 // long -- was charged a whole 10ms tick. See docs/decisions.md.
 //
-// WHAT THIS IS NOT: a wall clock. `rtc_read_local()` and tz.c's epoch
+// WHAT THIS IS NOT: a wall clock. `ktime_read()` and caltime.c's epoch
 // conversion answer "what time is it", which is a separate concept with
 // separate failure modes (it jumps when the user sets it, and it says
 // nothing about elapsed time). Linux keeps clocksource and RTC apart

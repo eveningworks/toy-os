@@ -28,11 +28,13 @@ docs/decisions.md for why; the seeding path never needs more.
 Bit order in bitmaps: bit i of a group's bitmap is byte[i >> 3],
 mask (1 << (i & 7)) -- LSB first, and the kernel matches this.
 
-TIMESTAMPS: the kernel stores LOCAL-derived epochs (tz_rtc_to_epoch()
-over rtc_read_local() -- see fs.h's fs_stat_info comment), so this
-tool writes calendar.timegm(time.localtime()): the same "local civil
-time read as if it were UTC" reckoning, keeping host-written and
-kernel-written timestamps comparable.
+TIMESTAMPS: UTC, plain. The kernel stores UTC epochs since the timezone
+left ring 0 (see fs.h's fs_stat_info comment), so a host-written file
+and a kernel-written one are the same kind of number. This used to
+write calendar.timegm(time.localtime()) to match the kernel's
+local-derived epochs, which made every seeded file carry the BUILD
+machine's offset -- visible as three hours between a seeded file and one
+the kernel created at boot.
 """
 
 import argparse
@@ -142,8 +144,10 @@ def fnv1a(data: bytes) -> int:
 
 
 def local_epoch() -> int:
-    # See the module docstring's TIMESTAMPS note.
-    return calendar.timegm(time.localtime())
+    # UTC -- see the module docstring's TIMESTAMPS note. The name is
+    # kept because every caller spells it, and what it means is stated
+    # in one place rather than in each of them.
+    return calendar.timegm(time.gmtime())
 
 
 def align4(n: int) -> int:

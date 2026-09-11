@@ -1,8 +1,7 @@
-// C's <time.h> over the RTC and api/caltime.h. See the header for the
-// one thing that matters -- gmtime() and localtime() are the same
-// function here, because the system has no stored UTC offset and
-// pretending otherwise would put a silent skew between time() and a
-// file's timestamp.
+// C's <time.h> over the clock and api/caltime.h. Everything here works
+// in UTC, which is what the kernel hands out; the conversion to a local
+// time is libc/tz.c, beside this file for the same reason glibc keeps
+// its zoneinfo reader inside libc.
 #include <time.h>
 #include <string.h>
 #include <stdio.h>
@@ -55,15 +54,13 @@ struct tm *gmtime_r(const time_t *t, struct tm *out) {
     return out;
 }
 
-struct tm *localtime_r(const time_t *t, struct tm *out) { return gmtime_r(t, out); }
-
-// The static-buffer forms C specifies. One buffer between them, because
-// they are one function here and two buffers would imply otherwise.
+// The static-buffer form C specifies. localtime() has its own, in
+// libc/tz.c: they are different functions now, so sharing one buffer
+// would make a gmtime() call quietly overwrite a localtime() result.
 static struct tm g_tm;
 struct tm *gmtime(const time_t *t) { return gmtime_r(t, &g_tm); }
-struct tm *localtime(const time_t *t) { return gmtime_r(t, &g_tm); }
 
-time_t mktime(struct tm *tm) {
+time_t timegm(struct tm *tm) {
     if (!tm) return -1;
     // NORMALISE. Everything is folded into a seconds count and a day
     // count and then converted back, so an out-of-range field carries
@@ -89,9 +86,29 @@ time_t mktime(struct tm *tm) {
 
     time_t v = days * SECS_PER_DAY + secs;
     // C requires the struct to come back normalised, which is also what
-    // makes mktime the way to fill in tm_wday and tm_yday.
+    // makes this the way to fill in tm_wday and tm_yday.
     gmtime_r(&v, tm);
     return v;
+}
+
+// C's mktime, which reads its `struct tm` as LOCAL time and is the
+// inverse of localtime(). timegm() above does the calendar arithmetic;
+// this subtracts the zone.
+//
+// THE OFFSET IS TAKEN AT THE RESULT, not at the input, which is the
+// approximation every simple implementation makes: near a DST
+// transition the two can disagree by an hour, and an hour either side
+// of the changeover is genuinely ambiguous in a way `struct tm` cannot
+// express (tm_isdst is an input glibc searches on; this does not).
+time_t mktime(struct tm *tm) {
+    if (!tm) return -1;
+    time_t utc = timegm(tm);
+    if (utc == (time_t)-1) return utc;
+    time_t local = utc - tz_offset_seconds(&utc);
+    // Re-normalise against the moment actually meant, so tm_wday,
+    // tm_yday and tm_isdst describe it rather than the UTC reading.
+    localtime_r(&local, tm);
+    return local;
 }
 
 // --- strftime --------------------------------------------------------

@@ -21,8 +21,8 @@ this the obvious way), not from how much history it accumulated.
   implementations.** `kernel/clocksource.h` -- sources register like
   `display_driver`s, best rating wins (PIT 110, TSC 300), and the core
   converts a raw counter with a mult/shift pair so the overflow
-  reasoning lives in one audited place. `rtc_read_local()` stays out of
-  it: "what time is it" jumps when the clock is set and says nothing
+  reasoning lives in one audited place. The WALL clock stays out of it:
+  "what time is it" jumps when the clock is set and says nothing
   about elapsed time, which is why Linux separates clocksource from RTC
   too. **The TSC needs an INVARIANT TSC** (CPUID 8000_0007H EDX bit 8),
   or its rate changes as the CPU throttles and every duration is
@@ -42,13 +42,17 @@ this the obvious way), not from how much history it accumulated.
   monotonic and this one jumps whenever it is set, which is the exact
   distinction `clocksource.h` already refuses to blur.
 
-  **`ktime` IS UTC. `SYS_GETTIME` ANSWERS IN LOCAL CIVIL TIME. libc's
-  `time()` IS A LOCAL-DERIVED EPOCH. No two of those three are
-  interchangeable**, and the one that bites is `SYS_SETTIME`, which takes
-  **UTC** -- so a client that reads `SYS_GETTIME`, adds a second and
-  passes it back moves the clock by the timezone offset. NTP hands out
-  UTC, which is the caller it exists for. `QUERY_CLOCK` is the only way
-  ring 3 can read UTC at all, and it exists because nothing else could.
+  **EVERYTHING THE KERNEL HANDS OUT IS UTC.** `ktime`, `SYS_GETTIME`,
+  `SYS_SETTIME`, libc's `time()` and every filesystem timestamp are one
+  reckoning, so a client may read the clock, add a second and pass it
+  back. Converting to a local time is RING 3's, in libc (`tzset()`,
+  `localtime()`, `tz_localize()`), reading `/etc/timezones`.
+
+  It was not always: `SYS_GETTIME` answered in local civil time and
+  libc's `time()` was a local-derived epoch, which meant the kernel
+  carried a 92-city database and two DST rules to convert with. Three
+  reckonings that looked alike is what that cost, and `QUERY_CLOCK`
+  existed only because nothing else could report UTC.
 
   **A set STEPS, and write-back to the CMOS is part of it.** `rtc_write()`
   brackets its six register writes with register B's SET bit, which

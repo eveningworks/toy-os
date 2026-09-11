@@ -4,8 +4,15 @@
 // EVERY DATE HERE IS A FIXED, KNOWN ONE -- nothing asserts against the
 // current clock, which would make the test pass or fail depending on
 // the day it ran. The one check that uses the real time asserts only
-// that it is SELF-CONSISTENT (time() -> gmtime() -> mktime() returns
+// that it is SELF-CONSISTENT (time() -> gmtime() -> timegm() returns
 // the same number), which is true on any date.
+//
+// **timegm(), NOT mktime(), for every fixed vector.** They were the same
+// function until the timezone moved to ring 3 (api/tz.h): mktime reads
+// its `struct tm` as LOCAL time now, as C says it must, so a UTC
+// expectation asserted through it measures the machine's configured
+// city as well as the calendar. mktime's own contract -- that it is the
+// inverse of localtime() -- is checked at the end, where it belongs.
 //
 // The load-bearing checks:
 //  - **A round trip through a leap day and a century boundary.**
@@ -24,9 +31,9 @@
 //    the code being tested. Writing the expectation from the same
 //    mental model as the implementation is how a calendar test agrees
 //    with a calendar bug.
-//  - **mktime NORMALISING out-of-range fields**, which is how C does
-//    date arithmetic ("add 40 days, then mktime"). A mktime that
-//    rejected them would pass any test that only feeds it valid dates.
+//  - **NORMALISING out-of-range fields**, which is how C does date
+//    arithmetic ("add 40 days, then mktime"). One that rejected them
+//    would pass any test that only feeds it valid dates.
 //  - **The epoch of a date computed independently.** 2001-09-09
 //    01:46:40 UTC is 1000000000, a number checkable by hand.
 //
@@ -62,11 +69,11 @@ int main(void) {
 
     // --- known epochs -------------------------------------------------
     struct tm t = mk(1970, 1, 1, 0, 0, 0);
-    utest_check(mktime(&t) == 0, "1970-01-01 00:00:00 is epoch 0");
+    utest_check(timegm(&t) == 0, "1970-01-01 00:00:00 is epoch 0");
     t = mk(2001, 9, 9, 1, 46, 40);
-    utest_check(mktime(&t) == 1000000000, "2001-09-09 01:46:40 is exactly 1e9");
+    utest_check(timegm(&t) == 1000000000, "2001-09-09 01:46:40 is exactly 1e9");
     t = mk(2024, 2, 29, 12, 0, 0);
-    time_t leap = mktime(&t);
+    time_t leap = timegm(&t);
     utest_check(leap == 1709208000, "a leap day converts to its known epoch");
 
     // --- the leap rules ----------------------------------------------
@@ -74,11 +81,11 @@ int main(void) {
     // rule). A calendar that only knows "every four years" gets both of
     // these wrong and everything else in this file right.
     t = mk(2000, 2, 29, 0, 0, 0);
-    time_t feb29_2000 = mktime(&t);
+    time_t feb29_2000 = timegm(&t);
     utest_check(t.tm_mon == 1 && t.tm_mday == 29,
           "2000-02-29 exists and is not normalised away");
     t = mk(1900, 2, 29, 0, 0, 0);
-    mktime(&t);
+    timegm(&t);
     utest_check(t.tm_mon == 2 && t.tm_mday == 1,
           "1900-02-29 does NOT exist and rolls into March 1st");
 
@@ -92,25 +99,25 @@ int main(void) {
 
     time_t v = 1709208000;
     gmtime_r(&v, &back);
-    utest_check(mktime(&back) == v, "tm -> epoch -> tm -> epoch is stable");
+    utest_check(timegm(&back) == v, "tm -> epoch -> tm -> epoch is stable");
 
     // --- normalisation ------------------------------------------------
-    // How C does date arithmetic. A mktime that REJECTED these would
-    // pass every check above.
+    // How C does date arithmetic. One that REJECTED these would pass
+    // every check above. timegm and mktime share the normalisation.
     t = mk(2024, 1, 31, 0, 0, 0);
     t.tm_mday += 40;                      // "31 January + 40 days"
-    mktime(&t);
+    timegm(&t);
     utest_check(t.tm_year == 124 && t.tm_mon == 2 && t.tm_mday == 11,
           "mday + 40 carries into March (through a leap February)");
     t = mk(2023, 12, 31, 23, 59, 59);
     t.tm_sec += 1;
-    mktime(&t);
+    timegm(&t);
     utest_check(t.tm_year == 124 && t.tm_mon == 0 && t.tm_mday == 1 &&
           t.tm_hour == 0 && t.tm_min == 0 && t.tm_sec == 0,
           "one second past new year's eve carries the whole way up");
     t = mk(2024, 1, 1, 0, 0, 0);
     t.tm_mon -= 1;                        // month 0 - 1 = the previous December
-    mktime(&t);
+    timegm(&t);
     utest_check(t.tm_year == 123 && t.tm_mon == 11,
           "a NEGATIVE month borrows from the year");
 
@@ -145,7 +152,7 @@ int main(void) {
     v = 1709164800 + 5 * 3600; // the 29th at 05:00, so the day is single-digit... no: 29
     gmtime_r(&v, &back);
     struct tm single = mk(2024, 3, 5, 9, 8, 7);
-    mktime(&single);
+    timegm(&single);
     str_is(asctime(&single), "Tue Mar  5 09:08:07 2024\n",
            "and SPACE-pads a single-digit day, where a numeric width would zero-pad");
 
@@ -155,8 +162,25 @@ int main(void) {
     time_t stored = 0;
     utest_check(time(&stored) == stored, "time(&t) stores what it returns");
     gmtime_r(&now, &back);
-    utest_check(mktime(&back) == now, "time() -> gmtime() -> mktime() round-trips");
+    utest_check(timegm(&back) == now, "time() -> gmtime() -> timegm() round-trips");
     utest_check(difftime(now + 60, now) == 60.0, "difftime");
+
+    // --- mktime IS THE INVERSE OF localtime ---------------------------
+    //
+    // Whatever city is configured. Asserting a fixed epoch here would
+    // measure the selection; asserting the ROUND TRIP measures the pair,
+    // and a mktime that forgot the zone (the old one, which was timegm
+    // under another name) fails it on any machine not set to UTC.
+    time_t moment = 1788000000;   // 2026-09-27 08:00:00 UTC
+    struct tm local;
+    localtime_r(&moment, &local);
+    utest_check(mktime(&local) == moment,
+                "localtime() -> mktime() returns the same instant");
+    // And the two differ by exactly the offset the library reports.
+    struct tm as_utc;
+    gmtime_r(&moment, &as_utc);
+    utest_check(timegm(&as_utc) - timegm(&local) == -tz_offset_seconds(&moment),
+                "...and the gap between them IS the zone's offset");
 
     return utest_end();
 }

@@ -229,7 +229,7 @@ this the obvious way), not from how much history it accumulated.
   yet -- not a permanent excuse. What is left is the commands that are
   builtins because that is what a builtin is FOR -- the shell's own
   state (`cd`, `pwd`, `path`, `history`, `color`), the console's
-  (`clear`, `cursor`, `fontsize`, `keyboard`, `timezone`) -- plus the
+  (`clear`, `cursor`, `fontsize`, `keyboard`) -- plus the
   kernel introspection still waiting on a class (`dmesg`, `fsck`,
   `debug`) and the in-kernel demos that cannot be processes at all
   (`ring3test`, `schedtest`, `fputest`).
@@ -350,8 +350,8 @@ this the obvious way), not from how much history it accumulated.
   `apps/shell_complete.c` is the kernel shell's; `userland/lib/
   ucomplete.c` is `/bin/tosh`'s. **The two are NOT parity, and should
   not be** -- most of the kernel shell's argument sets are for commands
-  that only exist at a `#` prompt (`color`, `debug`, `fontface`,
-  `timezone`), and tosh has six builtins plus one rule: `cd` offers
+  that only exist at a `#` prompt (`color`, `debug`, `fontface`), and
+  tosh has six builtins plus one rule: `cd` offers
   DIRECTORIES ONLY. An argument completer returns a
   `enum completion_domain` rather than a bool, which is what lets
   "directories only" be a domain instead of every caller filtering.

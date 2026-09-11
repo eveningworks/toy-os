@@ -16,7 +16,8 @@
 #include "keyboard_config.h" // keyboard layout persistence (see kernel/lib/keyboard_config.c)
 #include "mouse.h"     // mouse_init, mouse_get_state, mouse_set_bounds
 #include "timer.h"     // pit_ticks, rtc_read
-#include "tz.h"        // rtc_read_local, timezone selection (see kernel/lib/tz.c)
+#include "tz.h"        // the timezone SELECTION -- the database and the
+                       // conversion are ring 3's (userland/lib/utz.h)
 #include "font_config.h" // font size persistence (see kernel/lib/font_config.c)
 #include "font_face.h"   // fonts loaded from /usr/share/fonts at runtime
 #include "cursor_config.h" // console cursor-style persistence (see kernel/lib/cursor_config.c)

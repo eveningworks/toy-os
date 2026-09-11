@@ -20,6 +20,8 @@
 #include "fs.h"
 #include "fs_ops.h"
 #include "tfs3.h"
+#include "ktime.h"
+#include "caltime.h"
 #include "mount.h" // MOUNT_MAX -- the mount limit this backend declares
 #include "string.h"
 #include "block.h"    // TFS3 talks to a BLOCK DEVICE, not to a disk --
@@ -1375,8 +1377,8 @@ static int txn_stage_inode(uint64_t ino, const struct t3_inode *node) {
 
 static uint64_t now_epoch(void) {
     struct rtc_time t;
-    rtc_read_local(&t);
-    return tz_rtc_to_epoch(&t);
+    ktime_read(&t);
+    return cal_rtc_to_epoch(&t);
 }
 
 // ---- block-map allocation (write side) ------------------------------------
@@ -2165,8 +2167,8 @@ static int tfs3_format_inner(const struct block_device *dev) {
     uint64_t now = 0;
     {
         struct rtc_time t;
-        rtc_read_local(&t);
-        now = tz_rtc_to_epoch(&t);
+        ktime_read(&t);
+        now = cal_rtc_to_epoch(&t);
     }
 
     // Superblock image (one sector's worth, zero-padded to a block by

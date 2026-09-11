@@ -1625,11 +1625,12 @@ one plug-in demonstrates nothing about being pluggable -- the second
 entry is what makes the icon grid, the drill-in and the Back button
 meaningful instead of an elaborate way to show a single page.
 
-**The applet doesn't cache its setting.** The timezone applet reads
-`tz_current_index()` at draw time and writes `tz_set_index()`, which
-persists to `/etc/toyos.conf` itself. A local copy would be a second
-source of truth, and the `timezone` shell command can change the same
-setting behind the window's back.
+**The applet doesn't cache its setting.** The timezone applet read the
+current city at draw time and wrote it straight back, persisting to
+`/etc/toyos.conf`. A local copy would be a second source of truth, and
+a shell command could change the same setting behind the window's back.
+(Both of those accessors are gone: the timezone is a registered setting
+now, and the database left ring 0 entirely -- `docs/decisions.md`.)
 
 Two bugs caught by QMP testing rather than review, both of the "draws
 perfectly, does nothing" kind: `on_click`'s coordinates are

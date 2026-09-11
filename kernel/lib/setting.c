@@ -41,7 +41,7 @@ int setting_register(const struct setting *s) {
     // An ENUM with no way to list its options would render as an empty
     // picker -- a control that draws and cannot be used, which this
     // project has shipped before. Refuse at registration instead.
-    if (s->type == SETTING_TYPE_ENUM && !s->choice) return 0;
+    if (s->type == SETTING_TYPE_ENUM && !s->choice && !s->choice_file) return 0;
     // An INT with no usable range would accept everything, which is a
     // STRING wearing the wrong type -- and every UI reading imin/imax
     // would lay out a control with no ends. Refused at registration, so
@@ -247,6 +247,118 @@ const char *setting_unavailable(const struct setting *s) {
     return (why && why[0]) ? why : 0;
 }
 
+// --- a choice list that is a FILE (setting.h's `choice_file`) --------
+//
+// READ ONCE AND CACHED. Enumerating is O(choices) by construction --
+// System Settings asks for all 92 timezone rows to fill one dropdown --
+// and a whole-file read per row is the shape that made a nine-entry
+// desktop reload cost 54 of them (api/etc_config.h). The cache is keyed
+// on the path AND the filesystem generation, so an edit is picked up
+// without anything having to remember to invalidate.
+#define CHOICE_FILE_MAX 8192
+static char cf_buf[CHOICE_FILE_MAX];
+static uint32_t cf_len;
+static const char *cf_path;       // compared by POINTER: every caller
+static uint64_t cf_gen;           // passes a string literal from a
+static int cf_valid;              // `struct setting`, which outlives us
+
+static int choice_file_load(const char *path) {
+    uint64_t gen = fs_generation();
+    if (cf_valid && cf_path == path && cf_gen == gen) return 1;
+    cf_valid = 0;
+    cf_path = path;
+    cf_gen = gen;
+    // fs_read_into() REFUSES a file larger than the buffer rather than
+    // truncating it, which is the answer we want: half a city list is a
+    // list that is silently missing cities.
+    uint32_t n = fs_read_into(path, cf_buf, sizeof cf_buf - 1);
+    if (!n) return 0;
+    cf_buf[n] = '\0';
+    cf_len = n;
+    cf_valid = 1;
+    return 1;
+}
+
+// Field `want` of line `index`: 0 is the value, -1 the LAST field,
+// which is the label. Returns 1, or 0 past the last line.
+static int choice_file_field(const char *path, int index, int want,
+                             char *out, uint32_t out_size) {
+    if (!out || !out_size || !choice_file_load(path)) return 0;
+    uint32_t i = 0;
+    int line = 0;
+    while (i < cf_len) {
+        uint32_t start = i;
+        while (i < cf_len && cf_buf[i] != '\n') i++;
+        uint32_t end = i;
+        if (i < cf_len) i++;
+        if (end > start && cf_buf[end - 1] == '\r') end--;
+        if (end == start) continue;            // a blank line is not a choice
+        if (line++ != index) continue;
+        // The field: walk the commas within [start, end).
+        uint32_t fs = start, fe = end, seen = 0;
+        if (want == 0) {
+            fe = start;
+            while (fe < end && cf_buf[fe] != ',') fe++;
+        } else {
+            for (uint32_t p = start; p < end; p++)
+                if (cf_buf[p] == ',') { fs = p + 1; seen++; }
+            if (!seen) fs = start;             // one field: it is both
+        }
+        uint32_t len = fe - fs;
+        if (len >= out_size) len = out_size - 1;
+        k_memcpy(out, cf_buf + fs, len);
+        out[len] = '\0';
+        return 1;
+    }
+    return 0;
+}
+
+// The `index`-th choice of an ENUM setting, from whichever source it
+// declared. One place, so the four callers cannot disagree about which
+// settings have a choice list.
+static int setting_choice_at(const struct setting *s, int index,
+                             char *out, uint32_t out_size) {
+    if (!s || s->type != SETTING_TYPE_ENUM) return 0;
+    if (s->choice) return s->choice(index, out, out_size);
+    if (s->choice_file)
+        return choice_file_field(s->choice_file, index, 0, out, out_size);
+    return 0;
+}
+
+static int setting_has_choices(const struct setting *s) {
+    return s && s->type == SETTING_TYPE_ENUM && (s->choice || s->choice_file);
+}
+
+// Whether `value` is one of the setting's choices.
+//
+// AN EMPTY LIST ACCEPTS ANYTHING, which is not the same answer as "no
+// value is valid". A list is data -- a directory of themes, a database
+// file -- and it can be empty because the data is missing, at which
+// point refusing every value would make the setting impossible to put
+// BACK. That is a lockout, and a missing /etc/timezones would have
+// caused it.
+static int choice_valid(const struct setting *s, const char *value) {
+    char scratch[SETTING_VALUE_MAX];
+    int any = 0;
+    for (int i = 0; setting_choice_at(s, i, scratch, sizeof scratch); i++) {
+        any = 1;
+        if (k_strcmp(scratch, value) == 0) return 1;
+    }
+    return !any;
+}
+
+// How many options an ENUM setting offers. Walked rather than stored,
+// because a choice list can be COMPUTED (the keyboard layouts are a
+// directory listing), so a cached count would go stale the moment a
+// layout file appeared.
+static int choice_count(const struct setting *s) {
+    if (!setting_has_choices(s)) return 0;
+    char scratch[SETTING_VALUE_MAX];
+    int n = 0;
+    while (setting_choice_at(s, n, scratch, sizeof scratch)) n++;
+    return n;
+}
+
 enum setting_result setting_set(const char *name, const char *value) {
     const struct setting *s = setting_find(name);
     if (!s || !value) return SETTING_INVALID;
@@ -261,6 +373,13 @@ enum setting_result setting_set(const char *name, const char *value) {
     // is refused rather than being quietly accepted when it happens to
     // equal what is already there.
     if (s->type == SETTING_TYPE_INT && !int_value_ok(s, value, 0))
+        return SETTING_INVALID;
+    // AN ENUM'S VALUE MUST BE ONE OF ITS CHOICES, checked here for the
+    // same reason the range is: `config set` and a hand-edited /etc file
+    // reach this function without passing through any control. It was
+    // each setting's own `apply` that refused an unknown value, which
+    // worked only for the ones that remembered to.
+    if (setting_has_choices(s) && !choice_valid(s, value))
         return SETTING_INVALID;
 
     // SETTING IT TO WHAT IT ALREADY IS COSTS NOTHING. Without this,
@@ -360,18 +479,6 @@ int settings_reload(void) {
 
 // --- the ring-3 face of the registry (abi/setting_abi.h) -------------
 
-// How many options an ENUM setting offers. Walked rather than stored,
-// because a choice list can be COMPUTED (the keyboard layouts are a
-// directory listing), so a cached count would go stale the moment a
-// layout file appeared.
-static int choice_count(const struct setting *s) {
-    if (s->type != SETTING_TYPE_ENUM || !s->choice) return 0;
-    char scratch[SETTING_VALUE_MAX];
-    int n = 0;
-    while (s->choice(n, scratch, sizeof scratch)) n++;
-    return n;
-}
-
 int setting_dispatch(struct setting_msg *msg) {
     if (!msg) return 0;
 
@@ -447,9 +554,10 @@ int setting_dispatch(struct setting_msg *msg) {
 
     case SETTING_OP_CHOICE: {
         const struct setting *s = setting_at(msg->index);
-        if (!s || s->type != SETTING_TYPE_ENUM || !s->choice) return 0;
+        if (!setting_has_choices(s)) return 0;
         msg->value[0] = '\0';
-        if (!s->choice(msg->choice, msg->value, sizeof msg->value)) return 0;
+        if (!setting_choice_at(s, msg->choice, msg->value, sizeof msg->value))
+            return 0;
         // The DISPLAY name rides alongside the value -- so a client
         // draws `label` unconditionally and never decides. `value`
         // stays the token that gets stored.
@@ -466,6 +574,9 @@ int setting_dispatch(struct setting_msg *msg) {
             // declines leaves exactly what it would have left.
             if (s->choice_label)
                 s->choice_label(msg->choice, msg->label, sizeof msg->label);
+            else if (s->choice_file)
+                choice_file_field(s->choice_file, msg->choice, -1,
+                                  msg->label, sizeof msg->label);
         }
         return 1;
     }

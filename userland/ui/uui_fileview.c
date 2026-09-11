@@ -1,5 +1,6 @@
 // fileview -- a directory listing, as a widget. See ui/uui_fileview.h.
 #include "ui/uui_fileview.h"
+#include <time.h>
 #include "ui/uui_widget.h"
 #include "rt/sys.h"     // sys_listdir(), sys_ticks()
 #include "kpath.h"      // k_path_join/_dirname -- the KERNEL's, linked into ring 3
@@ -154,14 +155,21 @@ static void fv_cell(void *ctx, int row, int col, char *out, int cap) {
         else           human_size(out, (unsigned long)cap, e->size);
         break;
     case FV_COL_TIME: {
-        const struct rtc_time *t = &e->modified;
         // Zeroed when the kernel's per-entry stat failed
         // (syscall_abi.h), and a "00-00 00:00" is a worse answer than
         // an empty cell.
-        if (!t->year && !t->month && !t->day) { out[0] = '\0'; break; }
+        if (!e->modified.year && !e->modified.month && !e->modified.day) {
+            out[0] = '\0';
+            break;
+        }
+        // LOCALISED. The stored time is UTC (api/fs.h); this column is
+        // sized for its own narrow spelling, so it converts rather than
+        // going through lib/udate.h.
+        struct rtc_time t = e->modified;
+        tz_localize(&t);
         snprintf(out, (size_t)cap, "%02u-%02u %02u:%02u",
-                  (unsigned)t->month, (unsigned)t->day,
-                  (unsigned)t->hour, (unsigned)t->minute);
+                  (unsigned)t.month, (unsigned)t.day,
+                  (unsigned)t.hour, (unsigned)t.minute);
         break;
     }
     default:

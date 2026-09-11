@@ -4,27 +4,26 @@
 // C's <time.h>, over the RTC and the shared calendar arithmetic
 // (api/caltime.h, compiled into libc.a).
 //
-// **THE ONE THING TO READ BEFORE USING THIS: gmtime() AND localtime()
-// ARE THE SAME FUNCTION HERE, and time() is not UTC.**
+// **time() IS UTC, AND localtime() IS A REAL CONVERSION.**
 //
-// toy-os has no stored UTC offset. The RTC is read as LOCAL civil time
-// with the selected city's offset and DST already applied (tz.h), and
-// the filesystem stores epochs derived from that same local reckoning
-// -- deliberately, and documented at those call sites: it makes
-// timestamps arithmetic-comparable without inventing UTC handling the
-// system does not have.
+// The kernel's clock is UTC, SYS_GETTIME returns UTC and every
+// filesystem timestamp is a UTC epoch, so an epoch from time() and one
+// from a file's st.modified are the same kind of number and comparing
+// them means something. localtime() applies the selected city's offset
+// and its DST rule, both read from /etc/timezones by libc/tz.c -- which
+// is where a C library keeps them, the kernel having stopped carrying a
+// city database (api/tz.h).
 //
-// So this header keeps the system honest rather than papering over it.
-// time() returns an epoch in the SAME reckoning as a file's
-// st.modified, so comparing them is meaningful -- which is the thing
-// programs actually do. Making time() return true UTC while the
-// filesystem's epochs stayed local would have put a silent offset
-// between two numbers that look comparable, which is worse than a
-// documented simplification.
+// This header used to say the opposite, in detail: gmtime() and
+// localtime() WERE the same function, and time() was local-derived,
+// because the kernel converted at the syscall boundary and there was no
+// stored UTC offset for libc to apply. It predicted that the fix would
+// be a system-wide one rather than a libc patch. It was.
 //
-// The fix is a system-wide one (a stored UTC offset, on the roadmap),
-// not a libc patch -- and when it lands, gmtime() and localtime() here
-// become genuinely different and nothing else in this header changes.
+// **tzset() IS WHAT RE-READS THE SELECTION.** The city is read once, on
+// the first conversion; a program that wants to follow a change made in
+// System Settings calls tzset() again. Nothing polls a file from inside
+// localtime().
 //
 // **clock() REPORTS REAL PROCESSOR TIME**, not wall time. The kernel has
 // tracked per-process `cpu_ns` all along (abi/proc_info.h); what was
@@ -70,12 +69,44 @@ struct tm *localtime(const time_t *t);
 struct tm *gmtime_r(const time_t *t, struct tm *out);
 struct tm *localtime_r(const time_t *t, struct tm *out);
 
+// Re-reads the selected city and the database. Called for you by the
+// first localtime(); call it again to pick up a change.
+void tzset(void);
+
+// POSIX's three globals, set by tzset(). `timezone` is SECONDS WEST of
+// UTC (POSIX's sign, the opposite of the database's minutes east),
+// `daylight` says whether the zone has a DST rule at all -- not whether
+// it is in effect now, which is `tm_isdst` on a converted time.
+extern char *tzname[2];
+extern long timezone;
+extern int daylight;
+
+// The selected city's NAME -- the token, as stored. Not POSIX; here
+// because `tzname` carries the display name and a caller that wants to
+// report what is configured needs the identity.
+const char *tz_current_name(void);
+
+// The same conversion for the broken-down UTC time SYS_GETTIME returns,
+// in place -- so reading the clock and showing it is two calls and no
+// epoch round trip. `struct rtc_time` is abi/rtctime.h.
+struct rtc_time;
+void tz_localize(struct rtc_time *t);
+
+// Seconds EAST of UTC at that moment, DST included. `timezone` above is
+// the STANDARD-time offset and counts west, so the two differ in both
+// sign and season; this is the one to use for arithmetic.
+long tz_offset_seconds(const time_t *t);
+
 // tm -> time_t, NORMALISING the input: a tm_mday of 32 or a tm_mon of
 // 12 is carried into the next month or year rather than rejected,
 // because that is how C says date arithmetic is done ("add 40 days,
 // then mktime"). The struct is updated in place to the normalised
 // values, tm_wday and tm_yday included.
 time_t mktime(struct tm *tm);
+
+// The UTC counterpart of mktime(): reads `tm` as UTC. POSIX, and the
+// half of mktime that does the calendar arithmetic.
+time_t timegm(struct tm *tm);
 
 static inline double difftime(time_t a, time_t b) { return (double)(a - b); }
 

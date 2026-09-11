@@ -12,6 +12,7 @@
 // `config get` prints, so the two cannot disagree about where this
 // machine thinks it is.
 #include "rt/sys.h"
+#include <time.h>
 #include "lib/cmd.h"
 #include "lib/usetting.h"
 #include <stdio.h>
@@ -41,6 +42,10 @@ int main(int argc, char **argv) {
         cmd_fail("time", 0);
         return 1;
     }
+    // THE KERNEL RETURNS UTC. The city database and the DST rules are
+    // libc's (userland/libc/tz.c), so this is where the clock becomes a
+    // local time -- the kernel has not known a zone since they moved.
+    tz_localize(&t);
 
     char tz[SETTING_ABI_VALUE_MAX];
     timezone_name(tz, sizeof tz);

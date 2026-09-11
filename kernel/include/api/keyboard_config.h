@@ -11,7 +11,7 @@
 // (whatever /etc/kbs/<name> exists), not a fixed compiled-in enum.
 
 // Call once at boot, after fs_init()/fs_mkdir("/etc") (same ordering as
-// tz_init()/font_config_init() -- see kernel.c) -- loads the persisted
+// the other /etc readers -- see kernel.c) -- loads the persisted
 // keyboard_layout key if present and applies it via
 // keyboard_layout_load(). Falls back to "us" (see
 // keyboard_layout_load()'s own fallback chain) if no config exists yet.
@@ -19,7 +19,7 @@ void keyboard_config_init(void);
 
 // Persists `name` as /etc/toyos.conf's "keyboard_layout=<name>" key so
 // it survives a reboot. Does NOT call keyboard_layout_load() itself --
-// same split as tz_set_index()/font_config_save(); the shell's
+// same split as font_config_save(); the shell's
 // `keyboard` command calls keyboard_layout_load() itself and this
 // separately.
 // Returns an `enum setting_result` (etc_config.h): SETTING_INVALID for

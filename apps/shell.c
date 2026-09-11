@@ -115,8 +115,6 @@ static void dispatch(char *line) {
         cmd_help(args);
     } else if (k_strcmp(cmd, "clear") == 0) {
         vga_clear();
-    } else if (k_strcmp(cmd, "timezone") == 0) {
-        cmd_timezone(args);
     } else if (k_strcmp(cmd, "beep") == 0) {
         cmd_beep();
     } else if (k_strcmp(cmd, "hwcursor") == 0) {

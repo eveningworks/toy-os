@@ -39,7 +39,7 @@
 // line, or `config set system.default_target rescue`.
 #define TARGET_RESCUE    "rescue"
 
-// Called from kernel_main() after fs_init(), beside tz_init() and the
+// Called from kernel_main() after fs_init(), beside the other /etc readers and the
 // other /etc readers -- and BEFORE the init process is spawned, since
 // init asks for this value as its first act. Loads `default_target`
 // from /etc/toyos.conf (defaulting to `graphical`), then applies a

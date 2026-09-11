@@ -24,15 +24,14 @@
 // The registry knows, so it says.
 
 // What a "change a setting and persist it" call actually managed to do
-// -- returned by tz_set_index(), the three `*_config_save()`s and
-// setting_set() kernel-side, and reported in `struct setting_msg`'s
-// `result` to ring 3.
+// -- returned by the `*_config_save()`s and setting_set() kernel-side,
+// and reported in `struct setting_msg`'s `result` to ring 3.
 //
 // It exists because those savers used to conflate "applied" with
-// "saved": three returned void and tz_set_index() returned 1 for a
-// valid index whether or not the write landed, so `timezone Helsinki`
-// on a filesystem with no /etc printed "Timezone set to helsinki." and
-// persisted nothing. Applying and persisting are two outcomes, and a
+// "saved": they reported success for a valid value whether or not the
+// write landed, so setting a timezone on a filesystem with no /etc
+// said it had and persisted nothing. Applying and persisting are two
+// outcomes, and a
 // caller that reports one as the other is lying to the user -- a
 // setting silently not surviving a reboot is close to the worst way to
 // find that out.
@@ -41,9 +40,9 @@
 // this header) because ring 3 can change a setting now, so the outcome
 // is part of the kernel<->userland contract.
 //
-// SETTING_UNSAVED is deliberately non-zero, so the pre-existing
-// `if (!tz_set_index(i))` idiom still reads as "did it apply?" and only
-// callers that want the finer answer have to look for it.
+// SETTING_UNSAVED is deliberately non-zero, so an `if (!save(...))`
+// caller still reads as "did it apply?" and only callers that want the
+// finer answer have to look for it.
 enum setting_result {
     SETTING_INVALID = 0, // bad argument -- nothing applied, nothing written
     SETTING_SAVED   = 1, // applied, and written to its /etc file

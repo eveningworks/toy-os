@@ -12,6 +12,7 @@
 // (apps/shell_rescue.c), for a disk whose /bin is damaged. See
 // `docs/decisions.md`.
 #include "shell_internal.h"
+#include "caltime.h"
 
 // Reused across cmd_cat() calls, same reasoning as TFS2's own
 // g_read_buf (fs_read()'s staging buffer): a fresh kmalloc() every call
@@ -231,9 +232,9 @@ void cmd_stat(const char *name) {
         struct rtc_time t;
         vga_write("  inode:    "); vga_write_dec((uint32_t)st.ino);
         vga_write(fs_has(FS_CAP_INODES) ? "\n" : " (synthetic)\n");
-        tz_epoch_to_rtc(st.created, &t);
+        cal_epoch_to_rtc(st.created, &t);
         vga_write("  created:  "); print_stat_timestamp(&t); vga_putc('\n');
-        tz_epoch_to_rtc(st.modified, &t);
+        cal_epoch_to_rtc(st.modified, &t);
         vga_write("  modified: "); print_stat_timestamp(&t); vga_putc('\n');
     } else {
         // Only the implicit root "/" (no entry of its own -- see fs.h)

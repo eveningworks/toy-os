@@ -2,7 +2,7 @@
 // way tz.c persists the timezone city -- a small "font_size=<n>" key
 // inside the shared /etc/toyos.conf every setting lives in by default,
 // read/applied once at boot (see kernel.c's kernel_main():
-// fs_mkdir("/etc") runs before either tz_init() or font_config_init()),
+// fs_mkdir("/etc") runs before any INIT_CONFIG initcall),
 // through the shared reader/writer in kernel/lib/etc_config.c.
 //
 // `<n>` is a point size. It used to have to be one of the eight sizes

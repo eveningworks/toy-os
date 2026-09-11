@@ -51,6 +51,8 @@
 #include "fs.h"
 #include "fs_ops.h"
 #include "fat32.h"
+#include "ktime.h"
+#include "caltime.h"
 #include "mount.h" // MOUNT_MAX -- the mount limit this backend declares
 #include "block.h"
 #include "string.h"
@@ -711,9 +713,14 @@ static int lookup(const char *path, struct dirent_info *out) {
 // says a backend NOT declaring it does, and why fat32_ops does not
 // declare it.
 
+// FAT's fields are LOCAL time by specification, and this writes UTC --
+// the kernel has no local time to write since the zone left ring 3
+// (api/tz.h). That is Linux's `tz=UTC` vfat mount option, made the only
+// behaviour rather than an option: the alternative is asking a ring-3
+// service for an offset from inside a filesystem write.
 static void now_fat(uint16_t *out_date, uint16_t *out_time) {
     struct rtc_time t;
-    rtc_read_local(&t);
+    ktime_read(&t);
     uint32_t year = t.year;
     if (year < 1980) year = 1980;
     if (year > 2107) year = 2107; // FAT's 7-bit year field ends here
@@ -731,7 +738,7 @@ static uint64_t fat_to_epoch(uint16_t date, uint16_t time) {
     t.minute = (uint8_t)((time >> 5) & 0x3F);
     t.second = (uint8_t)((time & 0x1F) * 2);
     if (t.month < 1 || t.month > 12 || t.day < 1 || t.day > 31) return 0;
-    return tz_rtc_to_epoch(&t);
+    return cal_rtc_to_epoch(&t);
 }
 
 // ---- writing directory entries -------------------------------------------

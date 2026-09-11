@@ -174,14 +174,31 @@ def main():
     check("returning to normal restores the original pointer exactly",
           ink_back == ink_default, f"{ink_back} vs {ink_default}")
 
-    # --- a malformed shape falls back, and says so --------------------
-    # The floor that makes all of the above safe: a theme file a person
-    # edited badly must cost its own shape, not the pointer.
+    # --- a theme nobody installed is REFUSED --------------------------
+    #
+    # The registry is the gate for an enum's value now: a setting that
+    # declares its choices refuses one that is not among them
+    # (api/setting.h). So the state this used to check -- the setting
+    # holding a name with no theme behind it, and the compositor left
+    # with no shapes at all -- is no longer reachable through `config`,
+    # which is a better floor than asserting how gracefully it failed.
+    before_theme, before_n = loaded_count(dbg)
     dbg.send("gui spawn /bin/config set cursor_theme broken")
     time.sleep(1.0)
     theme, n = loaded_count(dbg)
-    check("a theme that does not exist loads nothing", n == 0,
-          f'theme="{theme}" loaded={n}')
+    # NO NEW REPORT IS THE PASS. The compositor logs a line when it
+    # reloads a theme, so a refused change produces nothing at all --
+    # `loaded_count()` reads the lines since the last drain and
+    # correctly finds none. A theme name coming back here would mean it
+    # reloaded, which is the failure.
+    check("a theme that does not exist is refused, not applied",
+          theme is None or (theme == before_theme and n == before_n),
+          f'theme="{theme}" loaded={n}, was "{before_theme}"/{before_n}')
+    # ...and the value on disk is still the working one, read through a
+    # path the compositor is not on.
+    out = dbg.send("sh cat /etc/toyos.conf") or ""
+    check("...and /etc still names a theme that exists",
+          "cursor_theme=broken" not in out, out[-200:])
 
     DebugConsole.warp_cursor(dbg, qmp, PARK_X + 40, PARK_Y + 40)
     time.sleep(0.5)
@@ -191,7 +208,10 @@ def main():
     ink_fallback = sum(1 for y in range(PARK_Y + 32, PARK_Y + 80)
                         for x in range(PARK_X + 32, PARK_X + 80)
                         if im.getpixel((x, y)) != BG)
-    check("the built-in pointer still draws with no theme at all",
+    # The pointer is still drawn after a refused change -- the check that
+    # a rejected setting costs nothing, rather than the old one that a
+    # missing theme costs only its own shapes.
+    check("the pointer still draws after a refused theme",
           ink_fallback > 40, f"{ink_fallback} px")
 
     # --- both settings are in the registry ----------------------------
