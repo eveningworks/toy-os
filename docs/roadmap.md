@@ -1065,6 +1065,7 @@ this to be better?".
 - [ ] Get blocking disk I/O out of the WM's event loop
 - [ ] Make the GUI test tooling RESOLUTION-AGNOSTIC
 - [ ] Retire `uui_button_group` once nothing needs it
+- [ ] The folder tree's double-click toggle has no automated check -- the layout report's node count did not settle under TCG
 - [ ] `toywm` links DYNAMICALLY, so the static set's rescue argument no longer covers the desktop
 - [ ] The WM's context menu has no keyboard: `uui_menubar_key()` exists and `wm_overlay.h` has no key op to route it through
 - [ ] `uui_menubar_init()` hardcodes seven RGB colours instead of reading `utheme`, so an app's menus do not follow the theme

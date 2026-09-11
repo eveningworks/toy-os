@@ -108,6 +108,10 @@ void desktop_entries_changed(void);
 int desktop_icon_geometry(int i, const char **name, int *x, int *y, int *w, int *h,
                           int *lines, const char **kind);   // kind: app | dir | file
 int desktop_icon_count(void);              // the folder's entries, launchers included
+// Is icon `i` in the selection? `gui icons --json` reports it, so a
+// test can assert that a plain click REPLACED the selection rather
+// than adding to it -- which no screenshot distinguishes reliably.
+int desktop_icon_selected(int i);
 struct gui_app;
 void desktop_add_launcher(const struct gui_app *app);   // writes <app_id>.desktop into /home/desktop
 // Ctrl+C/X/V and Delete when no window has the focus. 1 if consumed.

@@ -693,6 +693,105 @@ def run(dbg, qmp, tmp, res):
     dbg.send("sh config set desktop.icon_size medium")
     time.sleep(0.8)
 
+    # --- selecting one icon UNSELECTS the last ---------------------------
+    #
+    # A PLAIN CLICK REPLACES THE SELECTION, and the `selected` flag alone
+    # cannot see this go wrong: the bug this covers had the flag exactly
+    # right and the HIGHLIGHT still painted on every icon clicked, because
+    # nothing damaged the one that lost it (`redraw_pending` without a
+    # rect repaints only in a quiet frame, and the taskbar clock is not
+    # quiet). So both halves are asserted -- the app's answer AND the
+    # pixels -- and the pixel half is the one that fails without the fix.
+    print("a plain click replaces the selection, on screen as well as in the report")
+    for w2 in sorted(dbg.windows(), key=lambda w2: -w2["z"]):
+        dbg.send(f"gui close {w2['z']}")
+        time.sleep(0.3)
+    rep_sel = desktop_report(dbg)
+    picks = [i["name"] for i in rep_sel.get("icons", [])][:2]
+    if len(picks) == 2:
+        def band(shot, r):
+            """A pixel inside the icon's box but off its artwork -- the
+            highlight band, which is what a selected icon draws."""
+            return shot.getpixel((r["x"] + 3, r["y"] + r["h"] - 6))
+
+        r0, r1 = icon_rect(rep_sel, picks[0]), icon_rect(rep_sel, picks[1])
+        dbg.click(r0["x"] + r0["w"] // 2, r0["y"] + 8)
+        time.sleep(0.8)
+        im0 = shot(qmp, tmp, "sel0.png")
+        first_band = band(im0, r0)
+        rep_a = desktop_report(dbg)
+        sel_a = [i["name"] for i in rep_a["icons"] if i.get("selected")]
+        res.check("clicking an icon selects it and nothing else",
+                  sel_a == [picks[0]], f"selected={sel_a}")
+
+        dbg.click(r1["x"] + r1["w"] // 2, r1["y"] + 8)
+        time.sleep(0.8)
+        im1 = shot(qmp, tmp, "sel1.png")
+        rep_b = desktop_report(dbg)
+        sel_b = [i["name"] for i in rep_b["icons"] if i.get("selected")]
+        res.check("clicking a second icon moves the selection off the first",
+                  sel_b == [picks[1]], f"selected={sel_b}")
+        res.check("...and the first icon's HIGHLIGHT is repainted away",
+                  band(im1, r0) != first_band,
+                  f"{picks[0]} band {band(im0, r0)} -> {band(im1, r0)}")
+        res.check("...while the second icon now carries it",
+                  band(im1, r1) == first_band,
+                  f"{picks[1]} band {band(im1, r1)} vs {first_band}")
+
+    # --- the Start menu stays up under its own row's menu ----------------
+    #
+    # Windows' behaviour: right-clicking a Start row opens that row's menu
+    # WITHOUT dismissing Start, so the menu you were reading is still
+    # there. A launching verb still dismisses it.
+    print("the Start menu survives a right-click on one of its rows")
+
+    def overlays():
+        line = [ln for ln in dbg.send("gui state").splitlines() if "start_menu=" in ln][0]
+        return dict(kv.split("=") for kv in line.split(": ")[1].split())
+
+    tb = dbg.json("gui taskbar --json")["start"]
+    dbg.click(tb["x"] + tb["w"] // 2, tb["y"] + tb["h"] // 2)
+    time.sleep(0.8)
+    menu = dbg.json("gui menu --json")
+    approws = [r for r in menu.get("rows", []) if r.get("kind") == "app"]
+    if approws:
+        dbg.send(f"gui rclick {menu['x'] + 20} {approws[0]['cy']}")
+        time.sleep(0.9)
+        ov = overlays()
+        labels = [r["label"] for r in (ctx() or {}).get("rows", [])]
+        res.check("right-clicking a Start row opens its menu",
+                  ov["context_menu"] == "1" and "Add to desktop" in labels,
+                  f"overlays={ov} rows={labels}")
+        res.check("...and the Start menu is STILL open behind it",
+                  ov["start_menu"] == "1", f"overlays={ov}")
+        # The desktop's own files BEFORE, so the launcher this adds can
+        # be removed by name -- leaving it behind shifts the icon grid
+        # and every later check aims at the wrong cell.
+        before_ls = set(dbg.send("sh ls /home/desktop").split())
+        pos = dbg.ctxmenu_row("Add to desktop")
+        if pos:
+            dbg.click(*pos)
+            time.sleep(1.2)
+            ov = overlays()
+            res.check("a non-launching verb closes only the context menu",
+                      ov["context_menu"] == "0" and ov["start_menu"] == "1",
+                      f"overlays={ov}")
+        # BOTH overlays closed before moving on, and CONFIRMED: Super
+        # TOGGLES, so a stray one here reopens Start -- and an open Start
+        # eats the next section's right-click, which reads as the file
+        # menu being broken.
+        for _ in range(4):
+            ov = overlays()
+            if ov["start_menu"] == "0" and ov["context_menu"] == "0":
+                break
+            dbg.click(4, 4)   # empty desktop, above and left of every icon
+            time.sleep(0.5)
+        res.check("(both menus dismissed before the next section)",
+                  overlays()["start_menu"] == "0", f"overlays={overlays()}")
+        for added in set(dbg.send("sh ls /home/desktop").split()) - before_ls:
+            dbg.send(f"sh rm -r /home/desktop/{added}")
+        time.sleep(1.0)
+
     # --- the desktop folder ---------------------------------------------
     #
     # A file in /home/desktop is an icon like the seeded launchers; its menu

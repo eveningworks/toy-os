@@ -91,27 +91,56 @@ def extract_arrow():
 
 
 def resize_shape(kind):
-    """A port of draw_cursor_h/_v/_diag -- the same wedge, as a mask.
+    """A double-headed arrow: two arrowheads, a 3px shaft, fully outlined.
 
-    The C versions draw straight to the framebuffer with put_pixel, so
-    every touched pixel is fully opaque; `half` is the wedge's half-width
-    at that step and the two extreme rows of each wedge are its outline.
+    The same construction as wm_render.c's draw_resize_cursor() -- change
+    both. The outline is the point: the previous shape's middle was a
+    bare 1px white line with nothing behind it, which vanished against a
+    light window border.
     """
-    n, mid = 13, 3
-    s = Shape(13, 13, (6, 6)) if kind == "diag" else (
-        Shape(13, 7, (6, 3)) if kind == "h" else Shape(7, 13, (3, 6)))
-    for i in range(n):
-        half = i if i < 4 else (n - 1 - i if i >= n - 4 else 0)
-        for t in range(-half, half + 1):
-            edge = half > 0 and (t == half or t == -half)
+    LEN, HEAD, HALF, PAD = 19, 5, 4, 1
+
+    def half_at(i):
+        if i < HEAD:
+            return i
+        if i >= LEN - HEAD:
+            return LEN - 1 - i
+        return 1
+
+    span = LEN + 2 * HALF + 2 * PAD
+    fill = [[0] * span for _ in range(span)]
+    for i in range(LEN):
+        h = half_at(i)
+        for t in range(-h, h + 1):
             if kind == "h":
-                x, y = i, mid + t
+                gx, gy = i, HALF + t
             elif kind == "v":
-                x, y = mid + t, i
+                gx, gy = HALF + t, i
             else:
-                x, y = i + t, i - t
-            if 0 <= x < s.w and 0 <= y < s.h:
-                (s.outline if edge else s.fill)[y][x] = 255
+                gx, gy = i + t + HALF, i - t + HALF
+            fill[gy + PAD][gx + PAD] = 1
+
+    # Crop to the ink, so the shape carries no dead margin and its
+    # hotspot stays the centre of what is actually drawn.
+    xs = [x for y in range(span) for x in range(span) if fill[y][x]]
+    ys = [y for y in range(span) for x in range(span) if fill[y][x]]
+    x0, x1 = min(xs) - PAD, max(xs) + PAD
+    y0, y1 = min(ys) - PAD, max(ys) + PAD
+    w, h = x1 - x0 + 1, y1 - y0 + 1
+
+    s = Shape(w, h, (w // 2, h // 2))
+    for y in range(h):
+        for x in range(w):
+            if fill[y + y0][x + x0]:
+                s.fill[y][x] = 255
+    for y in range(h):
+        for x in range(w):
+            if s.fill[y][x]:
+                continue
+            near = any(0 <= y + dy < h and 0 <= x + dx < w and s.fill[y + dy][x + dx]
+                       for dy in (-1, 0, 1) for dx in (-1, 0, 1))
+            if near:
+                s.outline[y][x] = 255
     return s
 
 

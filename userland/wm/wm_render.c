@@ -388,40 +388,64 @@ static void draw_cursor_normal(int x, int y) {
 // style as draw_cursor_normal() above): a short double-headed wedge
 // shape, tapering from a single-pixel tip at each end up to a 3px-wide
 // base in the middle, connected by a thin 1px shaft.
-static void draw_cursor_h(int x, int y) { // <-> : right-edge resize
-    uint32_t color = UTHEME_WHITE, outline = ugfx_rgb(0, 0, 0);
-    int w = 13, mid = 3;
-    for (int i = 0; i < w; i++) {
-        int half = (i < 4) ? i : (i >= w - 4 ? (w - 1 - i) : 0);
-        for (int t = -half; t <= half; t++) {
-            uint32_t c = (half > 0 && (t == half || t == -half)) ? outline : color;
-            ugfx_put_pixel(wm_surface(), x + i, y + mid + t, c);
-        }
-    }
+// THE SHAPE, ONCE, FOR ALL THREE DIRECTIONS. A double-headed arrow:
+// two five-step arrowheads joined by a 3px shaft, with every white
+// pixel outlined. The outline is the point -- the old shape's middle
+// was a bare 1px WHITE line, invisible against a light window border,
+// which is what made the resize cursor hard to see. Same construction
+// as the themed shapes in tools/gen_cursors.py; change both.
+#define RZ_LEN   19   // steps along the arrow's axis
+#define RZ_HEAD   5   // of which each arrowhead
+#define RZ_HALF   4   // the arrowhead's half-width at its base
+#define RZ_PAD    1   // room for the outline
+#define RZ_GRID  (RZ_LEN + 2 * RZ_HALF + 2 * RZ_PAD)
+
+// Half-width at step i: tapering through the head, 1 along the shaft.
+static int rz_half(int i) {
+    if (i < RZ_HEAD) return i;
+    if (i >= RZ_LEN - RZ_HEAD) return RZ_LEN - 1 - i;
+    return 1;
 }
 
-static void draw_cursor_v(int x, int y) { // up/down : bottom-edge resize
-    uint32_t color = UTHEME_WHITE, outline = ugfx_rgb(0, 0, 0);
-    int h = 13, mid = 3;
-    for (int j = 0; j < h; j++) {
-        int half = (j < 4) ? j : (j >= h - 4 ? (h - 1 - j) : 0);
-        for (int t = -half; t <= half; t++) {
-            uint32_t c = (half > 0 && (t == half || t == -half)) ? outline : color;
-            ugfx_put_pixel(wm_surface(), x + mid + t, y + j, c);
-        }
-    }
-}
+// Rasterised into a grid rather than plotted directly, because the
+// outline is "every empty pixel touching a filled one" and that cannot
+// be decided until the fill is complete.
+static unsigned char rz_grid[RZ_GRID][RZ_GRID];
 
-static void draw_cursor_diag(int x, int y) { // corner resize -- same shape as H/V, rotated 45deg
-    uint32_t color = UTHEME_WHITE, outline = ugfx_rgb(0, 0, 0);
-    int n = 13;
-    for (int i = 0; i < n; i++) {
-        int half = (i < 4) ? i : (i >= n - 4 ? (n - 1 - i) : 0);
+static void draw_resize_cursor(int x, int y, enum wm_cursor_kind kind) {
+    for (int gy = 0; gy < RZ_GRID; gy++)
+        for (int gx = 0; gx < RZ_GRID; gx++) rz_grid[gy][gx] = 0;
+
+    for (int i = 0; i < RZ_LEN; i++) {
+        int half = rz_half(i);
         for (int t = -half; t <= half; t++) {
-            uint32_t c = (half > 0 && (t == half || t == -half)) ? outline : color;
-            ugfx_put_pixel(wm_surface(), x + i + t, y + i - t, c);
+            int gx, gy;
+            if (kind == WM_CURSOR_H)      { gx = i;                gy = RZ_HALF + t; }
+            else if (kind == WM_CURSOR_V) { gx = RZ_HALF + t;      gy = i; }
+            else                          { gx = i + t + RZ_HALF;  gy = i - t + RZ_HALF; }
+            rz_grid[gy + RZ_PAD][gx + RZ_PAD] = 1;
         }
     }
+    for (int gy = 0; gy < RZ_GRID; gy++) {
+        for (int gx = 0; gx < RZ_GRID; gx++) {
+            if (rz_grid[gy][gx]) continue;
+            int near = 0;
+            for (int dy = -1; dy <= 1 && !near; dy++)
+                for (int dx = -1; dx <= 1; dx++) {
+                    int ny = gy + dy, nx = gx + dx;
+                    if (ny < 0 || ny >= RZ_GRID || nx < 0 || nx >= RZ_GRID) continue;
+                    if (rz_grid[ny][nx] == 1) { near = 1; break; }
+                }
+            if (near) rz_grid[gy][gx] = 2;
+        }
+    }
+
+    uint32_t fill = UTHEME_WHITE, outline = ugfx_rgb(0, 0, 0);
+    for (int gy = 0; gy < RZ_GRID; gy++)
+        for (int gx = 0; gx < RZ_GRID; gx++)
+            if (rz_grid[gy][gx])
+                ugfx_put_pixel(wm_surface(), x + gx - RZ_PAD, y + gy - RZ_PAD,
+                               rz_grid[gy][gx] == 1 ? fill : outline);
 }
 
 // The built-in I-beam, for a theme with no `text` shape.
@@ -533,9 +557,9 @@ static void draw_cursor(int x, int y, enum wm_cursor_kind kind) {
         return;
     }
     switch (kind) {
-        case WM_CURSOR_H:    draw_cursor_h(x, y);    break;
-        case WM_CURSOR_V:    draw_cursor_v(x, y);    break;
-        case WM_CURSOR_DIAG: draw_cursor_diag(x, y); break;
+        case WM_CURSOR_H:
+        case WM_CURSOR_V:
+        case WM_CURSOR_DIAG: draw_resize_cursor(x, y, kind); break;
         case WM_CURSOR_TEXT: draw_cursor_text(x, y); break;
         case WM_CURSOR_WAIT: draw_cursor_wait(x, y); break;
         default:              draw_cursor_normal(x, y); break;
@@ -641,7 +665,10 @@ enum wm_cursor_kind wm_cursor_kind_at(int mx, int my) {
 // would leave a stale cursor-colored pixel behind on every move, so
 // it's deliberately oversized rather than tightly fit to each shape.
 #define CURSOR_BOX_MARGIN 2
-#define CURSOR_BOX_SIZE 22 // the BUILT-IN shapes' box; themed ones derive theirs
+#define CURSOR_BOX_SIZE 32 // the BUILT-IN shapes' box; themed ones derive theirs
+// 32 because the resize arrow's DIAGONAL is the widest built-in: 19
+// steps at 45 degrees plus its heads and outline. Too small strands a
+// cursor-coloured pixel on every move, which this file has paid for twice.
 
 // The themed shapes make the drawn extent variable -- a theme's size,
 // its hotspot and the size setting's scale all move it -- so the box can

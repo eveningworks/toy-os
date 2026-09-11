@@ -3416,6 +3416,38 @@ reports instead of hardcoding a 48 px tile at (16, 16). The cell's own
 x stays the column's left edge, which is what the grid, the drag and
 the saved positions speak; only the drawing and the hit box are offset.
 
+## A POPUP OPENED FROM ANOTHER OVERLAY NAMES IT AS ITS PARENT, AND `close_others()` SPARES BOTH
+
+`wm_overlay_set_parent(name)` before opening the child; the child clears
+it when it closes. That is Wayland's popup chain -- an `xdg_popup` does
+not dismiss the surface it hangs off -- and it is what keeps the Start
+menu up while the right-click menu for one of its rows is open, as
+Windows does. The table order already supported it: `context` sits
+before `start`, so the child takes the click and is painted last.
+
+**A LAUNCHING VERB STILL DISMISSES THE PARENT.** `ctx_open_app()` closes
+the Start menu itself, because opening a window is what closes Start
+everywhere else; "Add to desktop" deliberately does not, so you can do
+another. **And the child MUST clear the parent on BOTH its close paths**
+-- `context_menu_close()` and the commit inside
+`context_menu_handle_click()` -- or the next `close_others()` spares an
+overlay nobody meant to keep.
+
+## A SELECTION CHANGE MUST DAMAGE THE RECTS IT CHANGED, NOT JUST SET `redraw_pending`
+
+`redraw_pending` with no damage repaints everything only in a QUIET
+frame, and the taskbar clock is damaging one most seconds -- so a
+deselected desktop icon kept its highlight PAINTED while
+`gui icons --json` said it was not selected. Clicking icons in turn
+looked exactly like Ctrl+click accumulating a selection, and no
+assertion on the app's own answer could see it: the report was right
+the whole time. `desktop_handle_click()` snapshots the selection and
+damages every icon whose state moved.
+
+**THE TEST FOR THIS CLASS IS A PIXEL, NOT A REPORT.** `icons_test.py`
+asserts both halves and the pixel half is the one that reddens -- its
+positive control leaves the JSON check green.
+
 ## THE WM CONTEXT MENU IS `uui_menubar`, WITH THE PANEL'S ITEM MODEL OVER IT, AND THE DESKTOP'S MENU IS WINDOWS' SHAPE
 
 `context_menu.c` opens a `struct uui_menubar` through

@@ -523,6 +523,21 @@ void do_command(struct uapp *a, int code) {
 
 // --- input --------------------------------------------------------------
 
+// Double-click tracking for the folder tree. The window is the
+// fileview's, not a second constant: two double-click speeds in one
+// window is a thing a user feels and cannot name.
+// A LONGER WINDOW THAN THE FILEVIEW'S, because the first click of the
+// pair does real work -- it navigates a pane, which lists a directory
+// and relayouts the window -- and the second click is not looked at
+// until that frame is done. Measured at 60-90 ticks in the emulator
+// against the fileview's 30, where both clicks are cheap. ~900 ms is
+// also Windows' own maximum double-click time, so it is not out of
+// band for a person either.
+#define TREE_DOUBLE_CLICK_TICKS 90
+static int g_tree_click_id = -1;
+static uint64_t g_tree_click_tick = 0;
+static int g_tree_click_collapsed = 0;
+
 static void on_widget(struct uapp *a, int id, int reason) {
     // The modal owns the window: a routed widget can still be clicked
     // under it, and acting on that could open a second modal over the
@@ -609,13 +624,37 @@ static void on_widget(struct uapp *a, int id, int reason) {
         return;
     }
     if (id == ID_TREE) {
+        // A SECOND CLICK ON THE SAME ROW EXPANDS OR COLLAPSES IT, which
+        // is what Explorer and Dolphin do and what the expander column
+        // alone made a small target for. The first click still
+        // navigates; the node index IS the id here (fm_tree.c numbers
+        // them by slot), so the toggle needs no lookup.
+        int nid = uui_tree_selected_id(&g_tree);
+        uint64_t now = sys_ticks();
+        if (nid >= 0 && nid == g_tree_click_id &&
+            now - g_tree_click_tick <= TREE_DOUBLE_CLICK_TICKS) {
+            // THE STATE THE FIRST CLICK SAW, not the state now: that
+            // click navigated, and navigating REVEALS the node's path,
+            // so a blind toggle here reads an already-expanded node and
+            // closes the folder the user just asked to open.
+            uui_tree_set_collapsed(&g_tree, nid, !g_tree_click_collapsed);
+            g_tree_click_id = -1;   // a third click is not a second
+            refresh_status();
+            uapp_redraw(a);
+            return;
+        }
+        g_tree_click_id = nid;
+        g_tree_click_collapsed = uui_tree_is_collapsed(&g_tree, nid);
         // Navigate the ACTIVE pane there. Guarded against the selection
         // that did not move -- an expander click also releases here, and
         // re-entering the same directory would reset its selection.
-        int nid = uui_tree_selected_id(&g_tree);
         if (nid >= 0 && nid < g_tree_count &&
             strcmp(g_tree_path[nid], uui_fileview_dir(active())) != 0)
             uui_fileview_set_dir(active(), g_tree_path[nid]);
+        // AFTER the navigation, which lists a directory: the window is
+        // meant to measure the gap between the user's two clicks, not
+        // the work the first one caused.
+        g_tree_click_tick = sys_ticks();
         refresh_status();
         uapp_redraw(a);
         return;

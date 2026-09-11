@@ -112,11 +112,17 @@ const char *wm_overlay_topmost(void) {
     return 0;
 }
 
+static const char *g_parent;   // see wm_overlay_set_parent()
+
+void wm_overlay_set_parent(const char *name) { g_parent = name; }
+const char *wm_overlay_parent(void) { return g_parent; }
+
 void wm_overlay_close_others(const char *keep) {
     for (int i = 0; i < OVERLAY_COUNT; i++) {
         const struct wm_overlay *o = &g_overlays[i];
         if (!o->close) continue;
         if (keep && k_strcmp(o->name, keep) == 0) continue;
+        if (g_parent && k_strcmp(o->name, g_parent) == 0) continue;
         if (o->is_open()) o->close();
     }
 }

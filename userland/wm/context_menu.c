@@ -167,6 +167,7 @@ void context_menu_close(void) {
     if (context_menu_open) context_menu_damage();
     uui_menubar_close(&g_menu);
     context_menu_open = 0;
+    wm_overlay_set_parent(0);   // the chain ends with its child
     redraw_pending = 1;
 }
 
@@ -225,6 +226,7 @@ int context_menu_handle_click(int mx, int my) {
     // which every app menu here and on a real desktop already did; the
     // panel's own drawing used to close on a separator.
     context_menu_open = uui_menubar_is_open(&g_menu);
+    if (!context_menu_open) wm_overlay_set_parent(0);
     redraw_pending = 1;
     return 1;
 }

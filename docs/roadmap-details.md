@@ -3458,6 +3458,38 @@ test" item below, not re-measured against the previous commit.
 
 - [ ] ELF loader hardening -- `elf_load()` isn't told the file's size, so `p_offset`/`p_filesz` are unbounded and `p_vaddr` unchecked. Tolerable while every binary is one we built; not once loading ring-3 apps is the normal path. See the Details entry.
 
+## The folder tree's double-click toggle has no automated check
+
+Double-clicking a row in the File Manager's folder tree expands or
+collapses it (`files.c`'s `ID_TREE` handler), which is Explorer's and
+Dolphin's behaviour and a far bigger target than the expander triangle.
+The BEHAVIOUR is built; the check is not, and here is what the attempt
+found so the next session does not re-derive it.
+
+**The window is 90 ticks, not the fileview's 30, and that is measured.**
+The first click of the pair navigates a pane -- which lists a directory
+and relayouts the window -- and the second click is not looked at until
+that frame is done. Instrumented gaps between the two `on_widget` calls
+were 61-90 ticks in the emulator against the fileview's cheap two, and
+`g_tree_click_tick` is taken AFTER the navigation for the same reason.
+~900 ms is also Windows' own maximum double-click time.
+
+**The toggle reads the state the FIRST click saw**
+(`g_tree_click_collapsed`), not the state at the second. Measured: a
+node that was collapsed reads as EXPANDED by the time the second click
+lands, so a blind toggle closes the folder the user just asked to open.
+
+**What could not be settled** is the assertion. `l.view[4]`, the tree's
+node count, never moved the way either direction predicted inside
+`filemanager_test.py`: the first click's navigation changes the node set
+on its own, so expanded and collapsed are not distinguishable by count
+alone from the state the earlier checks leave behind. A check wants a
+report of the CLICKED NODE's own collapsed state rather than a count --
+`uui_tree` knows it and nothing logs it. Two checks were written, failed
+for this reason, and were removed rather than shipped red or weakened
+until green.
+
+
 ## A layout engine for the GUI
 
 *Before the apps that would use it. Every widget position in `apps/` is

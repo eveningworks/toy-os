@@ -749,6 +749,8 @@ void desktop_entries_changed(void) {
     last_click_tick = 0;
 }
 
+int desktop_icon_selected(int i) { return rb_is_selected(&sel, i); }
+
 // Which icon (if any) is under (mx, my) -- shared by click and
 // right-click handling so they can't disagree about hitboxes.
 static int icon_hit_test(int mx, int my) {
@@ -763,10 +765,35 @@ static int icon_hit_test(int mx, int my) {
     return -1;
 }
 
+// EVERY ICON WHOSE HIGHLIGHT CHANGED, damaged by rect. `redraw_pending`
+// alone is not enough: it repaints the whole screen only in a QUIET
+// frame, and the taskbar clock is damaging one most seconds, so a
+// deselected icon kept its highlight painted while the selection said
+// otherwise -- which reads as clicking icons ADDING to the selection.
+static void damage_selection_change(const uint32_t *before) {
+    struct icon_grid g = current_grid();
+    for (int i = 0; i < item_count(); i++) {
+        int was = (before[i / 32] >> (i % 32)) & 1u;
+        if (was == !!rb_is_selected(&sel, i)) continue;
+        if (!item_visible(i)) continue;
+        int x, y, w, h;
+        icon_box(&g, i, &x, &y, &w, &h);
+        wm_damage_rect(x, y, w, h);
+    }
+}
+
+static void snapshot_selection(uint32_t *out) {
+    for (int i = 0; i < (DESKTOP_MAX_ICONS + 31) / 32; i++) out[i] = 0;
+    for (int i = 0; i < item_count(); i++)
+        if (rb_is_selected(&sel, i)) out[i / 32] |= 1u << (i % 32);
+}
+
 void desktop_handle_click(int mx, int my) {
     desktop_load_positions();
     int idx = icon_hit_test(mx, my);
     uint64_t now = sys_ticks();
+    uint32_t sel_before[(DESKTOP_MAX_ICONS + 31) / 32];
+    snapshot_selection(sel_before);
 
     // Modifiers come from the LIVE keyboard state -- a click carries
     // none of its own. Ctrl adds to the selection, Shift too (both are
@@ -834,6 +861,7 @@ void desktop_handle_click(int mx, int my) {
         }
     }
 
+    damage_selection_change(sel_before);
     redraw_pending = 1;
 }
 

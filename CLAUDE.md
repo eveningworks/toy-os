@@ -882,6 +882,8 @@ whenever a headline here tells you something you did not already know.
 - **AN EMPTY-SPACE CLICK DESELECTS, AND THE RUBBER BAND WORKS IN EVERY VIEW**
 - **THE FOLDER TREE FOLLOWS A NAVIGATION, NEVER A TOGGLE**
 - **THE DESKTOP'S ICON SIZE IS A NAMED SETTING, THE ICONS ARE CENTRED, AND A CAPTION IS TWO LINES** -- `desktop.icon_size`; `icon_box()` is the one place an icon's rect comes from, and `gui icons --json` reports it
+- **A POPUP OPENED FROM ANOTHER OVERLAY NAMES IT AS ITS PARENT, AND `close_others()` SPARES BOTH** -- `wm_overlay_set_parent()`; the Start menu stays up under its own row's context menu, and a LAUNCHING verb still dismisses it
+- **A SELECTION CHANGE MUST DAMAGE THE RECTS IT CHANGED, NOT JUST SET `redraw_pending`** -- a bare `redraw_pending` repaints only in a QUIET frame, so a deselected icon kept its highlight while the report said otherwise; the test for this class is a PIXEL, not a report
 - **THE WM CONTEXT MENU IS `uui_menubar`, WITH THE PANEL'S ITEM MODEL OVER IT, AND THE DESKTOP'S MENU IS WINDOWS' SHAPE**
 - **A DRAG BETWEEN WINDOWS IS BROKERED BY THE COMPOSITOR, AND ITS PAYLOAD RIDES A SLOT BESIDE THE CLIPBOARD** -- `wm_dnd.c`, `WIN_REQ_DRAG_START`, `WIN_EV_DRAG_OVER/LEAVE/DROP`; the slot is NOT cleared on the release, the drop reads it later
 - **THE DESKTOP IS `/home/desktop` AND NOTHING ELSE: A `.desktop` FILE THERE IS A LAUNCHER, THE APPLICATION DATABASE IS `/usr/wm/applications`, AND EVERY VERB IS A CHILD PROCESS** -- the database feeds the Start menu only; "Add to desktop" writes a launcher file; Copy/Cut/Paste ride the system clipboard

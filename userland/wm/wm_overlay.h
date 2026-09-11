@@ -114,6 +114,16 @@ const char *wm_overlay_topmost(void);
 // changes.
 void wm_overlay_close_others(const char *keep);
 
+// A POPUP OPENED FROM ANOTHER OVERLAY names it as its PARENT, and
+// close_others() then spares both. That is Wayland's popup chain -- an
+// xdg_popup does not dismiss the surface it hangs off -- and it is what
+// keeps the Start menu up while the right-click menu for one of its rows
+// is open, as Windows does. NULL clears it; the child MUST clear it when
+// it closes, or the next close_others() spares an overlay nobody meant
+// to keep.
+void wm_overlay_set_parent(const char *name);
+const char *wm_overlay_parent(void);
+
 // Places a popup of (w, h) whose preferred top-left is (want_x,
 // want_y) -- a tray flyout's right edge on its item, a context menu at
 // the pointer -- inside the usable screen: WM_POPUP_MARGIN from the

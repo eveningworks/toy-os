@@ -1229,8 +1229,9 @@ static void cmd_icons(struct dbg_out *o, int json) {
         for (int i = 0; i < desktop_icon_count(); i++) {
             const char *name, *kind; int x, y, w, h, lines;
             if (!desktop_icon_geometry(i, &name, &x, &y, &w, &h, &lines, &kind)) continue;
-            dbg_out_printf(o, "%s{\"name\":\"%s\",\"kind\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"lines\":%d}",
-                           first ? "" : ",", name, kind, x, y, w, h, lines);
+            dbg_out_printf(o, "%s{\"name\":\"%s\",\"kind\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"lines\":%d,\"selected\":%s}",
+                           first ? "" : ",", name, kind, x, y, w, h, lines,
+                           desktop_icon_selected(i) ? "true" : "false");
             first = 0;
         }
         dbg_out_write(o, "]}\r\n");

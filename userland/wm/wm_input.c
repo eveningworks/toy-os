@@ -445,7 +445,14 @@ static void ctx_toggle_maximize_window(void *ctx) {
     wm_toggle_maximize(*(int *)ctx);
 }
 
-static void ctx_open_app(void *ctx) { open_app((const struct gui_app *)ctx); }
+// Launching DISMISSES the Start menu, which is what a left-click on the
+// same row does and what every desktop does when a window opens. "Add to
+// desktop" deliberately does not: it is a non-launching verb, and
+// Windows leaves Start up after one so you can do another.
+static void ctx_open_app(void *ctx) {
+    start_menu_close();
+    open_app((const struct gui_app *)ctx);
+}
 static void ctx_add_to_desktop(void *ctx) { desktop_add_launcher((const struct gui_app *)ctx); }
 
 // THE WINDOW MENU: one menu for the whole window, mirroring the
@@ -485,8 +492,14 @@ void wm_handle_right_click(int mx, int my) {
         // where the menu draws only the ones that show in it.
         int hit_row = start_menu_row_at(mx, my);
         struct gui_app *app = gui_app_visible_at(GUI_SHOW_STARTMENU, hit_row);
-        start_menu_close();
-        if (app) {
+        // THE START MENU STAYS UP UNDER ITS OWN ROW'S MENU, as on
+        // Windows: naming it the popup's parent is what stops
+        // context_menu_open_at()'s close_others() taking it down. A row
+        // that LAUNCHES still dismisses it (ctx_open_app), because
+        // opening a window is what closes Start everywhere else.
+        if (!app) { start_menu_close(); return; }
+        wm_overlay_set_parent("start");
+        {
             static struct context_menu_item item[2];
             item[0].label = "Open";
             item[0].on_select = ctx_open_app;
