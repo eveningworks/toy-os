@@ -16,12 +16,18 @@
 // deliberately NOT wired yet (desktop icons' own per-icon menu, once
 // desktop.c grows real icon identity beyond "click launches app X").
 //
-// Deliberately minimal, same philosophy as every widget in this
-// codebase: a list of label+callback rows, click-to-select,
-// click-elsewhere-to-dismiss, plus the three things a desktop menu
-// could not do without (2026-09-10): one level of submenu, a
-// separator, and a tick. No icons, no keyboard navigation (arrow
-// keys/Enter) -- add those only once a real need shows up.
+// THE MENU IS DRAWN AND HIT-TESTED BY `uui_menubar` (ui/uui_menubar.h),
+// opened through uui_menubar_open_at() with no bar strip behind it (as
+// QMenu and GtkPopoverMenu serve both a bar and a right-click menu).
+// This file is the panel's item model over it: a row stays
+// label+callback+ctx rather than the widget's `code`, because a caller
+// packs a gui_app pointer or a window index into `ctx`, and the commit
+// is looked back up here. See docs/decisions.md for why the Start menu
+// deliberately did NOT move.
+//
+// Submenu depth is the widget's now, not one. **The keyboard is still
+// not wired**: uui_menubar_key() exists, and wm_overlay.h has no key op
+// to route it through.
 
 struct context_menu_item {
     const char *label;

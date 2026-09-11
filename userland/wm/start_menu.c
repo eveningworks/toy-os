@@ -85,6 +85,18 @@ void start_menu_damage(void) {
     wm_damage_rect(mx, my, mw, item_h * items);
 }
 
+// Which row (mx, my) lands on, or -1. THE ONE COPY of that arithmetic:
+// index the result with gui_app_visible_at(), never into
+// gui_app_registry (a second copy counted the registry's rows, and a
+// `.desktop` hidden from the menu would have moved every one of them).
+int start_menu_row_at(int mx, int my) {
+    if (!start_menu_open) return -1;
+    int menu_x, menu_y, menu_w, item_h, total_items;
+    start_menu_geometry(&menu_x, &menu_y, &menu_w, &item_h, &total_items);
+    if (!uui_hit(menu_x, menu_y, menu_w, item_h * total_items, mx, my)) return -1;
+    return (my - menu_y) / item_h;
+}
+
 // Returns 1 when the hovered row CHANGED, having damaged the menu.
 // A no-op with the menu closed, so the caller needs no guard.
 // The registry's hover op (wm_overlay.h): which row, as a token. It
@@ -93,13 +105,8 @@ void start_menu_damage(void) {
 // here, and in three other overlays in three slightly different forms.
 int start_menu_hover_at(int mx, int my) {
     if (!start_menu_open) { hover_index = -1; return 0; }
-    int menu_x, menu_y, menu_w, item_h, total_items;
-    start_menu_geometry(&menu_x, &menu_y, &menu_w, &item_h, &total_items);
-    int row = -1;
-    if (uui_hit(menu_x, menu_y, menu_w, item_h * total_items, mx, my))
-        row = (my - menu_y) / item_h;
-    hover_index = row;
-    return row + 1;   // 0 is "none", so rows start at 1
+    hover_index = start_menu_row_at(mx, my);
+    return hover_index + 1;   // 0 is "none", so rows start at 1
 }
 static uint64_t flash_until = 0;
 #define START_MENU_FLASH_TICKS 10 // ~100ms at the PIT's 100Hz -- long enough to register as a deliberate flash
@@ -265,16 +272,13 @@ void start_menu_draw(int mx, int my) {
 int start_menu_handle_click(int mx, int my) {
     if (!start_menu_open) return 0;
 
-    int menu_x, menu_y, menu_w, item_h, total_items;
-    start_menu_geometry(&menu_x, &menu_y, &menu_w, &item_h, &total_items);
-
-    if (uui_hit(menu_x, menu_y, menu_w, item_h * total_items, mx, my)) {
-        int idx = (my - menu_y) / item_h;
+    int idx = start_menu_row_at(mx, my);
+    if (idx >= 0) {
         int app_rows = gui_app_visible_count(GUI_SHOW_STARTMENU);
         struct gui_app *app = gui_app_visible_at(GUI_SHOW_STARTMENU, idx);
         if (app) {
             open_app(app);
-        } else if (idx >= app_rows && idx < total_items) {
+        } else if (idx >= app_rows && idx - app_rows < wm_system_action_count) {
             wm_system_actions[idx - app_rows].on_select();
         }
         // The row's action already ran above -- only closing the menu

@@ -24,7 +24,6 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] Finish the app-deduplication pass: the smaller survey items, all three branches landed  *(The GUI in ring 3)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
@@ -534,7 +533,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Clipping RECTANGLES as a first-class concept in `ugfx`~~ DONE 2026-08-18
 - [x] ~~An animation/timer event, so a client does not have to poll~~ DONE 2026-08-18 -- `tick_ms` / `WIN_EV_TIMER`
 - [x] ~~The toolkit as a real shared library rather than static per client~~ DONE 2026-09-04 -- `/lib/libuapp.so`
-- [ ] **NEXT** Finish the app-deduplication pass: the smaller survey items, all three branches landed
+- [x] ~~Finish the app-deduplication pass: the smaller survey items~~ DONE 2026-09-11 -- one conversion, two withdrawals
 - [x] ~~Make the ring-3 apps reachable from the desktop~~ done
 - [x] ~~Remove the kernel-space Calculator once the ring-3 one is the default~~ DONE 2026-08-18 -- `apps/` holds no GUI at all
 - [x] ~~ELF loader hardening~~ DONE 2026-08-18
@@ -1066,6 +1065,9 @@ this to be better?".
 - [ ] Get blocking disk I/O out of the WM's event loop
 - [ ] Make the GUI test tooling RESOLUTION-AGNOSTIC
 - [ ] Retire `uui_button_group` once nothing needs it
+- [ ] `toywm` links DYNAMICALLY, so the static set's rescue argument no longer covers the desktop
+- [ ] The WM's context menu has no keyboard: `uui_menubar_key()` exists and `wm_overlay.h` has no key op to route it through
+- [ ] `uui_menubar_init()` hardcodes seven RGB colours instead of reading `utheme`, so an app's menus do not follow the theme
 - [ ] **NEXT** System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons
 - [ ] Audit the bare `redraw_pending = 1` sites in `userland/wm/` for a rect they could damage -- a focus change's title colour is next
 - [ ] Disk Mark's dropdown cannot be typed at while CLOSED -- the app routes no keys, so only the overlay path reaches it

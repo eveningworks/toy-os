@@ -3,74 +3,119 @@
 #include "wm_internal.h"
 #include "wm_overlay.h"
 #include "ui/uui.h"
+#include "ui/uui_menubar.h"
 #include "ui/utheme.h"
 #include "kapi.h"
 
 int context_menu_open = 0;
 
-// One menu level: the rows, and where they sit. The main menu and the
-// open submenu are two of these; a submenu's `parent` is the main row
-// that opened it, so hovering another main row closes it.
-struct level {
-    const struct context_menu_item *items;
-    int count;
-    int x, y, w, h;
-};
+// The menu itself is uui_menubar's, opened as a free-floating popup
+// (uui_menubar_open_at) with no bar strip behind it -- `count == 0`, so
+// nothing walks a title. The compositor installs no uui_popup provider
+// for its own panel, so every level falls through to the in-window path
+// and is drawn straight into wm_surface(), clamped against the bounds
+// set below.
+static struct uui_menubar g_menu;
 
-static struct level g_main, g_sub;
-static int g_sub_parent = -1;   // main row whose submenu is open, or -1
-static int g_item_h;
+// THE CALLER'S ITEM MODEL IS KEPT, and translated here. A row commits a
+// CODE, so the code indexes g_src back to the caller's own item and its
+// on_select/ctx pair -- which is what lets desktop.c go on packing a
+// gui_app pointer or a window index into a row.
+// Past these a menu is TRUNCATED rather than overrunning: the rows that
+// fit still work, which is the failure a WM menu can survive.
+#define CM_MAX_ROWS 32
+#define CM_MAX_SUB  32
+#define CM_CODES    (CM_MAX_ROWS + CM_MAX_SUB)
 
-static int item_h(void) { return ugfx_char_h() + 6; }
-static int sep_h(void) { return item_h() / 2; }
-// The tick gutter, so a checked row's tick never overlaps its label.
-static int gutter(void) { return ugfx_char_w() * 2; }
+static struct uui_menu_item g_items[CM_MAX_ROWS];
+static struct uui_menu_item g_subs[CM_MAX_SUB];
+static const struct context_menu_item *g_src[CM_CODES];
+static int g_ncodes;
 
-static int row_h(const struct context_menu_item *it) {
-    return it->separator ? sep_h() : g_item_h;
+static int add_code(const struct context_menu_item *it) {
+    if (g_ncodes >= CM_CODES) return -1;
+    g_src[g_ncodes] = it;
+    return g_ncodes++;
 }
 
-static int level_h(const struct context_menu_item *items, int count) {
-    int h = 0;
-    for (int i = 0; i < count; i++) h += row_h(&items[i]);
-    return h;
+static void translate_row(const struct context_menu_item *s, struct uui_menu_item *d) {
+    d->label = s->separator ? 0 : s->label;   // a NULL label IS the separator
+    d->accel = 0;                             // no accelerators in a WM menu
+    d->code = add_code(s);
+    d->sub = 0;
+    d->sub_count = 0;
 }
 
-static int row_top(const struct level *l, int index) {
-    int y = 0;
-    for (int i = 0; i < index && i < l->count; i++) y += row_h(&l->items[i]);
-    return y;
-}
-
-static int menu_w(const struct context_menu_item *items, int count) {
-    int max_chars = 0;
-    for (int i = 0; i < count; i++) {
-        if (items[i].separator) continue;
-        int n = (int)k_strlen(items[i].label) + (items[i].sub ? 2 : 0);
-        if (n > max_chars) max_chars = n;
+static int build(const struct context_menu_item *src, int count) {
+    g_ncodes = 0;
+    int n = count > CM_MAX_ROWS ? CM_MAX_ROWS : count;
+    int subn = 0;
+    for (int i = 0; i < n; i++) {
+        translate_row(&src[i], &g_items[i]);
+        if (!src[i].sub || src[i].sub_count <= 0 || subn >= CM_MAX_SUB) continue;
+        int k = src[i].sub_count;
+        if (subn + k > CM_MAX_SUB) k = CM_MAX_SUB - subn;
+        g_items[i].sub = &g_subs[subn];
+        g_items[i].sub_count = k;
+        for (int j = 0; j < k; j++) translate_row(&src[i].sub[j], &g_subs[subn + j]);
+        subn += k;
     }
-    return max_chars * ugfx_char_w() + gutter() + 20;
+    return n;
 }
 
-static void place(struct level *l, int x, int y, const struct context_menu_item *items, int count) {
-    l->items = items;
-    l->count = count;
-    l->w = menu_w(items, count);
-    l->h = level_h(items, count);
-    // At the pointer, kept whole on screen -- a right-click near the
-    // taskbar or an edge would otherwise draw partly off it.
-    wm_popup_place(x, y, l->w, l->h, &l->x, &l->y);
+// The widget asks per item rather than reading a flag off the tree, so
+// a tick follows the caller's live struct with nothing to keep in sync.
+static unsigned item_flags(int code) {
+    if (code < 0 || code >= g_ncodes || !g_src[code]) return 0;
+    return g_src[code]->checked ? UUI_MI_CHECKED : 0;
 }
 
-static void damage_level(const struct level *l) {
-    wm_damage_rect(l->x, l->y, l->w, l->h);
+// --- geometry, all asked of the widget ---------------------------------
+
+// A separator is half a row, so "the item height" is the first real
+// row's -- asked of the widget rather than recomputed here, which is
+// what stops this file owning a second copy of row_height().
+static int level_item_h(int level) {
+    const struct uui_menu_level *lv = &g_menu.level[level];
+    for (int i = 0; i < lv->count; i++) {
+        int x, y, w, h;
+        if (!uui_menubar_item_rect(&g_menu, level, i, &x, &y, &w, &h)) break;
+        if (lv->items[i].label) return h;
+    }
+    return ugfx_char_h();
+}
+
+static void damage_level(int level) {
+    int x, y, w, h;
+    if (uui_menubar_popup_rect(&g_menu, level, &x, &y, &w, &h))
+        wm_damage_rect(x, y, w, h);
+}
+
+void context_menu_damage(void) {
+    if (!context_menu_open) return;
+    for (int l = 0; l < uui_menubar_depth(&g_menu); l++) damage_level(l);
+    redraw_pending = 1;
 }
 
 void context_menu_open_at(int x, int y, const struct context_menu_item *items, int count) {
-    g_item_h = item_h();
-    place(&g_main, x, y, items, count);
-    g_sub.count = 0;
-    g_sub_parent = -1;
+    int n = build(items, count);
+
+    uui_menubar_init(&g_menu, 0, 0);   // no bar strip: a context menu is level 0 alone
+    g_menu.item_flags = item_flags;
+    // The panel's palette, not the widget's built-in defaults, so this
+    // menu and the rest of the desktop follow one theme.
+    g_menu.popup_bg = UTHEME_PANEL_BG;
+    g_menu.fg       = UTHEME_TEXT;
+    g_menu.border   = UTHEME_BORDER;
+    g_menu.hot_bg   = uui_state_bg(UTHEME_PANEL_BG, UUI_STATE_HOVER);
+    // The same usable rectangle wm_popup_place() clamps into, handed to
+    // the widget's own flip/slide/clamp -- so a menu opened near the
+    // taskbar or an edge stays whole, and one with no room below the
+    // pointer flips above it as Windows' and KDE's do.
+    uui_menubar_set_bounds(&g_menu, WM_POPUP_MARGIN, 0,
+                           screen_w - 2 * WM_POPUP_MARGIN,
+                           screen_h - taskbar_h - WM_POPUP_MARGIN);
+    uui_menubar_open_at(&g_menu, g_items, n, x, y);
 
     wm_overlay_close_others("context");
     context_menu_open = 1;
@@ -79,164 +124,107 @@ void context_menu_open_at(int x, int y, const struct context_menu_item *items, i
 
 int context_menu_geometry(int *x, int *y, int *w, int *item_h_out) {
     if (!context_menu_open) return 0;
-    if (x) *x = g_main.x;
-    if (y) *y = g_main.y;
-    if (w) *w = g_main.w;
-    if (item_h_out) *item_h_out = g_item_h;
-    return g_main.count;
+    int lx, ly, lw, lh;
+    if (!uui_menubar_popup_rect(&g_menu, 0, &lx, &ly, &lw, &lh)) return 0;
+    if (x) *x = lx;
+    if (y) *y = ly;
+    if (w) *w = lw;
+    if (item_h_out) *item_h_out = level_item_h(0);
+    return g_menu.level[0].count;
 }
 
 int context_menu_sub_geometry(int *x, int *y, int *w, int *item_h_out) {
-    if (!context_menu_open || g_sub_parent < 0) return 0;
-    if (x) *x = g_sub.x;
-    if (y) *y = g_sub.y;
-    if (w) *w = g_sub.w;
-    if (item_h_out) *item_h_out = g_item_h;
-    return g_sub.count;
+    if (!context_menu_open || uui_menubar_depth(&g_menu) < 2) return 0;
+    int lx, ly, lw, lh;
+    if (!uui_menubar_popup_rect(&g_menu, 1, &lx, &ly, &lw, &lh)) return 0;
+    if (x) *x = lx;
+    if (y) *y = ly;
+    if (w) *w = lw;
+    if (item_h_out) *item_h_out = level_item_h(1);
+    return g_menu.level[1].count;
 }
 
-const char *context_menu_row_label(int index) {
-    if (!context_menu_open || index < 0 || index >= g_main.count) return 0;
-    return g_main.items[index].separator ? "-" : g_main.items[index].label;
+static const char *row_label(int level, int index) {
+    if (!context_menu_open || level >= uui_menubar_depth(&g_menu)) return 0;
+    const struct uui_menu_level *lv = &g_menu.level[level];
+    if (index < 0 || index >= lv->count) return 0;
+    return lv->items[index].label ? lv->items[index].label : "-";
 }
 
-const char *context_menu_sub_row_label(int index) {
-    if (!context_menu_open || g_sub_parent < 0 || index < 0 || index >= g_sub.count) return 0;
-    return g_sub.items[index].separator ? "-" : g_sub.items[index].label;
+const char *context_menu_row_label(int index) { return row_label(0, index); }
+const char *context_menu_sub_row_label(int index) { return row_label(1, index); }
+
+static int row_top(int level, int index) {
+    int x, y, w, h;
+    if (!uui_menubar_item_rect(&g_menu, level, index, &x, &y, &w, &h)) return 0;
+    return y;
 }
 
-int context_menu_row_top(int index) { return g_main.y + row_top(&g_main, index); }
-int context_menu_sub_row_top(int index) { return g_sub.y + row_top(&g_sub, index); }
+int context_menu_row_top(int index) { return row_top(0, index); }
+int context_menu_sub_row_top(int index) { return row_top(1, index); }
 
 void context_menu_close(void) {
+    if (context_menu_open) context_menu_damage();
+    uui_menubar_close(&g_menu);
     context_menu_open = 0;
-    g_sub_parent = -1;
     redraw_pending = 1;
-}
-
-// Which row of `l` the cursor is over, or -1. Recomputed from the live
-// cursor rather than stored, exactly as start_menu.c does it -- one
-// geometry, used by drawing and hit-testing alike, so the two cannot
-// disagree about which row is which (docs/gui-guidelines.md).
-static int hot_row_in(const struct level *l, int mx, int my) {
-    if (!l->count || !uui_hit(l->x, l->y, l->w, l->h, mx, my)) return -1;
-    int y = l->y;
-    for (int i = 0; i < l->count; i++) {
-        int h = row_h(&l->items[i]);
-        if (my < y + h) return l->items[i].separator ? -1 : i;
-        y += h;
-    }
-    return -1;
-}
-
-// Open (or switch) the submenu of main row `i`, to the right of it and
-// level with it; a row without one closes whatever is open. Hover does
-// this, as every desktop's menu does -- a click on the row does too.
-static void open_sub(int i) {
-    if (i == g_sub_parent) return;
-    if (g_sub_parent >= 0) damage_level(&g_sub);
-    g_sub_parent = -1;
-    g_sub.count = 0;
-    if (i < 0 || !g_main.items[i].sub) return;
-    place(&g_sub, g_main.x + g_main.w - 2, g_main.y + row_top(&g_main, i),
-          g_main.items[i].sub, g_main.items[i].sub_count);
-    g_sub_parent = i;
-    damage_level(&g_sub);
-    redraw_pending = 1;
-}
-
-// A tick, drawn with two strokes: the font has no U+2713.
-static void draw_tick(int x, int y, int h, uint32_t fg) {
-    int cy = y + h / 2;
-    for (int k = 0; k < 3; k++) ugfx_fill_rect(wm_surface(), x + k, cy + k, 2, 2, fg);
-    for (int k = 0; k < 6; k++) ugfx_fill_rect(wm_surface(), x + 3 + k, cy + 2 - k, 2, 2, fg);
-}
-
-static void draw_level(const struct level *l, int hot) {
-    uint32_t bg = UTHEME_PANEL_BG, border = UTHEME_BORDER, fg = UTHEME_TEXT;
-    ugfx_fill_rect(wm_surface(), l->x, l->y, l->w, l->h, bg);
-    int y = l->y;
-    for (int i = 0; i < l->count; i++) {
-        const struct context_menu_item *it = &l->items[i];
-        int h = row_h(it);
-        if (it->separator) {
-            ugfx_fill_rect(wm_surface(), l->x + 6, y + h / 2, l->w - 12, 1, border);
-            y += h;
-            continue;
-        }
-        // Hover from uui_state_bg() rather than a hand-picked tint, so
-        // it darkens on this near-white theme instead of lightening
-        // into invisibility (docs/gui-guidelines.md).
-        uint32_t row_bg = (i == hot) ? uui_state_bg(bg, UUI_STATE_HOVER) : bg;
-        if (i == hot) ugfx_fill_rect(wm_surface(), l->x, y, l->w, h, row_bg);
-        if (it->checked) draw_tick(l->x + 6, y, h, fg);
-        // Clipped: a label longer than the menu is wide would otherwise
-        // be drawn straight through the border.
-        int lx = l->x + gutter() + 4;
-        int lw = l->w - gutter() - 8 - (it->sub ? 2 * ugfx_char_w() : 0);
-        ugfx_draw_string_clipped(wm_surface(), lx, y + 3, lw, it->label, fg, row_bg);
-        if (it->sub)
-            ugfx_draw_string_clipped(wm_surface(), l->x + l->w - 4 - ugfx_char_w(), y + 3,
-                                      ugfx_char_w(), ">", fg, row_bg);
-        y += h;
-    }
-    ugfx_draw_rect(wm_surface(), l->x, l->y, l->w, l->h, border);
 }
 
 void context_menu_draw(int mx, int my) {
+    (void)mx; (void)my;   // the hovered row is tracked, not derived here
     if (!context_menu_open) return;
-    int sub_hot = g_sub_parent >= 0 ? hot_row_in(&g_sub, mx, my) : -1;
-    // The parent row stays lit while its submenu is open, whatever the
-    // pointer is over now.
-    int main_hot = g_sub_parent >= 0 ? g_sub_parent : hot_row_in(&g_main, mx, my);
-    draw_level(&g_main, main_hot);
-    if (g_sub_parent >= 0) draw_level(&g_sub, sub_hot);
+    uui_menubar_draw_popup(wm_surface(), &g_menu);
 }
 
-// The registry's hover op (wm_overlay.h). A hovered main row with a
-// submenu OPENS it here, which is why this is not a pure query: the
-// token changes, the core damages, and the submenu appears on the
-// next frame.
+// The registry's hover op (wm_overlay.h). Not a pure query: a hovered
+// row with a submenu OPENS it, as every desktop's menu does. The rects
+// that CHANGE are damaged here, because the core damages only what is
+// open after the call and a submenu that just closed is not.
 int context_menu_hover_at(int mx, int my) {
     if (!context_menu_open) return 0;
-    int sub = g_sub_parent >= 0 ? hot_row_in(&g_sub, mx, my) : -1;
-    if (sub >= 0) return 1000 + sub;
-    int main = hot_row_in(&g_main, mx, my);
-    if (main >= 0 && g_main.items[main].sub) open_sub(main);
-    else if (main >= 0) open_sub(-1);
-    return main + 1;   // -1 becomes 0, "none"
-}
 
-void context_menu_damage(void) {
-    if (!context_menu_open) return;
-    damage_level(&g_main);
-    if (g_sub_parent >= 0) damage_level(&g_sub);
-    redraw_pending = 1;
+    int ox[UUI_MENU_MAX_DEPTH], oy[UUI_MENU_MAX_DEPTH];
+    int ow[UUI_MENU_MAX_DEPTH], oh[UUI_MENU_MAX_DEPTH];
+    int old_depth = uui_menubar_depth(&g_menu);
+    for (int l = 0; l < old_depth; l++)
+        uui_menubar_popup_rect(&g_menu, l, &ox[l], &oy[l], &ow[l], &oh[l]);
+
+    uui_menubar_motion(&g_menu, mx, my);
+
+    for (int l = 0; l < old_depth; l++) {
+        int x, y, w, h;
+        if (uui_menubar_popup_rect(&g_menu, l, &x, &y, &w, &h) &&
+            x == ox[l] && y == oy[l] && w == ow[l] && h == oh[l]) continue;
+        wm_damage_rect(ox[l], oy[l], ow[l], oh[l]);
+        redraw_pending = 1;
+    }
+
+    // The token: any two rows must differ, the same row must repeat.
+    for (int l = uui_menubar_depth(&g_menu) - 1; l >= 0; l--)
+        if (g_menu.level[l].hot >= 0) return (l + 1) * 1000 + g_menu.level[l].hot + 1;
+    return 0;
 }
 
 int context_menu_handle_click(int mx, int my) {
     if (!context_menu_open) return 0;
 
-    int sub = g_sub_parent >= 0 ? hot_row_in(&g_sub, mx, my) : -1;
-    if (sub >= 0) {
-        const struct context_menu_item *it = &g_sub.items[sub];
-        if (it->on_select) it->on_select(it->ctx);
-    } else {
-        int main = hot_row_in(&g_main, mx, my);
-        if (main >= 0 && g_main.items[main].sub) {
-            open_sub(main);        // a click on a parent row opens it and stays
-            return 1;
-        }
-        if (main >= 0 && g_main.items[main].on_select)
-            g_main.items[main].on_select(g_main.items[main].ctx);
-    }
-    // Unlike start_menu.c's brief post-click flash, this closes
-    // immediately whether or not a row was hit -- a right-click menu is
-    // a short-lived popup by convention (real desktops don't flash a
-    // context-menu selection either), and there's no taskbar button
-    // still showing "open" the way the Start button's highlight does.
-    context_menu_open = 0;
-    g_sub_parent = -1;
+    // Press then release at the same point, because the WM routes a
+    // click on its button-DOWN edge (wm.c) and the widget commits on
+    // the release. The press is what opens a submenu, switches levels
+    // and dismisses an outside click; the release is what commits.
+    context_menu_damage();
+    uui_menubar_press(&g_menu, mx, my);
+    int code = uui_menubar_release(&g_menu, mx, my);
+    if (code >= 0 && code < g_ncodes && g_src[code] && g_src[code]->on_select)
+        g_src[code]->on_select(g_src[code]->ctx);
+
+    // Unlike start_menu.c's brief post-click flash, this closes as soon
+    // as the widget does -- a right-click menu is a short-lived popup by
+    // convention, and real desktops don't flash a context-menu selection
+    // either. A click on a submenu parent or a separator leaves it open,
+    // which every app menu here and on a real desktop already did; the
+    // panel's own drawing used to close on a separator.
+    context_menu_open = uui_menubar_is_open(&g_menu);
     redraw_pending = 1;
     return 1;
 }

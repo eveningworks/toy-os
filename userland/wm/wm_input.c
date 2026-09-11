@@ -480,23 +480,17 @@ void wm_handle_right_click(int mx, int my) {
     // whatever's already open before deciding what (if anything) the
     // new click should show, so right-clicks never stack menus.
     if (start_menu_open) {
-        // Route into the Start menu's own row only if the click actually
-        // landed on one; this duplicates start_menu.c's small geometry()
-        // formula rather than exporting an internal-only helper for the
-        // sake of one caller -- revisit if a third caller ever needs it.
-        int item_h = ugfx_char_h() + 6;
-        int menu_w = start_menu_w();
-        int menu_x = 4;
-        int total_items = gui_app_registry_count + wm_system_action_count;
-        int menu_y = (screen_h - taskbar_h) - item_h * total_items;
-        int hit_row = uui_hit(menu_x, menu_y, menu_w, item_h * total_items, mx, my)
-                      ? (my - menu_y) / item_h : -1;
+        // Which row, asked of start_menu.c -- this used to re-derive the
+        // formula, and its copy counted gui_app_registry_count rows
+        // where the menu draws only the ones that show in it.
+        int hit_row = start_menu_row_at(mx, my);
+        struct gui_app *app = gui_app_visible_at(GUI_SHOW_STARTMENU, hit_row);
         start_menu_close();
-        if (hit_row >= 0 && hit_row < gui_app_registry_count) {
+        if (app) {
             static struct context_menu_item item[2];
             item[0].label = "Open";
             item[0].on_select = ctx_open_app;
-            item[0].ctx = (void *)&gui_app_registry[hit_row];
+            item[0].ctx = app;
             item[1].label = "Add to desktop";
             item[1].on_select = ctx_add_to_desktop;
             item[1].ctx = item[0].ctx;

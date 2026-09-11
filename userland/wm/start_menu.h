@@ -32,8 +32,9 @@ int start_menu_w(void);
 // button is clicked. Named with the `_now` suffix so it doesn't collide
 // with the `start_menu_open` state variable above.
 // The menu's own layout maths, exposed so nothing has to re-derive it.
-// Rows run top to bottom: gui_app_registry_count app rows, then
-// wm_system_action_count action rows. Row i spans
+// Rows run top to bottom: the apps that show in the Start menu
+// (gui_app_visible_count(GUI_SHOW_STARTMENU) of them -- NOT every
+// registry entry), then wm_system_action_count action rows. Row i spans
 // [menu_y + i*item_h, menu_y + (i+1)*item_h).
 //
 // Public because apps/wm/wm_debug.c reports it over the debug console
@@ -41,6 +42,11 @@ int start_menu_w(void);
 // Valid whether or not the menu is currently open.
 void start_menu_geometry(int *out_menu_x, int *out_menu_y, int *out_menu_w,
                           int *out_item_h, int *out_total_items);
+
+// Which row (mx, my) falls on, or -1 for "not on the menu" (including
+// when it is closed). Index it with gui_app_visible_at(), never into
+// gui_app_registry directly.
+int start_menu_row_at(int mx, int my);
 
 // Opens it, closing every other dismissable overlay (wm_overlay.h).
 void start_menu_open_now(void);

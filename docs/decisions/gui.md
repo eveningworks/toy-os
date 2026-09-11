@@ -5121,6 +5121,39 @@ sequence looks like a terminal bug for the rest of the session. Waiting
 costs that thread a slice and nothing else, because the thing it waits
 for is the window draining, which is the window doing its job.
 
+## The desktop's right-click menu is `uui_menubar`; its Start menu is not
+
+Both were hand-drawn in `userland/wm/`, and the obvious tidy was to put
+both on the toolkit's menu widget. Only one of them belonged there.
+
+**The context menu did.** Qt's QMenu and GTK's GtkPopoverMenu each serve
+a menu bar's dropdown and a right-click menu, and two implementations of
+"a menu" drift in the ways a user notices: different padding, a
+different tick, arrows that work in one and not the other. That had
+already happened here — the panel drew a `>` character where an app drew
+a triangle, two blocky strokes where an app drew an anti-aliased tick,
+and labels at `y + 3` where an app centred them. `context_menu.c` is the
+panel's item model over the widget now: a row is still a
+label+callback+ctx, because `desktop.c` packs a `gui_app *` and a window
+index into one, and the commit is looked back up from the widget's
+`code`.
+
+It works inside the compositor because `uui_popup_open()` is a no-op
+without a provider and the panel installs none for its own surface — so
+every level takes the in-window path and draws into `wm_surface()`,
+clamped against the rectangle `wm_popup_place()` already defined.
+
+**The Start menu did not.** It has per-row icons, an indent kept when
+the artwork is missing, a group divider that consumes no row, a click
+flash in its own colour on a tick deadline, and rows from a live
+registry rather than a const tree. That is four features added to a
+widget no other caller wants them in, to delete about eighty lines of
+drawing — and it would make every app's menu carry the slots.
+
+Real desktops split it the same way: Win11's Start is a XAML shell
+surface and KDE's Kickoff a QML applet, neither built from the menu
+control both use for an application's File menu.
+
 ## `uui_menubar` kept its hand-routed interface when it gained an ops table
 
 Terminal needed a menu bar and already declared a routed widget (the tab

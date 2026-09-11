@@ -217,7 +217,11 @@ void uui_menubar_open_at(struct uui_menubar *m, const struct uui_menu_item *item
     m->open_root = -1;
     set_depth(m, 0);
     if (!items || count <= 0) return;
-    open_level(m, 0, items, count, x, y, 1, 1, 0, -1); // a 1x1 anchor: the cursor
+    // The anchor is the cursor: one pixel wide and ZERO TALL, so
+    // "below it" is (x, y) itself and the header's "top-left at (x, y)"
+    // is what a caller gets. A 1px-tall anchor put it one row low --
+    // caught by a WM menu that has to line up under a title-bar icon.
+    open_level(m, 0, items, count, x, y, 1, 0, 0, -1);
 }
 
 // Opens level `lvl + 1` from row `index` of level `lvl`.

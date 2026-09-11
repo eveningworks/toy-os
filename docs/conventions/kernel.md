@@ -706,16 +706,22 @@ this the obvious way), not from how much history it accumulated.
   whole point, and the shape a shared libc's `__errno_location` call
   needs).
 - **EVERY `/bin` AND GUI PROGRAM LINKS `/lib/libc.so` AND
-  `/lib/libuapp.so`; init, toywm AND `/tests` ARE STATIC; AND THE `#`
+  `/lib/libuapp.so`; init, reboot AND `/tests` ARE STATIC; AND THE `#`
   SHELL'S BARE NAME SPAWNS.** `libuapp.so` is the toolkit (`userland/ui`
   + `userland/lib` + the compiled-twice `kernel/lib` sources) built from
   `libuapp.a`'s sources a second time with `-fpic`, as `libc.so` is; the
   archive stays for the static set. The
   static set is a rescue-and-harness contract: init boots a machine
-  with `/lib` missing, a rescue happens on the desktop, and
+  with `/lib` missing, `/bin/reboot` has to run in the window between
+  `remote.py flash` replacing `/lib` and the reboot itself, and
   `usertest_run.py` drives `/tests` through `run` -- the legacy
   blocking loader, which refuses `PT_INTERP` by name and stays that
-  way on purpose. A bare name at the `#` prompt is spawn-and-wait now
+  way on purpose. **`toywm` is NOT in that set** -- this entry and two
+  Makefile comments claimed it was, on the strength of `userland/wm/`
+  being outside `USERLAND_PROGRAM_DIRS`, but its `main()` is
+  `userland/gui/system/toywm.c` and it links dynamically like any other
+  GUI program (`readelf -d build/userland/gui/system/toywm.elf` names
+  two `NEEDED`); `docs/roadmap.md` carries the papercut. A bare name at the `#` prompt is spawn-and-wait now
   (`shell_exec_name()`), which is what lets a dynamic `cat` work
   there. Four things to know. **A foreground job's terminal handoff
   rides ON the spawn** -- `SPAWN_FOREGROUND` (musl's

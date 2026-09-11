@@ -683,11 +683,12 @@ EXTRA_OBJS_notepad    =
 EXTRA_OBJS_terminal   =
 EXTRA_OBJS_gfxdemo    =
 
-# ...and the one program that will genuinely need it: the ring-3 window
-# manager (M41 stage 4b). `userland/wm/` is the port of `apps/wm/` and
-# is deliberately NOT one of USERLAND_PROGRAM_DIRS -- those turn every
-# .c into its own ELF, which is right for a program and wrong for the
-# fourteen translation units of one.
+# ...and the one program that genuinely needs it: the window manager.
+# Its main() is userland/gui/system/toywm.c, which IS auto-discovered,
+# and everything else it is made of lives in `userland/wm/` -- a
+# directory deliberately outside USERLAND_PROGRAM_DIRS, because those
+# turn every .c into its own ELF, which is right for a program and
+# wrong for the two dozen translation units of one.
 #
 # Listed rather than wildcarded on purpose: a stray .c dropped into
 # userland/wm/ should fail to link with an undefined symbol, not get
@@ -706,26 +707,6 @@ EXTRA_OBJS_toywm      = wm/wm wm/wm_rawin wm/wm_render wm/wm_input wm/wm_client 
 # the toolkit's sidebar needed icons too, so it comes from libuapp.a like
 # every other shared piece. The archive is linked into every userland ELF
 # and --gc-sections drops it from the ones that never call icon_get().
-
-# --- the ring-3 WM is BUILT ON DEMAND, not by `make all` ---------------
-#
-# `make toywm`, and nothing else reaches it. The port is mid-flight
-# (stage 4b): some of its call sites still name kernel functions that
-# ring 3 has no path to, so the tree does not compile yet, and wiring an
-# incomplete program into the default build would turn `make all`,
-# `preflight.sh` and CI red for the duration of a migration every earlier
-# stage was shaped to keep green.
-#
-# This is why main() lives in `userland/wm/` rather than in
-# `userland/gui/system/`: that directory is auto-discovered, so a file
-# there would be built by `all` whether or not it was ready.
-#
-# **Delete this target and move main.c into userland/gui/system/ the
-# moment the port compiles** -- an on-demand target is a thing nobody
-# runs, and a build nobody runs is a build that rots. Stage 4c does that
-# and deletes apps/wm/ with it.
-.PHONY: toywm
-toywm: $(BUILD)/userland/wm/main.elf
 
 # --- DOOM ------------------------------------------------------------
 #
@@ -884,8 +865,9 @@ $(LIBC_SO): $(LIBC_PIC_OBJS)
 # libuapp.so -- the TOOLKIT (userland/ui + userland/lib + the shared
 # kernel/lib sources) as one shared object, from the same sources as
 # libuapp.a compiled a second time with -fpic, exactly as libc.so is.
-# Every dynamic /bin and GUI program links it; libuapp.a stays for the
-# static set (init, toywm, /tests). Measured before building it: the
+# Every dynamic /bin and GUI program links it -- toywm INCLUDED, since
+# its main() is userland/gui/system/toywm.c; libuapp.a stays for the
+# static set (init, reboot, /tests). Measured before building it: the
 # toolkit was 45-138 KB of text in every GUI binary against 10-30 KB of
 # the app's own, and /lib pages are shared through the image cache, so
 # this is one copy of the widgets, the JPEG decoder and the TrueType
@@ -936,9 +918,10 @@ $(BUILD)/userland/tests/dynlibc_test.elf: $(BUILD)/userland/tests/dynlibc_test.o
 #             that cannot run at the one moment it is wanted, and the
 #             machine needs its power button pressed by hand. That
 #             happened to both test laptops on 2026-09-07.
-#   (toywm is outside USERLAND_PROGRAM_DIRS and stays static by
-#    construction -- same reasoning: the desktop is what a rescue
-#    happens on.)
+#   (toywm is NOT in that set, whatever an earlier comment here said:
+#    its main() is userland/gui/system/toywm.c, so it matches the
+#    dynamic gui/%.elf rule below. `readelf -d` on the built ELF is the
+#    answer, not this list -- see docs/roadmap.md's papercut.)
 $(BUILD)/userland/bin/%.elf: $(BUILD)/userland/bin/%.o $(USERLAND_RT) userland/rt/link-dyn.ld $(LIBUAPP_SO) $(LIBC_NONSHARED) $(LIBC_SO) $(LDSO) $$(call uextra,$$*) $$(call ulibso,$$*)
 	$(DYN_LINK) -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(BUILD)/userland/rt/sigtramp.o $(BUILD)/userland/rt/tls.o $(call ulibso,$*) $(LIBUAPP_SO) $(LIBC_NONSHARED) $(LIBC_SO)
 

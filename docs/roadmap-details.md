@@ -3349,14 +3349,102 @@ are not a dialect of the same idiom, they are a different decision, and
 converting them would have deleted the allowance silently. See
 `docs/conventions/storage.md`.
 
-**Still not started** (file:line as of 2026-09-04):
-`start_menu.c:174-252` and `context_menu.c:76-98` hand-draw a vertical
-menu that `uui_menubar_open_at()` + `uui_menubar_draw_popup()` draw
-(Start carries icons and a flash state the menubar has no slot for);
-a `uui_icon_label()` primitive for the icon-then-label row drawn five
-ways; and the codec tables in `uimg.c`/`usnd.c` pull every decoder into
-every program that touches an image or a sound, which `libuapp.so` now
-absorbs but a static build still pays.
+**The last three findings, settled 2026-09-11: one conversion, one
+decline, two withdrawals.**
+
+**DONE -- the WM's context menu is `uui_menubar`'s.** `context_menu.c`
+keeps its header, its item struct and all four call sites, and is the
+panel's item model over a `struct uui_menubar` opened through
+`uui_menubar_open_at()` with `count == 0` (no bar strip). The
+translation is a row-to-code map back to the caller's own
+`on_select`/`ctx` pair, which is what lets `desktop.c` go on packing a
+`gui_app *` or a window index into a row and `checked` into a tick. It
+works in the panel because `uui_popup_open()` is a documented no-op
+with no provider and the compositor installs none for its own surface,
+so every level falls through to the in-window path and is drawn into
+`wm_surface()`; the bounds handed to the widget are the rectangle
+`wm_popup_place()` already clamps into. What the desktop's menu gained:
+a vector tick and arrow instead of hand-drawn strokes, vertically
+centred labels, disabled rows, submenus to any depth, and a flip above
+the pointer near the taskbar rather than a slide. Not wired: the
+keyboard, because `wm_overlay.h` has no key op.
+
+One real bug came out of it, in the widget rather than the WM.
+`uui_menubar_open_at()`'s header promises the popup's top-left at
+`(x, y)` and its implementation anchored a 1x1 rect and placed BELOW
+it, so every context menu in the tree sat one row low. Caught because
+the WM's window menu has to line up under a title-bar icon and
+`icons_test.py` asserts that; the anchor is zero-tall now.
+
+**DECLINED -- the Start menu stays its own drawing.** The gap is wider
+than the note said: per-row icons at `item_h - 4` with an
+unconditional indent, a group divider that consumes no row, a warm
+click flash with its own foreground colour on a tick deadline,
+taskbar-anchored placement, and rows from a live registry rather than
+a const tree. That is four features added to a widget no other caller
+wants them in, to delete ~80 lines. Neither Windows nor KDE builds its
+launcher out of its menu control either -- Win11's Start is a XAML
+shell surface and Kickoff is a QML applet -- while both DO use one menu
+implementation for an app's File menu and the desktop's right-click
+menu, which is the split this tree now has.
+
+**WITHDRAWN -- `uui_icon_label()`.** It is 8 sites, not five, and two
+of the files the finding named (`context_menu.c`, `uui_menubar.c`)
+contain no icon code at all: their leading marks are vector ticks and
+arrows in a gutter. The overlap across the 8 is three lines --
+`icon_get()`, one `ugfx_blit_alpha()`, and `text_x = icon_left + size
++ gap`. What differs: seven gap constants, four vertical policies (the
+Start menu pins `+2`/`+3`, About's logo is top-aligned, the rest
+centre), four missing-icon policies (the Start menu keeps the indent,
+the taskbar button switches to a DIFFERENT draw path handing
+`uui_button_draw()` the real label, `title_icon()` returns NULL below
+10px), and three clipping policies (`wm_render.c:924` truncates by
+character count, which is wrong on a proportional face; the drag ghost
+measures its box instead of clipping). A signature covering all 8 needs
+~13 parameters to replace 3 lines. Two honest sub-pairs exist if this
+is ever revisited: the Start menu with `uui_sidebar`'s headings, and
+Properties with About (an icon beside TWO stacked lines). The
+taskbar and Start buttons' real shared idiom is not the icon at all --
+it is `uui_button_draw(..., "")`, an empty button to place things in by
+hand.
+
+**WITHDRAWN -- the codec tables.** The coupling is real: selection is
+probe-by-magic with no "decode as JPEG" entry point, so `uimg_probe()`
+and `codec_for()` hard-reference every row and archive-member
+granularity cannot drop one. The cost it predicted is currently ZERO.
+Measured: `/tests/uimg_test` tests both JPEG and QOI, `/tests/usnd_test`
+decodes both WAV and `/tests/sine1k.mp3`, and `init`/`reboot` touch
+neither library -- and `toywm`, named as the third static consumer, is
+not static at all (see below). No static-linked program pays for a
+decoder it does not use. If one ever does, the cheap fix is a
+`uimg_decode_with(&uimg_codec_qoi, ...)` entry point, not restructuring
+the table. For scale if it is: JPEG is ~20.1 KB of text against QOI's
+~1.76 KB, MP3 ~13.3 KB plus ~9.6 KB of tables against WAV's ~1.84 KB.
+
+**Three stale claims fixed in the same change, all about the same
+thing.** `make toywm` pointed at `build/userland/wm/main.elf`, which
+has no source -- the WM's `main()` moved to
+`userland/gui/system/toywm.c`, which IS auto-discovered -- so the
+target failed with "No rule to make target" and the ~20 lines of
+comment above it described a migration that had finished. Deleted. And
+because that directory matches the dynamic `gui/%.elf` rule, **toywm
+links dynamically**: two Makefile comments and `docs/conventions/kernel.md`
+all said it was static "by construction". `readelf -d
+build/userland/gui/system/toywm.elf` names two `NEEDED` and an
+`INTERP`. The rescue argument for the static set (a flash replaces
+`/lib` while the old kernel runs) therefore does not cover the desktop;
+that is a papercut on `docs/roadmap.md` rather than a silent edit.
+
+**And one drifted formula, of exactly the shape this pass is about.**
+`wm_input.c`'s right-click path re-derived the Start menu's geometry --
+its own comment said "revisit if a third caller ever needs it" -- and
+its copy counted `gui_app_registry_count` rows where the menu draws
+`gui_app_visible_count(GUI_SHOW_STARTMENU)` of them, then indexed
+`gui_app_registry[hit_row]` with a VISIBLE row index. Latent today
+(every shipped entry shows in the menu), and a single `.desktop` with
+`ShowIn=desktop` would have misplaced every row and offered "Open" for
+the wrong app. `start_menu_row_at()` is the one copy now, and
+`start_menu_handle_click()` uses it too.
 
 `preflight.sh` on main that day: build, boot smoke and usertest green;
 ktest 633 passed, 3 failed, all three `r.leaked` -- the shape of the

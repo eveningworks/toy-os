@@ -648,7 +648,7 @@ whenever a headline here tells you something you did not already know.
 - **The ring-3 address-space map is `kernel/include/kernel/uaddr.h`, stated once.**
 - **`SYS_MMAP` IS A REGION LIST, ITS ARENA IS ITS OWN RANGE, AND A FILE-BACKED FAULT-IN REFUSES INSIDE AN `FS_OP`**
 - **A DYNAMIC EXECUTABLE IS ENTERED THROUGH `/lib/ld-toy.so`, AND THE KERNEL NEVER LEARNS ET_DYN**
-- **EVERY `/bin` AND GUI PROGRAM LINKS `/lib/libc.so` AND `/lib/libuapp.so`; init, toywm AND `/tests` ARE STATIC; AND THE `#` SHELL'S BARE NAME SPAWNS**
+- **EVERY `/bin` AND GUI PROGRAM LINKS `/lib/libc.so` AND `/lib/libuapp.so`; init, reboot AND `/tests` ARE STATIC; AND THE `#` SHELL'S BARE NAME SPAWNS**
 - **The kernel heap has a debug mode, and it is a RUNTIME toggle**
 - **The kernel RELOCATES ITSELF at boot -- it is not running where it was linked.**
 - **A BLOCKED PROCESS WAITS ON A CHANNEL, AND A CHANNEL IS AN ADDRESS.**
@@ -882,7 +882,7 @@ whenever a headline here tells you something you did not already know.
 - **AN EMPTY-SPACE CLICK DESELECTS, AND THE RUBBER BAND WORKS IN EVERY VIEW**
 - **THE FOLDER TREE FOLLOWS A NAVIGATION, NEVER A TOGGLE**
 - **THE DESKTOP'S ICON SIZE IS A NAMED SETTING, THE ICONS ARE CENTRED, AND A CAPTION IS TWO LINES** -- `desktop.icon_size`; `icon_box()` is the one place an icon's rect comes from, and `gui icons --json` reports it
-- **THE WM CONTEXT MENU HAS ONE LEVEL OF SUBMENU, A SEPARATOR AND A TICK, AND THE DESKTOP'S MENU IS WINDOWS' SHAPE**
+- **THE WM CONTEXT MENU IS `uui_menubar`, WITH THE PANEL'S ITEM MODEL OVER IT, AND THE DESKTOP'S MENU IS WINDOWS' SHAPE**
 - **A DRAG BETWEEN WINDOWS IS BROKERED BY THE COMPOSITOR, AND ITS PAYLOAD RIDES A SLOT BESIDE THE CLIPBOARD** -- `wm_dnd.c`, `WIN_REQ_DRAG_START`, `WIN_EV_DRAG_OVER/LEAVE/DROP`; the slot is NOT cleared on the release, the drop reads it later
 - **THE DESKTOP IS `/home/desktop` AND NOTHING ELSE: A `.desktop` FILE THERE IS A LAUNCHER, THE APPLICATION DATABASE IS `/usr/wm/applications`, AND EVERY VERB IS A CHILD PROCESS** -- the database feeds the Start menu only; "Add to desktop" writes a launcher file; Copy/Cut/Paste ride the system clipboard
 - **MARKS SURVIVE A RELOAD BY NAME, BECAUSE THE VOLUME'S GENERATION NEVER STOPS MOVING** -- a tick reload that cleared them was the "marking does nothing" cluster

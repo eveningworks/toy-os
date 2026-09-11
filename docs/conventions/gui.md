@@ -3416,19 +3416,33 @@ reports instead of hardcoding a 48 px tile at (16, 16). The cell's own
 x stays the column's left edge, which is what the grid, the drag and
 the saved positions speak; only the drawing and the hit box are offset.
 
-## THE WM CONTEXT MENU HAS ONE LEVEL OF SUBMENU, A SEPARATOR AND A TICK, AND THE DESKTOP'S MENU IS WINDOWS' SHAPE
+## THE WM CONTEXT MENU IS `uui_menubar`, WITH THE PANEL'S ITEM MODEL OVER IT, AND THE DESKTOP'S MENU IS WINDOWS' SHAPE
 
-`struct context_menu_item` grew four optional fields (`sub`,
-`sub_count`, `checked`, `separator`), zero for every existing caller.
-A row with `sub` opens its rows to the right on hover or click and
-never runs its own action; a separator is half a row and not
-hoverable; a tick is drawn in a gutter every row reserves. `gui ctxmenu
---json` reports row tops from the menu (`context_menu_row_top()`), not
-`y + i * item_h`, and the open submenu under `sub`. The desktop's menu
-is Open > (the launchers), Refresh, Sort by name, Icon size > (ticked),
-Desktop settings -- what a right-click on the Windows or KDE desktop
-offers, minus what needs a desktop folder (Paste, New folder), which is
-the next stage.
+`context_menu.c` opens a `struct uui_menubar` through
+`uui_menubar_open_at()` with `count == 0`, so the widget draws and
+hit-tests and this file only supplies rows. `struct context_menu_item`
+is unchanged -- `label`/`on_select`/`ctx` plus the optional `sub`,
+`sub_count`, `checked`, `separator` -- because a caller packs a
+`gui_app *` or a window index into `ctx`, which the widget's `int code`
+cannot carry; the code maps back to the row here. `checked` is answered
+through the widget's `item_flags`, so a tick follows the caller's live
+struct with nothing to keep in sync.
+
+Submenu depth is the widget's (`UUI_MENU_MAX_DEPTH`) now, not one --
+the callers still use one. A separator is a `NULL` label. `gui ctxmenu
+--json` reports row tops from `uui_menubar_item_rect()`, never
+`y + i * item_h`, and the open submenu under `sub`. **There is still no
+keyboard**: `uui_menubar_key()` exists and `wm_overlay.h` has no key op
+to route it through.
+
+It works inside the compositor because `uui_popup_open()` is a no-op
+with no provider and the panel installs none for its own surface, so
+every level draws into `wm_surface()` -- clamped against the rectangle
+`wm_popup_place()` defines, handed to the widget as its bounds.
+
+The desktop's menu is Open > (the launchers), New folder, Paste,
+Refresh, Sort by name, Icon size > (ticked), Desktop settings -- what a
+right-click on the Windows or KDE desktop offers.
 
 **THE TRAP FOR A TEST**: a real-mouse click after a `warp_cursor()`
 onto a submenu row did not land (`icons_test.py` measured it); the
