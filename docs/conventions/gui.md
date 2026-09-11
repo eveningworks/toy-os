@@ -834,7 +834,23 @@ this the obvious way), not from how much history it accumulated.
   a tool must scroll before clicking rather than aiming at unscrolled
   coordinates, where it gets silence rather than an error. An app driven
   by tools should report a control's rect whenever it MOVES (a page
-  change and a scroll alike), not only when a page changes.
+  change and a scroll alike), not only when a page changes. **And the
+  clip is at the VIEWPORT EDGE, so a control STRADDLING it is half
+  routable**: System Settings' mouse-speed spinbox stepped up and never
+  down for as long as a tool scrolled it until it was merely visible,
+  because its lower half -- the down stepper -- hung past the scroll
+  view. Scroll until the whole rect is inside, not until the top of it
+  is.
+- **A CLICK THAT MISSES THE WINDOW LANDS ON WHATEVER IS BEHIND IT, AND
+  AT THE BOTTOM OF THE SCREEN THAT IS THE TASKBAR.** The taskbar's
+  button for the focused window MINIMIZES it, and a minimized client
+  draws nothing -- so it reports nothing, and every later assertion
+  reads the state it had before the miss. That is the worst shape a
+  harness bug can take: it is silent, it arrives late, and it reads as
+  the app ignoring input rather than as a click that went somewhere
+  else. A tool driving a window should REFUSE a point outside the
+  content area rather than send it, naming the coordinate
+  (`settings_test.py`'s `click()`).
 - **`on_draw` RUNS BEFORE THE WIDGETS; `on_draw_over` RUNS AFTER.**
   `uapp.c`'s order is "clear, then the APP's own painting, then the
   widgets, then overlays", and it is that way deliberately: an app whose

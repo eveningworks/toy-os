@@ -1084,6 +1084,12 @@ static void navigate(int node_id) {
         g_page_desc_text[0] = '\0';
         strlcpy(g_status, "About this machine", sizeof g_status);
         relayout_page();
+        // REPORTED LIKE ANY OTHER PAGE. This one carries no settings, so
+        // it emits no control lines either -- a test that opened it had
+        // nothing to confirm it by, and measured the previous page's
+        // pixels instead. Same shape as open_group()'s line below.
+        ulogf("settings: page %s slots 0 advanced 0 captions 0 disabled 0\n",
+              g_page_title_text);
         return;
     }
     if (node_id >= NODE_GROUP_BASE) {

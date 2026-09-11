@@ -762,7 +762,8 @@ whenever a headline here tells you something you did not already know.
 - **`uui_splitter` IS THE DRAGGABLE DIVIDER, AND IT OWNS A FRACTION RATHER THAN A PIXEL COLUMN**
 - **A LAYOUT CHILD'S SIZE CAN BE PINNED FROM OUTSIDE: `uui_item.main_size` (LAST in the struct -- apps initialise it positionally)**
 - **A CLIENT MAY ASK FOR A RESIZE CURSOR NOW: `WIN_CURSOR_RESIZE_H`/`_RESIZE_V`, and the compositor still wins on a window edge**
-- **A CONTROL BELOW THE FOLD IS UNREACHABLE, not merely hard to hit.**
+- **A CONTROL BELOW THE FOLD IS UNREACHABLE, not merely hard to hit** -- and the clip is at the VIEWPORT EDGE, so a control STRADDLING it is half routable
+- **A CLICK THAT MISSES THE WINDOW LANDS ON WHATEVER IS BEHIND IT, AND AT THE BOTTOM OF THE SCREEN THAT IS THE TASKBAR** -- which MINIMIZES the window, after which the app reports nothing at all
 - **`on_draw` RUNS BEFORE THE WIDGETS; `on_draw_over` RUNS AFTER.**
 - **`uui_meter` IS THE READING WIDGET, AND IT RESERVES EVERY ROW IT COULD USE**
 - **LONG WORK BELONGS IN A CHILD PROCESS, NOT IN A GUI CLIENT'S EVENT LOOP**
@@ -1482,7 +1483,9 @@ cost".
   `keyboard_paths_test.py`, `kvm_soak.py`, `live_boot_test.py`,
   `ls_test.py`, `mem_stress.py`, `mkpart_test.py`,
   `multidisk_test.py`, `net_test.py`, `partition_test.py`,
-  `poweroff_test.py`, `qemu_matrix.py`, `remote_test.py`, `serial_backpressure_test.py`, `soundd_test.py`, `stdin_test.py`,
+  `poweroff_test.py`, `qemu_matrix.py`, `remote_test.py`, `serial_backpressure_test.py`,
+  `settings_harness_hostcheck.py` (the Settings harness's own geometry
+  and waits, no guest), `soundd_test.py`, `stdin_test.py`,
   `module_test.py` (loadable modules: hello, the refusals, an e1000
   unload and reload with the network coming back),
   `msi_test.py`, `ntp_test.py`, `ping_rtt.py` (the compositor<->client

@@ -233,6 +233,77 @@ def page_line(dbg, mark):
             "disabled": int(m.group(5))}
 
 
+def row_y(rows, index, top, pitch=None):
+    """Where sidebar row `index` sits with the list scrolled to `top`.
+
+    The app dumps every row's y ONCE, at top 0 (settings.c), so a row
+    below the fold is reported where it WOULD be unscrolled -- outside
+    the sidebar, and for the last rows outside the window. This is the
+    only geometry this tool derives, and it derives it from the app's own
+    numbers: two reported rows give the pitch, the reported offset gives
+    the rest.
+    """
+    if pitch is None:
+        pitch = rows[1]["y"] - rows[0]["y"] if len(rows) > 1 else 20
+    return rows[0]["y"] + pitch * (index - top)
+
+
+def fully_inside(ctl, view_y, view_h, margin=4):
+    """Whether ALL of a control's rect is inside a scroll view.
+
+    The clip is at the VIEWPORT EDGE, so a control straddling it is half
+    routable: the mouse-speed spinbox stepped up and never down while a
+    tool scrolled it until merely its top was visible.
+    """
+    return (ctl is not None and ctl["y"] >= view_y
+            and ctl["y"] + ctl["h"] <= view_y + view_h - margin)
+
+
+def wait_page(dbg, mark, want, timeout=6.0):
+    """Poll until the app says a page whose name contains `want` is open.
+
+    Waiting on the app's own report rather than sleeping: a click that
+    missed and a page that is merely slow look identical for the first
+    few hundred milliseconds, and only one of them ever resolves.
+    """
+    deadline = time.time() + timeout
+    while True:
+        got = page_line(dbg, mark) or page_line(dbg, 0)
+        if got and want.lower() in got["page"].lower():
+            return got
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.15)
+
+
+def sidebar_state(dbg):
+    """Where the sidebar is scrolled to, as the app last reported it.
+
+    Reported ON CHANGE (settings.c), so while the app stays quiet the
+    newest line IS the current position -- and a fixed sleep after an
+    input reads whatever was there before the frame it asked for.
+    """
+    drain(dbg)
+    hits = _since(0, r"settings: sidebar top (-?\d+) visible (\d+) rows (\d+)")
+    if not hits:
+        return None
+    m = hits[-1]
+    return {"top": int(m.group(1)), "visible": int(m.group(2)),
+             "rows": int(m.group(3))}
+
+
+def wait_sidebar(dbg, pred, timeout=4.0):
+    """Poll the reported scroll position until `pred` holds, or None."""
+    deadline = time.time() + timeout
+    while True:
+        sb = sidebar_state(dbg)
+        if sb and pred(sb):
+            return sb
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.15)
+
+
 def advanced_toggle(dbg, mark):
     drain(dbg)
     hits = _since(mark, r"settings: advanced_toggle (-?\d+) (-?\d+) (-?\d+) (-?\d+) shown (\d+)")
@@ -389,6 +460,98 @@ def main():
                 return r
         return None
 
+    # THE ROW DUMP IS TAKEN ONCE, AT TOP 0. Every row's reported y is
+    # therefore where it would be unscrolled, and rows past the fold are
+    # reported outside the sidebar entirely -- so a row is aimed at
+    # through its CURRENT position, derived from the one thing the app
+    # keeps reporting: where it is scrolled to.
+    def row_point(r, top):
+        return tx + tw // 2, row_y(rows, r["row"], top)
+
+    def item_point(sb):
+        """A visible ITEM row, never a heading -- so anything restoring
+        the scroll position does not depend on the heading case that the
+        checks below are testing."""
+        for r in rows:
+            if r["depth"] == 1 and sb["top"] <= r["row"] < sb["top"] + sb["visible"]:
+                return row_point(r, sb["top"])
+        return tx + tw // 2, ty + th // 2
+
+    def scroll_into_view(r, tries=20):
+        """Wheel until row `r` is on screen, one notch at a time against
+        the app's own reported position. A notch count computed from the
+        row pitch would be one assumption too many: the sidebar's step is
+        the widget's, not this tool's."""
+        sb = sidebar_state(dbg)
+        for _ in range(tries):
+            if sb is None:
+                return None
+            if sb["top"] <= r["row"] < sb["top"] + sb["visible"]:
+                return sb
+            down = r["row"] >= sb["top"] + sb["visible"]
+            dbg.warp_cursor(qmp, cx + tx + tw // 2, cy + ty + th // 2)
+            dbg.wheel(-1 if down else 1)
+            was = sb["top"]
+            sb = wait_sidebar(dbg, lambda s, was=was: s["top"] != was, timeout=2.0)
+        return None
+
+    def open_row(r):
+        """Click sidebar row `r` where it IS, scrolling it into view
+        first. Returns False with a failed check recorded if it cannot
+        be reached."""
+        if r is None:
+            check("the sidebar row asked for exists", False, "no such row")
+            return False
+        sb = scroll_into_view(r)
+        if sb is None:
+            check(f"the {r['label']} row can be scrolled into view", False,
+                  f"row {r['row']} of {len(rows)}, sidebar {sidebar_state(dbg)}")
+            return False
+        return click(*row_point(r, sb["top"]))
+
+    def select_page(label, want=None, timeout=6.0):
+        """Open a page by the name of its sidebar row and CONFIRM the app
+        says it is open. Returns the page dict, or None with a failed
+        check -- never the previous page, which is what a click that
+        missed leaves on screen for the next assertion to read."""
+        r = row_named(label)
+        if r is None:
+            check(f"the sidebar has a {label} row", False,
+                  f"labels={[x['label'] for x in rows]}")
+            return None
+        mark = len(drain(dbg))
+        if not open_row(r):
+            return None
+        got = wait_page(dbg, mark, want or label, timeout)
+        if got is None:
+            check(f"clicking {label} opens its page", False,
+                  f"row {r['row']}, sidebar {sidebar_state(dbg)}; "
+                  f"the app reports {page_line(dbg, 0)}")
+        return got
+
+    def reveal(name, ctl, tries=6):
+        """Scroll the page until ALL of `name`'s control is inside the
+        SCROLL VIEW, re-reading its rect from the app after each wheel.
+
+        The viewport is the page rect, not the window: a control whose
+        lower half hangs past it is drawn clipped, and a press there is
+        clipped away too -- which is why the mouse-speed spinbox stepped
+        UP and never DOWN. A control below the WINDOW is worse again: the
+        click reaches the desktop.
+        """
+        for _ in range(tries):
+            if fully_inside(ctl, py0, ph0):
+                return ctl
+            mark_sv = len(drain(dbg))
+            dbg.warp_cursor(qmp, cx + (ctl["x"] if ctl else px0) + 10,
+                            cy + py0 + ph0 // 2)
+            for _ in range(3):
+                dbg.send("gui wheel -1")
+            dbg.settle()
+            time.sleep(0.4)
+            ctl = controls(dbg, mark_sv).get(name) or ctl
+        return ctl
+
     # --- KERNEL TUNABLES APPEAR, AND UNDER THEIR OWN HEADING ----------
     #
     # A tunable is a setting with no config file (kernel/lib/tunables.c),
@@ -413,7 +576,19 @@ def main():
               row_named(group) is not None,
               f"labels={[r['label'] for r in rows]}")
 
+    cw, ch = win["content"]["w"], win["content"]["h"]
+
     def click(rel_x, rel_y):
+        # REFUSED OUTSIDE THE CONTENT AREA, with a check rather than
+        # silently. A sidebar row below the fold is still reported at its
+        # unscrolled y, and clicking that landed on the TASKBAR, whose
+        # button for this window MINIMIZES it -- after which the app
+        # draws nothing, reports nothing, and every later check reads the
+        # state it had before (see select_page()).
+        if not (0 <= rel_x < cw and 0 <= rel_y < ch):
+            check("a click stays inside the window", False,
+                  f"({rel_x},{rel_y}) is outside the {cw}x{ch} content area")
+            return False
         dbg.send(f"gui click {cx + rel_x} {cy + rel_y}")
         dbg.settle()
         # A SECOND FRAME, forced. The app reports its control geometry
@@ -426,6 +601,7 @@ def main():
         dbg.settle()
         time.sleep(0.4)
         drain(dbg)
+        return True
 
     # --- A GROUP PAGE CARRIES SEVERAL SETTINGS ------------------------
     #
@@ -438,7 +614,7 @@ def main():
                  f"labels={[r['label'] for r in rows]}"):
         return report()
     mark = len(drain(dbg))
-    click(tx + tw // 2, mouse_row["y"])
+    open_row(mouse_row)
     page_slots = slots(dbg, mark)
     qmp.screenshot(f"{args.tmp}/settings_mousepage.png")
     check("a group page carries SEVERAL settings", len(page_slots) >= 4,
@@ -472,7 +648,7 @@ def main():
     if not check("the sidebar offers a timezone page", tz_row is not None):
         return report()
     mark = len(drain(dbg))
-    click(tx + tw // 2, tz_row["y"])
+    open_row(tz_row)
     tz_slots = slots(dbg, mark)
     tz = [s for s in tz_slots if "timezone" in s["name"]]
     check("the timezone page loaded every city", tz and tz[-1]["choices"] >= 50,
@@ -510,9 +686,9 @@ def main():
     #
     # The value itself was set before the app started -- see the fixture
     # at the top, and why it has to be there rather than here.
-    click(tx + tw // 2, mouse_row["y"])
+    open_row(mouse_row)
     mark_tz = len(drain(dbg))
-    click(tx + tw // 2, tz_row["y"])
+    open_row(tz_row)
     shown = choice_shown(dbg, mark_tz, "system.timezone")
     check("the timezone's stored value is still a token",
           shown is not None and shown[0] == "losangeles",
@@ -654,7 +830,7 @@ def main():
     dbg.settle()
     time.sleep(0.4)
     mark = len(drain(dbg))
-    click(tx + tw // 2, mouse_row["y"])
+    open_row(mouse_row)
     page_slots = slots(dbg, mark)
     before = stored_value(dbg, "mouse_speed")
     # A NUMBER NOW, not a named level. mouse_speed became
@@ -692,18 +868,7 @@ def main():
     # pushed this control below the fold at the default window size --
     # where a click at its reported rect lands on whatever the scroll
     # view left there instead (it staged the TIMEZONE, one page up).
-    page_h = win["content"]["h"]
-    for _ in range(4):
-        if speed_ctl["y"] + speed_ctl["h"] < page_h - 30:
-            break
-        mark_sv = len(drain(dbg))
-        dbg.warp_cursor(qmp, cx + speed_ctl["x"] + 10, cy + page_h // 2)
-        for _ in range(3):
-            dbg.send("gui wheel -1")
-        dbg.settle()
-        time.sleep(0.4)
-        fresh = controls(dbg, mark_sv)
-        speed_ctl = fresh.get("system.mouse_speed") or speed_ctl
+    speed_ctl = reveal("system.mouse_speed", speed_ctl)
 
     click_y = speed_ctl["y"] + speed_ctl["h"] // 4
     click(speed_ctl["x"] + speed_ctl["w"] - 7, click_y)
@@ -759,17 +924,27 @@ def main():
     # merely hard to hit, it is unreachable, and a test clicking at its
     # unscrolled coordinates gets silence. The app re-reports its rects
     # whenever they move, so the post-scroll geometry is what to use.
+    # FROM THE TOP OF THE PAGE, because the sections above leave it part
+    # scrolled and a wheel at the bottom moves nothing -- which reads as
+    # an app that never re-reports, rather than as a page with nowhere
+    # left to go.
     mark_scroll = len(drain(dbg))
     dbg.warp_cursor(qmp, cx + px0 + pw0 // 2, cy + py0 + ph0 // 2)
-    for _ in range(6):
-        dbg.send("gui wheel -1")
+    for _ in range(20):
+        dbg.send("gui wheel 1")
     dbg.settle()
     time.sleep(0.4)
-    scrolled = controls(dbg, mark_scroll)
-    accel_ctl = scrolled.get("system.mouse_accel") or ctls.get("system.mouse_accel")
+    at_top = (controls(dbg, mark_scroll).get("system.mouse_accel")
+              or ctls.get("system.mouse_accel"))
+    accel_ctl = reveal("system.mouse_accel", at_top)
     qmp.screenshot(f"{args.tmp}/settings_slider.png")
+    # THE CONTROL'S OWN y, not a count of re-reported lines: a page with
+    # nothing left to scroll re-reports nothing and would fail a count
+    # while behaving perfectly.
     check("scrolling moved the page's controls",
-          bool(scrolled), f"{len(scrolled)} control(s) re-reported after the wheel")
+          at_top is not None and accel_ctl is not None
+          and accel_ctl["y"] < at_top["y"],
+          f"accel y {at_top and at_top['y']} -> {accel_ctl and accel_ctl['y']}")
     if accel_ctl:
         mark3 = len(drain(dbg))
         y_mid = accel_ctl["y"] + 5
@@ -798,7 +973,7 @@ def main():
     appearance = row_named("Console cursor") or row_named("Appearance")
     if appearance:
         mark = len(drain(dbg))
-        click(tx + tw // 2, appearance["y"])
+        open_row(appearance)
         page = slots(dbg, mark)
         check("an Advanced setting is NOT on the page by default",
               not any("cursor_style" in s["name"] for s in page),
@@ -875,13 +1050,22 @@ def main():
             bg = max(set(px), key=px.count)     # the panel colour, whatever it is
             return sum(1 for p in px if p != bg)
 
-        click(tx + tw // 2, mouse_row["y"])
-        control_ink = page_ink("mouse")
-        click(tx + tw // 2, sysinfo_row["y"])
-        info_ink = page_ink("sysinfo")
-        check("the System Information page draws its text",
-              info_ink > control_ink // 4,
-              f"sysinfo={info_ink} px vs a settings page={control_ink} px")
+        # BOTH PAGES CONFIRMED OPEN before their pixels are compared.
+        # System Information is the LAST row of thirty-one and the
+        # sidebar shows eighteen, so this is the check that reads the
+        # wrong screen when a row is aimed at where it is not.
+        mouse_page = select_page("Mouse")
+        control_ink = page_ink("mouse") if mouse_page else None
+        info_page = select_page("System Information") if mouse_page else None
+        if info_page:
+            info_ink = page_ink("sysinfo")
+            check("the System Information page draws its text",
+                  info_ink > control_ink // 4,
+                  f"sysinfo={info_ink} px vs a settings page={control_ink} px")
+        else:
+            check("the System Information page draws its text", False,
+                  "it, or the settings page it is measured against, never opened -- "
+                  "the pixels would be some other page's")
 
     # --- A STRING SETTING IS EDITABLE, not a dead empty control -------
     #
@@ -893,14 +1077,22 @@ def main():
     ntp_row = row_named("Network Time")
     if check("the sidebar offers a Network Time page", ntp_row is not None,
              f"labels={[r['label'] for r in rows]}"):
+        # THE PAGE FIRST, THEN ITS CONTROLS. An empty control list means
+        # two very different things -- a page with no controls, or a page
+        # that never opened -- and only the page report tells them apart.
         mark = len(drain(dbg))
-        click(tx + tw // 2, ntp_row["y"])
-        ntp_ctls = controls(dbg, mark)
+        ntp_page = select_page("Network Time")
+        ntp_ctls = controls(dbg, mark) if ntp_page else {}
         server_ctl = ntp_ctls.get("system.ntp_server")
+        # BY NAME, not by count: three controls from the page that was
+        # already open satisfies a count just as well as the right page.
+        want_ntp = ("system.ntp", "system.ntp_server", "system.ntp_interval")
         check("the page carries all three network-time settings",
-              len(ntp_ctls) >= 3, f"controls={sorted(ntp_ctls)}")
+              ntp_page is not None and all(n in ntp_ctls for n in want_ntp),
+              f"page={ntp_page and ntp_page['page']!r} controls={sorted(ntp_ctls)}")
         if check("the app reported the server control's rect",
-                 server_ctl is not None, f"controls={sorted(ntp_ctls)}"):
+                 server_ctl is not None,
+                 f"page={ntp_page and ntp_page['page']!r} controls={sorted(ntp_ctls)}"):
             # THE CHECK THIS PHASE EXISTS FOR. A string setting used to
             # report kind `radio` with zero rows -- which is exactly what
             # "an empty control" looks like in this log.
@@ -960,27 +1152,27 @@ def main():
     # used to make -- it answered "which ITEM row", and uui_route.c
     # gates press AND wheel on that slot, so the wheel was dead over a
     # heading and over the bar, and the thumb could not be pressed.
-    def sidebar_top(dbg):
-        """The scroll position the app last reported, or None."""
-        drain(dbg)
-        hits = _since(0, r"settings: sidebar top (-?\d+) visible (\d+) rows (\d+)")
-        if not hits:
-            return None
-        m = hits[-1]
-        return {"top": int(m.group(1)), "visible": int(m.group(2)),
-                 "rows": int(m.group(3))}
-
+    #
+    # EVERY STEP WAITS ON THE REPORT, never on a sleep: the position is
+    # reported on a CHANGE, so a read taken too early hands back the
+    # value from before the input and reads exactly like input that was
+    # never delivered.
     def to_top():
-        """Back to row 0. Wheeled from an ITEM row, which is the one
-        place the sidebar answered the wheel even when it was broken --
-        so the restore cannot itself depend on the fix."""
-        item = next(r for r in rows if r["depth"] == 1)
-        dbg.warp_cursor(qmp, cx + tx + tw // 2, cy + item["y"])
+        """Back to row 0, CONFIRMED. Wheeled from an ITEM row, which is
+        the one place the sidebar answered the wheel even when it was
+        broken -- so the restore cannot itself depend on the fix."""
+        sb = sidebar_state(dbg)
+        if sb is None:
+            return None
+        if sb["top"] == 0:
+            return sb
+        ix, iy = item_point(sb)
+        dbg.warp_cursor(qmp, cx + ix, cy + iy)
         dbg.wheel(len(rows))
-        time.sleep(0.4)
+        return wait_sidebar(dbg, lambda s: s["top"] == 0, timeout=4.0)
 
     to_top()
-    sb = sidebar_top(dbg)
+    sb = sidebar_state(dbg)
     if check("the sidebar reports where it is scrolled to", sb is not None,
              f"{sb}"):
         check("the sidebar is long enough to scroll",
@@ -988,73 +1180,93 @@ def main():
               f"{sb['rows']} rows, {sb['visible']} visible")
         max_top = sb["rows"] - sb["visible"]
         step = 3   # rows per wheel notch -- uui_sidebar_wheel()
+        want = min(step, max_top)
 
         def wheels_from(where, rel_x, rel_y):
-            to_top()
+            name = f"the wheel scrolls the sidebar over {where}"
+            if to_top() is None:
+                check(name, False, f"could not get back to the top: {sidebar_state(dbg)}")
+                return
             dbg.warp_cursor(qmp, cx + rel_x, cy + rel_y)
             dbg.wheel(-1)
-            time.sleep(0.4)
-            got = sidebar_top(dbg)
-            check(f"the wheel scrolls the sidebar over {where}",
-                  got is not None and got["top"] == min(step, max_top),
-                  f"top {got and got['top']}, wanted {min(step, max_top)}")
+            got = wait_sidebar(dbg, lambda s: s["top"] == want, timeout=3.0)
+            check(name, got is not None,
+                  f"top {sidebar_state(dbg) and sidebar_state(dbg)['top']}, wanted {want}")
 
         # Over a HEADING: not a row the sidebar can select, and it was
         # therefore not a row it would scroll under either.
         head = next((r for r in rows[:sb["visible"]] if r["depth"] == 0), None)
         if head:
-            wheels_from("a heading row", tx + tw // 2, head["y"])
+            wheels_from("a heading row", *row_point(head, 0))
         # Over the SCROLLBAR strip itself, where every desktop scrolls.
         wheels_from("the scrollbar", tx + tw - 2, ty + th // 2)
 
         # THE THUMB, dragged the length of the track. Landing at the END
         # is what a row-pitch drag would also fail, not just a dead one:
         # the thumb has to map the track's pixels onto the row range.
-        to_top()
-        mark = len(drain(dbg))
-        pitch = th // sb["visible"]
-        dbg.drag(cx + tx + tw - 2, cy + ty + pitch // 2,
-                 cx + tx + tw - 2, cy + ty + th - 1)
-        time.sleep(0.5)
-        got = sidebar_top(dbg)
-        check("dragging the thumb to the bottom of the track reaches the end",
-              got is not None and got["top"] == max_top,
-              f"top {got and got['top']}, wanted {max_top}")
-        # AND THE DRAG MUST NOT NAVIGATE. uui_route.c reports the
-        # sidebar's id on the release whatever the press was for, so the
-        # app has to tell a scroll from a click -- a page re-opened here
-        # would discard whatever the user had staged on it.
-        opened = page_line(dbg, mark)
-        check("dragging the thumb does not re-open the page",
-              opened is None,
-              f"the drag opened {opened and opened['page']!r}")
+        #
+        # drag_real(), never dbg.drag(): an injected drag is consumed one
+        # position per WM iteration with the real mouse read in between,
+        # so a ring-3 CLIENT is told the pointer left and never sees a
+        # held motion at all (gui_debug.py's drag_real docstring).
+        name = "dragging the thumb to the bottom of the track reaches the end"
+        thumb = th // sb["visible"]
+        if to_top() is None:
+            check(name, False, f"could not get back to the top: {sidebar_state(dbg)}")
+            check("dragging the thumb does not re-open the page", False,
+                  "no drag was made")
+        else:
+            mark = len(drain(dbg))
+            dbg.drag_real(qmp, cx + tx + tw - 2, cy + ty + thumb // 2,
+                          cx + tx + tw - 2, cy + ty + th - 1)
+            got = wait_sidebar(dbg, lambda s: s["top"] == max_top, timeout=4.0)
+            check(name, got is not None,
+                  f"top {sidebar_state(dbg) and sidebar_state(dbg)['top']}, wanted {max_top}")
+            # AND THE DRAG MUST NOT NAVIGATE. uui_route.c reports the
+            # sidebar's id on the release whatever the press was for, so
+            # the app has to tell a scroll from a click -- a page
+            # re-opened here would discard whatever the user had staged.
+            opened = page_line(dbg, mark)
+            check("dragging the thumb does not re-open the page",
+                  opened is None,
+                  f"the drag opened {opened and opened['page']!r}")
         # A CLICK ON THE TRACK PAGES, the other half of a scrollbar.
-        to_top()
-        dbg.warp_cursor(qmp, cx + tx + tw - 2, cy + ty + th - pitch)
-        qmp.click()
-        time.sleep(0.5)
-        got = sidebar_top(dbg)
-        check("clicking the track below the thumb pages down",
-              got is not None and 0 < got["top"] <= max_top,
-              f"top {got and got['top']}, wanted 1..{max_top}")
+        name = "clicking the track below the thumb pages down"
+        if to_top() is None:
+            check(name, False, f"could not get back to the top: {sidebar_state(dbg)}")
+        else:
+            dbg.warp_cursor(qmp, cx + tx + tw - 2, cy + ty + th - thumb)
+            qmp.click()
+            got = wait_sidebar(dbg, lambda s: 0 < s["top"] <= max_top, timeout=3.0)
+            check(name, got is not None,
+                  f"top {sidebar_state(dbg) and sidebar_state(dbg)['top']}, wanted 1..{max_top}")
         to_top()
 
     # --- Cancel closes without writing --------------------------------
     mark = len(drain(dbg))
-    click(tx + tw // 2, mouse_row["y"])
-    speed_ctl = controls(dbg, mark).get("system.mouse_speed", speed_ctl)
+    open_row(mouse_row)
+    speed_ctl = reveal("system.mouse_speed",
+                        controls(dbg, mark).get("system.mouse_speed", speed_ctl))
     on_disk = stored_value(dbg, "mouse_speed")
     # Step it DOWN this time, so the staged value differs from the one
     # the Apply test above left behind -- staging the value that is
     # already stored does nothing at all (setting_set() short-circuits
     # it), and a Cancel test whose change was a no-op proves nothing.
+    mark_stage = len(drain(dbg))
     click(speed_ctl["x"] + speed_ctl["w"] - 7,
           speed_ctl["y"] + speed_ctl["h"] * 3 // 4)
+    # THE STAGE IS ASSERTED BEFORE THE CANCEL. "The value on disk did not
+    # change" is satisfied just as well by a click that never reached the
+    # control, which is what this check used to be measuring.
+    staged_down = staged_for(dbg, mark_stage, "system.mouse_speed")
+    check("the step down stages a change for Cancel to discard",
+          staged_down is not None and staged_down != on_disk,
+          f"staged {staged_down!r}, on disk {on_disk!r}")
     click(bx + 2 * (bw + 6) + bw // 2, by + bh // 2)   # Cancel
     time.sleep(0.6)
     check("Cancel discards the staged change",
-          stored_value(dbg, "mouse_speed") == on_disk,
-          f"{on_disk!r} still on disk")
+          staged_down is not None and stored_value(dbg, "mouse_speed") == on_disk,
+          f"{on_disk!r} still on disk, staged was {staged_down!r}")
 
     return report()
 

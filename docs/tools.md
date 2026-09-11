@@ -2712,7 +2712,7 @@ window without going through it will find its layout polls timing out.
   it, the settings registry. Run it after touching
   `kernel/lib/setting.c`, `SYS_SETTING`/`SYS_SYSINFO`, or
   `uui_sidebar`/`uui_radio_list`/`uui_spinbox`/`uui_statusbar`/
-  `uui_layout`'s `hidden` handling. ~40 checks. (It was `cpanel_test.py` until the app was renamed on
+  `uui_layout`'s `hidden` handling. ~70 checks. (It was `cpanel_test.py` until the app was renamed on
   2026-08-19 -- Control Panel is Windows' name, and this shows exactly
   the SETTINGS registry.) Two things it encodes. A change is verified by reading the
   BYTES ON DISK through the console's own `sh cat`, not by believing the
@@ -2737,6 +2737,35 @@ window without going through it will find its layout polls timing out.
   logs nothing at all. And the row hovered must not be the SELECTED row
   -- selection correctly outranks hover, so hovering the current city
   measures nothing and reads as a dead hover.
+
+  **NOTHING IS AIMED AT WHERE IT WOULD BE UNSCROLLED.** Three rules,
+  each of which cost a check that measured nothing. A SIDEBAR ROW is
+  clicked through `open_row()`, which scrolls it into view and derives
+  its current position from the app's reported offset: the row dump is
+  taken once, at the top, so row 30 of 31 is reported at a y below the
+  window -- and a click there lands on the TASKBAR, whose button for
+  this window MINIMIZES it, after which the app draws nothing, reports
+  nothing, and every later check reads the state it had before. A
+  CONTROL is scrolled fully inside the PAGE VIEWPORT by `reveal()`,
+  which is the page rect and not the window: a control whose lower half
+  hangs past the scroll view is drawn clipped and a press there is
+  clipped away too, which is why the mouse-speed spinbox stepped up and
+  never down. And a PAGE is confirmed open by its own `settings: page`
+  report before its controls or its pixels are read, since an empty
+  control list means either a page with no controls or a page that never
+  opened. `click()` refuses a point outside the content area outright,
+  with a check naming the coordinate, so the whole class fails loudly.
+- **`settings_harness_hostcheck.py`** -- `settings_test.py`'s own
+  geometry and waits, on the host against a scripted console: a sidebar
+  row is aimed at where it IS rather than where it would be unscrolled
+  (the row dump is taken once, at the top, and the last rows are
+  reported below the WINDOW, where a click hits the taskbar and
+  minimizes the app); the scroll offset is read from the newest report
+  and waited for, since it is logged only on a change; a page is
+  confirmed open by its own report before anything reads its controls;
+  and a control counts as reachable only when its WHOLE rect is inside
+  the scroll view, because the clip is at the viewport edge and a
+  straddling control is half routable. Seconds, no guest.
 - **`iso_guard.py`** -- refuses to boot a stale `toy-os.iso`, called
   from `vm.py` and `qmp_test.py`'s `launch_qemu_cmd()`. `make all`
   without `make iso`, or a `make iso` that FAILED, otherwise leaves the

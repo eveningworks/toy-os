@@ -82,6 +82,11 @@ TOOLS = [
     # library only.
     ("fm_harness",  "filemanager_harness_hostcheck.py", "the File Manager harness's own logic", False,
      None,                                                                                   False),
+    # settings_test.py's own geometry and waits against a scripted
+    # console: a row aimed at where it is, a scroll position waited for,
+    # a page confirmed before its controls. Standard library only.
+    ("set_harness", "settings_harness_hostcheck.py", "the Settings harness's own logic", False,
+     None,                                                                               False),
     # The 128-bit division helpers, against Python's arbitrary-precision
     # integers. gcc and the standard library only.
     ("divti3_host", "divti3_hostcheck.py",     "__udivti3 and friends against bignums", False,
