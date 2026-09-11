@@ -388,42 +388,49 @@ static void draw_cursor_normal(int x, int y) {
 // style as draw_cursor_normal() above): a short double-headed wedge
 // shape, tapering from a single-pixel tip at each end up to a 3px-wide
 // base in the middle, connected by a thin 1px shaft.
-// THE SHAPE, ONCE, FOR ALL THREE DIRECTIONS. A double-headed arrow:
-// two five-step arrowheads joined by a 3px shaft, with every white
-// pixel outlined. The outline is the point -- the old shape's middle
-// was a bare 1px WHITE line, invisible against a light window border,
-// which is what made the resize cursor hard to see. Same construction
-// as the themed shapes in tools/gen_cursors.py; change both.
-#define RZ_LEN   19   // steps along the arrow's axis
-#define RZ_HEAD   5   // of which each arrowhead
-#define RZ_HALF   4   // the arrowhead's half-width at its base
-#define RZ_PAD    1   // room for the outline
-#define RZ_GRID  (RZ_LEN + 2 * RZ_HALF + 2 * RZ_PAD)
+// THE RESIZE ARROW, ONE PROFILE FOR ALL THREE DIRECTIONS, and the same
+// arithmetic as tools/gen_cursors.py's resize_shape() -- change both.
+//
+// Rasterised ANALYTICALLY rather than stepped along the axis. A stepped
+// diagonal sets only the pixels whose x+y is even, so the corner cursor
+// came out a CHECKERBOARD and read as bigger and different from the edge
+// ones; scanning every pixel and asking how far ALONG the arrow (u) and
+// how far ACROSS it (v) it lies is solid in any direction, and makes the
+// three one arrow rotated. Fixed point, 256 = 1 px; RZ_DIAG is
+// 256/sqrt(2), which is what makes a diagonal arrow 19 px long too
+// rather than 27.
+#define RZ_S     256
+#define RZ_LEN   (19 * RZ_S)   // tip to tip
+#define RZ_HEAD  (5 * RZ_S)    // of which each arrowhead
+#define RZ_HW    1152          // 4.5 px: the head's half-width at its base
+#define RZ_SW    384           // 1.5 px: the shaft's
+#define RZ_DIAG  181
+#define RZ_GRID  34            // comfortably over the longest extent
 
-// Half-width at step i: tapering through the head, 1 along the shaft.
-static int rz_half(int i) {
-    if (i < RZ_HEAD) return i;
-    if (i >= RZ_LEN - RZ_HEAD) return RZ_LEN - 1 - i;
-    return 1;
+// Half the arrow's width at `u` along it, or -1 past either end.
+static int rz_halfwidth(int u) {
+    if (u < 0 || u > RZ_LEN) return -1;
+    if (u < RZ_HEAD) return RZ_HW * u / RZ_HEAD;
+    if (u > RZ_LEN - RZ_HEAD) return RZ_HW * (RZ_LEN - u) / RZ_HEAD;
+    return RZ_SW;
 }
 
-// Rasterised into a grid rather than plotted directly, because the
+// Rasterised into a grid rather than plotted straight out, because the
 // outline is "every empty pixel touching a filled one" and that cannot
 // be decided until the fill is complete.
 static unsigned char rz_grid[RZ_GRID][RZ_GRID];
 
 static void draw_resize_cursor(int x, int y, enum wm_cursor_kind kind) {
-    for (int gy = 0; gy < RZ_GRID; gy++)
-        for (int gx = 0; gx < RZ_GRID; gx++) rz_grid[gy][gx] = 0;
-
-    for (int i = 0; i < RZ_LEN; i++) {
-        int half = rz_half(i);
-        for (int t = -half; t <= half; t++) {
-            int gx, gy;
-            if (kind == WM_CURSOR_H)      { gx = i;                gy = RZ_HALF + t; }
-            else if (kind == WM_CURSOR_V) { gx = RZ_HALF + t;      gy = i; }
-            else                          { gx = i + t + RZ_HALF;  gy = i - t + RZ_HALF; }
-            rz_grid[gy + RZ_PAD][gx + RZ_PAD] = 1;
+    int c = RZ_GRID / 2;
+    for (int gy = 0; gy < RZ_GRID; gy++) {
+        for (int gx = 0; gx < RZ_GRID; gx++) {
+            int dx = gx - c, dy = gy - c, u, v;
+            if (kind == WM_CURSOR_H)      { u = dx * RZ_S + RZ_LEN / 2; v = dy * RZ_S; }
+            else if (kind == WM_CURSOR_V) { u = dy * RZ_S + RZ_LEN / 2; v = dx * RZ_S; }
+            else { u = (dx + dy) * RZ_DIAG + RZ_LEN / 2; v = (dx - dy) * RZ_DIAG; }
+            int hw = rz_halfwidth(u);
+            int av = v < 0 ? -v : v;
+            rz_grid[gy][gx] = (hw >= 0 && av <= hw + RZ_S / 2) ? 1 : 0;
         }
     }
     for (int gy = 0; gy < RZ_GRID; gy++) {
@@ -440,11 +447,13 @@ static void draw_resize_cursor(int x, int y, enum wm_cursor_kind kind) {
         }
     }
 
+    // CENTRED ON THE HOTSPOT, as the I-beam is and unlike the arrow: a
+    // resize arrow has to straddle the edge it is grabbing.
     uint32_t fill = UTHEME_WHITE, outline = ugfx_rgb(0, 0, 0);
     for (int gy = 0; gy < RZ_GRID; gy++)
         for (int gx = 0; gx < RZ_GRID; gx++)
             if (rz_grid[gy][gx])
-                ugfx_put_pixel(wm_surface(), x + gx - RZ_PAD, y + gy - RZ_PAD,
+                ugfx_put_pixel(wm_surface(), x + gx - c, y + gy - c,
                                rz_grid[gy][gx] == 1 ? fill : outline);
 }
 
@@ -665,10 +674,7 @@ enum wm_cursor_kind wm_cursor_kind_at(int mx, int my) {
 // would leave a stale cursor-colored pixel behind on every move, so
 // it's deliberately oversized rather than tightly fit to each shape.
 #define CURSOR_BOX_MARGIN 2
-#define CURSOR_BOX_SIZE 32 // the BUILT-IN shapes' box; themed ones derive theirs
-// 32 because the resize arrow's DIAGONAL is the widest built-in: 19
-// steps at 45 degrees plus its heads and outline. Too small strands a
-// cursor-coloured pixel on every move, which this file has paid for twice.
+#define CURSOR_BOX_SIZE 22 // the BUILT-IN shapes' box; themed ones derive theirs
 
 // The themed shapes make the drawn extent variable -- a theme's size,
 // its hotspot and the size setting's scale all move it -- so the box can
@@ -688,6 +694,13 @@ static void cursor_rect(enum wm_cursor_kind kind, int x, int y,
         *oy = y - s->hot_y * sc - CURSOR_BOX_MARGIN;
         *w  = s->w * sc + 2 * CURSOR_BOX_MARGIN;
         *h  = s->h * sc + 2 * CURSOR_BOX_MARGIN;
+    } else if (kind == WM_CURSOR_H || kind == WM_CURSOR_V || kind == WM_CURSOR_DIAG) {
+        // Centred too, since draw_resize_cursor() draws from the grid's
+        // middle. A box that assumed the other three's down-and-right
+        // anchor would strand half the arrow on every move.
+        *ox = x - RZ_GRID / 2 - CURSOR_BOX_MARGIN;
+        *oy = y - RZ_GRID / 2 - CURSOR_BOX_MARGIN;
+        *w = *h = RZ_GRID + 2 * CURSOR_BOX_MARGIN;
     } else if (kind == WM_CURSOR_TEXT || kind == WM_CURSOR_WAIT) {
         // Centred on their hotspots, so not the down-and-right box the
         // other three share. The drawing functions' own constants; if

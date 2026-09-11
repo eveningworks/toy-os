@@ -277,6 +277,8 @@ static void save_position(int i) {
 // doesn't scramble saved positions. Runs once per boot; positions don't change except via a
 // drag, which updates icon_col/icon_row directly, so there's nothing
 // to invalidate this cache.
+static int cell_taken(int col, int row, int exclude);
+
 static void desktop_load_positions(void) {
     if (positions_loaded) return;
     positions_loaded = 1;
@@ -293,17 +295,17 @@ static void desktop_load_positions(void) {
     // the desktop with nothing to indicate why.
     int per_col = rows_that_fit();
 
-    // `slot` counts icons actually PLACED, not registry entries, so an
-    // entry hidden by ShowIn= leaves no gap in the default grid.
-    int slot = 0;
+    // TWO PASSES, AND THE ORDER IS THE POINT. This used to default every
+    // icon to its index's cell and then overwrite that with a saved
+    // position, which means a NEW icon's default cell could be one a
+    // saved position already owns -- with nothing checking. A launcher
+    // added from the Start menu landed ON TOP of another icon.
+    //
+    // Pass 1 places only what the user actually chose and parks the rest
+    // OFF-GRID, so pass 2 can tell "not placed yet" from "placed at 0,0".
     for (int i = 0; i < n; i++) {
-        if (!item_visible(i)) {
-            icon_col[i] = icon_row[i] = -1; // never drawn, never hit-tested
-            continue;
-        }
-        icon_col[i] = slot / per_col;
-        icon_row[i] = slot % per_col;
-        slot++;
+        icon_col[i] = icon_row[i] = -1; // off-grid: never drawn, never hit-tested
+        if (!item_visible(i)) continue;
 
         char value[16], keybuf[80];
         if (!wm_conf_get(DESKTOP_CONF_PATH, item_key(i, keybuf, sizeof keybuf), value, sizeof(value))) continue;
@@ -311,10 +313,10 @@ static void desktop_load_positions(void) {
         // "<col>,<row>" -- split on the comma, then let knum.h's bounded
         // parser handle each half. Stricter than the digit loops this
         // replaced: those accepted trailing junk ("3,4x" parsed as 3,4),
-        // where this treats the whole field as malformed and keeps the
-        // default, matching how every other config value here behaves.
+        // where this treats the whole field as malformed and leaves the
+        // icon to pass 2, matching how every other config value behaves.
         const char *comma = k_strchr(value, ',');
-        if (!comma) continue; // malformed -- keep the default set above
+        if (!comma) continue;
 
         uint64_t col = 0, row = 0;
         if (!k_parse_u64_n(value, (size_t)(comma - value), &col)) continue;
@@ -322,6 +324,22 @@ static void desktop_load_positions(void) {
 
         icon_col[i] = (int)col;
         icon_row[i] = (int)row;
+    }
+
+    // Pass 2: everything with no saved cell takes the first FREE one in
+    // the default column-major order -- Windows' rule for a new shortcut.
+    // Bounded by the pigeonhole: at most DESKTOP_MAX_ICONS icons can
+    // occupy DESKTOP_MAX_ICONS cells, so one more slot than that is
+    // always free.
+    for (int i = 0; i < n; i++) {
+        if (!item_visible(i) || icon_col[i] >= 0) continue;
+        for (int slot = 0; slot <= DESKTOP_MAX_ICONS; slot++) {
+            int col = slot / per_col, row = slot % per_col;
+            if (cell_taken(col, row, i)) continue;
+            icon_col[i] = col;
+            icon_row[i] = row;
+            break;
+        }
     }
 }
 

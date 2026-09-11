@@ -3425,6 +3425,14 @@ menu up while the right-click menu for one of its rows is open, as
 Windows does. The table order already supported it: `context` sits
 before `start`, so the child takes the click and is painted last.
 
+**A PARENT DOES NOT HOVER WHILE ITS CHILD IS UP.** The popup is drawn
+over it, so a row lighting up under the menu belongs to neither -- the
+Start menu went on tracking the pointer and highlighted whichever of its
+rows the context menu happened to cover. `wm_overlay_hover()` hovers the
+parent at a point that is on nothing, which also DROPS the row it was
+holding rather than freezing the last one lit. Only a PIXEL sees this:
+the highlight is not a state any overlay reports.
+
 **A LAUNCHING VERB STILL DISMISSES THE PARENT.** `ctx_open_app()` closes
 the Start menu itself, because opening a window is what closes Start
 everywhere else; "Add to desktop" deliberately does not, so you can do
@@ -3432,6 +3440,20 @@ another. **And the child MUST clear the parent on BOTH its close paths**
 -- `context_menu_close()` and the commit inside
 `context_menu_handle_click()` -- or the next `close_others()` spares an
 overlay nobody meant to keep.
+
+## A DEFAULT ICON CELL IS CHOSEN AFTER THE SAVED ONES, NOT BEFORE
+
+`desktop_load_positions()` runs in two passes. Pass 1 places only the
+cells the user actually chose and parks everything else OFF-GRID; pass 2
+gives each remaining icon the first FREE cell in the default
+column-major order. It used to default every icon to its index's cell
+and then overwrite that from `desktop.conf`, so a NEW icon's default
+could be a cell a saved position already owned -- with nothing checking.
+A launcher added from the Start menu landed ON TOP of another icon.
+
+The off-grid park is what makes pass 2 work: without it "not placed yet"
+and "placed at 0,0" are the same value. `gui icons --json` reports every
+icon's rect, so two sharing one is assertable.
 
 ## A SELECTION CHANGE MUST DAMAGE THE RECTS IT CHANGED, NOT JUST SET `redraw_pending`
 
@@ -3479,6 +3501,20 @@ right-click on the Windows or KDE desktop offers.
 **THE TRAP FOR A TEST**: a real-mouse click after a `warp_cursor()`
 onto a submenu row did not land (`icons_test.py` measured it); the
 injected `dbg.click(x, y)` at the reported row centre does.
+
+**THE RESIZE CURSOR IS RASTERISED ANALYTICALLY, NOT STEPPED ALONG ITS
+AXIS.** For each pixel, how far ALONG the arrow (u) and how far ACROSS
+it (v) decides whether it is filled -- which is solid in any direction
+and makes the three one arrow rotated. Stepping along the axis sets only
+the pixels whose `x + y` is even on a DIAGONAL, so the corner cursor came
+out a checkerboard and read as bigger and different from the edge ones;
+`RZ_DIAG` (256/sqrt(2)) is what keeps a diagonal arrow 19 px long rather
+than 27. `wm_render.c`'s `draw_resize_cursor()` and
+`tools/gen_cursors.py`'s `resize_shape()` are the same arithmetic --
+change both, and `gen_cursors.py --check` fails the build if the data
+files fall behind. The shape is CENTRED on its hotspot, so
+`cursor_rect()` gives it a centred box: the other built-ins draw down
+and right from theirs.
 
 ## THE DESKTOP IS `/home/desktop` AND NOTHING ELSE: A `.desktop` FILE THERE IS A LAUNCHER, THE APPLICATION DATABASE IS `/usr/wm/applications`, AND EVERY VERB IS A CHILD PROCESS
 

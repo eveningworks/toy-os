@@ -226,6 +226,14 @@ def desktop_report(dbg):
         return None
 
 
+def cell_map(dbg):
+    """Every desktop icon's top-left, by name. Two icons sharing one is
+    the stacking bug: a new launcher used to take its index's default
+    cell without asking whether a SAVED position already owned it."""
+    return {i["name"]: (i["x"], i["y"])
+            for i in dbg.json("gui icons --json")["icons"]}
+
+
 def icon_rect(report, name):
     for it in (report or {}).get("icons", []):
         if it["name"] == name:
@@ -764,6 +772,27 @@ def run(dbg, qmp, tmp, res):
                   f"overlays={ov} rows={labels}")
         res.check("...and the Start menu is STILL open behind it",
                   ov["start_menu"] == "1", f"overlays={ov}")
+        # NOTHING UNDER THE POPUP LIGHTS UP. The Start menu is still
+        # open beneath its own row's menu, and it used to go on tracking
+        # the pointer -- so moving over the popup highlighted whichever
+        # Start row happened to be underneath. Only a pixel can see this:
+        # the row is a highlight, not a state the app reports.
+        cmg = ctx() or {}
+        if cmg.get("open") and cmg.get("rows"):
+            def start_bands():
+                im = shot(qmp, tmp, "hoverleak.png")
+                return [im.getpixel((menu["x"] + 3, r["cy"])) for r in approws[:6]]
+            dbg.warp_cursor(qmp, 900, 300)
+            time.sleep(0.6)
+            away = start_bands()
+            last = cmg["rows"][-1]
+            dbg.warp_cursor(qmp, cmg["x"] + cmg["w"] // 2, last["cy"])
+            time.sleep(0.8)
+            on_popup = start_bands()
+            moved = [i for i, (a, b) in enumerate(zip(away, on_popup)) if a != b]
+            res.check("...and no Start row lights up under the popup",
+                      not moved, f"rows that changed: {moved}")
+
         # The desktop's own files BEFORE, so the launcher this adds can
         # be removed by name -- leaving it behind shifts the icon grid
         # and every later check aims at the wrong cell.
@@ -788,6 +817,9 @@ def run(dbg, qmp, tmp, res):
             time.sleep(0.5)
         res.check("(both menus dismissed before the next section)",
                   overlays()["start_menu"] == "0", f"overlays={overlays()}")
+        res.check("...and no icon ended up stacked on another",
+                  len(set(cell_map(dbg).values())) == len(cell_map(dbg)),
+                  f"cells={sorted(cell_map(dbg).values())}")
         for added in set(dbg.send("sh ls /home/desktop").split()) - before_ls:
             dbg.send(f"sh rm -r /home/desktop/{added}")
         time.sleep(1.0)

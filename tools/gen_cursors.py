@@ -90,56 +90,72 @@ def extract_arrow():
     return s
 
 
+# The resize arrow, ONE profile for all three directions. See
+# wm_render.c's draw_resize_cursor(), which is the same arithmetic in C
+# -- change both.
+#
+# Rasterised ANALYTICALLY rather than stepped along the axis: a stepped
+# diagonal sets only pixels whose x+y is even, so the corner cursor came
+# out a CHECKERBOARD, which is why it read as bigger and different from
+# the edge ones. Scanning every pixel and asking how far along the arrow
+# (u) and how far across it (v) it lies is solid in any direction, and
+# makes the three the same arrow rotated rather than three constructions.
+RZ_S = 256          # fixed point: 1 px
+RZ_LEN = 19 * RZ_S  # tip to tip
+RZ_HEAD = 5 * RZ_S  # of which each arrowhead
+RZ_HW = 1152        # 4.5 px -- the head's half-width at its base
+RZ_SW = 384         # 1.5 px -- the shaft's
+RZ_DIAG = 181       # 256 / sqrt(2), so a diagonal arrow is 19 px long too
+
+
+def rz_halfwidth(u):
+    """Half the arrow's width at `u` along it, or -1 past either end."""
+    if u < 0 or u > RZ_LEN:
+        return -1
+    if u < RZ_HEAD:
+        return RZ_HW * u // RZ_HEAD
+    if u > RZ_LEN - RZ_HEAD:
+        return RZ_HW * (RZ_LEN - u) // RZ_HEAD
+    return RZ_SW
+
+
 def resize_shape(kind):
-    """A double-headed arrow: two arrowheads, a 3px shaft, fully outlined.
-
-    The same construction as wm_render.c's draw_resize_cursor() -- change
-    both. The outline is the point: the previous shape's middle was a
-    bare 1px white line with nothing behind it, which vanished against a
-    light window border.
-    """
-    LEN, HEAD, HALF, PAD = 19, 5, 4, 1
-
-    def half_at(i):
-        if i < HEAD:
-            return i
-        if i >= LEN - HEAD:
-            return LEN - 1 - i
-        return 1
-
-    span = LEN + 2 * HALF + 2 * PAD
-    fill = [[0] * span for _ in range(span)]
-    for i in range(LEN):
-        h = half_at(i)
-        for t in range(-h, h + 1):
+    """A double-headed arrow: outlined, 3 px shaft, 19 px tip to tip."""
+    n = 34
+    c = n // 2
+    fill = [[0] * n for _ in range(n)]
+    for y in range(n):
+        for x in range(n):
+            dx, dy = x - c, y - c
             if kind == "h":
-                gx, gy = i, HALF + t
+                u, v = dx * RZ_S + RZ_LEN // 2, dy * RZ_S
             elif kind == "v":
-                gx, gy = HALF + t, i
+                u, v = dy * RZ_S + RZ_LEN // 2, dx * RZ_S
             else:
-                gx, gy = i + t + HALF, i - t + HALF
-            fill[gy + PAD][gx + PAD] = 1
+                u, v = (dx + dy) * RZ_DIAG + RZ_LEN // 2, (dx - dy) * RZ_DIAG
+            hw = rz_halfwidth(u)
+            if hw >= 0 and abs(v) <= hw + RZ_S // 2:
+                fill[y][x] = 1
 
-    # Crop to the ink, so the shape carries no dead margin and its
-    # hotspot stays the centre of what is actually drawn.
-    xs = [x for y in range(span) for x in range(span) if fill[y][x]]
-    ys = [y for y in range(span) for x in range(span) if fill[y][x]]
-    x0, x1 = min(xs) - PAD, max(xs) + PAD
-    y0, y1 = min(ys) - PAD, max(ys) + PAD
+    xs = [x for y in range(n) for x in range(n) if fill[y][x]]
+    ys = [y for y in range(n) for x in range(n) if fill[y][x]]
+    x0, x1 = min(xs) - 1, max(xs) + 1
+    y0, y1 = min(ys) - 1, max(ys) + 1
     w, h = x1 - x0 + 1, y1 - y0 + 1
 
-    s = Shape(w, h, (w // 2, h // 2))
+    s = Shape(w, h, (c - x0, c - y0))   # the hotspot is the arrow's centre
     for y in range(h):
         for x in range(w):
             if fill[y + y0][x + x0]:
                 s.fill[y][x] = 255
+    # Outlined all round, so it reads against a light window border --
+    # the previous shape's middle was bare white and vanished there.
     for y in range(h):
         for x in range(w):
             if s.fill[y][x]:
                 continue
-            near = any(0 <= y + dy < h and 0 <= x + dx < w and s.fill[y + dy][x + dx]
-                       for dy in (-1, 0, 1) for dx in (-1, 0, 1))
-            if near:
+            if any(0 <= y + dy < h and 0 <= x + dx < w and s.fill[y + dy][x + dx]
+                   for dy in (-1, 0, 1) for dx in (-1, 0, 1)):
                 s.outline[y][x] = 255
     return s
 

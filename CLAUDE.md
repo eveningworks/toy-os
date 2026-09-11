@@ -882,7 +882,8 @@ whenever a headline here tells you something you did not already know.
 - **AN EMPTY-SPACE CLICK DESELECTS, AND THE RUBBER BAND WORKS IN EVERY VIEW**
 - **THE FOLDER TREE FOLLOWS A NAVIGATION, NEVER A TOGGLE**
 - **THE DESKTOP'S ICON SIZE IS A NAMED SETTING, THE ICONS ARE CENTRED, AND A CAPTION IS TWO LINES** -- `desktop.icon_size`; `icon_box()` is the one place an icon's rect comes from, and `gui icons --json` reports it
-- **A POPUP OPENED FROM ANOTHER OVERLAY NAMES IT AS ITS PARENT, AND `close_others()` SPARES BOTH** -- `wm_overlay_set_parent()`; the Start menu stays up under its own row's context menu, and a LAUNCHING verb still dismisses it
+- **A POPUP OPENED FROM ANOTHER OVERLAY NAMES IT AS ITS PARENT, AND `close_others()` SPARES BOTH** -- `wm_overlay_set_parent()`; the Start menu stays up under its own row's context menu, a LAUNCHING verb still dismisses it, and the parent STOPS HOVERING while the child is up
+- **A DEFAULT ICON CELL IS CHOSEN AFTER THE SAVED ONES, NOT BEFORE** -- two passes in `desktop_load_positions()`, or a new launcher lands on top of an icon whose saved cell it never asked about
 - **A SELECTION CHANGE MUST DAMAGE THE RECTS IT CHANGED, NOT JUST SET `redraw_pending`** -- a bare `redraw_pending` repaints only in a QUIET frame, so a deselected icon kept its highlight while the report said otherwise; the test for this class is a PIXEL, not a report
 - **THE WM CONTEXT MENU IS `uui_menubar`, WITH THE PANEL'S ITEM MODEL OVER IT, AND THE DESKTOP'S MENU IS WINDOWS' SHAPE**
 - **A DRAG BETWEEN WINDOWS IS BROKERED BY THE COMPOSITOR, AND ITS PAYLOAD RIDES A SLOT BESIDE THE CLIPBOARD** -- `wm_dnd.c`, `WIN_REQ_DRAG_START`, `WIN_EV_DRAG_OVER/LEAVE/DROP`; the slot is NOT cleared on the release, the drop reads it later

@@ -59,6 +59,11 @@ static const struct wm_overlay g_overlays[] = {
 // were each getting slightly differently.
 static int g_hover[OVERLAY_COUNT];
 
+static const char *g_parent;   // see wm_overlay_set_parent()
+
+void wm_overlay_set_parent(const char *name) { g_parent = name; }
+const char *wm_overlay_parent(void) { return g_parent; }
+
 void wm_overlay_draw(int mx, int my) {
     for (int i = OVERLAY_COUNT - 1; i >= 0; i--) {
         const struct wm_overlay *o = &g_overlays[i];
@@ -87,7 +92,16 @@ int wm_overlay_hover(int mx, int my, uint8_t buttons) {
     for (int i = 0; i < OVERLAY_COUNT; i++) {
         const struct wm_overlay *o = &g_overlays[i];
         if (!o->hover_at) continue;
-        int want = o->is_open() ? o->hover_at(mx, my) : 0;
+        // A PARENT DOES NOT HOVER WHILE ITS CHILD IS UP. The popup is
+        // drawn over it, so a row lighting up under the menu belongs to
+        // neither -- it is the Start menu highlighting whatever the
+        // context menu happens to be covering. Hovered at a point that
+        // is on nothing, so it also DROPS the row it was holding
+        // (every overlay's rect is on screen, so (-1,-1) is off all of
+        // them) rather than freezing the last one lit.
+        int parent = g_parent && k_strcmp(o->name, g_parent) == 0;
+        int want = o->is_open() ? o->hover_at(parent ? -1 : mx,
+                                              parent ? -1 : my) : 0;
         if (want == g_hover[i]) continue;
         g_hover[i] = want;
         // Damaged only while it is up: a closing overlay damages its
@@ -111,11 +125,6 @@ const char *wm_overlay_topmost(void) {
         if (g_overlays[i].is_open()) return g_overlays[i].name;
     return 0;
 }
-
-static const char *g_parent;   // see wm_overlay_set_parent()
-
-void wm_overlay_set_parent(const char *name) { g_parent = name; }
-const char *wm_overlay_parent(void) { return g_parent; }
 
 void wm_overlay_close_others(const char *keep) {
     for (int i = 0; i < OVERLAY_COUNT; i++) {
