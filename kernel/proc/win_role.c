@@ -242,9 +242,35 @@ int win_server_request(int pid, struct win_request_msg *req) {
         return 0;
     }
     if (req->type == WIN_REQ_FB_PRESENT) {
-        if (pid != g_comp_pid || !g_comp_pid) return -1;
+        // The compositor, or the one client it leased the grant to;
+        // win_surface_present() refuses whichever of the two is not
+        // presenting right now.
+        if (!g_comp_pid || (pid != g_comp_pid && pid != win_surface_lessee())) return -1;
         int back = 0;
         if (!win_surface_present(pid, req->a, req->b, req->c, req->d, &back)) return -1;
+        req->window = (uint32_t)back;
+        return 0;
+    }
+    if (req->type == WIN_REQ_FB_LEASE) {
+        if (pid != g_comp_pid || !g_comp_pid) return -1;
+        int back = 0;
+        if (req->a == 0) {
+            win_surface_lease_end(&back);
+            req->window = (uint32_t)back;
+            return 0;
+        }
+        int lessee = req->a;
+        if (req->b == 1) { win_surface_lease_unmap(lessee); return 0; }
+        uint64_t pml4 = scheduler_pid_pml4(lessee);
+        if (lessee == pid || !pml4) return -1;
+        uint32_t w = 0, h = 0, pitch = 0, bpp = 0;
+        int count = 1;
+        if (!win_surface_lease(lessee, pml4, &w, &h, &pitch, &bpp, &count, &back)) return -1;
+        req->a = (int32_t)w;
+        req->b = (int32_t)h;
+        req->c = (int32_t)pitch;
+        req->d = (int32_t)bpp;
+        req->mods = (uint32_t)count;
         req->window = (uint32_t)back;
         return 0;
     }
@@ -366,6 +392,7 @@ void win_server_client_gone(int pid) {
     // later tries to unmap out of an address space that no longer
     // exists.
     if (pid == g_comp_pid) win_server_set_compositor(0, 0);
+    win_surface_client_gone(pid);
 
     // **NOTHING ELSE TO TEAR DOWN.** A client's windows were entries in
     // a table here; they are the compositor's now, and it learns of the

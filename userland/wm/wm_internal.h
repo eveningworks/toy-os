@@ -553,6 +553,24 @@ void wm_client_send_wheel(struct window *win, int notches);
 // Propose a content size to a client (WIN_EV_RESIZE). A proposal, not a
 // command -- see wm_client.c and abi/win_proto.h.
 void wm_client_send_resize(struct window *win, int w, int h);
+// The lease, told to the client (WIN_EV_SCANOUT): on with the grant's
+// pitch, scanout count and first back index, or off.
+void wm_client_send_scanout(struct window *win, int on, uint32_t pitch, int count, int back);
+
+// Fullscreen: enter or leave, for a resizable window (wm_input.c).
+void wm_set_fullscreen(int i, int on);
+int  window_has_chrome(const struct window *win);
+
+// wm_scanout.c -- the lease policy. Called once per rendered frame;
+// while it says the display is leased the compositor draws nothing.
+void wm_scanout_update(void);
+int  wm_scanout_active(void);
+int  wm_scanout_lessee(void);   // the pid, or 0
+void wm_scanout_client_presented(int pid);   // an ex-lessee's pages may come off
+// The topmost toplevel is fullscreen and has adopted the screen's size:
+// nothing under it -- wallpaper, taskbar, other windows -- is drawn or
+// clickable (wm_render.c).
+int  wm_top_covers_screen(void);
 
 // wm_watchdog.c -- the slow-frame watchdog. Times one loop iteration by
 // phase and logs anything over the threshold. Read that file's top

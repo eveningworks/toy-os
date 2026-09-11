@@ -203,6 +203,13 @@ struct uapp {
     // no-op -- an app calls it on every motion event.
     int cursor;
     int cursor_before_busy;
+    int fullscreen;    // as last asked for -- the compositor's proposal follows
+    // The lease (WIN_EV_SCANOUT): the toplevel draws into the display's
+    // buffer at WIN_FB_VADDR + lease_back * WIN_FB_BUFFER_STRIDE and
+    // presents with WIN_REQ_FB_PRESENT, which answers the next back.
+    int lease_on;
+    uint32_t lease_pitch;
+    int lease_count, lease_back;
 };
 
 // One process, one TOPLEVEL -- plus its popups, which are surfaces of
@@ -213,6 +220,16 @@ struct uapp {
 // opaque precisely so a future uapp_window_create() can appear without
 // this API changing shape.
 static struct uapp g_app;
+
+// The leased buffer as a surface: as many pixels wide as the PITCH
+// holds, clipped to the window, so a padded stride draws right without
+// the surface type learning about padding.
+static struct ugfx_surface lease_surface(struct uapp *a) {
+    void *px = (void *)(uintptr_t)(WIN_FB_VADDR + (uint64_t)a->lease_back * WIN_FB_BUFFER_STRIDE);
+    struct ugfx_surface s = ugfx_surface_for_pixels(px, (int)(a->lease_pitch / 4), a->h);
+    ugfx_set_clip_rect(&s, 0, 0, a->w, a->h);
+    return s;
+}
 
 // --- TWP plumbing, in one place instead of once per client ------------
 
@@ -272,7 +289,22 @@ static int surf_present(struct uapp_surf *s) {
 static void present(struct uapp *a) {
     TOPLEVEL->w = a->w;
     TOPLEVEL->h = a->h;
-    if (surf_present(TOPLEVEL)) a->surface = TOPLEVEL->surface;
+    if (a->lease_on) {
+        // The display's buffer: publish the whole screen and take the
+        // next back the kernel names (three buffers, a mailbox flip --
+        // see win_surface.c). The shm buffers stay as they were for the
+        // day the lease ends.
+        struct win_request_msg pr;
+        for (unsigned i = 0; i < sizeof pr; i++) ((uint8_t *)&pr)[i] = 0;
+        pr.type = WIN_REQ_FB_PRESENT;
+        pr.a = 0; pr.b = 0; pr.c = a->w; pr.d = a->h;
+        if (sys_win_request(&pr) == 0) {
+            if ((int)pr.window < a->lease_count) a->lease_back = (int)pr.window;
+            a->surface = lease_surface(a);
+        }
+    } else if (surf_present(TOPLEVEL)) {
+        a->surface = TOPLEVEL->surface;
+    }
     // THE POPUPS AFTER THE TOPLEVEL, in slot order -- the order they
     // were opened, which is the order the compositor stacks them. Only
     // those drawn into this frame: a menu nobody hovered is unchanged
@@ -589,7 +621,7 @@ int uapp_resize(struct uapp *a, int w, int h) {
     TOPLEVEL->w = w;
     TOPLEVEL->h = h;
     TOPLEVEL->surface = ugfx_surface_for_pixels(TOPLEVEL->px[back], w, h);
-    a->surface = TOPLEVEL->surface;
+    a->surface = a->lease_on ? lease_surface(a) : TOPLEVEL->surface;
     if (a->desc->layout) uui_layout_run(a->desc->layout, 0, 0, a->w, a->h);
     return 1;
 }
@@ -769,6 +801,17 @@ void uapp_busy_end(struct uapp *a) {
     uapp_set_cursor(a, a->cursor_before_busy);
 }
 
+void uapp_set_fullscreen(struct uapp *a, int on) {
+    if (!a || !a->running) return;   // the toplevel is window 0, so no id test
+    on = on ? 1 : 0;
+    if (a->fullscreen == on) return;
+    a->fullscreen = on;
+    wmchan_send(WIN_REQ_FULLSCREEN, a->window, on, 0, 0, 0);
+}
+
+int uapp_fullscreen(const struct uapp *a) { return a ? a->fullscreen : 0; }
+int uapp_scanout(const struct uapp *a)    { return a ? a->lease_on : 0; }
+
 int uapp_set_title(struct uapp *a, const char *title) {
     // OVER THE CHANNEL, which carries the string itself. The kernel path
     // below can only say "it changed" -- struct win_event is 24 bytes --
@@ -924,6 +967,22 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
     }
 
     switch (ev->type) {
+    case WIN_EV_SCANOUT:
+        if (ev->a) {
+            a->lease_on    = 1;
+            a->lease_pitch = (uint32_t)ev->b;
+            a->lease_count = (int)(ev->mods & 0xFF);
+            a->lease_back  = (int)(ev->mods >> 8);
+            if (a->lease_count < 1) a->lease_count = 1;
+            if (a->lease_back >= a->lease_count) a->lease_back = 0;
+            a->surface = lease_surface(a);
+        } else {
+            a->lease_on = 0;
+            a->surface = TOPLEVEL->surface;
+        }
+        // Whatever the last frame drew is in the OTHER buffer: repaint.
+        a->dirty = 1;
+        break;
     case WIN_EV_PING: {
         // Answered HERE, with no app involvement and no callback --
         // deliberately. A liveness check an app could forget to answer

@@ -163,10 +163,12 @@ void *window_get_state(struct window *win) { return win->app_state; }
 // A POPUP HAS NO CHROME, and these four are the one place that fact
 // lives: the blit, the hit-tests, the damage and the client coordinate
 // translation all go through them, so nothing else needs to know.
-int window_content_x(const struct window *win) { return win->popup ? win->x : win->x + 1; }
-int window_content_y(const struct window *win) { return win->popup ? win->y : win->y + WM_TITLEBAR_H + 1; }
-int window_content_w(const struct window *win) { return win->popup ? win->w : win->w - 2; }
-int window_content_h(const struct window *win) { return win->popup ? win->h : win->h - WM_TITLEBAR_H - 2; }
+// A FULLSCREEN window has none either.
+int window_has_chrome(const struct window *win) { return !win->popup && !win->fullscreen; }
+int window_content_x(const struct window *win) { return window_has_chrome(win) ? win->x + 1 : win->x; }
+int window_content_y(const struct window *win) { return window_has_chrome(win) ? win->y + WM_TITLEBAR_H + 1 : win->y; }
+int window_content_w(const struct window *win) { return window_has_chrome(win) ? win->w - 2 : win->w; }
+int window_content_h(const struct window *win) { return window_has_chrome(win) ? win->h - WM_TITLEBAR_H - 2 : win->h; }
 
 // THE FOCUSED WINDOW IS THE TOPMOST TOPLEVEL, not the topmost entry: a
 // popup sits above its parent and the parent keeps the active title
@@ -765,6 +767,12 @@ void wm_layout_changed(void) {
     for (int i = 0; i < window_count; i++) {
         struct window *w = &windows[i];
         int is_client = w->client_pid > 0;
+        if (w->fullscreen) {
+            w->x = 0; w->y = 0;
+            if (is_client) wm_client_send_resize(w, screen_w, screen_h);
+            else { w->w = screen_w; w->h = screen_h; }
+            continue;
+        }
         if (w->state == WIN_MAXIMIZED) {
             w->x = 0; w->y = 0;
             if (is_client)

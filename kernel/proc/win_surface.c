@@ -16,6 +16,7 @@
 #include "kfmt.h" // klog_printf
 #include "pmm.h"
 #include "string.h"
+#include "scheduler.h" // the preemption guard around a page-table walk
 
 static int      g_holder;      // pid holding the grant, or 0
 static uint64_t g_pml4;        // the address space it was mapped into
@@ -33,36 +34,21 @@ static int      g_span_count;
 static uint64_t g_span_pages;
 static uint64_t g_scratch;     // the frame a padded page points at
 
+static int      g_lessee;      // pid the grant is LEASED to, or 0
+static uint64_t g_lessee_pml4;
+// An EX-lessee whose mapping is still in place: the lease ended but the
+// client may be mid-draw into the buffer, so the pages come off only
+// when it has presented from its own buffer again (win_surface_lease_unmap)
+// -- unmapping at once put DOOM's next store on a non-present page.
+static int      g_stale;
+static uint64_t g_stale_pml4;
+
 int win_surface_holder(void) { return g_holder; }
+int win_surface_lessee(void) { return g_lessee; }
 
-int win_surface_grant(int pid, uint64_t pml4, uint32_t *out_w, uint32_t *out_h,
-                      uint32_t *out_pitch, uint32_t *out_bpp,
-                      int *out_count, int *out_back) {
-    uint64_t phys = gfx_framebuffer_phys();
-    uint32_t pitch = gfx_framebuffer_pitch();
-    int height = gfx_height();
-    if (!phys || !pitch || height <= 0) {
-        klog_write("win_surface: no framebuffer to grant\n");
-        return 0;
-    }
-
-    // Re-granting to the same holder is legal and idempotent -- a
-    // compositor that restarts its own mapping should not have to
-    // deregister first. Revoke any previous grant, including another
-    // process's: the role is single, so a grant to a new pid means the
-    // old one is no longer the compositor.
-    if (g_holder) win_surface_revoke(g_holder);
-
-    uint64_t size = (uint64_t)pitch * (uint64_t)height;
-    uint64_t pages = (size + 4095) / 4096;
-    // THREE OR ONE. The flip never waits, so the buffer handed back must
-    // be neither the one on screen nor the one just asked for; two
-    // buffers cannot promise that and a present into the live one tears
-    // worse than no flip at all (it did).
-    int count = display_scanout_count();
-    if (count < 3 || pages * 4096 > WIN_FB_BUFFER_STRIDE) count = 1;
-    if (count > 3) count = 3;
-
+// The scanouts at WIN_FB_VADDR in `pml4` -- one loop for the holder and
+// for a lessee; on failure nothing is left mapped.
+static int map_scanouts(uint64_t pml4, uint64_t phys, int count, uint64_t pages) {
     // Every scanout, each at its own stride from WIN_FB_VADDR; index 0
     // is the surface gfx.c draws the console into.
     for (int b = 0; b < count; b++) {
@@ -93,6 +79,54 @@ int win_surface_grant(int pid, uint64_t pml4, uint32_t *out_w, uint32_t *out_h,
             }
         }
     }
+    return 1;
+}
+
+static void unmap_scanouts(uint64_t pml4, int count, uint64_t pages) {
+    for (int b = 0; b < count; b++)
+        for (uint64_t i = 0; i < pages; i++)
+            vmm_unmap_user_page(pml4, WIN_FB_VADDR + (uint64_t)b * WIN_FB_BUFFER_STRIDE + i * 4096);
+}
+
+// The buffer nobody should be drawing into: neither the last flipped
+// nor the one being scanned. With one buffer there is no choice.
+static int free_back(void) {
+    if (g_count <= 1) return 0;
+    int live = display_scanout_live();
+    for (int b = 0; b < g_count; b++)
+        if (b != g_front && b != live) return b;
+    return 0;
+}
+
+int win_surface_grant(int pid, uint64_t pml4, uint32_t *out_w, uint32_t *out_h,
+                      uint32_t *out_pitch, uint32_t *out_bpp,
+                      int *out_count, int *out_back) {
+    uint64_t phys = gfx_framebuffer_phys();
+    uint32_t pitch = gfx_framebuffer_pitch();
+    int height = gfx_height();
+    if (!phys || !pitch || height <= 0) {
+        klog_write("win_surface: no framebuffer to grant\n");
+        return 0;
+    }
+
+    // Re-granting to the same holder is legal and idempotent -- a
+    // compositor that restarts its own mapping should not have to
+    // deregister first. Revoke any previous grant, including another
+    // process's: the role is single, so a grant to a new pid means the
+    // old one is no longer the compositor.
+    if (g_holder) win_surface_revoke(g_holder);
+
+    uint64_t size = (uint64_t)pitch * (uint64_t)height;
+    uint64_t pages = (size + 4095) / 4096;
+    // THREE OR ONE. The flip never waits, so the buffer handed back must
+    // be neither the one on screen nor the one just asked for; two
+    // buffers cannot promise that and a present into the live one tears
+    // worse than no flip at all (it did).
+    int count = display_scanout_count();
+    if (count < 3 || pages * 4096 > WIN_FB_BUFFER_STRIDE) count = 1;
+    if (count > 3) count = 3;
+
+    if (!map_scanouts(pml4, phys, count, pages)) return 0;
 
     // Pad up to the high-water mark -- see g_span_pages.
     if ((int)count > g_span_count) g_span_count = count;
@@ -134,6 +168,7 @@ int win_surface_grant(int pid, uint64_t pml4, uint32_t *out_w, uint32_t *out_h,
 
 void win_surface_revoke(int pid) {
     if (!g_holder || g_holder != pid) return;
+    win_surface_lease_end(0);
     // The whole span, padding included: a padded page is a real mapping.
     for (int b = 0; b < g_span_count; b++)
         for (uint64_t i = 0; i < g_span_pages; i++)
@@ -152,6 +187,9 @@ void win_surface_revoke(int pid) {
 
 int win_surface_remode(void) {
     if (!g_holder) return 1;
+    // A lessee's mapping is the OLD geometry; the compositor learns of
+    // the mode change (WIN_EV_SCREEN) and re-leases if it still wants to.
+    win_surface_lease_end(0);
     int pid = g_holder;
     uint64_t pml4 = g_pml4;
     uint32_t w, h, pitch, bpp;
@@ -162,7 +200,11 @@ int win_surface_remode(void) {
 }
 
 int win_surface_present(int pid, int x, int y, int w, int h, int *out_back) {
-    if (!g_holder || g_holder != pid) return 0;
+    if (!g_holder) return 0;
+    // The lessee presents while the lease stands, and ONLY the lessee:
+    // two presenters flipping one set of buffers would each hand the
+    // other a live one to draw into.
+    if (pid != (g_lessee ? g_lessee : g_holder)) return 0;
 
     // The holder drew into g_back; ask for it on screen. The next back
     // buffer is the one that is neither that nor the one being scanned
@@ -171,11 +213,7 @@ int win_surface_present(int pid, int x, int y, int w, int h, int *out_back) {
     // and the buffer it replaces is the live one, which is excluded too.
     if (g_count > 1) {
         if (display_flip(g_back)) g_front = g_back;
-        int live = display_scanout_live();
-        int next = 0;
-        for (int b = 0; b < g_count; b++)
-            if (b != g_front && b != live) { next = b; break; }
-        g_back = next;
+        g_back = free_back();
     }
     if (out_back) *out_back = g_back;
 
@@ -192,4 +230,80 @@ int win_surface_present(int pid, int x, int y, int w, int h, int *out_back) {
 
     display_flush(x, y, w, h);
     return 1;
+}
+
+// --- the lease ---------------------------------------------------------
+
+int win_surface_lease(int pid, uint64_t pml4, uint32_t *out_w, uint32_t *out_h,
+                      uint32_t *out_pitch, uint32_t *out_bpp,
+                      int *out_count, int *out_back) {
+    if (!g_holder || g_lessee || pid <= 0 || pid == g_holder || !pml4) return 0;
+    uint64_t phys = gfx_framebuffer_phys();
+    if (!phys) return 0;
+    // The lessee could exit while its tables are being written -- the
+    // kernel is preemptible in a syscall -- so the walk is one piece.
+    scheduler_preempt_disable();
+    int ok = map_scanouts(pml4, phys, g_count, g_pages);
+    scheduler_preempt_enable();
+    if (!ok) return 0;
+    if (g_stale == pid) { g_stale = 0; g_stale_pml4 = 0; } // the same pages, mapped again
+
+
+    g_lessee      = pid;
+    g_lessee_pml4 = pml4;
+    // The lessee inherits the holder's place in the rotation: the
+    // holder's back is free by construction, and the flips carry on
+    // from the same front.
+    if (out_count) *out_count = g_count;
+    if (out_back)  *out_back  = g_back;
+    if (out_w)     *out_w     = (uint32_t)gfx_width();
+    if (out_h)     *out_h     = (uint32_t)gfx_height();
+    if (out_pitch) *out_pitch = gfx_framebuffer_pitch();
+    if (out_bpp)   *out_bpp   = gfx_framebuffer_bpp();
+    klog_printf("win_surface: leased the framebuffer to pid %d\n", pid);
+    return 1;
+}
+
+void win_surface_lease_end(int *out_back) {
+    if (out_back) *out_back = g_back;
+    if (!g_lessee) return;
+    // The display comes back NOW; the pages stay mapped until the
+    // client has presented from its own buffer (win_surface_lease_unmap),
+    // because it may be in the middle of a frame into these.
+    if (g_stale && g_stale != g_lessee) win_surface_lease_unmap(g_stale);
+    g_stale = g_lessee;
+    g_stale_pml4 = g_lessee_pml4;
+    klog_printf("win_surface: lease from pid %d ended\n", g_lessee);
+    g_lessee = 0;
+    g_lessee_pml4 = 0;
+    g_back = free_back();
+    if (out_back) *out_back = g_back;
+}
+
+void win_surface_lease_unmap(int pid) {
+    if (!g_stale || g_stale != pid) return;
+    // g_stale_pml4 set means the space is ALIVE: its teardown clears it
+    // (win_surface_space_gone) before a page of it is freed.
+    scheduler_preempt_disable();
+    unmap_scanouts(g_stale_pml4, g_count, g_pages);
+    scheduler_preempt_enable();
+    g_stale = 0;
+    g_stale_pml4 = 0;
+}
+
+void win_surface_space_gone(uint64_t pml4) {
+    if (!pml4) return;
+    if (g_lessee && g_lessee_pml4 == pml4) win_surface_client_gone(g_lessee);
+    if (g_stale && g_stale_pml4 == pml4) { g_stale = 0; g_stale_pml4 = 0; }
+}
+
+void win_surface_client_gone(int pid) {
+    if (g_stale && g_stale == pid) { g_stale = 0; g_stale_pml4 = 0; }
+    if (!g_lessee || g_lessee != pid) return;
+    klog_printf("win_surface: lessee pid %d is gone -- back to the compositor\n", pid);
+    g_lessee = 0;
+    g_lessee_pml4 = 0;
+    // What it left on screen stays until the compositor's next present;
+    // the buffer being scanned is one of the shared three either way.
+    g_back = free_back();
 }

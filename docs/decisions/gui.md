@@ -6947,3 +6947,60 @@ side to err on for a file the user is expected to own.
 icon; it now only governs the desktop menu's Open > submenu. Kept
 rather than removed because the parser, the test and the entries all
 carry it and the submenu is a real second surface.
+
+## A fullscreen client is leased the display's scanouts, not imported into the GGTT
+
+Asked and answered 2026-09-11, when direct scanout was built for the
+laptop's Intel display (`docs/scanout-design.md`). The obvious design
+is Wayland's: import the client's buffer into KMS and put it on the
+primary plane. Here that buffer is a page list of scattered frames,
+write-back cached, with an unaligned stride -- scanning it out means a
+GGTT entry per frame, a write-combining retype per frame (each a 2 MiB
+identity-map split) and a cache flush per present. That is the blitter
+measurement's cost with none of its payoff.
+
+**Chosen: the compositor LENDS its own grant.** `win_surface_grant()`
+already gives the compositor three panel-sized scanouts, WC-typed and
+GGTT-mapped, flipped by one register write; `WIN_REQ_FB_LEASE` maps
+the same three into the fullscreen client and lets it present. That is
+`drmModeCreateLease`'s shape -- a compositor handing a CRTC to another
+process, as a VR runtime is handed a headset -- with direct scanout's
+policy on top: per frame, topmost, unoccluded, opted in. Nothing in the
+GPU driver changed, and the same mechanism works on virtio-gpu, which
+is what makes it testable in the suite rather than only by eye.
+
+**What it costs.** The client draws into write-combining memory, so it
+must draw write-only -- `UAPP_SCANOUT` is that promise, and a widget
+app that blends must not make it (it stays composed, correctly, with
+its fullscreen state). And a fullscreen client's size must be the
+panel's, which it is by definition of the state. What it does NOT cost
+is a second copy of the buffer-rotation rule: the kernel's mailbox
+(three buffers, never wait, `scanout_live()` decides the free one)
+serves the lessee exactly as it serves the compositor.
+
+**Why the hardware cursor is a precondition.** With the compositor not
+presenting, its software cursor is not drawn; a lease without a cursor
+plane would leave the pointer invisible. `-vga std` therefore composes
+a fullscreen window, and the Intel driver and virtio-gpu lease. The
+alternative -- the compositor drawing a cursor into the lessee's buffer
+-- would have the two processes writing one buffer, which is the race
+the whole design avoids.
+
+**Why a lease ends in two phases.** The display is the compositor's
+again the instant it asks, but the ex-lessee keeps its mapping until
+its next present from its own buffer. A game draws continuously, so
+when the lease ends it is mid-frame into the leased buffer; the first
+version unmapped at once and DOOM took a page fault at `WIN_FB_VADDR`
+20 ms later, on the laptop, twice. That is `wl_buffer.release`'s rule
+-- a buffer is the client's until the compositor says otherwise, and
+"otherwise" cannot be while the client is drawing into it. The kernel
+is told of a dying address space before a page of it is freed
+(`win_surface_space_gone()`), which is what makes the deferred unmap
+safe: a mapping it still holds is in a space that still exists.
+
+**Why the compositor forgets its buffers when a lease ends.** Buffer
+age (`ugfx_screen_present()`'s damage union) assumes every scanout holds
+one of this compositor's earlier frames. After a lease they hold the
+client's, and the rotation index moved; `ugfx_screen_forget()` resets
+both, so the first present after a lease is a whole screen. A partial
+one showed the client's last frame through the desktop.

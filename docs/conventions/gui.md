@@ -360,19 +360,44 @@ this the obvious way), not from how much history it accumulated.
   than its index, which `bring_to_front()` moves, and uses the desktop
   icons' threshold. Both route through `wm_toggle_maximize()`, so a
   fixed-size window refuses all three the same way.
-- **A DESKTOP-SIZED WINDOW IS "MAXIMIZED", AND THERE IS NO FULLSCREEN
-  STATE.** `wm_toggle_maximize()` (`userland/wm/wm_input.c`) fills the
-  screen ABOVE the taskbar and keeps the title bar; nothing removes
-  chrome or covers the taskbar, and no client can ask for it. That is
-  the same one implementation behind both the title-bar button and the
-  context menu, and the client half is the part to read before touching
-  it: a client is PROPOSED the new content size (the same configure/ack
-  the resize grip uses, and the shape Wayland's
-  `xdg_toplevel.configure` has) and `wm_client.c`'s
-  `on_window_resized()` adopts w/h when the client answers. Imposing a
-  size instead produces the stale-buffer failure above. A real
-  fullscreen state is `docs/roadmap.md`'s window-size-as-a-property
-  item.
+- **"MAXIMIZED" STOPS AT THE TASKBAR AND KEEPS THE TITLE BAR; FULLSCREEN
+  IS A FLAG BESIDE THE STATE, AND `window_has_chrome()` IS THE ONE PLACE
+  IT MEANS "NO CHROME".** `wm_toggle_maximize()` and
+  `wm_set_fullscreen()` (`userland/wm/wm_input.c`) share the shape: the
+  client is PROPOSED the new content size (the configure/ack the resize
+  grip uses, Wayland's `xdg_toplevel.configure`) and `wm_client.c`
+  adopts w/h on the next present. Fullscreen is `win->fullscreen`, not
+  a fourth `enum window_state`, so every `state ==` test stays true and
+  `fs_prev` says where leaving lands. A window that has ADOPTED the
+  screen's size (`wm_top_covers_screen()`) hides the wallpaper, the
+  taskbar and everything under it -- and the taskbar takes no clicks --
+  but until the adoption the desktop is still drawn under the old
+  buffer. A client asks with `uapp_set_fullscreen()`
+  (`WIN_REQ_FULLSCREEN`); the window menu offers it for any resizable
+  window. Never persisted (`wm_geometry_save()` stores the saved rect).
+  See `docs/scanout-design.md`.
+- **A FULLSCREEN CLIENT MAY BE LEASED THE DISPLAY'S OWN SCANOUTS, AND
+  WHILE IT HOLDS THEM THE COMPOSITOR DRAWS NOTHING.**
+  `WIN_REQ_FB_LEASE` (`kernel/proc/win_surface.c`) maps the grant's
+  three buffers into the client at `WIN_FB_VADDR` and lets it
+  `WIN_REQ_FB_PRESENT` for itself -- a KMS lease, never an import of
+  the client's scattered write-back buffer (`docs/scanout-design.md`).
+  `wm_scanout.c` decides once per frame: topmost, fullscreen, adopted,
+  `WIN_HINT_SCANOUT` (`UAPP_SCANOUT`: the app draws WRITE-ONLY -- the
+  buffers are write-combining, and a widget that blends reads them),
+  no popup, no overlay, hardware cursor active. **Three traps.** The
+  compositor must not present under a lease (`wm_render_frame()`
+  returns first) or its frame overwrites the client's. Ending a lease
+  must `ugfx_screen_forget()` -- the lessee's flips moved the rotation
+  and the buffers hold its frames, so the next present is a whole
+  screen. **And a lease ends in TWO PHASES**: the display comes back at
+  once, the ex-lessee's pages come off only after its next present from
+  its own buffer (`wm_scanout_client_presented()` -> `WIN_REQ_FB_LEASE`
+  with `b = 1`), because a game is mid-frame into them when the lease
+  ends -- the immediate unmap killed DOOM with a page fault at
+  `WIN_FB_VADDR`. A dying address space is forgotten before a page of
+  it is freed (`win_surface_space_gone()` in `release_process_state()`),
+  so the deferred unmap never writes freed tables.
 
 - **`apps/ui/` IS GONE, and the GUI toolkit is `userland/ui/`.** The
   last thing in it was `ui_scrollback.{c,h}`, which survived only

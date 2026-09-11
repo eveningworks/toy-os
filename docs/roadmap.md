@@ -684,6 +684,8 @@ run on, not by order.
 - [ ] Screen blanking: the backlight off on idle or lid, never persisted, and any key or motion brings it back
 - [ ] Intel modesetting: external outputs on DDI B-D, a second EDID and hotplug -- waits for a laptop with a usable port
 - [ ] Intel blitter acceleration on the BCS ring -- measured 2026-09-03: a software copy is 1.6 ms a screen, not worth it at 1080p
+- [x] ~~A fullscreen state, and direct scanout for a fullscreen client~~ DONE 2026-09-11 -- a lease, `docs/scanout-design.md`
+- [ ] The Broadwell sprite plane: a top-most window scanned out at its position, opaque, the desktop composed around it
 - [x] ~~Runtime mode switching: a display driver can set a mode after boot~~ DONE 2026-09-02 -- `config set resolution`, every QEMU adapter
 - [ ] Initcall levels: drivers declare a boot slot instead of being called by name from `kernel_main()`
 - [x] ~~Loadable drivers: `modload`, one PCI driver, `/etc/modules` -- `docs/modules-design.md`~~ DONE 2026-09-10

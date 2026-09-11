@@ -317,7 +317,7 @@ static void cmd_windows(struct dbg_out *o, int json) {
             dbg_out_printf(o, "\"buf\":{\"front\":%d,\"gen\":%u},",
                          w->client_front, w->client_gen[w->client_front]);
             dbg_out_printf(o, "\"state\":\"%s\",\"focused\":%s,\"resizable\":%s}",
-                         state_name(w->state),
+                         w->fullscreen ? "fullscreen" : state_name(w->state),
                          (i == wm_focus_index()) ? "true" : "false",
                          w->resizable ? "true" : "false");
             // ALL OR NOTHING: a half-written element in front of the
@@ -347,7 +347,7 @@ static void cmd_windows(struct dbg_out *o, int json) {
         col_int(o, window_content_x(w), 5); col_int(o, window_content_y(w), 5);
         col_int(o, window_content_w(w), 5); col_int(o, window_content_h(w), 5);
         dbg_out_write(o, " ");
-        dbg_out_write(o, state_name(w->state));
+        dbg_out_write(o, w->fullscreen ? "fullscreen" : state_name(w->state));
         if (w->popup) dbg_out_write(o, " popup");
         dbg_out_write(o, (i == wm_focus_index()) ? " (focused)\r\n" : "\r\n");
     }
@@ -721,13 +721,13 @@ static void cmd_volume(struct dbg_out *o, int json) {
 static void cmd_fb(struct dbg_out *o, int json) {
     const struct ugfx_screen *s = &g_wm_screen;
     if (json) {
-        dbg_out_printf(o, "{\"buffers\":%d,\"back\":%d,\"presents\":%u,\"flips\":%u}\r\n",
-                     s->buffers, s->back_index, s->presents, s->flips);
+        dbg_out_printf(o, "{\"buffers\":%d,\"back\":%d,\"presents\":%u,\"flips\":%u,\"lease\":%d}\r\n",
+                     s->buffers, s->back_index, s->presents, s->flips, wm_scanout_lessee());
         return;
     }
-    dbg_out_printf(o, "fb: %d scanout%s, back=%d, presents=%u flips=%u\r\n",
+    dbg_out_printf(o, "fb: %d scanout%s, back=%d, presents=%u flips=%u lease=%d\r\n",
                  s->buffers, s->buffers == 1 ? "" : "s", s->back_index,
-                 s->presents, s->flips);
+                 s->presents, s->flips, wm_scanout_lessee());
 }
 
 // The brightness flyout: the same shape as cmd_volume(), plus whether

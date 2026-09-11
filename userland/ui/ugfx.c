@@ -1069,6 +1069,12 @@ int ugfx_screen_remode(struct ugfx_screen *sc) {
     return 1;
 }
 
+void ugfx_screen_forget(struct ugfx_screen *sc, int back) {
+    if (!sc) return;
+    if (back >= 0 && back < sc->buffers) sc->back_index = back;
+    for (int i = 0; i < UGFX_SCREEN_BUFFERS; i++) sc->painted_seq[i] = 0;
+}
+
 void ugfx_screen_present(struct ugfx_screen *sc) {
     if (!sc || !sc->back.pixels) return;
 

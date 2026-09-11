@@ -730,7 +730,8 @@ whenever a headline here tells you something you did not already know.
 - **A FONT FACE IS NAMED BY ITS FILENAME, AND `builtin` IS NOT A FACE.**
 - **`WIN_CLIENT_MAX_W/H` TRACKS THE DISPLAY CEILING, AND A SCREEN BIGGER THAN IT BREAKS MAXIMIZE SILENTLY.**
 - **A WINDOW HAS ROUNDED CORNERS UNLESS IT IS MAXIMIZED, AND THE CORNER IS BLENDED OVER WHAT IS REALLY BENEATH**
-- **A DESKTOP-SIZED WINDOW IS "MAXIMIZED", AND THERE IS NO FULLSCREEN STATE.**
+- **"MAXIMIZED" STOPS AT THE TASKBAR AND KEEPS THE TITLE BAR; FULLSCREEN IS A FLAG BESIDE THE STATE, AND `window_has_chrome()` IS THE ONE PLACE IT MEANS "NO CHROME"** -- `uapp_set_fullscreen()` / `WIN_REQ_FULLSCREEN`; the taskbar is neither drawn nor clickable under a window that has ADOPTED the screen's size
+- **A FULLSCREEN CLIENT MAY BE LEASED THE DISPLAY'S OWN SCANOUTS, AND WHILE IT HOLDS THEM THE COMPOSITOR DRAWS NOTHING** -- `WIN_REQ_FB_LEASE`, a KMS lease rather than a buffer import; `UAPP_SCANOUT` means write-only; `wm_scanout.c` decides per frame, ending a lease `ugfx_screen_forget()`s, and the ex-lessee's pages come off only after its next present (a game is mid-frame into them)
 - **`-vga virtio` IS A REAL DISPLAY DRIVER, and nothing else boots it**
 - **`apps/ui/` IS GONE, and the GUI toolkit is `userland/ui/`**
 - **Ring-3 GUI apps are written against Toykit's `uapp`, and a new one is a `.c` file in `userland/gui/` with NO Makefile edit.**
@@ -1459,7 +1460,7 @@ cost".
   `resize_stride_test.py`,
   `sched_gui_test.py`, `screen_surface_test.py`, `scrollbar_test.py`,
   `settings_test.py`, `single_instance_test.py`, `taskmgr_test.py`,
-  `uapp_test.py`, `uiclient_test.py`, `uidemo_test.py`,
+  `uapp_test.py`, `fullscreen_test.py`, `uiclient_test.py`, `uidemo_test.py`,
   `uterm_test.py`, `volume_test.py`, `wallpaper_mode_test.py`,
   `winclient_test.py`, `window_geometry_test.py`.
 - **Run on demand, not in the gate** -- `ahci_test.py`,

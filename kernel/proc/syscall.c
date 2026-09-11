@@ -16,6 +16,7 @@
 #include "futex.h"
 #include "syscall_table.h"
 #include "vmm.h"
+#include "win_surface.h" // win_surface_space_gone()
 #include "scheduler.h"
 #include "strace.h"
 #include "sound.h"
@@ -39,6 +40,7 @@ static void release_process_state(uint64_t pml4_phys) {
     // a recycled CR3 landing on the same value later must not silently
     // inherit the trace (see strace.c).
     strace_release(pml4_phys);
+    win_surface_space_gone(pml4_phys); // before a page of it is freed
 
     fd_release_all(pml4_phys);
     proc_syscall_release(pml4_phys);

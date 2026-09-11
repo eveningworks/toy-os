@@ -122,6 +122,9 @@ void wm_overlay_close_others(const char *keep);
 // it closes, or the next close_others() spares an overlay nobody meant
 // to keep.
 void wm_overlay_set_parent(const char *name);
+// Is ANY overlay up? What the lease policy asks: an overlay is drawn by
+// this compositor, and a compositor that is not presenting cannot show it.
+int wm_overlay_any_open(void);
 const char *wm_overlay_parent(void);
 
 // Places a popup of (w, h) whose preferred top-left is (want_x,

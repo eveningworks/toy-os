@@ -64,4 +64,28 @@ int win_surface_present(int pid, int x, int y, int w, int h, int *out_back);
 // Which pid holds the grant, or 0. For diagnostics (`gui compositor`).
 int win_surface_holder(void);
 
+// The lease (docs/scanout-design.md): the holder's scanouts mapped into
+// `pid`'s address space too, so that process may present. Geometry
+// answered as win_surface_grant() answers it; `*out_back` is the
+// buffer the lessee draws into first. Refused with no holder, with a
+// lease already standing, or for the holder itself.
+int win_surface_lease(int pid, uint64_t pml4, uint32_t *out_w, uint32_t *out_h,
+                      uint32_t *out_pitch, uint32_t *out_bpp,
+                      int *out_count, int *out_back);
+// Ends the lease -- the holder presents again -- and answers in
+// `*out_back` the buffer it should draw into next. The lessee's pages
+// stay MAPPED until win_surface_lease_unmap(): it may be mid-frame.
+void win_surface_lease_end(int *out_back);
+// Takes an ex-lessee's pages off, once its next present from its own
+// buffer has shown it switched. A no-op for anyone else.
+void win_surface_lease_unmap(int pid);
+// An address space is about to be destroyed (exit and kill both pass
+// through release_process_state before freeing a page): a lessee or an
+// ex-lessee in it is forgotten WITHOUT its tables being written.
+void win_surface_space_gone(uint64_t pml4);
+int  win_surface_lessee(void);
+// A process died. If it was the lessee the lease ends WITHOUT touching
+// its address space, which is already going.
+void win_surface_client_gone(int pid);
+
 #endif

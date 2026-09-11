@@ -829,7 +829,7 @@ int wm_cursor_shape_changed(int mx, int my) {
 #define FRAME_OUTLINE UTHEME_BORDER
 
 static int corner_radius(const struct window *win) {
-    if (win->state == WIN_MAXIMIZED) return 0;
+    if (win->state == WIN_MAXIMIZED || win->fullscreen) return 0;
     int r = ugfx_char_h() / 2;
     if (r < 4) r = 4;
     if (r > CORNER_MAX_R) r = CORNER_MAX_R;
@@ -1349,10 +1349,22 @@ static int window_intersects_damage(const struct window *w) {
 // so it can be run TWICE: once damage-limited as normal, and once
 // unrestricted for the verify mode below, which is only meaningful if
 // both renders go through identical code.
+// The top window is fullscreen AND has adopted the screen's size: it
+// covers everything, so the wallpaper, the taskbar and the windows
+// under it are not painted. Before the adoption the proposal is still
+// in flight and the old buffer does not cover the screen.
+int wm_top_covers_screen(void) {
+    int focus = wm_focus_index();
+    if (focus < 0) return 0;
+    const struct window *w = &windows[focus];
+    return w->fullscreen && w->x == 0 && w->y == 0 && w->w >= screen_w && w->h >= screen_h;
+}
+
 static void render_scene(int mx, int my, int has_damage) {
     apply_scene_clip(has_damage);
 
-    desktop_draw(); // background + icon grid -- replaces the old bare ugfx_fill(wm_surface(), ) fill, see desktop.h
+    int covered = wm_top_covers_screen();
+    if (!covered) desktop_draw(); // background + icon grid, see desktop.h
 
     // Phase 3: a window whose rect doesn't overlap this frame's damage
     // box gets skipped entirely -- not just clipped. Its chrome and
@@ -1368,7 +1380,8 @@ static void render_scene(int mx, int my, int has_damage) {
     for (int i = 0; i < window_count; i++) {
         if (windows[i].state == WIN_MINIMIZED) continue;
         if (has_damage && !window_intersects_damage(&windows[i])) continue;
-        if (windows[i].popup) {
+        if (covered && i < focus && !windows[i].popup) continue; // under the fullscreen window
+        if (windows[i].popup || windows[i].fullscreen) {
             // NO CHROME, NO CORNERS, NO GRIP -- and nothing at all until
             // the client's first present: the buffer opened at create is
             // whatever the client has drawn so far, which for one frame
@@ -1403,7 +1416,7 @@ static void render_scene(int mx, int my, int has_damage) {
         corners_round(&windows[i]);    // last: the arc cuts chrome, content and grip alike
     }
 
-    draw_taskbar();
+    if (!covered) draw_taskbar();
     // Every open overlay, LEAST modal first, from the one table that
     // also decides who gets a click (wm_overlay.h). The order used to
     // be spelled out here and again, backwards, in wm_input.c -- two
@@ -1538,6 +1551,12 @@ uint32_t wm_scene_frames(void) { return g_scene_frames; }
 
 void wm_render_frame(int mx, int my) {
     g_scene_frames++;
+    // The lease decision first: while a client holds the display's
+    // buffers this compositor's frame is not on screen, so it is not
+    // drawn. Ending a lease inside update() asks for a full repaint,
+    // which the rest of this frame then does.
+    wm_scanout_update();
+    if (wm_scanout_active()) { damage_reset(); return; }
     compute_window_damage();
 
     // The FIRST frame of a GUI session is always a full repaint, never

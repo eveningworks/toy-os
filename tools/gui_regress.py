@@ -116,6 +116,7 @@ TOOLS = [
     ("clipboard", "clipboard_test.py", "the system text clipboard, across two apps"),
     ("uterm", "uterm_test.py", "Terminal + the ring-3 shell"),
     ("uapp", "uapp_test.py", "the TWP resize handshake"),
+    ("fullscreen", "fullscreen_test.py", "the fullscreen state and the display lease, on virtio-gpu"),
     ("stride", "resize_stride_test.py", "a resized window's buffers agree with its size"),
     ("keyup", "keyup_test.py", "key RELEASES reaching a ring-3 client"),
     ("hover", "hover_test.py", "a hover change REPAINTS, not just damages"),

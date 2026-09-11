@@ -84,6 +84,7 @@ static int title_btn_hit_test(int mx, int my, int *out_kind) {
         struct window *w = &windows[i];
         if (w->state == WIN_MINIMIZED) continue;
         if (!uui_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
+        if (!window_has_chrome(w)) return -1;      // fullscreen: nothing to press
         if (my >= w->y + WM_TITLEBAR_H) return -1; // topmost window here, but below its title bar
         struct btn_rects r = title_buttons(w);
         if (uui_hit(r.min_x, r.y, r.size, r.size, mx, my)) { *out_kind = 0; return i; }
@@ -100,7 +101,7 @@ int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom) {
         if (w->state == WIN_MINIMIZED) continue;
         if (!uui_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
 
-        if (w->state == WIN_MAXIMIZED) return -1; // maximized windows aren't resizable
+        if (w->state == WIN_MAXIMIZED || w->fullscreen) return -1; // neither is resizable by hand
         if (!w->resizable) return -1; // fixed-size window -- see wm.h
         if (my < w->y + WM_TITLEBAR_H) return -1; // over the title bar, not the resize border
 
@@ -151,7 +152,7 @@ void wm_handle_left_click(int mx, int my) {
         }
     }
 
-    if (my >= screen_h - taskbar_h) {
+    if (my >= screen_h - taskbar_h && !wm_top_covers_screen()) {
         int ty = screen_h - taskbar_h;
         int sbw = start_btn_w();
         if (uui_hit(4, ty, sbw, taskbar_h, mx, my)) {
@@ -224,7 +225,7 @@ void wm_handle_left_click(int mx, int my) {
         if (w->state == WIN_MINIMIZED) continue;
         if (!uui_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
 
-        if (!w->popup && my < w->y + WM_TITLEBAR_H) {
+        if (window_has_chrome(w) && my < w->y + WM_TITLEBAR_H) {
             struct btn_rects r = title_buttons(w);
             // Windows/KDE-style delayed commit: mouse-down here only
             // ARMS the button (shows a pressed visual) -- the actual
@@ -445,6 +446,56 @@ static void ctx_toggle_maximize_window(void *ctx) {
     wm_toggle_maximize(*(int *)ctx);
 }
 
+// Fullscreen: the whole screen, no chrome, no taskbar. The window's
+// state stays what it was -- fs_prev remembers it -- so leaving lands
+// back on the maximized or the saved rect. A client is PROPOSED the
+// size, as for maximize; the lease (wm_scanout.c) waits until it has
+// adopted it.
+void wm_set_fullscreen(int i, int on) {
+    if (i < 0 || i >= window_count) return;
+    struct window *w = &windows[i];
+    if (!w->resizable || w->popup) return;
+    on = on ? 1 : 0;
+    if (w->fullscreen == on) return;
+    int is_client = wm_client_is_client_window(w);
+
+    wm_damage_rect(w->x, w->y, w->w, w->h);
+    if (on) {
+        w->fs_prev = w->state;
+        if (w->state != WIN_MAXIMIZED) {
+            w->saved_x = w->x; w->saved_y = w->y;
+            w->saved_w = w->w; w->saved_h = w->h;
+        }
+        w->fullscreen = 1;
+        w->x = 0; w->y = 0;
+        if (is_client) wm_client_send_resize(w, screen_w, screen_h);
+        else { w->w = screen_w; w->h = screen_h; }
+        bring_to_front(i);
+    } else {
+        w->fullscreen = 0;
+        if (w->fs_prev == WIN_MAXIMIZED) {
+            w->state = WIN_MAXIMIZED;
+            w->x = 0; w->y = 0;
+            if (is_client)
+                wm_client_send_resize(w, screen_w - 2, screen_h - taskbar_h - WM_TITLEBAR_H - 2);
+            else { w->w = screen_w; w->h = screen_h - taskbar_h; }
+        } else {
+            w->state = WIN_NORMAL;
+            w->x = w->saved_x; w->y = w->saved_y;
+            if (is_client)
+                wm_client_send_resize(w, w->saved_w - 2, w->saved_h - WM_TITLEBAR_H - 2);
+            else { w->w = w->saved_w; w->h = w->saved_h; }
+        }
+    }
+    wm_damage_rect(w->x, w->y, w->w, w->h);
+    redraw_pending = 1;
+}
+
+static void ctx_toggle_fullscreen_window(void *ctx) {
+    int i = *(int *)ctx;
+    if (i >= 0 && i < window_count) wm_set_fullscreen(i, !windows[i].fullscreen);
+}
+
 // Launching DISMISSES the Start menu, which is what a left-click on the
 // same row does and what every desktop does when a window opens. "Add to
 // desktop" deliberately does not: it is a non-launching verb, and
@@ -471,12 +522,14 @@ static void wm_open_window_menu(int idx, int mx, int my) {
     if (idx < 0 || idx >= window_count) return;
     const struct window *w = &windows[idx];
     g_ctx_window_target = idx;
-    static struct context_menu_item items[3];
+    static struct context_menu_item items[4];
     int n = 0;
     items[n].label = "Minimize"; items[n].on_select = ctx_minimize_window; items[n].ctx = &g_ctx_window_target; n++;
     if (w->resizable) {
         items[n].label = (w->state == WIN_MAXIMIZED) ? "Restore" : "Maximize";
         items[n].on_select = ctx_toggle_maximize_window; items[n].ctx = &g_ctx_window_target; n++;
+        items[n].label = w->fullscreen ? "Exit Fullscreen" : "Fullscreen";
+        items[n].on_select = ctx_toggle_fullscreen_window; items[n].ctx = &g_ctx_window_target; n++;
     }
     items[n].label = "Close"; items[n].on_select = ctx_close_window; items[n].ctx = &g_ctx_window_target; n++;
     context_menu_open_at(mx, my, items, n);
@@ -524,7 +577,7 @@ void wm_handle_right_click(int mx, int my) {
         }
     }
 
-    if (my >= screen_h - taskbar_h) {
+    if (my >= screen_h - taskbar_h && !wm_top_covers_screen()) {
         taskbar_handle_right_click(mx, my);
         return; // taskbar area, but not over an app button (or the Start button -- no menu there)
     }

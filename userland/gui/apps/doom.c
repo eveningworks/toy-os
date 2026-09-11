@@ -285,13 +285,24 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 // keeps its own `gamekeydown[]` and wants every transition, and deciding
 // here which ones matter would be re-implementing its key bindings from
 // the outside.
+// Alt+Enter toggles fullscreen -- the one key the port does not see,
+// because it is the desktop's convention (every DOOM port since the
+// DOS days), not the game's binding.
+static int is_fullscreen_toggle(int key, unsigned mods) {
+    return (key == 0x0A || key == 0x0D) && (mods & KEY_MOD_ALT);
+}
+
 static void on_key(struct uapp *a, int key, unsigned mods) {
-    (void)a; (void)mods;
+    if (is_fullscreen_toggle(key, mods)) {
+        uapp_set_fullscreen(a, !uapp_fullscreen(a));
+        return;
+    }
     dg_push_key(key, 1);
 }
 
 static void on_key_up(struct uapp *a, int key, unsigned mods) {
-    (void)a; (void)mods;
+    (void)a;
+    if (is_fullscreen_toggle(key, mods)) return;
     dg_push_key(key, 0);
 }
 
@@ -384,7 +395,10 @@ int main(int argc, char **argv) {
         // letterboxed to 4:3 at whatever size it gets, so there is no
         // size at which the game looks wrong -- which is what makes
         // opting in safe with no on_resize at all.
-        .flags  = UAPP_SINGLE_INSTANCE | UAPP_RESIZABLE,
+        // SCANOUT: the scaler stores every pixel of the content rect
+        // and reads none back, so fullscreen may draw the display's own
+        // buffer (docs/scanout-design.md).
+        .flags  = UAPP_SINGLE_INSTANCE | UAPP_RESIZABLE | UAPP_SCANOUT,
         // 640x480, not 640x400: see DOOM_ASPECT_W above. The default
         // window is the aspect-corrected size, so it fills exactly.
         .w      = DOOM_RESX,

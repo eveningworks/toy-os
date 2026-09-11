@@ -159,8 +159,8 @@ static void unmap_client_window(struct window *win);
 static void adopt_content_size(struct window *win, int w, int h) {
     win->client_w = w;
     win->client_h = h;
-    win->w = win->popup ? w : w + 2;
-    win->h = win->popup ? h : h + WM_TITLEBAR_H + 2;
+    win->w = window_has_chrome(win) ? w + 2 : w;
+    win->h = window_has_chrome(win) ? h + WM_TITLEBAR_H + 2 : h;
 }
 
 static int on_window_created(int pid, uint32_t id,
@@ -377,6 +377,7 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
                               int w, int h) {
     int idx = find_client_window(pid, id);
     if (idx < 0) return;
+    wm_scanout_client_presented(pid);   // a present from its OWN buffer
 
     struct window *win = &windows[idx];
 
@@ -467,6 +468,7 @@ static void on_window_hints(int pid, uint32_t id, unsigned flags, int min_w, int
     if (idx < 0) return;
 
     windows[idx].resizable = (flags & WIN_HINT_RESIZABLE) ? 1 : 0;
+    windows[idx].scanout_ok = (flags & WIN_HINT_SCANOUT) ? 1 : 0;
     windows[idx].min_w = min_w;
     windows[idx].min_h = min_h;
 
@@ -823,6 +825,11 @@ void wm_client_chan_pump(void) {
         case WIN_REQ_HINTS:
             on_window_hints(from, m.window, (unsigned)m.a, m.b, m.c);
             break;
+        case WIN_REQ_FULLSCREEN: {
+            int idx = find_client_window(from, m.window);
+            if (idx >= 0) wm_set_fullscreen(idx, m.a);
+            break;
+        }
         case WIN_REQ_CURSOR:
             on_window_cursor(from, m.window, m.a);
             break;
@@ -1211,6 +1218,17 @@ void wm_client_send_mouse(struct window *win, int type, int x, int y, unsigned b
 // answers with WIN_REQ_RESIZE and on_window_resized() above adopts the
 // result; if it ignores this, nothing happens and the window stays as
 // it was. Same politeness as the close button.
+void wm_client_send_scanout(struct window *win, int on, uint32_t pitch, int count, int back) {
+    if (!wm_client_is_client_window(win)) return;
+    struct win_event ev = {0};
+    ev.type = WIN_EV_SCANOUT;
+    ev.window = win->client_win;
+    ev.a = on ? 1 : 0;
+    ev.b = (int32_t)pitch;
+    ev.mods = (uint32_t)(count & 0xFF) | ((uint32_t)back << 8);
+    if (!win_events_push(win->client_pid, &ev)) note_dropped(win);
+}
+
 void wm_client_send_resize(struct window *win, int w, int h) {
     if (!wm_client_is_client_window(win)) return;
 

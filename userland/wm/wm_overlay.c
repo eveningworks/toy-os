@@ -62,6 +62,12 @@ static int g_hover[OVERLAY_COUNT];
 static const char *g_parent;   // see wm_overlay_set_parent()
 
 void wm_overlay_set_parent(const char *name) { g_parent = name; }
+
+int wm_overlay_any_open(void) {
+    for (int i = 0; i < OVERLAY_COUNT; i++)
+        if (g_overlays[i].is_open()) return 1;
+    return 0;
+}
 const char *wm_overlay_parent(void) { return g_parent; }
 
 void wm_overlay_draw(int mx, int my) {

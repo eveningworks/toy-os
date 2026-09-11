@@ -88,7 +88,7 @@ void wm_geometry_save(const struct window *win) {
     // and covers the taskbar. The restore rect is already maintained
     // for the un-maximize path (wm_input.c), so it costs nothing.
     int x = win->x, y = win->y, w = win->w, h = win->h;
-    if (win->state == WIN_MAXIMIZED) {
+    if (win->state == WIN_MAXIMIZED || win->fullscreen) {
         x = win->saved_x; y = win->saved_y;
         w = win->saved_w; h = win->saved_h;
     }

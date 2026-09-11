@@ -548,6 +548,11 @@ int ugfx_screen_init(struct ugfx_screen *sc);
 // publishes it, then clears the damage. A no-op when nothing was drawn,
 // which is what makes calling it every frame free.
 void ugfx_screen_present(struct ugfx_screen *sc);
+// After somebody else flipped these buffers (a lease, WIN_REQ_FB_LEASE):
+// draw into `back` next, and treat every buffer as never painted, so
+// the next present copies the whole screen rather than a damage union
+// that assumes the buffers still hold this compositor's frames.
+void ugfx_screen_forget(struct ugfx_screen *sc, int back);
 
 // After WIN_EV_SCREEN: re-maps the grant at its new geometry, grows the
 // back buffer if the mode did, and forgets every damage box, which was

@@ -59,6 +59,12 @@ struct uui_focus;   // ui/uui_focus.h -- desc.focus is a pointer, so a
 // fixed-size window. Declared rather than inferred -- the server does
 // not guess resizability from a window's size (abi/win_proto.h).
 #define UAPP_RESIZABLE 0x01
+// This app draws WRITE-ONLY -- it stores every pixel of every frame and
+// never reads its surface back (a game's scaler, a video decoder). While
+// fullscreen the compositor may then lend it the display's own buffers,
+// which are write-combining memory (docs/scanout-design.md). A widget
+// app must not set this: blending reads the destination.
+#define UAPP_SCANOUT   0x04
 
 // Only one copy of this app at a time. With this set (and an `app_id`
 // given), uapp_run() asks TWS whether a window already carries that id
@@ -415,6 +421,16 @@ int uapp_spawn(struct uapp *a, const char *path, const char *args);
 
 // The same tracking for a pid obtained some other way -- uopen_path(),
 // where choosing the program is the library's job and starting it is
+// FULLSCREEN: the whole screen, no chrome, no taskbar, until asked
+// again with `on` = 0 or the window closes. The compositor answers
+// with a resize proposal; the app adopts it as it adopts any other.
+// With UAPP_SCANOUT the compositor may also lend the display's buffers
+// (WIN_EV_SCANOUT) -- the toolkit switches surfaces and presents by
+// flip on the app's behalf, and the app notices nothing.
+void uapp_set_fullscreen(struct uapp *a, int on);
+int  uapp_fullscreen(const struct uapp *a);   // as last asked for
+int  uapp_scanout(const struct uapp *a);      // drawing the display's own buffer right now
+
 // one call inside it.
 void uapp_track_child(struct uapp *a, int pid);
 int uapp_set_title(struct uapp *a, const char *title);

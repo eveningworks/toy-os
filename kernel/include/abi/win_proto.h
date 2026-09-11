@@ -204,6 +204,13 @@
 #define WIN_EV_DRAG_OVER  34
 #define WIN_EV_DRAG_LEAVE 35
 #define WIN_EV_DROP       36
+// The compositor has leased this client the display's scanouts (a = 1)
+// or taken them back (a = 0). With a = 1: b = the byte pitch, mods =
+// scanout count | (first back index << 8); the buffers are at
+// WIN_FB_VADDR + i * WIN_FB_BUFFER_STRIDE, the client's window is the
+// whole screen, and it presents with WIN_REQ_FB_PRESENT. With a = 0 the
+// client goes back to its own buffers and WIN_REQ_PRESENT.
+#define WIN_EV_SCANOUT    37
 #define WIN_EV_POPUP_DONE 33 // `window`: a popup of this client the compositor
                              // DISMISSED -- a press landed outside every
                              // surface of the client's. It is already off the
@@ -807,6 +814,30 @@ struct win_event {
                            //
                            // Compositor only, and same -1-means-gone
                            // contract as WIN_REQ_WINDOW_INFO.
+// FULLSCREEN, a window state beside maximized: the content area is the
+// whole screen, no chrome, no taskbar, restored by the same request
+// with a = 0 (or by the window closing). The compositor decides what
+// else follows -- see WIN_REQ_FB_LEASE.
+#define WIN_REQ_FULLSCREEN 31 // window = which; a = 1 on, 0 off
+
+// A KMS-style LEASE of the framebuffer grant (docs/scanout-design.md):
+// the compositor lends its WIN_REQ_FB_MAP scanouts to ONE client, which
+// then draws into them at WIN_FB_VADDR and flips with WIN_REQ_FB_PRESENT
+// itself -- direct scanout, no copy. a = the client's pid, or 0 to end
+// the lease. On success the reply carries the grant's geometry as
+// WIN_REQ_FB_MAP does (a, b, c, d = w, h, pitch, bpp; mods = scanout
+// count; window = the buffer the LESSEE should draw into first). Ending
+// the lease answers `window` = the buffer the COMPOSITOR should draw
+// into next, since the lessee's flips moved it -- and LEAVES THE
+// EX-LESSEE'S PAGES MAPPED, because it may be mid-frame into them; the
+// compositor asks for them to come off with a = that pid, b = 1, once
+// the client has presented from its own buffer again (the DOOM crash
+// this exists for: a store into a page unmapped 20 ms earlier).
+// Compositor only; while a lease stands the compositor's own
+// FB_PRESENT is refused. A lessee that dies ends its lease and the
+// display is flipped back to the compositor's front buffer.
+#define WIN_REQ_FB_LEASE   32
+
 #define WIN_REQ_FB_PRESENT 16 // a, b, c, d: x, y, w, h of the region
                            // just written. Publishes it. On a display
                            // with two scanouts this FLIPS to the buffer
@@ -928,6 +959,12 @@ struct win_event {
 
 // --- window behaviour hints (WIN_REQ_HINTS's `a`) ---------------------
 #define WIN_HINT_RESIZABLE 0x01 // the user may resize this window
+// This client draws WRITE-ONLY and may be handed the display's own
+// scanouts while fullscreen (WIN_REQ_FB_LEASE below). Those buffers are
+// write-combining memory, where a read costs a bus round trip, so a
+// widget app that blends must not say this; a game or a video decoder
+// that only stores pixels should.
+#define WIN_HINT_SCANOUT   0x04 // (0x02 is uapp's SINGLE_INSTANCE, sent as-is)
 
 // --- popup surfaces (WIN_REQ_POPUP) ------------------------------------
 //

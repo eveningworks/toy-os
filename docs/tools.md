@@ -2461,6 +2461,17 @@ window without going through it will find its layout polls timing out.
   landed on the disk. Its positive control is to make
   `virtio_blk_write_sectors()` return success without issuing anything:
   that reddens exactly the round-trip check.
+- **`fullscreen_test.py`** -- the fullscreen state and the display lease
+  (`docs/scanout-design.md`), on virtio-gpu because the lease needs a
+  cursor plane. Spawns `/tests/fsclient`, a write-only client that goes
+  fullscreen at once, and asserts the reported state and rect, the
+  taskbar rows in the client's colour, `gui fb --json` naming the
+  lessee, frames still flowing while the compositor's present count
+  stands still (the compositor is not presenting, so they can only be
+  the client's own flips), the Start menu taking the lease and giving
+  it back, F11 and Alt+F4. Its positive control was the overlay rule
+  dropped from the policy, which left the lease standing under the
+  Start menu -- one check red, the right one.
 - **`virtio_gpu_test.py`** -- the ONLY thing here that boots
   `-vga virtio`, which is the whole reason it exists: every other GUI
   tool and `make test` launch the default adapter, so the virtio-gpu

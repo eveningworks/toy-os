@@ -33,6 +33,16 @@ struct window {
     int saved_x, saved_y, saved_w, saved_h; // geometry to restore to after
                                             // un-maximizing
     enum window_state state;
+    // FULLSCREEN is a flag beside the state, not a fourth state: it
+    // composes with normal and maximized (fs_prev remembers which, so
+    // leaving it lands where the window was), and every `state ==`
+    // test in the tree stays true. The content area is the whole
+    // screen and there is no chrome (window_content_*, wm.c).
+    int fullscreen;
+    enum window_state fs_prev;
+    // The client said it draws write-only (WIN_HINT_SCANOUT), so while
+    // fullscreen it may be lent the display's buffers -- wm_scanout.c.
+    int scanout_ok;
 
     // Can the user resize this window? A property of the WINDOW, not of
     // whatever created it -- which is the whole point of it living here.
