@@ -1212,26 +1212,37 @@ def run(dbg, qmp, tmp, res):
         teardown_fixture(dbg)
         return
 
-    def tb_centre(i):
-        x, y, w, h = lay.tbitems[i]
-        return (ox + x + w // 2, oy + y + h // 2)
+    def tb_click(i, what):
+        """Click toolbar item `i`, adopting the layout it was aimed
+        from. A layout arriving mid-transition can report fewer items
+        than the strip has, and SUBSCRIPTING one that does not carry
+        `i` raised KeyError here -- which loses every check after it,
+        the worst shape a harness can fail in. toolbar_click() waits
+        for a layout that reports the item and records a failed check
+        when none arrives."""
+        nonlocal lay
+        got = toolbar_click(dbg, qmp, win, lay, i, res, what)
+        if got is None:
+            return False
+        lay = got
+        return True
 
     # Up climbs to the parent; at the root it is DISABLED and the click
     # lands on nothing.
     dir_now = lay.dir.get(0)
     parent = "/" if dir_now.count("/") <= 1 else dir_now.rsplit("/", 1)[0]
-    sure_click(dbg, qmp, *tb_centre(0))
+    tb_click(0, "up")
     lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == parent)
     res.check("the Up button climbs to the parent directory",
               lay is not None and lay.dir.get(0) == parent,
               f"dir {dir_now} -> {lay and lay.dir.get(0)} (wanted {parent})")
     while lay and lay.dir.get(0) not in (None, "/"):
-        sure_click(dbg, qmp, *tb_centre(0))
+        tb_click(0, "up")
         nxt = wait_layout(dbg, win, lambda l: l.dir.get(0) != lay.dir.get(0), timeout=5)
         if nxt is None or nxt.dir.get(0) == lay.dir.get(0):
             break
         lay = nxt
-    sure_click(dbg, qmp, *tb_centre(0))  # at "/": disabled, must do nothing
+    tb_click(0, "up at the root")  # disabled, must do nothing
     time.sleep(0.8)
     lay = wait_layout(dbg, win, lambda l: True) or lay
     res.check("at the root the Up button is disabled and does nothing",
@@ -1240,7 +1251,7 @@ def run(dbg, qmp, tmp, res):
     # The Folder-tree button toggles the same state the menu ticks, and
     # LATCHES: its background moves to the pressed wash while a sibling
     # stays put (half the assertion is the neighbour, CLAUDE.md).
-    sure_click(dbg, qmp, *tb_centre(13))
+    tb_click(13, "folder tree")
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 1)
     res.check("the Folder-tree button toggles the tree on",
               lay is not None and lay.view and lay.view[3] == 1, f"view={lay and lay.view}")
@@ -1252,14 +1263,17 @@ def run(dbg, qmp, tmp, res):
     qmp.stable_pixels(png_on)
     from PIL import Image
     im = Image.open(png_on).convert("RGB")
-    tx7, ty7 = lay.tbitems[13][0] + 2, lay.tbitems[13][1] + 2
-    tx1, ty1 = lay.tbitems[1][0] + 2, lay.tbitems[1][1] + 2
-    p7 = im.getpixel((ox + tx7, oy + ty7))
-    p1 = im.getpixel((ox + tx1, oy + ty1))
-    res.check("the latched button's background differs from its resting sibling's",
-              p7 != p1, f"tree btn {p7} vs refresh btn {p1}")
+    r7, r1 = lay.tbitems.get(13), lay.tbitems.get(1)
+    if r7 and r1:
+        p7 = im.getpixel((ox + r7[0] + 2, oy + r7[1] + 2))
+        p1 = im.getpixel((ox + r1[0] + 2, oy + r1[1] + 2))
+        res.check("the latched button's background differs from its resting sibling's",
+                  p7 != p1, f"tree btn {p7} vs refresh btn {p1}")
+    else:
+        res.skip("the latched button's background differs from its resting sibling's",
+                 _toolbar_evidence(13 if not r7 else 1, lay))
 
-    sure_click(dbg, qmp, *tb_centre(13))
+    tb_click(13, "folder tree")
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0)
     res.check("clicking it again toggles the tree off",
               lay is not None and lay.view and lay.view[3] == 0, f"view={lay and lay.view}")
@@ -1270,18 +1284,26 @@ def run(dbg, qmp, tmp, res):
     # nothing else in this window draws.
     dbg.warp_cursor(qmp, *park)
     time.sleep(0.6)
-    bx, by, bw, bh = lay.tbitems[1]
-    tip_rect = (ox + bx, oy + by + bh, 120, 30)
-    png0 = os.path.join(tmp, "fm_tip_before.png")
-    qmp.stable_pixels(png0)
-    n_before = ink_count(png0, tip_rect, (255, 252, 220), tol=6)
-    dbg.warp_cursor(qmp, ox + bx + bw // 2, oy + by + bh // 2)
-    time.sleep(1.4)
-    png1 = os.path.join(tmp, "fm_tip_after.png")
-    qmp.stable_pixels(png1)
-    n_after = ink_count(png1, tip_rect, (255, 252, 220), tol=6)
-    res.check("hovering a button shows its tooltip, and only then",
-              n_before == 0 and n_after > 20, f"cream {n_before} -> {n_after}")
+    # SKIP, never return: bailing out of the function here would take
+    # every check below it with it, which is the same "a fault loses
+    # the rest of the run" shape the guards above exist to stop.
+    r1 = lay.tbitems.get(1)
+    if not r1:
+        res.skip("hovering a button shows its tooltip, and only then",
+                 _toolbar_evidence(1, lay))
+    else:
+        bx, by, bw, bh = r1
+        tip_rect = (ox + bx, oy + by + bh, 120, 30)
+        png0 = os.path.join(tmp, "fm_tip_before.png")
+        qmp.stable_pixels(png0)
+        n_before = ink_count(png0, tip_rect, (255, 252, 220), tol=6)
+        dbg.warp_cursor(qmp, ox + bx + bw // 2, oy + by + bh // 2)
+        time.sleep(1.4)
+        png1 = os.path.join(tmp, "fm_tip_after.png")
+        qmp.stable_pixels(png1)
+        n_after = ink_count(png1, tip_rect, (255, 252, 220), tol=6)
+        res.check("hovering a button shows its tooltip, and only then",
+                  n_before == 0 and n_after > 20, f"cream {n_before} -> {n_after}")
     dbg.warp_cursor(qmp, *park)
 
 
@@ -1291,7 +1313,7 @@ def run(dbg, qmp, tmp, res):
     # commands WORK from up here: New folder must open the same prompt
     # F7 opens, and Delete the same confirm F8 opens.
     lay = wait_layout(dbg, win, lambda l: len(l.tbitems) == 14) or lay
-    sure_click(dbg, qmp, *tb_centre(5))          # New folder
+    tb_click(5, "new folder")
     lay = wait_layout(dbg, win, lambda l: l.modal not in (None, 0)) or lay
     res.check("the toolbar's New folder opens the same prompt F7 does",
               lay.modal not in (None, 0), f"modal={lay and lay.modal}")
@@ -1304,7 +1326,7 @@ def run(dbg, qmp, tmp, res):
     # broken toolbar button.
     dbg.key("0x62")                          # 'b' seeks bin/
     lay = wait_layout(dbg, win, lambda l: l.selected not in (None, "-")) or lay
-    sure_click(dbg, qmp, *tb_centre(7))          # Delete
+    tb_click(7, "delete")
     lay = wait_layout(dbg, win, lambda l: l.dialog == 1) or lay
     res.check("the toolbar's Delete opens the same confirm F8 does",
               lay.dialog == 1, f"dialog={lay and lay.dialog}")
@@ -2229,8 +2251,9 @@ def run(dbg, qmp, tmp, res):
         dbg.click(*lay.pane_centre(i))
         lay = wait_layout(dbg, win, lambda l, i=i: l.active == i) or lay
         if lay.view and lay.view[i] != 1:
-            x, y, w, h = lay.tbitems[9]              # Details (8 is a separator)
-            sure_click(dbg, qmp, lay.ox + x + w // 2, lay.oy + y + h // 2)
+            got = toolbar_click(dbg, qmp, win, lay, 9, res,  # Details (8 is a separator)
+                                f"pane {i} to Details")
+            lay = got or lay
             lay = wait_layout(dbg, win, lambda l, i=i: l.view and l.view[i] == 1) or lay
     res.check("(a fresh window over its own directories, both panes in Details)",
               lay.view is not None and lay.view[0] == 1 and lay.view[1] == 1 and
