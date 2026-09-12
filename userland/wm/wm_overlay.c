@@ -8,6 +8,7 @@
 #include "calendar_popup.h"
 #include "volume_popup.h"
 #include "brightness_popup.h"
+#include "network_popup.h"
 #include "confirm_dialog.h"
 #include "file_picker.h"
 #include "osk.h"
@@ -22,6 +23,7 @@ static int open_context(void) { return context_menu_open; }
 static int open_calendar(void){ return calendar_open; }
 static int open_volume(void)  { return volume_open; }
 static int open_brightness(void) { return brightness_open; }
+static int open_network(void) { return network_open; }
 static int open_picker(void)  { return file_picker_open; }
 static int open_confirm(void) { return confirm_dialog_open; }
 static int open_osk(void)     { return osk_open; }
@@ -46,6 +48,8 @@ static const struct wm_overlay g_overlays[] = {
       volume_hover_at,           volume_damage,           volume_update_press, volume_close },
     { "brightness", open_brightness, brightness_draw, brightness_handle_click,
       brightness_hover_at,       brightness_damage,       brightness_update_press, brightness_close },
+    { "network",  open_network,  network_draw,     network_handle_click,
+      network_hover_at,          network_damage,          0, network_close },
     // LAST, so it is the least modal: a menu overlapping the keyboard
     // takes the click and paints on top. No `close` op -- a keyboard
     // must survive the click that puts the caret where it is typing.
@@ -124,6 +128,21 @@ void wm_overlay_press(int mx, int my, uint8_t buttons) {
         const struct wm_overlay *o = &g_overlays[i];
         if (o->update_press) o->update_press(mx, my, buttons);
     }
+}
+
+// The table, enumerable -- so `gui state` reports every overlay by
+// walking it rather than naming each one. The hand-written list had
+// already lost `osk` from its JSON when this was added.
+int wm_overlay_count(void) { return OVERLAY_COUNT; }
+
+const char *wm_overlay_name(int i) {
+    if (i < 0 || i >= OVERLAY_COUNT) return "";
+    return g_overlays[i].name;
+}
+
+int wm_overlay_is_open(int i) {
+    if (i < 0 || i >= OVERLAY_COUNT) return 0;
+    return g_overlays[i].is_open && g_overlays[i].is_open();
 }
 
 const char *wm_overlay_topmost(void) {

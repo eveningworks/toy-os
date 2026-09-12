@@ -393,6 +393,57 @@ def icon_tray_keyboard():
     return im
 
 
+# The tray's network item, in three states. They differ by SHAPE only:
+# a tray icon is blitted TINTED to the panel's own ink (wm_tray.c), so
+# colour cannot carry state and a red "disconnected" is not available.
+#
+# A three-node graph rather than a plug or a globe: it stays legible at
+# the ~26px a tray icon is actually drawn at, and it is the glyph
+# Nautilus and Android already use for "network". A globe would be
+# Windows' "connected but no internet", which is a claim nothing here
+# can check -- there is no reachability probe.
+NET_NODES = [(32, 17), (15, 47), (49, 47)]
+
+
+def _net_nodes(d, lines=True, r=8):
+    if lines:
+        for (cx, cy) in NET_NODES[1:]:
+            d.line([(32, 17), (cx, cy)], fill=TB_INK, width=6)
+    for (cx, cy) in NET_NODES:
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=TB_INK)
+
+
+# Has an address: the nodes, joined.
+def icon_tray_network():
+    im, d = _tb()
+    _net_nodes(d, lines=True)
+    return im
+
+
+# A device, but nothing usable on it -- no address, a link-local one, or
+# a link the driver KNOWS is down. The nodes are there and unjoined,
+# which is the same "present but not connected" reading as a broken
+# chain and needs no second glyph beside it.
+def icon_tray_network_limited():
+    im, d = _tb()
+    _net_nodes(d, lines=False)
+    return im
+
+
+# No network device at all. Only reachable with `desktop.tray_network =
+# always`, since `auto` hides the item outright in this case -- it
+# exists so that pinning the item never shows a state it has no icon
+# for.
+def icon_tray_network_off():
+    im, d = _tb()
+    _net_nodes(d, lines=True)
+    # CUT, then stroke: a transparent gap under the bar is what keeps it
+    # readable as an overlay once the whole glyph is tinted one colour.
+    d.line([(8, 56), (56, 8)], fill=(0, 0, 0, 0), width=14)
+    d.line([(8, 56), (56, 8)], fill=TB_INK, width=6)
+    return im
+
+
 # The five file verbs. Copy/Move are a PAIR and read as one: two sheets
 # for copy, one sheet plus an arrow for move -- which is what Explorer's
 # ribbon and every commander's F5/F6 have always drawn.
@@ -686,6 +737,9 @@ ICONS = {
     "tray-volume-muted": icon_tray_volume_muted,
     "tray-brightness": icon_tray_brightness,
     "tray-keyboard": icon_tray_keyboard,
+    "tray-network": icon_tray_network,
+    "tray-network-limited": icon_tray_network_limited,
+    "tray-network-off": icon_tray_network_off,
 }
 
 # Crash Test deliberately gets NO icon file. It is the one entry that

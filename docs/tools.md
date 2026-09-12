@@ -2121,6 +2121,24 @@ window without going through it will find its layout polls timing out.
   The positive half (a real panel dimming) runs on the bare-metal
   laptop by hand: `config set brightness 40` reads the PWM back. In
   `gui_regress.py`.
+- **`network_tray_test.py`** -- the taskbar's network item: the icon's
+  state, the read-only panel behind it, and the visibility setting.
+  **Its strongest check is the one that does not ask the compositor**:
+  the interface name and address the panel reports must also appear in
+  `/bin/ifconfig`'s output, which walks the same `QUERY_NETDEV` class
+  through a completely different program -- a compositor reporting its
+  own view back to a test proves only that it is self-consistent.
+  It also pins the rule the widget exists for: `link_known` is
+  THREE-valued, a driver that cannot answer is not a driver saying
+  "down", and the e1000 in a default QEMU guest is exactly that case --
+  so `connected` must follow the ADDRESS. The positive control for
+  that (deriving `connected` from the link flag instead) reddens those
+  two checks and nothing else. Then: the panel is PAINTED rather than
+  merely flagged open, a second click on the icon closes it, a click
+  outside dismisses it and restores the pixels underneath, the volume
+  flyout and the Super key close it through the overlay table's `close`
+  op, and `never`/`auto` hide and show it with `gui taskbar --json`'s
+  `tray_x` moving by the icon's width. In `gui_regress.py`.
 - **`modeset_test.py`** -- a runtime resolution change under a live
   desktop, on the default adapter. **The oracle is the DEVICE**: a QMP
   screendump's own pixel size is QEMU's scanout geometry, and it must

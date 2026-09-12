@@ -106,6 +106,13 @@ void wm_overlay_press(int mx, int my, uint8_t buttons);
 // The topmost open overlay's name, or NULL when none is up -- for the
 // debug console, so a test can ask what is on screen without knowing
 // the table.
+// Walk the table: every overlay's name and whether it is up. `gui
+// state` reports from this, so a new overlay appears there the day it
+// is added to the table rather than when somebody remembers.
+int wm_overlay_count(void);
+const char *wm_overlay_name(int i);
+int wm_overlay_is_open(int i);
+
 const char *wm_overlay_topmost(void);
 
 // Closes every overlay with a `close` op except the one named `keep`

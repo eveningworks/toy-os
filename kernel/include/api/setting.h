@@ -48,8 +48,9 @@
 // Settings, which sizes its arrays from the ABI twin below. Raised
 // to 32 when `brightness` made 25, to 40 when `scaling` made 29 (the
 // KTESTs' four scratch settings had filled the rest), to 48 when the
-// three network-time settings made 32.
-#define SETTING_MAX        48 // registered settings
+// three network-time settings made 32, and to 56 when the two
+// `desktop.tray_*` visibility settings made 45.
+#define SETTING_MAX        56 // registered settings
 _Static_assert(SETTING_MAX == SETTING_ABI_MAX,
                "SETTING_MAX and SETTING_ABI_MAX must agree -- a client sizes "
                "its array from the ABI one and would truncate the list");

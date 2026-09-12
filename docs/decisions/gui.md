@@ -6066,6 +6066,54 @@ BEFORE init has read `/etc/services.d`, so init answered `supervises no
 service called toywm` and the desktop started anyway. It won the race
 about half the time. The wait is on init's own readiness line now.
 
+## The network tray item shows an icon and hides the address behind it
+
+The desktop had no network surface at all -- no app, no Settings page --
+so the tray item is the only place network state is visible (2026-09-12).
+
+**Why an icon plus a panel, and not the address in the strip.** Windows
+11, GNOME Shell and Plasma all put a state-shaped icon in the tray and
+keep the address one click away (Plasma's Details tab, macOS's
+Option-click); none of them spend panel width on an IP. The taskbar
+wants that width, and the address is not the thing that changes -- the
+state is. An always-visible IP is the conky/ops shape, not a desktop's.
+
+**Why it writes nothing.** `sys_net_config()` exists, so a Renew or an
+enable/disable is reachable in principle -- but the lease lives in
+`/bin/netd` and there is no control path into it, so "renew" would
+either be a lie or a second project. A button that half works is worse
+than no button.
+
+**"Connected" is decided by the ADDRESS, never by the link flag.**
+`link_known` is three-valued in `abi/query_abi.h`: 0 means the driver
+has no way to ask, which is NOT "down". The e1000 in a default QEMU
+guest is exactly that case, so reading the link flag would paint a
+disconnected icon on the machine this is most often looked at. An
+address is evidence; a flag that may not exist is not.
+
+**It does not say "DHCP".** `/bin/netd` holds `enum udhcp_state` in its
+own process memory and publishes none of it, and a lease file on disk
+records a REMEMBERED address with no expiry -- present after a release.
+A static address set by `ifconfig` is also indistinguishable from a
+leased one at the query layer. So the panel distinguishes only what the
+ABI supports: an address, a self-assigned 169.254/16 one, or none.
+Naming the source would need netd to publish its state, which is the
+honest way to add it later.
+
+**Two clocks, deliberately.** The device is read once a second, which
+is the one poll in `wm.c` that is not a generation compare: there is no
+netdev generation in the ABI, and the read is a `sys_query_record()`
+memcpy out of a live kernel table with no I/O behind it -- not what the
+poll convention was defending against (a whole-file disk read for the
+desktop's entries). The item's VISIBILITY is on the settings
+generation, because `tray_want_shown()` does read a file.
+
+**State is shape, not colour.** A tray icon is blitted TINTED to the
+panel's own ink (`wm_tray.c`), so "red for disconnected" is not
+available at all -- there is one icon file per state, and the glyph is
+a three-node graph rather than a globe because a globe is Windows'
+"connected but no internet", a claim nothing here can check.
+
 ## Which tray items are shown is a setting, and `auto` asks the hardware
 
 `userland/wm/brightness_popup.c` used to put a sun in the tray on every

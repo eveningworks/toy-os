@@ -52,6 +52,12 @@ static void brightness_get(char *out, uint32_t out_size) {
     }
 }
 
+static void network_get(char *out, uint32_t out_size) {
+    if (!etc_config_get(DESKTOP_CONFIG_FILE, "tray_network", out, out_size)) {
+        k_strlcpy(out, g_modes[0], out_size);
+    }
+}
+
 static const struct setting g_tray_brightness_setting = {
     .name = "tray_brightness",
     .label = "Brightness in the tray",
@@ -64,6 +70,19 @@ static const struct setting g_tray_brightness_setting = {
     .apply = 0, // persist-only -- the brightness item's poll applies it
 };
 
+static const struct setting g_tray_network_setting = {
+    .name = "tray_network",
+    .label = "Network in the tray",
+    .type = SETTING_TYPE_ENUM,
+    .file = DESKTOP_CONFIG_FILE,
+    .category = "Appearance",
+    .group    = "Desktop",
+    .choice = mode_choice,
+    .get = network_get,
+    .apply = 0, // persist-only -- the network item's poll applies it
+};
+
 void tray_setting_register(void) {
     setting_register(&g_tray_brightness_setting);
+    setting_register(&g_tray_network_setting);
 }

@@ -839,6 +839,7 @@ whenever a headline here tells you something you did not already know.
 - **A DISMISSABLE OVERLAY DECLARES `close`, AND AN OPEN PATH CALLS `wm_overlay_close_others()` RATHER THAN NAMING ITS PEERS**
 - **THE TRAY HAS A VOLUME FLYOUT, AND THE PANEL OWNS IT TOO**
 - **A TRAY ITEM'S VISIBILITY IS A SETTING, `desktop.tray_<item>` = `auto` | `always` | `never`, AND `auto` ASKS THE HARDWARE** -- hiding KEEPS THE SLOT, resolve it on the settings generation not per frame, and a GUI tool driving a hardware-gated item must pin it to `always` and put it back
+- **THE TRAY HAS A NETWORK ITEM, IT READS `QUERY_NETDEV`, AND IT WRITES NOTHING** -- `link_known` is THREE-valued so "connected" follows the ADDRESS; DHCP state is not readable; the device polls on a cadence and the visibility on the settings generation; state is carried by SHAPE, never colour
 - **THE TRAY HAS A BRIGHTNESS FLYOUT, HIDDEN BY DEFAULT WHERE THERE IS NO BACKLIGHT**
 - **BOTH TRAY FLYOUTS ARE ONE FILE: `userland/wm/tray_slider_popup.c`**
 - **A MODE SMALLER THAN THE PANEL IS PLACED BY `system.scaling`, A SETTING ON EVERY MACHINE, AND THE FITTER'S SIZE REGISTER IS THE ARMING WRITE -- AND ITS WINDOW MUST EQUAL THE PIPE ACTIVE AREA, `panel = 2 * position + size`, OR THE SCREEN SKEWS**
@@ -1459,7 +1460,8 @@ cost".
   `gfxdemo_test.py`, `hover_test.py`, `icons_test.py`,
   `idle_desktop_test.py`,
   `imgview_test.py`, `keyup_test.py`, `menubar_test.py`,
-  `mines_test.py`, `notepad_client_test.py`, `osk_test.py`,
+  `mines_test.py`, `network_tray_test.py`,
+  `notepad_client_test.py`, `osk_test.py`,
   `player_test.py`, `popup_test.py`,
   `pager_test.py`,
   `resize_stride_test.py`,

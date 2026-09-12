@@ -2018,6 +2018,27 @@ real scanout hardware does. Do not write a pixel assertion for one.
   runs under QEMU, where no adapter has a backlight, so on `auto` the
   sun is not in the tray at all -- and a setting left behind changes the
   taskbar geometry every later tool measures.
+- **THE TRAY HAS A NETWORK ITEM, IT READS `QUERY_NETDEV`, AND IT
+  WRITES NOTHING -- `userland/wm/network_popup.c`.** A state-shaped
+  icon left of the speaker opens a read-only panel: interface,
+  address, netmask, gateway, link. Windows 11, GNOME and Plasma all
+  keep the address one CLICK away rather than in the strip, and the
+  panel width is the taskbar's. Four things to know.
+  **`link_known` IS THREE-VALUED AND A DRIVER THAT CANNOT ANSWER IS NOT
+  ONE REPORTING "DOWN"** (`abi/query_abi.h`) -- the e1000 in a default
+  QEMU guest is exactly that case, so "connected" is decided by the
+  ADDRESS and never by the link flag. **DHCP STATE IS NOT READABLE**:
+  `/bin/netd` keeps its lease in its own memory and publishes none of
+  it, so the panel distinguishes only an address, a link-local one
+  (the 169.254/16 prefix `udhcp.c` falls back to) and none -- it must
+  not claim "leased". **THE DEVICE IS POLLED ON A CADENCE, THE
+  VISIBILITY ON THE SETTINGS GENERATION**, and the two cannot share a
+  clock: there is no netdev generation in the ABI (the read is a
+  memcpy with no I/O, so a 1 Hz read is affordable), while
+  `tray_want_shown()` reads `/etc/desktop.conf` and must not. And
+  **STATE IS CARRIED BY SHAPE, NEVER COLOUR** -- a tray icon is blitted
+  TINTED to the panel's ink, so a red "disconnected" does not exist;
+  there is one icon file per state.
 - **THE TRAY HAS A BRIGHTNESS FLYOUT, HIDDEN BY DEFAULT WHERE THERE IS
   NO BACKLIGHT -- `userland/wm/brightness_popup.c`.** A sun icon left
   of the speaker opens one slider; the wheel over the icon steps it by

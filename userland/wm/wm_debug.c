@@ -9,6 +9,7 @@
 #include "calendar_popup.h"
 #include "volume_popup.h"
 #include "brightness_popup.h"
+#include "network_popup.h"
 #include "wm_overlay.h"
 #include "osk.h"
 #include "wm_debug.h"
@@ -829,6 +830,21 @@ static void cmd_calendar(struct dbg_out *o, int json) {
                      cx, cy, cw, ch, cx + cw / 2, cy + ch / 2);
 }
 
+// THE REPORTED NAME, which is not always the table's. Four overlays are
+// spelled differently in `gui state` from how wm_overlay.c names them,
+// and every tool that parses either form uses the longer spelling --
+// deriving the report from the table without this renamed them and
+// broke two tools that scan for `start_menu=`. One function, so the
+// text and the JSON cannot drift apart either.
+static const char *overlay_label(int i) {
+    const char *nm = wm_overlay_name(i);
+    if (k_strcmp(nm, "start") == 0) return "start_menu";
+    if (k_strcmp(nm, "context") == 0) return "context_menu";
+    if (k_strcmp(nm, "picker") == 0) return "file_picker";
+    if (k_strcmp(nm, "confirm") == 0) return "confirm_dialog";
+    return nm;
+}
+
 // Everything else the WM is holding: which overlays are up, where the
 // cursor is, what's armed, and this frame's damage rect. The last one
 // is the thing you want when a repaint looks wrong -- it's otherwise
@@ -856,15 +872,14 @@ static void cmd_state(struct dbg_out *o, int json) {
         // recognise a sprite in a screenshot.
         dbg_out_printf(o, "\"cursor\":{\"x\":%d,\"y\":%d,\"buttons\":%u,\"shape\":%d},",
                      cx, cy, (unsigned)buttons, (int)wm_cursor_kind_at(cx, cy));
-        dbg_out_printf(o, "\"overlays\":{\"start_menu\":%s,\"context_menu\":%s,",
-                     start_menu_open ? "true" : "false",
-                     context_menu_open ? "true" : "false");
-        dbg_out_printf(o, "\"file_picker\":%s,\"confirm_dialog\":%s,\"calendar\":%s,\"volume\":%s,\"brightness\":%s},",
-                     file_picker_open ? "true" : "false",
-                     confirm_dialog_open ? "true" : "false",
-                     calendar_open ? "true" : "false",
-                     volume_open ? "true" : "false",
-                     brightness_open ? "true" : "false");
+        // WALKED, not enumerated: the hand-written list had already
+        // lost `osk`, and a tool asking about an overlay that is simply
+        // missing from the object cannot tell that from "closed".
+        dbg_out_write(o, "\"overlays\":{");
+        for (int i = 0; i < wm_overlay_count(); i++)
+            dbg_out_printf(o, "%s\"%s\":%s", i ? "," : "", overlay_label(i),
+                         wm_overlay_is_open(i) ? "true" : "false");
+        dbg_out_write(o, "},");
         dbg_out_printf(o, "\"dragging\":%d,\"resizing\":%d,\"content_pressed\":%d,",
                      dragging, resizing, content_pressed);
         // Resize proposals sent since boot -- see wm.c. One per drag
@@ -921,9 +936,10 @@ static void cmd_state(struct dbg_out *o, int json) {
                  (unsigned)buttons, (int)wm_cursor_kind_at(cx, cy));
     dbg_out_printf(o, "overlays: topmost=%s\r\n",
                  wm_overlay_topmost() ? wm_overlay_topmost() : "none");
-    dbg_out_printf(o, "overlays: start_menu=%d context_menu=%d file_picker=%d confirm=%d calendar=%d volume=%d brightness=%d osk=%d\r\n",
-                 start_menu_open, context_menu_open, file_picker_open, confirm_dialog_open,
-                 calendar_open, volume_open, brightness_open, osk_open);
+    dbg_out_write(o, "overlays:");
+    for (int i = 0; i < wm_overlay_count(); i++)
+        dbg_out_printf(o, " %s=%d", overlay_label(i), wm_overlay_is_open(i));
+    dbg_out_write(o, "\r\n");
     dbg_out_printf(o, "dragging=%d resizing=%d content_pressed=%d redraw_pending=%d\r\n",
                  dragging, resizing, content_pressed, redraw_pending);
     dbg_out_printf(o, "resize proposals sent: %u\r\n", resize_asks);
@@ -1231,6 +1247,53 @@ static void cmd_latency(struct dbg_out *o, char *rest, int json) {
                    wmwd_slow_frames(), wmwd_peak_ms());
 }
 
+// The tray's network item and its panel. Reported because a GUI tool
+// reaches an overlay only through this channel -- and because the
+// interesting states here (no device, an address, a self-assigned one,
+// a link the driver cannot answer for) are ones a screenshot cannot
+// tell apart.
+static void cmd_network(struct dbg_out *o, int json) {
+    struct network_geom g;
+    struct network_view v;
+    network_geometry(&g);
+    network_view(&v);
+
+    if (json) {
+        dbg_out_printf(o, "{\"open\":%s,\"tray_hidden\":%s,\"devices\":%d,",
+                     network_open ? "true" : "false",
+                     network_tray_hidden() ? "true" : "false", v.device_count);
+        dbg_out_printf(o, "\"have_device\":%s,\"connected\":%s,\"link_local\":%s,",
+                     v.have_device ? "true" : "false",
+                     v.connected ? "true" : "false",
+                     v.link_local ? "true" : "false");
+        dbg_out_printf(o, "\"link_known\":%s,\"link_up\":%s,\"link_bps\":%llu,",
+                     v.link_known ? "true" : "false", v.link_up ? "true" : "false",
+                     v.link_bps);
+        dbg_out_printf(o, "\"name\":\"%s\",\"driver\":\"%s\",\"location\":\"%s\",",
+                     v.name, v.driver, v.location);
+        dbg_out_printf(o, "\"ip\":\"%s\",\"netmask\":\"%s\",\"gateway\":\"%s\",",
+                     v.ip, v.mask, v.gw);
+        dbg_out_printf(o, "\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,", g.x, g.y, g.w, g.h);
+        dbg_out_printf(o, "\"tray\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"cx\":%d,\"cy\":%d}}\r\n",
+                     g.tray_x, g.tray_y, g.tray_w, g.tray_h,
+                     g.tray_x + g.tray_w / 2, g.tray_y + g.tray_h / 2);
+        return;
+    }
+    dbg_out_printf(o, "network: %s  %s  %d device(s)  %s\r\n",
+                 network_open ? "open" : "closed",
+                 network_tray_hidden() ? "tray hidden" : "tray shown",
+                 v.device_count,
+                 !v.have_device ? "no device" :
+                 v.connected ? "connected" :
+                 v.link_local ? "self-assigned address" : "no address");
+    if (v.have_device)
+        dbg_out_printf(o, "  %s (%s) at %s  inet %s  mask %s  gw %s\r\n",
+                     v.name, v.driver, v.location[0] ? v.location : "?",
+                     v.ip, v.mask, v.gw);
+    dbg_out_printf(o, "  panel x=%d y=%d w=%d h=%d  tray x=%d y=%d w=%d h=%d\r\n",
+                 g.x, g.y, g.w, g.h, g.tray_x, g.tray_y, g.tray_w, g.tray_h);
+}
+
 static void usage(struct dbg_out *o) {
     dbg_out_write(o, "gui subcommands (all of these work while the desktop is up):\r\n");
     dbg_out_write(o, "  windows [--json]      open windows: rects, content rects, z-order, focus\r\n");
@@ -1262,6 +1325,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  icons                 how many app icons are decoded and cached\r\n");
     dbg_out_write(o, "  watchdog [<ms>|off]   slow-frame threshold, and how often it fired\r\n");
     dbg_out_write(o, "  latency [reset] [--json]  frame work, wake overshoot and ping, as distributions\r\n");
+    dbg_out_write(o, "  network [--json]      the tray's network item: state, address, panel rect\r\n");
     dbg_out_write(o, "  pingtimeout [<ticks>] not-responding timeout (a TEST lever)\r\n");
     dbg_out_write(o, "  pinginterval [<ticks>] how often every client is asked (a TEST lever)\r\n");
     dbg_out_write(o, "Injected input enters at the WM loop, below the PS/2 driver -- it tests\r\n");
@@ -1427,6 +1491,11 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
         else    dbg_out_write(o, "watchdog: off\r\n");
         dbg_out_printf(o, "  %u slow frame(s) so far; slowest frame %u ms\r\n",
                        wmwd_slow_frames(), wmwd_peak_ms());
+        return 1;
+    }
+
+    if (k_strcmp(sub, "network") == 0) {
+        cmd_network(o, wants_json(p));
         return 1;
     }
 
