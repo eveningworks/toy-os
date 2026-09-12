@@ -52,6 +52,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 HEADER = os.path.join(REPO, "kernel/include/api/etc_config.h")
 SETTING_ABI = os.path.join(REPO, "kernel/include/abi/setting_abi.h")
+# The SCREENSAVER DESCRIPTORS have their own caps, in the library that
+# parses them rather than in the settings ABI -- they are not settings.
+USAVER_H = os.path.join(REPO, "userland/lib/usaver.h")
 DIRS = ("data/etc", "data/usr/share/services")
 
 # The descriptor keys that cross the ABI, and the constant bounding each.
@@ -72,6 +75,54 @@ def abi_caps():
         if m:
             caps[key] = int(m.group(1)) - 1
     return caps
+
+
+def saver_caps():
+    """`usaver.h`'s own caps, minus one for the NUL strlcpy writes.
+
+    Read from the header for the same reason every other limit here is:
+    a number copied into a checker drifts from the code that enforces it.
+    """
+    if not os.path.isfile(USAVER_H):
+        return {}
+    src = open(USAVER_H).read()
+    out = {}
+    for key, name in (("Label", "USAVER_LABEL_MAX"),
+                      ("Desc", "USAVER_DESC_MAX"),
+                      ("Unit", "USAVER_UNIT_MAX")):
+        m = re.search(r"#define\s+" + name + r"\s+(\d+)", src)
+        if m:
+            out[key] = int(m.group(1)) - 1
+    return out
+
+
+def saver_text_problems():
+    """Over-long per-option text in a screensaver descriptor.
+
+    Same trap as the settings one below and a different set of fields: a
+    `Desc.stars=` longer than the struct's array is `strlcpy`'d, so it
+    reaches System Settings truncated mid-word with the file itself far
+    under every size limit here.
+    """
+    caps = saver_caps()
+    if not caps:
+        return []
+    out = []
+    for rel in tracked("data/wm/savers"):
+        path = os.path.join(REPO, rel)
+        if not os.path.isfile(path) or rel.endswith(".md"):
+            continue
+        for line in open(path, encoding="utf-8", errors="replace"):
+            line = line.rstrip("\n")
+            if "=" not in line or line.lstrip().startswith("#"):
+                continue
+            key, _, value = line.partition("=")
+            # `Label.colour` -> `Label`; the per-option keys are the only
+            # ones with a suffix, and `Options=` has none.
+            cap = caps.get(key.strip().split(".", 1)[0])
+            if cap is not None and len(value.encode("utf-8")) > cap:
+                out.append((rel, key.strip(), len(value.encode("utf-8")), cap, value))
+    return out
 
 
 def descriptor_text_problems(caps):
@@ -126,6 +177,7 @@ def main():
 
     caps = abi_caps()
     long_text = descriptor_text_problems(caps) if caps else []
+    long_text += saver_text_problems()
     for rel, key, n, lim, value in long_text:
         print(f"  {rel}: {key} is {n} bytes, over the {lim}-byte ABI field "
               f"-- it would be TRUNCATED MID-WORD in System Settings, at "
@@ -146,7 +198,7 @@ def main():
                   f"is one short line, not a paragraph.")
         return 1
     print(f"check_config_size: ok -- {seen} config file(s), all within "
-          f"{cap} bytes; descriptor text within the ABI caps")
+          f"{cap} bytes; descriptor text within the ABI and usaver caps")
     return 0
 
 

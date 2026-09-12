@@ -1242,6 +1242,179 @@ def main():
                   f"top {sidebar_state(dbg) and sidebar_state(dbg)['top']}, wanted 1..{max_top}")
         to_top()
 
+    # --- A SCREENSAVER'S OWN OPTIONS, ON THE PAGE THAT SELECTS IT -----
+    #
+    # These rows are NOT registry settings. They are declared by a data
+    # file beside each saver (/usr/wm/savers/<name>.saver) and written to
+    # a file of its own (/etc/savers/<name>.conf), because a saver's
+    # options belong to a program that is not running and depend on which
+    # saver is chosen -- see userland/lib/usaver.h. So everything below
+    # is asking whether synthesised rows behave like real ones.
+    #
+    # WHAT A BROKEN VERSION WOULD STILL PASS is the question each check
+    # is picked against: "there are some controls" is satisfied by the
+    # two registry settings alone, so every check here names the SAVER
+    # the rows claim to belong to.
+    saver_row = row_named("Screensaver")
+    if check("the sidebar offers a Screensaver page", saver_row is not None):
+        mark_sv = len(drain(dbg))
+        open_row(saver_row)
+        sv_ctl = controls(dbg, mark_sv).get("desktop.screensaver")
+
+        def option_slots(mark):
+            """The page's rows that belong to a saver, not the registry.
+
+            Told apart by the namespace: a registry setting is
+            `desktop.screensaver`, an option is `<saver>.<key>`.
+            """
+            return [s for s in slots(dbg, mark)
+                    if "." in s["name"] and not s["name"].startswith("desktop.")]
+
+        def chosen(mark, fallback=None):
+            return staged_for(dbg, mark, "desktop.screensaver") or fallback
+
+        started_on = choice_shown(dbg, mark_sv, "desktop.screensaver")
+        started_on = started_on[0] if started_on else None
+        opts = option_slots(mark_sv)
+        check("the page carries the chosen saver's own options",
+              bool(opts) and started_on is not None
+              and all(o["name"].startswith(started_on + ".") for o in opts),
+              f"saver={started_on!r} rows={[o['name'] for o in opts]}")
+        # THE DECLARATION DECIDES THE CONTROL, which is the half a row
+        # count cannot see: `Option.stars=int:50..2000:420` has to become
+        # a spinbox and `Option.colour=enum:...` a radio list, or the
+        # descriptor's types are being ignored and every option is a
+        # string box.
+        kinds = {o["kind"] for o in opts}
+        check("...and each option's control comes from its declared type",
+              "spin" in kinds and "radio" in kinds,
+              f"kinds={sorted(kinds)} from {[o['name'] for o in opts]}")
+
+        def pick_saver(want=None, avoid=None, tries=14):
+            """Open the saver dropdown and choose a row, by NAME where one
+            is asked for. Returns (saver, option rows), or (None, []).
+
+            IT RETURNS THE ROWS IT SAW, rather than leaving the caller to
+            ask afterwards. The app's layout report is DEDUPED per frame,
+            so the rebuilt page is described exactly once -- in the window
+            this function already drained. A caller that nudged another
+            frame and read again got an empty list and a check that
+            failed with the feature working.
+
+            IT SCANS RATHER THAN ASSUMING A ROW PITCH. The popup is a
+            uui_listbox with no `describe`, so nothing reports its row
+            height -- and a pitch worked out once from a font size is the
+            constant this repo has had to re-measure three times. Walking
+            down the popup until the APP says the wanted saver is staged
+            asks the app instead of doing arithmetic, and needs no
+            knowledge of the order the savers directory lists them in.
+            """
+            if sv_ctl is None:
+                return None
+            popup_top = cy + sv_ctl["y"] + sv_ctl["h"]
+            for step in range(tries):
+                mk = len(drain(dbg))
+                dbg.send(f"gui click {cx + sv_ctl['x'] + sv_ctl['w'] // 2} "
+                         f"{cy + sv_ctl['y'] + sv_ctl['h'] // 2}")
+                dbg.settle()
+                time.sleep(0.35)
+                y = popup_top + 6 + step * 8
+                dbg.send(f"gui click {cx + sv_ctl['x'] + 20} {y}")
+                dbg.settle()
+                time.sleep(0.45)
+                # A SECOND FRAME, for the reason click() gives: the
+                # control report comes from on_draw, which runs before
+                # the rebuilt page has been laid out.
+                dbg.send(f"gui move {cx + sv_ctl['x'] + 20} {y + 1}")
+                dbg.settle()
+                time.sleep(0.3)
+                got = chosen(mk)
+                if got is None:
+                    continue
+                if (want is not None and got == want) or \
+                   (want is None and got != avoid):
+                    return got, option_slots(mk)
+            return None, []
+
+        # BY NAME, and a name that HAS options: "any saver but this one"
+        # picked `blank` -- which correctly shows none, so the swap check
+        # below failed on the one saver that cannot demonstrate it.
+        want_other = "plasma" if started_on == "matrix" else "matrix"
+        picked, new_opts = pick_saver(want=want_other)
+        if check(f"the saver dropdown can select {want_other}",
+                 picked is not None, f"stayed on {started_on!r}"):
+            # BOTH HALVES: the rows now shown belong to the saver just
+            # chosen, AND none of the previous saver's rows survived. The
+            # first alone passes on a page that merely appended.
+            check("choosing a saver swaps its options in",
+                  bool(new_opts)
+                  and all(o["name"].startswith(picked + ".") for o in new_opts)
+                  and not any(o["name"].startswith(str(started_on) + ".")
+                              for o in new_opts),
+                  f"{picked}: {[o['name'] for o in new_opts]}")
+
+        # A SAVER MAY DECLARE NO OPTIONS, and `blank` ships without a
+        # descriptor at all -- an empty page is a supported state here
+        # rather than a failed read, and it is the case that proves the
+        # rows come from the descriptor and not from the app.
+        blank, blank_opts = pick_saver(want="blank")
+        if blank == "blank":
+            check("a saver with no descriptor contributes no options",
+                  not blank_opts, f"{[o['name'] for o in blank_opts]}")
+        else:
+            check("the blank saver is selectable", False, "never staged")
+
+        # --- STAGING AND WRITING AN OPTION ----------------------------
+        #
+        # Back to a saver that HAS options, then step one of its
+        # spinboxes. The value is checked on DISK, read by `cat` through
+        # the serial console -- a different process and a different code
+        # path from the one that wrote it, which is the only way to tell
+        # "the app thinks it saved" from "it saved" (the reasoning every
+        # other check in this file uses for /etc/toyos.conf).
+        target, target_opts = pick_saver(want="starfield")
+        conf = f"/etc/savers/{target}.conf"
+        spins = [o for o in target_opts if o["kind"] == "spin"]
+        if check("starfield offers a numeric option to change", bool(spins),
+                 f"target={target!r}"):
+            name = spins[0]["name"]
+            key = name.split(".", 1)[1]
+            # FROM THE EARLIEST MARK, deliberately. controls() keeps the
+            # LAST rect reported for each name, and the deduped report
+            # for this page came and went inside pick_saver's window --
+            # a fresh mark here would find nothing at all.
+            ctl = reveal(name, controls(dbg, mark_sv).get(name))
+            if check(f"{name} reported a rect", ctl is not None):
+                mark_stage = len(drain(dbg))
+                click(ctl["x"] + ctl["w"] - 7, ctl["y"] + ctl["h"] // 4)
+                staged_opt = staged_for(dbg, mark_stage, name)
+                check("stepping an option stages it",
+                      staged_opt is not None, f"staged {staged_opt!r}")
+                # NOTHING ON DISK YET. This app was instant-apply once,
+                # and an option that quietly wrote would look identical
+                # on screen and differ only here.
+                check("...and writes nothing until Apply",
+                      key + "=" not in dbg.send(f"sh cat {conf}"),
+                      f"{conf} holds {key} already")
+                click(bx + bw + 6 + bw // 2, by + bh // 2)   # Apply
+                time.sleep(1.2)
+                on_disk = None
+                for line in dbg.send(f"sh cat {conf}").splitlines():
+                    line = line.strip()
+                    if line.startswith(key + "="):
+                        on_disk = line.split("=", 1)[1].strip()
+                check("Apply writes the option to the saver's own file",
+                      on_disk is not None and on_disk == staged_opt,
+                      f"{conf}: {key}={on_disk!r}, staged {staged_opt!r}")
+            # PUT THE MACHINE BACK. A setting this tool applies is the
+            # machine every later tool runs on -- an applied mouse_accel
+            # once made two unrelated tools fail as "hover does nothing".
+            # The saver's file goes too: it changes what the screen draws.
+            dbg.send(f"sh rm {conf}")
+        if started_on:
+            dbg.send(f"sh config set desktop.screensaver {started_on}")
+        dbg.settle()
+
     # --- Cancel closes without writing --------------------------------
     mark = len(drain(dbg))
     open_row(mouse_row)

@@ -1,0 +1,13 @@
+# What Plasma lets you change.
+Options=detail,speed,palette
+Option.detail=enum:coarse,medium,fine:medium
+Label.detail=Detail
+Desc.detail=Cell size. Fine is four times the work of medium per frame.
+Widget.detail=slider
+Option.speed=int:1..20:5
+Label.speed=Speed
+Desc.speed=How fast the waves drift through each other.
+Option.palette=enum:rainbow,fire,ocean,grey:rainbow
+Label.palette=Palette
+Desc.palette=Which colours the field cycles through.
+Widget.palette=radio

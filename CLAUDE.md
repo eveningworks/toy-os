@@ -768,6 +768,7 @@ whenever a headline here tells you something you did not already know.
 - **A CLIENT MAY ASK FOR A RESIZE CURSOR NOW: `WIN_CURSOR_RESIZE_H`/`_RESIZE_V`, and the compositor still wins on a window edge**
 - **A CONTROL BELOW THE FOLD IS UNREACHABLE, not merely hard to hit** -- and the clip is at the VIEWPORT EDGE, so a control STRADDLING it is half routable
 - **A SCREENSAVER IS A PROGRAM IN `/bin/wm/savers` AND THE COMPOSITOR OWNS THE IDLE CLOCK** -- a saver must declare `UAPP_RESIZABLE` and a non-zero size, or it silently stays a small box
+- **A SAVER'S OPTIONS ARE A DATA FILE BESIDE IT, AND SYSTEM SETTINGS GENERATES THE CONTROLS FROM IT** -- `/usr/wm/savers/<name>.saver` declares them and `/etc/savers/<name>.conf` holds them (`lib/usaver.h`); NOT in the savers directory, whose every entry is a selectable saver, and NOT registry settings, so the page synthesises their rows
 - **A CLICK THAT MISSES THE WINDOW LANDS ON WHATEVER IS BEHIND IT, AND AT THE BOTTOM OF THE SCREEN THAT IS THE TASKBAR** -- which MINIMIZES the window, after which the app reports nothing at all
 - **`on_draw` RUNS BEFORE THE WIDGETS; `on_draw_over` RUNS AFTER.**
 - **`uui_meter` IS THE READING WIDGET, AND IT RESERVES EVERY ROW IT COULD USE**

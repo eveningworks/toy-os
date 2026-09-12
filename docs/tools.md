@@ -2819,6 +2819,21 @@ window without going through it will find its layout polls timing out.
   control list means either a page with no controls or a page that never
   opened. `click()` refuses a point outside the content area outright,
   with a check naming the coordinate, so the whole class fails loudly.
+
+  It also drives the SCREENSAVER PAGE, whose option rows are not
+  registry settings at all: they are synthesised from the chosen saver's
+  descriptor (`userland/lib/usaver.h`) and written to a file of its own,
+  so the checks name the SAVER the rows claim to belong to rather than
+  counting them -- "there are controls" is satisfied by the two registry
+  settings alone. Two things it encodes. The saver is chosen BY NAME
+  through a scan, because the popup is a `uui_listbox` with no
+  `describe` and a row pitch worked out once from a font size is the
+  constant this repo has re-measured three times; and the rows are read
+  from the window `pick_saver()` already drained, because the layout
+  report is deduped per frame and the rebuilt page is described exactly
+  once. Asking for "any saver but this one" picked `blank`, which ships
+  with no descriptor and correctly shows nothing -- the swap check now
+  names a saver that has options.
 - **`screensaver_test.py`** -- the idle clock in the compositor, the
   two settings, and the savers it spawns. A saver is a PROCESS, so
   `gui idle` reports its pid and the checks ask for that rather than
@@ -2834,6 +2849,20 @@ window without going through it will find its layout polls timing out.
   minute, and it still refuses while the timeout is zero, so "off means
   off" stays testable. It puts both settings back, including after a
   failed check.
+
+  **And it checks that a saver's OPTIONS reach its pixels**, which is
+  the half neither `/tests/usaver_test` (does the file parse) nor
+  `settings_test.py` (does the app write it) can see: a descriptor wired
+  up and a `#define` still in place look identical from both. The tint
+  is asserted as a COMPARISON BETWEEN CHANNELS -- amber is redder than
+  it is blue, ice the other way -- because an absolute value would need
+  a threshold picked from one machine, and a saver ignoring the option
+  draws white, where the two are equal. The star count is asserted at
+  the two ends of its declared range, twenty times apart, which no
+  frame-to-frame variation in a moving field can cover. The conf file is
+  written with `tosh -c` and its redirection, UNQUOTED: the kernel
+  shell's `spawn` passes a quoted word through with its quotes, so tosh
+  re-lexes it as one word and runs a command called "echo colour=amber".
 - **`settings_harness_hostcheck.py`** -- `settings_test.py`'s own
   geometry and waits, on the host against a scripted console: a sidebar
   row is aimed at where it IS rather than where it would be unscrolled
@@ -3651,6 +3680,19 @@ window without going through it will find its layout polls timing out.
   the settings files) -- those grow as the system runs, and the rewrite
   path refuses rather than truncating, so they fail safely but only in
   the moment.
+
+  **It also checks the per-field text caps**, which is a different
+  failure from the file being too big: a `Description=`/`Label=` in
+  `data/etc/settings.d`, or a `Label.`/`Desc.`/`Unit.` in a
+  `data/wm/savers/*.saver`, longer than the fixed array it is copied
+  into arrives TRUNCATED MID-WORD with the file itself far under every
+  size limit here. The saver caps come from `userland/lib/usaver.h` and
+  the settings ones from the ABI, each read from its own header.
+
+  **Everything here walks `git ls-files`**, so a file that has not been
+  `git add`ed is invisible to it -- which is how a positive control on
+  a brand-new descriptor directory changed nothing at all and looked
+  like a checker that did not work.
 
 - **`hover_test.py`** -- that a hover change REPAINTS rather than only
   recording damage. Run by `gui_regress.py`.

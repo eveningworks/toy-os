@@ -16,6 +16,8 @@
 #include "ui/ugfx.h"
 #include "geom.h"
 #include "fixed.h"
+#include "lib/usaver.h"
+#include <string.h>
 
 #define V(a, b, c) { (a) * FX_ONE, (b) * FX_ONE, (c) * FX_ONE }
 
@@ -39,6 +41,14 @@ static const uint32_t FACE_RGB[8] = {
 };
 
 static fx_t g_yaw, g_pitch, g_roll;
+// The three tumble rates are DIVISORS of a turn, so a bigger `spin`
+// means a smaller divisor. 5 reproduces the 420/260/730 this had before
+// the option existed.
+static int g_spin = 5;
+// The solid's radius as a fraction of the smaller screen dimension --
+// the denominator, so larger is a smaller number. 3 was the constant.
+static int g_size_div = 3;
+static int g_wireframe;
 
 static void plot(void *ctx, int x, int y, uint32_t color, uint8_t alpha) {
     (void)alpha;
@@ -69,7 +79,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     // units. A radius of 240 with a distance of 8 puts the eye inside
     // the solid, the projection clamps, and the nearest face fills the
     // screen with one flat colour -- which is exactly what it did.
-    fx_t r = fx_from_int((s->h < s->w ? s->h : s->w) / 3);
+    fx_t r = fx_from_int((s->h < s->w ? s->h : s->w) / g_size_div);
     geom_transform3(VERT, 6, g_yaw, g_pitch, g_roll, r,
                     r * 4, s->w / 2, s->h / 2, xs, ys, zs);
 
@@ -101,8 +111,14 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
         if (n.z > 0) continue;   // wound away from the eye -- a back face
         int px[3] = { xs[f[0]], xs[f[1]], xs[f[2]] };
         int py[3] = { ys[f[0]], ys[f[1]], ys[f[2]] };
-        geom_fill_polygon(&t, px, py, 3,
-                          shade_rgb(FACE_RGB[order[i]], geom_shade(n, light)));
+        uint32_t c = shade_rgb(FACE_RGB[order[i]], geom_shade(n, light));
+        // WIREFRAME IS THE SAME FACE LIST, EDGES ONLY. The back-face
+        // test above still runs, so this draws the near half of the
+        // solid rather than every edge -- a hollow wireframe of a convex
+        // solid reads as noise, and the painter's order it is already
+        // sorted into is exactly what hidden-line removal needs.
+        if (g_wireframe) geom_polyline(&t, px, py, 3, 1, c, GEOM_ALIASED);
+        else             geom_fill_polygon(&t, px, py, 3, c);
     }
 }
 
@@ -110,15 +126,26 @@ static int on_tick(struct uapp *a) {
     (void)a;
     // THREE DIFFERENT RATES, so the tumble never repeats on a short
     // cycle -- equal rates give a solid that rocks back and forth.
-    g_yaw   = (g_yaw   + FX_ONE / 420) & (FX_ONE - 1);
-    g_pitch = (g_pitch + FX_ONE / 260) & (FX_ONE - 1);
-    g_roll  = (g_roll  + FX_ONE / 730) & (FX_ONE - 1);
+    g_yaw   = (g_yaw   + FX_ONE / (2100 / g_spin)) & (FX_ONE - 1);
+    g_pitch = (g_pitch + FX_ONE / (1300 / g_spin)) & (FX_ONE - 1);
+    g_roll  = (g_roll  + FX_ONE / (3650 / g_spin)) & (FX_ONE - 1);
     return 1;
 }
 
 static void on_open(struct uapp *a) { uapp_set_fullscreen(a, 1); }
 
+static void load_options(void) {
+    static struct usaver cfg;   // past the 2 KB ring-3 frame cap
+    usaver_load("solid", &cfg);
+    g_spin = usaver_int(&cfg, "spin", g_spin);
+    const char *sz = usaver_str(&cfg, "size", "medium");
+    if (!strcmp(sz, "small")) g_size_div = 5;
+    else if (!strcmp(sz, "large")) g_size_div = 2;
+    g_wireframe = strcmp(usaver_str(&cfg, "style", "solid"), "wireframe") == 0;
+}
+
 int main(void) {
+    load_options();
     struct uapp_desc desc = {
         .title = "Solid",
         .app_id = "saver-solid",

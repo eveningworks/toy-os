@@ -864,6 +864,70 @@ this the obvious way), not from how much history it accumulated.
   clock**: the compositor recognises a client by its SPAWN PATH and
   adopts it, so System Settings' Test button and a shell prompt both
   get dismiss-on-input for free, and neither can strand the screen.
+- **A SAVER'S OPTIONS ARE A DATA FILE BESIDE IT, AND SYSTEM SETTINGS
+  GENERATES THE CONTROLS FROM IT.** `/usr/wm/savers/<name>.saver`
+  declares what a saver lets you change and `/etc/savers/<name>.conf`
+  holds what it is set to; `userland/lib/usaver.h` is the one parser,
+  compiled into the saver and into System Settings alike. Adding an
+  option is a line of text in the descriptor plus the code that reads
+  it -- there is nothing to register and nothing to edit in the settings
+  app. That is XScreenSaver's arrangement, where each hack ships an XML
+  descriptor of its options and `xscreensaver-settings` builds the
+  dialog from it; Windows' is the other one, where a `.scr` run with
+  `/c` draws its own dialog, and it puts a whole settings window in
+  every saver.
+
+  Five things to know.
+
+  **THE DESCRIPTORS ARE NOT IN `/bin/wm/savers`.** The screensaver
+  setting's choice list IS that directory (`choice_dir`), so a
+  `starfield.saver` sitting beside `starfield` would become a saver you
+  could select and which could not start.
+
+  **THE DESCRIPTOR NAMES ITS OPTIONS IN AN `Options=` LINE**, because
+  `etc_config` cannot enumerate a document's keys and hand-walking the
+  buffer would be a second parser beside the shared one. That line is
+  also the ORDER the controls appear in.
+
+  **AN OPTION IS A BOUNDED INT OR A NAMED CHOICE, AND DELIBERATELY NOT A
+  BOOL** -- the settings registry has neither a bool type nor a checkbox
+  control, so a toggle is `enum:off,on` and gets the two radio buttons
+  every other two-way choice here gets.
+
+  **A VALUE THE DESCRIPTOR DOES NOT ALLOW READS AS THE DEFAULT.** These
+  are ordinary text files `edit` can change, and the descriptor is the
+  only thing between a typo and a saver asked to draw nine million
+  stars. The refusal is in `usaver_load()`, so both callers get it.
+
+  **THE OPTIONS ARE NOT REGISTRY SETTINGS, and System Settings
+  SYNTHESISES rows for them** past the registry's own (settings.c's
+  `g_saver_base`). They cannot be registered: what a saver offers
+  depends on which saver is selected, and that changes while the page is
+  open. Only the choice list and the WRITE know an option from a
+  setting; everything else -- layout, staging, the focus ring -- is one
+  path. Two consequences a change here must keep: the rows are REBUILT
+  when the dropdown moves rather than the page being re-opened, or a
+  staged timeout above them is silently discarded; and the Test button
+  WRITES the staged options before it spawns, because a child process
+  reads a file and there is no channel for an unwritten value.
+
+  **And the Test button moved UP when this landed, to sit under the
+  chooser.** It was the LAST item on the page, which fitted while the
+  Screensaver page was two rows and put it below the fold -- unreachable
+  rather than merely awkward -- as soon as a saver's options appeared
+  above it. Under the dropdown is where Windows puts Preview anyway, and
+  being near the top is what keeps it clear of the fold whatever the
+  saver declares.
+
+  **The trap that cost two attempts: A ROOT-LAYOUT ITEM CANNOT CHANGE
+  VISIBILITY PER PAGE.** `uapp` runs `uapp_desc.layout` at startup, on a
+  resize and on a font change, and at no other time -- so an item there
+  whose `hidden` follows the open page is placed ONCE, while hidden, at
+  ZERO SIZE, and never placed again. A zero-sized button still draws its
+  label, so the symptom is a stray caption where a control should be,
+  which points at drawing rather than at layout. A widget whose
+  visibility changes with the page belongs in the page's own item list,
+  which IS rebuilt and re-run on every page change.
 - **A CLICK THAT MISSES THE WINDOW LANDS ON WHATEVER IS BEHIND IT, AND
   AT THE BOTTOM OF THE SCREEN THAT IS THE TASKBAR.** The taskbar's
   button for the focused window MINIMIZES it, and a minimized client

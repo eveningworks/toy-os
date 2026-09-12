@@ -1,0 +1,13 @@
+# What Solid lets you change.
+Options=spin,size,style
+Option.spin=int:1..20:5
+Label.spin=Spin
+Desc.spin=How fast it tumbles. The three axes keep their different rates.
+Option.size=enum:small,medium,large:medium
+Label.size=Size
+Desc.size=How much of the screen the solid fills.
+Widget.size=slider
+Option.style=enum:solid,wireframe:solid
+Label.style=Style
+Desc.style=Filled faces, or just their edges.
+Widget.style=radio

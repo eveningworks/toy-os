@@ -9,6 +9,19 @@
 // Settings, because the setting's choice list IS this directory.
 #define SCREENSAVER_DIR "/bin/wm/savers"
 
+// A saver's OPTIONS: what it declares, and what they are set to. Two
+// directories rather than one because the halves have different
+// lifetimes -- the descriptors ship with the programs and are
+// read-only, the values are written by whoever changes them. The pair
+// is lib/usaver.h's; nothing in the kernel reads either.
+//
+// THE DESCRIPTORS ARE NOT IN SCREENSAVER_DIR, and that is not tidiness:
+// the setting's choice list IS that directory, so a `starfield.saver`
+// sitting beside `starfield` would become a saver you could select and
+// which would fail to start.
+#define SCREENSAVER_DESC_DIR "/usr/wm/savers"
+#define SCREENSAVER_CONF_DIR "/etc/savers"
+
 // Nothing running, which is a real state rather than an absence: the
 // timeout is what turns the feature on.
 #define SCREENSAVER_DEFAULT "starfield"

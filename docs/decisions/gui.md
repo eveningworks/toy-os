@@ -7151,3 +7151,94 @@ it properly needs a TRANSIENT display-power control, because
 what the user chose and leave a dark screen behind any crash that
 skipped the restore. That is DPMS, which is a different thing from
 brightness in every system that has both, and it is on `docs/roadmap.md`.
+
+## A saver's options are declared by a data file, not registered as settings
+
+**The problem.** Every knob in every saver was a `#define` -- starfield's
+star count, matrix's trail length, plasma's cell size. Making them
+configurable means answering three separate questions: what options
+exist, where the chosen values live, and who draws the controls.
+
+**What other systems do.** Windows answers all three inside the saver: a
+`.scr` run with `/c` opens its own configuration dialog and stores the
+result wherever it likes, so the shell knows nothing and every saver
+carries a settings window. XScreenSaver answers them declaratively: each
+hack ships an XML descriptor of its options and `xscreensaver-settings`
+GENERATES the dialog from it, with the chosen values becoming command
+line arguments. GNOME dropped configurable savers entirely; Plasma's
+lock-screen plugins are Windows' model in QML.
+
+**Why XScreenSaver's, here.** toy-os already had every ingredient: the
+saver list is a DIRECTORY (`choice_dir`), a setting's prose comes from a
+data file (`/etc/settings.d`), and the Start menu is built from
+`.desktop` files. A declarative descriptor is the shape this project
+keeps reaching for, and the reason is always the same -- the thing that
+knows is a file, so there is exactly one place to change and no C to
+edit in a second component. A saver gains an option by growing a line;
+System Settings never learns that any saver exists.
+
+**Why NOT registry settings.** The obvious alternative was to scan the
+descriptors at boot and register a `struct setting` per option, which
+would have needed no change to System Settings at all. It was declined
+on two counts. The registry is a BOOT-TIME list and what a saver offers
+depends on which saver is SELECTED, which changes while the settings
+page is open -- so the rows would all have to exist at once, and every
+saver's options would be visible whether or not it was in use. And the
+registry is a fixed-size table with a ceiling the ABI shares (`SETTING_MAX`,
+45 of 56 used when this was written); six savers' worth of options would
+have exhausted it, and raising a shared ABI constant to hold data that
+is not settings is the wrong direction.
+
+**So the settings page SYNTHESISES rows** at indices past the registry's
+(`g_saver_base` in `settings.c`). That keeps one code path for layout,
+staging, the focus ring and the status line; only the choice list and
+the WRITE ask whether a row is an option. The alternative -- a second
+kind of slot with its own drawing -- is the shape this app was built to
+avoid, since it had one hand-written applet per setting before the
+registry existed.
+
+**The values are a file per saver, not arguments.** XScreenSaver passes
+the options as argv, which toy-os could do (`SPAWN_ARGV` exists). A file
+was chosen because a saver is spawned by three different things here --
+the idle clock, the Test button, and a person at a shell prompt -- and
+only the first two could be taught to build an argv. A saver run by hand
+would silently draw its defaults, which is the kind of difference nobody
+finds until they are debugging something else.
+
+**The cost, stated: the Test button writes.** A child process reads a
+file at startup, so there is no channel for a value that has only been
+staged; a Test that skipped the write would preview the options you did
+NOT pick. So it commits this saver's own options before spawning, and
+says so in the status bar. It is the one place this page writes without
+being told to, and the settings above the options still wait for Apply.
+
+**A saver may declare nothing**, which is a state rather than an
+absence: `blank` ships with no descriptor at all and the page simply
+shows the two settings that select it. Making a descriptor mandatory
+would mean shipping a file that says "no options", which is a file that
+can go stale.
+
+**What this cost elsewhere: the Test button moved up the page.** It was
+the last item on the scrolling page, which was fine while the Screensaver
+page held two rows and put it past the bottom edge the moment a saver's
+three options were added above it -- unreachable, not merely awkward,
+since a scroll view refuses a press outside its viewport. It now sits
+directly under the saver chooser, which is where Windows puts Preview
+and KDE its lock-screen preview: beside the thing it previews rather than
+among the dialog's own verbs, and near enough to the top that no
+saver's option list can push it off.
+
+**The obvious fix was tried first and does not work, which is worth
+recording because the symptom points somewhere else.** Moving it into
+the ROOT layout beside OK/Apply/Cancel -- where an action arguably
+belongs, and where CLAUDE.md's "keep the chrome outside the scroll view"
+rule seems to send it -- produces a button of zero size. `uapp` runs
+`uapp_desc.layout` at startup, on a resize and on a font change and at
+no other time, so a root item whose `hidden` tracks the open page is
+placed ONCE, while hidden, and never again. It was tried twice, as a
+fourth column row (height 0) and as a row shared with the button group
+(width 0), and both times the button drew its LABEL and nothing else --
+which reads as a rendering bug and sent the first diagnosis after the
+column's spare height instead. The rule underneath it: per-page
+visibility belongs in the per-page item list, because that is the only
+one rebuilt when the page changes.

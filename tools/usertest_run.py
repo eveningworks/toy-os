@@ -324,6 +324,13 @@ TESTS = [
     # subsampling and quality) is tools/uimg_hostcheck.py's job; this one
     # proves the same .c file works on this heap, in a real process.
     ("uimg_test", 0, None, None),
+    # The screensaver option descriptors, against the ones this image
+    # actually ships -- a saver's options are a contract between a data
+    # file and two programs that never see each other, and a parser
+    # tested against strings written beside it keeps agreeing with
+    # itself while a shipped descriptor drifts. Runs fine under `run`:
+    # it reads and writes files and waits for nothing.
+    ("usaver_test", 0, None, None),
     # Not a self-checker: it exists to prove an exit code survives the
     # round trip out of ring 3, so the CODE is the whole assertion.
     ("exit_test", 42, [], []),

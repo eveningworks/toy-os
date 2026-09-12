@@ -20,14 +20,17 @@
 #include "ui/ugfx.h"
 #include "lib/icon_cache.h"
 #include "lib/uimg.h"
+#include "lib/usaver.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 
-// 96, not larger: the icons are drawn from a 64px master, so anything
-// past about this is upscaled and the plate's rounded corners go soft.
-// A logo that is slightly small reads better than a big blurry one.
-#define ICON_PX 96
+// 96 by default, not larger: the icons are drawn from a 64px master, so
+// anything past about this is upscaled and the plate's rounded corners
+// go soft. A logo that is slightly small reads better than a big blurry
+// one -- which is why the `size` option can go further and the default
+// does not.
+static int g_icon_px = 96;
 
 static int g_x, g_y, g_dx = 3, g_dy = 2, g_seeded;
 static int g_w, g_h;           // the surface, as of the last paint
@@ -35,10 +38,19 @@ static int g_corners;          // how many times it has hit one exactly
 
 static void seed(int w, int h) {
     srand((unsigned)time(0));
-    g_x = rand() % (w > ICON_PX ? w - ICON_PX : 1);
-    g_y = rand() % (h > ICON_PX ? h - ICON_PX : 1);
-    g_dx = (rand() & 1) ? 3 : -3;
-    g_dy = (rand() & 1) ? 2 : -2;
+    g_x = rand() % (w > g_icon_px ? w - g_icon_px : 1);
+    g_y = rand() % (h > g_icon_px ? h - g_icon_px : 1);
+    // THE TWO AXES MUST DIFFER, which is the whole reason `speed` is not
+    // simply copied into both: with equal steps the logo runs a diagonal
+    // and hits a corner within seconds, every time, and the count below
+    // stops meaning anything. Two thirds keeps them apart across the
+    // declared range, which is why that range starts at 2.
+    int sx = g_dx < 0 ? -g_dx : g_dx;
+    if (sx < 2) sx = 2;
+    int sy = sx * 2 / 3;
+    if (sy < 1) sy = 1;
+    g_dx = (rand() & 1) ? sx : -sx;
+    g_dy = (rand() & 1) ? sy : -sy;
     g_seeded = 1;
 }
 
@@ -48,7 +60,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     if (!g_seeded) seed(s->w, s->h);
     g_w = s->w; g_h = s->h;
     ugfx_fill_rect(s, 0, 0, s->w, s->h, 0x000000);
-    const struct uimg *ico = icon_get("toyos", ICON_PX);
+    const struct uimg *ico = icon_get("toyos", g_icon_px);
     if (ico) ugfx_blit(s, g_x, g_y, ico->w, ico->h, ico->px, ico->w);
     // The corner count, small and dim in a corner of its own. It is the
     // only reason to keep watching, so not saying it would be perverse.
@@ -65,7 +77,7 @@ static int on_tick(struct uapp *a) {
     // what the last on_draw saw. They are the window's, and the window
     // is the screen.
     if (!g_seeded) return 1;
-    int maxx = g_w - ICON_PX, maxy = g_h - ICON_PX;
+    int maxx = g_w - g_icon_px, maxy = g_h - g_icon_px;
     if (maxx < 1) maxx = 1;
     if (maxy < 1) maxy = 1;
 
@@ -85,7 +97,15 @@ static int on_tick(struct uapp *a) {
 
 static void on_open(struct uapp *a) { uapp_set_fullscreen(a, 1); }
 
+static void load_options(void) {
+    static struct usaver cfg;   // past the 2 KB ring-3 frame cap
+    usaver_load("bounce", &cfg);
+    g_icon_px = usaver_int(&cfg, "size", g_icon_px);
+    g_dx = usaver_int(&cfg, "speed", 3);   // seed() derives the other axis
+}
+
 int main(void) {
+    load_options();
     struct uapp_desc desc = {
         .title = "Bounce",
         .app_id = "saver-bounce",

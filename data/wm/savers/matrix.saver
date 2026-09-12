@@ -1,0 +1,13 @@
+# What Matrix lets you change.
+Options=trail,speed,colour
+Option.trail=int:4..30:14
+Label.trail=Trail length
+Desc.trail=Cells behind the head that still glow.
+Option.speed=enum:slow,normal,fast:normal
+Label.speed=Speed
+Desc.speed=How fast a column falls.
+Widget.speed=slider
+Option.colour=enum:green,amber,ice,white:green
+Label.colour=Colour
+Desc.colour=The trail's colour. The head stays bright whatever this is.
+Widget.colour=radio

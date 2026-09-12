@@ -27,9 +27,11 @@
 // also answers `wm_setting_generation()`, which is about the SETTINGS
 // REGISTRY rather than about a file and stays there.
 //
-// The 512-byte working buffer (ETC_CONFIG_MAX) is inherited from the
-// parser's header, so a document too large for the kernel is too large
-// here rather than the two disagreeing about where the limit is.
+// The working buffer (ETC_CONFIG_MAX) is inherited from the parser's
+// header, so a document too large for the kernel is too large here
+// rather than the two disagreeing about where the limit is. Named
+// rather than quoted: it has already moved once, and this comment said
+// 512 for some time after it became 4096.
 
 // Reads a whole config file into `buf`. 0 if it is missing, unreadable
 // or larger than the buffer -- the last of which is REFUSED rather than

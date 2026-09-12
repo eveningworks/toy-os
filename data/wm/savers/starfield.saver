@@ -1,0 +1,14 @@
+# What Starfield lets you change. See userland/lib/usaver.h for the
+# format; the values chosen here are written to /etc/savers/starfield.conf.
+Options=stars,speed,colour
+Option.stars=int:50..2000:420
+Label.stars=Stars
+Desc.stars=How many stars the field holds. Each one costs a divide per frame.
+Step.stars=10
+Option.speed=int:1..40:14
+Label.speed=Speed
+Desc.speed=How fast the field flies past you.
+Option.colour=enum:white,amber,ice,green:white
+Label.colour=Colour
+Desc.colour=The tint of the stars. Nearer ones are still brighter.
+Widget.colour=radio

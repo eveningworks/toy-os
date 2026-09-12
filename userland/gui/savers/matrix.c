@@ -14,11 +14,19 @@
 // needing a phase table.
 #include "ui/uapp.h"
 #include "ui/ugfx.h"
+#include "lib/usaver.h"
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #define COLS_MAX 256
-#define TRAIL    14          // cells behind the head that still glow
+
+static int g_trail = 14;     // cells behind the head that still glow
+// Rows a column falls per tick, as a range: the two ends differ so the
+// columns drift out of step on their own (see seed()).
+static int g_fall_min = 1, g_fall_max = 2;
+// The trail's colour, as a per-channel weight. Green is the identity.
+static int g_ink_r = 0, g_ink_g = 255, g_ink_b = 0;
 
 static struct {
     int head;                // row the bright cell is on, < 0 while waiting
@@ -47,7 +55,7 @@ static void seed(int w, int h) {
     for (int i = 0; i < g_cols; i++) {
         g_col[i].head = -1;
         g_col[i].wait = rand() % 120;
-        g_col[i].speed = 1 + (rand() % 2);
+        g_col[i].speed = g_fall_min + (rand() % (g_fall_max - g_fall_min + 1));
     }
     g_seeded = 1;
 }
@@ -62,7 +70,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 
     for (int c = 0; c < g_cols; c++) {
         if (g_col[c].head < 0) continue;
-        for (int t = 0; t < TRAIL; t++) {
+        for (int t = 0; t < g_trail; t++) {
             int row = g_col[c].head - t;
             if (row < 0 || row >= g_rows) continue;
             // THE HEAD IS WHITE AND THE TRAIL FADES, which is the whole
@@ -71,9 +79,11 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
             uint32_t col;
             if (t == 0) col = 0xE8FFE8;
             else {
-                int g = 255 - (t * 255) / TRAIL;
+                int g = 255 - (t * 255) / g_trail;
                 if (g < 24) g = 24;
-                col = (uint32_t)g << 8;
+                col = (uint32_t)(g * g_ink_r / 255) << 16 |
+                      (uint32_t)(g * g_ink_g / 255) << 8 |
+                      (uint32_t)(g * g_ink_b / 255);
             }
             ugfx_draw_char(s, c * cw, row * ch, glyph(), col, 0x000000);
         }
@@ -87,12 +97,13 @@ static int on_tick(struct uapp *a) {
         if (g_col[c].head < 0) {
             if (--g_col[c].wait <= 0) {
                 g_col[c].head = 0;
-                g_col[c].speed = 1 + (rand() % 2);
+                g_col[c].speed = g_fall_min +
+                                 (rand() % (g_fall_max - g_fall_min + 1));
             }
             continue;
         }
         g_col[c].head += g_col[c].speed;
-        if (g_col[c].head - TRAIL > g_rows) {
+        if (g_col[c].head - g_trail > g_rows) {
             g_col[c].head = -1;
             g_col[c].wait = 10 + (rand() % 90);
         }
@@ -102,7 +113,21 @@ static int on_tick(struct uapp *a) {
 
 static void on_open(struct uapp *a) { uapp_set_fullscreen(a, 1); }
 
+static void load_options(void) {
+    static struct usaver cfg;   // past the 2 KB ring-3 frame cap
+    usaver_load("matrix", &cfg);
+    g_trail = usaver_int(&cfg, "trail", g_trail);
+    const char *sp = usaver_str(&cfg, "speed", "normal");
+    if (!strcmp(sp, "slow"))      { g_fall_min = 1; g_fall_max = 1; }
+    else if (!strcmp(sp, "fast")) { g_fall_min = 2; g_fall_max = 4; }
+    const char *ink = usaver_str(&cfg, "colour", "green");
+    if (!strcmp(ink, "amber")) { g_ink_r = 255; g_ink_g = 176; g_ink_b = 0; }
+    else if (!strcmp(ink, "ice")) { g_ink_r = 128; g_ink_g = 200; g_ink_b = 255; }
+    else if (!strcmp(ink, "white")) { g_ink_r = 255; g_ink_g = 255; g_ink_b = 255; }
+}
+
 int main(void) {
+    load_options();
     struct uapp_desc desc = {
         .title = "Matrix",
         .app_id = "saver-matrix",

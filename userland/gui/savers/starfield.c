@@ -7,21 +7,31 @@
 //
 // INTEGER MATH ONLY. A star is a point in a box that flies toward the
 // viewer, and the projection is the textbook x/z -- a DIVIDE per star
-// per frame, which is why the count is in the hundreds rather than the
-// thousands. rand() is the source, because a starfield wants a
+// per frame, which is what the `stars` option's ceiling is about.
+// rand() is the source, because a starfield wants a
 // plausible spread and nothing else; the kernel's krandom is not linked
 // into ring-3 programs and would be the wrong ask if it were.
 #include "ui/uapp.h"
 #include "ui/ugfx.h"
+#include "lib/usaver.h"
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
-#define STARS 420
+// THE CEILING THE OPTION IS BOUNDED BY, not a count: `stars` comes from
+// /usr/wm/savers/starfield.saver and the array has to hold its maximum.
+// The two must agree -- a descriptor raised past this would be clamped
+// here with nothing saying so.
+#define STARS_MAX 2000
 #define DEPTH 1024           // the z a star is born at, and dies past
-#define SPEED 14             // z units a frame -- about 1.3 s to cross
 
-static struct { int x, y, z; } g_star[STARS];
+static struct { int x, y, z; } g_star[STARS_MAX];
 static int g_seeded;
+static int g_stars = 420, g_speed = 14;
+// The tint, as a per-channel weight over the depth brightness. White is
+// the identity, so the unconfigured saver draws exactly what it drew
+// before this file learned about options.
+static int g_tint_r = 255, g_tint_g = 255, g_tint_b = 255;
 // The surface the field was spread over. A saver opens at its
 // descriptor's size and is resized to the screen a frame later, so a
 // field seeded once fills a 640x480 box in the middle of a 1280x720
@@ -45,7 +55,7 @@ static void respawn(int i, int w, int h, int z) {
 static void seed(int w, int h) {
     if (!g_seeded) srand((unsigned)time(0));
     g_for_w = w; g_for_h = h;
-    for (int i = 0; i < STARS; i++)
+    for (int i = 0; i < g_stars; i++)
         respawn(i, w, h, 1 + (int)((unsigned)rand() % DEPTH));
     g_seeded = 1;
 }
@@ -57,7 +67,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     if (!g_seeded || w != g_for_w || h != g_for_h) seed(w, h);
     ugfx_fill_rect(s, 0, 0, w, h, 0x000000);
 
-    for (int i = 0; i < STARS; i++) {
+    for (int i = 0; i < g_stars; i++) {
         int z = g_star[i].z;
         if (z <= 0) continue;
         int px = cx + (g_star[i].x * (DEPTH / 2)) / z;
@@ -67,7 +77,9 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
         // a field of identical dots reads as noise however it moves.
         int lum = 255 - (z * 255) / DEPTH;
         if (lum < 24) lum = 24;
-        uint32_t c = ((uint32_t)lum << 16) | ((uint32_t)lum << 8) | (uint32_t)lum;
+        uint32_t c = (uint32_t)(lum * g_tint_r / 255) << 16 |
+                     (uint32_t)(lum * g_tint_g / 255) << 8 |
+                     (uint32_t)(lum * g_tint_b / 255);
         ugfx_put_pixel(s, px, py, c);
         // A NEAR star is a 2x2 block, so the field gains weight as it
         // arrives instead of staying one pixel until it vanishes.
@@ -81,8 +93,8 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 
 static int on_tick(struct uapp *a) {
     (void)a;
-    for (int i = 0; i < STARS; i++) {
-        g_star[i].z -= SPEED;
+    for (int i = 0; i < g_stars; i++) {
+        g_star[i].z -= g_speed;
         if (g_star[i].z <= 1) g_star[i].z = DEPTH;
     }
     return 1;   // repaint
@@ -90,7 +102,23 @@ static int on_tick(struct uapp *a) {
 
 static void on_open(struct uapp *a) { uapp_set_fullscreen(a, 1); }
 
+// READ ONCE, BEFORE THE FIRST FRAME. The options cannot change under a
+// running saver: the compositor kills this process on the first
+// keypress, so the next run is what picks a new value up.
+static void load_options(void) {
+    static struct usaver cfg;   // ~1.5 KB, past the 2 KB ring-3 frame cap
+    usaver_load("starfield", &cfg);
+    g_stars = usaver_int(&cfg, "stars", g_stars);
+    if (g_stars > STARS_MAX) g_stars = STARS_MAX;
+    g_speed = usaver_int(&cfg, "speed", g_speed);
+    const char *tint = usaver_str(&cfg, "colour", "white");
+    if (!strcmp(tint, "amber")) { g_tint_r = 255; g_tint_g = 191; g_tint_b = 64; }
+    else if (!strcmp(tint, "ice")) { g_tint_r = 160; g_tint_g = 208; g_tint_b = 255; }
+    else if (!strcmp(tint, "green")) { g_tint_r = 96; g_tint_g = 255; g_tint_b = 128; }
+}
+
 int main(void) {
+    load_options();
     struct uapp_desc desc = {
         .title = "Starfield",
         // RESIZABLE, because the compositor REFUSES fullscreen to a

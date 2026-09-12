@@ -210,6 +210,7 @@ SEED_SOURCES = {
     # staged under seed/once/ (copied only when missing) -- see unsourced_staged_files().
     "../once/home/desktop": "data/wm/applications",
     "usr/wm/startup":    "data/wm/startup",
+    "usr/wm/savers":     "data/wm/savers",
     "usr/share/icons":   "data/icons",
     "usr/share/music":   "data/usr/share/music",
     "usr/share/fonts":   "data/fonts",

@@ -44,6 +44,7 @@
 #include "ui/uui_textbox.h"
 #include "ui/uui_button.h"
 #include "screensaver_config.h"
+#include "lib/usaver.h"
 #include "ui/uui_button_group.h"
 #include "ui/uui_statusbar.h"
 #include "ui/uui_scrollview.h"
@@ -58,7 +59,11 @@ _Static_assert(UUI_TEXTBOX_MAX >= SETTING_ABI_VALUE_MAX,
                "a text field must hold a whole setting value, or editing one "
                "silently truncates it");
 
-#define MAX_SETTINGS   SETTING_ABI_MAX
+// THE REGISTRY'S SETTINGS, PLUS THE SELECTED SCREENSAVER'S OPTIONS.
+// The options are not registered anywhere (see g_saver_base below);
+// they are synthesised into these arrays at indices past the registry's
+// so that one code path draws both.
+#define MAX_SETTINGS   (SETTING_ABI_MAX + USAVER_OPT_MAX)
 // Room for every timezone the kernel ships plus hand-added rows.
 #define MAX_CHOICES    128
 #define MAX_CATEGORIES 12
@@ -70,7 +75,9 @@ _Static_assert(UUI_TEXTBOX_MAX >= SETTING_ABI_VALUE_MAX,
 #define MAX_GROUPS     24
 // Controls on one page. A group larger than this would be a page nobody
 // can take in anyway; the overflow is REPORTED rather than silently cut.
-#define PAGE_MAX       6
+// Sized by the Screensaver page, which is the only one that grows: its
+// two registry settings plus whatever the chosen saver declares.
+#define PAGE_MAX       (2 + USAVER_OPT_MAX)
 
 // Above this many choices a page uses a DROPDOWN rather than radio
 // buttons, unless /etc/settings.d says otherwise. Few mutually-exclusive
@@ -121,6 +128,19 @@ static int      g_order[MAX_SETTINGS];
 static char     g_unavail[MAX_SETTINGS][SETTING_ABI_DESC_MAX];
 static int      g_setting_count;
 static uint32_t g_generation;
+
+// THE SELECTED SCREENSAVER'S OPTIONS, as rows past the registry's.
+//
+// A saver's options are declared by a data file beside the program and
+// belong to a process that is not running (lib/usaver.h), so there is
+// nothing for the settings registry to hold: what a saver offers
+// depends on which saver is selected, and that changes while this page
+// is open. Synthesising rows keeps load_slot(), relayout_page(), the
+// focus ring and the staging logic on one path -- only the CHOICE LIST
+// and the WRITE know an option from a setting.
+static struct usaver g_saver;
+static int g_saver_base = -1;  // first synthesised index, or -1 for none
+static int g_saver_slot = -1;  // first option's slot, or -1
 
 // The sidebar: categories, and the pages under them.
 static char g_cat[MAX_CATEGORIES][SETTING_ABI_CATEGORY_MAX];
@@ -511,6 +531,15 @@ static const char *slot_prose(int idx) {
     return g_unavail[idx][0] ? g_unavail[idx] : g_desc[idx];
 }
 
+// The saver option behind a synthesised row, or NULL for a real
+// setting. Every place that has to tell them apart asks this, so the
+// "an index past the registry is an option" rule is written once.
+static const struct usaver_opt *opt_of(int idx) {
+    if (g_saver_base < 0 || idx < g_saver_base) return 0;
+    int i = idx - g_saver_base;
+    return i < g_saver.opt_count ? &g_saver.opt[i] : 0;
+}
+
 // A setting the REGISTRY says cannot be changed here gets every one of
 // its controls disabled -- all four, not just the one showing, because
 // /etc/settings.d can swap which one that is with a `Widget=` line and
@@ -596,30 +625,42 @@ static void load_slot(struct slot *sl, int idx) {
         return;
     }
 
+    const struct usaver_opt *o = opt_of(idx);
     for (int c = 0; c < MAX_CHOICES; c++) {
-        struct setting_msg m;
-        memset(&m, 0, sizeof m);
-        m.op = SETTING_OP_CHOICE;
-        m.index = idx;
-        m.choice = c;
-        if (sys_setting(&m) != 0) break; // past the last one
+        // THE RAW VALUE IS WHAT GETS STORED; the label is what is shown.
+        // The registry's own label falls back to the value, and a saver
+        // option has no display names at all (usaver_display() just
+        // capitalises), so neither branch has to decide -- applying the
+        // displayed string would try to set the timezone to "Los
+        // Angeles".
+        char raw[SETTING_ABI_VALUE_MAX], disp[SETTING_ABI_LABEL_MAX];
+        if (o) {
+            if (c >= o->choice_count) break;
+            strlcpy(raw, o->choice[c], sizeof raw);
+            usaver_display(raw, disp, sizeof disp);
+        } else {
+            struct setting_msg m;
+            memset(&m, 0, sizeof m);
+            m.op = SETTING_OP_CHOICE;
+            m.index = idx;
+            m.choice = c;
+            if (sys_setting(&m) != 0) break; // past the last one
+            strlcpy(raw, m.value, sizeof raw);
+            strlcpy(disp, m.label, sizeof disp);
+        }
 
-        // The RAW value is what gets stored; `label` is what is shown,
-        // and the kernel falls it back to the value, so this never has
-        // to decide. Applying the displayed string would try to set the
-        // timezone to "Los Angeles".
-        strlcpy(sl->choice_raw[c], m.value, sizeof sl->choice_raw[c]);
-        if (strcmp(m.value, g_value[idx]) == 0) {
+        strlcpy(sl->choice_raw[c], raw, sizeof sl->choice_raw[c]);
+        if (strcmp(raw, g_value[idx]) == 0) {
             // THE MARKER, baked into the option's text: uui_radio_list
             // and uui_dropdown both take plain strings, and a "mark this
             // row" hook on each would be a widget feature with one
             // caller. If a second app wants it, that is when it earns a
             // place in the widgets.
-            snprintf(sl->choice[c], sizeof sl->choice[c], "%s   (current)", m.label);
+            snprintf(sl->choice[c], sizeof sl->choice[c], "%s   (current)", disp);
             sl->baseline = c;
             sl->staged = c;
         } else {
-            strlcpy(sl->choice[c], m.label, sizeof sl->choice[c]);
+            strlcpy(sl->choice[c], disp, sizeof sl->choice[c]);
         }
         sl->choice_ptr[c] = sl->choice[c];
         sl->choice_count = c + 1;
@@ -647,6 +688,83 @@ static void load_slot(struct slot *sl, int idx) {
     set_slot_enabled(sl, idx);
 }
 
+static const char *staged_value(struct slot *sl);
+
+// Replaces the page's saver-option rows with `saver`'s, leaving every
+// registry slot before them -- and whatever is staged on those --
+// alone.
+//
+// CALLED AGAIN WHENEVER THE SAVER DROPDOWN MOVES, which is why it
+// truncates rather than rebuilding the page: re-opening the group would
+// discard a staged timeout, so picking a saver would silently undo the
+// change above it.
+static void rebuild_saver_options(const char *saver) {
+    if (g_saver_slot < 0) return;
+    g_slot_count = g_saver_slot;
+    g_saver_base = -1;
+    if (!saver || !saver[0]) return;
+
+    usaver_load(saver, &g_saver);
+    if (!g_saver.opt_count) return;
+    g_saver_base = g_setting_count;
+
+    for (int i = 0; i < g_saver.opt_count && g_slot_count < PAGE_MAX; i++) {
+        const struct usaver_opt *o = &g_saver.opt[i];
+        int k = g_saver_base + i;
+
+        // A SYNTHESISED ROW IS A REAL ROW. Everything downstream reads
+        // these arrays and nothing asks where a row came from, so a
+        // field left stale from the last saver is a control bounded by
+        // another saver's range.
+        strlcpy(g_label[k], o->label, sizeof g_label[k]);
+        strlcpy(g_desc[k],  o->desc,  sizeof g_desc[k]);
+        strlcpy(g_value[k], o->value, sizeof g_value[k]);
+        strlcpy(g_unit[k],  o->unit,  sizeof g_unit[k]);
+        // NAMED BY THE FILE IT IS WRITTEN TO, the way a qualified
+        // setting name is -- so the status line and the log say
+        // `starfield.stars` rather than a bare `stars` that two savers
+        // could both claim.
+        snprintf(g_name[k], sizeof g_name[k], "%s.%s", saver, o->key);
+        g_ns[k][0] = '\0';
+        usaver_conf_path(saver, g_file[k], sizeof g_file[k]);
+        g_cat_of[k][0] = '\0';
+        g_group_of[k][0] = '\0';
+        g_unavail[k][0] = '\0';
+        g_sflags[k] = 0;
+        g_order[k] = 0;
+        g_type[k] = o->type == USAVER_INT ? SETTING_ABI_TYPE_INT
+                                          : SETTING_ABI_TYPE_ENUM;
+        g_imin[k] = o->imin;
+        g_imax[k] = o->imax;
+        g_istep[k] = o->istep;
+        g_widget[k] = o->widget == USAVER_WIDGET_RADIO ? SETTING_ABI_WIDGET_RADIO
+                    : o->widget == USAVER_WIDGET_DROPDOWN ? SETTING_ABI_WIDGET_DROPDOWN
+                    : o->widget == USAVER_WIDGET_SLIDER ? SETTING_ABI_WIDGET_SLIDER
+                    : SETTING_ABI_WIDGET_AUTO;
+
+        load_slot(&g_slot[g_slot_count++], k);
+    }
+    // REPORTED, never silently cut -- the same rule the registry side of
+    // this page follows. It can only happen if the Screensaver group
+    // gains a third setting, which PAGE_MAX is not sized for.
+    if (g_slot_count - g_saver_slot < g_saver.opt_count)
+        snprintf(g_status, sizeof g_status,
+                 "%s: only %d of %d options fit on this page", saver,
+                 g_slot_count - g_saver_slot, g_saver.opt_count);
+    ulogf("settings: saver %s options %d shown %d\n", saver,
+          g_saver.opt_count, g_slot_count - g_saver_slot);
+}
+
+// The saver the page is currently showing -- the STAGED one, not what
+// is on disk, so the options follow the dropdown immediately.
+static const char *page_saver(void) {
+    for (int i = 0; i < g_slot_count; i++)
+        if (g_slot[i].setting >= 0 && !opt_of(g_slot[i].setting) &&
+            strcmp(g_name[g_slot[i].setting], "desktop.screensaver") == 0)
+            return staged_value(&g_slot[i]);
+    return 0;
+}
+
 // Does this page have anything staged but not yet applied?
 static int page_dirty(void) {
     for (int i = 0; i < g_slot_count; i++)
@@ -668,6 +786,8 @@ static void open_group(int g) {
     g_page_group = g;
     g_show_sysinfo = 0;
     g_slot_count = 0;
+    g_saver_slot = -1;
+    g_saver_base = -1;
 
     int hidden_advanced = 0;
     // A SELECTION SORT over the group's settings rather than sorting the
@@ -724,6 +844,15 @@ static void open_group(int g) {
             strcmp(g_name[g_slot[i].setting], "desktop.screensaver") == 0)
             g_test_has = 1;
 
+    // ...and so do the chosen saver's own options, below the settings
+    // that select it. One page rather than a Configure button: the
+    // options are meaningless without the saver they belong to, and a
+    // dialog would hide the thing Test is there to preview.
+    if (g_test_has) {
+        g_saver_slot = g_slot_count;
+        rebuild_saver_options(page_saver());
+    }
+
     g_advanced_cb.checked = g_show_advanced;
     // The checkbox appears only where there is something to reveal --
     // an "advanced" toggle on a page with no advanced settings is a
@@ -777,6 +906,25 @@ static int apply_page(void) {
         struct slot *sl = &g_slot[i];
         if (sl->setting < 0 || sl->staged < 0) continue;
         if (sl->staged == sl->baseline) continue;
+
+        // A SAVER OPTION IS A LINE IN A FILE, and there is nothing to
+        // apply it to: no subsystem holds the value and the program that
+        // reads it is not running. So the write IS the change, and it
+        // cannot come back UNSAVED -- the two outcomes here are a
+        // rewritten document and a failed write.
+        const struct usaver_opt *o = opt_of(sl->setting);
+        if (o) {
+            if (uconf_set(g_file[sl->setting], o->key, staged_value(sl))) {
+                changed++;
+                ulogf("settings: set %s %s result saved\n",
+                      g_name[sl->setting], staged_value(sl));
+            } else {
+                failed++;
+                ulogf("settings: set %s %s result FAILED\n",
+                      g_name[sl->setting], staged_value(sl));
+            }
+            continue;
+        }
 
         struct setting_msg m;
         memset(&m, 0, sizeof m);
@@ -1065,6 +1213,27 @@ static void relayout_page(void) {
             FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &sl->radio, &uui_radio_list_ops };
         }
 
+        // THE TEST BUTTON SITS UNDER THE CONTROL IT PREVIEWS, and it is
+        // INSIDE the page for a reason that is not taste: the ROOT
+        // layout runs at startup, on a resize and on a font change only
+        // (uapp.c), so a root item whose `hidden` follows the open page
+        // is placed ONCE, while hidden, at zero size -- and a zero-sized
+        // button draws nothing but its label, which reads as a stray
+        // caption rather than as a missing control. PAGE is rebuilt and
+        // re-laid out on every page change, so a hidden item here works.
+        //
+        // Under the chooser is also where Windows puts Preview and where
+        // KDE puts its screen-locker preview: beside the thing it shows,
+        // not among the dialog's own verbs. Being near the TOP of the
+        // page is what keeps it clear of the scroll fold whatever the
+        // chosen saver declares.
+        if (g_test_has && sl->setting >= 0 &&
+            strcmp(g_name[sl->setting], "desktop.screensaver") == 0) {
+            PAGE[n++] = (struct uui_item){ .ops = &uui_button_ops,
+                                            .widget = &g_test_btn,
+                                            .id = ID_TEST };
+        }
+
         // The gap that separates this setting from the next -- see
         // `spacer`. NOT after the last one: a trailing blank row at the
         // bottom of a scroll view is space you can scroll to and find
@@ -1076,8 +1245,6 @@ static void relayout_page(void) {
     }
     PAGE[n++] = (struct uui_item){ .ops = &uui_checkbox_ops, .widget = &g_advanced_cb,
                                     .id = ID_ADVANCED, .hidden = !g_advanced_has };
-    PAGE[n++] = (struct uui_item){ .ops = &uui_button_ops, .widget = &g_test_btn,
-                                    .id = ID_TEST, .hidden = !g_test_has };
     PAGE_COUNT = n;
     PAGE_LAYOUT.count = n;
     // The widgets the ring pointed at may have been re-inited by
@@ -1192,6 +1359,17 @@ static void on_widget(struct uapp *a, int id, int reason) {
             ulogf("settings: staged %s %s\n", g_name[sl->setting],
                   staged_value(sl));
         }
+        // PICKING A SAVER CHANGES WHAT IS BELOW IT: the rows under the
+        // dropdown belong to the saver it names. Rebuilt here rather
+        // than at Apply, because a page still showing the previous
+        // saver's controls is one where every value and every bound is
+        // the wrong saver's.
+        if (sl->setting >= 0 && !opt_of(sl->setting) &&
+            strcmp(g_name[sl->setting], "desktop.screensaver") == 0) {
+            rebuild_saver_options(staged_value(sl));
+            g_prose_fitted = 0;   // the new rows' text has never been fitted
+            relayout_page();
+        }
         uapp_redraw(a);
         return;
     }
@@ -1233,12 +1411,33 @@ static void on_widget(struct uapp *a, int id, int reason) {
                 name = staged_value(sl);
         }
         if (!name || !name[0]) break;
+        // THE STAGED OPTIONS ARE WRITTEN FIRST, and that is the one
+        // place this page commits without being told to. A saver is a
+        // separate process that reads a file at startup: there is no
+        // channel for an unwritten value, so a Test that skipped this
+        // would preview the options you did NOT pick. Only this saver's
+        // own options are written -- the settings above them still wait
+        // for Apply.
+        int wrote = 0;
+        for (int i = 0; i < g_slot_count; i++) {
+            struct slot *sl = &g_slot[i];
+            const struct usaver_opt *o = sl->setting >= 0 ? opt_of(sl->setting) : 0;
+            if (!o || sl->staged == sl->baseline) continue;
+            if (uconf_set(g_file[sl->setting], o->key, staged_value(sl))) {
+                sl->baseline = sl->staged;
+                wrote++;
+            }
+        }
         char path[128];
         snprintf(path, sizeof path, "%s/%s", SCREENSAVER_DIR, name);
         int pid = sys_spawn(path, 0, -1);
-        if (pid > 0) snprintf(g_status, sizeof g_status, "Testing %s", name);
-        else         snprintf(g_status, sizeof g_status, "Could not start %s", name);
-        ulogf("settings: screensaver test %s pid %d\n", name, pid);
+        if (pid > 0 && wrote)
+            snprintf(g_status, sizeof g_status,
+                     "Testing %s -- %d option(s) saved", name, wrote);
+        else if (pid > 0) snprintf(g_status, sizeof g_status, "Testing %s", name);
+        else snprintf(g_status, sizeof g_status, "Could not start %s", name);
+        ulogf("settings: screensaver test %s pid %d options %d\n",
+              name, pid, wrote);
         break;
     }
     case ID_BUTTONS: {

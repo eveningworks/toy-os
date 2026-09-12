@@ -262,6 +262,16 @@ def main():
     # so a saver stuck on a flat fill cannot pass either.
     every_saver(dbg, qmp, args)
 
+    # --- AND ITS OPTIONS REACH THE PIXELS -------------------------------
+    #
+    # A saver declares what it lets you change and reads the chosen
+    # values at startup (userland/lib/usaver.h). That the FILE parses is
+    # /tests/usaver_test's job and that System Settings WRITES it is
+    # settings_test's; what neither can see is whether the saver's
+    # drawing actually uses what it read -- which is the half a wired-up
+    # descriptor and a `#define` still in place look identical from.
+    options_reach_the_pixels(dbg, qmp, args)
+
     # --- System Settings' Test button -----------------------------------
     #
     # Windows' Preview by another name. What makes it safe is that it
@@ -275,6 +285,119 @@ def main():
 
     dbg.close()
     return report()
+
+
+SAVER_CONF = "/etc/savers"
+
+
+def write_conf(dbg, saver, values):
+    """Put `values` in /etc/savers/<saver>.conf, replacing what is there.
+
+    Through `tosh -c` and its redirection, which is the only writer a
+    test outside the guest has: the kernel shell has no `>` and these
+    are not registry settings, so `config set` cannot reach them.
+    """
+    path = f"{SAVER_CONF}/{saver}.conf"
+    dbg.send(f"sh rm {path}")
+    for i, (k, v) in enumerate(values):
+        # UNQUOTED, deliberately. The kernel shell's `spawn` passes a
+        # quoted word through WITH its quotes, so tosh re-lexes it as one
+        # word and runs a command called "echo colour=amber". `tosh -c`
+        # joins everything after the flag with spaces, so the plain form
+        # is the one that works.
+        dbg.send(f"sh spawn /bin/tosh -c echo {k}={v} "
+                 f"{'>' if i == 0 else '>>'} {path}")
+    # READ IT BACK, and retry the lines that did not land. Without this
+    # the fixture can be incomplete and the saver then draws its DEFAULT
+    # for the missing option -- which is indistinguishable from the
+    # saver ignoring the option, and was reported as exactly that.
+    for _ in range(4):
+        got = dbg.send(f"sh cat {path}") or ""
+        missing = [(k, v) for k, v in values if f"{k}={v}" not in got]
+        if not missing:
+            return path
+        for k, v in missing:
+            dbg.send(f"sh spawn /bin/tosh -c echo {k}={v} >> {path}")
+    check(f"the {saver} fixture reached the disk", False,
+          f"{path} is {dbg.send(f'sh cat {path}')!r}, wanted {values}")
+    return path
+
+
+def saver_pixels(dbg, qmp, args, tag):
+    """Start the configured saver, photograph it, and take it down.
+
+    Returns (ink, mean red, mean blue) over the non-background pixels,
+    or None if it never came up.
+    """
+    from PIL import Image
+    dbg.send("gui idle start")
+    if wait_pid(dbg, True) is None or wait_window(dbg) is None:
+        return None
+    path = f"{args.logs}/saver_opt_{tag}.png"
+    # WAIT FOR THE SAVER'S OWN BACKDROP, not for a fixed delay. A window
+    # the compositor has accepted is not yet a window it has PAINTED,
+    # and a frame taken too early photographs the DESKTOP -- whose ink
+    # is grey, where red and blue are equal, which is exactly what a
+    # saver ignoring its colour option would look like. That read as a
+    # real failure once.
+    #
+    # Settled-frame comparison is no use here: this saver animates on
+    # purpose, so two identical dumps never arrive. The condition is
+    # what the saver paints -- a black screen with points on it.
+    px, bg, ink = [], None, []
+    for _ in range(20):
+        qmp.screenshot(path, stable=False)
+        im = Image.open(path).convert("RGB")
+        px = list(im.getdata())
+        bg = max(set(px), key=px.count)
+        ink = [p for p in px if p != bg]
+        if bg == (0, 0, 0) and ink:
+            break
+        time.sleep(0.3)
+    dbg.key(ord("a"))
+    wait_pid(dbg, False)
+    if not ink:
+        return 0, 0, 0
+    return (len(ink), sum(p[0] for p in ink) / len(ink),
+            sum(p[2] for p in ink) / len(ink))
+
+
+def options_reach_the_pixels(dbg, qmp, args):
+    saver = "starfield"
+    set_setting(dbg, "desktop.screensaver", saver)
+    conf = f"{SAVER_CONF}/{saver}.conf"
+
+    # THE TINT, AS A COMPARISON BETWEEN TWO CHANNELS. An absolute value
+    # would need a threshold picked from one machine's rendering; "amber
+    # is redder than it is blue" is true of the colour and of nothing
+    # else. A saver ignoring the option draws WHITE, where the two
+    # channels are equal -- so neither half can pass by accident.
+    write_conf(dbg, saver, [("stars", 1200), ("colour", "amber")])
+    amber = saver_pixels(dbg, qmp, args, "amber")
+    write_conf(dbg, saver, [("stars", 1200), ("colour", "ice")])
+    ice = saver_pixels(dbg, qmp, args, "ice")
+    if check("the tinted saver came up twice", amber is not None and ice is not None,
+             f"amber={amber} ice={ice}"):
+        check("colour=amber draws warm stars", amber[1] > amber[2] + 8,
+              f"r={amber[1]:.1f} b={amber[2]:.1f}")
+        check("colour=ice draws cold ones", ice[2] > ice[1] + 8,
+              f"r={ice[1]:.1f} b={ice[2]:.1f}")
+
+    # THE INT OPTION, as a count rather than a colour. The two ends of
+    # the declared range differ by twenty times, which no frame-to-frame
+    # variation in a moving field can cover.
+    write_conf(dbg, saver, [("stars", 100)])
+    few = saver_pixels(dbg, qmp, args, "few")
+    write_conf(dbg, saver, [("stars", 2000)])
+    many = saver_pixels(dbg, qmp, args, "many")
+    if check("the counted saver came up twice", few is not None and many is not None,
+             f"few={few} many={many}"):
+        check("stars=2000 paints far more than stars=100",
+              many[0] > few[0] * 4, f"{few[0]} px -> {many[0]} px")
+
+    # LEAVE NOTHING BEHIND: a conf file here changes what every later
+    # boot of this saver draws.
+    dbg.send(f"sh rm {conf}")
 
 
 def every_saver(dbg, qmp, args):

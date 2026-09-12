@@ -1,0 +1,10 @@
+# What Bounce lets you change.
+Options=size,speed
+Option.size=int:32..192:96
+Label.size=Logo size
+Desc.size=Pixels. The artwork is drawn from a 64px master, so large is upscaled.
+Step.size=16
+Unit.size=px
+Option.speed=int:2..12:3
+Label.speed=Speed
+Desc.speed=Pixels a frame across. The other axis is two thirds of it, so it still hits corners.
