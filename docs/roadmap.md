@@ -397,7 +397,7 @@ No dependency on the phases above; ordered among themselves.
 **Needs:** nothing. Each is a separate fix that starts with its own regression test -- see the long form for the order and why it is that order.
 
 - [ ] **NEXT** Journal failures: an aborted operation and a committed transaction awaiting recovery are not the same outcome
-- [ ] File-size and addressing limits, validated before anything is allocated
+- [x] ~~File-size and addressing limits, validated before anything is allocated~~ DONE 2026-09-12
 - [x] ~~Zero-fill after a truncation, so a shrink and regrow cannot expose the old bytes~~ DONE 2026-09-12
 - [x] ~~The stepped append, which erases a block's existing prefix~~ DONE 2026-09-12
 - [ ] A failed indirect-table read, currently returned as zeros

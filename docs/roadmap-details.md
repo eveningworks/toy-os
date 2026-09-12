@@ -488,6 +488,22 @@ because it touches every `txn_commit()` caller and the mount path.
   no block was ever allocated for, while the bytes at risk are the ones
   immediately after the old EOF. Fixed 2026-09-12.
 
+- **The addressing limit** (`map_get_or_alloc_tables()`,
+  `block_for_index()`). Every index past double-indirect took the
+  triple-indirect branch whether or not it FIT, so one block past the
+  last addressable one indexed a 4096-byte table at slot 1024 -- four
+  bytes off the end -- and a large enough offset wrapped when narrowed
+  to the uint32_t block index. There is one stated maximum now,
+  `T3_MAX_FILE_SIZE` (12 direct + 1024 + 1024^2 + 1024^3 blocks, ~4
+  TB), checked at every door: `do_write()`, the stepped write's
+  `begin()`, `tfs3_truncate()`, both mapping helpers, and
+  `read_inode()` -- a corrupt inode's recorded size must not be able to
+  drive the walk either. `t3_range_fits()` never evaluates
+  `offset + len`, since at these magnitudes the addition is what
+  overflows. The test asserts BOTH halves, because a limit set one too
+  low passes the refusal half on its own: the last addressable block
+  round-trips (four blocks of allocation at a ~4 TB offset, so it costs
+  the volume nothing) and the next one is refused. Fixed 2026-09-12.
 
 ### Kernel test harness
 

@@ -1041,3 +1041,52 @@ KTEST("fs", "a shrink then a regrow reads zeros, not the discarded bytes") {
 
     fs_delete("/.ktest_tzero");
 }
+
+// THE ADDRESSING LIMIT, AND THE TEST HAS TO REACH IT.
+// map_get_or_alloc_tables() took the triple-indirect branch for every
+// index past double-indirect without checking it FITS, so one block
+// past the last addressable one indexed a 4096-byte table at slot
+// 1024 -- four bytes off the end of it -- and a large enough offset
+// wrapped when narrowed to the uint32_t block index.
+//
+// A "large-sounding size" proves nothing here, which is this repo's
+// recurring trap: the branch is only reached AT the limit. So both
+// halves are asserted -- the last addressable block round-trips, and
+// the next one is refused -- because a limit set one too low passes
+// the refusal half on its own. The numbers are derived from the
+// format's own shape rather than from tfs3.c's macro, so the two
+// cannot agree by sharing a mistake.
+#define T3_MAX_BLKS ((uint64_t)T3_TRIPLE_FIRST + \
+                     (uint64_t)T3_PTRS * T3_PTRS * T3_PTRS)
+#define T3_MAX_SIZE (T3_MAX_BLKS * (uint64_t)T3_BLK)
+
+KTEST("fs", "the last addressable block works and the next one is refused") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_limit");
+
+    // Sparse: four blocks of allocation (top, middle, leaf, data) at a
+    // ~4 TB offset, so this costs nothing the volume has to hold.
+    uint64_t last = (T3_MAX_BLKS - 1) * (uint64_t)T3_BLK;
+    KTEST_ASSERT(fs_write_range("/.ktest_limit", last, "EDGE", 4) == 1);
+    char back[4] = {0};
+    KTEST_ASSERT_EQ(fs_read_range("/.ktest_limit", last, back, 4), 4u);
+    KTEST_ASSERT(back[0] == 'E' && back[3] == 'E');
+    KTEST_ASSERT_EQ((int64_t)fs_size("/.ktest_limit"), (int64_t)(last + 4));
+
+    // One block further is past what the format can address.
+    KTEST_ASSERT_EQ(fs_write_range("/.ktest_limit", T3_MAX_SIZE, "X", 1), 0);
+    // ...and so is a range that STARTS inside and ends outside.
+    KTEST_ASSERT_EQ(fs_write_range("/.ktest_limit", T3_MAX_SIZE - 2, "XXXX", 4), 0);
+    // An offset that would wrap `offset + len` is refused on the
+    // offset, not by computing a small-looking sum.
+    KTEST_ASSERT_EQ(fs_write_range("/.ktest_limit", 0xFFFFFFFFFFFFFFF0ull, "XXXX", 4), 0);
+    // The stepped writer has its own door and must refuse the same.
+    KTEST_ASSERT(fs_write_range_begin("/.ktest_limit", T3_MAX_SIZE, "X", 1) == 0);
+
+    // Truncate: exactly the maximum is legal (sparse), one past it is not.
+    KTEST_ASSERT_EQ(fs_truncate("/.ktest_limit", T3_MAX_SIZE + 1), 0);
+    KTEST_ASSERT(fs_truncate("/.ktest_limit", T3_MAX_SIZE) == 1);
+    KTEST_ASSERT_EQ((int64_t)fs_size("/.ktest_limit"), (int64_t)T3_MAX_SIZE);
+
+    fs_delete("/.ktest_limit");
+}

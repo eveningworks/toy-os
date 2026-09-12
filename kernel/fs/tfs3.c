@@ -58,6 +58,27 @@
 #define T3_BACKUP_BLOCKS (T3_GDT_BLOCKS + 1)
 #define T3_PTRS_PER_BLOCK (T3_BLOCK / 4u)
 
+// THE ONE STATED MAXIMUM FILE SIZE. The format addresses 12 direct
+// blocks plus one single, one double and one triple indirect table and
+// nothing past that -- so an index beyond this made
+// map_get_or_alloc_tables() take the triple branch anyway and index a
+// 4096-byte table with a slot number it has not got, and a big enough
+// offset wrapped when narrowed to the uint32_t block index. Checked at
+// every door rather than in one of them: write, truncate, the stepped
+// write, the two mapping helpers, and an inode's own recorded size,
+// since a corrupt inode must not be able to drive the walk either.
+#define T3_MAX_FILE_BLOCKS ((uint64_t)12u + T3_PTRS_PER_BLOCK + \
+                            (uint64_t)T3_PTRS_PER_BLOCK * T3_PTRS_PER_BLOCK + \
+                            (uint64_t)T3_PTRS_PER_BLOCK * T3_PTRS_PER_BLOCK * \
+                            T3_PTRS_PER_BLOCK)
+#define T3_MAX_FILE_SIZE   (T3_MAX_FILE_BLOCKS * (uint64_t)T3_BLOCK)
+
+// Does [offset, offset+len) fit? Written so `offset + len` is never
+// evaluated: at these magnitudes it is the addition that overflows.
+static inline int t3_range_fits(uint64_t offset, uint64_t len) {
+    return offset <= T3_MAX_FILE_SIZE && len <= T3_MAX_FILE_SIZE - offset;
+}
+
 // ---- the two journal geometries -------------------------------------------
 //
 // The journal is a fixed region between the superblock and the group
@@ -647,6 +668,7 @@ static int read_inode(uint64_t ino, struct t3_inode *out) {
     out->type = p[0];
     out->links = rd16(p + 2);
     out->size = rd64(p + 4);
+    if (out->size > T3_MAX_FILE_SIZE) return 0; // corrupt: past what the format addresses
     out->created = rd64(p + 12);
     out->modified = rd64(p + 20);
     for (int i = 0; i < 15; i++) out->ptrs[i] = rd32(p + 28 + i * 4);
@@ -666,6 +688,7 @@ static int read_inode(uint64_t ino, struct t3_inode *out) {
 #define T3_RC_TOP  2
 
 static uint32_t block_for_index(const struct t3_inode *node, uint32_t idx) {
+    if ((uint64_t)idx >= T3_MAX_FILE_BLOCKS) return 0;
     if (idx < 12) return node->ptrs[idx];
     idx -= 12;
     if (idx < T3_PTRS_PER_BLOCK) {
@@ -1464,6 +1487,7 @@ static int map_get_or_alloc_tables(struct t3_inode *node, uint32_t idx,
                                     uint32_t prefer_group,
                                     uint32_t *out_leaf_blk, uint32_t *out_leaf_slot,
                                     uint32_t *out_existing) {
+    if ((uint64_t)idx >= T3_MAX_FILE_BLOCKS) return 0;
     if (idx < 12) {
         *out_leaf_blk = 0; // direct -- lives in the inode itself
         *out_leaf_slot = idx;
@@ -1679,6 +1703,9 @@ static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
 // comment. Only a CRASH is allowed to cost a leak.
 static int do_write(uint64_t ino, struct t3_inode *node, uint64_t offset,
                     const void *buf, uint32_t len) {
+    // BEFORE anything is allocated: a refusal that came after would
+    // leave the blocks behind for a write that never happened.
+    if (!t3_range_fits(offset, len)) return 0;
     alog_begin();
     int ok = do_write_inner(ino, node, offset, buf, len);
     if (ok) {
@@ -3071,6 +3098,7 @@ static int tfs3_truncate(const char *path, uint64_t size) {
     struct t3_inode node;
     if (!resolve(norm, &ino) || !read_inode(ino, &node)) return 0;
     if (node.type != T3_TYPE_FILE) return 0; // directories size themselves
+    if (size > T3_MAX_FILE_SIZE) return 0;   // a sparse grow past what the format addresses
     if (node.size == size) return 1;
 
     struct t3_trunc tr;
@@ -3130,6 +3158,7 @@ struct t3_write_step {
 static void *tfs3_write_range_begin(const char *path, uint64_t offset, const void *buf, uint32_t len) {
     char norm[T3_PATH_BUF];
     if (!S->mounted || !normalize(path, norm)) return 0;
+    if (!t3_range_fits(offset, len)) return 0;
     uint64_t ino;
     if (!resolve(norm, &ino)) {
         if (!create_entry(path, T3_TYPE_FILE, &ino)) return 0;
