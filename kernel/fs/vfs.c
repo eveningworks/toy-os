@@ -57,9 +57,10 @@
 // covers a caller preempted between two mounts exactly as it covers one
 // preempted within one.
 //
-// This is NOT the same thing as fs_read()'s nested-read refusal, which
-// protects one buffer during one call; this protects every backend's
-// internal state for the whole call. Note it does not make a LIST
+// This is NOT the same thing as the nested-read refusal that guarded
+// the old fs_read()'s shared staging buffer -- that call and its buffer
+// were deleted on 2026-09-03; this protects every backend's internal
+// state for the whole call. Note it does not make a LIST
 // CALLBACK safe to call fs_* from -- that is direct recursion, not
 // preemption, and the depth counter cannot see the difference.
 #define FS_OP(m, expr) ({                  \

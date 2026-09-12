@@ -165,8 +165,9 @@ int pthread_attr_getdetachstate(const pthread_attr_t *a, int *out) {
 
 // --- mutexes ---------------------------------------------------------
 //
-// A TEST-AND-SET THAT YIELDS, not a futex: there is no syscall to park
-// on an address yet (docs/roadmap.md). Correct under a preemptive
+// A TEST-AND-SET THAT YIELDS, not a futex: `SYS_FUTEX_WAIT` exists
+// (kernel/proc/futex.c) and this has not been moved onto it yet
+// (docs/roadmap.md). Correct under a preemptive
 // round-robin scheduler -- the holder is always eventually run, so a
 // waiter always eventually gets in -- and the cost is that a waiter
 // spends its slice asking. The acquire/release ordering is real work
@@ -245,8 +246,8 @@ int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m) {
 // SIGNAL AND BROADCAST ARE THE SAME CALL, and that is allowed: POSIX
 // lets an implementation wake more waiters than asked, which is why
 // every correct use of a condition variable re-tests its predicate in a
-// loop. Waking exactly one needs per-waiter state this has no futex to
-// build on.
+// loop. Waking exactly one needs per-waiter state, which this would
+// have to grow before a futex could wake a chosen waiter.
 int pthread_cond_signal(pthread_cond_t *c) {
     if (!c) return EINVAL;
     __atomic_add_fetch(&c->generation, 1, __ATOMIC_RELEASE);

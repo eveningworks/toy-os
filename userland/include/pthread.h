@@ -19,9 +19,10 @@
 //     exits -- nothing can safely free memory a dying thread is still
 //     standing on, which is what Linux's CLONE_CHILD_CLEARTID futex
 //     wake exists to solve. Join a thread if you want its memory back.
-//   - **A MUTEX SPINS AND YIELDS** rather than blocking, because there
-//     is no futex yet. Correct under this preemptive scheduler, and it
-//     costs the waiter its timeslice.
+//   - **A MUTEX SPINS AND YIELDS** rather than blocking: the futex it
+//     could park on exists, and this has not been moved onto it.
+//     Correct under this preemptive scheduler, and it costs the waiter
+//     its timeslice.
 //   - No cancellation, no thread-specific data keys (`__thread` is what
 //     to use), no scheduling attributes, no barriers or rwlocks.
 //

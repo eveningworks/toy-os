@@ -380,8 +380,9 @@ trips them before it knows to look anything up.
   the one place every caller passes through. Three things to know: it
   does NOT make an `fs_list()` callback safe to call `fs_*` from (that
   is recursion, which a depth counter cannot see); it is NOT the
-  nested-read refusal below, which protects one buffer during one call
-  rather than the backend's state across the whole call; and an
+  nested-read refusal that guarded the deleted `fs_read()`'s shared
+  buffer, which protected one buffer during one call rather than the
+  backend's state across the whole call; and an
   unbalanced `disable()` hangs the machine, which is why `_enable()`
   clamps at zero instead of going negative and silently disarming the
   next section. See `docs/decisions.md`.

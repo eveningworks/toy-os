@@ -47,8 +47,8 @@ int heap_os_should_fail_alloc(void) { return 0; }
 // kernel thread, this needs a lock first"); threads are that caller,
 // arriving on the ring-3 side.
 //
-// A SPIN THAT YIELDS, not a futex: there is nothing to park on yet
-// (docs/roadmap.md). Correct under a preemptive round-robin scheduler,
+// A SPIN THAT YIELDS, not a futex: `SYS_FUTEX_WAIT` exists and this has
+// not been moved onto it (docs/roadmap.md). Correct under a preemptive round-robin scheduler,
 // because the holder is always eventually run, and cheap in the case
 // that matters -- an uncontended acquire is one atomic exchange, which
 // is what every single-threaded program in this system pays.

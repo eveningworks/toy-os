@@ -191,6 +191,53 @@ def check_roadmap_items_are_one_line(problems):
                             f"\n      {line.strip()[:90]}")
 
 
+def check_roadmap_details_headings_resolve(problems):
+    """Every `###` in roadmap-details.md must name something that still
+    exists: a roadmap SECTION, a roadmap ITEM, or a bugs.md entry.
+
+    The pairing by TITLE is the whole mechanism -- CLAUDE.md sends a
+    reader from an item to its long form by name, so a heading nobody
+    can arrive at is detail that is written and never found. It drifts
+    silently, because the two files are edited apart: an item gets
+    reworded as the work progresses, or ticked and rephrased, and its
+    heading keeps the old title. Eight had drifted when this check was
+    written -- two of them section renames (`SMP` vs `SMP
+    (multi-core)`), the rest items reworded in place.
+
+    Matching is deliberately loose -- case, `~~`, `**`, and a trailing
+    `-- DONE ...` are ignored, and a prefix counts -- because the rule
+    is "a reader can find it", not "the strings are equal"."""
+    import re as _re
+
+    def norm(t):
+        t = t.replace("~~", "").replace("**", "")
+        t = _re.sub(r"\s+", " ", t).strip().lower()
+        return _re.sub(r"\s*--\s*done\b.*$", "", t)
+
+    targets = set()
+    for rel in ("docs/roadmap.md", "docs/bugs.md"):
+        for line in read(rel).split("\n"):
+            if line.startswith("## ") or line.startswith("### "):
+                targets.add(norm(line.lstrip("# ")))
+            m = _re.match(r"^- \[[ x]\] (.+)$", line)
+            if m:
+                n = norm(m.group(1))
+                targets.add(n)
+                targets.add(n.split(" -- ")[0].strip())
+    targets.discard("")
+
+    for i, line in enumerate(read("docs/roadmap-details.md").split("\n"), 1):
+        if not line.startswith("### "):
+            continue
+        n = norm(line[4:])
+        if any(n == t or (len(t) > 25 and (n.startswith(t[:60]) or t.startswith(n[:60])))
+               for t in targets):
+            continue
+        problems.append(f"docs/roadmap-details.md:{i}: heading matches no "
+                        f"roadmap section, roadmap item or bugs.md entry -- "
+                        f"rename it to match, or delete it\n      {line[:90]}")
+
+
 def check_no_duplicate_roadmap_entries(problems):
     """Two of this repo's own roadmap edits duplicated an entry and one
     deleted three, all silently: nothing tests documentation, and a
@@ -546,6 +593,7 @@ def main():
                   check_milestone_prose_frozen,
                   check_milestones_are_named,
                   check_no_duplicate_roadmap_entries,
+                  check_roadmap_details_headings_resolve,
                   check_roadmap_items_are_one_line,
                   check_no_duplicated_sections,
                   check_decisions_index_is_current,

@@ -140,13 +140,19 @@ manual steps to be worth automating:
   because the ones that rotted before were the ones nobody checked. A
   pointer to the DELETED changelog, a milestone heading that reintroduces
   a number or a target version, a DUPLICATED roadmap entry, a roadmap item
-  that WRAPS onto a second line or runs past 140 characters, a stale
-  decisions index, a link to a doc that does not exist, and a tool in
-  `tools/` that CLAUDE.md never mentions. The one-line rule is checked
+  that WRAPS onto a second line or runs past 140 characters, a
+  roadmap-details HEADING that names no roadmap item or bug any more, a
+  stale decisions index, a link to a doc that does not exist, and a tool
+  in `tools/` that CLAUDE.md never mentions. The one-line rule is checked
   rather than stated for the usual reason: the roadmap reached 2,939
   lines by accumulating a paragraph per item, and nothing noticed. The duplicate check earns its
   place on its own -- two of this repo's own roadmap edits duplicated an
-  entry and a third silently deleted three. The tool check enforces a
+  entry and a third silently deleted three. The heading check earns its
+  place the same way: the pairing by TITLE is what sends a reader from a
+  one-line item to its long form, and the two files are edited apart, so
+  an item reworded in place leaves its heading stranded. Eight had
+  drifted when the check was added -- two section renames and six items
+  reworded or ticked. The tool check enforces a
   rule this file already stated and nothing verified; it is deliberately
   a NAME check, so it says a tool is mentioned, not that what is written
   about it is still true. It does NOT flag `Milestone N` in prose

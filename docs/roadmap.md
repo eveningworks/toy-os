@@ -59,7 +59,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~`service start|stop|status|list` as a shell command~~ DONE 2026-08-27 -- a request file plus a `SIGHUP` doorbell
 - [x] ~~Reap orphans -- init adopts them, which is half of why it exists~~ DONE 2026-08-18
 - [ ] Shut services down in reverse order on `reboot`/`poweroff`
-- [ ] A service's output routed somewhere readable rather than the console it doesn't own (stderr reaches `dmesg` today)
+- [x] ~~A service's output routed somewhere readable~~ DONE 2026-09-12 -- `StandardOutput=`, `SPAWN_FD_LOG`, `/var/log`
 - [x] ~~One real service to prove it, rather than a framework with no users~~ DONE 2026-08-18 -- the desktop
 
 ### Scheduler: blocking, priorities, classes
@@ -133,7 +133,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~Ctrl-C~~ DONE 2026-08-22 -- each job in its own group, `tcsetpgrp` around it
 - [ ] **`#!` handling**, which is the loader's job, not the shell's: `elf_load()` rejects a non-ELF file
 - [x] ~~`|` pipes between two commands~~ DONE 2026-08-19 -- N stages, not two
-- [ ] `&&`/`||`/`;`, globbing, aliases, `$?`/`$1`, and a history buffer
+- [ ] `&&`/`||`/`;`, globbing, aliases, and `$?`/`$1` EXPANSION -- `$?`'s value is already tracked
 - [x] ~~Line editing~~ DONE -- `kernel/lib/klineedit.c`, compiled twice so both rings edit with the same code
 - [x] ~~`>`/`<`/`>>` redirection~~ DONE 2026-08-19 -- in `/bin/tosh` and the GUI Terminal
 - [x] ~~`Ctrl-Z`, `jobs` and `fg`~~ DONE 2026-08-22 -- a job table in the shell, over a STOPPED process in the kernel
@@ -166,7 +166,7 @@ is the bookkeeping that makes any other kind of mapping possible.
 - [x] ~~A per-frame reference count~~ DONE 2026-09-11 -- `pmm_frame_ref()`, and `pmm_free_frame()` decrements
 - [x] ~~`MAP_SHARED` memory between two processes~~ DONE 2026-09-06 -- `SYS_SHM_OPEN` names an object, `MAP_SHARED` maps it
 - [x] ~~Copy-on-write, shared between this and `fork()`~~ DONE 2026-09-11 -- `PAGE_COW`, `vmm_fork_address_space()`/`vmm_cow_break()`
-- [ ] Guard pages around USER and THREAD stacks -- kernel stacks have them; a thread stack is ring 3's own allocation and has none
+- [ ] Guard pages around THREAD stacks -- kernel and user stacks have them; a thread stack is ring 3's own malloc and has none
 - [x] ~~A frame-size bound for ring 3~~ DONE 2026-08-18
 - [x] ~~A check on the ~1 MiB between a ring-3 image and its heap~~ DONE 2026-08-18
 
@@ -246,7 +246,7 @@ everything libc-shaped is waiting on it. Full plan and staging:
 
 ### Runtime + interop
 
-- [ ] Inter-process IPC (message passing)
+- [x] ~~Inter-process IPC (message passing)~~ DONE 2026-09-12 -- `userland/lib/uchan.c`, five callers
 - [x] ~~Connect-by-name endpoints~~ DONE 2026-09-06 -- the shm namespace is the rendezvous, `QUERY_SHM` the enumeration
 - [ ] AF_UNIX sockets, the portable spelling of the same thing -- what ported software expects
 - [ ] Raise `PIPE_MAX` above its kernel-wide 8, which bounds how many clients any daemon can have
@@ -341,7 +341,7 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [x] ~~A shell running a second copy of itself with its state~~ DONE 2026-09-11 -- `fork()` and `execv`/`execve`/`execvp`
 - [ ] `sigprocmask`/`sigsuspend`/`sigsetjmp` -- ash's `INTOFF`/`INTON` critical sections
 - [ ] POSIX `stat`/`fstat`/`lstat` with a truthful `struct stat` -- `test -x`, command hashing
-- [ ] `fcntl` (`F_DUPFD`, `FD_CLOEXEC`), `umask`, `getppid`, `times`
+- [ ] `fcntl` (`F_DUPFD`, `FD_CLOEXEC`), `umask`, `times` -- `getppid()` landed
 - [ ] `SIGTTOU`, and a catchable `SIGQUIT`
 - [ ] `#!` handling in the loader -- listed under Shell pipes & job control
 - [ ] The port itself: `userland/ports/busybox/`, ash only, GPL-2 into ONE binary as Doom is
@@ -380,7 +380,7 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~`fs_truncate()`~~ done
 - [x] ~~TRIM/discard on delete, so freed blocks are reported to the device~~ done
 - [ ] Boot-time `fsck` report (check, never repair) behind a config key
-- [ ] Per-record checksums in the table itself
+- [x] ~~Per-record checksums in the table itself~~ DONE 2026-09-12 -- FNV-1a per inode, verified on every read
 
 ### The clock
 
@@ -432,7 +432,6 @@ No dependency on the phases above; ordered among themselves.
 - [ ] Nothing remounts in place: changing a mount's flags is `umount` then `mount`, and there is no `mount -o remount`
 - [ ] `MOUNT_MAX` is 6 and `PART_SLOTS` is 8, both compile-time
 - [ ] A mount point deeper than one already mounted works, but nothing tests a three-level nest
-- [ ] `fs_read()`'s nested-read refusal is ONE flag for every mount, so two reads on different filesystems still refuse
 - [ ] `fs_check`/`fsck` only ever check the ROOT -- there is no way to fsck `/boot`
 - [ ] `parttable` still reads `blk_active()`'s disk only -- `mkpart --disk` writes any of them
 
@@ -680,7 +679,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Scientific mode for Calculator
 - [ ] `uapp_relayout()`: invalidate the layout and flush ONE pass before the next paint, as `uapp_redraw()` already does for painting
 - [ ] CPU/memory history graphs in Task Manager
-- [ ] Per-app settings persisted via `/etc/<app>.conf` (the convention exists, only `desktop.conf` uses it)
+- [x] ~~Per-app settings persisted via `/etc/<app>.conf`~~ DONE 2026-09-12 -- desktop, files and settings all use it
 - [ ] `Terminal=true` on a `.desktop` entry, so a TUI program can be launched from the desktop
 - [ ] The Terminal CROPS COLUMNS on a resize rather than rewrapping -- Konsole and VTE reflow, which needs a per-row "this line wrapped" bit
 - [ ] `/bin/edit` asks its terminal size once at startup and never repaints on SIGWINCH, as the pager now does
@@ -706,9 +705,9 @@ run on, not by order.
 - [x] ~~A fullscreen state, and direct scanout for a fullscreen client~~ DONE 2026-09-11 -- a lease, `docs/scanout-design.md`
 - [ ] The Broadwell sprite plane: a top-most window scanned out at its position, opaque, the desktop composed around it
 - [x] ~~Runtime mode switching: a display driver can set a mode after boot~~ DONE 2026-09-02 -- `config set resolution`, every QEMU adapter
-- [ ] Initcall levels: drivers declare a boot slot instead of being called by name from `kernel_main()`
+- [x] ~~Initcall levels: drivers declare a boot slot instead of being called by name from `kernel_main()`~~ DONE 2026-09-12
 - [x] ~~Loadable drivers: `modload`, one PCI driver, `/etc/modules` -- `docs/modules-design.md`~~ DONE 2026-09-10
-- [ ] `virtio-net`: a NIC on the same transport, likely easier than e1000 once virtqueues exist
+- [x] ~~`virtio-net`: a NIC on the same transport~~ DONE 2026-09-12 -- `virtio_net.c` plus the `net_device` adapter
 - [x] ~~Every interrupt-taking driver on a vector where its device offers one~~ DONE 2026-09-05
 - [x] ~~`virtio-blk`: a block device that isn't ATA~~
 - [x] ~~`virtio-rng`: entropy, registered as a krandom source~~
@@ -718,7 +717,7 @@ run on, not by order.
 - [ ] An ACPI PM-timer clocksource, so a machine without an invariant TSC still has a clock that advances with interrupts off
 - [ ] A clocksource watchdog, cross-checking the TSC against a second source the way Linux does
 - [ ] MSI-X vectors per QUEUE rather than one per device -- wanted by multi-queue virtio and NVMe, worth it once a second CPU is online
-- [ ] Re-key `/etc/kbs` layouts to evdev keycodes, removing the input core's translation table
+- [x] ~~Re-key `/etc/kbs` layouts to evdev keycodes, removing the input core's translation table~~ DONE 2026-09-12
 - [ ] The on-screen keyboard should draw the CONFIGURED layout, not its own copy of US QWERTY
 - [ ] A virtual-keyboard protocol, so the on-screen keyboard can be a ring-3 app instead of compositor code
 
@@ -726,11 +725,11 @@ run on, not by order.
 
 ### other emulated hardware worth claiming
 
-- [ ] e1000 ethernet
+- [x] ~~e1000 ethernet~~ DONE 2026-09-12 -- `kernel/drivers/net/e1000.c`, a loadable module
 - [ ] RTL8139
 - [x] ~~AC97 audio~~ DONE 2026-08-29
 - [x] ~~Intel HDA~~ DONE 2026-09-02 -- `kernel/drivers/sound/hda.c`, on QEMU's `ich9-intel-hda` and the laptop's Conexant CX20751
-- [ ] UHCI/EHCI/XHCI USB
+- [ ] UHCI/EHCI USB -- xHCI is built; these two are only identified by `prog_if` and skipped
 - [ ] QXL
 - [ ] Cirrus
 
@@ -872,7 +871,7 @@ run on, not by order.
 - [x] ~~Real ACPI-based poweroff~~ DONE 2026-08-30 -- the sleep type comes from the DSDT's `_S5_`, the port from the FADT
 - [x] ~~ACPI reboot~~ DONE 2026-08-30 -- the FADT's reset register, with the 8042 pulse still the fallback
 - [ ] HPET as a third clocksource -- its table is found now, nothing reads it yet
-- [ ] APIC + a `clock_event_device` split, replacing the fixed-100Hz PIT interrupt
+- [x] ~~APIC + a `clock_event_device` split~~ DONE 2026-09-12 -- `clockevent.c`, the LAPIC timer outranks the PIT
 - [ ] Battery + AC adapter status
 - [ ] Thermal zone reporting
 - [ ] S3 suspend/resume
@@ -945,7 +944,7 @@ hand as a throwaway probe during a real hunt (see roadmap-details).
 - [ ] A scriptable POINTER, not a one-frame override -- `gui move` lasts ONE `wm_run()` iteration, so hover needs the real mouse
 - [x] ~~`gui icons [--json]` reports a CACHE COUNT, not desktop icon GEOMETRY~~ DONE 2026-09-10 -- per-icon rects and label lines
 - [ ] Finer `gui drag` interpolation
-- [ ] `klineedit_test.c`'s 12 oversized-frame warnings bury the frame budget's signal in that file
+- [x] ~~`klineedit_test.c`'s 12 oversized-frame warnings bury the frame budget's signal in that file~~ GONE 2026-09-12 -- 0 today
 - [x] ~~`gfxdemo_test`'s two scene-restore checks fail under heavy parallel load~~ DONE 2026-08-19 -- it polls for the log line now
 - [ ] `flake_hunt.py` does not reset `disk.img` between runs, so any rate involving the filesystem is contaminated
 - [ ] The ATA fault-injection KTESTs leak a failed write into the NEXT test -- measured 2 fails in 4 clean runs
@@ -971,7 +970,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [x] ~~Two unclipped string draws in fixed boxes, and the tray's `strlen * char_w` hit box~~ DONE 2026-09-03
 - [ ] Calculator sets `.layout` without `.widgets` and lives on `uui_button_group`; a checker for "layout but no router"
 - [ ] A compact capability table in README, since `check_docs.py` checks structure and its claims drift
-- [ ] A scheduled clean-checkout CI run (`build.yml` on a cron, not per push), so environmental drift is caught before a release tag
+- [ ] A CRON trigger on `build.yml`, so environmental drift is caught before a release tag rather than at one
 - [x] ~~`k_strcpy` vs `k_strlcpy` with no rule written anywhere~~ DONE 2026-09-03 -- `k_strcpy` deleted (it was 30 vs 206)
 - [x] ~~`write_dec`/`write_hex` chains beside `*_printf`~~ DONE 2026-09-03 -- frozen per file by `check_chains.py`
 - [x] ~~26 copy-to/from-user calls discard their result under a "validated above" comment~~ DONE 2026-09-03 -- the checker refuses it
@@ -1011,7 +1010,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 
 ### Observability
 
-- [ ] Panic backtraces with function names, using the DWARF symbols the build already emits
+- [x] ~~Panic backtraces with function names, using the DWARF symbols the build already emits~~ DONE 2026-09-12
 - [x] ~~Kernel state queryable without a filesystem -- one syscall, an information class, a provider registry~~ stage 0 DONE 2026-08-19
 - [x] ~~Move the introspection commands onto it~~ DONE 2026-08-24 -- `dmesg` was the last one
 - [ ] A sampling profiler driven off the timer interrupt
@@ -1019,7 +1018,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [ ] `dmesg` filtering by subsystem
 - [ ] Counters need a shared shape
 - [ ] A `top`-style live view, not just point-in-time snapshots
-- [ ] Per-process CPU time accounting, which the scheduler doesn't track today
+- [x] ~~Per-process CPU time accounting, which the scheduler doesn't track today~~ DONE 2026-09-12 -- `cpu_ns`, `ps`'s CPU column
 - [ ] Latency histograms for disk I/O, where the tail is the interesting part and an average hides it
 - [ ] Tracepoints that compile out when disabled, so they can live on hot paths
 - [x] ~~`strace` as a `/bin` program, not a kernel builtin~~ DONE 2026-08-23 -- `SPAWN_TRACE`, and the trace reaches the tracer's terminal
@@ -1027,14 +1026,14 @@ split. One line per pair here; the site lists are in roadmap-details.
 
 ### Crash reporting & postmortem debugging
 
-- [ ] A real kernel backtrace on panic -- walk the frame pointers, not just print RIP
-- [ ] Resolve those addresses to function names: the build already emits DWARF (`-g`)
-- [ ] A panic screen worth reading: registers, backtrace, the faulting address, what the kernel was doing
+- [x] ~~A real kernel backtrace on panic -- walk the frame pointers, not just print RIP~~ DONE 2026-09-12 -- a stack SCAN instead
+- [x] ~~Resolve those addresses to function names: the build already emits DWARF (`-g`)~~ DONE 2026-09-12 -- `tools/panic_resolve.py`
+- [x] ~~A panic screen worth reading: registers, backtrace, the faulting address, what the kernel was doing~~ DONE 2026-09-12
 - [ ] **NEXT** A panic RAM store, pstore-shaped, AND a panic that warm-resets after a countdown -- a power cycle loses RAM
 - [ ] `crashlog --panics`, once the RAM store exists (it lists ring-3 reports today)
 - [x] ~~Core dumps for a faulting ring-3 process~~ DONE 2026-09-02 -- a text report plus the raw stack in `/var/crash`
 - [x] ~~A host-side script to inspect a core dump against the ELF's DWARF~~ DONE 2026-09-02 -- `panic_resolve.py --crash`
-- [ ] Distinguish "the kernel faulted" from "a process faulted and the kernel tore it down correctly" in
+- [x] ~~Distinguish "the kernel faulted" from "a process faulted and the kernel tore it down correctly"~~ DONE 2026-09-12
 - [x] ~~Stack-overflow detection via a guard page, reported as such rather than as a mystery fault~~ done
 
 ### In-OS documentation

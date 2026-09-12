@@ -1798,7 +1798,7 @@ the machine actually sleep between an animating client's frames rather
 than being interrupted a hundred times a second regardless. Also a
 prerequisite for SMP.
 
-### SMP (multi-core)
+### SMP
 **`docs/smp-design.md` is the full design**, staged so each step ships on
 its own -- ACPI tables, then the Local APIC, then application processors
 parked, then a real spinlock and one kernel lock, then the scheduler,
@@ -1862,7 +1862,7 @@ capabilities all sit between +0x8000 and +0x8480, well inside any
 plausible BAR, and its hang was the BIOS handoff. This is the guard
 becoming real rather than heuristic.
 
-### USB (keyboard/mouse)
+### USB
 **BUILT** for xHCI, a HID boot keyboard and a HID boot mouse; see
 `docs/conventions/kernel.md` and `docs/decisions/drivers.md`. What
 remains is listed on the roadmap: the legacy-support handoff (hardware
@@ -3376,7 +3376,7 @@ caller is a test.
 
 - [x] ~~The toolkit as a real shared library rather than static per client~~ DONE 2026-09-04 -- `/lib/libuapp.so`; the measurement that decided it is in `docs/decisions.md` ("The toolkit is a shared library"). What follows is the note as it stood. Right now `ugfx.o` + `uui.o` are linked per binary, which is fine at two clients and wasteful at ten. The font already set the precedent for the answer (share one copy, no drift) -- but sharing CODE needs the dynamic-linking work in Dynamic linking / shared libraries, which is why this is a note and not a task yet.
 
-### Finish the app-deduplication pass: three WIP branches and the smaller survey items
+### Finish the app-deduplication pass: the smaller survey items
 
 Started 2026-09-04 and stopped mid-flight for budget. What LANDED on
 main that day: `lib/usetting.h`, `lib/udate.h`, `human_size_iec()`,
@@ -3923,7 +3923,7 @@ a spurious exit no longer makes the restart check pass for the wrong
 reason -- but it does not fail either, so grep rather than trusting the
 exit code.
 
-### `sum` on the laptop disagrees with crc32 on a large file
+### `sum` on the bare-metal laptop disagrees with zlib's crc32 on a 5 MB file
 
 Measured 2026-09-02 on the bare-metal laptop. `sum /tmp/version.txt` (10
 bytes) printed the same crc32 as `zlib.crc32` on the host; `sum
@@ -3981,7 +3981,7 @@ process using the image [disk.img]?`.
 `python3 tools/flake_hunt.py ktest -n 10` is the loop for measuring any
 change to it, and it scores these runs as `error` rather than `pass`.
 
-### `gui_regress.py`'s `uterm` fails its two `edit` checks under full parallel load
+### `gui_regress.py`'s `uterm` fails under full parallel load
 
 `the editor's cursor sequences MOVED the caret, not printed` and `a
 full-screen editor runs IN THE WINDOW and saves`, both from
@@ -4428,7 +4428,7 @@ first key or motion restores the level from `system.brightness` rather
 than from a stored zero. Deliberately NOT a setting: a persisted "off"
 is the black-screen-on-boot trap the brightness floor exists to avoid.
 
-### Intel modesetting: EDID over eDP AUX, the PLLs and the transcoder -- needs runtime mode switching above it first
+### Intel modesetting: external outputs on DDI B-D, a second EDID and hotplug
 
 Runtime mode switching above it landed on 2026-09-02. The staged plan,
 each stage a flash the maintainer can look at:
@@ -4547,7 +4547,7 @@ The QEMU suite can cover none of stages 3-4; what it covers is the
 EDID parser, the readout's decoders, and the `resolution` setting's
 plumbing when the Intel driver starts listing more than one mode.
 
-### Intel blitter acceleration: `DISPLAY_CAP_ACCEL_FILL`/`_COPY` on the BCS ring
+### Intel blitter acceleration on the BCS ring
 
 A ring buffer or execlist context on the blitter engine and
 `XY_SRC_COPY_BLT`/`XY_COLOR_BLT` commands. The display interface
