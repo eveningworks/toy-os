@@ -63,6 +63,7 @@
 // so a reader needs no floating point -- there is none in this project's
 // shared code and this program has no business being the exception.
 #include "rt/sys.h"
+#include "lib/uclock.h"
 #include "syscall_abi.h"   // SYS_WRITE_MAX -- the sequential request size
 #include "lib/cmd.h"
 #include <stdio.h>
@@ -297,20 +298,6 @@ static void io_report(int profile, const struct io_snap *before,
     }
 }
 
-// The smallest non-zero gap the monotonic clock will show -- the same
-// clocksource the kernel times block operations with. Sampled rather
-// than asked for: nothing reports a clocksource's resolution, and what
-// a reader needs is what can actually be OBSERVED.
-static uint64_t clock_granularity_ns(void) {
-    uint64_t best = 0;
-    for (int i = 0; i < 64; i++) {
-        uint64_t a = sys_monotonic_ns();
-        uint64_t b = sys_monotonic_ns();
-        if (b > a && (!best || b - a < best)) best = b - a;
-    }
-    return best;
-}
-
 static void k_memset_fsstat(struct query_fsstat *f) {
     f->lookup_calls = f->lookup_reads = f->lookup_ns = 0;
 }
@@ -419,7 +406,7 @@ int main(int argc, char **argv) {
     // build that produced it.
     emit("diskbench: syscall-bytes %u\n", (unsigned)SEQ_BLOCK);
     emit("diskbench: clock-granularity-ns %llu\n",
-         (unsigned long long)clock_granularity_ns());
+         (unsigned long long)uclock_granularity_ns());
 
     uint64_t total = (uint64_t)mib * 1024u * 1024u;
     for (int step = 0; step < PROFILES; step++) {

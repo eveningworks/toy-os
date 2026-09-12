@@ -963,6 +963,11 @@ void wm_run(void) {
             // Through the channel when there is one, so a client's
             // message defeats this park exactly as a kernel event does
             // -- one wait over both, which is what the wakeword is for.
+            //
+            // BRACKETED, not just excluded: how much longer than
+            // `wait_ms` this takes is the only measurement that sees a
+            // stall nobody here caused (wm_watchdog.c).
+            wmwd_park_begin(wait_ms);
             if (wm_client_chan_ready()) wm_client_chan_wait((int)wait_ms);
             else sys_wait_ready(wait_ms);
         }

@@ -1359,6 +1359,10 @@ void wm_client_ping(struct window *win) {
 static unsigned long long g_ping_last_us, g_ping_max_us, g_ping_sum_us;
 static unsigned long long g_ping_last_cyc, g_ping_max_cyc, g_ping_sum_cyc;
 static unsigned g_ping_n;
+// The same round trip as a distribution, and resettable -- the running
+// average above is lifetime-of-boot, so it cannot answer "before and
+// after the load started" within one session.
+static struct wmwd_dist g_ping_dist;
 
 void wm_client_ping_stats(unsigned long long *last_us, unsigned long long *max_us,
                           unsigned long long *avg_us, unsigned *n) {
@@ -1366,6 +1370,16 @@ void wm_client_ping_stats(unsigned long long *last_us, unsigned long long *max_u
     *max_us = g_ping_max_us;
     *avg_us = g_ping_n ? g_ping_sum_us / g_ping_n : 0;
     *n = g_ping_n;
+}
+
+const struct wmwd_dist *wm_client_ping_dist(void) { return &g_ping_dist; }
+
+void wm_client_ping_reset(void) {
+    struct wmwd_dist zero = {0};
+    g_ping_dist = zero;
+    g_ping_last_us = g_ping_max_us = g_ping_sum_us = 0;
+    g_ping_last_cyc = g_ping_max_cyc = g_ping_sum_cyc = 0;
+    g_ping_n = 0;
 }
 
 void wm_client_ping_cycles(unsigned long long *last, unsigned long long *max,
@@ -1390,6 +1404,7 @@ static void on_window_pong(int pid, uint32_t id, uint32_t serial) {
     if (cyc > g_ping_max_cyc) g_ping_max_cyc = cyc;
     g_ping_sum_cyc += cyc;
     g_ping_n++;
+    wmwd_dist_add(&g_ping_dist, rtt);
     if (w->not_responding) {
         w->not_responding = 0;
         redraw_pending = 1; // the title bar said "(Not Responding)"

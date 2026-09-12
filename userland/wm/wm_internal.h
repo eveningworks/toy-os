@@ -352,6 +352,8 @@ void wm_client_ping_stats(unsigned long long *last_us, unsigned long long *max_u
 // the ns figure is quantised to a 10 ms tick.
 void wm_client_ping_cycles(unsigned long long *last, unsigned long long *max,
                            unsigned long long *avg);
+const struct wmwd_dist *wm_client_ping_dist(void);
+void wm_client_ping_reset(void);
 
 // Once per frame. Returns the index of a window that has just gone
 // unresponsive while being asked to close (the only case worth a
@@ -595,12 +597,31 @@ void wm_builtin_arrow_masks(const unsigned char **outline,
                              const unsigned char **fill,
                              int *w, int *h, int *stride);
 
+// A latency distribution, in microseconds. Bucket i counts values in
+// [2^i, 2^(i+1)) us; the last one is everything above. A log2 histogram
+// resolves a percentile only to a factor of two, which is the right
+// trade here -- the question this answers is idle-vs-loaded, and those
+// differ by orders of magnitude (Android's gfxinfo framestats buckets
+// for the same reason). The reader interpolates inside a bucket.
+#define WMWD_BUCKETS 22
+struct wmwd_dist {
+    uint32_t n;
+    uint64_t sum_us;
+    uint64_t max_us;
+    uint32_t bucket[WMWD_BUCKETS];
+};
+void wmwd_dist_add(struct wmwd_dist *d, uint64_t us);
+
+void wmwd_park_begin(uint32_t asked_ms); // called immediately before the wait
 void wmwd_frame_begin(void);
 void wmwd_phase(const char *name);
 void wmwd_frame_end(void);
-void wmwd_set_threshold_ms(uint32_t ms); // 0 disables
+void wmwd_set_threshold_ms(uint32_t ms); // 0 disables the LOG, not the counters
 uint32_t wmwd_threshold_ms(void);
 uint32_t wmwd_slow_frames(void);
 uint32_t wmwd_peak_ms(void);
+void wmwd_reset(void);                   // counters only; the threshold stays
+const struct wmwd_dist *wmwd_work(void);  // per-frame work
+const struct wmwd_dist *wmwd_wake(void);  // how late the wait returned
 
 #endif

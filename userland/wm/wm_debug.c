@@ -4,6 +4,7 @@
 #include "desktop.h"   // desktop_icon_geometry -- `gui icons`
 #include "wm_taskbar.h"
 #include "lib/icon_cache.h"
+#include "lib/uclock.h"  // gui latency: what resolution the numbers have
 #include "wm_tray.h"
 #include "calendar_popup.h"
 #include "volume_popup.h"
@@ -1174,6 +1175,58 @@ static void cmd_compositor(struct dbg_out *o, int json) {
     }
 }
 
+// The latency yardstick's read-out (wm_watchdog.c). Three distributions
+// answering three different questions: WORK is what the WM did, WAKE is
+// how much later than it asked the wait returned -- the only one that
+// moves when another process is holding the CPU -- and PING is the same
+// round trip the compositor already measures, from the client's side of
+// the channel.
+//
+// `reset` before a measured interval, since every counter here is
+// otherwise lifetime-of-boot.
+static void emit_dist(struct dbg_out *o, const char *name,
+                      const struct wmwd_dist *d, int json) {
+    unsigned long long avg = d->n ? d->sum_us / d->n : 0;
+    if (json) {
+        dbg_out_printf(o, "\"%s\":{\"n\":%u,\"avg_us\":%llu,\"max_us\":%llu,\"buckets\":[",
+                       name, d->n, avg, d->max_us);
+        for (int i = 0; i < WMWD_BUCKETS; i++)
+            dbg_out_printf(o, i ? ",%u" : "%u", d->bucket[i]);
+        dbg_out_write(o, "]}");
+    } else {
+        dbg_out_printf(o, "  %s: n %u  avg %llu us  max %llu us\r\n",
+                       name, d->n, avg, d->max_us);
+    }
+}
+
+static void cmd_latency(struct dbg_out *o, char *rest, int json) {
+    char *p = rest, *t;
+    while ((t = next_tok(&p)) != 0) {
+        if (k_strcmp(t, "reset") == 0) { wmwd_reset(); wm_client_ping_reset(); }
+    }
+    if (json) {
+        dbg_out_write(o, "{");
+        emit_dist(o, "work", wmwd_work(), 1);
+        dbg_out_write(o, ",");
+        emit_dist(o, "wake", wmwd_wake(), 1);
+        dbg_out_write(o, ",");
+        emit_dist(o, "ping", wm_client_ping_dist(), 1);
+        dbg_out_printf(o, ",\"bucket_base_us\":1,\"clock_ns\":%llu,"
+                          "\"slow_frames\":%u,\"threshold_ms\":%u}\r\n",
+                       (unsigned long long)uclock_granularity_ns(),
+                       wmwd_slow_frames(), wmwd_threshold_ms());
+        return;
+    }
+    dbg_out_write(o, "latency (microseconds; bucket i is [2^i, 2^(i+1)) us):\r\n");
+    emit_dist(o, "work", wmwd_work(), 0);
+    emit_dist(o, "wake", wmwd_wake(), 0);
+    emit_dist(o, "ping", wm_client_ping_dist(), 0);
+    dbg_out_printf(o, "  clock granularity %llu ns -- anything finer is floor-zero noise\r\n",
+                   (unsigned long long)uclock_granularity_ns());
+    dbg_out_printf(o, "  %u slow frame(s); slowest frame %u ms\r\n",
+                   wmwd_slow_frames(), wmwd_peak_ms());
+}
+
 static void usage(struct dbg_out *o) {
     dbg_out_write(o, "gui subcommands (all of these work while the desktop is up):\r\n");
     dbg_out_write(o, "  windows [--json]      open windows: rects, content rects, z-order, focus\r\n");
@@ -1204,6 +1257,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  idle [start|stop]     the idle clock and the screensaver, as JSON\r\n");
     dbg_out_write(o, "  icons                 how many app icons are decoded and cached\r\n");
     dbg_out_write(o, "  watchdog [<ms>|off]   slow-frame threshold, and how often it fired\r\n");
+    dbg_out_write(o, "  latency [reset] [--json]  frame work, wake overshoot and ping, as distributions\r\n");
     dbg_out_write(o, "  pingtimeout [<ticks>] not-responding timeout (a TEST lever)\r\n");
     dbg_out_write(o, "  pinginterval [<ticks>] how often every client is asked (a TEST lever)\r\n");
     dbg_out_write(o, "Injected input enters at the WM loop, below the PS/2 driver -- it tests\r\n");
@@ -1369,6 +1423,11 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
         else    dbg_out_write(o, "watchdog: off\r\n");
         dbg_out_printf(o, "  %u slow frame(s) so far; slowest frame %u ms\r\n",
                        wmwd_slow_frames(), wmwd_peak_ms());
+        return 1;
+    }
+
+    if (k_strcmp(sub, "latency") == 0) {
+        cmd_latency(o, p, wants_json(p));
         return 1;
     }
 
