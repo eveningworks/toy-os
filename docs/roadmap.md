@@ -400,7 +400,7 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~File-size and addressing limits, validated before anything is allocated~~ DONE 2026-09-12
 - [x] ~~Zero-fill after a truncation, so a shrink and regrow cannot expose the old bytes~~ DONE 2026-09-12
 - [x] ~~The stepped append, which erases a block's existing prefix~~ DONE 2026-09-12
-- [ ] A failed indirect-table read, currently returned as zeros
+- [x] ~~A failed indirect-table read, currently returned as zeros~~ DONE 2026-09-12
 
 ### Screen power, below the screensaver
 **Needs:** a TRANSIENT display-power control -- `system.brightness` persists, so using it would overwrite what the user chose and leave a dark screen behind a crash. DPMS and brightness are different things in every system that has both.

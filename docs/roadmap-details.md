@@ -505,6 +505,25 @@ because it touches every `txn_commit()` caller and the mount path.
   round-trips (four blocks of allocation at a ~4 TB offset, so it costs
   the volume nothing) and the next one is refused. Fixed 2026-09-12.
 
+- **The failed indirect-table read** (`block_for_index()`). It
+  answered 0 for a hole and for a pointer-table read that FAILED, and
+  `read_range_impl()` reads 0 as a hole and supplies zeros -- so an I/O
+  error on an indirect table reached the caller as a successful read of
+  fabricated data. Three outcomes now: the block comes back through an
+  out parameter (0 = hole) and the return value is whether the walk
+  could be completed at all. A zero table pointer has to be tested
+  before `rcache_get()`, which answers NULL to both. Ten call sites;
+  the directory walks already stopped on either, so only the read path
+  changes behaviour. **Aiming the test cost two attempts**, and the
+  first one is the lesson: an injected read failure lands on the inode
+  read unless the stepped reader is used (it reads the inode in
+  `begin()`), and a verifying read before the armed step WARMS the
+  pointer-table cache -- so the failure hit the data read instead, a
+  short read the unfixed code also produced, and the positive control
+  passed. The verification goes after the armed step now. Which read
+  failed is settled by the control rather than by argument: only a
+  table read can make the unfixed build report DONE. Fixed 2026-09-12.
+
 ### Kernel test harness
 
 **Done** (2026-08-13) -- see the commit that added it. Kept

@@ -1090,3 +1090,55 @@ KTEST("fs", "the last addressable block works and the next one is refused") {
 
     fs_delete("/.ktest_limit");
 }
+
+// A FAILED POINTER-TABLE READ IS NOT A HOLE.
+// block_for_index() answered 0 for both, and read_range_impl() reads 0
+// as a hole and supplies zeros -- so an I/O error on an indirect table
+// was delivered to the caller as a successful read of fabricated data.
+//
+// AIMING THE INJECTOR AT THE TABLE is the whole difficulty: the
+// injector fails the NEXT read, and the first read of an ordinary
+// fs_read_range() is the inode's. The stepped reader reads the inode
+// in begin(), so arming between begin() and step() puts the next read
+// exactly where it is wanted -- and block index 12 is the first one
+// the format reaches through a pointer table, so with a cold cache
+// (the write below drops it) that read IS the table.
+//
+// WHICH READ FAILED IS SETTLED BY THE POSITIVE CONTROL, not by
+// argument: a failed DATA read came back short in the old code too, so
+// the unfixed build can only report DONE here if what failed was the
+// table.
+KTEST("fs", "a failed indirect-table read is an error, not a hole of zeros") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_ptrerr");
+
+    static char pattern[T3_BLK];
+    indirect_pattern(pattern, 12);
+    uint64_t off = 12ull * T3_BLK;   // the first block behind ptrs[12]
+    KTEST_ASSERT(fs_write_range("/.ktest_ptrerr", off, pattern, T3_BLK) == 1);
+
+    // THE CACHE MUST BE COLD AT THE ARMED STEP, and a verifying read
+    // here would warm it -- which is how the first version of this
+    // test passed its own positive control: the table was cached, the
+    // injected failure landed on the DATA read, and a short read is
+    // what the unfixed code returns for that too. The write above drops
+    // the cache (vol_write_sectors does, every write), so the
+    // verification goes AFTER.
+    static char back[T3_BLK];
+    void *h = fs_read_range_begin("/.ktest_ptrerr", off, back, T3_BLK);
+    KTEST_ASSERT(h != 0);
+    uint32_t total = 0xFFFFFFFFu;
+    fault_fail_next_block_reads(1);
+    enum fs_step_result r = fs_read_range_step(h, &total);
+    fault_fail_next_block_reads(0);
+
+    KTEST_ASSERT_EQ((int)r, (int)FS_STEP_FAILED);
+    KTEST_ASSERT_EQ(total, 0u);
+
+    // ...and the volume is fine afterwards: the refusal is the answer,
+    // not damage.
+    KTEST_ASSERT_EQ(fs_read_range("/.ktest_ptrerr", off, back, T3_BLK), (uint32_t)T3_BLK);
+    KTEST_ASSERT(back[0] == pattern[0]);
+
+    fs_delete("/.ktest_ptrerr");
+}

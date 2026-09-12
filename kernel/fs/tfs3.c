@@ -677,8 +677,17 @@ static int read_inode(uint64_t ino, struct t3_inode *out) {
 
 // ---- block map (read side: full direct/single/double/triple walk) -------
 
-// Data-block number for file-block index `idx`, or 0 for a hole /
-// out-of-range. Reads at most two pointer blocks into g_ptr_blk.
+// Data-block number for file-block index `idx`, through *out_blk: 0
+// there means a HOLE. The RETURN value is the third outcome -- 0 when
+// the walk could not be completed at all, i.e. a pointer-table read
+// that failed.
+//
+// THREE OUTCOMES, NOT TWO, and that is the whole point of the shape.
+// Answering 0 for a failed table read as well as for a hole made
+// read_range_impl() supply zeros for an I/O error and report the read
+// as a success: fabricated data delivered as fact. A caller that
+// cannot tell them apart cannot report the difference either.
+//
 // LEVELS ARE NUMBERED FROM THE LEAF (0 = the table holding data-block
 // numbers), so a single- and a triple-indirect walk agree about which
 // slot a leaf goes in. Numbering from the top instead would put the
@@ -687,37 +696,47 @@ static int read_inode(uint64_t ino, struct t3_inode *out) {
 #define T3_RC_MID  1
 #define T3_RC_TOP  2
 
-static uint32_t block_for_index(const struct t3_inode *node, uint32_t idx) {
-    if ((uint64_t)idx >= T3_MAX_FILE_BLOCKS) return 0;
-    if (idx < 12) return node->ptrs[idx];
+// A zero table pointer is a hole in the chain, not a failure -- so it
+// has to be tested BEFORE rcache_get(), which answers NULL to both.
+#define T3_WALK(level, tbl, dst)                                               \
+    do {                                                                       \
+        if (!(tbl)) return 1;               /* hole: *out_blk stays 0 */       \
+        (dst) = rcache_get((level), (tbl));                                    \
+        if (!(dst)) return 0;               /* the table could not be read */  \
+    } while (0)
+
+static int block_for_index(const struct t3_inode *node, uint32_t idx,
+                           uint32_t *out_blk) {
+    *out_blk = 0;
+    // Past what the format addresses. A hole rather than an error:
+    // every write door refuses such an offset, so no live inode can
+    // name one, and the read path clamps to the size regardless.
+    if ((uint64_t)idx >= T3_MAX_FILE_BLOCKS) return 1;
+    if (idx < 12) { *out_blk = node->ptrs[idx]; return 1; }
     idx -= 12;
+    const uint8_t *leaf, *mid_tbl, *top;
     if (idx < T3_PTRS_PER_BLOCK) {
-        const uint8_t *leaf = rcache_get(T3_RC_LEAF, node->ptrs[12]);
-        if (!leaf) return 0;
-        return rd32(leaf + idx * 4);
+        T3_WALK(T3_RC_LEAF, node->ptrs[12], leaf);
+        *out_blk = rd32(leaf + idx * 4);
+        return 1;
     }
     idx -= T3_PTRS_PER_BLOCK;
     if (idx < T3_PTRS_PER_BLOCK * T3_PTRS_PER_BLOCK) {
-        const uint8_t *mid_tbl = rcache_get(T3_RC_MID, node->ptrs[13]);
-        if (!mid_tbl) return 0;
+        T3_WALK(T3_RC_MID, node->ptrs[13], mid_tbl);
         uint32_t mid = rd32(mid_tbl + (idx / T3_PTRS_PER_BLOCK) * 4);
-        const uint8_t *leaf = rcache_get(T3_RC_LEAF, mid);
-        if (!leaf) return 0;
-        return rd32(leaf + (idx % T3_PTRS_PER_BLOCK) * 4);
+        T3_WALK(T3_RC_LEAF, mid, leaf);
+        *out_blk = rd32(leaf + (idx % T3_PTRS_PER_BLOCK) * 4);
+        return 1;
     }
     idx -= T3_PTRS_PER_BLOCK * T3_PTRS_PER_BLOCK;
-    {
-        const uint8_t *top = rcache_get(T3_RC_TOP, node->ptrs[14]);
-        if (!top) return 0;
-        uint32_t hi = rd32(top + (idx / (T3_PTRS_PER_BLOCK * T3_PTRS_PER_BLOCK)) * 4);
-        const uint8_t *mid_tbl = rcache_get(T3_RC_MID, hi);
-        if (!mid_tbl) return 0;
-        uint32_t rem = idx % (T3_PTRS_PER_BLOCK * T3_PTRS_PER_BLOCK);
-        uint32_t mid = rd32(mid_tbl + (rem / T3_PTRS_PER_BLOCK) * 4);
-        const uint8_t *leaf = rcache_get(T3_RC_LEAF, mid);
-        if (!leaf) return 0;
-        return rd32(leaf + (rem % T3_PTRS_PER_BLOCK) * 4);
-    }
+    T3_WALK(T3_RC_TOP, node->ptrs[14], top);
+    uint32_t hi = rd32(top + (idx / (T3_PTRS_PER_BLOCK * T3_PTRS_PER_BLOCK)) * 4);
+    T3_WALK(T3_RC_MID, hi, mid_tbl);
+    uint32_t rem = idx % (T3_PTRS_PER_BLOCK * T3_PTRS_PER_BLOCK);
+    uint32_t mid = rd32(mid_tbl + (rem / T3_PTRS_PER_BLOCK) * 4);
+    T3_WALK(T3_RC_LEAF, mid, leaf);
+    *out_blk = rd32(leaf + (rem % T3_PTRS_PER_BLOCK) * 4);
+    return 1;
 }
 
 // ---- path resolution ------------------------------------------------------
@@ -737,8 +756,8 @@ static uint64_t dir_lookup(uint64_t dir_ino, const struct t3_inode *dir,
     }
     uint32_t nblocks = (uint32_t)((dir->size + T3_BLOCK - 1) / T3_BLOCK);
     for (uint32_t b = 0; b < nblocks; b++) {
-        uint32_t blk = block_for_index(dir, b);
-        if (!blk || !read_block(blk, g_blk)) return 0;
+        uint32_t blk;
+        if (!block_for_index(dir, b, &blk) || !blk || !read_block(blk, g_blk)) return 0;
         uint32_t off = 0;
         while (off + 8 <= T3_BLOCK) {
             uint32_t e_ino = rd32(g_blk + off);
@@ -1930,8 +1949,8 @@ static int dirent_insert(uint64_t dir_ino, struct t3_inode *dir,
     uint32_t nblocks = (uint32_t)((dir->size + T3_BLOCK - 1) / T3_BLOCK);
 
     for (uint32_t b = 0; b < nblocks; b++) {
-        uint32_t blk = block_for_index(dir, b);
-        if (!blk) return 0;
+        uint32_t blk;
+        if (!block_for_index(dir, b, &blk) || !blk) return 0;
         const uint8_t *cur = txn_peek(blk);
         if (!cur) {
             if (!read_block(blk, g_blk)) return 0;
@@ -2030,8 +2049,8 @@ static int dirent_remove(struct t3_inode *dir, const char *name,
                          uint32_t name_len, uint64_t *out_child) {
     uint32_t nblocks = (uint32_t)((dir->size + T3_BLOCK - 1) / T3_BLOCK);
     for (uint32_t b = 0; b < nblocks; b++) {
-        uint32_t blk = block_for_index(dir, b);
-        if (!blk) return 0;
+        uint32_t blk;
+        if (!block_for_index(dir, b, &blk) || !blk) return 0;
         const uint8_t *cur = txn_peek(blk);
         if (!cur) {
             if (!read_block(blk, g_blk)) return 0;
@@ -2517,7 +2536,11 @@ static uint32_t read_range_impl(const struct t3_inode *node, uint64_t offset,
         uint32_t within = (uint32_t)(file_off % T3_BLOCK);
         uint32_t chunk = T3_BLOCK - within;
         if (chunk > len - total) chunk = len - total;
-        uint32_t blk = block_for_index(node, bi);
+        uint32_t blk;
+        // A TABLE READ THAT FAILED IS NOT A HOLE. Coming back short is
+        // the only honest answer; zeros here would be invented bytes
+        // reported as a successful read.
+        if (!block_for_index(node, bi, &blk)) break;
         if (!blk) {
             // A hole reads as zeros (the format allows them even
             // though the Stage C writer never creates one).
@@ -2538,7 +2561,8 @@ static uint32_t read_range_impl(const struct t3_inode *node, uint64_t offset,
                 // A HOLE ENDS THE RUN, and so does any block that is not
                 // the next one: both would make this transfer read
                 // sectors the caller did not ask for.
-                if (block_for_index(node, bi + run) != blk + run) break;
+                uint32_t nxt;
+                if (!block_for_index(node, bi + run, &nxt) || nxt != blk + run) break;
                 run++;
             }
             if (!vol_read_sectors(blk * T3_SPB, (int)(run * T3_SPB), dst + total)) break;
@@ -2643,11 +2667,11 @@ static void tfs3_list(const char *dir_path, void (*cb)(const char *name, uint32_
 
     uint32_t nblocks = (uint32_t)((dir.size + T3_BLOCK - 1) / T3_BLOCK);
     for (uint32_t b = 0; b < nblocks; b++) {
-        uint32_t blk = block_for_index(&dir, b);
+        uint32_t blk;
         // Copy the dirent block out of g_blk before per-child inode
         // reads reuse the scratch.
         static uint8_t dirblk[T3_BLOCK];
-        if (!blk || !read_block(blk, dirblk)) return;
+        if (!block_for_index(&dir, b, &blk) || !blk || !read_block(blk, dirblk)) return;
         uint32_t off = 0;
         while (off + 8 <= T3_BLOCK) {
             uint32_t e_ino = rd32(dirblk + off);
@@ -2872,8 +2896,8 @@ static int tfs3_delete(const char *path) {
         // delete policy, unchanged (docs/decisions.md).
         uint32_t nblocks = (uint32_t)((node.size + T3_BLOCK - 1) / T3_BLOCK);
         for (uint32_t b = 0; b < nblocks; b++) {
-            uint32_t blk = block_for_index(&node, b);
-            if (!blk || !read_block(blk, g_blk)) return 0;
+            uint32_t blk;
+            if (!block_for_index(&node, b, &blk) || !blk || !read_block(blk, g_blk)) return 0;
             uint32_t off = 0;
             while (off + 8 <= T3_BLOCK) {
                 uint32_t e_ino = rd32(g_blk + off);
@@ -2966,8 +2990,8 @@ static int dirent_repoint(struct t3_inode *dir, const char *name,
                           uint32_t name_len, uint64_t to) {
     uint32_t nblocks = (uint32_t)((dir->size + T3_BLOCK - 1) / T3_BLOCK);
     for (uint32_t b = 0; b < nblocks; b++) {
-        uint32_t blk = block_for_index(dir, b);
-        if (!blk) return 0;
+        uint32_t blk;
+        if (!block_for_index(dir, b, &blk) || !blk) return 0;
         const uint8_t *cur = txn_peek(blk);
         if (!cur) {
             if (!read_block(blk, g_blk)) return 0;
@@ -3117,7 +3141,8 @@ static int tfs3_truncate(const char *path, uint64_t size) {
         // failed zeroing leaves them exposed with the size already moved.
         uint32_t tail = (uint32_t)(size % T3_BLOCK);
         if (tail) {
-            uint32_t tblk = block_for_index(&node, (uint32_t)(size / T3_BLOCK));
+            uint32_t tblk;
+            if (!block_for_index(&node, (uint32_t)(size / T3_BLOCK), &tblk)) return 0;
             if (tblk) {
                 if (!read_block(tblk, g_blk)) return 0;
                 k_memset(g_blk + tail, 0, T3_BLOCK - tail);
@@ -3359,7 +3384,8 @@ static void fsck_walk_dir(struct t3_fsck *fk, uint64_t dir_ino, uint64_t parent_
 
     uint32_t nblocks = (uint32_t)((dir.size + T3_BLOCK - 1) / T3_BLOCK);
     for (uint32_t b = 0; b < nblocks; b++) {
-        uint32_t blk = block_for_index(&dir, b);
+        uint32_t blk;
+        if (!block_for_index(&dir, b, &blk)) continue;
         uint8_t *dirblk = kmalloc(T3_BLOCK);
         if (!dirblk) return;
         if (!blk || !read_block(blk, dirblk)) { kfree(dirblk); continue; }
