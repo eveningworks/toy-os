@@ -30,6 +30,7 @@
 #include "storage_config.h" // storage.sync -- whether the barriers are real
 #include "block_stat.h"     // the read counter lookup() brackets itself with
 #include "clocksource.h"    // clocksource_now_ns()
+#include "kfmt.h"           // klog_printf() -- the read-only transition says why
 #include "ata.h"   // ATA_SECTOR_SIZE only: 512 is the sector size every
                     // block device here uses, and it is spelled once there
 #include "klog.h"
@@ -180,6 +181,13 @@ struct t3_gd { uint32_t free_blocks, free_inodes; };
 struct t3_state {
     struct t3_vol vol;
     int mounted;
+
+    // THE VOLUME IS IN ERROR AND MAY NOT BE WRITTEN. Set when a
+    // committed journal transaction could not be applied, and when a
+    // replay left one outstanding: in both cases the journal names
+    // blocks that a further write could reuse, and the next mount has
+    // to be able to replay it. ext4's errors=remount-ro.
+    int readonly;
 
     struct {
         uint8_t version;
@@ -352,7 +360,20 @@ static int vol_read_sectors(uint32_t lba, int count, void *buf) {
 
 static void rcache_drop(void);
 
+// Stop writing this volume, and say so where a person can see it.
+// The mount flag is the REPORT (df, mount); t3_state.readonly is the
+// ENFORCEMENT, because at init() time -- a failed replay -- there is
+// no mount entry yet to flag.
+static void vol_go_readonly(const char *why) {
+    if (S->readonly) return;
+    S->readonly = 1;
+    klog_printf("tfs3: %s -- the volume is read-only until the next boot "
+                "replays its journal\n", why);
+    mount_force_readonly(S->vol.dev, why);
+}
+
 static int vol_write_sectors(uint32_t lba, int count, const void *buf) {
+    if (S->readonly) return 0;   // see t3_state.readonly -- one gate, not ten
     if (lba + (uint32_t)count > S->vol.sector_count) return 0;
     // ANY write drops the pointer-table read cache -- see rcache_get().
     // Here rather than in write_block() because a coalesced data run
@@ -1100,6 +1121,11 @@ static void alog_forget(uint32_t blk) {
     }
 }
 
+// Drop the log without freeing any of it: a committed transaction
+// names these blocks now, so they are live even though the operation
+// that allocated them failed.
+static void alog_cancel(void) { g_alog.n = 0; g_alog.active = 0; }
+
 static void alog_rollback(void) {
     if (g_alog.overflow) {
         // Couldn't track everything -- leak honestly rather than free
@@ -1296,13 +1322,34 @@ static int txn_barrier(void) {
     return blkdev_flush(S->vol.dev);
 }
 
-static int txn_commit(void) {
-    if (g_txn_count == 0) return 1;
+// A COMMIT HAS THREE OUTCOMES, AND THE THIRD IS THE POINT.
+//
+// Past the commit point the journal is durable and WILL be replayed,
+// so the blocks the operation allocated are live even though the
+// operation failed -- freeing them hands a replayed inode pointers to
+// space something else can take. Before the commit point it is the
+// exact opposite: nothing landed, and not freeing them leaks. The two
+// used to be one `return 0`, and every caller rolled back.
+//
+// jbd2 draws the same line, and answers it the same way
+// (jbd2_journal_abort() plus errors=remount-ro): a filesystem that
+// cannot apply its own commit stops writing, because the next mount's
+// replay is the only thing that can still finish the job.
+enum t3_commit {
+    T3_COMMIT_ABORTED   = 0,   // nothing durable -- the caller must roll back
+    T3_COMMIT_OK        = 1,
+    T3_COMMIT_UNAPPLIED = 2,   // committed; replay owns these blocks now
+};
+
+static enum t3_commit txn_commit_raw(void) {
+    if (g_txn_count == 0) return T3_COMMIT_OK;
     S->jrn_seq++;
     for (int i = 0; i < g_txn_count; i++) {
-        if (!write_block(S->jdata_block + (uint32_t)i, g_txn_img[i])) { txn_reset(); return 0; }
+        if (!write_block(S->jdata_block + (uint32_t)i, g_txn_img[i])) {
+            txn_reset(); return T3_COMMIT_ABORTED;
+        }
     }
-    if (!write_journal_header(1)) { txn_reset(); return 0; }
+    if (!write_journal_header(1)) { txn_reset(); return T3_COMMIT_ABORTED; }
 
     // BARRIER 1, and it is checked. The journal's whole guarantee is
     // that everything written before this point is on the platter, so
@@ -1316,7 +1363,7 @@ static int txn_commit(void) {
         klog_write("tfs3: journal barrier failed -- transaction abandoned, "
                    "targets untouched\n");
         txn_reset();
-        return 0;
+        return T3_COMMIT_ABORTED;
     }
 
     int ok = 1;
@@ -1338,20 +1385,42 @@ static int txn_commit(void) {
     } else {
         // Leave the header committed: replay finishes the job next
         // boot, same call replay_journal() in TFS2 makes.
-        klog_write("tfs3: transaction target write failed -- left committed for replay\n");
+        // Either a target write or barrier 2 -- both mean the same
+        // thing here, and only the journal can finish it now.
+        klog_write("tfs3: transaction could not be applied -- left committed for replay\n");
     }
     txn_reset();
-    return ok;
+    return ok ? T3_COMMIT_OK : T3_COMMIT_UNAPPLIED;
 }
 
-static void replay_journal(void) {
+// What every caller in this file actually wants: 1 on success, 0 on
+// failure. The three-way answer is consumed HERE rather than at the
+// sixteen call sites, which is what makes the rule impossible to
+// forget -- the same argument txn_begin() makes for forcing a deferred
+// flush in one place. A caller's own alog_rollback() then frees
+// nothing, because there is nothing it may undo.
+static int txn_commit(void) {
+    enum t3_commit r = txn_commit_raw();
+    if (r == T3_COMMIT_UNAPPLIED) {
+        alog_cancel();
+        vol_go_readonly("a committed transaction could not be applied");
+    }
+    return r == T3_COMMIT_OK;
+}
+
+// 1 if nothing is outstanding -- replayed, torn and discarded, or
+// none to begin with. 0 when a COMMITTED transaction is still on the
+// disk unapplied, which the caller must not mount writable over: a
+// write could reuse a block the journal names, and the replay is the
+// only thing that can still finish it.
+static int replay_journal(void) {
     uint8_t sec[ATA_SECTOR_SIZE];
-    if (!vol_read_sectors(T3_JH_BLOCK * T3_SPB, 1, sec)) return;
-    if (!(sec[0] == 'J' && sec[1] == 'R' && sec[2] == 'N' && sec[3] == '3')) return;
+    if (!vol_read_sectors(T3_JH_BLOCK * T3_SPB, 1, sec)) return 1;
+    if (!(sec[0] == 'J' && sec[1] == 'R' && sec[2] == 'N' && sec[3] == '3')) return 1;
     uint32_t slots = jh_slots_off(S->sb.version), ck = jh_cksum_off(S->sb.version);
-    if (k_fnv1a(sec, ck) != rd32(sec + ck)) return; // torn header = no transaction
+    if (k_fnv1a(sec, ck) != rd32(sec + ck)) return 1; // torn header = no transaction
     S->jrn_seq = rd32(sec + 8);
-    if (!sec[4]) return; // not committed
+    if (!sec[4]) return 1; // not committed
     uint32_t count = sec[5];
     if (count == 0 || count > S->jslots) count = 0;
 
@@ -1370,20 +1439,21 @@ static void replay_journal(void) {
             // below -- the next boot must replay them again.
             klog_write("tfs3: journal replay barrier failed -- left committed "
                        "for next boot\n");
-            return;
+            return 0;
         }
         if (all_ok) {
             klog_write("tfs3: replayed a committed journal transaction (");
             klog_write_dec(count); klog_write(" blocks)\n");
         } else {
             klog_write("tfs3: journal replay write failed -- left committed for next boot\n");
-            return;
+            return 0;
         }
     } else {
         klog_write("tfs3: discarded a torn journal transaction\n");
     }
     g_txn_count = 0;
     write_journal_header(0);
+    return 1;
 }
 
 // ---- inode staging (through the transaction) ------------------------------
@@ -2453,7 +2523,11 @@ static int tfs3_init(const struct block_device *dev, uint64_t size_bytes) {
         return -1;
     }
     derive_geometry();
-    replay_journal(); // before anything reads the structures a crash may have half-written
+    // Before anything reads the structures a crash may have
+    // half-written -- and a transaction it could not apply takes the
+    // volume read-only rather than being mounted over.
+    if (!replay_journal())
+        vol_go_readonly("a committed journal transaction could not be replayed");
 
     S->gd = kmalloc(sizeof(struct t3_gd) * S->sb.gc);
     S->bbm = kmalloc((size_t)S->sb.gc * T3_BLOCK);

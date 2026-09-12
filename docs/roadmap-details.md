@@ -524,6 +524,35 @@ because it touches every `txn_commit()` caller and the mount path.
   failed is settled by the control rather than by argument: only a
   table read can make the unfixed build report DONE. Fixed 2026-09-12.
 
+- **The journal's commit point** (`txn_commit()`). It answered 0 for a
+  failure before the commit point and for one after it, and every
+  caller rolled back. Past the commit point the journal is durable and
+  WILL be replayed, so the operation's blocks are live even though the
+  operation failed -- freeing them hands a replayed inode pointers to
+  space something else can take, and a later transaction can overwrite
+  the outstanding journal before it is replayed. `txn_commit_raw()`
+  has three outcomes now and `txn_commit()` consumes the third in ONE
+  place, so none of the sixteen call sites changed and none of them
+  can forget: past the commit point it cancels the allocation log
+  (a caller's own `alog_rollback()` then frees nothing) and takes the
+  volume read-only. A failed REPLAY at mount does the same. That is
+  jbd2 plus `errors=remount-ro`, and for the same reason -- only the
+  next mount's replay can finish the job, so nothing may reuse a block
+  the journal still names. Enforcement is one gate in
+  `vol_write_sectors()`; `mount_force_readonly()` is the REPORT, since
+  at `init()` time there is no mount entry yet to flag. Fixed
+  2026-09-12.
+
+  **Testing it needed a second volume and a new injector.** A commit
+  issues two barriers with the commit point between them, so a plain
+  countdown always hits the first -- `fault_fail_block_flushes(skip,
+  count)` is the skip that reaches the second. And the outcome is a
+  read-only volume, which on the ROOT would fail every test after it:
+  the post-commit KTEST skips unless a second TFS3 mount exists, and
+  `tools/multidisk_test.py` mounts one and runs `ktest fs` there. Two
+  KTESTs, one per side of the commit point, and the control that
+  restores the old behaviour reddens only the post-commit one.
+
 ### Kernel test harness
 
 **Done** (2026-08-13) -- see the commit that added it. Kept

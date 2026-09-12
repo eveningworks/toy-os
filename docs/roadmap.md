@@ -27,7 +27,6 @@ buildable now. Something that MISBEHAVES is not here -- that is
 - [ ] Measure desktop and input latency during heavy disk I/O, and keep that workload as the yardstick for the three items below  *(Scheduler: blocking, priorities, classes)*
 - [ ] **Interruptible syscalls** -- a trap gate plus retiring `g_next_kernel_rsp` as a single global  *(Scheduler: blocking, priorities, classes)*
 - [ ] Replace the preemption guard with a real sleeping lock -- **Needs:** interruptible syscalls, above  *(Scheduler: blocking, priorities, classes)*
-- [ ] Journal failures: an aborted operation and a committed transaction awaiting recovery are not the same outcome  *(TFS3 correctness: the five findings)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
@@ -394,9 +393,9 @@ No dependency on the phases above; ordered among themselves.
 
 ### TFS3 correctness: the five findings
 
-**Needs:** nothing. Each is a separate fix that starts with its own regression test -- see the long form for the order and why it is that order.
+**Needs:** nothing; all five landed 2026-09-12. Each was a separate fix with its own regression test -- see the long form.
 
-- [ ] **NEXT** Journal failures: an aborted operation and a committed transaction awaiting recovery are not the same outcome
+- [x] ~~Journal failures: an aborted operation and a committed transaction awaiting recovery are not the same outcome~~ DONE 2026-09-12
 - [x] ~~File-size and addressing limits, validated before anything is allocated~~ DONE 2026-09-12
 - [x] ~~Zero-fill after a truncation, so a shrink and regrow cannot expose the old bytes~~ DONE 2026-09-12
 - [x] ~~The stepped append, which erases a block's existing prefix~~ DONE 2026-09-12

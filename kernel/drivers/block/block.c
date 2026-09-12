@@ -360,6 +360,7 @@ int blkdev_max_sectors_per_xfer(const struct block_device *dev) {
 // Same contract as blk_flush(): 1 on a device with no cache, because
 // there is nothing that can be lost independently of everything else.
 int blkdev_flush(const struct block_device *dev) {
+    if (fault_should_fail_block_flush()) return 0;
     return io_flush(dev);
 }
 

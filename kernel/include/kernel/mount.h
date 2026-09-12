@@ -168,6 +168,16 @@ void mount_boot_auto(void);
 // A window something IS mounted from is kept, and then the table has a
 // name that no longer describes what is on the disk -- which is why
 // sys_mkpart() only rescans a disk nothing is mounted from.
+// A BACKEND THAT HAS FOUND ITS VOLUME INCONSISTENT TAKES IT READ-ONLY.
+// ext4's errors=remount-ro: once a journal holds work that could not
+// be applied, a further write could reuse a block the journal still
+// names, and only the next mount's replay can finish the job. The
+// backend enforces its own refusal (it is the only writer); this is
+// what makes the state VISIBLE -- df and mount report MNT_RDONLY.
+// Silent about a device nothing is mounted from, which is the case at
+// init() time, before the mount table has an entry.
+void mount_force_readonly(const struct block_device *dev, const char *why);
+
 int mount_rescan_disk(const struct block_device *disk);
 
 // Re-run the boot probe after a format wrote a new filesystem.

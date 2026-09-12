@@ -13,6 +13,7 @@
 #include "tfs3.h" // the caps-declaration test below reads tfs3_ops directly
 #include "block.h" // blk_sector_count() -- the geometry test at the bottom
 #include "storage_config.h" // storage_sync_batched() -- the deferred-commit test
+#include "mount.h" // mount_at()/MNT_RDONLY -- the read-only transition is a MOUNT fact
 
 
 // One path per test, not one shared path, and every test asserts its
@@ -1141,4 +1142,96 @@ KTEST("fs", "a failed indirect-table read is an error, not a hole of zeros") {
     KTEST_ASSERT(back[0] == pattern[0]);
 
     fs_delete("/.ktest_ptrerr");
+}
+
+// ---- the two sides of the journal's commit point ----
+//
+// txn_commit() used to answer 0 for a failure before the commit point
+// and for one after it, and every caller rolled back. Past the commit
+// point the journal is durable and WILL be replayed, so rolling back
+// frees blocks a replayed inode still names -- and a later write can
+// take them. The two outcomes need different answers: roll back, or
+// stop writing and let the next mount finish the job.
+//
+// REACHING EACH SIDE ON PURPOSE is what fault_fail_block_flushes()'s
+// skip is for. A commit issues two barriers with the commit point
+// between them, so a plain countdown always hits the first.
+
+KTEST("fs", "a failure BEFORE the commit point rolls back and keeps writing") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    if (!storage_sync_strict()) KTEST_SKIP("barriers are off under storage.sync = lazy");
+    // A WRITE IS THE WRONG OPERATION HERE: under the default
+    // `storage.sync = batched` it stages its inode into a deferred
+    // transaction and commits nothing, so neither barrier fires.
+    // fs_touch() commits on the spot in every mode. The sync drains
+    // whatever else is deferred, so the barriers counted below are
+    // this operation's.
+    fs_sync(0);
+    FRESH("/.ktest_bar1");
+    fs_sync(0);
+
+    fault_fail_block_flushes(0, 1);            // barrier 1: targets untouched
+    int ok = fs_touch("/.ktest_bar1");
+    fault_fail_block_flushes(0, 0);
+    KTEST_ASSERT_EQ(ok, 0);
+
+    // Rolled back: the file does not exist, rather than existing
+    // until the next reboot and then not.
+    KTEST_ASSERT_EQ(fs_exists("/.ktest_bar1"), 0);
+
+    // And the volume is NOT in error -- an abort is an ordinary
+    // failure, not a reason to stop writing. A wrapper that treated
+    // every failed commit as unapplied would fail here.
+    KTEST_ASSERT(fs_touch("/.ktest_bar1") == 1);
+    KTEST_ASSERT(fs_write_range("/.ktest_bar1", 0, "still writable", 14) == 1);
+
+    fs_delete("/.ktest_bar1");
+}
+
+// The other side, and it cannot run on the ROOT: the volume stays
+// read-only until something replays its journal, which would fail
+// every test after this one. So it needs a second TFS3 mount and
+// skips without one -- tools/multidisk_test.py boots the guest that
+// has one.
+static const char *second_tfs3_point(void) {
+    for (int i = 0; i < mount_count(); i++) {
+        const struct mount *m = mount_at(i);
+        if (m->point_len > 1 && m->fs == &tfs3_ops && !(m->flags & MNT_RDONLY))
+            return m->point;
+    }
+    return 0;
+}
+
+KTEST("fs", "a committed transaction that cannot be applied stops the writes") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    if (!storage_sync_strict()) KTEST_SKIP("barriers are off under storage.sync = lazy");
+    const char *point = second_tfs3_point();
+    if (!point) KTEST_SKIP("no second TFS3 mount -- see tools/multidisk_test.py");
+
+    char a[FS_PATH_MAX], b[FS_PATH_MAX];
+    k_snprintf(a, sizeof a, "%s/.ktest_bar2", point);
+    k_snprintf(b, sizeof b, "%s/.ktest_bar2b", point);
+    fs_sync(0);
+    FRESH(a);
+    FRESH(b);
+    fs_sync(0);
+
+    fault_fail_block_flushes(1, 1);            // barrier 2: past the commit point
+    int ok = fs_touch(a);
+    fault_fail_block_flushes(0, 0);
+    KTEST_ASSERT_EQ(ok, 0);
+
+    // The volume is in error and refuses to be written. This is the
+    // whole finding: the old code rolled the allocation back instead
+    // and carried on, so the next write could take a block the
+    // outstanding journal still names.
+    KTEST_ASSERT_EQ(fs_touch(b), 0);
+    KTEST_ASSERT_EQ(fs_write_range(b, 0, "no", 2), 0);
+
+    // ...and it says so where a person can see it, not only in a log.
+    const struct mount *m = 0;
+    for (int i = 0; i < mount_count(); i++)
+        if (k_strcmp(mount_at(i)->point, point) == 0) m = mount_at(i);
+    KTEST_ASSERT(m != 0);
+    KTEST_ASSERT((m->flags & MNT_RDONLY) != 0);
 }

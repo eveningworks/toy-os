@@ -2811,3 +2811,55 @@ person running it obtained for themselves -- the same distinction
 `tools/fetch_extras.py` draws for the Doom IWAD, and the reason the
 fetch needs no licence prompt while publishing an image carrying the
 result would.
+
+## A committed transaction that cannot be applied takes the volume read-only, and the backend calls UP to say so
+
+`txn_commit()` used to answer 0 for a failure before the commit point
+and for one after it. The two are opposites. Before it, nothing is
+durable and the caller must free what it allocated or leak. After it,
+the journal is on the platter and WILL be replayed, so those blocks are
+live even though the operation failed -- freeing them hands the
+replayed inode pointers to space something else can take, and a later
+transaction can overwrite the outstanding journal before anything
+replays it.
+
+jbd2 draws the same line and answers it the same way: a commit-time
+failure calls `jbd2_journal_abort()`, and the filesystem stops writing
+(`errors=remount-ro`, the default most distributions ship). NTFS sets
+the volume's dirty bit and leaves it to chkdsk. Neither ever undoes an
+allocation past the commit point, because the recovery pass is the only
+thing that can still finish the operation, and it cannot finish it if
+something else has taken the blocks. **Panicking** was the other real
+option (ext4's `errors=panic`) and was declined: it loses the machine
+for a fault the next mount can repair, and it makes the fault-injected
+test kill the guest it is running in.
+
+**Why one wrapper instead of sixteen edited call sites.** The three-way
+answer is `txn_commit_raw()`'s; `txn_commit()` keeps the int contract
+every caller already has and consumes the third outcome in one place --
+cancelling the allocation log so the caller's own `alog_rollback()`
+frees nothing. That is the same argument `txn_begin()` already makes
+for forcing a deferred flush in the one function every transaction
+passes through: a rule applied at sixteen sites is a rule a
+seventeenth will not know about.
+
+**Why the backend calls up into the mount table.** Enforcement and
+reporting are different jobs. `t3_state.readonly` gates
+`vol_write_sectors()` -- one place, and the backend is the only writer,
+so nothing can get past it. But a volume that has silently stopped
+accepting writes is the worst kind of failure, so `mount_force_readonly()`
+sets `MNT_RDONLY` and `df` shows it. That call is a backend reaching
+UP, which nothing else here does; the alternative was a new `fs_ops`
+hook the mount layer polls, which is more machinery for one fact. It
+has to be both, not just the mount flag, because `fs_ops.init()` runs
+BEFORE `mount_add()` records the mount -- a replay that fails at mount
+time has no entry to flag yet.
+
+**What it costs to test.** A commit issues two barriers with the commit
+point between them, so a countdown injector always hits the first;
+`fault_fail_block_flushes(skip, count)` exists for the skip, and that
+is the only reason it is shaped differently from every other injector
+here. And the outcome is a read-only volume, which on the root would
+fail every test after it -- so the post-commit KTEST skips unless a
+second TFS3 mount exists, and `tools/multidisk_test.py` is the guest
+that has one.

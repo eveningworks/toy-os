@@ -540,6 +540,17 @@ static void forget_windows_of(const struct block_device *disk) {
     }
 }
 
+void mount_force_readonly(const struct block_device *dev, const char *why) {
+    if (!dev) return;
+    for (int i = 0; i < MOUNT_MAX; i++) {
+        struct mount *m = &g_mounts[i];
+        if (!m->used || m->dev != dev || (m->flags & MNT_RDONLY)) continue;
+        m->flags |= MNT_RDONLY;
+        klog_printf("mount: %s is now read-only -- %s\n", m->point,
+                    why ? why : "the filesystem reported an error");
+    }
+}
+
 int mount_rescan_disk(const struct block_device *disk) {
     if (!disk) return 0;
     // STATIC, not a stack local: struct partition_table is ~1.5 KB

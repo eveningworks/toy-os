@@ -117,6 +117,30 @@ class Shell:
                 break
         return out.decode("utf-8", "replace")
 
+    def verb(self, cmd, timeout=None):
+        """A debug-console VERB (ktest, lsfs, ...), sent without the `sh `
+        prefix run() adds for /bin programs."""
+        saved, self.timeout = self.timeout, timeout or self.timeout
+        try:
+            return self._raw(cmd)
+        finally:
+            self.timeout = saved
+
+    def _raw(self, cmd):
+        self.s.sendall((cmd + "\n").encode())
+        out, deadline = b"", time.time() + self.timeout
+        while time.time() < deadline:
+            try:
+                chunk = self.s.recv(65536)
+            except socket.timeout:
+                break
+            if not chunk:
+                break
+            out += chunk
+            if out.rstrip().endswith(PROMPT.strip().encode()):
+                break
+        return out.decode("utf-8", "replace")
+
     def close(self):
         try:
             self.s.close()
@@ -275,13 +299,12 @@ def main():
                   blk.count("yes") == 1, blk.strip()[:400])
 
         # AND IT RESOLVES, which is a different claim from being listed.
-        # The mount is REFUSED here, deliberately and not by accident:
-        # every backend declares max_mounts = 1 (block/fs_ops.h) and TFS3
-        # is already carrying the root, so a second TFS3 volume cannot be
-        # mounted on this machine at all. What separates "reachable" from
-        # "unreachable" is therefore WHICH refusal comes back -- the
-        # volume being unrecognised means the name resolved and the
-        # window was read, where an unknown name says so by name.
+        # This check was written when every backend declared
+        # max_mounts = 1, so the mount could only be REFUSED and the
+        # assertion had to be about WHICH refusal came back. tfs3_ops
+        # declares MOUNT_MAX now and the mount SUCCEEDS, so the second
+        # half is asserted directly below; the unknown name still has
+        # to be refused by name, which is what this keeps.
         sh.run("sh mkdir /mnt2")
         time.sleep(0.6)
         good = sh.run("sh mount ahci0p1 /mnt2")
@@ -290,6 +313,44 @@ def main():
                   "no such device" not in good.split("mount:")[-1] and
                   "no partition named" in bad,
                   f"named: {good.strip()[-160:]} || unknown: {bad.strip()[-160:]}")
+
+        # A SECOND TFS3 VOLUME REALLY MOUNTS. This used to be
+        # impossible -- every backend declared max_mounts = 1 -- and
+        # the comment above said so long after tfs3_ops started
+        # declaring MOUNT_MAX. The code was right and the comment was
+        # not.
+        mounts = sh.run("mount")
+        res.check("the second TFS3 volume is mounted at /mnt2",
+                  "/mnt2" in mounts,
+                  mounts.strip()[-200:])
+
+        # ...AND IT IS WHAT MAKES THE JOURNAL'S POST-COMMIT TEST
+        # RUNNABLE. A committed transaction that cannot be applied
+        # takes its volume read-only until something replays it, so
+        # that KTEST skips on a one-disk machine rather than wrecking
+        # the root for every test after it. This is the guest that has
+        # somewhere else to do it.
+        # fsck FIRST, the way ktest_run.py does: the seeded disk.img
+        # carries a couple of blocks leaked by an earlier boot that was
+        # killed, and four of the fs tests assert a clean fsck. Without
+        # this they fail here for a reason that has nothing to do with
+        # the second disk.
+        sh.run("fsck repair")
+        out = sh.verb("ktest fs", timeout=90.0)
+        # NOT a literal "... ok": the kernel logs the read-only
+        # transition between the test's name and its result, so the two
+        # are not on one line. "0 skipped" is what says it RAN -- that
+        # test skips itself on a one-disk machine, which is every other
+        # guest in this repo.
+        named = "cannot be applied stops the writes" in out
+        res.check("the journal's post-commit KTEST RAN here, and passed",
+                  named and "0 failed" in out and "0 skipped" in out,
+                  " | ".join(ln.strip() for ln in out.splitlines()
+                             if "cannot be applied" in ln or "ktest:" in ln)[:300])
+        res.check("...and the volume it wrecked was /mnt2, not the root",
+                  "/mnt2 is now read-only" in out and "/ is now read-only" not in out,
+                  " | ".join(ln.strip() for ln in out.splitlines()
+                             if "ktest:" in ln)[:200])
     finally:
         if sh:
             sh.close()

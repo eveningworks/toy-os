@@ -3941,13 +3941,24 @@ window without going through it will find its layout polls timing out.
   blk_ata_init();` was invisible to all of them while it made a
   machine's second drive not exist.
 
-  Seven checks: both disks enumerated and named, `root=` overriding the
+  Ten checks: both disks enumerated and named, `root=` overriding the
   driver precedence, the OTHER disk's partitions named too, exactly one
   device marked as the root, a named device resolving where an unknown
   one is refused by name, and an unknown `root=` reporting what it does
   have and booting anyway. Its positive control is the old short circuit
-  restored, which reddens six of the seven and whose detail shows the
+  restored, which reddens six of them and whose detail shows the
   bug outright -- `have ahci0` and no `ata0` at all.
+
+  **IT IS ALSO THE ONLY GUEST WITH SOMEWHERE SAFE TO WRECK A VOLUME.**
+  TFS3's post-commit journal KTEST ends with the volume read-only
+  until something replays it, which on the root would fail every test
+  after it -- so that test skips unless a second TFS3 mount exists,
+  and this tool mounts one at `/mnt2` and runs `ktest fs` there. Three
+  of the ten checks are that: the second volume really mounts (it
+  could not, when every backend declared `max_mounts = 1`), the suite
+  runs with nothing skipped, and what went read-only was `/mnt2` and
+  not `/`. It `fsck repair`s first, as `ktest_run.py` does, or the
+  blocks a killed boot leaked fail four unrelated fsck assertions.
 
   It builds its own boot image per phase (`make iso KCMDLINE=...`, then
   a copy), so **it rewrites `disk.img`'s GRUB line** and puts it back at

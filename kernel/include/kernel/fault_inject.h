@@ -52,6 +52,19 @@ void fault_fail_next_ata_reads(uint32_t count);
 void fault_fail_next_block_writes(uint32_t count);
 void fault_fail_next_block_reads(uint32_t count);
 
+// Skip the next `skip` blkdev_flush() calls, then fail `count` of them.
+//
+// THE SKIP IS WHY THIS ONE IS NOT SHAPED LIKE THE OTHERS. A journal
+// commit issues TWO barriers and the commit point sits between them:
+// failing the first abandons the transaction with the targets
+// untouched, while failing the second leaves a committed transaction
+// awaiting replay -- two outcomes a caller must tell apart, and the
+// second is unreachable without stepping over the first. Arming a
+// plain countdown always hits barrier one.
+//
+// Pass skip = 0, count = 0 to disarm.
+void fault_fail_block_flushes(uint32_t skip, uint32_t count);
+
 // The next `count` kmalloc()/kzalloc() calls return NULL without
 // allocating. Note kfree() is unaffected -- freeing is not a failure
 // path in this heap.
@@ -66,6 +79,7 @@ int fault_any_armed(void);
 // should be failed (and consumes one from the countdown).
 int fault_should_fail_block_write(void);
 int fault_should_fail_block_read(void);
+int fault_should_fail_block_flush(void);
 int fault_should_fail_ata_write(void);
 int fault_should_fail_ata_read(void);
 int fault_should_fail_alloc(void);
