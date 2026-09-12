@@ -55,15 +55,18 @@ SECTIONS
         *(.rodata*)
     } :rodata
 
-    /* Placed explicitly rather than left as an orphan: with PHDRS
-       declared, where the linker puts an orphan section decides which
-       segment (and therefore which permissions) it lands in, and
-       "wherever ld felt like" is not a thing to leave to chance in a
-       file whose whole job is now saying what is executable. */
-    .eh_frame :
+    /* DISCARDED, not placed: nothing in ring 0 unwinds, and a panic is
+       resolved on the host from DWARF rather than from these at run
+       time. It is named here rather than only suppressed by
+       -fno-asynchronous-unwind-tables because that flag does not cover
+       hand-written .asm, and with PHDRS declared an ORPHAN section
+       lands in whichever segment ld chose -- which is the one thing
+       this file exists to stop being left to chance. */
+    /DISCARD/ :
     {
         *(.eh_frame)
-    } :rodata
+        *(.eh_frame_hdr)
+    }
 
     /* In-kernel test descriptors. KTEST() (kernel/include/kernel/ktest.h)
        drops one struct ktest_case per test into .ktests, and the runner

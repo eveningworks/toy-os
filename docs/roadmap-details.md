@@ -3773,7 +3773,14 @@ it serves. Small, and it makes everything above it discoverable.*
 
 ### The kernel ships ~62 KB of `.eh_frame` unwind tables nothing can ever read
 
-Measured on the current image: `.eh_frame` is **62,076 bytes, 2.5% of
+**DONE 2026-09-12.** The loaded image lost exactly 155,328 bytes
+(8,555,493 -> 8,400,165 across its PT_LOADs). The figure below said
+62,076 when it was written and had reached 155,324 by the time anyone
+acted on it -- a measurement in prose ages like every other number this
+repo has stopped citing, so read it as the shape of the argument rather
+than as a quantity.
+
+Measured when this was written: `.eh_frame` was **62,076 bytes, 2.5% of
 `kernel.bin`**. Those are DWARF call-frame tables, and their only possible
 consumer is an unwinder -- C++ exceptions, `_Unwind_Backtrace`, a debugger
 walking frames from inside the process. This kernel has none of the three.
@@ -3798,6 +3805,21 @@ worth doing carefully rather than casually:
   * **The W^X KTESTs assert on band boundaries.** Deleting a section moves
     every address above it. That is exactly what those tests are for, so
     expect them to be the thing that tells you whether it worked.
+
+**What was actually done, and the one surprise.** Both halves, as the
+warning above asks: `-fno-asynchronous-unwind-tables` in the kernel's
+`CFLAGS`, and `linker.ld`'s explicit placement replaced by a
+`/DISCARD/` of `.eh_frame`/`.eh_frame_hdr` rather than deleted, so a
+table from hand-written `.asm` cannot become the orphan that comment
+warns about. `.eh_frame` is gone from the section table entirely and
+the W^X line and all 732 KTESTs are unchanged.
+
+The surprise: **`build/kernel.bin` got 30 KB BIGGER on disk.** With
+`-g` and no asynchronous tables, GCC emits the same CFI into
+`.debug_frame` instead -- not allocated, never loaded, and still
+readable by GDB. So the ELF a developer debugs grew slightly while the
+image the machine copies into RAM shrank by 152 KB. Measure the
+PT_LOADs, not the file.
 
 Not urgent -- 62 KB of read-only NX data costs nothing at runtime. It is
 recorded because "why is this in the image at all" had never been asked,

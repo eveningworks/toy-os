@@ -100,8 +100,16 @@ API_INCLUDES    = -Ikernel/include/api -Ikernel/include/abi
 LIBC_INCLUDES   = -Iuserland/include
 KERNEL_INCLUDES = $(API_INCLUDES) -Ikernel/include/kernel
 
+# -fno-asynchronous-unwind-tables: nothing in ring 0 unwinds. There is
+# no C++, no _Unwind_*, and a panic is resolved on the HOST from DWARF
+# (tools/panic_resolve.py), not from .eh_frame at run time -- so the
+# tables were 155 KB of an image that is copied into RAM at boot.
+# linker.ld discards the section as well, since the flag does not cover
+# hand-written .asm and an orphan .eh_frame would land in whichever
+# segment ld chose.
 CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
          -mno-red-zone -mcmodel=kernel -mno-mmx -mno-sse -mno-sse2 \
+         -fno-asynchronous-unwind-tables \
          -Wall -Wextra -Wframe-larger-than=1024 -O2 -g -c $(KERNEL_INCLUDES) -Iapps -MMD -MP
 
 # apps/ gets a looser frame budget than kernel/ on purpose. The tight
