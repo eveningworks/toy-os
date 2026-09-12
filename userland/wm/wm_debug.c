@@ -744,6 +744,8 @@ static void cmd_brightness(struct dbg_out *o, int json) {
         dbg_out_printf(o, "{\"open\":%s,\"level\":%d,\"available\":%s,\"unavailable\":\"%s\",",
                      brightness_open ? "true" : "false", g.level,
                      g.available ? "true" : "false", why);
+        dbg_out_printf(o, "\"tray_hidden\":%s,",
+                     brightness_tray_hidden() ? "true" : "false");
         dbg_out_printf(o, "\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,", g.x, g.y, g.w, g.h);
         dbg_out_printf(o, "\"tray\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"cx\":%d,\"cy\":%d},",
                      g.tray_x, g.tray_y, g.tray_w, g.tray_h,
@@ -753,9 +755,11 @@ static void cmd_brightness(struct dbg_out *o, int json) {
                      g.slider_y + g.slider_h / 2);
         return;
     }
-    dbg_out_printf(o, "brightness: %s  level=%d  %s  x=%d y=%d w=%d h=%d\r\n",
+    dbg_out_printf(o, "brightness: %s  level=%d  %s  %s  x=%d y=%d w=%d h=%d\r\n",
                  brightness_open ? "open" : "closed", g.level,
-                 g.available ? "available" : why, g.x, g.y, g.w, g.h);
+                 g.available ? "available" : why,
+                 brightness_tray_hidden() ? "tray hidden" : "tray shown",
+                 g.x, g.y, g.w, g.h);
     dbg_out_printf(o, "  tray x=%d y=%d w=%d h=%d centre=(%d,%d)  slider x=%d y=%d w=%d\r\n",
                  g.tray_x, g.tray_y, g.tray_w, g.tray_h,
                  g.tray_x + g.tray_w / 2, g.tray_y + g.tray_h / 2,

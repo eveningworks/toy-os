@@ -22,6 +22,7 @@
 #include "wallpaper_config.h"
 #include "start_button_config.h"
 #include "taskbar_config.h"
+#include "tray_config.h"
 #include "screensaver_config.h"
 #include "week_start_config.h"
 #include "icon_size_config.h"
@@ -716,6 +717,7 @@ void settings_init(void) {
     wallpaper_setting_register();
     start_button_setting_register();
     taskbar_setting_register();
+    tray_setting_register();
     screensaver_setting_register();
     week_start_setting_register();
     icon_size_setting_register();

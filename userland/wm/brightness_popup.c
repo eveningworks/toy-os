@@ -3,6 +3,7 @@
 #include "wm_internal.h"
 #include "brightness_popup.h"
 #include "tray_slider_popup.h"
+#include "wm_tray.h"     // tray_want_shown, tray_set_hidden
 #include "ui/uui.h"
 #include "ui/utheme.h"
 #include "kapi.h"
@@ -17,12 +18,32 @@ static int g_hover;
 
 const char *brightness_unavailable_text(void) { return g_popup.unavailable; }
 
+int brightness_tray_hidden(void) { return tray_is_hidden(g_popup.tray_id); }
+
+// `auto` shows the sun only where there is a backlight to move, which
+// is what Windows 11 and Plasma both do. The item is REGISTERED either
+// way and hidden in its slot, so `always` -- which is how a GUI tool
+// keeps this flyout covered under QEMU -- costs no re-registration and
+// cannot reorder the strip. See tray_config.c.
+static void apply_visibility(void) {
+    int has_backlight = g_popup.unavailable[0] == 0;
+    tray_set_hidden(g_popup.tray_id, !tray_want_shown("brightness", has_backlight));
+}
+
 void brightness_tray_init(void) {
     g_popup.name = "brightness";
     g_popup.setting = BRIGHTNESS_SETTING;
     g_popup.step = BRIGHTNESS_STEP;
     g_popup.damage = brightness_damage;
+    // ON THE GENERATION, NEVER PER FRAME. tray_want_shown() is a
+    // sys_setting() GET, and the kernel getter behind it reads
+    // /etc/desktop.conf -- so calling it every frame is a whole-file
+    // disk read at frame rate, which is the cost the WM's poll
+    // convention exists to avoid (wm.c's desktop-entry note).
+    // tray_slider_poll() fires this only when some setting moved.
+    g_popup.on_reload = apply_visibility;
     tray_slider_init(&g_popup, "tray-brightness");
+    apply_visibility();
 }
 
 // --- geometry ---------------------------------------------------------

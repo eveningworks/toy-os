@@ -36,6 +36,22 @@ WHAT IT ASSERTS
    path now; this is the check that goes red if a popup's open path
    goes back to naming its peers by hand.
 
+6. THE ITEM HIDES ITSELF when there is no backlight, and the strip
+   REFLOWS -- `desktop.tray_brightness` is `auto` | `always` | `never`,
+   and `auto` consults the hardware. The evidence for a hidden item can
+   only be an absence, so it is taken two ways: the compositor's own
+   `tray_hidden`, and `gui taskbar --json`'s `tray_x` moving by the
+   icon's width, which is the half a mere flag cannot fake.
+
+THIS TOOL PINS `desktop.tray_brightness` TO `always` FOR EVERYTHING
+ELSE IT DOES, and that is load-bearing rather than tidy. Every GUI tool
+here runs under QEMU, where no adapter has a backlight, so on the
+default `auto` the sun is not in the tray at all and checks 1-5 would
+have nothing to click. It is restored to `auto` on the way out: a test
+that leaves a setting behind changes the machine for every later tool
+(CLAUDE.md), and an extra tray item moves the taskbar geometry that
+several of them measure.
+
 The positive half -- the slider dimming a real panel -- is reachable
 only on hardware with a backlight (the bare-metal laptop), and is
 verified there by `config get brightness` reading the PWM back.
@@ -76,6 +92,22 @@ def panel_box(g):
     return (g["x"], g["y"], g["x"] + g["w"], g["y"] + g["h"])
 
 
+def tray_mode(dbg, mode, want_hidden, tries=25):
+    """Set `desktop.tray_brightness` and WAIT ON THE OBSERVABLE.
+
+    Through the console's own `sh`, never a second tool: a DebugConsole
+    holds .vm.serial, and `vm.py exec` wants the same socket -- two
+    readers steal each other's replies, and the write silently does not
+    happen (which reads exactly like the feature being broken).
+    """
+    dbg.send(f"sh config set desktop.tray_brightness {mode}")
+    for _ in range(tries):
+        if bri(dbg)["tray_hidden"] == want_hidden:
+            return True
+        time.sleep(0.4)
+    return False
+
+
 def setting(dbg, name):
     reply = (dbg.send(f"sh config get {name}") or "").strip()
     return next((ln.strip() for ln in reply.splitlines() if ln.strip()), "")
@@ -99,6 +131,14 @@ def main():
 
     dbg = DebugConsole(args.sock)
     print("brightness flyout (tray sun -> slider; unavailable in QEMU)")
+
+    # --- 0. visibility, and pinning the item for everything below -----
+    shown = tray_mode(dbg, "always", False)
+    check("`always` shows the sun even with no backlight to move", shown,
+          str(bri(dbg)["tray_hidden"]))
+    tray_x_shown = dbg.json("gui taskbar --json")["tray_x"]
+    if not shown:
+        return report()   # nothing below can click an item that is not there
 
     if bri(dbg)["open"]:
         dbg.send("gui click 640 300")
@@ -208,6 +248,33 @@ def main():
           st["volume"] is True and st["brightness"] is False, str(st))
     dbg.send("gui click 640 300")
     dbg.settle()
+
+    # --- 7. auto hides it here, and the strip actually reflows --------
+    #
+    # TWO INDEPENDENT WITNESSES, because "it is gone" is an absence and
+    # a flag alone would be the app marking its own homework: the
+    # compositor's tray_hidden, and the taskbar's tray_x -- which comes
+    # from the same right-to-left walk that DRAWS the strip, so it
+    # cannot report a narrower tray than it painted.
+    hid = tray_mode(dbg, "auto", True)
+    check("`auto` hides the sun on a display with no backlight", hid,
+          str(bri(dbg)["tray_hidden"]))
+    tray_x_hidden = dbg.json("gui taskbar --json")["tray_x"]
+    icon_w = 0
+    if hid:
+        icon_w = tray_x_hidden - tray_x_shown
+    check("...and the strip reflows -- the tray starts further right",
+          hid and icon_w > 0, f"tray_x {tray_x_shown} -> {tray_x_hidden}")
+
+    check("`never` hides it too", tray_mode(dbg, "never", True),
+          str(bri(dbg)["tray_hidden"]))
+
+    # RESTORED, and it matters: an extra tray item shifts the taskbar
+    # geometry that other tools measure.
+    dbg.send("sh config set desktop.tray_brightness auto")
+    check("the setting is put back to its default on the way out",
+          (setting(dbg, "desktop.tray_brightness") or "").endswith("auto"),
+          setting(dbg, "desktop.tray_brightness"))
     return report()
 
 

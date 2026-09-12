@@ -6066,34 +6066,61 @@ BEFORE init has read `/etc/services.d`, so init answered `supervises no
 service called toywm` and the desktop started anyway. It won the race
 about half the time. The wait is on init's own readiness line now.
 
-## The brightness flyout is shown where there is no backlight, and its floor is 5%
+## Which tray items are shown is a setting, and `auto` asks the hardware
 
-`userland/wm/brightness_popup.c` puts a sun icon in the tray on every
-machine, including a QEMU guest whose adapter has no backlight at all.
-Windows 11 shows the brightness slider only on a machine with one, and
-Plasma's Brightness and Colour applet hides itself the same way; both
-would argue for hiding the icon here.
+`userland/wm/brightness_popup.c` used to put a sun in the tray on every
+machine, including a QEMU guest whose adapter has no backlight at all,
+and the flyout explained itself with the registry's `unavailable`
+sentence over a disabled slider. Windows 11 shows the brightness slider
+only on a machine with one, and Plasma's Brightness and Colour applet
+hides itself the same way.
 
-**Why it is shown anyway.** Two reasons, and the second is the one that
-decided it. The tree already answers "the hardware is missing" one way:
-the setting is registered regardless and reports an `unavailable`
-sentence, the volume item stays in the tray on a machine with no sound
-card, and `setting_abi.h` asks every client to show the sentence rather
-than silently disable the control. A brightness item that vanished
-would be the one control answering differently. And a hidden item
-cannot be tested: every GUI tool runs under QEMU, where the backlight
-never exists, so hiding would leave the flyout's drawing, geometry,
-dismissal and mutual exclusion exercised by nobody -- the exact shape
-of "a green suite that tests nothing". `brightness_test.py` drives the
-degraded path and asserts the sentence is the kernel's own, that the
-slider and the wheel write nothing, and that the panel is painted and
-repainted away. The positive half runs on the laptop through `config`.
-The alternative -- hide the item when the setting's INFO reports
-`unavailable`, and have the test assert the absence -- is a one-line
-change if the visible sun on a desktop ever grates more than the
-untested panel would.
+**Why it was shown anyway, and why that stopped being the answer.** Two
+reasons held it. The tree already answers "the hardware is missing" one
+way -- the setting is registered regardless and reports a sentence, the
+volume item stays with no sound card, and `setting_abi.h` asks every
+client to show the sentence rather than silently disable the control --
+so a brightness item that vanished would be the one control answering
+differently. The second reason was the deciding one and is the one that
+was actually load-bearing: **a hidden item cannot be tested.** Every GUI
+tool here runs under QEMU, where the backlight never exists, so hiding
+would leave the flyout's drawing, geometry, dismissal and mutual
+exclusion exercised by nobody.
 
-**Why the floor is 5 and not 0.** A backlight duty of zero turns the
+**What replaced it.** `desktop.tray_<item>`, three-valued: `auto` |
+`always` | `never`, defaulting to `auto`, which consults the hardware.
+That is Windows 11's Taskbar > System tray icons and Plasma's per-item
+panel control, and it dissolves both objections rather than trading one
+for the other. The consistency objection goes because the answer is now
+a POLICY every tray item resolves the same way, not one control
+disagreeing with its neighbours -- `tray_want_shown()` is one function
+and a third item needs no new code. The testing objection goes because
+`always` outranks the hardware probe: `brightness_test.py` pins it,
+keeps every check it had, and adds four that assert the absence under
+`auto` and `never`. A user who wants a control pinned regardless
+outranks a hardware probe, and so does one who never wants to see it;
+that is why three values and not a checkbox.
+
+**Hiding KEEPS THE SLOT.** The obvious implementation is
+`tray_unregister()`, and it is wrong: a slot index IS the item's
+left-to-right position in the strip, so an item that came back landed
+in whatever slot was free and silently reordered its neighbours.
+`tray_set_hidden()` leaves the slot allocated and `tray_walk()` skips
+it -- which also means the visibility may change at runtime, as it must,
+since the setting can move and so can the answer to "is there a
+backlight".
+
+**Resolved on the SETTINGS GENERATION, never per frame.**
+`tray_want_shown()` is a `sys_setting()` GET whose kernel getter reads
+`/etc/desktop.conf`, so calling it every frame is a whole-file disk read
+at frame rate -- the exact cost the WM's poll convention exists to avoid.
+It hangs off `tray_slider_poll()`'s existing generation compare. The
+known gap: a backlight appearing without any setting write would not be
+noticed until the next generation bump.
+
+## The brightness floor is 5%, not 0
+
+A backlight duty of zero turns the
 panel off. Mute is a volume of zero and comes back with a click; a
 persisted brightness of zero comes back on the NEXT BOOT as a black
 screen the user cannot see to fix, on a machine whose only recovery is

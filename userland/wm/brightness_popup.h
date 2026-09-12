@@ -41,4 +41,9 @@ void brightness_geometry(struct brightness_geom *out);
 // The `unavailable` sentence, empty when the backlight is controllable.
 const char *brightness_unavailable_text(void);
 
+// Is the sun currently out of the strip? `desktop.tray_brightness`
+// resolved against the backlight -- reported so a test can assert the
+// absence, which is the only evidence a hidden item can offer.
+int brightness_tray_hidden(void);
+
 #endif

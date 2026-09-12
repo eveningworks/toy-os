@@ -2103,6 +2103,21 @@ window without going through it will find its layout polls timing out.
   and the slider and the wheel WRITE NOTHING -- checked against `config
   get`, since a build that skipped the availability check would push a
   value the registry refuses and show a level the hardware never took.
+  It also drives `desktop.tray_brightness` through all three values:
+  `auto` must HIDE the sun on this backlight-less guest, `never` must
+  too, and `always` must show it anyway. An absence is weak evidence, so
+  it is taken twice -- the compositor's `tray_hidden` AND `gui taskbar
+  --json`'s `tray_x` moving by the icon's width, which comes from the
+  same walk that draws the strip and so cannot report a tray narrower
+  than it painted.
+  **It PINS the setting to `always` for everything else it does**: on
+  the default `auto` there is no sun in a QEMU tray to click, and checks
+  1-5 would have nothing to drive. It puts `auto` back on the way out,
+  since an extra tray item shifts the taskbar geometry other tools
+  measure. Its setting writes go through the console's own `sh`, never
+  `vm.py exec` -- two readers on one serial socket steal each other's
+  replies and the write silently does not happen, which reads exactly
+  like the feature being broken.
   The positive half (a real panel dimming) runs on the bare-metal
   laptop by hand: `config set brightness 40` reads the PWM back. In
   `gui_regress.py`.

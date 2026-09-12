@@ -22,6 +22,18 @@
 // or -1 when the tray is full.
 int tray_register_icon(const char *icon);
 
+// Should the item named by `desktop.tray_<key>` be shown, given whether
+// its hardware is there? The item owner still calls tray_set_hidden();
+// this only resolves the policy, so both tray items answer it the same
+// way and a third needs no new code.
+int tray_want_shown(const char *key, int hardware_present);
+
+// Takes an item out of the strip WITHOUT freeing its slot, so its
+// neighbours keep their order when it comes back (see the struct's
+// note). Cheap enough to call every frame -- a no-op when unchanged.
+void tray_set_hidden(int tray_id, int hidden);
+int  tray_is_hidden(int tray_id);
+
 // Swaps an icon item's picture -- the volume item's speaker changing
 // with the level. A no-op when the name is unchanged, so this may be
 // called every frame without repainting the taskbar.

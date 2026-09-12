@@ -2000,24 +2000,40 @@ real scanout hardware does. Do not write a pixel assertion for one.
   flipped** -- a display reporting three buffers whose index never
   changes is a flip that is not happening, which no screenshot can
   see. On `-vga std` and vmsvga the count is 1 and nothing changes.
-- **THE TRAY HAS A BRIGHTNESS FLYOUT ON EVERY MACHINE, AND A DISPLAY
-  WITHOUT A BACKLIGHT SHOWS THE REGISTRY'S SENTENCE --
-  `userland/wm/brightness_popup.c`.** A sun icon left of the speaker
-  opens one slider; the wheel over the icon steps it by 5. It is the
-  volume flyout's twin -- literally, since both are
+- **A TRAY ITEM'S VISIBILITY IS A SETTING, `desktop.tray_<item>` =
+  `auto` | `always` | `never`, AND `auto` ASKS THE HARDWARE.**
+  `tray_want_shown(key, hardware_present)` in `userland/wm/wm_tray.c`
+  is the one place that policy is resolved, so a new tray item needs no
+  new code for it -- that is Windows 11's Taskbar > System tray icons
+  and Plasma's per-item panel control. Three things bite.
+  **HIDING KEEPS THE SLOT** (`tray_set_hidden()`, never
+  `tray_unregister()`): a slot index IS the item's left-to-right
+  position, so freeing it lets an item that comes back reorder its
+  neighbours. **RESOLVE IT ON THE SETTINGS GENERATION, NEVER PER
+  FRAME** -- `tray_want_shown()` is a `sys_setting()` GET whose kernel
+  getter reads `/etc/desktop.conf`, so a per-frame call is a whole-file
+  disk read at frame rate; hang it off the owner's existing generation
+  poll. And **A GUI TOOL THAT DRIVES A HARDWARE-GATED ITEM MUST PIN IT
+  TO `always`** and put the setting back afterwards: every tool here
+  runs under QEMU, where no adapter has a backlight, so on `auto` the
+  sun is not in the tray at all -- and a setting left behind changes the
+  taskbar geometry every later tool measures.
+- **THE TRAY HAS A BRIGHTNESS FLYOUT, HIDDEN BY DEFAULT WHERE THERE IS
+  NO BACKLIGHT -- `userland/wm/brightness_popup.c`.** A sun icon left
+  of the speaker opens one slider; the wheel over the icon steps it by
+  5. It is the volume flyout's twin -- literally, since both are
   `tray_slider_popup.c` now: the same debounced write, the same
   `update_press` drag, the same one geometry function behind drawing,
   hit-testing and `gui brightness --json` -- and it talks to nothing
   but `system.brightness` over `SYS_SETTING`. Three things to know.
-  **It is registered whether or not the display has a backlight**, as
-  the volume item is with no sound card: the setting exists on every
-  machine and answers `unavailable` with a sentence, and the panel
-  shows THAT sentence over a disabled track rather than hiding, which
-  is what `setting_abi.h` asks of every client -- and what makes
-  `brightness_test.py` able to run in QEMU, where no adapter has a
-  backlight (Windows and Plasma hide the control instead; the
-  difference is deliberate and recorded in `docs/decisions.md`). **When
-  unavailable it WRITES NOTHING** -- the slider and the wheel leave the
+  **It is REGISTERED whether or not the display has a backlight and
+  then hidden in its slot**, so `desktop.tray_brightness = always`
+  brings it back on a machine that has none -- which is how
+  `brightness_test.py` covers the flyout in QEMU at all. When it IS
+  shown without a backlight the panel shows the registry's
+  `unavailable` sentence over a disabled track rather than inventing
+  its own reason, which is what `setting_abi.h` asks of every client.
+  **When unavailable it WRITES NOTHING** -- the slider and the wheel leave the
   level alone, and the test asserts that against `config get`, since
   a build that skipped the check would push a value the registry
   refuses and show a level the hardware never took. **The wheel stays

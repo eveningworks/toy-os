@@ -15,6 +15,7 @@
 #include "wm_taskbar.h"     // taskbar_h
 #include "lib/icon_cache.h"
 #include "kapi.h"
+#include "tray_config.h"  // TRAY_SHOW_*
 
 #define TRAY_MAX_ITEMS 6
 
@@ -27,6 +28,13 @@ struct tray_item {
     // change. Only the panel's own items use this; an app still
     // registers text, which is all wm.h offers.
     const char *icon;
+    // HIDDEN KEEPS ITS SLOT. The alternative, tray_unregister(), frees
+    // it -- so an item that came back landed in whatever slot was free
+    // and the strip silently reordered, since a slot index IS the
+    // left-to-right position here. A visibility that can change at
+    // runtime (`desktop.tray_*`, or the hardware behind an item
+    // appearing) must not be able to move its neighbours.
+    int hidden;
 };
 
 static struct tray_item tray_items[TRAY_MAX_ITEMS];
@@ -75,6 +83,37 @@ int tray_register_icon(const char *icon) {
     int id = tray_register("");
     if (id >= 0) tray_items[id].icon = icon;
     return id;
+}
+
+// `desktop.tray_<key>` resolved against whether the hardware behind the
+// item exists: `auto` asks the hardware, the other two outrank it.
+// Unknown or unset reads as `auto`, which is the registry's default.
+int tray_want_shown(const char *key, int hardware_present) {
+    char name[SETTING_ABI_QUALIFIED_MAX];
+    k_snprintf(name, sizeof name, "desktop.tray_%s", key);
+
+    struct setting_msg msg;
+    k_memset(&msg, 0, sizeof msg);
+    msg.op = SETTING_OP_GET;
+    k_strlcpy(msg.name, name, sizeof msg.name);
+    if (sys_setting(&msg) == 0 && msg.value[0]) {
+        if (k_strcmp(msg.value, TRAY_SHOW_ALWAYS) == 0) return 1;
+        if (k_strcmp(msg.value, TRAY_SHOW_NEVER) == 0) return 0;
+    }
+    return hardware_present;
+}
+
+void tray_set_hidden(int tray_id, int hidden) {
+    if (tray_id < 0 || tray_id >= TRAY_MAX_ITEMS) return;
+    if (!tray_items[tray_id].active) return;
+    if (tray_items[tray_id].hidden == !!hidden) return;
+    tray_items[tray_id].hidden = !!hidden;
+    tray_damage(); // the strip's whole width moves, not just this box
+}
+
+int tray_is_hidden(int tray_id) {
+    if (tray_id < 0 || tray_id >= TRAY_MAX_ITEMS) return 0;
+    return tray_items[tray_id].hidden;
 }
 
 void tray_set_icon(int tray_id, const char *icon) {
@@ -179,7 +218,7 @@ static int tray_walk(int want, int *out_x, int *out_w,
     // KDE and GNOME all pin the clock to the end of the strip.
     for (int pass = 0; pass < 2; pass++)
     for (int i = TRAY_MAX_ITEMS - 1; i >= 0; i--) {
-        if (!tray_items[i].active) continue;
+        if (!tray_items[i].active || tray_items[i].hidden) continue;
         if ((pass == 0) != (i == clock_tray_id)) continue;
         // Measured, never strlen * char_w: the face is proportional now.
         int text_w = tray_items[i].icon ? tray_icon_size()
