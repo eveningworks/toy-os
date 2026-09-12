@@ -4370,6 +4370,26 @@ And **the effect and the cause agree**: the worst wake and the worst
 ping land within 6% of `write`'s worst handler, measured by two
 instruments that share no code.
 
+**AND THE EMULATOR OVERSTATES IT BY ABOUT 60x, SO THE YARDSTICK IS THE
+LAPTOP.** The same `diskbench --size 32` on the bare-metal ASUS
+(2026-09-12, real SSD, real invariant TSC at 997 MHz):
+
+| worst handler | QEMU/KVM | ASUS |
+|---|---|---|
+| `write` | 220 ms | **3.8 ms** |
+| `open` | 179 ms | 2.3 ms |
+| `unlink` | 143 ms | **14.5 ms** (the worst on hardware) |
+| `listdir` | 5.3 ms | 9.0 ms |
+
+The SHAPE is what to aim at rather than any single figure: of 22,528
+calls, **18,246 finished under 2 us** and the whole problem is a tail of
+48 calls over 2 ms, 8 of them over 8 ms. So most syscalls cost the
+machine nothing and a handful cost it several frames -- which is the
+distribution an interruptible gate exists to cut, and a mean would have
+hidden completely. Judge the work against the tail on hardware; the
+emulator's numbers are useful for seeing the effect at all, not for
+sizing it.
+
 What is NOT measured is pointer-to-cursor and key-to-echo latency
 specifically -- the `ping` round trip is the client-responsiveness
 proxy standing in for it. An input-path probe is still worth building if
