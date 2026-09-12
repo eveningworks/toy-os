@@ -171,3 +171,94 @@ int sys_tcgetpgrp(struct syscall_ctx *c) {
     c->regs[14] = (uint64_t)(int64_t)(pgid > 0 ? pgid : -ENODEV);
     return 0;
 }
+
+// --- blocking signals -------------------------------------------------
+//
+// The mask itself is not new: entering a handler blocks that signal and
+// the sigreturn unblocks it, which is what stops a repeating signal
+// walking a 4-page user stack into its guard page. These two are what
+// let a program set it for itself, which every POSIX shell needs in one
+// place -- checking the job table with SIGCHLD held off, then waiting
+// for it atomically.
+
+int sys_sigprocmask(struct syscall_ctx *c) {
+    int pid = scheduler_current_pid();
+    int how = (int)(int32_t)c->a0;
+    uint64_t uset = c->a1, uold = c->a2;
+
+    // READ THE OLD MASK FIRST. A caller passing the same pointer for
+    // both -- legal, and what `sigprocmask(SIG_SETMASK, &m, &m)` is --
+    // must get the previous value, not the one just installed.
+    uint32_t old = scheduler_signal_blocked(pid);
+
+    if (uset) {
+        uint64_t set = 0;
+        if (!vmm_copy_from_user(c->pml4, &set, uset, sizeof set)) {
+            c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+            return 0;
+        }
+        uint32_t m = (uint32_t)set;
+        uint32_t next;
+        switch (how) {
+        case SIG_BLOCK:   next = old | m;  break;
+        case SIG_UNBLOCK: next = old & ~m; break;
+        case SIG_SETMASK: next = m;        break;
+        default:
+            c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+            return 0;
+        }
+        // SIGKILL and SIGSTOP are dropped by the setter, not here --
+        // sigreturn restores this mask from a struct on the USER stack,
+        // so the rule has to live at the one write every path goes
+        // through or a corrupted frame could make a process unkillable.
+        scheduler_signal_set_blocked(pid, next);
+    }
+
+    if (uold) {
+        uint64_t out = old;
+        if (!vmm_copy_to_user(c->pml4, uold, &out, sizeof out)) {
+            c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+            return 0;
+        }
+    }
+    c->regs[14] = 0;
+    return 0;
+}
+
+int sys_sigsuspend(struct syscall_ctx *c) {
+    int pid = scheduler_current_pid();
+    uint64_t set = 0;
+
+    if (!c->a0 || !vmm_copy_from_user(c->pml4, &set, c->a0, sizeof set)) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+
+    // The saved mask is the PROCESS's, not this frame's: the restore
+    // happens wherever the wait ends, which may be a delivery site in
+    // another file rather than a return from here.
+    scheduler_sigsuspend_arm(pid, scheduler_signal_blocked(pid));
+    scheduler_signal_set_blocked(pid, (uint32_t)set);
+
+    // ALREADY DELIVERABLE, so do not park. Interrupts are off for this
+    // whole handler, so this test and the park below are atomic against
+    // a signal arriving in between -- which is the lost-wakeup race that
+    // makes sigprocmask()-then-pause() wrong and this a syscall.
+    if (scheduler_signal_deliverable(pid)) {
+        // NOT restored here: the trap tail is about to deliver, and it
+        // unwinds the mask in the two steps POSIX needs. Doing it now
+        // would block the signal that is the whole reason to return.
+        c->regs[14] = (uint64_t)(int64_t)-EINTR;
+        return 0;
+    }
+
+    if (!scheduler_block_current(c->regs, scheduler_sigsuspend_chan(pid),
+                                 SCHED_WAIT_SIGNAL)) {
+        uint32_t saved = 0;
+        if (scheduler_sigsuspend_take(pid, &saved))
+            scheduler_signal_set_blocked(pid, saved); // nothing will deliver
+        c->regs[14] = (uint64_t)(int64_t)-EPERM; // no slot: cannot park
+        return 0;
+    }
+    return 1; // parked -- the waker writes the return value, see syscall.h
+}

@@ -7413,3 +7413,58 @@ opposite ends of the same event, which is what let the first real run
 corroborate itself: `wake` max 207 ms and `ping` max 209 ms against
 `write`'s 220 ms worst handler, on a guest where neither instrument can
 see the other's numbers.
+
+## sigsuspend is the one wait that is never restarted
+
+Every blocking syscall here is woken the same way: `scheduler_signal_raise()`
+finds the parked process, rewinds RIP back over the two bytes of `int
+$0x80`, and lets it re-enter the kernel at the same call with its
+arguments untouched. That is what makes `SA_RESTART` possible at all,
+and it is right for `read`, `waitpid` and every other call whose job is
+unfinished when a signal interrupts it.
+
+It is wrong for `sigsuspend`, whose job is finished the moment a signal
+arrives. Restarted, it re-installs the same mask and parks again, and
+the caller never reaches the line that reads what its handler set. A
+shell's wait loop is exactly that shape -- `while (!gotsigchld)
+sigsuspend(&oldmask);` -- so the symptom is a shell that hangs after its
+first background job, with nothing in the log and the process sitting in
+a legitimate-looking `block(signal)`.
+
+So the wait REASON carries the exception: `SCHED_WAIT_SIGNAL` is woken
+by writing `-EINTR` into the saved trapframe instead of rewinding.
+Linux spells the same thing `ERESTARTNOHAND`, decided per syscall rather
+than per wait; a reason is the cheaper carrier here because this kernel
+has exactly one call that needs it and the reason is already stored.
+
+**Three things had to be true besides, and each was found by a test
+rather than by reading:**
+
+- **The mask is unwound in TWO steps, not one.** POSIX runs the handler
+  under the mask `sigsuspend` installed and restores the previous one
+  when the handler returns. Restoring it before building the signal
+  frame is the obvious implementation and it deadlocks the common case:
+  a shell suspends with everything blocked, so the restored mask blocks
+  the very signal that ended the wait and the handler never runs. The
+  pre-suspend mask is therefore installed just long enough for
+  `push_signal_frame()` to record it as the sigreturn mask, and the
+  suspend mask is put back for the handler's duration. That is Linux's
+  `saved_sigmask`.
+- **The unwind must not happen while the process is still parked.** The
+  trap that parks a process runs its own tail afterwards, where "armed"
+  and "current" are both true and nothing has happened yet. Unwinding
+  there put the old mask straight back and left the process asleep under
+  it forever. `scheduler_sigsuspend_take()` refuses while the slot is
+  `SCHED_BLOCKED`.
+- **The wait channel cannot be the process slot's own address.**
+  `scheduler_wait_chan_pid()` already returns it, and that is the channel
+  a child's exit wakes with `SYS_RETRY` -- so a `sigsuspend` parked there
+  returned -4095 the moment any child died, which reads exactly like the
+  syscall being wrong rather than like a collision. It parks on the
+  address of a field inside the slot instead.
+
+**Why a syscall at all**, rather than `sigprocmask()` plus a `pause()`:
+a signal arriving between the two is lost, and the process sleeps
+forever. One syscall, with interrupts off across both the check and the
+park, is what closes that window -- the same argument that makes
+`scheduler_block_current()` safe against an IRQ pushing an event.

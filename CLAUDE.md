@@ -670,6 +670,7 @@ whenever a headline here tells you something you did not already know.
 - **AN INIT IS DECLARED, NOT CALLED: `INITCALL(fn, LEVEL)` BESIDE THE FUNCTION, AND `kernel_main()` WALKS THE LEVELS**
 - **A PCI DRIVER DECLARES A MATCH TABLE AND A `probe()`, AND `pci_bind()` CALLS IT ONCE PER DEVICE**
 - **A SYSCALL HANDLER RUNS WITH INTERRUPTS OFF, AND A WAIT ON `pit_ticks()` THERE NEVER ENDS**
+- **A SIGNAL CAN BE BLOCKED FROM RING 3 NOW, AND `sigsuspend` IS THE ONE WAIT THAT IS NEVER RESTARTED**
 - **A SYSCALL'S DURATION IS A STALL EVERYTHING ELSE FEELS, AND `stalls` IS WHAT MEASURES IT -- TIMED WITH THE TSC, BECAUSE THE SYSTEM CLOCK CANNOT SEE ITS OWN WINDOW**
 - **INTEL HDA IS THE THIRD SOUND DEVICE, ITS CODEC IS ROUTED BY A GENERIC WALK, AND THE VOLUME TAPER IS THE USB DRIVER'S**
 - **WRITE-COMBINING IS A 4 KiB DECISION: A 2 MiB PAGE A RANGE ONLY PARTLY COVERS IS SPLIT BEFORE IT IS TYPED**
@@ -1396,7 +1397,8 @@ cost".
 - **Is it safe to commit?** -- `preflight.sh`. **Stop your `vm.py`
   guest first** -- it refuses to start while one holds `disk.img`'s
   write lock. Static checks, run by it or beside it: `check_deps.py`,
-  `check_layout.py`, `check_dispatch.py`, `check_widget_ops.py`,
+  `check_layout.py`, `check_dispatch.py`, `check_syscalls.py`,
+  `check_widget_ops.py`,
   `check_key_routing.py`, `check_drivers.py`, `check_initcalls.py`,
   `check_copy_user.py`, `check_chains.py`,
   `check_docs.py`,

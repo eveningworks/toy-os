@@ -1961,6 +1961,32 @@ struct sys_stat {
 // naming the unexported symbol is worth more than a code.
 #define SYS_MODLOAD   106
 #define SYS_MODUNLOAD 107
+
+// Blocking signals from ring 3 (kernel/proc/signal_syscalls.c). The
+// per-process mask already existed -- entering a handler blocks that
+// signal and the sigreturn unblocks it -- and these are what let a
+// program set it for itself.
+//
+// RDI = SIG_BLOCK/SIG_UNBLOCK/SIG_SETMASK, RSI = a `const sigset_t *`
+// (may be NULL: "just tell me the current one"), RDX = a `sigset_t *`
+// for the previous mask, or NULL. Returns 0 or -errno. SIGKILL and
+// SIGSTOP are silently dropped from whatever is asked for, in the one
+// place that already enforces that.
+#define SYS_SIGPROCMASK 110
+
+// RDI = a `const sigset_t *`: install it, park until a signal not in it
+// is deliverable, restore the old one, and return -EINTR. ALWAYS -EINTR
+// -- there is no success return, which is why POSIX gives it no other
+// one.
+//
+// **IT MUST NOT BE RESTARTED, and that is the whole reason it is a
+// syscall rather than SYS_SIGPROCMASK plus a pause.** Every other
+// blocking call here is woken by rewinding RIP back over the `int
+// $0x80` so it re-runs (scheduler_signal_raise()); doing that to this
+// one re-parks it with the same mask and the caller never gets to look
+// at what its handler set -- a shell's wait loop hangs exactly there.
+// Linux's name for the same exception is ERESTARTNOHAND.
+#define SYS_SIGSUSPEND 111
                            // (abi/diag_abi.h). Asks a NAMED ring-3
                            // service a question, or -- from the service
                            // side -- claims that name and answers.

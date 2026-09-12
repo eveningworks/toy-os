@@ -54,6 +54,12 @@
 // The highest signal number this kernel accepts. The pending set is a
 // uint32_t bitmask, so 31 is the ceiling the representation allows and
 // there is no reason to pick a smaller one.
+// sigprocmask()'s `how`. The values are Linux's, so a ported program
+// that hardcodes them rather than using the names still works.
+#define SIG_BLOCK   0
+#define SIG_UNBLOCK 1
+#define SIG_SETMASK 2
+
 #define SIGNAL_MAX 31
 
 // 1 if `s` is a signal number this kernel will accept anywhere. Signal 0

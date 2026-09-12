@@ -305,6 +305,14 @@ struct sched_process {
     // stack straight into its guard page.
     uint32_t blocked;
 
+    // What `blocked` was before a sigsuspend swapped it, and whether one
+    // is in flight. On the PROCESS rather than on a kernel frame because
+    // the wait does not always end where it began: a parked process is
+    // woken by somebody else, and the signal that woke it is delivered at
+    // a later trap. scheduler_sigsuspend_disarm() is the one restore.
+    uint32_t sigsuspend_saved;
+    uint8_t  sigsuspend_armed;
+
     // --- job control: STOPPED, and why it is not a state -------------
     //
     // A FLAG BESIDE THE STATE RATHER THAN A FIFTH `enum sched_state`,
@@ -1129,6 +1137,7 @@ static uint32_t reported_wait_reason(int reason) {
     case SCHED_WAIT_THREAD: return PROC_WAIT_THREAD;
     case SCHED_WAIT_NET:   return PROC_WAIT_NET;
     case SCHED_WAIT_FUTEX: return PROC_WAIT_FUTEX;
+    case SCHED_WAIT_SIGNAL: return PROC_WAIT_SIGNAL;
     default:               return PROC_WAIT_NONE;
     }
 }
@@ -1528,6 +1537,7 @@ const char *sched_wait_reason_name(int reason) {
     case SCHED_WAIT_THREAD: return "join";
     case SCHED_WAIT_NET:   return "net";
     case SCHED_WAIT_FUTEX: return "futex";
+    case SCHED_WAIT_SIGNAL: return "signal";
     default:               return "?";
     }
 }
@@ -2509,6 +2519,49 @@ void scheduler_signal_set_blocked(int pid, uint32_t mask) {
     if (p) p->blocked = mask & ~((1u << SIGKILL) | (1u << SIGSTOP));
 }
 
+void scheduler_sigsuspend_arm(int pid, uint32_t saved) {
+    struct sched_process *p = live_slot(pid);
+    if (!p) return;
+    p->sigsuspend_saved = saved;
+    p->sigsuspend_armed = 1;
+}
+
+int scheduler_sigsuspend_take(int pid, uint32_t *saved) {
+    struct sched_process *p = live_slot(pid);
+    if (!p || !p->sigsuspend_armed) return 0;
+    // STILL PARKED MEANS THE WAIT IS NOT OVER. The trap that parked the
+    // process runs its own tail afterwards, where "armed" and "current"
+    // are both true and nothing has happened yet -- unwinding there put
+    // the pre-suspend mask straight back and left the process asleep
+    // under it forever, which reads as the signal never arriving.
+    if (p->state == SCHED_BLOCKED) return 0;
+    p->sigsuspend_armed = 0;
+    // HANDS THE MASK BACK RATHER THAN INSTALLING IT, because the two
+    // callers want it at different moments: a sigsuspend returning with
+    // nothing to deliver wants it now, and one whose signal has a
+    // handler wants the HANDLER to run under the suspend mask and the
+    // restore to happen at the sigreturn. Installing it here would block
+    // the very signal that ended the wait -- which is exactly what a
+    // shell does, since it suspends with everything else held off.
+    if (saved) *saved = p->sigsuspend_saved;
+    return 1;
+}
+
+int scheduler_sigsuspend_armed(int pid) {
+    struct sched_process *p = live_slot(pid);
+    return p ? p->sigsuspend_armed : 0;
+}
+
+const void *scheduler_sigsuspend_chan(int pid) {
+    struct sched_process *p = live_slot(pid);
+    // A FIELD INSIDE THE SLOT, NOT THE SLOT ITSELF -- `&procs[idx]` is
+    // already taken: scheduler_wait_chan_pid() returns it, and that is
+    // the channel a child's exit wakes with SYS_RETRY. Parking here on
+    // the slot address made a sigsuspend return -4095 the moment any
+    // child died, which reads exactly like the syscall being wrong.
+    return p ? (const void *)&p->sigsuspend_armed : 0;
+}
+
 int scheduler_signal_deliverable(int pid) {
     struct sched_process *p = live_slot(pid);
     if (!p) return 0;
@@ -2538,6 +2591,8 @@ int scheduler_signal_take(int pid) {
 static void signal_state_reset(int slot) {
     procs[slot].pending       = 0;
     procs[slot].blocked       = 0;
+    procs[slot].sigsuspend_saved = 0;
+    procs[slot].sigsuspend_armed = 0;
     for (int i = 0; i <= SIGNAL_MAX; i++)
         procs[slot].actions[i] = (struct k_sigaction){ 0, 0, 0, 0 };
     procs[slot].stopped       = 0;
@@ -2665,10 +2720,28 @@ int scheduler_signal_raise(int pid, int sig) {
     // state and writes an already-saved trapframe, and never touches
     // g_next_kernel_rsp. Freeing the victim's address space here would
     // mean calling the heap from the keyboard IRQ.
+    // A SIGSUSPEND SLEEPER IS WOKEN ONLY BY A SIGNAL ITS MASK LETS
+    // THROUGH. Every other wait can take a spurious wake and simply
+    // re-park; this one RETURNS on it, so waking it for a signal it
+    // asked to block would hand the caller an -EINTR POSIX says it must
+    // not see.
+    if (p->state == SCHED_BLOCKED && p->wait_reason == SCHED_WAIT_SIGNAL &&
+        (p->blocked & (1u << sig)))
+        return 1;
+
     if (p->state == SCHED_BLOCKED) {
         uint64_t *tf = (uint64_t *)(uintptr_t)p->kernel_rsp;
-        if (tf[TF_VECTOR] == 0x80) { tf[TF_RIP] -= SYSCALL_INSN_LEN; p->syscall_reissue = 1; }
-        else                       tf[TF_RAX] = (uint64_t)(int64_t)-EINTR;
+        // **SIGSUSPEND IS THE ONE WAIT THAT MUST NOT BE REWOUND.** Its
+        // whole contract is "return -EINTR once a signal arrives"; a
+        // re-issue re-parks it with the same mask, and the caller never
+        // reaches the line that reads what its handler set -- a shell's
+        // wait loop hangs there and looks like a lost wakeup. Linux
+        // spells the same exception ERESTARTNOHAND.
+        if (tf[TF_VECTOR] == 0x80 && p->wait_reason != SCHED_WAIT_SIGNAL) {
+            tf[TF_RIP] -= SYSCALL_INSN_LEN; p->syscall_reissue = 1;
+        } else {
+            tf[TF_RAX] = (uint64_t)(int64_t)-EINTR;
+        }
         p->state = SCHED_READY;
         p->wait_chan = 0;
         p->wake_at_ns = 0;   // the wait is over; see scheduler_wake()

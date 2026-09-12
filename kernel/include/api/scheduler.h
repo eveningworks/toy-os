@@ -523,6 +523,12 @@ const void *scheduler_wait_chan_pid(int pid);
 #define SCHED_WAIT_KEY   5 // a keystroke on a terminal this process reads
 #define SCHED_WAIT_THREAD 7 // a thread of this process, being joined
 #define SCHED_WAIT_FUTEX 9 // a word in memory another process has
+
+// A signal, and ONLY this one is never restarted. Every other wait here
+// is woken by rewinding RIP back over the `int $0x80` so the call
+// re-runs; sigsuspend re-run re-parks with the same mask, and the caller
+// never gets to look at what its handler set. Linux's ERESTARTNOHAND.
+#define SCHED_WAIT_SIGNAL 10
                             // promised to change (SYS_FUTEX_WAIT).
                             // Adding this one found a FOURTH site the
                             // list above does not name: /bin/ps has its
@@ -770,6 +776,34 @@ int scheduler_signal_take(int pid);
 // and a program that corrupts its own frame must not become unkillable.
 uint32_t scheduler_signal_blocked(int pid);
 void scheduler_signal_set_blocked(int pid, uint32_t mask);
+
+// --- sigsuspend: a mask installed for the length of one wait -----------
+//
+// Armed before the mask is swapped and disarmed wherever the wait ends,
+// which is NOT always a return from the handler that armed it -- a
+// parked process is woken by somebody else's syscall, and the signal
+// that woke it is delivered at a trap after that. So the saved mask
+// lives on the process rather than on a kernel frame, and exactly one
+// function puts it back.
+void scheduler_sigsuspend_arm(int pid, uint32_t saved);
+
+// Clears the flag and HANDS BACK the mask to restore, 1 if `pid` was
+// armed and 0 if it was not -- safe to call unconditionally, which is
+// what lets the delivery path ask on every trap.
+//
+// It does not install the mask itself, and that is the point. A
+// sigsuspend ending with nothing to deliver wants it back at once; one
+// whose signal has a HANDLER needs that handler to run under the
+// suspend mask, with the restore deferred to the sigreturn -- install
+// it here and the old mask blocks the signal that ended the wait, which
+// is every shell's usage (suspend with everything else held off) and
+// reads as the handler never running.
+int  scheduler_sigsuspend_take(int pid, uint32_t *saved);
+int  scheduler_sigsuspend_armed(int pid);
+
+// The wait channel for a sigsuspend, unique per process: a sigsuspend is
+// woken by a signal to THIS process, never by a shared event.
+const void *scheduler_sigsuspend_chan(int pid);
 
 // --- job control: stop and continue ------------------------------------
 //

@@ -165,6 +165,9 @@ python3 tools/check_docs.py || fail "documentation check"
 step "check_dispatch.py (dispatch chains that want a table)"
 python3 tools/check_dispatch.py || fail "dispatch-chain check"
 
+step "check_syscalls.py (no two syscalls on one number)"
+python3 tools/check_syscalls.py || fail "syscall number check"
+
 step "check_widget_ops.py (widget ops tables with a slot left NULL)"
 python3 tools/check_widget_ops.py || fail "widget ops check"
 

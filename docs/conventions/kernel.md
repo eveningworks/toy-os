@@ -2575,6 +2575,34 @@ returns at once and the hardware keeps the time. `kernel_main()` is
 the one place a tick wait is honest, and only because it runs before
 the first process.
 
+## A SIGNAL CAN BE BLOCKED FROM RING 3 NOW, AND `sigsuspend` IS THE ONE WAIT THAT IS NEVER RESTARTED
+
+`SYS_SIGPROCMASK` and `SYS_SIGSUSPEND` expose the per-process mask the
+kernel already kept for handler re-entry. `SIG_BLOCK`/`SIG_UNBLOCK`/
+`SIG_SETMASK` are Linux's values; SIGKILL and SIGSTOP are DROPPED from
+whatever is asked for rather than refused, in
+`scheduler_signal_set_blocked()` -- the one write every path goes
+through, because sigreturn restores this mask from a struct on the USER
+stack and a program that scribbles its own frame must not become
+unkillable.
+
+**The trap is the restart.** Every other blocking call is woken by
+rewinding RIP over the `int $0x80` so it re-runs; `sigsuspend` re-run
+re-parks with the same mask and its caller never gets to look at what
+the handler set -- a shell's wait loop hangs there, in a
+legitimate-looking `block(signal)`, with nothing in the log.
+`SCHED_WAIT_SIGNAL` is the exception, and it is carried by the wait
+REASON rather than per syscall as Linux's `ERESTARTNOHAND` is.
+
+Three things a session touching this must not undo, each found by a test
+rather than by reading (`docs/decisions.md` has the full argument):
+the mask is unwound in TWO steps so the handler runs under the suspend
+mask while sigreturn restores the pre-suspend one; the unwind must not
+fire while the process is still `SCHED_BLOCKED`, because the trap that
+parked it runs its own tail afterwards; and the wait channel must not be
+the process slot's own address, which `scheduler_wait_chan_pid()`
+already owns and a child's exit wakes with `SYS_RETRY`.
+
 ## A SYSCALL'S DURATION IS A STALL EVERYTHING ELSE FEELS, AND `stalls` IS WHAT MEASURES IT -- TIMED WITH THE TSC, BECAUSE THE SYSTEM CLOCK CANNOT SEE ITS OWN WINDOW
 
 The entry above says a handler runs with interrupts off. The consequence

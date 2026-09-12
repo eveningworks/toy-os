@@ -45,13 +45,11 @@ typedef int sig_atomic_t;
 
 // --- signal sets ------------------------------------------------------
 //
-// A BITMASK OF THE 31 SIGNALS, and the five operations on it are real --
-// they are pure bit arithmetic and need nothing from the kernel. What
-// needs the kernel is sigprocmask(), which is NOT here: there is no
-// syscall to block a signal outside its own handler, and a
-// sigprocmask() that returned success while blocking nothing is exactly
-// the failure this header's own preamble describes. Use SIG_IGN when
-// you mean "discard this".
+// A BITMASK OF THE 31 SIGNALS. The five set operations are pure bit
+// arithmetic and need nothing from the kernel; sigprocmask() and
+// sigsuspend() below are real syscalls now (SYS_SIGPROCMASK,
+// SYS_SIGSUSPEND) over a per-process mask the kernel already kept for
+// handler re-entry.
 typedef unsigned long sigset_t;
 
 static inline int sigemptyset(sigset_t *s) { if (!s) return -1; *s = 0; return 0; }
@@ -99,6 +97,34 @@ __sighandler_t signal(int sig, __sighandler_t h);
 // Returns 0, or -1 with errno -- EINVAL for an unknown signal or a
 // non-empty `sa_mask`, EPERM for the three that cannot be caught.
 int sigaction(int sig, const struct sigaction *act, struct sigaction *old);
+
+// SIGKILL and SIGSTOP are DROPPED from whatever you ask for rather than
+// refused, which is POSIX's rule and is enforced in the kernel -- so a
+// sigfillset() mask is accepted and those two still arrive.
+// 0, or -1 with errno.
+int sigprocmask(int how, const sigset_t *set, sigset_t *old);
+
+// Install `mask`, wait until a signal it does not block is delivered,
+// restore the previous mask. **ALWAYS returns -1 with errno EINTR** --
+// there is no success return, which is why POSIX gives it none.
+//
+// The pair below is NOT the same thing and has a race this does not:
+//
+//     sigprocmask(SIG_SETMASK, &mask, &old);   // a signal arriving
+//     pause();                                 // HERE is lost
+//
+// One syscall, with interrupts off across the check and the park, is
+// what closes it.
+//
+// **ONE DIVERGENCE FROM POSIX, stated because it is invisible:** the
+// handler runs under the mask that was in force BEFORE the sigsuspend,
+// plus the signal being delivered -- not under `mask`. Re-entry of the
+// handler's own signal is still prevented (the kernel blocks it for the
+// length of the handler either way), so what differs is only whether
+// OTHER signals named in `mask` can interrupt the handler. Linux defers
+// the restore to the sigreturn to get this exactly right; that needs a
+// second saved mask this kernel does not carry.
+int sigsuspend(const sigset_t *mask);
 
 // Send `sig` to this process. C's own, and the only part of this header
 // ISO C requires.

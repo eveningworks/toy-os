@@ -3231,6 +3231,49 @@ mode, so it only makes sense after a real `fork()`. Growing `tosh` is
 the roadmap's stated direction and is what was chosen for now; the
 items above are what a port would still need if that changes.
 
+## The shell is dash, and the list above was re-measured against it
+
+**Decided 2026-09-12.** `fork()` landed on 2026-09-11, which removed the
+one stated reason the analysis above rejected `dash` -- so the choice was
+re-opened and `dash` won: BSD-licensed (no GPL into an MIT tree, unlike
+the Doom precedent), no Kconfig or applet framework to vendor around,
+and it IS the Almquist shell that BusyBox's `ash` was re-synced from.
+Debian and Ubuntu ship it as `/bin/sh`; Alpine ships BusyBox ash.
+
+**The requirement list was then re-measured against dash's own source
+rather than inherited from the ash estimate, and three of its entries
+were wrong:**
+
+- **`sigsetjmp` is not used.** dash's exception mechanism is plain
+  `setjmp`/`longjmp` over a `struct jmploc`, which `<setjmp.h>` already
+  has.
+- **`glob`/`fnmatch` are not needed.** Both are `#ifdef HAVE_GLOB` /
+  `HAVE_FNMATCH` in `expand.c`, with dash's own pattern matching as the
+  fallback. Configure them off.
+- **`INTOFF`/`INTON` are NOT built on `sigprocmask`.** They are a
+  software counter (`suppressint++`, `error.h`), in BusyBox ash as well
+  -- the signal handler records `intpending` and `INTON` acts on it. The
+  attribution above is wrong.
+
+**What `sigprocmask`/`sigsuspend` are actually for** is the race-free
+wait in `jobs.c`'s `waitproc()`: block everything, re-check the job
+table, then `sigsuspend(&oldmask)` -- which is the textbook pattern and
+the reason the pair cannot be a mask swap around a `pause()`. BUILT
+2026-09-12.
+
+Also missing from the original list: `getrlimit`/`setrlimit` (the
+`ulimit` builtin) and `getpwnam` (`~user` expansion only -- bare `~`
+uses `$HOME`). And `stat` is wanted by the `test` builtin
+(`bltin/test.c`, which uses `struct stat64` throughout), not by command
+hashing.
+
+**Line editing is the one thing dash does not bring.** Debian builds it
+without libedit, so interactively it has no arrow keys and no history --
+a downgrade from `tosh`. The port therefore wires `kernel/lib/
+klineedit.c` into dash's read-a-line seam, which is what CLAUDE.md's
+"THERE IS ONE LINE EDITOR AND IT IS COMPILED TWICE" already requires and
+means the keys do not change with the shell.
+
 ## Layer 7 -- The GUI
 
 Sits highest deliberately: the desktop is a ring-3 process now, so

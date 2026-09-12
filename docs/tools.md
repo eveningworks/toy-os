@@ -4240,6 +4240,22 @@ window without going through it will find its layout polls timing out.
   whatever stale data it is still carrying. See
   `docs/decisions.md`'s versioning entry for the full v0.0.9 writeup.
 
+- **`check_syscalls.py`** -- NO TWO ROWS OF `syscall_table.c` RESOLVE TO
+  THE SAME NUMBER. The table is built with designated initializers, so a
+  row's index IS its syscall number -- a good property with one hole: C
+  lets the same index be written twice and silently keeps the LAST one.
+  That happened on 2026-09-12. `SYS_SIGPROCMASK` was given 108 by
+  reading the bottom of `abi/syscall_abi.h` and adding one, but the
+  numbers there are NOT in file order and 108 was already `SYS_FORK`.
+  The build was clean, the new syscalls worked, and `fork()` dispatched
+  to `sigprocmask()` -- so every fork returned 0 and every caller
+  believed it was the child. The only symptom was `fork_test` dying with
+  no fault and no log; the only thing that showed it was `strace`
+  printing the wrong name for the call. It reads the row NAMES out of
+  the table and their values out of the header, so nothing guesses which
+  `SYS_*` constants are numbers -- having a row is the definition, and
+  the flags and limits sharing the prefix are simply not rows. In
+  `preflight.sh`.
 - **`check_widget_ops.py`** -- refuses a `struct uui_widget_ops` table
   with a slot it needs left NULL, and it exists because FOUR widgets
   shipped with short tables on one day (`uui_dropdown`, `uui_checkbox`,

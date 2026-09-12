@@ -137,6 +137,8 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     // that number is "what the interrupted code is about to see", which
     // is exactly what a person debugging a handler wants.
     [SYS_SIGRETURN]     = { "sigreturn",     sys_sigreturn,     { A_END } },
+    [SYS_SIGPROCMASK]   = { "sigprocmask",   sys_sigprocmask,   { A_INT, A_HEX, A_HEX } },
+    [SYS_SIGSUSPEND]    = { "sigsuspend",    sys_sigsuspend,    { A_HEX } },
     [SYS_MKFS]          = { "mkfs",          sys_mkfs,          { A_HEX } },
     [SYS_MOUNT]         = { "mount",         sys_mount,         { A_HEX } },
     [SYS_UMOUNT]        = { "umount",        sys_umount,        { A_PATH } },

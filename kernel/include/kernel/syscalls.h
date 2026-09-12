@@ -282,6 +282,8 @@ int sys_setpgid(struct syscall_ctx *c);
 int sys_getpgid(struct syscall_ctx *c);
 int sys_sigaction(struct syscall_ctx *c);
 int sys_sigreturn(struct syscall_ctx *c);
+int sys_sigprocmask(struct syscall_ctx *c);
+int sys_sigsuspend(struct syscall_ctx *c);
 int sys_tcsetpgrp(struct syscall_ctx *c);
 int sys_tcgetpgrp(struct syscall_ctx *c);
 

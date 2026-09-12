@@ -86,3 +86,26 @@ const char *strsignal(int sig) {
     if (SIGNAL_VALID(sig) && g_names[sig]) return g_names[sig];
     return "Unknown signal";
 }
+
+// --- the blocked mask -------------------------------------------------
+//
+// A sigset_t here is a bitmask of the 31 signals in an unsigned long,
+// which is what the kernel keeps too -- so these are the syscall with
+// errno bookkeeping around it, and no translation that could drift.
+
+int sigprocmask(int how, const sigset_t *set, sigset_t *old) {
+    uint64_t s = set ? (uint64_t)*set : 0;
+    uint64_t o = 0;
+    int rc = sys_sigprocmask(how, set ? &s : 0, old ? &o : 0);
+    if (rc < 0) { errno = -rc; return -1; }
+    if (old) *old = (sigset_t)o;
+    return 0;
+}
+
+int sigsuspend(const sigset_t *mask) {
+    uint64_t m = mask ? (uint64_t)*mask : 0;
+    int rc = sys_sigsuspend(&m);
+    // -1/EINTR IS THE NORMAL RETURN, not a failure to report differently.
+    errno = rc < 0 ? -rc : EINTR;
+    return -1;
+}

@@ -365,8 +365,33 @@ int signal_deliver_pending(int pid, uint64_t *regs, int at_syscall_entry) {
     // The common case, and it must stay this cheap: this runs at the end
     // of every trap taken from ring 3 -- every syscall and every timer
     // tick of every process.
+    //
+    // TAKEN BEFORE THE SIGSUSPEND MASK IS UNWOUND, because what is
+    // deliverable is decided against the mask the caller asked to wait
+    // under. Unwinding first would hide the very signal that ended the
+    // wait.
     int sig = scheduler_signal_take(pid);
-    if (!sig) return 0;
+
+    // A SIGSUSPEND THAT GOT THIS FAR IS OVER. Reaching here means this
+    // process is the one about to run, and a process inside sigsuspend
+    // is parked -- so the only way to be armed AND current is to have
+    // just been woken.
+    //
+    // The mask goes back in TWO STEPS, which is Linux's saved_sigmask
+    // and is not tidiness: push_signal_frame() records the CURRENT mask
+    // as the one sigreturn restores, so the pre-suspend mask is
+    // installed across that call and the handler's own mask is put back
+    // after it. The handler therefore runs under what the caller asked
+    // to suspend with, and the mask it had before the call is restored
+    // when the handler returns -- which is what POSIX describes.
+    uint32_t saved = 0, suspend_mask = 0;
+    int was_suspended = scheduler_sigsuspend_take(pid, &saved);
+    if (was_suspended) {
+        suspend_mask = scheduler_signal_blocked(pid);
+        scheduler_signal_set_blocked(pid, saved);
+    }
+
+    if (!sig) return 0; // the wait ended with nothing to act on; mask is back
 
     struct k_sigaction act;
     if (!scheduler_signal_action(pid, sig, &act)) return 0;
@@ -384,7 +409,13 @@ int signal_deliver_pending(int pid, uint64_t *regs, int at_syscall_entry) {
             scheduler_signal_raise(pid, sig);
             return 0;
         }
-        if (push_signal_frame(pid, sig, &act, regs, at_syscall_entry)) return 1;
+        if (push_signal_frame(pid, sig, &act, regs, at_syscall_entry)) {
+            // The frame now carries `saved` as its restore-on-sigreturn
+            // mask; give the HANDLER the one the caller suspended under.
+            if (was_suspended)
+                scheduler_signal_set_blocked(pid, suspend_mask | (1u << sig));
+            return 1;
+        }
         // Fell through: no room for a frame. The process is told the
         // only way left.
     }

@@ -54,6 +54,7 @@ static const char *wait_name(uint32_t w) {
         case PROC_WAIT_THREAD: return "thread";
         case PROC_WAIT_NET:   return "net";
         case PROC_WAIT_FUTEX: return "futex";
+        case PROC_WAIT_SIGNAL: return "signal";
         default:              return "?";
     }
 }

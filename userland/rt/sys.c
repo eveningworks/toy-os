@@ -1029,6 +1029,17 @@ int sys_sigaction(int sig, const struct k_sigaction *act, struct k_sigaction *ol
                              (uint64_t)(uintptr_t)act, (uint64_t)(uintptr_t)old));
 }
 
+int sys_sigprocmask(int how, const uint64_t *set, uint64_t *old) {
+    return (int)err(syscall3(SYS_SIGPROCMASK, (uint64_t)(int64_t)how,
+                             (uint64_t)(uintptr_t)set, (uint64_t)(uintptr_t)old));
+}
+
+int sys_sigsuspend(const uint64_t *mask) {
+    // ALWAYS FAILS, and -EINTR is the success case: it returns when a
+    // signal arrived, which is the only thing it was ever waiting for.
+    return (int)err(syscall1(SYS_SIGSUSPEND, (uint64_t)(uintptr_t)mask));
+}
+
 sighandler_t sys_signal(int sig, sighandler_t h) {
     struct k_sigaction act = {
         .handler = (uint64_t)(uintptr_t)h,

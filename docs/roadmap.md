@@ -334,16 +334,18 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [ ] Decide, in writing, what is deliberately NOT pursued
 
 ### A ported POSIX shell
-**Needs:** nothing for the process model any more -- `fork()`/`exec()` landed 2026-09-11; the list below is what a BusyBox `ash` port was measured to need (2026-09-10), in the order it blocks.
+**Needs:** nothing for the process model any more -- `fork()`/`exec()` landed 2026-09-11. The shell is **`dash`** (chosen 2026-09-12), and the list below is measured against its own source rather than against ash's.
 
 - [x] ~~An argv VECTOR across a spawn, so a quoted argument survives it~~ DONE 2026-09-10 -- `SPAWN_ARGV`
 - [x] ~~A shell running a second copy of itself with its state~~ DONE 2026-09-11 -- `fork()` and `execv`/`execve`/`execvp`
-- [ ] `sigprocmask`/`sigsuspend`/`sigsetjmp` -- ash's `INTOFF`/`INTON` critical sections
-- [ ] POSIX `stat`/`fstat`/`lstat` with a truthful `struct stat` -- `test -x`, command hashing
-- [ ] `fcntl` (`F_DUPFD`, `FD_CLOEXEC`), `umask`, `times` -- `getppid()` landed
+- [x] ~~`sigprocmask`/`sigsuspend` -- the race-free wait in `jobs.c`'s `waitproc()`~~ DONE 2026-09-12
+- [ ] POSIX `stat`/`lstat`/`fstat` with a truthful `struct stat` -- the `test` builtin
+- [ ] `fcntl` (`F_DUPFD`, `FD_CLOEXEC`) -- redirection bookkeeping in `redir.c`
+- [ ] `umask`, `getrlimit`/`setrlimit`, `times` -- three builtins, each compilable out
 - [ ] `SIGTTOU`, and a catchable `SIGQUIT`
 - [ ] `#!` handling in the loader -- listed under Shell pipes & job control
-- [ ] The port itself: `userland/ports/busybox/`, ash only, GPL-2 into ONE binary as Doom is
+- [ ] The port itself: `userland/ports/dash/`, BSD-licensed, its build-time generators run on the host
+- [ ] Toykit's `klineedit` wired into dash's one read-a-line seam -- dash ships no line editing
 - [ ] A `system.shell` setting, read by the four places that hardcode `/bin/tosh` today
 
 ## Tracks -- no dependency on the phases above

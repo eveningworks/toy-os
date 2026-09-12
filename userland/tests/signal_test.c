@@ -471,6 +471,128 @@ int main(void) {
     check("a child death with SIGCHLD at its default does not disturb the parent",
           1, 0);
 
+    // --- the blocked mask: sigprocmask ------------------------------------
+    //
+    // The mask always existed inside the kernel; what is new is a
+    // program being able to set it. The property worth asserting is
+    // that a blocked signal is DEFERRED rather than dropped -- a
+    // dropped one and a working block look identical until you unblock.
+    //
+    // Against sys_*() rather than libc's sigprocmask(), like the rest of
+    // this file: the syscall is what the KTESTs cannot reach, and a
+    // sigset_t here is the same bitmask on both sides of the boundary.
+    {
+        uint64_t one = 1ull << SIGHUP, old = 0, back = 0;
+        sys_signal(SIGHUP, on_signal);
+        g_caught = 0;
+
+        check("sigprocmask(SIG_BLOCK) is accepted",
+              sys_sigprocmask(SIG_BLOCK, &one, &old) == 0, 0);
+        sys_kill(me, SIGHUP);
+        sys_yield();  // a delivery point, if there were one to take
+        checkf("a blocked signal does not reach its handler", g_caught == 0,
+               g_caught, 0);
+
+        check("...and the mask reads back with that bit set",
+              sys_sigprocmask(SIG_BLOCK, 0, &back) == 0 &&
+              (back & (1ull << SIGHUP)) != 0, 0);
+
+        check("unblocking it is accepted",
+              sys_sigprocmask(SIG_SETMASK, &old, 0) == 0, 0);
+        sys_yield();
+        // THE DEFERRED SIGNAL ARRIVES NOW. Without this the test would
+        // pass just as happily against a kernel that threw it away.
+        checkf("...and the signal that was held is delivered, not lost",
+               g_caught == SIGHUP, g_caught, SIGHUP);
+
+        // One buffer for both arguments is legal -- it is what
+        // sigprocmask(SIG_SETMASK, &m, &m) does. The OLD value has to
+        // come back, not the one just installed.
+        uint64_t both = 1ull << SIGTERM;
+        sys_sigprocmask(SIG_SETMASK, &both, 0);
+        both = 0;
+        sys_sigprocmask(SIG_SETMASK, &both, &both);
+        check("one buffer for both arguments returns the OLD mask",
+              (both & (1ull << SIGTERM)) != 0, 0);
+
+        // POSIX: these two are silently removed rather than refused, so
+        // a program that blocks everything is still killable.
+        uint64_t all = ~0ull;
+        sys_sigprocmask(SIG_SETMASK, &all, 0);
+        sys_sigprocmask(SIG_BLOCK, 0, &back);
+        check("SIGKILL cannot be blocked", (back & (1ull << SIGKILL)) == 0, 0);
+        check("SIGSTOP cannot be blocked", (back & (1ull << SIGSTOP)) == 0, 0);
+
+        check("a `how` that is not one of the three is refused",
+              sys_sigprocmask(99, &one, 0) < 0, 0);
+
+        all = 0;
+        sys_sigprocmask(SIG_SETMASK, &all, 0);
+        sys_signal(SIGHUP, (sighandler_t)SIG_DFL);
+    }
+
+    // --- sigsuspend --------------------------------------------------------
+    //
+    // THE CHECK THAT MATTERS IS THAT IT RETURNS AT ALL. Every other
+    // blocking call here is woken by rewinding RIP so the syscall
+    // re-runs; a sigsuspend woken that way re-parks with the same mask
+    // and never comes back -- so a kernel without the ERESTARTNOHAND
+    // exception HANGS here rather than failing a comparison. A hang is
+    // the failure mode to expect if this breaks.
+    {
+        uint64_t empty = 0, hold = 1ull << SIGHUP, old = 0;
+        sys_signal(SIGHUP, on_signal);
+        g_caught = 0;
+
+        // Hold SIGHUP off, spawn the poker, then wait for it with a mask
+        // that lets it through -- the textbook race-free wait, and the
+        // reason this is a syscall rather than a mask swap around a
+        // pause: a signal arriving between those two would be lost.
+        sys_sigprocmask(SIG_BLOCK, &hold, &old);
+        int poker = sys_spawn_group("/tests/sigpoke", poke_args(me, SIGHUP),
+                                    -1, 0, PGID_NEW);
+        if (poker > 0) {
+            int rc = sys_sigsuspend(&empty);
+            // -1 PLUS EINTR, not -EINTR: libsys turns every -errno into
+            // the -1 its contract promises (rt/sys.c's err()), and this
+            // call is no exception just because failing is its normal
+            // outcome.
+            checkf("sigsuspend returns -1", rc == -1, rc, -1);
+            checkf("...with errno EINTR", sys_errno() == EINTR, sys_errno(), EINTR);
+            // POSIX: the handler runs BEFORE sigsuspend returns. If the
+            // mask were put back too late, or the handler frame built
+            // from the temporary mask, this is what comes back zero.
+            checkf("...and the handler ran before it returned",
+                   g_caught == SIGHUP, g_caught, SIGHUP);
+            sys_waitpid(poker, 0);
+        } else {
+            check("sigsuspend: the poker spawned", 0, "spawn failed");
+        }
+
+        // A signal ALREADY pending when the mask is installed must not
+        // park at all -- the same lost-wakeup window, entered from the
+        // other side.
+        g_caught = 0;
+        sys_sigprocmask(SIG_SETMASK, &hold, 0);
+        sys_kill(me, SIGHUP);
+        int rc2 = sys_sigsuspend(&empty);
+        check("an already-pending signal returns from sigsuspend at once",
+              rc2 == -1 && sys_errno() == EINTR && g_caught == SIGHUP, 0);
+
+        // And the mask it installed is GONE afterwards. A sigsuspend
+        // that leaked its temporary mask would leave SIGHUP unblocked
+        // here -- the bug the restore-before-the-frame ordering in
+        // kernel/proc/signal.c exists to prevent.
+        uint64_t after = 0;
+        sys_sigprocmask(SIG_BLOCK, 0, &after);
+        check("...and the previous mask is back afterwards",
+              (after & (1ull << SIGHUP)) != 0, 0);
+
+        empty = 0;
+        sys_sigprocmask(SIG_SETMASK, &empty, 0);
+        sys_signal(SIGHUP, (sighandler_t)SIG_DFL);
+    }
+
     // --- signalling something that is not there ---------------------------
     check("a signal to a pid that does not exist is refused",
           sys_kill(4000, SIGTERM) != 0, 0);

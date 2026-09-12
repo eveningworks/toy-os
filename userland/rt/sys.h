@@ -575,6 +575,15 @@ sighandler_t sys_signal(int sig, sighandler_t h);
 // know that.
 int sys_sigaction(int sig, const struct k_sigaction *act, struct k_sigaction *old);
 
+// The blocked mask. `how` is SIG_BLOCK/SIG_UNBLOCK/SIG_SETMASK
+// (abi/signal_abi.h); either pointer may be NULL. 0, or -errno.
+int sys_sigprocmask(int how, const uint64_t *set, uint64_t *old);
+
+// Install `mask`, wait for a signal it does not block, put the old mask
+// back. Returns -EINTR ALWAYS -- see abi/syscall_abi.h for why it is a
+// syscall of its own rather than a mask swap around a pause.
+int sys_sigsuspend(const uint64_t *mask);
+
 // The restorer userland/rt/sigtramp.c provides. Declared so that a
 // caller building its own `struct k_sigaction` has something to put in the
 // field; there is no reason to write another one.
