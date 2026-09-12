@@ -1544,6 +1544,19 @@ static void map_set_block(struct t3_inode *node, uint32_t leaf_blk,
 // inode through the journal. The order is the leak-safe one: bitmap
 // state flushes BEFORE the inode transaction makes anything
 // reachable. Returns 1/0.
+// Can a partially-written block hold bytes worth preserving? The
+// question is about the BLOCK, not about where the write starts.
+//
+// Asking `file_off >= size` looks equivalent and is catastrophically
+// not: an APPEND starts exactly at size, so that test is true every
+// time and zeroes the whole block, destroying what is already in it.
+// The skip is only safe when the block is freshly allocated or BEGINS
+// past end-of-file. Both write paths ask here -- the stepped one
+// carried its own copy of the wrong test.
+static int block_has_live_bytes(int fresh, uint32_t bi, uint64_t size) {
+    return !fresh && (uint64_t)bi * T3_BLOCK < size;
+}
+
 static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
                           const void *buf, uint32_t len) {
     const uint8_t *src = (const uint8_t *)buf;
@@ -1611,20 +1624,7 @@ static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
             if (!vol_write_sectors(blk * T3_SPB, (int)(run * T3_SPB), src + total)) return 0;
             total += run * T3_BLOCK;
         } else {
-            // Can this block hold bytes worth preserving? The question
-            // is about the BLOCK, not about where this write starts.
-            //
-            // Asking `file_off >= node->size` looks equivalent and is
-            // catastrophically not: an APPEND always starts exactly at
-            // node->size, so that test was true every time and zeroed
-            // the whole block -- destroying the bytes already in it.
-            // `write f AAAA` then `append f BBBB` left NUL NUL NUL NUL
-            // BBBB on disk. A partial block is a read-modify-write, and
-            // the read is only skippable when there is provably nothing
-            // under it: the block is freshly allocated, or it begins
-            // past end-of-file (a sparse write landing beyond EOF).
-            uint64_t block_start = (uint64_t)bi * T3_BLOCK;
-            if (fresh || block_start >= node->size) k_memset(g_blk, 0, T3_BLOCK);
+            if (!block_has_live_bytes(fresh, bi, node->size)) k_memset(g_blk, 0, T3_BLOCK);
             else if (!read_block(blk, g_blk)) return 0;
             k_memcpy(g_blk + within, src + total, chunk);
             if (!write_block(blk, g_blk)) return 0;
@@ -3076,12 +3076,26 @@ static int tfs3_truncate(const char *path, uint64_t size) {
     struct t3_trunc tr;
     int shrinking = (size < node.size);
     if (shrinking) {
-        // Whole blocks past the new end. A partial final block keeps
-        // its stale tail bytes on disk; they are past EOF and
-        // read_range_impl() clamps, so nothing can observe them, and
-        // re-growing re-reads that block -- which is exactly what a
-        // hole-free re-extend is allowed to show. Zeroing it would be
-        // a second write for no observable difference.
+        // ZERO THE RETAINED TAIL, or a shrink and regrow hands the old
+        // bytes back: the final partial block survives the truncate, and
+        // both a regrow and a write into the gap read it whole. ext4
+        // zeroes the partial page in ext4_block_truncate_page() for the
+        // same reason; NTFS tracks a valid-data-length instead, which
+        // needs an inode field this format has not got.
+        //
+        // BEFORE the size commit, as ext4 orders it. The cost is that a
+        // failed truncate may already have discarded the bytes it was
+        // asked to discard -- cheaper than the alternative, where a
+        // failed zeroing leaves them exposed with the size already moved.
+        uint32_t tail = (uint32_t)(size % T3_BLOCK);
+        if (tail) {
+            uint32_t tblk = block_for_index(&node, (uint32_t)(size / T3_BLOCK));
+            if (tblk) {
+                if (!read_block(tblk, g_blk)) return 0;
+                k_memset(g_blk + tail, 0, T3_BLOCK - tail);
+                if (!write_block(tblk, g_blk)) return 0;
+            }
+        }
         uint32_t first = (uint32_t)((size + T3_BLOCK - 1) / T3_BLOCK);
         trunc_begin(&tr, &node, first);
         node.size = size;
@@ -3166,7 +3180,7 @@ static int tfs3_write_range_step(void *handle) {
         if (chunk == T3_BLOCK) {
             ok = write_block(blk, st->src + st->total);
         } else {
-            if (fresh || file_off >= st->node.size) {
+            if (!block_has_live_bytes(fresh, bi, st->node.size)) {
                 k_memset(g_blk, 0, T3_BLOCK);
             } else if (!read_block(blk, g_blk)) {
                 pcache_drop(); alog_rollback(); kfree(st); return 2;

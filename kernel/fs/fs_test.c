@@ -971,3 +971,73 @@ KTEST("fs", "an append that crosses a block boundary keeps both halves") {
 
     fs_delete("/.ktest_append3");
 }
+
+// THE STEPPED WRITE IS A SECOND IMPLEMENTATION OF THE APPEND ABOVE,
+// and it carried the wrong version of the same test for months: it
+// asked whether the WRITE began past EOF, which an append always does,
+// rather than whether the BLOCK did. Both paths share
+// block_has_live_bytes() now; this is the check that says so.
+//
+// The fixture must be smaller than a block, for the same reason the
+// blocking append test's is: a block-aligned append takes the
+// fresh-block path and is correct either way.
+static int step_write(const char *path, uint64_t off, const void *buf, uint32_t len) {
+    void *h = fs_write_range_begin(path, off, buf, len);
+    if (!h) return 0;
+    enum fs_step_result r;
+    while ((r = fs_write_range_step(h)) == FS_STEP_PENDING) { }
+    return r == FS_STEP_DONE;
+}
+
+KTEST("fs", "a stepped append preserves the bytes already in the block") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_stepapp");
+
+    KTEST_ASSERT(step_write("/.ktest_stepapp", 0, "AAAA", 4) == 1);
+    KTEST_ASSERT(step_write("/.ktest_stepapp", 4, "BBBB", 4) == 1);
+
+    uint32_t size = 0;
+    const char *data = read_whole("/.ktest_stepapp", &size);
+    KTEST_ASSERT(data != 0);
+    KTEST_ASSERT_EQ(size, 8);
+    // The head is the whole point: against the bug the size was right
+    // and the first four bytes were NUL.
+    KTEST_ASSERT(k_strcmp(data, "AAAABBBB") == 0);
+
+    fs_delete("/.ktest_stepapp");
+}
+
+// A SHRINK MUST NOT LEAVE THE OLD BYTES WHERE A REGROW CAN READ THEM.
+// The retained final block keeps whatever was in it, so growing back
+// over that range used to return the discarded bytes -- against
+// truncate's zero-fill guarantee everywhere else.
+//
+// The existing truncate test cannot see this: it grows to a DISTANT
+// offset and samples a hole no block was ever allocated for. The
+// bytes at risk are the ones immediately after the old EOF, inside a
+// block that still exists, so the fixture has to be smaller than one
+// block and the sample has to be right there.
+KTEST("fs", "a shrink then a regrow reads zeros, not the discarded bytes") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_tzero");
+
+    KTEST_ASSERT(fs_write_range("/.ktest_tzero", 0, "ABCDEFGH", 8) == 1);
+    KTEST_ASSERT(fs_truncate("/.ktest_tzero", 3) == 1);
+    KTEST_ASSERT(fs_truncate("/.ktest_tzero", 8) == 1);
+
+    char back[8];
+    KTEST_ASSERT_EQ(fs_read_range("/.ktest_tzero", 0, back, sizeof back), 8u);
+    KTEST_ASSERT(back[0] == 'A' && back[1] == 'B' && back[2] == 'C');
+    for (int i = 3; i < 8; i++) KTEST_ASSERT_EQ(back[i], 0);
+
+    // The same exposure through the WRITE path rather than truncate:
+    // a write landing past the new EOF read-modify-writes that block,
+    // so the gap it leaves behind is the same stale tail.
+    KTEST_ASSERT(fs_truncate("/.ktest_tzero", 3) == 1);
+    KTEST_ASSERT(fs_write_range("/.ktest_tzero", 6, "Z", 1) == 1);
+    KTEST_ASSERT_EQ(fs_read_range("/.ktest_tzero", 0, back, 7), 7u);
+    for (int i = 3; i < 6; i++) KTEST_ASSERT_EQ(back[i], 0);
+    KTEST_ASSERT_EQ(back[6], 'Z');
+
+    fs_delete("/.ktest_tzero");
+}

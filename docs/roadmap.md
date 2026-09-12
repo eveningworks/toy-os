@@ -398,8 +398,8 @@ No dependency on the phases above; ordered among themselves.
 
 - [ ] **NEXT** Journal failures: an aborted operation and a committed transaction awaiting recovery are not the same outcome
 - [ ] File-size and addressing limits, validated before anything is allocated
-- [ ] Zero-fill after a truncation, so a shrink and regrow cannot expose the old bytes
-- [ ] The stepped append, which erases a block's existing prefix
+- [x] ~~Zero-fill after a truncation, so a shrink and regrow cannot expose the old bytes~~ DONE 2026-09-12
+- [x] ~~The stepped append, which erases a block's existing prefix~~ DONE 2026-09-12
 - [ ] A failed indirect-table read, currently returned as zeros
 
 ### Screen power, below the screensaver

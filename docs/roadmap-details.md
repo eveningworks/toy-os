@@ -448,6 +448,47 @@ partition's size and not the disk's). Host side:
 `seed_disk.py --partition`, `tfs3_writer.py --at-lba`,
 `mkpart_test.py --layout`. See `docs/decisions.md`.
 
+### TFS3 correctness: the five findings
+
+Five defects found by reading `kernel/fs/tfs3.c` on 2026-09-11, none
+of them reproduced at the time. They are unrelated bugs that happen to
+share a file, so each is its own fix with its own regression test --
+and each test was seen to go red against the unfixed code before the
+fix was believed, since three of the five are the kind a fixture can
+miss entirely.
+
+**The order, and why.** Two of them are deterministic and need no
+fault injection (the stepped append, the truncate tail), so they go
+first and cost a KTEST each. The addressing limit is deterministic too
+but its test has to REACH the limit rather than merely use a
+large-sounding size -- the trap the truncate tests already fell into.
+The remaining two are error paths reachable only through
+`kernel/include/kernel/fault_inject.h`, and the journal one is last
+because it touches every `txn_commit()` caller and the mount path.
+
+**What each one was.**
+
+- **The stepped append** (`tfs3_write_range_step()`). It asked whether
+  the WRITE began past end-of-file, which an append always does, and
+  zeroed the whole block on the strength of it -- so `AAAA` followed by
+  an appended `BBBB` through the stepped API lost `AAAA`. The blocking
+  path had asked the right question (does the BLOCK begin past EOF?)
+  since the same bug was fixed there; the two ask
+  `block_has_live_bytes()` now, which is the point -- one copy of the
+  test cannot drift from the other. Fixed 2026-09-12.
+
+- **The truncate tail** (`tfs3_truncate()`). A shrink kept the final
+  partial block's bytes on disk, and the comment above it argued that
+  nothing could observe them. A regrow can: the block still exists and
+  the bytes are inside the new size. So can an ordinary write landing
+  past the new EOF, which read-modify-writes that same block. The
+  shrink zeroes the retained tail now, before the size commit, as
+  ext4 does in `ext4_block_truncate_page()`. The existing truncate test
+  could not see it -- it grows to a DISTANT offset and samples a hole
+  no block was ever allocated for, while the bytes at risk are the ones
+  immediately after the old EOF. Fixed 2026-09-12.
+
+
 ### Kernel test harness
 
 **Done** (2026-08-13) -- see the commit that added it. Kept
