@@ -472,6 +472,44 @@ struct query_fsstat {
 // `lsmod`. The record is struct query_module.
 #define QUERY_MODULE 40
 
+// HOW LONG EACH SYSCALL HELD THE CPU, while kernel.syscall_stall is on.
+// LIST, one record per syscall that has been measured -- legitimately
+// EMPTY when tracking is off, the same shape and for the same reason as
+// QUERY_KSTACK_SYSCALL above.
+//
+// A syscall handler runs with interrupts off (docs/conventions/kernel.md),
+// so its duration IS the stall it imposed on everything else: nothing
+// else runs, no timer tick lands, and a compositor waiting on a frame
+// deadline simply wakes late. That makes this the attribution half of
+// the compositor's own `gui latency` wake distribution -- which measures
+// how late, while this says WHAT.
+#define QUERY_SYSCALL_STALL 41
+
+#define QUERY_SYSCALL_STALL_NAME 24
+
+// Buckets match the compositor's (userland/wm/wm_internal.h, WMWD_BUCKETS)
+// so the two reports can be read side by side without rescaling. Bucket i
+// counts durations in [2^i, 2^(i+1)) microseconds; the last holds
+// everything above it, which at 2^21 us is ~2.1 s.
+#define QUERY_SYSCALL_STALL_BUCKETS 22
+
+struct query_syscall_stall {
+    uint64_t nr;       // the syscall number
+    uint64_t n;        // calls measured
+    uint64_t sum_us;   // total time in the handler
+    uint64_t max_us;   // the worst single call
+    uint32_t bucket[QUERY_SYSCALL_STALL_BUCKETS];
+    // The TSC rate these microseconds were converted with, latched when
+    // tracking was armed. It rides on every row rather than living in a
+    // class of its own because it is what makes the row READABLE: a
+    // duration and the conversion that produced it are one fact.
+    uint32_t tsc_mhz;
+    char     name[QUERY_SYSCALL_STALL_NAME]; // from strace's table, never a second one
+};
+
+_Static_assert(sizeof(struct query_syscall_stall) <= 256,
+               "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
+
 struct query_procpath {
     int32_t pid;
     // "" for a process the scheduler has no path for -- the legacy

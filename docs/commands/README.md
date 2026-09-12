@@ -190,6 +190,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`diskbench`](diskbench.md)
 - [`log`](log.md)
 - [`logd`](logd.md)
+- [`stalls`](stalls.md)
 
 ### Networking
 

@@ -7363,3 +7363,53 @@ option made the only behaviour, because a filesystem write cannot ask a
 ring-3 library for an offset. And a disk written before this change has
 local-derived timestamps mixed with UTC ones; nothing converts them,
 and on a hobby OS with a seeded image that is a `make clean-disk` away.
+
+## The syscall stall histogram times with `rdtsc`, not with the clocksource
+
+The interruptible-syscall work in `docs/roadmap.md` needs a number for
+"the desktop feels slow under disk I/O". The compositor already reports
+the EFFECT (`gui latency`'s `wake` overshoot); what was missing was the
+attribution -- which syscall spent the time -- and the obvious way to
+get it is to bracket the handler in `syscall_dispatch()` with
+`clocksource_now_ns()`, the kernel's one monotonic clock.
+
+That measures nothing, on every default boot. The clocksource is the
+PIT, and its `read` is `pit_ticks()` -- a counter the timer INTERRUPT
+increments. A syscall handler runs with interrupts off for its whole
+duration, so both reads return the same value and every stall is zero.
+It is not a precision problem that a better source would improve; it is
+the instrument being blind to exactly the window it is pointed at, and
+the failure is silent: a full table of syscalls, every one reporting no
+time, reads as a machine with nothing wrong. The all-zero first run is
+what found it.
+
+So this one subsystem keeps a clock of its own: `arch_rdtsc()`,
+converted with the TSC frequency `cpu_info` already calibrates against
+the PIT at boot. The TSC counts with IF clear, costs a couple of dozen
+cycles, needs no I/O port, and is the same register ftrace uses for its
+default trace clock.
+
+**The cost is accepted rather than fixed.** Without an *invariant* TSC
+the counter's rate changes as the CPU throttles, which is the exact
+hazard `clocksource_tsc.c` refuses to register for -- and refusing here
+on the same grounds would leave the default QEMU boot, where this work
+actually gets debugged, with no instrument at all. The difference is
+what the number is FOR: the clocksource's durations feed deadlines and
+accounting that must stay correct over hours, while this measures a
+single millisecond-scale interval and is read as a comparison between
+two runs on one machine. A rate that is wrong by a few percent does not
+change the answer to "did this stall get shorter".
+
+The refusal that IS kept is a machine with no calibrated frequency at
+all: arming returns 0 and `config set kernel.syscall_stall on` fails,
+because converting ticks to microseconds with a guessed divisor would
+produce plausible numbers rather than no numbers.
+
+**And the two halves stay separate on purpose.** The compositor's
+distribution could have been extended with a syscall breakdown, or the
+kernel's table given its own overshoot figure, and either would make one
+report instead of two. They are independent implementations measuring
+opposite ends of the same event, which is what let the first real run
+corroborate itself: `wake` max 207 ms and `ping` max 209 ms against
+`write`'s 220 ms worst handler, on a guest where neither instrument can
+see the other's numbers.

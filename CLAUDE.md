@@ -670,6 +670,7 @@ whenever a headline here tells you something you did not already know.
 - **AN INIT IS DECLARED, NOT CALLED: `INITCALL(fn, LEVEL)` BESIDE THE FUNCTION, AND `kernel_main()` WALKS THE LEVELS**
 - **A PCI DRIVER DECLARES A MATCH TABLE AND A `probe()`, AND `pci_bind()` CALLS IT ONCE PER DEVICE**
 - **A SYSCALL HANDLER RUNS WITH INTERRUPTS OFF, AND A WAIT ON `pit_ticks()` THERE NEVER ENDS**
+- **A SYSCALL'S DURATION IS A STALL EVERYTHING ELSE FEELS, AND `stalls` IS WHAT MEASURES IT -- TIMED WITH THE TSC, BECAUSE THE SYSTEM CLOCK CANNOT SEE ITS OWN WINDOW**
 - **INTEL HDA IS THE THIRD SOUND DEVICE, ITS CODEC IS ROUTED BY A GENERIC WALK, AND THE VOLUME TAPER IS THE USB DRIVER'S**
 - **WRITE-COMBINING IS A 4 KiB DECISION: A 2 MiB PAGE A RANGE ONLY PARTLY COVERS IS SPLIT BEFORE IT IS TYPED**
 - **THE INTEL DISPLAY DRIVER INHERITS THE FIRMWARE'S MODE AT BOOT AND CAN RE-PROGRAM THE NATIVE ONE, AND A BACKLIGHT IS A DISPLAY CAPABILITY**
@@ -1497,6 +1498,11 @@ cost".
   unload and reload with the network coming back),
   `msi_test.py`, `ntp_test.py`, `ping_rtt.py` (the compositor<->client
   round trip in microseconds -- the number behind stage 8),
+  `latency_under_io.py` (**what heavy disk I/O does to the desktop**, the
+  yardstick the interruptible-syscall work is measured against: the
+  compositor's `wake`/`ping` distributions as the EFFECT against the
+  kernel's per-syscall stall table as the CAUSE -- and it wants
+  `--kvm --cpu host,+invtsc`, or half the report is PIT floor noise),
   `sum_test.py`, `taskbar_test.py`,
   `terminal_probe.py`, `tfs3_v1_test.py`,
   `usb_audio_test.py`, `usb_test.py`, `virtio_boot_test.py`,

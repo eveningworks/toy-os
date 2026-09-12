@@ -1342,6 +1342,31 @@ window without going through it will find its layout polls timing out.
   thing a kernel wake is plausibly better at is latency -- so the move
   carries a number on each side. Quote DIFFERENCES on one host; the
   absolute figure is a TCG guest's. On demand (`ondemand_sweep.py`).
+- **`latency_under_io.py`** -- WHAT HEAVY DISK I/O DOES TO DESKTOP
+  LATENCY, measured from both ends: the compositor's own `work`/`wake`/
+  `ping` distributions (`gui latency --json`, the EFFECT) against the
+  kernel's per-syscall stall table (`sh stalls`, the CAUSE). Attaches to
+  a running guest, opens three apps, samples a quiet baseline, then
+  spawns `/bin/diskbench` and samples again while it runs -- waiting on
+  the benchmark's own `done` line rather than on a sleep, since a guest
+  under load takes as long as it takes. It is the yardstick
+  `docs/roadmap.md`'s interruptible-syscall work is measured against, so
+  the point is a BEFORE and an AFTER on one host, never an absolute.
+  Exit 1 only when it collected nothing; no threshold on the latency
+  itself, because there is no baseline to pick one from yet.
+  **`wake` is the number to read**: when another process holds the CPU
+  the WM does no work at all, so every frame it eventually runs looks
+  fast and only the gap between the wait it asked for and the one it got
+  moves -- which is cyclictest's measurement, and it was confirmed here
+  (`work` got FASTER under load while `wake` went up tenfold).
+  **Give it a TSC clocksource or half the report is floor noise**:
+  `python3 tools/vm.py --instance N --kvm --cpu host,+invtsc start` is
+  the only way to reach one in this environment, and without it the
+  compositor's figures quantise to the PIT's 10 ms while the stall table
+  -- which is TSC-timed in the kernel -- resolves either way. A reported
+  granularity of **0 means the clock never advanced**, the worst reading
+  rather than the best, and the tool says so in words. On demand
+  (`ondemand_sweep.py`).
 - **`kvm_soak.py`** -- the desktop under KVM, across FRESH BOOTS, failing
   on the symptoms that appear only there: a WM frame over a threshold, a
   file that exists but will not read, an incomplete cursor-theme load, a

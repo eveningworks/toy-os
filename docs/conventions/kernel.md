@@ -2575,6 +2575,43 @@ returns at once and the hardware keeps the time. `kernel_main()` is
 the one place a tick wait is honest, and only because it runs before
 the first process.
 
+## A SYSCALL'S DURATION IS A STALL EVERYTHING ELSE FEELS, AND `stalls` IS WHAT MEASURES IT -- TIMED WITH THE TSC, BECAUSE THE SYSTEM CLOCK CANNOT SEE ITS OWN WINDOW
+
+The entry above says a handler runs with interrupts off. The consequence
+worth having a number for: while it runs, NOTHING ELSE ON THE MACHINE
+RUNS. No process is scheduled, no timer tick lands, and a compositor
+parked on a frame deadline simply wakes late. `kernel.syscall_stall`
+arms a per-syscall histogram of exactly that (`kernel/proc/
+syscall_stall.c`, `QUERY_SYSCALL_STALL`, `/bin/stalls`); `gui latency`'s
+`wake` distribution counts the same event from the other end, so one
+says how late and the other says which syscall spent it. Measured on a
+QEMU guest under `diskbench`: `write` held the CPU for **220 ms** in one
+call, against 857 us on the same machine idle.
+
+**IT TIMES WITH `rdtsc`, AND A CLOCKSOURCE READ THERE WOULD MEASURE
+NOTHING AT ALL.** The default clocksource reads `pit_ticks()` -- a
+counter the timer INTERRUPT increments -- and the interrupt is off for
+precisely the window being measured, so both reads return the same value
+and every stall comes out as zero. Not coarse: structurally blind, and
+indistinguishable in the report from a machine with no stalls. That is
+what the first version of this did, and the all-zero table is what found
+it. The TSC keeps counting with IF clear, costs a couple of dozen cycles
+and no I/O port, which is why ftrace's default trace clock is the same
+register. The price is that a non-invariant TSC drifts with the CPU's
+frequency; accepted, because refusing every machine without an invariant
+TSC would leave the default QEMU boot -- where this work gets debugged
+-- with no instrument.
+
+Two things follow for anyone measuring here. **A granularity reported as
+0 is the WORST reading, not the best** -- it is measured by keeping the
+smallest positive difference between adjacent clock reads, so 0 means
+none was ever observed. And **a per-syscall table must be sized against
+the syscall table, and asserted**: `SCHED_KSTACK_SYSCALL_MAX` was 64
+while the ABI reached 107, so `kstack syscalls` had silently reported
+nothing about the top third of it. `kernel/proc/syscall_table.c` now
+carries a `_Static_assert` for both tables, which is the only place that
+can see both numbers.
+
 ## INTEL HDA IS THE THIRD SOUND DEVICE, ITS CODEC IS ROUTED BY A GENERIC WALK, AND THE VOLUME TAPER IS THE USB DRIVER'S
 
 `kernel/drivers/sound/hda.c` -- the laptop's own sound card. Matched by

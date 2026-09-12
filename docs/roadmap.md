@@ -24,7 +24,6 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] Measure desktop and input latency during heavy disk I/O, and keep that workload as the yardstick for the three items below  *(Scheduler: blocking, priorities, classes)*
 - [ ] **Interruptible syscalls** -- a trap gate plus retiring `g_next_kernel_rsp` as a single global  *(Scheduler: blocking, priorities, classes)*
 - [ ] Replace the preemption guard with a real sleeping lock -- **Needs:** interruptible syscalls, above  *(Scheduler: blocking, priorities, classes)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
@@ -67,7 +66,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~Blocking + wait queues~~ DONE 2026-08-20 -- a wait channel is an ADDRESS, so a wake reaches one pipe/client, not a category
 - [ ] Retire `uapp_desc.tick_ms` as a REQUIREMENT
 - [ ] Two scheduling classes, Linux-shaped
-- [ ] **NEXT** Measure desktop and input latency during heavy disk I/O, and keep that workload as the yardstick for the three items below
+- [x] ~~Measure desktop latency under heavy disk I/O, the yardstick for the three items below~~ DONE 2026-09-12
 - [ ] **NEXT** **Interruptible syscalls** -- a trap gate plus retiring `g_next_kernel_rsp` as a single global
 - [ ] **NEXT** Replace the preemption guard with a real sleeping lock -- **Needs:** interruptible syscalls, above
 - [ ] Bound how long a frame can block on I/O

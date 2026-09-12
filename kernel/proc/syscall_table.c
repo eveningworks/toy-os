@@ -13,6 +13,8 @@
 // to forget.
 #include "syscalls.h"
 #include "syscall_abi.h"
+#include "scheduler.h"      // SCHED_KSTACK_SYSCALL_MAX -- asserted against below
+#include "syscall_stall.h"  // SYSCALL_STALL_MAX -- likewise
 #include <stddef.h>
 
 // Designated initializers, so a row's INDEX is its syscall number.
@@ -171,6 +173,18 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])
+
+// THE TWO PER-SYSCALL DIAGNOSTIC TABLES ARE SIZED AGAINST THIS ONE, and
+// this is the only place that can check it. Both index by syscall number
+// and both silently DROP anything past their end, so a table that falls
+// behind reports a clean, plausible, incomplete answer -- which is what
+// SCHED_KSTACK_SYSCALL_MAX did for every number from 64 up.
+_Static_assert(SYSCALL_TABLE_COUNT <= SCHED_KSTACK_SYSCALL_MAX,
+               "SCHED_KSTACK_SYSCALL_MAX is below the syscall table -- "
+               "`kstack syscalls` would silently drop the numbers above it");
+_Static_assert(SYSCALL_TABLE_COUNT <= SYSCALL_STALL_MAX,
+               "SYSCALL_STALL_MAX is below the syscall table -- "
+               "`stalls` would silently drop the numbers above it");
 
 // **RETIRED NUMBERS, WHICH ARE NOT FREE NUMBERS.** A syscall that is
 // deleted leaves a hole: reusing the number would make an old binary's

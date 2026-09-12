@@ -32,6 +32,7 @@
 #include "setting_abi.h"   // SETTING_ABI_DESC_MAX -- the reason's own budget
 #include "block.h"        // blk_name() -- what IS carrying the transfers
 #include "keyboard_tap.h" // kbdtap_enabled()/_set_enabled() -- kernel.kbdtap
+#include "syscall_stall.h" // syscall_stall_get()/_set() -- kernel.syscall_stall
 #include "sound.h"        // hda_diag_tone() -- kernel.hda_tone
 #include "usb.h"          // usb_diag_reset_port() -- kernel.usb_reset
 #include "intel_display.h" // intel_display_pipe_cycle()/_link_retrain() -- kernel.intel_cycle
@@ -200,6 +201,39 @@ static const struct setting kstack_track_setting = {
     .apply = kstack_track_apply,
 };
 
+// ---- kernel.syscall_stall --------------------------------------------
+//
+// OFF BY DEFAULT BECAUSE THE INSTRUMENT IS NOT FREE, unlike kbdtap below
+// whose default is about privacy: armed, it reads the TSC twice per
+// syscall. Arming from off ZEROES the counters
+// (kernel/proc/syscall_stall.c), so `off` then `on` is a reset.
+
+static void syscall_stall_get_str(char *out, uint32_t cap) {
+    k_strlcpy(out, syscall_stall_get() ? "on" : "off", cap);
+}
+
+static int syscall_stall_apply(const char *value) {
+    int on;
+    if (!parse_onoff(value, &on)) return SETTING_INVALID;
+    // THIS ONE CAN REFUSE, like kernel.ata_nodma above: a machine whose
+    // TSC frequency was never calibrated cannot convert the counter to
+    // time. INVALID is the honest answer -- nothing was applied.
+    if (!syscall_stall_set(on)) return SETTING_INVALID;
+    return SETTING_SAVED;
+}
+
+static const struct setting syscall_stall_setting = {
+    .name = "syscall_stall",
+    .label = "Per-syscall stall timing",
+    .type = SETTING_TYPE_ENUM,
+    .file = CONFIG_PATH_RUNTIME,
+    .category = TUNABLE_CATEGORY,
+    .group = "Diagnostics",
+    .choice = onoff_choice,
+    .get = syscall_stall_get_str,
+    .apply = syscall_stall_apply,
+};
+
 // ---- kernel.kbdtap ---------------------------------------------------
 //
 // **THE ONE TUNABLE HERE WHOSE DEFAULT IS A PRIVACY DECISION.** While it
@@ -354,5 +388,6 @@ void tunables_register(void) {
     setting_register(&usb_reset_setting);
     setting_register(&ata_nodma_setting);
     setting_register(&kstack_track_setting);
+    setting_register(&syscall_stall_setting);
     setting_register(&kbdtap_setting);
 }

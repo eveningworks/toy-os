@@ -143,6 +143,13 @@ TOOLS = [
     # serial socket -- the sweep's fault, per the note above.
     ("stdin",       "stdin_test.py",           "blocking fd 0 and /bin/tosh",        True,  None,                   True),
     ("ping_rtt",    "ping_rtt.py",             "the compositor<->client round trip", True,  None,                   True),
+    # ATTACHES, and its numbers are only half-resolved on the sweep's own
+    # TCG guest -- the compositor's clock is the PIT there. It is listed
+    # anyway because the half that DOES resolve (the kernel's TSC-timed
+    # stall table) is the half that finds a regression, and because a
+    # tool no runner names is never run at all. Quote a real measurement
+    # from a `--kvm --cpu host,+invtsc` guest, not from this.
+    ("latency_io",  "latency_under_io.py",     "desktop latency under heavy disk I/O", True, None,                  True),
     ("terminal",    "terminal_probe.py",       "the GUI Terminal's keys and paging", True,  None,                   True),
     # ATTACHES to a running guest and needs a desktop up. Its
     # load-bearing check compares its answer against the SERIAL

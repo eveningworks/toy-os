@@ -4334,7 +4334,7 @@ refer to them by number.
       end, in the two lines of assembly that adjust `rsp` and the call
       target.
 
-### Measure desktop and input latency during heavy disk I/O, and keep that workload as the yardstick for the three items below
+### Measure desktop latency under heavy disk I/O, the yardstick for the three items below
 
 A source review (2026-09-11) put responsiveness under I/O ahead of more
 hardware support: the syscall gate runs with interrupts off and the
@@ -4346,6 +4346,34 @@ any of the three scheduler items land and again after each, so the
 work is judged by the number it was started for. `tools/ping_rtt.py`
 is the shape (a round trip in microseconds, printed), pointed at input
 instead of the compositor channel.
+
+**BUILT 2026-09-12.** `tools/latency_under_io.py` is the yardstick: it
+samples a quiet baseline, spawns `/bin/diskbench`, and samples again
+while it runs, reporting the compositor's `work`/`wake`/`ping`
+distributions beside the kernel's per-syscall stall table
+(`/bin/stalls`, `kernel.syscall_stall`). The first reference run, on a
+`--kvm --cpu host,+invtsc` guest:
+
+| | quiet | loaded |
+|---|---|---|
+| `wake` avg | 7.8 ms | **77 ms** |
+| `wake` max | 10.0 ms | **207 ms** |
+| `ping` max | 10.3 ms | **209 ms** |
+| `write` worst handler | 857 us | **220 ms** |
+| `open` worst handler | 14 us | **179 ms** |
+
+Two findings worth carrying into the work below. **`work` got FASTER
+under load** (388 -> 292 us average) -- when another process holds the
+CPU the WM does no work at all, so every frame it eventually runs looks
+quick and only the overshoot moves; `wake` is the number to read.
+And **the effect and the cause agree**: the worst wake and the worst
+ping land within 6% of `write`'s worst handler, measured by two
+instruments that share no code.
+
+What is NOT measured is pointer-to-cursor and key-to-echo latency
+specifically -- the `ping` round trip is the client-responsiveness
+proxy standing in for it. An input-path probe is still worth building if
+the numbers after the trap gate are ambiguous.
 
 ### Interruptible syscalls
 
