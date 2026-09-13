@@ -339,13 +339,18 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [x] ~~An argv VECTOR across a spawn, so a quoted argument survives it~~ DONE 2026-09-10 -- `SPAWN_ARGV`
 - [x] ~~A shell running a second copy of itself with its state~~ DONE 2026-09-11 -- `fork()` and `execv`/`execve`/`execvp`
 - [x] ~~`sigprocmask`/`sigsuspend` -- the race-free wait in `jobs.c`'s `waitproc()`~~ DONE 2026-09-12
-- [ ] POSIX `stat`/`lstat`/`fstat` with a truthful `struct stat` -- the `test` builtin
-- [ ] `fcntl` (`F_DUPFD`, `FD_CLOEXEC`) -- redirection bookkeeping in `redir.c`
-- [ ] `umask`, `getrlimit`/`setrlimit`, `times` -- three builtins, each compilable out
-- [ ] `#define SIGTTOU`, and an IGNORABLE `SIGQUIT` -- dash only ever `SIG_IGN`s both
+- [x] ~~Measure the gap instead of listing it~~ DONE 2026-09-13 -- `tools/dash_gap.py` compiles the port and prints what is left
+- [ ] Ten headers tolibc does not have, `sys/param.h` and `sys/ioctl.h` the widest
+- [ ] `struct stat` + `stat`/`lstat`/`fstat` and the nine `S_IS*` -- 8 files, and TFS3 grows a MODE field for it
+- [ ] `fcntl` (`F_DUPFD`, `F_GETFL`/`F_SETFL`, `F_SETFD`, `FD_CLOEXEC`) -- `redir.c` and `input.c`
+- [ ] `#define SIGTTOU`, `SIGPIPE` and `NSIG`, and an IGNORABLE `SIGQUIT` -- dash only ever `SIG_IGN`s both
+- [ ] `uid_t`/`gid_t`, `geteuid`/`getegid`/`getgroups` -- stubs, this is a single-user OS
+- [ ] `EACCES`, `ELOOP`, `EWOULDBLOCK`, `O_EXCL`, `DT_LNK`, `stpncpy`, `htonl`, `umask`, `alloca`
+- [ ] Wide characters, or a decision not to have them -- `expand.c` and `parser.c` want eight `mb*`/`isw*`
+- [ ] `SIGPIPE` and `-EPIPE` on the pipe WRITE path -- `pipe_write()` returns 0 today, so `yes | head` never ends
 - [ ] `#!` handling in the loader -- listed under Shell pipes & job control
 - [x] ~~Vendor the port~~ DONE 2026-09-13 -- `userland/ports/dash/`, v0.5.13.5 verbatim, nothing builds it yet
-- [ ] A Makefile rule for it, running dash's five build-time generators on the HOST
+- [ ] A Makefile rule for it, running dash's six build-time generators on the HOST -- all six already run clean
 - [ ] Our own `mksignames` -- dash's is GPL-2+ from bash, and our signal numbers are not its
 - [ ] Toykit's `klineedit` wired into dash's one read-a-line seam -- dash ships no line editing
 - [ ] A `system.shell` setting, read by the four places that hardcode `/bin/tosh` today

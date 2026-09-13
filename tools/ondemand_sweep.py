@@ -73,6 +73,11 @@ TOOLS = [
     # are the oracle -- so it has no `needs` gate at all.
     ("hash_host",   "hash_hostcheck.py",       "crc32/sha256 against hashlib and zlib", False,
      None,                                                                                   False),
+    # Compiles the vendored dash against tolibc with -nostdinc and
+    # reports what the compiler still refuses. Needs gcc and nothing
+    # else -- no guest, since nothing links or runs.
+    ("dash_gap",    "dash_gap.py",             "what the dash port still needs from tolibc", False,
+     ("host_cc", "needs gcc on PATH"),                                                       False),
     # Renders every docs/commands page through the same umd.c the guest
     # runs, at three widths. gcc and the standard library only.
     ("umd_host",    "umd_hostcheck.py",        "the Markdown renderer over every page", False,
@@ -294,6 +299,10 @@ def precondition_met(kind):
         # must not start requiring lame and ffmpeg on every checkout,
         # the same rule that keeps Docker out of preflight.
         return all(shutil.which(t) for t in ("gcc", "lame", "ffmpeg")), why
+    if key == "host_cc":
+        # Host gcc only. A skip rather than a failure on a checkout
+        # without it, same rule as host_audio above.
+        return shutil.which("gcc") is not None, why
     if key == "openssl":
         # The test certificates are made with `openssl req -x509`.
         # Missing it is a skip for the same reason lame and ffmpeg are:

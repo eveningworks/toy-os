@@ -3864,6 +3864,41 @@ window without going through it will find its layout polls timing out.
   and it writes to a temporary name and renames, so an interrupted build
   cannot leave a truncated store that fails for only some sites.
 
+- **`dash_gap.py`** -- what the vendored dash port still needs from
+  tolibc, measured by compiling it. No guest and no network: it runs
+  dash's six build-time generators on the host, then compiles all 32
+  sources against `userland/include/` and reports what the compiler
+  refuses. Needs gcc and nothing else.
+
+  **It exists because the requirement list kept being DERIVED, and was
+  wrong in both directions twice.** `docs/roadmap.md` named `getrlimit`,
+  `getpwnam`, `sysconf`, `times`, `fnmatch` and `glob` -- every one an
+  `AC_CHECK_FUNCS` probe dash has a fallback for and never needs -- and
+  named none of the ten missing headers, `SIGPIPE`, `uid_t`/`gid_t`,
+  `DT_LNK`, the errno constants or `htonl`. A list somebody has to keep
+  true is the shape this repo keeps deleting; this re-measures instead.
+
+  **`-nostdinc` IS THE WHOLE POINT, and leaving it out invents a pass.**
+  `USERLAND_CFLAGS` carries `-ffreestanding`, which does NOT stop
+  `#include <sys/ioctl.h>` finding `/usr/include`. Measured without it
+  this reported 17 of 32 sources compiling, plus two tolibc "bugs" that
+  were really glibc's declarations colliding with tolibc's. With it,
+  31 of 32 failed on missing headers. Any port built here needs the
+  flag for the same reason.
+
+  **Header discovery ITERATES**, because a missing header is a fatal
+  error: gcc stops there and never sees the includes below it, so one
+  pass found six of the ten. It shims what it found and asks again
+  until nothing new appears. The shims are measurement scaffolding --
+  enough to see the symbols behind a header, not a proposal for what
+  tolibc should ship -- and a header with no shim is reported as such
+  rather than counted as understood.
+
+  `--positive-control` withdraws a shim the run just proved was needed
+  and requires it to come back as a gap. It does this inside the temp
+  copy, never in `userland/include/`, so a crash mid-control cannot
+  leave the tree broken.
+
 - **`umd_hostcheck.py`** -- compiles `userland/lib/umd.c` with the host
   gcc and renders every `docs/commands/*.md` page through it at 40, 80
   and 132 columns, plus the three field lookups (`umd_title`,

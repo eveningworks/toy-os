@@ -1478,6 +1478,9 @@ cost".
 - **Run on demand, not in the gate** -- `ahci_test.py`,
   `ansi_cursor_test.py`, `audio_test.py`, `console_bleed_test.py`,
   `console_shell_test.py`, `ctrlc_test.py`, `cursor_ibeam_test.py`,
+  `dash_gap.py` (**what the dash port still needs from tolibc** --
+  compiled, not listed; `-nostdinc` is the whole point, since
+  `-ffreestanding` does not stop a port finding the HOST's headers),
   `diskmark_test.py`, `doc_test.py`, `doom_test.py`,
   `divti3_hostcheck.py`, `doom_sound_test.py`, `fat32_test.py`,
   `fileop_test.py`, `filemanager_harness_hostcheck.py` (the File

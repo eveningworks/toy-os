@@ -3324,6 +3324,66 @@ table has to name OUR signal numbers, so the fix and the necessity are
 the same work; `LICENSE` and the port's `README.md` disclose the file
 until it lands.
 
+## The gap is compiled now, not listed -- and TFS3 grows a mode field
+
+**Measured 2026-09-13 by `tools/dash_gap.py`**, which runs dash's six
+build-time generators and then compiles all 32 sources against tolibc.
+The list above had been DERIVED twice and was wrong in both directions
+both times; this replaces it with what the compiler actually refuses,
+and re-measures itself as tolibc grows.
+
+**All six generators already run clean** (`mktokens`, `mkbuiltins`,
+`mkinit`, `mknodes`, `mksyntax`, `mksignames`, plus a `cpp` pass over
+`builtins.def.in`) against a hand-written `config.h`. That half of the
+port costs nothing but a Makefile rule.
+
+**`-nostdinc` is the finding that outranks the rest.** `USERLAND_CFLAGS`
+carries `-ffreestanding`, which does NOT stop `#include <sys/ioctl.h>`
+finding `/usr/include`. Measured without it, 17 of 32 sources appeared
+to compile and two tolibc "bugs" appeared that were glibc's declarations
+colliding with tolibc's. With it, 31 of 32 failed on missing headers.
+Every port built here needs the flag, and the absence of it is a trap
+with no symptom until the target behaves differently from the host.
+
+**What the roadmap over-scoped**: `getrlimit`, `getpwnam`, `sysconf`,
+`times`, `fnmatch` and `glob` are all `AC_CHECK_FUNCS` probes with a
+dash fallback behind them. None is a requirement. **What it missed**:
+ten headers, `SIGPIPE`, `NSIG`, `uid_t`/`gid_t`, `DT_LNK`, three errno
+constants, `stpncpy`, `alloca`, `htonl`, and eight wide-character
+functions. It also attributed `stat` to the `test` builtin alone, when
+`exec.c`'s PATH search, `cd.c`'s CDPATH, `main.c`'s profile read and
+`var.c` all call it.
+
+**One item is not a build gap at all.** `pipe_write()` returns 0 when a
+pipe has no readers (`kernel/proc/pipe.c`) -- no `-EPIPE`, no `SIGPIPE`.
+dash compiles without either and then hangs on `yes | head -1`. This
+affects `tosh` today and is the one entry here that is a kernel
+behaviour change rather than a header.
+
+**`struct stat` REPORTS REAL FIELDS, AND TFS3 GROWS A MODE. Decided
+2026-09-13.** `sys/stat.h` refuses to have `stat()` at all,
+on the grounds that "a struct of invented zeroes lets ported code
+compile and then take wrong branches on `st_mode`". The objection is
+right about zeroes and wrong about invention: Linux's FAT driver
+synthesizes `st_uid`/`st_gid`/`st_mode` from `fmask`/`dmask` mount
+options and NTFS-3g does the same, because a CONSISTENT documented
+value is usable and a zero is not.
+
+Most of the struct is not invented here anyway. TFS3's inode already
+carries `type`, `links`, `size`, `created` and `modified`, so
+`st_mode`'s type bits, `st_nlink`, `st_size`, `st_mtime`, `st_ctime`
+and `st_ino` are all REAL. Only the permission bits and `st_uid`/
+`st_gid` would be made up.
+
+So rather than synthesize them mount-wide, **TFS3 grows a mode field**.
+The inode has 36 spare checksum-covered bytes at offsets 92..127, so
+real permission bits fit without breaking the format. That buys an
+honest `test -x` -- which is the one `test` operator a synthesized
+0755 would answer wrongly for every file on the disk, exactly as it
+does on a Linux FAT mount. The costs are a format revision, the write
+path, and `tools/tfs3_writer.py` having to match; `st_uid`/`st_gid`
+stay 0, which is not invention but a fact about a single-user system.
+
 ## Layer 7 -- The GUI
 
 Sits highest deliberately: the desktop is a ring-3 process now, so
