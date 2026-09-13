@@ -76,6 +76,13 @@ VM = os.path.join(REPO, "tools", "vm.py")
 # "all phases passed" and exit code 0.
 TESTS = [
     ("libc_test", 0, None, None),
+    # shellsetting_test is NOT here: this runner starts a test through
+    # the legacy `run` loader, and a process loaded that way has no
+    # scheduler slot, so its system() does not reach the spawned shell
+    # the way an ordinary process's does -- the marker never appears and
+    # the test reports a hardcoded path that is not there. It is driven
+    # by a KTEST instead (kernel/tty/tty_test.c), which spawns it
+    # properly, the same arrangement pty_test and the dash tests have.
     # The argv VECTOR across a spawn (SPAWN_ARGV) and tosh's quoting on
     # top of it. SPAWNED (exit code None): it reads pipes its children
     # write, which the legacy `run` loader cannot block on.

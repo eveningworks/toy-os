@@ -25,6 +25,7 @@
 // Terminal does (userland/gui/apps/terminal.c) -- so the shell cannot
 // tell the difference, which is the property worth having.
 #include <stdint.h>
+#include "lib/usetting.h"  // system.shell
 #include <pthread.h>
 #include "rt/sys.h"
 #include "lib/cmd.h"
@@ -35,7 +36,17 @@
 
 #define USAGE "telnetd  (run by inetd: inetd -p 23 /bin/telnetd)"
 
-#define SHELL "/bin/tosh"
+#define SHELL_FALLBACK "/bin/tosh"
+
+// WHICH SHELL, from the registry rather than baked in (`system.shell`,
+// kernel/lib/shell_config.c). Read per session rather than once at
+// startup, so changing the setting affects the NEXT window or login
+// instead of needing a restart -- and the fallback keeps a session
+// possible when the registry cannot answer.
+static const char *shell_path(char *buf, size_t cap) {
+    if (usetting_get("system.shell", buf, cap) && buf[0]) return buf;
+    return SHELL_FALLBACK;
+}
 
 // RFC 854. Only the commands a client actually sends are named; an
 // option this does not implement is REFUSED rather than ignored, which
@@ -227,7 +238,9 @@ static int start_shell(void) {
     // second shell run inside this one (`dash`) is exactly that case,
     // and it fails with "Cannot set tty process group" if every process
     // is in init's one session. See abi/syscall_abi.h's SPAWN_SETSID.
-    int pid = sys_spawn_flags(SHELL, 0, -1, 0, PGID_NEW, SPAWN_SETSID);
+    char shbuf[SETTING_ABI_VALUE_MAX];
+    int pid = sys_spawn_flags(shell_path(shbuf, sizeof shbuf), 0, -1, 0,
+                              PGID_NEW, SPAWN_SETSID);
     if (in0  >= 0) { dup2(in0, 0);  close(in0); }
     if (out1 >= 0) { dup2(out1, 1); close(out1); }
     if (err2 >= 0) { dup2(err2, 2); close(err2); }

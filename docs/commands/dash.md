@@ -101,4 +101,9 @@ which is the `tcsetpgrp()` that needed sessions to work at all.
 **`bg` and Ctrl-Z are not covered**, nor is `fc`, which compiles now
 (dropping `SMALL` turned on `histedit.c`) and has never been run.
 
-`tosh` remains the shell the system actually uses.
+**To make dash the shell a terminal starts:** `config set system.shell
+/bin/dash`. A new Terminal window or telnet login gets it, as does
+`system()`. The CONSOLE shell stays `/bin/tosh` whatever the setting
+says -- a service descriptor's `Exec=` is a data file, and the one shell
+that is always there must not depend on a value that can name a path
+which does not exist.

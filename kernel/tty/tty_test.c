@@ -473,3 +473,31 @@ KTEST("tty", "dash runs a background job, foregrounds it, and survives Ctrl-C") 
     // terminal and the signal went to the wrong group.
     KTEST_ASSERT_EQ(code, 0);
 }
+
+// --- system.shell, end to end ----------------------------------------
+//
+// /tests/shellsetting_test points the setting at a `#!` script and
+// checks that system() left the script's marker -- a build still
+// hardcoding /bin/tosh produces none. Driven from here rather than from
+// tools/usertest_run.py because that runner uses the legacy `run`
+// loader, and a process loaded that way has no scheduler slot, so its
+// system() does not reach a spawned shell the way an ordinary process's
+// does.
+#define SHELLSET_TEST_PATH "/tests/shellsetting_test"
+#define SHELLSET_TIMEOUT_TICKS 900
+
+KTEST("tty", "system.shell is honoured, not just stored") {
+    if (!fs_exists(SHELLSET_TEST_PATH)) KTEST_SKIP("no " SHELLSET_TEST_PATH);
+    if (!fs_exists("/bin/dash")) KTEST_SKIP("no /bin/dash to point it at");
+
+    int pid = scheduler_spawn(SHELLSET_TEST_PATH, 0);
+    KTEST_ASSERT(pid != 0);
+
+    int code = -1, exited = 0;
+    uint64_t start = pit_ticks();
+    while (pit_ticks() - start < SHELLSET_TIMEOUT_TICKS) {
+        if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
+    }
+    KTEST_ASSERT(exited);
+    KTEST_ASSERT_EQ(code, 0);
+}

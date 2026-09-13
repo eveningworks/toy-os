@@ -27,13 +27,36 @@
 #include <unistd.h>
 #include "rt/sys.h"
 
-#define SHELL_PATH "/bin/tosh"
+#define SHELL_FALLBACK "/bin/tosh"
+
+// WHICH SHELL, asked of the registry rather than baked in
+// (`system.shell`, kernel/lib/shell_config.c). Read on EVERY call
+// rather than cached: system() is about to create a process, so one
+// syscall is noise beside it, and a cache would make a changed setting
+// take effect only in programs started afterwards -- which is the kind
+// of difference nobody can explain later.
+//
+// The fallback is not defensive padding: a registry that cannot answer
+// (an old kernel, a failed syscall) must still leave system() working,
+// because a C library call that stops working when a setting is
+// unreadable is worse than one that ignores the setting.
+static const char *shell_path(char *buf, size_t cap) {
+    struct setting_msg m;
+    memset(&m, 0, sizeof m);
+    m.op = SETTING_OP_GET;
+    strlcpy(m.name, "system.shell", sizeof m.name);
+    if (sys_setting(&m) != 0 || !m.value[0]) return SHELL_FALLBACK;
+    strlcpy(buf, m.value, cap);
+    return buf;
+}
 
 int system(const char *command) {
     // POSIX: a NULL command asks whether a command processor is
     // AVAILABLE -- non-zero if so. It is, as long as the shell is
     // installed, so this is a real check rather than a constant.
-    if (!command) return access(SHELL_PATH, F_OK) == 0;
+    char shbuf[SETTING_ABI_VALUE_MAX];
+    const char *sh = shell_path(shbuf, sizeof shbuf);
+    if (!command) return access(sh, F_OK) == 0;
 
     // "-c " + the command. Built here rather than passed as two
     // arguments because sys_spawn() takes ONE argument string, which it
@@ -49,7 +72,7 @@ int system(const char *command) {
     memcpy(args, "-c ", prefix);
     strcpy(args + prefix, command);
 
-    int pid = sys_spawn(SHELL_PATH, args, -1);
+    int pid = sys_spawn(sh, args, -1);
     if (pid < 0) return -1;
 
     int status = 0;

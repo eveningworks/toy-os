@@ -65,6 +65,7 @@
 // its shell is standing. The parser handles it (api/ansi.h's ANSI_OSC);
 // a session with nothing to say keeps its generated "Shell N".
 #include <stdint.h>
+#include "lib/usetting.h"  // system.shell
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -95,7 +96,17 @@
 #define WIN_ROWS 30
 #define MARGIN 6
 
-#define SHELL "/bin/tosh"
+#define SHELL_FALLBACK "/bin/tosh"
+
+// WHICH SHELL, from the registry rather than baked in (`system.shell`,
+// kernel/lib/shell_config.c). Read per session rather than once at
+// startup, so changing the setting affects the NEXT window or login
+// instead of needing a restart -- and the fallback keeps a session
+// possible when the registry cannot answer.
+static const char *shell_path(char *buf, size_t cap) {
+    if (usetting_get("system.shell", buf, cap) && buf[0]) return buf;
+    return SHELL_FALLBACK;
+}
 
 // The screen. The grid GROWS to fit the window rather than being a
 // fixed 200x60: the display ceiling is 1920x1080 (WIN_CLIENT_MAX_W/H)
@@ -919,7 +930,9 @@ static int session_start(int slot) {
     // A NEW SESSION: this window's pty is its own terminal, and the
     // shell has to own it on behalf of everything it starts -- including
     // a second shell. See abi/syscall_abi.h's SPAWN_SETSID.
-    s->child = sys_spawn_flags(SHELL, 0, -1, 0, PGID_NEW, SPAWN_SETSID);
+    char shbuf[SETTING_ABI_VALUE_MAX];
+    s->child = sys_spawn_flags(shell_path(shbuf, sizeof shbuf), 0, -1, 0,
+                               PGID_NEW, SPAWN_SETSID);
     if (in0  >= 0) { sys_dup2(in0, 0);  sys_close(in0); }
     if (out1 >= 0) { sys_dup2(out1, 1); sys_close(out1); }
     if (err2 >= 0) { sys_dup2(err2, 2); sys_close(err2); }
@@ -1978,7 +1991,7 @@ static void on_open_cb(struct uapp *a) {
     g_menu.item_flags = menu_item_flags;
 
     if (!open_tab()) {
-        ulog("uterm: could not open a pty or start " SHELL "\n");
+        ulog("uterm: could not open a pty or start the shell\n");
         uapp_quit(a, 1);
     }
 }
