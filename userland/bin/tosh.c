@@ -49,6 +49,8 @@
 static struct tty_termios g_tio_saved;
 
 static struct kline_edit g_ed;
+// The terminal decoder's state -- one per input stream.
+static struct termkey_state g_keys;
 
 // Ring 3's allocator, for the editor. klineedit.c is compiled into both
 // rings and can name neither malloc() nor kmalloc() (klineedit.h);
@@ -552,7 +554,12 @@ int main(int argc, char **argv) {
             // shared editor work with no translation layer.
             int key = (unsigned char)buf[i];
 
-            switch (kline_key(&g_ed, key)) {
+            // **DECODED, because fd 0 is a TERMINAL.** A special key
+            // arrives as an ANSI sequence (api/termkey.h), which is what
+            // every terminal sends and what a ported program expects;
+            // kline_feed() turns it back into the code the keymap
+            // switches on. An ordinary byte passes straight through.
+            switch (kline_feed(&g_ed, &g_keys, key)) {
             case KLINE_REDRAW:
                 redraw();
                 break;

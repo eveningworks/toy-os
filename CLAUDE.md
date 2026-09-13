@@ -330,11 +330,14 @@ trips them before it knows to look anything up.
   supported and costs UNDO: a snapshot is sized to the line it holds and
   is dropped rather than truncated. **A front end that re-inits per line
   must `kline_free()` first**, or it leaks the previous line's buffer
-  and its whole undo stack, every line, forever. Five things to know. **A byte off fd 0 is fed in as-is** -- specials arrive as
-  0x91-0xA6, which ARE the `KEY_*` codes `kline_key()` switches on, so a
-  translation layer would be a third place to drift; Ctrl/Alt reach apps
-  as control codes and an ESC prefix, terminal-style, NOT as `KEY_*`
-  (see `keyboard.h`'s "Ctrl and Alt" comment). **The console front end
+  and its whole undo stack, every line, forever. Five things to know. **A BYTE OFF fd 0 IS DECODED, because what crosses a
+  terminal is ANSI** -- a special key arrives as an escape sequence (Up
+  is `ESC [ A`), and `kline_feed()` turns it back into the `KEY_*` the
+  keymap switches on. **This used to be the raw byte 0x91-0xA6**, and
+  that private encoding is why the first ported program could not use
+  its own line editor; `api/termkey.h` has the whole reasoning and the
+  keysym-versus-terminal split. Ctrl/Alt still reach apps as control
+  codes and an ESC prefix, terminal-style, which they always did. **The console front end
   repaints with `\r` and TWO passes**, because `vga_cursor_move()` is a
   non-destructive seek ring 3 cannot reach and must not get a syscall
   for; the cost is that a line longer than the console is wide repaints
@@ -716,6 +719,7 @@ whenever a headline here tells you something you did not already know.
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 - **A SPAWN CARRIES AN ARGV VECTOR WITH A LENGTH, AND THE STRING FORM IS SPLIT AT THE EDGE** -- `SPAWN_ARGV`; sized by length, not `env`'s double NUL, because an argument may be empty; both sides tolerate the other being older (libsys retries in the string form)
 - **THERE IS A `fork()` NOW, IT SHARES COPY-ON-WRITE, AND SPAWN IS STILL THE DOOR** -- `PAGE_COW` is PTE bit 11 and `pmm` counts owners per frame; a present-page fault is answered only as a COW write, `copy_user()` un-shares before it writes, and a frame the kernel holds a physical pointer into (a futex word) is copied eagerly; a shared frame is never a swap victim
+- **WHAT CROSSES A tty IS ANSI; WHAT REACHES A WINDOW IS A KEYSYM** -- `api/termkey.h` encodes/decodes (Up is `ESC [ A`), the encode lives in `tty_input()` gated on `bypass` because that flag already means "a compositor holds the keyboard", GUI clients still get `KEY_*` exactly as an X11 client gets a keysym, and a program reading a terminal must decode (`kline_feed()`, or a `termkey_state` of its own)
 - **A TERMINAL BELONGS TO A SESSION, NOT TO ONE PID** -- `tcsetpgrp()` is keyed on the session (both halves: same session AND a group in it), because an owner check refuses a nested shell the terminal and dash exits with "Cannot set tty process group"; `sid` is inherited by spawn AND fork, and a session is CREATED by `SPAWN_SETSID`, which telnetd and the GUI Terminal pass -- without a creation point everything shares init's session and the rule means nothing
 - **A SCRIPT RUNS BY NAME, AND `#!` IS THE LOADER'S JOB -- NEVER A SHELL'S** -- `build_image()` reads the first line before the ELF loader, Linux's `binfmt_script` position, so spawn and `execve()` both get it; argv becomes `[interp, arg?, script, caller's args]`, ONE optional interpreter argument, and the legacy `run` loader still does not have it
 - **AN EXEC LOADS BEFORE IT TEARS DOWN, TAKES `struct spawn_msg`, AND KEEPS THE SLOT** -- a failed load returns to a caller that still exists; fds survive, caught signals reset, a non-leader thread is refused

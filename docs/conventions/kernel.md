@@ -4129,3 +4129,43 @@ and it is about one number meaning two things rather than about safety.
 `SPAWN_SETSID` therefore goes through `scheduler_make_session_leader()`
 instead: a fresh child already leads a group, and that is creation
 rather than a transition.
+
+## WHAT CROSSES A tty IS ANSI; WHAT REACHES A WINDOW IS A KEYSYM
+
+A special key travels over a terminal as an escape sequence -- Up is
+`ESC [ A` -- because that is what every terminal since the VT100 has
+sent and what every program that reads one already parses.
+`api/termkey.h` encodes and decodes, in one file so the two cannot
+drift, and `termkey_cases.h` is asserted in both rings.
+
+**It used to be the raw byte 0x91-0xA6.** That was cheap and understood
+by exactly the programs written for this system. The cost arrived with
+the first real port: dash could not use its own libedit, because libedit
+expects ANSI and got a private encoding. Every ported shell, pager and
+editor would have hit the same wall, each needing a bespoke shim.
+
+**THE SPLIT IS THE ONE REAL SYSTEMS MAKE, and getting it wrong is
+subtle.** A GUI client receives `KEY_*` from the compositor, exactly as
+an X11 or Wayland client receives a keysym; nobody sends `ESC [ A` to a
+window. It is the TERMINAL EMULATOR that turns a keysym into a sequence
+for its pty, which is what Konsole does. So `api/keyboard.h`'s codes are
+unchanged and every widget still switches on them.
+
+**The encode belongs in `tty_input()`, gated on `bypass`.** That flag
+already means "a compositor holds the keyboard", so it is exactly the
+line between the two worlds. Encoding in the keyboard DRIVER instead was
+tried and was wrong: there is no separate keysym queue, so the sequences
+reached the compositor too and every GUI client started seeing escape
+bytes -- it presented as Terminal's tabs misbehaving, two failures away
+from anything to do with keys.
+
+**A program that reads a terminal must decode.** `kline_feed()` does it
+for the three line-editing front ends; `/bin/edit` and the pager
+(`lib/upager.c`) each hold a `struct termkey_state` and feed bytes
+through `termkey_feed()`. A program that forgets simply sees ESC and `[`
+as characters, which is what a missing decoder looks like.
+
+**A lone ESC is resolved by the NEXT byte, not a timer.** `ESC [` and
+`ESC O` begin a sequence; anything else means the ESC was the Esc key or
+a Meta prefix and is handed back. That keeps Alt-<key> working and costs
+Alt-[, which is the trade readline makes for the same reason.

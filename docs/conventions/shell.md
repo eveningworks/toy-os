@@ -81,10 +81,12 @@ this the obvious way), not from how much history it accumulated.
   nothing reopens the `sti`-in-the-handler hazard `SYS_READ_KEY`'s
   comment describes, because the handler does not wait, it RETURNS.
   Five things to know. **It never returns 0** -- a console has no EOF,
-  and 0 would tell a shell its input had closed. **It is RAW**: one byte
-  per key, exactly the code `keyboard_try_getchar()` gives (specials are
-  0x91-0xA6), with no echo, no editing and no escape translation, so
-  the reader echoes what it reads -- all three are a line discipline and
+  and 0 would tell a shell its input had closed. **It is RAW**: no echo and no
+  editing, so the reader echoes what it reads. What it is NOT any more
+  is untranslated -- a special key arrives as the ANSI sequence a
+  terminal sends (`ESC [ A` for Up, `api/termkey.h`), which is what
+  makes the console's fd 0 the same stream a pty carries and what lets a
+  ported program read it. It used to be the raw byte 0x91-0xA6 -- all three are a line discipline and
   belong above a real TTY. **The first fd-0 read CLAIMS the console**
   and the kernel shell stands down until that process dies; the claim is
   a SECOND flag beside the compositor's, released from

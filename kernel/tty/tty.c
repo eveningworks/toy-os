@@ -10,6 +10,7 @@
 // four lines and a separate file for it would be filing rather than
 // splitting.
 #include "tty_internal.h"
+#include "termkey.h"   // a key crosses a terminal as a sequence
 #include "scheduler.h"
 #include "signal.h"
 #include "signal_abi.h"
@@ -145,7 +146,29 @@ void tty_enqueue_wake(struct tty *t) {
 
 void tty_input(struct tty *t, uint8_t byte, uint8_t mods) {
     if (!t || !t->used) return;
-    tty_ldisc_input(t, byte, mods);
+
+    // **A COMPOSITOR HOLDING THE KEYBOARD GETS KEYSYMS; A TERMINAL GETS
+    // ANSI.** That is the split every windowing system makes, and
+    // `bypass` already means exactly "the compositor holds it" (see
+    // tty_set_bypass): a GUI client receives KEY_* the way an X11 or
+    // Wayland client receives a keysym, and nobody sends `ESC [ A` to a
+    // window.
+    //
+    // Below the bypass this is a TERMINAL, so a special key is expanded
+    // into the sequence a terminal sends (api/termkey.h). That is what
+    // makes the console's fd 0 the same stream a pty carries, and what
+    // lets a PORTED program -- one that has never heard of this
+    // system's key codes -- read it.
+    //
+    // Encoding in the keyboard driver instead was tried and was wrong:
+    // there is no separate keysym queue, so it reached the compositor
+    // too and every GUI client started seeing escape sequences.
+    if (tty_bypassed(t)) { tty_ldisc_input(t, byte, mods); return; }
+
+    char seq[TERMKEY_MAX];
+    int n = termkey_encode(byte, seq, sizeof seq);
+    for (int i = 0; i < n; i++)
+        tty_ldisc_input(t, (uint8_t)seq[i], mods);
 }
 
 void tty_output(struct tty *t, const char *buf, unsigned len) {

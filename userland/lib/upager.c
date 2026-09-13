@@ -28,6 +28,7 @@
 // a pager that left it raw hands the shell a prompt with no echo, which
 // looks exactly like a hung machine. `edit` does the same.
 #include "lib/upager.h"
+#include "termkey.h"   // a terminal sends sequences, not private bytes
 #include "rt/sys.h"
 #include <string.h>
 #include <stdio.h>
@@ -262,6 +263,7 @@ int upager_run_src(const char *text, int len, const char *label, int truncated,
 
     int rows, cols;
     int key_fd = upager_term(&rows, &cols);
+    struct termkey_state keys = {0};   // the terminal decoder, per stream
     if (key_fd < 0) return dump(text, len);
 
     // **RENDERED AT THE PAGER'S OWN WIDTH FIRST**, so a caller need not
@@ -382,9 +384,8 @@ int upager_run_src(const char *text, int len, const char *label, int truncated,
         if (top != last_top) { draw(&p, top); last_top = top; }
 
         // A BLOCKING read of one byte. Specials arrive as 0x91-0xA6,
-        // which ARE the KEY_* codes below -- a byte off a terminal
-        // needs no translation layer, the same contract the shared line
-        // editor relies on.
+        // which are reassembled below into the KEY_* codes the cases
+        // switch on -- what crosses a terminal is ANSI (api/termkey.h).
         unsigned char ch;
         int64_t n = read(key_fd, &ch, 1);
         // INTERRUPTED, NOT BROKEN: a resize lands here as EINTR, and
@@ -392,7 +393,10 @@ int upager_run_src(const char *text, int len, const char *label, int truncated,
         // on every window drag.
         if (n < 0 && sys_errno() == EINTR) continue;
         if (n <= 0) break;   // the terminal went away -- do not spin on it
-        int k = ch;
+        // DECODED: a special key is an ANSI sequence on a terminal, so
+        // reassemble it into the KEY_* the cases below switch on.
+        int k = termkey_feed(&keys, ch);
+        if (k == TERMKEY_MORE || k == TERMKEY_NONE) continue;
 
         int max_top = lines - page;
         if (max_top < 0) max_top = 0;

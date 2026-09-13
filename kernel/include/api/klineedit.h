@@ -2,6 +2,7 @@
 #define KLINEEDIT_H
 
 #include <stddef.h>
+#include "termkey.h"   // kline_feed() decodes what a terminal sends
 
 // A readline-style line editor, as pure logic: a buffer, a cursor, a
 // kill ring and an undo stack, with no idea how any of it gets drawn.
@@ -164,6 +165,23 @@ void kline_insert_str(struct kline_edit *e, const char *s);
 
 // Feeds one key in. See enum kline_action for what the return means.
 enum kline_action kline_key(struct kline_edit *e, int key);
+
+// **WHAT A FRONT END READING A TERMINAL SHOULD CALL.** Feeds one BYTE,
+// decoding the ANSI escape sequences a terminal sends for special keys
+// (api/termkey.h) before dispatching to kline_key() above. A byte that
+// is not part of a sequence reaches the keymap unchanged, so control
+// codes and ordinary characters behave exactly as they always have.
+//
+// `st` is the caller's decoder state, one per input stream, zeroed
+// before the first call. A sequence in progress returns KLINE_IGNORED
+// and changes nothing -- the action arrives with the byte that
+// completes it.
+//
+// It is here rather than in each front end because there are three of
+// them, and a decoder per front end is the drift this file exists to
+// prevent.
+enum kline_action kline_feed(struct kline_edit *e, struct termkey_state *st,
+                             int byte);
 
 // The word boundaries the editor uses, exposed because the front ends
 // need the same notion for completion. Two DIFFERENT definitions, and

@@ -57,6 +57,7 @@ struct EditLine {
     // /bin/tosh's g_tio_saved records.
     struct tty_termios saved;
     int    have_saved;
+    struct termkey_state keys;   // the terminal decoder, per EditLine
 };
 
 // --- history ---------------------------------------------------------
@@ -328,7 +329,9 @@ const char *el_gets(EditLine *el, int *count) {
 
         for (ssize_t i = 0; i < n; i++) {
             int key = (unsigned char)buf[i];
-            switch (kline_key(&el->ed, key)) {
+            // Decoded: fd 0 is a terminal, so a special key arrives as
+            // an ANSI sequence rather than a private byte.
+            switch (kline_feed(&el->ed, &el->keys, key)) {
             case KLINE_REDRAW:
                 uline_paint(p, &el->ed, &el->row_shown);
                 break;

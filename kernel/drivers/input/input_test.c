@@ -16,6 +16,8 @@
 // instructions here).
 #include "input.h"
 #include "keyboard.h"
+#include "termkey.h"   // a key crosses a terminal as a sequence
+#include "string.h"
 #include "keyboard_layout.h" // the parity check asks the LAYOUT what it maps
 #include "kfmt.h"            // klog_printf -- name the unreachable key
 #include "mouse.h"
@@ -65,13 +67,29 @@ KTEST("input", "an extended keycode arrives as one key, not as two") {
     // fed only the second byte, this would arrive as whatever plain
     // 0x48 means; if it fed them as two keys, there would be a spare
     // one left in the ring.
+    //
+    // **ONE KEY IS NOW ONE SEQUENCE**, because what crosses a terminal
+    // is ANSI: Up is `ESC [ A` (api/termkey.h). The claim is unchanged
+    // -- one key in, one key out, nothing left over -- but it is read
+    // through the decoder rather than as a single private byte, which
+    // is what a program on this terminal does too.
     input_report_key(INPUT_KEY_UP, 1);
-    int c = keyboard_try_getchar_mods(&mods);
+
+    struct termkey_state st;
+    k_memset(&st, 0, sizeof st);
+    int key = TERMKEY_MORE;
+    int bytes = 0;
+    for (int c; (c = keyboard_try_getchar_mods(&mods)) != -1; ) {
+        bytes++;
+        key = termkey_feed(&st, c);
+        if (key != TERMKEY_MORE) break;
+    }
     int extra = keyboard_try_getchar_mods(&mods);
     scheduler_preempt_enable();
 
-    KTEST_ASSERT_EQ(c, KEY_ARROW_UP);
-    KTEST_ASSERT_EQ(extra, -1); // the 0xE0 prefix leaked into the ring as its own key
+    KTEST_ASSERT_EQ(key, KEY_ARROW_UP);
+    KTEST_ASSERT_EQ(bytes, 3);  // ESC [ A -- and not a stray 0xE0 prefix
+    KTEST_ASSERT_EQ(extra, -1); // nothing left over after the sequence
 }
 
 KTEST("input", "a keycode nothing here maps is dropped, not guessed") {

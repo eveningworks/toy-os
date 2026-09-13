@@ -527,3 +527,21 @@ enum kline_action kline_key(struct kline_edit *e, int key) {
         return KLINE_IGNORED;
     }
 }
+
+// See klineedit.h. The decode belongs here rather than in each of the
+// three front ends, for the same reason the keymap does.
+enum kline_action kline_feed(struct kline_edit *e, struct termkey_state *st,
+                             int byte) {
+    int k = termkey_feed(st, byte);
+    if (k == TERMKEY_MORE) return KLINE_IGNORED;   // mid-sequence
+    if (k == TERMKEY_NONE) return KLINE_IGNORED;   // a sequence we do not know
+    // A LONE ESC comes back as ESC and the byte that ended it has NOT
+    // been consumed -- feed it again, which is what makes Alt-<key>
+    // still work (termkey.h says why it resolves this way).
+    if (k == 0x1B) {
+        enum kline_action a = kline_key(e, 0x1B);
+        enum kline_action b = kline_feed(e, st, byte);
+        return b == KLINE_IGNORED ? a : b;
+    }
+    return kline_key(e, k);
+}

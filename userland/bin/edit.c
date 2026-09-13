@@ -37,6 +37,7 @@
 // no undo beyond what the shared core has, and no second buffer. It is
 // `nano` at the size this OS actually needs one.
 #include <stdint.h>
+#include "termkey.h"   // fd 0 is a terminal: specials arrive as sequences
 #include "rt/sys.h"
 #include "ui/utext.h"
 #include "keyboard.h"
@@ -252,6 +253,9 @@ static int save(const char *path) {
     return w == (int64_t)n;
 }
 
+// The terminal decoder's state -- one per input stream.
+static struct termkey_state g_keys;
+
 int main(int argc, char **argv) {
     // `-n` before or after the path, and exactly one path. A flag-only
     // invocation is a usage error rather than an empty editor: `edit`
@@ -287,9 +291,21 @@ int main(int argc, char **argv) {
         render(path, status);
         status[0] = '\0';
 
+        // **DECODED, because fd 0 is a TERMINAL.** A special key arrives
+        // as an ANSI sequence (api/termkey.h) and is reassembled here
+        // into the code the shared edit core switches on. A byte that
+        // is not part of one passes through untouched; a sequence in
+        // progress simply asks for the next byte.
         char c;
-        if (read(0, &c, 1) <= 0) break; // end of input closes the editor
-        int key = (unsigned char)c;
+        int key;
+        for (;;) {
+            if (read(0, &c, 1) <= 0) { key = -1; break; }
+            key = termkey_feed(&g_keys, (unsigned char)c);
+            if (key == TERMKEY_MORE) continue;
+            if (key == TERMKEY_NONE) continue;   // a sequence we do not know
+            break;
+        }
+        if (key < 0) break;                      // end of input closes the editor
 
         if (key == KEY_F3 || key == 27) break;      // Esc, or nano's Ctrl+X
         if (key == KEY_F2) {                        // nano's Ctrl+O

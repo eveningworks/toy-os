@@ -65,6 +65,7 @@
 // its shell is standing. The parser handles it (api/ansi.h's ANSI_OSC);
 // a session with nothing to say keeps its generated "Shell N".
 #include <stdint.h>
+#include "termkey.h"   // a keysym becomes an ANSI sequence here
 #include "lib/usetting.h"  // system.shell
 #include <stdio.h>
 #include <stdlib.h>
@@ -1757,14 +1758,20 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         return;
     }
 
-    // EVERY CODE THIS TOOLKIT DELIVERS FITS IN A BYTE -- specials are
-    // 0x91-0xA6, which ARE the KEY_* values the shared line editor
-    // switches on (api/keyboard.h), and Ctrl/Alt arrive as control codes
-    // and an ESC prefix, terminal-style. So there is no translation
-    // layer here, which is the point: a translation layer would be a
-    // third place for the keymap to drift.
-    char b = (char)(unsigned char)key;
-    if (s->master >= 0) sys_write(s->master, &b, 1);
+    // **A TERMINAL EMULATOR TRANSLATES A KEYSYM INTO A SEQUENCE, and
+    // that is the whole job.** The toolkit delivers KEY_* -- a keysym,
+    // exactly what an X11 or Wayland client receives -- and what goes on
+    // the wire to the pty is ANSI: Up is `ESC [ A`. This is what Konsole
+    // does, and it is why a ported program can read this terminal at
+    // all; it used to write the raw 0x91, which only programs written
+    // for this system understood.
+    //
+    // An ordinary character encodes to itself, so typing costs one byte
+    // as it always did. A key with no terminal sequence (Super, a bare
+    // modifier) encodes to nothing and is correctly not sent.
+    char seq[TERMKEY_MAX];
+    int n = termkey_encode(key, seq, sizeof seq);
+    if (n > 0 && s->master >= 0) sys_write(s->master, seq, (size_t)n);
 
     // NO DRAIN HERE ANY MORE. The echo comes back through the discipline
     // and the reader thread is already blocked waiting for it, so it
