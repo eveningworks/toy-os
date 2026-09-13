@@ -76,6 +76,9 @@ VM = os.path.join(REPO, "tools", "vm.py")
 # "all phases passed" and exit code 0.
 TESTS = [
     ("libc_test", 0, None, None),
+    # The ring-3 half of termkey: the encoder is shared source compiled
+    # twice, and the KTESTs would pass whether or not ring 3 linked it.
+    ("termkey_test", 0, None, None),
     # shellsetting_test is NOT here: this runner starts a test through
     # the legacy `run` loader, and a process loaded that way has no
     # scheduler slot, so its system() does not reach the spawned shell
