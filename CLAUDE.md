@@ -1482,6 +1482,9 @@ cost".
   compiled, not listed; `-nostdinc` is the whole point, since
   `-ffreestanding` does not stop a port finding the HOST's headers),
   `diskmark_test.py`, `doc_test.py`, `doom_test.py`,
+  `dash_test.py` (**does dash BEHAVE like a shell** -- 18 constructs as
+  real scripts on a disk copy, since quoting through four lexers mangles
+  `dash -c`),
   `divti3_hostcheck.py`, `doom_sound_test.py`, `fat32_test.py`,
   `fileop_test.py`, `filemanager_harness_hostcheck.py` (the File
   Manager harness's own wait/toolbar logic, no guest), `frame_balance.py`,

@@ -3912,6 +3912,38 @@ window without going through it will find its layout polls timing out.
   out of the header rather than written down, so a signal added there
   appears on the next build. Run by the Makefile, not by hand.
 
+- **`dash_test.py`** -- does the vendored dash BEHAVE like a shell? 18
+  constructs run as real scripts and compared against real output:
+  pipelines, redirection, here-documents, functions, parameter
+  expansion, arithmetic, `case`, loops, command substitution, `test`,
+  `trap EXIT`, positional parameters and exit status.
+
+  **`dash_gap.py` proves dash compiles and links, which is a statement
+  about the C LIBRARY rather than about the shell.** Before this, the
+  whole of the evidence that dash worked was `dash -c pwd` printing
+  `/` -- one builtin, one exit path, none of the parts a shell is for.
+
+  **The scripts are FILES on the disk, not `dash -c` strings.** A shell
+  test is made of quotes, and sending them through this script, then
+  `vm.py`, then `tosh`, then dash gives four lexers a turn at them --
+  which mangled every early attempt, a pipe arriving at `echo` as a
+  literal argument. `tools/tfs3_writer.py` writes each script into a
+  SPARSE copy of `disk.img` and dash is handed a path, which removes all
+  four.
+
+  **One case is deliberately not run**, and it is named in the file as
+  `HANGS_THE_GUEST`: a pipeline whose reader fails to exec spins the
+  writer at 100% CPU forever and the guest stops answering at all
+  (`docs/bugs.md`). It becomes an ordinary case the day the pipe path
+  reports the failure.
+
+  A **warm-up** command runs before the table and its output is thrown
+  away: the first exec after boot comes back empty while the guest is
+  still emitting boot lines, which otherwise fails whichever case
+  happens to be first and reads as a bug in that case.
+  `--positive-control` expects a line no shell would print and requires
+  the run to go red.
+
 - **`dash_gap.py`** -- what the vendored dash port still needs from
   tolibc, measured by compiling it. No guest and no network: it runs
   dash's six build-time generators on the host, then compiles all 32

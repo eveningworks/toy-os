@@ -82,6 +82,11 @@ TOOLS = [
     # gcc only; exits non-zero when anything differs.
     ("libc_diff",   "libc_diff.py",            "tolibc's printf and strtol against glibc", False,
      ("host_cc", "needs gcc on PATH"),                                                       False),
+    # Boots its OWN guest from a copy of disk.img with the scripts
+    # written in, so wants_vm is False -- handing it one would point it
+    # at an image with no test scripts on it.
+    ("dash_shell",  "dash_test.py",            "dash behaves like a shell: 18 constructs", False,
+     None,                                                                                   False),
     # Renders every docs/commands page through the same umd.c the guest
     # runs, at three widths. gcc and the standard library only.
     ("umd_host",    "umd_hostcheck.py",        "the Markdown renderer over every page", False,
