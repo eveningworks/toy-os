@@ -60,14 +60,24 @@ changed the plan.
   2 GB. `ramfs` already sets a budget at mount ("half of free memory"),
   which is the precedent to copy.
 
-### A per-syscall cost that is real in the code and NOT yet measured
+### A per-syscall cost that is real in the code -- MEASURED AND FIXED (2026-09-13)
 
-**`resolve()` reads inode sectors from the disk on every read and write
-syscall, with no inode cache at all.** A path of depth N costs at least
-N uncached sector reads plus up to N dirent-block scans, per syscall.
-That is plain in `tfs3.c`, and it is the obvious candidate for why a
-sequential WRITE spends most of its block time READING (252 ms of 737 on
-the laptop; 76% of block-layer time in QEMU).
+**`resolve()` read inode sectors from the disk on every read and write
+syscall.** A path of depth N cost at least N uncached sector reads plus
+up to N dirent-block scans, per syscall. That was the candidate for why
+a sequential WRITE spent most of its block time READING, and it was
+right.
+
+The cause was narrower than "no inode cache": TFS3 HAD a full-path cache
+(`lcache`), it just lived inside `lookup()`, which only the READ path
+called -- `tfs3_write_range()` called `resolve()` directly. The
+signature was that sequential READ was completely insensitive to path
+depth while random 4 KiB WRITE lost 34% of throughput on a
+three-component path. Moving the cache into `resolve()` (322f5201)
+removed it; path depth now costs nothing on any profile.
+
+See `docs/decisions/storage.md` for why a VFS inode cache was NOT built
+on top of that: what it adds is one sector read per operation.
 
 **An attempt to confirm it by PATH DEPTH failed, and the failure is
 worth recording alongside the answer.** Running the same 4 MiB benchmark
@@ -451,3 +461,44 @@ writing. It counts the idle path's OWN commits now
   stages 1-4 is smaller than it looked when this document was started --
   which is an argument for building stage 0 and re-measuring before
   committing to the rest.
+
+
+## Re-measured 2026-09-13, after the path cache and the bigger transactions
+
+Bare-metal laptop (Samsung MZNLN128 on AHCI), 64 MiB,
+`/var/tmp/diskbench.tmp` -- a three-component path, which is the case
+that used to be penalised. `storage.sync` as marked.
+
+| profile | before, `lazy` | after, `lazy` | after, `batched` |
+|---|---|---|---|
+| SEQ write | 34.8 | 104.4 | 140.9 MB/s |
+| SEQ read | 89.7 | 133.9 | ~151 MB/s |
+| RND4K write | 3.13 | 6.63 | ~16.5 MB/s |
+| RND4K read | 9.37 | 10.93 | ~13.1 MB/s |
+
+**THIS MACHINE THROTTLES, AND THE SPREAD IS LARGER THAN SOME OF THE
+EFFECTS BEING MEASURED.** The figures above are from runs taken shortly
+after a boot. The same build after roughly a gigabyte of back-to-back
+benchmarking measured 94.8 / 104.1 / 11.3 / 9.3 -- a third down across
+the board, with no code change. It is a fanless Core M. Compare runs
+taken at the same point in a session, never a fresh run against a hot
+one, and take at least three.
+
+**Where the time goes now** (`batched`, cool, 64 MiB sequential write,
+256 syscalls): 623 block-layer write commands moving 133,360 sectors
+against 131,072 of data -- 1.018x amplification, down from 1.33x -- and
+~960 read commands moving only ~2,450 sectors. Block-layer time is
+roughly half the wall clock; the rest is the two copies and the syscall
+itself.
+
+**What this reorders.** The three remaining candidates, by measured
+headroom rather than by how interesting they are:
+
+1. **The copies and the per-syscall buffer.** The block layer moved
+   319 MB/s during a sequential read the caller saw as 133. Every file
+   read/write `kmalloc`s a bounce buffer, and the AHCI driver `memcpy`s
+   through a second one.
+2. **The pointer tables**, which still flush per write even in
+   `batched` (the bitmap and group descriptors no longer do).
+3. **NCQ and read-ahead**, which both still wait on the asynchronous
+   `block_device` split and buy least at QD1 sequential.
