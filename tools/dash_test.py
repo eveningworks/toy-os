@@ -137,6 +137,30 @@ CASES = [
 
 
 
+# Scripts run BY NAME rather than through `dash <path>` -- the `#!` line
+# is the LOADER's job (kernel/proc/scheduler.c's shebang_read), so this
+# is the only case set here that tests the kernel rather than the shell.
+# Each is (name, script, expected lines).
+SHEBANG = [
+    ("shebang-plain",
+     "#!/bin/dash\necho shebang-ran\n",
+     ["shebang-ran"]),
+
+    # $0 is the SCRIPT, and the caller's arguments survive the rewrite --
+    # the interpreter takes argv[0] and the script path is inserted after
+    # it, so a script still sees its own name and its own args.
+    ("shebang-args",
+     "#!/bin/dash\necho name=$0\necho count=$#\necho first=$1\n",
+     ["name=/dt_shebang-args.sh", "count=2", "first=alpha"]),
+
+    # ONE optional argument, not a split word list -- every Unix does
+    # exactly this, so `-e -x` would arrive as a single argument.
+    ("shebang-interp-arg",
+     "#!/bin/dash -u\necho interp-arg-ok\n",
+     ["interp-arg-ok"]),
+]
+
+
 def volume(img):
     from mkpart_test import volume_of
     return volume_of(img)
@@ -201,7 +225,8 @@ def main():
 
     scratch = os.path.join(REPO, "build", "dash_scripts")
     os.makedirs(scratch, exist_ok=True)
-    for name, body, _ in cases:
+    shebang = [c for c in SHEBANG if not args.only or c[0] == args.only]
+    for name, body, _ in cases + shebang:
         p = os.path.join(scratch, name + ".sh")
         open(p, "w").write(body)
         r = subprocess.run([sys.executable, os.path.join(HERE, "tfs3_writer.py"),
@@ -249,6 +274,28 @@ def main():
             it = iter(got)
             ok = all(any(w == g for g in it) for w in want)
             if ok:
+                print(f"  ok    {name}")
+                passed += 1
+            else:
+                print(f"  FAIL  {name:24s} wanted {want}")
+                print(f"        got {got[:12]}")
+                failed += 1
+
+        # BY NAME, with no interpreter on the command line: if the
+        # loader does not read the `#!` line these fail as "not an ELF".
+        # The BARE path, never `spawn <path>` -- the physical shell's
+        # bare-name spawn WAITS, and `spawn` does not, so the child's
+        # output is not collected and every case reads as empty.
+        for name, _body, want in shebang:
+            try:
+                out = vm(args, "exec", f"/dt_{name}.sh alpha beta")
+                got = clean(out.stdout + out.stderr)
+            except subprocess.TimeoutExpired:
+                print(f"  FAIL  {name:24s} guest stopped answering")
+                failed += 1
+                continue
+            it = iter(got)
+            if all(any(w == g for g in it) for w in want):
                 print(f"  ok    {name}")
                 passed += 1
             else:

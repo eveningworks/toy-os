@@ -4037,3 +4037,39 @@ switched and the old space destroyed -- the exit path's ordering. A
 non-leader thread is refused (`-EPERM`) rather than given POSIX's
 pid swap. In ring 3: `execv`/`execve`/`execvp`, and `posix_spawn()`
 over `sys_spawn_opts()` for everything that is not a ported shell.
+
+## A SCRIPT RUNS BY NAME, AND `#!` IS THE LOADER'S JOB -- NEVER A SHELL'S
+
+`build_image()` (kernel/proc/scheduler.c) reads the first line before it
+tries the ELF loader, so a `#!` file runs identically from a bare name at
+either prompt, from `SYS_SPAWN` and from `execve()`. That is Linux's
+position -- `binfmt_script`, not bash -- and the reason to copy it is
+that the alternative is per-shell: whichever shell remembered to look
+gets scripts, and the other reports "not an ELF" on the same file. It is
+also why this landed as one change rather than once per shell, with
+`tosh` and `dash` gaining it together.
+
+**The interpreter's argv is `[interp, arg?, script, caller's args]`** --
+argv[0] is the interpreter AS WRITTEN, and the script's own path arrives
+next, which is how the interpreter learns what to open. So a script sees
+its own name in `$0` and its own arguments from `$1`, which
+`tools/dash_test.py`'s `shebang-args` case asserts rather than assumes.
+
+Three limits, all of them Unix's rather than ours. The line is read out
+of the first 128 bytes (`SHEBANG_MAX_LINE`; Linux's `BINPRM_BUF_SIZE` is
+the same number). **There is ONE optional argument, not a word list** --
+`#!/bin/dash -e -x` passes `-e -x` as a single argument on every Unix,
+and copying that is cheaper than explaining a local difference. And an
+interpreter that is itself a script nests at most `SHEBANG_MAX_DEPTH`
+times, which is what stops `#!/x` inside a file named `/x` looping the
+kernel.
+
+A malformed line -- no interpreter, or one longer than the buffer -- is
+treated as NOT A SCRIPT rather than as its own error, so the ordinary
+"not an ELF64 binary" reaches the caller instead of a second message
+about a file that may simply have begun with `#!` by accident.
+
+**The legacy `run` loader does NOT have this.** `elf_run_from_fs()`
+(kernel/proc/elf_run.c) is a separate path that never reaches
+`build_image()`, so a script typed after `run` still fails as a non-ELF.
+That gap is a roadmap item rather than a quiet difference.

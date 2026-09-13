@@ -130,7 +130,7 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] Directory lookup is O(n) -- measured 2026-08-20 with `mkfiles`: creates stay flat to 5,000 entries, lookups grow with position
 - [x] ~~An environment passed to a child~~ DONE 2026-08-21 -- `SYS_SPAWN` carries it explicitly; `environ` and inheritance are libc's
 - [x] ~~Ctrl-C~~ DONE 2026-08-22 -- each job in its own group, `tcsetpgrp` around it
-- [ ] **`#!` handling**, which is the loader's job, not the shell's: `elf_load()` rejects a non-ELF file
+- [x] ~~**`#!` handling**, which is the loader's job, not the shell's~~ DONE 2026-09-13 -- `build_image()`, for spawn and exec
 - [x] ~~`|` pipes between two commands~~ DONE 2026-08-19 -- N stages, not two
 - [ ] `&&`/`||`/`;`, globbing, aliases, and `$?`/`$1` EXPANSION -- `$?`'s value is already tracked
 - [x] ~~Line editing~~ DONE -- `kernel/lib/klineedit.c`, compiled twice so both rings edit with the same code
@@ -142,7 +142,7 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] An `export` builtin -- the environment itself is done (a `SYS_SPAWN` blob, `getenv`/`setenv`, `/tests/env_test`); no shell can SET one
 - [ ] `&&`, `||`, `;` command sequencing
 - [x] ~~Quoting/escaping (`"..."`, `'...'`, `\`)~~ DONE 2026-09-10 -- one lexer, and `SPAWN_ARGV` carries the words whole
-- [ ] Shell scripts, including `#!` handling in `run`
+- [ ] `#!` handling in the LEGACY `run` loader -- `elf_run_from_fs()` is a separate path from `build_image()`, which has it
 - [ ] Aliases
 
 ## Phase 2 -- memory
@@ -349,10 +349,10 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [x] ~~Wide characters~~ DONE 2026-09-13 -- a C-LOCALE implementation, which is the complete answer for a single-byte locale
 - [x] ~~`SIGPIPE` and `-EPIPE` on the pipe WRITE path~~ DONE 2026-09-13 -- a dead pipe raises and fails instead of spinning
 - [x] ~~`chmod`, so a mode can change at all~~ DONE 2026-09-13 -- `SYS_CHMOD`, `/bin/chmod`; the default is 0755 now
-- [ ] `#!` handling in the loader -- listed under Shell pipes & job control
+- [x] ~~`#!` handling in the loader~~ DONE 2026-09-13 -- a script runs by name, `tools/dash_test.py` 22/22
 - [x] ~~Vendor the port~~ DONE 2026-09-13 -- `userland/ports/dash/`, v0.5.13.5 verbatim, nothing builds it yet
 - [x] ~~A Makefile rule, running dash's six generators on the HOST~~ DONE 2026-09-13 -- `/bin/dash` builds and runs
-- [x] ~~Exercise it: pipelines, here-docs, functions, traps~~ DONE 2026-09-13 -- `tools/dash_test.py` 18/18; job control unproven
+- [x] ~~Exercise it: pipelines, here-docs, functions, traps~~ DONE 2026-09-13 -- `tools/dash_test.py` 22/22; job control unproven
 - [x] ~~Our own `mksignames`~~ DONE 2026-09-13 -- `tools/gen_signames.py`; no GPL reaches the binary
 - [ ] Toykit's `klineedit` wired into dash's one read-a-line seam -- dash ships no line editing
 - [ ] A `system.shell` setting, read by the four places that hardcode `/bin/tosh` today

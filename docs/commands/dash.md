@@ -59,10 +59,27 @@ lands there as one `#define`; porting it was mostly deciding what to
 answer. `tools/dash_gap.py` reads that same file, so the measurement and
 the build cannot disagree.
 
+## Running a script by name
+
+A file starting with `#!/bin/dash` runs as a command in its own right --
+`/tmp/build.sh arg` rather than `dash /tmp/build.sh arg`. **That is the
+LOADER's doing, not this shell's** (`build_image()` in
+kernel/proc/scheduler.c, the position Linux's `binfmt_script` takes), so
+it works the same from `tosh`, from `execve()` and from a bare name at
+either prompt. The interpreter receives the script's path as its first
+argument and `$0` is the script, as on every Unix.
+
+One optional argument may follow the interpreter -- `#!/bin/dash -u` --
+and it arrives as a SINGLE argument, so `-e -u` would be one word rather
+than two. Again standard, and again not this shell's choice.
+
 ## What is not done
 
-**It has not been proven to run a real script.** `dash -c pwd` prints
-`/`, `dash -c false` exits 1, and a missing script file is reported in
-dash's own voice -- so it parses, executes and reports correctly. What
-has not been exercised is pipelines, job control, here-documents or
-anything long. `tosh` remains the shell the system actually uses.
+**Job control is unproven.** `tools/dash_test.py` drives 22 cases --
+pipelines, redirection, here-documents, functions, parameter expansion,
+arithmetic, `case`, loops, command substitution, `test`, `trap`, exit
+status, and three `#!` scripts run by name -- and they pass. What that
+harness cannot give dash is a terminal, so `fg`/`bg`/`jobs` and the
+signal handling around them are not exercised at all.
+
+`tosh` remains the shell the system actually uses.

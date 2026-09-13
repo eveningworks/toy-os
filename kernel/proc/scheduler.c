@@ -890,7 +890,93 @@ static void switch_to_kernel(void) {
 // map the initial stack and lay argv/env/auxv out on it. On success
 // `*out_as` holds an address space nothing else refers to yet; on
 // failure nothing is held. `*out_image_end` is where the heap starts.
-static int build_image(const char *path, const char *argvec, size_t argvec_len,
+// --- `#!`, which is the LOADER's job and not the shell's ------------
+//
+// Linux does this in binfmt_script, and the reason to copy the position
+// rather than the mechanism is that a script then runs the same way from
+// `spawn`, from execve() and from either shell -- instead of from
+// whichever one remembered to look for the line.
+//
+// Two limits, both Linux's: the line is read out of the first
+// SHEBANG_MAX_LINE bytes (BINPRM_BUF_SIZE is 128 there), and a script
+// whose interpreter is itself a script nests at most SHEBANG_MAX_DEPTH
+// times, which is what stops `#!/x` in a file named `/x` looping the
+// kernel. ONE optional argument after the interpreter, not a split word
+// list -- every Unix does exactly this, and a shell writing
+// `#!/bin/dash -e -x` gets `-e -x` as a single argument on all of them.
+#define SHEBANG_MAX_LINE  128
+#define SHEBANG_MAX_DEPTH 4
+
+// Builds the interpreter's argument vector: [interp, arg?, script,
+// caller's args after argv[0]]. argv[0] is the interpreter AS WRITTEN
+// and the script's own path arrives as the next entry, which is how the
+// interpreter learns what to open. Returns a kmalloc'd vector and its
+// length, or 0 if it cannot fit -- refused, never truncated, the same
+// rule elf_argv_from_string() follows.
+static char *shebang_argv(const char *interp, const char *arg, const char *script,
+                          const char *argvec, size_t argvec_len, size_t *out_len) {
+    // The caller's args MINUS argv[0]: the interpreter replaces it.
+    const char *rest = 0;
+    size_t rest_len = 0;
+    if (argvec && argvec_len) {
+        size_t first = 0;
+        while (first < argvec_len && argvec[first]) first++;
+        if (first < argvec_len) {           // there is something after argv[0]
+            rest = argvec + first + 1;
+            rest_len = argvec_len - first - 1;
+        }
+    }
+
+    size_t need = k_strlen(interp) + 1 + k_strlen(script) + 1 + rest_len;
+    if (arg) need += k_strlen(arg) + 1;
+    if (need > SPAWN_ARGS_MAX) return 0;
+
+    char *out = kmalloc(need);
+    if (!out) return 0;
+    size_t n = 0;
+    n += (size_t)k_strlcpy(out + n, interp, need - n) + 1;
+    if (arg) n += (size_t)k_strlcpy(out + n, arg, need - n) + 1;
+    n += (size_t)k_strlcpy(out + n, script, need - n) + 1;
+    if (rest_len) { k_memcpy(out + n, rest, rest_len); n += rest_len; }
+    *out_len = n;
+    return out;
+}
+
+// Reads `path`'s first line and, if it is a `#!`, writes the interpreter
+// into `interp` (cap `interp_cap`) and the optional single argument into
+// `arg`. Returns 1 if this file is a script, 0 if it is not one (or the
+// line is malformed, which is treated as "not a script" so the ordinary
+// "not an ELF" error reaches the caller rather than a second one).
+static int shebang_read(const char *path, char *interp, size_t interp_cap,
+                        char *arg, size_t arg_cap) {
+    char line[SHEBANG_MAX_LINE];
+    uint32_t got = fs_read_range(path, 0, line, sizeof line);
+    if (got < 3 || line[0] != '#' || line[1] != '!') return 0;
+
+    size_t i = 2, n = got < sizeof line ? got : sizeof line;
+    while (i < n && (line[i] == ' ' || line[i] == '\t')) i++;
+    size_t start = i;
+    while (i < n && line[i] != ' ' && line[i] != '\t' &&
+           line[i] != '\n' && line[i] != '\r') i++;
+    if (i == start || i - start >= interp_cap) return 0;
+    k_memcpy(interp, line + start, i - start);
+    interp[i - start] = 0;
+
+    // The optional argument: everything left on the line, trimmed at
+    // both ends, as ONE string.
+    arg[0] = 0;
+    while (i < n && (line[i] == ' ' || line[i] == '\t')) i++;
+    size_t astart = i;
+    while (i < n && line[i] != '\n' && line[i] != '\r') i++;
+    while (i > astart && (line[i - 1] == ' ' || line[i - 1] == '\t')) i--;
+    if (i > astart && i - astart < arg_cap) {
+        k_memcpy(arg, line + astart, i - astart);
+        arg[i - astart] = 0;
+    }
+    return 1;
+}
+
+static int build_elf_image(const char *path, const char *argvec, size_t argvec_len,
                        const char *env, uint64_t *out_as, uint64_t *out_entry,
                        uint64_t *out_rsp, uint64_t *out_image_end) {
     // THE IMAGE IS READ INTO MEMORY THIS FUNCTION OWNS (fs_read_into),
@@ -1021,6 +1107,38 @@ static void mm_reset(int slot, uint64_t image_end) {
     procs[slot].mm.brk          = heap_base;
     procs[slot].mm.stack_bottom = UADDR_STACK_INIT_BOTTOM;
     k_memset(procs[slot].mm.regions, 0, sizeof procs[slot].mm.regions);
+}
+
+// The loader every caller actually reaches: resolves `#!` first, then
+// loads a real ELF. A script's interpreter may itself be a script, so
+// this loops rather than recursing once -- bounded by SHEBANG_MAX_DEPTH.
+static int build_image(const char *path, const char *argvec, size_t argvec_len,
+                       const char *env, uint64_t *out_as, uint64_t *out_entry,
+                       uint64_t *out_rsp, uint64_t *out_image_end) {
+    char interp[SHEBANG_MAX_LINE], arg[SHEBANG_MAX_LINE];
+    char *owned = 0;
+
+    for (int depth = 0; shebang_read(path, interp, sizeof interp,
+                                     arg, sizeof arg); depth++) {
+        if (depth >= SHEBANG_MAX_DEPTH) { kfree(owned); return 0; }
+        size_t len = 0;
+        char *next = shebang_argv(interp, arg[0] ? arg : 0, path,
+                                  argvec, argvec_len, &len);
+        if (!next) { kfree(owned); return 0; }
+        kfree(owned);               // the vector this one was built from
+        owned = next;
+        argvec = next;
+        argvec_len = len;
+        path = interp;
+        // `path` now aliases `interp`, which the next pass overwrites --
+        // safe only because shebang_argv() above has already copied it
+        // into `owned` before that happens.
+    }
+
+    int rc = build_elf_image(path, argvec, argvec_len, env,
+                             out_as, out_entry, out_rsp, out_image_end);
+    kfree(owned);
+    return rc;
 }
 
 static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len,
