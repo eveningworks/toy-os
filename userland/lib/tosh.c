@@ -33,7 +33,9 @@
 // for the same reason in a different disguise (it could not read fd 0,
 // so `foo | cat` printed an error). Three instances of one mistake.
 #include "lib/tosh.h"
+#include "lib/usetting.h"  // system.shell -- who interprets a bare script
 #include "rt/sys.h"
+#include <string.h>   // strcmp -- the script-shell fallback
 #include <ksignal.h> // signal_name() -- one table, shared with the kernel
 #include "lib/tosh_jobs.h"
 #include "lib/upath.h"  // upath_find_program() -- shared with /bin/strace
@@ -635,6 +637,24 @@ full:
     return -1;
 }
 
+// Does this path name a file this shell could hand to an interpreter?
+// Existence only: the kernel decides whether it is executable, and
+// asking twice would be a second answer to drift from the first.
+static int uaccess_ok(const char *path) {
+    struct sys_stat st;
+    return path && path[0] && sys_stat(path, &st) == 0;
+}
+
+// WHICH SHELL interprets a file that is not a program -- `system.shell`,
+// the same setting a terminal starts. Falls back to /bin/dash rather
+// than to this shell, which has no control flow to interpret one with.
+static const char *tosh_script_shell(char *buf, size_t cap) {
+    if (usetting_get("system.shell", buf, cap) && buf[0] &&
+        strcmp(buf, "/bin/tosh") != 0)
+        return buf;
+    return "/bin/dash";
+}
+
 // The command word of a stage, for deciding builtin vs external.
 static int stage_is_builtin(const char *w) {
     return seq(w, "cd") || seq(w, "pwd") || seq(w, "help") ||
@@ -884,6 +904,38 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
         o.pgid = job_pgid > 0 ? job_pgid : PGID_NEW;
         o.flags = job_pgid > 0 || background ? 0 : SPAWN_FOREGROUND;
         st[i].pid = sys_spawn_opts(path, &o);
+
+        // **A FILE THAT IS NOT A PROGRAM IS RUN BY A SHELL, and that is
+        // POSIX rather than a nicety.** execve() answers ENOEXEC for a
+        // file with no `#!` and no ELF header, and every shell responds
+        // by interpreting it -- which is why `./script.sh` works
+        // everywhere without a shebang. This shell cannot interpret
+        // anything (it has no control flow), so it hands the file to
+        // the configured one; `system.shell` names it.
+        //
+        // Tried only when the file EXISTS, so a genuine typo still
+        // reports "not found" rather than starting a shell on nothing.
+        if (st[i].pid <= 0 && uaccess_ok(path)) {
+            const char *sh_argv[TOSH_WORD_MAX + 2];
+            char shbuf[128];
+            sh_argv[0] = tosh_script_shell(shbuf, sizeof shbuf);
+            for (int k = 0; k < argc && k < TOSH_WORD_MAX; k++)
+                sh_argv[k + 1] = (k == 0) ? path : argv[k];
+            sh_argv[argc + 1] = 0;
+            o.argv = (char *const *)sh_argv;
+            st[i].pid = sys_spawn_opts(sh_argv[0], &o);
+            o.argv = (char *const *)argv;
+        }
+
+        // **AND A FAILURE IS REPORTED.** This was silent: a spawn that
+        // could not happen produced no message at all and left the job
+        // with a status nothing had earned, which is how a script that
+        // would not run looked like the shell ignoring the command.
+        if (st[i].pid <= 0) {
+            emit(sh, argv[0]);
+            emit(sh, ": cannot execute\n");
+        }
+
         if (st[i].pid > 0 && job_pgid <= 0)
             job_pgid = sys_getpgid(st[i].pid);
 
