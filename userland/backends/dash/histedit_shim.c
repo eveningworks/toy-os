@@ -20,9 +20,18 @@
 #include <errno.h>
 #include "klineedit.h"
 #include "lib/uline.h"
+#include "lib/ucomplete.h" // the SHARED completion engine, not a second one
+#include "completion.h"
+#include "histsearch.h"   // the SHARED reverse-search loop
 #include "rt/sys.h"   // sys_tty_raw/_tcgetattr/_tcsetattr
 
 #define HIST_DEFAULT 500
+
+static void put_str(const char *s) {
+    size_t n = 0;
+    while (s[n]) n++;
+    if (n) write(1, s, n);
+}
 
 struct History {
     char **ent;      // ent[0] is the OLDEST
@@ -172,6 +181,55 @@ int history(History *h, HistEvent *ev, int op, ...) {
     return rc;
 }
 
+// The newest entry, or 0 -- Alt-. inserts its last word.
+static const char *hist_newest(History *h) {
+    return (h && h->n > 0) ? h->ent[h->n - 1] : 0;
+}
+
+// --- Ctrl-R, over the SHARED search loop ------------------------------
+//
+// kernel/lib/histsearch.c is compiled twice and reached through a
+// `struct histsearch_env` of callbacks, which is the seam that lets it
+// serve a history it knows nothing about -- the kernel shell's, tosh's,
+// and this one. So Ctrl-R here is the same loop and the same key
+// handling as everywhere else, not a second search.
+static EditLine *g_searching;    // the env's callbacks take a ctx; this is it
+
+static int hs_count(void *ctx) {
+    (void)ctx;
+    return g_searching && g_searching->hist ? g_searching->hist->n : 0;
+}
+
+// NEWEST FIRST, because a reverse search walks backwards in time and
+// index 0 must be the most recent thing typed.
+static const char *hs_entry(void *ctx, int i) {
+    (void)ctx;
+    History *h = g_searching ? g_searching->hist : 0;
+    if (!h || i < 0 || i >= h->n) return 0;
+    return h->ent[h->n - 1 - i];
+}
+
+static int hs_getkey(void *ctx) {
+    (void)ctx;
+    char c;
+    for (;;) {
+        ssize_t n = read(0, &c, 1);
+        if (n == 1) return (unsigned char)c;
+        if (n < 0 && errno == EINTR) continue;
+        return -1;
+    }
+}
+
+static void hs_paint(void *ctx, const char *pattern, const char *match) {
+    (void)ctx;
+    // One row, rewritten in place: the search prompt replaces the
+    // shell's while it is up, exactly as bash's does.
+    put_str("\r\x1b[K(reverse-i-search)`");
+    put_str(pattern ? pattern : "");
+    put_str("': ");
+    put_str(match ? match : "");
+}
+
 // --- the editor ------------------------------------------------------
 
 EditLine *el_init(const char *prog, FILE *fin, FILE *fout, FILE *ferr) {
@@ -315,6 +373,69 @@ const char *el_gets(EditLine *el, int *count) {
                     kline_set(&el->ed, ev.str);
                     uline_paint(p, &el->ed, &el->row_shown);
                 }
+                break;
+            }
+
+            // --- the four that used to fall through here --------------
+            //
+            // The editor RECOGNISES all of these; acting on them is the
+            // front end's job, and ignoring them is why Tab, Ctrl-L,
+            // Ctrl-R and Alt-. did nothing in dash while working in
+            // /bin/tosh. **A key that still does nothing belongs in
+            // klineedit's keymap, not here** -- adding one here would be
+            // the second keymap that rule exists to prevent.
+            case KLINE_CLEAR_SCREEN:
+                uline_clear_screen(p, &el->ed, &el->row_shown);
+                break;
+
+            case KLINE_LAST_ARG:
+                uline_insert_last_arg(&el->ed, hist_newest(el->hist));
+                uline_paint(p, &el->ed, &el->row_shown);
+                break;
+
+            case KLINE_COMPLETE: {
+                // ~3 KB, and a ring-3 frame is budgeted at 2 KB, so
+                // static rather than stack -- tosh's has the same note.
+                static struct completion_result cr;
+                if (!completion_run_env(ucomplete_env(), el->ed.buf,
+                                        el->ed.cursor, &cr))
+                    break;
+                if (cr.insert[0]) kline_insert_str(&el->ed, cr.insert);
+                if (cr.add_space) kline_insert_str(&el->ed, " ");
+                if (cr.count <= 1) {          // one candidate needs no list
+                    uline_paint(p, &el->ed, &el->row_shown);
+                    break;
+                }
+                uline_list_candidates(p, &el->ed, &el->row_shown,
+                                      (const char *)cr.candidates, cr.count,
+                                      COMPLETION_MAX_LEN);
+                break;
+            }
+
+            case KLINE_SEARCH: {
+                static const struct histsearch_env env = {
+                    0, hs_count, hs_entry, hs_getkey, hs_paint,
+                };
+                g_searching = el;
+                const char *match = 0;
+                enum histsearch_result r = histsearch_run(&env, &match);
+                g_searching = 0;
+
+                put_str("\r\x1b[K");
+                el->row_shown = 0;
+                if (r != HISTSEARCH_CANCELLED && match)
+                    kline_set(&el->ed, match);
+                // ACCEPTED means Enter ended the search, which in bash
+                // RUNS the match rather than merely recalling it.
+                if (r == HISTSEARCH_ACCEPTED) {
+                    write(1, "\n", 1);
+                    el->row_shown = 0;
+                    if (el->ed.len > 0 && el->hist)
+                        hist_add(el->hist, el->ed.buf);
+                    restore_tty(el);
+                    return finish(el, count);
+                }
+                uline_paint(p, &el->ed, &el->row_shown);
                 break;
             }
 

@@ -317,17 +317,7 @@ static void complete_line(void) {
 // Ends the current line on screen and starts a fresh one. Used before
 // anything that prints (a command's output, ^C) so it does not land on
 // top of the line being edited.
-static void end_line(void) {
-    // Park the caret past the last character first: redraw() leaves it
-    // wherever ed.cursor is, and a '\n' from the middle of a wrapped
-    // line would start the next output on top of the rest of it.
-    int save = g_ed.cursor;
-    g_ed.cursor = g_ed.len;
-    redraw();
-    g_ed.cursor = save;
-    put("\n");
-    g_row_shown = 0;
-}
+static void end_line(void) { uline_end(prompt(), &g_ed, &g_row_shown); }
 
 // TELL THE TERMINAL WHERE THIS SHELL IS STANDING.
 //
@@ -374,11 +364,7 @@ static void fresh_prompt(void) {
 
 // Alt-. -- the last whitespace-delimited word of the previous command.
 static void insert_last_arg(void) {
-    const char *last = uhist_last(&g_hist);
-    if (!last) return;
-    int n = (int)strlen(last);
-    int start = kline_ws_word_start(last, n, n);
-    kline_insert_str(&g_ed, last + start);
+    uline_insert_last_arg(&g_ed, uhist_last(&g_hist));
 }
 
 int main(int argc, char **argv) {
@@ -624,9 +610,7 @@ int main(int argc, char **argv) {
                 // directly, this writes the escape -- which is the
                 // split klineedit.h describes: the core decides WHAT
                 // Ctrl-L means and each front end owns HOW.
-                put("\x1b[2J\x1b[H");
-                g_row_shown = 0;
-                redraw();
+                uline_clear_screen(prompt(), &g_ed, &g_row_shown);
                 break;
 
             case KLINE_COMPLETE:

@@ -62,3 +62,53 @@ void uline_paint(const char *prompt, const struct kline_edit *ed, int *row_shown
 
     *row_shown = cur_row;
 }
+
+void uline_end(const char *prompt, struct kline_edit *ed, int *row_shown) {
+    int save = ed->cursor;
+    ed->cursor = ed->len;
+    uline_paint(prompt, ed, row_shown);
+    ed->cursor = save;
+    put("\n");
+    *row_shown = 0;
+}
+
+void uline_clear_screen(const char *prompt, struct kline_edit *ed, int *row_shown) {
+    // ESC[2J ESC[H -- erase the display, caret to the top -- then put
+    // the prompt and the half-typed line back. Both ring-3 front ends
+    // reach the same behaviour this way; the kernel shell calls the
+    // console directly, which is the split klineedit.h describes.
+    put("\x1b[2J\x1b[H");
+    *row_shown = 0;
+    uline_paint(prompt, ed, row_shown);
+}
+
+void uline_insert_last_arg(struct kline_edit *ed, const char *previous) {
+    if (!previous || !*previous) return;
+    int n = (int)strlen(previous);
+    int start = kline_ws_word_start(previous, n, n);
+    kline_insert_str(ed, previous + start);
+}
+
+void uline_list_candidates(const char *prompt, struct kline_edit *ed, int *row_shown,
+                           const char *candidates, int count, int stride) {
+    if (count <= 0 || stride <= 0 || !candidates) return;
+    uline_end(prompt, ed, row_shown);
+
+    int widest = 0;
+    for (int i = 0; i < count; i++) {
+        int l = (int)strlen(candidates + (size_t)i * stride);
+        if (l > widest) widest = l;
+    }
+    int colw = widest + 2;
+    int cols = uline_cols() / colw;
+    if (cols < 1) cols = 1;   // a candidate wider than the window gets a row
+
+    int col = 0;
+    for (int i = 0; i < count; i++) {
+        const char *c = candidates + (size_t)i * stride;
+        put(c);
+        if (++col == cols || i + 1 == count) { put("\n"); col = 0; continue; }
+        for (int pad = (int)strlen(c); pad < colw; pad++) put(" ");
+    }
+    uline_paint(prompt, ed, row_shown);
+}

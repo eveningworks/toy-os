@@ -138,6 +138,37 @@ int main(void) {
     if (put(master, "\n") < 0) return 8;
     if (waited(master, "alpha", mark) < 0) return 9;
 
+    // --- 4. the four keys that used to do nothing --------------------
+    //
+    // Each is recognised by the editor and acted on by the front end, so
+    // a regression here means the shim stopped handling an action rather
+    // than the editor forgetting a key.
+
+    // Ctrl-L clears: ESC[2J is the erase-display sequence, and it is in
+    // the stream only because something acted on KLINE_CLEAR_SCREEN.
+    if ((int)sys_write(master, "\x0c", 1) != 1) return 12;
+    if ((mark = waited(master, "\x1b[2J", mark)) < 0) return 13;
+
+    // Alt-. inserts the last WORD of the previous line, which is
+    // "alpha" -- an ESC prefix then '.', the way Meta arrives here.
+    if ((int)sys_write(master, "\x1b", 1) != 1) return 14;
+    if ((int)sys_write(master, ".", 1) != 1) return 14;
+    if ((mark = waited(master, "alpha", mark)) < 0) return 15;
+    // Ctrl-U clears the line again so the next phase starts clean.
+    if ((int)sys_write(master, "\x15", 1) != 1) return 16;
+
+    // Tab completes against the SHARED engine: `ech` has exactly one
+    // completion, so the line becomes `echo `.
+    if (put(master, "ech") < 0) return 17;
+    if ((int)sys_write(master, "\t", 1) != 1) return 18;
+    if ((mark = waited(master, "echo", mark)) < 0) return 19;
+    if ((int)sys_write(master, "\x15", 1) != 1) return 20;
+
+    // Ctrl-R opens the shared reverse search, which announces itself.
+    if ((int)sys_write(master, "\x12", 1) != 1) return 21;
+    if ((mark = waited(master, "reverse-i-search", mark)) < 0) return 22;
+    if ((int)sys_write(master, "\x07", 1) != 1) return 23;   // Ctrl-G cancels
+
     put(master, "exit\n");
     sys_close(master);
     sys_close(slave);

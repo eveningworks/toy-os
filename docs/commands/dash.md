@@ -47,15 +47,12 @@ screen fills with blanks -- an arrow key "types spaces". `set +E` turns
 editing off if you want upstream's behaviour, and an explicit `-V` still
 selects vi mode, which gets the same editor because there is only one.
 
-**Four editing keys are not wired up: Tab, Ctrl-L, Ctrl-R and Alt-.**
-The editor RECOGNISES all four -- it reports `KLINE_COMPLETE`,
-`KLINE_CLEAR_SCREEN`, `KLINE_SEARCH` and `KLINE_LAST_ARG` -- and
-`userland/backends/dash/histedit_shim.c` acts on six of the eleven
-actions and ignores those. So this is a gap in the front end, not
-something dash lacks; `/bin/tosh` handles all eleven. Tab is the one
-with a rule attached: completion is ONE engine compiled twice
-(`kernel/lib/completion.c`, behind a `completion_env`), so dash must use
-that rather than grow a second.
+**Tab, Ctrl-L, Ctrl-R and Alt-. work, and they are the same code
+`tosh` runs.** Tab completes through the one completion engine
+(`kernel/lib/completion.c`, behind a `completion_env`), Ctrl-R is the
+one reverse-search loop over a `histsearch_env` of callbacks, and
+Ctrl-L and Alt-. are shared helpers in `userland/lib/uline.c`. Nothing
+here is a second implementation, which is the point.
 
 ## How it is built
 
@@ -103,8 +100,5 @@ which is the `tcsetpgrp()` that needed sessions to work at all.
 
 **`bg` and Ctrl-Z are not covered**, nor is `fc`, which compiles now
 (dropping `SMALL` turned on `histedit.c`) and has never been run.
-
-**Tab, Ctrl-L, Ctrl-R and Alt-. do nothing** -- see the editing section
-above for why: the shim acts on six of the editor's eleven actions.
 
 `tosh` remains the shell the system actually uses.
