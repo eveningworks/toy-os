@@ -139,13 +139,20 @@ static void put_int(struct out *o, uint64_t v, int is_signed, int base,
         mag /= (unsigned)base;
     } while (mag);
 
+    if (prec >= 0) zero = 0;                    // C: precision overrides '0'
+    if (prec == 0 && v == 0) n = 0;             // `%.0d` of zero: nothing
+
     // '#' on octal means "make sure it starts with a 0", so a value that
     // already does gains nothing -- unlike hex's 0x, which is always two
     // extra characters.
-    if (alt && base == 8 && digits[n - 1] != '0') digits[n++] = '0';
-
-    if (prec >= 0) zero = 0;                    // C: precision overrides '0'
-    if (prec == 0 && v == 0) n = 0;             // `%.0d` of zero: nothing
+    //
+    // **AFTER the `%.0d` rule above, not before it.** C says '#' on
+    // octal "increases the precision, if and only if necessary, to force
+    // the first digit to be a zero" -- so it OUTRANKS a precision of
+    // zero, and `%#.0o` of 0 is "0" where `%.0o` of 0 is empty. Doing
+    // this first let the precision rule then delete the very digit the
+    // flag had just guaranteed, and printed nothing at all.
+    if (alt && base == 8 && (n == 0 || digits[n - 1] != '0')) digits[n++] = '0';
 
     int zeros = 0;
     if (prec > n) zeros = prec - n;

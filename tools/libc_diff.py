@@ -61,7 +61,7 @@ strtod strtol strtoll strtoul strtoull""".split()
 INT_CONVS = ["d", "i", "u", "x", "X", "o"]
 FLAGS = ["", "-", "+", "#", "0", "0+"]
 WIDTHS = ["", "5", "8"]
-PRECS = ["", ".3"]
+PRECS = ["", ".0", ".3"]   # .0 is where a precision and '#' collide
 LENGTHS = ["", "hh", "h", "l", "ll"]
 INT_ARGS = [0, 1, -1, 42, 255, 256, 65536, -2147483648]
 
@@ -80,12 +80,29 @@ STRTOL_INPUTS = [
 ]
 STRTOL_BASES = [0, 8, 10, 16, 36]
 
+# **LENGTH IS ITS OWN AXIS.** A written number's DIGIT COUNT and the
+# magnitude it denotes are different things, and conflating them is what
+# made "1" + 309 zeros + "e-309" -- whose value is 1 -- come out
+# infinite. None of the short inputs below could have found that, so the
+# long ones are built programmatically at the end of this list.
 STRTOD_INPUTS = [
     '"0"', '"0.0"', '"1"', '"1.5"', '"-1.5"', '"  3.25"', '".5"', '"5."',
     '"1e3"', '"1e-3"', '"1E3"', '"1e"', '"1e+"', '"0e999"', '"1e999"',
     '"1e-999"', '"1e308"', '"1e309"', '"1e-310"', '"1e-323"',
     '"inf"', '"-inf"', '"nan"', '"0x1p2"', '"0x10"', '"z"', '""',
     '"3.14159265358979"', '"123456789012345678901234567890"',
+    # The spelled-out forms: stopping at three characters is a wrong
+    # answer, not a refusal -- "infinity" left "inity" for the caller.
+    '"infinity"', '"INFINITY"', '"-infinity"', '"nan(1234)"', '"nan(_x9)"',
+    '"nan()"', '"infi"', '"0x1p1024"', '"0x1p-1074"', '"0x1p-1080"',
+]
+
+# Numbers far longer than a double's range, whose VALUE is ordinary.
+STRTOD_INPUTS += [
+    '"1' + '0' * 309 + 'e-309"',      # == 1
+    '"0.' + '1' * 310 + '"',          # == 0.111...
+    '"' + '9' * 400 + '"',            # overflows however it is read
+    '"0.' + '0' * 320 + '1"',         # a subnormal written the long way
 ]
 
 

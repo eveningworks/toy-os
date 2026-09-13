@@ -75,9 +75,17 @@ void abort(void) {
     // with an unusual status, a handler installed for SIGABRT runs, and
     // a core-dumping default would be reachable if one is ever added.
     //
-    // SIGABRT is reset to the default first, because C requires abort()
-    // to terminate even when the program has caught it and the handler
-    // returns.
+    // **THE INSTALLED HANDLER RUNS FIRST.** C says abort() raises
+    // SIGABRT, and a handler for it is allowed to run -- that is the
+    // whole point of catching it, and it is where a program writes its
+    // crash report. Resetting to SIG_DFL before the first raise, as
+    // this did, meant an installed handler was never called at all.
+    //
+    // C also says abort() must TERMINATE even if the handler returns.
+    // So: raise once with whatever the program installed, and if we are
+    // still here afterwards, reset to the default and raise again --
+    // which cannot be caught a second time.
+    raise(SIGABRT);
     signal(SIGABRT, SIG_DFL);
     raise(SIGABRT);
     // Unreachable unless SIGABRT is blocked, which C says abort() must
@@ -398,6 +406,13 @@ void srand(unsigned seed) { g_seed = seed; }
 // rounded conversion (Clinger, or Eisel-Lemire) is a real project and
 // docs/libc-design.md has it as one; this is accurate to a couple of
 // ULP and honest about it. tools/libc_diff.py measures the gap.
+// Case-insensitive prefix match, for the spelled-out inf/nan forms.
+static int ci_prefix(const char *s, const char *word) {
+    for (; *word; s++, word++)
+        if (tolower((unsigned char)*s) != *word) return 0;
+    return 1;
+}
+
 static double scale10(double v, int e) {
     // ZERO STAYS ZERO WHATEVER THE EXPONENT. "0e999" denotes 0, and
     // reaching the multiply at all produced 0 * inf = NaN.
@@ -426,14 +441,27 @@ double strtod(const char *nptr, char **endptr) {
 
     // inf/nan before digits, because "inf" is a legal input and would
     // otherwise parse as no conversion at all.
-    if ((s[0] == 'i' || s[0] == 'I') && (s[1] == 'n' || s[1] == 'N') &&
-        (s[2] == 'f' || s[2] == 'F')) {
-        if (endptr) *endptr = (char *)(s + 3);
+    // **"infinity" AND "nan(...)" ARE THE LONGER SPELLINGS C SPECIFIES,
+    // and stopping at three characters is a wrong ANSWER rather than a
+    // refusal**: "infinity" parsed as inf with endptr after "inf",
+    // leaving "inity" for the caller to trip over. C says take the
+    // LONGEST match of either form.
+    if (ci_prefix(s, "inf")) {
+        s += ci_prefix(s, "infinity") ? 8 : 3;
+        if (endptr) *endptr = (char *)s;
         return neg ? -INFINITY : INFINITY;
     }
-    if ((s[0] == 'n' || s[0] == 'N') && (s[1] == 'a' || s[1] == 'A') &&
-        (s[2] == 'n' || s[2] == 'N')) {
-        if (endptr) *endptr = (char *)(s + 3);
+    if (ci_prefix(s, "nan")) {
+        s += 3;
+        // An n-char-sequence in parentheses is part of the token. The
+        // payload is accepted and DISCARDED -- this library has one NaN
+        // -- but it must be consumed, or the caller sees "(1234)".
+        if (*s == '(') {
+            const char *q = s + 1;
+            while (*q == '_' || isalnum((unsigned char)*q)) q++;
+            if (*q == ')') s = q + 1;
+        }
+        if (endptr) *endptr = (char *)s;
         return NAN;
     }
 
@@ -483,30 +511,74 @@ double strtod(const char *nptr, char **endptr) {
                 bexp += pneg ? -pe : pe;
             }
         }
-        while (bexp > 0)  { hv *= 2.0; bexp--; }
-        while (bexp < 0)  { hv /= 2.0; bexp++; }
+        // ERANGE on the way out of range, the same contract scale10()
+        // holds for the decimal form -- a caller cannot tell a genuine
+        // infinity from an overflowed one without it.
+        while (bexp > 0)  {
+            hv *= 2.0; bexp--;
+            if (hv > DBL_MAX) { errno = ERANGE; break; }
+        }
+        while (bexp < 0)  {
+            hv /= 2.0; bexp++;
+            if (hv == 0.0) { errno = ERANGE; break; }
+        }
         if (endptr) *endptr = (char *)s;
         return neg ? -hv : hv;
     }
 
-    double v = 0.0;
-    int any = 0;
-    for (; isdigit((unsigned char)*s); s++) { v = v * 10.0 + (*s - '0'); any = 1; }
+    // **THE MANTISSA IS AN INTEGER AND THE DIGIT COUNT IS AN EXPONENT.**
+    // It used to accumulate into a double: `v = v * 10 + d` for the
+    // integer part, and a parallel `frac`/`scale` pair for the fraction.
+    // That overflows to +inf after 309 digits, BEFORE the exponent has
+    // been applied -- so "1" followed by 309 zeros and "e-309", whose
+    // value is 1, came out infinite, and "0." followed by 310 ones came
+    // out NaN (inf/inf). The magnitude of the written-out number is not
+    // the magnitude of what it denotes, and the old shape conflated
+    // them.
+    //
+    // Accumulating at most DIG_MAX significant digits into a uint64 and
+    // COUNTING the rest into exp10 keeps every intermediate finite
+    // whatever the input's length. 19 because 10^19 overflows a uint64
+    // and 10^18 does not; a double carries ~17 significant digits, so
+    // nothing that would have changed the result is being dropped.
+    #define DIG_MAX 19
+    uint64_t mant = 0;
+    int ndig = 0, exp10 = 0, any = 0;
+    // **A LEADING ZERO IS NOT A SIGNIFICANT DIGIT, and counting it as one
+    // spends the budget before the number starts.** "0." followed by 320
+    // zeros and a 1 filled DIG_MAX with zeros and then DISCARDED the
+    // only digit that carried value, returning 0 for a number that is
+    // small but perfectly representable. `mant == 0` is the test for
+    // "nothing significant yet".
+    for (; isdigit((unsigned char)*s); s++) {
+        any = 1;
+        if (mant == 0 && *s == '0') continue;       // leading zero: free
+        if (ndig < DIG_MAX) { mant = mant * 10 + (uint64_t)(*s - '0'); ndig++; }
+        else exp10++;          // past capacity: its PLACE still counts
+    }
     if (*s == '.') {
         s++;
-        // The fraction is accumulated as an INTEGER and scaled once at
-        // the end. Dividing as it goes (v += d / scale) compounds a
-        // rounding error per digit; one division at the end has one.
-        double frac = 0.0, scale = 1.0;
         for (; isdigit((unsigned char)*s); s++) {
-            frac = frac * 10.0 + (*s - '0');
-            scale *= 10.0;
             any = 1;
+            // A leading zero here costs no budget but DOES move the
+            // point -- that is the whole difference from the integer
+            // side, where a leading zero means nothing at all.
+            if (mant == 0 && *s == '0') { exp10--; continue; }
+            // A digit we can still hold moves the point left; one we
+            // cannot is dropped and moves nothing, being below the
+            // precision a double can express.
+            if (ndig < DIG_MAX) {
+                mant = mant * 10 + (uint64_t)(*s - '0');
+                ndig++;
+                exp10--;
+            }
         }
-        if (scale > 1.0) v += frac / scale;
     }
     if (!any) { if (endptr) *endptr = (char *)nptr; return 0.0; }
+    double v = (double)mant;
 
+    // exp10 carries the decimal point's position even when no 'e'
+    // follows, so the scaling below is not conditional on one.
     if (*s == 'e' || *s == 'E') {
         const char *save = s;
         s++;
@@ -522,9 +594,16 @@ double strtod(const char *nptr, char **endptr) {
                 if (e < 100000) e = e * 10 + (*s - '0');
             }
             if (eneg) e = -e;
-            v = scale10(v, e);
+            // CLAMPED before it is added, so a written exponent near
+            // INT_MIN/INT_MAX cannot wrap when the digit count is folded
+            // into it. Anything past +-100000 is unambiguously overflow
+            // or underflow and scale10() will say so.
+            if (e > 100000) e = 100000;
+            if (e < -100000) e = -100000;
+            exp10 += e;
         }
     }
+    v = scale10(v, exp10);
     if (endptr) *endptr = (char *)s;
     return neg ? -v : v;
 }

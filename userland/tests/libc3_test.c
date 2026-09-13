@@ -355,5 +355,52 @@ int main(void) {
         utest_check(sorted, "qsort sorts 4000 reversed elements");
     }
 
+        // --- the second review round --------------------------------------
+    {
+        // A number's DIGIT COUNT is not its magnitude. Both of these
+        // used to overflow the mantissa before the exponent was applied.
+        static char longnum[400];
+        longnum[0] = '1';
+        for (int i = 1; i <= 309; i++) longnum[i] = '0';
+        strcpy(longnum + 310, "e-309");
+        utest_check(strtod(longnum, 0) == 1.0,
+                    "1 then 309 zeros then e-309 is ONE, not infinity");
+
+        static char ones[400];
+        ones[0] = '0'; ones[1] = '.';
+        for (int i = 0; i < 310; i++) ones[2 + i] = '1';
+        ones[312] = 0;
+        double f = strtod(ones, 0);
+        utest_check(f > 0.11 && f < 0.12, "0. then 310 ones is ~0.111, not NaN");
+
+        // A leading zero is not a significant digit -- counting it as
+        // one spent the budget before the value began.
+        static char tiny[400];
+        tiny[0] = '0'; tiny[1] = '.';
+        for (int i = 0; i < 320; i++) tiny[2 + i] = '0';
+        tiny[322] = '1'; tiny[323] = 0;
+        utest_check(strtod(tiny, 0) > 0.0,
+                    "a subnormal written with 320 leading zeros is not zero");
+    }
+    {
+        // The spelled-out forms are one token, not three characters.
+        utest_check(strtod("infinity", &end) > 1e308 && *end == 0,
+                    "\"infinity\" is consumed whole");
+        utest_check(strtod("nan(1234)", &end) != strtod("nan(1234)", &end) &&
+                    *end == 0, "\"nan(payload)\" is consumed whole");
+        errno = 0;
+        double hx = strtod("0x1p1024", 0);
+        utest_check(hx > 1e308 && errno == ERANGE,
+                    "a hex float that overflows reports ERANGE");
+    }
+    {
+        // '#' on octal outranks a precision of zero.
+        char b[16];
+        snprintf(b, sizeof b, "%#.0o", 0);
+        utest_check(strcmp(b, "0") == 0, "%#.0o of zero is \"0\", not empty");
+        snprintf(b, sizeof b, "%.0o", 0);
+        utest_check(strcmp(b, "") == 0, "...while %.0o of zero is still empty");
+    }
+
     return utest_end();
 }

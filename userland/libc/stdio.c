@@ -88,14 +88,18 @@ struct _FILE {
 static unsigned char g_inbuf[BUFSIZ];
 static unsigned char g_outbuf[BUFSIZ];
 
+// The lock trio is spelled out rather than left to the implicit zero,
+// so -Wextra stays quiet AND so the next field added to the struct
+// produces the same warning again instead of landing silently in the
+// wrong positional slot.
 static FILE g_std[3] = {
-    { 0, g_inbuf,  BUFSIZ, 0, 0, {0}, 0, _IOFBF, F_READ  | F_INUSE },
-    { 1, g_outbuf, BUFSIZ, 0, 0, {0}, 0, _IOFBF, F_WRITE | F_INUSE },
+    { 0, g_inbuf,  BUFSIZ, 0, 0, {0}, 0, _IOFBF, F_READ  | F_INUSE, 0, 0, 0 },
+    { 1, g_outbuf, BUFSIZ, 0, 0, {0}, 0, _IOFBF, F_WRITE | F_INUSE, 0, 0, 0 },
     // stderr is unbuffered and says so up front: F_MODESET keeps the
     // policy below from asking fstat and deciding otherwise. A
     // diagnostic that is still sitting in a buffer when the process
     // dies is a diagnostic that did not happen.
-    { 2, 0,        0,      0, 0, {0}, 0, _IONBF, F_WRITE | F_INUSE | F_MODESET },
+    { 2, 0,        0,      0, 0, {0}, 0, _IONBF, F_WRITE | F_INUSE | F_MODESET, 0, 0, 0 },
 };
 
 FILE *const stdin  = &g_std[0];
@@ -147,16 +151,25 @@ static void *lock_id(void) { return (void *)__errno_location(); }
 // and a stdio critical section is short.
 static void lock_stream(FILE *f) {
     void *me = lock_id();
-    if (f->lock_owner == me) { f->lock_depth++; return; }
+    // **READ ATOMICALLY: this one runs WITHOUT the lock held.** It asks
+    // "am I already the owner", which only this thread can have made
+    // true, so the ANSWER is never wrong -- but a plain read racing a
+    // plain write from the releasing thread is still a data race, which
+    // a compiler may assume cannot happen. Relaxed is enough: no other
+    // memory is being published by this read.
+    if (__atomic_load_n(&f->lock_owner, __ATOMIC_RELAXED) == me) {
+        f->lock_depth++;
+        return;
+    }
     while (__atomic_exchange_n(&f->lock_flag, 1, __ATOMIC_ACQUIRE))
         sys_yield();
-    f->lock_owner = me;
+    __atomic_store_n(&f->lock_owner, me, __ATOMIC_RELAXED);
     f->lock_depth = 1;
 }
 
 static void unlock_stream(FILE *f) {
     if (--f->lock_depth > 0) return;
-    f->lock_owner = 0;
+    __atomic_store_n(&f->lock_owner, (void *)0, __ATOMIC_RELAXED);
     __atomic_store_n(&f->lock_flag, 0, __ATOMIC_RELEASE);
 }
 
@@ -181,9 +194,12 @@ void funlockfile(FILE *f) { if (f) unlock_stream(f); }
 int ftrylockfile(FILE *f) {
     if (!f) return -1;
     void *me = lock_id();
-    if (f->lock_owner == me) { f->lock_depth++; return 0; }
+    if (__atomic_load_n(&f->lock_owner, __ATOMIC_RELAXED) == me) {
+        f->lock_depth++;
+        return 0;
+    }
     if (__atomic_exchange_n(&f->lock_flag, 1, __ATOMIC_ACQUIRE)) return -1;
-    f->lock_owner = me;
+    __atomic_store_n(&f->lock_owner, me, __ATOMIC_RELAXED);
     f->lock_depth = 1;
     return 0;
 }
@@ -230,7 +246,21 @@ static int flush_write(FILE *f) {
 // terminal -- so reading a file does not flush anything, and cheap when
 // it does fire, since flush_write() returns at once on an empty buffer.
 static void flush_stdout_for_read(FILE *f) {
-    if (f->mode == _IOLBF || unbuffered(f)) flush_write(&g_std[1]);
+    if (!(f->mode == _IOLBF || unbuffered(f))) return;
+    // **TRY-LOCK, NEVER A BLOCKING ONE.** The caller already holds THIS
+    // stream's lock, so blocking on stdout's here would take two locks
+    // in an order nothing else is obliged to follow -- a thread writing
+    // stdout and then reading stdin would take them the other way round
+    // and the pair would deadlock.
+    //
+    // Failing to acquire it is the harmless case rather than a
+    // compromise: another thread holding stdout is another thread
+    // actively writing stdout, so the flush this exists to perform is
+    // already happening. Skipping it risks a prompt appearing late;
+    // blocking risks the program stopping forever.
+    if (ftrylockfile(&g_std[1]) != 0) return;
+    flush_write(&g_std[1]);
+    funlockfile(&g_std[1]);
 }
 
 static int locked_fflush(FILE *f) {
@@ -293,8 +323,14 @@ int fputs(const char *s, FILE *f) {
 }
 
 int puts(const char *s) {
-    if (fputs(s, stdout) == EOF) return EOF;
-    return fputc('\n', stdout) == EOF ? EOF : 0;
+    // The string and its newline are TWO stdio calls, so without a lock
+    // held across both another thread's output can land between them and
+    // split the line. Reentrant, so the inner calls cost a counter.
+    lock_stream(stdout);
+    int r = 0;
+    if (fputs(s, stdout) == EOF || fputc('\n', stdout) == EOF) r = EOF;
+    unlock_stream(stdout);
+    return r;
 }
 
 // --- reading ---------------------------------------------------------
@@ -758,9 +794,24 @@ char *tmpnam(char *s) {
 
 // --- getline / getdelim ------------------------------------------------
 
+static ssize_t getdelim_locked(char **lineptr, size_t *n, int delim, FILE *f);
+
 ssize_t getdelim(char **lineptr, size_t *n, int delim, FILE *f) {
     if (!lineptr || !n || !f) { errno = EINVAL; return -1; }
 
+    // **THE WHOLE LINE IS ONE CRITICAL SECTION, not one per character.**
+    // fgetc() takes the lock itself, so a loop over it is a sequence of
+    // separate atomic reads -- which is exactly what lets two threads
+    // reading one stream each come away with half of the same line. The
+    // lock is reentrant, so the per-character acquisitions inside are a
+    // counter and not a second wait.
+    lock_stream(f);
+    ssize_t r = getdelim_locked(lineptr, n, delim, f);
+    unlock_stream(f);
+    return r;
+}
+
+static ssize_t getdelim_locked(char **lineptr, size_t *n, int delim, FILE *f) {
     size_t len = 0;
     for (;;) {
         // GROW BEFORE THE STORE, and keep room for the NUL.
