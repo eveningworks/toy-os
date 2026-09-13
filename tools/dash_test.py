@@ -24,10 +24,13 @@ literal argument). Writing the script into the image with
 untouched and the run is repeatable from the same starting state.
 
 WHAT IT DOES NOT COVER, said plainly: job control (needs a terminal this
-harness does not give it), interactive editing (dash has none -- see
-docs/commands/dash.md), and the one case that HANGS THE MACHINE, which
-is documented in docs/bugs.md and deliberately not run here. See
-HANGS_THE_GUEST below.
+harness does not give it) and interactive editing (dash has none -- see
+docs/commands/dash.md).
+
+One case here, `pipe-to-missing-command`, was excluded for a while
+because it HUNG THE MACHINE -- a write to a pipe whose reader failed to
+exec spun the producer at full CPU forever. It is an ordinary case now,
+which is what a fix is supposed to look like.
 """
 import argparse
 import os
@@ -120,18 +123,18 @@ CASES = [
     ("trap-exit",
      "trap 'echo trapped' EXIT\necho before-exit\n",
      ["before-exit", "trapped"]),
+
+    # **THIS ONE USED TO WEDGE THE MACHINE**, and it is in the table
+    # rather than in a comment because that is what a fix looks like: a
+    # write to a pipe whose reader failed to exec reported zero bytes,
+    # libsys read that as a short write and looped, and the producer
+    # spun at full CPU until the guest stopped answering. SIGPIPE and
+    # EPIPE end it now, so the script survives its own typo.
+    ("pipe-to-missing-command",
+     "echo abc | no_such_command\necho survived\n",
+     ["survived"]),
 ]
 
-# **NOT RUN, AND THE REASON IS THE POINT.** A pipeline whose reader
-# fails to exec leaves the writer spinning at 100% CPU forever, because
-# pipe_write() reports zero bytes rather than raising SIGPIPE or failing
-# EPIPE -- so the producer cannot tell a dead pipe from a short write.
-# It wedges the guest: `cat` and every other command stops answering.
-#
-# Recorded in docs/bugs.md with this reproduction. Put back here as an
-# ordinary case the day the pipe path reports the failure, because at
-# that point it becomes a test rather than a hang.
-HANGS_THE_GUEST = ("pipe-to-missing-command", "echo abc | no_such_command\n")
 
 
 def volume(img):

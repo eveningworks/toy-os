@@ -21,10 +21,16 @@
 // not stylistic: the wake can run in an interrupt under a different
 // address space, where the reader's buffer is not addressable.
 //
-// Deliberately NOT a full POSIX pipe: no SIGPIPE (there are no signals
-// yet), and a write with no readers left is dropped and reported rather
-// than raising anything. Both are recorded in the roadmap instead of
-// being half-implemented here.
+// **SIGPIPE IS REAL NOW**, and this comment used to say the opposite --
+// "no SIGPIPE (there are no signals yet)", which was true when it was
+// written and then quietly stopped being. A write with no readers left
+// raises SIGPIPE and fails EPIPE at the SYSCALL layer
+// (sys_do_write_pipe); this layer still just reports the condition,
+// because a pipe does not know which process is writing it.
+//
+// What is still deliberately absent: O_NONBLOCK on the pipe itself
+// (SYS_SET_NONBLOCK is on the description) and atomicity guarantees
+// above PIPE_BUF.
 
 // This pipe's wait channel, for a caller that needs to park on it.
 // 0 for an invalid index.
@@ -49,8 +55,13 @@ void pipe_close_writer(int idx);
 // Copies `len` bytes in, ALL OR NOTHING. Returns `len` on success, -1
 // when they do not fit right now and a reader still exists ("would
 // block" -- park and retry, exactly as pipe_read() means it), and 0
-// when there are no readers left (the write is discarded; see the
-// header note on SIGPIPE).
+// when there are no readers left.
+//
+// **THE CALLER MUST NOT TREAT THAT ZERO AS A SHORT WRITE.** It is a
+// dead pipe, and reporting it as "wrote nothing, try again" is what
+// made a single mistyped command spin a process at full CPU until the
+// machine stopped answering. sys_do_write_pipe() turns it into SIGPIPE
+// plus EPIPE, which is what POSIX means by it.
 //
 // It used to take what fitted and report a short count. Nothing in ring
 // 3 loops on a short write, so a producer faster than its reader

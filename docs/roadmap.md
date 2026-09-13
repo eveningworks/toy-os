@@ -26,7 +26,6 @@ buildable now. Something that MISBEHAVES is not here -- that is
 
 - [ ] **Interruptible syscalls** -- a trap gate plus retiring `g_next_kernel_rsp` as a single global  *(Scheduler: blocking, priorities, classes)*
 - [ ] Replace the preemption guard with a real sleeping lock -- **Needs:** interruptible syscalls, above  *(Scheduler: blocking, priorities, classes)*
-- [ ] `SIGPIPE` and `-EPIPE` on the pipe WRITE path -- a pipeline typo WEDGES the machine today (`docs/bugs.md`)  *(A ported POSIX shell)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
@@ -348,7 +347,7 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [x] ~~`uid_t`/`gid_t`, `geteuid`/`getegid`/`getgroups`~~ DONE 2026-09-13 -- all answer 0
 - [x] ~~`EACCES`, `ELOOP`, `EWOULDBLOCK`, `O_EXCL`, `DT_LNK`, `stpncpy`, `htonl`, `umask`, `alloca`~~ DONE 2026-09-13
 - [x] ~~Wide characters~~ DONE 2026-09-13 -- a C-LOCALE implementation, which is the complete answer for a single-byte locale
-- [ ] **NEXT** `SIGPIPE` and `-EPIPE` on the pipe WRITE path -- a pipeline typo WEDGES the machine today (`docs/bugs.md`)
+- [x] ~~`SIGPIPE` and `-EPIPE` on the pipe WRITE path~~ DONE 2026-09-13 -- a dead pipe raises and fails instead of spinning
 - [x] ~~`chmod`, so a mode can change at all~~ DONE 2026-09-13 -- `SYS_CHMOD`, `/bin/chmod`; the default is 0755 now
 - [ ] `#!` handling in the loader -- listed under Shell pipes & job control
 - [x] ~~Vendor the port~~ DONE 2026-09-13 -- `userland/ports/dash/`, v0.5.13.5 verbatim, nothing builds it yet

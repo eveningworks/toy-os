@@ -23,6 +23,8 @@
 #define TOTAL (16 * 1024)   // four times the pipe buffer
 #define CHUNK 256
 
+#include <signal.h>
+#include <errno.h>
 #include "lib/utest.h"
 
 static char byte_at(int i) { return (char)((i * 7 + (i >> 8)) & 0x7f); }
@@ -73,6 +75,36 @@ int main(void) {
     utest_check(code == 0, "the reader got every byte, in order");
     if (code != 0) {
         utest_notef("(reader exited %d)", code);
+    }
+
+    // --- a pipe with no reader left --------------------------------
+    //
+    // **THIS USED TO WEDGE THE MACHINE.** A write with no readers
+    // reported ZERO BYTES, which libsys's sys_write() reads as "wrote
+    // nothing, send the rest" -- so a producer whose reader had gone
+    // spun at full CPU forever and the whole guest stopped answering.
+    // One mistyped command in a pipeline was enough.
+    //
+    // POSIX: raise SIGPIPE and fail EPIPE. SIGPIPE is IGNORED here
+    // first, because the default action would kill this test rather
+    // than let it check the errno -- which is exactly what every shell
+    // does around its own pipelines.
+    {
+        signal(SIGPIPE, SIG_IGN);
+        int p2[2];
+        utest_check(sys_pipe(p2) == 0, "a second pipe opens");
+        sys_close(p2[0]);                 // the reader goes away
+        errno = 0;
+        long long n = sys_write(p2[1], "x", 1);
+        utest_check(n < 0, "a write to a pipe with no reader FAILS");
+        utest_check(errno == EPIPE, "...with EPIPE, not a zero-length write");
+        if (errno != EPIPE) utest_notef("(errno %d)", errno);
+        // A zero-LENGTH write is not an error and must stay one.
+        errno = 0;
+        utest_check(sys_write(p2[1], "", 0) == 0,
+                    "...while a zero-length write is still not an error");
+        sys_close(p2[1]);
+        signal(SIGPIPE, SIG_DFL);
     }
 
     return utest_end();

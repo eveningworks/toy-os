@@ -23,6 +23,7 @@
 #include "vmm.h"
 #include "scheduler.h"
 #include "pipe.h"
+#include "signal.h"   // signal_send -- SIGPIPE on a dead pipe
 #include "pty.h" // a pty end is an fd kind
 #include "tty.h" // terminals -- fd 0 is one, and so is a pty end
 #include "fs.h"
@@ -783,8 +784,27 @@ sys_do_write_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
         // deadlock rather than a delay.
         scheduler_preempt_disable();
         int64_t n = pipe_write(pipe_idx, kbuf, (uint32_t)len);
-        if (n >= 0) {
-            regs[14] = (uint64_t)n; // all of it, or 0 for "no readers left"
+        // **A DEAD PIPE IS A FAILURE, NOT A SHORT WRITE**, and reporting
+        // it as one WEDGED THE MACHINE. pipe_write() answers 0 when no
+        // reader is left; this used to hand that straight back, where
+        // libsys's sys_write() reads a zero as "wrote nothing, try the
+        // rest" and loops -- so `echo abc | no_such_command`, one typo,
+        // spun a process at 100% CPU forever and the whole guest stopped
+        // answering (docs/bugs.md had the reproduction).
+        //
+        // POSIX: raise SIGPIPE and fail EPIPE. A process that has not
+        // caught or ignored it dies here, which is what makes a pipeline
+        // whose reader went away collapse instead of spin; one that HAS
+        // -- every shell does, around its own pipelines -- sees the
+        // errno and can act.
+        //
+        // `len > 0` is what separates this from an honest zero-length
+        // write, which is not an error and must stay one.
+        if (n == 0 && len > 0) {
+            signal_send(scheduler_current_pid(), SIGPIPE);
+            regs[14] = (uint64_t)(int64_t)-EPIPE;
+        } else if (n >= 0) {
+            regs[14] = (uint64_t)n; // all of it, or an honest zero
         } else if (!scheduler_block_current(regs, pipe_wait_chan(pipe_idx), SCHED_WAIT_PIPE)) {
             // Nowhere to park -- kernel code, or the legacy loader.
             // Report 0 rather than spinning, for the same reason the
