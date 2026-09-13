@@ -441,3 +441,35 @@ KTEST("tty", "a child in the same session may take the terminal, from ring 3") {
     // not take the terminal its parent owns, which is dash's failure.
     KTEST_ASSERT_EQ(code, 0);
 }
+
+// --- dash's job control, which the script harness cannot reach --------
+//
+// tools/dash_test.py runs SCRIPTS, and a script has no terminal, so
+// `fg`/`bg`/`jobs` and the signals around them went unexercised while
+// 22 other cases passed. /tests/dashjobs_test drives a real shell on a
+// pty; its interesting claim is that a Ctrl-C after `fg` kills the JOB
+// and not the shell, which is only true if `fg` moved the terminal's
+// foreground group -- the tcsetpgrp() that used to fail outright.
+#define DASHJOBS_TEST_PATH "/tests/dashjobs_test"
+#define DASHJOBS_TIMEOUT_TICKS 1200 // 12s at 100Hz -- a shell, a job, and waits
+
+KTEST("tty", "dash runs a background job, foregrounds it, and survives Ctrl-C") {
+    if (!fs_exists(DASHJOBS_TEST_PATH)) KTEST_SKIP("no " DASHJOBS_TEST_PATH);
+    if (!fs_exists("/bin/dash")) KTEST_SKIP("no /bin/dash on this boot");
+    if (!fs_exists("/tests/spin_test")) KTEST_SKIP("no /tests/spin_test");
+
+    int pid = scheduler_spawn(DASHJOBS_TEST_PATH, 0);
+    KTEST_ASSERT(pid != 0);
+
+    int code = -1, exited = 0;
+    uint64_t start = pit_ticks();
+    while (pit_ticks() - start < DASHJOBS_TIMEOUT_TICKS) {
+        if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
+    }
+    KTEST_ASSERT(exited);
+    // 0 = every phase worked; the codes name WHICH -- see
+    // userland/tests/dashjobs_test.c. 15 is the one that matters: the
+    // job was still Running after Ctrl-C, so `fg` never moved the
+    // terminal and the signal went to the wrong group.
+    KTEST_ASSERT_EQ(code, 0);
+}

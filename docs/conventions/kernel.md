@@ -4113,6 +4113,17 @@ were added for, failing in the test written for it.
 and the reader is the shell). The terminal joins the READER's session,
 so that is the moment the session is decided.
 
+**AND A `SPAWN_SETSID` CHILD TAKES ITS fd 0 AS ITS CONTROLLING TERMINAL
+AT THE SPAWN**, which is the other half. First-read is fine for a shell
+that reads before it asks anything, and wrong for one that asks first:
+dash calls `tcgetpgrp()` during startup, got `-ENODEV` because nobody
+owned the terminal yet, and printed `can't access tty; job control
+turned off`. It then wanted `/dev/null` for a background job's stdin --
+the fallback a shell uses when job control is off -- which this system
+does not have. One cause, two symptoms, and both go away when the
+session leader acquires the terminal at the spawn, which is what POSIX
+describes anyway.
+
 **`scheduler_setsid()` refuses a process-group leader** -- POSIX's rule,
 and it is about one number meaning two things rather than about safety.
 `SPAWN_SETSID` therefore goes through `scheduler_make_session_leader()`

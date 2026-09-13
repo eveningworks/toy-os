@@ -40,22 +40,38 @@ static int put(int fd, const char *s) {
     return (int)sys_write(fd, s, (size_t)n) == n ? 0 : -1;
 }
 
-// Reads until `needle` shows up or the budget runs out. A BUDGET rather
-// than one read, because the shell echoes its paint in whatever chunks
-// the discipline hands over and a single read can land mid-repaint.
+// **ONE BUFFER THAT IS NEVER CLEARED, and a watermark.** Waits until
+// `needle` appears at or after `from`, which is the accumulated length
+// taken BEFORE the write that should produce it.
 //
-// **THE MASTER MUST BE NON-BLOCKING FIRST** (main() sets it): a blocking
-// read with nothing pending never returns, so the budget below never
-// elapses and a broken shell HANGS this test instead of failing it --
-// which is exactly what /tests/pty_test's drain() warns about.
-static int wait_for(int master, const char *needle, char *acc, int cap) {
-    int len = 0;
-    for (int tries = 0; tries < 200; tries++) {
-        if (len < cap) {
-            int n = (int)sys_read(master, acc + len, (size_t)(cap - len));
-            if (n > 0) len += n;
+// Clearing the buffer between phases loses bytes that were already
+// read: a prompt arriving in the same read() as the previous command's
+// output is thrown away, and the next phase then waits for something
+// that has already gone past. That is a flake when the timing shifts
+// and a hard failure when it does not -- it cost a wrong diagnosis
+// here, so the shape is the fix rather than a longer budget.
+static char acc[4096];
+static int  acc_len;
+
+// **RETURNS THE POSITION JUST PAST THE MATCH**, which is what the next
+// phase passes as its `from`. Returning the buffer LENGTH instead loses
+// anything that arrived in the same read() as the match -- a prompt
+// printed in the same chunk as the command's output is then searched
+// for from beyond where it already sits, and the phase times out. That
+// is a real failure, not a flake, and it cost two wrong diagnoses here.
+static int waited(int master, const char *needle, int from) {
+    int nl = slen(needle);
+    for (int tries = 0; tries < 250; tries++) {
+        if (acc_len < (int)sizeof acc) {
+            int n = (int)sys_read(master, acc + acc_len,
+                                  (size_t)((int)sizeof acc - acc_len));
+            if (n > 0) acc_len += n;
         }
-        if (contains(acc, len, needle)) return len;
+        for (int i = from; i + nl <= acc_len; i++) {
+            int j = 0;
+            while (j < nl && acc[i + j] == needle[j]) j++;
+            if (j == nl) return i + nl;
+        }
         sys_sleep_ms(20);
     }
     return -1;
@@ -63,10 +79,9 @@ static int wait_for(int master, const char *needle, char *acc, int cap) {
 
 int main(void) {
     int master = -1, slave = -1;
-    char acc[1024];
 
     if (sys_openpty(&master, &slave) < 0) return 1;
-    // See wait_for(): without this a shell that says nothing hangs the
+    // See waited(): without this a shell that says nothing hangs the
     // test rather than failing it.
     if (sys_set_nonblock(master, 1) < 0) return 10;
 
@@ -84,51 +99,44 @@ int main(void) {
     // --- 1. it prompts -----------------------------------------------
     //
     // `#`, NOT `$`: dash picks its default PS1 from geteuid(), and every
-    // id on this system answers 0 (see the roadmap's dash milestone), so
-    // dash believes it is root. /bin/tosh's `$` means something else
-    // entirely -- ring 3 rather than privilege -- and the two
-    // conventions collide here by coincidence.
-    for (int i = 0; i < (int)sizeof acc; i++) acc[i] = 0;
-    if (wait_for(master, "#", acc, sizeof acc) < 0) return 3;
+    // id on this system answers 0, so dash believes it is root.
+    // /bin/tosh's `$` means something else entirely -- ring 3 rather
+    // than privilege -- and the two conventions collide by coincidence.
+    int mark = waited(master, "#", 0);
+    if (mark < 0) return 3;
 
     // --- 2. it runs what is typed ------------------------------------
     //
-    // **EDITING IS OPT-IN IN dash**, as `set -o emacs` / `set -o vi`
-    // upstream: Eflag starts clear, and histedit() builds an EditLine
-    // only once it is set. Debian never hits this because it ships dash
-    // without libedit at all.
-    if (put(master, "set -o emacs\n") < 0) return 4;
+    // **NO `set -o emacs`, DELIBERATELY.** Editing is opt-in upstream,
+    // and /bin/dash's entry turns it on by default because this
+    // system's terminals send specials as raw 0x91-0xA6 bytes -- with
+    // no editor an arrow key types blanks into the line, which is how
+    // that was found. Sending `set -o emacs` here would test the shim
+    // and leave the DEFAULT untested, and the default is what a person
+    // meets.
     if (put(master, "echo alpha\n") < 0) return 4;
-    for (int i = 0; i < (int)sizeof acc; i++) acc[i] = 0;
-    if (wait_for(master, "alpha", acc, sizeof acc) < 0) return 5;
+    if ((mark = waited(master, "alpha", mark)) < 0) return 5;
 
-    // --- 3. THE ACTUAL CLAIM: Up recalls the last line ---------------
+    // The prompt has to come BACK before a key means anything: the shim
+    // owns raw mode only inside el_gets(), so a key sent while the
+    // command is running is held by the discipline until a newline.
+    if ((mark = waited(master, "#", mark)) < 0) return 11;
+
+    // --- 3. THE CLAIM: Up recalls the last line ----------------------
     //
-    // The byte is KEY_ARROW_UP as the kernel delivers it -- 0x91, which
-    // IS the code klineedit switches on, so it travels through the pty
-    // with no translation (keyboard.h says why). A dash with no editor
-    // treats it as an ordinary character and runs a command that does
-    // not exist, so the echo below would never come back.
-    // **WAIT FOR THE PROMPT BACK FIRST.** The shim puts the terminal in
-    // raw mode inside el_gets() and restores it around the return, so
-    // the command dash runs gets an ordinary canonical terminal. An
-    // arrow sent during THAT window is buffered by the discipline until
-    // a newline and never reaches the editor -- the key has to arrive
-    // while the shell is the thing reading.
-    for (int i = 0; i < (int)sizeof acc; i++) acc[i] = 0;
-    if (wait_for(master, "#", acc, sizeof acc) < 0) return 11;
-
+    // KEY_ARROW_UP as the kernel delivers it -- 0x91, which IS the code
+    // klineedit switches on, and exactly what the GUI Terminal writes
+    // to its pty for that key. A dash with no editor puts the byte in
+    // the line instead, and the recall below never comes.
     char up = (char)KEY_ARROW_UP;
     if ((int)sys_write(master, &up, 1) != 1) return 6;
-    for (int i = 0; i < (int)sizeof acc; i++) acc[i] = 0;
-    // The recalled line is REPAINTED, so the text comes back on its own
-    // -- this is the history walk, not an echo of what was typed.
-    if (wait_for(master, "echo alpha", acc, sizeof acc) < 0) return 7;
+    // The recalled line is REPAINTED, so the text arrives on its own --
+    // this is the history walk, not an echo of what was typed.
+    if ((mark = waited(master, "echo alpha", mark)) < 0) return 7;
 
     // And it still RUNS when accepted, which a paint alone would not do.
     if (put(master, "\n") < 0) return 8;
-    for (int i = 0; i < (int)sizeof acc; i++) acc[i] = 0;
-    if (wait_for(master, "alpha", acc, sizeof acc) < 0) return 9;
+    if (waited(master, "alpha", mark) < 0) return 9;
 
     put(master, "exit\n");
     sys_close(master);

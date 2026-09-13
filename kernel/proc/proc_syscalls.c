@@ -705,8 +705,21 @@ int sys_spawn(struct syscall_ctx *c) {
         // BEFORE the foreground line below, which reads the child's
         // group: a session leader leads a group of its own, so the two
         // flags together would otherwise put the OLD group in front.
-        if (pid > 0 && (msg.flags & SPAWN_SETSID))
+        if (pid > 0 && (msg.flags & SPAWN_SETSID)) {
             scheduler_make_session_leader(pid);
+            // **AND THE TERMINAL BECOMES THE NEW SESSION'S**, which is
+            // POSIX acquiring a controlling terminal when a session
+            // leader gets one. Ownership is otherwise claimed on the
+            // first READ of a pty slave (syscall_fd.c) -- fine for a
+            // shell that reads before it asks, and wrong for one that
+            // asks first: dash calls tcgetpgrp() during startup, got
+            // -ENODEV because nobody owned the terminal yet, and
+            // printed "can't access tty; job control turned off". It
+            // then needed /dev/null for a background job's stdin, which
+            // this system does not have -- one cause, two symptoms.
+            struct tty *ct = fd_tty(scheduler_pid_pml4(pid), 0);
+            if (ct && !tty_owner(ct)) tty_set_owner(ct, pid);
+        }
         if (pid > 0 && (msg.flags & SPAWN_FOREGROUND))
             tty_set_fg_pgid(fd_tty(pml4, 0), scheduler_pgid(pid));
     }

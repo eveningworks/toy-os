@@ -31,7 +31,7 @@ Terminal, `telnetd` and libc's `system()` all name `/bin/tosh`, and a
 `system.shell` setting to change that is a separate roadmap item. Run
 it by name to use it.
 
-**Line editing is `set -o emacs`, and then it is `tosh`'s editor.**
+**Line editing is ON, and it is `tosh`'s editor.**
 Debian builds dash without libedit, so upstream has no editing at all;
 this port answers libedit's names with `kernel/lib/klineedit.c` instead
 (`userland/backends/dash/histedit_shim.c`), which is the same editor
@@ -39,10 +39,13 @@ this port answers libedit's names with `kernel/lib/klineedit.c` instead
 history, the kill ring and the word motions all behave as they do
 everywhere else in this system, because they ARE the same code.
 
-It is opt-in because upstream makes it so -- `Eflag` starts clear and
-dash builds its editor only once `set -o emacs` (or `-o vi`, which gets
-the same editor here, there being only one) sets it. Put it in the
-shell's startup file to have it always.
+Upstream leaves it OFF until `set -o emacs`; `/bin/dash` here passes
+`-E` for you (`userland/bin/dash.c`). That divergence is not taste: every
+terminal on this system sends specials as the single bytes 0x91-0xA6, so
+a shell reading a line canonically puts them straight into it and the
+screen fills with blanks -- an arrow key "types spaces". `set +E` turns
+editing off if you want upstream's behaviour, and an explicit `-V` still
+selects vi mode, which gets the same editor because there is only one.
 
 **Tab completion is not wired up.** The editor reports the keystroke and
 nothing answers it yet; `tosh` fills that in from
@@ -85,11 +88,18 @@ than two. Again standard, and again not this shell's choice.
 
 ## What is not done
 
-**Job control is unproven.** `tools/dash_test.py` drives 22 cases --
-pipelines, redirection, here-documents, functions, parameter expansion,
-arithmetic, `case`, loops, command substitution, `test`, `trap`, exit
-status, and three `#!` scripts run by name -- and they pass. What that
-harness cannot give dash is a terminal, so `fg`/`bg`/`jobs` and the
-signal handling around them are not exercised at all.
+**Job control works, and is tested.** `/tests/dashjobs_test` drives a
+real shell on a pty: `&` gives the prompt straight back, `jobs` lists the
+job as `[1] Running`, `fg` brings it forward, and a Ctrl-C then kills
+THE JOB while the shell prompts again. That last step is the one worth
+having -- it is only true if `fg` moved the terminal's foreground group,
+which is the `tcsetpgrp()` that needed sessions to work at all.
+
+**`bg` and Ctrl-Z are not covered**, nor is `fc`, which compiles now
+(dropping `SMALL` turned on `histedit.c`) and has never been run.
+
+**Tab completion is not wired up.** The editor reports the keystroke and
+nothing answers it yet; `tosh` fills that in from
+`kernel/lib/completion.c`, and dash could use the same engine.
 
 `tosh` remains the shell the system actually uses.

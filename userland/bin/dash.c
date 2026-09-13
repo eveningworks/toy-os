@@ -10,8 +10,30 @@
 // Same shape as userland/gui/apps/doom.c, and for the same reason: a
 // program target has to live in a USERLAND_PROGRAM_DIRS directory, and
 // a port's sources do not.
+#include <stdlib.h>
+
 int dash_main(int argc, char **argv);
 
 int main(int argc, char **argv) {
-    return dash_main(argc, argv);
+    // **LINE EDITING IS ON BY DEFAULT HERE, and that is a deliberate
+    // divergence from upstream.** dash leaves `-E` clear and expects
+    // `set -o emacs`, which is reasonable where a shell without an
+    // editor is merely plain. It is not plain on this system: every
+    // terminal here sends specials as the single bytes 0x91-0xA6
+    // (api/keyboard.h), so a canonical read puts them straight into the
+    // line and the terminal draws them as blanks -- an arrow key
+    // "types spaces", which is how this was found. /bin/tosh has no
+    // such mode and neither should this.
+    //
+    // Injected as an ARGUMENT rather than poked into dash's optlist, so
+    // it goes through the same parsing any user's `-E` would: `set +E`
+    // turns it back off, and an explicit `-V` later on the line still
+    // wins (upstream's own ksh hack clears one when the other is set).
+    char **av = malloc((size_t)(argc + 2) * sizeof *av);
+    if (!av) return dash_main(argc, argv);   // out of memory: upstream's default
+    av[0] = argv[0];
+    av[1] = (char *)"-E";
+    for (int i = 1; i < argc; i++) av[i + 1] = argv[i];
+    av[argc + 1] = 0;
+    return dash_main(argc + 1, av);
 }
