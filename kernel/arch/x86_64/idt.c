@@ -193,11 +193,11 @@ void idt_init(void) {
     // same tree are clean. Two win_input KTESTs also go red, and they
     // are the small half.
     //
-    // The per-call wrapper below stops a nested interrupt CLOBBERING an
-    // outer frame; what is still unsafe is a context switch taken from
-    // inside a nested dispatch, which parks a process at the IRQ's frame
-    // rather than the syscall's. docs/roadmap-details.md has the
-    // evidence and the rate.
+    // MEASURED CAUSE: `g_isr_depth` leaks to 348 under the trap gate --
+    // one global describing a per-context property, the same defect as
+    // g_next_kernel_rsp, and it makes isr_in_progress() lie for the rest
+    // of the boot. docs/roadmap-details.md has the evidence, the rate,
+    // and the two candidates a guard already killed.
     idt_set_gate(128, isr128, 0, 0xEE);
 
     idtp.limit = sizeof(idt) - 1;
@@ -767,5 +767,17 @@ uint64_t isr_dispatch(uint64_t *regs) {
     isr_dispatch_body(regs);
     uint64_t resume = g_next_kernel_rsp;
     g_next_kernel_rsp = outer;
+    // isr_common does `mov rsp, rax` with this, so a zero becomes RSP=0
+    // and double-faults three instructions later with no walkable stack
+    // to name it. Report it here instead -- same klog/vga/`ud2` shape as
+    // scheduler.c's kstack_verify(), and for the same reason.
+    if (!resume) {
+        klog_printf("ISR RESUME IS ZERO: vec=%lu cs=%lx depth=%d pid=%d "
+                    "outer=%lx\n", regs[15], regs[18], g_isr_depth,
+                    scheduler_current_pid(), outer);
+        vga_printf("\nISR RESUME IS ZERO: vec=%lu cs=%lx depth=%d pid=%d\n",
+                   regs[15], regs[18], g_isr_depth, scheduler_current_pid());
+        __asm__ volatile ("ud2");
+    }
     return resume;
 }

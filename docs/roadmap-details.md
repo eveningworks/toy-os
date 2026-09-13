@@ -4665,17 +4665,42 @@ control is clean -- three `win_input` runs at `0xEE` on the same tree,
 double faults -- so the corruption is the gate's and not a pre-existing
 flake.
 
-**So the cause is the resume path, not signals.** The `block_common()`
-candidate recorded below -- "refuse to park a process with a signal
-pending" -- does not explain a process being resumed at a garbage RIP,
-and does not explain `isr_dispatch()` returning zero. The per-call
-`isr_dispatch()` wrapper that landed as preparatory work makes the
-resume pointer safe against a nested interrupt CLOBBERING it, which was
-the hazard everyone had written down; what it does not make safe is a
-CONTEXT SWITCH taken from inside a nested dispatch, where the frame a
-process is parked at is the IRQ's rather than the syscall's it was
-actually in. That is the next thing to establish, and it is scheduler
-work rather than another gate flip.
+**MEASURED: `g_isr_depth` REACHES 348.** A guard on `isr_dispatch()`'s
+return value (it now reports rather than letting the CPU fault three
+instructions later with no walkable stack) caught the zero and named its
+context:
+
+    ISR RESUME IS ZERO: vec=128 cs=23 depth=348 pid=8
+
+`vec=128`, `cs=0x23` -- an ordinary top-level ring-3 syscall, not a
+nested IRQ. The depth should be 1 or 2. It is not genuine nesting: 348
+frames of ~200 bytes is ~70 KB on a 16 KiB kernel stack, so the stack
+would have died long before. **The counter LEAKS**, and `idt.h` already
+says what that costs -- "leaving the depth raised would make
+`isr_in_progress()` lie for the rest of the boot". `ata.c:157` reads it
+(`if (isr_in_progress()) return spin_not_busy();`), so a leaked depth
+pins the disk on its spin path permanently.
+
+**`g_isr_depth` is a single global describing a PER-CONTEXT property --
+the same defect as `g_next_kernel_rsp`, which this item already says to
+retire.** The increment is at one site and the decrements at three; a
+preemption inside a syscall increments on one context and decrements on
+another, because the parked dispatch's epilogue does not run on the
+stack that incremented. Under the interrupt gate that cannot happen at
+all, which is why it is trap-gate-only. Retire it the same way the
+resume pointer was retired: per call, on the C stack.
+
+**Two candidates were checked and KILLED, both by a guard that did not
+fire.** They are recorded so a later session does not re-derive them.
+`switch_to_kernel()` with `kernel_saved_rsp == 0` -- reachable on paper,
+since `find_next_runnable()`'s FALLBACK returns `ROT_KERNEL` without
+asking `kernel_slot_runnable()`, and it would produce exactly RSP=0; a
+guard there never fired. And signal delivery on a return path that is
+NOT going back to ring 3 -- already guarded, since `sig_pid` is gated on
+`regs[18] & 3`, so a nested IRQ inside a syscall (CS=0x08) delivers
+nothing. The `block_common()` candidate recorded below is likewise not
+this: it is about parking a process with a signal pending, not about a
+leaked depth.
 
 **Do not flip the gate again without fixing this first.** It is one line
 and it looks harmless; it corrupts an unrelated process's resume state

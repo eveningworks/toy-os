@@ -818,6 +818,18 @@ static void switch_to_kernel(void) {
     // in, and without this the last scheduled thread's %fs would still
     // be loaded when it resumed.
     arch_set_fs_base(kernel_fs_base);
+    // find_next_runnable()'s FALLBACK returns ROT_KERNEL without asking
+    // kernel_slot_runnable(), so it can reach here before any tick has
+    // captured a kernel trapframe -- and `g_next_kernel_rsp = 0` then
+    // iretqs into nothing. Measured not to fire under the interrupt
+    // gate; kept because the fallback is genuinely unguarded.
+    if (!kernel_saved_rsp) {
+        klog_printf("KERNEL SLOT HAS NO SAVED FRAME (armed=%d)\n",
+                    process_context_is_armed());
+        vga_printf("\nKERNEL SLOT HAS NO SAVED FRAME (armed=%d)\n",
+                   process_context_is_armed());
+        __asm__ volatile ("ud2");
+    }
     g_next_kernel_rsp = kernel_saved_rsp;
 }
 
