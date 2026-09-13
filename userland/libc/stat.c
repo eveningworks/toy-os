@@ -72,3 +72,13 @@ int fstat(int fd, struct stat *st) {
                                ((s.flags & SYS_STAT_TTY) ? S_IFCHR : S_IFIFO));
     return 0;
 }
+
+// The process's file-creation mask. See <sys/stat.h> for why nothing
+// consults it yet and why it is stored anyway.
+static mode_t g_umask = 022;
+
+mode_t umask(mode_t mask) {
+    mode_t old = g_umask;
+    g_umask = mask & 07777;
+    return old;
+}

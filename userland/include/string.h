@@ -101,6 +101,15 @@ static inline int strcasecmp(const char *a, const char *b) { return k_strcasecmp
 // of `dst` with zeroes when it is shorter. Both surprise people. It is
 // here because C requires it; use strlcpy().
 char  *strncpy(char *dst, const char *src, size_t n);
+
+// **RETURNS A POINTER TO THE NUL IT WROTE, or to d+n when it wrote
+// none** -- which is the whole reason to use it over strncpy, whose
+// return value tells a caller nothing it did not already have. It pads
+// the remainder of `n` with NULs as strncpy does, and as with strncpy a
+// source that fills the buffer exactly leaves the result UNTERMINATED,
+// with the returned pointer at d+n. dash's jobs.c builds its command
+// strings with it.
+char  *stpncpy(char *d, const char *s, size_t n);
 char  *strcat(char *dst, const char *src);
 char  *strncat(char *dst, const char *src, size_t n);
 void  *memchr(const void *s, int c, size_t n);

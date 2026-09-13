@@ -46,6 +46,13 @@
                     // misnomer everywhere -- there is no FPU trap here
 #define SIGKILL  9  // uncatchable, unignorable -- what a force-quit sends
 #define SIGSEGV 11  // a memory fault (#PF or #GP), given a name
+#define SIGPIPE 13  // wrote to a pipe nobody is reading. **THE NUMBER
+                    // EXISTS; THE DELIVERY DOES NOT YET** -- pipe_write()
+                    // still reports zero bytes rather than raising this,
+                    // so a producer cannot tell a dead pipe from a short
+                    // write (docs/roadmap.md). Defined because a shell
+                    // must be able to NAME it: dash ignores it around
+                    // its own pipelines, and `trap` prints it.
 #define SIGTERM 15  // ask politely; `kill` with no signal named
 #define SIGCHLD 17  // a child exited. Default action: IGNORE
 #define SIGCONT 18  // resume a stopped process. Default action: CONTINUE
@@ -54,6 +61,12 @@
 #define SIGTTIN 21  // a BACKGROUND process tried to read the terminal.
                     // Default action: stop, so it waits its turn
                     // instead of stealing the keyboard from the shell
+#define SIGTTOU 22  // a background process wrote to the terminal. NO
+                    // SENDER, deliberately -- see SIGNAL_STOPS below on
+                    // why there is no TOSTOP here. The number exists so
+                    // a shell can SIG_IGN it, which is all any shell
+                    // does with it: it stops tcsetpgrp() stopping the
+                    // shell itself.
 #define SIGWINCH 28 // the terminal's size changed. Default action:
                     // IGNORE, as on Unix -- a program that does not
                     // redraw must not die of a window drag

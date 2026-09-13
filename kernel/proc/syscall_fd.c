@@ -76,6 +76,12 @@ struct open_file fd_desc[FD_DESC_MAX];
 struct fd_space {
     uint64_t pml4;      // 0 = free slot
     short    d[FD_MAX]; // d[fd] = index into fd_desc, or -1
+    // **PER DESCRIPTOR, NOT PER DESCRIPTION.** open_file::nonblock is on
+    // the description and is shared by every dup; close-on-exec is the
+    // opposite and has to be, because a dup made precisely to survive an
+    // exec must not inherit the flag from the handle it was copied from.
+    // Same split as Linux's.
+    uint8_t  cloexec[FD_MAX];
 };
 static struct fd_space g_spaces[FD_SPACE_MAX];
 
@@ -225,6 +231,31 @@ int fd_close(uint64_t pml4, int fd) {
     return 0;
 }
 
+// dup to the lowest free descriptor AT OR ABOVE `min`. What fcntl's
+// F_DUPFD asks for and what neither fd_dup() (lowest free, no floor)
+// nor fd_dup2() (an exact number) can express -- see
+// abi/syscall_abi.h's SYS_DUPFD.
+//
+// **THE COPY DOES NOT INHERIT close-on-exec**, which is the whole point
+// of the call in a shell: the copy exists precisely to survive the exec
+// the original must not. POSIX says F_DUPFD clears FD_CLOEXEC on the
+// new descriptor, and this is why.
+int fd_dup_from(uint64_t pml4, int oldfd, int min) {
+    struct fd_space *sp = space_get(pml4);
+    if (!sp) return -EBADF;
+    int di = fd_desc_index(pml4, oldfd);
+    if (di < 0) return -EBADF;
+    if (min >= FD_MAX) return -EMFILE;
+    for (int fd = min; fd < FD_MAX; fd++) {
+        if (sp->d[fd] >= 0) continue;
+        fd_desc[di].refs++;
+        sp->d[fd] = (short)di;
+        sp->cloexec[fd] = 0;
+        return fd;
+    }
+    return -EMFILE;
+}
+
 int fd_dup2(uint64_t pml4, int oldfd, int newfd) {
     struct fd_space *sp = space_get(pml4);
     if (!sp || newfd < 0 || newfd >= FD_MAX) return -1;
@@ -301,12 +332,41 @@ void fd_clone(uint64_t child, uint64_t parent) {
     }
 }
 
+// Query or change a descriptor's close-on-exec flag. `op` is -1 to
+// query, 0 to clear, 1 to set. Returns the flag as it was BEFORE the
+// call, or -EBADF.
+int fd_cloexec(uint64_t pml4, int fd, int op) {
+    if (fd < 0 || fd >= FD_MAX) return -EBADF;
+    struct fd_space *sp = space_find(pml4);
+    if (!sp || sp->d[fd] < 0) return -EBADF;
+    int was = sp->cloexec[fd] ? 1 : 0;
+    if (op == 0 || op == 1) sp->cloexec[fd] = (uint8_t)op;
+    return was;
+}
+
+// Close every descriptor marked close-on-exec. Called from fd_rekey(),
+// which is the one place an exec carries descriptors into a new image.
+void fd_close_on_exec(uint64_t pml4) {
+    struct fd_space *sp = space_find(pml4);
+    if (!sp) return;
+    for (int fd = 0; fd < FD_MAX; fd++) {
+        if (!sp->cloexec[fd] || sp->d[fd] < 0) continue;
+        fd_close(pml4, fd);
+        sp->cloexec[fd] = 0;
+    }
+}
+
 void fd_rekey(uint64_t old_pml4, uint64_t new_pml4) {
     struct fd_space *sp = space_find(old_pml4);
     if (!sp || !new_pml4) return;
     // The console claim follows the process, not the tables.
     if (g_console_owner_pml4 == old_pml4) g_console_owner_pml4 = new_pml4;
     sp->pml4 = new_pml4;
+    // **THIS IS WHERE close-on-exec BITES**, and it is the only place an
+    // exec carries descriptors into the new image -- so a flag honoured
+    // anywhere else would be honoured at the wrong time. After the
+    // rekey, so the close acts on the space the new image will see.
+    fd_close_on_exec(new_pml4);
 }
 
 // Returns 1 if the caller was PARKED (its syscall has no return value
@@ -1049,6 +1109,10 @@ int sys_fstat(struct syscall_ctx *c) {
     }
     struct sys_stat out;
     k_memset(&out, 0, sizeof out);
+    // Reported for EVERY kind, before the switch: non-blocking is a
+    // property of the description whatever it names, and fcntl(F_GETFL)
+    // has no other way to read it back.
+    if (f->nonblock) out.flags |= SYS_STAT_NONBLOCK;
     switch (f->kind) {
     case FD_KIND_FILE:
         out.flags |= SYS_STAT_SEEKABLE;
@@ -1639,4 +1703,24 @@ void fd_release_all(uint64_t pml4_phys) {
         }
         sp->pml4 = 0; // the table itself is reusable now
     }
+}
+
+
+// SYS_DUPFD -- dup to the lowest free descriptor AT OR ABOVE a floor.
+// See abi/syscall_abi.h for why SYS_DUP and SYS_DUP2 cannot express it.
+int sys_dupfd(struct syscall_ctx *c) {
+    int fd = (int)(int32_t)c->a0;
+    int min = (int)(int32_t)c->a1;
+    if (min < 0) min = 0;
+    c->regs[14] = (uint64_t)(int64_t)fd_dup_from(c->pml4, fd, min);
+    return 0;
+}
+
+// SYS_FD_CLOEXEC -- query (-1), clear (0) or set (1). Returns the flag
+// as it was before the call.
+int sys_fd_cloexec(struct syscall_ctx *c) {
+    int fd = (int)(int32_t)c->a0;
+    int op = (int)(int32_t)c->a1;
+    c->regs[14] = (uint64_t)(int64_t)fd_cloexec(c->pml4, fd, op);
+    return 0;
 }

@@ -26,6 +26,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 
 - [ ] **Interruptible syscalls** -- a trap gate plus retiring `g_next_kernel_rsp` as a single global  *(Scheduler: blocking, priorities, classes)*
 - [ ] Replace the preemption guard with a real sleeping lock -- **Needs:** interruptible syscalls, above  *(Scheduler: blocking, priorities, classes)*
+- [ ] Build and RUN it: 32 of 32 sources compile and every symbol resolves, so this is the next thing that can fail  *(A ported POSIX shell)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
@@ -340,17 +341,18 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [x] ~~A shell running a second copy of itself with its state~~ DONE 2026-09-11 -- `fork()` and `execv`/`execve`/`execvp`
 - [x] ~~`sigprocmask`/`sigsuspend` -- the race-free wait in `jobs.c`'s `waitproc()`~~ DONE 2026-09-12
 - [x] ~~Measure the gap instead of listing it~~ DONE 2026-09-13 -- `tools/dash_gap.py` compiles the port and prints what is left
-- [ ] Ten headers tolibc does not have, `sys/param.h` and `sys/ioctl.h` the widest
+- [x] ~~Ten headers tolibc does not have~~ DONE 2026-09-13
 - [x] ~~`struct stat` + `stat`/`lstat`/`fstat` and the nine `S_IS*`~~ DONE 2026-09-13 -- TFS3 stores a mode at inode offset 92
-- [ ] `fcntl` (`F_DUPFD`, `F_GETFL`/`F_SETFL`, `F_SETFD`, `FD_CLOEXEC`) -- `redir.c` and `input.c`
-- [ ] `#define SIGTTOU`, `SIGPIPE` and `NSIG`, and an IGNORABLE `SIGQUIT` -- dash only ever `SIG_IGN`s both
-- [ ] `uid_t`/`gid_t`, `geteuid`/`getegid`/`getgroups` -- stubs, this is a single-user OS
-- [ ] `EACCES`, `ELOOP`, `EWOULDBLOCK`, `O_EXCL`, `DT_LNK`, `stpncpy`, `htonl`, `umask`, `alloca`
-- [ ] Wide characters, or a decision not to have them -- `expand.c` and `parser.c` want eight `mb*`/`isw*`
+- [x] ~~`fcntl` (`F_DUPFD`, `F_GETFL`/`F_SETFL`, `F_SETFD`, `FD_CLOEXEC`)~~ DONE 2026-09-13 -- `SYS_DUPFD`, `SYS_FD_CLOEXEC`
+- [x] ~~`SIGTTOU`, `SIGPIPE` and `NSIG`~~ DONE 2026-09-13 -- numbers only; SIGPIPE has no SENDER yet
+- [x] ~~`uid_t`/`gid_t`, `geteuid`/`getegid`/`getgroups`~~ DONE 2026-09-13 -- all answer 0
+- [x] ~~`EACCES`, `ELOOP`, `EWOULDBLOCK`, `O_EXCL`, `DT_LNK`, `stpncpy`, `htonl`, `umask`, `alloca`~~ DONE 2026-09-13
+- [x] ~~Wide characters~~ DONE 2026-09-13 -- a C-LOCALE implementation, which is the complete answer for a single-byte locale
 - [ ] `SIGPIPE` and `-EPIPE` on the pipe WRITE path -- a dead pipe reports 0 BYTES WRITTEN, which a producer cannot tell from a short write
 - [ ] `#!` handling in the loader -- listed under Shell pipes & job control
 - [x] ~~Vendor the port~~ DONE 2026-09-13 -- `userland/ports/dash/`, v0.5.13.5 verbatim, nothing builds it yet
 - [ ] A Makefile rule for it, running dash's six build-time generators on the HOST -- all six already run clean
+- [ ] **NEXT** Build and RUN it: 32 of 32 sources compile and every symbol resolves, so this is the next thing that can fail
 - [ ] Our own `mksignames` -- dash's is GPL-2+ from bash, and our signal numbers are not its
 - [ ] Toykit's `klineedit` wired into dash's one read-a-line seam -- dash ships no line editing
 - [ ] A `system.shell` setting, read by the four places that hardcode `/bin/tosh` today

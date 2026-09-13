@@ -205,4 +205,18 @@ static inline void free(void *p) { kfree(p); }
 // to this process's own list and sbrk never moves down.
 void *realloc(void *p, size_t n);
 
+
+// **THE COMPILER'S, NOT A FUNCTION.** alloca() cannot be a library call:
+// it allocates in the CALLER's frame, which only the compiler can do.
+// __builtin_alloca is how every libc spells it.
+//
+// Here rather than in a separate <alloca.h>, which is a glibc invention
+// -- BSD and macOS put it in this header too. **RING-3 CODE HAS A FRAME
+// BUDGET** (docs/conventions/build.md) and alloca spends it at RUNTIME,
+// where -Wframe-larger-than cannot see it, so a loop that allocas is a
+// stack overflow the build will not catch.
+#ifndef alloca
+#define alloca(n) __builtin_alloca(n)
+#endif
+
 #endif

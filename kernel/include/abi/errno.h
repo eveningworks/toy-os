@@ -65,6 +65,9 @@
                    // is why it must not read as "none have exited yet"
 #define ENOMEM 12  // out of memory, or a heap request that would run past its
                    // ceiling
+#define EACCES 13  // permission denied. Reachable now that TFS3 stores a
+                   // mode (fs.h's FS_CAP_MODE); before that nothing
+                   // could refuse for this reason
 #define EFAULT 14  // the caller handed the kernel a pointer it may not have
 #define EBUSY  16  // the thing exists and is IN USE, so the operation is
                    // refused rather than done anyway -- umount of a
@@ -146,6 +149,7 @@
                    // stream to read or write. Distinct from EBADF for
                    // the same reason EPIPE is.
 
+#define ELOOP  40  // too many symbolic links resolving one path
 #define ENOSYS 38  // the call exists and does nothing yet
 #define ENOEXEC 8  // not something that can be loaded: a module that is
                    // not a relocatable x86-64 object, is truncated, or

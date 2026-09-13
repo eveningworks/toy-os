@@ -43,6 +43,10 @@ struct dirent {
 #define DT_UNKNOWN 0
 #define DT_DIR     4
 #define DT_REG     8
+// TFS3 has a symlink type (T3_TYPE_SYMLINK) even though path resolution
+// does not follow one yet, so this is a value a listing can genuinely
+// return rather than a name defined for the sake of it.
+#define DT_LNK     10
 
 typedef struct _DIR DIR;
 

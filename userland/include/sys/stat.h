@@ -39,6 +39,18 @@
 // says: `mkdir("/a/b/c")` fails with ENOENT if `/a/b` does not exist.
 int mkdir(const char *path, mode_t mode);
 
+// **ACCEPTED, RECORDED, AND APPLIED TO NOTHING.** A umask subtracts bits
+// from the mode a creation asks for -- but nothing here passes a mode to
+// creation: a file gets the default for its type (kernel/fs/tfs3.c's
+// T3_MODE_DEFAULT) and there is no chmod to change it afterwards. The
+// value is stored and returned so the get-and-restore idiom every shell
+// uses (`old = umask(0); umask(old)`) behaves, and so a caller can read
+// back what it set. When creation learns to honour a mode, the mask is
+// already here.
+//
+// Returns the PREVIOUS mask, as POSIX says.
+mode_t umask(mode_t mask);
+
 // The mode bits themselves, so that a caller writing 0755 in symbols
 // compiles. Standard octal values; nothing here reads them.
 #include <time.h>

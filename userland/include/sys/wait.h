@@ -1,6 +1,8 @@
 #ifndef ULIB_SYS_WAIT_H
 #define ULIB_SYS_WAIT_H
 
+#include <sys/types.h>   // pid_t
+
 // POSIX's <sys/wait.h>: waiting for a child, and DECODING what came
 // back.
 //
@@ -55,5 +57,24 @@ int waitpid(int pid, int *status, int options);
 
 // Block for any child at all. POSIX's wait(), which is waitpid(-1, s, 0).
 static inline int wait(int *status) { return waitpid(-1, status, 0); }
+
+
+// --- wait3 / wait4 ----------------------------------------------------
+//
+// BSD's waits, which add resource usage to what waitpid() reports.
+// Present because ported code reaches for them -- dash's waitproc()
+// only compiles against wait3, its waitpid fallback having been written
+// with four arguments and never built.
+//
+// **THE rusage ARGUMENT IS REFUSED UNLESS IT IS NULL**, which is the
+// only way every real caller passes it. Filling it with zeroes would
+// claim a reaped child used no CPU, and this kernel does not accumulate
+// a child's time into its parent at all (<sys/times.h> says so for
+// tms_cutime, and this is the same absence). A caller that genuinely
+// wants the numbers must find out that they are not here.
+struct rusage;   // incomplete on purpose: there is nothing to put in it
+
+pid_t wait3(int *status, int options, struct rusage *usage);
+pid_t wait4(pid_t pid, int *status, int options, struct rusage *usage);
 
 #endif

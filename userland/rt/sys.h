@@ -648,6 +648,15 @@ int sys_tcsetwinsz(int fd, const struct tty_winsize *ws);
 // you own, never on a slave you are about to hand to a child.
 int sys_set_nonblock(int fd, int on);
 
+// dup to the lowest free descriptor AT OR ABOVE `min` -- fcntl's
+// F_DUPFD, which neither sys_dup() (lowest free) nor sys_dup2() (an
+// exact number) can express. The copy does NOT inherit close-on-exec.
+int sys_dupfd(int fd, int min);
+
+// Close-on-exec, per DESCRIPTOR rather than per description: -1 queries,
+// 0 clears, 1 sets. Returns the flag as it was before the call.
+int sys_fd_cloexec(int fd, int op);
+
 // ICANON and ECHO off, ISIG on -- what every shell here wants, since
 // they all edit for themselves and none of them wants the kernel
 // echoing on top. One call rather than four lines in three shells.

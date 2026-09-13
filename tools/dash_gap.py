@@ -38,9 +38,15 @@ that were glibc's declarations colliding with tolibc's. With it, 31 of
 32 failed on missing headers. Any port built here needs the flag for the
 same reason.
 
+  4. With --link, resolves every undefined symbol in the compiled
+     objects against what tolibc actually EXPORTS, which is the question
+     compiling cannot answer: a declaration satisfies the compiler and
+     only the linker knows whether anything stands behind it. It caught
+     that dash needs `sysconf` at RUNTIME -- dash declares its own when
+     HAVE_SYSCONF is unset, so it compiles and then calls sh_error().
+
 WHAT IT DOES NOT CHECK, said plainly because an oversold check is worse
-than none: that dash LINKS (nothing here links), that it RUNS, or that
-it fits the ring-3 frame budget. It answers "what would the compiler
+than none: that dash RUNS, or that it fits the ring-3 frame budget. It answers "what would the compiler
 still refuse", which is the question the roadmap kept guessing at.
 
 The shim headers below are MEASUREMENT SCAFFOLDING, not a port. They
@@ -99,6 +105,9 @@ CONFIG_H = """\
 #define HAVE_STRTOIMAX 1
 #define HAVE_STRTOUMAX 1
 #define HAVE_ISALPHA 1
+// dash's waitpid fallback is written with FOUR arguments and has
+// evidently never been compiled; wait3 is the path that works.
+#define HAVE_WAIT3 1
 /* dash reaches for the 64-bit names; map them onto the plain ones. */
 #define stat64 stat
 #define fstat64 fstat
@@ -164,7 +173,7 @@ def build_generated(work):
     return None
 
 
-def compile_all(work, shimmed):
+def compile_all(work, shimmed, drop_tolibc=False):
     """Compile every source. Returns (failed_files, stderr_text)."""
     gccinc = subprocess.run(["gcc", "-print-file-name=include"],
                             capture_output=True, text=True).stdout.strip()
@@ -174,15 +183,21 @@ def compile_all(work, shimmed):
     # NOTE: with shimmed=False this reports only the FIRST missing header
     # per file, which is why discover_headers() iterates rather than
     # trusting one pass.
-    inc += ["-I" + os.path.join(REPO, "userland", "include"),
-            "-I" + os.path.join(REPO, "kernel", "include", "api"),
+    if not drop_tolibc:
+        inc.append("-I" + os.path.join(REPO, "userland", "include"))
+    inc += ["-I" + os.path.join(REPO, "kernel", "include", "api"),
             "-I" + os.path.join(REPO, "kernel", "include", "abi"),
             "-I" + os.path.join(REPO, "userland"),
             "-I."]
     failed, errs = [], []
     for src in SOURCES:
+        # Kept, not sent to /dev/null: link_gap() reads them back, and a
+        # second compile just to produce them would be a second thing to
+        # keep in step with this one.
+        out = os.path.join(work, src[:-2] + ".o")
+        os.makedirs(os.path.dirname(out), exist_ok=True)
         r = run(["gcc"] + CFLAGS + ["-include", "config.h"] + inc +
-                [src, "-o", os.devnull], work)
+                [src, "-o", out], work)
         if r.returncode != 0:
             failed.append(src)
         errs.append(r.stderr)
@@ -241,10 +256,62 @@ def discover_headers(work):
     return sorted(found)
 
 
+def link_gap(work):
+    """Undefined symbols that nothing in tolibc exports.
+
+    Compiling proves a DECLARATION exists; this proves something stands
+    behind it. The two fail differently and at different times, which is
+    why both stages are here.
+    """
+    objs = []
+    for src in SOURCES:
+        o = os.path.join(work, src[:-2] + ".o")
+        if os.path.exists(o):
+            objs.append(o)
+    if not objs:
+        return None, "nothing compiled"
+
+    r = subprocess.run(["nm", "-u"] + objs, capture_output=True, text=True)
+    need = {ln.split()[-1] for ln in r.stdout.splitlines()
+            if ln.strip().startswith("U ")}
+
+    have = set()
+    for lib in ("build/lib/libc.so", "build/lib/libuapp.so",
+                "build/userland/rt/sys.o", "build/userland/rt/stack_chk.o",
+                "build/userland/rt/tls.o"):
+        path = os.path.join(REPO, lib)
+        if not os.path.exists(path):
+            return None, f"{lib} not built -- run `make all` first"
+        flag = "-D" if lib.endswith(".so") else ""
+        cmd = ["nm"] + ([flag] if flag else []) + ["--defined-only", path]
+        rr = subprocess.run(cmd, capture_output=True, text=True)
+        for ln in rr.stdout.splitlines():
+            parts = ln.split()
+            if len(parts) >= 3:
+                have.add(parts[-1])
+
+    # Dash's own symbols resolve among the objects themselves.
+    own = set()
+    rr = subprocess.run(["nm", "--defined-only"] + objs, capture_output=True, text=True)
+    for ln in rr.stdout.splitlines():
+        parts = ln.split()
+        if len(parts) >= 3:
+            own.add(parts[-1])
+
+    missing = sorted(s for s in need
+                     if s not in have and s not in own
+                     and s != "_GLOBAL_OFFSET_TABLE_")
+    return missing, None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter,
                                  epilog=__doc__)
+    ap.add_argument("--link", action="store_true",
+                    help="also resolve every undefined symbol against what "
+                         "tolibc EXPORTS -- the question compiling cannot "
+                         "answer")
     ap.add_argument("--verbose", action="store_true",
                     help="dump the raw compiler errors too")
     ap.add_argument("--positive-control", action="store_true",
@@ -291,30 +358,41 @@ def main():
                 print(f"\nmissing {label} ({len(items)}):")
                 print("  " + "  ".join(sorted(items)))
 
+        if args.link:
+            missing, why = link_gap(work)
+            if why:
+                print(f"\nlink: SKIPPED -- {why}")
+            elif missing:
+                print(f"\nsymbols nothing in tolibc exports ({len(missing)}):")
+                print("  " + "  ".join(missing))
+            else:
+                print("\nlink: ok -- every undefined symbol resolves against "
+                      "libc.so, libuapp.so and rt/")
+
         if args.verbose:
             print("\n--- raw errors (shimmed pass) ---\n" + errs)
 
         if args.positive_control:
-            # Withdraw a shim the run just proved was needed, and require
-            # it to come back as a gap. A report of "nothing missing"
-            # means nothing unless this harness can still see a hole --
-            # and doing it by deleting a file INSIDE the temp copy is why
-            # this never touches userland/include/, where a crash
-            # mid-control would leave the repo broken.
-            if not headers:
-                print("\npositive control: cannot run -- no header gap left "
-                      "to withdraw. Point it at a smaller include path.")
-                return 1
-            victim = headers[0]
-            os.remove(os.path.join(work, "shim", victim))
-            _, _, ctl_headers, _ = measure(work, shimmed=True)
-            if victim in ctl_headers:
-                print(f"\npositive control: ok -- withdrawing the {victim} shim "
-                      f"brought it back as a gap, so the measurement is live")
+            # **TAKE tolibc AWAY AND REQUIRE THE GAP TO COME BACK.**
+            # The first version of this withdrew one SHIM, which worked
+            # only while shims were still needed -- the day the last
+            # header landed it reported "cannot run", leaving the
+            # harness with no way to show it can fail at all. Removing
+            # the userland/include path instead is a control that keeps
+            # working however complete tolibc becomes, and it tests the
+            # thing that actually matters: that this measurement depends
+            # on tolibc rather than on something else on the path.
+            ctl_failed, ctl_errs = compile_all(work, shimmed=True,
+                                               drop_tolibc=True)
+            if len(ctl_failed) >= len(SOURCES):
+                print(f"\npositive control: ok -- without tolibc on the include "
+                      f"path all {len(ctl_failed)} sources fail, so the pass "
+                      f"above is tolibc's doing")
             else:
-                print(f"\npositive control: FAILED -- withdrawing {victim} "
-                      f"changed nothing. This harness is not measuring what "
-                      f"it claims, and a clean report from it means nothing.")
+                print(f"\npositive control: FAILED -- {len(SOURCES) - len(ctl_failed)} "
+                      f"source(s) still compiled with tolibc REMOVED. Something "
+                      f"else on the include path is satisfying them, and the "
+                      f"result above is not measuring what it claims.")
                 return 1
         return 0
     finally:

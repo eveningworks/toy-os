@@ -170,6 +170,14 @@
 #define SYS_O_WRITE 1 // open for writing (default: read-only)
 #define SYS_O_CREAT 2 // create the file if it doesn't exist (write only)
 #define SYS_O_TRUNC 4 // truncate to empty on open (write only)
+#define SYS_O_EXCL 16 // with SYS_O_CREAT: FAIL with -EEXIST if the file
+                      // already exists. Meaningless without it, and
+                      // refused in that combination rather than ignored.
+                      //
+                      // **THE ATOMICITY IS THE POINT.** A caller can
+                      // already ask fs_exists() and then open; what it
+                      // cannot do is close the window between the two,
+                      // which is exactly what a lock file needs.
 #define SYS_O_APPEND 8 // every write goes to the CURRENT end of the file,
                       // whatever the fd's position is, and the position
                       // follows the write. Write-only, and the flag
@@ -1388,6 +1396,11 @@ struct sys_stat {
 // type. Mirrors fs.h's FS_CAP_MODE.
 #define SYS_STAT_MODE   (1u << 3)
 
+// The DESCRIPTION is non-blocking (SYS_SET_NONBLOCK). Set only by
+// SYS_FSTAT, which is the only one of the two that has a descriptor to
+// ask about -- what fcntl(F_GETFL) reads.
+#define SYS_STAT_NONBLOCK (1u << 4)
+
 // The next two are what SYS_FSTAT adds, and they are FLAGS rather than
 // new struct fields on purpose: a bare `is_tty` word would be a field
 // that means nothing for the path-keyed SYS_STAT, which is exactly the
@@ -1999,6 +2012,33 @@ struct sys_stat {
 // at what its handler set -- a shell's wait loop hangs exactly there.
 // Linux's name for the same exception is ERESTARTNOHAND.
 #define SYS_SIGSUSPEND 111
+
+// RDI = fd, RSI = the lowest descriptor number the copy may take.
+// Returns the new descriptor, or -EBADF / -EMFILE.
+//
+// **WHAT SYS_DUP CANNOT DO, AND WHY IT IS A SEPARATE CALL RATHER THAN
+// AN ARGUMENT.** SYS_DUP takes the LOWEST free descriptor and SYS_DUP2
+// takes an EXACT one; fcntl's F_DUPFD asks for neither -- it wants the
+// lowest free one AT OR ABOVE a floor, which is how a shell moves a
+// descriptor out of the 0..9 range a redirection might overwrite. Doing
+// it in userland means dup()ing repeatedly and closing the results
+// below the floor, which is a loop of syscalls and, with more than one
+// thread, a race against another dup.
+#define SYS_DUPFD 112
+
+// RDI = fd, RSI = -1 to QUERY, 0 to clear, 1 to set. Returns the flag
+// as it was BEFORE the call (0 or 1), or -EBADF.
+//
+// **close-on-exec IS A PROPERTY OF THE DESCRIPTOR, NOT THE DESCRIPTION**
+// -- unlike SYS_SET_NONBLOCK above, which is on the description and is
+// therefore shared by every dup of it. That is Linux's split and it is
+// the one that makes sense: "do not let this leak into the program I am
+// about to exec" is about THIS handle, and a dup made precisely to
+// survive the exec must not inherit it.
+//
+// Honoured by fd_rekey(), which is the one place an exec carries
+// descriptors into the new image.
+#define SYS_FD_CLOEXEC 113
                            // (abi/diag_abi.h). Asks a NAMED ring-3
                            // service a question, or -- from the service
                            // side -- claims that name and answers.

@@ -123,6 +123,41 @@ static inline void _exit(int code) { sys_exit(code); }
 // Returns 0 if the path exists, -1 with errno ENOENT if it does not.
 int access(const char *path, int mode);
 
+// --- who we are -------------------------------------------------------
+//
+// **ALL FIVE ANSWER 0 OR EMPTY, AND THAT IS A FACT RATHER THAN A STUB.**
+// This system has no login, no /etc/passwd and no second user. Zero is
+// root's id on every Unix, which is also the truthful answer here -- the
+// one user can do everything -- so a program branching on
+// `geteuid() == 0` takes the branch that is correct for this machine.
+static inline uid_t getuid(void)  { return 0; }
+static inline uid_t geteuid(void) { return 0; }
+static inline gid_t getgid(void)  { return 0; }
+static inline gid_t getegid(void) { return 0; }
+
+// The supplementary group list, which is empty. Returns the COUNT, 0,
+// for any size -- including the size-0 form that asks how many there
+// are.
+static inline int getgroups(int size, gid_t *list) { (void)size; (void)list; return 0; }
+
+// **vfork() IS fork(), and the distinction it names does not exist
+// here.** vfork promised a cheaper fork by sharing the parent's address
+// space and suspending it until exec -- an optimisation for systems
+// without copy-on-write. This fork IS copy-on-write
+// (docs/conventions/kernel.md), so the promise is already kept, and the
+// dangerous half of vfork's contract (a child that must touch nothing
+// before exec) would buy nothing in exchange. POSIX removed it in 2008.
+static inline pid_t vfork(void) { return fork(); }
+
+// SEEK_SET/CUR/END are POSIX's here as well as <stdio.h>'s, since
+// lseek() is declared in this header and code reaching for the constants
+// includes whichever it saw first.
+#ifndef SEEK_SET
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+#endif
+
 // --- sysconf ----------------------------------------------------------
 //
 // Runtime system values. Only the names below are answered; anything

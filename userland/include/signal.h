@@ -140,4 +140,12 @@ int kill(int pid, int sig);
 // "Unknown signal".
 const char *strsignal(int sig);
 
+
+// ONE PAST THE HIGHEST SIGNAL NUMBER, which is what every `for (i = 1;
+// i < NSIG; i++)` loop over dispositions expects. SIGNAL_MAX is the
+// kernel's name for the highest; this is the C one for the bound.
+#ifndef NSIG
+#define NSIG (SIGNAL_MAX + 1)
+#endif
+
 #endif

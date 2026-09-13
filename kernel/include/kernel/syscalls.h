@@ -161,6 +161,10 @@ void fd_desc_unref(int di);
 // kernel log. Idempotent. Called for a process's own address space the
 // first time anything asks about its fds.
 int  fd_space_open(uint64_t pml4);
+int  fd_dup_from(uint64_t pml4, int oldfd, int min);
+// -1 queries, 0 clears, 1 sets; returns the flag as it was before.
+int  fd_cloexec(uint64_t pml4, int fd, int op);
+void fd_close_on_exec(uint64_t pml4);
 // The lowest free descriptor in `pml4` naming description `di`. -1 when
 // the table is full.
 //
@@ -290,6 +294,8 @@ int sys_tcgetpgrp(struct syscall_ctx *c);
 // --- terminals (kernel/tty/tty_syscalls.c) ---------------------------
 int sys_openpty(struct syscall_ctx *c);
 int sys_set_nonblock(struct syscall_ctx *c);
+int sys_dupfd(struct syscall_ctx *c);
+int sys_fd_cloexec(struct syscall_ctx *c);
 int sys_tcgetwinsz(struct syscall_ctx *c);
 int sys_tcsetwinsz(struct syscall_ctx *c);
 int sys_tcgetattr(struct syscall_ctx *c);

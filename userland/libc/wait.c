@@ -30,3 +30,15 @@ int waitpid(int pid, int *status, int options) {
     if (status) *status = code;
     return r;
 }
+
+
+// See <sys/wait.h>: `usage` must be NULL, because there is no honest
+// value to put in it.
+pid_t wait4(pid_t pid, int *status, int options, struct rusage *usage) {
+    if (usage) { errno = EINVAL; return -1; }
+    return waitpid(pid, status, options);
+}
+
+pid_t wait3(int *status, int options, struct rusage *usage) {
+    return wait4((pid_t)-1, status, options, usage);
+}

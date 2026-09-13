@@ -146,6 +146,27 @@ int sys_open(struct syscall_ctx *c) {
         // SYS_FSTAT have no answer for.
         int exists = fs_exists(name) && !fs_is_dir(name);
 
+        // **O_EXCL: EXISTS IS THE FAILURE.** Checked HERE, inside the
+        // syscall, because the whole value of the flag is that no other
+        // process can create the file between the test and the open --
+        // a caller doing fs_exists() then open() has exactly that
+        // window, which is why it cannot build a lock file.
+        //
+        // Refused WITHOUT O_CREAT rather than ignored: POSIX leaves the
+        // combination undefined, and a caller who wrote it meant
+        // something this cannot provide.
+        if (flags & SYS_O_EXCL) {
+            if (!want_creat) {
+                klog_write("syscall: open() rejected -- O_EXCL without O_CREAT\n");
+                c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+                return 0;
+            }
+            if (exists) {
+                c->regs[14] = (uint64_t)(int64_t)-EEXIST;
+                return 0;
+            }
+        }
+
         if (!exists && !(want_write && want_creat)) {
             klog_write("syscall: open() rejected -- file not found\n");
             c->regs[14] = (uint64_t)(int64_t)-ENOENT;

@@ -21,4 +21,10 @@ int *__errno_location(void);
 
 #define errno (*__errno_location())
 
+// **THE SAME VALUE AS EAGAIN, which POSIX explicitly permits and every
+// Unix does.** They are one condition with two names -- "try again" and
+// "this would have blocked" -- and code that tests both with `||` is
+// correct either way.
+#define EWOULDBLOCK EAGAIN
+
 #endif

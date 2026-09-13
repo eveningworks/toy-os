@@ -129,3 +129,14 @@ size_t strxfrm(char *dst, const char *src, size_t n) {
     }
     return len;
 }
+
+// See <string.h>: returns the NUL it wrote, or d+n when the source
+// filled the buffer exactly and nothing was written.
+char *stpncpy(char *d, const char *s, size_t n) {
+    size_t i = 0;
+    for (; i < n && s[i]; i++) d[i] = s[i];
+    char *end = d + i;
+    // strncpy's padding rule, kept: the REMAINDER is NULs, not one NUL.
+    for (; i < n; i++) d[i] = '\0';
+    return end;
+}
