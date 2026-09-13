@@ -762,8 +762,9 @@ run on, not by order.
 - [x] ~~`fsync()`/`fdatasync()`~~ done -- `SYS_FSYNC`, scoped to the volume rather than the file
 - [x] ~~TFS3 stops re-reading pointer tables it already holds~~ done -- the write caches outlive a syscall
 - [x] ~~`SYS_WRITE_MAX` at 256 KiB~~ done -- it sets the TRANSACTION count, and write amplification fell 1.33x -> 1.086x
-- [ ] A VFS inode cache -- ~4 of the ~5 metadata reads a random 4 KiB write still issues are the inode and the path walk
-- [ ] Batch TFS3's allocation metadata into the deferred transaction -- bitmap, GDT and pointer tables still flush per operation
+- [ ] A VFS inode cache -- the path half is done in `resolve()`; what is left is ONE sector read per op, measured not worth the refactor yet
+- [x] ~~Batch TFS3's allocation bitmap into the deferred transaction~~ done -- 1138 -> 623 write commands per 64 MiB
+- [ ] Batch the dirty POINTER TABLES too -- blocked on `g_mcache` needing to flush a second mount's dirty entry rather than discard it
 - [ ] Remove one of the file path's two copies -- scatter/gather the PRDT over the kernel buffer instead of the driver's bounce
 - [ ] A write-back page cache -- `docs/pagecache-design.md`, DEMOTED there by measurement: the workload is not read-bound
 - [ ] A second drive, which needs a block layer whose active device is not singular

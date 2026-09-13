@@ -4745,11 +4745,35 @@ sleeping -- so nothing is being slept through and the helper is looping
 without ever finishing. `scheduler_poll()` also returns RUNNING rather
 than INVALID, so it is not init reaping it first either.
 
-What makes it spin is NOT established. The obvious candidate is
-`SYS_WAIT_EVENT` returning "ask again" every time instead of parking,
-which would be a busy loop that consumes nothing -- but that has not
-been demonstrated, and the next step is to instrument the helper's own
-syscall returns rather than the scheduler's view of it.
+**IT IS NOT THE HELPER'S LOOP EITHER.** A 200,000-iteration cap inside
+`/tests/event_test`'s own "ask again" loop never fires, and sampling the
+state across the whole deadline gives READY and RUNNING with **zero
+BLOCKED samples** -- it never parks at all. Disabling
+`scheduler_wait_arm()` changes nothing, so it is not the new primitive.
+Runnable and making no progress is the signature of a context resumed at
+the same frame over and over.
+
+**MECHANISM, AND IT IS THE DEFERRED SWITCH.** `block_common()` marks the
+process BLOCKED, sets `current_index` to the process it picked, and then
+RETURNS -- the switch itself does not happen until the dispatch epilogue
+runs `mov rsp, rax`. So between `switch_to(next)` and that epilogue, the
+scheduler believes B is current while A's kernel code is still
+executing. A timer tick in that window -- which only a trap gate makes
+possible -- runs `scheduler_tick()`, which does
+`procs[current_index].kernel_rsp = regs` and saves **A's trapframe into
+B's slot**. B is then resumed at A's frame, and the frame A's block
+saved is stale.
+
+**So the fix is the one this item is named after, in its real form.**
+Retiring `g_next_kernel_rsp` as the mechanism, not just as a global: the
+context switch has to happen AT `switch_to()` rather than being handed
+to an epilogue that runs later with interrupts on.
+`kernel/arch/x86_64/context_switch.asm` already has the primitive
+(`process_context_save`/`_restore`, a real register-and-stack swap), used
+today only by the legacy `process_run_ring3()` path -- so the hard
+assembly exists and what is missing is moving the ~5 switch sites onto
+it, plus a `ret_from_fork`-shaped entry for a process that has never
+run.
 
 **`prepare_to_wait` LANDED ANYWAY, and is worth having on its own.**
 `scheduler_wait_arm()`/`_disarm()` (api/scheduler.h) let a caller

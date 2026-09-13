@@ -299,3 +299,15 @@ Reproduce: `python3 tools/ansi_cursor_test.py` (boots its own guest).
   `desktop.taskbar_height` checks that now run first pass.
 
 Reproduce: `python3 tools/vm.py --disk <copy> start && python3 tools/taskbar_test.py`.
+
+## `errno_test` and `focusring_test` fail intermittently, 2 boots in 3
+
+`usertest_run.py` reports 49/51 with `errno_test: FAIL dup() fails with
+a full table` and `focusring_test` missing its pass line. Measured 2 of
+3 boots at commit 64f098e9 and 2 of 4 with the storage work applied --
+the same rate and the same two tests, so PRE-EXISTING rather than
+introduced. Cause not established; the `dup()` check depends on how
+many descriptor tables the boot has already handed out, which is not
+something the test establishes for itself.
+
+Reproduce: `python3 tools/usertest_run.py`, several times.

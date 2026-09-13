@@ -844,7 +844,7 @@ static uint64_t dir_lookup(uint64_t dir_ino, const struct t3_inode *dir,
 // today -- symlink following (with its hop cap) is deliberately not
 // implemented yet, see the design doc's Symlinks section; a symlink
 // encountered mid-path simply fails the lookup.
-static int resolve(const char *norm, uint64_t *out_ino) {
+static int resolve_walk(const char *norm, uint64_t *out_ino) {
     uint64_t ino = T3_INO_ROOT;
     const char *p = norm;
     if (*p == '/') p++;
@@ -919,6 +919,26 @@ static void lcache_put(const char *norm, uint64_t ino) {
     S->lcache[s].ino = ino;
 }
 
+// resolve(), THROUGH THE PATH CACHE. The cache sits here rather than in
+// lookup() because every door into the filesystem walks a path and only
+// the READ path went through lookup(): a write syscall re-walked from
+// the root, reading a directory inode per component, every time.
+// Measured at 34% of random 4 KiB write throughput on a
+// three-component path, and sequential READ was already insensitive to
+// path depth -- which is what named the asymmetry.
+//
+// Only resolutions that SUCCEEDED are cached (lcache_get), and
+// ncache_flush() clears it on exactly the operations that can change
+// which inode a path names.
+static int resolve(const char *norm, uint64_t *out_ino) {
+    uint64_t ino = lcache_get(norm);
+    if (ino) { *out_ino = ino; return 1; }
+    if (!resolve_walk(norm, &ino)) return 0;
+    lcache_put(norm, ino);
+    *out_ino = ino;
+    return 1;
+}
+
 static int lookup(const char *path, uint64_t *out_ino, struct t3_inode *out_node) {
     char norm[T3_PATH_BUF];
     if (!S->mounted || !normalize(path, norm)) return 0;
@@ -927,12 +947,8 @@ static int lookup(const char *path, uint64_t *out_ino, struct t3_inode *out_node
     blk_stat_get(BLK_STAT_READ, &reads0, NULL, NULL, NULL);
     uint64_t t0 = clocksource_now_ns();
 
-    uint64_t ino = lcache_get(norm);
-    int ok = 1;
-    if (!ino) {
-        ok = resolve(norm, &ino);
-        if (ok) lcache_put(norm, ino);
-    }
+    uint64_t ino = 0;
+    int ok = resolve(norm, &ino);
     if (ok) {
         if (out_ino) *out_ino = ino;
         // STILL READ, never cached. The inode's CONTENTS change on
@@ -1264,7 +1280,10 @@ static int txn_flush_deferred(void) {
     // the mount being activated.
     struct t3_state *save = S;
     S = owner;
-    int ok = txn_commit();
+    // The allocation state the batch accumulated, BEFORE the commit
+    // that makes those blocks reachable -- do_write_inner() skips it
+    // per write under `batched`, which is the whole saving.
+    int ok = flush_alloc_state() && txn_commit();
     S = save;
     if (!ok) {
         // KEEP THE STAGED WORK. txn_commit() zeroed the count, but the
@@ -1818,7 +1837,14 @@ static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
     if (offset + len > node->size) node->size = offset + len;
     node->modified = now_epoch();
 
-    if (!flush_alloc_state()) return 0;       // set-before-use
+    // SET-BEFORE-USE, and under `batched` it rides the deferred commit
+    // instead. Deferring is strictly SAFER than flushing per write: a
+    // crash mid-batch then leaves the bitmap saying `free` and the
+    // inode unchanged -- consistent -- where a per-write flush leaves
+    // blocks marked used by an inode update that never landed, which is
+    // the leak fsck exists to reclaim. txn_flush_deferred() keeps the
+    // ordering by doing it before the commit.
+    if (!storage_sync_batched() && !flush_alloc_state()) return 0;
 
     // BATCHED: stage the inode into a transaction that stays open, so
     // many writes share one commit. Re-staging the same inode block
@@ -3881,3 +3907,58 @@ const struct fs_ops tfs3_ops = {
     .check = tfs3_check,
     .link = tfs3_link, // optional op, paired with FS_CAP_HARDLINKS above
 };
+
+// ---- the deferred allocation flush ----------------------------------------
+//
+// HERE RATHER THAN IN fs_test.c BECAUSE fsck CANNOT SEE THIS BUG.
+// tfs3_check() compares the inode tree against the RAM bitmap
+// (bbm_test()), so a batch whose bitmap never reached the disk looks
+// perfectly clean until the next mount re-reads it -- an earlier version
+// of this check called fs_check() and passed with the flush removed
+// entirely. So it reads the bitmap block back off the device.
+#include "ktest.h"
+
+KTEST("fs", "a batched commit lands the allocation bitmap on disk") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    const struct mount *rm = mount_root();
+    if (!rm || rm->fs != &tfs3_ops) KTEST_SKIP("the root is not TFS3");
+
+    int was_strict = storage_sync_strict(), was_batched = storage_sync_batched();
+    storage_config_set_mode_for_test(1, 1);   // barriers real, commits deferred
+
+    const char *path = "/.ktest_batchbm";
+    fs_delete(path);
+    static char buf[8192];
+    for (unsigned i = 0; i < sizeof buf; i++) buf[i] = (char)(i * 7u + 1u);
+    int wrote = fs_write_range(path, 0, buf, sizeof buf);
+    int synced = wrote && fs_sync(0);
+
+    // `S` NAMES THE MOUNT AN OPERATION IS RUNNING ON and is NULL between
+    // operations by design, so the inspection has to enter the mount the
+    // way the VFS does. Testing it without entering skipped this test on
+    // every boot, which reads exactly like a pass.
+    uint32_t blk = 0, on_disk = 2;
+    void *prev = mount_enter(rm);
+    uint64_t ino = 0;
+    struct t3_inode node;
+    if (synced && S && S->mounted && lookup(path, &ino, &node)) {
+        blk = node.ptrs[0];
+        if (blk) {
+            uint32_t g = (blk - S->group0) / T3_BPG;
+            uint32_t bit = (blk - S->group0) % T3_BPG;
+            static uint8_t disk[T3_BLOCK];
+            if (read_block(group_base(g), disk)) on_disk = (disk[bit >> 3] >> (bit & 7)) & 1u;
+        }
+    }
+    mount_leave(rm, prev);
+    storage_config_set_mode_for_test(was_strict, was_batched);
+
+    KTEST_ASSERT(wrote == 1);
+    KTEST_ASSERT(synced == 1);
+    KTEST_ASSERT(blk != 0);
+    // THE LOAD-BEARING ONE: the block the file uses is marked allocated
+    // in the bitmap AS THE DEVICE HOLDS IT, not as RAM believes it.
+    KTEST_ASSERT_EQ((int64_t)on_disk, 1);
+
+    fs_delete(path);
+}

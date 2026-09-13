@@ -2921,3 +2921,64 @@ asks. AHCI carries the full 256 KiB; legacy ATA cannot exceed 64 KiB
 because one PRD's byte count is 16-bit and `ata.c` has no
 scatter-gather. A 256 KiB syscall there is four commands in ONE
 transaction, which is where most of the win was.
+
+
+## Why the path cache moved into `resolve()`, and why a VFS inode cache was not built
+
+The obvious fix for "every write syscall re-walks the path" is a VFS
+inode cache -- Linux's shape, where the dcache and icache sit above the
+filesystem and backends are addressed by inode rather than by path.
+That was the plan. It was not built, and the reason is a measurement.
+
+TFS3 already had a full-path cache. It simply lived inside `lookup()`,
+which only the READ path called; `tfs3_write_range()` called `resolve()`
+directly. Moving the cache down into `resolve()` is a dozen lines, gives
+it to every door into the filesystem, and removed the entire
+path-resolution cost: after it, a three-component path measures the same
+as a root-level one on all four profiles, where before it cost 34% of
+random 4 KiB write throughput.
+
+What a VFS inode cache would ADD on top of that is the inode read
+itself -- one 512-byte read per operation, about one of the three to
+four metadata reads a write syscall still issues. Against that it needs
+inode identity in `fs_ops` (every one of ~20 entry points takes a path
+today), an opaque per-backend payload the VFS caches, and an
+invalidation rule covering delete, rename, truncate, link, chmod, mkfs,
+mount and hard links naming one inode by two paths. That is a large,
+correctness-critical change to the kernel's most central subsystem for
+one sector read.
+
+It stays on the roadmap because the SHAPE is right and the reasons to
+want it grow with the system -- a second filesystem with expensive
+resolution, or per-inode state worth caching. It is not worth building
+for what it buys today, and the honest version of that is a number
+rather than a preference.
+
+## Why `batched` defers the allocation bitmap too, and why that is safer
+
+`do_write_inner()` flushed the dirty bitmap and group descriptors on
+every write, before staging the inode -- the set-before-use order that
+keeps a crash costing a LEAK rather than a file pointing at blocks the
+bitmap calls free. Under `storage.sync = batched` the inode commit was
+already deferred, so that flush was the only per-write metadata write
+left, and it was most of them: 1138 block-layer write commands for 256
+syscalls of sequential writing.
+
+`txn_flush_deferred()` does it once per batch now, immediately before
+the commit, which preserves the ordering exactly. 623 commands, and
+write amplification of 1.018x against 1.05x; 130.5 -> 140.9 MB/s.
+
+**The crash argument runs the other way from the intuition.** Deferring
+is not a durability trade: a crash mid-batch now leaves the bitmap
+saying `free` and the inode unchanged, which is fully consistent and
+leaks nothing. Flushing per write left blocks marked used by an inode
+update that never landed. The batch's contents are lost either way --
+that is what `batched` already promised.
+
+**What made it hard to test is that `fsck` cannot see the bug.**
+`tfs3_check()` walks the inode tree against the RAM bitmap, so a batch
+whose bitmap never reached the device is invisible until the next mount
+re-reads it; removing the flush entirely passed all 36 fs tests. The
+check that catches it reads the bitmap block back through the block
+layer, which is why it lives in `tfs3.c` -- and why it calls
+`mount_enter()` first, since `S` is NULL between operations by design.

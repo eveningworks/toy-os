@@ -969,6 +969,8 @@ whenever a headline here tells you something you did not already know.
 - **NEVER LEAVE THE BOOT ORDER OUT OF A QEMU LINE, AND ASK `boot_medium()` WHICH ONE**
 - **A BLOCK-KEYED CACHE THAT OUTLIVES ONE OPERATION MUST BE FORGOTTEN WHEN ITS BLOCK IS FREED** -- TFS3's write-side pointer-table caches survive a syscall now; `map_cache_forget()` is called from `free_block_bit()` and from the two places that write a table directly, and `g_mcache` records its mount because a block number is volume-relative
 - **`SYS_WRITE_MAX` SETS THE TRANSACTION COUNT, NOT THE COMMAND SIZE** -- 256 KiB; each driver still reports its own per-transfer ceiling (`blkdev_max_sectors_per_xfer()`), and legacy ATA's is 64 KiB
+- **THE WRITE PATH RESOLVES THROUGH THE PATH CACHE, BECAUSE `resolve()` CACHES AND NOT `lookup()`** -- the cache moved into `resolve()`, so every door gets it; sequential READ being insensitive to path depth while random WRITE lost 34% is what named the asymmetry
+- **UNDER `batched`, THE ALLOCATION BITMAP RIDES THE DEFERRED COMMIT** -- and `fsck` CANNOT SEE a missing flush, because it compares against the RAM bitmap; the KTEST reads the block back off the device and must `mount_enter()` first, since `S` is NULL between operations
 
 ### The shell, the console, and line editing
 

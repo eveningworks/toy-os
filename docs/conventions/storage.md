@@ -1274,3 +1274,51 @@ rather than failing, so a fragmented heap costs throughput and not
 `-ENOMEM`, and because a pipe write is clamped to `PIPE_BUF_SIZE`
 separately -- without that clamp this constant would park a writer on a
 request the pipe could never satisfy.
+
+
+## THE WRITE PATH RESOLVES THROUGH THE PATH CACHE, BECAUSE `resolve()` CACHES AND NOT `lookup()`
+
+TFS3 has a full-path cache (`lcache`) and a per-component one
+(`ncache`). The full-path cache used to live inside `lookup()`, which
+only the READ path went through -- `tfs3_write_range()` called
+`resolve()` directly, so every write syscall walked the path from the
+root, reading a directory inode per component.
+
+**The measurement that named it:** sequential READ was completely
+insensitive to path depth while random 4 KiB WRITE lost 34% of its
+throughput on a three-component path. A cache one direction uses and
+the other does not produces exactly that asymmetry, and it is worth
+reaching for whenever two paths that should cost the same do not.
+
+The cache sits in `resolve()` now, so every door into the filesystem
+gets it and there is no second function to remember. `resolve_walk()`
+is the uncached walk. Only resolutions that SUCCEEDED are cached, and
+`ncache_flush()` clears both caches on exactly the operations that can
+change which inode a path names -- create, delete, link, rename,
+unmount.
+
+**Removing any one of those flushes now reddens a large part of the fs
+suite**, where before this change it would only have broken reads.
+
+## UNDER `batched`, THE ALLOCATION BITMAP RIDES THE DEFERRED COMMIT
+
+`do_write_inner()` used to `flush_alloc_state()` on every write --
+bitmap and group descriptors -- before staging the inode. Under
+`storage.sync = batched` it does not; `txn_flush_deferred()` does it
+once per batch, before the commit, keeping the set-before-use order.
+
+**Deferring it is SAFER, not a trade.** A crash mid-batch now leaves
+the bitmap saying `free` and the inode unchanged, which is consistent.
+Flushing per write left blocks marked used by an inode update that
+never landed -- the leak `fsck` exists to reclaim.
+
+**`fsck` CANNOT SEE A MISSING FLUSH**, and this is the trap. It
+compares the inode tree against the RAM bitmap (`bbm_test()`), so a
+batch whose bitmap never reached the device looks perfectly clean until
+the next mount re-reads it. A positive control that removed the flush
+entirely passed the whole fs suite. The KTEST that catches it lives in
+`tfs3.c` rather than `fs_test.c` and reads the bitmap block back off the
+device -- and it has to `mount_enter()` first, because `S` names the
+mount an operation is running on and is NULL between operations by
+design. Testing `S` without entering skipped the test on every boot,
+which reads exactly like a pass.

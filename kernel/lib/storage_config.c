@@ -99,7 +99,7 @@ static const char *const g_modes[] = { "strict", "batched", "lazy" };
 // THE THREE MODES, as two flags rather than an enum, because the two
 // questions they answer are independent and every caller asks only one:
 //
-//   strict   barriers real, commit per write   -- the default
+//   strict   barriers real, commit per write
 //   batched  barriers real, commit DEFERRED    -- one commit for many
 //   lazy     barriers skipped entirely         -- ext4's nobarrier
 //
@@ -111,16 +111,6 @@ static const char *const g_modes[] = { "strict", "batched", "lazy" };
 // `config set` away for anyone who wants every write durable before it
 // returns.
 //
-// BARRIERS STAY REAL, which is the half that keeps this defensible:
-// `g_strict` is still 1 here. Only `lazy` turns them off, and only
-// `lazy` risks a journal that cannot be replayed.
-//
-// These values also stand during MOUNT and journal replay, both of
-// which run before storage_config_init(). That is safe: deferral only
-// affects do_write_inner()'s path, replay writes its targets directly,
-// and anything opening a transaction commits a deferred one on its way
-// past.
-//
 // TWO THINGS HAD TO BE FIXED BEFORE THIS COULD BE THE DEFAULT, both
 // found by making it one: `fsck` had to commit a deferred transaction
 // before walking the disk (blocks referenced by an uncommitted inode
@@ -130,7 +120,10 @@ static const char *const g_modes[] = { "strict", "batched", "lazy" };
 //
 // BARRIERS STAY REAL, which is the half that keeps this defensible:
 // `g_strict` is still 1 here. Only `lazy` turns them off, and only
-// `lazy` risks a journal that cannot be replayed.
+// `lazy` risks a journal that cannot be replayed. `lazy` is also
+// SLOWER than `batched` on every profile measured on the laptop --
+// skipping barriers does not buy back what committing per write costs
+// -- so it is a mode with no case for it rather than a faster one.
 //
 // These values also stand during MOUNT and journal replay, both of
 // which run before storage_config_init(). That is safe: deferral only
