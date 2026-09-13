@@ -132,8 +132,13 @@ static void collector_finish(struct completion_collector *c) {
 // The listing callback takes no context pointer -- it matches ring 0's
 // fs_list(), which has none -- so the in-flight collector is reachable
 // from a file-scope pointer. Safe because nothing re-enters completion
-// mid-listing: the kernel shell is single-threaded and `/bin/tosh` is
-// its own single-threaded process.
+// mid-listing, and NOT for the reason it looks like. This file is
+// compiled TWICE, so each ring has its own copy of these statics: the
+// kernel's is reached only from apps/shell.c (the rescue shell, on no
+// syscall path), and ring 3's lives in one single-threaded process's
+// own address space. A ring-3 process preempting the rescue shell
+// mid-Tab therefore cannot touch the statics it is standing on --
+// which is what keeps this true now a syscall can be preempted.
 static struct completion_collector *g_active;
 static const char *g_dir_prefix; // the part of the word before the last '/'
 static int g_skip_dirs;          // walking PATH: a directory is not a command

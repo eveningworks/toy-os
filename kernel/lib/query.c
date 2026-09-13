@@ -16,6 +16,38 @@
 #include "kfmt.h" // klog_printf
 #include <stddef.h>
 #include "initcall.h"
+#include "scheduler.h" // preempt guard -- see provider_fill() below
+
+
+// ---- calling a provider ----------------------------------------------
+
+// **A PROVIDER BUILDS ITS RECORD IN FILE-SCOPE STATE, SO TWO READERS
+// MUST NOT INTERLEAVE.** multiboot_query.c walks the memory map through
+// statics because the walk callback takes no context argument;
+// partition_query.c holds a whole partition table that the frame budget
+// refuses on the stack. Both said "safe: the kernel is single-threaded"
+// -- true only while a syscall could not be preempted.
+//
+// Guarded HERE, not in each provider, for the reason vfs.c's FS_OP()
+// gives: this is the one place every caller passes through, so a
+// provider added later is covered without knowing it had to be. The
+// sections are short and bounded by QUERY_RECORD_MAX.
+//
+// Nesting is fine and happens: QUERY_PROVIDERS' own fill() asks every
+// other provider for its count, so the guard is a depth counter.
+static int provider_fill(const struct query_provider *p, int index, void *out) {
+    scheduler_preempt_disable();
+    int ok = p->fill(index, out);
+    scheduler_preempt_enable();
+    return ok;
+}
+
+static uint32_t provider_count(const struct query_provider *p) {
+    scheduler_preempt_disable();
+    uint32_t n = (uint32_t)(p->count ? p->count() : 1);
+    scheduler_preempt_enable();
+    return n;
+}
 
 static const struct query_provider *g_providers[QUERY_MAX];
 static int g_count;
@@ -40,7 +72,7 @@ static int providers_fill(int index, void *out) {
     // ASKED, not cached: a list's length is a fact in its own right and
     // changes between calls. A stored count would be stale the moment
     // anything registered a process or freed a frame.
-    info->count = (uint32_t)(p->count ? p->count() : 1);
+    info->count = provider_count(p);
     info->flags = p->flags;
     k_strlcpy(info->name, p->name, sizeof info->name);
     return 1;
@@ -126,7 +158,7 @@ int query_read(uint32_t cls, int index, void *out, uint32_t cap) {
     if (!p) return -ENOENT;
     if (!out || cap < p->record_size) return -EINVAL;
     if (index < 0) return -ERANGE;
-    if (!p->fill(index, out)) return -ERANGE;
+    if (!provider_fill(p, index, out)) return -ERANGE;
     return (int)p->record_size;
 }
 
@@ -172,7 +204,7 @@ int query_field_get(const char *qualified, uint64_t *out_value, uint32_t *out_ty
         // the one place that bounds it.
         uint8_t rec[QUERY_RECORD_MAX];
         if (p->record_size > sizeof rec) return -EINVAL;
-        if (!p->fill(0, rec)) return -ERANGE;
+        if (!provider_fill(p, 0, rec)) return -ERANGE;
 
         uint64_t v = 0;
         k_memcpy(&v, rec + p->fields[i].offset, sizeof v);

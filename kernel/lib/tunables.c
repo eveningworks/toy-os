@@ -130,7 +130,14 @@ static const char *ata_nodma_unavailable(void) {
         // be told it is using one. Static buffer rather than a format at
         // the call site: a setting's reason must outlive the call (it is
         // copied at the ABI boundary, but the kernel-side caller holds
-        // the pointer first), and this file is not reentrant.
+        // the pointer first).
+        //
+        // Two readers CAN now reach this at once, and it is benign
+        // rather than guarded: every input here is a fact about the
+        // MACHINE (ata_present(), blk_name()), so both writers put the
+        // same bytes in the same buffer. A guard would narrow a window
+        // with nothing different on either side of it. That stops being
+        // true the moment a reason depends on who is asking.
         static char why[SETTING_ABI_DESC_MAX];
         const char *dev = blk_name();
         if (dev && k_strcmp(dev, "none") != 0) {
