@@ -231,6 +231,24 @@ static void hs_paint(void *ctx, const char *pattern, const char *match) {
     put_str(match ? match : "");
 }
 
+// **A STORED LINE CARRIES ITS NEWLINE, AND A RECALLED ONE MUST NOT.**
+// el_gets() returns the line WITH its terminator -- that is libedit's
+// contract and what dash copies into history (input.c). Putting that
+// straight back in the edit buffer paints the newline too, so the
+// terminal moves down a row and the prompt looks like it restarted:
+// exactly the "Up gives you a new prompt line" this was reported as.
+static void recall(EditLine *el, const char *s) {
+    if (!s) return;
+    char trimmed[512];
+    size_t n = 0;
+    while (s[n] && s[n] != '\n' && s[n] != '\r' && n + 1 < sizeof trimmed) {
+        trimmed[n] = s[n];
+        n++;
+    }
+    trimmed[n] = 0;
+    kline_set(&el->ed, trimmed);
+}
+
 // --- the editor ------------------------------------------------------
 
 EditLine *el_init(const char *prog, FILE *fin, FILE *fout, FILE *ferr) {
@@ -339,8 +357,9 @@ const char *el_gets(EditLine *el, int *count) {
             case KLINE_ACCEPT:
                 write(1, "\n", 1);
                 el->row_shown = 0;
-                if (el->ed.len > 0 && el->hist)
-                    hist_add(el->hist, el->ed.buf);
+                // NOT added here: dash enters every line into the
+                // history it owns (ports/dash/src/input.c), and adding
+                // again stored each command twice.
                 restore_tty(el);
                 return finish(el, count);
 
@@ -364,7 +383,7 @@ const char *el_gets(EditLine *el, int *count) {
                 HistEvent ev;
                 if (el->hist && history(el->hist, &ev, el->hist->cursor >= el->hist->n
                                         ? H_FIRST : H_NEXT) == 0) {
-                    kline_set(&el->ed, ev.str);
+                    recall(el, ev.str);
                     uline_paint(p, &el->ed, &el->row_shown);
                 }
                 break;
@@ -373,7 +392,7 @@ const char *el_gets(EditLine *el, int *count) {
             case KLINE_HISTORY_NEXT: {
                 HistEvent ev;
                 if (el->hist && history(el->hist, &ev, H_PREV) == 0) {
-                    kline_set(&el->ed, ev.str);
+                    recall(el, ev.str);
                     uline_paint(p, &el->ed, &el->row_shown);
                 }
                 break;
@@ -427,14 +446,12 @@ const char *el_gets(EditLine *el, int *count) {
                 put_str("\r\x1b[K");
                 el->row_shown = 0;
                 if (r != HISTSEARCH_CANCELLED && match)
-                    kline_set(&el->ed, match);
+                    recall(el, match);
                 // ACCEPTED means Enter ended the search, which in bash
                 // RUNS the match rather than merely recalling it.
                 if (r == HISTSEARCH_ACCEPTED) {
                     write(1, "\n", 1);
                     el->row_shown = 0;
-                    if (el->ed.len > 0 && el->hist)
-                        hist_add(el->hist, el->ed.buf);
                     restore_tty(el);
                     return finish(el, count);
                 }

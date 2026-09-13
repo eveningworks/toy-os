@@ -18,7 +18,8 @@
 // tools/usertest_run.py.
 #include <stdint.h>
 #include "rt/sys.h"
-#include "keyboard.h"   // KEY_ARROW_UP -- a byte off fd 0, as the kernel sends it
+#include "keyboard.h"   // KEY_ARROW_UP -- the keysym an emulator encodes
+#include "termkey.h"    // ...into the sequence a terminal actually sends
 
 #define DASH "/bin/dash"
 
@@ -124,15 +125,31 @@ int main(void) {
 
     // --- 3. THE CLAIM: Up recalls the last line ----------------------
     //
-    // KEY_ARROW_UP as the kernel delivers it -- 0x91, which IS the code
-    // klineedit switches on, and exactly what the GUI Terminal writes
-    // to its pty for that key. A dash with no editor puts the byte in
-    // the line instead, and the recall below never comes.
-    char up = (char)KEY_ARROW_UP;
-    if ((int)sys_write(master, &up, 1) != 1) return 6;
+    // **THE SEQUENCE A REAL TERMINAL SENDS**, built by the same encoder
+    // the console and the GUI Terminal use -- not the raw 0x91.
+    //
+    // Writing the byte was what this did, and it PASSED while the thing
+    // a person actually meets was broken: the decoder hands any
+    // non-ESC byte straight through, so the test was still exercising
+    // the encoding the system had stopped using. A test must send what
+    // the system sends.
+    char up[TERMKEY_MAX];
+    int upn = termkey_encode(KEY_ARROW_UP, up, sizeof up);
+    if (upn <= 0 || (int)sys_write(master, up, (size_t)upn) != upn) return 6;
     // The recalled line is REPAINTED, so the text arrives on its own --
     // this is the history walk, not an echo of what was typed.
+    int before_recall = mark;
     if ((mark = waited(master, "echo alpha", mark)) < 0) return 7;
+
+    // **AND THE REPAINT MUST NOT CONTAIN A NEWLINE.** Checking only
+    // that the text came back is what let a real bug ship: the history
+    // entry carried its terminator (el_gets returns the line WITH it,
+    // and dash stores that), so the recall painted a newline too and
+    // the prompt appeared to restart a row down. The text was present
+    // either way, so the assertion has to be about the CURSOR, not the
+    // characters.
+    for (int i = before_recall; i < mark; i++)
+        if (acc[i] == '\n') return 24;
 
     // And it still RUNS when accepted, which a paint alone would not do.
     if (put(master, "\n") < 0) return 8;
