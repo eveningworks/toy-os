@@ -35,6 +35,13 @@
 #define SIGINT   2  // what Ctrl-C sends to the foreground group
 #define SIGQUIT  3  // the second escape hatch, for when SIGINT is ignored
 #define SIGILL   4  // an illegal instruction (#UD)
+#define SIGABRT  6  // what abort() raises. Added when abort() stopped
+                    // exiting with 128+6 and started actually raising
+                    // it: the difference a parent sees is a child that
+                    // DIED ON A SIGNAL rather than one that chose an
+                    // unusual exit status, and a handler for it now
+                    // runs. Default action: terminate, as for any
+                    // signal this file does not list otherwise.
 #define SIGFPE   8  // a division error (#DE). POSIX's name is a
                     // misnomer everywhere -- there is no FPU trap here
 #define SIGKILL  9  // uncatchable, unignorable -- what a force-quit sends

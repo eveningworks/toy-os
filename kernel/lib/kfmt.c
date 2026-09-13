@@ -88,80 +88,78 @@ static void put_str(struct out *o, const char *s) {
 // one and do not want a base parameter for a single caller -- so this
 // is the whole conversion, twelve lines, next to the only thing that
 // uses it.
-static void put_oct(struct out *o, uint64_t v, unsigned width, int zero,
-                     int left, int alt) {
-    char tmp[24];
+// ONE INTEGER FORMATTER FOR d/i/u/x/X/o, because the parts interact.
+//
+// **THE PREFIX LIVES INSIDE THE PADDED FIELD.** C's layout is
+// [spaces][prefix][zeros][digits] right-justified and
+// [prefix][zeros][digits][spaces] left. This used to emit the sign and
+// the "0x" BEFORE calling the padder, with `width--` to compensate, so
+// `%+5d` of 1 came out "+   1" where C says "   +1" and `%#8x` of 42
+// came out "0x    2a" where C says "    0x2a". The compensation looked
+// like it preserved the column and moved the prefix to the wrong end of
+// the padding. Judged against glibc by tools/libc_diff.py.
+//
+// **THE TWO KINDS OF ZERO PADDING COUNT DIFFERENT THINGS.** The '0'
+// FLAG pads the whole FIELD, prefix included: `%08d` of -7 is
+// "-0000007", eight characters. A PRECISION pads the DIGITS, prefix
+// excluded: `%.8d` of -7 is "-00000007", nine. They cannot both apply
+// -- C says a precision makes '0' ignored.
+//
+// `%.0d` OF ZERO PRINTS NOTHING, C's one genuinely surprising corner,
+// and it is how a caller formats a field that disappears when empty.
+static void put_int(struct out *o, uint64_t v, int is_signed, int base,
+                     int upper, unsigned width, int zero, int left,
+                     int prec, int plus, int space, int alt) {
+    char digits[24];
     int n = 0;
-    if (!v) tmp[n++] = '0';
-    while (v) { tmp[n++] = (char)('0' + (v & 7)); v >>= 3; }
-    // C's '#' on octal means "make sure it starts with a 0", so a value
-    // that already does gains nothing -- unlike hex's 0x, which is
-    // always two extra characters.
-    if (alt && tmp[n - 1] != '0') tmp[n++] = '0';
+    char prefix[3];
+    int plen = 0;
 
-    int digits = n;
-    if (!left) for (int i = digits; i < (int)width; i++) put(o, zero ? '0' : ' ');
-    while (n--) put(o, tmp[n]);
-    // Left-justified fields pad with SPACES whatever the '0' flag says
-    // -- C ignores '0' when '-' is given, since zeros on the right of a
-    // number would change its value rather than its column.
-    if (left) for (int i = digits; i < (int)width; i++) put(o, ' ');
-}
-
-static void put_num(struct out *o, uint64_t v, int is_signed, int is_hex,
-                     unsigned width, int zero, int left, int prec) {
-    char tmp[24];
-    // **THE TWO KINDS OF ZERO PADDING COUNT DIFFERENT THINGS, and that
-    // is not a detail.** The '0' FLAG pads the whole FIELD, sign
-    // included: `%08d` of -7 is "-0000007", eight characters. A
-    // PRECISION pads the DIGITS, sign excluded: `%.8d` of -7 is
-    // "-00000007", nine. Conflating them puts one zero too few in front
-    // of every negative number, which is exactly what the first version
-    // of this did.
-    //
-    // They cannot both apply, because C says a precision makes the '0'
-    // flag ignored -- so this picks one and the signed branch below adds
-    // the sign back on when the precision is the one driving.
-    if (prec >= 0) zero = 0;                    // C: precision overrides '0'
-    unsigned pad_width = (zero && !left) ? width : 0;
-    if (prec > 0 && (unsigned)prec > pad_width) pad_width = (unsigned)prec;
-    if (is_hex) {
-        k_htoa(v, tmp, sizeof tmp, pad_width);
-        if (is_hex == 2)
-            for (char *q = tmp; *q; q++)
-                if (*q >= 'a' && *q <= 'f') *q = (char)(*q - 'a' + 'A');
-    } else if (is_signed) {
-        k_itoa((int64_t)v, tmp, sizeof tmp);
-        // knum has no signed zero-padding variant (nothing needs one),
-        // so pad here, after the sign.
-        if (pad_width) {
-            size_t len = k_strlen(tmp);
-            int neg = tmp[0] == '-';
-            // A precision counts digits, so the sign needs a column of
-            // its own on top of it. A '0'-flag width already includes it.
-            if (prec >= 0 && neg) pad_width++;
-            while (len < pad_width && len + 1 < sizeof tmp) {
-                for (size_t i = len; i > (size_t)neg; i--) tmp[i] = tmp[i - 1];
-                tmp[neg] = '0';
-                len++;
-                tmp[len] = '\0';
-            }
-        }
-    } else {
-        k_utoa_pad(v, tmp, sizeof tmp, pad_width);
+    uint64_t mag = v;
+    if (is_signed) {
+        int64_t sv = (int64_t)v;
+        if (sv < 0) {
+            prefix[plen++] = '-';
+            // NEGATED IN UNSIGNED ARITHMETIC. -(int64_t)INT64_MIN is
+            // undefined; subtracting from zero in uint64_t is not, and
+            // gives the same magnitude.
+            mag = (uint64_t)0 - (uint64_t)sv;
+        } else if (plus)  prefix[plen++] = '+';
+        else if (space)   prefix[plen++] = ' ';
+    } else if (alt && base == 16 && v) {
+        // Zero is exempt from '#' in C, and the exemption is what makes
+        // the flag safe in a log line -- "0x0" is wider than the value.
+        prefix[plen++] = '0';
+        prefix[plen++] = upper ? 'X' : 'x';
     }
-    // `%.0d` OF ZERO PRINTS NOTHING. C's one genuinely surprising corner
-    // here, and it is not a curiosity: it is how a caller formats an
-    // optional field that disappears when it is empty. Handled after the
-    // conversion rather than before, so it applies to whichever branch
-    // above produced the digits.
-    if (prec == 0 && v == 0) tmp[0] = '\0';
-    // Space padding, around the finished number -- the same shape %s
-    // uses below, so both conversions pad by one rule.
-    size_t len = k_strlen(tmp);
-    if (!left) { for (size_t i = len; i < width; i++) put(o, ' '); }
-    put_str(o, tmp);
-    if (left) { for (size_t i = len; i < width; i++) put(o, ' '); }
+
+    do {
+        int d = (int)(mag % (unsigned)base);
+        digits[n++] = (char)(d < 10 ? '0' + d : (upper ? 'A' : 'a') + d - 10);
+        mag /= (unsigned)base;
+    } while (mag);
+
+    // '#' on octal means "make sure it starts with a 0", so a value that
+    // already does gains nothing -- unlike hex's 0x, which is always two
+    // extra characters.
+    if (alt && base == 8 && digits[n - 1] != '0') digits[n++] = '0';
+
+    if (prec >= 0) zero = 0;                    // C: precision overrides '0'
+    if (prec == 0 && v == 0) n = 0;             // `%.0d` of zero: nothing
+
+    int zeros = 0;
+    if (prec > n) zeros = prec - n;
+    else if (zero && !left && (int)width > n + plen + zeros)
+        zeros = (int)width - n - plen;
+
+    int total = plen + zeros + n;
+    if (!left) for (int i = total; i < (int)width; i++) put(o, ' ');
+    for (int i = 0; i < plen; i++) put(o, prefix[i]);
+    for (int i = 0; i < zeros; i++) put(o, '0');
+    while (n--) put(o, digits[n]);
+    // Left-justified fields pad with SPACES whatever '0' says: zeros on
+    // the right of a number would change its value, not its column.
+    if (left) for (int i = total; i < (int)width; i++) put(o, ' ');
 }
 
 // The formatter itself, shared by both entry points below. It knows
@@ -194,22 +192,22 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         // Parsing a flag costs one branch; not parsing one costs the
         // whole format string. Same reasoning as %X and the length
         // modifiers below.
-        int left = 0, plus = 0, space = 0, alt = 0;
+        int left = 0, plus = 0, space = 0, alt = 0, zero = 0;
         for (;;) {
             if (*p == '-')      { left = 1;  p++; }
             else if (*p == '+') { plus = 1;  p++; }
             else if (*p == ' ') { space = 1; p++; }
             else if (*p == '#') { alt = 1;   p++; }
+            // '0' IS A FLAG AND FLAGS COME IN ANY ORDER. It used to be
+            // read after this loop as a separate step, so `%0+d` broke
+            // out here, consumed the 0 as a flag, then met '+' where a
+            // width or a conversion was expected and emitted the whole
+            // specifier literally -- taking the argument list with it.
+            // Reading it HERE still keeps it ahead of the width digits,
+            // which is what stops it being mistaken for one.
+            else if (*p == '0') { zero = 1;  p++; }
             else break;
         }
-
-        // C's '0' FLAG, which has to be read before the width digits or
-        // it is indistinguishable from a leading zero in the number.
-        // It is what separates `%05u` (zero-padded) from `%5u`
-        // (space-padded); this formatter used to treat every width as
-        // the first and had no way to ask for the second.
-        int zero = 0;
-        if (*p == '0') { zero = 1; p++; }
 
         // `*` TAKES THE WIDTH FROM AN ARGUMENT, which is how a caller
         // whose column width is computed at runtime writes it --
@@ -268,16 +266,19 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         // (%d is int, %ld/%zu are 64-bit) keep GCC's -Wformat checking
         // on this file's callers meaningful -- which is why this bothers
         // to distinguish them rather than treating everything as 64-bit.
-        int wide = 0;
+        int wide = 0, narrow = 0;
         while (*p == 'l') { wide = 1; p++; }
         if (*p == 'z') { wide = 1; p++; } // size_t, as in %zu
-        // h and hh are ACCEPTED AND IGNORED, which is correct rather
-        // than lazy: default argument promotion has already widened a
-        // short or a char to int by the time it reaches va_arg, so
-        // there is nothing narrower to read. What matters is that they
-        // are CONSUMED -- an unparsed 'h' hits the literal path and
-        // takes the rest of the call's arguments with it.
-        while (*p == 'h') p++;
+        // **h AND hh NARROW THE PROMOTED VALUE, they are not decoration.**
+        // This used to consume them and stop, on the reasoning that
+        // promotion has already widened a short to int so there is
+        // nothing narrower to READ. True, and beside the point: C says
+        // the value "shall be converted to unsigned char/short before
+        // printing", so `%hhu` of 256 is 0 and `%hd` of 65541 is 5.
+        // Ignoring that printed 256 and 65541. Consuming them still
+        // matters too -- an unparsed 'h' hits the literal path and takes
+        // the rest of the call's arguments with it.
+        while (*p == 'h') { narrow++; p++; }
 
         switch (*p) {
         // %i is C's alias for %d in printf (they differ only in
@@ -287,25 +288,25 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         case 'i':
         case 'd': {
             int64_t sv = wide ? (int64_t)va_arg(ap, long) : (int64_t)va_arg(ap, int);
+            if (narrow == 1) sv = (int16_t)sv;
+            else if (narrow >= 2) sv = (int8_t)sv;
             // '+' and ' ' apply to a NON-NEGATIVE value only; a negative
-            // one already carries its sign. '+' wins when both are
-            // given, which is what C says.
-            if (sv >= 0 && (plus || space)) {
-                // Written before the number rather than folded into
-                // put_num(), so the padding rules stay in one place --
-                // the sign is one character in front of a field that is
-                // otherwise formatted exactly as it would be without it.
-                if (width > 0) width--;
-                put(o, plus ? '+' : ' ');
-            }
-            put_num(o, (uint64_t)sv, 1, 0, width, zero, left,
-                     has_prec ? (int)prec : -1);
+            // one already carries its sign, and '+' wins when both are
+            // given. put_int() places whichever applies INSIDE the
+            // padded field -- see its comment for why that matters.
+            put_int(o, (uint64_t)sv, 1, 10, 0, width, zero, left,
+                    has_prec ? (int)prec : -1, plus, space, 0);
             break;
         }
-        case 'u':
-            put_num(o, wide ? (uint64_t)va_arg(ap, unsigned long) : (uint64_t)va_arg(ap, unsigned int),
-                     0, 0, width, zero, left, has_prec ? (int)prec : -1);
+        case 'u': {
+            uint64_t uv = wide ? (uint64_t)va_arg(ap, unsigned long)
+                                : (uint64_t)va_arg(ap, unsigned int);
+            if (narrow == 1) uv = (uint16_t)uv;
+            else if (narrow >= 2) uv = (uint8_t)uv;
+            put_int(o, uv, 0, 10, 0, width, zero, left,
+                    has_prec ? (int)prec : -1, 0, 0, 0);
             break;
+        }
         // %X IS NOT DECORATION. This file is tolibc's printf as well as
         // the kernel's (see kfmt.h's note that it is one header and two
         // files), and an unrecognised conversion here does not merely
@@ -319,28 +320,25 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         case 'X': {
             uint64_t hv = wide ? (uint64_t)va_arg(ap, unsigned long)
                                 : (uint64_t)va_arg(ap, unsigned int);
-            // '#' prefixes a NON-ZERO value with 0x/0X. Zero is exempt
-            // in C, and that exemption is the whole reason the flag is
-            // safe to use in a log line: "0x0" would be wider than the
-            // value it describes.
-            if (alt && hv) {
-                if (width > 1) width -= 2;
-                put(o, '0');
-                put(o, *p == 'X' ? 'X' : 'x');
-            }
-            put_num(o, hv, 0, *p == 'X' ? 2 : 1, width, zero, left,
-                     has_prec ? (int)prec : -1);
+            if (narrow == 1) hv = (uint16_t)hv;
+            else if (narrow >= 2) hv = (uint8_t)hv;
+            put_int(o, hv, 0, 16, *p == 'X', width, zero, left,
+                    has_prec ? (int)prec : -1, 0, 0, alt);
             break;
         }
         // OCTAL, which nothing in this tree prints and ported code does
         // -- file modes are the usual reason. Cheap to have and, like
         // every other conversion here, ruinous to lack: the gap is not
         // a wrong number but a desynchronised argument list.
-        case 'o':
-            put_oct(o, wide ? (uint64_t)va_arg(ap, unsigned long)
-                             : (uint64_t)va_arg(ap, unsigned int),
-                     width, zero, left, alt);
+        case 'o': {
+            uint64_t ov = wide ? (uint64_t)va_arg(ap, unsigned long)
+                                : (uint64_t)va_arg(ap, unsigned int);
+            if (narrow == 1) ov = (uint16_t)ov;
+            else if (narrow >= 2) ov = (uint8_t)ov;
+            put_int(o, ov, 0, 8, 0, width, zero, left,
+                    has_prec ? (int)prec : -1, 0, 0, alt);
             break;
+        }
         // A POINTER, as "0x" plus lowercase hex -- glibc's rendering,
         // and what every log line that prints one already writes by
         // hand as "0x%lx". NULL is "(nil)", also glibc's, because a
@@ -351,10 +349,20 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
             if (!pv) { put_str(o, "(nil)"); break; }
             put(o, '0');
             put(o, 'x');
-            put_num(o, pv, 0, 1, 0, 0, 0, -1);
+            put_int(o, pv, 0, 16, 0, 0, 0, 0, -1, 0, 0, 0);
             break;
         }
-        case 'c': put(o, (char)va_arg(ap, int)); break;
+        case 'c': {
+            // A WIDTH applies here too. It was ignored, so `%5c` printed
+            // one character where C pads to five -- the same class of
+            // gap as the %.3d precision that sent Doom to a missing WAD
+            // lump, and found the same way (tools/libc_diff.py).
+            char cv = (char)va_arg(ap, int);
+            if (!left) for (unsigned i = 1; i < width; i++) put(o, ' ');
+            put(o, cv);
+            if (left) for (unsigned i = 1; i < width; i++) put(o, ' ');
+            break;
+        }
         case 's': {
             const char *s = va_arg(ap, const char *);
             if (!s) s = "(null)";

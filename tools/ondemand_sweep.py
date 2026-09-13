@@ -78,6 +78,10 @@ TOOLS = [
     # else -- no guest, since nothing links or runs.
     ("dash_gap",    "dash_gap.py",             "what the dash port still needs from tolibc", False,
      ("host_cc", "needs gcc on PATH"),                                                       False),
+    # tolibc's formatter and parsers against glibc, ~8,900 cases. Host
+    # gcc only; exits non-zero when anything differs.
+    ("libc_diff",   "libc_diff.py",            "tolibc's printf and strtol against glibc", False,
+     ("host_cc", "needs gcc on PATH"),                                                       False),
     # Renders every docs/commands page through the same umd.c the guest
     # runs, at three widths. gcc and the standard library only.
     ("umd_host",    "umd_hostcheck.py",        "the Markdown renderer over every page", False,

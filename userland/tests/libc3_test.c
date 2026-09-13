@@ -28,6 +28,7 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <limits.h>
+#include <fcntl.h>   // O_RDWR, for the refusal check
 #include "rt/sys.h"
 
 #include "lib/utest.h"
@@ -167,9 +168,20 @@ int main(void) {
     const char *nan_signed = "-zz";
     utest_check(strtol(nan_signed, &end, 10) == 0 && end == nan_signed,
           "...including when a SIGN was consumed before the failure");
+    // **"0xzz" IS A CONVERSION, and this check used to assert it was
+    // not.** The '0' is a valid hex digit and IS converted; only the
+    // "xzz" is left over, so glibc returns 0 with endptr one past the
+    // start. Asserting `end == nan_hex` enshrined the bug where base 0
+    // and base 16 stepped over the prefix and then reported that
+    // nothing had been parsed -- so strtol("0", &end, 0) consumed
+    // nothing either. Corrected against glibc (tools/libc_diff.py); the
+    // sign case above is the one that genuinely has no digits.
     const char *nan_hex = "0xzz";
-    utest_check(strtol(nan_hex, &end, 16) == 0 && end == nan_hex,
-          "...and when an 0x prefix was");
+    utest_check(strtol(nan_hex, &end, 16) == 0 && end == nan_hex + 1,
+          "...while an 0x prefix CONVERTS its zero and leaves the rest");
+    const char *bare_zero = "0";
+    utest_check(strtol(bare_zero, &end, 0) == 0 && end == bare_zero + 1,
+          "a lone 0 in base 0 is a conversion, not a refusal");
     utest_check(strtol("7", &end, 10) == 7 && end != (char *)0, "a real 0-valued parse differs");
     errno = 0;
     utest_check(strtol("99999999999999999999999", &end, 10) == LONG_MAX && errno == ERANGE,
@@ -262,6 +274,86 @@ int main(void) {
     utest_check(isatty(1) == 1, "isatty(stdout) on the console");
     char cwd[64];
     utest_check(getcwd(cwd, sizeof cwd) != 0, "getcwd");
+
+        // --- the 2026-09-13 libc review -----------------------------------
+    //
+    // Each of these was a REPORTED defect, and each is written so the
+    // old behaviour fails it rather than so the new one passes.
+    {
+        // getline with a NULL buffer and a NON-ZERO *n. The old guard
+        // tested only the capacity, so it skipped the allocation and
+        // stored through the NULL. A crash is the failure mode, so
+        // reaching the next line at all is most of the check.
+        FILE *g = fopen("/tests/libc3_getline.tmp", "w");
+        utest_check(g != 0, "getline fixture opens");
+        if (g) { fputs("alpha\nbeta\n", g); fclose(g); }
+        g = fopen("/tests/libc3_getline.tmp", "r");
+        if (g) {
+            char *line = 0;
+            size_t cap = 128;          // a LIE: there is no buffer
+            ssize_t n = getline(&line, &cap, g);
+            utest_check(n == 6 && line && line[0] == 'a',
+                        "getline allocates when *lineptr is NULL whatever *n says");
+            free(line);
+            fclose(g);
+        }
+        remove("/tests/libc3_getline.tmp");
+    }
+    {
+        // O_RDWR is refused rather than aliased to O_WRONLY, which used
+        // to let O_TRUNC destroy a file before the first read failed.
+        errno = 0;
+        int fd = open("/tests/libc3_rdwr.tmp", O_RDWR | O_CREAT | O_TRUNC, 0644);
+        utest_check(fd < 0 && errno == EINVAL,
+                    "O_RDWR is REFUSED, not quietly downgraded to write-only");
+        if (fd >= 0) close(fd);
+    }
+    {
+        // strtol's negation used to be undefined at LONG_MIN.
+        errno = 0;
+        long v = strtol("-9223372036854775808", &end, 10);
+        utest_check(v == LONG_MIN && errno != ERANGE,
+                    "LONG_MIN parses exactly, without signed overflow");
+    }
+    {
+        // strtod: a zero mantissa with a huge exponent is 0, not NaN,
+        // and a subnormal is not flushed to zero by an overflowing
+        // intermediate.
+        double z = strtod("0e999", 0);
+        utest_check(z == 0.0, "0e999 is zero, not NaN");
+        double sub = strtod("1e-310", 0);
+        utest_check(sub > 0.0 && sub < 1e-300,
+                    "a subnormal survives -- the exponent no longer overflows first");
+        utest_check(strtod("0x1p2", &end) == 4.0 && *end == 0,
+                    "hex floats parse");
+    }
+    {
+        // printf: the formats the differential harness found wrong.
+        char b[32];
+        snprintf(b, sizeof b, "%hhu", 256);
+        utest_check(strcmp(b, "0") == 0, "%hhu NARROWS the promoted value");
+        snprintf(b, sizeof b, "%+5d", 1);
+        utest_check(strcmp(b, "   +1") == 0, "a sign sits INSIDE the padded field");
+        snprintf(b, sizeof b, "%#8x", 42);
+        utest_check(strcmp(b, "    0x2a") == 0, "...and so does an 0x prefix");
+        snprintf(b, sizeof b, "%.3o", 1);
+        utest_check(strcmp(b, "001") == 0, "a precision applies to octal");
+        snprintf(b, sizeof b, "%5c", 'a');
+        utest_check(strcmp(b, "    a") == 0, "%c honours a width");
+        snprintf(b, sizeof b, "%0+d", 42);
+        utest_check(strcmp(b, "+42") == 0, "flags parse in ANY order");
+    }
+    {
+        // qsort is no longer quadratic. Not a timing check -- those are
+        // flaky -- but a size the old insertion sort would take minutes
+        // over, sorted here in well under a second.
+        static int big[4000];
+        for (int i = 0; i < 4000; i++) big[i] = 4000 - i;   // worst case
+        qsort(big, 4000, sizeof big[0], cmp_int);
+        int sorted = 1;
+        for (int i = 1; i < 4000; i++) if (big[i - 1] > big[i]) sorted = 0;
+        utest_check(sorted, "qsort sorts 4000 reversed elements");
+    }
 
     return utest_end();
 }

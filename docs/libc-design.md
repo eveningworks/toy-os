@@ -80,9 +80,12 @@ of these changed it.
   `k_*` toolkit -- one implementation, not two (`userland/include/string.h`).
 - **`snprintf`/`vsnprintf` are done**, as kfmt's formatter. The
   conversion set is kfmt's: `%d %u %x %s %c %%`, zero-pad width, `l/ll/z`.
-- **`malloc`/`calloc`/`free` are done**, as `kernel/lib/heap_core.c`
-  compiled twice over `SYS_SBRK`. No `realloc`, and `free()` cannot
-  return memory to the kernel until `mmap` exists.
+- **`malloc`/`calloc`/`free`/`realloc` are done**, as
+  `kernel/lib/heap_core.c` compiled twice over `SYS_SBRK`. `free()`
+  still does not return memory to the kernel: `mmap`/`munmap` exist now
+  (they landed with dynamic linking), so the barrier is no longer their
+  absence but that the allocator is a single `sbrk` arena and would have
+  to learn to serve large blocks from their own mappings.
 - **RING-3 FLOATING POINT IS FINISHED, and this is the measurement that
   most changes the plan.** CR0.EM is cleared and CR4.OSFXSR set
   (`kernel/arch/x86_64/fpu.c`), `USERLAND_CFLAGS` carries no
@@ -755,10 +758,13 @@ everything to zero would have passed the clearing half alone.
 ## Open questions
 
 - ~~**The environment.**~~ BUILT -- see Stage 8 above.
-- **What `free()` can never do.** Until `mmap`/`munmap` exist the
-  process footprint only grows. That is fine for everything here and is
-  a surprise to ported code that allocates in phases; say so in the
-  header rather than discovering it in a soak test.
+- **What `free()` still does not do.** The process footprint only
+  grows. `mmap`/`munmap` exist now, so this is no longer waiting on
+  them -- what is missing is for the allocator to serve a large block
+  from its own mapping and unmap it on free, which is the standard
+  answer (glibc's `M_MMAP_THRESHOLD`) and a real change to
+  `heap_core.c`. Fine for everything here, a surprise to ported code
+  that allocates in phases; the header says so.
 - ~~**Whether `libc` and `libuapp` stay separate archives.**~~ DECIDED:
   SEPARATE. A `/bin` program links `libc`; a GUI app links `libc` plus
   the Toykit. It matches the split-by-role convention the build already

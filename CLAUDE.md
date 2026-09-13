@@ -1494,6 +1494,11 @@ cost".
   refuses), `hwdata_test.py` (the id databases refuse a bad download,
   against a local server),
   `init_test.py`, `install_test.py`, `jobs_test.py`, `kbd_test.py`,
+  `libc_diff.py` (**tolibc's printf and number parsers against glibc**,
+  ~8,900 cases, no guest -- the oracle that found six formatter bugs and
+  three strtol ones; it once compared tolibc against ITSELF because
+  `stdio.h` aliases `snprintf`, so it now asserts the two are different
+  functions on every run),
   `keyboard_paths_test.py`, `kvm_soak.py`, `live_boot_test.py`,
   `ls_test.py`, `mem_stress.py`, `mkpart_test.py`,
   `multidisk_test.py`, `net_test.py`, `partition_test.py`,

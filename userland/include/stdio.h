@@ -92,6 +92,25 @@ int   setvbuf(FILE *f, char *buf, int mode, size_t size);
 void  setbuf(FILE *f, char *buf);
 int   fileno(FILE *f);
 
+// A stream over an fd stdio did not open (a pipe, a socket, an inherited
+// descriptor), and a reopen that KEEPS the caller's FILE * -- which is
+// what redirecting stdout needs, since its address is a constant.
+FILE *fdopen(int fd, const char *mode);
+FILE *freopen(const char *path, const char *mode, FILE *f);
+
+// --- explicit locking -------------------------------------------------
+//
+// Every stdio function above already takes the stream's lock, so each is
+// atomic against the others. These exist for what that does NOT cover: a
+// SEQUENCE which must not be interleaved -- a prompt and the read of its
+// answer, or a report that spans several calls.
+//
+// The lock is REENTRANT, so holding it across calls that take it again
+// is safe and is the intended use.
+void  flockfile(FILE *f);
+void  funlockfile(FILE *f);
+int   ftrylockfile(FILE *f);   // 0 if acquired, non-zero if it would block
+
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *f);
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f);
 
@@ -158,16 +177,32 @@ void  clearerr(FILE *f);
 // These two are not part of the stream layer at all: they are kfmt's
 // formatter under its C name, and they were here before FILE existed.
 
-static inline size_t vsnprintf(char *out, size_t cap, const char *fmt, va_list ap) {
-    return k_vsnprintf(out, cap, fmt, ap);
+// **THEY RETURN int, WHICH IS WHAT C SAYS, and they used to return
+// size_t.** The difference is not cosmetic: C specifies a NEGATIVE
+// return for an encoding error, so `if (snprintf(...) < 0)` is the
+// documented way to check one -- and against an unsigned return that
+// comparison is always false, which the compiler folds away silently.
+// It also made every `int n = snprintf(...)` a narrowing conversion.
+// k_snprintf keeps its size_t signature: it is the kernel's API and has
+// no failure value, so the conversion happens here, at the C boundary.
+static inline int vsnprintf(char *out, size_t cap, const char *fmt, va_list ap) {
+    return (int)k_vsnprintf(out, cap, fmt, ap);
 }
 
-// Not an inline: k_snprintf is variadic, and a wrapper would have to
-// unpack and re-pack the argument list, losing GCC's format checking at
-// the call site in the process. A macro keeps both -- the call IS
-// k_snprintf, so -Wformat still sees a real printf-attributed function
-// and catches a mismatched argument where it is written.
-#define snprintf k_snprintf
+// An inline rather than the `#define snprintf k_snprintf` this used to
+// be. The macro existed to keep GCC's format checking at the call site,
+// which a wrapper would lose by re-packing the argument list -- but the
+// format ATTRIBUTE gives the same checking, and a real function is what
+// lets the return type be corrected above. Taking the address of
+// snprintf now works too, which a macro never allowed.
+__attribute__((format(printf, 3, 4)))
+static inline int snprintf(char *out, size_t cap, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = (int)k_vsnprintf(out, cap, fmt, ap);
+    va_end(ap);
+    return n;
+}
 
 // --- files, by name ---------------------------------------------------
 //

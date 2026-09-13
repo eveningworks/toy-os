@@ -3864,6 +3864,44 @@ window without going through it will find its layout polls timing out.
   and it writes to a temporary name and renames, so an interrupted build
   cannot leave a truncated store that fails for only some sites.
 
+- **`libc_diff.py`** -- tolibc's formatter and number parsers against
+  glibc, case by case. No guest: it compiles `kernel/lib/kfmt.c` and
+  `userland/libc/stdlib.c` with the host gcc, links them beside glibc,
+  and runs ~8,900 generated cases through both. Needs gcc and nothing
+  else.
+
+  **It exists because tolibc's bar is COMPLETENESS**, which a
+  happy-path test cannot hold: such a test checks the cases whoever
+  wrote it thought of, which are the cases they got right. It found
+  `%hhu` of 256 printing 256, a sign emitted outside its padded field,
+  `%.3o` ignoring the precision, `%5c` ignoring the width, `%0+d`
+  emitted literally because flags were order-dependent, and
+  `strtol("0", &end, 0)` reporting no conversion at all. It also found
+  that `libc3_test.c` ASSERTED one of those bugs -- a self-referential
+  suite defends what it got wrong, and a differential one cannot.
+
+  **IT ONCE COMPARED tolibc AGAINST ITSELF AND REPORTED PERFECT
+  AGREEMENT.** `userland/include/stdio.h` makes `vsnprintf` a static
+  inline around `k_vsnprintf` and `#define`s `snprintf` to
+  `k_snprintf`, so putting that directory on the probe's include path
+  made both sides the same code. The probe is compiled in its own
+  translation unit with no tolibc headers, declaring the entry points
+  by hand -- and it now asserts at startup that `snprintf` and
+  `k_snprintf` are different functions, always, not behind a flag. That
+  check is the one that would have caught it.
+
+  **Symbol clash**: tolibc defines `strtol`, `abort`, `qsort` and
+  twenty more names glibc also defines. They are renamed at the C level
+  (`#define strtol toy_strtol` ahead of an `#include` of the source)
+  rather than with objcopy, because that also redirects tolibc's
+  internal calls and leaves genuine externals alone.
+
+  `strtod` is compared **within one ULP** by default: it applies the
+  decimal exponent by repeated multiplication and is a couple of ULP
+  off by construction, which its own comment says. Demanding equality
+  would report that known limit on every run and bury the categorical
+  bugs the harness is for. `--exact-float` shows the gap (two cases).
+
 - **`dash_gap.py`** -- what the vendored dash port still needs from
   tolibc, measured by compiling it. No guest and no network: it runs
   dash's six build-time generators on the host, then compiles all 32
