@@ -4718,18 +4718,39 @@ global could not have. No stack-swap rewrite was needed --
 `context_switch.asm` stays where it is, used by the legacy
 `process_run_ring3()` path only.
 
-**Measured under the trap gate, full suite, 2 runs of 2: zero
-double faults, zero ring-3 crashes, zero zero-resumes, 736 passed / 2
-failed.** Against 2 double faults in 3 runs before. The whole corruption
-class is gone.
+**Measured under the trap gate, full suite, 6 runs: zero double faults,
+zero ring-3 crashes, zero zero-resumes, 736 passed / 2 failed every
+time.** Against 2 double faults in 3 runs before. The double-fault class
+is gone.
 
-**WHAT IS LEFT is the original two `win_input` tests and the 35%
-slowdown** (43.3s against 32.2s), which are plausibly one thing: the
-`win_input` suite alone runs 11.2s against 1.2s, and both tests fail
-`KTEST_ASSERT(exited)` on a 500-tick (~5s) deadline having already
-passed the earlier "it is parked, not spinning" assert. Whether that is
-a missed deadline or a genuine block/wake defect is one experiment --
-raise `TIMEOUT_TICKS` and see -- and it has not been run.
+**NOT "stable", though: one `PANIC: stack smashing detected` at boot in
+7 runs.** The kernel stack canary, on a run whose only source difference
+was a `#define` used by tests. Cause NOT established, and it has been
+seen once -- recorded here rather than rounded down, because a canary
+failure under a change that lets interrupts nest is exactly the thing
+not to wave away.
+
+**THE TWO `win_input` TESTS ARE A LOST WAKEUP, NOT A MISSED DEADLINE.**
+The discriminating experiment: raise `TIMEOUT_TICKS` from 500 (~5s) to
+2500 (~25s). The suite went 11.2s -> 51.2s, so both tests really did
+wait the full time -- and both still failed. The helper never exits.
+
+That is the hazard `win_syscalls.c`'s own comment states: "the queue
+test and the park are atomic with respect to an IRQ pushing an event,
+because this whole handler runs with interrupts off". The trap gate
+removes exactly that atomicity, so a push landing between "queue is
+empty" and "parked" calls `scheduler_wake()` on a process that is not
+blocked yet, the wake is dropped, and the process parks forever.
+
+**The fix is check-and-park atomicity, and it is an AUDIT rather than
+two lines** -- every `if (nothing to do) block()` in the kernel has this
+window now, not just these two syscalls. Two shapes to choose between:
+a short `cli`/`sti` critical section around the check and the park
+(correct on one core, and a tiny window rather than the whole syscall),
+or Linux's `prepare_to_wait` shape, where the state is set to BLOCKED
+*before* the condition is tested so a wake in the window flips it back
+to READY and the park becomes a no-op. The second is what scales to
+SMP; the first is what this kernel can adopt site by site.
 
 **Two candidates were checked and KILLED, both by a guard that did not
 fire.** They are recorded so a later session does not re-derive them.

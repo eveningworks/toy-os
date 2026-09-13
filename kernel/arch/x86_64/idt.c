@@ -195,12 +195,15 @@ void idt_init(void) {
     // same tree are clean. Two win_input KTESTs also go red, and they
     // are the small half.
     //
-    // Both globals behind the crashes are retired (isr_depth and the
-    // resume slot travel with the context now), and the machine is
-    // STABLE with 0xEF: zero double faults and zero ring-3 crashes over
-    // two full suites, against 2 double faults in 3 runs before. What
-    // still holds the flip is the two win_input KTESTs and a 35%
-    // slowdown -- see docs/roadmap-details.md.
+    // Both globals behind the double faults are retired -- isr_depth and
+    // the resume slot travel with the context now -- and six full suites
+    // at 0xEF show none, against 2 in 3 before. What still holds the
+    // flip is a LOST WAKEUP: with IF set, a push landing between "queue
+    // is empty" and "parked" wakes a process that is not blocked yet
+    // (win_syscalls.c says so in as many words), and the two win_input
+    // KTESTs fail on it at a 25s deadline as readily as at 5s. Every
+    // check-and-park site in the kernel has that window.
+    // docs/roadmap-details.md has the evidence.
     idt_set_gate(128, isr128, 0, 0xEE);
 
     idtp.limit = sizeof(idt) - 1;
