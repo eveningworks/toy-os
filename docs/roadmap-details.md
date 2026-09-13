@@ -3356,9 +3356,17 @@ functions. It also attributed `stat` to the `test` builtin alone, when
 
 **One item is not a build gap at all.** `pipe_write()` returns 0 when a
 pipe has no readers (`kernel/proc/pipe.c`) -- no `-EPIPE`, no `SIGPIPE`.
-dash compiles without either and then hangs on `yes | head -1`. This
-affects `tosh` today and is the one entry here that is a kernel
-behaviour change rather than a header.
+
+**The consequence was first written up here as a hang, and that was
+wrong.** `sys_write()` breaks out of its short-write loop on a zero
+return (`userland/rt/sys.c`), so nothing blocks and the kernel never
+spins. What actually happens is worse to diagnose and easier to miss: a
+write to a dead pipe reports ZERO BYTES WRITTEN, which is exactly what a
+legitimate short write reports, so a producer cannot tell the two apart.
+POSIX raises `SIGPIPE`, or fails with `-EPIPE` where it is ignored,
+precisely so the producer can stop; here it keeps offering the same
+bytes and burns a core. That is still the one entry in this section that
+is a kernel behaviour change rather than a header.
 
 **`struct stat` REPORTS REAL FIELDS, AND TFS3 GROWS A MODE. Decided
 2026-09-13.** `sys/stat.h` refuses to have `stat()` at all,

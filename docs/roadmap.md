@@ -347,7 +347,7 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [ ] `uid_t`/`gid_t`, `geteuid`/`getegid`/`getgroups` -- stubs, this is a single-user OS
 - [ ] `EACCES`, `ELOOP`, `EWOULDBLOCK`, `O_EXCL`, `DT_LNK`, `stpncpy`, `htonl`, `umask`, `alloca`
 - [ ] Wide characters, or a decision not to have them -- `expand.c` and `parser.c` want eight `mb*`/`isw*`
-- [ ] `SIGPIPE` and `-EPIPE` on the pipe WRITE path -- `pipe_write()` returns 0 today, so `yes | head` never ends
+- [ ] `SIGPIPE` and `-EPIPE` on the pipe WRITE path -- a dead pipe reports 0 BYTES WRITTEN, which a producer cannot tell from a short write
 - [ ] `#!` handling in the loader -- listed under Shell pipes & job control
 - [x] ~~Vendor the port~~ DONE 2026-09-13 -- `userland/ports/dash/`, v0.5.13.5 verbatim, nothing builds it yet
 - [ ] A Makefile rule for it, running dash's six build-time generators on the HOST -- all six already run clean
