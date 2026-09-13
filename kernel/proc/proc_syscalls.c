@@ -717,8 +717,21 @@ int sys_spawn(struct syscall_ctx *c) {
             // printed "can't access tty; job control turned off". It
             // then needed /dev/null for a background job's stdin, which
             // this system does not have -- one cause, two symptoms.
-            struct tty *ct = fd_tty(scheduler_pid_pml4(pid), 0);
-            if (ct && !tty_owner(ct)) tty_set_owner(ct, pid);
+            //
+            // **NEVER THE PHYSICAL CONSOLE, and that guard is the whole
+            // safety of this.** tty0's owner is whoever READS it and
+            // must stay that way: in a graphical boot nothing owns it,
+            // so without this the first session leader to come along --
+            // a Terminal window's shell, or a telnet login -- takes the
+            // console and its foreground group, and the machine's own
+            // keyboard stops working while the on-screen one still
+            // does. That happened, on hardware, and it does not
+            // reproduce under a text boot because tosh already owns
+            // tty0 there and the claim is skipped.
+            uint64_t child_as = scheduler_pid_pml4(pid);
+            struct tty *ct = child_as ? fd_tty(child_as, 0) : 0;
+            if (ct && ct != tty_console() && !tty_owner(ct))
+                tty_set_owner(ct, pid);
         }
         if (pid > 0 && (msg.flags & SPAWN_FOREGROUND))
             tty_set_fg_pgid(fd_tty(pml4, 0), scheduler_pgid(pid));
