@@ -656,7 +656,57 @@ def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
         print("remote: already up to date")
     else:
         print(f"remote: sent {sent} file(s)")
+
+    _mark_executable(host, telnet_port, local_dir, remote_dir, timeout)
     return 0
+
+
+# Directories whose contents must be executable, as the host seeder
+# spells it (tools/tfs3_writer.py's EXEC_DIRS). Kept in step by hand
+# rather than imported, because that module is about writing an IMAGE
+# and this one is about a running machine.
+EXEC_DIRS = ("bin", "tests")
+
+
+def _mark_executable(host, telnet_port, local_dir, remote_dir, timeout):
+    """chmod 755 everything under /bin and /tests on the target.
+
+    **A SYNC CANNOT LEAVE THE MODE TO THE KERNEL'S DEFAULT, and this is
+    not belt-and-braces.** A file arrives here through the kernel rather
+    than through the host seeder, so it gets whatever
+    kernel/fs/tfs3.c's T3_MODE_DEFAULT says -- and a file that did NOT
+    change is not re-sent at all, so it keeps whatever mode it was
+    written with, possibly years and several defaults ago. That left
+    /bin/cat at 0644 on the laptop after a full --force flash, and dash
+    refuses a file with no execute bit (EACCES), so the shell could not
+    run a single external command.
+
+    Every file is chmod'd, not only the ones just sent, for exactly that
+    reason: the stale ones are the problem. It is one telnet round trip
+    per file and only runs on a sync, which is already the slow path.
+    """
+    names = []
+    for d in EXEC_DIRS:
+        local_d = os.path.join(local_dir, d)
+        if not os.path.isdir(local_d):
+            continue
+        for f in sorted(os.listdir(local_d)):
+            if os.path.isfile(os.path.join(local_d, f)):
+                names.append(f"{remote_dir.rstrip('/')}/{d}/{f}")
+    if not names:
+        return
+    sess = Session(host, telnet_port, timeout)
+    try:
+        for n in names:
+            # A failure is not fatal: the filesystem may not store modes
+            # at all (ramfs), and a machine that cannot chmod is still a
+            # machine that booted.
+            sess.run(f"chmod 755 {n}", timeout)
+    except Exception as e:      # noqa: BLE001 -- reported, never raised
+        print(f"remote: could not set execute bits ({e})", file=sys.stderr)
+    finally:
+        sess.close()
+    print(f"remote: marked {len(names)} file(s) executable")
 
 
 def _boot_device(sess, timeout):
