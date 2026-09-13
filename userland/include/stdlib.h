@@ -219,4 +219,10 @@ void *realloc(void *p, size_t n);
 #define alloca(n) __builtin_alloca(n)
 #endif
 
+// Creates a unique file from a template ending in six `X`s, replacing
+// them in place, and returns it OPEN -- which is what makes it safe
+// where mktemp() is not: the name cannot be taken between the choice
+// and the use. The caller owns the file, including removing it.
+int mkstemp(char *template);
+
 #endif

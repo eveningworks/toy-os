@@ -21,6 +21,13 @@ int optind = 1;
 int opterr = 1;
 int optopt;
 
+// **THE BSD EXTENSION, and dash is why it is here.** A shell parses
+// options for every builtin it runs, so it needs to restart the scanner
+// rather than merely rewind optind -- which cannot express "and forget
+// where you were inside a cluster". Setting it to 1 before a fresh
+// getopt() loop is the documented use; it clears itself.
+int optreset;
+
 // WHERE WE ARE INSIDE A CLUSTER. `-la` is two options in one argv
 // element, so optind alone cannot say what is next. Reset to 0 on
 // moving to a new element, which is also what makes an optind reset by
@@ -30,6 +37,7 @@ static int g_pos;
 int getopt(int argc, char *const argv[], const char *optstring) {
     optarg = 0;
 
+    if (optreset) { optreset = 0; g_pos = 0; }
     if (optind < 1) optind = 1;         // a caller restarting parsing
     if (g_pos == 0) {
         if (optind >= argc) return -1;

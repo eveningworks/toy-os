@@ -624,3 +624,43 @@ machine this way: it splits a line on whitespace and passes the pieces
 through, so `grep '^set timeout=' file` arrives as two arguments and
 grep reads the second as a filename. Anchor on the host side instead.
 
+
+
+## dash's LINE EDITING IS A libedit SHIM, NOT A SECOND EDITOR
+
+`userland/backends/dash/histedit_shim.c` exports the names dash's
+`histedit.c` calls -- `el_init`/`el_gets`/`el_set`/`el_source`/`el_end`
+and `history_init`/`history`/`history_end` -- and answers them with
+`kernel/lib/klineedit.c`, the editor `tosh`, the GUI Terminal and the
+physical console already share. **That is the whole reason the port gets
+editing at all**: writing a second editor, or vendoring real libedit,
+would break the one rule CLAUDE.md states about this area.
+
+Four things to know before touching it.
+
+**The vendored port stays byte for byte.** What changed is
+`userland/backends/dash/config.h`, which no longer defines `SMALL` --
+one line, and it turns on `histedit.c` (dash's `fc`) as well as the
+editor. Defining it again takes all of it away silently.
+
+**Editing is OPT-IN, because upstream makes it so.** `Eflag` starts
+clear and dash builds an `EditLine` only once `set -o emacs` or
+`set -o vi` sets it. Both land on the same editor here -- there is one --
+so `el_set(EL_EDITOR, ...)` is accepted and ignored rather than refused.
+
+**RAW MODE IS WHAT MAKES AN EDITOR POSSIBLE, and it belongs around the
+READ.** `el_gets()` puts fd 0 in raw mode and restores the shell's
+termios before it returns, so the command dash then runs gets an
+ordinary canonical, echoing terminal -- the same reasoning behind
+`/bin/tosh`'s `g_tio_saved`. Under ICANON the discipline holds every
+keystroke until Enter, so an arrow key arrives as a byte in the middle
+of a finished line and nothing can act on it. **A test that sends a key
+must therefore wait for the PROMPT first**, or it fires into the window
+where the terminal is canonical and the key is swallowed; that cost an
+afternoon and is why `/tests/dashedit_test` waits rather than sleeps.
+
+**An editing key that seems missing belongs in klineedit's keymap.** All
+three front ends gain it there at once. Adding one to this shim would be
+the second keymap the rule exists to prevent -- Tab is the current gap,
+and the answer is to route `kernel/lib/completion.c` in, not to write
+completion here.

@@ -208,6 +208,10 @@ static inline int set_nonblock(int fd, int on) { return sys_set_nonblock(fd, on)
 // does -- see userland/libc/getopt.c.
 extern char *optarg;
 extern int optind, opterr, optopt;
+// BSD's scanner reset: set it to 1 to begin a fresh getopt() loop, which
+// optind alone cannot do (it cannot say "and forget where you were
+// inside a cluster like -la"). Cleared by getopt().
+extern int optreset;
 int getopt(int argc, char *const argv[], const char *optstring);
 
 #endif

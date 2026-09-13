@@ -18,6 +18,10 @@
 #include <errno.h>
 #include <signal.h>
 #include <float.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <fcntl.h>   // mkstemp's O_CREAT|O_EXCL
 
 // 1e0..1e22 -- every power of ten a double represents EXACTLY. Past
 // 1e22 the constant itself is already rounded, which is why scale10()
@@ -609,3 +613,42 @@ double strtod(const char *nptr, char **endptr) {
 }
 
 double atof(const char *s) { return strtod(s, 0); }
+
+// --- mkstemp -----------------------------------------------------------
+//
+// Creates a uniquely-named file from a template ending in exactly six
+// `X`s, replacing them in place and returning an open descriptor. The
+// caller owns the name afterwards -- there is no unlink here, which is
+// POSIX's contract and the reason mkstemp() is safe where mktemp() is
+// not: the file is CREATED, so nobody can win a race to the name.
+//
+// `O_EXCL` IS THE WHOLE GUARANTEE, not the randomness. A predictable
+// name is a nuisance (an attacker can make the open fail); a name that
+// is merely checked-then-opened is a vulnerability. So this retries on
+// EEXIST rather than testing for absence first.
+int mkstemp(char *template) {
+    if (!template) { errno = EINVAL; return -1; }
+    size_t n = strlen(template);
+    if (n < 6 || strcmp(template + n - 6, "XXXXXX") != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    char *x = template + n - 6;
+
+    // Seeded from the clock and the pid, which is what a system with no
+    // /dev/urandom in ring 3 has. See the note above on why this is a
+    // nuisance-avoider rather than the security property.
+    static const char set[] = "abcdefghijklmnopqrstuvwxyz0123456789";
+    unsigned long seed = (unsigned long)time(0) ^ ((unsigned long)getpid() << 16);
+
+    for (int attempt = 0; attempt < 128; attempt++) {
+        seed = seed * 6364136223846793005UL + 1442695040888963407UL;
+        unsigned long v = seed >> 16;
+        for (int i = 0; i < 6; i++) { x[i] = set[v % 36]; v /= 36; }
+        int fd = open(template, O_RDWR | O_CREAT | O_EXCL, 0600);
+        if (fd >= 0) return fd;
+        if (errno != EEXIST) return -1;
+    }
+    errno = EEXIST;
+    return -1;
+}

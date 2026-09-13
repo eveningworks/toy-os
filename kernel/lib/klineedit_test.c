@@ -11,6 +11,9 @@
 #include "keyboard.h"
 #include "string.h"
 #include "heap.h"   // kmalloc/kfree -- the editor takes its memory from the caller
+#include "fs.h"        // fs_exists -- the ring-3 half is a /tests binary
+#include "scheduler.h" // scheduler_spawn/_poll, same shape as tty_test.c
+#include "timer.h"     // pit_ticks -- the spawn deadline
 
 // The ring-0 allocator, handed to the editor because klineedit.c cannot
 // name one (see klineedit.h). The undo cases need it: a snapshot that
@@ -320,4 +323,39 @@ KTEST("klineedit", "the shared case table holds in ring 0") {
         KTEST_ASSERT(kline_case_run(&kline_cases[i], &e, got, sizeof got, &cursor, &ktest_mem));
     }
     KTEST_ASSERT(kline_case_count >= 10); // the table is reachable, not empty
+}
+
+// --- the THIRD front end, and the only one with a vendored shell on it -
+//
+// /bin/dash ships without libedit, so this port had no arrow keys, no
+// history and no `fc` until userland/backends/dash/histedit_shim.c
+// answered libedit's names with the editor above. The claim is that
+// dash EDITS with this code -- which cannot be checked from ring 0,
+// because it needs a shell, a terminal and a keystroke.
+//
+// /tests/dashedit_test does it on a pty and reports by exit code; this
+// drives it. A pty and not a pipe on purpose: dash builds an EditLine
+// only when its input is interactive AND a terminal, so the pipe version
+// of this test would measure a shell with editing switched off and pass
+// whether or not any of it worked.
+#define DASHEDIT_TEST_PATH "/tests/dashedit_test"
+#define DASHEDIT_TIMEOUT_TICKS 900 // 9s at 100Hz -- it spawns a whole shell
+
+KTEST("klineedit", "dash edits with this editor, over a pty") {
+    if (!fs_exists(DASHEDIT_TEST_PATH)) KTEST_SKIP("no " DASHEDIT_TEST_PATH);
+    if (!fs_exists("/bin/dash")) KTEST_SKIP("no /bin/dash on this boot");
+
+    int pid = scheduler_spawn(DASHEDIT_TEST_PATH, 0);
+    KTEST_ASSERT(pid != 0);
+
+    int code = -1, exited = 0;
+    uint64_t start = pit_ticks();
+    while (pit_ticks() - start < DASHEDIT_TIMEOUT_TICKS) {
+        if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
+    }
+    KTEST_ASSERT(exited);
+    // 0 = every phase worked; the other codes name WHICH link broke --
+    // see userland/tests/dashedit_test.c. 7 is the one that matters:
+    // Up did not bring the previous line back.
+    KTEST_ASSERT_EQ(code, 0);
 }

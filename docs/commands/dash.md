@@ -31,12 +31,22 @@ Terminal, `telnetd` and libc's `system()` all name `/bin/tosh`, and a
 `system.shell` setting to change that is a separate roadmap item. Run
 it by name to use it.
 
-**It has no line editing.** Debian builds dash without libedit and so
-does this port, which means no arrow keys, no history and no Tab
-completion at an interactive prompt -- a downgrade from `tosh`, whose
-editor is `kernel/lib/klineedit.c` compiled twice. Wiring that editor
-into dash's one read-a-line seam is what would fix it, and is the point
-of there being exactly one line editor in this tree.
+**Line editing is `set -o emacs`, and then it is `tosh`'s editor.**
+Debian builds dash without libedit, so upstream has no editing at all;
+this port answers libedit's names with `kernel/lib/klineedit.c` instead
+(`userland/backends/dash/histedit_shim.c`), which is the same editor
+`tosh`, the GUI Terminal and the physical console use. Arrow keys,
+history, the kill ring and the word motions all behave as they do
+everywhere else in this system, because they ARE the same code.
+
+It is opt-in because upstream makes it so -- `Eflag` starts clear and
+dash builds its editor only once `set -o emacs` (or `-o vi`, which gets
+the same editor here, there being only one) sets it. Put it in the
+shell's startup file to have it always.
+
+**Tab completion is not wired up.** The editor reports the keystroke and
+nothing answers it yet; `tosh` fills that in from
+`kernel/lib/completion.c`, and dash could use the same engine.
 
 ## How it is built
 

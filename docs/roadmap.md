@@ -354,7 +354,7 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [x] ~~A Makefile rule, running dash's six generators on the HOST~~ DONE 2026-09-13 -- `/bin/dash` builds and runs
 - [x] ~~Exercise it: pipelines, here-docs, functions, traps~~ DONE 2026-09-13 -- `tools/dash_test.py` 22/22; job control unproven
 - [x] ~~Our own `mksignames`~~ DONE 2026-09-13 -- `tools/gen_signames.py`; no GPL reaches the binary
-- [ ] Toykit's `klineedit` wired into dash's one read-a-line seam -- dash ships no line editing
+- [x] ~~Toykit's `klineedit` wired into dash's read-a-line seam~~ DONE 2026-09-13 -- a libedit shim; `set -o emacs`
 - [ ] A `system.shell` setting, read by the four places that hardcode `/bin/tosh` today
 
 ## Tracks -- no dependency on the phases above

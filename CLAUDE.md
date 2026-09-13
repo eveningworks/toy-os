@@ -1030,6 +1030,7 @@ whenever a headline here tells you something you did not already know.
 - **Versioning is semver + a `-dev` suffix, not a per-change build number.**
 - **A SHARED LIBRARY IS `userland/dynlib/` PLUS ONE MAKEFILE LINE, AND A PROGRAM OPTS IN**
 - **THE BARE-METAL KERNEL IS REPLACED WITH `remote.py flash`, AND THE RESCUE ENTRY NEEDS A GRUB TIMEOUT** -- and `--force` after any change to a struct a program embeds, since the sync trusts the machine's `sum`
+- **dash's LINE EDITING IS A libedit SHIM, NOT A SECOND EDITOR** -- `userland/backends/dash/histedit_shim.c` answers libedit's names with `klineedit.c`; the port stays verbatim and `config.h` merely stops defining `SMALL`, editing is opt-in (`set -o emacs`) because upstream makes it so, `el_gets()` owns raw mode and restores it around the return, and a missing key goes in klineedit's keymap rather than here
 - **A GitHub Release's notes follow ONE shape, and it is terse.**
 
 ## This checkout, and the repo it pushes to

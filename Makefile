@@ -822,7 +822,10 @@ DASH_PORT_CFILES = alias.c arith_yacc.c arith_yylex.c cd.c error.c eval.c \
 DASH_PORT_OBJS = $(patsubst %.c,dash/port/%,$(DASH_PORT_CFILES))
 DASH_GEN_OBJS  = dash/gen/builtins dash/gen/init dash/gen/nodes \
                  dash/gen/signames dash/gen/syntax
-EXTRA_OBJS_dash = $(DASH_PORT_OBJS) $(DASH_GEN_OBJS)
+# OURS, so it is built with the ordinary warnings rather than the port's
+# -w: the libedit surface dash expects, answered by klineedit.
+DASH_BACKEND_OBJS = dash/backend/histedit_shim
+EXTRA_OBJS_dash = $(DASH_PORT_OBJS) $(DASH_GEN_OBJS) $(DASH_BACKEND_OBJS)
 
 # Vendored code compiles with its warnings off, exactly as Doom's does
 # and for the same reason -- nobody may "fix" the directory to match
@@ -830,11 +833,15 @@ EXTRA_OBJS_dash = $(DASH_PORT_OBJS) $(DASH_GEN_OBJS)
 # FRAME budget is kept: a shell recurses through its own evaluator.
 DASH_CFLAGS = $(subst -Wall,-w,$(subst -Wextra,,$(USERLAND_CFLAGS))) \
               -DBSD=1 -DSHELL -include userland/backends/dash/config.h \
-              -I$(DASH_SRC) -I$(DASH_GEN)
+              -I$(DASH_SRC) -I$(DASH_GEN) -Iuserland/backends/dash
 
 # main() is upstream's, and userland/bin/dash.c is the ELF's entry --
 # renamed in the BUILD so neither copy is edited.
 $(BUILD)/userland/dash/port/main.o: DASH_CFLAGS += -Dmain=dash_main
+
+$(BUILD)/userland/dash/backend/%.o: userland/backends/dash/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(USERLAND_CFLAGS) -Iuserland -Iuserland/backends/dash -c $< -o $@
 
 $(BUILD)/userland/dash/port/%.o: $(DASH_SRC)/%.c $(DASH_GEN)/.stamp
 	@mkdir -p $(dir $@)

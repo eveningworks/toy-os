@@ -18,13 +18,21 @@
 #define _PATH_BSHELL "/bin/sh"
 #define _PATH_DEVNULL "/dev/null"
 #define _PATH_TTY "/dev/tty"
+/* `fc` writes the command it is about to edit here. VOLATILE is the
+   right class for it -- the file lives for one editor session -- so /tmp
+   rather than /var/tmp. Spelled out because this is a vendored port
+   building a template itself; ours would ask tmppath() (api/tmppath.h). */
+#define _PATH_TMP "/tmp/"
 #define SIZEOF_INTMAX_T 8
 #define SIZEOF_LONG_LONG_INT 8
 #define PRIdMAX "lld"
 #define USE_TEE 0
 #define USE_MEMFD_CREATE 0
 #define HAVE_F_DUPFD_CLOEXEC 0
-#define SMALL 1
+/* NOT defined: dash gets line editing from userland/backends/dash/
+   histedit_shim.c, which answers libedit's names with this system's one
+   editor (kernel/lib/klineedit.c). Defining it again would take away
+   arrow keys, history and `fc` in one line. */
 #define WITH_LINENO 1
 /* tolibc has these, so dash must NOT declare its own and collide. */
 #define HAVE_STRSIGNAL 1
