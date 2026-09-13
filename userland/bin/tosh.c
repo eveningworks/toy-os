@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include "lib/uhistory.h"
 #include "klineedit.h"
+#include "lib/uline.h"   // the paint, shared with /bin/dash
 #include "lib/ucomplete.h"
 #include "histsearch.h" // the Ctrl-R loop, shared with the kernel shell
 #include "signal_abi.h" // SIGCHLD, SIGWINCH, struct k_sigaction -- see main()
@@ -105,11 +106,7 @@ static const char *prompt(void) {
 // assumed. A window that has been resized reports the new width, because
 // the emulator sends SYS_TCSETWINSZ on every resize -- and SIGWINCH is
 // what tells this shell to come back and ask again.
-static int term_cols(void) {
-    struct tty_winsize ws;
-    if (sys_tcgetwinsz(0, &ws) < 0 || ws.cols < 20) return 80;
-    return ws.cols;
-}
+static int term_cols(void) { return uline_cols(); }
 
 static void cursor_up(int n) {
     if (n <= 0) return;
@@ -136,40 +133,7 @@ static void cursor_up(int n) {
 //
 // g_row_shown is how the NEXT repaint finds the top of this one; a path
 // that prints anything else must reset it (end_line(), fresh_prompt()).
-static void redraw(void) {
-    int w = term_cols();
-    const char *p = prompt();
-    int plen  = (int)strlen(p);
-    int total = plen + g_ed.len;
-    int cur   = plen + g_ed.cursor;
-
-    cursor_up(g_row_shown);
-    put("\r");
-    put("\x1b[J");   // this row and every row below it
-
-    int rows = total / w;   // one past the last content row when total
-                            // fills its last row exactly -- which is the
-                            // row the caret then belongs on
-    for (int r = 0; r <= rows; r++) {
-        int from = r * w, to = from + w;
-        if (to > total) to = total;
-        if (from < plen)
-            write(1, p + from, (size_t)((to < plen ? to : plen) - from));
-        if (to > plen) {
-            int a = from > plen ? from : plen;
-            write(1, g_ed.buf + (a - plen), (size_t)(to - a));
-        }
-        if (r < rows) put("\n");
-    }
-
-    int cur_row = cur / w;
-    cursor_up(rows - cur_row);
-    char col[16];
-    snprintf(col, sizeof col, "\x1b[%dG", cur % w + 1);
-    put(col);
-
-    g_row_shown = cur_row;
-}
+static void redraw(void) { uline_paint(prompt(), &g_ed, &g_row_shown); }
 
 // --- news from a background job ----------------------------------------
 //
