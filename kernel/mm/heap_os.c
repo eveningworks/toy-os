@@ -14,6 +14,7 @@
 #include "pmm.h"
 #include "klog.h"
 #include "fault_inject.h"
+#include "scheduler.h" // preempt_disable/_enable -- see heap_os_lock() below
 
 #define HEAP_PAGE_SIZE 4096
 
@@ -29,10 +30,25 @@ void heap_os_report(const char *msg) { klog_write(msg); }
 
 int heap_os_should_fail_alloc(void) { return fault_should_fail_alloc(); }
 
-// NO-OPS, and heap_os.h says why: nothing preempts kernel code between
-// two instructions of kmalloc(). The day that stops being true is the
-// day SMP lands, and `docs/smp-design.md` names this as the first lock
-// to make real -- so the call sites already exist and only these two
-// bodies change.
-void heap_os_lock(void) { }
-void heap_os_unlock(void) { }
+// PREEMPTION OFF, NOT A LOCK -- and the day these stopped being no-ops
+// came before SMP, which is what the old comment here predicted.
+// Making the syscall gate a TRAP gate is what falsifies "nothing
+// preempts kernel code mid-kmalloc": a timer tick lands inside a
+// syscall, switches to a process that also allocates, and two walkers
+// share one free list. bounce_alloc() is on every read and write, so
+// this is the hot path rather than a corner.
+//
+// scheduler_preempt_disable() is enough BECAUSE NO INTERRUPT HANDLER
+// ALLOCATES -- measured across all eleven registered IRQ handlers, not
+// assumed. That is the invariant to keep: an IRQ handler that starts
+// calling kmalloc() re-enters the list the guard is protecting, and
+// the guard cannot see it. Such a handler would need the allocator to
+// mask interrupts instead (Linux's spin_lock_irqsave), which costs
+// every allocation in the kernel to serve one caller.
+//
+// Balanced by construction: heap_core.c's kmalloc/kfree are thin
+// wrappers around unlocked inner functions precisely so no early
+// return can skip the unlock -- an unbalanced disable() hangs the
+// machine (api/scheduler.h).
+void heap_os_lock(void) { scheduler_preempt_disable(); }
+void heap_os_unlock(void) { scheduler_preempt_enable(); }

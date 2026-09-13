@@ -56,7 +56,11 @@ int heap_os_should_fail_alloc(void);
 //   - **Ring 3: a real lock.** A process can have several threads
 //     (`docs/conventions/kernel.md`) and they are preempted at any
 //     instruction, so two of them in malloc() would corrupt the list.
-//   - **Ring 0: a no-op**, because the kernel is not preempted inside
+//   - **Ring 0: preemption off**, not a lock. It was a no-op until the
+//     syscall gate stopped running with interrupts masked; see
+//     kernel/mm/heap_os.c, which also records why masking interrupts
+//     is not needed and what would change that. Formerly a no-op because
+//     the kernel was not preempted inside
 //     kernel code -- the scheduler only ever switches ring-3 processes,
 //     and every syscall runs with interrupts off. That assumption is
 //     stated in heap_core.c's top comment and ENDS AT SMP: the kernel

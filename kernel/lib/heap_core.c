@@ -25,16 +25,17 @@
 // not list adjacency -- two blocks next to each other in the list
 // might come from separate, non-adjacent pmm regions.
 //
-// Not interrupt-safe or reentrant. Nothing here is called from an ISR,
-// and the scheduler only ever preempts between ring-3 processes, never
-// kernel-mode code mid-kmalloc -- so in RING 0 the list needs no lock.
+// Not interrupt-safe or reentrant, and NOTHING HERE MAY BE CALLED FROM
+// AN ISR -- that is the standing invariant both rings depend on, and
+// the one an interrupt handler that starts allocating would break.
 //
-// **THAT ARGUMENT NEVER APPLIED TO RING 3, and threads are what made it
-// matter**: two threads of one process are preempted at any instruction
-// and share one free list. kmalloc()/kfree()/heap_check() take
-// heap_os_lock(), which is a real lock in ring 3 and a no-op in the
-// kernel -- see api/heap_os.h, and docs/smp-design.md for the day the
-// kernel's half stops being a no-op.
+// kmalloc()/kfree()/heap_check() take heap_os_lock(), which is a real
+// lock in ring 3 (two threads of one process are preempted at any
+// instruction and share one free list) and preemption-off in the
+// kernel. The kernel's half USED to be a no-op, on the argument that
+// nothing preempts kernel code mid-kmalloc; making the syscall gate a
+// trap gate is what ended that. See api/heap_os.h and
+// kernel/mm/heap_os.c.
 //
 // DEBUG MODE (`heap debug on`, heap_set_debug()) wraps every subsequent
 // allocation in red-zones and poisons what it frees:
