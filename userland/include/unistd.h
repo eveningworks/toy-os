@@ -123,6 +123,27 @@ static inline void _exit(int code) { sys_exit(code); }
 // Returns 0 if the path exists, -1 with errno ENOENT if it does not.
 int access(const char *path, int mode);
 
+// --- sysconf ----------------------------------------------------------
+//
+// Runtime system values. Only the names below are answered; anything
+// else is -1 with EINVAL, which is how POSIX says "this implementation
+// has no limit for that" AND how it says "no such name" -- the two are
+// distinguished by whether errno was set, so this sets it.
+#define _SC_CLK_TCK      1
+#define _SC_PAGESIZE     2
+#define _SC_PAGE_SIZE    _SC_PAGESIZE
+#define _SC_OPEN_MAX     3
+#define _SC_ARG_MAX      4
+#define _SC_NPROCESSORS_ONLN 5
+
+// **_SC_CLK_TCK IS 1000000 HERE, NOT glibc's 100**, so that times()'s
+// unit and clock()'s CLOCKS_PER_SEC are the same number and the one
+// real trap in <sys/times.h> costs nothing. The kernel measures CPU
+// time in nanoseconds (abi/proc_info.h), so a coarser tick would
+// throw away precision it already has to buy compatibility with a
+// constant no correct program hardcodes.
+long sysconf(int name);
+
 #define F_OK 0
 #define X_OK 1
 #define W_OK 2

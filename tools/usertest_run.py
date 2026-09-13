@@ -311,6 +311,10 @@ TESTS = [
     # including on a failed check -- a test that leaves a setting behind
     # changes the machine for every later tool.
     ("utz_test", 0, None, None),
+    # The ten POSIX headers the dash port needed. Exit code is the
+    # failure count. Run through the legacy loader, which has NO
+    # scheduler slot -- which is why times() must not fail there.
+    ("posixhdr_test", 0, None, None),
     ("stdio_test", 0,
      ["stdio_test: all checks passed", "atexit:BA"], ["FAIL"]),
     # SYS_QUERY from ring 3. Runs fine under `run`: it spawns nothing and

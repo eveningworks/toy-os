@@ -1,6 +1,8 @@
 #ifndef ULIB_SYS_TYPES_H
 #define ULIB_SYS_TYPES_H
 
+#include <stdint.h>
+
 // POSIX's type names, in the one place every other header can take them
 // from. It exists mostly so that `#include <sys/types.h>` at the top of
 // ported code is not an error -- the definitions themselves are one
@@ -29,6 +31,32 @@ typedef long off_t;
 // type: the kernel's spawn/wait/kill all speak `int`, and a typedef
 // that disagreed with the ABI would be decoration.
 typedef int pid_t;
+#endif
+
+#ifndef __ULIB_TIME_T
+#define __ULIB_TIME_T
+// Also in <time.h>, guarded so both headers can define it -- POSIX
+// requires it from this one too, and ported code includes whichever it
+// happens to reach first (dash's mail.c takes this route).
+typedef int64_t time_t;
+#endif
+
+#ifndef __ULIB_SUSECONDS_T
+#define __ULIB_SUSECONDS_T
+// SIGNED microseconds, which is what the `s` is for: a timeval
+// difference can be negative.
+typedef long suseconds_t;
+#endif
+
+#ifndef __ULIB_UID_T
+// PRESENT AND ALWAYS ZERO, for the same reason mode_t below is present
+// and meaningless: this is a single-user system with no login, no
+// /etc/passwd and no notion of a second user. getuid()/geteuid() answer
+// 0 (<unistd.h> says why that is root rather than nobody), and a
+// signature carrying one compiles.
+#define __ULIB_UID_T
+typedef unsigned uid_t;
+typedef unsigned gid_t;
 #endif
 
 #ifndef __ULIB_MODE_T

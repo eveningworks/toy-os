@@ -34,7 +34,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef __ULIB_TIME_T
+#define __ULIB_TIME_T
 typedef int64_t time_t;
+#endif
 
 struct tm {
     int tm_sec;    // 0..60 (60 for a leap second that will never arrive here)
