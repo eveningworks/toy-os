@@ -971,6 +971,7 @@ static void ibm_set(uint32_t g, uint32_t i, int v) {
 }
 
 static void alog_push(uint32_t blk); // rollback log, defined below with its story
+static void map_cache_forget(uint32_t blk); // pointer-table caches, defined below
 
 // Highest usable data offset within group g (backup regions excluded).
 static uint32_t group_data_end(uint32_t g) {
@@ -1036,6 +1037,11 @@ static void free_block_bit(uint32_t blk) {
     S->gd[g].free_blocks++;
     mark_dirty(S->gdt_dirty, g);
     if (S->rotor[g] > i) S->rotor[g] = i;
+    // THE CACHES ARE KEYED BY BLOCK NUMBER AND OUTLIVE ONE OPERATION,
+    // so a freed table block must be forgotten here -- reallocating it
+    // as something else would otherwise hand the next walk a stale
+    // image, and the write that followed would land in the wrong file.
+    map_cache_forget(blk);
 }
 
 static uint64_t alloc_inode(uint32_t prefer_group) {
@@ -1552,6 +1558,19 @@ static struct {
     uint8_t buf[T3_BLOCK];
 } g_mcache[2];
 
+// WHICH MOUNT g_mcache HOLDS. A block number is volume-relative, so
+// once these entries outlive one operation the same number names a
+// different block on a second tfs3 mount. Entries are always clean
+// between operations (every write path ends in pcache_flush()), so a
+// mismatch discards rather than writing back.
+static struct t3_state *g_mcache_owner;
+
+static void mcache_claim(void) {
+    if (g_mcache_owner == S) return;
+    for (int i = 0; i < 2; i++) { g_mcache[i].blk = 0; g_mcache[i].dirty = 0; }
+    g_mcache_owner = S;
+}
+
 static int mcache_flush(void) {
     for (int i = 0; i < 2; i++) {
         if (g_mcache[i].blk && g_mcache[i].dirty) {
@@ -1563,6 +1582,7 @@ static int mcache_flush(void) {
 }
 
 static int mcache_load(int level, uint32_t blk, int fresh) {
+    mcache_claim();
     if (g_mcache[level].blk == blk) return 1;
     if (g_mcache[level].blk && g_mcache[level].dirty) {
         if (!write_block(g_mcache[level].blk, g_mcache[level].buf)) return 0;
@@ -1596,6 +1616,16 @@ static int pcache_load(uint32_t blk, int fresh) {
     S->pcache.dirty = 0;
     if (fresh) { k_memset(S->pcache.buf, 0, T3_BLOCK); S->pcache.dirty = 1; return 1; }
     return read_block(blk, S->pcache.buf);
+}
+
+// Forget one block wherever it is cached. Clean entries only ever
+// reach here: a dirty table belongs to the operation still running,
+// which cannot be freeing its own table.
+static void map_cache_forget(uint32_t blk) {
+    if (S && S->pcache.blk == blk) { S->pcache.blk = 0; S->pcache.dirty = 0; }
+    if (g_mcache_owner != S) return;
+    for (int i = 0; i < 2; i++)
+        if (g_mcache[i].blk == blk) { g_mcache[i].blk = 0; g_mcache[i].dirty = 0; }
 }
 
 static void pcache_drop(void) {
@@ -1714,7 +1744,6 @@ static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
     uint32_t last_alloc = 0;
     uint32_t total = 0;
 
-    pcache_drop();
     while (total < len) {
         uint64_t file_off = offset + total;
         uint32_t bi = (uint32_t)(file_off / T3_BLOCK);
@@ -1781,8 +1810,10 @@ static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
             total += chunk;
         }
     }
+    // FLUSHED, NOT DROPPED. The next write syscall to this file walks
+    // the same leaf and middle tables, and re-reading them was ~3 of
+    // the ~6 metadata reads every 64 KiB write was issuing.
     if (!pcache_flush()) return 0;
-    pcache_drop();
 
     if (offset + len > node->size) node->size = offset + len;
     node->modified = now_epoch();
@@ -1955,6 +1986,7 @@ static int trunc_detach(struct t3_trunc *tr, uint32_t table_blk, int depth, uint
     // An emptied table is dropped whole by the caller, so writing it
     // would be a write to a block about to be freed.
     if (dirty && !empty && !write_block(table_blk, edit)) empty = 0;
+    map_cache_forget(table_blk);   // edited behind the write caches' backs
     kfree(edit);
 
     tr->img[depth] = orig;
@@ -2120,6 +2152,7 @@ static int dirent_insert(uint64_t dir_ino, struct t3_inode *dir,
         else if (!read_block(table, g_ptr_blk)) { free_block_bit(newblk); return 0; }
         wr32(g_ptr_blk + (nblocks - 12) * 4, newblk);
         if (!write_block(table, g_ptr_blk)) { free_block_bit(newblk); return 0; }
+        map_cache_forget(table);
     }
     dir->size += T3_BLOCK;
     dir->modified = now_epoch();
@@ -3386,7 +3419,6 @@ static int tfs3_write_range_step(void *handle) {
     // Final step: land the pointer cache, the allocation state, and
     // the inode -- the same commit point do_write() has.
     if (!pcache_flush()) { pcache_drop(); alog_rollback(); kfree(st); return 2; }
-    pcache_drop();
     if (st->offset + st->len > st->node.size) st->node.size = st->offset + st->len;
     st->node.modified = now_epoch();
     int ok = flush_alloc_state();

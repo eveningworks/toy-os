@@ -658,6 +658,57 @@ KTEST("fs", "truncate cuts a file that uses indirect blocks") {
     KTEST_ASSERT_EQ((int64_t)used_after, (int64_t)used_before);
 }
 
+KTEST("fs", "a write after a truncate does not resurrect the cut blocks") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_tcw");
+
+    // THE SEQUENCE IS TRUNCATE-THEN-WRITE, and it is the one the test
+    // above cannot reach: that one truncates and only READS back.
+    // The write caches outlive a single operation now, so a straddling
+    // table edited in place by trunc_detach() -- which writes the block
+    // directly, behind those caches -- leaves a stale image cached. The
+    // next write to the kept region flushes that image back, restoring
+    // pointers to blocks the truncate freed.
+    // POKE == KEEP: the FIRST CUT BLOCK, not a kept one. Writing a
+    // kept index reuses the pointer already in the table, never
+    // dirties it, and a stale cached image is then never consulted
+    // for anything -- a version of this test that poked block 13
+    // passed with the invalidation removed entirely.
+    enum { BLK = 4096, NBLK = 20, KEEP = 15, POKE = KEEP };
+    static char chunk[BLK];
+    for (int b = 0; b < NBLK; b++) {
+        for (int i = 0; i < BLK; i++) chunk[i] = (char)('a' + ((b + i) % 26));
+        KTEST_ASSERT(fs_write_range("/.ktest_tcw", (uint64_t)b * BLK, chunk, BLK) == 1);
+    }
+    KTEST_ASSERT(fs_truncate("/.ktest_tcw", (uint64_t)KEEP * BLK) == 1);
+
+    // Past the 12 direct pointers, so this write walks the straddling
+    // single-indirect table the truncate just rewrote -- and at an
+    // index whose pointer that rewrite ZEROED, so a correct walk must
+    // allocate a fresh block. A stale cached table still holds the old
+    // pointer, so the write lands in a block the truncate freed and the
+    // new pointer is never recorded: the data reads back as a hole.
+    for (int i = 0; i < BLK; i++) chunk[i] = (char)('A' + (i % 26));
+    KTEST_ASSERT(fs_write_range("/.ktest_tcw", (uint64_t)POKE * BLK, chunk, BLK) == 1);
+
+    static char back[BLK];
+    KTEST_ASSERT_EQ(fs_read_range("/.ktest_tcw", (uint64_t)POKE * BLK, back, BLK), (uint32_t)BLK);
+    for (int i = 0; i < BLK; i++) KTEST_ASSERT(back[i] == (char)('A' + (i % 26)));
+    KTEST_ASSERT_EQ((int64_t)fs_size("/.ktest_tcw"), (int64_t)(POKE + 1) * BLK);
+
+    // THE LOAD-BEARING CHECK. A resurrected pointer is invisible to
+    // every read -- the file is 15 blocks long and nothing reads past
+    // that -- and shows up here as the inode referencing blocks the
+    // bitmap says are free.
+    struct fs_check_result r;
+    KTEST_ASSERT(fs_check(0, &r) == 1);
+    KTEST_ASSERT_EQ(r.referenced_but_free, 0);
+    KTEST_ASSERT_EQ(r.double_allocated, 0);
+    KTEST_ASSERT_EQ(r.leaked, 0);
+
+    KTEST_ASSERT(fs_delete("/.ktest_tcw") == 1);
+}
+
 KTEST("fs", "truncate refuses a directory and no-ops at the same size") {
     if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
     fs_delete("/.ktest_td");

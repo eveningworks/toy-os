@@ -967,6 +967,8 @@ whenever a headline here tells you something you did not already know.
 - **`/boot` IS READABLE FROM INSIDE toy-os NOW, AND IT IS THE ESP**
 - **TOY-OS BOOTS FROM ITS OWN DISK, AND `/boot` IS FAT32 BECAUSE GRUB CANNOT READ TFS3**
 - **NEVER LEAVE THE BOOT ORDER OUT OF A QEMU LINE, AND ASK `boot_medium()` WHICH ONE**
+- **A BLOCK-KEYED CACHE THAT OUTLIVES ONE OPERATION MUST BE FORGOTTEN WHEN ITS BLOCK IS FREED** -- TFS3's write-side pointer-table caches survive a syscall now; `map_cache_forget()` is called from `free_block_bit()` and from the two places that write a table directly, and `g_mcache` records its mount because a block number is volume-relative
+- **`SYS_WRITE_MAX` SETS THE TRANSACTION COUNT, NOT THE COMMAND SIZE** -- 256 KiB; each driver still reports its own per-transfer ceiling (`blkdev_max_sectors_per_xfer()`), and legacy ATA's is 64 KiB
 
 ### The shell, the console, and line editing
 

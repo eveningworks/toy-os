@@ -2863,3 +2863,61 @@ here. And the outcome is a read-only volume, which on the root would
 fail every test after it -- so the post-commit KTEST skips unless a
 second TFS3 mount exists, and `tools/multidisk_test.py` is the guest
 that has one.
+
+
+## Why TFS3's write caches outlive one operation, and the read cache's does not
+
+`pcache`/`g_mcache` hold the pointer tables a write walks. They were
+dropped at the start and end of every `do_write_inner()`, so a
+sequential write re-read the same leaf and middle tables on every
+syscall -- measured on a SATA SSD at ~6 metadata read commands per
+64 KiB write, about half of them these tables.
+
+They are keyed by block number, so keeping them is free until a block
+changes identity. The only way that happens is a free-and-reallocate,
+or a write that goes around the cache; both are now explicit
+(`map_cache_forget()`). That is strictly narrower than the rule the
+READ-side cache takes -- `vol_write_sectors()` drops `g_rcache` on any
+write at all -- and the asymmetry is the point: the read walk cannot
+tell a table block from a data block, and being wrong once serves
+another file's data. The write walk allocated the table, so it can.
+
+**Why not a general buffer cache instead.** That is the honest
+alternative and it is on the roadmap, but it answers a different
+question: a buffer cache makes a re-read cheap, while this makes the
+re-read not happen. The re-read was not cold -- it was the same three
+blocks, every syscall, on a path that already knew their numbers.
+
+**The measurement.** 64 MiB sequential write on a Samsung SATA SSD:
+44.1 -> 54.0 MB/s, with read commands per write syscall falling from
+5.9 to 4.0 and read SECTORS more than halving. Random 4 KiB write
+4.48 -> 5.47 MB/s.
+
+## Why `SYS_WRITE_MAX` is 256 KiB, and why that is not a driver question
+
+The constant does not size a disk command -- it sizes a TRANSACTION.
+Every `fs_write_range()` flushes its own dirty pointer tables, bitmap
+and group descriptors before staging the inode, so the syscall cap
+decides how many times that bookkeeping is paid per megabyte. At 64 KiB
+a 64 MiB sequential write issued 8311 block-layer write commands for
+1024 syscalls, moving 174,328 sectors where the data was 131,072: 1.33x
+write amplification, none of it the filesystem's format.
+
+At 256 KiB the same write issues ~2180 commands moving ~142,300
+sectors -- 1.086x -- and measured 92.9 MB/s against 54.0. Sequential
+read went 102.9 -> 132.6 MB/s.
+
+**Why not larger.** The bounce buffer is the ceiling: AHCI's is 64
+contiguous DMA32 frames and already steps down to 16 then 1 if the pool
+is fragmented. Beyond 256 KiB the contiguous ask stops being reliably
+satisfiable, and the remaining gap is no longer the request size --
+the block layer moves 319 MB/s during a sequential read that the caller
+sees as 133, so what is left is the two copies and the syscall, not the
+command.
+
+**Why it is not a driver constant.** Each driver answers
+`blkdev_max_sectors_per_xfer()` for itself and TFS3's run coalescing
+asks. AHCI carries the full 256 KiB; legacy ATA cannot exceed 64 KiB
+because one PRD's byte count is 16-bit and `ata.c` has no
+scatter-gather. A 256 KiB syscall there is four commands in ONE
+transaction, which is where most of the win was.

@@ -106,7 +106,7 @@ struct prd {
     uint32_t dbc;        // bits 21:0 are the byte count MINUS ONE
 };
 
-#define PRDT_ENTRIES 16  // one per 4 KiB page of the bounce buffer
+#define PRDT_ENTRIES 64  // one per 4 KiB page of the bounce buffer -- 256 KiB
 
 struct cmd_table {
     uint8_t cfis[64];
@@ -461,17 +461,24 @@ static void scan_ports(void) {
 // returns -- so there is no alignment arithmetic to get wrong.
 #define OFF_CLIST  0x000   // 32 headers, 1 KiB
 #define OFF_FIS    0x400   // 256 B
-#define OFF_CTABLE 0x500   // 128 + 16 * PRDT_ENTRIES
+#define OFF_CTABLE 0x500   // 128 + 16 * PRDT_ENTRIES = 1152 B, inside the frame
 
 static int alloc_dma(void) {
-    uint32_t frames = DMA_BUF_FRAMES;
-    uint64_t base = pmm_alloc_contiguous(1 + frames, PMM_ZONE_DMA32);
-    if (!base) {
-        frames = 1;
+    // STEPPED DOWN, NOT A CLIFF. 64 contiguous frames is a big ask of a
+    // fragmented pool, and dropping straight to one would cost 64x the
+    // commands for a shortfall that 16 would have absorbed.
+    static const uint32_t TRY[] = { DMA_BUF_FRAMES, 16, 1 };
+    uint32_t frames = 0;
+    uint64_t base = 0;
+    for (unsigned i = 0; i < sizeof TRY / sizeof TRY[0]; i++) {
+        frames = TRY[i];
         base = pmm_alloc_contiguous(1 + frames, PMM_ZONE_DMA32);
-        if (!base) return 0;
-        klog_write("ahci: only got a 4 KiB DMA buffer (contiguous pool too fragmented)\n");
+        if (base) break;
     }
+    if (!base) return 0;
+    if (frames != DMA_BUF_FRAMES)
+        klog_printf("ahci: only got a %u KiB DMA buffer (contiguous pool too fragmented)\n",
+                    frames * 4);
     g_buf_frames = frames;
     g_clist_phys  = base + OFF_CLIST;
     g_fis_phys    = base + OFF_FIS;

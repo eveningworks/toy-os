@@ -233,8 +233,13 @@ def main():
     # falls through to ramfs and still reaches a prompt. A mounted,
     # PERSISTENT tfs3 is what only a working driver produces.
     check("TFS3 mounted off the AHCI drive", "fs: tfs3 mounted at / on ahci" in t1)
+    # THE ROOT, not the transcript. This used to also require the word
+    # "ramfs" to be absent anywhere in the boot log, which stopped being
+    # satisfiable when /tmp became a ramfs mount -- the check then failed
+    # on a perfectly healthy AHCI boot and had been red ever since.
     check("the root is persistent, not ramfs",
-          "ramfs" not in t1 and re.search(r"tfs3\s+/\s+\S+\s+\S+\s+\S+\s+\S+\s+yes", t1) is not None)
+          re.search(r"ramfs\s+/\s", t1) is None
+          and re.search(r"tfs3\s+/\s+\S+\s+\S+\s+\S+\s+\S+\s+yes", t1) is not None)
     check("/bin/ahci reports the drive and marks one port in use",
           "<- in use" in t1 and t1.count("<- in use") == 1)
 

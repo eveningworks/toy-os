@@ -1212,3 +1212,65 @@ installer can format a volume and then mount it to copy the system
 across. `mount` still distinguishes "already at its mount limit" from
 "nothing recognises this volume", because saying the wrong one costs an
 hour.
+
+## A BLOCK-KEYED CACHE THAT OUTLIVES ONE OPERATION MUST BE FORGOTTEN WHEN ITS BLOCK IS FREED
+
+TFS3's write-side pointer-table caches (`pcache` for the leaf table,
+`g_mcache` for the middle levels) are keyed by BLOCK NUMBER. They used
+to be dropped at the start and end of every `do_write_inner()`, which
+made the key irrelevant: nothing survived one operation, so nothing
+could go stale. They survive now, because re-reading them was about
+half the metadata read traffic of a sequential write.
+
+Three rules come with that, and each one is a real failure:
+
+- **A freed block must be forgotten** (`map_cache_forget()`, called
+  from `free_block_bit()`). A table block that is freed and reallocated
+  as something else would otherwise still be cached under its old
+  number.
+- **A block written behind the caches' backs must be forgotten too.**
+  Two places write a pointer table directly rather than through the
+  cache -- `trunc_detach()` editing a straddling table, and the
+  directory-grow path recording a new dirent block. Both forget now.
+- **The cache belongs to ONE MOUNT.** `pcache` lives in `struct
+  t3_state` and is per mount already; `g_mcache` is file-scope, so it
+  records an owner and discards on a mismatch. A block number is
+  volume-relative, and two TFS3 mounts number their blocks the same
+  way.
+
+The read-side cache (`g_rcache`) takes the blunter rule instead -- ANY
+write drops it, unconditionally -- because it cannot tell which blocks
+are tables. That asymmetry is deliberate: the write side already knows.
+
+**The test for this class is a WRITE AFTER a truncate, into the CUT
+region.** A write to a KEPT index reuses the pointer already in the
+table, never dirties it, and a stale cached image is then never
+consulted -- a version of the KTEST that poked a kept block passed with
+the invalidation removed entirely. The symptom of the real bug is data
+written into a freed block with the pointer never recorded, so it reads
+back as a hole; `fs_test.c`'s "a write after a truncate does not
+resurrect the cut blocks" is that case.
+
+## `SYS_WRITE_MAX` SETS THE TRANSACTION COUNT, NOT THE COMMAND SIZE
+
+It is 256 KiB. Each `fs_write_range()` is one complete TFS3 operation
+that flushes its own pointer tables, bitmap and group descriptors
+before staging the inode, so the cap decides how many times that
+happens per megabyte -- measured on a SATA SSD, 64 MiB of sequential
+writing at a 64 KiB cap issued 8311 block-layer write commands for 1024
+syscalls, and at 256 KiB issues ~2180 for 256. Write amplification fell
+from 1.33x to 1.086x with no change to the filesystem at all.
+
+**It is NOT a promise of a bigger disk command.** Each driver reports
+its own per-transfer ceiling through `blkdev_max_sectors_per_xfer()`
+and TFS3's run coalescing asks rather than assuming: AHCI carries
+256 KiB (64 PRDT entries, one per page), while legacy ATA is still
+64 KiB because a single PRD's byte count is 16-bit and `ata.c` has no
+scatter-gather. A 256 KiB syscall on ATA becomes four commands inside
+ONE transaction, which is where most of the win is anyway.
+
+Raising it is safe because `bounce_alloc()` HALVES to a 1 KiB floor
+rather than failing, so a fragmented heap costs throughput and not
+`-ENOMEM`, and because a pipe write is clamped to `PIPE_BUF_SIZE`
+separately -- without that clamp this constant would park a writer on a
+request the pipe could never satisfy.

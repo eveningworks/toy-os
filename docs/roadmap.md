@@ -754,11 +754,17 @@ run on, not by order.
 - [x] ~~IRQ-driven write + `ata.c` parity~~
 - [x] ~~Multi-sector transfers (PRDT scatter-gather)~~
 - [x] ~~Backend selection + fallback~~
+- [x] ~~Multi-sector transfers past 64 KiB~~ done -- 64 PRDT entries, 256 KiB per command, stepped fallback if the pool is fragmented
 - [ ] **NEXT** One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy
 - [ ] NCQ (queued commands) -- needs an ASYNCHRONOUS block interface first, not more AHCI code
 - [ ] An asynchronous `block_device` submit/complete split, which NCQ, readahead and writeback all wait on
 - [x] ~~Batched journal barriers~~ done -- `storage.sync = batched` defers the COMMIT rather than generalising flush_begin/end
 - [x] ~~`fsync()`/`fdatasync()`~~ done -- `SYS_FSYNC`, scoped to the volume rather than the file
+- [x] ~~TFS3 stops re-reading pointer tables it already holds~~ done -- the write caches outlive a syscall
+- [x] ~~`SYS_WRITE_MAX` at 256 KiB~~ done -- it sets the TRANSACTION count, and write amplification fell 1.33x -> 1.086x
+- [ ] A VFS inode cache -- ~4 of the ~5 metadata reads a random 4 KiB write still issues are the inode and the path walk
+- [ ] Batch TFS3's allocation metadata into the deferred transaction -- bitmap, GDT and pointer tables still flush per operation
+- [ ] Remove one of the file path's two copies -- scatter/gather the PRDT over the kernel buffer instead of the driver's bounce
 - [ ] A write-back page cache -- `docs/pagecache-design.md`, DEMOTED there by measurement: the workload is not read-bound
 - [ ] A second drive, which needs a block layer whose active device is not singular
 - [ ] A sector cache shared with ATA, if one is ever measured to be worth it

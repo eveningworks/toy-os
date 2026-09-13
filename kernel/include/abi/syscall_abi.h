@@ -86,12 +86,21 @@
 // the entire reason a ring-3 write measured ~30x slower than the same
 // bytes written from the kernel shell.
 //
-// 64 KiB rather than more because the buffer wants CONTIGUOUS frames
-// (sixteen of them), and because the remaining gap is not this constant
-// -- it is that toy-os barriers every write while Linux batches its
-// journal commits onto a ~5 second timer and lets the page cache absorb
-// the rest. See docs/decisions/storage.md.
-#define SYS_WRITE_MAX 65536
+// 256 KiB, raised from 64 because the cost it sets is TRANSACTIONS, not
+// bytes: measured on a SATA SSD, a 64 MiB sequential write issued 8311
+// block-layer write commands for 1024 syscalls, because each syscall
+// flushes its own pointer tables, bitmap and group descriptors before
+// staging the inode. Quartering the syscall count quarters all of that.
+// It is NOT a promise of a bigger disk COMMAND -- each driver reports
+// its own per-transfer cap (blkdev_max_sectors_per_xfer()) and legacy
+// ATA's is still 64 KiB, one PRD's 16-bit byte count.
+//
+// Safe to raise because bounce_alloc() HALVES to a 1 KiB floor rather
+// than failing, so a fragmented heap costs throughput and not -ENOMEM,
+// and because a pipe write is clamped to PIPE_BUF_SIZE separately (see
+// api/pipe.h -- without that clamp this constant would park a writer on
+// a request the pipe could never satisfy).
+#define SYS_WRITE_MAX 262144
 
 // The value a BLOCKING syscall returns when the process was woken but
 // must call again -- the spurious-wakeup contract every blocking call
