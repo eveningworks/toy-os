@@ -296,6 +296,7 @@ int sys_openpty(struct syscall_ctx *c);
 int sys_set_nonblock(struct syscall_ctx *c);
 int sys_dupfd(struct syscall_ctx *c);
 int sys_fd_cloexec(struct syscall_ctx *c);
+int sys_chmod(struct syscall_ctx *c);
 int sys_tcgetwinsz(struct syscall_ctx *c);
 int sys_tcsetwinsz(struct syscall_ctx *c);
 int sys_tcgetattr(struct syscall_ctx *c);

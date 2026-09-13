@@ -1105,6 +1105,10 @@ int sys_fd_cloexec(int fd, int op) {
     return (int)err(syscall2(SYS_FD_CLOEXEC, (uint64_t)fd, (uint64_t)(int64_t)op));
 }
 
+int sys_chmod(const char *path, unsigned mode) {
+    return (int)err(syscall2(SYS_CHMOD, (uint64_t)(uintptr_t)path, (uint64_t)mode));
+}
+
 
 int sys_isatty(int fd) {
     struct sys_stat st;

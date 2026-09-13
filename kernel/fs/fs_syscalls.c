@@ -520,6 +520,20 @@ int sys_stat(struct syscall_ctx *c) {
     return 0;
 }
 
+int sys_chmod(struct syscall_ctx *c) {
+    char path[FS_PATH_MAX];
+    int err = resolve_user_path(c->pml4, c->a0, path);
+    if (err) {
+        klog_write("syscall: chmod() rejected -- bad path\n");
+        c->regs[14] = (uint64_t)(int64_t)err;
+        return 0;
+    }
+    // The VFS masks the type bits off and refuses a backend that cannot
+    // store permissions -- see fs.h's fs_chmod().
+    c->regs[14] = (uint64_t)(int64_t)fs_chmod(path, (uint16_t)c->a1);
+    return 0;
+}
+
 int sys_link(struct syscall_ctx *c) {
     char from[FS_PATH_MAX], to[FS_PATH_MAX];
     int err = resolve_user_path(c->pml4, c->a0, from);

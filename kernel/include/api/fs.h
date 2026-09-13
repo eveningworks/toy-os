@@ -294,6 +294,17 @@ struct fs_stat_info {
 // other per-entry call in this header.
 int fs_stat(const char *path, struct fs_stat_info *out);
 
+// Change `path`'s permission bits. Returns 0, or a negative errno:
+// -ENOENT for a path that is not there, -ENOTSUP for a filesystem whose
+// format has nowhere to keep them (ask FS_CAP_MODE first if you want to
+// know before trying).
+//
+// **ONLY THE LOW TWELVE BITS.** The type is the filesystem's own and is
+// not a caller's to set -- a chmod that could turn a file into a
+// directory would be a corruption primitive, which is why POSIX's
+// chmod takes permissions only and why S_IFMT is masked off here.
+int fs_chmod(const char *path, uint16_t mode);
+
 // ---- backend identity & capabilities ----
 
 // Capability bits a filesystem backend declares (struct fs_ops .caps).

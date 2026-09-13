@@ -51,6 +51,22 @@ int mkdir(const char *path, mode_t mode);
 // Returns the PREVIOUS mask, as POSIX says.
 mode_t umask(mode_t mask);
 
+// Change `path`'s permission bits. Returns 0, or -1 with errno --
+// ENOENT, or ENOTSUP on a filesystem whose format has nowhere to keep
+// them (ramfs, FAT32; ask stat's SYS_STAT_MODE flag if you want to know
+// first).
+//
+// **THE TYPE BITS ARE IGNORED**, as POSIX requires: chmod changes
+// permissions, and one that could turn a file into a directory would be
+// a corruption primitive rather than a convenience.
+int chmod(const char *path, mode_t mode);
+
+// **NOT HERE, AND DELIBERATELY: fchmod().** It would need the kernel to
+// carry a path back from a descriptor, which this fd layer does not do
+// for anything else either -- an open file knows its name only for the
+// duration of the call that opened it. chmod() by path is what every
+// caller here has.
+
 // The mode bits themselves, so that a caller writing 0755 in symbols
 // compiles. Standard octal values; nothing here reads them.
 #include <time.h>

@@ -177,10 +177,23 @@ int main(void) {
                     "a directory is a directory");
         utest_check((d.st_mode & 07777) == 0755, "a directory is 0755");
 
+        // **A FILE WE CREATE, not a seeded one.** This used to assert
+        // that /etc/services.d/tosh is non-executable, which held only
+        // while the default was 0644: that file predates the mode field,
+        // so its inode stores ZERO and stat reports the default -- which
+        // is 0755 now. Testing chmod on a file this check owns measures
+        // the behaviour instead of the disk's history.
+        FILE *mk = fopen("/tmp_modecheck", "w");
+        if (mk) fclose(mk);
         struct stat f;
-        utest_check(stat("/etc/services.d/tosh", &f) == 0 &&
-                    (f.st_mode & 0111) == 0,
-                    "a data file is NOT executable");
+        utest_check(stat("/tmp_modecheck", &f) == 0 && (f.st_mode & 0111),
+                    "a new file is executable by default");
+        utest_check(chmod("/tmp_modecheck", 0644) == 0, "chmod succeeds");
+        utest_check(stat("/tmp_modecheck", &f) == 0 && (f.st_mode & 0111) == 0,
+                    "...and the file is no longer executable");
+        utest_check((f.st_mode & S_IFMT) == S_IFREG,
+                    "...and chmod did not change what it IS");
+        remove("/tmp_modecheck");
 
         utest_check(stat("/no/such/path", &st) == -1, "a missing path fails");
         // lstat IS stat here and says so; checking they agree is what

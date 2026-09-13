@@ -349,6 +349,7 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [x] ~~`EACCES`, `ELOOP`, `EWOULDBLOCK`, `O_EXCL`, `DT_LNK`, `stpncpy`, `htonl`, `umask`, `alloca`~~ DONE 2026-09-13
 - [x] ~~Wide characters~~ DONE 2026-09-13 -- a C-LOCALE implementation, which is the complete answer for a single-byte locale
 - [ ] **NEXT** `SIGPIPE` and `-EPIPE` on the pipe WRITE path -- a pipeline typo WEDGES the machine today (`docs/bugs.md`)
+- [x] ~~`chmod`, so a mode can change at all~~ DONE 2026-09-13 -- `SYS_CHMOD`, `/bin/chmod`; the default is 0755 now
 - [ ] `#!` handling in the loader -- listed under Shell pipes & job control
 - [x] ~~Vendor the port~~ DONE 2026-09-13 -- `userland/ports/dash/`, v0.5.13.5 verbatim, nothing builds it yet
 - [x] ~~A Makefile rule, running dash's six generators on the HOST~~ DONE 2026-09-13 -- `/bin/dash` builds and runs

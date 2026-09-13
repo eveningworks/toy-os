@@ -22,6 +22,7 @@
 // `cp` exists.
 #include "fs.h"
 #include "fs_ops.h"
+#include "errno.h"   // fs_chmod returns a negative errno
 #include "mount.h"
 #include "tmppath.h"
 #include "block.h"
@@ -616,6 +617,17 @@ int fs_stat(const char *path, struct fs_stat_info *out) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
     return FS_OP(r.m, r.m->fs->stat(r.sub, out));
+}
+
+int fs_chmod(const char *path, uint16_t mode) {
+    struct resolved r;
+    if (!resolve(path, &r)) return -ENOENT;
+    // A backend with nowhere to keep permission bits leaves the slot
+    // NULL rather than accepting and discarding them -- see fs_ops.h.
+    if (!r.m->fs->chmod) return -ENOTSUP;
+    // PERMISSIONS ONLY. The type bits are the filesystem's, and a chmod
+    // that could rewrite them would be a corruption primitive.
+    return FS_OP(r.m, r.m->fs->chmod(r.sub, (uint16_t)(mode & 07777)));
 }
 
 // THE ROOT's usage. `df` reports every mount by walking the mount table

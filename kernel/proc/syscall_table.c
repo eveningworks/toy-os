@@ -141,6 +141,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_SIGSUSPEND]    = { "sigsuspend",    sys_sigsuspend,    { A_HEX } },
     [SYS_DUPFD]         = { "dupfd",         sys_dupfd,         { A_FD, A_INT } },
     [SYS_FD_CLOEXEC]    = { "fd_cloexec",    sys_fd_cloexec,    { A_FD, A_INT } },
+    [SYS_CHMOD]         = { "chmod",         sys_chmod,         { A_PATH, A_INT } },
     [SYS_MKFS]          = { "mkfs",          sys_mkfs,          { A_HEX } },
     [SYS_MOUNT]         = { "mount",         sys_mount,         { A_HEX } },
     [SYS_UMOUNT]        = { "umount",        sys_umount,        { A_PATH } },

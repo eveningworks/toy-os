@@ -657,6 +657,10 @@ int sys_dupfd(int fd, int min);
 // 0 clears, 1 sets. Returns the flag as it was before the call.
 int sys_fd_cloexec(int fd, int op);
 
+// Change a path's permission bits. 0, or -ENOENT / -ENOTSUP / -EFAULT.
+// The type bits are masked off by the kernel -- see SYS_CHMOD.
+int sys_chmod(const char *path, unsigned mode);
+
 // ICANON and ECHO off, ISIG on -- what every shell here wants, since
 // they all edit for themselves and none of them wants the kernel
 // echoing on top. One call rather than four lines in three shells.

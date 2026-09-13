@@ -19,6 +19,7 @@
 // and partitions").
 #include "fs.h"
 #include "fs_ops.h"
+#include "errno.h"   // fs_chmod returns a negative errno
 #include "tfs3.h"
 #include "ktime.h"
 #include "caltime.h"
@@ -125,12 +126,25 @@ static inline int t3_range_fits(uint64_t offset, uint64_t len) {
 #define T3_TYPE_SYMLINK 2u
 
 // What a mode of zero means -- an inode written before this field
-// existed, which is most of them. Directories and symlinks are
-// traversable (0755), a plain file is readable and writable and NOT
-// executable (0644). The same values every Unix umask of 022 produces,
-// chosen so a disk seeded before the field behaves as it always did.
-#define T3_MODE_DEFAULT(type) \
-    ((type) == T3_TYPE_FILE ? 0644u : 0755u)
+// existed, which is most of them on any disk that predates it.
+//
+// **0755 FOR EVERYTHING, INCLUDING PLAIN FILES, AND THE REASON IS A
+// MEASUREMENT RATHER THAN A PREFERENCE.** It was 0644 for files, which
+// is what a Unix umask of 022 produces -- and on real hardware that
+// made dash unable to run ANY external command. The laptop's files are
+// written by `remote.py sync` THROUGH THIS KERNEL rather than by the
+// host seeder, so every one of them got 0644, and dash's exec path
+// stats a candidate and refuses a file with no execute bit (EACCES).
+// QEMU never showed it: there the seeder sets /bin to 0755.
+//
+// So the default is the permissive one. A single-user system with no
+// login has no one to withhold execute FROM, and the alternative --
+// a default that makes half the binaries on a machine unrunnable
+// depending on how they got there -- is the "wrong answer is worse
+// than an absent one" failure this field was added to avoid.
+// `chmod` is what sets anything narrower, and the seeder still marks
+// data files 0644 where it knows better.
+#define T3_MODE_DEFAULT(type) ((void)(type), 0755u)
 
 // Deeper than any caller can currently express (every fs.h caller
 // holds FS_PATH_MAX=64 buffers), but the format has no path cap, so
@@ -2796,6 +2810,23 @@ static void tfs3_list(const char *dir_path, void (*cb)(const char *name, uint32_
     }
 }
 
+// Permission bits only -- the VFS has already masked the type off.
+static int tfs3_chmod(const char *path, uint16_t mode) {
+    char norm[T3_PATH_BUF];
+    if (!S->mounted || !normalize(path, norm)) return -ENOENT;
+    if (k_strcmp(norm, "/") == 0) return -ENOENT;   // root has no entry
+    uint64_t ino;
+    struct t3_inode node;
+    if (!resolve(norm, &ino) || !read_inode(ino, &node)) return -ENOENT;
+    if ((node.mode & 07777) == (mode & 07777)) return 0;  // already so
+    node.mode = (uint16_t)(mode & 07777);
+    // THROUGH THE JOURNAL, like every other inode change: a mode is a
+    // metadata write and gets the same crash-safety as a rename.
+    if (!txn_begin(1)) return -EIO;
+    if (!txn_stage_inode(ino, &node)) { txn_reset(); return -EIO; }
+    return txn_commit() ? 0 : -EIO;
+}
+
 static int tfs3_stat(const char *path, struct fs_stat_info *out) {
     char norm[T3_PATH_BUF];
     if (!S->mounted || !normalize(path, norm)) return 0;
@@ -3779,6 +3810,7 @@ const struct fs_ops tfs3_ops = {
     // timestamps are live already; hardlinks/symlinks are carried by
     // the format (link counts, type 2) with their ops still to come --
     // see fs.h's FS_CAP_* comment on exactly this distinction.
+    .chmod = tfs3_chmod,
     .caps = FS_CAP_INODES | FS_CAP_HARDLINKS | FS_CAP_SYMLINKS | FS_CAP_EPOCH_TIME |
             FS_CAP_MODE,
     .volume_relative = 1, // all I/O is volume-relative through vol_read/vol_write -- mountable from a partition

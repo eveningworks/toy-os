@@ -3379,8 +3379,27 @@ it already folds those bytes in, and reads mode 0, which it answers with
 its own default. `T3_VERSION_MIN` is untouched and no disk needs
 migrating.
 
-**The exec bit can only come from the seeder**, because there is no
-`chmod` yet. `tools/tfs3_writer.py` marks `/bin` and `/tests` 0755 and
+**THE SEEDER-ONLY EXEC BIT WAS A REGRESSION, FOUND ON HARDWARE.**
+The original default was 0644 for files, and the exec bit came only from
+`tools/tfs3_writer.py` -- so a file written through the KERNEL got 0644.
+On the laptop, whose filesystem is populated by `remote.py sync` rather
+than by the seeder, that meant `/bin/cat` was 0644 and **dash could not
+run a single external command**: its exec path stats a candidate and
+refuses one with no execute bit (EACCES). `tosh` was unaffected because
+it never checks. QEMU never showed it, since there the seeder sets
+`/bin` to 0755.
+
+Fixed 2026-09-13 two ways at once: `SYS_CHMOD` so a mode can CHANGE at
+all, and a default of **0755 for everything**. A single-user system with
+no login has nobody to withhold execute from, and the alternative -- a
+default under which half a machine's binaries are unrunnable depending
+on how they arrived -- is the "wrong answer is worse than an absent one"
+failure the field was added to avoid. The seeder still marks data files
+0644 where it knows better.
+
+**The original note, kept because the reasoning was right and the
+conclusion was not:** the exec bit could only come from the seeder,
+because there was no `chmod`. `tools/tfs3_writer.py` marks `/bin` and `/tests` 0755 and
 everything else 0644 -- named directories rather than guessed from
 content, since "does this look like an ELF" is not a question a seeder
 should ask. Without that, `test -x /bin/ls` would answer NO, which is a

@@ -82,3 +82,11 @@ mode_t umask(mode_t mask) {
     g_umask = mask & 07777;
     return old;
 }
+
+int chmod(const char *path, mode_t mode) {
+    if (!path) { errno = EINVAL; return -1; }
+    // The kernel masks the type bits off; masking here too means a
+    // caller passing a whole st_mode back gets what it expects rather
+    // than an error.
+    return sys_chmod(path, (unsigned)(mode & 07777));
+}

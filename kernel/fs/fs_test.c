@@ -1247,7 +1247,10 @@ KTEST("fs", "a file's mode round-trips through the inode") {
     KTEST_ASSERT(fs_write(p, "x", 1));
     struct fs_stat_info st;
     KTEST_ASSERT(fs_stat(p, &st));
-    KTEST_ASSERT_EQ(st.mode & 07777, 0644);
+    // 0755, not 0644: the default is permissive on purpose, because a
+    // file created through the kernel rather than by the host seeder was
+    // otherwise unrunnable -- see T3_MODE_DEFAULT for the measurement.
+    KTEST_ASSERT_EQ(st.mode & 07777, 0755);
     KTEST_ASSERT(st.nlink >= 1);
 
     KTEST_ASSERT(fs_mkdir("/tmp_modedir"));
@@ -1258,4 +1261,32 @@ KTEST("fs", "a file's mode round-trips through the inode") {
 
     fs_delete(p);
     fs_delete("/tmp_modedir");
+}
+
+// chmod: the value changes, it survives the journal, and the type bits
+// cannot be smuggled in through it. The last one is the interesting
+// check -- a chmod able to rewrite the type would be a corruption
+// primitive, and nothing else in the tree would notice.
+KTEST("fs", "chmod changes the mode and refuses the type bits") {
+    const char *p = "/tmp_chmodtest.txt";
+    fs_delete(p);
+    KTEST_ASSERT(fs_write(p, "x", 1));
+
+    struct fs_stat_info st;
+    KTEST_ASSERT(fs_stat(p, &st));
+    KTEST_ASSERT_EQ(st.mode & 07777, 0755);   // the default, see T3_MODE_DEFAULT
+
+    KTEST_ASSERT_EQ(fs_chmod(p, 0600), 0);
+    KTEST_ASSERT(fs_stat(p, &st));
+    KTEST_ASSERT_EQ(st.mode & 07777, 0600);
+
+    // 0170000 is S_IFMT. Offering it must change nothing but the low
+    // twelve bits -- the file stays a file.
+    KTEST_ASSERT_EQ(fs_chmod(p, (uint16_t)(0040000 | 0644)), 0);
+    KTEST_ASSERT(fs_stat(p, &st));
+    KTEST_ASSERT_EQ(st.mode & 07777, 0644);
+    KTEST_ASSERT(!fs_is_dir(p));              // still a file
+
+    KTEST_ASSERT(fs_chmod("/no/such/path", 0644) < 0);
+    fs_delete(p);
 }

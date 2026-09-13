@@ -2039,6 +2039,20 @@ struct sys_stat {
 // Honoured by fd_rekey(), which is the one place an exec carries
 // descriptors into the new image.
 #define SYS_FD_CLOEXEC 113
+
+// RDI = path, RSI = the permission bits. Returns 0, or -ENOENT,
+// -ENOTSUP for a filesystem with nowhere to keep them, or -EFAULT.
+//
+// **PERMISSIONS ONLY -- the type bits are masked off.** A chmod able to
+// turn a file into a directory would be a corruption primitive, which
+// is why POSIX's chmod takes permission bits and why this does too.
+//
+// It exists because the mode had no way to CHANGE: a file was created
+// with the default for its type and stayed there forever, which made
+// the field a seeded constant rather than a fact about the file. On
+// hardware that was worse than cosmetic -- see kernel/fs/tfs3.c's
+// T3_MODE_DEFAULT for the measurement.
+#define SYS_CHMOD 114
                            // (abi/diag_abi.h). Asks a NAMED ring-3
                            // service a question, or -- from the service
                            // side -- claims that name and answers.

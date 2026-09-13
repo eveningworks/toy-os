@@ -138,11 +138,47 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--by-dir", action="store_true",
                     help="one row per top-level directory, not per language")
+    ap.add_argument("--by-origin", action="store_true",
+                    help="WHO WROTE IT: this repo, a vendored port, or the "
+                         "test harness -- the split the other two views hide")
     ap.add_argument("--files", type=int, metavar="N",
                     help="also list the N largest files by code lines")
     args = ap.parse_args()
 
     rows = list(walk())
+
+    # **VENDORED CODE IS NOT OURS, AND COUNTING IT AS SUCH INFLATES THE
+    # NUMBER SILENTLY** -- the same failure the GENERATED list above
+    # exists to prevent, from a different direction. userland/ports/
+    # holds more lines than the entire OS written here (mbedtls alone is
+    # ~116k), so "userland: 242,661" answered the question wrongly and
+    # nothing said so.
+    if args.by_origin:
+        agg = {}
+        for rel, _kind, code, raw in rows:
+            if rel.startswith("tools" + os.sep):
+                who = "tools (never shipped)"
+            elif os.sep + "ports" + os.sep in os.sep + rel:
+                who = "ports (vendored)"
+            else:
+                who = "written here"
+            a = agg.setdefault(who, [0, 0, 0])
+            a[0] += code
+            a[1] += raw
+            a[2] += 1
+        print(f"{'origin':<26}{'code':>9}{'w/comments':>12}{'files':>7}")
+        print("-" * 54)
+        for who in ("written here", "ports (vendored)", "tools (never shipped)"):
+            if who not in agg:
+                continue
+            c, r, n = agg[who]
+            print(f"{who:<26}{c:>9,}{r:>12,}{n:>7}")
+        print("-" * 54)
+        own = agg.get("written here", [0])[0]
+        print(f"\nthe OS as written here -- no ports, no generated files, "
+              f"no comments: {own:,} lines")
+        return
+
     groups = {}
     for rel, kind, code, raw in rows:
         top = rel.split(os.sep)[0]

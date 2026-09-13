@@ -4541,6 +4541,15 @@ window without going through it will find its layout polls timing out.
   line count is a fact to look up, not a gate, and this file's own rule
   is that a number nobody has to keep true is the only safe kind.
 
+  **`--by-origin` is the view the other two hide.** The default buckets
+  by language and `--by-dir` by top-level directory, so `userland/ports/`
+  -- which holds MORE lines than the OS written here, mbedtls alone
+  being ~116k -- counted as ours. That is the same silent inflation the
+  `GENERATED` list exists to prevent, arriving from a different
+  direction, and it made "how big is this project" unanswerable without
+  doing arithmetic by hand.
+
+
 ---
 
 ## Host tools this repo expects (not in `tools/`)
