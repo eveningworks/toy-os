@@ -230,6 +230,9 @@ int tty_owner(const struct tty *t) { return t ? t->owner_pid : 0; }
 void tty_set_owner(struct tty *t, int pid) {
     if (!t) return;
     t->owner_pid = pid;
+    // The terminal joins the claimer's SESSION, not just its pid. That
+    // is what lets a shell hand job control to a shell it starts.
+    t->sid = pid ? scheduler_sid(pid) : 0;
     // THE OWNER'S OWN GROUP GOES IN FRONT, so a terminal is never in the
     // state "somebody owns it and nothing is in front of it" -- in which
     // an interrupt would have nowhere to go and be silently dropped
@@ -240,11 +243,23 @@ void tty_set_owner(struct tty *t, int pid) {
 
 int tty_fg_pgid(const struct tty *t) { return t ? t->fg_pgid : 0; }
 
+// **PERMISSION IS THE SESSION, NOT THE OWNING PID** -- POSIX's rule,
+// and the reason is a nested shell. /bin/dash started from /bin/tosh is
+// a different process, so an owner check refuses it the terminal and
+// dash exits with "Cannot set tty process group"; tosh's children
+// inherit tosh's session, so a session check allows exactly them. A
+// process in some OTHER session still cannot touch this terminal, which
+// is what the owner check was really protecting.
+//
+// Both halves of the rule are needed: being in the right session does
+// not let a caller name a group from a different one.
 int tty_set_fg_pgid(struct tty *t, int pgid) {
     if (!t) return -ENODEV;
     if (!t->owner_pid) return -ENODEV;
-    if (scheduler_current_tgid() != t->owner_pid) return -EPERM;
+    int sid = t->sid ? t->sid : scheduler_sid(t->owner_pid);
+    if (sid < 1 || scheduler_sid(scheduler_current_tgid()) != sid) return -EPERM;
     if (pgid < 1 || !scheduler_pgid_live(pgid)) return -ESRCH;
+    if (!scheduler_sid_has_pgid(sid, pgid)) return -EPERM;
     t->fg_pgid = pgid;
     return 0;
 }

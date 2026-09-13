@@ -117,6 +117,8 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_EXEC]          = { "exec",          sys_exec,          { A_HEX } },
     [SYS_NOTIFY_READY]  = { "notify_ready",  sys_notify_ready,  { A_END } },
     [SYS_SETPGID]       = { "setpgid",       sys_setpgid,       { A_INT, A_INT } },
+    [SYS_SETSID]        = { "setsid",        sys_setsid,        { A_END } },
+    [SYS_GETSID]        = { "getsid",        sys_getsid,        { A_INT } },
     [SYS_GETPGID]       = { "getpgid",       sys_getpgid,       { A_INT } },
     // The signal traces as a plain number: a name would want a third
     // argument formatter for a dozen values, and `sigaction(2, 0x...)`

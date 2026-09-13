@@ -42,7 +42,15 @@ struct tty {
     struct tty_termios tio;
     struct tty_winsize ws; // only consulted when the driver has no winsize hook
 
+    // The process that claimed it, kept for reporting (QUERY_TTYS) and
+    // for tty_check_background_read()'s fallback.
     int owner_pid;
+    // **THE SESSION THIS TERMINAL BELONGS TO, and what permission is
+    // keyed on.** Any process in it may move the foreground group; the
+    // owning PID may not, on its own, because a shell's children are
+    // different processes and must be able to take job control (see
+    // tty_set_fg_pgid()).
+    int sid;
     int fg_pgid;
 
     // See tty.h's tty_set_bypass(): a compositor holding the keyboard

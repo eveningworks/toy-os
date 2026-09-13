@@ -1024,6 +1024,14 @@ int sys_getpgid(int pid) {
     return (int)err(syscall1(SYS_GETPGID, (uint64_t)(int64_t)pid));
 }
 
+int sys_setsid(void) {
+    return (int)err(syscall0(SYS_SETSID));
+}
+
+int sys_getsid(int pid) {
+    return (int)err(syscall1(SYS_GETSID, (uint64_t)(int64_t)pid));
+}
+
 int sys_sigaction(int sig, const struct k_sigaction *act, struct k_sigaction *old) {
     return (int)err(syscall3(SYS_SIGACTION, (uint64_t)(int64_t)sig,
                              (uint64_t)(uintptr_t)act, (uint64_t)(uintptr_t)old));

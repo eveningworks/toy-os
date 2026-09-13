@@ -4073,3 +4073,48 @@ about a file that may simply have begun with `#!` by accident.
 (kernel/proc/elf_run.c) is a separate path that never reaches
 `build_image()`, so a script typed after `run` still fails as a non-ELF.
 That gap is a roadmap item rather than a quiet difference.
+
+
+## A TERMINAL BELONGS TO A SESSION, NOT TO ONE PID
+
+`tcsetpgrp()` used to require the caller to BE the terminal's owning pid.
+That is stricter than POSIX, which keys it on the SESSION, and the
+difference is exactly a nested shell: `/bin/dash` started from
+`/bin/tosh` is a different process, so it was refused the terminal and
+exited at once with `Cannot set tty process group (operation not
+permitted)`. Found on real hardware by typing `dash` into a Terminal
+window; it reproduces over `telnetd` too, which is the same shape.
+
+**The rule is now POSIX's, and it is two halves.** The caller must be in
+the terminal's session, AND the group it names must be a group in that
+session -- being in the right session is not a licence to name somebody
+else's group. `kernel/tty/tty.c`'s `tty_set_fg_pgid()` is the one place
+that decides.
+
+**A SESSION HAS TO BE CREATED, OR THE RULE MEANS NOTHING.** `sid` is
+inherited by every spawn and every fork, so without a creation point
+every process would sit in init's one session and any process could move
+any terminal's foreground group -- weaker than the owner check it
+replaced. The creation point is whatever hands a terminal to a shell:
+`SPAWN_SETSID` (abi/syscall_abi.h), passed by `/bin/telnetd` and the GUI
+Terminal when they spawn a shell on their pty. A flag rather than a
+`setsid()` the child makes, because a spawn ABI has no child-side window
+between fork and exec.
+
+Three traps.
+
+**`fork()` must copy `sid` as well as `pgid`.** It copied the group and
+not the session at first, which put the child in session 0 and left it
+unable to take the terminal its parent owned -- the very thing sessions
+were added for, failing in the test written for it.
+
+**Ownership is claimed on the first READ of a pty slave**, not at open
+(`kernel/proc/syscall_fd.c` says why: the opener is a terminal emulator
+and the reader is the shell). The terminal joins the READER's session,
+so that is the moment the session is decided.
+
+**`scheduler_setsid()` refuses a process-group leader** -- POSIX's rule,
+and it is about one number meaning two things rather than about safety.
+`SPAWN_SETSID` therefore goes through `scheduler_make_session_leader()`
+instead: a fresh child already leads a group, and that is creation
+rather than a transition.

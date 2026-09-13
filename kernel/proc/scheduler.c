@@ -370,6 +370,14 @@ struct sched_process {
     // its spawner's, and one the kernel started leads its own.
     int pgid;
 
+    // THE SESSION, which is what a controlling terminal belongs to.
+    // Inherited like `pgid`, and changed only by SYS_SETSID -- so
+    // everything a shell starts stays in the shell's session and may
+    // take the terminal from it, which is the rule POSIX states and the
+    // reason a nested shell works at all. A process the kernel started
+    // leads its own. Never 0 for a live slot.
+    int sid;
+
     // SYS_NOTIFY_READY: this process has said it finished starting up.
     // The kernel attaches NO meaning to it and never acts on it -- it
     // is reported through scheduler_proc_info() and init is the only
@@ -1248,6 +1256,15 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
         int parent_pgid = scheduler_pgid(procs[slot].ppid);
         procs[slot].pgid = parent_pgid > 0 ? parent_pgid : slot + 1;
     }
+    // THE SESSION IS ALWAYS INHERITED -- there is no spawn-time way to
+    // ask for a new one, and deliberately: POSIX creates a session with
+    // setsid() in the child, and a shell's children MUST stay in the
+    // shell's session or none of them could ever take the terminal.
+    // A kernel-context spawn has no session to lend and leads its own.
+    {
+        int parent_sid = scheduler_sid(procs[slot].ppid);
+        procs[slot].sid = parent_sid > 0 ? parent_sid : slot + 1;
+    }
     // Reset, not inherited: slots are reused, and a reaped process's
     // name and CPU time showing up on its successor would be a
     // reporting bug that looks like a scheduling one.
@@ -1632,6 +1649,7 @@ int scheduler_test_park(uint64_t *tf, const void *chan, int reason) {
         // test remembering to (ktest.h).
         signal_state_reset(i);
         procs[i].pgid = i + 1;
+        procs[i].sid = i + 1;
         return i;
     }
     return -1;
@@ -2168,6 +2186,10 @@ int scheduler_fork(const uint64_t *regs) {
     procs[slot].syscall_reissue = 0;
     procs[slot].ready   = 0;
     procs[slot].pgid    = procs[leader].pgid;
+    // THE SESSION TOO. A fork that copied the group and not the session
+    // put the child in session 0, so it could not take the terminal its
+    // parent owned -- which is the whole point of having sessions.
+    procs[slot].sid     = procs[leader].sid;
     k_strlcpy(procs[slot].name, procs[leader].name, sizeof procs[slot].name);
     k_strlcpy(procs[slot].exec_path, procs[leader].exec_path,
               sizeof procs[slot].exec_path);
@@ -2614,6 +2636,54 @@ int scheduler_pgid_live(int pgid) {
         if (procs[i].pgid == pgid) return 1;
     }
     return 0;
+}
+
+int scheduler_sid(int pid) {
+    struct sched_process *p = live_slot(pid);
+    return p ? p->sid : 0;
+}
+
+// Is `pgid` a group inside session `sid`? The second half of POSIX's
+// tcsetpgrp() rule: naming a group in somebody ELSE's session must not
+// work even from inside the right session.
+int scheduler_sid_has_pgid(int sid, int pgid) {
+    if (sid < 1 || pgid < 1) return 0;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].state == SCHED_UNUSED || procs[i].state == SCHED_ZOMBIE) continue;
+        if (procs[i].sid == sid && procs[i].pgid == pgid) return 1;
+    }
+    return 0;
+}
+
+// Starts a new session: the caller leads it, leads a new process group
+// of its own, and has NO controlling terminal (the caller's terminal
+// keeps its old session, so this process can no longer move its
+// foreground group -- which is the point).
+//
+// **REFUSED FOR A PROCESS GROUP LEADER**, as POSIX requires: the new
+// session's id would collide with the group it already leads, leaving
+// one number meaning two things. A caller that needs it forks first.
+int scheduler_setsid(int pid) {
+    struct sched_process *p = live_slot(pid);
+    if (!p) return -ESRCH;
+    if (p->pgid == pid) return -EPERM;   // already a group leader
+    p->sid  = pid;
+    p->pgid = pid;
+    return pid;
+}
+
+// SPAWN_SETSID's half: make a just-spawned process lead a new session
+// and a group of its own. Separate from scheduler_setsid() because that
+// one REFUSES a group leader (POSIX's rule about one number meaning two
+// things), and a fresh child spawned with PGID_NEW already leads a
+// group -- this is creation, not a transition, so the rule does not
+// apply. Safe to call before the child has run: it is READY, and a
+// syscall cannot be preempted.
+void scheduler_make_session_leader(int pid) {
+    struct sched_process *p = live_slot(pid);
+    if (!p) return;
+    p->sid  = pid;
+    p->pgid = pid;
 }
 
 int scheduler_setpgid(int pid, int pgid) {

@@ -283,6 +283,8 @@ int sys_kill(struct syscall_ctx *c);
 // the ring-3 SURFACE of it -- the core has kernel callers of its own
 // (the keyboard's INTR key) and must not depend on the syscall layer.
 int sys_setpgid(struct syscall_ctx *c);
+int sys_setsid(struct syscall_ctx *c);
+int sys_getsid(struct syscall_ctx *c);
 int sys_getpgid(struct syscall_ctx *c);
 int sys_sigaction(struct syscall_ctx *c);
 int sys_sigreturn(struct syscall_ctx *c);

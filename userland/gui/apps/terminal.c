@@ -916,7 +916,10 @@ static int session_start(int slot) {
     // and with tabs it is also what keeps one tab's Ctrl-C out of
     // another's: the group is per session, so the signal reaches the job
     // in the tab you are looking at.
-    s->child = sys_spawn_group(SHELL, 0, -1, 0, PGID_NEW);
+    // A NEW SESSION: this window's pty is its own terminal, and the
+    // shell has to own it on behalf of everything it starts -- including
+    // a second shell. See abi/syscall_abi.h's SPAWN_SETSID.
+    s->child = sys_spawn_flags(SHELL, 0, -1, 0, PGID_NEW, SPAWN_SETSID);
     if (in0  >= 0) { sys_dup2(in0, 0);  sys_close(in0); }
     if (out1 >= 0) { sys_dup2(out1, 1); sys_close(out1); }
     if (err2 >= 0) { sys_dup2(err2, 2); sys_close(err2); }

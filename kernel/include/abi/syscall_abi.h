@@ -950,8 +950,21 @@ struct spawn_msg {
 // refused, since a program entered with argc == 0 dereferences NULL.
 #define SPAWN_ARGV 4
 
+// The child LEADS A NEW SESSION, and a process group of its own inside
+// it. What a terminal emulator asks for when it starts a shell on a
+// pty: the shell then claims that terminal for ITS session, and only
+// things it starts -- which inherit the session -- may take job control
+// of it. Without this every process would be in init's one session and
+// "the terminal belongs to a session" would mean nothing.
+//
+// A FLAG rather than a setsid() the child makes itself, because a spawn
+// ABI has no child-side window between the fork and the exec (the same
+// reasoning `stdout_fd` above records). A process that already exists
+// uses SYS_SETSID.
+#define SPAWN_SETSID 8
+
 // Every flag this kernel knows. Anything outside it is -EINVAL.
-#define SPAWN_FLAGS_ALL (SPAWN_TRACE | SPAWN_FOREGROUND | SPAWN_ARGV)
+#define SPAWN_FLAGS_ALL (SPAWN_TRACE | SPAWN_FOREGROUND | SPAWN_ARGV | SPAWN_SETSID)
 
 // The most an environment blob may be, including its terminator. It has
 // to fit the child's single argv/env stack page alongside the strings
@@ -2053,6 +2066,24 @@ struct sys_stat {
 // hardware that was worse than cosmetic -- see kernel/fs/tfs3.c's
 // T3_MODE_DEFAULT for the measurement.
 #define SYS_CHMOD 114
+
+// SYS_SETSID -- no arguments. Starts a new session: the caller leads it
+// and a new process group of its own, and keeps NO controlling
+// terminal. Returns the new session id (the caller's pid), or -EPERM if
+// the caller already LEADS a process group -- POSIX's rule, and it is
+// about one number meaning two things rather than about safety.
+//
+// **WHAT A SESSION IS FOR HERE: tcsetpgrp().** A terminal belongs to a
+// session, and any process in that session may move its foreground
+// group. Without it the terminal belonged to one PID, so a shell
+// started from another shell could not take job control of the terminal
+// it was running on -- which is dash refusing to start with "Cannot set
+// tty process group".
+#define SYS_SETSID 115
+
+// SYS_GETSID -- RDI = pid (0 = the caller). Returns that process's
+// session id, or -ESRCH.
+#define SYS_GETSID 116
                            // (abi/diag_abi.h). Asks a NAMED ring-3
                            // service a question, or -- from the service
                            // side -- claims that name and answers.

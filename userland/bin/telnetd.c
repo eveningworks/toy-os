@@ -221,7 +221,13 @@ static int start_shell(void) {
     dup2(slave, 0);
     dup2(slave, 1);
     dup2(slave, 2);
-    int pid = sys_spawn_group(SHELL, 0, -1, 0, PGID_NEW);
+    // **A NEW SESSION, because this pty is a terminal of its own.** The
+    // shell claims it for that session, and only what the shell starts
+    // -- which inherits the session -- may take job control of it. A
+    // second shell run inside this one (`dash`) is exactly that case,
+    // and it fails with "Cannot set tty process group" if every process
+    // is in init's one session. See abi/syscall_abi.h's SPAWN_SETSID.
+    int pid = sys_spawn_flags(SHELL, 0, -1, 0, PGID_NEW, SPAWN_SETSID);
     if (in0  >= 0) { dup2(in0, 0);  close(in0); }
     if (out1 >= 0) { dup2(out1, 1); close(out1); }
     if (err2 >= 0) { dup2(err2, 2); close(err2); }

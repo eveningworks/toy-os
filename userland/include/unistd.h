@@ -97,6 +97,10 @@ static inline int pipe(int fds[2])                { return sys_pipe(fds); }
 static inline int setpgid(pid_t pid, pid_t pgid)  { return sys_setpgid(pid, pgid); }
 static inline pid_t getpgid(pid_t pid)            { return sys_getpgid(pid); }
 static inline pid_t getpgrp(void)                 { return sys_getpgid(0); }
+// A session is what a controlling terminal belongs to; setsid() starts
+// one and drops the caller's. Refused for a process-group leader.
+static inline pid_t setsid(void)                  { return sys_setsid(); }
+static inline pid_t getsid(pid_t pid)             { return sys_getsid(pid); }
 
 // The FOREGROUND process group of the terminal `fd` names -- what
 // Ctrl-C interrupts. POSIX puts these in <unistd.h> rather than

@@ -910,6 +910,37 @@ int scheduler_setpgid(int pid, int pgid);
 // front of the console and leave Ctrl-C pointed at nothing.
 int scheduler_pgid_live(int pgid);
 
+// --- sessions -------------------------------------------------------
+//
+// **A SESSION IS WHAT A CONTROLLING TERMINAL BELONGS TO**, and it is
+// the unit POSIX keys tcsetpgrp() on rather than a single owning pid.
+// The difference is exactly a nested shell: /bin/dash started from
+// /bin/tosh is a DIFFERENT process, so an owner check refuses it the
+// terminal ("Cannot set tty process group"), while a session check
+// allows it -- tosh's children inherit tosh's session.
+//
+// Inherited on every spawn, changed only by scheduler_setsid(). Never 0
+// for a live slot.
+int scheduler_sid(int pid);
+
+// Is `pgid` a group inside session `sid`? The half of the rule that
+// stops a caller in the right session naming somebody else's group.
+int scheduler_sid_has_pgid(int sid, int pgid);
+
+// Starts a new session; returns its id (the caller's pid), or -EPERM
+// for a process that already LEADS a group -- POSIX's rule, and it is
+// about one number meaning two things rather than about safety. The
+// caller keeps no controlling terminal: the terminal it had stays with
+// its old session, so this process can no longer move that terminal's
+// foreground group. That is what makes a session a boundary.
+int scheduler_setsid(int pid);
+
+// SPAWN_SETSID's half: make a just-spawned process lead a new session.
+// Separate from scheduler_setsid(), which refuses a group leader -- a
+// fresh child already leads one, and this is creation rather than a
+// transition.
+void scheduler_make_session_leader(int pid);
+
 // Fills `out` with a report on process-table slot `index`
 // (0 .. scheduler_max_procs()-1). An EMPTY slot is a successful call
 // reporting pid 0, not a failure -- a caller enumerating the table

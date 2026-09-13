@@ -32,6 +32,20 @@ static int this_pid_if_zero(int pid) {
     return pid == PGID_SELF ? scheduler_current_tgid() : pid;
 }
 
+// Starts a new session. See abi/syscall_abi.h's SYS_SETSID for what one
+// is for; the refusal is POSIX's group-leader rule.
+int sys_setsid(struct syscall_ctx *c) {
+    c->regs[14] = (uint64_t)(int64_t)scheduler_setsid(scheduler_current_tgid());
+    return 0;
+}
+
+int sys_getsid(struct syscall_ctx *c) {
+    int pid = this_pid_if_zero((int)(int32_t)c->a0);
+    int sid = scheduler_sid(pid);
+    c->regs[14] = (uint64_t)(int64_t)(sid > 0 ? sid : -ESRCH);
+    return 0;
+}
+
 int sys_setpgid(struct syscall_ctx *c) {
     int pid  = this_pid_if_zero((int)(int32_t)c->a0);
     int pgid = (int)(int32_t)c->a1;

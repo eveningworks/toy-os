@@ -13,6 +13,7 @@
 #include "keyboard.h"
 #include "win_role.h"
 #include "scheduler.h"
+#include "errno.h"   // -EPERM/-ESRCH -- the session rule's refusals
 #include "string.h"
 #include "pty.h"
 #include "fs.h"
@@ -377,5 +378,66 @@ KTEST("tty", "a pty carries a line, and INTR through it, from ring 3") {
     // 0 = every phase worked. See userland/tests/pty_test.c for what
     // each other code means; they are distinct so this reports WHICH
     // phase broke rather than only that something did.
+    KTEST_ASSERT_EQ(code, 0);
+}
+
+// --- sessions, and the rule dash actually needs -----------------------
+//
+// A terminal belongs to a SESSION, not to one pid. The difference is a
+// nested shell: /bin/dash started from /bin/tosh is a different process,
+// so an owner check refuses it the terminal and dash exits with "Cannot
+// set tty process group" -- which is how this was found, on hardware.
+//
+// **THE PERMISSION ITSELF CANNOT BE TESTED FROM HERE**, because it asks
+// who the CURRENT process is and a KTEST runs in the kernel context,
+// which is no process at all. That half is /tests/session_test, driven
+// below by its exit code -- the arrangement /tests/pty_test already has.
+// What ring 0 can check is the bookkeeping underneath it.
+
+KTEST("tty", "a fabricated slot leads its own session") {
+    uint64_t tf[SCHED_TF_SLOTS] = {0};
+    int idx = scheduler_test_park(tf, tf, SCHED_WAIT_EVENT);
+    if (idx < 0) KTEST_SKIP("no free slot");
+    int pid = idx + 1;
+
+    // Non-zero for every live slot, exactly as pgid is: a process the
+    // kernel started leads its own session.
+    int sid = scheduler_sid(pid);
+    int pgid = scheduler_pgid(pid);
+    // And the group IS in that session, which is the second half of the
+    // tcsetpgrp rule.
+    int has = scheduler_sid_has_pgid(sid, pgid);
+    // POSIX refuses setsid() to a process-group leader -- about one
+    // number meaning two things, not about safety. A fabricated slot
+    // leads its own group, so it is exactly that case.
+    int refused = scheduler_setsid(pid);
+
+    scheduler_test_release(idx);
+
+    KTEST_ASSERT_EQ(sid, pid);
+    KTEST_ASSERT_EQ(has, 1);
+    KTEST_ASSERT_EQ(refused, -EPERM);
+    // A group nobody is in is not in any session.
+    KTEST_ASSERT_EQ(scheduler_sid_has_pgid(sid, 0), 0);
+}
+
+#define SESSION_TEST_PATH "/tests/session_test"
+#define SESSION_TIMEOUT_TICKS 600
+
+KTEST("tty", "a child in the same session may take the terminal, from ring 3") {
+    if (!fs_exists(SESSION_TEST_PATH)) KTEST_SKIP("no " SESSION_TEST_PATH);
+
+    int pid = scheduler_spawn(SESSION_TEST_PATH, 0);
+    KTEST_ASSERT(pid != 0);
+
+    int code = -1, exited = 0;
+    uint64_t start = pit_ticks();
+    while (pit_ticks() - start < SESSION_TIMEOUT_TICKS) {
+        if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
+    }
+    KTEST_ASSERT(exited);
+    // 0 = every phase worked; see userland/tests/session_test.c for what
+    // each other code means. 5 is the one that matters: a child could
+    // not take the terminal its parent owns, which is dash's failure.
     KTEST_ASSERT_EQ(code, 0);
 }

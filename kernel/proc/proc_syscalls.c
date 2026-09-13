@@ -702,6 +702,11 @@ int sys_spawn(struct syscall_ctx *c) {
         // that creates it, so there is no window. Failure is a
         // no-op by contract (not a terminal, not the owner): the
         // after-the-fact tcsetpgrp this replaces behaved the same.
+        // BEFORE the foreground line below, which reads the child's
+        // group: a session leader leads a group of its own, so the two
+        // flags together would otherwise put the OLD group in front.
+        if (pid > 0 && (msg.flags & SPAWN_SETSID))
+            scheduler_make_session_leader(pid);
         if (pid > 0 && (msg.flags & SPAWN_FOREGROUND))
             tty_set_fg_pgid(fd_tty(pml4, 0), scheduler_pgid(pid));
     }

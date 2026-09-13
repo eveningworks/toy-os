@@ -523,6 +523,13 @@ int sys_setpgid(int pid, int pgid);
 // `pid`'s group (0 = me), or -1 with errno ESRCH.
 int sys_getpgid(int pid);
 
+// A NEW SESSION, which is what a controlling terminal belongs to. The
+// caller leads it and a group of its own, and keeps no controlling
+// terminal. -EPERM if it already LEADS a group. See
+// abi/syscall_abi.h's SYS_SETSID for what sessions are for here.
+int sys_setsid(void);
+int sys_getsid(int pid);
+
 // --- signals: dispositions and handlers -------------------------------
 
 // What a handler is: one argument, the signal number. No siginfo and no

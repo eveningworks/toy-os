@@ -355,6 +355,7 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [x] ~~Exercise it: pipelines, here-docs, functions, traps~~ DONE 2026-09-13 -- `tools/dash_test.py` 22/22; job control unproven
 - [x] ~~Our own `mksignames`~~ DONE 2026-09-13 -- `tools/gen_signames.py`; no GPL reaches the binary
 - [x] ~~Toykit's `klineedit` wired into dash's read-a-line seam~~ DONE 2026-09-13 -- a libedit shim; `set -o emacs`
+- [x] ~~Sessions, so a nested shell can take job control of its terminal~~ DONE 2026-09-13 -- `setsid`/`getsid`, `SPAWN_SETSID`
 - [ ] A `system.shell` setting, read by the four places that hardcode `/bin/tosh` today
 
 ## Tracks -- no dependency on the phases above
