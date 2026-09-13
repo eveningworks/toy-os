@@ -921,6 +921,28 @@ int scheduler_pgid_live(int pgid);
 //
 // Inherited on every spawn, changed only by scheduler_setsid(). Never 0
 // for a live slot.
+// --- prepare_to_wait: the lost wakeup a preemptible syscall opens ----
+//
+// **A WAKE ONLY FINDS A PROCESS THAT IS ALREADY BLOCKED**, so between
+// "is there anything to do?" and the park a process is invisible to
+// scheduler_wake() and the wake is dropped. With interrupts off for the
+// whole syscall that window did not exist; a trap gate opens it, and
+// win_syscalls.c's comment names it as the reason its queue test and
+// park had to be atomic.
+//
+// The shape is Linux's prepare_to_wait(): ANNOUNCE the wait before
+// testing the condition. A wake in the window then lands on the
+// announcement, and the park declines and answers instead.
+//
+//     scheduler_wait_arm(chan);
+//     if (something_to_do()) { scheduler_wait_disarm(); ... }
+//     else scheduler_block_current(regs, chan, reason);
+//
+// Disarm on every path that decides NOT to wait, or an unrelated wake
+// can make the NEXT park a no-op.
+void scheduler_wait_arm(const void *chan);
+void scheduler_wait_disarm(void);
+
 int scheduler_sid(int pid);
 
 // Is `pgid` a group inside session `sid`? The half of the rule that

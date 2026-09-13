@@ -4730,27 +4730,43 @@ seen once -- recorded here rather than rounded down, because a canary
 failure under a change that lets interrupts nest is exactly the thing
 not to wave away.
 
-**THE TWO `win_input` TESTS ARE A LOST WAKEUP, NOT A MISSED DEADLINE.**
-The discriminating experiment: raise `TIMEOUT_TICKS` from 500 (~5s) to
-2500 (~25s). The suite went 11.2s -> 51.2s, so both tests really did
-wait the full time -- and both still failed. The helper never exits.
+**THE TWO `win_input` TESTS ARE NOT A LOST WAKEUP. That was published
+here and it was WRONG.** The evidence for it was indirect: raising
+`TIMEOUT_TICKS` from 500 (~5s) to 2500 (~25s) took the suite from 11.2s
+to 51.2s and both tests still failed, so the helper genuinely never
+exits -- and `win_syscalls.c`'s own comment names a lost wakeup as what
+the trap gate would open, which fitted.
 
-That is the hazard `win_syscalls.c`'s own comment states: "the queue
-test and the park are atomic with respect to an IRQ pushing an event,
-because this whole handler runs with interrupts off". The trap gate
-removes exactly that atomicity, so a push landing between "queue is
-empty" and "parked" calls `scheduler_wake()` on a process that is not
-blocked yet, the wake is dropped, and the process parks forever.
+**Asking the process settled it.** A probe reporting
+`scheduler_proc_info()`'s state at the deadline says
+`PROC_STATE_RUNNING`, wait reason 0. A process that had parked and
+missed its wake would read `BLOCKED`. It is RUNNING -- spinning, not
+sleeping -- so nothing is being slept through and the helper is looping
+without ever finishing. `scheduler_poll()` also returns RUNNING rather
+than INVALID, so it is not init reaping it first either.
 
-**The fix is check-and-park atomicity, and it is an AUDIT rather than
-two lines** -- every `if (nothing to do) block()` in the kernel has this
-window now, not just these two syscalls. Two shapes to choose between:
-a short `cli`/`sti` critical section around the check and the park
-(correct on one core, and a tiny window rather than the whole syscall),
-or Linux's `prepare_to_wait` shape, where the state is set to BLOCKED
-*before* the condition is tested so a wake in the window flips it back
-to READY and the park becomes a no-op. The second is what scales to
-SMP; the first is what this kernel can adopt site by site.
+What makes it spin is NOT established. The obvious candidate is
+`SYS_WAIT_EVENT` returning "ask again" every time instead of parking,
+which would be a busy loop that consumes nothing -- but that has not
+been demonstrated, and the next step is to instrument the helper's own
+syscall returns rather than the scheduler's view of it.
+
+**`prepare_to_wait` LANDED ANYWAY, and is worth having on its own.**
+`scheduler_wait_arm()`/`_disarm()` (api/scheduler.h) let a caller
+announce a wait BEFORE testing its condition, so a wake arriving in the
+window lands on the announcement and the park declines rather than
+sleeping through it. It is Linux's shape, per PROCESS rather than a wait
+queue entry, so it needs no allocation and no channel table.
+`win_syscalls.c`'s two waits use it. The remaining ~16 park sites do
+not yet -- that is the audit, and it is still owed whatever turns out to
+be wrong above.
+
+**And the trap gate now panics somewhere new**: a general protection
+fault in `mmaudit_count()` under `providers_fill()`/`query_read()`,
+during a `query` KTEST, before the suite even reaches `win_input`. That
+is a THIRD site, not the one this entry is about -- query.c's provider
+walk is not safe against preemption despite the guard that was added for
+it.
 
 **Two candidates were checked and KILLED, both by a guard that did not
 fire.** They are recorded so a later session does not re-derive them.

@@ -99,20 +99,30 @@ static int event_get(struct syscall_ctx *c, int blocking) {
     } else if (!compositor_only(pid, "event")) {
         c->regs[14] = (uint64_t)(int64_t)-EPERM;
     } else {
+        // **ARMED BEFORE THE QUEUE IS TESTED.** A push landing between
+        // the pop below and the park would otherwise find this process
+        // still RUNNING, and scheduler_wake() only sees blocked ones --
+        // the lost wakeup that made a preemptible syscall unsafe. The
+        // arm gives that wake something to land on; the park then
+        // declines and answers instead. Disarmed on every path that
+        // does not go on to park.
+        scheduler_wait_arm(win_input_wait_chan());
         struct win_event ev;
         if (win_input_pop(&ev)) {
+            scheduler_wait_disarm();
             // Validated above BEFORE the pop, so a bad pointer cannot
             // lose an event; a copy that still fails says so.
             c->regs[14] = vmm_copy_to_user(pml4, c->a0, &ev, sizeof ev) ? 1 : (uint64_t)(int64_t)-EFAULT;
         } else if (!blocking) {
+            scheduler_wait_disarm();
             c->regs[14] = 0; // empty, and this one never blocks
         } else {
-            // Park until something is queued. Interrupts are OFF
-            // for this whole handler, so the "queue was empty" test
-            // above and this park are atomic with respect to an IRQ
-            // pushing an event -- there is no window in which an
-            // event arrives after the check and is missed by the
-            // block, which is the classic lost-wakeup bug.
+            // Park until something is queued. The "queue was empty"
+            // test above and this park are made atomic by the ARM
+            // above, not by interrupts being off -- they are not, once
+            // the syscall gate is a trap gate. See scheduler.h's
+            // prepare_to_wait section for the window and what closes
+            // it.
             //
             // On success this MUST NOT set c->regs[14]: the process is
             // no longer the one running, and scheduler_wake() will
@@ -142,20 +152,23 @@ int sys_poll_event(struct syscall_ctx *c) { return event_get(c, 0); }
 int sys_wait_event(struct syscall_ctx *c) { return event_get(c, 1); }
 
 // Readiness with a deadline, consuming nothing -- see SYS_WAIT_READY.
-// The queue test and the park are atomic with respect to an IRQ pushing
-// an event, because this whole handler runs with interrupts off; that is
-// the same lost-wakeup argument event_get() makes, and it is the reason
-// the check cannot be hoisted into a helper that returns first.
+// The queue test and the park are made atomic by scheduler_wait_arm(),
+// NOT by interrupts being off -- they are not, once the syscall gate is
+// a trap gate. Same reasoning as event_get() above, and it is still the
+// reason the check cannot be hoisted into a helper that returns first.
 int sys_wait_ready(struct syscall_ctx *c) {
     int pid = scheduler_current_tgid();
     if (!compositor_only(pid, "wait_ready")) {
         c->regs[14] = (uint64_t)(int64_t)-EPERM;
         return 0;
     }
-    if (win_input_pending()) { c->regs[14] = 1; return 0; }
+    // Armed before the queue is tested, for the reason event_get()
+    // above records.
+    scheduler_wait_arm(win_input_wait_chan());
+    if (win_input_pending()) { scheduler_wait_disarm(); c->regs[14] = 1; return 0; }
 
     uint64_t ms = c->a0;
-    if (!ms) { c->regs[14] = 0; return 0; }
+    if (!ms) { scheduler_wait_disarm(); c->regs[14] = 0; return 0; }
     if (ms > SYS_SLEEP_MAX_MS) ms = SYS_SLEEP_MAX_MS;
 
     uint64_t deadline = clocksource_now_ns() + ms * 1000000ull;

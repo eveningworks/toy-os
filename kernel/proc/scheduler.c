@@ -370,6 +370,22 @@ struct sched_process {
     // its spawner's, and one the kernel started leads its own.
     int pgid;
 
+    // --- prepare_to_wait, and the lost wakeup it closes --------------
+    //
+    // **A WAKE ONLY FINDS A PROCESS THAT IS ALREADY BLOCKED.** Between
+    // "is there anything to do?" and the park, a process is RUNNING, so
+    // scheduler_wake() skips it and the wake is dropped -- the process
+    // then parks forever. With interrupts off for the whole syscall
+    // that window did not exist, which is why this had to be built
+    // before the trap gate could land.
+    //
+    // Linux's answer is prepare_to_wait(): announce the wait BEFORE
+    // testing the condition, so a wake in the window has something to
+    // land on. Here that announcement is per PROCESS rather than a
+    // wait-queue entry, which needs no allocation and no channel table.
+    const void *arm_chan;   // the channel this process is about to wait on
+    int64_t     arm_value;  // what a wake in the window carried
+    int         armed_woken;// a wake arrived before the park -- do not park
     // THE SESSION, which is what a controlling terminal belongs to.
     // Inherited like `pgid`, and changed only by SYS_SETSID -- so
     // everything a shell starts stays in the shell's session and may
@@ -1747,6 +1763,20 @@ static int block_common(uint64_t *regs, const void *chan, int reason,
     // interrupt gate today, so a syscall runs with interrupts off and
     // nothing can raise a signal against a process part-way through one.
 
+    // **A WAKE THAT ARRIVED WHILE WE WERE CHECKING.** The caller armed
+    // before testing its condition, and scheduler_wake() found that arm
+    // rather than a blocked process -- so there IS something to do and
+    // parking now would sleep through it. Answer as a wake would have,
+    // and let the caller loop round and look again.
+    if (current_index >= 0 && procs[current_index].armed_woken &&
+        procs[current_index].arm_chan == chan) {
+        procs[current_index].armed_woken = 0;
+        procs[current_index].arm_chan = 0;
+        regs[TF_RAX] = (uint64_t)procs[current_index].arm_value;
+        return 1;
+    }
+    if (current_index >= 0) procs[current_index].arm_chan = 0;
+
     bill_current(); // this slice ends here -- see bill_current()
     int idx = current_index;
     procs[idx].kernel_rsp = (uint64_t)regs;
@@ -1859,6 +1889,18 @@ int scheduler_wake(const void *chan, int64_t value) {
 // unlock wants exactly one.
 int scheduler_wake_n(const void *chan, int64_t value, int max) {
     int woken = 0;
+    // **FIRST, ANYONE WHO HAS ARMED BUT NOT YET PARKED.** Such a process
+    // is RUNNING, so the blocked scan below cannot see it and its wake
+    // would be dropped -- the lost wakeup that made a preemptible
+    // syscall unsafe. Recording it here lets block_common() decline to
+    // park. It counts as woken, so a `max` of 1 is still honoured.
+    for (int i = 0; i < MAX_PROCS && (!max || woken < max); i++) {
+        if (procs[i].state == SCHED_UNUSED || procs[i].state == SCHED_ZOMBIE) continue;
+        if (procs[i].arm_chan != chan || procs[i].armed_woken) continue;
+        procs[i].armed_woken = 1;
+        procs[i].arm_value   = value;
+        woken++;
+    }
     for (int i = 0; i < MAX_PROCS; i++) {
         if (max && woken >= max) break;
         if (procs[i].state != SCHED_BLOCKED) continue;
@@ -2636,6 +2678,25 @@ int scheduler_pgid_live(int pgid) {
         if (procs[i].pgid == pgid) return 1;
     }
     return 0;
+}
+
+// See the fields' comment. Announces that the caller is ABOUT to wait on
+// `chan`, so a wake arriving before it parks is not lost. Every blocking
+// syscall calls this BEFORE it tests its condition.
+void scheduler_wait_arm(const void *chan) {
+    if (current_index < 0) return;
+    procs[current_index].arm_chan   = chan;
+    procs[current_index].armed_woken = 0;
+    procs[current_index].arm_value  = 0;
+}
+
+// Withdraws the announcement -- for a caller that decided not to wait
+// after all, so a later unrelated wake does not make its NEXT park a
+// no-op.
+void scheduler_wait_disarm(void) {
+    if (current_index < 0) return;
+    procs[current_index].arm_chan = 0;
+    procs[current_index].armed_woken = 0;
 }
 
 int scheduler_sid(int pid) {
