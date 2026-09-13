@@ -57,6 +57,17 @@ int isr_in_progress(void);
 // the (now unreachable) decrements that should have run.
 void isr_reset_depth(void);
 
+// THE DEPTH TRAVELS WITH THE CONTEXT, and these are the scheduler's
+// half of that. A context switch changes whose kernel stack
+// isr_in_progress() is describing, so scheduler.c saves the depth
+// beside `kernel_rsp` on the way out and restores it on the way in.
+// Nothing else should call these: as a plain global the counter leaked
+// to 348 the moment syscalls could be preempted, which left
+// isr_in_progress() answering "yes" for the rest of the boot and pinned
+// ata.c on its spin path.
+int isr_depth_get(void);
+void isr_depth_set(int depth);
+
 // Spurious LAPIC interrupts seen since boot -- reported by `lsdev`
 // beside the controller. See idt.c.
 uint32_t idt_spurious_count(void);

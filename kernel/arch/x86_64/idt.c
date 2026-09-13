@@ -193,11 +193,13 @@ void idt_init(void) {
     // same tree are clean. Two win_input KTESTs also go red, and they
     // are the small half.
     //
-    // MEASURED CAUSE: `g_isr_depth` leaks to 348 under the trap gate --
-    // one global describing a per-context property, the same defect as
-    // g_next_kernel_rsp, and it makes isr_in_progress() lie for the rest
-    // of the boot. docs/roadmap-details.md has the evidence, the rate,
-    // and the two candidates a guard already killed.
+    // The `g_isr_depth` leak behind the double fault is FIXED (it reads
+    // 1-2 now, not 348, and the double fault is gone). What still stops
+    // the flip is this file's own resume pointer: isr_dispatch() reads
+    // g_next_kernel_rsp AFTER the body, and a body that switches away is
+    // resumed once another wrapper has restored its `outer` -- so the
+    // read is not this call's value. Retiring the global is the fix, not
+    // another guard. docs/roadmap-details.md has the evidence.
     idt_set_gate(128, isr128, 0, 0xEE);
 
     idtp.limit = sizeof(idt) - 1;
@@ -225,10 +227,14 @@ void idt_init(void) {
     __asm__ volatile ("sti");
 }
 
-// See idt.h's doc comment. Not itself part of the reentrancy hazard --
-// just a plain counter -- but see isr_reset_depth() for the one case
-// (process.c's longjmp-style process teardown) where a decrement below
-// never runs and this needs forcing back to 0 from outside.
+// How deep THIS context is inside isr_dispatch(). Saved and restored by
+// the wrapper, per call on the C stack, and swapped by the scheduler
+// when a context switch changes whose kernel stack this describes --
+// the same treatment g_next_kernel_rsp gets, because it is the same
+// kind of fact. A plain global counter leaked to 348 the moment
+// syscalls became preemptible: the increment ran on one context and the
+// decrement on another. isr_reset_depth() still covers the longjmp
+// teardown, which restores nothing.
 static volatile int g_isr_depth = 0;
 
 // Spurious LAPIC interrupts. A handful over a boot is normal (a masked
@@ -268,6 +274,11 @@ int isr_in_progress(void) {
 void isr_reset_depth(void) {
     g_isr_depth = 0;
 }
+
+// The scheduler's half: a context switch changes whose kernel stack
+// g_isr_depth is describing, so it travels with kernel_rsp.
+int isr_depth_get(void) { return g_isr_depth; }
+void isr_depth_set(int d) { g_isr_depth = d; }
 
 // Called from isr.asm's common stub with rdi = pointer to saved GP regs.
 // Stack layout above saved regs (low->high addr): vector, error_code, then
@@ -355,11 +366,6 @@ static void panic_report_context(uint64_t rip, const uint64_t *regs,
 
 static void isr_dispatch_body(uint64_t *regs) {
     uint64_t vector = regs[15];
-    g_isr_depth++; // see idt.h's isr_in_progress() -- every normal-return
-                    // path below must decrement this to match; a
-                    // noreturn path (process_context_exit()/recover())
-                    // instead relies on isr_reset_depth() at the one
-                    // point that longjmp lands.
 
     // Default: resume exactly what was interrupted. Only scheduler_tick()
     // below (and scheduler_on_exit(), called from syscall.c) ever
@@ -522,7 +528,6 @@ static void isr_dispatch_body(uint64_t *regs) {
         int fault_sig = fault_signal(vector);
         if (recoverable && fault_sig && scheduler_current_pid() &&
             signal_deliver_fault(scheduler_current_pid(), fault_sig, regs)) {
-            g_isr_depth--; // matches this call's own increment -- see isr_in_progress()
             return;        // resume into the handler; regs now points at it
         }
 
@@ -699,7 +704,6 @@ static void isr_dispatch_body(uint64_t *regs) {
                 // Same "crashed, no real exit code to report" case
                 // scheduler_on_exit()'s own comment already covers --
                 // nothing consumes the code today either way.
-                g_isr_depth--; // matches this call's own increment above -- see isr_in_progress()
                 scheduler_on_exit(-1);
                 return; // g_next_kernel_rsp now points elsewhere; isr_common's epilogue resumes it
             } else {
@@ -709,11 +713,6 @@ static void isr_dispatch_body(uint64_t *regs) {
 
         for (;;) __asm__ volatile ("cli; hlt");
     }
-
-    g_isr_depth--; // matches this call's own increment above -- see
-                    // isr_in_progress(). NOT reached if syscall_dispatch()
-                    // above took the noreturn process_context_exit() path
-                    // (legacy SYS_EXIT) -- isr_reset_depth() covers that.
 
     // THE ONE PLACE A SIGNAL IS ACTED ON: on the way back to ring 3,
     // which is where Unix delivers and for the same reason (see
@@ -763,10 +762,16 @@ static void isr_dispatch_body(uint64_t *regs) {
 // counter at the same landing point.
 uint64_t isr_dispatch(uint64_t *regs) {
     uint64_t outer = g_next_kernel_rsp;
+    int outer_depth = g_isr_depth;
     g_next_kernel_rsp = (uint64_t)regs;
+    g_isr_depth = outer_depth + 1;
     isr_dispatch_body(regs);
     uint64_t resume = g_next_kernel_rsp;
     g_next_kernel_rsp = outer;
+    // RESTORED, not decremented. A body that switched away never reaches
+    // here at all -- the scheduler carried the raised depth into the
+    // outgoing context, which is where it belongs.
+    g_isr_depth = outer_depth;
     // isr_common does `mov rsp, rax` with this, so a zero becomes RSP=0
     // and double-faults three instructions later with no walkable stack
     // to name it. Report it here instead -- same klog/vga/`ud2` shape as

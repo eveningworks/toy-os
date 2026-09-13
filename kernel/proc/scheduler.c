@@ -108,6 +108,7 @@
 #include "pipe.h"      // pipe_close_writer() when a piped child exits
 #include "kstack.h"    // the guard page, canary and poison fill
 #include "kfmt.h"      // klog_printf, vga_printf
+#include "idt.h"     // isr_depth_get()/_set() -- the depth travels with kernel_rsp
 #include "syscall_abi.h" // SYS_RETRY -- the wake value a blocked waiter sees
 #include "signal_abi.h" // the pending mask and the group each process carries
 #include "signal.h"     // signal_send() -- SIGCHLD to a parent, see notify_parent()
@@ -237,6 +238,9 @@ struct sched_process {
     uint64_t pml4_phys;
     uint64_t kernel_rsp; // this process's saved trapframe pointer --
                           // valid whenever state != SCHED_UNUSED
+    int isr_depth;        // how deep this context is inside
+                          // isr_dispatch() -- see idt.h's
+                          // isr_depth_get(); travels with kernel_rsp
     int exit_code;        // valid only once state == SCHED_ZOMBIE
 
     // Who spawned this process, or 0 for "the kernel did" -- the
@@ -473,6 +477,7 @@ static uint64_t g_run_start_ns = 0;
 static int current_index = -1;    // -1 = kernel/shell in control, not
                                     // a scheduler-managed process
 static int scheduler_armed = 0;
+static int kernel_saved_isr_depth = 0; // the kernel slot's isr_depth_get()
 static uint64_t kernel_saved_rsp = 0; // refreshed every tick that finds
                                         // current_index == -1
 static volatile int alive_count = 0;
@@ -720,6 +725,7 @@ void scheduler_init(void) {
     // continuously-available spawn mechanism.
     scheduler_armed = 1;
     kernel_saved_rsp = 0;
+    kernel_saved_isr_depth = 0;
     alive_count = 0;
 }
 
@@ -789,6 +795,14 @@ static int find_next_runnable(int start) {
 // preserve. If that ever stops being true, this is one of the two
 // places that has to grow a save (the other is scheduler_tick()'s
 // outgoing branch), and the ISR path becomes a third -- see fpu.h.
+// The kernel slot's half of "the resume frame and the ISR depth travel
+// together". Every site that captured kernel_saved_rsp captured only
+// half the context before this existed.
+static void save_kernel_frame(uint64_t *regs) {
+    kernel_saved_rsp = (uint64_t)regs;
+    kernel_saved_isr_depth = isr_depth_get();
+}
+
 static void switch_to(int idx) {
     kstack_verify(idx);   // before trusting anything else about this slot
     fpu_restore(procs[idx].fpu);
@@ -796,7 +810,17 @@ static void switch_to(int idx) {
     // and leaves the hidden segment bases alone, so without this every
     // thread would read the last-scheduled thread's `__thread` storage.
     arch_set_fs_base(procs[idx].fs_base);
+    // The mirror of switch_to_kernel()'s guard below: a slot selected
+    // with no saved trapframe hands isr_common a zero RSP.
+    if (!procs[idx].kernel_rsp) {
+        klog_printf("SLOT HAS NO SAVED FRAME: idx=%d pid=%d state=%d \"%s\"\n",
+                    idx, idx + 1, procs[idx].state, procs[idx].name);
+        vga_printf("\nSLOT HAS NO SAVED FRAME: idx=%d pid=%d state=%d \"%s\"\n",
+                   idx, idx + 1, procs[idx].state, procs[idx].name);
+        __asm__ volatile ("ud2");
+    }
     g_next_kernel_rsp = procs[idx].kernel_rsp;
+    isr_depth_set(procs[idx].isr_depth);
     vmm_switch_address_space(procs[idx].pml4_phys);
     gdt_set_kernel_stack(kernel_stack_top(idx));
     procs[idx].state = SCHED_RUNNING;
@@ -831,6 +855,7 @@ static void switch_to_kernel(void) {
         __asm__ volatile ("ud2");
     }
     g_next_kernel_rsp = kernel_saved_rsp;
+    isr_depth_set(kernel_saved_isr_depth);
 }
 
 // Loads a real ELF64 binary from the persistent filesystem as a fresh
@@ -1353,7 +1378,7 @@ static void scheduler_rotate(uint64_t *regs) {
     // The window is narrow but entirely reachable: any `run` from the
     // physical shell while a client has a window open.
     if (process_context_is_armed()) {
-        if (current_index < 0) kernel_saved_rsp = (uint64_t)regs;
+        if (current_index < 0) save_kernel_frame(regs);
         return;
     }
 
@@ -1364,7 +1389,7 @@ static void scheduler_rotate(uint64_t *regs) {
     // in api/scheduler.h for what holds this and why. The slice is
     // already billed above, so accounting is unaffected.
     if (g_preempt_depth > 0) {
-        if (current_index < 0) kernel_saved_rsp = (uint64_t)regs;
+        if (current_index < 0) save_kernel_frame(regs);
         return;
     }
 
@@ -1374,6 +1399,7 @@ static void scheduler_rotate(uint64_t *regs) {
         // this is the only place that knows a whole tick elapsed under
         // it -- see abi/proc_info.h on why the total, not a percentage.
         procs[current_index].kernel_rsp = (uint64_t)regs;
+        procs[current_index].isr_depth = isr_depth_get();
         kstack_verify(current_index);  // it just stopped running -- check its stack
         // Paired with switch_to()'s FXRSTOR. Saved on the way out
         // whether or not the process has touched FP: "has it?" is
@@ -1383,7 +1409,7 @@ static void scheduler_rotate(uint64_t *regs) {
         fpu_save(procs[current_index].fpu);
         procs[current_index].state = SCHED_READY;
     } else {
-        kernel_saved_rsp = (uint64_t)regs;
+        save_kernel_frame(regs);
     }
 
     // Rotate from wherever the cycle last stopped, not from
@@ -1494,6 +1520,7 @@ void scheduler_test_release(int idx) {
     procs[idx].state = SCHED_UNUSED;
     procs[idx].wait_chan = 0;
     procs[idx].kernel_rsp = 0;
+    procs[idx].isr_depth = 0;
     // Cleared on the way out as well as on the way in. Belt and braces
     // is not the reason: an UNUSED slot with a pending bit is a slot the
     // next real spawn would have to remember to clear, and one of the
@@ -1577,6 +1604,7 @@ static int block_common(uint64_t *regs, const void *chan, int reason,
     bill_current(); // this slice ends here -- see bill_current()
     int idx = current_index;
     procs[idx].kernel_rsp = (uint64_t)regs;
+    procs[idx].isr_depth = isr_depth_get();
     kstack_verify(idx);
     fpu_save(procs[idx].fpu);
     procs[idx].state = SCHED_BLOCKED;

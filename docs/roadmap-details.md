@@ -4687,8 +4687,39 @@ retire.** The increment is at one site and the decrements at three; a
 preemption inside a syscall increments on one context and decrements on
 another, because the parked dispatch's epilogue does not run on the
 stack that incremented. Under the interrupt gate that cannot happen at
-all, which is why it is trap-gate-only. Retire it the same way the
-resume pointer was retired: per call, on the C stack.
+all, which is why it is trap-gate-only.
+
+**FIXED.** The counter is save/restore in `isr_dispatch()`'s wrapper
+(per call, on the C stack, beside the resume pointer) and travels with
+`kernel_rsp` across a context switch -- `procs[idx].isr_depth`, saved
+wherever `kernel_rsp` is saved and restored in `switch_to()` /
+`switch_to_kernel()`. Measured under the trap gate afterwards: depth
+reads 1 and 2 where it read 348, and **the double fault is gone, 0 runs
+in 3 against 2 in 3 before**.
+
+**WHAT IS LEFT, and it is the item's own headline.** `isr_dispatch()`
+still returns zero on an ordinary ring-3 syscall (`vec=128 cs=0x23`,
+depth now 1-2), and guards on BOTH writers -- `switch_to()` with a slot
+that has no saved frame, `switch_to_kernel()` with no captured kernel
+frame -- never fire. The zero comes from the wrapper itself:
+
+    isr_dispatch_body(regs);
+    uint64_t resume = g_next_kernel_rsp;   // may not be this call's
+    g_next_kernel_rsp = outer;
+
+The body may SWITCH AWAY and be resumed much later. By then another
+wrapper has restored its own `outer`, and the outermost one restores the
+initial 0 -- so this call reads a value that is no longer its own. The
+per-call wrapper fixed the CLOBBER case (a nested interrupt overwriting
+an outer frame) and not this one.
+
+**So the fix is the real thing the item asks for: retire the global
+rather than guard it.** A resume address handed to `isr_common` through
+shared state cannot survive a body that yields. What removes the
+mechanism instead of patching it is an explicit stack swap in the
+context switch -- Linux's `__switch_to_asm` -- so a resumed context
+continues after its own `switch_to()` call and no epilogue has to be
+told where to go.
 
 **Two candidates were checked and KILLED, both by a guard that did not
 fire.** They are recorded so a later session does not re-derive them.
