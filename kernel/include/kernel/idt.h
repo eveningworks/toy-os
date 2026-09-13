@@ -68,6 +68,15 @@ void isr_reset_depth(void);
 int isr_depth_get(void);
 void isr_depth_set(int depth);
 
+// Point isr_common's epilogue at `rsp` instead of what it interrupted --
+// the whole context-switch mechanism, and the only route to the live
+// isr_dispatch() call's resume local. The slot accessors are the
+// scheduler's: the pointer names a local on one context's kernel stack,
+// so it travels with `kernel_rsp` exactly as the depth does.
+void isr_resume_set(uint64_t rsp);
+void *isr_resume_slot_get(void);
+void isr_resume_slot_set(void *slot);
+
 // Spurious LAPIC interrupts seen since boot -- reported by `lsdev`
 // beside the controller. See idt.c.
 uint32_t idt_spurious_count(void);

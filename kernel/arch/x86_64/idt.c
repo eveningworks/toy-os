@@ -116,17 +116,19 @@ static const char *exception_names[32] = {
 
 static ring3_fault_hook_fn ring3_hook = 0;
 
-// Where isr_common's epilogue should resume -- see scheduler.c's design
-// comment. isr_dispatch() sets it to `regs` (a no-op) on entry; only
-// scheduler.c ever points it elsewhere, which is the whole
-// context-switch mechanism.
+// Where isr_common's epilogue should resume. **THE VALUE IS A LOCAL OF
+// THE LIVE isr_dispatch() CALL; this only points at it.** A plain global
+// holding the value cannot work once syscalls are preemptible: the
+// wrapper reads it AFTER the body, and a body that switches away is
+// resumed only once some other wrapper has restored its own saved copy
+// -- so the read is not this call's value (the outermost restores the
+// initial 0, which reached isr_common as `mov rsp, rax` with zero).
 //
-// **THIS IS SCRATCH FOR ONE isr_dispatch() CALL, NOT A PLACE TO KEEP
-// STATE.** The wrapper below saves the outer value and puts it back, so
-// a NESTED interrupt cannot clobber the frame an outer handler is going
-// to resume -- which it used to, and which is why a syscall could not
-// run with interrupts on. isr_common reads the RETURN VALUE, not this.
-uint64_t g_next_kernel_rsp;
+// The pointer travels with the context, like isr_depth beside it: the
+// scheduler saves and restores it whenever it saves `kernel_rsp`, so a
+// switch_to() on a resumed context writes into ITS dispatch's local and
+// not a parked one's. scheduler.c reaches it through isr_resume_set().
+static uint64_t *g_resume_slot;
 
 void idt_set_ring3_fault_hook(ring3_fault_hook_fn hook) {
     ring3_hook = hook;
@@ -193,13 +195,12 @@ void idt_init(void) {
     // same tree are clean. Two win_input KTESTs also go red, and they
     // are the small half.
     //
-    // The `g_isr_depth` leak behind the double fault is FIXED (it reads
-    // 1-2 now, not 348, and the double fault is gone). What still stops
-    // the flip is this file's own resume pointer: isr_dispatch() reads
-    // g_next_kernel_rsp AFTER the body, and a body that switches away is
-    // resumed once another wrapper has restored its `outer` -- so the
-    // read is not this call's value. Retiring the global is the fix, not
-    // another guard. docs/roadmap-details.md has the evidence.
+    // Both globals behind the crashes are retired (isr_depth and the
+    // resume slot travel with the context now), and the machine is
+    // STABLE with 0xEF: zero double faults and zero ring-3 crashes over
+    // two full suites, against 2 double faults in 3 runs before. What
+    // still holds the flip is the two win_input KTESTs and a 35%
+    // slowdown -- see docs/roadmap-details.md.
     idt_set_gate(128, isr128, 0, 0xEE);
 
     idtp.limit = sizeof(idt) - 1;
@@ -276,9 +277,18 @@ void isr_reset_depth(void) {
 }
 
 // The scheduler's half: a context switch changes whose kernel stack
-// g_isr_depth is describing, so it travels with kernel_rsp.
+// these describe, so both travel with kernel_rsp.
 int isr_depth_get(void) { return g_isr_depth; }
 void isr_depth_set(int d) { g_isr_depth = d; }
+
+// Point isr_common's epilogue somewhere other than what it interrupted.
+// THE WHOLE CONTEXT-SWITCH MECHANISM, and the only way to reach the
+// live dispatch's resume local from outside this file.
+void isr_resume_set(uint64_t rsp) {
+    if (g_resume_slot) *g_resume_slot = rsp;
+}
+void *isr_resume_slot_get(void) { return (void *)g_resume_slot; }
+void isr_resume_slot_set(void *slot) { g_resume_slot = (uint64_t *)slot; }
 
 // Called from isr.asm's common stub with rdi = pointer to saved GP regs.
 // Stack layout above saved regs (low->high addr): vector, error_code, then
@@ -367,11 +377,10 @@ static void panic_report_context(uint64_t rip, const uint64_t *regs,
 static void isr_dispatch_body(uint64_t *regs) {
     uint64_t vector = regs[15];
 
-    // Default: resume exactly what was interrupted. Only scheduler_tick()
-    // below (and scheduler_on_exit(), called from syscall.c) ever
-    // override this -- and only when the scheduler is armed. See
-    // scheduler.c's design comment.
-    g_next_kernel_rsp = (uint64_t)regs;
+    // The default -- resume exactly what was interrupted -- is the
+    // wrapper's initialiser now. Only scheduler_tick() (and
+    // scheduler_on_exit(), called from syscall.c) ever override it, and
+    // only when the scheduler is armed. See scheduler.c's design comment.
 
     // WHOSE SIGNALS MAY BE ACTED ON WHEN THIS TRAP FINISHES, or 0 for
     // "none, not now". Captured HERE, before anything runs, because both
@@ -761,25 +770,27 @@ static void isr_dispatch_body(uint64_t *regs) {
 // global on entry regardless. isr_reset_depth() covers the depth
 // counter at the same landing point.
 uint64_t isr_dispatch(uint64_t *regs) {
-    uint64_t outer = g_next_kernel_rsp;
+    // THE RESUME VALUE LIVES HERE, on this call's own frame, so nothing
+    // any other dispatch does can change what this one returns.
+    uint64_t resume = (uint64_t)regs;
+    uint64_t *outer_slot = g_resume_slot;
     int outer_depth = g_isr_depth;
-    g_next_kernel_rsp = (uint64_t)regs;
+    g_resume_slot = &resume;
     g_isr_depth = outer_depth + 1;
     isr_dispatch_body(regs);
-    uint64_t resume = g_next_kernel_rsp;
-    g_next_kernel_rsp = outer;
     // RESTORED, not decremented. A body that switched away never reaches
-    // here at all -- the scheduler carried the raised depth into the
-    // outgoing context, which is where it belongs.
+    // here at all -- the scheduler carried both into the outgoing
+    // context, which is where they belong.
+    g_resume_slot = outer_slot;
     g_isr_depth = outer_depth;
     // isr_common does `mov rsp, rax` with this, so a zero becomes RSP=0
     // and double-faults three instructions later with no walkable stack
     // to name it. Report it here instead -- same klog/vga/`ud2` shape as
     // scheduler.c's kstack_verify(), and for the same reason.
     if (!resume) {
-        klog_printf("ISR RESUME IS ZERO: vec=%lu cs=%lx depth=%d pid=%d "
-                    "outer=%lx\n", regs[15], regs[18], g_isr_depth,
-                    scheduler_current_pid(), outer);
+        klog_printf("ISR RESUME IS ZERO: vec=%lu cs=%lx depth=%d pid=%d\n",
+                    regs[15], regs[18], g_isr_depth,
+                    scheduler_current_pid());
         vga_printf("\nISR RESUME IS ZERO: vec=%lu cs=%lx depth=%d pid=%d\n",
                    regs[15], regs[18], g_isr_depth, scheduler_current_pid());
         __asm__ volatile ("ud2");

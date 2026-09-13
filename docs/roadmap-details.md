@@ -4697,29 +4697,39 @@ wherever `kernel_rsp` is saved and restored in `switch_to()` /
 reads 1 and 2 where it read 348, and **the double fault is gone, 0 runs
 in 3 against 2 in 3 before**.
 
-**WHAT IS LEFT, and it is the item's own headline.** `isr_dispatch()`
-still returns zero on an ordinary ring-3 syscall (`vec=128 cs=0x23`,
-depth now 1-2), and guards on BOTH writers -- `switch_to()` with a slot
-that has no saved frame, `switch_to_kernel()` with no captured kernel
-frame -- never fire. The zero comes from the wrapper itself:
+**`g_next_kernel_rsp` IS RETIRED, AND THE MACHINE IS STABLE UNDER THE
+TRAP GATE.** The second defect was the wrapper itself:
 
     isr_dispatch_body(regs);
     uint64_t resume = g_next_kernel_rsp;   // may not be this call's
     g_next_kernel_rsp = outer;
 
-The body may SWITCH AWAY and be resumed much later. By then another
-wrapper has restored its own `outer`, and the outermost one restores the
-initial 0 -- so this call reads a value that is no longer its own. The
-per-call wrapper fixed the CLOBBER case (a nested interrupt overwriting
-an outer frame) and not this one.
+The body may SWITCH AWAY and be resumed much later; by then another
+wrapper has restored its own `outer`, and the outermost restores the
+initial 0. Guards on BOTH writers -- `switch_to()` with a slot that has
+no saved frame, `switch_to_kernel()` with no captured kernel frame --
+never fired, which is what located it here rather than there.
 
-**So the fix is the real thing the item asks for: retire the global
-rather than guard it.** A resume address handed to `isr_common` through
-shared state cannot survive a body that yields. What removes the
-mechanism instead of patching it is an explicit stack swap in the
-context switch -- Linux's `__switch_to_asm` -- so a resumed context
-continues after its own `switch_to()` call and no epilogue has to be
-told where to go.
+The value is now a LOCAL of the live `isr_dispatch()` call, and a
+per-context pointer names it (`isr_resume_set()`); the pointer travels
+with `kernel_rsp` exactly as `isr_depth` does. Nothing any other
+dispatch does can change what this one returns, which is the property a
+global could not have. No stack-swap rewrite was needed --
+`context_switch.asm` stays where it is, used by the legacy
+`process_run_ring3()` path only.
+
+**Measured under the trap gate, full suite, 2 runs of 2: zero
+double faults, zero ring-3 crashes, zero zero-resumes, 736 passed / 2
+failed.** Against 2 double faults in 3 runs before. The whole corruption
+class is gone.
+
+**WHAT IS LEFT is the original two `win_input` tests and the 35%
+slowdown** (43.3s against 32.2s), which are plausibly one thing: the
+`win_input` suite alone runs 11.2s against 1.2s, and both tests fail
+`KTEST_ASSERT(exited)` on a 500-tick (~5s) deadline having already
+passed the earlier "it is parked, not spinning" assert. Whether that is
+a missed deadline or a genuine block/wake defect is one experiment --
+raise `TIMEOUT_TICKS` and see -- and it has not been run.
 
 **Two candidates were checked and KILLED, both by a guard that did not
 fire.** They are recorded so a later session does not re-derive them.
