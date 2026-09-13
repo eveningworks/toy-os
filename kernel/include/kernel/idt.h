@@ -26,16 +26,23 @@ void idt_set_ring3_fault_hook(ring3_fault_hook_fn hook);
 // doing so here would be safe.
 //
 // It is NOT safe to `sti` then block (`hlt` or otherwise) when this
-// returns true. g_next_kernel_rsp (this file) is a single global
-// "where to resume" pointer, unconditionally overwritten by every
-// isr_dispatch() call including a nested one, so a nested IRQ handler
-// clobbers the outer syscall's resume point and its epilogue returns
-// into a stale frame (a blocking keyboard syscall was tried that way:
-// it worked for one keystroke, then hung). Fixing
-// that reentrancy is its own separate, not-yet-done item (README.md's
-// "Ideas for what's next") -- this function exists so callers can
-// route AROUND the hazard instead (poll instead of block) rather than
-// trip over it.
+// returns true -- but the REASON changed, and the old one is worth not
+// leaving here to mislead. It used to be the resume pointer: a nested
+// isr_dispatch() overwrote the outer handler's `g_next_kernel_rsp`, so
+// its epilogue returned into a frame that had already been popped (a
+// blocking keyboard syscall was tried that way: it worked for one
+// keystroke, then hung). That is FIXED -- idt.c's isr_dispatch()
+// wrapper keeps the value per call, on the C stack.
+//
+// What is still unsafe is everything that assumed a syscall runs to
+// completion. `heap_os_lock()` is a no-op in ring 0 BY DESIGN
+// (heap_core.c), so a tick landing mid-kmalloc and switching to a
+// process that also allocates corrupts the free list -- and
+// bounce_alloc() is on every read and write. Several query providers
+// and lib/tunables.c say "the kernel is single-threaded" in as many
+// words. Those are what the roadmap's "Interruptible syscalls" item
+// has to clear before the gate can become a trap gate; until then this
+// still means "poll, do not block".
 int isr_in_progress(void);
 
 // Resets the isr_in_progress() depth counter to 0. Only meaningful

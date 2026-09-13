@@ -116,10 +116,16 @@ static const char *exception_names[32] = {
 
 static ring3_fault_hook_fn ring3_hook = 0;
 
-// Read by isr.asm's isr_common epilogue, reloaded into rsp right before
-// the pop+iretq sequence -- see scheduler.c's design comment for the
-// full explanation. isr_dispatch resets this to `regs` (a no-op) at the
-// top of every call; only scheduler.c ever points it elsewhere.
+// Where isr_common's epilogue should resume -- see scheduler.c's design
+// comment. isr_dispatch() sets it to `regs` (a no-op) on entry; only
+// scheduler.c ever points it elsewhere, which is the whole
+// context-switch mechanism.
+//
+// **THIS IS SCRATCH FOR ONE isr_dispatch() CALL, NOT A PLACE TO KEEP
+// STATE.** The wrapper below saves the outer value and puts it back, so
+// a NESTED interrupt cannot clobber the frame an outer handler is going
+// to resume -- which it used to, and which is why a syscall could not
+// run with interrupts on. isr_common reads the RETURN VALUE, not this.
 uint64_t g_next_kernel_rsp;
 
 void idt_set_ring3_fault_hook(ring3_fault_hook_fn hook) {
@@ -325,7 +331,7 @@ static void panic_report_context(uint64_t rip, const uint64_t *regs,
     if (!shown) klog_printf("    (nothing in .text found on the stack)\n");
 }
 
-void isr_dispatch(uint64_t *regs) {
+static void isr_dispatch_body(uint64_t *regs) {
     uint64_t vector = regs[15];
     g_isr_depth++; // see idt.h's isr_in_progress() -- every normal-return
                     // path below must decrement this to match; a
@@ -708,4 +714,36 @@ void isr_dispatch(uint64_t *regs) {
         signal_deliver_pending(sig_pid, regs,
                                scheduler_syscall_reissue_pending(sig_pid) ? SIG_BEFORE_REISSUE
                                                                           : SIG_TRAP_DONE);
+}
+
+// WHERE isr_common RESUMES, ANSWERED PER CALL RATHER THAN PER MACHINE.
+//
+// The trap: `g_next_kernel_rsp` is one global, and isr_dispatch_body()
+// sets it to its own `regs` on entry. With an INTERRUPT gate that is
+// safe because nothing can nest -- but the moment a syscall runs with
+// IF set, a timer IRQ lands inside it, overwrites the global, and the
+// OUTER handler's epilogue reloads a frame that has already been
+// popped. It resumes garbage. That bug was hit twice (a blocking
+// SYS_READ_KEY, then the ring-3 GUI migration) and was routed around
+// both times rather than fixed; idt.h's isr_in_progress() exists
+// because of it.
+//
+// The state was never really global -- it was per-invocation state kept
+// in a global. This wrapper gives each call its own copy on the C
+// stack, so nesting is correct by construction and every scheduler call
+// site keeps writing `g_next_kernel_rsp` exactly as before.
+//
+// A noreturn path (process_context_exit()/recover()) longjmps out and
+// never restores the outer value. That is fine rather than merely
+// tolerated: it abandons the C stack the outer frame lived on, so there
+// is no outer epilogue left to resume, and the next dispatch sets the
+// global on entry regardless. isr_reset_depth() covers the depth
+// counter at the same landing point.
+uint64_t isr_dispatch(uint64_t *regs) {
+    uint64_t outer = g_next_kernel_rsp;
+    g_next_kernel_rsp = (uint64_t)regs;
+    isr_dispatch_body(regs);
+    uint64_t resume = g_next_kernel_rsp;
+    g_next_kernel_rsp = outer;
+    return resume;
 }

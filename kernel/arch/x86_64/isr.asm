@@ -1,17 +1,11 @@
 bits 64
 
 extern isr_dispatch
-extern g_next_kernel_rsp ; defined in idt.c -- see scheduler.c's design
-                          ; comment for the full explanation. Reloaded
-                          ; into rsp right before the pop+iretq sequence
-                          ; below so a context switch can be performed
-                          ; by just pointing this at a DIFFERENT saved
-                          ; register block instead of the one that was
-                          ; just pushed. isr_dispatch sets it to `regs`
-                          ; (i.e. this exact block, a no-op) at the top
-                          ; of every call, for every vector -- so unless
-                          ; scheduler.c overrides it, this is provably
-                          ; identical to the pre-M16 behavior.
+; isr_dispatch returns WHERE TO RESUME, in rax -- see idt.c's wrapper and
+; scheduler.c's design comment. It used to be read out of the global
+; g_next_kernel_rsp instead, which a nested interrupt could clobber; the
+; global is still how scheduler.c asks for a context switch, but the
+; answer now rides the C stack, one copy per call.
 
 section .text
 
@@ -113,9 +107,12 @@ isr_common:
     mov rdi, rsp         ; pass pointer to saved state as arg
     call isr_dispatch
 
-    mov rsp, [rel g_next_kernel_rsp] ; usually a no-op (see above) --
-                                      ; this is the entire context-switch
-                                      ; mechanism when it isn't.
+    mov rsp, rax         ; isr_dispatch RETURNS where to resume. Usually
+                          ; the block just pushed (a no-op); when it is
+                          ; not, that is the entire context-switch
+                          ; mechanism. A return value rather than a
+                          ; global so a NESTED interrupt cannot clobber
+                          ; the frame an outer handler will resume.
 
     pop r15
     pop r14
