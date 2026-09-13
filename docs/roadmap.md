@@ -342,9 +342,11 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [ ] POSIX `stat`/`lstat`/`fstat` with a truthful `struct stat` -- the `test` builtin
 - [ ] `fcntl` (`F_DUPFD`, `FD_CLOEXEC`) -- redirection bookkeeping in `redir.c`
 - [ ] `umask`, `getrlimit`/`setrlimit`, `times` -- three builtins, each compilable out
-- [ ] `SIGTTOU`, and a catchable `SIGQUIT`
+- [ ] `#define SIGTTOU`, and an IGNORABLE `SIGQUIT` -- dash only ever `SIG_IGN`s both
 - [ ] `#!` handling in the loader -- listed under Shell pipes & job control
-- [ ] The port itself: `userland/ports/dash/`, BSD-licensed, its build-time generators run on the host
+- [x] ~~Vendor the port~~ DONE 2026-09-13 -- `userland/ports/dash/`, v0.5.13.5 verbatim, nothing builds it yet
+- [ ] A Makefile rule for it, running dash's five build-time generators on the HOST
+- [ ] Our own `mksignames` -- dash's is GPL-2+ from bash, and our signal numbers are not its
 - [ ] Toykit's `klineedit` wired into dash's one read-a-line seam -- dash ships no line editing
 - [ ] A `system.shell` setting, read by the four places that hardcode `/bin/tosh` today
 

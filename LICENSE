@@ -57,7 +57,7 @@ with the font.
 
 Third-party code
 
-This repository vendors three third-party programs. None is covered by
+This repository vendors four third-party programs. None is covered by
 the MIT License above, and each keeps its own license file in its own
 directory.
 
@@ -120,6 +120,26 @@ directory.
         a default build ships an empty trust store. Fetching is not
         distributing -- an image built with EXTRAS=1 carries
         /usr/share/licenses/extras.txt saying what is inside it.
+
+  userland/ports/dash/    dash, the Debian Almquist Shell, Copyright
+                          (c) 1989-1994 The Regents of the University
+                          of California, (c) 1997 Christos Zoulas and
+                          (c) 1997-2005 Herbert Xu, under the BSD
+                          3-Clause License. Full text:
+                          userland/ports/dash/COPYING.
+
+        ONE FILE IN IT IS NOT BSD. src/mksignames.c is Copyright (C)
+        1992 Free Software Foundation, Inc., taken from GNU Bash, under
+        the GNU General Public License, version 2 or (at your option)
+        any later version. dash's own COPYING carries that notice as a
+        second section and states the consequence: the file is not
+        linked into the shell, but its output -- the generated
+        signames.c signal-name table -- is. Nothing in this repository
+        builds dash yet, so today it is vendored source and no more
+        than that; a binary built from it as it stands would have to be
+        distributed under the GPL, exactly as /bin/doom is. See that
+        directory's README.md for why toy-os expects to generate that
+        table from its own signal numbers instead.
 
 ---
 

@@ -3274,6 +3274,56 @@ klineedit.c` into dash's read-a-line seam, which is what CLAUDE.md's
 "THERE IS ONE LINE EDITOR AND IT IS COMPILED TWICE" already requires and
 means the keys do not change with the shell.
 
+## The port is vendored, and two more of its requirements were wrong
+
+**Measured 2026-09-13**, against `userland/ports/dash/` (v0.5.13.5,
+vendored that day) rather than against the entry above, which had
+inherited both items from the ash estimate without checking them.
+
+**`SIGTTOU` does not need to exist as a signal -- only as a NUMBER.**
+dash names it in exactly two places, `jobs.c`'s `setjobctl()` and its
+`forkchild()`, and both are `setsignal(SIGTTOU)`, which under `mflag`
+resolves to `SIG_IGN` (`trap.c`'s switch on `signo`). It installs no
+handler for it, never sends it, and never waits on it: a shell ignores
+`SIGTTOU` so that its own `tcsetpgrp()` cannot stop it, which is the
+opposite of wanting it delivered. So the requirement is a `#define` in
+`abi/signal_abi.h` and nothing else -- `SIGNAL_VALID()` is a RANGE
+check, so `sigaction()` already accepts any number up to 31, and a
+signal with no sender never reaches its default action.
+
+That also settles the apparent conflict with `signal_abi.h`'s "THERE IS
+NO SIGTTOU, and that is a decision rather than an omission". The
+decision is about DELIVERY -- no `TOSTOP`, so no sender -- and it
+survives intact. Defining the number contradicts none of it.
+
+**`SIGQUIT` needs to be IGNORABLE, not catchable.** dash's uses are
+`setsignal(SIGQUIT)` (S_IGN when interactive), `ignoresig(SIGQUIT)` for
+a background job, and `signal(SIGQUIT, SIG_IGN)` in `redir.c`. Catching
+it is only ever a user's `trap ... QUIT`. Today `SIGNAL_UNIGNORABLE()`
+covers `SIGQUIT`, so `sigaction()` answers `-EPERM` -- and the
+interesting part is what dash does with that: nothing. `ignoresig()`
+does not check `signal()`'s return and records `S_IGN` in its own
+`sigmode` table regardless, so the shell would BELIEVE it had ignored a
+signal it had not. That is a silent divergence rather than a failure to
+build, which is the argument for fixing it rather than living with it.
+
+`signal_abi.h` ends that entry with "Revisit if a program ever has a
+real reason to catch it." dash is close to being it, and asks for less:
+it wants to IGNORE `SIGQUIT`, never to catch it. Dropping it from
+`SIGNAL_UNIGNORABLE()` would surrender the second escape hatch that
+entry is defending; permitting `SIG_IGN` while still refusing a handler
+would not, and is the narrower change to weigh when this is built.
+
+**And the licence premise was half wrong.** "BSD-licensed, no GPL into
+an MIT tree" is true of dash's shell and not of its build:
+`src/mksignames.c` is GPL-2-or-later, taken from GNU Bash, and dash's
+own `COPYING` says so -- *"This file is not directly linked with dash.
+However, its output is."* It is the generator for the signal-name table
+`kill -l` and `trap` print. toy-os needs its own anyway, because the
+table has to name OUR signal numbers, so the fix and the necessity are
+the same work; `LICENSE` and the port's `README.md` disclose the file
+until it lands.
+
 ## Layer 7 -- The GUI
 
 Sits highest deliberately: the desktop is a ring-3 process now, so
