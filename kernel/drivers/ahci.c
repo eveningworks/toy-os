@@ -133,7 +133,7 @@ struct cmd_table {
 // ---- state ----------------------------------------------------------
 
 #define AHCI_MAX_PORTS 32
-#define DMA_BUF_FRAMES PRDT_ENTRIES   // 64 KiB = 128 sectors per command
+#define DMA_BUF_FRAMES PRDT_ENTRIES   // 256 KiB = 512 sectors per command
 
 static volatile uint8_t *g_abar;
 static const struct pci_device *g_pci;
