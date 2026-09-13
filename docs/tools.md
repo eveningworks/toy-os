@@ -3902,6 +3902,16 @@ window without going through it will find its layout polls timing out.
   would report that known limit on every run and bury the categorical
   bugs the harness is for. `--exact-float` shows the gap (two cases).
 
+- **`gen_signames.py`** -- `signames.c` for the dash port, from
+  `kernel/include/abi/signal_abi.h`. Replaces dash's own
+  `src/mksignames.c` for two independent reasons, either of which would
+  be enough: that file is **GPL-2 from GNU Bash** and its output is
+  LINKED, so using it would pull the GPL into the shell binary; and it
+  reads the **HOST's** `<signal.h>`, so a dash built with it would list
+  Linux's signals and miss this kernel's numbering. The names are parsed
+  out of the header rather than written down, so a signal added there
+  appears on the next build. Run by the Makefile, not by hand.
+
 - **`dash_gap.py`** -- what the vendored dash port still needs from
   tolibc, measured by compiling it. No guest and no network: it runs
   dash's six build-time generators on the host, then compiles all 32

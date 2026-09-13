@@ -1568,6 +1568,9 @@ cost".
   `fetch_ca_bundle.py` (Mozilla's CA roots, behind `EXTRAS=1`),
   `gen_mp3_tables.py` (**verifies two independent sources agree before
   it writes**), `gen_icons.py`,
+  `gen_signames.py` (**dash's signal-name table from OUR signal
+  numbers** -- replacing upstream's `mksignames.c`, which is GPL-2 from
+  bash AND reads the HOST's signal set),
   `genrelocs.py`, `gen_syms.py`, `drivers_conf.py` (`drivers.conf`
   -> which drivers are modules), `gen_modalias.py` (`modules.alias`
   from the `.ko` files, and it FAILS the build on an unexported

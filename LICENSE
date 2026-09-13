@@ -138,8 +138,16 @@ directory.
         builds dash yet, so today it is vendored source and no more
         than that; a binary built from it as it stands would have to be
         distributed under the GPL, exactly as /bin/doom is. See that
-        directory's README.md for why toy-os expects to generate that
-        table from its own signal numbers instead.
+        **IT IS NOT COMPILED, AND THEREFORE NOT DISTRIBUTED IN ANY
+        BINARY.** The build generates that table with
+        tools/gen_signames.py instead, from this kernel's own signal
+        numbers -- which it had to do regardless of the licence, since
+        mksignames.c reads the HOST's <signal.h> and would have put
+        Linux's signal set in a toy-os shell. /bin/dash contains no GPL
+        code. The file stays in the vendored tree because the port is
+        kept byte for byte and deleting it would be a divergence to
+        carry forever; it is listed here so a reader of this file can
+        learn it is present.
 
 ---
 

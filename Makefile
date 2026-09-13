@@ -787,6 +787,122 @@ $(BUILD)/userland/backends/doom/%.o: USERLAND_CFLAGS += -Iuserland/ports/doom \
                                      -DDOOMGENERIC_RESX=640 -DDOOMGENERIC_RESY=400 \
                                      -DFEATURE_SOUND
 
+# --- dash, the vendored POSIX shell -----------------------------------
+#
+# userland/ports/dash/ is upstream byte for byte; userland/backends/dash/
+# is OURS and is almost entirely one file -- config.h, which is what
+# autoconf would have written. Porting dash is mostly deciding what to
+# answer, not writing code.
+#
+# **SIX GENERATORS RUN ON THE HOST**, which is why this needs rules of
+# its own rather than the generic userland pattern. dash generates a
+# parser table, a node layout, a builtin dispatch table and an
+# initialiser from its own sources at build time; four of the six are C
+# programs compiled for the BUILD machine, not the target.
+# The BUILD machine's compiler, for the generators that run HERE. The
+# same gcc as CC on this project (host and target are both x86-64), but
+# named separately because what it must NOT take is the freestanding
+# target flags -- a generator links against the host's libc.
+HOSTCC ?= gcc
+
+DASH_SRC  = userland/ports/dash/src
+DASH_GEN  = $(BUILD)/dash/gen
+DASH_HOST = $(BUILD)/dash/host
+
+# Upstream's dash_CFILES (src/Makefile.am), plus the generated units.
+# Listed rather than wildcarded, unlike Doom's: this is a SUBSET of the
+# directory -- mkinit.c, mknodes.c, mksyntax.c and mksignames.c are host
+# generators that must not be compiled for the target, and one of them
+# is GPL.
+DASH_PORT_CFILES = alias.c arith_yacc.c arith_yylex.c cd.c error.c eval.c \
+                   exec.c expand.c histedit.c input.c jobs.c mail.c main.c \
+                   memalloc.c miscbltin.c mystring.c options.c parser.c \
+                   redir.c show.c trap.c output.c system.c var.c \
+                   bltin/printf.c bltin/test.c bltin/times.c
+DASH_PORT_OBJS = $(patsubst %.c,dash/port/%,$(DASH_PORT_CFILES))
+DASH_GEN_OBJS  = dash/gen/builtins dash/gen/init dash/gen/nodes \
+                 dash/gen/signames dash/gen/syntax
+EXTRA_OBJS_dash = $(DASH_PORT_OBJS) $(DASH_GEN_OBJS)
+
+# Vendored code compiles with its warnings off, exactly as Doom's does
+# and for the same reason -- nobody may "fix" the directory to match
+# local conventions, so a warning here is noise nobody may act on. The
+# FRAME budget is kept: a shell recurses through its own evaluator.
+DASH_CFLAGS = $(subst -Wall,-w,$(subst -Wextra,,$(USERLAND_CFLAGS))) \
+              -DBSD=1 -DSHELL -include userland/backends/dash/config.h \
+              -I$(DASH_SRC) -I$(DASH_GEN)
+
+# main() is upstream's, and userland/bin/dash.c is the ELF's entry --
+# renamed in the BUILD so neither copy is edited.
+$(BUILD)/userland/dash/port/main.o: DASH_CFLAGS += -Dmain=dash_main
+
+$(BUILD)/userland/dash/port/%.o: $(DASH_SRC)/%.c $(DASH_GEN)/.stamp
+	@mkdir -p $(dir $@)
+	$(CC) $(DASH_CFLAGS) $< -o $@
+
+# **THE GENERATED SOURCES NEED A RULE OF THEIR OWN, even though the
+# stamp is what writes them.** Without this, make cannot see
+# build/dash/gen/builtins.c as buildable on a CLEAN tree -- so it
+# decides dash/gen/builtins.o is unmakeable, discards the .elf pattern
+# rule whose prerequisite it is, and reports "No rule to make target
+# build/userland/bin/dash.elf". The incremental build worked, which is
+# the worst way for this to fail: `make all` was green until `make
+# clean` came first, which is exactly what preflight does.
+#
+# The recipe is empty on purpose: the stamp already produced the file,
+# and this rule exists only to tell make WHO produces it.
+$(DASH_GEN)/%.c $(DASH_GEN)/%.h: $(DASH_GEN)/.stamp
+	@:
+
+$(BUILD)/userland/dash/gen/%.o: $(DASH_GEN)/%.c $(DASH_GEN)/.stamp
+	@mkdir -p $(dir $@)
+	$(CC) $(DASH_CFLAGS) $< -o $@
+
+# The four host generators. Built for the BUILD machine with the host's
+# own headers -- they run here, not on toy-os.
+$(DASH_HOST)/%: $(DASH_SRC)/%.c
+	@mkdir -p $(dir $@)
+	$(HOSTCC) -O1 -w -I$(DASH_SRC) -I$(DASH_GEN) -o $@ $<
+
+# ONE STAMP for all six, because they are not independent: mksyntax
+# needs token.h from mktokens, and mkinit reads every source. Sequencing
+# them through a single recipe is honest about that; a rule per output
+# would let make run them in an order that cannot work.
+#
+# **signames.c IS OURS, NOT dash's.** Upstream's mksignames.c is GPL-2
+# from bash and reads the HOST's signal set -- so it would put Linux's
+# signals in a toy-os binary, and pull the GPL into it. See
+# tools/gen_signames.py.
+# **THE GENERATORS ARE PREREQUISITES, NOT A NESTED $(MAKE).** The first
+# version built them with `$(MAKE) -s ...` inside this recipe, which
+# DEADLOCKS under `make -j`: a recursive make invoked from a recipe
+# without a leading `+` does not inherit the jobserver, so the sub-make
+# waits forever for a token it can never be given. It presented as four
+# processes at 0% CPU and a log that had stopped -- stalled rather than
+# spinning, which is what makes a jobserver deadlock look like a hang.
+#
+# mksyntax needs token.h, which mktokens writes, so that one is ordered
+# INSIDE the recipe rather than as a prerequisite.
+$(DASH_GEN)/.stamp: $(wildcard $(DASH_SRC)/*.c) $(DASH_SRC)/nodetypes \
+                    $(DASH_SRC)/nodes.c.pat $(DASH_SRC)/builtins.def.in \
+                    userland/backends/dash/config.h tools/gen_signames.py \
+                    $(DASH_HOST)/mkinit $(DASH_HOST)/mknodes
+	@mkdir -p $(DASH_GEN) $(DASH_HOST)
+	@cd $(DASH_GEN) && sh $(CURDIR)/$(DASH_SRC)/mktokens
+	@$(HOSTCC) -O1 -w -I$(DASH_SRC) -I$(DASH_GEN) -o $(DASH_HOST)/mksyntax \
+	    $(DASH_SRC)/mksyntax.c
+	@cd $(DASH_GEN) && $(CURDIR)/$(DASH_HOST)/mknodes \
+	    $(CURDIR)/$(DASH_SRC)/nodetypes $(CURDIR)/$(DASH_SRC)/nodes.c.pat
+	@cd $(DASH_GEN) && $(CURDIR)/$(DASH_HOST)/mksyntax
+	@$(HOSTCC) -E -x c -DBSD=1 -DSHELL \
+	    -include userland/backends/dash/config.h \
+	    -o $(DASH_GEN)/builtins.def $(DASH_SRC)/builtins.def.in
+	@cd $(DASH_GEN) && sh $(CURDIR)/$(DASH_SRC)/mkbuiltins builtins.def
+	@cd $(DASH_GEN) && $(CURDIR)/$(DASH_HOST)/mkinit \
+	    $(addprefix $(CURDIR)/$(DASH_SRC)/,$(DASH_PORT_CFILES))
+	@python3 tools/gen_signames.py --out $(DASH_GEN)/signames.c
+	@touch $@
+
 # THE ONE VENDORED PROGRAM. cjson_test is ours; userland/ports/cjson/ is
 # upstream's source byte for byte (see its README), and it is linked in
 # per-binary rather than added to an archive so that nothing else can

@@ -26,7 +26,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 
 - [ ] **Interruptible syscalls** -- a trap gate plus retiring `g_next_kernel_rsp` as a single global  *(Scheduler: blocking, priorities, classes)*
 - [ ] Replace the preemption guard with a real sleeping lock -- **Needs:** interruptible syscalls, above  *(Scheduler: blocking, priorities, classes)*
-- [ ] Build and RUN it: 32 of 32 sources compile and every symbol resolves, so this is the next thing that can fail  *(A ported POSIX shell)*
+- [ ] Exercise it: pipelines, job control, here-documents. `dash -c pwd` works; nothing longer is proven  *(A ported POSIX shell)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
@@ -351,9 +351,9 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [ ] `SIGPIPE` and `-EPIPE` on the pipe WRITE path -- a dead pipe reports 0 BYTES WRITTEN, which a producer cannot tell from a short write
 - [ ] `#!` handling in the loader -- listed under Shell pipes & job control
 - [x] ~~Vendor the port~~ DONE 2026-09-13 -- `userland/ports/dash/`, v0.5.13.5 verbatim, nothing builds it yet
-- [ ] A Makefile rule for it, running dash's six build-time generators on the HOST -- all six already run clean
-- [ ] **NEXT** Build and RUN it: 32 of 32 sources compile and every symbol resolves, so this is the next thing that can fail
-- [ ] Our own `mksignames` -- dash's is GPL-2+ from bash, and our signal numbers are not its
+- [x] ~~A Makefile rule, running dash's six generators on the HOST~~ DONE 2026-09-13 -- `/bin/dash` builds and runs
+- [ ] **NEXT** Exercise it: pipelines, job control, here-documents. `dash -c pwd` works; nothing longer is proven
+- [x] ~~Our own `mksignames`~~ DONE 2026-09-13 -- `tools/gen_signames.py`; no GPL reaches the binary
 - [ ] Toykit's `klineedit` wired into dash's one read-a-line seam -- dash ships no line editing
 - [ ] A `system.shell` setting, read by the four places that hardcode `/bin/tosh` today
 

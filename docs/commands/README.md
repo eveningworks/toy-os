@@ -229,3 +229,7 @@ a command), and the `gui3`/`nano` aliases.
 ### Text processing
 
 - [`grep`](grep.md)
+
+### The shell and the console
+
+- [`dash`](dash.md)
