@@ -685,14 +685,27 @@ def _mark_executable(host, telnet_port, local_dir, remote_dir, timeout):
     reason: the stale ones are the problem. It is one telnet round trip
     per file and only runs on a sync, which is already the slow path.
     """
+    # **TWO CALL SHAPES, AND MISSING ONE OF THEM FAILED SILENTLY.**
+    # `sync seed/sync /` passes the whole tree, so /bin is a
+    # SUBDIRECTORY of local_dir. `flash` syncs one tree at a time
+    # (USERLAND_TREES), so local_dir IS seed/sync/bin and remote_dir is
+    # /bin. The first version handled only the former, found no
+    # subdirectory named bin, and returned without a word -- so a full
+    # flash left every mode untouched and said nothing about it.
+    remote_top = "/" + remote_dir.strip("/").split("/")[0] if remote_dir.strip("/") else ""
     names = []
-    for d in EXEC_DIRS:
-        local_d = os.path.join(local_dir, d)
-        if not os.path.isdir(local_d):
-            continue
-        for f in sorted(os.listdir(local_d)):
-            if os.path.isfile(os.path.join(local_d, f)):
-                names.append(f"{remote_dir.rstrip('/')}/{d}/{f}")
+    if remote_top.lstrip("/") in EXEC_DIRS:
+        for f in sorted(os.listdir(local_dir)):
+            if os.path.isfile(os.path.join(local_dir, f)):
+                names.append(f"{remote_dir.rstrip('/')}/{f}")
+    else:
+        for d in EXEC_DIRS:
+            local_d = os.path.join(local_dir, d)
+            if not os.path.isdir(local_d):
+                continue
+            for f in sorted(os.listdir(local_d)):
+                if os.path.isfile(os.path.join(local_d, f)):
+                    names.append(f"{remote_dir.rstrip('/')}/{d}/{f}")
     if not names:
         return
     sess = Session(host, telnet_port, timeout)
@@ -923,8 +936,18 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
             return 1
 
         if _sha256(sess, "/boot/boot/kernel.bin", timeout) == want:
-            print("remote: that kernel is already installed")
-            return 0
+            # **--force MEANS DO IT ANYWAY, INCLUDING THE USERLAND SYNC.**
+            # This used to return here unconditionally, so a flash whose
+            # KERNEL happened to match skipped the sync entirely -- and
+            # said only "that kernel is already installed", which reads
+            # like success. It is how a --force run intended to fix
+            # /bin's permission bits changed nothing at all and reported
+            # nothing wrong.
+            if not force:
+                print("remote: that kernel is already installed")
+                return 0
+            print("remote: that kernel is already installed -- --force, "
+                  "so syncing the userland anyway")
 
         print("remote: rotating the running kernel to /boot/boot/kernel.old")
         # ITS OWN TIMEOUT, not --timeout. This copies ~5 MB through the
