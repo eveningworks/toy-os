@@ -185,13 +185,19 @@ void idt_init(void) {
     // that way, and compositor wake latency goes 2.3 ms -> 12.2 ms
     // under disk load.
     //
-    // Flipping it breaks two win_input KTESTs -- a ring-3 process that
-    // must block in SYS_WAIT_EVENT / SYS_WAIT_READY misses its deadline
-    // (736 pass at 0xEE, 734 at 0xEF, measured both ways). The cause is
-    // NOT established; scheduler.c's block_common() names one hazard
-    // this reopens (the removed "refuse to park a process with a signal
-    // pending" check) but nothing ties it to these two tests yet.
-    // docs/roadmap-details.md has what is known.
+    // **FLIPPING IT CORRUPTS AN UNRELATED PROCESS'S RESUME STATE AND
+    // PANICS THE KERNEL**, in 2 full-suite runs out of 3: a process
+    // blocked in a syscall comes back at an unmapped RIP, then
+    // isr_common double-faults in its push prologue with RSP=0 -- which
+    // means isr_dispatch() returned 0. Three control runs at 0xEE on the
+    // same tree are clean. Two win_input KTESTs also go red, and they
+    // are the small half.
+    //
+    // The per-call wrapper below stops a nested interrupt CLOBBERING an
+    // outer frame; what is still unsafe is a context switch taken from
+    // inside a nested dispatch, which parks a process at the IRQ's frame
+    // rather than the syscall's. docs/roadmap-details.md has the
+    // evidence and the rate.
     idt_set_gate(128, isr128, 0, 0xEE);
 
     idtp.limit = sizeof(idt) - 1;

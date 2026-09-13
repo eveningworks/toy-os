@@ -4631,21 +4631,55 @@ because every writer puts identical bytes in the buffer.
 
 **Then the gate was flipped to `0xEF` and two KTESTs went red**, both in
 `win_input_test.c`: a ring-3 process that must block in
-`SYS_WAIT_EVENT`, and `SYS_WAIT_READY`'s timed wait. Both miss their
-deadline. Measured both ways on the same tree -- 736 pass at `0xEE`,
-734 at `0xEF` -- so it is the flip and not a pre-existing flake. The
-suite also runs 35% slower with it on (42.9s against 31.7s), which is
-not yet explained either.
+`SYS_WAIT_EVENT`, and `SYS_WAIT_READY`'s timed wait. Both reach
+`KTEST_ASSERT(exited)` having already passed the earlier "it is parked,
+not spinning" assert, so the helper blocks correctly and is then never
+seen to exit. Measured both ways on the same tree -- 736 pass at `0xEE`,
+734 at `0xEF`. The suite also runs 35% slower with it on (42.9s against
+31.7s).
 
-**The cause is NOT established, and one candidate is already written
-down.** `scheduler.c`'s `block_common()` records a guard that was
-removed after a positive control showed it reddened nothing -- "refuse
-to park a process with a signal pending" -- and says in as many words
-that preemptible syscalls are WHAT WOULD BRING IT BACK. That is a
-named, pre-identified consequence of this exact change. What is missing
-is any evidence tying it to these two tests, which are about blocking
-and waking rather than about signals. The cheap discriminating check
-has not been run.
+**THE TWO RED TESTS ARE THE SMALL HALF. The gate also kills the machine
+outright, and that is the thing to fix.** Running the `win_input` suite
+alone with `-v` shows what the whole-suite report filters out:
+
+    RING-3 CRASH: Page fault
+      RIP=0x800002f57c  CS=0x23 (ring 3)  error_code=0x14
+      CR2=0x800002f57c
+    crash: report written to /var/crash/netd-5.crash
+    PANIC: Double fault
+      RIP=0x630140c  CS=0x8 (ring 0)  in isr_common+0xb
+      no backtrace: RSP=0x0 is not a walkable stack
+
+`netd` -- a process with nothing to do with these tests, blocked in a
+syscall waiting on the network -- is resumed at an RIP that is not
+mapped (`CR2 == RIP`, error code bit 4 set: an instruction fetch). The
+kernel then double-faults at `isr_common+0xb`, which is inside the
+register-push prologue, with RSP zero. `isr_common`'s only source of RSP
+is `mov rsp, rax` from `isr_dispatch()`'s return value, so that call
+returned 0: `g_next_kernel_rsp` was zero when `isr_dispatch_body()`
+returned.
+
+**Rate: 2 of 3 full-suite runs, 1 of 1 `win_input`-only run.** The
+control is clean -- three `win_input` runs at `0xEE` on the same tree,
+`PASSED -- 9 passed, 0 failed` each, zero `RING-3 CRASH` lines and zero
+double faults -- so the corruption is the gate's and not a pre-existing
+flake.
+
+**So the cause is the resume path, not signals.** The `block_common()`
+candidate recorded below -- "refuse to park a process with a signal
+pending" -- does not explain a process being resumed at a garbage RIP,
+and does not explain `isr_dispatch()` returning zero. The per-call
+`isr_dispatch()` wrapper that landed as preparatory work makes the
+resume pointer safe against a nested interrupt CLOBBERING it, which was
+the hazard everyone had written down; what it does not make safe is a
+CONTEXT SWITCH taken from inside a nested dispatch, where the frame a
+process is parked at is the IRQ's rather than the syscall's it was
+actually in. That is the next thing to establish, and it is scheduler
+work rather than another gate flip.
+
+**Do not flip the gate again without fixing this first.** It is one line
+and it looks harmless; it corrupts an unrelated process's resume state
+and panics the kernel in two runs out of three.
 
 **What the flip is expected to buy, and what it is not.** It stops
 interrupts being masked for ~20 ms at a stretch, so keyboard, mouse and
