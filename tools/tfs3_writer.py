@@ -207,15 +207,49 @@ def pack_gdt_entry(free_blocks, free_inodes):
     return body + struct.pack("<I", fnv1a(body))
 
 
-def pack_inode(typ, links, size, created, modified, ptrs):
-    """ptrs: list of 15 u32s (12 direct + single + double + triple)."""
+def pack_inode(typ, links, size, created, modified, ptrs, mode=None):
+    """ptrs: list of 15 u32s (12 direct + single + double + triple).
+
+    `mode` is the permission bits, at offset 92 -- inside the range the
+    checksum has always covered and which every earlier version wrote as
+    zero. That is what makes it an extension rather than a format
+    revision: an older kernel still validates the checksum because it
+    already folds 92..127 in, and reads mode 0, which it answers with
+    its own default. See kernel/fs/tfs3.c's `struct t3_inode`.
+
+    None means "the default for the type", which is what the kernel
+    would have supplied anyway -- written out explicitly so a stored
+    mode always means what it says.
+    """
     assert len(ptrs) == 15
+    if mode is None:
+        mode = 0o644 if typ == TYPE_FILE else 0o755
     head = struct.pack("<BBHQQQ", typ, 0, links, size, created, modified)
     assert len(head) == 28
     body = head + struct.pack("<15I", *ptrs)          # bytes 0..87
-    tail = b"\x00" * 36                                # bytes 92..127
+    tail = struct.pack("<H", mode) + b"\x00" * 34     # bytes 92..127
     cksum = fnv1a(body + tail)
     return body + struct.pack("<I", cksum) + tail
+
+
+# **WHAT MAKES A SEEDED FILE EXECUTABLE.** There is no chmod yet, so a
+# program's exec bit can only come from here -- and without it `test -x
+# /bin/ls` answers no, which is worse than having no mode at all: a
+# wrong answer rather than an absent one. The two directories that hold
+# programs are named explicitly rather than guessed from content,
+# because "does this look like an ELF" is a question the seeder should
+# not be asking.
+EXEC_DIRS = ("/bin", "/tests")
+
+
+def mode_for(path, is_dir):
+    if is_dir:
+        return 0o755
+    d = path.rsplit("/", 1)[0] or "/"
+    for e in EXEC_DIRS:
+        if d == e or d.startswith(e + "/"):
+            return 0o755
+    return 0o644
 
 
 def parse_inode(raw: bytes):
@@ -224,10 +258,11 @@ def parse_inode(raw: bytes):
     size, created, modified = struct.unpack("<QQQ", raw[4:28])
     ptrs = list(struct.unpack("<15I", raw[28:88]))
     cksum = struct.unpack("<I", raw[88:92])[0]
+    mode = struct.unpack("<H", raw[92:94])[0]
     if fnv1a(raw[0:88] + raw[92:128]) != cksum:
         return None
     return dict(type=typ, links=links, size=size, created=created,
-                modified=modified, ptrs=ptrs)
+                modified=modified, ptrs=ptrs, mode=mode)
 
 
 # ---- the image ----------------------------------------------------------
@@ -828,7 +863,8 @@ def write_file(img, data, dst):
         ptrs[slot] = build_table(img, rest[:span], slot - 11, pg)
         rest = rest[span:]
     now = local_epoch()
-    img.write_inode(ino, pack_inode(TYPE_FILE, 1, len(data), now, now, ptrs))
+    img.write_inode(ino, pack_inode(TYPE_FILE, 1, len(data), now, now, ptrs,
+                                    mode_for(dst, False)))
     img.dir_insert(parent, name, ino)
     return ino
 

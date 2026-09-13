@@ -46,6 +46,18 @@ int main(int argc, char **argv) {
                  (unsigned long long)st.size);
         sys_print(buf);
     }
+    // Permission bits in octal, and whether they came off the DISK or
+    // are the default for the type -- the same distinction the inode
+    // line below draws, and for the same reason: a reader has to be
+    // able to tell a fact from a fallback.
+    snprintf(buf, sizeof buf, "  mode:     %04o%s\n", st.mode & 07777,
+             (st.flags & SYS_STAT_MODE) ? "" : " (default -- this "
+                                               "filesystem stores none)");
+    sys_print(buf);
+    if (st.nlink > 1) {
+        snprintf(buf, sizeof buf, "  links:    %u\n", (unsigned)st.nlink);
+        sys_print(buf);
+    }
     snprintf(buf, sizeof buf, "  inode:    %llu%s\n", (unsigned long long)st.ino,
              (st.flags & SYS_STAT_INODES) ? "" : " (synthetic)");
     sys_print(buf);

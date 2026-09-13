@@ -341,7 +341,7 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [x] ~~`sigprocmask`/`sigsuspend` -- the race-free wait in `jobs.c`'s `waitproc()`~~ DONE 2026-09-12
 - [x] ~~Measure the gap instead of listing it~~ DONE 2026-09-13 -- `tools/dash_gap.py` compiles the port and prints what is left
 - [ ] Ten headers tolibc does not have, `sys/param.h` and `sys/ioctl.h` the widest
-- [ ] `struct stat` + `stat`/`lstat`/`fstat` and the nine `S_IS*` -- 8 files, and TFS3 grows a MODE field for it
+- [x] ~~`struct stat` + `stat`/`lstat`/`fstat` and the nine `S_IS*`~~ DONE 2026-09-13 -- TFS3 stores a mode at inode offset 92
 - [ ] `fcntl` (`F_DUPFD`, `F_GETFL`/`F_SETFL`, `F_SETFD`, `FD_CLOEXEC`) -- `redir.c` and `input.c`
 - [ ] `#define SIGTTOU`, `SIGPIPE` and `NSIG`, and an IGNORABLE `SIGQUIT` -- dash only ever `SIG_IGN`s both
 - [ ] `uid_t`/`gid_t`, `geteuid`/`getegid`/`getgroups` -- stubs, this is a single-user OS

@@ -124,6 +124,14 @@ static inline int t3_range_fits(uint64_t offset, uint64_t len) {
 #define T3_TYPE_DIR     1u
 #define T3_TYPE_SYMLINK 2u
 
+// What a mode of zero means -- an inode written before this field
+// existed, which is most of them. Directories and symlinks are
+// traversable (0755), a plain file is readable and writable and NOT
+// executable (0644). The same values every Unix umask of 022 produces,
+// chosen so a disk seeded before the field behaves as it always did.
+#define T3_MODE_DEFAULT(type) \
+    ((type) == T3_TYPE_FILE ? 0644u : 0755u)
+
 // Deeper than any caller can currently express (every fs.h caller
 // holds FS_PATH_MAX=64 buffers), but the format has no path cap, so
 // this backend's own working buffer is roomier on purpose.
@@ -673,6 +681,19 @@ struct t3_inode {
     uint64_t size;
     uint64_t created, modified;
     uint32_t ptrs[15]; // 12 direct + single + double + triple
+    // **PERMISSION BITS, AND ZERO MEANS "NOT SET" RATHER THAN "NO
+    // ACCESS".** Stored at offset 92, inside the range the checksum has
+    // always covered (bytes 0..87 and 92..127) and which every version
+    // of this format has written as zero. That is what makes this an
+    // extension and not a format revision: an inode written by an older
+    // kernel reads back mode 0, and an inode written with a mode still
+    // validates against an older kernel's checksum, because that kernel
+    // already folds 92..127 in. No version bump, no migration, and
+    // T3_VERSION_MIN is untouched.
+    //
+    // A zero is answered with mode_default() at read time, so a disk
+    // that predates this field behaves exactly as it did.
+    uint16_t mode;
 };
 
 static int read_inode(uint64_t ino, struct t3_inode *out) {
@@ -693,6 +714,7 @@ static int read_inode(uint64_t ino, struct t3_inode *out) {
     out->created = rd64(p + 12);
     out->modified = rd64(p + 20);
     for (int i = 0; i < 15; i++) out->ptrs[i] = rd32(p + 28 + i * 4);
+    out->mode = rd16(p + 92);
     return 1;
 }
 
@@ -1466,6 +1488,7 @@ static void pack_inode_into(uint8_t *p, const struct t3_inode *node) {
     wr64(p + 12, node->created);
     wr64(p + 20, node->modified);
     for (int i = 0; i < 15; i++) wr32(p + 28 + i * 4, node->ptrs[i]);
+    wr16(p + 92, node->mode);   // see struct t3_inode -- inside the checksum
     uint8_t chk[124];
     k_memcpy(chk, p, 88);
     k_memcpy(chk + 88, p + 92, 36);
@@ -2784,6 +2807,10 @@ static int tfs3_stat(const char *path, struct fs_stat_info *out) {
         out->ino = ino;             // a real inode number -- FS_CAP_INODES
         out->created = node.created; // stored as epoch natively -- FS_CAP_EPOCH_TIME
         out->modified = node.modified;
+        // A zero on disk is an inode written before the field existed,
+        // not a file nobody may touch -- see struct t3_inode.
+        out->mode = node.mode ? node.mode : (uint16_t)T3_MODE_DEFAULT(node.type);
+        out->nlink = node.links;
     }
     return 1;
 }
@@ -2853,6 +2880,10 @@ static int create_entry_inner(const char *path, uint8_t type, uint64_t *out_ino)
     node.type = type;
     node.links = (type == T3_TYPE_DIR) ? 2 : 1;
     node.created = node.modified = now_epoch();
+    // A NEW inode records its mode explicitly rather than leaning on the
+    // read-time default, so that a later chmod has somewhere to write
+    // and so an inode's stored mode means what it says.
+    node.mode = T3_MODE_DEFAULT(type);
 
     if (type == T3_TYPE_DIR) {
         // The child's own dirent block: plain data until the inode
@@ -3748,7 +3779,8 @@ const struct fs_ops tfs3_ops = {
     // timestamps are live already; hardlinks/symlinks are carried by
     // the format (link counts, type 2) with their ops still to come --
     // see fs.h's FS_CAP_* comment on exactly this distinction.
-    .caps = FS_CAP_INODES | FS_CAP_HARDLINKS | FS_CAP_SYMLINKS | FS_CAP_EPOCH_TIME,
+    .caps = FS_CAP_INODES | FS_CAP_HARDLINKS | FS_CAP_SYMLINKS | FS_CAP_EPOCH_TIME |
+            FS_CAP_MODE,
     .volume_relative = 1, // all I/O is volume-relative through vol_read/vol_write -- mountable from a partition
     // MORE THAN ONCE, because every per-volume field is in struct
     // t3_state and the VFS makes one current per call. Two is what an

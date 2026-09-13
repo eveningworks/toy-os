@@ -1527,6 +1527,16 @@ static int fat32_stat(const char *path, struct fs_stat_info *out) {
     out->ino = e.cluster;
     out->created = fat_to_epoch(e.crt_date, e.crt_time);
     out->modified = fat_to_epoch(e.wrt_date, e.wrt_time);
+    // NO PERMISSION BITS (hence no FS_CAP_MODE), but FAT does carry a
+    // READ-ONLY attribute, and reporting it is strictly better than
+    // ignoring it: a caller asking "may I write this" gets the real
+    // answer where FAT has one. Everything else is the default for the
+    // type, the same shape Linux's vfat driver takes with its `fmask`
+    // and `dmask` mount options.
+    int ro = (e.attr & ATTR_READ_ONLY) != 0;
+    if (e.attr & ATTR_DIRECTORY) out->mode = ro ? 0555 : 0755;
+    else                             out->mode = ro ? 0444 : 0644;
+    out->nlink = 1;
     return 1;
 }
 

@@ -1370,11 +1370,23 @@ struct sys_stat {
     uint32_t flags;         // SYS_STAT_*
     struct rtc_time created;
     struct rtc_time modified;
+    // PERMISSION BITS, 0644/0755-shaped. Always meaningful: a backend
+    // whose format stores none reports the default for the type rather
+    // than zero, because a caller cannot act on "unknown" and every
+    // question worth asking has to have an answer. SYS_STAT_MODE says
+    // whether the number came off the disk -- the same distinction
+    // SYS_STAT_INODES draws for `ino`, and for the same reason.
+    uint16_t mode;
+    uint16_t nlink;         // hard links; 1 where the format has no count
 };
 
 // The inode number above is the filesystem's own, not a synthetic one.
 // Mirrors fs.h's FS_CAP_INODES for the one caller that needs to say so.
 #define SYS_STAT_INODES (1u << 0)
+
+// `mode` above came off the disk rather than being the default for the
+// type. Mirrors fs.h's FS_CAP_MODE.
+#define SYS_STAT_MODE   (1u << 3)
 
 // The next two are what SYS_FSTAT adds, and they are FLAGS rather than
 // new struct fields on purpose: a bare `is_tty` word would be a field

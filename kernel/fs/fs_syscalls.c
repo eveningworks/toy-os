@@ -471,6 +471,7 @@ int sys_stat(struct syscall_ctx *c) {
     out.is_dir = (uint32_t)(is_root || fs_is_dir(path));
     if (!out.is_dir) out.size = fs_size(path);
     if (fs_has(FS_CAP_INODES)) out.flags |= SYS_STAT_INODES;
+    if (fs_has(FS_CAP_MODE))   out.flags |= SYS_STAT_MODE;
 
     struct fs_stat_info st;
     if (fs_stat(path, &st)) {
@@ -479,9 +480,16 @@ int sys_stat(struct syscall_ctx *c) {
         // boundary, exactly as struct sys_dirent's `modified` does.
         cal_epoch_to_rtc(st.created, &out.created);
         cal_epoch_to_rtc(st.modified, &out.modified);
+        out.mode = st.mode;
+        out.nlink = st.nlink;
+    } else {
+        // THE IMPLICIT ROOT is the only path that reaches this, and it
+        // has no entry to carry anything. Its timestamps stay zero --
+        // the honest answer -- but a mode of zero would read as "nobody
+        // may enter /", so the directory default is reported instead.
+        out.mode = 0755;
+        out.nlink = 1;
     }
-    // Only the implicit root reaches fs_stat() failing, and its zeroed
-    // timestamps are the honest answer: it has no entry to carry any.
     if (!vmm_copy_to_user(c->pml4, c->a1, &out, sizeof out)) {
         klog_write("syscall: stat() rejected -- invalid output pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;

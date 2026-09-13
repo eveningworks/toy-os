@@ -59,11 +59,25 @@ typedef unsigned uid_t;
 typedef unsigned gid_t;
 #endif
 
+#ifndef __ULIB_STAT_TYPES
+#define __ULIB_STAT_TYPES
+// The <sys/stat.h> family. All are exactly as wide as the thing they
+// describe here and no wider -- dev_t is present and always 0 because
+// there are no device nodes, not because a device number is coming.
+typedef uint64_t ino_t;
+typedef uint64_t dev_t;
+typedef uint32_t nlink_t;
+typedef int32_t  blksize_t;
+typedef int64_t  blkcnt_t;
+#endif
+
 #ifndef __ULIB_MODE_T
 #define __ULIB_MODE_T
-// PRESENT AND MEANINGLESS: there are no permission bits on this
-// filesystem (docs/filesystem-layout.md). It is here so that a
-// signature carrying one compiles; nothing reads the value.
+// **THERE ARE PERMISSION BITS NOW** -- TFS3 stores a mode at inode
+// offset 92 and <sys/stat.h>'s st_mode reports it. What is still
+// accepted and ignored is the mode ARGUMENT to mkdir() and open(): a
+// file is created with the default for its type, because there is no
+// umask and no chmod to change it afterwards.
 typedef unsigned mode_t;
 #endif
 

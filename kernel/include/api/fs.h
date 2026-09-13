@@ -278,6 +278,14 @@ struct fs_stat_info {
     uint64_t ino;
     uint64_t created;
     uint64_t modified;
+    // PERMISSION BITS, in the usual octal shape (0644, 0755). A backend
+    // whose format has none reports the default for the type rather
+    // than zero: a caller cannot act on "unknown", and every question
+    // worth asking -- is it executable, may I write it -- has to have
+    // an answer. FS_CAP_MODE says whether the number came off the disk
+    // or was supplied.
+    uint16_t mode;
+    uint16_t nlink;   // hard links; 1 where the format has no count
 };
 
 // Fills *out with `path`'s identity + timestamps. Returns 1 on
@@ -299,6 +307,7 @@ int fs_stat(const char *path, struct fs_stat_info *out);
 #define FS_CAP_HARDLINKS  (1u << 1) // format carries link counts
 #define FS_CAP_SYMLINKS   (1u << 2) // format carries symlinks (resolution may still be unimplemented)
 #define FS_CAP_EPOCH_TIME (1u << 3) // timestamps stored as epoch natively, not converted at stat time
+#define FS_CAP_MODE       (1u << 4) // format stores permission bits (else stat reports a default)
 
 // The active backend's short name ("tfs3") -- diagnostic, for
 // df/fsck/about-style output. Valid after fs_init(); never NULL.

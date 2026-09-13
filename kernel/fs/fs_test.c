@@ -1235,3 +1235,27 @@ KTEST("fs", "a committed transaction that cannot be applied stops the writes") {
     KTEST_ASSERT(m != 0);
     KTEST_ASSERT((m->flags & MNT_RDONLY) != 0);
 }
+
+// The mode survives a write and a read -- which is the whole claim of
+// putting it at inode offset 92, inside a checksum range every earlier
+// version wrote as zero. A create stores the default for the type; the
+// round trip proves the field is not being silently dropped by
+// pack_inode_into()/read_inode().
+KTEST("fs", "a file's mode round-trips through the inode") {
+    const char *p = "/tmp_modetest.txt";
+    fs_delete(p);
+    KTEST_ASSERT(fs_write(p, "x", 1));
+    struct fs_stat_info st;
+    KTEST_ASSERT(fs_stat(p, &st));
+    KTEST_ASSERT_EQ(st.mode & 07777, 0644);
+    KTEST_ASSERT(st.nlink >= 1);
+
+    KTEST_ASSERT(fs_mkdir("/tmp_modedir"));
+    struct fs_stat_info d;
+    KTEST_ASSERT(fs_stat("/tmp_modedir", &d));
+    // A DIRECTORY MUST BE TRAVERSABLE. 0644 here would say otherwise.
+    KTEST_ASSERT_EQ(d.mode & 07777, 0755);
+
+    fs_delete(p);
+    fs_delete("/tmp_modedir");
+}

@@ -3368,8 +3368,28 @@ precisely so the producer can stop; here it keeps offering the same
 bytes and burns a core. That is still the one entry in this section that
 is a kernel behaviour change rather than a header.
 
-**`struct stat` REPORTS REAL FIELDS, AND TFS3 GROWS A MODE. Decided
-2026-09-13.** `sys/stat.h` refuses to have `stat()` at all,
+**`struct stat` REPORTS REAL FIELDS, AND TFS3 GREW A MODE. Decided and
+BUILT 2026-09-13.**
+
+**No format revision was needed, which was the surprise.** The inode's
+checksum has always covered bytes 0..87 AND 92..127, and every version
+wrote 92..127 as zero -- so a mode at offset 92 is an extension rather
+than a new version: an older kernel still validates the checksum because
+it already folds those bytes in, and reads mode 0, which it answers with
+its own default. `T3_VERSION_MIN` is untouched and no disk needs
+migrating.
+
+**The exec bit can only come from the seeder**, because there is no
+`chmod` yet. `tools/tfs3_writer.py` marks `/bin` and `/tests` 0755 and
+everything else 0644 -- named directories rather than guessed from
+content, since "does this look like an ELF" is not a question a seeder
+should ask. Without that, `test -x /bin/ls` would answer NO, which is a
+wrong answer rather than an absent one and worse than having no mode.
+
+**`ramfs` and FAT32 report a default rather than zero**, and do not
+claim `FS_CAP_MODE`. FAT32 does honour its READ-ONLY attribute, because
+it genuinely has one -- the same shape Linux's vfat driver takes with
+`fmask`/`dmask`. `sys/stat.h` refuses to have `stat()` at all,
 on the grounds that "a struct of invented zeroes lets ported code
 compile and then take wrong branches on `st_mode`". The objection is
 right about zeroes and wrong about invention: Linux's FAT driver

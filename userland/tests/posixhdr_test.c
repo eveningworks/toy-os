@@ -37,6 +37,7 @@
 #include <sys/param.h>
 #include <sys/resource.h>
 #include <sys/times.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>   // CLOCKS_PER_SEC, to compare against _SC_CLK_TCK
 
@@ -153,6 +154,53 @@ int main(void) {
     (void)spin;   // volatile keeps the loop; this quiets set-but-unused
     clock_t t1 = times(&tb);
     utest_check(t1 >= t0, "times' return value does not go backwards");
+
+    // --- <sys/stat.h> --------------------------------------------------
+    {
+        struct stat st;
+        utest_check(stat("/bin/ls", &st) == 0, "stat finds a program");
+        utest_check(S_ISREG(st.st_mode), "...and reports it as a regular file");
+        utest_check(!S_ISDIR(st.st_mode), "...and not a directory");
+        // THE EXEC BIT IS THE POINT. Without it `test -x /bin/ls` is a
+        // wrong answer rather than an absent one, which is worse.
+        utest_check((st.st_mode & 0111) != 0, "a /bin program is EXECUTABLE");
+        utest_check(st.st_size > 0, "a program has a size");
+        utest_check(st.st_uid == 0 && st.st_gid == 0,
+                    "uid/gid are 0 -- a single-user system, not a placeholder");
+        utest_check(st.st_blocks * 512 >= st.st_size,
+                    "st_blocks covers st_size, rounded up");
+        utest_check(st.st_atime == st.st_mtime,
+                    "there is no access time, and stat says so by mirroring mtime");
+
+        struct stat d;
+        utest_check(stat("/bin", &d) == 0 && S_ISDIR(d.st_mode),
+                    "a directory is a directory");
+        utest_check((d.st_mode & 07777) == 0755, "a directory is 0755");
+
+        struct stat f;
+        utest_check(stat("/etc/services.d/tosh", &f) == 0 &&
+                    (f.st_mode & 0111) == 0,
+                    "a data file is NOT executable");
+
+        utest_check(stat("/no/such/path", &st) == -1, "a missing path fails");
+        // lstat IS stat here and says so; checking they agree is what
+        // stops the two drifting into a false distinction. Written as
+        // two separate calls compared field by field -- an `||` here
+        // would make the check pass however lstat behaved.
+        struct stat a, b;
+        int ok = (stat("/bin/ls", &a) == 0) && (lstat("/bin/ls", &b) == 0);
+        utest_check(ok && a.st_ino == b.st_ino && a.st_mode == b.st_mode &&
+                    a.st_size == b.st_size,
+                    "lstat agrees with stat field for field");
+
+        FILE *fp = fopen("/bin/ls", "r");
+        if (fp) {
+            struct stat fs_;
+            utest_check(fstat(fileno(fp), &fs_) == 0 && S_ISREG(fs_.st_mode),
+                        "fstat works on an open descriptor");
+            fclose(fp);
+        }
+    }
 
     return utest_end();
 }

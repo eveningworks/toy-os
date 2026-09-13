@@ -668,6 +668,11 @@ static int ramfs_stat(const char *path, struct fs_stat_info *out) {
     out->ino = (uint64_t)idx;
     out->created = S->nodes[idx]->created;
     out->modified = S->nodes[idx]->modified;
+    // NO STORED MODE (hence no FS_CAP_MODE): this format has nowhere to
+    // put one. The default for the type is reported rather than zero,
+    // because a caller cannot act on "unknown" -- see fs.h.
+    out->mode = S->nodes[idx]->is_dir ? 0755 : 0644;
+    out->nlink = 1;
     return 1;
 }
 
