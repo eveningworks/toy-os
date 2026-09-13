@@ -172,10 +172,26 @@ void idt_init(void) {
     // CPU triple-faults and the machine reboots with nothing printed.
     idt_set_gate(8, isr_table[8], 1, 0x8E);
 
-    // Syscall gate needs DPL=3 (0xEE, not 0x8E) -- otherwise ring-3 code
+    // Syscall gate needs DPL=3 (0xEF, not 0x8F) -- otherwise ring-3 code
     // executing `int 0x80` gets a #GP instead of reaching the handler,
     // since a software interrupt's DPL is the *minimum* privilege
     // allowed to invoke it via the `int` instruction.
+    //
+    // **STILL AN INTERRUPT GATE (0xEE), AND THE TRAP GATE (0xEF) IS ONE
+    // LINE AWAY -- it was tried, and it is not ready.** The one bit is
+    // whether IF survives the syscall: an interrupt gate clears it for
+    // the whole call, so nothing (timer, keyboard, mouse) is serviced
+    // until it returns. Measured: one write(2) holds the CPU 19.6 ms
+    // that way, and compositor wake latency goes 2.3 ms -> 12.2 ms
+    // under disk load.
+    //
+    // Flipping it breaks two win_input KTESTs -- a ring-3 process that
+    // must block in SYS_WAIT_EVENT / SYS_WAIT_READY misses its deadline
+    // (736 pass at 0xEE, 734 at 0xEF, measured both ways). The cause is
+    // NOT established; scheduler.c's block_common() names one hazard
+    // this reopens (the removed "refuse to park a process with a signal
+    // pending" check) but nothing ties it to these two tests yet.
+    // docs/roadmap-details.md has what is known.
     idt_set_gate(128, isr128, 0, 0xEE);
 
     idtp.limit = sizeof(idt) - 1;

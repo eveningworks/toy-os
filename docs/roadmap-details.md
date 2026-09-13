@@ -4577,6 +4577,52 @@ It unlocks three things below it: a real sleeping lock in place of the
 FS preemption guard, bounding how long a frame can block on I/O, and
 `hlt`-based waiting inside a syscall instead of polling.
 
+**The preparatory work is DONE and the flip is NOT. Measured
+2026-09-13.**
+
+Three things landed first, each shipping on its own: `isr_dispatch()`
+keeps its resume pointer per call, so a nested IRQ cannot clobber an
+outer syscall's frame; `heap_os_lock()` is real in ring 0, so a tick
+landing mid-`kmalloc` cannot hand the free list to a second walker; and
+`query.c` guards its providers' file-scope state at the one place every
+caller passes through. Two more sites that say "the kernel is
+single-threaded" were audited and need nothing -- `completion.c` because
+it is compiled twice and each ring has its own statics, `tunables.c`
+because every writer puts identical bytes in the buffer.
+
+**Then the gate was flipped to `0xEF` and two KTESTs went red**, both in
+`win_input_test.c`: a ring-3 process that must block in
+`SYS_WAIT_EVENT`, and `SYS_WAIT_READY`'s timed wait. Both miss their
+deadline. Measured both ways on the same tree -- 736 pass at `0xEE`,
+734 at `0xEF` -- so it is the flip and not a pre-existing flake. The
+suite also runs 35% slower with it on (42.9s against 31.7s), which is
+not yet explained either.
+
+**The cause is NOT established, and one candidate is already written
+down.** `scheduler.c`'s `block_common()` records a guard that was
+removed after a positive control showed it reddened nothing -- "refuse
+to park a process with a signal pending" -- and says in as many words
+that preemptible syscalls are WHAT WOULD BRING IT BACK. That is a
+named, pre-identified consequence of this exact change. What is missing
+is any evidence tying it to these two tests, which are about blocking
+and waking rather than about signals. The cheap discriminating check
+has not been run.
+
+**What the flip is expected to buy, and what it is not.** It stops
+interrupts being masked for ~20 ms at a stretch, so keyboard, mouse and
+timer IRQs are serviced DURING a long syscall. It does not let the
+compositor be SCHEDULED any sooner: `FS_OP()` still holds preemption off
+for a whole backend call. That is the sleeping-lock item, and it is why
+`ata.c` waiting on its DMA IRQ cannot simply deschedule -- inside an
+`FS_OP` a yield has nothing to yield to. `sti; hlt` is what is available
+there until the lock lands.
+
+**The baseline to beat**, taken on KVM with `--cpu host,+invtsc` before
+any of this: compositor `work` avg 163 -> 701 us quiet to loaded, `wake`
+avg 2266 -> 12199 us with a 27939 us max, `ping` avg 9934 -> 15466 us.
+Per-syscall stalls: `write` 19654 us max, `unlink` 16365, `open` 13867
+with a 7107 average.
+
 See `docs/decisions.md`'s entry on why `FS_OP()` is not a sleeping lock,
 which records the full measurement -- including that a spin lock inside a
 syscall would deadlock rather than merely wait.
