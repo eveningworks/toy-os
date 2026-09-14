@@ -73,6 +73,17 @@ struct tosh {
 
 void tosh_init(struct tosh *sh, tosh_out_fn out, void *ctx);
 
+// **A FAILED LINE EXITS LIKE A SHELL, IN 0..255.** 127 is "no such
+// command" and 126 "found but not runnable" in every Bourne descendant;
+// 2 is a syntax error and 1 an ordinary shell error. They were a bare
+// -1, which `tosh -c` handed to the kernel as its exit code -- and a
+// negative one there is PROCESS_CRASHED, so a mistyped command reported
+// the shell as having faulted.
+#define TOSH_ST_ERROR      1
+#define TOSH_ST_SYNTAX     2
+#define TOSH_ST_NOEXEC   126
+#define TOSH_ST_NOTFOUND 127
+
 // Runs one command line. Builtins are handled in-process; anything else
 // is looked up on PATH and SPAWNED, with its stdout piped back through
 // the sink. Returns the command's exit status (0 for builtins).

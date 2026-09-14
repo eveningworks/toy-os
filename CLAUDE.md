@@ -990,7 +990,7 @@ whenever a headline here tells you something you did not already know.
 - **CTRL-R IS ONE LOOP, COMPILED TWICE, AND HISTORY IS APPENDED**
 - **RING-3 HISTORY PERSISTS, AND IT APPENDS RATHER THAN REWRITING**
 - **TAB COMPLETION IN COMMAND POSITION IS BUILTINS PLUS ALL OF `PATH`, DEDUPLICATED AND SORTED, WITH NO DIRECTORIES.**
-- **`/bin/tosh -c <command>` RUNS ONE LINE AND EXITS**
+- **`/bin/tosh -c <command>` RUNS ONE LINE AND EXITS, WITH A SHELL'S EXIT STATUS** -- 127 not found, 126 not runnable, 2 unparseable; a NEGATIVE one reaches the kernel as `PROCESS_CRASHED`
 - **`#` IS RING 0 AND `$` IS RING 3, AND THE PROMPT IS WHERE THAT LIVES**
 - **A COMMAND LINE IS NOT A PATH, AND SIZING IT LIKE ONE TRUNCATES IT**
 - **A BUILTIN MUST NOT SHADOW A `/bin` PROGRAM THAT DOES MORE**
@@ -1008,7 +1008,7 @@ whenever a headline here tells you something you did not already know.
 - **RING 3 CAN READ THE CONSOLE -- fd 0, and it BLOCKS.**
 - **A QMP TEST THAT TYPES PUNCTUATION MUST PIN THE GUEST'S KEYBOARD LAYOUT.**
 - **RING 0's BLOCKING KEYBOARD READERS ARE SUSPENDED WHILE A COMPOSITOR HOLDS THE ROLE**
-- **QUOTING IS DECIDED IN ONE LEXER, AND A QUOTED WORD SURVIVES THE SPAWN ONLY BECAUSE THE SPAWN CARRIES A VECTOR** -- test quoting by reading the child's `argv`, never the shell's parse
+- **QUOTING IS DECIDED TWICE -- tosh's LEXER AND THE KERNEL'S SPLIT OF THE STRING FORM -- AND THE TWO MUST AGREE** -- the `#` shell has no lexer and spawns a string, so `elf_argv_from_string()` resolves quotes by tosh's rules and REFUSES an unterminated one; test quoting by reading the child's `argv`, never the shell's parse
 
 ### The build, the userland layout, and releases
 

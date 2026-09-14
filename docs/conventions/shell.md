@@ -553,6 +553,14 @@ works as typed. A real shell takes `argv[2]` alone and gives the rest to
 `$0`/`$1`..., but there are no positional parameters here to give them
 to, and silently dropping them would be worse than joining them.
 
+**ITS EXIT STATUS IS A SHELL'S, IN 0..255** (`TOSH_ST_*` in
+`userland/lib/tosh.h`): 127 for a command that was not found, 126 for
+one that would not start, 2 for a line that would not parse, 1 for a
+shell error, otherwise the command's own. They were a bare -1, and a
+NEGATIVE exit code means `PROCESS_CRASHED` to the kernel -- so a
+mistyped command at a `#` prompt reported `tosh: exit CRASHED` and read
+as a fault in the shell.
+
 ## `#` IS RING 0 AND `$` IS RING 3, AND THE PROMPT IS WHERE THAT LIVES.
 
 Three shells run on this machine: the kernel's own (`apps/shell.c`,
@@ -834,23 +842,43 @@ the arrangement every multi-window bash user ends up with. Nothing trims
 the file, and nothing needs to: `uhist_load()` streams it and the ring
 keeps the last `UHIST_MAX` lines for free.
 
-## QUOTING IS DECIDED IN ONE LEXER, AND A QUOTED WORD SURVIVES THE SPAWN ONLY BECAUSE THE SPAWN CARRIES A VECTOR
+## QUOTING IS DECIDED TWICE -- tosh's LEXER AND THE KERNEL'S SPLIT OF THE STRING FORM -- AND THE TWO MUST AGREE
 
 `/bin/tosh` splits a line ONCE (`lex()` in `userland/lib/tosh.c`) into
-words and operators, and quoting is resolved there and nowhere else:
-`"a b"` and `'a b'` are one word, `\ ` is a space, a quoted `|` or `>`
-is a character. Everything after -- redirections, pipeline stages, `&`,
-the command word -- works on that list. It replaced three scans of the
-raw string, each of which would have had to learn quoting on its own
-and drifted. dash and bash have the same shape.
+words and operators, and quoting is resolved there for everything that
+shell runs: `"a b"` and `'a b'` are one word, `\ ` is a space, a quoted
+`|` or `>` is a character. Everything after -- redirections, pipeline
+stages, `&`, the command word -- works on that list. It replaced three
+scans of the raw string, each of which would have had to learn quoting
+on its own and drifted. dash and bash have the same shape.
 
 **THE TRAP IS THAT THE LEXER ALONE CHANGES NOTHING THE PROGRAM CAN
-SEE.** `SYS_SPAWN`'s string form is re-split by the kernel on spaces,
-so a shell that quoted perfectly and then joined its words back into a
-string handed `echo "a b"` two arguments, exactly as before. The shell
-spawns with `sys_spawn_opts.argv` -- the vector, `SPAWN_ARGV` -- and a
-test of quoting must read the child's `argv`, not the shell's parse
+SEE.** A shell that quotes perfectly and then joins its words back into
+a string has undone its own work, so tosh spawns with
+`sys_spawn_opts.argv` -- the vector, `SPAWN_ARGV` -- and a test of
+quoting must read the child's `argv`, not the shell's parse
 (`/tests/argv_test` does, through a pipe).
+
+**AND THE STRING FORM HONOURS THE SAME RULES, because its caller has no
+lexer.** `SYS_SPAWN`'s string form is split by
+`elf_argv_from_string()` (`kernel/proc/elf_run.c`), the one place that
+happens, and the ring-0 `#` shell is what spawns through it -- it has no
+lexer of its own and is not getting one. A split on spaces alone meant
+`tosh -c 'echo hi'` typed at `#` arrived as `'echo` and `hi'`, was
+rejoined by tosh and looked up as a program named `echo hi`; `rm "my
+file"` was two arguments the same way. So the split resolves quotes by
+tosh's rules, and an unterminated quote FAILS the spawn rather than
+inventing a word. That is Windows' shape -- `CommandLineToArgvW` splits
+a command line at the edge -- and deliberately not POSIX's, which has
+no string form for the kernel to split; `docs/decisions/kernel.md` has
+why toy-os keeps one.
+
+**THE COST IS TWO IMPLEMENTATIONS OF ONE RULE**, which is exactly the
+shape this project usually refuses. What keeps them equal is that both
+answer the same cases: `/tests/argv_test` drives the string form and
+the vector form through one probe, and `kernel/proc/elf_test.c` checks
+the splitter directly. Add a quoting rule to one and the other's cases
+are where it shows.
 
 Two limits worth knowing. An operator needs no spaces now (`ls >f`),
 and `&` is still trailing-only -- `a & b` is refused, not half-run,

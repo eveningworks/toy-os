@@ -37,7 +37,6 @@ it has exonerated one this session and convicted another.
 
 ## Intermittent -- a rate, not a verdict
 
-- [ ] **`/bin/tosh -c '<two or more words>'` DOES NOT PARSE THE STRING, AND THEN CRASHES.** `tosh -c pwd` works; `tosh -c 'echo hi'` prints `echo hi: not found` -- so the whole string was looked up as a PROGRAM NAME rather than parsed as a command line -- and the shell then exits CRASHED. Measured 2026-09-13 and confirmed PRE-EXISTING against HEAD, which fails identically. Two bugs in one reproduction: the `-c` contract (`docs/conventions/shell.md` says it runs one line) is not honoured for a multi-word line, and whatever happens after the failed lookup is a fault rather than an exit. It is reachable from the kernel shell (`tosh -c '...'`) and from anything embedding a shell that way; `docs/commands/tosh.md`'s own example uses the quoted form
 - [ ] **`font_test.py` GETS WORSE THE MORE YOU RUN IT, on one build and one disk: 6 failures, then 11, then 12 on three consecutive runs.** Measured 2026-09-13. On a FRESH image it is 5 on HEAD and 6 on the working tree, so a single-run comparison between two builds says nothing -- the variance swamps any real difference, and `predates.py` (one run per side) cannot decide it either. The failing set is the same either way and is about faces, kerning, bold and the rasterizer's hash, not about anything a given change touched. It looks like accumulated state: this tool changes font settings and does not put them all back, which is the hazard CLAUDE.md records for `settings_test`'s mouse values. What would settle it is making the tool restore every setting it applies and then re-measuring the three-run sequence; until then treat a font_test count as meaningless unless it came from a fresh image
 - [ ] **`console_shell_test.py`'s "`ps` says the shell is waiting for its CHILD" FAILS ABOUT 4 RUNS IN 9.** Measured 2026-09-13 across a single session: red on the first run, red again inside `predates.py`'s working-tree pass (which called it `YOURS` on one run per side -- it is not, see below), then 3 green in a row, then red, green, red. The detail is always the same shape: `ps` reports `tosh` as `ready` where the check wants it blocked. It is a RACE by construction -- a single `ps` sampled at a moment when the shell may not yet have parked -- rather than a wrong answer, which is why one run per side cannot decide it. NOT attributable to that session's changes: it was red before the session work landed and `HEAD` passed only a single run, so neither side is measured. What would settle it is `flake_hunt.py` over the one tool, and either polling until the state settles or asserting on something that is not a sampled instant
 - [ ] **`filemanager_test.py`'s "dropping on the tree's row for the other directory moves the file there" FAILS 2 FRESH-IMAGE RUNS IN 3.** Detail `hit_dst=False row=3 last_drop=None src=['deep', 'g1.txt', 'g2.txt'] dst=['g0.txt', 'g1.txt']`, byte-identical in the 2 red runs of 3 on 2026-09-11 (the third passed all 142; 141 of 142 around it otherwise), and noted red earlier the same day in the ISR-depth entry, before the harness rewrite that day -- so PRE-EXISTING, though not measured against a specific earlier commit. `last_drop=None` says the app never reported a drop target for the tree row the drag was released on: either the drag session never reached the tree widget or the tree's `drop` op did not fire. Every other drag check in the tool passes. Cause NOT established; `userland/ui/uui_tree.c`'s drag_over/drop ops and the router's session in `uui_route.c` are where to start
@@ -304,9 +303,11 @@ Reproduce: `python3 tools/vm.py --disk <copy> start && python3 tools/taskbar_tes
 
 `usertest_run.py` reports 49/51 with `errno_test: FAIL dup() fails with
 a full table` and `focusring_test` missing its pass line. Measured 2 of
-3 boots at commit 64f098e9 and 2 of 4 with the storage work applied --
-the same rate and the same two tests, so PRE-EXISTING rather than
-introduced. Cause not established; the `dup()` check depends on how
+3 boots at commit 64f098e9, 2 of 4 with the storage work applied, and 3
+of 6 again on 2026-09-14 -- the same two tests every time, so
+PRE-EXISTING rather than introduced. `errno_test` run on its own passed
+4 of 4 in the same session, so it needs the rest of the suite ahead of
+it. Cause not established; the `dup()` check depends on how
 many descriptor tables the boot has already handed out, which is not
 something the test establishes for itself.
 

@@ -19,21 +19,46 @@
 // scheduler's build the SAME ring-3 layout, and used to say so in two
 // places with nothing keeping them equal.
 
+// **THE QUOTING RULES ARE tosh's, AND THE TWO MUST STAY EQUAL** --
+// `'...'` literal, `"..."` with a backslash escaping only `"` and `\`,
+// `\x` outside quotes literal, an empty quoted word a real empty
+// argument (userland/lib/tosh.c's lex()). An UNTERMINATED quote is
+// REFUSED, so a caller gets a failed spawn rather than a word nobody
+// typed. `userland/tests/argv_test.c` drives both forms through one
+// probe, which is what keeps them from drifting.
 int elf_argv_from_string(const char *path, const char *args, char *out, size_t cap,
                          size_t *out_len) {
     size_t n = k_strlen(path);
     if (n + 1 > cap) return 0;
     k_memcpy(out, path, n + 1);
     n++;
-    if (args) {
-        const char *p = args;
-        while (*p) {
-            while (*p == ' ') p++;
-            if (!*p) break;
-            while (*p && *p != ' ') {
-                if (n + 2 > cap) return 0;
-                out[n++] = *p++;
+    for (const char *p = args; p && *p; ) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        int word = 0;   // a quoted empty word is still a word
+        while (*p && *p != ' ') {
+            char q = *p;
+            if (q == '\\') {
+                if (!p[1]) return 0;        // nothing after the backslash
+                p++;
+            } else if (q == '\'' || q == '"') {
+                p++;
+                while (*p && *p != q) {
+                    if (q == '"' && *p == '\\' && (p[1] == '"' || p[1] == '\\')) p++;
+                    if (n + 2 > cap) return 0;
+                    out[n++] = *p++;
+                }
+                if (!*p) return 0;          // unterminated quote
+                p++;
+                word = 1;
+                continue;
             }
+            if (n + 2 > cap) return 0;
+            out[n++] = *p++;
+            word = 1;
+        }
+        if (word) {
+            if (n + 1 > cap) return 0;   // the empty quoted word's own NUL
             out[n++] = '\0';
         }
     }

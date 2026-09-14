@@ -52,6 +52,7 @@
 #include "pmm.h"
 #include "uaddr.h"
 #include "string.h"
+#include "elf_run.h"   // elf_argv_from_string -- the string form's split
 
 #define EI_NIDENT 16
 
@@ -373,4 +374,78 @@ KTEST("elf", "a refused file leaks no frames") {
 
     KTEST_ASSERT_EQ(rc, 0);
     KTEST_ASSERT_EQ(after, before);
+}
+
+// --- the string form's split -------------------------------------------
+//
+// elf_argv_from_string() is the ONE place a spawn's string form becomes
+// a vector, and the ring-0 shell is what spawns through it -- so these
+// ARE the quoting rules of a `#` prompt, and they must equal tosh's
+// (userland/lib/tosh.c's lex()). Each case names the whole vector after
+// argv[0], NULs included, because "it split into 2 words" would pass on
+// the wrong two.
+//
+// POSITIVE CONTROL, run when these were written: the splitter as it was
+// before quotes, a plain run of non-space characters. Measured -- SEVEN
+// of the eight go red and "splits on spaces" stays green, which is the
+// point of keeping that one: it is the behaviour quoting had to leave
+// alone.
+#define SPLIT_ARGV0 "/bin/p"
+
+static int split_is(const char *args, const char *expect, size_t expect_len) {
+    char out[256];
+    size_t len = 0;
+    if (!elf_argv_from_string(SPLIT_ARGV0, args, out, sizeof out, &len)) return 0;
+    size_t head = sizeof(SPLIT_ARGV0);              // argv[0] and its NUL
+    if (len != head + expect_len) return 0;
+    return k_memcmp(out + head, expect, expect_len) == 0;
+}
+
+static int split_refused(const char *args) {
+    char out[256];
+    size_t len = 0;
+    return !elf_argv_from_string(SPLIT_ARGV0, args, out, sizeof out, &len);
+}
+
+#define SPLIT_IS(args, expect) split_is(args, expect, sizeof(expect) - 1)
+
+KTEST("elf", "the string form splits on spaces") {
+    KTEST_ASSERT(SPLIT_IS("one  two", "one\0two\0"));
+    KTEST_ASSERT(SPLIT_IS("", ""));
+    KTEST_ASSERT(SPLIT_IS(0, ""));
+}
+
+KTEST("elf", "a quoted space is one argument") {
+    // `tosh -c 'echo hi'` at a `#` prompt: the quotes used to reach the
+    // child as characters, so the whole line became one word and was
+    // looked up as a program name.
+    KTEST_ASSERT(SPLIT_IS("'a b' c", "a b\0c\0"));
+    KTEST_ASSERT(SPLIT_IS("\"a b\" c", "a b\0c\0"));
+}
+
+KTEST("elf", "quotes join the word they sit in") {
+    KTEST_ASSERT(SPLIT_IS("a'b c'd", "ab cd\0"));
+}
+
+KTEST("elf", "an empty quoted word is a real empty argument") {
+    KTEST_ASSERT(SPLIT_IS("\"\" x", "\0x\0"));
+}
+
+KTEST("elf", "a backslash escapes the next character") {
+    KTEST_ASSERT(SPLIT_IS("a\\ b", "a b\0"));
+    KTEST_ASSERT(SPLIT_IS("\"a\\\"b\"", "a\"b\0"));
+}
+
+KTEST("elf", "a quote is literal inside the other kind") {
+    KTEST_ASSERT(SPLIT_IS("'a\"b'", "a\"b\0"));
+}
+
+KTEST("elf", "an unterminated quote is refused, not guessed at") {
+    KTEST_ASSERT(split_refused("'oops"));
+    KTEST_ASSERT(split_refused("\"oops"));
+    KTEST_ASSERT(split_refused("ok 'oops"));
+}
+
+KTEST("elf", "nothing after a backslash is refused") {
+    KTEST_ASSERT(split_refused("a\\"));
 }

@@ -8,12 +8,16 @@
 //   argv_test             the self-check: spawns the probe four ways
 //                         through a pipe and reads back what arrived.
 //
-// WHAT EACH SPAWN DISCRIMINATES. The string form must still split, or
-// every existing caller changed behaviour; the vector form must carry a
-// space and an EMPTY argument, which the string form cannot express at
-// all; and /bin/tosh must turn quotes into one argument, which proves
-// the lexer AND that it spawns with the vector -- a lexer over the
-// string form would pass a shell test that only looked at the parse.
+// WHAT EACH SPAWN DISCRIMINATES. The string form must still split on
+// spaces, or every existing caller changed behaviour, and it must
+// HONOUR QUOTES -- it is what the ring-0 shell spawns through, and that
+// shell has no lexer of its own. The vector form must carry a space and
+// an empty argument without any quoting at all. And /bin/tosh must turn
+// quotes into one argument, which proves the lexer AND that it spawns
+// with the vector -- a lexer over the string form would pass a shell
+// test that only looked at the parse. The two splitters answer the SAME
+// cases here on purpose (kernel/proc/elf_run.c says so too): they are
+// separate implementations of one set of rules.
 // The last spawn is the control the others need: a quoted operator
 // that must NOT be an operator, so a lexer that unquoted after
 // splitting would fail it.
@@ -72,6 +76,18 @@ int main(int argc, char **argv) {
     utest_check(n > 0, "string-form spawn ran");
     utest_check(strcmp(out, "argc=3\n[one]\n[two]\n") == 0,
                 "the string form splits into two arguments");
+
+    // 1b. AND IT HONOURS QUOTES. This is the `#` prompt's quoting:
+    //     `tosh -c 'echo hi'` typed there used to arrive as two words,
+    //     rejoined into one, and looked up as a program name.
+    n = collect(PROBE, "'a b' \"c d\" e\\ f \"\" plain", 0, out, sizeof out);
+    utest_checkf(strcmp(out, "argc=6\n[a b]\n[c d]\n[e f]\n[]\n[plain]\n") == 0,
+                 "the string form: quotes and a backslash each make one argument (got %s)", out);
+
+    // 1c. An unterminated quote is REFUSED at the edge -- the spawn
+    //     fails rather than running a word nobody typed.
+    n = collect(PROBE, "'oops", 0, out, sizeof out);
+    utest_check(n < 0, "the string form: an unterminated quote is refused");
 
     // 2. The vector form carries a space and an empty argument.
     char *const vec[] = { "argv_test", "a b", "", "c", 0 };

@@ -7468,3 +7468,44 @@ a signal arriving between the two is lost, and the process sleeps
 forever. One syscall, with interrupts off across both the check and the
 park, is what closes that window -- the same argument that makes
 `scheduler_block_current()` safe against an IRQ pushing an event.
+
+## The spawn's string form splits with quotes, because its caller has no lexer
+
+`SYS_SPAWN` takes arguments two ways: a VECTOR (`SPAWN_ARGV`), which a
+ring-3 shell builds after its own lexer has run, and a STRING, which
+`elf_argv_from_string()` splits into a vector at the edge. The string
+form split on spaces and nothing else, which made a quoted argument
+impossible to express through it -- `tosh -c 'echo hi'` typed at a `#`
+prompt arrived as `'echo` and `hi'`, was rejoined by tosh into one word
+and looked up as a program named `echo hi`.
+
+Linux has no such decision to make: `execve` takes a vector, the kernel
+splits nothing, and every quoting rule lives in the shell. Windows does
+the opposite -- `CreateProcess` takes a command LINE, and the callee's
+runtime splits it (`CommandLineToArgvW`), which is why quoting rules on
+Windows are a property of the C runtime rather than of `cmd.exe`.
+
+toy-os keeps both forms, so it had to pick where the string form's
+quoting lives, and there are only two answers:
+
+- **Give the ring-0 shell a lexer** and always spawn a vector. It is the
+  POSIX shape and it puts the rule in one place -- but the ring-0 shell
+  is the `rescue` target, deliberately shrinking, and this would grow it
+  by the one piece of code the ring-3 shell exists to own.
+- **Split with quotes at the edge**, Windows' shape. One function, no
+  new state, and it fixes every string-form caller at once: `rm "my
+  file"` at `#` now means what it says.
+
+The second, with the cost stated rather than hidden: there are now TWO
+implementations of one set of rules, and this project's usual answer to
+that is a shared case table (`kfmt_cases.h`, `klineedit_cases.h`). A
+table is not workable here -- tosh's lexer also produces operators and a
+word array, and the kernel's produces a NUL-separated vector -- so what
+keeps them equal is that both answer the same CASES:
+`userland/tests/argv_test.c` drives the string form and the vector form
+through one probe, and `kernel/proc/elf_test.c` checks the splitter
+directly, with the same inputs.
+
+An unterminated quote is REFUSED rather than guessed at, so the spawn
+fails and nothing runs -- the same rule every other parser here follows.
+The caller sees a failed spawn, which is what the `#` shell reports.

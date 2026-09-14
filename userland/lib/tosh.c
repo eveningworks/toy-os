@@ -304,6 +304,14 @@ static void job_backgrounded(struct tosh *sh, int pgid, const int *pids,
     emit(sh, "\n");
 }
 
+// Defined below, beside the other command-resolution helpers; declared
+// here because run_external() is above them and both spawn sites use
+// the same one (see spawn_or_script()).
+static int uaccess_ok(const char *path);
+static const char *tosh_script_shell(char *buf, size_t cap);
+static int spawn_or_script(const char *path, const char *const *argv, int argc,
+                           struct sys_spawn_opts *o);
+
 static int run_external(struct tosh *sh, const char *path, const char **argv,
                         const char *label, int background) {
 
@@ -339,8 +347,14 @@ static int run_external(struct tosh *sh, const char *path, const char **argv,
     o.env = environ;
     o.pgid = PGID_NEW;
     o.flags = background ? 0 : SPAWN_FOREGROUND;
-    int pid = sys_spawn_opts(path, &o);
-    if (pid < 0) return -1;
+    int argc_n = 0;
+    while (argv[argc_n]) argc_n++;
+    int pid = spawn_or_script(path, (const char *const *)argv, argc_n, &o);
+    if (pid < 0) {                        // it is there; it would not start
+        emit(sh, argv[0]);
+        emit(sh, ": cannot execute\n");
+        return TOSH_ST_NOEXEC;
+    }
     int pgid = sys_getpgid(pid);
 
     // **A BACKGROUND JOB IS NOT GIVEN THE TERMINAL, AND THAT IS THE
@@ -419,8 +433,8 @@ static int bi_fg(struct tosh *sh, const char *args) {
     struct tosh_job *job = tosh_jobs_get(id);
     if (!job) {
         emit(sh, "fg: no such job\n");
-        sh->last_status = -1;
-        return -1;
+        sh->last_status = TOSH_ST_ERROR;
+        return TOSH_ST_ERROR;
     }
 
     // Copied out before anything can invalidate the entry -- job_wait()
@@ -468,8 +482,8 @@ static int bi_bg(struct tosh *sh, const char *args) {
     struct tosh_job *job = tosh_jobs_get(id);
     if (!job) {
         emit(sh, "bg: no such job\n");
-        sh->last_status = -1;
-        return -1;
+        sh->last_status = TOSH_ST_ERROR;
+        return TOSH_ST_ERROR;
     }
     if (!job->stopped) {
         emit(sh, "bg: job is already running\n");
@@ -637,6 +651,40 @@ full:
     return -1;
 }
 
+// Spawns `path`, and if it is not a program HANDS IT TO A SHELL.
+//
+// **POSIX, not a nicety.** execve() answers ENOEXEC for a file with
+// neither a `#!` nor an ELF header, and every shell responds by
+// interpreting it -- which is why `./script.sh` runs everywhere without
+// a shebang. This shell cannot interpret anything (no control flow), so
+// it hands the file to the configured one. Only when the file EXISTS,
+// so a typo still reports "not found" rather than starting a shell on
+// nothing.
+//
+// ONE function because there are two spawn sites -- run_external() for
+// a simple command and run_pipeline() for a stage -- and a fallback in
+// only one of them is what shipped first: `/hw.sh` worked in a pipeline
+// and not on its own.
+static int spawn_or_script(const char *path, const char *const *argv, int argc,
+                           struct sys_spawn_opts *o) {
+    int pid = sys_spawn_opts(path, o);
+    if (pid > 0 || !uaccess_ok(path)) return pid;
+
+    const char *sh_argv[TOSH_WORD_MAX + 2];
+    char shbuf[128];
+    sh_argv[0] = tosh_script_shell(shbuf, sizeof shbuf);
+    sh_argv[1] = path;
+    int n = 2;
+    for (int k = 1; k < argc && n < TOSH_WORD_MAX + 1; k++) sh_argv[n++] = argv[k];
+    sh_argv[n] = 0;
+
+    char *const *saved = o->argv;
+    o->argv = (char *const *)sh_argv;
+    pid = sys_spawn_opts(sh_argv[0], o);
+    o->argv = saved;
+    return pid;
+}
+
 // Does this path name a file this shell could hand to an interpreter?
 // Existence only: the kernel decides whether it is executable, and
 // asking twice would be a second answer to drift from the first.
@@ -774,8 +822,8 @@ static int run_simple(struct tosh *sh, const char **argv, int argc,
     if (background && stage_is_builtin(cmd)) {
         emit(sh, cmd);
         emit(sh, ": cannot be backgrounded -- it runs inside this shell\n");
-        sh->last_status = -1;
-        return -1;
+        sh->last_status = TOSH_ST_ERROR;
+        return TOSH_ST_ERROR;
     }
 
     if (seq(cmd, "cd"))   { bi_cd(sh, arg1);  return 0; }
@@ -813,8 +861,8 @@ static int run_simple(struct tosh *sh, const char **argv, int argc,
         } else {
             emit(sh, ": not found\n");
         }
-        sh->last_status = -1;
-        return -1;
+        sh->last_status = TOSH_ST_NOTFOUND;
+        return TOSH_ST_NOTFOUND;
     }
 
     int code = run_external(sh, path, argv, label, background);
@@ -865,7 +913,10 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
         prev_read = -1;
         if (i < n - 1) {
             int fds[2];
-            if (sys_pipe(fds) != 0) { emit(sh, "tosh: out of pipes\n"); return -1; }
+            if (sys_pipe(fds) != 0) {
+                emit(sh, "tosh: out of pipes\n");
+                return TOSH_ST_ERROR;
+            }
             st[i].out_fd = fds[1];
             prev_read = fds[0];
         }
@@ -903,29 +954,7 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
         o.env = environ;
         o.pgid = job_pgid > 0 ? job_pgid : PGID_NEW;
         o.flags = job_pgid > 0 || background ? 0 : SPAWN_FOREGROUND;
-        st[i].pid = sys_spawn_opts(path, &o);
-
-        // **A FILE THAT IS NOT A PROGRAM IS RUN BY A SHELL, and that is
-        // POSIX rather than a nicety.** execve() answers ENOEXEC for a
-        // file with no `#!` and no ELF header, and every shell responds
-        // by interpreting it -- which is why `./script.sh` works
-        // everywhere without a shebang. This shell cannot interpret
-        // anything (it has no control flow), so it hands the file to
-        // the configured one; `system.shell` names it.
-        //
-        // Tried only when the file EXISTS, so a genuine typo still
-        // reports "not found" rather than starting a shell on nothing.
-        if (st[i].pid <= 0 && uaccess_ok(path)) {
-            const char *sh_argv[TOSH_WORD_MAX + 2];
-            char shbuf[128];
-            sh_argv[0] = tosh_script_shell(shbuf, sizeof shbuf);
-            for (int k = 0; k < argc && k < TOSH_WORD_MAX; k++)
-                sh_argv[k + 1] = (k == 0) ? path : argv[k];
-            sh_argv[argc + 1] = 0;
-            o.argv = (char *const *)sh_argv;
-            st[i].pid = sys_spawn_opts(sh_argv[0], &o);
-            o.argv = (char *const *)argv;
-        }
+        st[i].pid = spawn_or_script(path, argv, argc, &o);
 
         // **AND A FAILURE IS REPORTED.** This was silent: a spawn that
         // could not happen produced no message at all and left the job
@@ -1007,7 +1036,7 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
 
 int tosh_run_line(struct tosh *sh, const char *line) {
     int nwords = lex(sh, line);
-    if (nwords < 0) { sh->last_status = -1; return -1; }
+    if (nwords < 0) { sh->last_status = TOSH_ST_SYNTAX; return TOSH_ST_SYNTAX; }
 
     // THE LABEL IS THE LINE AS TYPED -- what `jobs` lists a job under.
     char label[TOSH_JOB_CMD_MAX];
@@ -1022,8 +1051,8 @@ int tosh_run_line(struct tosh *sh, const char *line) {
         // Nothing runs -- `cat < missing` must not execute `cat`
         // against the console -- and whatever was opened is closed.
         redir_undo(&r);
-        sh->last_status = -1;
-        return -1;
+        sh->last_status = TOSH_ST_SYNTAX;
+        return TOSH_ST_SYNTAX;
     }
     redir_apply(&r);
 

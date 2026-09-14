@@ -16,12 +16,12 @@
 // own top comment) so any binary can use sbrk()-based allocation, and
 // prints its own progress/errors to the console.
 //
-// `args` is an optional, space-separated argument string (NULL or ""
-// for none) -- e.g. "-l /docs" -- passed to the binary as argv[1..],
-// with `path` itself becoming argv[0]. The STRING form: split by
-// elf_argv_from_string() below into the vector the loader lays out, so
-// a run of non-space characters is one argument. A caller with a real
-// argv (a shell that quotes) goes through SYS_SPAWN's SPAWN_ARGV.
+// `args` is an optional argument string (NULL or "" for none) -- e.g.
+// "-l /docs" -- passed to the binary as argv[1..], with `path` itself
+// becoming argv[0]. The STRING form: split by elf_argv_from_string()
+// below into the vector the loader lays out, quotes and all. A caller
+// that already holds a real argv goes through SYS_SPAWN's SPAWN_ARGV
+// instead, and should.
 //
 // Returns the process's real exit code (see process_run_ring3()'s doc
 // comment for what a negative value means -- PROCESS_CRASHED, in
@@ -30,12 +30,15 @@
 // to fit in the one stack page) -- nothing ever runs in that case.
 int elf_run_from_fs(const char *path, const char *args);
 
-// Converts the whitespace-separated string form of arguments into the
-// VECTOR elf_build_argv_on_stack() takes: "path\0tok1\0tok2\0", with
-// `path` as argv[0], its length in `*out_len`. NULL/"" `args` gives a
-// one-entry vector. Returns 0 if it does not fit `cap` -- refused, never
-// truncated. This is the ONE place the string form is split; everything
-// below it carries a vector.
+// Converts the string form of arguments into the VECTOR
+// elf_build_argv_on_stack() takes: "path\0tok1\0tok2\0", with `path` as
+// argv[0], its length in `*out_len`. NULL/"" `args` gives a one-entry
+// vector. Returns 0 if it does not fit `cap`, or if the string quotes
+// badly -- refused, never truncated and never guessed at. This is the
+// ONE place the string form is split; everything below it carries a
+// vector, and the SPLIT HONOURS QUOTES by tosh's rules (see the
+// function's own comment) because nothing between here and a `#` prompt
+// has a lexer.
 int elf_argv_from_string(const char *path, const char *args, char *out, size_t cap,
                          size_t *out_len);
 
