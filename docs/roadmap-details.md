@@ -4880,7 +4880,41 @@ the same file already had it right.
 Measured at 0xEF, full suite, 4 runs after the fix: `errno_test` clean
 in all four, against 3 failures in 4 before.
 
-**WHAT IS LEFT STOPS AT ONE LINE, AND THAT IS THE HANDOFF.** Several
+**A LOST WAKEUP IN `waitpid` WAS REAL, AND IS FIXED.** `sys_waitpid()`
+polled for a dead child and then parked, and a child exiting between the
+two woke a parent that was not blocked yet -- `scheduler_wake()` only
+finds one that is, so the wake was dropped and the parent slept beside
+its own zombie. An interrupt gate hid it by construction: nothing else
+runs inside a syscall. Both park sites arm first now
+(`scheduler_wait_arm()`, the primitive that landed with `prepare_to_wait`
+and until now had only `win_syscalls.c` as a caller).
+
+**It was caught in the act rather than reasoned about**, and that is the
+transferable part: `usertest_run.py` asks the guest `ps`, the verdict
+file and `dmesg` WHEN A TEST FAILS, before tearing the machine down. The
+second run printed
+
+    8  1  7  block(child)  0.02  52  shm_test
+   11  8  7  zombie        0.00   0  shm_child
+
+which is the whole bug in two lines. Before that, three sessions had
+diagnosed this class from output alone against a machine that no longer
+existed -- and an attempt to recreate the conditions by hand produced a
+reproduction that was a harness bug of my own (the `#` shell has no `;`,
+so `spawn a; spawn b` ran nothing and read as a hang).
+
+Measured at 0xEF, full suite: **6 runs of 8 clean**, against 4 of 8
+before, with ktest still 760/0/31.
+
+**TWO STALLS REMAIN, both named by the same probe and both a DIFFERENT
+fault from the one above.** `applog_test` sits in `block(child)` with no
+child in the table at all -- waiting for a child that does not exist
+should answer ECHILD rather than park. `argv_test` sits in
+`block(pipe)`, parked on a pipe whose writer is gone, which is the
+"last writer closes, the reader sees EOF" contract failing. Neither is
+diagnosed.
+
+**WHAT WAS THE HANDOFF BEFORE THIS, and is now answered:** Several
 spawned tests -- `applog_test` most often, also `shm_test`, `env_test`,
 `hash_test` -- stop PART-WAY through at 0xEF inside the suite and pass
 alone: 4 runs in 8 have one or two of them, against 6 of 6 clean at

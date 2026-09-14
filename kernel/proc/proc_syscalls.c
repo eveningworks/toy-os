@@ -809,8 +809,19 @@ int sys_waitpid(struct syscall_ctx *c) {
 
     if (!bad && pid == -1) {
         int child = 0, code = 0;
+        // **ARMED BEFORE THE POLL.** A child that exits between "is one
+        // dead?" and the park below wakes a parent that is not blocked
+        // yet, and scheduler_wake() only finds one that is -- so the
+        // wake is dropped and the parent sleeps with a zombie child it
+        // asked about. An interrupt gate hid this by construction:
+        // nothing else could run inside the syscall. Measured under a
+        // trap gate as `shm_test` in block(child) beside `shm_child` in
+        // zombie, which is the whole bug in two lines of `ps`.
+        scheduler_wait_arm(scheduler_wait_chan_pid(scheduler_current_tgid()));
         enum sched_poll_result r =
             scheduler_poll_any(scheduler_current_tgid(), &child, &code);
+        if (r != SCHED_POLL_RUNNING || (c->a2 & SYS_WNOHANG))
+            scheduler_wait_disarm();   // every path that does not park
         if (r == SCHED_POLL_EXITED) {
             if (out) vmm_copy_to_user(pml4, out, &code, sizeof code);
             c->regs[14] = (uint64_t)(int64_t)child;
@@ -837,7 +848,11 @@ int sys_waitpid(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)(int64_t)-ECHILD;
     } else {
         int code = 0;
+        // Armed before the poll -- see the pid == -1 branch above.
+        scheduler_wait_arm(scheduler_wait_chan_pid(scheduler_current_tgid()));
         enum sched_poll_result r = scheduler_poll(pid, &code);
+        if (r != SCHED_POLL_RUNNING || (c->a2 & SYS_WNOHANG))
+            scheduler_wait_disarm();
         if (r == SCHED_POLL_EXITED) {
             if (out) vmm_copy_to_user(pml4, out, &code, sizeof code);
             c->regs[14] = (uint64_t)(int64_t)pid;

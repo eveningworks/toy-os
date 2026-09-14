@@ -587,6 +587,23 @@ def main():
                     # this fired, which turned a one-line diagnosis into
                     # an investigation.
                     problems.append(f"saw {s!r} in: {hits[0].strip()[:80]}")
+            # **ASK THE GUEST WHILE IT IS STILL THERE.** A failure here
+            # used to be diagnosed afterwards, from the output alone,
+            # against a machine that no longer existed -- which sent one
+            # session chasing a hang that was never happening. The three
+            # questions worth having are whether the test is still a
+            # process, what the verdict file really holds, and what the
+            # kernel said; all three are one command each, and only on a
+            # failure.
+            if problems:
+                post = vm(args, "exec", "ps", "--label", check=False)
+                whole = vm(args, "exec", f"cat /tmp/{name}.out", "--label",
+                           check=False)
+                log = vm(args, "exec", "dmesg", "--label", check=False)
+                out += ("\n--- after the failure ---\n"
+                        + post.stdout + post.stderr
+                        + whole.stdout + whole.stderr
+                        + "\n".join((log.stdout + log.stderr).splitlines()[-15:]))
             results.append((name, problems, out))
     finally:
         vm(args, "stop", check=False)
