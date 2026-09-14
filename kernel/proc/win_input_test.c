@@ -22,6 +22,10 @@
 #include "scheduler.h"
 #include "timer.h"
 #include "fs.h"
+#include "klog.h"
+#include "kfmt.h"   // klog_printf
+#include "process.h"
+#include "proc_info.h"
 
 #define EVENT_PATH "/tests/event_test"
 #define READY_PATH "/tests/waitready_test"
@@ -178,6 +182,31 @@ KTEST("win_input", "a role change empties the queue") {
     win_server_set_compositor(0, 0);
 }
 
+// **A TIMEOUT MUST SAY WHAT IT SAW.** "exited: false" names nothing --
+// a helper that never parked, one parked on the wrong channel and one
+// that was never scheduled all produce it, and telling them apart is
+// the whole question when the syscall gate changes.
+static void report_stuck(int pid, int sampled_blocked, int samples) {
+    struct proc_info pi;
+    int found = 0;
+    for (int i = 0; i < SCHED_MAX_PROCS; i++) {
+        if (scheduler_proc_info(i, &pi) == 1 && pi.pid == pid) { found = 1; break; }
+    }
+    if (!found) { klog_printf("win_input: pid %d has no slot at all\n", pid); return; }
+    // scheduler_current_pid() is read from KERNEL context, so anything
+    // but 0 means current_index names a process while the kernel is the
+    // thing executing -- a switch recorded in procs[] that the CPU never
+    // performed.
+    klog_printf("win_input: pid %d stuck -- state=%u wait=%u cpu_ns=%llu "
+                "blocked in %d of %d samples, current_pid=%d\n",
+                pid, pi.state, pi.wait_reason, (unsigned long long)pi.cpu_ns,
+                sampled_blocked, samples, scheduler_current_pid());
+    // A tick early-returns while either of these holds, so a process
+    // left RUNNING is never put back to READY and never picked again.
+    klog_printf("win_input: preempt_depth=%d armed=%d\n",
+                scheduler_preempt_depth(), process_context_is_armed());
+}
+
 // The end-to-end one: a real ring-3 process, holding the role, blocks
 // in SYS_WAIT_EVENT, gets woken by events pushed from kernel code, and
 // exits with the count it received. Nothing short of the whole chain
@@ -217,11 +246,20 @@ KTEST("win_input", "a ring-3 process blocks in SYS_WAIT_EVENT and is woken") {
         while (pit_ticks() - t < 10) { }
     }
 
-    int exited = 0;
+    int exited = 0, samples = 0, blocked = 0;
     start = pit_ticks();
     while (pit_ticks() - start < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &exit_code) == SCHED_POLL_EXITED) { exited = 1; break; }
+        struct proc_info pi;
+        for (int i = 0; i < SCHED_MAX_PROCS; i++) {
+            if (scheduler_proc_info(i, &pi) == 1 && pi.pid == pid) {
+                samples++;
+                if (pi.state == PROC_STATE_BLOCKED) blocked++;
+                break;
+            }
+        }
     }
+    if (!exited) report_stuck(pid, blocked, samples);
 
     KTEST_ASSERT(exited);
     KTEST_ASSERT_EQ(exit_code, WANT); // it received every event, and only those

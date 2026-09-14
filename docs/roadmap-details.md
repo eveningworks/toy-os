@@ -4764,16 +4764,62 @@ possible -- runs `scheduler_tick()`, which does
 B's slot**. B is then resumed at A's frame, and the frame A's block
 saved is stale.
 
-**So the fix is the one this item is named after, in its real form.**
-Retiring `g_next_kernel_rsp` as the mechanism, not just as a global: the
-context switch has to happen AT `switch_to()` rather than being handed
-to an epilogue that runs later with interrupts on.
-`kernel/arch/x86_64/context_switch.asm` already has the primitive
-(`process_context_save`/`_restore`, a real register-and-stack swap), used
-today only by the legacy `process_run_ring3()` path -- so the hard
-assembly exists and what is missing is moving the ~5 switch sites onto
-it, plus a `ret_from_fork`-shaped entry for a process that has never
-run.
+**THAT WINDOW IS CLOSED NOW AND IT WAS NOT THE CAUSE EITHER.** The
+window is real: `sched_switch_begin()` holds interrupts off from "this
+process stops being current" to the epilogue that moves the CPU, in
+`block_common()` and both exit paths -- the tick's switch already ran
+with IF clear, and every gate but 128 is an interrupt gate, so nothing
+can land in the gap any more. Linux's shape, which holds the runqueue
+lock with IRQs off across `__schedule()`. **Measured at 0xEF with the
+guard in: 758 passed, 2 failed -- the same two `win_input` tests, byte
+for byte.** So the deferred switch is not what breaks them, and the
+eager-switch rewrite this item was named after is NOT owed on this
+evidence.
+
+**WHAT THE HELPER ACTUALLY ENDS UP AS, measured rather than argued.**
+The test names what it saw now (`report_stuck()` in
+`win_input_test.c`), and at the deadline it reports:
+
+    pid 7 stuck -- state=2 wait=0 cpu_ns=40000000
+                   blocked in 0 of 1510708 samples, current_pid=0
+    preempt_depth=0 armed=0
+
+`state=2` is `SCHED_RUNNING` while `current_pid=0` says the KERNEL is
+what is executing. That is a TERMINAL STATE LEAK, not a spin and not a
+lost wakeup: `switch_to()` is the only writer of `SCHED_RUNNING`
+(scheduler.c), `find_next_runnable()` picks only `SCHED_READY`, and the
+one place a process is put back to READY is the tick's
+`if (current_index >= 0)` branch -- which cannot run for a process that
+is not current. So the helper is unschedulable for the rest of the boot,
+having had 40-50 ms of CPU, and it never parked once in 1.5 million
+samples. `preempt_depth=0 armed=0` rules out the tick's two early
+returns.
+
+What is NOT established is how a process comes to be `SCHED_RUNNING`
+while `current_index` is -1. Every switch site sets the outgoing state
+before switching (READY at the tick, BLOCKED in `block_common()`, ZOMBIE
+at both exits), and `block_common()` reads `idx = current_index` -- so
+the leak needs the executing context and `current_index` to already
+disagree, which is the same class as the window above and is not that
+window. **The next session starts here**, and the cheap discriminating
+instrument is in the tree: run at 0xEF and read the two lines.
+
+**AND THE (resume slot, depth) PAIR WAS SAVED WRONG, FOUND ON THE WAY.**
+A context is resumed with `mov rsp, <trapframe>; iretq`, which runs no
+dispatch tail at all -- so every dispatch entered after that frame was
+pushed is abandoned, and saving the LIVE pair resurrects a frame that no
+longer exists. Two halves, and each is proved by the other:
+`isr_context_defer()` installs the incoming pair only after
+`isr_dispatch()` has restored its own (installing it earlier means the
+tail overwrites it with the outgoing stack's values), and
+`isr_context_outer()` saves what the abandoned dispatch WOULD have
+restored -- with a ring-3 frame saving an EMPTY chain, since such a
+frame is the outermost one on its stack. **The deferral alone panics**:
+a page fault at a ring-3 RIP reported in "kernel context (no process)",
+2 runs in 2, which is what says the pair was internally inconsistent.
+With both, no panic. At 0xEE none of this is observable -- nothing
+nests -- so it is carried on the 0xEF evidence and not on a green
+suite.
 
 **`prepare_to_wait` LANDED ANYWAY, and is worth having on its own.**
 `scheduler_wait_arm()`/`_disarm()` (api/scheduler.h) let a caller

@@ -829,8 +829,31 @@ static int find_next_runnable(int start) {
 // half the context before this existed.
 static void save_kernel_frame(uint64_t *regs) {
     kernel_saved_rsp = (uint64_t)regs;
-    kernel_saved_isr_depth = isr_depth_get();
-    kernel_saved_resume_slot = isr_resume_slot_get();
+    // THE OUTER PAIR, not the live one: this context's resume skips the
+    // dispatch that is saving it -- see isr_context_outer().
+    isr_context_outer(regs, &kernel_saved_resume_slot, &kernel_saved_isr_depth);
+}
+
+// **THE SWITCH CRITICAL SECTION RUNS WITH INTERRUPTS OFF, AND NOTHING
+// TURNS THEM BACK ON** -- the `iretq` that completes the handover
+// restores the INCOMING context's RFLAGS, so IF returns with the
+// process it belongs to.
+//
+// The section runs from "this process stops being current" to the
+// epilogue that actually moves the CPU (`mov rsp, rax` in isr.asm).
+// switch_to() only NOMINATES the incoming trapframe; while the outgoing
+// context's C code walks back out to that epilogue, `current_index`
+// already names the incoming one -- so a tick landing in the gap has
+// scheduler_tick() write the OUTGOING trapframe into the INCOMING
+// slot, and the incoming process is then resumed at somebody else's
+// frame for as long as it lives (runnable, making no progress).
+//
+// An interrupt gate hid this: IF is clear for the whole syscall, so
+// nothing could land there. A trap gate does not, which is what made it
+// visible. Linux holds the runqueue lock with IRQs off across
+// __schedule() for exactly this window.
+static inline void sched_switch_begin(void) {
+    __asm__ volatile ("cli" ::: "memory");
 }
 
 static void switch_to(int idx) {
@@ -849,9 +872,10 @@ static void switch_to(int idx) {
                    idx, idx + 1, procs[idx].state, procs[idx].name);
         __asm__ volatile ("ud2");
     }
-    isr_resume_set(procs[idx].kernel_rsp);
-    isr_depth_set(procs[idx].isr_depth);
-    isr_resume_slot_set(procs[idx].resume_slot);
+    isr_resume_set(procs[idx].kernel_rsp);   // through THIS context's slot
+    // NOMINATED, not installed: the dispatch we are inside still has to
+    // restore its own on the way out -- see isr_context_defer().
+    isr_context_defer(procs[idx].resume_slot, procs[idx].isr_depth);
     vmm_switch_address_space(procs[idx].pml4_phys);
     gdt_set_kernel_stack(kernel_stack_top(idx));
     procs[idx].state = SCHED_RUNNING;
@@ -886,8 +910,7 @@ static void switch_to_kernel(void) {
         __asm__ volatile ("ud2");
     }
     isr_resume_set(kernel_saved_rsp);
-    isr_depth_set(kernel_saved_isr_depth);
-    isr_resume_slot_set(kernel_saved_resume_slot);
+    isr_context_defer(kernel_saved_resume_slot, kernel_saved_isr_depth);
 }
 
 // Loads a real ELF64 binary from the persistent filesystem as a fresh
@@ -1558,8 +1581,8 @@ static void scheduler_rotate(uint64_t *regs) {
         // this is the only place that knows a whole tick elapsed under
         // it -- see abi/proc_info.h on why the total, not a percentage.
         procs[current_index].kernel_rsp = (uint64_t)regs;
-        procs[current_index].isr_depth = isr_depth_get();
-        procs[current_index].resume_slot = isr_resume_slot_get();
+        isr_context_outer(regs, &procs[current_index].resume_slot,
+                          &procs[current_index].isr_depth);
         kstack_verify(current_index);  // it just stopped running -- check its stack
         // Paired with switch_to()'s FXRSTOR. Saved on the way out
         // whether or not the process has touched FP: "has it?" is
@@ -1777,11 +1800,11 @@ static int block_common(uint64_t *regs, const void *chan, int reason,
     }
     if (current_index >= 0) procs[current_index].arm_chan = 0;
 
+    sched_switch_begin();
     bill_current(); // this slice ends here -- see bill_current()
     int idx = current_index;
     procs[idx].kernel_rsp = (uint64_t)regs;
-    procs[idx].isr_depth = isr_depth_get();
-    procs[idx].resume_slot = isr_resume_slot_get();
+    isr_context_outer(regs, &procs[idx].resume_slot, &procs[idx].isr_depth);
     kstack_verify(idx);
     fpu_save(procs[idx].fpu);
     procs[idx].state = SCHED_BLOCKED;
@@ -2045,6 +2068,7 @@ void scheduler_on_exit(int code) {
     // "stdout_pipe" to remember, because stdout is an ordinary
     // descriptor like the rest.
 
+    sched_switch_begin();
     bill_current(); // the exiting process's last slice
     current_index = -1;
 
@@ -2332,6 +2356,7 @@ void scheduler_on_thread_exit(int code) {
     // waiter on the channel is a loop over the table finding nothing.
     scheduler_wake(scheduler_wait_chan_pid(me + 1), SYS_RETRY);
 
+    sched_switch_begin();
     bill_current();
     current_index = -1;
     int next = find_next_runnable(rotation_pos);

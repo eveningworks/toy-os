@@ -77,6 +77,17 @@ void isr_resume_set(uint64_t rsp);
 void *isr_resume_slot_get(void);
 void isr_resume_slot_set(void *slot);
 
+// Nominate the INCOMING context's (resume slot, depth) for a switch that
+// has not taken effect yet. isr_dispatch() installs it after restoring
+// its own, which is the only moment both are true of the right stack --
+// see the pair's comment in idt.c.
+void isr_context_defer(void *slot, int depth);
+
+// What the live dispatch will restore on its way out -- the pair a
+// context being switched AWAY from must be saved with, since its resume
+// skips every dispatch tail. See idt.c.
+void isr_context_outer(const uint64_t *regs, void **slot, int *depth);
+
 // Spurious LAPIC interrupts seen since boot -- reported by `lsdev`
 // beside the controller. See idt.c.
 uint32_t idt_spurious_count(void);
