@@ -651,7 +651,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] A user accent colour: a setting + an Appearance page (the `UTHEME_ACCENT` role exists; make it settable)
 - [ ] Migrate apps' `PAD`/`GAP`/size constants to the theme metrics (`utheme_pad/gap/indicator`), so chrome scales from one owner
 - [ ] Finish the 2026-08-21 toolkit centralizations -- only System Settings and Font Demo set `desc.focus`
-- [ ] A screenshot tool that writes a real image file to disk
+- [ ] A screenshot tool that writes a real image file to disk -- needs a QOI ENCODER, which round-trips against the existing decoder
 - [ ] A tween/easing helper, once a second real caller exists
 
 ### GUI clipboard + drag-and-drop
@@ -695,6 +695,9 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~A Markdown preview in Notepad~~ DONE 2026-09-07 -- `uui_markdown`, over the same parser `/bin/doc` uses
 - [ ] Find/replace in Notepad
 - [x] ~~An image viewer~~ DONE 2026-08-23 -- Image Viewer browses a directory rather than opening a file dialog
+- [ ] A Help browser over `docs/` -- `lib/umd.c` parses and `uui_markdown` draws already, so it is navigation plus a sidebar
+- [ ] A Log Viewer: `uui_table` over `QUERY_KLOG`, with a level filter and a search field
+- [ ] CPU/memory over time as a TAB in Task Manager, not a second process reading the same facts
 - [ ] Scientific mode for Calculator
 - [ ] `uapp_relayout()`: invalidate the layout and flush ONE pass before the next paint, as `uapp_redraw()` already does for painting
 - [ ] CPU/memory history graphs in Task Manager
