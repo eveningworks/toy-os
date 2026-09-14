@@ -402,6 +402,14 @@ def wait_layout(dbg, win, pred, timeout=12.0, grace=1.0):
     which a caller then read as the state it asked for. The last frame
     seen is `last_layout()`, for the failure detail.
 
+    **THE `or lay` IDIOM AT CALL SITES KEEPS THE PREVIOUS LAYOUT** so a
+    timeout fails a check instead of crashing on None. That is right
+    where the caller only READS a field -- and wrong where it then
+    INDEXES one the old layout may not carry: `lay.rowy[0]` and
+    `lay.rowh` killed this tool with `KeyError: 0` and `None * int`,
+    reported as the File Manager being broken. So ask the predicate for
+    what the code below actually uses, and drop the fallback there.
+
     Partial reads accumulate within the wait, so a report split across
     two serial sweeps is parsed whole. And after `grace` seconds with
     no fresh report at all, the last layout ANY wait observed answers if
@@ -873,9 +881,17 @@ def run(dbg, qmp, tmp, res):
         if w2["title"] != TITLE:
             dbg.send(f"gui close {w2['z']}")
             time.sleep(0.3)
+    # **AND WAIT FOR THE FOCUS, not just for the windows to go.** The
+    # next thing here drives the menu BY KEY, which reaches the focused
+    # window -- so "the others are closed" is a weaker condition than
+    # what follows it needs, and the File Manager taking the focus back
+    # is a separate event. It cost a `View->Icons` failure that only
+    # appeared under a trap gate, where the timing moved.
     deadline = time.time() + 8.0
     while time.time() < deadline:
-        if all(w2["title"] == TITLE for w2 in dbg.windows()):
+        ws = dbg.windows()
+        if ws and all(w2["title"] == TITLE for w2 in ws) \
+                and any(w2.get("focused") for w2 in ws):
             break
         time.sleep(0.3)
 
@@ -1536,7 +1552,21 @@ def run(dbg, qmp, tmp, res):
     wait_layout(dbg, win, lambda l: l.addr and l.addr[0] == 0)
     type_path(EDIT)
     dbg.key(K_ENTER)
-    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == EDIT and l.rows.get(0, 0) == 3) or lay
+    # **THE PREDICATE ASKS FOR WHAT THE CODE BELOW USES**, and there is
+    # deliberately no `or lay` fallback here. A timeout used to keep the
+    # PREVIOUS layout, which has no row geometry for this pane -- so the
+    # tool did not fail the check, it died in ctx_on() on `lay.rowy[0]`
+    # or `lay.rowh` (KeyError: 0, or None * int) a few lines later, which
+    # is a harness crash reported as the File Manager being broken.
+    lay = wait_layout(dbg, win,
+                      lambda l: l.dir.get(0) == EDIT and l.rows.get(0, 0) == 3
+                      and l.rowy.get(0) is not None and l.rowh)
+    res.check("the edit fixture reported its pane's row geometry",
+              lay is not None,
+              "no layout carried rowy/rowh -- the context-menu checks cannot be placed")
+    if lay is None:
+        teardown_fixture(dbg)
+        return
     px, py, pw, _ = lay.pane[0]
 
     def ctx_on(view_row):
