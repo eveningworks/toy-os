@@ -981,9 +981,15 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
         text_x = ix + isz + 5;
     }
 
+    // **MEASURED, NOT DIVIDED.** `avail_px / ugfx_char_w()` asks how
+    // many of the WIDEST glyph fit, which is the right answer only on a
+    // monospace face -- with a proportional interface face it cuts a
+    // title several characters early and every window reads as
+    // truncated. ugfx_text_fit_chars() exists for exactly this
+    // (ui/ugfx.h's "no widget does character arithmetic on a string").
     char title_buf[WIN_TITLE_MAX + 20];
     int avail_px = r.min_x - text_x;
-    int max_chars = avail_px > 0 ? avail_px / ugfx_char_w() : 0;
+    int max_chars = avail_px > 0 ? ugfx_text_fit_chars(shown, avail_px) : 0;
     int i = 0;
     for (; shown[i] && i < max_chars && i < (int)sizeof title_buf - 1; i++) title_buf[i] = shown[i];
     title_buf[i] = '\0';

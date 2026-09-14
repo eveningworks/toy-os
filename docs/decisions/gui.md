@@ -4471,7 +4471,7 @@ what nothing press-only can pass. Disabling `on_key_up` in `uapp.c`
 turns 5 of 10 checks red, and the last one reports "still holds 5 keys"
 -- a stuck key, seen from inside the client.
 
-## The file manager is a two-pane commander, not an Explorer
+## The file manager is a commander, and it opens as an Explorer
 
 The obvious build is an Explorer clone: a places sidebar, one content
 pane, icons, copy/paste. Measured against this tree that plan is blocked
@@ -4501,6 +4501,21 @@ from a test with no pixel arithmetic at all. And **each pane carries its
 own path strip**: one status line cannot say where two panes are, and
 "which pane does F5 copy FROM" has to be answerable by looking rather
 than by pressing something and finding out.
+
+**The DEFAULT flipped on 2026-09-14, and the shape did not.** Both
+premises above are spent: there is a system clipboard (`/bin/clipboardd`)
+and there is drag-and-drop, brokered by the compositor. An argument from
+what the system cannot do stops applying the moment it can, so the thing
+it was holding up -- one pane, a folder tree, icons, the shape every
+desktop's file manager has -- is what a first run gets now
+(`g_single`/`g_tree_on`, both 1). The commander is a toolbar click away
+and keeps its whole keymap.
+
+What is NOT reopened is the commander itself. Two panes remain the
+cheapest way to copy between two places, the F-keys still work, and both
+flags persist per user -- so this decides a FIRST run, not a preference.
+The 1986 reasoning is why the mode exists; it was never a reason to open
+in it.
 
 ## File operations are child processes, not loops inside the window
 
@@ -7409,3 +7424,32 @@ already had. fontd logs it instead, and the published header carries a
 **Both defaults are the same face today**, so a machine that has never
 been configured looks exactly as it did. This change adds the ability
 to differ; choosing to is separate, and reversible in one setting.
+
+## A settings category with one page collapses, and that needed a third row kind
+
+System Settings generates its sidebar from the categories the settings
+themselves declare, so the taxonomy is data and the widget is generic.
+Splitting Appearance -- which had accumulated the wallpaper, the taskbar,
+the tray, the week's first column and Diagnostics alongside the actual
+look of things -- left several categories holding exactly one page, and a
+heading with one child under it is a row that says nothing followed by a
+row that says the same thing indented.
+
+Collapsing it is obvious. What is not obvious is what the surviving row
+IS. `uui_sidebar` had two kinds and neither fits: an ITEM is indented and
+selectable, so the collapsed row reads as a child of whatever heading
+precedes it; a HEADING is unindented and INERT, so the one page in the
+category cannot be opened. The two properties had been one flag because
+nothing had ever needed them apart.
+
+So `UUI_SIDEBAR_TOP` is the third kind -- a heading's weight and indent
+with an item's selectability -- and `heading` (how it draws) is now a
+separate field from `inert` (whether it can be chosen). This is what
+Windows' Settings and GNOME's do with a lone entry, and the split is the
+honest shape: a row's appearance and a row's behaviour were never the
+same question.
+
+The alternative considered and rejected was for the app to emit the
+collapsed row as an ITEM and un-indent it by hand. That puts sidebar
+layout in every app that has a sidebar, which is the "make every fix
+twice" shape this repo keeps deleting.

@@ -731,6 +731,7 @@ whenever a headline here tells you something you did not already know.
 
 - **A WINDOW'S GEOMETRY IS REMEMBERED PER APP, AND THE KEY IS `app_id` -- NEVER `app_identity`**
 - **MEASURE TEXT, NEVER MULTIPLY: `gfx_char_advance()` / `ugfx_char_advance()`.**
+- **A SHARED GEOMETRY HELPER MEASURES IN WHATEVER FACE THE CALLER HAS SELECTED, AND `ugfx_set_font()` IS PER PROCESS** -- an app that switches faces mid-frame must bracket every measurement the same way, or the draw and the hit-test disagree
 - **A LOADED FACE STILL ONLY DRAWS 101 GLYPHS.**
 - **`font glyph <char>` SHOWS WHAT WILL ACTUALLY BE DRAWN, AND IT READS BOTH SIDES.**
 - **RING 0 PARSES NO FONT: THE CONSOLE DRAWS BAKED BITMAPS, THE DESKTOP DRAWS `/bin/fontd`'s ATLAS** -- and the two genuinely differ
@@ -867,7 +868,7 @@ whenever a headline here tells you something you did not already know.
 - **DOOM'S SOUND IS THE REST OF THE PORT, NOT A REWRITE -- AND THE THREE SHIMS ARE ON OUR SIDE**
 - **MINESWEEPER IS THE FIRST GAME, AND IT IS AN ORDINARY CLIENT**
 - **A DIRECTORY LISTING IS A WIDGET, `uui_fileview`, AND FOUR THINGS SHOULD BE DRAWING ONE**
-- **THE FILE MANAGER IS A TWO-PANE COMMANDER, NOT AN EXPLORER**
+- **THE FILE MANAGER IS A COMMANDER THAT OPENS AS AN EXPLORER -- one pane and the tree by default (`g_single`/`g_tree_on` = 1, persisted), the two-pane layout one toolbar click away**
 - **THE FILE MANAGER'S FIVE VERBS ARE ON THE TOOLBAR NOW, and a secondary click opens a context menu that SELECTS what it points at**
 - **PROPERTIES IS A PROCESS, `/bin/wm/apps/properties`, and a folder's total is walked a few directories per tick**
 - **WHAT OPENS A FILE TYPE IS DECLARED BY THE APP THAT OPENS IT (`Handles=`), AND `/etc/mimeapps.conf` OUTRANKS IT**

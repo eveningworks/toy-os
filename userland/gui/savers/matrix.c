@@ -60,9 +60,16 @@ static void seed(int w, int h) {
     g_seeded = 1;
 }
 
+// **A GRID OF FALLING GLYPHS IS A GRID, so this draws in the MONOSPACE
+// family.** Its columns are a width divided by a cell, which is only
+// true of a fixed advance -- with a proportional interface face the
+// columns would drift apart and the rain would lean. A saver owns the
+// whole screen and has no chrome, so the selection is made once here
+// and never put back.
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     (void)a;
     struct ugfx_surface *s = d->surface;
+    ugfx_set_font(ugfx_font_mono(UGFX_FONT_REGULAR));
     if (!g_seeded || s->w != g_for_w || s->h != g_for_h) seed(s->w, s->h);
     ugfx_fill_rect(s, 0, 0, s->w, s->h, 0x000000);
     int cw = ugfx_char_w(), ch = ugfx_char_h();

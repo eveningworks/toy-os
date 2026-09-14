@@ -1,2 +1,2 @@
-Description=The face terminals and code views draw with. It needs a fixed cell; a proportional face here makes a terminal's columns stop lining up.
+Description=The face terminals and code views draw with. It needs a fixed cell, or columns stop lining up.
 Order=25

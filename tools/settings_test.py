@@ -568,11 +568,21 @@ def main():
     check("the sidebar has a Kernel heading for the tunables",
           kernel_head is not None,
           f"headings={[r['label'] for r in rows if r['depth'] == 0]}")
-    # Its three groups, which is what proves the ROWS came through and
-    # not just the heading -- a category with no settings under it would
-    # not be drawn at all, so the heading alone is weaker than it looks.
-    for group in ("Memory", "Storage", "Diagnostics"):
-        check(f"the Kernel section offers a {group} page",
+    # **KERNEL IS ONE PAGE, SO ITS ROW IS THE PAGE.** A category with
+    # exactly one group collapses -- "Kernel" over a lone "Memory" was a
+    # heading whose only child repeated it -- so the name to look for is
+    # the CATEGORY's, and what proves the rows came through is that it
+    # is a DESTINATION rather than an inert caption. A heading alone
+    # would be weaker than it looks; a heading that can be selected is
+    # the collapse working.
+    check("the Kernel row is the page, not a caption over one",
+          kernel_head is not None and kernel_head["depth"] == 0
+          and row_named("Memory") is None,
+          f"labels={[r['label'] for r in rows]}")
+    # Two pages that did NOT collapse, so the walk is exercised on a
+    # category with children as well as on one without.
+    for group in ("Shell", "Diagnostics"):
+        check(f"the sidebar offers a {group} page",
               row_named(group) is not None,
               f"labels={[r['label'] for r in rows]}")
 

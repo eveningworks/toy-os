@@ -304,9 +304,11 @@ static const char *category_icon(const char *cat) {
     static const struct { const char *cat, *icon; } MAP[] = {
         { "Time & Locale", "cat-time" },
         { "Appearance",    "cat-appearance" },
+        { "Desktop",       "cat-desktop" },
         { "Input",         "cat-input" },
-        { "Startup",       "cat-startup" },
         { "Kernel",        "cat-kernel" },
+        { "System",        "cat-system" },
+        { "Network",       "cat-network" },
         { "Display",       "cat-display" },
         { "Storage",       "cat-storage" },
         { "Sound",         "cat-sound" },
@@ -365,6 +367,28 @@ static void rebuild_sidebar(void) {
 
     for (int c = 0; c < g_cat_count; c++) {
         if (g_node_count >= (int)(sizeof g_nodes / sizeof g_nodes[0])) break;
+
+        // **A CATEGORY WITH ONE PAGE IS ONE ROW, NOT TWO.** "System"
+        // over a lone "Shell" is a heading whose only child repeats it,
+        // and half the sidebar read that way. GNOME and Windows both
+        // collapse it: the category becomes the destination and the
+        // page's own name disappears, because the category name is
+        // already the better of the two.
+        //
+        // It has to become a selectable ITEM to do that -- a HEADING
+        // cannot be chosen and the page would be unreachable, which is
+        // the same trap the "System Information" note below records.
+        int only = -1, ngroups = 0;
+        for (int g = 0; g < g_group_count; g++)
+            if (strcmp(g_group_cat[g], g_cat[c]) == 0) { only = g; ngroups++; }
+        if (ngroups == 1) {
+            g_nodes[g_node_count++] = (struct uui_sidebar_row){
+                .label = g_cat[c], .kind = UUI_SIDEBAR_TOP,
+                .id = NODE_GROUP_BASE + only,
+                .icon = category_icon(g_cat[c])
+            };
+            continue;
+        }
         // A HEADING, not a row: a category is a caption over the pages
         // beneath it and is not itself a destination, so it cannot be
         // selected and the arrow keys step over it. That is the whole
@@ -1719,7 +1743,13 @@ static void on_open(struct uapp *a) {
         // rest of the line.
         ulogf("settings: row %d id %d y %d depth %d %s\n",
               r, g_nodes[r].id, g_tree.y + r * rh + rh / 2,
-              g_nodes[r].kind == UUI_SIDEBAR_HEADING ? 0 : 1,
+              // **DEPTH IS ABOUT INDENT, NOT ABOUT SELECTABILITY.** A
+              // collapsed category (UUI_SIDEBAR_TOP) is a top-level row
+              // that happens to be a destination, so it reports 0 like
+              // the heading it replaced -- reporting 1 would tell a
+              // test it is a page of whatever came before it, which is
+              // exactly what it is not.
+              g_nodes[r].kind == UUI_SIDEBAR_ITEM ? 1 : 0,
               g_nodes[r].label);
     }
     // NO per-slot dump here: on_open runs ONCE, so it would describe the

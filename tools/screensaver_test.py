@@ -459,7 +459,11 @@ def test_button(dbg, qmp, args):
             time.sleep(0.5)
     _applog[:] = []
     dbg.send("gui spawn /bin/wm/system/settings")
-    deadline = time.time() + 10
+    # **LONG ENOUGH FOR THE WALK ITSELF.** find_test_button() arrows down
+    # the sidebar one row at a time and reads the log after each, so one
+    # attempt costs tens of seconds -- a 10s deadline expired PART WAY
+    # ALONG and the retry started over from wherever it had got to.
+    deadline = time.time() + 90
     rect = None
     while time.time() < deadline and not rect:
         time.sleep(0.3)
@@ -567,12 +571,37 @@ def find_test_button(dbg):
             win = w
     if not win:
         return None
-    tx, _ty, tw, _th = (int(v) for v in tree.groups())
-    # Same rule as the button below: a sidebar row commits on release.
+    tx, ty, tw, _th = (int(v) for v in tree.groups())
+    # **ARROWED TO, NOT TYPED AND NOT CLICKED.** The row report gives an
+    # UNSCROLLED y, so clicking a row below the fold lands on whatever is
+    # at that point -- and Screensaver moved from the eighth row to the
+    # twenty-eighth. And `uui_sidebar` has no type-ahead (arrows only),
+    # so spelling the name at it does nothing. The click that starts the
+    # walk must land on a SELECTABLE row: row 0 is a heading.
+    first_item_y = None
+    for line in _applog:
+        m2 = re.search(r"settings: row \d+ id \d+ y (-?\d+) depth (\d+) ", line)
+        if m2 and m2.group(2) == "1" and first_item_y is None:
+            first_item_y = int(m2.group(1))
     dbg.warp_cursor(_QMP[0], win["content"]["x"] + tx + tw // 2,
-                    win["content"]["y"] + row_y)
+                    win["content"]["y"] + (first_item_y if first_item_y
+                                            is not None else ty + 8))
     _QMP[0].click()
     dbg.settle()
+    # Stops on the BUTTON, never on a count -- a fixed number of Downs
+    # goes stale the next time a setting lands above it. One key per
+    # look, too: batching five presses between checks overshoots the
+    # wanted row, and `settle()` after each costs a round trip that took
+    # the tool past its 600s budget.
+    for _ in range(40):
+        dbg.send("gui key 0x92")          # KEY_ARROW_DOWN
+        time.sleep(0.18)
+        _drain(dbg)
+        btn = _last(r"settings: test_button (-?\d+) (-?\d+) (-?\d+) (-?\d+) shown (\d+)")
+        if btn:
+            g = [int(v) for v in btn.groups()]
+            if g[4] and g[2] > 0:
+                return (g[0], g[1], g[2], g[3])
     return None
 
 

@@ -624,7 +624,25 @@ static void scrollbar_rect(int tx, int ty, int tw, int th,
 // stepper is actually wanted, and this is the flag's first caller.
 #define NP_SCROLLBAR_FLAGS UUI_SCROLLBAR_ARROWS
 
+// --- the document is drawn in the MONOSPACE family --------------------
+//
+// **utext WRAPS BY DIVIDING A WIDTH BY A CELL** (ui/utext.c), which is
+// only true of a fixed advance -- and a plain-text editor is monospace
+// in gedit, VS Code and Notepad alike for the same reason. So every
+// function that MEASURES or DRAWS the document selects that family and
+// puts the previous one back.
+//
+// The chrome does not: the menu bar, the status bar and the dialog are
+// declared widgets the toolkit paints after on_draw, in the interface
+// face. Bracketing the whole of on_draw would be wrong for that reason
+// and right only by accident.
+static const struct ugfx_font *doc_font(void) {
+    return ugfx_set_font(ugfx_font_mono(UGFX_FONT_REGULAR));
+}
+
+
 static void draw_scrollbar(struct ugfx_surface *s, int tx, int ty, int tw, int th) {
+    const struct ugfx_font *was_doc = doc_font();
     int total, visible;
     utext_metrics(&g_text, tw, th, &total, &visible);
 
@@ -633,11 +651,13 @@ static void draw_scrollbar(struct ugfx_surface *s, int tx, int ty, int tw, int t
     uui_scrollbar_draw(s, bx, by, bw, bh, total, visible, g_text.scroll_offset,
                         ugfx_rgb(225, 225, 230), ugfx_rgb(150, 155, 165),
                         NP_SCROLLBAR_FLAGS);
+    ugfx_set_font(was_doc);
 }
 
 // The document. The toolkit has already cleared the window and paints
 // the declared widgets -- bars, dialog -- on top of this afterwards.
 static void draw_document(struct ugfx_surface *s, int focused) {
+    const struct ugfx_font *was_doc = doc_font();
     int tx, ty, tw, th;
     text_rect_for(s->w, s->h, &tx, &ty, &tw, &th);
     ugfx_draw_rect(s, tx - 1, ty - 1, tw + 2, th + 2, ugfx_rgb(200, 205, 215));
@@ -662,6 +682,7 @@ static void draw_document(struct ugfx_surface *s, int focused) {
                             ugfx_rgb(225, 225, 230), ugfx_rgb(150, 155, 165),
                             NP_SCROLLBAR_FLAGS | UUI_SCROLLBAR_HORIZ);
     }
+    ugfx_set_font(was_doc);
 }
 
 // --- the dialog's behaviour -------------------------------------------
@@ -1017,6 +1038,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 // A click in the trough jumps there; a click on the thumb starts a
 // drag. Returns 1 if the scrollbar took the click.
 static int scrollbar_press(int px, int py, int tx, int ty, int tw, int th) {
+    const struct ugfx_font *was_doc = doc_font();
     int bx, by, bw, bh;
     scrollbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
 
@@ -1030,18 +1052,23 @@ static int scrollbar_press(int px, int py, int tx, int ty, int tw, int th) {
                            px, py, NP_SCROLLBAR_FLAGS);
     switch (z) {
     case UUI_SB_NONE:
+        ugfx_set_font(was_doc);
         return 0;
     case UUI_SB_UP:
         utext_scroll(&g_text, 1);   // one line back
+        ugfx_set_font(was_doc);
         return 1;
     case UUI_SB_DOWN:
         utext_scroll(&g_text, -1);  // one line forward
+        ugfx_set_font(was_doc);
         return 1;
     case UUI_SB_ABOVE:
         utext_scroll(&g_text, visible);  // page
+        ugfx_set_font(was_doc);
         return 1;
     case UUI_SB_BELOW:
         utext_scroll(&g_text, -visible);
+        ugfx_set_font(was_doc);
         return 1;
     case UUI_SB_THUMB: {
         // WHERE on the thumb the grab happened. Without this the drag
@@ -1054,20 +1081,24 @@ static int scrollbar_press(int px, int py, int tx, int ty, int tw, int th) {
                                   &thumb_y, &thumb_h, bw, NP_SCROLLBAR_FLAGS);
         g_scrollbar_grab = py - thumb_y;
         g_scrollbar_drag = 1;
+        ugfx_set_font(was_doc);
         return 1;
     }
     }
+    ugfx_set_font(was_doc);
     return 1;
 }
 
 // hscroll is the app's to clamp: utext keeps the value but has no view
 // to measure it against outside a draw.
 static void clamp_hscroll(int tw, int th) {
+    const struct ugfx_font *was_doc = doc_font();
     int cols = tw / ugfx_char_w();
     int max = utext_widest_line(&g_text, tw, th) - cols;
     if (max < 0) max = 0;
     if (g_text.hscroll > max) g_text.hscroll = max;
     if (g_text.hscroll < 0) g_text.hscroll = 0;
+    ugfx_set_font(was_doc);
 }
 
 // The horizontal twin of scrollbar_press(). The widget classifies the
@@ -1077,7 +1108,8 @@ static int g_hbar_drag;
 static int g_hbar_grab;
 
 static int hbar_press(int px, int py, int tx, int ty, int tw, int th) {
-    if (hbar_h() <= 0) return 0;
+    const struct ugfx_font *was_doc = doc_font();
+    if (hbar_h() <= 0) { ugfx_set_font(was_doc); return 0; }
     int bx, by, bw, bh;
     hbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
 
@@ -1088,7 +1120,7 @@ static int hbar_press(int px, int py, int tx, int ty, int tw, int th) {
     enum uui_scrollbar_zone z =
         uui_scrollbar_hit(bx, by, bw, bh, total, cols, g_text.hscroll, px, py, flags);
     switch (z) {
-    case UUI_SB_NONE:  return 0;
+    case UUI_SB_NONE:  ugfx_set_font(was_doc); return 0;
     case UUI_SB_UP:    g_text.hscroll -= 1;    break;   // the LEFT arrow
     case UUI_SB_DOWN:  g_text.hscroll += 1;    break;
     case UUI_SB_ABOVE: g_text.hscroll -= cols; break;   // the track, left of the thumb
@@ -1099,10 +1131,12 @@ static int hbar_press(int px, int py, int tx, int ty, int tw, int th) {
                                   &thumb_x, &thumb_w, bh, flags);
         g_hbar_grab = px - thumb_x;
         g_hbar_drag = 1;
+        ugfx_set_font(was_doc);
         return 1;
     }
     }
     clamp_hscroll(tw, th);
+    ugfx_set_font(was_doc);
     return 1;
 }
 
@@ -1141,6 +1175,9 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
 
     if (g_preview) return;   // the widget is routed; it owns its own input
 
+    // Only from here down does anything measure the document.
+    const struct ugfx_font *was_doc = doc_font();
+
     int tx, ty, tw, th;
     text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
     if (scrollbar_press(x, y, tx, ty, tw, th)) {
@@ -1153,9 +1190,11 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
         g_dragging = 1;
     }
     uapp_redraw(a);
+    ugfx_set_font(was_doc);
 }
 
 static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
+    const struct ugfx_font *was_doc = doc_font();
     int tx, ty, tw, th;
     text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
 
@@ -1169,7 +1208,7 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
         uapp_set_cursor(a, over_text ? WIN_CURSOR_TEXT : WIN_CURSOR_DEFAULT);
     }
 
-    if (!buttons) return;
+    if (!buttons) { ugfx_set_font(was_doc); return; }
     if (g_scrollbar_drag) {
         int total, visible;
         utext_metrics(&g_text, tw, th, &total, &visible);
@@ -1198,6 +1237,7 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
         g_text.ed.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, x, y);
         uapp_redraw(a);
     }
+    ugfx_set_font(was_doc);
 }
 
 static void on_release(struct uapp *a, int x, int y, unsigned buttons) {

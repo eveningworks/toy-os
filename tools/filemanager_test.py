@@ -599,6 +599,19 @@ def setup_fixture(dbg):
     dbg.send(f"sh touch {SRC}/three.txt")
     dbg.send(f"sh mkdir {SRC}/sub")
 
+    # **THE TWO-PANE STATE IS ESTABLISHED, NOT INHERITED.** Most of this
+    # tool drives the commander layout -- copy between panes, the active
+    # pane's strip, Tab -- and it used to get it by default. The app
+    # opens as an Explorer now (one pane, the tree; see
+    # docs/conventions/gui.md), so nineteen checks failed on a change to
+    # a DEFAULT, which is CLAUDE.md's rule arriving the hard way: a test
+    # must state the precondition it needs.
+    #
+    # Written before the first launch, because the app reads this once
+    # at startup. `panes=2` is what it writes for the commander.
+    dbg.send(f'sh spawn /bin/tosh -c "echo panes=2 > {FILES_CONF}"')
+    dbg.send(f'sh spawn /bin/tosh -c "echo tree=0 >> {FILES_CONF}"')
+
 
 def teardown_fixture(dbg):
     """Leave the image as it was found.
@@ -2171,8 +2184,21 @@ def run(dbg, qmp, tmp, res):
         if not win:
             time.sleep(0.3)
     ox, oy = win["content"]["x"], win["content"]["y"]
-    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == MS and
-                       l.rows.get(0, 0) >= 7) or lay
+    # NO `or lay` FALLBACK: every line below INDEXES this layout's own
+    # geometry, and the previous window's rects put the pointer outside
+    # the new one's rows entirely -- which reads as the modifier not
+    # reaching the widget. So the predicate asks for exactly the fields
+    # the code uses, and a timeout ends the section with the numbers.
+    fresh = wait_layout(dbg, win, lambda l: l.dir.get(0) == MS and
+                        l.rows.get(0, 0) >= 7 and l.pane.get(0) is not None and
+                        l.rowy.get(0) is not None and bool(l.rowh))
+    if not fresh:
+        seen = last_layout()
+        res.check("a plain click marks nothing on its own", False,
+                  f"the respawned window never reported usable row geometry; "
+                  f"last={seen and (seen.dir, seen.rows, seen.pane, seen.rowy, seen.rowh)}")
+        return
+    lay = fresh
     px, py, pw, ph = lay.pane[0]
     rh = lay.rowh or 16
 
@@ -2191,9 +2217,18 @@ def run(dbg, qmp, tmp, res):
         accelerates the pointer, so an unverified warp lands on a
         neighbour often enough to mark the wrong file -- which reads as
         the modifier not working rather than as a miss."""
+        # **NUDGED, because re-warping to the SAME point cannot
+        # converge.** The loop used to try the row's exact centre six
+        # times; if that point was systematically off -- a row is one
+        # line tall and the line height moved by a pixel when the
+        # interface face became proportional -- all six landed on the
+        # same neighbour and the check read as "the modifier does not
+        # work" rather than "the aim missed". The offsets walk outward
+        # from the centre and stay inside the row.
         got = None
-        for _ in range(6):
-            dbg.warp_cursor(dbg_qmp, *row_pt(view_row))
+        x0, y0c = row_pt(view_row)
+        for dy in (0, -1, 1, -2, 2, -3, 3, rh // 4, -(rh // 4)):
+            dbg.warp_cursor(dbg_qmp, x0, y0c + dy)
             # `layout_now`, NOT `wait_layout`: the app emits its block
             # only when the block CHANGES, so a warp that lands where the
             # pointer already was logs nothing at all and a wait for a
@@ -2201,7 +2236,9 @@ def run(dbg, qmp, tmp, res):
             got = layout_now(dbg, win)
             if got and got.hoverv.get(0) == view_row:
                 return True
-        aim_misses.append(f"want {view_row} got {got and got.hoverv}")
+        aim_misses.append(f"want {view_row} got {got and got.hoverv} "
+                           f"at ({x0},{y0c}) rh={rh} rowy={lay.rowy.get(0)} "
+                           f"pane={lay.pane.get(0)} win={ox},{oy}")
         return False
 
     dbg_qmp = qmp
@@ -2225,7 +2262,7 @@ def run(dbg, qmp, tmp, res):
               aimed and lay is not None and lay.marked[0] == 0 and
               lay.selected == "f0.txt",
               f"aimed={aimed} marked={lay and lay.marked} "
-              f"selected={lay and lay.selected}")
+              f"selected={lay and lay.selected} misses={aim_misses}")
 
     mod_click(2, "ctrl")
     lay = wait_layout(dbg, win, lambda l: l.marked[0] == 1) or lay

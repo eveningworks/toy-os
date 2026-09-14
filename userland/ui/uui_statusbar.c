@@ -8,8 +8,26 @@ static int pad(void) { return ugfx_char_w() / 2; }
 // A fixed pane's width. One derivation, used by drawing and by
 // pane_rect() alike -- the same rule the scrollbar's sb_geometry()
 // follows, for the same reason.
+//
+// **`chars` IS RESERVED IN DIGITS, NOT IN THE WIDEST GLYPH.** It used
+// to be `chars * ugfx_char_w()`, which is the same number on a
+// monospace face and far too generous on a proportional one -- the
+// fixed panes then ate the width the STRETCHING pane needed and its
+// text was clipped ("Ctrl-S sa"). A pane that declares a character
+// count is almost always reserving room for a number, and digits are
+// the same width in any sane face, so that is what it reserves.
+//
+// Never narrower than the text actually in it, because a pane holding
+// a WORD would otherwise be cut by a reservation meant for digits --
+// and a pane that clips its own content is worse than one a few pixels
+// wider than its neighbour.
 static int fixed_w(const struct uui_status_pane *p) {
-    return p->chars * ugfx_char_w() + 2 * pad();
+    int per = ugfx_char_advance('0');
+    if (per <= 0) per = ugfx_char_w();
+    int w = p->chars * per;
+    int textw = p->text ? ugfx_text_width(p->text) : 0;
+    if (textw > w) w = textw;
+    return w + 2 * pad();
 }
 
 void uui_statusbar_init(struct uui_statusbar *sb) {

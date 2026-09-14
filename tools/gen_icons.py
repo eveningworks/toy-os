@@ -636,15 +636,6 @@ def icon_cat_input():
     return im
 
 
-def icon_cat_startup():
-    # A power symbol -- a broken ring with a stem, which is what every
-    # system has used for "boot" since the IEC standardised it.
-    im, d = tile((210, 140, 70))
-    d.arc([15, 15, 49, 49], start=300, end=240, fill=WHITE, width=5)
-    d.line([32, 12, 32, 30], fill=WHITE, width=5)
-    return im
-
-
 def icon_cat_kernel():
     # A chip: a square die with legs on all four sides. The one category
     # that is about the machine rather than about the session.
@@ -681,6 +672,49 @@ def icon_cat_storage():
     return im
 
 
+def icon_cat_system():
+    # A tower: the machine itself, which is what this category is about
+    # (the shell it runs, the machine's own configuration) rather than
+    # the session on it. A TOWER and not a monitor, because Display is
+    # already a monitor and two boxes would be one too many; the power
+    # dot and the drive slots are what separate them at a glance.
+    im, d = tile((100, 110, 125))
+    d.rounded_rectangle([20, 10, 44, 54], radius=3, outline=WHITE, width=4)
+    d.ellipse([28, 16, 36, 24], outline=WHITE, width=3)   # power button
+    d.line([26, 32, 38, 32], fill=WHITE, width=3)         # drive slot
+    d.line([26, 40, 38, 40], fill=WHITE, width=3)         # drive slot
+    return im
+
+
+def icon_cat_desktop():
+    # A desktop with a panel along the bottom and two icons on it: the
+    # furniture of the session, which is what this category holds
+    # (wallpaper, icon size, taskbar, tray, screensaver). Distinct from
+    # Display's monitor, which is about the panel the pixels land on.
+    im, d = tile((80, 140, 150))
+    d.rounded_rectangle([10, 12, 54, 50], radius=3, outline=WHITE, width=4)
+    d.line([12, 42, 52, 42], fill=WHITE, width=3)        # the panel
+    d.rectangle([17, 20, 25, 28], outline=WHITE, width=3)  # an icon
+    d.rectangle([17, 31, 25, 38], outline=WHITE, width=3)  # another
+    return im
+
+
+def icon_cat_network():
+    # Three nodes on a stem: one above, two below. The shape every
+    # settings panel uses for a network -- a connection between things
+    # rather than a cable or a globe, neither of which is what this
+    # category is about (an address, a name, a log).
+    im, d = tile((70, 120, 165))
+    d.line([32, 20, 32, 32], fill=WHITE, width=4)        # stem down
+    d.line([16, 32, 48, 32], fill=WHITE, width=4)        # crossbar
+    d.line([16, 32, 16, 40], fill=WHITE, width=4)        # left drop
+    d.line([48, 32, 48, 40], fill=WHITE, width=4)        # right drop
+    d.ellipse([26, 10, 38, 22], outline=WHITE, fill=WHITE)   # top node
+    d.ellipse([10, 40, 22, 52], outline=WHITE, fill=WHITE)   # left node
+    d.ellipse([42, 40, 54, 52], outline=WHITE, fill=WHITE)   # right node
+    return im
+
+
 def icon_cat_sound():
     # A speaker with one arc. Deliberately ONE arc, not the tray
     # volume icon's three: this is the category heading, and it should
@@ -696,8 +730,10 @@ ICONS = {
     "cat-time": icon_cat_time,
     "cat-appearance": icon_cat_appearance,
     "cat-input": icon_cat_input,
-    "cat-startup": icon_cat_startup,
     "cat-kernel": icon_cat_kernel,
+    "cat-system": icon_cat_system,
+    "cat-desktop": icon_cat_desktop,
+    "cat-network": icon_cat_network,
     "cat-display": icon_cat_display,
     "cat-storage": icon_cat_storage,
     "cat-sound": icon_cat_sound,

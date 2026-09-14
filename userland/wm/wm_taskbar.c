@@ -203,12 +203,10 @@ int taskbar_icon_size(void) {
 }
 
 static void make_label(char *dst, int cap, const char *src, int w, int count) {
-    int cw = ugfx_char_w();
     // 24 matches win_btn_w()'s own padding, so a full-width label sits
     // inside the button rather than touching its edges.
-    int room = cw > 0 ? (w - 24) / cw : 0;
-    if (room > cap - 1) room = cap - 1;
-    if (room < 0) room = 0;
+    int avail = w - 24;
+    if (avail < 0) avail = 0;
 
     char suffix[8];
     int sn = 0;
@@ -223,11 +221,24 @@ static void make_label(char *dst, int cap, const char *src, int w, int count) {
     }
     suffix[sn] = '\0';
 
-    int nameroom = room - sn;
+    // **THE NAME IS MEASURED, NOT COUNTED IN CELLS.** This divided the
+    // button's width by ugfx_char_w() -- the WIDEST advance -- which is
+    // right only on a monospace face; with a proportional interface
+    // face it cut "Terminal" to "Termina" on a button with room to
+    // spare. The suffix is measured too, and reserved from the width
+    // rather than from a character count, because "(12)" is not four
+    // cells wide in a face where it is not four cells wide.
+    int sufw = sn ? ugfx_text_width(suffix) : 0;
+    int nameavail = avail - sufw;
+    if (nameavail < 0) nameavail = 0;
+
+    int nameroom = src ? ugfx_text_fit_chars(src, nameavail) : 0;
+    if (nameroom > cap - 1 - sn) nameroom = cap - 1 - sn;
     if (nameroom < 0) nameroom = 0;
+
     int n = 0;
     for (; src && src[n] && n < nameroom; n++) dst[n] = src[n];
-    for (int k = 0; k < sn && n < room; k++) dst[n++] = suffix[k];
+    for (int k = 0; k < sn && n < cap - 1; k++) dst[n++] = suffix[k];
     dst[n] = '\0';
 }
 

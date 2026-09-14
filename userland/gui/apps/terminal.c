@@ -345,6 +345,10 @@ static int g_rename_slot = -1;
 // frames later through on_widget -- so the refusal goes out first and
 // the real close is a uapp_quit() from the dialog's commit.
 static struct uui_dialog g_quit_ask;
+
+static int modal_up(void) {
+    return term_prefs_is_open() || uui_dialog_is_open(&g_quit_ask);
+}
 enum { QUIT_YES = 1, QUIT_NO };
 static struct uui_item g_widgets[] = {
     { .ops = &uui_menubar_ops, .widget = &g_menu,  .id = ID_MENU, .name = "menu" },
@@ -368,9 +372,22 @@ static int g_rows = 24, g_cols = 80;  // one window, so one size for all
 // Notepad an 8px strip that was genuinely hard to click.
 static int chrome_h(void);
 
+// **CHROME IS MEASURED IN THE UI FACE, WHATEVER IS SELECTED.** This is
+// called from inside draw()'s grid-font bracket AND from the layout and
+// hit-test paths outside it, and uui_scrollbar_natural_size() reads the
+// CURRENT font -- so a width that depended on the caller drew the bar
+// one size and hit-tested another. It did: the thumb answered a drag
+// several pixels short of where it was painted.
+// **A MODAL OWNS THE INPUT.** The router offers an open overlay every
+// event first, but one it does not consume still reaches the app-level
+// handler -- so without this test the menu bar opened and the grid
+// selected text underneath an open dialog, which is not a modal. Every
+// input handler in this file asks, and so does the caret.
 static int bar_w(void) {
+    const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
     int w = 0, h = 0;
     uui_scrollbar_natural_size(&w, &h);
+    ugfx_set_font(was);
     return w;
 }
 
@@ -1216,7 +1233,13 @@ static int menubar_h(void) {
 // single-shell window and a geometry that no longer jumps when a second
 // tab opens, which is the half worth having.
 static int chrome_h(void) {
-    return menubar_h() + uui_tabs_height();
+    // The same rule as bar_w(): the menu bar and the tab strip are the
+    // toolkit's, drawn in the UI face, and this is asked both inside
+    // and outside the grid-font bracket.
+    const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
+    int h = menubar_h() + uui_tabs_height();
+    ugfx_set_font(was);
+    return h;
 }
 
 static void draw_run(struct ugfx_surface *s, int x, int y,
@@ -1283,7 +1306,7 @@ static void draw(struct ugfx_surface *s, int focused) {
     // tab strip after this runs, and a full-surface fill here would wipe
     // whatever it had already put down (ui/uapp.c's draw order).
     ugfx_fill_rect(s, 0, top, s->w, s->h - top, VGA_RGB[VT_BG]);
-    if (!ses) return;
+    if (!ses) { ugfx_set_font(was_font); return; }
 
     int ch = cell_h(), cw = cell_w();
 
@@ -1320,14 +1343,10 @@ static void draw(struct ugfx_surface *s, int focused) {
     // The caret, only while FOCUSED and only while the program wants it
     // shown (`ESC[?25l` hides it -- a full-screen program parking the
     // caret somewhere meaningless turns it off rather than moving it).
-    // An unfocused window drawing a caret claims to be taking input that
-    // is going somewhere else.
-    // A MODAL OWNS THE INPUT, so the caret steps aside while one is up
-    // -- the same test Notepad's document draw makes, and for the same
-    // reason a caret is not drawn in an unfocused window: it claims to
-    // be taking keys that are going somewhere else.
+    // An unfocused window -- or one under a modal -- drawing a caret
+    // claims to be taking input that is going somewhere else.
     if (focused && ses->cursor_shown && ses->sb_view == 0 && g_caret_on
-            && !term_prefs_is_open() && !uui_dialog_is_open(&g_quit_ask)) {
+            && !modal_up()) {
         int cx = g_margin + ses->cc * cw, cy = top + g_margin + ses->cr * ch;
         if (g_conf.cursor == TERM_CURSOR_UNDER) {
             int t = ch / 8 + 1;
@@ -1649,6 +1668,7 @@ static int on_tick(struct uapp *a) {
 static void scroll_to(struct uapp *a, int want);
 
 static void on_wheel(struct uapp *a, int notches) {
+    if (modal_up()) return;
     struct session *s = active();
     if (!s) return;
     scroll_to(a, s->sb_view + notches * WHEEL_LINES);
@@ -1936,6 +1956,7 @@ static void do_command(struct uapp *a, int code) {
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
+    if (modal_up()) return;   // ...and it must not reach the pty
     // --- the rename prompt owns every key while it is up --------------
     if (g_rename_open) {
         if (key == '\n' || key == '\r') { rename_commit(); tabs_refresh(); }
@@ -2133,6 +2154,7 @@ static int click_run(int x, int y) {
 }
 
 static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
+    if (modal_up()) return;
     if (g_rename_open) {
         int fx, fy, fw, fh;
         rename_rect(uapp_width(a), uapp_height(a), &fx, &fy, &fw, &fh);
@@ -2204,6 +2226,7 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
 }
 
 static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
+    if (modal_up()) return;
     struct session *ses = active();
     if (!ses) return;
 
@@ -2242,6 +2265,7 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
 }
 
 static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
+    if (modal_up()) return;
     (void)x; (void)y; (void)buttons;
     g_bar_grab = -1;
     if (!g_selecting) return;

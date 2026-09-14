@@ -157,3 +157,6 @@ ci-virtio.img
 # EXTRAS build put in the image. Neither is source.
 /.extras-accepted
 /data/usr/share/licenses/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

@@ -211,6 +211,11 @@ def cached_count(dbg):
         return -1
 
 
+# A launcher this tool writes and removes, for the wrap check below:
+# a name long enough to need two lines whatever the interface face is.
+WRAP_ENTRY = "/home/desktop/zz-wraptest.desktop"
+
+
 def desktop_report(dbg):
     """`gui icons --json` whole: size, size_word and the per-icon rects."""
     import json as _json
@@ -666,10 +671,31 @@ def run(dbg, qmp, tmp, res):
         except ValueError:
             return None
 
-    settings_icon = icon_rect(rep, "System Settings")
-    res.check("a two-word name wraps to two label lines",
-              settings_icon is not None and settings_icon.get("lines") == 2,
-              f"System Settings={settings_icon}")
+    # **A NAME LONG ENOUGH TO WRAP, PLACED BY THIS TEST.** It used to
+    # assert that "System Settings" took two lines, which was true while
+    # the interface face was monospace and stopped being true the day it
+    # became proportional -- the same fifteen characters simply fit.
+    # Relying on a SHIPPED name to be long enough is relying on data
+    # this check does not own; a launcher it writes itself cannot be
+    # shortened by somebody renaming an app or widened by a face.
+    long_name = "Wrap Me Onto Two Lines"
+    dbg.send(f'sh spawn /bin/tosh -c "echo [Desktop Entry] > {WRAP_ENTRY}"')
+    dbg.send(f'sh spawn /bin/tosh -c "echo Name={long_name} >> {WRAP_ENTRY}"')
+    dbg.send(f'sh spawn /bin/tosh -c "echo Exec=/bin/hello >> {WRAP_ENTRY}"')
+    # The desktop reloads on the filesystem's generation, so writing the
+    # file IS the trigger -- the same wait every other launcher check in
+    # this tool uses.
+    time.sleep(1.8)
+    dbg.settle()
+    wrapped = icon_rect(desktop_report(dbg), long_name)
+    res.check("a name too long for one line wraps to two",
+              wrapped is not None and wrapped.get("lines") == 2,
+              f"{long_name}={wrapped}")
+    # Removed whatever happened: a launcher left here is inherited by
+    # every later run of every GUI tool, which is the trap CLAUDE.md
+    # records for a test that changes the machine.
+    dbg.send(f"sh rm {WRAP_ENTRY}")
+    time.sleep(1.2)
     dbg.rclick(640, 400)
     time.sleep(0.4)
     menu = ctx()

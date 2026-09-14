@@ -67,15 +67,15 @@ static const char *const CURSOR_LABELS[] = { "Block", "Underline", "Bar" };
 // rightwards with nothing lining up.
 static struct uui_layout g_row_font, g_row_sb, g_row_margin;
 static struct uui_item g_row_font_items[] = {
-    { .ops = &uui_label_ops,   .widget = &g_l_font, .name = "font-label" },
+    { .ops = &uui_label_ops,   .widget = &g_l_font, .flags = UUI_FILL_H, .name = "font-label" },
     { .ops = &uui_spinbox_ops, .widget = &g_font, .id = ID_FONT, .name = "font" },
 };
 static struct uui_item g_row_sb_items[] = {
-    { .ops = &uui_label_ops,   .widget = &g_l_sb, .name = "sb-label" },
+    { .ops = &uui_label_ops,   .widget = &g_l_sb, .flags = UUI_FILL_H, .name = "sb-label" },
     { .ops = &uui_spinbox_ops, .widget = &g_sb, .id = ID_SB, .name = "scrollback" },
 };
 static struct uui_item g_row_margin_items[] = {
-    { .ops = &uui_label_ops,   .widget = &g_l_margin, .name = "margin-label" },
+    { .ops = &uui_label_ops,   .widget = &g_l_margin, .flags = UUI_FILL_H, .name = "margin-label" },
     { .ops = &uui_spinbox_ops, .widget = &g_margin, .id = ID_MARGIN, .name = "margin" },
 };
 

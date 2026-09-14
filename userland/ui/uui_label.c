@@ -101,7 +101,16 @@ void uui_label_draw(struct ugfx_surface *s, const struct uui_label *l) {
 static void uui_label_draw_body(struct ugfx_surface *s, const struct uui_label *l) {
     if (!l->text || !l->text[0]) return;
     if (!l->wrap) {
-        ugfx_draw_string_clipped(s, l->x, l->y, l->w, l->text, l->fg, l->bg);
+        // **CENTRED IN WHATEVER HEIGHT IT WAS GIVEN.** A label's box is
+        // its own text height unless a layout stretched it, and then
+        // the centre IS the top -- so this is a no-op for every label
+        // that is not filling. Where it matters is a form caption
+        // beside a taller control (a spinbox, a field): drawn at l->y
+        // it floats at the top of the row and reads as misaligned,
+        // which is what every toolkit centres it to avoid.
+        int th = ugfx_char_h();
+        int ty = l->h > th ? l->y + (l->h - th) / 2 : l->y;
+        ugfx_draw_string_clipped(s, l->x, ty, l->w, l->text, l->fg, l->bg);
         return;
     }
 

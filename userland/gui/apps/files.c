@@ -80,9 +80,19 @@ struct uui_splitter g_pane_split;   // left | right
 // View options, all persisted in FILES_CONF. `g_single` shows only the
 // ACTIVE pane (Tab still swaps which one that is, and F5/F6 still act
 // toward the hidden one's directory -- the pane keeps existing, it just
-// is not shown). The commander shape stays the default.
-int g_single;
-int g_tree_on;
+// is not shown).
+//
+// **THE DEFAULT IS ONE PANE WITH THE TREE BESIDE IT** -- Explorer's
+// shape, and Dolphin's and Nautilus's out of the box. The commander
+// layout is still here and is one toolbar click away; what changed is
+// which of the two a person who has never opened this app gets. Two
+// panes is a power user's arrangement and reads as cluttered to
+// everyone else, and the tree is how most people navigate.
+//
+// Both are PERSISTED, so this only decides a machine's first run --
+// after that the file wins, which is why changing it is safe.
+int g_single = 1;
+int g_tree_on = 1;
 
 struct uui_menubar g_menu;
 struct uui_menubar g_ctx;   // the context menu -- no bar of its own

@@ -40,6 +40,43 @@ this the obvious way), not from how much history it accumulated.
   -- a terminal is monospace by definition -- so a proportional face
   gets a cell as wide as its widest advance there.
 
+- **A SHARED GEOMETRY HELPER MEASURES IN WHATEVER FACE THE CALLER
+  CURRENTLY HAS SELECTED, AND `ugfx_set_font()` IS PER PROCESS.** Font
+  selection is a process-wide register, not an argument, so
+  `uui_scrollbar_natural_size()` and every other toolkit measurement
+  answers a different number depending on WHO IS ASKING and WHEN. An app
+  that switches faces mid-frame -- Terminal and Notepad both do, to draw
+  a document in the monospace family while their chrome stays in the
+  interface one -- must call each helper from INSIDE the same bracket
+  every time, or the two call sites disagree.
+
+  The failure is silent and asymmetric: a scrollbar DRAWN in one face and
+  HIT-TESTED in the other is a thumb that tracks the pointer at the wrong
+  rate (measured: 52px of travel per 60px dragged), and a chrome height
+  computed both ways clips a row. Neither looks like a font bug. The fix
+  is to pin the face inside the helper's own wrapper --
+
+  ```c
+  static int bar_w(void) {
+      const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
+      int w = 0, h = 0;
+      uui_scrollbar_natural_size(&w, &h);
+      ugfx_set_font(was);
+      return w;
+  }
+  ```
+
+  -- so there is one answer rather than one per call site. A single-face
+  app never sees this, which is why it survived until the interface
+  became proportional.
+
+  **AND EVERY EARLY RETURN INSIDE A BRACKET LEAKS THE FACE**, leaving the
+  whole process measuring in the document's font until something else
+  sets it -- a handler's `if (!buttons) return;` is enough. Put the
+  acquire BELOW the exits that measure nothing, and restore on the ones
+  that remain; six of these were in the first version of Notepad's and
+  Terminal's brackets.
+
 - **A TITLE-BAR BUTTON IS A DISC, AND EVERY GLYPH CENTRES ON THE SAME
   PIXEL AS IT.** Adwaita's shape, chosen because a circle has no corners
   to alias at 18px. Four things, three of which were bugs first:
@@ -2546,16 +2583,29 @@ real scanout hardware does. Do not write a pixel assertion for one.
     a timer must skip while `uui_fileview_band_active()` says a sweep
     is in progress: a reload clears the very marks the band is choosing
     (the desktop's `desktop_drag_active()` rule).
-- **THE FILE MANAGER IS A TWO-PANE COMMANDER, NOT AN EXPLORER**
+- **THE FILE MANAGER IS A COMMANDER THAT OPENS AS AN EXPLORER**
   (`userland/gui/apps/files.c` plus `userland/fm/`, `/bin/wm/apps/files`).
-  Explorer's two
+  It was built as a two-pane commander for a real reason: Explorer's two
   primary verbs are copy/paste and drag-onto-a-window, and this system
-  has neither a clipboard nor drag-and-drop -- both are their own
-  roadmap milestone. Norton Commander's answer, kept by Midnight
-  Commander, Total Commander and Krusader for forty years, needs
-  neither: with two directories on screen the source is the active pane
-  and the destination is the other one, so nothing is carried and
-  nothing needs a carrier. Ten things to know, the first being where
+  had neither a clipboard nor drag-and-drop. Norton Commander's answer,
+  kept by Midnight Commander, Total Commander and Krusader for forty
+  years, needs neither: with two directories on screen the source is the
+  active pane and the destination is the other one, so nothing is
+  carried and nothing needs a carrier.
+
+  **BOTH OF THOSE ARRIVED, so the argument for two panes as the DEFAULT
+  went with them** -- there is a system clipboard (`lib/uclip.h`) and
+  drag-and-drop within and between windows. The commander layout is
+  still here, still the better tool for moving things, and one toolbar
+  click away; what changed (2026-09-14) is that a first run opens with
+  ONE pane and the folder tree, which is Explorer's shape and Dolphin's
+  and Nautilus's. Two panes reads as cluttered to somebody who has not
+  asked for it, and the tree is how most people navigate.
+
+  **`g_single`/`g_tree_on` DEFAULT TO 1 AND ARE PERSISTED**, so the
+  compiled-in value decides a machine's first run only; after that
+  `/etc/files.conf` wins, which is what makes changing it safe. Ten
+  things to know, the first being where
   they are: **the app is SIX translation units** -- `files.c` is the
   menus, the commands, input and `main()`; `userland/fm/` holds the view,
   the job queue, the tree, the thumbnails and the modal, sharing state

@@ -26,7 +26,9 @@
 //   - is skipped by the focus ring,
 //   - and never changes what the app is showing.
 //
-// An item is the opposite of all five. That asymmetry is the widget:
+// An item is the opposite of all five, and a TOP row is a heading in
+// the first respect and an item in the other four. That asymmetry is
+// the widget:
 // an app declares a flat array and gets a sidebar in which only the
 // destinations are reachable, which is the property a tree cannot give
 // it without pretending a heading is a place.
@@ -48,6 +50,15 @@ enum uui_sidebar_kind {
     UUI_SIDEBAR_HEADING = 0,
     // A destination. Indented, selectable, focusable, arrow-navigable.
     UUI_SIDEBAR_ITEM    = 1,
+    // **A DESTINATION THAT IS ALSO A TOP-LEVEL ROW.** Bold and
+    // unindented like a heading, selectable like an item -- the third
+    // of the four combinations, and the one a category with exactly
+    // ONE page needs: collapsing it to a single row is right (its
+    // heading and its page said the same word), but rendering that row
+    // as an ITEM indents it under whatever heading came before and it
+    // reads as a page of the wrong category. GNOME's sidebar is a flat
+    // list of exactly these.
+    UUI_SIDEBAR_TOP     = 2,
 };
 
 struct uui_sidebar_row {

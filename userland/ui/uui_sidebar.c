@@ -18,7 +18,8 @@
 #define UUI_SIDEBAR_INDENT  10 // extra inset for an item under one
 
 static int is_item(const struct uui_sidebar *s, int row) {
-    return row >= 0 && row < s->count && s->rows[row].kind == UUI_SIDEBAR_ITEM;
+    return row >= 0 && row < s->count &&
+           s->rows[row].kind != UUI_SIDEBAR_HEADING;
 }
 
 // The first selectable row, or -1 when the sidebar is all headings --
@@ -174,7 +175,7 @@ static int icon_px(void) { return ugfx_char_h(); }
 // every system that has icons does it this way for exactly that reason.
 static int icon_gutter(const struct uui_sidebar *s) {
     for (int i = 0; i < s->count; i++)
-        if (s->rows[i].kind == UUI_SIDEBAR_HEADING && s->rows[i].icon)
+        if (s->rows[i].kind != UUI_SIDEBAR_ITEM && s->rows[i].icon)
             return icon_px() + UUI_SIDEBAR_PAD_X;
     return 0;
 }
@@ -197,7 +198,7 @@ static int text_x(const struct uui_sidebar *s, int row) {
 void uui_sidebar_natural_size(const struct uui_sidebar *s, int *out_w, int *out_h) {
     int widest = 0;
     for (int i = 0; i < s->count; i++) {
-        int heading = s->rows[i].kind == UUI_SIDEBAR_HEADING;
+        int heading = s->rows[i].kind != UUI_SIDEBAR_ITEM;
         const struct ugfx_font *was =
             ugfx_set_font(heading ? ugfx_font_session(UGFX_FONT_BOLD) : 0);
         // THE GUTTER COUNTS TOWARDS THE WIDTH. It is added to every
@@ -234,8 +235,14 @@ void uui_sidebar_draw(struct ugfx_surface *surf, const struct uui_sidebar *s) {
         int row = s->top + r;
         if (row >= s->count) break;
         int ry = s->y + r * rh;
-        int heading = s->rows[row].kind == UUI_SIDEBAR_HEADING;
-        int selected = (row == s->selected) && !heading;
+        // TWO QUESTIONS, NOT ONE. `heading` is about WEIGHT and indent
+        // -- true of a caption and of a collapsed top-level row alike --
+        // while `inert` is about whether it can be chosen. Conflating
+        // them is why a selected TOP row painted no highlight the first
+        // time this was written.
+        int heading = s->rows[row].kind != UUI_SIDEBAR_ITEM;
+        int inert = s->rows[row].kind == UUI_SIDEBAR_HEADING;
+        int selected = (row == s->selected) && !inert;
         if (selected) sel_ry = ry;
 
         // NO HOVER AND NO SELECTION BOX ON A HEADING. A caption that
@@ -244,7 +251,7 @@ void uui_sidebar_draw(struct ugfx_surface *surf, const struct uui_sidebar *s) {
         // widget exists to avoid.
         if (selected)
             ugfx_fill_rect(surf, s->x, ry, s->w - bar, rh, s->sel_bg);
-        else if (!heading && row == s->hovered)
+        else if (!inert && row == s->hovered)
             ugfx_fill_rect(surf, s->x, ry, s->w - bar, rh,
                             uui_state_bg(s->bg, UUI_STATE_HOVER));
 

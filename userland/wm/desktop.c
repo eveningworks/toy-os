@@ -147,8 +147,22 @@ static int drag_start_row[DESKTOP_MAX_ICONS];
 // the fix either: at 76px only ~7 characters fit, turning "Control
 // Panel" and "Calculator" into "Contr.." and "Calcu..". So the pitch
 // widened to fit a real label, and clipping handles what still doesn't.
+// **RESERVED IN A REPRESENTATIVE GLYPH, NOT THE WIDEST ONE.**
+// `ugfx_char_w()` is the widest advance in the face: the same number as
+// every other advance on a monospace face, and nearly twice the average
+// on a proportional one. Thirteen of it took the column from 112px to
+// 190px the day the interface face became Liberation Sans, and the
+// selection highlight -- which is a column wide -- went with it.
+//
+// `advance('n')` keeps the column at the 112px it has always been,
+// which is what the captions were sized against: "System Settings"
+// measures ~105px and fits, a longer name still wraps to the second
+// line. A column is a PITCH for text nobody has seen yet, so it wants
+// the width of ordinary text rather than of the one widest glyph.
 static int icon_col_w(void) {
-    int w = DESKTOP_ICON_LABEL_CHARS * ugfx_char_w() + 8;
+    int per = ugfx_char_advance('n');
+    if (per <= 0) per = ugfx_char_w();
+    int w = DESKTOP_ICON_LABEL_CHARS * per + 8;
     return w < icon_px() + 8 ? icon_px() + 8 : w;
 }
 
@@ -529,6 +543,28 @@ static void icon_box(const struct icon_grid *g, int i, int *x, int *y, int *w, i
     *h = icon_px() + 4 + label_h();
 }
 
+// **THE SELECTION HIGHLIGHT'S RECT, IN ONE PLACE.** The fill and the
+// damage both come from here, and they used not to: the fill was a
+// literal in the draw loop and the damage used icon_box(), which is the
+// HIT rect and is strictly inside the fill on all four sides. So every
+// deselection left the overhang unpainted -- a blue outline around
+// where the highlight had been, one row of it under every icon clicked
+// past. Pre-existing; it surfaced while the proportional face was
+// being measured, not because of it.
+//
+// Deliberately NOT icon_box() itself: that one is what a CLICK is
+// tested against, and widening it would quietly enlarge every icon's
+// target. One rect for one job, two jobs.
+// Taken from a CELL'S TOP-LEFT rather than from an index, so the draw
+// can pass a dragged icon's offset position and the damage the grid's,
+// with one derivation of the size either way.
+static void icon_hl_rect(int cell_x, int cell_y, int *x, int *y, int *w, int *h) {
+    *x = cell_x + 2;
+    *y = cell_y - 4;
+    *w = icon_col_w() - 4;
+    *h = icon_px() + 4 + label_h() + 6;
+}
+
 // How many label lines `name` takes at the column's width, capped at
 // DESKTOP_LABEL_LINES -- what `gui icons` reports, so a test can assert
 // a long name WRAPPED rather than reading pixels.
@@ -636,8 +672,11 @@ void desktop_draw(void) {
         if (rb_is_selected(&sel, i)) {
             // The whole caption block, icon and both label lines, as on
             // Windows and KDE -- a highlight the width of the column.
-            ugfx_fill_rect(wm_surface(), cell_x + 2, y - 4, icon_col_w() - 4,
-                           px + 4 + label_h() + 6, icon_selected_bg);
+            // The rect is icon_hl_rect()'s, so that what is PAINTED and
+            // what is DAMAGED cannot drift apart.
+            int hx, hy, hw, hh;
+            icon_hl_rect(cell_x, y, &hx, &hy, &hw, &hh);
+            ugfx_fill_rect(wm_surface(), hx, hy, hw, hh, icon_selected_bg);
         }
 
         // A REAL ICON IF THERE IS ONE, the letter tile if there is not.
@@ -795,7 +834,12 @@ static void damage_selection_change(const uint32_t *before) {
         if (was == !!rb_is_selected(&sel, i)) continue;
         if (!item_visible(i)) continue;
         int x, y, w, h;
-        icon_box(&g, i, &x, &y, &w, &h);
+        // THE HIGHLIGHT'S rect, not the hit rect: what changed on
+        // screen is what was filled, and icon_box() is strictly inside
+        // it -- damaging that left the overhang painted.
+        int cx, cy;
+        icon_grid_cell_rect(&g, icon_col[i], icon_row[i], &cx, &cy);
+        icon_hl_rect(cx, cy, &x, &y, &w, &h);
         wm_damage_rect(x, y, w, h);
     }
 }

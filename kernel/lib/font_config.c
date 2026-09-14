@@ -43,17 +43,22 @@
 // setting here gets its default from code, and a first boot has no
 // config file to read.
 //
-// DejaVu Sans Mono because it is the face a Linux terminal has looked
-// like for twenty years, and because a default that exercises the
-// rasterizer on every boot is a default that cannot silently rot -- the
-// same argument that keeps one test booting -vga virtio.
-#define FACE_DEFAULT "dejavu-sans-mono"
+// **PROPORTIONAL, because this is the INTERFACE face.** It was
+// dejavu-sans-mono for as long as there was only one face setting and
+// the Terminal had to share it -- which made the whole desktop look
+// like a terminal, for a reason that was never about taste. With
+// `font_mono` beside it (below) the constraint is gone.
+//
+// Liberation Sans because it is metric-compatible with Arial, ships in
+// this tree already, and has a real bold companion -- so the bold
+// weight exercises the LOADED path on every boot rather than the
+// smeared fallback.
+#define FACE_DEFAULT "liberation-sans"
 
-// The MONOSPACE family's default. Today it is the same face as the UI
-// one, so a machine that has never been configured looks exactly as it
-// did -- which is the point: this change adds a second family, it does
-// not choose a new appearance. Pointing `font_face` at a proportional
-// face is what makes the two differ, and that is a separate decision.
+// The MONOSPACE family's default: the face a Linux terminal has looked
+// like for twenty years. A default that exercises the rasterizer on
+// every boot is one that cannot silently rot -- the same argument that
+// keeps one test booting -vga virtio.
 #define MONO_DEFAULT "dejavu-sans-mono"
 
 // THE FACE IS APPLIED BEFORE THE SIZE, and the order is not cosmetic:

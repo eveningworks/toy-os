@@ -1,2 +1,2 @@
-Description=The face menus, labels, titles and buttons draw with. It may be proportional; terminals use the monospace face below instead.
+Description=The face menus, labels and titles draw with. May be proportional; terminals use the monospace face.
 Order=20

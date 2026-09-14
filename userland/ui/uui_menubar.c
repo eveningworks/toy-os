@@ -9,10 +9,27 @@
 // metrics -- all font-derived, per docs/gui-guidelines.md
 // ---------------------------------------------------------------------
 
-static int pad(void)      { return ugfx_char_w() / 2; }
-static int gutter(void)   { return ugfx_char_w() * 2; } // the tick column
-static int arrow_col(void){ return ugfx_char_w(); }     // the submenu arrow
-static int accel_gap(void){ return ugfx_char_w() * 2; }
+// **THE SPACING UNIT IS A REPRESENTATIVE GLYPH, NOT THE WIDEST ONE.**
+// Every gap in this file used to be a multiple of ugfx_char_w(), which
+// is the WIDEST advance in the face. On a monospace face that is the
+// same number as every other advance, so it read as "one character".
+// On a proportional one it is nearly twice the average, and the day the
+// interface face stopped being monospace every title's padding doubled
+// and the bar spread out.
+//
+// `advance('n')` is unchanged on a monospace face -- so this is a
+// no-op for anything mono -- and is a sane average on a proportional
+// one. Height would also have been stable (utheme_pad() derives from
+// it), but it would have changed the monospace look too.
+static int unit(void) {
+    int u = ugfx_char_advance('n');
+    return u > 0 ? u : ugfx_char_w();
+}
+
+static int pad(void)      { return unit() / 2; }
+static int gutter(void)   { return unit() * 2; } // the tick column
+static int arrow_col(void){ return unit(); }     // the submenu arrow
+static int accel_gap(void){ return unit() * 2; }
 
 static int row_height(void) { return ugfx_char_h() + 6; }
 
@@ -38,7 +55,7 @@ static int enabled(const struct uui_menubar *m, const struct uui_menu_item *it) 
 }
 
 static int title_w(const struct uui_menu_item *it) {
-    return ugfx_text_width(it->label) + 2 * ugfx_char_w();
+    return ugfx_text_width(it->label) + 2 * unit();
 }
 
 // ONE geometry for a popup, shared by placement, drawing and hit-testing
@@ -274,7 +291,7 @@ void uui_menubar_set_bounds(struct uui_menubar *m, int x, int y, int w, int h) {
 
 void uui_menubar_natural_size(const struct uui_menubar *m, int *out_w, int *out_h) {
     if (out_w) {
-        int w = ugfx_char_w();
+        int w = unit();
         for (int i = 0; i < m->count; i++) w += title_w(&m->items[i]);
         *out_w = w;
     }
@@ -292,7 +309,7 @@ int uui_menubar_depth(const struct uui_menubar *m) { return m->depth; }
 int uui_menubar_title_rect(const struct uui_menubar *m, int index,
                             int *x, int *y, int *w, int *h) {
     if (index < 0 || index >= m->count) return 0;
-    int tx = m->x + ugfx_char_w() / 2;
+    int tx = m->x + unit() / 2;
     for (int i = 0; i < index; i++) tx += title_w(&m->items[i]);
     if (x) *x = tx;
     if (y) *y = m->y;
@@ -376,8 +393,8 @@ void uui_menubar_draw(struct ugfx_surface *s, const struct uui_menubar *m) {
 
         uint32_t bg = uui_state_bg(m->bar_bg, st);
         if (st != UUI_STATE_REST) ugfx_fill_rect(s, x, y, w, h, bg);
-        ugfx_draw_string_clipped(s, x + ugfx_char_w(), y + (h - ugfx_char_h()) / 2,
-                                  w - 2 * ugfx_char_w() + 2, m->items[i].label,
+        ugfx_draw_string_clipped(s, x + unit(), y + (h - ugfx_char_h()) / 2,
+                                  w - 2 * unit() + 2, m->items[i].label,
                                   m->fg, bg);
     }
 }
