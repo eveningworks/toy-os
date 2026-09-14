@@ -183,8 +183,21 @@ int sys_open(struct syscall_ctx *c) {
                 // all: /bin/tosh probes each PATH candidate with open()
                 // and reads any failure as "not there", so a machine out
                 // of descriptors reported "command not found".
-                klog_write("syscall: open() rejected -- fd table full\n");
-                c->regs[14] = (uint64_t)(int64_t)-EMFILE;
+                //
+                // **AND THE TWO TABLES ARE TWO ERRORS.** `fd_desc_alloc`
+                // failing means the SYSTEM's open-file descriptions are
+                // gone (ENFILE); `fd_install` failing means this process
+                // is out of descriptors (EMFILE). Reporting both as
+                // EMFILE tells a caller its own table is full when it is
+                // not, and a caller that believes it draws a false
+                // conclusion from the next call succeeding -- which is
+                // what /tests/errno_test did. sys_pipe() below already
+                // separates them.
+                int e = di < 0 ? -ENFILE : -EMFILE;
+                klog_write(di < 0
+                    ? "syscall: open() rejected -- no free open-file description\n"
+                    : "syscall: open() rejected -- fd table full\n");
+                c->regs[14] = (uint64_t)(int64_t)e;
             } else {
                 // The descriptor is reserved BEFORE the file work and
                 // put back if that work fails -- Linux's

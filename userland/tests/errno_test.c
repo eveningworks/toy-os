@@ -109,27 +109,35 @@ int main(void) {
           "mkdir() under a file is -1 ENOTDIR");
 
     // --- EMFILE: exhaust this process's table for real ------------------
-    // FD_MAX is 16 per address space and 0/1/2 are already taken, so
-    // this runs out well before the array does. Keeping every fd open is
-    // the point -- closing as it goes would never reach the branch.
+    //
+    // **FILLED WITH dup(), NOT WITH open(), AND THAT IS THE WHOLE
+    // POINT.** There are two tables -- FD_MAX descriptors per process
+    // and FD_DESC_MAX open-file DESCRIPTIONS for the whole system -- and
+    // open() needs one of each. On a machine with a dozen services
+    // alive the shared one runs out FIRST, so an open loop stops with
+    // this process's table half empty and every conclusion drawn from
+    // "it is full now" is false: the dup() below then succeeds and the
+    // test reports a bug that is not there. It failed exactly that way,
+    // intermittently, for months. dup() takes only a descriptor -- it
+    // shares the description it copies -- so this loop fills the one
+    // table it means to and cannot be affected by anything else running.
     int held[64];
     int n = 0;
     while (n < (int)(sizeof held / sizeof held[0])) {
-        int h = sys_open(PROBE, 0);
+        int h = sys_dup(0);
         if (h < 0) break;
         held[n++] = h;
     }
-    utest_check(n > 0, "opened the probe file until the table was full");
-    check_errno(sys_errno(), EMFILE, "open() with a full descriptor table");
-
-    // THE POINT OF ALL OF IT: the same path, the same process, two
-    // different answers. Anything that merges these two is the bug.
-    utest_notef("ENOENT and EMFILE are distinct: %s", ENOENT != EMFILE ? "yes" : "NO");
-
-    // dup() runs out of descriptors the same way, and must say so the
-    // same way rather than reporting a bad fd.
-    utest_check(sys_dup(0) < 0, "dup() fails with a full table");
+    utest_check(n > 0, "dup()ed fd 0 until this process's table was full");
     check_errno(sys_errno(), EMFILE, "dup() with a full descriptor table");
+
+    // ...and now open() must report the same thing, because the table
+    // that is full is this process's. THE POINT OF ALL OF IT: the same
+    // path, the same process, two different answers. Anything that
+    // merges these two is the bug.
+    utest_check(sys_open(PROBE, 0) < 0, "open() fails with a full table");
+    check_errno(sys_errno(), EMFILE, "open() with a full descriptor table");
+    utest_notef("ENOENT and EMFILE are distinct: %s", ENOENT != EMFILE ? "yes" : "NO");
 
     for (int i = 0; i < n; i++) sys_close(held[i]);
 

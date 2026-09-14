@@ -303,16 +303,27 @@ Reproduce: `python3 tools/ansi_cursor_test.py` (boots its own guest).
 
 Reproduce: `python3 tools/vm.py --disk <copy> start && python3 tools/taskbar_test.py`.
 
-## `errno_test` and `focusring_test` fail intermittently, 2 boots in 3
+## `errno_test` and `focusring_test` fail intermittently -- FIXED 2026-09-14
 
-`usertest_run.py` reports 49/51 with `errno_test: FAIL dup() fails with
-a full table` and `focusring_test` missing its pass line. Measured 2 of
-3 boots at commit 64f098e9, 2 of 4 with the storage work applied, and 3
-of 6 again on 2026-09-14 -- the same two tests every time, so
-PRE-EXISTING rather than introduced. `errno_test` run on its own passed
-4 of 4 in the same session, so it needs the rest of the suite ahead of
-it. Cause not established; the `dup()` check depends on how
-many descriptor tables the boot has already handed out, which is not
-something the test establishes for itself.
+**BOTH HALVES ARE FIXED, and each was a different fault.**
+`focusring_test` was the HARNESS: a spawned test's verdict was collected
+after a fixed 3-second sleep, so a slower boot reported a passing test
+as truncated. It polls the verdict now, with a deadline that is a hang
+guard rather than a budget.
 
-Reproduce: `python3 tools/usertest_run.py`, several times.
+`errno_test` was the KERNEL. There are two tables -- `FD_MAX`
+descriptors per process and `FD_DESC_MAX` open-file DESCRIPTIONS for the
+whole system -- and `open()` needs one of each, but `sys_open()`
+answered EMFILE whichever ran out. A caller that exhausted the shared
+table was told its OWN was full; the test believed it and required the
+next `dup()` to fail, which it will not, since `dup()` takes only a
+descriptor and shares the description it copies. `sys_open()` answers
+ENFILE for the shared table now, as `sys_pipe()` already did, and the
+test fills its table with `dup()` so nothing else on the machine can
+reach it.
+
+Kept as a record of the SHAPE rather than deleted: measured 2 of 3 boots
+at commit 64f098e9, 2 of 4 with the storage work, 3 of 6 on 2026-09-14
+-- always the same two tests, which is what said it was environmental
+rather than a flake, and what eventually named both causes. Delete this
+entry once it has stayed green for a while.

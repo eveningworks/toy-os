@@ -1225,8 +1225,11 @@ int sys_socket(struct syscall_ctx *c) {
     if (fd < 0) {
         if (di >= 0) fd_desc_unref(di);
         net_sock_close(sock);
-        klog_write("syscall: socket() rejected -- fd table full\n");
-        c->regs[14] = (uint64_t)(int64_t)-EMFILE;
+        // Which table ran out -- see sys_open()'s note.
+        klog_write(di < 0
+            ? "syscall: socket() rejected -- no free open-file description\n"
+            : "syscall: socket() rejected -- fd table full\n");
+        c->regs[14] = (uint64_t)(int64_t)(di < 0 ? -ENFILE : -EMFILE);
         return 0;
     }
     fd_desc[di].socket.idx = sock;
@@ -1550,7 +1553,7 @@ int sys_accept(struct syscall_ctx *c) {
     if (fd < 0) {
         if (di >= 0) fd_desc_unref(di);
         net_sock_close(conn);
-        c->regs[14] = (uint64_t)(int64_t)-EMFILE;
+        c->regs[14] = (uint64_t)(int64_t)(di < 0 ? -ENFILE : -EMFILE);
         return 0;
     }
     fd_desc[di].socket.idx = conn;

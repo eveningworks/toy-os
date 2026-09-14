@@ -4864,20 +4864,34 @@ luck.** Six more runs gave 1 clean, 3 with failures (`applog_test` and
 each) and one that HUNG for the full 15-minute timeout, leaving its
 guest behind. Against 6 of 6 clean at 0xEE with the same harness.
 
-**IT IS SUITE-ORDER DEPENDENT, NOT PER-TEST.** Run on their own at
-0xEF, `errno_test` passes 5 of 5 and `applog_test` 4 of 5 -- so what
-fails is the pair after fifty other tests have run on the same boot.
-That is what `docs/bugs.md` already says about the `dup()` check: it
-depends on how many descriptor tables the boot has handed out, and the
-fd table is keyed by CR3. A trap gate changes process lifetimes, so a
-mechanism exists; it is NOT established.
+**`errno_test` IS FIXED, AND IT WAS A REAL KERNEL BUG.** There are TWO
+tables -- `FD_MAX` descriptors per process and `FD_DESC_MAX` open-file
+DESCRIPTIONS for the whole system, 16 and 32 -- and `open()` needs one
+of each. `sys_open()` answered EMFILE for BOTH, so a caller that ran the
+system out of descriptions was told its OWN table was full. The test
+believed it, concluded the next `dup()` must fail, and reported a bug
+when `dup()` succeeded -- which it will, because `dup()` takes only a
+descriptor and shares the description it copies. On a machine with a
+dozen services alive holding two descriptions each, the shared table
+runs out first; a trap gate changes process lifetimes enough to make it
+usual rather than occasional. The split is POSIX's and `sys_pipe()` in
+the same file already had it right.
 
-**So the flip is blocked on that, and the discriminating experiment is
-cheap**: the pair fails after the suite and passes alone, at a gate
-where the same pair passes 6 of 6 with the suite. The hang is the other
-thread and has no diagnosis at all -- the harness buffers its output, so
-a run killed at the deadline leaves an empty log and a live guest.
-Re-run it with `python3 -u` to keep the output.
+Measured at 0xEF, full suite, 4 runs after the fix: `errno_test` clean
+in all four, against 3 failures in 4 before.
+
+**WHAT IS LEFT IS `applog_test`, 2 runs in 4 -- and it is the same
+SHAPE, not the same cause.** Alone at 0xEF it passes 5 of 5; in the
+suite it stops after 5 of its 7 checks, the two it never reaches being
+the ones that write several records through `logd`. So something the
+suite accumulates is what it trips over, exactly as `errno_test` did,
+and the accumulation is NOT identified. That is the last thing between
+here and the flip.
+
+The hang seen once has no diagnosis at all -- the harness buffers its
+output, so a run killed at the deadline leaves an empty log and a live
+guest. Re-run it with `python3 -u`, which is what the campaign does
+now.
 
 **AND THE (resume slot, depth) PAIR WAS SAVED WRONG, FOUND ON THE WAY.**
 A context is resumed with `mov rsp, <trapframe>; iretq`, which runs no
