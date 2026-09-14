@@ -664,6 +664,9 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Move the clipboard out of the kernel~~ DONE 2026-09-07 -- `/bin/clipboardd` owns a shared page; a paste costs no syscall
 - [x] ~~Mouse text selection in the Terminal, and copy from it~~ DONE 2026-09-07 -- drag/word/line, copy-on-select, Ctrl+Shift+C
 - [x] ~~A scrollbar on the Terminal, so the scrollback is visible~~ DONE 2026-09-07 -- a reserved gutter, Konsole's shape
+- [x] ~~Terminal preferences: schemes, its own font size, scrollback, cursor~~ DONE 2026-09-14 -- `/etc/terminal.conf` and a modal
+- [ ] A per-tab colour scheme, which is what a Konsole profile really is
+- [ ] Preferences for Notepad and the File Manager, on whatever `userland/term/`'s config half generalises into
 - [x] ~~Drag-and-drop within one window~~ DONE 2026-09-10 -- a router session; between the panes and onto the tree, Ctrl copies
 - [x] ~~Copy and move files between the desktop and the File Manager~~ DONE 2026-09-10 -- `/home/desktop`, over the clipboard both ways
 - [x] ~~Drag-and-drop between windows~~ DONE 2026-09-10 -- the compositor brokers it; the payload rides a slot beside the clipboard

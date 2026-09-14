@@ -753,6 +753,7 @@ whenever a headline here tells you something you did not already know.
 - **A TAB IS A SESSION, AND `uui_tabs` IS THE STRIP**
 - **A TITLE COMES FROM THE SHELL, AS AN OSC**
 - **TERMINAL IS A TERMINAL EMULATOR, NOT A SHELL WITH A WINDOW**
+- **AN APP'S OWN PREFERENCES ARE THE APP'S, NOT THE SETTINGS REGISTRY'S -- `/etc/terminal.conf` IS THE FIRST, A COLOUR SCHEME IS A DATA FILE, THE FILE IS IN ANSI ORDER WHILE A CELL HOLDS A VGA INDEX, AND THE GRID'S FONT IS THE TERMINAL'S WHILE THE CHROME'S IS THE DESKTOP'S**
 - **THE TERMINAL'S SCREEN IS A GRID, AND THE ANSI PARSER IS THE KERNEL'S COMPILED TWICE**
 - **An app with a cadence sets `tick_ms` and BLOCKS between frames.**
 - **An app refuses its OWN second copy -- the launcher never does.**
@@ -1565,6 +1566,10 @@ cost".
   `umd_hostcheck.py` (the Markdown renderer over every
   `docs/commands/` page at three widths, with a
   `--positive-control` that must go red),
+  `term_scheme_hostcheck.py` (**the Terminal's shipped colour
+  schemes against the ANSI -> VGA permutation the loader applies** --
+  reimplemented from the parser's table rather than shared with it, with
+  a `--positive-control` that must go red),
   `utext_hostcheck.py` (the editor's sparse wrap index against the naive
   scan it replaced -- a round trip from the oracle's draw position back
   through `index_at_point`, at five scroll positions, over this repo's

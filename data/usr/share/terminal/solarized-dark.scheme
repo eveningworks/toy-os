@@ -1,0 +1,24 @@
+# Ethan Schoonover's Solarized, dark. The background and foreground are
+# base03 and base0, which live in the BRIGHT half of the palette -- that
+# is the palette's own arrangement, not a mistake, and it is why the two
+# indices below are not the usual 0 and 7.
+Name=Solarized Dark
+Color0=073642
+Color1=dc322f
+Color2=859900
+Color3=b58900
+Color4=268bd2
+Color5=d33682
+Color6=2aa198
+Color7=eee8d5
+Color8=002b36
+Color9=cb4b16
+Color10=586e75
+Color11=657b83
+Color12=839496
+Color13=6c71c4
+Color14=93a1a1
+Color15=fdf6e3
+Foreground=12
+Background=8
+Cursor=93a1a1

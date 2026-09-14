@@ -15,7 +15,6 @@
 #include "kapi.h"
 #include "debugflags.h"
 #include "tz.h"
-#include "theme.h"
 
 // The names dispatch() handles ITSELF. Deliberately NOT a list of
 // everything you can type: `rm`, `cat`, `touch` and friends are ring-3

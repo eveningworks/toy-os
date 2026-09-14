@@ -1494,8 +1494,207 @@ def check_resize(dbg, qmp, tmp, res):
               rows2 == rows0 and cr == rows2 - 1,
               f"cursor row {cr} of {rows2} (started at {rows0})")
 
+    prefs_checks(dbg, qmp, tmp, win, res)
+
     dbg.key("f4", mods="alt")
     dbg.settle()
+
+
+KEY_F10 = "0xa4"
+
+
+def prime_layout(dbg):
+    """Force a fresh layout block out of the Terminal.
+
+    **TYPING IS NOT ENOUGH, and that is the trap.** `uapp` dedupes the
+    whole block per frame, and terminal.c logs its CHROME only when
+    `chrome_moved()` says the signature changed -- so an idle window
+    emits one `layout cursor` line and nothing else, however much you
+    type into it. Every check before this one has cleared the
+    accumulated log, so the dialog's rect reads as absent and a working
+    feature scores as missing.
+
+    F10 hides the menu bar and F10 puts it back: `g_menu_shown` is in
+    that signature, so the block is re-emitted in full, twice, ending
+    with the bar shown exactly as it started.
+    """
+    dbg.send(f"gui key {KEY_F10}")
+    dbg.settle()
+    time.sleep(0.4)
+    dbg.send(f"gui key {KEY_F10}")
+    dbg.settle()
+    time.sleep(0.6)
+
+
+def layout_rect(dbg, name):
+    """The rect of a named row of the Terminal's most recent layout block.
+
+    ONLY THE NEWEST BLOCK, for the reason menubar_test.py's Layout
+    states: the log accumulates, so a `prefs 289 37 408 400` line from a
+    dialog that has since closed stays in it forever and a parser taking
+    the last occurrence of each key reports a closed dialog as open.
+
+    **terminal.c LOGS `cursor` LAST, not first** -- which is the
+    opposite of Notepad, and slicing forward from it finds an empty
+    block and reports every rect as absent. So the newest block is the
+    run BETWEEN two `cursor` lines, and it must be one with something
+    between them: an idle repaint emits a lone `cursor` line and the
+    chrome only re-logs when `chrome_moved()` says it moved.
+
+    Every coordinate this test clicks comes from here rather than from
+    arithmetic, which is the rule for a control whose position moves
+    with the font.
+    """
+    lines = dbg.logs("uterm: layout", clear=False)
+    at = [i for i, l in enumerate(lines) if "uterm: layout cursor" in l]
+    lo = hi = None
+    for k in range(len(at) - 1, 0, -1):
+        if at[k] - at[k - 1] > 1:
+            lo, hi = at[k - 1] + 1, at[k]
+            break
+    if lo is None:
+        return None
+    want = f"uterm: layout {name} "
+    for l in lines[lo:hi + 1]:
+        if want in l:
+            t = l.split(want)[1].split()
+            if len(t) >= 4 and all(x.lstrip("-").isdigit() for x in t[:4]):
+                return tuple(int(x) for x in t[:4])
+    return None
+
+
+def prefs_checks(dbg, qmp, tmp, win, res):
+    """The colour scheme, and that the Preferences dialog is wired in.
+
+    **THE SCHEME IS ASSERTED ON A PIXEL**, because the whole feature is
+    a claim about colour and "the app reported that it applied one" is
+    exactly what a broken palette would also produce. Green Phosphor,
+    because its background (#001b00) is neither the default black nor
+    anything else on this desktop: a scheme that merely LOOKED applied
+    would have to land on that exact value.
+
+    **WHAT IS NOT DRIVEN HERE IS THE MENU.** Opening Edit > Preferences
+    needs a pointer that is still on the title between the press and the
+    release, and an injected position survives ONE wm_run() iteration
+    (CLAUDE.md's note on `gui move` and hover) -- so the popup opens and
+    is dismissed by a release the WM reads at the real cursor. The
+    dialog's own open/pick/OK/Cancel path is verified by hand; what is
+    checked here is everything downstream of it, which is where a
+    regression would actually land.
+    """
+    from PIL import Image
+
+    c = win["content"]
+
+    try:
+        prime_layout(dbg)
+        # The dialog is a declared widget, so the toolkit reports its
+        # rect -- zero while it is closed. A missing line means it never
+        # reached the widget array, which is how a modal silently stops
+        # being routed at all.
+        res.check("p1. the prefs dialog is declared and closed",
+                  layout_rect(dbg, "prefs") == (0, 0, 0, 0),
+                  f"prefs rect {layout_rect(dbg, 'prefs')}")
+        res.check("p2. so is the close confirmation",
+                  layout_rect(dbg, "quit-ask") == (0, 0, 0, 0),
+                  f"quit-ask rect {layout_rect(dbg, 'quit-ask')}")
+
+        top = layout_field(dbg, "chrome", 4)
+        probe = (c["x"] + c["w"] // 2, c["y"] + top + c["h"] // 2)
+        # THE CONTROL: a pixel on the desktop beside the window, which
+        # must not move. Half the assertion is the neighbour staying put.
+        control = (max(4, c["x"] // 2), c["y"] + c["h"] // 2)
+
+        # Reads `probe` at CALL time, not at definition time: the point
+        # moves to the freshly spawned window below, and a closure over
+        # the old value would keep sampling the window that is gone.
+        def pixels(name):
+            path = os.path.abspath(os.path.join(tmp, name))
+            qmp.screenshot(path)
+            with Image.open(path) as im:
+                im = im.convert("RGB")
+                return im.getpixel(probe), im.getpixel(control)
+
+        was_grid, was_desk = pixels("ut_scheme_before.png")
+
+        # **EVERY TERMINAL IS CLOSED FIRST, BY PID.** By this point the
+        # run has left several stacked at the same position, and
+        # spawning one more onto that pile is the step that is
+        # unreliable -- a spawn that quietly produced no window left the
+        # capture reading the one UNDERNEATH, whose grid is still the
+        # default black, so the check failed with the feature working.
+        #
+        # NOT with Alt+F4, which is what this tried first: a terminal
+        # with more than one tab now ASKS before closing, and several of
+        # those are exactly what the tab sections leave behind -- so the
+        # key put a modal up and the loop closed nothing at all. A kill
+        # needs no window to cooperate.
+        for line in (dbg.send("sh ps") or "").splitlines():
+            f = line.split()
+            if len(f) >= 2 and f[-1] == "uterm" and f[0].isdigit():
+                dbg.send(f"sh kill {f[0]}")
+        dbg.settle()
+        time.sleep(1.0)
+
+        # Through tosh, because the `#` shell has no redirection of its
+        # own; the kernel splits this string by tosh's quoting rules
+        # (docs/conventions/shell.md).
+        #
+        # **POLLED FOR ITS CONTENT, not slept on.** The spawn returns
+        # before the child has written, so a fixed pause reads an EMPTY
+        # file perfectly happily -- and the window opened next then
+        # takes the default scheme.
+        dbg.send('sh spawn /bin/tosh -c "echo scheme=green > /etc/terminal.conf"')
+        dbg.settle()
+        conf = ""
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            conf = dbg.send("sh cat /etc/terminal.conf") or ""
+            if "scheme=green" in conf:
+                break
+            time.sleep(0.4)
+        res.check("p3. the config file is where the app will look for it",
+                  "scheme=green" in conf, conf.strip()[:60])
+
+        # A NEW window, because the scheme is read when one OPENS: the
+        # running terminal is deliberately not reloaded from the file.
+        dbg.send(f"gui spawn {SPAWN_PATH}")
+        deadline = time.time() + SPAWN_TIMEOUT_S
+        fresh = None
+        while time.time() < deadline and not fresh:
+            fresh = dbg.window(TITLE)
+            if not fresh:
+                time.sleep(0.3)
+        if not fresh:
+            res.check("p4. a scheme in /etc/terminal.conf reaches the grid",
+                      False, "no Terminal window came back after the spawn")
+            return
+        dbg.settle()
+        time.sleep(1.5)
+
+        # The probe follows the NEW window, not the one measured before.
+        fc = fresh["content"]
+        top = layout_field(dbg, "chrome", 4)
+        probe = (fc["x"] + fc["w"] // 2, fc["y"] + top + fc["h"] // 2)
+        now_grid, now_desk = pixels("ut_scheme_after.png")
+        res.check("p4. a scheme in /etc/terminal.conf reaches the grid",
+                  now_grid == (0, 27, 0),
+                  f"grid was {was_grid}, now {now_grid} -- wanted green.scheme's "
+                  "#001b00 background")
+        res.check("p5. ...and nothing outside the window moved",
+                  now_desk == was_desk,
+                  f"the desktop pixel went {was_desk} -> {now_desk}")
+    finally:
+        # **ALWAYS**, including on an early return. This file is written
+        # to disk.img and survives `make iso`, so a run that left a
+        # scheme or a font size behind would change the machine for every
+        # later tool -- the trap CLAUDE.md records for settings_test, and
+        # one this check hit for real (a stale font_size reddened the
+        # reverse-video assertion three sections earlier).
+        dbg.send("sh rm /etc/terminal.conf")
+        dbg.settle()
+        dbg.key("f4", mods="alt")
+        dbg.settle()
 
 
 def main():

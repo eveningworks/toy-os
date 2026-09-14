@@ -865,7 +865,7 @@ exit criterion is that killing the WM is survivable, not invisible.
   version has the same hazard with a longer gap between the two halves.
 
 **R8. What compiles twice, and what moves outright.** `apps/ui/`,
-`apps/theme.h` and `kernel/lib/rubberband.h` are all already
+`userland/ui/utheme.h` and `kernel/lib/rubberband.h` are all already
 mirrored or shared-source; `gui_apps.c` (the `.desktop` scan) moves
 wholesale and becomes an ordinary ring-3 consumer of `SYS_LISTDIR` --
 note its 32-entry-per-call cap is a real constraint on a desktop

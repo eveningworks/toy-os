@@ -7242,3 +7242,120 @@ which reads as a rendering bug and sent the first diagnosis after the
 column's spare height instead. The rule underneath it: per-page
 visibility belongs in the per-page item list, because that is the only
 one rebuilt when the page changes.
+
+## The Terminal's preferences are the app's, not the settings registry's
+
+Every other knob in this system is a registered setting: a `struct
+setting` in a `kernel/lib/*_config.c`, a row generated into System
+Settings, a name `config get` and `usetting_get()` both answer. That
+mechanism works and it is the one to reach for. The Terminal's palette,
+font size, scrollback depth and cursor shape are deliberately not in it.
+
+**Three reasons, in the order they decided it.**
+
+The first is where the code would have to live. `setting_register()` is
+the KERNEL's -- a setting is declared in ring 0 and enumerated over
+`SYS_SETTING`. Registering `terminal.scheme` therefore means a
+`kernel/lib/terminal_config.c`: ring-0 code describing a ring-3
+application's appearance, which is the boundary `kapi.h` and
+`userland/` exist to hold. Nothing about a colour scheme needs a
+privilege level.
+
+The second is what the registry is FOR. `system.font_size` reflows every
+window on the desktop; `desktop.wallpaper` is the machine's. Those are
+the system's, and putting them somewhere a person can find them without
+knowing which app owns them is the whole value of one registry. A
+terminal's palette is the opposite: somebody changing it is changing
+that window. Konsole, GNOME Terminal and Windows Terminal all keep
+theirs in the application, and none of the three puts a terminal's
+colours in the desktop's settings -- which is a fact about where people
+look, not about implementation.
+
+The third is that the registry has no type for it. There is no colour
+type and no colour widget, and a sixteen-entry palette is not a setting
+in any case (see below).
+
+**What was given up, stated plainly.** `config get terminal.scheme`
+does not work; `/etc/terminal.conf` is read with `edit` or `cat`
+instead. System Settings shows nothing about the Terminal. A second app
+wanting preferences will write its own loader rather than inheriting
+one -- `userland/term/term_conf.c` is about two hundred lines, and the
+point at which that becomes a shared `uprefs` is the point at which
+there is a second real caller, which is this project's usual bar and
+not a plausible one.
+
+**The file is `etc_config`'s format through `lib/uconf.h`,** so it is
+not a private format either: `edit /etc/terminal.conf` works, the
+parser is the kernel's own compiled a second time, and there is no
+second set of answers to what a `name=value` document means.
+
+## A colour scheme is a data file, and the file is in ANSI order
+
+Sixteen colours is not sixteen settings. Konsole ships `.colorscheme`
+files, GNOME Terminal a list of built-in schemes over a custom palette,
+Windows Terminal named JSON objects that a profile references by name --
+all three make a scheme a NAMED THING and let you pick one, and none of
+them offers a grid of sixteen colour pickers as the primary control.
+So `/usr/share/terminal/<name>.scheme`, picked from a list, which is
+also the arrangement `/usr/wm/savers/<name>.saver` already uses here and
+for the same reason: the thing that knows is a data file, so there is
+one place to change and the UI carries no list.
+
+**The permutation is the part worth recording.** A cell in the emulator
+holds an `enum vga_color`, which is the IBM VGA ordering -- blue at 1,
+red at 4 -- because that is what the shared ANSI parser resolves an
+escape sequence to (`kernel/lib/ansi.c`, and the kernel console draws
+from the same indices). Every palette anyone publishes is written in
+ANSI order, red first. Authoring the files in VGA order would mean
+hand-permuting a published palette on the way in, which is a step
+nobody can check by looking at the result.
+
+So the file is ANSI-ordered and `term_scheme_load()` permutes through
+`ansi_color()` -- the parser's own table, so the two halves of the
+system cannot drift into disagreeing about where red is.
+
+**`Foreground=` and `Background=` name a `Color<N>`, and therefore
+permute too.** They are indices rather than colours because SGR 39/49
+return a CELL to the default pair and a cell holds an index; reading one
+as a VGA slot instead put Solarized Dark's foreground on light red. It
+rendered, it looked like a colour scheme, and it was the wrong one --
+which is why `tools/term_scheme_hostcheck.py` exists and reimplements
+the table rather than importing it.
+
+**Changing a scheme remaps the cells already on screen.** A cell has no
+"this is the default" bit, so moving the default pair from 7-on-0 to
+12-on-8 would leave the whole scrollback drawn in two colours the new
+scheme reserves for something else. The foreground and background move
+independently, because a coloured `ls` leaves an explicit foreground
+over a default background. The imprecision -- a cell that explicitly
+asked for the old default colour moves with the rest -- is invisible in
+practice, and the only alternative is a wider cell.
+
+## The Terminal's caret does not blink by default
+
+Konsole, GNOME Terminal and Windows Terminal all blink theirs; xterm
+and VS Code's terminal do not. It is a genuine split, so the tiebreak
+here was made on something this project can measure.
+
+**A blinking caret makes a focused terminal ANIMATE**, and almost
+everything this repo uses to judge something drawn is a comparison of
+two SETTLED frames (`QMPSession.screenshot()` is settled by default).
+A settled frame is two identical consecutive reads -- which a window
+repainting twice a second supplies constantly, in either phase. The
+comparison then cannot tell a real change from a caret that happened to
+be off, and `uterm_test.py`'s tab-switch check failed exactly that way:
+it had passed on the three runs before blinking was added and failed on
+the next, with tab switching working perfectly.
+
+So `cursor_blink` ships off and is one line in `/etc/terminal.conf` for
+anyone who wants it. The cost of the other choice is not "a slightly
+noisier screenshot" -- it is that every frame comparison against a
+Terminal becomes unreliable, including ones written later by somebody
+who does not know this is why.
+
+**The cadence is the caret's and nothing else's.** The 500 ms tick
+exists only to toggle the phase, and `on_tick` returns 0 -- repainting
+nothing -- while blinking is off, so the default costs two wake-ups a
+second and no frames. That is against the 33 a second this window paid
+before its reader threads landed, and it is the reason the tick could be
+reintroduced at all.

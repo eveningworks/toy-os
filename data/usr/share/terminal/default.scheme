@@ -1,0 +1,25 @@
+# The IBM VGA palette, which is what this terminal and the kernel
+# console have always drawn. Shipped as a file so that `default` names
+# one like every other scheme does; the same sixteen values are also
+# compiled into the emulator as the fallback for a machine with no
+# /usr/share/terminal at all.
+Name=Default (VGA)
+Color0=000000
+Color1=aa0000
+Color2=00aa00
+Color3=aa5500
+Color4=0000aa
+Color5=aa00aa
+Color6=00aaaa
+Color7=aaaaaa
+Color8=555555
+Color9=ff5555
+Color10=55ff55
+Color11=ffff55
+Color12=5555ff
+Color13=ff55ff
+Color14=55ffff
+Color15=ffffff
+Foreground=7
+Background=0
+Cursor=aaaaaa

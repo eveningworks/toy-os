@@ -4016,6 +4016,39 @@ window without going through it will find its layout polls timing out.
   ON DEMAND: it needs a host gcc, and the gate must not start requiring
   one.
 
+- **`term_scheme_hostcheck.py`** -- reads every
+  `data/usr/share/terminal/*.scheme` on the HOST and reports what each
+  colour will actually be once the Terminal has loaded it. No guest, no
+  compiler, a fraction of a second.
+
+  **What it is for is the PERMUTATION.** A scheme file is written in
+  ANSI order -- black, red, green, yellow, blue, magenta, cyan, white,
+  then the eight bright forms -- which is the order every published
+  palette is published in, so one can be copied in without being
+  rearranged by hand. A cell in the emulator holds an `enum vga_color`,
+  where blue is 1 and red is 4. `userland/term/term_conf.c` permutes
+  between them through the kernel parser's own `ansi_color()`.
+
+  That step is the part nobody can check by looking, and it has already
+  been wrong once: `Foreground=`/`Background=` name a `Color<N>` like
+  everything else in the file, and taking one as a VGA slot put
+  Solarized Dark's foreground on light red. It rendered, it looked like
+  a colour scheme, and it was not the one in the file.
+
+  So the ANSI table is written out here a SECOND TIME rather than parsed
+  out of `ansi.c` -- an oracle that read the table it is checking would
+  agree with it by construction. If `ansi.c`'s table changes this must
+  fail and be corrected by hand; that is the point of the copy. It also
+  refuses a file with a missing or malformed key, an index outside
+  0..15, or a default pair whose two colours are equal (which parses
+  perfectly and draws invisible text).
+
+  `--positive-control` additionally fails any scheme the permutation
+  actually MOVES, and reports how many -- two, the Solarized pair, being
+  the only shipped schemes whose default pair is not already at 0 and 7.
+  A control that reddens nothing has measured nothing, so it exits
+  non-zero when none moved. Named by `ondemand_sweep.py`.
+
 - **`utext_hostcheck.py`** -- compiles `userland/ui/utext.c` with the
   host gcc, beside a NAIVE implementation of the same wrap rule written
   out longhand in the driver, and requires the two to agree over a

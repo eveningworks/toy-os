@@ -1,0 +1,22 @@
+# The other monochrome CRT, and the same rule as green.scheme: sixteen
+# distinguishable shades rather than one colour sixteen times.
+Name=Amber
+Color0=1a0f00
+Color1=cc7700
+Color2=d98a00
+Color3=e69500
+Color4=b36b00
+Color5=cc8400
+Color6=d99400
+Color7=ffb000
+Color8=4d2e00
+Color9=ffc040
+Color10=ffcc55
+Color11=ffd470
+Color12=e6a020
+Color13=ffd88a
+Color14=ffe0a0
+Color15=fff0d0
+Foreground=7
+Background=0
+Cursor=ffb000

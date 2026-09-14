@@ -138,17 +138,17 @@ is a `.c` file there with a `struct uapp_desc`, and needs no Makefile
 edit.
 
 
-## Shared theme colors (theme.h)
+## There is no theme here any more
 
-`apps/theme.h` names the handful of `gfx_rgb(...)` values that had
-converged identically across more than one file. It survived the GUI's
-departure because `apps/completion.c` colours the shell's tab-completion
-with it -- the ring-3 toolkit has its own palette in
-`userland/ui/utheme.h`, and the two are deliberately separate now that
-nothing draws in both places.
+`apps/theme.h` is gone. It named the `gfx_rgb(...)` values that had
+converged across the ring-0 GUI apps, and it outlived all of them: the
+file it was said to still serve did include it and used no `THEME_*`
+name at all. **The palette is `userland/ui/utheme.c`, and it is the
+only one** -- a second copy is what this deletion removes, not
+something to recreate.
 
-Add a `THEME_*` name only when a value starts repeating, not
-preemptively.
+Ring 0 draws the console and nothing else. If something here ever needs
+a colour again, call `gfx_rgb()` at the site.
 
 
 ## What's available via kapi.h

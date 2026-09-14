@@ -1,0 +1,24 @@
+# A monochrome phosphor scheme: every slot is a shade of green, so a
+# program that colours its output stays READABLE rather than becoming
+# one flat colour. Nothing here is a real terminal's palette -- it is
+# what a green CRT did to one.
+Name=Green Phosphor
+Color0=001b00
+Color1=00b000
+Color2=00d000
+Color3=00c000
+Color4=009800
+Color5=00b800
+Color6=00c800
+Color7=00cc44
+Color8=004400
+Color9=00ff40
+Color10=33ff33
+Color11=66ff66
+Color12=00e050
+Color13=44ff88
+Color14=77ffaa
+Color15=ccffcc
+Foreground=7
+Background=0
+Cursor=33ff33

@@ -1,0 +1,22 @@
+# Konsole's own default scheme, so a terminal here looks like the
+# desktop this GUI takes its measurements from.
+Name=Breeze
+Color0=232629
+Color1=ed1515
+Color2=11d116
+Color3=f67400
+Color4=1d99f3
+Color5=9b59b6
+Color6=1abc9c
+Color7=fcfcfc
+Color8=7f8c8d
+Color9=c0392b
+Color10=1cdc9a
+Color11=fdbc4b
+Color12=3daee9
+Color13=8e44ad
+Color14=16a085
+Color15=ffffff
+Foreground=7
+Background=0
+Cursor=fcfcfc

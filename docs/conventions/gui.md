@@ -405,8 +405,10 @@ this the obvious way), not from how much history it accumulated.
   now, over the same `utext` model Notepad uses, so **the kernel image
   contains no widget code at all.** A new widget goes in
   `userland/ui/`. There is no longer any such thing as a kernel-side
-  one. `apps/theme.h` survives for the same kind of reason:
-  `apps/shell_complete.c` colours the shell's tab-completion with it.
+  one. `apps/theme.h` is gone too: it named
+  colours for those widgets and outlived every one of them, and the
+  file it was said to still serve used no `THEME_*` name at all. **The
+  palette is `userland/ui/utheme.c`, and it is the only one.**
   Three rules the deleted widgets taught still apply to their ring-3
   twins: draw a popup LAST (drawing is immediate-mode, so z-order is
   call order); **route keys through the focus ring, never by trying each
@@ -452,6 +454,69 @@ this the obvious way), not from how much history it accumulated.
   child on a 30ms tick, because there is no `poll()`** --
   `SYS_SET_NONBLOCK` is what makes that possible without freezing the
   window, and the real answer is on the roadmap.
+
+- **AN APP'S OWN PREFERENCES ARE THE APP'S, NOT THE SETTINGS REGISTRY'S
+  -- `/etc/terminal.conf` IS THE FIRST.**
+
+  Everything with a knob in this system registers a setting and gets a
+  row in System Settings for free (`api/setting.h`), and that stays
+  right for what the SYSTEM owns: the font, the wallpaper, the shell.
+  A terminal's palette is not one of those. Konsole, GNOME Terminal and
+  Windows Terminal all keep theirs in the application, because somebody
+  changing a scheme is changing that window and not the desktop --
+  and `setting_register()` is the KERNEL's, so following the registry
+  here would put a ring-3 app's appearance in ring 0.
+
+  The file is `etc_config`'s format through `lib/uconf.h`, so `edit
+  /etc/terminal.conf` and `config` read it like any other and there is
+  no second parser. `userland/term/` holds it: the emulator is one
+  translation unit, the configuration and the dialog are two more, wired
+  in through `EXTRA_OBJS_terminal` exactly as `userland/fm/` is -- a
+  second `.c` under `userland/gui/apps/` would become a second BINARY.
+
+  Four things to know.
+
+  **A COLOUR SCHEME IS A DATA FILE, NOT SIXTEEN CONTROLS.**
+  `/usr/share/terminal/<name>.scheme`, picked by name -- Konsole's
+  `.colorscheme`, GNOME Terminal's built-in schemes and Windows
+  Terminal's named JSON schemes are all this shape, and none of them
+  offers a grid of sixteen colour pickers as the primary UI. There is no
+  colour widget here anyway.
+
+  **THE FILE IS IN ANSI ORDER AND A CELL HOLDS A VGA INDEX.** `Color0`
+  is black, `Color1` is RED; `enum vga_color` has blue at 1 and red at
+  4. `term_scheme_load()` permutes through the kernel parser's own
+  `ansi_color()` so a published palette can be copied in verbatim --
+  **and `Foreground=`/`Background=` name a `Color<N>`, so they permute
+  too** (reading one as a VGA slot put Solarized Dark's foreground on
+  light red, which rendered perfectly and was the wrong colour).
+  `tools/term_scheme_hostcheck.py` is the host oracle for that, with a
+  positive control.
+
+  **CHANGING THE SCHEME REMAPS THE CELLS THAT ARE ALREADY THERE.** A
+  cell stores an index and has no "this is the default" bit, so moving
+  the default pair from 7-on-0 to 12-on-8 would otherwise leave the
+  whole scrollback drawn in two colours the new scheme reserves for
+  something else. The two halves move independently, because a coloured
+  `ls` leaves an explicit foreground over a default background.
+
+  **CLOSING A WINDOW WITH MORE THAN ONE TAB ASKS, WHICH MAKES Alt+F4
+  TWO-PHASE.** `wm_request_close()` takes 0 for "not yet" and a modal
+  answers frames later, so the refusal goes out first and the real
+  close is a `uapp_quit()` from the dialog's commit. **A TOOL THAT
+  CLOSES A TERMINAL CAN NO LONGER ASSUME Alt+F4 CLOSES IT** -- on a
+  multi-tab window the key puts a dialog up and nothing shuts;
+  `uterm_test.py` closes by PID for exactly that reason, having first
+  written a loop that closed nothing and reported it as a spawn
+  failure.
+
+  **THE GRID'S FONT IS THE TERMINAL'S AND THE CHROME'S IS THE
+  DESKTOP'S.** `font_size = 0` -- the default -- follows the desktop and
+  rasterizes nothing; any other value loads a private atlas
+  (`ugfx_font_load`, `ui/ugfx.h`'s tier 2). ugfx's font selection is per
+  PROCESS, so the grid measures with `cell_w()`/`cell_h()` and `draw()`
+  is the one place the selection moves -- the menu bar and tab strip are
+  the toolkit's and are drawn after `on_draw` in the session font.
 
 - **THE ANSI PARSER IS THE KERNEL'S, COMPILED TWICE.**
   `kernel/lib/ansi.c` is a pure state machine that knows nothing about a

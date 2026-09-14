@@ -81,8 +81,11 @@
 #include "ui/uui_tabs.h"
 #include "ui/uui_menubar.h"
 #include "ui/uui_textbox.h"
+#include "ui/uui_dialog.h"
 #include "keyboard.h"
 #include "ansi.h"   // the kernel's parser, compiled into libuapp too
+#include "font_faces.h"   // FONT_FACE_DIR, for a private atlas
+#include "term/term.h"    // /etc/terminal.conf and the Preferences dialog
 
 // THE WINDOW IS SIZED FOR A GRID, NOT IN PIXELS. A fixed pair does not
 // survive the font: 640x400 was 78x21 at size 14 and 44x12 at size 24,
@@ -95,7 +98,6 @@
 // window is resizable anyway.
 #define WIN_COLS 120
 #define WIN_ROWS 30
-#define MARGIN 6
 
 #define SHELL_FALLBACK "/bin/tosh"
 
@@ -121,7 +123,16 @@ static const char *shell_path(char *buf, size_t cap) {
 // there is one window, so every tab is the same size, and capacity only
 // ever grows -- shrinking the window narrows g_rows/g_cols and leaves
 // the buffers alone, exactly as the fixed grid did.
-#define SB_ROWS 240   // scrollback lines kept above the screen
+// Scrollback depth, the margin and the palette are all
+// /etc/terminal.conf's now (userland/term/term.h). They are read
+// into plain globals because every one of them is asked for per row
+// drawn, and a struct field behind a pointer would be the same
+// number with an indirection in front of it.
+static struct term_conf g_conf;
+static struct term_scheme g_scheme;
+static int g_margin = 6;
+static int g_sb_rows = 240;   // scrollback lines kept above the screen
+#define SB_ROWS g_sb_rows
 
 // **EIGHT, AND THE REASON IS MEMORY RATHER THAN TASTE.** A session is
 // about 220 KiB of grid, scrollback and saved screen, so the cap is
@@ -239,6 +250,7 @@ enum {
     CMD_INTR, CMD_EOF,
     CMD_TOP, CMD_BOTTOM, CMD_MENUBAR,
     CMD_NEXT_TAB, CMD_PREV_TAB,
+    CMD_PREFS,
 };
 
 static const struct uui_menu_item file_items[] = {
@@ -264,6 +276,11 @@ static const struct uui_menu_item edit_items[] = {
     UUI_MENU("Paste",      CMD_PASTE,      "Ctrl+Shift+V"),
     UUI_MENU_SEP,
     UUI_MENU("Select All", CMD_SELECT_ALL, 0),
+    UUI_MENU_SEP,
+    // GNOME Terminal's placement. Konsole calls it Settings > Configure
+    // Konsole and Windows Terminal hangs it off the tab strip; Edit is
+    // the one of the three this menu bar already has.
+    UUI_MENU("Preferences...", CMD_PREFS, 0),
 };
 
 static const struct uui_menu_item view_items[] = {
@@ -309,11 +326,31 @@ static int g_rename_slot = -1;
 // offered every press before anything is hit-tested (uui_route.c) -- so
 // declaring the menu here is what stops a click on the File menu's first
 // row ALSO landing on the tab underneath it.
+//
+// **THE PREFERENCES DIALOG IS APPENDED AT OPEN, AND IT GOES LAST.** A
+// modal has to outrank the menu bar it was opened from, and the router
+// offers overlays in array order.
 #define ID_MENU 1
 #define ID_TABS 2
+#define ID_QUIT_ASK 3
+
+// Closing a window with more than one tab ASKS, which is Konsole's
+// "confirm when closing a window with multiple tabs" and GNOME
+// Terminal's close-confirmation alike -- one careless Alt+F4 otherwise
+// takes every shell in the window with it.
+//
+// **IT MAKES CLOSING TWO-PHASE, and that is why it cannot just return
+// the answer.** `wm_request_close()` ASKS this client and takes 0 for
+// "no" (docs/conventions/gui.md), while a modal's answer arrives
+// frames later through on_widget -- so the refusal goes out first and
+// the real close is a uapp_quit() from the dialog's commit.
+static struct uui_dialog g_quit_ask;
+enum { QUIT_YES = 1, QUIT_NO };
 static struct uui_item g_widgets[] = {
     { .ops = &uui_menubar_ops, .widget = &g_menu,  .id = ID_MENU, .name = "menu" },
     { .ops = &uui_tabs_ops,    .widget = &g_strip, .id = ID_TABS, .name = "tabs" },
+    { 0 },   // filled with term_prefs_item() in on_open
+    { .ops = &uui_dialog_ops, .widget = &g_quit_ask, .id = ID_QUIT_ASK, .name = "quit-ask" },
 };
 
 static struct uapp *g_app;
@@ -341,7 +378,7 @@ static int bar_w(void) {
 // hit-testing and the drag maths all call -- two derivations is the
 // classic way a scrollbar draws in one place and responds in another.
 //
-// **INSET BY THE SAME MARGIN THE TEXT USES**, on the right and at both
+// **INSET BY THE SAME g_margin THE TEXT USES**, on the right and at both
 // ends, so the track floats in the window rather than butting against
 // its edges -- which is what it looked like flush, a bar welded to the
 // frame. The width it RESERVES is unchanged, because size_changed()
@@ -349,9 +386,9 @@ static int bar_w(void) {
 // the gap costs no cells.
 static void bar_rect(int win_w, int win_h, int *x, int *y, int *w, int *h) {
     *w = bar_w();
-    *x = win_w - *w - MARGIN;
-    *y = chrome_h() + MARGIN;
-    *h = win_h - *y - MARGIN;
+    *x = win_w - *w - g_margin;
+    *y = chrome_h() + g_margin;
+    *h = win_h - *y - g_margin;
     if (*h < 1) *h = 1;
 }
 
@@ -393,17 +430,70 @@ static int g_cap_rows, g_cap_cols;
 static char *g_runbuf;   // draw_run's text scratch, g_cap_cols + 1
 static char *g_rowbuf;   // draw_row's run scratch,  g_cap_cols + 1
 
-// The 16 ANSI colours as RGB. The parser resolves a sequence to an
-// `enum vga_color`, which is an INDEX -- turning an index into light is
-// the display's business, and the kernel console does exactly the same
-// thing with its own table.
-static const uint32_t VGA_RGB[16] = {
-    0x000000, 0x0000AA, 0x00AA00, 0x00AAAA, 0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
-    0x555555, 0x5555FF, 0x55FF55, 0x55FFFF, 0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
-};
+// The 16 colours as RGB, and which two slots the default pair uses.
+// The parser resolves a sequence to an `enum vga_color`, which is an
+// INDEX -- turning an index into light is the display's business, and
+// the kernel console does exactly the same thing with its own table.
+// What changed is only where the table comes from: a scheme file rather
+// than a constant (userland/term/term.h).
+#define VGA_RGB (g_scheme.pal)
+#define VT_FG (g_scheme.fg)
+#define VT_BG (g_scheme.bg)
 
-#define VT_FG 7   // light grey on black -- the console's own default pair
-#define VT_BG 0
+// --- the terminal's own font (Konsole's, GNOME Terminal's) ------------
+//
+// **THE GRID MEASURES WITH cell_w()/cell_h() AND THE CHROME DOES NOT.**
+// ugfx's font selection is per PROCESS, so the menu bar and tab strip --
+// drawn by the toolkit after on_draw -- keep the session font while the
+// grid uses this one, and draw() is the only place the selection moves.
+// `font_size = 0`, the default, follows the desktop and rasterizes
+// nothing.
+static struct ugfx_font g_font;
+static void *g_font_arena;
+static int g_font_px;          // what g_font holds; 0 = following the desktop
+static int g_cell_w, g_cell_h;
+
+// The caret's blink phase. Toggled by on_tick when cursor_blink is
+// on and pinned to 1 when it is off, so draw() tests one flag either
+// way rather than the flag AND the setting.
+static int g_caret_on = 1;
+
+static void font_sync(void) {
+    if (g_conf.font_size != g_font_px) {
+        void *arena = 0;
+        if (g_conf.font_size) {
+            char face[48], path[96];
+            if (!usetting_get("system.font_face", face, sizeof face) || !face[0])
+                strlcpy(face, "dejavu-sans-mono", sizeof face);
+            snprintf(path, sizeof path, "%s/%s.ttf", FONT_FACE_DIR, face);
+            unsigned long need = ugfx_font_arena_size(g_conf.font_size);
+            arena = malloc(need);
+            if (!arena || !ugfx_font_load(path, g_conf.font_size, 0, &g_font, arena, need)) {
+                // A face that will not rasterize leaves the DESKTOP's
+                // font in place rather than an empty window -- and says
+                // so, or the setting reads as silently ignored.
+                free(arena);
+                arena = 0;
+                ulogf("uterm: cannot rasterize %s at %dpx; using the desktop font\n",
+                       path, g_conf.font_size);
+            }
+        }
+        free(g_font_arena);
+        g_font_arena = arena;
+        g_font_px = arena ? g_conf.font_size : 0;
+    }
+    // Re-read EVERY call, not only after a reload: while we are
+    // following the desktop, the desktop's size can move under us
+    // (WIN_EV_FONT) and these two are what the whole grid is derived
+    // from.
+    const struct ugfx_font *was = g_font_px ? ugfx_set_font(&g_font) : 0;
+    g_cell_w = ugfx_char_w();
+    g_cell_h = ugfx_char_h();
+    if (g_font_px) ugfx_set_font(was);
+}
+
+static int cell_w(void) { if (g_cell_w <= 0) font_sync(); return g_cell_w; }
+static int cell_h(void) { if (g_cell_h <= 0) font_sync(); return g_cell_h; }
 
 static struct session *active(void) {
     if (g_ntabs <= 0) return 0;
@@ -531,6 +621,75 @@ static int grow_caps(int rows, int cols) {
     g_cap_rows = nr;
     g_cap_cols = nc;
     return 1;
+}
+
+// --- applying a configuration change ----------------------------------
+
+// The scheme's default pair moved, so every cell still holding the OLD
+// one has to follow it: a cell stores an INDEX and has no "this is the
+// default" bit, so switching Default (7 on 0) for Solarized Dark (12 on
+// 8) would otherwise leave the whole scrollback drawn in two colours
+// the new scheme reserves for something else.
+//
+// The two halves move independently, because `ls --color` leaves a row
+// with an explicit foreground over a default background. The
+// imprecision is a cell that explicitly asked for the old default
+// colour, which moves with the rest -- invisible in practice and the
+// only alternative is a wider cell.
+static void remap_default_pair(int old_fg, int old_bg) {
+    if (old_fg == VT_FG && old_bg == VT_BG) return;
+    for (int i = 0; i < MAX_TABS; i++) {
+        struct session *s = g_slot[i];
+        if (!s || !s->grid) continue;
+        struct cell *banks[3] = { s->grid, s->saved, s->sb };
+        int rows[3] = { g_cap_rows, g_cap_rows, g_sb_rows };
+        for (int b = 0; b < 3; b++) {
+            if (!banks[b]) continue;
+            size_t n = (size_t)rows[b] * (size_t)g_cap_cols;
+            for (size_t k = 0; k < n; k++) {
+                if (banks[b][k].fg == old_fg) banks[b][k].fg = (uint8_t)VT_FG;
+                if (banks[b][k].bg == old_bg) banks[b][k].bg = (uint8_t)VT_BG;
+            }
+        }
+        s->vt.fg = (enum vga_color)VT_FG;
+        s->vt.bg = (enum vga_color)VT_BG;
+    }
+}
+
+// Grows or shrinks every session's scrollback, KEEPING THE NEWEST
+// lines: the ones at the bottom are the ones somebody scrolling up is
+// about to look for, and dropping those instead would make "give me
+// more history" delete history. A failed malloc leaves the old depth,
+// which is a smaller scrollback and never a broken one.
+static void resize_scrollback(int lines) {
+    if (lines == g_sb_rows || lines < 1) return;
+    struct cell *nb[MAX_TABS] = {0};
+    int ok = 1;
+    for (int i = 0; ok && i < MAX_TABS; i++) {
+        struct session *s = g_slot[i];
+        if (!s || !s->sb) continue;
+        nb[i] = cells_new(lines, g_cap_cols);
+        if (!nb[i]) ok = 0;
+    }
+    if (!ok) {
+        for (int i = 0; i < MAX_TABS; i++) free(nb[i]);
+        ulogf("uterm: no memory for a %d-line scrollback; keeping %d\n", lines, g_sb_rows);
+        return;
+    }
+    for (int i = 0; i < MAX_TABS; i++) {
+        struct session *s = g_slot[i];
+        if (!s || !s->sb) continue;
+        int keep = s->sb_count < lines ? s->sb_count : lines;
+        int from = s->sb_count - keep;
+        for (int r = 0; r < keep; r++)
+            memcpy(nb[i] + (size_t)r * g_cap_cols, sb_row(s, from + r),
+                    (size_t)g_cap_cols * sizeof(struct cell));
+        free(s->sb);
+        s->sb = nb[i];
+        s->sb_count = keep;
+        if (s->sb_view > keep) s->sb_view = keep;
+    }
+    g_sb_rows = lines;
 }
 
 static void row_clear(struct cell *row, int from) {
@@ -765,8 +924,10 @@ static void vt_write(struct session *s, const char *buf, int len) {
     // NEW OUTPUT PINS THE VIEW TO THE BOTTOM, which is what every
     // terminal does: a program printing while you are reading history
     // brings you back, because otherwise the thing you asked to run
-    // appears to have done nothing.
-    s->sb_view = 0;
+    // appears to have done nothing. A SETTING, because the other
+    // reading is also defensible -- a long build scrolling the page you
+    // were reading out from under you is the reason Konsole offers it.
+    if (g_conf.scroll_on_output) s->sb_view = 0;
 }
 
 // --- the reader thread ------------------------------------------------
@@ -1057,7 +1218,7 @@ static void draw_run(struct ugfx_surface *s, int x, int y,
     // legible, and not what was asked for. Caught by reading pixel
     // values rather than by looking at the screenshot.
     if ((bg & 15) != VT_BG)
-        ugfx_fill_rect(s, x, y, n * ugfx_char_w(), ugfx_char_h(), VGA_RGB[bg & 15]);
+        ugfx_fill_rect(s, x, y, n * cell_w(), cell_h(), VGA_RGB[bg & 15]);
     ugfx_draw_string(s, x, y, buf, VGA_RGB[fg & 15], VGA_RGB[bg & 15]);
 }
 
@@ -1067,7 +1228,7 @@ static void draw_run(struct ugfx_surface *s, int x, int y,
 // what keeps a coloured `ls` legible inside a selection.
 static void draw_row(struct ugfx_surface *s, const struct cell *row, int y,
                      int sc0, int sc1) {
-    int cw = ugfx_char_w();
+    int cw = cell_w();
     int i = 0;
     while (i < g_cols) {
         int sel = (i >= sc0 && i < sc1);
@@ -1085,7 +1246,7 @@ static void draw_row(struct ugfx_surface *s, const struct cell *row, int y,
         if ((sel || !(blank && row[i].bg == VT_BG)) && g_rowbuf) {
             char *run = g_rowbuf;
             for (int k = i; k < j; k++) run[k - i] = row[k].ch;
-            draw_run(s, MARGIN + i * cw, y, run, j - i,
+            draw_run(s, g_margin + i * cw, y, run, j - i,
                       sel ? row[i].bg : row[i].fg,
                       sel ? row[i].fg : row[i].bg);
         }
@@ -1096,13 +1257,19 @@ static void draw_row(struct ugfx_surface *s, const struct cell *row, int y,
 static void draw(struct ugfx_surface *s, int focused) {
     struct session *ses = active();
     int top = chrome_h();
+    // The grid is drawn in THIS terminal's font; the menu bar and tab
+    // strip are the toolkit's and stay in the desktop's. font_sync()
+    // also re-reads the metrics, which is what makes a desktop font-size
+    // change reflow a window that is following it.
+    font_sync();
+    const struct ugfx_font *was_font = g_font_px ? ugfx_set_font(&g_font) : 0;
     // ONLY THE GRID AREA, not the whole surface: the toolkit paints the
     // tab strip after this runs, and a full-surface fill here would wipe
     // whatever it had already put down (ui/uapp.c's draw order).
     ugfx_fill_rect(s, 0, top, s->w, s->h - top, VGA_RGB[VT_BG]);
     if (!ses) return;
 
-    int ch = ugfx_char_h(), cw = ugfx_char_w();
+    int ch = cell_h(), cw = cell_w();
 
     // Scrolled back: the top rows come from history, the rest from the
     // screen, and they meet without a seam because both are the same
@@ -1114,7 +1281,7 @@ static void draw(struct ugfx_surface *s, int focused) {
         if (!row) continue;   // before the oldest line we kept
         int sc0, sc1;
         sel_cols(line, &sc0, &sc1);
-        draw_row(s, row, top + MARGIN + r * ch, sc0, sc1);
+        draw_row(s, row, top + g_margin + r * ch, sc0, sc1);
     }
 
     // The scrollbar. TOTAL is the whole virtual buffer -- scrollback plus
@@ -1139,9 +1306,32 @@ static void draw(struct ugfx_surface *s, int focused) {
     // caret somewhere meaningless turns it off rather than moving it).
     // An unfocused window drawing a caret claims to be taking input that
     // is going somewhere else.
-    if (focused && ses->cursor_shown && ses->sb_view == 0)
-        ugfx_fill_rect(s, MARGIN + ses->cc * cw, top + MARGIN + ses->cr * ch,
-                       2, ch, VGA_RGB[VT_FG]);
+    // A MODAL OWNS THE INPUT, so the caret steps aside while one is up
+    // -- the same test Notepad's document draw makes, and for the same
+    // reason a caret is not drawn in an unfocused window: it claims to
+    // be taking keys that are going somewhere else.
+    if (focused && ses->cursor_shown && ses->sb_view == 0 && g_caret_on
+            && !term_prefs_is_open() && !uui_dialog_is_open(&g_quit_ask)) {
+        int cx = g_margin + ses->cc * cw, cy = top + g_margin + ses->cr * ch;
+        if (g_conf.cursor == TERM_CURSOR_UNDER) {
+            int t = ch / 8 + 1;
+            ugfx_fill_rect(s, cx, cy + ch - t, cw, t, g_scheme.cursor);
+        } else if (g_conf.cursor == TERM_CURSOR_BAR) {
+            ugfx_fill_rect(s, cx, cy, cw / 8 + 1, ch, g_scheme.cursor);
+        } else {
+            // A BLOCK MUST REDRAW ITS CHARACTER, or it hides the one
+            // thing the caret is pointing at. In the BACKGROUND colour,
+            // which is what every terminal does and what keeps the
+            // glyph legible against the caret.
+            const struct cell *row = virt_row(ses, virt_of_row(ses, ses->cr));
+            ugfx_fill_rect(s, cx, cy, cw, ch, g_scheme.cursor);
+            if (row && row[ses->cc].ch != ' ') {
+                char one[2] = { row[ses->cc].ch, '\0' };
+                ugfx_draw_string(s, cx, cy, one, VGA_RGB[VT_BG], g_scheme.cursor);
+            }
+        }
+    }
+    if (was_font) ugfx_set_font(was_font);
 }
 
 // One line, content-relative, on stderr -- the grammar every GUI test
@@ -1302,6 +1492,8 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     // The whole content area, so a menu that will not fit below the bar
     // may flip or slide against the window rather than off it.
     uui_menubar_set_bounds(&g_menu, 0, 0, s->w, s->h);
+    term_prefs_set_bounds(0, 0, s->w, s->h);
+    uui_dialog_set_bounds(&g_quit_ask, 0, 0, s->w, s->h);
     uui_tabs_set_geometry(&g_strip, 0, mh, s->w, uui_tabs_height());
     g_widgets[0].hidden = !g_menu_shown;
     draw(s, uapp_focused(a));
@@ -1340,13 +1532,13 @@ static void on_draw_over(struct uapp *a, struct uapp_draw *d) {
 // learned the wrong size would draw its next full-screen program wrong
 // the moment you switched to it.
 static void size_changed(int w, int h) {
-    int cw = ugfx_char_w(), ch = ugfx_char_h();
+    int cw = cell_w(), ch = cell_h();
     if (cw <= 0 || ch <= 0) return;
-    int rows = (h - chrome_h() - 2 * MARGIN) / ch;
+    int rows = (h - chrome_h() - 2 * g_margin) / ch;
     // THE GUTTER COMES OFF THE WIDTH, and default_size() adds it back --
     // the two are inverses and a bar counted in only one of them is a
     // window that opens one column narrower than it asks for.
-    int cols = (w - 2 * MARGIN - bar_w()) / cw;
+    int cols = (w - 2 * g_margin - bar_w()) / cw;
     if (rows < 2) rows = 2;
     if (cols < 8) cols = 8;
     // Grow the buffers to fit; on a failed malloc keep the old
@@ -1382,6 +1574,49 @@ static void size_changed(int w, int h) {
 static void on_resize(struct uapp *a, int w, int h) {
     (void)a;
     size_changed(w, h);
+}
+
+// --- adopting a configuration -----------------------------------------
+//
+// ONE DOOR for every change, whether it came from the file at startup or
+// from the dialog: the palette, the font, the margin and the scrollback
+// each feed into the grid geometry, so applying them one at a time from
+// two places is how the two paths drift.
+static void apply_conf(const struct term_conf *next) {
+    int old_fg = VT_FG, old_bg = VT_BG;
+    int scheme_moved = strcmp(next->scheme, g_conf.scheme) != 0 || !g_scheme.label[0];
+    g_conf = *next;
+    g_margin = g_conf.margin;
+    if (scheme_moved) {
+        term_scheme_load(g_conf.scheme, &g_scheme);
+        remap_default_pair(old_fg, old_bg);
+    }
+    font_sync();
+    resize_scrollback(g_conf.scrollback);
+    g_caret_on = 1;
+    if (g_app) {
+        // LAST, and through size_changed(): the grid may have gained or
+        // lost rows, and the shell has to be told (SIGWINCH) after the
+        // buffers are in their final shape, which is that function's own
+        // rule rather than something to repeat here.
+        size_changed(uapp_width(g_app), uapp_height(g_app));
+        uapp_redraw(g_app);
+    }
+}
+
+// The cadence exists ONLY for the caret. 500 ms is xterm's and KDE's
+// blink interval; two wake-ups a second is the honest cost, against the
+// 33 this window paid before its reader threads landed. With blinking
+// off it returns 0 every time and nothing repaints.
+static int on_tick(struct uapp *a) {
+    (void)a;
+    if (!g_conf.cursor_blink) {
+        if (g_caret_on) return 0;
+        g_caret_on = 1;
+        return 1;
+    }
+    g_caret_on = !g_caret_on;
+    return 1;
 }
 
 // --- input ------------------------------------------------------------
@@ -1429,14 +1664,14 @@ static void scroll_to(struct uapp *a, int want) {
 // The column may come back as g_cols, which is the "past the end of the
 // line" position a selection needs to include the break.
 static struct selpoint point_at(struct session *s, int x, int y) {
-    int cw = ugfx_char_w(), ch = ugfx_char_h();
-    int r = (y - chrome_h() - MARGIN) / ch;
+    int cw = cell_w(), ch = cell_h();
+    int r = (y - chrome_h() - g_margin) / ch;
     if (r < 0) r = 0;
     if (r >= g_rows) r = g_rows - 1;
     // Snapped to the nearest gap, not to the cell: clicking a glyph's
     // right half puts the caret after it, as uui_textbox_index_at_x()
     // does for a text field.
-    int c = (x - MARGIN + cw / 2) / cw;
+    int c = (x - g_margin + cw / 2) / cw;
     if (c < 0) c = 0;
     if (c > g_cols) c = g_cols;
     struct selpoint p = { virt_of_row(s, r), c };
@@ -1672,6 +1907,11 @@ static void do_command(struct uapp *a, int code) {
     case CMD_TOP:       if (s) s->sb_view = s->sb_count; break;
     case CMD_BOTTOM:    if (s) s->sb_view = 0; break;
     case CMD_MENUBAR:   g_menu_shown = !g_menu_shown; size_changed(uapp_width(a), uapp_height(a)); break;
+    case CMD_PREFS:
+        uui_menubar_close(&g_menu);   // a modal owns the input
+        term_prefs_set_bounds(0, 0, uapp_width(a), uapp_height(a));
+        term_prefs_open(&g_conf);
+        break;
     case CMD_NEXT_TAB:  step_tab(+1); break;
     case CMD_PREV_TAB:  step_tab(-1); break;
     default: return;
@@ -1817,10 +2057,31 @@ static void tab_new(void *ctx) {
 // in the widget and taken here (ui/uui_menubar.h). Only the menu reports
 // this way -- the strip's own callbacks say what happened directly.
 static void on_widget(struct uapp *a, int id, int reason) {
-    (void)reason;
-    if (id != ID_MENU) return;
-    int code = uui_menubar_take_code(&g_menu);
-    if (code >= 0) do_command(a, code);
+    if (id == ID_MENU) {
+        int code = uui_menubar_take_code(&g_menu);
+        if (code >= 0) do_command(a, code);
+        return;
+    }
+    if (id == ID_QUIT_ASK) {
+        // Straight to uapp_quit(): on_close_cb() would ask again, and
+        // the dialog it would put up is the one that just answered.
+        if (uui_dialog_take_code(&g_quit_ask) == QUIT_YES) {
+            for (int i = 0; i < MAX_TABS; i++) session_stop(g_slot[i]);
+            uapp_quit(a, 0);
+        }
+        return;
+    }
+    term_prefs_widget(id, reason);
+    struct term_conf next;
+    if (!term_prefs_take(&next)) return;
+
+    // SAVED BEFORE APPLIED, and the old copy is what says which keys
+    // moved -- term_conf_save() writes only those, because uconf_set()
+    // rewrites the whole document per call.
+    struct term_conf old = g_conf;
+    if (term_conf_save(&next, &old) < 0)
+        ulog("uterm: /etc/terminal.conf could not be written; the change is this session only\n");
+    apply_conf(&next);
 }
 
 // A press the router did not consume. Its only job is the rename prompt:
@@ -1956,8 +2217,8 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     // terminal autoscrolls on a timer while the pointer is held still at
     // the edge; this window deliberately has no tick (see uapp_desc), so
     // it scrolls while the pointer keeps moving instead.
-    if (y < chrome_h() + MARGIN)                 scroll_to(a, ses->sb_view + 1);
-    else if (y >= chrome_h() + MARGIN + g_rows * ugfx_char_h())
+    if (y < chrome_h() + g_margin)                 scroll_to(a, ses->sb_view + 1);
+    else if (y >= chrome_h() + g_margin + g_rows * cell_h())
                                                  scroll_to(a, ses->sb_view - 1);
 
     g_sel_b = point_at(ses, x, y);
@@ -1973,8 +2234,9 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
     // Konsole offers as an option. There is one clipboard here, so this
     // does overwrite whatever was last copied -- deliberate, and the
     // reason it is worth having anyway is that a terminal selection is
-    // made in order to be pasted, essentially always.
-    do_copy();
+    // made in order to be pasted, essentially always. A SETTING because
+    // the overwrite is the half somebody may not want.
+    if (g_conf.copy_on_select) do_copy();
     uapp_redraw(a);
 }
 
@@ -1984,6 +2246,15 @@ static void on_open_cb(struct uapp *a) {
     // xterm does the same, scrollbar included.
     uapp_set_cursor(a, WIN_CURSOR_TEXT);
     g_app = a;
+
+    // The rest of the configuration -- main() already read it, so that
+    // default_size() could size the window in the RIGHT cell. This is
+    // the half that needs a window to exist.
+    apply_conf(&g_conf);
+    g_menu_shown = g_conf.menubar;
+    term_prefs_init();
+    g_widgets[2] = *term_prefs_item();
+    uui_dialog_init(&g_quit_ask);
 
     uui_tabs_init(&g_strip, g_tablabels, 0, 0);
     g_strip.on_select = tab_selected;
@@ -2004,10 +2275,25 @@ static void on_open_cb(struct uapp *a) {
 }
 
 static int on_close_cb(struct uapp *a) {
-    (void)a;
+    static const struct uui_dialog_button btns[] = {
+        { "Close", QUIT_YES }, { "Cancel", QUIT_NO },
+    };
+    static const char *rows[1];
+    static char line[64];
+
+    if (g_conf.confirm_close && g_ntabs > 1 && !uui_dialog_is_open(&g_quit_ask)) {
+        snprintf(line, sizeof line, "%d tabs are open. Close them all?", g_ntabs);
+        rows[0] = line;
+        uui_menubar_close(&g_menu);
+        uui_dialog_set_bounds(&g_quit_ask, 0, 0, uapp_width(a), uapp_height(a));
+        uui_dialog_open(&g_quit_ask, "Close Terminal", rows, 1, btns, 2, 1, QUIT_NO);
+        uapp_redraw(a);
+        return 0;   // not yet -- the dialog answers
+    }
     for (int i = 0; i < MAX_TABS; i++) session_stop(g_slot[i]);
-    return 1; // yes, close
+    return 1;
 }
+
 
 // The exact inverse of size_changed(), which is what keeps the two
 // honest: it derives the grid from the window, this derives the window
@@ -2017,11 +2303,20 @@ static int on_close_cb(struct uapp *a) {
 // g_menu -- chrome_h() is safe only because both halves of it are pure
 // font arithmetic.
 static void default_size(int *w, int *h) {
-    *w = WIN_COLS * ugfx_char_w() + 2 * MARGIN + bar_w();
-    *h = WIN_ROWS * ugfx_char_h() + chrome_h() + 2 * MARGIN;
+    *w = WIN_COLS * cell_w() + 2 * g_margin + bar_w();
+    *h = WIN_ROWS * cell_h() + chrome_h() + 2 * g_margin;
 }
 
 int main(void) {
+    // **BEFORE uapp_run(), because default_size() runs before on_open**
+    // and derives the window from cell_w()/cell_h() -- which are this
+    // terminal's font, not the desktop's. Read here and the window opens
+    // at 120x30 of the configured cell; read in on_open and it opens at
+    // the desktop's size and then loses rows to the bigger font.
+    term_conf_load(&g_conf);
+    g_margin = g_conf.margin;
+    term_scheme_load(g_conf.scheme, &g_scheme);
+
     struct uapp_desc desc = {
         .title   = "Terminal",
         .app_id  = "terminal",
@@ -2031,12 +2326,15 @@ int main(void) {
         .flags   = UAPP_RESIZABLE,
         .min_w   = 280,
         .min_h   = 140,
-        // **NO tick_ms AND NO on_tick.** This window used to poll its
-        // one master every 30 ms because there is no poll() to wait on
-        // two things at once. A reader thread per session blocks on the
-        // pty instead and posts when it has bytes, so the loop now
-        // blocks on the compositor alone and wakes only when something
-        // has actually happened.
+        // **THE CADENCE IS THE CARET'S AND NOTHING ELSE'S.** This
+        // window used to poll its one master every 30 ms because there
+        // is no poll() to wait on two things at once; a reader thread
+        // per session blocks on the pty instead and posts when it has
+        // bytes. What is left is a 500 ms blink (on_tick), which costs
+        // two wake-ups a second and returns 0 -- repainting nothing --
+        // when `cursor_blink` is off.
+        .tick_ms = 500,
+        .on_tick = on_tick,
         .widgets = g_widgets,
         .widget_count = (int)(sizeof g_widgets / sizeof g_widgets[0]),
         .on_open = on_open_cb,

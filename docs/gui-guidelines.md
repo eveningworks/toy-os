@@ -631,10 +631,11 @@ isn't a button group.
 
 ## Colours
 
-`apps/theme.h` holds the named colours; `apps/ui/` widgets take colours
-from their caller and stay theme-agnostic. Add a `THEME_*` entry only
-when a second caller needs the same colour -- the standing rule for this
-directory (see `apps/README.md`).
+`userland/ui/utheme.c` holds the named colours, and it is the only
+palette -- `apps/theme.h` was a second copy for widgets that no longer
+exist and has been deleted. Take a colour from a `UTHEME_*` role rather
+than typing an RGB triple; add a role only when a second caller needs
+the same colour.
 
 Semantic colour is separate from decoration: the close button is red
 because closing is destructive, not because it looks nice.

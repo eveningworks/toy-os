@@ -109,6 +109,11 @@ TOOLS = [
     # this repo's own Markdown and pci.ids. gcc and the standard library.
     ("utext_host",  "utext_hostcheck.py",      "the editor's wrap index vs a naive scan", False,
      None,                                                                                   False),
+    # The Terminal's shipped colour schemes against the ANSI -> VGA
+    # permutation the loader applies, reimplemented here from the
+    # parser's table rather than shared with it.
+    ("term_scheme", "term_scheme_hostcheck.py", "Terminal colour schemes vs the ANSI order", False,
+     None,                                                                                   False),
     # --- networking -------------------------------------------------
     # Launches its own guests against a COPY of disk.img and serves TLS
     # from the host, so wants_vm is False and nothing leaves the machine.

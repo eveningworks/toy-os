@@ -1,0 +1,24 @@
+# Solarized again, the same sixteen values, read the other way up:
+# base3 behind base00. The ONE light scheme shipped, which is what
+# makes the scrollbar's dark Breeze pair visible as a deliberate choice
+# rather than an accident.
+Name=Solarized Light
+Color0=073642
+Color1=dc322f
+Color2=859900
+Color3=b58900
+Color4=268bd2
+Color5=d33682
+Color6=2aa198
+Color7=eee8d5
+Color8=002b36
+Color9=cb4b16
+Color10=586e75
+Color11=657b83
+Color12=839496
+Color13=6c71c4
+Color14=93a1a1
+Color15=fdf6e3
+Foreground=11
+Background=15
+Cursor=586e75
