@@ -28,9 +28,34 @@
 // what tells it to re-open. Same shape as a window buffer's generation
 // -- see abi/win_proto.h.
 
-#define FONT_SHM_NAME_FMT  "font.%d"   // ...by weight: font.0, font.1
+// **TWO FAMILIES, AND THE SLOT IS family * FONT_WEIGHT_COUNT + weight.**
+// The UI family is proportional and the monospace one is what a
+// terminal or a code view draws with -- GNOME's `font-name` and
+// `monospace-font-name`, and Windows' UI font beside Consolas. A widget
+// wants the first and a grid of cells wants the second, and no single
+// face can be both.
+//
+// Encoded into the EXISTING one-number name rather than a second field,
+// so `font.0`/`font.1` still mean exactly what they meant -- the UI
+// family's regular and bold -- and the mono family is added at
+// `font.2`/`font.3`. A client built before this reads the same object
+// it always did.
+#define FONT_SHM_NAME_FMT  "font.%d"   // slot: font.0..font.3
 #define FONT_SHM_MAGIC     0x464E5431u // 'FNT1'
 #define FONT_SHM_VERSION   1
+
+enum font_family {
+    FONT_FAMILY_UI   = 0,  // proportional: menus, labels, titles
+    FONT_FAMILY_MONO = 1,  // fixed cell: terminals, code
+    FONT_FAMILY_COUNT = 2,
+};
+
+// The slot a (family, weight) pair publishes to and maps from. One
+// place, because the two sides of this ABI computing it separately is
+// the drift that makes a client read the wrong atlas and look merely
+// ugly.
+#define FONT_SHM_SLOT(family, weight) ((family) * 2 + (weight))
+#define FONT_SHM_SLOT_COUNT (FONT_FAMILY_COUNT * 2)
 
 // A reader must tolerate a header it does not understand: fontd may be
 // newer than the client. Check magic AND version, and fall back rather
@@ -61,6 +86,14 @@ struct font_shm {
     // The face's filename without the extension, for `fontd` diagnostics
     // and for a client that wants to say what it is drawing with.
     char face[32];
+
+    // **APPENDED, and that is why the version did not have to move.**
+    // Every table above is reached through an EXPLICIT offset, so a
+    // reader built before this field existed computes the same glyph
+    // address from the same `glyph_off` and simply never looks here.
+    // Inserting it higher up would have shifted `cell_w` onwards and
+    // silently handed such a reader garbage metrics.
+    uint32_t family;     // enum font_family -- see FONT_SHM_SLOT
 };
 
 // --- the beacon -------------------------------------------------------

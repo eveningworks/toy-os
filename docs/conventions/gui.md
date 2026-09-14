@@ -251,6 +251,46 @@ this the obvious way), not from how much history it accumulated.
   unbounded product of faces, weights and sizes in a never-evicted ring-0
   cache". See `docs/decisions.md`.
 
+- **THERE ARE TWO FONT FAMILIES: A PROPORTIONAL ONE FOR THE INTERFACE
+  AND A FIXED-CELL ONE FOR TERMINALS AND CODE.**
+  `system.font_face` and `system.font_mono`, both a face name, both
+  rasterized by `/bin/fontd` at the one shared `system.font_size`. GNOME
+  keeps `font-name` beside `monospace-font-name` and Windows pairs its
+  UI font with Consolas, for the same reason: no face is good at both
+  jobs, and a grid of cells drawn in a proportional face does not line
+  up.
+
+  **A WIDGET SAYS NOTHING AND GETS THE UI FAMILY.**
+  `ugfx_font_session(weight)` IS the UI family -- which is why adding
+  the second one changed no existing call site -- and
+  `ugfx_font_mono(weight)` is the other. Ask for mono only where a
+  fixed cell is part of the MEANING: a terminal grid, a hex dump, a
+  code view. Naming the unusual case is what makes a terminal silently
+  drawing proportional text a visible mistake rather than an inherited
+  default.
+
+  **THE SLOT IS `family * weights + weight`, ENCODED INTO THE OLD
+  NAME.** `font.0`/`font.1` still mean exactly what they meant -- the UI
+  family's two weights -- and mono was added at `font.2`/`font.3`, so
+  the ABI grew by addition and no client had to move.
+  `FONT_SHM_SLOT()` (`abi/font_shm.h`) and `UGFX_FONT_SLOT()`
+  (`ui/ugfx.h`) are the two sides of that arithmetic and must agree.
+  The `family` field was APPENDED to `struct font_shm` for the same
+  reason: every table in it is reached through an explicit offset, so a
+  reader that predates the field computes the same addresses and simply
+  never looks.
+
+  **THE KERNEL FALLBACK HAS NO FAMILIES AND DOES NOT NEED ANY.** Its
+  baked tables are monospace, so a mono slot falling back to them is
+  right and a UI slot falling back to them is what every client did
+  before this existed. Only the WEIGHT crosses that seam.
+
+  **NOTHING REFUSES A PROPORTIONAL FACE IN THE MONO SLOT** -- whether
+  every advance is equal is knowable only once the face is rasterized,
+  which happens in fontd -- but fontd says so in its log and the
+  published header carries a `monospace` flag for a client that wants
+  to check.
+
 - **BOLD IS A WEIGHT OF A FAMILY, AND A FAMILY IS A FILENAME RULE.**
   `<name>.ttf` plus an optional `<name>-bold.ttf` is ONE face, listed
   once, with both weights loaded and both mapped

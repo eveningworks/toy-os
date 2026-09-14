@@ -12,8 +12,21 @@
 
 ## Description
 
-Chooses which font the machine draws with. `fontface` alone lists
-`/usr/share/fonts` -- one `.ttf` per face -- and marks the active one.
+Chooses which font the INTERFACE draws with -- menus, labels, titles,
+buttons. `fontface` alone lists `/usr/share/fonts` -- one `.ttf` per
+face -- and marks what each family is using.
+
+**THERE ARE TWO FAMILIES, AND THIS SETS ONE OF THEM.** Terminals and
+code views draw with a separate monospace face, because a grid of cells
+in a proportional face does not line up; the listing marks it
+`<- monospace`. This command sets only the interface face, and the
+other one is
+
+    config set system.font_mono <name>
+
+rather than a second verb here -- the setting registry already does
+this, and two ways to change one thing is how they drift. Both default
+to `dejavu-sans-mono`, so an unconfigured machine has them the same.
 
 **A face is named by its filename without the extension**, the same way
 a cursor theme is named by its directory. So `dejavu-sans-mono.ttf` is

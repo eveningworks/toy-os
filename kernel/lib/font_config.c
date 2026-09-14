@@ -25,6 +25,7 @@
 #define FONT_CONFIG_FILE "/etc/toyos.conf"
 #define FONT_CONFIG_KEY "font_size"
 #define FACE_CONFIG_KEY "font_face"
+#define MONO_CONFIG_KEY "font_mono"
 
 // The name a face-less machine reports and persists. Not a face name --
 // no file may be called this -- so "the baked font" is a value the
@@ -48,6 +49,13 @@
 // same argument that keeps one test booting -vga virtio.
 #define FACE_DEFAULT "dejavu-sans-mono"
 
+// The MONOSPACE family's default. Today it is the same face as the UI
+// one, so a machine that has never been configured looks exactly as it
+// did -- which is the point: this change adds a second family, it does
+// not choose a new appearance. Pointing `font_face` at a proportional
+// face is what makes the two differ, and that is a separate decision.
+#define MONO_DEFAULT "dejavu-sans-mono"
+
 // THE FACE IS APPLIED BEFORE THE SIZE, and the order is not cosmetic:
 // an arbitrary size (13, 32) is only rasterizable once a face is loaded,
 // so a boot that read the size first would refuse it, snap to the
@@ -64,6 +72,11 @@ void font_config_init(void) {
         font_faces_set_selected(value);
     else
         font_faces_set_selected(FACE_DEFAULT);
+
+    if (etc_config_get(FONT_CONFIG_FILE, MONO_CONFIG_KEY, value, sizeof(value)))
+        font_faces_set_selected_mono(value);
+    else
+        font_faces_set_selected_mono(MONO_DEFAULT);
 
     // **A SELECTED FACE STILL HAS TO BE BUILT, AND THAT IS WHAT A
     // MISSING SIZE KEY USED TO SKIP.** font_face_select() only loads and
@@ -163,10 +176,17 @@ static void font_get(char *out, uint32_t out_size) {
 }
 
 static int font_apply(const char *value) {
-    // Any number is legal now, not only a baked one -- the choice list
-    // above is what Settings SHOWS, not what the setting accepts, and
-    // `config set system.font_size 13` is a reasonable thing to type
-    // once a face can be rasterized at 13.
+    // **THIS ACCEPTS ANY NUMBER AND THE REGISTRY DOES NOT, so a size
+    // outside the list above never reaches here.** `setting_set()`
+    // gates an ENUM on `choice_valid()` first, so `config set
+    // system.font_size 13` is refused with "try one of: 8 10 12 ..."
+    // even though the rasterizer would manage 13 perfectly well.
+    //
+    // The comment here used to claim the opposite -- that the list was
+    // only what Settings SHOWS -- which was the intent when faces
+    // became loadable and was never true of the registry. See
+    // docs/bugs.md; the fix is a type that means "an INT with
+    // suggestions", which this setting wants and none exists.
     uint32_t px = 0;
     if (!k_parse_u32(value, &px) || px == 0) return SETTING_INVALID;
     return font_config_apply_px((int)px);
@@ -192,9 +212,43 @@ static int face_apply(const char *value) {
     return font_config_apply_face(value);
 }
 
+static void mono_get(char *out, uint32_t out_size) {
+    k_strlcpy(out, font_faces_selected_mono(), out_size);
+}
+
+// **REFUSES A PROPORTIONAL FACE? NO -- ring 0 cannot tell.** Whether
+// every advance is equal is a question only the rasterizer can answer
+// and the rasterizer is in ring 3, so this validates existence exactly
+// as the UI face does and fontd reports the rest (its published header
+// carries a `monospace` flag for precisely this).
+static int mono_apply(const char *value) {
+    int builtin = !value || !value[0] || k_strcmp(value, FACE_BUILTIN) == 0;
+    if (!builtin && !font_faces_have(value)) return SETTING_INVALID;
+    font_faces_set_selected_mono(builtin ? FACE_BUILTIN : value);
+    int r = etc_config_set(FONT_CONFIG_FILE, MONO_CONFIG_KEY,
+                           builtin ? FACE_BUILTIN : value)
+                ? SETTING_SAVED : SETTING_UNSAVED;
+    win_server_font_changed();
+    return r;
+}
+
+static const struct setting g_mono_setting = {
+    .name   = MONO_CONFIG_KEY,
+    .label  = "Monospace face",
+    .type   = SETTING_TYPE_ENUM,
+    .file   = FONT_CONFIG_FILE,
+    .category = "Appearance",
+    .choice = face_choice,   // the same list; a face is a face
+    .get    = mono_get,
+    .apply  = mono_apply,
+};
+
 static const struct setting g_face_setting = {
     .name   = FACE_CONFIG_KEY,
-    .label  = "Font face",
+    // "Interface face", not "Font face": with a monospace face beside
+    // it the unqualified name says nothing about which of the two it
+    // is. GNOME's Interface Text / Monospace Text pair.
+    .label  = "Interface face",
     .type   = SETTING_TYPE_ENUM,
     .file   = FONT_CONFIG_FILE,
     .category = "Appearance",
@@ -217,4 +271,5 @@ static const struct setting g_font_setting = {
 void font_config_setting_register(void) {
     setting_register(&g_font_setting);
     setting_register(&g_face_setting);
+    setting_register(&g_mono_setting);
 }

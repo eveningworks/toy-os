@@ -38,7 +38,11 @@
 #define POLL_MS    250
 #define FACE_MAX   32
 
-static char g_face[FACE_MAX];
+// **ONE FACE PER FAMILY.** The UI family is what menus and labels draw
+// with and the monospace one is what a terminal's grid needs; a single
+// face cannot serve both, which is why GNOME keeps `font-name` beside
+// `monospace-font-name`.
+static char g_face[FONT_FAMILY_COUNT][FACE_MAX];
 static int  g_px;
 static uint32_t g_generation;
 
@@ -51,7 +55,7 @@ struct published {
     void *base;
     size_t bytes;
 };
-static struct published g_pub[FONT_WEIGHT_COUNT];
+static struct published g_pub[FONT_SHM_SLOT_COUNT];
 
 // The beacon: one page, created once, written IN PLACE. It is how a
 // client notices a republish at all -- see abi/font_shm.h on why the
@@ -79,8 +83,8 @@ static void beacon_bump(void) {
     if (g_beacon) g_beacon->generation = g_generation;
 }
 
-static void unpublish(int weight) {
-    struct published *p = &g_pub[weight];
+static void unpublish(int slot) {
+    struct published *p = &g_pub[slot];
     if (p->base) sys_munmap(p->base, p->bytes);
     if (p->fd >= 0) sys_close(p->fd);
     p->base = NULL;
@@ -88,24 +92,32 @@ static void unpublish(int weight) {
     p->bytes = 0;
 }
 
-// Rasterizes `weight` of the current face and publishes it. Returns 1 on
-// success; a failure leaves the PREVIOUS object in place, because a
-// client drawing yesterday's font is better than one drawing none.
-static int publish(int weight) {
+// Rasterizes one (family, weight) of its family's face and publishes it.
+// Returns 1 on success; a failure leaves the PREVIOUS object in place,
+// because a client drawing yesterday's font is better than one drawing
+// none.
+static int publish(int family, int weight) {
     char path[128];
     uint8_t *bytes = NULL;
     size_t len = 0;
     int synthesizing = 0;
+    const char *face = g_face[family];
+    int slot = FONT_SHM_SLOT(family, weight);
+
+    // A family set to `builtin` publishes nothing and its clients fall
+    // back to the baked tables -- the same state the whole service has
+    // when `font_face` is `builtin`, now reachable one family at a time.
+    if (!face[0] || strcmp(face, "builtin") == 0) return 0;
 
     if (weight == FONT_WEIGHT_BOLD) {
-        snprintf(path, sizeof path, "%s%s%s.ttf", FONT_DIR, g_face, FONT_BOLD_SUFFIX);
+        snprintf(path, sizeof path, "%s%s%s.ttf", FONT_DIR, face, FONT_BOLD_SUFFIX);
         // A FAMILY WITH NO BOLD FILE gets its regular outlines smeared,
         // which is what GDI, Cairo and DirectWrite all fall back to. A
         // client cannot tell and does not need to.
         if (ufile_slurp(path, 0, &bytes, &len) != UFILE_OK) synthesizing = 1;
     }
     if (!bytes) {
-        snprintf(path, sizeof path, "%s%s.ttf", FONT_DIR, g_face);
+        snprintf(path, sizeof path, "%s%s.ttf", FONT_DIR, face);
         if (ufile_slurp(path, 0, &bytes, &len) != UFILE_OK) {
             printf("fontd: cannot read %s\n", path);
             return 0;
@@ -121,14 +133,14 @@ static int publish(int weight) {
 
     struct font_atlas_plan plan;
     if (!font_atlas_plan(&t, g_px, weight, synthesizing, &plan)) {
-        printf("fontd: %s refused at %dpx\n", g_face, g_px);
+        printf("fontd: %s refused at %dpx\n", face, g_px);
         free(bytes);
         return 0;
     }
 
     size_t total = sizeof(struct font_shm) + (size_t)plan.total_bytes;
     char name[SHM_NAME_MAX];
-    snprintf(name, sizeof name, FONT_SHM_NAME_FMT, weight);
+    snprintf(name, sizeof name, FONT_SHM_NAME_FMT, slot);
 
     // UNLINK THEN CREATE, never reuse: a client holding the old object
     // keeps reading it until it re-opens, and writing a new atlas into
@@ -171,6 +183,7 @@ static int publish(int weight) {
     h->version   = FONT_SHM_VERSION;
     h->px        = (uint32_t)plan.px;
     h->weight    = (uint32_t)weight;
+    h->family    = (uint32_t)family;
     h->cell_w    = (uint32_t)plan.cell_w;
     h->cell_h    = (uint32_t)plan.cell_h;
     h->line_h    = (uint32_t)plan.line_h;
@@ -182,7 +195,7 @@ static int publish(int weight) {
     h->adv_off   = (uint32_t)(sizeof *h + plan.glyph_bytes);
     h->kern_off  = (uint32_t)(sizeof *h + plan.glyph_bytes + (uint64_t)plan.count);
     h->bytes     = (uint32_t)total;
-    strlcpy(h->face, g_face, sizeof h->face);
+    strlcpy(h->face, face, sizeof h->face);
 
     // THE MAGIC AND THE GENERATION GO LAST, in that order. A client that
     // maps this while it is being filled must see either "not ready" or a
@@ -191,49 +204,79 @@ static int publish(int weight) {
     h->generation = ++g_generation;
     h->magic = FONT_SHM_MAGIC;
 
-    unpublish(weight);
-    g_pub[weight].fd = fd;
-    g_pub[weight].base = base;
-    g_pub[weight].bytes = total;
+    unpublish(slot);
+    g_pub[slot].fd = fd;
+    g_pub[slot].base = base;
+    g_pub[slot].bytes = total;
 
-    printf("fontd: %s %s at %dpx -- %dx%d cell (line %d), %d glyphs, %s, gen %u\n",
-          g_face, weight == FONT_WEIGHT_BOLD ? "bold" : "regular", plan.px,
+    // **A MONOSPACE FAMILY THAT IS NOT MONOSPACE IS SAID OUT LOUD.**
+    // Nothing refuses it -- a face's advances are only knowable once it
+    // is rasterized, which is here -- but a terminal whose cells have
+    // stopped lining up should not be a mystery.
+    if (family == FONT_FAMILY_MONO && !plan.monospace)
+        printf("fontd: %s is PROPORTIONAL and is the monospace family -- "
+               "terminal cells will not line up\n", face);
+
+    printf("fontd: %s %s %s at %dpx -- %dx%d cell (line %d), %d glyphs, %s, gen %u\n",
+          family == FONT_FAMILY_MONO ? "mono" : "ui", face,
+          weight == FONT_WEIGHT_BOLD ? "bold" : "regular", plan.px,
           plan.cell_w, plan.cell_h, plan.line_h, plan.count,
           plan.monospace ? "monospace" : "proportional", h->generation);
     return 1;
 }
 
-// The settings, as they stand. Returns 1 when either has moved.
+// Drops a family's objects, so its clients fall back to the baked
+// tables. `builtin` is the sentinel for that, and it is now per family:
+// a proportional UI face beside a `builtin` monospace one is a legal
+// and useful state.
+static void drop_family(int family) {
+    for (int w = 0; w < FONT_WEIGHT_COUNT; w++) {
+        int slot = FONT_SHM_SLOT(family, w);
+        char name[SHM_NAME_MAX];
+        snprintf(name, sizeof name, FONT_SHM_NAME_FMT, slot);
+        sys_shm_unlink(name);
+        unpublish(slot);
+    }
+    g_face[family][0] = '\0';
+}
+
+// The settings, as they stand. Returns a BITMASK of the families whose
+// face or size moved -- a mask rather than a bool because the size is
+// shared and a change to it must republish both, while a face change
+// must republish only its own.
 static int settings_changed(void) {
-    char face[FACE_MAX] = {0};
+    static const char *const KEY[FONT_FAMILY_COUNT] = {
+        "system.font_face", "system.font_mono",
+    };
+    char face[FONT_FAMILY_COUNT][FACE_MAX] = {{0}};
     int px = 0;
 
-    if (usetting_get("system.font_face", face, sizeof face) <= 0) return 0;
+    for (int f = 0; f < FONT_FAMILY_COUNT; f++)
+        if (usetting_get(KEY[f], face[f], sizeof face[f]) <= 0) return 0;
     if (usetting_get_int("system.font_size", &px) < 0 || px <= 0) return 0;
 
-    // `builtin` is the sentinel for the baked tables. There is nothing
-    // to rasterize for it, so fontd publishes nothing and every client
-    // falls back to what the kernel already hands out.
-    if (strcmp(face, "builtin") == 0) {
-        if (g_face[0]) {
-            printf("fontd: face is `builtin' -- unpublishing\n");
-            for (int w = 0; w < FONT_WEIGHT_COUNT; w++) {
-                char name[SHM_NAME_MAX];
-                snprintf(name, sizeof name, FONT_SHM_NAME_FMT, w);
-                sys_shm_unlink(name);
-                unpublish(w);
-            }
-            g_face[0] = '\0';
-            g_generation++;
-            beacon_bump();
-        }
-        return 0;
-    }
+    // THE SIZE IS SHARED, so a change to it dirties every family that
+    // has a face at all.
+    int size_moved = (px != g_px);
+    int mask = 0;
 
-    if (strcmp(face, g_face) == 0 && px == g_px) return 0;
-    strlcpy(g_face, face, sizeof g_face);
+    for (int f = 0; f < FONT_FAMILY_COUNT; f++) {
+        if (strcmp(face[f], "builtin") == 0) {
+            if (g_face[f][0]) {
+                printf("fontd: %s is `builtin\' -- unpublishing\n", KEY[f]);
+                drop_family(f);
+                g_generation++;
+                beacon_bump();
+            }
+            continue;
+        }
+        if (strcmp(face[f], g_face[f]) != 0 || size_moved) {
+            strlcpy(g_face[f], face[f], sizeof g_face[f]);
+            mask |= 1 << f;
+        }
+    }
     g_px = px;
-    return 1;
+    return mask;
 }
 
 // `diag font` -- what is published, for somebody asking why their text
@@ -246,23 +289,29 @@ static void answer_diag(void) {
     q.type = DIAG_TAKE;
     if (sys_diag(&q) != 1) return;
 
+    static const char *const FAMILY[FONT_FAMILY_COUNT] = { "ui", "mono" };
     static char out[DIAG_CHUNK + 1];
     int n = 0;
-    if (!g_face[0]) {
+    if (!g_face[FONT_FAMILY_UI][0] && !g_face[FONT_FAMILY_MONO][0]) {
         n = snprintf(out, sizeof out,
                      "no face published -- the baked tables are in use\n");
     } else {
-        n = snprintf(out, sizeof out, "face %s at %dpx, generation %u\n",
-                     g_face, g_px, g_generation);
-        for (int w = 0; w < FONT_WEIGHT_COUNT && n < (int)sizeof out - 80; w++) {
-            const struct font_shm *h = (const struct font_shm *)g_pub[w].base;
-            if (!h) continue;
-            n += snprintf(out + n, sizeof out - (size_t)n,
-                          "  %-8s %ux%u cell, line %u, %u glyphs, %s%s\n",
-                          w == FONT_WEIGHT_BOLD ? "bold" : "regular",
-                          h->cell_w, h->cell_h, h->line_h, h->count,
-                          h->monospace ? "monospace" : "proportional",
-                          h->synthetic ? ", synthesized" : "");
+        n = snprintf(out, sizeof out, "size %dpx, generation %u\n",
+                     g_px, g_generation);
+        for (int f = 0; f < FONT_FAMILY_COUNT && n < (int)sizeof out - 80; f++) {
+            n += snprintf(out + n, sizeof out - (size_t)n, "%s: %s\n", FAMILY[f],
+                          g_face[f][0] ? g_face[f] : "builtin (baked tables)");
+            for (int w = 0; w < FONT_WEIGHT_COUNT && n < (int)sizeof out - 80; w++) {
+                const struct font_shm *h =
+                    (const struct font_shm *)g_pub[FONT_SHM_SLOT(f, w)].base;
+                if (!h) continue;
+                n += snprintf(out + n, sizeof out - (size_t)n,
+                              "  %-8s %ux%u cell, line %u, %u glyphs, %s%s\n",
+                              w == FONT_WEIGHT_BOLD ? "bold" : "regular",
+                              h->cell_w, h->cell_h, h->line_h, h->count,
+                              h->monospace ? "monospace" : "proportional",
+                              h->synthetic ? ", synthesized" : "");
+            }
         }
     }
 
@@ -277,8 +326,17 @@ static void answer_diag(void) {
     sys_diag(&r);
 }
 
+// Republishes every family the mask names, both weights.
+static void publish_mask(int mask) {
+    for (int f = 0; f < FONT_FAMILY_COUNT; f++) {
+        if (!(mask & (1 << f))) continue;
+        publish(f, FONT_WEIGHT_REGULAR);
+        publish(f, FONT_WEIGHT_BOLD);
+    }
+}
+
 int main(void) {
-    for (int w = 0; w < FONT_WEIGHT_COUNT; w++) { g_pub[w].fd = -1; }
+    for (int i = 0; i < FONT_SHM_SLOT_COUNT; i++) { g_pub[i].fd = -1; }
 
     // The diagnostic name, claimed once. A service that cannot be asked
     // what it is doing is one whose failures get guessed at.
@@ -289,9 +347,9 @@ int main(void) {
     sys_diag(&c);
 
     beacon_init();
-    if (settings_changed()) {
-        publish(FONT_WEIGHT_REGULAR);
-        publish(FONT_WEIGHT_BOLD);
+    int mask = settings_changed();
+    if (mask) {
+        publish_mask(mask);
         beacon_bump();
     }
 
@@ -302,9 +360,9 @@ int main(void) {
     sys_notify_ready();
 
     for (;;) {
-        if (settings_changed()) {
-            publish(FONT_WEIGHT_REGULAR);
-            publish(FONT_WEIGHT_BOLD);
+        mask = settings_changed();
+        if (mask) {
+            publish_mask(mask);
             beacon_bump();
         }
         answer_diag();

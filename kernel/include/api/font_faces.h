@@ -38,9 +38,18 @@ int font_faces_name(int index, char *out, uint32_t cap);
 // honestly do, since whether the file PARSES is fontd's question.
 int font_faces_have(const char *name);
 
-// The selected face, or "builtin". This is a record of the setting, not
-// a claim that anything has been loaded: ring 0 loads nothing.
+// The selected face for each family, or "builtin". A record of the
+// SETTING, not a claim that anything has been loaded: ring 0 loads
+// nothing. `font_faces_selected()` is the UI family, unqualified,
+// because that is the one almost every caller means.
+//
+// **TWO FAMILIES BECAUSE NO FACE IS BOTH.** A proportional face makes a
+// terminal's grid wrong and a monospace one makes the desktop look like
+// a terminal; GNOME keeps `font-name` beside `monospace-font-name` for
+// exactly this and Windows pairs its UI font with Consolas.
 const char *font_faces_selected(void);
 void font_faces_set_selected(const char *name);
+const char *font_faces_selected_mono(void);
+void font_faces_set_selected_mono(const char *name);
 
 #endif

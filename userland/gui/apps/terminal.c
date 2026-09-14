@@ -444,10 +444,14 @@ static char *g_rowbuf;   // draw_row's run scratch,  g_cap_cols + 1
 //
 // **THE GRID MEASURES WITH cell_w()/cell_h() AND THE CHROME DOES NOT.**
 // ugfx's font selection is per PROCESS, so the menu bar and tab strip --
-// drawn by the toolkit after on_draw -- keep the session font while the
-// grid uses this one, and draw() is the only place the selection moves.
-// `font_size = 0`, the default, follows the desktop and rasterizes
-// nothing.
+// drawn by the toolkit after on_draw -- keep the UI family while the
+// grid uses the MONOSPACE one, and draw() is the only place the
+// selection moves.
+//
+// `font_size = 0`, the default, rasterizes nothing and follows the
+// desktop's monospace family (`system.font_mono`, ui/ugfx.h). That is
+// the pair this window needs: the desktop's SIZE, in a face whose
+// cells line up.
 static struct ugfx_font g_font;
 static void *g_font_arena;
 static int g_font_px;          // what g_font holds; 0 = following the desktop
@@ -458,12 +462,25 @@ static int g_cell_w, g_cell_h;
 // way rather than the flag AND the setting.
 static int g_caret_on = 1;
 
+// The font the GRID draws in: this terminal's own atlas when it has
+// one, else the session's MONOSPACE family. Never the UI family, whose
+// face may be proportional -- a grid of cells drawn in one does not
+// line up, which is the whole reason the two families exist.
+static const struct ugfx_font *grid_font(void) {
+    return g_font_px ? &g_font : ugfx_font_mono(UGFX_FONT_REGULAR);
+}
+
 static void font_sync(void) {
     if (g_conf.font_size != g_font_px) {
         void *arena = 0;
         if (g_conf.font_size) {
             char face[48], path[96];
-            if (!usetting_get("system.font_face", face, sizeof face) || !face[0])
+            // **THE MONOSPACE FACE, not `system.font_face`.** Reading
+            // the UI one here would make a configured size undo the
+            // family split -- the one window that most needs a fixed
+            // cell would be the one drawing in the interface's face.
+            if (!usetting_get("system.font_mono", face, sizeof face) || !face[0]
+                || strcmp(face, "builtin") == 0)
                 strlcpy(face, "dejavu-sans-mono", sizeof face);
             snprintf(path, sizeof path, "%s/%s.ttf", FONT_FACE_DIR, face);
             unsigned long need = ugfx_font_arena_size(g_conf.font_size);
@@ -483,13 +500,12 @@ static void font_sync(void) {
         g_font_px = arena ? g_conf.font_size : 0;
     }
     // Re-read EVERY call, not only after a reload: while we are
-    // following the desktop, the desktop's size can move under us
-    // (WIN_EV_FONT) and these two are what the whole grid is derived
-    // from.
-    const struct ugfx_font *was = g_font_px ? ugfx_set_font(&g_font) : 0;
+    // following the desktop, its size can move under us (WIN_EV_FONT)
+    // and these two are what the whole grid is derived from.
+    const struct ugfx_font *was = ugfx_set_font(grid_font());
     g_cell_w = ugfx_char_w();
     g_cell_h = ugfx_char_h();
-    if (g_font_px) ugfx_set_font(was);
+    ugfx_set_font(was);
 }
 
 static int cell_w(void) { if (g_cell_w <= 0) font_sync(); return g_cell_w; }
@@ -1262,7 +1278,7 @@ static void draw(struct ugfx_surface *s, int focused) {
     // also re-reads the metrics, which is what makes a desktop font-size
     // change reflow a window that is following it.
     font_sync();
-    const struct ugfx_font *was_font = g_font_px ? ugfx_set_font(&g_font) : 0;
+    const struct ugfx_font *was_font = ugfx_set_font(grid_font());
     // ONLY THE GRID AREA, not the whole surface: the toolkit paints the
     // tab strip after this runs, and a full-surface fill here would wipe
     // whatever it had already put down (ui/uapp.c's draw order).
@@ -1331,7 +1347,7 @@ static void draw(struct ugfx_surface *s, int focused) {
             }
         }
     }
-    if (was_font) ugfx_set_font(was_font);
+    ugfx_set_font(was_font);
 }
 
 // One line, content-relative, on stderr -- the grammar every GUI test

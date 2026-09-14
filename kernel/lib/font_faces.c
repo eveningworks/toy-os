@@ -13,6 +13,7 @@ static char g_name[FACES_MAX][FONT_FACE_NAME_LEN];
 static int  g_count;
 static uint64_t g_scanned_gen = (uint64_t)-1;
 static char g_selected[FONT_FACE_NAME_LEN] = "builtin";
+static char g_selected_mono[FONT_FACE_NAME_LEN] = "builtin";
 
 // fs_list()'s callback carries no user pointer, so the collection point
 // is a file-level static -- the same shape every other caller of it uses.
@@ -72,4 +73,15 @@ const char *font_faces_selected(void) { return g_selected; }
 
 void font_faces_set_selected(const char *name) {
     k_strlcpy(g_selected, (name && name[0]) ? name : "builtin", sizeof g_selected);
+}
+
+// The MONOSPACE family's selection, kept beside the UI one. Separate
+// storage rather than an array indexed by family because these two are
+// reached by name from a dozen places and `[0]`/`[1]` at every call site
+// would say less than the two names do.
+const char *font_faces_selected_mono(void) { return g_selected_mono; }
+
+void font_faces_set_selected_mono(const char *name) {
+    k_strlcpy(g_selected_mono, (name && name[0]) ? name : "builtin",
+              sizeof g_selected_mono);
 }

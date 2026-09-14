@@ -180,6 +180,26 @@ void ugfx_draw_rect(struct ugfx_surface *s, int x, int y, int w, int h, uint32_t
 #define UGFX_FONT_BOLD    1
 #define UGFX_FONT_WEIGHTS 2
 
+// **TWO FAMILIES: a proportional one for the interface and a fixed-cell
+// one for terminals and code.** GNOME's `font-name` beside
+// `monospace-font-name`, Windows' UI font beside Consolas -- no single
+// face can be both, and a grid of cells drawn in a proportional face
+// does not line up.
+//
+// A widget wants the UI family and says nothing: `ugfx_font_session()`
+// IS the UI family, which is why adding this changed no call site. Only
+// something that genuinely needs a fixed cell names the other one.
+#define UGFX_FONT_FAMILY_UI   0
+#define UGFX_FONT_FAMILY_MONO 1
+#define UGFX_FONT_FAMILIES    2
+
+// The slot a (family, weight) pair lives in, matching
+// abi/font_shm.h's FONT_SHM_SLOT -- the two sides of that ABI must
+// agree and this is the client's copy of the arithmetic.
+#define UGFX_FONT_SLOT(family, weight) ((family) * UGFX_FONT_WEIGHTS + (weight))
+#define UGFX_FONT_SLOTS (UGFX_FONT_FAMILIES * UGFX_FONT_WEIGHTS)
+#define UGFX_FONT_SLOT_UI_REGULAR UGFX_FONT_SLOT(UGFX_FONT_FAMILY_UI, UGFX_FONT_REGULAR)
+
 struct ugfx_font {
     const unsigned char *glyphs;   // count cells of char_w x char_h coverage
     const unsigned char *advances; // count bytes, or NULL for a fixed cell
@@ -243,6 +263,16 @@ int ugfx_glyph_h(void);
 // bold weight (the baked font), so this never returns something
 // undrawable.
 const struct ugfx_font *ugfx_font_session(int weight);
+
+// The MONOSPACE family, same contract: mapped on first use, and a
+// failure returns the UI family's regular weight rather than nothing,
+// so a terminal whose mono face will not load draws text in the wrong
+// face instead of drawing none.
+//
+// **ASK FOR THIS WHENEVER A FIXED CELL IS PART OF THE MEANING** -- a
+// terminal grid, a hex dump, a code view. Everything else wants
+// ugfx_font_session().
+const struct ugfx_font *ugfx_font_mono(int weight);
 
 // Makes `f` the font every subsequent text call draws and measures
 // with, RETURNING THE PREVIOUS ONE so save/restore is the shortest

@@ -7359,3 +7359,53 @@ nothing -- while blinking is off, so the default costs two wake-ups a
 second and no frames. That is against the 33 a second this window paid
 before its reader threads landed, and it is the reason the tick could be
 reintroduced at all.
+
+## Two font families, and why the slot is the old name plus arithmetic
+
+The interface and a terminal want different faces. That is not a matter
+of taste: a terminal is a GRID, and a grid drawn in a proportional face
+does not line up. Every system that has both keeps both -- GNOME's
+`font-name` beside `monospace-font-name`, Windows' UI font beside
+Consolas, macOS's system font beside SF Mono.
+
+toy-os had one, `system.font_face`, and it had to be monospace because
+the Terminal used it. So the whole desktop looked like a terminal, and
+the fix was never "pick a nicer face" -- it was that one setting could
+not express the requirement.
+
+**A WIDGET SAYS NOTHING AND GETS THE UI FAMILY.** The alternative was
+`ugfx_font_session(family, weight)` at all 31 existing call sites, every
+one of them a widget, every one of them saying `UI`. That was rejected:
+it is 31 mechanical edits that prevent no bug. The case worth catching
+is a TERMINAL silently drawing proportional text, and what catches that
+is having to NAME `ugfx_font_mono()` -- the unusual requirement is the
+one that gets spelled out. A widget inheriting the interface font is
+the right default and reads better unqualified.
+
+**THE SLOT IS `family * weights + weight`, ENCODED INTO THE EXISTING
+ONE-NUMBER SHM NAME.** `FONT_SHM_NAME_FMT` was `"font.%d"` indexed by
+weight; it is now indexed by slot, which leaves `font.0`/`font.1`
+meaning precisely what they meant and adds the monospace family at
+`font.2`/`font.3`. The ABI grew by addition rather than by a second
+field and a new name format, so nothing that reads a font had to change
+to keep working.
+
+**`family` WAS APPENDED TO `struct font_shm`, NOT INSERTED.** Every
+table in that object is reached through an explicit byte offset
+(`glyph_off`, `adv_off`, `kern_off`) -- the header says so, and says
+why -- so a reader built before the field computes the same addresses
+and never looks at it. Inserting it beside `weight`, which is where it
+belongs by meaning, would have shifted `cell_w` onwards and handed such
+a reader plausible garbage metrics. Meaning lost to compatibility, and
+the comment beside the field records that it was a choice.
+
+**NOTHING REFUSES A PROPORTIONAL FACE IN THE MONOSPACE SLOT.** Whether
+every advance is equal is knowable only after rasterizing, which
+happens in ring 3; the setting's `apply` is in ring 0 and can validate
+existence and nothing more -- the same honest limit `system.font_face`
+already had. fontd logs it instead, and the published header carries a
+`monospace` flag, so the condition is reportable rather than silent.
+
+**Both defaults are the same face today**, so a machine that has never
+been configured looks exactly as it did. This change adds the ability
+to differ; choosing to is separate, and reversible in one setting.

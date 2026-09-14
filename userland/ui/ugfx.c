@@ -26,21 +26,25 @@ static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
 // which makes a forgotten init draw nothing rather than dereference a
 // wild pointer -- see ugfx.h.
 //
-// TWO OF THEM AND NOT ONE, because both weights are live at the same
-// time. That is the difference between a weight and a size: the machine
-// is only ever at one size, so a size change re-maps in place, while a
-// widget picks a weight per run of text and needs both there at once.
-static struct ugfx_font g_session[UGFX_FONT_WEIGHTS];
+// FOUR OF THEM AND NOT ONE, because every (family, weight) is live at
+// the same time. That is the difference between these and a SIZE: the
+// machine is only ever at one size, so a size change re-maps in place,
+// while a widget picks a weight per run of text -- and a terminal in
+// the same process picks the monospace family -- and they need to be
+// there at once. UGFX_FONT_SLOT is the index; abi/font_shm.h's
+// FONT_SHM_SLOT is the same arithmetic on the publishing side.
+static struct ugfx_font g_session[UGFX_FONT_SLOTS];
 
 // What text draws with right now -- always one of the above, or a font
 // a client rasterized for itself (ugfx_font_load). Never NULL after a
 // successful init.
-static const struct ugfx_font *g_font = &g_session[UGFX_FONT_REGULAR];
+static const struct ugfx_font *g_font = &g_session[UGFX_FONT_SLOT_UI_REGULAR];
 
-// Has the bold weight been asked for since the last ugfx_font_init()?
-// See ugfx_font_session(): mapping it eagerly cost every client a
-// startup round trip for a weight most never use.
-static int g_bold_mapped;
+// Which slots have been asked for since the last ugfx_font_init()?
+// See ugfx_font_session(): mapping them eagerly cost every client a
+// startup round trip per slot, for slots most never use. Slot 0 is
+// mapped by init and is always set.
+static int g_slot_asked[UGFX_FONT_SLOTS];
 
 // Kept as the old module-level names so that everything below reads as
 // it did; they now just track g_font.
@@ -287,7 +291,7 @@ static int glyph_index(unsigned char c) {
 // than a leftover -- a `builtin` face publishes nothing, and a machine
 // whose fontd has not started yet still has to draw. What it hands out
 // is the baked tables, which is what the console is using anyway.
-static uint32_t g_shm_generation[UGFX_FONT_WEIGHTS];
+static uint32_t g_shm_generation[UGFX_FONT_SLOTS];
 
 // The beacon, mapped once. Reading it is a memory access rather than a
 // syscall, which is what lets a client check on every frame -- see
@@ -298,18 +302,18 @@ static uint32_t g_tried_gen = 0xFFFFFFFFu; // no upgrade attempted yet
 
 // What this process currently has mapped for each weight, so a
 // republish can give it back.
-static void *g_map_base[UGFX_FONT_WEIGHTS];
-static uint64_t g_map_bytes[UGFX_FONT_WEIGHTS];
+static void *g_map_base[UGFX_FONT_SLOTS];
+static uint64_t g_map_bytes[UGFX_FONT_SLOTS];
 
 // Whether this weight is currently drawn from fontd's atlas, as opposed
 // to the kernel's baked fallback.
-static int g_from_fontd[UGFX_FONT_WEIGHTS];
+static int g_from_fontd[UGFX_FONT_SLOTS];
 
-static void fontd_unmap(int weight) {
-    if (!g_map_base[weight]) return;
-    sys_munmap(g_map_base[weight], g_map_bytes[weight]);
-    g_map_base[weight] = 0;
-    g_map_bytes[weight] = 0;
+static void fontd_unmap(int slot) {
+    if (!g_map_base[slot]) return;
+    sys_munmap(g_map_base[slot], g_map_bytes[slot]);
+    g_map_base[slot] = 0;
+    g_map_bytes[slot] = 0;
 }
 
 // **SYS_MMAP FAILS WITH (void *)-1, NOT NULL** -- mmap's own contract,
@@ -333,9 +337,9 @@ static void beacon_map(void) {
     g_seen_beacon = b->generation;
 }
 
-static int map_fontd_font(int weight, struct ugfx_font *out) {
+static int map_fontd_font(int slot, struct ugfx_font *out) {
     char name[SHM_NAME_MAX];
-    snprintf(name, sizeof name, FONT_SHM_NAME_FMT, weight);
+    snprintf(name, sizeof name, FONT_SHM_NAME_FMT, slot);
 
     int fd = sys_shm_open(name, 0, 0);   // open existing, never create
     if (fd < 0) return 0;
@@ -368,10 +372,10 @@ static int map_fontd_font(int weight, struct ugfx_font *out) {
     // space -- and a few switches in System Settings were enough for the
     // next mmap to fail, which the missing MAP_FAILED check above then
     // turned into a page fault in the compositor.
-    fontd_unmap(weight);
-    g_map_base[weight] = base;
-    g_map_bytes[weight] = hdr.bytes;
-    g_from_fontd[weight] = 1;
+    fontd_unmap(slot);
+    g_map_base[slot] = base;
+    g_map_bytes[slot] = hdr.bytes;
+    g_from_fontd[slot] = 1;
 
     const struct font_shm *h = (const struct font_shm *)base;
     out->char_w   = (int)h->cell_w;
@@ -381,23 +385,30 @@ static int map_fontd_font(int weight, struct ugfx_font *out) {
     out->glyphs   = (const unsigned char *)base + h->glyph_off;
     out->advances = (const unsigned char *)base + h->adv_off;
     out->kern     = (const signed char *)((const unsigned char *)base + h->kern_off);
-    g_shm_generation[weight] = h->generation;
+    g_shm_generation[slot] = h->generation;
     beacon_map();
 
-    // SAID ONCE PER WEIGHT, because fontd and the kernel produce the
-    // SAME bytes -- so nothing on screen can tell you which one a client
-    // is drawing from, and "it looks right" is not evidence that this
-    // path ran at all.
-    ulogf("ugfx: session font %d from fontd -- %ux%u cell, line %u, gen %u\n",
-          weight, h->cell_w, h->cell_h, h->line_h, h->generation);
+    // SAID ONCE PER SLOT, because fontd and the kernel produce the SAME
+    // bytes for the baked face -- so nothing on screen can tell you
+    // which one a client is drawing from, and "it looks right" is not
+    // evidence that this path ran at all.
+    ulogf("ugfx: session font slot %d from fontd -- %s, %ux%u cell, line %u, gen %u\n",
+          slot, h->monospace ? "monospace" : "proportional",
+          h->cell_w, h->cell_h, h->line_h, h->generation);
     return 1;
 }
 
-// Asks the server for one weight and fills `out`. Returns 1 on success.
-static int map_session_font(int weight, struct ugfx_font *out) {
-    if (map_fontd_font(weight, out)) return 1;
-    g_from_fontd[weight] = 0;
-    ulogf("ugfx: session font %d from the KERNEL (no fontd atlas)\n", weight);
+// Asks the server for one slot and fills `out`. Returns 1 on success.
+//
+// **THE KERNEL FALLBACK HAS NO FAMILIES, and does not need any.** Its
+// baked tables are monospace, so a mono slot falling back to them is
+// exactly right, and a UI slot falling back to them is what every
+// client did before this existed. Only the WEIGHT crosses that seam.
+static int map_session_font(int slot, struct ugfx_font *out) {
+    if (map_fontd_font(slot, out)) return 1;
+    int weight = slot % UGFX_FONT_WEIGHTS;
+    g_from_fontd[slot] = 0;
+    ulogf("ugfx: session font slot %d from the KERNEL (no fontd atlas)\n", slot);
 
     struct win_request_msg req;
     for (unsigned i = 0; i < sizeof(req); i++) ((uint8_t *)&req)[i] = 0;
@@ -454,11 +465,11 @@ int ugfx_font_recheck(void) {
     // permanently true there -- retrying every frame re-maps the font
     // and resets the current weight on each one, which is a storm, not
     // a fallback.
-    if (!g_from_fontd[UGFX_FONT_REGULAR]) {
+    if (!g_from_fontd[UGFX_FONT_SLOT_UI_REGULAR]) {
         if (g_beacon->generation == g_tried_gen) return 0;
         g_tried_gen = g_beacon->generation;
         g_seen_beacon = g_beacon->generation;
-        return ugfx_font_init() && g_from_fontd[UGFX_FONT_REGULAR];
+        return ugfx_font_init() && g_from_fontd[UGFX_FONT_SLOT_UI_REGULAR];
     }
 
     if (g_beacon->generation == g_seen_beacon) return 0;
@@ -468,7 +479,8 @@ int ugfx_font_recheck(void) {
 }
 
 int ugfx_font_init(void) {
-    if (!map_session_font(UGFX_FONT_REGULAR, &g_session[UGFX_FONT_REGULAR]))
+    if (!map_session_font(UGFX_FONT_SLOT_UI_REGULAR,
+                          &g_session[UGFX_FONT_SLOT_UI_REGULAR]))
         return 0;
     // **BOLD IS MAPPED LAZILY, ON FIRST USE.** Mapping it here cost every
     // client a second WIN_REQ_FONT round trip at startup for a weight
@@ -479,37 +491,52 @@ int ugfx_font_init(void) {
     // A startup cost paid by every client for a feature used by a few is
     // the wrong trade even when it is small, and it is the shape that
     // gets blamed on something else when it finally matters.
-    // BOLD'S OWN MAPPING GOES BACK HERE. It is about to be replaced by a
-    // copy of regular's, so keeping it would strand a whole atlas in
-    // this address space on every font change -- the leak that made
-    // mmap fail and took the compositor down.
-    fontd_unmap(UGFX_FONT_BOLD);
-    g_session[UGFX_FONT_BOLD] = g_session[UGFX_FONT_REGULAR];
-    g_bold_mapped = 0;
+    // EVERY OTHER SLOT'S OWN MAPPING GOES BACK HERE. Each is about to be
+    // replaced by a copy of UI-regular's, so keeping one would strand a
+    // whole atlas in this address space on every font change -- the leak
+    // that made mmap fail and took the compositor down.
+    //
+    // The copy is what makes an unasked-for slot DRAWABLE rather than
+    // empty: a widget that asks for bold, or a terminal that asks for
+    // mono, before either is mapped gets UI-regular and draws text,
+    // which is the degradation GDI makes for a family with no bold.
+    for (int i = 0; i < UGFX_FONT_SLOTS; i++) {
+        if (i == UGFX_FONT_SLOT_UI_REGULAR) continue;
+        fontd_unmap(i);
+        g_session[i] = g_session[UGFX_FONT_SLOT_UI_REGULAR];
+        g_slot_asked[i] = 0;
+    }
+    g_slot_asked[UGFX_FONT_SLOT_UI_REGULAR] = 1;
 
     // A re-init (WIN_EV_FONT) must not leave the current font pointing
     // at a private atlas whose backing the app may have freed, so this
-    // resets to the session's regular weight -- which is also what an
+    // resets to the UI family's regular weight -- which is also what an
     // app expects after the desktop's font changed under it.
-    g_font = &g_session[UGFX_FONT_REGULAR];
+    g_font = &g_session[UGFX_FONT_SLOT_UI_REGULAR];
     return 1;
 }
 
-const struct ugfx_font *ugfx_font_session(int weight) {
-    if (weight < 0 || weight >= UGFX_FONT_WEIGHTS)
-        weight = UGFX_FONT_REGULAR;
-    if (weight == UGFX_FONT_BOLD && !g_bold_mapped) {
-        // ONCE, and once per font change (ugfx_font_init clears the
-        // flag). A failure leaves the slot as the copy of regular that
-        // ugfx_font_init put there, so this always returns something
-        // drawable -- the baked font has ONE weight, so a machine with
-        // no face loaded has no bold at all and an app must not lose its
-        // text over that. A widget asking for bold quietly gets regular,
-        // the same degradation GDI makes for a family with no bold.
-        g_bold_mapped = 1; // set FIRST: a failed map must not retry per draw
-        map_session_font(UGFX_FONT_BOLD, &g_session[UGFX_FONT_BOLD]);
+// One slot, mapped on FIRST USE. See ugfx_font_init(): every slot but
+// UI-regular starts as a copy of it, so this always returns something
+// drawable whether or not the map succeeds.
+static const struct ugfx_font *session_slot(int slot) {
+    if (slot < 0 || slot >= UGFX_FONT_SLOTS) slot = UGFX_FONT_SLOT_UI_REGULAR;
+    if (!g_slot_asked[slot]) {
+        // Set FIRST: a failed map must not retry on every draw.
+        g_slot_asked[slot] = 1;
+        map_session_font(slot, &g_session[slot]);
     }
-    return &g_session[weight];
+    return &g_session[slot];
+}
+
+const struct ugfx_font *ugfx_font_session(int weight) {
+    if (weight < 0 || weight >= UGFX_FONT_WEIGHTS) weight = UGFX_FONT_REGULAR;
+    return session_slot(UGFX_FONT_SLOT(UGFX_FONT_FAMILY_UI, weight));
+}
+
+const struct ugfx_font *ugfx_font_mono(int weight) {
+    if (weight < 0 || weight >= UGFX_FONT_WEIGHTS) weight = UGFX_FONT_REGULAR;
+    return session_slot(UGFX_FONT_SLOT(UGFX_FONT_FAMILY_MONO, weight));
 }
 
 const struct ugfx_font *ugfx_font_current(void) { return g_font; }
@@ -520,7 +547,7 @@ const struct ugfx_font *ugfx_set_font(const struct ugfx_font *f) {
     // "no font": every measurement below would return 0 with a NULL
     // font, and a widget that forgot to restore would collapse the
     // layout of everything drawn after it instead of looking wrong.
-    g_font = (f && f->glyphs) ? f : &g_session[UGFX_FONT_REGULAR];
+    g_font = (f && f->glyphs) ? f : &g_session[UGFX_FONT_SLOT_UI_REGULAR];
     return prev;
 }
 

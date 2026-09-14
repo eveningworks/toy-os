@@ -990,16 +990,25 @@ void cmd_fontsize(const char *args) {
 void cmd_fontface(const char *args) {
     if (!args || k_strlen(args) == 0) {
         int n = font_faces_count();
-        const char *active = font_faces_selected();
+        // TWO SELECTIONS TO REPORT NOW, and a listing marking only one
+        // of them would say the other family is unset. `fontface <name>`
+        // still sets the INTERFACE one; the monospace face is
+        // `config set system.font_mono`, because a second positional
+        // verb here would be a second way to do what the registry
+        // already does.
+        const char *ui = font_faces_selected();
+        const char *mono = font_faces_selected_mono();
         vga_printf("Font faces in %s (%d):\n", FONT_FACE_DIR, n);
-        vga_printf("  %-24s %s%s\n", "builtin",
+        vga_printf("  %-24s %s%s%s\n", "builtin",
                    "baked in -- what THIS console draws",
-                   k_strcmp(active, "builtin") == 0 ? "  <- selected" : "");
+                   k_strcmp(ui, "builtin") == 0 ? "  <- interface" : "",
+                   k_strcmp(mono, "builtin") == 0 ? "  <- monospace" : "");
         for (int i = 0; i < n; i++) {
             char name[FONT_FACE_NAME_LEN];
             if (!font_faces_name(i, name, sizeof name)) continue;
-            vga_printf("  %-24s %s%s\n", name, "rasterized by /bin/fontd",
-                       k_strcmp(name, active) == 0 ? "  <- selected" : "");
+            vga_printf("  %-24s %s%s%s\n", name, "rasterized by /bin/fontd",
+                       k_strcmp(name, ui) == 0 ? "  <- interface" : "",
+                       k_strcmp(name, mono) == 0 ? "  <- monospace" : "");
         }
         if (n == 0) vga_write("  (none -- the built-in font is the only one)\n");
         return;
@@ -1014,7 +1023,7 @@ void cmd_fontface(const char *args) {
         return;
     }
     vga_reflow();
-    vga_printf("Font face set to %s", builtin ? "builtin" : args);
+    vga_printf("Interface face set to %s", builtin ? "builtin" : args);
     print_save_result(r);
     vga_write(".\n");
 }
