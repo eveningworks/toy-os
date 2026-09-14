@@ -205,6 +205,7 @@ static void report_stuck(int pid, int sampled_blocked, int samples) {
     // left RUNNING is never put back to READY and never picked again.
     klog_printf("win_input: preempt_depth=%d armed=%d\n",
                 scheduler_preempt_depth(), process_context_is_armed());
+    scheduler_trace_dump();
 }
 
 // The end-to-end one: a real ring-3 process, holding the role, blocks
