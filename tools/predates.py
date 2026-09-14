@@ -27,6 +27,12 @@ worth trusting:
   - The restore runs in a `finally`, so a Ctrl-C or a crashing command
     still puts the tree back.
   - It REFUSES to run mid-rebase/merge, where stashing is not safe.
+  - It REFUSES a SECOND concurrent run, which is the one way these
+    guarantees can still lose a tree: the second process stashes a tree
+    the first has already emptied, so its "stash" is identical to HEAD,
+    and restoring that empty stash wipes the work the first one was
+    holding. (Measured: two runs five seconds apart left the tree at
+    HEAD with 36 files' work reachable only as a dangling commit.)
 
 WHAT IT CANNOT TELL YOU. That a failure predates you is not that it is
 unrelated -- a change can make a latent bug reachable without being
@@ -93,6 +99,27 @@ def main():
         if os.path.exists(os.path.join(REPO, gitdir, marker)):
             sys.exit(f"predates: refusing -- a {marker} is in progress. "
                      f"Finish or abort it first.")
+
+    # **ONE AT A TIME, OR THE SECOND RUN RESTORES AN EMPTY STASH OVER
+    # THE FIRST ONE'S WORK.** An flock, so a run killed with -9 frees it;
+    # the pid in the file is for the message.
+    import fcntl
+    lock_path = os.path.join(REPO, "build", ".predates.lock")
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    lock_fh = open(lock_path, "a+")
+    try:
+        fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lock_fh.seek(0)
+        holder = lock_fh.read().strip() or "unknown pid"
+        sys.exit(f"predates: refusing -- another run holds the tree "
+                 f"({holder}). Two at once is how a working tree is lost: "
+                 f"the second stashes what the first already stashed away, "
+                 f"then restores that nothing over it.")
+    lock_fh.seek(0)
+    lock_fh.truncate()
+    lock_fh.write(f"{os.getpid()}\n")
+    lock_fh.flush()
 
     head = git("rev-parse", "--short", "HEAD")
     dirty = git("status", "--porcelain")
