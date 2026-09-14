@@ -834,6 +834,63 @@ static void save_kernel_frame(uint64_t *regs) {
     isr_context_outer(regs, &kernel_saved_resume_slot, &kernel_saved_isr_depth);
 }
 
+// A ring of the last few scheduler transitions, for a state that cannot
+// happen -- a process left SCHED_RUNNING while nothing is current, say.
+// **CONSECUTIVE IDENTICAL ENTRIES COLLAPSE**, or five seconds of an idle
+// rotation pushes out the transition that caused the trouble: the ring
+// is short on purpose (see CLAUDE.md on a probe outrunning its log).
+#define SCHED_TRACE_N 24
+static struct sched_trace_ent {
+    const char *what;
+    int idx, cur, repeat, state;
+} g_trace[SCHED_TRACE_N];
+static unsigned g_trace_n;
+
+static void trace_sched(const char *what, int idx) {
+    if (g_trace_n) {
+        struct sched_trace_ent *last = &g_trace[(g_trace_n - 1) % SCHED_TRACE_N];
+        if (last->what == what && last->idx == idx && last->cur == current_index) {
+            last->repeat++;
+            return;
+        }
+    }
+    struct sched_trace_ent *e = &g_trace[g_trace_n % SCHED_TRACE_N];
+    e->what = what; e->idx = idx; e->cur = current_index; e->repeat = 0;
+    e->state = (idx >= 0 && idx < MAX_PROCS) ? (int)procs[idx].state : -1;
+    g_trace_n++;
+}
+
+void scheduler_trace_dump(void) {
+    unsigned first = g_trace_n > SCHED_TRACE_N ? g_trace_n - SCHED_TRACE_N : 0;
+    for (unsigned i = first; i < g_trace_n; i++) {
+        struct sched_trace_ent *e = &g_trace[i % SCHED_TRACE_N];
+        klog_printf("sched: %s idx=%d cur=%d state=%d (x%d)\n", e->what, e->idx,
+                    e->cur, e->state, e->repeat + 1);
+    }
+}
+
+// **AT MOST ONE SLOT IS SCHED_RUNNING, AND IT IS `current_index`.** The
+// state is only reachable through switch_to(), only the rotation puts a
+// process back to READY, and it only does that for the process that is
+// current -- so a slot left RUNNING while somebody else is current is
+// unschedulable for the rest of the boot. Checked at every switch, ONCE
+// per boot: the report is the trace ring above, which is worth nothing
+// if a flood has already pushed the cause out of it.
+static int g_running_latched;
+
+static void check_one_running(const char *where) {
+    if (g_running_latched) return;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].state != SCHED_RUNNING || i == current_index) continue;
+        g_running_latched = 1;
+        klog_printf("sched: INVARIANT at %s -- slot %d (pid %d, \"%s\") is RUNNING "
+                    "while cur=%d (tgid=%d)\n", where, i, i + 1, procs[i].name,
+                    current_index, procs[i].tgid);
+        scheduler_trace_dump();
+        return;
+    }
+}
+
 // **THE SWITCH CRITICAL SECTION RUNS WITH INTERRUPTS OFF, AND NOTHING
 // TURNS THEM BACK ON** -- the `iretq` that completes the handover
 // restores the INCOMING context's RFLAGS, so IF returns with the
@@ -857,6 +914,8 @@ static inline void sched_switch_begin(void) {
 }
 
 static void switch_to(int idx) {
+    check_one_running("switch_to");
+    trace_sched("switch_to", idx);
     kstack_verify(idx);   // before trusting anything else about this slot
     fpu_restore(procs[idx].fpu);
     // The thread pointer, and it has to be here: iretq reloads CS and SS
@@ -889,6 +948,8 @@ static void switch_to(int idx) {
 // three. Kept as its own function purely so both callers (the tick and
 // the exit path) state the same thing once.
 static void switch_to_kernel(void) {
+    check_one_running("to_kernel");
+    trace_sched("to_kernel", -1);
     current_index = -1;
     rotation_pos = ROT_KERNEL;
     // The LEGACY loader's thread pointer -- the same
@@ -1591,6 +1652,7 @@ static void scheduler_rotate(uint64_t *regs) {
         // answer (see fpu.h).
         fpu_save(procs[current_index].fpu);
         procs[current_index].state = SCHED_READY;
+        trace_sched("rotate_out", current_index);
     } else {
         save_kernel_frame(regs);
     }
@@ -1808,6 +1870,7 @@ static int block_common(uint64_t *regs, const void *chan, int reason,
     kstack_verify(idx);
     fpu_save(procs[idx].fpu);
     procs[idx].state = SCHED_BLOCKED;
+    trace_sched("block", idx);
     procs[idx].wait_chan = chan;
     // SET UNCONDITIONALLY, and 0 for an unbounded wait. It has to be
     // written on EVERY block rather than only where a deadline is
@@ -2023,6 +2086,24 @@ static void group_release_threads(int leader) {
 void scheduler_on_exit(int code) {
     if (current_index < 0) return; // defensive; shouldn't happen
 
+    // **AN EXIT IS NOT INTERRUPTIBLE, and it is the state below that
+    // says so rather than the teardown.** The slot is marked ZOMBIE
+    // here and the switch happens at the bottom; a tick in between runs
+    // the rotation, which saves the frame and marks the slot READY --
+    // over the ZOMBIE. The process is then resumed part-way through
+    // this function, `switch_to()` makes it RUNNING on the way in, and
+    // the tail sets `current_index` to -1 and leaves it there: RUNNING
+    // while nothing is current, which only the rotation could undo and
+    // only for a process that is current. Unschedulable, unreapable,
+    // and the parent never hears that it exited.
+    //
+    // The guard rather than interrupts-off, because the teardown below
+    // releases descriptors and can reach the disk -- a wait that needs
+    // the very interrupt a `cli` would hold off. Only a trap gate makes
+    // this reachable at all: an interrupt gate clears IF for the whole
+    // syscall, which is what hid it.
+    scheduler_preempt_disable();
+
     // A PROCESS EXITS AS A WHOLE, whichever of its threads called
     // exit() -- POSIX's exit_group(), and not a choice: there is one
     // address space and the cleanup below is about to destroy it, so a
@@ -2062,6 +2143,10 @@ void scheduler_on_exit(int code) {
     // that is not waiting at all -- see notify_parent().
     notify_parent(procs[leader].ppid);
 
+    // Handed straight to the switch, which holds interrupts off from
+    // here -- so nothing can land between the two.
+    scheduler_preempt_enable();
+
     // The write end that turns a parent's blocking read into EOF is
     // closed by fd_release_all() now, along with every other
     // descriptor this process held -- there is no separate
@@ -2070,6 +2155,7 @@ void scheduler_on_exit(int code) {
 
     sched_switch_begin();
     bill_current(); // the exiting process's last slice
+    trace_sched("exit", current_index);
     current_index = -1;
 
     // Continue the rotation from the slot that just exited (which is
@@ -2343,6 +2429,7 @@ int scheduler_exec(const char *path, const char *argvec, size_t argvec_len,
 void scheduler_on_thread_exit(int code) {
     if (current_index < 0) return;
     if (!is_thread(current_index)) { scheduler_on_exit(code); return; }
+    scheduler_preempt_disable();   // as in scheduler_on_exit(), and for its reason
 
     int me = current_index;
     procs[me].exit_code = code;
@@ -2355,6 +2442,7 @@ void scheduler_on_thread_exit(int code) {
     // Whoever is joining. Harmless when nobody is: a wake with no
     // waiter on the channel is a loop over the table finding nothing.
     scheduler_wake(scheduler_wait_chan_pid(me + 1), SYS_RETRY);
+    scheduler_preempt_enable();
 
     sched_switch_begin();
     bill_current();

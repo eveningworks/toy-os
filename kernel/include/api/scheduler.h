@@ -50,6 +50,11 @@ void scheduler_init(void);
 // scheduler hasn't been armed (see scheduler_demo_run()).
 void scheduler_tick(uint64_t *regs);
 
+// Prints the last couple of dozen scheduler transitions, consecutive
+// duplicates collapsed. For reporting a state that cannot happen; not
+// for tracing normal operation.
+void scheduler_trace_dump(void);
+
 // SYS_YIELD's entry into the same rotation. Identical to
 // scheduler_tick() except that it charges the caller NO cpu time:
 // a tick is a unit of elapsed time and a yield elapses microseconds, so

@@ -1053,6 +1053,41 @@ from PS/2** because QEMU routes keystrokes to it -- which is why the
 axis is off by default, and what makes `tools/usb_test.py`
 self-controlling.
 
+## A STATE TRANSITION THAT ENDS IN A SWITCH MUST NOT BE PREEMPTIBLE
+
+The rotation rewrites the state of whatever process is CURRENT: it saves
+the frame and marks the slot `SCHED_READY`. So any path that sets a
+process's state and then switches away has a window in which a tick can
+put that state back -- and the last write wins, which is the tick's.
+
+`scheduler_on_exit()` is the worked example, and it cost a whole session.
+It marks the slot ZOMBIE at the top and switches at the bottom, with the
+teardown in between; a tick in the middle marked it READY over the
+ZOMBIE, the process was resumed part-way down the function, `switch_to()`
+made it RUNNING on the way in, and the tail set `current_index` to -1 and
+left it there. A slot that is RUNNING while somebody else is current is
+unschedulable for the rest of the boot -- only the rotation puts a
+process back to READY, and only while it is current -- so the process
+never ran again, was never reaped, and its parent never heard it exit.
+
+**The guard is `scheduler_preempt_disable()`, not `cli`, wherever the
+section does real work.** An exit releases descriptors and can reach the
+disk, and a wait there needs the very interrupt a `cli` would hold off.
+Interrupts-off is right only for the switch itself -- `sched_switch_begin()`
+covers "this process stops being current" to the epilogue, which is a
+handful of instructions.
+
+**Only a trap gate makes any of this reachable.** An interrupt gate
+clears IF for the whole syscall, so nothing can land inside an exit at
+all; that is why this survived for as long as the gate stayed 0xEE.
+
+Two instruments in `scheduler.c` exist because reasoning failed three
+times on it: a ring of the last couple of dozen transitions
+(`scheduler_trace_dump()`), consecutive duplicates collapsed, and a
+LATCHED check of the invariant above at every switch. A missing entry in
+that ring is itself evidence -- it is what showed the function being
+re-entered in the middle.
+
 ## A BOUNDED WAIT USES A DEADLINE WHERE THE CLOCK ADVANCES WITH INTERRUPTS OFF, AND A POLL COUNT WHERE IT DOES NOT
 
 **A POLL COUNT IS NOT A TIMEOUT.** `XHCI_POLL_BACKSTOP` spins take

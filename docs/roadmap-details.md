@@ -4776,33 +4776,47 @@ for byte.** So the deferred switch is not what breaks them, and the
 eager-switch rewrite this item was named after is NOT owed on this
 evidence.
 
-**WHAT THE HELPER ACTUALLY ENDS UP AS, measured rather than argued.**
-The test names what it saw now (`report_stuck()` in
-`win_input_test.c`), and at the deadline it reports:
+**THE CAUSE IS THE EXIT PATH, AND IT IS FIXED.** The helper ends up
+`SCHED_RUNNING` while the kernel is what executes -- a terminal state
+leak, since `switch_to()` is the only writer of that state and the one
+place a process is put back to READY is the rotation's
+`if (current_index >= 0)` branch, which cannot run for a process that is
+not current. Unschedulable for the rest of the boot, never reaped, and
+the parent never hears that it exited: exactly a `scheduler_poll()` that
+never reports EXITED.
 
-    pid 7 stuck -- state=2 wait=0 cpu_ns=40000000
-                   blocked in 0 of 1510708 samples, current_pid=0
-    preempt_depth=0 armed=0
+`scheduler_on_exit()` marks the slot ZOMBIE at the top and switches away
+at the bottom, and its whole middle -- releasing threads, the window
+server, reparenting, notifying the parent -- ran PREEMPTIBLE. A tick in
+there runs the rotation, which saves the frame and marks the slot READY
+over the ZOMBIE; the process is then resumed part-way down the function,
+`switch_to()` makes it RUNNING on the way in, and the tail sets
+`current_index` to -1 and leaves it there. An interrupt gate hid it by
+construction: IF is clear for the whole syscall, so no tick can land
+inside an exit.
 
-`state=2` is `SCHED_RUNNING` while `current_pid=0` says the KERNEL is
-what is executing. That is a TERMINAL STATE LEAK, not a spin and not a
-lost wakeup: `switch_to()` is the only writer of `SCHED_RUNNING`
-(scheduler.c), `find_next_runnable()` picks only `SCHED_READY`, and the
-one place a process is put back to READY is the tick's
-`if (current_index >= 0)` branch -- which cannot run for a process that
-is not current. So the helper is unschedulable for the rest of the boot,
-having had 40-50 ms of CPU, and it never parked once in 1.5 million
-samples. `preempt_depth=0 armed=0` rules out the tick's two early
-returns.
+`scheduler_preempt_disable()` over that middle fixes it (and the same
+shape in `scheduler_on_thread_exit()`). Interrupts-off would be the
+wrong tool -- the teardown releases descriptors and can reach the disk,
+which needs the very interrupt a `cli` would hold off.
 
-What is NOT established is how a process comes to be `SCHED_RUNNING`
-while `current_index` is -1. Every switch site sets the outgoing state
-before switching (READY at the tick, BLOCKED in `block_common()`, ZOMBIE
-at both exits), and `block_common()` reads `idx = current_index` -- so
-the leak needs the executing context and `current_index` to already
-disagree, which is the same class as the window above and is not that
-window. **The next session starts here**, and the cheap discriminating
-instrument is in the tree: run at 0xEF and read the two lines.
+**How it was found, since reasoning failed three times:** a ring of the
+last couple of dozen scheduler transitions (`scheduler_trace_dump()`)
+plus a latched invariant check -- at most one slot is `SCHED_RUNNING`
+and it is `current_index`, tested at every switch. The dump showed
+`win_gone`/`pre_notify`/`exit` all at `state=2` with the function's own
+first three trace points MISSING from the window, which is only possible
+if the function was re-entered in the middle. Both are kept: they are
+cheap, and this is the second bug of this class.
+
+**WHAT IS LEFT AT 0xEF: ONE TEST, 1 RUN IN 3.** `sched_test.c:156`, "a
+scheduled process survives a legacy process running alongside", fails
+`exited` -- measured 1 of 3 at 0xEF against 3 of 3 PASSING at 0xEE on
+the same tree, so it is the gate rather than a flake. The mechanism to
+check first is the rotation's own first early return: it refuses to
+rotate at all while `process_context_is_armed()`, and a trap gate makes
+the legacy process's syscalls preemptible, so the scheduled process
+beside it can be starved for longer. The win_input pair passes 3 of 3.
 
 **AND THE (resume slot, depth) PAIR WAS SAVED WRONG, FOUND ON THE WAY.**
 A context is resumed with `mov rsp, <trapframe>; iretq`, which runs no

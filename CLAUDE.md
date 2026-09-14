@@ -679,6 +679,7 @@ whenever a headline here tells you something you did not already know.
 - **WRITE-COMBINING IS A 4 KiB DECISION: A 2 MiB PAGE A RANGE ONLY PARTLY COVERS IS SPLIT BEFORE IT IS TYPED**
 - **THE INTEL DISPLAY DRIVER INHERITS THE FIRMWARE'S MODE AT BOOT AND CAN RE-PROGRAM THE NATIVE ONE, AND A BACKLIGHT IS A DISPLAY CAPABILITY**
 - **THE MONITOR'S EDID IS A DISPLAY-LAYER FACT READ ONCE AT PROBE, AND THE INTEL DRIVER READS ITS FIRMWARE TIMINGS BACK BEFORE IT MAY WRITE ANY**
+- **A STATE TRANSITION THAT ENDS IN A SWITCH MUST NOT BE PREEMPTIBLE** -- the rotation rewrites the CURRENT process's state, so a tick between "mark it ZOMBIE" and the switch puts it back to READY and the slot is left RUNNING while nobody is current: unschedulable for the boot. `scheduler_preempt_disable()` where the section does real work, `cli` only across the switch itself
 - **A BOUNDED WAIT USES A DEADLINE WHERE THE CLOCK ADVANCES WITH INTERRUPTS OFF, AND A POLL COUNT WHERE IT DOES NOT**
 - **THERE IS A LOCAL APIC NOW, AND A DEVICE MAY BE ON A VECTOR INSTEAD OF A LINE**
 - **THE I/O APIC DELIVERS EVERY LINE, THE MADT SAYS WHERE AN ISA IRQ ARRIVES, AND A PCI PIN IS ROUTED BY `_PRT`** -- drivers call `irq_unmask()` and `pci_irq_line()` and never learn which controller is live; `_PRT` is READ (one assumption: a `PIC*` name is 1), never executed; `noioapic` keeps the 8259

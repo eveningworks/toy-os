@@ -195,16 +195,14 @@ void idt_init(void) {
     // same tree are clean. Two win_input KTESTs also go red, and they
     // are the small half.
     //
-    // Both globals behind the double faults are retired -- isr_depth and
-    // the resume slot travel with the context now -- and six full suites
-    // at 0xEF show none, against 2 in 3 before. What still holds the
-    // flip is the two win_input KTESTs, and the mechanism is NOT
-    // established: a lost wakeup and the deferred switch were each
-    // written up here and each falsified by experiment. What is measured
-    // is that the helper ends up SCHED_RUNNING while the kernel is what
-    // executes -- unschedulable for the rest of the boot, since only the
-    // tick puts a process back to READY and only while it is current.
-    // docs/roadmap-details.md has the evidence and the instrument.
+    // The two win_input KTESTs that used to hold it are FIXED -- an
+    // exit ran preemptible, so a tick inside one marked the exiting
+    // slot READY over its ZOMBIE and left it RUNNING for good
+    // (scheduler_on_exit). What holds the flip now is ONE test at 1 run
+    // in 3: sched_test's "a scheduled process survives a legacy process
+    // running alongside", against 3 in 3 passing at 0xEE on the same
+    // tree. docs/roadmap-details.md has the evidence and the
+    // instruments.
     idt_set_gate(128, isr128, 0, 0xEE);
 
     idtp.limit = sizeof(idt) - 1;
