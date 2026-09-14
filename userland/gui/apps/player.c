@@ -24,7 +24,7 @@
 #include "kpath.h"
 #include "ui/ugfx.h"
 #include "ui/uui.h"
-#include "ui/uui_fileview.h"
+#include "ui/uui_filedialog.h"
 #include "ui/uui_label.h"
 #include "ui/uui_scale.h"
 #include "ui/uapp.h"
@@ -53,7 +53,8 @@
 #define ID_MENU  8
 
 enum {
-    CMD_RELOAD = 1,
+    CMD_OPEN = 1,
+    CMD_RELOAD,
     CMD_EXIT,
     CMD_PLAY,
     CMD_STOP,
@@ -81,6 +82,8 @@ static char g_stat_note[80];
 static int g_have_sound;      // did usnd_init() succeed
 
 static const struct uui_menu_item file_items[] = {
+    UUI_MENU("Open...", CMD_OPEN,   "Ctrl+O"),
+    UUI_MENU_SEP,
     UUI_MENU("Reload", CMD_RELOAD, "F3"),
     UUI_MENU_SEP,
     UUI_MENU("Exit",   CMD_EXIT,   "Alt+F4"),
@@ -162,6 +165,52 @@ static void refresh_transport(void) {
 }
 
 // --- playing ----------------------------------------------------------
+
+// --- opening from anywhere --------------------------------------------
+//
+// THE PLAYLIST STAYS PINNED and the chooser is what moves it. The
+// sidebar is this window's playlist -- Up/Down step through a folder --
+// and it lists exactly one directory (set_navigable(0)); until there was
+// a chooser there was no way to reach a second one, which is what made
+// this file's own "both are still reachable through Open" comment a
+// promise nothing kept.
+static struct uui_filedialog g_fd;
+static void play_selected(void);
+
+static void open_chosen(void *ctx, const char *path) {
+    struct uapp *a = (struct uapp *)ctx;
+    if (!path) { uapp_redraw(a); return; }
+    char dir[PATH_MAX_LEN];
+    if (!k_path_dirname(path, dir, sizeof dir)) strlcpy(dir, "/", sizeof dir);
+    strlcpy(g_dir, dir, sizeof g_dir);
+    uui_fileview_set_dir(&g_list, g_dir);
+    uui_fileview_select_name(&g_list, k_path_basename(path));
+    // CHOSEN MEANS PLAY IT. A chooser the user drove to one file and
+    // that then merely selected it would need a second action for the
+    // thing they had already asked for.
+    play_selected();
+    uapp_redraw(a);
+}
+
+static void open_dialog(struct uapp *a) {
+    if (uui_filedialog_is_open(&g_fd)) return;
+    uui_menubar_close(&g_menu);
+    // The playlist's own filter, so the chooser lists exactly what this
+    // app can play -- by probe, never by extension -- with "All files"
+    // beside it for looking around.
+    static const struct uui_filedialog_filter types[] = {
+        { "Sound files", keep_audio, 0 },
+        UUI_FILEDIALOG_ALL_FILES,
+    };
+    struct uui_filedialog_opts o = {
+        .mode = UUI_FILEDIALOG_OPEN,
+        .title = "Open Sound File",
+        .start_dir = g_dir,
+        .filters = types,
+        .filter_count = (int)(sizeof types / sizeof types[0]),
+    };
+    uui_filedialog_open(a, &g_fd, &o, open_chosen, a);
+}
 
 static void play_selected(void) {
     char path[PATH_MAX_LEN];
@@ -289,6 +338,7 @@ static void apply_volume(struct uapp *a) {
 
 static void do_command(struct uapp *a, int code) {
     switch (code) {
+    case CMD_OPEN:   open_dialog(a); return;
     case CMD_RELOAD: uui_fileview_reload(&g_list); break;
     case CMD_EXIT:   uapp_quit(a, 0); return;
     case CMD_PLAY:   toggle_play(); break;
@@ -351,6 +401,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         else uapp_redraw(a);
         return;
     }
+    if (key == 0x0F) { do_command(a, CMD_OPEN);   return; }   // Ctrl-O
     if (key == 0x9B) { do_command(a, CMD_RELOAD); return; }   // F3
     if (key == ' ')  { do_command(a, CMD_PLAY);   return; }
 

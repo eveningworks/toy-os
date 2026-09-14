@@ -1003,6 +1003,42 @@ struct win_popup_pos {
 #define WIN_POPUP_BELOW 0 // left edges aligned, below the anchor; flips above
 #define WIN_POPUP_RIGHT 1 // top edges aligned, right of the anchor; flips left
 
+// --- dialog windows (WIN_REQ_DIALOG) -----------------------------------
+//
+// A DIALOG IS A SECOND TOPLEVEL OF THE SAME CLIENT: chrome, a title, a
+// close button, dragged and stacked like any other window -- but OWNED
+// by one of its client's windows, centred on it, always above it, and
+// carrying no taskbar button of its own. Win32's owned dialog (an owner
+// HWND, disabled while a modal is up, no taskbar button), xdg_toplevel's
+// set_parent plus a portal's modal flag, X11's WM_TRANSIENT_FOR.
+//
+// **THIS IS NOT A POPUP.** A popup has no chrome, cannot be moved, and
+// is dismissed by the first press outside it -- right for a menu, wrong
+// for anything a person types into: a filename half entered would
+// vanish on a stray click. The two differ in every one of those, which
+// is why this is a third surface kind and not a flag on that one.
+//
+// WITH WIN_DIALOG_MODAL the owner stops taking input: a press on it
+// raises and focuses the dialog instead (KDE and Windows both do this),
+// and its keys go nowhere. Without it the two windows are peers that
+// merely stack together -- a find bar, a palette.
+//
+// The owner going away takes its dialogs with it. A dialog never owns a
+// dialog: one level, which is all a modal chain can usefully be here.
+#define WIN_REQ_DIALOG 33 // `window`: the slot the client PROPOSES for the
+                           // dialog, its buffers already named after it (as
+                           // CREATE); a/b: content w/h; `text`: the title;
+                           // c: WIN_DIALOG_OWNER | WIN_DIALOG_FLAGS -- the
+                           // owner's slot and the WIN_DIALOG_* bits share
+                           // one field, since the message has three and the
+                           // title takes the fourth.
+                           // REPLIES a = the granted slot, or -1.
+#define WIN_DIALOG_MODAL 0x01 // the owner takes no input while this is up
+#define WIN_DIALOG_C(owner, flags) ((int32_t)(((uint32_t)(owner) & 0xFFFFu) | \
+                                              ((uint32_t)(flags) << 16)))
+#define WIN_DIALOG_OWNER(c) ((uint32_t)(c) & 0xFFFFu)
+#define WIN_DIALOG_FLAGS(c) ((uint32_t)(c) >> 16)
+
 // --- resize is a CONFIGURE/ACK HANDSHAKE ------------------------------
 //
 // The obvious implementation -- the server resizes the window when the

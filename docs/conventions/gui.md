@@ -880,6 +880,84 @@ this the obvious way), not from how much history it accumulated.
     seam a second widget (the dropdown, the tooltip) plugs into; a
     refusal there means "draw it in the window", and every widget must
     keep that path.
+- **A DIALOG IS A SECOND TOPLEVEL OF ITS CLIENT, OWNED BY ONE OF ITS
+  WINDOWS, AND `uapp_window_open()` IS HOW AN APP GETS ONE.**
+  `WIN_REQ_DIALOG` (`abi/win_proto.h`) opens a window WITH chrome --
+  title, close button, dragged and stacked like any other -- centred on
+  its owner, always above it, and with no taskbar button of its own.
+  Win32's owned dialog, `xdg_toplevel.set_parent`, X11's
+  `WM_TRANSIENT_FOR`. With `WIN_DIALOG_MODAL` the owner takes no input:
+  a press on it raises the dialog instead, which is what KDE and Windows
+  both do. Six things to know.
+  - **IT IS NOT A POPUP AND NOT `ui/uui_dialog.h`.** A popup has no
+    chrome, cannot be moved and is dismissed by the first press outside
+    it -- right for a menu, wrong for anything typed into. `uui_dialog`
+    is a modal drawn INSIDE the app's own window, which is right for a
+    question that fits there ("Save changes?") and wrong for one that
+    wants more room than its owner has. Qt ships both for the same
+    reason (`QMessageBox` against `QFileDialog`).
+  - **IT HAS ITS OWN WIDGET ARRAY, ROUTER AND FOCUS RING** -- a second
+    content area, not a second view of the first. `uapp_window_desc`
+    carries them; everything else (reaping, the ping, the font change,
+    the clipboard) is the PROCESS's and is already running.
+  - **`bring_to_front()` STILL LEAVES THE PROMOTED WINDOW LAST.** Four
+    call sites in `wm_input.c` index `window_count - 1` right after it
+    to start a drag or a resize, so raising a window's dialogs INSIDE it
+    silently broke those: the owner's title bar armed a drag and the
+    thing dragged was the dialog. `raise_with_dialogs()` is the version
+    that carries them, and the taskbar uses it -- the button is the only
+    handle a blocked window has left out there.
+  - **THE LAYOUT LOG IS PER SURFACE.** Set `uapp_window_desc.log_prefix`
+    and the toolkit emits the report itself (a dialog has no `on_draw`
+    for an app to call `uapp_log_layout()` from). The per-frame dedupe
+    keeps one previous block PER SURFACE, because a toplevel and a
+    dialog reporting alternately never match and the dedupe would be off
+    exactly when two windows are open.
+  - **MODAL BLOCKS THREE DOORS, NOT ONE**: the primary click, the
+    SECONDARY click, and MOTION. Blocking only the first leaves the
+    owner's context menu live and its menu bar lighting up under the
+    cursor -- controls advertising themselves on a window that refuses
+    every one of them. Win32 gets all three free by disabling the owner
+    HWND; here each is a `wm_dialog_blocker()` call, and the first
+    version had only one.
+  - **`gui windows --json` SAYS SO**: `dialog`, `owner`, `modal` beside
+    `popup`/`parent`. A dialog is a toplevel with chrome, so `popup`
+    cannot tell a test one from an ordinary window.
+  - **ONE LEVEL.** A dialog never owns a dialog -- the compositor
+    refuses it, because the owner chain is what `modal` is resolved
+    against.
+- **THE FILE CHOOSER IS ONE WIDGET IN ONE WINDOW: `ui/uui_filedialog.h`,
+  AND THREE APPS OPEN IT.** Open, Save and Choose-a-folder, over
+  `uui_fileview` with a Places strip (Windows' Quick access, KDE's
+  Places) and a Details/Icons toggle. `uui_filedialog_open()` takes the
+  mode, a starting directory, a name and a FILTER -- the app's own, so
+  the chooser lists exactly what that app can open, by probe and never
+  by extension. The callback runs once, with the path or with NULL, and
+  the window is closed BEFORE it runs so it may open another.
+
+  It has a **"Files of type" combo** (`uui_filedialog_filter` rows,
+  Win32's `lpstrFilter`, KDE's Filter): each app declares its own rows
+  and ends with `UUI_FILEDIALOG_ALL_FILES`, written once here rather
+  than three times. **A DIRECTORY ALWAYS PASSES, WHATEVER THE ROW SAYS**
+  -- every app's filter answers "is this a file I can open" and so says
+  no to a folder, which is right for a sidebar pinned to one directory
+  and leaves a CHOOSER with an empty root and no way out; the gate is in
+  `uui_filedialog.c`, not asked of each caller. And **a form label needs
+  `UUI_FILL_H`**: its natural height is one text row, so without it the
+  box sits at the TOP of a taller row and the caption reads as belonging
+  to whatever is above. `uui_label` already centres its text in a taller
+  box -- the flag is what gives it one.
+
+  Three more things. **THE OUT-OF-PROCESS CHOOSER IS DELIBERATELY NOT
+  COPIED** (`xdg-desktop-portal`, macOS's panel service): it exists so a
+  sandboxed app that cannot read the filesystem can be handed one file,
+  and there is no such boundary here. **A NESTED LAYOUT'S MARGIN IS NOT
+  0 WHEN YOU WRITE 0** -- `uui_layout_margin()` reads anything <= 0 as
+  the font-derived default, so three rows asking for no padding took a
+  third of the window's height; write 1. And **the FILTER is what let
+  Image Viewer and Audio Player keep their pinned sidebars**: each is
+  still the filmstrip for one directory, and Open is how you reach a
+  different one -- which neither could do at all before.
 - **THERE IS A SYSTEM CLIPBOARD, IT IS A RING-3 SERVICE
   (`/bin/clipboardd`, `lib/uclip.h`), IT HOLDS FILES OR TEXT, AND A
   PASTE COSTS NO SYSCALL.** Apps use `userland/lib/uclip.h` rather than
@@ -1694,7 +1772,7 @@ this the obvious way), not from how much history it accumulated.
   loop/input/render split (`wm.c`/`wm_input.c`/`wm_render.c`, sharing
   state through `wm_internal.h`'s `extern`s) plus the pieces that grew
   their own files as they appeared: `desktop.c`, `start_menu.c`,
-  `context_menu.c`, `confirm_dialog.c`, `file_picker.c`, `wm_tray.c`,
+  `context_menu.c`, `confirm_dialog.c`, `wm_tray.c`,
   `cursor_theme.c`, `wm_client.c`. Split by concern for readability --
   it's still one tightly-coupled event loop, not decoupled components.
 - **THERE IS ONE KIND OF WINDOW SERVER, AND `win_server_any()` IS HOW
@@ -2518,7 +2596,7 @@ real scanout hardware does. Do not write a pixel assertion for one.
 - **A DIRECTORY LISTING IS A WIDGET, `uui_fileview`, AND FOUR THINGS
   SHOULD BE DRAWING ONE.** Before it, three places listed a directory
   and every one was written from scratch: the WM's file picker
-  (`userland/wm/file_picker.c`), Notepad's Open/Save dialog, and Image
+  (the WM's own, deleted 2026-09-14), Notepad's Open/Save dialog, and Image
   Viewer's sidebar -- all doing `sys_listdir()`, `dirsort()`, a
   synthetic `..` row and descend-on-activate. No real toolkit ships four
   (Windows has one `SysListView32`, Qt one `QFileSystemModel`, GTK one

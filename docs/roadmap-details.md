@@ -3559,7 +3559,7 @@ caller is a test.
 
 - [x] ~~Migrate one real app (Calculator) to `userland/`~~ -- done, see the git history. `apps/calc_engine.c` is SHARED (compiled twice, once per code model) rather than copied, so there is only ever one arithmetic implementation.
 
-- [x] ~~Migrate Notepad to `userland/`~~ -- done, see the git history. Its file dialog is drawn by the APP, not the window server, which is what GTK/Qt do; `apps/wm/file_picker.c` is a WM modal and was not portable.
+- [x] ~~Migrate Notepad to `userland/`~~ -- done, see the git history. Its file dialog is drawn by the APP, not the window server, which is what GTK/Qt do; the WM's own picker was a modal and was not portable (deleted 2026-09-14).
 
 - [x] ~~Port the remaining `apps/ui/` widgets~~ -- done (`userland/ui/uwidgets.c`): scrollbar, text field, checkbox, radio list, listbox, dropdown, focus ring.
 
@@ -5679,7 +5679,7 @@ from that day, kept so the direction of travel can be measured later.
   cannot serve a layout-only app or non-widget geometry, which is why
   the hand-rolled side keeps winning. Fix the helper first.
 - `ugfx_draw_string()` vs `_clipped()`, 36 vs 65. Two fixed-box sites
-  still unclipped: `userland/wm/file_picker.c` (truncates a row label
+  still unclipped: the WM's file picker, since deleted (truncated a row label
   by character count, then draws it unclipped) and
   `userland/wm/wm_tray.c`. The same tray file sizes an item's hit box
   as `k_strlen() * ugfx_char_w()`, the multiplication CLAUDE.md's

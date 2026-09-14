@@ -33,7 +33,7 @@ answers the same question.
 screen 1280x720, taskbar 22px
 cursor (640,360) buttons=0x0 shape=0
 overlays: topmost=none
-overlays: start_menu=0 context_menu=0 file_picker=0 confirm=0 calendar=0 volume=0 brightness=0
+overlays: start_menu=0 context_menu=0 confirm=0 calendar=0 volume=0 brightness=0
 dragging=-1 resizing=-1 content_pressed=-1 redraw_pending=1
 resize proposals sent: 0
 last resize lag: 0ms

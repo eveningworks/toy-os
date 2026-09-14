@@ -10,12 +10,10 @@
 #include "brightness_popup.h"
 #include "network_popup.h"
 #include "confirm_dialog.h"
-#include "file_picker.h"
 #include "osk.h"
 
 // The two that take no cursor, adapted rather than changed: their
 // drawing genuinely does not depend on where the pointer is.
-static void draw_file_picker(int mx, int my) { (void)mx; (void)my; file_picker_draw(); }
 static void draw_confirm(int mx, int my)     { (void)mx; (void)my; confirm_dialog_draw(); }
 
 static int open_start(void)   { return start_menu_open; }
@@ -24,7 +22,6 @@ static int open_calendar(void){ return calendar_open; }
 static int open_volume(void)  { return volume_open; }
 static int open_brightness(void) { return brightness_open; }
 static int open_network(void) { return network_open; }
-static int open_picker(void)  { return file_picker_open; }
 static int open_confirm(void) { return confirm_dialog_open; }
 static int open_osk(void)     { return osk_open; }
 
@@ -36,8 +33,6 @@ static int open_osk(void)     { return osk_open; }
 static const struct wm_overlay g_overlays[] = {
     { "confirm",  open_confirm,  draw_confirm,     confirm_dialog_handle_click,
       confirm_dialog_hover_at,   confirm_dialog_damage,   confirm_dialog_update_press, 0 },
-    { "picker",   open_picker,   draw_file_picker, file_picker_handle_click,
-      file_picker_hover_at,      file_picker_damage,      file_picker_update_press, 0 },
     { "context",  open_context,  context_menu_draw, context_menu_handle_click,
       context_menu_hover_at,     context_menu_damage,     0, context_menu_close },
     { "start",    open_start,    start_menu_draw,  start_menu_handle_click,

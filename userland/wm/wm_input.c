@@ -12,7 +12,6 @@
 #include "wm_taskbar.h"
 #include "wm_tray.h"
 #include "confirm_dialog.h"
-#include "file_picker.h"
 #include "desktop.h"
 #include "ui/uui.h"
 #include "rt/sys.h"   // sys_ticks(), for the title-bar double-click
@@ -103,6 +102,7 @@ int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom) {
 
         if (w->state == WIN_MAXIMIZED || w->fullscreen) return -1; // neither is resizable by hand
         if (!w->resizable) return -1; // fixed-size window -- see wm.h
+        if (wm_dialog_blocker(i) >= 0) return -1; // blocked: see wm_handle_left_click()
         if (my < w->y + WM_TITLEBAR_H) return -1; // over the title bar, not the resize border
 
         int on_right = (mx >= w->x + w->w - RESIZE_MARGIN);
@@ -224,6 +224,19 @@ void wm_handle_left_click(int mx, int my) {
         struct window *w = &windows[i];
         if (w->state == WIN_MINIMIZED) continue;
         if (!uui_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
+
+        // A WINDOW WITH A MODAL DIALOG UP TAKES NO PRESS -- the dialog
+        // is raised and focused instead, and the press goes no further.
+        // Win32 disables the owner HWND to the same end; KDE raises and
+        // flashes. Not even the title bar: dragging a window whose
+        // dialog stays put is how the two end up on opposite sides of
+        // the screen with nothing to say they are related.
+        int blocker = wm_dialog_blocker(i);
+        if (blocker >= 0) {
+            bring_to_front(blocker);
+            redraw_pending = 1;
+            return;
+        }
 
         if (window_has_chrome(w) && my < w->y + WM_TITLEBAR_H) {
             struct btn_rects r = title_buttons(w);
@@ -586,6 +599,17 @@ void wm_handle_right_click(int mx, int my) {
         struct window *w = &windows[i];
         if (w->state == WIN_MINIMIZED) continue;
         if (!uui_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
+
+        // BLOCKED BY A MODAL DIALOG, exactly as the primary button is
+        // (wm_handle_left_click()). A secondary click that still opened
+        // the app's context menu would be a live control on a window
+        // whose every other control is refused.
+        int blocker = wm_dialog_blocker(i);
+        if (blocker >= 0) {
+            bring_to_front(blocker);
+            redraw_pending = 1;
+            return;
+        }
 
         // THE CONTENT AREA BELONGS TO THE CLIENT, THE FRAME BELONGS TO
         // THE WM. A secondary click inside a client's own pixels is
@@ -1101,6 +1125,12 @@ void wm_update_content_hover(int mx, int my, uint8_t buttons) {
 
     if (now < 0) return;
     struct window *w = &windows[now];
+    // **A BLOCKED WINDOW GETS NO MOTION EITHER**, and that is not
+    // tidiness: hover is the only thing that tells a person a control is
+    // live, so an owner whose menu bar still highlighted under the
+    // cursor while refusing every click would be advertising controls
+    // that do nothing. Win32 gets this free by disabling the owner HWND.
+    if (wm_dialog_blocker(now) >= 0) return;
     wm_client_send_mouse(w, WIN_EV_MOUSE_MOVE, mx, my, 0); // no-op for an app window
     if (!w->app || !w->app->on_hover) return;
     int ccx = mx - window_content_x(w);

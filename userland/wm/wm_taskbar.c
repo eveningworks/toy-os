@@ -139,16 +139,21 @@ static int same_app(int a, int b) {
 // makes the group order the windows[] order of each group's FIRST
 // member, which is what keeps a button from jumping left along the
 // strip every time one of its siblings is raised.
+// A menu is not a window the strip lists -- and neither is a DIALOG,
+// which belongs to the window that owns it (Win32 gives an owned window
+// no button of its own either). Both are `unlisted`.
+static int unlisted(int i) { return windows[i].popup || windows[i].dialog; }
+
 static int starts_group(int i) {
-    if (windows[i].popup) return 0; // a menu is not a window the strip lists
+    if (unlisted(i)) return 0;
     for (int j = 0; j < i; j++) if (same_app(i, j)) return 0;
     return 1;
 }
 
-// How many windows the strip has to fit -- popups are not among them.
+// How many windows the strip has to fit -- see unlisted().
 static int listed_count(void) {
     int n = 0;
-    for (int i = 0; i < window_count; i++) if (!windows[i].popup) n++;
+    for (int i = 0; i < window_count; i++) if (!unlisted(i)) n++;
     return n;
 }
 
@@ -165,14 +170,14 @@ static int group_count(void) {
 static int group_front(int i) {
     int front = i;
     for (int j = i + 1; j < window_count; j++)
-        if (!windows[j].popup && same_app(i, j)) front = j;
+        if (!unlisted(j) && same_app(i, j)) front = j;
     return front;
 }
 
 static int group_size(int i) {
     int n = 1;
     for (int j = i + 1; j < window_count; j++)
-        if (!windows[j].popup && same_app(i, j)) n++;
+        if (!unlisted(j) && same_app(i, j)) n++;
     return n;
 }
 
@@ -288,7 +293,7 @@ int taskbar_layout(struct taskbar_button *out, int max) {
 
     int count = 0;
     for (int i = 0; i < window_count; i++) {
-        if (windows[i].popup) continue;
+        if (unlisted(i)) continue;
         if (grouped && !starts_group(i)) continue;
         int x = x0 + count * (w + TB_GAP);
         int members = grouped ? group_size(i) : 1;
@@ -334,7 +339,7 @@ static void row_raise(void *ctx) {
     if (i < 0 || i >= window_count) return; // the window may have closed while the menu was open
     if (windows[i].state == WIN_MINIMIZED) windows[i].state = WIN_NORMAL;
     wm_ensure_reachable(i);
-    bring_to_front(i);
+    raise_with_dialogs(i);
     redraw_pending = 1;
 }
 
@@ -368,22 +373,26 @@ static void open_group_menu(const struct taskbar_button *b) {
 // Acting on one window: raise it, recover it, or minimize it. Unchanged
 // behaviour, moved here so the button rect it is tested against is the
 // one taskbar_layout() placed.
+// **THE STRIP RAISES A WINDOW'S DIALOGS WITH IT.** The button is the
+// only handle a window with a modal dialog has out here -- its own title
+// bar takes no press (wm_handle_left_click()) -- so raising it and
+// burying the dialog underneath would leave the app looking wedged.
 static void activate(int i) {
     if (windows[i].state == WIN_MINIMIZED) {
         windows[i].state = WIN_NORMAL;
         wm_ensure_reachable(i);
-        bring_to_front(i);
+        raise_with_dialogs(i);
     } else if (wm_ensure_reachable(i)) {
         // It was somewhere it could not be grabbed -- off an edge, or
         // behind the taskbar. RECOVERING it is the action, taking
         // priority over the minimize toggle below: minimizing something
         // the user cannot see does nothing they can perceive, and this
         // button is the only handle such a window has left.
-        bring_to_front(i);
+        raise_with_dialogs(i);
     } else if (i == wm_focus_index()) {
         windows[i].state = WIN_MINIMIZED;
     } else {
-        bring_to_front(i);
+        raise_with_dialogs(i);
     }
     redraw_pending = 1;
 }

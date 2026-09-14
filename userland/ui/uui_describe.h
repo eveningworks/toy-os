@@ -41,5 +41,9 @@ void uui_describe_rect_i(const struct uui_describe *d, const char *part, int i,
 void uui_describe_rect_ij(const struct uui_describe *d, const char *part, int i, int j,
                           int x, int y, int w, int h);
 void uui_describe_int(const struct uui_describe *d, const char *part, int v);
+// A part whose value is a STRING -- a path, a mode name. Emitted on one
+// line like every other, so a test reads it the same way; the value is
+// last and may contain spaces, which is what makes a path safe here.
+void uui_describe_str(const struct uui_describe *d, const char *part, const char *v);
 
 #endif

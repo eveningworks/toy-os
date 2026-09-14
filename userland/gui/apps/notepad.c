@@ -23,17 +23,18 @@
 // a real architectural dividend of moving apps out of the kernel, not a
 // shortcut.
 //
-// THE FILE DIALOG IS THE TOOLKIT'S, DRAWN BY THIS PROCESS. A display
+// THE FILE DIALOG IS THE TOOLKIT'S, IN A WINDOW OF ITS OWN. A display
 // server has no business owning file dialogs -- GTK and Qt each draw
-// their own -- so it is a `uui_dialog` with a body of `uui_fileview`
-// (the listing, navigation, sorting) and `uui_textbox` (the name), in
-// this window. It used to be ~230 lines of hand-drawn rows and a caret
-// here, the third copy of a directory listing in the tree.
+// their own -- so it is `ui/uui_filedialog.h`, opened here and shared
+// with Image Viewer and Audio Player. It used to be ~230 lines of
+// hand-drawn rows and a caret in this file, then a `uui_dialog` box
+// inside this window; only the third version is something a viewer with
+// a small window can use too.
 //
-// THE CHROME IS ROUTED. The menu bar, the status bar and the dialog are
-// declared in `desc.widgets`, so the router owns their input and the
-// layout log; what this file still draws and hit-tests by hand is the
-// document and its scrollbar, which have no widget yet.
+// THE CHROME IS ROUTED. The menu bar and the status bar are declared in
+// `desc.widgets`, so the router owns their input and the layout log;
+// what this file still draws and hit-tests by hand is the document and
+// its scrollbar, which have no widget yet.
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
@@ -42,7 +43,8 @@
 #include "kpath.h"   // k_path_join/_dirname/_basename -- the kernel's, linked into ring 3
 #include "ui/ugfx.h"
 #include "ui/uui.h"
-#include "ui/uui_fileview.h"
+#include "lib/uopen.h"
+#include "ui/uui_filedialog.h"
 #include "ui/uui_markdown.h"
 #include "ui/uapp.h"
 #include "ui/ulog.h"
@@ -65,15 +67,11 @@
 #define TEXT_PAD 3
 
 #define PATH_MAX_LEN 64 // FS_PATH_MAX
-#define DIALOG_MAX_FILES 64
 
 // --- widget ids -------------------------------------------------------
 
 #define ID_MENU     1
 #define ID_STATUS   2
-#define ID_DIALOG   3
-#define ID_DLG_LIST 4
-#define ID_DLG_NAME 5
 #define ID_CTX      6
 #define ID_MD       7
 
@@ -101,10 +99,6 @@
 #define CMD_PASTE      18
 #define CMD_WORDWRAP   19
 #define CMD_MARKDOWN   20
-
-// The dialog's own codes -- a different widget, so a different space.
-#define CMD_DLG_OK     1
-#define CMD_DLG_CANCEL 2
 
 #define RECENT_MAX 3
 
@@ -241,35 +235,14 @@ static const struct uui_menu_item menu_bar[] = {
 // One dialog, two flavours: Open lists and takes a selection, Save As
 // lists and takes a typed name. Both have the field -- typing a path
 // into an Open dialog is what Win32's chooser allows too.
-static struct uui_dialog g_dialog;
+// The chooser, a WINDOW of its own (ui/uui_filedialog.h). ~20 KB, so
+// file-scope and never a local -- the ring-3 frame budget is 2 KiB.
+static struct uui_filedialog g_fd;
 static int g_dlg_saving;
-
-// The listing's storage: uui_fileview does not own it (ui/uui_fileview.h),
-// and 64 entries is 5 KB, which is why this is file-scope and not a
-// local (the ring-3 frame budget is 2 KiB).
-static struct sys_dirent g_dlg_entries[DIALOG_MAX_FILES];
-static struct uui_fileview g_dlg_list;
-static struct uui_textbox g_dlg_name;
-
-static struct uui_item g_dlg_items[] = {
-    { .ops = &uui_fileview_ops, .widget = &g_dlg_list, .flags = UUI_FILL_W | UUI_FILL_H,
-      .id = ID_DLG_LIST, .name = "flist" },
-    { .ops = &uui_textbox_ops,  .widget = &g_dlg_name, .flags = UUI_FILL_W,
-      .id = ID_DLG_NAME, .name = "fname" },
-};
-static struct uui_layout g_dlg_layout;
-static struct uui_item g_dlg_body = { .ops = &uui_layout_ops, .widget = &g_dlg_layout };
-
-// The one text row: which directory the listing shows. Rewritten by
-// the fileview's own navigation callback, so it cannot lag the list.
-static char g_dlg_row[PATH_MAX_LEN + 16];
-static const char *const g_dlg_rows[1] = { g_dlg_row };
 
 // --- the routed widgets ---------------------------------------------
 //
 // `.name` is what the layout log reports each one as (ui/uui_describe.h).
-// The dialog is LAST: with a body it is drawn in the items pass, and
-// last is what keeps it over the bars (ui/uui_dialog.h).
 static struct uui_item g_widgets[] = {
     { .ops = &uui_menubar_ops,   .widget = &g_menu,      .id = ID_MENU,   .name = "menu" },
     { .ops = &uui_statusbar_ops, .widget = &g_statusbar, .id = ID_STATUS, .name = "status" },
@@ -277,7 +250,6 @@ static struct uui_item g_widgets[] = {
     // reverse of draw order, and its popup covers whatever is under it.
     { .ops = &uui_markdown_ops,  .widget = &g_md,        .id = ID_MD,     .name = "markdown", .hidden = 1 },
     { .ops = &uui_menubar_ops,   .widget = &g_ctx,       .id = ID_CTX,    .name = "ctxmenu" },
-    { .ops = &uui_dialog_ops,    .widget = &g_dialog,    .id = ID_DIALOG, .name = "dialog" },
 };
 
 // By ID, never by index (docs/conventions/gui.md).
@@ -286,7 +258,6 @@ static struct uui_item *item_by_id(struct uui_item *items, int n, int id) {
     return NULL;
 }
 #define WIDGET(id)   item_by_id(g_widgets, (int)(sizeof g_widgets / sizeof g_widgets[0]), (id))
-#define DLG_ITEM(id) item_by_id(g_dlg_items, (int)(sizeof g_dlg_items / sizeof g_dlg_items[0]), (id))
 
 static void set_status(const char *s) { strlcpy(g_status, s, sizeof g_status); }
 
@@ -461,7 +432,6 @@ static void layout_chrome(int cw, int ch) {
         uui_markdown_set_geometry(&g_md, tx, ty, tw + scrollbar_w(), th);
     }
     uui_menubar_set_bounds(&g_ctx, 0, 0, cw, ch);
-    uui_dialog_set_bounds(&g_dialog, 0, 0, cw, ch);
 }
 
 // LOGICAL lines, not wrapped rows: "Ln 12" in every editor's status bar
@@ -668,7 +638,7 @@ static void draw_document(struct ugfx_surface *s, int focused) {
                 // taking input that is going somewhere else -- see TWP's
                 // WIN_EV_FOCUS.
                 UTHEME_TEXT, UTHEME_WHITE, ugfx_rgb(205, 220, 240),
-                focused && !uui_dialog_is_open(&g_dialog) &&
+                focused && !uui_filedialog_is_open(&g_fd) &&
                     !uui_menubar_is_open(&g_menu) && !uui_menubar_is_open(&g_ctx));
     draw_scrollbar(s, tx, ty, tw, th);
 
@@ -685,100 +655,61 @@ static void draw_document(struct ugfx_surface *s, int focused) {
     ugfx_set_font(was_doc);
 }
 
-// --- the dialog's behaviour -------------------------------------------
-
-// The field's text, keeping whether it currently draws a caret:
-// uui_textbox_init() resets `active`, and the focus is the dialog's.
-static void dlg_name_set(const char *s) {
-    uui_textbox_init(&g_dlg_name, s);
-    uui_textbox_set_active(&g_dlg_name, g_dialog.focus == DLG_ITEM(ID_DLG_NAME));
+// --- the file chooser --------------------------------------------------
+//
+// ONE CALLBACK FOR BOTH FLAVOURS, because Open and Save differ only in
+// what happens to the path that comes back. The window is already gone
+// by the time this runs (ui/uui_filedialog.h), so nothing has to be
+// dismissed here.
+static void dlg_done(void *ctx, const char *path) {
+    struct uapp *a = (struct uapp *)ctx;
+    if (!path) { set_status("cancelled"); uapp_redraw(a); return; }
+    if (g_dlg_saving) save_file(a, path);
+    else load_file(a, path);
+    uapp_redraw(a);
 }
 
-static void dlg_on_dir_changed(void *ctx, const char *dir) {
-    (void)ctx;
-    snprintf(g_dlg_row, sizeof g_dlg_row, "Folder: %s", dir);
-}
+// WHAT AN EDITOR CALLS A TEXT FILE, and it is a list of EXTENSIONS
+// rather than a probe -- deliberately. ui/uui_fileview.h's
+// probe-not-extension rule is about whether a DECODER will accept a
+// file, which a probe can settle; "is this a text file" is a convention
+// about the NAME, because any file at all opens in an editor. Every
+// editor's chooser answers it the same way, and "All files" is always
+// the row beside it.
+#define TEXT_EXTS ".txt .md .conf .log .c .h .py .sh .cfg .ini .json " \
+                  ".desktop .scheme .saver .ids .service"
 
-// A file ACTIVATED in the listing (Enter, double-click). Directories
-// never reach here -- the fileview descends into those itself.
-static void dlg_on_open(void *ctx, const char *path) {
-    (void)ctx;
-    if (g_dlg_saving) { dlg_name_set(k_path_basename(path)); return; }
-    uui_dialog_close(&g_dialog);
-    load_file(g_app, path);
-}
-
-// Save As: the selected file's name lands in the field, as in every
-// desktop's chooser, so "save over that one" is a click and Return.
-static void dlg_on_select(void *ctx, const char *path, int is_dir) {
-    (void)ctx;
-    if (g_dlg_saving && !is_dir) dlg_name_set(k_path_basename(path));
-}
-
-// (Re)opens the widget around the current flavour, directory and name.
-static void dialog_show(void) {
-    static const struct uui_dialog_button open_btns[] = {
-        { "Open", CMD_DLG_OK }, { "Cancel", CMD_DLG_CANCEL },
-    };
-    static const struct uui_dialog_button save_btns[] = {
-        { "Save", CMD_DLG_OK }, { "Cancel", CMD_DLG_CANCEL },
-    };
-    // Font-derived: the listing's natural height plus a few rows, and
-    // the field's. The dialog clamps this to the window.
-    int lw, lh, fw, fh;
-    uui_fileview_natural_size(&g_dlg_list, &lw, &lh);
-    lh += uui_table_row_h(&g_dlg_list.table) * 4;
-    uui_textbox_natural_size(&g_dlg_name, &fw, &fh);
-    int body_w = ugfx_char_w() * 44;
-    int body_h = lh + fh + uui_layout_gap(&g_dlg_layout) + 2 * uui_layout_margin(&g_dlg_layout);
-
-    uui_dialog_set_body(&g_dialog, &g_dlg_body, body_w, body_h);
-    uui_dialog_open(&g_dialog, g_dlg_saving ? "Save As" : "Open", g_dlg_rows, 1,
-                     g_dlg_saving ? save_btns : open_btns, 2, 0, CMD_DLG_CANCEL);
-    uui_dialog_focus(&g_dialog, DLG_ITEM(g_dlg_saving ? ID_DLG_NAME : ID_DLG_LIST));
+static int keep_text(void *ctx, const char *dir, const struct sys_dirent *e) {
+    (void)ctx; (void)dir;
+    if (e->is_dir) return 0;
+    const char *dot = strrchr(e->name, '.');
+    return dot && uopen_ext_matches(TEXT_EXTS, dot);
 }
 
 static void file_dialog(int saving) {
+    if (uui_filedialog_is_open(&g_fd)) return;
     g_dlg_saving = saving;
     uui_menubar_close(&g_menu); // a modal owns the input; the menu steps aside
-    uui_dialog_focus(&g_dialog, NULL);
 
-    // The document's directory, or the root -- and for Save As its name,
-    // selected so that typing replaces it.
+    // The document's directory, or the root -- and for Save As its
+    // name, so "save over that one" is already typed.
     char dir[PATH_MAX_LEN];
     if (!g_path[0] || !k_path_dirname(g_path, dir, sizeof dir)) strlcpy(dir, "/", sizeof dir);
-    uui_fileview_set_dir(&g_dlg_list, dir);
-    dlg_name_set(saving && g_path[0] ? k_path_basename(g_path) : "");
-    dialog_show();
-    if (saving && g_path[0]) uui_textbox_key(&g_dlg_name, 0x01); // Ctrl-A
-}
 
-// A button committed (or Return/Escape did). Typed name first, then
-// the selection; OK on a folder enters it and keeps the dialog up, as
-// every chooser does.
-static void dialog_answer(struct uapp *a, int code) {
-    if (code != CMD_DLG_OK) { set_status("cancelled"); return; }
-
-    char full[PATH_MAX_LEN];
-    const char *typed = uui_textbox_text(&g_dlg_name);
-    const char *sel = uui_fileview_selected_name(&g_dlg_list);
-    if (typed[0]) {
-        // Normalised to an absolute path: a bare name is relative to
-        // the listing, never to the kernel's cwd, so the title reads the
-        // same after a save as after an open of the same file.
-        int ok = typed[0] == '/' ? (int)strlcpy(full, typed, sizeof full) < (int)sizeof full
-                                 : k_path_join(uui_fileview_dir(&g_dlg_list), typed, full, sizeof full);
-        if (!ok) { set_status("path too long"); return; }
-    } else if (uui_fileview_selected_is_dir(&g_dlg_list) || (sel && strcmp(sel, "..") == 0)) {
-        uui_fileview_activate(&g_dlg_list);
-        dialog_show();
-        return;
-    } else if (!uui_fileview_selected_path(&g_dlg_list, full, sizeof full)) {
-        set_status("no file chosen");
-        return;
-    }
-    if (g_dlg_saving) save_file(a, full);
-    else load_file(a, full);
+    static const struct uui_filedialog_filter types[] = {
+        { "Text files", keep_text, 0 },
+        UUI_FILEDIALOG_ALL_FILES,
+    };
+    struct uui_filedialog_opts o = {
+        .mode = saving ? UUI_FILEDIALOG_SAVE : UUI_FILEDIALOG_OPEN,
+        .title = saving ? "Save As" : "Open",
+        .start_dir = dir,
+        .initial_name = (saving && g_path[0]) ? k_path_basename(g_path) : "",
+        .filters = types,
+        .filter_count = (int)(sizeof types / sizeof types[0]),
+    };
+    if (!uui_filedialog_open(g_app, &g_fd, &o, dlg_done, g_app))
+        set_status("cannot open the chooser");
 }
 
 // --- commands ---------------------------------------------------------
@@ -971,17 +902,6 @@ static void on_widget(struct uapp *a, int id, int reason) {
         if (code > 0) do_command(a, code);
         break;
     }
-    case ID_DIALOG: {
-        int code = uui_dialog_take_code(&g_dialog);
-        if (code > 0) dialog_answer(a, code);
-        break;
-    }
-    case ID_DLG_LIST:
-    case ID_DLG_NAME:
-        // Keys follow the click; the router names the child, so the
-        // dialog is told here (ui/uui_dialog.h).
-        if (reason == UUI_REASON_PRESS) uui_dialog_focus(&g_dialog, DLG_ITEM(id));
-        break;
     default:
         break;
     }
@@ -1156,7 +1076,7 @@ static int g_ctx_x, g_ctx_y;
 
 static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
     if (g_press_taken) { g_press_taken = 0; return; }
-    if (uui_dialog_is_open(&g_dialog)) return; // a secondary press; the modal keeps it
+    if (uui_filedialog_is_open(&g_fd)) return; // a secondary press; the modal keeps it
 
     if (buttons & 0x2) {
         if (uui_menubar_is_open(&g_ctx)) {
@@ -1202,7 +1122,7 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     // motion, including back to the arrow -- it is a state (ui/uapp.h).
     // With the dialog up the widget tree's answer stands (its field
     // names the I-beam itself), so this says nothing then.
-    if (!uui_dialog_is_open(&g_dialog)) {
+    if (!uui_filedialog_is_open(&g_fd)) {
         int over_text = x >= tx && x < tx + tw && y >= ty && y < ty + th &&
                         !uui_menubar_is_open(&g_menu);
         uapp_set_cursor(a, over_text ? WIN_CURSOR_TEXT : WIN_CURSOR_DEFAULT);
@@ -1247,7 +1167,7 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
     g_hbar_drag = 0;
     if (g_ctx_armed) {
         g_ctx_armed = 0;
-        if (!uui_dialog_is_open(&g_dialog))
+        if (!uui_filedialog_is_open(&g_fd))
             uui_menubar_open_at(&g_ctx, ctx_items,
                                  (int)(sizeof ctx_items / sizeof ctx_items[0]),
                                  g_ctx_x, g_ctx_y);
@@ -1294,18 +1214,6 @@ static void on_open_cb(struct uapp *a) {
     g_statusbar.panes[1].text = g_lncol;    g_statusbar.panes[1].chars = 14;
     g_statusbar.panes[2].text = g_modflag;  g_statusbar.panes[2].chars = 4;
     update_indicators();
-
-    uui_dialog_init(&g_dialog);
-    uui_fileview_init(&g_dlg_list, 0, 0, 100, 100, g_dlg_entries, DIALOG_MAX_FILES);
-    uui_fileview_set_mode(&g_dlg_list, UUI_FILEVIEW_LIST);
-    g_dlg_list.on_open = dlg_on_open;
-    g_dlg_list.on_select = dlg_on_select;
-    g_dlg_list.on_dir_changed = dlg_on_dir_changed;
-    uui_textbox_init(&g_dlg_name, "");
-    g_dlg_layout.dir = UUI_COLUMN;
-    g_dlg_layout.margin = 1;   // the dialog's own padding is the moat
-    g_dlg_layout.items = g_dlg_items;
-    g_dlg_layout.count = (int)(sizeof g_dlg_items / sizeof g_dlg_items[0]);
 
     // AFTER the widgets are set up, not before: load_file() writes the
     // status bar and the title, and both have to exist first.

@@ -224,6 +224,20 @@ struct window {
     // dismisses it first.
     int popup;
     uint32_t popup_parent;
+
+    // A DIALOG WINDOW (abi/win_proto.h's WIN_REQ_DIALOG): a second
+    // toplevel of the same client, WITH chrome, owned by one of its
+    // client's windows -- centred on it, stacked with it, and carrying
+    // no taskbar button of its own. `dialog_owner` is the owner's slot.
+    //
+    // `modal` means the owner takes no input while this is up: a press
+    // on it raises this instead. Win32 disables the owner HWND for the
+    // same effect; KDE raises and flashes.
+    //
+    // ONE LEVEL: a dialog never owns a dialog, so nothing here recurses.
+    int dialog;
+    uint32_t dialog_owner;
+    int modal;
 };
 
 // Height of a window's title bar in pixels. NOT the taskbar's, which is

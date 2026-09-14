@@ -39,3 +39,7 @@ void uui_describe_rect_ij(const struct uui_describe *d, const char *part, int i,
 void uui_describe_int(const struct uui_describe *d, const char *part, int v) {
     emit(d, "%s: layout %s.%s %d\n", d->prefix, d->name, part, v);
 }
+
+void uui_describe_str(const struct uui_describe *d, const char *part, const char *v) {
+    emit(d, "%s: layout %s.%s %s\n", d->prefix, d->name, part, v ? v : "");
+}

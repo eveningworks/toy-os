@@ -15,7 +15,6 @@
 #include "volume_popup.h"
 #include "wm_overlay.h"
 #include "confirm_dialog.h"
-#include "file_picker.h"
 #include "desktop.h"
 #include "wm_tray.h"
 #include "wm_taskbar.h"
@@ -593,13 +592,6 @@ static void draw_cursor(int x, int y, enum wm_cursor_kind kind) {
 // routing, and turns "stranded over the desktop" into "wrong inside one
 // window until the pointer crosses a boundary".
 static enum wm_cursor_kind client_cursor_at(int mx, int my) {
-    // The picker is the WM's own chrome with a text field in it, and it
-    // answers from uui_textbox's hit test -- the same widget a client's
-    // field is, so the two cannot disagree.
-    if (file_picker_open) {
-        return file_picker_cursor_at(mx, my) == WIN_CURSOR_TEXT
-                ? WM_CURSOR_TEXT : WM_CURSOR_NORMAL;
-    }
     if (start_menu_open || context_menu_open || calendar_open ||
         confirm_dialog_open) return WM_CURSOR_NORMAL;
     if (my >= screen_h - taskbar_h) return WM_CURSOR_NORMAL;
@@ -1644,8 +1636,7 @@ void wm_render_frame(int mx, int my) {
     // open. The others still opt out, and converting each is the same
     // three steps: track the hover instead of deriving it in the draw,
     // damage the rect on every state change, drop it from here.
-    int overlay_now = context_menu_open || calendar_open ||
-                      file_picker_open || confirm_dialog_open;
+    int overlay_now = context_menu_open || calendar_open || confirm_dialog_open;
     if (overlay_now || overlay_was_open) {
         damage_reset();
     }

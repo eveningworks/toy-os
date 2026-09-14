@@ -708,7 +708,7 @@ EXTRA_OBJS_toywm      = wm/wm wm/wm_rawin wm/wm_render wm/wm_input wm/wm_client 
                         wm/volume_popup wm/brightness_popup wm/tray_slider_popup \
                         wm/network_popup \
                         wm/wm_overlay wm/osk \
-                        wm/confirm_dialog wm/file_picker wm/cursor_theme \
+                        wm/confirm_dialog wm/cursor_theme \
                         wm/gui_apps wm/wm_log wm/wm_fs wm/wm_conf \
                         wm/wm_geometry \
                         wm/wm_hwcursor \

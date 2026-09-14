@@ -16,8 +16,8 @@
 #define DESKTOP_ENTRY_DIR "/usr/wm/applications"
 
 // A space/comma-separated list, matched whole -- ".md" must not match
-// ".mdx", which a substring search would.
-static int handles_ext(const char *list, const char *ext) {
+// ".mdx", which a substring search would. See uopen.h.
+int uopen_ext_matches(const char *list, const char *ext) {
     for (const char *p = list; *p;) {
         while (*p == ' ' || *p == ',') p++;
         const char *start = p;
@@ -66,7 +66,7 @@ static int declared_exec(const char *ext, char *out, int cap) {
         int hit = uconf_load(entry, cfg)
                   && etc_config_buf_get_in_or_top(cfg, UOPEN_ENTRY_SECTION,
                                                   "Handles", list, sizeof list)
-                  && handles_ext(list, ext)
+                  && uopen_ext_matches(list, ext)
                   && etc_config_buf_get_in_or_top(cfg, UOPEN_ENTRY_SECTION,
                                                   "Exec", out, (uint32_t)cap);
         free(cfg);

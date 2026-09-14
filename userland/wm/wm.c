@@ -38,7 +38,6 @@
 #include "wm_overlay.h"
 #include "osk.h"
 #include "confirm_dialog.h"
-#include "file_picker.h"
 #include "desktop.h"
 #include "wm_tray.h"
 #include "wm_taskbar.h"
@@ -279,6 +278,25 @@ void bring_to_front(int idx) {
     // pending_write_win/pending_read_win/pending_proc_win pointing at
     // the same window across the shuffle. R9 deleted those slots, so the
     // reorder is now just the reorder.
+}
+
+// A window AND its dialogs, promoted together -- the dialogs last, so
+// they end up above the window that owns them.
+//
+// **SEPARATE FROM bring_to_front(), and that separation is the point.**
+// Its contract is that the promoted window ends up at window_count - 1,
+// and four call sites in wm_input.c index by exactly that to start a
+// drag or a resize. Raising the dialogs inside it broke that silently:
+// the owner's title bar still armed a drag, and the thing dragged was
+// the dialog. Callers that must not care about the z-order underneath
+// them use this; everything that needs the index uses the other.
+void raise_with_dialogs(int idx) {
+    if (idx < 0 || idx >= window_count) return;
+    int pid = windows[idx].client_pid;
+    uint32_t win = windows[idx].client_win;
+    int dialog = windows[idx].dialog;
+    bring_to_front(idx);
+    if (!dialog) wm_dialogs_raise(pid, win);
 }
 
 static int find_window_for_app(const struct gui_app *app) {
@@ -560,7 +578,7 @@ void close_window(int idx) {
     // rewrites per drag. This is the one chokepoint that sees the final
     // answer, and it still has the live slot -- the array shift at the
     // bottom of this function is what would lose it.
-    if (!windows[idx].popup) wm_geometry_save(&windows[idx]);
+    if (!windows[idx].popup && !windows[idx].dialog) wm_geometry_save(&windows[idx]);
 
     // If the FRONT window is going away, whatever ends up frontmost
     // gains keyboard focus -- and a client has to be told, since it
@@ -1266,112 +1284,98 @@ void wm_run(void) {
         if (wheel != 0 && brightness_handle_wheel(mx, my, wheel)) wheel = 0;
 
         if (key != -1 || wheel != 0) {
-            // A modal file picker (e.g. Notepad's Save As...) captures
-            // keyboard input first, same "most modal" priority
-            // wm_handle_left_click() already gives confirm_dialog/
-            // file_picker over ordinary window clicks -- see
-            // file_picker.h. It has no wheel handling yet, so a wheel
-            // event while it's open is just dropped rather than
-            // reaching the window behind it.
-            if (key != -1 && file_picker_handle_key(key)) {
-                // consumed by the picker -- modal, its own rect isn't
-                // reported as damage yet, falls back to a full-screen
-                // repaint same as other dialogs (see wm_render.c's
-                // damage-region comment)
-            } else {
-                int f = wm_focus_index();
-                int kt = wm_key_target(f); // a popup of f's client, or f
+            int f = wm_focus_index();
+            int kt = wm_key_target(f); // a popup of f's client, or f
 
-                // Alt+F4 closes the focused window, and is handled HERE
-                // rather than delivered to the app -- a window-manager
-                // shortcut, exactly as it is in Windows (routed through
-                // DefWindowProc to WM_SYSCOMMAND/SC_CLOSE) and in KDE
-                // (a KWin global shortcut). The app still decides what
-                // happens, because this asks through the same
-                // wm_request_close() the X button uses and a client may
-                // refuse it; what the app does NOT get is the chance to
-                // silently swallow the keystroke, which is the whole
-                // point of the shortcut existing.
+            // Alt+F4 closes the focused window, and is handled HERE
+            // rather than delivered to the app -- a window-manager
+            // shortcut, exactly as it is in Windows (routed through
+            // DefWindowProc to WM_SYSCOMMAND/SC_CLOSE) and in KDE
+            // (a KWin global shortcut). The app still decides what
+            // happens, because this asks through the same
+            // wm_request_close() the X button uses and a client may
+            // refuse it; what the app does NOT get is the chance to
+            // silently swallow the keystroke, which is the whole
+            // point of the shortcut existing.
+            //
+            // Matched on the modifier bit rather than a dedicated
+            // KEY_ALT_F4 code: nothing is folded for a function key
+            // the way Ctrl/Alt are folded into a letter, so mods are
+            // usable here, and this generalises to any future
+            // Alt+F<n> without a new code each time.
+            // Super/Win TOGGLES the Start menu -- open if closed,
+            // close if open, exactly as on Windows and KDE. A
+            // window-manager shortcut like Alt+F4 below, consumed
+            // here so it never reaches the focused window: a
+            // full-screen app must not be able to swallow the Start
+            // menu.
+            //
+            // Suppressed while a MODAL overlay owns input (the
+            // confirm dialog, the file picker). Those take the
+            // screen deliberately, and opening a menu behind one
+            // would leave two things claiming the next click.
+            // The context menu is not modal in that sense and is
+            // simply replaced.
+            if (key != -1 && !key_down) {
+                // A RELEASE GOES STRAIGHT TO THE FOCUSED CLIENT, and
+                // takes none of the shortcut branches below: Super
+                // and Alt+F4 act on the PRESS, exactly as
+                // docs/gui-guidelines.md's arm-then-commit rule says
+                // a control should, and firing them again on the way
+                // up would toggle the Start menu twice per keystroke.
                 //
-                // Matched on the modifier bit rather than a dedicated
-                // KEY_ALT_F4 code: nothing is folded for a function key
-                // the way Ctrl/Alt are folded into a letter, so mods are
-                // usable here, and this generalises to any future
-                // Alt+F<n> without a new code each time.
-                // Super/Win TOGGLES the Start menu -- open if closed,
-                // close if open, exactly as on Windows and KDE. A
-                // window-manager shortcut like Alt+F4 below, consumed
-                // here so it never reaches the focused window: a
-                // full-screen app must not be able to swallow the Start
-                // menu.
-                //
-                // Suppressed while a MODAL overlay owns input (the
-                // confirm dialog, the file picker). Those take the
-                // screen deliberately, and opening a menu behind one
-                // would leave two things claiming the next click.
-                // The context menu is not modal in that sense and is
-                // simply replaced.
-                if (key != -1 && !key_down) {
-                    // A RELEASE GOES STRAIGHT TO THE FOCUSED CLIENT, and
-                    // takes none of the shortcut branches below: Super
-                    // and Alt+F4 act on the PRESS, exactly as
-                    // docs/gui-guidelines.md's arm-then-commit rule says
-                    // a control should, and firing them again on the way
-                    // up would toggle the Start menu twice per keystroke.
-                    //
-                    // A client can therefore see a release whose press
-                    // the WM consumed -- Super held over a window, say.
-                    // It has to tolerate that, and every real system says
-                    // the same: an X11 grab produces exactly this shape.
-                    // Tracking held keys means ignoring an up you have no
-                    // down for, which is the sane implementation anyway.
-                    if (kt >= 0 && !file_picker_open &&
-                        wm_client_is_client_window(&windows[kt])) {
-                        wm_client_send_key_up(&windows[kt], key, key_mods);
-                    }
-                } else if (key == KEY_SUPER) {
-                    if (!confirm_dialog_open && !file_picker_open) {
-                        // Toggle; opening closes every other popup
-                        // through the overlay table (wm_overlay.h).
-                        if (start_menu_open) start_menu_close();
-                        else start_menu_open_now();
-                        redraw_pending = 1;
-                    }
-                } else if (key == KEY_F4 && (key_mods & KEY_MOD_ALT) && f >= 0 && !file_picker_open) {
-                    wm_request_close(f); // may shift windows[] -- f is dead after this
-                    redraw_pending = 1;
-                } else if (kt >= 0 && key != -1 && !file_picker_open && wm_client_is_client_window(&windows[kt])) {
-                    // Focused window belongs to a ring-3 client: the
-                    // key becomes a protocol message rather than a
-                    // callback. Same focus rule either way -- who gets
-                    // the key is the WM's decision, and it doesn't
-                    // change because the recipient is a process.
-                    wm_client_send_key(&windows[kt], key, key_mods);
-                    redraw_pending = 1;
-                } else if (f >= 0 && key != -1 && !file_picker_open && windows[f].app && windows[f].app->on_key) {
-                    windows[f].app->on_key(&windows[f], key, key_mods);
-                } else if (f < 0 && key != -1 && !file_picker_open && !confirm_dialog_open) {
-                    // No window has the focus: the DESKTOP is the focus,
-                    // and its icons take Ctrl+C/X/V and Delete.
-                    if (desktop_handle_key(key, key_mods)) redraw_pending = 1;
+                // A client can therefore see a release whose press
+                // the WM consumed -- Super held over a window, say.
+                // It has to tolerate that, and every real system says
+                // the same: an X11 grab produces exactly this shape.
+                // Tracking held keys means ignoring an up you have no
+                // down for, which is the sane implementation anyway.
+                if (kt >= 0 &&
+                    wm_client_is_client_window(&windows[kt])) {
+                    wm_client_send_key_up(&windows[kt], key, key_mods);
                 }
-                if (f >= 0 && wheel != 0 && !file_picker_open) {
-                    // A client gets the same notches as a message. Until
-                    // TWP carried a wheel event, only kernel-space apps
-                    // could scroll -- so Notepad drew a scrollbar it
-                    // could never move.
-                    if (wm_client_is_client_window(&windows[kt])) {
-                        wm_client_send_wheel(&windows[kt], wheel);
-                    } else if (windows[f].app && windows[f].app->on_wheel) {
-                        windows[f].app->on_wheel(&windows[f], wheel);
-                    }
+            } else if (key == KEY_SUPER) {
+                if (!confirm_dialog_open) {
+                    // Toggle; opening closes every other popup
+                    // through the overlay table (wm_overlay.h).
+                    if (start_menu_open) start_menu_close();
+                    else start_menu_open_now();
+                    redraw_pending = 1;
                 }
-                // Typing/scrolling is the single most common redraw
-                // trigger this loop sees besides mouse movement -- worth
-                // reporting precisely rather than falling back to a full
-                // repaint for every keystroke.
-                if (f >= 0) wm_damage_rect(windows[f].x, windows[f].y, windows[f].w, windows[f].h);
+            } else if (key == KEY_F4 && (key_mods & KEY_MOD_ALT) && f >= 0) {
+                wm_request_close(f); // may shift windows[] -- f is dead after this
+                redraw_pending = 1;
+            } else if (kt >= 0 && key != -1 && wm_client_is_client_window(&windows[kt])) {
+                // Focused window belongs to a ring-3 client: the
+                // key becomes a protocol message rather than a
+                // callback. Same focus rule either way -- who gets
+                // the key is the WM's decision, and it doesn't
+                // change because the recipient is a process.
+                wm_client_send_key(&windows[kt], key, key_mods);
+                redraw_pending = 1;
+            } else if (f >= 0 && key != -1 && windows[f].app && windows[f].app->on_key) {
+                windows[f].app->on_key(&windows[f], key, key_mods);
+            } else if (f < 0 && key != -1 && !confirm_dialog_open) {
+                // No window has the focus: the DESKTOP is the focus,
+                // and its icons take Ctrl+C/X/V and Delete.
+                if (desktop_handle_key(key, key_mods)) redraw_pending = 1;
             }
+            if (f >= 0 && wheel != 0) {
+                // A client gets the same notches as a message. Until
+                // TWP carried a wheel event, only kernel-space apps
+                // could scroll -- so Notepad drew a scrollbar it
+                // could never move.
+                if (wm_client_is_client_window(&windows[kt])) {
+                    wm_client_send_wheel(&windows[kt], wheel);
+                } else if (windows[f].app && windows[f].app->on_wheel) {
+                    windows[f].app->on_wheel(&windows[f], wheel);
+                }
+            }
+            // Typing/scrolling is the single most common redraw
+            // trigger this loop sees besides mouse movement -- worth
+            // reporting precisely rather than falling back to a full
+            // repaint for every keystroke.
+            if (f >= 0) wm_damage_rect(windows[f].x, windows[f].y, windows[f].w, windows[f].h);
             redraw_pending = 1;
         }
 

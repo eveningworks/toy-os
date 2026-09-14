@@ -250,7 +250,7 @@ static void copy_text(char *dst, const char *src) {
     dst[i] = '\0';
 }
 
-static void layout_log_flush(void);
+static void layout_log_flush(int src);
 static int wmchan_send(uint32_t type, uint32_t window,
                        int aa, int bb, int cc, const char *text);
 
@@ -357,7 +357,7 @@ static void flush(struct uapp *a) {
     // The layout block this frame produced, emitted only if it differs
     // from the last -- see uapp_log_layout(). Here rather than in the
     // apps because only the toolkit knows when a frame has ended.
-    layout_log_flush();
+    layout_log_flush(0);
     present(a);
 }
 
@@ -465,8 +465,13 @@ static int layout_log_enabled(void) {
 static char g_block[LAYOUT_BLOCK_MAX];
 static int  g_block_len;
 static int  g_block_over;
-static char g_block_prev[LAYOUT_BLOCK_MAX];
-static int  g_block_prev_len;
+// THE DEDUPE IS PER SURFACE. A dialog window draws its own frame after
+// the toplevel's, so one shared "previous block" would see two different
+// reports alternating and never match -- the dedupe would be off exactly
+// when two windows are open. Source 0 is the toplevel, 1 any dialog.
+#define LAYOUT_LOG_SOURCES 2
+static char g_block_prev[LAYOUT_LOG_SOURCES][LAYOUT_BLOCK_MAX];
+static int  g_block_prev_len[LAYOUT_LOG_SOURCES];
 
 // The formatted form, which is what every app's own report uses. It
 // exists so those lines go through the SAME gate and the same per-frame
@@ -493,20 +498,22 @@ void uapp_log_layout_line(const char *line) {
 
 // Called by the draw path once the app has finished. Emits the block
 // only if it differs from the previous frame's.
-static void layout_log_flush(void) {
+static void layout_log_flush(int src) {
     if (!g_layout_log || !g_block_len) { g_block_len = g_block_over = 0; return; }
+    char *prev = g_block_prev[src];
+    int *prev_len = &g_block_prev_len[src];
     if (g_block_over) {
         for (const char *p = LAYOUT_BLOCK_MARK; *p; p++) g_block[g_block_len++] = *p;
         g_block_over = 0;
     }
-    int same = (g_block_len == g_block_prev_len);
+    int same = (g_block_len == *prev_len);
     for (int i = 0; same && i < g_block_len; i++)
-        if (g_block[i] != g_block_prev[i]) same = 0;
+        if (g_block[i] != prev[i]) same = 0;
     if (!same) {
         g_block[g_block_len] = '\0';
         ulog(g_block);
-        for (int i = 0; i < g_block_len; i++) g_block_prev[i] = g_block[i];
-        g_block_prev_len = g_block_len;
+        for (int i = 0; i < g_block_len; i++) prev[i] = g_block[i];
+        *prev_len = g_block_len;
     }
     g_block_len = 0;
 }
@@ -751,6 +758,210 @@ static struct ugfx_surface *popup_surface(void *ctx, int id) {
     return &s->surface;
 }
 
+// --- dialog windows: a second toplevel (ui/uapp.h) -------------------
+//
+// The same per-slot surface machinery a popup uses, with the compositor
+// told to give this one chrome instead (WIN_REQ_DIALOG). What is NOT
+// shared with the toplevel is the content: its own item array, its own
+// router and its own focus ring, because it is a different window --
+// a second view of the first one's widgets would be a split view, not
+// a dialog.
+struct uapp_window {
+    int slot;               // 0 = closed; also the `window` its events name
+    struct uapp *app;
+    struct uapp_window_desc desc;
+    char title[WIN_TITLE_LEN];
+    struct uui_router router;
+    int dirty;
+    int cursor;
+    int mouse_x, mouse_y;   // a WHEEL carries notches and no position
+};
+static struct uapp_window g_dlg[WIN_CLIENT_MAX];
+
+static struct uapp_window *dlg_for(uint32_t slot) {
+    if (slot == 0 || slot >= WIN_CLIENT_MAX) return 0;
+    return g_dlg[slot].slot ? &g_dlg[slot] : 0;
+}
+
+// Places the content and paints it. The same order flush() uses for the
+// toplevel, minus the app hooks a dialog has no equivalent of.
+static void dlg_flush(struct uapp_window *w) {
+    if (!w->slot || !w->dirty) return;
+    w->dirty = 0;
+    struct uapp_surf *s = &g_surf[w->slot];
+    if (!buf_ensure(s, s->front ^ 1, s->w, s->h)) return;
+    s->surface = ugfx_surface_for_pixels(s->px[s->front ^ 1], s->w, s->h);
+    if (w->desc.layout) uui_layout_run(w->desc.layout, 0, 0, s->w, s->h);
+    if (w->desc.log_prefix && layout_log_enabled()) {
+        g_log_seen_n = 0;
+        if (w->desc.layout) log_items(w->desc.log_prefix, w->desc.layout->items,
+                                      w->desc.layout->count);
+        if (w->router.count) log_items(w->desc.log_prefix, w->router.items, w->router.count);
+        if (w->desc.on_log_layout) w->desc.on_log_layout(w);
+    }
+    ugfx_fill(&s->surface, UTHEME_PANEL_BG);
+    if (w->desc.layout) uui_layout_draw(&s->surface, w->desc.layout);
+    if (w->router.count) uui_router_draw(&w->router, &s->surface);
+    layout_log_flush(1);
+    surf_present(s);
+}
+
+struct uapp_window *uapp_window_open(struct uapp *a, const struct uapp_window_desc *desc) {
+    if (!a || !desc || desc->w <= 0 || desc->h <= 0 || comp_pid() <= 0) return 0;
+    int w = desc->w > WIN_CLIENT_MAX_W ? WIN_CLIENT_MAX_W : desc->w;
+    int h = desc->h > WIN_CLIENT_MAX_H ? WIN_CLIENT_MAX_H : desc->h;
+    struct uapp_surf *s = 0;
+    for (int i = 1; i < WIN_CLIENT_MAX; i++)
+        if (!g_surf[i].used) { s = &g_surf[i]; break; }
+    if (!s) return 0;
+    if (!bufs_create(s, w, h)) return 0;
+    int slot = slot_of(s);
+
+    struct uapp_window *d = &g_dlg[slot];
+    memset(d, 0, sizeof *d);
+    d->desc = *desc;
+    strlcpy(d->title, desc->title ? desc->title : "Dialog", sizeof d->title);
+
+    struct wmchan_msg m, r;
+    memset(&m, 0, sizeof m);
+    m.type = WIN_REQ_DIALOG;
+    m.window = (uint32_t)slot;
+    m.a = w;
+    m.b = h;
+    m.c = WIN_DIALOG_C(a->window, (desc->flags & UAPP_WIN_MODAL) ? WIN_DIALOG_MODAL : 0);
+    strlcpy(m.text, d->title, sizeof m.text);
+    if (!wmchan() ||
+        uchan_call(&g_wmchan, &m, sizeof m, &r, sizeof r, UAPP_CALL_TIMEOUT_MS) < 0 ||
+        r.a < 0) {
+        bufs_release(s);
+        d->slot = 0;
+        return 0;
+    }
+
+    d->slot = slot;
+    d->app = a;
+    d->cursor = WIN_CURSOR_DEFAULT;
+    if (desc->widgets && desc->widget_count > 0)
+        uui_router_init(&d->router, desc->widgets, desc->widget_count);
+    s->surface = ugfx_surface_for_pixels(s->px[s->front ^ 1], w, h);
+    d->dirty = 1;
+    dlg_flush(d);
+    return d;
+}
+
+void uapp_window_close(struct uapp_window *w) {
+    if (!w || !w->slot) return;
+    int slot = w->slot;
+    wmchan_send(WIN_REQ_DESTROY, (uint32_t)slot, 0, 0, 0, 0);
+    bufs_release(&g_surf[slot]);
+    w->slot = 0;
+    if (w->app) w->app->dirty = 1;   // the owner repaints, now unblocked
+}
+
+int   uapp_window_is_open(const struct uapp_window *w) { return w && w->slot != 0; }
+void  uapp_window_redraw(struct uapp_window *w)  { if (w && w->slot) w->dirty = 1; }
+void *uapp_window_state(struct uapp_window *w)   { return w ? w->desc.state : 0; }
+struct uapp *uapp_window_app(struct uapp_window *w) { return w ? w->app : 0; }
+int uapp_window_width(const struct uapp_window *w)  { return w && w->slot ? g_surf[w->slot].w : 0; }
+int uapp_window_height(const struct uapp_window *w) { return w && w->slot ? g_surf[w->slot].h : 0; }
+
+void uapp_window_set_title(struct uapp_window *w, const char *title) {
+    if (!w || !w->slot || !title) return;
+    strlcpy(w->title, title, sizeof w->title);
+    wmchan_send(WIN_REQ_TITLE, (uint32_t)w->slot, 0, 0, 0, w->title);
+}
+
+// One event, in the dialog's OWN coordinate space -- it is a toplevel,
+// so nothing is translated. Its widgets are routed exactly as the
+// toplevel's are; what a dialog has no equivalent of (scanout, resize,
+// drag brokering) is simply not offered.
+static void dlg_dispatch(struct uapp_window *w, const struct win_event *ev) {
+    const struct uapp_window_desc *d = &w->desc;
+    switch (ev->type) {
+    case WIN_EV_PING:
+        wmchan_send(WIN_REQ_PONG, (uint32_t)w->slot, (int)ev->a, 0, 0, 0);
+        return;
+    case WIN_EV_CLOSE:
+        if (d->on_close) d->on_close(w);
+        else uapp_window_close(w);
+        return;
+    case WIN_EV_KEY: {
+        if (w->router.count) {
+            int changed = 0;
+            int id = uui_router_overlay_key(&w->router, ev->a, ev->mods, &changed);
+            if (changed) w->dirty = 1;
+            if (id) {
+                if (d->on_widget) d->on_widget(w, id, UUI_REASON_KEY);
+                return;
+            }
+        }
+        if (d->focus && uui_focus_key(d->focus, ev->a, ev->mods)) {
+            w->dirty = 1;
+            if (ev->a != '\t' && d->on_widget && d->focus->current >= 0) {
+                int id = uui_router_id_of(&w->router,
+                                          d->focus->items[d->focus->current].widget);
+                if (id) d->on_widget(w, id, UUI_REASON_KEY);
+            }
+        }
+        if (d->on_key) d->on_key(w, ev->a, ev->mods);
+        return;
+    }
+    case WIN_EV_MOUSE_DOWN: {
+        w->mouse_x = ev->a;
+        w->mouse_y = ev->b;
+        unsigned btns = WIN_MOUSE_BUTTONS(ev->mods);
+        unsigned kmods = WIN_MOUSE_MODS(ev->mods);
+        if (!(btns & 0x1)) return;
+        int changed = 0;
+        int id = w->router.count
+                     ? uui_router_press(&w->router, ev->a, ev->b, kmods, &changed) : 0;
+        if (changed) w->dirty = 1;
+        if (id && d->on_widget) d->on_widget(w, id, UUI_REASON_PRESS);
+        if (d->focus && uui_focus_click(d->focus, ev->a, ev->b)) w->dirty = 1;
+        return;
+    }
+    case WIN_EV_MOUSE_MOVE: {
+        if (ev->a < 0 || ev->b < 0) return;   // a leave carries no position
+        w->mouse_x = ev->a;
+        w->mouse_y = ev->b;
+        unsigned held = ev->mods & 0x1;
+        if (!w->router.count) return;
+        int changed = 0;
+        int id = uui_router_motion(&w->router, ev->a, ev->b, held,
+                                   WIN_MOUSE_MODS(ev->mods), &changed);
+        if (changed) w->dirty = 1;
+        if (id && d->on_widget) d->on_widget(w, id, UUI_REASON_MOTION);
+        int want = uui_router_cursor(&w->router, ev->a, ev->b);
+        if (want != w->cursor && want >= 0 && want < WIN_CURSOR_COUNT) {
+            w->cursor = want;
+            wmchan_send(WIN_REQ_CURSOR, (uint32_t)w->slot, want, 0, 0, 0);
+        }
+        return;
+    }
+    case WIN_EV_MOUSE_UP: {
+        w->mouse_x = ev->a;
+        w->mouse_y = ev->b;
+        if (!w->router.count) return;
+        int changed = 0;
+        int id = uui_router_release(&w->router, ev->a, ev->b, &changed);
+        if (changed) w->dirty = 1;
+        if (id && d->on_widget) d->on_widget(w, id, UUI_REASON_RELEASE);
+        return;
+    }
+    case WIN_EV_WHEEL: {
+        if (!w->router.count) return;
+        int changed = 0;
+        int id = uui_router_wheel(&w->router, w->mouse_x, w->mouse_y,
+                                  (int)ev->a, &changed);
+        if (changed) w->dirty = 1;
+        if (id && d->on_widget) d->on_widget(w, id, UUI_REASON_WHEEL);
+        return;
+    }
+    default:
+        return;
+    }
+}
+
 static const struct uui_popup_ops g_popup_ops = {
     .open = popup_open,
     .close = popup_close,
@@ -925,6 +1136,12 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
     struct win_event copy = *in;
     const struct win_event *ev = in;
     if (in->window != a->window) {
+        // A DIALOG WINDOW IS ITS OWN TOPLEVEL, so its event is handled
+        // in its own coordinates and goes no further -- the translation
+        // below is a POPUP's, and applying it here would move a press
+        // by the offset of a surface that has none.
+        struct uapp_window *dw = dlg_for(in->window);
+        if (dw) { dlg_dispatch(dw, in); return; }
         // STALE IF THE SLOT IS NOT IN USE: the compositor answered a
         // popup this side has since closed (a menu switched titles while
         // a press was in flight). Read as the toplevel's, its raw
@@ -1068,6 +1285,11 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         // callback exists to prevent.
         if (d->on_font) d->on_font(a);
         a->dirty = 1;
+        // AND EVERY DIALOG WINDOW. The event names the toplevel's slot,
+        // so marking only `a` would leave a chooser laid out for the
+        // font that just went away until something else touched it.
+        for (int i = 1; i < WIN_CLIENT_MAX; i++)
+            if (g_dlg[i].slot) g_dlg[i].dirty = 1;
         break;
 
     case WIN_EV_CLOSE:
@@ -1485,6 +1707,12 @@ static int uapp_pump(struct uapp *a, int block) {
     }
 
     flush(a);
+    // AND THE DIALOG WINDOWS, in slot order. Separate from the popup
+    // pass inside present(): a popup is drawn by the widget that owns it
+    // during the toplevel's own frame, while a dialog has its own
+    // content and paints itself.
+    for (int i = 1; i < WIN_CLIENT_MAX; i++)
+        if (g_dlg[i].slot) dlg_flush(&g_dlg[i]);
     return a->running;
 }
 

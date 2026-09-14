@@ -239,6 +239,9 @@ void wm_damage_rect(int x, int y, int w, int h);
 // Window lifecycle -- defined in wm.c, used by wm_input.c (opening from
 // the Start menu, closing via the title-bar X).
 void bring_to_front(int idx);
+// bring_to_front() plus this window's dialogs, promoted above it. See
+// wm.c for why the two are separate.
+void raise_with_dialogs(int idx);
 // The topmost TOPLEVEL (never a popup), or -1; and the window a key to
 // that toplevel actually reaches -- its topmost popup, if it has one.
 int wm_focus_index(void);
@@ -545,6 +548,17 @@ void wm_client_send_focus(struct window *win, int focused);
 // 2 = in the content of another of its windows, 0 = anywhere else --
 // and 0 is what `dismiss` is for, which closes every popup of the pid
 // and tells it with WIN_EV_POPUP_DONE.
+// --- dialog windows (abi/win_proto.h's WIN_REQ_DIALOG, wm.h) ---------
+//
+// `wm_dialog_blocker` is the index of the MODAL dialog that owns
+// windows[idx]'s input, or -1 -- what a press on a blocked window is
+// redirected to. `wm_dialog_of` walks an owner's dialogs, modal or not,
+// from index `after` (pass -1 to start). `wm_dialogs_raise` promotes
+// every dialog of one owner above it.
+int wm_dialog_blocker(int idx);
+int wm_dialog_of(int idx, int after);
+void wm_dialogs_raise(int pid, uint32_t owner_win);
+
 int wm_client_popup_owner(void);
 int wm_client_popup_route(int owner, int mx, int my);
 void wm_client_popups_dismiss(int owner);

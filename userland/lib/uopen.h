@@ -36,6 +36,15 @@
 #define UOPEN_CONF_SECTION  "Default Applications"
 #define UOPEN_ENTRY_SECTION "Desktop Entry"
 
+// Does a space/comma-separated extension list contain `ext`? Matched
+// WHOLE and case-insensitively, so ".md" never matches ".mdx" -- the
+// thing a substring search gets wrong. `ext` includes the dot.
+//
+// Exported because it is the rule `Handles=` is written in, and a
+// second caller now needs it (a file chooser's "Text files" row). A
+// copy would be a second answer to "is this extension in this list".
+int uopen_ext_matches(const char *list, const char *ext);
+
 // The program that opens `path`, written into `exec`. Returns 1, or 0
 // when nothing claims the extension (or there is none). An override
 // naming an entry that no longer exists falls through to the

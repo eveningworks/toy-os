@@ -686,7 +686,10 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~File operations in-process, with a conflict dialog~~ DONE 2026-08-30 -- `lib/ufileop.h` on a worker thread
 - [ ] An automated check for Shift+click's range -- aiming a click at a chosen list row is not reliable yet (`filemanager_test.py`'s `aim`)
 - [x] ~~The folder tree follows the active pane~~ DONE 2026-09-10 -- on a NAVIGATION only, so a collapsed branch stays collapsed
-- [ ] Move the WM's file picker onto `uui_fileview` -- Notepad's dialog did, 2026-09-04
+- [x] ~~Move the WM's file picker onto `uui_fileview`~~ DONE 2026-09-14 -- deleted; see `ui/uui_filedialog.h`
+- [ ] A dialog window cannot be RESIZED -- `uapp_window` sends no hints and routes no `WIN_EV_RESIZE`, so the chooser is one size
+- [ ] The file chooser has no "New folder" button -- Save As can only write into a directory that already exists
+- [ ] The chooser's Places list is compiled in -- KDE and Windows both let you add one
 - [x] ~~Desktop calendar widget~~ DONE 2026-08-24 -- a panel popup on the tray clock, not an app
 - [x] ~~Control panel with pluggable applets~~ done
 - [x] ~~Word wrap as a toggle in Notepad~~ DONE 2026-09-07 -- View > Word wrap, and a horizontal scrollbar when it is off
@@ -1093,7 +1096,7 @@ this to be better?".
 
 - [ ] The desktop decodes a new wallpaper on the COMPOSITOR's thread -- a 640 ms frame on the laptop; a mode change no longer decodes
 - [ ] Four overlays still opt out of damage tracking -- see `docs/roadmap-details.md`
-- [ ] `damage_sweep.py`'s random walk can open Notepad's file picker by chance -- harmless, but confusing in a state dump
+- [ ] `damage_sweep.py`'s random walk can open Notepad's file chooser by chance -- harmless, but it is a second WINDOW in a state dump now
 - [x] ~~`SYS_LISTDIR` truncates at 256 entries and TFS3 has no such cap~~ done -- `SYS_LISTDIR_AT` pages
 - [ ] `/bin/ls` still reports truncation rather than paging -- it SORTS a listing, so paging means holding it all
 - [ ] Nothing detects an ordinary memory LEAK, in either allocator

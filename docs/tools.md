@@ -1999,6 +1999,28 @@ window without going through it will find its layout polls timing out.
   press reddens the three "another window" checks. Run it after
   touching `wm_client.c`'s popup path, `uapp.c`'s surface table or
   `uui_menubar.c`'s open/close paths.
+- **`filedialog_test.py`** -- the shared file chooser as an OWNED window
+  (`WIN_REQ_DIALOG`, `ui/uui_filedialog.h`, `uapp_window_open()`),
+  driven through Notepad, Image Viewer and Audio Player. 17 checks: the
+  compositor lists a second toplevel with `dialog`/`owner`/`modal` set
+  and real chrome, the strip gives it no taskbar button of its own, a
+  press on the owner leaves the dialog on top AND cannot drag the owner,
+  a Places row changes the directory the view reports, a typed path
+  commits and the app loads that file, Escape cancels and the owner gets
+  the focus back, killing the owner takes the dialog with it, and both
+  other apps open the same chooser.
+
+  **Read its docstring before trusting the modality checks.** Two
+  earlier versions of them stayed GREEN with the block removed
+  entirely -- the obvious press point (the centre of the owner's title
+  bar) is under the chooser, which is wider than the window that opened
+  it, and the next one along is the app ICON, where a press opens the
+  window menu rather than starting a drag. `clear_grab()` picks a point
+  that is neither, and `place_owner()` pins the window first so such a
+  point exists at all; without the pin the cascade can put the whole
+  title bar under the dialog and the check fails as a fixture problem
+  that reads exactly like a regression. Three positive controls are
+  recorded there, including the one that found this.
 - **`forcequit_test.py`** -- not-responding detection and force quit
   (TWP's ping/pong, `scheduler_kill()`, the dialog, and the slot
   reaping). 15 checks. The design point it encodes: a client that

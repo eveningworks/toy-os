@@ -2359,7 +2359,17 @@ selection API, so it's inert there -- but any future caller of
 was no plausible reason for the underlying pixel<->buffer-index math
 (and its correctness) to exist twice. See the commit that added it for the full implementation.
 
-## The file picker is a WM-level modal overlay (`userland/wm/file_picker.c`), not an `apps/ui/` widget
+## The file picker was a WM-level modal overlay, not an `apps/ui/` widget -- SUPERSEDED
+
+**This is history.** The WM's own `file_picker.c` was deleted on
+2026-09-14: it had been unreachable since the apps moved to ring 3 (a
+ring-3 client cannot call into the compositor's C functions), and the
+chooser is `ui/uui_filedialog.h` in a window of its own now -- see "A
+file chooser is a window of its own" below. What the entry argued was
+right for the world it was written in, where a GUI app ran in ring 0
+beside the window manager. Kept because the reasoning is the same
+reasoning the confirm dialog and the context menu still run on.
+
 
 `apps/ui/` widgets are content-relative: they draw and hit-test
 against coordinates local to the window that owns them, and a widget
@@ -7453,3 +7463,84 @@ The alternative considered and rejected was for the app to emit the
 collapsed row as an ITEM and un-indent it by hand. That puts sidebar
 layout in every app that has a sidebar, which is the "make every fix
 twice" shape this repo keeps deleting.
+
+## A file chooser is a window of its own, and the toolkit grew a second toplevel to give it one
+
+Notepad's Open/Save was a `uui_dialog` with a `uui_fileview` body --
+a modal drawn inside Notepad's own window. That is the right shape for a
+question ("Save changes?") and the wrong one for browsing a filesystem:
+in a small window there is nowhere to put a listing. Image Viewer and
+Audio Player each said so in their own top-of-file comments, and each
+answered it by NOT having a chooser at all -- a sidebar pinned to one
+directory (`set_navigable(0)`), which meant neither app could ever leave
+the folder it was launched in. Three apps, three different amounts of
+"cannot open a file".
+
+What real systems do: Win32's `GetOpenFileName`/`IFileOpenDialog`, Qt's
+`QFileDialog` and `GtkFileChooserDialog` are all IN-PROCESS -- a real
+top-level window created by shared toolkit code in the calling app, and
+modal to its owner. The out-of-process chooser (`xdg-desktop-portal` on
+KDE and GNOME, macOS's `openAndSavePanelService`) exists for
+SANDBOXING: the app cannot read the filesystem, so the portal reads it
+and hands back one file. toy-os has no such boundary, so copying the
+portal would be copying the size rather than the shape -- and it would
+need an IPC to return the path plus a modality the compositor could not
+express anyway.
+
+So the chooser is in-process and the missing piece was a second
+toplevel. `uapp` said "one process, one TOPLEVEL -- plus its popups",
+and the popups already had everything expensive: a surface per slot,
+buffers, presents, input routed by slot. What a dialog adds over a popup
+is chrome, a place in the stack under its owner, and modality -- none of
+which a popup may have, since a popup is dismissed by the first press
+outside it and a filename half typed must not vanish on a stray click.
+Hence a third surface kind (`WIN_REQ_DIALOG`) rather than a flag on the
+second, and `uapp_window_open()` beside `uapp_run()`.
+
+Three consequences worth stating, because each one is a trap:
+
+**`bring_to_front()` keeps its contract.** Raising a window's dialogs
+inside it is the obvious implementation and it is wrong: four call sites
+in `wm_input.c` read `window_count - 1` immediately afterwards to start
+a drag or a resize, so the owner's title bar armed a drag and the thing
+dragged was the DIALOG. `raise_with_dialogs()` is the carrying version,
+and only the taskbar needs it -- everywhere else the modal block gets
+there first.
+
+**Modality is a press redirect, not a disabled window.** Win32 disables
+the owner HWND; here `wm_dialog_blocker()` is asked at the top of the
+window walk in `wm_handle_left_click()` and the dialog is raised
+instead. One place, so the title bar, the resize grip and the content
+are all covered by the same answer -- and a window that could be dragged
+away from its own modal is how the two end up on opposite sides of the
+screen with nothing to say they are related.
+
+**The layout log's dedupe is per surface.** It held one previous block,
+compared per frame; a toplevel and a dialog reporting alternately never
+match, so the dedupe would have been off exactly when two windows were
+open. Two slots, indexed by "toplevel" and "a dialog".
+
+**Modality is three doors, and the first version blocked one.** A press
+on the owner was redirected, and that looked complete -- until the
+question "can I still click Notepad's menus?" was actually asked. The
+SECONDARY click had its own window walk with no check in it, so the
+app's context menu was still live; and MOTION still reached the owner,
+so its menu bar highlighted under the cursor while refusing every click,
+which is a control advertising itself as usable. Win32 gets all three
+from disabling the owner HWND. Here each is a `wm_dialog_blocker()`
+call, and the lesson is that "modal" is a property of every input path,
+not of the one you happened to test.
+
+**And a directory has to pass the filter whatever the app says.** Each
+of the three apps' filters answers "is this a file I can open", so each
+says no to a folder -- correct for the sidebars they were written for,
+and fatal in a chooser, where it lists an empty root with no way out.
+The chooser gates the app's filter rather than asking every caller to
+remember; the bug shipped and twenty-two green checks missed it, because
+every one of them reached its directory by a Places row or a typed path
+instead of by walking one.
+
+The WM's own picker was deleted in the same change. It had been
+unreachable since the apps moved to ring 3 -- 531 lines that nothing
+called, plus fifteen live `!file_picker_open` guards threaded through
+`wm.c`, `wm_render.c` and `wm_overlay.c` for a flag that was always 0.

@@ -12,8 +12,9 @@
 //
 // THE FOURTH IMPLEMENTATION IS WHY THIS EXISTS. Before it, three places
 // listed a directory and every one of them was written from scratch:
-// the WM's file picker (userland/wm/file_picker.c), Notepad's Open/Save
-// dialog, and Image Viewer's sidebar. All three did the same four
+// the WM's own file picker (deleted 2026-09-14, orphaned since the apps
+// moved to ring 3), Notepad's Open/Save dialog, and Image Viewer's
+// sidebar. All three did the same four
 // things -- sys_listdir(), dirsort(), a synthetic ".." row, and
 // descend-on-activate -- and a file manager would have been the fourth.
 // No real toolkit ships four: Win32 has one SysListView32, Qt one

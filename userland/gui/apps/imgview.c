@@ -31,7 +31,7 @@
 #include <stdlib.h>
 #include "ui/ugfx.h"
 #include "ui/uui.h"
-#include "ui/uui_fileview.h"
+#include "ui/uui_filedialog.h"
 #include "ui/uapp.h"
 #include "ui/ulog.h"
 #include "ui/utheme.h"
@@ -50,7 +50,8 @@
 #define ID_MENU  3
 
 enum {
-    CMD_RELOAD = 1,
+    CMD_OPEN = 1,
+    CMD_RELOAD,
     CMD_EXIT,
     CMD_FIT,
     CMD_ACTUAL,
@@ -80,6 +81,8 @@ static char g_stat_size[48];
 static char g_stat_note[96];
 
 static const struct uui_menu_item file_items[] = {
+    UUI_MENU("Open...", CMD_OPEN,   "Ctrl+O"),
+    UUI_MENU_SEP,
     UUI_MENU("Reload", CMD_RELOAD, "F5"),
     UUI_MENU_SEP,
     UUI_MENU("Exit",   CMD_EXIT,   "Alt+F4"),
@@ -149,6 +152,53 @@ static int keep_images(void *ctx, const char *dir, const struct sys_dirent *e) {
     uint8_t head[16];
     size_t got = ufile_read_head(path, head, sizeof head);
     return got >= 4 && uimg_probe(head, got);
+}
+
+// --- opening a picture from anywhere ---------------------------------
+//
+// THE SIDEBAR STAYS. It is this window's filmstrip -- Up/Down step
+// through a folder, which is the reason the app browses a directory at
+// all (see the file header) -- and the chooser is what lets you reach a
+// DIFFERENT folder, which the sidebar alone never could: it is pinned
+// (set_navigable(0)) and always has been.
+static struct uui_filedialog g_fd;
+static void show_selected(struct uapp *a);
+
+static void open_chosen(void *ctx, const char *path) {
+    struct uapp *a = (struct uapp *)ctx;
+    if (!path) { uapp_redraw(a); return; }
+    // THE FILE'S DIRECTORY BECOMES THE FILMSTRIP, with that file
+    // selected -- which is what the command line already does with a
+    // path argument, so opening and being launched with a file land in
+    // exactly the same state.
+    char dir[PATH_MAX_LEN];
+    if (!k_path_dirname(path, dir, sizeof dir)) strlcpy(dir, "/", sizeof dir);
+    strlcpy(g_dir, dir, sizeof g_dir);
+    uui_fileview_set_dir(&g_list, g_dir);
+    uui_fileview_select_name(&g_list, k_path_basename(path));
+    show_selected(a);
+    uapp_redraw(a);
+}
+
+static void open_dialog(struct uapp *a) {
+    if (uui_filedialog_is_open(&g_fd)) return;
+    uui_menubar_close(&g_menu);
+    // THE SAME FILTER THE SIDEBAR USES, so the chooser and the
+    // filmstrip agree on what an image is -- one probe, one answer --
+    // and "All files" beside it, because a chooser that can only ever
+    // show what this app opens cannot be used to look.
+    static const struct uui_filedialog_filter types[] = {
+        { "Image files", keep_images, 0 },
+        UUI_FILEDIALOG_ALL_FILES,
+    };
+    struct uui_filedialog_opts o = {
+        .mode = UUI_FILEDIALOG_OPEN,
+        .title = "Open Image",
+        .start_dir = g_dir,
+        .filters = types,
+        .filter_count = (int)(sizeof types / sizeof types[0]),
+    };
+    uui_filedialog_open(a, &g_fd, &o, open_chosen, a);
 }
 
 // Ordering is the WIDGET's now, through lib/dirsort.h -- the same
@@ -312,6 +362,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 
 static void do_command(struct uapp *a, int code) {
     switch (code) {
+    case CMD_OPEN:    open_dialog(a); return;
     case CMD_RELOAD:
         reload_listing();
         show_selected(a);
@@ -354,6 +405,11 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         else uapp_redraw(a);
         return;
     }
+    // Ctrl-O, the one accelerator -- and it is here rather than in the
+    // menu's own table so the label on that item is not a claim nothing
+    // honours. A control code, which is how Ctrl reaches an app
+    // (api/termkey.h).
+    if (key == 0x0F) { do_command(a, CMD_OPEN); return; }
     // Motion is the WIDGET's -- arrows, Home/End and PageUp/PageDown all
     // arrive through one call, and the scroll follows the selection.
     // What stays here is what happens AFTER a move: decoding the newly

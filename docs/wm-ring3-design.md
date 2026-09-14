@@ -227,7 +227,7 @@ capability.
 **CORRECTION, from building it.** This section claimed stage 0 "ends
 with `apps/ui/` having no callers, and deletable". That was wrong: the
 WINDOW MANAGER is itself a heavy user of `apps/ui/` -- seven files in
-`apps/wm/` include `ui/ui.h` (`desktop.c`, `file_picker.c`,
+`apps/wm/` include `ui/ui.h` (`desktop.c`, the file picker,
 `start_menu.c`, `wm_render.c`, `wm_input.c`, `context_menu.c`,
 `confirm_dialog.c`). What stage 0 actually deletes is the half of it
 the apps owned: the checkbox, dropdown, listbox and text view. The

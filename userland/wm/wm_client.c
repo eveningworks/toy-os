@@ -12,7 +12,7 @@
 //
 // Why this is a separate file rather than more of wm.c: it's a distinct
 // concern with its own external contract, exactly the split that
-// produced desktop.c/start_menu.c/file_picker.c. See wm.c's top
+// produced desktop.c/start_menu.c/context_menu.c. See wm.c's top
 // comment.
 #include "wm_internal.h"
 #include "screensaver_config.h"
@@ -333,6 +333,112 @@ static int on_popup_created(int pid, uint32_t id, uint32_t parent_id, int w, int
     return 1;
 }
 
+// --- dialog windows (abi/win_proto.h's WIN_REQ_DIALOG) ---------------
+//
+// A second TOPLEVEL of the same client, so it joins windows[] as an
+// ordinary window and keeps its chrome, its focus and its Alt+F4 -- the
+// opposite of a popup, which is the same list entry with all three
+// taken away. What it does NOT get: a taskbar button (wm_taskbar.c's
+// unlisted(), as Win32 skips an owned window), saved geometry (a dialog
+// opens where its owner is, not where the last one was), and a place in
+// the stack below its owner (raise_with_dialogs(), wm.c).
+static int on_dialog_created(int pid, uint32_t id, uint32_t owner_id,
+                             int w, int h, int flags, const char *title) {
+    if (w <= 0 || h <= 0) return 0;
+    int oi = find_client_window(pid, owner_id);
+    // A DIALOG OF A DIALOG IS REFUSED rather than flattened: the owner
+    // chain is what `modal` is resolved against, and one level is all
+    // the client side can express anyway.
+    if (oi < 0 || windows[oi].popup || windows[oi].dialog) return 0;
+    if (!wm_windows_reserve(window_count + 1)) return 0;
+    const struct window *owner = &windows[find_client_window(pid, owner_id)];
+
+    struct window *win = &windows[window_count];
+    k_memset(win, 0, sizeof(*win));
+    win->dialog = 1;
+    win->dialog_owner = owner_id;
+    win->modal = (flags & WIN_DIALOG_MODAL) != 0;
+    adopt_content_size(win, w, h);
+    // CENTRED ON THE OWNER, unless it does not FIT over the owner -- a
+    // chooser is usually wider than the little window that asked for it,
+    // and centring on a narrower owner then clamps it hard against a
+    // screen edge. Centre it on the work area instead, which is what it
+    // would have looked like anyway.
+    int wa_h = screen_h - taskbar_h;
+    win->x = win->w <= window_content_w(owner)
+                 ? window_content_x(owner) + (window_content_w(owner) - win->w) / 2
+                 : (screen_w - win->w) / 2;
+    win->y = win->h <= window_content_h(owner)
+                 ? window_content_y(owner) + (window_content_h(owner) - win->h) / 2
+                 : (wa_h - win->h) / 2;
+    if (win->x + win->w > screen_w) win->x = screen_w - win->w;
+    if (win->y + win->h > wa_h) win->y = wa_h - win->h;
+    if (win->x < 0) win->x = 0;
+    if (win->y < 0) win->y = 0;
+    win->state = WIN_NORMAL;
+    win->open = 1;
+    win->client_pid = pid;
+    win->client_win = id;
+    win->app_identity = owner->app_identity;
+    if (!map_buf(win, 0, 0, w, h)) {
+        wm_logf("wm: client pid %d dialog %u -- cannot open its buffer\n", pid, id);
+        return 0;
+    }
+    win->client_buf = win->client_px[0];
+    win->client_last_mx = INT32_MIN;
+    win->client_last_my = INT32_MIN;
+    k_strlcpy(win->title, (title && title[0]) ? title : "Dialog", sizeof win->title);
+
+    // The owner is losing focus to it, and its title bar says so.
+    wm_client_send_focus(&windows[window_count - 1], 0);
+    wm_damage_rect(windows[window_count - 1].x, windows[window_count - 1].y,
+                   windows[window_count - 1].w, windows[window_count - 1].h);
+
+    window_count++;
+    redraw_pending = 1;
+    wm_logf("wm: client pid %d opened dialog %u (%dx%d) of %u\n", pid, id, w, h, owner_id);
+    return 1;
+}
+
+int wm_dialog_blocker(int idx) {
+    if (idx < 0 || idx >= window_count) return -1;
+    const struct window *o = &windows[idx];
+    if (o->dialog || o->popup || !o->client_pid) return -1;
+    for (int i = window_count - 1; i >= 0; i--)
+        if (windows[i].dialog && windows[i].modal &&
+            windows[i].client_pid == o->client_pid &&
+            windows[i].dialog_owner == o->client_win) return i;
+    return -1;
+}
+
+// Every dialog of this owner that is currently BELOW it, promoted in
+// turn. Each promotion renumbers windows[], so the scan restarts rather
+// than holding an index across one; a dialog already above its owner is
+// left alone, which is what ends the loop.
+void wm_dialogs_raise(int pid, uint32_t owner_win) {
+    if (!pid) return;
+    for (;;) {
+        int oi = find_client_window(pid, owner_win);
+        if (oi < 0) return;
+        int d = -1;
+        for (int i = 0; i < oi; i++)
+            if (windows[i].dialog && windows[i].client_pid == pid &&
+                windows[i].dialog_owner == owner_win) { d = i; break; }
+        if (d < 0) return;
+        bring_to_front(d);
+    }
+}
+
+int wm_dialog_of(int idx, int after) {
+    if (idx < 0 || idx >= window_count) return -1;
+    const struct window *o = &windows[idx];
+    if (o->dialog || !o->client_pid) return -1;
+    for (int i = after + 1; i < window_count; i++)
+        if (windows[i].dialog && windows[i].client_pid == o->client_pid &&
+            windows[i].dialog_owner == o->client_win) return i;
+    return -1;
+}
+
 int wm_client_popup_owner(void) {
     for (int i = window_count - 1; i >= 0; i--)
         if (windows[i].popup) return windows[i].client_pid;
@@ -421,6 +527,19 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
 static void on_window_destroyed(int pid, uint32_t id) {
     int idx = find_client_window(pid, id);
     if (idx < 0) return;
+
+    // AN OWNER TAKES ITS DIALOGS WITH IT. The owner is re-found each
+    // time round: close_window() renumbers windows[], so an index held
+    // across one names whatever slid into that slot.
+    for (;;) {
+        int d = wm_dialog_of(idx, -1);
+        if (d < 0) break;
+        unmap_client_window(&windows[d]);
+        windows[d].client_pid = 0;
+        close_window(d);
+        idx = find_client_window(pid, id);
+        if (idx < 0) return;
+    }
 
     // The pixels stay readable until this process lets go: the object
     // is the client's and this mapping holds it alive, whatever the
@@ -906,6 +1025,21 @@ void wm_client_chan_pump(void) {
                 r.b = px;
                 r.c = py;
             }
+            uchan_server_reply(&g_chan, from, &r, sizeof r);
+            break;
+        }
+        case WIN_REQ_DIALOG: {
+            // Answers, as CREATE and POPUP do: the client has already
+            // made this slot's buffers and needs to know whether to
+            // draw into them or release them again.
+            struct wmchan_msg r;
+            k_memset(&r, 0, sizeof r);
+            r.type = WIN_REQ_DIALOG;
+            r.a = -1;
+            if (find_client_window(from, m.window) < 0 &&
+                on_dialog_created(from, m.window, WIN_DIALOG_OWNER(m.c), m.a, m.b,
+                                  (int)WIN_DIALOG_FLAGS(m.c), m.text))
+                r.a = (int)m.window;
             uchan_server_reply(&g_chan, from, &r, sizeof r);
             break;
         }

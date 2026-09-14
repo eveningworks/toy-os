@@ -62,7 +62,9 @@ and under QEMU, and it does not stop at "hello world from the kernel":
   machine's own filesystem.
 - **A desktop, and it is not in the kernel** — the window manager is a
   ring-3 process and so is every app: a file manager, a terminal with tabs,
-  an image viewer, an audio player, Minesweeper and DOOM.
+  an image viewer, an audio player, Minesweeper and DOOM. They share one
+  toolkit, down to the file chooser, which opens as a modal window of its
+  own the way Windows' and KDE's do.
 - **Sound** — AC'97, Intel HD Audio and USB Audio behind one device class,
   mixed by a ring-3 daemon; WAV and an MP3 decoder written here rather than
   vendored.

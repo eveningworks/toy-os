@@ -65,7 +65,7 @@ Checked against the tree before this was written.
   `SYS_MKDIR`, `SYS_RENAME`, `SYS_UNLINK`, `SYS_CHDIR`, `SYS_LSEEK`.
   That roadmap line is stale and is corrected in the same change as this
   document.
-- **Three hand-rolled directory listings.** `userland/wm/file_picker.c`
+- **Three hand-rolled directory listings.** The WM's own file picker
   (a WM-level screen-absolute modal, 534 lines), `userland/gui/apps/notepad.c`'s
   in-app Open/Save dialog, and `userland/gui/apps/imgview.c`'s sidebar.
   All three do the same four things: `sys_listdir()`, `dirsort()`, a

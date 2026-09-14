@@ -16,7 +16,6 @@
 #include "start_menu.h"
 #include "context_menu.h"
 #include "confirm_dialog.h"
-#include "file_picker.h"
 #include "gui_apps.h"
 #include "kapi.h"
 #include "win_role.h"
@@ -291,6 +290,15 @@ static void cmd_windows(struct dbg_out *o, int json) {
             dbg_out_printf(o, "\"popup\":%s,\"parent\":%d,",
                          w->popup ? "true" : "false",
                          w->popup ? (int)w->popup_parent : -1);
+            // A DIALOG WINDOW and the slot it is owned by
+            // (WIN_REQ_DIALOG), -1 for an ordinary window; `modal` says
+            // whether that owner is taking input. A dialog is a toplevel
+            // with chrome, so `popup` above cannot tell a test one from
+            // an ordinary window.
+            dbg_out_printf(o, "\"dialog\":%s,\"owner\":%d,\"modal\":%s,",
+                         w->dialog ? "true" : "false",
+                         w->dialog ? (int)w->dialog_owner : -1,
+                         w->modal ? "true" : "false");
             // The TITLE-BAR ICON'S OWN RECT, not a formula a tool can
             // re-derive: which square is drawn AND which square is
             // clickable is one answer (title_icon(), see
@@ -352,6 +360,7 @@ static void cmd_windows(struct dbg_out *o, int json) {
         dbg_out_write(o, " ");
         dbg_out_write(o, w->fullscreen ? "fullscreen" : state_name(w->state));
         if (w->popup) dbg_out_write(o, " popup");
+        if (w->dialog) dbg_out_write(o, w->modal ? " dialog modal" : " dialog");
         dbg_out_write(o, (i == wm_focus_index()) ? " (focused)\r\n" : "\r\n");
     }
 }
@@ -390,7 +399,6 @@ static void cmd_probe(struct dbg_out *o, int px, int py, int json) {
     // what the window hit-test above says.
     const char *overlay = "none";
     if (confirm_dialog_open)   overlay = "confirm-dialog";
-    else if (file_picker_open) overlay = "file-picker";
     else if (context_menu_open) overlay = "context-menu";
     else if (start_menu_open)  overlay = "start-menu";
     else if (py >= screen_h - taskbar_h) overlay = "taskbar";
@@ -840,7 +848,6 @@ static const char *overlay_label(int i) {
     const char *nm = wm_overlay_name(i);
     if (k_strcmp(nm, "start") == 0) return "start_menu";
     if (k_strcmp(nm, "context") == 0) return "context_menu";
-    if (k_strcmp(nm, "picker") == 0) return "file_picker";
     if (k_strcmp(nm, "confirm") == 0) return "confirm_dialog";
     return nm;
 }

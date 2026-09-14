@@ -124,6 +124,7 @@ TOOLS = [
     ("pager", "pager_test.py", "the shared pager under /bin/less and /bin/doc"),
     ("menubar", "menubar_test.py", "menu bar, submenus and the status bar"),
     ("popup", "popup_test.py", "a menu leaves its window: popup surfaces"),
+    ("filedialog", "filedialog_test.py", "the shared file chooser, as an owned window"),
     ("forcequit", "forcequit_test.py", "not-responding detection and force quit"),
     ("dialog", "dialog_test.py", "the confirm dialog, by pixel value"),
     ("sched", "sched_gui_test.py", "the desktop stays live while a process runs"),

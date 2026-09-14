@@ -9,6 +9,7 @@
 // all written against `is_item()` for exactly that reason: one
 // predicate, so they cannot drift apart.
 #include "ui/uui_sidebar.h"
+#include "ui/uui_describe.h"
 #include "ui/uui_widget.h"
 #include "ui/uui_scrollbar.h"
 #include "lib/icon_cache.h" // icon_get() -- a heading may carry an icon
@@ -477,6 +478,18 @@ static void sb_ops_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
     *x = s->x; *y = s->y; *ow = s->w; *oh = s->h;
 }
 
+// THE ROW PITCH, THE COUNT AND THE SELECTION. A sidebar reports no
+// per-row rect -- its rows are a uniform grid, so the pitch plus the
+// strip's own bounds is the whole answer, and a test that had to guess
+// the pitch would be re-deriving a font-derived number.
+static void sb_describe(const void *w, const struct uui_describe *d) {
+    const struct uui_sidebar *s = (const struct uui_sidebar *)w;
+    uui_describe_int(d, "row_h", uui_sidebar_row_h(s));
+    uui_describe_int(d, "rows", s->count);
+    uui_describe_int(d, "top", s->top);
+    uui_describe_int(d, "selected", s->selected);
+}
+
 const struct uui_widget_ops uui_sidebar_ops = {
     .draw = draw_op,
     .accepts_focus = accepts_focus_op,
@@ -490,4 +503,5 @@ const struct uui_widget_ops uui_sidebar_ops = {
     .natural_size = natural_op,
     .set_geometry = set_geometry_op,
     .bounds = sb_ops_bounds,
+    .describe = sb_describe,
 };

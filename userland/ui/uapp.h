@@ -326,6 +326,85 @@ struct uapp_desc {
 // process exit status -- pass it straight back from main().
 int uapp_run(const struct uapp_desc *desc);
 
+// --- a DIALOG WINDOW: a second toplevel of this process ---------------
+//
+// A real window -- chrome, a title, a close button, dragged and stacked
+// like any other -- OWNED by this app's main window: centred on it,
+// always above it, and with no taskbar button of its own. Win32's owned
+// dialog, xdg_toplevel's set_parent, X11's WM_TRANSIENT_FOR. The
+// compositor's half is abi/win_proto.h's WIN_REQ_DIALOG;
+// docs/decisions.md ("A file chooser is a window of its own") has why
+// this exists beside ui/uui_dialog.h rather than instead of it.
+//
+// **IT IS NOT ui/uui_dialog.h.** That one is a modal drawn INSIDE the
+// app's own window, which is the right answer for a question that fits
+// there ("Save changes?"). This is for a dialog that wants more room
+// than its owner has.
+//
+// It has its own widget array, its own router and its own focus ring:
+// a second content area, not a second view of the first. Everything
+// else -- reaping, the ping, the font change, the clipboard -- is the
+// process's and is already running.
+//
+// ONE LEVEL: a dialog cannot open a dialog. The compositor refuses it,
+// because the owner chain is what modality is resolved against.
+struct uapp_window;
+
+// The owner takes no input while this is up; a press on it raises this
+// instead. Leave it off for a peer window -- a palette, a find bar.
+#define UAPP_WIN_MODAL 0x01
+
+struct uapp_window_desc {
+    const char *title;
+    int w, h;              // CONTENT size; derive it from the font
+    unsigned flags;        // UAPP_WIN_*
+
+    // The content. `widgets` is routed AND drawn, exactly as
+    // uapp_desc.widgets is; `layout` (optional) places them, run at the
+    // window's full content rect whenever the size is known.
+    struct uui_item *widgets;
+    int widget_count;
+    struct uui_layout *layout;
+    struct uui_focus *focus;
+
+    void *state;           // uapp_window_state()
+
+    void (*on_widget)(struct uapp_window *w, int id, int reason);
+    void (*on_key)(struct uapp_window *w, int key, unsigned mods);
+    // The user asked for it to go away (the X, Alt+F4, the window
+    // menu). NULL closes it; a handler that wants to refuse simply does
+    // not call uapp_window_close(), which is uapp_desc.on_close's rule.
+    void (*on_close)(struct uapp_window *w);
+
+    // What the layout log calls this window (ui/uui_describe.h's
+    // vocabulary). Set it and the toolkit emits the report itself each
+    // frame -- a dialog has no on_draw for an app to call
+    // uapp_log_layout() from, and a window a test cannot ask about is
+    // one a test has to guess pixels at. NULL logs nothing.
+    const char *log_prefix;
+
+    // Anything the widget walk cannot say, added to the same block --
+    // uapp_desc.on_draw's uapp_logf_layout() calls, for a window whose
+    // content has no on_draw of its own. Runs inside the gate, so it
+    // costs nothing when the log is off.
+    void (*on_log_layout)(struct uapp_window *w);
+};
+
+// Opens it. `desc` is COPIED, so it may be a compound literal; the
+// widget array and the layout are the caller's and must outlive the
+// window, the same ownership rule every widget here follows. Returns
+// NULL if the compositor refused or no slot is free.
+struct uapp_window *uapp_window_open(struct uapp *a, const struct uapp_window_desc *desc);
+void uapp_window_close(struct uapp_window *w);
+int  uapp_window_is_open(const struct uapp_window *w);
+void uapp_window_redraw(struct uapp_window *w);
+void *uapp_window_state(struct uapp_window *w);
+struct uapp *uapp_window_app(struct uapp_window *w);
+int uapp_window_width(const struct uapp_window *w);
+int uapp_window_height(const struct uapp_window *w);
+// Its title, re-sent to the compositor. The string is copied.
+void uapp_window_set_title(struct uapp_window *w, const char *title);
+
 // --- from inside a callback ------------------------------------------
 
 // Wake this program's own event loop, carrying two numbers.

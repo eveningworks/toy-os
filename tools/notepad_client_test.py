@@ -70,11 +70,15 @@ def type_text(dbg, text):
 
 
 def fileview_selected(dbg, default=-1):
-    """The Open dialog's selected row, as the app reports it. -1 when
-    the app has not drawn a fileview since the log was last read."""
-    for l in reversed(dbg.logs("notepad: layout flist.selected", clear=False)):
+    """The Open chooser's selected row, as it reports it.
+
+    Under `filedialog:`, not `notepad:` -- the chooser is its own WINDOW
+    now (ui/uui_filedialog.h) and reports under one prefix whichever app
+    opened it, so a helper written here reads the Image Viewer's too.
+    -1 when nothing has drawn it since the log was last read."""
+    for l in reversed(dbg.logs("filedialog: layout view.selected", clear=False)):
         try:
-            return int(l.split("flist.selected")[1].split()[0])
+            return int(l.split("view.selected")[1].split()[0])
         except (IndexError, ValueError):
             continue
     return default

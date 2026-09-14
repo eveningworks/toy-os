@@ -752,6 +752,8 @@ whenever a headline here tells you something you did not already know.
 - **A MENU BAR IN AN APP WITH ROUTED WIDGETS MUST BE `uui_menubar_ops`, NOT HAND-ROUTED**
 - **ONE MENU WIDGET SERVES A BAR AND A CONTEXT MENU: `uui_menubar_open_at()`, opened on the secondary RELEASE**
 - **A POPUP IS A SURFACE OF ITS CLIENT, PLACED BY THE COMPOSITOR, AND A PRESS OUTSIDE THE CLIENT'S SURFACES DISMISSES IT** -- `WIN_REQ_POPUP`/`WIN_EV_POPUP_DONE`, `ui/uui_popup.h`; coordinates stay the parent's and only the drawing moves, a leave carries no position
+- **A DIALOG IS A SECOND TOPLEVEL OF ITS CLIENT, OWNED BY ONE OF ITS WINDOWS, AND `uapp_window_open()` IS HOW AN APP GETS ONE** -- `WIN_REQ_DIALOG`, chrome and all, centred on its owner and above it, no taskbar button; `WIN_DIALOG_MODAL` blocks THREE doors on the owner (primary click, secondary click, motion), and `bring_to_front()` still leaves the PROMOTED window last (`raise_with_dialogs()` is the other one)
+- **THE FILE CHOOSER IS ONE WIDGET IN ONE WINDOW: `ui/uui_filedialog.h`, AND THREE APPS OPEN IT** -- Open/Save/Choose-a-folder over `uui_fileview`, with Places, a Details/Icons toggle and a "Files of type" combo; a DIRECTORY always passes the filter (every app's says no to one), a form label needs `UUI_FILL_H` to sit centred, and a nested layout wanting no padding must write `margin = 1` (0 means the font-derived default)
 - **A TAB IS A SESSION, AND `uui_tabs` IS THE STRIP**
 - **A TITLE COMES FROM THE SHELL, AS AN OSC**
 - **TERMINAL IS A TERMINAL EMULATOR, NOT A SHELL WITH A WINDOW**
@@ -1476,6 +1478,7 @@ cost".
   `clipboard_test.py`,
   `compositor_test.py`, `compositor_death_test.py`, `crashtest_test.py`,
   `cursor_theme_test.py`, `desktop_entries_test.py`, `dialog_test.py`,
+  `filedialog_test.py`,
   `filemanager_test.py`, `font_test.py`, `forcequit_test.py`,
   `gfxdemo_test.py`, `hover_test.py`, `icons_test.py`,
   `idle_desktop_test.py`,
