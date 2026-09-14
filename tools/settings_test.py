@@ -383,7 +383,7 @@ def main():
     # registry is meant to grow.
     check("it listed the registered settings", (n or 0) >= 9, f"{n} settings")
 
-    # --- the sidebar is a tree, built from the kernel's grouping ------
+    # --- the sidebar is a FLAT list of pages, from the registry -------
     rows = []
     for line in _log:
         m = re.search(r"settings: row (\d+) id (\d+) y (-?\d+) depth (\d+) (.+)", line)
@@ -391,12 +391,18 @@ def main():
             rows.append({"row": int(m.group(1)), "id": int(m.group(2)),
                           "y": int(m.group(3)), "depth": int(m.group(4)),
                           "label": m.group(5).strip()})
-    check("the sidebar is a TREE, not a flat list",
-          any(r["depth"] == 0 for r in rows) and any(r["depth"] == 1 for r in rows),
+    # **FLAT: ONE DEPTH, AND EVERY ROW A DESTINATION.** This asserted
+    # the opposite until 2026-09-14 -- that the sidebar had two depths --
+    # which was right while categories were captions over their pages.
+    # Half those captions then collapsed into clickable rows and half
+    # did not, and the two rendered identically, so the sidebar was
+    # flattened: there are no captions to mistake for buttons now.
+    check("the sidebar is a FLAT list, one depth",
+          rows and {r["depth"] for r in rows} == {0},
           f"{len(rows)} rows, depths={sorted({r['depth'] for r in rows})}")
-    check("its headings come from the registry's categories",
-          len([r for r in rows if r["depth"] == 0]) >= 3,
-          f"{len([r for r in rows if r['depth'] == 0])} headings")
+    pages = [r for r in rows if r["label"] != "-"]
+    check("its pages come from the registry's groups",
+          len(pages) >= 10, f"{len(pages)} pages")
 
     # --- THE SIDEBAR'S WIDTH IS DRAGGABLE ----------------------------
     #
@@ -469,11 +475,13 @@ def main():
         return tx + tw // 2, row_y(rows, r["row"], top)
 
     def item_point(sb):
-        """A visible ITEM row, never a heading -- so anything restoring
-        the scroll position does not depend on the heading case that the
-        checks below are testing."""
+        """A visible SELECTABLE row, never a separator -- so anything
+        restoring the scroll position does not depend on the inert-row
+        case the checks below are testing. Keyed on the label rather
+        than on depth: the sidebar is flat, so every row reports depth
+        0 and a depth test selects nothing at all."""
         for r in rows:
-            if r["depth"] == 1 and sb["top"] <= r["row"] < sb["top"] + sb["visible"]:
+            if r["label"] != "-" and sb["top"] <= r["row"] < sb["top"] + sb["visible"]:
                 return row_point(r, sb["top"])
         return tx + tw // 2, ty + th // 2
 
@@ -560,53 +568,49 @@ def main():
     # "Kernel" deliberately, separate from Appearance and Input: these
     # are machine knobs, and a heap-debug toggle sitting beside the
     # wallpaper would be a worse app.
-    kernel_head = None
-    for r in rows:
-        if r["depth"] == 0 and r["label"].strip().lower() == "kernel":
-            kernel_head = r
-            break
-    check("the sidebar has a Kernel heading for the tunables",
-          kernel_head is not None,
-          f"headings={[r['label'] for r in rows if r['depth'] == 0]}")
-    # **NO TOP-LEVEL ROW IS A DEAD END.** Every depth-0 row is either a
-    # CAPTION (a category id, 1000..1999) with at least one page under
-    # it, or a DESTINATION (a group id, >= 2000) that collapsed because
-    # its category held exactly one page. A caption with NO children is
-    # neither: it cannot be clicked and there is nothing behind it, and
-    # that is precisely what a page-table overflow produces -- the pages
-    # are dropped and their heading is left stranded. Storage and Kernel
-    # both shipped that way when MAX_GROUPS was a hand-picked 24 and 24
-    # pages existed.
+    # **EVERY ROW IS A PAGE, OR IT IS A RULE.** The sidebar is flat: no
+    # captions at all, so there is no such thing as a row that looks
+    # clickable and is not. That was the defect this replaced -- half
+    # the top-level rows opened a page and half were inert captions,
+    # rendered identically.
     #
-    # Asserted over EVERY row rather than over one named category: the
-    # overflow always cuts whatever is LAST, so a check naming a
-    # category is a check that stops working the moment one is added.
-    # (The previous version asserted Kernel had no "Memory" page, which
-    # was true both when Kernel had collapsed correctly AND when its
-    # pages had been dropped -- it could not tell those apart.)
-    dead = []
-    for i, r in enumerate(rows):
-        if r["depth"] != 0:
-            continue
-        # A CAPTION IS THE CATEGORY ID RANGE, not "below the group base":
-        # System Information is a top-level DESTINATION with id 1
-        # (NODE_SYSINFO), so a `>= 2000` test called it a caption and
-        # reported it as a dead end on a perfectly good build.
-        if not (1000 <= r["id"] < 2000):
-            continue                     # a selectable top-level page
-        kids = 0
-        for nxt in rows[i + 1:]:
-            if nxt["depth"] == 0:
-                break
-            kids += 1
-        if kids == 0:
-            dead.append(r["label"])
-    check("no top-level row is a caption with nothing under it",
-          not dead,
-          f"captions with no pages: {dead}")
-    # Two pages that did NOT collapse, so the walk is exercised on a
-    # category with children as well as on one without.
-    for group in ("Shell", "Diagnostics"):
+    # The invariant is asserted over EVERY row rather than over a named
+    # category, because the failure it guards against (a page-table
+    # overflow) always cuts whatever is LAST, and a check naming a
+    # category stops working the moment one is added. Storage and Kernel
+    # both shipped stranded when MAX_GROUPS was a hand-picked 24 and 24
+    # pages existed; with the caps derived from MAX_SETTINGS a dropped
+    # page now shows up here as a missing row.
+    captions = [r["label"] for r in rows if 1000 <= r["id"] < 2000]
+    check("the sidebar is flat -- no row is an inert caption",
+          not captions, f"captions still present: {captions}")
+
+    # The kernel tunables are registered with no /etc file at all, so
+    # this asserts that "no file" did not quietly mean "no row". Their
+    # pages are the ones whose names collide with a top-level page and
+    # are qualified by their category.
+    labels = [r["label"] for r in rows]
+    check("the kernel tunables have pages of their own",
+          "Memory" in labels and "Kernel: Diagnostics" in labels,
+          f"labels={labels}")
+
+    # **A COLLIDING NAME IS QUALIFIED, AND A UNIQUE ONE IS NOT.** Both
+    # halves matter: qualifying only one of a colliding pair leaves the
+    # other ambiguous (which an earlier version did, by rewriting the
+    # array it was still comparing against), and qualifying a lone page
+    # spells its category twice ("Sound: Sound").
+    dupes = [l for l in labels if l != "-" and labels.count(l) > 1]
+    check("no two pages share a name",
+          not dupes, f"duplicated labels: {sorted(set(dupes))}")
+    check("a lone page is named by its category, unqualified",
+          "Sound" in labels and "Storage" in labels and "Network" in labels,
+          f"labels={labels}")
+
+    # Pages from three different categories, so the walk is exercised
+    # across the list rather than at one end of it. "Diagnostics" is
+    # qualified because Kernel has one too -- which is the collision
+    # rule being asserted from the other side.
+    for group in ("Shell", "System: Diagnostics", "Wallpaper"):
         check(f"the sidebar offers a {group} page",
               row_named(group) is not None,
               f"labels={[r['label'] for r in rows]}")
@@ -1228,11 +1232,14 @@ def main():
             check(name, got is not None,
                   f"top {sidebar_state(dbg) and sidebar_state(dbg)['top']}, wanted {want}")
 
-        # Over a HEADING: not a row the sidebar can select, and it was
-        # therefore not a row it would scroll under either.
-        head = next((r for r in rows[:sb["visible"]] if r["depth"] == 0), None)
+        # Over an INERT row -- a separator. Not a row the sidebar can
+        # select, and therefore not one it would scroll under either.
+        # (This used to look for a depth-0 heading; the flat sidebar has
+        # no headings, and every row reports depth 0, so that found a
+        # perfectly selectable page and tested nothing.)
+        head = next((r for r in rows[:sb["visible"]] if r["label"] == "-"), None)
         if head:
-            wheels_from("a heading row", *row_point(head, 0))
+            wheels_from("a separator row", *row_point(head, 0))
         # Over the SCROLLBAR strip itself, where every desktop scrolls.
         wheels_from("the scrollbar", tx + tw - 2, ty + th // 2)
 

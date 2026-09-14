@@ -153,6 +153,17 @@ static int  g_cat_count;
 static char g_group_cat[MAX_GROUPS][SETTING_ABI_CATEGORY_MAX];
 static char g_group_key[MAX_GROUPS][SETTING_ABI_CATEGORY_MAX];
 static char g_group_label[MAX_GROUPS][SETTING_ABI_LABEL_MAX];
+// **THE SIDEBAR LABEL, WHICH IS THE PAGE'S OWN UNLESS IT COLLIDES.**
+// A flat list has no category captions to disambiguate by position, and
+// several names genuinely repeat: the Kernel category's pages are
+// Display, Memory, Sound, Diagnostics and Storage, four of which are
+// also the name of a top-level page. A colliding label is qualified
+// with its category ("Kernel: Display"); a unique one is left alone, so
+// the common row stays short. DERIVED per rebuild rather than a list
+// somebody maintains -- a hardcoded "prefix the Kernel ones" is wrong
+// the day two other categories collide.
+#define GROUP_DISPLAY_MAX (SETTING_ABI_CATEGORY_MAX + SETTING_ABI_LABEL_MAX + 3)
+static char g_group_display[MAX_GROUPS][GROUP_DISPLAY_MAX];
 static int  g_group_count;
 
 static struct uui_sidebar_row g_nodes[MAX_CATEGORIES + MAX_GROUPS + 1];
@@ -370,59 +381,87 @@ static void rebuild_sidebar(void) {
         }
     }
 
-    for (int c = 0; c < g_cat_count; c++) {
-        if (g_node_count >= (int)(sizeof g_nodes / sizeof g_nodes[0])) break;
+    // The display labels, once the whole group table is known -- two
+    // passes, because a name is only a collision relative to the others.
+    //
+    // **A CATEGORY'S ONLY PAGE IS NAMED BY THE CATEGORY.** Its group key
+    // is an internal word chosen to group settings, not to title a row:
+    // Sound's lone page is "Output", Storage's is "Filesystem" and
+    // Network's is named after its one setting, "Connection log". None
+    // of those is what the row should say at the top level, and the
+    // category already has the better word.
+    unsigned char lone[MAX_GROUPS], dup[MAX_GROUPS];
+    for (int g = 0; g < g_group_count; g++) {
+        int siblings = 0;
+        for (int j = 0; j < g_group_count; j++)
+            if (strcmp(g_group_cat[j], g_group_cat[g]) == 0) siblings++;
+        lone[g] = siblings == 1;
+        strlcpy(g_group_display[g],
+                 lone[g] ? g_group_cat[g] : g_group_label[g],
+                 sizeof g_group_display[g]);
+    }
+    // **DECIDED BEFORE ANYTHING IS REWRITTEN.** Qualifying in the same
+    // pass that compares comes out asymmetric: the first of a colliding
+    // pair is rewritten, the second then matches nothing and stays bare,
+    // so exactly one of the two is left ambiguous.
+    for (int g = 0; g < g_group_count; g++) {
+        dup[g] = 0;
+        for (int j = 0; j < g_group_count && !dup[g]; j++)
+            if (j != g && strcmp(g_group_display[j], g_group_display[g]) == 0)
+                dup[g] = 1;
+    }
+    for (int g = 0; g < g_group_count; g++) {
+        // A LONE PAGE IS ALREADY ITS CATEGORY, so qualifying it spells
+        // the word twice ("Sound: Sound"). The other side of the
+        // collision carries the qualifier instead, which is the half
+        // that needed it.
+        if (!dup[g] || lone[g]) continue;
+        char base[GROUP_DISPLAY_MAX];
+        strlcpy(base, g_group_display[g], sizeof base);
+        snprintf(g_group_display[g], sizeof g_group_display[g], "%s: %s",
+                  g_group_cat[g], base);
+    }
 
-        // **A CATEGORY WITH ONE PAGE IS ONE ROW, NOT TWO.** "System"
-        // over a lone "Shell" is a heading whose only child repeats it,
-        // and half the sidebar read that way. GNOME and Windows both
-        // collapse it: the category becomes the destination and the
-        // page's own name disappears, because the category name is
-        // already the better of the two.
-        //
-        // It has to become a selectable ITEM to do that -- a HEADING
-        // cannot be chosen and the page would be unreachable, which is
-        // the same trap the "System Information" note below records.
-        int only = -1, ngroups = 0;
-        for (int g = 0; g < g_group_count; g++)
-            if (strcmp(g_group_cat[g], g_cat[c]) == 0) { only = g; ngroups++; }
-        if (ngroups == 1) {
-            g_nodes[g_node_count++] = (struct uui_sidebar_row){
-                .label = g_cat[c], .kind = UUI_SIDEBAR_TOP,
-                .id = NODE_GROUP_BASE + only,
-                .icon = category_icon(g_cat[c])
-            };
-            continue;
-        }
-        // A HEADING, not a row: a category is a caption over the pages
-        // beneath it and is not itself a destination, so it cannot be
-        // selected and the arrow keys step over it. That is the whole
-        // reason this is a uui_sidebar and not a uui_tree -- see that
-        // header. It keeps its id anyway, purely so the debug dump
-        // below can name it.
-        g_nodes[g_node_count++] = (struct uui_sidebar_row){
-            .label = g_cat[c], .kind = UUI_SIDEBAR_HEADING,
-            .id = NODE_CATEGORY_BASE + c,
-            .icon = category_icon(g_cat[c])
-        };
+    // **A FLAT LIST: EVERY ROW IS A PAGE.** There are no captions at
+    // all, which is the shape GNOME's Settings and macOS's have. The
+    // sidebar used to mix two kinds of top-level row -- an inert
+    // caption over its pages, and a category that had collapsed to a
+    // single clickable page -- and they rendered identically, so
+    // "Display" did nothing while "Sound" beside it opened a page and
+    // nothing on screen said why.
+    //
+    // Categories survive as ORDER and as the icon each page carries, so
+    // related pages stay adjacent and look related; a SEP rule marks
+    // where one category's run ends.
+    for (int c = 0; c < g_cat_count; c++) {
+        int first = 1;
         for (int g = 0; g < g_group_count; g++) {
             if (strcmp(g_group_cat[g], g_cat[c]) != 0) continue;
             if (g_node_count >= (int)(sizeof g_nodes / sizeof g_nodes[0])) break;
+            // The rule goes BEFORE each run but the first, so the list
+            // never opens or closes on one.
+            if (first && g_node_count > 0)
+                g_nodes[g_node_count++] = (struct uui_sidebar_row){
+                    .kind = UUI_SIDEBAR_SEP
+                };
+            first = 0;
+            if (g_node_count >= (int)(sizeof g_nodes / sizeof g_nodes[0])) break;
             g_nodes[g_node_count++] = (struct uui_sidebar_row){
-                .label = g_group_label[g], .kind = UUI_SIDEBAR_ITEM,
-                .id = NODE_GROUP_BASE + g
+                .label = g_group_display[g], .kind = UUI_SIDEBAR_TOP,
+                .id = NODE_GROUP_BASE + g,
+                .icon = category_icon(g_cat[c])
             };
         }
     }
-    // A PAGE WITH NO CATEGORY OVER IT, so it is a TOP row: unindented
-    // like a heading and selectable like an item. As an ITEM it was
-    // indented under whichever category happened to be last and read as
-    // one of that category's pages.
-    if (g_node_count < (int)(sizeof g_nodes / sizeof g_nodes[0]))
+    // A page with no category over it, and the same kind as every other
+    // row now.
+    if (g_node_count + 1 < (int)(sizeof g_nodes / sizeof g_nodes[0])) {
+        g_nodes[g_node_count++] = (struct uui_sidebar_row){ .kind = UUI_SIDEBAR_SEP };
         g_nodes[g_node_count++] = (struct uui_sidebar_row){
             .label = "System Information", .kind = UUI_SIDEBAR_TOP,
             .id = NODE_SYSINFO
         };
+    }
 
     uui_sidebar_set_rows(&g_tree, g_nodes, g_node_count);
 }
@@ -1755,7 +1794,8 @@ static void on_open(struct uapp *a) {
               // test it is a page of whatever came before it, which is
               // exactly what it is not.
               g_nodes[r].kind == UUI_SIDEBAR_ITEM ? 1 : 0,
-              g_nodes[r].label);
+              g_nodes[r].kind == UUI_SIDEBAR_SEP ? "-" :
+              g_nodes[r].label ? g_nodes[r].label : "-");
     }
     // NO per-slot dump here: on_open runs ONCE, so it would describe the
     // first page forever and a tool reading it while looking at another

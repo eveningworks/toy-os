@@ -59,6 +59,16 @@ enum uui_sidebar_kind {
     // reads as a page of the wrong category. GNOME's sidebar is a flat
     // list of exactly these.
     UUI_SIDEBAR_TOP     = 2,
+    // **A RULE BETWEEN GROUPS, NOT A ROW.** Drawn as a hairline and
+    // nothing else: no label, no icon, never hovered, never selected,
+    // stepped over by the arrows. A flat sidebar has no captions to
+    // show where one group of pages ends, so this carries the grouping
+    // instead -- the separators macOS's System Settings uses and GNOME
+    // puts between its panel runs. It still occupies ONE ROW of the
+    // uniform grid: the row pitch is what every hit test, the scroll
+    // offset and the app's own `y` report are derived from, and a
+    // short row would have to be special-cased in all four.
+    UUI_SIDEBAR_SEP     = 3,
 };
 
 struct uui_sidebar_row {

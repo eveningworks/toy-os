@@ -557,13 +557,26 @@ def find_test_button(dbg):
         g = [int(v) for v in btn.groups()]
         if g[4] and g[2] > 0:
             return (g[0], g[1], g[2], g[3])
-    row_y = None
+    # **THE ROW INDEX, NOT ITS y.** The report's y is UNSCROLLED
+    # (g_tree.y + r * rh + rh/2), so for a row below the fold it names a
+    # point outside the sidebar. Screensaver is row 24 of 37 in a pane
+    # that shows 15, so it is always below it.
+    idx = rh = None
+    ys = {}
     for line in _applog:
-        m = re.search(r"settings: row \d+ id \d+ y (-?\d+) depth \d+ (.+)", line)
-        if m and m.group(2).strip() == "Screensaver":
-            row_y = int(m.group(1))
+        m = re.search(r"settings: row (\d+) id \d+ y (-?\d+) depth \d+ (.*)$", line)
+        if m:
+            ys[int(m.group(1))] = int(m.group(2))
+            if m.group(3).strip() == "Screensaver":
+                idx = int(m.group(1))
+    # The row pitch, from two rows the app reported rather than from a
+    # constant here: it is font-derived and moves with the interface face.
+    if len(ys) >= 2:
+        a, b = sorted(ys)[0], sorted(ys)[-1]
+        if b > a:
+            rh = (ys[b] - ys[a]) // (b - a)
     tree = _last(r"settings: layout tree (-?\d+) (-?\d+) (-?\d+) (-?\d+)")
-    if row_y is None or not tree:
+    if idx is None or not rh or not tree:
         return None
     win = None
     for w in dbg.json("gui windows --json")["windows"]:
@@ -572,36 +585,46 @@ def find_test_button(dbg):
     if not win:
         return None
     tx, ty, tw, _th = (int(v) for v in tree.groups())
-    # **ARROWED TO, NOT TYPED AND NOT CLICKED.** The row report gives an
-    # UNSCROLLED y, so clicking a row below the fold lands on whatever is
-    # at that point -- and Screensaver moved from the eighth row to the
-    # twenty-eighth. And `uui_sidebar` has no type-ahead (arrows only),
-    # so spelling the name at it does nothing. The click that starts the
-    # walk must land on a SELECTABLE row: row 0 is a heading.
-    first_item_y = None
-    for line in _applog:
-        m2 = re.search(r"settings: row \d+ id \d+ y (-?\d+) depth (\d+) ", line)
-        if m2 and m2.group(2) == "1" and first_item_y is None:
-            first_item_y = int(m2.group(1))
-    dbg.warp_cursor(_QMP[0], win["content"]["x"] + tx + tw // 2,
-                    win["content"]["y"] + (first_item_y if first_item_y
-                                            is not None else ty + 8))
+
+    # **WHEELED INTO VIEW, THEN CLICKED -- NOT ARROWED TO.** The sidebar
+    # is NOT in this app's focus ring (settings.c builds it from the
+    # PAGE's controls only), so no arrow key ever reaches it and a
+    # key-driven walk cannot move the selection at all. Wheeling is what
+    # settings_test.py drives the same widget with.
+    def state():
+        st = _last(r"settings: sidebar top (\d+) visible (\d+) rows (\d+)")
+        return tuple(int(v) for v in st.groups()) if st else None
+
+    cx = win["content"]["x"] + tx + tw // 2
+    for _ in range(40):
+        _drain(dbg)
+        st = state()
+        if st is None:
+            return None
+        top, visible, _total = st
+        if top <= idx < top + visible:
+            break
+        dbg.warp_cursor(_QMP[0], cx, win["content"]["y"] + ty + 4)
+        dbg.wheel(-1 if idx >= top + visible else 1)
+        time.sleep(0.25)
+    else:
+        return None
+
+    _drain(dbg)
+    st = state()
+    if st is None:
+        return None
+    top = st[0]
+    dbg.warp_cursor(_QMP[0], cx,
+                     win["content"]["y"] + ty + (idx - top) * rh + rh // 2)
     _QMP[0].click()
     dbg.settle()
-    # Stops on the BUTTON, never on a count -- a fixed number of Downs
-    # goes stale the next time a setting lands above it. One key per
-    # look, too: batching five presses between checks overshoots the
-    # wanted row, and `settle()` after each costs a round trip that took
-    # the tool past its 600s budget.
-    for _ in range(40):
-        dbg.send("gui key 0x92")          # KEY_ARROW_DOWN
-        time.sleep(0.18)
-        _drain(dbg)
-        btn = _last(r"settings: test_button (-?\d+) (-?\d+) (-?\d+) (-?\d+) shown (\d+)")
-        if btn:
-            g = [int(v) for v in btn.groups()]
-            if g[4] and g[2] > 0:
-                return (g[0], g[1], g[2], g[3])
+    _drain(dbg)
+    btn = _last(r"settings: test_button (-?\d+) (-?\d+) (-?\d+) (-?\d+) shown (\d+)")
+    if btn:
+        g = [int(v) for v in btn.groups()]
+        if g[4] and g[2] > 0:
+            return (g[0], g[1], g[2], g[3])
     return None
 
 

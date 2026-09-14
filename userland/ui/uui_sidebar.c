@@ -19,7 +19,8 @@
 
 static int is_item(const struct uui_sidebar *s, int row) {
     return row >= 0 && row < s->count &&
-           s->rows[row].kind != UUI_SIDEBAR_HEADING;
+           s->rows[row].kind != UUI_SIDEBAR_HEADING &&
+           s->rows[row].kind != UUI_SIDEBAR_SEP;
 }
 
 // The first selectable row, or -1 when the sidebar is all headings --
@@ -175,7 +176,8 @@ static int icon_px(void) { return ugfx_char_h(); }
 // every system that has icons does it this way for exactly that reason.
 static int icon_gutter(const struct uui_sidebar *s) {
     for (int i = 0; i < s->count; i++)
-        if (s->rows[i].kind != UUI_SIDEBAR_ITEM && s->rows[i].icon)
+        if (s->rows[i].kind != UUI_SIDEBAR_ITEM &&
+            s->rows[i].kind != UUI_SIDEBAR_SEP && s->rows[i].icon)
             return icon_px() + UUI_SIDEBAR_PAD_X;
     return 0;
 }
@@ -198,6 +200,7 @@ static int text_x(const struct uui_sidebar *s, int row) {
 void uui_sidebar_natural_size(const struct uui_sidebar *s, int *out_w, int *out_h) {
     int widest = 0;
     for (int i = 0; i < s->count; i++) {
+        if (s->rows[i].kind == UUI_SIDEBAR_SEP) continue;
         int heading = s->rows[i].kind != UUI_SIDEBAR_ITEM;
         const struct ugfx_font *was =
             ugfx_set_font(heading ? ugfx_font_session(UGFX_FONT_BOLD) : 0);
@@ -240,6 +243,14 @@ void uui_sidebar_draw(struct ugfx_surface *surf, const struct uui_sidebar *s) {
         // while `inert` is about whether it can be chosen. Conflating
         // them is why a selected TOP row painted no highlight the first
         // time this was written.
+        // A RULE AND NOTHING ELSE -- before the weight/indent questions
+        // below, none of which a separator has an answer to.
+        if (s->rows[row].kind == UUI_SIDEBAR_SEP) {
+            int inset = UUI_SIDEBAR_PAD_X * 2;
+            ugfx_fill_rect(surf, s->x + inset, ry + rh / 2,
+                            s->w - bar - inset * 2, 1, s->heading_fg);
+            continue;
+        }
         int heading = s->rows[row].kind != UUI_SIDEBAR_ITEM;
         int inert = s->rows[row].kind == UUI_SIDEBAR_HEADING;
         int selected = (row == s->selected) && !inert;
