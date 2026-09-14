@@ -1015,6 +1015,7 @@ whenever a headline here tells you something you did not already know.
 
 `docs/conventions/build.md`
 
+- **A `.d` FILE MUST NEVER BE REMAKEABLE, OR make BUILDS THE WRONG FILE AND STILL EXITS 0** -- `%.d: ;` is what stops it; without it an included `.d` reaches make's built-in `%: %.o` rule, compiles `builtins.d.c`, fails, and leaves a stale kernel behind a green build
 - **mtools DOES NOT READ stdin -- IT OPENS `/dev/tty`, so a CAPTURED PROMPT HANGS FOREVER**
 - **THE C LIBRARY IS CALLED `tolibc`, and its bar for adding a function is the OPPOSITE of everything else here -- it aims to be COMPLETE.**
 - **REGEX IS `<regex.h>` IN tolibc, AND IT IS AN NFA**

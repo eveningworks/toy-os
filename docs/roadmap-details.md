@@ -4809,14 +4809,37 @@ first three trace points MISSING from the window, which is only possible
 if the function was re-entered in the middle. Both are kept: they are
 cheap, and this is the second bug of this class.
 
-**WHAT IS LEFT AT 0xEF: ONE TEST, 1 RUN IN 3.** `sched_test.c:156`, "a
-scheduled process survives a legacy process running alongside", fails
-`exited` -- measured 1 of 3 at 0xEF against 3 of 3 PASSING at 0xEE on
-the same tree, so it is the gate rather than a flake. The mechanism to
-check first is the rotation's own first early return: it refuses to
-rotate at all while `process_context_is_armed()`, and a trap gate makes
-the legacy process's syscalls preemptible, so the scheduled process
-beside it can be starved for longer. The win_input pair passes 3 of 3.
+**THE KERNEL SUITE IS CLEAN AT 0xEF: 15 RUNS IN 15**, 760/0/31 every
+time (5 by hand, then `flake_hunt.py ktest -n 10`). That includes the
+`win_input` pair and `sched_test.c:156` -- the legacy-process test that
+failed 1 run in 3 was measured before the thread-exit guard landed and
+has not reproduced since.
+
+**WHAT HOLDS THE FLIP NOW IS `usertest_run.py`, AND AS FAR AS MEASURED
+IT IS THE HARNESS RATHER THAN THE KERNEL.** At 0xEF about half the runs
+report one or two of the spawned tests as failed, victims varying
+(argv, applog, env, errno, focusring, shm). **Three of them have been
+shown to PASS by reading their own verdict file by hand afterwards** --
+`focusring_test`, `applog_test` and `argv_test` each end with `all
+checks passed` while the harness reported them truncated. The harness
+reads those files through the debug console, where the reply
+interleaves with the console's own output, and a trap gate widens every
+window it depends on.
+
+One real harness fault was found and fixed on the way: a spawned test
+was given a FIXED 3-SECOND SLEEP before its verdict was collected, which
+is the thing CLAUDE.md forbids. It polls the verdict now -- an artifact
+that must come to exist, since every utest program ends with one of two
+lines. That alone took `focusring_test` from failing 5 runs in 5 at
+0xEF to passing, and at 0xEE the pair that `docs/bugs.md` records as
+failing 2 boots in 3 now passes 3 runs in 4. **The obvious shortcut in
+that poll is wrong and was measured wrong**: returning early when the
+reply says "not found" matches unrelated console text and makes the
+poll return on its first read.
+
+So the gate stays 0xEE, and what is owed is a verdict channel that does
+not share a wire with the console -- or a harness that reads the file
+with a delimiter it can trust.
 
 **AND THE (resume slot, depth) PAIR WAS SAVED WRONG, FOUND ON THE WAY.**
 A context is resumed with `mov rsp, <trapframe>; iretq`, which runs no

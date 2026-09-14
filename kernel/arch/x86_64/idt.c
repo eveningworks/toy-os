@@ -156,6 +156,10 @@ static void mouse_irq_handler(uint64_t *regs) {
     i8042_poll();
 }
 
+// 0xEE is an interrupt gate (IF clear for the whole syscall), 0xEF a
+// trap gate. See the comment at the call site.
+#define SYSCALL_GATE 0xEE
+
 void idt_init(void) {
     for (int i = 0; i < 72; i++) {
         idt_set_gate(i, isr_table[i], 0, 0x8E); // present, ring0, 64-bit interrupt gate
@@ -203,7 +207,13 @@ void idt_init(void) {
     // running alongside", against 3 in 3 passing at 0xEE on the same
     // tree. docs/roadmap-details.md has the evidence and the
     // instruments.
-    idt_set_gate(128, isr128, 0, 0xEE);
+    // LOGGED, because which gate a boot is running decides whether a
+    // syscall can be preempted -- and a build that did not pick up a
+    // change to it looks exactly like the change not working.
+    idt_set_gate(128, isr128, 0, SYSCALL_GATE);
+    klog_printf("idt: syscall gate 0x%x (%s)\n", SYSCALL_GATE,
+                SYSCALL_GATE == 0xEF ? "trap -- syscalls are preemptible"
+                                     : "interrupt -- IF clear for the whole call");
 
     idtp.limit = sizeof(idt) - 1;
     idtp.base = (uint64_t)&idt;

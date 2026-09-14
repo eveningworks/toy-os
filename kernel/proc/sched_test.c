@@ -23,6 +23,8 @@
 #include "elf_run.h" // elf_run_from_fs() -- the legacy blocking path
 #include "fs.h"
 #include "paging.h"  // paging_kernel_leaf() -- the guard-page checks below
+#include "kfmt.h"    // klog_printf -- the timeout report below
+#include "process.h" // process_context_is_armed()
 
 // The silent long-running spinner this test drives -- see
 // userland/spin_test.c for why it has to be silent (this test's own
@@ -152,6 +154,25 @@ KTEST("sched", "a scheduled process survives a legacy process running alongside"
     start = pit_ticks();
     while (pit_ticks() - start < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
+    }
+    if (!exited) {
+        // Same reasoning as win_input_test.c's report_stuck(): "it did
+        // not exit" names nothing, and this one only fails under a trap
+        // gate, where the difference between starved, parked and left
+        // unschedulable is the whole question.
+        struct proc_info pi;
+        for (int i = 0; i < SCHED_MAX_PROCS; i++) {
+            if (scheduler_proc_info(i, &pi) == 1 && pi.pid == pid) {
+                klog_printf("sched_test: pid %d stuck -- state=%u wait=%u "
+                            "cpu_ns=%llu cur=%d preempt=%d armed=%d\n",
+                            pid, pi.state, pi.wait_reason,
+                            (unsigned long long)pi.cpu_ns,
+                            scheduler_current_pid(), scheduler_preempt_depth(),
+                            process_context_is_armed());
+                break;
+            }
+        }
+        scheduler_trace_dump();
     }
     KTEST_ASSERT(exited);
     KTEST_ASSERT_EQ(code, 0);

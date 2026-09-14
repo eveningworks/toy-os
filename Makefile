@@ -1351,6 +1351,20 @@ $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) $(KRELOCS_O) $(KRELOCS_C) $(KSYMS_O) $(KS
 # paragraph above), silently reintroduced by a directory move. A
 # `find` can't drift that way. tools/check_deps.py is the guard that
 # proves it, and runs in preflight.sh and CI.
+# **AND A .d IS NEVER REMADE.** make tries to rebuild every file it
+# includes, and a .d has no rule -- so it falls through to the built-in
+# `%: %.o` link rule, wants build/userland/dash/gen/builtins.d.o, and
+# reaches the dash generated-source rule above, whose empty recipe
+# claims it can produce ANY .c in that directory. The chain "succeeds"
+# as far as make is concerned and then dies in the compiler:
+#   cc1: fatal error: build/dash/gen/builtins.d.c: No such file
+# It is intermittent (it needs the .d to look out of date) and it
+# FAILS THE BUILD WITHOUT FAILING THE TARGET YOU ASKED FOR -- three
+# times in one session, each leaving a stale kernel that tested as
+# though the change had not been made. An empty rule says "already up
+# to date" and stops the search.
+%.d: ;
+
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
 # Only created if it doesn't already exist -- see DISK_IMG's comment

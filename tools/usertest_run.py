@@ -426,10 +426,16 @@ EXCLUDED = [
     ("socket_test",      "needs a network peer"),
 ]
 
-# How long a spawned test is given before its output is collected. These
-# are small programs; the wait is for the scheduler to run them at all,
-# not for them to do work.
-SPAWN_SETTLE_S = 3.0
+# A spawned test is waited for by READING ITS VERDICT, not by sleeping.
+# Every utest program ends with exactly one of these two lines, so the
+# artifact is guaranteed to arrive -- and asking for it repeatedly costs
+# nothing when it is already there. The fixed 3-second sleep this
+# replaced was a coin flip the moment a build changed the timing: under a
+# TRAP gate (idt.c) it lost every time, and focusring_test was reported
+# as failing while its own file said `all checks passed`.
+VERDICT_DONE = ("all checks passed", "FAILED --")
+VERDICT_TIMEOUT_S = 15.0
+VERDICT_POLL_S = 0.5
 
 EXIT_RE = re.compile(r"Exit code:\s*(-?\d+)")
 
@@ -443,6 +449,26 @@ def vm(args, *argv, check=True):
     if check and r.returncode != 0:
         print(r.stdout + r.stderr, file=sys.stderr)
     return r
+
+
+def verdict_file(args, name):
+    """The test's own verdict, polled until it terminates or the deadline.
+
+    Waits on an ARTIFACT that must come to exist: every utest program
+    ends with exactly one of VERDICT_DONE. There is deliberately no
+    "the file is missing" shortcut -- the obvious one looked for "not
+    found" in the reply and matched unrelated console text, which made
+    the poll return on its FIRST read and reported passing tests as
+    truncated. The deadline is the only way out.
+    """
+    deadline = time.time() + VERDICT_TIMEOUT_S
+    text = ""
+    while True:
+        b = vm(args, "exec", f"cat /tmp/{name}.out", "--label", check=False)
+        text = b.stdout + b.stderr
+        if any(d in text for d in VERDICT_DONE) or time.time() >= deadline:
+            return text
+        time.sleep(VERDICT_POLL_S)
 
 
 def run_one(args, name, spawned=False):
@@ -460,12 +486,15 @@ def run_one(args, name, spawned=False):
         # from after the output was already discarded. Both were tried.
         # The test writes its own verdict to /tmp, which can be asked for
         # at any time -- waiting on the artifact rather than the timing.
-        time.sleep(SPAWN_SETTLE_S)
-        b = vm(args, "exec", f"cat /tmp/{name}.out", "--label", check=False)
-        return None, a.stdout + a.stderr + b.stdout + b.stderr
+        return None, a.stdout + a.stderr + verdict_file(args, name)
     r = vm(args, "exec", f"run {name}", "--label", check=False)
     out = r.stdout + r.stderr
     m = EXIT_RE.search(out)
+    # NOT extended to this path, and that was MEASURED rather than
+    # assumed: reading the verdict file here as well took the suite from
+    # 1 failure in 4 runs to 3, because a `run` test's file is still
+    # being written while the poll reads it and the partial content then
+    # replaces a console line that was complete.
     return (m.group(1) if m else None), out
 
 

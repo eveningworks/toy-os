@@ -503,6 +503,31 @@ this the obvious way), not from how much history it accumulated.
   `git show v<x>:<file>` answer it in seconds -- and say plainly what is
   still in progress.
 
+## A `.d` FILE MUST NEVER BE REMAKEABLE, OR make BUILDS THE WRONG FILE AND STILL EXITS 0
+
+make tries to rebuild every makefile it includes, and the `-include
+$(shell find $(BUILD) -name '*.d')` line at the bottom of the Makefile
+includes a couple of hundred of them. A `.d` has no rule of its own, so
+the search falls through to make's BUILT-IN `%: %.o` link rule, which
+wants `build/userland/dash/gen/builtins.d.o`, which reaches the dash
+generated-source rule -- and that rule's recipe is EMPTY on purpose (the
+stamp is what writes those files), so make believes it can produce any
+`.c` in that directory. The chain looks buildable and dies in the
+compiler:
+
+    cc1: fatal error: build/dash/gen/builtins.d.c: No such file
+
+**It exits 0.** The target you asked for is still made; what failed was
+a target you never asked for, so the build reports success while leaving
+whatever it skipped stale -- three times in one session, each one a
+kernel that tested as though the change had not been made. `%.d: ;` --
+an empty rule, meaning "already up to date" -- stops the search.
+
+Positive control, measured: remove that line, `touch
+build/dash/gen/.stamp` so the generated sources look out of date, and
+`make all` prints five `fatal error` lines and exits 0. With the line,
+zero.
+
 ## A SHARED LIBRARY IS `userland/dynlib/` PLUS ONE MAKEFILE LINE, AND A PROGRAM OPTS IN
 
 `/lib/libc.so` is special (every `/bin` and GUI program links it, and it
