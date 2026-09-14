@@ -109,6 +109,12 @@ TOOLS = [
     # this repo's own Markdown and pci.ids. gcc and the standard library.
     ("utext_host",  "utext_hostcheck.py",      "the editor's wrap index vs a naive scan", False,
      None,                                                                                   False),
+    # The toolkit's text measurement and uui_textbox's caret/window/hit
+    # geometry against a synthetic HOSTILE proportional face -- narrow
+    # 'i' against wide 'W', with kerning on. gcc and the standard
+    # library. Carries a --positive-control that must go red.
+    ("ugfx_text",   "ugfx_text_hostcheck.py",  "text measurement + textbox geometry", False,
+     None,                                                                                   False),
     # The Terminal's shipped colour schemes against the ANSI -> VGA
     # permutation the loader applies, reimplemented here from the
     # parser's table rather than shared with it.

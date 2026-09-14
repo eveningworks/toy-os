@@ -4071,6 +4071,32 @@ window without going through it will find its layout polls timing out.
   A control that reddens nothing has measured nothing, so it exits
   non-zero when none moved. Named by `ondemand_sweep.py`.
 
+- **`ugfx_text_hostcheck.py`** -- compiles the real
+  `userland/ui/ugfx_text.c` and `userland/ui/uui_textbox.c` with the
+  host gcc against a SYNTHETIC proportional face and sweeps ~4,400
+  checks over it. The face is deliberately hostile -- `i` and `l` are
+  3px where `W` and `M` are 20 -- so a surviving `* char_w` is off by
+  6x rather than by a rounding error, and kerning is non-zero on real
+  pairs (`AV`, `To`) because a measurement that ignores it agrees with
+  drawing only when no such pair appears.
+
+  Three things, and the second is the one that matters. The
+  MEASUREMENT against a Python oracle that shares no code with it.
+  The ROUND TRIP: the x at which the widget DRAWS character `i` must
+  hit-test back to `i`, for every character at every caret position --
+  which is what catches `draw()` and `index_at_x()` drifting apart, the
+  failure that put a click on a different glyph than the pointer. And
+  the WINDOW: the caret stays inside the field, the value never scrolls
+  further than it must, and nothing is drawn past the inner edge.
+
+  `--positive-control` restores the cell arithmetic and requires the
+  suite to go RED (569 of 4,407 do). **That control did not fire the
+  first time it was written**, and for the reason this repo keeps
+  writing down: it wrote the modified copy to `tmp/uui_textbox.c` while
+  the driver includes `ui/uui_textbox.c`, so the bug never reached the
+  compiler and a green run meant nothing. It writes to `tmp/ui/` and
+  puts that `-I` first now, and asserts the edit changed something. In
+  `ondemand_sweep.py`.
 - **`utext_hostcheck.py`** -- compiles `userland/ui/utext.c` with the
   host gcc, beside a NAIVE implementation of the same wrap rule written
   out longhand in the driver, and requires the two to agree over a
@@ -4468,6 +4494,35 @@ window without going through it will find its layout polls timing out.
   `SYS_*` constants are numbers -- having a row is the definition, and
   the flags and limits sharing the prefix are simply not rows. In
   `preflight.sh`.
+- **`check_text_measure.py`** -- fails the build on a character COUNT
+  used as a text WIDTH. `ugfx_char_w()` is the WIDEST advance in the
+  face, so `n * ugfx_char_w()` measured a string correctly only while
+  the interface face was monospace; the day it became `liberation-sans`
+  it became the width of the widest possible string of that length, and
+  ~23 sites across the toolkit, the WM and four apps were wrong at once
+  -- a Start menu 1.8x too wide, labels cut early, a file-view column
+  pitch (and its selection highlight) 1.7x over, and a text field whose
+  caret and click landed on a grid the glyphs were not on.
+
+  **The discriminator is a NAME versus a LITERAL**, and that is the
+  whole reason the check is usable: a variable paired with the cell
+  width is nearly always a count of characters in real data (a
+  `strlen`, a `width_chars` field, a `MAX_CHARS` budget), while a
+  literal is a layout unit -- `char_w / 2` of padding, a two-cell
+  gutter -- which `ugfx.h` explicitly permits and which there are ~76
+  of. Flagging those too would have meant 76 waivers and a check nobody
+  reads. It tracks aliases (`int cw = ugfx_char_w()`) and scopes them
+  per function, which is load-bearing rather than tidy: an `int w =
+  ugfx_char_w()` in one function otherwise makes every `w` in the file
+  look like a cell width, and it reported a callback's own parameter as
+  a bug until it did.
+
+  Its honest limit: a LITERAL count used as a text pitch
+  (`14 * ugfx_char_w()` for a filename column) reads as a layout unit
+  and is not flagged. Two of those existed and both are fixed by hand.
+  Waive with `text-measure-ok: <reason>`; the legitimate reason is a
+  monospace bracket, where dividing by the cell is the right answer.
+  `--positive-control` proves the matcher fires. In `preflight.sh`.
 - **`check_widget_ops.py`** -- refuses a `struct uui_widget_ops` table
   with a slot it needs left NULL, and it exists because FOUR widgets
   shipped with short tables on one day (`uui_dropdown`, `uui_checkbox`,

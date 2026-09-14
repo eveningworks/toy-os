@@ -275,7 +275,12 @@ static int statusbar_h(void) { return uui_statusbar_height(&g_status); }
 static void layout_all(int cw, int ch) {
     int mb = menubar_h(), sb = statusbar_h();
     int gap = utheme_gap(), row = ugfx_char_h();
-    int side = ugfx_char_w() * SIDEBAR_CHARS;
+    // A filename list's worth of pitch, in a REPRESENTATIVE glyph:
+    // char_w is the widest advance, which made this sidebar ~1.7x the
+    // width the names in it need.
+    int per = ugfx_char_advance('n');
+    if (per <= 0) per = ugfx_char_w();
+    int side = per * SIDEBAR_CHARS;
     if (side > cw / 2) side = cw / 2;
 
     uui_menubar_set_geometry(&g_menu, 0, 0, cw, mb);

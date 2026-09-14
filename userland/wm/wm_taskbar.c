@@ -286,7 +286,7 @@ int taskbar_layout(struct taskbar_button *out, int max) {
     // with the renderer.
     if (grouped) {
         int icon = taskbar_icon_size();
-        int cap = natural + 5 * ugfx_char_w() + (icon ? icon + 4 : 0);
+        int cap = natural + ugfx_text_width(" (99+)") + (icon ? icon + 4 : 0);
         int wide = fit_width(avail, n, cap);
         if (wide > w) w = wide;
     }

@@ -33,6 +33,22 @@ struct utheme {
     uint32_t accent;       // selection / highlight / focus / checkmark
     uint32_t accent_text;  // text drawn on `accent`
     uint32_t tab_rest;     // a resting tab in a strip: a clear step under control_bg
+    // A CONTROL'S OUTLINE IS NOT THE WINDOW'S BORDER. `border` frames a
+    // window or a menu and is nearly black; the edge of a text field, a
+    // scrollbar thumb or a spinbox is a soft grey, and drawing either
+    // one with the other's colour is immediately wrong. Qt separates
+    // these too (Mid/Dark against WindowText).
+    uint32_t outline;
+    // The tint behind SELECTED TEXT, which is not `accent`. Selected
+    // rows here are a pale wash with ordinary dark text over them --
+    // Explorer's treatment -- while `accent` is the saturated colour a
+    // focus ring and an icon selection use. One role each, because a
+    // dark mode has to move them independently.
+    uint32_t selection_bg;
+    // A DECORATIVE rule -- a table's grid lines, a divider between
+    // sections. Lighter than `outline`, which edges something you can
+    // click, and lighter again than `border`, which frames a window.
+    uint32_t separator;
 };
 
 // The live theme. Never NULL: the first read lazily installs the default
@@ -61,6 +77,25 @@ void utheme_default(struct utheme *out);
 #define UTHEME_ACCENT     (utheme_current()->accent)
 #define UTHEME_ACCENT_TEXT (utheme_current()->accent_text)
 #define UTHEME_TAB_REST   (utheme_current()->tab_rest)
+#define UTHEME_OUTLINE    (utheme_current()->outline)
+#define UTHEME_SELECTION  (utheme_current()->selection_bg)
+#define UTHEME_SEPARATOR  (utheme_current()->separator)
+
+// --- a widget's own colour, or the theme's ---------------------------
+//
+// **A WIDGET RESOLVES ITS COLOURS WHEN IT DRAWS, NOT WHEN IT IS
+// BUILT.** An init that copied UTHEME_* into the widget would freeze
+// whatever palette was live at construction, so a theme change would
+// reach only widgets created afterwards -- and every app builds its
+// widgets once, at open. Storing "unset" instead keeps the app's
+// explicit override working (it is any other value) while leaving the
+// default to be looked up per frame, which is how GTK and Qt both
+// resolve a style.
+//
+// The sentinel is outside the 24-bit range ugfx_rgb() produces, so no
+// real colour can collide with it.
+#define UUI_COLOR_UNSET 0xFF000000u
+#define UUI_COLOR(v, role) ((v) == UUI_COLOR_UNSET ? (role) : (v))
 
 // --- metrics (QStyle), FONT-DERIVED and live -------------------------
 //

@@ -7544,3 +7544,80 @@ The WM's own picker was deleted in the same change. It had been
 unreachable since the apps moved to ring 3 -- 531 lines that nothing
 called, plus fifteen live `!file_picker_open` guards threaded through
 `wm.c`, `wm_render.c` and `wm_overlay.c` for a flag that was always 0.
+
+## A widget resolves its colours when it draws, not when it is built
+
+Every widget's `_init()` filled its colour fields with `ugfx_rgb()`
+literals, and those literals were -- almost always -- exactly the
+default palette. That looks harmless and is the reason a theme change
+could not work: an app builds its widgets once, at open, so a palette
+swapped afterwards would reach nothing that already existed. The
+`utheme` object had shipped, `UTHEME_*` were already live reads of it,
+and the widgets were still holding a private copy of its defaults taken
+at construction time.
+
+The fix is a sentinel rather than a constructor argument.
+`UUI_COLOR_UNSET` (0xFF000000, outside the 24-bit range `ugfx_rgb()`
+produces, so no real colour collides) means "no opinion"; `UUI_COLOR(v,
+UTHEME_ROLE)` at the draw resolves it. An app that sets a colour still
+wins, because any other value is not the sentinel -- which is what kept
+this from being an audit of every app as well as every widget.
+
+GTK and Qt both resolve a style at paint, for exactly this reason: a
+`QPalette` is consulted by `QStyle::drawControl`, not copied into the
+widget at construction. The alternative shape -- broadcast a theme
+change and have every widget rebuild -- is what `WIN_EV_FONT` does for
+metrics, and it is the wrong tool here: metrics change the LAYOUT, so a
+client has to re-run it anyway, while a colour changes only what the
+next frame paints.
+
+**Converting a literal is only safe when it equals a role exactly.**
+Nine of the table's colours, four of the textbox's and three of the menu
+bar's did, and those are converted with the rendering provably
+unchanged under the default theme. Five did not -- a table header's ink
+at (40,40,40) against `text` at (20,20,20), the menu bar's bar and popup
+grounds, its accel and disabled greys -- and mapping them to the nearest
+role would have silently restyled every menu and every table header in
+the same commit that claimed to change nothing. They stay literals, and
+`docs/roadmap.md` says so.
+
+**The palette gained three roles rather than reusing one.** `outline`
+(150,155,165) appeared by hand in eight widgets and `selection_bg`
+(205,220,240) in six, and neither is what it would otherwise have been
+folded into: `border` (60,60,60) frames a window and is nearly black,
+while `accent` is the saturated selection colour a focus ring uses. A
+`separator` followed for a table's grid lines. Qt keeps the same
+distinctions (WindowText against Mid/Dark, Highlight against Window),
+and a dark mode is where collapsing them would show -- the three greys
+move by different amounts, and a wash under dark text has to become a
+wash under light text without becoming the accent.
+
+## The text measurement functions are their own translation unit
+
+`ugfx_text_width`, `_width_n`, `_fit_chars`, `_index_at_x`, `_next` and
+`_prev` are in `userland/ui/ugfx_text.c` rather than in `ugfx.c` with
+the rest of the drawing. They are the only text functions that touch no
+font state and no surface: they stand entirely on `ugfx_char_advance()`
+and `ugfx_kern()`, which stay with the atlas.
+
+That is what makes them compilable on the host, and the reason it was
+worth a file. This is the arithmetic that decides where a caret sits and
+which character a click selects, and it is arithmetic whose errors are
+invisible on a monospace face -- `n * char_w` and a real measurement are
+the same number, so every one of ~23 wrong sites looked correct for as
+long as the interface face was `dejavu-sans-mono`.
+`tools/ugfx_text_hostcheck.py` compiles these two files against a
+synthetic face where `i` is 3px and `W` is 20 and sweeps ~4,400 checks,
+including the round trip that the x a character is DRAWN at hit-tests
+back to that character. None of that is reachable from a screenshot,
+and a guest test could only ever sample a few strings.
+
+**Kerning is why a slice must be measured on the slice.** It is counted
+between adjacent characters, before the advance of the second, so the
+width of `str[start..i]` is not the difference of two offsets into the
+whole string -- an offset includes a kern pair that drawing the slice on
+its own never applies. `uui_textbox` measures the exact buffer it draws
+for this reason, and `ugfx_text_width_n` documents it, because the
+faster-looking version (one subtraction instead of a walk) is wrong by a
+pixel or two per scroll step and would be reintroduced by anyone
+optimising it.

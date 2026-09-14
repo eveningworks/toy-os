@@ -26,7 +26,6 @@ buildable now. Something that MISBEHAVES is not here -- that is
 
 - [ ] **Interruptible syscalls** -- a trap gate plus retiring `g_next_kernel_rsp` as a single global  *(Scheduler: blocking, priorities, classes)*
 - [ ] Replace the preemption guard with a real sleeping lock -- **Needs:** interruptible syscalls, above  *(Scheduler: blocking, priorities, classes)*
-- [ ] A proportional interface face by default, once labels and hit-testing are checked against one  *(GUI clipboard + drag-and-drop)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
@@ -667,7 +666,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~A scrollbar on the Terminal, so the scrollback is visible~~ DONE 2026-09-07 -- a reserved gutter, Konsole's shape
 - [x] ~~Terminal preferences: schemes, its own font size, scrollback, cursor~~ DONE 2026-09-14 -- `/etc/terminal.conf` and a modal
 - [x] ~~A monospace font family separate from the interface's~~ DONE 2026-09-14 -- `system.font_mono`, `ugfx_font_mono()`
-- [ ] **NEXT** A proportional interface face by default, once labels and hit-testing are checked against one
+- [x] ~~A proportional interface face by default, once labels and hit-testing are checked against one~~ DONE 2026-09-14 -- `liberation-sans`
 - [ ] A per-tab colour scheme, which is what a Konsole profile really is
 - [ ] Preferences for Notepad and the File Manager, on whatever `userland/term/`'s config half generalises into
 - [x] ~~Drag-and-drop within one window~~ DONE 2026-09-10 -- a router session; between the panes and onto the tree, Ctrl copies
@@ -1122,7 +1121,7 @@ this to be better?".
 - [ ] The folder tree's double-click toggle has no automated check -- the layout report's node count did not settle under TCG
 - [ ] `toywm` links DYNAMICALLY, so the static set's rescue argument no longer covers the desktop
 - [ ] The WM's context menu has no keyboard: `uui_menubar_key()` exists and `wm_overlay.h` has no key op to route it through
-- [ ] `uui_menubar_init()` hardcodes seven RGB colours instead of reading `utheme`, so an app's menus do not follow the theme
+- [ ] Widget-local RGB literals bypass `utheme` -- ~12 widgets unconverted, plus five colours no palette role matches
 - [ ] **NEXT** System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons
 - [ ] Audit the bare `redraw_pending = 1` sites in `userland/wm/` for a rect they could damage -- a focus change's title colour is next
 - [ ] Disk Mark's dropdown cannot be typed at while CLOSED -- the app routes no keys, so only the overlay path reaches it

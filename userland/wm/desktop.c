@@ -603,15 +603,15 @@ static void draw_label(int cell_x, int label_y, const char *name, uint32_t fg) {
         // More than fits: this line is cut two characters short and
         // marked, so a truncated caption reads AS truncated rather than
         // as a differently-named app.
-        int cut_w = max_w - 2 * ugfx_char_w();
-        if (cut_w < ugfx_char_w()) cut_w = ugfx_char_w();
+        int ell = ugfx_text_width("..");
+        int cut_w = max_w - ell;
+        if (cut_w < ell) cut_w = ell;
         int tw = ugfx_text_width(line);
         if (tw > cut_w) tw = cut_w;
-        int lx = left + (max_w - (tw + 2 * ugfx_char_w())) / 2;
+        int lx = left + (max_w - (tw + ell)) / 2;
         if (lx < left) lx = left;
         ugfx_draw_string_clipped_shadowed(wm_surface(), lx, y, cut_w, line, fg);
-        ugfx_draw_string_clipped_shadowed(wm_surface(), lx + tw, y,
-                                          2 * ugfx_char_w(), "..", fg);
+        ugfx_draw_string_clipped_shadowed(wm_surface(), lx + tw, y, ell, "..", fg);
     }
 }
 
@@ -701,7 +701,7 @@ void desktop_draw(void) {
             // as it did.
             char ic = item_is_launcher(i) ? g_launch[i].glyph : 0;
             char initial[2] = { ic ? ic : item_name(i)[0], '\0' };
-            int gx = x + (px - ugfx_char_w()) / 2;
+            int gx = x + (px - ugfx_text_width(initial)) / 2;
             int gy = y + (px - ugfx_char_h()) / 2;
             ugfx_draw_string(wm_surface(), gx, gy, initial, icon_fg, ugfx_rgb(60, 90, 130));
         }

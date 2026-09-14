@@ -24,6 +24,11 @@ void utheme_default(struct utheme *out) {
     // face, so a resting tab reads as recessed and the selected one --
     // field_bg -- as raised out of it by fifty rather than thirty.
     out->tab_rest    = ugfx_rgb(205, 205, 212);
+    // The two the widgets had been spelling out by hand: this outline
+    // appeared in eight of them and this selection tint in six.
+    out->outline     = ugfx_rgb(150, 155, 165);
+    out->selection_bg = ugfx_rgb(205, 220, 240);
+    out->separator   = ugfx_rgb(205, 205, 210);
 }
 
 void utheme_init(void) {

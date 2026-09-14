@@ -730,7 +730,9 @@ whenever a headline here tells you something you did not already know.
 `docs/conventions/gui.md`
 
 - **A WINDOW'S GEOMETRY IS REMEMBERED PER APP, AND THE KEY IS `app_id` -- NEVER `app_identity`**
-- **MEASURE TEXT, NEVER MULTIPLY: `gfx_char_advance()` / `ugfx_char_advance()`.**
+- **MEASURE TEXT, NEVER MULTIPLY: `gfx_char_advance()` / `ugfx_char_advance()`** -- five chokepoints (`ugfx_text_width`/`_n`/`_fit_chars`/`_index_at_x`, and `ugfx_char_advance('0')`/`('n')` to RESERVE), `tools/check_text_measure.py` fails the build on a character count used as a width, and a SLICE is measured on the slice because kerning is counted between adjacent characters
+- **A WIDGET RESOLVES ITS COLOURS WHEN IT DRAWS, NOT WHEN IT IS BUILT** -- `UUI_COLOR_UNSET` in the init, `UUI_COLOR(v, UTHEME_ROLE)` at the draw; the palette's three greys (`border` frames a window, `outline` edges a control, `separator` is decorative) are not interchangeable, and `selection_bg` is not `accent`
+- **`utext` IS A FIXED GRID, AND ITS CALLERS OWE IT A MONOSPACE FACE** -- Notepad's `doc_font()` and `uui_textview.c`'s `grid_font()`; every early return inside the bracket leaks the face
 - **A SHARED GEOMETRY HELPER MEASURES IN WHATEVER FACE THE CALLER HAS SELECTED, AND `ugfx_set_font()` IS PER PROCESS** -- an app that switches faces mid-frame must bracket every measurement the same way, or the draw and the hit-test disagree
 - **A LOADED FACE STILL ONLY DRAWS 101 GLYPHS.**
 - **`font glyph <char>` SHOWS WHAT WILL ACTUALLY BE DRAWN, AND IT READS BOTH SIDES.**
@@ -1417,7 +1419,7 @@ cost".
   guest first** -- it refuses to start while one holds `disk.img`'s
   write lock. Static checks, run by it or beside it: `check_deps.py`,
   `check_layout.py`, `check_dispatch.py`, `check_syscalls.py`,
-  `check_widget_ops.py`,
+  `check_widget_ops.py`, `check_text_measure.py`,
   `check_key_routing.py`, `check_drivers.py`, `check_initcalls.py`,
   `check_copy_user.py`, `check_chains.py`,
   `check_docs.py`,
@@ -1575,6 +1577,10 @@ cost".
   schemes against the ANSI -> VGA permutation the loader applies** --
   reimplemented from the parser's table rather than shared with it, with
   a `--positive-control` that must go red),
+  `ugfx_text_hostcheck.py` (**the toolkit's text measurement and
+  `uui_textbox`'s caret/window/hit geometry against a synthetic HOSTILE
+  proportional face** -- narrow `i` against wide `W`, kerning on, ~4,400
+  checks with a `--positive-control` that must go red),
   `utext_hostcheck.py` (the editor's sparse wrap index against the naive
   scan it replaced -- a round trip from the oracle's draw position back
   through `index_at_point`, at five scroll positions, over this repo's

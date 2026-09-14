@@ -645,7 +645,9 @@ static void draw_document(struct ugfx_surface *s, int focused) {
     if (hbar_h() > 0) {
         int bx, by, bw, bh;
         hbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
-        int cols = tw / ugfx_char_w();
+        // text-measure-ok: inside doc_font(), which selects the mono family --
+    // the document really is a fixed grid.
+    int cols = tw / ugfx_char_w();
         uui_scrollbar_draw(s, bx, by, bw, bh,
                             utext_widest_line(&g_text, tw, th), cols,
                             g_text.hscroll,
@@ -1013,6 +1015,8 @@ static int scrollbar_press(int px, int py, int tx, int ty, int tw, int th) {
 // to measure it against outside a draw.
 static void clamp_hscroll(int tw, int th) {
     const struct ugfx_font *was_doc = doc_font();
+    // text-measure-ok: inside doc_font(), which selects the mono family --
+    // the document really is a fixed grid.
     int cols = tw / ugfx_char_w();
     int max = utext_widest_line(&g_text, tw, th) - cols;
     if (max < 0) max = 0;
@@ -1033,6 +1037,8 @@ static int hbar_press(int px, int py, int tx, int ty, int tw, int th) {
     int bx, by, bw, bh;
     hbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
 
+    // text-measure-ok: inside doc_font(), which selects the mono family --
+    // the document really is a fixed grid.
     int cols = tw / ugfx_char_w();
     int total = utext_widest_line(&g_text, tw, th);
     unsigned flags = NP_SCROLLBAR_FLAGS | UUI_SCROLLBAR_HORIZ;
@@ -1146,7 +1152,9 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     } else if (g_hbar_drag) {
         int bx, by, bw, bh;
         hbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
-        int cols = tw / ugfx_char_w();
+        // text-measure-ok: inside doc_font(), which selects the mono family --
+    // the document really is a fixed grid.
+    int cols = tw / ugfx_char_w();
         g_text.hscroll =
             uui_scrollbar_offset_for_drag(bx, bw,
                                            utext_widest_line(&g_text, tw, th), cols,

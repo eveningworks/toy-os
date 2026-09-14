@@ -216,6 +216,22 @@ int  uui_table_view_row(const struct uui_table *t, int source_row);
 // re-deriving its geometry in Python.
 int  uui_table_header_hit(const struct uui_table *t, int cx, int cy);
 
+// --- colours, RESOLVED --------------------------------------------
+//
+// **READ A TABLE'S COLOUR THROUGH THESE, NEVER OFF THE STRUCT.** The
+// fields hold UUI_COLOR_UNSET until they are drawn (utheme.h), so a
+// direct `t->sel_bg` gets the sentinel rather than a colour -- which is
+// how uui_fileview drew its marked rows in 0xFF000000 for exactly as
+// long as it took a test to notice.
+uint32_t uui_table_c_bg(const struct uui_table *t);
+uint32_t uui_table_c_fg(const struct uui_table *t);
+uint32_t uui_table_c_sel_bg(const struct uui_table *t);
+uint32_t uui_table_c_sel_fg(const struct uui_table *t);
+uint32_t uui_table_c_head_bg(const struct uui_table *t);
+uint32_t uui_table_c_grid(const struct uui_table *t);
+uint32_t uui_table_c_track_bg(const struct uui_table *t);
+uint32_t uui_table_c_thumb_bg(const struct uui_table *t);
+
 int  uui_table_row_h(const struct uui_table *t);
 int  uui_table_header_h(const struct uui_table *t);
 int  uui_table_visible_rows(const struct uui_table *t);

@@ -79,6 +79,17 @@ def _stash_ref_for(sha):
     return None
 
 
+def _never_ran(out):
+    """Did this run die before the thing under test did any work? The
+    signature is a connection failure -- a tool that could not reach a
+    guest measured nothing, whatever its exit code says."""
+    if not out:
+        return False
+    markers = ("could not connect to QMP", "Connection refused",
+               "ConnectionRefusedError", "could not connect to the serial")
+    return any(m in out for m in markers)
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__.splitlines()[0],
@@ -231,6 +242,24 @@ def main():
     if head_rc == 0 and work_rc == 0:
         print("predates: BOTH PASS -- there is no failure to attribute.")
         return 0
+    # **A RUN THAT NEVER REACHED THE CODE IS NOT EVIDENCE OF ANYTHING.**
+    # A GUI tool that ATTACHES to a guest it does not launch dies in
+    # seconds with "Connection refused" on both sides, and the two
+    # identical failures then read as a confident PRE-EXISTING -- which
+    # is worse than no answer, because it looks like a measurement. Ask
+    # for the tool to be driven through a runner that launches a guest
+    # (gui_regress.py -k <name>) instead.
+    both_unrun = (head_rc == work_rc
+                  and _never_ran(head_out) and _never_ran(work_out))
+    if both_unrun:
+        print("predates: INVALID -- neither run reached the code under test "
+              "(both failed to connect, in seconds).")
+        print("predates: this is NOT 'pre-existing'. A tool that attaches to a "
+              "guest it does not launch needs one started for it --")
+        print("predates: re-run it through a launcher, e.g. "
+              "predates.py \"python3 tools/gui_regress.py -k <tool>\".")
+        return 2
+
     if head_rc == work_rc:
         print(f"predates: PRE-EXISTING -- HEAD fails the same way (exit {head_rc}).")
         print("predates: note that pre-existing is not the same as unrelated: a "

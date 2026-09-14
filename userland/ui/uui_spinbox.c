@@ -181,7 +181,7 @@ void uui_spinbox_draw(struct ugfx_surface *surf, const struct uui_spinbox *s) {
     // The field's own focus ring would leave its right edge one pixel
     // left of the separator, reading as a stray accent line inside the
     // control; this one rings the whole box at the end instead.
-    if (s->field.active) ugfx_fill_rect(surf, sx - 1, s->y + 1, 1, s->h - 2, s->field.bg);
+    if (s->field.active) ugfx_fill_rect(surf, sx - 1, s->y + 1, 1, s->h - 2, uui_textbox_c_bg(&s->field));
 
     int half = s->h / 2;
     for (int i = 0; i < 2; i++) {

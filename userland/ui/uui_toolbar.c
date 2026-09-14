@@ -116,7 +116,7 @@ static void tb_draw(struct ugfx_surface *s, const struct uui_toolbar *t) {
         } else {
             // The icon cache's missing-file rule: a letter, never an error.
             char c[2] = { t->items[i].tip ? t->items[i].tip[0] : '?', 0 };
-            ugfx_draw_string(s, x + (w - ugfx_char_w()) / 2,
+            ugfx_draw_string(s, x + (w - ugfx_text_width(c)) / 2,
                               y + (h - ugfx_char_h()) / 2, c, t->fg,
                               uui_state_bg(t->bg, st));
         }

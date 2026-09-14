@@ -60,14 +60,27 @@ static int text_w_with_bar(const struct uui_textview *tv) {
     return tw > 0 ? tw : 0;
 }
 
+// **utext IS A FIXED GRID**: it places every glyph at `col * char_w`
+// and hit-tests by dividing, which is only a measurement in a monospace
+// face. So this control selects one around everything that measures or
+// draws the buffer, exactly as Notepad brackets its document -- without
+// it a proportional face draws ragged text at cell pitch and a click
+// lands nowhere near the caret. The restore must come before every
+// early return, or the whole process keeps measuring in this face.
+static const struct ugfx_font *grid_font(void) {
+    return ugfx_set_font(ugfx_font_mono(UGFX_FONT_REGULAR));
+}
+
 int uui_textview_scrollbar_visible(const struct uui_textview *tv) {
     if (tv->policy == UUI_TEXTVIEW_NEVER) return 0;
     if (text_w_with_bar(tv) < tv->min_text_w) return 0; // too narrow to be worth it
     if (tv->policy == UUI_TEXTVIEW_ALWAYS) return 1;
 
     int total = 0, visible = 0;
+    const struct ugfx_font *was = grid_font();
     utext_metrics((struct utext *)&tv->tb, text_w_with_bar(tv), tv->h,
                   &total, &visible);
+    ugfx_set_font(was);
     return total > visible;
 }
 
@@ -80,15 +93,19 @@ int uui_textview_hit(const struct uui_textview *tv, int cx, int cy) {
 }
 
 static void metrics(struct uui_textview *tv, int *total, int *visible) {
+    const struct ugfx_font *was = grid_font();
     utext_metrics(&tv->tb, uui_textview_text_w(tv), tv->h, total, visible);
+    ugfx_set_font(was);
 }
 
 void uui_textview_draw(struct ugfx_surface *s, struct uui_textview *tv) {
     int tw = uui_textview_text_w(tv);
 
     ugfx_fill_rect(s, tv->x, tv->y, tv->w, tv->h, tv->bg);
+    const struct ugfx_font *was = grid_font();
     utext_draw(&tv->tb, s, tv->x, tv->y, tw, tv->h,
                tv->fg, tv->bg, tv->sel_bg, tv->show_caret);
+    ugfx_set_font(was);
 
     if (!uui_textview_scrollbar_visible(tv)) return;
     int total, visible;
@@ -184,7 +201,9 @@ void uui_textview_drag(struct uui_textview *tv, int cx, int cy) {
     // pushing paper would move it. The remainder carries sub-line
     // movement between ticks -- without it a slow drag truncates to zero
     // lines every tick and the view never moves at all.
+    const struct ugfx_font *was_pan = grid_font();
     int line_h = ugfx_char_h();
+    ugfx_set_font(was_pan);
     if (line_h <= 0) return;
     int dy = (cy - tv->pan_last_y) + tv->pan_remainder;
     int lines = dy / line_h;

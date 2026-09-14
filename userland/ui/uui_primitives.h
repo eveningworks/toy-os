@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 #include "ui/ugfx.h"
+// Every widget reaches its default colours through the theme (UUI_COLOR
+// / UTHEME_*), so the one header they all include carries it.
+#include "ui/utheme.h"
 
 // Split out of the single uwidgets.c/.h this used to be, one file per
 // widget -- the same shape as apps/ui/, so a widget's kernel-side and

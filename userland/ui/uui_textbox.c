@@ -68,10 +68,14 @@ void uui_textbox_init(struct uui_textbox *f, const char *initial) {
     f->ed.cursor = i;
     f->active = 0;
     f->disabled = 0;
-    f->bg = ugfx_rgb(255, 255, 255);
-    f->fg = ugfx_rgb(20, 20, 20);
-    f->border = ugfx_rgb(150, 155, 165);
-    f->sel_bg = ugfx_rgb(205, 220, 240);
+    // Left UNSET so the theme answers at DRAW time -- see utheme.h.
+    // These were four literals that happened to equal the default
+    // palette, which meant a theme change reached everything except the
+    // widgets nobody had overridden.
+    f->bg = UUI_COLOR_UNSET;
+    f->fg = UUI_COLOR_UNSET;
+    f->border = UUI_COLOR_UNSET;
+    f->sel_bg = UUI_COLOR_UNSET;
 }
 
 const char *uui_textbox_text(const struct uui_textbox *f) { return f->buf; }
@@ -93,34 +97,39 @@ void uui_textbox_natural_size(const struct uui_textbox *f, int *out_w, int *out_
     if (out_h) *out_h = ugfx_char_h() + 2 * UUI_TEXTBOX_PAD; // and this one is real
 }
 
-// How far the visible window has slid right, in characters. Shared by
-// draw() and by uui_textbox_index_at_x() below, so a click lands on the
-// character that is actually drawn there -- two copies of this
-// arithmetic is the classic way a caret ends up one glyph off.
-static int field_window_start(const struct uui_textbox *f, int visible) {
-    if (!f->active || f->len <= visible) return 0;
-    int start = f->ed.cursor - visible + 1;
-    if (start < 0) start = 0;
-    int max_start = f->len - visible;
-    if (start > max_start) start = max_start;
+// The pixels the text gets: the box less its padding, and less the
+// caret when there is one -- a caret at the very end of a full value
+// has to land inside the field rather than on its border.
+static int field_avail(const struct uui_textbox *f) {
+    int avail = f->w - 2 * UUI_TEXTBOX_PAD - (f->active ? CARET_W : 0);
+    return avail > 0 ? avail : 0;
+}
+
+// How far the visible window has slid right, as a character INDEX
+// chosen by MEASURING -- a proportional face has no column to count, so
+// this walks left from the caret while the text between the two still
+// fits. Shared by draw() and by uui_textbox_index_at_x() below, so a
+// click lands on the character that is actually drawn there -- two
+// copies of this arithmetic is the classic way a caret ends up one
+// glyph off.
+//
+// Re-measuring the slice per step is O(len^2), which is 64 characters
+// squared and invisible; measuring forward from a running total would
+// be wrong, because the kerning of a slice depends on where it starts.
+static int field_window_start(const struct uui_textbox *f, int avail) {
+    if (!f->active || ugfx_text_width(f->buf) <= avail) return 0;
+    int start = f->ed.cursor;
+    while (start > 0
+           && ugfx_text_width_n(f->buf + start - 1, f->ed.cursor - start + 1) <= avail)
+        start--;
     return start;
 }
 
 int uui_textbox_index_at_x(const struct uui_textbox *f, int cx) {
-    int char_w = ugfx_char_w();
-    if (char_w <= 0) return f->ed.cursor;
-    int pad = UUI_TEXTBOX_PAD;
-    int visible = (f->w - 2 * pad) / char_w;
-    if (visible < 0) visible = 0;
-
-    int rel = cx - (f->x + pad);
+    int start = field_window_start(f, field_avail(f));
+    int rel = cx - (f->x + UUI_TEXTBOX_PAD);
     if (rel < 0) rel = 0;
-    // Round to the NEAREST gap rather than truncating: clicking the
-    // right half of a glyph should put the caret after it, which is
-    // what a text field does everywhere else.
-    int col = (rel + char_w / 2) / char_w;
-    int idx = field_window_start(f, visible) + col;
-    if (idx < 0) idx = 0;
+    int idx = start + ugfx_text_index_at_x(f->buf + start, rel);
     if (idx > f->len) idx = f->len;
     return idx;
 }
@@ -147,8 +156,17 @@ int uui_textbox_hit(const struct uui_textbox *f, int cx, int cy) {
     return uui_hit(f->x, f->y, f->w, f->h, cx, cy);
 }
 
+uint32_t uui_textbox_c_bg(const struct uui_textbox *f)
+{ return UUI_COLOR(f->bg, UTHEME_WHITE); }
+uint32_t uui_textbox_c_fg(const struct uui_textbox *f)
+{ return UUI_COLOR(f->fg, UTHEME_TEXT); }
+uint32_t uui_textbox_c_border(const struct uui_textbox *f)
+{ return UUI_COLOR(f->border, UTHEME_OUTLINE); }
+
 void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f) {
-    uint32_t bg = f->bg, fg = f->fg, border = f->border;
+    uint32_t bg = uui_textbox_c_bg(f);
+    uint32_t fg = uui_textbox_c_fg(f);
+    uint32_t border = uui_textbox_c_border(f);
     if (f->disabled) {
         // Derived from the field's OWN colours, never hand-picked --
         // uui_primitives.h's rule, and what keeps a greyed field greyed
@@ -162,20 +180,18 @@ void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f) {
     ugfx_draw_rect(s, x, y, w, h, border);
 
     int pad = UUI_TEXTBOX_PAD;
-    int char_w = ugfx_char_w();
     int ty = y + (h - ugfx_char_h()) / 2;
 
-    // Horizontal windowing: how many characters fit, and how far right
-    // the window has to slide to keep the caret inside it. Without this
-    // a long value draws straight through the border -- a bug the
-    // kernel widget actually had.
-    int visible = char_w > 0 ? (w - 2 * pad) / char_w : 0;
-    if (visible < 0) visible = 0;
-    int start = field_window_start(f, visible);
+    // Horizontal windowing: how much text fits, and how far right the
+    // window has to slide to keep the caret inside it. Without this a
+    // long value draws straight through the border -- a bug the kernel
+    // widget actually had.
+    int avail = field_avail(f);
+    int start = field_window_start(f, avail);
 
     char shown[UUI_TEXTBOX_MAX];
-    int n = 0;
-    for (; n < visible && f->buf[start + n]; n++) shown[n] = f->buf[start + n];
+    int n = ugfx_text_fit_chars(f->buf + start, avail);
+    for (int i = 0; i < n; i++) shown[i] = f->buf[start + i];
     shown[n] = '\0';
     // The SELECTION, behind the glyphs. Drawn before the text and
     // clipped to the visible window, so a selection running off either
@@ -186,10 +202,12 @@ void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f) {
         uui_edit_range(&f->ed, &a, &b);
         a -= start; b -= start;
         if (a < 0) a = 0;
-        if (b > visible) b = visible;
+        if (b > n) b = n;
         if (b > a) {
-            ugfx_fill_rect(s, x + pad + a * char_w, ty,
-                            (b - a) * char_w, ugfx_char_h(), f->sel_bg);
+            int ax = ugfx_text_width_n(shown, a);
+            ugfx_fill_rect(s, x + pad + ax, ty,
+                            ugfx_text_width_n(shown, b) - ax,
+                            ugfx_char_h(), UUI_COLOR(f->sel_bg, UTHEME_SELECTION));
         }
     }
 
@@ -199,8 +217,8 @@ void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f) {
     ugfx_draw_string_clipped(s, x + pad, ty, w - 2 * pad, shown, fg, bg);
 
     if (f->active) {
-        ugfx_fill_rect(s, x + pad + (f->ed.cursor - start) * char_w, ty,
-                        CARET_W, ugfx_char_h(), fg);
+        ugfx_fill_rect(s, x + pad + ugfx_text_width_n(shown, f->ed.cursor - start),
+                        ty, CARET_W, ugfx_char_h(), fg);
         // The border too, not the caret alone: the caret says WHERE the
         // next character lands, the ring says WHICH control is listening,
         // and a caret 200px away is easy to miss. Over the border rather

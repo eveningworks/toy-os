@@ -327,12 +327,18 @@ unsigned long ugfx_font_arena_size(int px);
 int ugfx_char_w(void);
 int ugfx_char_h(void);
 
-// Width in pixels of `s` rendered by ugfx_draw_string(). Monospaced
-// today, so it is length * char_w -- but call this rather than doing
-// that multiplication, exactly as kapi's gfx_text_width() exists for:
-// the identity stops holding the moment a proportional face appears,
-// and callers that assumed it are then wrong everywhere at once.
+// Width in pixels of `s` rendered by ugfx_draw_string(). The interface
+// face is PROPORTIONAL, so `length * char_w` is not this number -- it
+// is the width of the widest string of that length, and a caller using
+// it draws its labels on top of each other.
 int ugfx_text_width(const char *str);
+
+// The same for the first `n` characters (`n < 0` means all of it, which
+// is what ugfx_text_width() is). Kerning is counted INSIDE the prefix,
+// so this agrees with drawing that prefix on its own: a field that
+// windows a long value must measure the SLICE it draws, not an offset
+// into the whole string.
+int ugfx_text_width_n(const char *str, int n);
 
 // --- the rest of the text chokepoints ---------------------------------
 //
@@ -363,7 +369,16 @@ int ugfx_text_fit_chars(const char *str, int max_w);
 int ugfx_text_next(const char *str, int i);
 int ugfx_text_prev(const char *str, int i);
 
-// An index-at-x is deliberately absent here too -- see gfx.h.
+// Which character boundary of `str` sits at `x` pixels from its start
+// -- the inverse of ugfx_text_width_n(), and what places a caret by
+// clicking. Rounds to the NEAREST boundary, so the right half of a
+// glyph selects the position after it.
+//
+// The kernel half stays absent (gfx.h says why): the console is a fixed
+// grid and has no caller. This one has uui_textbox, which placed its
+// caret by dividing by the cell until the interface face stopped being
+// monospace.
+int ugfx_text_index_at_x(const char *str, int x);
 
 // Draws `str` with its top-left at (x, y), alpha-blending each glyph's
 // coverage between `bg` and `color` -- the same anti-aliased result the

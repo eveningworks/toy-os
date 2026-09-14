@@ -272,13 +272,22 @@ void uui_menubar_init(struct uui_menubar *m, const struct uui_menu_item *items,
     m->committed = -1;
 
     m->bar_bg      = ugfx_rgb(235, 235, 238);
-    m->fg          = ugfx_rgb(20, 20, 20);
+    m->fg          = UUI_COLOR_UNSET;
     m->popup_bg    = ugfx_rgb(250, 250, 252);
-    m->hot_bg      = ugfx_rgb(205, 220, 240);
-    m->border      = ugfx_rgb(150, 155, 165);
+    m->hot_bg      = UUI_COLOR_UNSET;
+    m->border      = UUI_COLOR_UNSET;
     m->accel_fg    = ugfx_rgb(120, 125, 135);
     m->disabled_fg = ugfx_rgb(170, 172, 178);
 }
+
+// Resolved at DRAW time (utheme.h). Only the three roles the palette
+// already names: `bar_bg`, `popup_bg`, `accel_fg` and `disabled_fg` are
+// still literals, since no role matches them and mapping them to the
+// nearest one would change what every menu looks like today.
+static uint32_t m_fg(const struct uui_menubar *m)     { return UUI_COLOR(m->fg, UTHEME_TEXT); }
+static uint32_t m_hot_bg(const struct uui_menubar *m) { return UUI_COLOR(m->hot_bg, UTHEME_SELECTION); }
+static uint32_t m_border(const struct uui_menubar *m) { return UUI_COLOR(m->border, UTHEME_OUTLINE); }
+
 
 void uui_menubar_set_geometry(struct uui_menubar *m, int x, int y, int w, int h) {
     m->x = x; m->y = y; m->w = w; m->h = h;
@@ -379,7 +388,7 @@ static void draw_arrow(struct ugfx_surface *s, int cx, int cy, uint32_t fg) {
 
 void uui_menubar_draw(struct ugfx_surface *s, const struct uui_menubar *m) {
     ugfx_fill_rect(s, m->x, m->y, m->w, m->h, m->bar_bg);
-    ugfx_fill_rect(s, m->x, m->y + m->h - 1, m->w, 1, m->border);
+    ugfx_fill_rect(s, m->x, m->y + m->h - 1, m->w, 1, m_border(m));
 
     for (int i = 0; i < m->count; i++) {
         int x, y, w, h;
@@ -395,7 +404,7 @@ void uui_menubar_draw(struct ugfx_surface *s, const struct uui_menubar *m) {
         if (st != UUI_STATE_REST) ugfx_fill_rect(s, x, y, w, h, bg);
         ugfx_draw_string_clipped(s, x + unit(), y + (h - ugfx_char_h()) / 2,
                                   w - 2 * unit() + 2, m->items[i].label,
-                                  m->fg, bg);
+                                  m_fg(m), bg);
     }
 }
 
@@ -406,7 +415,7 @@ static void draw_level_at(struct ugfx_surface *s, const struct uui_menubar *m,
                            const struct uui_menu_level *lv, int ox, int oy) {
     int lx = lv->x - ox, ly = lv->y - oy;
     ugfx_fill_rect(s, lx, ly, lv->w, lv->h, m->popup_bg);
-    ugfx_draw_rect(s, lx, ly, lv->w, lv->h, m->border);
+    ugfx_draw_rect(s, lx, ly, lv->w, lv->h, m_border(m));
 
     int y = ly + 1;
     for (int i = 0; i < lv->count; i++) {
@@ -414,7 +423,7 @@ static void draw_level_at(struct ugfx_surface *s, const struct uui_menubar *m,
         int h = item_height(it);
 
         if (is_sep(it)) {
-            ugfx_fill_rect(s, lx + pad(), y + h / 2, lv->w - 2 * pad(), 1, m->border);
+            ugfx_fill_rect(s, lx + pad(), y + h / 2, lv->w - 2 * pad(), 1, m_border(m));
             y += h;
             continue;
         }
@@ -423,10 +432,10 @@ static void draw_level_at(struct ugfx_surface *s, const struct uui_menubar *m,
         int off = (f & UUI_MI_DISABLED) != 0;
         uint32_t bg = m->popup_bg;
         if (i == lv->hot && !off) {
-            bg = m->hot_bg;
+            bg = m_hot_bg(m);
             ugfx_fill_rect(s, lx + 1, y, lv->w - 2, h, bg);
         }
-        uint32_t fg = off ? m->disabled_fg : m->fg;
+        uint32_t fg = off ? m->disabled_fg : m_fg(m);
         int ty = y + (h - ugfx_char_h()) / 2;
 
         if (f & UUI_MI_CHECKED) draw_tick(s, lx + 1 + pad(), ty, fg);

@@ -14,6 +14,22 @@
 // than the layout.
 #define UUI_TABLE_CELL_MAX 96
 
+// A fixed column's width, RESERVED IN DIGITS rather than in the widest
+// glyph -- `uui_statusbar.c`'s `fixed_w()` in full, for the same reason
+// and with the same consequence when it is got wrong: `char_w` is the
+// widest advance in the face, so fixed columns over-reserve on a
+// proportional one and eat the width the stretch columns needed.
+// A column declaring a character count is nearly always reserving room
+// for a number, and digits are one width in any sane face.
+//
+// One derivation, because column_rect() and natural_size() must agree
+// or the table draws its cells outside the columns it measured.
+static int col_fixed_w(int chars) {
+    int per = ugfx_char_advance('0');
+    if (per <= 0) per = ugfx_char_w();
+    return chars * per;
+}
+
 void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
                      const struct uui_table_column *cols, int col_count,
                      uui_table_cell_fn cell, void *ctx) {
@@ -43,16 +59,36 @@ void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
     t->seek_col = 0;
     uui_seek_reset(&t->seek);
 
-    t->bg = ugfx_rgb(255, 255, 255);
-    t->fg = ugfx_rgb(20, 20, 20);
-    t->sel_bg = ugfx_rgb(205, 220, 240);
-    t->sel_fg = ugfx_rgb(20, 20, 20);
-    t->head_bg = ugfx_rgb(225, 225, 230);
+    // UNSET means "ask the theme when you draw" (utheme.h). An app
+    // setting any of these still wins.
+    t->bg = UUI_COLOR_UNSET;
+    t->fg = UUI_COLOR_UNSET;
+    t->sel_bg = UUI_COLOR_UNSET;
+    t->sel_fg = UUI_COLOR_UNSET;
+    t->head_bg = UUI_COLOR_UNSET;
+    // A header's ink is a step lighter than body text and the palette
+    // has no role for it yet; left a literal rather than mapped to
+    // `text`, which would darken every table header today.
     t->head_fg = ugfx_rgb(40, 40, 40);
-    t->grid = ugfx_rgb(205, 205, 210);
-    t->track_bg = ugfx_rgb(225, 225, 230);
-    t->thumb_bg = ugfx_rgb(150, 155, 165);
+    t->grid = UUI_COLOR_UNSET;
+    t->track_bg = UUI_COLOR_UNSET;
+    t->thumb_bg = UUI_COLOR_UNSET;
 }
+
+
+// --- colours, resolved when we DRAW ----------------------------------
+//
+// Not at init: a widget built before a theme change would otherwise
+// keep the old palette forever, and every app builds its widgets once.
+// See utheme.h's UUI_COLOR.
+uint32_t uui_table_c_bg(const struct uui_table *t)      { return UUI_COLOR(t->bg, UTHEME_WHITE); }
+uint32_t uui_table_c_fg(const struct uui_table *t)      { return UUI_COLOR(t->fg, UTHEME_TEXT); }
+uint32_t uui_table_c_sel_bg(const struct uui_table *t)  { return UUI_COLOR(t->sel_bg, UTHEME_SELECTION); }
+uint32_t uui_table_c_sel_fg(const struct uui_table *t)  { return UUI_COLOR(t->sel_fg, UTHEME_TEXT); }
+uint32_t uui_table_c_head_bg(const struct uui_table *t) { return UUI_COLOR(t->head_bg, UTHEME_BUTTON_BG); }
+uint32_t uui_table_c_grid(const struct uui_table *t)    { return UUI_COLOR(t->grid, UTHEME_SEPARATOR); }
+uint32_t uui_table_c_track_bg(const struct uui_table *t)   { return UUI_COLOR(t->track_bg, UTHEME_BUTTON_BG); }
+uint32_t uui_table_c_thumb_bg(const struct uui_table *t)   { return UUI_COLOR(t->thumb_bg, UTHEME_OUTLINE); }
 
 int uui_table_row_h(const struct uui_table *t) {
     return t->row_h > 0 ? t->row_h : ugfx_char_h() + 4;
@@ -200,10 +236,9 @@ void uui_table_column_rect(const struct uui_table *t, int col,
     if (out_w) *out_w = 0;
     if (col < 0 || col >= t->col_count) return;
 
-    int cw = ugfx_char_w();
     int fixed = 0, stretch = 0;
     for (int i = 0; i < t->col_count; i++) {
-        if (t->cols[i].width_chars > 0) fixed += t->cols[i].width_chars * cw;
+        if (t->cols[i].width_chars > 0) fixed += col_fixed_w(t->cols[i].width_chars);
         else stretch++;
     }
 
@@ -217,7 +252,7 @@ void uui_table_column_rect(const struct uui_table *t, int col,
     int x = t->x, seen_stretch = 0, width = 0;
     for (int i = 0; i <= col; i++) {
         if (t->cols[i].width_chars > 0) {
-            width = t->cols[i].width_chars * cw;
+            width = col_fixed_w(t->cols[i].width_chars);
         } else {
             seen_stretch++;
             width = (seen_stretch == stretch) ? spare - each * (stretch - 1) : each;
@@ -261,7 +296,7 @@ static void draw_cell(struct ugfx_surface *s, const struct uui_table *t,
 // hidden (uui_table_set_header()) -- the rule below would otherwise
 // land one pixel above the widget's own rect.
 static void table_draw_header(struct ugfx_surface *s, const struct uui_table *t, int hh) {
-    ugfx_fill_rect(s, t->x, t->y, t->w, hh, t->head_bg);
+    ugfx_fill_rect(s, t->x, t->y, t->w, hh, uui_table_c_head_bg(t));
     for (int c = 0; c < t->col_count; c++) {
         int cx, cw;
         uui_table_column_rect(t, c, &cx, &cw);
@@ -290,7 +325,7 @@ static void table_draw_header(struct ugfx_surface *s, const struct uui_table *t,
             if (tw < text_avail) tx = cx + cw - UUI_TABLE_PAD_X - arrow - tw;
         }
         ugfx_draw_string_clipped(s, tx, t->y + (hh - ugfx_char_h()) / 2,
-                                  text_avail, title, t->head_fg, t->head_bg);
+                                  text_avail, title, t->head_fg, uui_table_c_head_bg(t));
         if (arrow) {
             // Drawn as stacked rows rather than a glyph: the baked font
             // has no arrow character, and a triangle built from the
@@ -313,9 +348,9 @@ static void table_draw_header(struct ugfx_surface *s, const struct uui_table *t,
         // Column separator, header only -- a full grid turns a dense
         // table into graph paper, and every desktop table draws the
         // header rule and leaves the body clean.
-        if (c > 0) ugfx_fill_rect(s, cx, t->y, 1, hh, t->grid);
+        if (c > 0) ugfx_fill_rect(s, cx, t->y, 1, hh, uui_table_c_grid(t));
     }
-    ugfx_fill_rect(s, t->x, t->y + hh - 1, t->w, 1, t->grid);
+    ugfx_fill_rect(s, t->x, t->y + hh - 1, t->w, 1, uui_table_c_grid(t));
 }
 
 void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
@@ -324,7 +359,7 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
     int vis = uui_table_visible_rows(t);
     int bar = uui_table_scrollbar_visible(t) ? t->bar_w : 0;
 
-    ugfx_fill_rect(s, t->x, t->y, t->w, t->h, t->bg);
+    ugfx_fill_rect(s, t->x, t->y, t->w, t->h, uui_table_c_bg(t));
 
     // --- header ---
     if (hh > 0) table_draw_header(s, t, hh);
@@ -339,10 +374,10 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
         if (idx < 0) break;
         int ry = t->y + hh + i * rh;
 
-        uint32_t rbg = t->bg, rfg = t->fg;
+        uint32_t rbg = uui_table_c_bg(t), rfg = uui_table_c_fg(t);
         uint32_t tint = t->tint ? t->tint(t->ctx, idx) : 0;
-        if (idx == t->selected) { rbg = t->sel_bg; rfg = t->sel_fg; }
-        else if (idx == t->hovered) { rbg = uui_state_bg(t->bg, UUI_STATE_HOVER); }
+        if (idx == t->selected) { rbg = uui_table_c_sel_bg(t); rfg = uui_table_c_sel_fg(t); }
+        else if (idx == t->hovered) { rbg = uui_state_bg(uui_table_c_bg(t), UUI_STATE_HOVER); }
         else if (tint) { rbg = tint; }
 
         // HALFWAY TO THE BACKGROUND, which is what a cut looks like on
@@ -350,7 +385,7 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
         // that is also selected fades from the SELECTION's text colour.
         if (t->fade && t->fade(t->ctx, idx)) rfg = ugfx_blend(rfg, rbg, 128);
 
-        if (rbg != t->bg) ugfx_fill_rect(s, t->x, ry, t->w - bar, rh, rbg);
+        if (rbg != uui_table_c_bg(t)) ugfx_fill_rect(s, t->x, ry, t->w - bar, rh, rbg);
         for (int c = 0; c < t->col_count; c++) draw_cell(s, t, c, idx, ry, rfg, rbg);
     }
 
@@ -360,7 +395,7 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
         // scroll.
         uui_scrollbar_draw(s, t->x + t->w - bar, t->y + hh, bar, t->h - hh,
                             t->row_count, vis, t->row_count - vis - t->top,
-                            t->track_bg, t->thumb_bg, 0);
+                            uui_table_c_track_bg(t), uui_table_c_thumb_bg(t), 0);
     }
 
     // On the selected ROW, because that is what the arrows move. Round
@@ -381,7 +416,7 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
 
 void uui_table_natural_size(const struct uui_table *t, int *out_w, int *out_h) {
     if (out_w) {
-        int cw = ugfx_char_w(), total = 0;
+        int total = 0;
         for (int i = 0; i < t->col_count; i++) {
             int chars = t->cols[i].width_chars;
             if (chars <= 0) {
@@ -391,7 +426,7 @@ void uui_table_natural_size(const struct uui_table *t, int *out_w, int *out_h) {
                 int tw = ugfx_text_width(t->cols[i].title ? t->cols[i].title : "");
                 total += tw + UUI_TABLE_PAD_X * 2;
             } else {
-                total += chars * cw;
+                total += col_fixed_w(chars);
             }
         }
         *out_w = total + t->bar_w;

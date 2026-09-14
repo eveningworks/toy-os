@@ -49,6 +49,7 @@ static void seed(int w, int h) {
     if (!g_seeded) srand((unsigned)time(0));
     g_for_w = w; g_for_h = h;
     int cw = ugfx_char_w(), ch = ugfx_char_h();
+    // text-measure-ok: on_draw() selects the mono family; this is a real grid.
     g_cols = cw > 0 ? w / cw : 0;
     g_rows = ch > 0 ? h / ch : 0;
     if (g_cols > COLS_MAX) g_cols = COLS_MAX;
@@ -92,7 +93,8 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
                       (uint32_t)(g * g_ink_g / 255) << 8 |
                       (uint32_t)(g * g_ink_b / 255);
             }
-            ugfx_draw_char(s, c * cw, row * ch, glyph(), col, 0x000000);
+            // text-measure-ok: mono family, selected above -- a cell grid by design.
+        ugfx_draw_char(s, c * cw, row * ch, glyph(), col, 0x000000);
         }
     }
 }

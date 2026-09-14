@@ -176,6 +176,8 @@ int uui_splitter_key(struct uui_splitter *sp, int key) {
     // One character cell per press, so the nudge tracks the font like
     // everything else -- and at least one unit, or a very wide track
     // would round the step to nothing.
+    // text-measure-ok: UUI_SPLIT_SCALE is a fixed-point scale, not a
+    // character count -- this moves the divider by one cell of travel.
     int step = (int)(((long)ugfx_char_w() * UUI_SPLIT_SCALE) / travel);
     if (step < 1) step = 1;
 

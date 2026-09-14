@@ -269,7 +269,8 @@ static int fv_fade(void *ctx, int row) {
 // not hide where the keyboard is.
 static uint32_t fv_tint(void *ctx, int row) {
     const struct uui_fileview *fv = (const struct uui_fileview *)ctx;
-    return uui_fileview_is_marked(fv, row) ? fv->mark_bg : 0;
+    return uui_fileview_is_marked(fv, row)
+           ? UUI_COLOR(fv->mark_bg, uui_table_c_sel_bg(&fv->table)) : 0;
 }
 
 // --- listing ----------------------------------------------------------
@@ -297,7 +298,10 @@ void uui_fileview_init(struct uui_fileview *fv, int x, int y, int w, int h,
     // a multi-selection is one selection with several rows, not a
     // second kind of highlight. The cursor row is told apart by its
     // focus ring, which is what the ring is for.
-    fv->mark_bg = fv->table.sel_bg;
+    // UNSET, not resolved here: this runs at construction, and taking
+    // the colour now would freeze today's palette into every file view
+    // ever built -- the exact thing the sentinel exists to stop.
+    fv->mark_bg = UUI_COLOR_UNSET;
     uui_table_set_sort(&fv->table, FV_COL_NAME, 1);
     // Typing a letter seeks by NAME, in both modes. Stated rather than
     // left to the default, so a reordered column list moves it too.
@@ -544,8 +548,14 @@ static int ic_pad(void)  { return 4; }
 
 static int ic_cell_w(void) {
     // A label's worth of pitch, never narrower than the icon -- the
-    // desktop's icon_col_w() tradeoff (fixed pitch, clipped labels).
-    int w = 14 * ugfx_char_w();
+    // desktop's icon_col_w() tradeoff (fixed pitch, clipped labels),
+    // including its reservation in a REPRESENTATIVE glyph. `char_w` is
+    // the widest advance in the face, so fourteen of it is ~1.7x the
+    // pitch these labels were sized against, and the selection
+    // highlight is a cell wide.
+    int per = ugfx_char_advance('n');
+    if (per <= 0) per = ugfx_char_w();
+    int w = 14 * per;
     int m = ic_px() + 8;
     return w < m ? m : w;
 }
@@ -745,7 +755,7 @@ static void ic_wash(struct ugfx_surface *s, int x, int y, int w, int h,
 
 static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
     const struct uui_table *t = &fv->table;
-    ugfx_fill_rect(s, t->x, t->y, t->w, t->h, t->bg);
+    ugfx_fill_rect(s, t->x, t->y, t->w, t->h, uui_table_c_bg(t));
 
     // THE BOTTOM ROW IS DELIBERATELY PARTIAL (`last`, below), so this
     // must clip or that row paints over whatever follows the pane -- the
@@ -767,12 +777,13 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
         ic_cell_rect(fv, view, &x, &y);
 
         // Same precedence as the table's rows: selection, hover, tint.
-        uint32_t bg = t->bg;
+        uint32_t bg = uui_table_c_bg(t);
         int selected = (src == t->selected);
-        if (selected) { bg = t->sel_bg; sel_x = x; sel_y = y; }
-        else if (src == t->hovered) bg = uui_state_bg(t->bg, UUI_STATE_HOVER);
-        else if (uui_fileview_is_marked(fv, src)) bg = fv->mark_bg;
-        if (bg != t->bg) ugfx_fill_rect(s, x, y, cw - 2, chh - 2, bg);
+        if (selected) { bg = uui_table_c_sel_bg(t); sel_x = x; sel_y = y; }
+        else if (src == t->hovered) bg = uui_state_bg(uui_table_c_bg(t), UUI_STATE_HOVER);
+        else if (uui_fileview_is_marked(fv, src))
+            bg = UUI_COLOR(fv->mark_bg, uui_table_c_sel_bg(t));
+        if (bg != uui_table_c_bg(t)) ugfx_fill_rect(s, x, y, cw - 2, chh - 2, bg);
 
         int is_up = fv_is_up_row(fv, src);
         const struct sys_dirent *e = fv_entry(fv, src);
@@ -796,7 +807,7 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
             // A hairline frame: a photo's edge can match the pane and a
             // frameless thumbnail reads as a rendering glitch.
             ugfx_draw_rect(s, tx2 - 1, ty2 - 1, thumb->w + 2, thumb->h + 2,
-                            t->grid);
+                            uui_table_c_grid(t));
         } else {
             const struct uimg *ico = icon_get(is_dir ? "folder" : "file", px);
             int ix = x + (cw - px) / 2;
@@ -808,7 +819,7 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
                 // files are missing rather than merely unthemed.
                 ugfx_fill_rect(s, ix, y + 2, px, px, ugfx_rgb(60, 90, 130));
                 char initial[2] = { name[0] ? name[0] : '?', 0 };
-                ugfx_draw_string(s, ix + (px - ugfx_char_w()) / 2,
+                ugfx_draw_string(s, ix + (px - ugfx_text_width(initial)) / 2,
                                   y + 2 + (px - ugfx_char_h()) / 2, initial,
                                   ugfx_rgb(230, 230, 235), ugfx_rgb(60, 90, 130));
             }
@@ -828,29 +839,30 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
             rest = uui_label_wrap_next(rest, max_w, line, sizeof line);
             int ly = y + 2 + px + 2 + n * (ugfx_char_h() + 1);
             int cut = (n == IC_LABEL_LINES - 1) && *rest;
-            int avail = cut ? max_w - 2 * ugfx_char_w() : max_w;
-            if (avail < ugfx_char_w()) avail = ugfx_char_w();
+            int ell = ugfx_text_width("..");
+            int avail = cut ? max_w - ell : max_w;
+            if (avail < ell) avail = ell;
             int tw = ugfx_text_width(line);
             if (tw > avail) tw = avail;
-            int lx = x + 3 + (max_w - (tw + (cut ? 2 * ugfx_char_w() : 0))) / 2;
+            int lx = x + 3 + (max_w - (tw + (cut ? ell : 0))) / 2;
             if (lx < x + 3) lx = x + 3;
             ugfx_draw_string_clipped(s, lx, ly, avail, line,
-                                      selected ? t->sel_fg : t->fg, bg);
-            if (cut) ugfx_draw_string_clipped(s, lx + tw, ly, 2 * ugfx_char_w(), "..",
-                                              selected ? t->sel_fg : t->fg, bg);
+                                      selected ? uui_table_c_sel_fg(t) : uui_table_c_fg(t), bg);
+            if (cut) ugfx_draw_string_clipped(s, lx + tw, ly, ell, "..",
+                                              selected ? uui_table_c_sel_fg(t) : uui_table_c_fg(t), bg);
         }
     }
 
     if (ic_bar_visible(fv))
         uui_scrollbar_draw(s, t->x + t->w - t->bar_w, t->y, t->bar_w, t->h,
                             ic_total_rows(fv), vis, ic_offset(fv),
-                            t->track_bg, t->thumb_bg, 0);
+                            uui_table_c_track_bg(t), uui_table_c_thumb_bg(t), 0);
 
     // The band, above everything it crosses. An outline, not a fill --
     // the same call the desktop makes (no alpha blend to fill with).
     int bx, by, bw, bh;
     if (rb_rect(&fv->band, &bx, &by, &bw, &bh))
-        ugfx_draw_rect(s, bx, by, bw, bh, t->fg);
+        ugfx_draw_rect(s, bx, by, bw, bh, uui_table_c_fg(t));
 
     if (t->focused) {
         if (sel_x >= 0) uui_focus_ring(s, sel_x, sel_y, cw - 2, chh - 2);
@@ -1031,7 +1043,7 @@ void uui_fileview_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
             const struct uui_table *t = &fv->table;
             int hh = uui_table_header_h(t);
             ugfx_set_clip_rect(s, t->x, t->y + hh, t->w, t->h - hh);
-            ugfx_draw_rect(s, bx, by, bw, bh, t->fg);
+            ugfx_draw_rect(s, bx, by, bw, bh, uui_table_c_fg(t));
             ugfx_clear_clip_rect(s);
         }
     }
@@ -1404,13 +1416,13 @@ static void fv_ops_drag_draw(struct ugfx_surface *s, const void *w, const struct
     int tw = ugfx_text_width(d->label);
     int gx = d->x + 12, gy = d->y + 12;
     int gw = px + 6 + tw + 8, gh = px + 6;
-    ugfx_fill_rect(s, gx, gy, gw, gh, t->sel_bg);
-    ugfx_draw_rect(s, gx, gy, gw, gh, t->fg);
+    ugfx_fill_rect(s, gx, gy, gw, gh, uui_table_c_sel_bg(t));
+    ugfx_draw_rect(s, gx, gy, gw, gh, uui_table_c_fg(t));
     if (ico) ugfx_blit_alpha(s, gx + 3, gy + 3, ico->w, ico->h, ico->px, ico->w);
     ugfx_draw_string(s, gx + px + 6, gy + (gh - ugfx_char_h()) / 2, d->label,
-                     t->sel_fg, t->sel_bg);
+                     uui_table_c_sel_fg(t), uui_table_c_sel_bg(t));
     if (d->copy)
-        ugfx_draw_string(s, gx + gw + 2, gy, "+", t->fg, t->bg);
+        ugfx_draw_string(s, gx + gw + 2, gy, "+", uui_table_c_fg(t), uui_table_c_bg(t));
 }
 
 static int fv_ops_wheel(void *w, int notches) {

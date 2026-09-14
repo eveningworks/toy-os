@@ -95,7 +95,13 @@ const struct uimg *start_icon(int *out_x, int *out_y, int *out_size) {
 // ("untitled" drew as "un" once the strip, and so the icon, grew).
 int win_btn_w(void) {
     int icon = taskbar_icon_size();
-    return WIN_LABEL_MAX_CHARS * ugfx_char_w() + 24 + (icon ? icon + 4 : 0);
+    // Reserved in a REPRESENTATIVE glyph, not the widest one -- this is
+    // a budget for a title nobody has seen yet, and `char_w` makes it
+    // nearly twice what ordinary text needs, so fewer buttons fit
+    // before taskbar_layout() starts shrinking and grouping them.
+    int per = ugfx_char_advance('n');
+    if (per <= 0) per = ugfx_char_w();
+    return WIN_LABEL_MAX_CHARS * per + 24 + (icon ? icon + 4 : 0);
 }
 
 // The minimize/maximize/close title-bar buttons used to be a fixed

@@ -33,6 +33,57 @@ this the obvious way), not from how much history it accumulated.
   which point its labels overlap. `tools/font_test.py`'s one
   load-bearing check exists for exactly this.
 
+  **THE FIVE CHOKEPOINTS, and `tools/check_text_measure.py` FAILS THE
+  BUILD when something goes round them.** `ugfx_text_width()` for a
+  whole string, `ugfx_text_width_n()` for a prefix (a caret, a selection
+  edge), `ugfx_text_fit_chars()` for how much fits, and
+  `ugfx_text_index_at_x()` for the inverse -- which character a click
+  landed on. Reserving space for text that does not exist yet is the
+  fifth and is NOT a measurement: `ugfx_char_advance('0')` for a column
+  of digits, `('n')` for ordinary text. The check flags an arithmetic
+  use of the cell width whose other operand is a NAME rather than a
+  literal, because a variable paired with the cell is nearly always a
+  character count while a literal is a layout unit (`char_w / 2` of
+  padding is fine and always was). Waive with `text-measure-ok:
+  <reason>`; the legitimate reason is a monospace bracket.
+
+  **A SLICE IS MEASURED ON THE SLICE.** Kerning is counted between
+  adjacent characters, so the width of `str[start..i]` is not the
+  difference of two offsets into the whole string -- it includes a kern
+  pair the drawing of that slice never applies. `uui_textbox` measures
+  the exact `shown[]` buffer it draws, which is why its caret, its
+  selection and its hit test cannot drift apart.
+
+- **A WIDGET RESOLVES ITS COLOURS WHEN IT DRAWS, NOT WHEN IT IS BUILT.**
+  `UUI_COLOR_UNSET` in an init means "ask the theme", and
+  `UUI_COLOR(v, UTHEME_ROLE)` at the draw is what asks. An init that
+  copied `UTHEME_*` into the widget would freeze whatever palette was
+  live at construction -- and every app builds its widgets once, at
+  open -- so a theme change would reach only widgets created afterwards.
+  GTK and Qt both resolve a style at paint for the same reason. An app
+  that sets a colour explicitly still wins, because any other value is
+  not the sentinel.
+
+  **THE PALETTE HAS THREE GREYS AND THEY ARE NOT INTERCHANGEABLE.**
+  `border` frames a window or a menu and is nearly black; `outline`
+  edges something you can click (a field, a scrollbar thumb); and
+  `separator` is a decorative rule (a table's grid lines). Drawing one
+  with another's colour is immediately wrong, and Qt separates them too
+  (WindowText against Mid/Dark). `selection_bg` is likewise not
+  `accent`: a selected row here is a pale wash under ordinary dark text,
+  while `accent` is the saturated colour a focus ring uses, and a dark
+  mode has to move them independently.
+
+- **`utext` IS A FIXED GRID, AND ITS CALLERS OWE IT A MONOSPACE FACE.**
+  It places every glyph at `col * ugfx_char_w()` and hit-tests by
+  dividing, which is a measurement only in a monospace face. Notepad's
+  `doc_font()` and `uui_textview.c`'s `grid_font()` are the two brackets
+  that pay that debt; `uui_textview` had no bracket at all until
+  2026-09-14, so it drew the proportional session face at cell pitch --
+  ragged text with a caret nowhere near the click. **And every early
+  return inside such a bracket leaks the face**, leaving the whole
+  process measuring in it.
+
   Two related facts. `gfx_draw_char()` still paints the WHOLE cell,
   background included, because the console depends on it (a character
   replacing a wider one must leave nothing behind); string drawing

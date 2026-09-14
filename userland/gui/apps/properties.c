@@ -200,7 +200,14 @@ static void build_rows(void) {
 
 static int margin(void)  { return utheme_pad() * 2; }
 static int line_h(void)  { return ugfx_char_h() + utheme_gap(); }
-static int label_w(void) { return ugfx_char_w() * 11; }
+// Eleven characters of label column, reserved in a REPRESENTATIVE glyph
+// -- `char_w` is the widest advance, so eleven of it is roughly twice
+// what "Modified:" draws, and the value column loses that width.
+static int label_w(void) {
+    int per = ugfx_char_advance('n');
+    if (per <= 0) per = ugfx_char_w();
+    return per * 11;
+}
 static int indent(void)  { return ugfx_char_w(); }   // rows sit in from their heading
 static int header_h(void) {
     int two = 2 * line_h();

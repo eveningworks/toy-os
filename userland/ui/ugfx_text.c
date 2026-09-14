@@ -1,0 +1,67 @@
+// Text MEASUREMENT: a string in, pixels or an index out.
+//
+// Split out of ugfx.c because these six are the only text functions
+// that touch no font state and no surface -- they stand entirely on
+// ugfx_char_advance() and ugfx_kern(). That is what makes them
+// compilable on the host against a synthetic proportional face, which
+// matters more here than for most code: this is the arithmetic that
+// decides where a caret goes, and it was wrong in every widget for as
+// long as the interface face was monospace and the error was invisible.
+//
+// THE INVARIANT ALL SIX SHARE: kerning is counted BETWEEN adjacent
+// characters, before the advance of the second. So a measurement of a
+// SLICE must be taken on that slice -- an offset into the whole string
+// includes a kern pair the drawing of the slice never applies, which is
+// a caret drifting by a pixel or two per scroll step.
+#include "ui/ugfx.h"
+
+int ugfx_text_width_n(const char *str, int n) {
+    if (!str) return 0;
+    int w = 0, prev = 0;
+    for (int i = 0; (n < 0 || i < n) && str[i]; i++) {
+        w += ugfx_kern(prev, (unsigned char)str[i]) + ugfx_char_advance(str[i]);
+        prev = (unsigned char)str[i];
+    }
+    return w;
+}
+
+int ugfx_text_width(const char *str) { return ugfx_text_width_n(str, -1); }
+
+int ugfx_text_index_at_x(const char *str, int x) {
+    if (!str || x <= 0) return 0;
+    int w = 0, prev = 0, i = 0;
+    for (; str[i]; i++) {
+        int adv = ugfx_kern(prev, (unsigned char)str[i]) + ugfx_char_advance(str[i]);
+        // Past a glyph's midpoint belongs to the boundary AFTER it, so
+        // clicking the right half of a character puts the caret behind
+        // it. Rounding by half the CELL instead lands a click on the
+        // wrong character for every glyph narrower than the widest one.
+        if (x < w + adv / 2) return i;
+        w += adv;
+        prev = (unsigned char)str[i];
+    }
+    return i;
+}
+
+int ugfx_text_fit_chars(const char *str, int max_w) {
+    if (!str || ugfx_char_w() <= 0) return 0;
+    int n = 0, used = 0, prev = 0;
+    while (str[n]) {
+        int adv = ugfx_kern(prev, (unsigned char)str[n]) + ugfx_char_advance(str[n]);
+        if (used + adv > max_w) break;
+        used += adv;
+        prev = (unsigned char)str[n];
+        n++;
+    }
+    return n;
+}
+
+int ugfx_text_next(const char *str, int i) {
+    if (!str || i < 0) return 0;
+    return str[i] ? i + 1 : i;
+}
+
+int ugfx_text_prev(const char *str, int i) {
+    (void)str;
+    return i > 0 ? i - 1 : 0;
+}

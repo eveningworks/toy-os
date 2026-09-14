@@ -116,15 +116,18 @@ static uint64_t flash_until = 0;
 // any app name today) both need to fit, so this scans both instead of
 // assuming a fixed char count.
 int start_menu_w(void) {
-    int max_chars = 0;
+    // MEASURED, not counted: the menu is as wide as its widest label
+    // DRAWS, which on a proportional face is not its longest label
+    // times the widest advance -- that came out ~1.8x too wide.
+    int max_w = 0;
     int app_rows = gui_app_visible_count(GUI_SHOW_STARTMENU);
     for (int i = 0; i < app_rows; i++) {
-        int n = (int)k_strlen(gui_app_visible_at(GUI_SHOW_STARTMENU, i)->name);
-        if (n > max_chars) max_chars = n;
+        int n = ugfx_text_width(gui_app_visible_at(GUI_SHOW_STARTMENU, i)->name);
+        if (n > max_w) max_w = n;
     }
     for (int i = 0; i < wm_system_action_count; i++) {
-        int n = (int)k_strlen(wm_system_actions[i].label);
-        if (n > max_chars) max_chars = n;
+        int n = ugfx_text_width(wm_system_actions[i].label);
+        if (n > max_w) max_w = n;
     }
     // ROOM FOR THE ICON COLUMN, whether or not every row has one:
     // rows with an icon indent their label by the row height, and a
@@ -132,7 +135,7 @@ int start_menu_w(void) {
     // artwork arrived. Reserved unconditionally so the menu does not
     // change width when an icon file appears or goes missing.
     int icon_col = ugfx_char_h() + 2;   // item_h - 4 plus its gap
-    return max_chars * ugfx_char_w() + 20 + icon_col;
+    return max_w + 20 + icon_col;
 }
 
 // Shared by start_menu_draw() and start_menu_handle_click() so the two

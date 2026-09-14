@@ -89,6 +89,12 @@ void uui_textbox_natural_size(const struct uui_textbox *f, int *out_w, int *out_
 void uui_textbox_set_geometry(struct uui_textbox *f, int x, int y, int w, int h);
 
 // Point (cx, cy) inside the field, content-relative.
+// A field's colours, RESOLVED -- read these, never the struct fields,
+// which hold UUI_COLOR_UNSET until they are drawn (utheme.h).
+uint32_t uui_textbox_c_bg(const struct uui_textbox *f);
+uint32_t uui_textbox_c_fg(const struct uui_textbox *f);
+uint32_t uui_textbox_c_border(const struct uui_textbox *f);
+
 int uui_textbox_hit(const struct uui_textbox *f, int cx, int cy);
 
 // The character index a click at `cx` lands on -- the inverse of the

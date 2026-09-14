@@ -635,7 +635,16 @@ def main():
           f"{mono_cell!r} -> {prop_cell!r}")
 
     set_band(cell_h_from(prop_cell) or LINE_H)
-    prop_left, prop_ink = text_left(qmp, "prop")
+    # **WAIT FOR THE PROPORTIONAL FACE TO ACTUALLY ARRIVE.** The
+    # compositor logging "font changed" is not the screen having
+    # repainted in the new face -- fontd republishes on its own poll
+    # and every client re-maps on its next frame. Without
+    # differs_from this captured the PREVIOUS face often enough to
+    # fail the narrower-than-monospace check below with prop and mono
+    # the wrong way round, which is the flake this helper's own
+    # docstring describes and which only the builtin call site was
+    # guarding against.
+    prop_left, prop_ink = text_left(qmp, "prop", differs_from=mono_left)
     check("the switch reached the screen without a restart",
           prop_left != mono_left or abs(prop_ink - mono_ink) > 100,
           f"left {mono_left} -> {prop_left}, ink {mono_ink} -> {prop_ink}")

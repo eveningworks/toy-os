@@ -740,38 +740,12 @@ int ugfx_char_h(void) { return g_font->line_h; }
 
 int ugfx_glyph_h(void) { return g_char_h; }
 
-int ugfx_text_width(const char *str) {
-    if (!str) return 0;
-    int w = 0, prev = 0;
-    for (int n = 0; str[n]; n++) {
-        w += ugfx_kern(prev, (unsigned char)str[n]) + ugfx_char_advance(str[n]);
-        prev = (unsigned char)str[n];
-    }
-    return w;
-}
-
-int ugfx_text_fit_chars(const char *str, int max_w) {
-    if (!str || g_char_w <= 0) return 0;
-    int n = 0, used = 0, prev = 0;
-    while (str[n]) {
-        int adv = ugfx_kern(prev, (unsigned char)str[n]) + ugfx_char_advance(str[n]);
-        if (used + adv > max_w) break;
-        used += adv;
-        prev = (unsigned char)str[n];
-        n++;
-    }
-    return n;
-}
-
-int ugfx_text_next(const char *str, int i) {
-    if (!str || i < 0) return 0;
-    return str[i] ? i + 1 : i;
-}
-
-int ugfx_text_prev(const char *str, int i) {
-    (void)str;
-    return i > 0 ? i - 1 : 0;
-}
+// The six string-measurement functions moved to ugfx_text.c: they are
+// pure arithmetic over ugfx_char_advance()/ugfx_kern() with no font
+// state and no surface of their own, which is what lets a host harness
+// compile them against a synthetic proportional face
+// (tools/ugfx_text_hostcheck.py). The two accessors they stand on stay
+// here, with the atlas.
 
 // Blends `fg` over `bg` by `alpha` (0..255), per channel. The glyph
 // tables are coverage maps, not masks -- that is what makes this text

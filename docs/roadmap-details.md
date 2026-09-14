@@ -1306,9 +1306,11 @@ than the baked font at the same size, which FreeType hinted offline. This
 is worth knowing before treating small-size rendering as a bug: it is a
 missing feature with a name.
 
-**Kerning** (`kern`/`GPOS`) matters only once proportional faces are in
-normal use; `AV` and `To` sit visibly wrong, and nothing on the desktop
-uses a proportional face by default.
+**Kerning** (`kern`/`GPOS`) matters now that the interface face IS
+proportional by default (`liberation-sans`, 2026-09-14): `AV` and `To`
+sit visibly wrong without it, and every measurement chokepoint applies
+it. This entry said "nothing on the desktop uses a proportional face by
+default" for as long as that was true and one commit longer.
 
 **Moving the parse out of ring 0** is the security item, and it is not a
 font task. A `.ttf` is untrusted input being parsed in the kernel -- the

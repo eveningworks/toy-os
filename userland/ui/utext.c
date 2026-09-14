@@ -1,5 +1,14 @@
 // See utext.h for the design: caller-owned flat storage, a wrap
 // derived on demand, and a sparse index that only accelerates it.
+//
+// **THIS BUFFER IS A FIXED GRID, AND THAT IS A CONTRACT ON ITS
+// CALLERS.** Every glyph is placed at `col * ugfx_char_w()` and every
+// hit-test divides by it, which is a measurement only in a monospace
+// face. So a caller must select one around anything here that draws or
+// measures -- Notepad's `doc_font()` and `uui_textview.c`'s
+// `grid_font()` are the two that do. Drawn in the proportional
+// interface face this spreads text at cell pitch with ragged gaps and
+// puts the caret nowhere near the click.
 #include "ui/utext.h"
 
 #define CURSOR_BAR_W 2
@@ -212,6 +221,7 @@ static void pos_of_index(struct utext *t, int cols, int target,
 
 static void grid(int w, int h, int *max_cols, int *visible_rows) {
     int cw = ugfx_char_w(), chh = ugfx_char_h();
+    // text-measure-ok: the caller selected a mono face; see the top of this file
     *max_cols = cw > 0 ? w / cw : 1;
     if (*max_cols < 1) *max_cols = 1;
     *visible_rows = chh > 0 ? h / chh : 1;
@@ -306,7 +316,8 @@ void utext_draw(struct utext *t, struct ugfx_surface *s,
             if (col < 0) continue;
             if (col >= max_cols) break;
             int selected = has_sel && k >= sel_start && k < sel_end;
-            int rx = x + col * char_w;
+            // text-measure-ok: a fixed grid by contract -- see the top of this file
+    int rx = x + col * char_w;
             if (selected) ugfx_fill_rect(s, rx, ry, char_w, char_h, sel_bg);
             ugfx_draw_char(s, rx, ry, t->buf[k], fg, selected ? sel_bg : bg);
         }
@@ -316,7 +327,8 @@ void utext_draw(struct utext *t, struct ugfx_surface *s,
         if (has_sel && draw_end >= sel_start && draw_end < sel_end) {
             int col = draw_end - i - t->hscroll;
             if (col >= 0 && col < max_cols)
-                ugfx_fill_rect(s, x + col * char_w, ry, char_w, char_h, sel_bg);
+                // text-measure-ok: same grid contract
+        ugfx_fill_rect(s, x + col * char_w, ry, char_w, char_h, sel_bg);
         }
 
         if (last_span(t, draw_end, next) || next <= i) break;
@@ -329,7 +341,8 @@ void utext_draw(struct utext *t, struct ugfx_surface *s,
         cc -= t->hscroll;
         if (cl >= first_line && cl - first_line < visible_rows &&
             cc >= 0 && cc <= max_cols)
-            ugfx_fill_rect(s, x + cc * char_w, y + (cl - first_line) * char_h,
+            // text-measure-ok: same grid contract
+        ugfx_fill_rect(s, x + cc * char_w, y + (cl - first_line) * char_h,
                             CURSOR_BAR_W, char_h, fg);
     }
 }
