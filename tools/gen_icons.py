@@ -146,6 +146,17 @@ def icon_about():
     return im
 
 
+def icon_help():
+    # A QUESTION MARK AS STROKES, not a glyph: the icon set carries no
+    # font, and an outlined '?' drawn as a polygon loses its counter at
+    # menu-row size the way icon_fontdemo()'s A did.
+    im, d = tile((90, 120, 200))
+    d.arc([18, 12, 46, 40], start=160, end=20, fill=WHITE, width=5)
+    d.line([32, 30, 32, 40], fill=WHITE, width=5)
+    d.ellipse([29, 45, 35, 51], fill=WHITE)
+    return im
+
+
 def icon_shapes():
     im, d = tile((215, 95, 120))
     d.polygon([(15, 37), (26, 16), (37, 37)], fill=WHITE)
@@ -747,6 +758,7 @@ ICONS = {
     "imgview": icon_imgview,
     "player": icon_player,
     "about": icon_about,
+    "help": icon_help,
     "shapes": icon_shapes,
     "fontdemo": icon_fontdemo,
     "uidemo": icon_uidemo,
