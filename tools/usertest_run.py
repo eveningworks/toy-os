@@ -434,7 +434,12 @@ EXCLUDED = [
 # TRAP gate (idt.c) it lost every time, and focusring_test was reported
 # as failing while its own file said `all checks passed`.
 VERDICT_DONE = ("all checks passed", "FAILED --")
-VERDICT_TIMEOUT_S = 15.0
+# GENEROUS, because polling costs nothing when the answer is already
+# there and this bound is a HANG GUARD rather than a budget. 15 s was
+# too tight: argv_test spawns /bin/tosh several times and was still on
+# its third check when the poll gave up, which reads exactly like a
+# truncated verdict.
+VERDICT_TIMEOUT_S = 90.0
 VERDICT_POLL_S = 0.5
 
 EXIT_RE = re.compile(r"Exit code:\s*(-?\d+)")

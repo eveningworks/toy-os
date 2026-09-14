@@ -4837,9 +4837,35 @@ that poll is wrong and was measured wrong**: returning early when the
 reply says "not found" matches unrelated console text and makes the
 poll return on its first read.
 
-So the gate stays 0xEE, and what is owed is a verdict channel that does
-not share a wire with the console -- or a harness that reads the file
-with a delimiter it can trust.
+**THE HARNESS HALF IS FIXED, AND THE GATE IS CLOSE.** The deadline was
+the other half of it: 15 s was a BUDGET where it should have been a hang
+guard, and `argv_test` -- which spawns `/bin/tosh` several times -- was
+still on its third check when the poll gave up, which reads exactly like
+a truncated verdict. At 90 s the suite goes from 5 runs in 5 failing to:
+
+| | ktest | usertest | `files` alone |
+|---|---|---|---|
+| 0xEE | 3 of 3 clean | 6 of 6 clean | 142/0, 1 run |
+| 0xEF | **15 of 15 clean** | 7 of 8 clean | 1 new failure in 3 runs |
+
+**Nothing deterministic is left.** The full `gui_regress` at 0xEF added
+`gfxdemo` and a `KeyError` in `files` over the 0xEE control, and both
+are SUITE LOAD rather than the gate: `gfxdemo` passes 3 runs in 3 on its
+own. `font` (7 failed) and `fullscreen` (2 failed) are the entries
+already in `docs/bugs.md`, at both gates.
+
+What is left is a HINT of extra flakiness at 0xEF that is not measured
+well enough to act on: one bad `usertest` run in 8 (three tests at once,
+which looks like one slow boot rather than three faults), and one GUI
+check never seen before -- `View->Icons puts the active pane in icons
+mode, the other stays`, 1 run in 3, which also aborted the tool at check
+29. Against 0 in 1 at 0xEE, which is one sample and decides nothing.
+
+**So the flip is a measurement away, not a fix away.** What is owed is
+runs: `files` and `usertest_run.py` several times at each gate, enough
+to say whether 0xEF is genuinely flakier or whether those two were the
+ordinary noise this suite already has. If it is genuinely flakier, the
+`View->Icons` check is the thread to pull.
 
 **AND THE (resume slot, depth) PAIR WAS SAVED WRONG, FOUND ON THE WAY.**
 A context is resumed with `mov rsp, <trapframe>; iretq`, which runs no
