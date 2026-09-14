@@ -267,11 +267,17 @@ def do_exec(host, port, commands, timeout):
 # --- TFTP ---------------------------------------------------------------
 #
 # OPTIONS ARE NEGOTIATED (RFC 2347), and the two that matter are
-# `blksize` (RFC 2348) and `windowsize` (RFC 7440). 512-byte lock-step
-# is not slow for the reason it looks slow: measured against the
-# bare-metal laptop, a block cost 32 ms of which ~1.8 ms was the
-# network. The rest was a 10 ms scheduler tick per round trip -- a
-# blocked process runs at the next tick -- plus the server's write.
+# `blksize` (RFC 2348) and `windowsize` (RFC 7440). Lock-step is not
+# slow for the reason it looks slow -- the cost is a round trip, not
+# bandwidth: a blocked server process resumes on the next 10 ms
+# scheduler tick. Measured 2026-09-14, a whole `flash --force` to the
+# ASUS moved ~57 MiB of 240 files in 210 s, about 280 KB/s or ~5 ms a
+# block at blksize 1428. (An earlier note here said 32 ms a block; that
+# was 512-byte blocks before blksize was negotiated, and quoting it
+# extrapolates a flash six times longer than it takes.)
+#
+# `windowsize` is the lever nobody has pulled: this asks for a window
+# of 1, so every block still costs a round trip. See docs/roadmap.md.
 #
 # 1428 IS THE CEILING, and it is the guest's, not a convention:
 # kernel/net/ipv4.c does not fragment or reassemble, so a block that
