@@ -7,7 +7,9 @@
 //
 // `index` COUNTS FROM THE OLDEST RECORD STILL HELD, so index 0 always
 // answers and a reader that has fallen behind gets `oldest` back on
-// every record to compare against what it wanted.
+// every record to compare against what it wanted. **The walk ENDS at
+// the newest record as of this call** -- see applog_fill(); without
+// that it has no end at all while anything is writing.
 #include "query.h"
 #include "applog.h"
 #include "string.h"
@@ -29,7 +31,15 @@ static int applog_fill(int index, void *out) {
     struct query_applog *q = out;
     struct applog_rec rec;
 
+    // **BOUNDED WITHIN THIS CALL**, as klog_query.c is. `oldest`
+    // ADVANCES as records are written, so "is oldest+index still held?"
+    // stays true for an index that grows in step with it: on a machine
+    // that is logging, a reader walking until the query runs out never
+    // stops. It terminated on a quiet one, which is why it survived --
+    // /tests/applog_test hung here after a busy suite and passed alone.
     uint64_t oldest = applog_oldest();
+    uint64_t newest = applog_total();
+    if (!newest || oldest > newest || (uint64_t)index > newest - oldest) return 0;
     if (!applog_get(oldest + (uint64_t)index, &rec)) return 0;
 
     q->seq = rec.seq;

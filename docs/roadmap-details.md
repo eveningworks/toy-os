@@ -4880,13 +4880,31 @@ the same file already had it right.
 Measured at 0xEF, full suite, 4 runs after the fix: `errno_test` clean
 in all four, against 3 failures in 4 before.
 
-**WHAT IS LEFT IS `applog_test`, 2 runs in 4 -- and it is the same
-SHAPE, not the same cause.** Alone at 0xEF it passes 5 of 5; in the
-suite it stops after 5 of its 7 checks, the two it never reaches being
-the ones that write several records through `logd`. So something the
-suite accumulates is what it trips over, exactly as `errno_test` did,
-and the accumulation is NOT identified. That is the last thing between
-here and the flip.
+**WHAT IS LEFT STOPS AT ONE LINE, AND THAT IS THE HANDOFF.** Several
+spawned tests -- `applog_test` most often, also `shm_test`, `env_test`,
+`hash_test` -- stop PART-WAY through at 0xEF inside the suite and pass
+alone: 4 runs in 8 have one or two of them, against 6 of 6 clean at
+0xEE. The verdict is not truncated by the harness; the test stops
+producing it.
+
+For `applog_test` the place is exact and unchanged across runs: after
+its fifth check, whose next statement is
+`run("/bin/cat", "/no/such/file/applog-probe", SPAWN_FD_LOG)` -- a spawn
+followed by `sys_waitpid`. So it is a spawn-and-wait that does not
+return on a machine that has already run fifty tests. **That is the
+same family as the preemptible exit fixed earlier** (a process that
+exits without its parent ever hearing), which makes it a target rather
+than a mystery: the parent is parked in waitpid and the child's death
+has to reach it.
+
+One stall of a different kind WAS found and fixed on the way, and it is
+worth knowing because it is a kernel-side contract rather than a test
+bug: `QUERY_APPLOG`'s enumeration had no end. `applog_fill()` re-read
+`oldest` on every call and answered "is oldest+index still held?", which
+stays true for an index growing in step with a writer -- so any reader
+walking the class until the query runs out loops forever on a machine
+that is logging, and terminates on a quiet one. It is bounded within the
+call now, as `klog_query.c` already was.
 
 The hang seen once has no diagnosis at all -- the harness buffers its
 output, so a run killed at the deadline leaves an empty log and a live
