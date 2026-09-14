@@ -603,7 +603,7 @@ def main():
                 out += ("\n--- after the failure ---\n"
                         + post.stdout + post.stderr
                         + whole.stdout + whole.stderr
-                        + "\n".join((log.stdout + log.stderr).splitlines()[-15:]))
+                        + "\n".join((log.stdout + log.stderr).splitlines()[-40:]))
             results.append((name, problems, out))
     finally:
         vm(args, "stop", check=False)
