@@ -4843,29 +4843,41 @@ guard, and `argv_test` -- which spawns `/bin/tosh` several times -- was
 still on its third check when the poll gave up, which reads exactly like
 a truncated verdict. At 90 s the suite goes from 5 runs in 5 failing to:
 
-| | ktest | usertest | `files` alone |
+| | ktest | usertest (whole suite) | `files` alone |
 |---|---|---|---|
-| 0xEE | 3 of 3 clean | 6 of 6 clean | 142/0, 1 run |
-| 0xEF | **15 of 15 clean** | 7 of 8 clean | 1 new failure in 3 runs |
+| 0xEE | 3 of 3 clean | **6 of 6 clean** | 142/0 |
+| 0xEF | **15 of 15 clean** | **1 of 4 clean, plus one HANG** | 142/1, 143/0, 142/1 |
 
-**Nothing deterministic is left.** The full `gui_regress` at 0xEF added
-`gfxdemo` and a `KeyError` in `files` over the 0xEE control, and both
-are SUITE LOAD rather than the gate: `gfxdemo` passes 3 runs in 3 on its
-own. `font` (7 failed) and `fullscreen` (2 failed) are the entries
-already in `docs/bugs.md`, at both gates.
+**THE GUI HALF IS SETTLED AND THE KERNEL HALF IS CLEAN; THE USERLAND
+SUITE IS NOT.** `files` at 0xEF now matches its documented baseline
+exactly -- the one failure in two of three runs is the tree-row drop
+already in `docs/bugs.md` at its 2-in-3 rate -- once two harness faults
+were fixed (a wait that did not require the focus the next keystroke
+needed, and a `wait_layout(...) or lay` whose stale layout was then
+INDEXED). `gfxdemo` and a `KeyError` in the full suite were suite LOAD:
+`gfxdemo` passes 3 runs in 3 alone. `font` and `fullscreen` fail
+identically at both gates and are already recorded.
 
-What is left is a HINT of extra flakiness at 0xEF that is not measured
-well enough to act on: one bad `usertest` run in 8 (three tests at once,
-which looks like one slow boot rather than three faults), and one GUI
-check never seen before -- `View->Icons puts the active pane in icons
-mode, the other stays`, 1 run in 3, which also aborted the tool at check
-29. Against 0 in 1 at 0xEE, which is one sample and decides nothing.
+**An earlier "7 of 8 clean" for usertest at 0xEF is WITHDRAWN -- it was
+luck.** Six more runs gave 1 clean, 3 with failures (`applog_test` and
+`errno_test` in three of four, plus `hash_test` and `fork_test` once
+each) and one that HUNG for the full 15-minute timeout, leaving its
+guest behind. Against 6 of 6 clean at 0xEE with the same harness.
 
-**So the flip is a measurement away, not a fix away.** What is owed is
-runs: `files` and `usertest_run.py` several times at each gate, enough
-to say whether 0xEF is genuinely flakier or whether those two were the
-ordinary noise this suite already has. If it is genuinely flakier, the
-`View->Icons` check is the thread to pull.
+**IT IS SUITE-ORDER DEPENDENT, NOT PER-TEST.** Run on their own at
+0xEF, `errno_test` passes 5 of 5 and `applog_test` 4 of 5 -- so what
+fails is the pair after fifty other tests have run on the same boot.
+That is what `docs/bugs.md` already says about the `dup()` check: it
+depends on how many descriptor tables the boot has handed out, and the
+fd table is keyed by CR3. A trap gate changes process lifetimes, so a
+mechanism exists; it is NOT established.
+
+**So the flip is blocked on that, and the discriminating experiment is
+cheap**: the pair fails after the suite and passes alone, at a gate
+where the same pair passes 6 of 6 with the suite. The hang is the other
+thread and has no diagnosis at all -- the harness buffers its output, so
+a run killed at the deadline leaves an empty log and a live guest.
+Re-run it with `python3 -u` to keep the output.
 
 **AND THE (resume slot, depth) PAIR WAS SAVED WRONG, FOUND ON THE WAY.**
 A context is resumed with `mov rsp, <trapframe>; iretq`, which runs no
