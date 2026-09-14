@@ -64,8 +64,14 @@ static void layout(struct uui_dialog *d) {
     }
     d->h = text_h + body_h;
 
-    d->x = d->bx + (d->bw - d->w) / 2;
-    d->y = d->by + (d->bh - d->h) / 2;
+    d->x = d->bx + (d->bw - d->w) / 2 + d->off_x;
+    d->y = d->by + (d->bh - d->h) / 2 + d->off_y;
+    // CLAMPED EVERY LAYOUT, not just on the drag: a window that shrinks
+    // under a dragged box would otherwise strand it off-screen, where a
+    // modal is unreachable and nothing else can be clicked either.
+    if (d->x > d->bx + d->bw - d->w) d->x = d->bx + d->bw - d->w;
+    if (d->x < d->bx) d->x = d->bx;
+    if (d->y > d->by + d->bh - d->h) d->y = d->by + d->bh - d->h;
     if (d->y < d->by) d->y = d->by;
 
     if (d->body && d->body->ops && d->body->ops->set_geometry) {
@@ -310,16 +316,36 @@ static void dlg_describe(const void *w, const struct uui_describe *desc) {
 static int dlg_overlay_active(const void *w) {
     return ((const struct uui_dialog *)w)->open;
 }
+// **THE SCRIM, NOT THE BOX -- THAT IS WHAT MAKES IT MODAL.** The router
+// gates press/motion/wheel on this, so answering with the panel let
+// every click outside it fall through to whatever was behind: an open
+// Preferences dialog and a working menu bar and tab close button under
+// it. dlg_press() always meant to consume wherever it landed and was
+// simply never asked. bx/by/bw/bh are the whole window; x/y/w/h are the
+// centred panel, which is still what `bounds` reports for drawing.
 static int dlg_hit(const void *w, int cx, int cy) {
     const struct uui_dialog *d = w;
-    return d->open && uui_hit(d->x, d->y, d->w, d->h, cx, cy);
+    return d->open && uui_hit(d->bx, d->by, d->bw, d->bh, cx, cy);
 }
+// The title strip: the band the title is drawn in, and the only part of
+// the box that starts a drag. A body fills the rest, so grabbing
+// anywhere else would fight whatever control is under the pointer.
+static int on_title(const struct uui_dialog *d, int cx, int cy) {
+    if (!d->title) return 0;
+    return uui_hit(d->x, d->y, d->w, utheme_pad() + line_h(), cx, cy);
+}
+
 static int dlg_press(void *w, int cx, int cy, unsigned mods) {
     (void)mods;
     struct uui_dialog *d = w;
     if (!d->open) return 0;
     d->pressed = button_at(d, cx, cy);
     d->hot = d->pressed >= 0 ? d->pressed : d->hot;
+    if (d->pressed < 0 && on_title(d, cx, cy)) {
+        d->dragging = 1;
+        d->grab_dx = cx - d->x;
+        d->grab_dy = cy - d->y;
+    }
     // CONSUMED WHEREVER IT LANDED, including outside the box: that is
     // what makes it modal. Clicking outside does NOT dismiss -- these
     // dialogs ask questions whose default answer is not obvious, and
@@ -329,7 +355,24 @@ static int dlg_press(void *w, int cx, int cy, unsigned mods) {
 static int dlg_motion(void *w, int cx, int cy, unsigned buttons) {
     struct uui_dialog *d = w;
     if (!d->open) return 0;
-    (void)buttons;
+    // A DRAG NEEDS THE BUTTON STILL DOWN (docs/conventions/gui.md): a
+    // motion with none held is not a drag, and treating it as one
+    // leaves the box following the pointer after the release.
+    // **A LEAVE CARRIES NO POSITION** (docs/conventions/gui.md), and a
+    // motion with no button held is ignored rather than treated as a
+    // release -- the drag ends on the RELEASE and nowhere else. Both
+    // matter here: dragging a box towards an edge sends the pointer out
+    // of the content area, which arrives as (-1, -1) with no buttons,
+    // and cancelling on either of those dropped the box mid-drag.
+    if (cx < 0 || cy < 0) return 0;
+    if (d->dragging) {
+        if (!buttons) return 0;
+        int want_x = cx - d->grab_dx, want_y = cy - d->grab_dy;
+        d->off_x += want_x - d->x;
+        d->off_y += want_y - d->y;
+        layout(d);              // re-clamps, and moves the body with it
+        return 1;
+    }
     int over = button_at(d, cx, cy);
     if (over == d->hot) return 0;
     d->hot = over >= 0 ? over : d->hot;
@@ -338,6 +381,7 @@ static int dlg_motion(void *w, int cx, int cy, unsigned buttons) {
 static int dlg_release(void *w, int cx, int cy) {
     struct uui_dialog *d = w;
     if (!d->open) return 1;
+    if (d->dragging) { d->dragging = 0; d->pressed = -1; return 1; }
     // COMMITS ON RELEASE, and only if the release is on the button the
     // press armed -- so a press dragged off commits nothing, which is
     // this GUI's rule for every control.

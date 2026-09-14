@@ -136,10 +136,11 @@ static int kb_apply(const char *value) {
 
 static const struct setting g_kb_setting = {
     .name   = KEYBOARD_CONFIG_KEY,
-    .label  = "Keyboard layout",
+    .label  = "Layout",
     .type   = SETTING_TYPE_ENUM,
     .file   = KEYBOARD_CONFIG_FILE,
     .category = "Input",
+    .group = "Keyboard",
     .choice = kb_choice,
     .get    = kb_get,
     .apply  = kb_apply,

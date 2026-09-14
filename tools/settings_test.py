@@ -568,17 +568,42 @@ def main():
     check("the sidebar has a Kernel heading for the tunables",
           kernel_head is not None,
           f"headings={[r['label'] for r in rows if r['depth'] == 0]}")
-    # **KERNEL IS ONE PAGE, SO ITS ROW IS THE PAGE.** A category with
-    # exactly one group collapses -- "Kernel" over a lone "Memory" was a
-    # heading whose only child repeated it -- so the name to look for is
-    # the CATEGORY's, and what proves the rows came through is that it
-    # is a DESTINATION rather than an inert caption. A heading alone
-    # would be weaker than it looks; a heading that can be selected is
-    # the collapse working.
-    check("the Kernel row is the page, not a caption over one",
-          kernel_head is not None and kernel_head["depth"] == 0
-          and row_named("Memory") is None,
-          f"labels={[r['label'] for r in rows]}")
+    # **NO TOP-LEVEL ROW IS A DEAD END.** Every depth-0 row is either a
+    # CAPTION (a category id, 1000..1999) with at least one page under
+    # it, or a DESTINATION (a group id, >= 2000) that collapsed because
+    # its category held exactly one page. A caption with NO children is
+    # neither: it cannot be clicked and there is nothing behind it, and
+    # that is precisely what a page-table overflow produces -- the pages
+    # are dropped and their heading is left stranded. Storage and Kernel
+    # both shipped that way when MAX_GROUPS was a hand-picked 24 and 24
+    # pages existed.
+    #
+    # Asserted over EVERY row rather than over one named category: the
+    # overflow always cuts whatever is LAST, so a check naming a
+    # category is a check that stops working the moment one is added.
+    # (The previous version asserted Kernel had no "Memory" page, which
+    # was true both when Kernel had collapsed correctly AND when its
+    # pages had been dropped -- it could not tell those apart.)
+    dead = []
+    for i, r in enumerate(rows):
+        if r["depth"] != 0:
+            continue
+        # A CAPTION IS THE CATEGORY ID RANGE, not "below the group base":
+        # System Information is a top-level DESTINATION with id 1
+        # (NODE_SYSINFO), so a `>= 2000` test called it a caption and
+        # reported it as a dead end on a perfectly good build.
+        if not (1000 <= r["id"] < 2000):
+            continue                     # a selectable top-level page
+        kids = 0
+        for nxt in rows[i + 1:]:
+            if nxt["depth"] == 0:
+                break
+            kids += 1
+        if kids == 0:
+            dead.append(r["label"])
+    check("no top-level row is a caption with nothing under it",
+          not dead,
+          f"captions with no pages: {dead}")
     # Two pages that did NOT collapse, so the walk is exercised on a
     # category with children as well as on one without.
     for group in ("Shell", "Diagnostics"):

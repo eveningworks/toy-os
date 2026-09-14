@@ -36,10 +36,11 @@ static void size_get(char *out, uint32_t out_size) {
 
 static const struct setting g_icon_size_setting = {
     .name = "icon_size",
-    .label = "Icon size",
+    .label = "Size",
     .type = SETTING_TYPE_ENUM,
     .file = DESKTOP_CONFIG_FILE,
     .category = "Desktop",
+    .group = "Icons",
     .choice = size_choice,
     .get = size_get,
     .apply = 0, // persist-only -- the desktop's poll applies it

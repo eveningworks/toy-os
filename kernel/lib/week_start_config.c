@@ -49,10 +49,11 @@ static void day_get(char *out, uint32_t out_size) {
 
 static const struct setting g_week_start_setting = {
     .name = "week_start",
-    .label = "Week starts on",
+    .label = "First day",
     .type = SETTING_TYPE_ENUM,
     .file = DESKTOP_CONFIG_FILE,
     .category = "Desktop",
+    .group = "Calendar",
     .choice = day_choice,
     .get = day_get,
     .apply = 0, // persist-only -- the calendar popup's poll applies it

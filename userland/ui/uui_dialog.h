@@ -54,6 +54,14 @@ struct uui_dialog {
     // whenever the window resizes; the box centres itself inside.
     int bx, by, bw, bh;
 
+    // **DRAGGED BY ITS TITLE STRIP, AS AN OFFSET FROM CENTRE.** Not an
+    // absolute position: the box re-centres on every resize and on
+    // every re-layout, so storing x/y would be overwritten by the next
+    // layout() and the box would jump back. The offset survives both
+    // and is clamped so the box can never leave the bounds.
+    int off_x, off_y;
+    int dragging, grab_dx, grab_dy;
+
     const char *title;
     const char *rows[UUI_DIALOG_ROWS];   // caller-owned, NULL ends it
     int row_count;

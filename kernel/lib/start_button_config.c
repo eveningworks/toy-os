@@ -62,6 +62,7 @@ static const struct setting g_start_button_setting = {
     .type = SETTING_TYPE_ENUM,
     .file = DESKTOP_CONFIG_FILE,
     .category = "Desktop",
+    .group = "Taskbar",
     .choice = mode_choice,
     .get = mode_get,
     .apply = 0, // persist-only -- the taskbar's poll applies it

@@ -116,10 +116,11 @@ static void mode_get(char *out, uint32_t out_size) {
 
 static const struct setting g_wallpaper_setting = {
     .name = "wallpaper",
-    .label = "Wallpaper",
+    .label = "Image",
     .type = SETTING_TYPE_ENUM,
     .file = WALLPAPER_CONFIG_FILE,
     .category = "Desktop",
+    .group = "Wallpaper",
     .choice = wallpaper_choice,
     .get = wallpaper_get,
     .apply = 0, // persist-only -- the desktop's poll applies it
@@ -127,10 +128,11 @@ static const struct setting g_wallpaper_setting = {
 
 static const struct setting g_mode_setting = {
     .name = "wallpaper_mode",
-    .label = "Wallpaper placement",
+    .label = "Placement",
     .type = SETTING_TYPE_ENUM,
     .file = WALLPAPER_CONFIG_FILE,
     .category = "Desktop",
+    .group = "Wallpaper",
     .choice = mode_choice,
     .get = mode_get,
     .apply = 0,

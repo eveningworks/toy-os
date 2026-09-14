@@ -27,10 +27,11 @@ static void height_get(char *out, uint32_t out_size) {
 
 static const struct setting g_taskbar_height_setting = {
     .name = "taskbar_height",
-    .label = "Taskbar height",
+    .label = "Height",
     .type = SETTING_TYPE_INT,
     .file = DESKTOP_CONFIG_FILE,
     .category = "Desktop",
+    .group = "Taskbar",
     .min  = TASKBAR_H_MIN,
     .max  = TASKBAR_H_MAX,
     .step = TASKBAR_H_STEP,

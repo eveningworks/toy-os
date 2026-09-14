@@ -60,10 +60,11 @@ static void network_get(char *out, uint32_t out_size) {
 
 static const struct setting g_tray_brightness_setting = {
     .name = "tray_brightness",
-    .label = "Brightness in the tray",
+    .label = "Brightness",
     .type = SETTING_TYPE_ENUM,
     .file = DESKTOP_CONFIG_FILE,
     .category = "Desktop",
+    .group = "Tray",
     .choice = mode_choice,
     .get = brightness_get,
     .apply = 0, // persist-only -- the brightness item's poll applies it
@@ -71,10 +72,11 @@ static const struct setting g_tray_brightness_setting = {
 
 static const struct setting g_tray_network_setting = {
     .name = "tray_network",
-    .label = "Network in the tray",
+    .label = "Network",
     .type = SETTING_TYPE_ENUM,
     .file = DESKTOP_CONFIG_FILE,
     .category = "Desktop",
+    .group = "Tray",
     .choice = mode_choice,
     .get = network_get,
     .apply = 0, // persist-only -- the network item's poll applies it

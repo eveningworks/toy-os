@@ -66,13 +66,18 @@ _Static_assert(UUI_TEXTBOX_MAX >= SETTING_ABI_VALUE_MAX,
 #define MAX_SETTINGS   (SETTING_ABI_MAX + USAVER_OPT_MAX)
 // Room for every timezone the kernel ships plus hand-added rows.
 #define MAX_CHOICES    128
-#define MAX_CATEGORIES 12
-// PAGES IN THE SIDEBAR. Raised from 16 when Network Time made 17 and
-// the Kernel category's last page silently vanished -- the overflow was
-// dropped without a word, which is the failure mode this app reports
-// everywhere else (see open_group's "too many settings for one page").
-// It is logged now, so the next one is visible rather than absent.
-#define MAX_GROUPS     24
+// **DERIVED, NEVER HAND-PICKED.** A category and a page are both keyed
+// off settings, so neither can outnumber them: a setting with no group
+// becomes a page of its own, which is the worst case and is exactly
+// MAX_SETTINGS. Both of these were hand-picked numbers before, and both
+// failed the same way twice -- 16 pages when Network Time made 17, then
+// 24 when this commit's category split refilled it -- each time cutting
+// the LAST category (Storage, then Kernel) down to a heading with no
+// children: a top-level row that cannot be clicked and has no page
+// behind it. The overflow was logged, and the log had rotated by the
+// time anyone looked, so it presented as "Storage does nothing".
+#define MAX_CATEGORIES MAX_SETTINGS
+#define MAX_GROUPS     MAX_SETTINGS
 // Controls on one page. A group larger than this would be a page nobody
 // can take in anyway; the overflow is REPORTED rather than silently cut.
 // Sized by the Screensaver page, which is the only one that grows: its
@@ -409,13 +414,13 @@ static void rebuild_sidebar(void) {
             };
         }
     }
-    // AN ITEM WITH NO HEADING OVER IT. It is a page, so it has to be
-    // reachable -- a heading could not be selected and the page would
-    // become dead. It sits unindented-looking at the end rather than
-    // inventing a one-page category to hold it.
+    // A PAGE WITH NO CATEGORY OVER IT, so it is a TOP row: unindented
+    // like a heading and selectable like an item. As an ITEM it was
+    // indented under whichever category happened to be last and read as
+    // one of that category's pages.
     if (g_node_count < (int)(sizeof g_nodes / sizeof g_nodes[0]))
         g_nodes[g_node_count++] = (struct uui_sidebar_row){
-            .label = "System Information", .kind = UUI_SIDEBAR_ITEM,
+            .label = "System Information", .kind = UUI_SIDEBAR_TOP,
             .id = NODE_SYSINFO
         };
 

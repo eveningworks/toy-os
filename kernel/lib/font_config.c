@@ -239,10 +239,11 @@ static int mono_apply(const char *value) {
 
 static const struct setting g_mono_setting = {
     .name   = MONO_CONFIG_KEY,
-    .label  = "Monospace face",
+    .label  = "Monospace",
     .type   = SETTING_TYPE_ENUM,
     .file   = FONT_CONFIG_FILE,
     .category = "Appearance",
+    .group = "Fonts",
     .choice = face_choice,   // the same list; a face is a face
     .get    = mono_get,
     .apply  = mono_apply,
@@ -253,10 +254,11 @@ static const struct setting g_face_setting = {
     // "Interface face", not "Font face": with a monospace face beside
     // it the unqualified name says nothing about which of the two it
     // is. GNOME's Interface Text / Monospace Text pair.
-    .label  = "Interface face",
+    .label  = "Interface",
     .type   = SETTING_TYPE_ENUM,
     .file   = FONT_CONFIG_FILE,
     .category = "Appearance",
+    .group = "Fonts",
     .choice = face_choice,
     .get    = face_get,
     .apply  = face_apply,
@@ -264,10 +266,11 @@ static const struct setting g_face_setting = {
 
 static const struct setting g_font_setting = {
     .name   = FONT_CONFIG_KEY,
-    .label  = "Font size",
+    .label  = "Size",
     .type   = SETTING_TYPE_ENUM,
     .file   = FONT_CONFIG_FILE,
     .category = "Appearance",
+    .group = "Fonts",
     .choice = font_choice,
     .get    = font_get,
     .apply  = font_apply,

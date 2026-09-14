@@ -54,10 +54,11 @@ static int cursor_apply(const char *value) {
 
 static const struct setting g_cursor_setting = {
     .name   = CURSOR_CONFIG_KEY,
-    .label  = "Console cursor",
+    .label  = "Cursor",
     .type   = SETTING_TYPE_ENUM,
     .file   = CURSOR_CONFIG_FILE,
     .category = "Appearance",
+    .group = "Console",
     .choice = cursor_choice,
     .get    = cursor_get,
     .apply  = cursor_apply,
