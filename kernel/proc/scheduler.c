@@ -2058,9 +2058,38 @@ static void notify_parent(int ppid) {
     futex_note_ready(ppid);
 }
 
+// **WHO FREED A CHILD SOMEBODY WAS WAITING FOR.** docs/bugs.md's
+// `block(child)` stall is a parent parked on a child that is no longer
+// in the table, and the one thing a `ps` after the fact cannot say is
+// which code path returned that slot. The legitimate reaper is the
+// PARENT, through scheduler_poll()/_poll_any() -- and a parked parent
+// is by definition not calling either. So any reap of a child whose
+// parent is blocked waiting for one is the anomaly, reported where it
+// happens with the caller's name.
+//
+// Cheap: one compare on a path that runs at most once per process
+// death. Remove it when the stall has a cause.
+static void reap_audit(int idx, const char *who) {
+    int ppid = procs[idx].ppid;
+    if (ppid < 1 || ppid > MAX_PROCS) return;
+    // **A CHILD IS REAPED BY ITS PARENT, AND BY NOBODY ELSE.** Checking
+    // the parent's STATE instead was the first version of this and it
+    // never fired: the window is between the parent's poll and its
+    // park, where it is still RUNNING, so "is the parent blocked?" is
+    // false exactly when the damage is done. Who reaps is a fact that
+    // does not depend on that timing.
+    int reaper = scheduler_current_tgid();
+    if (reaper == ppid) return;          // the parent itself: correct
+    klog_printf(KLOG_ERR "REAP BY NON-PARENT: %s (pid %d) freed pid %d "
+                "(\"%s\", state %d) whose parent is pid %d\n",
+                who, reaper, idx + 1, procs[idx].name, procs[idx].state, ppid);
+    scheduler_trace_dump();
+}
+
 // Free a slot outright, keeping the live count honest whichever state
 // it was in. A ZOMBIE has already been subtracted.
 static void slot_release(int idx) {
+    reap_audit(idx, "slot_release");
     if (procs[idx].state == SCHED_UNUSED) return;
     if (procs[idx].state != SCHED_ZOMBIE) alive_count--;
     procs[idx].state = SCHED_UNUSED;
@@ -2473,6 +2502,7 @@ enum sched_poll_result scheduler_thread_poll(int tid, int *out_code) {
 
     if (procs[slot].state == SCHED_ZOMBIE) {
         if (out_code) *out_code = procs[slot].exit_code;
+        reap_audit(slot, "thread_poll");
         procs[slot].state = SCHED_UNUSED; // reaped -- see scheduler_poll()
         return SCHED_POLL_EXITED;
     }
@@ -2492,7 +2522,7 @@ int scheduler_thread_detach(int tid) {
     if (procs[slot].detached) return -EINVAL;
 
     procs[slot].detached = 1;
-    if (procs[slot].state == SCHED_ZOMBIE) procs[slot].state = SCHED_UNUSED;
+    if (procs[slot].state == SCHED_ZOMBIE) { reap_audit(slot, "thread_detach"); procs[slot].state = SCHED_UNUSED; }
     return 0;
 }
 
@@ -2660,6 +2690,30 @@ uint64_t scheduler_slot_pml4(int slot) {
     return procs[slot].pml4_phys;
 }
 
+// **IS `pid` A CHILD OF `parent_pid`?** waitpid() needs this and did
+// not have it: scheduler_poll() answers about ANY pid, so a caller that
+// named something that was never its child was told RUNNING and parked
+// on its OWN channel -- while that process's death woke its real
+// parent's channel instead, and the waiter slept for the rest of the
+// boot. POSIX answers ECHILD there, and pids RECYCLE here, so "the pid
+// I spawned" and "the process in that slot now" are not the same
+// question on a machine that has started fifty processes.
+//
+// A THREAD IS NOT A CHILD, the same rule scheduler_poll_any() keeps.
+int scheduler_is_child_of(int pid, int parent_pid) {
+    // **A CALLER WITH NO SLOT IS NOBODY'S PARENT.** The legacy loader
+    // runs with current_index < 0, so scheduler_current_tgid() is 0 --
+    // and init's ppid is 0 too, which made "is init a child of nobody?"
+    // answer YES and let a wait through to a park that then refused.
+    // Caught by the errno test asking for ECHILD and getting EPERM.
+    if (parent_pid < 1) return 0;
+    if (pid < 1 || pid > MAX_PROCS) return 0;
+    int slot = pid - 1;
+    if (procs[slot].state == SCHED_UNUSED) return 0;
+    if (is_thread(slot)) return 0;
+    return procs[slot].ppid == parent_pid;
+}
+
 int scheduler_pid_valid(int pid) {
     if (pid < 1 || pid > MAX_PROCS) return 0;
     return procs[pid - 1].state != SCHED_UNUSED;
@@ -2748,6 +2802,7 @@ enum sched_poll_result scheduler_poll_any(int parent_pid, int *out_pid,
         if (procs[i].state == SCHED_ZOMBIE) {
             if (out_pid) *out_pid = i + 1;
             if (out_exit_code) *out_exit_code = procs[i].exit_code;
+            reap_audit(i, "poll_any");
             procs[i].state = SCHED_UNUSED; // reap, as scheduler_poll() does
             return SCHED_POLL_EXITED;
         }
@@ -3243,6 +3298,7 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code) {
 
     if (procs[slot].state == SCHED_ZOMBIE) {
         if (out_exit_code) *out_exit_code = procs[slot].exit_code;
+        reap_audit(slot, "poll");
         procs[slot].state = SCHED_UNUSED; // reap -- see scheduler.h's doc comment
         return SCHED_POLL_EXITED;
     }

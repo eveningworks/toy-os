@@ -624,9 +624,23 @@ def main():
             own = [l for l in out.splitlines() if name.split("_")[0] in l]
             for line in own[-20:]:
                 print(f"          | {line}")
-            tail = [l for l in out.strip().splitlines()[-4:] if l not in own]
-            for line in tail:
-                print(f"          . {line}")
+            # **AND THE DIAGNOSTICS, WHICH USED TO BE COLLECTED AND THEN
+            # THROWN AWAY.** The block above filters to lines carrying
+            # the test's NAME, which is right for its own verdict and
+            # wrong for everything the failure path just asked the guest:
+            # `ps`, the verdict file and dmesg mention the test's name
+            # hardly at all, so a stall that needed the PROCESS TABLE to
+            # diagnose printed four lines of "exit() called by ring-3
+            # process" instead. The whole point of asking was to keep
+            # the evidence from a machine that is about to be torn down.
+            marker = "--- after the failure ---"
+            if marker in out:
+                for line in out[out.index(marker):].splitlines():
+                    print(f"          . {line}")
+            else:
+                tail = [l for l in out.strip().splitlines()[-4:] if l not in own]
+                for line in tail:
+                    print(f"          . {line}")
         else:
             print(f"  ok    {name}")
     total = len(results)

@@ -844,7 +844,16 @@ int sys_waitpid(struct syscall_ctx *c) {
 
     if (bad) {
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
-    } else if (!scheduler_pid_valid(pid)) {
+    } else if (!scheduler_pid_valid(pid) ||
+               !scheduler_is_child_of(pid, scheduler_current_tgid())) {
+        // **NOT OURS IS ECHILD, NOT A WAIT.** scheduler_poll() answers
+        // about any pid, so without the second test a caller that named
+        // something that was never its child was told RUNNING and
+        // parked -- on its own channel, while that process's death woke
+        // its REAL parent's. That is a sleep nothing ends. Pids recycle
+        // here, so it is reachable without anyone doing something odd:
+        // the pid you spawned and the process in that slot now are
+        // different questions once a machine has started fifty of them.
         c->regs[14] = (uint64_t)(int64_t)-ECHILD;
     } else {
         int code = 0;

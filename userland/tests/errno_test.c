@@ -203,6 +203,17 @@ int main(void) {
     utest_check(sys_waitpid(-1, 0) < 0, "waitpid(-1) with no children fails");
     check_errno(sys_errno(), ECHILD, "waitpid(-1) with no children at all");
 
+    // **A LIVE PID THAT IS NOT OURS IS ALSO ECHILD, AND THIS ONE USED TO
+    // HANG.** waitpid() named a pid and the kernel only asked whether
+    // that slot was alive -- scheduler_poll() reports on ANY process --
+    // so the caller was told "running" and parked on its OWN channel,
+    // while that process's death wakes its REAL parent's. Nothing ever
+    // ended that sleep. pid 1 is init: certainly alive, certainly not
+    // our child. Without the parentage check this line does not fail,
+    // it never returns.
+    utest_check(sys_waitpid(1, 0) < 0, "waitpid() on a live non-child fails");
+    check_errno(sys_errno(), ECHILD, "waitpid() on a process that is not ours");
+
     // --- ENOSYS: a number with nothing behind it ----------------------
     // Three shapes, through the RAW entry because a wrapper cannot ask
     // for a number it does not know: index 0 (a table row with no

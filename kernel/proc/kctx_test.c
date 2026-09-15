@@ -64,9 +64,20 @@ static void co_entry(void *arg) {
 // calls between the two halves were too shallow to reach the
 // coroutine's locals, so removing the stack switch changed no result
 // and the test proved nothing about needing one.
-static void stack_churn(void) {
-    volatile unsigned char scratch[4096];
+// RECURSIVE, with a small frame each: one 4 KB local would blow the
+// kernel's -Wframe-larger-than=1024 budget, and DEPTH is what this
+// needs rather than width.
+//
+// **THE RETURN VALUE IS LOad-BEARING.** Written first as a plain
+// `if (depth) stack_churn(depth - 1);`, which is a TAIL CALL that -O2
+// turns into a loop reusing one frame -- 256 bytes of churn instead of
+// four kilobytes, and the positive control silently stopped biting.
+// Using the result after the call forces a real frame per level.
+static int stack_churn(int depth) {
+    volatile unsigned char scratch[256];
     for (int i = 0; i < (int)sizeof scratch; i++) scratch[i] = (unsigned char)(i ^ 0x5A);
+    int deeper = depth > 0 ? stack_churn(depth - 1) : 0;
+    return deeper + scratch[0];
 }
 
 KTEST("kctx", "a context runs on its own stack and resumes mid-call") {
@@ -90,7 +101,7 @@ KTEST("kctx", "a context runs on its own stack and resumes mid-call") {
     // has not finished.
     if (rc == 1) {
         KTEST_ASSERT_EQ(g_steps, 1);
-        stack_churn();   // the coroutine's frames must survive this
+        (void)stack_churn(15);  // ~4 KB of depth the coroutine's frames must survive
         int rc2 = process_context_save(&g_main);
         if (rc2 == 0) process_context_restore(&g_co, 9);
         // rc2 == 2: it ran on from where it parked.

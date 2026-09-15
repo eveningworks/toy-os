@@ -428,6 +428,12 @@ int scheduler_spawn_group(const char *path, const char *argv, size_t argv_len,
 // scheduler_spawn*(). For SYS_WAITPID's validation.
 int scheduler_pid_valid(int pid);
 
+// Is `pid` a child (not a thread) of `parent_pid`? waitpid() asks
+// before parking: scheduler_poll() reports on any pid, so without this
+// a wait on something that was never your child parks forever -- its
+// death wakes ITS parent's channel, not yours. See scheduler.c.
+int scheduler_is_child_of(int pid, int parent_pid);
+
 // FS_STEP_*-shaped result for scheduler_poll() below (fs.h's enum
 // fs_step_result was the direct precedent -- same "PENDING/DONE-ish,
 // call again" shape, renamed since this isn't actually that type and a
