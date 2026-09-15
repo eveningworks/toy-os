@@ -45,3 +45,24 @@ process_context_restore:
     ; exit syscall, since nothing else re-enables them. sti first.
     sti
     jmp qword [rdi+56]     ; jump directly to the saved return address
+
+; void process_context_enter(void *stack_top, void (*entry)(void *), void *arg)
+;
+; Begin running `entry(arg)` on a DIFFERENT stack, never returning to the
+; caller. The missing half of save/restore: those two can suspend and
+; resume a context, but a context has to START somewhere, and a save
+; point can only be resumed while its frames are still live -- which
+; means the second context needs a stack of its own rather than a
+; position in this one. Together they are makecontext/swapcontext, cut
+; down to what kernel/proc needs.
+global process_context_enter
+process_context_enter:
+    mov rsp, rdi
+    and rsp, -16          ; SysV wants RSP 16-aligned at a call boundary
+    xor rbp, rbp          ; a fresh frame chain, so a backtrace STOPS here
+                          ; rather than walking into the old stack's frames
+    mov rdi, rdx          ; arg -> first parameter
+    call rsi              ; entry(arg)
+    ud2                   ; entry must never return: there is nothing to
+                          ; return TO, and falling off would run whatever
+                          ; this fresh stack happens to contain

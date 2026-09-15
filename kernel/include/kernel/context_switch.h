@@ -37,4 +37,17 @@ int process_context_save(struct kernel_context *ctx);
 void process_context_restore(struct kernel_context *ctx, int value)
     __attribute__((noreturn));
 
+// Start running `entry(arg)` on `stack_top`, and never come back here.
+//
+// A context can only be RESUMED while the frames it saved are still
+// live -- process_context_restore() puts RSP back inside them, and a
+// caller that has since returned has handed that memory to whatever ran
+// next (see the note above on why `rip` is captured as data). So a
+// second context cannot be a second save point in one call chain: it
+// needs its own stack, and this is what puts it there.
+//
+// `entry` must never return. There is nothing to return to.
+void process_context_enter(void *stack_top, void (*entry)(void *), void *arg)
+    __attribute__((noreturn));
+
 #endif

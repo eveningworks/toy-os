@@ -1,6 +1,7 @@
 # Blocking inside the kernel, and the lock that needs it
 
-**Status: DESIGNED, NOT BUILT. Read this before touching
+**Status: stage 1's PRIMITIVE is built and tested; nothing calls it
+yet. The rest is designed, not built. Read this before touching
 `switch_to()`, `block_common()` or `FS_OP()`.**
 
 This is the first link of the chain `docs/roadmap.md` now carries in
@@ -100,14 +101,26 @@ documents follow.
   **THREE THINGS FOUND BY STARTING IT, which is why it is bigger than
   it looks:**
 
-  1. **A KTEST FOR THIS NEEDS TWO STACKS.** It cannot be demonstrated
-     by saving and restoring within one call chain: `_restore()` puts
-     RSP back inside a frame the caller has since returned from and
-     reused, which `context_switch.h` already warns about in its own
-     terms. The legacy path gets away with one save because its frame
-     stays LIVE while the restore runs on a different stack. So stage 1
-     owes a "start a kernel context on a fresh stack" primitive, and
-     that -- not the save/restore -- is the heart of it.
+  1. **A KTEST FOR THIS NEEDS TWO STACKS** -- BUILT.
+     `process_context_enter(stack_top, entry, arg)` starts a context on
+     a stack of its own, which is the half `save`/`restore` were
+     missing: a saved context can only be resumed while its frames are
+     still LIVE, so a second context cannot be a second save point in
+     one call chain. With `enter()` the three are
+     makecontext/swapcontext cut down to what `kernel/proc` needs.
+     `kernel/proc/kctx_test.c` ping-pongs two contexts and asserts the
+     parked one's LOCALS survive.
+
+     **THE CONTROL FOR IT TOOK THREE GOES, and each failure is worth
+     knowing.** Removing the stack switch has to redden this test, and
+     at first it did not: the coroutine kept its state in GLOBALS, so
+     nothing ever read the stack that was being clobbered. Given locals
+     instead, it still did not: the test's own calls between the park
+     and the resume were too shallow to reach them. It bites only with
+     a `stack_churn()` of the size a real scheduler's work would have.
+     **A control has to REACH the state it claims to break** -- the
+     same "the fixture never reached the branch" rule this repo already
+     records for the truncate tests.
   2. **`switch_to()` CANNOT BE REUSED AS-IS.** It NOMINATES the
      incoming trapframe and returns; `block_common()` then returns 1
      and the CPU actually moves in the ISR epilogue on the way out. A

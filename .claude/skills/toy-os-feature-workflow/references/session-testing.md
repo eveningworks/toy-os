@@ -2685,3 +2685,16 @@ The general rule that covers all three: **a control is only evidence if
 the ONLY thing it changed is the fix.** Ask what else that revert
 touched -- the other half of the fix, the instrumentation, the timing --
 before believing either colour.
+
+**AND A FOURTH, THE SAME DAY: A CONTROL THAT DOES NOT REACH FAR ENOUGH.**
+`kctx_test.c` asserts a parked kernel context's stack survives, and the
+control for it -- removing the stack switch, so both contexts share one
+stack -- had to be iterated TWICE before it reddened anything. First the
+coroutine kept its state in globals, so no read ever touched the memory
+being clobbered. Then it kept locals, and the test's own calls between
+the park and the resume were too SHALLOW to overwrite them. It bites
+only with a deliberate 4 KB `stack_churn()` in that gap, which is the
+size of the work a real scheduler does there anyway. **Ask not just
+"does the control disable the fix" but "does the test then EXECUTE the
+thing the fix was protecting"** -- the truncate-test rule (the fixture
+never reached the branch) arriving from the control's side.
