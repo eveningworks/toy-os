@@ -1,0 +1,5 @@
+# Log Viewer -- see this directory's README.md for the format.
+Name=Log Viewer
+Exec=/bin/wm/apps/logview
+Category=system
+Icon=logview

@@ -697,7 +697,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Find/replace in Notepad
 - [x] ~~An image viewer~~ DONE 2026-08-23 -- Image Viewer browses a directory rather than opening a file dialog
 - [x] ~~A Help browser over `docs/`~~ DONE 2026-09-14 -- `/bin/wm/apps/help`, a sidebar of categories over `uui_markdown`
-- [ ] A Log Viewer: `uui_table` over `QUERY_KLOG`, with a level filter and a search field
+- [x] ~~A Log Viewer~~ DONE 2026-09-15 -- both rings merged on their shared stamp, a level filter and a search field
 - [ ] CPU/memory over time as a TAB in Task Manager, not a second process reading the same facts
 - [ ] Scientific mode for Calculator
 - [ ] `uapp_relayout()`: invalidate the layout and flush ONE pass before the next paint, as `uapp_redraw()` already does for painting

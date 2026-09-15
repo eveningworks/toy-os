@@ -157,6 +157,17 @@ def icon_help():
     return im
 
 
+def icon_logview():
+    # RULED LINES OF DIFFERENT LENGTHS, with one marked: a log is text in
+    # rows, and "one row stands out" is what the app is for. Equal-length
+    # bars read as a menu or a list rather than as a log.
+    im, d = tile((110, 125, 140))
+    for i, (y, w) in enumerate(((16, 30), (24, 24), (32, 32), (40, 20), (48, 28))):
+        colour = (250, 190, 90) if i == 3 else WHITE
+        d.rectangle([14, y, 14 + w, y + 4], fill=colour)
+    return im
+
+
 def icon_shapes():
     im, d = tile((215, 95, 120))
     d.polygon([(15, 37), (26, 16), (37, 37)], fill=WHITE)
@@ -759,6 +770,7 @@ ICONS = {
     "player": icon_player,
     "about": icon_about,
     "help": icon_help,
+    "logview": icon_logview,
     "shapes": icon_shapes,
     "fontdemo": icon_fontdemo,
     "uidemo": icon_uidemo,
