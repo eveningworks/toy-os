@@ -5059,6 +5059,32 @@ identified rather than guessed.
 `preflight.sh` at `0xEF` also fails, on the ring-3 userland tests
 (50/51), same family as the standalone runs above.
 
+**AND IT IS NOT LOST INPUT -- THAT WAS MEASURED AND RULED OUT.** The
+obvious reading of `drag=None` is that the press never arrived, and it
+is wrong. A probe that presses, reads the compositor's OWN button mask
+out of `gui state` (`buttons=0x..`, which is text, not JSON) and
+releases, with no app in the loop at all, is **40 pairs of 40 clean in
+every condition tried**: idle at `0xEE`, idle at `0xEF`, and at `0xEF`
+under sustained disk load with the load confirmed alive in `ps` at both
+ends of the run. So the hardware -> i8042 -> input core -> compositor
+path does not drop a button edge, and the failure is above it.
+
+**The likelier reading is TIME, and the numbers were in the run all
+along**: the bad `files` run took 695s against 285s for the clean one,
+and the full-suite one hit the 600s guard at 612s. A tool 2.4x slower
+fails its waits, and a wait that expires before the app has acted
+presents EXACTLY as `drag=None` -- the drag has not happened yet rather
+than having been lost. This entry already records the gate costing ~35%
+on the kernel suite (42.9s against 31.7s), which is a different order
+from 2.4x, so what varies run to run is the open question.
+
+**The instrument for that is `tools/latency_under_io.py`**, which is
+this milestone's own yardstick and measures both ends -- the
+compositor's `wake`/`ping` distributions as the effect and the kernel's
+TSC-timed `stalls` table as the cause. It has NOT been run at `0xEF`,
+and it wants `--kvm --cpu host,+invtsc`, since under TCG the effect half
+quantises to the PIT's 10 ms and only its tail is evidence.
+
 **So the flip is NOT clear, and the next question is why a drag never
 starts under the trap gate** -- `docs/bugs.md` already records injected
 clicks being lost under parallel load, and this is the same symptom
