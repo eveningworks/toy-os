@@ -47,6 +47,7 @@ void remote_log_record(int kind, uint32_t remote_ip, int pid,
     r->kind = (uint64_t)kind;
     r->remote_ip = remote_ip;
     r->pid = (uint64_t)pid;
+    r->sessions = (uint64_t)remote_log_sessions();
     if (comm) k_strlcpy(r->comm, comm, sizeof r->comm);
     if (text) k_strlcpy(r->text, text, sizeof r->text);
 }
@@ -114,10 +115,15 @@ void remote_log_session_opened(int leader_pid, uint32_t ip) {
 void remote_log_session_closed(int leader_pid) {
     for (int i = 0; i < REMOTE_SESSIONS_MAX; i++) {
         if (g_sessions[i].leader != leader_pid) continue;
-        remote_log_record(QUERY_REMOTE_SESSION, g_sessions[i].ip, leader_pid,
-                          "telnetd", "session closed");
+        // THE SLOT GOES FIRST, so the record this writes carries the
+        // count AFTER the close -- a reader takes the newest record's
+        // `sessions` as the current answer, and a close that still
+        // counted itself would leave the indicator up forever.
+        uint32_t ip = g_sessions[i].ip;
         g_sessions[i].leader = 0;
         g_sessions[i].ip = 0;
+        remote_log_record(QUERY_REMOTE_SESSION, ip, leader_pid,
+                          "telnetd", "session closed");
         return;
     }
 }

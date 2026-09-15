@@ -514,6 +514,15 @@ struct query_remotelog {
     uint64_t kind;          // QUERY_REMOTE_*
     uint64_t remote_ip;     // host byte order; the peer this is about
     uint64_t pid;           // who did it
+    // HOW MANY SESSIONS WERE OPEN when this record was written, which
+    // makes the NEWEST record the answer to "is anybody on this machine
+    // now" -- every open and close writes one, so it cannot go stale.
+    // It rides on the record for the reason applog's `total`/`oldest`
+    // do: a reader must not have to replay a ring that forgets its
+    // beginning to learn a live fact. Counting `opened` minus `closed`
+    // over the records was the first version, and it reported zero the
+    // moment the ring wrapped past an `opened` whose `closed` it kept.
+    uint64_t sessions;
     char     comm[24];      // that process's name (PROC_NAME_MAX)
     char     text[QUERY_REMOTELOG_TEXT_MAX];
 };

@@ -293,11 +293,50 @@ def main():
             finally:
                 held.close()
 
+                # **DRAWN, NOT MERELY REPORTED.** The checks above read
+                # the app's own JSON, and this project has shipped three
+                # inert scrollbars and an invisible Calculator past
+                # exactly that kind of assertion. Clicking the tray item
+                # must change PIXELS inside the rect it says the flyout
+                # occupies -- with the strip left of the panel sampled
+                # as the control, because a check that only looks where
+                # it expects a change cannot tell a flyout from a
+                # repaint of the whole screen.
+                from qmp_test import QMPSession   # noqa: E402
+                with QMPSession(port=port_guard.instance_qmp(INSTANCE)) as qmp:
+                    geom = during or {}
+                    # PIL's crop box: left, top, RIGHT, BOTTOM.
+                    gx, gy = geom.get("x", 0), geom.get("y", 0)
+                    gw, gh = geom.get("w", 1), geom.get("h", 1)
+                    box = (gx, gy, gx + gw, gy + gh)
+                    ctrl = (max(0, gx - 40), gy, max(1, gx - 10), gy + gh)
+                    before_px = qmp.stable_pixels(os.path.join(tmp, "rb.png"), box)
+                    before_ctl = qmp.stable_pixels(os.path.join(tmp, "cb.png"), ctrl)
+                    tray = geom.get("tray", {})
+                    dbg.click(tray.get("cx", 0), tray.get("cy", 0))
+                    time.sleep(1.0)
+                    opened = dbg.json("gui remote --json")
+                    after_px = qmp.stable_pixels(os.path.join(tmp, "ra.png"), box)
+                    after_ctl = qmp.stable_pixels(os.path.join(tmp, "ca.png"), ctrl)
+                    r.check("clicking the item opens the flyout",
+                            opened and opened.get("open") is True,
+                            repr(opened)[:160])
+                    r.check("...and it is DRAWN -- the panel's pixels changed",
+                            before_px != after_px)
+                    r.check("...while the strip beside it did not",
+                            before_ctl == after_ctl)
+                    dbg.click(tray.get("cx", 0), tray.get("cy", 0))
+
             # A TRANSFER, HERE, because the flyout lists the last ten
             # records: the puts above are long gone behind the commands
             # these checks themselves ran, and asserting against a
             # window that has scrolled past them tests nothing.
             remote("put", os.path.join(REPO, "VERSION"), "/tmp/ver.txt")
+            # Two polls' worth: the tray re-evaluates once a second, and
+            # a check tighter than that cadence measures the cadence
+            # rather than the behaviour. NOT a retry -- sampling again
+            # until it passes would hide exactly the bug this caught,
+            # where the indicator stayed up with nobody connected.
             time.sleep(2.5)
             after = dbg.json("gui remote --json")
             r.check("the indicator goes away when the session ends",

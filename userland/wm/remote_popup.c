@@ -23,6 +23,8 @@ static int g_row_count;
 static uint64_t g_last_seq;      // the newest record this has drawn
 static uint32_t g_peer;
 static int g_sessions;
+// What the visibility gate last acted on -- written only there.
+static int g_last_present;
 
 // --- reading ----------------------------------------------------------
 
@@ -32,11 +34,13 @@ static void fmt_ip(char *out, unsigned cap, unsigned long long ip) {
                (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF);
 }
 
-// A SESSION IS OPEN UNTIL ITS CLOSE LINE, which is what the indicator
-// asks. Derived by walking the records rather than by a second query:
-// the ring already carries both halves, and a count the kernel exports
-// separately is a second view that can disagree with the list a person
-// is reading.
+// HOW MANY SESSIONS ARE OPEN COMES OFF THE NEWEST RECORD, which is the
+// kernel's own live count at the moment it was written (query_abi.h).
+// Replaying `opened` minus `closed` across the ring was the first
+// version and it reported zero as soon as the ring wrapped past an
+// `opened` whose `closed` it still held -- the indicator then stayed up
+// with nobody connected, which is the one reading this item must never
+// produce.
 static void read_records(void) {
     struct query_remotelog r;
     int total = 0;
@@ -53,31 +57,36 @@ static void read_records(void) {
     }
 
     g_sessions = 0;
-    g_peer = 0;
-    for (int i = 0; i < total; i++) {
-        if (sys_query_record(QUERY_REMOTELOG, i, &r, sizeof r) < (int)sizeof r) break;
-        if (r.kind != QUERY_REMOTE_SESSION) continue;
-        // "session opened" and "session closed" are the two texts the
-        // kernel writes; the first character after the space is what
-        // separates them without a second field to keep true.
-        if (k_strstr(r.text, "opened")) { g_sessions++; g_peer = (uint32_t)r.remote_ip; }
-        else if (g_sessions > 0)        { g_sessions--; }
+    if (g_row_count) {
+        const struct query_remotelog *newest = &g_rows[g_row_count - 1];
+        g_sessions = (int)newest->sessions;
+        // The peer is remembered past the close, so the flyout can still
+        // say who the listed records came from.
+        if (newest->remote_ip) g_peer = (uint32_t)newest->remote_ip;
     }
     g_last_seq = g_row_count ? g_rows[g_row_count - 1].seq : 0;
 }
 
 void remote_poll(void) {
     uint64_t before = g_last_seq;
-    int was_sessions = g_sessions;
     read_records();
 
+    // **THE GATE TRACKS WHAT IT LAST APPLIED, NOT WHAT THE LAST POLL
+    // SAW.** Comparing against the session count at poll entry looks
+    // equivalent and is not: `read_records()` also runs when the flyout
+    // is OPENED, so a session that ended between two polls was already
+    // folded into the count by that click and the next poll saw no
+    // change -- leaving the indicator up with nobody connected, which
+    // is the one reading this item must never produce.
+    int present = g_sessions > 0;
     uint32_t gen = wm_setting_generation();
-    if (gen != g_seen_generation || was_sessions != g_sessions) {
+    if (gen != g_seen_generation || present != g_last_present) {
+        g_last_present = present;
         // tray_want_shown() reads /etc/desktop.conf, so it is asked on a
         // CHANGE rather than once a second forever (network_popup.c has
         // the measurement).
         g_seen_generation = gen;
-        tray_set_hidden(g_tray_id, !tray_want_shown("remote", g_sessions > 0));
+        tray_set_hidden(g_tray_id, !tray_want_shown("remote", present));
     }
     if (g_last_seq != before && remote_open) remote_damage();
 }
@@ -85,7 +94,8 @@ void remote_poll(void) {
 void remote_tray_init(void) {
     read_records();
     g_tray_id = tray_register_icon("tray-remote");
-    tray_set_hidden(g_tray_id, !tray_want_shown("remote", g_sessions > 0));
+    g_last_present = g_sessions > 0;
+    tray_set_hidden(g_tray_id, !tray_want_shown("remote", g_last_present));
 }
 
 int remote_tray_hidden(void) { return tray_is_hidden(g_tray_id); }
