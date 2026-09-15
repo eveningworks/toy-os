@@ -87,7 +87,16 @@ MODULE_DIRS = ("/usr/lib/grub/i386-pc", "/usr/share/grub/i386-pc",
 # driver bug and is not one.
 CORE_MODULES = ("biosdisk", "part_gpt", "part_msdos", "fat", "normal",
                 "configfile", "multiboot2", "all_video", "gfxterm", "echo",
-                "test", "search", "search_fs_uuid", "search_label", "ls")
+                "test", "search", "search_fs_uuid", "search_label", "ls",
+                # GZIO -- so a GZIPPED kernel boots from the disk. GRUB
+                # decompresses any file whose CONTENT starts with the gzip
+                # magic, but only if this module is in the core image; the
+                # rescue ISO gets it from grub-mkrescue's full module set,
+                # and this one has only what is listed here. Without it a
+                # compressed kernel fails SILENTLY -- measured: no serial
+                # output at all, which reads like a dead machine rather
+                # than a missing module.
+                "gzio")
 
 # mformat picks a volume serial from the clock unless told otherwise,
 # and this repo builds byte-identical images from identical inputs

@@ -151,14 +151,12 @@ def build(tmp, sabotage=False):
     # from it.
     shim = os.path.join(tmp, "shim")
     os.makedirs(shim, exist_ok=True)
-    for h in ("kcrc.h", "kinflate.h"):
-        with open(os.path.join(shim, h), "w") as f:
-            f.write('#include "%s"\n'
-                    % os.path.join(ROOT, "kernel", "include", "api", h))
+    with open(os.path.join(shim, "kcrc.h"), "w") as f:
+        f.write('#include "%s"\n'
+                % os.path.join(ROOT, "kernel", "include", "api", "kcrc.h"))
 
     png_c = os.path.join(ROOT, "userland", "lib", "uimg_png.c")
-    infl_c = os.path.join(ROOT, "kernel", "lib", "kinflate.c")
-    defl_c = os.path.join(ROOT, "userland", "lib", "udeflate.c")
+    infl_c = os.path.join(ROOT, "userland", "lib", "uinflate.c")
     if sabotage:
         # THE control: a Huffman code that is not reversed. The file
         # stays structurally valid -- signature, chunk lengths and CRCs
@@ -170,11 +168,11 @@ def build(tmp, sabotage=False):
                 "    return r;\n")
         # bit_reverse() moved to uinflate.c with the rest of the
         # compressor; the control follows it.
-        text = open(defl_c).read()
+        text = open(infl_c).read()
         if body not in text:
             sys.exit("positive control: bit_reverse() no longer looks as expected")
-        defl_c = os.path.join(tmp, "udeflate_broken.c")
-        with open(defl_c, "w") as f:
+        infl_c = os.path.join(tmp, "uinflate_broken.c")
+        with open(infl_c, "w") as f:
             f.write(text.replace(body, "    (void)n;\n    return v;\n"))
 
         # AND A SECOND, DECODE-ONLY SABOTAGE. The one above breaks only
@@ -195,26 +193,9 @@ def build(tmp, sabotage=False):
             f.write(ptext.replace(pbody,
                                    "        case 4: v += a + 0 * c; break;\n"))
 
-    # kinflate.c IS A SHARED-SOURCE FILE and includes the kernel's
-    # "string.h" for k_memset, so it needs kernel/include/api on its
-    # include path -- and nothing else may have it, because that
-    # directory's string.h would shadow the host's for every other file
-    # and take memcpy with it. So it compiles on its own, and the objects
-    # are linked together.
-    kobjs = []
-    for csrc in (infl_c, os.path.join(ROOT, "kernel", "lib", "string.c")):
-        obj = os.path.join(tmp, os.path.basename(csrc)[:-2] + ".o")
-        subprocess.run(["gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-c", csrc,
-                        "-o", obj,
-                        "-I" + os.path.join(ROOT, "kernel", "include", "api"),
-                        "-I" + os.path.join(ROOT, "kernel", "include", "abi")],
-                       check=True)
-        kobjs.append(obj)
-
     exe = os.path.join(tmp, "uimgenc")
     cmd = ["gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-o", exe, src,
-           os.path.join(ROOT, "userland", "lib", "uimg_qoi.c"), png_c, defl_c,
-           *kobjs,
+           os.path.join(ROOT, "userland", "lib", "uimg_qoi.c"), png_c, infl_c,
            os.path.join(ROOT, "kernel", "lib", "kcrc.c"),
            "-I" + shim,
            "-I" + os.path.join(ROOT, "userland"),
@@ -255,6 +236,54 @@ def raw_argb(im):
     for (r, g, b, a) in pixels(im):
         out += struct.pack("<I", (a << 24) | (r << 16) | (g << 8) | b)
     return bytes(out)
+
+
+def write_png_filtered(path, im, filt):
+    """A truecolour PNG whose every row uses filter `filt`.
+
+    The five filters are the decoder's five unfilter paths, and this is
+    the only way to be sure each one is entered: an encoder picks per
+    row, so a file that happens to use Paeth everywhere leaves Sub and
+    Average untested.
+    """
+    im = im.convert("RGB")
+    w, h = im.size
+    px = pixels(im)
+    raw = bytearray()
+    prev = bytearray(w * 3)
+    for y in range(h):
+        row = bytearray()
+        for x in range(w):
+            row += bytes(px[y * w + x][:3])
+        raw.append(filt)
+        for i in range(len(row)):
+            a = row[i - 3] if i >= 3 else 0
+            b = prev[i]
+            c = prev[i - 3] if i >= 3 else 0
+            if filt == 0:
+                v = row[i]
+            elif filt == 1:
+                v = row[i] - a
+            elif filt == 2:
+                v = row[i] - b
+            elif filt == 3:
+                v = row[i] - ((a + b) >> 1)
+            else:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                v = row[i] - pr
+            raw.append(v & 0xFF)
+        prev = row
+
+    def chunk(typ, data):
+        return (struct.pack(">I", len(data)) + typ + data
+                + struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF))
+
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+    out = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+           + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
+    open(path, "wb").write(out)
 
 
 def unfilter_png(path):
@@ -421,10 +450,15 @@ def main():
                 im = patterns("gradient" if mode != "P" else "palette", w, h)
                 im = im.convert(mode)
                 src = os.path.join(keep or tmp2, tag.replace(" ", "_") + ".png")
-                kw = {}
-                if filt is not None:
-                    kw = {"compress_level": 9, "bits": 8}
-                im.save(src, format="PNG", **({} if filt is None else {}))
+                if filt is None:
+                    im.save(src, format="PNG")
+                else:
+                    # BUILT BY HAND, because Pillow chooses filters per row
+                    # and gives no way to demand one. Asking it politely
+                    # produced cases whose names said "filter3" and whose
+                    # bytes were whatever Pillow preferred -- four checks
+                    # that tested nothing they claimed to.
+                    write_png_filtered(src, im, filt)
                 raw = os.path.join(tmp2, "d.raw")
                 r = subprocess.run([exe2, "decode", src, raw], capture_output=True)
                 checks += 1

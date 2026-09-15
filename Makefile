@@ -166,6 +166,29 @@ LDFLAGS = -n -T linker.ld -nostdlib
 ASMFLAGS = -f elf64
 
 KERNEL = $(BUILD)/kernel.bin
+
+# WHAT ACTUALLY GOES ON THE MEDIA, which is not always $(KERNEL).
+#
+# With `option compress = yes` (the default) this is the kernel GZIPPED.
+# GRUB decompresses it -- by CONTENT, so the name need not say so, and
+# the disk needs `gzio` in its core image (tools/install_grub.py).
+# Measured: 1.74 MB -> 745 KB, which is ~6 s -> ~2.7 s of every
+# `remote.py flash` at the link's 280 KB/s.
+#
+# A SEPARATE FILE rather than gzipping $(KERNEL) in place, because
+# panic_resolve.py, `make debug` and the whole DWARF story want the ELF
+# -- and because `remote.py flash` verifies by hashing the local file
+# against the machine's, so the two must be the same bytes.
+KERNEL_MEDIA = $(BUILD)/kernel.media
+
+$(KERNEL_MEDIA): $(KERNEL) $(BUILD)/.compress-flag
+	@if [ "$(COMPRESS)" != "0" ]; then \
+	    gzip -9 -c $(KERNEL) > $@ && \
+	    echo "  kernel.media `stat -c%s $@` bytes (gzip -9; GRUB unpacks it)"; \
+	else \
+	    cp $(KERNEL) $@ && \
+	    echo "  COMPRESS=0: kernel.media is the plain ELF, `stat -c%s $@` bytes"; \
+	fi
 ISO = toy-os.iso
 
 # A separate, genuinely writable raw disk image for kernel/drivers/ata.c
@@ -676,8 +699,7 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/klineedit_cases.o \
                $(BUILD)/userland/shared/etc_config_cases.o \
                $(BUILD)/userland/shared/tmppath.o \
-               $(BUILD)/userland/shared/kcrc.o \
-               $(BUILD)/userland/shared/kinflate.o
+               $(BUILD)/userland/shared/kcrc.o
 LIBUAPP      = $(BUILD)/userland/libuapp.a
 
 # libc.a -- the C LIBRARY, a second archive beside the toolkit.
@@ -1511,7 +1533,7 @@ $(DISK_IMG):
 # holds the registry and the reasoning.
 EXTRAS ?=
 LICENSE ?=
-seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LIBUAPP_SO) $(MODULE_KOS) $(MODULE_ALIAS) $(BUILD)/conf.mk
+seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LIBUAPP_SO) $(MODULE_KOS) $(MODULE_ALIAS) $(BUILD)/conf.mk $(KERNEL_MEDIA)
 	$(if $(EXTRAS),TOYOS_LICENSE=$(LICENSE) python3 tools/fetch_extras.py,@true)
 	mkdir -p $(SEED_DIR)/sync/bin $(SEED_DIR)/sync/tests
 	# The dynamic loader and the shared libraries -- /lib is theirs
@@ -1574,7 +1596,7 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LI
 	# boots, it just cannot install itself.
 	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(KCMDLINE)|' grub.cfg > $(BUILD)/grub-disk.cfg
 	python3 tools/install_grub.py --stage-payload $(SEED_DIR)/sync/install \
-	    --kernel $(KERNEL) --grub-cfg $(BUILD)/grub-disk.cfg
+	    --kernel $(KERNEL_MEDIA) --grub-cfg $(BUILD)/grub-disk.cfg
 	mkdir -p $(SEED_DIR)/sync/usr/share/doc
 	cp data/usr/share/doc/toy-os.txt $(SEED_DIR)/sync/usr/share/doc/toy-os.txt
 	# The command pages, staged UNCONVERTED from docs/commands/ -- the
@@ -1770,7 +1792,7 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LI
 	# lets a disk.img built before this layout existed keep working:
 	# it has nowhere to install to, so nothing is installed and every
 	# launcher falls back to booting the ISO.
-	python3 tools/install_grub.py $(DISK_IMG) --kernel $(KERNEL) \
+	python3 tools/install_grub.py $(DISK_IMG) --kernel $(KERNEL_MEDIA) \
 	    --grub-cfg $(BUILD)/grub-disk.cfg --optional
 	@touch $(BUILD)/.bootdisk
 	# A stamp saying the seed step RAN, which disk.img's own mtime
@@ -1848,10 +1870,10 @@ $(LIVE_IMG): $(USERLAND_ELVES) seed
 	python3 tools/tfs3_writer.py trim $(LIVE_IMG) \
 	    --at-lba $${V%% *} --sectors $${V##* }
 
-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(BUILD)/conf.mk
+iso: version $(KERNEL) $(USERLAND_ELVES) seed $(BUILD)/conf.mk $(KERNEL_MEDIA)
 	mkdir -p iso/boot/grub
 	rm -f iso/boot/live.img
-	cp $(KERNEL) iso/boot/kernel.bin
+	cp $(KERNEL_MEDIA) iso/boot/kernel.bin
 	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(KCMDLINE)|' grub.cfg > iso/boot/grub/grub.cfg
 	@if [ -z "$(GRUB_MKRESCUE)" ]; then \
 		echo "make: grub-mkrescue not found (looked for grub-mkrescue and grub2-mkrescue)."; \
@@ -1883,13 +1905,13 @@ LIVE_ISO = toy-os-live.iso
 USB_IMG  = toyos-usb.img
 USB_SIZE = 512M
 
-usb-image: version $(KERNEL) $(USERLAND_ELVES) seed $(BUILD)/conf.mk
+usb-image: version $(KERNEL) $(USERLAND_ELVES) seed $(BUILD)/conf.mk $(KERNEL_MEDIA)
 	rm -f $(USB_IMG)
 	truncate -s $(USB_SIZE) $(USB_IMG)
 	python3 tools/seed_disk.py $(USB_IMG) $(SEED_DIR)
 	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(KCMDLINE)|' \
 	    grub.cfg > $(BUILD)/grub-usb.cfg
-	python3 tools/install_grub.py $(USB_IMG) --kernel $(KERNEL) \
+	python3 tools/install_grub.py $(USB_IMG) --kernel $(KERNEL_MEDIA) \
 	    --grub-cfg $(BUILD)/grub-usb.cfg
 	@echo ""
 	@echo "  $(USB_IMG) is ready and boots itself (BIOS/CSM, not UEFI)."
@@ -1898,10 +1920,10 @@ usb-image: version $(KERNEL) $(USERLAND_ELVES) seed $(BUILD)/conf.mk
 	@echo "  /dev/sdX is the WHOLE DEVICE, not a partition (no digit)."
 	@echo ""
 
-live-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG) $(BUILD)/.compress-flag $(BUILD)/conf.mk
+live-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG) $(BUILD)/.compress-flag $(BUILD)/conf.mk $(KERNEL_MEDIA)
 	rm -rf iso-live
 	mkdir -p iso-live/boot/grub
-	cp $(KERNEL) iso-live/boot/kernel.bin
+	cp $(KERNEL_MEDIA) iso-live/boot/kernel.bin
 	# GZIPPED BY DEFAULT, AND GRUB IS WHAT UNPACKS IT. The image is
 	# ~86 MiB of mostly-empty filesystem and compresses to about a
 	# quarter, which halves the ISO (122 MB -> 59 MB, measured). GRUB's

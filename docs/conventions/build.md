@@ -404,6 +404,25 @@ this the obvious way), not from how much history it accumulated.
   **16-aligned before `call main`** -- a `sub rsp, 8` there looks like
   it restores the old convention and instead faults every SSE-using
   binary while leaving plain ones working, see `docs/decisions.md`.
+- **WHAT GOES ON THE MEDIA IS `$(KERNEL_MEDIA)`, NOT `$(KERNEL)`.**
+  With `option compress = yes` (the default) it is the kernel GZIPPED,
+  and **GRUB decompresses it** -- by CONTENT, so the file keeps the name
+  `kernel.bin` on the media and nothing in toy-os inflates anything.
+  1.74 MB -> 745 KB, which is ~6 s -> ~2.7 s of every `remote.py flash`.
+
+  **THE DISK NEEDS `gzio` IN ITS CORE IMAGE** (`tools/install_grub.py`'s
+  `CORE_MODULES`), and without it a compressed kernel fails SILENTLY --
+  measured: no serial output at all, which reads like a dead machine
+  rather than a missing GRUB module. The ISO is unaffected because
+  `grub-mkrescue` ships the full module set.
+
+  **It is a SEPARATE FILE, not `$(KERNEL)` gzipped in place**, because
+  `panic_resolve.py`, `make debug` and the whole DWARF story want the
+  ELF -- and because `remote.py flash` verifies by hashing the local
+  file against the machine's, so the two have to be the same bytes.
+  `flash` defaults to the media copy for that reason, falling back to
+  the ELF when it has not been built.
+
 - **`drivers.conf` IS THE KERNEL CONFIG: WHICH DRIVERS ARE MODULES AND
   HOW THE BUILD IS TUNED.** `option <name> = <value>` lines sit beside
   the `<driver> = builtin|module` ones -- FreeBSD's `conf/GENERIC` and

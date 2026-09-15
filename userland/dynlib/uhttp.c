@@ -6,7 +6,7 @@
 
 #include "rt/sys.h"
 #include "uhttp.h"
-#include "kinflate.h"
+#include "lib/uinflate.h"
 #include "utls.h"
 #include "lib/uresolv.h"
 
@@ -372,11 +372,11 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
     if (scan.gzip && gz_len) {
         struct uhttp_gz gctx = { req, 0 };
         size_t out_len = 0;
-        // The decoder's window is the caller's -- 32 KiB, too big for a
-        // stack frame here (api/kinflate.h).
-        struct kinflate_scratch *sc = malloc(sizeof *sc);
+        // The decoder's window is the caller's -- too big for a stack
+        // frame here (lib/uinflate.h).
+        struct uinflate_scratch *sc = malloc(sizeof *sc);
         if (!sc) { fail(req, "out of memory to decompress the body"); goto done_err; }
-        int zrc = kinflate(gz, gz_len, KINFLATE_GZIP, sc, gz_sink, &gctx, &out_len);
+        int zrc = uinflate(gz, gz_len, UINFLATE_GZIP, sc, gz_sink, &gctx, &out_len);
         free(sc);
         free(gz);
         gz = NULL;
@@ -386,7 +386,7 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
         }
         if (zrc < 0) {
             fail(req, "the server's gzip body could not be read: %s",
-                 kinflate_error());
+                 uinflate_error());
             goto done_err;
         }
         // What the CALLER moved is the decompressed length; the

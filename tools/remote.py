@@ -56,6 +56,8 @@ import zlib
 IAC, DONT, DO, WONT, WILL, SB, SE = 255, 254, 253, 252, 251, 250, 240
 OPT_ECHO, OPT_SGA, OPT_NAWS = 1, 3, 31
 
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 DEFAULT_TELNET_PORT = 23
 DEFAULT_TFTP_PORT = 69
 
@@ -1199,7 +1201,15 @@ def main():
 
     f = sub.add_parser("flash", help="replace the kernel on the machine's "
                                      "own boot partition")
-    f.add_argument("kernel", nargs="?", default="build/kernel.bin")
+    # build/kernel.media, NOT build/kernel.bin: the media copy is what
+    # the ISO and the disk carry, and with `option compress = yes` it is
+    # the GZIPPED kernel (GRUB unpacks it). Sending the ELF instead would
+    # work -- GRUB takes either -- but it would put 1.7 MB over the link
+    # where 745 KB would do, and leave the machine holding something no
+    # other medium carries. Falls back to the ELF when the media copy has
+    # not been built, so `remote.py flash` after a bare `make all` still
+    # does the obvious thing.
+    f.add_argument("kernel", nargs="?", default=None)
     # **REBOOTING IS THE DEFAULT, and it is the safe direction.** A
     # flash that verifies a kernel and does NOT boot it leaves the
     # machine running the OLD kernel against the NEW /lib -- the exact
@@ -1250,8 +1260,13 @@ def main():
                            a.local, a.remote, a.timeout, a.dry_run,
                            a.new_only, force=a.force)
         if a.cmd == "flash":
+            kernel = a.kernel
+            if kernel is None:
+                media = os.path.join(REPO, "build", "kernel.media")
+                elf = os.path.join(REPO, "build", "kernel.bin")
+                kernel = media if os.path.exists(media) else elf
             return do_flash(a.host, a.telnet_port, a.tftp_port,
-                            a.kernel, a.timeout, a.reboot,
+                            kernel, a.timeout, a.reboot,
                             a.kernel_only, a.staging, force=a.force)
         if a.cmd == "screenshot":
             return do_screenshot(a, a.host, a.telnet_port, a.tftp_port, a.timeout)

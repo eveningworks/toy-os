@@ -3,7 +3,7 @@
 // It arrived as a WRITE-ONLY row in uimg.h's codec table, because a
 // screenshot needed a format a host could open and reading one needs
 // inflate. The decoder came later, and inflate with it: the compression
-// is api/kinflate.h (shared with ring 0) and lib/udeflate.h, rather
+// both directions now live in lib/uinflate.h, which is a library rather
 // than something private here because /bin/wget inflates a gzip
 // Content-Encoding through the same code.
 //
@@ -28,8 +28,7 @@
 // this read what Pillow wrote, because an encoder and decoder that share
 // a mistake round-trip perfectly and produce files nothing else opens.
 #include "lib/uimg.h"
-#include "kinflate.h"
-#include "lib/udeflate.h"
+#include "lib/uinflate.h"
 #include <kcrc.h>
 #include <kerrno.h>
 #include <stdlib.h>
@@ -208,18 +207,18 @@ static int png_encode(const struct uimg *im, uint8_t **out, size_t *out_len) {
     // THE ZLIB WRAPPER IS THE LIBRARY'S, header and adler32 both -- this
     // file used to build it by hand, and a second copy of a two-byte
     // header whose check bits must be a multiple of 31 is a second place
-    // to get it wrong (lib/udeflate.h).
+    // to get it wrong (lib/uinflate.h).
     size_t idat_cap = udeflate_bound(raw_len);
     uint8_t *idat = malloc(idat_cap);
     if (!idat) { free(raw); free(up); PFAIL(-ENOMEM, "not enough memory to compress"); }
 
     size_t idat_len = 0;
-    int rc = udeflate_into(raw, raw_len, KINFLATE_ZLIB, idat, idat_cap, &idat_len);
+    int rc = udeflate_into(raw, raw_len, UINFLATE_ZLIB, idat, idat_cap, &idat_len);
     free(raw);
     free(up);
     if (rc < 0) {
         free(idat);
-        PFAIL(rc, udeflate_error());
+        PFAIL(rc, uinflate_error());
     }
 
     uint8_t ihdr[13];
@@ -428,16 +427,15 @@ static int png_decode(const uint8_t *d, size_t n, struct uimg *out) {
     if (!raw) { free(z); PFAIL(-ENOMEM, "not enough memory for the decompressed rows"); }
 
     size_t got = 0;
-    // THE 32 KiB WINDOW IS THE CALLER'S (api/kinflate.h): the decoder
-    // allocates nothing, so that one implementation can serve ring 0 as
-    // well. Too big for a 2 KiB ring-3 frame, so it is malloc'd here
-    // rather than made a local.
-    struct kinflate_scratch *sc = malloc(sizeof *sc);
+    // THE WINDOW IS THE CALLER'S (lib/uinflate.h): the decoder
+    // allocates nothing, so nothing is hidden inside a decode. Too big
+    // for a 2 KiB frame, so it is malloc'd here rather than made a local.
+    struct uinflate_scratch *sc = malloc(sizeof *sc);
     if (!sc) { free(z); free(raw); PFAIL(-ENOMEM, "not enough memory to decompress"); }
-    rc = kinflate_into(z, z_len, KINFLATE_ZLIB, sc, raw, raw_len, &got);
+    rc = uinflate_into(z, z_len, UINFLATE_ZLIB, sc, raw, raw_len, &got);
     free(sc);
     free(z);
-    if (rc < 0) { free(raw); PFAIL(rc, kinflate_error()); }
+    if (rc < 0) { free(raw); PFAIL(rc, uinflate_error()); }
     // A SHORT STREAM IS REFUSED, not padded. Half an image decodes to a
     // plausible picture with a grey tail, which reads as a decoder bug
     // rather than as a truncated file (the rule read_file() follows).

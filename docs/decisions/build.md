@@ -1747,3 +1747,38 @@ now. The general lesson is the one this repo keeps relearning in other
 forms -- check what the layer below already does before building it
 again. A boot loader is a layer, and this one has had transparent
 decompression since GRUB 2.
+
+## GRUB decompresses the kernel too, which cancelled the boot stub
+
+The entry above records that GRUB unpacks a gzipped MODULE. The obvious
+next question was not asked at the time: does it do the same for the
+kernel? It does. `gzip -9 build/kernel.bin` is 745 KB, GRUB loads it,
+and the kernel relocates and boots exactly as before.
+
+**That cancelled a planned piece of work.** A self-decompressing kernel
+-- a stub carrying its own inflate, running in 32-bit mode before paging
+and before this kernel's own KASLR relocation -- was queued, and its
+entire benefit is what one `gzip` now delivers with no code running
+before paging at all and nothing to get wrong. Linux needs
+`arch/x86/boot/compressed/` because a PC BIOS hands it no decompressor;
+this project's boot loader has had one since GRUB 2.
+
+**The disk needed one line and failed silently without it.** GRUB
+decompresses only if `gzio` is in the image doing the reading: the
+rescue ISO gets it from `grub-mkrescue`'s full module set, while the
+disk's `core.img` carries only what `tools/install_grub.py` lists.
+Without it the machine produced NO serial output -- indistinguishable
+from a dead build, and the kind of failure that would have been blamed
+on the compression rather than on a missing module.
+
+**And it settled where the compression code lives.** With GRUB unpacking
+both the kernel and the live image, `uinflate.c` has no ring-0 caller
+and went back to `userland/lib/`, where its two real callers are. It
+kept the caller-supplied scratch it grew while it was briefly shared --
+that is worth having in ring 3 too, because it means nothing is hidden
+inside a decode, and it is what let the 4 KiB output chunk and the two
+Huffman tables come off a stack frame that was three times the budget.
+
+The sequence is worth remembering as a shape: measure, find the layer
+below already does it, delete the thing you built. Twice, on the same
+question, a week's worth of planned work each time.
