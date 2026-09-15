@@ -1551,7 +1551,7 @@ window without going through it will find its layout polls timing out.
   misreads cannot round-trip through a matching bug of our own. (The
   repo does write QOI now -- `/bin/screenshot` does -- and its encoder is
   checked the other way round, by Pillow decoding it; see
-  `uimg_encode_hostcheck.py`.) **Crash Test gets no
+  `uimg_codec_hostcheck.py`.) **Crash Test gets no
   icon on purpose** -- it is the entry that exercises the letter-tile
   fallback on every boot, the same trick `data/fonts/` plays by shipping
   `vera-mono` with no bold companion.
@@ -1567,8 +1567,10 @@ window without going through it will find its layout polls timing out.
   real photograph; `--tolerance` tightens the bar. Not in any gate: it
   needs Pillow, and `/tests/uimg_test` is the version that runs in the
   guest.
-- **`uimg_encode_hostcheck.py`** -- the mirror of the above, for the
-  ENCODERS: `uimg_qoi.c` and `uimg_png.c` compiled with the host gcc,
+- **`uimg_codec_hostcheck.py`** -- the QOI and PNG codecs, BOTH WAYS,
+  against Pillow and Python's `zlib`.
+
+  **Encoding:** `uimg_qoi.c` and `uimg_png.c` compiled with the host gcc,
   run over eight images chosen for what they do to each format (a flat
   fill for QOI's runs, a gradient for its luma chunks, noise that no
   chunk helps, a UI-shaped image, one with alpha, a 1x1 and a 1x300),
@@ -1583,12 +1585,29 @@ window without going through it will find its layout polls timing out.
   packed least-significant-bit-first. Both produce a file that
   round-trips perfectly here and that nothing else can open.
 
-  `--positive-control` patches the deflate writer's bit reversal in a
-  COPY of the source and requires every PNG check to go red while the
-  QOI ones stay green -- a control that reddened both would have
-  isolated nothing. `--keep DIR` leaves the encoded files to look at.
-  Not in any gate: it needs Pillow, and `/tests/uimg_test` is the
-  round-trip that runs in the guest.
+  **Decoding:** the same argument in reverse -- files PILLOW wrote,
+  read by us, compared exactly (PNG is lossless, so there is no
+  tolerance to hide behind). Every colour type including palette, each
+  row filter forced in turn, and sizes whose stride is not round. Plus
+  what it must REFUSE and with which errno: a 16-bit or interlaced file
+  is `-ENOTSUP` (the file is fine, this build is not) and a corrupted
+  chunk is `-EINVAL`, because an app prints a different sentence for
+  each.
+
+  **The interlaced fixture is BUILT BY HAND**, and that is the
+  interesting part: Pillow silently ignores `interlace=1` and writes a
+  progressive-free file, so asking it for one produced a fixture that
+  never reached the code under test and a check that passed for the
+  wrong reason. Flipping the IHDR byte and repairing its CRC is what
+  actually tests the refusal.
+
+  `--positive-control` carries TWO sabotages in two files -- an
+  unreversed Huffman code in the compressor, and the Paeth predictor
+  dropped from unfiltering -- and requires encode AND decode to go red
+  while QOI stays green. One sabotage reddened only half the harness,
+  which meant the other half was untested. `--keep DIR` leaves the
+  files to look at. Not in any gate: it needs Pillow, and
+  `/tests/uimg_test` is the round-trip that runs in the guest.
 - **`fetch_extras.py`** -- the registry of optional, differently-licensed
   material, and the licence acceptance in front of it. `make iso
   EXTRAS=1` runs it; nothing else does, so an ordinary build reaches no

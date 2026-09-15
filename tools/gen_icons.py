@@ -16,7 +16,7 @@ DECODER honest: these files come from a foreign implementation, so a
 misread chunk type cannot round-trip through a matching bug of our own.
 (The repo does write QOI now -- the screenshot tool does -- and its
 encoder is kept honest the other way round, by Pillow decoding what it
-wrote: tools/uimg_encode_hostcheck.py. Neither side is ever checked
+wrote: tools/uimg_codec_hostcheck.py. Neither side is ever checked
 against the other.)
 
 ONE MASTER SIZE, scaled at runtime. 64x64 is drawn here and the window

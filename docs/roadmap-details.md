@@ -6187,6 +6187,6 @@ prerequisite of something else. That is the same argument `uimg_qoi.c`'s
 header made for picking QOI over PNG for icons in the first place.
 
 Once it exists, the decoder side is the ordinary PNG chunk walk plus the
-five unfilters, all of which `tools/uimg_encode_hostcheck.py` already
+five unfilters, all of which `tools/uimg_codec_hostcheck.py` already
 implements in Python as its second oracle -- so the reference to check
 against is written.

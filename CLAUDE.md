@@ -841,6 +841,7 @@ whenever a headline here tells you something you did not already know.
 - **THE TOOLKIT OWNS THE KEYBOARD FOCUS RING: set `uapp_desc.focus`.**
 - **A WIDGET DESCRIBES ITSELF, AND THE LAYOUT LOG HAS ONE VOCABULARY: `<prefix>: layout <name>[.<part>] [i [j]] x y w h`** -- `uui_item.name` plus `uapp_log_layout()`, and a `describe` op for a widget's sub-rects, never a per-app logger
 - **AN IMAGE IS DECODED IN RING 3, AND `lib/uimg.h`'s CODEC TABLE IS THE EXTENSION POINT**
+- **COMPRESSION IS A LIBRARY, `lib/uinflate.h`, WITH TWO REAL CALLERS** -- DEFLATE both ways plus the zlib and gzip wrappers; the PNG codec and `/bin/wget`'s gzip `Content-Encoding`. Its input is ONE CONTIGUOUS BUFFER and its output a CALLBACK, which is what keeps it a straight loop instead of a suspend-anywhere state machine; ring 3 only, because nothing in this kernel decompresses anything
 - **AN IMAGE IS ALSO ENCODED IN RING 3, AND THE TWO FORMATS ARE FOR DIFFERENT THINGS** -- `qoi` is what toy-os can open again, `png` is what LEAVES the machine (and has no decoder here, so `uimg_decode()` answers -ENOTSUP); the encoders are checked by a FOREIGN decoder, never by ours
 - **THE COMPOSITOR COPIES PIXELS AND THE CLIENT ENCODES THEM: `WIN_REQ_SCREENSHOT`, `lib/ushot.h`** -- wlr-screencopy's shape, not XGetImage's; the capture renders a frame first, forces the alpha byte OPAQUE, refuses a scanout lease with -EBUSY, and `WIN_SHOT_NO_SELF` keeps the asking client out of its own picture
 - **THE POINTER IS EXCLUDED BY DEFAULT, AND IT IS SUBTLE IN BOTH DIRECTIONS** -- a software cursor is already IN the back buffer and must be undrawn; one on the hardware plane is not there at all and must be drawn
@@ -1575,10 +1576,11 @@ cost".
   `QMPSession.hmp()` (**the QEMU monitor -- the one oracle the guest
   cannot fake**; ask it BEFORE trusting anything the guest says about
   itself), `regex_hostcheck.py`, `uimg_hostcheck.py`,
-  `uimg_encode_hostcheck.py` (**the QOI and PNG ENCODERS against Pillow
-  and zlib** -- a foreign decoder is the point, since an encoder checked
-  by our own decoder passes on a shared mistake; its
-  `--positive-control` must redden the PNG half and spare the QOI half),
+  `uimg_codec_hostcheck.py` (**the QOI and PNG codecs BOTH WAYS against
+  Pillow and zlib** -- a foreign implementation on the far side of each
+  direction, since an encoder checked by our own decoder passes on a
+  shared mistake; its `--positive-control` carries two sabotages and
+  must redden encode AND decode while sparing QOI),
   `usnd_hostcheck.py`, `hash_hostcheck.py`,
   `divti3_hostcheck.py` (the 128-bit division helpers against Python's
   arbitrary-precision integers), `corrupt_diff.py` (**HOW two copies of

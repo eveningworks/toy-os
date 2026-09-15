@@ -2039,12 +2039,39 @@ real scanout hardware does. Do not write a pixel assertion for one.
   than defaulted.
 
   **AND THE ENCODERS ARE CHECKED BY A FOREIGN DECODER, NEVER BY OURS**
-  (`tools/uimg_encode_hostcheck.py`, Pillow plus Python's `zlib`). An
+  (`tools/uimg_codec_hostcheck.py`, Pillow plus Python's `zlib`). An
   encoder tested against this repo's own decoder passes whenever the two
   share a mistake, and the two mistakes an image encoder actually makes
   are exactly that shape: a QOI index table updated on the wrong chunk,
   or a Huffman code packed least-significant-bit-first. Both produce a
   file that round-trips perfectly here and that nothing else can open.
+
+- **PNG IS READ AND WRITTEN NOW, AND COMPRESSION IS A LIBRARY:
+  `lib/uinflate.h`.** DEFLATE both directions, with the zlib and gzip
+  wrappers. It is a library rather than something private to the PNG
+  codec because it has TWO real callers -- the codec, and `/bin/wget`
+  inflating a gzip `Content-Encoding` -- which is the bar this project
+  sets for factoring anything out.
+
+  **The input is one contiguous buffer and the output is a callback**,
+  and that asymmetry is the design. A decompressor that can suspend
+  anywhere is a state machine with a dozen resume points whose bugs only
+  appear on an input split at an awkward byte; consuming from one buffer
+  keeps it a straight loop. The cost is that a caller holds the
+  COMPRESSED input -- which PNG already did, and which for an HTTP body
+  is the size gzip bought you.
+
+  **RING 3 ONLY, and that is not an oversight.** Linux carries
+  `lib/zlib_inflate/` in the kernel, but to unpack its own kernel and
+  initrd; toy-os compresses neither, so there is no ring-0 caller to
+  compile twice for.
+
+  **What the decoder reads is 8-bit, every colour type, not
+  interlaced** -- greyscale, truecolour, palette, both alpha variants,
+  plus tRNS. A 1/2/4/16-bit depth or an Adam7 file is `-ENOTSUP` with a
+  sentence naming what it found, which is `uimg_jpeg.c`'s arrangement
+  for progressive and CMYK: the file is fine, this build is not, and
+  that is a different sentence from "corrupt".
 
 - **THE COMPOSITOR COPIES PIXELS AND THE CLIENT ENCODES THEM:
   `WIN_REQ_SCREENSHOT`, `lib/ushot.h`.** A program asking for a capture

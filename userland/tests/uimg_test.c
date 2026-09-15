@@ -33,6 +33,7 @@
 #include "rt/sys.h"
 #include "lib/uimg.h"
 #include <kerrno.h>
+#include <kcrc.h>
 #include "uimg_vectors.h"
 
 #include "lib/utest.h"
@@ -236,8 +237,6 @@ int main(int argc, char **argv) {
         free(bytes);
     }
 
-    // PNG has no decoder here, and that is a DISTINCT answer from a
-    // broken file -- an app has to be able to tell a user which it is.
     bytes = 0;
     len = 0;
     rc = uimg_encode(&enc, "png", &bytes, &len);
@@ -251,11 +250,54 @@ int main(int argc, char **argv) {
         ok("a written PNG reads back its own header",
            irc == 0 && info.w == 4 && info.h == 4, d4);
 
+        // THE ROUND TRIP IS THE WEAK CHECK AND IT IS HERE ANYWAY. An
+        // encoder and decoder that share a mistake pass it, which is why
+        // the real oracle is Pillow and zlib on the host
+        // (tools/uimg_codec_hostcheck.py). What this adds is the half
+        // that harness cannot see: both halves running in RING 3, on
+        // this heap, on the machine that ships.
         struct uimg back;
         int drc = uimg_decode(bytes, len, &back);
-        ok("and refuses to DECODE with -ENOTSUP, not -EINVAL",
-           drc == -ENOTSUP, "a file we wrote must not read as corrupt");
+        int same = drc == 0 && back.w == 4 && back.h == 4;
+        for (int i = 0; same && i < 16; i++)
+            if ((back.px[i] & 0xFFFFFF) != (src[i] & 0xFFFFFF)) same = 0;
+        ok("PNG decodes back to the same pixels, exactly", same,
+           drc == 0 ? "a pixel differs" : uimg_last_error());
+        if (drc == 0) uimg_free(&back);
+
+        // A CORRUPTED CHUNK MUST NOT DECODE. Flipping a byte inside IDAT
+        // leaves every length and the signature intact, so a decoder
+        // that skipped the CRC produces a picture rather than an error.
+        bytes[len - 8] ^= 0xFF;
+        struct uimg wrecked;
+        int brc = uimg_decode(bytes, len, &wrecked);
+        ok("a corrupted PNG is refused, not decoded", brc < 0,
+           "a damaged file decoded anyway");
+        if (brc == 0) uimg_free(&wrecked);
         free(bytes);
+    }
+
+    // A BIT DEPTH THIS BUILD REFUSES IS -ENOTSUP, NOT -EINVAL, and the
+    // difference is what lets the Image Viewer say "this build cannot
+    // show 16-bit PNGs" instead of calling a good file corrupt. The
+    // header is hand-built: there is no 16-bit encoder here to make one.
+    {
+        static uint8_t hdr[] = {
+            137, 'P', 'N', 'G', '\r', '\n', 26, '\n',
+            0, 0, 0, 13, 'I', 'H', 'D', 'R',
+            0, 0, 0, 4, 0, 0, 0, 4,   // 4x4
+            16,                        // bit depth 16 -- the point
+            2, 0, 0, 0,                // truecolour, deflate, adaptive, none
+            0, 0, 0, 0,                // CRC, filled in below
+        };
+        uint32_t crc = kcrc32(hdr + 12, 4 + 13);
+        hdr[29] = (uint8_t)(crc >> 24); hdr[30] = (uint8_t)(crc >> 16);
+        hdr[31] = (uint8_t)(crc >> 8);  hdr[32] = (uint8_t)crc;
+        struct uimg deep;
+        int nrc = uimg_decode(hdr, sizeof hdr, &deep);
+        char d5[96];
+        snprintf(d5, sizeof d5, "rc=%d (%s)", nrc, uimg_last_error());
+        ok("a 16-bit PNG is -ENOTSUP, not -EINVAL", nrc == -ENOTSUP, d5);
     }
 
     rc = uimg_encode(&enc, "jpeg", &bytes, &len);

@@ -6,6 +6,7 @@
 
 #include "rt/sys.h"
 #include "uhttp.h"
+#include "lib/uinflate.h"
 #include "utls.h"
 #include "lib/uresolv.h"
 
@@ -128,6 +129,7 @@ struct hdr_scan {
     char line[160];
     int  line_len;
     unsigned long content_length;   // 0 = the server did not say
+    int gzip;                       // Content-Encoding: gzip
 };
 
 static int hdr_prefix(const char *line, const char *name) {
@@ -139,11 +141,22 @@ static int hdr_prefix(const char *line, const char *name) {
     return 1;
 }
 
-// One completed header line. Only Content-Length is read: it is what a
-// progress meter needs, and a header nobody consumes is a parser to
-// keep correct for nothing.
+// One completed header line. Two are read: Content-Length, which a
+// progress meter needs, and Content-Encoding, because a gzipped body has
+// to be inflated before it reaches the caller's sink. A header nobody
+// consumes is a parser to keep correct for nothing.
 static void hdr_line(struct hdr_scan *s) {
     s->line[s->line_len] = 0;
+    if (hdr_prefix(s->line, "content-encoding:")) {
+        const char *v = s->line + sizeof "content-encoding:" - 1;
+        while (*v == ' ' || *v == '\t') v++;
+        // `gzip` and the older `x-gzip` are the same thing. `deflate` is
+        // NOT accepted: the name is a decades-old muddle -- some servers
+        // send a zlib stream and some a bare one -- and we never ask for
+        // it, so a server sending it anyway is better refused than
+        // guessed at.
+        s->gzip = hdr_prefix(v, "gzip") || hdr_prefix(v, "x-gzip");
+    }
     if (hdr_prefix(s->line, "content-length:")) {
         const char *v = s->line + sizeof "content-length:" - 1;
         while (*v == ' ' || *v == '\t') v++;
@@ -184,6 +197,27 @@ static long find_body(struct hdr_scan *s, const char *buf, size_t n) {
     return -1;
 }
 
+// A ceiling on what a server may send us compressed. A decompression
+// bomb is a small download that expands without limit; this bounds the
+// COMPRESSED side, and uinflate's own limit bounds the other.
+#define UHTTP_GZIP_MAX (64u * 1024u * 1024u)
+
+// Inflated bytes on their way to the caller's sink.
+struct uhttp_gz {
+    struct uhttp_request *req;
+    int stopped;
+};
+
+static int gz_sink(void *vctx, const uint8_t *data, size_t n) {
+    struct uhttp_gz *c = vctx;
+    if (!c->req->sink) return 0;
+    if (c->req->sink(c->req->sink_ctx, (const char *)data, n) != 0) {
+        c->stopped = 1;
+        return -1;
+    }
+    return 0;
+}
+
 static void fail(struct uhttp_request *r, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -204,6 +238,11 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
 
     req->status = 0;
     req->body_bytes = 0;
+
+    // The compressed body, when there is one. Declared here so every
+    // `goto done_err` can release it.
+    char *gz = NULL;
+    size_t gz_len = 0, gz_cap = 0;
 
     struct transport t = { .fd = -1, .tls = NULL };
     t.fd = sys_socket(NET_ABI_AF_INET, NET_ABI_SOCK_STREAM, NET_ABI_IPPROTO_TCP);
@@ -251,7 +290,9 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
     char reqbuf[UHTTP_PATH_MAX + UHTTP_HOST_MAX + 128];
     int n = snprintf(reqbuf, sizeof reqbuf,
                      "GET %s HTTP/1.0\r\nHost: %s\r\n"
-                     "User-Agent: toy-os/uhttp\r\nConnection: close\r\n\r\n",
+                     "User-Agent: toy-os/uhttp\r\n"
+                     "Accept-Encoding: gzip\r\n"
+                     "Connection: close\r\n\r\n",
                      u.path, u.host);
     if (n <= 0 || (size_t)n >= sizeof reqbuf) {
         fail(req, "the request does not fit in %zu bytes", sizeof reqbuf);
@@ -291,20 +332,70 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
                 req->on_headers(req->sink_ctx, req->status, scan.content_length);
         }
 
-        if (off < (size_t)got && req->sink) {
-            if (req->sink(req->sink_ctx, buf + off, (size_t)got - off) != 0) {
-                fail(req, "the fetch was stopped by its caller");
-                goto done_err;
+        if (off < (size_t)got) {
+            // A GZIPPED BODY IS BUFFERED, NOT STREAMED, and that is the
+            // one cost of this. lib/uinflate.h consumes one contiguous
+            // input so that it can be a straight loop rather than a
+            // suspend-anywhere state machine; what is held is the
+            // COMPRESSED size, which is what asking for gzip bought.
+            // An uncompressed body still streams straight through.
+            if (scan.gzip) {
+                size_t add = (size_t)got - off;
+                if (gz_len + add > gz_cap) {
+                    size_t want = gz_cap ? gz_cap * 2 : 16384;
+                    while (want < gz_len + add) want *= 2;
+                    if (want > UHTTP_GZIP_MAX) {
+                        fail(req, "the compressed body is larger than %u bytes",
+                             (unsigned)UHTTP_GZIP_MAX);
+                        goto done_err;
+                    }
+                    char *ng = realloc(gz, want);
+                    if (!ng) { fail(req, "out of memory for the compressed body"); goto done_err; }
+                    gz = ng;
+                    gz_cap = want;
+                }
+                memcpy(gz + gz_len, buf + off, add);
+                gz_len += add;
+            } else if (req->sink) {
+                if (req->sink(req->sink_ctx, buf + off, (size_t)got - off) != 0) {
+                    fail(req, "the fetch was stopped by its caller");
+                    goto done_err;
+                }
             }
         }
         req->body_bytes += (unsigned long)((size_t)got - off);
     }
+
+    // The whole member is here now, so inflate it into the sink. The
+    // caller never learns the body arrived compressed -- which is the
+    // point: Content-Encoding is a transfer detail, not the document.
+    if (scan.gzip && gz_len) {
+        struct uhttp_gz gctx = { req, 0 };
+        size_t out_len = 0;
+        int zrc = uinflate(gz, gz_len, UINFLATE_GZIP, gz_sink, &gctx, &out_len);
+        free(gz);
+        gz = NULL;
+        if (gctx.stopped) {
+            fail(req, "the fetch was stopped by its caller");
+            goto done_err;
+        }
+        if (zrc < 0) {
+            fail(req, "the server's gzip body could not be read: %s",
+                 uinflate_error());
+            goto done_err;
+        }
+        // What the CALLER moved is the decompressed length; the
+        // compressed one is the transport's business.
+        req->body_bytes = (unsigned long)out_len;
+    }
+    free(gz);
 
     if (t.tls) utls_close(t.tls);
     close(t.fd);
     return ATTEMPT_OK;
 
 done_err:
+    free(gz);
     if (t.tls) utls_close(t.tls);
     close(t.fd);
     return ATTEMPT_FAILED;

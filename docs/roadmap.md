@@ -653,7 +653,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Migrate apps' `PAD`/`GAP`/size constants to the theme metrics (`utheme_pad/gap/indicator`), so chrome scales from one owner
 - [ ] Finish the 2026-08-21 toolkit centralizations -- only System Settings and Font Demo set `desc.focus`
 - [x] ~~A screenshot tool that writes a real image file to disk~~ DONE 2026-09-15 -- `WIN_REQ_SCREENSHOT`, `/bin/screenshot`, the app
-- [ ] A PNG DECODER, which needs inflate -- this build WRITES PNG and cannot read one back
+- [x] ~~A PNG DECODER, which needs inflate~~ DONE 2026-09-15 -- `lib/uinflate.h`, 8-bit every colour type
 - [ ] A tween/easing helper, once a second real caller exists
 
 ### GUI clipboard + drag-and-drop

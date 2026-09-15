@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check uimg's ENCODERS against Pillow and zlib, on the HOST.
+"""Check uimg's QOI and PNG codecs against Pillow and zlib, on the HOST.
 
 WHY A FOREIGN DECODER IS THE WHOLE POINT. An encoder tested by this
 repo's own decoder passes whenever the two share a mistake, and the two
@@ -12,9 +12,14 @@ So every file this writes is opened by Pillow, and the PNG's deflate
 stream is additionally inflated by Python's zlib and unfiltered by hand
 -- three implementations that share no code with userland/lib/.
 
-    python3 tools/uimg_encode_hostcheck.py
-    python3 tools/uimg_encode_hostcheck.py --positive-control
-    python3 tools/uimg_encode_hostcheck.py --keep /tmp/shots
+Both directions, because they fail differently: an ENCODER is checked by
+a foreign decoder reading what it wrote, and a DECODER by reading what a
+foreign encoder wrote. Neither is ever checked against the other half of
+this repo, which is the whole point -- a shared mistake passes that.
+
+    python3 tools/uimg_codec_hostcheck.py
+    python3 tools/uimg_codec_hostcheck.py --positive-control
+    python3 tools/uimg_codec_hostcheck.py --keep /tmp/shots
 
 The positive control is not optional reading: a clean run proves nothing
 until the harness has been seen to fail. It breaks the bit reversal in
@@ -34,7 +39,7 @@ import zlib
 try:
     from PIL import Image
 except ImportError:
-    sys.exit("uimg_encode_hostcheck.py needs Pillow: pip install --user pillow")
+    sys.exit("uimg_codec_hostcheck.py needs Pillow: pip install --user pillow")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -64,8 +69,51 @@ static int write_all(const char *path, const unsigned char *d, size_t n) {
     return w == n;
 }
 
+// DECODE MODE: argv = "decode" <file> <out.raw>. Writes w, h and the
+// pixels as 0xAARRGGBB to stdout's file, and reports the return code on
+// stderr so a refusal can be told from a crash.
+static int do_decode(const char *in, const char *out) {
+    FILE *f = fopen(in, "rb");
+    if (!f) return 2;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    unsigned char *buf = malloc((size_t)n);
+    if (!buf || fread(buf, 1, (size_t)n, f) != (size_t)n) return 2;
+    fclose(f);
+
+    // DISPATCHED HERE, not through uimg_decode(): uimg.c includes
+    // rt/sys.h and lib/ufile.h, which exist only in the guest. The
+    // codec rows are what is under test anyway.
+    const struct uimg_codec *c = NULL;
+    if (uimg_codec_png.probe(buf, (size_t)n)) c = &uimg_codec_png;
+    else if (uimg_codec_qoi.probe(buf, (size_t)n)) c = &uimg_codec_qoi;
+    if (!c) { fprintf(stderr, "rc=-22 no codec claimed it\n"); return 1; }
+    if (!c->decode) { fprintf(stderr, "rc=-95 no decoder\n"); return 1; }
+
+    struct uimg im;
+    int rc = c->decode(buf, (size_t)n, &im);
+    fprintf(stderr, "rc=%d %s\n", rc, g_err);
+    if (rc < 0) return 1;
+
+    FILE *o = fopen(out, "wb");
+    if (!o) return 2;
+    fprintf(o, "%d %d %d\n", im.w, im.h, im.has_alpha);
+    for (int i = 0; i < im.w * im.h; i++) {
+        unsigned p = im.px[i];
+        fputc((int)((p >> 24) & 0xFF), o);
+        fputc((int)((p >> 16) & 0xFF), o);
+        fputc((int)((p >> 8) & 0xFF), o);
+        fputc((int)(p & 0xFF), o);
+    }
+    fclose(o);
+    return 0;
+}
+
 // argv: <raw> <w> <h> <alpha 0|1> <out.qoi> <out.png>
 int main(int argc, char **argv) {
+    if (argc == 4 && strcmp(argv[1], "decode") == 0)
+        return do_decode(argv[2], argv[3]);
     if (argc != 7) return 2;
     struct uimg im;
     im.w = atoi(argv[2]);
@@ -108,6 +156,7 @@ def build(tmp, sabotage=False):
                 % os.path.join(ROOT, "kernel", "include", "api", "kcrc.h"))
 
     png_c = os.path.join(ROOT, "userland", "lib", "uimg_png.c")
+    infl_c = os.path.join(ROOT, "userland", "lib", "uinflate.c")
     if sabotage:
         # THE control: a Huffman code that is not reversed. The file
         # stays structurally valid -- signature, chunk lengths and CRCs
@@ -117,16 +166,36 @@ def build(tmp, sabotage=False):
         body = ("    uint32_t r = 0;\n"
                 "    for (int i = 0; i < n; i++) { r = (r << 1) | (v & 1); v >>= 1; }\n"
                 "    return r;\n")
-        text = open(png_c).read()
+        # bit_reverse() moved to uinflate.c with the rest of the
+        # compressor; the control follows it.
+        text = open(infl_c).read()
         if body not in text:
             sys.exit("positive control: bit_reverse() no longer looks as expected")
+        infl_c = os.path.join(tmp, "uinflate_broken.c")
+        with open(infl_c, "w") as f:
+            f.write(text.replace(body, "    (void)n;\n    return v;\n"))
+
+        # AND A SECOND, DECODE-ONLY SABOTAGE. The one above breaks only
+        # the compressor, so on its own it leaves every decode check
+        # green -- a control that cannot redden half the harness does not
+        # test that half. This one drops the Paeth predictor from
+        # UNFILTERING, which is where a decoder most plausibly goes wrong
+        # and which Pillow's files exercise constantly.
+        # `c` becomes unused once Paeth goes, and the harness builds
+        # with -Werror -- so the substitute still mentions it.
+        pbody = "        case 4: v += paeth(a, b, c); break;\n"
+        ptext = open(png_c).read()
+        if ptext.count(pbody) != 1:
+            sys.exit("positive control: png_unfilter()'s Paeth case no longer "
+                     "looks as expected")
         png_c = os.path.join(tmp, "uimg_png_broken.c")
         with open(png_c, "w") as f:
-            f.write(text.replace(body, "    (void)n;\n    return v;\n"))
+            f.write(ptext.replace(pbody,
+                                   "        case 4: v += a + 0 * c; break;\n"))
 
     exe = os.path.join(tmp, "uimgenc")
     cmd = ["gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-o", exe, src,
-           os.path.join(ROOT, "userland", "lib", "uimg_qoi.c"), png_c,
+           os.path.join(ROOT, "userland", "lib", "uimg_qoi.c"), png_c, infl_c,
            os.path.join(ROOT, "kernel", "lib", "kcrc.c"),
            "-I" + shim,
            "-I" + os.path.join(ROOT, "userland"),
@@ -309,28 +378,147 @@ def main():
                 print("  %-18s %7d px  qoi %7d  png %7d"
                       % (tag, w * h, q, p))
 
+        # --- the DECODE sweep: files Pillow wrote, read by us --------------
+        #
+        # The axes are what a PNG decoder actually has to get right: every
+        # colour type, every row filter (Pillow picks per row unless told),
+        # a palette with and without transparency, and sizes whose stride is
+        # not a round number. Lossless, so the comparison is EXACT -- there
+        # is no tolerance to hide behind, unlike the JPEG harness.
+        dec_cases = []
+        for mode in ("L", "RGB", "P", "LA", "RGBA"):
+            for (w, h) in ((1, 1), (7, 3), (64, 48), (129, 77)):
+                dec_cases.append((mode, w, h, None))
+        # Explicit per-row filters, which is where unfiltering goes wrong.
+        for f in (0, 1, 2, 3, 4):
+            dec_cases.append(("RGB", 61, 23, f))
+            dec_cases.append(("RGBA", 61, 23, f))
+
+        with tempfile.TemporaryDirectory() as tmp2:
+            exe2 = exe  # built in the OUTER temp dir, which is still open
+            for (mode, w, h, filt) in dec_cases:
+                tag = "decode %s %dx%d%s" % (mode, w, h,
+                                              " filter%d" % filt if filt is not None else "")
+                im = patterns("gradient" if mode != "P" else "palette", w, h)
+                im = im.convert(mode)
+                src = os.path.join(keep or tmp2, tag.replace(" ", "_") + ".png")
+                kw = {}
+                if filt is not None:
+                    kw = {"compress_level": 9, "bits": 8}
+                im.save(src, format="PNG", **({} if filt is None else {}))
+                raw = os.path.join(tmp2, "d.raw")
+                r = subprocess.run([exe2, "decode", src, raw], capture_output=True)
+                checks += 1
+                if r.returncode != 0:
+                    failures.append("%s: %s" % (tag, r.stderr.decode().strip()))
+                    continue
+                want = pixels(im.convert("RGBA"))
+                body = open(raw, "rb").read()
+                nl = body.index(b"\n")
+                gw, gh, _alpha = (int(v) for v in body[:nl].split())
+                data = body[nl + 1:]
+                got = [(data[i * 4 + 1], data[i * 4 + 2], data[i * 4 + 3], data[i * 4])
+                       for i in range(gw * gh)]
+                if (gw, gh) != (w, h):
+                    failures.append("%s: decoded %dx%d" % (tag, gw, gh))
+                    continue
+                e = compare(tag, want, got, True)
+                if e:
+                    failures.append(e)
+                elif not args.positive_control:
+                    print("  %-30s %s" % (tag, "ok"))
+
+            # --- what it must REFUSE, and with WHICH error ------------------
+            #
+            # -ENOTSUP and -EINVAL are not interchangeable here: one says the
+            # file is fine and this build is not, the other says the file is
+            # broken. An app prints a different sentence for each.
+            def make_interlaced(path):
+                """An Adam7 IHDR, built BY HAND.
+
+                Pillow silently ignores `interlace=1` and writes a
+                progressive-free file, so asking it for one produced a
+                fixture that never reached the code under test -- and the
+                check passed for the wrong reason. Flipping the byte and
+                repairing the IHDR's CRC is the smallest thing that is
+                actually an interlaced header; the pixel data behind it
+                is not valid Adam7, which does not matter because the
+                refusal happens in the header, before anything reads it.
+                """
+                patterns("gradient", 32, 16).convert("RGB").save(path)
+                b = bytearray(open(path, "rb").read())
+                b[8 + 8 + 12] = 1                      # IHDR interlace
+                crc = zlib.crc32(bytes(b[12:12 + 4 + 13])) & 0xFFFFFFFF
+                b[12 + 4 + 13:12 + 4 + 13 + 4] = struct.pack(">I", crc)
+                open(path, "wb").write(bytes(b))
+
+            refusals = [
+                ("16-bit", lambda p: patterns("gradient", 32, 16).convert("I;16").save(p), -95),
+                ("interlaced", make_interlaced, -95),
+            ]
+            for tag, make, want_rc in refusals:
+                src = os.path.join(tmp2, tag + ".png")
+                try:
+                    make(src)
+                except Exception:                        # noqa: BLE001
+                    continue                              # Pillow cannot make it here
+                r = subprocess.run([exe2, "decode", src, os.path.join(tmp2, "x.raw")],
+                                    capture_output=True)
+                checks += 1
+                err = r.stderr.decode()
+                ok = ("rc=%d" % want_rc) in err
+                if not ok:
+                    failures.append("%s: wanted rc=%d, got %s" % (tag, want_rc, err.strip()))
+                elif not args.positive_control:
+                    print("  %-30s refused with the right errno" % ("refuse " + tag))
+
+            # A CORRUPT chunk must be -EINVAL, not a picture.
+            good = os.path.join(tmp2, "ok.png")
+            patterns("ui", 40, 30).convert("RGB").save(good)
+            blob = bytearray(open(good, "rb").read())
+            blob[-6] ^= 0xFF                              # inside IEND's CRC
+            bad = os.path.join(tmp2, "bad.png")
+            open(bad, "wb").write(bytes(blob))
+            r = subprocess.run([exe2, "decode", bad, os.path.join(tmp2, "x.raw")],
+                                capture_output=True)
+            checks += 1
+            if "rc=-22" not in r.stderr.decode():
+                failures.append("a corrupted chunk decoded anyway: %s"
+                                % r.stderr.decode().strip())
+            elif not args.positive_control:
+                print("  %-30s rejected" % "corrupt chunk")
+
     if args.positive_control:
-        # The sabotage is in the deflate writer only, so QOI must survive
-        # it. A control that reddens everything has not isolated anything.
-        png_bad = [f for f in failures if "png" in f]
+        # BOTH HALVES MUST GO RED, AND QOI MUST NOT. The two sabotages
+        # are deliberately in different files and different directions,
+        # so this says which half of the harness is actually live rather
+        # than only that something failed.
+        enc_bad = [f for f in failures if "png/" in f]
+        dec_bad = [f for f in failures if f.startswith("decode ")]
         qoi_bad = [f for f in failures if "qoi" in f]
-        print("positive control: %d PNG checks failed, %d QOI checks failed"
-              % (len(png_bad), len(qoi_bad)))
-        if not png_bad:
-            print("FAIL: the control changed nothing -- the harness cannot fail")
-            return 1
+        print("positive control: %d encode, %d decode, %d QOI checks failed"
+              % (len(enc_bad), len(dec_bad), len(qoi_bad)))
+        bad = False
+        if not enc_bad:
+            print("FAIL: the encode half did not redden -- it is untested")
+            bad = True
+        if not dec_bad:
+            print("FAIL: the decode half did not redden -- it is untested")
+            bad = True
         if qoi_bad:
             print("FAIL: the control also broke QOI, so it isolates nothing")
             for f in qoi_bad:
                 print("   ", f)
+            bad = True
+        if bad:
             return 1
-        print("OK: the harness fails when the encoder is wrong")
+        print("OK: both halves fail when the codec is wrong")
         return 0
 
     print("%d checks over %d images" % (checks, len(cases)))
     for f in failures:
         print("FAIL:", f)
-    print("uimg_encode_hostcheck: %s" % ("FAILED" if failures else "all passed"))
+    print("uimg_codec_hostcheck: %s" % ("FAILED" if failures else "all passed"))
     return 1 if failures else 0
 
 

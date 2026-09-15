@@ -1,28 +1,34 @@
-// PNG -- written, not read.
+// PNG -- read and written.
 //
-// The asymmetric row in uimg.h's codec table: probe and info work, and
-// `decode` is deliberately NULL. PNG is here so a picture can LEAVE this
-// machine -- a screenshot a host, a browser or a bug report can open --
-// and reading one needs inflate, which is a separate piece of work with
-// its own testing pass (docs/roadmap.md). uimg_decode() turns the NULL
-// into -ENOTSUP and a sentence saying so, which is a different answer
-// from "corrupt file" and the reason that error code exists.
+// It arrived as a WRITE-ONLY row in uimg.h's codec table, because a
+// screenshot needed a format a host could open and reading one needs
+// inflate. The decoder came later, and inflate with it: the compression
+// both directions now live in lib/uinflate.h, which is a library rather
+// than something private here because /bin/wget inflates a gzip
+// Content-Encoding through the same code.
 //
-// **THE DEFLATE HERE IS FIXED-HUFFMAN LZ77, AND STORED BLOCKS WOULD HAVE
-// BEEN A TRAP.** A spec-legal PNG can be written with uncompressed
+// **WHAT IT READS IS 8-BIT, EVERY COLOUR TYPE, NOT INTERLACED.**
+// Greyscale, truecolour, palette and both alpha variants, plus tRNS.
+// A 1/2/4/16-bit depth or an Adam7 file is answered -ENOTSUP with a
+// sentence naming what it found, which is uimg_jpeg.c's arrangement for
+// progressive and CMYK -- the file is fine, this build is not, and that
+// is a different sentence from "corrupt".
+//
+// **THE DEFLATE IT WRITES IS FIXED-HUFFMAN LZ77, AND STORED BLOCKS WOULD
+// HAVE BEEN A TRAP.** A spec-legal PNG can be written with uncompressed
 // deflate blocks in about thirty lines, and a 1920x1080 screenshot then
-// weighs 6.2 MB -- which is a minute per capture over the TFTP link this
-// exists to serve. A desktop is mostly flat colour, so the filtered rows
-// are long runs and a greedy match finder takes the same shot to a few
-// hundred KB.
+// weighs 6.2 MB -- a minute per capture over the TFTP link this exists
+// to serve. A desktop is mostly flat colour, so a greedy match finder
+// takes the same shot to a few hundred KB. What it READS is unaffected
+// by that choice: the decoder handles dynamic Huffman blocks, which is
+// what every other encoder in the world emits.
 //
-// Verified against Python's zlib and Pillow rather than against itself:
-// tools/uimg_encode_hostcheck.py decodes what this writes with a foreign
-// implementation, which is the only way a bit-packing bug shows up as a
-// failure instead of as a file that round-trips through a matching
-// mistake (the same argument uimg_qoi.c's header makes about its
-// vectors being written by Pillow).
+// **NEITHER HALF IS EVER CHECKED AGAINST THE OTHER.**
+// tools/uimg_codec_hostcheck.py has Pillow read what this writes and
+// this read what Pillow wrote, because an encoder and decoder that share
+// a mistake round-trip perfectly and produce files nothing else opens.
 #include "lib/uimg.h"
+#include "lib/uinflate.h"
 #include <kcrc.h>
 #include <kerrno.h>
 #include <stdlib.h>
@@ -77,181 +83,6 @@ static int png_info(const uint8_t *d, size_t n, struct uimg_info *out) {
     out->detail[o] = '\0';
     (void)depth;
     return 0;
-}
-
-// --- deflate ----------------------------------------------------------
-
-// A bit sink that REFUSES rather than overruns: every write checks, and
-// one that does not fit sets `full` and drops the rest. The caller tests
-// it once at the end. An encoder that smashed its own heap on an
-// unexpectedly incompressible image would be a very quiet bug.
-struct bitw {
-    uint8_t *buf;
-    size_t cap, len;
-    uint32_t acc;
-    int nacc;
-    int full;
-};
-
-static void bw_bits(struct bitw *b, uint32_t v, int n) {
-    b->acc |= v << b->nacc;
-    b->nacc += n;
-    while (b->nacc >= 8) {
-        if (b->len >= b->cap) { b->full = 1; b->nacc = 0; b->acc = 0; return; }
-        b->buf[b->len++] = (uint8_t)b->acc;
-        b->acc >>= 8;
-        b->nacc -= 8;
-    }
-}
-
-static void bw_flush(struct bitw *b) {
-    if (b->nacc > 0) bw_bits(b, 0, 8 - b->nacc);
-}
-
-// A Huffman code is packed MOST significant bit first while everything
-// else in deflate is least significant bit first, so a code goes out
-// reversed. Getting this backwards writes a file that is structurally
-// perfect and decodes to noise.
-static uint32_t bit_reverse(uint32_t v, int n) {
-    uint32_t r = 0;
-    for (int i = 0; i < n; i++) { r = (r << 1) | (v & 1); v >>= 1; }
-    return r;
-}
-
-// RFC 1951 3.2.6: the fixed literal/length code.
-static void bw_fixed_sym(struct bitw *b, int sym) {
-    if (sym < 144)      bw_bits(b, bit_reverse(0x30 + sym, 8), 8);
-    else if (sym < 256) bw_bits(b, bit_reverse(0x190 + sym - 144, 9), 9);
-    else if (sym < 280) bw_bits(b, bit_reverse(sym - 256, 7), 7);
-    else                bw_bits(b, bit_reverse(0xC0 + sym - 280, 8), 8);
-}
-
-static const uint16_t len_base[29] = {
-    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51,
-    59, 67, 83, 99, 115, 131, 163, 195, 227, 258
-};
-static const uint8_t len_extra[29] = {
-    0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4,
-    4, 5, 5, 5, 5, 0
-};
-static const uint16_t dist_base[30] = {
-    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385,
-    513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577
-};
-static const uint8_t dist_extra[30] = {
-    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10,
-    10, 11, 11, 12, 12, 13, 13
-};
-
-static void bw_match(struct bitw *b, int len, int dist) {
-    int lc = 28;
-    while (lc > 0 && len < len_base[lc]) lc--;
-    bw_fixed_sym(b, 257 + lc);
-    if (len_extra[lc]) bw_bits(b, (uint32_t)(len - len_base[lc]), len_extra[lc]);
-
-    int dc = 29;
-    while (dc > 0 && dist < dist_base[dc]) dc--;
-    bw_bits(b, bit_reverse((uint32_t)dc, 5), 5);
-    if (dist_extra[dc])
-        bw_bits(b, (uint32_t)(dist - dist_base[dc]), dist_extra[dc]);
-}
-
-#define DEF_WBITS  15
-#define DEF_WSIZE  (1 << DEF_WBITS)
-#define DEF_HBITS  15
-#define DEF_HSIZE  (1 << DEF_HBITS)
-#define DEF_MINLEN 3
-#define DEF_MAXLEN 258
-#define DEF_PROBES 32   // chain depth: the whole speed/ratio dial here
-
-static uint32_t def_hash(const uint8_t *p) {
-    return (((uint32_t)p[0] << 10) ^ ((uint32_t)p[1] << 5) ^ (uint32_t)p[2])
-           & (DEF_HSIZE - 1);
-}
-
-// Greedy LZ77 into ONE fixed-Huffman block. No lazy matching and no
-// dynamic code table: both are worth real ratio on text and close to
-// nothing on the long flat runs a screenshot is made of, which the
-// match finder already collapses.
-static int deflate_fixed(const uint8_t *src, size_t n, uint8_t *dst,
-                          size_t dst_cap, size_t *out_len) {
-    int32_t *head = malloc((size_t)DEF_HSIZE * sizeof *head);
-    int32_t *prev = malloc((size_t)DEF_WSIZE * sizeof *prev);
-    if (!head || !prev) { free(head); free(prev); return -ENOMEM; }
-    for (int i = 0; i < DEF_HSIZE; i++) head[i] = -1;
-    for (int i = 0; i < DEF_WSIZE; i++) prev[i] = -1;
-
-    struct bitw b = { dst, dst_cap, 0, 0, 0, 0 };
-    bw_bits(&b, 1, 1); // BFINAL
-    bw_bits(&b, 1, 2); // BTYPE = fixed Huffman
-
-    size_t pos = 0;
-    while (pos < n) {
-        int best_len = 0, best_dist = 0;
-        if (pos + DEF_MINLEN <= n) {
-            uint32_t h = def_hash(src + pos);
-            int32_t cand = head[h];
-            int probes = DEF_PROBES;
-            while (cand >= 0 && probes-- > 0) {
-                size_t dist = pos - (size_t)cand;
-                if (dist == 0 || dist > DEF_WSIZE) break;
-                size_t maxl = n - pos;
-                if (maxl > DEF_MAXLEN) maxl = DEF_MAXLEN;
-                size_t l = 0;
-                while (l < maxl && src[cand + l] == src[pos + l]) l++;
-                if ((int)l > best_len) {
-                    best_len = (int)l;
-                    best_dist = (int)dist;
-                    if (best_len >= DEF_MAXLEN) break;
-                }
-                cand = prev[(size_t)cand & (DEF_WSIZE - 1)];
-            }
-        }
-
-        if (best_len >= DEF_MINLEN) {
-            bw_match(&b, best_len, best_dist);
-            // Every position inside the match still has to enter the
-            // chain, or the next search cannot see back past it.
-            for (int i = 0; i < best_len; i++) {
-                if (pos + DEF_MINLEN <= n) {
-                    uint32_t h = def_hash(src + pos);
-                    prev[pos & (DEF_WSIZE - 1)] = head[h];
-                    head[h] = (int32_t)pos;
-                }
-                pos++;
-            }
-        } else {
-            bw_fixed_sym(&b, src[pos]);
-            if (pos + DEF_MINLEN <= n) {
-                uint32_t h = def_hash(src + pos);
-                prev[pos & (DEF_WSIZE - 1)] = head[h];
-                head[h] = (int32_t)pos;
-            }
-            pos++;
-        }
-        if (b.full) break;
-    }
-
-    bw_fixed_sym(&b, 256); // end of block
-    bw_flush(&b);
-    free(head);
-    free(prev);
-    if (b.full) return -ENOMEM;
-    *out_len = b.len;
-    return 0;
-}
-
-static uint32_t adler32(const uint8_t *d, size_t n) {
-    uint32_t a = 1, s = 0;
-    // 5552 is the most bytes that cannot overflow the 32-bit sums.
-    while (n) {
-        size_t k = n < 5552 ? n : 5552;
-        n -= k;
-        while (k--) { a += *d++; s += a; }
-        a %= 65521;
-        s %= 65521;
-    }
-    return (s << 16) | a;
 }
 
 // --- filtering --------------------------------------------------------
@@ -373,33 +204,22 @@ static int png_encode(const struct uimg *im, uint8_t **out, size_t *out_len) {
     }
     free(row);
 
-    // Deflate's worst case is a handful of bits per literal plus the
-    // block header; this is comfortably past it.
-    size_t z_cap = raw_len + raw_len / 8 + 128;
-    uint8_t *z = malloc(z_cap);
-    if (!z) { free(raw); free(up); PFAIL(-ENOMEM, "not enough memory to compress"); }
+    // THE ZLIB WRAPPER IS THE LIBRARY'S, header and adler32 both -- this
+    // file used to build it by hand, and a second copy of a two-byte
+    // header whose check bits must be a multiple of 31 is a second place
+    // to get it wrong (lib/uinflate.h).
+    size_t idat_cap = udeflate_bound(raw_len);
+    uint8_t *idat = malloc(idat_cap);
+    if (!idat) { free(raw); free(up); PFAIL(-ENOMEM, "not enough memory to compress"); }
 
-    size_t z_len = 0;
-    int rc = deflate_fixed(raw, raw_len, z, z_cap, &z_len);
-    if (rc < 0) {
-        free(raw); free(up); free(z);
-        PFAIL(rc, "not enough memory to compress the image");
-    }
-    uint32_t sum = adler32(raw, raw_len);
+    size_t idat_len = 0;
+    int rc = udeflate_into(raw, raw_len, UINFLATE_ZLIB, idat, idat_cap, &idat_len);
     free(raw);
     free(up);
-
-    // The zlib stream PNG wraps deflate in: 0x78 0x01 is the deflate
-    // method with a 32 KiB window, and the two bytes must be a multiple
-    // of 31 read big-endian.
-    size_t idat_len = 2 + z_len + 4;
-    uint8_t *idat = malloc(idat_len);
-    if (!idat) { free(z); PFAIL(-ENOMEM, "not enough memory to assemble the file"); }
-    idat[0] = 0x78;
-    idat[1] = 0x01;
-    memcpy(idat + 2, z, z_len);
-    put_be32(idat + 2 + z_len, sum);
-    free(z);
+    if (rc < 0) {
+        free(idat);
+        PFAIL(rc, uinflate_error());
+    }
 
     uint8_t ihdr[13];
     uint8_t *q = ihdr;
@@ -428,10 +248,251 @@ static int png_encode(const struct uimg *im, uint8_t **out, size_t *out_len) {
     return 0;
 }
 
+// --- decoding ---------------------------------------------------------
+//
+// WHAT THIS READS, AND WHAT IT REFUSES. Every colour type -- greyscale,
+// truecolour, PALETTE, and both alpha variants -- at 8 bits a channel,
+// plus tRNS transparency, not interlaced. A file outside that is
+// answered -ENOTSUP with a sentence naming what it found, which is
+// uimg_jpeg.c's arrangement for progressive and CMYK and the reason
+// -ENOTSUP is distinct from -EINVAL: the file is fine, we are not.
+//
+// The two left out are 1/2/4/16-bit depths and Adam7 interlacing. Both
+// are rare now, and both are where PNG decoders go subtly wrong --
+// sub-byte unpacking and a seven-pass walk have plenty of room for an
+// off-by-one that produces a picture rather than an error.
+
+#define PNG_MAX_PIXELS (64u * 1024u * 1024u)
+
+struct png_hdr {
+    uint32_t w, h;
+    int depth, colour, interlace;
+    int channels;   // per pixel in the raw stream, before palette expansion
+};
+
+static int png_read_ihdr(const uint8_t *d, size_t n, struct png_hdr *h) {
+    if (!png_probe(d, n)) PFAIL(-EINVAL, "not a PNG file (no signature)");
+    if (n < 8 + 8 + 13 + 4) PFAIL(-EINVAL, "truncated PNG (no room for an IHDR)");
+    if (memcmp(d + 12, "IHDR", 4) != 0)
+        PFAIL(-EINVAL, "PNG does not start with an IHDR chunk");
+
+    h->w = be32(d + 16);
+    h->h = be32(d + 20);
+    h->depth = d[24];
+    h->colour = d[25];
+    h->interlace = d[28];
+
+    if (h->w == 0 || h->h == 0) PFAIL(-EINVAL, "PNG declares a zero-sized image");
+    if (h->w > PNG_MAX_DIM || h->h > PNG_MAX_DIM ||
+        (uint64_t)h->w * h->h > PNG_MAX_PIXELS)
+        PFAIL(-EINVAL, "PNG is larger than this decoder will allocate");
+    if (d[26] != 0) PFAIL(-EINVAL, "PNG uses an unknown compression method");
+    if (d[27] != 0) PFAIL(-EINVAL, "PNG uses an unknown filter method");
+
+    switch (h->colour) {
+    case 0: h->channels = 1; break;   // greyscale
+    case 2: h->channels = 3; break;   // truecolour
+    case 3: h->channels = 1; break;   // palette index
+    case 4: h->channels = 2; break;   // greyscale + alpha
+    case 6: h->channels = 4; break;   // truecolour + alpha
+    default: PFAIL(-EINVAL, "PNG declares an unknown colour type");
+    }
+
+    if (h->depth != 8) {
+        if (h->depth == 1 || h->depth == 2 || h->depth == 4 || h->depth == 16)
+            PFAIL(-ENOTSUP, "a PNG bit depth other than 8, which this build does not read");
+        PFAIL(-EINVAL, "PNG declares an impossible bit depth");
+    }
+    if (h->interlace == 1)
+        PFAIL(-ENOTSUP, "an interlaced PNG, which this build does not read");
+    if (h->interlace != 0) PFAIL(-EINVAL, "PNG declares an unknown interlace method");
+    return 0;
+}
+
+// Undoes one row's filter, in place, against the row above. `a` is the
+// pixel to the left, `b` above, `c` above-left -- all zero outside the
+// image, which is what makes the first row and first pixel work without
+// a special case.
+static int png_unfilter(uint8_t *row, const uint8_t *up, size_t stride,
+                        int bpp, int filter) {
+    for (size_t i = 0; i < stride; i++) {
+        int a = i >= (size_t)bpp ? row[i - bpp] : 0;
+        int b = up ? up[i] : 0;
+        int c = (i >= (size_t)bpp && up) ? up[i - bpp] : 0;
+        int v = row[i];
+        switch (filter) {
+        case 0: break;
+        case 1: v += a; break;
+        case 2: v += b; break;
+        case 3: v += (a + b) >> 1; break;
+        case 4: v += paeth(a, b, c); break;
+        default: PFAIL(-EINVAL, "PNG uses an unknown row filter");
+        }
+        row[i] = (uint8_t)v;
+    }
+    return 0;
+}
+
+static int png_decode(const uint8_t *d, size_t n, struct uimg *out) {
+    struct png_hdr h;
+    int rc = png_read_ihdr(d, n, &h);
+    if (rc < 0) return rc;
+
+    // THE PALETTE AND tRNS ARE CHUNKS LIKE ANY OTHER, so the walk has to
+    // collect them before the pixels can be expanded -- PLTE always
+    // precedes IDAT, and tRNS must too, but a decoder that ASSUMED the
+    // order rather than checking would read an empty palette on a file
+    // that merely surprised it.
+    uint8_t plte[256 * 3];
+    int plte_n = 0;
+    uint8_t trns[256];
+    int trns_n = 0;
+    uint16_t trns_grey = 0, trns_r = 0, trns_g = 0, trns_b = 0;
+    int have_trns_key = 0;
+
+    // The IDAT chunks are ONE zlib stream split at arbitrary points, so
+    // they are concatenated before inflating. A decoder that inflated
+    // each chunk separately works on every file written by one encoder
+    // and fails on the next.
+    uint8_t *z = NULL;
+    size_t z_len = 0, z_cap = 0;
+
+    size_t pos = 8;
+    int saw_iend = 0;
+    while (pos + 8 <= n) {
+        uint32_t len = be32(d + pos);
+        const uint8_t *type = d + pos + 4;
+        if (len > n || pos + 12 + len > n) {
+            free(z);
+            PFAIL(-EINVAL, "a PNG chunk runs past the end of the file");
+        }
+        const uint8_t *body = d + pos + 8;
+        uint32_t crc = be32(d + pos + 8 + len);
+        if (kcrc32(type, len + 4) != crc) {
+            free(z);
+            PFAIL(-EINVAL, "a PNG chunk fails its CRC");
+        }
+
+        if (memcmp(type, "PLTE", 4) == 0) {
+            if (len % 3 || len > sizeof plte) {
+                free(z);
+                PFAIL(-EINVAL, "a PNG palette has an impossible size");
+            }
+            memcpy(plte, body, len);
+            plte_n = (int)(len / 3);
+        } else if (memcmp(type, "tRNS", 4) == 0) {
+            if (h.colour == 3) {
+                if (len > sizeof trns) { free(z); PFAIL(-EINVAL, "an oversized tRNS"); }
+                memcpy(trns, body, len);
+                trns_n = (int)len;
+            } else if (h.colour == 0 && len >= 2) {
+                trns_grey = (uint16_t)((body[0] << 8) | body[1]);
+                have_trns_key = 1;
+            } else if (h.colour == 2 && len >= 6) {
+                trns_r = (uint16_t)((body[0] << 8) | body[1]);
+                trns_g = (uint16_t)((body[2] << 8) | body[3]);
+                trns_b = (uint16_t)((body[4] << 8) | body[5]);
+                have_trns_key = 1;
+            }
+        } else if (memcmp(type, "IDAT", 4) == 0) {
+            if (z_len + len > z_cap) {
+                size_t want = z_cap ? z_cap * 2 : 16384;
+                while (want < z_len + len) want *= 2;
+                uint8_t *nz = realloc(z, want);
+                if (!nz) { free(z); PFAIL(-ENOMEM, "not enough memory for the compressed data"); }
+                z = nz;
+                z_cap = want;
+            }
+            memcpy(z + z_len, body, len);
+            z_len += len;
+        } else if (memcmp(type, "IEND", 4) == 0) {
+            saw_iend = 1;
+            break;
+        }
+        pos += 12 + len;
+    }
+
+    if (!saw_iend) { free(z); PFAIL(-EINVAL, "the PNG has no IEND chunk"); }
+    if (!z_len) { free(z); PFAIL(-EINVAL, "the PNG has no image data"); }
+    if (h.colour == 3 && plte_n == 0) {
+        free(z);
+        PFAIL(-EINVAL, "a palette PNG with no palette");
+    }
+
+    int bpp = h.channels;                       // 8 bits a channel
+    size_t stride = (size_t)h.w * bpp;
+    size_t raw_len = (stride + 1) * h.h;
+
+    uint8_t *raw = malloc(raw_len);
+    if (!raw) { free(z); PFAIL(-ENOMEM, "not enough memory for the decompressed rows"); }
+
+    size_t got = 0;
+    rc = uinflate_into(z, z_len, UINFLATE_ZLIB, raw, raw_len, &got);
+    free(z);
+    if (rc < 0) { free(raw); PFAIL(rc, uinflate_error()); }
+    // A SHORT STREAM IS REFUSED, not padded. Half an image decodes to a
+    // plausible picture with a grey tail, which reads as a decoder bug
+    // rather than as a truncated file (the rule read_file() follows).
+    if (got != raw_len) {
+        free(raw);
+        PFAIL(-EINVAL, "the PNG's image data is the wrong length for its header");
+    }
+
+    uint32_t *px = malloc((size_t)h.w * h.h * sizeof *px);
+    if (!px) { free(raw); PFAIL(-ENOMEM, "not enough memory for the decoded image"); }
+
+    int transparent = 0;
+    for (uint32_t y = 0; y < h.h; y++) {
+        uint8_t *row = raw + (size_t)y * (stride + 1) + 1;
+        uint8_t *up = y ? raw + (size_t)(y - 1) * (stride + 1) + 1 : NULL;
+        rc = png_unfilter(row, up, stride, bpp, raw[(size_t)y * (stride + 1)]);
+        if (rc < 0) { free(raw); free(px); return rc; }
+
+        for (uint32_t x = 0; x < h.w; x++) {
+            const uint8_t *s = row + (size_t)x * bpp;
+            uint32_t a = 255, r, g, b;
+            switch (h.colour) {
+            case 0:
+                r = g = b = s[0];
+                if (have_trns_key && s[0] == (trns_grey & 0xFF)) a = 0;
+                break;
+            case 2:
+                r = s[0]; g = s[1]; b = s[2];
+                if (have_trns_key && s[0] == (trns_r & 0xFF) &&
+                    s[1] == (trns_g & 0xFF) && s[2] == (trns_b & 0xFF)) a = 0;
+                break;
+            case 3: {
+                int idx = s[0];
+                if (idx >= plte_n) { free(raw); free(px); PFAIL(-EINVAL, "a palette index past the palette"); }
+                r = plte[idx * 3]; g = plte[idx * 3 + 1]; b = plte[idx * 3 + 2];
+                if (idx < trns_n) a = trns[idx];
+                break;
+            }
+            case 4:
+                r = g = b = s[0];
+                a = s[1];
+                break;
+            default:
+                r = s[0]; g = s[1]; b = s[2]; a = s[3];
+                break;
+            }
+            if (a != 255) transparent = 1;
+            px[(size_t)y * h.w + x] = (a << 24) | (r << 16) | (g << 8) | b;
+        }
+    }
+    free(raw);
+
+    out->w = (int)h.w;
+    out->h = (int)h.h;
+    out->px = px;
+    out->has_alpha = transparent;
+    return 0;
+}
+
 const struct uimg_codec uimg_codec_png = {
     .name   = "png",
     .probe  = png_probe,
     .info   = png_info,
-    .decode = NULL,        // see this file's header
+    .decode = png_decode,
     .encode = png_encode,
 };

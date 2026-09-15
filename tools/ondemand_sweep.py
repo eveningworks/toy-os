@@ -73,6 +73,13 @@ TOOLS = [
     # are the oracle -- so it has no `needs` gate at all.
     ("hash_host",   "hash_hostcheck.py",       "crc32/sha256 against hashlib and zlib", False,
      None,                                                                                   False),
+    # The two image harnesses, both host-only. The codec one runs the QOI
+    # and PNG codecs BOTH WAYS against Pillow and zlib; the other is the
+    # JPEG decoder against libjpeg.
+    ("uimg_codec",  "uimg_codec_hostcheck.py", "QOI and PNG both ways vs Pillow/zlib", False,
+     ("host_pillow", "needs gcc and Pillow"),                                                 False),
+    ("uimg_jpeg",   "uimg_hostcheck.py",       "the JPEG decoder against libjpeg",   False,
+     ("host_pillow", "needs gcc and Pillow"),                                                 False),
     # Compiles the vendored dash against tolibc with -nostdinc and
     # reports what the compiler still refuses. Needs gcc and nothing
     # else -- no guest, since nothing links or runs.
@@ -319,6 +326,19 @@ def precondition_met(kind):
         # must not start requiring lame and ffmpeg on every checkout,
         # the same rule that keeps Docker out of preflight.
         return all(shutil.which(t) for t in ("gcc", "lame", "ffmpeg")), why
+    if key == "host_pillow":
+        # Host gcc plus Pillow, which is the ORACLE rather than a
+        # convenience: both image harnesses judge our codecs against it.
+        # Missing either is a skip for the same reason lame and ffmpeg
+        # are -- a check that cannot pass on a clean checkout is one
+        # people learn to skim past.
+        if not shutil.which("gcc"):
+            return False, why
+        try:
+            import PIL  # noqa: F401
+        except ImportError:
+            return False, why
+        return True, why
     if key == "host_cc":
         # Host gcc only. A skip rather than a failure on a checkout
         # without it, same rule as host_audio above.

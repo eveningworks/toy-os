@@ -7697,7 +7697,58 @@ pixels afterwards. The laptop exercises the second half and no emulated
 setup here exercises it the same way: `guictl state` reports
 `hwcursor: true` there and `false` under QEMU.
 
+## Inflate is a library, and PNG stopped being write-only
+
+PNG arrived here able to write and not read (the entry below records
+why), and `uimg_decode()` answered `-ENOTSUP`. The decoder landed once
+there was a reason to build inflate properly, and the question worth
+recording is where inflate went.
+
+**It is a library because it has two real callers, not because a
+library is tidier.** `userland/lib/uinflate.c` serves the PNG codec and
+`/bin/wget`'s gzip `Content-Encoding`; the deflate COMPRESSOR moved
+there out of `uimg_png.c` at the same time, so one module owns both
+directions and there is one place to test them. Had PNG stayed the only
+caller it would have belonged inside the codec, which is where it sat
+while it was write-only.
+
+**It is ring 3 only, and the obvious-looking precedent does not
+apply.** Linux carries `lib/zlib_inflate/` in the kernel -- but to
+decompress its own kernel image and initrd. toy-os compresses neither,
+so there is no ring-0 caller, and compiling it twice would be the
+speculative generality this project's conventions warn against. The
+file names nothing kernel-side, so the day a compressed module exists it
+is a move rather than a rewrite.
+
+**THE INPUT IS ONE CONTIGUOUS BUFFER AND THE OUTPUT IS A CALLBACK.**
+This is the load-bearing decision. zlib's own interface streams both
+ways, which is why its decoder is a state machine that can suspend
+mid-symbol, mid-match and mid-block -- a dozen resume points whose bugs
+appear only on input split at a particular byte. Consuming from one
+buffer makes the decoder a straight loop, and emitting through a
+callback means nothing needs the decompressed size in advance. The cost
+is real and worth stating: a caller holds the whole compressed input.
+For PNG that changed nothing (the IDAT chunks are concatenated before
+inflating either way); for an HTTP body it is the compressed size,
+which is what asking for gzip bought.
+
+That cost is also why `wget` buffers a gzipped body and streams a plain
+one -- the uncompressed path still goes straight to the sink.
+
+**What the decoder refuses is as deliberate as what it reads.** 8-bit,
+every colour type including palette, plus tRNS, not interlaced. The two
+left out -- sub-byte and 16-bit depths, and Adam7 -- are where PNG
+decoders go subtly wrong, and both are rare now. They are `-ENOTSUP`
+rather than `-EINVAL` for the reason `uimg_jpeg.c` refuses progressive
+that way: an app can say "this build cannot show 16-bit PNGs" instead of
+calling a perfectly good file corrupt.
+
 ## PNG is written here and not read, and that is an honest state
+
+**SUPERSEDED the same day, by the entry above: PNG reads now.** Kept
+because the reasoning for shipping a write-only codec is still the
+reasoning for the next format that arrives write-first, and because the
+deflate half of it is unchanged.
 
 `uimg.h`'s codec table now has an `encode` slot, and the PNG row fills
 it while leaving `decode` NULL. That asymmetry is deliberate rather than
@@ -7729,7 +7780,7 @@ share a mistake, and the two mistakes an image encoder actually makes
 are exactly that shape: a QOI index table updated on the wrong chunk, or
 a Huffman code packed least-significant-bit-first. Both produce a file
 that round-trips perfectly here and that nothing else in the world can
-open. `tools/uimg_encode_hostcheck.py` opens everything with Pillow and
+open. `tools/uimg_codec_hostcheck.py` opens everything with Pillow and
 additionally inflates each PNG with Python's `zlib`; the guest test
 keeps the round trip only for what the host harness cannot see, which is
 the encoders running in ring 3 on the machine that ships.

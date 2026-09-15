@@ -1259,6 +1259,14 @@ def phase_connlog(r, disk, tmp):
 HTTP_PORT = 18088
 HTTP_BODY = b"toy-os fetched this\n" * 4
 
+# BIG ENOUGH TO CROSS THE READ BUFFER AND COMPRESSIBLE ENOUGH TO MATTER.
+# A short body fits one recv() and one deflate block, which is the one
+# shape that works even when the buffering is wrong; this needs several
+# of both. The tail is unique so a truncated result cannot pass.
+HTTP_GZIP_BODY = (b"".join(b"line %04d: the quick brown fox jumps over it\n" % i
+                           for i in range(2000))
+                  + b"THE-END-OF-THE-GZIP-BODY\n")
+
 
 def http_server(port, deadline_s=60.0):
     """A real HTTP server on the host, as the far end of the guest's
@@ -1278,6 +1286,27 @@ def http_server(port, deadline_s=60.0):
             state["served"] += 1
             state["path"] = self.path
             state["agent"] = self.headers.get("User-Agent", "")
+            state["accept_encoding"] = self.headers.get("Accept-Encoding", "")
+
+            # /gz is served COMPRESSED, and only if the client asked --
+            # a server that gzips regardless would let a client which
+            # never sends Accept-Encoding pass this by accident.
+            if self.path.endswith("/gz"):
+                if "gzip" not in state["accept_encoding"]:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+                import gzip as _gzip
+                body = _gzip.compress(HTTP_GZIP_BODY)
+                state["gz_wire_len"] = len(body)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.send_header("Content-Length", str(len(HTTP_BODY)))
@@ -1319,6 +1348,33 @@ def phase_tcp(r, disk, tmp):
         out = sh.run("cat /tmp/fetched.txt")
         r.check("[tcp] a fetched body lands on disk intact",
                 out.count("toy-os fetched this") >= 4, out.strip()[-300:])
+
+        # --- gzip Content-Encoding ---------------------------------
+        #
+        # The body arrives COMPRESSED and must reach the caller
+        # decompressed, with the client never having said so. Checked
+        # three ways, because the weak version of this check passes on a
+        # server that ignored Accept-Encoding and sent plain text:
+        #   1. the server only serves /gz compressed, and 400s a client
+        #      that did not ask -- so a fetch that succeeds proves the
+        #      request carried the header;
+        #   2. what lands on disk is the DECOMPRESSED text, including a
+        #      tail that a truncated inflate cannot produce;
+        #   3. the file on disk is BIGGER than what crossed the wire,
+        #      which no amount of copying bytes through could fake.
+        sh.run(f"wget -O /tmp/gz.txt http://{GATEWAY}:{HTTP_PORT}/gz", timeout=60.0)
+        out = sh.run("cat /tmp/gz.txt | tail -1", timeout=40.0)
+        r.check("[tcp] a gzip Content-Encoding is inflated for the caller",
+                "THE-END-OF-THE-GZIP-BODY" in out, out.strip()[-200:])
+        r.check("[tcp] ...and the client asked for it",
+                "gzip" in state.get("accept_encoding", ""),
+                str(state.get("accept_encoding")))
+        size = sh.run("stat /tmp/gz.txt", timeout=40.0)
+        wire = state.get("gz_wire_len", 0)
+        r.check("[tcp] ...and what landed is larger than what crossed the wire",
+                str(len(HTTP_GZIP_BODY)) in size and wire < len(HTTP_GZIP_BODY),
+                f"wire {wire} bytes, want {len(HTTP_GZIP_BODY)} on disk: "
+                f"{size.strip()[-200:]}")
 
         # Nothing listens on port 9. A RST must become "refused" rather
         # than a timeout -- different codes, different fixes.

@@ -82,7 +82,9 @@ struct uimg_codec {
     // NULL means this build can read the format's header but not its
     // pixels -- uimg_decode() turns that into -ENOTSUP with a sentence
     // saying so, which is the honest answer and not the same as
-    // "corrupt file". PNG is the one: it is here to be WRITTEN.
+    // "corrupt file". No row is NULL today; PNG was, until it gained a
+    // decoder, and the mechanism stays because the next format to arrive
+    // write-first should not have to invent it again.
     int (*decode)(const uint8_t *d, size_t n, struct uimg *out);
 
     // Writes `im` into a fresh allocation, `*out_len` bytes, which the
@@ -137,12 +139,14 @@ void uimg_free(struct uimg *im);
 // had to WRITE a file: the screenshot tool. Two formats, and the pair
 // is the point, as it is for the decoders above:
 //
-//   qoi  what toy-os itself can open again -- Image Viewer already
-//        decodes it, losslessly, and on flat UI content it is several
-//        times smaller than the raw pixels.
-//   png  what LEAVES the machine. Nothing here decodes PNG (that needs
-//        inflate; see docs/roadmap.md), so a PNG written here is for a
-//        host, a browser or a bug report -- not for this desktop.
+//   qoi  the DEFAULT for a screenshot, because it is a couple of
+//        hundred lines, needs no compression library, and on flat UI
+//        content it beats PNG anyway (measured: 87 KB against 91 KB for
+//        the same 1280x720 desktop).
+//   png  what LEAVES the machine, and what arrives from outside it. Both
+//        directions work now (lib/uinflate.h); a PNG is what a host, a
+//        browser or a bug report expects, and what most images anyone
+//        brings to this system already are.
 //
 // A format is named, never guessed from the pixels. `uimg_save()` picks
 // it from the path's extension because that is what a user typing a
@@ -201,8 +205,9 @@ int uimg_scale(const struct uimg *src, int dw, int dh, struct uimg *out);
 // file is smaller than the JPEG header would be. Neither is a substitute
 // for the other, and a decoder that had to be one would be a worse
 // version of both.
-// PNG is the third row and the asymmetric one: probe and info, no
-// decode, and an encoder. See the encoding section above.
+// PNG is the third row, and the only one that both reads and writes
+// through a compression library (lib/uinflate.h) rather than its own
+// code. See the encoding section above.
 extern const struct uimg_codec uimg_codec_jpeg;
 extern const struct uimg_codec uimg_codec_qoi;
 extern const struct uimg_codec uimg_codec_png;
