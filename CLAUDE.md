@@ -1048,6 +1048,7 @@ whenever a headline here tells you something you did not already know.
 - **READING A WHOLE FILE IS `lib/ufile.h`, AND THE PART IT EXISTS FOR IS THE LOOP**
 - **A SELF-CHECKING `/tests` PROGRAM REPORTS THROUGH `userland/lib/utest.h`, AND ITS EPILOGUE IS ONE LINE IN ONE SHAPE**
 - **Every ring-3 program is just a `main()`.**
+- **THE KERNEL'S DEBUG INFO IS SPLIT OUT (`build/kernel.debug`), AND `--add-gnu-debuglink` IS WHAT KEEPS `addr2line`, `gdb` AND `panic_resolve.py` WORKING** -- the link names the file by BASENAME, so the two must stay in the same directory; `.ksyms` is not debug info and survives, which is why a panic still names functions on a machine that has never seen the DWARF
 - **`linker.ld` decides kernel memory PERMISSIONS, not just placement.**
 - **CI RUNS THE KERNEL SUITE TWICE, on ATA and on virtio-blk, and the second one earns its place.**
 - **A graphics card is a `display_driver`, not a special case.**

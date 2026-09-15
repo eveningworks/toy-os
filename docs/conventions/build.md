@@ -404,6 +404,33 @@ this the obvious way), not from how much history it accumulated.
   **16-aligned before `call main`** -- a `sub rsp, 8` there looks like
   it restores the old convention and instead faults every SSE-using
   binary while leaving plain ones working, see `docs/decisions.md`.
+- **THE KERNEL'S DEBUG INFO IS SPLIT OUT, AND `--add-gnu-debuglink` IS
+  WHAT KEEPS EVERY TOOL WORKING.** `build/kernel.bin` is stripped and
+  `build/kernel.debug` holds the DWARF; the link between them is a
+  section in the stripped file naming the other by BASENAME, so the two
+  must stay in the same directory. Do that and `addr2line`, `gdb` (and
+  therefore `make debug`) and `tools/panic_resolve.py` all resolve
+  exactly as before, with no argument and no change -- move or rename
+  `kernel.debug` and every one of them silently degrades to `??:0`.
+
+  **Why: 4.3 MB of a 6.1 MB kernel was debug information in sections no
+  `PT_LOAD` segment covers**, so GRUB never read a byte of it. It cost
+  only FILE size -- which is what TFTP copies on every `remote.py flash`
+  (~22 s of one, at the measured 280 KB/s) and what the FAT32 `/boot`
+  has to hold. The installed kernel is 1.7 MB now and the running one is
+  byte-identical.
+
+  **The in-kernel symbol table is NOT debug information.** `.ksyms`
+  (`tools/gen_syms.py`) survives stripping, which is why a panic still
+  prints function names on a machine that has never seen
+  `kernel.debug`. The two answer different questions: `.ksyms` gives a
+  name in the guest, the DWARF gives a name AND a source line here.
+
+  **It runs last in the link rule**, after `genrelocs.py` and
+  `gen_syms.py` have read `kernel.pass2.elf` -- both need the full
+  symbol table, so stripping earlier breaks the build rather than the
+  debugger.
+
 - **`linker.ld` decides kernel memory PERMISSIONS, not just placement.**
   Four PT_LOAD segments (R / R+X / R / RW) and four boundary symbols --
   `__kimage_start`, `__ktext_start`, `__ktext_end`, `__kdata_start` --

@@ -1325,6 +1325,28 @@ $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) $(KRELOCS_O) $(KRELOCS_C) $(KSYMS_O) $(KS
 	@python3 tools/genrelocs.py $(BUILD)/kernel.pass2.elf --verify $(KRELOCS_C)
 	@python3 tools/gen_syms.py $(BUILD)/kernel.pass2.elf --verify $(KSYMS_C)
 	objcopy --remove-section='.rela.*' $(BUILD)/kernel.pass2.elf $@
+	# THE DWARF COMES OUT, AND IT COMES OUT LAST -- after genrelocs and
+	# gen_syms have read pass2, which both need the full symbol table.
+	#
+	# 4.3 MB of the 6.1 MB was debug information in sections no PT_LOAD
+	# segment covers, so GRUB never read a byte of it: it cost only FILE
+	# size, which is what TFTP copies on every `remote.py flash` and what
+	# /boot has to hold. Splitting it out takes the installed kernel to
+	# 1.7 MB and changes nothing about the running one.
+	#
+	# **--add-gnu-debuglink IS WHAT KEEPS EVERY TOOL WORKING.** It leaves
+	# a pointer to kernel.debug in the stripped file, so addr2line, gdb
+	# and tools/panic_resolve.py resolve exactly as before with no
+	# argument and no change -- as long as the two files stay in the same
+	# directory, which is the one thing not to break here. `make debug`
+	# and a panic address both depend on it.
+	#
+	# The in-kernel symbol table (.ksyms, from gen_syms.py) is NOT debug
+	# information and survives, so a panic still prints function names on
+	# a machine that has never seen kernel.debug.
+	objcopy --only-keep-debug $@ $(BUILD)/kernel.debug
+	objcopy --strip-debug $@
+	objcopy --add-gnu-debuglink=$(BUILD)/kernel.debug $@
 
 # Pulls in every .d file -MMD/-MP generated alongside its .o (same
 # directory, same basename, e.g. build/apps/notepad.d next to

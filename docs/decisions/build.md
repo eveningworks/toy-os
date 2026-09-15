@@ -1666,3 +1666,49 @@ certificate answered with a handshake_failure alert. It built, linked
 and could not talk to most of the web. The server's own log
 (`tls_choose_sigalg: no suitable signature algorithm`) named it in one
 line, after reasoning had not.
+
+## The kernel's debug info is split out rather than compressed
+
+The kernel was 6.1 MB, which is ~22 s of every `remote.py flash` at the
+measured 280 KB/s, and the obvious fix -- the one Linux is famous for --
+is a self-decompressing kernel. Measuring first gave a different answer.
+
+**4.3 MB of the 6.1 was DWARF, in sections no `PT_LOAD` segment
+covers.** GRUB never read a byte of it; `-g` had been paying a file-size
+cost with no memory cost and no runtime cost. The four options, measured
+rather than estimated:
+
+| | file | needs a decompressor |
+|---|---|---|
+| as it was | 6.10 MB | -- |
+| gzipped as-is | 2.61 MB | yes |
+| debug info split out | 1.74 MB | no |
+| split, then gzipped | 0.74 MB | yes |
+
+**Stripping alone beats compressing alone**, and does it with no code
+running before paging. That is the whole decision. Compression is still
+worth having on top, and is a separate change with a separate risk; what
+this entry records is that it should not have been the FIRST one.
+
+**`--add-gnu-debuglink` is the piece that makes it free.** The stripped
+file keeps a section naming `kernel.debug`, so `addr2line`, `gdb` and
+`tools/panic_resolve.py` find the DWARF with no argument and no change
+-- verified on all three, including resolving a ring-0 panic address to
+`kernel_main (kernel/core/kernel.c:86)` against the stripped binary. The
+constraint it buys is that the two files must stay in the same
+directory.
+
+**And `build/kernel.bin` had to remain the installed artifact**, not a
+second stripped copy beside a fat one. `remote.py flash` verifies by
+hashing the LOCAL file against the machine's `/boot/boot/kernel.bin`, so
+anything that installed a different file than the one it hashed would
+have broken that check -- and five Makefile paths (the disk seed, the
+ISO, the USB image, the live ISO, and the flash) would each have had to
+learn which copy they wanted. Stripping in place costs none of that.
+
+**A caution for anyone repeating the measurement on a userland ELF.**
+The same `-g` is in `USERLAND_CFLAGS`, and the same split would work --
+but ring-3 crash reports are resolved by `panic_resolve.py` against
+`build/userland/.../x.elf` on this machine, so the debug file would have
+to follow each of them. Not done, and not obviously worth it: no
+userland ELF is 6 MB.
