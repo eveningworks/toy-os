@@ -698,10 +698,10 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~An image viewer~~ DONE 2026-08-23 -- Image Viewer browses a directory rather than opening a file dialog
 - [x] ~~A Help browser over `docs/`~~ DONE 2026-09-14 -- `/bin/wm/apps/help`, a sidebar of categories over `uui_markdown`
 - [x] ~~A Log Viewer~~ DONE 2026-09-15 -- both rings merged on their shared stamp, a level filter and a search field
-- [ ] CPU/memory over time as a TAB in Task Manager, not a second process reading the same facts
+- [x] ~~CPU/memory over time as a TAB in Task Manager~~ DONE 2026-09-15 -- history is collected whether or not the tab is showing
 - [ ] Scientific mode for Calculator
 - [ ] `uapp_relayout()`: invalidate the layout and flush ONE pass before the next paint, as `uapp_redraw()` already does for painting
-- [ ] CPU/memory history graphs in Task Manager
+- [x] ~~CPU/memory history graphs in Task Manager~~ DONE 2026-09-15 -- a Performance tab over `uui_chart`
 - [x] ~~Per-app settings persisted via `/etc/<app>.conf`~~ DONE 2026-09-12 -- desktop, files and settings all use it
 - [ ] `Terminal=true` on a `.desktop` entry, so a TUI program can be launched from the desktop
 - [ ] The Terminal CROPS COLUMNS on a resize rather than rewrapping -- Konsole and VTE reflow, which needs a per-row "this line wrapped" bit

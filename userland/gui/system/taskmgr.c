@@ -51,6 +51,7 @@
 #include "ui/uui_widget.h"
 #include "ui/uui_route.h"   // UUI_REASON_KEY
 #include "ui/uui_tabs.h"
+#include "ui/uui_chart.h"
 #include "ui/uui_meter.h"
 #include "ui/uui_scrollview.h"
 #include "query_abi.h"
@@ -253,7 +254,18 @@ static int selected_pid(void) {
     return g_rows[sel].pid;
 }
 
-static struct uui_tab TABS[2] = { { "Overview", 0 }, { "Processes", 0 } };
+static struct uui_tab TABS[3] = { { "Overview", 0 }, { "Processes", 0 },
+                                  { "Performance", 0 } };
+
+// **HISTORY IS COLLECTED WHETHER OR NOT THE TAB IS SHOWING**, which is
+// what makes it worth having: a graph that only starts when you look at
+// it can never answer "what happened a minute ago", which is the
+// question a person opens it with. Both are fed from
+// refresh_overview(), which already computes the two percentages for
+// the rings -- so the tab costs no extra reading, only the samples.
+static struct uui_chart g_cpu_chart, g_mem_chart;
+static struct uui_item   PERF_ITEMS[2];
+static struct uui_layout PERF_LAYOUT;
 static struct uui_tabs g_tabs;
 
 static void select_page(struct uapp *a, int index);
@@ -389,8 +401,16 @@ static int g_ov_count;   // meters actually in use this refresh
 // first time. System Settings' apply_split() re-runs it for the same
 // reason.
 static void select_page(struct uapp *a, int index) {
-    ITEMS[1].ops    = (index == 0) ? &uui_scrollview_ops : &uui_layout_ops;
-    ITEMS[1].widget = (index == 0) ? (void *)&OV_SCROLL : (void *)&PROC_LAYOUT;
+    if (index == 0) {
+        ITEMS[1].ops = &uui_scrollview_ops;
+        ITEMS[1].widget = (void *)&OV_SCROLL;
+    } else if (index == 2) {
+        ITEMS[1].ops = &uui_layout_ops;
+        ITEMS[1].widget = (void *)&PERF_LAYOUT;
+    } else {
+        ITEMS[1].ops = &uui_layout_ops;
+        ITEMS[1].widget = (void *)&PROC_LAYOUT;
+    }
     // The Overview's tiles are only as many as the machine has; a stale
     // count would lay out a meter with no strings in it.
     // The gauge row plus one tile per disk found. g_ov_count counts
@@ -457,6 +477,7 @@ static void refresh_overview(void) {
         g_cpu_prev_kernel = cl.kernel_ns;
         g_cpu_have_prev = 1;
     }
+    uui_chart_push(&g_cpu_chart, pct);
     snprintf(val, sizeof val, "%d%%", pct);
     // No unit under the number: a percentage that moves says "busy" on
     // its own, and a static word inside the hole is one more thing to
@@ -471,6 +492,7 @@ static void refresh_overview(void) {
         unsigned long long freeb = mi.frame_free * mi.frame_bytes;
         unsigned long long used  = total > freeb ? total - freeb : 0;
         int per = total ? (int)((used * 1000ULL) / total) : 0;
+        uui_chart_push(&g_mem_chart, per / 10);
         snprintf(val, sizeof val, "%d%%", per / 10);
         human_size_iec(unit, sizeof unit, used);
         char t[16];
@@ -668,7 +690,18 @@ int main(void) {
     // No on_select callback: the tab arrives through on_widget like
     // every other control, which is the one path that carries the
     // `struct uapp *` the re-layout needs.
-    uui_tabs_init(&g_tabs, TABS, 2, NULL);
+    uui_chart_init(&g_cpu_chart, "CPU");
+    uui_chart_init(&g_mem_chart, "Memory");
+    PERF_ITEMS[0] = (struct uui_item){ .ops = &uui_chart_ops, .widget = &g_cpu_chart,
+                                        .name = "cpuchart",
+                                        .flags = UUI_FILL_W | UUI_FILL_H };
+    PERF_ITEMS[1] = (struct uui_item){ .ops = &uui_chart_ops, .widget = &g_mem_chart,
+                                        .name = "memchart",
+                                        .flags = UUI_FILL_W | UUI_FILL_H };
+    PERF_LAYOUT = (struct uui_layout){ .dir = UUI_COLUMN, .items = PERF_ITEMS,
+                                        .count = 2 };
+
+    uui_tabs_init(&g_tabs, TABS, 3, NULL);
 
     ITEMS[0] = (struct uui_item){ .ops = &uui_tabs_ops, .widget = &g_tabs,
                                    .id = ID_TABS, .name = "tabs" };
