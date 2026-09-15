@@ -408,6 +408,18 @@ int mount_remove(const char *point, const char **why) {
 // meant is blk_present(), and it cannot be read here -- it is only true
 // after the disk drivers have run, which a FORCED live session must
 // happen before. So the caller asks, in that order.
+// THE IMAGE ON THE MEDIA IS GZIPPED AND THE KERNEL NEVER SEES THAT.
+// GRUB's gzio decompresses any file it reads whose CONTENT starts with
+// the gzip magic -- measured, and by content rather than by name: an
+// image called `live.img` with no extension at all still arrives here
+// inflated. So the ISO holds ~25 MiB where this holds ~86 MiB, and there
+// is nothing for this function to unpack.
+//
+// That is also the better arrangement for MEMORY. GRUB decompresses into
+// the buffer it was going to allocate anyway, so the peak is one copy; a
+// kernel-side unpack would hold the compressed module and the inflated
+// image at once. An in-kernel decompressor was written for this and
+// deleted unrun (see docs/decisions/build.md).
 static int try_live_module(int forced) {
     struct multiboot_module_info mod;
     if (!multiboot_get_module(0, &mod) || !mod.found) return 0;

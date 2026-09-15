@@ -1,37 +1,35 @@
-// See uinflate.h. DEFLATE both ways, with the zlib and gzip wrappers.
-#include "lib/uinflate.h"
+// See kinflate.h. DEFLATE both ways, with the zlib and gzip wrappers.
+#include "kinflate.h"
 #include <kcrc.h>
 #include <kerrno.h>
-#include <stdlib.h>
-#include <string.h>
+#include "string.h"   // kernel/include/api/string.h -- k_memset/k_memcpy
 
 static const char *g_err = "";
-const char *uinflate_error(void) { return g_err; }
+const char *kinflate_error(void) { return g_err; }
 #define ZFAIL(code, msg) do { g_err = (msg); return (code); } while (0)
 
 // --- the tables both directions share ---------------------------------
 //
 // RFC 1951 3.2.5. Length code 285 is the odd one: 258 with no extra
 // bits, which is why the table stops rather than continuing the run.
-static const uint16_t len_base[29] = {
+const uint16_t kinflate_len_base[29] = {
     3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51,
     59, 67, 83, 99, 115, 131, 163, 195, 227, 258
 };
-static const uint8_t len_extra[29] = {
+const uint8_t kinflate_len_extra[29] = {
     0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4,
     4, 5, 5, 5, 5, 0
 };
-static const uint16_t dist_base[30] = {
+const uint16_t kinflate_dist_base[30] = {
     1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385,
     513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577
 };
-static const uint8_t dist_extra[30] = {
+const uint8_t kinflate_dist_extra[30] = {
     0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10,
     10, 11, 11, 12, 12, 13, 13
 };
 
-#define WBITS 15
-#define WSIZE (1 << WBITS)
+#define WSIZE KINFLATE_WSIZE
 
 // --- decoding ---------------------------------------------------------
 
@@ -117,11 +115,11 @@ static int huff_decode(struct bitr *b, const struct huff *h) {
 // Where decompressed bytes go: a 32 KiB history window (back-references
 // need it) plus a chunk handed to the caller's callback.
 struct sink {
-    uint8_t *win;          // WSIZE, circular
+    uint8_t *win;          // the caller's scratch, circular
     size_t wpos;
     uint8_t buf[4096];
     size_t nbuf;
-    uinflate_out out;
+    kinflate_out out;
     void *ctx;
     size_t total;
     int stopped;
@@ -201,7 +199,7 @@ static int inflate_blocks(struct bitr *b, struct sink *s) {
                 ZFAIL(-EINVAL, "a dynamic block declares too many codes");
 
             uint8_t clen[19];
-            memset(clen, 0, sizeof clen);
+            k_memset(clen, 0, sizeof clen);
             for (int i = 0; i < hclen; i++) clen[FIXED_ORDER[i]] = (uint8_t)br_bits(b, 3);
             struct huff cl;
             if (huff_build(&cl, clen, 19) != 0)
@@ -256,11 +254,11 @@ static int inflate_blocks(struct bitr *b, struct sink *s) {
 
             sym -= 257;
             if (sym >= 29) ZFAIL(-EINVAL, "an invalid length code");
-            int length = len_base[sym] + (int)br_bits(b, len_extra[sym]);
+            int length = kinflate_len_base[sym] + (int)br_bits(b, kinflate_len_extra[sym]);
 
             int dsym = huff_decode(b, &dist);
             if (dsym < 0 || dsym >= 30) ZFAIL(-EINVAL, "an invalid distance code");
-            size_t distance = dist_base[dsym] + (size_t)br_bits(b, dist_extra[dsym]);
+            size_t distance = kinflate_dist_base[dsym] + (size_t)br_bits(b, kinflate_dist_extra[dsym]);
             if (b->over) ZFAIL(-EINVAL, "the compressed stream ends mid-match");
             // BEFORE THE START OF THE STREAM. The window is circular, so
             // without this a distance larger than what has been produced
@@ -291,12 +289,14 @@ static uint32_t le32(const uint8_t *d) {
            ((uint32_t)d[2] << 16) | ((uint32_t)d[3] << 24);
 }
 
-int uinflate(const void *src, size_t n, enum uinflate_wrap wrap,
-             uinflate_out out, void *ctx, size_t *out_len) {
+int kinflate(const void *src, size_t n, enum kinflate_wrap wrap,
+             struct kinflate_scratch *scratch,
+             kinflate_out out, void *ctx, size_t *out_len) {
+    if (!scratch) ZFAIL(-EINVAL, "no scratch buffer");
     const uint8_t *d = src;
     size_t start = 0, trailer = 0;
 
-    if (wrap == UINFLATE_ZLIB) {
+    if (wrap == KINFLATE_ZLIB) {
         if (n < 6) ZFAIL(-EINVAL, "too short to be a zlib stream");
         // CM must be 8 and the two header bytes are a multiple of 31.
         if ((d[0] & 0x0F) != 8) ZFAIL(-EINVAL, "not deflate-compressed");
@@ -305,7 +305,7 @@ int uinflate(const void *src, size_t n, enum uinflate_wrap wrap,
         if (d[1] & 0x20) ZFAIL(-ENOTSUP, "a preset dictionary, which this build has no way to supply");
         start = 2;
         trailer = 4;
-    } else if (wrap == UINFLATE_GZIP) {
+    } else if (wrap == KINFLATE_GZIP) {
         if (n < 18) ZFAIL(-EINVAL, "too short to be a gzip member");
         if (d[0] != 0x1F || d[1] != 0x8B) ZFAIL(-EINVAL, "no gzip magic");
         if (d[2] != 8) ZFAIL(-ENOTSUP, "a gzip member compressed with something other than deflate");
@@ -328,9 +328,8 @@ int uinflate(const void *src, size_t n, enum uinflate_wrap wrap,
     if (start + trailer > n) ZFAIL(-EINVAL, "a truncated stream");
 
     struct sink s;
-    memset(&s, 0, sizeof s);
-    s.win = malloc(WSIZE);
-    if (!s.win) ZFAIL(-ENOMEM, "no memory for the history window");
+    k_memset(&s, 0, sizeof s);
+    s.win = scratch->window;
     s.out = out;
     s.ctx = ctx;
     s.adler_a = 1;
@@ -340,13 +339,13 @@ int uinflate(const void *src, size_t n, enum uinflate_wrap wrap,
     int rc = inflate_blocks(&b, &s);
     if (rc == 0 && sink_flush(&s) < 0) { g_err = "the reader stopped"; rc = -EIO; }
 
-    if (rc == 0 && wrap == UINFLATE_ZLIB) {
+    if (rc == 0 && wrap == KINFLATE_ZLIB) {
         uint32_t want = be32(d + n - 4);
         if (want != ((s.adler_b << 16) | s.adler_a)) {
             g_err = "the zlib stream's adler32 does not match";
             rc = -EINVAL;
         }
-    } else if (rc == 0 && wrap == UINFLATE_GZIP) {
+    } else if (rc == 0 && wrap == KINFLATE_GZIP) {
         if (le32(d + n - 8) != KCRC32_FINAL(s.crc)) {
             g_err = "the gzip member's crc32 does not match";
             rc = -EINVAL;
@@ -360,7 +359,6 @@ int uinflate(const void *src, size_t n, enum uinflate_wrap wrap,
     }
 
     if (out_len) *out_len = s.total;
-    free(s.win);
     return rc;
 }
 
@@ -371,228 +369,18 @@ struct into_ctx { uint8_t *dst; size_t cap, len; };
 static int into_out(void *vctx, const uint8_t *data, size_t n) {
     struct into_ctx *c = vctx;
     if (c->len + n > c->cap) return -1;   // refuse, never truncate
-    memcpy(c->dst + c->len, data, n);
+    k_memcpy(c->dst + c->len, data, n);
     c->len += n;
     return 0;
 }
 
-int uinflate_into(const void *src, size_t n, enum uinflate_wrap wrap,
+int kinflate_into(const void *src, size_t n, enum kinflate_wrap wrap,
+                  struct kinflate_scratch *scratch,
                   void *dst, size_t cap, size_t *out_len) {
     struct into_ctx c = { dst, cap, 0 };
-    int rc = uinflate(src, n, wrap, into_out, &c, out_len);
+    int rc = kinflate(src, n, wrap, scratch, into_out, &c, out_len);
     if (rc == -EIO) ZFAIL(-EINVAL, "the stream decompresses to more than it should");
     return rc;
 }
 
-struct grow_ctx { uint8_t *buf; size_t cap, len, limit; int oom, over; };
 
-static int grow_out(void *vctx, const uint8_t *data, size_t n) {
-    struct grow_ctx *c = vctx;
-    if (c->len + n > c->limit) { c->over = 1; return -1; }
-    if (c->len + n > c->cap) {
-        size_t want = c->cap ? c->cap * 2 : 16384;
-        while (want < c->len + n) want *= 2;
-        if (want > c->limit) want = c->limit;
-        uint8_t *nb = realloc(c->buf, want);
-        if (!nb) { c->oom = 1; return -1; }
-        c->buf = nb;
-        c->cap = want;
-    }
-    memcpy(c->buf + c->len, data, n);
-    c->len += n;
-    return 0;
-}
-
-int uinflate_alloc(const void *src, size_t n, enum uinflate_wrap wrap,
-                   uint8_t **out, size_t *out_len, size_t limit) {
-    struct grow_ctx c;
-    memset(&c, 0, sizeof c);
-    c.limit = limit;
-    size_t total = 0;
-    int rc = uinflate(src, n, wrap, grow_out, &c, &total);
-    if (rc == -EIO) {
-        free(c.buf);
-        if (c.over) ZFAIL(-EINVAL, "the stream decompresses past the caller's limit");
-        ZFAIL(-ENOMEM, "no memory for the decompressed data");
-    }
-    if (rc < 0) { free(c.buf); return rc; }
-    *out = c.buf;
-    if (out_len) *out_len = c.len;
-    (void)total;
-    return 0;
-}
-
-// --- compressing ------------------------------------------------------
-//
-// Moved here from uimg_png.c when the decompressor arrived: one module,
-// both directions. See uinflate.h on why it stays greedy and fixed.
-
-struct bitw {
-    uint8_t *buf;
-    size_t cap, len;
-    uint32_t acc;
-    int nacc;
-    int full;
-};
-
-static void bw_bits(struct bitw *b, uint32_t v, int n) {
-    b->acc |= v << b->nacc;
-    b->nacc += n;
-    while (b->nacc >= 8) {
-        if (b->len >= b->cap) { b->full = 1; b->nacc = 0; b->acc = 0; return; }
-        b->buf[b->len++] = (uint8_t)b->acc;
-        b->acc >>= 8;
-        b->nacc -= 8;
-    }
-}
-
-static void bw_flush(struct bitw *b) {
-    if (b->nacc > 0) bw_bits(b, 0, 8 - b->nacc);
-}
-
-// A Huffman code is packed MOST significant bit first while everything
-// else in deflate is least significant bit first, so a code goes out
-// reversed. Getting this backwards writes a file that is structurally
-// perfect and decodes to noise.
-static uint32_t bit_reverse(uint32_t v, int n) {
-    uint32_t r = 0;
-    for (int i = 0; i < n; i++) { r = (r << 1) | (v & 1); v >>= 1; }
-    return r;
-}
-
-static void bw_fixed_sym(struct bitw *b, int sym) {
-    if (sym < 144)      bw_bits(b, bit_reverse(0x30 + sym, 8), 8);
-    else if (sym < 256) bw_bits(b, bit_reverse(0x190 + sym - 144, 9), 9);
-    else if (sym < 280) bw_bits(b, bit_reverse(sym - 256, 7), 7);
-    else                bw_bits(b, bit_reverse(0xC0 + sym - 280, 8), 8);
-}
-
-static void bw_match(struct bitw *b, int len, int dist) {
-    int lc = 28;
-    while (lc > 0 && len < len_base[lc]) lc--;
-    bw_fixed_sym(b, 257 + lc);
-    if (len_extra[lc]) bw_bits(b, (uint32_t)(len - len_base[lc]), len_extra[lc]);
-
-    int dc = 29;
-    while (dc > 0 && dist < dist_base[dc]) dc--;
-    bw_bits(b, bit_reverse((uint32_t)dc, 5), 5);
-    if (dist_extra[dc])
-        bw_bits(b, (uint32_t)(dist - dist_base[dc]), dist_extra[dc]);
-}
-
-#define DEF_HBITS  15
-#define DEF_HSIZE  (1 << DEF_HBITS)
-#define DEF_MINLEN 3
-#define DEF_MAXLEN 258
-#define DEF_PROBES 32   // chain depth: the whole speed/ratio dial here
-
-static uint32_t def_hash(const uint8_t *p) {
-    return (((uint32_t)p[0] << 10) ^ ((uint32_t)p[1] << 5) ^ (uint32_t)p[2])
-           & (DEF_HSIZE - 1);
-}
-
-size_t udeflate_bound(size_t n) { return n + n / 8 + 128; }
-
-int udeflate_into(const void *src_v, size_t n, enum uinflate_wrap wrap,
-                  void *dst_v, size_t cap, size_t *out_len) {
-    const uint8_t *src = src_v;
-    uint8_t *dst = dst_v;
-    size_t head = 0;
-
-    if (wrap == UINFLATE_ZLIB) {
-        if (cap < 6) ZFAIL(-ENOMEM, "no room for a zlib stream");
-        dst[0] = 0x78;   // deflate, 32 KiB window
-        dst[1] = 0x01;   // and the two bytes are a multiple of 31
-        head = 2;
-    } else if (wrap == UINFLATE_GZIP) {
-        if (cap < 18) ZFAIL(-ENOMEM, "no room for a gzip member");
-        static const uint8_t hdr[10] = { 0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 255 };
-        memcpy(dst, hdr, sizeof hdr);
-        head = 10;
-    }
-
-    int32_t *head_tbl = malloc((size_t)DEF_HSIZE * sizeof *head_tbl);
-    int32_t *prev = malloc((size_t)WSIZE * sizeof *prev);
-    if (!head_tbl || !prev) {
-        free(head_tbl); free(prev);
-        ZFAIL(-ENOMEM, "no memory for the match tables");
-    }
-    for (int i = 0; i < DEF_HSIZE; i++) head_tbl[i] = -1;
-    for (int i = 0; i < WSIZE; i++) prev[i] = -1;
-
-    size_t tail = (wrap == UINFLATE_RAW) ? 0 : (wrap == UINFLATE_ZLIB ? 4 : 8);
-    struct bitw b = { dst + head, cap > head + tail ? cap - head - tail : 0, 0, 0, 0, 0 };
-    bw_bits(&b, 1, 1); // BFINAL
-    bw_bits(&b, 1, 2); // BTYPE = fixed Huffman
-
-    size_t pos = 0;
-    while (pos < n) {
-        int best_len = 0, best_dist = 0;
-        if (pos + DEF_MINLEN <= n) {
-            uint32_t h = def_hash(src + pos);
-            int32_t cand = head_tbl[h];
-            int probes = DEF_PROBES;
-            while (cand >= 0 && probes-- > 0) {
-                size_t distance = pos - (size_t)cand;
-                if (distance == 0 || distance > WSIZE) break;
-                size_t maxl = n - pos;
-                if (maxl > DEF_MAXLEN) maxl = DEF_MAXLEN;
-                size_t l = 0;
-                while (l < maxl && src[cand + l] == src[pos + l]) l++;
-                if ((int)l > best_len) {
-                    best_len = (int)l;
-                    best_dist = (int)distance;
-                    if (best_len >= DEF_MAXLEN) break;
-                }
-                cand = prev[(size_t)cand & (WSIZE - 1)];
-            }
-        }
-
-        if (best_len >= DEF_MINLEN) {
-            bw_match(&b, best_len, best_dist);
-            // Every position inside the match still has to enter the
-            // chain, or the next search cannot see back past it.
-            for (int i = 0; i < best_len; i++) {
-                if (pos + DEF_MINLEN <= n) {
-                    uint32_t h = def_hash(src + pos);
-                    prev[pos & (WSIZE - 1)] = head_tbl[h];
-                    head_tbl[h] = (int32_t)pos;
-                }
-                pos++;
-            }
-        } else {
-            bw_fixed_sym(&b, src[pos]);
-            if (pos + DEF_MINLEN <= n) {
-                uint32_t h = def_hash(src + pos);
-                prev[pos & (WSIZE - 1)] = head_tbl[h];
-                head_tbl[h] = (int32_t)pos;
-            }
-            pos++;
-        }
-        if (b.full) break;
-    }
-
-    bw_fixed_sym(&b, 256); // end of block
-    bw_flush(&b);
-    free(head_tbl);
-    free(prev);
-    if (b.full) ZFAIL(-ENOMEM, "the compressed result did not fit");
-
-    size_t len = head + b.len;
-    if (wrap == UINFLATE_ZLIB) {
-        uint32_t a = 1, s2 = 0;
-        for (size_t i = 0; i < n; i++) { a = (a + src[i]) % 65521; s2 = (s2 + a) % 65521; }
-        uint32_t sum = (s2 << 16) | a;
-        dst[len++] = (uint8_t)(sum >> 24); dst[len++] = (uint8_t)(sum >> 16);
-        dst[len++] = (uint8_t)(sum >> 8);  dst[len++] = (uint8_t)sum;
-    } else if (wrap == UINFLATE_GZIP) {
-        uint32_t crc = kcrc32(src, n);
-        dst[len++] = (uint8_t)crc; dst[len++] = (uint8_t)(crc >> 8);
-        dst[len++] = (uint8_t)(crc >> 16); dst[len++] = (uint8_t)(crc >> 24);
-        uint32_t isz = (uint32_t)n;
-        dst[len++] = (uint8_t)isz; dst[len++] = (uint8_t)(isz >> 8);
-        dst[len++] = (uint8_t)(isz >> 16); dst[len++] = (uint8_t)(isz >> 24);
-    }
-    if (out_len) *out_len = len;
-    return 0;
-}

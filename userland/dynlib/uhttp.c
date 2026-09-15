@@ -6,7 +6,7 @@
 
 #include "rt/sys.h"
 #include "uhttp.h"
-#include "lib/uinflate.h"
+#include "kinflate.h"
 #include "utls.h"
 #include "lib/uresolv.h"
 
@@ -199,7 +199,7 @@ static long find_body(struct hdr_scan *s, const char *buf, size_t n) {
 
 // A ceiling on what a server may send us compressed. A decompression
 // bomb is a small download that expands without limit; this bounds the
-// COMPRESSED side, and uinflate's own limit bounds the other.
+// COMPRESSED side, and the sink's own refusal bounds the other.
 #define UHTTP_GZIP_MAX (64u * 1024u * 1024u)
 
 // Inflated bytes on their way to the caller's sink.
@@ -372,7 +372,12 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
     if (scan.gzip && gz_len) {
         struct uhttp_gz gctx = { req, 0 };
         size_t out_len = 0;
-        int zrc = uinflate(gz, gz_len, UINFLATE_GZIP, gz_sink, &gctx, &out_len);
+        // The decoder's window is the caller's -- 32 KiB, too big for a
+        // stack frame here (api/kinflate.h).
+        struct kinflate_scratch *sc = malloc(sizeof *sc);
+        if (!sc) { fail(req, "out of memory to decompress the body"); goto done_err; }
+        int zrc = kinflate(gz, gz_len, KINFLATE_GZIP, sc, gz_sink, &gctx, &out_len);
+        free(sc);
         free(gz);
         gz = NULL;
         if (gctx.stopped) {
@@ -381,7 +386,7 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
         }
         if (zrc < 0) {
             fail(req, "the server's gzip body could not be read: %s",
-                 uinflate_error());
+                 kinflate_error());
             goto done_err;
         }
         // What the CALLER moved is the decompressed length; the

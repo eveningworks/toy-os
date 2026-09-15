@@ -1712,3 +1712,38 @@ but ring-3 crash reports are resolved by `panic_resolve.py` against
 `build/userland/.../x.elf` on this machine, so the debug file would have
 to follow each of them. Not done, and not obviously worth it: no
 userland ELF is 6 MB.
+
+## GRUB decompresses a gzipped module, so the kernel never needs to
+
+The live ISO carries an ~86 MiB TFS3 filesystem as a Multiboot2 module,
+and gzipping it halves the ISO (122 MB -> 59 MB, measured). The
+interesting part is who unpacks it.
+
+An in-kernel decompressor was written for this -- `try_live_module()`
+sniffing gzip magic, allocating with `pmm_alloc_contiguous()` and
+inflating -- on the assumption that the kernel would receive the
+compressed bytes. **It never ran.** The first live boot logged the module
+at 86016 KiB, the UNCOMPRESSED size, with the "unpacked" line absent:
+GRUB had already done it.
+
+**And it is by CONTENT, not by name.** The discriminating experiment: an
+ISO with the same gzipped bytes named `live.img`, no extension at all,
+still arrived inflated. GRUB's `gzio` decompresses any file it reads
+whose first bytes are the gzip magic, so there is no way to hand this
+kernel a compressed module through GRUB. The decompressor was deleted
+unrun.
+
+**GRUB doing it is also the better arrangement**, which is worth saying
+rather than treating this as a consolation. GRUB inflates into the
+buffer it was going to allocate for the module anyway, so the peak is
+ONE copy of the image; a kernel-side unpack would hold the compressed
+module and the inflated image at once, on a machine whose whole reason
+for booting live may be that it is short of resources.
+
+**What this cost, and what it is worth knowing for.** It removed the
+justification for `kinflate.c` living on the shared-source path: the
+live image was to be its ring-0 caller and there is no ring-0 caller
+now. The general lesson is the one this repo keeps relearning in other
+forms -- check what the layer below already does before building it
+again. A boot loader is a layer, and this one has had transparent
+decompression since GRUB 2.

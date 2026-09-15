@@ -404,6 +404,24 @@ this the obvious way), not from how much history it accumulated.
   **16-aligned before `call main`** -- a `sub rsp, 8` there looks like
   it restores the old convention and instead faults every SSE-using
   binary while leaving plain ones working, see `docs/decisions.md`.
+- **`STRIP=0` AND `COMPRESS=0` ARE THE TWO ESCAPE HATCHES, AND BOTH
+  NEED A STAMP TO WORK AT ALL.** `make STRIP=0 all` keeps the kernel's
+  debug information in `build/kernel.bin`; `make COMPRESS=0 live-iso`
+  ships the live image plain. Both default to on.
+
+  **A FLAG IS NOT A HEADER, AND THE `.d` FILES ONLY TRACK HEADERS.**
+  Without `build/.strip-flag` and `build/.compress-flag`, `make STRIP=0`
+  after an ordinary build relinks NOTHING -- make sees `kernel.bin` up
+  to date and the flag silently does not apply, which is the same class
+  of trap this file already records for a `CFLAGS` change. Each stamp is
+  rewritten only when its value changed, so a repeat build with the same
+  flags relinks nothing.
+
+  **The choice is made in the SHELL, not with `ifeq`.** A recipe's `if`
+  is evaluated when the recipe runs, so it cannot be caught out by when
+  the variable arrived -- the hazard the `make run` axes document at
+  length.
+
 - **THE KERNEL'S DEBUG INFO IS SPLIT OUT, AND `--add-gnu-debuglink` IS
   WHAT KEEPS EVERY TOOL WORKING.** `build/kernel.bin` is stripped and
   `build/kernel.debug` holds the DWARF; the link between them is a

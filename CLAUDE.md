@@ -1048,6 +1048,7 @@ whenever a headline here tells you something you did not already know.
 - **READING A WHOLE FILE IS `lib/ufile.h`, AND THE PART IT EXISTS FOR IS THE LOOP**
 - **A SELF-CHECKING `/tests` PROGRAM REPORTS THROUGH `userland/lib/utest.h`, AND ITS EPILOGUE IS ONE LINE IN ONE SHAPE**
 - **Every ring-3 program is just a `main()`.**
+- **`STRIP=0` KEEPS THE KERNEL'S DEBUG INFO IN `kernel.bin` AND `COMPRESS=0` SHIPS THE LIVE IMAGE PLAIN; BOTH DEFAULT ON, AND BOTH NEED THEIR STAMP FILE** -- a flag is not a header, so without `build/.strip-flag` a `make STRIP=0` relinks nothing and silently does not apply
 - **THE KERNEL'S DEBUG INFO IS SPLIT OUT (`build/kernel.debug`), AND `--add-gnu-debuglink` IS WHAT KEEPS `addr2line`, `gdb` AND `panic_resolve.py` WORKING** -- the link names the file by BASENAME, so the two must stay in the same directory; `.ksyms` is not debug info and survives, which is why a panic still names functions on a machine that has never seen the DWARF
 - **`linker.ld` decides kernel memory PERMISSIONS, not just placement.**
 - **CI RUNS THE KERNEL SUITE TWICE, on ATA and on virtio-blk, and the second one earns its place.**
@@ -1122,6 +1123,9 @@ make verify # the full pre-delivery gate: clean build + iso + boot test + ktest
             # (same as tools/preflight.sh, which also summarises `git status`)
 make run    # boots in QEMU with an SDL window (the user's machine, not headless)
 make live-iso   # toy-os-live.iso -- carries a TFS3 image as a GRUB module
+                # (gzipped; GRUB unpacks it, halving the ISO)
+make all STRIP=0        # keep the kernel's debug info in kernel.bin
+make live-iso COMPRESS=0  # ship the live image uncompressed
 make usb-image  # toyos-usb.img -- compact and self-booting, to dd to a USB stick
 make debug  # boots frozen (-s -S) for real GDB debugging -- see below
 ```

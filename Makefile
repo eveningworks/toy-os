@@ -529,6 +529,36 @@ help:
 FORCE:
 $(BUILD)/kernel/core/kversion.o: FORCE
 
+# --- STRIP and COMPRESS: the two build axes, both ON by default -------
+#
+# STRIP=0 keeps the kernel's debug information IN build/kernel.bin
+# instead of splitting it into build/kernel.debug, for a debugging
+# session that would rather carry one file than two -- gdb against a
+# kernel copied somewhere else, or a machine where kernel.debug cannot
+# sit beside the binary. The default costs nothing: --add-gnu-debuglink
+# means addr2line, gdb and panic_resolve.py all still resolve.
+#
+# COMPRESS=0 ships the live filesystem image uncompressed, roughly
+# doubling toy-os-live.iso (59 MB -> 122 MB, measured). Worth having
+# because GRUB is what decompresses it -- so a boot loader that does not,
+# or a hand-assembled image, needs the plain one.
+STRIP    ?= 1
+COMPRESS ?= 1
+
+# A FLAG IS NOT A HEADER, AND THE .d FILES ONLY TRACK HEADERS. Without
+# these stamps, `make STRIP=0` after an ordinary build relinks NOTHING --
+# make sees kernel.bin up to date and the flag silently does not apply.
+# That is the same class of trap CLAUDE.md records for a CFLAGS change.
+# Each stamp is rewritten only when its value actually changed, so a
+# repeated build with the same flags relinks nothing.
+$(BUILD)/.strip-flag: FORCE
+	@mkdir -p $(dir $@)
+	@echo '$(STRIP)' | cmp -s - $@ || echo '$(STRIP)' > $@
+
+$(BUILD)/.compress-flag: FORCE
+	@mkdir -p $(dir $@)
+	@echo '$(COMPRESS)' | cmp -s - $@ || echo '$(COMPRESS)' > $@
+
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(if $(filter apps/%,$<),$(APPS_CFLAGS),$(CFLAGS)) $< -o $@
@@ -609,7 +639,8 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/klineedit_cases.o \
                $(BUILD)/userland/shared/etc_config_cases.o \
                $(BUILD)/userland/shared/tmppath.o \
-               $(BUILD)/userland/shared/kcrc.o
+               $(BUILD)/userland/shared/kcrc.o \
+               $(BUILD)/userland/shared/kinflate.o
 LIBUAPP      = $(BUILD)/userland/libuapp.a
 
 # libc.a -- the C LIBRARY, a second archive beside the toolkit.
@@ -1320,7 +1351,7 @@ $(KSYMS_O): $(KSYMS_C)
 # looks obviously correct. .PRECIOUS keeps it for the same reason.
 .PRECIOUS: $(KRELOCS_C)
 
-$(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) $(KRELOCS_O) $(KRELOCS_C) $(KSYMS_O) $(KSYMS_C) linker.ld
+$(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) $(KRELOCS_O) $(KRELOCS_C) $(KSYMS_O) $(KSYMS_C) linker.ld $(BUILD)/.strip-flag
 	$(LD) $(LDFLAGS) -q -o $(BUILD)/kernel.pass2.elf $(ASM_OBJECTS) $(C_OBJECTS) $(KRELOCS_O) $(KSYMS_O)
 	@python3 tools/genrelocs.py $(BUILD)/kernel.pass2.elf --verify $(KRELOCS_C)
 	@python3 tools/gen_syms.py $(BUILD)/kernel.pass2.elf --verify $(KSYMS_C)
@@ -1344,9 +1375,15 @@ $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) $(KRELOCS_O) $(KRELOCS_C) $(KSYMS_O) $(KS
 	# The in-kernel symbol table (.ksyms, from gen_syms.py) is NOT debug
 	# information and survives, so a panic still prints function names on
 	# a machine that has never seen kernel.debug.
-	objcopy --only-keep-debug $@ $(BUILD)/kernel.debug
-	objcopy --strip-debug $@
-	objcopy --add-gnu-debuglink=$(BUILD)/kernel.debug $@
+	@if [ "$(STRIP)" != "0" ]; then \
+	    objcopy --only-keep-debug $@ $(BUILD)/kernel.debug && \
+	    objcopy --strip-debug $@ && \
+	    objcopy --add-gnu-debuglink=$(BUILD)/kernel.debug $@ && \
+	    echo "  kernel.bin `stat -c%s $@` bytes, debug info in kernel.debug"; \
+	else \
+	    rm -f $(BUILD)/kernel.debug; \
+	    echo "  STRIP=0: kernel.bin keeps its debug info, `stat -c%s $@` bytes"; \
+	fi
 
 # Pulls in every .d file -MMD/-MP generated alongside its .o (same
 # directory, same basename, e.g. build/apps/notepad.d next to
@@ -1824,11 +1861,27 @@ usb-image: version $(KERNEL) $(USERLAND_ELVES) seed
 	@echo "  /dev/sdX is the WHOLE DEVICE, not a partition (no digit)."
 	@echo ""
 
-live-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
+live-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG) $(BUILD)/.compress-flag
 	rm -rf iso-live
 	mkdir -p iso-live/boot/grub
 	cp $(KERNEL) iso-live/boot/kernel.bin
-	cp $(LIVE_IMG) iso-live/boot/live.img
+	# GZIPPED BY DEFAULT, AND GRUB IS WHAT UNPACKS IT. The image is
+	# ~86 MiB of mostly-empty filesystem and compresses to about a
+	# quarter, which halves the ISO (122 MB -> 59 MB, measured). GRUB's
+	# gzio decompresses any file whose CONTENT begins with the gzip
+	# magic, so the kernel is handed the full image and needs no
+	# decompressor of its own -- and the peak memory is one copy rather
+	# than two. The module keeps the .gz name for the reader's benefit
+	# only; GRUB decides by content, not by extension.
+	#
+	# COMPRESS=0 ships it plain, for a loader that does not do this.
+	@if [ "$(COMPRESS)" != "0" ]; then \
+	    gzip -9 -c $(LIVE_IMG) > iso-live/boot/live.img.gz; \
+	    echo "  live.img.gz `stat -c%s iso-live/boot/live.img.gz` bytes (gzip -9)"; \
+	else \
+	    cp $(LIVE_IMG) iso-live/boot/live.img.gz; \
+	    echo "  COMPRESS=0: live image shipped uncompressed, `stat -c%s iso-live/boot/live.img.gz` bytes"; \
+	fi
 	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(KCMDLINE)|' grub-live.cfg > iso-live/boot/grub/grub.cfg
 	@if [ -z "$(GRUB_MKRESCUE)" ]; then \
 		echo "make: grub-mkrescue not found -- see README.md's dependency table."; \

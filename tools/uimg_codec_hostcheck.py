@@ -151,12 +151,14 @@ def build(tmp, sabotage=False):
     # from it.
     shim = os.path.join(tmp, "shim")
     os.makedirs(shim, exist_ok=True)
-    with open(os.path.join(shim, "kcrc.h"), "w") as f:
-        f.write('#include "%s"\n'
-                % os.path.join(ROOT, "kernel", "include", "api", "kcrc.h"))
+    for h in ("kcrc.h", "kinflate.h"):
+        with open(os.path.join(shim, h), "w") as f:
+            f.write('#include "%s"\n'
+                    % os.path.join(ROOT, "kernel", "include", "api", h))
 
     png_c = os.path.join(ROOT, "userland", "lib", "uimg_png.c")
-    infl_c = os.path.join(ROOT, "userland", "lib", "uinflate.c")
+    infl_c = os.path.join(ROOT, "kernel", "lib", "kinflate.c")
+    defl_c = os.path.join(ROOT, "userland", "lib", "udeflate.c")
     if sabotage:
         # THE control: a Huffman code that is not reversed. The file
         # stays structurally valid -- signature, chunk lengths and CRCs
@@ -168,11 +170,11 @@ def build(tmp, sabotage=False):
                 "    return r;\n")
         # bit_reverse() moved to uinflate.c with the rest of the
         # compressor; the control follows it.
-        text = open(infl_c).read()
+        text = open(defl_c).read()
         if body not in text:
             sys.exit("positive control: bit_reverse() no longer looks as expected")
-        infl_c = os.path.join(tmp, "uinflate_broken.c")
-        with open(infl_c, "w") as f:
+        defl_c = os.path.join(tmp, "udeflate_broken.c")
+        with open(defl_c, "w") as f:
             f.write(text.replace(body, "    (void)n;\n    return v;\n"))
 
         # AND A SECOND, DECODE-ONLY SABOTAGE. The one above breaks only
@@ -193,9 +195,26 @@ def build(tmp, sabotage=False):
             f.write(ptext.replace(pbody,
                                    "        case 4: v += a + 0 * c; break;\n"))
 
+    # kinflate.c IS A SHARED-SOURCE FILE and includes the kernel's
+    # "string.h" for k_memset, so it needs kernel/include/api on its
+    # include path -- and nothing else may have it, because that
+    # directory's string.h would shadow the host's for every other file
+    # and take memcpy with it. So it compiles on its own, and the objects
+    # are linked together.
+    kobjs = []
+    for csrc in (infl_c, os.path.join(ROOT, "kernel", "lib", "string.c")):
+        obj = os.path.join(tmp, os.path.basename(csrc)[:-2] + ".o")
+        subprocess.run(["gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-c", csrc,
+                        "-o", obj,
+                        "-I" + os.path.join(ROOT, "kernel", "include", "api"),
+                        "-I" + os.path.join(ROOT, "kernel", "include", "abi")],
+                       check=True)
+        kobjs.append(obj)
+
     exe = os.path.join(tmp, "uimgenc")
     cmd = ["gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-o", exe, src,
-           os.path.join(ROOT, "userland", "lib", "uimg_qoi.c"), png_c, infl_c,
+           os.path.join(ROOT, "userland", "lib", "uimg_qoi.c"), png_c, defl_c,
+           *kobjs,
            os.path.join(ROOT, "kernel", "lib", "kcrc.c"),
            "-I" + shim,
            "-I" + os.path.join(ROOT, "userland"),
