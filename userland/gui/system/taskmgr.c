@@ -447,7 +447,21 @@ static struct uui_item PROC_ITEMS[2];
 static struct uui_layout PROC_LAYOUT;
 static struct uui_item OV_GAUGES[2];   // CPU and Memory, side by side
 static struct uui_layout OV_GAUGE_ROW;
-static struct uui_item OV_ITEMS[1 + OV_DISKS_MAX];
+// TWO PER ROW, not one: a disk tile is four short strings and a bar, and
+// a full-width one spent nine tenths of its width on nothing -- which is
+// most of what made this page look empty. Windows 11 and GNOME both lay
+// their resource cards in a grid for the same reason. Nested rows,
+// which the router descends on its own.
+#define OV_DISK_COLS 2
+static struct uui_item   OV_DISK_CELLS[OV_DISKS_MAX];
+static struct uui_layout OV_DISK_ROWS[(OV_DISKS_MAX + OV_DISK_COLS - 1) / OV_DISK_COLS];
+// The gap a partly-filled row leaves. An empty layout draws nothing and
+// measures nothing, so it absorbs the leftover width without becoming a
+// tile -- which is what stops a lone /tmp stretching to twice the width
+// of the two cards above it.
+static struct uui_layout OV_DISK_GAP;
+static struct uui_item   OV_DISK_ROW_ITEMS[(OV_DISKS_MAX / OV_DISK_COLS + 1)][OV_DISK_COLS];
+static struct uui_item   OV_ITEMS[1 + ((OV_DISKS_MAX + OV_DISK_COLS - 1) / OV_DISK_COLS)];
 static struct uui_layout OV_LAYOUT;
 // THE OVERVIEW CAN OVERFLOW: two gauges plus one tile per mount is more
 // than a small window holds, and uui_layout places the surplus PAST the
@@ -483,7 +497,26 @@ static void select_page(struct uapp *a, int index) {
     // count would lay out a meter with no strings in it.
     // The gauge row plus one tile per disk found. g_ov_count counts
     // METERS, and the first two of those live inside the nested row.
-    OV_LAYOUT.count = 1 + (g_ov_count > 2 ? g_ov_count - 2 : 0);
+    int disks = g_ov_count > 2 ? g_ov_count - 2 : 0;
+    // ROWS, not tiles, and a partial row still counts: three disks are
+    // two rows, the second half empty rather than missing.
+    OV_LAYOUT.count = 1 + (disks + OV_DISK_COLS - 1) / OV_DISK_COLS;
+    for (int r = 0; r < (int)(sizeof OV_DISK_ROWS / sizeof OV_DISK_ROWS[0]); r++) {
+        int left = disks - r * OV_DISK_COLS;
+        if (left >= OV_DISK_COLS) {
+            OV_DISK_ROWS[r].count = OV_DISK_COLS;
+        } else if (left > 0) {
+            // The tiles that exist, then a gap holding the rest of the
+            // row open so they keep the width of a full row's cards.
+            OV_DISK_ROWS[r].count = OV_DISK_COLS;
+            for (int col = left; col < OV_DISK_COLS; col++)
+                OV_DISK_ROW_ITEMS[r][col] = (struct uui_item){
+                    .ops = &uui_layout_ops, .widget = &OV_DISK_GAP,
+                    .flags = UUI_FILL_W };
+        } else {
+            OV_DISK_ROWS[r].count = 0;
+        }
+    }
     uui_scrollview_content_changed(&OV_SCROLL);
     if (a) uui_layout_run(&LAYOUT, 0, 0, uapp_width(a), uapp_height(a));
 }
@@ -604,10 +637,15 @@ static void refresh_overview(void) {
     snprintf(g_cpu_reading, sizeof g_cpu_reading, "%d%%", pct);
     set_live_value(&g_cpu_chart, g_cpu_reading);
     snprintf(val, sizeof val, "%d%%", pct);
-    // No unit under the number: a percentage that moves says "busy" on
-    // its own, and a static word inside the hole is one more thing to
-    // clip. Asked for directly.
-    ov_set(n++, "CPU", pct * 10, val, NULL, NULL, UUI_METER_RING);
+    // A DETAIL LINE, so the two gauges balance: Memory has carried one
+    // since it was written and CPU's row sat empty, which left the pair
+    // visibly uneven. The process count is the fact a reader of a task
+    // manager already came for, and it costs nothing -- refresh() has
+    // just counted them.
+    char cpu_det[24];
+    snprintf(cpu_det, sizeof cpu_det, "%d process%s", g_row_count,
+             g_row_count == 1 ? "" : "es");
+    ov_set(n++, "CPU", pct * 10, val, NULL, cpu_det, UUI_METER_RING);
 
     // Memory: used against total, which is every frame the allocator
     // manages -- the same number About calls "usable".
@@ -818,10 +856,28 @@ int main(void) {
     OV_ITEMS[0] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &OV_GAUGE_ROW,
                                       .flags = UUI_FILL_W };
     for (int i = 0; i < OV_DISKS_MAX; i++) {
-        OV_ITEMS[1 + i] = (struct uui_item){ .ops = &uui_meter_ops,
-                                              .widget = &g_ov[2 + i],
+        OV_DISK_CELLS[i] = (struct uui_item){ .ops = &uui_meter_ops,
+                                               .widget = &g_ov[2 + i],
+                                               .flags = UUI_FILL_W | UUI_FILL_H };
+    }
+    OV_DISK_GAP = (struct uui_layout){ .dir = UUI_ROW, .items = 0, .count = 0, .margin = 0 };
+    for (int r = 0; r < (int)(sizeof OV_DISK_ROWS / sizeof OV_DISK_ROWS[0]); r++) {
+        for (int col = 0; col < OV_DISK_COLS; col++)
+            OV_DISK_ROW_ITEMS[r][col] = OV_DISK_CELLS[r * OV_DISK_COLS + col];
+        OV_DISK_ROWS[r] = (struct uui_layout){ .dir = UUI_ROW,
+                                                .items = OV_DISK_ROW_ITEMS[r],
+                                                .count = OV_DISK_COLS, .margin = 0 };
+        OV_ITEMS[1 + r] = (struct uui_item){ .ops = &uui_layout_ops,
+                                              .widget = &OV_DISK_ROWS[r],
                                               .flags = UUI_FILL_W };
     }
+
+    // THE TREND UNDER THE TWO THAT MOVE. The same charts the Performance
+    // tab draws, so there is one history and two views of it -- and none
+    // on the disks, whose fullness does not move enough to make a trace
+    // anything but a flat line claiming to be information.
+    uui_meter_set_spark(&g_ov[0], &g_cpu_chart);
+    uui_meter_set_spark(&g_ov[1], &g_mem_chart);
     OV_LAYOUT = (struct uui_layout){ .dir = UUI_COLUMN, .items = OV_ITEMS,
                                       .count = 1, .margin = 0 };
     uui_scrollview_init(&OV_SCROLL, &OV_LAYOUT);

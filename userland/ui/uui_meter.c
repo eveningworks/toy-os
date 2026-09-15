@@ -2,6 +2,7 @@
 #include "ui/uui_meter.h"
 #include "ui/uui_widget.h"
 #include "ui/utheme.h"
+#include "ui/uui_chart.h"
 #include "fixed.h"
 #include <stddef.h>
 
@@ -23,6 +24,7 @@ void uui_meter_init(struct uui_meter *m) {
     m->accent = UTHEME_ACCENT;
     m->value_font = NULL;
     m->style = UUI_METER_BAR;
+    m->spark = NULL;
 }
 
 void uui_meter_set(struct uui_meter *m, const char *caption,
@@ -35,6 +37,10 @@ void uui_meter_set(struct uui_meter *m, const char *caption,
 
 void uui_meter_set_fill(struct uui_meter *m, int per_mille) {
     m->fill = per_mille;
+}
+
+void uui_meter_set_spark(struct uui_meter *m, const struct uui_chart *spark) {
+    m->spark = spark;
 }
 
 void uui_meter_set_style(struct uui_meter *m, enum uui_meter_style style) {
@@ -56,6 +62,11 @@ void uui_meter_set_style(struct uui_meter *m, enum uui_meter_style style) {
 
 // The ring's thickness. A fraction of the row pitch rather than a
 // constant, and floored so it never vanishes on a tiny font.
+// The trend's own rows, reserved only when there IS one: unlike the
+// text rows above, a spark is a property of the CALLER's tile rather
+// than of its content, so it cannot appear later and overflow the box.
+#define SPARK_ROWS 3
+
 static int ring_thickness(void) {
     int t = ugfx_char_h() / 2;
     return t < 4 ? 4 : t;
@@ -120,10 +131,30 @@ void uui_meter_natural_size(const struct uui_meter *m, int *out_w, int *out_h) {
         // rule the bar style follows.
         if (out_h) *out_h = line + d + line + pad * 2;
     }
+
+    if (m->spark && out_h) *out_h += SPARK_ROWS * line;
 }
 
 // The ring presentation: a caption row, then a track with the filled
 // sweep over it, and the value stacked inside the hole.
+// The trend across the tile's foot, in the band natural_size() reserved
+// for it. Drawn through the chart's OWN draw so the two cannot disagree
+// about what a trace looks like -- the widget is told where to sit and
+// nothing here reaches into its samples.
+static void draw_spark(struct ugfx_surface *s, const struct uui_meter *m) {
+    if (!m->spark) return;
+    int pad = utheme_pad();
+    int h = SPARK_ROWS * ugfx_char_h();
+    struct uui_chart c = *m->spark;        // a COPY: placing it must not
+    c.label = NULL;                        // move the caller's widget, and
+    c.value = NULL;                        // the tile already says both
+    c.sample_ms = 0;                       // and already carries the span
+    c.compact = 1;                         // a trace, not a boxed grid
+    uui_chart_set_geometry(&c, m->x + pad, m->y + m->h - pad - h,
+                           m->w - pad * 2, h);
+    uui_chart_draw(s, &c);
+}
+
 static void draw_ring(struct ugfx_surface *s, const struct uui_meter *m) {
     int pad = utheme_pad();
     int line = ugfx_char_h();
@@ -145,7 +176,8 @@ static void draw_ring(struct ugfx_surface *s, const struct uui_meter *m) {
     // The largest ring that fits what is left, so a tile stretched by a
     // layout grows its gauge instead of stranding it in a corner. One
     // row is held back for the detail line under it.
-    int avail_h = m->y + m->h - pad - top - line;
+    int spark_h = m->spark ? SPARK_ROWS * ugfx_char_h() : 0;
+    int avail_h = m->y + m->h - pad - top - line - spark_h;
     int d = inner < avail_h ? inner : avail_h;
     // CAPPED. A gauge is a gauge at any window size -- letting it grow
     // to fill a maximised tile makes a dinner plate, and the arc's cost
@@ -226,7 +258,11 @@ void uui_meter_draw(struct ugfx_surface *s, const struct uui_meter *m) {
     ugfx_fill_rect(s, m->x, m->y, m->w, m->h, m->bg);
     ugfx_draw_rect(s, m->x, m->y, m->w, m->h, UTHEME_BORDER);
 
-    if (m->style == UUI_METER_RING) { draw_ring(s, m); return; }
+    if (m->style == UUI_METER_RING) {
+        draw_ring(s, m);
+        draw_spark(s, m);
+        return;
+    }
 
     int pad = utheme_pad();
     int line = ugfx_char_h();
@@ -263,8 +299,11 @@ void uui_meter_draw(struct ugfx_surface *s, const struct uui_meter *m) {
 
     if (m->fill >= 0) {
         int fill = m->fill > 1000 ? 1000 : m->fill;   // clamped, not overflowing
-        int bar_h = line / 2;
-        if (bar_h < 2) bar_h = 2;
+        // THREE QUARTERS OF A ROW, not half: at a tile's full width a
+        // half-row strip reads as a border along the bottom edge rather
+        // than as a meter, which is exactly how it looked.
+        int bar_h = line * 3 / 4;
+        if (bar_h < 3) bar_h = 3;
         // On its OWN reserved row at the bottom, not hung off the box's
         // edge: the rows above are reserved whether or not they carry
         // text, so this cannot land on top of one.

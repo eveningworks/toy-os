@@ -60,6 +60,11 @@ struct uui_chart {
     // or -1. The widget marks it; the APP formats what it says, because
     // the app owns the units.
     int hover;
+    // **A SPARKLINE IS THE TRACE AND NOTHING ELSE** -- no gridlines, no
+    // frame. At three rows tall the furniture is most of the ink, and a
+    // small boxed grid reads as an empty table rather than as a series.
+    // Tufte's point, and what every sparkline in a dashboard does.
+    int compact;
 
     // UUI_COLOR_UNSET lets the theme answer at DRAW time -- see utheme.h
     // on why a widget must not resolve its colours when it is built.

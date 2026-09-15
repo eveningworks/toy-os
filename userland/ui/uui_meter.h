@@ -34,6 +34,8 @@ enum uui_meter_style {
     UUI_METER_RING,      // a caption over a ring, with the value inside it
 };
 
+struct uui_chart;   // ui/uui_chart.h -- the optional trend below
+
 struct uui_meter {
     int x, y, w, h;
 
@@ -74,6 +76,7 @@ struct uui_meter {
     // negative one draws the track alone, exactly as it suppresses the
     // bar.
     enum uui_meter_style style;
+    const struct uui_chart *spark;   // NULL for none -- see set_spark()
 };
 
 // Sets the palette from the theme and everything else to empty. Call
@@ -95,6 +98,20 @@ void uui_meter_set_fill(struct uui_meter *m, int per_mille);
 // Bar or ring. Separate from _init() so a caller that wants the default
 // never mentions it, and so switching a meter over is one line.
 void uui_meter_set_style(struct uui_meter *m, enum uui_meter_style style);
+
+// **A TREND UNDER THE READING, FOR A VALUE THAT MOVES.** NULL (the
+// default) reserves nothing and draws nothing.
+//
+// Only worth attaching where the number actually changes: a processor
+// and a memory figure move, a disk's fullness does not, and a flat
+// trace pretending to be information is worse than no trace. Windows 11
+// puts a sparkline beside each resource for the same reason and leaves
+// the static ones alone.
+//
+// NOT OWNED and NOT COPIED -- the caller pushes samples into its own
+// chart and this draws whatever is there, which is what lets one
+// history serve both a tile here and a full graph elsewhere.
+void uui_meter_set_spark(struct uui_meter *m, const struct uui_chart *spark);
 
 void uui_meter_natural_size(const struct uui_meter *m, int *out_w, int *out_h);
 void uui_meter_draw(struct ugfx_surface *s, const struct uui_meter *m);

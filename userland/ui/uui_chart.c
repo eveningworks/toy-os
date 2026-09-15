@@ -16,6 +16,7 @@ void uui_chart_init(struct uui_chart *c, const char *label) {
     c->scale_max = 100;     // a percentage unless the caller says otherwise
     c->sample_ms = 0;
     c->hover = -1;
+    c->compact = 0;
     for (int i = 0; i < UUI_CHART_MAX; i++) c->samples[i] = c->parts[i] = 0;
     c->bg = c->grid = c->line = c->fill = c->part = UUI_COLOR_UNSET;
 }
@@ -109,13 +110,13 @@ void uui_chart_draw(struct ugfx_surface *s, const struct uui_chart *c) {
     int ch = ugfx_char_h();
     // The plot sits below the caption row and above the axis row, so
     // neither can be painted over by a tall column.
-    int top = c->y + ch + 2;
-    int bot = c->y + c->h - 1 - (c->sample_ms ? ch + 1 : 0);
+    int top = c->y + (c->compact ? 0 : ch + 2);
+    int bot = c->y + c->h - 1 - (!c->compact && c->sample_ms ? ch + 1 : 0);
     int ph = bot - top;
     if (ph < 4) { top = c->y; bot = c->y + c->h - 1; ph = bot - top; }
 
     ugfx_fill_rect(s, c->x, c->y, c->w, c->h, bg);
-    for (int q = 1; q < 4; q++) {
+    for (int q = 1; !c->compact && q < 4; q++) {
         int gy = top + ph * q / 4;
         ugfx_draw_line(s, c->x, gy, c->x + c->w - 1, gy, grid, GEOM_ALIASED);
     }
@@ -150,10 +151,12 @@ void uui_chart_draw(struct ugfx_surface *s, const struct uui_chart *c) {
         ugfx_draw_line(s, hx, top, hx, bot, edge, GEOM_ALIASED);
     }
 
-    ugfx_draw_line(s, c->x, c->y, c->x + c->w - 1, c->y, edge, GEOM_ALIASED);
-    ugfx_draw_line(s, c->x, c->y + c->h - 1, c->x + c->w - 1, c->y + c->h - 1, edge, GEOM_ALIASED);
-    ugfx_draw_line(s, c->x, c->y, c->x, c->y + c->h - 1, edge, GEOM_ALIASED);
-    ugfx_draw_line(s, c->x + c->w - 1, c->y, c->x + c->w - 1, c->y + c->h - 1, edge, GEOM_ALIASED);
+    if (!c->compact) {
+        ugfx_draw_line(s, c->x, c->y, c->x + c->w - 1, c->y, edge, GEOM_ALIASED);
+        ugfx_draw_line(s, c->x, c->y + c->h - 1, c->x + c->w - 1, c->y + c->h - 1, edge, GEOM_ALIASED);
+        ugfx_draw_line(s, c->x, c->y, c->x, c->y + c->h - 1, edge, GEOM_ALIASED);
+        ugfx_draw_line(s, c->x + c->w - 1, c->y, c->x + c->w - 1, c->y + c->h - 1, edge, GEOM_ALIASED);
+    }
 
     // The label left and the reading right, both CLIPPED -- caller text
     // in a fixed box, the bug gfx_draw_string()'s unclipped twin has
@@ -216,6 +219,7 @@ static int chart_motion_op(void *w, int cx, int cy, unsigned buttons) {
     int was = c->hover;
     if (!uui_hit(c->x, c->y, c->w, c->h, cx, cy)) {
         c->hover = -1;
+    c->compact = 0;
     } else {
         int n = uui_chart_drawn(c);
         int i = cx - (c->x + c->w - n);
