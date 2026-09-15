@@ -306,9 +306,79 @@ def wallpaper_dusk(w, h):
     return im.filter(ImageFilter.GaussianBlur(2))
 
 
+# THREE MORE, AND THE CONSTRAINT IS THE DESKTOP RATHER THAN THE PICTURE.
+# Icons and their captions are drawn over these, so each keeps its
+# detail LOW-FREQUENCY and its top-left quiet -- that is where the icon
+# grid starts. Busy texture there costs legibility and JPEG bytes at
+# once; `ugfx_draw_string_shadowed()` covers the rest.
+
+def wallpaper_slate(w, h):
+    """A cool neutral with a faint grid -- the quiet one, for reading."""
+    im = Image.new("RGB", (w, h))
+    d = ImageDraw.Draw(im)
+    for y in range(h):
+        t = y / (h - 1)
+        d.line([(0, y), (w, y)],
+               fill=(int(36 + 22 * t), int(41 + 26 * t), int(50 + 32 * t)))
+    # A grid a couple of units above the ground it sits on: visible as
+    # structure, never as lines to read past.
+    step = h // 12
+    for x in range(0, w, step):
+        d.line([(x, 0), (x, h)], fill=(52, 58, 70))
+    for y in range(0, h, step):
+        d.line([(0, y), (w, y)], fill=(52, 58, 70))
+    # One soft diagonal light, bottom-right, away from the icon grid.
+    glow = Image.new("RGB", (w, h), (0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse([w * 0.55, h * 0.45, w * 1.25, h * 1.35], fill=(40, 46, 58))
+    glow = glow.filter(ImageFilter.GaussianBlur(h // 6))
+    return Image.blend(im, Image.blend(im, glow, 0.5), 0.6)
+
+
+def wallpaper_ember(w, h):
+    """Warm and dark: a low horizon glow under a near-black sky."""
+    im = Image.new("RGB", (w, h))
+    d = ImageDraw.Draw(im)
+    for y in range(h):
+        t = y / (h - 1)
+        # The warmth arrives late, so the top two thirds stay dark
+        # enough for white icon captions.
+        k = max(0.0, (t - 0.45) / 0.55) ** 2
+        d.line([(0, y), (w, y)],
+               fill=(int(18 + 150 * k), int(16 + 62 * k), int(20 + 30 * k)))
+    for i in range(6):
+        r = h * (0.18 + 0.13 * i)
+        cx, cy = w * 0.5, h * 1.02
+        d.ellipse([cx - r * 1.6, cy - r, cx + r * 1.6, cy + r],
+                  outline=(70 + 14 * i, 34 + 8 * i, 26), width=3)
+    return im.filter(ImageFilter.GaussianBlur(h // 55))
+
+
+def wallpaper_tide(w, h):
+    """Daylight teal: layered water, lighter than aurora."""
+    im = Image.new("RGB", (w, h))
+    d = ImageDraw.Draw(im)
+    for y in range(h):
+        t = y / (h - 1)
+        d.line([(0, y), (w, y)],
+               fill=(int(120 - 70 * t), int(178 - 74 * t), int(188 - 66 * t)))
+    for i in range(6):
+        base = h * (0.34 + 0.11 * i)
+        amp = h * (0.030 + 0.008 * i)
+        pts = [(0, h), (0, base)]
+        for x in range(0, w + 10, 10):
+            u = x / w
+            pts.append((x, base + amp * math.sin(4.1 * u + i * 0.9)))
+        pts.append((w, h))
+        d.polygon(pts, fill=(int(96 - 11 * i), int(150 - 15 * i), int(166 - 13 * i)))
+    return im.filter(ImageFilter.GaussianBlur(3))
+
+
 def build_wallpapers():
     os.makedirs(WALLPAPER_DIR, exist_ok=True)
-    for name, fn in (("aurora", wallpaper_aurora), ("dusk", wallpaper_dusk)):
+    for name, fn in (("aurora", wallpaper_aurora), ("dusk", wallpaper_dusk),
+                     ("slate", wallpaper_slate), ("ember", wallpaper_ember),
+                     ("tide", wallpaper_tide)):
         im = fn(1280, 720)
         path = os.path.join(WALLPAPER_DIR, name + ".jpg")
         im.save(path, format="JPEG", quality=88, subsampling=2, optimize=True)
