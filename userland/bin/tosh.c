@@ -27,6 +27,7 @@
 // call is unconditional, which is what lets this one binary run on the
 // physical console and inside a Terminal window without knowing which.
 #include "rt/sys.h"
+#include "query_abi.h"   // QUERY_REMOTE_COMMAND
 #include "lib/tosh.h"
 #include <string.h>
 #include <stdlib.h>
@@ -211,6 +212,13 @@ static void accept_line(void) {
         // with echo: it is where Ctrl-D means end of input and where the
         // person can see what they are typing. readline brackets a
         // command exactly this way.
+        // WHAT A REMOTE SESSION IS DOING, so the machine's owner can
+        // watch it from the tray. Dropped by the kernel unless this
+        // session actually arrived over the network, so a local shell
+        // reports nothing (abi/syscall_abi.h's SYS_REMOTE_LOG). The
+        // LINE is logged rather than the spawn because a builtin --
+        // `cd`, a `config set` -- spawns nothing at all.
+        sys_remote_log(QUERY_REMOTE_COMMAND, 0, g_ed.buf);
         sys_tcsetattr(0, &g_tio_saved);
         tosh_run_line(&g_sh, g_ed.buf);
         sys_tty_raw(0);

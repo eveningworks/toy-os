@@ -9,6 +9,7 @@
 #include "volume_popup.h"
 #include "brightness_popup.h"
 #include "network_popup.h"
+#include "remote_popup.h"
 #include "confirm_dialog.h"
 #include "osk.h"
 
@@ -22,6 +23,7 @@ static int open_calendar(void){ return calendar_open; }
 static int open_volume(void)  { return volume_open; }
 static int open_brightness(void) { return brightness_open; }
 static int open_network(void) { return network_open; }
+static int open_remote(void)  { return remote_open; }
 static int open_confirm(void) { return confirm_dialog_open; }
 static int open_osk(void)     { return osk_open; }
 
@@ -45,6 +47,8 @@ static const struct wm_overlay g_overlays[] = {
       brightness_hover_at,       brightness_damage,       brightness_update_press, brightness_close },
     { "network",  open_network,  network_draw,     network_handle_click,
       network_hover_at,          network_damage,          0, network_close },
+    { "remote",   open_remote,   remote_draw,      remote_handle_click,
+      remote_hover_at,           remote_damage,           0, remote_close },
     // LAST, so it is the least modal: a menu overlapping the keyboard
     // takes the click and paints on top. No `close` op -- a keyboard
     // must survive the click that puts the caret where it is typing.

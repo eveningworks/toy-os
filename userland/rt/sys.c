@@ -1032,6 +1032,15 @@ int sys_getsid(int pid) {
     return (int)err(syscall1(SYS_GETSID, (uint64_t)(int64_t)pid));
 }
 
+// SYS_REMOTE_LOG -- what a remote session did. The kernel KEEPS the
+// record only where it can see the caller is remote, or where the
+// caller names the peer it is serving, so a local caller costs a
+// syscall and changes nothing (abi/syscall_abi.h).
+int sys_remote_log(int kind, unsigned ip, const char *text) {
+    return (int)syscall3(SYS_REMOTE_LOG, (uint64_t)kind, (uint64_t)ip,
+                         (uint64_t)(uintptr_t)text);
+}
+
 int sys_sigaction(int sig, const struct k_sigaction *act, struct k_sigaction *old) {
     return (int)err(syscall3(SYS_SIGACTION, (uint64_t)(int64_t)sig,
                              (uint64_t)(uintptr_t)act, (uint64_t)(uintptr_t)old));

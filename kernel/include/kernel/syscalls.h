@@ -176,6 +176,10 @@ void fd_close_on_exec(uint64_t pml4);
 int  fd_install(uint64_t pml4, int di);
 // The description behind one descriptor, or NULL if it is not open.
 struct open_file *fd_get(uint64_t pml4, int fd);
+uint32_t fd_peer_ip(uint64_t pml4);
+
+// kernel/lib/remote_log.c
+int sys_remote_log(struct syscall_ctx *c);
 // Its index, for callers that need to share it (dup, spawn).
 int  fd_desc_index(uint64_t pml4, int fd);
 int  fd_close(uint64_t pml4, int fd);

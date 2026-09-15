@@ -94,6 +94,7 @@
 #include "shm.h"    // shm_process_gone() -- undoing a half-inherited arena, and an exec
 #include "sound.h"  // sound_process_gone() -- an exec drops the stream
 #include "syscalls.h" // the fd table: a child inherits its parent's descriptors
+#include "remote_log.h" // a session created from a socket is a REMOTE session
 #include "vmm.h"
 #include "pmm.h"
 #include "elf.h"
@@ -1392,6 +1393,30 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
     // this needs no special case for a process the shell's `spawn`
     // started.
     k_strlcpy(procs[slot].cwd.path, scheduler_cwd(), sizeof procs[slot].cwd.path);
+
+    // WHAT A REMOTE SESSION STARTS IS RECORDED, auditd's execve shape --
+    // here rather than in sys_spawn() because every spawn funnels
+    // through this function, including the ones a script makes. A local
+    // session logs nothing: remote_log_session_of() answers 0 and this
+    // costs one walk of eight slots.
+    uint32_t rip = remote_log_session_of(procs[slot].sid);
+    if (rip) {
+        char line[QUERY_REMOTELOG_TEXT_MAX];
+        // The path plus the first argument, which is what makes `ls
+        // /boot` distinguishable from `ls`. The whole vector would not
+        // fit and the interesting part is the front of it.
+        const char *arg = 0;
+        if (argvec && argvec_len) {   // the same walk shebang_argv() makes
+            size_t first = 0;
+            while (first < argvec_len && argvec[first]) first++;
+            if (first + 1 < argvec_len) arg = argvec + first + 1;
+        }
+        if (arg) k_snprintf(line, sizeof line, "%s %s", path, arg);
+        else     k_strlcpy(line, path, sizeof line);
+        remote_log_record(QUERY_REMOTE_SPAWN, rip, slot + 1,
+                          procs[slot].name, line);
+    }
+
     procs[slot].state      = SCHED_READY;
     alive_count++;
     return slot;
@@ -2161,6 +2186,11 @@ void scheduler_on_exit(int code) {
     procs[leader].state = SCHED_ZOMBIE;
     procs[leader].exit_code = code;
 
+    // A REMOTE SESSION ENDS WHEN ITS LEADER DOES, whether it said
+    // goodbye or the link dropped -- a no-op for every other process,
+    // and what stops the tray indicator outliving the connection.
+    remote_log_session_closed(leader + 1);
+
     // Tell the window server to drop anything this client still owned.
     // Here rather than at reap: a zombie's windows must come off the
     // screen the moment it dies, not whenever someone gets round to
@@ -2923,6 +2953,19 @@ void scheduler_make_session_leader(int pid) {
     if (!p) return;
     p->sid  = pid;
     p->pgid = pid;
+
+    // **A SESSION IS REMOTE WHEN THE PROCESS THAT CREATED IT WAS READING
+    // A SOCKET**, and this is the one place a session is born -- so the
+    // fact is derived here rather than declared by anybody. telnetd is
+    // handed its connection on fd 0 and then spawns a shell with
+    // SPAWN_SETSID; a GUI Terminal does the same spawn with a pty in
+    // front of it and is not remote. Nothing in ring 3 is trusted to
+    // say, and the peer travels with the session so every later record
+    // carries it (kernel/include/kernel/remote_log.h).
+    if (p->ppid > 0) {
+        uint32_t ip = fd_peer_ip(scheduler_pid_pml4(p->ppid));
+        if (ip) remote_log_session_opened(pid, ip);
+    }
 }
 
 int scheduler_setpgid(int pid, int pgid) {
@@ -3269,6 +3312,8 @@ int scheduler_kill(int pid, int exit_code) {
     procs[slot].state = SCHED_ZOMBIE;
     procs[slot].exit_code = exit_code;
     alive_count--;
+
+    remote_log_session_closed(slot + 1);   // killed counts as ended
 
     // Exactly the teardown scheduler_on_exit() does, and for the same
     // reasons -- see its comments. A killed client's windows must come

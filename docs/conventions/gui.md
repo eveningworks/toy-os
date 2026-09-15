@@ -2499,6 +2499,25 @@ real scanout hardware does. Do not write a pixel assertion for one.
   **STATE IS CARRIED BY SHAPE, NEVER COLOUR** -- a tray icon is blitted
   TINTED to the panel's ink, so a red "disconnected" does not exist;
   there is one icon file per state.
+- **THE TRAY SAYS WHEN SOMEBODY IS ON THIS MACHINE OVER THE NETWORK, AND
+  THE KERNEL DERIVES THAT -- `userland/wm/remote_popup.c`.**
+  `desktop.tray_remote` = `auto` | `always` | `never`, where `auto` means
+  "while a remote session is open": krfb's shape, and the reason the item
+  exists at all is that the owner must never have to guess whether
+  somebody else is acting on their machine. The flyout lists the last ten
+  records from `QUERY_REMOTELOG` and can neither start nor stop a
+  session.
+
+  **A SESSION IS REMOTE WHEN THE PROCESS THAT CREATED IT WAS SERVING A
+  CONNECTION**, asked at `scheduler_make_session_leader()` -- the one
+  place a session is born -- and asked of EVERY descriptor, not fd 0:
+  telnetd dup2s a pty onto 0/1/2 around the spawn and keeps its socket
+  elsewhere. The peer travels with the session, so a command, a spawn
+  and a transfer all carry the address without anybody passing it down.
+  **`SYS_REMOTE_LOG` is for the two things the kernel cannot see** -- the
+  command line as typed (a builtin spawns nothing) and which file a
+  transfer moved -- and the kernel decides whether to keep the record,
+  stamping the SESSION's peer rather than the caller's claim.
 - **THE TRAY HAS A BRIGHTNESS FLYOUT, HIDDEN BY DEFAULT WHERE THERE IS
   NO BACKLIGHT -- `userland/wm/brightness_popup.c`.** A sun icon left
   of the speaker opens one slider; the wheel over the icon steps it by

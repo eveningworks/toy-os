@@ -40,8 +40,9 @@
 // KEEP HEADROOM ABOVE THE REGISTERED COUNT. query_test.c registers a
 // FIXTURE provider at runtime, so a table that is merely full at boot
 // fails three tests with "registry full" rather than anything naming
-// the cap -- which is how the 32 was found, by filling it.
-#define QUERY_MAX 48
+// the cap -- which is how the 32 was found, by filling it. The 48 was
+// found the same way: QUERY_REMOTELOG made exactly 48 providers.
+#define QUERY_MAX 64
 
 // The largest record any class may declare. It bounds the one stack
 // buffer that reads a record in order to pull a named field out of it,

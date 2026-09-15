@@ -38,12 +38,15 @@ ON DEMAND, not in gui_regress: it boots its own guest, enables services
 that ship disabled, and takes about a minute.
 """
 import os
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import port_guard                      # noqa: E402 -- the serial socket's path
 import remote as rmod                  # noqa: E402 -- WANT_BLKSIZE/WANT_WINDOW
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -53,6 +56,11 @@ REMOTE = os.path.join(HERE, "remote.py")
 
 TELNET_PORT = 2323
 TFTP_PORT = 6969
+
+# vm() passes no --instance, so the guest is slot 0 and its debug console
+# is that slot's serial socket. Named here rather than spelled, because
+# port_guard owns the mapping from a slot to its two endpoints.
+INSTANCE = 0
 
 
 class Result:
@@ -242,6 +250,64 @@ def main():
         else:
             r.check("a binary pushed over tftp runs on the guest", False,
                     "seed/sync/bin/hello missing -- run `make iso` first")
+        # 6. THE MACHINE'S OWNER CAN SEE WHO IS ON IT. The tray's
+        #    remote-activity item is the only thing that reports a
+        #    session while it is happening, and the indicator is the
+        #    point: a session that is open with the item hidden is the
+        #    failure this feature exists to prevent (krfb's shape --
+        #    see userland/wm/remote_popup.h).
+        #
+        #    The socket is held OPEN across the checks deliberately. A
+        #    remote.py `exec` opens and closes in one breath, so asking
+        #    afterwards can only ever see a session that has ended --
+        #    which is exactly the reading that would pass whether or not
+        #    the indicator works.
+        from gui_debug import DebugConsole   # noqa: E402
+
+        dbg = DebugConsole(port_guard.instance_sock(INSTANCE))
+        try:
+            before = dbg.json("gui remote --json")
+            r.check("the tray item is hidden with nobody connected",
+                    before and before.get("tray_hidden") is True
+                    and before.get("sessions") == 0, repr(before)[:200])
+
+            held = socket.create_connection(("127.0.0.1", TELNET_PORT), timeout=10)
+            try:
+                held.sendall(b"uptime\r\n")
+                time.sleep(2.5)          # the tray polls once a second
+                held.recv(4096)
+                during = dbg.json("gui remote --json")
+                r.check("a live session raises the tray indicator",
+                        during and during.get("tray_hidden") is False
+                        and during.get("sessions") >= 1, repr(during)[:200])
+                r.check("it names the peer it came from",
+                        during and during.get("peer", "").startswith("10.0.2."),
+                        repr(during.get("peer") if during else None))
+                rows = (during or {}).get("rows", [])
+                r.check("the command that was typed is listed",
+                        any(row.startswith("$ uptime") for row in rows),
+                        repr(rows)[:300])
+                r.check("and the program it started, with its path",
+                        any("/bin/uptime" in row for row in rows),
+                        repr(rows)[:300])
+            finally:
+                held.close()
+
+            # A TRANSFER, HERE, because the flyout lists the last ten
+            # records: the puts above are long gone behind the commands
+            # these checks themselves ran, and asserting against a
+            # window that has scrolled past them tests nothing.
+            remote("put", os.path.join(REPO, "VERSION"), "/tmp/ver.txt")
+            time.sleep(2.5)
+            after = dbg.json("gui remote --json")
+            r.check("the indicator goes away when the session ends",
+                    after and after.get("sessions") == 0
+                    and after.get("tray_hidden") is True, repr(after)[:200])
+            r.check("a transfer is listed too",
+                    any("file put" in row for row in (after or {}).get("rows", [])),
+                    repr((after or {}).get("rows"))[:300])
+        finally:
+            dbg.close()
     finally:
         vm("stop")
 

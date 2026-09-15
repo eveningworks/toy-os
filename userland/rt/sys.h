@@ -529,6 +529,7 @@ int sys_getpgid(int pid);
 // abi/syscall_abi.h's SYS_SETSID for what sessions are for here.
 int sys_setsid(void);
 int sys_getsid(int pid);
+int sys_remote_log(int kind, unsigned ip, const char *text);
 
 // --- signals: dispositions and handlers -------------------------------
 

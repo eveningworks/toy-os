@@ -41,6 +41,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include "rt/sys.h"
+#include "query_abi.h"   // QUERY_REMOTE_XFER
 #include "net_abi.h"
 #include "lib/cmd.h"
 #include <stdio.h>
@@ -54,6 +55,19 @@
 // startup reached nothing at all, which is a poor way to find out that a
 // bind failed. fd 2 is the kernel log (inetd.c says so), so this lands
 // in `dmesg` where a daemon's log belongs.
+
+// One line per completed transfer, for the tray's remote-activity view.
+// Separate from logf() above: that is diagnostics in the kernel log,
+// this is a record about a REMOTE party and belongs where the indicator
+// can find it.
+static void remote_note(uint32_t ip, const char *verb, const char *path,
+                        uint64_t bytes) {
+    char line[120];
+    snprintf(line, sizeof line, "%s %s (%llu bytes)", verb, path,
+             (unsigned long long)bytes);
+    sys_remote_log(QUERY_REMOTE_XFER, ip, line);
+}
+
 static void logf(const char *fmt, ...) {
     va_list ap;
     char buf[192];
@@ -403,6 +417,11 @@ static void do_write(uint32_t ip, uint16_t port, const char *path,
     if (had_old) remove(aside);
     logf("tftpd: wrote %s, %llu bytes (blksize %u, window %u)\n", path,
          (unsigned long long)total, g_blksize, g_window);
+    // THE OTHER HALF OF WHAT A FLASH DOES, for the tray's remote view.
+    // The peer is passed EXPLICITLY because tftpd is a service rather
+    // than a session -- naming the connection it is serving is what
+    // makes the kernel keep the record (abi/syscall_abi.h).
+    remote_note(ip, "put", path, total);
 }
 
 // --- RRQ: the client reads a file from us ------------------------------
@@ -497,6 +516,7 @@ static void do_read(uint32_t ip, uint16_t port, const char *path,
     close_tid(tid);
     logf("tftpd: sent %s, %llu bytes (blksize %u, window %u)\n", path,
          (unsigned long long)total, g_blksize, g_window);
+    remote_note(ip, "get", path, total);
 }
 
 // --- the request port --------------------------------------------------

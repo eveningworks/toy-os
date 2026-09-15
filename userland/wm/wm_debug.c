@@ -10,6 +10,7 @@
 #include "volume_popup.h"
 #include "brightness_popup.h"
 #include "network_popup.h"
+#include "remote_popup.h"
 #include "wm_overlay.h"
 #include "osk.h"
 #include "wm_debug.h"
@@ -1301,6 +1302,41 @@ static void cmd_network(struct dbg_out *o, int json) {
                  g.x, g.y, g.w, g.h, g.tray_x, g.tray_y, g.tray_w, g.tray_h);
 }
 
+static void cmd_remote(struct dbg_out *o, int json) {
+    struct remote_geom g;
+    remote_geometry(&g);
+    char peer[20];
+    remote_peer(peer, sizeof peer);
+    int rows = remote_row_count();
+
+    if (json) {
+        dbg_out_printf(o, "{\"open\":%s,\"tray_hidden\":%s,\"sessions\":%d,",
+                     remote_open ? "true" : "false",
+                     remote_tray_hidden() ? "true" : "false",
+                     remote_session_count());
+        dbg_out_printf(o, "\"peer\":\"%s\",\"rows\":[", peer);
+        for (int i = 0; i < rows; i++) {
+            char buf[160];
+            remote_row_text(i, buf, sizeof buf);
+            dbg_out_printf(o, "%s\"%s\"", i ? "," : "", buf);
+        }
+        dbg_out_printf(o, "],\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,", g.x, g.y, g.w, g.h);
+        dbg_out_printf(o, "\"tray\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"cx\":%d,\"cy\":%d}}\r\n",
+                     g.tray_x, g.tray_y, g.tray_w, g.tray_h,
+                     g.tray_x + g.tray_w / 2, g.tray_y + g.tray_h / 2);
+        return;
+    }
+    dbg_out_printf(o, "remote: %s  %s  %d session(s) from %s\r\n",
+                 remote_open ? "open" : "closed",
+                 remote_tray_hidden() ? "tray hidden" : "tray shown",
+                 remote_session_count(), peer);
+    for (int i = 0; i < rows; i++) {
+        char buf[160];
+        remote_row_text(i, buf, sizeof buf);
+        dbg_out_printf(o, "  %s\r\n", buf);
+    }
+}
+
 static void usage(struct dbg_out *o) {
     dbg_out_write(o, "gui subcommands (all of these work while the desktop is up):\r\n");
     dbg_out_write(o, "  windows [--json]      open windows: rects, content rects, z-order, focus\r\n");
@@ -1333,6 +1369,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  watchdog [<ms>|off]   slow-frame threshold, and how often it fired\r\n");
     dbg_out_write(o, "  latency [reset] [--json]  frame work, wake overshoot and ping, as distributions\r\n");
     dbg_out_write(o, "  network [--json]      the tray's network item: state, address, panel rect\r\n");
+    dbg_out_write(o, "  remote [--json]       the tray's remote-activity item: sessions and what they did\r\n");
     dbg_out_write(o, "  pingtimeout [<ticks>] not-responding timeout (a TEST lever)\r\n");
     dbg_out_write(o, "  pinginterval [<ticks>] how often every client is asked (a TEST lever)\r\n");
     dbg_out_write(o, "Injected input enters at the WM loop, below the PS/2 driver -- it tests\r\n");
@@ -1503,6 +1540,11 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
 
     if (k_strcmp(sub, "network") == 0) {
         cmd_network(o, wants_json(p));
+        return 1;
+    }
+
+    if (k_strcmp(sub, "remote") == 0) {
+        cmd_remote(o, wants_json(p));
         return 1;
     }
 

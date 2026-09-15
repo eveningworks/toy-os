@@ -17,7 +17,11 @@
 #include "kapi.h"
 #include "tray_config.h"  // TRAY_SHOW_*
 
-#define TRAY_MAX_ITEMS 6
+// Eight: the clock, the on-screen keyboard, volume, brightness, the
+// network and the remote-activity indicator, with room for the next
+// one. A hidden item KEEPS its slot (see below), so this is the
+// number of items that exist, not the number on screen.
+#define TRAY_MAX_ITEMS 8
 
 struct tray_item {
     int active;

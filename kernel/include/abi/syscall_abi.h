@@ -2093,6 +2093,25 @@ struct sys_stat {
 // SYS_GETSID -- RDI = pid (0 = the caller). Returns that process's
 // session id, or -ESRCH.
 #define SYS_GETSID 116
+
+// SYS_REMOTE_LOG -- RDI = kind (QUERY_REMOTE_*), RSI = peer IP in host
+// byte order (0 = "the one my session came from"), RDX = a NUL-
+// terminated line. Returns 0.
+//
+// **WHAT A REMOTE SESSION DID, FROM THE TWO PLACES THE KERNEL CANNOT
+// SEE IT**: the command line as TYPED (the kernel sees `/bin/ls` being
+// spawned, never `cd` or a `config set`, which spawn nothing) and a
+// file transfer (tftpd knows the path, the byte count and the peer;
+// it is a service, not a session).
+//
+// **THE KERNEL DECIDES WHETHER TO KEEP IT, so a local program cannot
+// forge one.** A record is kept when the caller's session is remote --
+// and then the SESSION's peer is stamped on it, never the caller's
+// claim -- or when the caller names a peer itself, which is a service
+// reporting a connection it is serving. Anything else is dropped and 0
+// is still returned: a shell must not behave differently because
+// somebody is watching.
+#define SYS_REMOTE_LOG 117
                            // (abi/diag_abi.h). Asks a NAMED ring-3
                            // service a question, or -- from the service
                            // side -- claims that name and answers.

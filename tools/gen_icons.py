@@ -415,6 +415,22 @@ def icon_tray_brightness():
     return im
 
 
+# The tray's remote-activity item: a monitor with a link leaving it, one
+# state. It is shown ONLY while somebody is connected, so "nobody is on
+# this machine" is said by the item's ABSENCE rather than by a second
+# glyph -- which is how krfb and every screen-share indicator behave.
+def icon_tray_remote():
+    im, d = _tb()
+    d.rectangle([12, 14, 52, 40], outline=TB_INK, width=5)
+    d.rectangle([26, 44, 38, 50], fill=TB_INK)
+    d.line([(18, 54), (46, 54)], fill=TB_INK, width=5)
+    # The link: two arcs leaving the top-right corner, the universal
+    # "something is reaching this" mark.
+    d.arc([36, -2, 62, 24], start=180, end=270, fill=TB_INK, width=4)
+    d.arc([42, 4, 56, 18], start=180, end=270, fill=TB_INK, width=4)
+    return im
+
+
 # The tray's on-screen-keyboard item: a key grid, one state. It toggles
 # a panel rather than opening a flyout, so unlike the volume speaker
 # there is no level for it to show.
@@ -816,6 +832,7 @@ ICONS = {
     "tray-network": icon_tray_network,
     "tray-network-limited": icon_tray_network_limited,
     "tray-network-off": icon_tray_network_off,
+    "tray-remote": icon_tray_remote,
 }
 
 # Crash Test deliberately gets NO icon file. It is the one entry that

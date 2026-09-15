@@ -222,6 +222,29 @@ struct open_file *fd_get(uint64_t pml4, int fd) {
     return di < 0 ? NULL : &fd_desc[di];
 }
 
+// THE PEER THIS PROCESS IS TALKING TO, or 0 if it holds no connected
+// socket at all. How the kernel knows a session arrived over the network
+// without being told: telnetd is handed its connection by inetd and then
+// makes a session for the shell it spawns, so asking the PARENT answers
+// it (kernel/include/kernel/remote_log.h).
+//
+// **EVERY DESCRIPTOR, NOT fd 0.** The obvious version asked fd 0 and
+// found a PTY: telnetd dup2s the pty onto 0/1/2 around the spawn so the
+// child inherits them, and its socket is on a descriptor it kept. The
+// question worth asking is not "what is this process reading" but "is
+// it serving a connection".
+uint32_t fd_peer_ip(uint64_t pml4) {
+    for (int fd = 0; fd < FD_MAX; fd++) {
+        struct open_file *f = fd_get(pml4, fd);
+        if (!f || f->kind != FD_KIND_SOCKET) continue;
+        uint32_t ip = 0;
+        uint16_t port = 0;
+        net_sock_peer(f->socket.idx, &ip, &port);
+        if (ip) return ip;
+    }
+    return 0;
+}
+
 int fd_close(uint64_t pml4, int fd) {
     struct fd_space *sp = space_get(pml4);
     if (!sp || fd < 0 || fd >= FD_MAX) return -1;

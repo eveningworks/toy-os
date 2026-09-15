@@ -35,6 +35,7 @@
 #include "volume_popup.h"
 #include "brightness_popup.h"
 #include "network_popup.h"
+#include "remote_popup.h"
 #include "wm_overlay.h"
 #include "osk.h"
 #include "confirm_dialog.h"
@@ -929,6 +930,7 @@ void wm_run(void) {
     volume_tray_init();   // the tray's second item, after the clock takes slot 0
     brightness_tray_init();
     network_tray_init();  // furthest right of the non-clock items
+    remote_tray_init();   // hidden unless somebody is connected
 
     // Announced once per run of this loop. Reset here rather than
     // declared static-and-forgotten, because `gui` can re-enter it:
@@ -1248,6 +1250,7 @@ void wm_run(void) {
             last_second = this_second;
             tray_update_clock(); // also sets redraw_pending + damages the taskbar strip
             volume_tray_update(); // the speaker icon follows the level
+            remote_poll();        // who is on this machine, and what they did
             // A CADENCE, not a generation compare, and network_popup.c
             // says why: there is no netdev generation in the ABI, and
             // the read is a memcpy out of a kernel table with no I/O.

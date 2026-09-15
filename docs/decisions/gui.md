@@ -7833,3 +7833,55 @@ snapping to a row. The three numbers come from one function (`sb_units`)
 for the reason the bar's own geometry is shared: three callers deriving
 the same three values separately is how they come to disagree.
 
+## The tray says when somebody else is on this machine, and remoteness is derived
+
+A machine reachable over the network gives its owner no way to see that
+somebody is acting on it. KDE's krfb raises a tray indicator for as long
+as a remote party is connected, every Wayland screen-share portal does
+the same, and Windows shows a session notification -- because the one
+thing the owner must never have to guess is whether they are alone on
+their own machine. `desktop.tray_remote` = `auto` therefore means "while
+a session is open", which is this item's version of the tray's
+ask-the-hardware rule.
+
+**REMOTENESS IS DERIVED, NOT DECLARED.** A session is remote when the
+process that CREATED it was serving a connection --
+`scheduler_make_session_leader()` is the one place a session is born, and
+it asks whether the parent holds a connected socket. telnetd is handed
+its connection by inetd and then spawns a shell with `SPAWN_SETSID`; a
+GUI Terminal makes the same spawn holding no socket and is not remote.
+Nothing in ring 3 is trusted to say so, and the peer travels with the
+session, so every later record carries the address without anybody
+passing it down.
+
+The obvious version of that check asked fd 0 and found a PTY: telnetd
+dup2s the pty onto 0/1/2 around the spawn so the child inherits them,
+and keeps its socket on a descriptor of its own. The question worth
+asking is not "what is this process reading" but "is it serving a
+connection", which is every descriptor.
+
+**A SEPARATE RING, NOT THE KLOG.** The kernel log is 16 KiB shared with
+the kernel's own output, and a flash writes hundreds of transfer lines:
+the evidence would destroy the evidence beside it, which is the failure
+CLAUDE.md already records as a probe outrunning its log. `QUERY_REMOTELOG`
+is its own 128-record ring, numbered like `QUERY_CONNLOG` so a reader
+knows both what is new and how many it missed.
+
+**TWO OF THE FOUR SOURCES ARE RING 3's, AND THAT IS WHY THERE IS A
+SYSCALL.** The kernel sees sessions opening and closing and every program
+a remote session spawns (`spawn_from_fs()` is the one funnel, which is
+auditd's execve shape). What it cannot see is the command LINE -- `cd` and
+`config set` spawn nothing at all -- and which file a transfer moved,
+which only tftpd knows. `SYS_REMOTE_LOG` is that door, and **the kernel
+decides whether to keep the record**: it is kept when the caller's
+session is remote, with the SESSION's peer stamped on it rather than the
+caller's claim, or when the caller names a peer it is serving (a
+service, like tftpd). Anything else is dropped -- and still returns 0,
+because a shell must not behave differently for being watched.
+
+The alternatives were checked rather than assumed. `applog` is the right
+shape (tagged by the kernel, follow-able by `seq`) but a process can only
+get a log descriptor through `SPAWN_FD_LOG` on **stdout at spawn time**,
+and both of these have their stdout bound elsewhere -- a pty and a
+socket. `SYS_DIAG` is a relay to a ring-3 provider with one in-flight
+slot, not a sink.

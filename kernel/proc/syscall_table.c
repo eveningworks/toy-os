@@ -119,6 +119,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_SETPGID]       = { "setpgid",       sys_setpgid,       { A_INT, A_INT } },
     [SYS_SETSID]        = { "setsid",        sys_setsid,        { A_END } },
     [SYS_GETSID]        = { "getsid",        sys_getsid,        { A_INT } },
+    [SYS_REMOTE_LOG]    = { "remote_log",    sys_remote_log,    { A_INT, A_HEX, A_PATH } },
     [SYS_GETPGID]       = { "getpgid",       sys_getpgid,       { A_INT } },
     // The signal traces as a plain number: a name would want a third
     // argument formatter for a dozen values, and `sigaction(2, 0x...)`

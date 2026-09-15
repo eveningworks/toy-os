@@ -485,6 +485,39 @@ struct query_fsstat {
 // how late, while this says WHAT.
 #define QUERY_SYSCALL_STALL 41
 
+// WHAT A REMOTE SESSION DID: one record per command, transfer, spawn or
+// session on a connection that arrived over the network. LIST.
+//
+// It exists so the machine's OWNER can see what somebody else is doing
+// to it -- KDE's krfb puts a tray indicator up while a remote party is
+// connected, and every Wayland screen-share portal does the same. This
+// is that indicator's data.
+//
+// A SEPARATE RING RATHER THAN THE KLOG, because a flash writes hundreds
+// of transfer lines and the klog is 16 KiB shared with the kernel's own
+// output: the evidence would destroy the evidence beside it. Numbered
+// like QUERY_CONNLOG so a reader that saw `seq` knows what is new AND
+// how many it missed.
+#define QUERY_REMOTELOG 42
+
+#define QUERY_REMOTE_SESSION  0 // a session opened or closed
+#define QUERY_REMOTE_COMMAND  1 // a command line the remote shell ran
+#define QUERY_REMOTE_SPAWN    2 // a program a remote session started
+#define QUERY_REMOTE_XFER     3 // a file read or written over the network
+
+#define QUERY_REMOTELOG_TEXT_MAX 120
+
+struct query_remotelog {
+    uint64_t seq;
+    uint64_t utc;           // seconds since 1970-01-01 UTC
+    uint64_t monotonic_ns;  // the same instant, since boot
+    uint64_t kind;          // QUERY_REMOTE_*
+    uint64_t remote_ip;     // host byte order; the peer this is about
+    uint64_t pid;           // who did it
+    char     comm[24];      // that process's name (PROC_NAME_MAX)
+    char     text[QUERY_REMOTELOG_TEXT_MAX];
+};
+
 #define QUERY_SYSCALL_STALL_NAME 24
 
 // Buckets match the compositor's (userland/wm/wm_internal.h, WMWD_BUCKETS)

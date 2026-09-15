@@ -866,6 +866,7 @@ whenever a headline here tells you something you did not already know.
 - **THE TRAY HAS A VOLUME FLYOUT, AND THE PANEL OWNS IT TOO**
 - **A TRAY ITEM'S VISIBILITY IS A SETTING, `desktop.tray_<item>` = `auto` | `always` | `never`, AND `auto` ASKS THE HARDWARE** -- hiding KEEPS THE SLOT, resolve it on the settings generation not per frame, and a GUI tool driving a hardware-gated item must pin it to `always` and put it back
 - **THE TRAY HAS A NETWORK ITEM, IT READS `QUERY_NETDEV`, AND IT WRITES NOTHING** -- `link_known` is THREE-valued so "connected" follows the ADDRESS; DHCP state is not readable; the device polls on a cadence and the visibility on the settings generation; state is carried by SHAPE, never colour
+- **THE TRAY SAYS WHEN SOMEBODY IS ON THIS MACHINE OVER THE NETWORK, AND THE KERNEL DERIVES THAT** -- `desktop.tray_remote`, `auto` = while a session is open (krfb's shape); a session is remote when the process that CREATED it was serving a connection (asked of every descriptor, not fd 0), and `SYS_REMOTE_LOG` carries only what the kernel cannot see itself -- the typed command line and which file a transfer moved
 - **THE TRAY HAS A BRIGHTNESS FLYOUT, HIDDEN BY DEFAULT WHERE THERE IS NO BACKLIGHT**
 - **BOTH TRAY FLYOUTS ARE ONE FILE: `userland/wm/tray_slider_popup.c`**
 - **A MODE SMALLER THAN THE PANEL IS PLACED BY `system.scaling`, A SETTING ON EVERY MACHINE, AND THE FITTER'S SIZE REGISTER IS THE ARMING WRITE -- AND ITS WINDOW MUST EQUAL THE PIPE ACTIVE AREA, `panel = 2 * position + size`, OR THE SCREEN SKEWS**
