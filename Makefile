@@ -1,3 +1,41 @@
+# THE BUILD'S OWN CONFIGURATION IS READ BEFORE ANYTHING ELSE IN THIS
+# FILE. See the block below for why the position is load-bearing.
+#
+# .DEFAULT_GOAL is set because the first TARGET in a makefile is what a
+# bare `make` builds, and the conf.mk rule below is a target -- without
+# this line, `make` would build the config fragment and stop.
+.DEFAULT_GOAL := all
+
+BUILD = build
+
+# --- drivers.conf's OPTIONS half, and it must be read FIRST -----------
+#
+# Every setting it carries is a `?=` default further down this file
+# (KCMDLINE, GRUB_TIMEOUT, STRIP, COMPRESS), and `?=` takes the FIRST
+# value it sees -- so an include placed after them silently does
+# nothing. That is exactly what happened the first time, and the symptom
+# was a `grub_timeout = 5` in the file producing `set timeout=0` in the
+# built config, with no error anywhere.
+#
+# Through a GENERATED FILE rather than a $(shell), because $(shell)
+# collapses newlines to spaces and `KCMDLINE ?= video=1920x1080 nokaslr`
+# would arrive as two assignments. make remakes an included file and
+# re-execs itself, which is the mechanism this relies on -- and unlike
+# the .d files it has a REAL RULE, so it never falls through to the
+# built-in one that caused the trap documented further down.
+#
+# The assignments are `?=`, so a command-line variable still wins: the
+# file is this checkout's default and `make STRIP=0` is one build.
+DRIVERS_CONF ?= drivers.conf
+
+$(BUILD)/conf.mk: $(DRIVERS_CONF) tools/drivers_conf.py
+	@mkdir -p $(dir $@)
+	@python3 tools/drivers_conf.py $(DRIVERS_CONF) --options > $@.tmp \
+	    && mv $@.tmp $@ || { rm -f $@.tmp; \
+	        echo "make: $(DRIVERS_CONF): see the message above" >&2; exit 1; }
+
+-include $(BUILD)/conf.mk
+
 # grub-mkrescue is named grub2-mkrescue on Fedora/RHEL and openSUSE.
 # Resolved here rather than documented as a "symlink it yourself" step,
 # so `make iso` just works on those distributions.
@@ -127,7 +165,6 @@ LDFLAGS = -n -T linker.ld -nostdlib
 
 ASMFLAGS = -f elf64
 
-BUILD = build
 KERNEL = $(BUILD)/kernel.bin
 ISO = toy-os.iso
 
@@ -340,7 +377,7 @@ USB_IDS = data/usb.ids
 # modules -- are always modules; they are outside kernel/ because every
 # .c under kernel/ is in the image. Evaluated once (:=): a python call
 # per reference would be paid dozens of times.
-DRIVERS_CONF ?= drivers.conf
+# DRIVERS_CONF is set at the top of this file, with the conf.mk include
 MODULE_DRIVER_SOURCES := $(shell python3 tools/drivers_conf.py $(DRIVERS_CONF) || echo DRIVERS_CONF_ERROR)
 ifneq ($(filter DRIVERS_CONF_ERROR,$(MODULE_DRIVER_SOURCES)),)
 $(error $(DRIVERS_CONF): see the message above)
@@ -1474,7 +1511,7 @@ $(DISK_IMG):
 # holds the registry and the reasoning.
 EXTRAS ?=
 LICENSE ?=
-seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LIBUAPP_SO) $(MODULE_KOS) $(MODULE_ALIAS)
+seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LIBUAPP_SO) $(MODULE_KOS) $(MODULE_ALIAS) $(BUILD)/conf.mk
 	$(if $(EXTRAS),TOYOS_LICENSE=$(LICENSE) python3 tools/fetch_extras.py,@true)
 	mkdir -p $(SEED_DIR)/sync/bin $(SEED_DIR)/sync/tests
 	# The dynamic loader and the shared libraries -- /lib is theirs
@@ -1811,7 +1848,7 @@ $(LIVE_IMG): $(USERLAND_ELVES) seed
 	python3 tools/tfs3_writer.py trim $(LIVE_IMG) \
 	    --at-lba $${V%% *} --sectors $${V##* }
 
-iso: version $(KERNEL) $(USERLAND_ELVES) seed
+iso: version $(KERNEL) $(USERLAND_ELVES) seed $(BUILD)/conf.mk
 	mkdir -p iso/boot/grub
 	rm -f iso/boot/live.img
 	cp $(KERNEL) iso/boot/kernel.bin
@@ -1846,7 +1883,7 @@ LIVE_ISO = toy-os-live.iso
 USB_IMG  = toyos-usb.img
 USB_SIZE = 512M
 
-usb-image: version $(KERNEL) $(USERLAND_ELVES) seed
+usb-image: version $(KERNEL) $(USERLAND_ELVES) seed $(BUILD)/conf.mk
 	rm -f $(USB_IMG)
 	truncate -s $(USB_SIZE) $(USB_IMG)
 	python3 tools/seed_disk.py $(USB_IMG) $(SEED_DIR)
@@ -1861,7 +1898,7 @@ usb-image: version $(KERNEL) $(USERLAND_ELVES) seed
 	@echo "  /dev/sdX is the WHOLE DEVICE, not a partition (no digit)."
 	@echo ""
 
-live-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG) $(BUILD)/.compress-flag
+live-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG) $(BUILD)/.compress-flag $(BUILD)/conf.mk
 	rm -rf iso-live
 	mkdir -p iso-live/boot/grub
 	cp $(KERNEL) iso-live/boot/kernel.bin

@@ -404,6 +404,43 @@ this the obvious way), not from how much history it accumulated.
   **16-aligned before `call main`** -- a `sub rsp, 8` there looks like
   it restores the old convention and instead faults every SSE-using
   binary while leaving plain ones working, see `docs/decisions.md`.
+- **`drivers.conf` IS THE KERNEL CONFIG: WHICH DRIVERS ARE MODULES AND
+  HOW THE BUILD IS TUNED.** `option <name> = <value>` lines sit beside
+  the `<driver> = builtin|module` ones -- FreeBSD's `conf/GENERIC` and
+  Linux's `.config` both keep the two together, because "what is in this
+  kernel" and "how is it built" are one question asked twice.
+
+  **AN UNKNOWN OPTION IS A BUILD FAILURE**, naming the real ones. A
+  misspelt `strp = no` quietly doing nothing is exactly as invisible as
+  a misspelt driver, and worse in consequence: the file is what somebody
+  will believe about the build.
+
+  **THE INCLUDE IS AT THE TOP OF THE MAKEFILE AND THE POSITION IS
+  LOAD-BEARING.** Every setting it carries is a `?=` default further
+  down (`KCMDLINE`, `GRUB_TIMEOUT`, `STRIP`, `COMPRESS`), and `?=` takes
+  the FIRST value it sees -- so an include placed after them silently
+  does nothing. That happened, and the symptom was `grub_timeout = 5`
+  in the file producing `set timeout=0` in the built config with no
+  error anywhere. Two consequences: the block sits above every default
+  it can set, and `.DEFAULT_GOAL := all` is pinned beside it, because
+  the first TARGET in a makefile is what a bare `make` builds and that
+  block carries one.
+
+  **It is a generated file, not a `$(shell)`**: `$(shell)` collapses
+  newlines to spaces, which would split `KCMDLINE ?= video=1920x1080
+  nokaslr` into two assignments. Unlike the `.d` files it has a real
+  rule, so it never reaches the built-in one this file warns about.
+
+  **A COMMAND-LINE VARIABLE STILL WINS.** The emitted assignments are
+  `?=`, and make ranks a command-line variable above any makefile
+  assignment -- so the file is the checkout's default and `make STRIP=0`
+  is one build. **And the media targets depend on it**: `seed`, `iso`,
+  `usb-image` and `live-iso` each list `$(BUILD)/conf.mk`, or a changed
+  option leaves an already-built `grub-disk.cfg` alone and does nothing.
+
+  `option extras = yes` is the one that reaches the NETWORK, and this
+  file is tracked -- committing it makes every clone's build download.
+
 - **`STRIP=0` AND `COMPRESS=0` ARE THE TWO ESCAPE HATCHES, AND BOTH
   NEED A STAMP TO WORK AT ALL.** `make STRIP=0 all` keeps the kernel's
   debug information in `build/kernel.bin`; `make COMPRESS=0 live-iso`
