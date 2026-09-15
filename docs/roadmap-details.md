@@ -5078,12 +5078,46 @@ than having been lost. This entry already records the gate costing ~35%
 on the kernel suite (42.9s against 31.7s), which is a different order
 from 2.4x, so what varies run to run is the open question.
 
-**The instrument for that is `tools/latency_under_io.py`**, which is
-this milestone's own yardstick and measures both ends -- the
-compositor's `wake`/`ping` distributions as the effect and the kernel's
-TSC-timed `stalls` table as the cause. It has NOT been run at `0xEF`,
-and it wants `--kvm --cpu host,+invtsc`, since under TCG the effect half
-quantises to the PIT's 10 ms and only its tail is evidence.
+**AND IT WAS RUN, AND THE FLIP MAKES THIS MILESTONE'S OWN METRIC
+20x WORSE.** `tools/latency_under_io.py` under KVM with
+`--cpu host,+invtsc`, two runs per gate on one host, LOADED column:
+
+| microseconds, loaded | `0xEE` | `0xEE` | `0xEF` | `0xEF` |
+|---|---|---|---|---|
+| compositor `wake` avg | 13492 | 14491 | **292739** | **408680** |
+| compositor `wake` max | 22345 | 27986 | **1435545** | **1240428** |
+| `ping` avg | 19218 | 19933 | 126896 | **1027984** |
+| frames in the window | 39 | 39 | **8** | **6** |
+
+The `0xEE` column reproduces the baseline recorded at the end of this
+entry (`write` 19556 us max against 19654, `unlink` 16358 against
+16365), so the instrument agrees with itself across sessions. The
+compositor's wake latency goes from ~14 ms to **0.3-0.4 s average with a
+1.2-1.4 s worst case**, and it gets a FIFTH of the frames. The syscall
+stall table barely moves (`write` 36766 us max against 19556), so the
+extra latency is not one handler getting slower -- it is the compositor
+not being RUN.
+
+**THIS EXPLAINS THE `files` FAILURES COMPLETELY**, and retires the
+"lost input" and "why does a drag never start" framings above: a tool
+whose waits are sized for a 14 ms wake fails them when the wake is 400
+ms, the run takes 2.4x as long, and a drag that has not happened yet
+reports exactly as `drag=None`.
+
+**THE ENTRY PREDICTED THE DIRECTION AND UNDERSTATED THE SIZE.** It
+already said the flip "does not let the compositor be SCHEDULED any
+sooner: `FS_OP()` still holds preemption off for a whole backend call".
+Measured, it is not neutral but strongly negative. The mechanism is NOT
+established; the shape consistent with the numbers is that a syscall
+holding the preemption guard now also takes interrupts, so it occupies
+the CPU for longer in wall-clock while still preventing any switch --
+but that is a hypothesis, not a measurement.
+
+**SO THE DEPENDENCY IN `docs/roadmap.md` POINTS THE WRONG WAY.** It
+says the sleeping lock "Needs: interruptible syscalls". On this
+evidence the gate cannot ship before something lets a process yield
+inside an `FS_OP` -- the trap gate alone is a regression a user would
+feel, not an improvement waiting on polish.
 
 **So the flip is NOT clear, and the next question is why a drag never
 starts under the trap gate** -- `docs/bugs.md` already records injected
