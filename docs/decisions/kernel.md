@@ -4295,6 +4295,34 @@ lock is a consequence of that, not an alternative to it. The guard stays
 until then. Recorded because the lock is an obvious-looking change that
 survives every argument except reading the gate type.
 
+**MEASURED 2026-09-15, AND THE ORDERING NEEDS A THIRD LINK.** The trap
+gate was flipped and `tools/latency_under_io.py` run under KVM, two runs
+a gate: the compositor's loaded `wake` goes from ~14 ms average to
+**0.3-0.4 s, with a 1.2-1.4 s worst case**, and it gets a FIFTH of the
+frames. The syscall stall table barely moves, so it is not a handler
+getting slower -- it is the compositor not being RUN, because `FS_OP()`
+still holds preemption off for the whole backend call. **The gate alone
+is a regression a user would feel, not an improvement awaiting polish.**
+
+So "the gate first, the lock after" is right about the order and wrong
+about it being enough, and the reason is point 2 above rather than
+anything new: **blocking here abandons the kernel stack.**
+`block_common()` takes the ring-3 trapframe, stores it as
+`procs[idx].kernel_rsp`, and resumes with `iretq` back to ring 3 -- so a
+parked caller RE-RUNS its syscall. That is fine at a syscall entry point
+and impossible for a mutex deep inside `tfs3`'s block walk, whose
+position lives on the kernel stack being thrown away.
+
+**The machinery to suspend a kernel stack DOES exist now**, and that is
+what changed since this entry was written: a timer tick preempting a
+syscall under the trap gate saves and restores exactly that
+(`isr_context_outer()`/`_defer()` beside `kernel_rsp`), which is why
+ktest is clean at `0xEF`. What is missing is a VOLUNTARY door to it -- a
+`schedule()` that suspends the current kernel context and resumes it
+mid-call, which is what Linux's `mutex_lock()` reaches. Until that
+exists a sleeping lock cannot be written, and until the lock exists the
+gate costs more than it buys.
+
 ## Boot order is a hand-written list, and a violation of it PANICS
 
 **The defect was never the list.** `kernel_main()` is a sequence of

@@ -24,8 +24,8 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] **Interruptible syscalls** -- a trap gate plus retiring `g_next_kernel_rsp` as a single global  *(Scheduler: blocking, priorities, classes)*
-- [ ] Replace the preemption guard with a real sleeping lock -- **Needs:** interruptible syscalls, above  *(Scheduler: blocking, priorities, classes)*
+- [ ] A `schedule()` that suspends the KERNEL stack, so a caller can block mid-call  *(Scheduler: blocking, priorities, classes)*
+- [ ] Replace the preemption guard with a real sleeping lock -- **Needs:** the kernel-stack `schedule()` above  *(Scheduler: blocking, priorities, classes)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
@@ -67,8 +67,9 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] Retire `uapp_desc.tick_ms` as a REQUIREMENT
 - [ ] Two scheduling classes, Linux-shaped
 - [x] ~~Measure desktop latency under heavy disk I/O, the yardstick for the three items below~~ DONE 2026-09-12
-- [ ] **NEXT** **Interruptible syscalls** -- a trap gate plus retiring `g_next_kernel_rsp` as a single global
-- [ ] **NEXT** Replace the preemption guard with a real sleeping lock -- **Needs:** interruptible syscalls, above
+- [ ] **NEXT** A `schedule()` that suspends the KERNEL stack, so a caller can block mid-call
+- [ ] **NEXT** Replace the preemption guard with a real sleeping lock -- **Needs:** the kernel-stack `schedule()` above
+- [ ] **Interruptible syscalls** -- the trap gate; MEASURED as a 20x latency regression until the lock above lands
 - [ ] Bound how long a frame can block on I/O
 
 ### Signals & process control

@@ -5113,11 +5113,32 @@ holding the preemption guard now also takes interrupts, so it occupies
 the CPU for longer in wall-clock while still preventing any switch --
 but that is a hypothesis, not a measurement.
 
-**SO THE DEPENDENCY IN `docs/roadmap.md` POINTS THE WRONG WAY.** It
-says the sleeping lock "Needs: interruptible syscalls". On this
-evidence the gate cannot ship before something lets a process yield
-inside an `FS_OP` -- the trap gate alone is a regression a user would
-feel, not an improvement waiting on polish.
+**SO THE CHAIN IS THREE LINKS, NOT TWO, AND `docs/roadmap.md` NOW SAYS
+SO.** The first reading of this measurement was that the dependency
+simply inverted -- build the lock first. That is wrong for the reason
+`docs/decisions.md`'s `FS_OP()` entry already gives: at `0xEE` a ring-3
+syscall is atomic because IF is 0, so a lock changes nothing on the
+syscall path, and **a lock cannot be written at all yet**.
+`block_common()` parks a caller by saving its RING-3 TRAPFRAME
+(`procs[idx].kernel_rsp = regs`) and resuming with `iretq`, so a blocked
+syscall RE-RUNS -- fine at an entry point, impossible for a mutex deep
+inside `tfs3`'s block walk, whose position is on the kernel stack that
+gets abandoned.
+
+What changed since that entry was written is that **suspending a kernel
+stack now works** -- a tick preempting a syscall under the trap gate
+saves and restores exactly that, which is why ktest is clean at `0xEF`.
+It has no VOLUNTARY door. So:
+
+    a schedule() that suspends the kernel stack   <- missing
+      -> a sleeping lock replacing FS_OP          <- needs it
+        -> the trap gate pays off                 <- 20x regression
+                                                     without both
+
+The trap-gate item keeps its place at the END of that chain rather than
+being abandoned: everything the campaign above fixed still holds, and
+the gate is still what lets interrupts be serviced during a syscall. It
+is simply not shippable on its own, which is what today measured.
 
 **So the flip is NOT clear, and the next question is why a drag never
 starts under the trap gate** -- `docs/bugs.md` already records injected
