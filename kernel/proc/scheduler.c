@@ -1975,6 +1975,16 @@ int scheduler_wake(const void *chan, int64_t value) {
 // unlock wants exactly one.
 int scheduler_wake_n(const void *chan, int64_t value, int max) {
     int woken = 0;
+    // **A NULL CHANNEL WAKES NOBODY.** scheduler_wait_chan_pid() answers
+    // NULL for a pid outside the table, and 0 is one -- it is what
+    // notify_parent() is handed for a process whose parent is "the
+    // kernel", which is every program the debug console starts. Without
+    // this the arm loop below then matches every process whose
+    // arm_chan is 0, i.e. everything not currently armed, and stamps
+    // armed_woken on all of them. Measured: 77 such calls in one
+    // usertest run, each reporting 1-2 processes "woken" that nobody
+    // had asked about.
+    if (!chan) return 0;
     // **FIRST, ANYONE WHO HAS ARMED BUT NOT YET PARKED.** Such a process
     // is RUNNING, so the blocked scan below cannot see it and its wake
     // would be dropped -- the lost wakeup that made a preemptible
