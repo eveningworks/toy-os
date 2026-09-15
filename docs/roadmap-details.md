@@ -5033,9 +5033,38 @@ child, `argv_test` in `block(pipe)` with the writer gone), and
 the remaining work is those contract bugs, which are worth fixing at
 `0xEE` regardless -- not something the gate introduces.
 
-**Still NOT measured at `0xEF` on this tree:** the GUI suite, and a full
-`preflight.sh`. The one-in-seven `stack smashing` boot panic above has
-also not been looked for again.
+**AND THEN THE GUI SUITE WAS MEASURED, AND IT NAMES A NEW BLOCKER.**
+`files` ALONE at `0xEF`, on an idle machine, is 1 clean run in 2:
+
+| gate | runs | result |
+|---|---|---|
+| `0xEE` | 3 | 316s each -- 143/0, 142/1, 142/1 (the tree-drop entry below) |
+| `0xEF` | 2 | **695s / 107 passed, 21 failed**, then 285s / 143 passed |
+
+The bad run is not slow-but-correct and it is not the tree-drop flake:
+**21 checks fail in ONE family** -- every drag check reports `drag=None
+drop=None`, i.e. the app saw no drag session at all, plus Ctrl+click,
+the rubber band and the tree-follow checks. A full-suite run at `0xEF`
+reproduced the same shape and hit the 600s hang guard at 612s. So the
+trap gate degrades pointer input in roughly half of this tool's runs,
+which nothing at `0xEE` does.
+
+**This supersedes the "files 142/1, 143/0, 142/1" line recorded for
+`0xEF` earlier in this entry** -- that measurement did not run the tool
+alone often enough to see the bad half. It is also what the `-u` fix to
+`gui_regress.py` bought: the 612s run now reports the last checks it
+printed instead of "NO output at all", which is how the family was
+identified rather than guessed.
+
+`preflight.sh` at `0xEF` also fails, on the ring-3 userland tests
+(50/51), same family as the standalone runs above.
+
+**So the flip is NOT clear, and the next question is why a drag never
+starts under the trap gate** -- `docs/bugs.md` already records injected
+clicks being lost under parallel load, and this is the same symptom
+without the load. The one-in-seven `stack smashing` boot panic has not
+been looked for again; ~26 boots at `0xEF` across these campaigns showed
+none.
 
 **What the flip is expected to buy, and what it is not.** It stops
 interrupts being masked for ~20 ms at a stretch, so keyboard, mouse and
