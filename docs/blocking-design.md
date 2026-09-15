@@ -121,14 +121,26 @@ documents follow.
      **A control has to REACH the state it claims to break** -- the
      same "the fixture never reached the branch" rule this repo already
      records for the truncate tests.
-  2. **`switch_to()` CANNOT BE REUSED AS-IS.** It NOMINATES the
+  2. **STAGE 1'S BLOCK CANNOT BE PROVEN ON ITS OWN, so it lands with
+     stage 2 rather than before it.** `scheduler_block_kernel()` needs
+     a caller that OWNS A SCHEDULER SLOT, and a KTEST does not have one
+     -- tests run in the kernel context, where `current_index` is -1
+     and the block must refuse. So the only thing that can exercise it
+     is a ring-3 process going through a syscall, which is stage 2's
+     caller. The per-context `kctx`/`suspend_kind` fields were written
+     and then REVERTED for that reason: unused fields are the same
+     smell as an unused export, and they would have sat there until
+     something could drive them. **Land the block, the resume and
+     `ata.c`'s wait together, with the test being a real disk wait.**
+
+  3. **`switch_to()` CANNOT BE REUSED AS-IS.** It NOMINATES the
      incoming trapframe and returns; `block_common()` then returns 1
      and the CPU actually moves in the ISR epilogue on the way out. A
      voluntary block has no epilogue to unwind to, so it must do
      everything `switch_to()` does (CR3, RSP0, FPU, `fs_base`, state,
      `current_index`) AND move the CPU itself -- and `isr_context_defer()`
      nominates for a dispatch that, on this path, does not exist.
-  3. **Anything added to `isr_common`'s tail must be JUMPED OVER.** An
+  4. **Anything added to `isr_common`'s tail must be JUMPED OVER.** An
      entry point placed between `mov rsp, rax` and the pops is fallen
      into by the normal path, so `mov rsp, rdi` clobbers the frame the
      dispatch just selected -- on every interrupt return. Written,
