@@ -814,6 +814,25 @@ def _grub_timeout_ok(sess, timeout):
     return False
 
 
+def _core_modules(sess, timeout):
+    """What the machine's INSTALLED bootloader can do, as a set of GRUB
+    module names -- empty when nothing says.
+
+    /etc/grub-core.modules is written by `install --bootloader`, and it
+    is the only readable record: core.img sits in raw sectors nothing can
+    open and is lzma-compressed besides. An older machine has no stamp,
+    which reads as "cannot be shown to have gzio" -- the safe direction,
+    since the consequence of being wrong is a dead default menu entry.
+    """
+    mods = set()
+    for ln in sess.run("cat /etc/grub-core.modules", timeout):
+        t = ln.strip()
+        if not t or ":" in t:      # an error line names the path
+            continue
+        mods.update(t.split())
+    return mods
+
+
 def _sha256(sess, remote, timeout):
     for ln in sess.run(f"sum -a sha256 {remote}", timeout):
         f = ln.split()
@@ -927,9 +946,15 @@ def _verify_offline(host, tftp_port, local, want, timeout,
 # (staged subdirectory, path on the machine, new files only)
 # /home is NEW FILES ONLY like /etc: the desktop folder has to EXIST on
 # the machine, and what a person put in it is theirs.
+# `install` IS A TREE LIKE ANY OTHER, and leaving it out meant a machine
+# could never hand on a bootloader newer than the one it was installed
+# with: the laptop's /install/core.img was three weeks stale, from before
+# `gzio` joined CORE_MODULES, which is also the image `install
+# --bootloader` writes.
 USERLAND_TREES = (("bin", "/bin", False), ("tests", "/tests", False),
                   ("usr", "/usr", False), ("etc", "/etc", True),
-                  ("home", "/home", True), ("lib", "/lib", False))
+                  ("home", "/home", True), ("lib", "/lib", False),
+                  ("install", "/install", False))
 
 
 def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
@@ -971,11 +996,9 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
     a power cycle to recover because the half that broke is the half
     that answers telnet. If you must bound it, bound it generously.
     """
-    if not os.path.isfile(local):
+    if local is not None and not os.path.isfile(local):
         print(f"remote: no such file: {local}", file=sys.stderr)
         return 1
-    with open(local, "rb") as fh:
-        want = hashlib.sha256(fh.read()).hexdigest()
 
     sess = Session(host, telnet_port, timeout)
     try:
@@ -998,6 +1021,43 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
                   "first -- a bad flash would need a USB stick.",
                   file=sys.stderr)
             return 1
+
+        # **WHICH KERNEL, DECIDED BY WHAT THE MACHINE'S GRUB CAN DO.**
+        # The compressed kernel is worth ~1 MB of a 280 KB/s link and
+        # boots only where `gzio` is in the core image, which is a
+        # property of the machine and not of this checkout -- so it is
+        # READ from the machine (`install --bootloader` records it) and
+        # never assumed. No stamp means the ELF, which every GRUB reads.
+        gzio = "gzio" in _core_modules(sess, timeout)
+        if local is None:
+            media = os.path.join(REPO, "build", "kernel.media")
+            elf = os.path.join(REPO, "build", "kernel.bin")
+            local = media if (gzio and os.path.isfile(media)) else elf
+            if not os.path.isfile(local):
+                print(f"remote: no such file: {local} -- run `make all` "
+                      "first", file=sys.stderr)
+                return 1
+        with open(local, "rb") as fh:
+            blob = fh.read()
+        want = hashlib.sha256(blob).hexdigest()
+
+        # A GZIPPED KERNEL TO A MACHINE THAT CANNOT UNPACK ONE is not a
+        # failed flash -- it is a machine whose default menu entry is
+        # dead, recovered only from the rescue entry at its own keyboard.
+        # That happened; hence the refusal rather than a warning.
+        if blob[:2] == b"\x1f\x8b" and not gzio:
+            print(f"remote: {local} is gzipped, and this machine's "
+                  "bootloader does not\nremote: record `gzio` "
+                  "(/etc/grub-core.modules). GRUB would read it as raw "
+                  "bytes:\nremote:   no multiboot header found\n"
+                  "remote: Run `install --bootloader confirm` on the "
+                  "machine first, or send build/kernel.bin.",
+                  file=sys.stderr)
+            return 1
+        if blob[:2] == b"\x1f\x8b":
+            print(f"remote: sending the compressed kernel "
+                  f"({len(blob) // 1024} KiB) -- this machine's GRUB "
+                  "records gzio")
 
         if _sha256(sess, "/boot/boot/kernel.bin", timeout) == want:
             # **--force MEANS DO IT ANYWAY, INCLUDING THE USERLAND SYNC.**
@@ -1201,14 +1261,14 @@ def main():
 
     f = sub.add_parser("flash", help="replace the kernel on the machine's "
                                      "own boot partition")
-    # build/kernel.media, NOT build/kernel.bin: the media copy is what
-    # the ISO and the disk carry, and with `option compress = yes` it is
-    # the GZIPPED kernel (GRUB unpacks it). Sending the ELF instead would
-    # work -- GRUB takes either -- but it would put 1.7 MB over the link
-    # where 745 KB would do, and leave the machine holding something no
-    # other medium carries. Falls back to the ELF when the media copy has
-    # not been built, so `remote.py flash` after a bare `make all` still
-    # does the obvious thing.
+    # OMITTED, THE MACHINE DECIDES: build/kernel.media where its own
+    # /etc/grub-core.modules records `gzio`, and build/kernel.bin where
+    # it does not. A flash must not depend on a capability the INSTALLED
+    # bootloader may not have -- it replaces the kernel alone, never the
+    # bootloader, and the laptop's GRUB predated that module and read the
+    # gzip bytes raw: `no multiboot header found`, default entry dead.
+    # Name a file to override; a gzipped one is still refused where the
+    # stamp does not back it.
     f.add_argument("kernel", nargs="?", default=None)
     # **REBOOTING IS THE DEFAULT, and it is the safe direction.** A
     # flash that verifies a kernel and does NOT boot it leaves the
@@ -1260,13 +1320,8 @@ def main():
                            a.local, a.remote, a.timeout, a.dry_run,
                            a.new_only, force=a.force)
         if a.cmd == "flash":
-            kernel = a.kernel
-            if kernel is None:
-                media = os.path.join(REPO, "build", "kernel.media")
-                elf = os.path.join(REPO, "build", "kernel.bin")
-                kernel = media if os.path.exists(media) else elf
             return do_flash(a.host, a.telnet_port, a.tftp_port,
-                            kernel, a.timeout, a.reboot,
+                            a.kernel, a.timeout, a.reboot,
                             a.kernel_only, a.staging, force=a.force)
         if a.cmd == "screenshot":
             return do_screenshot(a, a.host, a.telnet_port, a.tftp_port, a.timeout)

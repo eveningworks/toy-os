@@ -688,6 +688,34 @@ globbed wholesale into `libuapp.a`, so a copy there would be linked
 statically into every caller and the `.so` would never be reached --
 with nothing failing, because both copies work.
 
+## A FLASH REPLACES THE KERNEL, NEVER THE BOOTLOADER -- AND `install --bootloader` IS HOW A MACHINE GAINS ONE
+
+`core.img` is written at INSTALL time and nothing else ever rewrote it,
+so an installed machine has exactly the bootloader capabilities it was
+installed with. The bare-metal laptop predated `gzio` joining
+`install_grub.py`'s `CORE_MODULES`, and the first compressed kernel
+flashed to it was read as raw bytes -- `no multiboot header found`, the
+default menu entry dead until the rescue entry was picked by hand.
+
+So **`flash` sends `build/kernel.bin` unless the machine can be SHOWN to
+unpack a compressed one**, which is the rule a Linux kernel package
+follows (and why Linux ships a self-decompressing bzImage rather than
+asking the bootloader). The proof is a stamp the machine writes about
+itself: `install --bootloader confirm` records the module list it wrote
+into `/etc/grub-core.modules`, and `flash` reads it back. No stamp means
+the ELF. A gzipped image named explicitly is REFUSED where the stamp
+does not back it -- the failure is not a failed flash but a machine
+whose default entry is dead.
+
+`install --bootloader` rewrites this machine's own bootloader and
+nothing else -- no table, no format, no file. **The running disk is the
+only target**, because each staged core image has its prefix baked in
+(`(hd0,gpt2)` against `(hd0,msdos1)`) and `QUERY_PARTTABLE` can only
+answer for this machine's disk; and **the core image is read back before
+the boot sector is written**, so a bad write leaves the bootloader that
+is already there. `/install` is in `flash`'s synced trees for this
+reason: a machine cannot hand on a bootloader newer than its own.
+
 ## THE BARE-METAL KERNEL IS REPLACED WITH `remote.py flash`, AND THE RESCUE ENTRY NEEDS A GRUB TIMEOUT
 
 `/boot` on an installed machine is FAT32 and mounts READ-ONLY

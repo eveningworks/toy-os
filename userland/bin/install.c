@@ -59,10 +59,13 @@
 
 #define USAGE \
     "install [--disk <name>] [--esp <MiB>] [--mbr] confirm\n" \
+    "install --bootloader confirm\n" \
     "  --disk <name>  the target (`lsblk`); refuses the one this machine runs from\n" \
     "  --esp <MiB>    size of the FAT32 /boot partition (default 64)\n" \
     "  --mbr          write an MBR table instead of GPT, for firmware that\n" \
     "                 will not boot a GPT disk in legacy/CSM mode\n" \
+    "  --bootloader   rewrite THIS machine's bootloader in place and change\n" \
+    "                 nothing else -- no partitioning, no files touched\n" \
     "  confirm        required -- this ERASES the target disk"
 
 #define SECTOR_BYTES 512
@@ -80,6 +83,13 @@
 // carries this directory, so there is ONE path here rather than one per
 // boot kind. Staged by tools/install_grub.py --stage-payload.
 #define PAYLOAD "/install"
+
+// WHAT THE INSTALLED BOOTLOADER CAN DO, one line of GRUB module names,
+// written by `--bootloader`. In /etc because it describes this machine's
+// configuration rather than the build -- and because a flash sends /etc
+// NEW FILES ONLY, so an update never overwrites what the machine itself
+// last recorded here.
+#define STAMP_PATH "/etc/grub-core.modules"
 
 // WHAT IS NOT COPIED. `/boot` is a mount point -- for the source's ESP on
 // a disk boot, and for nothing at all on a live one -- and the target's
@@ -326,10 +336,15 @@ static int payload_present(int mbr) {
     return 1;
 }
 
-static int write_bootloader(const char *disk, int mbr) {
+// `in_use` is the INSTALL_BOOT_CONFIRM the kernel wants before it writes
+// a boot sector on a disk something is mounted from -- false for an
+// install (the target is unmounted by then) and true for a refresh,
+// where the disk being written is the one this program is running from.
+static int write_bootloader(const char *disk, int mbr, int in_use) {
     struct install_boot_request req;
     memset(&req, 0, sizeof req);
     snprintf(req.device, sizeof req.device, "%s", disk);
+    if (in_use) req.flags = INSTALL_BOOT_CONFIRM;
 
     uint64_t boot_size = 0, core_size = 0;
     void *boot = slurp(PAYLOAD "/boot.img", &boot_size);
@@ -353,19 +368,115 @@ static int write_bootloader(const char *disk, int mbr) {
     return 1;
 }
 
+// THE BOOTLOADER, REWRITTEN IN PLACE -- `grub-install` on a machine
+// that is already installed, and nothing else. No table is written, no
+// partition is formatted and no file is copied: the 185 KiB core image
+// goes into the embed area it already occupies and the boot sector is
+// re-patched to point at it.
+//
+// IT EXISTS BECAUSE AN INSTALLED MACHINE COULD NOT OTHERWISE GAIN A
+// BOOTLOADER IT DOES NOT ALREADY HAVE. A laptop installed before
+// `gzio` joined CORE_MODULES read a gzipped kernel as raw bytes -- `no
+// multiboot header found`, and the default menu entry was dead until
+// the rescue entry was picked by hand. The full installer cannot help:
+// it ERASES the disk and refuses the one the machine runs from.
+//
+// THE RUNNING DISK IS THE ONLY TARGET, and that is what makes the table
+// format knowable: QUERY_PARTTABLE answers for this machine's disk, and
+// the prefix baked into each staged core image (`(hd0,gpt2)` against
+// `(hd0,msdos1)`) has to match it or GRUB comes up at a rescue prompt
+// having found no config. Another disk is the full installer's job.
+static int refresh_bootloader(int confirmed) {
+    char disk[16] = "";
+    if (!root_disk(disk, sizeof disk)) {
+        refuse("this machine has no disk-backed root -- there is no "
+               "bootloader here to rewrite.");
+        return 1;
+    }
+
+    struct query_parttable t;
+    if (sys_query_record(QUERY_PARTTABLE, 0, &t, sizeof t) < (int)sizeof t ||
+        t.kind == QUERY_PART_NONE) {
+        refuse("this disk has no partition table -- refusing to guess "
+               "where the core image goes.");
+        return 1;
+    }
+    int mbr = (t.kind == QUERY_PART_MBR);
+
+    if (!payload_present(mbr)) return 1;
+
+    if (!confirmed) {
+        printf("install: this rewrites %s's bootloader in place (%s layout):\n",
+               disk, mbr ? "MBR" : "GPT");
+        printf("  boot sector    LBA 0, keeping this disk's partition table\n");
+        printf("  core image     %s\n",
+               mbr ? PAYLOAD "/core-msdos.img" : PAYLOAD "/core.img");
+        printf("install: partitions, filesystems and files are untouched. "
+               "The core image is\n");
+        printf("install: read back before the boot sector is written, so a "
+               "bad write leaves the\n");
+        printf("install: bootloader you have now. Re-run with `confirm` if "
+               "that is what you want.\n");
+        return 1;
+    }
+
+    step("writing the bootloader");
+    if (!write_bootloader(disk, mbr, 1)) {
+        printf("install: FAILED -- %s still has the bootloader it had.\n", disk);
+        return 1;
+    }
+
+    // WHAT WENT IN, WRITTEN DOWN. The core image lives in raw sectors
+    // nothing can open and is lzma-compressed besides, so its module set
+    // cannot be recovered by looking at the disk. This stamp is the only
+    // record, and `remote.py flash` reads it before sending a kernel
+    // whose unpacking GRUB has to do.
+    uint64_t mod_size = 0;
+    void *mods = slurp(PAYLOAD "/core.modules", &mod_size);
+    if (mods) {
+        int fd = open(STAMP_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            write(fd, mods, (size_t)mod_size);
+            close(fd);
+        } else {
+            printf("install: could not write %s -- the bootloader is in "
+                   "place, but nothing records what it can do.\n", STAMP_PATH);
+        }
+        free(mods);
+    }
+
+    printf("install: done. %s boots the newly written GRUB from now on; "
+           "nothing else changed.\n", disk);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     const char *disk = 0;
     uint64_t esp_mib = 64;
     int confirmed = 0;
     int mbr = 0;
+    int bootloader = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--disk") == 0 && i + 1 < argc) { disk = argv[++i]; continue; }
         if (strcmp(argv[i], "--esp") == 0 && i + 1 < argc) { esp_mib = (uint64_t)atoi(argv[++i]); continue; }
         if (strcmp(argv[i], "--mbr") == 0) { mbr = 1; continue; }
+        if (strcmp(argv[i], "--bootloader") == 0) { bootloader = 1; continue; }
         if (strcmp(argv[i], "confirm") == 0) { confirmed = 1; continue; }
         cmd_usage(USAGE);
         return 1;
+    }
+    if (bootloader) {
+        // The target is this machine's own disk and the layout is read
+        // from it, so neither flag has a meaning here -- refused rather
+        // than ignored, since a `--mbr` silently doing nothing is how
+        // somebody ends up believing they chose a layout.
+        if (disk || mbr) {
+            refuse("--bootloader rewrites THIS machine's bootloader; "
+                   "--disk and --mbr do not apply.");
+            return 1;
+        }
+        return refresh_bootloader(confirmed);
     }
     if (!disk) { cmd_usage(USAGE); return 1; }
     if (esp_mib < 8) { refuse("--esp must be at least 8 MiB"); return 1; }
@@ -444,7 +555,7 @@ int main(int argc, char **argv) {
     sys_umount(TARGET_ROOT);
 
     step("writing the bootloader");
-    if (ok) ok = write_bootloader(disk, mbr);
+    if (ok) ok = write_bootloader(disk, mbr, 0);
 
     if (!ok) {
         printf("install: FAILED -- %s is in an unknown state; re-run to start over.\n", disk);

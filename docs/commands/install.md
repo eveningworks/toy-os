@@ -7,10 +7,13 @@
 ## Synopsis
 
     install [--disk <name>] [--esp <MiB>] [--mbr] confirm
+    install --bootloader confirm
       --disk <name>  the target (`lsblk`); refuses the one this machine runs from
       --esp <MiB>    size of the FAT32 /boot partition (default 64)
       --mbr          write an MBR table instead of GPT, for firmware that
                      will not boot a GPT disk in legacy/CSM mode
+      --bootloader   rewrite THIS machine's bootloader in place and change
+                     nothing else -- no partitioning, no files touched
       confirm        required -- this ERASES the target disk
 
 ## Options
@@ -22,6 +25,10 @@
 - `--mbr` -- write an MBR table instead of GPT, for firmware that will
   not boot a GPT disk in legacy/CSM mode. Refused before anything is
   erased on a build that staged no `core-msdos.img`.
+- `--bootloader` -- rewrite this machine's own bootloader in place; see
+  "Refreshing the bootloader" below. `--disk` and `--mbr` are refused
+  with it, because the target is this machine's disk and the layout is
+  read from that disk.
 - `confirm` -- required, and it ERASES the target disk.
 
 ## Description
@@ -53,6 +60,44 @@ The layout it writes:
 | `p1` | 1 MiB | BIOS boot | GRUB's `core.img`, no filesystem |
 | `p2` | `--esp` (64 MiB) | ESP, FAT32 | the kernel, `grub.cfg`, GRUB's modules |
 | `p3` | the rest | TFS3 | the root |
+
+## Refreshing the bootloader
+
+    install --bootloader confirm
+
+`grub-install` on a machine that is already installed: it writes the boot
+sector and GRUB's core image and **nothing else** — no partition table, no
+format, no file copied. It is the only way an installed machine can gain a
+bootloader capability it was installed without.
+
+That is not hypothetical. The bare-metal laptop was installed before `gzio`
+joined `install_grub.py`'s `CORE_MODULES`, so when it was later flashed with a
+gzipped kernel its GRUB read the gzip bytes as raw ones:
+
+    error: ... grub_multiboot2_load: no multiboot header found
+    error: ... grub_loader_boot: you need to load the kernel first
+
+The default menu entry was dead until the rescue entry was picked by hand. The
+full installer cannot help there — it ERASES its target and refuses the disk the
+machine runs from.
+
+**The running disk is the only target**, which is what makes the layout
+knowable: `QUERY_PARTTABLE` answers for this machine's disk, and the prefix
+baked into each staged core image (`(hd0,gpt2)` against `(hd0,msdos1)`) must
+match it or GRUB comes up at a rescue prompt having found no config. Another
+disk is the full installer's job.
+
+**The core image is read back before the boot sector is written**
+(`sys_install_boot`), so a short or failed write leaves the machine booting the
+bootloader it already has. The boot sector — the one write that decides what
+runs — is last, and the disk's own partition table bytes at 0x1b8 are preserved
+through it.
+
+It records what it installed in **`/etc/grub-core.modules`**, one line of GRUB
+module names. That stamp is the only readable record of what the installed
+bootloader can do: `core.img` lives in raw sectors nothing can open and is
+lzma-compressed besides. `tools/remote.py flash` reads it to decide whether this
+machine can be sent a compressed kernel.
 
 ## Installing from live media
 

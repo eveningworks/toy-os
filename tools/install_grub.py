@@ -412,6 +412,15 @@ def stage_payload(outdir, kernel, grub_cfg, verbose=True):
     shutil.copyfile(os.path.join(mods, "boot.img"), os.path.join(outdir, "boot.img"))
     shutil.copyfile(kernel, os.path.join(outdir, "kernel.bin"))
     shutil.copyfile(grub_cfg, os.path.join(outdir, "grub.cfg"))
+    # WHAT THIS CORE IMAGE CAN DO, as a line of module names. `install
+    # --bootloader` copies it to /etc/grub-core.modules on the machine it
+    # writes, which is the only readable record of what the bootloader in
+    # the embed area is -- core.img lives in raw sectors nothing can open,
+    # and it is lzma-compressed, so its module set cannot be recovered by
+    # looking. `remote.py flash` reads that stamp before it dares send a
+    # gzipped kernel, which GRUB unpacks only with `gzio` present.
+    with open(os.path.join(outdir, "core.modules"), "w") as f:
+        f.write(" ".join(CORE_MODULES) + "\n")
     if verbose:
         total = sum(os.path.getsize(os.path.join(outdir, f))
                     for f in os.listdir(outdir))

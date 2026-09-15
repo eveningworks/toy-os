@@ -1779,6 +1779,73 @@ that is worth having in ring 3 too, because it means nothing is hidden
 inside a decode, and it is what let the 4 KiB output chunk and the two
 Huffman tables come off a stack frame that was three times the budget.
 
+**One line of this entry was written from a fresh install and was
+wrong about everything else**: see the entry below. `gzio` being in
+the image doing the reading is a property of the MACHINE, and a machine
+installed last month has the `core.img` it was installed with.
+
+## An installed machine rewrites its own bootloader, and a flash assumes nothing
+
+The entry above establishes that GRUB unpacks a gzipped kernel where
+`gzio` is in its `core.img`, and that `tools/install_grub.py` lists the
+modules. Both true, and together they hid a third fact: **`core.img` is
+written at INSTALL time and nothing ever rewrote it.** The bare-metal
+laptop was installed before `gzio` joined that list, so the first
+compressed kernel flashed to it was read as raw bytes --
+
+    error: ... grub_multiboot2_load: no multiboot header found
+    error: ... grub_loader_boot: you need to load the kernel first
+
+-- and the default menu entry was dead until the rescue entry was
+picked by hand at the machine's own keyboard. The evidence that settled
+it was a photograph of that screen; the mechanism was confirmed by a
+control that installs a `core.img` with `gzio` removed and reproduces
+the two lines exactly.
+
+**A kernel install must not depend on a bootloader capability, which is
+why Linux ships a self-decompressing bzImage.** `arch/x86/boot/
+compressed/` exists so that a kernel package never has to ask what the
+installed bootloader can do -- and a Debian kernel upgrade does not run
+`grub-install`. So `remote.py flash` sends `build/kernel.bin`, the ELF,
+unless the machine can be SHOWN to unpack one.
+
+**Shown, not assumed, and not a flag.** A `--compressed` flag would be a
+footgun with a label on it: its precondition lives on the machine and
+cannot be checked from the checkout. `core.img` sits in raw sectors
+nothing can open and is lzma-compressed besides, so its module set
+cannot be recovered by looking at the disk either. The stamp is
+therefore written at the only moment anything knows: `install
+--bootloader` records the module list it just wrote into
+`/etc/grub-core.modules`, and `flash` reads that back before it dares
+send a gzipped kernel. No stamp means the ELF, which every GRUB reads.
+
+**`install --bootloader` is `grub-install`**, and it exists because the
+full installer cannot help: it ERASES its target and refuses the disk
+the machine runs from, which is right for an install and useless for a
+machine that needs one module added. Three things make it safe enough to
+run on a live machine:
+
+- **The running disk is the only target.** That is not timidity -- it is
+  what makes the layout knowable. Each staged core image carries its
+  prefix baked in (`(hd0,gpt2)` against `(hd0,msdos1)`), so writing the
+  wrong one produces a GRUB that comes up at a rescue prompt having
+  found no config. `QUERY_PARTTABLE` answers for this machine's disk;
+  for any other disk it would be a guess.
+- **The core image is read back before the boot sector is written.**
+  Until that last write the disk still boots the bootloader it has, so a
+  mismatch costs nothing -- which is the only window in which checking
+  is worth anything. The boot sector is last for the same reason the
+  protective MBR is (`partition_write_table()`), and the disk's own
+  partition-table bytes at 0x1b8 are carried through it.
+- **Nothing else is touched.** No table, no format, no file. The
+  previous kernel stays at `/boot/kernel.old` behind the rescue entry,
+  which a bootloader refresh does not disturb.
+
+**`/install` joined the synced trees in the same change.** Without it a
+machine could never hand on a bootloader newer than its own: the
+laptop's `/install/core.img` was three weeks stale, from before `gzio`,
+and that is the image `--bootloader` writes.
+
 The sequence is worth remembering as a shape: measure, find the layer
 below already does it, delete the thing you built. Twice, on the same
 question, a week's worth of planned work each time.

@@ -301,12 +301,100 @@ def run_media(args, c, media):
     return True
 
 
+def run_bootloader(args, c):
+    """`install --bootloader` on the RUNNING disk -- does that disk still
+    boot, and can it then boot a COMPRESSED kernel?
+
+    THE CONTROL IS PART OF THE PHASE, because every check here would pass
+    on a machine whose bootloader was never rewritten: the disk booted
+    before too. So the last check installs the same gzipped kernel behind
+    a `core.img` with `gzio` REMOVED and requires it NOT to boot -- which
+    is the bare-metal failure this mode exists for, reproduced:
+
+        error: ... grub_multiboot2_load: no multiboot header found
+    """
+    def add(name, ok, detail=""):
+        return c.add(f"[bootloader] {name}", ok, detail)
+
+    import install_grub
+
+    media = os.path.join(ROOT, "build", "kernel.media")
+    if not os.path.exists(media):
+        add("build/kernel.media exists", False, "run `make all` first")
+        return
+
+    self_img = os.path.join(args.scratch, "self.img")
+    ctrl_img = os.path.join(args.scratch, "nogzio.img")
+    for img in (self_img, ctrl_img):
+        subprocess.run(["cp", "--reflink=auto", "--sparse=always",
+                        os.path.join(ROOT, "disk.img"), img], check=True)
+
+    base = VM + ["--instance", str(args.instance), "--disk", self_img]
+    env = dict(os.environ)
+    env["TOYOS_ALLOW_STALE_ISO"] = "1"
+
+    def guest(*cmds):
+        p = subprocess.run(base + list(cmds), cwd=ROOT, capture_output=True,
+                           text=True, timeout=600, env=env)
+        return p.stdout + p.stderr
+
+    guest("start")
+    try:
+        plan = guest("exec", "install --bootloader")
+        add("refuses without `confirm`, and says what it would write",
+            "core image" in plan and "Re-run with `confirm`" in plan)
+        add("reads the layout off the disk rather than taking a flag",
+            "GPT layout" in plan)
+        add("--mbr is refused in this mode",
+            "do not apply" in guest("exec", "install --bootloader --mbr confirm"))
+
+        done = guest("exec", "install --bootloader confirm", "sync")
+        add("writes the bootloader", "boots the newly written GRUB" in done)
+        add("the kernel logged the write", "install_boot:" in done and
+            "boot sector written" in done)
+        add("records what it installed in /etc/grub-core.modules",
+            "gzio" in guest("exec", "cat /etc/grub-core.modules"))
+    finally:
+        guest("stop")
+
+    log = os.path.join(args.scratch, "self-boot.log")
+    add("the disk still boots on the bootloader it wrote itself",
+        "init: target" in boot_target_alone(self_img, log))
+
+    # The payoff: the same disk, now carrying a GZIPPED kernel.
+    _bios, esp = install_grub.parts_of(self_img)
+    install_grub.mcopy_into(self_img, esp, [media], "::/boot/kernel.bin")
+    log = os.path.join(args.scratch, "self-gz.log")
+    add("and then boots a COMPRESSED kernel",
+        "init: target" in boot_target_alone(self_img, log))
+
+    # THE CONTROL. Same gzipped kernel, a core.img built without gzio.
+    saved = install_grub.CORE_MODULES
+    try:
+        install_grub.CORE_MODULES = tuple(m for m in saved if m != "gzio")
+        install_grub.install(ctrl_img, media,
+                             os.path.join(ROOT, "build", "grub-disk.cfg"),
+                             verbose=False)
+    finally:
+        install_grub.CORE_MODULES = saved
+    log = os.path.join(args.scratch, "nogzio.log")
+    add("CONTROL: without gzio that kernel does NOT boot",
+        "init: target" not in boot_target_alone(ctrl_img, log, seconds=20))
+
+    if not args.keep:
+        for f in (self_img, ctrl_img):
+            if os.path.exists(f):
+                os.remove(f)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--instance", default="auto")
-    ap.add_argument("--media", choices=("disk", "live", "grown", "mbr", "all"), default="all",
-                    help="which run to make (default all three)")
+    ap.add_argument("--media",
+                    choices=("disk", "live", "grown", "mbr", "bootloader", "all"),
+                    default="all",
+                    help="which run to make (default every one)")
     ap.add_argument("--keep", action="store_true",
                     help="leave the images behind for inspection")
     ap.add_argument("--scratch", default="/tmp/toyos-install-test")
@@ -330,7 +418,8 @@ def main():
         args.instance = n
         print(f"install_test: using VM slot {args.instance}")
 
-    media = ("disk", "live", "grown", "mbr") if args.media == "all" else (args.media,)
+    media = (("disk", "live", "grown", "mbr", "bootloader")
+             if args.media == "all" else (args.media,))
     if ("live" in media or "grown" in media) and not os.path.exists(os.path.join(ROOT, LIVE_ISO)):
         print(f"install_test: no {LIVE_ISO} -- run `make live-iso` "
               "(or pass --media disk)")
@@ -348,7 +437,10 @@ def main():
 
     c = Checks()
     for m in media:
-        run_media(args, c, m)
+        if m == "bootloader":
+            run_bootloader(args, c)   # rewrites a COPY of this disk's own GRUB
+        else:
+            run_media(args, c, m)
 
     if not args.keep:
         for f in (args.system, args.target):

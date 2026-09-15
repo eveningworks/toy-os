@@ -371,6 +371,36 @@ int sys_install_boot(struct syscall_ctx *c) {
         if (!blkdev_write_sectors(disk, core_lba + (uint32_t)i, 1, sec)) ok = 0;
     }
 
+    // THE CORE IMAGE IS READ BACK BEFORE THE BOOT SECTOR IS TOUCHED.
+    // Until that last write the disk still boots the bootloader it has,
+    // so a mismatch here costs nothing -- which is the only window in
+    // which checking is worth anything, and it is why the check is here
+    // rather than at the end. `install --bootloader` rewrites the
+    // bootloader of a machine that is RUNNING, and a silently short
+    // write there is a machine that never comes back.
+    static uint8_t chk[BOOT_SECTOR_SIZE];
+    for (uint64_t i = 0; i < core_sectors && ok; i++) {
+        uint32_t want = BOOT_SECTOR_SIZE;
+        uint64_t left = req.core_size - i * BOOT_SECTOR_SIZE;
+        if (left < want) { k_memset(sec, 0, BOOT_SECTOR_SIZE); want = (uint32_t)left; }
+        if (!vmm_copy_from_user(c->pml4, sec, req.core_img + i * BOOT_SECTOR_SIZE, want)) {
+            scheduler_preempt_enable();
+            c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+            return 0;
+        }
+        if (i == 0) {
+            wr64(sec + 0x1F4, core_lba + 1);
+            wr16(sec + 0x1FC, (uint16_t)(core_sectors - 1));
+        }
+        if (!blkdev_read_sectors(disk, core_lba + (uint32_t)i, 1, chk) ||
+            k_memcmp(chk, sec, BOOT_SECTOR_SIZE) != 0) {
+            klog_printf(KLOG_ERR "install_boot: core image did not verify at "
+                        "LBA %u -- the boot sector was NOT touched\n",
+                        core_lba + (unsigned)i);
+            ok = 0;
+        }
+    }
+
     // THE BOOT SECTOR LAST. A power cut partway then leaves a disk whose
     // old boot sector is intact rather than one pointing at a core image
     // that was never finished -- the same publish-last discipline
