@@ -1397,7 +1397,17 @@ static void on_widget(struct uapp *a, int id, int reason) {
     // crossing a control -- typing into a focused dropdown, or arrowing
     // through an open one, is the user choosing a value, and it would
     // otherwise change on screen and be silently dropped by Apply.
-    if (reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) return;
+    //
+    // **THE DIVIDER IS THE ONE EXCEPTION, and it has to be exempted
+    // HERE or its own "live" comment below is a lie** -- which it was:
+    // the layout re-ran only on release, so the columns jumped at the
+    // end of a drag instead of following the handle. Every real toolkit
+    // resizes panes during the drag (Qt's QSplitter `opaqueResize`,
+    // GtkPaned), and the reason motion is dangerous in this app does
+    // not apply to it: relaying out is free, and the /etc write it
+    // would be dangerous to repeat still waits for the release.
+    if (id != ID_SIDE_SPLIT &&
+        reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) return;
 
     if (id >= ID_CONTROL_BASE && id < ID_CONTROL_BASE + PAGE_MAX) {
         // STAGED, not applied. The selection is remembered; Apply or OK

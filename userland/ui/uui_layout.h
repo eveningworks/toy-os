@@ -45,7 +45,18 @@ struct uui_layout {
     // <= 0 means the font-derived default (see uui_layout.c). Set them
     // to pin a specific spacing; leave them alone to get one that
     // reflows.
+    //
+    // **A DEFAULT MARGIN IS THE WINDOW'S EDGE, NOT EVERY NESTING
+    // LEVEL'S.** A layout placed inside another container takes NO
+    // margin of its own unless it names one, which is Qt's rule for a
+    // sub-layout and GTK's for a box. Without that they compound: System
+    // Settings nests three deep and paid three character cells, 28 px
+    // before the sidebar and another 14 inside the page.
     int margin, gap;
+
+    // Set by the ops table when this layout is laid out as a CHILD --
+    // the one signal that it is not the outermost. Not an app's to set.
+    int nested;
 
     struct uui_item *items; // caller-owned
     int count;

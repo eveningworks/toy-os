@@ -7784,3 +7784,52 @@ open. `tools/uimg_codec_hostcheck.py` opens everything with Pillow and
 additionally inflates each PNG with Python's `zlib`; the guest test
 keeps the round trip only for what the host harness cannot see, which is
 the encoders running in ring 3 on the machine that ships.
+
+## A nested layout takes no margin, because margins compound
+
+`uui_layout_margin()` read anything `<= 0` as "the font-derived
+default", which is right for the layout that fills a window and wrong
+for every layout inside one: System Settings nests three deep and paid
+three character cells, 28 px before the sidebar and another 14 inside
+the page, on a window whose page area was then too short for its own
+content.
+
+**Qt and GTK both put the padding at the window and none at each nesting
+level** -- a Qt sub-layout's contents margins are zero, a GtkBox has no
+padding of its own -- and that is the rule now: a layout laid out as a
+CHILD contributes no margin unless it names one. An explicit `margin`
+still wins, so a container that genuinely wants inner padding asks.
+
+The flag is latched by the OPS TABLE, in `natural_size` as well as
+`set_geometry`, because being asked either question through the ops
+table is exactly what "somebody else is placing me" means -- and the
+measurement happens first, so latching only in `set_geometry` would
+measure one frame against a margin the layout then did not use. That
+also covers a layout nested in a scroll view or a file dialog, not just
+one nested in another layout.
+
+The `margin = 1` idiom this replaces -- one pixel, meaning "not the
+default" -- was a workaround for the same problem and is no longer
+needed.
+
+## The scroll view drives its scrollbar in pixels, not rows
+
+`uui_scrollbar`'s maths is a pure ratio: the thumb is `h * visible /
+total` tall and sits at `track_range * off / max_scroll`. Any consistent
+unit works -- and rows were not consistent. The scroll view rounded
+`total` UP (to keep the last partial row reachable), `visible` DOWN, and
+the offset DOWN again, so a view scrolled fully to the top reported an
+offset SHORT of the bar's own maximum and the thumb was drawn several
+pixels below the track. The bottom was exact, which is why it read as
+"the scrollbar will not go all the way up" rather than as a rounding
+bug.
+
+All three call sites -- draw, hit and drag -- agreed with each other,
+which is why nothing misbehaved on a click: the thumb was in the place
+the hit test also believed. Only the eye disagreed.
+
+Pixels fix both ends exactly and make a thumb drag smooth instead of
+snapping to a row. The three numbers come from one function (`sb_units`)
+for the reason the bar's own geometry is shared: three callers deriving
+the same three values separately is how they come to disagree.
+

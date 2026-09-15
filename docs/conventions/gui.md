@@ -1011,10 +1011,12 @@ this the obvious way), not from how much history it accumulated.
   Three more things. **THE OUT-OF-PROCESS CHOOSER IS DELIBERATELY NOT
   COPIED** (`xdg-desktop-portal`, macOS's panel service): it exists so a
   sandboxed app that cannot read the filesystem can be handed one file,
-  and there is no such boundary here. **A NESTED LAYOUT'S MARGIN IS NOT
-  0 WHEN YOU WRITE 0** -- `uui_layout_margin()` reads anything <= 0 as
-  the font-derived default, so three rows asking for no padding took a
-  third of the window's height; write 1. And **the FILTER is what let
+  and there is no such boundary here. **A NESTED LAYOUT NOW TAKES NO
+  MARGIN AT ALL** -- it used to read anything <= 0 as the font-derived
+  default, so three rows asking for no padding took a third of the
+  window's height (the `margin = 1` idiom was the workaround, and is no
+  longer needed). A layout laid out as a CHILD contributes nothing
+  unless it names a margin, which is Qt's rule for a sub-layout. And **the FILTER is what let
   Image Viewer and Audio Player keep their pinned sidebars**: each is
   still the filmstrip for one directory, and Open is how you reach a
   different one -- which neither could do at all before.

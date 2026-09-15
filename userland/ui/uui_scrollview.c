@@ -37,6 +37,26 @@ static int max_offset(const struct uui_scrollview *sv) {
     return over > 0 ? over : 0;
 }
 
+// THE SCROLLBAR IS DRIVEN IN PIXELS HERE, NOT IN ROWS, and that is what
+// makes the thumb reach the top. Its maths is a pure ratio -- thumb size
+// is `h * visible / total` and its position `track_range * off /
+// max_scroll` -- so any consistent unit works, and rows were not
+// consistent: `total` rounded UP, `visible` rounded DOWN and the offset
+// rounded DOWN again, so a view scrolled fully to the top reported an
+// offset SHORT of the bar's own maximum and the thumb was drawn a few
+// pixels below the track. The bottom was exact, which is why it read as
+// "it will not go all the way up". In pixels both ends land exactly and
+// a drag is smooth instead of snapping to a row.
+//
+// The three callers -- draw, hit and drag -- must pass the SAME three
+// numbers, which is why they come from one place.
+static void sb_units(const struct uui_scrollview *sv,
+                     int *total, int *vis, int *off) {
+    *total = sv->content_h > 0 ? sv->content_h : 1;
+    *vis = sv->h;
+    *off = max_offset(sv) - sv->offset;   // the bar counts from the BOTTOM
+}
+
 static int clamp_offset(struct uui_scrollview *sv) {
     int before = sv->offset;
     int max = max_offset(sv);
@@ -195,15 +215,10 @@ static void sv_children_end(struct ugfx_surface *s, void *w) {
 
     if (!uui_scrollview_scrollable(sv)) return;
 
-    // The scrollbar is line-based, so the pixel offset is expressed in
-    // rows. Rounding up the total keeps the last partial row reachable.
-    int r = row_px(sv);
-    int total = (sv->content_h + r - 1) / r;
-    int vis = sv->h / r;
-    if (vis < 1) vis = 1;
-    int off_lines = (max_offset(sv) - sv->offset) / r; // the bar counts from the BOTTOM
+    int total, vis, off;
+    sb_units(sv, &total, &vis, &off);
     uui_scrollbar_draw(s, sv->x + sv->w - bar_px(sv), sv->y, bar_px(sv), sv->h,
-                        total, vis, off_lines, sv->track_bg, sv->thumb_bg, 0);
+                        total, vis, off, sv->track_bg, sv->thumb_bg, 0);
 }
 
 // THE ONE ACCESSOR for the children, which is why the staleness check
@@ -242,11 +257,8 @@ static int on_bar(const struct uui_scrollview *sv, int cx) {
 }
 
 static int bar_press(struct uui_scrollview *sv, int cx, int cy) {
-    int r = row_px(sv);
-    int total = (sv->content_h + r - 1) / r;
-    int vis = sv->h / r;
-    if (vis < 1) vis = 1;
-    int off = (max_offset(sv) - sv->offset) / r;
+    int total, vis, off;
+    sb_units(sv, &total, &vis, &off);
     int bx = sv->x + sv->w - bar_px(sv);
 
     enum uui_scrollbar_zone zone =
@@ -263,8 +275,10 @@ static int bar_press(struct uui_scrollview *sv, int cx, int cy) {
     }
 
     // Page toward the click, keeping one row of overlap, as every real
-    // toolkit does and as uui_listbox already does here.
-    int page = (vis > 1 ? vis - 1 : 1) * r;
+    // toolkit does and as uui_listbox already does here. In pixels now,
+    // like everything else the bar is driven with (sb_units()).
+    int row = row_px(sv);
+    int page = sv->h > row ? sv->h - row : row;
     if (zone == UUI_SB_ABOVE) return uui_scrollview_set_offset(sv, sv->offset - page);
     if (zone == UUI_SB_BELOW) return uui_scrollview_set_offset(sv, sv->offset + page);
     return 0;
@@ -283,13 +297,11 @@ static int sv_press(void *w, int cx, int cy, unsigned mods) {
 static int sv_motion(void *w, int cx, int cy, unsigned buttons) {
     struct uui_scrollview *sv = w;
     if (sv->thumb_grab >= 0) {
-        int r = row_px(sv);
-        int total = (sv->content_h + r - 1) / r;
-        int vis = sv->h / r;
-        if (vis < 1) vis = 1;
-        int off = uui_scrollbar_offset_for_drag(sv->y, sv->h, total, vis,
-                                                 cy, sv->thumb_grab, bar_px(sv), 0);
-        return uui_scrollview_set_offset(sv, (max_offset(sv) - off * r));
+        int total, vis, off;
+        sb_units(sv, &total, &vis, &off);
+        off = uui_scrollbar_offset_for_drag(sv->y, sv->h, total, vis,
+                                            cy, sv->thumb_grab, bar_px(sv), 0);
+        return uui_scrollview_set_offset(sv, max_offset(sv) - off);
     }
     (void)cx; (void)cy; (void)buttons;
     return 0;

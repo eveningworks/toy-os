@@ -6,7 +6,11 @@
 // the spacing the hand-placed apps already used (Calculator's MARGIN 8
 // / BTN_GAP 6 against an 8x17 cell) without any of them saying a number.
 int uui_layout_margin(const struct uui_layout *l) {
-    return l->margin > 0 ? l->margin : ugfx_char_w();
+    if (l->margin > 0) return l->margin;
+    // A NESTED LAYOUT'S DEFAULT IS NONE (see uui_layout.h). An explicit
+    // margin still wins, so a container that genuinely wants inner
+    // padding asks for it.
+    return l->nested ? 0 : ugfx_char_w();
 }
 int uui_layout_gap(const struct uui_layout *l) {
     return l->gap > 0 ? l->gap : ugfx_char_w() / 2 + 2;
@@ -221,11 +225,21 @@ void uui_layout_draw(struct ugfx_surface *s, const struct uui_layout *l) {
 
 // --- a layout as a widget, so containers nest -------------------------
 
+// BOTH OPS LATCH `nested`, because being asked either question THROUGH
+// the ops table is what "somebody else is placing me" means -- and the
+// measurement comes first, so setting it only in set_geometry would
+// measure one frame with a margin the layout then did not use. The cast
+// is const-away on purpose: the flag is bookkeeping about who is asking,
+// not part of the layout the caller declared.
 static void layout_natural(const void *w, int *out_w, int *out_h) {
-    uui_layout_natural_size((const struct uui_layout *)w, out_w, out_h);
+    struct uui_layout *l = (struct uui_layout *)w;
+    l->nested = 1;
+    uui_layout_natural_size(l, out_w, out_h);
 }
 static void layout_geometry(void *w, int x, int y, int width, int height) {
-    uui_layout_run((struct uui_layout *)w, x, y, width, height);
+    struct uui_layout *l = w;
+    l->nested = 1;
+    uui_layout_run(l, x, y, width, height);
 }
 static void layout_draw(struct ugfx_surface *s, const void *w) {
     uui_layout_draw(s, (const struct uui_layout *)w);
