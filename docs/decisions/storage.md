@@ -2982,3 +2982,100 @@ re-reads it; removing the flush entirely passed all 36 fs tests. The
 check that catches it reads the bitmap block back through the block
 layer, which is why it lives in `tfs3.c` -- and why it calls
 `mount_enter()` first, since `S` is NULL between operations by design.
+
+## A path has THREE bounds, not one: what a call may be handed, what a struct may remember, and what one component may be
+
+**Decided 2026-09-15**, when `FS_PATH_MAX` went from 64 to 4096 so a
+deep directory tree could be opened at all. The interesting part is not
+the new number; it is that one number could not do the job.
+
+`FS_PATH_MAX` was 64 and every path-shaped thing in the tree was spelled
+with it -- a syscall's working buffer, a mount point, an mmap region's
+backing file, a `struct dirent`'s name, a process's current directory.
+That works exactly as long as the number is small. Raising it exposed
+that those uses have nothing in common except the word "path":
+
+- **`FS_PATH_MAX` (4096)** is what a CALL may be handed. It is
+  transient, one or two live at a time, and it is the only one that has
+  to be generous, because it is what bounds the deepest file a program
+  can name. This is Linux's `PATH_MAX`.
+- **`FS_PATH_STORED_MAX` (256)** is what a long-lived struct may
+  REMEMBER, and it exists because storage gets MULTIPLIED. A per-region
+  path at 4096 is 8 MB of kernel `.bss` (64 processes x 32 mmap
+  regions), buying deep paths for the one case that least needs them.
+  Windows drew this line too: `MAX_PATH` for what an API struct embeds,
+  a longer form for what a call may name. A path too long for one of
+  these is REFUSED, never truncated.
+- **`FS_NAME_MAX` (255)** is one COMPONENT -- what TFS3 already stores
+  on disk (`T3_NAME_MAX`) and what ext4 and NTFS both use. **It is the
+  one of the three the LISTING ABI does not yet honour**: `struct
+  sys_dirent.name` stays 64, so a file can be created with a 200-byte
+  name and `readdir()` will not report it.
+
+  That was measured, not assumed. Raising the field to 256 multiplies by
+  `SYS_LISTDIR_MAX` in every `opendir()`, taking a `DIR` from ~22 KiB to
+  ~72 KiB -- and ring-3 `free()` never returns memory to the OS, so the
+  File Manager, which opens directories per navigation and per tick
+  reload, only grows: `filemanager_test` went from **1 failure to 16**.
+  Cutting `SYS_LISTDIR_MAX` to 64 to pay for it was tried first and was
+  worse -- `/bin` (89 entries) and `/tests` (101) both exceed 64, so any
+  caller not paging with `SYS_LISTDIR_AT` silently saw a short
+  directory. Both were reverted. The real fix is an allocator that
+  releases, or a variable-length record -- which is exactly why Linux's
+  `struct dirent` has one -- and it is a roadmap item rather than
+  something to smuggle into a path change.
+
+**Why not just make everything 4096.** Because two of the three are
+array dimensions in structs that exist once per object, and the kernel
+has 64 process slots. The measurement that settled it: `sched_cwd` is
+one per process (256 KB at 4096 -- affordable, and it keeps `chdir` into
+a deep directory working), while `mmap_region` is thirty-two per process
+(8 MB -- not affordable, and nothing wanted it).
+
+**Why a query record is bounded by something else again.**
+`QUERY_PROCPATH_MAX` is 252, not either of the above, because a query
+record must fit `QUERY_RECORD_MAX` (256, `api/query.h`). A process whose
+spawn path is longer reports `""` rather than a truncated one, since
+both readers MATCH on that string and a nearly-right identity is worse
+than an absent one.
+
+## A path buffer is not a kernel local, and `kpath.c` cannot allocate one
+
+A kernel stack is 16 KiB with a single guard page, so two 4096-byte path
+locals in one frame is half of it and three step over the guard into
+unmapped space. Linux has the same arithmetic and the same answer:
+`getname()` takes a path from a slab (`names_cachep`), `putname()`
+returns it, and no path is ever a local. `kpath_get()`/`kpath_put()`
+(`api/kpath_buf.h`) are that pair, over `kmalloc` rather than a fixed
+pool -- a pool has to guess how many paths are live at once, and this
+kernel preempts inside a syscall, so the honest number is not one a
+constant could name.
+
+**The wrinkle that shaped the API: `kernel/lib/kpath.c` is compiled into
+BOTH rings** (the Makefile's shared-source list strips the C library from
+its include path), so it can name neither `kmalloc` nor `malloc`. Its
+`k_path_normalize()`/`k_path_resolve()` kept a 256-byte local for the
+join-before-collapse scratch, which is exactly what could not grow. So
+the scratch became the CALLER's, passed as a `struct kpath_scratch` --
+the same answer `klineedit.c` gives to the same constraint with
+`struct kline_mem`, and for the same reason.
+
+**Three places deliberately did something else**, and the pattern is
+worth naming because "allocate it" is not always right:
+
+- **`mount_resolve()` stopped copying at all.** Stripping a mount point
+  from a path leaves a SUFFIX, so the backend-relative path is a pointer
+  INTO the caller's string. That removed an `FS_PATH_MAX` array from
+  `struct resolved` and with it a path local from every `fs_*()` in
+  `vfs.c` -- nineteen frames, fixed by deleting a buffer rather than
+  pooling one.
+- **`tfs3.c` uses one static buffer per function.** The backend is
+  non-reentrant by contract (`vfs.c`'s `FS_OP()` holds preemption off),
+  which is already why `S`, `g_blk` and `dirblk` are module-level. One
+  buffer per function rather than a shared stack with a depth counter:
+  these calls nest and none recurses into itself, so separate buffers
+  need no push/pop and cannot leak a slot down an early return.
+- **A CONSTRUCTED path keeps a small local.** `/etc/settings.d/<ns>.<name>`,
+  `/lib/modules/<name>.ko` and a cursor theme's shape file are bounded by
+  their own shape rather than by what a caller may hand in, so they take a
+  named constant of their own and stay on the stack.

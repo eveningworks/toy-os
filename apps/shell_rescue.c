@@ -67,7 +67,7 @@ static void rescue_ls_cb(const char *name, uint32_t size, int is_dir) {
 // now the ONLY way to see a directory when /bin is damaged, which
 // raises its stakes rather than lowering them.
 static void rescue_ls(const char *args) {
-    char path[FS_PATH_MAX];
+    static char path[FS_PATH_MAX]; // static: a path is 4096 now and the kernel shell runs one command at a time
     if (!resolve_path((args && k_strlen(args) > 0) ? args : 0, path)) {
         vga_write("rescue ls: path too long\n");
         return;

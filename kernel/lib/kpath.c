@@ -92,33 +92,37 @@ static int normalize_in_place(char *scratch, char *out, size_t cap) {
     return 1;
 }
 
-// Scratch size for the combined base+input string before collapsing.
-// Callers pass paths bounded by FS_PATH_MAX (64), and a join of two is
-// still far short of this -- generous on purpose, since running out
-// here would mean rejecting a path that would have fit after
-// normalization.
-#define KPATH_SCRATCH 256
+// A scratch of at least two segments plus separators -- anything
+// smaller cannot hold even "/" joined to a name, and a caller that
+// passes one is a bug worth failing on rather than truncating into.
+#define KPATH_SCRATCH_MIN 8
 
-int k_path_normalize(const char *path, char *out, size_t cap) {
-    if (!path || !out) return 0;
-    char scratch[KPATH_SCRATCH];
-    if (k_strlcpy(scratch, path, sizeof scratch) >= sizeof scratch) return 0;
-    return normalize_in_place(scratch, out, cap);
+static int scratch_ok(const struct kpath_scratch *s) {
+    return s && s->buf && s->cap >= KPATH_SCRATCH_MIN;
 }
 
-int k_path_resolve(const char *base, const char *input, char *out, size_t cap) {
-    if (!out) return 0;
+int k_path_normalize(const char *path, char *out, size_t cap,
+                     const struct kpath_scratch *scratch) {
+    if (!path || !out || !scratch_ok(scratch)) return 0;
+    if (k_strlcpy(scratch->buf, path, scratch->cap) >= scratch->cap) return 0;
+    return normalize_in_place(scratch->buf, out, cap);
+}
+
+int k_path_resolve(const char *base, const char *input, char *out, size_t cap,
+                   const struct kpath_scratch *scratch) {
+    if (!out || !scratch_ok(scratch)) return 0;
     if (!base) base = "/";
 
-    char scratch[KPATH_SCRATCH];
+    char  *sb = scratch->buf;
+    size_t sc = scratch->cap;
     if (!input || input[0] == '\0') {
-        if (k_strlcpy(scratch, base, sizeof scratch) >= sizeof scratch) return 0;
+        if (k_strlcpy(sb, base, sc) >= sc) return 0;
     } else if (k_path_is_absolute(input)) {
-        if (k_strlcpy(scratch, input, sizeof scratch) >= sizeof scratch) return 0;
+        if (k_strlcpy(sb, input, sc) >= sc) return 0;
     } else {
-        if (!k_path_join(base, input, scratch, sizeof scratch)) return 0;
+        if (!k_path_join(base, input, sb, sc)) return 0;
     }
-    return normalize_in_place(scratch, out, cap);
+    return normalize_in_place(sb, out, cap);
 }
 
 const char *k_path_basename(const char *path) {

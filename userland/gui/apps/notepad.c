@@ -66,8 +66,10 @@
 // visibly floating inside its own window.
 #define TEXT_PAD 3
 
-#define PATH_MAX_LEN 64 // FS_PATH_MAX
-
+#define PATH_MAX_LEN 64          // NOT FS_PATH_MAX (4096 since
+                                 // 2026-09-15) -- this app's own
+                                 // buffers, still the old bound.
+                                 // See docs/roadmap.md.
 // --- widget ids -------------------------------------------------------
 
 #define ID_MENU     1

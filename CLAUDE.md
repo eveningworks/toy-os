@@ -930,6 +930,9 @@ whenever a headline here tells you something you did not already know.
 
 `docs/conventions/storage.md`
 
+- **A PATH HAS THREE BOUNDS AND THEY ARE NOT INTERCHANGEABLE: `FS_PATH_MAX` (4096) is what a CALL may be handed, `FS_PATH_STORED_MAX` (256) is what a STRUCT may remember, `FS_NAME_MAX` (255) is one COMPONENT** -- they were one number (64) until 2026-09-15, and a path you BUILD from known parts gets a named constant of its own
+- **A PATH BUFFER IS NOT A KERNEL LOCAL -- `kpath_get()`/`kpath_put()`, Linux's `getname`/`putname` -- AND `kpath.c` CANNOT ALLOCATE ONE FOR YOU**, so `k_path_resolve()` takes a `struct kpath_scratch` from the caller (`klineedit.c`'s constraint, same answer); `-Wframe-larger-than` is what finds the sites
+- **A CONSTANT BORROWED TO MEAN SOMETHING IT DOES NOT NAME BREAKS THE FIRST TIME THE THING IT NAMES MOVES** -- `4096 - FS_PATH_MAX` was a margin until a path became 4096, and then nothing could be spawned at all
 - **ASK FOR A SCRATCH PATH, NEVER SPELL ONE -- `tmppath(buf, cap, TMP_VOLATILE|TMP_PERSISTENT, "name")` (`api/tmppath.h`). Both directories are SETTINGS, one registry answers in both rings, and a service descriptor says `%T`/`%V`.**
 - **`/tmp` IS IN RAM AND `/var/tmp` IS THE DISK, and picking the wrong one fails SILENTLY -- anything measuring the disk, or expected to survive a reboot, wants the second. Runtime state is `/run`.**
 - **A RAMFS MOUNT'S SIZE IS `-o size=`, THEN `storage.ramfs_size`, THEN HALF OF FREE -- and the setting's default MUST stay 0, or a diskless root gets a /tmp-sized cap.**
@@ -1778,8 +1781,9 @@ detail there, and keep the pointer here to a line. What each file is:
   `lsdrv` on a running machine is the live answer.
 - **`docs/filesystem-layout.md`** -- what lives where on the OS's own
   disk (`/bin` vs `/tests` vs `/usr/share` vs `/etc`), the deliberate
-  divergences from the FHS, and the budgets that constrain it (64-byte
-  caller-side paths everywhere). Not advisory: `tools/check_layout.py`
+  divergences from the FHS, and the budgets that constrain it (paths are
+  4096 now -- but the short names in `/bin` and `/lib` were chosen when
+  they were 64, and the host seeder's ~4 MB per-file cap still binds). Not advisory: `tools/check_layout.py`
   reads its table and fails `preflight`/CI if the built image disagrees,
   in either direction. Read it before adding a directory, a config file
   or any seeded data.

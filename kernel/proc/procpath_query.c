@@ -14,8 +14,8 @@
 #include "syscall_abi.h" // SYS_PROC_MAX
 #include "initcall.h"
 
-_Static_assert(QUERY_PROCPATH_MAX == FS_PATH_MAX,
-               "a record's path must hold what scheduler_exec_path() writes");
+_Static_assert(sizeof(struct query_procpath) <= QUERY_RECORD_MAX,
+               "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
 
 static int procpath_count(void) {
     int n = 0;

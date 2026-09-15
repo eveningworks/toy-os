@@ -164,9 +164,14 @@ int sys_mmap(struct syscall_ctx *c) {
         r->kind    = MMAP_KIND_SHM;
         r->shm_idx = shm_idx;
     } else if (f) {
+        // The region REMEMBERS this path to fault pages in from later,
+        // so a truncated one would read a different file. fs.h's
+        // FS_PATH_STORED_MAX is the bound a per-region copy gets.
+        if (k_strlcpy(r->path, f->file.name, sizeof r->path) >= sizeof r->path) {
+            ret = -ENAMETOOLONG; goto out;
+        }
         r->kind     = MMAP_KIND_FILE;
         r->file_off = m.offset;
-        k_strlcpy(r->path, f->file.name, sizeof r->path);
     }
     r->base = base; // last: a non-zero base is what makes the slot live
 

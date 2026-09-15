@@ -101,7 +101,10 @@ void mount_scratch_end(struct fs_scratch *sc);
 // handed. `out_sub` must be at least FS_PATH_MAX bytes; it receives the
 // root-relative path (rule 2). Returns NULL only when nothing at all is
 // mounted, which is a machine with no filesystem.
-const struct mount *mount_resolve(const char *path, char *out_sub, int sub_cap);
+// `*out_sub` is handed back as a pointer INTO `path` (or the literal
+// "/" for the mount point itself), so it needs no buffer and is valid
+// only as long as `path` is.
+const struct mount *mount_resolve(const char *path, const char **out_sub);
 
 // The root mount, or NULL. What fs_backend_name()/fs_is_persistent()
 // answer for, since every caller that predates mounts means the root.

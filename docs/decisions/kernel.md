@@ -388,6 +388,21 @@ start address has a full `FS_PATH_MAX` mapped bytes after it. Found
 live via QMP testing (`ls /` failed with "cannot access '/'"), not by
 review.
 
+**THE PREMISE STOPPED BEING TRUE, AND THE MARGIN OUTLIVED IT.** No
+path-taking syscall validates a fixed range any more: `resolve_user_path()`
+(`kernel/fs/fs_syscalls.c`) copies with `vmm_copy_string_from_user()`,
+which walks to the NUL and "fails only on an unreadable page", and
+`SYS_LISTDIR` now range-validates its OUTPUT array rather than its path
+pointer. The margin was still spelled `FS_PATH_MAX` -- so when a path
+became 4096 the reservation ate the whole 4096-byte page, every spawn
+failed the size test, and the machine could not start `/bin/init`. It is
+`ARGV_TAIL_MARGIN` (64) now, a number of its own, because a margin has to
+be small relative to the page it is carved from and had only ever been
+64 by coincidence. The general lesson is the one this project keeps
+relearning about pointers to numbers: a constant borrowed to mean
+something it does not name will be wrong the first time the thing it
+names moves.
+
 ## The M16 scheduler is permanently armed now -- an empty process table makes that safe
 
 `scheduler_armed` (`kernel/proc/scheduler.c`) used to be false by

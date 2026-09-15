@@ -149,7 +149,7 @@ static inline int t3_range_fits(uint64_t offset, uint64_t len) {
 // Deeper than any caller can currently express (every fs.h caller
 // holds FS_PATH_MAX=64 buffers), but the format has no path cap, so
 // this backend's own working buffer is roomier on purpose.
-#define T3_PATH_BUF     256
+#define T3_PATH_BUF     FS_PATH_MAX
 #define T3_NAME_MAX     255
 
 #define T3_SB_READ_RETRIES 3 // same transient-DMA-miss reasoning as TFS2's
@@ -865,9 +865,20 @@ static int resolve_walk(const char *norm, uint64_t *out_ino) {
 
 // Backend-internal normalization, per fs_ops.h's contract. kpath's
 // lexical normalize is exactly this job.
+// **EVERY PATH BUFFER IN THIS FILE IS STATIC, AND THAT IS THE FILE'S
+// EXISTING RULE RATHER THAN A NEW ONE.** tfs3 is non-reentrant by
+// contract -- vfs.c's FS_OP() holds preemption off across every backend
+// call, which is what already lets `S`, `g_blk` and `dirblk` be
+// module-level. One buffer PER FUNCTION, never a shared stack with a
+// depth counter: these calls nest (tfs3_is_dir -> lookup -> normalize)
+// and none of them recurses into itself, so separate buffers need no
+// push/pop and cannot leak a slot down an early return.
+static char g_norm_scratch[KPATH_SCRATCH_FOR(T3_PATH_BUF)];
+
 static int normalize(const char *path, char *out /* T3_PATH_BUF */) {
     if (!path) return 0;
-    return k_path_normalize(path, out, T3_PATH_BUF) == 0 ? 0 : 1;
+    struct kpath_scratch sc = { g_norm_scratch, sizeof g_norm_scratch };
+    return k_path_normalize(path, out, T3_PATH_BUF, &sc) == 0 ? 0 : 1;
 }
 
 // resolve() + normalize() in one, the common op prologue.
@@ -940,7 +951,7 @@ static int resolve(const char *norm, uint64_t *out_ino) {
 }
 
 static int lookup(const char *path, uint64_t *out_ino, struct t3_inode *out_node) {
-    char norm[T3_PATH_BUF];
+    static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
 
     uint64_t reads0 = 0;
@@ -2257,7 +2268,7 @@ static int split_parent(const char *norm, uint64_t *out_parent,
     for (const char *p = norm; *p; p++) if (*p == '/') last = p;
     uint32_t len = (uint32_t)k_strlen(last + 1);
     if (len == 0 || len > T3_NAME_MAX) return 0;
-    char parent[T3_PATH_BUF];
+    static char parent[T3_PATH_BUF]; // per-function, see normalize()
     if (last == norm) { parent[0] = '/'; parent[1] = '\0'; }
     else {
         uint32_t plen = (uint32_t)(last - norm);
@@ -2811,7 +2822,7 @@ static int tfs3_read_range_step(void *handle, uint32_t *out_total) {
 }
 
 static int tfs3_is_dir(const char *path) {
-    char norm[T3_PATH_BUF];
+    static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 1;
     struct t3_inode node;
@@ -2820,7 +2831,7 @@ static int tfs3_is_dir(const char *path) {
 }
 
 static int tfs3_exists(const char *path) {
-    char norm[T3_PATH_BUF];
+    static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 1;
     uint64_t ino;
@@ -2829,7 +2840,7 @@ static int tfs3_exists(const char *path) {
 
 static void tfs3_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir)) {
     struct t3_inode dir;
-    char norm[T3_PATH_BUF];
+    static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(dir_path, norm)) return;
     uint64_t ino = T3_INO_ROOT;
     if (k_strcmp(norm, "/") != 0 && !resolve(norm, &ino)) return;
@@ -2871,7 +2882,7 @@ static void tfs3_list(const char *dir_path, void (*cb)(const char *name, uint32_
 
 // Permission bits only -- the VFS has already masked the type off.
 static int tfs3_chmod(const char *path, uint16_t mode) {
-    char norm[T3_PATH_BUF];
+    static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return -ENOENT;
     if (k_strcmp(norm, "/") == 0) return -ENOENT;   // root has no entry
     uint64_t ino;
@@ -2887,7 +2898,7 @@ static int tfs3_chmod(const char *path, uint16_t mode) {
 }
 
 static int tfs3_stat(const char *path, struct fs_stat_info *out) {
-    char norm[T3_PATH_BUF];
+    static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 0; // root has no entry
     uint64_t ino;
@@ -2948,7 +2959,7 @@ static int create_entry(const char *path, uint8_t type, uint64_t *out_ino) {
 }
 
 static int create_entry_inner(const char *path, uint8_t type, uint64_t *out_ino) {
-    char norm[T3_PATH_BUF];
+    static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t existing;
     if (resolve(norm, &existing)) return 0; // caller decides what exists means
@@ -3009,7 +3020,7 @@ static int create_entry_inner(const char *path, uint8_t type, uint64_t *out_ino)
 }
 
 static int tfs3_touch(const char *path) {
-    char norm[T3_PATH_BUF];
+    static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
     struct t3_inode node;
@@ -3024,7 +3035,7 @@ static int tfs3_touch(const char *path) {
 }
 
 static int tfs3_mkdir(const char *path) {
-    char norm[T3_PATH_BUF];
+    static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
     if (resolve(norm, &ino)) return 0; // exists (file OR dir) -- refuse
@@ -3032,7 +3043,7 @@ static int tfs3_mkdir(const char *path) {
 }
 
 static int tfs3_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len) {
-    char norm[T3_PATH_BUF];
+    static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
     struct t3_inode node;
@@ -3045,7 +3056,7 @@ static int tfs3_write_range(const char *path, uint64_t offset, const void *buf, 
 }
 
 static int tfs3_write(const char *path, const char *data, int append) {
-    char norm[T3_PATH_BUF];
+    static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
     struct t3_inode node;
@@ -3079,7 +3090,7 @@ static int tfs3_write(const char *path, const char *data, int append) {
 }
 
 static int tfs3_delete(const char *path) {
-    char norm[T3_PATH_BUF];
+    static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 0;
     uint64_t ino;
@@ -3155,7 +3166,7 @@ static int tfs3_delete(const char *path) {
 // directories turn the tree into a graph, refused by every real Unix
 // filesystem for the same reason (see the design doc).
 static int tfs3_link(const char *existing, const char *newpath) {
-    char norm[T3_PATH_BUF], newnorm[T3_PATH_BUF];
+    static char norm[T3_PATH_BUF], newnorm[T3_PATH_BUF]; // see normalize()
     if (!S->mounted || !normalize(existing, norm) || !normalize(newpath, newnorm)) return 0;
     uint64_t ino, clash;
     struct t3_inode node;
@@ -3234,7 +3245,7 @@ static int path_is_within(const char *parent, const char *child) {
 // a v1 image can still rename freely and only refuses that one case,
 // with a message, instead of failing halfway.
 static int tfs3_rename(const char *oldpath, const char *newpath) {
-    char oldn[T3_PATH_BUF], newn[T3_PATH_BUF];
+    static char oldn[T3_PATH_BUF], newn[T3_PATH_BUF]; // see normalize()
     if (!S->mounted || !normalize(oldpath, oldn) || !normalize(newpath, newn)) return 0;
     if (k_strcmp(oldn, "/") == 0 || k_strcmp(newn, "/") == 0) return 0;
     if (k_strcmp(oldn, newn) == 0) return 1; // renaming to itself changes nothing
@@ -3311,7 +3322,7 @@ static int tfs3_rename(const char *oldpath, const char *newpath) {
 // (clear-after-persist): a crash in between costs leaked blocks that
 // fsck reclaims, never a live file pointing at freed space.
 static int tfs3_truncate(const char *path, uint64_t size) {
-    char norm[T3_PATH_BUF];
+    static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
     struct t3_inode node;
@@ -3376,7 +3387,7 @@ struct t3_write_step {
 };
 
 static void *tfs3_write_range_begin(const char *path, uint64_t offset, const void *buf, uint32_t len) {
-    char norm[T3_PATH_BUF];
+    static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     if (!t3_range_fits(offset, len)) return 0;
     uint64_t ino;

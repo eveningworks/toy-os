@@ -14,6 +14,11 @@
 #include "string.h"
 #include "strace.h"
 #include "uaddr.h"
+// Reserved, never-written padding at the top of the argv page, so a
+// string landing near the end still has mapped bytes after it. 64 is
+// what FS_PATH_MAX used to be, kept as the margin it actually was.
+#define ARGV_TAIL_MARGIN 64
+
 
 // Stack/heap/guard addresses come from uaddr.h -- this loader and the
 // scheduler's build the SAME ring-3 layout, and used to say so in two
@@ -124,15 +129,17 @@ int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
     size_t env_bytes = 0;
     if (env) for (const char *e = env; *e; e += k_strlen(e) + 1) env_bytes += k_strlen(e) + 1;
 
-    // Strings go downward, starting FS_PATH_MAX bytes below the page's
-    // true top rather than right at it -- reserved, never-written
-    // padding. Several syscalls that take a path argument (SYS_LISTDIR
-    // chief among them) validate a full FS_PATH_MAX-byte range starting
-    // at whatever pointer userland passes in, not just up to its NUL,
-    // so argv[0] landing near the page's end ran that check off the
-    // mapped page. The margin guarantees every string's start, whichever
-    // ends up highest, still has FS_PATH_MAX mapped bytes after it.
-    size_t offset = 4096 - FS_PATH_MAX;
+    // Strings go downward, starting ARGV_TAIL_MARGIN bytes below the
+    // page's true top rather than right at it -- reserved, never-written
+    // padding, so a string starting near the top still has mapped bytes
+    // after it.
+    //
+    // **IT WAS FS_PATH_MAX, AND THAT STOPPED BEING A MARGIN WHEN A PATH
+    // BECAME 4096** -- it reserved the whole page, every spawn failed
+    // the size test below, and the machine could not start /bin/init.
+    // A margin has to be small relative to the page it is carved from,
+    // which is the reason it is now a number of its own.
+    size_t offset = 4096 - ARGV_TAIL_MARGIN;
     if (!auxv) auxc = 0;
     size_t block_bytes = 8                              // argc
                         + (size_t)(argc + 1) * 8        // argv[] + NULL
@@ -145,7 +152,7 @@ int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
 
     // The strings, argv[0] highest, each pointer written as its string
     // lands.
-    size_t at = 4096 - FS_PATH_MAX;
+    size_t at = 4096 - ARGV_TAIL_MARGIN;
     blk[0] = (uint64_t)argc;
     if (!argv) {
         size_t len = k_strlen(path);

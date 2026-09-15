@@ -17,6 +17,7 @@
 #include "signal.h"  // signal_send(), signal_send_group() -- SYS_KILL is a signal now
 #include "ksignal.h" // signal_name(), for the log line
 #include "fs.h"
+#include "kpath_buf.h" // a path is 4096 now and may not be a kernel local
 #include "timer.h"       // pit_ticks() -- SYS_TICKS
 #include "clocksource.h" // clocksource_now_ns() -- SYS_MONOTONIC_NS
 #include "uaddr.h"
@@ -524,7 +525,11 @@ static int spawn_std_desc(uint64_t pml4, int fd, enum fd_kind want) {
 // held across an ELF load would be overwritten by a concurrent spawn.
 // 0 or -errno; on an error nothing is held.
 struct spawn_args {
-    char        path[FS_PATH_MAX];
+    // Pooled, not inline: a struct spawn_args is a LOCAL in sys_spawn()
+    // and sys_exec(), and at FS_PATH_MAX = 4096 that put a quarter of a
+    // kernel stack in each. It rides the alloc/free pair this struct
+    // already had.
+    char       *path;
     char       *envbuf;
     const char *env;
     char       *argbuf;
@@ -535,12 +540,16 @@ struct spawn_args {
 static void spawn_args_free(struct spawn_args *a) {
     if (a->envbuf) kfree(a->envbuf);
     if (a->argbuf) kfree(a->argbuf);
+    if (a->path)   kpath_put(a->path);
     a->envbuf = a->argbuf = 0;
+    a->path = 0;
 }
 
 static int spawn_args_collect(uint64_t pml4, const struct spawn_msg *msg,
                               struct spawn_args *a, const char *who) {
     k_memset(a, 0, sizeof *a);
+    a->path = kpath_get();
+    if (!a->path) return -ENOMEM;
     if (msg->env) {
         a->envbuf = kmalloc(SYS_ENV_MAX);
         if (!a->envbuf) return -ENOMEM;

@@ -57,9 +57,14 @@
 
 // PATH_MAX is the size of the buffer a path is declared with, counting
 // the terminator -- the same thing `FS_PATH_MAX` means, which is what
-// makes them comparable. NAME_MAX is one component of one, so it is
-// PATH_MAX less the leading '/' and the terminator.
-#define PATH_MAX 64
-#define NAME_MAX (PATH_MAX - 2)
+// makes them comparable. NAME_MAX is one COMPONENT and is a separate
+// bound, not a subtraction from this one: 255 is what TFS3 stores.
+//
+// A ring-3 stack is 8 MiB, so a local of this size is affordable here
+// in a way it is not in ring 0 -- but -Wframe-larger-than=2048 still
+// refuses one, deliberately. Heap-allocate, or reach for a shorter
+// buffer when the path is known-short.
+#define PATH_MAX 4096
+#define NAME_MAX 255
 
 #endif

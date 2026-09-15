@@ -180,8 +180,12 @@ int cursor_shape_parse(const char *text, uint32_t len, struct cursor_shape *out)
 
 // --- loading ---------------------------------------------------------
 
+// Constructed, not caller-supplied: CURSOR_DIR "/<theme>/<shape>", so
+// it is bounded by its own shape rather than by FS_PATH_MAX.
+#define CURSOR_PATH_MAX 192
+
 static int load_one(const char *theme, int index) {
-    char path[FS_PATH_MAX];
+    char path[CURSOR_PATH_MAX];
     if (!k_snprintf(path, sizeof path, "%s/%s/%s", CURSOR_DIR, theme,
                      g_names[index]))
         return 0;

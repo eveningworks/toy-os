@@ -1322,3 +1322,62 @@ device -- and it has to `mount_enter()` first, because `S` names the
 mount an operation is running on and is NULL between operations by
 design. Testing `S` without entering skipped the test on every boot,
 which reads exactly like a pass.
+
+## **A PATH HAS THREE BOUNDS AND THEY ARE NOT INTERCHANGEABLE: `FS_PATH_MAX` (4096) is what a CALL may be handed, `FS_PATH_STORED_MAX` (256) is what a STRUCT may remember, `FS_NAME_MAX` (255) is one COMPONENT**
+
+They were one number (64) until 2026-09-15, and spelling all three with
+the same constant is what stopped a deep path being openable at all.
+Pick by what the buffer is FOR, not by the fact that it holds a path:
+
+- Passing a path into a call, or receiving one from ring 3 ->
+  `FS_PATH_MAX`. **And it may not be a stack local** (below).
+- A field in a struct that outlives the call -> `FS_PATH_STORED_MAX`.
+  These get MULTIPLIED: an `mmap_region` path at 4096 is 8 MB of kernel
+  `.bss`. Refuse what does not fit; never truncate.
+- A single filename, with no '/' in it -> `FS_NAME_MAX` (255). **But
+  `struct dirent.name` is still 64**, so a name longer than 63 bytes can
+  be created and cannot be LISTED. That gap is measured and deliberate
+  (`docs/decisions.md`): widening the record costs ~50 KiB per
+  `opendir()` in a ring 3 whose `free()` never returns memory, and it
+  took `filemanager_test` from 1 failure to 16.
+- A path you BUILD from known parts (`/etc/settings.d/<ns>.<name>`) ->
+  a named constant of its own, in the file that builds it. It is bounded
+  by its own shape, so it stays a small stack local.
+
+`docs/decisions.md` has the measurement behind each number.
+
+## **A PATH BUFFER IS NOT A KERNEL LOCAL -- `kpath_get()`/`kpath_put()` -- AND `kpath.c` CANNOT ALLOCATE ONE FOR YOU**
+
+A kernel stack is 16 KiB with one guard page; two 4096-byte path locals
+is half of it. `api/kpath_buf.h` is Linux's `getname()`/`putname()` pair,
+and **a `get()` can fail, so every caller grows an `-ENOMEM` path** --
+that is the cost of the move off the stack, and it is deliberate.
+`-Wframe-larger-than` is what finds the sites: it named all 47 of them
+when the constant moved, and a clean build is the check that they are
+gone.
+
+**`k_path_normalize()`/`k_path_resolve()` take the scratch from the
+CALLER** (`struct kpath_scratch`, sized `KPATH_SCRATCH_FOR(n)` -- a
+resolve joins before it collapses, so the working string outgrows its
+own result). `kernel/lib/kpath.c` is on the shared-source path, where the
+build strips the C library from its include path, so it can name neither
+`kmalloc` nor `malloc` -- the identical constraint `klineedit.c` answers
+with `struct kline_mem`.
+
+Three places deliberately do something else, and each is right for its
+reason: `mount_resolve()` BORROWS (the backend-relative path is a suffix
+of the caller's string, so there is nothing to copy); `tfs3.c` uses one
+STATIC per function (the backend is non-reentrant under `FS_OP()`, and
+one-per-function means no push/pop to leak down an early return); and
+the kernel shell uses statics too (one command runs at a time).
+
+## **A CONSTANT BORROWED TO MEAN SOMETHING IT DOES NOT NAME BREAKS THE FIRST TIME THE THING IT NAMES MOVES**
+
+`elf_run.c` reserved `4096 - FS_PATH_MAX` bytes at the top of the argv
+page as never-written margin. At 64 that was a 64-byte margin; at 4096 it
+was the whole page, every spawn failed its size test, and the machine
+could not start `/bin/init` -- while the filesystem, the shell and `ls`
+all still worked, so nothing pointed at paths. It is `ARGV_TAIL_MARGIN`
+now. When you move a constant, grep for ARITHMETIC on it, not just for
+its use as a size: `4096 - X` and `X * 2` are the shapes that change
+meaning rather than merely changing value.

@@ -42,7 +42,7 @@ static const char *second_mount_path(void) {
 // concatenated with a literal, so the suffix is an argument.
 static const char *second_under(const char *rel) {
     static char p[FS_PATH_MAX];
-    char base[FS_PATH_MAX];
+    static char base[FS_PATH_MAX]; // a path is 4096; KTESTs run on a kernel stack
     k_snprintf(base, sizeof base, "second%s", rel);
     if (!tmppath(p, sizeof p, TMP_PERSISTENT, base)) p[0] = '\0';
     return p;
@@ -60,14 +60,14 @@ KTEST("mount", "the root answers for everything nothing else claims") {
     KTEST_ASSERT(root != 0);
     KTEST_ASSERT_EQ(root->point_len, 1);
 
-    char sub[64];
-    const struct mount *m = mount_resolve("/etc/toyos.conf", sub, sizeof sub);
+    const char *sub = 0;
+    const struct mount *m = mount_resolve("/etc/toyos.conf", &sub);
     KTEST_ASSERT(m == root);
     // The root's sub-path is the path UNCHANGED -- stripping a "/" off
     // it would hand every backend a relative path.
     KTEST_ASSERT_EQ(k_strcmp(sub, "/etc/toyos.conf"), 0);
 
-    m = mount_resolve("/", sub, sizeof sub);
+    m = mount_resolve("/", &sub);
     KTEST_ASSERT(m == root);
     KTEST_ASSERT_EQ(k_strcmp(sub, "/"), 0);
 }
@@ -75,15 +75,15 @@ KTEST("mount", "the root answers for everything nothing else claims") {
 KTEST("mount", "a mount claims its subtree, and the backend sees a root-relative path") {
     if (!mnt_ramfs("/mnt")) { KTEST_SKIP("could not mount ramfs at /mnt"); }
 
-    char sub[64];
-    const struct mount *m = mount_resolve("/mnt/a/b.txt", sub, sizeof sub);
+    const char *sub = 0;
+    const struct mount *m = mount_resolve("/mnt/a/b.txt", &sub);
     KTEST_ASSERT(m != 0);
     KTEST_ASSERT_EQ(k_strcmp(m->fs->name, "ramfs"), 0);
     KTEST_ASSERT_EQ(k_strcmp(sub, "/a/b.txt"), 0);
 
     // The mount point ITSELF resolves to that filesystem's root, not to
     // an empty string -- a backend handed "" has no path at all.
-    m = mount_resolve("/mnt", sub, sizeof sub);
+    m = mount_resolve("/mnt", &sub);
     KTEST_ASSERT_EQ(k_strcmp(m->fs->name, "ramfs"), 0);
     KTEST_ASSERT_EQ(k_strcmp(sub, "/"), 0);
 
@@ -97,8 +97,8 @@ KTEST("mount", "a mount point does not claim a sibling that shares its prefix") 
     if (!fs_is_dir(SIBLING)) { KTEST_SKIP("could not create " SIBLING); }
     if (!mnt_ramfs("/mnt")) { fs_delete(SIBLING); KTEST_SKIP("could not mount ramfs at /mnt"); }
 
-    char sub[64];
-    const struct mount *sib = mount_resolve(SIBLING "/x", sub, sizeof sub);
+    const char *sub = 0;
+    const struct mount *sib = mount_resolve(SIBLING "/x", &sub);
     KTEST_ASSERT(sib == mount_root());
     // The path arrives at the ROOT unchanged, mount point and all.
     KTEST_ASSERT_EQ(k_strcmp(sub, SIBLING "/x"), 0);
@@ -227,11 +227,11 @@ KTEST("mount", "rename across a mount boundary is refused") {
 // consulted.
 KTEST("mount", "`..` cannot escape a mount root, because it never arrives") {
     if (!mnt_ramfs("/mnt")) { KTEST_SKIP("could not mount ramfs at /mnt"); }
-    char sub[64];
+    const char *sub = 0;
     // A caller that DID pass ".." (against api/fs.h's contract) must not
     // be handed a path that leaves the mount -- it resolves inside it
     // and the backend rejects the component.
-    const struct mount *m = mount_resolve("/mnt/../etc", sub, sizeof sub);
+    const struct mount *m = mount_resolve("/mnt/../etc", &sub);
     KTEST_ASSERT_EQ(k_strcmp(m->fs->name, "ramfs"), 0);
     KTEST_ASSERT_EQ(k_strcmp(sub, "/../etc"), 0);
     KTEST_ASSERT(!fs_exists("/mnt/../etc"));
@@ -273,7 +273,7 @@ KTEST("mount", "a mount's size reaches the backend, and 0 means the default") {
         KTEST_SKIP("could not mount a sized ramfs at /mnt");
     }
     uint64_t used = 0, total = 0;
-    const struct mount *m = mount_resolve("/mnt", (char[64]){0}, 64);
+    const struct mount *m = mount_resolve("/mnt", 0);
     int got = m && fs_mount_usage(m, &used, &total);
     KTEST_ASSERT(mount_remove("/mnt", &why));
     KTEST_ASSERT(got);
@@ -285,7 +285,7 @@ KTEST("mount", "a mount's size reaches the backend, and 0 means the default") {
         KTEST_SKIP("could not mount a default-sized ramfs at /mnt");
     }
     uint64_t deflt = 0;
-    m = mount_resolve("/mnt", (char[64]){0}, 64);
+    m = mount_resolve("/mnt", 0);
     got = m && fs_mount_usage(m, &used, &deflt);
     KTEST_ASSERT(mount_remove("/mnt", &why));
     KTEST_ASSERT(got);

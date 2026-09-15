@@ -91,7 +91,7 @@ static int under(const char *point, int plen, const char *path) {
     return next == '\0' || next == '/';
 }
 
-const struct mount *mount_resolve(const char *path, char *out_sub, int sub_cap) {
+const struct mount *mount_resolve(const char *path, const char **out_sub) {
     if (!path) path = "/";
     const struct mount *best = NULL;
     for (int i = 0; i < MOUNT_MAX; i++) {
@@ -104,15 +104,18 @@ const struct mount *mount_resolve(const char *path, char *out_sub, int sub_cap) 
     }
     if (!best) return NULL;
 
-    if (out_sub && sub_cap > 0) {
+    if (out_sub) {
         // RULE 2: the backend is handed a root-relative path and never
         // learns where it is mounted.
+        //
+        // **THE RESULT POINTS INTO `path`** -- stripping a mount point
+        // leaves a SUFFIX, so there is nothing to copy and no buffer to
+        // size. It used to copy into the caller's array, which put an
+        // FS_PATH_MAX local in every fs_*() in vfs.c; at 4096 that was
+        // a quarter of a kernel stack per call. The borrow is only
+        // valid while `path` is.
         const char *rest = (best->point_len == 1) ? path : path + best->point_len;
-        if (rest[0] == '\0') { // the mount point itself
-            k_strlcpy(out_sub, "/", (uint32_t)sub_cap);
-        } else {
-            k_strlcpy(out_sub, rest, (uint32_t)sub_cap);
-        }
+        *out_sub = (rest[0] == '\0') ? "/" : rest; // "" means the mount point itself
     }
     return best;
 }

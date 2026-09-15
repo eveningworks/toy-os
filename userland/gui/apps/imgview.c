@@ -39,7 +39,10 @@
 
 #define WIN_W 720
 #define WIN_H 460
-#define PATH_MAX_LEN 64          // FS_PATH_MAX
+#define PATH_MAX_LEN 64          // NOT FS_PATH_MAX (4096 since
+                                 // 2026-09-15) -- this app's own
+                                 // buffers, still the old bound.
+                                 // See docs/roadmap.md.
 #define MAX_FILES 64
 #define SIDEBAR_CHARS 16
 #define WALLPAPER_DIR "/usr/share/wallpapers"

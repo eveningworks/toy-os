@@ -56,7 +56,7 @@ in check_layout.py changes with it.)
 | `/etc/ssl/certs` | One PEM file per trust anchor, read by `utls_connect()`. **Legitimately EMPTY**, and that is a supported state rather than a missing step: with no anchors nothing verifies, so `wget https://` refuses by name instead of connecting to something it cannot vouch for. `make iso EXTRAS=1` stages the Mozilla CA bundle (MPL-2.0) into it -- see `data/etc/ssl/certs/README.md` | build | present |
 | `/tests` | Test/demo binaries -- one kernel mechanism each -- plus two FIXTURES, `sample.txt` and `sine1k.wav`. Every line names its own number, because moving identical content is pixel-identical and a scroll test over repeated lines cannot tell a working scroll from a dead one; the content is hostile on purpose (a 400-column line, an exactly-80 one, trailing spaces, a tab, a last line with no newline). Kept apart from `/usr/share/doc/toy-os.txt` so the fixture can be awkward without making the document worse to read, and so editing the document cannot break a test's line numbers. `sine1k.wav` is a steady 1 kHz tone at 44.1 kHz: the shipped sounds under `/usr/share/sounds` are musical and cannot be measured by a zero-crossing count, which is what `tools/audio_test.py` does on the host | build | present |
 | `/install` | The four files `/bin/install` needs to make another disk boot: `kernel.bin`, `grub.cfg`, `boot.img` and `core.img`. In the ROOT rather than in `/boot` because a LIVE boot has no `/boot` at all -- GRUB loads the kernel and a filesystem image into RAM and nothing drives the medium afterwards -- and installing from live media is how a real machine gets toy-os. Every toy-os filesystem carries it, so `install` reads one path on every medium. Staged by `tools/install_grub.py --stage-payload`; ABSENT on a build made without GRUB's BIOS target, which boots fine and cannot install itself | build | optional |
-| `/lib` | The dynamic loader (`ld-toy.so`) and the shared libraries (`lib*.so`) -- where every Unix keeps them, and short because every caller-side path buffer is 64 bytes. `PT_INTERP` names the loader by this absolute path, and the loader resolves a `DT_NEEDED` name against this one directory (no search path, no rpath) | build | present |
+| `/lib` | The dynamic loader (`ld-toy.so`) and the shared libraries (`lib*.so`) -- where every Unix keeps them, and short because caller-side path buffers were 64 bytes when it was named, and because `PT_INTERP`'s own field still is. `PT_INTERP` names the loader by this absolute path, and the loader resolves a `DT_NEEDED` name against this one directory (no search path, no rpath) | build | present |
 | `/lib/modules` | Loadable kernel modules, one `<name>.ko` per driver `drivers.conf` builds as a module (plus the test modules `hello` and `unexported`), and `modules.alias` -- the PCI-id-to-module table `tools/gen_modalias.py` derives from them, which is what the kernel loads modules BY at boot. `modload <name>` reads `<name>.ko` from here. Where Linux keeps them, minus the per-kernel-version directory: one build, one kernel | build | present |
 | `/tmp` | Scratch space, and a MOUNT POINT: the `tmpfs` service puts a ramfs over it at boot (`data/etc/services.d/tmpfs`), so it is in RAM and does not survive a reboot. Sized by `storage.ramfs_size`, whose default of 0 means half of free memory -- tmpfs's own default. The directory created here is what a machine sees only if that service is removed, and what was in it is HIDDEN rather than lost while the mount stands | boot | present |
 | `/var/tmp` | Scratch that must SURVIVE a reboot, and must be REAL STORAGE. The FHS's distinction from `/tmp`, and Linux's reason for keeping both once `/tmp` is a tmpfs. Anything measuring the disk belongs here -- `diskbench`, Disk Benchmark's scratch file, the shell's `stress` -- because the same work against a ramfs measures memcpy and reports a number that is enormous and meaningless. So do `remote.py`'s sync checksums and the KTESTs that assert what the DEVICE did | boot | present |
@@ -126,9 +126,8 @@ seed it to `/bin` from the start.
 not meant to be invoked directly by users" is `/usr/libexec`, and that
 was the alternative considered. `/tests` won on three grounds: it is
 unmissable (nobody wonders whether `/tests/nx_test` is part of the real
-OS), it keeps paths short under the 64-byte caller-side path buffers
-(`FS_PATH_MAX` -- a format limit only on TFS2 now, but every caller
-still holds buffers that size), and `/usr/libexec` carries an implication these binaries don't
+OS), it keeps paths short, which mattered more when caller-side buffers were
+64 bytes (`FS_PATH_MAX` is 4096 now) and is still worth having, and `/usr/libexec` carries an implication these binaries don't
 match -- they aren't internal helpers invoked by other programs, they're
 exercises a person runs on purpose. The cost is one name a
 newcomer-from-Linux won't recognise, which this table answers.
@@ -253,11 +252,12 @@ shared by files and directories, 255-byte names, and no on-disk path
 length limit (`docs/tfs3-spec.md`'s Limits table). Two ceilings do
 remain and are worth knowing:
 
-- **`FS_PATH_MAX` = 64 still binds every CALLER**: the shell, apps
-  and syscall surface all hold 64-byte path buffers, so a path deeper
-  than that can exist on disk (via the host tool) but can't be typed
-  or resolved inside toy-os yet. Raising the API constant is its own
-  audit, tracked under Milestone 15's remaining items.
+- ~~**`FS_PATH_MAX` = 64 still binds every CALLER**~~ -- **RAISED to
+  4096 on 2026-09-15**, so a path deep enough to need it can now be
+  typed and resolved, not merely written by the host tool. Note the
+  bound SPLIT in the same change: `FS_PATH_STORED_MAX` (256) is what a
+  long-lived struct may remember and `FS_NAME_MAX` (255) is one
+  component. See `docs/conventions/storage.md`.
 - The host writer tools cap a single written file at
   direct+single-indirect (~4.03 MB) -- a seeding-path bound, not a
   format one.

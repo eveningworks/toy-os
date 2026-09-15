@@ -377,7 +377,12 @@ void addr_end_edit(int commit) {
         char path[PATH_MAX_LEN], was[PATH_MAX_LEN];
         strlcpy(was, uui_fileview_dir(&g_pane[pane]), sizeof was);
         const char *typed = uui_textbox_text(&g_addr[pane]);
-        if (!k_path_resolve(was, typed, path, sizeof path)) {
+        // The scratch is the caller's now (kpath.h) and is twice a
+        // path; static rather than a local because a GUI client's
+        // event loop is one thread and this does not recurse.
+        static char scratch[KPATH_SCRATCH_FOR(PATH_MAX_LEN)];
+        struct kpath_scratch sc = { scratch, sizeof scratch };
+        if (!k_path_resolve(was, typed, path, sizeof path, &sc)) {
             set_note("path too long");
             return;
         }

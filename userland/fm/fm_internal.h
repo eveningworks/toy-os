@@ -33,7 +33,10 @@
 //   fm_thumbs.c  the lazy thumbnail cache
 //   fm_modal.c   Rename / New folder (the two prompts with a text field)
 
-#define PATH_MAX_LEN 64          // FS_PATH_MAX
+#define PATH_MAX_LEN 64          // NOT FS_PATH_MAX (4096 since
+                                 // 2026-09-15) -- this app's own
+                                 // buffers, still the old bound.
+                                 // See docs/roadmap.md.
 #define PANE_FILES  SYS_LISTDIR_MAX
 
 // The Properties window is a PROCESS, not a dialog in this one. See

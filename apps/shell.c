@@ -29,6 +29,7 @@
 #include "apps.h"
 #include "shell_complete.h"
 #include "histsearch.h" // the Ctrl-R loop, shared with /bin/tosh
+#include "kpath.h"      // k_path_resolve() and its caller-supplied scratch
 
 // Ctrl-<letter> arrives as that letter's control code -- see keyboard.h
 // on the encoding. Only reverse_search() below has to name one
@@ -73,7 +74,14 @@ int history_count = 0; // number of entries stored (caps at HISTORY_MAX)
 // state, and fs.c still only ever sees already-normalized absolute
 // paths (see its own top comment). kpath just does the string work.
 int resolve_path(const char *input, char *out) {
-    return k_path_resolve(cwd, input, out, FS_PATH_MAX);
+    // Static: k_path_resolve() takes its scratch from the caller now
+    // (kpath.h), and at FS_PATH_MAX = 4096 the join buffer is 8 KiB --
+    // half a kernel stack. The kernel shell is one context and this
+    // does not recurse, the same reason tfs3.c's path buffers are
+    // static.
+    static char scratch[KPATH_SCRATCH_FOR(FS_PATH_MAX)];
+    struct kpath_scratch sc = { scratch, sizeof scratch };
+    return k_path_resolve(cwd, input, out, FS_PATH_MAX, &sc);
 }
 
 static void dispatch(char *line) {

@@ -41,7 +41,7 @@ void cmd_cat(const char *name) {
         vga_write("usage: cat <file>\n");
         return;
     }
-    char path[FS_PATH_MAX];
+    static char path[FS_PATH_MAX]; // static: a path is 4096 now and the kernel shell runs one command at a time
     if (!resolve_path(name, path)) {
         vga_write("cat: path too long\n");
         return;
@@ -95,7 +95,7 @@ void cmd_touch(const char *name) {
         vga_write("usage: touch <file>\n");
         return;
     }
-    char path[FS_PATH_MAX];
+    static char path[FS_PATH_MAX]; // static: a path is 4096 now and the kernel shell runs one command at a time
     if (!resolve_path(name, path) || !fs_touch(path)) {
         vga_write("touch: failed (bad path, missing parent directory, or disk full)\n");
     }
@@ -106,7 +106,7 @@ void cmd_mkdir(const char *name) {
         vga_write("usage: mkdir <dir>\n");
         return;
     }
-    char path[FS_PATH_MAX];
+    static char path[FS_PATH_MAX]; // static: a path is 4096 now and the kernel shell runs one command at a time
     if (!resolve_path(name, path) || !fs_mkdir(path)) {
         vga_write("mkdir: failed (bad path, missing parent directory, already exists, or disk full)\n");
     }
@@ -121,14 +121,14 @@ void cmd_write_or_append(const char *args, int append) {
         vga_write(append ? "usage: append <file> <text>\n" : "usage: write <file> <text>\n");
         return;
     }
-    char name[FS_PATH_MAX];
+    static char name[FS_PATH_MAX];
     const char *rest = args;
     unsigned int i = 0;
     while (*rest && *rest != ' ' && i < FS_PATH_MAX - 1) name[i++] = *rest++;
     name[i] = '\0';
     while (*rest == ' ') rest++;
 
-    char path[FS_PATH_MAX];
+    static char path[FS_PATH_MAX]; // static: a path is 4096 now and the kernel shell runs one command at a time
     if (!resolve_path(name, path)) {
         vga_write("write: failed\n");
         return;
@@ -161,7 +161,7 @@ void cmd_rm(const char *name) {
         vga_write("usage: rm <file>\n");
         return;
     }
-    char path[FS_PATH_MAX];
+    static char path[FS_PATH_MAX]; // static: a path is 4096 now and the kernel shell runs one command at a time
     if (!resolve_path(name, path)) {
         vga_write("rm: path too long\n");
         return;
@@ -207,7 +207,7 @@ void cmd_stat(const char *name) {
         vga_write("usage: stat <path>\n");
         return;
     }
-    char path[FS_PATH_MAX];
+    static char path[FS_PATH_MAX]; // static: a path is 4096 now and the kernel shell runs one command at a time
     if (!resolve_path(name, path)) {
         vga_write("stat: path too long\n");
         return;
@@ -250,7 +250,7 @@ void cmd_pwd(void) {
 }
 
 void cmd_cd(const char *args) {
-    char path[FS_PATH_MAX];
+    static char path[FS_PATH_MAX]; // static: a path is 4096 now and the kernel shell runs one command at a time
     // Bare `cd` (no args) goes to root -- there's no $HOME concept here.
     if (!resolve_path((args && k_strlen(args) > 0) ? args : "/", path)) {
         vga_write("cd: path too long\n");
@@ -274,7 +274,7 @@ void cmd_cd(const char *args) {
 // command -- on a filesystem whose format has no link counts
 // it says so instead of failing mysteriously.
 void cmd_ln(const char *args) {
-    char first[FS_PATH_MAX];
+    static char first[FS_PATH_MAX];
     int n = 0;
     const char *p = args;
     while (*p == ' ') p++;
@@ -292,7 +292,7 @@ void cmd_ln(const char *args) {
         vga_write(") has no hardlinks\n");
         return;
     }
-    char src[FS_PATH_MAX], dst[FS_PATH_MAX];
+    static char src[FS_PATH_MAX], dst[FS_PATH_MAX];
     if (!resolve_path(first, src) || !resolve_path(p, dst)) {
         vga_write("ln: path too long\n");
         return;
@@ -320,7 +320,7 @@ void cmd_ln(const char *args) {
 // prints nothing) if either word is missing, so each caller can print
 // its own usage line.
 static int two_paths(const char *args, const char *what, char *a, char *b) {
-    char first[FS_PATH_MAX];
+    static char first[FS_PATH_MAX];
     int n = 0;
     const char *p = args;
     while (*p == ' ') p++;
@@ -340,7 +340,7 @@ static int two_paths(const char *args, const char *what, char *a, char *b) {
 // silently destroys the destination is the one mistake this command
 // can make that the user cannot undo.
 void cmd_mv(const char *args) {
-    char src[FS_PATH_MAX], dst[FS_PATH_MAX];
+    static char src[FS_PATH_MAX], dst[FS_PATH_MAX];
     int r = two_paths(args, "mv", src, dst);
     if (r < 0) return;
     if (r == 0) {
@@ -378,7 +378,7 @@ void cmd_mv(const char *args) {
 // `truncate <file> <size>` -- set a file's size exactly. Growing is
 // sparse, so `truncate big 1000000000` is instant and costs no blocks.
 void cmd_truncate(const char *args) {
-    char first[FS_PATH_MAX], path[FS_PATH_MAX];
+    static char first[FS_PATH_MAX], path[FS_PATH_MAX];
     int n = 0;
     const char *p = args;
     while (*p == ' ') p++;

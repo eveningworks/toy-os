@@ -477,9 +477,9 @@ struct sched_process {
 // spells its size as a literal. This is what stops the two drifting.
 _Static_assert(sizeof(((struct sched_cwd *)0)->path) == FS_PATH_MAX,
                "struct sched_cwd::path must match FS_PATH_MAX");
-_Static_assert(sizeof(((struct mmap_region *)0)->path) == FS_PATH_MAX,
-               "mmap_region.path must hold any fs path -- same 64 the "
-               "sched_cwd assert above pins, for the same reason");
+_Static_assert(sizeof(((struct mmap_region *)0)->path) == FS_PATH_STORED_MAX,
+               "mmap_region.path is a STORED path (fs.h): 32 per process, so it "
+               "takes the smaller bound and mmap REFUSES anything longer");
 
 static struct sched_process procs[MAX_PROCS];
 
@@ -2606,7 +2606,10 @@ int scheduler_exec_path(int pid, char *out, unsigned cap) {
     if (pid < 1 || pid > MAX_PROCS) return 0;   // slot is pid - 1, as everywhere here
     struct sched_process *p = &procs[pid - 1];
     if (p->state == SCHED_UNUSED) return 0;
-    k_strlcpy(out, p->exec_path, cap);
+    // REFUSE rather than truncate: callers match on this string to
+    // decide which program a window belongs to, and a shortened path
+    // matches the wrong one.
+    if (k_strlcpy(out, p->exec_path, cap) >= cap) { out[0] = '\0'; return 0; }
     return out[0] ? 1 : 0;
 }
 

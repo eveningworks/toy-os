@@ -525,10 +525,14 @@ int module_load(const char *path) {
 
 #define ALIAS_FILE MODULE_DIR "/modules.alias"
 #define ETC_MODULES "/etc/modules"
+// A module path is MODULE_DIR "/<name>.ko" -- bounded by its own
+// construction, so it needs neither FS_PATH_MAX nor a kpath_get().
+#define MODULE_PATH_MAX 192
+
 #define BOOT_FILE_CAP (64u * 1024)
 
 static void load_named(const char *name) {
-    char path[FS_PATH_MAX];
+    char path[MODULE_PATH_MAX]; // constructed, not caller-supplied
     size_t n = k_snprintf(path, sizeof path, MODULE_DIR "/%s.ko", name);
     if (n == 0 || n >= sizeof path) return;   // did not fit: k_snprintf wrote nothing
     module_load(path);   // the reason for a refusal is already in the log
@@ -613,7 +617,7 @@ INITCALL(module_boot_init, INIT_CONFIG);
 // --- syscalls -------------------------------------------------------------
 
 int sys_modload(struct syscall_ctx *c) {
-    char path[FS_PATH_MAX];
+    char path[MODULE_PATH_MAX]; // constructed, not caller-supplied
     if (!vmm_copy_string_from_user(c->pml4, path, c->a0, sizeof path)) {
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;

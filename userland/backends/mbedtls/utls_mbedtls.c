@@ -91,11 +91,14 @@ static int load_anchors(mbedtls_x509_crt *ca, const char *dir) {
 
     int loaded = 0;
     struct dirent *e;
+    // One buffer for the whole walk: PATH_MAX is 4096, which a ring-3
+    // stack can afford and -Wframe-larger-than=2048 still refuses.
+    char *path = malloc(PATH_MAX);
+    if (!path) { closedir(d); return 0; }
     while ((e = readdir(d))) {
         if (e->d_name[0] == '.') continue;
 
-        char path[PATH_MAX];
-        if ((size_t)snprintf(path, sizeof path, "%s/%s", dir, e->d_name) >= sizeof path)
+        if ((size_t)snprintf(path, PATH_MAX, "%s/%s", dir, e->d_name) >= (size_t)PATH_MAX)
             continue; // a path that does not fit is skipped, never truncated
 
         FILE *f = fopen(path, "rb");
@@ -118,6 +121,7 @@ static int load_anchors(mbedtls_x509_crt *ca, const char *dir) {
             loaded++;
         free(pem);
     }
+    free(path);
     closedir(d);
     return loaded;
 }

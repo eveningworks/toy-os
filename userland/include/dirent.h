@@ -34,7 +34,11 @@ struct dirent {
     // caller that needs it has the name to ask with. A d_ino field that
     // was always zero would invite somebody to believe it.
     unsigned char d_type;      // DT_* below
-    char d_name[64];           // FS_PATH_MAX -- the last component only
+    char d_name[64];           // The last COMPONENT only -- a different
+                               // bound from PATH_MAX, and SMALLER than
+                               // NAME_MAX (255): see struct sys_dirent
+                               // in abi/syscall_abi.h for the
+                               // measurement that keeps it at 64.
 };
 
 // The two that can occur. POSIX's full set (sockets, devices, symlinks)

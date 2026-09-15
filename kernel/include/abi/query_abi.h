@@ -466,7 +466,12 @@ struct query_fsstat {
 // LIST, one record per live process.
 #define QUERY_PROCPATH 39
 
-#define QUERY_PROCPATH_MAX 64  // FS_PATH_MAX (api/fs.h)
+// Bounded by the QUERY RECORD, not by FS_PATH_MAX: a record is capped
+// at QUERY_RECORD_MAX (256, api/query.h), so this is what is left after
+// the pid. A process whose spawn path is longer reports "" rather than
+// a truncated one -- an identity that is nearly right is worse here
+// than one that is absent, since both readers MATCH on it.
+#define QUERY_PROCPATH_MAX 252
 
 // LIST, one record per loaded kernel module (kernel/core/module.c) --
 // `lsmod`. The record is struct query_module.

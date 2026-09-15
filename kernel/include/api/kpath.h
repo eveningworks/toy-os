@@ -40,21 +40,42 @@ int k_path_is_absolute(const char *path);
 // shell treats `cd /tmp` from anywhere.
 int k_path_join(const char *dir, const char *name, char *out, size_t cap);
 
+// **SCRATCH IS THE CALLER'S, AND THAT IS NOT A STYLE CHOICE.** This
+// file is compiled into both rings (Makefile's shared-source list), so
+// it can name neither kmalloc nor malloc -- the same constraint
+// klineedit.c answers with `struct kline_mem`. It used to keep a
+// 256-byte local, which stopped being affordable when a path became
+// 4096. Ring 0 gets one from kpath_get(); ring 3 mallocs or declares.
+//
+// `cap` must be at least KPATH_SCRATCH_FOR(the longest path) -- a
+// resolve joins base and input before it collapses anything, so the
+// working string can exceed the result.
+struct kpath_scratch {
+    char  *buf;
+    size_t cap;
+};
+
+// What a scratch must hold to resolve two paths each bounded by `n`:
+// base + '/' + input + NUL.
+#define KPATH_SCRATCH_FOR(n) (2u * (n) + 2u)
+
 // Collapses "." and ".." segments, duplicate and trailing slashes:
 // "/a/./b/../c" -> "/a/c", "//a//" -> "/a". `path` must be absolute
 // (see k_path_resolve() for the relative case). ".." at the root is
 // clamped to the root rather than escaping it -- the same rule real
 // kernels apply to a chroot, and the behavior shell.c's resolve_path()
-// already had. Returns 0 if the result wouldn't fit in `cap` or the
-// path nests deeper than KPATH_MAX_DEPTH.
-int k_path_normalize(const char *path, char *out, size_t cap);
+// already had. Returns 0 if the result wouldn't fit in `cap`, the
+// scratch is too small, or the path nests deeper than KPATH_MAX_DEPTH.
+int k_path_normalize(const char *path, char *out, size_t cap,
+                     const struct kpath_scratch *scratch);
 
 // The two combined, which is what a shell command actually wants:
 // resolves `input` against `base` (used only when `input` is relative)
 // and normalizes the result. An empty or NULL `input` yields `base`
 // normalized. This is the one function the shell and the Terminal both
 // call, so `edit ../x` means the same thing in each.
-int k_path_resolve(const char *base, const char *input, char *out, size_t cap);
+int k_path_resolve(const char *base, const char *input, char *out, size_t cap,
+                   const struct kpath_scratch *scratch);
 
 // Last component of `path` ("/docs/todo.txt" -> "todo.txt"). Returns a
 // pointer INTO `path`, so it never fails and never needs a buffer. A
@@ -67,11 +88,11 @@ const char *k_path_basename(const char *path);
 // "/". Returns 1 on success, 0 if it wouldn't fit in `cap`.
 int k_path_dirname(const char *path, char *out, size_t cap);
 
-// How deep a path may nest before k_path_normalize() gives up. 16 is
-// what shell.c's resolve_path() used, kept rather than raised: this
-// filesystem's FS_PATH_MAX is 64 bytes, so a 16-deep path is already
-// unreachable in practice, and the bound exists to keep the segment
-// stack on the stack.
-#define KPATH_MAX_DEPTH 16
+// How deep a path may nest before k_path_normalize() gives up. It was
+// 16, which a 64-byte path could not reach; a 4096-byte one reaches it
+// easily, so the bound became a real refusal rather than a formality.
+// 64 costs 512 bytes of segment stack and is past anything this
+// filesystem's layout produces.
+#define KPATH_MAX_DEPTH 64
 
 #endif

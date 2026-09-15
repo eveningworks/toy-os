@@ -34,7 +34,10 @@
 
 #define WIN_W 620
 #define WIN_H 380
-#define PATH_MAX_LEN 64          // FS_PATH_MAX
+#define PATH_MAX_LEN 64          // NOT FS_PATH_MAX (4096 since
+                                 // 2026-09-15) -- this app's own
+                                 // buffers, still the old bound.
+                                 // See docs/roadmap.md.
 #define MAX_FILES 64
 #define SIDEBAR_CHARS 18
 // MUSIC, not the sound effects. /usr/share/sounds holds the short

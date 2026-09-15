@@ -75,7 +75,9 @@ static void parse_path(const char *spec) {
 }
 
 void shell_path_init(void) {
-    char spec[FS_PATH_MAX * 2];
+    // Static: the PATH spec is two paths' worth, which is 8 KiB of a
+    // 16 KiB kernel stack now. Loaded once, from the shell's context.
+    static char spec[FS_PATH_MAX * 2];
     if (!etc_config_get(SHELL_PATH_CONF, SHELL_PATH_KEY, spec, sizeof(spec)) || spec[0] == '\0') {
         k_strlcpy(spec, SHELL_PATH_DEFAULT, sizeof spec);
     }
@@ -111,7 +113,7 @@ int shell_path_find(const char *name, char *out) {
     // for it would be wrong.
     for (const char *p = name; *p; p++) {
         if (*p == '/') {
-            char resolved[FS_PATH_MAX];
+            static char resolved[FS_PATH_MAX]; // static: a path is 4096 now and the kernel shell runs one command at a time
             if (!resolve_path(name, resolved)) return 0;
             if (!fs_exists(resolved) || fs_is_dir(resolved)) return 0;
             k_strlcpy(out, resolved, FS_PATH_MAX);
@@ -120,7 +122,7 @@ int shell_path_find(const char *name, char *out) {
     }
 
     for (int i = 0; i < g_dir_count; i++) {
-        char candidate[FS_PATH_MAX];
+        static char candidate[FS_PATH_MAX];
         if (!join_path(g_dirs[i], name, candidate)) continue;
         if (fs_exists(candidate) && !fs_is_dir(candidate)) {
             k_strlcpy(out, candidate, FS_PATH_MAX);
@@ -152,7 +154,7 @@ int shell_exec_name(const char *name, const char *args, int report) {
         return 1;
     }
 
-    char bin_path[FS_PATH_MAX];
+    static char bin_path[FS_PATH_MAX];
     if (!shell_path_find(name, bin_path)) return 0;
 
     // TWO LOADERS, chosen by the form the user typed. A BARE NAME is

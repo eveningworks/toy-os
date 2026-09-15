@@ -1259,7 +1259,7 @@ KTEST("fs", "a committed transaction that cannot be applied stops the writes") {
     const char *point = second_tfs3_point();
     if (!point) KTEST_SKIP("no second TFS3 mount -- see tools/multidisk_test.py");
 
-    char a[FS_PATH_MAX], b[FS_PATH_MAX];
+    static char a[FS_PATH_MAX], b[FS_PATH_MAX]; // a path is 4096; KTESTs run on a kernel stack
     k_snprintf(a, sizeof a, "%s/.ktest_bar2", point);
     k_snprintf(b, sizeof b, "%s/.ktest_bar2b", point);
     fs_sync(0);
@@ -1340,4 +1340,77 @@ KTEST("fs", "chmod changes the mode and refuses the type bits") {
 
     KTEST_ASSERT(fs_chmod("/no/such/path", 0644) < 0);
     fs_delete(p);
+}
+
+// ---- deep and long paths --------------------------------------------
+//
+// FS_PATH_MAX was 64 until paths moved off the kernel stack, so every
+// assertion below failed by construction before that change: the names
+// alone are longer than the whole path buffer used to be. They are
+// written as one nesting walk rather than a single long name because
+// the two limits are different (a COMPONENT is FS_NAME_MAX) and a test
+// that only proved one of them would leave the other unmeasured.
+
+#define DEEP_SEG "/.ktest_deep_segment_with_a_deliberately_long_name"
+
+KTEST("fs", "a path far longer than the old 64-byte bound round-trips") {
+    if (!fs_is_persistent()) KTEST_SKIP("no writable filesystem on this boot");
+
+    // Five of these is ~250 bytes -- comfortably past the old bound and
+    // past FS_PATH_STORED_MAX too, so nothing that merely REMEMBERS a
+    // path can be what makes this pass.
+    static char dir[FS_PATH_MAX];
+    static char file[FS_PATH_MAX];
+    dir[0] = '\0';
+    for (int i = 0; i < 5; i++) k_strlcat(dir, DEEP_SEG, sizeof dir);
+    KTEST_ASSERT(k_strlen(dir) > 240);
+
+    // Build the tree a level at a time; mkdir creates ONE level.
+    static char part[FS_PATH_MAX];
+    part[0] = '\0';
+    for (int i = 0; i < 5; i++) {
+        k_strlcat(part, DEEP_SEG, sizeof part);
+        if (!fs_exists(part)) KTEST_ASSERT(fs_mkdir(part));
+        KTEST_ASSERT(fs_is_dir(part));
+    }
+
+    k_strlcpy(file, dir, sizeof file);
+    k_strlcat(file, "/leaf.txt", sizeof file);
+    FRESH(file);
+    KTEST_ASSERT(fs_write(file, "deep", 0));
+
+    // Read it back through a SECOND path expression that normalizes to
+    // the same file -- so this measures resolution, not just that the
+    // same string was handed back.
+    static char viadots[FS_PATH_MAX];
+    k_strlcpy(viadots, dir, sizeof viadots);
+    k_strlcat(viadots, "/./leaf.txt", sizeof viadots);
+    char buf[16];
+    KTEST_ASSERT(fs_read_into(viadots, buf, sizeof buf) == 4);
+    KTEST_ASSERT_EQ(k_strcmp(buf, "deep"), 0);
+
+    // Clean up, deepest first -- a non-empty directory cannot go.
+    fs_delete(file);
+    for (int i = 5; i > 0; i--) {
+        part[0] = '\0';
+        for (int j = 0; j < i; j++) k_strlcat(part, DEEP_SEG, sizeof part);
+        fs_delete(part);
+    }
+}
+
+KTEST("fs", "a path past FS_PATH_MAX is refused, not truncated") {
+    // A truncated path names a DIFFERENT file, so the refusal is the
+    // behaviour worth pinning. Built at FS_PATH_MAX + slack so the
+    // assertion cannot drift if the bound moves again.
+    static char toolong[FS_PATH_MAX + 64];
+    toolong[0] = '/';
+    for (size_t i = 1; i < sizeof toolong - 1; i++) toolong[i] = 'x';
+    toolong[sizeof toolong - 1] = '\0';
+
+    KTEST_ASSERT_EQ(fs_exists(toolong), 0);
+    KTEST_ASSERT_EQ(fs_touch(toolong), 0);
+    // ...and the prefix it would have been truncated TO was not created.
+    static char prefix[FS_PATH_MAX];
+    k_strlcpy(prefix, toolong, sizeof prefix);
+    KTEST_ASSERT_EQ(fs_exists(prefix), 0);
 }

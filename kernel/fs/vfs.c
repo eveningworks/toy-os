@@ -86,13 +86,17 @@
 // One buffer per call, on the stack: FS_PATH_MAX is 64, and a static
 // one would be exactly the shared-scratch hazard the preemption guard
 // above exists to contain.
+// `sub` BORROWS from the `path` the caller passed in (mount.h), so a
+// struct resolved is two pointers and must not outlive that argument.
+// It held an FS_PATH_MAX array until paths grew to 4096, at which point
+// one of these per fs_*() was a quarter of the kernel stack.
 struct resolved {
     const struct mount *m;
-    char sub[FS_PATH_MAX];
+    const char *sub;
 };
 
 static int resolve(const char *path, struct resolved *r) {
-    r->m = mount_resolve(path, r->sub, sizeof r->sub);
+    r->m = mount_resolve(path, &r->sub);
     return r->m != NULL;
 }
 

@@ -20,6 +20,13 @@
 
 // A setting's file is named by its QUALIFIED name, because that is its
 // identity -- two programs may each own a `theme`.
+// **NOT FS_PATH_MAX.** Every path this file builds is
+// /etc/settings.d/<ns>.<name>, bounded by its own construction rather
+// than by what a caller may hand in, so it stays a stack local instead
+// of taking a kpath_get(). text_path() already refuses rather than
+// truncates when a name somehow exceeds it.
+#define SETTING_TEXT_PATH_MAX 192
+
 static int text_path(const char *ns, const char *name, char *out, uint32_t cap) {
     if (!name || !name[0]) return 0;
     int n;
@@ -37,7 +44,7 @@ static int text_path(const char *ns, const char *name, char *out, uint32_t cap) 
 int setting_text_description(const char *ns, const char *name,
                              char *out, uint32_t out_size) {
     if (out && out_size) out[0] = '\0';
-    char path[FS_PATH_MAX];
+    char path[SETTING_TEXT_PATH_MAX];
     if (!text_path(ns, name, path, sizeof path)) return 0;
     if (!fs_exists(path)) return 0; // no text for this setting: normal
     return etc_config_get(path, SETTING_TEXT_KEY_DESC, out, out_size);
@@ -52,7 +59,7 @@ int setting_text_choice(const char *ns, const char *name, const char *value,
     if (out && out_size) k_strlcpy(out, value ? value : "", out_size);
     if (!value || !value[0]) return 0;
 
-    char path[FS_PATH_MAX];
+    char path[SETTING_TEXT_PATH_MAX];
     if (!text_path(ns, name, path, sizeof path)) return 0;
     if (!fs_exists(path)) return 0;
 
@@ -67,7 +74,7 @@ int setting_text_choice(const char *ns, const char *name, const char *value,
 }
 
 uint32_t setting_text_widget(const char *ns, const char *name) {
-    char path[FS_PATH_MAX];
+    char path[SETTING_TEXT_PATH_MAX];
     if (!text_path(ns, name, path, sizeof path)) return SETTING_ABI_WIDGET_AUTO;
     if (!fs_exists(path)) return SETTING_ABI_WIDGET_AUTO;
 
@@ -89,7 +96,7 @@ uint32_t setting_text_widget(const char *ns, const char *name) {
 static struct etc_config_buf g_text_buf;
 
 uint32_t setting_text_sflags(const char *ns, const char *name) {
-    char path[FS_PATH_MAX];
+    char path[SETTING_TEXT_PATH_MAX];
     if (!text_path(ns, name, path, sizeof path)) return 0;
     if (!fs_exists(path)) return 0;
 
@@ -109,7 +116,7 @@ uint32_t setting_text_sflags(const char *ns, const char *name) {
 }
 
 int setting_text_order(const char *ns, const char *name) {
-    char path[FS_PATH_MAX];
+    char path[SETTING_TEXT_PATH_MAX];
     if (!text_path(ns, name, path, sizeof path)) return 0;
     if (!fs_exists(path)) return 0;
 
@@ -130,7 +137,7 @@ int setting_text_group(const char *category, const char *group,
     if (out_desc && desc_size) out_desc[0] = '\0';
     if (!category || !category[0] || !group || !group[0]) return 0;
 
-    char path[FS_PATH_MAX];
+    char path[SETTING_TEXT_PATH_MAX];
     if (k_snprintf(path, sizeof path,
                    SETTING_TEXT_DIR "/" SETTING_TEXT_GROUP_PREFIX "%s.%s",
                    category, group) <= 0)

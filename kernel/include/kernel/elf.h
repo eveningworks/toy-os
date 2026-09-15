@@ -58,7 +58,11 @@
 // file was static. phoff/phnum are what the interpreter needs to find
 // PT_DYNAMIC, passed on the stack as auxv (abi/auxv.h).
 struct elf_dyn_info {
-    char     interp[64]; // PT_INTERP's path; FS_PATH_MAX-sized
+    char     interp[64]; // PT_INTERP's path. NOT FS_PATH_MAX-sized (it
+                          // said so while both were 64): this holds
+                          // "/lib/ld-toy.so" and nothing else, since
+                          // the loader resolves DT_NEEDED against one
+                          // directory with no search path.
     uint64_t phoff;
     uint16_t phnum;
 };

@@ -2698,3 +2698,30 @@ size of the work a real scheduler does there anyway. **Ask not just
 "does the control disable the fix" but "does the test then EXECUTE the
 thing the fix was protecting"** -- the truncate-test rule (the fixture
 never reached the branch) arriving from the control's side.
+
+**2026-09-15: A `make` DURING a running `gui_regress.py` VOIDS THE REST
+OF THE SUITE, and it reads as a mass failure rather than as your
+mistake.** `iso_guard` compares `build/kernel.bin` against the boot
+medium, so a `make all` run to check an unrelated edit makes every
+tool launched after that moment refuse with "REFUSING to boot a stale
+image" -- 40 tools red, in 1-2 seconds each, with a summary line naming
+essentially every tool in the suite. The guard is doing exactly its job
+(that is the bug it exists to catch); what is misleading is that the
+tools which already ran keep their real results, so the log is a mix of
+genuine passes and guard refusals.
+
+Two rules. **While a suite is running, the tree is FROZEN** -- edit
+docs if you must, run nothing that writes to `build/`. And **a failure
+list that names nearly every tool is a harness or fixture fault, not a
+regression**: no single change breaks forty unrelated tools, so read the
+FAILURE TEXT before reading the list. The same shape as this file's
+other entries -- suspect the instrument when the reading is impossibly
+bad.
+
+**And the more general one from the same session: measure the baseline
+before believing ANY of it.** Five GUI tools failed; four
+(`font`, `fullscreen`, `saver`, `imgview`) failed identically or worse
+on a stashed HEAD, and `font` was actually BETTER with the change in
+(6 failures against 8). Only `files` was real. Running the failing
+tools alone against a stashed baseline took ~20 minutes and was the
+difference between one honest finding and five wrong ones.

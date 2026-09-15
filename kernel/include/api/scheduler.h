@@ -230,7 +230,7 @@ struct mmap_region {
     uint64_t npages;
     uint8_t  prot;     // SYS_PROT_* bits
     uint8_t  kind;     // MMAP_KIND_*
-    char     path[64]; // absolute; FS_PATH_MAX, asserted in scheduler.c
+    char     path[256]; // absolute; FS_PATH_STORED_MAX, asserted in scheduler.c
     uint64_t file_off; // file offset backing `base`
     int32_t  shm_idx;  // MMAP_KIND_SHM: which object (kernel/mm/shm.c)
     int32_t  reserved;
@@ -301,7 +301,7 @@ struct sched_mm {
 // scheduler.c rather than by including fs.h here, so the two cannot
 // drift without the build saying so.
 struct sched_cwd {
-    char path[64];
+    char path[4096];
 };
 
 // The current directory of the process on the CPU, or NULL when the

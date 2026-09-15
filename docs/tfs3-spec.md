@@ -247,7 +247,7 @@ committed for the next boot).
 | Quantity | Value |
 |---|---|
 | Max file size | 12 + 1024 + 1024^2 + 1024^3 blocks = ~4 TiB format; volume-capped in practice |
-| Name | 255 bytes; path depth unlimited on disk (`PATH_MAX` 4096 is an in-memory constant; today's fs.h callers still hold 64-byte buffers) |
+| Name | 255 bytes (`FS_NAME_MAX` matches it now); path depth unlimited on disk, and `FS_PATH_MAX` is 4096 since 2026-09-15, so callers can reach one |
 | Inodes | group_count * inodes_per_group; ~590k on 9 GiB at defaults |
 | Dir entries | uncapped (a dir grows like a file; the kernel writer stops dirs at single-indirect scale, ~4 M entries) |
 

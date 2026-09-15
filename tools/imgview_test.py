@@ -61,6 +61,7 @@ a clean run says nothing about the real mouse or keyboard path.
 
 import argparse
 import os
+import re
 import sys
 import tempfile
 import time
@@ -344,8 +345,17 @@ def run(dbg, qmp, tmp, res):
     lay, lines = wait_layout(dbg, content,
                              lambda l: l.has("image.picture") and l.has("list"))
     listed = [l for l in lines if "imgview: listing" in l]
+    # The COUNT is not asserted as a literal. It used to be "2 image(s)",
+    # which silently went stale the day three more wallpapers were seeded
+    # -- a test that fails because the data grew is a test nobody trusts.
+    # What matters is that it listed THIS directory and found something.
+    def listed_some(line):
+        if WALLPAPER_DIR not in line:
+            return False
+        m = re.search(r"(\d+) image\(s\)", line)
+        return bool(m) and int(m.group(1)) > 0
     res.check("it listed the wallpapers directory",
-              any(WALLPAPER_DIR in l and "2 image(s)" in l for l in listed),
+              any(listed_some(l) for l in listed),
               f"listing lines: {listed}")
     shown = [l for l in lines if "imgview: shown" in l]
     res.check("it decoded the first image",

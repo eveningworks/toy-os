@@ -143,8 +143,8 @@ static int g_log_max_mib = LOG_MAX_DEFAULT;
 // Sized to FS_PATH_MAX so a value that fits here fits everywhere a
 // path does; anything longer is refused at the setting rather than
 // truncated into a directory nobody meant.
-static char g_tmpdir[FS_PATH_MAX]    = TMP_DIR_DEFAULT;
-static char g_vartmpdir[FS_PATH_MAX] = TMP_VARDIR_DEFAULT;
+static char g_tmpdir[FS_PATH_STORED_MAX]    = TMP_DIR_DEFAULT;
+static char g_vartmpdir[FS_PATH_STORED_MAX] = TMP_VARDIR_DEFAULT;
 
 const char *tmpdir_for(enum tmp_kind kind) {
     return kind == TMP_PERSISTENT ? g_vartmpdir : g_tmpdir;
@@ -425,7 +425,7 @@ void storage_config_init(void) {
     // its directories since before /etc was readable. The two passes
     // are what break the circularity: the layout pass is what creates
     // /etc, and /etc is where this answer lives.
-    char dir[FS_PATH_MAX];
+    char dir[FS_PATH_STORED_MAX]; // a REMEMBERED path (fs.h)
     if (etc_config_buf_get(&g_cfg, TMPDIR_KEY, dir, sizeof dir) && dir_ok(dir)) {
         k_strlcpy(g_tmpdir, dir, sizeof g_tmpdir);
     }

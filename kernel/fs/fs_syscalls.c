@@ -16,6 +16,7 @@
 #include "string.h"
 #include "tz.h"
 #include "kpath.h"    // k_path_resolve() -- one resolution rule, kernel-side
+#include "kpath_buf.h" // a path is 4096 now and may not be a kernel local
 #include "scheduler.h" // struct sched_cwd -- the per-process current directory
 #include "ata.h"       // the ATA write-back cache SYS_SYNC writes back
 #include "kfmt.h"      // klog_printf
@@ -67,7 +68,11 @@ static void listdir_collect(const char *name, uint32_t size, int is_dir) {
     // (shouldn't happen for anything fs_list() itself just reported),
     // so a bug here shows up as an obviously-wrong 0000-00-00 rather
     // than reading stale/garbage struct bytes.
-    char full_path[FS_PATH_MAX];
+    // Static, not a local: this is a per-ENTRY callback, so allocating
+    // here would be one kmalloc per directory entry -- and the listdir
+    // path above it is already module-level scratch for the same
+    // non-reentrancy reason.
+    static char full_path[FS_PATH_MAX];
     size_t dl = k_strlen(g_listdir_dir_path);
     k_strlcpy(full_path, g_listdir_dir_path, sizeof full_path);
     if (dl > 1) { // dir isn't just "/" -- needs a separating slash
@@ -102,11 +107,17 @@ static void listdir_collect(const char *name, uint32_t size, int is_dir) {
 // ENOSPC from the create. fs.h reports one 0 for all three, so a caller
 // that skips this can only guess -- and open() discarded even the 0.
 static int parent_dir_err(const char *path) {
-    char parent[FS_PATH_MAX];
-    if (!k_path_dirname(path, parent, sizeof parent)) return -ENAMETOOLONG;
-    if (!fs_exists(parent)) return -ENOENT;
-    if (!fs_is_dir(parent)) return -ENOTDIR;
-    return 0;
+    char *parent = kpath_get();
+    if (!parent) return -ENOMEM;
+    // Sequential rather than an `else if` chain: check_dispatch.py
+    // groups those by brace depth, so three here would join sys_open's
+    // flag chain below into one 22-branch run.
+    int rc = 0;
+    if (!k_path_dirname(path, parent, FS_PATH_MAX)) rc = -ENAMETOOLONG;
+    if (!rc && !fs_exists(parent))                  rc = -ENOENT;
+    if (!rc && !fs_is_dir(parent))                  rc = -ENOTDIR;
+    kpath_put(parent);
+    return rc;
 }
 
 int sys_open(struct syscall_ctx *c) {
@@ -119,7 +130,8 @@ int sys_open(struct syscall_ctx *c) {
     // would get rejected here even if the real string is safely
     // NUL-terminated well before the end -- an acceptable tradeoff
     // for a path buffer this small.
-    char name[FS_PATH_MAX];
+    char *name = kpath_get();
+    if (!name) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
     int perr = resolve_user_path(pml4, c->a0, name);
     if (perr) {
         klog_write(KLOG_ERR "syscall: open() rejected -- bad path\n");
@@ -159,10 +171,12 @@ int sys_open(struct syscall_ctx *c) {
             if (!want_creat) {
                 klog_write(KLOG_ERR "syscall: open() rejected -- O_EXCL without O_CREAT\n");
                 c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+                kpath_put(name);
                 return 0;
             }
             if (exists) {
                 c->regs[14] = (uint64_t)(int64_t)-EEXIST;
+                kpath_put(name);
                 return 0;
             }
         }
@@ -226,6 +240,7 @@ int sys_open(struct syscall_ctx *c) {
                     fd_close(pml4, fd);
                     klog_printf(KLOG_ERR "syscall: open() rejected -- %s\n", why);
                     c->regs[14] = (uint64_t)(int64_t)ferr;
+                    kpath_put(name);
                     return 0;
                 }
                 k_strlcpy(fd_desc[di].file.name, name, sizeof fd_desc[di].file.name);
@@ -240,12 +255,14 @@ int sys_open(struct syscall_ctx *c) {
             }
         }
     }
+    kpath_put(name);
     return 0;
 }
 
 int sys_unlink(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
-    char name[FS_PATH_MAX];
+    char *name = kpath_get();
+    if (!name) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
     int err = resolve_user_path(pml4, c->a0, name);
     if (err) {
         // 0 success / -errno failure since the polarity flip -- the
@@ -264,6 +281,7 @@ int sys_unlink(struct syscall_ctx *c) {
     } else {
         c->regs[14] = 0;
     }
+    kpath_put(name);
     return 0;
 }
 
@@ -276,7 +294,8 @@ static int listdir_common(struct syscall_ctx *c, uint64_t path_ptr,
     uint64_t pml4 = c->pml4;
     if (max > SYS_LISTDIR_MAX) max = SYS_LISTDIR_MAX;
 
-    char path[FS_PATH_MAX];
+    char *path = kpath_get();
+    if (!path) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
     if (!vmm_validate_user_range(pml4, out, (uint64_t)max * sizeof(struct sys_dirent)) ||
         resolve_user_path(pml4, path_ptr, path)) {
         klog_write(KLOG_ERR "syscall: listdir() rejected -- invalid pointer\n");
@@ -325,6 +344,7 @@ static int listdir_common(struct syscall_ctx *c, uint64_t path_ptr,
             else if (!fs_is_dir(path)) c->regs[14] = (uint64_t)(int64_t)-ENOTDIR;
         }
     }
+    kpath_put(path);
     return 0;
 }
 
@@ -367,20 +387,36 @@ int sys_fs_generation(struct syscall_ctx *c) {
 // absolute path is unchanged by resolution, so nothing that already
 // passed one behaves differently.
 static int resolve_user_path(uint64_t pml4, uint64_t uaddr, char *out) {
-    char raw[FS_PATH_MAX];
-    if (!vmm_copy_string_from_user(pml4, raw, uaddr, FS_PATH_MAX)) return -EFAULT;
-    // k_path_resolve() refuses rather than truncates -- a shortened path
-    // names a different file, which is the failure mode worth avoiding.
-    if (!k_path_resolve(scheduler_cwd(), raw, out, FS_PATH_MAX)) return -ENAMETOOLONG;
-    return 0;
+    // Three buffers, none of them a local: the raw copy, the scratch
+    // k_path_resolve() joins into, and the caller's `out`. At
+    // FS_PATH_MAX = 4096 that is 16 KiB, a whole kernel stack.
+    char *raw = kpath_get();
+    if (!raw) return -ENOMEM;
+    struct kpath_scratch sc;
+    if (!kpath_scratch_get(&sc)) { kpath_put(raw); return -ENOMEM; }
+
+    int rc = 0;
+    if (!vmm_copy_string_from_user(pml4, raw, uaddr, FS_PATH_MAX)) {
+        rc = -EFAULT;
+    } else if (!k_path_resolve(scheduler_cwd(), raw, out, FS_PATH_MAX, &sc)) {
+        // k_path_resolve() refuses rather than truncates -- a shortened
+        // path names a different file, which is the failure mode worth
+        // avoiding.
+        rc = -ENAMETOOLONG;
+    }
+    kpath_scratch_put(&sc);
+    kpath_put(raw);
+    return rc;
 }
 
 int sys_chdir(struct syscall_ctx *c) {
-    char path[FS_PATH_MAX];
+    char *path = kpath_get();
+    if (!path) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
     int err = resolve_user_path(c->pml4, c->a0, path);
     if (err) {
         klog_write(KLOG_ERR "syscall: chdir() rejected -- bad path\n");
         c->regs[14] = (uint64_t)(int64_t)err;
+        kpath_put(path);
         return 0;
     }
     if (!fs_exists(path) && k_strcmp(path, "/") != 0) {
@@ -397,6 +433,7 @@ int sys_chdir(struct syscall_ctx *c) {
         else scheduler_set_kernel_cwd(path);
         c->regs[14] = 0;
     }
+    kpath_put(path);
     return 0;
 }
 
@@ -422,7 +459,8 @@ int sys_getcwd(struct syscall_ctx *c) {
 // distinguish are checked first (fs_exists(), then parent_dir_err())
 // rather than collapsed into one code.
 int sys_mkdir(struct syscall_ctx *c) {
-    char path[FS_PATH_MAX];
+    char *path = kpath_get();
+    if (!path) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
     int err = resolve_user_path(c->pml4, c->a0, path);
     if (err) {
         klog_write(KLOG_ERR "syscall: mkdir() rejected -- bad path\n");
@@ -441,11 +479,15 @@ int sys_mkdir(struct syscall_ctx *c) {
     } else {
         c->regs[14] = 0;
     }
+    kpath_put(path);
     return 0;
 }
 
 int sys_rename(struct syscall_ctx *c) {
-    char from[FS_PATH_MAX], to[FS_PATH_MAX];
+    char *from = kpath_get();
+    if (!from) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
+    char *to = kpath_get();
+    if (!to) { kpath_put(from); c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
     int err = resolve_user_path(c->pml4, c->a0, from);
     if (!err) err = resolve_user_path(c->pml4, c->a1, to);
     if (err) {
@@ -464,11 +506,13 @@ int sys_rename(struct syscall_ctx *c) {
     } else {
         c->regs[14] = 0;
     }
+    kpath_put(from); kpath_put(to);
     return 0;
 }
 
 int sys_truncate(struct syscall_ctx *c) {
-    char path[FS_PATH_MAX];
+    char *path = kpath_get();
+    if (!path) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
     int err = resolve_user_path(c->pml4, c->a0, path);
     if (err) {
         klog_write(KLOG_ERR "syscall: truncate() rejected -- bad path\n");
@@ -483,20 +527,24 @@ int sys_truncate(struct syscall_ctx *c) {
     } else {
         c->regs[14] = 0;
     }
+    kpath_put(path);
     return 0;
 }
 
 int sys_stat(struct syscall_ctx *c) {
-    char path[FS_PATH_MAX];
+    char *path = kpath_get();
+    if (!path) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
     int err = resolve_user_path(c->pml4, c->a0, path);
     if (err) {
         klog_write(KLOG_ERR "syscall: stat() rejected -- bad path\n");
         c->regs[14] = (uint64_t)(int64_t)err;
+        kpath_put(path);
         return 0;
     }
     int is_root = k_strcmp(path, "/") == 0;
     if (!is_root && !fs_exists(path)) {
         c->regs[14] = (uint64_t)(int64_t)-ENOENT;
+        kpath_put(path);
         return 0;
     }
 
@@ -527,28 +575,36 @@ int sys_stat(struct syscall_ctx *c) {
     if (!vmm_copy_to_user(c->pml4, c->a1, &out, sizeof out)) {
         klog_write(KLOG_ERR "syscall: stat() rejected -- invalid output pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        kpath_put(path);
         return 0;
     }
     c->regs[14] = 0;
+    kpath_put(path);
     return 0;
 }
 
 int sys_chmod(struct syscall_ctx *c) {
-    char path[FS_PATH_MAX];
+    char *path = kpath_get();
+    if (!path) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
     int err = resolve_user_path(c->pml4, c->a0, path);
     if (err) {
         klog_write(KLOG_ERR "syscall: chmod() rejected -- bad path\n");
         c->regs[14] = (uint64_t)(int64_t)err;
+        kpath_put(path);
         return 0;
     }
     // The VFS masks the type bits off and refuses a backend that cannot
     // store permissions -- see fs.h's fs_chmod().
     c->regs[14] = (uint64_t)(int64_t)fs_chmod(path, (uint16_t)c->a1);
+    kpath_put(path);
     return 0;
 }
 
 int sys_link(struct syscall_ctx *c) {
-    char from[FS_PATH_MAX], to[FS_PATH_MAX];
+    char *from = kpath_get();
+    if (!from) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
+    char *to = kpath_get();
+    if (!to) { kpath_put(from); c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
     int err = resolve_user_path(c->pml4, c->a0, from);
     if (!err) err = resolve_user_path(c->pml4, c->a1, to);
     if (err) {
@@ -572,6 +628,7 @@ int sys_link(struct syscall_ctx *c) {
     } else {
         c->regs[14] = 0;
     }
+    kpath_put(from); kpath_put(to);
     return 0;
 }
 

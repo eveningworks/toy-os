@@ -262,8 +262,19 @@
 // the precedent), so this is the odd one out being brought into line
 // rather than a name being surrendered.
 struct sys_dirent {
-    char name[64];   // FS_PATH_MAX (fs.h) -- last path component only,
-                      // e.g. "notes.txt", not "/docs/notes.txt"
+    char name[64];   // A COMPONENT, not a path -- and NOT FS_NAME_MAX,
+                      // which is 255 (what TFS3 actually stores).
+                      //
+                      // **RAISING THIS TO 256 WAS TRIED AND MEASURED
+                      // BACK OUT.** It is multiplied by SYS_LISTDIR_MAX
+                      // in every opendir(), taking a DIR from ~22 KiB to
+                      // ~72 KiB -- and ring-3 free() never returns
+                      // memory to the OS, so a File Manager that opens
+                      // directories per navigation and per tick reload
+                      // only grows. filemanager_test went from 1 failure
+                      // to 16. Raising it needs the allocator to release
+                      // (docs/roadmap.md) or a variable-length record,
+                      // which is why Linux's dirent has one.
     uint32_t size;    // meaningless (0) for directories, same as fs_list()
     uint32_t is_dir;
     // Added for /bin/ls's `-l` (see userland/ls.c) -- SYS_LISTDIR's
@@ -288,6 +299,16 @@ struct sys_dirent {
                             // the most any directory could ever hold" --
                             // which was wrong twice: FS_MAX_FILES is 256,
                             // and TFS3 has no per-directory cap at all.
+                            // IT STAYS 256 even though `name` grew to
+                            // 256 bytes, which makes a DIR ~72 KiB of
+                            // ring-3 heap. Cutting it to 64 to hold that
+                            // down was tried and REVERTED the same day:
+                            // /bin (89 entries) and /tests (101) both
+                            // exceed 64, and a caller that does not page
+                            // with SYS_LISTDIR_AT silently sees a short
+                            // directory -- the exact bug the paragraph
+                            // below describes, reintroduced.
+                            //
                             // So `ls` silently listed the first 32
                             // entries of a bigger directory and stopped,
                             // with nothing said. Measured 2026-08-19 by

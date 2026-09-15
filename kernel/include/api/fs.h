@@ -36,11 +36,35 @@
 // to size buffers against it regardless of which backend is active.
 #define FS_MAX_FILES 256
 
-// Was FS_NAME_MAX (a single flat name, 32 bytes) before directory
-// support -- now holds a full absolute path like "/docs/notes.txt", so
-// it needed more room. Per-slot on-disk size doesn't actually change
-// (still fits the same 5 sectors -- see FS_RECORD_SECTORS in TFS2).
-#define FS_PATH_MAX 64
+// A whole path, and a single component, are two different bounds --
+// FS_PATH_MAX is Linux's PATH_MAX and FS_NAME_MAX is its NAME_MAX.
+// They were one number (64) until paths moved off the kernel stack.
+//
+// **A BUFFER THIS SIZE MAY NOT BE A LOCAL.** A kernel stack is 16 KiB
+// with a single guard page, so two of these in one frame is half of it
+// -- which is why Linux allocates a path from a slab (`getname()`) and
+// never stacks one. Ring 0 calls kpath_get()/kpath_put()
+// (kernel/include/kernel/kpath_buf.h); kpath.c itself is shared-source
+// and cannot allocate at all, so its normalize/resolve take the
+// caller's scratch.
+#define FS_PATH_MAX 4096
+
+// One component. 255 is what TFS3 stores on disk (T3_NAME_MAX), and
+// what ext4 and NTFS both use.
+#define FS_NAME_MAX 255
+
+// **A PATH THAT IS STORED PER OBJECT, rather than passed and dropped.**
+// FS_PATH_MAX bounds what a call may be HANDED; this bounds what a
+// long-lived struct may REMEMBER, and the two differ because the second
+// gets multiplied. A per-mmap-region path at 4096 is 8 MB of kernel
+// .bss (64 processes x 32 regions), which buys nothing -- the deep
+// paths worth having are the ones being opened, not the ones being
+// recorded. Windows drew the same line: MAX_PATH for what an API
+// struct embeds, the longer form for what a call may name.
+//
+// A path too long for one of these is REFUSED, never truncated -- a
+// shortened path names a different file (kpath.h's rule).
+#define FS_PATH_STORED_MAX 256
 
 void fs_init(void);
 
