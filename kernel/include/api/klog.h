@@ -16,6 +16,50 @@
 void klog_write(const char *s);
 void klog_putc(char c);
 
+// A LEVEL IS AN IN-BAND PREFIX, as in Linux's KERN_ERR: the marker sits
+// on the front of the string and klog_write() takes it off at a line
+// start. That is what let levels arrive without touching any of the
+// ~940 existing call sites, which keep the default.
+//
+// The NUMBERS are Linux's, so `<3>` means there what it means here.
+// Levels 0, 1 and 5 (EMERG, ALERT, NOTICE) are deliberately not
+// defined: this kernel has nothing that is above CRIT or between INFO
+// and WARN, and a level nothing writes is a filter option that never
+// matches.
+//
+// **THE MARKER NEVER REACHES THE WIRE.** klog_write() strips it before
+// any byte is emitted, and the ring records the level in its own
+// timestamp instead (`[7.03] <3> `) -- so serial.log's format, which
+// every test harness reads, is exactly what it was.
+#define KLOG_SOH    "\001"
+#define KLOG_CRIT   KLOG_SOH "2"   // the machine is going down
+#define KLOG_ERR    KLOG_SOH "3"   // something failed
+#define KLOG_WARN   KLOG_SOH "4"   // something recovered, and you should know
+#define KLOG_INFO   KLOG_SOH "6"   // the default -- boot progress, what bound
+#define KLOG_DEBUG  KLOG_SOH "7"   // per-device chatter, off by default
+
+#define KLOG_LEVEL_CRIT   2
+#define KLOG_LEVEL_ERR    3
+#define KLOG_LEVEL_WARN   4
+#define KLOG_LEVEL_INFO   6
+#define KLOG_LEVEL_DEBUG  7
+
+// What still reaches the console -- serial and, during boot, the
+// screen. The RING ALWAYS KEEPS EVERYTHING: a threshold that dropped
+// bytes from the log would be losing exactly the evidence a fault
+// needs, which this project has already paid for once. Linux's
+// console_loglevel, same split.
+//
+// Defaults to KLOG_LEVEL_INFO, so a future KLOG_DEBUG line is quiet
+// until somebody asks for it. Nothing logs at debug today, so no line
+// that used to appear stopped appearing.
+void klog_set_console_level(int level);
+int  klog_console_level(void);
+
+
+// Reads `loglevel=<0-7>` out of the GRUB command line, if it is there.
+void klog_apply_cmdline(const char *cmdline);
+
 // Decimal/hex number formatting for klog messages that need to include
 // a value (a device ID, a resolution, a count) -- mirrors
 // vga_write_dec()/vga_write_hex() (vga.h) exactly (same no-padding

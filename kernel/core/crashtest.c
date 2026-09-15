@@ -112,7 +112,7 @@ int crash_trigger(int index) {
     const struct crash_kind *k = crash_kind_at(index);
     if (!k) return 0;
     if (!crash_armed()) {
-        klog_printf("crash: refusing \"%s\" -- boot with `faultinject` to arm\n",
+        klog_printf(KLOG_ERR "crash: refusing \"%s\" -- boot with `faultinject` to arm\n",
                      k->name);
         return 0;
     }

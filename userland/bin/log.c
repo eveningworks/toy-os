@@ -21,9 +21,51 @@
 #define LOG_PREV "/var/log/toyos.log.1"
 
 static const char *USAGE =
-    "log [-n <lines>] [-u <tag>] [-p] [-f]\n"
+    "log [-n <lines>] [-u <tag>] [-l <level>] [-p] [-f] [--raw]\n"
     "       -n  show only the last <lines>       -u  only lines from <tag>\n"
-    "       -p  the PREVIOUS boot's log          -f  follow as it grows";
+    "       -l  crit|err|warn|info|debug, or 0-7 -- that level and worse\n"
+    "       -p  the PREVIOUS boot's log          -f  follow as it grows\n"
+    "       --raw  keep the <N> level marker the kernel wrote";
+
+// --raw, and -l. A KERNEL line carries "<N> " after its stamp (the
+// level is text, see kernel/lib/klog.c); an application line carries
+// none, because a program declares no level. A line with no marker is
+// never filtered out -- the alternative is `-l err` silently hiding
+// every service's output.
+static int g_raw;
+static int g_min_level = 7;
+
+static int level_by_name(const char *s) {
+    if (s[0] >= '0' && s[0] <= '7' && !s[1]) return s[0] - '0';
+    if (strcmp(s, "crit") == 0)  return 2;
+    if (strcmp(s, "err") == 0)   return 3;
+    if (strcmp(s, "warn") == 0)  return 4;
+    if (strcmp(s, "info") == 0)  return 6;
+    if (strcmp(s, "debug") == 0) return 7;
+    return -1;
+}
+
+// Where "<N> " sits in this line, or -1. Searched rather than computed
+// from a fixed offset: the tag is padded to one width and the stamp is
+// not, so the marker's column moves with the uptime.
+#define MARKER_SEARCH 40
+static int marker_at(const char *line) {
+    for (int i = 0; i < MARKER_SEARCH && line[i]; i++)
+        if (line[i] == '<' && line[i + 1] >= '0' && line[i + 1] <= '7' &&
+            line[i + 2] == '>' && line[i + 3] == ' ')
+            return i;
+    return -1;
+}
+
+// Prints one line, dropping it if its level is below the filter and
+// hiding the marker unless --raw asked for it.
+static void emit_line(const char *line) {
+    int at = marker_at(line);
+    if (at < 0) { printf("%s\n", line); return; }
+    if (line[at + 1] - '0' > g_min_level) return;
+    if (g_raw) { printf("%s\n", line); return; }
+    printf("%.*s%s\n", at, line, line + at + 4);
+}
 
 // The tag sits at a fixed offset because logd writes it first and
 // pads it, so this is an exact comparison rather than a substring
@@ -77,7 +119,7 @@ static int show(const char *path, const char *tag, int last_n) {
             }
             line[len] = '\0';
             if (seen++ >= skip && (!tag || tag_is(line, tag)))
-                printf("%s\n", line);
+                emit_line(line);
             len = 0;
         }
     }
@@ -95,6 +137,14 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc) { last_n = atoi(argv[++i]); }
         else if (strcmp(argv[i], "-p") == 0) { path = LOG_PREV; }
         else if (strcmp(argv[i], "-f") == 0) { follow = 1; }
+        else if (strcmp(argv[i], "--raw") == 0) { g_raw = 1; }
+        else if (strcmp(argv[i], "-l") == 0 && i + 1 < argc) {
+            g_min_level = level_by_name(argv[++i]);
+            if (g_min_level < 0) {
+                fprintf(stderr, "log: -l wants crit, err, warn, info, debug or 0-7\n");
+                return 1;
+            }
+        }
         else { cmd_usage(USAGE); return 1; }
     }
 
@@ -104,14 +154,29 @@ int main(int argc, char **argv) {
     // the file grows from another process, so the only honest way to
     // watch it is to look again. It never returns; Ctrl-C ends it.
     long off = 0;
+    // A partial line survives the poll: the file grows mid-line, and a
+    // marker split across two reads would be neither hidden nor matched.
+    static char line[600];
+    unsigned len = 0;
+    int per_line = g_raw || g_min_level < 7 || tag;
     for (;;) {
         int fd = open(path, O_RDONLY);
         if (fd >= 0) {
             lseek(fd, off, SEEK_SET);
             int n;
             while ((n = (int)read(fd, g_buf, sizeof g_buf)) > 0) {
-                write(STDOUT_FILENO, g_buf, (unsigned)n);
                 off += n;
+                if (!per_line) { write(STDOUT_FILENO, g_buf, (unsigned)n); continue; }
+                for (int i = 0; i < n; i++) {
+                    if (g_buf[i] != '\n') {
+                        if (len < sizeof line - 1) line[len++] = g_buf[i];
+                        continue;
+                    }
+                    line[len] = '\0';
+                    if (!tag || tag_is(line, tag)) emit_line(line);
+                    len = 0;
+                }
+                fflush(stdout);
             }
             close(fd);
         }

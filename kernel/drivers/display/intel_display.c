@@ -403,7 +403,7 @@ static int intel_probe(void) {
     }
     g_mmio = (volatile uint8_t *)paging_map_device(bar0, bar0_size);
     if (!g_mmio) {
-        klog_printf("intel-display: BAR0 at %#llx could not be mapped\n", (unsigned long long)bar0);
+        klog_printf(KLOG_ERR "intel-display: BAR0 at %#llx could not be mapped\n", (unsigned long long)bar0);
         return 0;
     }
     // The GGTT occupies the upper half of BAR0 (gen8), one 64-bit PTE

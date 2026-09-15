@@ -13,7 +13,7 @@
 // rather than at the call sites so a future caller cannot forget it.
 static void flush_before_stopping(const char *what) {
     if (!atac_flush()) {
-        klog_write("power: DISK FLUSH FAILED before ");
+        klog_write(KLOG_ERR "power: DISK FLUSH FAILED before ");
         klog_write(what);
         klog_write(" -- some writes were NOT saved\n");
     }

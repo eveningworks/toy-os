@@ -74,7 +74,7 @@ static void read_edid(const struct display_driver *d) {
         return;
     }
     if (!edid_parse(raw, n, &g_edid)) {
-        klog_printf("display: EDID from \"%s\" rejected (%d bytes, header %02x %02x .. checksum %02x)\n",
+        klog_printf(KLOG_ERR "display: EDID from \"%s\" rejected (%d bytes, header %02x %02x .. checksum %02x)\n",
                     d->name, n, raw[0], raw[1], raw[127]);
         return;
     }

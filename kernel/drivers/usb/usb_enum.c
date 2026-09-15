@@ -360,7 +360,7 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
     usb_read_string((uint8_t)slot, i_prod,  d->product,      sizeof d->product);
 
     if (set_configuration((uint8_t)slot, cfg_value) < 0) {
-        klog_printf("usb: port %u: set configuration failed\n", parent_port);
+        klog_printf(KLOG_ERR "usb: port %u: set configuration failed\n", parent_port);
         if (d->cfg_phys) pmm_free_contiguous(d->cfg_phys, 1);
         d->cfg = 0; d->cfg_phys = 0; d->cfg_len = 0;
         xhci_disable_slot((uint8_t)slot);

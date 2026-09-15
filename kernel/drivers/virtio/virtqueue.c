@@ -134,7 +134,7 @@ int virtqueue_setup(struct virtio_device *d, uint16_t index, struct virtqueue *v
     // is here so that a future high-memory allocator produces a clean
     // refusal rather than silent DMA to the wrong place.
     if (base + (uint64_t)frames * 4096ull > 0x100000000ull) {
-        klog_printf("virtio: queue %u landed above 4 GiB, which this kernel cannot reach\n", index);
+        klog_printf(KLOG_ERR "virtio: queue %u landed above 4 GiB, which this kernel cannot reach\n", index);
         pmm_free_contiguous(base, frames);
         return 0;
     }
@@ -184,7 +184,7 @@ int virtqueue_setup(struct virtio_device *d, uint16_t index, struct virtqueue *v
     if (d->msix_vector) {
         common_w16(d, VIRTIO_COMMON_Q_MSIX, VIRTIO_MSIX_ENTRY);
         if (common_r16(d, VIRTIO_COMMON_Q_MSIX) == VIRTIO_MSI_NO_VECTOR) {
-            klog_printf("virtio: queue %u refused an MSI-X entry\n", index);
+            klog_printf(KLOG_ERR "virtio: queue %u refused an MSI-X entry\n", index);
             pmm_free_contiguous(base, frames);
             k_memset(vq, 0, sizeof *vq);
             return 0;
@@ -441,7 +441,7 @@ int virtqueue_poll(struct virtqueue *vq, int head, uint32_t *used_len) {
     // not tell them apart. A low poll count with a large elapsed means
     // the clock jumped; a huge poll count means the device really was
     // silent for that long.
-    klog_printf("virtio: queue %u timed out on chain %d after %u us and %u poll(s) --"
+    klog_printf(KLOG_ERR "virtio: queue %u timed out on chain %d after %u us and %u poll(s) --"
                 " %u descriptor(s) abandoned, %u still free\n",
                 vq->index, head,
                 (unsigned)((clocksource_now_ns() - began) / 1000ull),

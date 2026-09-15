@@ -518,7 +518,7 @@ int json_selftest(void) {
         "{\"name\":\"toy-os\",\"version\":2,\"tags\":[\"os\",\"hobby\"],"
         "\"nested\":{\"ok\":true,\"missing\":null},\"esc\":\"a\\\"b\\nc\"}";
     struct json_value *v = json_parse(doc, (uint32_t)k_strlen(doc));
-    if (!v) { klog_write("json: selftest FAILED (parse)\n"); return 0; }
+    if (!v) { klog_write(KLOG_ERR "json: selftest FAILED (parse)\n"); return 0; }
 
     const char *name = json_as_string(json_object_get(v, "name"), 0);
     int64_t version = json_as_number(json_object_get(v, "version"), -1);
@@ -534,22 +534,22 @@ int json_selftest(void) {
         && ok_flag == 1
         && esc && k_strcmp(esc, "a\"b\nc") == 0;
 
-    if (!pass) { klog_write("json: selftest FAILED (accessors)\n"); json_free(v); return 0; }
+    if (!pass) { klog_write(KLOG_ERR "json: selftest FAILED (accessors)\n"); json_free(v); return 0; }
 
     // Serialize, re-parse, spot-check it still round-trips.
     uint32_t needed = json_write(v, 0, 0, 0);
     char *buf = (char *)kmalloc(needed + 1);
-    if (!buf) { klog_write("json: selftest FAILED (oom)\n"); json_free(v); return 0; }
+    if (!buf) { klog_write(KLOG_ERR "json: selftest FAILED (oom)\n"); json_free(v); return 0; }
     json_write(v, buf, needed + 1, 0);
     struct json_value *v2 = json_parse(buf, needed);
     kfree(buf);
     json_free(v);
 
-    if (!v2) { klog_write("json: selftest FAILED (re-parse)\n"); return 0; }
+    if (!v2) { klog_write(KLOG_ERR "json: selftest FAILED (re-parse)\n"); return 0; }
     int64_t version2 = json_as_number(json_object_get(v2, "version"), -1);
     json_free(v2);
 
-    if (version2 != 2) { klog_write("json: selftest FAILED (round-trip)\n"); return 0; }
+    if (version2 != 2) { klog_write(KLOG_ERR "json: selftest FAILED (round-trip)\n"); return 0; }
 
     klog_write("json: selftest passed\n");
     return 1;

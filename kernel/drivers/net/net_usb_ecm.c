@@ -340,7 +340,7 @@ int usb_net_bind(struct usb_device_info *info, const uint8_t *cfg,
     // The endpoints only exist in the alternate setting -- see the file
     // comment -- so this comes before configuring them.
     if (set_interface(info->slot, e.data_ifnum, e.data_alt) < 0) {
-        klog_printf("usb: slot %u: set interface %u alt %u failed\n",
+        klog_printf(KLOG_ERR "usb: slot %u: set interface %u alt %u failed\n",
                     info->slot, e.data_ifnum, e.data_alt);
         pmm_free_contiguous(d->mem_phys, pages);
         return 0;

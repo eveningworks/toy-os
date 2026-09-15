@@ -852,7 +852,7 @@ static int dma_transfer_with_retry(uint32_t lba, int count, void *buf, int is_wr
             return 1;
         }
         if (dbgflag_enabled(DBGFLAG_ATA)) {
-            klog_write("ata: dma "); klog_write(is_write ? "write" : "read");
+            klog_write(KLOG_ERR "ata: dma "); klog_write(is_write ? "write" : "read");
             klog_write(" attempt "); klog_write_dec((uint32_t)attempt);
             klog_write(" failed (lba "); klog_write_dec(lba); klog_write(")\n");
         }
@@ -863,7 +863,7 @@ static int dma_transfer_with_retry(uint32_t lba, int count, void *buf, int is_wr
     // whoever called fs_write()/fs_read()) is about to report as one
     // too, and dmesg should have the disk-level detail on hand even
     // with debug logging off.
-    klog_write("ata: dma "); klog_write(is_write ? "write" : "read");
+    klog_write(KLOG_ERR "ata: dma "); klog_write(is_write ? "write" : "read");
     klog_write(" failed after "); klog_write_dec((uint32_t)ATA_DMA_MAX_RETRIES);
     klog_write(" attempts (lba "); klog_write_dec(lba);
     klog_write(", last reason: "); klog_write(g_dma_fail_reason);
@@ -890,7 +890,7 @@ static int dma_transfer_with_retry(uint32_t lba, int count, void *buf, int is_wr
 // is a failure the caller is about to report as one too, and dmesg
 // should carry the disk-level detail even with debug logging off.
 static int pio_fail(uint32_t lba, int is_write) {
-    klog_write("ata: pio "); klog_write(is_write ? "write" : "read");
+    klog_write(KLOG_ERR "ata: pio "); klog_write(is_write ? "write" : "read");
     klog_write(" failed (lba "); klog_write_dec(lba);
     klog_write(", reason: "); klog_write(g_pio_fail_reason);
     klog_write(")\n");
@@ -1041,7 +1041,7 @@ uint32_t ata_sector_count(void) {
 static int lba_range_ok(uint32_t lba, int count) {
     if (g_sector_count == 0) return 1;
     if (lba > g_sector_count || (uint32_t)count > g_sector_count - lba) {
-        klog_write("ata: refusing transfer past end of drive (lba ");
+        klog_write(KLOG_ERR "ata: refusing transfer past end of drive (lba ");
         klog_write_dec(lba); klog_write(", count "); klog_write_dec((uint32_t)count);
         klog_write(", drive has "); klog_write_dec(g_sector_count);
         klog_write(" sectors)\n");

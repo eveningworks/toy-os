@@ -285,7 +285,7 @@ static void e1000_probe(const struct pci_device *pci) {
     reg_write(REG_TCTL, TCTL_EN | TCTL_PSP | (0x0Fu << 4) | (0x40u << 12));
 
     if (!read_mac(g_dev.mac)) {
-        klog_write("e1000: could not read the MAC address\n");
+        klog_write(KLOG_ERR "e1000: could not read the MAC address\n");
         return;
     }
 

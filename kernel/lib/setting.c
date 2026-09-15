@@ -15,6 +15,7 @@
 #include "font_config.h"
 #include "cursor_config.h"
 #include "mouse_config.h"
+#include "klog_config.h"
 #include "sound_config.h"
 #include "display_config.h"
 #include "setting_text.h"
@@ -63,7 +64,7 @@ int setting_register(const struct setting *s) {
     if (k_strlen(s->name) >= SETTING_NAME_MAX) return 0;
     if (k_strlen(s->label) >= SETTING_LABEL_MAX) return 0;
     if (g_count >= SETTING_MAX) {
-        klog_write("setting: registry full, refusing ");
+        klog_write(KLOG_ERR "setting: registry full, refusing ");
         klog_write(s->name);
         klog_write("\n");
         return 0;
@@ -78,7 +79,7 @@ int setting_register(const struct setting *s) {
         if (k_strcmp(g_settings[i]->name, s->name) != 0) continue;
         const char *a = g_settings[i]->file, *b = s->file;
         if (a == b || (a && b && k_strcmp(a, b) == 0)) {
-            klog_write("setting: refusing duplicate ");
+            klog_write(KLOG_ERR "setting: refusing duplicate ");
             klog_write(s->name);
             klog_write(" in the same file\n");
             return 0;
@@ -712,6 +713,7 @@ void settings_init(void) {
     font_config_setting_register();
     cursor_config_setting_register();
     mouse_config_setting_register();
+    klog_config_setting_register();
     sound_config_setting_register();
     display_config_setting_register();
     keyboard_config_setting_register();

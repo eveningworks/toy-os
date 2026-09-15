@@ -72,7 +72,7 @@ static const struct block_device RAM_DEV = {
 
 int blk_ram_register(uint64_t base, uint64_t bytes) {
     if (!base || bytes < SECTOR_SIZE) {
-        klog_write("block: ram device refused -- empty image\n");
+        klog_write(KLOG_ERR "block: ram device refused -- empty image\n");
         return 0;
     }
     g_base = (uint8_t *)(uintptr_t)base;

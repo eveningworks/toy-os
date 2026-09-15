@@ -127,7 +127,7 @@ static int begin(struct pipe_state *st, const char *what) {
     st->pipe = intel_display_pipe();
     if (st->pipe < 0) return 0;
     if (!(intel_rd(TRANS_DDI_FUNC_CTL_EDP) & TRANS_DDI_FUNC_ENABLE)) {
-        klog_printf("intel-display: %s: the panel is not on the EDP transcoder -- refused\n", what);
+        klog_printf(KLOG_ERR "intel-display: %s: the panel is not on the EDP transcoder -- refused\n", what);
         return 0;
     }
     klog_printf("intel-display: %s: transconf %#x func %#x plane %#x buf ctl %#x tp ctl %#x\n",
@@ -343,7 +343,7 @@ int intel_modeset_native(void) {
     if (!begin(&st, "native modeset")) return 0;
     const struct display_edid *e = display_edid();
     if (!e || e->timing_count < 1) {
-        klog_write("intel-display: native modeset: no EDID timing to program -- refused\n");
+        klog_write(KLOG_ERR "intel-display: native modeset: no EDID timing to program -- refused\n");
         return 0;
     }
     const struct edid_timing *t = &e->timing[0];
@@ -361,7 +361,7 @@ int intel_modeset_native(void) {
     int enhanced = (tp & DP_TP_ENHANCED) != 0;
     uint32_t link_khz = intel_display_port_clock_khz(clk);
     if (!link_khz) {
-        klog_printf("intel-display: native modeset: port clock %#x is not an LCPLL tap -- refused\n", clk);
+        klog_printf(KLOG_ERR "intel-display: native modeset: port clock %#x is not an LCPLL tap -- refused\n", clk);
         return 0;
     }
 

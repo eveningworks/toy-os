@@ -80,7 +80,7 @@ int syscall_stall_set(int on) {
         struct cpu_info info;
         cpu_info_get(&info);
         if (info.mhz == 0 || info.mhz_source == CPU_MHZ_UNKNOWN) {
-            klog_write("syscall_stall: refused -- no calibrated TSC frequency\n");
+            klog_write(KLOG_ERR "syscall_stall: refused -- no calibrated TSC frequency\n");
             return 0;
         }
         g_mhz = info.mhz;

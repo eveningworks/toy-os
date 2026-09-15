@@ -1685,6 +1685,49 @@ there, `SYS_SLEEP` is refused AND the monotonic clock never advances, so
 a poll loop spins against a deadline that cannot arrive and takes the
 machine with it.
 
+## A LOG LINE'S LEVEL ARRIVES IN-BAND, AND THE THRESHOLD IS THE CONSOLE'S -- THE RING KEEPS EVERY LEVEL
+
+A level goes on the FRONT of the format string, as Linux's does:
+
+    klog_printf(KLOG_ERR "ata: dma write failed after %d attempts\n", n);
+
+`klog_write()` takes the marker off and never emits it. That shape was
+not chosen for elegance -- it is the only one that could arrive at all,
+because there are ~940 `klog_printf`/`klog_write` call sites across 117
+files and any design needing a per-site edit would have had to change
+all of them to add a parameter nobody had a value for. In-band means an
+unmarked call is `KLOG_INFO`, which is what the overwhelming majority of
+them actually are.
+
+**THE NUMBERS ARE LINUX'S** -- 2 crit, 3 err, 4 warn, 6 info, 7 debug --
+so `<3>` means here what it means in `dmesg` anywhere else. 0, 1 and 5
+are deliberately undefined: nothing in this kernel is above crit or sits
+between info and warn, and a level nothing writes is a filter option
+that never matches.
+
+**THE MARKER MUST NOT SURVIVE INTO THE RING**, and `klog_write()` strips
+it wherever a write begins rather than only at a line start. A line here
+is routinely built from several writes (`ata.c`'s failure line is six),
+so a level put on the second fragment is an easy mistake -- and the
+stripped-anywhere rule means the worst case is a level that does not
+take effect, instead of a raw `\001` byte in the one copy of the
+evidence. It only CHANGES the level at a line start, because by the
+second fragment the line's console fate has already been decided.
+
+**THE LEVEL IS STORED AS TEXT, IN THE TIMESTAMP** -- `[7.03] <3> `. The
+stamp was already ring-only content that never reaches COM1, so this
+costs no ABI, leaves `serial.log`'s format untouched, and gives every
+reader of the ring the level for free, `grep` included. `dmesg` and
+`log` hide the marker unless `--raw` asks for it.
+
+**AND THE THRESHOLD GATES THE CONSOLE, NEVER THE RING.** `loglevel=` and
+`system.loglevel` decide what still reaches the serial port and the
+boot screen; `klog_buf_putc()` is not gated at all. A level that dropped
+bytes from the log would be discarding exactly the evidence an
+intermittent fault needs -- this project lost a laptop's entire boot log
+to a chatty driver once already, and the fix for that is a level on the
+chatter plus a quiet console, not a smaller log.
+
 ## KERNEL LOG OUTPUT IS QUEUED, NEVER WAITED ON -- A STALLED COM1 CONSUMER MUST NOT STOP THE MACHINE
 
 `serial_putc()` was `while (!transmit_empty()); outb(COM1, c);` -- an

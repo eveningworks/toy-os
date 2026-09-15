@@ -232,7 +232,7 @@ int elf_load(uint64_t elf_phys_addr, uint64_t elf_size, uint64_t pml4_phys,
         if (ph->p_type == PT_INTERP) {
             uint64_t iend;
             if (!out_dyn) {
-                klog_write("elf: refused -- dynamic executable (PT_INTERP), use spawn\n");
+                klog_write(KLOG_ERR "elf: refused -- dynamic executable (PT_INTERP), use spawn\n");
                 return 0;
             }
             if (ph->p_filesz == 0 ||
@@ -240,7 +240,7 @@ int elf_load(uint64_t elf_phys_addr, uint64_t elf_size, uint64_t pml4_phys,
                 !add_ok(ph->p_offset, ph->p_filesz, &iend) ||
                 iend > elf_size ||
                 base[ph->p_offset + ph->p_filesz - 1] != '\0') {
-                klog_write("elf: refused -- bad PT_INTERP path\n");
+                klog_write(KLOG_ERR "elf: refused -- bad PT_INTERP path\n");
                 return 0;
             }
             k_memcpy(out_dyn->interp, base + ph->p_offset, ph->p_filesz);
@@ -249,7 +249,7 @@ int elf_load(uint64_t elf_phys_addr, uint64_t elf_size, uint64_t pml4_phys,
 
         if (ph->p_type != PT_LOAD) continue;
         if (!segment_ok(ph, elf_size)) {
-            klog_write("elf: refused -- segment out of bounds\n");
+            klog_write(KLOG_ERR "elf: refused -- segment out of bounds\n");
             return 0;
         }
     }

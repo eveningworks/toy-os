@@ -616,6 +616,7 @@ whenever a headline here tells you something you did not already know.
 - **USB IS xHCI ONLY, ITS PORTS WAIT ON PED RATHER THAN PRC, AND EVERY DMA OBJECT IS ITS OWN FRAME**
 - **INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event is evdev -- including `/etc/kbs`, so only the PS/2 driver ever sees a scancode**
 - **`kbd` PRINTS EVERY STAGE OF A KEYPRESS, AND ITS KERNEL LOG IS OFF BY DEFAULT**
+- **A LOG LINE'S LEVEL ARRIVES IN-BAND (`klog_printf(KLOG_ERR "...")`), AND THE THRESHOLD IS THE CONSOLE'S -- THE RING KEEPS EVERY LEVEL**
 - **KERNEL LOG OUTPUT IS QUEUED, NEVER WAITED ON -- A STALLED COM1 CONSUMER MUST NOT STOP THE MACHINE**
 - **A GUEST SPIN-WAIT NEEDS `cpu_relax()` (`pause`), AND UNDER KVM THAT IS NOT AN OPTIMISATION**
 - **VIRTIO INTERRUPTS ARE OPT-IN, a forgotten ISR read hangs the machine, and ENABLING IS THE LAST STEP**

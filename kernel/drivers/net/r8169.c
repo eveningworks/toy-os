@@ -243,7 +243,7 @@ static void r8169_irq(uint64_t *regs) {
 
     if (status & (ISR_ROK | ISR_RER | ISR_RDU | ISR_FOVW)) drain_rx(&g_dev);
     if (status & ISR_LINKCHG) update_link(&g_dev);
-    if (status & ISR_SYSERR) klog_write("r8169: the chip reports a system error\n");
+    if (status & ISR_SYSERR) klog_write(KLOG_ERR "r8169: the chip reports a system error\n");
 }
 
 static int r8169_transmit(struct net_device *dev, const void *frame, uint32_t len) {

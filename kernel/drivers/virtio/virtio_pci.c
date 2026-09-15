@@ -88,7 +88,7 @@ static volatile uint8_t *map_window(const struct pci_device *d, uint8_t cap,
     // is mapped rather than assumed.
     volatile void *win = paging_map_device(addr, length);
     if (!win) {
-        klog_printf("virtio: %s window at 0x%llx could not be mapped\n",
+        klog_printf(KLOG_ERR "virtio: %s window at 0x%llx could not be mapped\n",
                     what, (unsigned long long)addr);
         return 0;
     }
@@ -132,7 +132,7 @@ int virtio_pci_attach(const struct pci_device *dev, uint16_t type, struct virtio
     // resume offset -- asking for "the next 0x09" is the whole point.
     uint8_t cap = pci_capability_find(dev, PCI_CAP_ID_VNDR, 0);
     if (!cap) {
-        klog_printf("virtio: device %04x:%04x has no vendor capabilities --"
+        klog_printf(KLOG_ERR "virtio: device %04x:%04x has no vendor capabilities --"
                     " legacy-only, refusing (this transport is modern-only)\n",
                     dev->vendor_id, dev->device_id);
         return 0;
@@ -226,7 +226,7 @@ int virtio_msix_enable(struct virtio_device *d, void (*handler)(uint64_t *regs))
     // way of saying "no", and the only way to find out.
     mmio_w16(d->common, VIRTIO_COMMON_MSIX_CFG, VIRTIO_MSIX_ENTRY);
     if (mmio_r16(d->common, VIRTIO_COMMON_MSIX_CFG) == VIRTIO_MSI_NO_VECTOR) {
-        klog_printf("virtio: %s refused an MSI-X entry for config changes\n", d->name);
+        klog_printf(KLOG_ERR "virtio: %s refused an MSI-X entry for config changes\n", d->name);
         pci_msix_disable(d->pci);   // or the caller's fallback line never asserts
         lapic_free_vector(vector);
         return 0;
@@ -307,7 +307,7 @@ int virtio_begin(struct virtio_device *d, uint64_t wanted) {
     //    implement -- refuse rather than half-drive it. Single place the
     //    modern-only decision lives.
     if (!(offered & VIRTIO_F_VERSION_1)) {
-        klog_printf("virtio: %s offers no VERSION_1 -- legacy-only, refusing\n",
+        klog_printf(KLOG_ERR "virtio: %s offers no VERSION_1 -- legacy-only, refusing\n",
                     d->name ? d->name : "device");
         virtio_fail(d);
         return 0;
@@ -333,7 +333,7 @@ int virtio_begin(struct virtio_device *d, uint64_t wanted) {
     //    conformance for devices we do not have.
     uint8_t back = mmio_r8(d->common, VIRTIO_COMMON_STATUS);
     if (!(back & VIRTIO_STATUS_FEATURES_OK)) {
-        klog_printf("virtio: %s rejected the negotiated feature set\n",
+        klog_printf(KLOG_ERR "virtio: %s rejected the negotiated feature set\n",
                     d->name ? d->name : "device");
         virtio_fail(d);
         return 0;

@@ -1435,7 +1435,7 @@ static int fat32_init(const struct block_device *dev, uint64_t size_bytes) {
         // FAT32 has no RAM-only mode -- that is ramfs's job. -1, not 0:
         // 0 would mean "mounted, but not persistent", which is the
         // fiction fs_ops.h's three-valued init() exists to stop.
-        klog_write("fat32: no volume -- cannot mount\n");
+        klog_write(KLOG_ERR "fat32: no volume -- cannot mount\n");
         return -1;
     }
     int r = parse_bpb(dev);

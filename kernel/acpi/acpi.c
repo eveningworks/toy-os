@@ -114,7 +114,7 @@ static void record_table(uint64_t phys) {
     // trusted: everything downstream reads fixed offsets out of it, and
     // a corrupt FADT names I/O ports this kernel would then write to.
     if (acpi_checksum(h, h->length) != 0) {
-        klog_printf("acpi: %c%c%c%c at 0x%x FAILS its checksum -- ignored\n",
+        klog_printf(KLOG_ERR "acpi: %c%c%c%c at 0x%x FAILS its checksum -- ignored\n",
                     h->signature[0], h->signature[1], h->signature[2],
                     h->signature[3], (uint32_t)phys);
         return;

@@ -126,7 +126,7 @@ static void virtio_rng_probe(const struct pci_device *pci) {
     if (!virtio_begin(&g_dev, 0)) return;   // logged its own reason
 
     if (!virtqueue_setup(&g_dev, 0, &g_vq)) {
-        klog_write("virtio-rng: could not set up its request queue\n");
+        klog_write(KLOG_ERR "virtio-rng: could not set up its request queue\n");
         virtio_fail(&g_dev);
         return;
     }

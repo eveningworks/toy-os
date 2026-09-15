@@ -7509,3 +7509,55 @@ directly, with the same inputs.
 An unterminated quote is REFUSED rather than guessed at, so the spawn
 fails and nothing runs -- the same rule every other parser here follows.
 The caller sees a failed spawn, which is what the `#` shell reports.
+
+## Log levels arrive in-band, and are stored as text in the timestamp
+
+Adding a severity to the kernel log ran into a number before it ran into
+a design: there are ~940 `klog_printf`/`klog_write` call sites across 117
+files. Any shape needing a per-site edit — a level parameter, a
+`klog_err()` family replacing the calls — meant touching all of them to
+supply a value that only a few dozen actually have. So the question was
+never "what is the tidiest signature", it was "what can arrive without a
+sweep".
+
+**Linux answers that with an in-band prefix**, and it answers it for the
+same reason: `KERN_ERR` expands to `"\001" "3"` on the front of the
+format string, `vprintk` strips it, and a call with no prefix is
+`KERN_DEFAULT`. That is the only construction where an unmarked call
+keeps working unchanged, which is the whole requirement. toy-os copies
+it, including the numbers, so `<3>` means here what it means in anyone's
+`dmesg`.
+
+**Where it goes afterwards is the part that differs.** Linux's log has
+been a record ring since the structured-printk rewrite in 3.5, with the
+level as a 3-bit field; toy-os's `klog` stores BYTES, and making it
+records would change `QUERY_KLOG`'s ABI, `dmesg`, `logd` and
+`crash_report.c` together — a session's work before a single level was
+useful. The cheaper option that is not merely cheaper: put it in the
+ring's own **timestamp**. That text (`[7.03] `) is already written by
+`klog_write_timestamp()` into the buffer only and has never reached
+COM1, so a level living beside it costs no ABI, leaves `serial.log`
+byte-identical for every harness that parses it, and makes the level
+visible to every reader that can already read the log — `grep '<3>'
+/var/log/toyos.log` works, and `cat` remains a working reader, which is
+the property `logd`'s own design note protects. The cost is ~4 bytes per
+line of a 16 KB ring and a marker readers must hide; `dmesg` and `log`
+hide it by default, as util-linux does, and show it for `--raw`.
+
+**The threshold gates the console and never the ring**, which is also
+Linux's split (`console_loglevel` versus what `/dev/kmsg` still holds).
+It matters more here than it does there: this project has already lost a
+laptop's entire boot log to a driver logging once a second, and the fix
+for that class is a level on the chatter plus a quiet console — a
+threshold that dropped bytes from the ring would be deleting the
+evidence the ring exists to keep.
+
+**A stray marker is stripped rather than stored.** A line here is often
+built from several writes — `ata.c`'s DMA failure line is six — so a
+level put on the second fragment is an easy mistake, and one that would
+otherwise write a raw `\001` into the log. `klog_write()` takes a marker
+off wherever a write begins and only lets it change the level at a line
+start: the worst case is a level that quietly does not apply, instead of
+a corrupted line. Seven such fragments existed in the first sweep and
+were moved onto their line's opening write; the rule is what makes the
+eighth harmless.

@@ -153,7 +153,7 @@ static int map_font(int pid, struct win_request_msg *req) {
             for (uint64_t j = 0; j < i; j++) {
                 vmm_unmap_user_page(pml4, win_font_vaddr(weight) + j * 4096);
             }
-            klog_write("win_server: font refused -- mapping failed\n");
+            klog_write(KLOG_ERR "win_server: font refused -- mapping failed\n");
             return 0;
         }
     }

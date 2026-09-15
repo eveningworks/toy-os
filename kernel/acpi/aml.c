@@ -429,7 +429,7 @@ static const char *kind_name(uint8_t k) {
 
 void aml_dump(void) {
     if (!g_count) aml_build();
-    klog_printf("aml: %d node(s), %d dropped, %d refused\n",
+    klog_printf(KLOG_ERR "aml: %d node(s), %d dropped, %d refused\n",
                 g_count, g_dropped, g_refused);
     int devices = 0;
     for (int i = 0; i < g_count; i++) {

@@ -148,8 +148,13 @@ def run_once(name, keep_dir, index):
         with open(log_path) as f:
             log = f.read()
 
+    # "FAILED: <check>" is the tool's own SUMMARY of a failure it already
+    # printed as "FAIL  <check>", so counting both reports one failing
+    # check as two -- and the second is named "ED: <check>", which reads
+    # like a different check and cannot be grepped for in the source.
     failed = [l.split("FAIL", 1)[1].strip()
-              for l in log.splitlines() if l.strip().startswith("FAIL")]
+              for l in log.splitlines()
+              if l.strip().startswith("FAIL") and not l.strip().startswith("FAILED:")]
 
     m = SUMMARY_RE.search(log)
     if not m:

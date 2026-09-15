@@ -450,35 +450,35 @@ int pmm_selftest(void) {
 
     uint64_t base = pmm_alloc_contiguous(4, PMM_ZONE_DMA32);
     if (base == 0) {
-        klog_write("toy-os: PMM SELFTEST FAILED -- pmm_alloc_contiguous(4) returned 0\n");
+        klog_write(KLOG_ERR "toy-os: PMM SELFTEST FAILED -- pmm_alloc_contiguous(4) returned 0\n");
         return 0;
     }
     if (base % FRAME_SIZE != 0) {
-        klog_write("toy-os: PMM SELFTEST FAILED -- unaligned address from pmm_alloc_contiguous\n");
+        klog_write(KLOG_ERR "toy-os: PMM SELFTEST FAILED -- unaligned address from pmm_alloc_contiguous\n");
         return 0;
     }
 
     uint64_t f = base / FRAME_SIZE;
     for (uint64_t i = 0; i < 4; i++) {
         if (!bit_is_used(f + i)) {
-            klog_write("toy-os: PMM SELFTEST FAILED -- frame not marked used after alloc\n");
+            klog_write(KLOG_ERR "toy-os: PMM SELFTEST FAILED -- frame not marked used after alloc\n");
             return 0;
         }
     }
     if (pmm_free_frames() != before - 4) {
-        klog_write("toy-os: PMM SELFTEST FAILED -- free_frames count wrong after alloc\n");
+        klog_write(KLOG_ERR "toy-os: PMM SELFTEST FAILED -- free_frames count wrong after alloc\n");
         return 0;
     }
 
     pmm_free_contiguous(base, 4);
     for (uint64_t i = 0; i < 4; i++) {
         if (bit_is_used(f + i)) {
-            klog_write("toy-os: PMM SELFTEST FAILED -- frame still marked used after free\n");
+            klog_write(KLOG_ERR "toy-os: PMM SELFTEST FAILED -- frame still marked used after free\n");
             return 0;
         }
     }
     if (pmm_free_frames() != before) {
-        klog_write("toy-os: PMM SELFTEST FAILED -- free_frames count wrong after free\n");
+        klog_write(KLOG_ERR "toy-os: PMM SELFTEST FAILED -- free_frames count wrong after free\n");
         return 0;
     }
 
@@ -486,7 +486,7 @@ int pmm_selftest(void) {
     // proof the free cleared those bits rather than just the count.
     uint64_t base2 = pmm_alloc_contiguous(4, PMM_ZONE_DMA32);
     if (base2 != base) {
-        klog_write("toy-os: PMM SELFTEST FAILED -- reuse after free landed at a different address\n");
+        klog_write(KLOG_ERR "toy-os: PMM SELFTEST FAILED -- reuse after free landed at a different address\n");
         pmm_free_contiguous(base2, 4);
         return 0;
     }

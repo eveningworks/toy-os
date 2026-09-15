@@ -221,7 +221,7 @@ static void port_recover(volatile uint8_t *p) {
     port_stop(p);
     px_w(p, PX_SERR, px_r(p, PX_SERR));
     px_w(p, PX_IS, px_r(p, PX_IS));
-    if (!port_start(p)) klog_write("ahci: the port would not restart after an error\n");
+    if (!port_start(p)) klog_write(KLOG_ERR "ahci: the port would not restart after an error\n");
 }
 
 // ---- issuing one command --------------------------------------------
@@ -348,14 +348,14 @@ static int run_command(uint8_t command, uint8_t features, uint64_t lba, uint16_t
     px_w(g_preg, PX_CI, 1u);
 
     if (!wait_command()) {
-        klog_printf("ahci: command 0x%x timed out (tfd 0x%x, is 0x%x)\n",
+        klog_printf(KLOG_ERR "ahci: command 0x%x timed out (tfd 0x%x, is 0x%x)\n",
                     command, px_r(g_preg, PX_TFD), px_r(g_preg, PX_IS));
         return 0;
     }
     kmb();
 
     if (g_irq_status & PXIS_TFES) {
-        klog_printf("ahci: command 0x%x refused (tfd 0x%x)\n", command, px_r(g_preg, PX_TFD));
+        klog_printf(KLOG_ERR "ahci: command 0x%x refused (tfd 0x%x)\n", command, px_r(g_preg, PX_TFD));
         port_recover(g_preg);
         return 0;
     }
@@ -541,7 +541,7 @@ static void ahci_probe(const struct pci_device *dev) {
     }
     g_abar = (volatile uint8_t *)paging_map_device(abar, 0x1100);
     if (!g_abar) {
-        klog_printf("ahci: ABAR at 0x%llx could not be mapped\n", (unsigned long long)abar);
+        klog_printf(KLOG_ERR "ahci: ABAR at 0x%llx could not be mapped\n", (unsigned long long)abar);
         return;
     }
 

@@ -184,7 +184,7 @@ static int bochs_try_mode(uint32_t w, uint32_t h) {
     uint16_t got_h = dispi_read(DISPI_INDEX_YRES);
     uint16_t virt_w = dispi_read(DISPI_INDEX_VIRT_WIDTH);
     if (got_w != w || got_h != h || !virt_w) {
-        klog_printf("bochs: asked for %ux%u, adapter reports %ux%u -- rejecting\n",
+        klog_printf(KLOG_ERR "bochs: asked for %ux%u, adapter reports %ux%u -- rejecting\n",
                      w, h, got_w, got_h);
         return 0;
     }

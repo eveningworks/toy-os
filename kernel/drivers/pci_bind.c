@@ -140,7 +140,7 @@ int pci_driver_remove_table(const struct pci_driver *drivers) {
     for (int i = 0; i < pci_device_count() && i < PCI_MAX_DEVICES; i++) {
         if (!g_bound[i] || !in_table(&g_tables[t], g_bound[i])) continue;
         if (!g_bound[i]->remove) {
-            klog_printf("pci: %s holds a device and cannot let go\n", g_bound[i]->name);
+            klog_printf(KLOG_ERR "pci: %s holds a device and cannot let go\n", g_bound[i]->name);
             return -EBUSY;
         }
     }

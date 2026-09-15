@@ -44,6 +44,7 @@
 #include "serial.h"
 #include "timer.h"
 #include "knum.h"
+#include "string.h"   // k_strstr -- the loglevel= flag
 #include "kfmt.h"
 
 #define KLOG_BUF_SIZE 16384
@@ -58,6 +59,10 @@ static uint32_t klog_count = 0; // valid bytes currently buffered, caps at KLOG_
 // kbdtap's `seq` is.
 static uint64_t klog_total = 0;
 static int at_line_start = 1;   // true at boot and right after the last '\n' written
+// The line being written, and what still reaches the console. See
+// api/klog.h: the ring keeps every level, the console does not.
+static int g_line_level = KLOG_LEVEL_INFO;
+static int g_console_level = KLOG_LEVEL_INFO;
 
 static void klog_buf_putc(char c) {
     klog_buf[klog_head] = c;
@@ -81,8 +86,14 @@ static void klog_write_timestamp(void) {
     // klog_putc() and back into here -- buffer-only content, written
     // with klog_buf_putc() directly, is the whole point of this
     // function.
+    // The level goes in the STAMP because the stamp is already
+    // ring-only: it costs no ABI, every reader that can see the text
+    // can see the level (`grep '<3>' /var/log/toyos.log` works), and
+    // the wire stays byte-identical. Always emitted, even for info --
+    // an irregular format is worse to parse than four spare bytes.
     char stamp[24];
-    k_snprintf(stamp, sizeof stamp, "[%u.%02u] ", secs, hund);
+    k_snprintf(stamp, sizeof stamp, "[%u.%02u] <%u> ", secs, hund,
+               (uint32_t)g_line_level);
     for (const char *p = stamp; *p; p++) klog_buf_putc(*p);
 }
 
@@ -95,10 +106,15 @@ void klog_set_console_echo(int on) {
 }
 
 void klog_putc(char c) {
-    serial_putc(c); // raw wire byte, unchanged -- see top comment
+    int to_console = g_line_level <= g_console_level;
+    if (to_console) serial_putc(c); // raw wire byte, unchanged -- see top comment
     if (at_line_start) klog_write_timestamp();
     klog_buf_putc(c);
     at_line_start = (c == '\n');
+    // A level lasts one logical line. Reset HERE rather than where the
+    // next one is parsed, so a klog_putc() caller that never goes
+    // through klog_write() still starts its line at the default.
+    if (at_line_start) g_line_level = KLOG_LEVEL_INFO;
     // Echo to the physical console too, while enabled. Off by default
     // and switched off for good just before apps_start() (kernel.c), so
     // this only ever covers boot: the messages a real kernel prints on
@@ -106,11 +122,41 @@ void klog_putc(char c) {
     // serial port and dmesg. Leaving it on afterwards would put every
     // ATA retry and filesystem warning on top of whatever the shell or
     // the GUI is drawing.
-    if (g_console_echo) vga_putc(c);
+    if (to_console && g_console_echo) vga_putc(c);
 }
 
 void klog_write(const char *s) {
+    // A marker is TAKEN OFF wherever a write begins, and only CHANGES
+    // the level at a line start. Stripping unconditionally is the
+    // defensive half: a level put on the second fragment of a line
+    // built from several writes would otherwise reach the ring as a raw
+    // \001, corrupting the one thing a log exists to preserve. The
+    // level is ignored there because the line's console fate was
+    // already decided when its first byte went out.
+    if (s[0] == '\001' && s[1] >= '0' && s[1] <= '7') {
+        if (at_line_start) g_line_level = s[1] - '0';
+        s += 2;
+    }
     while (*s) klog_putc(*s++);
+}
+
+void klog_set_console_level(int level) {
+    if (level < KLOG_LEVEL_CRIT) level = KLOG_LEVEL_CRIT;
+    if (level > KLOG_LEVEL_DEBUG) level = KLOG_LEVEL_DEBUG;
+    g_console_level = level;
+}
+
+int klog_console_level(void) { return g_console_level; }
+
+// `loglevel=<0-7>` on the GRUB line (docs/boot-flags.md). Takes the
+// string rather than calling multiboot_cmdline() itself, so this file
+// keeps depending on nothing above it.
+void klog_apply_cmdline(const char *cmdline) {
+    if (!cmdline) return;
+    const char *p = k_strstr(cmdline, "loglevel=");
+    if (!p) return;
+    p += 9;
+    if (*p >= '0' && *p <= '9') klog_set_console_level(*p - '0');
 }
 
 // Both of these used to be full digit loops, byte-for-byte identical to

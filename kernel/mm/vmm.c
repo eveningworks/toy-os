@@ -3,6 +3,7 @@
 #include "swap.h"
 #include "string.h" // k_memcpy() -- the user-copy helpers below
 #include "kfmt.h"   // klog_printf() -- the fork walk's refusals
+#include "klog.h"   // KLOG_ERR -- the level on a failure line
 #include <stddef.h>
 
 // The kernel's own top-level page table, from boot.asm. Every process's
@@ -576,7 +577,7 @@ uint64_t vmm_fork_address_space(uint64_t parent, const struct vmm_fork_opts *o) 
         }
     }
     if (why) {
-        klog_printf("vmm: fork of %#lx refused -- %s\n", parent, why);
+        klog_printf(KLOG_ERR "vmm: fork of %#lx refused -- %s\n", parent, why);
         vmm_destroy_address_space(child);
         return 0;
     }

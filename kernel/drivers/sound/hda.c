@@ -745,7 +745,7 @@ static void hda_irq_one(struct hda_ctrl *h) {
         if (s & 0x08) h->fifoe++;
         if (s & 0x10) h->dese++;
         if ((s & 0x18) && h->fifoe + h->dese <= 3)
-            klog_printf("%s: stream error sts %#x (fifoe %u dese %u)\n", h->name, s, h->fifoe, h->dese);
+            klog_printf(KLOG_ERR "%s: stream error sts %#x (fifoe %u dese %u)\n", h->name, s, h->fifoe, h->dese);
         if ((s & SD_STS_BCIS) && h->diag) {
             // The diagnostic tone: count it down and stop the engine
             // from here, with no waiting -- pit_ticks() does not advance
@@ -836,7 +836,7 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     uint64_t len = pci_bar_mem_size(d, 0);
     volatile void *win = paging_map_device(bar0, len ? len : 0x4000);
     if (!win) {
-        klog_printf("%s: BAR0 at 0x%llx could not be mapped\n", h->name, (unsigned long long)bar0);
+        klog_printf(KLOG_ERR "%s: BAR0 at 0x%llx could not be mapped\n", h->name, (unsigned long long)bar0);
         return;
     }
     h->mmio = (volatile uint8_t *)win;

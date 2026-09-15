@@ -156,7 +156,7 @@ static void hub_attach_port(struct usb_hub *h, uint8_t port) {
                                  (uint8_t)(h->depth + 1), speed,
                                  h->slot, tt_slot, tt_port, attempt) >= 0)
             return;
-        klog_printf("usb: hub slot %u port %u: enumeration failed%s\n",
+        klog_printf(KLOG_ERR "usb: hub slot %u port %u: enumeration failed%s\n",
                     h->slot, port, attempt ? "" : " -- retrying");
     }
 }
@@ -242,7 +242,7 @@ int usb_hub_bind(struct usb_device_info *d) {
     uint8_t ttt = (uint8_t)((hd[3] >> 5) & 3u);   // wHubCharacteristics [6:5]
     xhci_slot_set_hub(d->slot, n, ttt);
     if (xhci_add_interrupt_in(d->slot, ifc->ep, ifc->mps, ifc->interval) < 0) {
-        klog_printf("usb: slot %u: hub status pipe failed\n", d->slot);
+        klog_printf(KLOG_ERR "usb: slot %u: hub status pipe failed\n", d->slot);
         h->in_use = 0;
         return 0;
     }

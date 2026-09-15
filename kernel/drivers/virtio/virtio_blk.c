@@ -117,7 +117,7 @@ uint32_t virtio_blk_sector_count(void) {
 static int do_request(uint32_t type, uint64_t sector, void *data, uint32_t len, int device_writes) {
     if (!g_present) return 0;
     if (g_busy) {
-        klog_write("virtio-blk: re-entrant request refused\n");
+        klog_write(KLOG_ERR "virtio-blk: re-entrant request refused\n");
         return 0;
     }
 
@@ -127,7 +127,7 @@ static int do_request(uint32_t type, uint64_t sector, void *data, uint32_t len, 
     // construction. Virtio addresses are 64-bit, so the only bound is
     // the map itself (a kmalloc buffer may be above 4 GiB now).
     if (data && ((uint64_t)(uintptr_t)data + len) > paging_identity_limit()) {
-        klog_write("virtio-blk: buffer outside the identity map refused\n");
+        klog_write(KLOG_ERR "virtio-blk: buffer outside the identity map refused\n");
         return 0;
     }
 
@@ -184,7 +184,7 @@ static int do_request(uint32_t type, uint64_t sector, void *data, uint32_t len, 
         return 0;   // virtqueue_poll() logged, and leaked the chain
     }
     if (g_status != VIRTIO_BLK_S_OK) {
-        klog_printf("virtio-blk: request type %u at sector %llu failed, status %u\n",
+        klog_printf(KLOG_ERR "virtio-blk: request type %u at sector %llu failed, status %u\n",
                     type, (unsigned long long)sector, (unsigned)g_status);
         return 0;
     }
@@ -199,7 +199,7 @@ int virtio_blk_read_sectors(uint32_t lba, int count, void *buf) {
 int virtio_blk_write_sectors(uint32_t lba, int count, const void *buf) {
     if (!buf || count <= 0 || (uint32_t)count > g_max_xfer) return 0;
     if (g_readonly) {
-        klog_write("virtio-blk: device is read-only, write refused\n");
+        klog_write(KLOG_ERR "virtio-blk: device is read-only, write refused\n");
         return 0;
     }
     return do_request(VIRTIO_BLK_T_OUT, lba, (void *)buf, (uint32_t)count * 512u, 0);
@@ -249,7 +249,7 @@ static void virtio_blk_probe(const struct pci_device *pci) {
     if (!virtio_begin(&g_dev, wanted)) return;   // logged its own reason
 
     if (!virtqueue_setup(&g_dev, 0, &g_vq)) {
-        klog_write("virtio-blk: could not set up its request queue\n");
+        klog_write(KLOG_ERR "virtio-blk: could not set up its request queue\n");
         virtio_fail(&g_dev);
         return;
     }

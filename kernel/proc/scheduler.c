@@ -1135,7 +1135,7 @@ static int build_elf_image(const char *path, const char *argvec, size_t argvec_l
     int auxc = 0;
     if (dyn.interp[0]) {
         if (image_end > ELF_LDSO_BASE) {
-            klog_printf("spawn: %s reaches %#lx, into the interpreter -- refused\n",
+            klog_printf(KLOG_ERR "spawn: %s reaches %#lx, into the interpreter -- refused\n",
                         path, image_end);
             vmm_destroy_address_space(as);
             return 0;
@@ -2371,7 +2371,7 @@ int scheduler_exec(const char *path, const char *argvec, size_t argvec_len,
     if (is_thread(me)) {
         // POSIX makes the exec'ing thread the leader, pid and all. Not
         // worth a second exit path: refuse, loudly.
-        klog_printf("exec: refused from thread %d -- only a process may exec\n", me + 1);
+        klog_printf(KLOG_ERR "exec: refused from thread %d -- only a process may exec\n", me + 1);
         return -EPERM;
     }
     uint64_t as = 0, entry = 0, user_rsp = 0, image_end = 0;

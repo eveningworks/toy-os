@@ -30,7 +30,7 @@ int screen_set_mode(uint32_t w, uint32_t h) {
 
     struct display_mode m = { .width = w, .height = h, .bpp = 32 };
     if (!display_set_mode(&m)) {
-        klog_printf("screen: the driver refused %ux%u -- keeping %dx%d\n",
+        klog_printf(KLOG_ERR "screen: the driver refused %ux%u -- keeping %dx%d\n",
                     w, h, gfx_width(), gfx_height());
         return 0;
     }
@@ -38,13 +38,13 @@ int screen_set_mode(uint32_t w, uint32_t h) {
     // it is re-read in the order it was first built.
     display_refresh_write_combining();
     if (!gfx_remode()) {
-        klog_write("screen: gfx could not adopt the new surface\n");
+        klog_write(KLOG_ERR "screen: gfx could not adopt the new surface\n");
         return 0;
     }
     vga_reflow();
     mouse_set_bounds(gfx_width(), gfx_height());
     if (!win_surface_remode())
-        klog_write("screen: the compositor's grant could not be re-mapped\n");
+        klog_write(KLOG_ERR "screen: the compositor's grant could not be re-mapped\n");
     win_server_screen_changed(gfx_width(), gfx_height());
     klog_printf("screen: mode %dx%d, %d scanout(s)\n", gfx_width(), gfx_height(),
                 display_scanout_count());

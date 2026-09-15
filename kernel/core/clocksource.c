@@ -63,7 +63,7 @@ int clocksource_register(const struct clocksource *cs) {
     // stopped one, and a stopped clock installed over a working one is
     // the failure this refuses to perform quietly.
     if (!cs || !cs->read || !cs->mask || !cs->mult) {
-        klog_printf("clocksource: REFUSED %s -- incomplete (read=%d mask=%d mult=%u)\n",
+        klog_printf(KLOG_ERR "clocksource: REFUSED %s -- incomplete (read=%d mask=%d mult=%u)\n",
                      cs && cs->name ? cs->name : "(unnamed)",
                      cs && cs->read ? 1 : 0, cs && cs->mask ? 1 : 0,
                      cs ? cs->mult : 0);

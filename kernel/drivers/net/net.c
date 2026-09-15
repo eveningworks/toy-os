@@ -115,7 +115,7 @@ int net_rename(struct net_device *dev, const char *name) {
     if (k_strcmp(dev->name, name) == 0) return 1;
     struct net_device *clash = net_device_by_name(name);
     if (clash && clash != dev) {
-        klog_printf("net: %s cannot be renamed to %s -- that name is taken\n",
+        klog_printf(KLOG_ERR "net: %s cannot be renamed to %s -- that name is taken\n",
                     dev->name, name);
         return 0;
     }
@@ -135,7 +135,7 @@ int net_register(struct net_device *dev) {
     // CLAUDE.md's rule is that using a subsystem before its init() is a
     // hard failure, and a silent one is worse than a panic.
     if (!g_inited) {
-        klog_printf("net: %s registered BEFORE net_init() -- refused; "
+        klog_printf(KLOG_ERR "net: %s registered BEFORE net_init() -- refused; "
                     "fix the order in kernel_main()\n",
                     dev->driver ? dev->driver : "a device");
         return 0;
@@ -155,7 +155,7 @@ int net_register(struct net_device *dev) {
     // produce, one adapter listed under two names. Refused rather than
     // accepted, so the driver hears about its own bug.
     if (net_device_by_name(dev->name)) {
-        klog_printf("net: %s is already registered -- refused\n", dev->name);
+        klog_printf(KLOG_ERR "net: %s is already registered -- refused\n", dev->name);
         return 0;
     }
 

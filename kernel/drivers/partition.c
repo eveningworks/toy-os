@@ -536,16 +536,16 @@ static __attribute__((noinline)) int write_gpt_header(const struct block_device 
 
 int partition_write_table_of(const struct block_device *dev, const struct partition_table *in) {
     const char *why = "";
-    if (!dev) { klog_write("partition: refusing to write -- no such disk\n"); return 0; }
+    if (!dev) { klog_write(KLOG_ERR "partition: refusing to write -- no such disk\n"); return 0; }
     if (!partition_validate_on(dev, in, &why)) {
-        klog_printf("partition: refusing to write -- %s\n", why);
+        klog_printf(KLOG_ERR "partition: refusing to write -- %s\n", why);
         return 0;
     }
 
     uint32_t disk = blkdev_sector_count(dev);
 
     if (in->kind == PART_TABLE_MBR) {
-        if (!write_mbr(dev, in, 0)) { klog_write("partition: MBR write failed\n"); return 0; }
+        if (!write_mbr(dev, in, 0)) { klog_write(KLOG_ERR "partition: MBR write failed\n"); return 0; }
         blkdev_flush(dev);
         return 1;
     }
@@ -564,27 +564,27 @@ int partition_write_table_of(const struct block_device *dev, const struct partit
 
     int ok = 0;
     uint32_t crc_backup = write_gpt_entries(dev, in, backup_entries, &ok);
-    if (!ok) { klog_write("partition: GPT backup entry array write failed\n"); return 0; }
+    if (!ok) { klog_write(KLOG_ERR "partition: GPT backup entry array write failed\n"); return 0; }
     uint32_t crc_primary = write_gpt_entries(dev, in, GPT_PRIMARY_ENTRY_LBA, &ok);
-    if (!ok) { klog_write("partition: GPT entry array write failed\n"); return 0; }
+    if (!ok) { klog_write(KLOG_ERR "partition: GPT entry array write failed\n"); return 0; }
     // Same bytes, so the two CRCs must agree. If they ever did not, one
     // of the two arrays did not land the way it was built, and writing
     // headers claiming both is how a disk gets a backup that silently
     // does not match.
     if (crc_backup != crc_primary) {
-        klog_write("partition: GPT entry arrays disagree -- refusing to write the headers\n");
+        klog_write(KLOG_ERR "partition: GPT entry arrays disagree -- refusing to write the headers\n");
         return 0;
     }
 
     if (!write_gpt_header(dev, backup_hdr, GPT_HEADER_LBA, backup_entries, crc_primary, disk_guid, disk)) {
-        klog_write("partition: GPT backup header write failed\n");
+        klog_write(KLOG_ERR "partition: GPT backup header write failed\n");
         return 0;
     }
     if (!write_gpt_header(dev, GPT_HEADER_LBA, backup_hdr, GPT_PRIMARY_ENTRY_LBA, crc_primary, disk_guid, disk)) {
-        klog_write("partition: GPT header write failed\n");
+        klog_write(KLOG_ERR "partition: GPT header write failed\n");
         return 0;
     }
-    if (!write_mbr(dev, in, 1)) { klog_write("partition: protective MBR write failed\n"); return 0; }
+    if (!write_mbr(dev, in, 1)) { klog_write(KLOG_ERR "partition: protective MBR write failed\n"); return 0; }
 
     blkdev_flush(dev);
     return 1;

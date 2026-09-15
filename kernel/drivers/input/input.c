@@ -40,7 +40,7 @@ void input_register_source(const struct input_source *src) {
     // source REPORTS; it says nothing about whether the source is worth
     // servicing.
     if (!src->poll && !src->irq && !src->msi_vector) {
-        klog_printf("input: REFUSED %s -- neither polled nor on an "
+        klog_printf(KLOG_ERR "input: REFUSED %s -- neither polled nor on an "
                     "interrupt\n", src->name);
         return;
     }

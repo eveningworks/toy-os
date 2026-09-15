@@ -1048,6 +1048,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [x] ~~Move the introspection commands onto it~~ DONE 2026-08-24 -- `dmesg` was the last one
 - [ ] A sampling profiler driven off the timer interrupt
 - [ ] Per-subsystem counters (cache hits, DMA retries, allocation failures) behind the existing `debug` flags
+- [x] ~~Log levels, and filtering by them~~ DONE 2026-09-15 -- in-band `KLOG_ERR` markers, `dmesg -l err`, `loglevel=`
 - [ ] `dmesg` filtering by subsystem
 - [ ] Counters need a shared shape
 - [ ] A `top`-style live view, not just point-in-time snapshots

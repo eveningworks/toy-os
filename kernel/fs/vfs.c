@@ -101,7 +101,7 @@ static int resolve(const char *path, struct resolved *r) {
 // would otherwise look like) when it is.
 static int writable(const struct resolved *r, const char *what, const char *path) {
     if (!(r->m->flags & MNT_RDONLY)) return 1;
-    klog_printf("fs: %s refused -- %s is mounted read-only (\"%s\")\n",
+    klog_printf(KLOG_ERR "fs: %s refused -- %s is mounted read-only (\"%s\")\n",
                 what, r->m->point, path ? path : "");
     return 0;
 }
@@ -163,7 +163,7 @@ int fs_format_device(const struct block_device *dev, const char *fstype) {
     for (int i = 0; i < mount_count(); i++) {
         const struct mount *m = mount_at(i);
         if (!m || !m->used || m->dev != dev) continue;
-        klog_printf("mkfs: %s is mounted at %s -- refused\n",
+        klog_printf(KLOG_ERR "mkfs: %s is mounted at %s -- refused\n",
                     blk_device_name(dev), m->point);
         return 0;
     }
@@ -336,7 +336,7 @@ int fs_sync_path(const char *path) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
     if (r.m->fs->sync && !FS_OP(r.m, r.m->fs->sync())) {
-        klog_printf("fs: fsync FAILED -- %s could not commit\n", r.m->point);
+        klog_printf(KLOG_ERR "fs: fsync FAILED -- %s could not commit\n", r.m->point);
         return 0;
     }
     // A mount with no device (ramfs) has nothing to flush and is
@@ -375,13 +375,13 @@ int fs_sync(uint32_t *wrote_out) {
         const struct mount *m = mount_at(i);
         if (!m || !m->fs || !m->fs->sync) continue;
         if (!FS_OP(m, m->fs->sync())) {
-            klog_printf("fs: sync FAILED -- %s could not commit\n", m->point);
+            klog_printf(KLOG_ERR "fs: sync FAILED -- %s could not commit\n", m->point);
             ok = 0;
         }
     }
 
     if (ata_cache_active() && !ata_sync(&wrote, &pending)) {
-        klog_printf("fs: sync FAILED -- %u sector(s) still in RAM\n", pending);
+        klog_printf(KLOG_ERR "fs: sync FAILED -- %u sector(s) still in RAM\n", pending);
         if (wrote_out) *wrote_out = wrote;
         return 0;   // a barrier cannot rescue a write that never left
     }
@@ -401,7 +401,7 @@ int fs_sync(uint32_t *wrote_out) {
         if (seen) continue;
         if (ndone < MOUNT_MAX) done[ndone++] = m->dev;
         if (!blkdev_flush(m->dev)) {
-            klog_printf("fs: sync FAILED -- %s did not flush\n", m->point);
+            klog_printf(KLOG_ERR "fs: sync FAILED -- %s did not flush\n", m->point);
             ok = 0;
         }
     }
@@ -445,7 +445,7 @@ int fs_delete(const char *path) {
     for (int i = 0; i < mount_count(); i++) {
         const struct mount *m = mount_at(i);
         if (m && k_strcmp(m->point, path) == 0) {
-            klog_printf("fs: refusing to delete \"%s\" -- %s is mounted there\n",
+            klog_printf(KLOG_ERR "fs: refusing to delete \"%s\" -- %s is mounted there\n",
                         path, m->fs->name);
             return 0;
         }
@@ -576,7 +576,7 @@ int fs_rename(const char *oldpath, const char *newpath) {
     struct resolved a, b;
     if (!resolve(oldpath, &a) || !resolve(newpath, &b)) return 0;
     if (a.m != b.m) {
-        klog_printf("fs: refusing to rename across mounts (\"%s\" -> \"%s\") -- use cp\n",
+        klog_printf(KLOG_ERR "fs: refusing to rename across mounts (\"%s\" -> \"%s\") -- use cp\n",
                     oldpath, newpath);
         return 0;
     }

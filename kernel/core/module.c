@@ -425,7 +425,7 @@ int module_load_image(const char *name, const void *image, uint32_t len) {
     if (rc) { pmm_free_contiguous(base, pages); return rc; }
 
     if (text_bytes && !paging_set_kernel_exec(base, text_bytes, 1)) {
-        klog_printf("module: %s: could not make its text executable\n", name);
+        klog_printf(KLOG_ERR "module: %s: could not make its text executable\n", name);
         pmm_free_contiguous(base, pages);
         return -ENOMEM;
     }
@@ -449,12 +449,12 @@ int module_load_image(const char *name, const void *image, uint32_t len) {
     }
 
     if (m->ndrivers && (rc = driver_add_table(m->drivers, m->ndrivers)) != 0) {
-        klog_printf("module: %s: cannot register its drivers (%d)\n", name, rc);
+        klog_printf(KLOG_ERR "module: %s: cannot register its drivers (%d)\n", name, rc);
         free_frames(m);
         return rc;
     }
     if (m->npci && (rc = pci_driver_add_table(m->pci, m->npci)) != 0) {
-        klog_printf("module: %s: cannot register its PCI drivers (%d)\n", name, rc);
+        klog_printf(KLOG_ERR "module: %s: cannot register its PCI drivers (%d)\n", name, rc);
         if (m->ndrivers) driver_remove_table(m->drivers);
         free_frames(m);
         return rc;

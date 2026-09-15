@@ -196,7 +196,7 @@ static int read_edid_block(uint8_t *out) {
 static void log_dpcd(void) {
     uint8_t d[16];
     int n = intel_aux_native_read(0x000, d, 16);
-    if (n < 16) { klog_printf("intel-display: DPCD read failed (%d)\n", n); return; }
+    if (n < 16) { klog_printf(KLOG_ERR "intel-display: DPCD read failed (%d)\n", n); return; }
     klog_printf("intel-display: DPCD rev %d.%d, max link %d.%02d Gbps, max %d lanes%s, edp cap %#x, aux interval %#x\n",
                 d[0] >> 4, d[0] & 0xF, (d[1] * 27) / 100, (d[1] * 27) % 100,
                 d[2] & 0x1F, (d[2] & 0x80) ? " (enhanced framing)" : "", d[0xD], d[0xE]);

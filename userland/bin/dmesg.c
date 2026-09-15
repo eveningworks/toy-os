@@ -57,6 +57,13 @@
 #define ABS_LINE_MAX 512
 
 static int g_abs;                  // -T
+// --raw, and -l. The kernel writes its level into the ring's own
+// timestamp -- "[7.03] <3> " -- so it is TEXT here rather than a field,
+// and hiding it by default is what keeps every existing reader of this
+// program's output working (util-linux's dmesg hides it the same way,
+// and shows it for --raw).
+static int g_raw;
+static int g_min_level = 7;        // KLOG_LEVEL_DEBUG -- everything
 static long long g_boot_epoch;     // seconds, or 0 when unknown
 static char g_line[ABS_LINE_MAX];
 static unsigned g_line_len;
@@ -64,37 +71,58 @@ static int g_line_over;            // this line outran the buffer
 
 static void raw(const char *s, unsigned n) { write(1, s, n); }
 
-// Writes one buffered line, replacing a leading "[secs.hh] " with the
-// absolute time it names. A line without that prefix passes untouched --
-// the kernel stamps once per LOGICAL line, so a continuation legitimately
-// has none, and inventing a time for it would be a fabrication.
+// "<N> " at `at`, or -1 when the line carries none -- which a line the
+// ring wrapped into the middle of legitimately does not.
+static int line_level(const char *p, unsigned n, unsigned at) {
+    if (at + 3 > n) return -1;
+    if (p[at] != '<' || p[at + 2] != '>') return -1;
+    if (p[at + 1] < '0' || p[at + 1] > '7') return -1;
+    return p[at + 1] - '0';
+}
+
+// Writes one buffered line: drops it if its level is below the filter,
+// hides the level marker unless --raw asked for it, and under -T
+// replaces the leading "[secs.hh] " with the absolute time it names. A
+// line without that prefix passes untouched -- the kernel stamps once
+// per LOGICAL line, and inventing a time for a continuation would be a
+// fabrication.
 static void emit_line(const char *p, unsigned n) {
-    unsigned secs = 0, i = 1;
-    int ok = 0;
+    unsigned secs = 0, i = 1, after_stamp = 0;
     if (!g_line_over && n > 2 && p[0] == '[') {
         while (i < n && p[i] >= '0' && p[i] <= '9') { secs = secs * 10 + (unsigned)(p[i] - '0'); i++; }
         // "[N.hh] " -- the hundredths are dropped on purpose: a whole
         // second is the resolution an absolute stamp can honestly claim
         // when its origin was derived from a one-second RTC.
-        if (i > 1 && i + 4 <= n && p[i] == '.' && p[i + 3] == ']' && p[i + 4] == ' ') {
-            i += 5;
-            ok = 1;
-        }
+        if (i > 1 && i + 4 <= n && p[i] == '.' && p[i + 3] == ']' && p[i + 4] == ' ')
+            after_stamp = i + 5;
     }
-    if (!ok) { raw(p, n); return; }
 
-    time_t t = (time_t)(g_boot_epoch + (long long)secs);
-    struct tm tm;
-    char stamp[40];
-    localtime_r(&t, &tm);
-    unsigned len = (unsigned)strftime(stamp, sizeof stamp, "[%Y-%m-%d %H:%M:%S] ", &tm);
-    if (!len) { raw(p, n); return; }
-    raw(stamp, len);
-    raw(p + i, n - i);
+    int level = after_stamp ? line_level(p, n, after_stamp) : -1;
+    // A line with no level of its own is never filtered out: it is
+    // evidence the ring wrapped into, and dropping it would hide that.
+    if (level >= 0 && level > g_min_level) return;
+    unsigned skip = (level >= 0 && !g_raw) ? 4 : 0;   // "<N> "
+
+    if (!after_stamp) { raw(p, n); return; }
+
+    if (g_abs) {
+        time_t t = (time_t)(g_boot_epoch + (long long)secs);
+        struct tm tm;
+        char stamp[40];
+        localtime_r(&t, &tm);
+        unsigned len = (unsigned)strftime(stamp, sizeof stamp, "[%Y-%m-%d %H:%M:%S] ", &tm);
+        if (len) raw(stamp, len);
+        else     raw(p, after_stamp);
+    } else {
+        raw(p, after_stamp);
+    }
+    raw(p + after_stamp + skip, n - after_stamp - skip);
 }
 
+// EVERY byte goes through the line buffer now, not only under -T: the
+// level sits in the text, so hiding it is a per-line edit whatever else
+// was asked for.
 static void put(const char *s, unsigned n) {
-    if (!g_abs) { raw(s, n); return; }
     for (unsigned k = 0; k < n; k++) {
         if (g_line_len < sizeof g_line) {
             g_line[g_line_len++] = s[k];
@@ -116,7 +144,7 @@ static void put(const char *s, unsigned n) {
 
 // A log that does not end in a newline still has a last line.
 static void put_flush(void) {
-    if (g_abs && g_line_len && !g_line_over) emit_line(g_line, g_line_len);
+    if (g_line_len && !g_line_over) emit_line(g_line, g_line_len);
     g_line_len = 0;
 }
 
@@ -130,7 +158,23 @@ static void puts_(const char *s) { put(s, (unsigned)strlen(s)); }
 // figure.
 #define FOLLOW_POLL_MS 200
 
-#define USAGE "dmesg [-n <lines>] [-w|--follow] [-T]"
+#define USAGE \
+    "dmesg [-n <lines>] [-w|--follow] [-T] [-l <level>] [--raw]\n" \
+    "       -l  crit | err | warn | info | debug, or 0-7 -- that level and worse\n" \
+    "       --raw  keep the <N> level marker the kernel wrote"
+
+// A level by name or by number. Names are Linux's, shortened the way
+// util-linux shortens them, so `dmesg -l err` means there what it means
+// here. -1 for anything else.
+static int level_by_name(const char *s) {
+    if (s[0] >= '0' && s[0] <= '7' && !s[1]) return s[0] - '0';
+    if (strcmp(s, "crit") == 0)  return 2;
+    if (strcmp(s, "err") == 0)   return 3;
+    if (strcmp(s, "warn") == 0)  return 4;
+    if (strcmp(s, "info") == 0)  return 6;
+    if (strcmp(s, "debug") == 0) return 7;
+    return -1;
+}
 
 // Reads from `from` to the end of the log, writing to stdout. Returns
 // the absolute offset just past the last byte written, or `from` when
@@ -223,6 +267,14 @@ int main(int argc, char **argv) {
             }
         } else if (strcmp(argv[i], "-T") == 0) {
             g_abs = 1;
+        } else if (strcmp(argv[i], "--raw") == 0) {
+            g_raw = 1;
+        } else if (strcmp(argv[i], "-l") == 0 && i + 1 < argc) {
+            g_min_level = level_by_name(argv[++i]);
+            if (g_min_level < 0) {
+                puts_("dmesg: -l wants crit, err, warn, info, debug or 0-7\n");
+                return 1;
+            }
         } else {
             cmd_usage(USAGE);
             return 1;

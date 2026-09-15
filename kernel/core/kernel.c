@@ -95,6 +95,9 @@ void kernel_main(uint64_t multiboot_info_addr) {
     klog_write("toy-os: kernel_main reached, initializing...\n");
 
     multiboot_set_info(multiboot_info_addr);
+    // Before anything else logs: a `loglevel=` that arrived too late
+    // to quieten the boot would be quietening the wrong half.
+    klog_apply_cmdline(multiboot_cmdline());
 
     // Kernel ASLR already happened, in long_mode_start, before this
     // function was reached -- the image copied itself to a random
@@ -127,7 +130,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     if (paging_enforce_wx()) {
         klog_write("toy-os: kernel W^X applied (.text read-only+exec, everything else NX)\n");
     } else {
-        klog_write("toy-os: WARNING -- kernel W^X NOT applied; split table pool exhausted\n");
+        klog_write(KLOG_WARN "toy-os: WARNING -- kernel W^X NOT applied; split table pool exhausted\n");
     }
 
     // The CPU's own half of the same idea, right beside it: SMEP stops
@@ -230,7 +233,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     if (fpu_init()) {
         klog_write("toy-os: FPU/SSE enabled (ring-3 only, eager FXSAVE per switch)\n");
     } else {
-        klog_write("toy-os: WARNING -- no FXSR/SSE2 reported; ring-3 float unavailable\n");
+        klog_write(KLOG_WARN "toy-os: WARNING -- no FXSR/SSE2 reported; ring-3 float unavailable\n");
     }
 
     // Needs the PIT already ticking (idt_init above) -- it calibrates
@@ -374,7 +377,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // shell use THAT one, so leaving it unguarded left the overflow
     // reachable from the likeliest place to type the command.
     if (!process_guard_page_init()) {
-        klog_write("toy-os: WARNING -- the legacy loader's kernel stack has no "
+        klog_write(KLOG_WARN "toy-os: WARNING -- the legacy loader's kernel stack has no "
                    "guard page (split table pool exhausted)\n");
     }
 
@@ -412,7 +415,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
             klog_printf("toy-os: init started as pid %d (" INIT_PATH ")\n",
                         init_pid);
         } else {
-            klog_printf("toy-os: WARNING -- could not spawn " INIT_PATH
+            klog_printf(KLOG_WARN "toy-os: WARNING -- could not spawn " INIT_PATH
                         "; orphaned processes will hold their slots\n");
         }
     }

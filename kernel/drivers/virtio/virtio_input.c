@@ -286,7 +286,7 @@ static int claim_dev(const struct pci_device *pci, struct input_dev *d) {
     virtio_msix_enable(&d->vdev, input_irq_handler);
 
     if (!virtqueue_setup(&d->vdev, 0, &d->eventq)) {
-        klog_write("virtio-input: could not set up its event queue\n");
+        klog_write(KLOG_ERR "virtio-input: could not set up its event queue\n");
         virtio_fail(&d->vdev);
         return 0;
     }

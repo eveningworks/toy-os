@@ -487,7 +487,7 @@ int usb_r8153_bind(struct usb_device_info *info, const uint8_t *cfg,
     }
     uint8_t idr[NET_MAC_LEN];
     if (rtl_reg_read_mem(PLA_IDR, MCU_PLA, g_reg_buf, 8) < 8) {
-        klog_printf("usb: slot %u: rtl-usb register read failed -- not bound\n",
+        klog_printf(KLOG_ERR "usb: slot %u: rtl-usb register read failed -- not bound\n",
                     info->slot);
         return 0;
     }

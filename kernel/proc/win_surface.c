@@ -74,7 +74,7 @@ static int map_scanouts(uint64_t pml4, uint64_t phys, int count, uint64_t pages)
                 for (int pb = 0; pb < b; pb++)
                     for (uint64_t j = 0; j < pages; j++)
                         vmm_unmap_user_page(pml4, WIN_FB_VADDR + (uint64_t)pb * WIN_FB_BUFFER_STRIDE + j * 4096);
-                klog_write("win_surface: framebuffer mapping failed\n");
+                klog_write(KLOG_ERR "win_surface: framebuffer mapping failed\n");
                 return 0;
             }
         }

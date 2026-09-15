@@ -95,11 +95,11 @@ static const struct query_provider g_providers_provider = {
 
 int query_register(const struct query_provider *p) {
     if (!p || !p->name || !p->name[0] || !p->fill || !p->record_size) {
-        klog_write("query: refused a malformed provider\n");
+        klog_write(KLOG_ERR "query: refused a malformed provider\n");
         return 0;
     }
     if (g_count >= QUERY_MAX) {
-        klog_write("query: registry full -- provider refused\n");
+        klog_write(KLOG_ERR "query: registry full -- provider refused\n");
         return 0;
     }
     // A DUPLICATE CLASS IS REFUSED, not last-wins and not first-wins.
@@ -109,7 +109,7 @@ int query_register(const struct query_provider *p) {
     // duplicate (namespace, name), and for the same reason.
     for (int i = 0; i < g_count; i++) {
         if (g_providers[i]->cls == p->cls) {
-            klog_printf("query: class %u already registered -- '%s' refused\n",
+            klog_printf(KLOG_ERR "query: class %u already registered -- '%s' refused\n",
                         p->cls, p->name);
             return 0;
         }

@@ -772,7 +772,7 @@ static int wait_completion(volatile struct xhci_completion *c, const char *what)
     while (!c->done) {
         xhci_service();
         if (xhci_wait_over(&w)) {
-            klog_printf("usb: %s timed out after %u polls (%s)\n", what, w.spins,
+            klog_printf(KLOG_ERR "usb: %s timed out after %u polls (%s)\n", what, w.spins,
                         w.deadline ? "1000 ms" : "poll ceiling, no usable clock");
             return -1;
         }
@@ -804,7 +804,7 @@ int xhci_address_device(uint8_t root_port, uint32_t route, uint8_t speed,
     uint8_t slot = 0;
     int cc = cmd_submit(0, XHCI_TRB_SET_TYPE(XHCI_TRB_ENABLE_SLOT), &slot);
     if (cc != XHCI_CC_SUCCESS) {
-        klog_printf("usb: enable slot failed: %s\n", xhci_completion_name((uint32_t)cc));
+        klog_printf(KLOG_ERR "usb: enable slot failed: %s\n", xhci_completion_name((uint32_t)cc));
         return -cc;
     }
     if (!slot || slot > XHCI_MAX_SLOTS) {
@@ -868,7 +868,7 @@ int xhci_address_device(uint8_t root_port, uint32_t route, uint8_t speed,
                     XHCI_TRB_SET_TYPE(XHCI_TRB_ADDRESS_DEVICE) |
                     ((uint32_t)slot << 24), 0);
     if (cc != XHCI_CC_SUCCESS) {
-        klog_printf("usb: address device (slot %u) failed: %s\n",
+        klog_printf(KLOG_ERR "usb: address device (slot %u) failed: %s\n",
                     slot, xhci_completion_name((uint32_t)cc));
         xhci_disable_slot(slot);
         return -cc;
@@ -891,7 +891,7 @@ int xhci_set_ep0_mps(uint8_t slot, uint16_t mps) {
                         XHCI_TRB_SET_TYPE(XHCI_TRB_EVALUATE_CONTEXT) |
                         ((uint32_t)slot << 24), 0);
     if (cc != XHCI_CC_SUCCESS) {
-        klog_printf("usb: evaluate context (slot %u, mps %u) failed: %s\n",
+        klog_printf(KLOG_ERR "usb: evaluate context (slot %u, mps %u) failed: %s\n",
                     slot, mps, xhci_completion_name((uint32_t)cc));
         return -cc;
     }
@@ -1174,7 +1174,7 @@ static struct xhci_ep *ep_configure(uint8_t slot, uint8_t ep_addr, uint16_t mps,
                         XHCI_TRB_SET_TYPE(XHCI_TRB_CONFIGURE_ENDPOINT) |
                         ((uint32_t)slot << 24), 0);
     if (cc != XHCI_CC_SUCCESS) {
-        klog_printf("usb: configure endpoint 0x%x (slot %u) failed: %s\n",
+        klog_printf(KLOG_ERR "usb: configure endpoint 0x%x (slot %u) failed: %s\n",
                     ep_addr, slot, xhci_completion_name((uint32_t)cc));
         e->in_use = 0;
         *out_cc = cc;
@@ -2055,7 +2055,7 @@ void xhci_deferred_work(void) {
             klog_printf("usb: slot %u ep 0x%x recovered from halt\n",
                         e->slot, e->ep_addr);
         } else if (e->recover_tries > 4) {
-            klog_printf("usb: slot %u ep 0x%x halt recovery failed (%s) -- giving up\n",
+            klog_printf(KLOG_ERR "usb: slot %u ep 0x%x halt recovery failed (%s) -- giving up\n",
                         e->slot, e->ep_addr, xhci_completion_name((uint32_t)-rc));
         }
     }
@@ -2103,7 +2103,7 @@ static void usb_probe(const struct pci_device *d) {
     uint64_t bar0_len = pci_bar_mem_size(d, 0);
     volatile void *win = paging_map_device(bar0, bar0_len ? bar0_len : 0x1000);
     if (!win) {
-        klog_printf("usb: xHCI register window at 0x%llx could not be mapped\n",
+        klog_printf(KLOG_ERR "usb: xHCI register window at 0x%llx could not be mapped\n",
                     (unsigned long long)bar0);
         return;
     }

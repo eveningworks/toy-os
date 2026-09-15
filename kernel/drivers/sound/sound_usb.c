@@ -573,7 +573,7 @@ static int set_clock_rate(void) {
                      (uint8_t)((SND_RATE >> 24) & 0xFF) };
     if (audio_control(AUDIO_REQ_SET_CUR, TYPE_OUT_CLASS_IF, CS_SAM_FREQ, 0,
                       clock, v, 4) < 0) {
-        klog_printf("usb-audio: clock %u refused %u Hz\n", clock,
+        klog_printf(KLOG_ERR "usb-audio: clock %u refused %u Hz\n", clock,
                     (unsigned)SND_RATE);
         return -1;
     }
@@ -600,7 +600,7 @@ static int audio_start(void) {
     // on one audiodev, choosing the AC'97 played nothing until this
     // driver started standing down.
     if (set_interface(a->slot, a->s.ifnum, a->s.alt) < 0) {
-        klog_printf("usb-audio: could not claim interface %u alt %u\n",
+        klog_printf(KLOG_ERR "usb-audio: could not claim interface %u alt %u\n",
                     a->s.ifnum, a->s.alt);
         return -1;
     }
@@ -832,7 +832,7 @@ int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
     // refuse, which is a device we cannot play through rather than one
     // to configure anyway.
     if (set_interface(info->slot, s.ifnum, s.alt) < 0) {
-        klog_printf("usb: slot %u: set interface %u alt %u failed\n",
+        klog_printf(KLOG_ERR "usb: slot %u: set interface %u alt %u failed\n",
                     info->slot, s.ifnum, s.alt);
         pmm_free_contiguous(a->pkt_phys, 1);
         return 0;
@@ -857,7 +857,7 @@ int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
     // whole rate negotiation, and a device that refuses it is one this
     // driver cannot play through however well it parsed.
     if (set_clock_rate() < 0) {
-        klog_printf("usb-audio: slot %u: cannot set %u Hz -- not bound\n",
+        klog_printf(KLOG_ERR "usb-audio: slot %u: cannot set %u Hz -- not bound\n",
                     info->slot, (unsigned)SND_RATE);
         a->in_use = 0;
         pmm_free_contiguous(a->pkt_phys, 1);

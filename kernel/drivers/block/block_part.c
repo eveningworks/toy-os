@@ -166,11 +166,11 @@ const struct block_device *blk_part_create(const struct block_device *parent,
     if (!parent) return NULL;
 
     if (sectors == 0) {
-        klog_write("block: partition refused -- empty window\n");
+        klog_write(KLOG_ERR "block: partition refused -- empty window\n");
         return NULL;
     }
     if ((uint64_t)base_lba + (uint64_t)sectors > (uint64_t)parent->sector_count()) {
-        klog_printf("block: partition refused -- LBA %u+%u past the end of %s (%u sectors)\n",
+        klog_printf(KLOG_ERR "block: partition refused -- LBA %u+%u past the end of %s (%u sectors)\n",
                     base_lba, sectors, parent->name, parent->sector_count());
         return NULL;
     }
@@ -189,7 +189,7 @@ const struct block_device *blk_part_create(const struct block_device *parent,
         if (!g_slots[i].used && free_slot < 0) free_slot = i;
     }
     if (free_slot < 0) {
-        klog_write("block: partition refused -- no free window slots\n");
+        klog_write(KLOG_ERR "block: partition refused -- no free window slots\n");
         return NULL;
     }
 

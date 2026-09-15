@@ -60,7 +60,7 @@ static const struct block_device *resolve_disk(const char *name, struct syscall_
             return NULL;
         }
         if (e->parent != e->dev) {
-            klog_printf("partition: \"%s\" is a partition, not a disk -- refused\n", name);
+            klog_printf(KLOG_ERR "partition: \"%s\" is a partition, not a disk -- refused\n", name);
             c->regs[14] = (uint64_t)(int64_t)-EINVAL;
             return NULL;
         }
@@ -101,7 +101,7 @@ int sys_mkpart(struct syscall_ctx *c) {
     // to mean nothing. The boot disk still needs it whether or not
     // anything is mounted from it.
     if (disk_is_in_use(disk) && !(req.flags & MKPART_CONFIRM)) {
-        klog_printf("mkpart: refused -- %s is in use and MKPART_CONFIRM was not set\n",
+        klog_printf(KLOG_ERR "mkpart: refused -- %s is in use and MKPART_CONFIRM was not set\n",
                     blk_device_name(disk));
         c->regs[14] = (uint64_t)(int64_t)-EPERM;
         return 0;
@@ -180,7 +180,7 @@ int sys_mkpart(struct syscall_ctx *c) {
 
     const char *why = "";
     if (!partition_validate_on(disk, &tbl, &why)) {
-        klog_printf("mkpart: refused -- %s\n", why);
+        klog_printf(KLOG_ERR "mkpart: refused -- %s\n", why);
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
         return 0;
     }
@@ -290,7 +290,7 @@ int sys_install_boot(struct syscall_ctx *c) {
     if (!disk) return 0;   // resolve_disk() set the errno
 
     if (disk_is_in_use(disk) && !(req.flags & INSTALL_BOOT_CONFIRM)) {
-        klog_printf("install_boot: refused -- %s is in use and INSTALL_BOOT_CONFIRM was not set\n",
+        klog_printf(KLOG_ERR "install_boot: refused -- %s is in use and INSTALL_BOOT_CONFIRM was not set\n",
                     blk_device_name(disk));
         c->regs[14] = (uint64_t)(int64_t)-EPERM;
         return 0;
@@ -300,7 +300,7 @@ int sys_install_boot(struct syscall_ctx *c) {
     // 511 bytes would leave the last byte of the 0x55AA signature
     // whatever was there before.
     if (req.boot_size != INSTALL_BOOT_SECTOR_BYTES) {
-        klog_printf("install_boot: refused -- boot image is %u bytes, not %u\n",
+        klog_printf(KLOG_ERR "install_boot: refused -- boot image is %u bytes, not %u\n",
                     (unsigned)req.boot_size, INSTALL_BOOT_SECTOR_BYTES);
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
         return 0;
@@ -318,7 +318,7 @@ int sys_install_boot(struct syscall_ctx *c) {
     // and the block list it carries describes the REST. A one-sector
     // core image has no rest and its patched count would be zero.
     if (core_sectors < 2 || core_sectors > core_room) {
-        klog_printf("install_boot: refused -- core image is %u sector(s), room for %u\n",
+        klog_printf(KLOG_ERR "install_boot: refused -- core image is %u sector(s), room for %u\n",
                     (unsigned)core_sectors, core_room);
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
         return 0;
@@ -343,7 +343,7 @@ int sys_install_boot(struct syscall_ctx *c) {
     // and the partition table; a boot sector written over them boots and
     // describes an empty disk.
     if (!blkdev_read_sectors(disk, 0, 1, sec)) {
-        klog_write("install_boot: could not read the target's boot sector\n");
+        klog_write(KLOG_ERR "install_boot: could not read the target's boot sector\n");
         scheduler_preempt_enable();
         c->regs[14] = (uint64_t)(int64_t)-EIO;
         return 0;
@@ -381,7 +381,7 @@ int sys_install_boot(struct syscall_ctx *c) {
     scheduler_preempt_enable();
 
     if (!ok) {
-        klog_write("install_boot: write failed\n");
+        klog_write(KLOG_ERR "install_boot: write failed\n");
         c->regs[14] = (uint64_t)(int64_t)-EIO;
         return 0;
     }

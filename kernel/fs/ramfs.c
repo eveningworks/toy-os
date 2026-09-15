@@ -435,7 +435,7 @@ static int ramfs_init(const struct block_device *dev, uint64_t size_bytes) {
     // allocation whose failure is worth a loud line.
     S->nodes[0] = kmalloc(sizeof(struct rnode));
     if (!S->nodes[0]) {
-        klog_write("ramfs: cannot allocate a root directory -- not mounted\n");
+        klog_write(KLOG_ERR "ramfs: cannot allocate a root directory -- not mounted\n");
         return -1;
     }
     k_memset(S->nodes[0], 0, sizeof(struct rnode));

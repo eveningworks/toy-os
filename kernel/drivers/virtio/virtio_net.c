@@ -151,7 +151,7 @@ void virtio_net_attach(const struct pci_device *pci) {
     // Refuse instead: an address nobody assigned is one the host's
     // filtering has never heard of, and the failure would be silent.
     if (!virtio_has_feature(&g_vdev, VIRTIO_NET_F_MAC)) {
-        klog_write("virtio-net: device offers no MAC address -- refusing\n");
+        klog_write(KLOG_ERR "virtio-net: device offers no MAC address -- refusing\n");
         virtio_fail(&g_vdev);
         return;
     }
@@ -165,7 +165,7 @@ void virtio_net_attach(const struct pci_device *pci) {
     int msix = virtio_msix_enable(&g_vdev, net_irq);
 
     if (!virtqueue_setup(&g_vdev, 0, &g_rxq) || !virtqueue_setup(&g_vdev, 1, &g_txq)) {
-        klog_write("virtio-net: could not set up the receive/transmit queues\n");
+        klog_write(KLOG_ERR "virtio-net: could not set up the receive/transmit queues\n");
         virtio_fail(&g_vdev);
         return;
     }

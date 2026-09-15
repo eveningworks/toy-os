@@ -6,9 +6,11 @@
 
 ## Synopsis
 
-    log [-n <lines>] [-u <tag>] [-p] [-f]
+    log [-n <lines>] [-u <tag>] [-l <level>] [-p] [-f] [--raw]
            -n  show only the last <lines>       -u  only lines from <tag>
+           -l  crit|err|warn|info|debug, or 0-7 -- that level and worse
            -p  the PREVIOUS boot's log          -f  follow as it grows
+           --raw  keep the <N> level marker the kernel wrote
 
 ## Options
 
@@ -18,10 +20,17 @@
   matching ones.
 - `-u <tag>` -- only lines from `<tag>`; the tag is matched exactly, not
   as a substring.
+- `-l <level>` -- only lines at that level or worse, by name (`crit`,
+  `err`, `warn`, `info`, `debug`) or by Linux's digit. **Only KERNEL
+  lines carry a level**; an application line has none and is never
+  filtered out, because `-l err` silently hiding every service's output
+  would be worse than showing too much.
 - `-p` -- read the PREVIOUS boot's log, `/var/log/toyos.log.1`, instead
   of the current one.
-- `-f` -- print the file and keep printing as it grows, ignoring `-n`
-  and `-u`. It never returns; Ctrl-C ends it.
+- `-f` -- print the file and keep printing as it grows, ignoring `-n`.
+  It never returns; Ctrl-C ends it.
+- `--raw` -- keep the `<N>` level marker in the output instead of hiding
+  it, as `dmesg --raw` does.
 
 ## Description
 
@@ -35,6 +44,16 @@ wraps. `log` shows the FILE: what was persisted, across boots, still there
 after the machine has been rebooted to recover it. Neither replaces the
 other — a machine that has just crashed has an interesting ring, and a
 machine you have already rebooted has only the file.
+
+**A kernel line carries its level as text**, written into the stamp by
+`klog_write()` (see `dmesg`'s page for why it lives there). So the file
+is greppable without this program at all:
+
+    $ grep '<3>' /var/log/toyos.log
+    [kernel] [0.51] <3> ata: dma write failed after 3 attempts (lba 4096)
+
+which is the property this file is built around: if `log` is broken, the
+log is still readable.
 
 **`log -p` is why this exists.** The previous boot's log is kept as
 `/var/log/toyos.log.1`, so the question "what did it say before I rebooted

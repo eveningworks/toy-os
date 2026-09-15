@@ -87,7 +87,7 @@ void syscall_process_kill_cleanup(uint64_t pml4_phys) {
         // current process precisely so this cannot happen; if it ever
         // does, leaking is survivable and pulling CR3 out from under
         // the running process is not.
-        klog_write("syscall: kill cleanup refused -- that is the CALLER's address space\n");
+        klog_write(KLOG_ERR "syscall: kill cleanup refused -- that is the CALLER's address space\n");
         return;
     }
     release_process_state(pml4_phys);

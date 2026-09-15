@@ -585,7 +585,7 @@ static int load_superblock(int loud) {
             if (parse_superblock(sec) && S->sb.version == v) {
                 S->mounted_from_backup = 1;
                 if (loud) {
-                    klog_write("tfs3: primary superblock invalid -- mounted from the backup in group ");
+                    klog_write(KLOG_ERR "tfs3: primary superblock invalid -- mounted from the backup in group ");
                     klog_write_dec(groups[i]);
                     klog_write(" (run `fsck repair` to restore the primary)\n");
                 }
@@ -1421,7 +1421,7 @@ static enum t3_commit txn_commit_raw(void) {
     // a write-back cache went in underneath (ata_cache.h) -- that is
     // where a deferred write's failure now surfaces.
     if (!txn_barrier()) {
-        klog_write("tfs3: journal barrier failed -- transaction abandoned, "
+        klog_write(KLOG_ERR "tfs3: journal barrier failed -- transaction abandoned, "
                    "targets untouched\n");
         txn_reset();
         return T3_COMMIT_ABORTED;
@@ -1448,7 +1448,7 @@ static enum t3_commit txn_commit_raw(void) {
         // boot, same call replay_journal() in TFS2 makes.
         // Either a target write or barrier 2 -- both mean the same
         // thing here, and only the journal can finish it now.
-        klog_write("tfs3: transaction could not be applied -- left committed for replay\n");
+        klog_write(KLOG_ERR "tfs3: transaction could not be applied -- left committed for replay\n");
     }
     txn_reset();
     return ok ? T3_COMMIT_OK : T3_COMMIT_UNAPPLIED;
@@ -1498,7 +1498,7 @@ static int replay_journal(void) {
             // Same rule as txn_commit()'s barrier 2: if the replayed
             // targets are not durable, do NOT clear the committed flag
             // below -- the next boot must replay them again.
-            klog_write("tfs3: journal replay barrier failed -- left committed "
+            klog_write(KLOG_ERR "tfs3: journal replay barrier failed -- left committed "
                        "for next boot\n");
             return 0;
         }
@@ -1506,7 +1506,7 @@ static int replay_journal(void) {
             klog_write("tfs3: replayed a committed journal transaction (");
             klog_write_dec(count); klog_write(" blocks)\n");
         } else {
-            klog_write("tfs3: journal replay write failed -- left committed for next boot\n");
+            klog_write(KLOG_ERR "tfs3: journal replay write failed -- left committed for next boot\n");
             return 0;
         }
     } else {
@@ -2601,7 +2601,7 @@ static int tfs3_init(const struct block_device *dev, uint64_t size_bytes) {
         // is exactly the fiction this return value was carrying before
         // ramfs existed -- vfs.c reported an active backend while
         // S->mounted stayed 0 and every fs_* call failed. See fs_ops.h.
-        klog_write("tfs3: no disk -- cannot mount\n");
+        klog_write(KLOG_ERR "tfs3: no disk -- cannot mount\n");
         return -1;
     }
     set_flat_volume(dev);
@@ -2637,7 +2637,7 @@ static int tfs3_init(const struct block_device *dev, uint64_t size_bytes) {
         S->rotor[g] = S->meta_off;
         if (!read_block(group_base(g), S->bbm + (size_t)g * T3_BLOCK) ||
             !read_block(group_base(g) + 1, S->ibm + (size_t)g * T3_BLOCK)) {
-            klog_write("tfs3: bitmap read failed -- not mounted\n");
+            klog_write(KLOG_ERR "tfs3: bitmap read failed -- not mounted\n");
             unmount_state();
             return -1;
         }
@@ -2658,10 +2658,10 @@ static int tfs3_init(const struct block_device *dev, uint64_t size_bytes) {
                 // and 71 identical lines helped nobody.
                 static const uint32_t GD_LOG_CAP = 4;
                 if (bad_gd < GD_LOG_CAP) {
-                    klog_write("tfs3: group descriptor "); klog_write_dec(g);
+                    klog_write(KLOG_ERR "tfs3: group descriptor "); klog_write_dec(g);
                     klog_write(" failed its checksum -- treating its free counts as 0 until fsck\n");
                 } else if (bad_gd == GD_LOG_CAP) {
-                    klog_write("tfs3: ...more group descriptors failed -- run fsck\n");
+                    klog_write(KLOG_ERR "tfs3: ...more group descriptors failed -- run fsck\n");
                 }
                 bad_gd++;
                 S->gd[g].free_blocks = 0;
@@ -2676,7 +2676,7 @@ static int tfs3_init(const struct block_device *dev, uint64_t size_bytes) {
     // Sanity-check the root before declaring victory.
     struct t3_inode root;
     if (!read_inode(T3_INO_ROOT, &root) || root.type != T3_TYPE_DIR) {
-        klog_write("tfs3: root inode invalid -- not mounted\n");
+        klog_write(KLOG_ERR "tfs3: root inode invalid -- not mounted\n");
         unmount_state();
         return -1;
     }
@@ -3589,7 +3589,7 @@ static void fsck_walk_dir(struct t3_fsck *fk, uint64_t dir_ino, uint64_t parent_
             uint16_t rec_len = rd16(dirblk + off + 4);
             uint8_t nl = dirblk[off + 6];
             if (rec_len < 8 || off + rec_len > T3_BLOCK) {
-                klog_write("tfs3 fsck: corrupt dirent chain in inode ");
+                klog_write(KLOG_ERR "tfs3 fsck: corrupt dirent chain in inode ");
                 klog_write_dec((uint32_t)dir_ino); klog_write("\n");
                 break;
             }
@@ -3608,7 +3608,7 @@ static void fsck_walk_dir(struct t3_fsck *fk, uint64_t dir_ino, uint64_t parent_
                 } else {
                     struct t3_inode cn;
                     if (!read_inode(child, &cn)) {
-                        klog_write("tfs3 fsck: dirent -> inode ");
+                        klog_write(KLOG_ERR "tfs3 fsck: dirent -> inode ");
                         klog_write_dec((uint32_t)child);
                         klog_write(" whose checksum fails (not repaired -- deleting a name is data loss)\n");
                     } else if (fsck_ino_reached(fk, child)) {

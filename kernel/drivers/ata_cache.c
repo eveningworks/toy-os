@@ -108,7 +108,7 @@ static void touch(struct atac_line *l) { l->age = ++g_clock; }
 
 void atac_init(const struct atac_ops *ops) {
     if (!ops || !ops->read || !ops->write || !ops->flush) {
-        klog_write("atac: refused ops missing an operation -- cache off\n");
+        klog_write(KLOG_ERR "atac: refused ops missing an operation -- cache off\n");
         return;
     }
     g_ops = ops;
@@ -260,7 +260,7 @@ int atac_flush(void) {
     if (!g_ops->flush()) ok = 0;
     g_stats.flushes++;
     g_busy = 0;
-    if (!ok) klog_write("atac: FLUSH FAILED -- dirty sectors kept; the caller must "
+    if (!ok) klog_write(KLOG_ERR "atac: FLUSH FAILED -- dirty sectors kept; the caller must "
                         "NOT treat this as durable\n");
     return ok;
 }

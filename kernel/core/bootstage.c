@@ -29,7 +29,7 @@ void boot_require(uint32_t sub, const char *caller) {
     vga_write("\n*** KERNEL PANIC: boot order ***\n");
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
 
-    klog_printf("PANIC: %s ran before %s -- see kernel_main() and"
+    klog_printf(KLOG_CRIT "PANIC: %s ran before %s -- see kernel_main() and"
                 " kernel/include/kernel/bootstage.h\n",
                 caller ? caller : "(unknown caller)", sub_name(sub));
 

@@ -22,10 +22,10 @@ int sys_win_request(struct syscall_ctx *c) {
 
     struct win_request_msg req;
     if (!vmm_copy_from_user(pml4, &req, c->a0, sizeof req)) {
-        klog_write("syscall: win_request() rejected -- invalid user pointer\n");
+        klog_write(KLOG_ERR "syscall: win_request() rejected -- invalid user pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (pid == 0) {
-        klog_write("syscall: win_request() rejected -- caller isn't a scheduled process\n");
+        klog_write(KLOG_ERR "syscall: win_request() rejected -- caller isn't a scheduled process\n");
         c->regs[14] = (uint64_t)(int64_t)-EPERM;
     } else {
         // Copy in, act, copy back: the request is handled against a
@@ -49,7 +49,7 @@ int sys_win_request(struct syscall_ctx *c) {
             //
             // SET_COMPOSITOR is exempt: claiming the role is what a
             // window server does before it is one. See abi/win_proto.h.
-            klog_write("syscall: win_request() rejected -- no window server registered\n");
+            klog_write(KLOG_ERR "syscall: win_request() rejected -- no window server registered\n");
             c->regs[14] = (uint64_t)(int64_t)-ENODEV;
         } else {
             int rc = win_server_request(pid, &req);
@@ -78,7 +78,7 @@ static int compositor_only(int pid, const char *what) {
     if (pid && pid == win_server_compositor_pid()) return 1;
     static int said;
     if (!said++) {
-        klog_write("syscall: ");
+        klog_write(KLOG_ERR "syscall: ");
         klog_write(what);
         klog_write("() rejected -- only the compositor has an event queue\n");
     }
@@ -94,7 +94,7 @@ static int event_get(struct syscall_ctx *c, int blocking) {
     int pid = scheduler_current_tgid(); // the process -- see sys_win_request()
 
     if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct win_event))) {
-        klog_write("syscall: event() rejected -- invalid user pointer\n");
+        klog_write(KLOG_ERR "syscall: event() rejected -- invalid user pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (!compositor_only(pid, "event")) {
         c->regs[14] = (uint64_t)(int64_t)-EPERM;

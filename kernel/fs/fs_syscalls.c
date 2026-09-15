@@ -122,7 +122,7 @@ int sys_open(struct syscall_ctx *c) {
     char name[FS_PATH_MAX];
     int perr = resolve_user_path(pml4, c->a0, name);
     if (perr) {
-        klog_write("syscall: open() rejected -- bad path\n");
+        klog_write(KLOG_ERR "syscall: open() rejected -- bad path\n");
         c->regs[14] = (uint64_t)(int64_t)perr;
     } else {
 
@@ -157,7 +157,7 @@ int sys_open(struct syscall_ctx *c) {
         // something this cannot provide.
         if (flags & SYS_O_EXCL) {
             if (!want_creat) {
-                klog_write("syscall: open() rejected -- O_EXCL without O_CREAT\n");
+                klog_write(KLOG_ERR "syscall: open() rejected -- O_EXCL without O_CREAT\n");
                 c->regs[14] = (uint64_t)(int64_t)-EINVAL;
                 return 0;
             }
@@ -224,7 +224,7 @@ int sys_open(struct syscall_ctx *c) {
                 }
                 if (ferr) {
                     fd_close(pml4, fd);
-                    klog_printf("syscall: open() rejected -- %s\n", why);
+                    klog_printf(KLOG_ERR "syscall: open() rejected -- %s\n", why);
                     c->regs[14] = (uint64_t)(int64_t)ferr;
                     return 0;
                 }
@@ -251,7 +251,7 @@ int sys_unlink(struct syscall_ctx *c) {
         // 0 success / -errno failure since the polarity flip -- the
         // last of the boolean-returning syscalls converted, with every
         // caller in the same commit (docs/errno-design.md).
-        klog_write("syscall: unlink() rejected -- invalid path pointer\n");
+        klog_write(KLOG_ERR "syscall: unlink() rejected -- invalid path pointer\n");
         c->regs[14] = (uint64_t)(int64_t)err;
     } else if (!fs_exists(name)) {
         klog_write("syscall: unlink() rejected -- no such file\n");
@@ -259,7 +259,7 @@ int sys_unlink(struct syscall_ctx *c) {
     } else if (!fs_delete(name)) {
         // Exists and still refused: a non-empty directory is the usual
         // cause, and fs_delete() does not say which it was.
-        klog_write("syscall: unlink() failed\n");
+        klog_write(KLOG_ERR "syscall: unlink() failed\n");
         c->regs[14] = (uint64_t)(int64_t)-EIO;
     } else {
         c->regs[14] = 0;
@@ -279,7 +279,7 @@ static int listdir_common(struct syscall_ctx *c, uint64_t path_ptr,
     char path[FS_PATH_MAX];
     if (!vmm_validate_user_range(pml4, out, (uint64_t)max * sizeof(struct sys_dirent)) ||
         resolve_user_path(pml4, path_ptr, path)) {
-        klog_write("syscall: listdir() rejected -- invalid pointer\n");
+        klog_write(KLOG_ERR "syscall: listdir() rejected -- invalid pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         // The output array stays a USER address here, and
@@ -379,7 +379,7 @@ int sys_chdir(struct syscall_ctx *c) {
     char path[FS_PATH_MAX];
     int err = resolve_user_path(c->pml4, c->a0, path);
     if (err) {
-        klog_write("syscall: chdir() rejected -- bad path\n");
+        klog_write(KLOG_ERR "syscall: chdir() rejected -- bad path\n");
         c->regs[14] = (uint64_t)(int64_t)err;
         return 0;
     }
@@ -425,7 +425,7 @@ int sys_mkdir(struct syscall_ctx *c) {
     char path[FS_PATH_MAX];
     int err = resolve_user_path(c->pml4, c->a0, path);
     if (err) {
-        klog_write("syscall: mkdir() rejected -- bad path\n");
+        klog_write(KLOG_ERR "syscall: mkdir() rejected -- bad path\n");
         c->regs[14] = (uint64_t)(int64_t)err;
     } else if (fs_exists(path)) {
         klog_write("syscall: mkdir() rejected -- already exists\n");
@@ -436,7 +436,7 @@ int sys_mkdir(struct syscall_ctx *c) {
                    : "syscall: mkdir() rejected -- no such parent directory\n");
         c->regs[14] = (uint64_t)(int64_t)err;
     } else if (!fs_mkdir(path)) {
-        klog_write("syscall: mkdir() failed -- the record table is full\n");
+        klog_write(KLOG_ERR "syscall: mkdir() failed -- the record table is full\n");
         c->regs[14] = (uint64_t)(int64_t)-ENOSPC;
     } else {
         c->regs[14] = 0;
@@ -449,7 +449,7 @@ int sys_rename(struct syscall_ctx *c) {
     int err = resolve_user_path(c->pml4, c->a0, from);
     if (!err) err = resolve_user_path(c->pml4, c->a1, to);
     if (err) {
-        klog_write("syscall: rename() rejected -- bad path\n");
+        klog_write(KLOG_ERR "syscall: rename() rejected -- bad path\n");
         c->regs[14] = (uint64_t)(int64_t)err;
     } else if (!fs_exists(from)) {
         c->regs[14] = (uint64_t)(int64_t)-ENOENT;
@@ -459,7 +459,7 @@ int sys_rename(struct syscall_ctx *c) {
         // Includes the one case a v1 TFS3 journal genuinely cannot do
         // (a cross-parent directory move needs five credits) -- see
         // fs.h. -EIO rather than a guess at which of several it was.
-        klog_write("syscall: rename() failed\n");
+        klog_write(KLOG_ERR "syscall: rename() failed\n");
         c->regs[14] = (uint64_t)(int64_t)-EIO;
     } else {
         c->regs[14] = 0;
@@ -471,14 +471,14 @@ int sys_truncate(struct syscall_ctx *c) {
     char path[FS_PATH_MAX];
     int err = resolve_user_path(c->pml4, c->a0, path);
     if (err) {
-        klog_write("syscall: truncate() rejected -- bad path\n");
+        klog_write(KLOG_ERR "syscall: truncate() rejected -- bad path\n");
         c->regs[14] = (uint64_t)(int64_t)err;
     } else if (!fs_exists(path)) {
         c->regs[14] = (uint64_t)(int64_t)-ENOENT;
     } else if (fs_is_dir(path)) {
         c->regs[14] = (uint64_t)(int64_t)-EISDIR;
     } else if (!fs_truncate(path, c->a1)) {
-        klog_write("syscall: truncate() failed\n");
+        klog_write(KLOG_ERR "syscall: truncate() failed\n");
         c->regs[14] = (uint64_t)(int64_t)-EIO;
     } else {
         c->regs[14] = 0;
@@ -490,7 +490,7 @@ int sys_stat(struct syscall_ctx *c) {
     char path[FS_PATH_MAX];
     int err = resolve_user_path(c->pml4, c->a0, path);
     if (err) {
-        klog_write("syscall: stat() rejected -- bad path\n");
+        klog_write(KLOG_ERR "syscall: stat() rejected -- bad path\n");
         c->regs[14] = (uint64_t)(int64_t)err;
         return 0;
     }
@@ -525,7 +525,7 @@ int sys_stat(struct syscall_ctx *c) {
         out.nlink = 1;
     }
     if (!vmm_copy_to_user(c->pml4, c->a1, &out, sizeof out)) {
-        klog_write("syscall: stat() rejected -- invalid output pointer\n");
+        klog_write(KLOG_ERR "syscall: stat() rejected -- invalid output pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
@@ -537,7 +537,7 @@ int sys_chmod(struct syscall_ctx *c) {
     char path[FS_PATH_MAX];
     int err = resolve_user_path(c->pml4, c->a0, path);
     if (err) {
-        klog_write("syscall: chmod() rejected -- bad path\n");
+        klog_write(KLOG_ERR "syscall: chmod() rejected -- bad path\n");
         c->regs[14] = (uint64_t)(int64_t)err;
         return 0;
     }
@@ -552,7 +552,7 @@ int sys_link(struct syscall_ctx *c) {
     int err = resolve_user_path(c->pml4, c->a0, from);
     if (!err) err = resolve_user_path(c->pml4, c->a1, to);
     if (err) {
-        klog_write("syscall: link() rejected -- bad path\n");
+        klog_write(KLOG_ERR "syscall: link() rejected -- bad path\n");
         c->regs[14] = (uint64_t)(int64_t)err;
     } else if (!fs_has(FS_CAP_HARDLINKS)) {
         // A distinct code, because "this filesystem's FORMAT has no link
@@ -567,7 +567,7 @@ int sys_link(struct syscall_ctx *c) {
     } else if (fs_exists(to)) {
         c->regs[14] = (uint64_t)(int64_t)-EEXIST;
     } else if (!fs_link(from, to)) {
-        klog_write("syscall: link() failed\n");
+        klog_write(KLOG_ERR "syscall: link() failed\n");
         c->regs[14] = (uint64_t)(int64_t)-EIO;
     } else {
         c->regs[14] = 0;

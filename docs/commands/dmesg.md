@@ -6,7 +6,9 @@
 
 ## Synopsis
 
-    dmesg [-n <lines>] [-w|--follow] [-T]
+    dmesg [-n <lines>] [-w|--follow] [-T] [-l <level>] [--raw]
+           -l  crit | err | warn | info | debug, or 0-7 -- that level and worse
+           --raw  keep the <N> level marker the kernel wrote
 
 ## Options
 
@@ -15,6 +17,14 @@
 - `-w`, `--follow` -- keep printing as new lines arrive, polling every
   200 ms; Ctrl-C stops it.
 - `-T` -- absolute timestamps instead of seconds since boot.
+- `-l <level>` -- only lines at that level or worse. Takes a name
+  (`crit`, `err`, `warn`, `info`, `debug`) or Linux's digit (2, 3, 4, 6,
+  7). A line carrying no level of its own is never filtered out. With
+  `-n` the TAIL is taken first and the filter applies within it, so
+  `-n 4 -l err` can print fewer than four lines; `dmesg -l err | tail -4`
+  is the other order.
+- `--raw` -- keep the `<N>` marker in the output instead of hiding it,
+  as util-linux's `dmesg --raw` does.
 
 ## Description
 
@@ -67,6 +77,30 @@ monotonic stamps rather than printing 1970 for every line:
     dmesg: the clock is not set -- keeping monotonic times
     [0.42] init: starting
 
+## Levels are text in the ring, and hidden on the way out
+
+    $ dmesg --raw -n 2
+    [0.42] <6> init: starting
+    [0.51] <3> ata: dma write failed after 3 attempts (lba 4096)
+
+    $ dmesg -l err
+    [0.51] ata: dma write failed after 3 attempts (lba 4096)
+
+A kernel line carries a level the way Linux's does -- the writer puts
+`KLOG_ERR` on the front of the format string and `klog_write()` takes it
+off. **It is never stored as a field**: the level goes into the ring's
+own timestamp, which is already ring-only content that never reaches
+COM1, so `serial.log`'s format is exactly what it always was and every
+reader of the ring can see the level without a new interface. `grep '<3>'
+/var/log/toyos.log` works for the same reason.
+
+The marker is hidden by default because this program's output is read by
+a hundred places that predate levels. `--raw` shows it.
+
+**A line with no marker is never filtered out.** The ring can wrap into
+the middle of a line, and dropping the remains would hide exactly the
+event the offsets exist to make visible.
+
 ## The log leaves the kernel through `QUERY_KLOG`
 
 `klog_dump()` streams into a callback, which is the wrong shape for a
@@ -111,8 +145,13 @@ program, and says where the kernel's own copy is if `/bin` is gone.
 ## What it deliberately does not do
 
 It cannot CLEAR the log — there is no `dmesg -C` here. Filtering by
-subsystem is a separate item on `docs/roadmap.md`; `dmesg | less` and
-reading is the answer today.
+SUBSYSTEM is still a separate item on `docs/roadmap.md` — `-l` filters by
+level, and `dmesg | grep usb:` is the answer for the other axis today.
+
+`-l` cannot show a line the kernel never logged. The console threshold
+(`loglevel=`, `system.loglevel`) decides what reaches the serial port and
+the screen; the ring keeps every level regardless, which is why this
+command can still show what the console was told to skip.
 
 `--follow` polls rather than blocking, because `SYS_QUERY` is a snapshot
 interface by design: a fact is computed on every read and has no stored

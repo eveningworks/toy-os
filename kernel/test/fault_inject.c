@@ -9,6 +9,7 @@
 #include "fault_inject.h"
 #include "scheduler.h"
 #include "kfmt.h"
+#include "klog.h"   // KLOG_ERR -- the level on a failure line
 
 // WHO ARMED THE COUNTER, so a failure consumed by somebody else is
 // visible: the counters are global, a ring-3 process can be scheduled
@@ -53,7 +54,7 @@ static int consume(uint32_t *counter) {
     int me = scheduler_current_pid();
     if (me != g_armer && g_foreign_logged < 16) {
         g_foreign_logged++;
-        klog_printf("fault: injected failure consumed by pid %d (armed by pid %d, %u left)\n",
+        klog_printf(KLOG_ERR "fault: injected failure consumed by pid %d (armed by pid %d, %u left)\n",
                     me, g_armer, (unsigned)*counter);
     }
     return 1;

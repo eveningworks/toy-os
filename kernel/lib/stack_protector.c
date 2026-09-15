@@ -80,7 +80,7 @@ void __stack_chk_fail(void) {
     vga_set_color(VGA_WHITE, VGA_RED);
     vga_write("\n*** KERNEL PANIC: stack smashing detected ***\n");
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
-    klog_write("PANIC: stack smashing detected (__stack_chk_fail)\n");
+    klog_write(KLOG_CRIT "PANIC: stack smashing detected (__stack_chk_fail)\n");
 
     // Same unconditional halt idt.c's non-recoverable fault path ends
     // on -- a stack-layout bug this deep is always fatal, there's no

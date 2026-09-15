@@ -721,7 +721,7 @@ static void isr_dispatch_body(uint64_t *regs) {
         // Everything above went to the SCREEN only, which is why a panic
         // used to arrive as a photograph. The serial log is where a
         // report can actually be pasted from, so it gets the same facts.
-        klog_printf("  RIP=0x%lx  CS=0x%lx (ring %lu)  error_code=0x%lx\n",
+        klog_printf(KLOG_CRIT "  RIP=0x%lx  CS=0x%lx (ring %lu)  error_code=0x%lx\n",
                      rip, cs, cs & 3, error_code);
         if (vector == 14) klog_printf("  CR2=0x%lx\n", cr2);
         // Ring 0 only. A ring-3 fault's RIP is an address in some

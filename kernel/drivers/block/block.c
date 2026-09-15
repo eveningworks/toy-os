@@ -135,7 +135,7 @@ int blk_register_over(const struct block_device *dev,
 
     if (!dev->name || !dev->sector_count || !dev->read_sectors ||
         !dev->write_sectors || !dev->max_sectors_per_xfer) {
-        klog_write("block: refused a device missing a required operation\n");
+        klog_write(KLOG_ERR "block: refused a device missing a required operation\n");
         return 0;
     }
 

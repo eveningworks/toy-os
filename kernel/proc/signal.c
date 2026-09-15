@@ -243,7 +243,7 @@ static int push_signal_frame(int pid, int sig, const struct k_sigaction *act,
     sp = (sp & ~15ULL) - 8;
 
     if (!frame_fits(sp)) {
-        klog_printf("signal: pid %d cannot take SIG%s -- no room at rsp 0x%lx\n",
+        klog_printf(KLOG_ERR "signal: pid %d cannot take SIG%s -- no room at rsp 0x%lx\n",
                     pid, signal_name(sig), sp);
         return 0;
     }

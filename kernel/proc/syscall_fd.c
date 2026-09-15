@@ -393,7 +393,7 @@ sys_do_read_pty_master(uint64_t *regs, uint64_t pml4, int idx,
     int64_t n = pty_master_read(idx, kbuf, (uint32_t)len);
     int blocked = 0;
     if (n >= 0 && !vmm_copy_to_user(pml4, buf_ptr, kbuf, (uint64_t)n)) {
-        klog_write("syscall: read() rejected -- invalid buffer pointer\n");
+        klog_write(KLOG_ERR "syscall: read() rejected -- invalid buffer pointer\n");
         regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (n >= 0) {
         regs[14] = (uint64_t)n; // bytes, or 0 for EOF (no slave left)
@@ -445,7 +445,7 @@ sys_do_read_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
     unsigned n = tty_read(t, kbuf, (unsigned)len);
     int blocked = 0;
     if (n && !vmm_copy_to_user(pml4, buf_ptr, kbuf, (uint64_t)n)) {
-        klog_write("syscall: read() rejected -- invalid buffer pointer\n");
+        klog_write(KLOG_ERR "syscall: read() rejected -- invalid buffer pointer\n");
         regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (n) {
         regs[14] = (uint64_t)n;
@@ -479,7 +479,7 @@ sys_do_write_pty_master(uint64_t *regs, uint64_t pml4, int idx,
     char *kbuf = bounce_alloc(&len);
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return; }
     if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
-        klog_write("syscall: write() rejected -- invalid buffer pointer\n");
+        klog_write(KLOG_ERR "syscall: write() rejected -- invalid buffer pointer\n");
         regs[14] = (uint64_t)(int64_t)-EFAULT;
         kfree(kbuf);
         return;
@@ -500,7 +500,7 @@ sys_do_write_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
     char *kbuf = bounce_alloc(&len);
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
     if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
-        klog_write("syscall: write() rejected -- invalid buffer pointer\n");
+        klog_write(KLOG_ERR "syscall: write() rejected -- invalid buffer pointer\n");
         regs[14] = (uint64_t)(int64_t)-EFAULT;
         kfree(kbuf);
         return 0;
@@ -561,7 +561,7 @@ sys_do_read_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
     int64_t n = pipe_read(pipe_idx, kbuf, (uint32_t)len);
     int blocked = 0;
     if (n >= 0 && !vmm_copy_to_user(pml4, buf_ptr, kbuf, (uint64_t)n)) {
-        klog_write("syscall: read() rejected -- invalid buffer pointer\n");
+        klog_write(KLOG_ERR "syscall: read() rejected -- invalid buffer pointer\n");
         regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (n >= 0) {
         regs[14] = (uint64_t)n; // bytes, or 0 for EOF
@@ -692,7 +692,7 @@ sys_do_read_console(uint64_t *regs, uint64_t pml4, uint64_t buf_ptr, uint64_t le
     }
 
     if (!vmm_copy_to_user(pml4, buf_ptr, kbuf, got)) {
-        klog_write("syscall: read() rejected -- invalid buffer pointer\n");
+        klog_write(KLOG_ERR "syscall: read() rejected -- invalid buffer pointer\n");
         regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         regs[14] = got;
@@ -714,7 +714,7 @@ SYSCALL_HANDLER sys_do_write_console(uint64_t *regs, uint64_t pml4, int kind,
     char *kbuf = bounce_alloc(&len);
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return; }
     if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
-        klog_write("syscall: write() rejected -- invalid buffer pointer\n");
+        klog_write(KLOG_ERR "syscall: write() rejected -- invalid buffer pointer\n");
         regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         const char *buf = kbuf;
@@ -775,7 +775,7 @@ sys_do_write_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
 
     int blocked = 0;
     if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
-        klog_write("syscall: write() rejected -- invalid buffer pointer\n");
+        klog_write(KLOG_ERR "syscall: write() rejected -- invalid buffer pointer\n");
         regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         // Atomic against the reader, for the reason sys_do_read_pipe()
@@ -845,7 +845,7 @@ SYSCALL_HANDLER sys_do_write_file(uint64_t *regs, uint64_t pml4, struct open_fil
     char *tmp = bounce_alloc(&len);
     if (!tmp) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return; }
     if (!vmm_copy_from_user(pml4, tmp, buf_ptr, len)) {
-        klog_write("syscall: write() rejected -- invalid buffer pointer\n");
+        klog_write(KLOG_ERR "syscall: write() rejected -- invalid buffer pointer\n");
         regs[14] = (uint64_t)(int64_t)-EFAULT;
         kfree(tmp);
         return;
@@ -883,7 +883,7 @@ SYSCALL_HANDLER sys_do_read_file(uint64_t *regs, uint64_t pml4, struct open_file
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return; }
     uint32_t n = fs_read_range(f->file.name, off, kbuf, (uint32_t)len);
     if (!vmm_copy_to_user(pml4, buf_ptr, kbuf, n)) {
-        klog_write("syscall: read() rejected -- invalid buffer pointer\n");
+        klog_write(KLOG_ERR "syscall: read() rejected -- invalid buffer pointer\n");
         regs[14] = (uint64_t)(int64_t)-EFAULT;
         kfree(kbuf);
         return;
@@ -920,7 +920,7 @@ int sys_write(struct syscall_ctx *c) {
     // process instead.
     struct open_file *f = fd_get(pml4, fd);
     if (!f) {
-        klog_write("syscall: write() rejected -- bad fd\n");
+        klog_write(KLOG_ERR "syscall: write() rejected -- bad fd\n");
         c->regs[14] = (uint64_t)(int64_t)-EBADF;
         return 0;
     }
@@ -936,7 +936,7 @@ int sys_write(struct syscall_ctx *c) {
         // the send buffer takes what it can and reports the count, and
         // a short write is a stream's own convention -- libsys loops.
         if (!net_sock_is_stream(f->socket.idx)) {
-            klog_write("syscall: write() rejected -- a datagram socket needs sendto()\n");
+            klog_write(KLOG_ERR "syscall: write() rejected -- a datagram socket needs sendto()\n");
             c->regs[14] = (uint64_t)(int64_t)-EBADF;
             break;
         }
@@ -968,7 +968,7 @@ int sys_write(struct syscall_ctx *c) {
         return sys_do_write_pty_slave(c->regs, pml4, f->pty.idx, buf_ptr, len);
     case FD_KIND_FILE:
         if (f->file.mode != FD_MODE_WRITE) {
-            klog_write("syscall: write() rejected -- fd is read-only\n");
+            klog_write(KLOG_ERR "syscall: write() rejected -- fd is read-only\n");
             c->regs[14] = (uint64_t)(int64_t)-EBADF;
         } else {
             sys_do_write_file(c->regs, pml4, f, buf_ptr, len);
@@ -979,7 +979,7 @@ int sys_write(struct syscall_ctx *c) {
         // reaching here means the caller used the wrong syscall or the
         // wrong end. Rejected like any other bad fd rather than
         // silently treated as something it is not.
-        klog_write("syscall: write() rejected -- wrong kind of fd\n");
+        klog_write(KLOG_ERR "syscall: write() rejected -- wrong kind of fd\n");
         c->regs[14] = (uint64_t)(int64_t)-EBADF;
         break;
     }
@@ -998,12 +998,12 @@ int sys_read(struct syscall_ctx *c) {
     // `dup2(pipe_r, 0)` makes fd 0 a pipe with nothing here changed.
     struct open_file *f = fd_get(pml4, fd);
     if (!f) {
-        klog_write("syscall: read() rejected -- bad fd\n");
+        klog_write(KLOG_ERR "syscall: read() rejected -- bad fd\n");
         c->regs[14] = (uint64_t)(int64_t)-EBADF;
         return 0;
     }
     if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
-        klog_write("syscall: read() rejected -- invalid buffer pointer\n");
+        klog_write(KLOG_ERR "syscall: read() rejected -- invalid buffer pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
@@ -1030,7 +1030,7 @@ int sys_read(struct syscall_ctx *c) {
         // DATAGRAM socket still refuses: a read that cannot say who
         // sent it is not a datagram interface.
         if (!net_sock_is_stream(f->socket.idx)) {
-            klog_write("syscall: read() rejected -- a datagram socket needs recvfrom()\n");
+            klog_write(KLOG_ERR "syscall: read() rejected -- a datagram socket needs recvfrom()\n");
             c->regs[14] = (uint64_t)(int64_t)-EBADF;
             return 0;
         }
@@ -1045,7 +1045,7 @@ int sys_read(struct syscall_ctx *c) {
 
     case FD_KIND_FILE:
         if (f->file.mode != FD_MODE_READ) {
-            klog_write("syscall: read() rejected -- fd is write-only\n");
+            klog_write(KLOG_ERR "syscall: read() rejected -- fd is write-only\n");
             c->regs[14] = (uint64_t)(int64_t)-EBADF;
             break;
         }
@@ -1060,7 +1060,7 @@ int sys_read(struct syscall_ctx *c) {
     default:
         // A socket fd (SYS_RECV is its only reader), a pipe WRITE end,
         // or the kernel-log description, which has no reader.
-        klog_write("syscall: read() rejected -- wrong kind of fd\n");
+        klog_write(KLOG_ERR "syscall: read() rejected -- wrong kind of fd\n");
         c->regs[14] = (uint64_t)(int64_t)-EBADF;
         break;
     }
@@ -1078,7 +1078,7 @@ int sys_read(struct syscall_ctx *c) {
 int sys_lseek(struct syscall_ctx *c) {
     struct open_file *f = fd_get(c->pml4, (int)c->a0);
     if (!f) {
-        klog_write("syscall: lseek() rejected -- bad fd\n");
+        klog_write(KLOG_ERR "syscall: lseek() rejected -- bad fd\n");
         c->regs[14] = (uint64_t)(int64_t)-EBADF;
         return 0;
     }
@@ -1123,7 +1123,7 @@ int sys_lseek(struct syscall_ctx *c) {
 int sys_fstat(struct syscall_ctx *c) {
     struct open_file *f = fd_get(c->pml4, (int)c->a0);
     if (!f) {
-        klog_write("syscall: fstat() rejected -- bad fd\n");
+        klog_write(KLOG_ERR "syscall: fstat() rejected -- bad fd\n");
         c->regs[14] = (uint64_t)(int64_t)-EBADF;
         return 0;
     }
@@ -1160,7 +1160,7 @@ int sys_fstat(struct syscall_ctx *c) {
         break;
     }
     if (!vmm_copy_to_user(c->pml4, c->a1, &out, sizeof out)) {
-        klog_write("syscall: fstat() rejected -- invalid output pointer\n");
+        klog_write(KLOG_ERR "syscall: fstat() rejected -- invalid output pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
@@ -1661,7 +1661,7 @@ int sys_net_arp_probe(struct syscall_ctx *c) {
 int sys_pipe(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     if (!vmm_validate_user_range(pml4, c->a0, sizeof(int) * 2)) {
-        klog_write("syscall: pipe() rejected -- invalid user pointer\n");
+        klog_write(KLOG_ERR "syscall: pipe() rejected -- invalid user pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         int idx = pipe_create();
@@ -1679,7 +1679,7 @@ int sys_pipe(struct syscall_ctx *c) {
             // ENFILE when the system-wide pipe table is out, EMFILE
             // when it was this process's descriptors -- the caller can
             // do something about the second and nothing about the first.
-            klog_write("syscall: pipe() failed -- no free pipe or fd\n");
+            klog_write(KLOG_ERR "syscall: pipe() failed -- no free pipe or fd\n");
             c->regs[14] = (uint64_t)(int64_t)(idx < 0 ? -ENFILE : -EMFILE);
         } else {
             int out[2] = { rfd, wfd };

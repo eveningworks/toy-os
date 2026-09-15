@@ -124,7 +124,7 @@ int sound_register(const struct sound_device *dev, void *ring, uint64_t ring_phy
     // silently plays nothing, and it would still be chosen over a
     // working one by resolve_pref().
     if (!dev->name || !dev->start || !dev->stop) {
-        klog_printf("sound: REFUSED %s -- missing start/stop\n",
+        klog_printf(KLOG_ERR "sound: REFUSED %s -- missing start/stop\n",
                     dev->name ? dev->name : "(unnamed)");
         return 0;
     }
@@ -283,7 +283,7 @@ int sys_snd_open(struct syscall_ctx *c) {
     if (g_owner_pml4) {
         // EXCLUSIVE, like the compositor role: mixing is a userspace
         // problem on every modern OS and is not moving in here.
-        klog_write("syscall: snd_open() rejected -- stream in use\n");
+        klog_write(KLOG_ERR "syscall: snd_open() rejected -- stream in use\n");
         c->regs[14] = (uint64_t)(int64_t)-EBUSY;
         return 0;
     }

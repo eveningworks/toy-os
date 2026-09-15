@@ -57,7 +57,7 @@ SYSCALL_HANDLER sys_do_proc_info(uint64_t *regs, uint64_t rdi, uint64_t rsi) {
         // empty slots (pid 0) itself: an empty slot is a SUCCESS.
         regs[14] = (uint64_t)(int64_t)-EINVAL;
     } else if (!vmm_copy_to_user(pml4, rsi, &info, sizeof info)) {
-        klog_write("syscall: proc_info() rejected -- invalid user pointer\n");
+        klog_write(KLOG_ERR "syscall: proc_info() rejected -- invalid user pointer\n");
         regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         // Filled in a KERNEL struct and copied out, never written
@@ -202,7 +202,7 @@ int sys_sbrk(struct syscall_ctx *c) {
         // ugfx.c, the WM). A small negative code would be a plausible
         // -- and wrong -- address. libsys turns the sign into errno
         // without touching the value, exactly as POSIX sbrk() does.
-        klog_write("syscall: sbrk() rejected -- no heap armed for this process\n");
+        klog_write(KLOG_ERR "syscall: sbrk() rejected -- no heap armed for this process\n");
         c->regs[14] = (uint64_t)-1;
     } else if (inc > UADDR_HEAP_LIMIT - hp->brk) {
         // The heap grows UP toward the stack's guard region, and
@@ -216,7 +216,7 @@ int sys_sbrk(struct syscall_ctx *c) {
         // Written as `inc > LIMIT - brk` rather than
         // `brk + inc > LIMIT` on purpose: the sum overflows for a
         // large enough inc and the comparison then passes.
-        klog_write("syscall: sbrk() rejected -- would grow into the stack guard\n");
+        klog_write(KLOG_ERR "syscall: sbrk() rejected -- would grow into the stack guard\n");
         c->regs[14] = (uint64_t)-1;
     } else {
         // THE BREAK IS A RESERVATION. Nothing is mapped here: the frame
@@ -343,7 +343,7 @@ static int uheap_fault(uint64_t pml4_phys, uint64_t vaddr) {
             // interesting failures here (a frame that leapt the gap,
             // and a pointer aimed into unmapped stack) are both a bare
             // "Page fault" with nothing to distinguish them.
-            klog_printf("mm: refused to grow the stack to %#lx -- %lu KiB "
+            klog_printf(KLOG_ERR "mm: refused to grow the stack to %#lx -- %lu KiB "
                         "below the bottom (%#lx), further than one frame\n",
                         page, (unsigned long)((hp->stack_bottom - page) / 1024),
                         hp->stack_bottom);
@@ -545,14 +545,14 @@ static int spawn_args_collect(uint64_t pml4, const struct spawn_msg *msg,
         a->envbuf = kmalloc(SYS_ENV_MAX);
         if (!a->envbuf) return -ENOMEM;
         if (!copy_env_from_user(pml4, (uint64_t)(uintptr_t)msg->env, a->envbuf, SYS_ENV_MAX)) {
-            klog_printf("syscall: %s() rejected -- bad or oversized environment\n", who);
+            klog_printf(KLOG_ERR "syscall: %s() rejected -- bad or oversized environment\n", who);
             spawn_args_free(a);
             return -EINVAL;
         }
         a->env = a->envbuf;
     }
     if (!vmm_copy_string_from_user(pml4, a->path, (uint64_t)(uintptr_t)msg->path, FS_PATH_MAX)) {
-        klog_printf("syscall: %s() rejected -- invalid path pointer\n", who);
+        klog_printf(KLOG_ERR "syscall: %s() rejected -- invalid path pointer\n", who);
         spawn_args_free(a);
         return -EFAULT;
     }
@@ -593,7 +593,7 @@ static int spawn_args_collect(uint64_t pml4, const struct spawn_msg *msg,
         }
     }
     if (bad) {
-        klog_printf("syscall: %s() rejected -- bad or oversized arguments\n", who);
+        klog_printf(KLOG_ERR "syscall: %s() rejected -- bad or oversized arguments\n", who);
         spawn_args_free(a);
         return -EINVAL;
     }
@@ -609,7 +609,7 @@ int sys_spawn(struct syscall_ctx *c) {
     // registers.
     struct spawn_msg msg;
     if (!vmm_copy_from_user(pml4, &msg, c->a0, sizeof msg)) {
-        klog_write("syscall: spawn() rejected -- invalid message pointer\n");
+        klog_write(KLOG_ERR "syscall: spawn() rejected -- invalid message pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
@@ -621,7 +621,7 @@ int sys_spawn(struct syscall_ctx *c) {
     // number to MEAN a group, and accepting one here would be taking a
     // value from the wrong vocabulary.
     if (msg.pgid < PGID_NEW) {
-        klog_write("syscall: spawn() rejected -- pgid below PGID_NEW\n");
+        klog_write(KLOG_ERR "syscall: spawn() rejected -- pgid below PGID_NEW\n");
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
         return 0;
     }
@@ -632,7 +632,7 @@ int sys_spawn(struct syscall_ctx *c) {
     // do nothing. Same reasoning as the "reserved must be zero" check
     // `pgid` replaced.
     if (msg.flags & ~(uint32_t)SPAWN_FLAGS_ALL) {
-        klog_write("syscall: spawn() rejected -- unknown flag\n");
+        klog_write(KLOG_ERR "syscall: spawn() rejected -- unknown flag\n");
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
         return 0;
     }
@@ -662,7 +662,7 @@ int sys_spawn(struct syscall_ctx *c) {
     if (msg.stdout_fd != -1) {
         stdout_desc = spawn_std_desc(pml4, (int)msg.stdout_fd, FD_KIND_PIPE_W);
         if (stdout_desc < 0) {
-            klog_write("syscall: spawn() rejected -- stdout fd isn't this process's pipe write end or socket\n");
+            klog_write(KLOG_ERR "syscall: spawn() rejected -- stdout fd isn't this process's pipe write end or socket\n");
             spawn_rc = -EBADF;
             ok = 0;
         }
@@ -670,7 +670,7 @@ int sys_spawn(struct syscall_ctx *c) {
     if (ok && msg.stdin_fd != -1) {
         stdin_desc = spawn_std_desc(pml4, (int)msg.stdin_fd, FD_KIND_PIPE_R);
         if (stdin_desc < 0) {
-            klog_write("syscall: spawn() rejected -- stdin fd isn't this process's pipe read end or socket\n");
+            klog_write(KLOG_ERR "syscall: spawn() rejected -- stdin fd isn't this process's pipe read end or socket\n");
             spawn_rc = -EBADF;
             ok = 0;
         }
@@ -748,13 +748,13 @@ int sys_exec(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     struct spawn_msg msg;
     if (!vmm_copy_from_user(pml4, &msg, c->a0, sizeof msg)) {
-        klog_write("syscall: exec() rejected -- invalid message pointer\n");
+        klog_write(KLOG_ERR "syscall: exec() rejected -- invalid message pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
     if (msg.stdin_fd != -1 || msg.stdout_fd != -1 || msg.pgid != 0 ||
         (msg.flags & ~(uint32_t)SPAWN_ARGV)) {
-        klog_write("syscall: exec() rejected -- a stream, group or flag that only a child could take\n");
+        klog_write(KLOG_ERR "syscall: exec() rejected -- a stream, group or flag that only a child could take\n");
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
         return 0;
     }
@@ -778,7 +778,7 @@ int sys_waitpid(struct syscall_ctx *c) {
     int bad = 0;
     if (c->a1) {
         if (!vmm_validate_user_range(pml4, c->a1, sizeof(int))) {
-            klog_write("syscall: waitpid() rejected -- invalid out pointer\n");
+            klog_write(KLOG_ERR "syscall: waitpid() rejected -- invalid out pointer\n");
             bad = 1;
         } else {
             out = c->a1;

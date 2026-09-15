@@ -22,6 +22,7 @@
 #include "shm.h"
 #include "string.h"
 #include "kfmt.h"     // klog_printf
+#include "klog.h"   // KLOG_ERR -- the level on a failure line
 
 // The region containing `addr`, or NULL. Linear: MMAP_MAX_REGIONS is
 // 16 and this runs per fault-in and per syscall, not per byte.
@@ -340,7 +341,7 @@ int mmap_fault_in(struct sched_mm *mm, uint64_t pml4_phys, uint64_t vaddr) {
         // ranges in before FS_OP. This refusal is what keeps that an
         // invariant rather than an accident.
         if (scheduler_preempt_depth() > 0) {
-            klog_printf("mm: refused file-backed fault-in of %#lx inside an "
+            klog_printf(KLOG_ERR "mm: refused file-backed fault-in of %#lx inside an "
                         "FS_OP -- see mmap_fault_in()\n", page);
             pmm_free_frame(frame);
             return 0;

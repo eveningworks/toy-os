@@ -133,7 +133,7 @@ uint32_t crash_report_write(const char *what, const uint64_t *regs, uint64_t cr2
     fs_mkdir("/var");
     fs_mkdir(CRASH_DIR);
     if (!fs_touch(path) || !fs_write_range(path, 0, g_header, (uint32_t)at)) {
-        klog_printf("crash: could not write %s\n", path);
+        klog_printf(KLOG_ERR "crash: could not write %s\n", path);
         return 0;
     }
     uint32_t written = (uint32_t)at;

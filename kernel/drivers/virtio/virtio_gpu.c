@@ -250,7 +250,7 @@ static int g_cur_busy = 0;
 static uint32_t ctl_send_into(uint32_t len, void *resp, uint32_t resp_len) {
     if (!g_dev.common) return 0;
     if (g_ctl_busy) {
-        klog_write("virtio-gpu: re-entrant command refused\n");
+        klog_write(KLOG_ERR "virtio-gpu: re-entrant command refused\n");
         return 0;
     }
     g_ctl_busy = 1;
@@ -283,7 +283,7 @@ static uint32_t ctl_send(uint32_t len) { return ctl_send_into(len, &g_resp, size
 static int ctl_ok(uint32_t len, const char *what) {
     uint32_t type = ctl_send(len);
     if (type == VIRTIO_GPU_RESP_OK_NODATA) return 1;
-    klog_printf("virtio-gpu: %s failed (response 0x%x)\n", what, type);
+    klog_printf(KLOG_ERR "virtio-gpu: %s failed (response 0x%x)\n", what, type);
     return 0;
 }
 
@@ -688,7 +688,7 @@ int virtio_gpu_init(void) {
     if (!virtio_begin(&g_dev, VIRTIO_GPU_F_EDID)) return 0;
 
     if (!virtqueue_setup(&g_dev, 0, &g_control)) {
-        klog_write("virtio-gpu: could not set up its control queue\n");
+        klog_write(KLOG_ERR "virtio-gpu: could not set up its control queue\n");
         virtio_fail(&g_dev);
         return 0;
     }

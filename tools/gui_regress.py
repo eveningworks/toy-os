@@ -310,7 +310,13 @@ def run_one(name, script, disk_src, timeout, keep_logs, slot, kvm=False):
             return ("FAIL", time.time() - started,
                     "the guest never started: "
                     + (why[0] if why else f"vm.py exited {boot.returncode}"))
-        r = subprocess.run([sys.executable, tool, "--instance", str(slot)],
+        # -u, because the partial output below is the whole diagnosis
+        # and without it there is none. A captured child's stdout is a
+        # pipe, so Python block-buffers it: a tool killed by the guard
+        # has flushed nothing, and the timeout branch reports "NO
+        # output at all" for a tool that had printed thirty checks.
+        r = subprocess.run([sys.executable, "-u", tool,
+                            "--instance", str(slot)],
                            cwd=REPO, capture_output=True, text=True,
                            timeout=timeout)
         out = r.stdout + r.stderr

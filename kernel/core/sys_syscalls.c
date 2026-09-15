@@ -66,7 +66,7 @@ SYSCALL_HANDLER sys_do_setting(uint64_t *regs, uint64_t rdi) {
     uint64_t pml4 = vmm_current_pml4();
     struct setting_msg msg;
     if (!vmm_copy_from_user(pml4, &msg, rdi, sizeof msg)) {
-        klog_write("syscall: setting() rejected -- invalid user pointer\n");
+        klog_write(KLOG_ERR "syscall: setting() rejected -- invalid user pointer\n");
         regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         int ok = setting_dispatch(&msg);
@@ -86,7 +86,7 @@ int sys_gettime(struct syscall_ctx *c) {
     struct rtc_time t;
     ktime_read(&t);
     if (!vmm_copy_to_user(pml4, c->a0, &t, sizeof t)) {
-        klog_write("syscall: gettime() rejected -- invalid pointer\n");
+        klog_write(KLOG_ERR "syscall: gettime() rejected -- invalid pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         c->regs[14] = 0;
@@ -123,7 +123,7 @@ int sys_pci_info(struct syscall_ctx *c) {
     int index = (int)c->a0;
     const struct pci_device *dev = pci_device_at(index);
     if (!dev || !vmm_copy_to_user(pml4, c->a1, dev, sizeof *dev)) {
-        klog_write("syscall: pci_info() rejected -- bad index or invalid pointer\n");
+        klog_write(KLOG_ERR "syscall: pci_info() rejected -- bad index or invalid pointer\n");
         c->regs[14] = (uint64_t)(int64_t)(dev ? -EFAULT : -EINVAL);
     } else {
         c->regs[14] = 0;
@@ -136,7 +136,7 @@ int sys_cpu_info(struct syscall_ctx *c) {
     struct cpu_info ci;
     cpu_info_get(&ci);
     if (!vmm_copy_to_user(pml4, c->a0, &ci, sizeof ci)) {
-        klog_write("syscall: cpu_info() rejected -- invalid user pointer\n");
+        klog_write(KLOG_ERR "syscall: cpu_info() rejected -- invalid user pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         c->regs[14] = 0;
@@ -147,7 +147,7 @@ int sys_cpu_info(struct syscall_ctx *c) {
 int sys_getrandom(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     if (c->a1 > SYS_GETRANDOM_MAX) {
-        klog_write("syscall: getrandom() rejected -- count over SYS_GETRANDOM_MAX\n");
+        klog_write(KLOG_ERR "syscall: getrandom() rejected -- count over SYS_GETRANDOM_MAX\n");
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
     } else if (c->a1 == 0) {
         // A zero-length request is a legal no-op, NOT an error --
@@ -155,7 +155,7 @@ int sys_getrandom(struct syscall_ctx *c) {
         // pointer that is never going to be dereferenced.
         c->regs[14] = 0;
     } else if (!vmm_validate_user_range(pml4, c->a0, c->a1)) {
-        klog_write("syscall: getrandom() rejected -- invalid user pointer\n");
+        klog_write(KLOG_ERR "syscall: getrandom() rejected -- invalid user pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         sys_do_getrandom(c->regs, pml4, c->a0, c->a1);
@@ -192,7 +192,7 @@ int sys_sysinfo(struct syscall_ctx *c) {
         info.flags |= SYS_INFO_DISK_VALID;
     }
     if (!vmm_copy_to_user(pml4, c->a0, &info, sizeof info)) {
-        klog_write("syscall: sysinfo() rejected -- invalid user pointer\n");
+        klog_write(KLOG_ERR "syscall: sysinfo() rejected -- invalid user pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         c->regs[14] = 0;
@@ -204,7 +204,7 @@ int sys_query(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     struct query_msg msg;
     if (!vmm_copy_from_user(pml4, &msg, c->a0, sizeof msg)) {
-        klog_write("syscall: query() rejected -- invalid message pointer\n");
+        klog_write(KLOG_ERR "syscall: query() rejected -- invalid message pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
@@ -265,7 +265,7 @@ int sys_query(struct syscall_ctx *c) {
         break;
     }
     default:
-        klog_printf("syscall: query() rejected -- unknown op %u\n", msg.op);
+        klog_printf(KLOG_ERR "syscall: query() rejected -- unknown op %u\n", msg.op);
         err = -EINVAL;
         break;
     }

@@ -89,7 +89,7 @@ int sys_mkfs(struct syscall_ctx *c) {
     req.fstype[MOUNT_FSTYPE_MAX - 1] = '\0';
 
     if (!(req.flags & MKFS_CONFIRM)) {
-        klog_write("mkfs: refused without MKFS_CONFIRM\n");
+        klog_write(KLOG_ERR "mkfs: refused without MKFS_CONFIRM\n");
         c->regs[14] = (uint64_t)(int64_t)-EPERM;
         return 0;
     }

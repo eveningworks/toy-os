@@ -383,5 +383,5 @@ KTEST("acpi_prt", "this machine's own _PRT answers for a present device, or refu
         else { KTEST_ASSERT(rc == -ENOENT || rc == -ENOTSUP); refused++; }
     }
     KTEST_ASSERT(answered + refused > 0);
-    klog_printf("acpi_prt: %d device(s) routed by _PRT, %d refused\n", answered, refused);
+    klog_printf(KLOG_ERR "acpi_prt: %d device(s) routed by _PRT, %d refused\n", answered, refused);
 }

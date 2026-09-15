@@ -350,7 +350,7 @@ int usb_hid_bind(struct usb_device_info *info) {
         d->is_mouse = (ifc->if_protocol == HID_IF_MOUSE);
 
         if (hid_set_idle_and_boot(info->slot, ifc->ifnum) < 0) {
-            klog_printf("usb: slot %u if %u: set protocol(boot) failed\n",
+            klog_printf(KLOG_ERR "usb: slot %u if %u: set protocol(boot) failed\n",
                         info->slot, ifc->ifnum);
             continue;
         }

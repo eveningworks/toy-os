@@ -338,7 +338,7 @@ int sys_diag(struct syscall_ctx *c) {
 
     struct diag_msg msg;
     if (!vmm_copy_from_user(pml4, &msg, c->a0, sizeof msg)) {
-        klog_write("syscall: diag() rejected -- invalid user pointer\n");
+        klog_write(KLOG_ERR "syscall: diag() rejected -- invalid user pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (pid == 0) {
         c->regs[14] = (uint64_t)(int64_t)-EPERM;

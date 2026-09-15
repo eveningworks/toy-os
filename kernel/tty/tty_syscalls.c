@@ -56,7 +56,7 @@ int sys_openpty(struct syscall_ctx *c) {
     if (!vmm_copy_to_user(c->pml4, c->a0, &msg, sizeof msg)) {
         fd_close(c->pml4, sfd);
         fd_close(c->pml4, mfd);
-        klog_write("syscall: openpty() rejected -- invalid pointer\n");
+        klog_write(KLOG_ERR "syscall: openpty() rejected -- invalid pointer\n");
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
