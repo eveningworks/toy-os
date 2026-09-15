@@ -84,6 +84,7 @@ NOTEPAD = "/bin/wm/apps/notepad"
 IMGVIEW = "/bin/wm/apps/imgview"
 PLAYER = "/bin/wm/apps/player"
 CTRL_O = "0x0f"
+CTRL_S = "0x13"   # Save As, the mode where the name field is focused
 ESC = "0x1b"
 # A fixture that is on every image and is not in the directory any of the
 # three apps starts in, so "the app shows this" cannot be true already.
@@ -146,6 +147,15 @@ def fd_geom(dbg, name):
         except ValueError:
             return None
     return None
+
+
+def name_text(dbg):
+    """What the File name field says, as the chooser itself reports it."""
+    lines = dbg.logs('filedialog: layout name.text ', clear=False)
+    if not lines:
+        return None
+    tail = lines[-1].split('name.text ', 1)[1].strip()
+    return tail[1:-1] if len(tail) >= 2 and tail[0] == '"' else tail
 
 
 def click_in(dbg, dlg, x, y):
@@ -497,6 +507,67 @@ def check_roundtrip(dbg, res, dlg):
               PICK_NAME in title, f"window title {title!r}")
 
 
+def check_places_hover(dbg, res, qmp):
+    """THE POINTER MUST NOT KILL THE NAME FIELD BY RESTING ON PLACES.
+
+    The regression: `case ID_PLACES` had no `reason` guard, so a mouse
+    MOTION over the strip re-listed the directory and re-inited the name
+    field -- and uui_textbox_init() clears `active` while the focus ring
+    still points AT the field, so no click could revive it. Save As was
+    unusable with the pointer anywhere over Places, which is what made
+    the clipboard tool's three disk round trips fail.
+
+    THE POINTER MUST BE THERE BEFORE THE DIALOG OPENS. A dbg.move() onto
+    an already-open chooser does NOT reproduce it, and a version of this
+    check that did that passed against the unfixed code -- so the order
+    here is the whole check. It also has to be SAVE rather than Open:
+    Open focuses the list, and the dead field is invisible from there.
+
+    Two assertions, one per defect, because either fix alone satisfies
+    the other's.
+    """
+    # Open once to learn where the strip lands, then close and aim there.
+    owner, dlg = open_chooser(dbg, NOTEPAD, "untitled")
+    places = fd_geom(dbg, "places") if dlg else None
+    if not dlg or not places:
+        res.check("a hover over Places leaves Save As usable", False,
+                  f"dlg={dlg is not None} places={places}")
+        close_all(dbg)
+        return
+    px, py, pw, ph = places
+    sx = dlg["content"]["x"] + px + pw // 2
+    sy = dlg["content"]["y"] + py + ph // 2
+    dbg.key(ESC)
+    wait_dialog(dbg, False)
+
+    # THE REAL CURSOR, warped and confirmed. `gui move` (dbg.move) is
+    # one wm_run() iteration and the driver snaps the pointer back on
+    # the next, so a version of this check using it passed against the
+    # unfixed chooser -- the motion never persisted to the open.
+    dbg.warp_cursor(qmp, sx, sy)
+    dbg.settle()
+    dbg.key(CTRL_S, mods="ctrl")   # Save As -- the name field is focused
+    dlg = wait_dialog(dbg, True)
+    dbg.settle()
+    if not dlg:
+        res.check("a hover over Places leaves Save As usable", False,
+                  "Ctrl-S opened no dialog")
+        close_all(dbg)
+        return
+    for ch in "zq":
+        dbg.key(ch, settle=False)
+    dbg.settle()
+    res.check("Save As takes typing with the pointer over Places",
+              name_text(dbg) == "zq", f"the field holds {name_text(dbg)!r}")
+    dbg.warp_cursor(qmp, sx + 4, sy + 2)   # a further hover must not wipe it
+    dbg.settle()
+    res.check("...and a hover does not clear what was typed",
+              name_text(dbg) == "zq", f"the field holds {name_text(dbg)!r}")
+    dbg.key(ESC)
+    wait_dialog(dbg, False)
+    close_all(dbg)
+
+
 def check_cancel(dbg, res):
     owner, dlg = open_chooser(dbg, NOTEPAD, "untitled")
     if not dlg:
@@ -541,7 +612,7 @@ def check_other_apps(dbg, res):
         close_all(dbg)
 
 
-def run(dbg, res):
+def run(dbg, res, qmp):
     dbg.send("sh config set desktop.layout_log on")
     close_all(dbg)
 
@@ -560,6 +631,10 @@ def run(dbg, res):
         check_labels(dbg, res)
         print("the round trip")
         check_roundtrip(dbg, res, dialog(dbg) or dlg)
+    close_all(dbg)
+
+    print("a hover must not disturb Save As")
+    check_places_hover(dbg, res, qmp)
     close_all(dbg)
 
     print("cancelling")
@@ -593,7 +668,7 @@ def main():
     res = Result()
     with DebugConsole(args.sock) as dbg:
         dbg.settle()
-        run(dbg, res)
+        run(dbg, res, qmp)
 
     n_ok, n_bad = len(res.passes), len(res.fails)
     print(f"\nfiledialog_test: {n_ok} passed, {n_bad} failed")

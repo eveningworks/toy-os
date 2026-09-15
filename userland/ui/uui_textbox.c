@@ -78,6 +78,25 @@ void uui_textbox_init(struct uui_textbox *f, const char *initial) {
     f->sel_bg = UUI_COLOR_UNSET;
 }
 
+// THE TEXT, WITHOUT THE REST OF init(). A caller that re-inits a field
+// only to change what it says also clears `active` -- and a field the
+// focus ring still points AT cannot be revived by clicking it, because
+// uui_focus_click() returns early on the index it already holds. That
+// left the Save As name field dead whenever the pointer crossed the
+// chooser's Places strip. Geometry, colours and `disabled` are the
+// caller's and are left alone; the caret goes to the end, as after a
+// programmatic fill.
+void uui_textbox_set_text(struct uui_textbox *f, const char *text) {
+    int i = 0;
+    if (text) {
+        while (text[i] && i < UUI_TEXTBOX_MAX - 1) { f->buf[i] = text[i]; i++; }
+    }
+    f->buf[i] = '\0';
+    f->len = i;
+    uui_edit_init(&f->ed);
+    f->ed.cursor = i;
+}
+
 const char *uui_textbox_text(const struct uui_textbox *f) { return f->buf; }
 
 int uui_textbox_has_selection(const struct uui_textbox *f) {

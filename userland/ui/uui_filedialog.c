@@ -173,7 +173,7 @@ static int commit(struct uui_filedialog *fd) {
         // OK ON A FOLDER ENTERS IT and keeps the dialog up, as in
         // Explorer and every GTK chooser.
         uui_fileview_set_dir(&fd->view, full);
-        uui_textbox_init(&fd->name, "");
+        uui_textbox_set_text(&fd->name, "");
         sync_places(fd);
         return 0;
     }
@@ -198,10 +198,17 @@ static void on_widget(struct uapp_window *w, int id, int reason) {
         break;
     }
     case ID_PLACES: {
+        // A HOVER IS NOT A CHOICE. Motion reaches every widget at every
+        // depth, so without this a pointer merely RESTING over the strip
+        // re-listed the directory and wiped the typed name on every
+        // frame -- Save As was unusable with the mouse anywhere over
+        // Places. The three cases below have always guarded this way.
+        if (reason != UUI_REASON_PRESS && reason != UUI_REASON_KEY) break;
         int i = uui_sidebar_selected_id(&fd->places);
         if (i >= 0 && i < fd->place_count) {
             uui_fileview_set_dir(&fd->view, fd->place_paths[i]);
-            uui_textbox_init(&fd->name, "");
+            uui_textbox_set_text(&fd->name, "");
+            uui_focus_set(&fd->focus, FOCUS_PLACES);
         }
         break;
     }
@@ -260,6 +267,11 @@ static void log_layout(struct uapp_window *w) {
     struct uui_filedialog *fd = (struct uui_filedialog *)uapp_window_state(w);
     if (!fd) return;
     uapp_logf_layout("filedialog: layout view.dir %s\n", uui_fileview_dir(&fd->view));
+    // Quoted, so an EMPTY field is a visible fact rather than a line
+    // that looks truncated -- which is the state a test asserting the
+    // name survived a hover has to tell apart from no line at all.
+    uapp_logf_layout("filedialog: layout name.text \"%s\"\n",
+                     uui_textbox_text(&fd->name));
     uapp_logf_layout("filedialog: layout view.rows %d\n", uui_fileview_row_count(&fd->view));
     if (fd->filter_count)
         uapp_logf_layout("filedialog: layout type.selected %d\n",
@@ -280,7 +292,7 @@ static void view_select(void *ctx, const char *path, int is_dir) {
     // THE SELECTED NAME LANDS IN THE FIELD, which is what makes saving
     // over an existing file one click. The BASENAME, because the field
     // is relative to the listing.
-    if (path) uui_textbox_init(&fd->name, k_path_basename(path));
+    if (path) uui_textbox_set_text(&fd->name, k_path_basename(path));
 }
 
 static void view_open(void *ctx, const char *path) {

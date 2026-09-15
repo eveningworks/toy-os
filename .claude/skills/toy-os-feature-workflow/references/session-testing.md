@@ -2651,3 +2651,37 @@ hand failed it. `make clean-disk && make iso` before believing any
 listing-shaped failure -- and then MEASURE with `predates.py` anyway,
 because on that occasion the clean image failed identically and the
 real answer was "pre-existing".
+
+**2026-09-15: THREE POSITIVE CONTROLS IN A ROW PASSED AGAINST BROKEN
+CODE, EACH FOR A DIFFERENT REASON.** The bug was real and fixed; what
+took the time was proving the regression check could see it. Worth
+reading as a set, because each failure mode is one a session would hit
+alone and shrug off:
+
+- **The redundant-fix control.** The fix had two halves (a `reason`
+  guard, and a `set_text()` that stops re-texting a field from clearing
+  its `active` flag). Disabling ONE left the other satisfying the
+  assertion. This repo already records the shape -- "a redundant code
+  path makes a positive control lie" -- and it arrives here as two
+  deliberate fixes rather than one accidental second path. **Write one
+  assertion per defect, and revert one fix at a time.**
+- **The control that reverted the INSTRUMENTATION too.** `git checkout
+  <file>` to get the broken version also removed the `name.text` line
+  the check reads, so the check failed because its oracle was gone, not
+  because the bug was back. It looked like a perfect red. **Revert the
+  FIX, keep the probe** -- by hand, or from a copy taken after the
+  instrumentation and before the fix.
+- **`gui move` cannot reproduce a hover.** The bug needed the pointer
+  resting over a strip WHEN A DIALOG OPENED. `DebugConsole.move()`
+  injects a position for ONE `wm_run()` iteration and the driver snaps
+  it back on the next, so the motion never persisted to the open and
+  the check passed against unfixed code -- twice, in two different
+  shapes. `dbg.warp_cursor(qmp, x, y)` moves the REAL cursor and
+  reddened it immediately. This file already said so at three separate
+  places and it was still walked into: **if a check involves where the
+  pointer IS rather than a click, it needs the real cursor.**
+
+The general rule that covers all three: **a control is only evidence if
+the ONLY thing it changed is the fix.** Ask what else that revert
+touched -- the other half of the fix, the instrumentation, the timing --
+before believing either colour.
