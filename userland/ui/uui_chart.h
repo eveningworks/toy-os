@@ -5,62 +5,98 @@
 #include "ui/ugfx.h"
 #include "ui/uui_widget.h"
 
-// chart -- a percentage over TIME, which is the one thing uui_meter
-// cannot show.
+// chart -- a value over TIME, which is the one thing uui_meter cannot
+// show.
 //
 // A meter answers "how busy is it now"; this answers "and was it busy a
 // minute ago", which is a different question and the reason Task
-// Manager, GNOME System Monitor and KSysGuard all carry both. The
-// sample is deliberately a PERCENTAGE rather than a free number: every
-// caller so far is a proportion of something, a fixed 0..100 range needs
-// no axis negotiation, and a chart that rescales under a moving series
-// is one whose shape means nothing between two glances.
+// Manager, GNOME System Monitor and KSysGuard all carry both.
 //
-// **THE RING IS INSIDE THE WIDGET AND IT IS SMALL.** One byte per
-// sample, so the whole history costs less than the struct around it --
-// Toykit has no allocator, and a caller-supplied array would be one more
-// thing for every caller to size wrongly.
+// **RAW VALUES, NOT PERCENTAGES, AND A SCALE THAT SAYS WHICH.** A
+// percentage-only chart cannot plot a RATE -- bytes per second has no
+// natural 100 -- and rescaling a percentage series against a moving
+// peak makes old samples lie, because they were scaled against an older
+// one. So samples are stored as given and `scale_max` decides how they
+// are read: 100 for a percentage, 0 to AUTOSCALE against the largest
+// sample in view, which is what GNOME's network graph does.
+//
+// **THE RING IS INSIDE THE WIDGET.** Toykit has no allocator, and a
+// caller-supplied array is one more thing for every caller to size
+// wrongly.
 //
 // NEWEST ON THE RIGHT, which is every system monitor's direction and
 // the one that keeps the eye where new data arrives.
 
-#define UUI_CHART_MAX 180   // at Task Manager's cadence, about three minutes
+#define UUI_CHART_MAX 180
 
 struct uui_chart {
     int x, y, w, h;
     const char *label;          // drawn top-left, or NULL for none
-    // **THE READING, IN THE CALLER'S WORDS, drawn top-right.** The
-    // widget plots a PERCENTAGE and only the caller knows what it is a
-    // percentage OF -- "42%" for a processor, "1.2 / 1.9 GiB" for
-    // memory. Formatting it here would mean the widget choosing units
-    // for a number whose meaning it does not have. Same split
-    // uui_meter makes with its caption/value/unit strings.
-    //
-    // CALLER-OWNED and must outlive the draw, exactly like `label`.
+    // **THE READING, IN THE CALLER'S WORDS, drawn top-right.** Only the
+    // caller knows what a sample MEANS -- "42%" for a processor,
+    // "1.2 of 1.9 GiB" for memory, "3.4 MiB/s" for a disk. Formatting
+    // it here would mean the widget choosing units for a number whose
+    // meaning it does not have. Caller-owned and uncopied, like `label`.
     const char *value;
-    uint8_t samples[UUI_CHART_MAX];
+
+    uint32_t samples[UUI_CHART_MAX];
+    // A SECOND SERIES THAT IS PART OF THE FIRST, not beside it: kernel
+    // time inside total CPU time, which is the decomposition Windows
+    // draws as a darker band. Drawn from the baseline UP TO its own
+    // height, over the total, so the eye reads "this much of that".
+    uint32_t parts[UUI_CHART_MAX];
+    int has_parts;
+
     int count;                  // valid samples, capped at UUI_CHART_MAX
     int head;                   // where the next sample goes
+
+    // 100 for a percentage; 0 autoscales to the largest sample in view.
+    uint32_t scale_max;
+    // Milliseconds between samples, for the span caption. 0 draws none
+    // -- a width that means nothing is better left unlabelled than
+    // labelled wrongly.
+    int sample_ms;
+    // Which column the pointer is over, counted from the OLDEST drawn,
+    // or -1. The widget marks it; the APP formats what it says, because
+    // the app owns the units.
+    int hover;
+
     // UUI_COLOR_UNSET lets the theme answer at DRAW time -- see utheme.h
     // on why a widget must not resolve its colours when it is built.
-    uint32_t bg, grid, line, fill;
+    uint32_t bg, grid, line, fill, part;
 };
 
 void uui_chart_init(struct uui_chart *c, const char *label);
 
-// Append one reading, 0..100. Out-of-range values are CLAMPED rather
-// than refused: a caller computing a percentage from two deltas can
-// legitimately land just outside on a rounding edge, and a dropped
-// sample would leave a hole in a series that is read as a shape.
-void uui_chart_push(struct uui_chart *c, int percent);
+// 100 for a percentage, 0 to autoscale against the largest sample in
+// view. Anything else fixes the top of the scale.
+void uui_chart_set_scale(struct uui_chart *c, uint32_t max);
 
-// The reading to print top-right, or NULL for none. The string is NOT
-// copied -- point it at storage that outlives the frame.
+// How far apart samples are, so the span caption can say what the width
+// covers. 0 (the default) draws no caption.
+void uui_chart_set_interval(struct uui_chart *c, int ms);
+
+void uui_chart_push(struct uui_chart *c, uint32_t value);
+
+// One sample where `part` is a component of `total` -- kernel time
+// within CPU time. `part` is clamped to `total`: a component larger
+// than its whole is a caller bug, and drawing it would paint outside
+// the series it belongs to.
+void uui_chart_push_split(struct uui_chart *c, uint32_t total, uint32_t part);
+
+// The reading to print top-right, or NULL. NOT copied -- point it at
+// storage that outlives the frame.
 void uui_chart_set_value(struct uui_chart *c, const char *value);
 
-// The most recent sample, or 0 when there is none. For a caller that
-// wants to print the number beside the trace.
-int uui_chart_last(const struct uui_chart *c);
+uint32_t uui_chart_last(const struct uui_chart *c);
+
+// Which sample the pointer is over, as an index into the drawn series
+// (0 = oldest drawn), or -1. With uui_chart_sample() this is what lets
+// an app print the hovered reading in its own units.
+int uui_chart_hover_index(const struct uui_chart *c);
+uint32_t uui_chart_sample(const struct uui_chart *c, int i);
+// How many samples are actually DRAWN -- min(count, width).
+int uui_chart_drawn(const struct uui_chart *c);
 
 void uui_chart_natural_size(const struct uui_chart *c, int *out_w, int *out_h);
 void uui_chart_set_geometry(struct uui_chart *c, int x, int y, int w, int h);

@@ -62,6 +62,10 @@
 #define ID_KILL    3
 #define ID_BUTTONS 4
 #define ID_TABS    5
+#define ID_CPU_CHART  6
+#define ID_MEM_CHART  7
+#define ID_DISK_CHART 8
+#define ID_NET_CHART  9
 
 // --- the Overview page -----------------------------------------------
 //
@@ -263,18 +267,78 @@ static struct uui_tab TABS[3] = { { "Overview", 0 }, { "Processes", 0 },
 // question a person opens it with. Both are fed from
 // refresh_overview(), which already computes the two percentages for
 // the rings -- so the tab costs no extra reading, only the samples.
-static struct uui_chart g_cpu_chart, g_mem_chart;
+static struct uui_chart g_cpu_chart, g_mem_chart, g_disk_chart, g_net_chart;
 // The readings the charts POINT AT -- uui_chart copies nothing, so these
 // must outlive every frame that draws them.
-static char g_cpu_reading[16], g_mem_reading[40];
-static struct uui_item   PERF_ITEMS[2];
+static char g_cpu_reading[24], g_mem_reading[40];
+static char g_disk_reading[24], g_net_reading[24];
+// One buffer: only one chart can be hovered at a time.
+static char g_hover[40];
+static struct uui_item   PERF_ITEMS[4];
 static struct uui_layout PERF_LAYOUT;
+static struct uui_scrollview PERF_SCROLL;
+
+// **THE REFRESH MUST NOT TALK OVER THE POINTER.** Every tick recomputes
+// the live readings, and setting them unconditionally wiped the hovered
+// sample's text a second after it appeared -- which reads as hover not
+// working at all, and is how it was found. A chart under the pointer
+// keeps what the hover put there until the pointer leaves.
+static void set_live_value(struct uui_chart *c, const char *text) {
+    if (uui_chart_hover_index(c) < 0) uui_chart_set_value(c, text);
+}
+
+// Cumulative counters from the previous sample. A RATE is a delta over
+// an interval, and these counters have been running since boot -- the
+// same two-samples-and-divide the CPU figure already uses.
+static unsigned long long g_prev_disk_bytes, g_prev_net_bytes;
+static int g_rate_have_prev;
+
+// The live readings, kept so hovering can replace them and un-hovering
+// can put them back without re-reading anything.
+static unsigned long long g_mem_used, g_mem_total;
 static struct uui_tabs g_tabs;
 
 static void select_page(struct uapp *a, int index);
 
 static void on_widget(struct uapp *a, int id, int reason) {
     (void)reason;
+
+    // **HOVERING A COLUMN REPLACES THE READING WITH THAT SAMPLE'S.**
+    // The widget marks the column and knows the number; only this file
+    // knows what the number MEANS, which is why the formatting is here
+    // and not in ui/uui_chart.c. Moving off restores the live value.
+    if (id == ID_CPU_CHART || id == ID_MEM_CHART ||
+        id == ID_DISK_CHART || id == ID_NET_CHART) {
+        struct uui_chart *c = id == ID_CPU_CHART  ? &g_cpu_chart
+                            : id == ID_MEM_CHART  ? &g_mem_chart
+                            : id == ID_DISK_CHART ? &g_disk_chart
+                                                  : &g_net_chart;
+        int at = uui_chart_hover_index(c);
+        int n = uui_chart_drawn(c);
+        if (at >= 0) {
+            // How long ago, counted back from the newest drawn sample.
+            int ago_s = (n - 1 - at) * REFRESH_MS / 1000;
+            uint32_t v = uui_chart_sample(c, at);
+            char h[16];
+            if (id == ID_CPU_CHART)
+                snprintf(g_hover, sizeof g_hover, "%u%%, %ds ago", v, ago_s);
+            else if (id == ID_MEM_CHART) {
+                human_size_iec(h, sizeof h, (unsigned long long)v << 10);
+                snprintf(g_hover, sizeof g_hover, "%s, %ds ago", h, ago_s);
+            } else {
+                human_size_iec(h, sizeof h, v);
+                snprintf(g_hover, sizeof g_hover, "%s/s, %ds ago", h, ago_s);
+            }
+            uui_chart_set_value(c, g_hover);
+        } else {
+            uui_chart_set_value(c, id == ID_CPU_CHART  ? g_cpu_reading
+                                 : id == ID_MEM_CHART  ? g_mem_reading
+                                 : id == ID_DISK_CHART ? g_disk_reading
+                                                       : g_net_reading);
+        }
+        uapp_redraw(a);
+        return;
+    }
 
     if (id == ID_TABS) {
         select_page(a, g_tabs.selected);
@@ -408,8 +472,9 @@ static void select_page(struct uapp *a, int index) {
         ITEMS[1].ops = &uui_scrollview_ops;
         ITEMS[1].widget = (void *)&OV_SCROLL;
     } else if (index == 2) {
-        ITEMS[1].ops = &uui_layout_ops;
-        ITEMS[1].widget = (void *)&PERF_LAYOUT;
+        ITEMS[1].ops = &uui_scrollview_ops;
+        ITEMS[1].widget = (void *)&PERF_SCROLL;
+        uui_scrollview_content_changed(&PERF_SCROLL);
     } else {
         ITEMS[1].ops = &uui_layout_ops;
         ITEMS[1].widget = (void *)&PROC_LAYOUT;
@@ -461,6 +526,58 @@ static void ov_set(int i, const char *caption, int per_mille,
 // this needs to be, and because a failed query here must leave the
 // PROCESS list working -- an Overview that cannot read a disk is a
 // missing tile, not a broken app.
+// Disk and network are COUNTERS, not levels: the interesting number is
+// how fast they moved, which is a delta over the refresh interval. Both
+// charts autoscale (uui_chart_set_scale(0)), because bytes per second
+// has no natural 100 -- the shape is relative to the busiest moment in
+// view, which is what GNOME's network graph does.
+static void refresh_rates(void) {
+    unsigned long long disk_bytes = 0, net_bytes = 0;
+
+    struct query_blkstat bs;
+    for (int i = 0; ; i++) {
+        int got = sys_query_record(QUERY_BLKSTAT, (unsigned)i, &bs, sizeof bs);
+        if (got < (int)sizeof bs) break;
+        // Reads and writes only: a flush moves no data and a trim frees
+        // rather than transfers, so counting either would report
+        // throughput that never crossed the bus.
+        if (!strcmp(bs.name, "read") || !strcmp(bs.name, "write"))
+            disk_bytes += bs.sectors * 512ULL;
+    }
+
+    struct query_netdev nd;
+    for (int i = 0; ; i++) {
+        int got = sys_query_record(QUERY_NETDEV, (unsigned)i, &nd, sizeof nd);
+        if (got < (int)sizeof nd) break;
+        net_bytes += nd.rx_bytes + nd.tx_bytes;
+    }
+
+    if (g_rate_have_prev) {
+        unsigned long long dd = disk_bytes > g_prev_disk_bytes
+                              ? disk_bytes - g_prev_disk_bytes : 0;
+        unsigned long long dn = net_bytes > g_prev_net_bytes
+                              ? net_bytes - g_prev_net_bytes : 0;
+        // Per SECOND, from the refresh interval rather than a measured
+        // elapsed time: the tick is what paces this, and a rate divided
+        // by a clock the sample was not taken against is a worse lie
+        // than one divided by the cadence it was.
+        unsigned long long dps = dd * 1000ULL / REFRESH_MS;
+        unsigned long long nps = dn * 1000ULL / REFRESH_MS;
+        uui_chart_push(&g_disk_chart, (uint32_t)dps);
+        uui_chart_push(&g_net_chart, (uint32_t)nps);
+        char h[16];
+        human_size_iec(h, sizeof h, dps);
+        snprintf(g_disk_reading, sizeof g_disk_reading, "%s/s", h);
+        human_size_iec(h, sizeof h, nps);
+        snprintf(g_net_reading, sizeof g_net_reading, "%s/s", h);
+        set_live_value(&g_disk_chart, g_disk_reading);
+        set_live_value(&g_net_chart, g_net_reading);
+    }
+    g_prev_disk_bytes = disk_bytes;
+    g_prev_net_bytes = net_bytes;
+    g_rate_have_prev = 1;
+}
+
 static void refresh_overview(void) {
     char val[16], unit[24], det[28];
     int n = 0;
@@ -480,11 +597,12 @@ static void refresh_overview(void) {
         g_cpu_prev_kernel = cl.kernel_ns;
         g_cpu_have_prev = 1;
     }
-    uui_chart_push(&g_cpu_chart, pct);
+    refresh_rates();
+    uui_chart_push(&g_cpu_chart, (uint32_t)pct);
     // THE CHART'S OWN READING, in storage that outlives the frame: the
     // widget keeps the pointer rather than copying (ui/uui_chart.h).
     snprintf(g_cpu_reading, sizeof g_cpu_reading, "%d%%", pct);
-    uui_chart_set_value(&g_cpu_chart, g_cpu_reading);
+    set_live_value(&g_cpu_chart, g_cpu_reading);
     snprintf(val, sizeof val, "%d%%", pct);
     // No unit under the number: a percentage that moves says "busy" on
     // its own, and a static word inside the hole is one more thing to
@@ -499,7 +617,6 @@ static void refresh_overview(void) {
         unsigned long long freeb = mi.frame_free * mi.frame_bytes;
         unsigned long long used  = total > freeb ? total - freeb : 0;
         int per = total ? (int)((used * 1000ULL) / total) : 0;
-        uui_chart_push(&g_mem_chart, per / 10);
         // USED AGAINST TOTAL, in whatever unit each deserves --
         // human_size_iec() picks MiB or GiB per value, so a machine with
         // 512 MiB and one with 8 GiB both read naturally and neither is
@@ -508,7 +625,13 @@ static void refresh_overview(void) {
         human_size_iec(used_h, sizeof used_h, used);
         human_size_iec(total_h, sizeof total_h, total);
         snprintf(g_mem_reading, sizeof g_mem_reading, "%s of %s", used_h, total_h);
-        uui_chart_set_value(&g_mem_chart, g_mem_reading);
+        set_live_value(&g_mem_chart, g_mem_reading);
+        g_mem_used = used;
+        g_mem_total = total;
+        // KiB, not bytes: a uint32_t sample caps at 4 GiB and this
+        // machine is not the biggest one this will run on.
+        uui_chart_set_scale(&g_mem_chart, (uint32_t)(total >> 10));
+        uui_chart_push(&g_mem_chart, (uint32_t)(used >> 10));
         snprintf(val, sizeof val, "%d%%", per / 10);
         human_size_iec(unit, sizeof unit, used);
         char t[16];
@@ -708,14 +831,37 @@ int main(void) {
     // `struct uapp *` the re-layout needs.
     uui_chart_init(&g_cpu_chart, "CPU");
     uui_chart_init(&g_mem_chart, "Memory");
+    uui_chart_init(&g_disk_chart, "Disk");
+    uui_chart_init(&g_net_chart, "Network");
+    // A percentage has a fixed top; a RATE does not, so it autoscales.
+    uui_chart_set_scale(&g_disk_chart, 0);
+    uui_chart_set_scale(&g_net_chart, 0);
+    // What the width covers, so the axis means something.
+    uui_chart_set_interval(&g_cpu_chart, REFRESH_MS);
+    uui_chart_set_interval(&g_mem_chart, REFRESH_MS);
+    uui_chart_set_interval(&g_disk_chart, REFRESH_MS);
+    uui_chart_set_interval(&g_net_chart, REFRESH_MS);
     PERF_ITEMS[0] = (struct uui_item){ .ops = &uui_chart_ops, .widget = &g_cpu_chart,
-                                        .name = "cpuchart",
-                                        .flags = UUI_FILL_W | UUI_FILL_H };
+                                        .id = ID_CPU_CHART, .name = "cpuchart",
+                                        .flags = UUI_FILL_W };
     PERF_ITEMS[1] = (struct uui_item){ .ops = &uui_chart_ops, .widget = &g_mem_chart,
-                                        .name = "memchart",
-                                        .flags = UUI_FILL_W | UUI_FILL_H };
+                                        .id = ID_MEM_CHART, .name = "memchart",
+                                        .flags = UUI_FILL_W };
+    PERF_ITEMS[2] = (struct uui_item){ .ops = &uui_chart_ops, .widget = &g_disk_chart,
+                                        .id = ID_DISK_CHART, .name = "diskchart",
+                                        .flags = UUI_FILL_W };
+    PERF_ITEMS[3] = (struct uui_item){ .ops = &uui_chart_ops, .widget = &g_net_chart,
+                                        .id = ID_NET_CHART, .name = "netchart",
+                                        .flags = UUI_FILL_W };
     PERF_LAYOUT = (struct uui_layout){ .dir = UUI_COLUMN, .items = PERF_ITEMS,
-                                        .count = 2 };
+                                        .count = 4 };
+    // **FOUR CHARTS AT NATURAL HEIGHT OVERFLOW THIS WINDOW**, and
+    // uui_layout does not shrink children -- it places the last ones
+    // past the bottom edge with nothing to say they are gone
+    // (docs/conventions/gui.md). Sharing the height instead squeezed
+    // every plot to about twenty pixels, which is a trace nobody can
+    // read. The page scrolls, as the Overview's already does.
+    uui_scrollview_init(&PERF_SCROLL, &PERF_LAYOUT);
 
     uui_tabs_init(&g_tabs, TABS, 3, NULL);
 

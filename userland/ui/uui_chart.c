@@ -1,7 +1,9 @@
 // chart -- see ui/uui_chart.h for why this exists beside uui_meter.
 #include "ui/uui_chart.h"
 #include "ui/utheme.h"
+#include "ui/uui_primitives.h"   // uui_hit -- the pointer is inside the plot
 #include "geom.h"   // enum geom_aa -- a line is drawn ALIASED here
+#include <stdio.h>
 #include <stddef.h>
 
 void uui_chart_init(struct uui_chart *c, const char *label) {
@@ -10,44 +12,89 @@ void uui_chart_init(struct uui_chart *c, const char *label) {
     c->value = NULL;
     c->count = 0;
     c->head = 0;
-    for (int i = 0; i < UUI_CHART_MAX; i++) c->samples[i] = 0;
-    c->bg = c->grid = c->line = c->fill = UUI_COLOR_UNSET;
+    c->has_parts = 0;
+    c->scale_max = 100;     // a percentage unless the caller says otherwise
+    c->sample_ms = 0;
+    c->hover = -1;
+    for (int i = 0; i < UUI_CHART_MAX; i++) c->samples[i] = c->parts[i] = 0;
+    c->bg = c->grid = c->line = c->fill = c->part = UUI_COLOR_UNSET;
 }
 
-void uui_chart_push(struct uui_chart *c, int percent) {
-    if (percent < 0) percent = 0;
-    if (percent > 100) percent = 100;
-    c->samples[c->head] = (uint8_t)percent;
+void uui_chart_set_scale(struct uui_chart *c, uint32_t max) { c->scale_max = max; }
+void uui_chart_set_interval(struct uui_chart *c, int ms)    { c->sample_ms = ms; }
+void uui_chart_set_value(struct uui_chart *c, const char *value) { c->value = value; }
+
+void uui_chart_push_split(struct uui_chart *c, uint32_t total, uint32_t part) {
+    if (part > total) part = total;
+    if (part) c->has_parts = 1;   // a component cannot exceed its whole
+    c->samples[c->head] = total;
+    c->parts[c->head] = part;
     c->head = (c->head + 1) % UUI_CHART_MAX;
     if (c->count < UUI_CHART_MAX) c->count++;
 }
 
-void uui_chart_set_value(struct uui_chart *c, const char *value) {
-    c->value = value;
+void uui_chart_push(struct uui_chart *c, uint32_t value) {
+    uui_chart_push_split(c, value, 0);
 }
 
-int uui_chart_last(const struct uui_chart *c) {
+uint32_t uui_chart_last(const struct uui_chart *c) {
     if (!c->count) return 0;
     return c->samples[(c->head + UUI_CHART_MAX - 1) % UUI_CHART_MAX];
 }
 
-// The i'th sample counting back from the newest, oldest-first order.
-static int sample_at(const struct uui_chart *c, int i) {
-    int first = (c->head + UUI_CHART_MAX - c->count) % UUI_CHART_MAX;
-    return c->samples[(first + i) % UUI_CHART_MAX];
+int uui_chart_drawn(const struct uui_chart *c) {
+    int n = c->count < c->w ? c->count : c->w;
+    return n < 0 ? 0 : n;
+}
+
+// The i'th DRAWN sample, oldest first.
+static int drawn_slot(const struct uui_chart *c, int i) {
+    int n = uui_chart_drawn(c);
+    int first = (c->head + UUI_CHART_MAX - n) % UUI_CHART_MAX;
+    return (first + i) % UUI_CHART_MAX;
+}
+
+uint32_t uui_chart_sample(const struct uui_chart *c, int i) {
+    if (i < 0 || i >= uui_chart_drawn(c)) return 0;
+    return c->samples[drawn_slot(c, i)];
+}
+
+int uui_chart_hover_index(const struct uui_chart *c) { return c->hover; }
+
+// The top of the scale: the caller's, or the largest sample in view.
+// Never zero, so the division below is safe and an all-zero series
+// draws a flat baseline rather than a full block.
+static uint32_t scale_of(const struct uui_chart *c) {
+    if (c->scale_max) return c->scale_max;
+    uint32_t peak = 1;
+    int n = uui_chart_drawn(c);
+    for (int i = 0; i < n; i++) {
+        uint32_t v = c->samples[drawn_slot(c, i)];
+        if (v > peak) peak = v;
+    }
+    return peak;
 }
 
 void uui_chart_natural_size(const struct uui_chart *c, int *out_w, int *out_h) {
     (void)c;
     // FONT-DERIVED, never pixels (docs/gui-guidelines.md): wide enough
-    // that the trace is a shape rather than a spike, tall enough that a
-    // percentage has somewhere to move.
+    // that the trace is a shape rather than a spike, tall enough for a
+    // caption above it and an axis below.
     if (out_w) *out_w = ugfx_char_advance('n') * 34;
-    if (out_h) *out_h = ugfx_char_h() * 7;
+    if (out_h) *out_h = ugfx_char_h() * 8;
 }
 
 void uui_chart_set_geometry(struct uui_chart *c, int x, int y, int w, int h) {
     c->x = x; c->y = y; c->w = w; c->h = h;
+}
+
+// "3 min", "45 s" -- the span the DRAWN samples cover, which is what the
+// width actually shows rather than what the ring could hold.
+static void span_text(const struct uui_chart *c, char *out, int cap) {
+    long long ms = (long long)uui_chart_drawn(c) * c->sample_ms;
+    long long sec = ms / 1000;
+    if (sec >= 120) snprintf(out, (unsigned)cap, "%lld min", sec / 60);
+    else            snprintf(out, (unsigned)cap, "%lld s", sec);
 }
 
 void uui_chart_draw(struct ugfx_surface *s, const struct uui_chart *c) {
@@ -55,59 +102,85 @@ void uui_chart_draw(struct ugfx_surface *s, const struct uui_chart *c) {
     uint32_t bg   = UUI_COLOR(c->bg, UTHEME_WHITE);
     uint32_t grid = UUI_COLOR(c->grid, UTHEME_SEPARATOR);
     uint32_t line = UUI_COLOR(c->line, UTHEME_ACCENT);
+    uint32_t part = UUI_COLOR(c->part, UTHEME_TEXT);
     uint32_t edge = UUI_COLOR(c->grid, UTHEME_OUTLINE);
+    uint32_t ink  = UUI_COLOR(c->fill, UTHEME_TEXT);
+
+    int ch = ugfx_char_h();
+    // The plot sits below the caption row and above the axis row, so
+    // neither can be painted over by a tall column.
+    int top = c->y + ch + 2;
+    int bot = c->y + c->h - 1 - (c->sample_ms ? ch + 1 : 0);
+    int ph = bot - top;
+    if (ph < 4) { top = c->y; bot = c->y + c->h - 1; ph = bot - top; }
 
     ugfx_fill_rect(s, c->x, c->y, c->w, c->h, bg);
-
-    // Quarters, so the eye has something to read a height against. The
-    // 0 and 100 lines are the border itself and are not drawn twice.
     for (int q = 1; q < 4; q++) {
-        int gy = c->y + c->h * q / 4;
+        int gy = top + ph * q / 4;
         ugfx_draw_line(s, c->x, gy, c->x + c->w - 1, gy, grid, GEOM_ALIASED);
     }
 
     // **ONE COLUMN PER SAMPLE, RIGHT-ALIGNED.** Scaling the series to
     // the width would make the same history a different shape in a
-    // resized window; instead the newest UUI_CHART_MAX samples that fit
-    // are drawn and the rest is empty, which is what every system
-    // monitor does while its history fills.
-    int n = c->count < c->w ? c->count : c->w;
+    // resized window; the newest samples that fit are drawn and the
+    // rest is empty, which is what every monitor does while filling.
+    uint32_t top_scale = scale_of(c);
+    int n = uui_chart_drawn(c);
     for (int i = 0; i < n; i++) {
-        int v = sample_at(c, c->count - n + i);
+        int slot = drawn_slot(c, i);
+        uint32_t v = c->samples[slot];
+        if (v > top_scale) v = top_scale;
         int x = c->x + c->w - n + i;
-        int top = c->y + c->h - 1 - (c->h - 1) * v / 100;
-        // Filled to the baseline rather than a bare line: an area reads
-        // as a quantity at a glance, and a one-pixel trace on a busy
-        // background does not.
-        ugfx_draw_line(s, x, top, x, c->y + c->h - 1, line, GEOM_ALIASED);
+        int y1 = bot - (int)((uint64_t)ph * v / top_scale);
+        ugfx_draw_line(s, x, y1, x, bot, line, GEOM_ALIASED);
+        if (c->has_parts) {
+            uint32_t p = c->parts[slot];
+            if (p > top_scale) p = top_scale;
+            int y2 = bot - (int)((uint64_t)ph * p / top_scale);
+            // OVER the total, from the baseline: the component reads as
+            // a share of the column it sits inside.
+            if (y2 < bot) ugfx_draw_line(s, x, y2, x, bot, part, GEOM_ALIASED);
+        }
     }
 
-    // The frame last, so the area cannot paint over it.
+    // The hovered column, marked full height so it is findable even
+    // where the trace is flat.
+    if (c->hover >= 0 && c->hover < n) {
+        int hx = c->x + c->w - n + c->hover;
+        ugfx_draw_line(s, hx, top, hx, bot, edge, GEOM_ALIASED);
+    }
+
     ugfx_draw_line(s, c->x, c->y, c->x + c->w - 1, c->y, edge, GEOM_ALIASED);
     ugfx_draw_line(s, c->x, c->y + c->h - 1, c->x + c->w - 1, c->y + c->h - 1, edge, GEOM_ALIASED);
     ugfx_draw_line(s, c->x, c->y, c->x, c->y + c->h - 1, edge, GEOM_ALIASED);
     ugfx_draw_line(s, c->x + c->w - 1, c->y, c->x + c->w - 1, c->y + c->h - 1, edge, GEOM_ALIASED);
 
     // The label left and the reading right, both CLIPPED -- caller text
-    // in a fixed box, which is the bug gfx_draw_string()'s unclipped
-    // twin has shipped twice.
-    uint32_t ink = UUI_COLOR(c->fill, UTHEME_TEXT);
+    // in a fixed box, the bug gfx_draw_string()'s unclipped twin has
+    // shipped twice.
     int label_w = c->label ? ugfx_text_width(c->label) : 0;
     if (c->label)
-        ugfx_draw_string_clipped(s, c->x + 4, c->y + 3, c->w - 8, c->label, ink, bg);
+        ugfx_draw_string_clipped(s, c->x + 4, c->y + 2, c->w - 8, c->label, ink, bg);
     if (c->value) {
-        // MEASURED, never a character count times a width: this font is
-        // proportional (docs/conventions/gui.md), so counting would put
-        // the reading in the wrong place by a few pixels per character.
+        // MEASURED, never a character count times a width: the face is
+        // proportional (docs/conventions/gui.md).
         int vw = ugfx_text_width(c->value);
         int vx = c->x + c->w - 4 - vw;
-        // Never over the label: the reading loses, because the label
-        // says WHICH graph this is and a nameless one is worse than an
-        // unlabelled number.
         int floor_x = c->x + 4 + label_w + ugfx_char_advance('n');
         int room = c->x + c->w - 4 - floor_x;
         if (vx < floor_x) vx = floor_x;
-        if (room > 0) ugfx_draw_string_clipped(s, vx, c->y + 3, room, c->value, ink, bg);
+        // The reading loses a fight for space: a nameless graph is worse
+        // than an unlabelled number.
+        if (room > 0) ugfx_draw_string_clipped(s, vx, c->y + 2, room, c->value, ink, bg);
+    }
+
+    // The axis: how far back the left edge is. "now" is not drawn --
+    // the right edge being the present is the one thing every reader of
+    // a time series already assumes.
+    if (c->sample_ms) {
+        char span[16];
+        span_text(c, span, sizeof span);
+        ugfx_draw_string_clipped(s, c->x + 4, bot + 1, c->w - 8, span, grid, bg);
     }
 }
 
@@ -129,13 +202,33 @@ static void chart_bounds_op(const void *w, int *x, int *y, int *width, int *heig
     if (width) *width = c->w;
     if (height) *height = c->h;
 }
+static int chart_hit_op(const void *w, int cx, int cy) {
+    const struct uui_chart *c = (const struct uui_chart *)w;
+    return uui_hit(c->x, c->y, c->w, c->h, cx, cy);
+}
+// A MOTION, NOT A PRESS: nothing is chosen by pointing at a graph, so
+// this widget takes no press and needs no release (check_widget_ops.py's
+// rule). Returns 1 only when the column CHANGED, so a pointer resting
+// still does not ask for a repaint every frame.
+static int chart_motion_op(void *w, int cx, int cy, unsigned buttons) {
+    (void)buttons;
+    struct uui_chart *c = (struct uui_chart *)w;
+    int was = c->hover;
+    if (!uui_hit(c->x, c->y, c->w, c->h, cx, cy)) {
+        c->hover = -1;
+    } else {
+        int n = uui_chart_drawn(c);
+        int i = cx - (c->x + c->w - n);
+        c->hover = (n > 0 && i >= 0 && i < n) ? i : -1;
+    }
+    return c->hover != was;
+}
 
-// No press, key or focus: a chart is a READING, like uui_meter beside
-// it. check_widget_ops.py's rule is that a table with `draw` owes
-// natural_size and set_geometry, and one with set_geometry owes bounds.
 const struct uui_widget_ops uui_chart_ops = {
     .bounds = chart_bounds_op,
     .draw = chart_draw_op,
     .natural_size = chart_natural_op,
     .set_geometry = chart_geometry_op,
+    .hit = chart_hit_op,
+    .motion = chart_motion_op,
 };
