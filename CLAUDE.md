@@ -1791,6 +1791,12 @@ detail there, and keep the pointer here to a line. What each file is:
   point is that those are one problem, and that building signal delivery
   alone yields a working `kill -TERM` and a `Ctrl-C` that still does
   nothing.
+- **`docs/blocking-design.md`** -- blocking INSIDE kernel code: why
+  `block_common()` cannot do it (it abandons the kernel stack and
+  re-runs the syscall), what already exists that makes it tractable
+  (per-process kernel stacks, `process_context_save/restore`), and the
+  four stages from the primitive to flipping the syscall gate. **Read
+  it before touching `switch_to()`, `block_common()` or `FS_OP()`.**
 - **`docs/smp-design.md`** -- more than one core: ACPI/MADT, the Local
   APIC, bringing up application processors, a real spinlock and ONE
   kernel lock first (Linux 2.0's move), then splitting it in measured
