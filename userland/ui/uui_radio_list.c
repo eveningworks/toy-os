@@ -67,7 +67,13 @@ void uui_radio_list_set_geometry(struct uui_radio_list *l, int x, int y) {
 
 void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l) {
     int selected = l->selected, hovered = l->hovered;
-    uint32_t bg = l->bg, fg = l->fg;
+    // RESOLVED HERE, NOT WHEN THE WIDGET WAS BUILT -- the rule
+    // docs/conventions/gui.md states for every widget. Without it
+    // UUI_COLOR_UNSET reaches uui_state_bg() as the opaque black it
+    // literally is, and the hovered and selected rows draw as dark grey
+    // bars on a near-white panel.
+    uint32_t bg = UUI_COLOR(l->bg, UTHEME_PANEL_BG);
+    uint32_t fg = UUI_COLOR(l->fg, UTHEME_TEXT);
     // Dimmed, and with no hover or focus ring: those say "this responds
     // to you", which is the one thing a disabled control must not say.
     if (l->disabled) {

@@ -135,6 +135,7 @@ TOOLS = [
     ("compdeath", "compositor_death_test.py", "the compositor death path (R7)"),
     ("cursor", "cursor_theme_test.py", "cursor themes: shapes as data files, size, fallback"),
     ("saver", "screensaver_test.py", "the idle clock, and the savers it spawns"),
+    ("shot", "screenshot_test.py", "screen capture: the command, the app, the region band"),
     ("crash", "crashtest_test.py", "fault paths: ring-3 crashes, and the gate on kernel panics"),
     ("entries", "desktop_entries_test.py", "ShowIn= and live .desktop reload"),
     ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),

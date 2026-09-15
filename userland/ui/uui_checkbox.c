@@ -50,8 +50,12 @@ void uui_checkbox_init(struct uui_checkbox *cb, int x, int y, int size,
 }
 
 void uui_checkbox_draw(struct ugfx_surface *s, const struct uui_checkbox *cb) {
-    uint32_t bg = cb->bg;
-    uint32_t fg = cb->disabled ? uui_state_bg(cb->fg, UUI_STATE_DISABLED) : cb->fg;
+    // See uui_radio_list.c: UUI_COLOR_UNSET means "the theme's", and a
+    // widget that passes it straight to uui_state_bg() draws black.
+    uint32_t bg = UUI_COLOR(cb->bg, UTHEME_PANEL_BG);
+    uint32_t base_fg = UUI_COLOR(cb->fg, UTHEME_TEXT);
+    uint32_t fg = cb->disabled ? uui_state_bg(base_fg, UUI_STATE_DISABLED)
+                               : base_fg;
 
     if (cb->hovered && cb->hover_effect && !cb->disabled) {
         // The WHOLE clickable area -- the hit test is box+label, and a

@@ -94,6 +94,10 @@ void rb_begin(struct rubberband *rb, int x, int y, enum rb_mode mode);
 // accumulating -- so pulling the band back off an item deselects it
 // again, which is what a real one does and what an accumulating
 // implementation gets wrong.
+//
+// `ops` MAY BE NULL, and that means a band that selects nothing: the
+// rectangle still tracks and rb_rect() still answers, which is all a
+// caller dragging over a picture rather than over a list needs.
 void rb_motion(struct rubberband *rb, int x, int y,
                 const struct rb_ops *ops, void *ctx);
 

@@ -608,7 +608,8 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/font_slots.o \
                $(BUILD)/userland/shared/klineedit_cases.o \
                $(BUILD)/userland/shared/etc_config_cases.o \
-               $(BUILD)/userland/shared/tmppath.o
+               $(BUILD)/userland/shared/tmppath.o \
+               $(BUILD)/userland/shared/kcrc.o
 LIBUAPP      = $(BUILD)/userland/libuapp.a
 
 # libc.a -- the C LIBRARY, a second archive beside the toolkit.
@@ -712,7 +713,7 @@ EXTRA_OBJS_toywm      = wm/wm wm/wm_rawin wm/wm_render wm/wm_input wm/wm_client 
                         wm/gui_apps wm/wm_log wm/wm_fs wm/wm_conf \
                         wm/wm_geometry \
                         wm/wm_hwcursor \
-                        wm/wm_dnd wm/wm_scanout wm/wm_idle
+                        wm/wm_dnd wm/wm_scanout wm/wm_idle wm/wm_screenshot
 # icon_cache is NOT in that list any more: it moved to userland/lib/ when
 # the toolkit's sidebar needed icons too, so it comes from libuapp.a like
 # every other shared piece. The archive is linked into every userland ELF

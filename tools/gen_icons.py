@@ -11,10 +11,13 @@ WHY QOI AND NOT JPEG. An icon needs an ALPHA channel (it sits on a
 wallpaper) and lossless edges (at 48px an icon is almost entirely edge,
 which is what a DCT rings around). See userland/lib/uimg_qoi.c.
 
-**PILLOW ENCODES THEM.** Nothing in this repo writes a QOI file, which
-is what keeps userland/lib/uimg_qoi.c honest: the decoder is checked
-against files a foreign implementation produced, so a misread chunk type
-cannot round-trip through a matching bug of our own.
+**PILLOW ENCODES THEM**, and that is what keeps userland/lib/uimg_qoi.c's
+DECODER honest: these files come from a foreign implementation, so a
+misread chunk type cannot round-trip through a matching bug of our own.
+(The repo does write QOI now -- the screenshot tool does -- and its
+encoder is kept honest the other way round, by Pillow decoding what it
+wrote: tools/uimg_encode_hostcheck.py. Neither side is ever checked
+against the other.)
 
 ONE MASTER SIZE, scaled at runtime. 64x64 is drawn here and the window
 manager's icon cache resamples to whatever a site needs (48 on the
@@ -165,6 +168,18 @@ def icon_logview():
     for i, (y, w) in enumerate(((16, 30), (24, 24), (32, 32), (40, 20), (48, 28))):
         colour = (250, 190, 90) if i == 3 else WHITE
         d.rectangle([14, y, 14 + w, y + 4], fill=colour)
+    return im
+
+
+def icon_screenshot():
+    # A CAMERA BODY WITH A LENS, which is what a screenshot icon is
+    # everywhere -- the alternative, a dashed rectangle "selection",
+    # reads as a crop tool and is invisible at 20px once the dashes go.
+    im, d = tile((70, 110, 160))
+    d.rectangle([22, 15, 34, 21], fill=WHITE)              # the viewfinder hump
+    d.rounded_rectangle([12, 20, 52, 48], radius=5, fill=WHITE)
+    d.ellipse([24, 26, 40, 42], fill=(70, 110, 160, 255))
+    d.ellipse([28, 30, 36, 38], fill=WHITE)
     return im
 
 
@@ -771,6 +786,7 @@ ICONS = {
     "about": icon_about,
     "help": icon_help,
     "logview": icon_logview,
+    "screenshot": icon_screenshot,
     "shapes": icon_shapes,
     "fontdemo": icon_fontdemo,
     "uidemo": icon_uidemo,

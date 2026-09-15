@@ -6170,3 +6170,23 @@ sparse holes that must still read as zeros.
 **After each fix:** run the filesystem suite against TFS3 v1 and v2,
 exercise both strict and batched journal modes
 (`storage.sync`), and `fsck` a disposable image after a remount.
+
+
+## A PNG DECODER, which needs inflate
+
+`userland/lib/uimg_png.c` writes PNG and its codec row leaves `decode`
+NULL, so `uimg_decode()` answers `-ENOTSUP` with a sentence saying this
+build writes the format and cannot read it. That is honest and it is
+still a gap: a screenshot saved as `.png` cannot be opened by the Image
+Viewer that shipped with it.
+
+What it needs is inflate -- fixed and dynamic Huffman, a 32 KiB window --
+which is roughly the size of the deflate already written here and wants
+its own testing pass against Python's `zlib` rather than arriving as a
+prerequisite of something else. That is the same argument `uimg_qoi.c`'s
+header made for picking QOI over PNG for icons in the first place.
+
+Once it exists, the decoder side is the ordinary PNG chunk walk plus the
+five unfilters, all of which `tools/uimg_encode_hostcheck.py` already
+implements in Python as its second oracle -- so the reference to check
+against is written.

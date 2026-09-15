@@ -191,9 +191,124 @@ static int qoi_decode(const uint8_t *d, size_t n, struct uimg *out) {
     return 0;
 }
 
+
+
+// --- encoding ---------------------------------------------------------
+//
+// The decoder's own rules run backwards, and the ORDER of the tests is
+// the format rather than an optimisation: a run beats the index, the
+// index beats a delta, and a delta beats a literal. Pick them in any
+// other order and the file is still valid and simply bigger.
+//
+// The one asymmetry worth knowing: a pixel is written into the index by
+// BOTH sides for every chunk except a run, so an encoder that updates
+// the table on an index hit as well produces a file that decodes to a
+// different picture. It is the same hash either way (qoi_hash), which
+// is what makes the round trip in /tests/uimg_test exact.
+static uint8_t *qoi_write_header(uint8_t *p, int w, int h, int channels) {
+    *p++ = 'q'; *p++ = 'o'; *p++ = 'i'; *p++ = 'f';
+    *p++ = (uint8_t)(w >> 24); *p++ = (uint8_t)(w >> 16);
+    *p++ = (uint8_t)(w >> 8);  *p++ = (uint8_t)w;
+    *p++ = (uint8_t)(h >> 24); *p++ = (uint8_t)(h >> 16);
+    *p++ = (uint8_t)(h >> 8);  *p++ = (uint8_t)h;
+    *p++ = (uint8_t)channels;
+    *p++ = 0; // sRGB with a linear alpha channel
+    return p;
+}
+
+static int qoi_encode(const struct uimg *im, uint8_t **out, size_t *out_len) {
+    if (!im || !im->px || im->w <= 0 || im->h <= 0)
+        QFAIL(-EINVAL, "nothing to encode");
+    if (im->w > QOI_MAX_DIM || im->h > QOI_MAX_DIM ||
+        (uint64_t)im->w * im->h > QOI_MAX_PIXELS)
+        QFAIL(-EINVAL, "larger than this encoder will write");
+
+    int channels = im->has_alpha ? 4 : 3;
+    long total = (long)im->w * im->h;
+    // Worst case is one RGBA chunk per pixel; nothing here can exceed it.
+    size_t cap = QOI_HEADER_LEN + (size_t)total * 5 + QOI_PADDING_LEN;
+    uint8_t *buf = malloc(cap);
+    if (!buf) QFAIL(-ENOMEM, "not enough memory to encode the image");
+
+    uint8_t *p = qoi_write_header(buf, im->w, im->h, channels);
+
+    struct qoi_px index[64];
+    memset(index, 0, sizeof index);
+    struct qoi_px prev = { 0, 0, 0, 255 };
+    int run = 0;
+
+    for (long i = 0; i < total; i++) {
+        uint32_t v = im->px[i];
+        struct qoi_px cur;
+        cur.r = (uint8_t)(v >> 16);
+        cur.g = (uint8_t)(v >> 8);
+        cur.b = (uint8_t)v;
+        // A 3-channel file has no alpha to carry, so the source's top
+        // byte must not reach the chunk chooser -- an opaque image whose
+        // pixels happen to hold 0x00 there would otherwise emit RGBA
+        // chunks the header says are not coming.
+        cur.a = channels == 4 ? (uint8_t)(v >> 24) : 255;
+
+        if (cur.r == prev.r && cur.g == prev.g && cur.b == prev.b &&
+            cur.a == prev.a) {
+            run++;
+            if (run == 62 || i == total - 1) {
+                *p++ = (uint8_t)(QOI_OP_RUN | (run - 1));
+                run = 0;
+            }
+        } else {
+            if (run > 0) {
+                *p++ = (uint8_t)(QOI_OP_RUN | (run - 1));
+                run = 0;
+            }
+            int h = qoi_hash(cur);
+            if (index[h].r == cur.r && index[h].g == cur.g &&
+                index[h].b == cur.b && index[h].a == cur.a) {
+                *p++ = (uint8_t)(QOI_OP_INDEX | h);
+            } else {
+                index[h] = cur;
+                if (cur.a == prev.a) {
+                    // Signed 8-bit differences, which WRAP: the decoder
+                    // adds them back in 8 bits, so 250 -> 2 is +8 and
+                    // not -248.
+                    int8_t vr = (int8_t)(cur.r - prev.r);
+                    int8_t vg = (int8_t)(cur.g - prev.g);
+                    int8_t vb = (int8_t)(cur.b - prev.b);
+                    int8_t vg_r = (int8_t)(vr - vg);
+                    int8_t vg_b = (int8_t)(vb - vg);
+                    if (vr > -3 && vr < 2 && vg > -3 && vg < 2 &&
+                        vb > -3 && vb < 2) {
+                        *p++ = (uint8_t)(QOI_OP_DIFF | ((vr + 2) << 4) |
+                                          ((vg + 2) << 2) | (vb + 2));
+                    } else if (vg_r > -9 && vg_r < 8 && vg > -33 && vg < 32 &&
+                               vg_b > -9 && vg_b < 8) {
+                        *p++ = (uint8_t)(QOI_OP_LUMA | (vg + 32));
+                        *p++ = (uint8_t)(((vg_r + 8) << 4) | (vg_b + 8));
+                    } else {
+                        *p++ = QOI_OP_RGB;
+                        *p++ = cur.r; *p++ = cur.g; *p++ = cur.b;
+                    }
+                } else {
+                    *p++ = QOI_OP_RGBA;
+                    *p++ = cur.r; *p++ = cur.g; *p++ = cur.b; *p++ = cur.a;
+                }
+            }
+        }
+        prev = cur;
+    }
+
+    for (int i = 0; i < QOI_PADDING_LEN - 1; i++) *p++ = 0;
+    *p++ = 1;
+
+    *out = buf;
+    *out_len = (size_t)(p - buf);
+    return 0;
+}
+
 const struct uimg_codec uimg_codec_qoi = {
     .name   = "qoi",
     .probe  = qoi_probe,
     .info   = qoi_info,
     .decode = qoi_decode,
+    .encode = qoi_encode,
 };

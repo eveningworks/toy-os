@@ -54,6 +54,15 @@ this the obvious way), not from how much history it accumulated.
   the exact `shown[]` buffer it draws, which is why its caret, its
   selection and its hit test cannot drift apart.
 
+- **AND `UUI_COLOR_UNSET` IS A COLOUR UNTIL A WIDGET RESOLVES IT.** It
+  is `0xFF000000`, so a widget that passes `l->bg` straight to
+  `uui_state_bg()` draws opaque BLACK -- and not obviously: the hover
+  state of black is a dark grey bar that looks like a deliberate, if
+  ugly, choice. `uui_radio_list` and `uui_checkbox` both did this, and
+  it only surfaced when an app followed the convention below instead of
+  naming theme colours at build time the way System Settings does. If
+  you add a `bg`/`fg` pair to a widget, resolve it in `draw()`.
+
 - **A WIDGET RESOLVES ITS COLOURS WHEN IT DRAWS, NOT WHEN IT IS BUILT.**
   `UUI_COLOR_UNSET` in an init means "ask the theme", and
   `UUI_COLOR(v, UTHEME_ROLE)` at the draw is what asks. An init that
@@ -2011,6 +2020,93 @@ real scanout hardware does. Do not write a pixel assertion for one.
   refuses (progressive JPEG, CMYK, 12-bit), `-EINVAL` is a broken one,
   and `uimg_last_error()` carries the sentence. Formats are identified by
   PROBING magic bytes, not by extension.
+
+- **AN IMAGE IS ALSO ENCODED IN RING 3, AND THE TWO FORMATS ARE FOR
+  DIFFERENT THINGS.** `uimg_encode()` / `uimg_save()` are the other half
+  of the codec table, and a row now carries an `encode` slot beside its
+  `decode`. Two formats, and the pair is the point rather than variety:
+  **`qoi` is what toy-os can open again** (the Image Viewer decodes it,
+  it is lossless, and on flat UI content it beats PNG), and **`png` is
+  what LEAVES the machine** -- a host, a browser, a bug report. Nothing
+  here decodes PNG, so its row has `decode = NULL` and `uimg_decode()`
+  answers `-ENOTSUP` with a sentence saying this build writes the format
+  and cannot read it, which is a different answer from a corrupt file
+  and the reason that error code exists.
+
+  **THE FORMAT IS NAMED, NEVER GUESSED FROM THE PIXELS**; `uimg_save()`
+  takes it from the path's extension because that is what a person
+  typing a filename means, and an unknown extension is refused rather
+  than defaulted.
+
+  **AND THE ENCODERS ARE CHECKED BY A FOREIGN DECODER, NEVER BY OURS**
+  (`tools/uimg_encode_hostcheck.py`, Pillow plus Python's `zlib`). An
+  encoder tested against this repo's own decoder passes whenever the two
+  share a mistake, and the two mistakes an image encoder actually makes
+  are exactly that shape: a QOI index table updated on the wrong chunk,
+  or a Huffman code packed least-significant-bit-first. Both produce a
+  file that round-trips perfectly here and that nothing else can open.
+
+- **THE COMPOSITOR COPIES PIXELS AND THE CLIENT ENCODES THEM:
+  `WIN_REQ_SCREENSHOT`, `lib/ushot.h`.** A program asking for a capture
+  creates a shared-memory object, grants it, and names a rectangle; the
+  compositor copies its back buffer into it and answers with the rect it
+  actually took. Nothing about files, formats or paths crosses the
+  protocol -- which is what lets `/bin/screenshot` be an ordinary
+  program with no window, usable over `telnet` on a machine whose screen
+  nobody is watching, and is how `tools/remote.py screenshot` reaches
+  the bare-metal laptop at all.
+
+  This is `wlr-screencopy-v1`'s shape, and KWin's `ScreenShot2` (an fd
+  rather than a name). It is deliberately NOT X11's, where any client
+  reads the root window -- there is no permission model here to enforce,
+  but the SHAPE is what makes adding one later a change in one function
+  rather than in the protocol.
+
+  Four things that fail silently if forgotten. **The capture RENDERS A
+  FRAME FIRST**, because a request arrives mid-pump and anything that
+  changed this iteration is not in the back buffer yet. **The alpha byte
+  is forced OPAQUE**: a compositor surface is `0x00RRGGBB` and a
+  `struct uimg` means `0xAARRGGBB`, so a straight copy is an image every
+  alpha-aware consumer reads as fully transparent (it shipped as a black
+  preview). **A scanout lease is refused with `-EBUSY`** rather than
+  answered with the stale frame behind a fullscreen game. And
+  **`WIN_SHOT_NO_SELF` leaves the ASKING client's windows out** for that
+  one frame, so a screenshot tool is not in its own screenshot -- the
+  window visibly goes away and comes back, which is what GNOME
+  Screenshot and Spectacle look like.
+
+- **A PICKER ASKS WHAT IT WOULD GET BEFORE IT ASKS FOR IT:
+  `WIN_SHOT_WINDOW_AT` + `WIN_SHOT_PROBE`.** Pointing at a window to
+  capture it needs the window's rectangle on every pointer move, so
+  there is a mode that resolves a rect from a POINT and a flag that
+  answers it while copying nothing -- no render, no buffer, no capacity
+  check. Rendering a frame per mouse motion to find out what is under
+  the cursor would be a full repaint per motion.
+
+  **The choice is made over a FROZEN capture, not the live screen.** The
+  app takes the full-screen shot first, goes fullscreen showing it, and
+  crops in memory when you click -- so a window is captured as it was
+  when you pressed the button, not as it is when you finally reach it.
+  Spectacle and GNOME's shell both work this way.
+
+  **The outline is TWO rings, accent inside dark.** One ring is
+  invisible against a window whose own chrome is that colour, which on
+  this theme is every focused title bar -- the same reason
+  `ugfx_draw_string_shadowed()` exists. And the overlay REDRAWS ONLY
+  WHEN THE TARGET CHANGES: a repaint there is a full-screen blit, and
+  one per pointer move over the same window is a megabyte of memcpy for
+  an identical picture.
+
+- **THE POINTER IS EXCLUDED BY DEFAULT, AND IT IS SUBTLE IN BOTH
+  DIRECTIONS.** `WIN_SHOT_POINTER` asks for it; without it a capture has
+  none, matching X11, Windows' PrintScreen and GNOME's default. What
+  makes it more than a flag is that the back buffer's state depends on
+  the machine: with a SOFTWARE cursor the sprite is already in the
+  buffer, so "no pointer" means UNDRAWING it (from the compositor's own
+  saved backing pixels, exactly); on a HARDWARE cursor plane it is not
+  there at all, so "with pointer" means drawing it. Neither is the
+  caller's to get right, which is why the flag is on the request and
+  both halves live in `wm_render.c`.
 
 - **MP3 IS THE CODEC TABLE'S SECOND ROW, AND ITS TABLES CARRY THEIR OWN
   PROOF**

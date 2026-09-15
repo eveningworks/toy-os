@@ -19,6 +19,7 @@ wrong looks like the guest being broken.
     python3 tools/remote.py --host 192.168.200.104 exec "lsusb" "dmesg"
     python3 tools/remote.py --host 192.168.200.104 put build/userland/bin/ls /bin/ls
     python3 tools/remote.py --host 192.168.200.104 get /tmp/crash.log ./crash.log
+    python3 tools/remote.py --host 192.168.200.104 screenshot shot.png
     python3 tools/remote.py --host 192.168.200.104 shell     # interactive
 
 WHAT IT IS NOT
@@ -413,6 +414,61 @@ def do_put(host, port, local, remote, timeout, quiet=False):
     if not quiet:
         print(f"remote: put {local} -> {remote}, {sent_bytes} bytes")
     return 0
+
+
+def do_screenshot(a, host, tport, fport, timeout):
+    """What the real machine's screen looks like, as a file on this one.
+
+    THE ONLY WAY TO SEE A BARE-METAL SCREEN FROM HERE. `vm.py` drives a
+    QEMU guest and can ask QMP for a screendump; the laptop has no such
+    channel and nobody is sitting in front of it. So the capture is taken
+    BY THE MACHINE -- /bin/screenshot, an ordinary program that asks the
+    compositor for pixels -- and fetched over the same TFTP link
+    everything else here uses.
+
+    PNG by default, because the point is to open it on THIS machine and
+    nothing here decodes QOI. The guest writes it; there is no host-side
+    conversion step to go wrong.
+
+    /var/tmp, never /tmp: the latter is a ramfs mount, and TFTP reads the
+    file back through the filesystem a moment later -- which works either
+    way, but "anything that must survive is on the disk" is the rule and
+    a screenshot is worth keeping if the fetch fails.
+    """
+    fmt = a.format
+    if not fmt:
+        fmt = "qoi" if a.local.lower().endswith(".qoi") else "png"
+    remote = f"/var/tmp/remote-shot.{fmt}"
+
+    cmd = f"screenshot -f {fmt}"
+    if a.window:
+        cmd += " -w"
+    if a.pointer:
+        cmd += " -p"
+    if a.region:
+        cmd += f" -r {a.region}"
+    if a.delay:
+        cmd += f" -d {a.delay}"
+    cmd += f" {remote}"
+
+    sess = Session(host, tport, timeout)
+    try:
+        out = sess.run(cmd, timeout)
+        sess.run("sync", timeout)
+    finally:
+        sess.close()
+    # The command is SILENT when it succeeds with a named path, so any
+    # output at all is the failure -- which is why this reports what it
+    # said rather than only that the fetch found nothing.
+    for line in out:
+        if line.startswith("screenshot:"):
+            print(f"remote: {line}", file=sys.stderr)
+            return 1
+
+    rc = do_get(host, fport, remote, a.local, timeout)
+    if rc == 0:
+        print(f"{a.local} ({os.path.getsize(a.local)} bytes)")
+    return rc
 
 
 def do_get(host, port, remote, local, timeout):
@@ -1166,6 +1222,19 @@ def main():
     f.add_argument("--force", action="store_true",
                    help="sync every file, comparing nothing (see sync --force)")
 
+    sc = sub.add_parser("screenshot", help="capture the machine's screen")
+    sc.add_argument("local", nargs="?", default="screenshot.png",
+                    help="where to write it (default screenshot.png)")
+    sc.add_argument("--window", action="store_true",
+                    help="the topmost window rather than the whole screen")
+    sc.add_argument("--pointer", action="store_true",
+                    help="include the mouse pointer")
+    sc.add_argument("--region", metavar="X,Y,W,H", help="a rectangle")
+    sc.add_argument("--delay", type=int, default=0, metavar="SECONDS",
+                    help="wait before capturing")
+    sc.add_argument("--format", choices=("png", "qoi"), default=None,
+                    help="default: from the filename's extension")
+
     sub.add_parser("shell", help="an interactive session (Ctrl-] quits)")
 
     a = ap.parse_args()
@@ -1184,6 +1253,8 @@ def main():
             return do_flash(a.host, a.telnet_port, a.tftp_port,
                             a.kernel, a.timeout, a.reboot,
                             a.kernel_only, a.staging, force=a.force)
+        if a.cmd == "screenshot":
+            return do_screenshot(a, a.host, a.telnet_port, a.tftp_port, a.timeout)
         if a.cmd == "shell":
             return do_shell(a.host, a.telnet_port, a.timeout)
     except (OSError, RuntimeError) as ex:

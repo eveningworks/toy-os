@@ -119,7 +119,12 @@ static int past_threshold(const struct rubberband *rb, int x, int y) {
 
 void rb_motion(struct rubberband *rb, int x, int y,
                 const struct rb_ops *ops, void *ctx) {
-    if (!rb || !rb->armed || !ops || !ops->count || !ops->rect) return;
+    // NO OPS IS LEGAL and means a band that selects nothing -- the
+    // Screenshot app drags one over a frozen picture and wants only the
+    // rectangle. Refusing it made the band never go active, so rb_rect()
+    // answered 0 and the drag silently did nothing.
+    if (!rb || !rb->armed) return;
+    int have_items = ops && ops->count && ops->rect;
 
     if (!rb->active) {
         if (!past_threshold(rb, x, y)) return;
@@ -131,7 +136,7 @@ void rb_motion(struct rubberband *rb, int x, int y,
     int bx, by, bw, bh;
     if (!rb_rect(rb, &bx, &by, &bw, &bh)) return;
 
-    int n = ops->count(ctx);
+    int n = have_items ? ops->count(ctx) : 0;
     if (n > RB_MAX_ITEMS) n = RB_MAX_ITEMS; // never index past the bitset
     if (n < 0) n = 0;
 

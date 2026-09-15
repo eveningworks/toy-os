@@ -507,6 +507,19 @@ int uapp_spawn(struct uapp *a, const char *path, const char *args);
 // (WIN_EV_SCANOUT) -- the toolkit switches surfaces and presents by
 // flip on the app's behalf, and the app notices nothing.
 void uapp_set_fullscreen(struct uapp *a, int on);
+
+// The toolkit's channel to the compositor, for a library that needs one
+// and must not open a second (a process holds one ring per server, named
+// after its pid). NULL when there is no compositor. lib/ushot.h.
+struct uchan_client;
+struct uchan_client *uapp_wmchan(void);
+
+// Replaces the routed-and-drawn widget set, for an app with more than
+// one mode. The array is the caller's and must outlive the swap; a
+// count of 0 draws and routes nothing, which is what a full-window
+// canvas mode wants. `uapp_desc.layout` is separate -- set its own
+// `count` to 0 beside this, or it keeps drawing.
+void uapp_set_widgets(struct uapp *a, struct uui_item *items, int count);
 int  uapp_fullscreen(const struct uapp *a);   // as last asked for
 int  uapp_scanout(const struct uapp *a);      // drawing the display's own buffer right now
 

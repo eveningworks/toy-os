@@ -199,3 +199,25 @@ KTEST("rubberband", "an empty band and empty items touch nothing") {
     KTEST_ASSERT(!rb_overlaps(0, 0, 10, 10, 10, 0, 10, 10));
     KTEST_ASSERT(rb_overlaps(0, 0, 11, 10, 10, 0, 10, 10));
 }
+
+// The Screenshot app drags a band over a picture rather than over a
+// list, so there is nothing to select and no ops table to describe it.
+// Refusing that case made the band never go active, and a rectangle
+// that never exists reads to the app as a drag that did nothing.
+KTEST("rubberband", "a band with no selection model still has a rect") {
+    struct rubberband rb;
+    rb_clear(&rb);
+
+    rb_begin(&rb, 100, 50, RB_REPLACE);
+    rb_motion(&rb, 40, 200, 0, 0);
+
+    int x, y, w, h;
+    KTEST_ASSERT(rb_rect(&rb, &x, &y, &w, &h));
+    // Normalised: the drag went up-and-left in x and down in y.
+    KTEST_ASSERT_EQ(x, 40);
+    KTEST_ASSERT_EQ(y, 50);
+    KTEST_ASSERT_EQ(w, 60);
+    KTEST_ASSERT_EQ(h, 150);
+    KTEST_ASSERT(rb_end(&rb) == 1);       // a band, not a click
+    KTEST_ASSERT_EQ(rb_selected_count(&rb), 0);
+}

@@ -1020,6 +1020,27 @@ void uapp_set_fullscreen(struct uapp *a, int on) {
     wmchan_send(WIN_REQ_FULLSCREEN, a->window, on, 0, 0, 0);
 }
 
+// The toolkit's own channel, for a library that must not open a second
+// one: a process may hold only ONE ring per server, because the ring is
+// named after its pid. lib/ushot.h is the caller.
+struct uchan_client *uapp_wmchan(void) {
+    return wmchan() ? &g_wmchan : 0;
+}
+
+// SWAP THE WIDGET SET. An app with two modes -- a form, and a
+// full-window canvas over it -- otherwise has to draw and hit-test the
+// second one itself, because `widgets` is fixed at uapp_run() and
+// emptying the LAYOUT leaves the router still drawing every item.
+//
+// The array is the caller's and must outlive the swap, the same
+// ownership rule uapp_desc.widgets follows. A count of 0 is legal and
+// means "nothing routed and nothing drawn", which is the point.
+void uapp_set_widgets(struct uapp *a, struct uui_item *items, int count) {
+    if (!a) return;
+    uui_router_init(&a->router, items, count > 0 ? count : 0);
+    a->dirty = 1;
+}
+
 int uapp_fullscreen(const struct uapp *a) { return a ? a->fullscreen : 0; }
 int uapp_scanout(const struct uapp *a)    { return a ? a->lease_on : 0; }
 

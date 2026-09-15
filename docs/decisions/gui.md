@@ -7621,3 +7621,115 @@ for this reason, and `ugfx_text_width_n` documents it, because the
 faster-looking version (one subtraction instead of a walk) is wrong by a
 pixel or two per scroll step and would be reintroduced by anyone
 optimising it.
+
+## A screenshot is the compositor copying pixels, and the client encoding them
+
+A capture has to start at the compositor, because nothing else can see
+the composited frame: the mapped framebuffer is write-combining and is
+never read, and the finished picture lives in the compositor's own back
+buffer (`ui/ugfx.h`). The question was what crosses the boundary.
+
+**The obvious design -- the client names a file and the compositor
+writes it -- does not fit, and the reason is a number.** A client
+channel slot is 64 bytes (`lib/uchan_page.h`) and `FS_PATH_MAX` is 64 on
+its own, so a path cannot ride a request at all. Widening the message
+was available and was not taken: `struct wmchan_msg` is on the path of
+every `WIN_REQ_PRESENT`, which is once per client per frame.
+
+So the compositor copies into a shared-memory object the CLIENT created
+and granted, and the client does everything else. That is
+`wlr-screencopy-v1` exactly (the client provides the buffer, the
+compositor fills it) and it is KWin's `ScreenShot2` with a name instead
+of a passed fd. X11's `XGetImage` on the root window is the shape this
+deliberately is not -- any client reading the whole screen with no
+mediation is now regarded as a hole, which is why Wayland forbids it and
+routes captures through the compositor or a portal.
+
+**What the split bought, beyond fitting in 64 bytes.** The compositor
+contains no image encoder and never learns that file formats exist, in
+the same way it contains no decoder (see `uimg.h`'s header for that
+half). And `/bin/screenshot` is an ordinary program with no window: it
+connects to the compositor like any client, so it works from a terminal,
+from the physical console, and over `telnet` on a machine whose screen
+nobody is watching. That last one is the whole reason a bare-metal
+capture is possible -- `tools/remote.py screenshot` runs it on the
+laptop and fetches the file, where `vm.py`'s QMP screendump has no
+equivalent.
+
+**A capture renders a frame before it copies.** A request is handled in
+the middle of the frame loop's message pump, so anything that changed
+this iteration is not in the back buffer yet -- including, critically,
+the asking client having just been hidden. A client-side sleep was the
+alternative and it would have been guessing at a frame rate this loop
+does not have.
+
+**`WIN_SHOT_NO_SELF` hides the asker rather than minimizing it.** The
+first attempt added a `WIN_REQ_MINIMIZE` so the tool could put itself
+away, which is a real gap in the protocol (`xdg_toplevel.set_minimized`
+exists, and so does `ShowWindow(SW_MINIMIZE)`) -- but it has no inverse
+here by design, since an app that could put itself back on screen
+unasked is an app that steals focus. Leaving the client's windows out of
+one rendered frame needs no new request, no restore path, and produces
+the same thing on screen: the window goes away, the shot is taken, it
+comes back.
+
+## The pointer is excluded by default, and both directions are work
+
+Every system's default is to leave the pointer out -- X11's `XGetImage`,
+Windows' PrintScreen, GNOME and Spectacle's unticked checkbox -- because
+the common use is documenting what is on screen, not where the mouse
+was. toy-os follows.
+
+What is not obvious is that "exclude it" and "include it" are each real
+work, and which one is work depends on the machine. With a SOFTWARE
+cursor the compositor has already drawn the sprite into its back buffer,
+so excluding means UNDRAWING it; the pixels it covered are already saved
+(`cursor_under`, which exists for the cheap cursor-move path), so the
+result is the frame as it would have been rather than a repaint of it.
+On a HARDWARE cursor plane the pointer was never in the back buffer, so
+including it means drawing the sprite into the copy -- which is why
+`wm_render.c` gained a destination surface for its cursor drawing at
+all.
+
+Neither is something a caller could get right from outside, which is why
+this is a flag on the request rather than something a client does to the
+pixels afterwards. The laptop exercises the second half and no emulated
+setup here exercises it the same way: `guictl state` reports
+`hwcursor: true` there and `false` under QEMU.
+
+## PNG is written here and not read, and that is an honest state
+
+`uimg.h`'s codec table now has an `encode` slot, and the PNG row fills
+it while leaving `decode` NULL. That asymmetry is deliberate rather than
+unfinished work waiting to be tidied.
+
+PNG exists here for pictures that LEAVE the machine -- a host, a
+browser, a bug report -- and reading one needs inflate, which is a
+separate piece of work with its own testing pass. QOI covers everything
+that stays: the Image Viewer already decodes it, it is lossless, and on
+flat UI content it is smaller than PNG anyway. So the screenshot tools
+default to QOI and offer PNG, and `uimg_decode()` answers `-ENOTSUP`
+with a sentence saying this build writes the format and cannot read it.
+
+That is a different answer from `-EINVAL`, and the distinction is the
+reason `-ENOTSUP` exists in this library: an app can say "this build
+cannot show PNGs" instead of calling a perfectly good file corrupt.
+
+**The deflate is fixed-Huffman LZ77, and stored blocks were the trap.** A
+spec-legal PNG can be written with uncompressed deflate blocks in about
+thirty lines, and a 1920x1080 screenshot then weighs 6.2 MB -- which is
+a minute per capture over the TFTP link this exists to serve. A desktop
+is mostly flat colour, so a greedy match finder takes the same shot to a
+few hundred KB, and that is what makes the bare-metal path usable at
+all.
+
+**Both encoders are checked by foreign decoders, never by ours.** An
+encoder tested against this repo's own decoder passes whenever the two
+share a mistake, and the two mistakes an image encoder actually makes
+are exactly that shape: a QOI index table updated on the wrong chunk, or
+a Huffman code packed least-significant-bit-first. Both produce a file
+that round-trips perfectly here and that nothing else in the world can
+open. `tools/uimg_encode_hostcheck.py` opens everything with Pillow and
+additionally inflates each PNG with Python's `zlib`; the guest test
+keeps the round trip only for what the host harness cannot see, which is
+the encoders running in ring 3 on the machine that ships.

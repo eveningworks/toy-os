@@ -25,6 +25,7 @@
 #include "wm_overlay.h" // WM_POPUP_MARGIN -- a client popup keeps the same edge gap
 #include "wm_rawin.h"
 #include "wm_debug.h" // the diagnostic channel's WM end, below
+#include "wm_screenshot.h"
 #include "win_role.h"
 #include "kapi.h"
 #include "ui/utheme.h"
@@ -974,6 +975,19 @@ void wm_client_chan_pump(void) {
         case WIN_REQ_DRAG_END:
             wm_dnd_end(from);
             break;
+        // A CAPTURE ROUND-TRIPS, because the client has to know what it
+        // got: a WINDOW capture's size is the compositor's answer, not
+        // the client's question, and a refusal has to be told apart
+        // from an unwritten buffer.
+        case WIN_REQ_SCREENSHOT: {
+            struct wmchan_msg r;
+            k_memset(&r, 0, sizeof r);
+            r.type = WIN_REQ_SCREENSHOT;
+            r.shot = m.shot;
+            r.a = wm_screenshot_capture(from, m.a, (unsigned)m.b, m.c, &r.shot);
+            uchan_server_reply(&g_chan, from, &r, sizeof r);
+            break;
+        }
         // **CREATE IS THE ONLY REQUEST THAT ALLOCATES.** The client
         // proposes a slot -- its buffer objects are already named after
         // it -- and this accepts unless that (pid, slot) is already

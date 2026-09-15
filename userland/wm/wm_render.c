@@ -9,6 +9,7 @@
 #include "wm_internal.h"
 #include "wm_idle.h"
 #include "wm_dnd.h"
+#include "wm_rawin.h"
 #include "start_menu.h"
 #include "context_menu.h"
 #include "calendar_popup.h"
@@ -369,6 +370,25 @@ void wm_builtin_arrow_masks(const unsigned char **outline,
     *stride = CURSOR_SPRITE_W;
 }
 
+// WHERE THE POINTER IS DRAWN. Normally the back buffer, like everything
+// else here; wm_render_cursor_into() points it at a caller's surface for
+// one call. That exists because a pointer riding the HARDWARE cursor
+// plane is not in the back buffer at all, so a screenshot taken on a
+// machine that has one would silently have no pointer in it.
+// A CLIENT THAT ASKED NOT TO BE IN THE PICTURE. Set for the one frame a
+// WIN_SHOT_NO_SELF capture renders, so the screenshot tool is not in its
+// own screenshot -- which is the visible behaviour of every screenshot
+// tool there is: the window goes away, the shot is taken, it comes back.
+// See wm_screenshot.c, the only caller.
+static int g_hidden_pid;
+int  wm_render_hidden_pid(void)      { return g_hidden_pid; }
+void wm_render_hide_pid(int pid)     { g_hidden_pid = pid; }
+
+static struct ugfx_surface *g_cursor_dst;
+static struct ugfx_surface *cursor_surface(void) {
+    return g_cursor_dst ? g_cursor_dst : wm_surface();
+}
+
 static void draw_cursor_normal(int x, int y) {
     uint32_t fill = UTHEME_WHITE, outline = ugfx_rgb(0, 0, 0);
     // Outline first, fill on top -- matches how the two masks were
@@ -377,12 +397,12 @@ static void draw_cursor_normal(int x, int y) {
     // pixels both masks touch get the fill's fully-opaque top coat).
     for (int row = 0; row < CURSOR_SPRITE_H; row++) {
         for (int col = 0; col < CURSOR_SPRITE_W; col++) {
-            ugfx_blend_pixel(wm_surface(), x + col, y + row, outline, cursor_outline_alpha[row][col]);
+            ugfx_blend_pixel(cursor_surface(), x + col, y + row, outline, cursor_outline_alpha[row][col]);
         }
     }
     for (int row = 0; row < CURSOR_SPRITE_H; row++) {
         for (int col = 0; col < CURSOR_SPRITE_W; col++) {
-            ugfx_blend_pixel(wm_surface(), x + col, y + row, fill, cursor_fill_alpha[row][col]);
+            ugfx_blend_pixel(cursor_surface(), x + col, y + row, fill, cursor_fill_alpha[row][col]);
         }
     }
 }
@@ -459,7 +479,7 @@ static void draw_resize_cursor(int x, int y, enum wm_cursor_kind kind) {
     for (int gy = 0; gy < RZ_GRID; gy++)
         for (int gx = 0; gx < RZ_GRID; gx++)
             if (rz_grid[gy][gx])
-                ugfx_put_pixel(wm_surface(), x + gx - c, y + gy - c,
+                ugfx_put_pixel(cursor_surface(), x + gx - c, y + gy - c,
                                rz_grid[gy][gx] == 1 ? fill : outline);
 }
 
@@ -483,14 +503,14 @@ static void draw_cursor_text(int x, int y) {
         int x0 = serif ? 0 : CURSOR_TEXT_HOT_X - 1;
         int x1 = serif ? CURSOR_TEXT_W - 1 : CURSOR_TEXT_HOT_X + 1;
         for (int i = x0; i <= x1; i++)
-            ugfx_put_pixel(wm_surface(), ox + i, oy + j, outline);
+            ugfx_put_pixel(cursor_surface(), ox + i, oy + j, outline);
     }
     // Fill: the shaft, plus the one-pixel serif caps inside the outline.
     for (int j = 1; j < CURSOR_TEXT_H - 1; j++)
-        ugfx_put_pixel(wm_surface(), ox + CURSOR_TEXT_HOT_X, oy + j, color);
+        ugfx_put_pixel(cursor_surface(), ox + CURSOR_TEXT_HOT_X, oy + j, color);
     for (int i = 1; i < CURSOR_TEXT_W - 1; i++) {
-        ugfx_put_pixel(wm_surface(), ox + i, oy + 1, color);
-        ugfx_put_pixel(wm_surface(), ox + i, oy + CURSOR_TEXT_H - 2, color);
+        ugfx_put_pixel(cursor_surface(), ox + i, oy + 1, color);
+        ugfx_put_pixel(cursor_surface(), ox + i, oy + CURSOR_TEXT_H - 2, color);
     }
 }
 
@@ -516,14 +536,14 @@ static void draw_cursor_wait(int x, int y) {
     for (int j = 0; j < CURSOR_WAIT_H; j++) {
         if (j == 0 || j == CURSOR_WAIT_H - 1) { // the end bars
             for (int i = -4; i <= 4; i++)
-                ugfx_put_pixel(wm_surface(), cx + i, oy + j, outline);
+                ugfx_put_pixel(cursor_surface(), cx + i, oy + j, outline);
             continue;
         }
         int h = wait_half(j);
-        ugfx_put_pixel(wm_surface(), cx - h, oy + j, outline);
-        ugfx_put_pixel(wm_surface(), cx + h, oy + j, outline);
+        ugfx_put_pixel(cursor_surface(), cx - h, oy + j, outline);
+        ugfx_put_pixel(cursor_surface(), cx + h, oy + j, outline);
         for (int i = -(h - 1); i <= h - 1; i++)
-            ugfx_put_pixel(wm_surface(), cx + i, oy + j, color);
+            ugfx_put_pixel(cursor_surface(), cx + i, oy + j, color);
     }
 }
 
@@ -544,7 +564,7 @@ static void draw_cursor_themed(const struct cursor_shape *s, int x, int y,
             if (!a) continue;
             for (int j = 0; j < scale; j++)
                 for (int i = 0; i < scale; i++)
-                    ugfx_blend_pixel(wm_surface(), ox + col * scale + i, oy + row * scale + j,
+                    ugfx_blend_pixel(cursor_surface(), ox + col * scale + i, oy + row * scale + j,
                                      outline, a);
         }
     }
@@ -554,7 +574,7 @@ static void draw_cursor_themed(const struct cursor_shape *s, int x, int y,
             if (!a) continue;
             for (int j = 0; j < scale; j++)
                 for (int i = 0; i < scale; i++)
-                    ugfx_blend_pixel(wm_surface(), ox + col * scale + i, oy + row * scale + j,
+                    ugfx_blend_pixel(cursor_surface(), ox + col * scale + i, oy + row * scale + j,
                                      fill, a);
         }
     }
@@ -651,6 +671,19 @@ enum wm_cursor_kind wm_cursor_kind_at(int mx, int my) {
     return resolve_cursor_kind(mx, my);
 }
 
+// Draws the pointer into `dst`, whose top-left sits at (ox, oy) on the
+// screen. The shape is resolved from the real pointer position, so a
+// capture shows the same cursor the screen does.
+void wm_render_cursor_into(struct ugfx_surface *dst, int ox, int oy) {
+    int mx, my;
+    uint8_t buttons;
+    wm_rawin_mouse(&mx, &my, &buttons);
+    g_cursor_dst = dst;
+    draw_cursor(mx - ox, my - oy, resolve_cursor_kind(mx, my));
+    g_cursor_dst = NULL;
+}
+
+
 // ---- cursor sprite save/restore ----
 //
 // Used only by wm_render_cursor_move() (the cheap "mouse moved, nothing
@@ -744,6 +777,24 @@ static void save_cursor_under(int x, int y, enum wm_cursor_kind kind) {
     cursor_under_w = w;
     cursor_under_h = h;
     cursor_under_valid = 1;
+}
+
+// Puts back what the SOFTWARE pointer is covering, into `dst`, whose
+// top-left sits at (ox, oy) on the screen. Returns 1 if it erased
+// anything.
+//
+// The screenshot path needs this because the default is a capture with
+// no pointer in it, and with a software cursor the pointer IS in the
+// back buffer -- there is nothing to leave out, only something to undo.
+// These are the exact pixels the sprite overwrote, so the result is the
+// frame as it would have been, not a repaint of it.
+int wm_render_cursor_erase(struct ugfx_surface *dst, int ox, int oy) {
+    if (!cursor_under_valid) return 0;
+    for (int j = 0; j < cursor_under_h; j++)
+        for (int i = 0; i < cursor_under_w; i++)
+            ugfx_put_pixel(dst, cursor_under_x + i - ox,
+                            cursor_under_y + j - oy, cursor_under[j][i]);
+    return 1;
 }
 
 // --- the hardware cursor is BACK, and per shape ------------------------
@@ -1402,6 +1453,9 @@ static void render_scene(int mx, int my, int has_damage) {
     int focus = wm_focus_index(); // the topmost TOPLEVEL -- a popup's parent stays active
     for (int i = 0; i < window_count; i++) {
         if (windows[i].state == WIN_MINIMIZED) continue;
+        if (wm_render_hidden_pid() &&
+            wm_client_is_client_window(&windows[i]) &&
+            windows[i].client_pid == wm_render_hidden_pid()) continue;
         if (has_damage && !window_intersects_damage(&windows[i])) continue;
         if (covered && i < focus && !windows[i].popup) continue; // under the fullscreen window
         if (windows[i].popup || windows[i].fullscreen) {

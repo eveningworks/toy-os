@@ -732,6 +732,8 @@ whenever a headline here tells you something you did not already know.
 
 - **A WINDOW'S GEOMETRY IS REMEMBERED PER APP, AND THE KEY IS `app_id` -- NEVER `app_identity`**
 - **MEASURE TEXT, NEVER MULTIPLY: `gfx_char_advance()` / `ugfx_char_advance()`** -- five chokepoints (`ugfx_text_width`/`_n`/`_fit_chars`/`_index_at_x`, and `ugfx_char_advance('0')`/`('n')` to RESERVE), `tools/check_text_measure.py` fails the build on a character count used as a width, and a SLICE is measured on the slice because kerning is counted between adjacent characters
+- **`UUI_COLOR_UNSET` IS A COLOUR (0xFF000000) UNTIL A WIDGET RESOLVES IT** -- one that passes `bg` straight to `uui_state_bg()` draws BLACK, and the hover state of black is a plausible-looking dark grey
+- **A PICKER ASKS WHAT IT WOULD GET BEFORE IT ASKS FOR IT: `WIN_SHOT_WINDOW_AT` + `WIN_SHOT_PROBE`** -- a rect from a POINT, answered without rendering or copying, so an outline can follow the pointer
 - **A WIDGET RESOLVES ITS COLOURS WHEN IT DRAWS, NOT WHEN IT IS BUILT** -- `UUI_COLOR_UNSET` in the init, `UUI_COLOR(v, UTHEME_ROLE)` at the draw; the palette's three greys (`border` frames a window, `outline` edges a control, `separator` is decorative) are not interchangeable, and `selection_bg` is not `accent`
 - **`utext` IS A FIXED GRID, AND ITS CALLERS OWE IT A MONOSPACE FACE** -- Notepad's `doc_font()` and `uui_textview.c`'s `grid_font()`; every early return inside the bracket leaks the face
 - **A SHARED GEOMETRY HELPER MEASURES IN WHATEVER FACE THE CALLER HAS SELECTED, AND `ugfx_set_font()` IS PER PROCESS** -- an app that switches faces mid-frame must bracket every measurement the same way, or the draw and the hit-test disagree
@@ -839,6 +841,10 @@ whenever a headline here tells you something you did not already know.
 - **THE TOOLKIT OWNS THE KEYBOARD FOCUS RING: set `uapp_desc.focus`.**
 - **A WIDGET DESCRIBES ITSELF, AND THE LAYOUT LOG HAS ONE VOCABULARY: `<prefix>: layout <name>[.<part>] [i [j]] x y w h`** -- `uui_item.name` plus `uapp_log_layout()`, and a `describe` op for a widget's sub-rects, never a per-app logger
 - **AN IMAGE IS DECODED IN RING 3, AND `lib/uimg.h`'s CODEC TABLE IS THE EXTENSION POINT**
+- **AN IMAGE IS ALSO ENCODED IN RING 3, AND THE TWO FORMATS ARE FOR DIFFERENT THINGS** -- `qoi` is what toy-os can open again, `png` is what LEAVES the machine (and has no decoder here, so `uimg_decode()` answers -ENOTSUP); the encoders are checked by a FOREIGN decoder, never by ours
+- **THE COMPOSITOR COPIES PIXELS AND THE CLIENT ENCODES THEM: `WIN_REQ_SCREENSHOT`, `lib/ushot.h`** -- wlr-screencopy's shape, not XGetImage's; the capture renders a frame first, forces the alpha byte OPAQUE, refuses a scanout lease with -EBUSY, and `WIN_SHOT_NO_SELF` keeps the asking client out of its own picture
+- **THE POINTER IS EXCLUDED BY DEFAULT, AND IT IS SUBTLE IN BOTH DIRECTIONS** -- a software cursor is already IN the back buffer and must be undrawn; one on the hardware plane is not there at all and must be drawn
+- **A WIDGET SET CAN BE SWAPPED AT RUNTIME (`uapp_set_widgets`), AND THE LAYOUT IS A SECOND HALF** -- the router draws and routes `uapp_desc.widgets` independently, so emptying the layout alone leaves every control on screen
 - **AUDIO IS DECODED AND MIXED IN RING 3, AND `lib/usnd.h` HAS THREE SEAMS**
 - **MP3 IS THE CODEC TABLE'S SECOND ROW, AND ITS TABLES CARRY THEIR OWN PROOF**
 - **AN ICON IS A NAME, NOT A PATH, AND IT IS COMPOSITED**
@@ -1433,7 +1439,11 @@ cost".
   tool to `tools/` does not add it here**, and a tool no runner names is
   run when somebody types it, which is never. Never a gate itself.
 - **Drive the BARE-METAL machine** -- `remote.py` (`exec` runs commands
-  and returns text, `put`/`get` move files, `sync` copies a whole tree
+  and returns text, `put`/`get` move files, **`screenshot` is the only
+  way to SEE that machine's screen from here** -- the capture is taken by
+  the machine (`/bin/screenshot`, which needs no window) and fetched over
+  the same TFTP link, PNG by default because nothing on this side decodes
+  QOI, `sync` copies a whole tree
   and sends only what differs, `flash` replaces the KERNEL on its own
   boot partition AND syncs the userland with it -- but **`/etc` gets NEW
   FILES ONLY**, deliberately, so a flash never clobbers a machine's own
@@ -1492,6 +1502,7 @@ cost".
   `pager_test.py`,
   `resize_stride_test.py`,
   `sched_gui_test.py`, `screen_surface_test.py`, `screensaver_test.py`,
+  `screenshot_test.py`,
   `scrollbar_test.py`,
   `settings_test.py`, `single_instance_test.py`, `taskmgr_test.py`,
   `uapp_test.py`, `fullscreen_test.py`, `uiclient_test.py`, `uidemo_test.py`,
@@ -1564,6 +1575,10 @@ cost".
   `QMPSession.hmp()` (**the QEMU monitor -- the one oracle the guest
   cannot fake**; ask it BEFORE trusting anything the guest says about
   itself), `regex_hostcheck.py`, `uimg_hostcheck.py`,
+  `uimg_encode_hostcheck.py` (**the QOI and PNG ENCODERS against Pillow
+  and zlib** -- a foreign decoder is the point, since an encoder checked
+  by our own decoder passes on a shared mistake; its
+  `--positive-control` must redden the PNG half and spare the QOI half),
   `usnd_hostcheck.py`, `hash_hostcheck.py`,
   `divti3_hostcheck.py` (the 128-bit division helpers against Python's
   arbitrary-precision integers), `corrupt_diff.py` (**HOW two copies of

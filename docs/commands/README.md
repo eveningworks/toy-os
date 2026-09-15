@@ -193,6 +193,10 @@ a command), and the `gui3`/`nano` aliases.
 - [`logd`](logd.md)
 - [`stalls`](stalls.md)
 
+### Graphics and the desktop
+
+- [`screenshot`](screenshot.md)
+
 ### Networking
 
 - [`dhcp`](dhcp.md)

@@ -394,6 +394,7 @@ manual steps to be worth automating:
       python3 tools/remote.py --host 192.168.200.104 exec "lsusb" "dmesg"
       python3 tools/remote.py --host 192.168.200.104 put build/userland/bin/ls /bin/ls
       python3 tools/remote.py --host 192.168.200.104 get /tmp/crash.log ./crash.log
+      python3 tools/remote.py --host 192.168.200.104 screenshot shot.png
       python3 tools/remote.py --host 192.168.200.104 shell      # Ctrl-] quits
       python3 tools/remote.py --host 192.168.200.104 sync seed/sync/bin /bin
       python3 tools/remote.py --host 192.168.200.104 --timeout 60 flash build/kernel.bin
@@ -406,6 +407,26 @@ manual steps to be worth automating:
   existed, investigating any of them meant sitting at the machine. The
   guest side is `/bin/telnetd` and `/bin/tftpd`, both shipped DISABLED
   (`service enable telnetd`).
+
+  **`screenshot` IS THE ONLY WAY TO SEE THAT MACHINE'S SCREEN FROM
+  HERE.** `vm.py` can ask QMP for a screendump of a QEMU guest; the
+  laptop has no such channel and nobody is sitting in front of it. So
+  the capture is taken BY THE MACHINE -- `/bin/screenshot`, an ordinary
+  program with no window that asks the compositor for pixels -- and
+  fetched over the same TFTP link. `--window`, `--region X,Y,W,H`,
+  `--pointer` and `--delay` pass straight through.
+
+  **PNG by default**, because the point is to open it on THIS machine
+  and nothing here decodes QOI; `.qoi` in the filename (or `--format`)
+  gets the other one. The guest writes the file, so there is no
+  host-side conversion step to go wrong. It lands in `/var/tmp` on the
+  machine, not `/tmp`, which is a ramfs mount -- a screenshot is worth
+  keeping if the fetch fails.
+
+  It is also the one path that exercises the HARDWARE cursor plane:
+  `--pointer` there draws a sprite the back buffer does not contain,
+  which no emulated setup here reproduces (`guictl state` reports
+  `hwcursor: true` on the laptop and `false` under QEMU).
 
   **`--timeout` MUST OUTLAST THE COMMAND, and the default is 15s.** A
   command that simply runs longer than that raises with the output it
@@ -1525,9 +1546,12 @@ window without going through it will find its layout polls timing out.
   pictogram -- because that is what still reads at 20 pixels in a Start
   menu row, and it is drawn here rather than committed as somebody's
   icon set so the repo owns every pixel it ships. **PILLOW encodes
-  them**, which is what keeps `uimg_qoi.c` honest: nothing in this repo
-  writes a QOI file, so a chunk type the decoder misreads cannot
-  round-trip through a matching bug of our own. **Crash Test gets no
+  them**, which is what keeps `uimg_qoi.c`'s DECODER honest: these files
+  come from a foreign implementation, so a chunk type the decoder
+  misreads cannot round-trip through a matching bug of our own. (The
+  repo does write QOI now -- `/bin/screenshot` does -- and its encoder is
+  checked the other way round, by Pillow decoding it; see
+  `uimg_encode_hostcheck.py`.) **Crash Test gets no
   icon on purpose** -- it is the entry that exercises the letter-tile
   fallback on every boot, the same trick `data/fonts/` plays by shipping
   `vera-mono` with no bold companion.
@@ -1543,6 +1567,28 @@ window without going through it will find its layout polls timing out.
   real photograph; `--tolerance` tightens the bar. Not in any gate: it
   needs Pillow, and `/tests/uimg_test` is the version that runs in the
   guest.
+- **`uimg_encode_hostcheck.py`** -- the mirror of the above, for the
+  ENCODERS: `uimg_qoi.c` and `uimg_png.c` compiled with the host gcc,
+  run over eight images chosen for what they do to each format (a flat
+  fill for QOI's runs, a gradient for its luma chunks, noise that no
+  chunk helps, a UI-shaped image, one with alpha, a 1x1 and a 1x300),
+  and every file opened again by **Pillow** -- with each PNG also
+  inflated by Python's `zlib` and unfiltered by hand, so three
+  implementations that share no code with ours read what we wrote.
+
+  **A foreign decoder is the whole point.** An encoder tested against
+  this repo's own decoder passes whenever the two share a mistake, and
+  the two mistakes an image encoder actually makes are exactly that
+  shape: a QOI index table updated on the wrong chunk, or a Huffman code
+  packed least-significant-bit-first. Both produce a file that
+  round-trips perfectly here and that nothing else can open.
+
+  `--positive-control` patches the deflate writer's bit reversal in a
+  COPY of the source and requires every PNG check to go red while the
+  QOI ones stay green -- a control that reddened both would have
+  isolated nothing. `--keep DIR` leaves the encoded files to look at.
+  Not in any gate: it needs Pillow, and `/tests/uimg_test` is the
+  round-trip that runs in the guest.
 - **`fetch_extras.py`** -- the registry of optional, differently-licensed
   material, and the licence acceptance in front of it. `make iso
   EXTRAS=1` runs it; nothing else does, so an ordinary build reaches no
@@ -2856,6 +2902,32 @@ window without going through it will find its layout polls timing out.
   once. Asking for "any saver but this one" picked `blank`, which ships
   with no descriptor and correctly shows nothing -- the swap check now
   names a saver that has options.
+- **`screenshot_test.py`** -- screen capture end to end: `/bin/screenshot`,
+  the Screenshot app, `--pointer`, `-w`, and the region band.
+
+  **The assertion that matters is a ROUND TRIP, not "a file appeared".**
+  A capture that wrote a well-formed image of the WRONG THING passes
+  every did-it-produce-a-file check there is, and both ways it could be
+  wrong are real: the compositor's back buffer can be a frame old, and
+  its alpha byte is zero, which every alpha-aware consumer reads as
+  fully transparent (that one shipped, as a black preview). So the file
+  is pulled OFF the guest's TFS3 volume with `tfs3_writer.py read` and
+  compared pixel by pixel against a QMP screendump, by **Pillow** -- a
+  decoder sharing no code with ours.
+
+  **The cursor box is its own control.** Outside it the two images must
+  match exactly; INSIDE it they must differ, or the comparison is
+  passing because the capture is a copy of the screendump rather than
+  because it is correct. `--pointer` is then checked as a COUNT OF
+  DISTINCT COLOURS in that box (a cursor is an antialiased arrow: three
+  wallpaper shades become twenty-six), not as "the files differ", which
+  two captures of a moving desktop would satisfy with no cursor in
+  either.
+
+  It asks QEMU which image the guest has (`info block`) rather than
+  assuming `disk.img`, because `gui_regress.py` boots a per-tool copy
+  and a hardcoded path would read a file the guest never wrote.
+
 - **`screensaver_test.py`** -- the idle clock in the compositor, the
   two settings, and the savers it spawns. A saver is a PROCESS, so
   `gui idle` reports its pid and the checks ask for that rather than

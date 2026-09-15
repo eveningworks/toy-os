@@ -1039,6 +1039,94 @@ struct win_popup_pos {
 #define WIN_DIALOG_OWNER(c) ((uint32_t)(c) & 0xFFFFu)
 #define WIN_DIALOG_FLAGS(c) ((uint32_t)(c) >> 16)
 
+// --- capturing the screen (WIN_REQ_SCREENSHOT) -------------------------
+//
+// THE COMPOSITOR COPIES PIXELS; THE CLIENT ENCODES THEM. A screenshot
+// program creates a shared-memory object, grants it to the compositor,
+// and asks for a rectangle to be copied into it -- then writes whatever
+// file format it likes without the compositor knowing that image formats
+// exist. That is wlr-screencopy-v1's shape, and KWin's ScreenShot2 (an
+// fd rather than a name, the same idea); the alternative, a path on this
+// message, does not fit -- a channel slot is 64 bytes and FS_PATH_MAX is
+// 64 on its own.
+//
+// **THIS IS NOT XGetImage.** Under X11 any client can read the root
+// window, which is now regarded as a hole; Wayland forbids it outright
+// and routes a capture through the compositor precisely so there is one
+// place to put a policy. There is no policy here yet -- no users to have
+// one about -- but the SHAPE is what makes adding one later a change in
+// one function rather than in the protocol.
+//
+// Two refusals matter and both are silent failures if ignored:
+//
+//   * **While a fullscreen client holds a scanout lease the compositor
+//     draws nothing** (WIN_REQ_FB_LEASE), so its back buffer holds a
+//     frame from before the lease. Capturing it would save a stale
+//     picture with nothing to say so. -EBUSY.
+//   * **The pointer is not in the back buffer** when it rides the
+//     hardware cursor plane. WIN_SHOT_POINTER draws it into the COPY,
+//     which is why "include the pointer" is a request flag rather than
+//     something the client could do afterwards.
+#define WIN_REQ_SCREENSHOT 34 // a: WIN_SHOT_* mode. b: flags.
+                           // c: the client's buffer capacity IN PIXELS
+                           //    -- the compositor refuses rather than
+                           //    writing past what the client allocated,
+                           //    since it cannot ask an shm object its
+                           //    size.
+                           // `shot`: the rect, for REGION only.
+                           // REPLIES a = 0, or a negative errno; `shot`
+                           // = the rect actually captured, in SCREEN
+                           // coordinates, which is how a WINDOW capture
+                           // reports what it found.
+
+#define WIN_SHOT_SCREEN 0  // the whole screen; the rect is ignored
+#define WIN_SHOT_WINDOW 1  // the topmost window that is NOT the caller's
+                           // -- deliberately not "the focused window",
+                           // because a screenshot tool asking is itself
+                           // focused. Chrome included, as Alt+PrtScn and
+                           // GNOME's window capture both do.
+#define WIN_SHOT_REGION 2  // `shot`, clamped to the screen
+#define WIN_SHOT_WINDOW_AT 3 // the window under the POINT in `shot.x`,
+                           // `shot.y` -- for a tool that lets you point
+                           // at one. Same skip-the-caller rule as
+                           // WIN_SHOT_WINDOW, so a picker never offers
+                           // its own overlay as the target.
+
+#define WIN_SHOT_POINTER 0x1 // draw the cursor into the copy
+#define WIN_SHOT_PROBE   0x4 // ANSWER THE RECT AND COPY NOTHING. What a
+                           // picker asks on every pointer move: it needs
+                           // to know what it would get in order to draw
+                           // an outline around it, and copying a screen
+                           // per motion to find out would be absurd. No
+                           // buffer is read, so `c` is ignored and a
+                           // client that has not allocated one may ask.
+#define WIN_SHOT_NO_SELF 0x2 // leave the ASKING client's own windows out.
+                           // The compositor renders one frame without
+                           // them, captures, and repaints -- so the
+                           // window visibly goes away and comes back,
+                           // which is what GNOME Screenshot and
+                           // Spectacle do and for the same reason: a
+                           // screenshot tool must not be in its own
+                           // screenshot. A capture that does not ask
+                           // gets the screen exactly as it stands.
+
+// The object the compositor copies INTO: the client creates it, grants
+// it (SYS_SHM_GRANT), and fills in the name from its own pid. A format
+// rather than a function for the reason WIN_BUF_NAME_FMT gives -- the
+// two sides are in different rings with different snprintf()s.
+#define WIN_SHOT_NAME_FMT "shot.%d"   // the requesting pid
+#define WIN_SHOT_NAME_MAX 32          // and <= SHM_NAME_MAX
+
+// Tightly packed 0xFFRRGGBB, `w` pixels per row, no padding -- exactly
+// what `struct uimg` means by an opaque image, so an encode needs no
+// conversion pass. The alpha byte is FORCED opaque rather than copied:
+// a compositor surface is 0x00RRGGBB (there is no alpha to composite
+// against), and passing that through produces an image every alpha-aware
+// consumer reads as fully transparent.
+struct win_shot {
+    int32_t x, y, w, h;
+};
+
 // --- resize is a CONFIGURE/ACK HANDSHAKE ------------------------------
 //
 // The obvious implementation -- the server resizes the window when the

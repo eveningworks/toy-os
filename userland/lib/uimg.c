@@ -15,6 +15,7 @@
 static const struct uimg_codec *const codecs[] = {
     &uimg_codec_jpeg,
     &uimg_codec_qoi,
+    &uimg_codec_png,
 };
 #define CODEC_COUNT ((int)(sizeof codecs / sizeof codecs[0]))
 
@@ -50,6 +51,13 @@ int uimg_decode(const void *data, size_t n, struct uimg *out) {
     if (!c) {
         uimg_set_error("not an image format this build recognises");
         return -EINVAL;
+    }
+    // A row with no decoder is a format this build WRITES and cannot
+    // read. -ENOTSUP says the file is fine and we are not, which is
+    // what lets the Image Viewer say so instead of calling it corrupt.
+    if (!c->decode) {
+        uimg_set_error("this build can write this format but not read it");
+        return -ENOTSUP;
     }
     return c->decode(data, n, out);
 }
@@ -115,6 +123,88 @@ int uimg_load(const char *path, struct uimg *out) {
     rc = uimg_decode(buf, len, out);
     free(buf);
     return rc;
+}
+
+// --- encoding ---------------------------------------------------------
+
+// The format is NAMED. Probing the pixels to pick one would be guessing
+// at the caller's intent, and the two formats here differ in what they
+// are FOR rather than in what they can hold (see uimg.h).
+static const struct uimg_codec *codec_named(const char *name) {
+    for (int i = 0; i < CODEC_COUNT; i++)
+        if (strcmp(codecs[i]->name, name) == 0) return codecs[i];
+    return NULL;
+}
+
+int uimg_encode(const struct uimg *im, const char *format,
+                uint8_t **out, size_t *out_len) {
+    *out = NULL;
+    *out_len = 0;
+    if (!im || !im->px || im->w <= 0 || im->h <= 0) {
+        uimg_set_error("nothing to encode");
+        return -EINVAL;
+    }
+    const struct uimg_codec *c = format ? codec_named(format) : NULL;
+    if (!c) {
+        uimg_set_error("not an image format this build recognises");
+        return -ENOTSUP;
+    }
+    if (!c->encode) {
+        uimg_set_error("this build can read this format but not write it");
+        return -ENOTSUP;
+    }
+    return c->encode(im, out, out_len);
+}
+
+// The extension, lowercased, with no dot. An unknown one is refused
+// rather than defaulted: silently writing a QOI into a file called
+// .bmp would produce a file nothing opens and no error to explain it.
+static const char *format_from_path(const char *path) {
+    const char *dot = NULL;
+    for (const char *p = path; *p; p++)
+        if (*p == '.') dot = p;
+        else if (*p == '/') dot = NULL;
+    if (!dot || !dot[1]) return NULL;
+
+    static char ext[8];
+    size_t n = 0;
+    for (const char *p = dot + 1; *p && n + 1 < sizeof ext; p++)
+        ext[n++] = (*p >= 'A' && *p <= 'Z') ? (char)(*p - 'A' + 'a') : *p;
+    ext[n] = '\0';
+    if (strcmp(ext, "jpg") == 0) return "jpeg";
+    return ext;
+}
+
+int uimg_save(const char *path, const struct uimg *im, const char *format) {
+    if (!format) format = format_from_path(path);
+    if (!format) {
+        uimg_set_error("the filename has no extension to pick a format from");
+        return -ENOTSUP;
+    }
+
+    uint8_t *buf;
+    size_t len;
+    int rc = uimg_encode(im, format, &buf, &len);
+    if (rc < 0) return rc;
+
+    int fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+    if (fd < 0) {
+        free(buf);
+        uimg_set_error("the file could not be created");
+        return fd;
+    }
+    // sys_write() completes the whole buffer (the kernel chunks it), so
+    // a short return here is a real failure and not a partial write to
+    // resume. A half-written image file is worse than none: it has a
+    // valid header and decodes to a picture that is simply wrong.
+    long wrote = sys_write(fd, buf, len);
+    sys_close(fd);
+    free(buf);
+    if (wrote < 0 || (size_t)wrote != len) {
+        uimg_set_error("the file could not be written in full");
+        return wrote < 0 ? (int)wrote : -EIO;
+    }
+    return 0;
 }
 
 // --- fitting and resampling -------------------------------------------

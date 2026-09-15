@@ -29,6 +29,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "rt/sys.h"
 #include "lib/uimg.h"
 #include <kerrno.h>
@@ -199,6 +200,66 @@ int main(int argc, char **argv) {
     ok("a transparent pixel does not bleed its colour into an opaque one",
        ha_a >= 120 && ha_a <= 136 && ha_r >= 250 && ha_g == 0 && ha_b == 0, d3);
     if (rc == 0) uimg_free(&hb);
+
+    // --- the ENCODERS, round-tripped -----------------------------------
+    //
+    // **THE ROUND TRIP IS THE WEAK HALF AND IT IS HERE ANYWAY.** An
+    // encoder checked by this repo's own decoder passes whenever the two
+    // share a mistake, which is why the real oracle is Pillow and zlib
+    // on the host (tools/uimg_encode_hostcheck.py). What this adds is
+    // the half that harness cannot see: the encoders running in RING 3,
+    // against this heap and these syscalls, on the machine that ships.
+    //
+    // The image is deliberately awkward for QOI: a run, an index hit, a
+    // small delta and a jump too big for one, so every chunk type is
+    // exercised rather than a flat block that only emits runs.
+    static uint32_t src[16];
+    for (int i = 0; i < 16; i++) src[i] = 0xFF000000u | (uint32_t)(i * 0x0F0704);
+    src[4] = src[5] = src[6] = src[3];        // a run
+    src[9] = src[0];                          // an index hit
+    src[12] = 0xFF010203u;                    // a jump nothing can encode small
+    struct uimg enc = { .w = 4, .h = 4, .px = src, .has_alpha = 0 };
+
+    uint8_t *bytes = 0;
+    size_t len = 0;
+    rc = uimg_encode(&enc, "qoi", &bytes, &len);
+    ok("QOI encodes", rc == 0 && bytes && len > 14, uimg_last_error());
+    if (rc == 0) {
+        struct uimg back;
+        int drc = uimg_decode(bytes, len, &back);
+        int same = drc == 0 && back.w == 4 && back.h == 4;
+        for (int i = 0; same && i < 16; i++)
+            if ((back.px[i] & 0xFFFFFF) != (src[i] & 0xFFFFFF)) same = 0;
+        ok("QOI decodes back to the same pixels, exactly", same,
+           drc == 0 ? "a pixel differs" : uimg_last_error());
+        if (drc == 0) uimg_free(&back);
+        free(bytes);
+    }
+
+    // PNG has no decoder here, and that is a DISTINCT answer from a
+    // broken file -- an app has to be able to tell a user which it is.
+    bytes = 0;
+    len = 0;
+    rc = uimg_encode(&enc, "png", &bytes, &len);
+    ok("PNG encodes", rc == 0 && bytes && len > 8, uimg_last_error());
+    if (rc == 0) {
+        struct uimg_info info;
+        int irc = uimg_info(bytes, len, &info);
+        char d4[96];
+        snprintf(d4, sizeof d4, "info rc=%d %dx%d %s", irc, info.w, info.h,
+                 info.format ? info.format : "?");
+        ok("a written PNG reads back its own header",
+           irc == 0 && info.w == 4 && info.h == 4, d4);
+
+        struct uimg back;
+        int drc = uimg_decode(bytes, len, &back);
+        ok("and refuses to DECODE with -ENOTSUP, not -EINVAL",
+           drc == -ENOTSUP, "a file we wrote must not read as corrupt");
+        free(bytes);
+    }
+
+    rc = uimg_encode(&enc, "jpeg", &bytes, &len);
+    ok("a format with no encoder is -ENOTSUP", rc == -ENOTSUP, uimg_last_error());
 
     // fit maths, which the widget and the wallpaper both depend on
     int fw, fh;

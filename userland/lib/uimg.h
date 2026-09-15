@@ -78,7 +78,16 @@ struct uimg_codec {
 
     // Both return 0 or a negative errno. See the error codes below.
     int (*info)(const uint8_t *d, size_t n, struct uimg_info *out);
+
+    // NULL means this build can read the format's header but not its
+    // pixels -- uimg_decode() turns that into -ENOTSUP with a sentence
+    // saying so, which is the honest answer and not the same as
+    // "corrupt file". PNG is the one: it is here to be WRITTEN.
     int (*decode)(const uint8_t *d, size_t n, struct uimg *out);
+
+    // Writes `im` into a fresh allocation, `*out_len` bytes, which the
+    // caller frees. NULL for a format this build only reads.
+    int (*encode)(const struct uimg *im, uint8_t **out, size_t *out_len);
 };
 
 // ERRORS ARE NEGATIVE ERRNOS, the same convention a failed syscall
@@ -122,6 +131,34 @@ int uimg_load(const char *path, struct uimg *out);
 // never-decoded image.
 void uimg_free(struct uimg *im);
 
+// --- encoding ---------------------------------------------------------
+//
+// The other direction, and the only reason it exists is that something
+// had to WRITE a file: the screenshot tool. Two formats, and the pair
+// is the point, as it is for the decoders above:
+//
+//   qoi  what toy-os itself can open again -- Image Viewer already
+//        decodes it, losslessly, and on flat UI content it is several
+//        times smaller than the raw pixels.
+//   png  what LEAVES the machine. Nothing here decodes PNG (that needs
+//        inflate; see docs/roadmap.md), so a PNG written here is for a
+//        host, a browser or a bug report -- not for this desktop.
+//
+// A format is named, never guessed from the pixels. `uimg_save()` picks
+// it from the path's extension because that is what a user typing a
+// filename means by it.
+
+// Encodes into a fresh allocation. `*out` is the caller's to free().
+// `format` is a codec name ("qoi", "png"). Returns 0, -EINVAL for an
+// empty image, -ENOTSUP for a format this build cannot write, -ENOMEM.
+int uimg_encode(const struct uimg *im, const char *format,
+                uint8_t **out, size_t *out_len);
+
+// The same, straight to a path. `format` may be NULL, which takes it
+// from the extension; an unknown extension is -ENOTSUP rather than a
+// guess, for the reason a parser here never guesses.
+int uimg_save(const char *path, const struct uimg *im, const char *format);
+
 // --- scaling ---------------------------------------------------------
 //
 // How a picture is placed in a box that is not its shape. The names are
@@ -164,7 +201,10 @@ int uimg_scale(const struct uimg *src, int dw, int dh, struct uimg *out);
 // file is smaller than the JPEG header would be. Neither is a substitute
 // for the other, and a decoder that had to be one would be a worse
 // version of both.
+// PNG is the third row and the asymmetric one: probe and info, no
+// decode, and an encoder. See the encoding section above.
 extern const struct uimg_codec uimg_codec_jpeg;
 extern const struct uimg_codec uimg_codec_qoi;
+extern const struct uimg_codec uimg_codec_png;
 
 #endif

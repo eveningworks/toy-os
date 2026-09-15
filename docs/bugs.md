@@ -300,6 +300,35 @@ either still parses the ring-0 output or runs on an image that has no
 
 Reproduce: `make clean-disk && make iso && python3 tools/ondemand_sweep.py --logs DIR`.
 
+- **`remote.py flash` can finish without rebooting, and say nothing
+  about it** — seen once on the ASUS (2026-09-15), with the previous
+  flash to the same machine an hour earlier rebooting normally. The
+  kernel was written and verified over TFTP; none of `_verify_offline`'s
+  three outcome messages was printed, and the tool exited 0. The machine
+  was then left running the OLD kernel with the NEW `/lib`, which is the
+  state that file's own comments describe as the one to avoid: apps
+  stopped launching, and only a manual reboot recovered it. Cause not
+  established -- the capture was through `tail -6` and the decisive
+  lines may have been what it cut, so the first thing to do is reproduce
+  with the full output kept.
+
+Reproduce: `python3 tools/remote.py --host <ip> flash --force 2>&1 |
+tee flash.log`, twice in a row, and compare. The tell is the absence of
+either `rebooting ...` or `PRESS THE POWER BUTTON`; `remote.py exec
+uptime` then shows the machine did not restart.
+
+- **`fullscreen_test.py` fails 2 checks under `gui_regress.py`, and
+  cannot pass there** — it starts its OWN guest with `--vga virtio`
+  because the display lease needs a hardware cursor plane, but
+  `gui_regress` has already booted a std-VGA guest on that slot, so
+  `vm.py` prints `vm: already running`, returns 0, and the tool runs
+  against the wrong machine. Its `hwcursor` precondition then fails and
+  the lease check with it. Measured PRE-EXISTING with `predates.py`
+  (2026-09-15): HEAD fails the same two. It passes when run on its own.
+
+Reproduce: `python3 tools/gui_regress.py -k fullscreen` (fails) against
+`python3 tools/fullscreen_test.py` (passes).
+
 - **`ansi_cursor_test.py`** — 5 of 10 checks fail on the physical
   console (blank-column and cursor-up assertions), every run. Measured
   PRE-EXISTING against the pre-dynlink HEAD with `predates.py`

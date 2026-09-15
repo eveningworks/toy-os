@@ -90,11 +90,14 @@ struct wmchan_msg {
     union {
         char text[WIN_TITLE_LEN];   // TITLE, and CREATE's app_id
         struct win_popup_pos pos;   // POPUP's positioner
+        struct win_shot shot;       // SCREENSHOT's rect, in and out
     };
 };
 
 _Static_assert(sizeof(struct win_popup_pos) <= WIN_TITLE_LEN,
                "the positioner rides the text field and must fit it");
+_Static_assert(sizeof(struct win_shot) <= WIN_TITLE_LEN,
+               "a screenshot rect rides the text field and must fit it");
 
 _Static_assert(sizeof(struct wmchan_msg) <= UCHAN_SLOT_BYTES,
                "a wmchan message must fit one channel slot");

@@ -103,6 +103,21 @@ extern int window_count;
 // afterwards.
 int wm_windows_reserve(int n);
 
+// --- the pointer, drawn somewhere that is not the back buffer ---------
+//
+// Both exist for WIN_REQ_SCREENSHOT and are two halves of one question:
+// is the pointer in the frame that was captured? With a software cursor
+// it is, and _erase() takes it back out; on the hardware cursor plane it
+// is not, and _into() puts it in. See wm_screenshot.c.
+// Leaves one client's windows out of the next rendered frame, so a
+// screenshot tool can stay out of its own picture (WIN_SHOT_NO_SELF).
+// Set it, render, capture, clear it, repaint -- wm_screenshot.c.
+void wm_render_hide_pid(int pid);
+int  wm_render_hidden_pid(void);
+
+void wm_render_cursor_into(struct ugfx_surface *dst, int ox, int oy);
+int  wm_render_cursor_erase(struct ugfx_surface *dst, int ox, int oy);
+
 extern int screen_w, screen_h;
 extern int taskbar_h;
 
