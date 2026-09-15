@@ -264,6 +264,9 @@ static struct uui_tab TABS[3] = { { "Overview", 0 }, { "Processes", 0 },
 // refresh_overview(), which already computes the two percentages for
 // the rings -- so the tab costs no extra reading, only the samples.
 static struct uui_chart g_cpu_chart, g_mem_chart;
+// The readings the charts POINT AT -- uui_chart copies nothing, so these
+// must outlive every frame that draws them.
+static char g_cpu_reading[16], g_mem_reading[40];
 static struct uui_item   PERF_ITEMS[2];
 static struct uui_layout PERF_LAYOUT;
 static struct uui_tabs g_tabs;
@@ -478,6 +481,10 @@ static void refresh_overview(void) {
         g_cpu_have_prev = 1;
     }
     uui_chart_push(&g_cpu_chart, pct);
+    // THE CHART'S OWN READING, in storage that outlives the frame: the
+    // widget keeps the pointer rather than copying (ui/uui_chart.h).
+    snprintf(g_cpu_reading, sizeof g_cpu_reading, "%d%%", pct);
+    uui_chart_set_value(&g_cpu_chart, g_cpu_reading);
     snprintf(val, sizeof val, "%d%%", pct);
     // No unit under the number: a percentage that moves says "busy" on
     // its own, and a static word inside the hole is one more thing to
@@ -493,6 +500,15 @@ static void refresh_overview(void) {
         unsigned long long used  = total > freeb ? total - freeb : 0;
         int per = total ? (int)((used * 1000ULL) / total) : 0;
         uui_chart_push(&g_mem_chart, per / 10);
+        // USED AGAINST TOTAL, in whatever unit each deserves --
+        // human_size_iec() picks MiB or GiB per value, so a machine with
+        // 512 MiB and one with 8 GiB both read naturally and neither is
+        // "0.04 GiB". Windows' Task Manager shows the same pair.
+        char used_h[16], total_h[16];
+        human_size_iec(used_h, sizeof used_h, used);
+        human_size_iec(total_h, sizeof total_h, total);
+        snprintf(g_mem_reading, sizeof g_mem_reading, "%s of %s", used_h, total_h);
+        uui_chart_set_value(&g_mem_chart, g_mem_reading);
         snprintf(val, sizeof val, "%d%%", per / 10);
         human_size_iec(unit, sizeof unit, used);
         char t[16];

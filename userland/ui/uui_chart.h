@@ -29,6 +29,15 @@
 struct uui_chart {
     int x, y, w, h;
     const char *label;          // drawn top-left, or NULL for none
+    // **THE READING, IN THE CALLER'S WORDS, drawn top-right.** The
+    // widget plots a PERCENTAGE and only the caller knows what it is a
+    // percentage OF -- "42%" for a processor, "1.2 / 1.9 GiB" for
+    // memory. Formatting it here would mean the widget choosing units
+    // for a number whose meaning it does not have. Same split
+    // uui_meter makes with its caption/value/unit strings.
+    //
+    // CALLER-OWNED and must outlive the draw, exactly like `label`.
+    const char *value;
     uint8_t samples[UUI_CHART_MAX];
     int count;                  // valid samples, capped at UUI_CHART_MAX
     int head;                   // where the next sample goes
@@ -44,6 +53,10 @@ void uui_chart_init(struct uui_chart *c, const char *label);
 // legitimately land just outside on a rounding edge, and a dropped
 // sample would leave a hole in a series that is read as a shape.
 void uui_chart_push(struct uui_chart *c, int percent);
+
+// The reading to print top-right, or NULL for none. The string is NOT
+// copied -- point it at storage that outlives the frame.
+void uui_chart_set_value(struct uui_chart *c, const char *value);
 
 // The most recent sample, or 0 when there is none. For a caller that
 // wants to print the number beside the trace.

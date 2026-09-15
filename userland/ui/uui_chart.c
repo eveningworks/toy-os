@@ -7,6 +7,7 @@
 void uui_chart_init(struct uui_chart *c, const char *label) {
     c->x = c->y = c->w = c->h = 0;
     c->label = label;
+    c->value = NULL;
     c->count = 0;
     c->head = 0;
     for (int i = 0; i < UUI_CHART_MAX; i++) c->samples[i] = 0;
@@ -19,6 +20,10 @@ void uui_chart_push(struct uui_chart *c, int percent) {
     c->samples[c->head] = (uint8_t)percent;
     c->head = (c->head + 1) % UUI_CHART_MAX;
     if (c->count < UUI_CHART_MAX) c->count++;
+}
+
+void uui_chart_set_value(struct uui_chart *c, const char *value) {
+    c->value = value;
 }
 
 int uui_chart_last(const struct uui_chart *c) {
@@ -83,11 +88,26 @@ void uui_chart_draw(struct ugfx_surface *s, const struct uui_chart *c) {
     ugfx_draw_line(s, c->x, c->y, c->x, c->y + c->h - 1, edge, GEOM_ALIASED);
     ugfx_draw_line(s, c->x + c->w - 1, c->y, c->x + c->w - 1, c->y + c->h - 1, edge, GEOM_ALIASED);
 
-    if (c->label) {
-        // CLIPPED, because a label is caller text in a fixed box --
-        // gfx_draw_string()'s unclipped twin has shipped this bug twice.
-        ugfx_draw_string_clipped(s, c->x + 4, c->y + 3, c->w - 8, c->label,
-                                 UUI_COLOR(c->fill, UTHEME_TEXT), bg);
+    // The label left and the reading right, both CLIPPED -- caller text
+    // in a fixed box, which is the bug gfx_draw_string()'s unclipped
+    // twin has shipped twice.
+    uint32_t ink = UUI_COLOR(c->fill, UTHEME_TEXT);
+    int label_w = c->label ? ugfx_text_width(c->label) : 0;
+    if (c->label)
+        ugfx_draw_string_clipped(s, c->x + 4, c->y + 3, c->w - 8, c->label, ink, bg);
+    if (c->value) {
+        // MEASURED, never a character count times a width: this font is
+        // proportional (docs/conventions/gui.md), so counting would put
+        // the reading in the wrong place by a few pixels per character.
+        int vw = ugfx_text_width(c->value);
+        int vx = c->x + c->w - 4 - vw;
+        // Never over the label: the reading loses, because the label
+        // says WHICH graph this is and a nameless one is worse than an
+        // unlabelled number.
+        int floor_x = c->x + 4 + label_w + ugfx_char_advance('n');
+        int room = c->x + c->w - 4 - floor_x;
+        if (vx < floor_x) vx = floor_x;
+        if (room > 0) ugfx_draw_string_clipped(s, vx, c->y + 3, room, c->value, ink, bg);
     }
 }
 
