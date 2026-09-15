@@ -5001,6 +5001,42 @@ leaked depth.
 and it looks harmless; it corrupts an unrelated process's resume state
 and panics the kernel in two runs out of three.
 
+**RE-MEASURED 2026-09-15 AND THE BLOCKER ABOVE NO LONGER REPRODUCES.**
+`flake_hunt.py ktest -n 10` at `0xEF`: **10 runs of 10 clean**,
+767/0/31 every time, zero `#GP`, zero panics, zero ring-3 crashes.
+`query_test.c`'s "class 0 describes the registry, itself included"
+enumerates `QUERY_PROVIDERS`, whose `fill()` asks every provider for its
+count -- so `mmaudit_count()` and its `audit_walk()` over every slot's
+PML4 WERE exercised on each of those runs, which is the check that says
+the data reached the code rather than the run being vacuous. What fixed
+it was not identified: several things landed between the two
+measurements, and nothing was aimed at this. **Treat the paragraph above
+as history, not as current state** -- and re-measure before believing
+either way, because a fault that appeared in 2 runs of 3 and then not in
+10 has not been explained, only stopped being observed.
+
+**THE USERLAND SUITE IS NOW THE SAME AT BOTH GATES, AND THAT IS THE
+REAL NEWS.** Standalone `usertest_run.py`, one run at a time on an idle
+machine:
+
+| gate | clean runs | what failed |
+|---|---|---|
+| `0xEE` | 7 of 8 | `applog_test` once -- missing its completion banner |
+| `0xEF` | 12 of 16 | `env_test` once by name, 1-2 unnamed in two more runs |
+
+4 in 16 against 1 in 8 is not a difference these counts can resolve, and
+**every failure is the same family**: a spawned test whose completion
+banner never arrives. That is the pair of stalls this entry already
+lists as undiagnosed (`applog_test` parked in `block(child)` with no
+child, `argv_test` in `block(pipe)` with the writer gone), and
+`docs/bugs.md` records the `env_test` signature at `0xEE` as well. So
+the remaining work is those contract bugs, which are worth fixing at
+`0xEE` regardless -- not something the gate introduces.
+
+**Still NOT measured at `0xEF` on this tree:** the GUI suite, and a full
+`preflight.sh`. The one-in-seven `stack smashing` boot panic above has
+also not been looked for again.
+
 **What the flip is expected to buy, and what it is not.** It stops
 interrupts being masked for ~20 ms at a stretch, so keyboard, mouse and
 timer IRQs are serviced DURING a long syscall. It does not let the

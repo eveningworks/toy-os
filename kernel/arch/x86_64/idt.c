@@ -202,10 +202,12 @@ void idt_init(void) {
     // The two win_input KTESTs that used to hold it are FIXED -- an
     // exit ran preemptible, so a tick inside one marked the exiting
     // slot READY over its ZOMBIE and left it RUNNING for good
-    // (scheduler_on_exit). What holds the flip now is ONE test at 1 run
-    // in 3: sched_test's "a scheduled process survives a legacy process
-    // running alongside", against 3 in 3 passing at 0xEE on the same
-    // tree. docs/roadmap-details.md has the evidence and the
+    // (scheduler_on_exit). **Re-measured 2026-09-15: ktest is 10 runs
+    // of 10 clean at 0xEF and the mmaudit #GP that last held it did not
+    // reproduce, cause unidentified.** What is left is the userland
+    // suite, which fails at the SAME rate and in the same family at
+    // both gates -- a spawned test whose completion banner never
+    // arrives. docs/roadmap-details.md has the evidence and the
     // instruments.
     // LOGGED, because which gate a boot is running decides whether a
     // syscall can be preempted -- and a build that did not pick up a
