@@ -231,9 +231,9 @@ int64_t sys_write(int fd, const void *buf, size_t len) {
     //
     // **THE OUTER ONE IS THE ONE THAT WAS MISSING, AND IT LOST DATA
     // SILENTLY.** The kernel caps a single write at SYS_WRITE_MAX
-    // (1024 bytes, abi/syscall_abi.h) -- an artefact of the bounce
-    // buffer it copies through, not a promise to the caller. A program
-    // handing over more than that got 1024 bytes written, a return
+    // (abi/syscall_abi.h) -- an artefact of the bounce buffer it copies
+    // through, not a promise to the caller. A program handing over more
+    // than the cap, then 1024 bytes, got exactly that written, a return
     // value saying so, and no indication that the remainder had gone
     // anywhere. Every caller that ignored the count -- which is most of
     // them, because a write to a terminal "cannot fail" -- silently

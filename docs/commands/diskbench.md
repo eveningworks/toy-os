@@ -92,10 +92,11 @@ compositor's pings.
 **Why the profiles are not called SEQ1M.** Two things CrystalDiskMark
 reports that this OS cannot deliver are stated rather than implied:
 
-- **64 KiB per syscall.** `SYS_WRITE_MAX` is 65536 bytes — an artefact
-  of the bounce buffer the syscall copies through — and libsys loops to
-  complete a bigger buffer. A "1 MiB transfer" is therefore 16 syscalls
-  and the disk never sees one, so the profile is plain **SEQ** and the
+- **One syscall is not one request.** The sequential block is
+  `SYS_WRITE_MAX` (`abi/syscall_abi.h`) — an artefact of the bounce
+  buffer the syscall copies through — and libsys loops to complete a
+  bigger buffer. A "1 MiB transfer" is therefore several syscalls and
+  the disk never sees one, so the profile is plain **SEQ** and the
   program prints the size it actually used as `syscall-bytes`, which is
   the number to read rather than any figure quoted elsewhere.
 - **Q1T1.** One request in flight, always: there is no asynchronous

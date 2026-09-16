@@ -5,8 +5,8 @@
 // that prints. The first version ran the passes inside on_tick, sliced
 // across frames, and it was wrong in a way worth recording: the slice
 // was bounded in time but the UNIT was not, and one "1 MiB transfer" is
-// 1024 syscalls (SYS_WRITE_MAX was 1 KiB then; it is 64 KiB now),
-// which on a 256 MiB file runs
+// 1024 syscalls (SYS_WRITE_MAX was 1 KiB then and is far larger now --
+// abi/syscall_abi.h), which on a 256 MiB file runs
 // for many seconds. The compositor pings every client on a cadence, so
 // the window sat there reading "Disk Mark (Not Responding)" for the
 // length of a pass. Bounding a loop is useless when one turn of it is

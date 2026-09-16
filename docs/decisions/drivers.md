@@ -1756,7 +1756,7 @@ changing. `libasound` made exactly this move when PulseAudio appeared,
 and PipeWire kept both.
 
 **What a daemon needs is RENDEZVOUS, not shared memory.** 192 KB/s in
-2 KiB chunks is ~94 messages a second against a 64 KiB `SYS_WRITE_MAX`;
+2 KiB chunks is ~94 messages a second, well inside `SYS_WRITE_MAX`;
 two copies and a scheduling hop are free against a 341 ms ring, and a
 shared-memory ring per client is what a 2 ms latency target needs, which
 this is not. What is genuinely missing is that pipes here are INHERITED

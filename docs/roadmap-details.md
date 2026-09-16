@@ -3087,8 +3087,8 @@ way to reach it -- that rendezvous is the missing primitive, and
 `PIPE_MAX` being 8 kernel-wide is a number to raise beside it.
 
 **It does NOT need shared memory.** 48 kHz stereo s16 is 192 KB/s; at
-2 KiB chunks that is ~94 messages a second per client against a
-`SYS_WRITE_MAX` of 64 KiB, and two copies plus a scheduling hop are
+2 KiB chunks that is ~94 messages a second per client, comfortably
+inside `SYS_WRITE_MAX`, and two copies plus a scheduling hop are
 nothing against a 341 ms ring. A shared-memory ring per client is what
 PipeWire needs for a 2 ms target, and toy-os has no such target.
 

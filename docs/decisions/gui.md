@@ -145,8 +145,9 @@ the work across `on_tick` and bounded each slice at 120 ms of wall
 clock, which sounds exactly right. It shipped, and the window still read
 `(Not Responding)` through every pass. The reason is that a slice can
 only be bounded between UNITS, and the unit was a 1 MiB transfer -- which
-on this OS is 1024 syscalls, because `SYS_WRITE_MAX` is 1 KiB and libsys
-loops to complete a bigger buffer. One unit ran for seconds. **Bounding
+was then 1024 syscalls, because `SYS_WRITE_MAX` was 1 KiB and libsys
+loops to complete a bigger buffer. One unit ran for seconds. (The cap
+has been raised twice since; the shape of the mistake is the point.) **Bounding
 a loop does nothing when one turn of it is unbounded**, and the budget
 check never got to run.
 

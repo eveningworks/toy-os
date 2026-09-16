@@ -51,9 +51,11 @@ extern FILE *const stderr;
 
 #define EOF (-1)
 
-// One flush is one write syscall: SYS_WRITE_MAX is 1024 and the kernel
-// silently CAPS a longer write rather than failing it, so a buffer
-// bigger than that would just mean more short writes to loop over.
+// One flush is one write syscall. This was sized when SYS_WRITE_MAX was
+// also 1024, so a bigger buffer could only have meant more short writes
+// to loop over; the cap is far larger now (abi/syscall_abi.h), which
+// makes this a plain memory-versus-syscalls choice rather than a
+// constraint. Raising it is a measurement nobody has taken.
 #define BUFSIZ 1024
 
 // Streams a program may have open at once, over and above the three

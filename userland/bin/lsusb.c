@@ -30,7 +30,8 @@
 #define VENDOR_NAME_MAX  48
 #define PRODUCT_NAME_MAX 64
 #define LINE_MAX        256
-#define CHUNK           1024   // SYS_WRITE_MAX also caps a single SYS_READ
+#define CHUNK           1024   // local read buffer; SYS_READ is capped
+                               // at SYS_WRITE_MAX, far above this
 
 static struct query_usb g_dev[MAX_DEVS];
 static char g_vendor_name[MAX_DEVS][VENDOR_NAME_MAX];

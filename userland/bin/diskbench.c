@@ -14,11 +14,15 @@
 // WHAT THE LABELS MEAN, AND WHY THEY ARE NOT CDM's. Two things this OS
 // cannot deliver are stated rather than implied:
 //
-//   * **64 KiB per syscall.** SYS_WRITE_MAX is 65536 bytes
+//   * **One syscall is not one request.** SEQ_BLOCK is SYS_WRITE_MAX
 //     (abi/syscall_abi.h) -- an artefact of the bounce buffer the
 //     syscall copies through -- and libsys loops to complete a larger
-//     buffer. So a "1 MiB transfer" is 1024 syscalls and the disk never
-//     sees one. The sequential profile is therefore SEQ1K, not SEQ1M.
+//     buffer, so a "1 MiB transfer" is several syscalls and the disk
+//     never sees one. The profile is therefore plain SEQ, and the
+//     program PRINTS the size it used as `syscall-bytes` rather than
+//     naming a figure here that the constant can outgrow. It has: this
+//     comment has said 1 KiB and 64 KiB, both wrong by the time it was
+//     read.
 //   * **Q1T1.** One request in flight, always: there is no asynchronous
 //     block interface and no threads here, so CDM's Q8T1/Q32T1 have
 //     nothing to express.

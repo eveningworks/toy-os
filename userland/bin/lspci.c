@@ -131,7 +131,8 @@ static const char *class_name(uint8_t class_code, uint8_t subclass) {
 #define VENDOR_NAME_MAX  40
 #define DEVICE_NAME_MAX  64
 #define LINE_MAX        256
-#define CHUNK           1024 // SYS_WRITE_MAX -- the per-call cap on SYS_READ too
+#define CHUNK           1024 // local read buffer; SYS_READ is capped at
+                             // SYS_WRITE_MAX, far above this
 
 static struct pci_device g_dev[MAX_DEVS];
 static char g_vendor_name[MAX_DEVS][VENDOR_NAME_MAX];

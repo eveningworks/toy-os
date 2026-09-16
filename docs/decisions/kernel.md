@@ -3769,11 +3769,15 @@ SILENTLY. That was latent while the only reader was a shell draining
 continuously; `|` makes the reader another process that may not have
 been scheduled yet, so the pipe fills every time.
 
-Atomicity is affordable rather than aspirational: a single write is
-capped at `SYS_WRITE_MAX` (1024) against a `PIPE_BUF_SIZE` (4096)
-buffer, so one write always fits once the pipe drains and a parked
-writer can never be waiting on a request too large to satisfy. POSIX
-guarantees the same for writes up to `PIPE_BUF`, for the same reason.
+Atomicity is affordable rather than aspirational: `sys_do_write_pipe()`
+CLAMPS a pipe write to `PIPE_BUF_SIZE`, so one write always fits once
+the pipe drains and a parked writer can never be waiting on a request
+too large to satisfy. POSIX guarantees the same for writes up to
+`PIPE_BUF`, for the same reason. **The clamp was free when this was
+written and is not any more** -- `SYS_WRITE_MAX` was then 1024 against a
+4096-byte buffer, so the property held with nothing enforcing it;
+raising the cap would have parked writers on requests the pipe could
+never satisfy. `api/pipe.h` carries the note.
 The retry lives in libsys, which already loops on `SYS_RETRY` for reads;
 re-sending the whole buffer is only correct BECAUSE the write was
 all-or-nothing, since a partial write would duplicate those bytes.
