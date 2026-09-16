@@ -823,49 +823,67 @@ that could be missing therefore pins a following `%d` as well.
 
 ## BUFSIZ, measured (2026-09-16)
 
-`BUFSIZ` is 4096. It was 1024, chosen when `SYS_WRITE_MAX` was also
+`BUFSIZ` is 16384. It was 1024, chosen when `SYS_WRITE_MAX` was also
 1024 -- so a larger buffer could only have produced more short writes,
 and the constant was a constraint rather than a choice. `SYS_WRITE_MAX`
 is 262144 now and that reasoning is gone, which is what prompted
 measuring it.
 
-`/tests/stdio_bench` sweeps the buffer size over 64-byte writes. On
-ramfs, where there is no device and the figure is per-syscall overhead
-alone -- the ceiling on what this constant can buy:
+`/tests/stdio_bench` sweeps the buffer size over 64-byte writes, on
+ramfs (per-syscall overhead alone) and on the disk (what a user feels).
 
-| bufsz | syscalls/pass | KB/s | vs 1024 |
-|---:|---:|---:|---:|
-| 512 | 2048 | 42,666 | -50% |
-| 1024 | 1024 | 85,333 | -- |
-| 4096 | 256 | 89,043 | +4.3% |
-| 16384 | 64 | 89,043 | +4.3% |
-| 65536 | 16 | 89,043 | +4.3% |
-| 262144 | 4 | 97,523 | +14% |
+**THE FIRST ANSWER WAS WRONG, AND THE WAY IT WAS WRONG IS THE POINT.**
+Measured under QEMU/KVM, the curve looked flat above 4096: 1024 -> 4096
+read as +4% and nothing above it gained anything, so 4096 was chosen
+and shipped. On the bare-metal ASUS the same sweep says 1024 -> 4096 is
+**6.3x**, with another 2.15x above that. An emulated disk does not model
+a journalled write to a real AHCI controller, so the cost the constant
+exists to amortise was simply absent. This is CLAUDE.md's rule about
+TCG saying nothing about speed, arriving as a wrong constant rather than
+as a missed bug -- **do not tune this under emulation.**
 
-**The large win was 512 -> 1024 and the old value already had it.**
-Above 1024 the curve is flat from 4096 up. 4096 was chosen because it
-is where it flattens AND because it equals `T3_BLOCK` and the page
-size, so a full buffer is exactly one filesystem block; the sizes above
-it cost `.bss` in every process for nothing measurable.
+Bare metal, 64-byte records, 4 MB x 4 rounds per size, two runs
+agreeing within a few percent:
 
-Three honest limits on the numbers. It is a SINGLE sample against a
-100 Hz clock, so the 4096 -> 262144 step is four ticks out of 46 and
-not a solid 14%. The disk half of the run came out too quantised to
-use -- non-monotonic, with 4096 measuring slower than 1024 -- so
-nothing is claimed from it. And CPU time came out at exactly half of
-wall in every row, which is too clean to be a real figure.
+| bufsz | disk KB/s | vs 4096 | per doubling | RAM/proc |
+|---:|---:|---:|---:|---:|
+| 1024 | 5,441 | 0.16x | | 2 KB |
+| 4096 | 33,844 | 1.00x | | 8 KB |
+| 8192 | 53,610 | 1.58x | +58% | 16 KB |
+| **16384** | **72,797** | **2.15x** | +36% | **32 KB** |
+| 32768 | 97,428 | 2.88x | +34% | 64 KB |
+| 65536 | 103,896 | 3.07x | +7% | 128 KB |
+| 262144 | 128,641 | 3.80x | +24%, 4x the RAM | 512 KB |
+
+ramfs is nearly flat across the whole range (+40% end to end), so the
+disk is what this constant is for.
+
+**Why 16384 and not the knee.** The knee is 32768 -- past it, doubling
+the memory buys 7%. 16384 takes 2.15x for 32 KB per process because
+**that memory is resident, not reserved**: `elf_load()` allocates and
+zeroes a frame for every page up to `p_memsz`, so `.bss` is committed at
+spawn whether a program prints or not. Half the throughput-per-byte
+argument for 32768 disappears once the cost is paid by every process on
+the machine rather than by the ones doing I/O.
 
 **What real systems do, and why toy-os does not.** glibc's `BUFSIZ` is
 8192 and musl's and FreeBSD's are 1024 -- but glibc and FreeBSD both
 ignore it in practice and size the real buffer from `st_blksize`, the
 filesystem's preferred block, keeping the constant as a fallback. That
-is the better design and it is not available here: `struct sys_stat`
-has no `blksize` field, so it would be an ABI change. Worth doing if a
-backend ever wants a block size other than 4096; until then the
-constant and `T3_BLOCK` agree and the fallback IS the answer.
+is the better design and it is not available here: `struct sys_stat` has
+no `blksize` field, so it would be an ABI change. It would also be worth
+more here than there, since ramfs and TFS3 want different answers --
+ramfs gains almost nothing from a big buffer and pays the same resident
+cost for it.
+
+**Two things the numbers do not support.** A measurement taken seconds
+after boot read 2.2x slower than the same configuration on a settled
+machine, so let the machine idle first. And CPU time under KVM came out
+at exactly half of wall in every row, which is not a real figure -- the
+bare-metal CPU column is the usable one.
 
 **Fixtures in `stdio_test.c` are sized from `BUFSIZ`, not from
 literals.** Three of them meant "larger than the buffer" and said 1280,
 3000 and 2048 -- all written against the old 1024, and all of which
-would have silently stopped crossing a boundary at 4096. A test whose
+would silently stop crossing a boundary once it moved. A test whose
 point is a boundary has to derive its size from the thing that moves.

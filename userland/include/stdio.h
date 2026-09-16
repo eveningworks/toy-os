@@ -51,17 +51,25 @@ extern FILE *const stderr;
 
 #define EOF (-1)
 
-// One flush is one write syscall, so this trades memory for syscalls:
-// 2 x BUFSIZ sits in every process's .bss for stdin and stdout, and
-// fopen() takes another from malloc. 4096 is where the measured curve
-// flattens (/tests/stdio_bench) and is also T3_BLOCK and the page size,
-// so a full buffer is exactly one block. Bigger measured no faster.
+// One flush is one write syscall, so this trades memory for syscalls --
+// and the memory is REAL: .bss is eagerly committed (elf_load() zeroes
+// every page up to p_memsz), so 2 x BUFSIZ is resident in every process
+// from spawn whether it prints or not, plus one more per fopen().
+//
+// 16384 is measured, on HARDWARE: writing 64-byte records to a TFS3
+// disk it is 2.15x the throughput of 4096, and the sizes above it buy
+// +34% and then +7% for each doubling of that resident cost.
+// docs/libc-design.md has the curve and the two runs behind it.
+//
+// **DO NOT RE-TUNE THIS UNDER QEMU.** An emulated disk made the same
+// sweep look flat above 4096 (+4%, against 12x on the real one), which
+// is how it was first set too low.
 //
 // **FIXTURES IN stdio_test.c ARE SIZED FROM THIS.** A test that means
 // "larger than the buffer" must say so in terms of BUFSIZ -- three were
-// written as literals against the old 1024 and silently stopped
+// written as literals against an older value and silently stopped
 // crossing a boundary when it moved.
-#define BUFSIZ 4096
+#define BUFSIZ 16384
 
 // Streams a program may have open at once, over and above the three
 // standard ones. Bounded by the kernel's own FD_MAX (16 descriptors per

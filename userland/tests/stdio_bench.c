@@ -15,6 +15,11 @@
 // the figure is the quantity BUFSIZ trades: one syscall per N bytes.
 // The total memcpy is the same at every N and cancels out.
 //
+// **THE DISK PASS IS SIZED SO THE BIGGEST BUFFER STILL MAKES SEVERAL
+// SYSCALLS.** At 64 KB it made ONE at 65536 and one at 262144, so those
+// two rows measured the same single write and could not be told apart --
+// which is exactly the range the choice of BUFSIZ turns on.
+//
 // **WHERE IT WRITES DECIDES WHAT IT MEASURES.** On /tmp (ramfs) there
 // is no device, so the figure is per-syscall overhead alone -- the
 // ceiling on what this constant can buy. On /var/tmp (the disk) the
@@ -48,7 +53,7 @@
 
 #define LINE_LEN     64
 #define PASS_KB      1024   // ramfs pass
-#define DISK_KB        64   // the disk is ~100x slower per byte; see the header
+#define DISK_KB      4096   // the disk is ~100x slower per byte; see the header
 
 #define ROUNDS_RAM   40
 #define ROUNDS_DISK  4
@@ -58,7 +63,10 @@
 // bug and it reported every row as a failure.
 #define FAILED  ((uint64_t)~0ull)
 
-static const int SIZES[] = { 512, 1024, 4096, 16384, 65536, 262144 };
+// 8192 and 32768 are here to resolve the KNEE rather than to be
+// candidates: the first real-hardware run jumped 12x between 1024 and
+// 4096 and then doubled again by 65536, with nothing measured between.
+static const int SIZES[] = { 512, 1024, 4096, 8192, 16384, 32768, 65536, 262144 };
 #define NSIZES ((int)(sizeof SIZES / sizeof SIZES[0]))
 
 // The report goes to a FILE as well as stdout: this runs for longer
