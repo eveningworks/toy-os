@@ -1,5 +1,6 @@
 // meter -- see ui/uui_meter.h for why this exists at all.
 #include "ui/uui_meter.h"
+#include "ui/uui_describe.h"
 #include "ui/uui_widget.h"
 #include "ui/utheme.h"
 #include "ui/uui_chart.h"
@@ -331,6 +332,16 @@ static void meter_bounds_op(const void *w, int *x, int *y, int *ow, int *oh) {
     *x = m->x; *y = m->y; *ow = m->w; *oh = m->h;
 }
 
+// WHERE THE TILE LANDED, so a test can ask instead of reading pixels
+// (docs/gui-guidelines.md). A meter is laid out in a grid beside others
+// and "are these cells uniform" is exactly the question a screenshot
+// answers badly -- Task Manager's Overview shipped a last row wider
+// than the row above it and every check passed.
+static void meter_describe_op(const void *w, const struct uui_describe *d) {
+    const struct uui_meter *m = w;
+    uui_describe_rect(d, "tile", m->x, m->y, m->w, m->h);
+}
+
 // No `hit`: a reading is not a control, so a click passes through to
 // whatever is behind. widget-ops-ok: display-only, like uui_label.
 const struct uui_widget_ops uui_meter_ops = {
@@ -338,4 +349,5 @@ const struct uui_widget_ops uui_meter_ops = {
     .draw = meter_draw_op,
     .natural_size = meter_natural_op,
     .set_geometry = meter_geometry_op,
+    .describe = meter_describe_op,
 };

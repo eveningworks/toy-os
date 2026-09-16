@@ -3534,6 +3534,21 @@ Four things to know:
   answer is not obvious, and a stray click is not an answer.
 - **`rows` are caller-owned pointers** and must outlive the dialog being
   up; point them at the app's own buffers.
+- **`.margin = 0` MEANS "UNSET", NOT "NONE"** -- `uui_layout_margin()`
+  tests `> 0`, so a container asking for zero gets the font-derived
+  default anyway. A nested layout gets none because `nested` is set,
+  not because anyone wrote 0. **AND A SCROLL VIEW'S CONTENT IS NESTED**:
+  it is run directly rather than through the ops table, so it used to
+  keep the outermost default and the page inside one paid the margin
+  TWICE -- once for the window, once again inside it. Task Manager's
+  Overview sat 29 px in where its own tab strip sat 14.
+- **A ROW IS NOT A GRID. `UUI_GRID` is** -- uniform cells, `cols`
+  across, a partial last row simply leaving cells empty. A column of
+  rows sizes each row's height independently and shares each row's
+  leftover width among whatever declares `UUI_FILL_W`, so a last row
+  holding one tile and a spacer gives that tile its natural width PLUS
+  half the leftover -- wider than the cards above it, never the same
+  twice, and no spacer needed once it is a real grid.
 - **AN ACTIVE OVERLAY DOES NOT YET OWN THE CURSOR, and an app that
   names its own must test for a modal itself.** `uui_router_cursor()`
   falls THROUGH an overlay to the widgets behind it, so the I-beam of a

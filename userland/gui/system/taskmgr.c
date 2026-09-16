@@ -453,15 +453,20 @@ static struct uui_layout OV_GAUGE_ROW;
 // their resource cards in a grid for the same reason. Nested rows,
 // which the router descends on its own.
 #define OV_DISK_COLS 2
+// **ONE `UUI_GRID`, NOT A COLUMN OF ROWS.** A row shares its leftover
+// width among whatever declares UUI_FILL_W, so a last row holding one
+// tile and a spacer gave the tile its natural width PLUS half the
+// leftover -- wider than the cards above it, and never the same width
+// twice. The rows also sized their own heights independently, so a
+// three-disk machine drew two rows of different heights with a
+// different gap between them than above them. A grid divides the room
+// it is given into uniform cells `cols` across and places into them
+// left to right (ui/uui_layout.h), which is the one thing all three
+// symptoms have in common. A partial last row needs no spacer at all:
+// the cell exists and simply has nothing placed in it.
 static struct uui_item   OV_DISK_CELLS[OV_DISKS_MAX];
-static struct uui_layout OV_DISK_ROWS[(OV_DISKS_MAX + OV_DISK_COLS - 1) / OV_DISK_COLS];
-// The gap a partly-filled row leaves. An empty layout draws nothing and
-// measures nothing, so it absorbs the leftover width without becoming a
-// tile -- which is what stops a lone /tmp stretching to twice the width
-// of the two cards above it.
-static struct uui_layout OV_DISK_GAP;
-static struct uui_item   OV_DISK_ROW_ITEMS[(OV_DISKS_MAX / OV_DISK_COLS + 1)][OV_DISK_COLS];
-static struct uui_item   OV_ITEMS[1 + ((OV_DISKS_MAX + OV_DISK_COLS - 1) / OV_DISK_COLS)];
+static struct uui_layout OV_DISK_GRID;
+static struct uui_item   OV_ITEMS[2];   // the gauge row, then the grid
 static struct uui_layout OV_LAYOUT;
 // THE OVERVIEW CAN OVERFLOW: two gauges plus one tile per mount is more
 // than a small window holds, and uui_layout places the surplus PAST the
@@ -494,29 +499,13 @@ static void select_page(struct uapp *a, int index) {
         ITEMS[1].widget = (void *)&PROC_LAYOUT;
     }
     // The Overview's tiles are only as many as the machine has; a stale
-    // count would lay out a meter with no strings in it.
-    // The gauge row plus one tile per disk found. g_ov_count counts
-    // METERS, and the first two of those live inside the nested row.
+    // count would lay out a meter with no strings in it. g_ov_count
+    // counts METERS, and the first two of those are the gauges.
     int disks = g_ov_count > 2 ? g_ov_count - 2 : 0;
-    // ROWS, not tiles, and a partial row still counts: three disks are
-    // two rows, the second half empty rather than missing.
-    OV_LAYOUT.count = 1 + (disks + OV_DISK_COLS - 1) / OV_DISK_COLS;
-    for (int r = 0; r < (int)(sizeof OV_DISK_ROWS / sizeof OV_DISK_ROWS[0]); r++) {
-        int left = disks - r * OV_DISK_COLS;
-        if (left >= OV_DISK_COLS) {
-            OV_DISK_ROWS[r].count = OV_DISK_COLS;
-        } else if (left > 0) {
-            // The tiles that exist, then a gap holding the rest of the
-            // row open so they keep the width of a full row's cards.
-            OV_DISK_ROWS[r].count = OV_DISK_COLS;
-            for (int col = left; col < OV_DISK_COLS; col++)
-                OV_DISK_ROW_ITEMS[r][col] = (struct uui_item){
-                    .ops = &uui_layout_ops, .widget = &OV_DISK_GAP,
-                    .flags = UUI_FILL_W };
-        } else {
-            OV_DISK_ROWS[r].count = 0;
-        }
-    }
+    OV_DISK_GRID.count = disks;
+    // The grid is dropped entirely on a machine with no mounts, rather
+    // than left as an empty container holding a row of blank cells open.
+    OV_LAYOUT.count = disks > 0 ? 2 : 1;
     uui_scrollview_content_changed(&OV_SCROLL);
     if (a) uui_layout_run(&LAYOUT, 0, 0, uapp_width(a), uapp_height(a));
 }
@@ -855,22 +844,28 @@ int main(void) {
 
     OV_ITEMS[0] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &OV_GAUGE_ROW,
                                       .flags = UUI_FILL_W };
+    // NAMED PER CELL, so the layout report says which tile is which and
+    // a test can ask whether the grid is uniform (ui/uui_describe.h).
+    // One shared name would collapse every cell onto one log line.
+    static const char *const disk_names[OV_DISKS_MAX] = {
+        "disk0", "disk1", "disk2", "disk3",
+    };
     for (int i = 0; i < OV_DISKS_MAX; i++) {
         OV_DISK_CELLS[i] = (struct uui_item){ .ops = &uui_meter_ops,
                                                .widget = &g_ov[2 + i],
-                                               .flags = UUI_FILL_W | UUI_FILL_H };
+                                               .flags = UUI_FILL_W | UUI_FILL_H,
+                                               .name = disk_names[i] };
     }
-    OV_DISK_GAP = (struct uui_layout){ .dir = UUI_ROW, .items = 0, .count = 0, .margin = 0 };
-    for (int r = 0; r < (int)(sizeof OV_DISK_ROWS / sizeof OV_DISK_ROWS[0]); r++) {
-        for (int col = 0; col < OV_DISK_COLS; col++)
-            OV_DISK_ROW_ITEMS[r][col] = OV_DISK_CELLS[r * OV_DISK_COLS + col];
-        OV_DISK_ROWS[r] = (struct uui_layout){ .dir = UUI_ROW,
-                                                .items = OV_DISK_ROW_ITEMS[r],
-                                                .count = OV_DISK_COLS, .margin = 0 };
-        OV_ITEMS[1 + r] = (struct uui_item){ .ops = &uui_layout_ops,
-                                              .widget = &OV_DISK_ROWS[r],
-                                              .flags = UUI_FILL_W };
-    }
+    OV_DISK_GRID = (struct uui_layout){ .dir = UUI_GRID, .cols = OV_DISK_COLS,
+                                         .items = OV_DISK_CELLS, .count = 0,
+                                         .margin = 0 };
+    // NO UUI_FILL_H on the grid: it takes its natural height, which is
+    // its rows at their natural size. Filling would divide the whole
+    // viewport between however many rows there happen to be, so a
+    // one-disk machine would get a single tile half a window tall.
+    OV_ITEMS[1] = (struct uui_item){ .ops = &uui_layout_ops,
+                                      .widget = &OV_DISK_GRID,
+                                      .flags = UUI_FILL_W };
 
     // THE TREND UNDER THE TWO THAT MOVE. The same charts the Performance
     // tab draws, so there is one history and two views of it -- and none

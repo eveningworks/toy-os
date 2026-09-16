@@ -78,6 +78,17 @@ static int clamp_offset(struct uui_scrollview *sv) {
 static void place_content(struct uui_scrollview *sv) {
     if (!sv->content) { sv->content_h = 0; return; }
 
+    // **THE CONTENT IS A NESTED LAYOUT, AND NOTHING ELSE WAS SAYING SO.**
+    // `nested` is set by uui_layout_ops when a layout is placed as a
+    // child, and a scroll view runs its content DIRECTLY -- so the page
+    // inside one kept the outermost layout's default margin and paid it
+    // a second time, on top of the window's own. Task Manager's Overview
+    // was inset twice: 14 px from the window, then another 14 from a
+    // page that had asked for `.margin = 0` and been given the default
+    // anyway, because uui_layout_margin() reads 0 as "unset".
+    // BEFORE the measure below, which spends the margin twice over.
+    sv->content->nested = 1;
+
     int nw = 0, nh = 0;
     uui_layout_natural_size(sv->content, &nw, &nh);
     sv->content_h = nh;

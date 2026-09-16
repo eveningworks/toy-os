@@ -574,6 +574,11 @@ whenever a headline here tells you something you did not already know.
 - **A DEFAULT ICON CELL IS CHOSEN AFTER THE SAVED ONES, NOT BEFORE**
 - **A SELECTION CHANGE MUST DAMAGE THE RECTS IT CHANGED, NOT JUST SET
   `redraw_pending`**
+- **`.margin = 0` MEANS "UNSET", NOT "NONE"**, and a scroll view's
+  content is NESTED -- a page inside one used to pay the margin twice
+  (`gui.md`)
+- **A ROW IS NOT A GRID; `UUI_GRID` is** -- a row shares leftover width,
+  so a half-full last row is wider than the one above it (`gui.md`)
 - **AN ACTIVE OVERLAY DOES NOT YET OWN THE CURSOR** -- the walk falls
   through to what is behind a modal, so an app naming its own cursor
   gates it on `uui_dialog_is_open()` itself (`gui.md`)

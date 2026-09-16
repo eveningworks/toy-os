@@ -138,6 +138,10 @@ def layout(dbg):
         m2b = re.search(r"taskmgr: layout table\.header_h (\d+)", line)
         if m2b:
             out["header_h"] = int(m2b.group(1))
+        # The Overview's disk tiles, one line each (uui_meter's describe).
+        m6 = re.search(r"taskmgr: layout (disk\d+)\.tile (-?\d+) (-?\d+) (\d+) (\d+)", line)
+        if m6:
+            out[m6.group(1)] = tuple(int(v) for v in m6.groups()[1:])
         m7 = re.search(r"taskmgr: layout tabs\.slot (\d+) (-?\d+) (-?\d+) (\d+) (\d+)", line)
         if m7:
             out[f"tab{m7.group(1)}"] = tuple(int(v) for v in m7.groups()[1:])
@@ -555,6 +559,43 @@ def main():
 
     killed = any("taskmgr: killed pid" in l for l in dbg.logs())
     check("...and says so in the log", killed)
+
+    # --- the Overview's disk tiles are a GRID -------------------------
+    #
+    # They were a column of rows, each row sharing its leftover width
+    # among whatever declared UUI_FILL_W -- so a last row holding one
+    # tile and a spacer gave that tile its natural width PLUS half the
+    # leftover, wider than the cards above it, and the rows sized their
+    # heights independently. It is one uui_layout UUI_GRID now.
+    #
+    # **THE ASSERTION IS UNIFORMITY, NOT A PIXEL COUNT.** A literal
+    # width would go stale with the font, the window and the number of
+    # mounts; "every cell is the same size and the columns line up" is
+    # the property, and it is what a reader means by a neat grid.
+    if "tab0" in lay:
+        tx, ty, tw, th = lay["tab0"]
+        dbg.click(tx + tw // 2, ty + th // 2)
+        dbg.settle()
+        time.sleep(0.6)
+        lay = layout(dbg)
+
+    tiles = [lay[k] for k in sorted(lay) if re.fullmatch(r"disk\d+", k)]
+    if check("the Overview reports its disk tiles", len(tiles) >= 1,
+             f"tiles found: {len(tiles)}"):
+        widths = {t[2] for t in tiles}
+        heights = {t[3] for t in tiles}
+        check("every disk tile is the same size", len(widths) == 1 and len(heights) == 1,
+              f"widths {sorted(widths)}, heights {sorted(heights)}")
+        # Columns: every tile's left edge is one of at most `cols`
+        # values, and a tile on the second row sits under one on the
+        # first. That is the check the old layout failed.
+        lefts = sorted({t[0] for t in tiles})
+        check("the tiles line up in columns", len(lefts) <= 2,
+              f"distinct left edges: {lefts}")
+        if len(tiles) > 2:
+            check("a tile on the second row sits under one on the first",
+                  tiles[2][0] == tiles[0][0],
+                  f"row-2 x={tiles[2][0]} vs row-1 x={tiles[0][0]}")
 
     # --- it survived its own operation --------------------------------
     #
