@@ -131,8 +131,10 @@ def resize_shape(kind):
                 u, v = dx * RZ_S + RZ_LEN // 2, dy * RZ_S
             elif kind == "v":
                 u, v = dy * RZ_S + RZ_LEN // 2, dx * RZ_S
-            else:
+            elif kind == "diag":
                 u, v = (dx + dy) * RZ_DIAG + RZ_LEN // 2, (dx - dy) * RZ_DIAG
+            else:  # "diag2" -- the / axis, the \ one mirrored in y
+                u, v = (dx - dy) * RZ_DIAG + RZ_LEN // 2, (dx + dy) * RZ_DIAG
             hw = rz_halfwidth(u)
             if hw >= 0 and abs(v) <= hw + RZ_S // 2:
                 fill[y][x] = 1
@@ -206,6 +208,7 @@ def theme_default():
         "resize-h": resize_shape("h"),
         "resize-v": resize_shape("v"),
         "resize-diag": resize_shape("diag"),
+        "resize-diag2": resize_shape("diag2"),
         "text": ibeam(),
         "wait": hourglass(),
     }

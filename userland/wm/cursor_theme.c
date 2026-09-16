@@ -18,6 +18,7 @@
 
 static const char *const g_names[CURSOR_SHAPE_COUNT] = {
     "arrow", "resize-h", "resize-v", "resize-diag", "text", "wait",
+    "resize-diag2",
 };
 
 const char *cursor_shape_name(int index) {
@@ -40,6 +41,7 @@ static int kind_to_index(enum wm_cursor_kind kind) {
         case WM_CURSOR_DIAG: return 3;
         case WM_CURSOR_TEXT: return 4;
         case WM_CURSOR_WAIT: return 5;
+        case WM_CURSOR_DIAG2: return 6;
         default:             return 0;
     }
 }

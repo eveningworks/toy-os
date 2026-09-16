@@ -356,8 +356,10 @@ class DebugConsole:
         return (c["x"], c["y"])
 
     # WM_CURSOR_* (userland/wm/wm_internal.h): 0 normal, 1 resize-h,
-    # 2 resize-v, 3 diagonal, 4 text, 5 wait.
-    CURSOR_NORMAL, CURSOR_H, CURSOR_V, CURSOR_DIAG, CURSOR_TEXT, CURSOR_WAIT = range(6)
+    # 2 resize-v, 3 diagonal, 4 text, 5 wait, 6 the other diagonal.
+    # DIAG is the \ axis (top-left/bottom-right), DIAG2 the /.
+    (CURSOR_NORMAL, CURSOR_H, CURSOR_V, CURSOR_DIAG,
+     CURSOR_TEXT, CURSOR_WAIT, CURSOR_DIAG2) = range(7)
 
     def cursor_shape(self):
         """The shape the compositor would DRAW under the pointer right

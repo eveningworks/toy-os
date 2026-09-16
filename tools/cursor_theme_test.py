@@ -25,6 +25,7 @@ Usage (the VM must already be up):
 """
 
 import argparse
+import re
 import os
 import sys
 import tempfile
@@ -70,8 +71,22 @@ def cursor_ink(qmp, tag):
     return n
 
 
+def expected_shapes():
+    """CURSOR_SHAPE_COUNT, read from the header that defines it.
+
+    IT WAS THE LITERAL 6, and adding a shape reddened this tool with
+    `loaded=7 of 6` -- a count restated in a second file goes stale the
+    first time the first file moves (CLAUDE.md).
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    hdr = os.path.join(here, "..", "userland", "wm", "cursor_theme.h")
+    with open(hdr) as f:
+        m = re.search(r"#define\s+CURSOR_SHAPE_COUNT\s+(\d+)", f.read())
+    return int(m.group(1)) if m else None
+
+
 def loaded_count(dbg):
-    """The most recent 'theme "x" -- n of 6 shapes loaded' line."""
+    """The most recent 'theme "x" -- n of N shapes loaded' line."""
     lines = [l for l in dbg.logs() if "shapes loaded" in l]
     if not lines:
         return None, None
@@ -128,9 +143,10 @@ def main():
     set_setting(dbg, "cursor_size", "normal")
     set_setting(dbg, "cursor_theme", "bold")
     set_setting(dbg, "cursor_theme", "default")
+    want = expected_shapes()
     theme, n = loaded_count(dbg)
-    check("the default theme loads every shape", n == 6,
-          f'theme="{theme}" loaded={n} of 6')
+    check("the default theme loads every shape", n == want,
+          f'theme="{theme}" loaded={n} of {want}')
 
     # --- it is what is actually drawn ---------------------------------
     DebugConsole.warp_cursor(dbg, qmp, PARK_X, PARK_Y)
@@ -141,8 +157,8 @@ def main():
     # --- a different THEME changes the drawn shape --------------------
     set_setting(dbg, "cursor_theme", "bold")
     theme, n = loaded_count(dbg)
-    check("the bold theme loads every shape", n == 6,
-          f'theme="{theme}" loaded={n} of 6')
+    check("the bold theme loads every shape", n == want,
+          f'theme="{theme}" loaded={n} of {want}')
 
     DebugConsole.warp_cursor(dbg, qmp, PARK_X, PARK_Y)
     time.sleep(0.5)

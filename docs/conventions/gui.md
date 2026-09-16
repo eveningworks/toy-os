@@ -4186,3 +4186,28 @@ window is its own toolkit's, and a drop elsewhere reaches it as a
 release nothing accepted while the file has moved anyway. Outside the
 source the compositor draws the ghost (a count), since a client's ghost
 stops at its window edge.
+
+## A RESIZE EDGE IS A `WM_EDGE_*` MASK, AND THE TITLE BAR'S TOP STRIP IS PART OF IT
+
+`wm_find_resize_zone()` returns a mask, not a pair of bools, and a
+corner is two bits rather than a ninth case -- Wayland's
+`xdg_toplevel.resize_edge` shape. Three things that bite:
+
+- **The edge test must run BEFORE the title-bar test.** The top edge IS
+  the title bar on every window here, so refusing the whole bar (which
+  is what the code did until 2026-09-16) makes the top edge and both
+  top corners unreachable while looking like a deliberate exclusion.
+- **The opposite edge is the anchor, so LEFT and TOP clamp the ORIGIN,
+  not the extent.** A left drag at the minimum width must stop moving
+  `x`; clamping `w` instead walks the window sideways at a constant
+  size. The four edges clamp four different quantities on purpose.
+- **Anything that hit-tests a resize edge must CALL this function.**
+  `wm_debug.c` open-coded the same two comparisons and so reported the
+  old zones for a day; `wm_render.c` asks it every frame for the cursor.
+  A second copy of the test is a second thing to forget.
+
+**And a test that drags edges must reset the window between cases.** A
+window dragged into the screen corner cannot grow further up or left,
+and the clamps correctly refuse -- which reads as five broken
+directions. `tools/resize_edges_test.py` resets, and asserts the reset
+worked, so a fixture failure says so instead of blaming the WM.

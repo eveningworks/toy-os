@@ -72,7 +72,21 @@ int start_btn_w(void);
 int win_btn_w(void);
 int btn_size(void);
 
-#define RESIZE_MARGIN 6
+// The grab strip along each edge, and the square at each corner where
+// BOTH of its edges are live. Windows' sizing border is about this wide
+// once SM_CXPADDEDBORDER is counted, and every desktop makes the corner
+// bigger than the edge -- an 8x8 corner is a target you have to aim at.
+#define RESIZE_MARGIN 8
+#define RESIZE_CORNER (RESIZE_MARGIN * 2)
+
+// WHICH EDGES A RESIZE IS DRAGGING, as a mask. This is the shape
+// Wayland's xdg_toplevel.resize_edge uses (and _NET_WM_MOVERESIZE
+// before it): four edges, and a corner is two of them at once, so the
+// code below never enumerates eight cases.
+#define WM_EDGE_LEFT   0x1
+#define WM_EDGE_RIGHT  0x2
+#define WM_EDGE_TOP    0x4
+#define WM_EDGE_BOTTOM 0x8
 #define MIN_CONTENT_W 120
 #define MIN_CONTENT_H 80
 
@@ -145,9 +159,13 @@ extern int drag_off_x, drag_off_y;
 // stage 0, so the machinery was already dead when it was removed.
 
 extern int resizing; // index into windows[], or -1 if not resizing
-extern int resize_right, resize_bottom;
+extern int resize_edges;   // WM_EDGE_* mask, the edges this drag moves
 extern int resize_start_mx, resize_start_my;
 extern int resize_start_w, resize_start_h;
+// The LEFT and TOP edges move the window as well as size it, so the
+// drag has to remember where it started from -- deriving it from the
+// live x/y accumulates the rounding every clamp does.
+extern int resize_start_x, resize_start_y;
 
 // The interactive resize's ask (see wm.c). resize_ask_idx is -1 when
 // there is none; the pid/id pair beside it is what makes a stale index
@@ -438,8 +456,12 @@ const struct uimg *start_icon(int *out_x, int *out_y, int *out_size);
 // owns; TEXT and WAIT are a CLIENT'S request (WIN_REQ_CURSOR), and WAIT
 // is also raised by the WM itself for a window that stopped answering.
 // Two lists on purpose -- a client may not name a resize shape.
+// WM_CURSOR_DIAG is the \ diagonal (top-left/bottom-right corners);
+// WM_CURSOR_DIAG2 is the / one. Appended rather than inserted -- these
+// are mapped to theme-file indices by name in cursor_theme.c, and the
+// two orders are deliberately not assumed to match.
 enum wm_cursor_kind { WM_CURSOR_NORMAL, WM_CURSOR_H, WM_CURSOR_V, WM_CURSOR_DIAG,
-                       WM_CURSOR_TEXT, WM_CURSOR_WAIT };
+                       WM_CURSOR_TEXT, WM_CURSOR_WAIT, WM_CURSOR_DIAG2 };
 
 // Finds which window (if any) the point (mx, my) is over a resize edge
 // of -- the same topmost-window-wins hit-testing wm_handle_left_click()
@@ -448,9 +470,9 @@ enum wm_cursor_kind { WM_CURSOR_NORMAL, WM_CURSOR_H, WM_CURSOR_V, WM_CURSOR_DIAG
 // cursor (hovering, not clicking). Skips minimized/maximized windows
 // and any app with resizable == 0 (see gui_apps.h), same as the click
 // handler. Returns the window index, or -1 if the point isn't over a
-// resize zone of any window; on a hit, *out_right/*out_bottom say which
-// edge(s) matched (both set means the corner). Defined in wm_input.c.
-int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom);
+// resize zone of any window; on a hit, *out_edges is a WM_EDGE_* mask,
+// two bits set at a corner. Defined in wm_input.c.
+int wm_find_resize_zone(int mx, int my, int *out_edges);
 
 // The shape that would be DRAWN at (mx, my) right now -- frame, client
 // and overlay rules all applied. For `gui state`, so a test can ask what

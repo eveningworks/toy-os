@@ -453,7 +453,8 @@ static void draw_resize_cursor(int x, int y, enum wm_cursor_kind kind) {
             int dx = gx - c, dy = gy - c, u, v;
             if (kind == WM_CURSOR_H)      { u = dx * RZ_S + RZ_LEN / 2; v = dy * RZ_S; }
             else if (kind == WM_CURSOR_V) { u = dy * RZ_S + RZ_LEN / 2; v = dx * RZ_S; }
-            else { u = (dx + dy) * RZ_DIAG + RZ_LEN / 2; v = (dx - dy) * RZ_DIAG; }
+            else if (kind == WM_CURSOR_DIAG) { u = (dx + dy) * RZ_DIAG + RZ_LEN / 2; v = (dx - dy) * RZ_DIAG; }
+            else { u = (dx - dy) * RZ_DIAG + RZ_LEN / 2; v = (dx + dy) * RZ_DIAG; }
             int hw = rz_halfwidth(u);
             int av = v < 0 ? -v : v;
             rz_grid[gy][gx] = (hw >= 0 && av <= hw + RZ_S / 2) ? 1 : 0;
@@ -594,7 +595,8 @@ static void draw_cursor(int x, int y, enum wm_cursor_kind kind) {
     switch (kind) {
         case WM_CURSOR_H:
         case WM_CURSOR_V:
-        case WM_CURSOR_DIAG: draw_resize_cursor(x, y, kind); break;
+        case WM_CURSOR_DIAG:
+        case WM_CURSOR_DIAG2: draw_resize_cursor(x, y, kind); break;
         case WM_CURSOR_TEXT: draw_cursor_text(x, y); break;
         case WM_CURSOR_WAIT: draw_cursor_wait(x, y); break;
         default:              draw_cursor_normal(x, y); break;
@@ -652,16 +654,19 @@ static enum wm_cursor_kind client_cursor_at(int mx, int my) {
 }
 
 static enum wm_cursor_kind resolve_cursor_kind(int mx, int my) {
-    int cur_right = 0, cur_bottom = 0;
-    if (resizing >= 0) {
-        cur_right = resize_right;
-        cur_bottom = resize_bottom;
-    } else if (wm_find_resize_zone(mx, my, &cur_right, &cur_bottom) < 0) {
-        cur_right = cur_bottom = 0;
-    }
-    if (cur_right && cur_bottom) return WM_CURSOR_DIAG;
-    if (cur_right) return WM_CURSOR_H;
-    if (cur_bottom) return WM_CURSOR_V;
+    int edges = 0;
+    if (resizing >= 0) edges = resize_edges;
+    else if (wm_find_resize_zone(mx, my, &edges) < 0) edges = 0;
+
+    // Which DIAGONAL a corner gets is the direction the drag runs in:
+    // top-left and bottom-right both lie on the \ axis, the other two
+    // on the /.
+    int left = edges & WM_EDGE_LEFT, right = edges & WM_EDGE_RIGHT;
+    int top = edges & WM_EDGE_TOP, bottom = edges & WM_EDGE_BOTTOM;
+    if ((left && top) || (right && bottom)) return WM_CURSOR_DIAG;
+    if ((right && top) || (left && bottom)) return WM_CURSOR_DIAG2;
+    if (left || right) return WM_CURSOR_H;
+    if (top || bottom) return WM_CURSOR_V;
     // Frame first: a resize edge is geometry the compositor owns, and
     // wins over anything the client inside asked for.
     return client_cursor_at(mx, my);

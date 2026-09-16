@@ -382,13 +382,18 @@ static void cmd_probe(struct dbg_out *o, int px, int py, int json) {
 
         hit = i;
         struct btn_rects r = title_buttons(w);
-        if (py < w->y + WM_TITLEBAR_H) {
+        // ASK THE HIT-TEST, never re-derive it. This open-coded the
+        // edge test and so reported the pre-2026-09-16 zones -- a
+        // debug view that disagrees with the code it describes is
+        // worse than none.
+        int edges = 0;
+        if (wm_find_resize_zone(px, py, &edges) == i) {
+            region = "resize-edge";
+        } else if (py < w->y + WM_TITLEBAR_H) {
             if (px >= r.close_x && px < r.close_x + r.size) region = "close-button";
             else if (px >= r.max_x && px < r.max_x + r.size) region = "maximize-button";
             else if (px >= r.min_x && px < r.min_x + r.size) region = "minimize-button";
             else region = "title-bar";
-        } else if (px >= w->x + w->w - RESIZE_MARGIN || py >= w->y + w->h - RESIZE_MARGIN) {
-            region = "resize-edge";
         } else {
             region = "content";
         }

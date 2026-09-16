@@ -3131,6 +3131,21 @@ window without going through it will find its layout polls timing out.
   be mid-command; seven tools "failed" that way in one run here, none of
   them at fault. An flock rather than a pidfile check, so a run killed
   with -9 leaves nothing to clean up.
+- **`resize_edges_test.py`** -- a window resizes from all EIGHT edges
+  and corners, and each one shows the right cursor. 8 cases, each
+  naming the dimensions that must CHANGE *and* the ones that must be
+  ANCHORED -- the second half is what has teeth, because pinning the
+  wrong corner moves a window without resizing it and looks almost
+  right in a screenshot. **IT RESETS THE WINDOW BEFORE EVERY CASE**,
+  after the first version dragged it into the screen corner and then
+  reported the WM as broken when the clamps correctly refused to grow
+  it further; the reset is asserted, so a fixture failure says so
+  rather than masquerading as a bug. It also takes the TOPMOST window
+  of its title rather than `DebugConsole.window()`'s lowest, which is
+  what a re-run against a guest that still has one hands you -- reading
+  one window's geometry while clicking another's reddens the whole
+  board with nothing wrong at all. `--positive-control` prints every
+  before/after geometry.
 - **`resize_stride_test.py`** -- a resized window is composited at the
   size it was DRAWN at. 4 checks. **THE ASSERTION IS TWO NUMBERS, NOT
   PIXELS**: a shear is a stride disagreement, and reading the numbers

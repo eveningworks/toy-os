@@ -40,7 +40,7 @@
 // (the moment a pointer crosses an editable field) and `wait`. An
 // unknown name in a theme directory is ignored, so adding a seventh
 // later costs nothing.
-#define CURSOR_SHAPE_COUNT 6
+#define CURSOR_SHAPE_COUNT 7
 const char *cursor_shape_name(int index); // "arrow", "resize-h", ...
 
 // The authored size cap. Generous for a pointer (the default theme's

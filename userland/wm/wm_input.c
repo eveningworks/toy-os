@@ -94,7 +94,7 @@ static int title_btn_hit_test(int mx, int my, int *out_kind) {
     return -1;
 }
 
-int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom) {
+int wm_find_resize_zone(int mx, int my, int *out_edges) {
     for (int i = window_count - 1; i >= 0; i--) {
         struct window *w = &windows[i];
         if (w->state == WIN_MINIMIZED) continue;
@@ -103,14 +103,40 @@ int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom) {
         if (w->state == WIN_MAXIMIZED || w->fullscreen) return -1; // neither is resizable by hand
         if (!w->resizable) return -1; // fixed-size window -- see wm.h
         if (wm_dialog_blocker(i) >= 0) return -1; // blocked: see wm_handle_left_click()
-        if (my < w->y + WM_TITLEBAR_H) return -1; // over the title bar, not the resize border
 
-        int on_right = (mx >= w->x + w->w - RESIZE_MARGIN);
-        int on_bottom = (my >= w->y + w->h - RESIZE_MARGIN);
-        if (!on_right && !on_bottom) return -1;
+        int edges = 0;
+        if (mx < w->x + RESIZE_MARGIN)          edges |= WM_EDGE_LEFT;
+        if (mx >= w->x + w->w - RESIZE_MARGIN)  edges |= WM_EDGE_RIGHT;
+        if (my < w->y + RESIZE_MARGIN)          edges |= WM_EDGE_TOP;
+        if (my >= w->y + w->h - RESIZE_MARGIN)  edges |= WM_EDGE_BOTTOM;
 
-        *out_right = on_right;
-        *out_bottom = on_bottom;
+        // A CORNER IS BIGGER THAN ITS EDGES. Within RESIZE_CORNER of
+        // one, the perpendicular edge joins in even though the pointer
+        // is not in its strip -- so the diagonal drag has a square to
+        // aim at rather than the 8x8 the strips alone would intersect
+        // in. Every desktop does this; Windows names the zones
+        // HTTOPLEFT and friends for the same reason.
+        if (edges & (WM_EDGE_LEFT | WM_EDGE_RIGHT)) {
+            if (my < w->y + RESIZE_CORNER)                edges |= WM_EDGE_TOP;
+            else if (my >= w->y + w->h - RESIZE_CORNER)   edges |= WM_EDGE_BOTTOM;
+        }
+        if (edges & (WM_EDGE_TOP | WM_EDGE_BOTTOM)) {
+            if (mx < w->x + RESIZE_CORNER)                edges |= WM_EDGE_LEFT;
+            else if (mx >= w->x + w->w - RESIZE_CORNER)   edges |= WM_EDGE_RIGHT;
+        }
+
+        // THE TITLE BAR'S TOP STRIP RESIZES, THE REST OF IT DRAGS, and
+        // that split is why this test comes after the edges rather than
+        // before them: the top edge IS the title bar on every window
+        // here, so refusing the whole bar (as this did) made the top
+        // edge and both top corners unreachable. Windows and KWin carve
+        // the same strip out of their own title bars.
+        if (!edges) return -1;
+        if (my < w->y + WM_TITLEBAR_H && !(edges & WM_EDGE_TOP) &&
+            !(edges & (WM_EDGE_LEFT | WM_EDGE_RIGHT)))
+            return -1;
+
+        *out_edges = edges;
         return i;
     }
     return -1;
@@ -183,18 +209,19 @@ void wm_handle_left_click(int mx, int my) {
     }
 
     {
-        int on_right = 0, on_bottom = 0;
-        int ri = wm_find_resize_zone(mx, my, &on_right, &on_bottom);
+        int edges = 0;
+        int ri = wm_find_resize_zone(mx, my, &edges);
         if (ri >= 0) {
             bring_to_front(ri);
             dragging = -1;
             resizing = window_count - 1;
-            resize_right = on_right;
-            resize_bottom = on_bottom;
+            resize_edges = edges;
             resize_start_mx = mx;
             resize_start_my = my;
             resize_start_w = windows[resizing].w;
             resize_start_h = windows[resizing].h;
+            resize_start_x = windows[resizing].x;
+            resize_start_y = windows[resizing].y;
             // WHAT THIS DRAG SHOWS, decided once, here.
             //
             // `auto` ASKS WHAT HAPPENED LAST TIME. A window already
@@ -893,16 +920,53 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
             int dx = mx - resize_start_mx;
             int dy = my - resize_start_my;
             int neww = w->w, newh = w->h;
-            if (resize_right) {
+            int newx = w->x, newy = w->y;
+            int min_w = MIN_CONTENT_W + 2;
+            int min_h = MIN_CONTENT_H + WM_TITLEBAR_H + 2;
+
+            if (resize_edges & WM_EDGE_RIGHT) {
                 neww = resize_start_w + dx;
-                if (neww < MIN_CONTENT_W + 2) neww = MIN_CONTENT_W + 2;
+                if (neww < min_w) neww = min_w;
                 if (w->x + neww > screen_w) neww = screen_w - w->x;
             }
-            if (resize_bottom) {
+            // THE OPPOSITE EDGE IS THE ANCHOR, so the minimum size and
+            // the screen edge both clamp the ORIGIN, not the extent: a
+            // left drag that has hit the minimum must stop moving x, or
+            // the window walks away while staying the same size.
+            if (resize_edges & WM_EDGE_LEFT) {
+                int right = resize_start_x + resize_start_w;
+                newx = resize_start_x + dx;
+                if (newx < 0) newx = 0;
+                if (right - newx < min_w) newx = right - min_w;
+                neww = right - newx;
+            }
+            if (resize_edges & WM_EDGE_BOTTOM) {
                 newh = resize_start_h + dy;
-                int min_h = MIN_CONTENT_H + WM_TITLEBAR_H + 2;
                 if (newh < min_h) newh = min_h;
                 if (w->y + newh > screen_h - taskbar_h) newh = screen_h - taskbar_h - w->y;
+            }
+            if (resize_edges & WM_EDGE_TOP) {
+                int bottom = resize_start_y + resize_start_h;
+                newy = resize_start_y + dy;
+                // Never above the top of the screen -- the same rule the
+                // title-bar drag above enforces, and for the same
+                // reason: a title bar the pointer cannot reach cannot
+                // recover itself.
+                if (newy < 0) newy = 0;
+                if (bottom - newy < min_h) newy = bottom - min_h;
+                newh = bottom - newy;
+            }
+
+            // The window MOVES as it sizes, and a client sizes itself a
+            // frame or two later (resize_pump()), so the anchored edge
+            // can visibly lag on a slow client. `desktop.resize_mode =
+            // outline` is the answer for anyone it bothers.
+            if (!resize_outline_mode && (newx != w->x || newy != w->y)) {
+                wm_damage_rect(w->x, w->y, w->w, w->h);
+                w->x = newx;
+                w->y = newy;
+                wm_damage_rect(w->x, w->y, w->w, w->h);
+                redraw_pending = 1;
             }
 
             if (resize_outline_mode) {
@@ -911,7 +975,7 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
                 // the setting is about what a DRAG looks like, and the
                 // WM owning those pixels is no reason to answer
                 // differently.
-                drag_outline_set(resizing, w->x, w->y, neww, newh);
+                drag_outline_set(resizing, newx, newy, neww, newh);
             } else if (is_client) {
                 // ASK, every step of the drag. The window changes size
                 // when the client presents a frame at the new one, so it
@@ -931,7 +995,19 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
             // final one when it does.
             if (resize_outline_mode && drag_outline_win == resizing) {
                 int fw = drag_outline_w, fh = drag_outline_h;
+                int fx = drag_outline_x, fy = drag_outline_y;
                 drag_outline_clear();
+                // THE ORIGIN LANDS FIRST, and for a client it lands even
+                // though the size arrives later -- a left/top drag moved
+                // the outline, and leaving x behind would put the window
+                // back where the drag started.
+                if (fx != w->x || fy != w->y) {
+                    wm_damage_rect(w->x, w->y, w->w, w->h);
+                    w->x = fx;
+                    w->y = fy;
+                    wm_damage_rect(w->x, w->y, w->w, w->h);
+                    redraw_pending = 1;
+                }
                 if (is_client) {
                     resize_ask(resizing, fw - 2, fh - WM_TITLEBAR_H - 2);
                 } else {

@@ -107,9 +107,10 @@ int dragging = -1; // index into windows[], or -1 if not dragging
 int drag_off_x, drag_off_y;
 
 int resizing = -1; // index into windows[], or -1 if not resizing
-int resize_right = 0, resize_bottom = 0;
+int resize_edges = 0;
 int resize_start_mx, resize_start_my;
 int resize_start_w, resize_start_h;
+int resize_start_x, resize_start_y;
 
 // THE INTERACTIVE RESIZE, at most one at a time. A client's window
 // follows the pointer like any other (as it does on Windows and in

@@ -7886,3 +7886,47 @@ get a log descriptor through `SPAWN_FD_LOG` on **stdout at spawn time**,
 and both of these have their stdout bound elsewhere -- a pty and a
 socket. `SYS_DIAG` is a relay to a ring-3 provider with one in-flight
 slot, not a sink.
+
+## A resize edge is a MASK, and the opposite edge is the anchor
+
+`wm_find_resize_zone()` answers a `WM_EDGE_*` bitmask rather than the
+`out_right`/`out_bottom` pair it used to, and only the right and bottom
+edges started a resize before 2026-09-16 -- the whole title-bar row was
+refused outright, which made the top edge and both top corners
+unreachable on every window here, since the top edge IS the title bar.
+
+**The mask is the shape Wayland's `xdg_toplevel.resize_edge` uses**, and
+X11's `_NET_WM_MOVERESIZE` before it: four edges, a corner being two of
+them at once. The alternative -- eight named zones, as Win32's
+`WM_NCHITTEST` returns HTLEFT/HTTOPLEFT/... -- needs eight cases in
+every consumer. With a mask the drag code asks "is LEFT set" four times
+and never enumerates a corner at all, and the cursor picks its diagonal
+from which pair is set.
+
+**The opposite edge is the anchor, so the minimum size and the screen
+edge clamp the ORIGIN rather than the extent.** A left drag that has hit
+`MIN_CONTENT_W` must stop moving `x`; clamping the width instead lets
+the window walk leftwards while staying the same size, which reads as a
+move with extra steps. Each of the four edges therefore clamps a
+different quantity, and that asymmetry is the whole of the arithmetic.
+
+**The window moves LIVE, and a client sizes itself a frame or two
+later**, so the anchored edge can visibly lag on a slow client -- the
+compositor owns `x`/`y` and can move them at once, while `w`/`h` only
+change when the client presents at the new size (`resize_pump()`). The
+alternatives were considered and declined for now: applying the origin
+on the ack, as KWin and Mutter do with `ack_configure`, is the correct
+answer and needs `resize_pump()` to carry the edge mask and the anchor
+origin; forcing outline mode on left/top drags makes one half of the
+frame behave differently from the other. `desktop.resize_mode = outline`
+already answers it for anyone the lag bothers, which is why the simple
+version was taken first.
+
+**The title bar's top strip resizes and the rest of it drags.** Windows
+and KWin carve the same strip, and the ordering matters: the edge test
+runs BEFORE the title-bar test, or the bar swallows the top edge again.
+
+**A corner is bigger than its edges** (`RESIZE_CORNER`, twice
+`RESIZE_MARGIN`): within that distance of a corner the perpendicular
+edge joins the mask, so a diagonal drag has a square to aim at rather
+than the 8x8 the two strips intersect in. Every desktop does this.
