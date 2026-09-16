@@ -731,7 +731,8 @@ static void cursor_rect(enum wm_cursor_kind kind, int x, int y,
         *oy = y - s->hot_y * sc - CURSOR_BOX_MARGIN;
         *w  = s->w * sc + 2 * CURSOR_BOX_MARGIN;
         *h  = s->h * sc + 2 * CURSOR_BOX_MARGIN;
-    } else if (kind == WM_CURSOR_H || kind == WM_CURSOR_V || kind == WM_CURSOR_DIAG) {
+    } else if (kind == WM_CURSOR_H || kind == WM_CURSOR_V ||
+               kind == WM_CURSOR_DIAG || kind == WM_CURSOR_DIAG2) {
         // Centred too, since draw_resize_cursor() draws from the grid's
         // middle. A box that assumed the other three's down-and-right
         // anchor would strand half the arrow on every move.

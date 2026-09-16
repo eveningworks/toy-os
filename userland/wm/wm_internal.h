@@ -79,6 +79,16 @@ int btn_size(void);
 #define RESIZE_MARGIN 8
 #define RESIZE_CORNER (RESIZE_MARGIN * 2)
 
+// **THE TOP IS HALF AS DEEP, BECAUSE IT IS THE ONLY EDGE SHARING ITS
+// PIXELS WITH A CONTROL.** The other three sit on frame nobody else
+// wants; the top lies over the title bar, so every row it claims is a
+// row that stops dragging the window. At 8 the corner reached 16 rows
+// into a 23-row title bar and the diagonal came up under the pointer
+// most of the way across it. Windows' top sizing border is thinner than
+// its sides for the same reason.
+#define RESIZE_MARGIN_TOP 4
+#define RESIZE_CORNER_TOP (RESIZE_MARGIN_TOP * 2)
+
 // WHICH EDGES A RESIZE IS DRAGGING, as a mask. This is the shape
 // Wayland's xdg_toplevel.resize_edge uses (and _NET_WM_MOVERESIZE
 // before it): four edges, and a corner is two of them at once, so the
@@ -447,8 +457,8 @@ const char *wm_window_icon_name(int idx);
 const struct uimg *start_icon(int *out_x, int *out_y, int *out_size);
 
 // Which resize cursor (if any) to show -- WM_CURSOR_H/V are the
-// straight-edge cases (dragging the right or bottom edge alone),
-// WM_CURSOR_DIAG is the corner (both at once). wm_render.c draws the
+// straight-edge cases (one edge alone), and the two DIAG kinds are the
+// corners, one per diagonal axis. wm_render.c draws the
 // matching hand-drawn icon; wm.c's wm_run() loop doesn't care about
 // this, it's purely a rendering decision made each frame from
 // wm_find_resize_zone()/the active resizing state below.

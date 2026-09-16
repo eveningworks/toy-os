@@ -105,10 +105,10 @@ int wm_find_resize_zone(int mx, int my, int *out_edges) {
         if (wm_dialog_blocker(i) >= 0) return -1; // blocked: see wm_handle_left_click()
 
         int edges = 0;
-        if (mx < w->x + RESIZE_MARGIN)          edges |= WM_EDGE_LEFT;
-        if (mx >= w->x + w->w - RESIZE_MARGIN)  edges |= WM_EDGE_RIGHT;
-        if (my < w->y + RESIZE_MARGIN)          edges |= WM_EDGE_TOP;
-        if (my >= w->y + w->h - RESIZE_MARGIN)  edges |= WM_EDGE_BOTTOM;
+        if (mx < w->x + RESIZE_MARGIN)              edges |= WM_EDGE_LEFT;
+        if (mx >= w->x + w->w - RESIZE_MARGIN)      edges |= WM_EDGE_RIGHT;
+        if (my < w->y + RESIZE_MARGIN_TOP)          edges |= WM_EDGE_TOP;
+        if (my >= w->y + w->h - RESIZE_MARGIN)      edges |= WM_EDGE_BOTTOM;
 
         // A CORNER IS BIGGER THAN ITS EDGES. Within RESIZE_CORNER of
         // one, the perpendicular edge joins in even though the pointer
@@ -117,7 +117,7 @@ int wm_find_resize_zone(int mx, int my, int *out_edges) {
         // in. Every desktop does this; Windows names the zones
         // HTTOPLEFT and friends for the same reason.
         if (edges & (WM_EDGE_LEFT | WM_EDGE_RIGHT)) {
-            if (my < w->y + RESIZE_CORNER)                edges |= WM_EDGE_TOP;
+            if (my < w->y + RESIZE_CORNER_TOP)            edges |= WM_EDGE_TOP;
             else if (my >= w->y + w->h - RESIZE_CORNER)   edges |= WM_EDGE_BOTTOM;
         }
         if (edges & (WM_EDGE_TOP | WM_EDGE_BOTTOM)) {
@@ -125,7 +125,8 @@ int wm_find_resize_zone(int mx, int my, int *out_edges) {
             else if (mx >= w->x + w->w - RESIZE_CORNER)   edges |= WM_EDGE_RIGHT;
         }
 
-        // THE TITLE BAR'S TOP STRIP RESIZES, THE REST OF IT DRAGS, and
+        // THE TITLE BAR'S TOP STRIP RESIZES (RESIZE_MARGIN_TOP), AND
+        // THE REST OF IT DRAGS, and
         // that split is why this test comes after the edges rather than
         // before them: the top edge IS the title bar on every window
         // here, so refusing the whole bar (as this did) made the top

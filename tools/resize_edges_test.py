@@ -179,6 +179,32 @@ def run_case(con, qmp, case, failures, control):
         print(f"  {name}: {before} -> {after}")
 
 
+def check_titlebar_still_drags(con, qmp, failures):
+    """The title bar's MIDDLE row drags, everywhere along its width.
+
+    The top edge shares its pixels with the title bar, so every row the
+    resize strip claims is a row that stops moving the window -- and the
+    corner reached 16 rows into a 23-row bar until the top margin was
+    halved. Asserted at the bar's vertical MIDPOINT and through the
+    cursor, so it stays true whatever the margins become: a diagonal at
+    the midpoint means the corner has eaten the bar again.
+    """
+    w = reset_window(con, qmp)
+    if w is None:
+        failures.append("titlebar: no window")
+        return
+    mid = w["y"] + (w["content"]["y"] - w["y"]) // 2
+    for label, x, want in (
+            ("centre", w["x"] + w["w"] // 2, DebugConsole.CURSOR_NORMAL),
+            ("near the left corner", w["x"] + 2, DebugConsole.CURSOR_H),
+            ("near the right corner", w["x"] + w["w"] - 3, DebugConsole.CURSOR_H)):
+        got = con.probe(x, mid)["cursor"]
+        if got != want:
+            failures.append(f"title bar {label}: cursor {got} at ({x}, {mid}), "
+                            f"expected {want} -- the resize zone has eaten "
+                            f"the draggable part of the bar")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -201,6 +227,7 @@ def main():
             return 1
         for case in CASES:
             run_case(con, qmp, case, failures, args.positive_control)
+        check_titlebar_still_drags(con, qmp, failures)
     finally:
         con.close()
 
@@ -209,8 +236,8 @@ def main():
         for f in failures:
             print("  " + f)
         return 1
-    print(f"resize_edges_test: PASS -- all {len(CASES)} directions resize "
-          f"and show the right cursor")
+    print(f"resize_edges_test: PASS -- all {len(CASES)} directions resize, "
+          f"show the right cursor, and leave the title bar draggable")
     return 0
 
 

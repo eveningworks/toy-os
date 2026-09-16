@@ -3144,8 +3144,11 @@ window without going through it will find its layout polls timing out.
   of its title rather than `DebugConsole.window()`'s lowest, which is
   what a re-run against a guest that still has one hands you -- reading
   one window's geometry while clicking another's reddens the whole
-  board with nothing wrong at all. `--positive-control` prints every
-  before/after geometry.
+  board with nothing wrong at all. It also asserts the TITLE BAR'S
+  MIDPOINT still drags at both corners -- the guard for a corner zone
+  growing back into the bar, which is what a "resize cursor far from the
+  corner" report means. `--positive-control` prints every before/after
+  geometry.
 - **`resize_stride_test.py`** -- a resized window is composited at the
   size it was DRAWN at. 4 checks. **THE ASSERTION IS TWO NUMBERS, NOT
   PIXELS**: a shear is a stride disagreement, and reading the numbers

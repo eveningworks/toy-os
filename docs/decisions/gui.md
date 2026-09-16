@@ -7930,3 +7930,14 @@ runs BEFORE the title-bar test, or the bar swallows the top edge again.
 `RESIZE_MARGIN`): within that distance of a corner the perpendicular
 edge joins the mask, so a diagonal drag has a square to aim at rather
 than the 8x8 the two strips intersect in. Every desktop does this.
+
+**But the TOP is half as deep as the other three** (`RESIZE_MARGIN_TOP`,
+`RESIZE_CORNER_TOP`), because it is the only edge sharing its pixels
+with a control. The sides and bottom sit on frame nobody else wants;
+every row the top claims is a row that stops dragging the window. At the
+same 8 as the others the corner reached 16 rows into a 23-row title bar,
+so the diagonal came up under the pointer at the bar's own MIDPOINT --
+reported as a corner cursor appearing far from the corner, which is
+exactly what it was. Windows' top sizing border is thinner than its
+sides for the same reason. `resize_edges_test.py` asserts the midpoint
+of the bar is still draggable, at both corners.

@@ -410,9 +410,16 @@ static void cmd_probe(struct dbg_out *o, int px, int py, int json) {
     else if (py >= screen_h - taskbar_h) overlay = "taskbar";
 
     if (json) {
+        // THE MASK AND THE SHAPE, because "resize-edge" cannot tell a
+        // top edge from a top-LEFT corner -- which is the whole
+        // question when a corner is reported too eagerly.
+        int pedges = 0;
+        (void)wm_find_resize_zone(px, py, &pedges);
         dbg_out_printf(o, "{\"x\":%d,\"y\":%d,\"window\":%d,\"title\":\"%s\","
-                     "\"region\":\"%s\",\"overlay\":\"%s\"", px, py, hit,
-                     hit >= 0 ? windows[hit].title : "", region, overlay);
+                     "\"region\":\"%s\",\"overlay\":\"%s\","
+                     "\"edges\":%d,\"cursor\":%d", px, py, hit,
+                     hit >= 0 ? windows[hit].title : "", region, overlay,
+                     pedges, (int)wm_cursor_kind_at(px, py));
         if (hit >= 0) {
             const struct window *w = &windows[hit];
             dbg_out_printf(o, ",\"content_rel\":{\"x\":%d,\"y\":%d}",

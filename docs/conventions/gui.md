@@ -4201,6 +4201,11 @@ corner is two bits rather than a ninth case -- Wayland's
   not the extent.** A left drag at the minimum width must stop moving
   `x`; clamping `w` instead walks the window sideways at a constant
   size. The four edges clamp four different quantities on purpose.
+- **The TOP edge is thinner than the other three, and that is not an
+  oversight.** It is the only edge lying over a control, so
+  `RESIZE_MARGIN_TOP`/`RESIZE_CORNER_TOP` are half their siblings --
+  at the full 8 the corner ate 16 rows of a 23-row title bar and showed
+  a diagonal at the bar's midpoint.
 - **Anything that hit-tests a resize edge must CALL this function.**
   `wm_debug.c` open-coded the same two comparisons and so reported the
   old zones for a day; `wm_render.c` asks it every frame for the cursor.
