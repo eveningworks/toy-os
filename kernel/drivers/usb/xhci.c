@@ -30,6 +30,7 @@
 #include "clocksource.h"
 #include "usb_trace.h"
 #include "klog.h"
+#include "fault_inject.h"
 #include "kfmt.h"
 #include "string.h"
 #include "barrier.h"
@@ -118,6 +119,11 @@ struct xhci_hc {
 
     uint32_t events_seen;
     uint32_t irqs_seen;
+    // Set the first time a command timed out and the ring was reported
+    // and abort-restarted. ONCE per controller: the failure this exists
+    // for times out every later command too, and repeating the report
+    // would flood the klog ring that holds the evidence.
+    uint8_t  cmd_recovered;
     // Command completions that named a TRB nobody was waiting for --
     // see the CMD_COMPLETION arm of xhci_service(). Non-zero means a
     // late completion arrived from a command this driver had already
@@ -780,6 +786,80 @@ static int wait_completion(volatile struct xhci_completion *c, const char *what)
     return 0;
 }
 
+// WHAT THE COMMAND RING LOOKS LIKE WHEN A COMMAND DID NOT COME BACK.
+//
+// A boot on the ASUS lost every USB device because exactly one command
+// ever completed and every command after it timed out, while port-change
+// events kept arriving -- so the event ring was alive and the command
+// ring was not (docs/bugs.md). Nothing in the log said which, because
+// nothing read CRCR. This is the line that tells the two apart: CRR is
+// read-only and answers "is the ring still running", and the enqueue
+// index plus cycle state say where the DRIVER thinks it is, which is
+// the half the controller cannot report.
+static void cmd_ring_report(const char *when) {
+    uint64_t crcr = (uint64_t)mr32(g_hc.op, XHCI_CRCR) |
+                    ((uint64_t)mr32(g_hc.op, XHCI_CRCR + 4) << 32);
+    klog_printf(KLOG_ERR
+                "usb: cmd ring %s: crcr 0x%llx (CRR=%u RCS=%u) enq %u cyc %u "
+                "base 0x%llx usbsts 0x%x\n",
+                when, (unsigned long long)crcr,
+                (unsigned)((crcr & XHCI_CRCR_CRR) ? 1 : 0),
+                (unsigned)(crcr & XHCI_CRCR_RCS),
+                g_hc.cmd.enqueue, g_hc.cmd.cycle,
+                (unsigned long long)g_hc.cmd.phys, mr32(g_hc.op, XHCI_USBSTS));
+}
+
+// ABORT THE COMMAND RING AND PUT IT BACK, which is the only lever a
+// driver has over one that has stopped: the controller owns the dequeue
+// pointer, so the ring cannot simply be rewound.
+//
+// **THIS RUNS ONLY AFTER A COMMAND HAS ALREADY TIMED OUT**, i.e. on a
+// path where the boot is otherwise lost -- every later command queues
+// behind the dead one and every port gives up. That is what makes it
+// safe to attempt: the state it is trying to repair is one where doing
+// nothing is known to end with no USB at all.
+//
+// Returns 1 if the ring is running again.
+static int cmd_ring_recover(void) {
+    // CA is write-1 and self-clearing, and the RCS bit must be written
+    // with it: this register's low bits are the ring's cycle state, and
+    // dropping them here would tell the controller to expect the wrong
+    // one when it restarts.
+    mw64(g_hc.op, XHCI_CRCR, g_hc.cmd.phys |
+                              (g_hc.cmd.cycle ? XHCI_CRCR_RCS : 0) |
+                              XHCI_CRCR_CA);
+
+    // The controller stops asynchronously and says so with a Command
+    // Completion event (CC 24, Command Ring Stopped). Waiting on CRR
+    // rather than on that event is deliberate -- the event may be the
+    // very thing that is not arriving, and CRR is a register read that
+    // cannot be starved.
+    struct xhci_wait w; xhci_wait_start(&w, 50);
+    for (;;) {
+        xhci_service();                       // drain whatever it does post
+        uint64_t crcr = (uint64_t)mr32(g_hc.op, XHCI_CRCR) |
+                        ((uint64_t)mr32(g_hc.op, XHCI_CRCR + 4) << 32);
+        if (!(crcr & XHCI_CRCR_CRR)) break;
+        if (xhci_wait_over(&w)) {
+            klog_printf(KLOG_ERR "usb: command ring will not stop -- "
+                                  "abort ignored\n");
+            return 0;
+        }
+    }
+
+    // A stopped ring's dequeue pointer is undefined, so the ring is
+    // rebuilt from scratch and CRCR re-pointed at it. xhci_ring_init()
+    // re-zeroes the segment and restores cycle 1, which is what the
+    // controller is told to expect on the next line.
+    xhci_ring_init(&g_hc.cmd, (void *)g_hc.cmd.trb, g_hc.cmd.phys,
+                   g_hc.cmd.count, 0);
+    mw64(g_hc.op, XHCI_CRCR, g_hc.cmd.phys | XHCI_CRCR_RCS);
+    cmd_ring_report("after abort");
+    return 1;
+}
+
+int xhci_selftest_cmd_recovery(void);   // below cmd_submit; see its comment
+
 // Enqueues one command, rings doorbell 0 and waits for its Command
 // Completion event. Returns the completion code; `out_slot` receives
 // the slot id the controller assigned, when the command allocates one.
@@ -789,14 +869,73 @@ static int cmd_submit(uint64_t param, uint32_t control, uint8_t *out_slot) {
     g_cmd_done.trb = at;
     ring_doorbell(0, 0);
 
-    if (wait_completion(&g_cmd_done, "command") < 0) {
+    // The injector fakes the WAIT, not the controller: the command was
+    // really posted above and the controller really will run it. That
+    // is enough to drive the report and the abort/restart below against
+    // a live ring, and is NOT a reproduction of the stalled-ring fault
+    // (fault_inject.h says so at more length).
+    if (fault_should_fail_usb_command() ||
+        wait_completion(&g_cmd_done, "command") < 0) {
         usb_trace(USB_TR_CMD, 0, 0, XHCI_TRB_TYPE(control), 0xFFu); // timeout
+        // ONCE PER CONTROLLER, not once per command: the failure mode
+        // this exists for produces a timeout on every command for the
+        // rest of the boot, and a report plus an abort on each of them
+        // would be the probe outrunning the log that CLAUDE.md warns
+        // about -- the evidence destroyed by the instrument.
+        if (!g_hc.cmd_recovered) {
+            cmd_ring_report("timeout");
+            // 1 = the ring is running again, 2 = the abort did not take.
+            // Recording WHICH, not merely that this ran: a flag set
+            // before the attempt would be satisfied by an abort that
+            // failed, and the self-test below would then pass on a
+            // controller left exactly as broken as it found it.
+            g_hc.cmd_recovered = cmd_ring_recover() ? 1 : 2;
+            if (g_hc.cmd_recovered == 1)
+                klog_printf(KLOG_ERR "usb: command ring aborted and "
+                                      "restarted after a timeout\n");
+        }
         return -XHCI_CC_INVALID - 1;
     }
     if (out_slot) *out_slot = g_cmd_done.slot;
     usb_trace(USB_TR_CMD, 0, g_cmd_done.slot,
               XHCI_TRB_TYPE(control), g_cmd_done.code);
     return (int)g_cmd_done.code;
+}
+
+// DRIVE THE COMMAND-RING RECOVERY ON PURPOSE, and then prove the ring
+// still works. Called by the KTEST in xhci_cmd_test.c.
+//
+// The fault it exists for has only ever been seen on the bare-metal
+// ASUS and never once under QEMU, so without this the abort/restart
+// would ship to the one machine whose NETWORK IS A USB DEVICE having
+// never executed. What this can and cannot show is worth being exact
+// about: the injector fakes the driver's WAIT, so this exercises the
+// report, the abort, the restart and whether the ring is usable
+// afterwards -- against a live controller -- and it does NOT reproduce
+// a genuinely stalled ring.
+//
+// A No-Op command (TRB type 23) is the probe both times: it is the one
+// command with no arguments, no side effects and nothing to clean up.
+//
+// Returns 1 pass, 0 fail, -1 no controller to test.
+int xhci_selftest_cmd_recovery(void) {
+    if (!g_hc.op) return -1;
+
+    uint8_t saved = g_hc.cmd_recovered;
+    g_hc.cmd_recovered = 0;             // the guard is once-per-boot; re-arm it
+
+    fault_fail_next_usb_commands(1);
+    (void)cmd_submit(0, XHCI_TRB_SET_TYPE(XHCI_TRB_NOOP_CMD), 0);
+    fault_fail_next_usb_commands(0);    // a test disarms what it arms
+
+    int fired = (g_hc.cmd_recovered == 1);   // ran AND restarted the ring
+    // THE ASSERTION THAT MATTERS IS THIS ONE. Recovery that runs and
+    // leaves the ring unusable is worse than no recovery, because the
+    // log then says it healed something it did not.
+    int cc = cmd_submit(0, XHCI_TRB_SET_TYPE(XHCI_TRB_NOOP_CMD), 0);
+
+    g_hc.cmd_recovered = saved;
+    return (fired && cc == XHCI_CC_SUCCESS) ? 1 : 0;
 }
 
 int xhci_address_device(uint8_t root_port, uint32_t route, uint8_t speed,

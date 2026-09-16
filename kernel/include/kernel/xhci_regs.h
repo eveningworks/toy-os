@@ -64,7 +64,22 @@
 #define XHCI_STS_CNR        (1u << 11)  // Controller Not Ready
 
 // CRCR bits. RCS is the cycle state the controller should expect.
+//
+// CS and CA are the only two levers over a command ring that has stopped
+// answering: the controller owns the dequeue pointer, so a driver cannot
+// simply rewind it. Both are write-1, self-clearing, and both make the
+// controller post a Command Completion event with CC = 24 (Command Ring
+// Stopped) once it has actually stopped -- which is the thing to wait
+// for, rather than assuming the write took effect.
+//
+// CRR is READ-ONLY and is the honest answer to "is the ring running": a
+// stopped ring reads 0 there. It is the bit worth LOGGING at a command
+// timeout, because it distinguishes a controller that is chewing on a
+// command from one that stopped and never told anybody.
 #define XHCI_CRCR_RCS       (1ull << 0)
+#define XHCI_CRCR_CS        (1ull << 1)   // Command Stop     -- write 1
+#define XHCI_CRCR_CA        (1ull << 2)   // Command Abort    -- write 1
+#define XHCI_CRCR_CRR       (1ull << 3)   // Command Ring Running -- RO
 
 // --- PORTSC ----------------------------------------------------------
 //

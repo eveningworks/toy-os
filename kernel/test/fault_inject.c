@@ -28,12 +28,14 @@ static uint32_t g_ata_reads;
 static uint32_t g_blk_writes;
 static uint32_t g_blk_reads;
 static uint32_t g_allocs;
+static uint32_t g_usb_cmds;
 static uint32_t g_blk_flush_skip, g_blk_flushes;
 
 void fault_fail_next_ata_writes(uint32_t count) { if (count) g_armer = scheduler_current_pid(); g_ata_writes = count; }
 void fault_fail_next_ata_reads(uint32_t count) { if (count) g_armer = scheduler_current_pid(); g_ata_reads = count; }
 void fault_fail_next_block_writes(uint32_t count) { if (count) g_armer = scheduler_current_pid(); g_blk_writes = count; }
 void fault_fail_next_block_reads(uint32_t count) { if (count) g_armer = scheduler_current_pid(); g_blk_reads = count; }
+void fault_fail_next_usb_commands(uint32_t count) { if (count) g_armer = scheduler_current_pid(); g_usb_cmds = count; }
 void fault_fail_next_allocs(uint32_t count) { if (count) g_armer = scheduler_current_pid(); g_allocs = count; }
 
 void fault_fail_block_flushes(uint32_t skip, uint32_t count) {
@@ -45,7 +47,7 @@ void fault_fail_block_flushes(uint32_t skip, uint32_t count) {
 int fault_any_armed(void) {
     return g_ata_writes != 0 || g_ata_reads != 0
         || g_blk_writes != 0 || g_blk_reads != 0
-        || g_allocs != 0 || g_blk_flushes != 0;
+        || g_allocs != 0 || g_blk_flushes != 0 || g_usb_cmds != 0;
 }
 
 static int consume(uint32_t *counter) {
@@ -65,6 +67,7 @@ int fault_should_fail_ata_read(void)  { return consume(&g_ata_reads); }
 int fault_should_fail_block_write(void) { return consume(&g_blk_writes); }
 int fault_should_fail_block_read(void)  { return consume(&g_blk_reads); }
 int fault_should_fail_alloc(void)     { return consume(&g_allocs); }
+int fault_should_fail_usb_command(void) { return consume(&g_usb_cmds); }
 
 int fault_should_fail_block_flush(void) {
     if (g_blk_flushes == 0) return 0;

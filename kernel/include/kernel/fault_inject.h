@@ -52,6 +52,21 @@ void fault_fail_next_ata_reads(uint32_t count);
 void fault_fail_next_block_writes(uint32_t count);
 void fault_fail_next_block_reads(uint32_t count);
 
+// The next `count` xHCI COMMANDS report a timeout without waiting for
+// the controller, which is the one way to reach the command-ring abort
+// and restart in xhci.c from a machine where the real fault does not
+// reproduce -- it has only ever been seen on the bare-metal ASUS, and
+// never once under QEMU.
+//
+// **IT FAKES THE TIMEOUT, NOT THE CONTROLLER.** The command really is
+// posted and the controller really does execute it; what is suppressed
+// is the driver's wait. So this exercises the REPORT and the
+// abort/restart sequence against a live controller -- which is the part
+// that can be wrong -- and cannot reproduce the stalled ring itself.
+// Say that when quoting a result from it.
+void fault_fail_next_usb_commands(uint32_t count);
+int  fault_should_fail_usb_command(void);
+
 // Skip the next `skip` blkdev_flush() calls, then fail `count` of them.
 //
 // THE SKIP IS WHY THIS ONE IS NOT SHAPED LIKE THE OTHERS. A journal
