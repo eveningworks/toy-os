@@ -25,6 +25,7 @@
 // build never needs it -- the stack-protector guard is `global` here,
 // so nothing reads %fs:0x28 -- but it costs one store and it is what
 // any ported code expects to find.
+#include "toyabi.h"
 #include "rt/sys.h"
 #include <stdint.h>
 
@@ -39,6 +40,17 @@
 extern char __tls_template[];
 struct rt_tlsdesc { uint64_t filesz, memsz, align; };
 extern const struct rt_tlsdesc __rt_tlsdesc;
+
+// What the PROGRAM side of the ABI contract says it was built against.
+// Here rather than in a file of its own because this is the runtime
+// object already linked into every executable, and because the geometry
+// just above is exactly what a skew gets wrong: the crash that made
+// this necessary was a write through a TLS block whose size the program
+// and the library disagreed about. /lib/ld-toy.so compares it with
+// libc.so's `__toy_abi_provided` (abi/toyabi.h).
+const struct toy_abi_stamp __toy_abi_required = {
+    TOY_ABI_MAGIC, TOY_ABI_VERSION,
+};
 
 #define TLS_MAX_ALIGN 16 // what an allocation here is guaranteed to give
 #define TCB_SIZE      64 // tp[0] is the self pointer; the rest is headroom

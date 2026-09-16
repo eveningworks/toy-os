@@ -540,6 +540,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Force-close an unresponsive client~~ done
 - [x] ~~Client-side window resize~~ done
 - [x] ~~Empty ring 0 of applications first~~ done
+- [ ] An automated check that ld-toy.so REFUSES an ABI mismatch -- verified by hand only, and a silent gate is worse than none
+- [x] ~~`vm.py` can put a file INTO a guest~~ DONE 2026-09-16 -- TFTP through a per-slot hostfwd, reusing `remote.py`'s client
 - [ ] An active overlay owns the CURSOR in the toolkit, so Notepad's per-app I-beam gate can go -- first attempt crash-looped toywm
 - [ ] Restore the About window's storage line -- `QUERY_FSINFO` reports it since 2026-08-20; the window has to widen for it
 - [ ] Kernel command-line switches for the protections, not just `nokaslr`

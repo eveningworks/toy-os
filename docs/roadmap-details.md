@@ -6332,3 +6332,54 @@ modal appears, which is its own entry in `docs/bugs.md`.
 mechanism -- the arrow over the modal, the I-beam back after Cancel --
 so those two checks go green either way and are what should be run
 against the next attempt.
+
+## An automated check that ld-toy.so REFUSES an ABI mismatch
+
+The refusal is real and was verified end to end, but BY HAND, and this
+project's own rule is that a check nobody runs is a check that does not
+exist. What was done once, and what the tool should do:
+
+1. build normally, then copy a small dynamic binary (`hello` is ideal --
+   it links libc and does nothing else)
+2. find `__toy_abi_required` with `nm`, convert its vaddr to a file
+   offset through the program headers, and patch the version dword to
+   something the system does not provide
+3. write it into a COPY of `disk.img` with `tools/tfs3_writer.py write
+   <img> <file> /bin/hello_bad --at-lba 135168 --sectors 18739167`
+   (there is no way to put a file into a running guest -- see the
+   `vm.py` item)
+4. boot that copy and run both: the patched one must exit 127 with
+   `ld-toy: built for userland ABI N, this system provides M`, and the
+   unpatched one must still run
+
+Measured 2026-09-16: patched exits 127 with exactly that line, unpatched
+prints its greeting. The second half is the part that matters -- a
+refusal that also refuses good binaries is not a check, it is an outage.
+
+## ~~`vm.py` can put a file INTO a guest~~ -- done 2026-09-16
+
+`remote.py` drove the bare-metal machine with `put`/`get`/`sync` over
+TFTP while `vm.py` had no file transfer at all, so getting a test file
+into a guest meant seeding a disk image from the host and rebooting --
+fine for a fixture decided before boot, useless for anything a test
+wants to plant mid-run. It cost the ABI check above its automated test.
+
+`vm.py put <host-file> [guest-path]` now does it, and the two decisions
+worth keeping are about REUSE and about the guest's side.
+
+The transfer is `remote.py`'s `do_put()` called directly, not a second
+TFTP client: that one already carries the blksize/windowsize
+negotiation and the retry behaviour, and a second copy would be a
+second thing to get wrong. Only the addressing differs -- a QEMU
+hostfwd onto 127.0.0.1, on a port derived from `--instance` exactly as
+the QMP port and serial socket are, so parallel guests cannot collide.
+The forward is added to EVERY launch rather than being something a
+caller opts into; it is inert until something connects, and a transfer
+that only works when you remembered a flag at boot is a transfer nobody
+will use.
+
+`tftpd` is started on demand because it is NOT a service in the default
+image -- `/etc/services.d` has no inetd or tftpd, the bare-metal laptop
+enables them and a QEMU guest does not, which is why the first attempt
+at this found nothing listening. Spawned, not enabled: a service would
+persist into the next boot and change what every other tool is testing.

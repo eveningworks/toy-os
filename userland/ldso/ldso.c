@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "syscall_abi.h"
+#include "toyabi.h"
 #include "auxv.h"
 
 // --- raw syscalls (rt/sys.c's inline, minus its __thread errno) ------
@@ -42,6 +43,18 @@ static void ld_write(const char *s) {
 
 // Loudly, to fd 2 (the kernel log): a loader that dies silently is a
 // program that "crashed somewhere in libc" with no explanation.
+// Decimal, into `out`, returning how many characters it wrote. The
+// loader links no libc -- it IS what libc arrives through -- so there
+// is no snprintf here and the alternative is printing the version as a
+// word, which is what the message exists to avoid.
+static int ld_u32(char *out, uint32_t v) {
+    char tmp[10];
+    int n = 0;
+    do { tmp[n++] = (char)('0' + (v % 10u)); v /= 10u; } while (v);
+    for (int i = 0; i < n; i++) out[i] = tmp[n - 1 - i];
+    return n;
+}
+
 static void die(const char *what, const char *detail) {
     ld_write("ld-toy: ");
     ld_write(what);
@@ -387,6 +400,41 @@ uint64_t ldso_main(uint64_t *sp) {
         for (const struct dyn64 *d = g_objs[i].dynamic; d->d_tag != DT_NULL; d++)
             if (d->d_tag == DT_NEEDED)
                 load_library(g_objs[i].strtab + d->d_val);
+    }
+
+    // **A PROGRAM BUILT AGAINST A DIFFERENT ABI IS REFUSED HERE, BY
+    // NAME.** Before this, an executable a build behind its libraries
+    // started, relocated, and then wrote through a TLS block whose size
+    // it and libc disagreed about -- a page fault into its own text,
+    // three frames from anything that named the real problem.
+    //
+    // BOTH SIDES ARE OPTIONAL AND A MISSING ONE IS NOT A FAILURE: an
+    // object built before this existed carries no stamp, and refusing
+    // those would make the check itself the thing that bricks userland.
+    // resolve(..., 1) is the weak form, which answers 0 rather than
+    // dying. The magic is checked because these are read out of an
+    // object nothing has relocated yet, so a wrong address has to look
+    // wrong rather than plausible.
+    {
+        uint64_t rq = resolve("__toy_abi_required", 1);
+        uint64_t pv = resolve("__toy_abi_provided", 1);
+        if (rq && pv) {
+            const struct toy_abi_stamp *r = (const struct toy_abi_stamp *)(uintptr_t)rq;
+            const struct toy_abi_stamp *p = (const struct toy_abi_stamp *)(uintptr_t)pv;
+            if (r->magic == TOY_ABI_MAGIC && p->magic == TOY_ABI_MAGIC &&
+                r->version != p->version) {
+                char msg[64];
+                int n = 0;
+                const char *a = "built for userland ABI ";
+                for (const char *c = a; *c; c++) msg[n++] = *c;
+                n += ld_u32(msg + n, r->version);
+                const char *b = ", this system provides ";
+                for (const char *c = b; *c; c++) msg[n++] = *c;
+                n += ld_u32(msg + n, p->version);
+                msg[n] = '\0';
+                die(msg, "rebuild the program");
+            }
+        }
     }
 
     // Relocate LIBRARIES first, the executable last -- order matters

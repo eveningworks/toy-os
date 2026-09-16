@@ -51,6 +51,10 @@ PIDFILE = ".vm.pid"
 SERIAL_SOCK = ".vm.serial"
 QMP_PORT = 4445
 VNC_DISPLAY = 5
+# The host port `put` reaches the guest's tftpd on, derived per slot like
+# everything else. SLIRP is a NAT, so a file only travels INTO a guest
+# through a forward -- see cmd_put().
+TFTP_PORT = 6969
 PROMPT = "dbg> "
 
 
@@ -106,6 +110,8 @@ def _apply_instance(args):
         args.qmp_port = QMP_PORT + n
     if getattr(args, "vnc", None) is None:
         args.vnc = VNC_DISPLAY + n
+    if getattr(args, "tftp_port", None) is None:
+        args.tftp_port = TFTP_PORT + n
 
 
 def _running(pid):
@@ -389,7 +395,15 @@ def cmd_start(args):
     # port-unreachable check, which needs a datagram to ARRIVE.
     # QEMU spells it `hostfwd=SPEC`; the flag takes the SPEC alone so a
     # caller writes what the QEMU documentation calls it.
-    fwd = "".join(",hostfwd=" + f for f in (getattr(args, "hostfwd", None) or []))
+    rules = list(getattr(args, "hostfwd", None) or [])
+    # **AND ALWAYS THE TFTP ONE**, so `vm.py put` works against any guest
+    # this launched rather than only against one somebody remembered to
+    # forward a port for. It is inert until something connects: SLIRP
+    # binds the host port and forwards nothing otherwise. Derived from
+    # the slot, so parallel guests do not collide (see _apply_instance).
+    tftp = getattr(args, "tftp_port", None) or TFTP_PORT
+    rules.append(f"udp::{tftp}-:69")
+    fwd = "".join(",hostfwd=" + f for f in rules)
     if net == "none":
         cmd += ["-nic", "none"]
     else:
@@ -519,6 +533,63 @@ def _strip_kernel_noise(text):
             continue
         keep.append(line)
     return "\n".join(keep)
+
+
+def _ensure_tftpd(timeout):
+    """Start the guest's tftpd if it is not already up, and say so.
+
+    It is NOT a service in the default image (`/etc/services.d` has no
+    inetd or tftpd -- the bare-metal laptop enables them, a QEMU guest
+    does not), so `put` has to start it. Spawned rather than enabled: a
+    service would persist into the next boot and change what every other
+    tool is testing, and this one exists for the length of a transfer.
+    """
+    out = _exec_one("sh ps", timeout=timeout) or ""
+    if "tftpd" in out:
+        return True
+    _exec_one("sh spawn /bin/tftpd", timeout=timeout)
+    for _ in range(20):
+        time.sleep(0.25)
+        out = _exec_one("sh ps", timeout=timeout) or ""
+        if "tftpd" in out:
+            return True
+    return False
+
+
+def cmd_put(args):
+    """Copy a host file INTO the running guest, over TFTP.
+
+    THE GAP THIS FILLS: remote.py drives the bare-metal machine with
+    put/get/sync and vm.py had no file transfer at all, so planting a
+    file in a VM meant seeding a disk image from the host and rebooting
+    -- fine for a fixture decided before boot, useless for anything a
+    test wants to put there mid-run. It cost the ld-toy.so ABI check its
+    automated test (docs/roadmap-details.md).
+
+    The transfer is remote.py's, not a second copy of it: do_put() is
+    the same TFTP client, already carrying the blksize/windowsize
+    negotiation and the retry behaviour that took a session to get
+    right. What differs is only how the guest is reached -- a hostfwd
+    onto 127.0.0.1 instead of the laptop's address.
+    """
+    if not _read_pid():
+        print("vm: not running (vm.py start first)")
+        return 1
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import remote
+
+    if not _ensure_tftpd(args.timeout):
+        print("vm: could not start tftpd in the guest -- is networking up? "
+              "(`vm.py exec ifconfig`)", file=sys.stderr)
+        return 1
+
+    dst = args.dst or ("/tmp/" + os.path.basename(args.src))
+    rc = remote.do_put("127.0.0.1", args.tftp_port, args.src, dst,
+                       args.timeout)
+    if rc:
+        print(f"vm: put failed -- was this guest started by THIS vm.py? "
+              f"(the forward is on host port {args.tftp_port})", file=sys.stderr)
+    return rc
 
 
 def cmd_spawn(args):
@@ -781,6 +852,12 @@ def main():
                         help="send to the debug console directly instead of wrapping in `sh`")
     p_exec.add_argument("--label", action="store_true", help="always print a --- command --- header")
     p_exec.set_defaults(func=cmd_exec)
+
+    p_put = sub.add_parser("put", help="copy a host file INTO the running guest")
+    p_put.add_argument("src", help="the host file to send")
+    p_put.add_argument("dst", nargs="?", default=None,
+                        help="where it lands in the guest (default: /tmp/<name>)")
+    p_put.set_defaults(func=cmd_put)
 
     p_spawn = sub.add_parser("spawn",
                               help="spawn a program and print the file it writes")

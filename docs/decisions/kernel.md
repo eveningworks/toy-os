@@ -7608,3 +7608,61 @@ start: the worst case is a level that quietly does not apply, instead of
 a corrupted line. Seven such fragments existed in the first sweep and
 were moved onto their line's opening write; the rule is what makes the
 eighth harmless.
+
+## A dynamic program carries an ABI stamp, and the loader refuses a mismatch by name
+
+`/bin/about` on the bare-metal laptop was left one build behind while
+`/lib/libc.so` was replaced. It did not fail to start. It page-faulted
+inside `__rt_tls_init`, writing into its own text segment, because an
+old executable's static TLS geometry does not match a new libc's --
+`error=0x7`, `cr2` in the R+E segment, and nothing anywhere near the
+message "your binary is stale". Two hours went into that fault before
+the cause turned out to be a sync that had skipped a file.
+
+The fix is the cheap half of what every real system does. A shared
+library declares the ABI it provides; a program records the one it was
+built against; `ld-toy.so` compares them before relocating anything and
+refuses with a sentence:
+
+    ld-toy: built for userland ABI 99, this system provides 1: rebuild the program
+
+**IT IS A STAMP, NOT SYMBOL VERSIONING, and that is the whole decision.**
+glibc carries several ABIs in one file through version nodes
+(`GLIBC_2.34`, `.gnu.version_r`), which is why decades-old binaries
+still run on Linux; the SONAME major (`libc.so.6`) is the coarser
+version of the same idea, and macOS's `LC_ID_DYLIB` compatibility
+version a third. All of them let an OLD PROGRAM KEEP RUNNING across
+compatible change, and all of them cost machinery -- a linker script
+per library, version nodes, loader support, and a standing discipline
+about what counts as breaking.
+
+This project has one userland, built together and shipped together. It
+does not need an old program to keep running; it needs to be TOLD when
+one cannot. So the stamp is a single integer, the check is an equality,
+and the answer to a mismatch is "rebuild it" rather than a compatibility
+path. That is the same shape as everything else here that refuses
+rather than guesses -- a progressive JPEG before it was implemented, a
+config parser, `fs_read_into()` on an oversized file.
+
+Three details worth keeping.
+
+**BOTH SIDES ARE OPTIONAL.** `resolve(..., 1)` is the weak lookup, which
+answers 0 rather than dying, and a missing stamp on either side skips
+the check. An object built before this existed carries none, and a
+version gate that bricks every older binary is a worse failure than the
+one it replaces.
+
+**THE MAGIC IS CHECKED** because these records are read out of an object
+nothing has relocated yet, so a wrong address has to be recognisable as
+garbage rather than believed.
+
+**ONE NUMBER, IN LIBC, NOT ONE PER LIBRARY.** libuapp.so carries no
+stamp of its own: two version numbers that can only ever agree are a
+second thing to keep true for no benefit.
+
+When to bump it: anything that makes an already-built program wrong --
+the TLS block's size or alignment, a struct passed or returned BY VALUE
+by an exported function, a signature, the meaning of a wrapper's
+arguments. NOT adding a new exported function; an old program never
+calls it, and a new program against an old library already fails to
+resolve it by name, which reports itself clearly.

@@ -658,6 +658,27 @@ manual steps to be worth automating:
   exercise different halves of `kernel/acpi/`. **q35 has no legacy IDE
   at all**, so it implies `--disk-kind ahci` rather than silently
   booting a machine with no disk, which would read as a kernel bug.
+- **`vm.py put <host-file> [guest-path]`** -- copies a file INTO the
+  running guest, over TFTP, defaulting to `/tmp/<name>`. It closes the
+  asymmetry that `remote.py` had put/get/sync for the bare-metal machine
+  while the VM side had no file transfer at all: planting a file in a
+  guest meant seeding a disk image from the host and rebooting, which is
+  fine for a fixture decided before boot and useless for anything a test
+  wants to put there mid-run.
+  **The transfer is `remote.py`'s `do_put()`, not a second copy of it**
+  -- the same TFTP client, already carrying the blksize/windowsize
+  negotiation and the retries. What differs is only how the guest is
+  reached: a QEMU hostfwd onto 127.0.0.1 instead of the laptop's
+  address, on a port derived from `--instance` like every other
+  per-slot resource, and added to EVERY launch so this works against
+  any guest `vm.py` started rather than one somebody remembered to
+  forward a port for.
+  **It starts `tftpd` in the guest if it is not running**, because it is
+  not a service in the default image -- `/etc/services.d` has none, the
+  bare-metal laptop enables it and a QEMU guest does not. Spawned rather
+  than enabled: a service would persist into the next boot and change
+  what every other tool is testing.
+  It needs networking, so `--net none` has no path for it.
 - **`vm.py spawn <path> [args]`** -- spawns a guest program and prints
   the FILE it writes its report to, waiting until that file stops
   changing. It replaces a three-command dance that was hand-rolled four
