@@ -52,6 +52,9 @@ import tempfile
 import time
 import zlib
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import iso_guard  # noqa: E402  -- the staging-freshness check, see do_flash()
+
 # RFC 854.
 IAC, DONT, DO, WONT, WILL, SB, SE = 255, 254, 253, 252, 251, 250, 240
 OPT_ECHO, OPT_SGA, OPT_NAWS = 1, 3, 31
@@ -985,6 +988,15 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
     descriptor has to arrive, and a file the machine already has is its
     configuration and is not ours to overwrite.
 
+    AND THE STAGING TREE IS CHECKED BEFORE ANY OF IT. `make all` writes
+    build/ and stops; seed/sync is populated by the `seed` target that
+    `make iso` runs -- so flashing after a bare `make all` sends the
+    PREVIOUS build's userland, and the sync cannot save you because it
+    faithfully compares the machine against that stale staging and
+    correctly reports "already up to date". That is how a laptop came to
+    run a /bin/about one build behind its libraries and page-fault in
+    __rt_tls_init. Same refusal, same bypass variable, as a stale ISO.
+
     The sync goes FIRST so a failure there costs nothing: the machine is
     still running the kernel it booted. It does leave a short window of
     new userland on the old kernel, which the reboot closes -- and which
@@ -996,6 +1008,9 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
     a power cycle to recover because the half that broke is the half
     that answers telnet. If you must bound it, bound it generously.
     """
+    kernel_current = 0      # set when the machine already has this kernel
+    if not kernel_only:
+        iso_guard.assert_staging_fresh()
     if local is not None and not os.path.isfile(local):
         print(f"remote: no such file: {local}", file=sys.stderr)
         return 1
@@ -1060,26 +1075,34 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
                   "records gzio")
 
         if _sha256(sess, "/boot/boot/kernel.bin", timeout) == want:
-            # **--force MEANS DO IT ANYWAY, INCLUDING THE USERLAND SYNC.**
-            # This used to return here unconditionally, so a flash whose
-            # KERNEL happened to match skipped the sync entirely -- and
-            # said only "that kernel is already installed", which reads
-            # like success. It is how a --force run intended to fix
-            # /bin's permission bits changed nothing at all and reported
-            # nothing wrong.
-            if not force:
-                print("remote: that kernel is already installed")
-                return 0
-            print("remote: that kernel is already installed -- --force, "
-                  "so syncing the userland anyway")
+            # **A MATCHING KERNEL SKIPS THE KERNEL WRITE AND NOTHING
+            # ELSE.** This used to `return 0` here -- so a flash whose
+            # kernel happened to match did not sync the userland, did not
+            # reboot, and said "that kernel is already installed", which
+            # reads like success. That is a flash that silently changes
+            # nothing, and it is how the laptop came to run a /bin/about
+            # one build behind its libraries: the kernel was current, so
+            # nothing else was even looked at. Measured 2026-09-16 --
+            # corrupt /bin/hello on the machine, flash an unchanged
+            # kernel, and the corruption survives.
+            #
+            # An earlier fix made --force alone fall through, which left
+            # the ordinary path carrying the bug it was diagnosing.
+            kernel_current = 1
+            print("remote: that kernel is already installed -- syncing the "
+                  "userland anyway")
 
-        print("remote: rotating the running kernel to /boot/boot/kernel.old")
+        if kernel_current:
+            print("remote: leaving /boot alone -- the kernel already matches")
+        else:
+            print("remote: rotating the running kernel to /boot/boot/kernel.old")
         # ITS OWN TIMEOUT, not --timeout. This copies ~5 MB through the
         # guest's filesystem and took longer than the 15s default on a
         # real laptop, which aborted the flash before it had sent a byte
         # -- and left the rescue slot holding a partial copy.
-        sess.run("cp /boot/boot/kernel.bin /boot/boot/kernel.old",
-                 max(timeout, ROTATE_TIMEOUT))
+        if not kernel_current:
+            sess.run("cp /boot/boot/kernel.bin /boot/boot/kernel.old",
+                     max(timeout, ROTATE_TIMEOUT))
     finally:
         sess.close()
 
@@ -1132,11 +1155,16 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
                     rescue.close()
                 return 1
 
-    rc = do_put(host, tftp_port, local, "/boot/boot/kernel.bin", timeout)
-    if rc:
-        if rescue is not None:
-            rescue.close()
-        return rc
+    # The userland is in sync by here whatever happens next, which is the
+    # whole point of not returning early above.
+    if kernel_current:
+        print("remote: kernel unchanged, so nothing to write or verify")
+    else:
+        rc = do_put(host, tftp_port, local, "/boot/boot/kernel.bin", timeout)
+        if rc:
+            if rescue is not None:
+                rescue.close()
+            return rc
 
     # THE VERIFY SESSION IS ON THE WRONG SIDE OF THE /lib SYNC, and that
     # is not a hypothetical: the new libc.so and libuapp.so are already

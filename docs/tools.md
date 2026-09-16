@@ -658,6 +658,28 @@ manual steps to be worth automating:
   exercise different halves of `kernel/acpi/`. **q35 has no legacy IDE
   at all**, so it implies `--disk-kind ahci` rather than silently
   booting a machine with no disk, which would read as a kernel bug.
+- **`remote.py flash` REFUSES A STALE STAGING TREE**, the way
+  `iso_guard.py` refuses a stale ISO, and for the same reason. It sends
+  from `seed/sync`, which `make all` does NOT populate -- the `seed`
+  target that `make iso` runs does. A flash after a bare `make all`
+  therefore ships the PREVIOUS build's userland, and the sync cannot
+  save you: it compares the machine against that stale staging and
+  truthfully reports no differences. It is a clean-looking flash that
+  changed nothing. `TOYOS_ALLOW_STALE_ISO=1` bypasses it.
+  **`--force` is NOT the fix for a stale userland** and was believed to
+  be for most of a session: the comparison is sound -- measured, a
+  single flipped byte at unchanged size in a 512 KB file is detected and
+  re-sent, and a corrupted `/bin` binary is repaired by a plain sync.
+  What made `--force` look like the cure is that it was the only path
+  that got PAST the early return described below. Reach for it when you
+  suspect the MACHINE, not when you suspect the build.
+- **A MATCHING KERNEL SKIPS THE KERNEL WRITE AND NOTHING ELSE.** A flash
+  whose kernel already matched used to return before syncing `/bin`,
+  `/lib`, `/tests` and `/usr`, printing `that kernel is already
+  installed` -- a flash that silently changed nothing and read like
+  success (`docs/bugs.md`). It now leaves `/boot` alone and syncs the
+  userland as usual, which is what makes an ordinary incremental flash
+  send exactly the files that changed.
 - **`vm.py put <host-file> [guest-path]`** -- copies a file INTO the
   running guest, over TFTP, defaulting to `/tmp/<name>`. It closes the
   asymmetry that `remote.py` had put/get/sync for the bare-metal machine

@@ -427,3 +427,52 @@ if __name__ == "__main__":
     # ISO is current, 2 when it is not.
     assert_iso_fresh()
     print("iso_guard: toy-os.iso is current.")
+
+
+# --- the STAGING tree, which `remote.py flash` sends from -------------
+
+def check_staging_fresh(repo: Path = REPO, staging: str = "seed/sync"):
+    """Is `seed/sync` newer than what the build produced?
+
+    **THE SAME TRAP AS A STALE ISO, ON A DIFFERENT PATH.** `make all`
+    writes build/ and stops; `seed/sync` is populated by the `seed`
+    target that `make iso` runs. So `make all` followed by a flash sends
+    the PREVIOUS build's binaries -- and the sync is not at fault and
+    will not save you, because it faithfully compares the machine
+    against that stale staging and correctly reports "already up to
+    date". Measured 2026-09-16: a laptop ran a `/bin/about` one build
+    behind its libraries and page-faulted in __rt_tls_init.
+
+    Returns None when fresh, or a sentence saying what is older than
+    what.
+    """
+    staged = repo / staging
+    if not staged.is_dir():
+        return None          # nothing staged yet; `make iso` will make it
+    _, staged_m = _newest(staged)
+    if not staged_m:
+        return None
+
+    # The BUILD's own outputs, not the sources: a source newer than
+    # staging is normal between an edit and a build, and saying so here
+    # would cry wolf on every keystroke. What matters is a BUILT
+    # artifact that never reached the staging tree.
+    built, built_m = _newest(repo / "build", suffixes={".elf", ".so", ".bin", ".ko"})
+    if not built or built_m <= staged_m:
+        return None
+    return (f"{built.relative_to(repo)} is newer than anything in "
+            f"{staging}/ -- `make all` does not populate the staging tree, "
+            f"`make iso` does. Flashing now would send the PREVIOUS "
+            f"build's files and the sync would call it up to date")
+
+
+def assert_staging_fresh(repo: Path = REPO, staging: str = "seed/sync"):
+    """Refuse a flash from a stale staging tree. Bypassed by the same
+    env var as the ISO check, since it is the same mistake."""
+    if os.environ.get(BYPASS_ENV):
+        return
+    why = check_staging_fresh(repo, staging)
+    if why:
+        raise SystemExit(f"iso_guard: REFUSING to flash stale staging.\n"
+                          f"  {why}\n"
+                          f"  Run `make iso` first, or set {BYPASS_ENV}=1.")
