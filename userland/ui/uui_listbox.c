@@ -65,6 +65,19 @@ static void listbox_clamp(struct uui_listbox *lb) {
     if (lb->top < 0) lb->top = 0;
 }
 
+// A SHIFTED COPY rather than an offset threaded through the body: the
+// draw reads lb->x/lb->y in seven places and a missed one would paint
+// one element at the wrong origin, which is the bug that does not look
+// like an origin bug.
+void uui_listbox_draw_at(struct ugfx_surface *s, const struct uui_listbox *lb,
+                          int ox, int oy) {
+    if (!ox && !oy) { uui_listbox_draw(s, lb); return; }
+    struct uui_listbox t = *lb;
+    t.x -= ox;
+    t.y -= oy;
+    uui_listbox_draw(s, &t);
+}
+
 void uui_listbox_draw(struct ugfx_surface *s, const struct uui_listbox *lb) {
     int rh = uui_listbox_row_h(lb);
     int vis = uui_listbox_visible_rows(lb);

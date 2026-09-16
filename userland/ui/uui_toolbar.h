@@ -27,10 +27,14 @@
 // So hover only records when it started, and the app calls
 // uui_toolbar_tick() from its on_tick, repainting when it returns 1.
 // An app that never ticks simply never shows tooltips; every button
-// still works. The tooltip itself is drawn from `draw_overlay`, so the
-// router paints it above the widgets it drops over, and it is clamped
-// to the surface -- a tip near the window edge slides inward rather
-// than clipping.
+// still works.
+//
+// THE TIP IS ITS OWN POPUP SURFACE when the compositor grants one
+// (ui/uui_popup.h), so it can leave the window entirely -- and it is
+// opened with NO GRAB, because a tooltip that took the pointer would
+// swallow the click meant for the button beneath it. Without a surface
+// it falls back to `draw_overlay`, drawn in-window and clamped to the
+// window's edges, which is all it could ever do there.
 
 struct uui_toolbar_item {
     const char *icon; // icon_get() name; NULL makes this a SEPARATOR
@@ -42,6 +46,9 @@ struct uui_toolbar_item {
 
 // ~500ms at the PIT's 100 Hz -- every desktop delays about this long.
 #define UUI_TOOLTIP_DELAY_TICKS 50
+
+#define UUI_TIP_PAD 4 // inset around the tip's text
+#define UUI_TIP_GAP 3 // between the button and the tip, in-window only
 
 struct uui_toolbar {
     int x, y, w, h;
@@ -64,6 +71,13 @@ struct uui_toolbar {
     // Tooltip state -- see the header comment.
     unsigned long hot_since; // sys_ticks() when `hot` last changed
     int tip_shown;           // OWNED; flipped by uui_toolbar_tick()
+
+    // The tooltip's own popup surface (ui/uui_popup.h), or 0 when it is
+    // drawn in-window instead. Opened WITHOUT a grab: a tooltip that
+    // took the pointer would eat the click meant for the button it is
+    // describing. Opened from tick()/motion(), never from the draw op,
+    // which is const.
+    int tip_popup;
 
     uint32_t bg, fg, border, tip_bg, tip_fg;
 };

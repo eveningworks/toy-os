@@ -905,12 +905,20 @@ this the obvious way), not from how much history it accumulated.
   side it prefers; the compositor flips/slides/clamps it against the work
   area and replies with where it landed, in the same coordinates. No
   chrome, no taskbar button, no saved geometry; the parent keeps the
-  active title bar and Alt+F4, the popup gets the keys. A press inside
-  one of the client's popups or inside its own window's content is
-  delivered; a press anywhere else closes every popup of that client
-  with `WIN_EV_POPUP_DONE` and is consumed. `docs/decisions.md` has the
-  comparison with `xdg_popup` and Win32 and the six calls. Five things
-  to know when touching it:
+  active title bar and Alt+F4, the popup gets the keys. **THE GRAB IS
+  OPT-IN (`WIN_POPUP_GRAB`)**: for a GRABBING popup a press inside one of
+  the client's popups or inside its own window's content is delivered and
+  a press anywhere else closes every popup of that client with
+  `WIN_EV_POPUP_DONE` and is consumed -- while a popup WITHOUT the flag
+  routes input as though it were not there, which is what a TOOLTIP is.
+  `docs/decisions.md` has the comparison with `xdg_popup` and Win32 and
+  the six calls. Six things to know when touching it:
+  - **A GRABBING POPUP'S KEYS GO TO THE POPUP'S SLOT, NOT ITS PARENT'S**,
+    so anything routing a popup's events home must route EVERY type, not
+    just the pointer. A dropdown in the file chooser -- a dialog window
+    with its own router -- seeked with keys delivered to the MAIN
+    window's widgets until `uapp` recorded which window each popup hangs
+    off.
   - **COORDINATES STAY THE PARENT'S; ONLY THE DRAWING MOVES.** A widget
     keeps its popup rect in the window's content coordinates (the reply)
     and draws with the level's origin SUBTRACTED into the surface

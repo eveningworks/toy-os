@@ -184,9 +184,11 @@ static void open_level(struct uui_menubar *m, int l,
     level_size(items, count, &w, &h);
 
     int px, py;
+    // A MENU GRABS: a press outside must dismiss it and be swallowed,
+    // which is the whole reason it is a surface and not a rectangle.
     int surf = uui_popup_open(ax, side ? ay - 1 : ay, aw, ah, w, h,
                               side ? UUI_POPUP_RIGHT : UUI_POPUP_BELOW,
-                              level_done, m, &px, &py);
+                              UUI_POPUP_GRAB, level_done, m, &px, &py);
     if (!surf) place(m, ax, ay, aw, ah, w, h, side, &px, &py);
 
     struct uui_menu_level *lv = &m->level[l];

@@ -311,6 +311,7 @@ static int on_popup_created(int pid, uint32_t id, uint32_t parent_id, int w, int
     struct window *win = &windows[window_count];
     k_memset(win, 0, sizeof(*win));
     win->popup = 1;
+    win->popup_grab = (pos->flags & WIN_POPUP_GRAB) != 0;
     win->popup_parent = parent_id;
     win->x = sx;
     win->y = sy;
@@ -440,9 +441,13 @@ int wm_dialog_of(int idx, int after) {
     return -1;
 }
 
+// ONLY A GRABBING POPUP OWNS THE POINTER. A tooltip is a popup with no
+// grab, and answering with its pid would make every press anywhere
+// dismiss it and be consumed -- which is a tooltip swallowing the click
+// that was meant for a button.
 int wm_client_popup_owner(void) {
     for (int i = window_count - 1; i >= 0; i--)
-        if (windows[i].popup) return windows[i].client_pid;
+        if (windows[i].popup && windows[i].popup_grab) return windows[i].client_pid;
     return 0;
 }
 
@@ -538,6 +543,24 @@ static void on_window_destroyed(int pid, uint32_t id) {
         unmap_client_window(&windows[d]);
         windows[d].client_pid = 0;
         close_window(d);
+        idx = find_client_window(pid, id);
+        if (idx < 0) return;
+    }
+
+    // AND ITS POPUPS, for the same reason and by the same re-find: a
+    // popup anchored to a window that is going away cannot be placed or
+    // drawn against anything. Only reachable by destroying a toplevel
+    // with one still open -- a client that DIES is swept whole, by pid
+    // -- which is why nothing had noticed the row being left behind.
+    for (;;) {
+        int p = -1;
+        for (int i = 0; i < window_count; i++)
+            if (windows[i].popup && windows[i].client_pid == pid &&
+                windows[i].popup_parent == id) { p = i; break; }
+        if (p < 0) break;
+        unmap_client_window(&windows[p]);
+        windows[p].client_pid = 0;
+        close_window(p);
         idx = find_client_window(pid, id);
         if (idx < 0) return;
     }

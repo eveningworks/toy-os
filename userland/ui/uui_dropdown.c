@@ -1,6 +1,7 @@
 // dropdown. Split out of uwidgets.c -- see ui/uui_dropdown.h.
 #include "ui/uui_dropdown.h"
 #include "ui/uui_widget.h"  // the ops table the focus ring takes
+#include "ui/uui_popup.h"
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
 // ---------------------------------------------------------------------
@@ -25,6 +26,52 @@ void uui_dropdown_init(struct uui_dropdown *d, int x, int y, int w, int h,
 
 int uui_dropdown_selected(const struct uui_dropdown *d) { return d->list.selected; }
 
+// THE POPUP IS A SURFACE WHEN THE COMPOSITOR GRANTS ONE, and the list
+// keeps its rect in the PARENT's content coordinates either way -- the
+// seam hands the placed position back in that space and translates
+// input on the surface back into it (ui/uui_popup.h), so every hit test
+// below is unchanged by the move. Only the draw differs.
+//
+// Opened WITH a grab: an open dropdown owns the next click, which is
+// what dd_ops_overlay used to buy in-window.
+static void dd_done(void *owner) {
+    struct uui_dropdown *d = (struct uui_dropdown *)owner;
+    d->popup = 0;
+    d->open = 0;
+}
+
+static void dd_place_list(struct uui_dropdown *d) {
+    int rh = uui_listbox_row_h(&d->list);
+    int rows = d->list.count < d->max_rows ? d->list.count : d->max_rows;
+    if (rows < 1) rows = 1;
+    d->list.x = d->x;
+    d->list.y = d->y + d->h;
+    d->list.w = d->w;
+    d->list.h = rows * rh;
+}
+
+static void dd_open(struct uui_dropdown *d) {
+    if (d->open) return;
+    d->open = 1;
+    dd_place_list(d);
+    int px, py;
+    d->popup = uui_popup_open(d->x, d->y, d->w, d->h,
+                              d->list.w, d->list.h, UUI_POPUP_BELOW,
+                              UUI_POPUP_GRAB, dd_done, d, &px, &py);
+    // Where the COMPOSITOR put it -- it may have flipped the list above
+    // the box near the screen's bottom edge, which the in-window
+    // placement above could never do.
+    if (d->popup) { d->list.x = px; d->list.y = py; }
+}
+
+static void dd_close(struct uui_dropdown *d) {
+    if (d->popup) {
+        uui_popup_close(d->popup);
+        d->popup = 0;
+    }
+    d->open = 0;
+}
+
 // Moves the closed box AND re-places the popup under it.
 //
 // The popup's geometry is the WIDGET's, not the app's: an app that set
@@ -34,13 +81,7 @@ int uui_dropdown_selected(const struct uui_dropdown *d) { return d->list.selecte
 // select. Behaviour belongs to the component (docs/gui-guidelines.md).
 void uui_dropdown_set_geometry(struct uui_dropdown *d, int x, int y, int w, int h) {
     d->x = x; d->y = y; d->w = w; d->h = h;
-    int rh = uui_listbox_row_h(&d->list);
-    int rows = d->list.count < d->max_rows ? d->list.count : d->max_rows;
-    if (rows < 1) rows = 1;
-    d->list.x = x;
-    d->list.y = y + h;
-    d->list.w = w;
-    d->list.h = rows * rh;
+    dd_place_list(d);
 }
 
 void uui_dropdown_draw(struct ugfx_surface *s, const struct uui_dropdown *d) {
@@ -70,8 +111,14 @@ void uui_dropdown_draw(struct ugfx_surface *s, const struct uui_dropdown *d) {
 
 void uui_dropdown_draw_popup(struct ugfx_surface *s, const struct uui_dropdown *d) {
     if (!d->open) return;
-    uui_listbox_draw(s, &d->list);
-    ugfx_draw_rect(s, d->list.x, d->list.y, d->list.w, d->list.h, d->border);
+    int ox = 0, oy = 0;
+    if (d->popup) {
+        struct ugfx_surface *ps = uui_popup_surface(d->popup);
+        if (ps) { s = ps; ox = d->list.x; oy = d->list.y; }
+    }
+    uui_listbox_draw_at(s, &d->list, ox, oy);
+    ugfx_draw_rect(s, d->list.x - ox, d->list.y - oy, d->list.w, d->list.h,
+                    d->border);
 }
 
 void uui_dropdown_natural_size(const struct uui_dropdown *d, int *out_w, int *out_h) {
@@ -94,7 +141,7 @@ int uui_dropdown_hit(const struct uui_dropdown *d, int cx, int cy) {
 
 int uui_dropdown_click(struct uui_dropdown *d, int cx, int cy) {
     if (uui_dropdown_hit(d, cx, cy)) {
-        d->open = !d->open;
+        if (d->open) dd_close(d); else dd_open(d);
         return 1;
     }
     if (d->open) {
@@ -106,12 +153,15 @@ int uui_dropdown_click(struct uui_dropdown *d, int cx, int cy) {
 
         if (uui_hit(d->list.x, d->list.y, d->list.w, d->list.h, cx, cy)) {
             uui_listbox_click(&d->list, cx, cy);
-            d->open = 0; // committing closes it
+            dd_close(d); // committing closes it
             return 1;
         }
         // A click anywhere else DISMISSES rather than falling through to
         // whatever is underneath -- an open popup owns the next click.
-        d->open = 0;
+        // On a popup SURFACE this arm is unreachable: the compositor's
+        // grab consumes that press and answers with WIN_EV_POPUP_DONE,
+        // which lands in dd_done() instead.
+        dd_close(d);
         return 1;
     }
     return 0;
@@ -131,7 +181,7 @@ void uui_dropdown_drag_end(struct uui_dropdown *d) {
 int uui_dropdown_key(struct uui_dropdown *d, int key) {
     if (!d->open) {
         if (key == '\n' || key == '\r' || key == ' ' || key == KEY_ARROW_DOWN) {
-            d->open = 1;
+            dd_open(d);
             return 1;
         }
         // A LETTER SELECTS WITHOUT OPENING, as a Windows or KDE combobox
@@ -151,8 +201,8 @@ int uui_dropdown_key(struct uui_dropdown *d, int key) {
         if (key > ' ' && key < 0x7F) return uui_listbox_key(&d->list, key);
         return 0;
     }
-    if (key == 0x1B) { d->open = 0; return 1; }             // Esc dismisses
-    if (key == '\n' || key == '\r') { d->open = 0; return 1; } // Enter commits
+    if (key == 0x1B) { dd_close(d); return 1; }             // Esc dismisses
+    if (key == '\n' || key == '\r') { dd_close(d); return 1; } // Enter commits
     return uui_listbox_key(&d->list, key);
 }
 
@@ -181,7 +231,7 @@ static void dd_ops_set_focused(void *w, int focused) {
     // Focus leaving CLOSES the popup. A popup left open while the keys
     // go somewhere else is a menu nobody is driving, and it would still
     // be drawn over the rest of the window.
-    if (!focused) d->open = 0;
+    if (!focused) dd_close(d);
 }
 
 const struct uui_widget_ops uui_dropdown_focus_ops = {

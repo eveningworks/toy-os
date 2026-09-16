@@ -26,16 +26,26 @@
 //
 // `done` is called when the COMPOSITOR dismissed the popup -- a press
 // outside every surface of this process. The id is already dead; the
-// widget closes whatever state it kept and repaints.
+// widget closes whatever state it kept and repaints. A popup opened
+// WITHOUT UUI_POPUP_GRAB is never dismissed this way, so its `done` is
+// only ever the courtesy path: that widget closes its own popup.
 
 #define UUI_POPUP_BELOW 0 // below the anchor, left edges aligned (a menu title)
 #define UUI_POPUP_RIGHT 1 // right of the anchor, top edges aligned (a submenu)
 
+// THE GRAB IS WHAT SEPARATES A MENU FROM A TOOLTIP, and it is opt-in --
+// Wayland's split, where the surface comes from `xdg_surface.get_popup`
+// and `xdg_popup.grab` is a separate request. A grabbing popup owns the
+// pointer and a press outside dismisses it; one without routes input as
+// if it were not there. A menu WANTS it; a tooltip that took it would
+// eat the click meant for the button under the pointer.
+#define UUI_POPUP_GRAB  0x01u
+
 struct uui_popup_ops {
     // 0 on refusal; else an id > 0 and where it landed in *out_x/*out_y.
     int (*open)(void *ctx, int ax, int ay, int aw, int ah, int w, int h,
-                int gravity, void (*done)(void *owner), void *owner,
-                int *out_x, int *out_y);
+                int gravity, unsigned flags, void (*done)(void *owner),
+                void *owner, int *out_x, int *out_y);
     void (*close)(void *ctx, int id);
     // The buffer to draw THIS FRAME into, sized w x h; marks it for
     // presenting. NULL if the popup is gone.
@@ -46,7 +56,8 @@ void uui_popup_set_provider(const struct uui_popup_ops *ops, void *ctx);
 
 // The widget-facing calls; every one is a refusal/no-op with no provider.
 int uui_popup_open(int ax, int ay, int aw, int ah, int w, int h, int gravity,
-                   void (*done)(void *owner), void *owner, int *out_x, int *out_y);
+                   unsigned flags, void (*done)(void *owner), void *owner,
+                   int *out_x, int *out_y);
 void uui_popup_close(int id);
 struct ugfx_surface *uui_popup_surface(int id);
 

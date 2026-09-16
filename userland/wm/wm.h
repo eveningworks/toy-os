@@ -222,7 +222,13 @@ struct window {
     // anchored to. Created at the top of the list; it never needs to
     // follow its parent because the press that would move the parent
     // dismisses it first.
+    //
+    // `popup_grab` is WIN_POPUP_GRAB: only a GRABBING popup takes the
+    // pointer and is dismissed by a press outside. A tooltip sets it to
+    // 0 and input routes as if it were not there -- so a popup with no
+    // grab is dismissed by nobody but its own client.
     int popup;
+    int popup_grab;
     uint32_t popup_parent;
 
     // A DIALOG WINDOW (abi/win_proto.h's WIN_REQ_DIALOG): a second

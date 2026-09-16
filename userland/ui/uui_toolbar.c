@@ -3,6 +3,7 @@
 #include "ui/uui_toolbar.h"
 #include "ui/uui_widget.h"
 #include "ui/uui_primitives.h"
+#include "ui/uui_popup.h"
 #include "lib/icon_cache.h"
 #include "rt/sys.h" // sys_ticks()
 #include <string.h>
@@ -74,11 +75,52 @@ int uui_toolbar_take_code(struct uui_toolbar *t) {
     return code;
 }
 
+// The tip's size, and the button it hangs off. Both the open site and
+// the in-window draw need these and must agree, or the surface is sized
+// for one tip and painted with another.
+static int tip_metrics(const struct uui_toolbar *t, int *w, int *h,
+                       int *bx, int *by, int *bw, int *bh) {
+    if (t->hot < 0 || !t->items[t->hot].tip) return 0;
+    uui_toolbar_item_rect(t, t->hot, bx, by, bw, bh);
+    *w = ugfx_text_width(t->items[t->hot].tip) + UUI_TIP_PAD * 2;
+    *h = ugfx_char_h() + UUI_TIP_PAD * 2;
+    return 1;
+}
+
+static void tip_hide(struct uui_toolbar *t) {
+    if (t->tip_popup) {
+        uui_popup_close(t->tip_popup);
+        t->tip_popup = 0;
+    }
+    t->tip_shown = 0;
+}
+
+// The compositor swept this client's popups -- it does that for ALL of
+// them when a GRABBING one is dismissed, so a tooltip up beside an open
+// menu goes with it. The id is already dead; just forget it.
+static void tip_done(void *owner) {
+    struct uui_toolbar *t = (struct uui_toolbar *)owner;
+    t->tip_popup = 0;
+    t->tip_shown = 0;
+}
+
 int uui_toolbar_tick(struct uui_toolbar *t) {
     int want = t->hot >= 0 && t->items[t->hot].tip &&
                 sys_ticks() - t->hot_since >= UUI_TOOLTIP_DELAY_TICKS;
     if (want == t->tip_shown) return 0;
-    t->tip_shown = want;
+    if (!want) { tip_hide(t); return 1; }
+
+    t->tip_shown = 1;
+    int w, h, bx, by, bw, bh;
+    if (tip_metrics(t, &w, &h, &bx, &by, &bw, &bh)) {
+        int px, py;
+        // NO GRAB. The compositor flips it above the button when there
+        // is no room below, which is the clamp this widget used to do
+        // against the surface -- and could only ever do against its
+        // OWN window.
+        t->tip_popup = uui_popup_open(bx, by, bw, bh, w, h, UUI_POPUP_BELOW,
+                                      0, tip_done, t, &px, &py);
+    }
     return 1;
 }
 
@@ -130,21 +172,31 @@ static void tb_draw_tip(struct ugfx_surface *s, const struct uui_toolbar *t) {
     if (!t->tip_shown || t->hot < 0 || !t->items[t->hot].tip) return;
     const char *tip = t->items[t->hot].tip;
 
-    int bx, by, bw, bh;
-    uui_toolbar_item_rect(t, t->hot, &bx, &by, &bw, &bh);
-    int pad = 4;
-    int w = ugfx_text_width(tip) + pad * 2;
-    int h = ugfx_char_h() + pad * 2;
-    int x = bx;
-    int y = by + bh + 3;
-    if (x + w > s->w) x = s->w - w;
-    if (x < 0) x = 0;
-    if (y + h > s->h) y = by - h - 3; // no room below: flip above
+    int w, h, bx, by, bw, bh;
+    if (!tip_metrics(t, &w, &h, &bx, &by, &bw, &bh)) return;
+
+    int x, y;
+    struct ugfx_surface *ps = t->tip_popup ? uui_popup_surface(t->tip_popup) : 0;
+    if (ps) {
+        // Its own surface: the compositor placed it, so the tip sits at
+        // that surface's origin and nothing here clamps.
+        s = ps;
+        x = y = 0;
+    } else {
+        // In-window fallback -- the only clamp this widget can do, and
+        // the reason a tooltip near the window edge used to be cut off
+        // rather than moved.
+        x = bx;
+        y = by + bh + UUI_TIP_GAP;
+        if (x + w > s->w) x = s->w - w;
+        if (x < 0) x = 0;
+        if (y + h > s->h) y = by - h - UUI_TIP_GAP; // no room below: flip above
+    }
 
     ugfx_fill_rect(s, x, y, w, h, t->tip_bg);
     ugfx_draw_rect(s, x, y, w, h, t->border);
-    ugfx_draw_string_clipped(s, x + pad, y + pad, w - pad * 2, tip,
-                              t->tip_fg, t->tip_bg);
+    ugfx_draw_string_clipped(s, x + UUI_TIP_PAD, y + UUI_TIP_PAD,
+                              w - UUI_TIP_PAD * 2, tip, t->tip_fg, t->tip_bg);
 }
 
 // --- the ops table ----------------------------------------------------
@@ -195,7 +247,7 @@ static int tb_motion_op(void *w, int cx, int cy, unsigned buttons) {
     if (over == t->hot) return 0;
     t->hot = over;
     t->hot_since = sys_ticks();
-    t->tip_shown = 0;
+    tip_hide(t);   // a new button means a new tip, and the old SURFACE goes
     return 1;
 }
 

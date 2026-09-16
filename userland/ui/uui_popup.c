@@ -11,9 +11,11 @@ void uui_popup_set_provider(const struct uui_popup_ops *ops, void *ctx) {
 }
 
 int uui_popup_open(int ax, int ay, int aw, int ah, int w, int h, int gravity,
-                   void (*done)(void *owner), void *owner, int *out_x, int *out_y) {
+                   unsigned flags, void (*done)(void *owner), void *owner,
+                   int *out_x, int *out_y) {
     if (!g_ops || !g_ops->open) return 0;
-    return g_ops->open(g_ctx, ax, ay, aw, ah, w, h, gravity, done, owner, out_x, out_y);
+    return g_ops->open(g_ctx, ax, ay, aw, ah, w, h, gravity, flags, done, owner,
+                       out_x, out_y);
 }
 
 void uui_popup_close(int id) {

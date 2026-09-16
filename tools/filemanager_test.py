@@ -1333,6 +1333,7 @@ def run(dbg, qmp, tmp, res):
         n_after = ink_count(png1, tip_rect, (255, 252, 220), tol=6)
         res.check("hovering a button shows its tooltip, and only then",
                   n_before == 0 and n_after > 20, f"cream {n_before} -> {n_after}")
+
     dbg.warp_cursor(qmp, *park)
 
 
@@ -2668,6 +2669,48 @@ def run(dbg, qmp, tmp, res):
     dbg.send(f"sh rm -r {MS}")
 
     dbg.send(f"sh rm {FILES_CONF}")
+
+    # --- a tooltip is a popup that does NOT grab ------------------------
+    #
+    # LAST IN THE FILE, DELIBERATELY. Proving the press was not swallowed
+    # means making one that DOES something, and the only cheap observable
+    # here is a toolbar command -- so this runs where nothing downstream
+    # can inherit the state it changes. Put earlier, its folder-tree
+    # toggle broke the drag-onto-a-tree-row check 1100 lines below it.
+    #
+    # WIN_POPUP_GRAB (abi/win_proto.h): a grabbing popup has the
+    # compositor consume a press outside it and answer with
+    # WIN_EV_POPUP_DONE. A tooltip must not, or the button it describes
+    # goes dead for exactly as long as its own tip is showing.
+    lay = wait_layout(dbg, win, lambda l: len(l.tbitems) >= 14) or lay
+    ox, oy = win["content"]["x"], win["content"]["y"]
+    r1 = lay.tbitems.get(1) if lay else None
+    if not r1:
+        res.skip("a press while the tooltip is up is NOT swallowed",
+                 _toolbar_evidence(1, lay))
+    else:
+        bx, by, bw, bh = r1
+        # BEFORE AND AFTER, never an absolute count: "exactly one popup
+        # is up" passed 1 run in 3 with the tooltip surface REMOVED,
+        # because any other open popup satisfies it. The delta cannot.
+        n0 = len([w for w in dbg.windows() if w.get("popup")])
+        dbg.warp_cursor(qmp, ox + bx + bw // 2, oy + by + bh // 2)
+        time.sleep(1.4)   # the delay rides the app's tick, plus one tick
+        tips = [w for w in dbg.windows() if w.get("popup")]
+        # ...and it is the TIP: anchored under the button, its own size.
+        near = [w for w in tips
+                if abs(w["y"] - (oy + by + bh)) <= bh + 8
+                and abs(w["x"] - (ox + bx)) <= bw * 4]
+        res.check("the tooltip is its own popup surface",
+                  n0 == 0 and len(tips) == 1 and len(near) == 1,
+                  f"popups {n0} -> {len(tips)}, under the button: {len(near)}")
+
+        before = lay.view and lay.view[3]
+        tb_click(13, "folder tree, with the tip up")
+        lay2 = wait_layout(dbg, win, lambda l: l.view and l.view[3] != before)
+        res.check("a press while the tooltip is up is NOT swallowed",
+                  lay2 is not None and lay2.view and lay2.view[3] != before,
+                  f"view[3] {before} -> {lay2 and lay2.view and lay2.view[3]}")
 
     teardown_fixture(dbg)
 

@@ -6825,11 +6825,50 @@ it declined:
 Two consequences worth stating. **`WIN_CLIENT_MAX` is 8 now and it sizes
 the CLIENT's table only** -- the compositor grows its list on demand and
 never enforced it; a toplevel plus a five-deep menu is six surfaces.
-And **the surface serves one widget so far.** `uui_dropdown`'s list and
-`uui_toolbar`'s tooltip still draw in-window and are the next two
-callers (`docs/roadmap.md`); the tooltip is the second copy of
-flip/clamp in the toolkit and the one that flips against the surface's
-own size.
+And **three widgets use the surface now** -- `uui_menubar`'s levels,
+`uui_dropdown`'s list and `uui_toolbar`'s tooltip. Each keeps its
+in-window fallback for a refusal. The tooltip is what made the grab a
+flag rather than a property of being a popup; see the entry below.
+
+## A popup's GRAB is a flag, because a tooltip is a popup that must not take the pointer
+
+`WIN_REQ_POPUP` gave every popup an implicit grab: while one was up, a
+press inside it went there, and a press anywhere else dismissed every
+popup of that client and was CONSUMED. That is right for a menu and
+wrong for the two callers the roadmap named next.
+
+A tooltip is a popup. It wants everything a menu wants -- to leave its
+window, to be placed against the work area, to sit above everything --
+and none of what a grab does. A tooltip that grabbed would swallow the
+click meant for the button it is describing, so a button would go dead
+for exactly as long as its own tip was showing.
+
+Wayland separates at this line, which is what makes the split cheap to
+copy: `xdg_surface.get_popup` creates the surface and `xdg_popup.grab`
+is a SEPARATE request. A menu issues it; a tooltip does not. Win32 is
+the same shape by another route -- a menu runs a modal loop with a
+capture, a tooltip is a plain window that never captures.
+
+So the grab is `WIN_POPUP_GRAB` in the positioner's flags word, which
+was `reserved` and already documented as where flags would go. The
+compositor stores it per window and `wm_client_popup_owner()` answers
+only for a GRABBING popup, so a popup without one routes input as
+though it were not there.
+
+**OPT-IN rather than opt-out**, which is the one real choice here. A
+forgotten flag then yields a menu that does not dismiss -- visible the
+first time anyone opens it. Opt-out would make the same slip a tooltip
+that eats clicks, which presents as a broken button somewhere else
+entirely.
+
+The migration's own lesson, and it cost a measured regression: **a
+grabbing popup's KEYS go to the popup's slot, not its parent's.** A
+dropdown inside the file chooser -- itself a dialog window with its own
+router -- seeked with keys that were being delivered to the MAIN
+window's widgets, because uapp translated a popup's pointer events back
+to the owning window and let everything else fall through to the
+toplevel. A popup now records which window it hangs off, and every
+event type routes home.
 
 ## A face is lit by two geom helpers, and the face list stays the caller's
 

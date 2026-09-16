@@ -369,6 +369,7 @@ whenever a headline here tells you something you did not already know.
   DRAWS, `uapp_desc.widgets` GETS INPUT**
 - **`uui_label` WRAPS ONLY IF ASKED, AND THE CALLER RESERVES THE ROWS.**
 - **A WIDGET BORROWS ITS TEXT, SO THERE IS NO SET-CALL PER UPDATE.**
+- **A GRABBING POPUP'S KEYS GO TO THE POPUP'S SLOT, NOT ITS PARENT'S**
 - **`uui_sidebar` IS THE NAVIGATION WIDGET; `uui_tree` MODELS
   CONTAINMENT.**
 - **A SETTING DECLARES ITS CATEGORY, and the sidebar is generated from

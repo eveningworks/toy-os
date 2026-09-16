@@ -979,15 +979,24 @@ struct win_event {
 // The adjustment is fixed -- flip to the other side when the preferred
 // one does not fit, then slide along the other axis, then clamp -- which
 // is the vocabulary every menu here already resolved against its own
-// window (ui/uui_menubar.c). `reserved` is where flags go if a second
-// caller ever wants a different one.
+// window (ui/uui_menubar.c).
 //
-// THE GRAB IS THE COMPOSITOR'S. While a client has a popup up, a press
-// inside one of its popups is delivered there; a press inside another
-// of that client's windows is delivered normally (the client decides,
-// as GTK does under a Wayland grab); a press anywhere else dismisses
-// every popup of that client with WIN_EV_POPUP_DONE and is CONSUMED.
-// Motion reaches only that client's surfaces meanwhile.
+// THE GRAB IS THE COMPOSITOR'S, AND IT IS OPT-IN. While a client has a
+// GRABBING popup up, a press inside one of its popups is delivered
+// there; a press inside another of that client's windows is delivered
+// normally (the client decides, as GTK does under a Wayland grab); a
+// press anywhere else dismisses every popup of that client with
+// WIN_EV_POPUP_DONE and is CONSUMED. Motion reaches only that client's
+// surfaces meanwhile.
+//
+// A popup WITHOUT WIN_POPUP_GRAB takes none of that: input routes as if
+// it were not there, and only its client dismisses it. That is what a
+// TOOLTIP is, and it is why the grab is a flag rather than a property of
+// being a popup -- Wayland learned the same thing, where the surface
+// comes from `xdg_surface.get_popup` and the grab is a SEPARATE
+// `xdg_popup.grab` request a menu makes and a tooltip does not. A
+// tooltip that grabbed would steal hover from every other window and
+// vanish on the next click.
 #define WIN_REQ_POPUP 28 // `window`: the slot the client PROPOSES for the
                           // popup, its buffers already named after it (as
                           // CREATE); a/b: w/h; c: the PARENT slot; `pos`
@@ -998,10 +1007,11 @@ struct win_event {
 struct win_popup_pos {
     int32_t  ax, ay, aw, ah;  // the anchor rect, in the PARENT's content coords
     uint32_t gravity;         // WIN_POPUP_*
-    uint32_t reserved;        // must be 0
+    uint32_t flags;           // WIN_POPUP_GRAB; every other bit must be 0
 };
 #define WIN_POPUP_BELOW 0 // left edges aligned, below the anchor; flips above
 #define WIN_POPUP_RIGHT 1 // top edges aligned, right of the anchor; flips left
+#define WIN_POPUP_GRAB  0x01u // this popup takes the pointer (a menu, not a tooltip)
 
 // --- dialog windows (WIN_REQ_DIALOG) -----------------------------------
 //

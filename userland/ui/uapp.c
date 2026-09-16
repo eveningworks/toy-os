@@ -57,9 +57,21 @@ struct uapp_surf {
     // the compositor's reply -- what turns popup-local input back into
     // the coordinates every widget hit-tests in (ui/uui_popup.h).
     int ox, oy;
+    // WHICH WINDOW THIS POPUP BELONGS TO. A dialog window is its own
+    // toplevel with its own router (uapp_window_open), so a dropdown
+    // inside one anchors its popup to THAT surface and its input must
+    // go back to THAT router -- routing it to the main window's would
+    // hit-test the press against a different window's widgets.
+    uint32_t parent;
     void (*done)(void *owner);    // the widget to tell when the compositor dismisses it
     void *owner;
 };
+
+// The window a popup opened right now should hang off: whichever one is
+// dispatching, or the toplevel. A widget cannot say -- it does not know
+// it is in a dialog -- so uapp tracks it around the one call that can
+// re-enter a widget from a non-toplevel window.
+static uint32_t g_popup_parent;
 static struct uapp_surf g_surf[WIN_CLIENT_MAX];
 #define TOPLEVEL (&g_surf[0])
 
@@ -703,8 +715,8 @@ static int wmchan_call(uint32_t type, uint32_t window, int aa, int bb,
 // slot, and a surface to draw into.
 
 static int popup_open(void *ctx, int ax, int ay, int aw, int ah, int w, int h,
-                      int gravity, void (*done)(void *owner), void *owner,
-                      int *out_x, int *out_y) {
+                      int gravity, unsigned flags, void (*done)(void *owner),
+                      void *owner, int *out_x, int *out_y) {
     (void)ctx;
     if (w <= 0 || h <= 0 || comp_pid() <= 0) return 0;
     if (w > WIN_CLIENT_MAX_W) w = WIN_CLIENT_MAX_W;
@@ -721,9 +733,10 @@ static int popup_open(void *ctx, int ax, int ay, int aw, int ah, int w, int h,
     m.window = (uint32_t)slot_of(s);
     m.a = w;
     m.b = h;
-    m.c = (int32_t)g_app.window;   // anchored to the toplevel
+    m.c = (int32_t)(g_popup_parent ? g_popup_parent : g_app.window);
     m.pos.ax = ax; m.pos.ay = ay; m.pos.aw = aw; m.pos.ah = ah;
     m.pos.gravity = gravity == UUI_POPUP_RIGHT ? WIN_POPUP_RIGHT : WIN_POPUP_BELOW;
+    m.pos.flags = (flags & UUI_POPUP_GRAB) ? WIN_POPUP_GRAB : 0;
     if (!wmchan() ||
         uchan_call(&g_wmchan, &m, sizeof m, &r, sizeof r, UAPP_CALL_TIMEOUT_MS) < 0 ||
         r.a < 0) {
@@ -732,6 +745,7 @@ static int popup_open(void *ctx, int ax, int ay, int aw, int ah, int w, int h,
     }
     s->ox = r.b;
     s->oy = r.c;
+    s->parent = g_popup_parent ? g_popup_parent : g_app.window;
     s->done = done;
     s->owner = owner;
     s->surface = ugfx_surface_for_pixels(s->px[s->front ^ 1], w, h);
@@ -1162,7 +1176,13 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         // below is a POPUP's, and applying it here would move a press
         // by the offset of a surface that has none.
         struct uapp_window *dw = dlg_for(in->window);
-        if (dw) { dlg_dispatch(dw, in); return; }
+        if (dw) {
+            uint32_t prev = g_popup_parent;
+            g_popup_parent = dw->slot;
+            dlg_dispatch(dw, in);
+            g_popup_parent = prev;
+            return;
+        }
         // STALE IF THE SLOT IS NOT IN USE: the compositor answered a
         // popup this side has since closed (a menu switched titles while
         // a press was in flight). Read as the toplevel's, its raw
@@ -1199,6 +1219,25 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             return;
         default:
             break;
+        }
+        // BACK TO THE WINDOW THAT OWNS IT, not always the toplevel. A
+        // dialog is its own toplevel with its own router, so a popup
+        // anchored to one delivers THERE -- and for KEYS as much as for
+        // the pointer, because the compositor sends a grabbing popup's
+        // keys to the popup's slot. Routing only the pointer left a
+        // dropdown in a dialog seeking with keys that reached the main
+        // window's widgets instead.
+        if (s->parent && s->parent != a->window) {
+            struct uapp_window *ow = dlg_for(s->parent);
+            if (ow) {
+                struct win_event out = *ev;
+                out.window = s->parent;
+                uint32_t prev = g_popup_parent;
+                g_popup_parent = ow->slot;
+                dlg_dispatch(ow, &out);
+                g_popup_parent = prev;
+                return;
+            }
         }
     } else if (in->type == WIN_EV_POPUP_DONE) {
         return;   // never for the toplevel

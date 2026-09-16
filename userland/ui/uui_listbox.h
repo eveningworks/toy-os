@@ -45,6 +45,13 @@ int  uui_listbox_visible_rows(const struct uui_listbox *lb);
 int  uui_listbox_scrollbar_visible(const struct uui_listbox *lb);
 void uui_listbox_draw(struct ugfx_surface *s, const struct uui_listbox *lb);
 
+// The same, with the list's own coordinates shifted by (ox, oy) -- what
+// a caller drawing into a POPUP SURFACE needs, where the list keeps its
+// parent-content rect for hit-testing but paints at that surface's own
+// origin (ui/uui_popup.h). uui_menubar's draw_level_at is the same idea.
+void uui_listbox_draw_at(struct ugfx_surface *s, const struct uui_listbox *lb,
+                          int ox, int oy);
+
 // Row index at (cx, cy), or -1 if outside / on the scrollbar.
 // Preferred minimum: wide enough for the longest item plus insets and
 // the scrollbar, tall enough for every row. A layout may give LESS

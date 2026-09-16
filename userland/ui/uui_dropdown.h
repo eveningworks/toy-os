@@ -32,6 +32,11 @@ struct uui_dropdown {
     // Settings prints the registry's `unavailable` text above the
     // control; see abi/setting_abi.h).
     int disabled;
+
+    // The popup's own compositor surface, or 0 when it is drawn
+    // in-window. OWNED; every open/close goes through dd_open/dd_close
+    // so the surface cannot outlive the `open` flag.
+    int popup;
 };
 
 void uui_dropdown_init(struct uui_dropdown *d, int x, int y, int w, int h,
