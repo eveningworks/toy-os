@@ -294,40 +294,22 @@ struct sys_dirent {
                             // is silently clamped down to it, not
                             // rejected.
                             //
-                            // IT WAS 32, and its comment claimed that
-                            // "matches FS_MAX_FILES (fs.h), since that's
-                            // the most any directory could ever hold" --
-                            // which was wrong twice: FS_MAX_FILES is 256,
-                            // and TFS3 has no per-directory cap at all.
-                            // IT STAYS 256 even though `name` grew to
-                            // 256 bytes, which makes a DIR ~72 KiB of
-                            // ring-3 heap. Cutting it to 64 to hold that
-                            // down was tried and REVERTED the same day:
-                            // /bin (89 entries) and /tests (101) both
-                            // exceed 64, and a caller that does not page
-                            // with SYS_LISTDIR_AT silently sees a short
-                            // directory -- the exact bug the paragraph
-                            // below describes, reintroduced.
+                            // A BATCH SIZE, NOT A CEILING. Nothing
+                            // bounds how many entries a directory holds
+                            // -- TFS3 has no per-directory cap -- so a
+                            // caller that does not page with
+                            // SYS_LISTDIR_AT gets a SHORT directory with
+                            // nothing said. It can still DETECT the cut:
+                            // a full array means "there may be more",
+                            // which is what /bin/ls did before it
+                            // learned to page.
                             //
-                            // So `ls` silently listed the first 32
-                            // entries of a bigger directory and stopped,
-                            // with nothing said. Measured 2026-08-19 by
-                            // putting 40 files in one directory.
-                            //
-                            // 256 matches FS_MAX_FILES for real, which
-                            // bounds a TFS2 volume. IT STILL DOES NOT
-                            // BOUND TFS3, so this remains a truncation
-                            // point rather than a guarantee -- the real
-                            // fix is an offset argument so a caller can
-                            // page through, which changes this call's
-                            // ABI. SYS_LISTDIR_AT is that offset, and
-                            // this cap is now a BATCH SIZE rather than a
-                            // ceiling: a caller that pages through reads
-                            // every entry however many there are.
-                            // A caller that does not page can still
-                            // DETECT the cut -- a full array means
-                            // "there may be more", which is what
-                            // /bin/ls said before it learned to page.
+                            // DO NOT LOWER IT. The number buys a caller
+                            // that cannot page; `name` is 256 bytes, so
+                            // a DIR is ~72 KiB of ring-3 heap, and
+                            // cutting to 64 to hold that down was tried
+                            // and reverted the same day -- /bin (89
+                            // entries) and /tests (101) both exceed it.
 
 // SYS_LISTDIR_AT's request. A struct because this call needs FOUR
 // arguments and `int 0x80` carries three -- the same answer SYS_MKPART

@@ -19,6 +19,7 @@
 #include "fs.h"
 #include "string.h"
 #include "heap.h"
+#include "kfmt.h"
 
 // Every test mounts with a small budget rather than the half-of-free-
 // memory default: it makes the full-filesystem path reachable without
@@ -306,6 +307,30 @@ KTEST("ramfs", "disk_usage reports the budget, and it moves with the data") {
     KTEST_ASSERT(R()->write_range("/f", 0, blob, sizeof blob));
     KTEST_ASSERT(R()->disk_usage(&used, &total));
     KTEST_ASSERT(used > empty);
+
+    ramfs_test_unmount();
+}
+
+KTEST("ramfs", "list emits every child, past the old SYS_LISTDIR batch size") {
+    // THE ONE ASSERTION THAT CATCHES A BACKEND-SIDE CAP. SYS_LISTDIR_AT
+    // pages by re-walking and skipping in the callback (fs_syscalls.c),
+    // so a backend that stops early hides those entries at EVERY
+    // offset, not just the first page. 300 clears the 256 batch size.
+    KTEST_ASSERT(ramfs_test_mount(TEST_BUDGET));
+    KTEST_ASSERT(R()->mkdir("/many"));
+
+    // touch(), not write(): an empty file costs one node, where a byte
+    // of data would cost a whole RAMFS_CHUNK and blow the budget long
+    // before the count gets interesting.
+    char path[32];
+    for (int i = 0; i < 300; i++) {
+        k_snprintf(path, sizeof path, "/many/f%d", i);
+        KTEST_ASSERT(R()->touch(path));
+    }
+
+    g_seen = g_saw_dir = 0;
+    R()->list("/many", count_cb);
+    KTEST_ASSERT_EQ(g_seen, 300);
 
     ramfs_test_unmount();
 }

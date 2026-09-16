@@ -32,9 +32,8 @@
 //    and makes create, delete and rename each unlink-and-relink three
 //    fields that must agree. This way every one of those is a single
 //    field write that cannot leave a dangling link. The cost is a scan
-//    of RAMFS_MAX_NODES pointers per lookup, against a listing cap of
-//    FS_MAX_FILES (256) and paths bounded to FS_PATH_MAX (64) -- not
-//    what a directory listing will be waiting on.
+//    of RAMFS_MAX_NODES pointers per lookup -- not what a directory
+//    listing will be waiting on.
 //
 // 2. FILE DATA IS CHUNKED, and the reason is the allocator, not taste.
 //    kmalloc -> heap_os_alloc() -> pmm_alloc_contiguous(), so every
@@ -648,12 +647,13 @@ static void ramfs_list(const char *dir_path, void (*cb)(const char *, uint32_t, 
     if (!S->mounted || !cb) return;
     int dir = find(dir_path);
     if (dir < 0 || !S->nodes[dir]->is_dir) return;
-    int emitted = 0;
-    for (int i = 0; i < RAMFS_MAX_NODES && emitted < FS_MAX_FILES; i++) {
+    // EVERY child, with no cap of its own: SYS_LISTDIR_AT pages by
+    // re-walking and skipping in the callback, so a backend that stops
+    // early makes the entries past it unreachable at any offset.
+    for (int i = 0; i < RAMFS_MAX_NODES; i++) {
         struct rnode *n = S->nodes[i];
         if (!n || n->parent != dir) continue;
         cb(n->name, (uint32_t)n->size, n->is_dir);
-        emitted++;
     }
 }
 

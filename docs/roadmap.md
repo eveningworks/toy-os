@@ -1153,7 +1153,7 @@ Smaller or lower-priority items not yet slotted into a section above.
 - [x] ~~A RAM disk backend, once Real mount points makes a second backend addressable~~ done -- `mount -t ramfs none /mnt`
 - [x] ~~`ls` colour/format options beyond `-l`/`-a`~~ done -- `-1CFhlRrSt`, `--color`, sorted by name, and colour as ANSI
 - [ ] Serial debug console: make it writable -- read-only inspection today, deliberately (`docs/decisions.md`)
-- [ ] Replace the fixed `MAX_WINDOWS`-style compile-time caps (and TFS2's `FS_MAX_FILES`) with growable structures
+- [ ] Replace the fixed `MAX_WINDOWS`-style compile-time caps with growable structures
 - [x] ~~Stretch: port a small classic game (e.g. Doom, `doomgeneric`-style)~~ DONE 2026-08-23 -- `/bin/wm/apps/doom`, ~34 fps under TCG
 
 ## Completed milestones

@@ -896,7 +896,8 @@ reads as a bug in the program.
 
 `SYS_LISTDIR_MAX` was 32, with a comment saying that "matches
 FS_MAX_FILES, since that's the most any directory could ever hold".
-`FS_MAX_FILES` is 256, and TFS3 has no per-directory cap at all. So `ls`
+`FS_MAX_FILES` was 256 (and is retired entirely now, with the TFS2
+backend it sized), and TFS3 has no per-directory cap at all. So `ls`
 listed 32 of a 40-file directory and stopped -- no message, just output
 that ended. Found by making 40 files and counting, which took a minute.
 
@@ -905,6 +906,14 @@ this one had been outlived by a filesystem added after it.** The comment
 was the thing that made it invisible: it explained why nobody needed to
 check. When a constant carries a justification, the cheap move is to test
 the justification, not to read it.
+
+**AND THE SAME CAP HAD BEEN COPIED SOMEWHERE ELSE.** On 2026-09-16
+`ramfs_list()` was still stopping after `FS_MAX_FILES` children, which
+is worse than a syscall-side batch: `SYS_LISTDIR_AT` pages by
+re-walking and skipping in the callback, so a BACKEND that stops early
+hides those entries at every offset. When a constant is retired, grep
+its remaining callers for who was using it as a proxy for something
+else.
 
 The fix worth copying is not the bigger number -- 256 still does not
 bound TFS3 -- it is that a caller can now DETECT the cap and say so. A

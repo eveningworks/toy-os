@@ -15,27 +15,6 @@
 // writing a new backend and pointing vfs.c's fs_init() at it, not
 // touching this file or any of its callers.
 
-// Raised from 32 to 256, which is an ON-DISK LAYOUT change (the record
-// table sits between the journal and the free-block bitmap, so a
-// different file count moves FS_BITMAP_START_LBA and everything after
-// it) -- hence the FS_DISK_VERSION bump in TFS2 and the one-time
-// reformat that comes with it.
-//
-// 32 was not a comfortable margin any more, it was nearly exhausted:
-// the shipped disk.img already used 25 of them (17 /bin binaries plus
-// /bin, /etc, /etc/kbs and four /etc files), and /etc/toyos.conf makes
-// 26 the moment any setting is saved. The next handful of seeded
-// binaries would have hit "table full" -- which surfaces as a bare 0
-// return from fs_touch(), not an obvious out-of-slots message.
-//
-// The cost of 256 is small and bounded: 256 in-memory `struct file`
-// entries (~44KB of .bss) and 256 one-sector records on disk, against
-// a disk that's gigabytes. Directories consume a slot each too (an
-// empty directory is just an entry with no data). Backend-specific
-// (TFS2's own limit), but lives here since callers may reasonably want
-// to size buffers against it regardless of which backend is active.
-#define FS_MAX_FILES 256
-
 // A whole path, and a single component, are two different bounds --
 // FS_PATH_MAX is Linux's PATH_MAX and FS_NAME_MAX is its NAME_MAX.
 // They were one number (64) until paths moved off the kernel stack.

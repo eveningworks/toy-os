@@ -16,13 +16,12 @@
 > from it — TFS3's 32 KiB front reservation exists *because* TFS2's
 > superblock collided with the MBR.
 
-**Status: the LEGACY of toy-os's two filesystems.** Since Milestone 15
-(2026-08-14), TFS3 (`docs/tfs3-spec.md`) is the default for
-fresh/blank images; TFS2 remains fully supported as a second backend
--- the kernel probes both magics and mounts whatever a disk actually
-carries, and `fsformat tfs2 confirm` creates a fresh TFS2 on purpose.
-This spec is unchanged by any of that: the format itself did not move
-a byte.
+**Status: the LEGACY of toy-os's two filesystems.** TFS3
+(`docs/tfs3-spec.md`) became the default for fresh images at Milestone
+15 (2026-08-14) and the only on-disk filesystem at 0adce467, which
+removed the TFS2 backend outright -- there is no second magic to probe
+and no `fsformat tfs2`. This spec is unchanged by any of that: the
+format itself did not move a byte, which is the point of keeping it.
 
 This is a byte-exact specification of TFS2 for writing an independent
 (read-only, ideally) tool on a
@@ -72,11 +71,12 @@ versions. A TFS2-aware reader should check the superblock magic+version
   bytes before the first `\0` are meaningful. This spec doesn't rely on
   trailing bytes past a string's terminator being any particular
   value -- treat them as unspecified padding, not as data.
-- `FS_MAX_FILES` (256) and `FS_PATH_MAX` (64) are compile-time constants
-  in this kernel (`kernel/include/api/fs.h`), not something an on-disk
-  header records anywhere. (Since TFS3 landed, `FS_MAX_FILES` is
-  TFS2's table size only; `FS_PATH_MAX` remains the caller-side path
-  buffer limit shared by both backends.) A reader has to know them ahead of time
+- `FS_MAX_FILES` (256) and `FS_PATH_MAX` (64) were compile-time
+  constants in the kernel that wrote these images, not something an
+  on-disk header records anywhere. Neither name means this any more --
+  `FS_MAX_FILES` is gone with the backend, and `FS_PATH_MAX` is 4096
+  and bounds callers rather than any format. Within THIS page they are
+  the frozen values above. A reader has to know them ahead of time
   (they're listed here) rather than discover them from the image
   itself. A future toy-os build that changes either would also bump
   the superblock version (see below), which is the signal a reader

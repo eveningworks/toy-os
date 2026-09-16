@@ -19,9 +19,8 @@ wanted eventually and the format must not make them an afterthought).
 
 TFS2 has two hard limits baked into its format:
 
-- A fixed 256-slot file/directory table (`FS_MAX_FILES`,
-  `kernel/include/api/fs.h`) -- every file *and* every directory
-  shares one global cap.
+- A fixed 256-slot file/directory table (`docs/tfs2-spec.md`) --
+  every file *and* every directory shares one global cap.
 - Each record stores its own full path inline (`path[64]`,
   `FS_PATH_MAX`) -- an individual name and a whole path are capped by
   the same 64-byte field, and a "directory" is just a record with

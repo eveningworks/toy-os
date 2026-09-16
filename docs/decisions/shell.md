@@ -276,12 +276,12 @@ with noise. And **there is no merged `/usr`**: modern distributions make
 `/bin` a symlink into `/usr/bin`, which this filesystem cannot express,
 having no symlinks at all.
 
-The constraint that actually drives layout here isn't a standard, it's
-the record budget -- which Milestone 15 has since split in two: on a
-TFS2 image, `FS_MAX_FILES` is 256 records with directories counting
-against it; on TFS3 (the default for fresh images) the on-disk budget
-is effectively gone (~590k inodes), and only the caller-side
-`FS_PATH_MAX` = 64 path buffers still bind. See
+The constraint that actually drives layout here was the record budget,
+and Milestone 15 removed it: TFS2 capped a whole volume at 256 records
+with directories counting against it, while TFS3 (the only on-disk
+filesystem since 0adce467) has effectively no inode budget (~590k).
+What still binds is caller-side -- `FS_PATH_MAX` on a path, and
+`SYS_LISTDIR_MAX` as one listing batch. See
 `docs/filesystem-layout.md`'s budget section for the current rules.
 
 ## dmesg coverage: log from the one-shot call site, not the hot function itself
