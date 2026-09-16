@@ -76,6 +76,7 @@
 #define ID_STATUS   2
 #define ID_CTX      6
 #define ID_MD       7
+#define ID_ASK      8
 
 // --- menu command codes -----------------------------------------------
 //
@@ -242,6 +243,36 @@ static const struct uui_menu_item menu_bar[] = {
 static struct uui_filedialog g_fd;
 static int g_dlg_saving;
 
+// --- the unsaved-changes dialog ---------------------------------------
+//
+// EVERY ACTION THAT WOULD THROW THE DOCUMENT AWAY ASKS THROUGH ONE
+// PLACE. Close, File > Exit, New, Open and a Recent entry all call
+// confirm_discard(), which either runs the action straight away (the
+// document is clean) or parks it behind the dialog. Save / Don't Save /
+// Cancel is Qt's QMessageBox::Save|Discard|Cancel and what Notepad,
+// gedit and Kate all put up.
+//
+// **THE ANSWER ARRIVES FRAMES LATER, SO THE ACTION HAS TO BE PARKED.**
+// on_close() cannot block waiting for it, and Save on an untitled
+// document opens the file chooser -- a second wait on top of the first.
+// So the pending action is state, `g_after_save` says the chooser is
+// finishing a discard-confirmation rather than a plain Save As, and
+// dlg_done() runs it only once the bytes are actually on disk.
+static struct uui_dialog g_ask;
+
+enum { ASK_SAVE = 1, ASK_DISCARD, ASK_CANCEL };
+
+// What to do once the document is safe to throw away. PEND_RECENT_0..2
+// are contiguous with the CMD_RECENT_* they mirror.
+enum {
+    PEND_NONE = 0, PEND_CLOSE, PEND_NEW, PEND_OPEN,
+    PEND_RECENT_0, PEND_RECENT_1, PEND_RECENT_2,
+};
+static int g_pending;
+static int g_after_save;   // the chooser is completing a g_pending action
+static char g_ask_line[96];
+static const char *g_ask_rows[1];
+
 // --- the routed widgets ---------------------------------------------
 //
 // `.name` is what the layout log reports each one as (ui/uui_describe.h).
@@ -252,6 +283,9 @@ static struct uui_item g_widgets[] = {
     // reverse of draw order, and its popup covers whatever is under it.
     { .ops = &uui_markdown_ops,  .widget = &g_md,        .id = ID_MD,     .name = "markdown", .hidden = 1 },
     { .ops = &uui_menubar_ops,   .widget = &g_ctx,       .id = ID_CTX,    .name = "ctxmenu" },
+    // LAST: an overlay is offered every press first, and this one has
+    // to outrank the context menu as well as the document.
+    { .ops = &uui_dialog_ops,    .widget = &g_ask,       .id = ID_ASK,    .name = "ask-save" },
 };
 
 // By ID, never by index (docs/conventions/gui.md).
@@ -434,6 +468,7 @@ static void layout_chrome(int cw, int ch) {
         uui_markdown_set_geometry(&g_md, tx, ty, tw + scrollbar_w(), th);
     }
     uui_menubar_set_bounds(&g_ctx, 0, 0, cw, ch);
+    uui_dialog_set_bounds(&g_ask, 0, 0, cw, ch);
 }
 
 // LOGICAL lines, not wrapped rows: "Ln 12" in every editor's status bar
@@ -665,11 +700,28 @@ static void draw_document(struct ugfx_surface *s, int focused) {
 // what happens to the path that comes back. The window is already gone
 // by the time this runs (ui/uui_filedialog.h), so nothing has to be
 // dismissed here.
+static void run_pending(struct uapp *a);
+
 static void dlg_done(void *ctx, const char *path) {
     struct uapp *a = (struct uapp *)ctx;
-    if (!path) { set_status("cancelled"); uapp_redraw(a); return; }
-    if (g_dlg_saving) save_file(a, path);
-    else load_file(a, path);
+    int after = g_after_save;
+    g_after_save = 0;
+    if (!path) {
+        // A cancelled chooser cancels the CLOSE too -- the document is
+        // still unsaved, and quitting here is exactly what the dialog
+        // was put up to prevent.
+        if (after) g_pending = PEND_NONE;
+        set_status("cancelled");
+        uapp_redraw(a);
+        return;
+    }
+    if (g_dlg_saving) {
+        int ok = save_file(a, path);
+        if (after && ok) run_pending(a);
+        else if (after) g_pending = PEND_NONE;   // the reason is in the status bar
+    } else {
+        load_file(a, path);
+    }
     uapp_redraw(a);
 }
 
@@ -722,19 +774,65 @@ static void file_dialog(int saving) {
 // the Ctrl accelerators -- which is what stops "Ctrl-S" and "File >
 // Save" from being two implementations of saving.
 
+static void do_new(struct uapp *a) {
+    (void)a;
+    utext_clear(&g_text);
+    g_path[0] = '\0';
+    g_dirty = 0;
+    set_status("new file");
+}
+
+// The path a pending Recent was pointing at. SNAPSHOT, because answering
+// Save runs recent_push() and that rewrites the very slot the index
+// refers to.
+static char g_pending_path[PATH_MAX_LEN];
+
+static void run_pending(struct uapp *a) {
+    int what = g_pending;
+    g_pending = PEND_NONE;
+    switch (what) {
+    case PEND_CLOSE: uapp_quit(a, 0); break;
+    case PEND_NEW:   do_new(a);       break;
+    case PEND_OPEN:  file_dialog(0);  break;
+    case PEND_RECENT_0:
+    case PEND_RECENT_1:
+    case PEND_RECENT_2:
+        if (g_pending_path[0]) load_file(a, g_pending_path);
+        break;
+    default: break;
+    }
+}
+
+// The gate every discarding action goes through. A clean document runs
+// the action at once; a dirty one parks it and asks.
+static void confirm_discard(struct uapp *a, int pending) {
+    if (uui_dialog_is_open(&g_ask)) return;   // already asking; that answer decides
+    g_pending = pending;
+    if (!g_dirty) { run_pending(a); return; }
+
+    static const struct uui_dialog_button btns[] = {
+        { "Save", ASK_SAVE }, { "Don't Save", ASK_DISCARD }, { "Cancel", ASK_CANCEL },
+    };
+    snprintf(g_ask_line, sizeof g_ask_line, "Save changes to %s?",
+             g_path[0] ? k_path_basename(g_path) : "this document");
+    g_ask_rows[0] = g_ask_line;
+    uui_menubar_close(&g_menu);   // a modal owns the input
+    uui_menubar_close(&g_ctx);
+    uui_dialog_set_bounds(&g_ask, 0, 0, uapp_width(a), uapp_height(a));
+    uui_dialog_open(&g_ask, "Unsaved changes", g_ask_rows, 1, btns, 3, 0, ASK_CANCEL);
+    uapp_redraw(a);
+}
+
 static void do_command(struct uapp *a, int code) {
     // An ACTION is an event a test waits for exactly once, so it is
     // never a layout line (docs/conventions/gui.md).
     ulogf("notepad: action %d\n", code);
     switch (code) {
     case CMD_NEW:
-        utext_clear(&g_text);
-        g_path[0] = '\0';
-        g_dirty = 0;
-        set_status("new file");
+        confirm_discard(a, PEND_NEW);
         break;
     case CMD_OPEN:
-        file_dialog(0);
+        confirm_discard(a, PEND_OPEN);
         break;
     case CMD_SAVE:
         if (g_path[0]) save_file(a, g_path);
@@ -744,7 +842,7 @@ static void do_command(struct uapp *a, int code) {
         file_dialog(1);
         break;
     case CMD_EXIT:
-        uapp_quit(a, 0);
+        confirm_discard(a, PEND_CLOSE);
         break;
     case CMD_RECENT_0:
     case CMD_RECENT_1:
@@ -753,9 +851,8 @@ static void do_command(struct uapp *a, int code) {
         if (i < g_recent_count) {
             // A copy: load_file() calls recent_push(), which rewrites the
             // very slot the path is being read out of.
-            char p[PATH_MAX_LEN];
-            strlcpy(p, g_recent[i], sizeof p);
-            load_file(a, p);
+            strlcpy(g_pending_path, g_recent[i], sizeof g_pending_path);
+            confirm_discard(a, PEND_RECENT_0 + i);
         }
         break;
     }
@@ -906,6 +1003,35 @@ static void on_widget(struct uapp *a, int id, int reason) {
         if (code > 0) do_command(a, code);
         break;
     }
+    case ID_ASK: {
+        // **-1 IS "NOTHING WAS COMMITTED", AND IT ARRIVES EVERY PRESS.**
+        // on_widget runs for the press as well as the release, and the
+        // dialog only parks a code on the release -- so treating the
+        // press's -1 as Cancel cleared g_pending a moment before the
+        // release needed it, and Don't Save closed nothing. The menu
+        // bar's `if (code > 0)` above is the same guard.
+        int code = uui_dialog_take_code(&g_ask);
+        if (code < 0) break;
+        // **DISCARD DOES NOT CLEAR g_dirty.** The actions that replace
+        // the document set it themselves, and the one that does not --
+        // Open, whose chooser can still be cancelled -- would otherwise
+        // leave an edited document marked clean and never ask again.
+        switch (code) {
+        case ASK_DISCARD:
+            run_pending(a);
+            break;
+        case ASK_SAVE:
+            if (!g_path[0]) { g_after_save = 1; file_dialog(1); }
+            else if (save_file(a, g_path)) run_pending(a);
+            else g_pending = PEND_NONE;   // the failure is in the status bar
+            break;
+        case ASK_CANCEL:
+        default:
+            g_pending = PEND_NONE;
+            break;
+        }
+        break;
+    }
     default:
         break;
     }
@@ -940,8 +1066,8 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // Esc is NOT a quit key. It closes a menu or cancels a dialog --
     // both handled above -- and otherwise does nothing. Closing the
     // window is Alt+F4, which never reaches here: the WM takes it and
-    // asks through the same handshake the X button uses, so this app's
-    // on_close (uapp's default, accept) still decides.
+    // asks through the same handshake the X button uses, so on_close_cb
+    // below decides -- and refuses while the document is unsaved.
     // THE PREVIEW IS READ-ONLY. A keystroke that edited the buffer
     // underneath a rendered document would change what is on screen
     // with no caret to say where -- so typing does nothing until
@@ -1218,6 +1344,7 @@ static void on_open_cb(struct uapp *a) {
     g_ctx.item_flags = menu_item_flags;
     clip_refresh();   // the broadcast only fires on a CHANGE, so ask once
 
+    uui_dialog_init(&g_ask);
     uui_statusbar_init(&g_statusbar);
     g_statusbar.count = 3;
     g_statusbar.panes[0].text = g_status;   g_statusbar.panes[0].chars = 0;
@@ -1231,6 +1358,14 @@ static void on_open_cb(struct uapp *a) {
         load_file(a, g_arg_path);
         set_title(a);
     }
+}
+
+// The X, Alt+F4 and the window menu. Refusing is simply not returning 1
+// -- the dialog answers frames later and quits through run_pending().
+static int on_close_cb(struct uapp *a) {
+    if (!g_dirty) return 1;
+    confirm_discard(a, PEND_CLOSE);
+    return 0;
 }
 
 int main(int argc, char **argv) {
@@ -1262,6 +1397,7 @@ int main(int argc, char **argv) {
         .on_release   = on_release,
         .on_wheel     = on_wheel,
         .on_clipboard = on_clipboard_cb,
+        .on_close     = on_close_cb,
     };
     return uapp_run(&desc);
 }

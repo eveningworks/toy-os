@@ -1555,18 +1555,42 @@ window without going through it will find its layout polls timing out.
   icon on purpose** -- it is the entry that exercises the letter-tile
   fallback on every boot, the same trick `data/fonts/` plays by shipping
   `vera-mono` with no bold companion.
-- **`uimg_hostcheck.py`** -- the same `userland/lib/uimg_jpeg.c`,
-  compiled with the host gcc and run against ~180 Pillow-generated
-  images (four patterns x five sizes x three subsamplings x three
-  qualities, plus grayscale and restart markers), every pixel compared
-  against libjpeg's. **It exists because a guest test can only carry the
-  vectors somebody committed**, and a JPEG decoder's bugs live in the
-  combinations. It is how the chroma upsampler was found to be visibly
-  wrong: replication needed a tolerance of 70 to pass, and the triangle
-  filter libjpeg uses brought the worst case to 3. `--file` checks a
-  real photograph; `--tolerance` tightens the bar. Not in any gate: it
-  needs Pillow, and `/tests/uimg_test` is the version that runs in the
-  guest.
+- **`uimg_hostcheck.py`** -- the same `userland/lib/uimg_jpeg.c` and
+  `uimg_jpeg_enc.c`, compiled with the host gcc and run against ~370
+  Pillow-generated images (four patterns x five sizes x three
+  subsamplings x three qualities, each BOTH sequential and PROGRESSIVE,
+  plus grayscale, restart markers and all eight Exif orientations),
+  every pixel compared against libjpeg's. **It exists because a guest
+  test can only carry the vectors somebody committed**, and a JPEG
+  decoder's bugs live in the combinations. It is how the chroma
+  upsampler was found to be visibly wrong: replication needed a
+  tolerance of 70 to pass, and the triangle filter libjpeg uses brought
+  the worst case to 3.
+
+  **`--positive-control`** removes the successive-approximation
+  correction bit -- the one place a progressive decode ADJUSTS a
+  coefficient rather than assigning it, and the bug that leaves a
+  plausible, slightly wrong picture. Every judged progressive check must
+  go red and every baseline one stay green. The `gradient` pattern is
+  excluded from that verdict, and the reason is about the FIXTURE: a
+  smooth ramp quantises to almost no nonzero AC coefficients, so the
+  sabotaged line is never reached and five of them decode identically
+  without it. Judging them would make the control's bar a measurement of
+  how flat the test images are.
+
+  **The ENCODER is checked in two ways, because they fail differently.**
+  Our decode of the file we wrote against libjpeg's decode of the same
+  bytes, at the decoder's own tolerance of 3 -- two independent decoders
+  reading one bitstream must agree to a rounding step. And how much the
+  file LOST against how much libjpeg loses encoding the same image at
+  the same quality, which is a COMPARISON rather than a threshold on
+  purpose: 4:2:0 at q85 moves a 3-pixel checkerboard by 180 levels and
+  that is the format working as designed, so an absolute bar loose
+  enough to pass it would pass real damage too.
+
+  `--file` checks a real photograph; `--tolerance` tightens the bar. Not
+  in any gate: it needs Pillow, and `/tests/uimg_test` is the version
+  that runs in the guest.
 - **`uimg_codec_hostcheck.py`** -- the QOI and PNG codecs, BOTH WAYS,
   against Pillow and Python's `zlib`.
 

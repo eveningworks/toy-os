@@ -43,7 +43,7 @@ import os
 import sys
 
 try:
-    from PIL import Image, ImageDraw, ImageFilter
+    from PIL import Image, ImageOps, ImageDraw, ImageFilter
 except ImportError:
     sys.exit("gen_imgdata.py needs Pillow: pip install --user pillow")
 
@@ -54,7 +54,9 @@ WALLPAPER_DIR = os.path.join(ROOT, "data", "wallpapers")
 # errno values from kernel/include/abi/errno.h, as POSITIVE numbers; the
 # test compares them against a negative return.
 EINVAL = 22
-ENOTSUP = 95
+# ENOTSUP (95) had a vector here until progressive JPEG stopped being a
+# refusal; the remaining -ENOTSUP paths (arithmetic coding, 12-bit, CMYK)
+# have no encoder here to produce a file with.
 
 
 def gradient(w, h):
@@ -132,9 +134,19 @@ def c_bytes(name, data):
 def build_vectors():
     vectors = []
 
-    def add(name, data, tol):
-        """One decodable vector: the bytes, and what PILLOW decodes them to."""
-        ref = Image.open(io.BytesIO(data)).convert("RGBA")
+    def add(name, data, tol, exif=False):
+        """One decodable vector: the bytes, and what PILLOW decodes them to.
+
+        `exif` turns the reference the way Pillow's own
+        ImageOps.exif_transpose() does. The decoder applies the
+        orientation tag (docs/decisions/gui.md), so a reference that did
+        not would fail every rotated file and pass a decoder that
+        ignored the tag -- the assertion backwards.
+        """
+        ref = Image.open(io.BytesIO(data))
+        if exif:
+            ref = ImageOps.exif_transpose(ref)
+        ref = ref.convert("RGBA")
         vectors.append({
             "name": name, "jpeg": data, "w": ref.width, "h": ref.height,
             "rgb": ref.tobytes(), "err": 0, "tol": tol,
@@ -184,8 +196,24 @@ def build_vectors():
     qoi("qoi rgb, no alpha", gradient(16, 16).convert("RGB"))
     qoi("qoi with alpha", alpha_disc(24, 24))
 
-    prog = encode(gradient(16, 16), quality=85, progressive=True)
-    bad("progressive is refused", prog, ENOTSUP)
+    # PROGRESSIVE DECODES NOW. It is here as a vector rather than as a
+    # refusal because it used to be the refusal, and a build that
+    # regressed to one would otherwise look like a passing suite with a
+    # missing feature. Noise rather than a gradient on purpose: a smooth
+    # ramp has almost no AC coefficients, so the refinement scans this
+    # is meant to cover carry nothing.
+    ok("progressive 4:2:0", noise(32, 24), quality=85, subsampling=2,
+       progressive=True)
+    ok("progressive 4:4:4", noise(17, 9), quality=92, subsampling=0,
+       progressive=True)
+
+    # EXIF ORIENTATION 6 -- a quarter turn, so the DIMENSIONS swap. A
+    # decoder ignoring the tag fails on the size before it gets to a
+    # pixel, which is the loudest way for this to break.
+    ex = Image.Exif()
+    ex[0x0112] = 6
+    add("exif orientation 6", encode(noise(24, 16), quality=92,
+                                     exif=ex.tobytes()), 3, exif=True)
     truncated = vectors[2]["jpeg"][:len(vectors[2]["jpeg"]) * 6 // 10]
     bad("truncated is refused", truncated, EINVAL)
     bad("not an image", b"this is not a JPEG, not even slightly\n", EINVAL)

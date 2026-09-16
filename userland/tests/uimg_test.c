@@ -300,8 +300,32 @@ int main(int argc, char **argv) {
         ok("a 16-bit PNG is -ENOTSUP, not -EINVAL", nrc == -ENOTSUP, d5);
     }
 
+    // JPEG ROUND TRIPS IN THE GUEST. The host harness
+    // (tools/uimg_hostcheck.py) is what compares our encoder against
+    // libjpeg's; what this adds is that both halves work HERE, on this
+    // heap, in ring 3 -- and reading back what we wrote is the shape
+    // that catches an encoder and a decoder disagreeing about the file
+    // they both produced.
     rc = uimg_encode(&enc, "jpeg", &bytes, &len);
-    ok("a format with no encoder is -ENOTSUP", rc == -ENOTSUP, uimg_last_error());
+    char djpg[96];
+    snprintf(djpg, sizeof djpg, "rc=%d (%s)", rc, uimg_last_error());
+    ok("a JPEG can be written", rc == 0 && len > 0, djpg);
+    if (rc == 0) {
+        struct uimg back;
+        int brc = uimg_decode(bytes, len, &back);
+        snprintf(djpg, sizeof djpg, "rc=%d, %dx%d want %dx%d", brc,
+                 brc == 0 ? back.w : 0, brc == 0 ? back.h : 0, enc.w, enc.h);
+        ok("...and read back at the same size",
+           brc == 0 && back.w == enc.w && back.h == enc.h, djpg);
+        if (brc == 0) uimg_free(&back);
+        free(bytes);
+    }
+
+    // An unknown FORMAT NAME is still -ENOTSUP, which is the branch the
+    // JPEG encoder's arrival took the last caller away from.
+    rc = uimg_encode(&enc, "webp", &bytes, &len);
+    ok("a format this build cannot write is -ENOTSUP", rc == -ENOTSUP,
+       uimg_last_error());
 
     // fit maths, which the widget and the wallpaper both depend on
     int fw, fh;

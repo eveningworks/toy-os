@@ -7952,3 +7952,151 @@ genuinely inside it, a lower window's band can never punch up through a
 window in front. Both directions are asserted in
 `resize_edges_test.py`, along with the band ENDING: a moat of
 unclickable desktop around every window is the failure mode.
+
+## Exif orientation is applied by the DECODER, not by whoever is showing the picture
+
+A photograph shot in portrait is stored as the sensor read it, with a
+tag saying how the camera was held. Somebody has to act on that tag, and
+the two real answers disagree: libjpeg deliberately does NOT, handing
+the caller markers and letting it decide, and GdkPixbuf makes it a
+separate `gdk_pixbuf_apply_embedded_orientation()` call. Qt's
+QImageReader has `setAutoTransform()`, off by default for source
+compatibility and turned on by essentially every application that uses
+it.
+
+toy-os applies it in `uimg_jpeg.c`, because the library-versus-
+application argument does not transfer. libjpeg and GdkPixbuf have
+thousands of callers they cannot see, some of which genuinely want the
+stored pixels; `uimg.h` has a handful in this tree, every one of which
+is showing a picture to a person. An app that has to ask is an app that
+will forget, and the failure is silent -- a sideways photograph looks
+like a photograph. Browsers reached the same conclusion when CSS
+`image-orientation: from-image` became the default.
+
+Two consequences worth knowing. `uimg_info()` reports the size as it
+will be SHOWN, dimensions swapped for the four orientations that
+transpose, because the stored size is not a fact about the picture and a
+caller sizing a window wants the one it will draw. And the transform
+happens AS THE PIXELS ARE WRITTEN, inside the emit loop, rather than by
+rotating a finished buffer: the second buffer for a 16-megapixel photo
+is 64 MB, and the placement costs an index calculation.
+
+## The JPEG encoder has no quality knob, and one integer is not worth an options struct
+
+`uimg_encode()` takes an image and a format name. QOI and PNG need
+nothing else; JPEG obviously could use a quality, and the obvious move
+is to add an options struct so it can have one.
+
+It has a constant instead (`J_ENC_QUALITY`, 85 -- libjpeg's default is
+75 and every export dialog's is 85-92; 85 is where a photograph stops
+ringing on a hard edge at normal viewing size). The bar this project
+applies to adding API is a SECOND REAL CALLER, not a plausible one, and
+there is one caller that writes a JPEG at all. An options struct that
+exists to carry a single integer changes every call site in the tree,
+makes the two formats that need no options carry a parameter they
+ignore, and has to be designed now for knobs nobody has asked for --
+subsampling, optimised tables, progressive output.
+
+The knob should arrive when something needs to VARY it. A photo editor
+with a save dialog is the case that forces it; a screenshot tool is not,
+because it wants one answer and this is the answer.
+
+## Image Viewer decodes one image at a time, and a request during a decode is remembered rather than run
+
+Moving the decode off the paint loop is not the decision -- a 280 ms
+freeze per image made that one for itself, and no viewer anywhere
+decodes on its UI thread. The decision is what happens when a second
+request arrives while the first is still going, which it does constantly:
+arrowing down a folder fires one per row.
+
+Three answers were available. Refuse the new request until the old one
+lands, which makes the list feel stuck for as long as the decode takes.
+Run them concurrently, which is N decoders competing for one CPU to
+produce N-1 pictures nobody will look at, and needs a rule for which
+result wins anyway. Or run one and REMEMBER the latest thing asked for,
+which is what this does.
+
+The cost is honest and small: at most one already-started decode
+finishes and is thrown away, so arrowing quickly through ten files
+decodes two of them. The alternative that looks cheaper -- cancelling
+the in-flight decode -- needs a cancellation point inside the codec,
+which means the codec learning about threads, and buys back one decode.
+
+What this leaves is the property a test can hold on to: the app reports
+how many frames it painted while a decode was in flight. A synchronous
+decode paints none, which is why that number is the check
+(`tools/imgview_test.py`) rather than a screenshot of the transient.
+
+## Notepad asks before throwing a document away, and CLOSING is not what it asks about
+
+The obvious reading of "ask before closing" is an `on_close` handler,
+and that is half the feature. The event worth confirming is not the
+window going away -- it is the text going away, and File > New, File >
+Open and picking a Recent file all do that just as completely as Alt+F4
+does. Windows Notepad, gedit and Kate all ask on all of them.
+
+So every one of those goes through one `confirm_discard()`, which either
+runs the action at once (the document is clean) or parks it behind the
+dialog. Three buttons, Qt's `QMessageBox::Save|Discard|Cancel` and every
+editor's: Save, Don't Save, Cancel.
+
+**The parking is the part that is not obvious.** The answer arrives
+frames later through the widget router, so the action cannot be a return
+value -- and Save on an UNTITLED document opens the file chooser, which
+is a second wait stacked on the first. A close then completes only once
+the bytes are actually on disk, and a cancelled chooser cancels the
+close: quitting there would throw away exactly the text the dialog was
+put up to protect.
+
+The one that reads backwards until you hit it: **Don't Save must not
+clear the dirty flag.** The actions that replace the document set it
+themselves. The one that does not is Open, whose chooser can still be
+cancelled -- and clearing the flag there leaves an edited document
+marked clean, so nothing ever asks about it again.
+
+## A modal owns the pointer's SHAPE too, and the toolkit resolves that rather than each app
+
+Making a dialog modal happened in three separate pieces, and the gap
+between them is the interesting part. The click came first (the scrim
+answers `hit`, so nothing behind it can be reached). The keyboard came
+with it (`uui_dialog`'s `key` op returns 1 for every key). The CURSOR
+was never wired, so an I-beam belonging to a text field nobody could
+click sat over a modal whose entire purpose is that the app underneath
+is untouchable.
+
+The obvious fix is a predicate each app consults before naming its
+cursor. It does not work, and the Terminal is why: it names the I-beam
+ONCE in `on_open` -- the whole grid is text, as xterm does -- and has no
+`on_motion` at all, so a predicate it is supposed to consult would never
+be consulted. Any rule an app has to remember is a rule the app without
+a motion handler cannot obey.
+
+So it is resolved in the toolkit, in two halves. `uui_router_cursor()`
+STOPS at an active overlay rather than falling through to the widgets
+behind it -- the same precedence the press and the key already follow,
+which is the rule this was missing rather than a new one. And `uapp`
+keeps what the app ASKED FOR separate from what the compositor was
+TOLD, resolving the two every frame that repaints. Per frame rather than
+per motion, because a modal opening changes the right answer without
+moving the pointer.
+
+`WIN_CURSOR_WAIT` is exempt, and that exemption is not a special case so
+much as a different kind of thing: a busy cursor is an OVERRIDE, not a
+property of what the pointer happens to be over. Qt draws the same line
+between `QApplication::setOverrideCursor()` and a widget's own cursor.
+An app that starts a long operation behind its own dialog still has to
+be able to say so.
+
+What this buys is that Notepad was fixed without notepad.c changing, and
+that the next app to draw its own region gets it right for free.
+
+The Terminal is NOT evidence for that, and the measurement is worth
+recording because the reasoning above invites the opposite claim: its
+I-beam is already gone before any modal appears. `uapp` sets the cursor
+from `uui_router_cursor()` on every motion, nothing claims a cursor over
+the grid, so the first pointer movement inside the window replaces the
+shape `on_open` asked for with the arrow. Measured with
+`tools/predates.py` at HEAD and after this change: the I-beam is absent
+in both, so it is a pre-existing bug (`docs/bugs.md`) rather than
+anything this touched -- and it is why the Terminal could not be used to
+demonstrate the fix.

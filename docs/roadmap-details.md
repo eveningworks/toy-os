@@ -1128,9 +1128,10 @@ rather than imply otherwise.
 `/bin/imginfo` to inspect a file, `uui_image` to put one in a layout,
 and Image Viewer to look at one. The kernel contains no image parser at
 all and gained no syscall -- see `docs/decisions.md` on why this differs
-from the font parser, which IS in ring 0. Progressive, arithmetic-coded,
+from the font parser, which IS in ring 0. Arithmetic-coded, lossless,
 12-bit and CMYK files are refused BY NAME (`-ENOTSUP`, with a sentence)
-rather than half-decoded into a plausible wrong picture.
+rather than half-decoded into a plausible wrong picture. Progressive was
+in that list until 2026-09-16; see its own entry below.
 
 What it is checked against, since a decoder tested against itself is
 worthless: libjpeg, in three places. `tools/uimg_hostcheck.py` compiles
@@ -1145,6 +1146,92 @@ tolerance of 70; libjpeg's triangle filter brought it to 3).
 
 Measured cost, since it decides whether a wallpaper is affordable: 97 ms
 to decode 1280x720 under TCG, once, at desktop start.
+
+~~Progressive JPEG~~ -- done 2026-09-16. SOF2 is decoded end to end:
+DC-first and DC-refinement scans, AC-first and AC-refinement with
+end-of-band runs, spectral selection and successive approximation, then
+one dequantise-and-IDCT pass once every scan is in. That last part is
+why it needed a COEFFICIENT BUFFER and could not be bolted onto the
+sequential path -- a block's coefficients arrive across many scans and
+nothing can be transformed until the last one. The arrangement is
+libjpeg's and stb_image's.
+
+Non-interleaved scans came with it and are the reason the change is
+smaller than it sounds: every progressive AC scan names one component
+and walks that component's own block grid (`ceil(dw/8)`, not the
+MCU-padded width), and once that geometry existed the baseline
+multi-scan files that used to be refused by name worked too.
+
+Checked the same way as the sequential path: `tools/uimg_hostcheck.py`
+now generates every image progressively as well, 137 of them, and
+compares against libjpeg at the same tolerance of 3. It carries a
+`--positive-control` that removes the successive-approximation
+correction bit -- the one place a coefficient is adjusted rather than
+assigned, and the bug that would leave a plausible, slightly wrong
+picture. It reddens every judged progressive check and no baseline one.
+The smooth-gradient images are excluded from that verdict on purpose:
+they quantise to almost no nonzero AC coefficients, so the sabotaged
+line is never reached and five of them decode identically without it.
+
+~~EXIF orientation~~ -- done 2026-09-16. Tag 0x0112 out of the APP1
+segment, applied AS THE PIXELS ARE WRITTEN rather than by rotating a
+finished image (a second full-size buffer for a 16-megapixel photo is
+64 MB nobody has to ask for). `uimg_info` reports the size as it will be
+SHOWN, since the stored size is not a fact about the picture. libjpeg
+deliberately does not do this and GdkPixbuf makes it a separate call;
+every actual viewer applies it, and so does a browser, so this one does
+too. All eight orientations are checked against Pillow's own
+`ImageOps.exif_transpose`; seven of the eight go red if the tag is
+ignored, the eighth being the no-op.
+
+~~A JPEG encoder~~ -- done 2026-09-16, `userland/lib/uimg_jpeg_enc.c`,
+filling the codec table's `encode` slot so `uimg_save("x.jpg", ...)`
+works. Deliberately the plain textbook encoder: baseline sequential,
+4:2:0, the Annex K quantisation and Huffman tables, the IJG's integer
+forward DCT. No optimised tables, no progressive output, and no quality
+knob -- `uimg_encode()` takes a format and no options, and one integer
+does not justify inventing an options struct.
+
+How it is checked is the part worth copying. Two comparisons, because
+they fail differently: our decode of the file against LIBJPEG's decode
+of the same bytes, at the decoder sweep's tolerance of 3 (two
+independent decoders reading one bitstream must agree to a rounding
+step); and how much the file LOST against how much libjpeg loses
+encoding the same image at the same quality. The second is a comparison
+rather than a threshold on purpose -- 4:2:0 at q85 moves a 3-pixel
+checkerboard by 180 levels and that is the format working as designed,
+so any absolute bar loose enough to pass it would pass real damage too.
+Measured: within 0.17 mean levels of libjpeg across every pattern, and
+file sizes within 5%.
+
+~~Image Viewer decodes on a worker thread~~ -- done 2026-09-16. A
+1280x720 JPEG takes 280 ms here and the window used to take no input and
+repaint nothing for all of it. One decode at a time, and a request that
+arrives during one is REMEMBERED rather than started beside it: arrowing
+down a folder fires a request per row, and running them concurrently
+would be N decoders competing for one CPU to produce N-1 pictures nobody
+asked to see.
+
+The measurement that shaped it: of ~9.9 ms on the host, the colour and
+upsample pass is 54% and the IDCT 40%, so micro-optimising the decoder
+could never have fixed this -- only moving it off the loop could. What
+the decoder did gain is a flat-block IDCT shortcut (an all-AC-zero block
+is one constant, which most blocks in a photograph are), worth
+9.1-9.9 ms -> 6.6-7.3 and 340 ms -> 280 in the guest. It is BIT-IDENTICAL,
+not an approximation, checked by decoding the whole sweep with and
+without it and requiring byte-for-byte equality.
+
+Proving the window keeps painting took three attempts and the first two
+are the lesson. The layout log is DEDUPLICATED per frame, and a
+mid-decode frame has exactly the rects of the one before it -- so "no
+layout line between the two log lines" was green against working code.
+Catching the "decoding..." status text in a screenshot is a race against
+a 200 ms window whose flakes would be blamed on the app. What works is a
+count the APP kept: it reports how many frames it painted while the
+decode was in flight, and a synchronous decode paints none by
+construction. The positive control for it found a real bug in the
+fallback path -- `g_active` was published only after the thread started,
+so a failed `pthread_create` decoded the image and then dropped it.
 
 ~~Real wallpaper images~~ -- done: `/usr/share/wallpapers` holds one
 JPEG per background and two REGISTERED SETTINGS choose between them --

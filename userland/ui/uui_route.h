@@ -151,6 +151,11 @@ int  uui_router_extern_drop(struct uui_router *r, int cx, int cy, unsigned mods)
 // lets uapp_set_cursor() filter the no-ops.
 int uui_router_cursor(const struct uui_router *r, int cx, int cy);
 
+// Is a modal or a popup up? The pointer's own rule, asked as a
+// question: uapp gates the cursor on it, so an app that names its own
+// cursor for a hand-drawn region does not have to remember to.
+int uui_router_overlay_active(const struct uui_router *r);
+
 // The wheel goes to the widget under the cursor, or to the grab holder
 // if there is one. Apps used to send it to a fixed chain of widgets in
 // a fixed order, which is why a wheel over one control scrolled another.

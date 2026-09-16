@@ -84,6 +84,52 @@ def fileview_selected(dbg, default=-1):
     return default
 
 
+def dialog_buttons(dbg):
+    """The unsaved-changes dialog's button rects, content-relative.
+
+    Read from the app's OWN layout report (ui/uui_describe.h), not
+    guessed from a font size -- and an empty list is how "the dialog is
+    not up" is told from "it is up somewhere else". Only the latest
+    frame counts, so the log is cut at the frame boundary first: a
+    dialog that has since been dismissed would otherwise still be
+    reported open, the trap tools/menubar_test.py documents.
+    """
+    lines = dbg.logs("notepad: layout", clear=False)
+    last = -1
+    for i, l in enumerate(lines):
+        if "notepad: layout scrollbar" in l:   # leads every frame
+            last = i
+    if last < 0:
+        return []
+    rects = {}
+    for l in lines[last:]:
+        if "notepad: layout ask-save.button " not in l:
+            continue
+        nums = [int(v) for v in l.split("ask-save.button")[1].split()[:5]]
+        rects[nums[0]] = tuple(nums[1:5])
+    return [rects[i] for i in sorted(rects)]
+
+
+def last_rect(dbg, what):
+    """One `notepad: layout <what> x y w h` rect from the latest frame."""
+    lines = dbg.logs("notepad: layout", clear=False)
+    last = -1
+    for i, l in enumerate(lines):
+        if "notepad: layout scrollbar" in l:   # leads every frame
+            last = i
+    if last < 0:
+        return None
+    key = "notepad: layout %s " % what
+    for l in reversed(lines[last:]):
+        if key in l:
+            nums = l.split(key, 1)[1].split()[:4]
+            try:
+                return tuple(int(v) for v in nums)
+            except ValueError:
+                return None
+    return None
+
+
 def find_window(dbg, want):
     """Notepad's title is the file's path with a leading '*' while
     dirty, so match on the BASENAME rather than the whole string --
@@ -228,6 +274,17 @@ def run(dbg, qmp, tmp, shot_dir, res):
     res.check("New put the window back to `untitled`",
               find_window(dbg, "untitled") is not None,
               "the title never returned to untitled after Ctrl-N")
+
+    # AND IT IS NOT DIRTY, which find_window() cannot tell you: it
+    # strips the leading '*' so that a path matches whether or not the
+    # document has been edited. So the raw title is read here. A fresh
+    # document wrongly marked dirty would make the unsaved-changes
+    # dialog fire on every close of an empty editor, and every check in
+    # this file would still pass.
+    raw = [w.get("title", "") for w in dbg.json("gui windows --json")["windows"]]
+    res.check("...and a new document is not marked modified",
+              "untitled" in raw and "*untitled" not in raw,
+              f"window titles: {raw}")
     cleared = text_pixels(qmp, tmp, "np_cleared.png", box)
     res.check("New clears the editor", cleared != typed)
     blank_ref = cleared
@@ -418,19 +475,182 @@ def run(dbg, qmp, tmp, shot_dir, res):
               or find_window(dbg, "untitled") is not None,
               "Esc closed the window -- it must be app-local now")
 
-    # Alt+F4 does. It never reaches the app: the WM takes it and asks
-    # through the same handshake the X button uses, so a successful
-    # close still proves the client processed WIN_EV_CLOSE and answered
-    # with WIN_REQ_DESTROY.
+    # --- closing a MODIFIED document asks first ----------------------
+    #
+    # Every action that would throw the document away goes through one
+    # confirm (userland/gui/apps/notepad.c): the X, Alt+F4, File > Exit,
+    # New, Open and a Recent entry. Alt+F4 is checked here because it is
+    # the one that never reaches the app -- the WM takes it and asks
+    # through the same handshake the X button uses -- so this also proves
+    # the client can REFUSE that handshake, not merely answer it.
+    #
+    # The document is made dirty on purpose rather than assumed: whether
+    # it is depends on what the checks above left behind, and a check
+    # that only fires some runs is worse than none.
+    type_text(dbg, "zz")
+    dbg.settle()
+    time.sleep(0.3)
+
     dbg.send("gui key 0xa5 alt")
     dbg.settle()
+    time.sleep(0.8)
+    res.check("Alt+F4 on a MODIFIED document does not close it",
+              find_window(dbg, SAVE_NAME) is not None
+              or find_window(dbg, "untitled") is not None,
+              "the window went away with unsaved text in it")
+
+    # And it is ASKING -- the dialog reports its own buttons, so this is
+    # the app's geometry rather than a guess at where they landed.
+    btns = dialog_buttons(dbg)
+    res.check("...it puts up the unsaved-changes dialog, with three buttons",
+              len(btns) == 3, f"button rects reported: {btns}")
+    if len(btns) != 3:
+        return
+
+    win = find_window(dbg, SAVE_NAME) or find_window(dbg, "untitled")
+    ox, oy = win["content"]["x"], win["content"]["y"]
+
+    # --- the modal owns the CURSOR, not the editor underneath ---------
+    #
+    # The third axis of "modal": the click and the key were refused long
+    # before the pointer's SHAPE was, so an I-beam belonging to a text
+    # area nobody could reach sat over the dialog. The point sampled is
+    # inside the document and OUTSIDE the dialog box, which is where the
+    # old behaviour was visible and where the fix has to show.
+    #
+    # The I-beam is re-checked after Cancel as the CONTROL: without it,
+    # an app that had simply stopped asking for the caret at all would
+    # pass the first half and mean nothing.
+    text_r = last_rect(dbg, "text")
+    box_r = last_rect(dbg, "ask-save")
+    cur_pt = None
+    if text_r and box_r:
+        tx, ty, tw, th = text_r
+        bx, by, bw, bh = box_r
+        # Above the box if there is room in the document, else below.
+        py = ty + 8 if by - ty > 16 else by + bh + 8
+        cur_pt = (ox + tx + tw // 2, oy + py)
+
+    res.check("Notepad reports the rects the cursor check needs",
+              cur_pt is not None,
+              f"text={text_r} ask-save={box_r}")
+    if cur_pt:
+        dbg.warp_cursor(qmp, *cur_pt)
+        time.sleep(0.4)
+        shape_modal = dbg.cursor_shape()
+        res.check("with the modal up the cursor is the arrow, not the I-beam",
+                  shape_modal == DebugConsole.CURSOR_NORMAL,
+                  f"shape {shape_modal} at {cur_pt} (I-beam is "
+                  f"{DebugConsole.CURSOR_TEXT})")
+
+    def press(i):
+        x, y, w, h = btns[i]
+        dbg.send(f"gui click {ox + x + w // 2} {oy + y + h // 2}")
+        dbg.settle()
+        time.sleep(0.6)
+
+    press(2)                                  # Cancel
+    res.check("Cancel keeps the window and the text",
+              find_window(dbg, SAVE_NAME) is not None
+              or find_window(dbg, "untitled") is not None,
+              "Cancel closed the window anyway")
+    res.check("...and dismisses the dialog", not dialog_buttons(dbg),
+              "the dialog is still reporting buttons after Cancel")
+
+    # THE CONTROL for the cursor check above: the same point must go
+    # back to the I-beam once the modal is gone. Without this, an app
+    # that had stopped asking for the caret anywhere would pass.
+    if cur_pt:
+        dbg.warp_cursor(qmp, cur_pt[0], cur_pt[1] + 1)   # force a motion
+        dbg.warp_cursor(qmp, *cur_pt)
+        time.sleep(0.4)
+        shape_after = dbg.cursor_shape()
+        res.check("...and the I-beam comes back over the document",
+                  shape_after == DebugConsole.CURSOR_TEXT,
+                  f"shape {shape_after} at {cur_pt} (I-beam is "
+                  f"{DebugConsole.CURSOR_TEXT})")
+
+    # --- File > New asks as well, and that is the point ---------------
+    #
+    # The confirm is not about CLOSING, it is about throwing the
+    # document away -- so New, Open and a Recent entry go through the
+    # same gate. Windows Notepad and gedit both ask here too.
+    key(dbg, "0x0e")                          # Ctrl-N
+    dbg.settle()
+    time.sleep(0.8)
+    btns = dialog_buttons(dbg)
+    res.check("File > New on a modified document asks before discarding it",
+              len(btns) == 3, f"button rects reported: {btns}")
+    if len(btns) != 3:
+        return
+    press(1)                                  # Don't Save -> a fresh document
+
+    deadline = time.time() + SPAWN_TIMEOUT_S
+    fresh = False
+    while time.time() < deadline and not fresh:
+        fresh = find_window(dbg, "untitled") is not None
+        time.sleep(0.3)
+    res.check("...and answering it gives an untitled document", fresh,
+              "the title did not go back to `untitled`")
+
+    # --- Save, on a document with no filename yet --------------------
+    #
+    # The intricate branch: Save on an untitled document has to open the
+    # chooser and finish the close only once the bytes are down, which
+    # is two waits stacked on each other. CANCELLING the chooser must
+    # cancel the CLOSE too -- quitting there would throw away exactly
+    # the text the dialog was put up to protect.
+    type_text(dbg, "qq")
+    dbg.settle()
+    time.sleep(0.3)
+    dbg.send("gui key 0xa5 alt")
+    dbg.settle()
+    time.sleep(0.8)
+    btns = dialog_buttons(dbg)
+    if len(btns) == 3:
+        press(0)                              # Save
+        chooser = None
+        deadline = time.time() + SPAWN_TIMEOUT_S
+        while time.time() < deadline and chooser is None:
+            chooser = find_window(dbg, "Save As")
+            time.sleep(0.3)
+        res.check("Save on an untitled document opens the chooser",
+                  chooser is not None,
+                  "no `Save As` window -- Save did nothing, or saved to "
+                  "a filename nobody chose")
+        key(dbg, ESC)                         # cancel the chooser
+        dbg.settle()
+        time.sleep(0.8)
+        res.check("...and cancelling the chooser cancels the close too",
+                  find_window(dbg, "untitled") is not None,
+                  "the editor quit with unsaved text after the chooser was "
+                  "cancelled")
+
+    # Ask again, and take the other answer.
+    dbg.send("gui key 0xa5 alt")
+    dbg.settle()
+    time.sleep(0.8)
+    btns = dialog_buttons(dbg)
+    # Result.check() RETURNS NOTHING -- guard on the condition, never on
+    # its return value. Writing `if not res.check(...)` here skipped the
+    # rest of this function AND every markdown check below it, while the
+    # tool reported a clean pass.
+    asked_again = len(btns) == 3
+    res.check("Alt+F4 asks again after a Cancel", asked_again,
+              f"button rects reported: {btns}")
+    if not asked_again:
+        return
+    press(1)                                  # Don't Save
+
     deadline = time.time() + SPAWN_TIMEOUT_S
     gone = False
     while time.time() < deadline:
         if find_window(dbg, SAVE_NAME) is None and find_window(dbg, "untitled") is None:
             gone = True
             break
-    res.check("Alt+F4 closes the editor", gone)
+        time.sleep(0.3)
+    res.check("Don't Save closes the editor", gone,
+              "the window survived an explicit Don't Save")
 
     markdown_checks(dbg, qmp, tmp, res)
 

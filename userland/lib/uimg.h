@@ -98,10 +98,10 @@ struct uimg_codec {
 //
 //   -EINVAL   the bytes are malformed, truncated, or not an image at
 //             all. The file is broken.
-//   -ENOTSUP  a valid file this build refuses: progressive JPEG,
-//             arithmetic coding, 12-bit samples, CMYK. The file is
-//             fine; we are not. That distinction is what lets an app
-//             say "this build cannot show progressive JPEGs" instead of
+//   -ENOTSUP  a valid file this build refuses: arithmetic-coded or
+//             lossless JPEG, 12-bit samples, CMYK. The file is fine; we
+//             are not. That distinction is what lets an app say "this
+//             build cannot read an arithmetic-coded JPEG" instead of
 //             "corrupt file", which would be a lie.
 //   -ENOMEM   the pixels did not fit.
 //
@@ -136,8 +136,12 @@ void uimg_free(struct uimg *im);
 // --- encoding ---------------------------------------------------------
 //
 // The other direction, and the only reason it exists is that something
-// had to WRITE a file: the screenshot tool. Two formats, and the pair
+// had to WRITE a file: the screenshot tool. Three formats, and the set
 // is the point, as it is for the decoders above:
+//
+//   jpeg what a PHOTOGRAPH should be written as -- lossy, opaque, and
+//        roughly a tenth of the PNG for the same picture. Never for UI
+//        content, where the DCT puts ringing around every glyph.
 //
 //   qoi  the DEFAULT for a screenshot, because it is a couple of
 //        hundred lines, needs no compression library, and on flat UI

@@ -36,6 +36,7 @@
 #include "ui/ulog.h"
 #include "ui/utheme.h"
 #include "keyboard.h"
+#include <pthread.h>
 
 #define WIN_W 720
 #define WIN_H 460
@@ -82,6 +83,60 @@ static struct uui_statusbar g_status;
 static char g_stat_name[PATH_MAX_LEN];
 static char g_stat_size[48];
 static char g_stat_note[96];
+
+// --- decoding, on a WORKER THREAD -------------------------------------
+//
+// **A DECODE IS THE LONGEST THING THIS APP DOES AND IT MUST NOT BE ON
+// THE PAINT LOOP.** Measured in this system: 280 ms for a 1280x720
+// baseline JPEG, during which the window took no input and repainted
+// nothing -- a drag left a trail, and a bigger photograph is seconds of
+// it. No image viewer decodes on its UI thread: gThumb and Eye of GNOME
+// hand it to a task and post the result back, Qt's QImageReader is
+// driven from a QtConcurrent worker, Windows Photos the same. So this
+// one does too.
+//
+// ONE DECODE AT A TIME, AND A REQUEST THAT ARRIVES DURING IT IS
+// REMEMBERED rather than started beside it. Arrowing down a folder
+// fires a request per row, and running them concurrently would be N
+// decoders competing for the same CPU to produce N-1 pictures nobody
+// asked to see. The last one asked for is the one shown; at most one
+// already-started decode is finished and thrown away.
+//
+// The thread is DETACHED and nothing joins it, as the Terminal's pty
+// readers are: joining would mean blocking the UI on exactly the work
+// being moved off it. If the process exits mid-decode the address space
+// goes with it, which is the same shape.
+struct decode_job {
+    struct uapp *app;
+    char path[PATH_MAX_LEN];
+    char name[PATH_MAX_LEN];
+    struct uimg img;
+    struct uimg_info info;
+    int rc;
+    unsigned long long ms;
+    // uimg_last_error() is ONE STRING PER PROCESS (lib/uimg.h), so the
+    // worker copies it before returning rather than leaving the main
+    // thread to read whatever the next decode has overwritten it with.
+    char err[96];
+};
+
+enum { USER_DECODED = 1 };
+
+static struct decode_job *g_active;         // in flight; the main thread's
+static char g_pending_path[PATH_MAX_LEN];   // asked for during one
+static char g_pending_name[PATH_MAX_LEN];
+static int  g_pending;
+
+// Frames painted while a decode was in flight, reported beside the
+// decode's duration. **IT IS THE ONLY OUTSIDE EVIDENCE THAT THE WINDOW
+// KEPT PAINTING**, and it exists because the two cheaper signals do not
+// work: the layout log is DEDUPLICATED per frame (ui/uapp.c's
+// layout_log_flush), and a mid-decode frame has exactly the rects the
+// one before it had, so a live loop logs nothing at all there; and
+// catching the transient in a screenshot is a race against a 200 ms
+// window. A count the app kept cannot race. Zero here means the decode
+// is back on the paint loop.
+static unsigned g_frames_during;
 
 static const struct uui_menu_item file_items[] = {
     UUI_MENU("Open...", CMD_OPEN,   "Ctrl+O"),
@@ -218,6 +273,70 @@ static const char *selected_name(void) {
     return uui_fileview_selected_name(&g_list);
 }
 
+// THE WORKER. Nothing here touches a widget, the window, or anything
+// the main thread reads without the post in between -- the job struct is
+// handed over whole, and uapp_post() is the handover.
+static void *decode_main(void *arg) {
+    struct decode_job *j = (struct decode_job *)arg;
+    unsigned long long t0 = sys_monotonic_ns();
+    j->rc = uimg_load(j->path, &j->img);
+    j->ms = (sys_monotonic_ns() - t0) / 1000000ull;
+    if (j->rc < 0) strlcpy(j->err, uimg_last_error(), sizeof j->err);
+    uapp_post(j->app, USER_DECODED, 0);
+    return NULL;
+}
+
+static void start_decode(struct uapp *a, const char *path, const char *name) {
+    struct decode_job *j = calloc(1, sizeof *j);
+    if (!j) {
+        strlcpy(g_stat_note, "not enough memory to decode", sizeof g_stat_note);
+        return;
+    }
+    j->app = a;
+    strlcpy(j->path, path, sizeof j->path);
+    strlcpy(j->name, name, sizeof j->name);
+
+    // The HEADER is read here and not on the worker: it is a few hundred
+    // bytes of work whatever the image's size (lib/uimg.h), and having
+    // the dimensions immediately is what lets the status bar say what is
+    // loading instead of going blank.
+    if (uimg_load_info(j->path, &j->info) == 0)
+        snprintf(g_stat_size, sizeof g_stat_size, "%dx%d %s",
+                 j->info.w, j->info.h, j->info.detail);
+    else
+        strlcpy(g_stat_size, "", sizeof g_stat_size);
+    strlcpy(g_stat_name, j->name, sizeof g_stat_name);
+    strlcpy(g_stat_note, "decoding...", sizeof g_stat_note);
+    // The ACTION a test waits for, once (docs/conventions/gui.md). It
+    // pairs with the "shown"/"refused" line below, and what lands
+    // BETWEEN the two is how tools/imgview_test.py proves the window
+    // kept painting -- a synchronous decode emits nothing there.
+    ulogf("imgview: decoding %s\n", j->name);
+    g_frames_during = 0;
+
+    // **PUBLISHED BEFORE THE THREAD EXISTS.** finish_decode() takes the
+    // job out of g_active, so setting it only on the success path left
+    // the fallback below decoding the image and then dropping it on the
+    // floor -- found by the positive control in tools/imgview_test.py,
+    // which is the shape that control is for.
+    g_active = j;
+    uapp_busy_begin(a);
+    uapp_redraw(a);
+
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+    pthread_t th;
+    if (pthread_create(&th, &at, decode_main, j) != 0) {
+        // NO THREAD IS NOT NO PICTURE. Decode it here instead -- the
+        // window freezes for it, which is what this app did before the
+        // worker existed and is strictly better than refusing the file.
+        // It still posts, so the result lands the same way.
+        ulog("imgview: no worker thread; decoding on the main loop\n");
+        decode_main(j);
+    }
+}
+
 // Decodes and shows whatever the sidebar has selected.
 static void show_selected(struct uapp *a) {
     const char *name = selected_name();
@@ -226,47 +345,65 @@ static void show_selected(struct uapp *a) {
     char path[PATH_MAX_LEN];
     if (!uui_fileview_selected_path(&g_list, path, sizeof path)) return;
 
-    struct uimg_info info;
-    int rc = uimg_load_info(path, &info);
-    if (rc == 0) {
-        // A JPEG decode is the longest thing this app does, and the
-        // status bar already reports how long it took.
-        uapp_busy_begin(a);
-        unsigned long long t0 = sys_monotonic_ns();
-        struct uimg fresh;
-        rc = uimg_load(path, &fresh);
-        unsigned long long ms = (sys_monotonic_ns() - t0) / 1000000ull;
-        uapp_busy_end(a);
-        if (rc == 0) {
-            // The widget is pointed at the NEW image before the old one
-            // is freed: pointing it at freed pixels, even for the length
-            // of one statement, is a use-after-free the first repaint
-            // would find.
-            struct uimg old = g_img;
-            g_img = fresh;
-            g_have_img = 1;
-            uui_image_set(&g_view, &g_img);
-            uimg_free(&old);
-            snprintf(g_stat_size, sizeof g_stat_size, "%dx%d %s", info.w, info.h,
-                     info.detail);
-            snprintf(g_stat_note, sizeof g_stat_note, "decoded in %llu ms", ms);
-            ulogf("imgview: shown %s %dx%d in %llu ms\n", name,
-                  info.w, info.h, ms);
-        }
+    if (g_active) {
+        // Remembered, not queued: a third request replaces the second.
+        strlcpy(g_pending_path, path, sizeof g_pending_path);
+        strlcpy(g_pending_name, name, sizeof g_pending_name);
+        g_pending = 1;
+        strlcpy(g_stat_name, name, sizeof g_stat_name);
+        return;
     }
-    if (rc < 0) {
+    start_decode(a, path, name);
+}
+
+// The worker landed. Everything below runs on the MAIN thread.
+static void finish_decode(struct uapp *a) {
+    struct decode_job *j = g_active;
+    if (!j) return;
+    g_active = NULL;
+    uapp_busy_end(a);
+
+    if (j->rc == 0) {
+        // The widget is pointed at the NEW image before the old one is
+        // freed: pointing it at freed pixels, even for the length of one
+        // statement, is a use-after-free the first repaint would find.
+        struct uimg old = g_img;
+        g_img = j->img;
+        g_have_img = 1;
+        uui_image_set(&g_view, &g_img);
+        uimg_free(&old);
+        snprintf(g_stat_size, sizeof g_stat_size, "%dx%d %s",
+                 j->img.w, j->img.h, j->info.detail);
+        snprintf(g_stat_note, sizeof g_stat_note, "decoded in %llu ms", j->ms);
+        ulogf("imgview: shown %s %dx%d in %llu ms, %u frame(s) during\n",
+              j->name, j->img.w, j->img.h, j->ms, g_frames_during);
+    } else {
         // A REFUSAL IS NOT A CORRUPTION, and the status bar says which:
-        // uimg_last_error() carries the decoder's own sentence.
+        // the decoder's own sentence, copied on the worker.
         if (g_have_img) {
             uimg_free(&g_img);
             g_have_img = 0;
             uui_image_set(&g_view, NULL);
         }
         strlcpy(g_stat_size, "not shown", sizeof g_stat_size);
-        strlcpy(g_stat_note, uimg_last_error(), sizeof g_stat_note);
-        ulogf("imgview: refused %s -- %s\n", name, uimg_last_error());
+        strlcpy(g_stat_note, j->err, sizeof g_stat_note);
+        ulogf("imgview: refused %s -- %s\n", j->name, j->err);
     }
-    strlcpy(g_stat_name, name, sizeof g_stat_name);
+    strlcpy(g_stat_name, j->name, sizeof g_stat_name);
+    free(j);
+
+    if (g_pending) {
+        g_pending = 0;
+        start_decode(a, g_pending_path, g_pending_name);
+    }
+    uapp_redraw(a);
+}
+
+static int on_user(struct uapp *a, int a0, int a1) {
+    (void)a1;
+    if (a0 != USER_DECODED) return 0;
+    finish_decode(a);
+    return 1;
 }
 
 // "Set as wallpaper" -- through the SETTINGS REGISTRY, not by writing
@@ -362,6 +499,7 @@ static void layout_all(int cw, int ch) {
 // boundary and cannot report a popup that closed three frames ago as
 // still open (the trap tools/menubar_test.py documents).
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
+    if (g_active) g_frames_during++;
     (void)a;
     layout_all(d->surface->w, d->surface->h);
     uui_statusbar_draw(d->surface, &g_status);
@@ -501,6 +639,7 @@ int main(int argc, char **argv) {
         .on_widget    = on_widget,
         .on_key       = on_key,
         .on_resize    = on_resize,
+        .on_user      = on_user,
     };
     int rc = uapp_run(&desc);
     uui_image_release(&g_view);

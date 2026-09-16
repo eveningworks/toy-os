@@ -3534,6 +3534,26 @@ Four things to know:
   answer is not obvious, and a stray click is not an answer.
 - **`rows` are caller-owned pointers** and must outlive the dialog being
   up; point them at the app's own buffers.
+- **AN ACTIVE OVERLAY OWNS THE CURSOR, and the toolkit does that for
+  you** -- `uui_router_cursor()` STOPS at an overlay instead of falling
+  through to what is behind it, and `uapp` re-resolves the shape every
+  frame against `uui_router_overlay_active()`. So an app names the
+  cursor it wants and never tests for a modal. Two things follow. The
+  resolution runs per FRAME, not per motion, because an app may name its
+  cursor once and never again (the Terminal does, in `on_open`) and a
+  modal opening moves no pointer. And `WIN_CURSOR_WAIT` is EXEMPT: it is
+  an override, not a property of what the pointer is over -- Qt's
+  `setOverrideCursor()` versus a widget's own cursor -- so an app that
+  goes busy behind its own dialog can still say so.
+- **`uui_dialog_take_code()` RETURNS -1 ON EVERY PRESS**, because
+  `on_widget` runs for the press as well as the release and the dialog
+  parks its code only on the release. A `switch` whose `default` acts --
+  clearing state, cancelling, closing -- therefore acts on the press,
+  half an event before the answer arrives. Take the code, `break` on a
+  negative, and only then switch; the menu bar's `if (code > 0)` is the
+  same guard. This cost a real bug in Notepad: the press wiped the
+  parked action and Don't Save closed nothing, while Cancel looked
+  perfectly fine because "do nothing" is what Cancel means anyway.
 
 Its buttons are equal-width, sized to the widest label and then CLAMPED
 so the row fits the box -- the row is right-aligned, so an unclamped

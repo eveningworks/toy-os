@@ -436,6 +436,35 @@ def run(dbg, qmp, tmp, res):
               any("imgview: shown dusk.jpg" in l for l in lines3),
               f"shown lines: {[l for l in lines3 if 'shown' in l]}")
 
+    # --- the window keeps PAINTING through the decode -----------------
+    #
+    # A 1280x720 JPEG takes ~280 ms here, and it used to be decoded on
+    # the paint loop -- the window took no input and repainted nothing
+    # for the whole of it. It is on a worker thread now
+    # (userland/gui/apps/imgview.c), and this is how that is visible
+    # from outside.
+    #
+    # **THE ASSERTION IS A COUNT THE APP KEPT, NOT A PIXEL AT A MOMENT.**
+    # Two cheaper signals were tried first and neither works. The layout
+    # log is DEDUPLICATED per frame (ui/uapp.c's layout_log_flush), and a
+    # mid-decode frame has exactly the rects of the one before it, so a
+    # perfectly live loop logs nothing between the two lines -- that
+    # version of this check failed against working code. And catching
+    # the "decoding..." status text in a screenshot is a race against a
+    # 200 ms window, whose flakes would be blamed on the app. The app
+    # counts its own frames instead, which cannot race: a synchronous
+    # decode paints none, by construction.
+    m = None
+    for line in reversed(lines3):
+        m = re.search(r"imgview: shown dusk\.jpg .* (\d+) frame\(s\) during", line)
+        if m:
+            break
+    res.check("the window painted while the decode was running",
+              m is not None and int(m.group(1)) > 0,
+              "the app painted 0 frames during the decode -- it is back on "
+              "the paint loop" if m else
+              "no `frame(s) during` in any `shown dusk.jpg` line")
+
     px, py, pw, ph = lay3.screen_rect("image.picture")
     pts = [((px + int(pw * fx), py + int(ph * fy)),
             (int(dusk.width * fx), int(dusk.height * fy)))
