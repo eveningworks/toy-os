@@ -200,11 +200,8 @@ struct uapp {
     int mouse_x, mouse_y;
 
     // The WIN_CURSOR_* last named, so uapp_set_cursor() can drop the
-    // no-op -- an app calls it on every motion event. `cursor` is what
-    // the compositor has been TOLD; `cursor_want` is what the app last
-    // ASKED FOR, and they differ while a modal is up (cursor_apply).
+    // no-op -- an app calls it on every motion event.
     int cursor;
-    int cursor_want;
     int cursor_before_busy;
     int fullscreen;    // as last asked for -- the compositor's proposal follows
     // The lease (WIN_EV_SCANOUT): the toplevel draws into the display's
@@ -319,17 +316,9 @@ static void present(struct uapp *a) {
 // Draw + present, but only if something actually asked. This is the
 // coalescing uapp_redraw() promises: a burst of events costs one round
 // trip, not one per event.
-static void cursor_apply(struct uapp *a);
-
 static void flush(struct uapp *a) {
     if (!a->dirty) return;
     a->dirty = 0;
-
-    // A modal opening or closing changes what the cursor should be with
-    // no pointer motion to trigger it, and an app that named its cursor
-    // once will never ask again -- so the resolution is re-run on every
-    // frame that repaints, which an overlay appearing always causes.
-    cursor_apply(a);
 
     // ORDER, and it is load-bearing: clear, then the APP's own painting,
     // then the widgets, then overlays.
@@ -1002,40 +991,17 @@ const struct uui_drag *uapp_drag(struct uapp *a) {
     return uui_router_dropped(&a->router);
 }
 
-// **A MODAL OVERLAY OWNS THE CURSOR, AND NO APP HAS TO REMEMBER THAT.**
-// The router already refuses the click and the key while one is up
-// (ui/uui_route.h); the pointer's SHAPE is the third axis of the same
-// rule and was the one nobody wired. It is resolved here rather than
-// left to each app because an app does not have to be tracking motion
-// at all -- the Terminal names the I-beam once in on_open and has no
-// on_motion, so a predicate it was supposed to consult would never be
-// consulted and the caret would sit over the modal for ever.
-//
-// WAIT IS THE EXCEPTION, deliberately: it is an OVERRIDE rather than a
-// property of what the pointer is over -- Qt draws the same distinction
-// between QApplication::setOverrideCursor() and a widget's own cursor
-// -- and an app that goes busy behind its own dialog still has to be
-// able to say so.
-static void cursor_apply(struct uapp *a) {
-    int want = a->cursor_want;
-    if (want != WIN_CURSOR_WAIT && a->router.count &&
-        uui_router_overlay_active(&a->router))
-        want = WIN_CURSOR_DEFAULT;
-    if (a->cursor == want) return;
-    // Either way: a server that refuses this (one built before the
-    // request existed) must not be asked again on every motion.
-    a->cursor = want;
-    wmchan_send(WIN_REQ_CURSOR, a->window, want, 0, 0, 0);
-}
-
 void uapp_set_cursor(struct uapp *a, int cursor) {
     if (cursor < 0 || cursor >= WIN_CURSOR_COUNT) return;
-    a->cursor_want = cursor;
-    cursor_apply(a);
+    if (a->cursor == cursor) return;
+    // Either way: a server that refuses this (one built before the
+    // request existed) must not be asked again on every motion.
+    a->cursor = cursor;
+    wmchan_send(WIN_REQ_CURSOR, a->window, cursor, 0, 0, 0);
 }
 
 void uapp_busy_begin(struct uapp *a) {
-    a->cursor_before_busy = a->cursor_want;
+    a->cursor_before_busy = a->cursor;
     uapp_set_cursor(a, WIN_CURSOR_WAIT);
     // The shape has to be ON THE WIRE before the caller blocks, and
     // uapp_set_cursor() is a syscall, so it already is -- the compositor

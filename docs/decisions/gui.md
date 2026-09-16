@@ -8056,6 +8056,14 @@ marked clean, so nothing ever asks about it again.
 
 ## A modal owns the pointer's SHAPE too, and the toolkit resolves that rather than each app
 
+**WITHDRAWN 2026-09-16, AND KEPT BECAUSE THE REASONING IS STILL RIGHT.**
+The change this describes crash-looped `toywm` on the bare-metal laptop
+with a general protection fault, cleanly A/B/A: good on the build
+before it, crash-looping with it, good again with the three files backed
+out. It never misbehaved in QEMU, where seven suites ran over it. The
+MECHANISM IS NOT ESTABLISHED -- see `docs/bugs.md` -- so what follows is
+the design to attempt again, not what the tree does today.
+
 Making a dialog modal happened in three separate pieces, and the gap
 between them is the interesting part. The click came first (the scrim
 answers `hit`, so nothing behind it can be reached). The keyboard came

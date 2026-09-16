@@ -3534,17 +3534,15 @@ Four things to know:
   answer is not obvious, and a stray click is not an answer.
 - **`rows` are caller-owned pointers** and must outlive the dialog being
   up; point them at the app's own buffers.
-- **AN ACTIVE OVERLAY OWNS THE CURSOR, and the toolkit does that for
-  you** -- `uui_router_cursor()` STOPS at an overlay instead of falling
-  through to what is behind it, and `uapp` re-resolves the shape every
-  frame against `uui_router_overlay_active()`. So an app names the
-  cursor it wants and never tests for a modal. Two things follow. The
-  resolution runs per FRAME, not per motion, because an app may name its
-  cursor once and never again (the Terminal does, in `on_open`) and a
-  modal opening moves no pointer. And `WIN_CURSOR_WAIT` is EXEMPT: it is
-  an override, not a property of what the pointer is over -- Qt's
-  `setOverrideCursor()` versus a widget's own cursor -- so an app that
-  goes busy behind its own dialog can still say so.
+- **AN ACTIVE OVERLAY DOES NOT YET OWN THE CURSOR, and an app that
+  names its own must test for a modal itself.** `uui_router_cursor()`
+  falls THROUGH an overlay to the widgets behind it, so the I-beam of a
+  text area nobody can click shows over a modal. Notepad works around it
+  per-app. The toolkit fix -- stop the walk at an overlay, and resolve
+  the app's request per frame -- was written, verified in QEMU, and
+  WITHDRAWN when it crash-looped `toywm` on bare metal with no mechanism
+  established (`docs/bugs.md`, `docs/decisions/gui.md`). Read both
+  before attempting it again.
 - **`uui_dialog_take_code()` RETURNS -1 ON EVERY PRESS**, because
   `on_widget` runs for the press as well as the release and the dialog
   parks its code only on the release. A `switch` whose `default` acts --

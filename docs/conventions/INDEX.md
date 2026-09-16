@@ -574,9 +574,9 @@ whenever a headline here tells you something you did not already know.
 - **A DEFAULT ICON CELL IS CHOSEN AFTER THE SAVED ONES, NOT BEFORE**
 - **A SELECTION CHANGE MUST DAMAGE THE RECTS IT CHANGED, NOT JUST SET
   `redraw_pending`**
-- **AN ACTIVE OVERLAY OWNS THE CURSOR, and the toolkit does that for
-  you** -- the router stops at an overlay, `uapp` re-resolves per frame,
-  and `WIN_CURSOR_WAIT` is exempt (`gui.md`)
+- **AN ACTIVE OVERLAY DOES NOT YET OWN THE CURSOR** -- the walk falls
+  through to what is behind a modal; the toolkit fix was withdrawn after
+  it crash-looped toywm on bare metal (`gui.md`)
 - **`uui_dialog_take_code()` RETURNS -1 ON EVERY PRESS** -- `on_widget`
   runs for the press too, and a `switch` whose `default` acts does it
   half an event early (`gui.md`)

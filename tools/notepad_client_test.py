@@ -531,10 +531,15 @@ def run(dbg, qmp, tmp, shot_dir, res):
         py = ty + 8 if by - ty > 16 else by + bh + 8
         cur_pt = (ox + tx + tw // 2, oy + py)
 
+    # **THE CHECK ITSELF IS PARKED, NOT DELETED.** The toolkit fix it was
+    # written against crash-looped toywm on the bare-metal laptop and was
+    # backed out (docs/bugs.md); re-enable this the moment it lands
+    # again, because it is the check that proved the fix worked and the
+    # one that will prove the next attempt does.
     res.check("Notepad reports the rects the cursor check needs",
               cur_pt is not None,
               f"text={text_r} ask-save={box_r}")
-    if cur_pt:
+    if cur_pt and os.environ.get("NOTEPAD_MODAL_CURSOR"):
         dbg.warp_cursor(qmp, *cur_pt)
         time.sleep(0.4)
         shape_modal = dbg.cursor_shape()
@@ -560,7 +565,7 @@ def run(dbg, qmp, tmp, shot_dir, res):
     # THE CONTROL for the cursor check above: the same point must go
     # back to the I-beam once the modal is gone. Without this, an app
     # that had stopped asking for the caret anywhere would pass.
-    if cur_pt:
+    if cur_pt and os.environ.get("NOTEPAD_MODAL_CURSOR"):
         dbg.warp_cursor(qmp, cur_pt[0], cur_pt[1] + 1)   # force a motion
         dbg.warp_cursor(qmp, *cur_pt)
         time.sleep(0.4)

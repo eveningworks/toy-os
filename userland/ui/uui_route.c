@@ -385,22 +385,12 @@ int uui_router_cursor(const struct uui_router *r, int cx, int cy) {
             int c = ov->ops->cursor(ov->widget, cx, cy);
             if (c != WIN_CURSOR_DEFAULT) return c;
         }
-        // **AND IT IS TERMINAL.** An overlay that swallows the click
-        // owns the cursor too, so the walk stops here rather than
-        // falling through to whatever is underneath -- which answered
-        // the I-beam of a text field nobody could reach, under a modal
-        // whose whole point is that the app is untouchable.
-        return WIN_CURSOR_DEFAULT;
     }
     for (int i = r->count - 1; i >= 0; i--) {
         int c = cursor_item(&r->items[i], cx, cy);
         if (c != WIN_CURSOR_DEFAULT) return c;
     }
     return WIN_CURSOR_DEFAULT;
-}
-
-int uui_router_overlay_active(const struct uui_router *r) {
-    return overlay_owner(r->items, r->count) != NULL;
 }
 
 static int id_of_item(struct uui_item *it, const void *widget) {
