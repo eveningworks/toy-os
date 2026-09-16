@@ -4201,11 +4201,13 @@ corner is two bits rather than a ninth case -- Wayland's
   not the extent.** A left drag at the minimum width must stop moving
   `x`; clamping `w` instead walks the window sideways at a constant
   size. The four edges clamp four different quantities on purpose.
-- **The TOP edge is thinner than the other three, and that is not an
-  oversight.** It is the only edge lying over a control, so
-  `RESIZE_MARGIN_TOP`/`RESIZE_CORNER_TOP` are half their siblings --
-  at the full 8 the corner ate 16 rows of a 23-row title bar and showed
-  a diagonal at the bar's midpoint.
+- **MOST OF THE BORDER IS OUTSIDE THE WINDOW** -- `RESIZE_OUTSIDE` 8
+  against `RESIZE_INSIDE` 2. The inside is expensive (the top edge lies
+  over the title bar; at 8 the corner ate 16 rows of a 23-row bar and
+  showed a diagonal at its midpoint) and the outside is free. Two
+  guards make the band safe: a non-resizable window projects none, and
+  a window owns everything genuinely inside it, so a lower window's
+  band cannot reach through one in front.
 - **Anything that hit-tests a resize edge must CALL this function.**
   `wm_debug.c` open-coded the same two comparisons and so reported the
   old zones for a day; `wm_render.c` asks it every frame for the cursor.

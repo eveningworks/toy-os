@@ -40,12 +40,15 @@ APP = "/tests/winclient"
 DRAG = 60
 TOL = 6
 
-# name -> (grab point as a fraction of the window's edge, the expected
-# cursor, dx, dy, what must change, what must be anchored)
-#
-# Fractions rather than pixels: the grab point has to land INSIDE the
-# resize strip whatever RESIZE_MARGIN is, and "3 px in from the left
-# edge" is a constant that goes stale the moment the margin moves.
+# Where to grab, relative to the frame. The resize border is mostly an
+# invisible band OUTSIDE the window (RESIZE_OUTSIDE), with only
+# RESIZE_INSIDE rows on the frame itself -- so grabbing outside is both
+# what a person does and the only roomy target.
+GRAB_OUT = 4      # into the outside band
+BAND_MISS = 20    # far enough out that the band must NOT reach
+
+# name -> (which edge/corner, the expected cursor, dx, dy, what must
+# CHANGE, what must stay ANCHORED)
 CASES = [
     ("right",        ("edge", "e"),  "H",     DRAG,  0,    ["w"],      ["x", "y"]),
     ("left",         ("edge", "w"),  "H",    -DRAG,  0,    ["x", "w"], ["y", "right"]),
@@ -61,19 +64,15 @@ CASES = [
 ]
 
 
-def grab_point(win, kind, where):
-    """A point inside the window's resize strip for `where`.
+def grab_point(win, kind, where, out=GRAB_OUT):
+    """A point in the resize band for `where`, `out` px OUTSIDE the frame.
 
-    IN by 2 px, never ON the boundary: the right edge is x + w - 1, and
-    a point at x + w is outside the window entirely -- it hit-tests as
-    the desktop and the drag does nothing at all.
+    An edge is grabbed at its midpoint, the one place the corner squares
+    cannot claim; a corner at the corner itself.
     """
     x, y, w, h = win["x"], win["y"], win["w"], win["h"]
-    inset = 2
-    # A corner is grabbed at the corner itself; an edge at its midpoint,
-    # which is the one place the corner squares cannot claim.
-    cx = x + inset if "w" in where else (x + w - 1 - inset if "e" in where else x + w // 2)
-    cy = y + inset if "n" in where else (y + h - 1 - inset if "s" in where else y + h // 2)
+    cx = x - out if "w" in where else (x + w - 1 + out if "e" in where else x + w // 2)
+    cy = y - out if "n" in where else (y + h - 1 + out if "s" in where else y + h // 2)
     return cx, cy
 
 
@@ -180,14 +179,15 @@ def run_case(con, qmp, case, failures, control):
 
 
 def check_titlebar_still_drags(con, qmp, failures):
-    """The title bar's MIDDLE row drags, everywhere along its width.
+    """The title bar drags across its whole width; the band OUTSIDE resizes.
 
-    The top edge shares its pixels with the title bar, so every row the
-    resize strip claims is a row that stops moving the window -- and the
-    corner reached 16 rows into a 23-row bar until the top margin was
-    halved. Asserted at the bar's vertical MIDPOINT and through the
-    cursor, so it stays true whatever the margins become: a diagonal at
-    the midpoint means the corner has eaten the bar again.
+    That split is the point of putting the border outside the frame: the
+    window keeps only RESIZE_INSIDE rows, so the bar stays draggable
+    right up to its ends, while the roomy target hangs over what is
+    behind. Asserted at the bar's vertical MIDPOINT through the cursor,
+    so it survives any change to the numbers -- a diagonal at the
+    midpoint means a corner has eaten the bar again, which is exactly
+    what a "resize cursor far from the corner" report looks like.
     """
     w = reset_window(con, qmp)
     if w is None:
@@ -196,13 +196,45 @@ def check_titlebar_still_drags(con, qmp, failures):
     mid = w["y"] + (w["content"]["y"] - w["y"]) // 2
     for label, x, want in (
             ("centre", w["x"] + w["w"] // 2, DebugConsole.CURSOR_NORMAL),
-            ("near the left corner", w["x"] + 2, DebugConsole.CURSOR_H),
-            ("near the right corner", w["x"] + w["w"] - 3, DebugConsole.CURSOR_H)):
+            ("just inside its left end", w["x"] + 4, DebugConsole.CURSOR_NORMAL),
+            ("just inside its right end", w["x"] + w["w"] - 5,
+             DebugConsole.CURSOR_NORMAL),
+            # ...and the band beyond those ends IS live, which is what
+            # stops this passing by the target having vanished entirely.
+            # An EDGE cursor, not a corner one: the bar's midpoint is
+            # past RESIZE_CORNER, so the diagonal has correctly stopped.
+            ("the band off its left end", w["x"] - GRAB_OUT,
+             DebugConsole.CURSOR_H),
+            ("the band off its right end", w["x"] + w["w"] - 1 + GRAB_OUT,
+             DebugConsole.CURSOR_H)):
         got = con.probe(x, mid)["cursor"]
         if got != want:
-            failures.append(f"title bar {label}: cursor {got} at ({x}, {mid}), "
-                            f"expected {want} -- the resize zone has eaten "
-                            f"the draggable part of the bar")
+            failures.append(f"title bar, {label}: cursor {got} at ({x}, {mid}), "
+                            f"expected {want}")
+
+
+def check_band_is_bounded(con, qmp, failures):
+    """The outside band ENDS.
+
+    It steals from whatever is behind it -- the desktop, or another
+    window's content -- so a band reaching further than RESIZE_OUTSIDE
+    would quietly make a moat around every window unclickable. Both
+    halves are asserted, because "nothing resizes out here" also passes
+    when the band is broken outright.
+    """
+    w = reset_window(con, qmp)
+    if w is None:
+        failures.append("band: no window")
+        return
+    my = w["y"] + w["h"] // 2
+    far = con.probe(w["x"] - BAND_MISS, my)["cursor"]
+    if far != DebugConsole.CURSOR_NORMAL:
+        failures.append(f"the band still bites {BAND_MISS}px out: cursor {far}, "
+                        f"expected {DebugConsole.CURSOR_NORMAL}")
+    near = con.probe(w["x"] - GRAB_OUT, my)["cursor"]
+    if near != DebugConsole.CURSOR_H:
+        failures.append(f"the band is dead {GRAB_OUT}px out: cursor {near}, "
+                        f"expected {DebugConsole.CURSOR_H}")
 
 
 def main():
@@ -228,6 +260,7 @@ def main():
         for case in CASES:
             run_case(con, qmp, case, failures, args.positive_control)
         check_titlebar_still_drags(con, qmp, failures)
+        check_band_is_bounded(con, qmp, failures)
     finally:
         con.close()
 

@@ -98,26 +98,39 @@ int wm_find_resize_zone(int mx, int my, int *out_edges) {
     for (int i = window_count - 1; i >= 0; i--) {
         struct window *w = &windows[i];
         if (w->state == WIN_MINIMIZED) continue;
-        if (!uui_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
 
-        if (w->state == WIN_MAXIMIZED || w->fullscreen) return -1; // neither is resizable by hand
-        if (!w->resizable) return -1; // fixed-size window -- see wm.h
-        if (wm_dialog_blocker(i) >= 0) return -1; // blocked: see wm_handle_left_click()
+        int inside = uui_hit(w->x, w->y, w->w, w->h, mx, my);
+        int near = uui_hit(w->x - RESIZE_OUTSIDE, w->y - RESIZE_OUTSIDE,
+                           w->w + 2 * RESIZE_OUTSIDE, w->h + 2 * RESIZE_OUTSIDE,
+                           mx, my);
+        if (!near) continue;
+
+        // **A WINDOW THAT CANNOT BE RESIZED HAS NO OUTSIDE BAND.** It
+        // still owns what is genuinely inside it -- so the search stops
+        // there, as it always did -- but it must not reach past its own
+        // frame, or a fixed-size popup would silently swallow the resize
+        // border of the window underneath it.
+        int no_resize = (w->state == WIN_MAXIMIZED || w->fullscreen ||
+                         !w->resizable || wm_dialog_blocker(i) >= 0);
+        if (no_resize) {
+            if (inside) return -1;
+            continue;
+        }
 
         int edges = 0;
-        if (mx < w->x + RESIZE_MARGIN)              edges |= WM_EDGE_LEFT;
-        if (mx >= w->x + w->w - RESIZE_MARGIN)      edges |= WM_EDGE_RIGHT;
-        if (my < w->y + RESIZE_MARGIN_TOP)          edges |= WM_EDGE_TOP;
-        if (my >= w->y + w->h - RESIZE_MARGIN)      edges |= WM_EDGE_BOTTOM;
+        if (mx < w->x + RESIZE_INSIDE)              edges |= WM_EDGE_LEFT;
+        if (mx >= w->x + w->w - RESIZE_INSIDE)      edges |= WM_EDGE_RIGHT;
+        if (my < w->y + RESIZE_INSIDE)              edges |= WM_EDGE_TOP;
+        if (my >= w->y + w->h - RESIZE_INSIDE)      edges |= WM_EDGE_BOTTOM;
 
         // A CORNER IS BIGGER THAN ITS EDGES. Within RESIZE_CORNER of
         // one, the perpendicular edge joins in even though the pointer
         // is not in its strip -- so the diagonal drag has a square to
-        // aim at rather than the 8x8 the strips alone would intersect
-        // in. Every desktop does this; Windows names the zones
-        // HTTOPLEFT and friends for the same reason.
+        // aim at rather than the point the two strips intersect in.
+        // Every desktop does this; Windows names the zones HTTOPLEFT
+        // and friends for the same reason.
         if (edges & (WM_EDGE_LEFT | WM_EDGE_RIGHT)) {
-            if (my < w->y + RESIZE_CORNER_TOP)            edges |= WM_EDGE_TOP;
+            if (my < w->y + RESIZE_CORNER)                edges |= WM_EDGE_TOP;
             else if (my >= w->y + w->h - RESIZE_CORNER)   edges |= WM_EDGE_BOTTOM;
         }
         if (edges & (WM_EDGE_TOP | WM_EDGE_BOTTOM)) {
@@ -125,15 +138,22 @@ int wm_find_resize_zone(int mx, int my, int *out_edges) {
             else if (mx >= w->x + w->w - RESIZE_CORNER)   edges |= WM_EDGE_RIGHT;
         }
 
-        // THE TITLE BAR'S TOP STRIP RESIZES (RESIZE_MARGIN_TOP), AND
-        // THE REST OF IT DRAGS, and
+        // Inside the frame and on no edge: the window body, and the
+        // search stops here rather than falling through to a window
+        // below. Outside it, `near` guarantees at least one edge, so
+        // this cannot swallow a point the band was meant to catch.
+        if (!edges) {
+            if (inside) return -1;
+            continue;
+        }
+
+        // THE TITLE BAR'S TOP STRIP RESIZES, THE REST OF IT DRAGS, and
         // that split is why this test comes after the edges rather than
         // before them: the top edge IS the title bar on every window
         // here, so refusing the whole bar (as this did) made the top
         // edge and both top corners unreachable. Windows and KWin carve
         // the same strip out of their own title bars.
-        if (!edges) return -1;
-        if (my < w->y + WM_TITLEBAR_H && !(edges & WM_EDGE_TOP) &&
+        if (inside && my < w->y + WM_TITLEBAR_H && !(edges & WM_EDGE_TOP) &&
             !(edges & (WM_EDGE_LEFT | WM_EDGE_RIGHT)))
             return -1;
 

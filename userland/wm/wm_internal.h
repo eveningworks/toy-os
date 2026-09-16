@@ -72,22 +72,30 @@ int start_btn_w(void);
 int win_btn_w(void);
 int btn_size(void);
 
-// The grab strip along each edge, and the square at each corner where
-// BOTH of its edges are live. Windows' sizing border is about this wide
-// once SM_CXPADDEDBORDER is counted, and every desktop makes the corner
-// bigger than the edge -- an 8x8 corner is a target you have to aim at.
-#define RESIZE_MARGIN 8
-#define RESIZE_CORNER (RESIZE_MARGIN * 2)
+// THE RESIZE BORDER IS MOSTLY OUTSIDE THE WINDOW, which is how
+// Windows and KWin make it big without spending window pixels on it
+// (SM_CXPADDEDBORDER; KWin's resize-only border). The frame keeps 2
+// rows; the other 8 hang over whatever is behind.
+//
+// The inside number is small ON PURPOSE. The top edge lies over the
+// title bar, so every row it claims stops dragging the window -- at 8
+// the corner reached 16 rows into a 23-row bar and the diagonal came up
+// at the bar's own MIDPOINT. Outside costs nothing, so that is where
+// the target lives.
+//
+// **THE OUTSIDE BAND STEALS FROM WHATEVER IS BEHIND IT**, including
+// another window's content, and that is the bargain every desktop with
+// an invisible border makes. It is bounded two ways: a window that
+// cannot be resized has no band at all (wm_find_resize_zone()), and the
+// band is only consulted where the topmost window at that point has
+// one.
+#define RESIZE_OUTSIDE 8
+#define RESIZE_INSIDE  2
 
-// **THE TOP IS HALF AS DEEP, BECAUSE IT IS THE ONLY EDGE SHARING ITS
-// PIXELS WITH A CONTROL.** The other three sit on frame nobody else
-// wants; the top lies over the title bar, so every row it claims is a
-// row that stops dragging the window. At 8 the corner reached 16 rows
-// into a 23-row title bar and the diagonal came up under the pointer
-// most of the way across it. Windows' top sizing border is thinner than
-// its sides for the same reason.
-#define RESIZE_MARGIN_TOP 4
-#define RESIZE_CORNER_TOP (RESIZE_MARGIN_TOP * 2)
+// Along the perpendicular axis, how far from a corner BOTH its edges
+// are live -- measured inward from the frame, with the outside band on
+// top of it, so a corner is about 16x16 of aimable target.
+#define RESIZE_CORNER  8
 
 // WHICH EDGES A RESIZE IS DRAGGING, as a mask. This is the shape
 // Wayland's xdg_toplevel.resize_edge uses (and _NET_WM_MOVERESIZE

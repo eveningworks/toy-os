@@ -7926,18 +7926,29 @@ version was taken first.
 and KWin carve the same strip, and the ordering matters: the edge test
 runs BEFORE the title-bar test, or the bar swallows the top edge again.
 
-**A corner is bigger than its edges** (`RESIZE_CORNER`, twice
-`RESIZE_MARGIN`): within that distance of a corner the perpendicular
-edge joins the mask, so a diagonal drag has a square to aim at rather
-than the 8x8 the two strips intersect in. Every desktop does this.
+**A corner is bigger than its edges** (`RESIZE_CORNER`): within that
+distance of a corner the perpendicular edge joins the mask, so a
+diagonal drag has a square to aim at rather than the point the two
+strips intersect in. Every desktop does this.
 
-**But the TOP is half as deep as the other three** (`RESIZE_MARGIN_TOP`,
-`RESIZE_CORNER_TOP`), because it is the only edge sharing its pixels
-with a control. The sides and bottom sit on frame nobody else wants;
-every row the top claims is a row that stops dragging the window. At the
-same 8 as the others the corner reached 16 rows into a 23-row title bar,
-so the diagonal came up under the pointer at the bar's own MIDPOINT --
-reported as a corner cursor appearing far from the corner, which is
-exactly what it was. Windows' top sizing border is thinner than its
-sides for the same reason. `resize_edges_test.py` asserts the midpoint
-of the bar is still draggable, at both corners.
+**AND THE BORDER IS MOSTLY OUTSIDE THE WINDOW** -- `RESIZE_OUTSIDE` (8)
+hanging over whatever is behind, against `RESIZE_INSIDE` (2) on the
+frame itself. This is Windows' `SM_CXPADDEDBORDER` and KWin's
+resize-only border, and the reason is that the inside is expensive while
+the outside is free: the top edge lies over the title bar, so every row
+it claims stops dragging the window. An 8px inside border put the corner
+16 rows into a 23-row bar and raised the diagonal at the bar's own
+MIDPOINT -- reported as a corner cursor appearing far from the corner,
+which is what it was. Thinning the inside alone would have shrunk the
+target; moving it outside keeps a 10px-deep grab with a bar draggable
+end to end.
+
+**The band steals from whatever is behind it**, which is the bargain
+every desktop with an invisible border makes, and it is bounded two
+ways. A window that cannot be resized projects NO band -- otherwise a
+fixed-size popup would swallow the resize border of the window under it
+-- and because the search is topmost-first and a window owns everything
+genuinely inside it, a lower window's band can never punch up through a
+window in front. Both directions are asserted in
+`resize_edges_test.py`, along with the band ENDING: a moat of
+unclickable desktop around every window is the failure mode.

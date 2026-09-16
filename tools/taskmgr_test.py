@@ -277,7 +277,13 @@ def main():
     # against 300, so "it changed" is not the assertion -- "it grew by
     # roughly what the window grew by" is.
     before = lay["table"]
-    grip = (win["x"] + win["w"] - 3, win["y"] + win["h"] - 3)
+    # GRABBED OUTSIDE THE FRAME. The resize border is mostly an
+    # invisible band beyond the window (RESIZE_OUTSIDE) with only a
+    # couple of rows on the frame itself, so an offset measured INWARD
+    # is a constant this file has to keep true -- and it stopped being
+    # true the day the inside shrank, failing here as "the table did not
+    # widen" rather than as a missed grab.
+    grip = (win["x"] + win["w"] - 1 + 4, win["y"] + win["h"] - 1 + 4)
     grow_x, grow_y = 150, 260
     dbg.send("gui drag %d %d %d %d" % (grip[0], grip[1],
                                         grip[0] + grow_x, grip[1] + grow_y))
