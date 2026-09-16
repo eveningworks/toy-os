@@ -820,6 +820,13 @@ static void confirm_discard(struct uapp *a, int pending) {
     uui_menubar_close(&g_ctx);
     uui_dialog_set_bounds(&g_ask, 0, 0, uapp_width(a), uapp_height(a));
     uui_dialog_open(&g_ask, "Unsaved changes", g_ask_rows, 1, btns, 3, 0, ASK_CANCEL);
+    // **HERE AS WELL AS IN on_motion, because opening this moves no
+    // pointer.** Alt+F4 opens it from the keyboard, and the X button is
+    // clicked with the pointer over the WM's title bar rather than over
+    // the document -- in both cases no motion event follows, so a gate
+    // that only runs on motion would leave the caret sitting there
+    // until the user happened to move the mouse.
+    uapp_set_cursor(a, WIN_CURSOR_DEFAULT);
     uapp_redraw(a);
 }
 
@@ -1254,11 +1261,19 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
 
     // The I-beam over the document and nothing else. Set on EVERY
     // motion, including back to the arrow -- it is a state (ui/uapp.h).
-    // With the dialog up the widget tree's answer stands (its field
+    // With the chooser up the widget tree's answer stands (its field
     // names the I-beam itself), so this says nothing then.
+    //
+    // **AND NOTHING NAMES THE I-BEAM UNDER THE UNSAVED-CHANGES MODAL.**
+    // A dialog that cannot be clicked past must not leave the caret of
+    // the text area it is covering -- and the toolkit does NOT do this
+    // for us: uui_router_cursor() walks straight through an overlay to
+    // whatever is behind it. The toolkit fix for that is withdrawn
+    // (docs/bugs.md), so this is per-app until it comes back.
     if (!uui_filedialog_is_open(&g_fd)) {
         int over_text = x >= tx && x < tx + tw && y >= ty && y < ty + th &&
-                        !uui_menubar_is_open(&g_menu);
+                        !uui_menubar_is_open(&g_menu) &&
+                        !uui_dialog_is_open(&g_ask);
         uapp_set_cursor(a, over_text ? WIN_CURSOR_TEXT : WIN_CURSOR_DEFAULT);
     }
 

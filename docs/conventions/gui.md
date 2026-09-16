@@ -3537,12 +3537,16 @@ Four things to know:
 - **AN ACTIVE OVERLAY DOES NOT YET OWN THE CURSOR, and an app that
   names its own must test for a modal itself.** `uui_router_cursor()`
   falls THROUGH an overlay to the widgets behind it, so the I-beam of a
-  text area nobody can click shows over a modal. Notepad works around it
-  per-app. The toolkit fix -- stop the walk at an overlay, and resolve
-  the app's request per frame -- was written, verified in QEMU, and
-  WITHDRAWN when it crash-looped `toywm` on bare metal with no mechanism
-  established (`docs/bugs.md`, `docs/decisions/gui.md`). Read both
-  before attempting it again.
+  text area nobody can click shows over a modal. **So an app that names
+  its own cursor must gate it on `uui_dialog_is_open()` itself**, in
+  `on_motion` AND where it opens the dialog -- Alt+F4 and the X move no
+  pointer, so a motion-only gate leaves the caret until the mouse
+  happens to move. Notepad is the worked example. The toolkit fix --
+  stop the walk at an overlay, and resolve the app's request per frame
+  -- was written, verified in QEMU, and WITHDRAWN when it crash-looped
+  `toywm` on bare metal with no mechanism established (`docs/bugs.md`,
+  `docs/decisions/gui.md`, and the roadmap item). Read those before
+  attempting it again, and delete the per-app gates when it lands.
 - **`uui_dialog_take_code()` RETURNS -1 ON EVERY PRESS**, because
   `on_widget` runs for the press as well as the release and the dialog
   parks its code only on the release. A `switch` whose `default` acts --

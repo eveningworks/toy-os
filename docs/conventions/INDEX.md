@@ -575,8 +575,8 @@ whenever a headline here tells you something you did not already know.
 - **A SELECTION CHANGE MUST DAMAGE THE RECTS IT CHANGED, NOT JUST SET
   `redraw_pending`**
 - **AN ACTIVE OVERLAY DOES NOT YET OWN THE CURSOR** -- the walk falls
-  through to what is behind a modal; the toolkit fix was withdrawn after
-  it crash-looped toywm on bare metal (`gui.md`)
+  through to what is behind a modal, so an app naming its own cursor
+  gates it on `uui_dialog_is_open()` itself (`gui.md`)
 - **`uui_dialog_take_code()` RETURNS -1 ON EVERY PRESS** -- `on_widget`
   runs for the press too, and a `switch` whose `default` acts does it
   half an event early (`gui.md`)

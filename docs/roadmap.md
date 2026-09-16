@@ -540,6 +540,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Force-close an unresponsive client~~ done
 - [x] ~~Client-side window resize~~ done
 - [x] ~~Empty ring 0 of applications first~~ done
+- [ ] An active overlay owns the CURSOR in the toolkit, so Notepad's per-app I-beam gate can go -- first attempt crash-looped toywm
 - [ ] Restore the About window's storage line -- `QUERY_FSINFO` reports it since 2026-08-20; the window has to widen for it
 - [ ] Kernel command-line switches for the protections, not just `nokaslr`
 - [x] ~~A Live-CD boot: run from the ISO with no disk~~ done

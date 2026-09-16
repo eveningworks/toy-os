@@ -6279,3 +6279,56 @@ Once it exists, the decoder side is the ordinary PNG chunk walk plus the
 five unfilters, all of which `tools/uimg_codec_hostcheck.py` already
 implements in Python as its second oracle -- so the reference to check
 against is written.
+
+## An active overlay owns the CURSOR in the toolkit, so Notepad's per-app I-beam gate can go
+
+The symptom: with Notepad's *Unsaved changes* modal up, the pointer over
+the document behind it is still the text caret. A dialog that cannot be
+clicked past must not leave the I-beam of the thing it is covering.
+
+**IT BELONGS IN THE TOOLKIT, NOT IN THE COMPOSITOR, and the reason is
+where a modal lives.** `uui_dialog` is drawn INSIDE the app's own window
+-- a TWP client draws into its own buffer and nothing else, so there is
+no such thing as a dialog window the compositor could see. The WM
+therefore cannot know a client has a modal up; all it gets is a
+`WIN_REQ_CURSOR` naming a shape. Only the client's own widget tree knows,
+which is why this is `uui_route.c` and `uapp.c` and not `userland/wm/`.
+X11 gets this for free because a cursor is a per-WINDOW attribute and a
+modal is a window; Wayland pushes it to the client for the same reason
+toy-os has to.
+
+Three axes make a modal modal, and only two are wired: the CLICK (the
+scrim answers `hit`, fixed 2026-09-14) and the KEY (`dlg_key` returns 1
+for everything). The CURSOR is the third. `uui_router_cursor()` walks
+straight through an active overlay to the widgets behind it, so a text
+field nobody can reach still answers the I-beam.
+
+The shape of the fix, from the attempt that was withdrawn (see
+`docs/decisions/gui.md`, kept and marked WITHDRAWN): stop the cursor
+walk at an active overlay rather than falling through, and have `uapp`
+keep what the app ASKED for separate from what the compositor was TOLD,
+re-resolving the two every frame. **Per frame rather than per motion**
+is load-bearing -- an app may name its cursor once and never again, and
+a modal opening moves no pointer. `WIN_CURSOR_WAIT` must stay exempt: it
+is an override rather than a property of what the pointer is over, so an
+app that goes busy behind its own dialog can still say so.
+
+**THAT ATTEMPT CRASH-LOOPED `toywm` ON THE BARE-METAL LAPTOP** and is
+the entry in `docs/bugs.md` -- read it first. It never misbehaved in
+QEMU across seven GUI suites, and the open question is whether the
+change caused the fault at all or merely perturbed a pre-existing
+overflow in `render_scene` into firing.
+
+Until it lands, Notepad gates its own I-beam on `uui_dialog_is_open()`
+in `on_motion`, plus a `uapp_set_cursor()` where the dialog opens
+(Alt+F4 and the X move no pointer, so a motion-only gate would leave the
+caret until the mouse happened to move). **DELETE THAT WORKAROUND when
+this lands** -- a per-app gate that outlives the general fix is how the
+next app to draw its own region gets it wrong again. The Terminal is NOT
+a second caller waiting on this: its I-beam is already gone before any
+modal appears, which is its own entry in `docs/bugs.md`.
+
+`tools/notepad_client_test.py` asserts the BEHAVIOUR rather than the
+mechanism -- the arrow over the modal, the I-beam back after Cancel --
+so those two checks go green either way and are what should be run
+against the next attempt.
