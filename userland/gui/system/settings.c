@@ -1815,6 +1815,18 @@ static void on_open(struct uapp *a) {
 }
 
 static void on_size(int *w, int *h) {
+    // **ONE CELL'S MARGIN, SHARED BETWEEN THE WINDOW EDGE AND THE PAGE.**
+    // The page is in a scroll view, and a scroll view's content used to
+    // pay the full default margin on top of the window's own -- two
+    // whole character cells before the first control. Spending none
+    // inside instead put the page flush against the view's edge. Half
+    // each: closer to the frame, still not touching the panel. The same
+    // split as Task Manager's, for the same reason.
+    // Font-derived and re-run on every resize, so it reflows with
+    // `fontsize` (docs/gui-guidelines.md).
+    LAYOUT.margin      = ugfx_char_w() / 2;
+    PAGE_LAYOUT.margin = ugfx_char_w() - ugfx_char_w() / 2;
+
     // THE REGISTRY IS READ HERE, not in on_open. on_size is the first
     // hook with a font, and it runs BEFORE the layout, which sizes each
     // widget from its natural_size -- so loading in on_open would lay

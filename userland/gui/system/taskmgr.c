@@ -777,6 +777,23 @@ static void on_size(int *w, int *h) {
     // callback is the first hook that runs with the font available, and
     // it runs before the layout, which is what the group's natural size
     // is read from.
+    // **THE WINDOW'S MARGIN IS SPLIT, NOT SPENT TWICE AND NOT SKIPPED.**
+    // A page inside a scroll view used to pay the full margin at the
+    // window edge AND again inside the view (a whole character cell
+    // each), which read as wasted space; removing the inner one put the
+    // tiles flush against the view's edge, which reads as no margin at
+    // all. So one cell's worth is SHARED between the two bands -- the
+    // page sits closer to the frame and still does not touch the panel.
+    // Font-derived, like everything else here (docs/gui-guidelines.md).
+    LAYOUT.margin      = ugfx_char_w() / 2;
+    OV_LAYOUT.margin   = ugfx_char_w() - ugfx_char_w() / 2;
+    PERF_LAYOUT.margin = OV_LAYOUT.margin;
+    // The Processes tab is not in a scroll view, so it is a direct child
+    // of LAYOUT and gets no inner band of its own -- it names the same
+    // one, or its table would sit a half-cell closer to the frame than
+    // the other two tabs' content and the tab strip would look crooked.
+    PROC_LAYOUT.margin = OV_LAYOUT.margin;
+
     int bw = ugfx_char_w() * 13, bh = ugfx_char_h() + 12;
     g_buttons[BTN_END].x = 0;
     g_buttons[BTN_END].y = 0;
