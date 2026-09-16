@@ -765,6 +765,16 @@ everything to zero would have passed the clearing half alone.
   answer (glibc's `M_MMAP_THRESHOLD`) and a real change to
   `heap_core.c`. Fine for everything here, a surprise to ported code
   that allocates in phases; the header says so.
+- **`setvbuf()` only sets the MODE.** It ignores `size` and REFUSES a
+  caller-supplied buffer, so a program cannot resize a stream's buffer
+  at all -- `stdio_test` asserts the refusal, so it is deliberate rather
+  than an oversight, but it is a real gap against this library's own
+  completeness bar. It is also what stopped `/tests/stdio_bench`
+  measuring through stdio: it has to batch into its own buffer and call
+  `sys_write()`, because a stdio sweep would have measured one size six
+  times. Honouring a caller's buffer needs `F_OWNBUF` to become
+  three-valued (static, malloc'd, borrowed) so `fclose` knows whether to
+  free it.
 - ~~**Whether `libc` and `libuapp` stay separate archives.**~~ DECIDED:
   SEPARATE. A `/bin` program links `libc`; a GUI app links `libc` plus
   the Toykit. It matches the split-by-role convention the build already
@@ -810,3 +820,52 @@ selection of interesting ones, precisely because "does nothing" and "is
 not parsed" are indistinguishable from the output of the conversion
 itself -- only the argument AFTER it moves. Every case for a conversion
 that could be missing therefore pins a following `%d` as well.
+
+## BUFSIZ, measured (2026-09-16)
+
+`BUFSIZ` is 4096. It was 1024, chosen when `SYS_WRITE_MAX` was also
+1024 -- so a larger buffer could only have produced more short writes,
+and the constant was a constraint rather than a choice. `SYS_WRITE_MAX`
+is 262144 now and that reasoning is gone, which is what prompted
+measuring it.
+
+`/tests/stdio_bench` sweeps the buffer size over 64-byte writes. On
+ramfs, where there is no device and the figure is per-syscall overhead
+alone -- the ceiling on what this constant can buy:
+
+| bufsz | syscalls/pass | KB/s | vs 1024 |
+|---:|---:|---:|---:|
+| 512 | 2048 | 42,666 | -50% |
+| 1024 | 1024 | 85,333 | -- |
+| 4096 | 256 | 89,043 | +4.3% |
+| 16384 | 64 | 89,043 | +4.3% |
+| 65536 | 16 | 89,043 | +4.3% |
+| 262144 | 4 | 97,523 | +14% |
+
+**The large win was 512 -> 1024 and the old value already had it.**
+Above 1024 the curve is flat from 4096 up. 4096 was chosen because it
+is where it flattens AND because it equals `T3_BLOCK` and the page
+size, so a full buffer is exactly one filesystem block; the sizes above
+it cost `.bss` in every process for nothing measurable.
+
+Three honest limits on the numbers. It is a SINGLE sample against a
+100 Hz clock, so the 4096 -> 262144 step is four ticks out of 46 and
+not a solid 14%. The disk half of the run came out too quantised to
+use -- non-monotonic, with 4096 measuring slower than 1024 -- so
+nothing is claimed from it. And CPU time came out at exactly half of
+wall in every row, which is too clean to be a real figure.
+
+**What real systems do, and why toy-os does not.** glibc's `BUFSIZ` is
+8192 and musl's and FreeBSD's are 1024 -- but glibc and FreeBSD both
+ignore it in practice and size the real buffer from `st_blksize`, the
+filesystem's preferred block, keeping the constant as a fallback. That
+is the better design and it is not available here: `struct sys_stat`
+has no `blksize` field, so it would be an ABI change. Worth doing if a
+backend ever wants a block size other than 4096; until then the
+constant and `T3_BLOCK` agree and the fallback IS the answer.
+
+**Fixtures in `stdio_test.c` are sized from `BUFSIZ`, not from
+literals.** Three of them meant "larger than the buffer" and said 1280,
+3000 and 2048 -- all written against the old 1024, and all of which
+would have silently stopped crossing a boundary at 4096. A test whose
+point is a boundary has to derive its size from the thing that moves.

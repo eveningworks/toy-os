@@ -354,6 +354,19 @@ TESTS = [
 # adding one of these without solving the reason would produce a red
 # table that says nothing about the code under test.
 EXCLUDED = [
+    # The two BENCHMARKS. Both are real programs under /tests and both
+    # report a timing number, which would make this gate flap for
+    # reasons that have nothing to do with the code under test. They are
+    # listed here rather than left unnamed because a program no runner
+    # names is run when somebody types it, which is never -- cjson_bench
+    # sat outside every runner until stdio_bench was added beside it.
+    ("cjson_bench",      "a benchmark, not a test: a timing number would make the "
+                          "gate flap. Run it with `spawn /tests/cjson_bench`"),
+    ("stdio_bench",      "a benchmark, not a test: it measures what BUFSIZ should be "
+                          "and reports throughput, which varies with the host. Run it "
+                          "with `spawn /tests/stdio_bench` and read its log with "
+                          "`cat /var/tmp/stdio_bench.log` -- it outlives a console "
+                          "capture, which is why it writes one"),
     ("crash_test",       "faults on purpose; the point is the kernel's recovery"),
     ("nx_test",          "faults on purpose (jumps into a data page) -- see faulttest_run.py"),
     ("stack_smash_test", "faults on purpose (trips the stack canary)"),

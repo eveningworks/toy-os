@@ -51,12 +51,17 @@ extern FILE *const stderr;
 
 #define EOF (-1)
 
-// One flush is one write syscall. This was sized when SYS_WRITE_MAX was
-// also 1024, so a bigger buffer could only have meant more short writes
-// to loop over; the cap is far larger now (abi/syscall_abi.h), which
-// makes this a plain memory-versus-syscalls choice rather than a
-// constraint. Raising it is a measurement nobody has taken.
-#define BUFSIZ 1024
+// One flush is one write syscall, so this trades memory for syscalls:
+// 2 x BUFSIZ sits in every process's .bss for stdin and stdout, and
+// fopen() takes another from malloc. 4096 is where the measured curve
+// flattens (/tests/stdio_bench) and is also T3_BLOCK and the page size,
+// so a full buffer is exactly one block. Bigger measured no faster.
+//
+// **FIXTURES IN stdio_test.c ARE SIZED FROM THIS.** A test that means
+// "larger than the buffer" must say so in terms of BUFSIZ -- three were
+// written as literals against the old 1024 and silently stopped
+// crossing a boundary when it moved.
+#define BUFSIZ 4096
 
 // Streams a program may have open at once, over and above the three
 // standard ones. Bounded by the kernel's own FD_MAX (16 descriptors per

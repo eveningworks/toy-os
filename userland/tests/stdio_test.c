@@ -103,9 +103,10 @@ int main(void) {
     utest_check(strncmp(rb + 5, "000-001-002-", 12) == 0, "in order and correctly formatted");
     utest_check(fclose(f) == 0, "fclose succeeds");
 
-    // A single printf longer than KFMT_LINE_MAX (256) AND than BUFSIZ
-    // (1024): the sink form has no line limit, the scratch-buffer shape
-    // it replaced would have stopped at 256.
+    // A single printf past KFMT_LINE_MAX (256): the sink form has no
+    // line limit, the scratch-buffer shape it replaced stopped at 256.
+    // Crossing a BUFSIZ boundary is the ftell fixture's job below, which
+    // derives its size rather than naming one.
     f = fopen(BIG, "w");
     utest_check(f != 0, "reopened for the long line");
     const char *s64 = "0123456789abcdef0123456789abcdef"
@@ -167,36 +168,47 @@ int main(void) {
 
     // --- position, across a buffer boundary --------------------------
     //
-    // 3000 bytes: more than BUFSIZ (1024), so the stream refills twice
-    // and ftell has to account for what is still sitting unread.
+    // SIZED FROM BUFSIZ, not written as a literal: the point is that the
+    // stream refills several times, and at a fixed 3000 that quietly
+    // stopped being true the moment BUFSIZ passed it.
+    const int fix_n = 3 * BUFSIZ;
+    const int mid   = fix_n / 2;      // past at least one refill
     sys_unlink(BIG);
     f = fopen(BIG, "w");
-    for (int i = 0; i < 3000; i++) fputc('A' + (i % 26), f);
-    utest_check(fclose(f) == 0, "wrote a 3000-byte fixture");
+    for (int i = 0; i < fix_n; i++) fputc('A' + (i % 26), f);
+    utest_check(fclose(f) == 0, "wrote a 3*BUFSIZ fixture");
 
     f = fopen(BIG, "r");
     utest_check(ftell(f) == 0, "a fresh read stream is at 0");
-    for (int i = 0; i < 1500; i++) fgetc(f);
-    // If ftell reported the fd's position it would say 2048 here.
-    utest_check(ftell(f) == 1500, "ftell is the LOGICAL position, not the fd's");
-    utest_check(fgetc(f) == 'A' + (1500 % 26), "and the next byte is the right one");
+    for (int i = 0; i < mid; i++) fgetc(f);
+    // If ftell reported the fd's position it would say a whole number of
+    // buffers here, never mid.
+    utest_check(ftell(f) == mid, "ftell is the LOGICAL position, not the fd's");
+    utest_check(fgetc(f) == 'A' + (mid % 26), "and the next byte is the right one");
 
-    utest_check(fseek(f, 2000, SEEK_SET) == 0, "fseek SEEK_SET");
-    utest_check(ftell(f) == 2000, "reports the new position");
-    utest_check(fgetc(f) == 'A' + (2000 % 26), "and reads byte 2000");
-    utest_check(fseek(f, 99, SEEK_CUR) == 0 && ftell(f) == 2100,
+    // p2 is p1 + 100, not + 99: the fgetc below the SEEK_SET consumes a
+    // byte, so SEEK_CUR starts from p1 + 1.
+    const int p1 = 2 * BUFSIZ, p2 = p1 + 100;
+    utest_check(fseek(f, p1, SEEK_SET) == 0, "fseek SEEK_SET");
+    utest_check(ftell(f) == p1, "reports the new position");
+    utest_check(fgetc(f) == 'A' + (p1 % 26), "and reads that byte");
+    utest_check(fseek(f, 99, SEEK_CUR) == 0 && ftell(f) == p2,
           "SEEK_CUR is relative to the LOGICAL position");
-    utest_check(fgetc(f) == 'A' + (2100 % 26), "and reads byte 2100");
-    utest_check(fseek(f, -1, SEEK_END) == 0 && fgetc(f) == 'A' + (2999 % 26),
+    utest_check(fgetc(f) == 'A' + (p2 % 26), "and reads 99 further on");
+    utest_check(fseek(f, -1, SEEK_END) == 0 && fgetc(f) == 'A' + ((fix_n - 1) % 26),
           "SEEK_END reaches the last byte");
     rewind(f);
     utest_check(ftell(f) == 0 && fgetc(f) == 'A', "rewind goes back to the start");
 
-    // fread's direct path: a block larger than the buffer.
+    // fread's direct path: a block larger than the buffer, which is what
+    // sends it straight out instead of through f->buf -- so it is sized
+    // from BUFSIZ too. Static, not on the stack: ring-3 frames are
+    // budgeted at 2048 bytes.
     rewind(f);
-    static char big[2048];
-    utest_check(fread(big, 1, sizeof big, f) == sizeof big, "fread of 2048 bytes");
-    utest_check(big[0] == 'A' && big[2047] == 'A' + (2047 % 26), "with the right contents");
+    static char big[2 * BUFSIZ];
+    utest_check(fread(big, 1, sizeof big, f) == sizeof big, "fread past the buffer");
+    utest_check(big[0] == 'A' && big[sizeof big - 1] == 'A' + ((sizeof big - 1) % 26),
+          "with the right contents");
     fclose(f);
 
     // --- sprintf and sscanf ------------------------------------------
