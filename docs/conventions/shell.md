@@ -3,13 +3,14 @@
 The line editor, the console and its ownership, ANSI colour, and the
 text-boot path.
 
-These are the conventions CLAUDE.md indexes by headline but does not
-carry in full -- it is the always-loaded context, so it holds the rule
-and this file holds the reasoning and the trap. **The headline of every
-entry here also appears in CLAUDE.md**, so a session sees the warning
-without loading the body; come here when you are actually working in
-this area, or when a headline there tells you something you did not
-know.
+These are the conventions indexed by headline in
+`docs/conventions/INDEX.md` but not carried in full there -- the index
+holds the rule and this file holds the reasoning and the trap. **The
+headline of every entry here also appears in that index**, so a session
+can see the warning without loading the body; come here when you are
+actually working in this area, or when a headline there tells you
+something you did not know. CLAUDE.md itself carries only the
+conventions that fire UNANNOUNCED.
 
 Same bar as `docs/decisions.md`: an entry earns its length from the
 INVARIANT (what must stay true) and the TRAP (what breaks if you edit

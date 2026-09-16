@@ -5,13 +5,14 @@ cursor. `docs/gui-guidelines.md` is the separate, binding spec for how
 anything drawn should LOOK and BEHAVE; this file is how the machinery
 works and what breaks if you edit it the obvious way.
 
-These are the conventions CLAUDE.md indexes by headline but does not
-carry in full -- it is the always-loaded context, so it holds the rule
-and this file holds the reasoning and the trap. **The headline of every
-entry here also appears in CLAUDE.md**, so a session sees the warning
-without loading the body; come here when you are actually working in
-this area, or when a headline there tells you something you did not
-know.
+These are the conventions indexed by headline in
+`docs/conventions/INDEX.md` but not carried in full there -- the index
+holds the rule and this file holds the reasoning and the trap. **The
+headline of every entry here also appears in that index**, so a session
+can see the warning without loading the body; come here when you are
+actually working in this area, or when a headline there tells you
+something you did not know. CLAUDE.md itself carries only the
+conventions that fire UNANNOUNCED.
 
 Same bar as `docs/decisions.md`: an entry earns its length from the
 INVARIANT (what must stay true) and the TRAP (what breaks if you edit
@@ -1252,7 +1253,8 @@ this the obvious way), not from how much history it accumulated.
   that blocks through a long job reads `(Not Responding)` for the
   duration. **Slicing it across `on_tick` is NOT enough** -- a slice can
   only be bounded between UNITS, and one unit here was a 1 MiB transfer,
-  which is 1024 syscalls because `SYS_WRITE_MAX` is 1 KiB. Disk Mark
+  which was 1024 syscalls against the 1 KiB `SYS_WRITE_MAX` of the time.
+  Disk Mark
   shipped with a 120 ms slice budget that never got to run. Spawn a
   `/bin` program and poll it (the File Manager's `/bin/cp` pattern);
   the work is then also reachable from a shell, which is a different and

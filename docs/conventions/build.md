@@ -3,13 +3,14 @@
 The Makefile, how `userland/` is laid out and linked, the driver
 registries, versioning and CI.
 
-These are the conventions CLAUDE.md indexes by headline but does not
-carry in full -- it is the always-loaded context, so it holds the rule
-and this file holds the reasoning and the trap. **The headline of every
-entry here also appears in CLAUDE.md**, so a session sees the warning
-without loading the body; come here when you are actually working in
-this area, or when a headline there tells you something you did not
-know.
+These are the conventions indexed by headline in
+`docs/conventions/INDEX.md` but not carried in full there -- the index
+holds the rule and this file holds the reasoning and the trap. **The
+headline of every entry here also appears in that index**, so a session
+can see the warning without loading the body; come here when you are
+actually working in this area, or when a headline there tells you
+something you did not know. CLAUDE.md itself carries only the
+conventions that fire UNANNOUNCED.
 
 Same bar as `docs/decisions.md`: an entry earns its length from the
 INVARIANT (what must stay true) and the TRAP (what breaks if you edit
@@ -145,15 +146,16 @@ this the obvious way), not from how much history it accumulated.
   **`tcsetattr()` masks `c_lflag`** to the three bits the line
   discipline implements, so `<termios.h>`'s inert names never reach a
   flag space a future `TTY_*` bit will want.
-- **`SYS_WRITE_MAX` IS A THROUGHPUT CONSTANT, NOT JUST A BUFFER SIZE,
-  AND IT IS 64 KiB.** Every `fs_write*()` call is one complete TFS3
+- **`SYS_WRITE_MAX` IS A THROUGHPUT CONSTANT, NOT JUST A BUFFER SIZE.**
+  Its value is in `kernel/include/abi/syscall_abi.h`, which is the only
+  place worth reading it from -- it has been raised twice. Every `fs_write*()` call is one complete TFS3
   transaction and `txn_commit()` ends with TWO barriers, while
   `do_write()` commits once for the whole range however large -- so the
   cap decides how many device flushes a megabyte of ring-3 writing
-  costs. At 1 KiB that was 2048 per MiB against the 2 the ring-0
-  `stress` command pays, which is why a ring-3 write measured ~30x
-  slower than the same bytes from the kernel shell. Raising it to 64 KiB
-  measured 3.4 -> 114.3 MB/s sequential write. **The remaining gap is
+  costs. At its original 1 KiB that was 2048 per MiB against the 2 the
+  ring-0 `stress` command pays, which is why a ring-3 write measured
+  ~30x slower than the same bytes from the kernel shell. The first raise
+  (to 64 KiB) measured 3.4 -> 114.3 MB/s sequential write. **The remaining gap is
   architectural**: Linux does not flush on write at all (page cache,
   writeback on a timer, journal commit every ~5 s), so toy-os is making
   a stronger promise and paying for it. **And raising it nearly
@@ -163,12 +165,11 @@ this the obvious way), not from how much history it accumulated.
   constant three files away was load-bearing for an invariant nothing
   checked.
 - **`sys_write()` COMPLETES THE WHOLE BUFFER, because the kernel caps one
-  write at `SYS_WRITE_MAX` (1024) and a short write loses data
-  SILENTLY.** The cap is an artefact of the bounce buffer the kernel
+  write at `SYS_WRITE_MAX` and a short write loses data SILENTLY.** The cap is an artefact of the bounce buffer the kernel
   copies through, not a promise -- but libsys returned the short count
   and left the remainder unwritten, so every caller that ignored the
   count (which is most of them: a write to a terminal "cannot fail")
-  truncated its output at 1 KB. `/bin/less` is how it surfaced: a
+  truncated its output at the cap, 1 KB at the time. `/bin/less` is how it surfaced: a
   screenful of ~1.5 KB came out as seventeen lines cut mid-word, with
   the status line -- which sits at the END of the frame it builds --
   never written at all. It looked like a pager bug for two rounds of

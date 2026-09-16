@@ -3,13 +3,14 @@
 The syscall table, the memory model, the scheduler and process tree,
 init and services, panics.
 
-These are the conventions CLAUDE.md indexes by headline but does not
-carry in full -- it is the always-loaded context, so it holds the rule
-and this file holds the reasoning and the trap. **The headline of every
-entry here also appears in CLAUDE.md**, so a session sees the warning
-without loading the body; come here when you are actually working in
-this area, or when a headline there tells you something you did not
-know.
+These are the conventions indexed by headline in
+`docs/conventions/INDEX.md` but not carried in full there -- the index
+holds the rule and this file holds the reasoning and the trap. **The
+headline of every entry here also appears in that index**, so a session
+can see the warning without loading the body; come here when you are
+actually working in this area, or when a headline there tells you
+something you did not know. CLAUDE.md itself carries only the
+conventions that fire UNANNOUNCED.
 
 Same bar as `docs/decisions.md`: an entry earns its length from the
 INVARIANT (what must stay true) and the TRAP (what breaks if you edit
@@ -223,9 +224,12 @@ this the obvious way), not from how much history it accumulated.
   when the buffer is full: taking what fitted and reporting a short
   count is something nothing in ring 3 loops on, so a producer faster
   than its reader silently lost the remainder. Atomicity is affordable
-  because `SYS_WRITE_MAX` (1024) is well under `PIPE_BUF_SIZE` (4096),
+  because `sys_do_write_pipe()` CLAMPS a pipe write to `PIPE_BUF_SIZE`,
   so a write always fits once drained -- POSIX's `PIPE_BUF` guarantee,
-  for the same reason. Three traps ride with it. **Check-and-park must
+  for the same reason. **That clamp used to be free and is not any
+  more**: it held with nothing enforcing it while `SYS_WRITE_MAX` was
+  1024, and raising the cap would have parked writers on requests the
+  pipe could never satisfy. `api/pipe.h` carries the full note. Three traps ride with it. **Check-and-park must
   be atomic** (`scheduler_preempt_disable()` around both pipe paths): a
   wake that fires between "it is full" and "park" is LOST, which was a
   delay when only readers slept and is a DEADLOCK now both ends can.

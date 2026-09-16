@@ -104,11 +104,13 @@ int64_t pipe_write(int idx, const char *src, uint32_t len) {
     // unavoidable rather than unlucky, since the reader is another
     // process that may not have been scheduled yet.
     //
-    // Atomicity is affordable because a single write is capped at
-    // SYS_WRITE_MAX (1024) and the buffer is PIPE_BUF_SIZE (4096), so
-    // any one write fits once the pipe drains and this cannot deadlock
-    // on a request too big to ever satisfy. POSIX guarantees exactly
-    // this for writes up to PIPE_BUF, and for the same reason.
+    // Atomicity is affordable because sys_do_write_pipe() CLAMPS a pipe
+    // write to PIPE_BUF_SIZE, so any one write fits once the pipe drains
+    // and this cannot deadlock on a request too big to ever satisfy.
+    // POSIX guarantees exactly this for writes up to PIPE_BUF, and for
+    // the same reason. The clamp used to be free -- SYS_WRITE_MAX was
+    // under PIPE_BUF_SIZE -- and stopped being when the cap was raised;
+    // see api/pipe.h.
     if (len > (uint32_t)(PIPE_BUF_SIZE - p->count)) return -1; // would block
 
     int64_t written = 0;
