@@ -2207,6 +2207,17 @@ real scanout hardware does. Do not write a pixel assertion for one.
   app that keeps one view for its lifetime never needs to call it; one
   that creates and drops views does, and nothing will tell it so.
 
+- **A WIDGET BORROWS ITS TEXT, SO THERE IS NO SET-CALL PER UPDATE.**
+  `uui_label` and `uui_statusbar` hold a `const char *` into the app's
+  own buffer and never copy it, so once `uui_label_init()` or a pane's
+  `.text` points at `g_status`, rewriting that buffer IS the update --
+  `snprintf(g_status, sizeof g_status, ...)` and nothing else. Calling
+  `uui_label_set_text()` again afterwards re-assigns the same pointer
+  and does nothing. The trap is the inverse, and it is silent: a buffer that
+  goes out of scope, or one reused for a second widget, leaves the
+  widget reading freed or wrong memory with no call to blame it on.
+  Same rule as `uui_image`'s `struct uimg` and `uui_dialog`'s rows.
+
 - **A MARKDOWN DOCUMENT IS A WIDGET, AND IT DOES NOT PARSE ANYTHING.**
   `uui_markdown` draws; `lib/umd.h` decides what Markdown MEANS --
   `umd_classify()` for blocks and `umd_inline_walk()` for `code`,

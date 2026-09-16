@@ -182,9 +182,6 @@ static struct uui_item g_widgets[] = {
 
 // --- loading ----------------------------------------------------------
 
-static int menubar_h(void) { return uui_menubar_height(&g_menu); }
-static int statusbar_h(void) { return uui_statusbar_height(&g_status); }
-
 // The sidebar's filter: keep only the files a codec claims. THE PROBE
 // DECIDES, not the extension -- uimg_probe() reads the magic bytes, so a
 // JPEG saved as .dat is listed and a text file called photo.jpg is not.
@@ -465,7 +462,7 @@ static void set_wallpaper(struct uapp *a, const char *mode) {
 // --- layout and drawing ------------------------------------------------
 
 static void layout_all(int cw, int ch) {
-    int mb = menubar_h(), sb = statusbar_h();
+    int mb = uui_menubar_height(&g_menu), sb = uui_statusbar_height(&g_status);
     // A filename list's worth of pitch, in a REPRESENTATIVE glyph:
     // char_w is the widest advance, which made this sidebar ~1.7x the
     // width the names in it need.

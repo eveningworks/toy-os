@@ -368,6 +368,7 @@ whenever a headline here tells you something you did not already know.
 - **A WIDGET ARRAY IS DECLARED TWICE: `uapp_desc.layout` SIZES AND
   DRAWS, `uapp_desc.widgets` GETS INPUT**
 - **`uui_label` WRAPS ONLY IF ASKED, AND THE CALLER RESERVES THE ROWS.**
+- **A WIDGET BORROWS ITS TEXT, SO THERE IS NO SET-CALL PER UPDATE.**
 - **`uui_sidebar` IS THE NAVIGATION WIDGET; `uui_tree` MODELS
   CONTAINMENT.**
 - **A SETTING DECLARES ITS CATEGORY, and the sidebar is generated from

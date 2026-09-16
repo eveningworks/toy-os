@@ -39,6 +39,7 @@
 #include "ui/uui_focus.h"
 #include "lib/uclip.h"
 #include "lib/ushot.h"
+#include "kpath.h"   // k_path_basename -- the kernel's, linked into ring 3
 #include "rubberband.h"
 
 #define SHOT_DIR "/home/screenshots"
@@ -127,7 +128,9 @@ static void status(const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(g_status, sizeof g_status, fmt, ap);
     va_end(ap);
-    uui_label_set_text(&g_status_label, g_status);
+    // No set_text: uui_label BORROWS its string (ui/uui_label.h), so the
+    // one at init points here for good and rewriting the buffer is the
+    // whole update.
 }
 
 // FILE-SCOPE, NOT A LOCAL: uui_image BORROWS the struct it is given and
@@ -305,12 +308,15 @@ static void on_widget(struct uapp *a, int id, int reason) {
     case ID_SAVE: {
         if (!g_shot_ok) { status("Take a screenshot first."); uapp_redraw(a); break; }
         if (uui_filedialog_is_open(&g_chooser)) break;
-        const char *name = g_last_path[0] ? strrchr(g_last_path, '/') : 0;
+        // k_path_basename() never fails and never returns NULL, so the
+        // empty answer -- no path yet, or a trailing slash -- is what
+        // selects the default name.
+        const char *name = k_path_basename(g_last_path);
         struct uui_filedialog_opts o = {
             .mode = UUI_FILEDIALOG_SAVE,
             .title = "Save Screenshot",
             .start_dir = SHOT_DIR,
-            .initial_name = name ? name + 1 : "screenshot.qoi",
+            .initial_name = name[0] ? name : "screenshot.qoi",
             .filters = FILTERS,
             .filter_count = 2,
         };
