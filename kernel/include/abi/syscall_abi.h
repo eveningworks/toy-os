@@ -298,11 +298,14 @@ struct sys_dirent {
                             // bounds how many entries a directory holds
                             // -- TFS3 has no per-directory cap -- so a
                             // caller that does not page with
-                            // SYS_LISTDIR_AT gets a SHORT directory with
-                            // nothing said. It can still DETECT the cut:
-                            // a full array means "there may be more",
-                            // which is what /bin/ls did before it
-                            // learned to page.
+                            // SYS_LISTDIR_AT gets a SHORT directory. It
+                            // can still DETECT the cut -- a full array
+                            // means "there may be more" -- which is what
+                            // /bin/ls does, printing "listing truncated
+                            // at N entries" rather than paging.
+                            // userland/lib/ufileop.c is the caller that
+                            // pages, and the one a backend-side cap used
+                            // to defeat.
                             //
                             // DO NOT LOWER IT. The number buys a caller
                             // that cannot page; `name` is 256 bytes, so
