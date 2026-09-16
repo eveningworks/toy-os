@@ -51,10 +51,14 @@ extern FILE *const stderr;
 
 #define EOF (-1)
 
-// One flush is one write syscall, so this trades memory for syscalls --
-// and the memory is REAL: .bss is eagerly committed (elf_load() zeroes
-// every page up to p_memsz), so 2 x BUFSIZ is resident in every process
-// from spawn whether it prints or not, plus one more per fopen().
+// One flush is one write syscall, so this trades memory for syscalls.
+// **WHAT IT COSTS DEPENDS ON HOW THE PROGRAM IS LINKED**, measured on
+// hardware by diffing `ps` across the change: a STATIC program (init,
+// /tests) pays 2 x BUFSIZ at spawn, because elf_load() zeroes every
+// page up to p_memsz -- init went 92 KB -> 116 KB. Everything linking
+// /lib/libc.so paid NOTHING measurable: those buffers live in the
+// library's .bss and arrive a page at a time as they are written, so a
+// process that prints one short line still touches one page.
 //
 // 16384 is measured, on HARDWARE: writing 64-byte records to a TFS3
 // disk it is 2.15x the throughput of 4096, and the sizes above it buy

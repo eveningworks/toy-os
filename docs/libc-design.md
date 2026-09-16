@@ -859,12 +859,32 @@ ramfs is nearly flat across the whole range (+40% end to end), so the
 disk is what this constant is for.
 
 **Why 16384 and not the knee.** The knee is 32768 -- past it, doubling
-the memory buys 7%. 16384 takes 2.15x for 32 KB per process because
-**that memory is resident, not reserved**: `elf_load()` allocates and
-zeroes a frame for every page up to `p_memsz`, so `.bss` is committed at
-spawn whether a program prints or not. Half the throughput-per-byte
-argument for 32768 disappears once the cost is paid by every process on
-the machine rather than by the ones doing I/O.
+the memory buys 7% -- and 16384 was chosen on a memory argument that the
+measurement then WEAKENED, which is worth recording rather than hiding.
+
+The argument was that the cost is resident rather than reserved:
+`elf_load()` allocates and zeroes a frame for every page up to
+`p_memsz`, so `.bss` is committed at spawn. That is true, and it is only
+true for a STATICALLY linked program. Diffing `ps` on the laptop across
+the change:
+
+| process | linkage | 4096 | 16384 |
+|---|---|---:|---:|
+| init | static | 92 KB | 116 KB |
+| tosh, netd, ntpd, soundd, logd, clipboardd, fontd, inetd, telnetd | dynamic | unchanged | unchanged |
+
+**Only `init` grew.** Everything linking `/lib/libc.so` -- which is
+every `/bin` program and every GUI app -- showed no change at all,
+because the buffers are in the library's `.bss` and arrive a page at a
+time as they are written. `ps` reports `vmm_user_bytes()`, a walk of the
+process's actual mappings, so this is what is mapped and not an
+estimate.
+
+So the honest position is that 32768 would probably also have been
+affordable, and 16384 is the conservative end of a range rather than a
+boundary. It is where it is because the throughput gain above it (+34%,
+then +7%) did not look worth revisiting the question for; if a future
+change makes stdio hotter, 32768 is the measured next stop.
 
 **What real systems do, and why toy-os does not.** glibc's `BUFSIZ` is
 8192 and musl's and FreeBSD's are 1024 -- but glibc and FreeBSD both
