@@ -23,6 +23,43 @@
 #define CURPOS(p)      (0x70088 + (p) * PIPE_STRIDE)
 #define TRANS_DDI_FUNC_CTL_EDP 0x6F400
 
+// --- the SPRITE (second universal) plane -------------------------------
+//
+// DERIVED, not remembered: the DSP* offsets above ARE gen8's universal
+// plane block at plane 0 (ctl 0x70180, stride +0x08, surf +0x1C,
+// surflive +0x2C), and a plane is 0x100 further on. So the sprite plane
+// is the same block at +0x100 -- which is what SPR_PLANE_OFF says, so
+// the relationship is visible rather than a second set of magic numbers
+// that could drift from the first.
+//
+// UNVERIFIED AGAINST THIS SILICON UNTIL THE READOUT RUNS, which is the
+// entire point of reading them before writing any: a wrong offset shows
+// up as an implausible value in a log line, not as a dead panel.
+#define SPR_PLANE_OFF  0x100
+#define SPRCTL(p)      (DSPCNTR(p)     + SPR_PLANE_OFF)
+#define SPRSTRIDE(p)   (DSPSTRIDE(p)   + SPR_PLANE_OFF)
+#define SPRPOS(p)      (0x7018C + (p) * PIPE_STRIDE + SPR_PLANE_OFF) // y<<16 | x
+#define SPRSIZE(p)     (0x70190 + (p) * PIPE_STRIDE + SPR_PLANE_OFF) // (h-1)<<16 | (w-1)
+#define SPRSURF(p)     (DSPSURF(p)     + SPR_PLANE_OFF)
+#define SPRSURFLIVE(p) (DSPSURFLIVE(p) + SPR_PLANE_OFF)
+
+// --- watermarks --------------------------------------------------------
+//
+// NOTHING IN THIS DRIVER PROGRAMS THESE. It does a fastboot readout and
+// reuses what the firmware left, which the firmware computed for ONE
+// plane plus a cursor. Enabling a second plane changes the bandwidth the
+// display engine has to sustain, and on gen8 a watermark that is too low
+// for the configuration is a FIFO underrun -- flicker, or a black
+// scanline band, not an error anyone is told about. i915 computes these
+// in software and rejects a configuration that does not fit; a KMS
+// client discovers the rejection through an atomic commit with
+// TEST_ONLY. There is no such gate here, so the first thing to know is
+// what the firmware actually programmed.
+#define WM_PIPE(p)     (0x45100 + (p) * 4)
+#define WM_LP(n)       (0x45108 + (n) * 4)   // LP1..LP3
+#define WM_LINETIME(p) (0x45270 + (p) * 4)
+#define WM_MISC        0x45260
+
 #define DSPCNTR_ENABLE   (1u << 31)
 #define DSPCNTR_FMT_MASK (0xFu << 26)
 #define DSPCNTR_BGRX8888 (0x6u << 26)
@@ -71,6 +108,9 @@ int  intel_aux_native_write(uint32_t addr, const uint8_t *buf, int len);
 // intel_readout.c -- what the firmware programmed, decoded and compared.
 struct display_edid;
 void intel_readout_log(const struct display_edid *edid);
+// Stage 0 of the sprite plane: the second universal plane's registers
+// and the firmware's watermarks, read and logged. Writes nothing.
+void intel_readout_planes_log(void);
 
 // intel_modeset.c -- stage 3. pipe_cycle() turns the transcoder and
 // pipe off and back on with the link and panel power untouched; 1 when

@@ -232,6 +232,10 @@ int intel_aux_read_edid(uint8_t *out, int cap) {
         // programmed and say whether it is this timing.
         struct display_edid e;
         intel_readout_log(g_edid_len == EDID_BLOCK && edid_parse(g_edid_raw, g_edid_len, &e) ? &e : 0);
+        // Stage 0 of the sprite plane: the second plane's registers and
+        // the firmware's watermarks, read and logged beside the timing
+        // for the same reason -- understood before written.
+        intel_readout_planes_log();
     }
     int n = g_edid_len < cap ? g_edid_len : cap;
     k_memcpy(out, g_edid_raw, (size_t)n);

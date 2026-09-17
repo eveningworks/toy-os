@@ -87,6 +87,38 @@ static const char *ddi_mode_name(uint32_t mode) {
     return names[mode & 7];
 }
 
+// The SECOND universal plane and the watermarks, read and logged --
+// stage 0 of the sprite plane (docs/scanout-design.md). Nothing here
+// writes, for the same reason the timing readout above does not: the
+// register map has to be shown to be understood before any of it is
+// programmed, and on this machine a wrong guess is a panel nobody can
+// see the log on.
+//
+// WHAT TO LOOK FOR IN THE OUTPUT. `SPRCTL` bit 31 is the plane's
+// enable, and it should be CLEAR -- the firmware lit one plane and a
+// cursor, so a set bit would mean the offset is wrong (or that
+// something else is using it). `SPRSURFLIVE` should read back whatever
+// `SPRSURF` holds. And the watermark registers should be NON-ZERO:
+// they are what the firmware computed for the configuration it left
+// running, and a row of zeroes means the offsets are wrong rather than
+// that the machine has no watermarks.
+void intel_readout_planes_log(void) {
+    int pipe = intel_display_pipe();
+    if (pipe < 0) return;
+
+    uint32_t sprctl = intel_rd(SPRCTL(pipe));
+    klog_printf("intel-display: sprite plane: ctl %#x (%s) stride %#x pos %#x size %#x surf %#x live %#x\n",
+                sprctl, (sprctl & DSPCNTR_ENABLE) ? "ENABLED -- unexpected" : "disabled",
+                intel_rd(SPRSTRIDE(pipe)), intel_rd(SPRPOS(pipe)), intel_rd(SPRSIZE(pipe)),
+                intel_rd(SPRSURF(pipe)), intel_rd(SPRSURFLIVE(pipe)));
+    klog_printf("intel-display: primary for comparison: ctl %#x stride %#x surf %#x live %#x\n",
+                intel_rd(DSPCNTR(pipe)), intel_rd(DSPSTRIDE(pipe)),
+                intel_rd(DSPSURF(pipe)), intel_rd(DSPSURFLIVE(pipe)));
+    klog_printf("intel-display: watermarks: pipe %#x lp1 %#x lp2 %#x lp3 %#x linetime %#x misc %#x\n",
+                intel_rd(WM_PIPE(pipe)), intel_rd(WM_LP(0)), intel_rd(WM_LP(1)),
+                intel_rd(WM_LP(2)), intel_rd(WM_LINETIME(pipe)), intel_rd(WM_MISC));
+}
+
 void intel_readout_log(const struct display_edid *edid) {
     int pipe = intel_display_pipe();
     if (pipe < 0) return;

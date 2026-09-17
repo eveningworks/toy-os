@@ -110,16 +110,133 @@ a present of it would overwrite the client's.
 
 ## Deliberately not built
 
-- **The sprite overlay plane** (Broadwell's `SPR*` registers): a
-  window's content scanned out at its screen position with the desktop
-  composed around it. Opaque only on Gen8, occlusion rules, a plane
-  bring-up sequence and watermarks -- the next stage, on the same lease
-  seam, recorded in `docs/roadmap.md`.
+- **The sprite overlay plane** is no longer "not built" so much as "not
+  built YET" -- it has a stage of its own below, and its stage 0 (the
+  read-only probe) is done.
 - **A vblank interrupt.** Flips stay mailbox writes latched at vblank;
   a client's frame rate is bounded by its own draw, not by the panel.
 - **Lease without a cursor plane.** A software cursor would need the
   compositor to draw into the lessee's buffer. `-vga std` therefore
   composes a fullscreen window; virtio-gpu and the Intel driver lease.
+
+## Stage 4 -- the sprite plane
+
+**Status: stage 0 (the read-only probe) BUILT 2026-09-17. The rest is
+designed, not built.**
+
+The same seam as the lease, one step less drastic: instead of handing a
+client the whole display, give it the SECOND universal plane and compose
+the desktop around it on the primary. Mutter, KWin and wlroots all do
+this -- they try to promote a surface onto a DRM plane every frame and
+fall back to composition when the kernel refuses.
+
+### Why it, and not the blitter
+
+The blitter was declined in 2026-09-03 because a full-screen software
+COPY is 1.6 ms. The compositor's full-screen COMPOSITE was measured on
+2026-09-17 and is **7.3 ms** (`docs/roadmap-details.md`), so the
+question reopened -- but a composite is text, icons and alpha blending
+as well as copies, and `XY_SRC_COPY_BLT` accelerates only the last. A
+plane does not make the copy faster; it removes the window from the
+composite altogether. That is the argument for this over the blitter,
+and it is a measurement rather than a preference.
+
+### The constraint that sets the scope: ROUNDED CORNERS
+
+`corner_radius()` (`userland/wm/wm_render.c`) returns 0 **only** for a
+maximized or fullscreen window. Every other window has anti-aliased
+corners blended against whatever is behind it -- wallpaper or a lower
+window -- and a Gen8 sprite plane is opaque and rectangular, so it
+physically cannot reproduce that. There are no window shadows, so the
+corners are the only blocker.
+
+**So stage 1 promotes a MAXIMIZED window and nothing else.** That is
+not a limitation worked around; it is the set of windows the plane is
+actually correct for, and it is also where the 7.3 ms hurts most. The
+title bar, taskbar and any overlay compose on the primary plane around
+it, which is exactly the shape `docs/roadmap.md` describes.
+
+### The other constraint: the client's buffer is not scanout-capable
+
+Recorded above and still true -- scattered `PMM_ZONE_ANY` frames,
+write-back cached, unaligned stride. So the client must draw into a
+kernel-granted buffer that is contiguous, write-combining and
+GGTT-mapped: a window-sized generalisation of `win_surface_grant()`.
+`setup_scanouts()` in `kernel/drivers/display/intel_display.c` is the
+template for the allocation, and it is a well-worn path here --
+`pmm_alloc_contiguous(pages, PMM_ZONE_DMA32)`, write the GGTT PTEs,
+`ggtt_invalidate()`, `paging_set_write_combining()`, grant.
+
+**The buffers are screen-sized and reserved at probe**, beside the three
+scanouts, and reused by whichever window is promoted. A maximized window
+is nearly screen-sized anyway, and reserving them means a promotion
+cannot fail on an allocation -- `pmm_alloc_contiguous(DMA32)` failing at
+the moment someone maximizes a window is a failure path that would
+otherwise have to be got right and would almost never be exercised.
+
+### Stage 0 -- the probe (BUILT 2026-09-17)
+
+`intel_readout_planes_log()` reads the second plane's registers and the
+firmware's watermarks and logs them. It writes nothing, the same
+discipline the timing readout follows.
+
+**The registers are DERIVED rather than remembered**: the existing
+`DSPCNTR`/`DSPSTRIDE`/`DSPSURF`/`DSPSURFLIVE` offsets are gen8's
+universal-plane block at plane 0, and a plane is `0x100` further on, so
+`SPRCTL(p) == DSPCNTR(p) + SPR_PLANE_OFF`. That relationship is written
+into `intel_internal.h` so the two sets cannot drift apart.
+
+**What it found on the laptop:**
+
+    sprite plane: ctl 0 (disabled) stride 0 pos 0 size 0 surf 0 live 0
+    primary:      ctl 0x98000000 stride 0x1e00 surf 0 live 0
+    watermarks:   pipe 0x787838 lp1 0 lp2 0 lp3 0 linetime 0 misc 0
+
+- **The derivation is confirmed for the primary plane**: `ctl` decodes
+  as enabled + BGRX8888, and `stride` is `0x1e00` = 7680, which is
+  exactly the pitch `lsdisplay` reports. The block layout is right.
+- **The sprite plane is disabled and reads as zeroes.** That is what a
+  correct offset on a disabled plane looks like -- and also what a
+  WRONG offset looks like, since an unimplemented offset reads 0 too.
+  **Stage 0 cannot tell those apart, and does not claim to.** The first
+  write to `SPRCTL` is what confirms it.
+- **`WM_PIPE` is non-zero and plausible** (`0x787838`) -- the firmware
+  computed watermarks for one plane plus a cursor. **`WM_LP1..3`,
+  `WM_LINETIME` and `WM_MISC` all read 0**, which is either "the
+  firmware left the low-power watermarks off" or "those three offsets
+  are wrong". Undetermined, and it is the first thing stage 1 has to
+  settle, because a second plane changes the bandwidth demand and a
+  watermark that is too low for the configuration is a FIFO underrun --
+  flicker or a black band, reported to nobody.
+
+### Stage 1 -- one maximized window on the plane
+
+Enable the plane, point `SPRSURF` at a granted buffer, `SPRPOS` at the
+window's content origin and `SPRSIZE` at its size; the compositor stops
+drawing that window's content and composes everything else.
+Demote on anything that breaks the preconditions -- unmaximized, no
+longer topmost, an overlay above it, a popup.
+
+**The first write needs a way back.** A wrong `SPRCTL` can leave the
+panel unreadable, and `.107` has no serial console. It is recoverable
+because `tools/remote.py` works over the network whatever the display is
+doing -- the NIC and the shell do not depend on the panel -- so the
+sequence is: write, read back, log, and keep the network path as the
+oracle rather than the screen.
+
+### What would make us stop
+
+- **The watermark question cannot be settled without a bandwidth model.**
+  If enabling the plane produces underruns that no readable watermark
+  value fixes, this needs i915's `ilk_compute_wm`-equivalent, which is a
+  project of its own and not obviously worth 7.3 ms.
+- **`SPRCTL` at the derived offset does nothing.** Then the universal
+  plane derivation is wrong for this silicon and the register map has to
+  be established some other way.
+- **Only the laptop can test it.** QEMU has no Intel display model, so
+  no automated tool in this repo can exercise any of this -- every check
+  is a `remote.py` run against one machine. That is a real cost and it
+  is the argument for keeping the stage small.
 
 ## How it is proved
 
