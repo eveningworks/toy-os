@@ -513,6 +513,9 @@ whenever a headline here tells you something you did not already know.
   ONE PLACE THAT DOES IT, AND THE GRANT NEVER SHRINKS**
 - **THE CLOCK IS ALWAYS THE RIGHTMOST TRAY ITEM, whatever slot it
   holds**
+- **A TRAY ITEM HAS NO HOVER STATE, AND LIGHTS UP ONLY WHILE IT IS HELD**
+- **THE ROUNDED RECT IS `uui_fill_round_rect()`, ONE RASTERISER, AND ITS
+  ARCS BLEND AGAINST THE SURFACE**
 - **THE TRAY CLOCK OPENS A CALENDAR, AND THE PANEL OWNS IT**
 - **THE WEEK'S FIRST COLUMN IS A REGISTERED SETTING:
   `desktop.week_start` = `monday` | `sunday`**

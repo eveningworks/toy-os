@@ -68,6 +68,17 @@ void draw_tray(int taskbar_y, uint32_t bg, uint32_t fg);
 // its panel to it.
 int tray_clock_rect(int *out_x, int *out_y, int *out_w, int *out_h);
 
+// Live press tracking for the strip, called once per wm_run() tick with
+// the cursor and the raw button mask. A tray item has no hover state at
+// all and lights up only while held -- see the definition for why, and
+// for the arm/disarm rule. Nothing latches: a popup opened by the press
+// does not keep its item lit.
+void tray_update_press(int mx, int my, uint8_t buttons);
+
+// Which item is drawn pressed right now, or -1. `gui state` reports it
+// and tools/tray_press_test.py asserts on it.
+int tray_pressed_item(void);
+
 // The x the leftmost tray item starts at -- the right edge of the strip
 // the window buttons get. See the definition for why it re-walks the
 // items rather than caching a width.

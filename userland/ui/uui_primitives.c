@@ -59,3 +59,60 @@ void uui_focus_ring(struct ugfx_surface *s, int x, int y, int w, int h) {
     if (w <= 0 || h <= 0) return;
     ugfx_draw_rect(s, x, y, w, h, UTHEME_ACCENT);
 }
+
+// --- the rounded rect --------------------------------------------------
+//
+// THE SHAPE, in one rasteriser for every caller. It lived in
+// uui_scrollbar.c until the taskbar's tray grew a pressed pill and
+// became its second real caller.
+
+// Coverage of pixel (px, py) -- counted inward from a corner's outer
+// edge, 0 being the outermost row/column -- by a disc of radius `r`
+// centred on the arc centre (r, r), in 0..255. Sixteen sub-samples per
+// pixel, the same arithmetic wm_render.c's window corners use; r is a
+// handful of pixels, so a corner is a few hundred compares.
+static uint8_t arc_coverage(int r, int px, int py) {
+    int in = 0;
+    for (int sy = 0; sy < 4; sy++) {
+        for (int sx = 0; sx < 4; sx++) {
+            int cx = 8 * px + 2 * sx + 1 - 8 * r;
+            int cy = 8 * py + 2 * sy + 1 - 8 * r;
+            if (cx * cx + cy * cy <= 64 * r * r) in++;
+        }
+    }
+    return (uint8_t)(in * 255 / 16);
+}
+
+// A requested radius resolved against the rect it has to fit in. Half
+// the SHORT axis is the ceiling, which is what makes UUI_CAPSULE and
+// "any radius too big for this rect" the same answer -- and what lets
+// one function round a vertical thumb and a horizontal one without
+// knowing which it has.
+static int clamp_radius(int req, int w, int h) {
+    int max = (w < h ? w : h) / 2;
+    if (req < 0 || req > max) return max;   // UUI_CAPSULE, or clamped
+    return req;
+}
+
+void uui_fill_round_rect(struct ugfx_surface *s, int x, int y, int w, int h,
+                         int radius, uint32_t c) {
+    if (w <= 0 || h <= 0) return;
+    int r = clamp_radius(radius, w, h);
+    if (r < 1) { ugfx_fill_rect(s, x, y, w, h, c); return; }
+
+    ugfx_fill_rect(s, x, y + r, w, h - 2 * r, c);          // the waist
+    ugfx_fill_rect(s, x + r, y, w - 2 * r, r, c);          // between the top corners
+    ugfx_fill_rect(s, x + r, y + h - r, w - 2 * r, r, c);  // and the bottom ones
+
+    for (int q = 0; q < 4; q++) {
+        for (int py = 0; py < r; py++) {
+            for (int px = 0; px < r; px++) {
+                uint8_t cov = arc_coverage(r, px, py);
+                if (!cov) continue;
+                int sx = (q & 1) ? x + w - 1 - px : x + px;
+                int sy = (q & 2) ? y + h - 1 - py : y + py;
+                ugfx_blend_pixel(s, sx, sy, c, cov);
+            }
+        }
+    }
+}

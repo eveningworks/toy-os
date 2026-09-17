@@ -8399,3 +8399,48 @@ popup SURFACE the compositor places. The panel draws its overlays
 straight into the compositor's buffer and has neither a widget tree nor
 surfaces, so what carries over is the RULES -- the delay constant, the
 no-grab rule, re-arming on a move -- and not the code.
+
+## A tray icon answers a press and ignores a hover
+
+Every tray item now fills with a rounded `uui_state_bg(panel,
+UUI_STATE_PRESSED)` while the left button is held on it, and shows
+nothing at any other time -- no hover state, and no lit item while the
+popup a press opened is still up.
+
+**That is the odd one out, deliberately.** Windows 11 gives a tray
+button a rounded hover highlight, a pressed state AND a lit state while
+its flyout is open; Plasma's system tray and GNOME Shell's quick
+settings both do the hover half too. macOS menu-bar extras are the
+exception: no hover feedback whatever, and a click fills the item while
+its menu is down. The maintainer asked for press-only, so the shape
+copied is macOS's, minus the latch.
+
+**Why press-only is defensible and not just a preference.** The tray is
+the one strip where the pointer is constantly passing THROUGH on its way
+to the clock or to the screen edge, and a hover highlight there fires on
+travel rather than on intent -- the same reason this project's guidance
+warns that a hover which shouts is worse than none. A press is
+unambiguous: nothing arms it by accident.
+
+**Nothing latches, and that cost a decision.** Lighting the item while
+its popup is open is the more informative behaviour and is what every
+desktop named above does. It was dropped because it makes the fill mean
+two things -- "your press landed" and "this flyout is the open one" --
+and the second is already said by the flyout itself being on screen,
+anchored to that item. A fill that means one thing is testable; the
+check for it is the last pair in `tray_press_test.py`, which asserts
+the calendar is open AND the clock is back at rest.
+
+**Where it lives, and why not in each popup.** `wm_tray.c` owns the
+pressed id and applies it inside the single right-to-left walk that
+draws the strip, so the clock, the four flyout items, the on-screen
+keyboard and anything registered later all get it with no code of their
+own. The alternative -- each popup marking its own item -- is six call
+sites to keep in step and a seventh to forget, which is the failure
+`wm_overlay.h`'s registry exists to prevent.
+
+**And the pill is a shape, not a band.** It is inset from the strip's
+edges and rounded at `taskbar_h / 8`, Windows 11's taskbar-button
+proportion; a full-height block reads as a section of the bar rather
+than as a control. The rasteriser is `uui_fill_round_rect()`, promoted
+out of `uui_scrollbar.c` when this became its second real caller.

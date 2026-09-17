@@ -61,11 +61,11 @@ enum uui_scrollbar_zone {
 // A radius per part, because the shape of a scrollbar is the APP's
 // decision and not this widget's: it is `border-radius` on
 // `::-webkit-scrollbar-thumb` in CSS, and the radius a Qt style hands
-// `drawRoundedRect()`. UUI_SB_CAPSULE is half the short axis -- Breeze
-// passes exactly `0.5 * width` for its groove and its handle -- and any
-// radius is clamped to that, since a corner larger than the rect is not
-// a shape.
-#define UUI_SB_CAPSULE (-1)
+// `drawRoundedRect()`. UUI_SB_CAPSULE is uui_primitives.h's UUI_CAPSULE,
+// half the short axis -- Breeze passes exactly `0.5 * width` for its
+// groove and its handle -- and any radius is clamped to that, since a
+// corner larger than the rect is not a shape.
+#define UUI_SB_CAPSULE UUI_CAPSULE   // ui/uui_primitives.h
 
 struct uui_scrollbar_style {
     int track_radius;   // the groove

@@ -2673,6 +2673,28 @@ real scanout hardware does. Do not write a pixel assertion for one.
   read as a control the panel invented. `tray_item_rect()` gives any
   item's box from that same walk, so a click cannot be told a different
   position from the one it was drawn at.
+- **A TRAY ITEM HAS NO HOVER STATE, AND LIGHTS UP ONLY WHILE IT IS
+  HELD.** The item's box gets a rounded fill in `uui_state_bg(panel,
+  UUI_STATE_PRESSED)` for exactly as long as the left button is down on
+  it: nothing on hover, and nothing latched afterwards -- a popup the
+  press opened does NOT keep its item lit. That is the macOS menu-bar
+  rule, not Windows 11's or Breeze's, both of which also highlight on
+  hover; `docs/decisions.md` has why. Three mechanical things.
+  `tray_update_press()` runs every wm_run() tick, not on the button-down
+  edge, because the pill has to go out on a release or a drag off the
+  item and neither is an edge. It asks the SAME right-to-left walk that
+  draws the strip (`tray_walk()`), so a press cannot light an item a
+  click would miss. And a TEXT item's glyph cells are painted opaque, so
+  the pressed clock's `ugfx_draw_string_clipped()` must be given the
+  PILL's colour as its background, or it punches the strip's colour back
+  through its own fill.
+- **THE ROUNDED RECT IS `uui_fill_round_rect()`, ONE RASTERISER**
+  (`userland/ui/uui_primitives.h`), and **its arcs BLEND against what is
+  already on the surface** -- so the caller must have painted under the
+  rect in this same pass, or the corner darkens a little every frame.
+  `UUI_CAPSULE` is half the short axis, and any larger radius clamps to
+  it. It lived inside `uui_scrollbar.c` until the tray's pressed pill
+  became its second real caller; `UUI_SB_CAPSULE` is now an alias.
 - **THE TRAY CLOCK OPENS A CALENDAR, AND THE PANEL OWNS IT --
   `userland/wm/calendar_popup.c`, not an app.** Clicking the clock opens
   a month grid anchored above it, today in the theme's ACCENT, `<` / `>`

@@ -667,10 +667,11 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
             }
         }
         dbg_out_printf(o, "{\"y\":%d,\"h\":%d,\"start\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
-                     "\"cx\":%d,\"cy\":%d,\"mark\":%s},\"tray_x\":%d,\"hidden\":%d,\"buttons\":[",
+                     "\"cx\":%d,\"cy\":%d,\"mark\":%s},\"tray_x\":%d,"
+                     "\"tray_pressed\":%d,\"hidden\":%d,\"buttons\":[",
                      bar_y, taskbar_h, 0, bar_y, sw, taskbar_h,
                      sw / 2, bar_y + taskbar_h / 2, start_mark_buf,
-                     tray_left(), taskbar_hidden());
+                     tray_left(), tray_pressed_item(), taskbar_hidden());
         dbg_out_reserve(o, 48); // room for the ending -- see cmd_windows()
         int listed = 0;
         for (int i = 0; i < nb; i++) {
@@ -694,8 +695,8 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
         return;
     }
 
-    dbg_out_printf(o, "taskbar: y=%d h=%d tray_x=%d hidden=%d\r\n",
-                 bar_y, taskbar_h, tray_left(), taskbar_hidden());
+    dbg_out_printf(o, "taskbar: y=%d h=%d tray_x=%d tray_pressed=%d hidden=%d\r\n",
+                 bar_y, taskbar_h, tray_left(), tray_pressed_item(), taskbar_hidden());
     dbg_out_write(o, "  start   x="); col_int(o, 0, 6);
     dbg_out_write(o, "w="); col_int(o, sw, 6);
     dbg_out_printf(o, "centre=(%d,%d)\r\n", sw / 2, bar_y + taskbar_h / 2);

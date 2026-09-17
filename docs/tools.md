@@ -2331,6 +2331,28 @@ window without going through it will find its layout polls timing out.
   empty and unwritable on a machine with no sound card -- it says so and
   skips them rather than failing, so the rows going missing on a machine
   that HAS a card still reads as a failure.
+- **`tray_press_test.py`** -- the notification area's press feedback:
+  a rounded fill while an item is held, and nothing on hover. Driven on
+  the CLOCK, the one tray item that is registered whatever hardware the
+  guest has. Every assertion is a pixel value read from the item's
+  four-column left padding strip -- **a band the glyphs never reach, so
+  the seconds ticking underneath cannot move it**, which is what lets an
+  ordinary pixel comparison work on a control that redraws once a
+  second. **The hover half is the point**: the cursor is PARKED on the
+  item with the button up (`DebugConsole.warp_cursor`, never `gui move`)
+  and that strip must not move by one value -- a build that added a
+  hover state as well would pass every "the press works" check. The
+  direction of the wash is READ, not assumed (`uui_state_bg()` darkens a
+  light panel and lightens a dark one; this guest's panel is dark, and
+  an assertion phrased as "darker" would fail on a correct build). It
+  also asserts the fill is ROUNDED -- its corner pixel must sit nearer
+  the panel's colour than its interior -- that a drag off the item
+  disarms and a re-entry re-arms, and that the press does NOT latch: the
+  calendar it opened is still up while the clock is back at rest. Three
+  positive controls were run: removing the fill reddens three checks,
+  squaring its corners reddens exactly one, and adding a hover state
+  reddens the two hover checks and the two latch checks -- each on the
+  right assertion. Skips cleanly with no Pillow. In `gui_regress.py`.
 - **`brightness_test.py`** -- the taskbar's brightness flyout, driven
   on a machine with NO backlight, which is every QEMU adapter. It
   asserts the degraded path honestly: the tray item exists, the panel

@@ -63,6 +63,20 @@ uint32_t uui_state_bg(uint32_t base, enum uui_state state);
 // this is a bounds check and nothing more.
 int uui_hit(int x, int y, int w, int h, int px, int py);
 
+// --- the rounded rect --------------------------------------------------
+
+// Half the SHORT axis -- a capsule. Any radius larger than that is
+// clamped to it, since a corner bigger than the rect is not a shape.
+#define UUI_CAPSULE (-1)
+
+// A filled rect with `radius` corners, antialiased 16 sub-samples to
+// the pixel. **The arcs BLEND against what is already on the surface,
+// so the caller must have painted under the rect in this same pass** --
+// blending against a stale back buffer darkens the corner a little
+// every frame.
+void uui_fill_round_rect(struct ugfx_surface *s, int x, int y, int w, int h,
+                         int radius, uint32_t c);
+
 // --- natural size ------------------------------------------------------
 //
 // The ring-3 half of apps/ui/ui_primitives.h's contract, same rule and

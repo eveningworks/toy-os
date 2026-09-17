@@ -152,6 +152,7 @@ TOOLS = [
     ("calendar", "calendar_test.py", "the tray clock's calendar popup, and week_start"),
     ("mines", "mines_test.py", "Minesweeper, and a secondary click reaching a client"),
     ("volume", "volume_test.py", "the tray volume flyout: slider, mute, wheel, devices"),
+    ("traypress", "tray_press_test.py", "the tray's pressed pill, and that hover stays dead"),
     ("brightness", "brightness_test.py", "the tray brightness flyout, and its answer with no backlight"),
     ("network", "network_tray_test.py", "the tray network item: its state, panel and visibility"),
     ("modeset", "modeset_test.py", "a runtime resolution change: device, desktop and setting agree"),
