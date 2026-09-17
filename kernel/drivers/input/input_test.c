@@ -108,6 +108,39 @@ KTEST("input", "a keycode nothing here maps is dropped, not guessed") {
     KTEST_ASSERT_EQ(c, -1);
 }
 
+KTEST("input", "a warp puts the pointer there, and cannot leave the bounds") {
+    int w = 0, h = 0;
+    mouse_get_bounds(&w, &h);
+    if (w <= 1 || h <= 1) KTEST_SKIP("the pointer has no usable bounds yet");
+
+    int save_x = 0, save_y = 0;
+    uint8_t buttons = 0;
+    mouse_get_state(&save_x, &save_y, &buttons);
+
+    int x = 0, y = 0;
+    mouse_set_position(w / 4, h / 3);
+    mouse_get_state(&x, &y, &buttons);
+    KTEST_ASSERT_EQ(x, w / 4);
+    KTEST_ASSERT_EQ(y, h / 3);
+
+    // CLAMPED like any other motion: a compositor asking for somewhere
+    // off screen must not be able to strand the pointer where no device
+    // could put it, and the last pixel is the last pixel.
+    mouse_set_position(w + 1000, h + 1000);
+    mouse_get_state(&x, &y, &buttons);
+    KTEST_ASSERT_EQ(x, w - 1);
+    KTEST_ASSERT_EQ(y, h - 1);
+
+    mouse_set_position(-50, -50);
+    mouse_get_state(&x, &y, &buttons);
+    KTEST_ASSERT_EQ(x, 0);
+    KTEST_ASSERT_EQ(y, 0);
+
+    // PUT IT BACK: these tests run in the LIVE kernel, and a pointer
+    // left in a corner is a desktop somebody has to rescue by hand.
+    mouse_set_position(save_x, save_y);
+}
+
 KTEST("input", "an absolute report lands where the arithmetic says") {
     // The POINTER's bounds, not the display's. They are usually the
     // same once a compositor has set them, and they are not the same on

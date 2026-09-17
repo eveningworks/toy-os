@@ -583,6 +583,7 @@ The bar is "does this fix a rederive-from-scratch cost".
 | Is it safe to commit? | `preflight.sh` (**stop your `vm.py` guest first**) |
 | Has the on-demand half rotted? | `ondemand_sweep.py` -- the ~30 tools no other runner covers |
 | Drive the BARE-METAL machine | `remote.py` (`exec`/`put`/`get`/`sync`/`flash`/`screenshot`/`shell`) |
+| Run the GUI TOOLS on it | `gui_regress.py --host <ip>`, over `remote_gui.py` |
 | Drive a VM | `vm.py` (text in, text out), `qmp_test.py`, `gui_debug.py`, `gui_flow.py`, `shell_flow.py`, `serial_console.py`, `serial_capture.py`, `watch_vm.sh`, `run_release.sh` |
 | Is it INTERMITTENT, and at what rate? | `boot_rate.py` (bare metal), `flake_hunt.py` (VM) |
 | Test runners | `boot_smoke_test.py`, `ktest_run.py`, `usertest_run.py`, `faulttest_run.py`, `gui_regress.py`, `damage_sweep.py`, `damage_hunt.py` |
@@ -674,6 +675,7 @@ runners themselves; `--list` on either runner is the live answer.
 `gen_mp3_tables.py`, `gen_music.py`, `gen_next_up.py`, `gen_signames.py`,
 `gen_syms.py`, `gen_version.sh`, `genfont.py`, `genrelocs.py`,
 `gui_debug.py`, `gui_flow.py`, `idle_cpu.py`, `install_grub.py`, `loc.py`,
+`remote_gui.py`,
 `mem_stress.py`, `panic_resolve.py`, `port_guard.py`, `qmp_test.py`,
 `regex_hostcheck.py`, `run_release.sh`, `screenshot_diff.py`,
 `seed_disk.py`, `serial_capture.py`, `serial_console.py`,

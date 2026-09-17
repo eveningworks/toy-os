@@ -1127,6 +1127,24 @@ struct win_popup_pos {
 // combination, so a window holding the inhibitor can always be closed;
 // the cost is that Alt+F4 itself cannot be recorded by capture, which is
 // the trade every compositor makes for having an escape hatch at all.
+#define WIN_REQ_WARP_POINTER 36 // COMPOSITOR ONLY. a, b: where to put the
+                           // pointer, clamped to its bounds. The next
+                           // relative report from a device carries on
+                           // from there -- X11's XWarpPointer, which is
+                           // server-side for the same reason.
+                           //
+                           // Here rather than in a syscall of its own
+                           // because the compositor owns pointer policy
+                           // and already speaks this channel; and here
+                           // rather than at the compositor's event loop
+                           // because an INJECTED position lasts one
+                           // iteration (the next pass reads the driver
+                           // again), which is right for a click and
+                           // useless for a hover that has to survive a
+                           // screen capture.
+                           //
+                           // A device reporting ABSOLUTE positions
+                           // overwrites it with its next report.
 #define WIN_REQ_INHIBIT_SHORTCUTS 35
 #define WIN_SHOT_PROBE   0x4 // ANSWER THE RECT AND COPY NOTHING. What a
                            // picker asks on every pointer move: it needs

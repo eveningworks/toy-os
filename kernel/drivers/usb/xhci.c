@@ -53,6 +53,11 @@ struct xhci_port_state {
     uint8_t connected;
     uint8_t enabled;
     uint8_t speed;
+    // This port's socket has already been power-cycled since the last
+    // time something on it enumerated or went away. ONE per episode: a
+    // device that is simply broken would otherwise cycle, re-attach,
+    // fail, and cycle again for the life of the machine.
+    uint8_t power_cycled;
 };
 
 // ONE PROTOCOL'S PORT RANGE, from a Supported Protocol capability.
@@ -110,6 +115,10 @@ struct xhci_hc {
     // interrupt advances. Done inline it never returns, which is how it
     // froze a laptop the first time it was tried.
     volatile uint32_t diag_reset_pending;
+    // kernel.usb_replug, same deferral and for the same reason.
+    // Separate from the reset: they are different levers and the point
+    // of having both is to tell which one a device needs.
+    volatile uint32_t diag_power_pending;
 
     struct xhci_ring cmd;
     struct xhci_ring evt;
@@ -253,13 +262,19 @@ static const char *speed_name(uint8_t s) {
 // -- disables the port AND clears every change bit that happened to
 // read as 1, losing the connect event you were about to act on. Nothing
 // in this driver writes PORTSC any other way.
-static void portsc_write(uint32_t port, uint32_t set, uint32_t rw1c_ack) {
+static void portsc_rmw(uint32_t port, uint32_t set, uint32_t clear,
+                       uint32_t rw1c_ack) {
     uint32_t v = mr32(g_hc.op, XHCI_PORTSC(port));
     v &= ~(uint32_t)XHCI_PORTSC_RW1C;   // do not clear what we did not mean to
     v &= ~(uint32_t)XHCI_PORTSC_PED;    // ...and do not disable the port
+    v &= ~clear;                        // ...and only what the caller named
     v |= set;
     v |= rw1c_ack;                      // only the change bits named here
     mw32(g_hc.op, XHCI_PORTSC(port), v);
+}
+
+static void portsc_write(uint32_t port, uint32_t set, uint32_t rw1c_ack) {
+    portsc_rmw(port, set, 0, rw1c_ack);
 }
 
 // --- discovery --------------------------------------------------------
@@ -513,6 +528,8 @@ static int xhci_wait_over(struct xhci_wait *w) {
 // read back 0x7ff. The bits outside the mask are read-only, which is
 // what makes Linux's plain write of the mask safe rather than a way to
 // switch working ports away.
+// Also used by intel_mux_cycle() below, which is why these are up here
+// rather than inside the one function that used to want them.
 #define INTEL_XUSB2PR    0xD0   // xHC USB2 port routing (write)
 #define INTEL_XUSB2PRM   0xD4   // ...and which ports may be routed (read)
 #define INTEL_USB3_PSSEN 0xD8   // SuperSpeed enable (write)
@@ -1885,6 +1902,54 @@ static void reset_port(uint32_t p, int force) {
 // re-measuring if the failure rate ever drops.
 #define ATTACH_ATTEMPTS 3
 
+// A RE-ATTACH WE CAUSED IS NOT A CONNECT EVENT, and that difference
+// cost a device. Taking a port away and giving it back makes CCS rise
+// again -- but the change bits have to be acknowledged (or the port
+// change interrupt stays asserted), and CSC is the only edge the driver
+// watches. Measured on the ASUS 2026-09-17: the webcam's port read
+// `portsc 0x6e1` -- CCS set, link Polling -- and nothing ever looked at
+// it again, so a recovery meant to rescue a device instead removed one.
+//
+// So the attach is QUEUED, through the same `attach_pending` the event
+// path sets. Not a second attach path: this driver has been bitten
+// twice by those, and the bit is consumed by the next pass of the
+// deferred work rather than recursing into the attach this is running
+// inside.
+static void requeue_if_connected(uint32_t p) {
+    if (p >= XHCI_MAX_PORTS) return;
+
+    // COMPLETE THE DISCONNECT WE CAUSED, FIRST. The attach arm skips
+    // any port that still has a slot -- "a port that already has an
+    // enumerated device is not a plug", which is right for a spurious
+    // connect change and wrong here -- and the detach event for our own
+    // cycle arrives a few milliseconds AFTER this runs. Measured on the
+    // ASUS 2026-09-17: `still connected -- re-attaching` at 24.45 s,
+    // `device removed` at 24.46, and the attach in between was
+    // discarded against the dying device's slot. The recovery removed
+    // the webcam instead of rescuing it, twice, for this reason.
+    //
+    // So the teardown happens HERE, where the driver knows the device
+    // went away because it took the port off it, rather than being
+    // waited for. The pending detach is dropped with it: it describes
+    // this same transition, and left set it would tear down whatever
+    // comes back.
+    g_hc.detach_pending &= ~(1u << p);
+    if (usb_root_port_slot((uint8_t)(p + 1))) {
+        klog_printf("usb: port %u: tearing down the device the cycle "
+                    "disconnected\n", p + 1);
+        usb_detach_root_port((uint8_t)(p + 1));
+    }
+    // ...and the recorded state goes with it, so a port-change event
+    // that lands late reads CCS=1 against `connected == 0` and queues
+    // the same attach rather than seeing no transition at all.
+    g_hc.ports[p].connected = 0;
+
+    if (!(mr32(g_hc.op, XHCI_PORTSC(p)) & XHCI_PORTSC_CCS)) return;
+    klog_printf("usb: port %u: still connected after the cycle -- "
+                "re-attaching\n", p + 1);
+    g_hc.attach_pending |= (1u << p);
+}
+
 // A LAST RESORT FOR A DEVICE THAT FELL BACK TO USB2 AND THEN FAILED:
 // warm-reset the SuperSpeed side of the same socket.
 //
@@ -1948,6 +2013,179 @@ static void warm_reset_companion(uint32_t p) {
                 "port %u portsc 0x%x\n",
                 cp + 1, mr32(g_hc.op, XHCI_PORTSC(cp)),
                 p + 1, mr32(g_hc.op, XHCI_PORTSC(p)));
+    // Same edge problem as the cycle below: the change bits were
+    // acknowledged, so a device that DID come back on the SuperSpeed
+    // side needs its attach queued rather than waited for.
+    requeue_if_connected(cp);
+}
+
+// DROP VBUS AND BRING IT BACK -- the software replug, and the lever a
+// warm reset is not.
+//
+// WHAT THE EVIDENCE SAYS (docs/bugs.md, three occurrences). A UE300
+// lands on the USB2 half of its socket at FULL speed -- two tiers below
+// its class, so it failed SuperSpeed link training AND the USB2
+// high-speed chirp -- and then answers Address Device with a USB
+// TRANSACTION ERROR, three times. Enable Slot and Disable Slot around
+// it both succeed, so the ring and the controller are fine and the
+// DEVICE is wedged. Every recorded cure has been a physical replug or a
+// cold boot; more resets have never worked, and on 2026-09-17 the warm
+// reset of the SuperSpeed companion was observed firing and changing
+// nothing -- `port 14: after warm reset portsc 0x2a0` is CCS=0, PLS=5
+// (RxDetect): it re-trained a port with nothing on it, while the device
+// sat on port 3 untouched.
+//
+// The mechanism that makes a REBOOT the trigger is that a warm reboot
+// never drops VBUS, so a wedged device stays wedged into the next boot.
+// Power is therefore the one thing a replug does that this driver had
+// no way to do.
+//
+// WHAT REAL SYSTEMS DO: Linux's hub driver power-cycles a port through
+// `usb_hub_set_port_power()` when resets fail, and its `usb_port`
+// runtime PM uses the same two writes. This is that, on the root ports
+// of one socket.
+//
+// Refused when HCCPARAMS1.PPC is 0 -- then port power is not
+// software-controllable at all and there is nothing to cycle. QEMU
+// reports PPC=0, so this path is hardware-only and says so once rather
+// than silently doing nothing.
+// NO VBUS SWITCH, SO TAKE THE PORT AWAY FROM THE CONTROLLER INSTEAD.
+//
+// On an Intel PCH the same two registers `intel_port_mux()` programs at
+// startup can be written at any time: XUSB2PR routes a USB2 port to the
+// xHC or away from it, and USB3PSSEN enables the SuperSpeed half. A
+// port un-routed and re-routed presents its terminations afresh, which
+// is what a device's link state machine reacts to -- the nearest thing
+// to a replug available when HCCPARAMS1.PPC says port power is not
+// software-controllable. The ASUS is exactly that machine: `port power
+// always on (no PPC)`, measured 2026-09-17.
+//
+// THE DRIVER'S OWN COMMENT ON intel_port_mux() ALREADY NAMES THIS BUG'S
+// SHAPE -- "a USB3 port whose SS half is not enabled falls back to its
+// USB2 half" -- which is the failing signature exactly: the adapter
+// lands on the USB2 companion, below its class's speed, and will not
+// address. This puts both halves back through that transition
+// deliberately.
+//
+// GATED ON THE MASK REGISTERS, like the startup write: a bit outside
+// XUSB2PRM or USB3PRM is read-only, so a controller without the mux
+// does nothing here and needs no device-id list. Returns 1 when
+// something was actually toggled.
+static int intel_mux_cycle(uint32_t p) {
+    const struct pci_device *d = g_hc.pci;
+    if (!d || d->vendor_id != 0x8086) return 0;
+
+    uint32_t hs_mask = pci_config_read32(d, INTEL_XUSB2PRM);
+    uint32_t ss_mask = pci_config_read32(d, INTEL_USB3PRM);
+    if (!hs_mask && !ss_mask) return 0;
+
+    // The bit is the port's index WITHIN ITS PROTOCOL'S RANGE, not the
+    // port number: these registers count USB2 ports from 0 and USB3
+    // ports from 0, while everything a person reads counts all ports
+    // from 1.
+    uint32_t hs_bit = 0, ss_bit = 0;
+    int c = companion_port(p);
+    if (g_hc.usb2.count && p + 1 >= g_hc.usb2.first &&
+        p + 1 < (uint32_t)g_hc.usb2.first + g_hc.usb2.count)
+        hs_bit = 1u << (p + 1 - g_hc.usb2.first);
+    if (c >= 0 && g_hc.usb3.count && (uint32_t)c + 1 >= g_hc.usb3.first &&
+        (uint32_t)c + 1 < (uint32_t)g_hc.usb3.first + g_hc.usb3.count)
+        ss_bit = 1u << ((uint32_t)c + 1 - g_hc.usb3.first);
+
+    hs_bit &= hs_mask;      // a bit the hardware will not take is not a lever
+    ss_bit &= ss_mask;
+    if (!hs_bit && !ss_bit) {
+        klog_printf("usb: port %u: not routable -- XUSB2PRM 0x%x USB3PRM 0x%x\n",
+                    p + 1, hs_mask, ss_mask);
+        return 0;
+    }
+
+    uint32_t hs = pci_config_read32(d, INTEL_XUSB2PR);
+    uint32_t ss = pci_config_read32(d, INTEL_USB3_PSSEN);
+    klog_printf("usb: port %u: MUX CYCLING the socket (usb2 bit 0x%x of 0x%x, "
+                "usb3 bit 0x%x of 0x%x)\n", p + 1, hs_bit, hs, ss_bit, ss);
+
+    // SUPERSPEED FIRST, THEN USB2 -- the same order intel_port_mux()
+    // takes and for the same reason: an SS half that goes away while
+    // the USB2 half is still routed is precisely how a device ends up
+    // on the USB2 side, which is the state being escaped from here.
+    if (ss_bit) pci_config_write32(d, INTEL_USB3_PSSEN, ss & ~ss_bit);
+    if (hs_bit) pci_config_write32(d, INTEL_XUSB2PR, hs & ~hs_bit);
+    xhci_delay_ms(100);
+
+    // RESTORED to what was read, not to "the bit set": the bits outside
+    // the mask are read-only and the rest are somebody else's ports.
+    if (hs_bit) pci_config_write32(d, INTEL_XUSB2PR, hs);
+    if (ss_bit) pci_config_write32(d, INTEL_USB3_PSSEN, ss);
+    xhci_delay_ms(100);
+
+    portsc_rmw(p, 0, 0, XHCI_PORTSC_CSC | XHCI_PORTSC_PEC);
+    if (c >= 0) portsc_rmw((uint32_t)c, 0, 0, XHCI_PORTSC_CSC | XHCI_PORTSC_PEC);
+    klog_printf("usb: port %u: after mux cycle usb2 0x%x usb3 0x%x, "
+                "portsc 0x%x\n", p + 1,
+                pci_config_read32(d, INTEL_XUSB2PR),
+                pci_config_read32(d, INTEL_USB3_PSSEN),
+                mr32(g_hc.op, XHCI_PORTSC(p)));
+    // EITHER HALF may be where it comes back -- that is the whole
+    // premise of this bug.
+    requeue_if_connected(p);
+    if (c >= 0) requeue_if_connected((uint32_t)c);
+    return 1;
+}
+
+static void power_cycle_socket(uint32_t p) {
+
+    // BOTH HALVES OF THE SOCKET. They are one connector with one VBUS,
+    // and the device may be on either -- this whole bug is it being on
+    // the half nobody expected.
+    int c = companion_port(p);
+    klog_printf("usb: port %u: POWER CYCLING the socket%s\n", p + 1,
+                c >= 0 ? " (with its companion)" : "");
+    portsc_rmw(p, 0, XHCI_PORTSC_PP, 0);
+    if (c >= 0) portsc_rmw((uint32_t)c, 0, XHCI_PORTSC_PP, 0);
+
+    // OFF LONG ENOUGH TO BE SEEN. VBUS has to fall far enough for the
+    // device's own link state machine to take it as a disconnect, which
+    // is the entire point; 100 ms is the same order as this driver's
+    // power-good wait and as a hub's own port-power delay.
+    xhci_delay_ms(100);
+
+    portsc_rmw(p, XHCI_PORTSC_PP, 0, 0);
+    if (c >= 0) portsc_rmw((uint32_t)c, XHCI_PORTSC_PP, 0, 0);
+    // Power good, then the USB2 attach debounce, before anything reads
+    // CCS -- power_ports() waits the same way after the initial power-on.
+    xhci_delay_ms(100);
+
+    // The connect that follows is a REAL one, so the change bits are
+    // acknowledged and the attach is left to scan_ports() -- the one
+    // place that notices a connect. A second attach path here is how
+    // this driver has been bitten twice before.
+    portsc_rmw(p, 0, 0, XHCI_PORTSC_CSC | XHCI_PORTSC_PEC);
+    if (c >= 0) portsc_rmw((uint32_t)c, 0, 0, XHCI_PORTSC_CSC | XHCI_PORTSC_PEC);
+    klog_printf("usb: port %u: after power cycle portsc 0x%x\n", p + 1,
+                mr32(g_hc.op, XHCI_PORTSC(p)));
+    if (c >= 0)
+        klog_printf("usb: port %u: companion after power cycle portsc 0x%x\n",
+                    (uint32_t)c + 1, mr32(g_hc.op, XHCI_PORTSC((uint32_t)c)));
+    requeue_if_connected(p);
+    if (c >= 0) requeue_if_connected((uint32_t)c);
+}
+
+// THE SOFTWARE REPLUG, by whichever lever this machine has. Port power
+// when the controller allows it; the Intel port mux when it does not,
+// which is the only one the ASUS has. Once per episode either way.
+static void software_replug(uint32_t p) {
+    if (g_hc.ports[p].power_cycled) {
+        klog_printf("usb: port %u: already replugged this episode\n", p + 1);
+        return;
+    }
+    g_hc.ports[p].power_cycled = 1;
+    if (g_hc.ppc) { power_cycle_socket(p); return; }
+    klog_printf("usb: port %u: no Port Power Control (PPC=0) -- trying the "
+                "port mux instead\n", p + 1);
+    if (!intel_mux_cycle(p))
+        klog_printf("usb: port %u: nothing left to try -- this controller has "
+                    "neither port power nor a port mux\n", p + 1);
 }
 
 static void attach_root_port(uint32_t p) {
@@ -2005,8 +2243,10 @@ static void attach_root_port(uint32_t p) {
         // `attempt` is the patience flag too: the first try is fast,
         // and a device that has already failed is asked again slowly.
         if (usb_enumerate_port((uint8_t)(p + 1), g_hc.ports[p].speed,
-                               attempt) >= 0)
+                               attempt) >= 0) {
+            g_hc.ports[p].power_cycled = 0;   // this episode ended well
             return;
+        }
         // THE TWO OUTCOMES MUST NOT SHARE A PREFIX. "enumeration
         // failed -- resetting and retrying" is a device that may still
         // come back, and since the retry started actually re-resetting
@@ -2030,7 +2270,16 @@ static void attach_root_port(uint32_t p) {
             // AFTER the dump, so the trace covers the attempts that
             // failed rather than the recovery -- and the recovery's own
             // lines then follow it in order.
+            //
+            // TWO LEVERS, CHEAPEST FIRST. The warm reset re-runs link
+            // training and costs nothing when it works; the power cycle
+            // is a replug and takes the port away for 200 ms, so it
+            // only runs when the device is still sitting there after
+            // the warm reset -- which is exactly what was measured on
+            // 2026-09-17 and is the case this bug has always been.
             warm_reset_companion(p);
+            if (mr32(g_hc.op, XHCI_PORTSC(p)) & XHCI_PORTSC_CCS)
+                software_replug(p);
         }
     }
 }
@@ -2057,6 +2306,20 @@ static void attach_root_port(uint32_t p) {
 uint32_t xhci_usbsts(void) {
     if (!g_hc.present) return 0;
     return mr32(g_hc.op, XHCI_USBSTS);
+}
+
+int usb_diag_replug_port(unsigned port) {
+    if (!g_hc.running) return 0;
+    if (port < 1 || port > g_hc.max_ports || port > XHCI_MAX_PORTS) return 0;
+    // NOT gated on PPC: software_replug() picks whichever lever this
+    // controller has and says so, and refusing here would hide the
+    // answer to the question the knob exists to ask.
+    //
+    // QUEUED for the same reason the forced reset is: the caller is a
+    // syscall with interrupts off, and this waits on pit_ticks().
+    g_hc.diag_power_pending |= (1u << (port - 1));
+    klog_printf("usb: port %u: replug queued\n", port);
+    return 1;
 }
 
 int usb_diag_reset_port(unsigned port) {
@@ -2148,12 +2411,26 @@ void xhci_deferred_work(void) {
     for (uint32_t p = 0; p < g_hc.max_ports && p < XHCI_MAX_PORTS; p++) {
         if (g_hc.detach_pending & (1u << p)) {
             g_hc.detach_pending &= ~(1u << p);
+            // A REAL DISCONNECT ENDS THE EPISODE, so a device unplugged
+            // and plugged back in gets the power cycle again if it needs
+            // it -- the flag is "already tried for THIS device", not
+            // "tried once ever".
+            g_hc.ports[p].power_cycled = 0;
             klog_printf("usb: port %u: device removed\n", p + 1);
             usb_detach_root_port((uint8_t)(p + 1));
         }
         // The forced diagnostic reset (kernel.usb_reset). Before the
         // attach below, so a port that is pending both is reset once
         // deliberately rather than attached and then reset under it.
+        if (g_hc.diag_power_pending & (1u << p)) {
+            g_hc.diag_power_pending &= ~(1u << p);
+            // FORCED, so the once-per-episode guard is cleared first:
+            // the operator asking for it is the whole point, and a
+            // refusal saying "already cycled" would be answering a
+            // question nobody asked.
+            g_hc.ports[p].power_cycled = 0;
+            software_replug(p);
+        }
         if (g_hc.diag_reset_pending & (1u << p)) {
             g_hc.diag_reset_pending &= ~(1u << p);
             diag_reset_port(p);
@@ -2315,10 +2592,16 @@ static void usb_probe(const struct pci_device *d) {
     if (!setup_rings()) return;
     USBT("usb: trace: rings done\n");
 
+    // PPC IS ON THIS LINE BECAUSE A RECOVERY DEPENDS ON IT. Port Power
+    // Control is what makes power_cycle_socket() -- the software replug
+    // -- possible at all, and with it unlogged the only way to know
+    // whether a machine has it was to read a failure that never
+    // mentioned the reason.
     klog_printf("usb: %u slots (%u used), %u interrupters, %u ports, "
-                "%u-byte contexts, %u-byte pages\n",
+                "%u-byte contexts, %u-byte pages, port power %s\n",
                 g_hc.max_slots, slots, g_hc.max_intrs, g_hc.max_ports,
-                g_hc.csz64 ? 64u : 32u, g_hc.page_size);
+                g_hc.csz64 ? 64u : 32u, g_hc.page_size,
+                g_hc.ppc ? "software-controlled (PPC)" : "always on (no PPC)");
 
     // --- publish first ------------------------------------------------
     //

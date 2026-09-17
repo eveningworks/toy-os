@@ -383,6 +383,125 @@ def run_one(name, script, disk_src, timeout, keep_logs, slot, kvm=False):
     return ("PASS" if rc == 0 else "FAIL", time.time() - started, summary)
 
 
+def run_remote_suite(picked, args):
+    """The whole suite against one bare-metal machine, SERIALLY.
+
+    There is one laptop: no slots, no parallelism, and nothing to copy.
+    That also means this can never be a gate -- it is a spot-check tier
+    like `qemu_matrix.py`, run when a change is hardware-shaped or
+    before a release.
+
+    ASK THE MACHINE FIRST, and say which one did not answer: the Lenovo
+    is not always switched on (local_info.txt), and silence from it is a
+    machine that is off rather than fifty broken tools.
+    """
+    sys.path.insert(0, HERE)
+    import remote_gui
+
+    host = args.host
+    if not remote_gui.machine_is_up(host):
+        print(f"gui_regress: {host} is not answering on telnet -- is it "
+              f"powered on and booted? (local_info.txt lists the machines)")
+        return 2
+    con = remote_gui.RemoteConsole(host=host, quiet=True)
+    try:
+        if not remote_gui.desktop_is_up(con):
+            print(f"gui_regress: {host} answers, but no desktop is running "
+                  f"-- `guictl state` says nothing. It may be at a shell "
+                  f"prompt or mid-boot.")
+            return 2
+    finally:
+        # THE SESSION, not just this object: inetd serves four at a time
+        # and the parent holding one leaves the children three. The
+        # check above is the only thing this process does itself.
+        remote_gui.close_session()
+
+    print(f"gui_regress: {len(picked)} tool(s) against {host} (bare metal), "
+          f"one at a time\n")
+    results = []
+    for name, script, what in picked:
+        print(f"=== {name}: {what}  [{host}]")
+        status, secs, summary = run_one_remote(name, script, host,
+                                               args.timeout, args.logs)
+        print(f"    {status}  ({secs:.0f}s)  {summary}\n", end="\n")
+        results.append((name, status, secs, summary))
+
+    print("gui_regress: summary")
+    for name, status, secs, summary in results:
+        print(f"  {status:<5} {name:<12} {secs:5.0f}s  {summary}")
+
+    na = [r[0] for r in results if r[1] == "N/A"]
+    if na:
+        print(f"\ngui_regress: {len(na)} tool(s) cannot run on hardware: "
+              f"{', '.join(na)}")
+    failed = [r[0] for r in results if r[1] == "FAIL"]
+    if failed:
+        print(f"\ngui_regress: FAILED on {host} -- {', '.join(failed)}")
+        if not args.logs:
+            print("  re-run with --logs DIR to keep each tool's full output")
+        return 1
+    print(f"\ngui_regress: all clear on {host}")
+    return 0
+
+
+def run_one_remote(name, script, host, timeout, keep_logs):
+    """Run one tool against the BARE-METAL machine.
+
+    No guest to launch, no disk to copy, no slot: there is ONE machine
+    and it is already running. `TOYOS_REMOTE_HOST` is what redirects the
+    tool -- see tools/remote_gui.py for why that lands in the two
+    constructors rather than in a flag each tool has to grow.
+
+    A tool that asks for something hardware cannot do raises
+    `RemoteUnsupported`, and that is reported as **N/A with the reason**
+    rather than as a failure: "this check needs an emulator" and "the
+    desktop is broken" are different answers, and a run that conflates
+    them teaches a reader to ignore red.
+    """
+    tool = os.path.join(HERE, script)
+    if not os.path.exists(tool):
+        return ("SKIP", 0.0, f"no such tool: {script}")
+
+    env = dict(os.environ)
+    env["TOYOS_REMOTE_HOST"] = host
+    started = time.time()
+    try:
+        r = subprocess.run([sys.executable, "-u", tool],
+                           cwd=REPO, capture_output=True, text=True,
+                           timeout=timeout, env=env)
+        out = r.stdout + r.stderr
+        rc = r.returncode
+    except subprocess.TimeoutExpired as e:
+        partial = ""
+        for chunk in (e.stdout, e.stderr):
+            if not chunk:
+                continue
+            partial += chunk if isinstance(chunk, str) else chunk.decode(
+                "utf-8", errors="replace")
+        tail = partial.strip().splitlines()[-25:]
+        out = (f"TIMEOUT after {timeout}s on {host}; last output:\n"
+               + "\n".join(tail)) if tail else f"TIMEOUT after {timeout}s with no output"
+        rc = 124
+
+    if keep_logs:
+        with open(os.path.join(keep_logs, f"{name}.log"), "w") as f:
+            f.write(f"# tool={name} host={host} (bare metal)\n")
+            f.write(out)
+
+    unsupported = [ln.strip() for ln in out.splitlines()
+                   if "RemoteUnsupported" in ln]
+    summary = ""
+    for line in out.splitlines():
+        if "passed," in line and "failed" in line:
+            summary = line.strip()
+    if not summary:
+        tail = [ln for ln in out.splitlines() if ln.strip()]
+        summary = tail[-1].strip() if tail else "(no output)"
+    if rc != 0 and unsupported and not summary.startswith(name):
+        return ("N/A", time.time() - started, unsupported[-1][:160])
+    return ("PASS" if rc == 0 else "FAIL", time.time() - started, summary)
+
+
 def acquire_run_lock():
     """Refuse a SECOND concurrent suite run. Returns (handle, holder).
 
@@ -438,6 +557,10 @@ def main():
                          "is worse than no guard.")
     ap.add_argument("--logs", metavar="DIR",
                     help="write each tool's full output to DIR/<name>.log")
+    ap.add_argument("--host", metavar="IP",
+                    help="run against the BARE-METAL machine at this address "
+                         "instead of QEMU guests (serial, one machine; see "
+                         "tools/remote_gui.py). local_info.txt has the addresses")
     ap.add_argument("--list", action="store_true", help="list the tools and exit")
     ap.add_argument("--kvm", action="store_true",
                     help="run the guests under KVM instead of TCG -- much "
@@ -462,12 +585,16 @@ def main():
         print(f"gui_regress: nothing matched {args.only}")
         return 2
 
+    if args.logs:
+        os.makedirs(args.logs, exist_ok=True)
+
+    if args.host:
+        return run_remote_suite(picked, args)
+
     disk = args.disk if os.path.isabs(args.disk) else os.path.join(REPO, args.disk)
     if not os.path.exists(disk):
         print(f"gui_regress: no {disk} -- run `make iso` first")
         return 2
-    if args.logs:
-        os.makedirs(args.logs, exist_ok=True)
 
     if shutil.which("qemu-system-x86_64") is None:
         print("gui_regress: qemu-system-x86_64 not on PATH")

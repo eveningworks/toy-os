@@ -25,6 +25,23 @@ void mouse_set_scroll_invert(int on);
 int  mouse_scroll_step(void);
 int  mouse_scroll_invert(void);
 void mouse_set_bounds(int width, int height);
+
+// PUT THE POINTER SOMEWHERE, clamped to the bounds above. The next
+// relative report from a device moves on from there, which is what
+// makes this a WARP rather than an override -- X11's XWarpPointer is
+// server-side for the same reason, and a compositor is where Wayland
+// puts the equivalent.
+//
+// The kernel exposes it so a pointer can be PARKED: an injected
+// position at the compositor's own event loop lasts one iteration, and
+// a hover state has to survive a screen capture. Reached from ring 3
+// through WIN_REQ_WARP_POINTER, compositor only (abi/win_proto.h).
+//
+// A device that reports ABSOLUTE positions (a tablet, virtio-input)
+// overwrites this with its next report, so a warp holds only while
+// nothing is touching the pointer -- which is the case a parked
+// pointer is for.
+void mouse_set_position(int x, int y);
 // Called by i8042_poll() with one byte already read from the shared
 // PS/2 data port. Don't call this from an IRQ handler directly.
 void mouse_feed_byte(uint8_t data);

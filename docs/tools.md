@@ -2131,6 +2131,24 @@ window without going through it will find its layout polls timing out.
   press reddens the three "another window" checks. Run it after
   touching `wm_client.c`'s popup path, `uapp.c`'s surface table or
   `uui_menubar.c`'s open/close paths.
+- **`remote_gui.py`** -- THE GUI TOOLS, POINTED AT THE BARE-METAL
+  MACHINE. Not a runner: two objects serving the interfaces a tool
+  already drives -- `RemoteScreen` for `QMPSession` (screenshots through
+  the machine's own `screenshot` program, fetched over TFTP; input
+  through `guictl`) and `RemoteConsole` for `DebugConsole` (the same
+  `gui` vocabulary over telnet, subclassed so every helper from
+  `menu_row()` to `hover_frames()` comes across and cannot drift).
+  `TOYOS_REMOTE_HOST=<ip>` is what redirects a tool, and it is read in
+  the two constructors rather than in a flag each tool has to grow --
+  fifty-odd tools, fifty chances to forget. Three things it does NOT
+  pretend: a call needing QEMU (`hmp()`, a held button, relative motion)
+  raises `RemoteUnsupported` naming the reason; a settle compares the
+  caller's box or everything above the taskbar, because a whole frame is
+  never identical twice with a clock in it; and the kernel log comes
+  from `dmesg` as a delta, since telnet is not the wire the klog is on.
+  ONE session per process, given back at exit -- `inetd` serves four.
+  Driven by `gui_regress.py --host`; `docs/testing.md` has the worked
+  commands.
 - **`start_menu_test.py`** -- the Start menu's FOLDERS, search field and
   keyboard (`userland/wm/start_menu.c`, and `wm_overlay.h`'s `key` op
   that makes typing into an overlay possible at all). 23 checks: the

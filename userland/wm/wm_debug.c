@@ -1104,6 +1104,26 @@ static int cmd_move(int x, int y) {
     return inject_push(x, y, 0);
 }
 
+// WARP THE REAL POINTER, which `gui move` cannot do: an injected
+// position overrides the driver for the ONE wm_run() iteration that
+// consumes it, and the next pass reads the driver again and snaps back.
+// Right for a click, useless for a hover that has to survive a capture.
+// The kernel moves it (WIN_REQ_WARP_POINTER), so the next relative
+// report from the touchpad carries on from the new place -- and the
+// compositor learns about it through the ordinary raw-mouse event, with
+// no second copy of the pointer's position to keep true.
+static int cmd_warp(int *x, int *y) {
+    struct win_request_msg q;
+    k_memset(&q, 0, sizeof q);
+    q.type = WIN_REQ_WARP_POINTER;
+    q.a = *x;
+    q.b = *y;
+    if (sys_win_request(&q) != 0) return 0;
+    *x = q.a;   // clamped, and read back from the driver
+    *y = q.b;
+    return 1;
+}
+
 // A click is four queued events, not one: move, press, a held tick, and
 // release. Each is consumed on its own wm_run() iteration, which is
 // what makes press and release land on different frames -- a control
@@ -1408,6 +1428,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  open <AppName>        open a window directly (no menu clicking)\r\n");
     dbg_out_write(o, "  close <index>         close window <index> from `gui windows`\r\n");
     dbg_out_write(o, "  move X Y              move the cursor, nothing held (for hover)\r\n");
+    dbg_out_write(o, "  warp X Y              PARK the real pointer there (a hover that survives)\r\n");
     dbg_out_write(o, "  click X Y             synthetic press+release at a point\r\n");
     dbg_out_write(o, "  drag X1 Y1 X2 Y2 [N]  synthetic press, N interpolated moves, release\r\n");
     dbg_out_write(o, "  key <c|0xNN> [up] [mods]  synthetic key press/release\r\n");
@@ -1760,6 +1781,24 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
         }
         dbg_out_printf(o, cmd_move(x, y) ? "gui: queued move to (%d,%d)\r\n"
                                     : "gui: move queue full\r\n", x, y);
+        return 1;
+    }
+
+    if (k_strcmp(sub, "warp") == 0) {
+        char *xs = next_tok(&p), *ys = next_tok(&p);
+        int x, y;
+        if (!xs || !ys || !parse_int(xs, &x) || !parse_int(ys, &y)) {
+            dbg_out_write(o, "usage: gui warp X Y\r\n");
+            return 1;
+        }
+        // The POSITION IT REACHED, from the driver rather than echoed
+        // back: it clamps to the pointer's bounds, so a caller aiming
+        // off screen needs the answer, not its own question.
+        if (!cmd_warp(&x, &y)) {
+            dbg_out_write(o, "gui: warp refused\r\n");
+            return 1;
+        }
+        dbg_out_printf(o, "gui: pointer at (%d,%d)\r\n", x, y);
         return 1;
     }
 

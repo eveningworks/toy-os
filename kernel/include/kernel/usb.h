@@ -264,6 +264,17 @@ void usb_dump(void);
 // Returns 1 if the device enumerated. Ports are 1-based, as logged.
 int usb_diag_reset_port(unsigned port);
 
+// `config set kernel.usb_replug <port>`: the SOFTWARE REPLUG of that
+// port's socket -- drop its power and bring it back where the
+// controller allows that (HCCPARAMS1.PPC), and otherwise un-route and
+// re-route it through the Intel port mux, which is the only such lever
+// the ASUS has. The recovery the driver runs by itself after an
+// enumeration gives up; exposed as a knob so the MECHANISM can be
+// verified on a device that currently WORKS, instead of only when the
+// intermittent failure fires. Returns 1 if it was queued; which lever
+// ran, and whether the machine has one at all, is in the log.
+int usb_diag_replug_port(unsigned port);
+
 // The OTHER port number of `port`'s physical socket, or 0 if it has
 // none. Both are 1-based, as every port number a user sees is.
 //

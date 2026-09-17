@@ -78,6 +78,23 @@ argument. The result is in the kernel log, not in the setting's answer,
 because "the port was refused" and "the device would not come back" are
 both "we tried" and only one of them is an invalid value.
 
+`kernel.usb_replug` is the OTHER half of that replug, added
+2026-09-17 when the question above got its answer: the reset half has
+never rescued a wedged device, and the power half is what a replug does
+that nothing in software could. It takes a port number and takes that
+port's whole SOCKET away from the device for 100 ms -- both halves,
+since they are one connector -- then gives it back and lets the
+ordinary scan notice the connect. Which lever it uses depends on the
+machine: port power where HCCPARAMS1 says software controls it, and the
+Intel port mux (un-route and re-route) where it does not, which is the
+case on the ASUS. The driver now runs this by itself when a port's
+enumeration gives up and the device is still sitting there; the knob
+exists so the MECHANISM can be checked on a device that currently works,
+which is a question any boot can answer, unlike the intermittent
+failure. Refused, in the log, on a controller whose HCCPARAMS1 says port
+power is not software-controllable -- the boot line says which kind a
+machine is (`port power software-controlled (PPC)` or `always on`).
+
 **A tunable can also be a CONSENT switch, and `kernel.kbdtap` is the
 first.** The others trade performance against diagnostics — turning one
 on costs cycles and tells you more. That one gates whether the kernel

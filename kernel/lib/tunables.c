@@ -343,6 +343,46 @@ static const struct setting usb_reset_setting = {
     .apply = usb_reset_apply,
 };
 
+// ---- kernel.usb_replug -----------------------------------------------
+//
+// The other half of a replug, and the sibling of usb_reset above: that
+// one re-connects the port, this one takes the port AWAY from the
+// device and gives it back -- power where the controller has Port
+// Power Control, the Intel port mux where it does not. Both are
+// write-only port numbers reading back "off".
+//
+// Worth having as a knob rather than only as the driver's own recovery,
+// because the failure it exists for is intermittent: the knob answers
+// "does the mechanism work at all" on a device that is currently fine,
+// which is a different question from "did it rescue a wedged one" and
+// can be asked on any boot.
+
+static void usb_replug_get(char *out, uint32_t cap) { k_strlcpy(out, "off", cap); }
+
+static int usb_replug_apply(const char *value) {
+    if (!value || !value[0]) return SETTING_INVALID;
+    unsigned port = 0;
+    for (const char *c = value; *c; c++) {
+        if (*c < '0' || *c > '9') return SETTING_INVALID;
+        port = port * 10 + (unsigned)(*c - '0');
+        if (port > 255) return SETTING_INVALID;
+    }
+    if (!port) return SETTING_INVALID;   // ports are 1-based, as logged
+    usb_diag_replug_port(port);
+    return SETTING_SAVED;
+}
+
+static const struct setting usb_replug_setting = {
+    .name = "usb_replug",
+    .label = "Replug a USB port in software",
+    .type = SETTING_TYPE_STRING,
+    .file = CONFIG_PATH_RUNTIME,
+    .category = TUNABLE_CATEGORY,
+    .group = "Diagnostics",
+    .get = usb_replug_get,
+    .apply = usb_replug_apply,
+};
+
 // ---- kernel.intel_cycle -----------------------------------------------
 //
 // Write-only, like hda_tone: `pipe` turns the laptop panel's transcoder
@@ -393,6 +433,7 @@ void tunables_register(void) {
     setting_register(&heap_debug_setting);
     setting_register(&hda_tone_setting);
     setting_register(&usb_reset_setting);
+    setting_register(&usb_replug_setting);
     setting_register(&ata_nodma_setting);
     setting_register(&kstack_track_setting);
     setting_register(&syscall_stall_setting);

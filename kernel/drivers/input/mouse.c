@@ -147,6 +147,14 @@ static void clamp_to_bounds(void) {
     if (mouse_y >= bound_h) mouse_y = bound_h - 1;
 }
 
+// See api/mouse.h. Clamped through the same helper the motion path
+// uses, so a warp cannot put the pointer anywhere a device could not.
+void mouse_set_position(int x, int y) {
+    mouse_x = x;
+    mouse_y = y;
+    clamp_to_bounds();
+}
+
 void mouse_feed_byte(uint8_t data) {
 
     if (packet_index == 0 && !(data & 0x08)) {

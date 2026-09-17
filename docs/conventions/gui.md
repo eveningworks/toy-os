@@ -1814,6 +1814,27 @@ this the obvious way), not from how much history it accumulated.
   `/bin/wm/{system,apps,demos}/` -- the class is the SOURCE directory
   (`userland/gui/<class>/`) and the Makefile derives the destination,
   same rule that already made `userland/gui` mean `/bin`.
+- **A GUI TOOL REACHES A MACHINE THROUGH `QMPSession` AND
+  `DebugConsole`, AND NOWHERE ELSE** -- which is what lets
+  `TOYOS_REMOTE_HOST` point the whole suite at the bare-metal machine
+  without touching a tool (`tools/remote_gui.py`,
+  `gui_regress.py --host`). A tool that opens its own socket, shells out
+  to `vm.py`, or hardcodes `.vm.serial` can only ever drive a VM. What
+  hardware cannot do is REFUSED BY NAME (`RemoteUnsupported`: the
+  monitor, a held button, relative motion) and reported as N/A rather
+  than as a failure.
+- **ON HARDWARE, ONE TELNET SESSION PER PROCESS, GIVEN BACK AT EXIT.**
+  `inetd` serves four children (`userland/bin/inetd.c`), so a leaked
+  session is a quarter of the machine's capacity and the next connection
+  is refused as `connection closed` -- in whatever command happened to
+  be in flight, which reads as the desktop being gone. Same shape as the
+  VM rule that two `DebugConsole`s on one serial socket steal each
+  other's replies.
+- **AND THE KLOG IS NOT ON THAT WIRE.** A VM's debug console shares the
+  serial port the kernel logs to, so `logs()`/`events()` see an app's
+  layout report for free; over telnet they are fetched from `dmesg` as a
+  delta. A tool that reads app output through the console works on both
+  because of that, not by accident.
 - **THE START MENU SHOWS ONE FOLDER AT A TIME**, from the entries'
   `Category=` key: a sidebar of the categories actually present, the
   selected one's apps beside it, the system actions under a divider in

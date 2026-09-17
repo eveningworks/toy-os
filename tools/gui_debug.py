@@ -53,7 +53,9 @@ enter_gui() does that.
 """
 
 import json as _json
+import os
 import socket
+import sys
 import time
 
 PROMPT = "dbg> "
@@ -84,6 +86,18 @@ SETTLE_TIMEOUT_S = 15.0  # give up rather than hang if the queue never empties
 
 
 class DebugConsole:
+    # POINTED AT THE LAPTOP WHEN `TOYOS_REMOTE_HOST` NAMES ONE, which
+    # `gui_regress.py --host` sets for its children. The remote object is
+    # a SUBCLASS (tools/remote_gui.py) that replaces the transport and
+    # nothing else, so a tool reaches real hardware without an edit of
+    # its own -- and the alternative, a factory call in every tool, was
+    # fifty chances to forget one. It says on stderr where it is pointed.
+    def __new__(cls, *args, **kwargs):
+        if cls is DebugConsole and os.environ.get("TOYOS_REMOTE_HOST"):
+            from remote_gui import RemoteConsole
+            return super().__new__(RemoteConsole)
+        return super().__new__(cls)
+
     def __init__(self, sock_path, timeout=6.0):
         self.sock_path = sock_path
         self.timeout = timeout
@@ -388,6 +402,38 @@ class DebugConsole:
         overrides the mouse for one WM iteration only, after which the
         real pointer takes over again and the hover is recomputed away.
         """
+        # `gui warp` IF THE GUEST HAS IT: the kernel puts the pointer
+        # there and answers with where it landed, so one round trip
+        # replaces the aim-measure-correct loop below -- and it is the
+        # only way that works on real hardware, where there is no
+        # emulator input layer to inject through. The reply is the
+        # DRIVER's position, clamped, not an echo of the request.
+        reply = self.send(f"gui warp {x} {y}") or ""
+        for line in reply.splitlines():
+            if "pointer at (" in line:
+                got = line.split("pointer at (", 1)[1].split(")", 1)[0]
+                try:
+                    cx, cy = (int(v) for v in got.split(","))
+                except ValueError:
+                    break
+                # TELL THE EMULATOR WHERE THE POINTER WENT. QMP moves
+                # the cursor in RELATIVE deltas from its own estimate,
+                # so a warp the kernel performed leaves that estimate
+                # stale and the NEXT click_at() aims from the wrong
+                # origin -- measured: osk_test's tray click missed and
+                # the panel never opened, while the warp itself was
+                # perfect. The old aim-and-correct loop kept the two in
+                # step by construction; this has to say so.
+                try:
+                    qmp.pos[0], qmp.pos[1] = cx, cy
+                except (AttributeError, TypeError):
+                    pass
+                self.settle()   # let the compositor take the raw event
+                return (cx, cy)
+
+        # An older guest: aim through the emulator, ask where it got to,
+        # re-aim at the remaining error. QMPSession.goto() is open-loop
+        # and a large jump lands roughly a third of the way.
         for _ in range(tries):
             qmp.goto(x, y)
             self.settle()
@@ -814,11 +860,23 @@ def enter_gui(qmp, sock=".vm.serial", timeout=8.0):
     # launched -- which is exactly what this function is for. Doing it
     # per tool would mean every new tool rediscovering why its layout
     # poll times out.
-    ready = wait_for_desktop(sock, timeout=1.0)
-    if not ready:
-        qmp.send_text("gui")
-        qmp.send_key("ret")
+    if os.environ.get("TOYOS_REMOTE_HOST"):
+        # ON HARDWARE THERE IS NOTHING TO TYPE AT. `gui` is a command at
+        # the kernel's serial console, and the laptop has no serial
+        # console in use -- which is the whole reason `guictl` exists.
+        # The desktop is init's under the graphical target, so this asks
+        # and reports rather than trying to start one.
         ready = wait_for_desktop(sock, timeout)
+        if not ready:
+            print("remote: no desktop is answering on "
+                  f"{os.environ['TOYOS_REMOTE_HOST']} -- is it at a shell prompt, "
+                  "or mid-boot?", file=sys.stderr)
+    else:
+        ready = wait_for_desktop(sock, timeout=1.0)
+        if not ready:
+            qmp.send_text("gui")
+            qmp.send_key("ret")
+            ready = wait_for_desktop(sock, timeout)
     try:
         DebugConsole(sock).send("sh config set desktop.layout_log on")
     except Exception:

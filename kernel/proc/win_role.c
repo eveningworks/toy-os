@@ -17,6 +17,7 @@
 #include "win_surface.h" // the compositor's framebuffer grant (M41 stage 4a)
 #include "timer.h"       // pit_ticks() -- the ring-3 debug leg's deadline
 #include "win_input.h"   // the compositor's queue -- tell_compositor(), and reset with the role
+#include "mouse.h"       // mouse_set_position() -- WIN_REQ_WARP_POINTER
 #include "vga.h"         // vga_resume() -- hand the screen back (R7)
 #include "kfmt.h"        // klog_printf
 #include <stddef.h>
@@ -278,6 +279,23 @@ int win_server_request(int pid, struct win_request_msg *req) {
     // the op encoding; the MOVE half deliberately has no request at
     // all -- win_input.c moves the plane where it already holds the
     // screen coordinates, so pointer motion costs zero syscalls.
+    // Putting the pointer somewhere, same role gate: the compositor is
+    // the only process allowed to move it, as it is the only one that
+    // knows where anything is.
+    if (req->type == WIN_REQ_WARP_POINTER) {
+        if (pid != g_comp_pid || !g_comp_pid) return -1;
+        mouse_set_position((int)req->a, (int)req->b);
+        // WHERE IT ACTUALLY LANDED, written back: the driver clamps to
+        // the pointer's bounds, and the compositor's own copy does not
+        // move until the next raw event reaches it -- so a caller that
+        // echoed its own request would report a position the pointer
+        // may never have had.
+        int mx = 0, my = 0;
+        mouse_get_state(&mx, &my, 0);
+        req->a = (int32_t)mx;
+        req->b = (int32_t)my;
+        return 0;
+    }
     if (req->type == WIN_REQ_FB_CURSOR) {
         if (pid != g_comp_pid || !g_comp_pid) return -1;
         switch (req->a) {

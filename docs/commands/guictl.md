@@ -52,10 +52,20 @@ compositor: pid 3  pending 0  dropped 0
 nothing. `guictl help` lists what the WM currently answers --
 `windows`, `probe`, `menu`, `ctxmenu`, `dialog`, `taskbar`, `calendar`,
 `volume`, `state`, `compositor`, `icons`, `apps`, `damage`, `watchdog`,
-and the input verbs `click`, `rclick`, `move`, `key`, `open`, `close`,
-`kill`, `spawn`. Most take `--json`. A subcommand added to
+and the input verbs `click`, `rclick`, `move`, `warp`, `key`, `open`,
+`close`, `kill`, `spawn`. Most take `--json`. A subcommand added to
 `userland/wm/wm_debug.c` works here the day it lands, with no edit to
 this program.
+
+**`move` and `warp` are not the same verb.** `move` injects a position
+at the compositor's event loop, where it overrides the pointer for the
+ONE iteration that consumes it -- right for a click, and useless for a
+hover, which has to still be true while a screenshot is taken. `warp`
+asks the KERNEL to put the pointer there (`mouse_set_position()`), so
+the next movement of the touchpad carries on from the new place, and it
+answers with where the pointer actually landed after clamping. On a
+machine driven from here, `warp` is the only one of the two that can
+park a pointer at all.
 
 **It can act, not only report.** `guictl click 300 200` and `guictl open
 Calculator` do what they say. That is deliberate and consistent with

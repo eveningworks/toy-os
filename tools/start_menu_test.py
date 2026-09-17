@@ -189,7 +189,7 @@ def run(dbg, qmp, tmp, res):
         time.sleep(0.5)
     launched = dbg.window("Calculator") is not None
     res.check("Enter launches the highlighted result", launched,
-              "no Calculator window appeared")
+              "" if launched else "no Calculator window appeared")
     if launched:
         dbg.key(KEY_F4, mods="alt")
         time.sleep(0.8)

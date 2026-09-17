@@ -176,3 +176,76 @@ a crash mid-unlink or mid-truncate recovers itself without a full check.
 That is the honest upgrade path if this ever costs anything real; it
 touches the journal, which is the one part of TFS3 with a
 credit-counting design, so it was not worth doing to fix a harness bug.
+
+## The GUI tools reach real hardware by being POINTED, not by being ported
+
+A GUI tool here drives two objects: `QMPSession` for pixels and
+synthetic input, and `DebugConsole` for the compositor's own geometry.
+Both are emulator-shaped -- a QMP socket and the guest's serial port --
+and neither exists in front of a laptop. But almost nothing a tool ASKS
+is emulator-shaped: `gui menu --json` is the same answer from either
+machine, because `guictl` is the same `gui` vocabulary reached from a
+program rather than from a serial console.
+
+So `tools/remote_gui.py` serves those two interfaces over telnet and
+TFTP, and `TOYOS_REMOTE_HOST` makes the two constructors hand back the
+remote objects. A tool reaches the laptop with no edit of its own.
+
+**Why the environment and not a `--host` flag per tool.** The flag is
+the explicit version, and it is fifty-odd edits with fifty chances to
+forget one -- and a tool that forgot would silently drive the VM while
+its output said hardware. The two constructors are already the
+chokepoint every tool passes through, the same argument
+`launch_qemu_cmd()` makes for being the only way a guest is started.
+Each object prints one line naming the machine, because the failure this
+trades against is a reader believing the wrong machine was measured.
+
+**Why refusals are by name.** `hmp()`, `mouse_down()`, `key_down()` and
+`move_rel()` raise `RemoteUnsupported` with the reason instead of
+degrading. The runner reports such a tool as N/A, not FAIL: a suite that
+conflates "this check needs an emulator" with "the desktop is broken"
+teaches its reader to ignore red, which is the one thing a test tier
+cannot afford.
+
+**Why a spot-check tier rather than a gate.** There is one machine, so
+runs are serial and a frame costs a second. That buys the questions a VM
+cannot answer -- a real backlight, a panel's own modes, real USB, real
+timing -- and it cannot buy per-change feedback. Same reasoning as
+`qemu_matrix.py`: run it when a change is hardware-shaped, or before a
+release.
+
+## A pointer warp belongs in the mouse driver, not in the compositor's event loop
+
+`gui move` injects a position at the compositor's event loop, where it
+overrides the pointer for exactly ONE `wm_run()` iteration -- the next
+pass reads the driver again and the pointer snaps back. That is right
+for a click, whose press and release are edges, and useless for a hover,
+which has to still be true while a screen capture is taken. The VM
+harness worked around it by moving the REAL pointer through QEMU's input
+layer with relative deltas, aiming and correcting in a loop because the
+aim is open-loop; hardware has no such layer at all, so hover states,
+drag highlights and parked-pointer pixel probes were untestable there.
+
+The capability went where the pointer's position actually lives:
+`mouse_set_position()` in `kernel/drivers/input/mouse.c`, clamped
+through the same helper every motion path uses. The next relative report
+from a device carries on from the new place, which is what makes it a
+warp rather than an override -- X11's `XWarpPointer` is server-side for
+exactly this reason, and Wayland puts the equivalent in the compositor.
+
+**Reached by `WIN_REQ_WARP_POINTER`, not by a new syscall.** The
+compositor already speaks that channel for things only it may do
+(`WIN_REQ_FB_CURSOR`, the framebuffer lease), and it is the process that
+owns pointer policy; a syscall of its own would have been a second door
+into the same room, gated by the same role check.
+
+**The request answers with where the pointer LANDED**, read back from
+the driver. It clamps to the pointer's bounds, and the compositor's own
+copy does not move until the next raw event reaches it -- so a caller
+that echoed its own request would report a position the pointer may
+never have had. One round trip replaces the old eight-step loop.
+
+The honest limit: a device that reports ABSOLUTE positions (a tablet,
+virtio-input) overwrites a warp with its next report. That is fine for
+what a warp is for -- parking a pointer while nothing is touching it --
+and it is why the reply is the driver's answer rather than an assumption.

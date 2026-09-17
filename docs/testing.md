@@ -338,6 +338,61 @@ tracks the dirty box and `gfx_present()` no-ops when empty, so a second
 copy could only disagree with it silently. See `docs/decisions.md`.
 
 
+## Driving the BARE-METAL machine with the same tools
+
+**`gui_regress.py --host <ip>` runs the GUI tools against a real
+machine.** No QEMU, no disk copies, no slots: one machine, one tool at a
+time. `local_info.txt` has the addresses (the ASUS is normally up; the
+Lenovo is not always).
+
+```
+python3 tools/gui_regress.py --host 192.168.200.107 --logs /tmp/hw
+python3 tools/gui_regress.py --host 192.168.200.107 --only startmenu
+TOYOS_REMOTE_HOST=192.168.200.107 python3 tools/start_menu_test.py   # one tool
+```
+
+**The tools are not ported, they are POINTED.** `tools/remote_gui.py`
+serves the two interfaces a GUI tool already drives -- `QMPSession` and
+`DebugConsole` -- over telnet and TFTP instead of QMP and a unix socket,
+and `TOYOS_REMOTE_HOST` makes those two constructors hand back the
+remote objects. Nothing a tool asks for is emulator-specific: `gui menu
+--json` is the same answer from either machine, because `guictl` is the
+same `gui` vocabulary reached from a program.
+
+**What hardware cannot do is REFUSED BY NAME, not faked.** A tool that
+needs the QEMU monitor (`hmp()`), a held button (`mouse_down()`,
+`key_down()`) or relative motion with no target (`move_rel()`) raises
+`RemoteUnsupported`, and the runner reports that tool as **N/A with the
+reason** rather than as a failure -- "this check needs an emulator" and
+"the desktop is broken" are different answers.
+
+Three things that are genuinely different, and that a tool feels:
+
+- **A frame costs about a second**, not tens of milliseconds: the
+  machine writes a PNG and this one fetches it over TFTP. And **a whole
+  frame is never byte-identical twice**, because the taskbar clock
+  ticks -- so a settle compares the box the caller named, or everything
+  above the taskbar.
+- **The kernel log is not on this wire.** On a VM the klog and the
+  command replies share the serial port, which is how `logs()` and
+  `events()` see an app's layout report for free; over telnet the log is
+  fetched from `dmesg` instead, as the delta since the last look.
+- **`inetd` serves FOUR sessions** (`userland/bin/inetd.c`), so a
+  process uses exactly one and gives it back. A leaked session is a
+  quarter of the machine's capacity, and the next connection is refused
+  with `connection closed` and no hint of why.
+
+**A hardware run is a spot-check tier, never a gate** -- one machine,
+serial, minutes per tool. It is what answers the questions a VM cannot:
+a real backlight, a real panel's modes, real USB and audio, real timing.
+
+**The pointer can be PARKED on hardware** because the warp lives in the
+mouse driver (`mouse_set_position()`, reached by `WIN_REQ_WARP_POINTER`
+and spelled `gui warp X Y`), not in the emulator. `DebugConsole.
+warp_cursor()` uses it on both machines now; the old aim-measure-correct
+loop through QMP remains only for a guest whose WM predates it.
+
+
 ## Interactive runs, and the two extra ISOs
 
 **WHICH MEDIUM A RUN BOOTS, because it is no longer always the ISO.**

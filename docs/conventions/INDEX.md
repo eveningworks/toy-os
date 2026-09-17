@@ -415,6 +415,10 @@ whenever a headline here tells you something you did not already know.
 - **A ring-3 process can own a real window**
 - **`Exec=builtin:` is GONE, and ring 0 contains no applications.**
 - **The Start menu is built from FILES**
+- **A GUI TOOL REACHES A MACHINE THROUGH `QMPSession` AND
+  `DebugConsole`, AND NOWHERE ELSE**
+- **ON HARDWARE, ONE TELNET SESSION PER PROCESS, GIVEN BACK AT EXIT.**
+- **AND THE KLOG IS NOT ON THAT WIRE.**
 - **THE START MENU SHOWS ONE FOLDER AT A TIME**
 - **TYPING GOES TO THE SEARCH FIELD WHENEVER THE MENU IS OPEN**
 - **A Start-menu entry launches a RING-3 program**

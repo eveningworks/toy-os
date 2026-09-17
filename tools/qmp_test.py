@@ -258,6 +258,17 @@ class QMPSession:
     screenshot helpers layered on top. One instance per QEMU process.
     """
 
+    # THE BARE-METAL MACHINE WHEN `TOYOS_REMOTE_HOST` NAMES ONE -- see
+    # tools/remote_gui.py. RemoteScreen serves this same surface over
+    # the laptop's own screenshot program and `guictl`, and REFUSES, by
+    # name, the handful of calls that need an emulator (the monitor, a
+    # held button). Subclassed so `isinstance(x, QMPSession)` stays true.
+    def __new__(cls, *args, **kwargs):
+        if cls is QMPSession and os.environ.get("TOYOS_REMOTE_HOST"):
+            from remote_gui import RemoteScreen
+            return super().__new__(RemoteScreen)
+        return super().__new__(cls)
+
     def __init__(self, host="127.0.0.1", port=4445, cursor_start=(640, 360),
                  connect_timeout=5.0, connect_retries=10, retry_delay=0.5):
         last_err = None
