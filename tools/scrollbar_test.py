@@ -40,7 +40,7 @@ chooses between are far further apart than it.
 
 POSITIVE CONTROL
 ----------------
-Pass 0 for `g_scrollbar_grab` in userland/gui/notepad.c's on_motion().
+Pass 0 for `g_scrollbar_grab` in userland/gui/apps/notepad.c's on_motion().
 Run when this was written: check 1 goes red ("thumb moved 16px, dragged
 60px") and **everything else stays green**, including the
 drag-back-and-return check -- the jump drives the thumb into the end of

@@ -18,8 +18,8 @@ changing either, and the shipped theme cannot drift from the built-in
 fallback.
 
 It is also the authoring tool: a new theme is a function here that
-returns {shape name: Shape}, the same way tools/genfont.py is how a font
-gets made rather than a thing anyone writes by hand.
+returns {shape name: Shape} -- artwork that gets GENERATED rather than
+written by hand into a C array.
 
     python3 tools/gen_cursors.py            # write the themes
     python3 tools/gen_cursors.py --check    # fail if they are stale (CI)

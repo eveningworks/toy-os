@@ -4,7 +4,7 @@
 WHAT THIS IS
 ------------
 The desktop, the Start menu and the taskbar draw an app's icon by name:
-a .desktop entry says `Icon=notepad`, `userland/wm/icon_cache.c` decodes
+a .desktop entry says `Icon=notepad`, `userland/lib/icon_cache.c` decodes
 /usr/share/icons/notepad.qoi and scales it, and three draw sites blit
 the result with alpha. This checks the whole path, with the HOST as the
 oracle -- Pillow decodes the very same file and the guest's framebuffer

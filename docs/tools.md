@@ -11,7 +11,7 @@ does — and add a line to CLAUDE.md's index, which `tools/check_docs.py`
 verifies.
 
 Dev/build helper scripts, not compiled or shipped as part of the OS:
-`genfont.py`/`genttf.py` (font generation, pre-existing), `gen_kbs.py`
+`genttf.py` (font generation, pre-existing), `gen_kbs.py`
 (generates the `seed/sync/etc/kbs/<layout>` keyboard-layout data files
 from Linux's own XKB data -- see `docs/decisions.md` on layouts being
 data files, not a compiled-in enum), `qmp_test.py`
@@ -1902,7 +1902,18 @@ window without going through it will find its layout polls timing out.
   a probe asserting on that would pass on any output at all; and the
   path is unique per call, since a shared one read back after a failed
   spawn returns the PREVIOUS call's output, which is the quietest way a
-  check like this can lie. In `gui_regress.py`.
+  check like this can lie.
+
+  **It is in `ondemand_sweep.py`, NOT in `gui_regress.py`, and that is
+  the point of the move.** Several of its checks compare what the KERNEL
+  reports for a glyph against what a CLIENT draws and require a match --
+  which stopped being true when the kernel's font path was deleted, so
+  they are red BY DESIGN and no build can turn them green.
+  `docs/bugs.md` carries the owed rewrite (ask fontd what the session
+  font is; wait on the beacon rather than on `WIN_EV_FONT`). Until then
+  it is off the standard gate rather than dropped, because the ~20
+  checks around them still test real things -- a gate that always cries
+  wolf gets ignored, which is why per-push CI was retired here too.
 - **`check_layout.py`** -- see CLAUDE.md's `docs/` section: verifies the built
   image's directories against `docs/filesystem-layout.md`, and warns
   about orphaned seeded files. Runs in `preflight.sh` and CI.

@@ -4,7 +4,7 @@ proportional advance widths actually reaching the screen.
 
 The glyphs the desktop draws with come from one of two places: the
 tables tools/genttf.py baked into the kernel image, or a .ttf under
-/usr/share/fonts rasterized at runtime (kernel/lib/ttf.c). Switching
+/usr/share/fonts rasterized at runtime (userland/lib/ttf.c). Switching
 between them is a setting, and WIN_EV_FONT tells every client its cached
 metrics went stale.
 

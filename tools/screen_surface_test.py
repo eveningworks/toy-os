@@ -36,7 +36,7 @@ The blit check reads back four specific source values for exactly that.
 THE HEAP IS PART OF WHAT THIS PROVES. `screenclient: screen ...` only
 appears if sbrk handed over a full screen of back buffer. Before this
 stage the ring-3 heap was 1 MiB against a 3.5 MiB buffer at 1280x720, so
-the first check is a real regression gate on kernel/uaddr.h, not a
+the first check is a real regression gate on kernel/include/kernel/uaddr.h, not a
 formality -- see its comment there.
 
 Usage (the VM must already be up and in GUI mode):

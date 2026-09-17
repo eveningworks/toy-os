@@ -77,7 +77,7 @@ RIGHT = "0x96"      # KEY_ARROW_RIGHT
 POPUP_BG = (250, 250, 252)
 BAR_BG = (235, 235, 238)
 
-# Menu command codes, from userland/gui/notepad.c. A test asserting on
+# Menu command codes, from userland/gui/apps/notepad.c. A test asserting on
 # the app's action log needs the same numbering the app commits.
 CMD_SAVE = 3
 CMD_GOTO_TOP = 13

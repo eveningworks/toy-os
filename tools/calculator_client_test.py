@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Drive the RING-3 Calculator (userland/gui/calculator.c) and assert on it.
+"""Drive the RING-3 Calculator (userland/gui/apps/calculator.c) and assert on it.
 
 This is the proof for the app-migration step: Calculator running as an
 ordinary ring-3 process, drawing with the ported widget toolkit
-(userland/ui/uui.c) and computing with the SAME apps/calc_engine.c the
+(userland/ui/, one file per widget) and computing with the SAME
+apps/calc_engine.c the
 kernel-space version uses.
 
 WHAT IT ASSERTS, AND WHY IN THIS FORM

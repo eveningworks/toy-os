@@ -4,7 +4,7 @@
 WHAT THIS IS
 ------------
 UI Demo (`apps/uidemo.c`) exists to be a known target: one of every
-`apps/ui/` widget, and every interaction reported as a single parseable
+`userland/ui/` widget, and every interaction reported as a single parseable
 line. This is the other half of that -- the thing that drives it and
 checks the lines came out right. A widget regression shows up here as a
 named failing check rather than as something subtly wrong in a
@@ -171,7 +171,7 @@ class Demo:
         """Spawn a FRESH UI Demo and read its self-reported layout.
 
         UI Demo is a RING-3 PROCESS since Milestone 41's stage 0
-        (userland/gui/uidemo.c), so this spawns it rather than opening a
+        (userland/gui/demos/uidemo.c), so this spawns it rather than opening a
         kernel-space window, and waits for the app's own layout lines --
         a window in the WM's list does not yet mean the client has run
         its on_open. Everything else is unchanged: close whatever is on

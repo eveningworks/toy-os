@@ -211,7 +211,7 @@ TESTS = [
     # kernel-only include in the shared half opens silently.
     ("kfmt_test", 0, None, None),
     # The TrueType rasterizer's SECOND compilation, and the same gap
-    # klineedit_test covers: kernel/lib/ttf.c has KTESTs, and every one
+    # klineedit_test covers: userland/lib/ttf.c has KTESTs, and every one
     # of them would pass whether or not ring 3 could link a byte of it.
     # SKIPS ITSELF on an image built with no fonts, so it must not
     # require a pass line that only appears when there is a font.

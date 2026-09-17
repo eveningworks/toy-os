@@ -30,7 +30,7 @@ what proves the capture pipeline can see motion at all. Without it, a
 harness that returned the same cached image every time would report a
 perfectly steady desktop and pass.
 
-POSITIVE CONTROL, verified: in `kernel/drivers/keyboard.c`, drop the
+POSITIVE CONTROL, verified: in `kernel/drivers/input/keyboard.c`, drop the
 `keyboard_blocking_suspended()` guards around `vga_cursor_tick()` and
 `vga_present()` in the blocking wait loop, and rebuild. The Control Panel
 icon region goes from 1 distinct image in 8 captures to 2, the empty

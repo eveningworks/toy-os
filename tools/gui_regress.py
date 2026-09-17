@@ -5,7 +5,7 @@ WHAT THIS IS
 ------------
 The GUI test tools (`uidemo_test.py`, `gfxdemo_test.py`,
 `notepad_client_test.py`, ...) each drive one app and assert on its log.
-Running them is the standard check after touching `apps/ui/`,
+Running them is the standard check after touching `userland/ui/`,
 `userland/`, or anything the window manager draws -- and doing that by
 hand means retyping the same six commands, each with its own image copy
 and VM lifecycle. This is that sequence, once, with a summary table.
@@ -107,7 +107,7 @@ DEFAULT_JOBS = min(12, max(2, (os.cpu_count() or 4) // 2))
 # regression is reported before the apps built on it start failing for
 # what looks like their own reasons.
 TOOLS = [
-    ("uidemo", "uidemo_test.py", "apps/ui/ widgets, kernel-space"),
+    ("uidemo", "uidemo_test.py", "userland/ui/ widgets, in a ring-3 client"),
     ("uiclient", "uiclient_test.py", "the ported widgets, ring 3"),
     ("winclient", "winclient_test.py", "the ring-3 window protocol"),
     ("gfxdemo", "gfxdemo_test.py", "geometry primitives + the canvas widget"),
@@ -144,7 +144,6 @@ TOOLS = [
     ("singleinst", "single_instance_test.py", "one copy of an app, and relaunch raises it"),
     ("osk", "osk_test.py", "the on-screen keyboard types into the focused client"),
     ("settings", "settings_test.py", "the settings registry, in ring 3"),
-    ("font", "font_test.py", "runtime TTF faces, live switching, proportional widths"),
     ("idle", "idle_desktop_test.py", "nothing paints over an idle desktop"),
     ("imgview", "imgview_test.py", "JPEG decoding, the viewer, and the wallpaper"),
     ("icons", "icons_test.py", "app icons: QOI, alpha compositing, three draw sites"),
@@ -214,7 +213,6 @@ COST_S = {
     "imgview": 30,     # two decodes, several settled frames, a wallpaper hop
     "wallpaper": 30,   # a resolution change out and back, plus five settled frames
     "icons": 25,       # three draw sites, each a settled frame
-    "font": 19,        # two face switches and a size change, each settled
     "gfxdemo": 24,
     "cursor": 21,
     "saver": 22,

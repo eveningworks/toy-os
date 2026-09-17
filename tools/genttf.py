@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Bakes a real TrueType font into static anti-aliased bitmap fonts for
-toy-os, the same "generate at build time, bake into a C array, commit the
-result" pattern genfont.py used for the original hand-drawn 8x8 font --
-except the source of truth here is an actual .ttf file rendered offline
-with FreeType (via Pillow), not hand-authored ASCII art. There is no font
+toy-os: generate offline, bake into a C array, commit the result. It
+replaced a hand-authored 8x8 ASCII-art font and its authoring script,
+deleted once nothing referenced the face; the source of truth here is an
+actual .ttf rendered with FreeType (via Pillow). There is no font
 rasterizer on-target: this script never runs on toy-os itself, only on a
 developer's machine, and its *output* (plain grayscale-alpha byte arrays)
 is what actually ships in the kernel image.
@@ -15,7 +15,7 @@ selectable at runtime via gfx_set_font_px() (see gfx.c) -- the shell's
 `fontsize` command switches between them by typing the number.
 
 **WHAT THIS IS FOR NOW.** There IS a real runtime TrueType rasterizer
-(kernel/lib/ttf.c), so these baked tables are no longer how the machine
+(userland/lib/ttf.c), so these baked tables are no longer how the machine
 gets glyphs -- they are how it gets glyphs when nothing else can: before
 the filesystem is mounted, on the panic path, and on an image with no
 font files. That makes what this script produces the FALLBACK, and the
@@ -146,7 +146,7 @@ def header_text():
     lines.append("// gfx_draw_char() alpha-blends it straight into the framebuffer.")
     lines.append("//")
     lines.append("// **THIS IS THE FALLBACK NOW, NOT THE ONLY FONT.** There IS a runtime")
-    lines.append("// rasterizer (kernel/lib/ttf.c) and a face loaded from")
+    lines.append("// rasterizer (userland/lib/ttf.c) and a face loaded from")
     lines.append("// /usr/share/fonts (api/font_face.h) takes precedence when one is")
     lines.append("// selected. These tables remain because they are the only glyphs that")
     lines.append("// need no filesystem, no allocator and no parsing: they draw before")
@@ -287,7 +287,7 @@ def check_header():
     it needs JetBrainsMono-Regular.ttf installed -- which most checkouts
     do not have. So the tempting move when its prose goes stale (and it
     did: it claimed "no runtime rasterization involved" for a while after
-    kernel/lib/ttf.c landed) is to hand-edit the header, which works
+    userland/lib/ttf.c landed) is to hand-edit the header, which works
     perfectly until the next person who DOES have the font regenerates
     and silently reverts it.
 

@@ -529,7 +529,7 @@ def main():
               f"pid {shell_pid} (" in out, out.strip()[:90])
         # A console with an owner and no foreground group is the state
         # in which Ctrl-C silently does nothing while everything else
-        # looks healthy -- kernel/tty.h's invariant, from outside.
+        # looks healthy -- kernel/include/kernel/tty.h's invariant, from outside.
         check("...and it has a foreground group, so Ctrl-C means something",
               "foreground group: none" not in out, out.strip()[:90])
         # WHICH suspend reason, not merely that there is one: on a text

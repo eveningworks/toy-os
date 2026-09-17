@@ -240,6 +240,15 @@ TOOLS = [
     ("hires",       "hires_test.py",           "a desktop above 1280x720",           True,
      ("kcmdline", "needs an ISO built with KCMDLINE=\"video=1920x1080\""),                   False),
     ("taskbar",     "taskbar_test.py",         "taskbar overflow and grouping",      True,  None,                   True),
+    # OUT OF gui_regress.py DELIBERATELY: it compares what the KERNEL
+    # reports for a glyph against what a CLIENT draws and requires a
+    # match, which stopped being true when the kernel's font path was
+    # deleted -- so several of its checks are red BY DESIGN and a gate
+    # that always cries wolf gets ignored. docs/bugs.md carries the owed
+    # rewrite (ask fontd what the session font is, and wait on the
+    # beacon rather than on WIN_EV_FONT). It is here, not dropped,
+    # because the ~20 checks around them still test real things.
+    ("font",        "font_test.py",            "runtime TTF faces and live switching (PARTLY RED BY DESIGN)", True, None, True),
 
     # ATTACHES to a running vm.py guest (its usage says to start one
     # first), so wants_vm -- without it, it dies on a missing

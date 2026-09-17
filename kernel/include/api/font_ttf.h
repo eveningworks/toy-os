@@ -10,7 +10,7 @@
 // gfx_draw_char() alpha-blends it straight into the framebuffer.
 //
 // **THIS IS THE FALLBACK NOW, NOT THE ONLY FONT.** There IS a runtime
-// rasterizer (kernel/lib/ttf.c) and a face loaded from
+// rasterizer (userland/lib/ttf.c) and a face loaded from
 // /usr/share/fonts (api/font_face.h) takes precedence when one is
 // selected. These tables remain because they are the only glyphs that
 // need no filesystem, no allocator and no parsing: they draw before
