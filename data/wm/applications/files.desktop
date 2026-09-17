@@ -2,4 +2,5 @@
 Name=File Manager
 Exec=/bin/wm/apps/files
 Category=utility
+Comment=Browse, copy and rename what is on the disk
 Icon=files

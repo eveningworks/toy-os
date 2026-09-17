@@ -2,5 +2,6 @@
 Name=Audio Player
 Exec=/bin/wm/apps/player
 Category=multimedia
+Comment=Plays audio files through the sound card
 Icon=player
 Handles=.wav .mp3

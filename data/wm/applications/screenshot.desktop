@@ -2,4 +2,5 @@
 Name=Screenshot
 Exec=/bin/wm/apps/screenshot
 Category=graphics
+Comment=Captures the screen, a window or a region
 Icon=screenshot

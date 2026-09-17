@@ -2,4 +2,5 @@
 Name=System Settings
 Exec=/bin/wm/system/settings
 Category=system
+Comment=Everything about this machine you can change
 Icon=settings

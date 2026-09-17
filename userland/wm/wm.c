@@ -30,6 +30,7 @@
 #include "wm_debug.h"
 #include "win_role.h"
 #include "start_menu.h"
+#include "start_store.h"
 #include "context_menu.h"
 #include "calendar_popup.h"
 #include "volume_popup.h"
@@ -326,6 +327,12 @@ void open_app(const struct gui_app *app) {
     // A launched client has no such callback, and its window is torn
     // down by the window server when the process dies -- so tracking it
     // here would cap the desktop at one ring-3 app for no benefit.
+    // RECORDED HERE, not in the Start menu: this is the one place a
+    // launcher starts anything, so the desktop's icons and the context
+    // menu's Open count too. A "recent" list that disagreed with what
+    // you just did would not be worth keeping.
+    start_store_record_launch(app->app_id);
+
     if (app->exec_path) {
         int pid = sys_spawn(app->exec_path, 0, -1);
         wm_logf("wm: launched %s (%s) as pid %d\n",
@@ -915,6 +922,9 @@ void wm_run(void) {
     // menu or an icon. Data on disk, not a compiled-in table -- see
     // apps/gui_apps.c.
     gui_apps_load();
+    // AFTER the registry: the store asks it which apps exist, so their
+    // history can be found by id (start_store.c).
+    start_store_load();
 
     window_count = 0;
     wm_overlay_close_others(0);
@@ -1294,6 +1304,10 @@ void wm_run(void) {
         // focused window, so a scrollable app is unaffected.
         if (wheel != 0 && volume_handle_wheel(mx, my, wheel)) wheel = 0;
         if (wheel != 0 && brightness_handle_wheel(mx, my, wheel)) wheel = 0;
+        // ...and then any open overlay that scrolls, over its own rect
+        // (wm_overlay.h). Before the focused window, or a Start menu
+        // taller than its pane would scroll whatever is behind it.
+        if (wheel != 0 && wm_overlay_wheel(mx, my, wheel)) wheel = 0;
 
         if (key != -1 || wheel != 0) {
             int f = wm_focus_index();

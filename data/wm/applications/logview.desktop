@@ -2,4 +2,5 @@
 Name=Log Viewer
 Exec=/bin/wm/apps/logview
 Category=system
+Comment=What the kernel and the programs have been saying
 Icon=logview

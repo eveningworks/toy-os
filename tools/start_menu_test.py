@@ -30,6 +30,25 @@ What it proves, and what a broken version would still pass:
     inside the field's own rect, while a sidebar action row (which
     nothing in that gesture touches) stays byte-identical. "It responds"
     is not "it is drawn", and the neighbour is half the assertion.
+  * A PIN SURVIVES A REBOOT. Pinning through the row's own context menu
+    makes a Favourites folder appear and the app show in it; the store
+    is then read back from `/etc/start-menu.conf` through an
+    INDEPENDENT path (`sh cat`), and the guest is REBOOTED and asked
+    again -- which is the only version of this check worth having,
+    since a pin that lasted until the next boot would be the bug.
+  * A LAUNCH PUTS AN APP IN Recent, newest first, and the count the WM
+    reports goes up by exactly one per launch.
+  * A FOLDER TALLER THAN THE PANE SCROLLS: the wheel moves the window
+    over the list (the rows shown change, the list does not), End
+    reaches the last row, and the selection is never off screen -- the
+    bug this pair exists for is a highlight that walks past the bottom
+    while Enter goes on launching something invisible.
+  * RANKING: typing a prefix puts the app whose name STARTS with it
+    first. "te" offers Terminal before Crash Test, which a substring
+    match alone does not.
+  * THE DESCRIPTION STRIP says what the hovered row is, from its
+    `Comment=` -- and says nothing, rather than the last thing, when
+    the pointer is on a row that has none.
 
 Positive controls, each run once when this was written (2026-09-17):
   * start_menu_key() returning 0 for printable characters reddens every
@@ -38,6 +57,10 @@ Positive controls, each run once when this was written (2026-09-17):
     reddens "shows exactly that folder's apps" while leaving the
     selection check green -- which is the pair of checks that
     distinguishes the two failures.
+  * start_store_pin() not writing the file reddens the four persistence
+    checks (the store on disk, and the three after the reboot) and
+    NOTHING else -- "pinning makes a Favourites folder" stays green,
+    which is exactly the failure a same-boot check cannot see.
 
 Usage (the VM must already be up):
     python3 tools/gui_regress.py --only start_menu_test
@@ -60,6 +83,8 @@ KEY_UP = "0x91"
 KEY_RIGHT = "0x96"
 KEY_ENTER = "0x0a"
 KEY_F4 = "0xA5"
+KEY_HOME = "0x97"
+KEY_END = "0x98"
 
 
 class Result:
@@ -103,6 +128,31 @@ def open_menu(dbg, want=True, tries=6):
 def type_text(dbg, text):
     for ch in text:
         dbg.key(ch)
+
+
+def reboot(dbg, timeout=90):
+    """Reboot the guest and wait for its desktop to answer again.
+
+    The only way to test that something PERSISTED. `reboot` is a /bin
+    program, so the console's connection dies with the machine -- the
+    wait is a fresh console per poll, and the first one that answers is
+    the new boot.
+    """
+    dbg.send("sh sync")
+    try:
+        dbg.send("sh spawn /bin/reboot")
+    except (OSError, EOFError):
+        pass        # the machine going away mid-command is the point
+    time.sleep(3)
+    if not dbg.reconnect(timeout):
+        return False
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if "screen " in (dbg.send("gui state") or ""):
+            time.sleep(1.5)     # let the desktop finish its first frame
+            return True
+        time.sleep(2)
+    return False
 
 
 def crop(im, r):
@@ -206,7 +256,15 @@ def run(dbg, qmp, tmp, res):
     res.check("a second Esc closes the menu", not dbg.menu().get("open"))
 
     # --- 7. the arrows ---------------------------------------------------
+    #
+    # ALL APPS, EXPLICITLY. The menu opens on Favourites or Recent when
+    # either exists -- and check 5 above LAUNCHES something, so by here
+    # Recent does, with one row in it. Two Down presses on a one-row
+    # folder land on the same row, which read as the arrows being
+    # broken: the test had assumed a default that its own earlier check
+    # changes.
     open_menu(dbg)
+    dbg.menu_select_folder("All Apps")
     dbg.key(KEY_DOWN)
     first = [r["selected"] for r in rows_of(dbg.menu(), "app")]
     dbg.key(KEY_DOWN)
@@ -223,6 +281,144 @@ def run(dbg, qmp, tmp, res):
     res.check("Right moves to the next folder",
               dbg.menu().get("category") != before_folder,
               f"{before_folder} -> {dbg.menu().get('category')}")
+
+    # --- 8. the description strip ----------------------------------------
+    open_menu(dbg)
+    menu = dbg.menu()
+    row = next((r for r in rows_of(menu, "app") if r["label"] == "Notepad"), None)
+    if row is None:
+        x, y = dbg.menu_app_row("Notepad")
+        menu = dbg.menu()
+        row = next(r for r in rows_of(menu, "app") if r["label"] == "Notepad")
+    dbg.warp_cursor(qmp, row["cx"], row["cy"])
+    said = dbg.menu().get("description") or ""
+    res.check("the strip says what the hovered app is",
+              len(said) > 8, f"{said!r}")
+    # AND IT DOES NOT LATCH. A strip that kept showing the last app's
+    # line while the pointer sat on something else would be worse than
+    # an empty one -- it would be wrong. A sidebar action is the row to
+    # prove it on: every shipped app entry has a `Comment=` now, so the
+    # "nothing to say" case is a row that is not an app at all.
+    act = rows_of(dbg.menu(), "action")[0]
+    dbg.warp_cursor(qmp, act["cx"], act["cy"])
+    res.check("...and says nothing on a row that is not an app",
+              not (dbg.menu().get("description") or ""),
+              f"{dbg.menu().get('description')!r}")
+
+    # --- 9. scrolling a folder taller than the pane ------------------------
+    dbg.menu_select_folder("All Apps")
+    menu = dbg.menu()
+    listed, shown = menu.get("listed", 0), len(rows_of(menu, "app"))
+    res.check("All Apps holds more than the pane shows",
+              listed > shown, f"{listed} apps, {shown} rows")
+    if listed > shown:
+        first_rows = [r["label"] for r in rows_of(menu, "app")]
+        dbg.wheel(-3)
+        m2 = dbg.menu()
+        res.check("the wheel scrolls the list, and the list does not change",
+                  m2.get("scroll", 0) > 0 and m2.get("listed") == listed and
+                  [r["label"] for r in rows_of(m2, "app")] != first_rows,
+                  f"scroll={m2.get('scroll')} listed={m2.get('listed')}")
+        dbg.key(KEY_END)
+        m3 = dbg.menu()
+        sel = [r["label"] for r in rows_of(m3, "app") if r["selected"]]
+        res.check("End reaches the last row, and it is ON SCREEN",
+                  m3.get("scroll", 0) == listed - shown and len(sel) == 1,
+                  f"scroll={m3.get('scroll')} of {listed - shown}, selected={sel}")
+        dbg.key(KEY_HOME)
+        res.check("Home goes back to the top",
+                  dbg.menu().get("scroll", 0) == 0)
+
+    # --- 10. ranking -------------------------------------------------------
+    type_text(dbg, "te")
+    hits = [r["label"] for r in rows_of(dbg.menu(), "app")]
+    res.check("a prefix match is offered before a substring one",
+              bool(hits) and hits[0].lower().startswith("te"), f"{hits}")
+    dbg.key(KEY_ESC)
+
+    # --- 11. Recent, and a pin that survives a reboot ----------------------
+    before = {a["label"]: a for a in dbg.menu().get("apps", [])}
+    runs_before = before.get("Calculator", {}).get("runs", 0)
+    open_menu(dbg, want=False)
+    dbg.open_app("Calculator")
+    deadline = time.time() + 20
+    while time.time() < deadline and dbg.window("Calculator") is None:
+        time.sleep(0.5)
+    if dbg.window("Calculator") is not None:
+        dbg.key(KEY_F4, mods="alt")
+        time.sleep(0.8)
+    open_menu(dbg)
+    after = {a["label"]: a for a in dbg.menu().get("apps", [])}
+    res.check("a launch is counted",
+              after.get("Calculator", {}).get("runs", 0) == runs_before + 1,
+              f"{runs_before} -> {after.get('Calculator', {}).get('runs')}")
+    res.check("...and Recent is a folder now",
+              any(c["label"] == "Recent"
+                  for c in rows_of(dbg.menu(), "category")))
+    dbg.menu_select_folder("Recent")
+    recent = [r["label"] for r in rows_of(dbg.menu(), "app")]
+    res.check("...with the app just launched at the top",
+              bool(recent) and recent[0] == "Calculator", f"{recent}")
+
+    # ESTABLISH THE PRECONDITION, do not assume it. On a machine that
+    # has been used -- the bare-metal one, or a disk image a previous
+    # run wrote to -- Notepad may already be pinned, and the row then
+    # offers Unpin. The first version of this asserted "Pin to Start" is
+    # present and failed on a working menu for that reason.
+    def pin_menu(label_wanted):
+        x, y = dbg.menu_app_row("Notepad")
+        dbg.rclick(x, y)
+        time.sleep(0.6)
+        rows = [r["label"] for r in (dbg.ctxmenu() or {}).get("rows", [])]
+        pos = dbg.ctxmenu_row(label_wanted)
+        if pos:
+            dbg.click(*pos)
+            time.sleep(0.6)
+        return rows
+
+    labels = pin_menu("Unpin from Start")   # a no-op when it is not pinned
+    res.check("an app row offers the pin toggle, by the name of what it does",
+              "Pin to Start" in labels or "Unpin from Start" in labels, f"{labels}")
+    labels = pin_menu("Pin to Start")
+    res.check("...and once unpinned it offers Pin to Start",
+              "Pin to Start" in labels, f"{labels}")
+    res.check("pinning makes a Favourites folder",
+              any(c["label"] == "Favourites"
+                  for c in rows_of(dbg.menu(), "category")))
+    # THROUGH AN INDEPENDENT PATH: the menu believing it is pinned and
+    # the file saying so are different claims, and only the second
+    # survives a boot.
+    stored = dbg.send("sh cat /etc/start-menu.conf") or ""
+    res.check("...and the store on disk says so",
+              "pinned=" in stored and "notepad" in stored,
+              stored.strip().splitlines()[-1] if stored.strip() else "empty")
+
+    open_menu(dbg, want=False)
+    if reboot(dbg):
+        open_menu(dbg)
+        menu = dbg.menu()
+        res.check("AFTER A REBOOT the pin is still there",
+                  any(c["label"] == "Favourites"
+                      for c in rows_of(menu, "category")),
+                  f"{[c['label'] for c in rows_of(menu, 'category')]}")
+        res.check("...the menu opens on Favourites",
+                  menu.get("category") == "Favourites", f"{menu.get('category')}")
+        fav = [r["label"] for r in rows_of(menu, "app")]
+        res.check("...and the pinned app is in it", fav == ["Notepad"], f"{fav}")
+        res.check("...and the launch count survived too",
+                  {a["label"]: a["runs"] for a in menu.get("apps", [])}
+                      .get("Calculator", 0) >= 1)
+
+    # PUT THE MACHINE BACK. A pin is user-visible state that outlives
+    # the run -- on the bare-metal machine it outlives the DAY -- and
+    # CLAUDE.md's rule for a test that changes the machine applies to
+    # this as much as to a setting. The launch history is deliberately
+    # NOT reset: it is a counter of real launches, and this tool made
+    # one.
+    pin_menu("Unpin from Start")
+    res.check("the pin is removed again, leaving the machine as it was",
+              not any(a["label"] == "Notepad" and a["pinned"]
+                      for a in dbg.menu().get("apps", [])))
 
     # Leave nothing open: a left-over menu eats the next tool's first
     # click, anywhere on screen.

@@ -2,4 +2,5 @@
 Name=Calculator
 Exec=/bin/wm/apps/calculator
 Category=utility
+Comment=Arithmetic, with a keypad and a keyboard
 Icon=calculator

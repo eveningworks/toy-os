@@ -2,4 +2,5 @@
 Name=Font Demo
 Exec=/bin/wm/demos/fontdemo
 Category=graphics
+Comment=Every glyph of the current face, at every size
 Icon=fontdemo

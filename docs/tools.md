@@ -2163,11 +2163,21 @@ window without going through it will find its layout polls timing out.
   result and the folder. The pixel half: typing CHANGES the search
   field's own rect while a sidebar action row stays byte-identical --
   "it responds" is not "it is drawn", and the neighbour is half the
-  assertion. Two positive controls in its docstring: refusing printable
-  characters reddens the seven search/Enter checks and nothing else, and
-  a pane that ignores the selected folder reddens the contents check
-  while the selection check stays green. Run it after touching
-  `start_menu.c`, the overlay table or a `.desktop` `Category=`.
+  assertion. It also covers what PERSISTS: a pin made
+  through the row's own context menu is read back from
+  `/etc/start-menu.conf` through an independent path (`sh cat`), and
+  then the guest is REBOOTED and asked again -- the only version of that
+  check worth having. **It is the one tool that reboots its guest**, so
+  `gui_regress.py` launches it with `--reboot`: the default
+  `-no-reboot` answers a guest reboot by ending QEMU, and the tool's
+  next command would then fail as a dead socket somewhere unrelated.
+  Three positive controls in its docstring: refusing printable
+  characters reddens the seven search/Enter checks and nothing else; a
+  pane that ignores the selected folder reddens the contents check while
+  the selection check stays green; and a pin that never reaches the disk
+  reddens the four persistence checks and leaves the same-boot one
+  green. Run it after touching `start_menu.c`, `start_store.c`, the
+  overlay table or a `.desktop` `Category=`.
 - **`filedialog_test.py`** -- the shared file chooser as an OWNED window
   (`WIN_REQ_DIALOG`, `ui/uui_filedialog.h`, `uapp_window_open()`),
   driven through Notepad, Image Viewer and Audio Player. 17 checks: the

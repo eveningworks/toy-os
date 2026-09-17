@@ -15,6 +15,7 @@
 #include "osk.h"
 #include "wm_debug.h"
 #include "start_menu.h"
+#include "start_store.h"
 #include "context_menu.h"
 #include "confirm_dialog.h"
 #include "gui_apps.h"
@@ -534,6 +535,7 @@ static const char *menu_kind_name(int kind) {
     case START_ROW_CATEGORY: return "category";
     case START_ROW_ACTION:   return "action";
     case START_ROW_APP:      return "app";
+    case START_ROW_DESC:     return "desc";
     default:                 return "search";
     }
 }
@@ -549,10 +551,14 @@ static void cmd_menu(struct dbg_out *o, int json) {
     int total = start_menu_row_count();
 
     if (json) {
+        int first = 0, listed = 0;
+        start_menu_scroll_state(&first, &listed);
         dbg_out_printf(o, "{\"open\":%s,\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
-                          "\"item_h\":%d,\"category\":\"%s\",\"query\":\"%s\",\"rows\":[",
+                          "\"item_h\":%d,\"category\":\"%s\",\"query\":\"%s\","
+                          "\"scroll\":%d,\"listed\":%d,\"description\":\"%s\",\"rows\":[",
                      start_menu_open ? "true" : "false", mx, my, mw, mh, item_h,
-                     start_menu_category(), start_menu_query());
+                     start_menu_category(), start_menu_query(),
+                     first, listed, start_menu_description());
         for (int i = 0; i < total; i++) {
             const char *label; int kind, x, y, w, h, sel;
             if (!start_menu_row_info(i, &label, &kind, &x, &y, &w, &h, &sel)) break;
@@ -572,8 +578,12 @@ static void cmd_menu(struct dbg_out *o, int json) {
         int apps = gui_app_visible_count(GUI_SHOW_STARTMENU);
         for (int i = 0; i < apps; i++) {
             const struct gui_app *a = gui_app_visible_at(GUI_SHOW_STARTMENU, i);
-            dbg_out_printf(o, "%s{\"label\":\"%s\",\"cat\":\"%s\"}",
-                         i ? "," : "", a->name, gui_app_cat_label_for(a->category));
+            dbg_out_printf(o, "%s{\"label\":\"%s\",\"cat\":\"%s\",\"id\":\"%s\","
+                              "\"pinned\":%s,\"runs\":%u}",
+                         i ? "," : "", a->name, gui_app_cat_label_for(a->category),
+                         a->app_id ? a->app_id : "",
+                         start_store_is_pinned(a->app_id) ? "true" : "false",
+                         start_store_launch_count(a->app_id));
         }
         dbg_out_write(o, "]}\r\n");
         return;
@@ -581,8 +591,14 @@ static void cmd_menu(struct dbg_out *o, int json) {
 
     dbg_out_printf(o, "start menu: %s, x=%d y=%d w=%d h=%d item_h=%d rows=%d\r\n",
                  start_menu_open ? "open" : "closed", mx, my, mw, mh, item_h, total);
-    dbg_out_printf(o, "  folder: %s   query: \"%s\"\r\n",
-                 start_menu_category(), start_menu_query());
+    {
+        int first = 0, listed = 0;
+        start_menu_scroll_state(&first, &listed);
+        dbg_out_printf(o, "  folder: %s   query: \"%s\"   rows %d..%d of %d\r\n",
+                     start_menu_category(), start_menu_query(),
+                     first, first + (listed ? 1 : 0), listed);
+        dbg_out_printf(o, "  says: %s\r\n", start_menu_description());
+    }
     for (int i = 0; i < total; i++) {
         const char *label; int kind, x, y, w, h, sel;
         if (!start_menu_row_info(i, &label, &kind, &x, &y, &w, &h, &sel)) break;

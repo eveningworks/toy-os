@@ -431,8 +431,16 @@ def cmd_start(args):
         "-serial", f"unix:{SERIAL_SOCK},server,nowait",
         "-qmp", f"tcp:127.0.0.1:{args.qmp_port},server,nowait",
         "-daemonize", "-pidfile", PIDFILE,
-        "-no-reboot",
     ]
+    # `-no-reboot` BY DEFAULT, so a guest that triple-faults stops
+    # instead of looping through the same boot forever while a test
+    # waits out its timeout. `--reboot` is the opt-out, for the one kind
+    # of test that has to reboot deliberately: proving something
+    # PERSISTED is not provable any other way, and with -no-reboot the
+    # reboot ends QEMU and the tool's next command fails as a dead
+    # socket somewhere unrelated.
+    if not getattr(args, "reboot", False):
+        cmd.append("-no-reboot")
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         print("vm: QEMU failed to start:\n" + (r.stderr or r.stdout).strip())
@@ -792,6 +800,9 @@ def main():
                          "default; with it the guest has BOTH these and the PS/2 "
                          "pair, which is what exercises the input core's "
                          "multiple-source path.")
+    ap.add_argument("--reboot", action="store_true",
+                    help="let the guest reboot instead of QEMU exiting "
+                         "(-no-reboot is the default; see the launch)")
     ap.add_argument("--usb", choices=("none", "xhci", "xhci+mouse", "xhci+hub"),
                     default="none",
                     help="attach an xHCI controller and USB HID devices. Off by "

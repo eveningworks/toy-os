@@ -2,5 +2,6 @@
 Name=Image Viewer
 Exec=/bin/wm/apps/imgview
 Category=graphics
+Comment=Opens pictures, and sets the wallpaper
 Icon=imgview
 Handles=.jpg .jpeg .qoi

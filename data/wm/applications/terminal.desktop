@@ -2,6 +2,7 @@
 Name=Terminal
 Exec=/bin/wm/apps/uterm
 Category=system
+Comment=A shell in a window
 Icon=terminal
 # The window calls itself this; the Exec basename is different, so the
 # taskbar could not otherwise find this entry (freedesktop's StartupWMClass).

@@ -8297,3 +8297,61 @@ something genuinely belongs in two folders and it costs a variable-length
 list in a fixed-size registry. An unknown key becomes its own folder
 labelled with the key verbatim: the failure directions are asymmetric,
 and an app nobody can find is far worse than an oddly-named folder.
+
+## Favourites and Recent are one file keyed by AppId, and Recent is a sequence number rather than a clock
+
+The Start menu grew folders before it had any notion of what a person
+actually uses, so every app was equally far away. Kickoff opens on
+Favorites and keeps Recent beside it; Windows 11's whole Start is those
+two lists over a search box. toy-os follows, with the folders it already
+had underneath.
+
+**One file, `/etc/start-menu.conf`, holding both.** A pin is a
+preference and a launch count is variable state, which the FHS would
+split between `/etc` and `/var`. They are kept together because they are
+read together, once, by one reader at startup -- and because a menu
+whose favourites and history disagreed about which apps exist would be
+worse than either living in the tidier directory.
+`/etc/desktop.conf` is the precedent: the desktop's own state, in its
+own file, beside the settings rather than inside them. The settings
+registry was considered and rejected for the counter specifically: a
+value that changes on every launch is not a preference, and writing it
+through the settings path would put it in front of System Settings as
+something to edit.
+
+**Keyed by AppId.** A name can be edited and a row moves on every
+reload -- the registry re-sorts by `(category, name)` each time -- so
+both are the wrong handle for something persisted. `AppId` is the
+`.desktop` entry's own stable identifier, already what the window
+protocol matches a client on. The desktop's icon positions are keyed by
+Name and pay exactly this price: rename an app and its position is lost.
+
+**Recent is ordered by a SEQUENCE NUMBER, not a timestamp.** "Recent"
+needs an ORDER and nothing else, and an order is all a counter gives:
+each launch takes the next number, so the newest is the largest. That
+works on a machine with no RTC, before NTP has run, and across a
+timezone change -- none of which a wall clock survives, and this desktop
+has all three. The count is kept beside it because a "frequently used"
+view would need it and nothing else would have to change.
+
+**The list is a folder, not a grid or a tab.** Kickoff makes Favorites a
+TAB and Windows 11 a pinned grid, both of which need a second layout;
+here they are two more rows in a sidebar that already existed, showing
+their apps in the column that already existed. What that costs is the
+distinction between "pinned" and "a category" being only the icon and
+the position -- and what it buys is that pinning changed no layout code
+at all.
+
+## A pinned app is a toggle with two names, and the Start menu stays up under it
+
+`Pin to Start` becomes `Unpin from Start` on an app that is already
+pinned, rather than a row with a tick beside it. A ticked "Pinned" makes
+the reader work out what clicking would do; the verb says it. Windows
+and KDE both word it this way.
+
+The menu is NOT dismissed by it, which is the opposite of what a launch
+does. Pinning changes what the menu SHOWS -- the sidebar gains a
+Favourites folder on the next frame -- and closing the menu would hide
+the only feedback the action has. That is the same rule the desktop's
+own context menu follows for a non-launching verb, and it is why
+`ctx_toggle_pin()` damages the menu instead of closing it.

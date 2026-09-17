@@ -188,6 +188,7 @@ class RemoteConsole(DebugConsole):
         if not self.host:
             raise RuntimeError("RemoteConsole needs a host (TOYOS_REMOTE_HOST)")
         self.sock_path = f"{self.host}:{port}"
+        self._port = port
         self.timeout = timeout
         self.log_lines = []
         self._klog_seen = 0
@@ -226,6 +227,31 @@ class RemoteConsole(DebugConsole):
         # this object's (see _session above), and tools open and close
         # consoles freely -- wait_for_desktop() does it once a poll.
         pass
+
+    def reconnect(self, timeout=180.0):
+        """Re-attach after the MACHINE went away -- a reboot.
+
+        The VM side of this re-opens a unix socket that never stopped
+        existing; here the far end is a machine that has to finish
+        POSTing, so the wait is longer and starts with "is anything
+        listening at all". The session is dropped first: `inetd`'s child
+        for the old connection dies with the machine, and holding a dead
+        one costs a quarter of the machine's telnet capacity.
+        """
+        close_session()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if machine_is_up(self.host, self._port):
+                try:
+                    self._sess = _session(self.host, self._port, self.timeout)
+                    self._klog_seen = 0     # a new boot, a new ring
+                    return True
+                except RuntimeError:
+                    pass
+            time.sleep(3)
+        print(f"remote: {self.host} did not come back within {timeout:.0f}s",
+              file=sys.stderr)
+        return False
 
     # -- the kernel log, which does not share this wire ------------------
     #

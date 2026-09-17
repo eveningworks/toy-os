@@ -1849,6 +1849,35 @@ this the obvious way), not from how much history it accumulated.
   reaching an app in another folder opens that folder first
   (`DebugConsole.menu_app_row()` does it), which is why `gui menu
   --json` reports every app's folder beside the drawn rows.
+- **THE SIDEBAR'S FIRST FOLDERS ARE NOT CATEGORIES.** Favourites,
+  Recent and All Apps come before the `Category=` ones, and the first
+  two exist only when they hold something -- the same "a folder exists
+  when something is in it" rule the categories follow. The menu opens on
+  the first of them, so it opens on what you use (Kickoff's default) and
+  on All Apps on a machine where nothing has been pinned or launched
+  yet.
+- **WHAT IS PINNED AND WHAT HAS BEEN LAUNCHED IS KEYED BY APP ID**, in
+  `/etc/start-menu.conf` (`userland/wm/start_store.h`). Not by name and
+  not by row: both move -- a rename, and every reload's re-sort -- and
+  the desktop's Name-keyed icon positions already pay that price. A
+  launch is recorded in `open_app()`, the ONE place a launcher starts
+  anything, so the desktop's icons and the context menu's Open count too.
+- **THE APP COLUMN SCROLLS, AND A ROW INDEX IS NOT A SCREEN POSITION.**
+  The pane is capped (`SM_MAX_ROWS`) and shows a window onto the list:
+  `pane_count()` is the list, `L.pane_rows` is the window, `scroll` is
+  where it sits. Anything PERSISTED -- the keyboard selection, what a
+  click launches -- is in LIST coordinates, and every place that
+  conflates the two is a bug. The keyboard scrolls its selection into
+  view, or the highlight walks off the bottom while Enter goes on
+  launching something invisible.
+- **AND THE INDICATOR BESIDE IT IS NOT A SCROLLBAR** -- no track to
+  click, no thumb to drag, because the pane is scrolled by the wheel and
+  the keyboard. A draggable one would be a second implementation of
+  `uui_scrollbar` inside an overlay the panel hand-draws.
+- **SEARCH RANKS: exact, then prefix, then substring**, ties keeping the
+  list's own order. "te" offers Terminal before Crash Test, which is
+  what a person typing three letters means and what a plain substring
+  match gets wrong.
 - **TYPING GOES TO THE SEARCH FIELD WHENEVER THE MENU IS OPEN**, with no
   click into it, because it is the only thing in the popup that takes
   text -- Windows' and KDE's behaviour, and there is deliberately no

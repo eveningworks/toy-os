@@ -4,6 +4,7 @@
 // wm.c's top comment for why that sharing is fine here.
 #include "wm_internal.h"
 #include "start_menu.h"
+#include "start_store.h"
 #include "context_menu.h"
 #include "calendar_popup.h"
 #include "volume_popup.h"
@@ -596,6 +597,19 @@ static void wm_open_window_menu(int idx, int mx, int my) {
     context_menu_open_at(mx, my, items, n);
 }
 
+// Pin or unpin, and leave the Start menu UP: this changes what the menu
+// shows rather than launching anything, and dismissing it would hide
+// the result of the click. The sidebar gains or loses its Favourites
+// folder on the next frame, which is the feedback.
+static void ctx_toggle_pin(void *ctx) {
+    const struct gui_app *app = (const struct gui_app *)ctx;
+    if (!app || !app->app_id) return;
+    if (start_store_is_pinned(app->app_id)) start_store_unpin(app->app_id);
+    else start_store_pin(app->app_id);
+    start_menu_damage();
+    redraw_pending = 1;
+}
+
 void wm_handle_right_click(int mx, int my) {
     // A right-click always resolves to at most one popup -- close
     // whatever's already open before deciding what (if anything) the
@@ -613,14 +627,23 @@ void wm_handle_right_click(int mx, int my) {
         if (!app) { start_menu_close(); return; }
         wm_overlay_set_parent("start");
         {
-            static struct context_menu_item item[2];
+            static struct context_menu_item item[3];
             item[0].label = "Open";
             item[0].on_select = ctx_open_app;
             item[0].ctx = app;
-            item[1].label = "Add to desktop";
-            item[1].on_select = ctx_add_to_desktop;
-            item[1].ctx = item[0].ctx;
-            context_menu_open_at(mx, my, item, 2);
+            // PIN IS A TOGGLE WITH TWO NAMES, not a checkmark: the row
+            // says what the click will DO, which is how Windows and
+            // KDE both word this ("Pin to Start" / "Unpin from
+            // Start"). A ticked "Pinned" would need a second click to
+            // discover what it means.
+            item[1].label = start_store_is_pinned(app->app_id)
+                                ? "Unpin from Start" : "Pin to Start";
+            item[1].on_select = ctx_toggle_pin;
+            item[1].ctx = app;
+            item[2].label = "Add to desktop";
+            item[2].on_select = ctx_add_to_desktop;
+            item[2].ctx = app;
+            context_menu_open_at(mx, my, item, 3);
         }
         return;
     }

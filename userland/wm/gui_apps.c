@@ -49,6 +49,7 @@ int gui_app_registry_count;
 static char g_names[GUI_APP_MAX][GUI_APP_NAME_MAX];
 static char g_execs[GUI_APP_MAX][GUI_APP_EXEC_MAX];
 static char g_cats[GUI_APP_MAX][16];
+static char g_comments[GUI_APP_MAX][GUI_APP_COMMENT_MAX];
 // The Icon= name and the AppId, in the same backing store as the rest --
 // struct gui_app holds POINTERS, so these must outlive a reload.
 static char g_icons[GUI_APP_MAX][GUI_APP_ICON_MAX];
@@ -173,6 +174,10 @@ int gui_app_read_entry(const char *path, struct gui_app_entry *e) {
     if (!entry_get(&cfg, "Exec", e->exec, sizeof e->exec)) return 0;
     if (!entry_get(&cfg, "Category", e->category, sizeof e->category))
         k_strlcpy(e->category, "utility", sizeof e->category);
+    // OPTIONAL, and empty is a normal answer: an app with nothing to
+    // say about itself shows its name alone rather than a placeholder.
+    if (!entry_get(&cfg, "Comment", e->comment, sizeof e->comment))
+        e->comment[0] = '\0';
     if (!entry_get(&cfg, "Icon", icon, sizeof icon)) icon[0] = '\0';
     if (!entry_get(&cfg, "AppId", appid, sizeof appid)) appid[0] = '\0';
     if (entry_get(&cfg, "NoDisplay", nodisplay, sizeof nodisplay)
@@ -213,6 +218,7 @@ static void load_entry(const char *file) {
     k_strlcpy(g_names[i], e.name, GUI_APP_NAME_MAX);
     k_strlcpy(g_execs[i], e.exec, GUI_APP_EXEC_MAX);
     k_strlcpy(g_cats[i], e.category, sizeof g_cats[0]);
+    k_strlcpy(g_comments[i], e.comment, sizeof g_comments[0]);
     k_strlcpy(g_icons[i], e.icon, sizeof g_icons[0]);
     k_strlcpy(g_appids[i], e.app_id, sizeof g_appids[0]);
 
@@ -223,6 +229,7 @@ static void load_entry(const char *file) {
     a->icon_name = g_icons[i];
     a->app_id = g_appids[i];
     a->category = g_cats[i];
+    a->comment = g_comments[i];
     a->resizable = 1;
     a->remember_geometry = e.remember_geometry;
     a->show_in = e.show_in;
@@ -322,6 +329,12 @@ void gui_apps_load(void) {
             gui_app_registry[j - 1].name = g_names[j - 1];
             gui_app_registry[j].category = g_cats[j];
             gui_app_registry[j - 1].category = g_cats[j - 1];
+            char tcm[GUI_APP_COMMENT_MAX];
+            k_strlcpy(tcm, g_comments[j], sizeof tcm);
+            k_strlcpy(g_comments[j], g_comments[j - 1], sizeof g_comments[0]);
+            k_strlcpy(g_comments[j - 1], tcm, sizeof g_comments[0]);
+            gui_app_registry[j].comment = g_comments[j];
+            gui_app_registry[j - 1].comment = g_comments[j - 1];
         }
     }
 
@@ -384,6 +397,16 @@ static int cat_list(unsigned surface, const char *out[], int cap) {
         if (!dup && n < cap) out[n++] = a->category;
     }
     return n;
+}
+
+struct gui_app *gui_app_by_id(unsigned surface, const char *app_id) {
+    if (!app_id || !app_id[0]) return 0;
+    for (int i = 0; i < gui_app_registry_count; i++) {
+        struct gui_app *a = &gui_app_registry[i];
+        if (!gui_app_shows_in(a, surface) || !a->app_id) continue;
+        if (k_strcmp(a->app_id, app_id) == 0) return a;
+    }
+    return 0;
 }
 
 int gui_app_cat_count(unsigned surface) {

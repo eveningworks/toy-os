@@ -2,4 +2,5 @@
 Name=Disk Mark
 Exec=/bin/wm/apps/diskmark
 Category=system
+Comment=Measures how fast this machine's disk reads and writes
 Icon=diskmark

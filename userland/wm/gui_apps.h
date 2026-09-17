@@ -300,6 +300,13 @@ struct gui_app {
     // gets the default. Points into this file's storage like `name`,
     // so a sort that swaps two entries re-points both.
     const char *category;
+
+    // `Comment=`, freedesktop's one-line description of what the app
+    // IS -- shown under the Start menu's list for whichever row the
+    // pointer or the keyboard is on. "" when the entry names none,
+    // never NULL, so a caller draws an empty strip rather than
+    // branching. Same storage rule as `name` and `category`.
+    const char *comment;
 };
 
 // Caps on the live registry. Fixed tables rather than allocation, the
@@ -310,6 +317,10 @@ struct gui_app {
 // one bound keeps the two arrays that hold them the same shape.
 #define GUI_APP_ICON_MAX 24
 #define GUI_APP_EXEC_MAX 64
+// One line about what the app is, from `Comment=`. Long enough for a
+// sentence that fits the menu's own width at the default font, and no
+// longer: this is a description, not documentation -- `help` is that.
+#define GUI_APP_COMMENT_MAX 64
 
 // The registry, BUILT AT STARTUP from /usr/wm/applications/ -- see
 // gui_apps.c's top comment and data/wm/applications/README.md. Not const any
@@ -358,6 +369,7 @@ struct gui_app_entry {
     char glyph;                    // that character, else 0
     char app_id[GUI_APP_ICON_MAX];
     char category[16];
+    char comment[GUI_APP_COMMENT_MAX];
     unsigned show_in;
     int remember_geometry;
 };
@@ -385,6 +397,12 @@ const char *gui_app_cat_key(unsigned surface, int n);     // "utility"
 const char *gui_app_cat_label(unsigned surface, int n);   // "Utilities"
 int gui_app_cat_size(unsigned surface, const char *key);
 struct gui_app *gui_app_cat_at(unsigned surface, const char *key, int n);
+
+// The entry with this AppId on `surface`, or NULL. The id is the
+// `.desktop` entry's own stable handle, which is what anything
+// PERSISTED must key on -- a name can be edited and a position moves
+// on every reload (see start_store.h).
+struct gui_app *gui_app_by_id(unsigned surface, const char *app_id);
 
 // The display label for a key, for a caller that already holds one.
 // An UNKNOWN key is its own label: a typo shows up as an oddly-named

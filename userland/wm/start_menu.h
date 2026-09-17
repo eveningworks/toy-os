@@ -53,6 +53,11 @@ enum start_row_kind {
     START_ROW_CATEGORY = 0,
     START_ROW_ACTION,
     START_ROW_APP,
+    // The one-line description of whatever row the pointer or the
+    // keyboard is on, from the entry's `Comment=`. A status line, not a
+    // control: it is reported so a test can read it, and it is never
+    // hit-tested.
+    START_ROW_DESC,
     START_ROW_SEARCH,
 };
 
@@ -71,6 +76,21 @@ int start_menu_row_info(int n, const char **label, int *kind,
 // row. For a test comparing those pixels against the source file; the
 // offsets are this file's and nothing else should re-derive them.
 int start_menu_row_icon(int n, int *x, int *y, int *sz);
+
+// What the description strip currently says: the `Comment=` of the row
+// under the pointer, or of the keyboard's selection, or "" when neither
+// has one. Never NULL.
+const char *start_menu_description(void);
+
+// How the app column is scrolled: the first row SHOWN, and how many
+// rows the open folder has in total. A folder taller than the pane
+// scrolls (the wheel, the arrows, Page Up/Down), which is the one place
+// a row index and a screen position stop being the same number.
+void start_menu_scroll_state(int *out_first, int *out_total);
+
+// The overlay registry's wheel op -- notches over the app column scroll
+// it. Returns 1 when it consumed them.
+int start_menu_wheel(int mx, int my, int notches);
 
 // The typed query ("" when none) and the selected folder's label --
 // state a test would otherwise have to read off pixels.

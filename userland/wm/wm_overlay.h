@@ -73,6 +73,14 @@ struct wm_overlay {
     // when nothing in the overlay is draggable.
     void (*update_press)(int mx, int my, uint8_t buttons);
 
+    // WHEEL NOTCHES, while this overlay is up and the pointer is over
+    // it. Returns 1 when it consumed them -- an overlay that scrolls
+    // must take the wheel before the focused window does, or a menu
+    // over a text view scrolls the text underneath it. Scoped to the
+    // overlay's own rect by the overlay, exactly as the tray scopes
+    // its volume-by-wheel to the tray.
+    int (*wheel)(int mx, int my, int notches);
+
     // A KEY, while this overlay is up. Returns 1 when it consumed it,
     // which stops it reaching a global shortcut or the focused window --
     // an open menu owns the keyboard, as an xdg_popup's grab does.
@@ -117,6 +125,11 @@ void wm_overlay_press(int mx, int my, uint8_t buttons);
 // Offers a key press to each open overlay, most modal first. Returns 1
 // when one consumed it.
 int wm_overlay_key(int key, uint8_t mods);
+
+// The same for wheel notches, and with the same rule: the pointer's
+// position is passed because an overlay only takes the wheel over
+// itself.
+int wm_overlay_wheel(int mx, int my, int notches);
 
 // The topmost open overlay's name, or NULL when none is up -- for the
 // debug console, so a test can ask what is on screen without knowing

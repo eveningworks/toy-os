@@ -21,6 +21,10 @@ or the D-Bus activation none of which exist here.
     Name       what the user sees, in the Start menu and under the icon
     Exec       what to launch (see below)
     Category   which FOLDER the Start menu files this under (see below)
+    Comment    one line about what the app IS, shown under the Start
+               menu's list for the row the pointer or the keyboard is
+               on. freedesktop's key, and optional: an entry without
+               one shows its name alone
     Icon       an icon NAME, resolved to /usr/share/icons/<name>.qoi.
                A one-character value is still drawn as a letter tile,
                which is the fallback when no artwork exists
@@ -56,6 +60,20 @@ nobody can find. Missing the key entirely means `utility`.
 Note this is NOT where the binary lives: `/bin/wm/<class>/` comes from
 the app's SOURCE directory (see the end of this file), and the two
 stopped being the same list when the folders arrived.
+
+## Comment
+
+    Comment=A shell in a window
+
+One line, in the present tense, about what the app IS -- not what it is
+called and not how to use it. The Start menu shows it in a strip under
+the list, for whichever row the pointer or the keyboard is on, which is
+why it is a SENTENCE FRAGMENT rather than a sentence: it is read beside
+the name, not instead of it.
+
+Keep it inside `GUI_APP_COMMENT_MAX` (`userland/wm/gui_apps.h`); a
+longer one is truncated on the way in, not wrapped. Anything that needs
+a paragraph belongs in `help`, which is a whole app for that.
 
 ## Handles
 

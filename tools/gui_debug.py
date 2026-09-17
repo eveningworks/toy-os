@@ -130,6 +130,37 @@ class DebugConsole:
         self._s.sendall(b"\n")
         self._read_to_prompt()
 
+    def reconnect(self, timeout=90.0):
+        """Re-open this console after the GUEST went away.
+
+        A test that proves something PERSISTED has to reboot the
+        machine, and the socket dies with it -- every later command on
+        this object then fails with `BrokenPipeError`, in whatever check
+        happened to be next rather than at the reboot. So the console
+        re-attaches to the same socket and waits for a prompt, and the
+        object a test is holding keeps working.
+        """
+        try:
+            self._s.close()
+        except OSError:
+            pass
+        deadline = time.time() + timeout
+        last = None
+        while time.time() < deadline:
+            try:
+                self._s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                self._s.settimeout(self.timeout)
+                self._s.connect(self.sock_path)
+                self.log_lines = []
+                self._sync()
+                return True
+            except OSError as e:
+                last = e
+                time.sleep(2)
+        print(f"gui_debug: could not re-attach to {self.sock_path}: {last}",
+              file=sys.stderr)
+        return False
+
     def send(self, command):
         """Run one debug-console command, return its output as text."""
         self._s.sendall((command + "\n").encode())

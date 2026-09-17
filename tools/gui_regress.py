@@ -185,6 +185,11 @@ EXTRA_VM_ARGS = {
     # recording attached. player_test.py deliberately keeps the default,
     # since a machine with NO device is its premise.
     "volume": ["--audio", "both"],
+    # The Start menu's favourites have to SURVIVE A REBOOT, and the
+    # default launch answers a reboot by ending QEMU (-no-reboot, so a
+    # triple-faulting guest stops rather than looping). This tool is the
+    # one that deliberately reboots, so it gets a guest that can.
+    "startmenu": ["--reboot"],
 }
 
 COST_S = {

@@ -1,5 +1,6 @@
 // See desktop.h for the design writeup.
 #include "desktop.h"
+#include "start_store.h"
 #include "wm_internal.h"
 #include "context_menu.h"
 #include "ui/uui.h"
@@ -796,6 +797,7 @@ void desktop_draw(void) {
 int desktop_drag_active(void) { return drag.active || sel.armed; }
 
 void desktop_entries_changed(void) {
+    start_store_load();     // an entry that just arrived has history to find
     icon_cache_invalidate(); // an entry's artwork can have arrived with it
     if (!desktop_files_reload()) desktop_files_parse();   // same names: re-read the launchers
     positions_loaded = 0;   // re-read from DESKTOP_CONF_PATH, keyed by name

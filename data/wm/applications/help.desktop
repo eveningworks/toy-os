@@ -2,4 +2,5 @@
 Name=Help
 Exec=/bin/wm/apps/help
 Category=utility
+Comment=The manual, and every command's page
 Icon=help

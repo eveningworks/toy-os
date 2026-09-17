@@ -2,4 +2,5 @@
 Name=UI Demo
 Exec=/bin/wm/demos/uidemo
 Category=development
+Comment=Every widget the toolkit has, in one window
 Icon=uidemo

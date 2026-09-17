@@ -2,4 +2,5 @@
 Name=DOOM
 Exec=/bin/wm/apps/doom
 Category=games
+Comment=The 1993 shooter, running on its own engine
 Icon=doom

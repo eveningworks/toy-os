@@ -141,11 +141,28 @@ class Telnet:
         answer that looks like a whole one is the failure mode this
         whole tool exists to avoid.
         """
+        # ...OR A LINE THAT ENDS WITH IT, because the marker does not
+        # always land alone. The shell repaints its input line with
+        # carriage returns and ANSI, and after a long reply the prompt
+        # and the marker render as ONE line -- `/$__done20__` -- which
+        # an equality test misses and then times out on output that is
+        # sitting right there. Seen once `gui menu --json` grew past a
+        # kilobyte.
+        #
+        # The ECHO of the marker's own command ends with it too, and
+        # matching that would stop before the command being framed has
+        # run -- so a line carrying `echo <marker>` is explicitly not
+        # the end of the reply. That is the guarantee this function is
+        # for, kept.
+        def is_end(line):
+            return line.endswith(marker) and f"echo {marker}" not in line
+
         end = time.time() + timeout
         while True:
             lines = render(self.buf.decode("utf-8", "replace"))
-            if marker in lines:
-                return lines[:lines.index(marker)]
+            for i, line in enumerate(lines):
+                if is_end(line):
+                    return lines[:i]
             self.s.settimeout(max(0.1, end - time.time()))
             try:
                 chunk = self.s.recv(4096)
@@ -164,11 +181,45 @@ class Telnet:
                 raise EOFError(f"connection closed; got: {self.buf[-400:]!r}")
             self.buf += self._strip(chunk)
 
+    def drain_quiet(self, idle=0.3, cap=3.0):
+        """Read until the machine has said nothing for `idle` seconds.
+
+        THE MARKER MUST NOT BE TYPED WHILE THE GUEST IS BUSY TALKING.
+        The shell echoes every character it receives, so sending the
+        framing line straight after a command that is about to print
+        two kilobytes makes the guest echo and print at once -- and its
+        input ring drops characters under exactly that load. Measured
+        on the ASUS with `guictl menu --json`: 2 runs in 3, the third
+        losing the marker and timing out on a machine that was working
+        perfectly.
+
+        Bounded by `cap` because a command that streams for a long time
+        must not hold this forever: the marker is still the authority,
+        and sending it into a quiet moment is an optimisation of the
+        input path, not a substitute for the framing.
+        """
+        end = time.time() + cap
+        while time.time() < end:
+            try:
+                self.s.settimeout(idle)
+                chunk = self.s.recv(4096)
+            except socket.timeout:
+                return          # quiet for `idle` -- the moment to type into
+            except OSError:
+                return
+            if not chunk:
+                return
+            self.buf += self._strip(chunk)
+
     def send_line(self, line):
         self.s.sendall(line.encode() + b"\r\n")
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+# The same alphabet, as a SPLIT: render() has to see the erase sequences
+# rather than have them stripped, so it walks tokens instead of a
+# scrubbed string. Capturing group, so re.split keeps the separators.
+ANSI_TOKEN_RE = re.compile(r"(\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\))")
 
 
 def render(text):
@@ -182,21 +233,43 @@ def render(text):
     cursor. Stripping the CRs concatenates forty partial repaints into
     one line of garbage; honouring them collapses the repaints onto each
     other and leaves the final state, which is what was on the screen.
+
+    AND THE ERASE IS PART OF THAT REPAINT. The editor sends `\r`, then
+    `ESC[J`, then the new text -- so a line that got SHORTER leaves the
+    old tail behind unless the erase is honoured. Stripping every escape
+    sequence, which this did, rendered `/$__done0__` as
+    `/$__done0__one0__`: the marker was on the wire, the framing did not
+    match it, and `remote.py exec` timed out on output that was sitting
+    right there. Only the erases are interpreted; every other sequence
+    is still dropped, because colour and cursor-shape changes do not
+    move text.
     """
     lines, cur, pos = [], "", 0
-    for ch in ANSI_RE.sub("", text):
-        if ch == "\n":
-            lines.append(cur)
-            cur, pos = "", 0
-        elif ch == "\r":
-            pos = 0
-        elif ch == "\b":
-            pos = max(0, pos - 1)
-        elif ch == "\x07":
+    for tok in ANSI_TOKEN_RE.split(text):
+        if not tok:
             continue
-        else:
-            cur = cur[:pos] + ch + cur[pos + 1:]
-            pos += 1
+        if tok.startswith("\x1b"):
+            # ESC[J / ESC[0J (to end of display) and ESC[K / ESC[0K (to
+            # end of line) both mean "nothing after the cursor on this
+            # line". The display-wide forms would also clear the lines
+            # BELOW, which a stream being replayed into a list does not
+            # have -- there is nothing after the cursor yet.
+            if tok in ("\x1b[J", "\x1b[0J", "\x1b[K", "\x1b[0K"):
+                cur = cur[:pos]
+            continue
+        for ch in tok:
+            if ch == "\n":
+                lines.append(cur)
+                cur, pos = "", 0
+            elif ch == "\r":
+                pos = 0
+            elif ch == "\b":
+                pos = max(0, pos - 1)
+            elif ch == "\x07":
+                continue
+            else:
+                cur = cur[:pos] + ch + cur[pos + 1:]
+                pos += 1
     if cur:
         lines.append(cur)
     return lines
@@ -229,9 +302,11 @@ class Session:
         self._n += 1
         self.t.buf = b""
         self.t.send_line(cmd)
-        # The marker echo is the frame. `echo` is a /bin program, so
-        # this also proves the shell is still running commands rather
-        # than sitting in one that never returned.
+        # ...and only then the frame, once the machine has gone quiet --
+        # see drain_quiet(). The marker echo is the frame; `echo` is a
+        # /bin program, so this also proves the shell is still running
+        # commands rather than sitting in one that never returned.
+        self.t.drain_quiet()
         self.t.send_line(f"echo {marker}")
         lines = self.t.read_until_line(marker, timeout or self.timeout)
         # Drop what the shell echoed back at us -- the two command

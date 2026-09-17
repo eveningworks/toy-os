@@ -2,5 +2,6 @@
 Name=Notepad
 Exec=/bin/wm/apps/notepad
 Category=utility
+Comment=Writes and edits plain text files
 Icon=notepad
 Handles=.txt .md .conf .log .c .h .cfg

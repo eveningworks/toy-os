@@ -2,4 +2,5 @@
 Name=Minesweeper
 Exec=/bin/wm/apps/mines
 Category=games
+Comment=Minesweeper, with the classic three board sizes
 Icon=mines

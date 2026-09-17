@@ -2,4 +2,5 @@
 Name=About
 Exec=/bin/wm/system/about
 Category=system
+Comment=What this system is, and what it is built from
 Icon=about

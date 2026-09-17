@@ -10,5 +10,6 @@
 Name=Crash Test
 Exec=/bin/wm/demos/crashtest
 Category=development
+Comment=Faults a program on purpose, to test the handler
 Icon=!
 ShowIn=startmenu

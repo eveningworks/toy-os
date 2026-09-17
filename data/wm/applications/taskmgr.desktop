@@ -2,4 +2,5 @@
 Name=Task Manager
 Exec=/bin/wm/system/taskmgr
 Category=system
+Comment=What is running, and what it is costing
 Icon=taskmgr

@@ -753,6 +753,98 @@ def icon_cat_system():
     return im
 
 
+def icon_cat_favourites():
+    # A STAR, which is what a pinned thing is called everywhere. Drawn
+    # as a polygon rather than a glyph so it stays sharp at the folder
+    # size the Start menu asks for, which is smaller than an app icon.
+    im, d = tile((240, 186, 60))
+    pts = []
+    import math
+    for i in range(10):
+        r = 22 if i % 2 == 0 else 9
+        a = -math.pi / 2 + i * math.pi / 5
+        pts.append((32 + r * math.cos(a), 32 + r * math.sin(a)))
+    d.polygon(pts, fill=WHITE)
+    return im
+
+
+def icon_cat_recent():
+    # A CLOCK, and deliberately not an hourglass: this folder is
+    # ordered by WHEN, and an hourglass means "wait" in every toolkit
+    # including this one's wait cursor.
+    im, d = tile((120, 140, 170))
+    d.ellipse([14, 14, 50, 50], outline=WHITE, width=4)
+    d.line([32, 32, 32, 21], fill=WHITE, width=4)   # hour hand
+    d.line([32, 32, 41, 36], fill=WHITE, width=4)   # minute hand
+    return im
+
+
+def icon_cat_all():
+    # A GRID: every app, which is what the folder holds. Nine squares
+    # rather than four, because four reads as a window layout.
+    im, d = tile((110, 120, 135))
+    for row in range(3):
+        for col in range(3):
+            x = 14 + col * 13
+            y = 14 + row * 13
+            d.rounded_rectangle([x, y, x + 8, y + 8], radius=2, fill=WHITE)
+    return im
+
+
+def icon_cat_utility():
+    # A WRENCH at an angle -- the small tools category. The handle is a
+    # thick line and the head an open ring, which survives being drawn
+    # at half an app icon's size where a detailed spanner would not.
+    im, d = tile((90, 150, 120))
+    d.line([22, 42, 44, 20], fill=WHITE, width=7)
+    d.ellipse([16, 36, 30, 50], outline=WHITE, width=5)
+    return im
+
+
+def icon_cat_graphics():
+    # A PICTURE: a frame with a hill and a sun, the same pictogram the
+    # Image Viewer's own icon uses -- a category and the app most in it
+    # sharing a visual language is a feature.
+    im, d = tile((200, 120, 190))
+    d.rounded_rectangle([14, 16, 50, 48], radius=3, outline=WHITE, width=4)
+    d.polygon([(20, 44), (30, 30), (40, 44)], fill=WHITE)
+    d.ellipse([36, 22, 44, 30], fill=WHITE)
+    return im
+
+
+def icon_cat_multimedia():
+    # A PLAY TRIANGLE, which means media everywhere and nothing else
+    # anywhere.
+    im, d = tile((220, 110, 90))
+    d.polygon([(24, 16), (48, 32), (24, 48)], fill=WHITE)
+    return im
+
+
+def icon_cat_games():
+    # A GAMEPAD, reduced to what survives at this size: a rounded body,
+    # a d-pad cross and two buttons.
+    im, d = tile((110, 160, 90))
+    d.rounded_rectangle([12, 22, 52, 44], radius=10, fill=WHITE)
+    d.line([20, 33, 30, 33], fill=(110, 160, 90, 255), width=4)
+    d.line([25, 28, 25, 38], fill=(110, 160, 90, 255), width=4)
+    d.ellipse([38, 28, 44, 34], fill=(110, 160, 90, 255))
+    d.ellipse([44, 34, 50, 40], fill=(110, 160, 90, 255))
+    return im
+
+
+def icon_cat_development():
+    # ANGLE BRACKETS, the universal "this is code" mark -- and the one
+    # pictogram here that is literally two characters, which is why it
+    # is drawn as lines rather than set as text: the interface face is
+    # not guaranteed to have a weight that reads at 20 pixels.
+    im, d = tile((130, 120, 200))
+    d.line([26, 22, 16, 32], fill=WHITE, width=5)
+    d.line([16, 32, 26, 42], fill=WHITE, width=5)
+    d.line([38, 22, 48, 32], fill=WHITE, width=5)
+    d.line([48, 32, 38, 42], fill=WHITE, width=5)
+    return im
+
+
 def icon_cat_desktop():
     # A desktop with a panel along the bottom and two icons on it: the
     # furniture of the session, which is what this category holds
@@ -794,6 +886,18 @@ def icon_cat_sound():
 
 
 ICONS = {
+    # The Start menu's folders. `cat-<key>` is the name start_menu.c
+    # derives from a `.desktop` Category=, so an icon appears the day a
+    # category does -- and a category with no icon file simply draws
+    # none rather than breaking the column.
+    "cat-favourites": icon_cat_favourites,
+    "cat-recent": icon_cat_recent,
+    "cat-all": icon_cat_all,
+    "cat-utility": icon_cat_utility,
+    "cat-graphics": icon_cat_graphics,
+    "cat-multimedia": icon_cat_multimedia,
+    "cat-games": icon_cat_games,
+    "cat-development": icon_cat_development,
     "cat-time": icon_cat_time,
     "cat-appearance": icon_cat_appearance,
     "cat-input": icon_cat_input,
