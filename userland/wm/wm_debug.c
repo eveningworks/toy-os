@@ -40,6 +40,11 @@ static int g_inject_head = 0, g_inject_tail = 0;
 
 #define KEY_INJECT_MAX 32
 static int g_keys[KEY_INJECT_MAX];
+// **BOTH EDGES ARE INJECTABLE**, because some gestures only exist on
+// the release: Super alone opens the Start menu when it goes UP having
+// modified nothing (wm.c). A queue that could only press could not
+// test that at all.
+static uint8_t g_key_down[KEY_INJECT_MAX];
 static uint8_t g_key_mods[KEY_INJECT_MAX]; // KEY_MOD_* bits, parallel to g_keys
 static int g_keys_head = 0, g_keys_tail = 0;
 
@@ -104,9 +109,14 @@ int wm_debug_next_wheel(void) {
 int wm_debug_next_key(void) { return wm_debug_next_key_mods(0); }
 
 int wm_debug_next_key_mods(uint8_t *out_mods) {
+    return wm_debug_next_key_full(out_mods, 0);
+}
+
+int wm_debug_next_key_full(uint8_t *out_mods, int *out_down) {
     if (g_keys_head == g_keys_tail) return 0;
     int k = g_keys[g_keys_head];
     if (out_mods) *out_mods = g_key_mods[g_keys_head];
+    if (out_down) *out_down = g_key_down[g_keys_head];
     g_keys_head = (g_keys_head + 1) % KEY_INJECT_MAX;
     return k;
 }
@@ -1125,7 +1135,7 @@ static int cmd_drag(int x0, int y0, int x1, int y1, int steps) {
     return inject_push(x1, y1, 0);
 }
 
-// `gui key <c> [shift|ctrl|alt|altgr]...`
+// `gui key <c> [up] [shift|ctrl|alt|altgr|super]...`
 //
 // The modifier words set the KEY_MOD_* bits the WM delivers alongside
 // the key -- they do NOT re-encode it. So `gui key 0x09 shift` is
@@ -1142,11 +1152,15 @@ static int cmd_key(const char *s, char *rest) {
     else if (!parse_int(s, &code)) return 0;
 
     uint8_t mods = 0;
+    int down = 1;
     for (char *p = rest, *t; (t = next_tok(&p)) != 0; ) {
-        if (k_strcmp(t, "shift") == 0) mods |= KEY_MOD_SHIFT;
+        if (k_strcmp(t, "up") == 0) down = 0;
+        else if (k_strcmp(t, "shift") == 0) mods |= KEY_MOD_SHIFT;
         else if (k_strcmp(t, "ctrl") == 0) mods |= KEY_MOD_CTRL;
         else if (k_strcmp(t, "alt") == 0) mods |= KEY_MOD_ALT;
         else if (k_strcmp(t, "altgr") == 0) mods |= KEY_MOD_ALTGR;
+        else if (k_strcmp(t, "super") == 0 || k_strcmp(t, "win") == 0)
+            mods |= KEY_MOD_SUPER;
         else return 0; // an unrecognised word is a typo, not a modifier
     }
 
@@ -1154,6 +1168,7 @@ static int cmd_key(const char *s, char *rest) {
     if (next == g_keys_head) return 0;
     g_keys[g_keys_tail] = code;
     g_key_mods[g_keys_tail] = mods;
+    g_key_down[g_keys_tail] = (uint8_t)down;
     g_keys_tail = next;
     return 1;
 }
@@ -1374,7 +1389,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  move X Y              move the cursor, nothing held (for hover)\r\n");
     dbg_out_write(o, "  click X Y             synthetic press+release at a point\r\n");
     dbg_out_write(o, "  drag X1 Y1 X2 Y2 [N]  synthetic press, N interpolated moves, release\r\n");
-    dbg_out_write(o, "  key <c|0xNN>          synthetic keypress to the focused window\r\n");
+    dbg_out_write(o, "  key <c|0xNN> [up] [mods]  synthetic key press/release\r\n");
     dbg_out_write(o, "  wheel <n>             synthetic wheel notches (+up / -down)\r\n");
     dbg_out_write(o, "  idle [start|stop]     the idle clock and the screensaver, as JSON\r\n");
     dbg_out_write(o, "  icons                 how many app icons are decoded and cached\r\n");

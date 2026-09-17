@@ -1014,6 +1014,25 @@ void uapp_set_cursor(struct uapp *a, int cursor) {
     wmchan_send(WIN_REQ_CURSOR, a->window, cursor, 0, 0, 0);
 }
 
+// **ASK THE COMPOSITOR TO STOP EATING GLOBAL SHORTCUTS.** Only a program
+// that must RECEIVE them has any business calling this -- in this tree
+// that is System Settings' shortcut capture, which cannot record Super+E
+// while the compositor is busy launching a file manager with it.
+//
+// It lapses on its own when this window loses the focus, so a caller
+// that forgets to release it cannot leave the desktop without
+// shortcuts (abi/win_proto.h). Releasing explicitly is still right:
+// the capture control does it the moment it stops listening.
+void uapp_inhibit_shortcuts(struct uapp *a, int on) {
+    // **SLOT 0 IS A REAL WINDOW.** `a->window` is the compositor's slot
+    // number and the first window gets 0, so a `!a->window` guard here
+    // refused the only window most apps have -- which presented as the
+    // capture control arming and the compositor carrying on eating the
+    // very keys it was waiting for.
+    if (!a) return;
+    wmchan_send(WIN_REQ_INHIBIT_SHORTCUTS, a->window, on ? 1 : 0, 0, 0, 0);
+}
+
 void uapp_busy_begin(struct uapp *a) {
     a->cursor_before_busy = a->cursor;
     uapp_set_cursor(a, WIN_CURSOR_WAIT);

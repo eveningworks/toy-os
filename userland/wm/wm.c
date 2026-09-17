@@ -42,6 +42,12 @@
 #include "desktop.h"
 #include "wm_tray.h"
 #include "wm_taskbar.h"
+#include "wm_shortcut.h"
+
+// SUPER'S GESTURE IS ARMED ON THE PRESS AND SPENT BY ANY OTHER KEY.
+// Cleared when Super goes down, set by anything pressed while it is
+// held, and read on the release -- see the key loop in wm_run().
+static int g_super_used;
 #include "cursor_theme.h"
 #include "kapi.h"
 #include "rt/sys.h"
@@ -1024,6 +1030,7 @@ void wm_run(void) {
         // One integer compare unless the filesystem actually changed.
         wmwd_phase("desktop_entries");
         poll_desktop_entries();
+        wm_shortcut_poll();   // its own counter -- see wm_shortcut.c
 
         // The wallpaper, on the same generation counter. Its own
         // watchdog phase because it is the one that can be SLOW: a
@@ -1271,8 +1278,9 @@ void wm_run(void) {
         // nothing -- deliberately second, so a human at the keyboard is
         // never pre-empted by a queued test keystroke.
         if (key == -1) {
-            int injected = wm_debug_next_key_mods(&key_mods);
+            int injected = wm_debug_next_key_full(&key_mods, &key_down);
             if (injected) key = injected;
+            else key_down = 1;   // nothing injected: leave the default alone
         }
 
         int wheel = wm_rawin_take_wheel();
@@ -1289,6 +1297,13 @@ void wm_run(void) {
 
         if (key != -1 || wheel != 0) {
             int f = wm_focus_index();
+            // AN INHIBITOR DIES WITH ITS WINDOW'S FOCUS. Checked here,
+            // on every pass, rather than hooked to a focus-change event:
+            // this is the one place the focused window is already known,
+            // and "the holder is no longer focused" is the whole rule
+            // (abi/win_proto.h). A window that vanished is not focused
+            // either, so the crash case falls out of the same test.
+            wm_shortcut_focus_changed(f);
             int kt = wm_key_target(f); // a popup of f's client, or f
 
             // Alt+F4 closes the focused window, and is handled HERE
@@ -1320,7 +1335,33 @@ void wm_run(void) {
             // would leave two things claiming the next click.
             // The context menu is not modal in that sense and is
             // simply replaced.
-            if (key != -1 && !key_down) {
+            // ANY OTHER KEY PRESSED WHILE SUPER IS HELD means this
+            // Super was a MODIFIER, not the Start-menu gesture. Set
+            // here rather than inside the shortcut branch, because it
+            // is true whether or not the combination was bound: holding
+            // Super and typing E must not open the menu on the way out
+            // even when nothing is bound to Super+E.
+            if (key_down && key != KEY_SUPER && (key_mods & KEY_MOD_SUPER))
+                g_super_used = 1;
+
+            if (key == KEY_SUPER) {
+                // **BOTH EDGES, AND THE GESTURE IS ON THE RELEASE.**
+                // Super is a modifier now (api/keyboard.h), so pressing
+                // it ARMS and anything pressed while it is held disarms;
+                // only a release that was never used toggles the Start
+                // menu. Windows and KDE both behave exactly this way,
+                // and it is what lets Super+E exist at all -- opening
+                // the menu on the press would open it on the way into
+                // every Super shortcut.
+                if (key_down) {
+                    g_super_used = 0;
+                } else if (!g_super_used && !confirm_dialog_open &&
+                           !wm_shortcut_inhibited(f)) {
+                    if (start_menu_open) start_menu_close();
+                    else start_menu_open_now();
+                    redraw_pending = 1;
+                }
+            } else if (key != -1 && !key_down) {
                 // A RELEASE GOES STRAIGHT TO THE FOCUSED CLIENT, and
                 // takes none of the shortcut branches below: Super
                 // and Alt+F4 act on the PRESS, exactly as
@@ -1338,14 +1379,13 @@ void wm_run(void) {
                     wm_client_is_client_window(&windows[kt])) {
                     wm_client_send_key_up(&windows[kt], key, key_mods);
                 }
-            } else if (key == KEY_SUPER) {
-                if (!confirm_dialog_open) {
-                    // Toggle; opening closes every other popup
-                    // through the overlay table (wm_overlay.h).
-                    if (start_menu_open) start_menu_close();
-                    else start_menu_open_now();
-                    redraw_pending = 1;
-                }
+            } else if (!wm_shortcut_inhibited(f) &&
+                       wm_shortcut_fire(key, key_mods)) {
+                // A BOUND KEY NEVER REACHES A WINDOW. Checked before
+                // Alt+F4 and before routing, because a shortcut is the
+                // compositor's and an app cannot be allowed to shadow
+                // one (wm_shortcut.c).
+                redraw_pending = 1;
             } else if (key == KEY_F4 && (key_mods & KEY_MOD_ALT) && f >= 0) {
                 wm_request_close(f); // may shift windows[] -- f is dead after this
                 redraw_pending = 1;

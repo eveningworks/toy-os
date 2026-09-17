@@ -300,6 +300,9 @@ whenever a headline here tells you something you did not already know.
   BAR'S**
 - **AN APP HANDED A FILE MUST SELECT IT, NOT JUST ITS FOLDER** -- and
   its regression test has to LAUNCH WITH AN ARGUMENT
+- **A GLOBAL SHORTCUT IS THE COMPOSITOR'S, AND SUPER IS NOW A MODIFIER**
+  -- `KEY_SUPER` left the byte stream; Ctrl with a non-letter is
+  undeliverable; a capture control must inhibit shortcuts while listening
 - **A MENU BAR IN AN APP WITH ROUTED WIDGETS MUST BE `uui_menubar_ops`,
   NOT HAND-ROUTED**
 - **ONE MENU WIDGET SERVES A BAR AND A CONTEXT MENU:

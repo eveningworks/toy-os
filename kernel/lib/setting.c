@@ -29,6 +29,7 @@
 #include "week_start_config.h"
 #include "icon_size_config.h"
 #include "window_drag_config.h"
+#include "shortcuts_config.h"
 #include "target.h"
 #include "storage_config.h"
 #include "conn_log.h"
@@ -555,8 +556,13 @@ int setting_dispatch(struct setting_msg *msg) {
                   sizeof msg->unavailable);
         msg->sflags = setting_text_sflags(setting_namespace(s), s->name);
         msg->order  = setting_text_order(setting_namespace(s), s->name);
+        // ANYTHING UNRECOGNISED FALLS THROUGH TO STRING, which is not
+        // laziness: every type here is carried as text, so a client
+        // that has never heard of the newest one renders a text box and
+        // still works. That is what KEYCOMBO degrades to.
         msg->type = s->type == SETTING_TYPE_ENUM ? SETTING_ABI_TYPE_ENUM
                   : s->type == SETTING_TYPE_INT  ? SETTING_ABI_TYPE_INT
+                  : s->type == SETTING_TYPE_KEYCOMBO ? SETTING_ABI_TYPE_KEYCOMBO
                                                  : SETTING_ABI_TYPE_STRING;
         // Zero on every other type, so a client that ignores them sees
         // nothing new -- and a client that reads them on an ENUM gets an
@@ -726,6 +732,7 @@ void settings_init(void) {
     week_start_setting_register();
     icon_size_setting_register();
     window_drag_setting_register();
+    shortcuts_setting_register();
     storage_config_setting_register();
     target_setting_register();
     tunables_register();

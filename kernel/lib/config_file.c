@@ -114,6 +114,8 @@ static struct etc_config_buf g_scan_buf;
                          "Desktop icon positions and wallpaper", 1);
     config_file_register("storage", "/etc/storage.conf",
                          "Filesystem and disk behaviour", 1);
+    config_file_register("shortcuts", "/etc/shortcuts.conf",
+                         "Global keyboard shortcuts", 1);
     config_file_register("windows", "/etc/windows.conf",
                          "Remembered window positions and sizes", 1);
     config_file_register("keymaps", "/etc/kbs",

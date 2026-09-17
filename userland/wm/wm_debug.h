@@ -126,6 +126,9 @@ int wm_debug_next_key(void);
 // way, since Tab has no shifted character (see api/keyboard.h).
 // `out_mods` may be NULL, which makes this exactly wm_debug_next_key().
 int wm_debug_next_key_mods(uint8_t *out_mods);
+// The same, also reporting the EDGE. `gui key ... up` injects a release,
+// which is the only way to test a gesture that acts on one (Super).
+int wm_debug_next_key_full(uint8_t *out_mods, int *out_down);
 
 // ...and for the wheel: returns the next injected notch delta, or 0.
 // Present because apps DO handle the wheel (a scrollback's scrollbar

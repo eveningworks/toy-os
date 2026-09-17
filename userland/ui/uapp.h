@@ -557,6 +557,12 @@ int uapp_drag_active(struct uapp *a);   // a drag is in flight right now
 // The WM raises the busy pointer by itself once a window stops
 // answering pings, so this is for work that is slow ON PURPOSE and
 // finishes: it says "working", where the WM's says "not responding".
+// Stop the compositor consuming global shortcuts while this window has
+// the focus, so the app receives them as ordinary keys. For BINDING a
+// shortcut and essentially nothing else -- see abi/win_proto.h, and note
+// that it lapses automatically when the window loses the focus.
+void uapp_inhibit_shortcuts(struct uapp *a, int on);
+
 void uapp_busy_begin(struct uapp *a);
 void uapp_busy_end(struct uapp *a);
 

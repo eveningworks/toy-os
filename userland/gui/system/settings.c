@@ -42,6 +42,7 @@
 #include "ui/uui_spinbox.h"
 #include "ui/uui_checkbox.h"
 #include "ui/uui_textbox.h"
+#include "ui/uui_keycapture.h"
 #include "ui/uui_button.h"
 #include "screensaver_config.h"
 #include "lib/usaver.h"
@@ -90,7 +91,8 @@ _Static_assert(UUI_TEXTBOX_MAX >= SETTING_ABI_VALUE_MAX,
 #define CHOICES_DROPDOWN_MIN 7
 
 // struct slot's `kind`.
-enum { CTRL_RADIO = 0, CTRL_COMBO, CTRL_SLIDER, CTRL_SPIN, CTRL_TEXT };
+enum { CTRL_RADIO = 0, CTRL_COMBO, CTRL_SLIDER, CTRL_SPIN, CTRL_TEXT,
+       CTRL_KEYCAP };
 
 enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST, ID_BUTTONS, ID_STATUS,
        ID_CONTROL_BASE = 100 }; // + slot, so a control names its own row
@@ -244,6 +246,11 @@ struct slot {
     // `config set`. Every registry client can now edit one, not just the
     // setting that prompted it.
     struct uui_textbox    text;
+    // A KEY COMBINATION, captured by pressing it. Staged the way
+    // CTRL_TEXT is -- baseline_buf holds what the page opened with
+    // and `staged` is a changed FLAG, because a combination is no
+    // more an index than a free string is.
+    struct uui_keycapture keycap;
     // Which of the five is showing. A KIND rather than a set of flags:
     // booleans can express "both" and "neither", and neither is a state
     // this page has.
@@ -322,6 +329,7 @@ static const char *category_icon(const char *cat) {
         { "Appearance",    "cat-appearance" },
         { "Desktop",       "cat-desktop" },
         { "Input",         "cat-input" },
+        { "Shortcuts",     "cat-shortcuts" },
         { "Kernel",        "cat-kernel" },
         { "System",        "cat-system" },
         { "Network",       "cat-network" },
@@ -617,6 +625,28 @@ static const struct usaver_opt *opt_of(int idx) {
 // The widgets go dim and refuse input; the SENTENCE is drawn by
 // relayout_page() in place of the description, since a disabled control
 // with no reason beside it reads as a broken one.
+// **THE COMPOSITOR HAS TO STAND DOWN WHILE A CAPTURE IS ARMED.** Global
+// shortcuts are matched before any client sees a key, so without this
+// pressing Super+E to bind it would launch a file manager and the
+// control could never record the combinations it exists for
+// (abi/win_proto.h). It lapses if this window loses the focus, so a
+// crash mid-capture cannot leave the desktop with no shortcuts.
+static struct uapp *g_app;
+
+static void keycap_armed(void *ctx, int armed) {
+    (void)ctx;
+    if (g_app) uapp_inhibit_shortcuts(g_app, armed);
+}
+
+// A combination was captured, or capture was cancelled (`text` NULL).
+// Nothing is WRITTEN here: the page stages it like every other control
+// and Apply commits, so a mis-press is undone by Cancel rather than by
+// pressing the old shortcut again.
+static void keycap_done(void *ctx, const char *text) {
+    (void)ctx; (void)text;
+    if (g_app) uapp_redraw(g_app);
+}
+
 static void set_slot_enabled(struct slot *sl, int idx) {
     int off = idx >= 0 && g_unavail[idx][0] != '\0';
     sl->radio.disabled  = off;
@@ -674,6 +704,23 @@ static void load_slot(struct slot *sl, int idx) {
         // The NUMBER, not an index -- see struct slot.
         sl->baseline = uui_spinbox_value(&sl->spin);
         sl->staged = sl->baseline;
+        sl->choice_count = 0;
+        set_slot_enabled(sl, idx);
+        return;
+    }
+
+    if (g_type[idx] == SETTING_ABI_TYPE_KEYCOMBO) {
+        // A KEY COMBINATION GETS A CAPTURE CONTROL -- you press the keys
+        // rather than spelling them. That is the whole reason KEYCOMBO
+        // is a type of its own and not a STRING (abi/setting_abi.h).
+        sl->kind = CTRL_KEYCAP;
+        uui_keycapture_init(&sl->keycap, g_value[idx]);
+        sl->keycap.on_arm = keycap_armed;
+        sl->keycap.on_done = keycap_done;
+        sl->keycap.ctx = sl;
+        strlcpy(sl->baseline_buf, g_value[idx], sizeof sl->baseline_buf);
+        sl->baseline = 0;
+        sl->staged = 0;
         sl->choice_count = 0;
         set_slot_enabled(sl, idx);
         return;
@@ -959,6 +1006,7 @@ static void open_group(int g) {
 // have to find all of them.
 static const char *staged_value(struct slot *sl) {
     if (sl->kind == CTRL_TEXT) return uui_textbox_text(&sl->text);
+    if (sl->kind == CTRL_KEYCAP) return sl->keycap.text;
     if (sl->kind == CTRL_SPIN) {
         snprintf(sl->staged_buf, sizeof sl->staged_buf, "%d", sl->staged);
         return sl->staged_buf;
@@ -1264,6 +1312,15 @@ static void relayout_page(void) {
                                             .id = ID_CONTROL_BASE + i,
                                             .flags = UUI_FILL_W };
             FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &sl->text, &uui_textbox_ops };
+        } else if (sl->kind == CTRL_KEYCAP) {
+            // NOT UUI_FILL_W: its natural size is measured from the
+            // longest thing it ever shows (the prompt), so stretching it
+            // across the page would leave a shortcut floating in a box
+            // four times its width.
+            PAGE[n++] = (struct uui_item){ .ops = &uui_keycapture_ops,
+                                            .widget = &sl->keycap,
+                                            .id = ID_CONTROL_BASE + i };
+            FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &sl->keycap, &uui_keycapture_ops };
         } else if (sl->kind == CTRL_SPIN) {
             // NOT UUI_FILL_W: a spinbox wants exactly the width of its
             // widest number plus its steppers, and stretching it across
@@ -1420,7 +1477,9 @@ static void on_widget(struct uapp *a, int id, int reason) {
         // A FIELD REPORTS WHETHER IT DIFFERS, not an index -- there is
         // no choice list to index into. `baseline` stays 0, so the
         // page's `staged != baseline` tests keep working unchanged.
-        sl->staged = sl->kind == CTRL_TEXT
+        sl->staged = sl->kind == CTRL_KEYCAP
+                        ? (strcmp(sl->keycap.text, sl->baseline_buf) != 0)
+                    : sl->kind == CTRL_TEXT
                         ? (strcmp(uui_textbox_text(&sl->text), sl->baseline_buf) != 0)
                     : sl->kind == CTRL_COMBO   ? uui_dropdown_selected(&sl->combo)
                     : sl->kind == CTRL_SLIDER ? sl->slider.selected
@@ -1758,6 +1817,7 @@ static void on_resize(struct uapp *a, int w, int h) {
 static void on_font(struct uapp *a) { apply_split(a); }
 
 static void on_open(struct uapp *a) {
+    g_app = a;
     apply_split(a);
     // The lines tools/ asserts on. Kept in the app rather than derived
     // from a screenshot because a layout is a fact, and a number a test

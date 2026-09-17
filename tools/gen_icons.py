@@ -689,6 +689,20 @@ def icon_cat_input():
     return im
 
 
+def icon_cat_shortcuts():
+    # A single keycap with a chevron on it -- a KEY being pressed, which
+    # is what a shortcut is. Deliberately NOT another full keyboard:
+    # cat-input already is one, and two keyboards in the same sidebar
+    # would be two rows nobody can tell apart at 20px.
+    im, d = tile((120, 135, 185))
+    d.rounded_rectangle([16, 16, 48, 48], radius=5, outline=WHITE, width=4)
+    # The chevron, pointing down-right the way a "press" arrow does.
+    d.line([25, 27, 32, 34], fill=WHITE, width=4)
+    d.line([32, 34, 25, 41], fill=WHITE, width=4)
+    d.line([36, 41, 42, 41], fill=WHITE, width=4)
+    return im
+
+
 def icon_cat_kernel():
     # A chip: a square die with legs on all four sides. The one category
     # that is about the machine rather than about the session.
@@ -783,6 +797,7 @@ ICONS = {
     "cat-time": icon_cat_time,
     "cat-appearance": icon_cat_appearance,
     "cat-input": icon_cat_input,
+    "cat-shortcuts": icon_cat_shortcuts,
     "cat-kernel": icon_cat_kernel,
     "cat-system": icon_cat_system,
     "cat-desktop": icon_cat_desktop,

@@ -3181,6 +3181,30 @@ a thread is neither. The case for a thread is work whose RESULT must
 live in the app's own memory: a decoded image is the example, since
 handing one back through a pipe that carries 1 KiB a read is absurd.
 
+## A GLOBAL SHORTCUT IS THE COMPOSITOR'S, AND SUPER IS NOW A MODIFIER.
+
+Bindings are registry settings under the `shortcuts` namespace
+(`kernel/lib/shortcut_actions.c` holds the action table, which the
+compositor reads too). `userland/wm/wm_shortcut.c` matches every key
+before routing, so **no app can shadow one** -- the same rule Alt+F4 has
+always followed, and the reason a Wayland client cannot grab a key.
+
+- **`KEY_SUPER` IS NO LONGER IN THE BYTE STREAM.** It is a modifier
+  (`KEY_MOD_SUPER`) and reaches the compositor as a TRANSITION. "Super
+  alone opens the Start menu" is the compositor's policy and fires on the
+  RELEASE, only when nothing was pressed in between.
+- **THE COMMAND IN THE ACTION TABLE MUST MATCH `data/wm/applications/`,
+  AND NOTHING CHECKS IT AT BUILD TIME.** Two of the first four were
+  wrong; the symptom is `pid -1` in the log and no window.
+  `tools/shortcut_test.py` compares the lists.
+- **THIS KEYBOARD CANNOT DELIVER Ctrl WITH A NON-LETTER.** The driver
+  drops it, so `Ctrl+Shift+Esc` is unbindable however well it parses.
+  Ctrl+letter folds to a control code before anyone sees it, which
+  `keycombo_matches()` undoes -- do not re-derive that anywhere else.
+- **A CONTROL THAT RECORDS A SHORTCUT MUST HOLD
+  `uapp_inhibit_shortcuts()`** while it listens, or the compositor spends
+  the very keys it is waiting for. It lapses on focus loss by design.
+
 ## AN APP HANDED A FILE MUST SELECT IT, NOT JUST ITS FOLDER.
 
 Image Viewer and Music Player both browse a DIRECTORY and show the

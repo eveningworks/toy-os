@@ -15,6 +15,7 @@
 // produced desktop.c/start_menu.c/context_menu.c. See wm.c's top
 // comment.
 #include "wm_internal.h"
+#include "wm_shortcut.h"
 #include "screensaver_config.h"
 #include "wm_idle.h"
 #include "wm_dnd.h"
@@ -1085,6 +1086,14 @@ void wm_client_chan_pump(void) {
             break;
         case WIN_REQ_TIMER:
             on_window_timer(from, m.window, (unsigned)m.a);
+            break;
+        case WIN_REQ_INHIBIT_SHORTCUTS:
+            // **RESOLVED TO THE COMPOSITOR'S INDEX, not stored raw.**
+            // `m.window` is the slot as the CLIENT numbers it; every
+            // other handler here goes through find_client_window() for
+            // exactly that reason, and comparing a client's id against
+            // wm_focus_index() matches by accident or not at all.
+            wm_shortcut_inhibit(find_client_window(from, m.window), m.a != 0);
             break;
         case WIN_REQ_PONG:
             on_window_pong(from, m.window, (uint32_t)m.a);

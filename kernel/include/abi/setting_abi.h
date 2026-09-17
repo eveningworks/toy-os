@@ -76,7 +76,14 @@ enum setting_result {
 // telling the same kind of lie SETTING_UNSAVED exists to prevent.
 #define SETTING_ABI_SF_REBOOT   (1u << 0) // takes effect at the next boot
 #define SETTING_ABI_SF_ADVANCED (1u << 1) // a UI may keep it behind a disclosure
-#define SETTING_ABI_MAX       56
+// **RAISED TO 72 WHEN THE SHORTCUTS LANDED, AND THE OLD VALUE WAS
+// EXACTLY FULL.** 56 settings against a cap of 56 is not a system with
+// room; it is one where the next registration disappears. The symptom is
+// not an error either -- System Settings' own comment records this
+// happening twice, each time leaving the LAST category as a heading with
+// no children, which reads as "that category does nothing". Four
+// shortcut settings put it back on the line, so this moves.
+#define SETTING_ABI_MAX       72
 
 #define SETTING_ABI_NAME_MAX  24 // the /etc key, e.g. "font_size"
 #define SETTING_ABI_LABEL_MAX 40 // human-facing, e.g. "Font size"
@@ -99,6 +106,11 @@ enum setting_result {
 // offer steppers and a slider instead of a free-text box, and what lets
 // the REGISTRY reject an out-of-range value before any apply() sees it.
 #define SETTING_ABI_TYPE_INT    2
+// A KEY COMBINATION ("Ctrl+Alt+T"), stored and carried as a STRING --
+// what the type adds is that a UI offers a capture control rather than a
+// text box. api/keycombo.h is the grammar; api/setting.h says why it is
+// a type and not a flag.
+#define SETTING_ABI_TYPE_KEYCOMBO 3
 
 enum setting_op {
     // No inputs. Fills `count` with the number of registered settings.

@@ -3141,6 +3141,25 @@ window without going through it will find its layout polls timing out.
   notification is the signal, and a waiter beside it is redundant even
   when it works (CLAUDE.md). Named by no runner -- it is a helper, not a
   test.
+- **`shortcut_test.py`** -- global keyboard shortcuts: the default
+  bindings, the Super gesture, and rebinding one through System Settings
+  (15 checks). **It asserts on what the compositor LAUNCHED**, from its
+  own `wm: shortcut -> <command>` line, not on a window appearing -- a
+  window is also what a Start-menu click gives you, and this is about the
+  key path. Four traps it pins, each of which has already bitten:
+  **the command paths drift from `data/wm/applications/`** (two of four
+  were wrong first time, and the symptom was `pid -1` in a log nobody
+  read, so the first check lists each one on the disk); **Super held over
+  another key must not open the Start menu**, or every Super shortcut
+  opens it on the way out; **capture needs the compositor to stand down**,
+  checked by recording a combination that IS already bound and asserting
+  no file manager appeared; and **the rebinding is end to end** -- Apply,
+  then press the NEW key -- because `usetting_get()` returns 1 for
+  success and reading it as a syscall result made every binding fall
+  through to its fallback, so a rebinding was stored, reloaded and
+  ignored while every cheaper check passed. It leaves
+  `/etc/shortcuts.conf` removed, so the machine is as it was found. In
+  `gui_regress.py`.
 - **`taskmgr_test.py`** -- the ring-3 Task Manager: `uui_table`, resize
   reflow, and ending a process (12 checks). Its resize check asserts the
   table grew by ROUGHLY WHAT THE WINDOW GREW BY, not merely that it

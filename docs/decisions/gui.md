@@ -8104,6 +8104,58 @@ plainly: a cache HIT does not rewrite its file, so age is not use.
 Recording a use would mean a disk write on every hit, which is the cost
 the cache exists to avoid.
 
+## Global shortcuts are the compositor's, and Super is a modifier that also acts alone
+
+Nothing here was ever going to let an application grab a key. A Wayland
+client cannot, deliberately -- one that could would be a keylogger -- so
+the compositor matches every binding before routing, and toy-os already
+had exactly that shape for Alt+F4. What changed is that the set became
+DATA instead of a chain of `else if`s.
+
+**They are registry settings, not a file of bindings.** KDE keeps
+`kglobalshortcutsrc`, a `binding = command` file, and that buys arbitrary
+custom commands. But System Settings here is registry-driven: a
+registered setting gets a row, a label, validation and `config set` for
+free, where a file would have needed a page written from scratch. GNOME
+makes the same split and keeps its named actions in GSettings. The cost
+is that the ACTION LIST IS FIXED in `kernel/lib/shortcut_actions.c`;
+binding a key to an arbitrary command is a second mechanism and is on the
+roadmap, not in this.
+
+A value may name SEVERAL combinations, comma-separated, because one
+action genuinely wants two keys -- the screenshot tool answers to
+Shift+Super+S and to Print Screen, as Windows binds both. GNOME's
+keybindings are arrays of strings for the same reason.
+
+**The harder half is Super.** It used to open the Start menu on the
+PRESS, which is fine for a key that only ever acts alone and impossible
+for one that also modifies: holding Super to type Super+E would open the
+menu on the way out of every shortcut. So Super is a modifier now
+(`KEY_MOD_SUPER`), and "Super alone" became a compositor POLICY rather
+than something the driver decides -- it acts on the RELEASE, and only
+when no other key was pressed in between. Windows and KDE both behave
+exactly this way. The driver no longer pushes `KEY_SUPER` into the byte
+stream at all; it is a transition, like the other four modifiers, which
+is also what stops Super reaching a shell.
+
+**And a capture control needs the compositor to stand down.** Binding
+Super+E means RECEIVING Super+E, which the compositor would otherwise
+match and spend. `WIN_REQ_INHIBIT_SHORTCUTS` is Wayland's
+`zwp_keyboard_shortcuts_inhibit_v1` under another name, and it is scoped
+to the focused window and released automatically when that window loses
+the focus -- so a client that crashes mid-capture cannot leave the
+desktop with no shortcuts. Alt+F4 is deliberately NOT inhibited: it stays
+the break combination, which costs the ability to rebind Alt+F4 itself
+and buys a window holding the inhibitor always being closeable.
+
+**What this keyboard cannot express, and why the Task Manager default is
+not Windows'.** The driver drops Ctrl with anything that is not a letter,
+and folds Ctrl+letter to a control code before anyone sees it. So
+Ctrl+Shift+Esc can never be delivered -- it was the first default here
+and could never have fired -- while Ctrl+Alt+Delete can, because Delete
+is pushed before the Ctrl fold. `keycombo_matches()` undoes the fold so
+that nothing above it has to know any of this.
+
 ## Notepad asks before throwing a document away, and CLOSING is not what it asks about
 
 The obvious reading of "ask before closing" is an `on_close` handler,

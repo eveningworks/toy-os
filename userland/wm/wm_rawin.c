@@ -112,6 +112,7 @@ static void key_push(int code, uint8_t mods, int down) {
     case KEY_CTRL:  bit = KEY_MOD_CTRL;  break;
     case KEY_ALT:   bit = KEY_MOD_ALT;   break;
     case KEY_ALTGR: bit = KEY_MOD_ALTGR; break;
+    case KEY_SUPER: bit = KEY_MOD_SUPER; break;   // a modifier since shortcuts
     default: break;
     }
     if (bit) {

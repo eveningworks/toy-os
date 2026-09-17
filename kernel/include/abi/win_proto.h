@@ -1103,6 +1103,31 @@ struct win_popup_pos {
                            // its own overlay as the target.
 
 #define WIN_SHOT_POINTER 0x1 // draw the cursor into the copy
+
+// A CLIENT ASKING THE COMPOSITOR TO STOP EATING GLOBAL SHORTCUTS while
+// it has the focus. `window`: which one. `a`: 1 to inhibit, 0 to release.
+//
+// **IT EXISTS FOR ONE HONEST REASON: BINDING A SHORTCUT.** System
+// Settings' capture control has to receive Super+E as a keystroke, and
+// the compositor would otherwise match it and launch a file manager --
+// the control could never record the very combinations it exists to
+// record. Wayland has exactly this and calls it
+// `zwp_keyboard_shortcuts_inhibit_v1`; KDE and GNOME both implement it
+// for their own shortcut editors and for remote-desktop and VM windows,
+// which want the guest to see Super too.
+//
+// **IT IS SCOPED TO THE FOCUSED WINDOW AND RELEASED AUTOMATICALLY.** The
+// compositor drops it when that window loses the focus or goes away, so
+// a client that crashes mid-capture cannot leave the desktop with no
+// shortcuts -- which is the failure this would otherwise invite, and the
+// reason Wayland ties the inhibitor to a surface rather than to a
+// client.
+//
+// **ALT+F4 IS DELIBERATELY NOT INHIBITED.** It stays the break
+// combination, so a window holding the inhibitor can always be closed;
+// the cost is that Alt+F4 itself cannot be recorded by capture, which is
+// the trade every compositor makes for having an escape hatch at all.
+#define WIN_REQ_INHIBIT_SHORTCUTS 35
 #define WIN_SHOT_PROBE   0x4 // ANSWER THE RECT AND COPY NOTHING. What a
                            // picker asks on every pointer move: it needs
                            // to know what it would get in order to draw

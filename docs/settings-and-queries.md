@@ -330,6 +330,22 @@ Selecting a heading opens its first setting rather than an empty pane.
 Renamed from *Control Panel* on 2026-08-19: that is Windows' name, and
 this shows exactly the setting registry.
 
+### The control a setting gets
+
+From its TYPE, and from nothing the app decides: an ENUM gets radio
+buttons or a dropdown (by count, or by what `/etc/settings.d` asks for),
+an INT gets a spinbox with the registry's own bounds, a STRING gets a
+text field, and a **KEYCOMBO gets a capture control** — click it, press
+the keys, and it records what you pressed (`userland/ui/uui_keycapture.c`).
+
+That last one is why KEYCOMBO is a type rather than a flag on STRING: a
+key combination is storable as text but not *spellable* by most people
+on the first try, and a text box makes a typo silent until the key does
+not work. KDE and GNOME both put a capture control in front of a
+shortcut. While it is listening the app holds
+`uapp_inhibit_shortcuts()`, or the compositor would spend the very keys
+being recorded — see `docs/decisions.md`.
+
 ## Related
 
 - [query-design.md](query-design.md) — the query registry, why it is not `/proc`, and its staging

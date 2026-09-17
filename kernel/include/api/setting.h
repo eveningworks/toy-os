@@ -50,7 +50,7 @@
 // KTESTs' four scratch settings had filled the rest), to 48 when the
 // three network-time settings made 32, and to 56 when the two
 // `desktop.tray_*` visibility settings made 45.
-#define SETTING_MAX        56 // registered settings
+#define SETTING_MAX        72 // registered settings
 _Static_assert(SETTING_MAX == SETTING_ABI_MAX,
                "SETTING_MAX and SETTING_ABI_MAX must agree -- a client sizes "
                "its array from the ABI one and would truncate the list");
@@ -115,6 +115,21 @@ enum setting_type {
     // always did. Only the bounds are new. That is what keeps `config`,
     // etc_config.c and every existing caller untouched.
     SETTING_TYPE_INT    = 2,
+
+    // A KEY COMBINATION, spelled by api/keycombo.h -- "Ctrl+Alt+T".
+    //
+    // IT IS A STRING AS FAR AS STORAGE GOES, and the registry treats it
+    // as one; what the type adds is that a UI knows to offer a CAPTURE
+    // control ("press the new shortcut") instead of a text box. That is
+    // the difference between a setting a person can change and one they
+    // have to look up the spelling for, and it is what KDE and GNOME
+    // both put in front of a shortcut.
+    //
+    // A THIRD TYPE RATHER THAN A FLAG ON STRING, because the settings
+    // ABI carries the type as a number and every client switches on it:
+    // a flag would be a second field that STRING clients would ignore,
+    // leaving them rendering a text box for a value they cannot spell.
+    SETTING_TYPE_KEYCOMBO = 3,
 };
 
 struct setting {

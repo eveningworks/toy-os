@@ -745,6 +745,8 @@ LIBC_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBC_SRCS)) \
                $(BUILD)/userland/shared/kfmt.o \
                $(BUILD)/userland/shared/heap_core.o \
                $(BUILD)/userland/shared/caltime.o \
+               $(BUILD)/userland/shared/keycombo.o \
+               $(BUILD)/userland/shared/shortcut_actions.o \
                $(BUILD)/userland/shared/ksignal.o \
                $(BUILD)/userland/shared/kfmt_cases.o
 LIBC         = $(BUILD)/userland/libc.a
@@ -794,7 +796,7 @@ EXTRA_OBJS_gfxdemo    =
 # userland/wm/ should fail to link with an undefined symbol, not get
 # silently absorbed into the desktop.
 EXTRA_OBJS_toywm      = wm/wm wm/wm_rawin wm/wm_render wm/wm_input wm/wm_client \
-                        wm/wm_debug wm/wm_tray wm/wm_taskbar wm/wm_watchdog \
+                        wm/wm_debug wm/wm_tray wm/wm_taskbar wm/wm_watchdog wm/wm_shortcut \
                         wm/desktop wm/start_menu wm/context_menu wm/calendar_popup \
                         wm/volume_popup wm/brightness_popup wm/tray_slider_popup \
                         wm/network_popup wm/remote_popup \
@@ -1060,6 +1062,8 @@ LIBC_PIC_OBJS = $(patsubst userland/%.c,$(BUILD)/userland-pic/%.o,$(filter-out u
                 $(BUILD)/userland-pic/shared/kfmt.o \
                 $(BUILD)/userland-pic/shared/heap_core.o \
                 $(BUILD)/userland-pic/shared/caltime.o \
+                $(BUILD)/userland-pic/shared/keycombo.o \
+                $(BUILD)/userland-pic/shared/shortcut_actions.o \
                 $(BUILD)/userland-pic/shared/ksignal.o \
                 $(BUILD)/userland-pic/shared/kfmt_cases.o
 

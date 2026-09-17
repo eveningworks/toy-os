@@ -27,6 +27,7 @@ static int shift_pressed = 0;
 static int altgr_pressed = 0;
 static int ctrl_pressed = 0;
 static int alt_pressed = 0;   // LEFT Alt only -- right Alt is AltGr, see below
+static int super_pressed = 0; // Super/Win, a modifier since shortcuts landed
 static int extended_prefix = 0;
 
 #define LEFT_SHIFT_PRESS   0x2A
@@ -73,6 +74,7 @@ static uint8_t current_mods(void) {
     if (ctrl_pressed) m |= KEY_MOD_CTRL;
     if (alt_pressed) m |= KEY_MOD_ALT;
     if (altgr_pressed) m |= KEY_MOD_ALTGR;
+    if (super_pressed) m |= KEY_MOD_SUPER;
     return m;
 }
 
@@ -341,6 +343,14 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     case INPUT_KEY_RIGHTCTRL:  ctrl_pressed = down;  mod_code = KEY_CTRL;  break;
     case INPUT_KEY_LEFTALT:    alt_pressed = down;   mod_code = KEY_ALT;   break;
     case INPUT_KEY_RIGHTALT:   altgr_pressed = down; mod_code = KEY_ALTGR; break;
+    // SUPER JOINED THIS SWITCH when shortcuts landed, and that is what
+    // took it out of the byte stream: it used to ring_push(KEY_SUPER) on
+    // the press, which is why the Start menu opened the instant the key
+    // went down. It is a modifier now (api/keyboard.h), so it reaches
+    // the compositor as a TRANSITION and the "Super alone" gesture is
+    // the compositor's policy rather than this driver's.
+    case INPUT_KEY_LEFTMETA:
+    case INPUT_KEY_RIGHTMETA:  super_pressed = down; mod_code = KEY_SUPER; break;
     default: break;
     }
     if (mod_code) {
@@ -406,12 +416,6 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     case INPUT_KEY_PAGEUP:   ring_push(KEY_PAGE_UP); return;
     case INPUT_KEY_PAGEDOWN: ring_push(KEY_PAGE_DOWN); return;
     case INPUT_KEY_DELETE:   ring_push(KEY_DELETE); return;
-    // Super/Win opens the Start menu, the way it does on Windows and
-    // KDE. Both sides send the same code: no desktop distinguishes
-    // them, and nothing here should invent a distinction (the same call
-    // this driver already makes for left/right Ctrl).
-    case INPUT_KEY_LEFTMETA:
-    case INPUT_KEY_RIGHTMETA: ring_push(KEY_SUPER); return;
     // THE WHOLE FUNCTION ROW. It was four -- F2/F3 (the file manager),
     // F10 (the menu bar) and F4 (Alt+F4) -- added one per caller; Doom
     // binds F1 through F11 and made the rest worth having. Pushed

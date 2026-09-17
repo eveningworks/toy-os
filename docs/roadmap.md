@@ -264,6 +264,9 @@ everything libc-shaped is waiting on it. Full plan and staging:
 - [x] ~~Image Viewer decodes on a worker thread~~ DONE 2026-09-16 -- one at a time, a later request supersedes it
 - [x] ~~File Manager thumbnails decode on a worker thread, with no batch size~~ DONE 2026-09-17 -- measured 24/s against the old 4/s ceiling
 - [x] ~~A thumbnail cache that survives a reboot~~ DONE 2026-09-17 -- `/var/cache/thumbnails`, one QOI named after its source
+- [x] ~~Global keyboard shortcuts, and a way to rebind them~~ DONE 2026-09-17 -- registry settings; Super became a modifier
+- [ ] Bind a shortcut to an ARBITRARY command, not just a named action -- a second mechanism beside the registry
+- [ ] Make Ctrl with a non-letter deliverable, so `Ctrl+Shift+Esc` can be bound
 - [x] ~~The GUI Terminal reads its pty on a thread, not a 30 ms poll~~ DONE 2026-08-26 -- one reader per tab, no cadence left
 - [ ] More than eight Terminal tabs, which needs a scrolling strip rather than a wider one
 - [x] ~~A tab can be renamed by hand~~ DONE 2026-08-27 -- Terminal > Rename Tab; the name outranks the shell's OSC

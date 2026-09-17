@@ -55,20 +55,25 @@
 // here, and this generalises to a future Alt+F<n> for free.
 #define KEY_F4                0xA5
 
-// Super (the Windows/Meta key) -- TOGGLES the Start menu, exactly as it
-// does on Windows and KDE: press to open, press again to close.
+// Super (the Windows/Meta key). **IT IS BOTH A MODIFIER AND A KEY**,
+// which is the one place this driver reports a key twice over, and the
+// reason is that every desktop binds it both ways: Super+E opens a file
+// manager on Windows and KDE, and Super ALONE opens the launcher.
 //
-// A KEY_* code rather than a modifier bit, because this key ACTS on its
-// own rather than modifying another keypress. Nothing here supports
-// Super+<letter> combinations, and adding one later means adding a
-// modifier bit beside this, not replacing it.
+// So it is a MODIFIER FIRST -- KEY_MOD_SUPER below, and a transition on
+// this code, never a byte in the console stream (see the modifier block
+// after this). The "Super alone" gesture is then a POLICY the window
+// manager applies, not something the driver decides: it acts on the
+// RELEASE, and only when no other key was pressed in between. That is
+// what Windows and KDE both do, and it is why holding Super to type
+// Super+E does not also open the Start menu on the way out.
+//
+// (This header used to say Super acted on its own and that supporting
+// Super+<letter> "means adding a modifier bit beside this". That is
+// exactly what happened; the bit is KEY_MOD_SUPER.)
 //
 // Left and right Super send the SAME code. No desktop distinguishes
 // them, and the driver already makes that call for left/right Ctrl.
-//
-// Like Alt+F4, this is a WINDOW-MANAGER shortcut: userland/wm/wm.c consumes
-// it before keys are routed to the focused window, so it never reaches
-// an app. A full-screen app cannot swallow the Start menu.
 #define KEY_SUPER             0xA6
 
 // --- THE FOUR MODIFIER KEYS, AS KEYS ---------------------------------
@@ -280,6 +285,10 @@ int keyboard_wire_keycode(uint8_t sc, int extended, uint16_t *out);
 #define KEY_MOD_CTRL  0x02
 #define KEY_MOD_ALT   0x04 // LEFT Alt (Meta) only -- AltGr is separate, see above
 #define KEY_MOD_ALTGR 0x08
+// Super/Win. Unlike the four above it is ALSO a key in its own right
+// (KEY_SUPER) -- see there for why, and for whose job the "Super alone"
+// gesture is.
+#define KEY_MOD_SUPER 0x10
 
 // Blocking read of a single byte from the input stream: either an ASCII
 // char or one of the KEY_* codes above.
