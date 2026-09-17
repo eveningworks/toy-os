@@ -2580,10 +2580,58 @@ pointer grab TWS does not have), and resizing.
 ---
 
 Deliberately left out as out of scope for toy-os: an own bootloader (GRUB
-is fine here), a self-hosted C compiler, and additional CPU architectures
+is fine here), a SELF-HOSTED C compiler, and additional CPU architectures
 beyond the RISC-V backlog item above (toy-os is x86-64-first by design,
 per the project description). [brutal-org/brutal](https://github.com/brutal-org/brutal)'s
 own roadmap has all three as goals -- not goals here.
+
+**Self-hosted is the operative word in the middle one**, and it is not
+the same as having a compiler. `roadmap.md`'s "Programming on the
+machine" plans a `cc` that compiles ordinary programs ON toy-os, and
+this file's section of the same name has the detail; what stays out of
+scope is toy-os rebuilding its own kernel and userland, which needs GCC
+and Make rather than a compiler port. `docs/cc-design.md` opens with
+that distinction because it is the one a reader of this paragraph would
+otherwise get wrong.
+
+---
+
+## Programming on the machine
+
+The full plan is `docs/cc-design.md`; this section records only what
+decides its scope, so the roadmap item above is readable without opening
+it.
+
+**It is NOT self-hosting**, and the out-of-scope note below still stands
+unchanged. The goal is `cc hello.c -o hello` on the machine's own
+console, for ordinary `/bin`-shaped programs against tolibc -- not
+rebuilding `kernel.bin`.
+
+**The one measurement that picks the compiler**: there is no `as`, no
+`ld` and no `make` in `/bin`. Most small C compilers emit assembly text
+and shell out to an assembler and a linker, so adopting one of those is
+three projects rather than one. A compiler with an integrated assembler
+and linker that writes ELF directly is one.
+
+**The one measurement that rules self-hosting out**: this tree compiles
+with `-mcmodel=kernel`, `-mstack-protector-guard=global`,
+`-ftls-model=local-exec`, `-mno-direct-extern-access` and
+`-fno-tree-loop-distribute-patterns`. No small compiler implements any
+of them, so "toy-os builds toy-os" means porting GCC and Make.
+
+**What is already favourable, measured**: `kernel/proc/elf.c` loads
+`ET_EXEC` only, which is exactly what such a compiler emits; tolibc
+already has `qsort`, `strtod`, `mmap` and a real assembly
+`setjmp`/`longjmp`; `errno` is a function call rather than a `__thread`
+variable, so a compiled program needs no TLS; and vendoring at this
+scale is routine (mbedtls 203,755 lines against 566 of glue).
+
+**The trap worth knowing before stage 0**: tolibc's POSIX layer is
+`static inline` IN THE HEADERS over raw `sys_*` calls -- `lseek`,
+`getcwd` and `isatty` have no out-of-line definition and appear in no
+archive. An include root staged without `userland/rt/sys.h` does not
+compile, and the failure looks like a broken compiler rather than a
+broken SDK.
 
 ---
 

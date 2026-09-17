@@ -1084,6 +1084,19 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [x] ~~Distinguish "the kernel faulted" from "a process faulted and the kernel tore it down correctly"~~ DONE 2026-09-12
 - [x] ~~Stack-overflow detection via a guard page, reported as such rather than as a mystery fault~~ done
 
+### Programming on the machine
+
+**Needs:** nothing not already built. See `docs/cc-design.md`, which
+carries the staged plan and the honest case against. NOT self-hosting --
+that stays out of scope, and the design doc says why in its first
+section.
+
+- [ ] Stage the SDK: `userland/include/` + `rt/sys.h` to `/usr/include`, the static libraries and crt/rt objects to `/usr/lib`
+- [ ] Vendor a C compiler with an integrated assembler and linker, cross-built and proven on the host first
+- [ ] The same compiler running ON toy-os, emitting `ET_EXEC` at `0x8000000000` with `PT_INTERP=/lib/ld-toy.so`
+- [ ] `/bin/cc`, our own driver over it, plus `docs/commands/cc.md`
+- [ ] A corpus compiled on the machine whose output is compared against the host gcc's
+
 ### In-OS documentation
 **Needs:** TTY / virtual terminals, for the front end.
 
