@@ -49,6 +49,19 @@ What it proves, and what a broken version would still pass:
   * THE DESCRIPTION STRIP says what the hovered row is, from its
     `Comment=` -- and says nothing, rather than the last thing, when
     the pointer is on a row that has none.
+  * A LINE TOO LONG FOR THE STRIP IS MARKED `..`, and the TOOLTIP
+    carries the whole of it after a hover delay. Three things are
+    asserted separately because they fail separately: it is NOT up
+    immediately (a tooltip with no delay strobes as the pointer crosses
+    a list), it IS up after the delay with the full text, and a CLICK
+    still reaches the row underneath -- a tooltip that took the pointer
+    would eat the click, which is the classic way to get this wrong.
+    **The "not up yet" half is SKIPPED, not failed, when the probe
+    itself took longer than the delay** -- every console command against
+    the bare-metal machine is a telnet round trip of about half a
+    second, which is the whole delay, so asserting it there would
+    measure the transport. It reports as "not measurable here" and the
+    run stays honest; the VM asks about 280ms in and measures it.
 
 Positive controls, each run once when this was written (2026-09-17):
   * start_menu_key() returning 0 for printable characters reddens every
@@ -61,6 +74,9 @@ Positive controls, each run once when this was written (2026-09-17):
     checks (the store on disk, and the three after the reboot) and
     NOTHING else -- "pinning makes a Favourites folder" stays green,
     which is exactly the failure a same-boot check cannot see.
+  * wm_tooltip_update() without its delay reddens exactly one check,
+    "no tooltip has appeared yet" -- the one that separates a hint from
+    a box that strobes as the pointer crosses a list.
 
 Usage (the VM must already be up):
     python3 tools/gui_regress.py --only start_menu_test
@@ -85,16 +101,31 @@ KEY_ENTER = "0x0a"
 KEY_F4 = "0xA5"
 KEY_HOME = "0x97"
 KEY_END = "0x98"
+# UUI_TOOLTIP_DELAY_TICKS (ui/uui_toolbar.h) at the PIT's 100 Hz. Named
+# here so the one check that races it says what it is racing.
+TOOLTIP_DELAY_S = 0.5
 
 
 class Result:
     def __init__(self):
-        self.passes, self.fails = [], []
+        self.passes, self.fails, self.skips = [], [], []
 
     def check(self, name, ok, detail=""):
         (self.passes if ok else self.fails).append(name)
         print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"   {detail}" if detail else ""))
         return bool(ok)
+
+    def skip(self, name, why):
+        """A check this RUN could not measure -- not a pass.
+
+        Counted and printed separately, because "we could not ask in
+        time" and "the answer was right" are different statements and a
+        tool that reported the first as the second would be lying in the
+        direction that matters.
+        """
+        self.skips.append(name)
+        print(f"  SKIP  {name}   {why}")
+        return False
 
 
 def shot(qmp, tmp, name):
@@ -305,6 +336,62 @@ def run(dbg, qmp, tmp, res):
               not (dbg.menu().get("description") or ""),
               f"{dbg.menu().get('description')!r}")
 
+    # --- 8b. the tooltip --------------------------------------------------
+    #
+    # A LONG description is the case worth testing: Crash Test's runs
+    # past the strip, so the strip must MARK the cut and the tooltip
+    # must carry the rest.
+    try:
+        dbg.menu_app_row("Crash Test")
+        row = next(r for r in rows_of(dbg.menu(), "app")
+                   if r["label"] == "Crash Test")
+    except (KeyError, StopIteration):
+        row = None
+    if row:
+        dbg.warp_cursor(qmp, row["cx"], row["cy"])
+        full = dbg.menu().get("description") or ""
+        res.check("the strip reports the whole description",
+                  len(full) > 40, f"{full!r}")
+        # NOT YET: the delay is the thing being tested, and a tooltip
+        # that appeared on arrival would pass every other check here.
+        #
+        # ...but only when the PROBE ITSELF got there in time. Every
+        # console command is a round trip, and against the bare-metal
+        # machine that is a telnet exchange of about half a second --
+        # the whole delay. Asking late and then asserting "not up"
+        # measures the transport, not the feature: on hardware this
+        # failed while the tooltip was behaving perfectly.
+        t0 = time.time()
+        dbg.warp_cursor(qmp, row["cx"], row["cy"])
+        asked = dbg.json("gui tooltip --json")
+        elapsed = time.time() - t0
+        if elapsed < TOOLTIP_DELAY_S * 0.8:
+            res.check("...and no tooltip has appeared yet", not asked.get("open"),
+                      f"asked {elapsed * 1000:.0f}ms in")
+        else:
+            res.skip("...and no tooltip has appeared yet",
+                     f"the probe took {elapsed * 1000:.0f}ms of a "
+                     f"{TOOLTIP_DELAY_S * 1000:.0f}ms delay -- this check needs a "
+                     f"faster transport than this machine has")
+        time.sleep(1.2)
+        tip = dbg.json("gui tooltip --json")
+        res.check("after a pause the tooltip carries the full text",
+                  tip.get("open") and tip.get("text") == full,
+                  f"{tip.get('open')} {tip.get('text')!r}")
+        # THE PIXELS, because "the WM says it is open" is not "it is on
+        # screen": the box is drawn over the desktop, so the rect it
+        # claims must differ from the frame taken before it appeared.
+        if tip.get("open"):
+            box = (tip["x"], tip["y"], tip["x"] + tip["w"], tip["y"] + tip["h"])
+            with_tip = qmp.stable_pixels(os.path.join(tmp, "tip-on.png"), box=box)
+            dbg.warp_cursor(qmp, act["cx"], act["cy"])   # a row with no comment
+            time.sleep(0.4)
+            without = qmp.stable_pixels(os.path.join(tmp, "tip-off.png"), box=box)
+            res.check("...and it is DRAWN, not just reported",
+                      with_tip != without)
+            res.check("...and moving off it takes it down",
+                      not dbg.json("gui tooltip --json").get("open"))
+
     # --- 9. scrolling a folder taller than the pane ------------------------
     dbg.menu_select_folder("All Apps")
     menu = dbg.menu()
@@ -445,7 +532,8 @@ def main():
         run(dbg, qmp, args.tmp, res)
 
     n_ok, n_bad = len(res.passes), len(res.fails)
-    print(f"\nstart_menu_test: {n_ok} passed, {n_bad} failed")
+    tail = f", {len(res.skips)} not measurable here" if res.skips else ""
+    print(f"\nstart_menu_test: {n_ok} passed, {n_bad} failed{tail}")
     if res.fails:
         print("  failed: " + ", ".join(res.fails))
     return 1 if n_bad else 0

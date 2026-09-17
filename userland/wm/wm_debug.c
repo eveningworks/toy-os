@@ -16,6 +16,7 @@
 #include "wm_debug.h"
 #include "start_menu.h"
 #include "start_store.h"
+#include "wm_tooltip.h"
 #include "context_menu.h"
 #include "confirm_dialog.h"
 #include "gui_apps.h"
@@ -545,6 +546,24 @@ static const char *menu_kind_name(int kind) {
 // open folder's apps (or the search results), and the search field --
 // plus an `apps` list of every entry with the folder it lives in, so a
 // test can find which folder to click without knowing the layout.
+// The tooltip: what it says and where, or that nothing is showing. Its
+// own command rather than a field on `gui menu`, because it is the
+// panel's and not the menu's -- the taskbar and the tray are the next
+// things to use it.
+static void cmd_tooltip(struct dbg_out *o, int json) {
+    const char *text = "";
+    int x = 0, y = 0, w = 0, h = 0;
+    int up = wm_tooltip_state(&text, &x, &y, &w, &h);
+    if (json) {
+        dbg_out_printf(o, "{\"open\":%s,\"text\":\"%s\",\"x\":%d,\"y\":%d,"
+                          "\"w\":%d,\"h\":%d}\r\n",
+                     up ? "true" : "false", up ? text : "", x, y, w, h);
+        return;
+    }
+    if (!up) { dbg_out_write(o, "tooltip: none\r\n"); return; }
+    dbg_out_printf(o, "tooltip: \"%s\" at %d,%d %dx%d\r\n", text, x, y, w, h);
+}
+
 static void cmd_menu(struct dbg_out *o, int json) {
     int mx, my, mw, mh, item_h;
     start_menu_geometry(&mx, &my, &mw, &mh, &item_h);
@@ -1426,6 +1445,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  windows [--json]      open windows: rects, content rects, z-order, focus\r\n");
     dbg_out_write(o, "  probe X Y [--json]    what is at this point, and what would take the click\r\n");
     dbg_out_write(o, "  menu [--json]         start menu row geometry, as the kernel computes it\r\n");
+    dbg_out_write(o, "  tooltip [--json]      what the hover tooltip says, and where\r\n");
     dbg_out_write(o, "  ctxmenu [--json]      the open right-click menu's rows, same shape as `menu`\r\n");
     dbg_out_write(o, "  dialog [--json]       the open confirm dialog's message and button centres\r\n");
     dbg_out_write(o, "  rclick X Y            right-click, which is what opens a context menu\r\n");
@@ -1522,6 +1542,7 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
 
     if (k_strcmp(sub, "windows") == 0)      { cmd_windows(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "menu") == 0)         { cmd_menu(o, wants_json(p)); return 1; }
+    if (k_strcmp(sub, "tooltip") == 0)      { cmd_tooltip(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "ctxmenu") == 0)      { cmd_ctxmenu(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "dialog") == 0)       { cmd_dialog(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "taskbar") == 0)      { cmd_taskbar(o, wants_json(p)); return 1; }

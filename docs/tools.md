@@ -2171,13 +2171,23 @@ window without going through it will find its layout polls timing out.
   `gui_regress.py` launches it with `--reboot`: the default
   `-no-reboot` answers a guest reboot by ending QEMU, and the tool's
   next command would then fail as a dead socket somewhere unrelated.
-  Three positive controls in its docstring: refusing printable
-  characters reddens the seven search/Enter checks and nothing else; a
-  pane that ignores the selected folder reddens the contents check while
-  the selection check stays green; and a pin that never reaches the disk
-  reddens the four persistence checks and leaves the same-boot one
-  green. Run it after touching `start_menu.c`, `start_store.c`, the
-  overlay table or a `.desktop` `Category=`.
+  It also covers the DESCRIPTION: a line too long for the strip is
+  marked `..` and the tooltip carries the whole of it, with the three
+  halves asserted apart because they fail apart -- not up immediately,
+  up after the delay with the full text, and a click that still reaches
+  the row underneath. Four positive controls in its docstring: refusing
+  printable characters reddens the seven search/Enter checks and nothing
+  else; a pane that ignores the selected folder reddens the contents
+  check while the selection check stays green; a pin that never reaches
+  the disk reddens the four persistence checks and leaves the same-boot
+  one green; and a tooltip with no delay reddens exactly the check that
+  separates a hint from a box that strobes across a list. One check is
+  SKIPPED rather than failed against the bare-metal machine -- "no
+  tooltip yet" cannot be asked in under half a second over telnet, which
+  is the whole delay, so measuring it there would measure the transport;
+  it prints as "not measurable here". Run it after
+  touching `start_menu.c`, `start_store.c`, `wm_tooltip.c`, the overlay
+  table or a `.desktop` `Category=`.
 - **`filedialog_test.py`** -- the shared file chooser as an OWNED window
   (`WIN_REQ_DIALOG`, `ui/uui_filedialog.h`, `uapp_window_open()`),
   driven through Notepad, Image Viewer and Audio Player. 17 checks: the

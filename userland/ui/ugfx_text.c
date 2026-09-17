@@ -43,6 +43,30 @@ int ugfx_text_index_at_x(const char *str, int x) {
     return i;
 }
 
+int ugfx_draw_string_elided(struct ugfx_surface *s, int x, int y, int max_w,
+                            const char *str, uint32_t color, uint32_t bg) {
+    if (!str) return 0;
+    if (ugfx_text_width(str) <= max_w) {
+        ugfx_draw_string_clipped(s, x, y, max_w, str, color, bg);
+        return 0;
+    }
+    // ROOM FOR THE MARK FIRST, then as much text as is left. Measured
+    // rather than counted: on a proportional face the two dots are not
+    // two character widths.
+    int mark = ugfx_text_width("..");
+    int cut_w = max_w - mark;
+    if (cut_w < 0) cut_w = 0;
+    int n = ugfx_text_fit_chars(str, cut_w);
+    char buf[256];
+    if (n > (int)sizeof buf - 1) n = (int)sizeof buf - 1;
+    for (int i = 0; i < n; i++) buf[i] = str[i];
+    buf[n] = '\0';
+    int drawn = ugfx_text_width(buf);
+    ugfx_draw_string_clipped(s, x, y, cut_w, buf, color, bg);
+    ugfx_draw_string_clipped(s, x + drawn, y, mark, "..", color, bg);
+    return 1;
+}
+
 int ugfx_text_fit_chars(const char *str, int max_w) {
     if (!str || ugfx_char_w() <= 0) return 0;
     int n = 0, used = 0, prev = 0;

@@ -31,6 +31,7 @@
 #include "win_role.h"
 #include "start_menu.h"
 #include "start_store.h"
+#include "wm_tooltip.h"
 #include "context_menu.h"
 #include "calendar_popup.h"
 #include "volume_popup.h"
@@ -1226,6 +1227,8 @@ void wm_run(void) {
         // it still fires even if the mouse hasn't moved since the
         // click. See start_menu.c's own comment on this.
         start_menu_update();
+        // The hover delay, on the same tick as the menu's click flash.
+        wm_tooltip_update();
 
         // Title-bar button hover/press feedback -- hover only matters
         // when the mouse actually moved (same cheap-path reasoning as

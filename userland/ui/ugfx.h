@@ -356,6 +356,20 @@ int ugfx_text_width_n(const char *str, int n);
 // all "size this proportionally to the font" and stay. The banned
 // pattern is measuring or indexing A STRING with it.
 
+// Draw `str` in `max_w` pixels, MARKING it when it did not fit: the
+// text is cut short and `..` drawn after it, so a truncated line reads
+// as truncated instead of as a shorter sentence. Returns 1 when it had
+// to elide.
+//
+// `..` and not U+2026: the font is indexed from ASCII 32
+// (kernel/drivers/font_ttf.c), so an ellipsis glyph draws as NOTHING --
+// which would make an elided line indistinguishable from a complete
+// one, the exact failure this exists to stop. The desktop's icon
+// captions have done it this way since they were written; this is that
+// rule, in the one place every caller can reach it.
+int ugfx_draw_string_elided(struct ugfx_surface *s, int x, int y, int max_w,
+                            const char *str, uint32_t color, uint32_t bg);
+
 // How many leading characters of `str` fit within `max_w` pixels, whole
 // glyphs only -- the measurement half of ugfx_draw_string_clipped(),
 // for a caller doing its own windowing (a field scrolling to follow its

@@ -12,6 +12,7 @@
 #include "remote_popup.h"
 #include "confirm_dialog.h"
 #include "osk.h"
+#include "wm_tooltip.h"
 
 // The two that take no cursor, adapted rather than changed: their
 // drawing genuinely does not depend on where the pointer is.
@@ -32,7 +33,17 @@ static int open_osk(void)     { return osk_open; }
 // so the same row that gets the first click is painted last and lands
 // on top. Keeping one table for both is what stops the two orders from
 // drifting apart, which they had already started to do.
+static int open_tooltip(void) { return wm_tooltip_open; }
+static int tooltip_click(int mx, int my) { (void)mx; (void)my; return 0; }
+
 static const struct wm_overlay g_overlays[] = {
+    // FIRST, so it is PAINTED LAST and lands on top of everything --
+    // including the menu whose row it describes. Its click op always
+    // returns 0: a tooltip must never consume the click the person was
+    // about to make, which is the one thing every toolkit gets wrong
+    // about them. No hover op either; it is not a control.
+    { "tooltip",  open_tooltip,  wm_tooltip_draw,  tooltip_click,
+      0, wm_tooltip_damage, 0, 0, 0, wm_tooltip_cancel },
     { "confirm",  open_confirm,  draw_confirm,     confirm_dialog_handle_click,
       confirm_dialog_hover_at,   confirm_dialog_damage,   confirm_dialog_update_press, 0, 0, 0 },
     { "context",  open_context,  context_menu_draw, context_menu_handle_click,

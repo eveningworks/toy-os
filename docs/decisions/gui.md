@@ -8355,3 +8355,47 @@ Favourites folder on the next frame -- and closing the menu would hide
 the only feedback the action has. That is the same rule the desktop's
 own context menu follows for a non-launching verb, and it is why
 `ctx_toggle_pin()` damages the menu instead of closing it.
+
+
+## The description is elided AND tooltipped, because those answer different questions
+
+A `Comment=` longer than the menu is wide was silently cut: the strip
+stopped mid-sentence and looked like a shorter, complete one.
+`ugfx_draw_string_clipped()` has always RETURNED whether it cut, with a
+comment telling callers to "shorten, ellipsise", and two places in the
+tree already did -- the desktop's icon captions and `uui_label`'s last
+wrapped line. The strip was simply the odd one out, and the fix is
+`ugfx_draw_string_elided()` in the toolkit: its third caller is what
+earns it a place there rather than a third copy.
+
+**The mark is `..`, not an ellipsis character.** The font is indexed
+from ASCII 32 (`kernel/drivers/font_ttf.c`), so U+2026 draws as nothing
+-- an elided line would be indistinguishable from a complete one, which
+is the exact failure being fixed. The desktop's captions worked this out
+first; it is now written once where every caller can reach it.
+
+**And eliding does not answer "what does it say".** So the panel grew a
+tooltip: hover a row, wait, read the whole thing. Four options were
+weighed -- eliding alone, shortening the shipped descriptions to fit,
+a permanently two-line strip, and widening the menu to its longest
+description. The last two make every user pay, in height or width, for
+one wordy entry; the second is worth doing anyway but cannot help an
+entry we did not ship.
+
+**Always on hover, not only when truncated.** Explorer shows a tooltip
+only for text it had to cut, which is the tidier rule and the wrong one
+here: the description is the only place an app says what it IS, and it
+is worth reading whether or not it fit.
+
+**It takes no input at all** -- no grab, no hit region, and a click op
+that always returns 0. A tooltip that consumed the click the person was
+about to make is how this goes wrong everywhere, and the check for it is
+in `start_menu_test.py`: clicking a row the tooltip covers must still
+launch that row.
+
+**Why the panel needs its own rather than `uui_toolbar`'s.** That one is
+right for a ring-3 app: the widget rides the app's tick and opens a
+popup SURFACE the compositor places. The panel draws its overlays
+straight into the compositor's buffer and has neither a widget tree nor
+surfaces, so what carries over is the RULES -- the delay constant, the
+no-grab rule, re-arming on a move -- and not the code.

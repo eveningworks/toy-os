@@ -50,7 +50,7 @@ compositor: pid 3  pending 0  dropped 0
 **The vocabulary is the window manager's, not this program's.**
 `guictl` joins its arguments with spaces and sends the line; it parses
 nothing. `guictl help` lists what the WM currently answers --
-`windows`, `probe`, `menu`, `ctxmenu`, `dialog`, `taskbar`, `calendar`,
+`windows`, `probe`, `menu`, `tooltip`, `ctxmenu`, `dialog`, `taskbar`, `calendar`,
 `volume`, `state`, `compositor`, `icons`, `apps`, `damage`, `watchdog`,
 and the input verbs `click`, `rclick`, `move`, `warp`, `key`, `open`,
 `close`, `kill`, `spawn`. Most take `--json`. A subcommand added to

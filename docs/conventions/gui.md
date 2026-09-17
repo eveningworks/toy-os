@@ -1874,6 +1874,29 @@ this the obvious way), not from how much history it accumulated.
   click, no thumb to drag, because the pane is scrolled by the wheel and
   the keyboard. A draggable one would be a second implementation of
   `uui_scrollbar` inside an overlay the panel hand-draws.
+- **TEXT THAT DOES NOT FIT IS MARKED, NOT JUST CUT** --
+  `ugfx_draw_string_elided()`, which draws what fits and then `..`. The
+  mark is two ASCII dots and NOT U+2026, because the font is indexed
+  from ASCII 32 and an ellipsis glyph draws as nothing, which would make
+  an elided line indistinguishable from a complete one. The desktop's
+  icon captions have always done this; the Start menu's strip and rows
+  do now, and anything new that clips should.
+- **THE PANEL HAS A TOOLTIP, AND IT TAKES NO INPUT** --
+  `userland/wm/wm_tooltip.h`, a row in the overlay table placed FIRST so
+  it paints last and lands on top. Its click op always returns 0: a
+  tooltip that consumed the click the person was about to make is the
+  classic way to get this wrong. It appears on a DELAY
+  (`UUI_TOOLTIP_DELAY_TICKS`, the toolkit's own, so the desktop does not
+  feel like two systems), a move to another row re-arms it from zero
+  rather than swapping the text under a box already up, and it is
+  cancelled by whatever it describes going away. `uui_toolbar`'s is the
+  widget version for a ring-3 app and cannot be reused: the panel has no
+  widget tree and no surfaces of its own.
+- **AND EVERY PATH THAT CLOSES THE START MENU GOES THROUGH
+  `start_menu_close()`.** Three did it by clearing the flag inline, so
+  the one thing a close has to tidy was done in one of them and
+  forgotten in the others -- measured: a launch left the tooltip on
+  screen over a menu that had gone.
 - **SEARCH RANKS: exact, then prefix, then substring**, ties keeping the
   list's own order. "te" offers Terminal before Crash Test, which is
   what a person typing three letters means and what a plain substring

@@ -1,6 +1,7 @@
 // See start_menu.h.
 #include "start_menu.h"
 #include "start_store.h"
+#include "wm_tooltip.h"
 #include "wm_overlay.h"
 #include "lib/icon_cache.h"
 #include "wm_internal.h"
@@ -629,11 +630,31 @@ struct gui_app *start_menu_app_at(int mx, int my) {
     return a;
 }
 
+// WHAT THE POINTER IS RESTING ON, handed to the tooltip every frame.
+// Told rather than asked, because the menu is the only thing that knows
+// which row is which -- and saying the same thing twice is free
+// (wm_tooltip_track() compares before it re-arms).
+static void track_tooltip(const struct sm_layout *L, int n) {
+    int apps = pane_visible(L, 0);
+    int acts = wm_system_action_count;
+    if (n < L->cats + acts || n >= L->cats + acts + apps) {
+        wm_tooltip_cancel();
+        return;
+    }
+    struct gui_app *a = 0; int act;
+    pane_row(scroll + n - L->cats - acts, &a, &act);
+    if (!a || !a->comment || !a->comment[0]) { wm_tooltip_cancel(); return; }
+    int x, y, w, h;
+    if (!row_rect(L, apps, n, 0, 0, &x, &y, &w, &h, 0)) { wm_tooltip_cancel(); return; }
+    wm_tooltip_track(a->comment, x, y, w, h);
+}
+
 int start_menu_hover_at(int mx, int my) {
-    if (!start_menu_open) { hover_token = 0; return 0; }
+    if (!start_menu_open) { hover_token = 0; wm_tooltip_cancel(); return 0; }
     struct sm_layout L;
     layout(&L);
     int n = row_at(mx, my);
+    track_tooltip(&L, n);
     if (n < 0) { hover_token = 0; return 0; }
     int acts = wm_system_action_count;
     if (n < L.cats) hover_token = TOK_CAT(n);
@@ -668,6 +689,7 @@ void start_menu_open_now(void) {
 
 void start_menu_close(void) {
     if (!start_menu_open) return;
+    wm_tooltip_cancel();   // it describes a row that is about to not exist
     start_menu_open = 0;
     flash_row = -1;
     hover_token = 0;
@@ -795,11 +817,12 @@ void start_menu_draw(int mx, int my) {
                 ugfx_blit_alpha(wm_surface(), x + 8, y + (h - ico->h) / 2,
                                 ico->w, ico->h, ico->px, ico->w);
         }
-        // Clipped: a label longer than its column is wide would
-        // otherwise be drawn through the border.
-        ugfx_draw_string_clipped(wm_surface(), text_x,
-                                 y + (L.item_h - ugfx_char_h()) / 2,
-                                 x + w - 8 - text_x, label, row_fg, row_bg);
+        // Elided, for the same reason the strip is -- and a row label
+        // that ran past its column used to be drawn through the border
+        // before it was even clipped.
+        ugfx_draw_string_elided(wm_surface(), text_x,
+                                y + (L.item_h - ugfx_char_h()) / 2,
+                                x + w - 8 - text_x, label, row_fg, row_bg);
     }
 
     // WHERE IN THE LIST THIS IS, when the list is taller than the pane.
@@ -833,9 +856,13 @@ void start_menu_draw(int mx, int my) {
         ugfx_fill_rect(wm_surface(), L.x + 6, dy, L.w - 12, 1, UTHEME_SEPARATOR);
         const char *d = start_menu_description();
         if (d && d[0])
-            ugfx_draw_string_clipped(wm_surface(), L.x + 10,
-                                     dy + (L.desc_h - ugfx_char_h()) / 2,
-                                     L.w - 20, d, UTHEME_OUTLINE, bg);
+            // ELIDED, not clipped: a description that simply stopped at
+            // the menu's edge read as a complete shorter sentence, and
+            // the strip is the one place a person reads a whole line.
+            // The full text is the tooltip's job (wm_tooltip.h).
+            ugfx_draw_string_elided(wm_surface(), L.x + 10,
+                                    dy + (L.desc_h - ugfx_char_h()) / 2,
+                                    L.w - 20, d, UTHEME_OUTLINE, bg);
     }
 
     // Border last, after every row fill -- a hover/selection band spans
@@ -891,8 +918,7 @@ int start_menu_handle_click(int mx, int my) {
     if (n < 0) {
         // Clicked elsewhere while the menu was open (the desktop, a
         // window) -- no row was selected, so there's nothing to flash.
-        start_menu_open = 0;
-        start_menu_damage(); // the rows it just vacated
+        start_menu_close();
     } else if (activate(n)) {
         // The row's action already ran -- only closing is deferred, so
         // the click gets a brief visible flash instead of vanishing in
@@ -1030,10 +1056,12 @@ int start_menu_key(int key, uint8_t mods) {
 void start_menu_update(void) {
     if (flash_row < 0) return;
     if (sys_ticks() >= flash_until) {
+        // THROUGH start_menu_close(), not by clearing the flag here.
+        // Three paths closed this menu and two of them did it inline,
+        // so anything the close has to tidy up was done in one of them
+        // and forgotten in the others -- measured: a launch left the
+        // hover TOOLTIP on screen over a menu that had gone.
         flash_row = -1;
-        start_menu_open = 0;
-        hover_token = 0;
-        start_menu_damage(); // the rows it just vacated
-        redraw_pending = 1;
+        start_menu_close();
     }
 }
