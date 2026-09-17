@@ -213,8 +213,13 @@ int uui_menubar_release(struct uui_menubar *m, int cx, int cy);
 // activating immediately if it is the only match, which is what Windows
 // does.
 //
-// Returns 1 if the key was consumed; a committed code (if any) is
-// written to *out_code, which is left alone otherwise.
+// Returns 1 if the key was consumed. **`*out_code` is ALWAYS written**:
+// the committed code, or -1 for "nothing committed" -- the same sentinel
+// uui_menubar_release() returns, so the mouse path and the keyboard path
+// mean the same thing by the same value. A caller therefore never
+// initialises it and never chooses a sentinel, which is what a command
+// numbered 0 used to depend on: it worked with the mouse and silently
+// did nothing from the keyboard.
 //
 // There are deliberately NO Alt+letter mnemonics. Alt does not reach an
 // app as a modifier in this OS -- it arrives terminal-style as an ESC

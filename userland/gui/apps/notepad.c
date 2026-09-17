@@ -1053,14 +1053,14 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // AN OPEN POPUP TAKES THE KEY, wherever the app thinks it is
     // (CLAUDE.md). The context menu is asked first; the bar is closed
     // whenever this one is open.
-    int code = 0;
+    int code;
     if (uui_menubar_key(&g_ctx, key, &code)) {
-        if (code > 0) do_command(a, code);
+        if (code >= 0) do_command(a, code);
         uapp_redraw(a);
         return;
     }
     if (uui_menubar_key(&g_menu, key, &code)) {
-        if (code > 0) do_command(a, code);
+        if (code >= 0) do_command(a, code);
         uapp_redraw(a);
         return;
     }

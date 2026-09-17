@@ -763,17 +763,17 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         return;
     }
 
-    int code = 0;
+    int code;
     // AN OPEN POPUP TAKES THE KEY, wherever the app thinks it is
     // (CLAUDE.md). Asked before the bar, which is closed whenever this
     // one is open.
     if (uui_menubar_key(&g_ctx, key, &code)) {
-        if (code > 0) do_command(a, code);
+        if (code >= 0) do_command(a, code);
         else uapp_redraw(a);
         return;
     }
     if (uui_menubar_key(&g_menu, key, &code)) {
-        if (code > 0) do_command(a, code);
+        if (code >= 0) do_command(a, code);
         else uapp_redraw(a);
         return;
     }

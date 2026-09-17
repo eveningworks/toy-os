@@ -89,6 +89,13 @@ TOOLS = [
     # gcc only; exits non-zero when anything differs.
     ("libc_diff",   "libc_diff.py",            "tolibc's printf and strtol against glibc", False,
      ("host_cc", "needs gcc on PATH"),                                                       False),
+    # A REPORT, not a gate: it always exits 0, because whether a
+    # duplicated block is worth extracting is a judgement call (see the
+    # tool's docstring for the bar) and a check that failed a build on it
+    # would be wrong most of the time. It is in the sweep so the number
+    # stays visible and the tool keeps being exercised.
+    ("dup_scan",    "dup_scan.py",             "copy-paste across userland -- a report, never a gate", False,
+     None,                                                                                   False),
     # Boots its OWN guest from a copy of disk.img with the scripts
     # written in, so wants_vm is False -- handing it one would point it
     # at an image with no test scripts on it.

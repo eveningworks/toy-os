@@ -1,17 +1,17 @@
 # SMP: more than one core, staged
 
-**Status: STAGE 1 IS BUILT (2026-08-30); STAGE 2 IS BUILT (the Local
-APIC 2026-08-30, its TIMER 2026-09-06) EXCEPT THE I/O APIC; STAGES 3-7
-ARE DESIGNED, NOT BUILT.** The ACPI table walk and the MADT's processor
-list exist (`kernel/acpi/`, read by `/bin/acpi` and `/bin/lscpu`), the
-Local APIC is enabled and carries MSI-X for seven drivers, and the tick
-now runs on the LAPIC timer through `kernel/clockevent.h` -- but nothing
+**Status: STAGE 1 IS BUILT (2026-08-30); STAGE 2 IS BUILT IN FULL (the
+Local APIC 2026-08-30, its TIMER 2026-09-06, the I/O APIC and the MADT
+interrupt source overrides 2026-09-10); STAGES 3-7 ARE DESIGNED, NOT
+BUILT.** The ACPI table walk and the MADT's processor list exist
+(`kernel/acpi/`, read by `/bin/acpi` and `/bin/lscpu`), the Local APIC is
+enabled and carries MSI-X for seven drivers, the tick runs on the LAPIC
+timer through `kernel/clockevent.h`, and `kernel/arch/x86_64/ioapic.c`
+routes the legacy lines with the MADT's overrides applied -- so nothing
+goes through the 8259 any more. What remains is stage 3 onward: nothing
 starts a second core, and every MADT entry still reports `online: no`.
-What stage 2 still lacks is the I/O APIC and the MADT's interrupt source
-overrides; legacy lines are still delivered by the 8259 through the
-LAPIC's LINT0 in virtual wire mode. The document is meant to be executed
-in order, each stage shippable and testable on its own, with the honest
-case against at the end.
+The document is meant to be executed in order, each stage shippable and
+testable on its own, with the honest case against at the end.
 
 **Stage 1 landed for a different reason than SMP**, which is worth
 knowing before reading it as progress: shutdown needed the FADT, so the

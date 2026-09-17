@@ -2673,6 +2673,28 @@ real scanout hardware does. Do not write a pixel assertion for one.
   read as a control the panel invented. `tray_item_rect()` gives any
   item's box from that same walk, so a click cannot be told a different
   position from the one it was drawn at.
+- **`uui_menubar_key()` ALWAYS WRITES `*out_code`, AND -1 IS THE ONLY
+  "NOTHING COMMITTED" VALUE** -- the same one `uui_menubar_release()`
+  returns, so the mouse path and the keyboard path mean the same thing by
+  the same value. A caller never initialises it and never picks a
+  sentinel. It used to be "left alone otherwise", and six apps then
+  chose two conventions: `mines` and `terminal` used -1, while `files`,
+  `imgview`, `player` and `notepad` used 0 -- which is only safe while no
+  command has id 0, and **all four had numbered their command enums from
+  1** with nothing recording that they had to. A command numbered 0 would
+  have worked with the mouse and silently done nothing from the keyboard.
+- **SHARE THE PART THAT DOES NOT DIFFER, NOT A LOOP WHOSE DIFFERENCES
+  BECOME CALLBACKS.** `userland/lib/uline.h` states it: the line editor's
+  PAINT is shared by `tosh` and `dash`, and the read loop deliberately is
+  not, because each front end genuinely differs there and sharing it
+  would cost a callback per difference. Measured 2026-09-17 with
+  `tools/dup_scan.py`, two candidates met the "second real caller" bar on
+  the letter and were declined on this rule: `lspci`/`lsusb` share 21
+  lines of bounded-line file reader whose only variable is one
+  `handle_line()` callback, and `imgview`/`player` share ~46 lines of the
+  same media-browser shape while differing in decode-versus-play. Total
+  duplication is small enough that neither pays: 71 duplicated lines
+  across 27 GUI files, 75 across 88 `/bin` programs.
 - **A TRAY ITEM HAS NO HOVER STATE, AND LIGHTS UP ONLY WHILE IT IS
   HELD.** The item's box gets a rounded fill in `uui_state_bg(panel,
   UUI_STATE_PRESSED)` for exactly as long as the left button is down on

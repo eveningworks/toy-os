@@ -722,7 +722,7 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
-    int code = -1;
+    int code;
     if (uui_menubar_key(&g_menu, key, &code)) {
         if (code >= 0) do_command(a, code);
         uapp_redraw(a);

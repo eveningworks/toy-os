@@ -546,9 +546,9 @@ static void on_widget(struct uapp *a, int id, int reason) {
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
-    int code = 0;
+    int code;
     if (uui_menubar_key(&g_menu, key, &code)) {
-        if (code > 0) do_command(a, code);
+        if (code >= 0) do_command(a, code);
         else uapp_redraw(a);
         return;
     }

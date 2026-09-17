@@ -4961,6 +4961,28 @@ window without going through it will find its layout polls timing out.
   is dead and the handler runs on an unfilled buffer; twelve socket
   syscalls shipped that way with the contract stated in the header
   above them. Static, over `kernel/` and `apps/`. Run by `preflight.sh`.
+- **`dup_scan.py`** -- where is the tree actually duplicating code?
+  Normalises away comments, blanks, brace-only lines and whitespace,
+  hashes a sliding window (`--window`, 6 by default), and reports every
+  window occurring in two DIFFERENT files, each extended to its maximal
+  run and claimed so one 40-line clone is reported once rather than as 35
+  overlapping windows. Vendored `ports/` is skipped -- that is somebody
+  else's duplication. **It ALWAYS exits 0**: whether a block is worth
+  extracting is a judgement call, and a check that failed the build on it
+  would be wrong most of the time.
+
+  **What it cannot see, said plainly because a clean run is the most
+  misreadable kind of result**: the same idea written twice in different
+  words, and an API read two different ways by its callers. The menubar
+  sentinel in `docs/conventions/gui.md` -- six apps, three readings, one
+  latent keyboard-only bug -- was found by COUNTING CALLERS of one
+  function, not by this. A clean run means "no copy-paste", never "no
+  duplication".
+
+  First answer, 2026-09-17: 71 duplicated lines across 27 GUI files and
+  75 across 88 `/bin` programs, i.e. almost nothing -- which is why the
+  work that came out of that audit was a contract fix rather than an
+  extraction. In `ondemand_sweep.py`.
 - **`loc.py`** -- how big this project is, honestly: source lines with
   generated files, comments and blank lines all excluded, and the
   with-comments figure beside it. Not `wc -l`, because the answer

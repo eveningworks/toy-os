@@ -640,6 +640,13 @@ static int letter_jump(struct uui_menubar *m, int key, int *out_code) {
 }
 
 int uui_menubar_key(struct uui_menubar *m, int key, int *out_code) {
+    // ALWAYS WRITTEN, so no caller has to pick a sentinel of its own.
+    // It used to be "left alone unless something commits", and six apps
+    // then chose two different conventions for what an untouched value
+    // means -- four of them settling on 0, which is only safe while no
+    // command has id 0, and all four numbered their command enums from 1
+    // to stay compatible without anything recording that they had to.
+    if (out_code) *out_code = -1;
     if (m->depth <= 0) {
         if (key == KEY_F10 && m->count > 0) {
             open_root(m, 0);
