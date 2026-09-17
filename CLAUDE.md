@@ -547,14 +547,20 @@ faster and gives text you can assert on. Order of cheapness:
   else might be running** (`gui_regress.py` holds `0..DEFAULT_JOBS-1`).
   What it does NOT fix is CPU contention: a concurrent run is fine for
   getting an answer, and not evidence when the suite is being judged.
-- **DON'T ADD A WAIT LOOP FOR WORK THAT IS ALREADY IN THE BACKGROUND --
-  and never `pgrep` for a pattern your own command line contains.** That
-  shell's command line matches the waiter itself, so the loop can never
-  exit, reporting a finished suite as still RUNNING. A backgrounded
-  command's own completion notification IS the signal. If a wait
-  genuinely is needed, wait on an ARTIFACT that MUST come to exist --
-  twelve wait-loops were left running in one session, several unable to
-  exit at all.
+- **DON'T ADD A WAIT LOOP FOR WORK THAT IS ALREADY IN THE BACKGROUND.**
+  A backgrounded command's own completion notification IS the signal, so
+  a waiter beside it is redundant even when it works -- twelve were left
+  running in one session, several unable to exit at all.
+
+  **IF A WAIT IS GENUINELY NEEDED, WAIT ON A PID OR AN ARTIFACT, AND
+  BOUND IT** -- `tools/wait_for.sh <pid>`, `--file PATH`, both with a
+  timeout. Never match a process by NAME: the waiter's own command line
+  contains the name it is looking for, so the loop matches ITSELF and can
+  never exit, reporting a finished suite as still RUNNING. The `[f]oo`
+  trick does not save it -- that hides the grep, not the shell whose
+  command line carries the word somewhere else. Two such waiters ran for
+  two hours in one session while `preflight.sh` reported none, because
+  its pattern looked for `while [` and these were `while ps ... | grep`.
 - **Prefer `tools/gui_debug.py` to pixels** for anything not literally
   about rendering. It is asynchronous: call `DebugConsole.settle()`
   before asserting, never a fixed sleep.
@@ -586,6 +592,7 @@ The bar is "does this fix a rederive-from-scratch cost".
 | Disk images, from the host | `seed_disk.py`, `install_grub.py` (also `boot_medium()`), `tfs3_writer.py`, `mkpart_test.py`, `fetch_wad.py` |
 | Generated data | `gen_version.sh`/`set_version.sh`, `genfont.py`, `genttf.py`, `gen_kbs.py`, `gen_cursors.py`, `gen_icons.py`, `gen_imgdata.py`, `gen_audio.py`, `gen_music.py`, `gen_mp3_tables.py`, `gen_signames.py`, `genrelocs.py`, `gen_syms.py`, `drivers_conf.py`, `gen_modalias.py`, `gen_decisions_index.py`, `gen_commands_index.py`, `gen_next_up.py`, `fetch_ca_bundle.py` |
 | The repo itself | `backup_repo.sh` -- run before ANY change to the repo's identity or history |
+| Wait for something, safely | `wait_for.sh` -- a PID or a file, never a process NAME, always bounded |
 
 **Static checks**, run by `preflight.sh` or beside it: `check_deps.py`,
 `check_layout.py`, `check_dispatch.py`, `check_syscalls.py`,
@@ -625,6 +632,7 @@ runners themselves; `--list` on either runner is the live answer.
 `screen_surface_test.py`, `screensaver_test.py`, `screenshot_test.py`,
 `scrollbar_test.py`,
 `settings_test.py`, `single_instance_test.py`, `taskmgr_test.py`,
+`thumbcache_test.py`,
 `uapp_test.py`, `uiclient_test.py`, `uidemo_test.py`, `uterm_test.py`,
 `vm.py`, `volume_test.py`, `wallpaper_mode_test.py`, `winclient_test.py`,
 `window_geometry_test.py`
@@ -668,8 +676,8 @@ runners themselves; `--list` on either runner is the live answer.
 `mem_stress.py`, `panic_resolve.py`, `port_guard.py`, `qmp_test.py`,
 `regex_hostcheck.py`, `run_release.sh`, `screenshot_diff.py`,
 `seed_disk.py`, `serial_capture.py`, `serial_console.py`,
-`set_version.sh`, `shell_flow.py`, `tfs3_writer.py`, `watch_vm.sh`,
-`window_resize_probe.py`
+`set_version.sh`, `shell_flow.py`, `tfs3_writer.py`, `wait_for.sh`,
+`watch_vm.sh`, `window_resize_probe.py`
 
 **HOST TOOLS THIS REPO EXPECTS, none required to build it** --
 `docs/tools.md` has the full entry for each. Two worth knowing first:

@@ -306,6 +306,7 @@ def run(dbg, qmp, tmp, res):
               f"sampled {flat}")
 
     set_setting(dbg, "desktop.wallpaper", "aurora")
+
     time.sleep(2.5)   # the desktop polls, decodes and repaints
 
     # aurora.jpg is 1280x720 and so is the screen, so UIMG_FIT_COVER
@@ -476,6 +477,7 @@ def run(dbg, qmp, tmp, res):
     check_resize_never_blanks(dbg, qmp, tmp, res, win)
     check_auto_resize_falls_back(dbg, res)
 
+
     # --- 6. set as wallpaper, and the DESKTOP picks it up -------------
     open_menu_item(dbg, content, 2, 0)    # Desktop > Set as wallpaper (fill)
     conf = ""
@@ -523,6 +525,37 @@ def run(dbg, qmp, tmp, res):
     # previous tool's cleanup to have happened is a tool that fails
     # depending on the order the suite ran in.
     set_setting(dbg, "desktop.wallpaper", "aurora")
+
+    # --- 5b. LAUNCHED WITH A FILE, it shows THAT file -----------------
+    #
+    # The regression this exists for: main() took the argument's
+    # DIRECTORY and never selected the file in it, so double-clicking any
+    # picture in the File Manager opened the alphabetically first one in
+    # its folder instead. Every check above launched with no argument and
+    # so could not see it.
+    #
+    # tide.jpg is the LAST of the seeded wallpapers, which is what makes
+    # the assertion discriminating: the broken version shows aurora.jpg,
+    # the first.
+    # **NOT `sh dmesg`.** The kernel ring holds a few hundred lines and
+    # the layout log this tool turned on fills it in seconds, so the one
+    # line being waited for is destroyed before it can be read
+    # (CLAUDE.md). `LOG` is this tool's own transcript, swept off the
+    # wire as it arrives.
+    poll_logs(dbg)
+    before = len(LOG)
+    dbg.send("gui spawn /bin/wm/apps/imgview " + WALLPAPER_DIR + "/tide.jpg")
+    shown, deadline = [], time.time() + 30
+    while time.time() < deadline:
+        time.sleep(0.5)
+        poll_logs(dbg)
+        shown = [l for l in LOG[before:] if "imgview: shown" in l]
+        if shown:
+            break
+    res.check("launched with a file, it shows THAT file",
+              any("tide.jpg" in l for l in shown),
+              f"shown lines since the launch: {shown[-4:]} -- aurora.jpg "
+              "here means the argument only picked the folder")
 
 
 def check_resize_never_blanks(dbg, qmp, tmp, res, win):

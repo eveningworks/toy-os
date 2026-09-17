@@ -8066,6 +8066,44 @@ how many frames it painted while a decode was in flight. A synchronous
 decode paints none, which is why that number is the check
 (`tools/imgview_test.py`) rather than a screenshot of the transient.
 
+## Thumbnails have no rate, and their cache file is NAMED after the source
+
+The File Manager decoded a couple of thumbnails per 500 ms tick, which
+is four a second whatever the pictures cost. For a folder of
+photographs that is the right order of magnitude by accident; for
+`/usr/share/icons` -- 53 files, 25 KB, microseconds of real work -- it
+meant thirteen seconds of cells filling in two at a time. A batch size
+is a rate limit written as a constant, and the thing being limited was
+never the bottleneck.
+
+So there is no batch size now: a detached worker decodes one at a time
+and posts each result back, and the queue drains as fast as the decoding
+does. That is Nautilus's shape and Dolphin's -- neither runs on the UI
+thread, and neither has a number to tune. Measured at 24 a second on TCG
+for that directory, against a ceiling of 4.
+
+The second half is the disk cache, and its one real decision is the
+NAME. The freedesktop standard hashes the URI (MD5) and then has to
+store `Thumb::URI` inside the PNG, because a hashed name cannot say what
+it stood for and a collision shows the wrong picture. QOI has nowhere to
+put that string, so copying the scheme would have meant either a second
+file per entry or a format change. Writing the source path with `/` as
+`%` gives the property the URI field exists to restore: the name IS the
+answer, `ls` is the debugger, and two sources cannot collide. It costs a
+bound -- a name longer than `sys_dirent`'s 64 bytes gets no cache file
+and is thumbnailed in memory, which is the case a hash would have
+handled.
+
+Staleness is then "not OLDER than its source", make's rule, rather than
+a recorded mtime -- again because there is nowhere to record one. It is
+worth more than the metadata version: a rewritten file overwrites its
+own entry instead of adding one, so the directory is bounded by how many
+distinct pictures have been looked at and not by how often they change.
+Eviction is by age, oldest first, and that is an approximation stated
+plainly: a cache HIT does not rewrite its file, so age is not use.
+Recording a use would mean a disk write on every hit, which is the cost
+the cache exists to avoid.
+
 ## Notepad asks before throwing a document away, and CLOSING is not what it asks about
 
 The obvious reading of "ask before closing" is an `on_close` handler,

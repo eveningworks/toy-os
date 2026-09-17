@@ -298,6 +298,8 @@ whenever a headline here tells you something you did not already know.
   is a `.c` file in `userland/gui/` with NO Makefile edit.**
 - **A TOOLBAR IS `uui_toolbar`, AND ITS STATE CALLBACK IS THE MENU
   BAR'S**
+- **AN APP HANDED A FILE MUST SELECT IT, NOT JUST ITS FOLDER** -- and
+  its regression test has to LAUNCH WITH AN ARGUMENT
 - **A MENU BAR IN AN APP WITH ROUTED WIDGETS MUST BE `uui_menubar_ops`,
   NOT HAND-ROUTED**
 - **ONE MENU WIDGET SERVES A BAR AND A CONTEXT MENU:

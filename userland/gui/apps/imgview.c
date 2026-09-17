@@ -67,6 +67,10 @@ enum {
 };
 
 static char g_dir[PATH_MAX_LEN] = DEFAULT_DIR;
+// The file named on the command line, if one was. The sidebar
+// starts on row 0 (uui_fileview_set_dir), so without this an
+// argument picked the folder and not the picture in it.
+static char g_want[PATH_MAX_LEN];
 
 // The sidebar's listing storage. uui_fileview does not own it -- see
 // ui/uui_fileview.h -- and MAX_FILES entries is 5 KB, which is why it is
@@ -590,6 +594,7 @@ int main(int argc, char **argv) {
             // of that loop in this tree.
             if (!k_path_dirname(argv[1], g_dir, sizeof g_dir))
                 strlcpy(g_dir, DEFAULT_DIR, sizeof g_dir);
+            strlcpy(g_want, k_path_basename(argv[1]), sizeof g_want);
         } else {
             strlcpy(g_dir, argv[1], sizeof g_dir);
         }
@@ -611,6 +616,8 @@ int main(int argc, char **argv) {
     uui_fileview_set_navigable(&g_list, 0);
     uui_fileview_set_filter(&g_list, keep_images, NULL);
     uui_fileview_set_dir(&g_list, g_dir);
+    // AFTER set_dir, which selects row 0 whatever was selected before.
+    if (g_want[0]) uui_fileview_select_name(&g_list, g_want);
     uui_image_init(&g_view, NULL, UIMG_FIT_CONTAIN);
     // Without these a 4000px photograph would ask for a 4000px window
     // and uui_layout would hand it one (it overflows rather than

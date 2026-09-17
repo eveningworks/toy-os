@@ -1013,6 +1013,7 @@ static int on_user(struct uapp *a, int a0, int a1) {
         fm_job_finished();
         return 1;
     }
+    if (a0 == POST_THUMB) return thumb_posted();
     return 0;
 }
 

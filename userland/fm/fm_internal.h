@@ -178,9 +178,14 @@ void tree_toggle(void *ctx, int id, int expand);
 // --- thumbnails (fm_thumbs.c) ----------------------------------------
 
 // uui_fileview's thumb callback: a LOOKUP, never a decode (see
-// ui/uui_fileview.h). The decoding happens on the tick.
+// ui/uui_fileview.h). The decoding happens on a worker thread; this
+// enqueues and posts POST_THUMB.
 const struct uimg *pane_thumb(void *ctx, const char *dir,
                                const struct sys_dirent *e, int px);
+// POST_THUMB arrived -- a decode finished, or a lookup wants one
+// started. 1 if a thumbnail became ready.
+int thumb_posted(void);
+// The tick's backstop, for a kick that found the post queue full.
 int thumb_tick(void);
 
 // --- operations (fm_jobs.c) ------------------------------------------
@@ -210,6 +215,7 @@ int  poll_job(void);
 // made here on the main thread.
 #define POST_DONE     1
 #define POST_CONFLICT 2
+#define POST_THUMB    3   // fm_thumbs.c's worker, and its wake-up
 
 int  fm_job_running(void);
 void fm_job_cancel(void);

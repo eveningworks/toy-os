@@ -269,9 +269,6 @@ static volatile int g_conflict_answer = -1;
 static char g_conflict_src[PATH_MAX_LEN], g_conflict_dst[PATH_MAX_LEN];
 static char g_conflict_rename[PATH_MAX_LEN];
 
-#define POST_DONE     1
-#define POST_CONFLICT 2
-
 // --- the policy the worker supplies to the engine ---------------------
 
 static int worker_progress(void *ctx, const char *path,

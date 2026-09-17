@@ -235,6 +235,14 @@ git status --short || true
 # a superseded run's log is never. Five were found six hours old in one
 # session, and only because someone asked what was running.
 #
+# **THE SHAPE TO MATCH IS `sleep` INSIDE A LOOP, NOT `[`.** This used to
+# look for `(until|while) *\[`, which sees only the loops whose test is a
+# bracket expression -- so `while ps aux | grep -q foo; do sleep 15; done`
+# was invisible to it. Two of those ran for nearly two hours in one
+# session and this step printed `none` throughout, because the pattern
+# they can never escape (a poll matching its OWN command line) is also
+# the pattern this was not looking for.
+#
 # Informational, never a failure: an interactive session legitimately
 # has shells of its own, and this cannot tell them apart. It only says
 # what is there, which is the part nobody thinks to look at.
@@ -254,7 +262,7 @@ done
 # the elapsed time is half the answer -- a waiter minutes old is normal,
 # one hours old is the leak.
 waiters=$(ps -eo pid,etime,args 2>/dev/null \
-          | grep -E '(until|while) *\[' | grep -v grep \
+          | grep -E '(until|while).*;[[:space:]]*do.*sleep' | grep -v grep \
           | while read -r wpid rest; do
                 case " $mine " in *" $wpid "*) continue ;; esac
                 echo "$wpid $rest"
@@ -265,6 +273,9 @@ if [ -n "$waiters" ]; then
     echo "    on is finished or superseded, kill it -- and prefer the"
     echo "    background job's OWN completion signal over a waiter beside"
     echo "    it, which is redundant even when it works (CLAUDE.md)."
+    echo "    A waiter that greps \`ps\` for a name its OWN command line"
+    echo "    carries matches itself and can NEVER exit: wait on a PID"
+    echo "    (kill -0) or an artifact, and bound it -- tools/wait_for.sh."
 else
     echo "  none"
 fi

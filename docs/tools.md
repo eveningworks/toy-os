@@ -3099,6 +3099,48 @@ window without going through it will find its layout polls timing out.
   conservative fallback -- so this can only ever make the guard quieter
   about a file the compiler positively placed elsewhere, never about a
   new one.
+- **`thumbcache_test.py`** -- the File Manager's thumbnail RATE, and the
+  disk cache under it (7 checks). **THE ASSERTION IS A RATE, NOT A
+  DURATION**: decoding used to be two per 500 ms tick, so four a second
+  was that design's CEILING by construction, and a measured rate above
+  it is something it could not have produced however fast the host is --
+  where a wall-clock bound would be a bet on the emulator. Measured at
+  24/s on TCG; the bar is 8. It reads the app's own drain report
+  (`files: N thumbnail(s) in M ms, C from the cache`) off the WIRE
+  through `DebugConsole.logs()`, **never `sh dmesg`** -- the kernel ring
+  holds a few hundred lines and any tool that has turned the layout log
+  on fills it in about a second, so the first version of this check
+  asked dmesg and found NOTHING with the app working perfectly. It is
+  its own tool rather than a section in `filemanager_test.py` because it
+  needs to START A FRESH APP TWICE, once cold and once against a
+  populated cache: a second process is what proves the DISK was read
+  rather than an in-memory table. Two fixture traps it paid for:
+  `/etc/files.conf` remembers the view mode, so it removes that file to
+  get the icons view rather than inheriting whatever ran last; and
+  toy-os's `touch` does NOT move an existing file's mtime, so the
+  staleness check copies a different icon over one instead -- the first
+  version went red against working code because the input never reached
+  the branch. In `gui_regress.py`.
+- **`wait_for.sh`** -- wait for a PID to exit or a file to appear, with a
+  MANDATORY timeout. It exists because the hand-rolled version has a
+  failure mode that outlives the session: `while ps aux | grep -q
+  "[f]oo"; do sleep 15; done` can NEVER exit, because the waiting
+  shell's own command line carries the word `foo` somewhere -- the
+  reporting `grep` after the loop is enough -- so `ps` sees it and the
+  condition stays true. The `[f]oo` trick hides the grep from itself and
+  does nothing about the shell around it. **Two of those ran for two
+  hours in one session while `preflight.sh` reported none**, because its
+  detector looked for `while [` and these were `while ps ... | grep`
+  (both are fixed). This matches no process NAMES at all: a pid is
+  `kill -0` and a file is a test, neither of which can see the waiter.
+  Expiry is exit 2, distinct from the awaited thing failing, because a
+  waiter that gave up silently reads as success. A pid that is already
+  gone is exit 0, not an error -- that is the condition already true,
+  which is the common case when a waiter is armed a moment too late.
+  **Prefer not needing it**: a backgrounded command's own completion
+  notification is the signal, and a waiter beside it is redundant even
+  when it works (CLAUDE.md). Named by no runner -- it is a helper, not a
+  test.
 - **`taskmgr_test.py`** -- the ring-3 Task Manager: `uui_table`, resize
   reflow, and ending a process (12 checks). Its resize check asserts the
   table grew by ROUGHLY WHAT THE WINDOW GREW BY, not merely that it

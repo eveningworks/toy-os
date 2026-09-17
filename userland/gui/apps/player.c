@@ -66,6 +66,9 @@ enum {
 };
 
 static char g_dir[PATH_MAX_LEN] = DEFAULT_DIR;
+// The track named on the command line, if one was -- the sidebar
+// starts on row 0 otherwise (uui_fileview_set_dir).
+static char g_want[PATH_MAX_LEN];
 static struct sys_dirent g_entries[MAX_FILES];   // 5 KB -- not a local
 
 static struct uui_fileview g_list;
@@ -455,6 +458,7 @@ int main(int argc, char **argv) {
         if (sys_stat(argv[1], &st) == 0 && !st.is_dir) {
             if (!k_path_dirname(argv[1], g_dir, sizeof g_dir))
                 strlcpy(g_dir, DEFAULT_DIR, sizeof g_dir);
+            strlcpy(g_want, k_path_basename(argv[1]), sizeof g_want);
         } else {
             strlcpy(g_dir, argv[1], sizeof g_dir);
         }
@@ -484,6 +488,8 @@ int main(int argc, char **argv) {
     uui_fileview_set_navigable(&g_list, 0);
     uui_fileview_set_filter(&g_list, keep_audio, NULL);
     uui_fileview_set_dir(&g_list, g_dir);
+    // AFTER set_dir, which selects row 0 whatever was selected before.
+    if (g_want[0]) uui_fileview_select_name(&g_list, g_want);
 
     uui_label_init(&g_now, g_now_txt);
     uui_label_init(&g_fmt, g_fmt_txt);

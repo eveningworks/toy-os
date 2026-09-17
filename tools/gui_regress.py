@@ -156,6 +156,7 @@ TOOLS = [
     ("modeset", "modeset_test.py", "a runtime resolution change: device, desktop and setting agree"),
     ("wallpaper", "wallpaper_mode_test.py", "fit vs fill, at a mode where they differ, and when the picture is decoded"),
     ("files", "filemanager_test.py", "the File Manager: two panes, marks, and real file operations"),
+    ("thumbcache", "thumbcache_test.py", "thumbnail decode rate, and the disk cache under it"),
 ]
 
 # Roughly how long each tool takes, in seconds, used ONLY to decide what

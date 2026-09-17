@@ -3181,6 +3181,28 @@ a thread is neither. The case for a thread is work whose RESULT must
 live in the app's own memory: a decoded image is the example, since
 handing one back through a pipe that carries 1 KiB a read is absurd.
 
+## AN APP HANDED A FILE MUST SELECT IT, NOT JUST ITS FOLDER.
+
+Image Viewer and Music Player both browse a DIRECTORY and show the
+selected row (imgview.c's header says why), so a path argument is used
+twice: `k_path_dirname()` picks the folder and the basename picks the
+row. Both apps did only the first, and `uui_fileview_set_dir()` selects
+row 0 -- so opening a picture from the File Manager opened the
+alphabetically first picture in its folder instead. It shipped in two
+apps because the second was written from the first.
+
+**The selection goes AFTER `set_dir()`**, which clears whatever was
+selected before, and the name survives the `reload()` in `on_open()`
+because reload preserves a selection BY NAME. A file that the app's own
+filter rejects simply misses and row 0 stands, which is the right
+answer for "open this .txt with the Image Viewer".
+
+**And the regression test must LAUNCH WITH AN ARGUMENT.** Every check in
+`tools/imgview_test.py` started the app bare and then clicked, so all of
+them passed with the bug present -- the argument path had no coverage at
+all. Name a file that is NOT first in its directory, or the broken
+version passes.
+
 ## A MENU BAR IN AN APP WITH ROUTED WIDGETS MUST BE `uui_menubar_ops`.
 
 `uui_menubar` has two interfaces now and picking the wrong one is a
