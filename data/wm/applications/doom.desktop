@@ -1,5 +1,5 @@
 # DOOM -- see this directory's README.md for the format.
 Name=DOOM
 Exec=/bin/wm/apps/doom
-Category=apps
+Category=games
 Icon=doom

@@ -188,12 +188,17 @@ def main():
     if check("reopened for the Start-menu check", (
             dbg.send(f"gui click {n['tray']['cx']} {n['tray']['cy']}"),
             dbg.settle(), time.sleep(0.4), net(dbg)["open"])[-1]):
-        dbg.send("gui key 0xa6")   # KEY_SUPER -- the WM toggles the Start menu
+        # SUPER ACTS ON THE RELEASE, so both edges: pressing it only
+        # ARMS the gesture (wm.c), and anything pressed while it is
+        # held disarms it. A lone down-edge did nothing at all.
+        dbg.send("gui key 0xa6")
+        dbg.send("gui key 0xa6 up")
         dbg.settle(); time.sleep(0.4)
         st = dbg.json("gui state --json")["overlays"]
         check("the Super key opens the Start menu and closes the network panel",
               st.get("start_menu") is True and st.get("network") is False, str(st))
         dbg.send("gui key 0xa6")
+        dbg.send("gui key 0xa6 up")
         dbg.settle(); time.sleep(0.3)
 
     # --- 7. the visibility setting, and the strip reflowing -----------

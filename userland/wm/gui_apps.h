@@ -294,6 +294,12 @@ struct gui_app {
     // that appears nowhere is NoDisplay=1 and never reaches the
     // registry at all.
     unsigned show_in;
+
+    // The `Category=` key verbatim, which is the FOLDER the Start menu
+    // files this entry under. Never NULL -- an entry that named none
+    // gets the default. Points into this file's storage like `name`,
+    // so a sort that swaps two entries re-points both.
+    const char *category;
 };
 
 // Caps on the live registry. Fixed tables rather than allocation, the
@@ -361,6 +367,29 @@ int gui_app_read_entry(const char *path, struct gui_app_entry *e);
 
 int gui_app_visible_count(unsigned surface);
 struct gui_app *gui_app_visible_at(unsigned surface, int n);
+
+// --- CATEGORIES: the Start menu's folders -----------------------------
+//
+// The categories PRESENT among the entries a surface shows, in display
+// order -- not a fixed list, so a folder exists exactly when something
+// is in it and an empty one is unrepresentable. Derived per call rather
+// than cached: gui_apps_load() can rewrite the registry between any two
+// calls, and eleven entries make a scan cheaper than a cache that can
+// go stale.
+//
+// Apps are addressed by category KEY rather than by category index, so
+// a caller holding a selection across a reload cannot silently point at
+// a different folder than the one it named.
+int gui_app_cat_count(unsigned surface);
+const char *gui_app_cat_key(unsigned surface, int n);     // "utility"
+const char *gui_app_cat_label(unsigned surface, int n);   // "Utilities"
+int gui_app_cat_size(unsigned surface, const char *key);
+struct gui_app *gui_app_cat_at(unsigned surface, const char *key, int n);
+
+// The display label for a key, for a caller that already holds one.
+// An UNKNOWN key is its own label: a typo shows up as an oddly-named
+// folder rather than as an app nobody can find.
+const char *gui_app_cat_label_for(const char *key);
 
 // Does this entry appear on `surface`? For a consumer that must keep
 // registry indexing for its own reasons -- desktop.c's icon positions

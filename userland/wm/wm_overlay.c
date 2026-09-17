@@ -34,26 +34,26 @@ static int open_osk(void)     { return osk_open; }
 // drifting apart, which they had already started to do.
 static const struct wm_overlay g_overlays[] = {
     { "confirm",  open_confirm,  draw_confirm,     confirm_dialog_handle_click,
-      confirm_dialog_hover_at,   confirm_dialog_damage,   confirm_dialog_update_press, 0 },
+      confirm_dialog_hover_at,   confirm_dialog_damage,   confirm_dialog_update_press, 0, 0 },
     { "context",  open_context,  context_menu_draw, context_menu_handle_click,
-      context_menu_hover_at,     context_menu_damage,     0, context_menu_close },
+      context_menu_hover_at,     context_menu_damage,     0, 0, context_menu_close },
     { "start",    open_start,    start_menu_draw,  start_menu_handle_click,
-      start_menu_hover_at,       start_menu_damage,       0, start_menu_close },
+      start_menu_hover_at,       start_menu_damage,       0, start_menu_key, start_menu_close },
     { "calendar", open_calendar, calendar_draw,    calendar_handle_click,
-      calendar_hover_at,         calendar_damage,         0, calendar_close },
+      calendar_hover_at,         calendar_damage,         0, 0, calendar_close },
     { "volume",   open_volume,   volume_draw,      volume_handle_click,
-      volume_hover_at,           volume_damage,           volume_update_press, volume_close },
+      volume_hover_at,           volume_damage,           volume_update_press, 0, volume_close },
     { "brightness", open_brightness, brightness_draw, brightness_handle_click,
-      brightness_hover_at,       brightness_damage,       brightness_update_press, brightness_close },
+      brightness_hover_at,       brightness_damage,       brightness_update_press, 0, brightness_close },
     { "network",  open_network,  network_draw,     network_handle_click,
-      network_hover_at,          network_damage,          0, network_close },
+      network_hover_at,          network_damage,          0, 0, network_close },
     { "remote",   open_remote,   remote_draw,      remote_handle_click,
-      remote_hover_at,           remote_damage,           0, remote_close },
+      remote_hover_at,           remote_damage,           0, 0, remote_close },
     // LAST, so it is the least modal: a menu overlapping the keyboard
     // takes the click and paints on top. No `close` op -- a keyboard
     // must survive the click that puts the caret where it is typing.
     { "osk",      open_osk,      osk_draw,         osk_handle_click,
-      osk_hover_at,              osk_damage,              osk_update_press, 0 },
+      osk_hover_at,              osk_damage,              osk_update_press, 0, 0 },
 };
 #define OVERLAY_COUNT ((int)(sizeof g_overlays / sizeof g_overlays[0]))
 
@@ -120,6 +120,15 @@ int wm_overlay_hover(int mx, int my, uint8_t buttons) {
         changed = 1;
     }
     return changed;
+}
+
+int wm_overlay_key(int key, uint8_t mods) {
+    for (int i = 0; i < OVERLAY_COUNT; i++) {
+        const struct wm_overlay *o = &g_overlays[i];
+        if (!o->key || !o->is_open()) continue;
+        if (o->key(key, mods)) return 1;
+    }
+    return 0;
 }
 
 void wm_overlay_press(int mx, int my, uint8_t buttons) {

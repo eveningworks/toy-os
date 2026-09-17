@@ -20,13 +20,42 @@ or the D-Bus activation none of which exist here.
 
     Name       what the user sees, in the Start menu and under the icon
     Exec       what to launch (see below)
-    Category   system | apps | demos -- how the Start menu groups them
+    Category   which FOLDER the Start menu files this under (see below)
     Icon       an icon NAME, resolved to /usr/share/icons/<name>.qoi.
                A one-character value is still drawn as a letter tile,
                which is the fallback when no artwork exists
     Handles    file extensions this app opens (see below)
     NoDisplay  1 to keep it out of the menu and off the desktop
     ShowIn     which surfaces this appears on (see below)
+
+## Category
+
+The Start menu is a folder sidebar with the selected folder's apps
+beside it, and this key is the folder:
+
+    utility | graphics | multimedia | games | system | development
+
+freedesktop.org's registered category names, minus the ones nothing here
+uses. Single-valued on purpose -- freedesktop's `Categories=` is a
+semicolon-separated LIST and an app can appear in several menus, which
+buys nothing until there are enough apps for one to genuinely belong in
+two places.
+
+A FOLDER EXISTS EXACTLY WHEN SOMETHING IS IN IT: the sidebar is built
+from the categories actually present, so an empty folder is
+unrepresentable and a new one costs nothing but a file. `apps` and
+`demos` are the words this README used before folders existed and still
+work, shown as "Applications" and "Demos".
+
+**An unknown value is its own folder**, labelled with the key verbatim,
+because the failure directions are asymmetric: a typo that puts an app
+in a folder called `utillity` is visible and fixable, while one that
+dropped the app or filed it silently under something else is an app
+nobody can find. Missing the key entirely means `utility`.
+
+Note this is NOT where the binary lives: `/bin/wm/<class>/` comes from
+the app's SOURCE directory (see the end of this file), and the two
+stopped being the same list when the folders arrived.
 
 ## Handles
 

@@ -3783,7 +3783,7 @@ the WM's window menu has to line up under a title-bar icon and
 `icons_test.py` asserts that; the anchor is zero-tall now.
 
 **DECLINED -- the Start menu stays its own drawing.** The gap is wider
-than the note said: per-row icons at `item_h - 4` with an
+than the note said: per-row icons at a size derived from the row, with an
 unconditional indent, a group divider that consumes no row, a warm
 click flash with its own foreground colour on a tick deadline,
 taskbar-anchored placement, and rows from a live registry rather than

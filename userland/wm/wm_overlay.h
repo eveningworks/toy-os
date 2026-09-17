@@ -73,6 +73,17 @@ struct wm_overlay {
     // when nothing in the overlay is draggable.
     void (*update_press)(int mx, int my, uint8_t buttons);
 
+    // A KEY, while this overlay is up. Returns 1 when it consumed it,
+    // which stops it reaching a global shortcut or the focused window --
+    // an open menu owns the keyboard, as an xdg_popup's grab does.
+    // NULL for an overlay with nothing to type into or navigate.
+    //
+    // The op is offered in table order, so the most modal overlay sees
+    // the key first, and a key nobody wants falls through untouched:
+    // an overlay must not swallow what it does not act on, or a
+    // shortcut stops working whenever a popup happens to be open.
+    int (*key)(int key, uint8_t mods);
+
     // Dismiss it with no action; safe to call when it is closed. This
     // is what makes the popups MUTUALLY EXCLUSIVE: an open path calls
     // wm_overlay_close_others() instead of naming its peers, so a
@@ -102,6 +113,10 @@ int wm_overlay_hover(int mx, int my, uint8_t buttons);
 
 // Per-tick press tracking for every open overlay that wants it.
 void wm_overlay_press(int mx, int my, uint8_t buttons);
+
+// Offers a key press to each open overlay, most modal first. Returns 1
+// when one consumed it.
+int wm_overlay_key(int key, uint8_t mods);
 
 // The topmost open overlay's name, or NULL when none is up -- for the
 // debug console, so a test can ask what is on screen without knowing

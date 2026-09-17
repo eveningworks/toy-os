@@ -1,5 +1,5 @@
 # Screenshot -- see this directory's README.md for the format.
 Name=Screenshot
 Exec=/bin/wm/apps/screenshot
-Category=apps
+Category=graphics
 Icon=screenshot

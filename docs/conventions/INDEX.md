@@ -415,6 +415,8 @@ whenever a headline here tells you something you did not already know.
 - **A ring-3 process can own a real window**
 - **`Exec=builtin:` is GONE, and ring 0 contains no applications.**
 - **The Start menu is built from FILES**
+- **THE START MENU SHOWS ONE FOLDER AT A TIME**
+- **TYPING GOES TO THE SEARCH FIELD WHENEVER THE MENU IS OPEN**
 - **A Start-menu entry launches a RING-3 program**
 - **There is no limit on open windows**
 - **Super/Win toggles the Start menu, and Alt+F4 closes a window**
@@ -475,6 +477,7 @@ whenever a headline here tells you something you did not already know.
   WAIT**
 - **AN OVERLAY IS A ROW IN A TABLE, AND THE TABLE DRIVES DRAWING, CLICKS
   AND HOVER**
+- **AN OPEN OVERLAY OWNS THE KEYBOARD, THROUGH THE TABLE'S `key` OP**
 - **A DISMISSABLE OVERLAY DECLARES `close`, AND AN OPEN PATH CALLS
   `wm_overlay_close_others()` RATHER THAN NAMING ITS PEERS**
 - **THE TRAY HAS A VOLUME FLYOUT, AND THE PANEL OWNS IT TOO**

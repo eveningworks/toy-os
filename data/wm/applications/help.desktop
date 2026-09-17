@@ -1,5 +1,5 @@
 # Help -- see this directory's README.md for the format.
 Name=Help
 Exec=/bin/wm/apps/help
-Category=apps
+Category=utility
 Icon=help

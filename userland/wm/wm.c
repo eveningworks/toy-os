@@ -1379,6 +1379,13 @@ void wm_run(void) {
                     wm_client_is_client_window(&windows[kt])) {
                     wm_client_send_key_up(&windows[kt], key, key_mods);
                 }
+            } else if (wm_overlay_key(key, key_mods)) {
+                // AN OPEN OVERLAY OWNS THE KEYBOARD, which is what lets
+                // the Start menu be typed into -- xdg_popup's grab, and
+                // Windows' menu loop, both put the keyboard here. It
+                // consumes only what it acts on (see wm_overlay.h), so a
+                // shortcut is not shadowed by a popup being open.
+                redraw_pending = 1;
             } else if (!wm_shortcut_inhibited(f) &&
                        wm_shortcut_fire(key, key_mods)) {
                 // A BOUND KEY NEVER REACHES A WINDOW. Checked before

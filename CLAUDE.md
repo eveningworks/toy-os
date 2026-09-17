@@ -632,6 +632,7 @@ runners themselves; `--list` on either runner is the live answer.
 `screen_surface_test.py`, `screensaver_test.py`, `screenshot_test.py`,
 `scrollbar_test.py`,
 `settings_test.py`, `shortcut_test.py`, `single_instance_test.py`,
+`start_menu_test.py`,
 `taskmgr_test.py`, `thumbcache_test.py`,
 `uapp_test.py`, `uiclient_test.py`, `uidemo_test.py`, `uterm_test.py`,
 `vm.py`, `volume_test.py`, `wallpaper_mode_test.py`, `winclient_test.py`,

@@ -8237,3 +8237,63 @@ shape `on_open` asked for with the arrow. Measured with
 in both, so it is a pre-existing bug (`docs/bugs.md`) rather than
 anything this touched -- and it is why the Terminal could not be used to
 demonstrate the fix.
+
+## The Start menu is two columns with the search at the foot, and the power actions are not behind a folder
+
+The menu was one flat column: every app that showed in it, then the
+three system actions. That is Windows 95's shape, and it scales exactly
+as well -- nineteen entries made it 22 rows tall, alphabetical within
+three groups nothing on screen named.
+
+**What real systems do.** KDE's Kickoff is two panes -- a category
+sidebar and the selected category's apps -- with a search field, and
+XFCE's Whisker is the same with the field placeable at the bottom. KDE's
+older Kicker made each category a row that flies out to the right, the
+Win95 shape. Windows 7 put search at the FOOT with categories as folders
+that expand in place; Windows 11 dropped folders for a pinned grid and
+an "All apps" list; GNOME went to a full-screen grid. The two-pane form
+is the one that stays legible as the list grows without needing a whole
+screen, so toy-os follows Kickoff, with Windows 7's bottom-anchored
+search because the field then sits directly above the Start button that
+opened the menu.
+
+**The power actions stay in the sidebar's foot rather than in a folder.**
+Kickoff files them under a "Leave" tab, which makes shutting down two
+clicks and a decision about which tab; Windows 7 keeps them in the
+footer, one click from open. Mixing "select" rows and "act" rows in one
+column is the cost, paid with a divider between them -- and the win is
+that `Exit to shell` is exactly as reachable as it was before folders
+existed, which also kept every tool that clicks it working.
+
+**There is no "All" folder, and nothing scrolls.** An All folder would
+be as tall as the old flat menu, which defeats the point, and a fixed
+pane sized for it would leave two thirds of the popup empty for every
+other folder. The search field is what answers "show me everything" --
+it spans every folder, and it also matches the system actions, so
+typing "shut" finds Shutdown the way it does on both KDE and Windows.
+The pane is therefore as tall as the BIGGEST folder and a folder that
+outgrows the screen is a real limit; a scroll region here would need a
+wheel op on the overlay table and an offset in every one of the draw,
+hit-test, keyboard and JSON paths, which is not worth buying before
+something needs it.
+
+**The keyboard reaches the menu through a new `key` op on the overlay
+table** (`userland/wm/wm_overlay.h`), not through a special case in
+`wm.c`. Overlays already shared draw/click/hover/press that way, and
+typing was the fourth verb an overlay could not have. It is offered in
+modality order like a click, and an overlay consumes only what it acts
+on -- a key held with Ctrl/Alt/Super falls through -- because the
+alternative is a global shortcut that silently stops working whenever a
+popup is open. The context menu can take its keyboard the same way now
+(`uui_menubar_key()` exists and has never been routed); that is left
+undone rather than guessed at.
+
+**Categories became freedesktop's names, single-valued.** `system | apps
+| demos` described where the BINARIES live, not what the apps are, and
+"apps" held eleven of nineteen. `Categories=` in a real `.desktop` file
+is a semicolon-separated list and an app may appear in several menus;
+that is deliberately not copied yet, because it buys nothing until
+something genuinely belongs in two folders and it costs a variable-length
+list in a fixed-size registry. An unknown key becomes its own folder
+labelled with the key verbatim: the failure directions are asymmetric,
+and an app nobody can find is far worse than an oddly-named folder.

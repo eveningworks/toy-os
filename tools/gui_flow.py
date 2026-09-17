@@ -185,7 +185,12 @@ class GuiFlow:
         """
         if not _menu_already_open and not getattr(self, "_menu_open_hint", False):
             self.open_start_menu()
-        x, y = self._console().menu_row(label)
+        # menu_app_row(), not menu_row(): the menu shows ONE FOLDER at a
+        # time, so an app in another folder has no geometry until its
+        # folder is clicked. The helper does that and falls straight
+        # through for a row already on screen (a folder, a system
+        # action, an app in the open folder).
+        x, y = self._console().menu_app_row(label)
         self.session.click_at(x, y)
         time.sleep(settle)
         self._menu_open_hint = False

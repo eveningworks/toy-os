@@ -1,5 +1,5 @@
 # File Manager -- see this directory's README.md for the format.
 Name=File Manager
 Exec=/bin/wm/apps/files
-Category=apps
+Category=utility
 Icon=files

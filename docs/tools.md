@@ -2131,6 +2131,25 @@ window without going through it will find its layout polls timing out.
   press reddens the three "another window" checks. Run it after
   touching `wm_client.c`'s popup path, `uapp.c`'s surface table or
   `uui_menubar.c`'s open/close paths.
+- **`start_menu_test.py`** -- the Start menu's FOLDERS, search field and
+  keyboard (`userland/wm/start_menu.c`, and `wm_overlay.h`'s `key` op
+  that makes typing into an overlay possible at all). 23 checks: the
+  menu reports two columns with the app rows starting right of the
+  sidebar, clicking a folder shows exactly that folder's apps (compared
+  against `gui menu --json`'s own app-to-folder list, with the selection
+  asserted SEPARATELY from the contents -- the pair is what tells "the
+  highlight moved but the list did not" from the reverse), typing with
+  no click into the field filters and the reported query is what was
+  typed, Enter launches the highlighted result into a real window, Esc
+  clears the query before it closes anything, and the arrows move the
+  result and the folder. The pixel half: typing CHANGES the search
+  field's own rect while a sidebar action row stays byte-identical --
+  "it responds" is not "it is drawn", and the neighbour is half the
+  assertion. Two positive controls in its docstring: refusing printable
+  characters reddens the seven search/Enter checks and nothing else, and
+  a pane that ignores the selected folder reddens the contents check
+  while the selection check stays green. Run it after touching
+  `start_menu.c`, the overlay table or a `.desktop` `Category=`.
 - **`filedialog_test.py`** -- the shared file chooser as an OWNED window
   (`WIN_REQ_DIALOG`, `ui/uui_filedialog.h`, `uapp_window_open()`),
   driven through Notepad, Image Viewer and Audio Player. 17 checks: the

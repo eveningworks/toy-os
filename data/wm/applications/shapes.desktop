@@ -1,7 +1,7 @@
 # Shapes -- see this directory's README.md for the format.
 Name=Shapes
 Exec=/bin/wm/demos/shapes
-Category=demos
+Category=graphics
 Icon=shapes
 # The window calls itself this; the Exec basename is different, so the
 # taskbar could not otherwise find this entry (freedesktop's StartupWMClass).

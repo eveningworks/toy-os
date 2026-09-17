@@ -73,15 +73,36 @@ static void collect(const char *name, uint32_t size, int is_dir) {
     g_file_count++;
 }
 
-// Category order in the menu: the desktop's own things first, then real
-// apps, then the demos. An unknown category sorts last rather than
-// being dropped -- a typo should show up as a misplaced row, not as an
-// app that silently vanished.
+// THE FOLDERS THE START MENU SHOWS, in order, and what each key is
+// called on screen. freedesktop's registered category names minus the
+// ones nothing here uses; `apps` and `demos` are what this file said
+// before folders existed and stay as aliases so an entry written
+// against the old README still lands somewhere sensible.
+static const struct { const char *key, *label; } g_cat_table[] = {
+    { "utility",     "Utilities" },
+    { "graphics",    "Graphics" },
+    { "multimedia",  "Multimedia" },
+    { "games",       "Games" },
+    { "system",      "System" },
+    { "development", "Development" },
+    { "apps",        "Applications" },
+    { "demos",       "Demos" },
+};
+#define CAT_TABLE_N ((int)(sizeof g_cat_table / sizeof g_cat_table[0]))
+
+// An unknown category sorts last rather than being dropped -- a typo
+// should show up as a misplaced row, not as an app that silently
+// vanished.
 static int cat_rank(const char *c) {
-    if (k_strcmp(c, "system") == 0) return 0;
-    if (k_strcmp(c, "apps") == 0) return 1;
-    if (k_strcmp(c, "demos") == 0) return 2;
-    return 3;
+    for (int i = 0; i < CAT_TABLE_N; i++)
+        if (k_strcmp(c, g_cat_table[i].key) == 0) return i;
+    return CAT_TABLE_N;
+}
+
+const char *gui_app_cat_label_for(const char *key) {
+    for (int i = 0; i < CAT_TABLE_N; i++)
+        if (k_strcmp(key, g_cat_table[i].key) == 0) return g_cat_table[i].label;
+    return key;
 }
 
 // An entry's ShowIn= key -> GUI_SHOW_* bits. Absent means BOTH, which is
@@ -151,7 +172,7 @@ int gui_app_read_entry(const char *path, struct gui_app_entry *e) {
     if (!entry_get(&cfg, "Name", e->name, sizeof e->name)) return 0;
     if (!entry_get(&cfg, "Exec", e->exec, sizeof e->exec)) return 0;
     if (!entry_get(&cfg, "Category", e->category, sizeof e->category))
-        k_strlcpy(e->category, "apps", sizeof e->category);
+        k_strlcpy(e->category, "utility", sizeof e->category);
     if (!entry_get(&cfg, "Icon", icon, sizeof icon)) icon[0] = '\0';
     if (!entry_get(&cfg, "AppId", appid, sizeof appid)) appid[0] = '\0';
     if (entry_get(&cfg, "NoDisplay", nodisplay, sizeof nodisplay)
@@ -201,6 +222,7 @@ static void load_entry(const char *file) {
     a->icon = e.glyph;
     a->icon_name = g_icons[i];
     a->app_id = g_appids[i];
+    a->category = g_cats[i];
     a->resizable = 1;
     a->remember_geometry = e.remember_geometry;
     a->show_in = e.show_in;
@@ -298,6 +320,8 @@ void gui_apps_load(void) {
             // pointers to each other's storage.
             gui_app_registry[j].name = g_names[j];
             gui_app_registry[j - 1].name = g_names[j - 1];
+            gui_app_registry[j].category = g_cats[j];
+            gui_app_registry[j - 1].category = g_cats[j - 1];
         }
     }
 
@@ -340,4 +364,63 @@ struct gui_app *gui_app_visible_at(unsigned surface, int n) {
         if (n-- == 0) return &gui_app_registry[i];
     }
     return 0; // out of range: a no-op, never a clamp onto the last entry
+}
+
+// --- the category view (see gui_apps.h) -------------------------------
+
+// The distinct categories among the entries `surface` shows. The
+// registry is already sorted by (rank, name), so this comes out in
+// display order; it still DEDUPES against every key found rather than
+// against the previous one, because two different unknown keys share a
+// rank and interleave.
+static int cat_list(unsigned surface, const char *out[], int cap) {
+    int n = 0;
+    for (int i = 0; i < gui_app_registry_count; i++) {
+        struct gui_app *a = &gui_app_registry[i];
+        if (!gui_app_shows_in(a, surface) || !a->category) continue;
+        int dup = 0;
+        for (int j = 0; j < n; j++)
+            if (k_strcmp(out[j], a->category) == 0) { dup = 1; break; }
+        if (!dup && n < cap) out[n++] = a->category;
+    }
+    return n;
+}
+
+int gui_app_cat_count(unsigned surface) {
+    const char *keys[GUI_APP_MAX];
+    return cat_list(surface, keys, GUI_APP_MAX);
+}
+
+const char *gui_app_cat_key(unsigned surface, int n) {
+    const char *keys[GUI_APP_MAX];
+    int c = cat_list(surface, keys, GUI_APP_MAX);
+    if (n < 0 || n >= c) return 0;
+    return keys[n];
+}
+
+const char *gui_app_cat_label(unsigned surface, int n) {
+    const char *key = gui_app_cat_key(surface, n);
+    return key ? gui_app_cat_label_for(key) : 0;
+}
+
+int gui_app_cat_size(unsigned surface, const char *key) {
+    if (!key) return 0;
+    int n = 0;
+    for (int i = 0; i < gui_app_registry_count; i++) {
+        struct gui_app *a = &gui_app_registry[i];
+        if (gui_app_shows_in(a, surface) && a->category &&
+            k_strcmp(a->category, key) == 0) n++;
+    }
+    return n;
+}
+
+struct gui_app *gui_app_cat_at(unsigned surface, const char *key, int n) {
+    if (!key || n < 0) return 0;
+    for (int i = 0; i < gui_app_registry_count; i++) {
+        struct gui_app *a = &gui_app_registry[i];
+        if (!gui_app_shows_in(a, surface) || !a->category) continue;
+        if (k_strcmp(a->category, key) != 0) continue;
+        if (n-- == 0) return a;
+    }
+    return 0;
 }

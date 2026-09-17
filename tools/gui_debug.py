@@ -654,13 +654,57 @@ class DebugConsole:
 
     def menu_row(self, label):
         """Centre point of the Start menu row with this label, straight
-        from the kernel's own geometry -- the thing gui_flow.py's
-        hardcoded MENU_TOP_Y/ITEM_H were an approximation of."""
+        from the WM's own geometry -- the thing gui_flow.py's hardcoded
+        MENU_TOP_Y/ITEM_H were an approximation of.
+
+        The menu has TWO COLUMNS now, so the row carries its own centre
+        x; a caller that takes the menu's own centre lands on the
+        category sidebar for half the rows.
+
+        Only the rows the menu currently DRAWS are here -- the folders,
+        the system actions, the open folder's apps. For an app in some
+        other folder use menu_app_row(), which opens its folder first.
+        """
         m = self.menu()
         for row in m["rows"]:
             if row["label"] == label:
-                return (m["x"] + m["w"] // 2, row["cy"])
+                return (row.get("cx", m["x"] + m["w"] // 2), row["cy"])
         raise KeyError(f"no Start menu row named {label!r}")
+
+    def menu_apps(self):
+        """Every app the Start menu can show, as {label: folder label}.
+
+        Independent of which folder is open -- `gui menu --json` reports
+        this beside the drawn rows exactly so a test can ask "where does
+        this app live" without clicking around to find out.
+        """
+        return {a["label"]: a["cat"] for a in self.menu().get("apps", [])}
+
+    def menu_select_folder(self, label, settle=True):
+        """Clicks the category sidebar row with this label."""
+        x, y = self.menu_row(label)
+        self.click(x, y)
+        if settle:
+            self.settle()
+
+    def menu_app_row(self, label, settle=True):
+        """Centre point of an app's row, OPENING ITS FOLDER first if the
+        app is not currently shown.
+
+        Written because the obvious menu_row(app) silently stopped
+        finding most apps the day the menu grew folders: a row that is
+        not drawn has no geometry, and a KeyError at that point reads as
+        "the app is gone" rather than "it is one click away".
+        """
+        try:
+            return self.menu_row(label)
+        except KeyError:
+            pass
+        folder = self.menu_apps().get(label)
+        if folder is None:
+            raise KeyError(f"no Start menu app named {label!r}")
+        self.menu_select_folder(folder, settle=settle)
+        return self.menu_row(label)
 
     def close(self):
         self._s.close()

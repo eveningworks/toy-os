@@ -90,15 +90,19 @@ def main():
     state = raw("gui state")
     check("the Start menu opened", "start_menu=1" in state, state[:120])
 
-    rows = [int(c) for c in re.findall(r"centre=(\d+)", raw("gui menu"))]
+    # FROM THE JSON, not from the text: the menu is two columns, so a
+    # row's centre is a POINT. Scraping `centre=` out of the text gave
+    # the x back and moved the pointer to (60, x) -- off the menu
+    # entirely, so nothing hovered and nothing repainted.
+    rows = [(r["cx"], r["cy"]) for r in dbg.menu().get("rows", [])]
     check("the menu reports its rows", len(rows) >= 6, f"{len(rows)} rows")
     if len(rows) < 6:
         return 1
 
     # Eight hover changes, as fast as the console allows.
     before = repaints()
-    for cy in rows[:8]:
-        raw(f"gui move 60 {cy}")
+    for cx, cy in rows[:8]:
+        raw(f"gui move {cx} {cy}")
     after = repaints()
     gained = after - before
 

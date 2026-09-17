@@ -61,9 +61,17 @@ def check(name, ok, detail=""):
 
 
 def menu_labels(dbg):
-    """The labels the Start menu actually DRAWS, in row order."""
+    """Every app label the Start menu would show, in row order.
+
+    The menu draws ONE FOLDER at a time now, so the drawn rows answer
+    "which folder is open" rather than "did this entry load" -- the
+    question this file asks. `gui menu --json` reports the full app list
+    beside the drawn rows for exactly that reason, and it is still the
+    MENU's own view (it comes from the same per-surface accessor the
+    rows do), not the registry's.
+    """
     m = dbg.json("gui menu --json")
-    return [r["label"] for r in m.get("rows", []) if r.get("kind") == "app"]
+    return [a["label"] for a in m.get("apps", [])]
 
 
 def write_entry(dbg, show_in=None):
@@ -234,7 +242,11 @@ def main():
         dbg.click(start["x"] + start["w"] // 2, start["y"] + start["h"] // 2)
         dbg.settle()
 
-        dbg.click(m["x"] + 20, first["cy"])
+        # The ROW's own centre. `m["x"] + 20` was the app column when the
+        # menu was one column; it is the folder sidebar now, so that
+        # click selected a folder, left the menu open -- and an open menu
+        # DEFERS the entry reload every check after this one waits for.
+        dbg.click(first["cx"], first["cy"])
         time.sleep(0.8)
         win = dbg.window(first["label"])
         check("clicking row 0 opens the app row 0 names",

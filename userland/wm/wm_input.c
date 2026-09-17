@@ -601,11 +601,10 @@ void wm_handle_right_click(int mx, int my) {
     // whatever's already open before deciding what (if anything) the
     // new click should show, so right-clicks never stack menus.
     if (start_menu_open) {
-        // Which row, asked of start_menu.c -- this used to re-derive the
-        // formula, and its copy counted gui_app_registry_count rows
+        // Which app, asked of start_menu.c -- this used to re-derive the
+        // row formula, and its copy counted gui_app_registry_count rows
         // where the menu draws only the ones that show in it.
-        int hit_row = start_menu_row_at(mx, my);
-        struct gui_app *app = gui_app_visible_at(GUI_SHOW_STARTMENU, hit_row);
+        struct gui_app *app = start_menu_app_at(mx, my);
         // THE START MENU STAYS UP UNDER ITS OWN ROW'S MENU, as on
         // Windows: naming it the popup's parent is what stops
         // context_menu_open_at()'s close_others() taking it down. A row

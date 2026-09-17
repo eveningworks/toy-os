@@ -331,39 +331,66 @@ def run(dbg, qmp, tmp, res):
             break
         dbg.click(20, 709)
         time.sleep(0.8)
-    im2 = shot(qmp, tmp, "icons-menu.png")
+    shot(qmp, tmp, "icons-menu.png")   # the menu as it opens, for a human to look at
     menu = dbg.menu()          # AFTER the capture: geometry read before a
                                # settled frame can describe a menu that has
                                # since closed
-    p2 = im2.load()
     rows = {r["label"]: r for r in menu["rows"]} if menu.get("open") else {}
     res.check("the Start menu is open and reports its rows", len(rows) > 3,
               f"rows: {list(rows)[:4]}")
 
-    isz = menu["item_h"] - 4
-    if "About" in rows:
-        r = rows["About"]
+    def menu_probe(label, shot_name):
+        """Put `label`'s row on screen and return (pixels, item_h, row).
+
+        ONE FOLDER AT A TIME: the menu shows the open folder's apps, so
+        a row for an app filed elsewhere has no geometry at all until
+        its folder is selected. menu_app_row() clicks the folder (which
+        does not dismiss the menu -- selecting is not committing) and
+        the capture happens after, or the frame is of the wrong folder.
+        """
+        try:
+            dbg.menu_app_row(label)
+        except KeyError:
+            return None
+        im = shot(qmp, tmp, shot_name)
+        m = dbg.menu()
+        row = next((r for r in m["rows"] if r["label"] == label), None)
+        if row is None:
+            return None
+        return im.load(), m["item_h"], row
+
+    # THE ICON BOX IS THE MENU'S, not re-derived here: `gui menu --json`
+    # reports it per app row. This file used to compute it from the row
+    # and the item height, and when those offsets changed it went on
+    # sampling the old place -- which reads as a wrong icon rather than
+    # as a stale test.
+    probe = menu_probe("About", "icons-menu-about.png")
+    if probe:
+        p2, item_h, r = probe
+        box = r.get("icon")
+        isz = box["sz"] if box else item_h - 6
         want = host_icon("about", isz)
         # The menu row's background is flat, so the blend is against it.
-        row_bg = p2[menu["x"] + menu["w"] - 4, r["cy"]]
-        top = r["cy"] - menu["item_h"] // 2
+        row_bg = p2[r["x"] + r["w"] - 4, r["cy"]]
         worst, at = 0, None
         for dx, dy in ((isz // 3, isz // 3), (isz // 2, isz // 2),
                        (isz // 2, isz // 4)):
-            got = p2[menu["x"] + 4 + dx, top + 2 + dy]
+            got = p2[box["x"] + dx, box["y"] + dy]
             exp = over(want.getpixel((dx, dy)), row_bg)
             if diff(got, exp) > worst:
                 worst, at = diff(got, exp), ((dx, dy), got, exp)
-        res.check("a Start menu row draws that app's icon", worst <= TOL,
-                  f"worst channel difference {worst} at {at}; "
-                  f"menu x={menu['x']} row top={top} item_h={menu['item_h']}")
+        res.check("a Start menu row draws that app's icon",
+                  box is not None and worst <= TOL,
+                  f"worst channel difference {worst} at {at}; box {box}")
 
-    if "Crash Test" in rows:
-        r = rows["Crash Test"]
+    probe = menu_probe("Crash Test", "icons-menu-crashtest.png")
+    if probe:
+        p2, item_h, r = probe
+        box = r.get("icon")
         # Crash Test ships with NO icon file: its icon column must be
         # empty (the row's own background), which is the fallback path.
-        col = p2[menu["x"] + 4 + isz // 2, r["cy"]]
-        bgc = p2[menu["x"] + menu["w"] - 4, r["cy"]]
+        col = p2[box["x"] + box["sz"] // 2, box["y"] + box["sz"] // 2]
+        bgc = p2[r["x"] + r["w"] - 4, r["cy"]]
         res.check("an app with no icon file leaves the column empty",
                   diff(col, bgc) <= 6, f"icon column {col} vs row background {bgc}")
     res.check("the Start menu closes again",
@@ -679,9 +706,15 @@ def run(dbg, qmp, tmp, res):
     # this check does not own; a launcher it writes itself cannot be
     # shortened by somebody renaming an app or widened by a face.
     long_name = "Wrap Me Onto Two Lines"
-    dbg.send(f'sh spawn /bin/tosh -c "echo [Desktop Entry] > {WRAP_ENTRY}"')
-    dbg.send(f'sh spawn /bin/tosh -c "echo Name={long_name} >> {WRAP_ENTRY}"')
-    dbg.send(f'sh spawn /bin/tosh -c "echo Exec=/bin/hello >> {WRAP_ENTRY}"')
+    # `write`/`append`, NOT three `spawn`s: spawn does not wait, so the
+    # three lines raced and the file came out in any order -- or with a
+    # line half written, which parses as an entry with no Name= and
+    # lands on the desktop under its FILE name. Seen as an intermittent
+    # "the launcher never appeared" that looked like a reload bug.
+    # desktop_entries_test.py writes its probe the same way.
+    dbg.send(f"sh write {WRAP_ENTRY} [Desktop Entry]")
+    dbg.send(f"sh append {WRAP_ENTRY} Name={long_name}")
+    dbg.send(f"sh append {WRAP_ENTRY} Exec=/bin/hello")
     # The desktop reloads on the filesystem's generation, so writing the
     # file IS the trigger -- the same wait every other launcher check in
     # this tool uses.
@@ -789,7 +822,9 @@ def run(dbg, qmp, tmp, res):
     menu = dbg.json("gui menu --json")
     approws = [r for r in menu.get("rows", []) if r.get("kind") == "app"]
     if approws:
-        dbg.send(f"gui rclick {menu['x'] + 20} {approws[0]['cy']}")
+        # The ROW's own centre: the app rows are a second column now, and
+        # the menu's left edge is the folder sidebar.
+        dbg.send(f"gui rclick {approws[0]['cx']} {approws[0]['cy']}")
         time.sleep(0.9)
         ov = overlays()
         labels = [r["label"] for r in (ctx() or {}).get("rows", [])]
@@ -807,7 +842,7 @@ def run(dbg, qmp, tmp, res):
         if cmg.get("open") and cmg.get("rows"):
             def start_bands():
                 im = shot(qmp, tmp, "hoverleak.png")
-                return [im.getpixel((menu["x"] + 3, r["cy"])) for r in approws[:6]]
+                return [im.getpixel((r["x"] + 3, r["cy"])) for r in approws[:6]]
             dbg.warp_cursor(qmp, 900, 300)
             time.sleep(0.6)
             away = start_bands()

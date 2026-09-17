@@ -529,48 +529,69 @@ static void cmd_dialog(struct dbg_out *o, int json) {
     }
 }
 
+static const char *menu_kind_name(int kind) {
+    switch (kind) {
+    case START_ROW_CATEGORY: return "category";
+    case START_ROW_ACTION:   return "action";
+    case START_ROW_APP:      return "app";
+    default:                 return "search";
+    }
+}
+
+// The Start menu's rows, as the WM itself computes them. Reports what
+// the menu currently DRAWS -- the sidebar's folders and actions, the
+// open folder's apps (or the search results), and the search field --
+// plus an `apps` list of every entry with the folder it lives in, so a
+// test can find which folder to click without knowing the layout.
 static void cmd_menu(struct dbg_out *o, int json) {
-    int mx, my, mw, item_h, total;
-    start_menu_geometry(&mx, &my, &mw, &item_h, &total);
+    int mx, my, mw, mh, item_h;
+    start_menu_geometry(&mx, &my, &mw, &mh, &item_h);
+    int total = start_menu_row_count();
 
     if (json) {
-        dbg_out_printf(o, "{\"open\":%s,\"x\":%d,\"y\":%d,\"w\":%d,\"item_h\":%d,\"rows\":[",
-                     start_menu_open ? "true" : "false", mx, my, mw, item_h);
-        int app_rows = gui_app_visible_count(GUI_SHOW_STARTMENU);
-        for (int i = 0; i < app_rows; i++) {
-            dbg_out_printf(o, "%s{\"label\":\"%s\",\"kind\":\"app\",\"y\":%d,\"cy\":%d}",
-                         i ? "," : "",
-                         gui_app_visible_at(GUI_SHOW_STARTMENU, i)->name,
-                         my + i * item_h, my + i * item_h + item_h / 2);
+        dbg_out_printf(o, "{\"open\":%s,\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
+                          "\"item_h\":%d,\"category\":\"%s\",\"query\":\"%s\",\"rows\":[",
+                     start_menu_open ? "true" : "false", mx, my, mw, mh, item_h,
+                     start_menu_category(), start_menu_query());
+        for (int i = 0; i < total; i++) {
+            const char *label; int kind, x, y, w, h, sel;
+            if (!start_menu_row_info(i, &label, &kind, &x, &y, &w, &h, &sel)) break;
+            dbg_out_printf(o, "%s{\"label\":\"%s\",\"kind\":\"%s\",\"x\":%d,\"y\":%d,"
+                              "\"w\":%d,\"h\":%d,\"cx\":%d,\"cy\":%d,\"selected\":%s",
+                         i ? "," : "", label, menu_kind_name(kind), x, y, w, h,
+                         x + w / 2, y + h / 2, sel ? "true" : "false");
+            // The icon box comes from the menu itself -- a test that
+            // re-derived it from the row went on sampling the old
+            // offsets when they moved, and reported a wrong icon.
+            int ix, iy, isz;
+            if (start_menu_row_icon(i, &ix, &iy, &isz))
+                dbg_out_printf(o, ",\"icon\":{\"x\":%d,\"y\":%d,\"sz\":%d}", ix, iy, isz);
+            dbg_out_write(o, "}");
         }
-        for (int i = 0; i < wm_system_action_count; i++) {
-            int row = app_rows + i;
-            dbg_out_printf(o, ",{\"label\":\"%s\",\"kind\":\"action\",\"y\":%d,\"cy\":%d}",
-                         wm_system_actions[i].label,
-                         my + row * item_h, my + row * item_h + item_h / 2);
+        dbg_out_write(o, "],\"apps\":[");
+        int apps = gui_app_visible_count(GUI_SHOW_STARTMENU);
+        for (int i = 0; i < apps; i++) {
+            const struct gui_app *a = gui_app_visible_at(GUI_SHOW_STARTMENU, i);
+            dbg_out_printf(o, "%s{\"label\":\"%s\",\"cat\":\"%s\"}",
+                         i ? "," : "", a->name, gui_app_cat_label_for(a->category));
         }
         dbg_out_write(o, "]}\r\n");
         return;
     }
 
-    dbg_out_printf(o, "start menu: %s, x=%d y=%d w=%d item_h=%d rows=%d\r\n",
-                 start_menu_open ? "open" : "closed", mx, my, mw, item_h, total);
-    int app_rows = gui_app_visible_count(GUI_SHOW_STARTMENU);
-    for (int i = 0; i < app_rows; i++) {
-        dbg_out_write(o, "  row "); col_int(o, i, 3);
-        dbg_out_write(o, "y="); col_int(o, my + i * item_h, 6);
-        dbg_out_write(o, "centre="); col_int(o, my + i * item_h + item_h / 2, 6);
-        dbg_out_write(o, "app     ");
-        dbg_out_write(o, gui_app_visible_at(GUI_SHOW_STARTMENU, i)->name);
-        dbg_out_write(o, "\r\n");
-    }
-    for (int i = 0; i < wm_system_action_count; i++) {
-        int row = app_rows + i;
-        dbg_out_write(o, "  row "); col_int(o, row, 3);
-        dbg_out_write(o, "y="); col_int(o, my + row * item_h, 6);
-        dbg_out_write(o, "centre="); col_int(o, my + row * item_h + item_h / 2, 6);
-        dbg_out_write(o, "action  "); dbg_out_write(o, wm_system_actions[i].label);
-        dbg_out_write(o, "\r\n");
+    dbg_out_printf(o, "start menu: %s, x=%d y=%d w=%d h=%d item_h=%d rows=%d\r\n",
+                 start_menu_open ? "open" : "closed", mx, my, mw, mh, item_h, total);
+    dbg_out_printf(o, "  folder: %s   query: \"%s\"\r\n",
+                 start_menu_category(), start_menu_query());
+    for (int i = 0; i < total; i++) {
+        const char *label; int kind, x, y, w, h, sel;
+        if (!start_menu_row_info(i, &label, &kind, &x, &y, &w, &h, &sel)) break;
+        // centre=(x,y), the same shape `gui taskbar` prints -- the rows
+        // are two columns now, so a centre that is only a Y is not a
+        // point you can click.
+        dbg_out_printf(o, "  row %2d centre=(%d,%d) %s %-8s %s\r\n",
+                     i, x + w / 2, y + h / 2, sel ? "*" : " ",
+                     menu_kind_name(kind), label);
     }
 }
 

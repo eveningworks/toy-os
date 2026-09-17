@@ -1,5 +1,5 @@
 # Disk Mark -- see this directory's README.md for the format.
 Name=Disk Mark
 Exec=/bin/wm/apps/diskmark
-Category=apps
+Category=system
 Icon=diskmark

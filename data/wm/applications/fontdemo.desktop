@@ -1,5 +1,5 @@
 # Font Demo -- see this directory's README.md for the format.
 Name=Font Demo
 Exec=/bin/wm/demos/fontdemo
-Category=demos
+Category=graphics
 Icon=fontdemo

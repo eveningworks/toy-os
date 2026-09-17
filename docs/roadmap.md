@@ -653,6 +653,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Per-size icon art (freedesktop's `16x16/`, `48x48/`), if one 64px master ever looks mushy at menu-row size
 - [ ] A switchable icon theme, the way cursor themes switch -- needs a second set of artwork first
 - [ ] Per-icon context menus (Rename/Properties) -- the popup and the Properties window exist; the desktop has yet to call them
+- [ ] The Start menu's app column does not scroll -- it is as tall as the biggest folder, so a folder that outgrows the screen is clipped
 - [ ] Full dirty-rect compositor
 - [x] ~~Taskbar notification area (tray)~~ done
 - [ ] Alt+Tab window switching
@@ -1137,7 +1138,7 @@ this to be better?".
 - [ ] Retire `uui_button_group` once nothing needs it
 - [ ] The folder tree's double-click toggle has no automated check -- the layout report's node count did not settle under TCG
 - [ ] `toywm` links DYNAMICALLY, so the static set's rescue argument no longer covers the desktop
-- [ ] The WM's context menu has no keyboard: `uui_menubar_key()` exists and `wm_overlay.h` has no key op to route it through
+- [ ] The WM's context menu has no keyboard: `uui_menubar_key()` exists and nothing routes the overlay key op to it
 - [ ] Widget-local RGB literals bypass `utheme` -- ~12 widgets unconverted, plus five colours no palette role matches
 - [ ] **NEXT** System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons
 - [ ] Audit the bare `redraw_pending = 1` sites in `userland/wm/` for a rect they could damage -- a focus change's title colour is next

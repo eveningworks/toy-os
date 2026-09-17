@@ -65,6 +65,7 @@ Usage (the VM must already be up):
 
 import argparse
 import os
+import re
 import sys
 import time
 
@@ -108,9 +109,30 @@ def tray_mode(dbg, mode, want_hidden, tries=25):
     return False
 
 
+# A kernel log line: `subsystem: message`, which is every line the
+# kernel writes to this port. A setting's value never looks like one.
+_KLOG = re.compile(r"^[a-z0-9_.\-]+: ")
+
+
 def setting(dbg, name):
+    """`config get <name>`, with the kernel's own chatter filtered out.
+
+    The kernel talks on the SAME serial channel (tools/vm.py's note), so
+    a reply arrives with log lines around it -- a boot-time `dhcp: ...
+    10.0.2.15 ...` was read as the brightness level here, and a
+    `syscall: exit() called by ring-3 process` was read as it from the
+    other end. Neither the first line nor the last is the value. Since
+    the value is kept and compared against later, ONE contaminated read
+    failed three checks that had nothing to do with each other.
+    """
     reply = (dbg.send(f"sh config get {name}") or "").strip()
-    return next((ln.strip() for ln in reply.splitlines() if ln.strip()), "")
+    lines = [ln.strip() for ln in reply.splitlines() if ln.strip()]
+    vals = [ln for ln in lines
+            if not _KLOG.match(ln) and not ln.startswith("sh ")]
+    # The FIRST surviving line: `config get` prints the value and then,
+    # for a setting the hardware refuses, a `(not in effect: ...)` note
+    # under it -- so the last line is not the value either.
+    return vals[0] if vals else (lines[-1] if lines else "")
 
 
 def main():
@@ -226,12 +248,17 @@ def main():
     dbg.send(f"gui click {g['tray']['cx']} {g['tray']['cy']}")
     dbg.settle(); time.sleep(0.3)
     if check("reopened for the Super-key check", bri(dbg)["open"]):
-        dbg.send("gui key 0xa6")   # KEY_SUPER (keyboard.h); the WM toggles the Start menu
+        # SUPER ACTS ON THE RELEASE, so both edges: pressing it only
+        # ARMS the gesture (wm.c), and anything pressed while it is
+        # held disarms it. A lone down-edge did nothing at all.
+        dbg.send("gui key 0xa6")
+        dbg.send("gui key 0xa6 up")
         dbg.settle(); time.sleep(0.3)
         st = dbg.json("gui state --json")["overlays"]
         check("the Super key opens the Start menu and closes the brightness popup",
               st["start_menu"] is True and st["brightness"] is False, str(st))
         dbg.send("gui key 0xa6")
+        dbg.send("gui key 0xa6 up")
         dbg.settle(); time.sleep(0.3)
         st = dbg.json("gui state --json")["overlays"]
         check("...and Super again closes the Start menu",

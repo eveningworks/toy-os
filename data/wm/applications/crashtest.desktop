@@ -9,6 +9,6 @@
 # docs/boot-flags.md); the app shows the buttons either way and says so.
 Name=Crash Test
 Exec=/bin/wm/demos/crashtest
-Category=demos
+Category=development
 Icon=!
 ShowIn=startmenu

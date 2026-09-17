@@ -1814,6 +1814,27 @@ this the obvious way), not from how much history it accumulated.
   `/bin/wm/{system,apps,demos}/` -- the class is the SOURCE directory
   (`userland/gui/<class>/`) and the Makefile derives the destination,
   same rule that already made `userland/gui` mean `/bin`.
+- **THE START MENU SHOWS ONE FOLDER AT A TIME**, from the entries'
+  `Category=` key: a sidebar of the categories actually present, the
+  selected one's apps beside it, the system actions under a divider in
+  the sidebar's foot, and a search field across the bottom (KDE's
+  Kickoff and XFCE's Whisker in shape). Three things follow. **A folder
+  exists exactly when something is in it** -- the sidebar is derived
+  from the registry, so an empty folder is unrepresentable and an
+  unknown key becomes its own folder rather than losing the app.
+  **Nothing scrolls**: the column is as tall as the biggest folder, so a
+  folder that outgrows the screen is a real limit, not a missing
+  scrollbar. And **a row that is not drawn has no geometry** -- a test
+  reaching an app in another folder opens that folder first
+  (`DebugConsole.menu_app_row()` does it), which is why `gui menu
+  --json` reports every app's folder beside the drawn rows.
+- **TYPING GOES TO THE SEARCH FIELD WHENEVER THE MENU IS OPEN**, with no
+  click into it, because it is the only thing in the popup that takes
+  text -- Windows' and KDE's behaviour, and there is deliberately no
+  focus to move. Search spans every folder AND the system actions
+  (typing "shut" finds Shutdown), matching is case-insensitive
+  SUBSTRING and deliberately not fuzzy, and Esc clears the query before
+  it closes anything -- one level at a time, as a menu's Esc always is.
 - **A Start-menu entry launches a RING-3 program**, named by `exec_path`
   on the registry entry (`apps/gui_apps.h`): `open_app()` spawns it and
   the process makes its own window through the windowing protocol. Two
@@ -2337,6 +2358,13 @@ real scanout hardware does. Do not write a pixel assertion for one.
   since it was written. And **nothing re-hovers while the primary
   button is down**, stated once in the core rather than guarded per
   overlay, so a dragged slider or an armed button keeps its highlight.
+  **AN OPEN OVERLAY OWNS THE KEYBOARD, THROUGH THE TABLE'S `key` OP**,
+  offered in the same modality order as a click -- an xdg_popup's grab,
+  and Windows' menu loop. **It consumes only what it acts on**: a key
+  held with Ctrl/Alt/Super falls straight through, or a global shortcut
+  would stop working whenever a popup happened to be open. The op is
+  asked in `wm.c` AFTER the Super gesture and BEFORE `wm_shortcut_fire()`
+  and any routing to a window.
   **A DISMISSABLE OVERLAY DECLARES `close`, AND AN OPEN PATH CALLS
   `wm_overlay_close_others(keep)` RATHER THAN NAMING ITS PEERS** --
   which is what makes the popups mutually exclusive, and what the
