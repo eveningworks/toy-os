@@ -18,6 +18,7 @@
 #include "confirm_dialog.h"
 #include "desktop.h"
 #include "wm_tray.h"
+#include "rt/sys.h"   // sys_monotonic_ns(), for the frame timer below
 #include "wm_taskbar.h"
 #include "lib/icon_cache.h"
 #include "cursor_theme.h"
@@ -1630,6 +1631,56 @@ static void damage_cursor(int mx, int my) {
 // repaints once a second anyway and hides the difference.
 static uint32_t g_scene_frames;
 
+// --- what a frame COSTS ----------------------------------------------
+//
+// The number `docs/roadmap-details.md`'s blitter entry names as the
+// condition for revisiting it ("a measured compositor frame time") and
+// that nothing here could measure until now. Same shape as the ping's
+// stats in wm_client.c -- last, worst and mean -- and for the same
+// reason it carries TSC cycles beside microseconds: `sys_monotonic_ns()`
+// is quantised to the 10 ms tick under an emulator, which is six times
+// the figure being measured.
+//
+// TWO BUCKETS, AND ONE MEAN OVER BOTH WOULD MEASURE NOTHING. A
+// damage-limited frame repaints a rectangle and a full frame repaints
+// the screen; they differ by more than an order of magnitude, and it is
+// the FULL one a blitter or a scanout plane would have to beat. Mixing
+// them produces a number that moves with how much the mouse happened to
+// be moving.
+//
+// Two kinds of frame are deliberately NOT counted: one that returned
+// early because a client holds the display (nothing was drawn), and any
+// frame while `gui damage verify on` is set (it renders the same scene
+// two or three times on purpose).
+struct frame_stats { unsigned long long last_us, max_us, sum_us; unsigned long long last_cyc, sum_cyc; unsigned n; };
+static struct frame_stats g_frame_full, g_frame_partial;
+
+static void frame_record(struct frame_stats *f, unsigned long long us,
+                         unsigned long long cyc) {
+    f->last_us = us;
+    if (us > f->max_us) f->max_us = us;
+    f->sum_us += us;
+    f->last_cyc = cyc;
+    f->sum_cyc += cyc;
+    f->n++;
+}
+
+void wm_frame_stats(int full, unsigned long long *last_us, unsigned long long *max_us,
+                    unsigned long long *avg_us, unsigned long long *avg_cyc, unsigned *n) {
+    const struct frame_stats *f = full ? &g_frame_full : &g_frame_partial;
+    if (last_us) *last_us = f->last_us;
+    if (max_us)  *max_us  = f->max_us;
+    if (avg_us)  *avg_us  = f->n ? f->sum_us / f->n : 0;
+    if (avg_cyc) *avg_cyc = f->n ? f->sum_cyc / f->n : 0;
+    if (n)       *n       = f->n;
+}
+
+void wm_frame_stats_reset(void) {
+    struct frame_stats z = { 0, 0, 0, 0, 0, 0 };
+    g_frame_full = z;
+    g_frame_partial = z;
+}
+
 uint32_t wm_scene_frames(void) { return g_scene_frames; }
 
 void wm_render_frame(int mx, int my) {
@@ -1640,6 +1691,11 @@ void wm_render_frame(int mx, int my) {
     // which the rest of this frame then does.
     wm_scanout_update();
     if (wm_scanout_active()) { damage_reset(); return; }
+
+    // After the lease check, so a frame that drew nothing is not timed.
+    unsigned long long t0_ns = sys_monotonic_ns();
+    unsigned long long t0_cyc = __builtin_ia32_rdtsc();
+
     compute_window_damage();
 
     // The FIRST frame of a GUI session is always a full repaint, never
@@ -1839,6 +1895,15 @@ void wm_render_frame(int mx, int my) {
     }
 
     ugfx_screen_present(&g_wm_screen);
+
+    // `has_damage` is read AFTER render_scene(), which is the only place
+    // that knows whether this frame was limited -- and the verify mode
+    // is excluded because it renders the scene two or three times.
+    if (!verify_enabled) {
+        frame_record(has_damage ? &g_frame_partial : &g_frame_full,
+                     (sys_monotonic_ns() - t0_ns) / 1000,
+                     __builtin_ia32_rdtsc() - t0_cyc);
+    }
     damage_reset();
 }
 

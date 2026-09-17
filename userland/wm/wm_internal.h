@@ -406,6 +406,15 @@ void wm_client_ping_stats(unsigned long long *last_us, unsigned long long *max_u
 // the ns figure is quantised to a 10 ms tick.
 void wm_client_ping_cycles(unsigned long long *last, unsigned long long *max,
                            unsigned long long *avg);
+// What a FRAME cost, microseconds: the last, the worst and the mean over
+// `n`, plus the mean in TSC cycles. `full` picks the bucket -- a
+// full-screen repaint or a damage-limited one, which differ by more than
+// an order of magnitude, so there is no combined figure on purpose. See
+// wm_render.c for what is deliberately not counted.
+void wm_frame_stats(int full, unsigned long long *last_us, unsigned long long *max_us,
+                    unsigned long long *avg_us, unsigned long long *avg_cyc, unsigned *n);
+void wm_frame_stats_reset(void);
+
 const struct wmwd_dist *wm_client_ping_dist(void);
 void wm_client_ping_reset(void);
 

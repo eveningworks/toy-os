@@ -1294,16 +1294,32 @@ static void cmd_compositor(struct dbg_out *o, int json) {
     unsigned long long last_cyc, max_cyc, avg_cyc;
     wm_client_ping_cycles(&last_cyc, &max_cyc, &avg_cyc);
 
+    // What a frame COSTS, the two buckets kept apart (wm_render.c).
+    unsigned long long ff_last, ff_max, ff_avg, ff_cyc, fp_last, fp_max, fp_avg, fp_cyc;
+    unsigned ff_n, fp_n;
+    wm_frame_stats(1, &ff_last, &ff_max, &ff_avg, &ff_cyc, &ff_n);
+    wm_frame_stats(0, &fp_last, &fp_max, &fp_avg, &fp_cyc, &fp_n);
+
     if (json) {
         dbg_out_printf(o, "{\"pid\":%d,\"pending\":%d,\"dropped\":%d,"
                           "\"pings\":%u,\"ping_us_last\":%llu,\"ping_us_max\":%llu,\"ping_us_avg\":%llu,"
-                          "\"ping_cyc_last\":%llu,\"ping_cyc_max\":%llu,\"ping_cyc_avg\":%llu}\r\n",
+                          "\"ping_cyc_last\":%llu,\"ping_cyc_max\":%llu,\"ping_cyc_avg\":%llu,",
                     pid, pending, dropped, pings, last_us, max_us, avg_us, last_cyc, max_cyc, avg_cyc);
+        dbg_out_printf(o, "\"frame_full\":{\"n\":%u,\"us_last\":%llu,\"us_max\":%llu,"
+                          "\"us_avg\":%llu,\"cyc_avg\":%llu},",
+                    ff_n, ff_last, ff_max, ff_avg, ff_cyc);
+        dbg_out_printf(o, "\"frame_partial\":{\"n\":%u,\"us_last\":%llu,\"us_max\":%llu,"
+                          "\"us_avg\":%llu,\"cyc_avg\":%llu}}\r\n",
+                    fp_n, fp_last, fp_max, fp_avg, fp_cyc);
     } else if (!pid) {
         dbg_out_write(o, "compositor: none registered\r\n");
     } else {
         dbg_out_printf(o, "compositor: pid %d  pending %d  dropped %d  ping rtt us last %llu max %llu avg %llu over %u\r\n",
                     pid, pending, dropped, last_us, max_us, avg_us, pings);
+        dbg_out_printf(o, "  frame us  full: last %llu max %llu avg %llu over %u\r\n",
+                    ff_last, ff_max, ff_avg, ff_n);
+        dbg_out_printf(o, "            damage-limited: last %llu max %llu avg %llu over %u\r\n",
+                    fp_last, fp_max, fp_avg, fp_n);
     }
 }
 
@@ -1560,7 +1576,25 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
     }
     if (k_strcmp(sub, "brightness") == 0)   { cmd_brightness(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "state") == 0)        { cmd_state(o, wants_json(p)); return 1; }
-    if (k_strcmp(sub, "compositor") == 0)   { cmd_compositor(o, wants_json(p)); return 1; }
+    if (k_strcmp(sub, "compositor") == 0) {
+        // `gui compositor reset` zeroes the frame-cost stats, so a
+        // measurement can be scoped to an interval -- "while this window
+        // animates" -- rather than being an average since boot, which is
+        // dominated by whatever the desktop did while starting up.
+        // The cursor is SAVED and restored: next_tok() consumes, and
+        // wants_json() has to see the whole tail or `gui compositor
+        // --json` silently loses its flag.
+        char *save = p;
+        char *arg = next_tok(&p);
+        if (arg && k_strcmp(arg, "reset") == 0) {
+            wm_frame_stats_reset();
+            dbg_out_write(o, "compositor: frame stats reset\r\n");
+            return 1;
+        }
+        p = save;
+        cmd_compositor(o, wants_json(p));
+        return 1;
+    }
     if (k_strcmp(sub, "fb") == 0)           { cmd_fb(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "icons") == 0)        { cmd_icons(o, wants_json(p)); return 1; }
 

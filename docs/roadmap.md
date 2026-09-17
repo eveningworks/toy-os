@@ -736,8 +736,9 @@ run on, not by order.
 - [x] ~~An Intel display driver: fastboot readout, cursor plane, backlight, power well~~ DONE 2026-09-02 -- gen8 only, never sets a mode
 - [x] ~~A page flip on vblank: three scanouts and a buffer age over the framebuffer grant~~ DONE 2026-09-02 -- Intel and virtio-gpu
 - [ ] Screen blanking: the backlight off on idle or lid, never persisted, and any key or motion brings it back
+- [ ] The calendar, context menu and confirm dialog should declare their own damage, as the Start menu already does
 - [ ] Intel modesetting: external outputs on DDI B-D, a second EDID and hotplug -- waits for a laptop with a usable port
-- [ ] Intel blitter acceleration on the BCS ring -- measured 2026-09-03: a software copy is 1.6 ms a screen, not worth it at 1080p
+- [ ] Intel blitter acceleration on the BCS ring -- declined 2026-09-03; the 2026-09-17 frame time reopens it
 - [x] ~~A fullscreen state, and direct scanout for a fullscreen client~~ DONE 2026-09-11 -- a lease, `docs/scanout-design.md`
 - [ ] The Broadwell sprite plane: a top-most window scanned out at its position, opaque, the desktop composed around it
 - [x] ~~Runtime mode switching: a display driver can set a mode after boot~~ DONE 2026-09-02 -- `config set resolution`, every QEMU adapter

@@ -5506,6 +5506,43 @@ Not worth the ring, the context and the GGTT mapping of every source
 buffer at this resolution; revisit if a 4K panel or a measured
 compositor frame time says otherwise.
 
+**THE COMPOSITOR FRAME TIME IS MEASURED NOW, AND IT IS 4.5x THE FIGURE
+ABOVE.** `gui compositor` reports what a frame cost as of 2026-09-17
+(`userland/wm/wm_render.c`), full-screen and damage-limited kept apart.
+On the laptop at 1920x1080:
+
+| | average | worst | samples |
+|---|---|---|---|
+| full-screen composite | **7.3 ms** | 16.3 ms | 29 |
+| damage-limited (the clock tick) | 0.66 ms | 0.70 ms | 5 |
+
+Two readings of that, and they pull in opposite directions. **The
+revisit condition named above is MET**: 7.3 ms against a 16.7 ms frame
+is 44% of the budget, and the worst frame spends all of it -- so the
+1.6 ms number this entry was decided on was measuring a raw framebuffer
+copy (`gfx_bench_fill`/`_scroll`), not a composite. **But a blitter
+cannot recover most of it**: a composite is text, icons and alpha
+blending as well as copies, and `XY_SRC_COPY_BLT` accelerates only the
+last. What the number actually argues for is the scanout plane, which
+removes a window's content from the composite altogether rather than
+copying it faster.
+
+**And the cheapest win it found is not GPU work at all.** A full-screen
+repaint happens whenever an overlay is up, because `wm_render_frame()`
+discards the damage box for the calendar, the context menu and the
+confirm dialog (the Start menu was taken off that list when it learned
+to declare its own damage, and `wm_render.c` records that this is what
+had made the cursor crawl while it was open). So those three overlays
+cost 7.3 ms a frame for as long as they are on screen, and the fix is
+the same three steps the Start menu already went through -- no ring, no
+context, no GGTT mapping.
+
+Method, so the numbers can be reproduced: `gui compositor reset`, click
+the tray clock to raise the calendar (which forces a full repaint every
+frame), wait, `gui compositor`. The first frame of a session is excluded
+from any conclusion -- it measured 675 ms, because it decodes the
+wallpaper, the icons and the font.
+
 ### Runtime mode switching: a display driver can set a mode after boot
 
 virtio-gpu can program a mode -- that is what its probe does, and what
