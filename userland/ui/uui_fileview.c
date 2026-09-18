@@ -52,6 +52,7 @@ static int fv_is_up_row(const struct uui_fileview *fv, int row) {
 }
 
 static void ic_reveal(struct uui_fileview *fv); // icons mode, below
+static void ic_clamp(struct uui_fileview *fv);   // ...and its range check
 
 int uui_fileview_row_count(const struct uui_fileview *fv) {
     return fv->count + (fv->has_up ? 1 : 0);
@@ -436,7 +437,14 @@ int uui_fileview_reload(struct uui_fileview *fv) {
         if (row >= 0) uui_fileview_toggle_mark(fv, row);
     }
     fv->last_click_row = -1;
-    if (fv->mode == UUI_FILEVIEW_ICONS) ic_reveal(fv);
+    // **CLAMP, NOT REVEAL.** The grid may have shrunk under the offset,
+    // so it has to be brought back into range -- but moving the view to
+    // the SELECTION is what made a scrolled pane jump to the top on
+    // every refresh, and a refresh happens on any write anywhere on the
+    // volume. It only ever bit the icons view because it is the only
+    // mode this line ran in, which is why /bin -- no thumbnails, no
+    // cache writes -- did it too.
+    if (fv->mode == UUI_FILEVIEW_ICONS) ic_clamp(fv);
     return !fv->failed;
 }
 
