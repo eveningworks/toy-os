@@ -107,13 +107,25 @@ isr_common:
     mov rdi, rsp         ; pass pointer to saved state as arg
     call isr_dispatch
 
-    mov rsp, rax         ; isr_dispatch RETURNS where to resume. Usually
-                          ; the block just pushed (a no-op); when it is
-                          ; not, that is the entire context-switch
-                          ; mechanism. A return value rather than a
-                          ; global so a NESTED interrupt cannot clobber
-                          ; the frame an outer handler will resume.
+    jmp isr_resume_frame ; OVER the entry below, not into it: falling
+                          ; through would `mov rsp, rdi` on every
+                          ; interrupt return and clobber the frame we
+                          ; just came in on.
 
+; void isr_return_to(uint64_t *regs)
+;
+; Resume a trapframe by name -- the tail of this stub, made callable so
+; ordinary C can do what the epilogue does. ONE implementation, two
+; entries, the same rule geom.c and klineedit.c are built on. Used to
+; start a process that has never run: its context is a hand-built
+; kernel_context whose rsp is the trapframe and whose rip is
+; isr_resume_frame, so a restore lands in the pops below.
+global isr_return_to
+isr_return_to:
+    mov rsp, rdi
+
+global isr_resume_frame
+isr_resume_frame:
     pop r15
     pop r14
     pop r13

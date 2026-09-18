@@ -3,12 +3,25 @@
 
 #include <stdint.h>
 
-// A minimal setjmp/longjmp-style saved kernel execution context. There's
-// no scheduler yet -- this exists purely so process_run_ring3() (see
-// process.h) can drop into ring 3 and get control back later from deep
-// inside a completely different call stack (the syscall handler, running
-// on the TSS's kernel stack after an int 0x80 from ring 3), the same way
-// an ordinary function call returns to its caller.
+// A minimal setjmp/longjmp-style saved kernel execution context, and
+// **the scheduler's one suspend shape** -- every context this kernel
+// parks, whether preempted in ring 3 or blocked half-way through a
+// syscall, is parked by saving one of these and resumed by restoring
+// it. That is Linux's `__switch_to_asm` and NT's `SwapContext`: swap
+// the kernel stack, and a task preempted in userspace is not special --
+// its trapframe simply sits at the base of its own kernel stack and the
+// resume unwinds back out to the epilogue that will iretq from it.
+//
+// The one thing that cannot be saved is a context that has never run.
+// Linux plants `ret_from_fork` on the fresh stack for this; here a new
+// process gets a hand-built context whose rsp is its trapframe and
+// whose rip is isr.asm's `isr_resume_frame`, so the first restore lands
+// straight in the interrupt epilogue's pops. See scheduler.c's
+// kctx_for_trapframe().
+//
+// It also still serves process_run_ring3() (see process.h), which drops
+// into ring 3 and gets control back from deep inside a different call
+// stack, the same way an ordinary function call returns to its caller.
 //
 // The return address is captured directly into `rip` at save time,
 // rather than left on the stack for restore to read later via `ret` --
@@ -29,13 +42,32 @@ struct kernel_context {
 // process_context_restore(), this SAME call "returns" a second time,
 // with whatever value was passed to process_context_restore() -- exactly
 // like setjmp()/longjmp().
-int process_context_save(struct kernel_context *ctx);
+// `returns_twice` is not decoration: without it GCC is entitled to
+// assume the code after this call runs once, and at -O2 that is a
+// live-range assumption about every local held across it. setjmp
+// carries the same attribute for the same reason.
+int process_context_save(struct kernel_context *ctx)
+    __attribute__((returns_twice));
 
 // Restores a previously saved context: the matching
 // process_context_save() call "returns" again with `value`. Never
 // returns to its own caller.
 void process_context_restore(struct kernel_context *ctx, int value)
     __attribute__((noreturn));
+
+// The same, without the `sti`. What the SCHEDULER resumes through: the
+// context being restored was suspended with interrupts in the state it
+// wants, and the iretq it eventually unwinds to restores IF from its
+// own frame. See context_switch.asm.
+void process_context_restore_noirq(struct kernel_context *ctx, int value)
+    __attribute__((noreturn));
+
+// isr.asm's interrupt epilogue, reachable by name: point RSP at a
+// trapframe and return through it. The address of `isr_resume_frame`
+// (the same tail, minus the RSP load) is what a hand-built context's
+// rip holds -- see the note above.
+void isr_return_to(uint64_t *regs) __attribute__((noreturn));
+void isr_resume_frame(void);
 
 // Start running `entry(arg)` on `stack_top`, and never come back here.
 //

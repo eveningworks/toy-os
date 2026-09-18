@@ -1,8 +1,22 @@
 # Blocking inside the kernel, and the lock that needs it
 
-**Status: stage 1's PRIMITIVE is built and tested; nothing calls it
-yet. The rest is designed, not built. Read this before touching
-`switch_to()`, `block_common()` or `FS_OP()`.**
+**Status: the SINGLE SUSPEND SHAPE is built and boots, and
+`scheduler_block_kernel()` exists with no caller. IT IS NOT GREEN --
+`sched_test.c:85` and `:142` still fail; see "What is still wrong"
+below. The lock and the gate are designed, not built. Read this before
+touching `switch_to()`, `block_common()` or `FS_OP()`.**
+
+**AND THE TWO-SHAPE DESIGN BELOW WAS NOT BUILT.** The staging text that
+follows still describes it, because the argument it records is worth
+keeping; what shipped instead is ONE shape, which is what Linux and NT
+both have. `switch_to()` saves the outgoing context and restores the
+incoming one on the spot, and a context preempted in ring 3 is not
+special -- its trapframe sits at the base of its own kernel stack and
+the resume unwinds back out to the epilogue that iretqs from it. A
+process that has never run gets a hand-built context whose rip is
+isr.asm's `isr_resume_frame`, which is Linux's `ret_from_fork`. That
+deleted `isr_resume_set()`, `isr_context_defer()`, `isr_context_outer()`
+and the per-dispatch resume slot outright.
 
 This is the first link of the chain `docs/roadmap.md` now carries in
 measured order:
@@ -150,7 +164,8 @@ documents follow.
   a sleep, so something else runs during a disk wait. This is where the
   latency actually moves, and it is deliberately not stage 1 because it
   is inside `FS_OP()` on the path every boot depends on.
-- **Stage 3 -- the lock.** `FS_OP()`'s blanket preempt guard becomes a
+- **Stage 3 -- the lock. NOW A PREREQUISITE OF STAGE 2, not a
+  successor to it** (see the open question below). `FS_OP()`'s blanket preempt guard becomes a
   mutex that sleeps the contender. Note the guard is GLOBAL today and
   deliberately so (`vfs.c`: "a second mount does not weaken this"), so
   the lock is one lock, not one per mount -- `docs/smp-design.md`'s
@@ -159,6 +174,47 @@ documents follow.
   `latency_under_io.py`, which now has a two-run baseline at both gates
   taken on one host.
 
+## What the single shape cost, and what is still wrong
+
+**Three things broke, and all three are the same lesson: a switch that
+only NOMINATED let the outgoing context finish its function, and a
+switch that MOVES THE CPU does not.** Every one of them was invisible
+until the switch became immediate.
+
+1. **The preemption guard was left raised across a park.** Every
+   blocking syscall calls `scheduler_preempt_enable()` AFTER
+   `scheduler_block_current()` -- see `sys_do_read_pipe()`. Under the
+   old switch that line still ran; under this one it does not run until
+   the process is resumed, so the whole machine stopped preempting
+   while somebody else held the CPU. Measured as three tty tests
+   failing and the suite taking 24s instead of 0.3s. FIXED by making
+   the depth travel with the context, like `isr_depth` beside it -- the
+   fourth instance of "a global describing a per-context property",
+   cured the same way as the other three.
+
+2. **THE INTERRUPT WAS NEVER ACKNOWLEDGED.** `irq_dispatch()` sent the
+   EOI *after* running the handlers, and the timer's handler reaches
+   `scheduler_tick()` -- which now never returns. So the PIC kept the
+   line in service and delivered no further timer interrupt until the
+   kernel context happened to be resumed. FIXED by acking before the
+   handler loop, which is Linux's `handle_edge_irq()`; safe here
+   because every gate is an interrupt gate, so IF is clear throughout
+   and an early ack cannot re-enter one.
+
+3. **STILL OPEN: a ring-3 spin loop terminates early.**
+   `spawn /tests/spin_test 600` is 18 billion volatile iterations and
+   should run for minutes; it exits 0 within a tick, and every process
+   reports `cpu_ns` of 0. `/tests/counter_a` runs, prints all twenty of
+   its characters and exits correctly, so ring-3 entry, syscalls and
+   output are fine -- it is long-running COMPUTATION that does not
+   survive. Measured against `86dc4fff`, where the same spawn leaves
+   the process `ready` with 0.03s billed. NOT root-caused. What has
+   been ruled out: the hand-built first-entry context (its trapframe
+   reads rip/cs/rflags/rsp correctly for init and every service), the
+   preemption guard, and the EOI above. The cheap next step is GDB
+   (`make debug`) with a breakpoint on the resume, comparing the
+   process's user RSP and registers either side of one preemption.
+
 ## The open questions, stated rather than hidden
 
 - **Who may block.** Twenty-five files reach the filesystem and most
@@ -166,11 +222,17 @@ documents follow.
   path, KTESTs, and the kernel context itself. Stage 1 refuses them
   (`current_index < 0` returns an error rather than parking); stage 3
   has to answer what an `FS_OP` from one of those does instead.
-- **Blocking while holding the preemption guard.** Today's guard is a
-  global depth counter, so a context that parks with it raised leaves
-  it raised for whoever runs next. That is the fourth instance of the
-  same defect class and it is NOT fixed here; stage 3 either makes the
-  depth per-context or the lock removes the need for it.
+- **Blocking while holding the preemption guard.** The depth is per
+  context now, so a parked context no longer leaves the machine
+  unpreemptible -- but that is only half the question. The guard is
+  what makes the non-re-entrant filesystem safe, so a context that
+  SLEEPS inside `FS_OP()` would let a second one into `tfs3.c`'s
+  module-level scratch buffers. `scheduler_block_kernel()` must
+  therefore refuse while the guard is raised -- Linux's "you cannot
+  sleep holding a spinlock" -- which is why stage 2's ata.c caller is
+  not wired up yet: under `FS_OP()` it could never fire. **Stage 2's
+  measured payoff genuinely depends on stage 3's lock**, which the
+  staging above did not say.
 - **`process_context_restore()` ends with `sti`**, which is right for
   the legacy exit path it was written for and has to be re-examined for
   a resume that may be entering a section which wants interrupts off.

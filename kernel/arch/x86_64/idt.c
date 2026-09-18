@@ -116,19 +116,6 @@ static const char *exception_names[32] = {
 
 static ring3_fault_hook_fn ring3_hook = 0;
 
-// Where isr_common's epilogue should resume. **THE VALUE IS A LOCAL OF
-// THE LIVE isr_dispatch() CALL; this only points at it.** A plain global
-// holding the value cannot work once syscalls are preemptible: the
-// wrapper reads it AFTER the body, and a body that switches away is
-// resumed only once some other wrapper has restored its own saved copy
-// -- so the read is not this call's value (the outermost restores the
-// initial 0, which reached isr_common as `mov rsp, rax` with zero).
-//
-// The pointer travels with the context, like isr_depth beside it: the
-// scheduler saves and restores it whenever it saves `kernel_rsp`, so a
-// switch_to() on a resumed context writes into ITS dispatch's local and
-// not a parked one's. scheduler.c reaches it through isr_resume_set().
-static uint64_t *g_resume_slot;
 
 void idt_set_ring3_fault_hook(ring3_fault_hook_fn hook) {
     ring3_hook = hook;
@@ -295,63 +282,7 @@ void isr_reset_depth(void) {
 int isr_depth_get(void) { return g_isr_depth; }
 void isr_depth_set(int d) { g_isr_depth = d; }
 
-// Point isr_common's epilogue somewhere other than what it interrupted.
-// THE WHOLE CONTEXT-SWITCH MECHANISM, and the only way to reach the
-// live dispatch's resume local from outside this file.
-void isr_resume_set(uint64_t rsp) {
-    if (g_resume_slot) *g_resume_slot = rsp;
-}
-void *isr_resume_slot_get(void) { return (void *)g_resume_slot; }
-void isr_resume_slot_set(void *slot) { g_resume_slot = (uint64_t *)slot; }
 
-// **THE INCOMING CONTEXT'S PAIR IS INSTALLED LAST, AFTER isr_dispatch()
-// HAS PUT ITS OWN BACK.** A switch nominates here instead of writing
-// the globals, because the wrapper's tail below restores the OUTGOING
-// stack's outer values -- right for that stack, wrong for the CPU,
-// which is about to be on the incoming one. Install then nominate would
-// mean the incoming context resumes describing somebody else.
-//
-// An interrupt gate hid it: a switch could only happen at a context's
-// outermost dispatch, and whatever the globals then said was replaced
-// by the next trap. A trap gate lets a preempted syscall resume INSIDE
-// a dispatch, where the next isr_resume_set() writes through a stale
-// slot -- into a dead frame belonging to another stack, so the switch
-// that was asked for silently does not happen.
-static uint64_t *g_pending_slot;
-static int g_pending_depth;
-static int g_pending;
-
-void isr_context_defer(void *slot, int depth) {
-    g_pending_slot = (uint64_t *)slot;
-    g_pending_depth = depth;
-    g_pending = 1;
-}
-
-// **WHAT A SWITCHED-AWAY CONTEXT MUST BE SAVED WITH IS THE OUTER PAIR,
-// NOT THE LIVE ONE -- the dispatch doing the saving is itself
-// abandoned.** A resume is `mov rsp, <trapframe>; iretq`: it lands
-// wherever that frame says and never runs a single dispatch tail, so
-// every dispatch entered after that frame was pushed is gone. Saving
-// the live depth therefore resurrects a frame that no longer exists,
-// and the next isr_resume_set() through it writes into dead stack --
-// which is a switch that silently does not happen.
-static uint64_t *g_outer_slot;
-static int g_outer_depth;
-
-// `regs` is the frame the context will be RESUMED at, and its CS is what
-// says how much of the dispatch chain survives that resume. From ring 3
-// there is none: the frame is the outermost one on that kernel stack, so
-// the context must come back describing nothing. Saving the live pair --
-// or this one's outer, which belongs to whatever ran before -- leaves it
-// pointing at a frame on somebody else's stack, and the next
-// isr_resume_set() through it writes where nothing will read: the switch
-// is recorded in procs[] and never happens, so the scheduler reports a
-// process as RUNNING that is not running at all.
-void isr_context_outer(const uint64_t *regs, void **slot, int *depth) {
-    if ((regs[18] /* cs */ & 3) == 3) { *slot = 0; *depth = 0; return; }
-    *slot = (void *)g_outer_slot;
-    *depth = g_outer_depth;
-}
 
 // Called from isr.asm's common stub with rdi = pointer to saved GP regs.
 // Stack layout above saved regs (low->high addr): vector, error_code, then
@@ -809,67 +740,32 @@ static void isr_dispatch_body(uint64_t *regs) {
                                                                           : SIG_TRAP_DONE);
 }
 
-// WHERE isr_common RESUMES, ANSWERED PER CALL RATHER THAN PER MACHINE.
+// THE DEPTH IS PER KERNEL STACK, AND THIS WRAPPER IS WHAT MAKES IT SO.
 //
-// The trap: `g_next_kernel_rsp` is one global, and isr_dispatch_body()
-// sets it to its own `regs` on entry. With an INTERRUPT gate that is
-// safe because nothing can nest -- but the moment a syscall runs with
-// IF set, a timer IRQ lands inside it, overwrites the global, and the
-// OUTER handler's epilogue reloads a frame that has already been
-// popped. It resumes garbage. That bug was hit twice (a blocking
-// SYS_READ_KEY, then the ring-3 GUI migration) and was routed around
-// both times rather than fixed; idt.h's isr_in_progress() exists
-// because of it.
+// isr_in_progress() asks "is the CPU inside a dispatch on THIS stack?",
+// and a context switch changes which stack that is -- so the counter is
+// saved into the outgoing context and reloaded from the incoming one
+// (scheduler.c's switch_to()), and this wrapper keeps each call's own
+// outer value on its own frame so nesting is correct by construction.
 //
-// The state was never really global -- it was per-invocation state kept
-// in a global. This wrapper gives each call its own copy on the C
-// stack, so nesting is correct by construction and every scheduler call
-// site keeps writing `g_next_kernel_rsp` exactly as before.
+// **NOTHING HERE DECIDES WHERE TO RESUME ANY MORE.** It used to: the
+// body nominated an incoming trapframe and the return value became
+// isr_common's `mov rsp, rax`, which is why a whole apparatus existed
+// to keep a nomination, a resume slot and a depth consistent across a
+// dispatch the switch abandoned. A switch moves the CPU itself now, so
+// a resumed context returns THROUGH here in the ordinary way and the
+// epilogue below it iretqs from the frame it arrived on.
 //
 // A noreturn path (process_context_exit()/recover()) longjmps out and
 // never restores the outer value. That is fine rather than merely
-// tolerated: it abandons the C stack the outer frame lived on, so there
-// is no outer epilogue left to resume, and the next dispatch sets the
-// global on entry regardless. isr_reset_depth() covers the depth
-// counter at the same landing point.
-uint64_t isr_dispatch(uint64_t *regs) {
-    // THE RESUME VALUE LIVES HERE, on this call's own frame, so nothing
-    // any other dispatch does can change what this one returns.
-    uint64_t resume = (uint64_t)regs;
-    uint64_t *outer_slot = g_resume_slot;
+// tolerated: it abandons the C stack the outer frame lived on, and
+// isr_reset_depth() covers the counter at the same landing point.
+void isr_dispatch(uint64_t *regs) {
     int outer_depth = g_isr_depth;
-    uint64_t *outer_pub = g_outer_slot;
-    int outer_depth_pub = g_outer_depth;
-    g_resume_slot = &resume;
     g_isr_depth = outer_depth + 1;
-    g_outer_slot = outer_slot;      // what THIS dispatch will put back
-    g_outer_depth = outer_depth;
-    g_pending = 0;   // a nomination from a context that longjmp'd away
     isr_dispatch_body(regs);
-    // RESTORED, not decremented: these describe THIS kernel stack, and
-    // the body may have switched to another one part-way through.
-    g_resume_slot = outer_slot;
+    // RESTORED, not decremented: it describes THIS kernel stack, and a
+    // switch part-way through the body reloaded it for another one --
+    // then put this stack's back when we were resumed.
     g_isr_depth = outer_depth;
-    g_outer_slot = outer_pub;
-    g_outer_depth = outer_depth_pub;
-    // AND ONLY NOW the incoming context's, if the body nominated one.
-    // Nothing runs between here and the epilogue's `mov rsp, rax`.
-    if (g_pending) {
-        g_resume_slot = g_pending_slot;
-        g_isr_depth = g_pending_depth;
-        g_pending = 0;
-    }
-    // isr_common does `mov rsp, rax` with this, so a zero becomes RSP=0
-    // and double-faults three instructions later with no walkable stack
-    // to name it. Report it here instead -- same klog/vga/`ud2` shape as
-    // scheduler.c's kstack_verify(), and for the same reason.
-    if (!resume) {
-        klog_printf("ISR RESUME IS ZERO: vec=%lu cs=%lx depth=%d pid=%d\n",
-                    regs[15], regs[18], g_isr_depth,
-                    scheduler_current_pid());
-        vga_printf("\nISR RESUME IS ZERO: vec=%lu cs=%lx depth=%d pid=%d\n",
-                   regs[15], regs[18], g_isr_depth, scheduler_current_pid());
-        __asm__ volatile ("ud2");
-    }
-    return resume;
 }

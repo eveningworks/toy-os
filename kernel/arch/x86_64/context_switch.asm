@@ -25,9 +25,23 @@ process_context_save:
     xor eax, eax
     ret
 
+; void process_context_restore_noirq(struct kernel_context *ctx, int value)
+;
+; The scheduler's entry: identical, minus the `sti`. A context switch
+; resumes a context that was suspended with interrupts already in the
+; state it wants -- inside a syscall, or inside an ISR -- and the iretq
+; it eventually unwinds to restores IF from its own frame. Enabling
+; them here instead would run the rest of that handler preemptible.
+global process_context_restore_noirq
+process_context_restore_noirq:
+    xor r8d, r8d
+    jmp ctx_restore
+
 ; void process_context_restore(struct kernel_context *ctx, int value)
 global process_context_restore
 process_context_restore:
+    mov r8d, 1
+ctx_restore:
     mov rbx, [rdi+8]
     mov rbp, [rdi+16]
     mov r12, [rdi+24]
@@ -37,13 +51,16 @@ process_context_restore:
     mov rsp, [rdi+0]      ; RSP as if process_context_save() had just
                            ; returned normally
     mov eax, esi           ; value (2nd arg) becomes the "return value"
-    ; This jump bypasses isr_common's normal epilogue entirely, which
-    ; would otherwise `iretq` and -- as part of that -- restore RFLAGS
-    ; from the interrupt frame, re-enabling interrupts (our int 0x80
-    ; gate, like every other interrupt gate here, clears IF on entry).
-    ; Skipping that means interrupts would stay off forever after an
-    ; exit syscall, since nothing else re-enables them. sti first.
+    ; The sti entry bypasses isr_common's normal epilogue entirely,
+    ; which would otherwise `iretq` and -- as part of that -- restore
+    ; RFLAGS from the interrupt frame, re-enabling interrupts (our
+    ; int 0x80 gate, like every other interrupt gate here, clears IF on
+    ; entry). Skipping that means interrupts would stay off forever
+    ; after an exit syscall, since nothing else re-enables them.
+    test r8d, r8d
+    jz .go
     sti
+.go:
     jmp qword [rdi+56]     ; jump directly to the saved return address
 
 ; void process_context_enter(void *stack_top, void (*entry)(void *), void *arg)

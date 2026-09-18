@@ -101,6 +101,7 @@
 #include "auxv.h" // the dynamic handoff, see spawn_from_fs()
 #include "elf_run.h"
 #include "process.h" // process_context_is_armed() -- see kernel_slot_runnable()
+#include "context_switch.h" // the ONE suspend shape -- see switch_to()
 #include "win_role.h"
 #include "syscall.h" // syscall_process_kill_cleanup()
 #include "win_input.h" // raw input to a ring-3 compositor // win_server_client_gone() -- see scheduler_on_exit()
@@ -136,12 +137,14 @@
 // scheduler_set_tls().
 static uint64_t kernel_fs_base;
 
-// Defined in idt.c; isr.asm's isr_common epilogue reloads rsp from this
-// immediately before popping registers and iretq'ing. isr_dispatch sets
-// it to `regs` (no-op) at the top of every call; only this file ever
-// overrides it to something else.
-// g_next_kernel_rsp is gone: the resume value is a local of the live
-// isr_dispatch() call now, reached through idt.h's isr_resume_set().
+// A SWITCH MOVES THE CPU ITSELF; NOTHING NOMINATES A FRAME ANY MORE.
+// switch_to() saves the outgoing context and restores the incoming one
+// on the spot (Linux's __switch_to_asm, NT's SwapContext), so a resumed
+// context returns out through the dispatch it parked in and that
+// dispatch's own epilogue iretqs from the frame it arrived on. What
+// this replaced -- g_next_kernel_rsp, then a per-dispatch resume slot
+// with a deferred (slot, depth) nomination beside it -- is gone with
+// it; see docs/blocking-design.md.
 
 // See api/scheduler.h -- one definition, shared with everything that
 // sizes a table per process.
@@ -240,11 +243,24 @@ struct sched_process {
     uint64_t pml4_phys;
     uint64_t kernel_rsp; // this process's saved trapframe pointer --
                           // valid whenever state != SCHED_UNUSED
+    // PARKED INSIDE KERNEL CODE, not at a syscall entry. The switch is
+    // the same either way; the WAKE is not. A process parked at an
+    // entry is answered by writing SYS_RETRY into its trapframe and
+    // letting ring 3 ask again, and one parked mid-call is answered by
+    // its own C code carrying on -- there is no ring-3 loop involved
+    // and its trapframe is not a return value to be written.
+    uint8_t parked_in_kernel;
+    int preempt_depth;    // this context's scheduler_preempt_disable()
+                          // nesting -- see g_preempt_depth
     int isr_depth;        // how deep this context is inside
                           // isr_dispatch() -- see idt.h's
                           // isr_depth_get(); travels with kernel_rsp
-    void *resume_slot;    // where this context's live dispatch keeps its
-                          // resume value -- idt.h's isr_resume_set()
+    struct kernel_context kctx; // WHERE THIS PROCESS IS PARKED. The one
+                          // suspend shape: preempted in ring 3 or
+                          // blocked mid-syscall, a context is saved and
+                          // resumed the same way. A process that has
+                          // never run gets a hand-built one -- see
+                          // proc_start_context()
     int exit_code;        // valid only once state == SCHED_ZOMBIE
 
     // Who spawned this process, or 0 for "the kernel did" -- the
@@ -506,7 +522,10 @@ static int current_index = -1;    // -1 = kernel/shell in control, not
                                     // a scheduler-managed process
 static int scheduler_armed = 0;
 static int kernel_saved_isr_depth = 0; // the kernel slot's isr_depth_get()
-static void *kernel_saved_resume_slot = 0; // and its isr_resume_slot_get()
+static int kernel_preempt_depth = 0;   // and its scheduler_preempt_depth()
+static struct kernel_context kernel_kctx; // and where the kernel context
+                                          // itself is parked -- rip 0
+                                          // until it has been left once
 static uint64_t kernel_saved_rsp = 0; // refreshed every tick that finds
                                         // current_index == -1
 static volatile int alive_count = 0;
@@ -755,7 +774,7 @@ void scheduler_init(void) {
     scheduler_armed = 1;
     kernel_saved_rsp = 0;
     kernel_saved_isr_depth = 0;
-    kernel_saved_resume_slot = 0;
+    k_memset(&kernel_kctx, 0, sizeof kernel_kctx);
     alive_count = 0;
 }
 
@@ -830,9 +849,6 @@ static int find_next_runnable(int start) {
 // half the context before this existed.
 static void save_kernel_frame(uint64_t *regs) {
     kernel_saved_rsp = (uint64_t)regs;
-    // THE OUTER PAIR, not the live one: this context's resume skips the
-    // dispatch that is saving it -- see isr_context_outer().
-    isr_context_outer(regs, &kernel_saved_resume_slot, &kernel_saved_isr_depth);
 }
 
 // A ring of the last few scheduler transitions, for a state that cannot
@@ -898,13 +914,15 @@ static void check_one_running(const char *where) {
 // process it belongs to.
 //
 // The section runs from "this process stops being current" to the
-// epilogue that actually moves the CPU (`mov rsp, rax` in isr.asm).
-// switch_to() only NOMINATES the incoming trapframe; while the outgoing
-// context's C code walks back out to that epilogue, `current_index`
-// already names the incoming one -- so a tick landing in the gap has
-// scheduler_tick() write the OUTGOING trapframe into the INCOMING
-// slot, and the incoming process is then resumed at somebody else's
-// frame for as long as it lives (runnable, making no progress).
+// process_context_restore_noirq() that moves the CPU. It used to be
+// far longer and far worse: a switch only NOMINATED the incoming
+// trapframe, so the outgoing context then walked all the way back out
+// to isr.asm's epilogue while `current_index` already named the
+// incoming one -- and a tick landing in that gap had scheduler_tick()
+// write the OUTGOING trapframe into the INCOMING slot, leaving the
+// incoming process resumed at somebody else's frame for as long as it
+// lived (runnable, making no progress). The gap is a few instructions
+// now, but it is still a gap.
 //
 // An interrupt gate hid this: IF is clear for the whole syscall, so
 // nothing could land there. A trap gate does not, which is what made it
@@ -914,33 +932,113 @@ static inline void sched_switch_begin(void) {
     __asm__ volatile ("cli" ::: "memory");
 }
 
-static void switch_to(int idx) {
+// A PROCESS THAT HAS NEVER RUN CANNOT HAVE SAVED A CONTEXT, so it gets
+// one built by hand: rsp at its trapframe, rip at the interrupt
+// epilogue's pops. The first restore therefore lands exactly where a
+// resume always used to -- Linux plants `ret_from_fork` on a fresh
+// kernel stack for the same reason. The callee-saved registers are
+// zeroed and immediately overwritten by those pops.
+static void proc_start_context(int slot, const uint64_t *tf) {
+    struct kernel_context *k = &procs[slot].kctx;
+    k_memset(k, 0, sizeof *k);
+    k->rsp = (uint64_t)tf;
+    k->rip = (uint64_t)&isr_resume_frame;
+    // Its own, not the spawner's: a slot is reused, and both of these
+    // describe a context that does not exist yet.
+    procs[slot].isr_depth = 0;
+    procs[slot].preempt_depth = 0;
+    procs[slot].parked_in_kernel = 0;
+}
+
+// WHO IS BEING SWITCHED AWAY FROM, PASSED IN RATHER THAN READ OFF
+// current_index. Every caller but the tick clears current_index before
+// it switches -- a blocking process is no longer current, and an
+// exiting one is a zombie -- so reading it here would park the outgoing
+// context in the KERNEL's slot and leave the real one unreachable.
+// That mattered the moment a switch started saving anything; it did
+// not before, when it only nominated a frame the caller had already
+// written into procs[].
+//
+// -1 is the kernel context, which is a rotation participant like any
+// other. An exiting process passes its own slot: the save is dead
+// state, but the switch still has to HAPPEN.
+static struct kernel_context *kctx_of(int from) {
+    return from >= 0 ? &procs[from].kctx : &kernel_kctx;
+}
+static int *isr_depth_of(int from) {
+    return from >= 0 ? &procs[from].isr_depth : &kernel_saved_isr_depth;
+}
+
+// **THE CPU MOVES HERE, not in an epilogue.** process_context_save()
+// returns 0 on the way out and non-zero when this context is resumed,
+// which is the entire switch: everything after the save runs on the
+// outgoing stack and is abandoned by the restore, and everything the
+// resumed context needs was installed for it by whoever resumed it.
+//
+// So the order matters and is not arbitrary: park OURSELVES first, then
+// install the incoming context, then go. Installing first would run the
+// rest of this function under the incoming process's CR3.
+// Depth, not a flag: sections nest, and an inner one must not re-enable
+// preemption an outer one is relying on. See api/scheduler.h.
+//
+// **AND IT TRAVELS WITH THE CONTEXT, exactly as isr_depth does.** A
+// switch moves the CPU on the spot now, so a process that parks inside
+// a guarded section parks WITH IT RAISED -- and as one global that
+// left the whole machine unpreemptible for as long as somebody else
+// was running. It presented as three tty tests failing and the suite
+// taking 24s instead of 0.3s. docs/blocking-design.md names this as
+// the fourth instance of "a global describing a per-context property",
+// beside g_next_kernel_rsp, g_isr_depth and the old resume slot; this
+// is it being cured the same way they were.
+static int g_preempt_depth;
+
+// The globals that describe the CURRENT context rather than the
+// machine. Saved into the outgoing slot and reloaded from the incoming
+// one on every switch, which is the whole of what makes them per
+// context. kernel_* hold the kernel context's, since it has no slot.
+static void context_save_globals(int from) {
+    int *depth = isr_depth_of(from);
+    int *preempt = from >= 0 ? &procs[from].preempt_depth : &kernel_preempt_depth;
+    *depth = isr_depth_get();
+    *preempt = g_preempt_depth;
+}
+
+static void context_load_globals(int to) {
+    isr_depth_set(to >= 0 ? procs[to].isr_depth : kernel_saved_isr_depth);
+    g_preempt_depth = to >= 0 ? procs[to].preempt_depth : kernel_preempt_depth;
+}
+
+static void switch_to(int from, int idx) {
+
     check_one_running("switch_to");
     trace_sched("switch_to", idx);
     kstack_verify(idx);   // before trusting anything else about this slot
+    // A slot selected before anything gave it somewhere to resume. Was
+    // a zero RSP handed to isr_common; now it is a jump to address 0,
+    // which is no more diagnosable, so it is still checked here.
+    if (!procs[idx].kctx.rip) {
+        klog_printf("SLOT HAS NO SAVED CONTEXT: idx=%d pid=%d state=%d \"%s\"\n",
+                    idx, idx + 1, procs[idx].state, procs[idx].name);
+        vga_printf("\nSLOT HAS NO SAVED CONTEXT: idx=%d pid=%d state=%d \"%s\"\n",
+                   idx, idx + 1, procs[idx].state, procs[idx].name);
+        __asm__ volatile ("ud2");
+    }
+
+    if (process_context_save(kctx_of(from)) != 0) return;  // resumed: back
+
+    context_save_globals(from);
     fpu_restore(procs[idx].fpu);
     // The thread pointer, and it has to be here: iretq reloads CS and SS
     // and leaves the hidden segment bases alone, so without this every
     // thread would read the last-scheduled thread's `__thread` storage.
     arch_set_fs_base(procs[idx].fs_base);
-    // The mirror of switch_to_kernel()'s guard below: a slot selected
-    // with no saved trapframe hands isr_common a zero RSP.
-    if (!procs[idx].kernel_rsp) {
-        klog_printf("SLOT HAS NO SAVED FRAME: idx=%d pid=%d state=%d \"%s\"\n",
-                    idx, idx + 1, procs[idx].state, procs[idx].name);
-        vga_printf("\nSLOT HAS NO SAVED FRAME: idx=%d pid=%d state=%d \"%s\"\n",
-                   idx, idx + 1, procs[idx].state, procs[idx].name);
-        __asm__ volatile ("ud2");
-    }
-    isr_resume_set(procs[idx].kernel_rsp);   // through THIS context's slot
-    // NOMINATED, not installed: the dispatch we are inside still has to
-    // restore its own on the way out -- see isr_context_defer().
-    isr_context_defer(procs[idx].resume_slot, procs[idx].isr_depth);
     vmm_switch_address_space(procs[idx].pml4_phys);
     gdt_set_kernel_stack(kernel_stack_top(idx));
+    context_load_globals(idx);
     procs[idx].state = SCHED_RUNNING;
     current_index = idx;
     rotation_pos = idx;
+    process_context_restore_noirq(&procs[idx].kctx, 1);
 }
 
 // The ROT_KERNEL counterpart to switch_to(): hand the CPU back to the
@@ -948,9 +1046,10 @@ static void switch_to(int idx) {
 // see the ROT_KERNEL comment above for why the kernel needs none of the
 // three. Kept as its own function purely so both callers (the tick and
 // the exit path) state the same thing once.
-static void switch_to_kernel(void) {
+static void switch_to_kernel(int from) {
     check_one_running("to_kernel");
     trace_sched("to_kernel", -1);
+    int was = from;
     current_index = -1;
     rotation_pos = ROT_KERNEL;
     // The LEGACY loader's thread pointer -- the same
@@ -959,20 +1058,27 @@ static void switch_to_kernel(void) {
     // in, and without this the last scheduled thread's %fs would still
     // be loaded when it resumed.
     arch_set_fs_base(kernel_fs_base);
+    // ALREADY THE KERNEL -- the overwhelmingly common case, since a tick
+    // with nothing spawned lands here every time. It used to nominate
+    // the frame the tick had just captured, which was a no-op by a
+    // longer route; now there is nothing to switch to.
+    if (was < 0) return;
     // find_next_runnable()'s FALLBACK returns ROT_KERNEL without asking
-    // kernel_slot_runnable(), so it can reach here before any tick has
-    // captured a kernel trapframe -- and `g_next_kernel_rsp = 0` then
-    // iretqs into nothing. Measured not to fire under the interrupt
-    // gate; kept because the fallback is genuinely unguarded.
-    if (!kernel_saved_rsp) {
-        klog_printf("KERNEL SLOT HAS NO SAVED FRAME (armed=%d)\n",
+    // kernel_slot_runnable(), so it can reach here before the kernel
+    // context has ever been left -- and a restore then jumps to 0.
+    // Measured not to fire under the interrupt gate; kept because the
+    // fallback is genuinely unguarded.
+    if (!kernel_kctx.rip) {
+        klog_printf("KERNEL SLOT HAS NO SAVED CONTEXT (armed=%d)\n",
                     process_context_is_armed());
-        vga_printf("\nKERNEL SLOT HAS NO SAVED FRAME (armed=%d)\n",
+        vga_printf("\nKERNEL SLOT HAS NO SAVED CONTEXT (armed=%d)\n",
                    process_context_is_armed());
         __asm__ volatile ("ud2");
     }
-    isr_resume_set(kernel_saved_rsp);
-    isr_context_defer(kernel_saved_resume_slot, kernel_saved_isr_depth);
+    if (process_context_save(&procs[was].kctx) != 0) return; // resumed: back
+    context_save_globals(was);
+    context_load_globals(-1);
+    process_context_restore_noirq(&kernel_kctx, 1);
 }
 
 // Loads a real ELF64 binary from the persistent filesystem as a fresh
@@ -1282,6 +1388,7 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
 
     procs[slot].pml4_phys  = as;
     procs[slot].kernel_rsp = (uint64_t)tf;
+    proc_start_context(slot, tf);
     kstack_arm_slot(slot);
     // A pristine FP state, not whatever the previous tenant of this
     // slot left behind -- slots get reused (scheduler_poll() reaps back
@@ -1592,10 +1699,6 @@ void scheduler_tick(uint64_t *regs) {
 // to justify two paths is gone.
 void scheduler_yield(uint64_t *regs) { scheduler_rotate(regs); }
 
-// Depth, not a flag: sections nest, and an inner one must not re-enable
-// preemption an outer one is relying on. See api/scheduler.h.
-static int g_preempt_depth;
-
 void scheduler_preempt_disable(void) { g_preempt_depth++; }
 
 int scheduler_preempt_depth(void) { return g_preempt_depth; }
@@ -1611,6 +1714,7 @@ void scheduler_preempt_enable(void) {
 static void scheduler_rotate(uint64_t *regs) {
     if (!scheduler_armed) return;
 
+
     // UNCONDITIONALLY, and before anything can return early or switch:
     // this closes the slice that just ended, whoever owned it. Doing it
     // inside the `current_index >= 0` branch below was wrong in the one
@@ -1620,6 +1724,7 @@ static void scheduler_rotate(uint64_t *regs) {
     // just spent. Measured: a process billed 9.51 SECONDS across a 300ms
     // window.
     bill_current();
+
 
     // A LEGACY BLOCKING PROCESS CANNOT BE PARKED, so while one is in
     // flight this file does not switch at all -- it resumes exactly
@@ -1667,8 +1772,6 @@ static void scheduler_rotate(uint64_t *regs) {
         // this is the only place that knows a whole tick elapsed under
         // it -- see abi/proc_info.h on why the total, not a percentage.
         procs[current_index].kernel_rsp = (uint64_t)regs;
-        isr_context_outer(regs, &procs[current_index].resume_slot,
-                          &procs[current_index].isr_depth);
         kstack_verify(current_index);  // it just stopped running -- check its stack
         // Paired with switch_to()'s FXRSTOR. Saved on the way out
         // whether or not the process has touched FP: "has it?" is
@@ -1693,11 +1796,11 @@ static void scheduler_rotate(uint64_t *regs) {
         // in the rotation. In the overwhelmingly common case (nothing
         // has been spawned at all) kernel_saved_rsp was just set to
         // `regs` above, so this stays the genuine no-op it always was.
-        switch_to_kernel();
+        switch_to_kernel(current_index);
         return;
     }
 
-    switch_to(next);
+    switch_to(current_index, next);
 }
 
 // BLOCKING SYSCALLS, AND WHY THEY DESCHEDULE RATHER THAN WAIT
@@ -1765,6 +1868,7 @@ int scheduler_test_park(uint64_t *tf, const void *chan, int reason) {
         procs[i].wait_chan = chan;
         procs[i].wait_reason = reason;
         procs[i].kernel_rsp = (uint64_t)tf;
+        proc_start_context(i, tf);
         // A FABRICATED SLOT MUST LOOK LIKE A FRESH PROCESS, which is
         // exactly what spawn_from_fs() gives a real one. Slots are
         // reused, so without this a test that set a disposition leaves
@@ -1792,7 +1896,9 @@ void scheduler_test_release(int idx) {
     procs[idx].wait_chan = 0;
     procs[idx].kernel_rsp = 0;
     procs[idx].isr_depth = 0;
-    procs[idx].resume_slot = 0;
+    procs[idx].preempt_depth = 0;
+    procs[idx].parked_in_kernel = 0;
+    k_memset(&procs[idx].kctx, 0, sizeof procs[idx].kctx);
     // Cleared on the way out as well as on the way in. Belt and braces
     // is not the reason: an UNUSED slot with a pending bit is a slot the
     // next real spawn would have to remember to clear, and one of the
@@ -1891,7 +1997,6 @@ static int block_common(uint64_t *regs, const void *chan, int reason,
     bill_current(); // this slice ends here -- see bill_current()
     int idx = current_index;
     procs[idx].kernel_rsp = (uint64_t)regs;
-    isr_context_outer(regs, &procs[idx].resume_slot, &procs[idx].isr_depth);
     kstack_verify(idx);
     fpu_save(procs[idx].fpu);
     procs[idx].state = SCHED_BLOCKED;
@@ -1909,8 +2014,8 @@ static int block_common(uint64_t *regs, const void *chan, int reason,
     current_index = -1;
 
     int next = find_next_runnable(rotation_pos);
-    if (next == ROT_KERNEL) switch_to_kernel();
-    else switch_to(next);
+    if (next == ROT_KERNEL) switch_to_kernel(idx);
+    else switch_to(idx, next);
     return 1;
 }
 
@@ -1998,6 +2103,55 @@ int scheduler_wake(const void *chan, int64_t value) {
 // that all but one park again is the thundering herd this channel
 // mechanism was built to avoid (see api/scheduler.h), and a lock's
 // unlock wants exactly one.
+// **PARK THE CURRENT CONTEXT MID-CALL, AND CARRY ON WHERE IT STOPPED.**
+// The counterpart to scheduler_block_current(), and the reason a single
+// suspend shape was worth building: that one parks at a syscall ENTRY
+// and is answered by ring 3 asking again, so the C frames beneath it
+// are thrown away. This one keeps them, so a caller six frames deep in
+// a block walk can wait for a disk and resume on the next line with its
+// locals intact.
+//
+// Returns 0 when there is nowhere to park -- the kernel context, a
+// KTEST, the legacy loader, anything with no scheduler slot -- and the
+// caller must fall back to polling rather than assume it slept.
+//
+// THE CALLER MUST ARM BEFORE IT TESTS ITS CONDITION, exactly as the
+// entry-point version requires: a wake that lands between the test and
+// the park is otherwise lost, and this one has no ring-3 retry loop
+// underneath it to paper over that.
+int scheduler_block_kernel(const void *chan, int reason) {
+    if (current_index < 0) return 0;
+    int idx = current_index;
+
+    // A wake that arrived while we were checking -- see block_common().
+    if (procs[idx].armed_woken && procs[idx].arm_chan == chan) {
+        procs[idx].armed_woken = 0;
+        procs[idx].arm_chan = 0;
+        return 1;
+    }
+    procs[idx].arm_chan = 0;
+
+    sched_switch_begin();
+    bill_current();
+    kstack_verify(idx);
+    fpu_save(procs[idx].fpu);
+    procs[idx].state = SCHED_BLOCKED;
+    procs[idx].parked_in_kernel = 1;
+    trace_sched("block_kernel", idx);
+    procs[idx].wait_chan = chan;
+    procs[idx].wake_at_ns = 0;   // unbounded -- see block_common()
+    procs[idx].wait_reason = reason;
+    current_index = -1;
+
+    int next = find_next_runnable(rotation_pos);
+    if (next == ROT_KERNEL) switch_to_kernel(idx);
+    else switch_to(idx, next);
+
+    // Resumed, on our own stack, with every frame below us intact.
+    procs[idx].parked_in_kernel = 0;
+    return 1;
+}
+
 int scheduler_wake_n(const void *chan, int64_t value, int max) {
     int woken = 0;
     // **A NULL CHANNEL WAKES NOBODY.** scheduler_wait_chan_pid() answers
@@ -2031,8 +2185,15 @@ int scheduler_wake_n(const void *chan, int64_t value, int max) {
         // isr_common's epilogue pops it straight into the register the
         // ring-3 caller reads. Writing it here is what makes waking a
         // process and answering its syscall the same act.
-        uint64_t *tf = (uint64_t *)(uintptr_t)procs[i].kernel_rsp;
-        tf[TF_RAX] = (uint64_t)value;
+        // ...but only for a process parked at a syscall ENTRY. One
+        // parked mid-call resumes its own C frames and computes its
+        // own answer, and its trapframe belongs to a call that has not
+        // finished -- writing a return value into it would be
+        // answering a question nobody asked.
+        if (!procs[i].parked_in_kernel) {
+            uint64_t *tf = (uint64_t *)(uintptr_t)procs[i].kernel_rsp;
+            tf[TF_RAX] = (uint64_t)value;
+        }
         // The wait is over, so its deadline is too. Leaving it set
         // would have the next timer tick "release" a process that is
         // already running -- overwriting the RAX of whatever syscall it
@@ -2224,6 +2385,7 @@ void scheduler_on_exit(int code) {
 
     sched_switch_begin();
     bill_current(); // the exiting process's last slice
+    int gone = current_index;
     trace_sched("exit", current_index);
     current_index = -1;
 
@@ -2233,10 +2395,10 @@ void scheduler_on_exit(int code) {
     // position is reached normally instead of being skipped on an exit.
     int next = find_next_runnable(rotation_pos);
     if (next == ROT_KERNEL) {
-        switch_to_kernel();
+        switch_to_kernel(gone);
         return;
     }
-    switch_to(next);
+    switch_to(gone, next);
 }
 
 // --- threads ---------------------------------------------------------
@@ -2302,6 +2464,7 @@ int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
 
     procs[slot].pml4_phys  = procs[leader].pml4_phys; // SHARED, not created
     procs[slot].kernel_rsp = (uint64_t)tf;
+    proc_start_context(slot, tf);
     kstack_arm_slot(slot);
     fpu_init_state(procs[slot].fpu);
     procs[slot].wait_chan   = 0;
@@ -2390,6 +2553,7 @@ int scheduler_fork(const uint64_t *regs) {
 
     procs[slot].pml4_phys  = as;
     procs[slot].kernel_rsp = (uint64_t)tf;
+    proc_start_context(slot, tf);
     kstack_arm_slot(slot);
     fpu_save(procs[slot].fpu);
     procs[slot].wait_chan   = 0;
@@ -2517,8 +2681,8 @@ void scheduler_on_thread_exit(int code) {
     bill_current();
     current_index = -1;
     int next = find_next_runnable(rotation_pos);
-    if (next == ROT_KERNEL) { switch_to_kernel(); return; }
-    switch_to(next);
+    if (next == ROT_KERNEL) { switch_to_kernel(me); return; }
+    switch_to(me, next);
 }
 
 // Reap `tid` if it is dead, and say so; otherwise say "not yet".
@@ -3252,6 +3416,16 @@ int scheduler_signal_raise(int pid, int sig) {
     if (p->state == SCHED_BLOCKED && p->wait_reason == SCHED_WAIT_SIGNAL &&
         (p->blocked & (1u << sig)))
         return 1;
+
+    // **A CONTEXT PARKED MID-CALL IS NOT INTERRUPTIBLE, which is Linux's
+    // TASK_UNINTERRUPTIBLE and for the same reason: the thing it is
+    // waiting for is a device, not a person.** Neither answer below
+    // applies to it -- rewinding RIP would re-issue a syscall that has
+    // not finished, and -EINTR would be written into a trapframe its C
+    // frames are still going to return through. The signal stays
+    // pending and is delivered where every other one is, on the way
+    // back to ring 3 once the call completes.
+    if (p->state == SCHED_BLOCKED && p->parked_in_kernel) return 1;
 
     if (p->state == SCHED_BLOCKED) {
         uint64_t *tf = (uint64_t *)(uintptr_t)p->kernel_rsp;

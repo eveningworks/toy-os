@@ -62,33 +62,14 @@ void isr_reset_depth(void);
 // THE DEPTH TRAVELS WITH THE CONTEXT, and these are the scheduler's
 // half of that. A context switch changes whose kernel stack
 // isr_in_progress() is describing, so scheduler.c saves the depth
-// beside `kernel_rsp` on the way out and restores it on the way in.
+// into the outgoing context on the way out and reloads the incoming
+// one's on the way in.
 // Nothing else should call these: as a plain global the counter leaked
 // to 348 the moment syscalls could be preempted, which left
 // isr_in_progress() answering "yes" for the rest of the boot and pinned
 // ata.c on its spin path.
 int isr_depth_get(void);
 void isr_depth_set(int depth);
-
-// Point isr_common's epilogue at `rsp` instead of what it interrupted --
-// the whole context-switch mechanism, and the only route to the live
-// isr_dispatch() call's resume local. The slot accessors are the
-// scheduler's: the pointer names a local on one context's kernel stack,
-// so it travels with `kernel_rsp` exactly as the depth does.
-void isr_resume_set(uint64_t rsp);
-void *isr_resume_slot_get(void);
-void isr_resume_slot_set(void *slot);
-
-// Nominate the INCOMING context's (resume slot, depth) for a switch that
-// has not taken effect yet. isr_dispatch() installs it after restoring
-// its own, which is the only moment both are true of the right stack --
-// see the pair's comment in idt.c.
-void isr_context_defer(void *slot, int depth);
-
-// What the live dispatch will restore on its way out -- the pair a
-// context being switched AWAY from must be saved with, since its resume
-// skips every dispatch tail. See idt.c.
-void isr_context_outer(const uint64_t *regs, void **slot, int *depth);
 
 // Spurious LAPIC interrupts seen since boot -- reported by `lsdev`
 // beside the controller. See idt.c.

@@ -140,7 +140,24 @@ void irq_switch_to_ioapic(void) {
     klog_write("irq: the I/O APIC delivers every line now; the 8259 is masked\n");
 }
 
+// **ACKNOWLEDGED BEFORE THE HANDLERS RUN, NOT AFTER -- a handler can
+// switch away and never come back.** The timer's reaches
+// scheduler_tick(), and a context switch moves the CPU on the spot
+// (scheduler.c's switch_to()), so an EOI below the loop is simply never
+// sent: the PIC keeps the line in service, no further timer interrupt
+// is delivered, and the process that was just switched to runs until it
+// makes a syscall. It presented as every process reporting ZERO cpu
+// time -- the tick that bills a slice had stopped arriving.
+//
+// This is Linux's handle_edge_irq(), which acks up front for the same
+// reason; handle_fasteoi_irq() is the one that EOIs afterwards, for
+// level-triggered lines that must stay masked while the device is
+// serviced. Safe here without that distinction because every gate in
+// this kernel is an INTERRUPT gate: IF is clear for the whole handler,
+// so an early ack cannot re-enter one.
 void irq_dispatch(uint8_t irq, uint64_t *regs) {
+    if (g_ioapic) lapic_eoi();
+    else pic_send_eoi(irq);
     if (irq < IRQ_MAX) {
         // EVERY handler on the line runs, in registration order, and
         // each decides for itself whether the interrupt was its
@@ -150,6 +167,4 @@ void irq_dispatch(uint8_t irq, uint64_t *regs) {
             handlers[irq][i](regs);
         }
     }
-    if (g_ioapic) lapic_eoi();
-    else pic_send_eoi(irq);
 }

@@ -1020,6 +1020,19 @@ int scheduler_max_procs(void);
 
 int scheduler_block_current(uint64_t *regs, const void *chan, int reason);
 
+// **PARK THE CURRENT CONTEXT MID-CALL**, and return when it is woken --
+// the counterpart to the entry-point block above, for a caller that is
+// already deep inside kernel code and whose position lives on the
+// kernel stack. scheduler_block_current() parks at a syscall entry and
+// is answered by ring 3 asking again, so the frames beneath it are
+// thrown away; this keeps them and returns on the next line.
+//
+// 0 means THERE WAS NOWHERE TO PARK -- the kernel context, a KTEST, the
+// legacy loader -- and the caller must fall back to polling rather than
+// assume it slept. Arm before testing the condition, exactly as the
+// entry-point version requires. See docs/blocking-design.md.
+int scheduler_block_kernel(const void *chan, int reason);
+
 // The same, BOUNDED: released by scheduler_wake() naming `chan`, or by
 // the timer once `wake_at_ns` passes, whichever happens first. A
 // deadline of 0 means no deadline and is exactly scheduler_block_current().
