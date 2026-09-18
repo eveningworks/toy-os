@@ -2121,6 +2121,15 @@ int scheduler_wake(const void *chan, int64_t value) {
 // underneath it to paper over that.
 int scheduler_block_kernel(const void *chan, int reason) {
     if (current_index < 0) return 0;
+    // **AND NOT WHILE THE PREEMPTION GUARD IS RAISED**, which is
+    // Linux's "you cannot sleep holding a spinlock". The guard is what
+    // makes the non-re-entrant filesystem safe (vfs.c's FS_OP), so a
+    // context that slept inside one would let a second walker into
+    // tfs3.c's module-level scratch buffers -- the exact corruption the
+    // guard exists to prevent, reintroduced by the thing meant to
+    // replace it. The caller falls back to polling, as it does for a
+    // context with no slot at all.
+    if (g_preempt_depth > 0) return 0;
     int idx = current_index;
 
     // A wake that arrived while we were checking -- see block_common().
