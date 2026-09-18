@@ -1550,6 +1550,7 @@ static uint32_t reported_wait_reason(int reason) {
     case SCHED_WAIT_NET:   return PROC_WAIT_NET;
     case SCHED_WAIT_FUTEX: return PROC_WAIT_FUTEX;
     case SCHED_WAIT_SIGNAL: return PROC_WAIT_SIGNAL;
+    case SCHED_WAIT_LOCK:  return PROC_WAIT_LOCK;
     default:               return PROC_WAIT_NONE;
     }
 }
@@ -1955,6 +1956,7 @@ const char *sched_wait_reason_name(int reason) {
     case SCHED_WAIT_NET:   return "net";
     case SCHED_WAIT_FUTEX: return "futex";
     case SCHED_WAIT_SIGNAL: return "signal";
+    case SCHED_WAIT_LOCK:  return "lock";
     default:               return "?";
     }
 }

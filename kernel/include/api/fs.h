@@ -451,4 +451,10 @@ struct fs_check_result {
 // (nothing to check -- RAM-only mode has no persistent bitmap).
 int fs_check(int repair, struct fs_check_result *out);
 
+// Whether a filesystem backend call is in flight right now, and the pid
+// holding it (0 for the kernel context). DIAGNOSTIC ONLY -- a caller
+// that branched on this would be racing the answer. See vfs.c's FS_OP.
+int fs_lock_held(void);
+int fs_lock_owner(void);
+
 #endif

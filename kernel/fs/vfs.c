@@ -30,10 +30,19 @@
 #include "kfmt.h"    // klog_printf
 #include "klog.h"
 #include "string.h"
-#include "scheduler.h" // scheduler_preempt_disable/enable -- see FS_OP below
+#include "scheduler.h"
+#include "kmutex.h"  // the one filesystem lock -- see FS_OP below
 #include "initcall.h"
 
-// EVERY backend call runs inside a preemption-free section.
+// EVERY backend call runs inside ONE LOCK, and a contender SLEEPS.
+//
+// It was a blanket preemption guard until 2026-09-18, and the reason it
+// stopped being one is measured: `tools/latency_under_io.py` put the
+// compositor's loaded wake latency at 0.3-0.4 s under the trap gate
+// purely because this held preemption off for a whole backend call --
+// a process waiting on nothing at all still waited, because the
+// machine was not rotating at all. A lock stops only the contexts that
+// want the same thing. See docs/blocking-design.md.
 //
 // The backends are not re-entrant and never were: tfs3.c walks
 // directories, inodes and file data through module-level scratch
@@ -53,10 +62,12 @@
 // guard goes here rather than being repeated (and eventually forgotten)
 // in each backend.
 //
-// A SECOND MOUNT DOES NOT WEAKEN THIS. Two backends have separate
-// state, but the guard is per CALL rather than per backend, so it
-// covers a caller preempted between two mounts exactly as it covers one
-// preempted within one.
+// A SECOND MOUNT DOES NOT WEAKEN THIS, and it is why the lock is ONE
+// lock rather than one per mount. Two backends have separate state, but
+// `mount_enter()` swaps a GLOBAL "which mount is live" pointer and
+// tfs3.c's scratch is module-level rather than per mount -- so a
+// per-mount lock would protect neither. What would earn a finer lock is
+// making that state per mount, which docs/smp-design.md wants anyway.
 //
 // This is NOT the same thing as the nested-read refusal that guarded
 // the old fs_read()'s shared staging buffer -- that call and its buffer
@@ -64,21 +75,33 @@
 // state for the whole call. Note it does not make a LIST
 // CALLBACK safe to call fs_* from -- that is direct recursion, not
 // preemption, and the depth counter cannot see the difference.
+// THE one lock. A file-scope definition rather than a pointer handed
+// around, because there is exactly one filesystem serialisation point
+// in this kernel and naming it twice is how a second one appears.
+static struct kmutex g_fs_lock;
+
+// Whether a backend call is in flight, and whose. A diagnostic: "the
+// filesystem is busy" is otherwise invisible from outside vfs.c, and it
+// is what a test uses to prove FS_OP holds the lock for the WHOLE call
+// rather than taking and dropping it around the edges.
+int fs_lock_held(void)  { return kmutex_held(&g_fs_lock); }
+int fs_lock_owner(void) { return kmutex_owner(&g_fs_lock); }
+
 #define FS_OP(m, expr) ({                  \
-    scheduler_preempt_disable();           \
+    kmutex_lock(&g_fs_lock);               \
     void *_fs_prev = mount_enter(m);       \
     __auto_type _fs_r = (expr);            \
     mount_leave(m, _fs_prev);              \
-    scheduler_preempt_enable();            \
+    kmutex_unlock(&g_fs_lock);             \
     _fs_r;                                 \
 })
 
 #define FS_OP_VOID(m, stmt) do {           \
-    scheduler_preempt_disable();           \
+    kmutex_lock(&g_fs_lock);               \
     void *_fs_prev = mount_enter(m);       \
     stmt;                                  \
     mount_leave(m, _fs_prev);              \
-    scheduler_preempt_enable();            \
+    kmutex_unlock(&g_fs_lock);             \
 } while (0)
 
 // ---- resolution -----------------------------------------------------

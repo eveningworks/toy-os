@@ -540,6 +540,9 @@ const void *scheduler_wait_chan_pid(int pid);
 // re-runs; sigsuspend re-run re-parks with the same mask, and the caller
 // never gets to look at what its handler set. Linux's ERESTARTNOHAND.
 #define SCHED_WAIT_SIGNAL 10
+// A kmutex another context holds (kernel/kmutex.h). The filesystem's
+// is the only one today; `ps` prints it as block(lock).
+#define SCHED_WAIT_LOCK  11
                             // promised to change (SYS_FUTEX_WAIT).
                             // Adding this one found a FOURTH site the
                             // list above does not name: /bin/ps has its
