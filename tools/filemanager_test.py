@@ -101,6 +101,7 @@ class Layout:
         self.pane = {}
         self.dir = {}
         self.rows = {}
+        self.scroll = {}      # pane -> (icon grid row, details table row)
         self.marked = (0, 0)
         self.dim = (0, 0)     # per-pane dimmed rows -- a staged cut
         self.cancel = None    # is the Cancel button up?
@@ -156,6 +157,8 @@ class Layout:
             self.dir[int(p[1])] = p[2]
         elif p[0] == "rows" and len(p) >= 3:
             self.rows[int(p[1])] = int(p[2])
+        elif p[0] == "scroll" and len(p) >= 4:
+            self.scroll[int(p[1])] = (int(p[2]), int(p[3]))
         elif p[0] == "active" and len(p) >= 2:
             self.active = int(p[1])
         elif p[0] == "selected" and len(p) >= 2:
@@ -2004,6 +2007,36 @@ def run(dbg, qmp, tmp, res):
                   0 in lay.cellgrid and lay.cellgrid[0][1] > y_now,
                   f"cell y {y_now} -> {lay.cellgrid.get(0)}")
         dbg.send("sh config set scroll_dir normal")
+
+        # **A REFRESH MUST NOT MOVE THE VIEW**, and this is the check
+        # that says so. reload() restores the selection BY NAME, and
+        # restoring it used to REVEAL it -- so any write anywhere on the
+        # volume yanked a scrolled pane back to wherever the selection
+        # was. In a directory full of images that write is the app's own
+        # thumbnail cache (fm_thumbs.c stores a .qoi per decode), half a
+        # second apart, so /usr/share/icons could not be scrolled at all:
+        # it snapped to the top continuously. Explorer and Dolphin both
+        # keep the offset across a refresh.
+        #
+        # The write is a plain touch rather than a thumbnail, because
+        # what the bug is ABOUT is any generation bump -- driving it
+        # through the cache would test the cache as well and fail for
+        # two reasons at once.
+        off_before = lay.scroll.get(0)
+        rows_before = lay.rows.get(0, 0)
+        res.check("the pane really is scrolled away from the top",
+                  off_before is not None and off_before[0] > 0,
+                  f"scroll={off_before} (the checks below prove nothing at 0)")
+        dbg.send(f"sh touch {SRC}/poke.txt")
+        # WAIT ON THE RELOAD, not on a clock: the row count rising is
+        # the app having seen the write and rebuilt the pane, which is
+        # the exact moment the old code moved the view.
+        lay = wait_layout(dbg, win,
+                          lambda l: l.rows.get(0, 0) > rows_before) or lay
+        res.check("a filesystem write elsewhere does not scroll the pane back",
+                  lay.scroll.get(0) == off_before,
+                  f"scroll {off_before} -> {lay.scroll.get(0)} "
+                  f"rows {rows_before} -> {lay.rows.get(0)}")
 
     # --- 16. associations: /bin/open and the override file --------------
     # The File Manager resolves through lib/uopen now, so an override

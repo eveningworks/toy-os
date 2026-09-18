@@ -352,6 +352,10 @@ static int fv_at_root(const struct uui_fileview *fv) {
     return fv->dir[0] == '/' && fv->dir[1] == '\0';
 }
 
+// Defined below, beside the public wrapper -- see its comment on why
+// `reveal` is an argument at all.
+static int fv_select_name(struct uui_fileview *fv, const char *name, int reveal);
+
 int uui_fileview_reload(struct uui_fileview *fv) {
     // Remember the selected NAME, not the row: a reload can insert or
     // remove entries above it, and a row index would then point at a
@@ -417,7 +421,9 @@ int uui_fileview_reload(struct uui_fileview *fv) {
     // rebuilds the order and clamps the scroll and the selection.
     uui_table_set_rows(&fv->table, uui_fileview_row_count(fv));
 
-    if (keep[0] && uui_fileview_select_name(fv, keep)) {
+    // NO REVEAL: this is a refresh, and the scroll offset is the
+    // user's -- see fv_select_name().
+    if (keep[0] && fv_select_name(fv, keep, 0)) {
         /* kept */
     } else if (had_none) {
         fv->table.selected = -1;
@@ -486,11 +492,25 @@ int uui_fileview_selected_path(const struct uui_fileview *fv, char *out, int cap
     return k_path_join(fv->dir, e->name, out, (size_t)cap);
 }
 
-int uui_fileview_select_name(struct uui_fileview *fv, const char *name) {
+// **A REFRESH MUST NOT MOVE THE VIEW, AND THAT IS WHY `reveal` IS AN
+// ARGUMENT.** Restoring the selection after a reload and selecting a
+// file because the user asked are the same search and opposite
+// intentions: the second should scroll the file into sight, and the
+// first must leave the scroll exactly where the user put it.
+//
+// Conflating them shipped as a file manager that scrolled itself back
+// to the top every half second in any directory full of images. The
+// loop: decoding a thumbnail WRITES it to /var/cache/thumbnails, which
+// bumps sys_fs_generation(), which has files.c's tick reload both
+// panes, which restored the selection, which revealed it. Explorer and
+// Dolphin both keep the offset across a refresh for this reason -- a
+// live view the user cannot scroll is not a live view.
+static int fv_select_name(struct uui_fileview *fv, const char *name, int reveal) {
     if (!name || !name[0]) return 0;
     for (int i = 0; i < fv->count; i++) {
         if (strcmp(fv->entries[i].name, name) != 0) continue;
         fv->table.selected = fv->has_up ? i + 1 : i;
+        if (!reveal) return 1;
         // Scroll it into view: a selection the user cannot see is a
         // selection they will act on by accident.
         if (fv->mode == UUI_FILEVIEW_ICONS) { ic_reveal(fv); return 1; }
@@ -503,6 +523,10 @@ int uui_fileview_select_name(struct uui_fileview *fv, const char *name) {
         return 1;
     }
     return 0;
+}
+
+int uui_fileview_select_name(struct uui_fileview *fv, const char *name) {
+    return fv_select_name(fv, name, 1);
 }
 
 static void fv_report_select(struct uui_fileview *fv) {
