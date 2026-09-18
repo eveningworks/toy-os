@@ -1,5 +1,6 @@
 // See context_menu.h for the design writeup.
 #include "context_menu.h"
+#include "wm_shadow.h"
 #include "wm_internal.h"
 #include "wm_overlay.h"
 #include "ui/uui.h"
@@ -88,7 +89,7 @@ static int level_item_h(int level) {
 static void damage_level(int level) {
     int x, y, w, h;
     if (uui_menubar_popup_rect(&g_menu, level, &x, &y, &w, &h))
-        wm_damage_rect(x, y, w, h);
+        wm_damage_window_rect(x, y, w, h);   // plus its shadow (wm_shadow.h)
 }
 
 void context_menu_damage(void) {
@@ -174,6 +175,12 @@ void context_menu_close(void) {
 void context_menu_draw(int mx, int my) {
     (void)mx; (void)my;   // the hovered row is tracked, not derived here
     if (!context_menu_open) return;
+    // Each open level casts a menu's small shadow, under the popups.
+    for (int l = 0; l < uui_menubar_depth(&g_menu); l++) {
+        int x, y, w, h;
+        if (uui_menubar_popup_rect(&g_menu, l, &x, &y, &w, &h))
+            wm_shadow_draw(x, y, w, h, 0, WM_SHADOW_POPUP);
+    }
     uui_menubar_draw_popup(wm_surface(), &g_menu);
 }
 

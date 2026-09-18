@@ -24,6 +24,7 @@
 // with nothing else changing -- cheap without needing real dirty-rect
 // tracking of the scene: see wm_render_cursor_move() in wm_render.c.
 #include "wm_internal.h"
+#include "wm_shadow.h"   // wm_damage_window_rect(): a window's rect plus its shadow
 #include "wm_idle.h"
 #include "wm_dnd.h"
 #include "wm_geometry.h"
@@ -202,7 +203,7 @@ int wm_key_target(int focus) {
 }
 
 void window_invalidate(struct window *win) {
-    wm_damage_rect(win->x, win->y, win->w, win->h);
+    wm_damage_window_rect(win->x, win->y, win->w, win->h);
     redraw_pending = 1;
 }
 
@@ -266,8 +267,8 @@ void bring_to_front(int idx) {
     // on which window is frontmost, so both the newly- and
     // previously-frontmost buttons need a repaint.
     struct window *prev_front = &windows[window_count - 1];
-    wm_damage_rect(prev_front->x, prev_front->y, prev_front->w, prev_front->h);
-    wm_damage_rect(windows[idx].x, windows[idx].y, windows[idx].w, windows[idx].h);
+    wm_damage_window_rect(prev_front->x, prev_front->y, prev_front->w, prev_front->h);
+    wm_damage_window_rect(windows[idx].x, windows[idx].y, windows[idx].w, windows[idx].h);
     wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);
 
     // Tell the clients involved, BEFORE the reorder -- prev_front is
@@ -390,8 +391,8 @@ void open_app(const struct gui_app *app) {
     // bar. Nothing else had noticed it.
     if (window_count > 0) {
         struct window *losing_focus = &windows[window_count - 1];
-        wm_damage_rect(losing_focus->x, losing_focus->y,
-                        losing_focus->w, losing_focus->h);
+        wm_damage_window_rect(losing_focus->x, losing_focus->y,
+                               losing_focus->w, losing_focus->h);
         // ...and if it is a CLIENT, it has to be TOLD, not just
         // repainted: a client sees nothing but its own event queue, so
         // an unannounced focus loss leaves it drawing a caret for input
@@ -611,7 +612,7 @@ void close_window(int idx) {
     // taskbar strip always needs it too, regardless of minimized state
     // -- its button disappears and every later button shifts left.
     if (windows[idx].state != WIN_MINIMIZED) {
-        wm_damage_rect(windows[idx].x, windows[idx].y, windows[idx].w, windows[idx].h);
+        wm_damage_window_rect(windows[idx].x, windows[idx].y, windows[idx].w, windows[idx].h);
     }
     wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);
 
@@ -636,7 +637,7 @@ void close_window(int idx) {
     if (idx == window_count - 1 && window_count >= 2) {
         struct window *inheritor = &windows[window_count - 2];
         if (inheritor->state != WIN_MINIMIZED) {
-            wm_damage_rect(inheritor->x, inheritor->y, inheritor->w, inheritor->h);
+            wm_damage_window_rect(inheritor->x, inheritor->y, inheritor->w, inheritor->h);
         }
     }
 
@@ -1058,6 +1059,7 @@ void wm_run(void) {
         wmwd_phase("startbutton");
         taskbar_poll_config();
         calendar_poll_config(); // `desktop.week_start`, same generation poll
+        wm_shadow_poll_config(); // `desktop.shadows`, same poll
         volume_poll_config();   // the level and the device list, and the debounced write
         brightness_poll_config();
 
@@ -1448,7 +1450,7 @@ void wm_run(void) {
             // trigger this loop sees besides mouse movement -- worth
             // reporting precisely rather than falling back to a full
             // repaint for every keystroke.
-            if (f >= 0) wm_damage_rect(windows[f].x, windows[f].y, windows[f].w, windows[f].h);
+            if (f >= 0) wm_damage_window_rect(windows[f].x, windows[f].y, windows[f].w, windows[f].h);
             redraw_pending = 1;
         }
 

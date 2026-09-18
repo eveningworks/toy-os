@@ -8541,3 +8541,52 @@ Effects page, where the window effects' toggles will join it.
 keystroke through the same text buffer; with the glide on there, a
 displaced frame would sit until the next key. `uui_textview` and
 Notepad turn it on because Toykit redraws them per frame.
+
+## Shadows are a cached corner tile and a falloff table, drawn under the window, and part of its damage
+
+Every toplevel casts a drop shadow (`userland/wm/wm_shadow.c`): larger
+and darker when focused, smaller when not, none when maximized or
+fullscreen; every popup -- a Toykit menu, the context menu, the Start
+menu, a tray flyout -- casts a small one. `desktop.shadows` turns them
+all off.
+
+**Why no blur.** Mutter renders one blurred rounded rect per size class
+and 9-slices it; Breeze ships a tile set. Neither blurs per frame, and a
+software compositor with a 7 ms full frame on the laptop cannot afford
+to either. Here the falloff past an edge is a quadratic table and each
+corner a tile of `(radius + corner radius)^2` alphas computed once per
+kind from the signed distance to the arc, mirrored to the four corners.
+A shadow costs a perimeter band of blends and no square roots per
+frame. Under TCG that band was measured at ~12 ms a damage-limited
+frame for a 510x379 window; the laptop figure is the one that matters
+and is what `gui compositor` reports.
+
+**Why it is drawn BEFORE the window, not composited after.** The
+rounded corners are cut by `corners_save()`/`corners_round()`, which
+save what is beneath the corner and blend it back through the arc. With
+the shadow already in the scene, what is beneath is shadow, so the cut
+reveals a shadowed corner rather than bare desktop. Drawing the shadow
+after the window would need a second pass under the arcs.
+
+**Why the focused shadow differs.** Mutter, DWM and macOS all draw the
+active window's shadow larger and darker; it says which window is up
+without reading a title bar, which matters most when the title bars are
+the same colour. Breeze's default strength is 50%, which is the
+focused alpha here; the inactive one is smaller and lighter as Breeze's
+inactive shadow is.
+
+**Why the shadow is part of the damage rect.** A shadow is pixels
+outside the window's rect, so the invariant `docs/gui-guidelines.md`
+calls "the damage invariant" now reaches `wm_shadow_margin()` past the
+frame. Rather than pad at each of the ~30 sites by hand, the sites that
+damage a WINDOW's rect call `wm_damage_window_rect()`, which pads; the
+ones that damage part of a window (a title bar) or something else (the
+drag outline) do not. `window_intersects_damage()` grows the same way,
+so a damage box that touches only a shadow still repaints the window
+that casts it. `tools/damage_sweep.py` ran clean over 43 interactions
+with the shadows on and its positive control still fired.
+
+**Why the radii are line heights.** Breeze's medium shadow is about a
+title bar tall at the default font; a fixed pixel radius would be right
+at exactly one font size (`docs/gui-guidelines.md`, "Size everything
+from the font").

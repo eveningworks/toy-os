@@ -1,6 +1,7 @@
 // See remote_popup.h. A read-only tray flyout over QUERY_REMOTELOG.
 #include "wm_internal.h"
 #include "remote_popup.h"
+#include "wm_shadow.h"
 #include "wm_tray.h"
 #include "wm_overlay.h"
 #include "ui/uui.h"
@@ -170,7 +171,7 @@ void remote_geometry(struct remote_geom *g) {
 void remote_damage(void) {
     struct remote_geom g;
     remote_geometry(&g);
-    wm_damage_rect(g.x, g.y, g.w, g.h);
+    wm_damage_window_rect(g.x, g.y, g.w, g.h);   // plus its shadow (wm_shadow.h)
     redraw_pending = 1;
 }
 
@@ -230,6 +231,7 @@ void remote_draw(int mx, int my) {
     remote_geometry(&g);
 
     uint32_t bg = UTHEME_PANEL_BG, border = UTHEME_BORDER, fg = UTHEME_TEXT;
+    wm_shadow_draw(g.x, g.y, g.w, g.h, 0, WM_SHADOW_POPUP);
     ugfx_fill_rect(wm_surface(), g.x, g.y, g.w, g.h, bg);
 
     char head[64], ip[20];

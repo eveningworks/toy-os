@@ -649,6 +649,23 @@ the same colour.
 Semantic colour is separate from decoration: the close button is red
 because closing is destructive, not because it looks nice.
 
+## Depth: shadows say what is on top
+
+Every window casts a drop shadow onto whatever is beneath it, and the
+focused window's is larger and darker than an inactive one's -- the
+Mutter/DWM/macOS treatment, at Breeze's default strength. Menus and
+flyouts cast a small one. Maximized and fullscreen windows cast none;
+there is nothing beside them to fall on. `desktop.shadows` turns them
+off system-wide.
+
+Three rules that follow from it: a window's damage is its rect PLUS the
+shadow (`wm_damage_window_rect()`, `docs/conventions/gui.md`); anything
+new that draws a floating panel into the compositor's scene draws
+`wm_shadow_draw()` under it first and pads its damage the same way; and
+a shadow is never hand-tinted -- it is black at a per-kind alpha,
+falling off quadratically over a radius measured in line heights
+(`userland/wm/wm_shadow.c`).
+
 ## Background colour belongs to a cell, not to a region
 
 The text console (`kernel/drivers/vga.c`) has no notion of a coloured

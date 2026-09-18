@@ -3,6 +3,7 @@
 // this reads and mutates (windows[], dragging/resizing, etc.) and
 // wm.c's top comment for why that sharing is fine here.
 #include "wm_internal.h"
+#include "wm_shadow.h"   // wm_damage_window_rect(): a window's rect plus its shadow
 #include "start_menu.h"
 #include "start_store.h"
 #include "context_menu.h"
@@ -478,7 +479,7 @@ static void wm_toggle_maximize(int i) {
     // Damage the rect the window is leaving, in both directions: the
     // window is about to move and resize, and nothing else repaints the
     // desktop it uncovers.
-    wm_damage_rect(windows[i].x, windows[i].y, windows[i].w, windows[i].h);
+    wm_damage_window_rect(windows[i].x, windows[i].y, windows[i].w, windows[i].h);
 
     if (windows[i].state == WIN_MAXIMIZED) {
         windows[i].x = windows[i].saved_x; windows[i].y = windows[i].saved_y;
@@ -521,7 +522,7 @@ void wm_set_fullscreen(int i, int on) {
     if (w->fullscreen == on) return;
     int is_client = wm_client_is_client_window(w);
 
-    wm_damage_rect(w->x, w->y, w->w, w->h);
+    wm_damage_window_rect(w->x, w->y, w->w, w->h);
     if (on) {
         w->fs_prev = w->state;
         if (w->state != WIN_MAXIMIZED) {
@@ -549,7 +550,7 @@ void wm_set_fullscreen(int i, int on) {
             else { w->w = w->saved_w; w->h = w->saved_h; }
         }
     }
-    wm_damage_rect(w->x, w->y, w->w, w->h);
+    wm_damage_window_rect(w->x, w->y, w->w, w->h);
     redraw_pending = 1;
 }
 
@@ -755,10 +756,10 @@ int wm_ensure_reachable(int idx) {
 
     if (nx == w->x && ny == w->y) return 0; // already reachable, leave it
 
-    wm_damage_rect(w->x, w->y, w->w, w->h); // vacated
+    wm_damage_window_rect(w->x, w->y, w->w, w->h); // vacated
     w->x = nx;
     w->y = ny;
-    wm_damage_rect(w->x, w->y, w->w, w->h); // arrived
+    wm_damage_window_rect(w->x, w->y, w->w, w->h); // arrived
     return 1;
 }
 
@@ -945,10 +946,10 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
             // RELEASED: the window goes where the outline was.
             if (move_outline_mode && drag_outline_win == dragging) {
                 struct window *w = &windows[dragging];
-                wm_damage_rect(w->x, w->y, w->w, w->h);   // vacated
+                wm_damage_window_rect(w->x, w->y, w->w, w->h);   // vacated
                 w->x = drag_outline_x;
                 w->y = drag_outline_y;
-                wm_damage_rect(w->x, w->y, w->w, w->h);   // arrived
+                wm_damage_window_rect(w->x, w->y, w->w, w->h);   // arrived
                 drag_outline_clear();
             }
             dragging = -1;
@@ -1005,10 +1006,10 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
             // can visibly lag on a slow client. `desktop.resize_mode =
             // outline` is the answer for anyone it bothers.
             if (!resize_outline_mode && (newx != w->x || newy != w->y)) {
-                wm_damage_rect(w->x, w->y, w->w, w->h);
+                wm_damage_window_rect(w->x, w->y, w->w, w->h);
                 w->x = newx;
                 w->y = newy;
-                wm_damage_rect(w->x, w->y, w->w, w->h);
+                wm_damage_window_rect(w->x, w->y, w->w, w->h);
                 redraw_pending = 1;
             }
 
@@ -1045,19 +1046,19 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
                 // the outline, and leaving x behind would put the window
                 // back where the drag started.
                 if (fx != w->x || fy != w->y) {
-                    wm_damage_rect(w->x, w->y, w->w, w->h);
+                    wm_damage_window_rect(w->x, w->y, w->w, w->h);
                     w->x = fx;
                     w->y = fy;
-                    wm_damage_rect(w->x, w->y, w->w, w->h);
+                    wm_damage_window_rect(w->x, w->y, w->w, w->h);
                     redraw_pending = 1;
                 }
                 if (is_client) {
                     resize_ask(resizing, fw - 2, fh - WM_TITLEBAR_H - 2);
                 } else {
-                    wm_damage_rect(w->x, w->y, w->w, w->h);
+                    wm_damage_window_rect(w->x, w->y, w->w, w->h);
                     w->w = fw;
                     w->h = fh;
-                    wm_damage_rect(w->x, w->y, w->w, w->h);
+                    wm_damage_window_rect(w->x, w->y, w->w, w->h);
                     redraw_pending = 1;
                 }
             } else if (is_client) {

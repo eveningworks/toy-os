@@ -30,6 +30,7 @@
 #include "icon_size_config.h"
 #include "window_drag_config.h"
 #include "smooth_scroll_config.h"
+#include "window_effects_config.h"
 #include "shortcuts_config.h"
 #include "target.h"
 #include "storage_config.h"
@@ -734,6 +735,7 @@ void settings_init(void) {
     icon_size_setting_register();
     window_drag_setting_register();
     smooth_scroll_setting_register();
+    window_effects_setting_register();
     shortcuts_setting_register();
     storage_config_setting_register();
     target_setting_register();

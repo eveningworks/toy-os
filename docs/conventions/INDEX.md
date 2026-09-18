@@ -449,6 +449,8 @@ whenever a headline here tells you something you did not already know.
 - **COLOURS COME FROM THE THEME, SIZES FROM ITS METRICS -- neither is
   hardcoded.**
 - **A WORKER THREAD MAY TOUCH NOTHING IN TOYKIT EXCEPT `uapp_post()`**
+- **A WINDOW'S DAMAGE IS ITS OUTER RECT -- THE FRAME PLUS ITS SHADOW --
+  AND `wm_damage_window_rect()` IS HOW IT IS DAMAGED.**
 - **A SCROLL GLIDES AS A DISPLACEMENT OF THE DRAWN CONTENT, NEVER OF THE
   POSITION -- AND A WIDGET ARMS IT, THE HELPER DOES NOT GUESS.**
 - **AN APP LOGS THROUGH `ulog()`/`ulogf()`, not a hand-rolled `logf_`.**

@@ -1,5 +1,6 @@
 // See start_menu.h.
 #include "start_menu.h"
+#include "wm_shadow.h"
 #include "start_store.h"
 #include "wm_tooltip.h"
 #include "wm_overlay.h"
@@ -345,7 +346,7 @@ void start_menu_geometry(int *out_x, int *out_y, int *out_w, int *out_h,
 void start_menu_damage(void) {
     struct sm_layout L;
     layout(&L);
-    wm_damage_rect(L.x, L.y, L.w, L.h);
+    wm_damage_window_rect(L.x, L.y, L.w, L.h);   // plus its shadow (wm_shadow.h)
 }
 
 // --- what the app column holds ----------------------------------------
@@ -711,6 +712,7 @@ void start_menu_draw(int mx, int my) {
     if (!start_menu_open) return;
     struct sm_layout L;
     layout(&L);
+    wm_shadow_draw(L.x, L.y, L.w, L.h, 0, WM_SHADOW_POPUP);
 
     uint32_t bg = UTHEME_PANEL_BG, border = UTHEME_BORDER, fg = UTHEME_TEXT;
     // Hover comes from uui_state_bg(), derived from the row's OWN

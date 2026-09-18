@@ -2081,6 +2081,21 @@ real scanout hardware does. Do not write a pixel assertion for one.
   off it the first time the ground moved (labels drew as lighter boxes,
   the menu bar vanished into the page).
 
+- **A WINDOW'S DAMAGE IS ITS OUTER RECT -- THE FRAME PLUS ITS SHADOW --
+  AND `wm_damage_window_rect()` IS HOW IT IS DAMAGED.** The compositor
+  paints a drop shadow outside every toplevel and popup
+  (`userland/wm/wm_shadow.c`), so a damage call that names a window's
+  own `x, y, w, h` leaves the shadow behind when the window moves,
+  closes, or changes focus (the focused shadow is larger). Every site
+  that damages a window rect goes through `wm_damage_window_rect()`,
+  which pads by `wm_shadow_margin()`; `window_intersects_damage()` tests
+  the padded rect too. A rect that is NOT a window's -- a title bar
+  alone, a drag outline, the taskbar strip -- keeps `wm_damage_rect()`.
+  The WM's own menus and flyouts cast the popup shadow and pad their
+  damage the same way; a Toykit popup window gets both from
+  `render_scene()`. `tools/damage_sweep.py` is the check, and its
+  positive control is the proof the check can see a miss.
+
 - **A SCROLL GLIDES AS A DISPLACEMENT OF THE DRAWN CONTENT, NEVER OF THE
   POSITION -- AND A WIDGET ARMS IT, THE HELPER DOES NOT GUESS.**
   `ui/uui_scrollanim.h`: the widget's `top`/`offset`/`scroll_offset`

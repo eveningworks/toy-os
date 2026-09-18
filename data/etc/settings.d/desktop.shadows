@@ -1,0 +1,4 @@
+Description=Drop shadows under windows and menus
+Order=20
+Choice.on=On
+Choice.off=Off

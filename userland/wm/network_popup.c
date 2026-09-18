@@ -1,6 +1,7 @@
 // See network_popup.h. A read-only tray flyout over QUERY_NETDEV.
 #include "wm_internal.h"
 #include "network_popup.h"
+#include "wm_shadow.h"
 #include "wm_tray.h"
 #include "wm_overlay.h"
 #include "lib/icon_cache.h"
@@ -219,7 +220,7 @@ void network_geometry(struct network_geom *g) {
 void network_damage(void) {
     struct network_geom g;
     network_geometry(&g);
-    wm_damage_rect(g.x, g.y, g.w, g.h);
+    wm_damage_window_rect(g.x, g.y, g.w, g.h);   // plus its shadow (wm_shadow.h)
     redraw_pending = 1;
 }
 
@@ -281,6 +282,7 @@ void network_draw(int mx, int my) {
     network_geometry(&g);
 
     uint32_t bg = UTHEME_PANEL_BG, border = UTHEME_BORDER, fg = UTHEME_TEXT;
+    wm_shadow_draw(g.x, g.y, g.w, g.h, 0, WM_SHADOW_POPUP);
     ugfx_fill_rect(wm_surface(), g.x, g.y, g.w, g.h, bg);
 
     char keys[NET_ROWS][12], vals[NET_ROWS][40];

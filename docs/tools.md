@@ -2090,6 +2090,16 @@ window without going through it will find its layout polls timing out.
   DISTINCT COLOURS in the canvas (468 with, 5 without) rather than by
   sampling a point, since a curve moves and a fixed sample point
   doesn't follow it.
+- **`shadow_test.py`** -- drop shadows (`userland/wm/wm_shadow.c`) and
+  `desktop.shadows`. Places Notepad and Calculator over the flat lower
+  wallpaper band, focuses one, and reads LUMINANCE just below and
+  beside their edges: the focused window darkens the desktop and the
+  darkening fades with distance; the inactive window darkens it less;
+  Notepad's File menu (a popup window) darkens what is below it; with
+  the setting off the pixel beside the edge matches a control pixel
+  60 px out, and that control itself has not moved. Puts the setting
+  back to `on` in a `finally`.
+
 - **`smooth_scroll_test.py`** -- smooth scrolling (`ui/uui_scrollanim.h`)
   in the File Manager's icon grid, and the `desktop.smooth_scroll`
   setting. One wheel notch with the setting ON must draw SEVERAL frames

@@ -2,6 +2,7 @@
 #include "wm_internal.h"
 #include <time.h>
 #include "calendar_popup.h"
+#include "wm_shadow.h"
 #include "wm_tray.h"
 #include "wm_overlay.h"
 #include "ui/uui.h"
@@ -230,7 +231,7 @@ int calendar_hover_at(int mx, int my) {
 void calendar_damage(void) {
     struct calendar_geom g;
     calendar_geometry(&g);
-    wm_damage_rect(g.x, g.y, g.w, g.h);
+    wm_damage_window_rect(g.x, g.y, g.w, g.h);   // plus its shadow (wm_shadow.h)
     redraw_pending = 1;
 }
 
@@ -247,6 +248,7 @@ void calendar_draw(int mx, int my) {
     // here (docs/gui-guidelines.md).
     uint32_t hover_bg = uui_state_bg(bg, UUI_STATE_HOVER);
 
+    wm_shadow_draw(g.x, g.y, g.w, g.h, 0, WM_SHADOW_POPUP);
     ugfx_fill_rect(wm_surface(), g.x, g.y, g.w, g.h, bg);
 
     // --- header: < month year > -------------------------------------

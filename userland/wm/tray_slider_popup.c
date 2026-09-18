@@ -3,6 +3,7 @@
 #include "wm_internal.h"
 #include "wm_overlay.h"
 #include "tray_slider_popup.h"
+#include "wm_shadow.h"
 #include "wm_tray.h"
 #include "ui/uui.h"
 #include "ui/utheme.h"
@@ -88,7 +89,7 @@ static int over_track(const struct tray_slider_geom *g, int mx, int my) {
 // --- state ------------------------------------------------------------
 
 void tray_slider_damage(const struct tray_slider_geom *g) {
-    wm_damage_rect(g->x, g->y, g->w, g->h);
+    wm_damage_window_rect(g->x, g->y, g->w, g->h);   // plus its shadow (wm_shadow.h)
     redraw_pending = 1;
 }
 
@@ -225,6 +226,8 @@ void tray_slider_draw(const struct tray_slider_popup *p, const struct tray_slide
                       const char *icon, int icon_hot) {
     uint32_t bg = UTHEME_PANEL_BG, border = UTHEME_BORDER, fg = UTHEME_TEXT;
     int available = p->unavailable[0] == 0;
+
+    wm_shadow_draw(g->x, g->y, g->w, g->h, 0, WM_SHADOW_POPUP);
 
     ugfx_fill_rect(wm_surface(), g->x, g->y, g->w, g->h, bg);
 

@@ -20,6 +20,7 @@
 #include "wm_tray.h"
 #include "rt/sys.h"   // sys_monotonic_ns(), for the frame timer below
 #include "wm_taskbar.h"
+#include "wm_shadow.h"
 #include "lib/icon_cache.h"
 #include "cursor_theme.h"
 #include "ui/uui.h"
@@ -1321,12 +1322,12 @@ static void compute_window_damage(void) {
         int visible_now = (w->state != WIN_MINIMIZED);
 
         if (w->last_w == 0) {
-            if (visible_now) wm_damage_rect(w->x, w->y, w->w, w->h);
+            if (visible_now) wm_damage_window_rect(w->x, w->y, w->w, w->h);
         } else if (visible_now != w->last_visible) {
-            wm_damage_rect(visible_now ? w->x : w->last_x,
-                            visible_now ? w->y : w->last_y,
-                            visible_now ? w->w : w->last_w,
-                            visible_now ? w->h : w->last_h);
+            wm_damage_window_rect(visible_now ? w->x : w->last_x,
+                                   visible_now ? w->y : w->last_y,
+                                   visible_now ? w->w : w->last_w,
+                                   visible_now ? w->h : w->last_h);
             // draw_taskbar()'s per-button tint depends on whether the
             // FRONTMOST window is visible (see wm.c's bring_to_front()
             // comment on the same point) -- minimizing/restoring it
@@ -1343,7 +1344,7 @@ static void compute_window_damage(void) {
             int uy1_a = w->y + w->h, uy1_b = w->last_y + w->last_h;
             int ux1 = ux1_a > ux1_b ? ux1_a : ux1_b;
             int uy1 = uy1_a > uy1_b ? uy1_a : uy1_b;
-            wm_damage_rect(ux0, uy0, ux1 - ux0, uy1 - uy0);
+            wm_damage_window_rect(ux0, uy0, ux1 - ux0, uy1 - uy0);
         }
 
         w->last_x = w->x; w->last_y = w->y; w->last_w = w->w; w->last_h = w->h;
@@ -1422,8 +1423,11 @@ static void clip_to_window_content(const struct window *w, int has_damage) {
 // at the call site) -- with no damage, every window is "unaffected" by
 // this definition too, which would wrongly skip everyone.
 static int window_intersects_damage(const struct window *w) {
-    return w->x < damage_x1 && w->x + w->w > damage_x0 &&
-           w->y < damage_y1 && w->y + w->h > damage_y0;
+    // Grown by the shadow's reach: a damage box that touches only the
+    // shadow still needs this window to repaint it (wm_shadow.h).
+    int m = wm_shadow_enabled() ? wm_shadow_margin() : 0;
+    return w->x - m < damage_x1 && w->x + w->w + m > damage_x0 &&
+           w->y - m < damage_y1 && w->y + w->h + m > damage_y0;
 }
 
 // Draws the whole scene for this frame. Split out of wm_render_frame()
@@ -1458,6 +1462,20 @@ static void render_scene(int mx, int my, int has_damage) {
     // was harmless before this skip existed (the call still happened,
     // just clipped away) and became a real visible bug once it didn't.
     int focus = wm_focus_index(); // the topmost TOPLEVEL -- a popup's parent stays active
+    // A FRAME WITHOUT ONE CLIENT'S WINDOWS (a self-excluding screenshot)
+    // renders as if that client were not there: focus, and with it the
+    // title-bar colour and the shadow's strength, go to the topmost
+    // window that IS drawn. Spectacle hides itself the same way, and a
+    // capture that showed every other window inactive was the tell.
+    if (wm_render_hidden_pid()) {
+        for (int i = window_count - 1; i >= 0; i--) {
+            if (windows[i].state == WIN_MINIMIZED || windows[i].popup) continue;
+            if (wm_client_is_client_window(&windows[i]) &&
+                windows[i].client_pid == wm_render_hidden_pid()) continue;
+            focus = i;
+            break;
+        }
+    }
     for (int i = 0; i < window_count; i++) {
         if (windows[i].state == WIN_MINIMIZED) continue;
         if (wm_render_hidden_pid() &&
@@ -1472,11 +1490,23 @@ static void render_scene(int mx, int my, int has_damage) {
             // is nothing, and a menu that flashes black before it
             // appears is the flash Wayland's map-on-first-commit avoids.
             if (windows[i].client_gen[windows[i].client_front] == 0) continue;
+            // A menu's small shadow, under it (wm_shadow.h); a fullscreen
+            // window has nothing beside it to shadow.
+            if (windows[i].popup)
+                wm_shadow_draw(windows[i].x, windows[i].y, windows[i].w, windows[i].h, 0,
+                               WM_SHADOW_POPUP);
             clip_to_window_content(&windows[i], has_damage);
             wm_client_draw(&windows[i]);
             apply_scene_clip(has_damage);
             continue;
         }
+        // The shadow FIRST, so corners_save() below sees it beneath the
+        // corners and the rounded cut reveals shadow, not desktop. None
+        // for a maximized window: nothing beside it to fall on.
+        if (windows[i].state != WIN_MAXIMIZED)
+            wm_shadow_draw(windows[i].x, windows[i].y, windows[i].w, windows[i].h,
+                           corner_radius(&windows[i]),
+                           i == focus ? WM_SHADOW_FOCUSED : WM_SHADOW_INACTIVE);
         corners_save(&windows[i]);   // what is beneath, before this window covers it
         draw_window_chrome(&windows[i], i, i == focus);
         if (windows[i].app && windows[i].app->on_draw) {

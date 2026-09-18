@@ -15,6 +15,7 @@
 // produced desktop.c/start_menu.c/context_menu.c. See wm.c's top
 // comment.
 #include "wm_internal.h"
+#include "wm_shadow.h"   // wm_damage_window_rect(): a window's rect plus its shadow
 #include "wm_shortcut.h"
 #include "screensaver_config.h"
 #include "wm_idle.h"
@@ -183,8 +184,8 @@ static int on_window_created(int pid, uint32_t id,
     // is documented in open_app().
     if (window_count > 0) {
         struct window *losing_focus = &windows[window_count - 1];
-        wm_damage_rect(losing_focus->x, losing_focus->y,
-                        losing_focus->w, losing_focus->h);
+        wm_damage_window_rect(losing_focus->x, losing_focus->y,
+                               losing_focus->w, losing_focus->h);
     }
 
     struct window *win = &windows[window_count];
@@ -394,8 +395,8 @@ static int on_dialog_created(int pid, uint32_t id, uint32_t owner_id,
 
     // The owner is losing focus to it, and its title bar says so.
     wm_client_send_focus(&windows[window_count - 1], 0);
-    wm_damage_rect(windows[window_count - 1].x, windows[window_count - 1].y,
-                   windows[window_count - 1].w, windows[window_count - 1].h);
+    wm_damage_window_rect(windows[window_count - 1].x, windows[window_count - 1].y,
+                          windows[window_count - 1].w, windows[window_count - 1].h);
 
     window_count++;
     redraw_pending = 1;
@@ -511,9 +512,9 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     // window of black for the length of the client's repaint. See
     // abi/win_proto.h's configure/ack.
     if (w > 0 && h > 0 && (w != win->client_w || h != win->client_h)) {
-        wm_damage_rect(win->x, win->y, win->w, win->h);   // the rect being left
+        wm_damage_window_rect(win->x, win->y, win->w, win->h);   // the rect being left
         adopt_content_size(win, w, h);
-        wm_damage_rect(win->x, win->y, win->w, win->h);
+        wm_damage_window_rect(win->x, win->y, win->w, win->h);
         redraw_pending = 1;
         // An interactive resize sends its next proposal now: one FRAME
         // in flight at a time, so the client's real repaint sets the
@@ -620,7 +621,7 @@ static void on_window_hints(int pid, uint32_t id, unsigned flags, int min_w, int
 
     // The resize grip appears or disappears with this, so the chrome
     // has to be repainted -- the frame only, not the content.
-    wm_damage_rect(windows[idx].x, windows[idx].y, windows[idx].w, windows[idx].h);
+    wm_damage_window_rect(windows[idx].x, windows[idx].y, windows[idx].w, windows[idx].h);
     redraw_pending = 1;
 }
 
@@ -705,7 +706,7 @@ static int raise_window_at(int i) {
     // unrelated redraws it.
     if (window_count > 0 && i != window_count - 1) {
         struct window *losing = &windows[window_count - 1];
-        wm_damage_rect(losing->x, losing->y, losing->w, losing->h);
+        wm_damage_window_rect(losing->x, losing->y, losing->w, losing->h);
     }
 
     if (windows[i].state == WIN_MINIMIZED) windows[i].state = WIN_NORMAL;
@@ -713,7 +714,7 @@ static int raise_window_at(int i) {
     // bring_to_front() renumbers, so the window is at the top now --
     // damage it there rather than at the index just used.
     struct window *w = &windows[window_count - 1];
-    wm_damage_rect(w->x, w->y, w->w, w->h);
+    wm_damage_window_rect(w->x, w->y, w->w, w->h);
     // A window dragged somewhere unreachable is exactly as useless
     // as no window at all, and this path is the only handle a
     // second launch gives the user -- same reasoning as the taskbar
