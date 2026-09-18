@@ -300,6 +300,15 @@ that control in the same change, and a check that asserts the view
 MOVED. "It responds" is not "it scrolls", and an absence check ("the
 drag changed no selection") passes happily against a dead bar.
 
+**10. A wheel, a trough click or a key GLIDES; a drag does not.** The
+view eases to its destination over `UUI_SCROLL_MS` (~150 ms, ease-out,
+Qt's figure) and the thumb moves with it, so a notch reads as motion
+rather than a cut. The thumb under a held button follows the cursor
+1:1 (rule 2) and never eases. `desktop.smooth_scroll` turns the glide
+off system-wide. The mechanism is `ui/uui_scrollanim.h`; the rule for
+what animates and what does not is `docs/conventions/gui.md`'s "A
+SCROLL GLIDES AS A DISPLACEMENT".
+
 **Looks, as distinct from the nine behaviours above: the SHAPE is the
 app's.** `struct uui_scrollbar_style` carries a radius per part, and the
 default is `UUI_SB_CAPSULE` on both -- Breeze's groove and handle, which

@@ -78,6 +78,16 @@ struct ugfx_surface ugfx_surface_for_pixels(void *pixels, int w, int h);
 void ugfx_set_clip_rect(struct ugfx_surface *s, int x, int y, int w, int h);
 void ugfx_clear_clip_rect(struct ugfx_surface *s);
 
+// A NESTED clip, for a widget that confines part of its own painting
+// (scrolled rows under a header) without losing the clip whoever is
+// drawing it already set: save, INTERSECT with the part, paint,
+// restore. ugfx_set_clip_rect() would replace the outer clip and
+// ugfx_clear_clip_rect() would drop it.
+struct ugfx_clip { int x0, y0, x1, y1, active; };
+void ugfx_clip_save(const struct ugfx_surface *s, struct ugfx_clip *out);
+void ugfx_clip_restore(struct ugfx_surface *s, const struct ugfx_clip *c);
+void ugfx_clip_intersect(struct ugfx_surface *s, int x, int y, int w, int h);
+
 // --- pixels -----------------------------------------------------------
 //
 // The chokepoint every irregular primitive here bottoms out at: bounds,

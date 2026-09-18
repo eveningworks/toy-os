@@ -16,6 +16,7 @@ void uui_listbox_init(struct uui_listbox *lb, int x, int y, int w, int h,
     lb->hovered = -1;
     uui_seek_reset(&lb->seek);
     lb->top = 0;
+    uui_scrollanim_init(&lb->anim);
     lb->row_h = 0; // derive from the font
     lb->bar_w = 8;
     lb->bg = ugfx_rgb(255, 255, 255);
@@ -72,6 +73,9 @@ static void listbox_clamp(struct uui_listbox *lb) {
 void uui_listbox_draw_at(struct ugfx_surface *s, const struct uui_listbox *lb,
                           int ox, int oy) {
     if (!ox && !oy) { uui_listbox_draw(s, lb); return; }
+    // The glide's state must advance on the ORIGINAL, or a copy drawn
+    // every frame would leave it frozen mid-motion, asking for frames.
+    uui_scrollanim_sync((struct uui_scrollanim *)&lb->anim, lb->top * uui_listbox_row_h(lb));
     struct uui_listbox t = *lb;
     t.x -= ox;
     t.y -= oy;
@@ -86,10 +90,21 @@ void uui_listbox_draw(struct ugfx_surface *s, const struct uui_listbox *lb) {
 
     ugfx_fill_rect(s, lb->x, lb->y, lb->w, lb->h, lb->bg);
 
-    for (int i = 0; i < vis; i++) {
-        int idx = lb->top + i;
+    // The glide (ui/uui_scrollanim.h): `top` has moved; the rows are
+    // drawn `disp` px from where it puts them for a few frames, plus the
+    // rows the displacement uncovers, clipped to the box. The animation
+    // state is the draw's own; the list is const to its caller.
+    int disp = uui_scrollanim_sync((struct uui_scrollanim *)&lb->anim, lb->top * rh);
+    int extra = uui_scrollanim_extra_rows(disp, rh);
+    int first = disp > 0 ? lb->top - extra : lb->top;
+    struct ugfx_clip saved;
+    ugfx_clip_save(s, &saved);
+    ugfx_clip_intersect(s, lb->x, lb->y, lb->w, lb->h);
+    for (int i = 0; i < vis + 1 + extra; i++) {
+        int idx = first + i;
+        if (idx < 0) continue;
         if (idx >= lb->count) break;
-        int ry = lb->y + i * rh;
+        int ry = lb->y + (idx - lb->top) * rh + disp;
 
         uint32_t rbg = lb->bg, rfg = lb->fg;
         if (idx == lb->selected) { rbg = lb->sel_bg; rfg = lb->sel_fg; }
@@ -99,10 +114,17 @@ void uui_listbox_draw(struct ugfx_surface *s, const struct uui_listbox *lb) {
         ugfx_draw_string_clipped(s, lb->x + UUI_LISTBOX_PAD_X, ry + (rh - ugfx_char_h()) / 2,
                                   text_w - 8, lb->items[idx], rfg, rbg);
     }
+    ugfx_clip_restore(s, &saved);
 
     if (bar) {
+        // In PIXELS, so the thumb glides with the rows; the row ratios
+        // scaled by rh land it on the pixels the row-unit hit computes.
+        int max_px = (lb->count - vis) * rh;
+        int off_px = (lb->count - vis - lb->top) * rh + disp;
+        if (off_px < 0) off_px = 0;
+        if (off_px > max_px) off_px = max_px;
         uui_scrollbar_draw(s, lb->x + lb->w - bar, lb->y, bar, lb->h,
-                            lb->count, vis, lb->count - vis - lb->top,
+                            lb->count * rh, vis * rh, off_px,
                             lb->track_bg, lb->thumb_bg, 0);
     }
 
@@ -115,7 +137,7 @@ void uui_listbox_draw(struct ugfx_surface *s, const struct uui_listbox *lb) {
     if (lb->focused) {
         int view = lb->selected - lb->top;
         if (lb->selected >= 0 && view >= 0 && view < vis)
-            uui_focus_ring(s, lb->x, lb->y + view * rh, text_w, rh);
+            uui_focus_ring(s, lb->x, lb->y + view * rh + disp, text_w, rh);
         else
             uui_focus_ring(s, lb->x, lb->y, lb->w, lb->h);
     }
@@ -137,7 +159,10 @@ int uui_listbox_hit(const struct uui_listbox *lb, int cx, int cy) {
     int bar = uui_listbox_scrollbar_visible(lb) ? lb->bar_w : 0;
     if (!uui_hit(lb->x, lb->y, lb->w - bar, lb->h, cx, cy)) return -1;
     int rh = uui_listbox_row_h(lb);
-    int idx = lb->top + (cy - lb->y) / rh;
+    // Mid-glide the rows sit `disp` px from their resting place; floor
+    // division, since a row above `top` shows through a positive one.
+    int rel = cy - lb->y - lb->anim.disp;
+    int idx = lb->top + (rel >= 0 ? rel / rh : -((-rel + rh - 1) / rh));
     if (idx < 0 || idx >= lb->count) return -1;
     return idx;
 }
@@ -206,12 +231,14 @@ int uui_listbox_press(struct uui_listbox *lb, int cx, int cy) {
         // cursor instead of snapping its top to it -- the exact bug the
         // ring-3 Notepad shipped by passing 0 here.
         lb->thumb_grab = cy - thumb_y;
+        uui_scrollanim_cancel(&lb->anim); // a drag draws where the thumb is, at once
         return 1;
     }
 
     // Track: page toward the click, keeping one row of overlap, which is
     // what every real toolkit does.
     int page = vis > 1 ? vis - 1 : 1;
+    if (zone == UUI_SB_ABOVE || zone == UUI_SB_BELOW) uui_scrollanim_arm(&lb->anim);
     if (zone == UUI_SB_ABOVE) listbox_set_offset(lb, off + page);
     else if (zone == UUI_SB_BELOW) listbox_set_offset(lb, off - page);
     else return 0;
@@ -233,6 +260,7 @@ void uui_listbox_drag_end(struct uui_listbox *lb) {
 
 int uui_listbox_wheel(struct uui_listbox *lb, int notches) {
     int before = lb->top;
+    uui_scrollanim_arm(&lb->anim);
     // Scrolling must NOT change the selection -- a wheel over a list is
     // navigation, not a choice. The kernel version documents the same.
     lb->top -= notches * 3;
@@ -264,6 +292,7 @@ static void lb_seek_text(void *ctx, int idx, char *out, int cap) {
 
 int uui_listbox_key(struct uui_listbox *lb, int key) {
     if (lb->count <= 0) return 0;
+    uui_scrollanim_arm(&lb->anim); // a key that scrolls the view glides it
     int before = lb->selected;
 
     if (key == KEY_ARROW_UP)        { if (lb->selected > 0) lb->selected--; }

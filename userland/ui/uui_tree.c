@@ -29,6 +29,7 @@ void uui_tree_init(struct uui_tree *t, int x, int y, int w, int h,
     // grab -- the same complaint that widened uui_textview's.
     uui_scrollbar_natural_size(&t->bar_w, 0);
     t->thumb_grab = -1;
+    uui_scrollanim_init(&t->anim);
     t->collapsed = 0; // EXPANDED by default -- see the header
     t->on_toggle = 0;
     t->toggle_ctx = 0;
@@ -295,10 +296,22 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
     // already has the answer.
     int sel_ry = -1;
 
-    for (int r = 0; r < vis; r++) {
-        int node = uui_tree_node_at_row(t, t->top + r);
+    // The glide (ui/uui_scrollanim.h): `top` has moved; the rows are
+    // drawn `disp` px from where it puts them for a few frames, plus the
+    // rows the displacement uncovers, clipped to the widget. The
+    // animation state is the draw's own; the tree is const to its caller.
+    int disp = uui_scrollanim_sync((struct uui_scrollanim *)&t->anim, t->top * rh);
+    int extra = uui_scrollanim_extra_rows(disp, rh);
+    int first = disp > 0 ? t->top - extra : t->top;
+    struct ugfx_clip saved;
+    ugfx_clip_save(s, &saved);
+    ugfx_clip_intersect(s, t->x, t->y, t->w, t->h);
+    for (int i = 0; i < vis + 1 + extra; i++) {
+        int r = first + i;
+        if (r < 0) continue;
+        int node = uui_tree_node_at_row(t, r);
         if (node < 0) break;
-        int ry = t->y + r * rh;
+        int ry = t->y + (r - t->top) * rh + disp;
         int selected = (node == t->selected);
         if (selected) sel_ry = ry;
         if (selected)
@@ -333,10 +346,19 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
                                       selected ? t->sel_fg : t->fg,
                                       selected ? t->sel_bg : t->bg);
     }
+    ugfx_clip_restore(s, &saved);
 
-    if (bar)
+    if (bar) {
+        // In PIXELS, so the thumb glides with the rows: the row ratios
+        // scaled by rh land the thumb on the same pixels the row-unit
+        // hit test computes.
+        int max_px = (total - vis) * rh;
+        int off_px = tree_offset(t) * rh + disp;
+        if (off_px < 0) off_px = 0;
+        if (off_px > max_px) off_px = max_px;
         uui_scrollbar_draw(s, t->x + t->w - bar, t->y, bar, t->h,
-                            total, vis, tree_offset(t), t->track_bg, t->thumb_bg, 0);
+                            total * rh, vis * rh, off_px, t->track_bg, t->thumb_bg, 0);
+    }
 
     // On the selected row, or round the box when it is collapsed away
     // or scrolled off -- see uui_listbox.c for why an indicator that can
@@ -352,7 +374,11 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
 int uui_tree_hit(const struct uui_tree *t, int cx, int cy) {
     if (cx < t->x || cx >= t->x + t->w || cy < t->y || cy >= t->y + t->h) return -1;
     if (uui_tree_scrollbar_visible(t) && cx >= tree_bar_x(t)) return -1;
-    int r = (cy - t->y) / uui_tree_row_h(t);
+    // Mid-glide the rows sit `disp` px from their resting place; floor
+    // division, since a row above `top` shows through a positive one.
+    int rh = uui_tree_row_h(t);
+    int rel = cy - t->y - t->anim.disp;
+    int r = rel >= 0 ? rel / rh : -((-rel + rh - 1) / rh);
     return uui_tree_node_at_row(t, t->top + r);
 }
 
@@ -386,6 +412,7 @@ int uui_tree_click(struct uui_tree *t, int cx, int cy) {
 
 int uui_tree_wheel(struct uui_tree *t, int notches) {
     int before = t->top;
+    uui_scrollanim_arm(&t->anim);
     t->top -= notches;
     tree_clamp(t);
     return t->top != before;
@@ -415,9 +442,11 @@ int uui_tree_press(struct uui_tree *t, int cx, int cy) {
             // instead of snapping its top to it -- the bug the ring-3
             // Notepad shipped by passing 0 here.
             t->thumb_grab = cy - thumb_y;
+            uui_scrollanim_cancel(&t->anim); // a drag draws where the thumb is, at once
             return 1;
         }
         int page = vis > 1 ? vis - 1 : 1;
+        if (zone == UUI_SB_ABOVE || zone == UUI_SB_BELOW) uui_scrollanim_arm(&t->anim);
         if (zone == UUI_SB_ABOVE) tree_set_offset(t, off + page);
         else if (zone == UUI_SB_BELOW) tree_set_offset(t, off - page);
         return 1;
@@ -455,6 +484,7 @@ static void reveal(struct uui_tree *t) {
 
 int uui_tree_key(struct uui_tree *t, int key) {
     if (t->count <= 0) return 0;
+    uui_scrollanim_arm(&t->anim); // a key that scrolls the view glides it
     int row = row_of_node(t, t->selected);
     int total = uui_tree_visible_count(t);
 

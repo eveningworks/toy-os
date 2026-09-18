@@ -6,6 +6,7 @@
 #include "ui/uui_primitives.h"
 #include "ui/uui_scrollbar.h"
 #include "ui/uui_seek.h"
+#include "ui/uui_scrollanim.h"
 
 // --- table: rows in columns, with a header ---------------------------
 //
@@ -166,6 +167,9 @@ struct uui_table {
     // what made a ring-3 scrollbar grabbable only by its top edge once
     // already -- see docs/gui-guidelines.md's scrollbar section.
     int thumb_grab;
+    // The glide (ui/uui_scrollanim.h): `top` jumps, the rows are drawn
+    // displaced for a few frames. OWNED.
+    struct uui_scrollanim anim;
 
     uint32_t bg, fg, sel_bg, sel_fg;
     uint32_t head_bg, head_fg, grid;

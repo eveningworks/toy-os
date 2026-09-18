@@ -5,6 +5,7 @@
 #include "ui/ugfx.h"
 #include "ui/uui_primitives.h"
 #include "ui/uui_scrollbar.h"
+#include "ui/uui_scrollanim.h"
 
 // A TREE: rows at a depth, with collapsible parents.
 //
@@ -73,6 +74,7 @@ struct uui_tree {
     int row_h;       // 0 = derive from the font
     int bar_w;
     int thumb_grab;  // -1 when no drag is in progress; OWNED
+    struct uui_scrollanim anim; // the glide (ui/uui_scrollanim.h); OWNED
     // A drop target's state (ui/uui_widget.h's drag ops): the NODE a
     // drag is hovering, -1 for none, drawn as an accent outline; and
     // the node the last drop landed on, for uui_tree_drop_id(). OWNED.

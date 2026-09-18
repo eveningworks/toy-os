@@ -588,7 +588,7 @@ The bar is "does this fix a rederive-from-scratch cost".
 | Is it INTERMITTENT, and at what rate? | `boot_rate.py` (bare metal), `flake_hunt.py` (VM) |
 | Test runners | `boot_smoke_test.py`, `ktest_run.py`, `usertest_run.py`, `faulttest_run.py`, `gui_regress.py`, `damage_sweep.py`, `damage_hunt.py` |
 | Diagnose | `panic_resolve.py` (**never hand-roll `nm`**), `acpi_dump.py`, `aml_walk.py`, `QMPSession.hmp()` (**the one oracle the guest cannot fake**), `corrupt_diff.py`, `window_resize_probe.py`, `pixel_probe.py`, `screenshot_diff.py`, `iso_guard.py` |
-| Check an implementation against a FOREIGN one | `libc_diff.py`, `uimg_codec_hostcheck.py`, `usnd_hostcheck.py`, `hash_hostcheck.py`, `divti3_hostcheck.py`, `regex_hostcheck.py`, `umd_hostcheck.py`, `ugfx_text_hostcheck.py`, `utext_hostcheck.py`, `term_scheme_hostcheck.py` |
+| Check an implementation against a FOREIGN one | `libc_diff.py`, `uimg_codec_hostcheck.py`, `usnd_hostcheck.py`, `hash_hostcheck.py`, `divti3_hostcheck.py`, `regex_hostcheck.py`, `umd_hostcheck.py`, `ugfx_text_hostcheck.py`, `utext_hostcheck.py`, `utween_hostcheck.py`, `term_scheme_hostcheck.py` |
 | Measure | `idle_cpu.py` (quote DIFFERENCES only), `loc.py`, `dup_scan.py` (copy-paste; a REPORT, never a gate), `ping_rtt.py`, `latency_under_io.py`, `frame_balance.py` |
 | Disk images, from the host | `seed_disk.py`, `install_grub.py` (also `boot_medium()`), `tfs3_writer.py`, `mkpart_test.py`, `fetch_wad.py` |
 | Generated data | `gen_version.sh`/`set_version.sh`, `genttf.py`, `gen_kbs.py`, `gen_cursors.py`, `gen_icons.py`, `gen_imgdata.py`, `gen_audio.py`, `gen_music.py`, `gen_mp3_tables.py`, `gen_signames.py`, `genrelocs.py`, `gen_syms.py`, `drivers_conf.py`, `gen_modalias.py`, `gen_decisions_index.py`, `gen_commands_index.py`, `gen_next_up.py`, `fetch_ca_bundle.py` |
@@ -633,7 +633,7 @@ runners themselves; `--list` on either runner is the live answer.
 `screen_surface_test.py`, `screensaver_test.py`, `screenshot_test.py`,
 `scrollbar_test.py`,
 `settings_test.py`, `shortcut_test.py`, `single_instance_test.py`,
-`start_menu_test.py`,
+`smooth_scroll_test.py`, `start_menu_test.py`,
 `taskmgr_test.py`, `thumbcache_test.py`, `tray_press_test.py`,
 `uapp_test.py`, `uiclient_test.py`, `uidemo_test.py`, `uterm_test.py`,
 `vm.py`, `volume_test.py`, `wallpaper_mode_test.py`, `winclient_test.py`,
@@ -664,8 +664,8 @@ runners themselves; `--list` on either runner is the live answer.
 `terminal_probe.py`, `tfs3_v1_test.py`, `ugfx_text_hostcheck.py`,
 `uimg_codec_hostcheck.py`, `uimg_hostcheck.py`, `umd_hostcheck.py`,
 `usb_audio_test.py`, `usb_test.py`, `usnd_hostcheck.py`,
-`utext_hostcheck.py`, `virtio_boot_test.py`, `virtio_gpu_test.py`,
-`virtio_input_test.py`
+`utext_hostcheck.py`, `utween_hostcheck.py`, `virtio_boot_test.py`,
+`virtio_gpu_test.py`, `virtio_input_test.py`
 
 *Libraries, generators and drivers -- named by no runner:*
 

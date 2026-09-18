@@ -2081,6 +2081,31 @@ real scanout hardware does. Do not write a pixel assertion for one.
   off it the first time the ground moved (labels drew as lighter boxes,
   the menu bar vanished into the page).
 
+- **A SCROLL GLIDES AS A DISPLACEMENT OF THE DRAWN CONTENT, NEVER OF THE
+  POSITION -- AND A WIDGET ARMS IT, THE HELPER DOES NOT GUESS.**
+  `ui/uui_scrollanim.h`: the widget's `top`/`offset`/`scroll_offset`
+  jumps exactly as before, so every reader, hit-test and test tool sees
+  the same numbers; only the draw adds `disp` to its content y for
+  ~150 ms (`UUI_SCROLL_MS`), eased by `lib/utween.h`, and folds the same
+  `disp` into a PIXEL-unit scrollbar so the thumb moves with the rows.
+  Three calls: `arm()` in the wheel, trough-page and key paths;
+  `cancel()` in a thumb drag (the thumb follows the cursor 1:1,
+  gui-guidelines rule 2) and on a data reload; `sync(pos_px)` at the top
+  of draw. Arming is explicit because a change that is not the user's
+  (a reload that shortens a list, a resize that re-clamps) must not
+  glide -- it reads as the content lurching on its own. The widget
+  draws the rows the displacement uncovers (`uui_scrollanim_extra_rows`)
+  under `ugfx_clip_intersect()` of its own rect, so a displaced row
+  cannot paint over a header or a neighbour, and hit-tests subtract
+  `anim.disp` so a click mid-glide lands on what is on screen. Frames
+  come from `uui_anim_request()` (`ui/uui_anim.h`): uapp's pump waits
+  one frame instead of its long park while one is pending, so a process
+  wakes per frame only while something moves. `desktop.smooth_scroll`
+  turns it off; the helper reads the setting at each `arm()`, one
+  syscall a notch. `utext` gates the whole thing behind `animate`,
+  because `/bin/edit` draws once per keystroke and a displaced frame
+  there would sit until the next key.
+
 - **AN APP LOGS THROUGH `ulog()`/`ulogf()`, not a hand-rolled `logf_`.**
   `userland/ui/ulog.h` -- `ulog(s)` for a pre-formatted line, `ulogf(fmt,
   ...)` for a formatted one. Two calls on purpose: `--gc-sections` drops

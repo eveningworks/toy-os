@@ -655,7 +655,12 @@ static void draw_scrollbar(struct ugfx_surface *s, int tx, int ty, int tw, int t
 
     int bx, by, bw, bh;
     scrollbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
-    uui_scrollbar_draw(s, bx, by, bw, bh, total, visible, g_text.scroll_offset,
+    // In PIXELS with the glide folded in (utext_bar_units), so the thumb
+    // moves with the lines; hit and drag stay in lines, which the same
+    // ratios land on the same pixels.
+    int total_px, vis_px, off_px;
+    utext_bar_units(&g_text, total, visible, &total_px, &vis_px, &off_px);
+    uui_scrollbar_draw(s, bx, by, bw, bh, total_px, vis_px, off_px,
                         UTHEME_BUTTON_BG, UTHEME_OUTLINE,
                         NP_SCROLLBAR_FLAGS);
     ugfx_set_font(was_doc);
@@ -1286,10 +1291,10 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
             scrollbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
             // The widget's own drag mapping -- so the thumb tracks
             // the cursor the same way it is drawn, arrows included.
-            g_text.scroll_offset =
+            utext_scroll_set(&g_text,
                 uui_scrollbar_offset_for_drag(by, bh, total, visible, y,
                                                g_scrollbar_grab,
-                                               bw, NP_SCROLLBAR_FLAGS);
+                                               bw, NP_SCROLLBAR_FLAGS));
             uapp_redraw(a);
         }
     } else if (g_hbar_drag) {
@@ -1343,6 +1348,7 @@ static void on_clipboard_cb(struct uapp *a, int op, unsigned serial) {
 static void on_open_cb(struct uapp *a) {
     g_app = a;
     utext_init_buf(&g_text, NULL, 0);
+    g_text.animate = 1; // Toykit redraws per frame while a scroll glides
     doc_reserve(0);              // the empty document still needs somewhere to live
     utext_init_buf(&g_text, g_doc, g_doc_cap);
     g_path[0] = '\0';

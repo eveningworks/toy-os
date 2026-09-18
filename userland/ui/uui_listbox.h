@@ -6,6 +6,7 @@
 #include "ui/uui_primitives.h"
 #include "ui/uui_scrollbar.h"
 #include "ui/uui_seek.h"
+#include "ui/uui_scrollanim.h"
 
 
 // Split out of the single uwidgets.c/.h this used to be, one file per
@@ -31,6 +32,7 @@ struct uui_listbox {
     // the offset WITHIN the thumb that was grabbed. OWNED -- driven by
     // uui_listbox_press()/_drag()/_drag_end().
     int thumb_grab;
+    struct uui_scrollanim anim; // the glide (ui/uui_scrollanim.h); OWNED
     uint32_t bg, fg, sel_bg, sel_fg, track_bg, thumb_bg;
 
     // TYPE-AHEAD state, OWNED -- driven by uui_listbox_key().

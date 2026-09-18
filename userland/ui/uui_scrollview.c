@@ -54,7 +54,11 @@ static void sb_units(const struct uui_scrollview *sv,
                      int *total, int *vis, int *off) {
     *total = sv->content_h > 0 ? sv->content_h : 1;
     *vis = sv->h;
-    *off = max_offset(sv) - sv->offset;   // the bar counts from the BOTTOM
+    // The bar counts from the BOTTOM; the glide's displacement is folded
+    // in so the thumb moves with the content rather than ahead of it.
+    *off = max_offset(sv) - sv->offset + sv->anim_disp;
+    if (*off < 0) *off = 0;
+    if (*off > max_offset(sv)) *off = max_offset(sv);
 }
 
 static int clamp_offset(struct uui_scrollview *sv) {
@@ -104,7 +108,7 @@ static void place_content(struct uui_scrollview *sv) {
     // what makes this a scroll view rather than a squashed one -- the
     // children are laid out at the size they asked for and the viewport
     // shows a window onto them.
-    uui_layout_run(sv->content, sv->x, sv->y - sv->offset, inner_w, sv->content_h);
+    uui_layout_run(sv->content, sv->x, sv->y - sv->offset + sv->anim_disp, inner_w, sv->content_h);
     sv->seen_items = sv->content->items;
     sv->seen_count = sv->content->count;
 }
@@ -113,6 +117,8 @@ void uui_scrollview_init(struct uui_scrollview *sv, struct uui_layout *content) 
     sv->x = sv->y = sv->w = sv->h = 0;
     sv->content = content;
     sv->offset = 0;
+    uui_scrollanim_init(&sv->anim);
+    sv->anim_disp = 0;
     sv->content_h = 0;
     sv->thumb_grab = -1;
     sv->seen_items = 0;
@@ -213,6 +219,11 @@ static void sv_set_geometry(void *w, int x, int y, int width, int height) {
 // has children, or uui_layout would paint its items twice.
 static void sv_children_begin(struct ugfx_surface *s, void *w) {
     struct uui_scrollview *sv = w;
+    // The glide: while the displacement moves, the children are placed
+    // at the displaced y each frame, so their hit rects follow what is
+    // drawn.
+    int disp = uui_scrollanim_sync(&sv->anim, sv->offset);
+    if (disp != sv->anim_disp) { sv->anim_disp = disp; place_content(sv); }
     ugfx_fill_rect(s, sv->x, sv->y, sv->w, sv->h, sv->bg);
     // A non-positive w/h would set an EMPTY clip rather than none
     // (ugfx.h), which is exactly right for a zero-sized viewport.
@@ -282,6 +293,7 @@ static int bar_press(struct uui_scrollview *sv, int cx, int cy) {
         // instead of snapping its top to it -- the bug the ring-3
         // Notepad shipped by passing 0 here.
         sv->thumb_grab = cy - ty;
+        uui_scrollanim_cancel(&sv->anim); // a drag draws where the thumb is, at once
         return 1;
     }
 
@@ -290,6 +302,7 @@ static int bar_press(struct uui_scrollview *sv, int cx, int cy) {
     // like everything else the bar is driven with (sb_units()).
     int row = row_px(sv);
     int page = sv->h > row ? sv->h - row : row;
+    if (zone == UUI_SB_ABOVE || zone == UUI_SB_BELOW) uui_scrollanim_arm(&sv->anim);
     if (zone == UUI_SB_ABOVE) return uui_scrollview_set_offset(sv, sv->offset - page);
     if (zone == UUI_SB_BELOW) return uui_scrollview_set_offset(sv, sv->offset + page);
     return 0;
@@ -329,7 +342,8 @@ static int sv_wheel(void *w, int notches) {
     struct uui_scrollview *sv = w;
     if (!uui_scrollview_scrollable(sv)) return 0;
     // Three rows a notch, matching uui_listbox so a wheel feels the same
-    // wherever it is used.
+    // wherever it is used -- and it glides (uui_scrollanim.h).
+    uui_scrollanim_arm(&sv->anim);
     return uui_scrollview_set_offset(sv, sv->offset - notches * 3 * row_px(sv));
 }
 

@@ -7,6 +7,7 @@
 #include "syscall_abi.h"  // struct sys_dirent
 #include "lib/dirsort.h"  // enum dirsort_key, dirsort_cmp()
 #include "rubberband.h"   // the icons view's drag selection
+#include "ui/uui_scrollanim.h"
 
 // --- fileview: a directory, as a widget -------------------------------
 //
@@ -165,6 +166,7 @@ struct uui_fileview {
 
     // --- icons mode only (see enum uui_fileview_mode) ---------------
     int icon_scroll;         // PIXELS scrolled off the grid's top; OWNED
+    struct uui_scrollanim ic_anim; // the glide (ui/uui_scrollanim.h); OWNED
     // A drag from EMPTY SPACE sweeps a rubber band that MARKS what it
     // covers, in every view (rubberband.h's second caller); a plain
     // click there clears the selection, which is the band's own rule.

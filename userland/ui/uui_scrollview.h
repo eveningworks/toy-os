@@ -3,6 +3,7 @@
 
 #include "ui/uui_widget.h"
 #include "ui/uui_layout.h"
+#include "ui/uui_scrollanim.h"
 #include "ui/uui_route.h"
 
 // uui_scrollview -- a viewport onto a layout that is taller than it.
@@ -70,6 +71,10 @@ struct uui_scrollview {
 
     // --- state the widget owns --------------------------------------
     int offset;      // pixels scrolled down; 0 = top. Clamped, always.
+    // The glide (ui/uui_scrollanim.h): `offset` jumps, the content is
+    // drawn `anim_disp` px from where it says for a few frames.
+    struct uui_scrollanim anim;
+    int anim_disp;
     int content_h;   // the content's natural height, measured at layout
     int thumb_grab;
     // What the content looked like when it was last positioned. Compared

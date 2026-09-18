@@ -44,6 +44,7 @@ void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
     t->selected = -1;
     t->hovered = -1;
     t->top = 0;
+    uui_scrollanim_init(&t->anim);
     t->row_h = 0; // derive from the font
     // THE TOOLKIT'S OWN DEFAULT, not a pixel count. uui_scrollbar.h
     // asks every widget to take its width from there so the bar tracks
@@ -372,14 +373,27 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
     if (hh > 0) table_draw_header(s, t, hh);
 
     // --- rows ---
-    for (int i = 0; i < vis; i++) {
-        if (t->top + i >= t->row_count) break;
+    // The glide (ui/uui_scrollanim.h): `top` has already moved, and the
+    // rows are drawn `disp` px from where it puts them for a few frames,
+    // plus the rows the displacement uncovers, clipped to the rows area
+    // so a displaced row cannot paint over the header. The animation
+    // state is the draw's own; the table is const to its caller.
+    int disp = uui_scrollanim_sync((struct uui_scrollanim *)&t->anim, t->top * rh);
+    int extra = uui_scrollanim_extra_rows(disp, rh);
+    int first = disp > 0 ? t->top - extra : t->top;
+    struct ugfx_clip saved;
+    ugfx_clip_save(s, &saved);
+    ugfx_clip_intersect(s, t->x, t->y + hh, t->w, t->h - hh);
+    for (int i = 0; i < vis + 1 + extra; i++) {
+        int view = first + i;
+        if (view < 0) continue;
+        if (view >= t->row_count) break;
         // The app's row for this SCREEN position. `selected` and
         // `hovered` are app rows too, so the comparisons below are
         // apples to apples and a selection survives a re-sort.
-        int idx = uui_table_source_row(t, t->top + i);
+        int idx = uui_table_source_row(t, view);
         if (idx < 0) break;
-        int ry = t->y + hh + i * rh;
+        int ry = t->y + hh + (view - t->top) * rh + disp;
 
         uint32_t rbg = uui_table_c_bg(t), rfg = uui_table_c_fg(t);
         uint32_t tint = t->tint ? t->tint(t->ctx, idx) : 0;
@@ -395,13 +409,20 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
         if (rbg != uui_table_c_bg(t)) ugfx_fill_rect(s, t->x, ry, t->w - bar, rh, rbg);
         for (int c = 0; c < t->col_count; c++) draw_cell(s, t, c, idx, ry, rfg, rbg);
     }
+    ugfx_clip_restore(s, &saved);
 
     if (bar) {
         // Beside the ROWS, not the header -- a bar that started at the
         // top would let the thumb sit next to column titles it cannot
-        // scroll.
+        // scroll. IN PIXELS, so the thumb glides with the rows: the
+        // ratios are the row ones scaled by rh, which lands the thumb
+        // on the same pixels the row-unit hit test computes.
+        int max_px = (t->row_count - vis) * rh;
+        int off_px = (t->row_count - vis - t->top) * rh + disp;
+        if (off_px < 0) off_px = 0;
+        if (off_px > max_px) off_px = max_px;
         uui_scrollbar_draw(s, t->x + t->w - bar, t->y + hh, bar, t->h - hh,
-                            t->row_count, vis, t->row_count - vis - t->top,
+                            t->row_count * rh, vis * rh, off_px,
                             uui_table_c_track_bg(t), uui_table_c_thumb_bg(t), 0);
     }
 
@@ -415,7 +436,7 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
         int view = uui_table_view_row(t, t->selected);
         int i = view - t->top;
         if (view >= 0 && i >= 0 && i < vis)
-            uui_focus_ring(s, t->x, t->y + hh + i * rh, t->w - bar, rh);
+            uui_focus_ring(s, t->x, t->y + hh + i * rh + disp, t->w - bar, rh);
         else
             uui_focus_ring(s, t->x, t->y, t->w, t->h);
     }
@@ -459,7 +480,11 @@ int uui_table_hit(const struct uui_table *t, int cx, int cy) {
     int hh = uui_table_header_h(t);
     if (!uui_hit(t->x, t->y + hh, t->w - bar, t->h - hh, cx, cy)) return -1;
     int rh = uui_table_row_h(t);
-    int view = t->top + (cy - t->y - hh) / rh;
+    // Mid-glide the rows sit `disp` px from their resting place, and a
+    // hit must land on what is drawn. Floor division, since a row above
+    // `top` shows through a positive displacement.
+    int rel = cy - t->y - hh - t->anim.disp;
+    int view = t->top + (rel >= 0 ? rel / rh : -((-rel + rh - 1) / rh));
     if (view < 0 || view >= t->row_count) return -1;
     // The APP's row, not the screen position -- every public row index
     // on this widget means the same thing (uui_table.h).
@@ -536,10 +561,12 @@ int uui_table_press(struct uui_table *t, int cx, int cy) {
         // The offset WITHIN the thumb, so it tracks the cursor rather
         // than snapping its top to it.
         t->thumb_grab = cy - thumb_y;
+        uui_scrollanim_cancel(&t->anim); // a drag draws where the thumb is, at once
         return 1;
     }
 
     int page = vis > 1 ? vis - 1 : 1;
+    if (zone == UUI_SB_ABOVE || zone == UUI_SB_BELOW) uui_scrollanim_arm(&t->anim);
     if (zone == UUI_SB_ABOVE) table_set_offset(t, off + page);
     else if (zone == UUI_SB_BELOW) table_set_offset(t, off - page);
     else return 0;
@@ -562,6 +589,7 @@ void uui_table_drag_end(struct uui_table *t) {
 
 int uui_table_wheel(struct uui_table *t, int notches) {
     int before = t->top;
+    uui_scrollanim_arm(&t->anim);
     // Scrolling must NOT change the selection -- a wheel over a table is
     // navigation, not a choice.
     t->top -= notches * 3;
@@ -616,6 +644,7 @@ static int table_seek(struct uui_table *t, int key) {
 
 int uui_table_key(struct uui_table *t, int key) {
     if (t->row_count <= 0) return 0;
+    uui_scrollanim_arm(&t->anim); // a key that scrolls the view glides it
     int before = t->selected;
     int vis = uui_table_visible_rows(t);
 

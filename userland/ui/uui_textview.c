@@ -19,6 +19,7 @@ void uui_textview_init(struct uui_textview *tv, int x, int y, int w, int h,
                         uint32_t thumb_bg, uint32_t sel_bg,
                         char *buf, int cap) {
     utext_init_buf(&tv->tb, buf, cap);
+    tv->tb.animate = 1; // a Toykit app redraws per frame (ui/uui_anim.h)
     tv->x = x; tv->y = y; tv->w = w; tv->h = h;
     tv->policy = UUI_TEXTVIEW_AUTO;
     tv->body = UUI_TEXTVIEW_BODY_APP;
@@ -110,8 +111,15 @@ void uui_textview_draw(struct ugfx_surface *s, struct uui_textview *tv) {
     if (!uui_textview_scrollbar_visible(tv)) return;
     int total, visible;
     metrics(tv, &total, &visible);
+    // In PIXELS, glide folded in, so the thumb moves with the lines; the
+    // line ratios scaled by the line height land it on the pixels the
+    // line-unit hit test computes.
+    int total_px, vis_px, off_px;
+    was = grid_font();
+    utext_bar_units(&tv->tb, total, visible, &total_px, &vis_px, &off_px);
+    ugfx_set_font(was);
     uui_scrollbar_draw(s, tv->x + tw, tv->y, tv->bar_w, tv->h,
-                       total, visible, tv->tb.scroll_offset,
+                       total_px, vis_px, off_px,
                        tv->track_bg, tv->thumb_bg, tv->bar_flags);
 }
 
@@ -189,10 +197,10 @@ void uui_textview_drag(struct uui_textview *tv, int cx, int cy) {
     metrics(tv, &total, &visible);
 
     if (tv->thumb_grab >= 0) {
-        tv->tb.scroll_offset =
+        utext_scroll_set(&tv->tb,
             uui_scrollbar_offset_for_drag(tv->y, tv->h, total, visible,
                                           cy, tv->thumb_grab,
-                                          tv->bar_w, tv->bar_flags);
+                                          tv->bar_w, tv->bar_flags));
         return;
     }
 

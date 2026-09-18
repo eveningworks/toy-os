@@ -32,6 +32,8 @@ void utext_init_buf(struct utext *t, char *buf, int cap) {
     t->wrap = UTEXT_WRAP_WORD;
     t->hscroll = 0;
     t->scroll_offset = 0;
+    t->animate = 0;
+    uui_scrollanim_init(&t->anim);
     t->ed.cursor = 0;
     t->ed.sel_anchor = 0;
     t->ed.sel_active = 0;
@@ -238,6 +240,7 @@ static int clamp_scroll(struct utext *t, int total_lines, int visible_rows) {
 }
 
 void utext_scroll(struct utext *t, int delta_lines) {
+    if (t->animate) uui_scrollanim_arm(&t->anim);
     t->scroll_offset += delta_lines;
     if (t->scroll_offset < 0) t->scroll_offset = 0;
     // The upper clamp needs a width, so it happens in the next measure.
@@ -245,8 +248,32 @@ void utext_scroll(struct utext *t, int delta_lines) {
 
 // A number no document can exceed: one line per character is the worst
 // case, so this cannot fall short and is clamped on the next measure.
-void utext_scroll_top(struct utext *t)    { t->scroll_offset = t->count + 1; }
-void utext_scroll_bottom(struct utext *t) { t->scroll_offset = 0; }
+void utext_scroll_top(struct utext *t)    { utext_scroll_set(t, t->count + 1); }
+void utext_scroll_bottom(struct utext *t) { utext_scroll_set(t, 0); }
+
+void utext_scroll_set(struct utext *t, int offset) {
+    uui_scrollanim_cancel(&t->anim);
+    t->scroll_offset = offset < 0 ? 0 : offset;
+}
+
+int utext_anim_disp(const struct utext *t) { return t->anim.disp; }
+
+void utext_bar_units(const struct utext *t, int total_lines, int visible_rows,
+                     int *out_total, int *out_visible, int *out_offset) {
+    int ch = ugfx_char_h();
+    if (ch <= 0) ch = 1;
+    int max_px = (total_lines - visible_rows) * ch;
+    if (max_px < 0) max_px = 0;
+    // offset counts lines from the BOTTOM; content displaced DOWN
+    // (disp > 0) is content that has not finished scrolling down, so the
+    // thumb is still that much higher.
+    int off_px = t->scroll_offset * ch + t->anim.disp;
+    if (off_px < 0) off_px = 0;
+    if (off_px > max_px) off_px = max_px;
+    *out_total = total_lines * ch;
+    *out_visible = visible_rows * ch;
+    *out_offset = off_px;
+}
 
 void utext_metrics(struct utext *t, int w, int h,
                     int *out_total_lines, int *out_visible_rows) {
@@ -302,15 +329,29 @@ void utext_draw(struct utext *t, struct ugfx_surface *s,
     int has_sel = utext_sel_present(t);
     if (has_sel) utext_sel_range(t, &sel_start, &sel_end);
 
+    // THE GLIDE: the lines are drawn `disp` px from where first_line puts
+    // them for a few frames after a scroll (ui/uui_scrollanim.h), plus
+    // the lines the displacement uncovers above or below, clipped to the
+    // box. Off (disp stays 0) unless the host set `animate`.
+    int disp = uui_scrollanim_sync(&t->anim, first_line * char_h);
+    if (!t->animate) disp = 0;
+    int extra = uui_scrollanim_extra_rows(disp, char_h);
+    int start_line = disp > 0 ? first_line - extra : first_line;
+    if (start_line < 0) start_line = 0;
+    int rows_to_draw = visible_rows + 1 + extra;
+    struct ugfx_clip saved;
+    ugfx_clip_save(s, &saved);
+    ugfx_clip_intersect(s, x, y, w, h);
+
     // ROW BY ROW, from the first VISIBLE line -- which is why a
     // document of any size costs a screenful of work per frame rather
     // than a documentful.
-    int i = line_begin(t, max_cols, first_line);
-    for (int row = 0; row < visible_rows && i <= t->count; row++) {
+    int i = line_begin(t, max_cols, start_line);
+    for (int row = 0; row < rows_to_draw && i <= t->count; row++) {
         int draw_end, next;
         line_span(t, max_cols, i, &draw_end, &next);
 
-        int ry = y + row * char_h;
+        int ry = y + (start_line - first_line + row) * char_h + disp;
         for (int k = i; k < draw_end; k++) {
             int col = k - i - t->hscroll;   // hscroll is 0 while wrapping
             if (col < 0) continue;
@@ -334,6 +375,7 @@ void utext_draw(struct utext *t, struct ugfx_surface *s,
         if (last_span(t, draw_end, next) || next <= i) break;
         i = next;
     }
+    ugfx_clip_restore(s, &saved);
 
     if (show_cursor) {
         int cl, cc;
@@ -342,7 +384,7 @@ void utext_draw(struct utext *t, struct ugfx_surface *s,
         if (cl >= first_line && cl - first_line < visible_rows &&
             cc >= 0 && cc <= max_cols)
             // text-measure-ok: same grid contract
-        ugfx_fill_rect(s, x + cc * char_w, y + (cl - first_line) * char_h,
+        ugfx_fill_rect(s, x + cc * char_w, y + (cl - first_line) * char_h + disp,
                             CURSOR_BAR_W, char_h, fg);
     }
 }

@@ -73,6 +73,10 @@ TOOLS = [
     # are the oracle -- so it has no `needs` gate at all.
     ("hash_host",   "hash_hostcheck.py",       "crc32/sha256 against hashlib and zlib", False,
      None,                                                                                   False),
+    # The easing tween's invariants, on the host: it takes its clock as
+    # an argument, so nothing here needs a guest.
+    ("utween_host", "utween_hostcheck.py",     "the easing tween lands, is monotonic, eases out", False,
+     None,                                                                                   False),
     # The two image harnesses, both host-only. The codec one runs the QOI
     # and PNG codecs BOTH WAYS against Pillow and zlib; the other is the
     # JPEG decoder against libjpeg.

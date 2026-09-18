@@ -1,5 +1,6 @@
 // See ui/uapp.h for what this is and why.
 #include "rt/sys.h"   // TWP messages, sys_win_request()
+#include "ui/uui_anim.h" // a frame while something animates
 #include "kpath.h"    // k_path_dirname/_basename -- a drag from another window
 #include "ui/uapp.h"
 #include <string.h>
@@ -1752,8 +1753,14 @@ static int uapp_pump(struct uapp *a, int block) {
 
     if (block) {
         while (!uchan_client_pending(&g_wmchan) && g_post_head == g_post_tail) {
-            uchan_client_wait(&g_wmchan, UAPP_WAIT_MS);
+            // ONE FRAME while something animates (ui/uui_anim.h), the
+            // long park otherwise -- and the frame's wake is not "a whole
+            // wait with nobody there", so the liveness check below stays
+            // on the long one.
+            int animating = uui_anim_pending();
+            uchan_client_wait(&g_wmchan, animating ? UUI_ANIM_FRAME_MS : UAPP_WAIT_MS);
             if (uchan_client_pending(&g_wmchan) || g_post_head != g_post_tail) break;
+            if (animating) break;
             // Nothing arrived in a whole wait: is anyone still there to
             // send? A dead compositor's beacon is unlinked with it, so
             // this is the close the desktop can no longer ask for.
@@ -1776,6 +1783,15 @@ static int uapp_pump(struct uapp *a, int block) {
     // several events, and handling them together is what makes the
     // single coalesced present below correct rather than laggy.
     while (a->running && next_event(&ev)) dispatch(a, &ev);
+
+    // A widget asked for another frame from its last draw: paint every
+    // surface, since nothing says which one it was on. Only while
+    // something moves, so the over-paint is bounded by the motion.
+    if (uui_anim_take()) {
+        a->dirty = 1;
+        for (int i = 0; i < WIN_CLIENT_MAX; i++)
+            if (g_dlg[i].slot) g_dlg[i].dirty = 1;
+    }
 
     // Input the inbox could not hold went missing, and that is worth
     // one line per rise: a client that sees this is not keeping up.

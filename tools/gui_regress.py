@@ -144,6 +144,7 @@ TOOLS = [
     ("singleinst", "single_instance_test.py", "one copy of an app, and relaunch raises it"),
     ("osk", "osk_test.py", "the on-screen keyboard types into the focused client"),
     ("settings", "settings_test.py", "the settings registry, in ring 3"),
+    ("smooth", "smooth_scroll_test.py", "smooth scrolling glides, and desktop.smooth_scroll turns it off"),
     ("idle", "idle_desktop_test.py", "nothing paints over an idle desktop"),
     ("imgview", "imgview_test.py", "JPEG decoding, the viewer, and the wallpaper"),
     ("icons", "icons_test.py", "app icons: QOI, alpha compositing, three draw sites"),
@@ -227,6 +228,7 @@ COST_S = {
     "singleinst": 16,  # six launches, each waiting out a client's first frame
     "scrollbar": 15,
     "settings": 20,   # +4 scroll checks, incl. a resize and a wheel
+    "smooth": 10,      # three glides waited out, a drag, and a fixture of 40 files
     "calculator": 14,
     "entries": 13,
     "sched": 12,

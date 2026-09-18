@@ -94,6 +94,29 @@ void ugfx_clear_clip_rect(struct ugfx_surface *s) {
     if (s) s->clip_active = 0;
 }
 
+void ugfx_clip_save(const struct ugfx_surface *s, struct ugfx_clip *out) {
+    out->x0 = s->clip_x0; out->y0 = s->clip_y0;
+    out->x1 = s->clip_x1; out->y1 = s->clip_y1;
+    out->active = s->clip_active;
+}
+
+void ugfx_clip_restore(struct ugfx_surface *s, const struct ugfx_clip *c) {
+    s->clip_x0 = c->x0; s->clip_y0 = c->y0;
+    s->clip_x1 = c->x1; s->clip_y1 = c->y1;
+    s->clip_active = c->active;
+}
+
+void ugfx_clip_intersect(struct ugfx_surface *s, int x, int y, int w, int h) {
+    if (!s->clip_active) { ugfx_set_clip_rect(s, x, y, w, h); return; }
+    int x0 = x > s->clip_x0 ? x : s->clip_x0;
+    int y0 = y > s->clip_y0 ? y : s->clip_y0;
+    int x1 = x + w < s->clip_x1 ? x + w : s->clip_x1;
+    int y1 = y + h < s->clip_y1 ? y + h : s->clip_y1;
+    // An empty intersection is an EMPTY clip -- the same rule as
+    // ugfx_set_clip_rect(), reached through it.
+    ugfx_set_clip_rect(s, x0, y0, x1 - x0, y1 - y0);
+}
+
 static inline void dirty_mark(struct ugfx_surface *s, int x, int y) {
     if (s->dirty_x1 <= s->dirty_x0) { // was empty
         s->dirty_x0 = x; s->dirty_x1 = x + 1;

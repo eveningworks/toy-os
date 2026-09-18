@@ -8479,3 +8479,65 @@ alone left labels as lighter boxes on every page and the menu bar
 level with the page. Those default to `UUI_COLOR_UNSET` and resolve
 at draw now, the bars through a `bar_bg` role that did not exist
 because nothing had needed it to -- two callers made it one.
+
+## Smooth scrolling is a displacement that eases to zero, not an animated position
+
+Every scrolling widget glides ~150 ms after a wheel notch, a trough
+click or a key that moves the view, through one helper
+(`ui/uui_scrollanim.h`) over one tween (`lib/utween.h`). The widget's
+own position -- `uui_table.top`, `uui_scrollview.offset`,
+`utext.scroll_offset`, the icon grid's pixel offset -- still JUMPS to
+its destination exactly as it did before; what changes is that the draw
+adds a displacement to every content y, starting at "where the content
+was" and easing to zero, and folds the same displacement into a
+pixel-unit scrollbar so the thumb moves with the rows.
+
+**Why not animate the position.** The obvious design tweens `top`
+itself, which means every row widget switching to a pixel position with
+a sub-row remainder, and every reader of the position -- `fm_view`'s
+layout report, System Settings' sidebar log, UI Demo's status line,
+every test that asserts a `top` or an `offset` -- learning about the
+motion. A displacement touches the draw and nothing else: hit-tests
+subtract it, the bar folds it in, and everything that asked "where is
+the view" keeps getting the answer it always got. Qt's item views
+animate a per-item scroll the same way (the scroll position is items,
+the motion is pixels), and Explorer's list view scrolls by item with a
+pixel glide over it.
+
+**Why the widget arms it rather than the helper detecting a change.** A
+position changes for reasons that are not the user scrolling: a
+directory reload that shortens the list, a resize that re-clamps, a
+selection restored by name. Gliding those reads as the content lurching
+of its own accord. So the wheel, the trough and the keys say "the next
+change is a scroll" and anything else draws where the position says,
+at once. A thumb drag cancels outright: gui-guidelines rule 2 is that
+the thumb follows the cursor 1:1, and an eased thumb under a held
+button feels like a loose control.
+
+**Why the tween takes its clock as an argument.** `utween.c` compiles
+with a host gcc for `tools/utween_hostcheck.py`, which is what caught a
+rounding overshoot (100 -> 0 visited -1 for a frame) before any guest
+ran it. The same property lets the window manager use it later without
+a second copy -- the roadmap had held the helper back until a second
+real caller existed, and this is it.
+
+**Why the frames come from a request flag, not a timer.** Toykit draws
+on events and blocks; an animation has none. A widget still moving asks
+for one more frame from its draw (`uui_anim_request()`), and uapp's
+pump waits one frame instead of its long park while one is pending. So
+a process wakes at ~60 Hz only while something moves and sleeps as
+before otherwise, with nothing to register or unregister -- a widget
+destroyed mid-glide leaves no dangling entry. A TWS timer would have
+been a round trip per frame to say "yes, again".
+
+**Why a registry setting.** `desktop.smooth_scroll` is read at each
+`arm()`. Smooth scrolling is toolkit-wide, so it is the SYSTEM's knob
+and not an app's (`docs/conventions/gui.md`, "AN APP'S OWN PREFERENCES
+ARE THE APP'S"); Windows and GNOME expose the same switch as "animation
+effects", macOS as "reduce motion". It lives on a new Appearance >
+Effects page, where the window effects' toggles will join it.
+
+**Why `utext` gates it behind `animate`.** `/bin/edit` draws once per
+keystroke through the same text buffer; with the glide on there, a
+displaced frame would sit until the next key. `uui_textview` and
+Notepad turn it on because Toykit redraws them per frame.

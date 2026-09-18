@@ -2090,6 +2090,18 @@ window without going through it will find its layout polls timing out.
   DISTINCT COLOURS in the canvas (468 with, 5 without) rather than by
   sampling a point, since a curve moves and a fixed sample point
   doesn't follow it.
+- **`smooth_scroll_test.py`** -- smooth scrolling (`ui/uui_scrollanim.h`)
+  in the File Manager's icon grid, and the `desktop.smooth_scroll`
+  setting. One wheel notch with the setting ON must draw SEVERAL frames
+  at distinct positions, spread over time, with shrinking steps
+  (ease-out); with it OFF, exactly one. The positions are the app's own
+  `files: layout cellgrid` lines read back through `dmesg`, because the
+  app emits one per drawn frame that differs from the last and the
+  console's live buffer misses a 20 ms burst. A thumb drag must land in
+  one frame -- a drag never glides. It writes the setting to
+  /etc/desktop.conf and puts it back to `on` in a `finally`, since a
+  setting left behind changes the machine for every later tool.
+
 - **`scrollbar_test.py`** -- scrollbar BEHAVIOUR, against the ring-3
   Notepad: the thumb doesn't jump when grabbed anywhere on it, a drag is
   reversible, the trough pages while an arrow steps, and the strip is
@@ -4085,6 +4097,19 @@ window without going through it will find its layout polls timing out.
   so `WIN_DEBUG_F_UNKNOWN` never arrived and `gui nosuchthing` printed
   nothing on the serial console either. A check asserting only that
   known commands answer would not have seen it.
+
+- **`utween_hostcheck.py`** -- compiles `userland/lib/utween.c`, the
+  desktop's one easing tween, with the host gcc and checks the
+  PROPERTIES a motion must have rather than an oracle (there is no
+  reference easing library, and the curve's exact shape is a taste): it
+  starts at `from` and lands EXACTLY on `to`, never moves back, covers
+  more than half the distance in the first half of the time (ease-out),
+  goes inactive exactly at the end, and a retarget mid-flight continues
+  from the value at that instant without a jump. Possible on the host
+  because the tween takes its clock as an argument. Its first run caught
+  a rounding overshoot (100 -> 0 visited -1 for a frame) before any
+  guest had drawn with it. `--positive-control` compiles a LINEAR curve
+  and must fail on the ease-out check. Needs only gcc.
 
 - **`hash_hostcheck.py`** -- compiles `/lib/libhash.so`'s two algorithms
   (`userland/dynlib/uhash.c` plus `kernel/lib/kcrc.c`) with the host gcc

@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "ui/ugfx.h"
 #include "ui/uui_edit.h"
+#include "ui/uui_scrollanim.h"
 
 // utext -- a wrapped, scrollable, editable text buffer with a cursor
 // and a selection.
@@ -105,6 +106,14 @@ struct utext {
     // come back sideways with no way to say so.
     int hscroll;
 
+    // THE GLIDE (ui/uui_scrollanim.h), OFF unless a host that redraws
+    // per frame turns it on: utext_draw() adds the displacement to every
+    // line for a few frames after a utext_scroll(). /bin/edit draws once
+    // per keystroke, so with it on there the view would sit displaced
+    // until the next key -- uui_textview and Notepad set `animate`.
+    int animate;
+    struct uui_scrollanim anim;
+
     // Caret and selection, plus the keymap that goes with them, come
     // from the shared edit core (ui/uui_edit.h) -- the same one the
     // single-line uui_textbox uses, so a field and a document cannot
@@ -134,6 +143,17 @@ void utext_set(struct utext *t, int i, char c);
 
 // Scrolls by whole wrapped lines: positive is toward older text.
 void utext_scroll(struct utext *t, int delta_lines);
+// Set the offset outright, with no glide -- a thumb drag, which must
+// track the cursor 1:1 (docs/gui-guidelines.md's scrollbar rules).
+void utext_scroll_set(struct utext *t, int offset);
+// The glide's current displacement in pixels, for a caller drawing its
+// own scrollbar beside the text: fold it into the bar's offset as
+// utext_bar_units() does.
+int  utext_anim_disp(const struct utext *t);
+// The scrollbar's three numbers IN PIXELS, displacement folded in, so
+// the thumb glides with the lines. Call after utext_metrics().
+void utext_bar_units(const struct utext *t, int total_lines, int visible_rows,
+                     int *out_total, int *out_visible, int *out_offset);
 
 // The two ends, named rather than open-coded. `_top` is not
 // `utext_scroll(t, t->count)` by luck -- it is that clamp stated once.

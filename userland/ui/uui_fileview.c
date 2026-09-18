@@ -3,6 +3,7 @@
 #include <time.h>
 #include "ui/uui_widget.h"
 #include "rt/sys.h"     // sys_listdir(), sys_ticks()
+#include "ui/uui_anim.h" // uui_wheel_step_px()
 #include "kpath.h"      // k_path_join/_dirname -- the KERNEL's, linked into ring 3
 #include "lib/human.h"  // human_size()
 #include "lib/icon_cache.h" // icon_get() -- the icons view's artwork
@@ -315,6 +316,7 @@ void uui_fileview_set_mode(struct uui_fileview *fv, enum uui_fileview_mode mode)
         // The table keeps its columns and sort: the grid displays the
         // same order, and switching back finds the header as it was.
         fv->icon_scroll = 0;
+        uui_scrollanim_cancel(&fv->ic_anim);
         rb_clear(&fv->band);
         return;
     }
@@ -456,6 +458,7 @@ int uui_fileview_set_dir(struct uui_fileview *fv, const char *dir) {
     fv->table.selected = -1;
     fv->table.top = 0;
     fv->icon_scroll = 0;
+    uui_scrollanim_cancel(&fv->ic_anim);
     int ok = uui_fileview_reload(fv);
     // A directory just entered starts on its first row (reload keeps
     // "nothing selected" only for a refresh of the same one).
@@ -646,6 +649,13 @@ static void ic_clamp(struct uui_fileview *fv) {
     if (fv->icon_scroll < 0) fv->icon_scroll = 0;
 }
 
+// Where the grid is DRAWN this frame: the canonical position less the
+// glide's displacement (ui/uui_scrollanim.h). Geometry and hit-testing
+// both read this, so a click mid-glide lands on what is on screen.
+static int ic_eff_scroll(const struct uui_fileview *fv) {
+    return fv->icon_scroll - fv->ic_anim.disp;
+}
+
 static int ic_set_offset(struct uui_fileview *fv, int offset) {
     int before = fv->icon_scroll;
     fv->icon_scroll = ic_max_scroll(fv) - offset;
@@ -656,7 +666,7 @@ static int ic_set_offset(struct uui_fileview *fv, int offset) {
 static struct icon_grid ic_grid(const struct uui_fileview *fv) {
     struct icon_grid g;
     g.origin_x = fv->table.x + ic_pad();
-    g.origin_y = fv->table.y + ic_pad() - fv->icon_scroll;
+    g.origin_y = fv->table.y + ic_pad() - ic_eff_scroll(fv);
     g.cell_w = ic_cell_w();
     g.cell_h = ic_cell_h();
     g.cols = ic_cols(fv);
@@ -688,7 +698,7 @@ static int ic_hit_view(const struct uui_fileview *fv, int cx, int cy) {
     if (!uui_hit(t->x, t->y, t->w, t->h, cx, cy)) return -1;
     if (ic_bar_visible(fv) && cx >= t->x + t->w - t->bar_w) return -1;
     int lx = cx - (t->x + ic_pad());
-    int ly = cy - (t->y + ic_pad()) + fv->icon_scroll;
+    int ly = cy - (t->y + ic_pad()) + ic_eff_scroll(fv);
     if (lx < 0 || ly < 0) return -1;
     int col = lx / ic_cell_w();
     if (col >= ic_cols(fv)) return -1;
@@ -814,7 +824,13 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
     int rows = uui_fileview_row_count(fv);
     int cols = ic_cols(fv), vis = ic_vis_rows(fv);
     int px = ic_px(), cw = ic_cell_w(), chh = ic_cell_h();
-    int first = (fv->icon_scroll / chh) * cols;
+    // The glide: the state is the draw's own; the view is const to its
+    // caller. Everything below reads ic_eff_scroll(), which is what the
+    // displacement moved.
+    int disp = uui_scrollanim_sync((struct uui_scrollanim *)&fv->ic_anim, fv->icon_scroll);
+    int eff = ic_eff_scroll(fv);
+    if (eff < 0) eff = 0;
+    int first = (eff / chh) * cols;
     int last = first + (vis + 2) * cols; // +2: a partial row at each end
     if (last > rows) last = rows;
 
@@ -902,10 +918,16 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
         }
     }
 
-    if (ic_bar_visible(fv))
+    if (ic_bar_visible(fv)) {
+        // The thumb glides with the grid: the displacement folded into
+        // the bottom-anchored offset.
+        int off = ic_offset(fv) + disp;
+        if (off < 0) off = 0;
+        if (off > ic_max_scroll(fv)) off = ic_max_scroll(fv);
         uui_scrollbar_draw(s, t->x + t->w - t->bar_w, t->y, t->bar_w, t->h,
-                            ic_content_h(fv), ic_view_h(fv), ic_offset(fv),
+                            ic_content_h(fv), ic_view_h(fv), off,
                             uui_table_c_track_bg(t), uui_table_c_thumb_bg(t), 0);
+    }
 
     // The band, above everything it crosses. An outline, not a fill --
     // the same call the desktop makes (no alpha blend to fill with).
@@ -944,11 +966,13 @@ static int ic_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
             uui_scrollbar_thumb_rect(t->y, t->h, total, vis, off,
                                       &thumb_y, &thumb_h, t->bar_w, 0);
             t->thumb_grab = cy - thumb_y;
+            uui_scrollanim_cancel(&fv->ic_anim); // a drag draws where the thumb is, at once
             return 1;
         }
         // A page is the view less one cell, so the last row seen stays
         // in sight as the first -- Explorer's paging.
         int page = vis > ic_cell_h() ? vis - ic_cell_h() : ic_cell_h();
+        if (zone == UUI_SB_ABOVE || zone == UUI_SB_BELOW) uui_scrollanim_arm(&fv->ic_anim);
         if (zone == UUI_SB_ABOVE) ic_set_offset(fv, off + page);
         else if (zone == UUI_SB_BELOW) ic_set_offset(fv, off - page);
         return 1;
@@ -1015,9 +1039,10 @@ static int ic_wheel(struct uui_fileview *fv, int notches) {
     // MINUS, like every scrolling widget here: positive notches mean
     // the wheel rolled AWAY (mouse.c negates the raw byte), which
     // scrolls the view UP. This shipped as += and read exactly like an
-    // inverted mouse. One cell a notch, so the wheel feels as it did
-    // when the grid scrolled by row.
-    fv->icon_scroll -= notches * ic_cell_h();
+    // inverted mouse. Three text lines a notch, the toolkit's one step
+    // (ui/uui_anim.h), and it glides.
+    uui_scrollanim_arm(&fv->ic_anim);
+    fv->icon_scroll -= notches * uui_wheel_step_px();
     ic_clamp(fv);
     return fv->icon_scroll != before;
 }
@@ -1026,6 +1051,7 @@ static int ic_key(struct uui_fileview *fv, int key) {
     int cols = ic_cols(fv), vis = ic_vis_rows(fv);
     int rows = uui_fileview_row_count(fv);
     if (rows <= 0) return 0;
+    uui_scrollanim_arm(&fv->ic_anim); // a key that scrolls the view glides it
 
     switch (key) {
     case KEY_ARROW_LEFT:  return ic_step(fv, -1);
