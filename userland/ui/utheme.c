@@ -7,13 +7,22 @@
 static struct utheme g_theme;
 static int g_inited;
 
-// The default (light) palette. Values are apps/theme.h's, unchanged --
-// filled at runtime because ugfx_rgb() is a function, not a constant.
+// The default (light) palette, filled at runtime because ugfx_rgb() is
+// a function, not a constant.
+//
+// The greys are ordered: field_bg is the brightest thing on a page and
+// the page (panel_bg) sits far enough below it that a text box reads as
+// a box without its outline -- macOS's and Windows 10's spacing, not
+// Breeze's, whose buttons are lighter than the ground; here a face is a
+// step DARKER than the page, and bars a step darker again. Hover and
+// press derive from these by luminance (uui_state_bg), so nothing else
+// moves when a rung does.
 void utheme_default(struct utheme *out) {
-    out->window_bg   = ugfx_rgb(235, 235, 235);
-    out->panel_bg    = ugfx_rgb(245, 245, 245);
-    out->control_bg  = ugfx_rgb(225, 225, 230);
+    out->window_bg   = ugfx_rgb(228, 228, 228);
+    out->panel_bg    = ugfx_rgb(236, 236, 236);
+    out->control_bg  = ugfx_rgb(220, 220, 226);
     out->field_bg    = ugfx_rgb(255, 255, 255);
+    out->bar_bg      = ugfx_rgb(226, 226, 229);
     out->text        = ugfx_rgb(20, 20, 20);
     out->border      = ugfx_rgb(60, 60, 60);
     // The selection blue the desktop and widgets already draw with
@@ -22,8 +31,8 @@ void utheme_default(struct utheme *out) {
     out->accent_text = ugfx_rgb(255, 255, 255);
     // Darker than the strip ground (window_bg) as well as the control
     // face, so a resting tab reads as recessed and the selected one --
-    // field_bg -- as raised out of it by fifty rather than thirty.
-    out->tab_rest    = ugfx_rgb(205, 205, 212);
+    // field_bg -- as raised out of it.
+    out->tab_rest    = ugfx_rgb(200, 200, 207);
     // The two the widgets had been spelling out by hand: this outline
     // appeared in eight of them and this selection tint in six.
     out->outline     = ugfx_rgb(150, 155, 165);

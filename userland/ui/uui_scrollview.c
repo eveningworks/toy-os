@@ -124,7 +124,7 @@ void uui_scrollview_init(struct uui_scrollview *sv, struct uui_layout *content) 
     sv->bg = UTHEME_WINDOW_BG;
     // The same two values uui_listbox uses, so a scrollbar looks the
     // same whichever widget is showing one.
-    sv->track_bg = ugfx_rgb(225, 225, 230);
+    sv->track_bg = UTHEME_BUTTON_BG;
     sv->thumb_bg = ugfx_rgb(150, 155, 165);
     if (content) uui_router_init(&sv->router, content->items, content->count);
     else uui_router_init(&sv->router, 0, 0);

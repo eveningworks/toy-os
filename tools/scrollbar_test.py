@@ -65,8 +65,8 @@ SPAWN_PATH = "/bin/wm/apps/notepad"   # spawned directly -- see run()
 SPAWN_TIMEOUT_S = 20.0
 ENTER = "0x0d"
 
-# notepad.c's draw_scrollbar() colours.
-TRACK = (225, 225, 230)
+# notepad.c's draw_scrollbar() colours: utheme.c's control_bg and outline.
+TRACK = (220, 220, 226)
 THUMB = (150, 155, 165)
 
 # Enough lines to give the thumb real travel: ~20 rows are visible, so

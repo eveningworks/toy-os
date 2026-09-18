@@ -273,7 +273,7 @@ void uui_menubar_init(struct uui_menubar *m, const struct uui_menu_item *items,
     m->item_flags = 0;
     m->committed = -1;
 
-    m->bar_bg      = ugfx_rgb(235, 235, 238);
+    m->bar_bg      = UUI_COLOR_UNSET;
     m->fg          = UUI_COLOR_UNSET;
     m->popup_bg    = ugfx_rgb(250, 250, 252);
     m->hot_bg      = UUI_COLOR_UNSET;
@@ -282,10 +282,11 @@ void uui_menubar_init(struct uui_menubar *m, const struct uui_menu_item *items,
     m->disabled_fg = ugfx_rgb(170, 172, 178);
 }
 
-// Resolved at DRAW time (utheme.h). Only the three roles the palette
-// already names: `bar_bg`, `popup_bg`, `accel_fg` and `disabled_fg` are
-// still literals, since no role matches them and mapping them to the
-// nearest one would change what every menu looks like today.
+// Resolved at DRAW time (utheme.h). Only the roles the palette names:
+// `popup_bg`, `accel_fg` and `disabled_fg` are still literals, since no
+// role matches them and mapping them to the nearest one would change
+// what every menu looks like today.
+static uint32_t m_bar_bg(const struct uui_menubar *m) { return UUI_COLOR(m->bar_bg, UTHEME_BAR_BG); }
 static uint32_t m_fg(const struct uui_menubar *m)     { return UUI_COLOR(m->fg, UTHEME_TEXT); }
 static uint32_t m_hot_bg(const struct uui_menubar *m) { return UUI_COLOR(m->hot_bg, UTHEME_SELECTION); }
 static uint32_t m_border(const struct uui_menubar *m) { return UUI_COLOR(m->border, UTHEME_OUTLINE); }
@@ -389,7 +390,7 @@ static void draw_arrow(struct ugfx_surface *s, int cx, int cy, uint32_t fg) {
 }
 
 void uui_menubar_draw(struct ugfx_surface *s, const struct uui_menubar *m) {
-    ugfx_fill_rect(s, m->x, m->y, m->w, m->h, m->bar_bg);
+    ugfx_fill_rect(s, m->x, m->y, m->w, m->h, m_bar_bg(m));
     ugfx_fill_rect(s, m->x, m->y + m->h - 1, m->w, 1, m_border(m));
 
     for (int i = 0; i < m->count; i++) {
@@ -402,7 +403,7 @@ void uui_menubar_draw(struct ugfx_surface *s, const struct uui_menubar *m) {
         if (m->depth > 0 && m->open_root == i) st = UUI_STATE_PRESSED;
         else if (m->hot_root == i) st = UUI_STATE_HOVER;
 
-        uint32_t bg = uui_state_bg(m->bar_bg, st);
+        uint32_t bg = uui_state_bg(m_bar_bg(m), st);
         if (st != UUI_STATE_REST) ugfx_fill_rect(s, x, y, w, h, bg);
         ugfx_draw_string_clipped(s, x + unit(), y + (h - ugfx_char_h()) / 2,
                                   w - 2 * unit() + 2, m->items[i].label,

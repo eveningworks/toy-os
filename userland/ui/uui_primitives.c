@@ -29,7 +29,7 @@ uint32_t uui_state_bg(uint32_t base, enum uui_state state) {
     switch (state) {
     case UUI_STATE_HOVER:    return shift_from(base, UUI_HOVER_ALPHA);
     case UUI_STATE_PRESSED:  return shift_from(base, UUI_PRESSED_ALPHA);
-    case UUI_STATE_DISABLED: return ugfx_blend(base, ugfx_rgb(235, 235, 235),
+    case UUI_STATE_DISABLED: return ugfx_blend(base, UTHEME_PANEL_BG,
                                                 UUI_DISABLED_ALPHA);
     case UUI_STATE_REST:
     default:                 return base;

@@ -17,7 +17,7 @@ void uui_slider_init(struct uui_slider *s, const char *const *options, int count
     s->selected = count > 0 ? 0 : -1;
     s->hovered = 0;
     s->dragging = 0;
-    s->bg = ugfx_rgb(245, 245, 245);
+    s->bg = UUI_COLOR_UNSET; // the page's ground, resolved at draw
     s->fg = ugfx_rgb(20, 20, 20);
     s->track_bg = ugfx_rgb(205, 205, 212);
     // The travelled part of the track, so "how far along am I" reads
@@ -128,7 +128,7 @@ void uui_slider_draw(struct ugfx_surface *surf, const struct uui_slider *s) {
     ugfx_draw_string_clipped(surf, s->x + SLIDER_PAD_X, ly,
                               s->w - 2 * SLIDER_PAD_X, label,
                               s->disabled ? uui_state_bg(s->fg, UUI_STATE_DISABLED) : s->fg,
-                              s->bg);
+                              UUI_COLOR(s->bg, UTHEME_PANEL_BG));
 }
 
 // --- input ------------------------------------------------------------

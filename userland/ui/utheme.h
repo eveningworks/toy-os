@@ -17,17 +17,21 @@
 // the `utheme_*()` metric calls derive from `ugfx_char_h()` live and
 // need no rebuild when `font_size` changes.
 //
-// The default palette's values are apps/theme.h's, kept in step
-// deliberately -- a client whose colours drift from the desktop's reads
-// as a rendering bug (the same risk the font mapping was built to
-// avoid). When a dark mode or accent lands, it starts from the default
+// This is the ONLY palette (apps/theme.h, the kernel-side copy, is
+// gone). When a dark mode or accent lands, it starts from the default
 // and overrides roles, rather than each app re-picking colours.
+//
+// THE GREYS ARE A LADDER, AND A WIDGET THAT COPIES ONE AS A LITERAL
+// FALLS OFF IT: retuning the ground once left labels as lighter boxes
+// and the menu bar invisible, because each had its own 245 or 235.
+// Default to UUI_COLOR_UNSET and resolve against a role at draw time.
 
 struct utheme {
-    uint32_t window_bg;    // default window content background
-    uint32_t panel_bg;     // window / panel / control-row background
-    uint32_t control_bg;   // button / control face
+    uint32_t window_bg;    // frame fill, tab-strip / scroll-view / dialog ground
+    uint32_t panel_bg;     // an app's PAGE: what uapp clears a window to
+    uint32_t control_bg;   // button / control face, a step below panel_bg
     uint32_t field_bg;     // editable field / display background (white today)
+    uint32_t bar_bg;       // menu bar / status bar: chrome, a step below panel_bg
     uint32_t text;         // body text
     uint32_t border;       // window / menu / control border lines
     uint32_t accent;       // selection / highlight / focus / checkmark
@@ -72,6 +76,7 @@ void utheme_default(struct utheme *out);
 #define UTHEME_PANEL_BG   (utheme_current()->panel_bg)
 #define UTHEME_BUTTON_BG  (utheme_current()->control_bg)
 #define UTHEME_WHITE      (utheme_current()->field_bg)
+#define UTHEME_BAR_BG     (utheme_current()->bar_bg)
 #define UTHEME_TEXT       (utheme_current()->text)
 #define UTHEME_BORDER     (utheme_current()->border)
 #define UTHEME_ACCENT     (utheme_current()->accent)

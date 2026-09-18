@@ -22,7 +22,7 @@ void uui_listbox_init(struct uui_listbox *lb, int x, int y, int w, int h,
     lb->fg = ugfx_rgb(20, 20, 20);
     lb->sel_bg = ugfx_rgb(205, 220, 240);
     lb->sel_fg = ugfx_rgb(20, 20, 20);
-    lb->track_bg = ugfx_rgb(225, 225, 230);
+    lb->track_bg = UTHEME_BUTTON_BG;
     lb->thumb_bg = ugfx_rgb(150, 155, 165);
     lb->thumb_grab = -1;
 }

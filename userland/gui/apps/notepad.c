@@ -656,7 +656,7 @@ static void draw_scrollbar(struct ugfx_surface *s, int tx, int ty, int tw, int t
     int bx, by, bw, bh;
     scrollbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
     uui_scrollbar_draw(s, bx, by, bw, bh, total, visible, g_text.scroll_offset,
-                        ugfx_rgb(225, 225, 230), ugfx_rgb(150, 155, 165),
+                        UTHEME_BUTTON_BG, UTHEME_OUTLINE,
                         NP_SCROLLBAR_FLAGS);
     ugfx_set_font(was_doc);
 }
@@ -688,7 +688,7 @@ static void draw_document(struct ugfx_surface *s, int focused) {
         uui_scrollbar_draw(s, bx, by, bw, bh,
                             utext_widest_line(&g_text, tw, th), cols,
                             g_text.hscroll,
-                            ugfx_rgb(225, 225, 230), ugfx_rgb(150, 155, 165),
+                            UTHEME_BUTTON_BG, UTHEME_OUTLINE,
                             NP_SCROLLBAR_FLAGS | UUI_SCROLLBAR_HORIZ);
     }
     ugfx_set_font(was_doc);

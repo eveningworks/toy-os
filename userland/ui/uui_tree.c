@@ -36,7 +36,7 @@ void uui_tree_init(struct uui_tree *t, int x, int y, int w, int h,
     t->fg = ugfx_rgb(20, 20, 20);
     t->sel_bg = ugfx_rgb(205, 220, 240);
     t->sel_fg = ugfx_rgb(20, 20, 20);
-    t->track_bg = ugfx_rgb(225, 225, 230);
+    t->track_bg = UTHEME_BUTTON_BG;
     t->thumb_bg = ugfx_rgb(150, 155, 165);
     t->guide = ugfx_rgb(200, 200, 208);
 }

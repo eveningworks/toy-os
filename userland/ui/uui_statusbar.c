@@ -35,7 +35,7 @@ void uui_statusbar_init(struct uui_statusbar *sb) {
     sb->panes[0].text = 0;
     sb->panes[0].chars = 0;
     sb->count = 1;
-    sb->bg     = ugfx_rgb(235, 235, 238);
+    sb->bg     = UUI_COLOR_UNSET; // UTHEME_BAR_BG, resolved at draw
     sb->fg     = ugfx_rgb(90, 100, 115);
     sb->border = ugfx_rgb(200, 205, 215);
 }
@@ -85,7 +85,8 @@ int uui_statusbar_pane_rect(const struct uui_statusbar *sb, int index,
 }
 
 void uui_statusbar_draw(struct ugfx_surface *s, const struct uui_statusbar *sb) {
-    ugfx_fill_rect(s, sb->x, sb->y, sb->w, sb->h, sb->bg);
+    uint32_t bg = UUI_COLOR(sb->bg, UTHEME_BAR_BG);
+    ugfx_fill_rect(s, sb->x, sb->y, sb->w, sb->h, bg);
     ugfx_fill_rect(s, sb->x, sb->y, sb->w, 1, sb->border);
 
     for (int i = 0; i < sb->count; i++) {
@@ -102,7 +103,7 @@ void uui_statusbar_draw(struct ugfx_surface *s, const struct uui_statusbar *sb) 
         int avail = w - 2 * pad();
         if (avail <= 0) continue;
         ugfx_draw_string_clipped(s, tx, y + (h - ugfx_char_h()) / 2, avail,
-                                  sb->panes[i].text, sb->fg, sb->bg);
+                                  sb->panes[i].text, sb->fg, bg);
     }
 }
 

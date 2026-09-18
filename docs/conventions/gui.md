@@ -2075,6 +2075,11 @@ real scanout hardware does. Do not write a pixel assertion for one.
   `ugfx_rgb()`; a control's default size is a metric, not a literal. The
   split (palette vs metrics) is Qt's QPalette vs QStyle -- see
   `docs/decisions/gui.md`. A dark mode / accent is a `utheme_set()` swap.
+  **A widget's DEFAULT colour is `UUI_COLOR_UNSET`, resolved against a
+  role at draw time -- never a copy of the role's current value.** The
+  greys are a ladder; a widget that had copied a rung as a literal fell
+  off it the first time the ground moved (labels drew as lighter boxes,
+  the menu bar vanished into the page).
 
 - **AN APP LOGS THROUGH `ulog()`/`ulogf()`, not a hand-rolled `logf_`.**
   `userland/ui/ulog.h` -- `ulog(s)` for a pre-formatted line, `ulogf(fmt,

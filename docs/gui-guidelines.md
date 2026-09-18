@@ -150,8 +150,8 @@ constant disappeared when this function arrived.
 
 **The wash direction follows the control's brightness, not a fixed
 "lighter on hover" rule.** The first version always lightened, which is
-the textbook description and wrong here: this theme's window background
-is already 235/255, so hover moved the pixels by *two* and was invisible.
+the textbook description and wrong here: this theme's grounds are
+near-white, so hover moved the pixels by *two* and was invisible.
 `gfx_luminance()` decides the direction, so a light control darkens and
 a dark one lightens. That bug was found by reading pixel values off a
 screenshot, not by looking at one -- see "Verifying" below.

@@ -75,7 +75,7 @@ RIGHT = "0x96"      # KEY_ARROW_RIGHT
 
 # uui_menubar.c's palette, and uui_statusbar.c's.
 POPUP_BG = (250, 250, 252)
-BAR_BG = (235, 235, 238)
+BAR_BG = (226, 226, 229)   # utheme.c bar_bg
 
 # Menu command codes, from userland/gui/apps/notepad.c. A test asserting on
 # the app's action log needs the same numbering the app commits.

@@ -7,7 +7,7 @@ void uui_label_init(struct uui_label *l, const char *text) {
     l->x = l->y = l->w = l->h = 0;
     l->text = text;
     l->fg = ugfx_rgb(20, 20, 20);
-    l->bg = ugfx_rgb(245, 245, 245);
+    l->bg = UUI_COLOR_UNSET; // the page's ground, resolved at draw
     l->rows = 1;
     l->wrap = 0;
 }
@@ -110,7 +110,7 @@ static void uui_label_draw_body(struct ugfx_surface *s, const struct uui_label *
         // which is what every toolkit centres it to avoid.
         int th = ugfx_char_h();
         int ty = l->h > th ? l->y + (l->h - th) / 2 : l->y;
-        ugfx_draw_string_clipped(s, l->x, ty, l->w, l->text, l->fg, l->bg);
+        ugfx_draw_string_clipped(s, l->x, ty, l->w, l->text, l->fg, UUI_COLOR(l->bg, UTHEME_PANEL_BG));
         return;
     }
 
@@ -139,7 +139,7 @@ static void uui_label_draw_body(struct ugfx_surface *s, const struct uui_label *
                 }
             }
         }
-        ugfx_draw_string_clipped(s, l->x, l->y + r * line_h, l->w, line, l->fg, l->bg);
+        ugfx_draw_string_clipped(s, l->x, l->y + r * line_h, l->w, line, l->fg, UUI_COLOR(l->bg, UTHEME_PANEL_BG));
         p = next;
     }
 }

@@ -60,7 +60,7 @@ void uui_sidebar_init(struct uui_sidebar *s, int x, int y, int w, int h,
     s->heading_fg = ugfx_rgb(64, 66, 74);
     s->sel_bg = ugfx_rgb(205, 220, 240);
     s->sel_fg = ugfx_rgb(20, 20, 20);
-    s->track_bg = ugfx_rgb(225, 225, 230);
+    s->track_bg = UTHEME_BUTTON_BG;
     s->thumb_bg = ugfx_rgb(150, 155, 165);
     s->selected = first_item(s);
 }

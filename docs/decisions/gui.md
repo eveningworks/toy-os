@@ -8444,3 +8444,38 @@ edges and rounded at `taskbar_h / 8`, Windows 11's taskbar-button
 proportion; a full-height block reads as a section of the bar rather
 than as a control. The rasteriser is `uui_fill_round_rect()`, promoted
 out of `uui_scrollbar.c` when this became its second real caller.
+
+## The greys are a ladder with the page in the middle, macOS/Windows 10 spacing, not Breeze's
+
+The default palette's neutral rungs, brightest first: `field_bg` (a
+text box, a list) sits well above the page; `panel_bg` is the page an
+app clears its window to; `bar_bg` (menu bar, status bar), `control_bg`
+(a button face, a scrollbar track) and `window_bg` (the frame fill,
+the tab-strip and scroll-view ground) are each a step BELOW the page;
+`tab_rest` a step below those. A field is the thing that reads as
+raised; chrome and faces read as recessed.
+
+**Why the page moved down.** The page had been 245 against a 255
+field -- a ten-level fill delta, weaker than any shipping light theme
+(Breeze 239/252, Windows 10 240/255, macOS 236/255) -- and the
+maintainer read a text box as barely a box. The ground is 236 now, the
+macOS value, with every rung below it moved by about the same amount
+so the ordering is unchanged.
+
+**Why faces stay DARKER than the page rather than flipping to Breeze's
+shape.** Breeze and Windows 11 draw a button lighter than its window
+and give it an outline; this toolkit's buttons are flat fills with no
+outline, so a lighter face would need a border drawn on every button
+to keep its edge, and every button on the desktop would change
+character for a change that was asked of the ground. macOS and
+Windows 10 keep the face a step below the window, which is the shape
+already here, so the fix moved the rungs and kept the shape.
+
+**Why the change was a ladder edit and not one number.** Four widgets
+had copied a rung as a literal: `uui_label` and `uui_slider` carried
+their own 245, `uui_menubar` and `uui_statusbar` their own 235, and
+the disabled wash blended toward a literal 235. Moving `panel_bg`
+alone left labels as lighter boxes on every page and the menu bar
+level with the page. Those default to `UUI_COLOR_UNSET` and resolve
+at draw now, the bars through a `bar_bg` role that did not exist
+because nothing had needed it to -- two callers made it one.
