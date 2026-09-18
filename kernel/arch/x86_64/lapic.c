@@ -174,11 +174,24 @@ void lapic_dispatch_vector(uint8_t vector, uint64_t *regs) {
     int i = vector - LAPIC_VECTOR_BASE;
     if (i < 0 || i >= LAPIC_VECTOR_COUNT) return;
     g_delivered++;
-    if (g_vector_handlers[i]) g_vector_handlers[i](regs);
-    // THE EOI IS SENT HERE, not left to the handler, for the reason
-    // irq.c gives about the PIC's: a forgotten one stops every later
-    // interrupt of that class and looks nothing like a missing EOI.
+    // **BEFORE THE HANDLER, NOT AFTER -- A HANDLER CAN SWITCH AWAY AND
+    // NEVER COME BACK.** lapic_timer_isr() reaches scheduler_tick(),
+    // and a context switch moves the CPU on the spot (scheduler.c's
+    // switch_to()), so an EOI below the call is simply never sent: the
+    // in-service bit stays set, the LAPIC delivers no further timer
+    // interrupt, and nothing preempts a ring-3 process that makes no
+    // syscalls. It presented as one background compute job starving the
+    // whole machine while the PIT kept pit_ticks() limping along, so
+    // the machine looked alive and merely unfair. irq.c's EOI moved for
+    // the same reason and on the same day; this is its twin, and the
+    // one that was missed first time.
+    //
+    // Safe for the MSIs that share this path: an MSI is edge-triggered
+    // by construction, which is the case handle_edge_irq() acks up
+    // front for, and every gate here is an interrupt gate, so IF is
+    // clear for the whole handler and an early ack cannot re-enter one.
     lapic_eoi();
+    if (g_vector_handlers[i]) g_vector_handlers[i](regs);
 }
 
 // --- the LAPIC timer -------------------------------------------------

@@ -1,10 +1,9 @@
 # Blocking inside the kernel, and the lock that needs it
 
-**Status: the SINGLE SUSPEND SHAPE is built and boots, and
-`scheduler_block_kernel()` exists with no caller. IT IS NOT GREEN --
-`sched_test.c:85` and `:142` still fail; see "What is still wrong"
-below. The lock and the gate are designed, not built. Read this before
-touching `switch_to()`, `block_common()` or `FS_OP()`.**
+**Status: the SINGLE SUSPEND SHAPE is BUILT and the in-kernel suite is
+green on it; `scheduler_block_kernel()` exists with no caller yet. The
+lock and the gate are designed, not built. Read this before touching
+`switch_to()`, `block_common()` or `FS_OP()`.**
 
 **AND THE TWO-SHAPE DESIGN BELOW WAS NOT BUILT.** The staging text that
 follows still describes it, because the argument it records is worth
@@ -174,12 +173,14 @@ documents follow.
   `latency_under_io.py`, which now has a two-run baseline at both gates
   taken on one host.
 
-## What the single shape cost, and what is still wrong
+## What the single shape cost
 
 **Three things broke, and all three are the same lesson: a switch that
 only NOMINATED let the outgoing context finish its function, and a
 switch that MOVES THE CPU does not.** Every one of them was invisible
-until the switch became immediate.
+until the switch became immediate, and the last two are the same bug in
+two files -- **every interrupt controller this kernel acknowledges AFTER
+running a handler is a place a switching handler can strand.**
 
 1. **The preemption guard was left raised across a park.** Every
    blocking syscall calls `scheduler_preempt_enable()` AFTER
@@ -201,19 +202,31 @@ until the switch became immediate.
    because every gate is an interrupt gate, so IF is clear throughout
    and an early ack cannot re-enter one.
 
-3. **STILL OPEN: a ring-3 spin loop terminates early.**
-   `spawn /tests/spin_test 600` is 18 billion volatile iterations and
-   should run for minutes; it exits 0 within a tick, and every process
-   reports `cpu_ns` of 0. `/tests/counter_a` runs, prints all twenty of
-   its characters and exits correctly, so ring-3 entry, syscalls and
-   output are fine -- it is long-running COMPUTATION that does not
-   survive. Measured against `86dc4fff`, where the same spawn leaves
-   the process `ready` with 0.03s billed. NOT root-caused. What has
-   been ruled out: the hand-built first-entry context (its trapframe
-   reads rip/cs/rflags/rsp correctly for init and every service), the
-   preemption guard, and the EOI above. The cheap next step is GDB
-   (`make debug`) with a breakpoint on the resume, comparing the
-   process's user RSP and registers either side of one preemption.
+3. **...AND SO WAS THE LAPIC'S, which is the one that actually
+   preempts.** `lapic_dispatch_vector()` had the identical shape and
+   was missed on the first pass: `lapic_timer_isr()` reaches
+   `scheduler_tick()` too, so its `lapic_eoi()` below the call was
+   never sent either. The in-service bit stayed set, the LAPIC
+   delivered no further timer interrupt, and **nothing preempted a
+   ring-3 process that made no syscalls** -- while the PIT kept
+   `pit_ticks()` limping along, so the machine looked alive and merely
+   unfair. FIXED the same way. MSIs share that path and are safe with
+   an early ack, being edge-triggered by construction.
+
+   **It took four wrong diagnoses to find, and the reason is worth
+   keeping.** The symptom was read as a scheduling bug, then a billing
+   bug, then a register-corruption bug, because `spawn
+   /tests/spin_test 600` exited "instantly" with `cpu_ns` of 0. It had
+   not exited instantly: instrumenting the program to print a dot per
+   round showed it completing all 180 million iterations correctly.
+   GUEST TIME had slowed to 5% of real time, because a background
+   compute job now starved the machine and QEMU dropped PIT ticks --
+   so every clock-derived reading, including `cpu_ns` and the tests'
+   own tick budgets, was measuring a broken clock rather than the
+   thing under test. **The measurement that finally separated them was
+   host wall clock against guest wall clock**; raw compute throughput
+   (`run /tests/spin_test`, 0.62s) was identical on both sides all
+   along, which is what said the kernel was not slower, only unfair.
 
 ## The open questions, stated rather than hidden
 
