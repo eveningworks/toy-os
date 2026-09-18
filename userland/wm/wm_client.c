@@ -15,7 +15,8 @@
 // produced desktop.c/start_menu.c/context_menu.c. See wm.c's top
 // comment.
 #include "wm_internal.h"
-#include "wm_shadow.h"   // wm_damage_window_rect(): a window's rect plus its shadow
+#include "wm_shadow.h"
+#include "wm_anim.h"   // wm_damage_window_rect(): a window's rect plus its shadow
 #include "wm_shortcut.h"
 #include "screensaver_config.h"
 #include "wm_idle.h"
@@ -496,6 +497,10 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     wm_scanout_client_presented(pid);   // a present from its OWN buffer
 
     struct window *win = &windows[idx];
+    // THE FIRST FRAME is when the window appears, and so when it
+    // animates in (wm_anim.h) -- after this present is adopted, since
+    // the ghost is a snapshot of what arrived.
+    int first = !win->client_gen[0] && !win->client_gen[1];
 
     // **THE GENERATION IS WHAT SAYS "RE-OPEN THE NAME".** The name is
     // the slot and never changes; the object under it does, on every
@@ -515,6 +520,7 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
         wm_damage_window_rect(win->x, win->y, win->w, win->h);   // the rect being left
         adopt_content_size(win, w, h);
         wm_damage_window_rect(win->x, win->y, win->w, win->h);
+        if (first) wm_anim_open(idx);
         redraw_pending = 1;
         // An interactive resize sends its next proposal now: one FRAME
         // in flight at a time, so the client's real repaint sets the
@@ -528,6 +534,7 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     // stops being a compositor.
     wm_damage_rect(window_content_x(win), window_content_y(win),
                     window_content_w(win), window_content_h(win));
+    if (first) wm_anim_open(idx);
     redraw_pending = 1;
     wm_resize_shown(idx, 0);
 }
@@ -535,6 +542,7 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
 static void on_window_destroyed(int pid, uint32_t id) {
     int idx = find_client_window(pid, id);
     if (idx < 0) return;
+    wm_anim_close(idx);   // the ghost snapshots the buffers BEFORE they are unmapped below
 
     // AN OWNER TAKES ITS DIALOGS WITH IT. The owner is re-found each
     // time round: close_window() renumbers windows[], so an index held
@@ -709,7 +717,7 @@ static int raise_window_at(int i) {
         wm_damage_window_rect(losing->x, losing->y, losing->w, losing->h);
     }
 
-    if (windows[i].state == WIN_MINIMIZED) windows[i].state = WIN_NORMAL;
+    if (windows[i].state == WIN_MINIMIZED) { wm_anim_restore(i); windows[i].state = WIN_NORMAL; }
     bring_to_front(i);
     // bring_to_front() renumbers, so the window is at the top now --
     // damage it there rather than at the index just used.
@@ -1588,7 +1596,12 @@ static void on_window_pong(int pid, uint32_t id, uint32_t serial) {
     wmwd_dist_add(&g_ping_dist, rtt);
     if (w->not_responding) {
         w->not_responding = 0;
-        redraw_pending = 1; // the title bar said "(Not Responding)"
+        // The title bar said "(Not Responding)": DAMAGE it, do not just
+        // ask for a frame. A frame that also carries other damage is
+        // limited to that damage, and the title text then changed
+        // outside it -- damage_sweep.py caught it under a ghost.
+        wm_damage_rect(w->x, w->y, w->w, WM_TITLEBAR_H);
+        redraw_pending = 1;
     }
 }
 
@@ -1615,6 +1628,7 @@ int wm_client_check_liveness(void) {
 
         if (!w->not_responding) {
             w->not_responding = 1;
+            wm_damage_rect(w->x, w->y, w->w, WM_TITLEBAR_H); // the title text changes
             redraw_pending = 1;
             wm_logf("wm: client pid %d is not responding\r\n", w->client_pid);
         }

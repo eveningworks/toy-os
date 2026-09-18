@@ -286,13 +286,18 @@ class DebugConsole:
         deadline = time.time() + SETTLE_TIMEOUT_S
         while time.time() < deadline:
             try:
-                pending = self.state().get("pending")
+                st = self.state()
+                pending = st.get("pending")
+                # A window animation in flight is motion the WM itself
+                # asked for; a frame compared while one runs is a frame
+                # of a ghost. Absent on an older WM, and then ignored.
+                anims = st.get("anims", 0)
             except (ValueError, KeyError):
-                pending = None
+                pending, anims = None, 0
             if pending is None:      # kernel without the field -- old behaviour
                 time.sleep(seconds)
                 return
-            if pending == 0:
+            if pending == 0 and anims == 0:
                 break
             time.sleep(0.02)
         else:

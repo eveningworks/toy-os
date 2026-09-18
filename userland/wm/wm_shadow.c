@@ -140,6 +140,7 @@ void wm_shadow_draw(int x, int y, int w, int h, int corner_r, enum wm_shadow_kin
 
 void wm_damage_window_rect(int x, int y, int w, int h) {
     int m = g_enabled ? wm_shadow_margin() : 0;
+    m -= wm_damage_shrink_px();   // the sweep's positive control (wm_internal.h)
     wm_damage_rect(x - m, y - m, w + 2 * m, h + 2 * m);
 }
 

@@ -252,6 +252,37 @@ void ugfx_blit_alpha(struct ugfx_surface *s, int x, int y, int w, int h,
     dirty_mark_rect(s, dx, dy, dw, dh);
 }
 
+void ugfx_blit_scaled_alpha(struct ugfx_surface *s, int x, int y, int w, int h,
+                             const uint32_t *src, int sw, int sh, int src_pitch_px,
+                             uint8_t alpha) {
+    if (!s || !s->pixels || !src || w <= 0 || h <= 0 || sw <= 0 || sh <= 0 || alpha == 0) return;
+    int dx = x, dy = y, dw = w, dh = h;
+    if (!clip_rect(s, &dx, &dy, &dw, &dh)) return;
+    unsigned a = alpha;
+    for (int j = 0; j < dh; j++) {
+        // The destination row's source row, in the UNCLIPPED mapping, so
+        // a clipped blit shows the same part of the source as a whole one.
+        int sy = (int)((long long)(dy - y + j) * sh / h);
+        if (sy >= sh) sy = sh - 1;
+        const uint32_t *srow = src + (uint32_t)sy * (uint32_t)src_pitch_px;
+        uint32_t *drow = s->pixels + (uint32_t)(dy + j) * (uint32_t)s->w + (uint32_t)dx;
+        for (int i = 0; i < dw; i++) {
+            int sx = (int)((long long)(dx - x + i) * sw / w);
+            if (sx >= sw) sx = sw - 1;
+            uint32_t sp = srow[sx] & 0x00FFFFFF;
+            if (a == 255) { drow[i] = sp; continue; }
+            uint32_t dp = drow[i], out = 0;
+            for (int shift = 0; shift <= 16; shift += 8) {
+                unsigned sc = (sp >> shift) & 0xFF, dc = (dp >> shift) & 0xFF;
+                unsigned v = (sc * a + dc * (255 - a) + 127) / 255;
+                out |= (v & 0xFF) << shift;
+            }
+            drow[i] = out;
+        }
+    }
+    dirty_mark_rect(s, dx, dy, dw, dh);
+}
+
 void ugfx_blit_tinted(struct ugfx_surface *s, int x, int y, int w, int h,
                        const uint32_t *src, int src_pitch_px, uint32_t color) {
     if (!s || !s->pixels || !src || w <= 0 || h <= 0) return;

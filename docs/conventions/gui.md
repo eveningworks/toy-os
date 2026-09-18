@@ -2081,6 +2081,24 @@ real scanout hardware does. Do not write a pixel assertion for one.
   off it the first time the ground moved (labels drew as lighter boxes,
   the menu bar vanished into the page).
 
+- **A WINDOW ANIMATES AS A GHOST, AND THE STATE CHANGE THAT STARTS IT
+  CALLS `wm_anim_*()` FIRST, THEN CHANGES THE STATE.** A window opening,
+  closing, minimizing or coming back is drawn by `userland/wm/wm_anim.c`
+  as a SNAPSHOT of its chrome and content, blitted scaled and faded
+  along a 150 ms tween while the live window is hidden
+  (`wm_anim_hides()`) or already gone. The snapshot is taken from the
+  window as it IS, so every site that minimizes, restores or destroys
+  a window calls the starter before it changes `state` or unmaps the
+  buffers -- `on_window_destroyed()` calls `wm_anim_close()` before its
+  `unmap_client_window()`, and a new site that changes a window's state
+  does the same. The first present of a new toplevel starts the open
+  animation, not window creation: a ghost is a snapshot of what arrived.
+  Ghosts damage their old and new rects every frame through
+  `wm_damage_window_rect()`, the WM loop waits `WM_ANIM_FRAME_MS` while
+  one is in flight, and `gui state --json` reports `anims` so
+  `DebugConsole.settle()` waits them out -- a frame compared while one
+  runs is a frame of a ghost. `desktop.animations` turns all of it off.
+
 - **A WINDOW'S DAMAGE IS ITS OUTER RECT -- THE FRAME PLUS ITS SHADOW --
   AND `wm_damage_window_rect()` IS HOW IT IS DAMAGED.** The compositor
   paints a drop shadow outside every toplevel and popup
@@ -2094,7 +2112,11 @@ real scanout hardware does. Do not write a pixel assertion for one.
   The WM's own menus and flyouts cast the popup shadow and pad their
   damage the same way; a Toykit popup window gets both from
   `render_scene()`. `tools/damage_sweep.py` is the check, and its
-  positive control is the proof the check can see a miss.
+  positive control -- `gui damage shrink 4` before a drag -- is the proof
+  the check can see a miss. FOCUS IS PART OF THIS TOO: the focused
+  window's shadow is larger, so `compute_window_damage()` damages both
+  windows whenever the focused identity changes between frames, however
+  focus moved (a raise, a minimize of the top window, a close).
 
 - **A SCROLL GLIDES AS A DISPLACEMENT OF THE DRAWN CONTENT, NEVER OF THE
   POSITION -- AND A WIDGET ARMS IT, THE HELPER DOES NOT GUESS.**

@@ -349,6 +349,17 @@ void start_menu_damage(void) {
     wm_damage_window_rect(L.x, L.y, L.w, L.h);   // plus its shadow (wm_shadow.h)
 }
 
+// The Start BUTTON is drawn lit while the menu is up (wm_render.c's
+// draw_taskbar), so opening and closing change it too. With no window
+// to change focus and damage the strip for it, the button kept its lit
+// look after a dismiss -- damage_sweep.py found it the first time it
+// ran on an empty desktop. The button alone, and only on open and
+// close: start_menu_damage() runs on every hover change, and a whole
+// strip repaint per hover made every Start-menu frame heavier.
+static void damage_start_button(void) {
+    wm_damage_rect(0, screen_h - taskbar_h, 4 + start_btn_w() + 8, taskbar_h);
+}
+
 // --- what the app column holds ----------------------------------------
 
 static char lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
@@ -686,6 +697,7 @@ void start_menu_open_now(void) {
     query[0] = '\0';
     query_len = 0;
     start_menu_damage();
+    damage_start_button();
 }
 
 void start_menu_close(void) {
@@ -695,6 +707,7 @@ void start_menu_close(void) {
     flash_row = -1;
     hover_token = 0;
     start_menu_damage(); // the rows it just vacated
+    damage_start_button();
     redraw_pending = 1;
 }
 

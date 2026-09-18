@@ -146,6 +146,7 @@ TOOLS = [
     ("settings", "settings_test.py", "the settings registry, in ring 3"),
     ("smooth", "smooth_scroll_test.py", "smooth scrolling glides, and desktop.smooth_scroll turns it off"),
     ("shadow", "shadow_test.py", "drop shadows under windows and menus, and desktop.shadows turns them off"),
+    ("anim", "animation_test.py", "open/close/minimize/restore ghosts, and desktop.animations turns them off"),
     ("idle", "idle_desktop_test.py", "nothing paints over an idle desktop"),
     ("imgview", "imgview_test.py", "JPEG decoding, the viewer, and the wallpaper"),
     ("icons", "icons_test.py", "app icons: QOI, alpha compositing, three draw sites"),
@@ -231,6 +232,7 @@ COST_S = {
     "settings": 20,   # +4 scroll checks, incl. a resize and a wheel
     "smooth": 10,      # three glides waited out, a drag, and a fixture of 40 files
     "shadow": 8,       # two apps, two drags, four screenshots
+    "anim": 12,        # eight state changes waited out, three frames each
     "calculator": 14,
     "entries": 13,
     "sched": 12,

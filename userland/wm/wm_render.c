@@ -21,6 +21,7 @@
 #include "rt/sys.h"   // sys_monotonic_ns(), for the frame timer below
 #include "wm_taskbar.h"
 #include "wm_shadow.h"
+#include "wm_anim.h"
 #include "lib/icon_cache.h"
 #include "cursor_theme.h"
 #include "ui/uui.h"
@@ -154,19 +155,22 @@ struct btn_rects title_buttons(const struct window *win) {
 // icon box-filtered down is a smudge, and no icon at all reads better
 // than a wrong-looking one. The title simply starts where it always
 // did in that case.
-const struct uimg *title_icon(int idx, int *out_x, int *out_y, int *out_size) {
-    if (idx < 0 || idx >= window_count) return 0;
+static const struct uimg *title_icon_of(const struct window *win, int *out_x, int *out_y, int *out_size) {
     int size = WM_TITLEBAR_H - 8;
     if (size < 10) return 0;
-    const char *name = wm_window_icon_name(idx);
+    const char *name = wm_window_icon_name_of(win);
     if (!name) return 0;
     const struct uimg *ico = icon_get(name, size);
     if (!ico) return 0;
-    const struct window *win = &windows[idx];
     *out_x = win->x + 5;
     *out_y = win->y + (WM_TITLEBAR_H - size) / 2;
     *out_size = size;
     return ico;
+}
+
+const struct uimg *title_icon(int idx, int *out_x, int *out_y, int *out_size) {
+    if (idx < 0 || idx >= window_count) return 0;
+    return title_icon_of(&windows[idx], out_x, out_y, out_size);
 }
 
 // Hand-drawn diagonal X, sized to fit inside a button/icon area of
@@ -1029,7 +1033,7 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     // most-repeated drawing bug (docs/gui-guidelines.md).
     int text_x = win->x + 6;
     int ix, iy, isz;
-    const struct uimg *ico = title_icon(idx, &ix, &iy, &isz);
+    const struct uimg *ico = title_icon_of(win, &ix, &iy, &isz);   // by the window: a ghost has no index
     if (ico) {
         // ALPHA, not a plain blit: an icon is a rounded tile on a
         // transparent field, and a plain blit lands its corners as
@@ -1146,6 +1150,19 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
 #define GRIP_STEP  3   // px between dot origins -- one clear pixel between
 #define GRIP_INSET 3   // px from the frame's outer edge to the first dot
 #define GRIP_ROWS  3
+
+static void draw_resize_grip(const struct window *win);
+
+void wm_render_window_into(struct ugfx_surface *dst, struct window *ghost, int focused) {
+    g_wm_surface_override = dst;
+    ugfx_clear_clip_rect(dst);
+    draw_window_chrome(ghost, -1, focused);   // -1: no index, so no armed/hovered button state
+    if (wm_client_is_client_window(ghost) && ghost->client_buf)
+        ugfx_blit(dst, window_content_x(ghost), window_content_y(ghost),
+                  ghost->client_w, ghost->client_h, ghost->client_buf, ghost->client_w);
+    draw_resize_grip(ghost);
+    g_wm_surface_override = 0;
+}
 
 static void draw_resize_grip(const struct window *win) {
     if (win->state == WIN_MAXIMIZED) return;
@@ -1276,6 +1293,22 @@ static int client_content_rects(struct ugfx_skip_rect *out, int max) {
 // Milestone 12 entry for what's still open.
 static int damage_x0, damage_y0, damage_x1, damage_y1;
 
+// A TEST LEVER: for the next `n` rendered frames every WINDOW damage
+// rect (wm_damage_window_rect) is SHRUNK by WM_DAMAGE_SHRINK_PX on each
+// side, so tools/damage_sweep.py's positive control can make the
+// verifier report a miss on a WM that has none. It used to rely on a
+// real bug being present, and the day the last one was fixed it
+// reported the harness as "not checking anything".
+//
+// Shrink, not drop: a frame whose damage is all dropped has NO damage,
+// and a frame with no damage is a full repaint -- correct by
+// construction, nothing to report. A shrunk box keeps the frame
+// damage-limited and leaves a border the moved window changed.
+#define WM_DAMAGE_SHRINK_PX 32
+static int g_damage_shrink;
+void wm_damage_shrink(int n) { g_damage_shrink = n > 0 ? n : 0; }
+int  wm_damage_shrink_px(void) { return g_damage_shrink > 0 ? WM_DAMAGE_SHRINK_PX : 0; }
+
 void wm_damage_rect(int x, int y, int w, int h) {
     if (w <= 0 || h <= 0) return;
     int x1 = x + w, y1 = y + h;
@@ -1316,7 +1349,34 @@ static void damage_reset(void) {
 // windows[], since by the time this runs a closed window is already
 // gone from the array and a reordered window's geometry didn't change
 // (nothing here would notice either on its own).
+// FOCUS IS A RENDERED STATE: the focused window's title bar is another
+// colour and its shadow is larger and darker. A raise damages both
+// windows itself (bring_to_front), but focus also moves when the top
+// window is minimized or closes, and those paths damaged only the
+// window that went. The shadow made the gap visible -- the band a
+// newly focused window's shadow adds fell outside every rect -- so the
+// change is tracked here, by identity rather than index, and both the
+// window that lost focus and the one that gained it are damaged.
+static int g_focus_pid_last = -1;
+static uint32_t g_focus_win_last;
+static int g_focus_idx_last = -1;
+
+static void damage_focus_change(void) {
+    int f = wm_focus_index();
+    int pid = f >= 0 ? windows[f].client_pid : 0;
+    uint32_t win = f >= 0 ? windows[f].client_win : 0;
+    if (f == g_focus_idx_last && pid == g_focus_pid_last && win == g_focus_win_last) return;
+    if (f >= 0) wm_damage_window_rect(windows[f].x, windows[f].y, windows[f].w, windows[f].h);
+    // The previous holder, if it is still here to be repainted.
+    for (int i = 0; i < window_count; i++)
+        if (windows[i].client_pid == g_focus_pid_last && windows[i].client_win == g_focus_win_last &&
+            windows[i].state != WIN_MINIMIZED)
+            wm_damage_window_rect(windows[i].x, windows[i].y, windows[i].w, windows[i].h);
+    g_focus_idx_last = f; g_focus_pid_last = pid; g_focus_win_last = win;
+}
+
 static void compute_window_damage(void) {
+    damage_focus_change();
     for (int i = 0; i < window_count; i++) {
         struct window *w = &windows[i];
         int visible_now = (w->state != WIN_MINIMIZED);
@@ -1481,6 +1541,7 @@ static void render_scene(int mx, int my, int has_damage) {
         if (wm_render_hidden_pid() &&
             wm_client_is_client_window(&windows[i]) &&
             windows[i].client_pid == wm_render_hidden_pid()) continue;
+        if (wm_anim_hides(&windows[i])) continue;   // its ghost is on screen instead (wm_anim.h)
         if (has_damage && !window_intersects_damage(&windows[i])) continue;
         if (covered && i < focus && !windows[i].popup) continue; // under the fullscreen window
         if (windows[i].popup || windows[i].fullscreen) {
@@ -1531,6 +1592,7 @@ static void render_scene(int mx, int my, int has_damage) {
     }
 
     if (!covered) draw_taskbar();
+    wm_anim_draw();   // ghosts: over the windows and the taskbar a minimize shrinks into
     // Every open overlay, LEAST modal first, from the one table that
     // also decides who gets a click (wm_overlay.h). The order used to
     // be spelled out here and again, backwards, in wm_input.c -- two
@@ -1935,6 +1997,7 @@ void wm_render_frame(int mx, int my) {
                      __builtin_ia32_rdtsc() - t0_cyc);
     }
     damage_reset();
+    if (g_damage_shrink > 0) g_damage_shrink--;   // the lever counts rendered frames
 }
 
 void wm_render_cursor_move(int mx, int my) {

@@ -37,10 +37,17 @@ rediscover:
   2. Coordinates are re-read from `gui windows` between steps, never
      carried over. Windows move; a cached rect drags the wrong thing and
      the failure looks like a WM bug.
-  3. It VALIDATES ITSELF. --positive-control deliberately expects a
-     violation, so "0 bugs" can be distinguished from "the harness is
-     not actually checking anything" -- which is exactly the mistake
-     this project's testing notes warn about most often.
+  3. It VALIDATES ITSELF. --positive-control INJECTS a miss -- `gui
+     damage shrink 4` insets every WINDOW damage rect by 32 px for the
+     next few rendered frames, so a drag's frames are limited to a box
+     smaller than the area the window vacated -- and then expects the
+     verifier to report it, so "0 bugs" can be distinguished from "the
+     harness is not actually checking anything" -- which is exactly the
+     mistake this project's testing notes warn about most often. It used
+     to merely EXPECT a violation, which passed for as long as the WM
+     had a real one; the day the last was fixed the control reported the
+     harness as broken. (Dropping the damage outright does not work: a
+     frame with none is a full repaint, correct by construction.)
 
 CAVEAT WORTH KNOWING
 --------------------
@@ -108,13 +115,24 @@ class Sweep:
         return None
 
 
-def run_sequence(sw):
+def run_sequence(sw, inject=False):
     dbg = sw.dbg
 
     # Open several overlapping windows -- overlap is what makes a missed
     # declaration visible at all.
     for app in APPS:
         sw.step(f"open {app}", f"gui open {app}")
+    if inject:
+        # THE POSITIVE CONTROL: window damage is shrunk for a few frames,
+        # so the drag below moves a window whose vacated border the
+        # frame's damage box does not include. A verifier that cannot see
+        # this sees nothing. A few frames, not one: the drag's first
+        # rendered frame is a cursor-only move.
+        w = sw.visible()[-1]
+        dbg.send("gui damage shrink 4")
+        sw.step(f"injected miss: drag {w['title']}",
+                f"gui drag {w['x'] + w['w'] // 2} {w['y'] + 12} "
+                f"{w['x'] + w['w'] // 2 + 60} {w['y'] + 12 + 40}")
 
     # Raise each in turn: z-order churn with no geometry change, which
     # compute_window_damage() cannot see on its own.
@@ -253,7 +271,7 @@ def main():
 
     sw = Sweep(dbg, verbose=args.verbose)
     try:
-        run_sequence(sw)
+        run_sequence(sw, inject=args.positive_control)
         if args.random:
             seed = args.seed if args.seed is not None else random.randrange(1 << 30)
             run_random(sw, args.random, seed)

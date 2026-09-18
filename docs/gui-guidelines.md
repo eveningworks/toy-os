@@ -649,6 +649,18 @@ the same colour.
 Semantic colour is separate from decoration: the close button is red
 because closing is destructive, not because it looks nice.
 
+## Motion: a window arrives, leaves and minimizes with a gesture
+
+A new window scales in from 92% while fading in; a closing one scales
+out while fading; a minimize shrinks the window into its taskbar button
+and a restore grows it back out -- 150 ms, ease-out, the DWM/KWin
+figures. The rules: an animation is a GHOST of the window
+(`userland/wm/wm_anim.c`), never the live window moving; nothing waits
+on it -- input goes to the real window rect from the first frame; a
+test settles with `DebugConsole.settle()`, which waits for `anims` to
+reach zero; and `desktop.animations` turns them off, at which point
+every state change lands in one frame as before.
+
 ## Depth: shadows say what is on top
 
 Every window casts a drop shadow onto whatever is beneath it, and the

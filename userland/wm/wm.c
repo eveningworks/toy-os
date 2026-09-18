@@ -24,7 +24,8 @@
 // with nothing else changing -- cheap without needing real dirty-rect
 // tracking of the scene: see wm_render_cursor_move() in wm_render.c.
 #include "wm_internal.h"
-#include "wm_shadow.h"   // wm_damage_window_rect(): a window's rect plus its shadow
+#include "wm_shadow.h"
+#include "wm_anim.h"   // wm_damage_window_rect(): a window's rect plus its shadow
 #include "wm_idle.h"
 #include "wm_dnd.h"
 #include "wm_geometry.h"
@@ -231,7 +232,11 @@ const struct window *wm_get_window(int index) {
 // property of the window, not of the strip that happens to draw it.
 const char *wm_window_icon_name(int idx) {
     if (idx < 0 || idx >= window_count) return 0;
-    const char *id = windows[idx].app_id;
+    return wm_window_icon_name_of(&windows[idx]);
+}
+
+const char *wm_window_icon_name_of(const struct window *w) {
+    const char *id = w->app_id;
     if (!id || !id[0]) return 0;
     for (int i = 0; i < gui_app_registry_count; i++) {
         const struct gui_app *a = &gui_app_registry[i];
@@ -360,7 +365,10 @@ void open_app(const struct gui_app *app) {
     if (!app->multi_instance) {
         int existing = find_window_for_app(app);
         if (existing >= 0) {
-            if (windows[existing].state == WIN_MINIMIZED) windows[existing].state = WIN_NORMAL;
+            if (windows[existing].state == WIN_MINIMIZED) {
+                wm_anim_restore(existing);
+                windows[existing].state = WIN_NORMAL;
+            }
             bring_to_front(existing);
             redraw_pending = 1;
             return;
@@ -1000,6 +1008,9 @@ void wm_run(void) {
                 if (in_ms < wait_ms) wait_ms = in_ms;
             }
             if (redraw_pending || wm_debug_work_pending()) wait_ms = 0;
+            // A ghost in flight wants a frame every WM_ANIM_FRAME_MS, not
+            // the idle park (wm_anim.h).
+            if (wm_anim_active() && wait_ms > WM_ANIM_FRAME_MS) wait_ms = WM_ANIM_FRAME_MS;
 
             // Through the channel when there is one, so a client's
             // message defeats this park exactly as a kernel event does
@@ -1020,6 +1031,9 @@ void wm_run(void) {
         // would stop a silent watchdog from meaning "the stall was not
         // ours". See wm_watchdog.c.
         wmwd_frame_begin();
+
+        wmwd_phase("anim");
+        wm_anim_step();   // advance the ghosts; damages, sets redraw_pending
 
         // Picks up a cursor theme or size changed from Control Panel or
         // by editing /etc/toyos.conf. One generation compare per frame
@@ -1060,6 +1074,7 @@ void wm_run(void) {
         taskbar_poll_config();
         calendar_poll_config(); // `desktop.week_start`, same generation poll
         wm_shadow_poll_config(); // `desktop.shadows`, same poll
+        wm_anim_poll_config();   // `desktop.animations`, same poll
         volume_poll_config();   // the level and the device list, and the debounced write
         brightness_poll_config();
 

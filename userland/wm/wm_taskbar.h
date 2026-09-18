@@ -59,6 +59,11 @@ struct taskbar_button {
 // a fourth thing that can disagree with the other three.
 int taskbar_layout(struct taskbar_button *out, int max);
 
+// The button window `idx` is shown on -- its own, or its group's -- as a
+// screen rect; 0 when the strip has no room for it. What a minimize
+// shrinks toward (wm_anim.h).
+int taskbar_button_rect_for(int idx, int *x, int *y, int *w, int *h);
+
 // The icon column inside a taskbar button: its edge length in pixels.
 // Two callers must agree on it -- wm_render.c draws the icon and this
 // file's make_label() has to reserve the same width, or a label is

@@ -1,0 +1,4 @@
+Description=Windows open, close, minimize and come back with motion
+Order=15
+Choice.on=On
+Choice.off=Off

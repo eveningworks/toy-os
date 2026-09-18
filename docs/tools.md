@@ -2090,6 +2090,32 @@ window without going through it will find its layout polls timing out.
   DISTINCT COLOURS in the canvas (468 with, 5 without) rather than by
   sampling a point, since a curve moves and a fixed sample point
   doesn't follow it.
+- **`animation_test.py`** -- window animations (`userland/wm/wm_anim.c`)
+  and `desktop.animations`. Opens, minimizes, restores and closes
+  Calculator with the setting on and then off. For each change: `gui
+  state --json`'s `anims` is >= 1 right after and 0 once settled, and a
+  frame captured mid-ghost differs inside the window's rect from BOTH
+  the frame before the change and the settled frame -- so the ghost is
+  something in between, not one of them. Off: `anims` stays 0 and the
+  first frame after the change already equals the settled one. The
+  close is the client being killed, which is the case the ghost exists
+  to outlive. Puts the setting back to `on` in a `finally`.
+
+- **`damage_sweep.py`'s positive control injects its miss.** `gui damage
+  shrink <n>` (a test lever in `wm_render.c`) insets every
+  `wm_damage_window_rect()` by 32 px for the next `n` rendered frames;
+  `--positive-control` shrinks four frames before a drag and expects the
+  verifier to report the border the window vacated. Shrink rather than
+  drop, because a frame whose damage is all dropped has none, and a frame
+  with no damage is a full repaint -- correct by construction. Until
+  2026-09-18 the control only EXPECTED a violation, which passed for as
+  long as the WM had a real one -- two, as it turned out (a focus change's
+  shadow and the Start button's lit state) -- and the day both were fixed
+  it reported the harness as "not checking anything". **The injected miss
+  does not yet make the verifier fire** -- `docs/bugs.md` has the
+  measurement -- so the control exits 1, loudly, and a clean sweep is
+  not yet proof until it does.
+
 - **`shadow_test.py`** -- drop shadows (`userland/wm/wm_shadow.c`) and
   `desktop.shadows`. Places Notepad and Calculator over the flat lower
   wallpaper band, focuses one, and reads LUMINANCE just below and

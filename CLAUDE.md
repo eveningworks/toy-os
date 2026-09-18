@@ -618,7 +618,8 @@ runners themselves; `--list` on either runner is the live answer.
 
 *Run by `gui_regress.py`:*
 
-`blank_window_test.py`, `brightness_test.py`, `calculator_client_test.py`,
+`animation_test.py`, `blank_window_test.py`, `brightness_test.py`,
+`calculator_client_test.py`,
 `calendar_test.py`, `clipboard_test.py`, `compositor_death_test.py`,
 `compositor_test.py`, `crashtest_test.py`, `cursor_theme_test.py`,
 `damage_hunt.py`, `damage_sweep.py`, `desktop_entries_test.py`,

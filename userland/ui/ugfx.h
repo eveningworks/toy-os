@@ -125,6 +125,15 @@ void ugfx_blit(struct ugfx_surface *s, int x, int y, int w, int h,
 // blit does.
 void ugfx_blit_alpha(struct ugfx_surface *s, int x, int y, int w, int h,
                       const uint32_t *src, int src_pitch_px);
+// A `sw` x `sh` source stretched to `w` x `h` at (x, y), NEAREST
+// NEIGHBOUR, blended over the surface at one constant `alpha` (255 is a
+// plain scaled copy). The source's own alpha byte is ignored. For a
+// window animating over a few frames, where a bilinear filter's cost
+// would buy nothing anyone sees; not for an image that stays on
+// screen -- that is uimg_scale().
+void ugfx_blit_scaled_alpha(struct ugfx_surface *s, int x, int y, int w, int h,
+                             const uint32_t *src, int sw, int sh, int src_pitch_px,
+                             uint8_t alpha);
 
 // The same again, but the source's COLOUR is discarded and only its
 // alpha is used, as coverage for `color`. A SYMBOLIC icon: one that

@@ -28,7 +28,16 @@ void wm_layout_changed(void); // the usable area moved: relay windows and the gr
 // `&g_wm_screen.back` at each site so the indirection stays greppable
 // and a future second surface (an off-screen compose target, say) is one
 // function to change rather than 169.
-static inline struct ugfx_surface *wm_surface(void) { return &g_wm_screen.back; }
+// The scene's back buffer -- or, while a ghost is being snapshotted
+// (wm_anim.c), the ghost's own buffer, so the chrome code draws there
+// without knowing.
+extern struct ugfx_surface *g_wm_surface_override;
+static inline struct ugfx_surface *wm_surface(void) {
+    return g_wm_surface_override ? g_wm_surface_override : &g_wm_screen.back;
+}
+// Draws `ghost`'s chrome, content and grip into `dst` at the ghost's
+// own x/y (0, 0 for a snapshot). wm_render.c.
+void wm_render_window_into(struct ugfx_surface *dst, struct window *ghost, int focused);
 
 // Private to the window manager's own files (wm.c / wm_input.c /
 // wm_render.c / start_menu.c) -- never included from outside apps/wm/,
@@ -272,6 +281,11 @@ extern int title_hover_win;
 extern int title_hover_kind;
 
 extern int redraw_pending;
+// Window damage is SHRUNK by a margin for the next `n` rendered frames
+// (wm_render.c) -- the damage sweep's positive control, reached as
+// `gui damage shrink <n>`.
+void wm_damage_shrink(int n);
+int  wm_damage_shrink_px(void);   // the inset to apply now, 0 when the lever is off
 
 // Accumulates (x, y, w, h) into the pending scene-damage region
 // wm_render_frame() will clip its next repaint to -- see wm_render.c's
@@ -467,6 +481,7 @@ const struct uimg *title_icon(int idx, int *out_x, int *out_y, int *out_size);
 // Which .desktop icon name a window's app_id resolves to, or NULL --
 // see wm.c. The taskbar and the title bar both ask.
 const char *wm_window_icon_name(int idx);
+const char *wm_window_icon_name_of(const struct window *w); // by app_id, no index
 
 // The Start button's mark and its rect, or NULL when the button shows
 // the word instead (`text` mode, or artwork missing from the disk).

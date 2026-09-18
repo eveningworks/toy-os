@@ -1,5 +1,6 @@
 // See wm_debug.h for what this is for and why it lives here.
 #include "wm_internal.h"
+#include "wm_anim.h"
 #include "wm_idle.h"
 #include "desktop.h"   // desktop_icon_geometry -- `gui icons`
 #include "wm_taskbar.h"
@@ -983,6 +984,24 @@ static void cmd_state(struct dbg_out *o, int json) {
                      redraw_pending ? "true" : "false", wm_debug_input_pending());
         dbg_out_printf(o, "\"hwcursor\":%s,",
                      wm_hwcursor_active() ? "true" : "false");
+        // Ghosts in flight (wm_anim.h): a test that reads pixels waits
+        // for zero, the same way it waits for `pending`.
+        dbg_out_printf(o, "\"anims\":%d,", wm_anim_active());
+        // Where each ghost is this frame, so a test can watch one move
+        // instead of racing a screenshot against 150 ms.
+        dbg_out_printf(o, "\"anim_rects\":[");
+        {
+            int n = 0;
+            for (int i = 0; i < WM_ANIM_MAX; i++) {
+                int x, y, w, h, al;
+                int kind = wm_anim_rect(i, &x, &y, &w, &h, &al);
+                if (!kind) continue;
+                dbg_out_printf(o, "%s{\"kind\":%d,\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"alpha\":%d}",
+                             n ? "," : "", kind, x, y, w, h, al);
+                n++;
+            }
+        }
+        dbg_out_printf(o, "],");
         // Always 0, and kept in the grammar on purpose. It reported
         // wm.c's pending_proc -- the process a WINDOW was waiting on --
         // which only window_start_process() ever set, and nothing has
@@ -1608,6 +1627,17 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
                 return 1;
             }
             wm_damage_verify_set(k_strcmp(onoff, "on") == 0);
+            return 1;
+        }
+        // `damage shrink <n>`: shrink every WINDOW damage rect for the next
+        // n rendered frames, so the sweep's positive control has a miss to
+        // find (wm_internal.h).
+        if (arg && k_strcmp(arg, "shrink") == 0) {
+            char *cnt = next_tok(&p);
+            int n = 1;
+            if (cnt && !parse_int(cnt, &n)) n = 1;
+            wm_damage_shrink(n);
+            dbg_out_printf(o, "damage: window damage shrunk for the next %d frame(s)\r\n", n);
             return 1;
         }
         int dx, dy, dw, dh;

@@ -23,6 +23,23 @@ static void shadows_get(char *out, uint32_t cap) {
         k_strlcpy(out, "on", cap);
 }
 
+static void animations_get(char *out, uint32_t cap) {
+    if (!etc_config_get(DESKTOP_CONFIG_FILE, "animations", out, cap))
+        k_strlcpy(out, "on", cap);
+}
+
+static const struct setting g_animations_setting = {
+    .name  = "animations",
+    .label = "Window animations",
+    .type  = SETTING_TYPE_ENUM,
+    .file  = DESKTOP_CONFIG_FILE,
+    .category = "Appearance",
+    .group    = "Effects",
+    .choice = onoff_choice,
+    .get   = animations_get,
+    .apply = 0, // persist-only -- wm_anim.c adopts it
+};
+
 static const struct setting g_shadows_setting = {
     .name  = "shadows",
     .label = "Window shadows",
@@ -36,5 +53,6 @@ static const struct setting g_shadows_setting = {
 };
 
 void window_effects_setting_register(void) {
+    setting_register(&g_animations_setting);
     setting_register(&g_shadows_setting);
 }

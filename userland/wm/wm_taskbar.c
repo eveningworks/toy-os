@@ -2,6 +2,7 @@
 // what it does and why it is one file rather than three walks.
 #include "wm_internal.h"
 #include "wm_taskbar.h"
+#include "wm_anim.h"
 #include "wm_tray.h"
 #include "context_menu.h"
 #include "ui/uui.h"
@@ -247,6 +248,20 @@ static void make_label(char *dst, int cap, const char *src, int w, int count) {
     dst[n] = '\0';
 }
 
+int taskbar_button_rect_for(int idx, int *x, int *y, int *w, int *h) {
+    // STATIC: 3.5 KB of buttons on a 16 KiB ring-3 stack is what the
+    // frame budget exists to catch, and the WM has one thread.
+    static struct taskbar_button b[64];
+    int n = taskbar_layout(b, 64);
+    for (int k = 0; k < n; k++) {
+        if (b[k].first != idx && !same_app(b[k].first, idx)) continue;
+        *x = b[k].x; *w = b[k].w;
+        *y = screen_h - taskbar_h; *h = taskbar_h;
+        return 1;
+    }
+    return 0;
+}
+
 int taskbar_layout(struct taskbar_button *out, int max) {
     g_hidden = 0;
     int listed = listed_count();
@@ -337,7 +352,7 @@ static char g_row_label[TB_GROUP_ROWS][WIN_LABEL_MAX_CHARS * 3];
 static void row_raise(void *ctx) {
     int i = *(int *)ctx;
     if (i < 0 || i >= window_count) return; // the window may have closed while the menu was open
-    if (windows[i].state == WIN_MINIMIZED) windows[i].state = WIN_NORMAL;
+    if (windows[i].state == WIN_MINIMIZED) { wm_anim_restore(i); windows[i].state = WIN_NORMAL; }
     wm_ensure_reachable(i);
     raise_with_dialogs(i);
     redraw_pending = 1;
@@ -379,6 +394,7 @@ static void open_group_menu(const struct taskbar_button *b) {
 // burying the dialog underneath would leave the app looking wedged.
 static void activate(int i) {
     if (windows[i].state == WIN_MINIMIZED) {
+        wm_anim_restore(i);
         windows[i].state = WIN_NORMAL;
         wm_ensure_reachable(i);
         raise_with_dialogs(i);
@@ -390,6 +406,7 @@ static void activate(int i) {
         // button is the only handle such a window has left.
         raise_with_dialogs(i);
     } else if (i == wm_focus_index()) {
+        wm_anim_minimize(i);
         windows[i].state = WIN_MINIMIZED;
     } else {
         raise_with_dialogs(i);

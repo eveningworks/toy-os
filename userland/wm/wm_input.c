@@ -3,7 +3,8 @@
 // this reads and mutates (windows[], dragging/resizing, etc.) and
 // wm.c's top comment for why that sharing is fine here.
 #include "wm_internal.h"
-#include "wm_shadow.h"   // wm_damage_window_rect(): a window's rect plus its shadow
+#include "wm_shadow.h"
+#include "wm_anim.h"   // wm_damage_window_rect(): a window's rect plus its shadow
 #include "start_menu.h"
 #include "start_store.h"
 #include "context_menu.h"
@@ -454,6 +455,7 @@ static void ctx_close_window(void *ctx) { wm_request_close(*(int *)ctx); }
 
 static void ctx_minimize_window(void *ctx) {
     int i = *(int *)ctx;
+    wm_anim_minimize(i);
     windows[i].state = WIN_MINIMIZED;
     redraw_pending = 1;
 }
@@ -1147,6 +1149,7 @@ void wm_update_title_btn_press(int mx, int my, uint8_t buttons) {
     if (now_over) {
         int idx = title_btn_armed_win;
         if (title_btn_armed_kind == 0) {
+            wm_anim_minimize(idx);
             windows[idx].state = WIN_MINIMIZED;
         } else if (title_btn_armed_kind == 1) {
             // Fixed-size apps (Calculator -- see gui_apps.h) get a

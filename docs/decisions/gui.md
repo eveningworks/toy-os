@@ -8590,3 +8590,54 @@ with the shadows on and its positive control still fired.
 title bar tall at the default font; a fixed pixel radius would be right
 at exactly one font size (`docs/gui-guidelines.md`, "Size everything
 from the font").
+
+## Window animations are ghosts: one snapshot, scaled and faded, in place of the window
+
+A toplevel opens by scaling in from 92% while fading in, closes by
+scaling out while fading, minimizes by shrinking into its taskbar
+button and comes back from it -- 150 ms, ease-out, `userland/wm/wm_anim.c`.
+`desktop.animations` turns them off. Maximize and restore-from-maximize
+are not animated yet.
+
+**Why a snapshot and not the live window.** DWM and KWin animate a
+window's TEXTURE: the compositor already holds every window as one, so
+scaling and fading it is a transform. Here a window is painted
+procedurally into one back buffer -- chrome by `draw_window_chrome()`,
+content by a blit -- and there is no per-window layer to transform.
+Rendering the window once into a buffer of its own
+(`wm_render_window_into()`, which points `wm_surface()` at that buffer
+for the duration) gives it the texture DWM has for free, and every
+animation is then the same operation: `ugfx_blit_scaled_alpha()` of
+that buffer at a tweened rect and alpha. It also makes the ghost
+INDEPENDENT of the window: a client that has exited still shrinks away,
+because the ghost owns its pixels and `windows[]` can compact under it.
+
+**Why the live window is hidden while its ghost runs.** An open or a
+restore has a live window at the destination and a ghost on the way
+there; drawing both would show the window pop in at full size under a
+fading ghost. `wm_anim_hides()` keeps the window out of the scene until
+the ghost lands, identified by (pid, window id) rather than by index,
+since indices move.
+
+**Why the starters run BEFORE the state changes.** The snapshot reads
+the window's buffers and geometry as they are; `on_window_destroyed()`
+unmaps the buffers a line later, and a minimize is skipped by the
+scene the frame after. So every site calls the starter first. The open
+animation starts at the FIRST PRESENT rather than at creation, for the
+same reason: at creation there is nothing to snapshot.
+
+**Why nearest-neighbour scaling and a constant alpha.** The ghost is on
+screen for 150 ms; a bilinear filter would cost a multiply-add per
+channel per pixel for a difference nobody sees in nine frames. The
+source's own alpha byte is ignored: a window has none.
+
+**Why the frames come from the WM loop's wait.** The loop parks up to
+100 ms waiting for input; a ghost in flight caps that at
+`WM_ANIM_FRAME_MS` and `wm_anim_step()` sets `redraw_pending` while it
+moves, so the compositor runs at ~60 Hz only while something animates.
+It is the same shape the toolkit uses for smooth scrolling.
+
+**Why `gui state` reports `anims`.** Fifty GUI tools compare settled
+frames. A frame captured mid-ghost is neither the before nor the after,
+so `DebugConsole.settle()` waits for `anims` to reach zero exactly as it
+waits for `pending` -- without it the suite would flake on every open.
