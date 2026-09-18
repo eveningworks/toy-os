@@ -232,11 +232,27 @@ int tty_check_background_read(struct tty *t) {
     if (!pid) return 0;  // kernel context: it has no group to be outside
     if (scheduler_pgid(pid) == t->fg_pgid) return 0;
 
+    // **THREE WAYS SIGTTIN CANNOT DO ITS JOB, AND ALL THREE ANSWER
+    // EIO.** Stopping the reader is only the right answer while
+    // something could start it again; where it could not, POSIX refuses
+    // the read instead, and so does this.
+    //
     // IGNORING THE SIGNAL DOES NOT EARN THE KEYBOARD. A process that has
     // asked not to be stopped cannot be stopped, so the only two answers
-    // left are "let it steal input" and "refuse the read"; POSIX picks
-    // the second and so does this.
+    // left are "let it steal input" and "refuse the read".
     if (scheduler_signal_ignored(pid, SIGTTIN)) return -EIO;
+    // BLOCKING IT IS THE SAME REFUSAL BY ANOTHER ROUTE, and it is the
+    // one a job-control shell actually takes -- the signal goes pending,
+    // nothing stops, and the read that returned "try again" is retried
+    // forever by libsys. That is not a hang anybody can see: it is a
+    // process at 100% of the CPU with nothing on screen to explain it.
+    if (scheduler_signal_blocked(pid) & (1u << SIGTTIN)) return -EIO;
+    // AND AN ORPHANED GROUP HAS NOBODY LEFT TO CONTINUE IT. A shell in
+    // a terminal window that has been closed is exactly this: its
+    // parent is gone and it has been reparented to init, so stopping it
+    // would be for the rest of the boot. Measured on the bare-metal
+    // laptop as a `dash` holding 64 s of CPU with pid 1 for a parent.
+    if (scheduler_pgid_orphaned(scheduler_pgid(pid))) return -EIO;
 
     // THE WHOLE GROUP, not the one process: a background PIPELINE whose
     // first stage reads would otherwise be half stopped and half

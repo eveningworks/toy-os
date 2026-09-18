@@ -3057,6 +3057,39 @@ int scheduler_pgid(int pid) {
     return p ? p->pgid : 0;
 }
 
+// **IS THIS PROCESS GROUP ORPHANED?** POSIX's definition, not a
+// shorthand: a group is orphaned when no member has a parent that is
+// both ALIVE, in a DIFFERENT group, and in the SAME SESSION. The parent
+// being elsewhere in the session is what makes it possible for anyone
+// to notice the group stopped and continue it.
+//
+// It exists because of what happens otherwise. A background read stops
+// the reader with SIGTTIN, which is right while somebody could resume
+// it -- and is a process stopped forever once nobody can. The shell in
+// a closed terminal window is exactly that: reparented to init, its
+// group's only outside parent gone. POSIX answers such a read with EIO
+// instead, and tty.c's tty_check_background_read() is the caller.
+int scheduler_pgid_orphaned(int pgid) {
+    if (pgid < 1) return 0;
+    int any = 0;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].state == SCHED_UNUSED || procs[i].state == SCHED_ZOMBIE) continue;
+        if (procs[i].pgid != pgid) continue;
+        any = 1;
+        int ppid = procs[i].ppid;
+        if (ppid < 1 || ppid > MAX_PROCS) continue;
+        const struct sched_process *par = &procs[ppid - 1];
+        if (par->state == SCHED_UNUSED || par->state == SCHED_ZOMBIE) continue;
+        // A parent inside the group cannot rescue it, and one in another
+        // SESSION has no claim on this terminal.
+        if (par->pgid == pgid) continue;
+        if (par->sid != procs[i].sid) continue;
+        return 0;
+    }
+    // A group with no members is not orphaned; it does not exist.
+    return any;
+}
+
 int scheduler_pgid_live(int pgid) {
     if (pgid < 1) return 0;
     for (int i = 0; i < MAX_PROCS; i++) {

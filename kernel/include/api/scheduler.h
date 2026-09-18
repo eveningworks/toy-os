@@ -922,6 +922,13 @@ int scheduler_setpgid(int pid, int pgid);
 // 1 if any live process is in `pgid`. What SYS_TCSETPGRP validates
 // against, so a shell cannot put a group that has already exited in
 // front of the console and leave Ctrl-C pointed at nothing.
+// Whether a process group is ORPHANED in POSIX's sense -- no member has
+// a live parent in a different group of the same session, so nothing
+// outside it could ever continue it if it stopped. What a terminal uses
+// to answer a background read with EIO instead of stopping a process
+// that could never be resumed. See scheduler.c.
+int scheduler_pgid_orphaned(int pgid);
+
 int scheduler_pgid_live(int pgid);
 
 // --- sessions -------------------------------------------------------
