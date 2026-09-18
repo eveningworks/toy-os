@@ -168,10 +168,10 @@ void log_layout(void) {
         uapp_logf_layout("files: layout rows %d %d\n", i, uui_fileview_row_count(&g_pane[i]));
         // THE SCROLL OFFSET, because a test that cannot see it cannot
         // tell "the view stayed put" from "the view moved and came
-        // back". Both modes: icons scroll by grid ROW, details by table
+        // back". Both modes: icons scroll by PIXEL, details by table
         // row, and only one of the two is meaningful at a time.
         uapp_logf_layout("files: layout scroll %d %d %d\n", i,
-                         g_pane[i].icon_top, g_pane[i].table.top);
+                         g_pane[i].icon_scroll, g_pane[i].table.top);
     }
     const char *sel = uui_fileview_selected_name(active());
     uapp_logf_layout("files: layout active %d\n", g_active);

@@ -164,7 +164,7 @@ struct uui_fileview {
     char drag_label[UUI_FILEVIEW_PATH_MAX];  // what the ghost says
 
     // --- icons mode only (see enum uui_fileview_mode) ---------------
-    int icon_top;            // first visible grid ROW; OWNED
+    int icon_scroll;         // PIXELS scrolled off the grid's top; OWNED
     // A drag from EMPTY SPACE sweeps a rubber band that MARKS what it
     // covers, in every view (rubberband.h's second caller); a plain
     // click there clears the selection, which is the band's own rule.

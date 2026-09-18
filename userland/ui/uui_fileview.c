@@ -314,7 +314,7 @@ void uui_fileview_set_mode(struct uui_fileview *fv, enum uui_fileview_mode mode)
     if (mode == UUI_FILEVIEW_ICONS) {
         // The table keeps its columns and sort: the grid displays the
         // same order, and switching back finds the header as it was.
-        fv->icon_top = 0;
+        fv->icon_scroll = 0;
         rb_clear(&fv->band);
         return;
     }
@@ -455,7 +455,7 @@ int uui_fileview_set_dir(struct uui_fileview *fv, const char *dir) {
     // preserve-by-name is for a refresh of the same directory.
     fv->table.selected = -1;
     fv->table.top = 0;
-    fv->icon_top = 0;
+    fv->icon_scroll = 0;
     int ok = uui_fileview_reload(fv);
     // A directory just entered starts on its first row (reload keeps
     // "nothing selected" only for a refresh of the same one).
@@ -612,34 +612,51 @@ static int ic_vis_rows(const struct uui_fileview *fv) {
     return n > 0 ? n : 1;
 }
 
+// THE GRID SCROLLS BY PIXEL, NOT BY ROW -- Explorer's and Dolphin's
+// icon views do, and a cell here is ~6 text lines tall, so a row-
+// stepped thumb had a handful of positions and leapt between them
+// under the cursor. The scrollbar helpers are unit-agnostic: they get
+// pixels for total, visible and offset alike.
+static int ic_view_h(const struct uui_fileview *fv) {
+    int h = fv->table.h - 2 * ic_pad();
+    return h > 0 ? h : 1;
+}
+
+static int ic_content_h(const struct uui_fileview *fv) {
+    return ic_total_rows(fv) * ic_cell_h();
+}
+
+static int ic_max_scroll(const struct uui_fileview *fv) {
+    int m = ic_content_h(fv) - ic_view_h(fv);
+    return m > 0 ? m : 0;
+}
+
 static int ic_bar_visible(const struct uui_fileview *fv) {
-    return ic_total_rows(fv) > ic_vis_rows(fv);
+    return ic_max_scroll(fv) > 0;
 }
 
 // Bottom-anchored offset, uui_scrollbar's convention (see uui_tree.c).
 static int ic_offset(const struct uui_fileview *fv) {
-    return ic_total_rows(fv) - ic_vis_rows(fv) - fv->icon_top;
+    return ic_max_scroll(fv) - fv->icon_scroll;
 }
 
 static void ic_clamp(struct uui_fileview *fv) {
-    int max_top = ic_total_rows(fv) - ic_vis_rows(fv);
-    if (max_top < 0) max_top = 0;
-    if (fv->icon_top > max_top) fv->icon_top = max_top;
-    if (fv->icon_top < 0) fv->icon_top = 0;
+    int max_scroll = ic_max_scroll(fv);
+    if (fv->icon_scroll > max_scroll) fv->icon_scroll = max_scroll;
+    if (fv->icon_scroll < 0) fv->icon_scroll = 0;
 }
 
 static int ic_set_offset(struct uui_fileview *fv, int offset) {
-    int before = fv->icon_top;
-    fv->icon_top = ic_total_rows(fv) - ic_vis_rows(fv) - offset;
+    int before = fv->icon_scroll;
+    fv->icon_scroll = ic_max_scroll(fv) - offset;
     ic_clamp(fv);
-    return fv->icon_top != before;
+    return fv->icon_scroll != before;
 }
 
 static struct icon_grid ic_grid(const struct uui_fileview *fv) {
     struct icon_grid g;
     g.origin_x = fv->table.x + ic_pad();
-    // Scrolled: grid row `icon_top` lands on the widget's first row.
-    g.origin_y = fv->table.y + ic_pad() - fv->icon_top * ic_cell_h();
+    g.origin_y = fv->table.y + ic_pad() - fv->icon_scroll;
     g.cell_w = ic_cell_w();
     g.cell_h = ic_cell_h();
     g.cols = ic_cols(fv);
@@ -671,7 +688,7 @@ static int ic_hit_view(const struct uui_fileview *fv, int cx, int cy) {
     if (!uui_hit(t->x, t->y, t->w, t->h, cx, cy)) return -1;
     if (ic_bar_visible(fv) && cx >= t->x + t->w - t->bar_w) return -1;
     int lx = cx - (t->x + ic_pad());
-    int ly = cy - (t->y + ic_pad()) + fv->icon_top * ic_cell_h();
+    int ly = cy - (t->y + ic_pad()) + fv->icon_scroll;
     if (lx < 0 || ly < 0) return -1;
     int col = lx / ic_cell_w();
     if (col >= ic_cols(fv)) return -1;
@@ -682,10 +699,10 @@ static int ic_hit_view(const struct uui_fileview *fv, int cx, int cy) {
 static void ic_reveal(struct uui_fileview *fv) {
     int view = uui_table_view_row(&fv->table, fv->table.selected);
     if (view < 0) { ic_clamp(fv); return; }
-    int grow = view / ic_cols(fv);
-    int vis = ic_vis_rows(fv);
-    if (grow < fv->icon_top) fv->icon_top = grow;
-    else if (grow >= fv->icon_top + vis) fv->icon_top = grow - vis + 1;
+    int top = (view / ic_cols(fv)) * ic_cell_h(), bottom = top + ic_cell_h();
+    int view_h = ic_view_h(fv);
+    if (top < fv->icon_scroll) fv->icon_scroll = top;
+    else if (bottom > fv->icon_scroll + view_h) fv->icon_scroll = bottom - view_h;
     ic_clamp(fv);
 }
 
@@ -797,8 +814,8 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
     int rows = uui_fileview_row_count(fv);
     int cols = ic_cols(fv), vis = ic_vis_rows(fv);
     int px = ic_px(), cw = ic_cell_w(), chh = ic_cell_h();
-    int first = fv->icon_top * cols;
-    int last = first + (vis + 1) * cols; // +1: the partial row at the bottom
+    int first = (fv->icon_scroll / chh) * cols;
+    int last = first + (vis + 2) * cols; // +2: a partial row at each end
     if (last > rows) last = rows;
 
     int sel_x = -1, sel_y = -1; // the selected cell, for the focus ring
@@ -887,7 +904,7 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
 
     if (ic_bar_visible(fv))
         uui_scrollbar_draw(s, t->x + t->w - t->bar_w, t->y, t->bar_w, t->h,
-                            ic_total_rows(fv), vis, ic_offset(fv),
+                            ic_content_h(fv), ic_view_h(fv), ic_offset(fv),
                             uui_table_c_track_bg(t), uui_table_c_thumb_bg(t), 0);
 
     // The band, above everything it crosses. An outline, not a fill --
@@ -917,7 +934,7 @@ static int ic_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
     if (!uui_hit(t->x, t->y, t->w, t->h, cx, cy)) return 0;
 
     if (ic_bar_visible(fv) && cx >= t->x + t->w - t->bar_w) {
-        int vis = ic_vis_rows(fv), total = ic_total_rows(fv);
+        int vis = ic_view_h(fv), total = ic_content_h(fv);
         int off = ic_offset(fv);
         enum uui_scrollbar_zone zone =
             uui_scrollbar_hit(t->x + t->w - t->bar_w, t->y, t->bar_w, t->h,
@@ -929,7 +946,9 @@ static int ic_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
             t->thumb_grab = cy - thumb_y;
             return 1;
         }
-        int page = vis > 1 ? vis - 1 : 1;
+        // A page is the view less one cell, so the last row seen stays
+        // in sight as the first -- Explorer's paging.
+        int page = vis > ic_cell_h() ? vis - ic_cell_h() : ic_cell_h();
         if (zone == UUI_SB_ABOVE) ic_set_offset(fv, off + page);
         else if (zone == UUI_SB_BELOW) ic_set_offset(fv, off - page);
         return 1;
@@ -969,8 +988,8 @@ static int ic_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
 static int ic_drag(struct uui_fileview *fv, int cx, int cy) {
     struct uui_table *t = &fv->table;
     if (t->thumb_grab >= 0) {
-        int off = uui_scrollbar_offset_for_drag(t->y, t->h, ic_total_rows(fv),
-                                                 ic_vis_rows(fv), cy,
+        int off = uui_scrollbar_offset_for_drag(t->y, t->h, ic_content_h(fv),
+                                                 ic_view_h(fv), cy,
                                                  t->thumb_grab, t->bar_w, 0);
         return ic_set_offset(fv, off);
     }
@@ -992,14 +1011,15 @@ static void ic_drag_end(struct uui_fileview *fv) {
 }
 
 static int ic_wheel(struct uui_fileview *fv, int notches) {
-    int before = fv->icon_top;
+    int before = fv->icon_scroll;
     // MINUS, like every scrolling widget here: positive notches mean
     // the wheel rolled AWAY (mouse.c negates the raw byte), which
     // scrolls the view UP. This shipped as += and read exactly like an
-    // inverted mouse.
-    fv->icon_top -= notches;
+    // inverted mouse. One cell a notch, so the wheel feels as it did
+    // when the grid scrolled by row.
+    fv->icon_scroll -= notches * ic_cell_h();
     ic_clamp(fv);
-    return fv->icon_top != before;
+    return fv->icon_scroll != before;
 }
 
 static int ic_key(struct uui_fileview *fv, int key) {
