@@ -30,7 +30,14 @@
 // -- an "off" that disagreed with a timeout is a combination this
 // cannot express. The ceiling is two hours, past which a machine that
 // has been idle that long is not waiting for a screensaver.
-#define SCREENSAVER_IDLE_DEFAULT 10
+// OFF BY DEFAULT, at the maintainer's request. Most desktops ship a
+// timeout, and this one deliberately does not: the saver is a
+// fullscreen window, so on a machine being driven by test tools it
+// silently becomes the thing every screenshot measures. That is not
+// hypothetical -- a scrollbar measurement in this repo read the
+// starfield for four rounds before anyone noticed the window list.
+// `config set screensaver_minutes <n>` turns it on.
+#define SCREENSAVER_IDLE_DEFAULT 0
 #define SCREENSAVER_IDLE_MAX 120
 
 void screensaver_setting_register(void);

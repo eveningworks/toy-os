@@ -153,6 +153,26 @@ def main():
     _QMP[0] = qmp
     print("screensaver (the idle clock, in the compositor)")
 
+    # **THE TIMEOUT IS ESTABLISHED, NOT INHERITED.** The saver ships OFF
+    # (SCREENSAVER_IDLE_DEFAULT is 0 -- a fullscreen window that appears
+    # on an idle machine is the thing every screenshot then measures),
+    # and `gui idle start` honours zero by refusing to start. So four
+    # checks below failed on a change to a DEFAULT, which is CLAUDE.md's
+    # "a test must establish its own preconditions" arriving the same
+    # way it did for filemanager_test's two-pane state. Restored at the
+    # end, since `make iso` re-seeds by SYNC and a left-behind timeout
+    # follows every later run.
+    set_setting(dbg, "desktop.screensaver_idle", "10")
+    # WAIT ON THE COMPOSITOR HAVING TAKEN IT, not on a clock: the write
+    # goes through /bin/config and the compositor picks it up on its own
+    # schedule, so a fixed sleep here read the OLD value and failed the
+    # very checks this is establishing.
+    for _ in range(40):
+        st = idle(dbg)
+        if st and st.get("minutes", 0) > 0:
+            break
+        time.sleep(0.25)
+
     st = idle(dbg)
     if not check("the compositor reports its idle clock", st is not None, f"{st}"):
         return report()
@@ -283,6 +303,8 @@ def main():
     # matters here -- not that a window appeared.
     test_button(dbg, qmp, args)
 
+    # Back to the shipped default -- see the note where it was set.
+    set_setting(dbg, "desktop.screensaver_idle", "0")
     dbg.close()
     return report()
 
