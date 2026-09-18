@@ -1,6 +1,7 @@
 // table -- rows in columns, with a header. See ui/uui_table.h.
 #include "ui/uui_table.h"
 #include "ui/uui_widget.h"
+#include "ui/uui_scrollbar.h" // uui_scrollbar_natural_size()
 #include <string.h>
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
@@ -44,7 +45,13 @@ void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
     t->hovered = -1;
     t->top = 0;
     t->row_h = 0; // derive from the font
-    t->bar_w = 8;
+    // THE TOOLKIT'S OWN DEFAULT, not a pixel count. uui_scrollbar.h
+    // asks every widget to take its width from there so the bar tracks
+    // the font size and the toolkit's bars keep matching each other;
+    // this one picked 8, which is the case that header names. At the
+    // default face that left a thumb the maintainer could not reliably
+    // grab -- the same complaint that widened uui_textview's.
+    uui_scrollbar_natural_size(&t->bar_w, 0);
     t->thumb_grab = -1;
     // Sorting off until an app supplies a comparator, so a table that
     // says nothing about sorting behaves exactly as it did before.

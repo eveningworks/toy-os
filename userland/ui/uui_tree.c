@@ -3,6 +3,7 @@
 #include "ui/uui_tree.h"
 #include "ui/uui_route.h" // UUI_NOWHERE -- a drag_over's leave
 #include "ui/uui_widget.h"
+#include "ui/uui_scrollbar.h" // uui_scrollbar_natural_size()
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
 #define UUI_TREE_PAD_X   4  // left inset before the first expander
@@ -20,7 +21,13 @@ void uui_tree_init(struct uui_tree *t, int x, int y, int w, int h,
     t->dropped_node = -1;
     t->top = 0;
     t->row_h = 0; // derive from the font
-    t->bar_w = 8;
+    // THE TOOLKIT'S OWN DEFAULT, not a pixel count. uui_scrollbar.h
+    // asks every widget to take its width from there so the bar tracks
+    // the font size and the toolkit's bars keep matching each other;
+    // this one picked 8, which is the case that header names. At the
+    // default face that left a thumb the maintainer could not reliably
+    // grab -- the same complaint that widened uui_textview's.
+    uui_scrollbar_natural_size(&t->bar_w, 0);
     t->thumb_grab = -1;
     t->collapsed = 0; // EXPANDED by default -- see the header
     t->on_toggle = 0;

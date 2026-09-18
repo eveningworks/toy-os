@@ -97,7 +97,15 @@ void uui_scrollbar_natural_size(int *out_w, int *out_h) {
     // genuinely hard to hit with a mouse, which is what raised this.
     // Still font-derived, so the bar stays proportional at every font
     // size -- a fixed pixel width would be right at exactly one of them.
-    if (out_w) *out_w = ugfx_char_w() + 6;
+    // **THE FONT MAY NOT BE UP YET.** A widget builds its parts in its
+    // constructor, which can run before ugfx_font_init(), and then
+    // ugfx_char_w() is 0 -- so a bar that asked for char_w + 6 got SIX
+    // PIXELS, narrower than the hardcoded 8 it was meant to improve on,
+    // with nothing to say so. That is CLAUDE.md's "the font is not
+    // free" arriving in the toolkit rather than in a fresh app.
+    int cw = ugfx_char_w();
+    if (cw <= 0) cw = 8;   // a plausible cell, so the floor is 14 not 6
+    if (out_w) *out_w = cw + 6;
     if (out_h) *out_h = 0; // no preference: as tall as its content area
 }
 
