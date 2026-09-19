@@ -1037,3 +1037,36 @@ is the thing that grows.
   real, but a poll adds overhead and the guest is a TCG machine, so
   `tools/animation_test.py` requires fast < normal < slow and that
   `instant` creates no ghost at all.
+
+
+## The minimize effect is a choice, and only minimize/restore take it
+
+`desktop.minimize_effect` -- scale / genie / squash / glide -- is the
+question macOS asks in System Settings ("Minimize windows using: Genie
+/ Scale") and the set KWin ships as pluggable effects. **Open and close
+deliberately do not take it**: a window that genies out of nothing
+reads as a glitch, and macOS applies its genie to the Dock alone.
+
+- **Three of the four are the same blit.** `ugfx_blit_scaled_alpha()`
+  already scales the axes independently, so scale, squash and glide
+  differ only in their from/to rects. Only GENIE needs a primitive of
+  its own.
+- **`ugfx_blit_genie()` is one span per ROW**, not a mesh: each row's
+  width and centre are eased between the top span and the bottom span
+  with a smoothstep, and the whole source is always inside the tube --
+  compressed, never cropped. One sample per destination pixel, the
+  same class as the scaled blit and cheaper in practice because the
+  tube is narrower than the window.
+- **THE EFFECT IS FIXED WHEN THE ANIMATION STARTS**, not read per
+  frame: changing the setting mid-flight would otherwise switch a
+  ghost's shape and its destination halfway across the screen.
+- **A GHOST'S DAMAGE IS WHAT IT PAINTS, WHICH IS NOT ALWAYS ITS RECT.**
+  The genie fills the whole tube from the window's current top edge
+  down to the button, so damaging the lerped rect alone leaves the neck
+  on screen. `damage_ghost()` covers the tube. This is the third time
+  this exact fault has been fixed here -- the drop shadow's band and a
+  window that resized under its own ghost were the other two -- so a
+  new effect that paints outside its rect must extend that function.
+- **A restore is its minimize reversed**, the same pair of rects
+  swapped. A restore that took a different route reads as two
+  unrelated animations rather than one thing going and coming back.

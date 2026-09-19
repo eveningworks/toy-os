@@ -1,0 +1,6 @@
+Description=How a window travels to the taskbar and back
+Order=17
+Choice.scale=Scale (shrink into the button)
+Choice.genie=Genie (macOS-style tube)
+Choice.squash=Squash (flatten onto the taskbar)
+Choice.glide=Glide (travel and fade)

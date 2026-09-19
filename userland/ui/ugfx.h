@@ -548,6 +548,23 @@ void ugfx_blend_pixel(struct ugfx_surface *s, int x, int y, uint32_t color, uint
 void ugfx_blend_hspan(struct ugfx_surface *s, int x, int y, int w,
                        uint32_t color, const uint8_t *cov, uint8_t alpha);
 
+// THE GENIE. The source squeezed into a vertical tube: the band
+// [y0, y0+h) is filled row by row, each row's width and centre eased
+// between the span at the top and the span at the bottom with a
+// smoothstep, and each row taking its pixels from the corresponding
+// row of the source. The whole source is always inside the tube --
+// compressed, never cropped.
+//
+// It is macOS's Genie and KWin's Magic Lamp. A MESH would be the
+// general version; one span per ROW is enough for a tube that only
+// narrows vertically, and costs one sample per destination pixel --
+// the same class as ugfx_blit_scaled_alpha(), and cheaper in practice
+// because the tube is narrower than the window.
+void ugfx_blit_genie(struct ugfx_surface *s, int y0, int h,
+                      int top_cx, int top_w, int bot_cx, int bot_w,
+                      const uint32_t *src, int sw, int sh, int src_pitch_px,
+                      uint8_t alpha);
+
 // --- the screen -------------------------------------------------------
 //
 // A ring-3 COMPOSITOR's view of the real display: an ordinary

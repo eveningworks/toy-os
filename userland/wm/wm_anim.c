@@ -32,6 +32,11 @@ struct anim {
     uint32_t *snap; int sw, sh;   // the ghost's pixels
     int cx, cy, cw, ch, ca;       // this frame's rect and alpha
     int has_last;
+    // THE EFFECT IS FIXED AT START, not read per frame: changing the
+    // setting mid-flight would otherwise switch a ghost's shape and
+    // its destination halfway across the screen.
+    unsigned char effect;
+    int bx, by, bw, bh;           // the taskbar button, for the genie's mouth
 };
 
 static struct anim g_anims[WM_ANIM_MAX];
@@ -48,6 +53,18 @@ static uint32_t g_seen_generation;
 // real window for a frame. `desktop.animations=off` is the same path.
 enum { SPEED_INSTANT = 0, SPEED_FAST, SPEED_NORMAL, SPEED_SLOW, SPEED_VERY_SLOW };
 static int g_speed = SPEED_NORMAL;
+
+// `desktop.minimize_effect`, for MINIMIZE and RESTORE only. Opening and
+// closing keep SCALE: macOS applies its genie to the Dock alone, and a
+// window that genies out of nothing on open reads as a glitch rather
+// than as an effect.
+//
+// SCALE and SQUASH and GLIDE are all the same axis-aligned blit with
+// different from/to rects -- ugfx_blit_scaled_alpha() already scales
+// the axes independently, so only the geometry differs. GENIE is the
+// one that needs its own primitive (ugfx_blit_genie).
+enum { EFFECT_SCALE = 0, EFFECT_GENIE, EFFECT_SQUASH, EFFECT_GLIDE };
+static int g_effect = EFFECT_SCALE;
 
 // Numerator/denominator rather than a float: there is no floating point
 // in this desktop. KWin's slider is the same set of ratios.
@@ -85,8 +102,11 @@ int wm_anim_rect(int i, int *x, int *y, int *w, int *h, int *alpha) {
     return (int)a->kind;
 }
 
+// Defined below, beside the step that computes the rects it damages.
+static void damage_ghost(const struct anim *a, int x, int y, int w, int h);
+
 static void finish(struct anim *a) {
-    if (a->has_last) wm_damage_window_rect(a->cx, a->cy, a->cw, a->ch);
+    if (a->has_last) damage_ghost(a, a->cx, a->cy, a->cw, a->ch);
     // AND THE WINDOW AS IT IS *NOW*, which is not where the ghost ended.
     // A client may resize while its ghost is in flight -- Notepad does,
     // once it has laid out the file it was opened with -- and the real
@@ -179,6 +199,43 @@ static void button_rect(int idx, int *x, int *y, int *w, int *h) {
     *x = screen_w / 2 - 32; *y = screen_h - *h;
 }
 
+// The from/to rects for a MINIMIZE, by effect. RESTORE is the same
+// pair reversed, which is why this is one function and not two.
+//
+// GENIE keeps the ghost's rect as the whole TUBE -- window top down to
+// the button -- and wm_anim_draw() shapes what is inside it. The other
+// three are plain rects and differ only in where they end:
+//   SCALE   shrinks into the button (what this has always done)
+//   SQUASH  keeps its width and collapses onto the taskbar (KWin's)
+//   GLIDE   travels to the button at 60%, fading, with no distortion
+static void minimize_rects(const struct window *w, int bx, int by, int bw, int bh,
+                           int effect, int *tx, int *ty, int *tw, int *th,
+                           int *a0, int *a1) {
+    *a0 = 255; *a1 = 0;
+    switch (effect) {
+    case EFFECT_SQUASH:
+        // Width HOLDS, height collapses onto the taskbar's top edge.
+        *tx = w->x; *tw = w->w;
+        *ty = by;   *th = 1;
+        *a1 = 128;          // still visible as it flattens; the collapse reads it
+        break;
+    case EFFECT_GLIDE:
+        *tw = w->w * 3 / 5; *th = w->h * 3 / 5;
+        *tx = bx + bw / 2 - *tw / 2;
+        *ty = by + bh / 2 - *th / 2;
+        break;
+    case EFFECT_GENIE:
+        // The tube: from the window's top edge down to the button. The
+        // BAND is what the rect reports; the neck is drawn inside it.
+        *tx = w->x; *tw = w->w;
+        *ty = by;   *th = 1;
+        break;
+    default:            // EFFECT_SCALE
+        *tx = bx; *ty = by; *tw = bw; *th = bh;
+        break;
+    }
+}
+
 void wm_anim_open(int idx) {
     if (!anim_wanted() || idx < 0 || idx >= window_count) return;
     struct window *w = &windows[idx];
@@ -210,8 +267,10 @@ void wm_anim_minimize(int idx) {
     struct anim *a = slot_for(w->client_pid, w->client_win);
     if (!snapshot(a, idx)) return;
     a->fx = w->x; a->fy = w->y; a->fw = w->w; a->fh = w->h;
-    button_rect(idx, &a->tx, &a->ty, &a->tw_, &a->th);
-    a->a0 = 255; a->a1 = 0;
+    button_rect(idx, &a->bx, &a->by, &a->bw, &a->bh);
+    a->effect = (unsigned char)g_effect;
+    minimize_rects(w, a->bx, a->by, a->bw, a->bh, g_effect,
+                   &a->tx, &a->ty, &a->tw_, &a->th, &a->a0, &a->a1);
     start(a, MINIMIZE, 0, 0);   // the live window is minimized: not drawn anyway
 }
 
@@ -221,9 +280,16 @@ void wm_anim_restore(int idx) {
     if (w->popup || w->fullscreen || w->state != WIN_MINIMIZED) return;
     struct anim *a = slot_for(w->client_pid, w->client_win);
     if (!snapshot(a, idx)) return;
-    button_rect(idx, &a->fx, &a->fy, &a->fw, &a->fh);
+    // THE SAME PAIR, REVERSED. A restore that took a different route
+    // from its minimize reads as two unrelated animations rather than
+    // one thing going and coming back.
+    button_rect(idx, &a->bx, &a->by, &a->bw, &a->bh);
+    a->effect = (unsigned char)g_effect;
+    int a0, a1;
+    minimize_rects(w, a->bx, a->by, a->bw, a->bh, g_effect,
+                   &a->fx, &a->fy, &a->fw, &a->fh, &a0, &a1);
     a->tx = w->x; a->ty = w->y; a->tw_ = w->w; a->th = w->h;
-    a->a0 = 0; a->a1 = 255;
+    a->a0 = a1; a->a1 = a0;        // the minimize's alphas, backwards
     start(a, RESTORE, w->client_pid, w->client_win);
 }
 
@@ -235,6 +301,25 @@ int wm_anim_hides(const struct window *w) {
         if (a->pid == w->client_pid && a->win == w->client_win) return 1;
     }
     return 0;
+}
+
+// WHAT A GHOST ACTUALLY PAINTS, which is not always its rect. The
+// genie fills the whole tube from the window's current top edge down
+// to the button, so damaging the lerped rect alone would leave the
+// neck on screen -- the same stale-pixel fault the shadow and the
+// resize-under-a-ghost both were.
+static void damage_ghost(const struct anim *a, int x, int y, int w, int h) {
+    if (a->effect == EFFECT_GENIE && (a->kind == MINIMIZE || a->kind == RESTORE)) {
+        int top = y < a->by ? y : a->by;
+        int bot = a->by + a->bh;
+        if (bot < y + h) bot = y + h;
+        int x0 = x < a->bx ? x : a->bx;
+        int x1 = x + w;
+        if (a->bx + a->bw > x1) x1 = a->bx + a->bw;
+        wm_damage_window_rect(x0, top, x1 - x0, bot - top);
+        return;
+    }
+    wm_damage_window_rect(x, y, w, h);
 }
 
 static int lerp(int a, int b, int v) { return a + (int)(((long long)(b - a) * v) / PROGRESS); }
@@ -251,8 +336,8 @@ void wm_anim_step(void) {
         int al = lerp(a->a0, a->a1, v);
         // Damage where it was and where it is: both padded like a window,
         // since a ghost stands where one stood.
-        if (a->has_last) wm_damage_window_rect(a->cx, a->cy, a->cw, a->ch);
-        wm_damage_window_rect(x, y, w, h);
+        if (a->has_last) damage_ghost(a, a->cx, a->cy, a->cw, a->ch);
+        damage_ghost(a, x, y, w, h);
         a->cx = x; a->cy = y; a->cw = w; a->ch = h; a->ca = al;
         a->has_last = 1;
         if (!utween_active(&a->tw)) { finish(a); continue; }
@@ -265,6 +350,20 @@ void wm_anim_draw(void) {
     for (int i = 0; i < WM_ANIM_MAX; i++) {
         const struct anim *a = &g_anims[i];
         if (!a->kind || !a->snap || !a->has_last || a->cw <= 0 || a->ch <= 0) continue;
+        if (a->effect == EFFECT_GENIE && (a->kind == MINIMIZE || a->kind == RESTORE)) {
+            // THE TUBE IS THE WHOLE TRAVEL, not this frame's rect: the
+            // band runs from wherever the window's top edge has reached
+            // down to the button, and the neck lives inside it. Feeding
+            // it the lerped rect instead would give a tube that shrinks
+            // to nothing rather than one the window slides down.
+            int top = a->cy, bot = a->by;
+            if (bot <= top) bot = top + 1;
+            ugfx_blit_genie(wm_surface(), top, bot - top,
+                            a->cx + a->cw / 2, a->cw,
+                            a->bx + a->bw / 2, a->bw,
+                            a->snap, a->sw, a->sh, a->sw, (uint8_t)a->ca);
+            continue;
+        }
         ugfx_blit_scaled_alpha(wm_surface(), a->cx, a->cy, a->cw, a->ch,
                                a->snap, a->sw, a->sh, a->sw, (uint8_t)a->ca);
     }
@@ -273,6 +372,13 @@ void wm_anim_draw(void) {
 // The speed NAMES, matched in full. A prefix match would make "slow"
 // and "slower" the same answer, and the enum is ordered so a future
 // value can be added at either end.
+static int effect_of(const char *v) {
+    if (!k_strcmp(v, "genie"))  return EFFECT_GENIE;
+    if (!k_strcmp(v, "squash")) return EFFECT_SQUASH;
+    if (!k_strcmp(v, "glide"))  return EFFECT_GLIDE;
+    return EFFECT_SCALE;           // including an unknown value
+}
+
 static int speed_of(const char *v) {
     if (!k_strcmp(v, "instant"))   return SPEED_INSTANT;
     if (!k_strcmp(v, "fast"))      return SPEED_FAST;
@@ -291,6 +397,10 @@ static void adopt(void) {
         g_speed = speed_of(v);
     else
         g_speed = SPEED_NORMAL;
+    if (wm_conf_get(DESKTOP_CONF, "minimize_effect", v, sizeof v) && v[0])
+        g_effect = effect_of(v);
+    else
+        g_effect = EFFECT_SCALE;
     if (!on) for (int i = 0; i < WM_ANIM_MAX; i++) if (g_anims[i].kind) finish(&g_anims[i]);
 }
 

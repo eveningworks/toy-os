@@ -1027,6 +1027,83 @@ void ugfx_blend_hspan(struct ugfx_surface *s, int x, int y, int w,
     dirty_mark(s, x1 - 1, y);
 }
 
+// Smoothstep in Q16.16: 3t^2 - 2t^3, the curve that gives the genie
+// its neck. Flat at both ends, so the window's own edge and the
+// button's edge each meet the tube without a visible corner.
+static uint32_t smoothstep_fx(uint32_t t) {
+    if (t >= 65536u) return 65536u;
+    uint64_t tt = ((uint64_t)t * t) >> 16;              // t^2
+    uint64_t ttt = (tt * t) >> 16;                      // t^3
+    uint64_t v = 3u * tt - 2u * ttt;
+    return v > 65536u ? 65536u : (uint32_t)v;
+}
+
+static int lerp_i(int a, int b, uint32_t t) {
+    return a + (int)(((long long)(b - a) * (long long)t) >> 16);
+}
+
+void ugfx_blit_genie(struct ugfx_surface *s, int y0, int h,
+                      int top_cx, int top_w, int bot_cx, int bot_w,
+                      const uint32_t *src, int sw, int sh, int src_pitch_px,
+                      uint8_t alpha) {
+    if (!s || !s->pixels || !src || h <= 0 || sw <= 0 || sh <= 0 || alpha == 0) return;
+
+    for (int j = 0; j < h; j++) {
+        int dy = y0 + j;
+        if (dy < 0 || dy >= s->h) continue;
+        if (s->clip_active && (dy < s->clip_y0 || dy >= s->clip_y1)) continue;
+
+        // WHERE THIS ROW SITS IN THE TUBE. The curve is over the row's
+        // position in the band, not over time: that is what makes the
+        // shape a neck rather than a trapezoid, and what keeps the top
+        // looking like a window while the bottom is already a spout.
+        uint32_t u = h > 1 ? (uint32_t)(((uint64_t)j << 16) / (uint32_t)(h - 1)) : 65536u;
+        uint32_t t = smoothstep_fx(u);
+        int rw = lerp_i(top_w, bot_w, t);
+        int rcx = lerp_i(top_cx, bot_cx, t);
+        if (rw <= 0) continue;
+
+        int rx0 = rcx - rw / 2, rx1 = rx0 + rw;
+        // The source row: the WHOLE window is always in the tube,
+        // compressed into it, so nothing of it is ever missing.
+        int sy = (int)(((long long)j * sh) / h);
+        if (sy >= sh) sy = sh - 1;
+        const uint32_t *srow = src + (uint32_t)sy * (uint32_t)src_pitch_px;
+
+        int cx0 = rx0 < 0 ? 0 : rx0, cx1 = rx1 > s->w ? s->w : rx1;
+        if (s->clip_active) {
+            if (cx0 < s->clip_x0) cx0 = s->clip_x0;
+            if (cx1 > s->clip_x1) cx1 = s->clip_x1;
+        }
+        if (cx1 <= cx0) continue;
+
+        // Bresenham across the row, as ugfx_blit_scaled_alpha does and
+        // for the same reason: a divide per pixel is what made the
+        // ghost cost most of a frame.
+        int col0 = cx0 - rx0;
+        int sx_i = (int)(((long long)col0 * sw) / rw);
+        int err  = (int)(((long long)col0 * sw) % rw);
+        uint32_t *drow = s->pixels + (uint32_t)dy * (uint32_t)s->w + (uint32_t)cx0;
+        unsigned a = alpha;
+        for (int i = 0; i < cx1 - cx0; i++) {
+            int sx = sx_i >= sw ? sw - 1 : sx_i;
+            err += sw;
+            while (err >= rw) { err -= rw; sx_i++; }
+            uint32_t sp = srow[sx] & 0x00FFFFFF;
+            if (a >= 255) { drow[i] = sp; continue; }
+            uint32_t dp = drow[i], out = 0;
+            for (int shift = 0; shift <= 16; shift += 8) {
+                unsigned sc = (sp >> shift) & 0xFF, dc = (dp >> shift) & 0xFF;
+                unsigned v = (sc * a + dc * (255 - a) + 127) / 255;
+                out |= (v & 0xFF) << shift;
+            }
+            drow[i] = out;
+        }
+        dirty_mark(s, cx0, dy);
+        dirty_mark(s, cx1 - 1, dy);
+    }
+}
+
 static void ugfx_geom_plot(void *ctx, int x, int y, uint32_t color, uint8_t alpha) {
     ugfx_blend_pixel((struct ugfx_surface *)ctx, x, y, color, alpha);
 }

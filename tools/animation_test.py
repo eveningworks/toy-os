@@ -266,6 +266,138 @@ def run_speed(dbg, res):
                   f"fast={got['fast']:.0f} slow={got['slow']:.0f} ms")
 
 
+def run_effects(dbg, qmp, tmp, res):
+    """`desktop.minimize_effect`: scale / genie / squash / glide.
+
+    Two things per effect. It must ANIMATE -- a ghost in flight whose
+    reported rect actually changes, so an effect that silently fell back
+    to drawing nothing would fail. And it must leave NO STALE PIXELS:
+    the screen once it has settled must match a forced full repaint.
+
+    THE GENIE IS WHY THE SECOND CHECK EXISTS. It paints a whole tube
+    from the window's top edge down to the taskbar button, which is not
+    its lerped rect -- so damaging the rect alone would leave the neck
+    on screen. That is the same fault the drop shadow and the
+    resize-under-a-ghost both were, and it is invisible to a test that
+    only asks whether something moved.
+
+    The taskbar strip is excluded from the comparison: the clock
+    advances between the two captures, which is a real difference and
+    not a bug. Measured at 13 sampled pixels, all of them in the clock.
+    """
+    from PIL import Image
+
+    dbg.send("sh config set desktop.animations on")
+    dbg.settle(1.2)
+
+    # EXACTLY ONE NOTEPAD, and that is not fussiness. Notepad is
+    # multi-instance, so a second window makes the taskbar GROUP them --
+    # and a click on a group button opens the group's list instead of
+    # minimizing anything. The phase before this one leaves a Notepad
+    # open, so opening another unconditionally produced a button that
+    # could not minimize, reported as "no ghost flies" for every effect
+    # while the screen check passed because nothing had changed.
+    extra = [w for w in dbg.windows() if w["title"] == "untitled"]
+    for w in extra[1:]:
+        dbg.send(f"sh kill {w['client_pid']}")
+        dbg.settle(1.0)
+    if not extra:
+        dbg.open_app("Notepad")
+        dbg.settle(1.5)
+    n = len([w for w in dbg.windows() if w["title"] == "untitled"])
+    res.check("effects: exactly one Notepad window to drive", n == 1,
+              f"{n} windows -- the taskbar would group them")
+
+    def button():
+        tb = dbg.taskbar()
+        buttons = tb.get("buttons") if isinstance(tb, dict) else tb
+        return next((x for x in (buttons or [])
+                     if "untitled" in str(x.get("title", ""))), None)
+
+    def full_repaint():
+        dbg.send("sh config set desktop.shadows off")
+        dbg.settle(0.8)
+        dbg.send("sh config set desktop.shadows on")
+        dbg.settle(1.0)
+
+    def ensure_normal():
+        """The window OPEN and not minimized, whatever the phase before
+        this left behind. Clicking a minimized window's button restores
+        it instead of minimizing it, and the check would then be timing
+        the wrong direction -- or, if the restore never landed, nothing
+        at all. Established rather than assumed: this ran after two
+        other phases and reported 'no ghost' for every effect because
+        the window was already down."""
+        for _ in range(3):
+            w = next((x for x in dbg.windows() if x["title"] == "untitled"), None)
+            if w and w.get("state") == "normal":
+                return True
+            b = button()
+            if b:
+                dbg.send(f"gui click {b['cx']} {b['cy']}")
+            dbg.settle(1.2)
+        return False
+
+    try:
+        dbg.send("sh config set desktop.animation_speed normal")
+        dbg.settle(1.0)
+        for eff in ("scale", "genie", "squash", "glide"):
+            dbg.send(f"sh config set desktop.minimize_effect {eff}")
+            dbg.settle(1.2)
+            if not ensure_normal():
+                res.check(f"effect {eff}: the window is up before minimizing it",
+                          False, "could not get it out of the taskbar")
+                continue
+            b = button()
+            if not b:
+                res.check(f"effect {eff}: a taskbar button to click", False)
+                continue
+
+            rects, peak, saw = set(), 0, False
+            t0 = time.time()
+            dbg.send(f"gui click {b['cx']} {b['cy']}")
+            while time.time() - t0 < 4.0:
+                st = dbg.state()
+                a = st.get("anims") or 0
+                peak = max(peak, a)
+                for r in st.get("anim_rects", []):
+                    rects.add((r["x"], r["y"], r["w"], r["h"]))
+                if a:
+                    saw = True
+                elif saw:
+                    break
+            res.check(f"effect {eff}: a ghost flies and MOVES",
+                      peak >= 1 and len(rects) >= 2,
+                      f"anims peak={peak} distinct rects={len(rects)}")
+
+            dbg.settle(1.5)
+            live_p = os.path.join(tmp, f"eff_{eff}_live.png")
+            qmp.screenshot(live_p, settle=0.0, stable=True)
+            live = Image.open(live_p).convert("RGB")
+            full_repaint()
+            ref_p = os.path.join(tmp, f"eff_{eff}_full.png")
+            qmp.screenshot(ref_p, settle=0.0, stable=True)
+            ref = Image.open(ref_p).convert("RGB")
+
+            bad = []
+            for y in range(0, min(live.height, ref.height) - 40, 2):
+                for x in range(0, min(live.width, ref.width), 2):
+                    a_, c_ = live.getpixel((x, y)), ref.getpixel((x, y))
+                    if max(abs(a_[i] - c_[i]) for i in range(3)) > 24:
+                        bad.append((x, y))
+            res.check(f"effect {eff}: nothing stale once it has settled",
+                      len(bad) == 0,
+                      f"{len(bad)} px differ from a full repaint, first {bad[:3]}")
+
+            b = button()
+            if b:
+                dbg.send(f"gui click {b['cx']} {b['cy']}")   # restore
+                dbg.settle(1.2)
+    finally:
+        dbg.send("sh config set desktop.minimize_effect scale")
+        dbg.settle(0.8)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     port_guard.add_instance_args(ap)
@@ -284,10 +416,12 @@ def main():
     try:
         run(dbg, qmp, tmp, res)
         run_speed(dbg, res)
+        run_effects(dbg, qmp, tmp, res)
     finally:
         try:
             dbg.send("sh config set desktop.animations on")
             dbg.send("sh config set desktop.animation_speed normal")
+            dbg.send("sh config set desktop.minimize_effect scale")
         finally:
             dbg.close()
     print(f"\nanimation_test: {len(res.passes)} passed, {len(res.fails)} failed")
