@@ -28,6 +28,7 @@
 #include "kfmt.h"
 #include "string.h"   // k_memset
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv -v` names THIS file
+#include "timer.h"  // pit_ticks -- rate-limiting the live-scanout probe
 #include "intel_internal.h"
 
 DRIVER_DECLARE("intel-display", "display", "Intel gen8 display engine: eDP modeset, cursor plane, backlight");
@@ -336,10 +337,40 @@ static int intel_flip(int index) {
     return 1;
 }
 
+// WHEN THIS CANNOT TELL, IT SAYS 0, AND 0 MAY BE THE BUFFER ON SCREEN.
+// free_back() (win_surface.c) excludes the answer from what it hands
+// the compositor to draw into, so a wrong answer hands back a LIVE
+// buffer and the next frame is painted where the panel can see it --
+// a window drawn in front of you instead of appearing whole. The
+// counter is how a session tells that from a present-path fault; the
+// log line is rate-limited because a present runs at frame rate.
+static unsigned long long g_live_miss, g_live_calls, g_live_last_log;
+static uint32_t g_live_last_raw;
+
+void intel_display_live_stats(unsigned long long *calls, unsigned long long *miss,
+                              uint32_t *last_raw) {
+    if (calls)    *calls    = g_live_calls;
+    if (miss)     *miss     = g_live_miss;
+    if (last_raw) *last_raw = g_live_last_raw;
+}
+
 static int intel_scanout_live(void) {
     uint32_t live = rd(DSPSURFLIVE(g_pipe));
+    g_live_calls++;
+    g_live_last_raw = live;
     for (int b = 0; b < g_scanouts; b++)
         if (g_scanout_ggtt[b] == live) return b;
+    g_live_miss++;
+    uint64_t now = pit_ticks();
+    if (now - g_live_last_log >= 100) {     // 100 Hz: one line a second
+        g_live_last_log = now;
+        klog_printf("intel-display: DSPSURFLIVE %#x matches no scanout (%llu of %llu) -- "
+                    "assuming 0; scanouts %#x %#x %#x\n",
+                    live, g_live_miss, g_live_calls,
+                    g_scanouts > 0 ? g_scanout_ggtt[0] : 0,
+                    g_scanouts > 1 ? g_scanout_ggtt[1] : 0,
+                    g_scanouts > 2 ? g_scanout_ggtt[2] : 0);
+    }
     return 0;
 }
 

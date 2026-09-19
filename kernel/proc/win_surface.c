@@ -17,6 +17,8 @@
 #include "pmm.h"
 #include "string.h"
 #include "scheduler.h" // the preemption guard around a page-table walk
+#include "timer.h"     // pit_ticks -- rate-limiting the free_back probe
+#include "debugflags.h" // `debug wm on` -- the rotation trace
 
 static int      g_holder;      // pid holding the grant, or 0
 static uint64_t g_pml4;        // the address space it was mapped into
@@ -90,11 +92,45 @@ static void unmap_scanouts(uint64_t pml4, int count, uint64_t pages) {
 
 // The buffer nobody should be drawing into: neither the last flipped
 // nor the one being scanned. With one buffer there is no choice.
+// THE FALLBACK HANDS BACK A BUFFER THAT IS NOT FREE. With three
+// buffers the loop cannot fail -- front and live are at most two
+// distinct indices -- so reaching `return 0` means the count is wrong
+// or live/front are lying, and the compositor is about to paint into
+// something the panel is reading. Counted rather than assumed away:
+// "a window drawn in front of you" is what that looks like.
+static unsigned long long g_back_fallback, g_back_calls, g_back_last_log;
+
+void win_surface_back_stats(unsigned long long *calls, unsigned long long *fallback) {
+    if (calls)    *calls    = g_back_calls;
+    if (fallback) *fallback = g_back_fallback;
+}
+
 static int free_back(void) {
     if (g_count <= 1) return 0;
     int live = display_scanout_live();
+    g_back_calls++;
+    // `debug wm on` traces the ROTATION itself, one line a second: which
+    // buffer is on screen, which was just asked for, and which the
+    // compositor is about to be handed. The flag gated nothing after the
+    // WM moved to ring 3 (nothing in userland/ can read a kernel flag),
+    // and this is the half of the WM that stayed behind.
+    if (dbgflag_enabled(DBGFLAG_WM)) {
+        uint64_t t = pit_ticks();
+        if (t - g_back_last_log >= 100) {
+            g_back_last_log = t;
+            klog_printf("win_surface: rotate front %d live %d of %d (presents %llu, fallback %llu)\n",
+                        g_front, live, g_count, g_back_calls, g_back_fallback);
+        }
+    }
     for (int b = 0; b < g_count; b++)
         if (b != g_front && b != live) return b;
+    g_back_fallback++;
+    uint64_t now = pit_ticks();
+    if (now - g_back_last_log >= 100) {   // 100 Hz: one line a second
+        g_back_last_log = now;
+        klog_printf("win_surface: no free buffer (front %d live %d of %d) -- handing back 0, "
+                    "%llu of %llu\n", g_front, live, g_count, g_back_fallback, g_back_calls);
+    }
     return 0;
 }
 
