@@ -11,6 +11,7 @@
 #include "klog.h"
 #include "tz.h"
 #include "ntp_config.h"
+#include "netheal_config.h"
 #include "shell_config.h"
 #include "font_config.h"
 #include "cursor_config.h"
@@ -722,6 +723,7 @@ int setting_dispatch(struct setting_msg *msg) {
 void settings_init(void) {
     tz_setting_register();
     ntp_setting_register();
+    netheal_setting_register();
     shell_setting_register();
     conn_log_setting_register();
     font_config_setting_register();

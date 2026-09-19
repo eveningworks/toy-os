@@ -2880,6 +2880,21 @@ window without going through it will find its layout polls timing out.
   repaints no framebuffer pixels), because a device-composited cursor
   is handed to the display client out of band and never appears in a
   `screendump` at all. On demand, not in the gate.
+- **`netheal_test.py`** -- `/bin/netheal`, which reboots a machine once
+  when it comes up with no network. **THIS TOOL REBOOTS ITS GUEST TWICE
+  ON PURPOSE**, which is the property under test, so it needs
+  `vm.py --reboot` (the default `-no-reboot` ends QEMU on a guest
+  reboot instead) and lives in the sweep rather than the gate. The
+  assertion that matters is not that it reboots but that it **STOPS**:
+  the counter in `/var/lib/netheal` is the whole safety design, and
+  without it a machine with genuinely no NIC reboots forever. So the
+  tool checks the counter reaches the ceiling, then samples uptime
+  twice and requires it to GROW -- a machine still rebooting keeps
+  resetting it. It also checks the give-up line is logged once, and
+  that a boot WITH an address clears the counter back to zero. Its
+  positive control leaves the feature off, where a clean report would
+  mean the tool is watching nothing.
+
 - **`usb_test.py`** -- an xHCI controller and a HID boot keyboard and
   mouse (`vm.py --usb xhci` / `--usb xhci+mouse` / `--usb xhci+hub`, or
   `make run USB=xhci+mouse`). Five phases: keyboard, ring wrap, mouse,

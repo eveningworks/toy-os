@@ -246,6 +246,12 @@ TOOLS = [
     # rather than the gate: three phases and two reboots per phase.
     ("usb",         "usb_test.py",             "xHCI, and a HID keyboard and mouse", True,  None,                   False),
 
+    # REBOOTS ITS GUEST TWICE, ON PURPOSE -- that is the property under
+    # test. Here rather than in the gate for the same reason usb_test is:
+    # it needs `vm.py --reboot`, costs a couple of minutes, and a suite
+    # that reboots its own VMs makes every other failure harder to read.
+    ("netheal",     "netheal_test.py",         "reboot-once-if-no-network, and its loop guard", True, None,           False),
+
     # --- display ------------------------------------------------------
     ("virtio_gpu",  "virtio_gpu_test.py",      "the virtio GPU driver",              True,  None,                   False),
     ("hires",       "hires_test.py",           "a desktop above 1280x720",           True,

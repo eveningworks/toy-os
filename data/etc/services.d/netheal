@@ -1,0 +1,17 @@
+# Reboot once if this machine came up with no network at all.
+#
+# STARTED ALWAYS, and IDLE until `system.net_recover` is on -- which
+# ships off, so a stock machine never reboots itself. One switch, not
+# two, exactly as ntpd beside it is arranged.
+#
+# It exists for the USB NIC wedge in docs/bugs.md: the machine boots
+# perfectly and is simply unreachable, which is expensive precisely
+# because it is headless. A reboot is the only thing measured to clear
+# it. This is not a fix and the bug stays open.
+#
+# After= is ordering only; it waits for an address itself.
+Name=netheal
+Description=Reboot once if the network never comes up
+Exec=/bin/netheal
+After=netd
+Restart=no

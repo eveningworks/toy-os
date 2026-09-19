@@ -205,6 +205,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`ifconfig`](ifconfig.md)
 - [`inetd`](inetd.md)
 - [`netd`](netd.md)
+- [`netheal`](netheal.md)
 - [`netlog`](netlog.md)
 - [`ntpd`](ntpd.md)
 - [`ping`](ping.md)
