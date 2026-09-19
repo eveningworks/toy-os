@@ -184,6 +184,11 @@ static const struct uui_menu_item view_items[] = {
 };
 
 static const struct uui_menu_item go_items[] = {
+    // ALT+LEFT / ALT+RIGHT, which is what Explorer, Dolphin and every
+    // browser bind -- and deliberately NOT Backspace, which is Up here
+    // and which browsers themselves stopped using for Back.
+    UUI_MENU("Back",           CMD_BACK,    "Alt+Left"),
+    UUI_MENU("Forward",        CMD_FORWARD, "Alt+Right"),
     UUI_MENU("Up",             CMD_UP,      "Backspace"),
     UUI_MENU("Other pane",     CMD_SWAP,    "Tab"),
     UUI_MENU("Refresh",        CMD_REFRESH, "Ctrl+R"),
@@ -199,6 +204,10 @@ static const struct uui_menu_item go_items[] = {
 // Same codes and the same item_flags as the menus, so a latched button
 // and a ticked menu item cannot disagree.
 static const struct uui_toolbar_item toolbar_items[] = {
+    // BACK, FORWARD, UP -- in that order and first, which is where
+    // every file manager and browser puts them.
+    { "tb-back",    "Back",        CMD_BACK },
+    { "tb-forward", "Forward",     CMD_FORWARD },
     { "tb-up",      "Up",          CMD_UP },
     { "tb-refresh", "Refresh",     CMD_REFRESH },
     UUI_TOOLBAR_SEP,
@@ -289,6 +298,12 @@ static unsigned menu_item_flags(int code) {
         const char *d = uui_fileview_dir(&g_pane[g_active]);
         return (d[0] == '/' && d[1] == '\0') ? UUI_MI_DISABLED : 0;
     }
+    // GREYED AT THE ENDS, which is how a person reads "this is as far
+    // back as it goes" without pressing it and getting a status note.
+    case CMD_BACK:
+        return fm_history_can_back(g_active) ? 0 : UUI_MI_DISABLED;
+    case CMD_FORWARD:
+        return fm_history_can_forward(g_active) ? 0 : UUI_MI_DISABLED;
     // Both act on ONE row, so both are dead with nothing selected --
     // said by greying them rather than by a status-bar complaint after
     // the click, which is the difference between a menu that tells you
@@ -386,9 +401,13 @@ void addr_end_edit(int commit) {
             set_note("path too long");
             return;
         }
-        if (!uui_fileview_set_dir(&g_pane[pane], path)) {
+        if (!fm_goto(pane, path)) {
             // The failed listing left the pane EMPTY (ui/uui_fileview.h);
             // put the directory it had back rather than show a hole.
+            // DELIBERATELY NOT fm_goto(): this is undoing a navigation
+            // that did not happen, and recording it would put the place
+            // you already were into the history a second time, where
+            // Back would then have to be pressed twice to leave it.
             uui_fileview_set_dir(&g_pane[pane], was);
             snprintf(g_stat_note, sizeof g_stat_note, "no such directory: %s",
                       k_path_basename(path));
@@ -439,6 +458,18 @@ void refresh_status(void) {
 }
 
 void do_command(struct uapp *a, int code) {
+    // dispatch-ok: THE SET IS THE APP'S OWN MENUS and nothing else can
+    // extend it -- every branch is one entry of the CMD_* enum in
+    // fm_internal.h, which exists so the menu bar, the toolbar, the
+    // context menu and the function keys cannot disagree about what a
+    // command does. That is the opposite of the case this check is for:
+    // syscall_table.c is a table because its entries are UNIFORM and the
+    // set is open-ended. These bodies are not uniform -- some are one
+    // call, some take a selection and bail, some spawn a process -- so a
+    // {code, handler} table would mean 21 one-line functions each needing
+    // the uapp and the locals this one already has, which is more code
+    // saying less. It crossed 20 branches when Back and Forward were
+    // added on 2026-09-19.
     switch (code) {
     case CMD_COPY:   do_copy(); break;
     case CMD_MOVE:   do_move(); break;
@@ -450,8 +481,14 @@ void do_command(struct uapp *a, int code) {
         open_prompt(CMD_RENAME, "Rename", name);
         break;
     }
+    case CMD_BACK:
+        if (!fm_history_back(g_active)) set_note("nothing to go back to");
+        break;
+    case CMD_FORWARD:
+        if (!fm_history_forward(g_active)) set_note("nothing to go forward to");
+        break;
     case CMD_UP:
-        uui_fileview_up(active());
+        fm_goto_up(g_active);
         break;
     case CMD_CLIP_COPY:  clip_copy();  break;
     case CMD_CLIP_CUT:   clip_cut();   break;
@@ -460,7 +497,7 @@ void do_command(struct uapp *a, int code) {
         // The same act as Enter or a double click, so a directory
         // descends and a file goes to whatever /etc/mimeapps.conf and
         // the Handles= declarations resolve to (lib/uopen.h).
-        if (!uui_fileview_activate(active())) set_note("nothing selected");
+        if (!fm_goto_activate(g_active)) set_note("nothing selected");
         break;
     case CMD_EDIT: {
         // A launch, like on_pane_open(): not waited for.
@@ -665,7 +702,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
         // re-entering the same directory would reset its selection.
         if (nid >= 0 && nid < g_tree_count &&
             strcmp(g_tree_path[nid], uui_fileview_dir(active())) != 0)
-            uui_fileview_set_dir(active(), g_tree_path[nid]);
+            fm_goto(g_active, g_tree_path[nid]);
         // AFTER the navigation, which lists a directory: the window is
         // meant to measure the gap between the user's two clicks, not
         // the work the first one caused.
@@ -693,6 +730,23 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
         addr_end_edit(0);
         uapp_redraw(a);
     }
+    // THE THUMB BUTTONS ARE NAVIGATION, which is the app's decision and
+    // not the compositor's -- it delivers SIDE and EXTRA and says
+    // nothing about what they mean (abi/win_proto.h). Explorer, Dolphin
+    // and every browser read them this way round: the one nearer the
+    // thumb's rest position goes back.
+    //
+    // Before the modal check on purpose: a dialog is up means the app
+    // should not navigate, and falling through to the right-click path
+    // below with a thumb bit set would open a context menu instead.
+    unsigned b = WIN_MOUSE_BUTTONS(buttons);
+    if (b & (WIN_MOUSE_BTN_SIDE | WIN_MOUSE_BTN_EXTRA)) {
+        if (g_modal == MODAL_NONE)
+            do_command(a, (b & WIN_MOUSE_BTN_SIDE) ? CMD_BACK : CMD_FORWARD);
+        uapp_redraw(a);
+        return;
+    }
+
     if (!(buttons & 0x2) || g_modal != MODAL_NONE) return;
     if (uui_menubar_is_open(&g_ctx)) {
         uui_menubar_close(&g_ctx);  // a second right-click dismisses
@@ -741,6 +795,15 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         if (key == '\n' || key == '\r') addr_end_edit(1);
         else if (key == 0x1B) addr_end_edit(0);
         else uui_textbox_key_mods(&g_addr[g_addr_edit], key, mods);
+        uapp_redraw(a);
+        return;
+    }
+    // ALT+LEFT / ALT+RIGHT, the binding Explorer, Dolphin and every
+    // browser use. Tested before the pane's own key handling, where a
+    // bare arrow moves the selection -- the modifier is the whole
+    // difference between "move down the list" and "leave this folder".
+    if ((mods & KEY_MOD_ALT) && (key == KEY_ARROW_LEFT || key == KEY_ARROW_RIGHT)) {
+        do_command(a, key == KEY_ARROW_LEFT ? CMD_BACK : CMD_FORWARD);
         uapp_redraw(a);
         return;
     }
@@ -828,7 +891,20 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // Everything else is the active pane's: arrows, Home/End, PageUp/
     // PageDown, Enter (descend) and Backspace (up) are all one call,
     // because uui_fileview owns what a directory listing does.
+    //
+    // **AND THAT INCLUDES NAVIGATING**, which is why the directory is
+    // compared across the call rather than recorded by whoever asked.
+    // Enter and Backspace move the pane from INSIDE the widget, so they
+    // never pass through fm_goto()/fm_goto_up() -- history recorded the
+    // descent and not the climb back, and Back then pointed at the
+    // directory the pane was already showing and appeared to do
+    // nothing. Comparing here catches every navigation the widget does
+    // on its own, including any it grows later.
+    char before[PATH_MAX_LEN];
+    snprintf(before, sizeof before, "%s", uui_fileview_dir(active()));
     if (uui_fileview_key(active(), key)) {
+        const char *now = uui_fileview_dir(active());
+        if (strcmp(before, now) != 0) fm_history_record(g_active, now);
         refresh_status();
         uapp_redraw(a);
     }
@@ -1144,8 +1220,8 @@ int main(int argc, char **argv) {
 
     tree_init();
 
-    uui_fileview_set_dir(&g_pane[0], left);
-    uui_fileview_set_dir(&g_pane[1], right);
+    fm_goto(0, left);
+    fm_goto(1, right);
     // Hooked up AFTER the opening directories are set, so starting the
     // app with an explicit argument does not silently rewrite the
     // remembered pair -- an argument is a statement about this launch.

@@ -46,7 +46,7 @@ person has to keep true.
 | Driver | Claims | Notes |
 |---|---|---|
 | `i8042` | PS/2 keyboard and mouse | The path a default boot uses. |
-| `usb-hid` | USB HID, **boot protocol only** | A non-boot-protocol device is skipped and says so; report-descriptor parsing is a roadmap item. |
+| `usb-hid` | USB HID, **boot protocol only** | A non-boot-protocol device is skipped and says so; report-descriptor parsing is a roadmap item. Reads FIVE button bits out of the boot report: the spec defines three, and every real 5-button mouse puts the thumb pair in bits 3-4 of the same byte -- an assumption about hardware, stated in `docs/decisions.md`. |
 | `virtio-input` | virtio keyboard, mouse, tablet | |
 
 ## Sound (`sound_device`)

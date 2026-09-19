@@ -327,6 +327,26 @@ def icon_tb_up():
     return im
 
 
+# BACK AND FORWARD ARE THE SAME ARROW MIRRORED, drawn from one point
+# list so the pair cannot drift apart -- a forward arrow a few pixels
+# fatter than its back twin is the kind of thing nobody reports and
+# everybody sees.
+def _tb_arrow(points):
+    im, d = _tb()
+    d.polygon(points, fill=TB_INK)
+    return im
+
+
+def icon_tb_back():
+    return _tb_arrow([(8, 32), (32, 10), (32, 24), (56, 24),
+                      (56, 40), (32, 40), (32, 54)])
+
+
+def icon_tb_forward():
+    return _tb_arrow([(56, 32), (32, 10), (32, 24), (8, 24),
+                      (8, 40), (32, 40), (32, 54)])
+
+
 def icon_tb_refresh():
     im, d = _tb()
     d.arc([10, 10, 54, 54], start=30, end=300, fill=TB_INK, width=8)
@@ -931,6 +951,8 @@ ICONS = {
     "folder": icon_folder,
     "file": icon_file,
     "tb-up": icon_tb_up,
+    "tb-back": icon_tb_back,
+    "tb-forward": icon_tb_forward,
     "tb-refresh": icon_tb_refresh,
     "tb-details": icon_tb_details,
     "tb-icons": icon_tb_icons,

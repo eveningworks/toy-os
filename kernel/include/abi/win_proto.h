@@ -78,6 +78,22 @@
 // (0x1 primary, 0x2 secondary, 0x4 middle); the next byte is the
 // KEY_MOD_* bits held at the time. Both are bytes because both already
 // were -- this widens no field and no struct.
+// The button bits carried in the low byte, matching what the kernel's
+// input core reports (kernel/input.h). SIDE and EXTRA are the thumb
+// buttons; they are named for the POSITION because what they MEAN is
+// the app's decision -- Wayland delivers evdev codes and lets the
+// client decide, Windows delivers XBUTTON1/2 and it is Explorer that
+// reads them as navigation.
+//
+// X11 calls these 8 and 9 because it spent buttons 4..7 on the wheel.
+// This protocol does not: the wheel is WIN_EV_WHEEL, so the bits sit
+// where evdev puts them and nothing had to be renumbered.
+#define WIN_MOUSE_BTN_PRIMARY   0x1
+#define WIN_MOUSE_BTN_SECONDARY 0x2
+#define WIN_MOUSE_BTN_MIDDLE    0x4
+#define WIN_MOUSE_BTN_SIDE      0x8
+#define WIN_MOUSE_BTN_EXTRA     0x10
+
 #define WIN_MOUSE_MODS_SHIFT 8
 #define WIN_MOUSE_BUTTONS(m) ((unsigned)(m) & 0xFFu)
 #define WIN_MOUSE_MODS(m)    (((unsigned)(m) >> WIN_MOUSE_MODS_SHIFT) & 0xFFu)

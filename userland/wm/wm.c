@@ -1148,6 +1148,29 @@ void wm_run(void) {
         int right_edge_down = (buttons & 0x2) && !(prev_buttons & 0x2);
         if (right_edge_down) wm_handle_right_click(mx, my);
 
+        // MIDDLE AND THE TWO THUMB BUTTONS, BOTH EDGES. Unlike the two
+        // above these do no window management at all -- they are handed
+        // to the client under the pointer and nothing else -- so the
+        // release matters as much as the press and there is no drag to
+        // track between them. A client that does not want them ignores
+        // them; that is the whole of the compositor's policy here.
+        //
+        // MIDDLE IS IN THIS LIST BECAUSE IT WAS IN NO LIST. Nothing
+        // tested bit 2 anywhere in the WM, so a middle click travelled
+        // the whole way up from the driver and was dropped here, having
+        // never reached a client. It is delivered on the same terms as
+        // the thumb buttons: what it MEANS is the app's business --
+        // X11 pastes the primary selection, browsers and file managers
+        // open in a new tab, and neither is the compositor's call.
+        static const unsigned PASSTHRU[] = {
+            WIN_MOUSE_BTN_MIDDLE, WIN_MOUSE_BTN_SIDE, WIN_MOUSE_BTN_EXTRA,
+        };
+        for (unsigned t = 0; t < sizeof PASSTHRU / sizeof PASSTHRU[0]; t++) {
+            unsigned bit = PASSTHRU[t];
+            int now = (buttons & bit) != 0, was = (prev_buttons & bit) != 0;
+            if (now != was) wm_handle_thumb_button(mx, my, bit, now);
+        }
+
         // A Start-menu action (currently just "Exit to shell") may have
         // just set this -- bail out the same way Esc used to, before
         // touching drag/resize state for a click that was never about a

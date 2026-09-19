@@ -545,6 +545,9 @@ int wm_ensure_reachable(int idx);
 // button or empty taskbar space shows nothing (no real action to offer
 // there yet). Defined in wm_input.c.
 void wm_handle_right_click(int mx, int my);
+// The thumb buttons (WIN_MOUSE_BTN_SIDE/EXTRA), delivered to the client
+// under the pointer and to nothing else -- see the definition.
+void wm_handle_thumb_button(int mx, int my, unsigned btn, int down);
 
 // Drives title_btn_pressed_active while a title-bar button is armed,
 // and fires its action on release if the cursor's still over it -- see

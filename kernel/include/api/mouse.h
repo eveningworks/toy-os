@@ -58,7 +58,8 @@ void mouse_feed_buttons(uint8_t mask);
 void mouse_feed_wheel(int notches);
 
 // Fills current absolute position and button bitmask (bit0=left,
-// bit1=right, bit2=middle). Position is clamped to the configured bounds.
+// bit1=right, bit2=middle, bit3=SIDE, bit4=EXTRA -- the thumb buttons,
+// kernel/input.h). Position is clamped to the configured bounds.
 void mouse_get_state(int *x, int *y, uint8_t *buttons);
 
 // The bounds the pointer is clamped to. These are NOT always the

@@ -129,8 +129,11 @@ void input_report_rel(int dx, int dy);
 // takes; `max_x`/`max_y` of 0 are ignored rather than dividing by zero.
 void input_report_abs(int x, int y, int max_x, int max_y);
 
-// Button mask: bit0 left, bit1 right, bit2 middle -- the encoding
-// mouse_get_state() already reports, so consumers are unchanged.
+// Button mask: bit0 left, bit1 right, bit2 middle, bit3 SIDE, bit4
+// EXTRA -- the encoding mouse_get_state() already reports. The two
+// thumb bits were added 2026-09-19; a driver that reports only three
+// is unaffected, and one that reports more has them dropped at
+// mouse_feed_buttons().
 void input_report_buttons(uint8_t mask);
 
 // Wheel notches, positive = away from the user.
@@ -230,8 +233,20 @@ void input_report_wheel(int notches);
 #define INPUT_KEY_PAUSE 119
 
 // Pointer buttons, evdev numbering.
+//
+// SIDE AND EXTRA ARE THE THUMB BUTTONS, and they are named for the
+// POSITION rather than for "back" and "forward" because that is what
+// the device reports -- what they MEAN is the application's decision,
+// which is Wayland's split and Windows' (WM_XBUTTONDOWN carries
+// XBUTTON1/2, and it is Explorer that reads them as navigation).
+//
+// X11 numbers these 8 and 9 because it spent 4..7 on the wheel. toy-os
+// does not inherit that: the wheel is its own event here, so the bits
+// below sit where evdev puts them.
 #define INPUT_BTN_LEFT   0x110
 #define INPUT_BTN_RIGHT  0x111
 #define INPUT_BTN_MIDDLE 0x112
+#define INPUT_BTN_SIDE   0x113
+#define INPUT_BTN_EXTRA  0x114
 
 #endif

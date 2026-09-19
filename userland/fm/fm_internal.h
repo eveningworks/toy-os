@@ -72,6 +72,7 @@ enum {
     CMD_UP, CMD_OPEN, CMD_PROPERTIES,
     CMD_CLIP_COPY, CMD_CLIP_CUT, CMD_CLIP_PASTE,
     CMD_EDIT,
+    CMD_BACK, CMD_FORWARD,
 };
 
 // The dialog's answers. ONE widget serves both questions the app asks
@@ -84,6 +85,24 @@ enum {
 };
 enum dialog_kind { DIALOG_NONE, DIALOG_CONFLICT, DIALOG_DELETE };
 extern enum dialog_kind g_dialog_kind;
+
+// --- navigation history, per pane (fm_history.c) ---------------------
+//
+// EVERY directory change goes through fm_goto()/fm_history_record(), or
+// the history silently stops matching where the panes actually are --
+// which is worse than having none, because Back then goes somewhere the
+// user has never been.
+void fm_history_record(int pane, const char *dir);
+int  fm_history_back(int pane);
+int  fm_history_forward(int pane);
+int  fm_history_can_back(int pane);
+int  fm_history_can_forward(int pane);
+
+// The choke point: set a pane's directory AND record it. Returns what
+// uui_fileview_set_dir() returned.
+int  fm_goto(int pane, const char *dir);
+int  fm_goto_up(int pane);        // the fileview's own "up"
+int  fm_goto_activate(int pane);  // ...and its "open what is selected"
 
 // --- the app's own state (files.c) -----------------------------------
 

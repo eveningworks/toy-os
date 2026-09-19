@@ -613,6 +613,33 @@ static void ctx_toggle_pin(void *ctx) {
     redraw_pending = 1;
 }
 
+// A THUMB BUTTON GOES STRAIGHT TO THE CLIENT UNDER THE POINTER, and
+// does no window management on the way: it does not raise, focus, drag,
+// or touch the chrome. That is Wayland's rule for a button the
+// compositor has no policy for -- and it is also what makes the button
+// usable, since navigating back in a window you are already looking at
+// should not reorder the desktop.
+//
+// DELIVERED BY POSITION, NOT BY FOCUS, which is what both Windows
+// (mouse messages go to the window under the cursor) and Wayland
+// (pointer focus IS the surface under the pointer) do.
+void wm_handle_thumb_button(int mx, int my, unsigned btn, int down) {
+    for (int i = window_count - 1; i >= 0; i--) {
+        struct window *w = &windows[i];
+        if (w->state == WIN_MINIMIZED) continue;
+        if (!uui_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
+        if (wm_dialog_blocker(i) >= 0) return;   // a modal owner takes nothing
+        // CONTENT ONLY. A press on the title bar or a border is chrome,
+        // and the client has no business hearing about it.
+        int cx = mx - window_content_x(w), cy = my - window_content_y(w);
+        if (cx < 0 || cy < 0 || cx >= w->w || cy >= w->h) return;
+        if (wm_client_is_client_window(w))
+            wm_client_send_mouse(w, down ? WIN_EV_MOUSE_DOWN : WIN_EV_MOUSE_UP,
+                                 mx, my, down ? btn : 0);
+        return;   // the topmost window here takes it, hit or not
+    }
+}
+
 void wm_handle_right_click(int mx, int my) {
     // A right-click always resolves to at most one popup -- close
     // whatever's already open before deciding what (if anything) the

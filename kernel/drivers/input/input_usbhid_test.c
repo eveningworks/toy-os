@@ -150,9 +150,19 @@ KTEST("usb-hid", "mouse buttons are a mask, so one does not clear another") {
     usb_hid_mouse_diff(&buttons, none, 3);
     KTEST_ASSERT_EQ(buttons, 0x00);
 
-    // Only the three real buttons; the upper bits of the byte are not
-    // buttons and must not reach the pointer as one.
-    uint8_t noisy[3] = { 0xF8, 0, 0 };
+    // FIVE REAL BUTTONS NOW: bits 3 and 4 are the thumb pair. The boot
+    // report formally defines three, and every 5-button mouse puts them
+    // in these bits of the same byte -- see docs/decisions.md.
+    uint8_t thumbs[3] = { 0x18, 0, 0 };
+    usb_hid_mouse_diff(&buttons, thumbs, 3);
+    KTEST_ASSERT_EQ(buttons, 0x18);
+
+    // ...and the bits ABOVE them are still not buttons. This assertion
+    // read `0xF8 -> 0` until the thumb pair was added; kept rather than
+    // deleted because the property it protects is unchanged -- a bit
+    // with no name must not reach the pointer, since every consumer
+    // asks "buttons != 0" and a stray one answers yes forever.
+    uint8_t noisy[3] = { 0xE0, 0, 0 };
     usb_hid_mouse_diff(&buttons, noisy, 3);
     KTEST_ASSERT_EQ(buttons, 0x00);
 }

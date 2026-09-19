@@ -8693,3 +8693,60 @@ change replaces the set. `WIN_WIDGET_MAX` bounds one window's map at 48,
 and the allocation is made on first report rather than living in every
 `struct window`, because most windows never report one -- a
 kernel-space app has no toolkit behind it.
+
+## Five mouse buttons, and the app decides what the extra ones mean
+
+The kernel masked pointer buttons to three (`mouse_feed_buttons()`,
+`& 0x07`), and a KTEST asserted that truncation. Above it the window
+manager had edge detection for exactly two: bit 0 and bit 1. So a middle
+click travelled the whole way up from the driver and was dropped by the
+compositor having never reached a client, and the thumb buttons were
+discarded three layers below that.
+
+**The numbering follows evdev, not X11, and it was free.** X11 numbers
+pointer buttons 1-3 left/middle/right and then spends 4-7 on the WHEEL,
+which is why a thumb button is button 8 there and why every X11 app
+carries that table. Wayland does not inherit it: `wl_pointer` carries
+evdev codes and scrolling is a separate `axis` event. This protocol
+already made that choice -- the wheel has been `WIN_EV_WHEEL` since it
+existed -- so bits 3 and 4 were never spoken for and `WIN_MOUSE_BTN_SIDE`
+and `_EXTRA` sit where Linux puts `BTN_SIDE` and `BTN_EXTRA`. Nothing had
+to be renumbered and no ABI changed: `WIN_MOUSE_BUTTONS()` already masked
+the low byte with the modifiers shifted clear of it.
+
+**They are named for the POSITION, not for "back" and "forward".** What a
+thumb button means is the application's decision, and the three systems
+worth copying all agree: Wayland delivers an evdev code, Windows delivers
+`WM_XBUTTONDOWN` with `XBUTTON1`/`XBUTTON2`, Qt exposes
+`Qt::BackButton`/`Qt::ForwardButton` -- and in every case it is the
+application (Explorer, Dolphin, a browser) that reads them as
+navigation. A compositor that hard-coded "back" would be wrong in a
+paint program, and one that synthesised Alt+Left instead would be lying
+to the client about what happened.
+
+**So the compositor delivers and does nothing else.** A thumb or middle
+press goes to the client under the pointer -- by POSITION, which is both
+Windows' rule and Wayland's -- and does not raise, focus, drag or touch
+the chrome. Navigating back inside a window you are already looking at
+should not reorder the desktop.
+
+**The PS/2 driver has to ask twice.** A 5-button PS/2 mouse is Microsoft's
+IntelliMouse Explorer, reached by a SECOND sample-rate knock
+(`200, 200, 80`) after the wheel one, and it changes the packet: at
+device ID 3 byte 3 is a signed 8-bit wheel count, at ID 4 it is a signed
+FOUR-bit count with the two buttons in bits 4 and 5. Decoding an ID 4
+packet with the ID 3 rule reads a thumb press as a wheel spin of -16,
+which is why the two decode paths are split rather than shared.
+
+**USB HID leans on a fact outside the spec, and that is stated rather
+than hidden.** This driver has no report-descriptor parser, so it runs
+boot protocol, whose mouse report formally defines three buttons. Every
+real 5-button mouse puts the extra two in bits 3 and 4 of that same byte
+and reports them in boot mode anyway. A device that does not simply
+never sets the bits, so the cost of being wrong is zero -- but it is an
+assumption about hardware rather than a guarantee from a document.
+
+**virtio-input was worse than truncating.** Its range test ended at
+`BTN_MIDDLE`, so codes `0x113`/`0x114` fell past it into the key branch
+and were delivered as KEYBOARD keycodes -- a thumb click injected a
+keystroke no keymap names. Found while widening the others.

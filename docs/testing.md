@@ -512,6 +512,7 @@ gui windows [--json]     rects, content rects, z-order, focus
 gui probe X Y [--json]   which window/region is at a point, and what overlay would take the click
                          -- plus the CLIENT'S OWN NAME for the widget there, when it reports one
 gui widgets [title]      that client's named controls, content-relative and in screen coords
+gui click X Y [BUTTON]   BUTTON is 1-5: left, right, middle, side, extra (NOT X11's numbering)
 gui menu | gui taskbar    row + button geometry, as the kernel computes it
 gui ctxmenu [--json]     the OPEN right-click menu's rows, same shape as `menu`
 gui state [--json]       overlays, cursor, armed drag/resize/press, damage rect

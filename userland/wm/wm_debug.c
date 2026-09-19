@@ -1292,18 +1292,24 @@ static int cmd_warp(int *x, int *y) {
 // Added because no test could open a context menu at all, which is how
 // its Close row went on tearing ring-3 windows down without their
 // handshake while the X button beside it asked politely.
-static int cmd_rclick(int x, int y) {
+// ANY BUTTON, BY MASK -- the two named wrappers below are what most
+// callers want, and the thumb buttons (WIN_MOUSE_BTN_SIDE/EXTRA) have
+// no wrapper because a test asks for them by number. Same
+// press/press/release shape either way, so the WM sees a real edge in
+// both directions.
+static int cmd_button_click(int x, int y, unsigned mask) {
     return inject_push(x, y, 0) &&
-           inject_push(x, y, 2) &&
-           inject_push(x, y, 2) &&
+           inject_push(x, y, (uint8_t)mask) &&
+           inject_push(x, y, (uint8_t)mask) &&
            inject_push(x, y, 0);
 }
 
+static int cmd_rclick(int x, int y) {
+    return cmd_button_click(x, y, 2);
+}
+
 static int cmd_click(int x, int y) {
-    return inject_push(x, y, 0) &&
-           inject_push(x, y, 1) &&
-           inject_push(x, y, 1) &&
-           inject_push(x, y, 0);
+    return cmd_button_click(x, y, 1);
 }
 
 // Interpolated so the WM sees real intermediate positions: a drag that
@@ -1582,6 +1588,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  windows [--json]      open windows: rects, content rects, z-order, focus\r\n");
     dbg_out_write(o, "  probe X Y [--json]    what is at this point, and what would take the click\r\n");
     dbg_out_write(o, "  widgets [title]       the client's named controls, content-relative\r\n");
+    dbg_out_write(o, "  click X Y [BUTTON]    BUTTON 1-5; 4 and 5 are the thumb buttons\r\n");
     dbg_out_write(o, "  menu [--json]         start menu row geometry, as the kernel computes it\r\n");
     dbg_out_write(o, "  tooltip [--json]      what the hover tooltip says, and where\r\n");
     dbg_out_write(o, "  ctxmenu [--json]      the open right-click menu's rows, same shape as `menu`\r\n");
@@ -1946,12 +1953,26 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
     if (k_strcmp(sub, "click") == 0) {
         int x, y;
         if (!parse_int(next_tok(&p), &x) || !parse_int(next_tok(&p), &y)) {
-            dbg_out_write(o, "usage: gui click X Y\r\n");
+            dbg_out_write(o, "usage: gui click X Y [BUTTON]\r\n");
             return 1;
         }
-        dbg_out_printf(o, cmd_click(x, y) ? "gui: queued click at (%d,%d)\r\n"
-                                     : "gui: input queue full, click at (%d,%d) DROPPED\r\n",
-                     x, y);
+        // AN OPTIONAL BUTTON NUMBER, 1-5, not a mask -- a test says
+        // "button 4", and the bit is this end's business. 4 and 5 are
+        // the thumb buttons; the wheel is `gui wheel` and was never a
+        // button here, which is why they are 4 and 5 rather than X11's
+        // 8 and 9.
+        int btn = 1;
+        if (parse_int(next_tok(&p), &btn)) {
+            if (btn < 1 || btn > 5) {
+                dbg_out_write(o, "gui: button must be 1-5 "
+                                 "(4 and 5 are the thumb buttons)\r\n");
+                return 1;
+            }
+        }
+        dbg_out_printf(o, cmd_button_click(x, y, 1u << (btn - 1))
+                     ? "gui: queued button-%d click at (%d,%d)\r\n"
+                     : "gui: input queue full, click at (%d,%d) DROPPED\r\n",
+                     btn, x, y);
         return 1;
     }
 

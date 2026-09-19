@@ -144,7 +144,11 @@ static int read_abs_max(struct input_dev *d, uint8_t axis) {
 static void handle_event(struct input_dev *d, const struct virtio_input_event *ev) {
     switch (ev->type) {
         case EV_KEY:
-            if (ev->code >= INPUT_BTN_LEFT && ev->code <= INPUT_BTN_MIDDLE) {
+            // THROUGH BTN_EXTRA, NOT BTN_MIDDLE. The two thumb buttons used to
+    // fall past this test into the key branch below and were delivered
+    // as KEYBOARD keycodes 0x113/0x114 -- a thumb click injected a
+    // keystroke no keymap has a name for.
+    if (ev->code >= INPUT_BTN_LEFT && ev->code <= INPUT_BTN_EXTRA) {
                 // Buttons are reported as a MASK by the pointer state,
                 // so the driver holds the mask and edits one bit --
                 // otherwise a right-click would clear a held left one.

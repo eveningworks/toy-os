@@ -204,12 +204,25 @@ KTEST("input", "buttons are a mask, so one button does not clear another") {
     mouse_get_state(&x, &y, &now);
     KTEST_ASSERT_EQ(now, 0x3);
 
-    // Bits above the three real buttons are dropped rather than stored:
-    // consumers test bit0/1/2 and a stray high bit would make
-    // "buttons != 0" true forever.
-    input_report_buttons(0xF0);
+    // THE THUMB BUTTONS ARE REAL BITS NOW (SIDE 0x08, EXTRA 0x10), and
+    // this assertion used to be `0xF0 -> 0`. It is kept as a mask test
+    // rather than deleted: a driver reporting a button nothing here
+    // names must still be dropped, because consumers ask "buttons != 0"
+    // and a stray high bit would answer yes forever.
+    input_report_buttons(0x18);
+    mouse_get_state(&x, &y, &now);
+    KTEST_ASSERT_EQ(now, 0x18);
+
+    input_report_buttons(0xE0);   // above EXTRA: no name, no bit
     mouse_get_state(&x, &y, &now);
     KTEST_ASSERT_EQ(now, 0);
+
+    // AND THE THUMB BITS COMPOSE WITH THE ORDINARY ONES, which is the
+    // property the whole mask exists for -- holding left while pressing
+    // back must not release left.
+    input_report_buttons(0x09);
+    mouse_get_state(&x, &y, &now);
+    KTEST_ASSERT_EQ(now, 0x09);
 
     input_report_buttons(before);
 }

@@ -74,6 +74,22 @@ K_ENTER = "0x0d"
 # every QMP-typing tool here has paid for at least once.
 K_TAB, K_ENTER, K_ESC, K_BACKSPACE = "0x09", "0x0a", "0x1b", "0x08"
 K_DOWN, K_UP = "0x92", "0x91"
+K_LEFT, K_RIGHT = "0x95", "0x96"   # KEY_ARROW_LEFT/RIGHT (api/keyboard.h)
+
+# THE TOOLBAR IS ADDRESSED BY INDEX, AND THE INDEX IS ITS ORDER. Adding
+# a button to `toolbar_items[]` in userland/gui/apps/files.c shifts every
+# item after it and separators count -- which is exactly what happened
+# when Back and Forward were added at the front on 2026-09-19: Details
+# moved from 9 to 11, the test clicked the wrong button, and SIXTEEN
+# later checks failed on state the wrong click left behind.
+#
+# Kept here as named constants rather than spelled at each call site so
+# the next such change is one edit, and so a mismatch reads as "the
+# toolbar grew" instead of as the File Manager being broken.
+TB_COUNT = 16          # every item INCLUDING separators
+TB_BACK, TB_FORWARD, TB_UP = 0, 1, 2
+TB_DETAILS = 11
+TB_PANES, TB_TREE = 14, 15
 K_INSERT = "0xb3"
 K_HOME = "0x97"
 K_F2, K_F5, K_F6, K_F7, K_F8 = "0x9a", "0xac", "0xad", "0xae", "0xaf"
@@ -648,7 +664,7 @@ def run(dbg, qmp, tmp, res):
     # desktop file manager does. Everything below aims at rows by
     # height, so both panes are put in Details (1) from the toolbar --
     # which is a check of the toolbar's Details button too.
-    lay = wait_layout(dbg, win, lambda l: l.view is not None and len(l.tbitems) == 14) or lay
+    lay = wait_layout(dbg, win, lambda l: l.view is not None and len(l.tbitems) == TB_COUNT) or lay
     res.check("both panes open in icons view by default",
               lay.view is not None and lay.view[0] == 2 and lay.view[1] == 2,
               f"view={lay.view}")
@@ -656,7 +672,7 @@ def run(dbg, qmp, tmp, res):
         dbg.click(*lay.pane_centre(i))
         lay = wait_layout(dbg, win, lambda l, i=i: l.active == i) or lay
         # Details is item 9 (8 is a separator)
-        lay = toolbar_click(dbg, qmp, win, lay, 9, res, "Details") or lay
+        lay = toolbar_click(dbg, qmp, win, lay, TB_DETAILS, res, "Details") or lay
         lay = wait_layout(dbg, win, lambda l, i=i: l.view and l.view[i] == 1) or lay
     res.check("the toolbar's Details button switches each pane in turn",
               lay.view is not None and lay.view[0] == 1 and lay.view[1] == 1,
@@ -712,6 +728,40 @@ def run(dbg, qmp, tmp, res):
     res.check("Backspace goes back up", lay.dir.get(0) == SRC, f"dir {lay.dir.get(0)}")
     res.check("and selects the directory it just left",
               lay.selected == "sub", f"selected {lay.selected!r}")
+
+    # --- 4a. history: back, forward, and the thumb buttons ---------------
+    #
+    # THE HISTORY IS PER PANE and browser-shaped: going somewhere new
+    # truncates forward. Driven here through all three of its entry
+    # points, because they are three separate bugs -- the keyboard
+    # binding, the toolbar button, and the mouse button the compositor
+    # has to deliver before the app can act on it.
+    #
+    # At this point the pane has been to SRC, SRC/sub, and SRC again.
+    dbg.key(K_LEFT, mods="alt")
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == f"{SRC}/sub") or lay
+    res.check("Alt+Left goes back to the previous directory",
+              lay.dir.get(0) == f"{SRC}/sub", f"dir {lay.dir.get(0)}")
+
+    dbg.key(K_RIGHT, mods="alt")
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == SRC) or lay
+    res.check("Alt+Right goes forward again",
+              lay.dir.get(0) == SRC, f"dir {lay.dir.get(0)}")
+
+    # THE THUMB BUTTON, which is the whole reason the kernel now carries
+    # five button bits. Delivered by the compositor to the client under
+    # the pointer; the app decides it means "back" (abi/win_proto.h).
+    px = win["content"]["x"] + 200
+    py = win["content"]["y"] + 200
+    dbg.send(f"gui click {px} {py} 4")
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == f"{SRC}/sub") or lay
+    res.check("the mouse's back button goes back",
+              lay.dir.get(0) == f"{SRC}/sub", f"dir {lay.dir.get(0)}")
+
+    dbg.send(f"gui click {px} {py} 5")
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == SRC) or lay
+    res.check("...and its forward button goes forward",
+              lay.dir.get(0) == SRC, f"dir {lay.dir.get(0)}")
 
     # --- 4b. type-ahead --------------------------------------------------
     # The fixture sorts on screen as: .., sub, one.txt, three.txt,
@@ -1237,9 +1287,9 @@ def run(dbg, qmp, tmp, res):
     # button row across the bottom, sep, Details, Icons, sep, Second
     # pane, Folder tree. Separators are indexed too.
     res.check("the toolbar reports its strip and all fourteen items",
-              lay is not None and lay.toolbar is not None and len(lay.tbitems) == 14,
+              lay is not None and lay.toolbar is not None and len(lay.tbitems) == TB_COUNT,
               f"toolbar={lay and lay.toolbar} items={lay and sorted(lay.tbitems)}")
-    if not (lay and lay.toolbar and len(lay.tbitems) == 14):
+    if not (lay and lay.toolbar and len(lay.tbitems) == TB_COUNT):
         dbg.send(f"sh rm {FILES_CONF}")
         teardown_fixture(dbg)
         return
@@ -1263,18 +1313,18 @@ def run(dbg, qmp, tmp, res):
     # lands on nothing.
     dir_now = lay.dir.get(0)
     parent = "/" if dir_now.count("/") <= 1 else dir_now.rsplit("/", 1)[0]
-    tb_click(0, "up")
+    tb_click(TB_UP, "up")
     lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == parent)
     res.check("the Up button climbs to the parent directory",
               lay is not None and lay.dir.get(0) == parent,
               f"dir {dir_now} -> {lay and lay.dir.get(0)} (wanted {parent})")
     while lay and lay.dir.get(0) not in (None, "/"):
-        tb_click(0, "up")
+        tb_click(TB_UP, "up")
         nxt = wait_layout(dbg, win, lambda l: l.dir.get(0) != lay.dir.get(0), timeout=5)
         if nxt is None or nxt.dir.get(0) == lay.dir.get(0):
             break
         lay = nxt
-    tb_click(0, "up at the root")  # disabled, must do nothing
+    tb_click(TB_UP, "up at the root")  # disabled, must do nothing
     time.sleep(0.8)
     lay = wait_layout(dbg, win, lambda l: True) or lay
     res.check("at the root the Up button is disabled and does nothing",
@@ -1283,7 +1333,7 @@ def run(dbg, qmp, tmp, res):
     # The Folder-tree button toggles the same state the menu ticks, and
     # LATCHES: its background moves to the pressed wash while a sibling
     # stays put (half the assertion is the neighbour, CLAUDE.md).
-    tb_click(13, "folder tree")
+    tb_click(TB_TREE, "folder tree")
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 1)
     res.check("the Folder-tree button toggles the tree on",
               lay is not None and lay.view and lay.view[3] == 1, f"view={lay and lay.view}")
@@ -1305,7 +1355,7 @@ def run(dbg, qmp, tmp, res):
         res.skip("the latched button's background differs from its resting sibling's",
                  _toolbar_evidence(13 if not r7 else 1, lay))
 
-    tb_click(13, "folder tree")
+    tb_click(TB_TREE, "folder tree")
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0)
     res.check("clicking it again toggles the tree off",
               lay is not None and lay.view and lay.view[3] == 0, f"view={lay and lay.view}")
@@ -1345,7 +1395,7 @@ def run(dbg, qmp, tmp, res):
     # moved is not that the strip has more items -- it is that the
     # commands WORK from up here: New folder must open the same prompt
     # F7 opens, and Delete the same confirm F8 opens.
-    lay = wait_layout(dbg, win, lambda l: len(l.tbitems) == 14) or lay
+    lay = wait_layout(dbg, win, lambda l: len(l.tbitems) == TB_COUNT) or lay
     tb_click(5, "new folder")
     lay = wait_layout(dbg, win, lambda l: l.modal not in (None, 0)) or lay
     res.check("the toolbar's New folder opens the same prompt F7 does",
@@ -2104,8 +2154,7 @@ def run(dbg, qmp, tmp, res):
     # all three -- hiding the pane splitter hid the CONTEXT MENU, and
     # right-click died in single-pane view while every check here passed
     # because none of them had ever turned the second pane off.
-    TB_PANES, TB_TREE = 12, 13
-    lay = wait_layout(dbg, win, lambda l: len(l.tbitems) == 14) or lay
+    lay = wait_layout(dbg, win, lambda l: len(l.tbitems) == TB_COUNT) or lay
 
     def tb(i, what):
         """Click item `i`, adopting the layout it was aimed from; False
@@ -2352,7 +2401,7 @@ def run(dbg, qmp, tmp, res):
         dbg.click(*lay.pane_centre(i))
         lay = wait_layout(dbg, win, lambda l, i=i: l.active == i) or lay
         if lay.view and lay.view[i] != 1:
-            got = toolbar_click(dbg, qmp, win, lay, 9, res,  # Details (8 is a separator)
+            got = toolbar_click(dbg, qmp, win, lay, TB_DETAILS, res,
                                 f"pane {i} to Details")
             lay = got or lay
             lay = wait_layout(dbg, win, lambda l, i=i: l.view and l.view[i] == 1) or lay

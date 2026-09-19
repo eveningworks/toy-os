@@ -421,6 +421,41 @@ def run(d, qmp):
                    "button 1")
 
 
+def check_buttons(d):
+    """All five pointer buttons reach an app, by name.
+
+    THE TOOLKIT ROUTES ONLY THE PRIMARY BUTTON TO WIDGETS
+    (uui_route.h), so `on_press` is the only place buttons 2-5 are
+    visible at all -- which is why UI Demo reports the live mask and why
+    this is the tool that checks it.
+
+    MIDDLE IS IN THE LIST BECAUSE IT WAS THE ONE THAT WAS BROKEN: bit 2
+    had no edge detection anywhere in the WM, so a middle click was
+    carried the whole way up from the driver and dropped without ever
+    reaching a client. Asserting 4 and 5 alone would have passed over
+    that.
+    """
+    win = d.dbg.window("UI Demo")
+    cx, cy = win["content"]["x"], win["content"]["y"]
+    want = {1: "left", 2: "right", 3: "middle", 4: "side", 5: "extra"}
+    for btn, name in want.items():
+        d.dbg.logs("")
+        d.dbg.send(f"gui click {cx + 200} {cy + 200} {btn}")
+        d.dbg.settle()
+        got = [l for l in d.dbg.logs("") if "uidemo: press" in l]
+        d.check_is(f"button {btn} arrives as {name}",
+                   got and name in got[-1],
+                   got[-1].strip() if got else "(no press reported)")
+
+    # AND THE RELEASE CLEARS IT. A driver that reports the press and
+    # loses the release leaves a button stuck down, which looks
+    # identical to one that works until something tests for held.
+    got = [l for l in d.dbg.logs("") if "uidemo: release" in l]
+    d.check_is("a release reports an empty mask",
+               not got or "0x00" in got[-1],
+               got[-1].strip() if got else "(none)")
+
+
 def check_widget_map(d):
     """`gui widgets` against the LAYOUT LOG -- two sources, one truth.
 
@@ -607,6 +642,9 @@ def main():
     d.open()
     print(f"uidemo_test: layout {d.layout}, row_h {d.row_h}")
     run(d, qmp)
+
+    print("\n== pointer buttons ==")
+    check_buttons(d)
 
     print("\n== widget map ==")
     check_widget_map(d)

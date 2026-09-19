@@ -219,7 +219,13 @@ void usb_hid_mouse_diff(uint8_t *buttons, const uint8_t *r, uint32_t len) {
 
     // Buttons are a HELD MASK: edit the bit that changed and report the
     // whole mask, or pressing right would clear a held left.
-    uint8_t mask = (uint8_t)(r[0] & 0x07);
+    // FIVE BUTTONS OUT OF THE BOOT REPORT. The boot-protocol mouse
+    // descriptor formally defines three, and every real 5-button mouse
+    // puts the thumb buttons in bits 3 and 4 of that same byte and
+    // reports them in boot mode anyway -- which is what makes this
+    // work without the report-descriptor parser this driver does not
+    // have. A device that does not have them simply never sets the bits.
+    uint8_t mask = (uint8_t)(r[0] & 0x1F);
     if (mask != *buttons) {
         *buttons = mask;
         input_report_buttons(mask);

@@ -9,6 +9,7 @@
 
 static int mouse_x = 0, mouse_y = 0;
 static uint8_t mouse_buttons = 0;
+static int explorer = 0;   // the device took the 5-button knock
 static int bound_w = 80, bound_h = 25;
 
 // Plain PS/2 mice send 3-byte packets (flags, dx, dy). The "IntelliMouse"
@@ -121,9 +122,38 @@ void mouse_init(void) {
     mouse_write(0xF2); // read device ID
     mouse_read();       // ACK
     uint8_t device_id = mouse_read();
-    packet_size = (device_id == 3) ? 4 : 3;
 
-    klog_write(packet_size == 4
+    // THE SECOND KNOCK, ONLY IF THE FIRST TOOK. `200, 200, 80` on a
+    // device already at ID 3 moves it to ID 4 -- Microsoft's
+    // IntelliMouse Explorer -- which is the ONLY way a PS/2 mouse
+    // reports its two thumb buttons. Asked in this order because the
+    // Explorer knock is defined as following the wheel one; a device
+    // that declined the first cannot take the second.
+    //
+    // **IT CHANGES THE WHEEL FIELD.** At ID 3 byte 3 is a signed 8-bit
+    // notch count; at ID 4 it is a signed FOUR-bit count in bits 0-3
+    // with the thumb buttons in bits 4 and 5. Decoding an ID 4 packet
+    // with the ID 3 rule reads a thumb press as a wheel spin of -16 or
+    // -32, which is why the two are split at the decode below rather
+    // than sharing a path.
+    if (device_id == 3) {
+        static const uint8_t knock2[3] = {200, 200, 80};
+        for (int i = 0; i < 3; i++) {
+            mouse_write(0xF3);
+            mouse_read(); // ACK
+            mouse_write(knock2[i]);
+            mouse_read(); // ACK
+        }
+        mouse_write(0xF2);
+        mouse_read();     // ACK
+        device_id = mouse_read();
+    }
+    explorer = (device_id == 4);
+    packet_size = (device_id == 3 || device_id == 4) ? 4 : 3;
+
+    klog_write(explorer
+        ? "mouse: PS/2 5-button wheel mouse detected (Explorer, 4-byte packets)\n"
+        : packet_size == 4
         ? "mouse: PS/2 wheel mouse detected (4-byte packets)\n"
         : "mouse: PS/2 mouse detected (3-byte packets, no wheel)\n");
 
@@ -173,9 +203,21 @@ void mouse_feed_byte(uint8_t data) {
     if (flags & 0x20) dy -= 256; // sign-extend 9th bit (negative Y)
 
     mouse_feed_rel(dx, dy);
-    mouse_feed_buttons(flags & 0x07);
+    // The thumb buttons live in the WHEEL byte, not in byte 0, so the
+    // mask is assembled from both -- and only on an Explorer device,
+    // where bits 4/5 of byte 3 mean that. On an ID 3 wheel mouse those
+    // same bits are part of the notch count.
+    uint8_t btn = flags & 0x07;
+    if (explorer) btn |= (uint8_t)((packet[3] >> 1) & 0x18);
+    mouse_feed_buttons(btn);
 
-    if (packet_size == 4) {
+    if (explorer) {
+        // FOUR-BIT SIGNED, sign-extended by hand: bit 3 is the sign, so
+        // 0x8..0xF are -8..-1. Negated for the same reason as below.
+        int notch = packet[3] & 0x0F;
+        if (notch & 0x08) notch -= 16;
+        mouse_feed_wheel(-notch);
+    } else if (packet_size == 4) {
         // Wheel byte is a signed 8-bit notch count -- almost always
         // -1 or +1 per physical click of the wheel, occasionally more
         // if it's spun fast. Convention (matches every real mouse):
@@ -253,7 +295,11 @@ void mouse_feed_abs(int x, int y, int max_x, int max_y) {
     clamp_to_bounds();
 }
 
-void mouse_feed_buttons(uint8_t mask) { mouse_buttons = mask & 0x07; }
+// FIVE BITS: left, right, middle, then the two thumb buttons (SIDE and
+// EXTRA, kernel/input.h). Masked rather than stored whole so a driver
+// reporting a button nothing here has a name for cannot invent one --
+// a HID mouse's byte 0 has three more bits above these.
+void mouse_feed_buttons(uint8_t mask) { mouse_buttons = mask & 0x1F; }
 
 void mouse_feed_wheel(int notches) { wheel_delta += notches; }
 

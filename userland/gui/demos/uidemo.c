@@ -92,6 +92,7 @@
 #include "ui/uui.h"
 #include "ui/uapp.h"
 #include "ui/utheme.h"
+#include "win_proto.h"   // WIN_MOUSE_BTN_*, the live button readout
 #include <stdio.h>
 #include <string.h>
 
@@ -179,6 +180,8 @@ static struct {
     int dd_was_open, dd_was_sel;
     int list_was_sel, list_was_top;
     char status[64];
+    // The live pointer-button mask, reported by name -- see log_buttons().
+    char btnmask[64];
 } g;
 
 // The scroll view's text storage: the caller's, as utext.h requires.
@@ -545,8 +548,29 @@ static void snapshot(void) {
     g.list_was_top = g.list.top;
 }
 
+// **THE LIVE BUTTON MASK, INCLUDING THE THUMB BUTTONS.** The toolkit
+// routes only the primary button to widgets (uui_route.h), so a test --
+// or a person checking that their mouse's back button works at all --
+// has nowhere else to see buttons 3, 4 and 5. This is that place, which
+// is what `evtest` and `xev` are for on Linux.
+//
+// Reported by NAME from the protocol's own bits rather than as a
+// number, because the number is where X11 and evdev disagree and this
+// app should not be a fourth opinion.
+static void log_buttons(unsigned mods, const char *what) {
+    unsigned b = WIN_MOUSE_BUTTONS(mods);
+    snprintf(g.btnmask, sizeof g.btnmask, "%s 0x%02x%s%s%s%s%s", what, b,
+             (b & WIN_MOUSE_BTN_PRIMARY)   ? " left"   : "",
+             (b & WIN_MOUSE_BTN_SECONDARY) ? " right"  : "",
+             (b & WIN_MOUSE_BTN_MIDDLE)    ? " middle" : "",
+             (b & WIN_MOUSE_BTN_SIDE)      ? " side"   : "",
+             (b & WIN_MOUSE_BTN_EXTRA)     ? " extra"  : "");
+    logline(g.btnmask);
+}
+
 static void on_press(struct uapp *a, int cx, int cy, unsigned buttons) {
-    (void)a; (void)buttons;
+    (void)a;
+    log_buttons(buttons, "press");
     layout();
     // Focus follows the click. uui_focus_click() only MOVES focus; it
     // never consumes the press, which the toolkit has already routed.
@@ -560,6 +584,20 @@ static void on_draw_over(struct uapp *a, struct uapp_draw *d) {
     struct ugfx_surface *s = d->surface;
     ugfx_draw_string_clipped(s, PAD, row_status(), s->w - 2 * PAD, g.status,
                              UTHEME_TEXT, UTHEME_PANEL_BG);
+    ugfx_draw_string_clipped(s, PAD, row_status() - ugfx_char_h(),
+                             s->w - 2 * PAD, g.btnmask,
+                             UTHEME_TEXT, UTHEME_PANEL_BG);
+    uapp_logf_layout("uidemo: layout btnmask %s\n", g.btnmask);
+}
+
+// So a held button is visibly RELEASED. Without it the readout keeps
+// showing the last press and a button that never comes up -- a driver
+// that reports the press and loses the release -- looks identical to
+// one that works.
+static void on_release(struct uapp *a, int cx, int cy, unsigned buttons) {
+    (void)cx; (void)cy;
+    log_buttons(buttons, "release");
+    uapp_redraw(a);
 }
 
 static void on_motion(struct uapp *a, int cx, int cy, unsigned buttons) {
@@ -681,6 +719,7 @@ int main(void) {
         // What is left for the app: focus on click, hover reporting and
         // the keyboard. No press/drag/release routing at all.
         .on_press     = on_press,
+        .on_release   = on_release,
         .on_motion    = on_motion,
         .on_key       = on_key,
         .flags        = UAPP_RESIZABLE,
