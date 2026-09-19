@@ -35,9 +35,15 @@
 #include <fcntl.h>
 #include <dirent.h>
 
-// Bounded, and the newest win: a ring that has wrapped has already lost
-// its oldest, so holding more than it retains buys nothing.
-#define MAX_LINES 400
+// Bounded, and the newest win. 400 was sized for the RINGS -- one that
+// has wrapped has already lost its oldest, so holding more buys nothing.
+// A stored boot is a different shape: a quiet boot on the test laptop is
+// ~270 lines, but one with a driver retrying is thousands, and truncating
+// to the tail hides the START of the boot, which is where an enumeration
+// fault appears. 2000 covers a ~120 KiB boot whole; beyond that the most
+// recent 2000 are kept. The table reads rows through a callback, so this
+// bounds MEMORY (~204 bytes a line) and nothing else.
+#define MAX_LINES 2000
 #define TEXT_MAX  152
 #define SRC_MAX   16
 
@@ -62,7 +68,12 @@
 // code keeps, not a field. So the list is whatever the loaded lines
 // actually contain, and a line with no prefix is never filtered out, for
 // the reason the Level filter already gives.
-#define SUBSYS_MAX   14
+// 24, against a longest REAL prefix of 13 (`intel-display`, `syscall_stall`
+// -- measured across the tree, not guessed). It was 14, which gave the scan
+// 13 usable bytes and so stopped one character short of those two's colon:
+// they recorded NO subsystem, and a line with no prefix is deliberately
+// never filtered out, so `intel-display:` showed under every choice.
+#define SUBSYS_MAX   24
 #define MAX_SUBSYS   48
 
 struct line {
@@ -310,26 +321,48 @@ static void add_file_line(char *s, int len) {
     add_parsed_line(src[0] ? src : "?", s + i, len - i);
 }
 
+// TWO PASSES, AND THE FIRST ONE ONLY COUNTS. next_line() keeps the
+// NEWEST lines by shifting the whole array down once it is full, which
+// costs a MAX_LINES-entry memmove per line -- fine for a ring that hands
+// over a few hundred, quadratic for a file. A 183 KiB boot (~3000 lines)
+// spent about 200 MB of copying to display, and it showed: selecting it
+// visibly hung the window. Counting first and skipping to the last
+// MAX_LINES means the shift never runs at all.
+static int count_lines(int fd) {
+    static char buf[2048];
+    int lines = 0, got, partial = 0;
+    while ((got = (int)read(fd, buf, sizeof buf)) > 0) {
+        for (int i = 0; i < got; i++) {
+            if (buf[i] == '\n') { lines++; partial = 0; }
+            else partial = 1;
+        }
+    }
+    return lines + partial;
+}
+
 static void read_boot_file(unsigned long long n) {
     char path[64];
     snprintf(path, sizeof path, BOOT_DIR "/%04llu.log", n);
     int fd = open(path, O_RDONLY);
     if (fd < 0) return;
+    int total = count_lines(fd);
+    int skip = total > MAX_LINES ? total - MAX_LINES : 0;
+    if (lseek(fd, 0, SEEK_SET) < 0) { close(fd); return; }
+
     static char buf[2048];
     static char line[512];
-    int line_len = 0;
-    int got;
+    int line_len = 0, index = 0, got;
     while ((got = (int)read(fd, buf, sizeof buf)) > 0) {
         for (int i = 0; i < got; i++) {
             if (buf[i] == '\n') {
-                add_file_line(line, line_len);
+                if (index++ >= skip) add_file_line(line, line_len);
                 line_len = 0;
             } else if (line_len < (int)sizeof line - 1) {
                 line[line_len++] = buf[i];
             }
         }
     }
-    if (line_len) add_file_line(line, line_len);
+    if (line_len && index >= skip) add_file_line(line, line_len);
     close(fd);
 }
 
