@@ -643,6 +643,18 @@ void ugfx_screen_present(struct ugfx_screen *sc);
 // that assumes the buffers still hold this compositor's frames.
 void ugfx_screen_forget(struct ugfx_screen *sc, int back);
 
+// A TEST LEVER (`gui present full on`): present the WHOLE screen every
+// frame rather than the buffer-age union, on a display that flips
+// between several buffers. Inert where there is one buffer -- which is
+// every machine the automated suite runs on, so the union path it
+// bypasses has no coverage there and a screenshot cannot see its output
+// (wm_screenshot.c copies the BACK buffer, and renders a frame first).
+// It exists so a human on flip-capable hardware can tell a catch-up bug
+// from one further down the present path, and costs a full-screen copy
+// per frame while it is on.
+void ugfx_screen_present_full(int on);
+int  ugfx_screen_present_full_get(void);
+
 // After WIN_EV_SCREEN: re-maps the grant at its new geometry, grows the
 // back buffer if the mode did, and forgets every damage box, which was
 // in the old coordinates. Returns 1, or 0 if the grant was refused.

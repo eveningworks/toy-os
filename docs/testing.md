@@ -552,6 +552,33 @@ handshake while the X button beside it asked politely. Use
 is Alt+F4, which is the only way to close a window from a test now that
 Esc doesn't.
 
+**A FLIP-CAPABLE DISPLAY HAS A BUG CLASS NO TEST HERE CAN SEE, AND
+`gui present full on` IS THE LEVER FOR IT.** When the display flips
+between several buffers, the buffer being painted is two or three frames
+stale, so a damage-limited paint must ALSO repaint everything that
+changed since that buffer was last touched -- the buffer-age union in
+`ugfx_screen_present()`, over a 4-entry damage ring. Two things make it
+invisible here:
+
+- **It never runs in QEMU.** The path is gated on `buffers > 1`, and
+  every machine the suite runs on reports ONE scanout and no flip
+  (`lsdisplay`). The bare-metal ASUS reports THREE, with flip.
+- **A screenshot cannot show it, and TAKING one repairs it.**
+  `wm_screenshot.c` copies the compositor's BACK buffer -- which is
+  always complete -- having first called `wm_render_frame()`, and it
+  sets `redraw_pending` afterwards. So the capture is of a surface the
+  bug does not affect, produced by an action that heals the screen.
+
+The symptom, reported from the ASUS 2026-09-19, is a window that opens
+with most of it missing, or a drop shadow on one side only, righting
+itself within a second -- the taskbar clock sets `redraw_pending` once
+a second, and that full repaint is the heal. `gui present full on`
+bypasses the union and presents the whole screen every frame; if the
+symptom stops, the defect is in the catch-up, and if it continues it is
+further down (the kernel's `WIN_REQ_FB_PRESENT` or `intel_flip`). It
+reports `buffers=` too, because the lever does nothing with one buffer
+and that is the first thing to check when it seems inert.
+
 **`gui damage verify on` catches the WM's worst bug class.** The
 compositor only repaints declared damage, so anything that changes on
 screen without being declared leaves stale pixels -- no crash, no

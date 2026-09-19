@@ -1160,6 +1160,17 @@ void ugfx_screen_forget(struct ugfx_screen *sc, int back) {
     for (int i = 0; i < UGFX_SCREEN_BUFFERS; i++) sc->painted_seq[i] = 0;
 }
 
+// A TEST LEVER, not a setting: presents the WHOLE screen every frame
+// when the display flips between several buffers, instead of the
+// buffer-age union below. The multi-buffer path runs on NO machine any
+// automated test here uses (QEMU reports one scanout and no flip), and
+// a screenshot cannot see its output -- wm_screenshot.c copies the BACK
+// buffer, having first rendered a frame -- so this is how a human with
+// flip-capable hardware tells a catch-up bug from one further down.
+static int g_present_full;
+void ugfx_screen_present_full(int on) { g_present_full = on ? 1 : 0; }
+int  ugfx_screen_present_full_get(void) { return g_present_full; }
+
 void ugfx_screen_present(struct ugfx_screen *sc) {
     if (!sc || !sc->back.pixels) return;
 
@@ -1180,7 +1191,7 @@ void ugfx_screen_present(struct ugfx_screen *sc) {
     if (sc->buffers > 1) {
         uint32_t last = sc->painted_seq[back];
         uint32_t age = last ? this_seq - last : 0;   // frames since; 0 = never
-        if (!last || age > UGFX_DAMAGE_RING) {
+        if (!last || age > UGFX_DAMAGE_RING || g_present_full) {
             x = 0; y = 0; w = sc->back.w; h = sc->back.h;
         } else {
             int x1 = x + w, y1 = y + h;

@@ -1646,6 +1646,24 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
                      wm_damage_verify_enabled() ? "on" : "off");
         return 1;
     }
+    // `present [full on|off]` -- the buffer-age bypass (ugfx.h). Reports
+    // the scanout count too, since the lever does nothing with one
+    // buffer and that is the first thing to check when it seems inert.
+    if (k_strcmp(sub, "present") == 0) {
+        char *arg = next_tok(&p);
+        if (arg && k_strcmp(arg, "full") == 0) {
+            char *onoff = next_tok(&p);
+            if (onoff) {
+                ugfx_screen_present_full(k_strcmp(onoff, "on") == 0);
+                redraw_pending = 1;   // the buffers are stale by whatever it was doing
+            }
+        }
+        dbg_out_printf(o, "present: full=%s buffers=%d\r\n",
+                       ugfx_screen_present_full_get() ? "on" : "off",
+                       g_wm_screen.buffers);
+        return 1;
+    }
+
     // The not-responding ping timeout. A TEST lever, not a setting --
     // see wm_internal.h. Reports the value either way, so a tool can
     // assert it actually took rather than assuming.
