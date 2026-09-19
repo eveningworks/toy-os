@@ -9,6 +9,7 @@
 #include "setting.h"
 #include "string.h"
 #include "klog.h"
+#include "kfmt.h" // klog_printf -- a refusal says which limit it hit
 #include "tz.h"
 #include "ntp_config.h"
 #include "netheal_config.h"
@@ -71,8 +72,20 @@ int setting_register(const struct setting *s) {
     // and nothing to apply, so a `set` would report success and change
     // nothing observable. Refused here rather than discovered later.
     if (!setting_persists(s) && !s->apply) return 0;
-    if (k_strlen(s->name) >= SETTING_NAME_MAX) return 0;
-    if (k_strlen(s->label) >= SETTING_LABEL_MAX) return 0;
+    // SAY WHY. These two refusals used to be silent, and a setting that
+    // simply does not exist is debugged from the far end -- `config
+    // get` answering "no setting named", with nothing anywhere saying
+    // it was rejected at boot. A 47-character label cost exactly that.
+    if (k_strlen(s->name) >= SETTING_NAME_MAX) {
+        klog_printf(KLOG_ERR "setting: refusing \"%s\" -- name is %u, max %u\n",
+                    s->name, (unsigned)k_strlen(s->name), (unsigned)SETTING_NAME_MAX - 1);
+        return 0;
+    }
+    if (k_strlen(s->label) >= SETTING_LABEL_MAX) {
+        klog_printf(KLOG_ERR "setting: refusing \"%s\" -- label is %u, max %u\n",
+                    s->name, (unsigned)k_strlen(s->label), (unsigned)SETTING_LABEL_MAX - 1);
+        return 0;
+    }
     if (g_count >= SETTING_MAX) {
         klog_write(KLOG_ERR "setting: registry full, refusing ");
         klog_write(s->name);

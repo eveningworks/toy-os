@@ -782,3 +782,21 @@ KTEST("setting", "a legacy named speed in /etc still migrates") {
 
     setting_set("system.mouse_speed", before);
 }
+
+// A LABEL TOO LONG IS REFUSED, and says so. It used to be refused
+// silently, which is debugged from the far end -- `config get`
+// answering "no setting named" with nothing anywhere explaining why.
+KTEST("setting", "an over-long label is refused, not truncated") {
+    static const struct setting too_long = {
+        .name = "ktest_label_probe",
+        .label = "0123456789012345678901234567890123456789",  // 40 >= MAX
+        .type = SETTING_TYPE_STRING,
+        .file = CONFIG_PATH_RUNTIME,
+        .get = 0,
+    };
+    // .get is NULL too, so this is refused whatever happens -- the
+    // point is that registering it does not ADD anything.
+    int before = setting_count();
+    setting_register(&too_long);
+    KTEST_ASSERT_EQ(setting_count(), before);
+}

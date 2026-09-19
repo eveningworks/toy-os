@@ -383,6 +383,57 @@ static const struct setting usb_replug_setting = {
     .apply = usb_replug_apply,
 };
 
+// ---- system.usb_recover -----------------------------------------------
+//
+// POLICY, not a diagnostic: whether a port that has exhausted every
+// cheaper lever may re-initialise the whole CONTROLLER. Persisted, and
+// OFF by default, because the reset takes every USB device down with it
+// for a moment -- on a laptop that is the keyboard and the trackpad.
+//
+// It is on for the machine with the fault (docs/bugs.md) and off
+// everywhere else, the same shape `system.net_recover` has: a headless
+// test machine wants a recovery a desktop would find alarming.
+//
+// READ WHEN THE LEVER FIRES, not cached at boot: USB enumeration gives
+// up around 1.3 s and init has the filesystem up at 0.6 s, so the file
+// is readable by then -- and a value cached earlier would be the one
+// from before the user changed it.
+
+static void usb_recover_get(char *out, uint32_t cap) {
+    if (!etc_config_get("/etc/toyos.conf", "usb_recover", out, cap))
+        k_strlcpy(out, "off", cap);
+}
+
+static int usb_recover_apply(const char *value) {
+    if (k_strcmp(value, "on") != 0 && k_strcmp(value, "off") != 0) return SETTING_INVALID;
+    return etc_config_set("/etc/toyos.conf", "usb_recover", value)
+           ? SETTING_SAVED : SETTING_UNSAVED;
+}
+
+static int usb_recover_choice(int index, char *out, uint32_t cap) {
+    if (index == 0) { k_strlcpy(out, "on", cap); return 1; }
+    if (index == 1) { k_strlcpy(out, "off", cap); return 1; }
+    return 0;
+}
+
+static const struct setting g_usb_recover_setting = {
+    .name = "usb_recover",
+    .label = "Reset USB controller to recover a port",
+    .type = SETTING_TYPE_ENUM,
+    .file = "/etc/toyos.conf",
+    .category = TUNABLE_CATEGORY, .group = "Diagnostics",
+    .choice = usb_recover_choice,
+    .get = usb_recover_get, .apply = usb_recover_apply,
+};
+
+// What the driver asks. Kept here beside the setting so there is one
+// definition of what "on" means.
+int usb_recover_enabled(void) {
+    char v[8];
+    if (!etc_config_get("/etc/toyos.conf", "usb_recover", v, sizeof v)) return 0;
+    return k_strcmp(v, "on") == 0;
+}
+
 // ---- kernel.usb_hcreset -----------------------------------------------
 // The last recovery lever: re-initialise the whole controller. A knob
 // for the reason usb_replug is one -- the mechanism can be checked on
@@ -465,6 +516,7 @@ void tunables_register(void) {
     setting_register(&usb_reset_setting);
     setting_register(&usb_replug_setting);
     setting_register(&g_usb_hcreset_setting);
+    setting_register(&g_usb_recover_setting);
     setting_register(&ata_nodma_setting);
     setting_register(&kstack_track_setting);
     setting_register(&syscall_stall_setting);

@@ -278,6 +278,10 @@ int usb_diag_replug_port(unsigned port);
 // Re-initialise the whole controller (kernel.usb_hcreset). See xhci.c.
 int usb_controller_reinit(void);
 
+// `system.usb_recover`: may a lost port reset the whole controller?
+// Defined beside the setting, in kernel/lib/tunables.c.
+int usb_recover_enabled(void);
+
 // The OTHER port number of `port`'s physical socket, or 0 if it has
 // none. Both are 1-based, as every port number a user sees is.
 //

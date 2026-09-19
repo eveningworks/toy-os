@@ -2182,18 +2182,22 @@ static void power_cycle_socket(uint32_t p) {
 // THE SOFTWARE REPLUG, by whichever lever this machine has. Port power
 // when the controller allows it; the Intel port mux when it does not,
 // which is the only one the ASUS has. Once per episode either way.
-static void software_replug(uint32_t p) {
+// 1 if a replug was actually attempted, 0 if there was nothing left to
+// try on this port -- which is what promotes the caller to the next
+// lever rather than leaving the port lost.
+static int software_replug(uint32_t p) {
     if (g_hc.ports[p].power_cycled) {
         klog_printf("usb: port %u: already replugged this episode\n", p + 1);
-        return;
+        return 0;
     }
     g_hc.ports[p].power_cycled = 1;
-    if (g_hc.ppc) { power_cycle_socket(p); return; }
+    if (g_hc.ppc) { power_cycle_socket(p); return 1; }
     klog_printf("usb: port %u: no Port Power Control (PPC=0) -- trying the "
                 "port mux instead\n", p + 1);
-    if (!intel_mux_cycle(p))
-        klog_printf("usb: port %u: nothing left to try -- this controller has "
-                    "neither port power nor a port mux\n", p + 1);
+    if (intel_mux_cycle(p)) return 1;
+    klog_printf("usb: port %u: nothing left to try -- this controller has "
+                "neither port power nor a port mux\n", p + 1);
+    return 0;
 }
 
 static void power_ports(void);
@@ -2377,8 +2381,22 @@ static void attach_root_port(uint32_t p) {
             // the warm reset -- which is exactly what was measured on
             // 2026-09-17 and is the case this bug has always been.
             warm_reset_companion(p);
-            if (mr32(g_hc.op, XHCI_PORTSC(p)) & XHCI_PORTSC_CCS)
-                software_replug(p);
+            if (mr32(g_hc.op, XHCI_PORTSC(p)) & XHCI_PORTSC_CCS) {
+                // THIRD AND LAST, and only once the two above have had
+                // their turn AND been shown not to work -- which
+                // software_replug() reports by refusing a second
+                // attempt in the same episode. That is exactly the
+                // state the 2026-09-19 log ended in, and the point at
+                // which a REBOOT was the only thing left.
+                //
+                // Behind `system.usb_recover`, off by default: this
+                // takes every USB device down for a moment, and on a
+                // laptop that is the keyboard. It is armed here and
+                // performed off the event path -- see
+                // usb_controller_reinit().
+                if (!software_replug(p) && usb_recover_enabled())
+                    usb_controller_reinit();
+            }
         }
     }
 }

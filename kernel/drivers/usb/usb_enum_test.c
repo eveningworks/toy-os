@@ -10,6 +10,7 @@
 #include "usb.h"
 #include "ktest.h"
 #include "string.h"
+#include "etc_config.h"
 
 // The shape of a Logitech Unifying receiver's configuration: three
 // interfaces (boot keyboard, boot mouse, vendor HID), each with a HID
@@ -161,4 +162,22 @@ KTEST("usb-sockets", "ranges in the other order still pair") {
     // 1..4 and USB2 at 5..15 must pair 1 with 5, not with itself.
     KTEST_ASSERT_EQ(xhci_companion_in(5, 11, 1, 4, 1), 5);
     KTEST_ASSERT_EQ(xhci_companion_in(5, 11, 1, 4, 5), 1);
+}
+
+// THE GATE ON THE BIGGEST HAMMER IN THE USB DRIVER must default to OFF.
+// `system.usb_recover` decides whether a port that has exhausted every
+// cheaper lever may reset the whole controller -- which takes the
+// keyboard with it. A machine that has never been told to do that must
+// not, so the interesting direction is the absent key, not the set one.
+//
+// Deliberately does NOT write the setting: a KTEST that turned this on
+// and failed before restoring it would leave every later boot of that
+// image resetting its controller (CLAUDE.md's "a test that applies a
+// setting changes the machine for every later tool").
+KTEST("usb", "system.usb_recover defaults to off") {
+    char v[8];
+    int present = etc_config_get("/etc/toyos.conf", "usb_recover", v, sizeof v);
+    if (present && k_strcmp(v, "on") == 0)
+        KTEST_SKIP("this machine has usb_recover ON deliberately");
+    KTEST_ASSERT_EQ(usb_recover_enabled(), 0);
 }
