@@ -215,6 +215,9 @@ struct setting_msg {
     // setting -- including a hand edit to /etc followed by `settings
     // reload` -- with one integer compare and no re-read. Same trick as
     // fs_generation() and the desktop's live `.desktop` reload.
+    // NEVER 0: a client's own seen-generation is a static that starts
+    // at 0, so 0 has to mean "never asked" or its first compare on a
+    // fresh boot matches and it never adopts (see setting.c).
     uint32_t generation;
 
     char name[SETTING_ABI_QUALIFIED_MAX]; // in (GET/SET), out (INFO)

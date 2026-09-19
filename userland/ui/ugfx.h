@@ -537,6 +537,17 @@ void ugfx_fill_ring(struct ugfx_surface *s, int cx, int cy,
 // gradients or shadows wants the same thing.
 void ugfx_blend_pixel(struct ugfx_surface *s, int x, int y, uint32_t color, uint8_t alpha);
 
+// A RUN of `w` pixels of `color` along row `y` from `x`, taking each
+// pixel's coverage from `cov` -- or, when `cov` is NULL, one constant
+// `alpha` for the whole run. Clipped and dirty-marked ONCE per run
+// rather than once per pixel, which is the whole reason it exists: the
+// drop shadows walk a window's perimeter every frame, and a call per
+// pixel there cost more than the blending did.
+// `cov` is indexed from the UNCLIPPED `x`, so clipping a run does not
+// shift its coverage.
+void ugfx_blend_hspan(struct ugfx_surface *s, int x, int y, int w,
+                       uint32_t color, const uint8_t *cov, uint8_t alpha);
+
 // --- the screen -------------------------------------------------------
 //
 // A ring-3 COMPOSITOR's view of the real display: an ordinary

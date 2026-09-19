@@ -621,6 +621,9 @@ whenever a headline here tells you something you did not already know.
 - **`uui_dialog_take_code()` RETURNS -1 ON EVERY PRESS** -- `on_widget`
   runs for the press too, and a `switch` whose `default` acts does it
   half an event early (`gui.md`)
+- **A long alpha run is one `ugfx_blend_hspan()`, not a loop of
+  `ugfx_blend_pixel()`** -- the per-pixel call re-clips and re-marks damage
+  every time; the drop shadows got 2.6x cheaper this way (`gui.md`)
 - **THE WM CONTEXT MENU IS `uui_menubar`, WITH THE PANEL'S ITEM MODEL
   OVER IT, AND THE DESKTOP'S MENU IS WINDOWS' SHAPE**
 - **A DRAG BETWEEN WINDOWS IS BROKERED BY THE COMPOSITOR, AND ITS

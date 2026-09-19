@@ -9,6 +9,11 @@
 static int g_enabled = 1;
 static uint32_t g_seen_generation;
 
+// The edge falloff's domain (d past the casting edge) and the widest
+// varying run a row can carry, both bounds on font-derived radii.
+#define SHADOW_EDGE_MAX 256
+#define SHADOW_SPAN_MAX 320
+
 // Radius (how far the shadow reaches), darkness (the alpha at the edge
 // of the casting rect, of 255) and downward offset, per kind. In LINE
 // HEIGHTS so they scale with the chrome: Breeze's active shadow is
@@ -25,6 +30,7 @@ static void params(enum wm_shadow_kind kind, int *r, int *a, int *oy) {
     default:                 *r = 0;          *a = 0;  break;
     }
     if (*r < 4 && *r > 0) *r = 4;
+    if (*r >= SHADOW_EDGE_MAX) *r = SHADOW_EDGE_MAX - 1;  // the edge LUT's domain
     *oy = *r / 3;
 }
 
@@ -55,9 +61,18 @@ static int fall_alpha(int d, int r, int a) {
 // recomputed when the font (and so the radii) changes. Four corners
 // use one tile mirrored, which is what makes a shadow cost a
 // perimeter's worth of blends and no square roots per frame.
-struct tile { int r, cr, a, side; unsigned char *px; };
+struct tile { int r, cr, a, side; unsigned char *px; unsigned char edge[SHADOW_EDGE_MAX]; };
 static struct tile g_tile[4];
 static unsigned char g_tile_px[4][64 * 64];
+
+// The straight edges' falloff, cached beside the corner tile. It was
+// fall_alpha() per pixel, and that division ran once for every pixel of
+// a window's perimeter band, every frame of a drag.
+static int edge_alpha(const struct tile *t, int d) {
+    if (d <= 0) return t->a;
+    if (d >= t->r) return 0;
+    return t->edge[d];
+}
 
 static const struct tile *corner_tile(enum wm_shadow_kind kind, int cr) {
     int r, a, oy;
@@ -67,6 +82,8 @@ static const struct tile *corner_tile(enum wm_shadow_kind kind, int cr) {
     if (side > 64) side = 64;
     if (t->px && t->r == r && t->cr == cr && t->a == a && t->side == side) return t;
     t->r = r; t->cr = cr; t->a = a; t->side = side; t->px = g_tile_px[kind];
+    for (int d = 0; d < SHADOW_EDGE_MAX; d++)
+        t->edge[d] = (unsigned char)fall_alpha(d, r, a);
     for (int j = 0; j < side; j++)
         for (int i = 0; i < side; i++) {
             // (i, j) is the pixel (i + 1, j + 1) past an arc centre:
@@ -89,7 +106,25 @@ static int shadow_alpha(const struct tile *t, int px, int py,
         return t->px[(dy - 1) * t->side + (dx - 1)];
     }
     int d = (dx > dy ? dx : dy) - t->cr;
-    return fall_alpha(d, t->r, t->a);
+    return edge_alpha(t, d);
+}
+
+// One row of a LEFT or RIGHT band, where the coverage varies along the
+// run: built into `cov` and emitted as a single span. The run is at
+// most the shadow's reach plus a corner radius wide.
+static void outer_span(struct ugfx_surface *s, const struct tile *t,
+                       int x0, int x1, int py,
+                       int cx0, int cx1, int cy0, int cy1, unsigned char *cov) {
+    int n = x1 - x0;
+    if (n <= 0) return;
+    if (n > SHADOW_SPAN_MAX) n = SHADOW_SPAN_MAX;
+    int any = 0;
+    for (int i = 0; i < n; i++) {
+        int al = shadow_alpha(t, x0 + i, py, cx0, cx1, cy0, cy1);
+        cov[i] = (unsigned char)al;
+        any |= al;
+    }
+    if (any) ugfx_blend_hspan(s, x0, py, n, 0x000000, cov, 0);
 }
 
 void wm_shadow_draw(int x, int y, int w, int h, int corner_r, enum wm_shadow_kind kind) {
@@ -123,18 +158,31 @@ void wm_shadow_draw(int x, int y, int w, int h, int corner_r, enum wm_shadow_kin
         if (bx1 > s->clip_x1) bx1 = s->clip_x1;
         if (by1 > s->clip_y1) by1 = s->clip_y1;
     }
-    // What the window will paint over anyway, less its corner boxes:
-    // skipped, since the rounded cut is the only place a covered pixel
-    // shows through.
-    int ix0 = x + cr, ix1 = x + w - cr, iy0 = y + cr, iy1 = y + h - cr;
+    // The rows the window will paint over anyway, less its corner
+    // boxes: skipped, since the rounded cut is the only place a
+    // covered pixel shows through.
+    int iy0 = y + cr, iy1 = y + h - cr;
+
+    // EACH ROW IS THREE SEGMENTS, and the long one is flat. Left and
+    // right of the arc centres the coverage varies, so those are built
+    // per pixel; BETWEEN them dx is 0, so the whole run shares one
+    // alpha and blends as a span. The skipped interior [ix0, ix1) is
+    // exactly that middle segment -- ix0 == cx0 and ix1 == cx1 + 1,
+    // since sx == x -- so an interior row simply omits it.
+    unsigned char cov[SHADOW_SPAN_MAX];
+    int mid0 = cx0 < bx0 ? bx0 : cx0;
+    int mid1 = cx1 + 1 > bx1 ? bx1 : cx1 + 1;
+    int left1 = cx0 < bx1 ? cx0 : bx1;
+    int right0 = cx1 + 1 > bx0 ? cx1 + 1 : bx0;
 
     for (int py = by0; py < by1; py++) {
-        int inside_rows = (py >= iy0 && py < iy1);
-        for (int px = bx0; px < bx1; px++) {
-            if (inside_rows && px >= ix0 && px < ix1) { px = ix1 - 1; continue; }
-            int al = shadow_alpha(t, px, py, cx0, cx1, cy0, cy1);
-            if (al > 0) ugfx_blend_pixel(s, px, py, 0x000000, (uint8_t)al);
+        outer_span(s, t, bx0, left1, py, cx0, cx1, cy0, cy1, cov);
+        if (!(py >= iy0 && py < iy1) && mid1 > mid0) {
+            int dy = py < cy0 ? cy0 - py : (py > cy1 ? py - cy1 : 0);
+            int al = edge_alpha(t, dy - t->cr);
+            if (al > 0) ugfx_blend_hspan(s, mid0, py, mid1 - mid0, 0x000000, 0, (uint8_t)al);
         }
+        outer_span(s, t, right0, bx1, py, cx0, cx1, cy0, cy1, cov);
     }
 }
 

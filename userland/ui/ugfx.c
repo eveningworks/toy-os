@@ -980,6 +980,36 @@ void ugfx_blend_pixel(struct ugfx_surface *s, int x, int y, uint32_t color, uint
     dirty_mark(s, x, y);
 }
 
+void ugfx_blend_hspan(struct ugfx_surface *s, int x, int y, int w,
+                       uint32_t color, const uint8_t *cov, uint8_t alpha) {
+    if (!s || !s->pixels || w <= 0) return;
+    if (y < 0 || y >= s->h) return;
+    int x0 = x, x1 = x + w;
+    if (x0 < 0) x0 = 0;
+    if (x1 > s->w) x1 = s->w;
+    if (s->clip_active) {
+        if (y < s->clip_y0 || y >= s->clip_y1) return;
+        if (x0 < s->clip_x0) x0 = s->clip_x0;
+        if (x1 > s->clip_x1) x1 = s->clip_x1;
+    }
+    if (x1 <= x0) return;
+    uint32_t *p = &s->pixels[(uint32_t)y * (uint32_t)s->w + (uint32_t)x0];
+    if (cov) {
+        const uint8_t *c = cov + (x0 - x);   // clipping skipped that much coverage too
+        for (int i = 0; i < x1 - x0; i++) {
+            unsigned al = c[i];
+            if (al) p[i] = (al >= 255) ? color : blend(color, p[i], al);
+        }
+    } else if (alpha) {
+        if (alpha >= 255) for (int i = 0; i < x1 - x0; i++) p[i] = color;
+        else              for (int i = 0; i < x1 - x0; i++) p[i] = blend(color, p[i], alpha);
+    } else {
+        return;                              // nothing drawn, so nothing dirtied
+    }
+    dirty_mark(s, x0, y);
+    dirty_mark(s, x1 - 1, y);
+}
+
 static void ugfx_geom_plot(void *ctx, int x, int y, uint32_t color, uint8_t alpha) {
     ugfx_blend_pixel((struct ugfx_surface *)ctx, x, y, color, alpha);
 }

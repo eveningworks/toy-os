@@ -49,6 +49,13 @@ int wm_conf_set(const char *path, const char *key, const char *value);
 // edit followed by `config reload`. The compositor compares it once per
 // frame to decide whether to re-read its own settings, which is free
 // unless something actually changed.
+//
+// A REAL GENERATION IS NEVER 0 (setting_abi.h), which is what makes the
+// usual `static uint32_t g_seen_generation;` poller adopt on its FIRST
+// poll rather than sitting on its compiled-in defaults until something
+// else moves the counter. 0 is also what this returns when the syscall
+// fails, so a failure re-reads rather than silently keeping stale
+// values.
 uint32_t wm_setting_generation(void);
 
 #endif

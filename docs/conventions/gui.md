@@ -4532,3 +4532,32 @@ window dragged into the screen corner cannot grow further up or left,
 and the clamps correctly refuse -- which reads as five broken
 directions. `tools/resize_edges_test.py` resets, and asserts the reset
 worked, so a fixture failure says so instead of blaming the WM.
+
+### A long alpha run is one span, not a loop of `ugfx_blend_pixel()`
+
+`ugfx_blend_pixel()` re-checks the surface, the bounds and the clip and
+re-marks damage on EVERY call, so a per-pixel loop pays that overhead
+once per pixel. `ugfx_blend_hspan()` does the clipping and the damage
+mark ONCE for a whole horizontal run, taking per-pixel coverage from an
+array or one constant alpha for the run.
+
+The drop shadows are why it exists. They walk a window's perimeter band
+every frame a window is dragged, which is ~113,000 pixels for a large
+window; moving the flat middle of each edge onto a constant-alpha span
+and the varying left/right bands onto a coverage array made the shadow
+**2.6x cheaper** (5.93 -> 2.28 ms per drag step, measured against a
+shadows-off control that stayed within 2%).
+
+Two things that made the decomposition exact, both worth knowing before
+editing `wm_shadow.c`:
+
+- **The skipped window interior IS the middle segment.** `ix0 == cx0`
+  and `ix1 == cx1 + 1`, because the casting rect is offset only in y
+  (`sx == x`), so an interior row simply omits its middle span instead
+  of needing a second range test per pixel.
+- **The straight edges' falloff is a LUT, and only the corners are a
+  tile.** `fall_alpha()` divides; it now fills `tile.edge[]` once per
+  (radius, alpha) change and the hot path is a lookup.
+
+**`cov` is indexed from the UNCLIPPED `x`**, so clipping a run does not
+shift its coverage -- pass the run's true origin, not the clipped one.

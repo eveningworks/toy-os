@@ -44,7 +44,13 @@ static int setting_has_choices(const struct setting *s);
 
 static const struct setting *g_settings[SETTING_MAX];
 static int g_count = 0;
-static uint32_t g_generation = 0;
+// STARTS AT 1, AND 0 IS RESERVED FOR "NEVER ASKED". Every cache holder
+// keeps its own seen-generation in a static, which zero-initialises; if
+// a real generation could be 0 too, the first poll on a fresh boot
+// compares equal and the holder never adopts what /etc actually says.
+// That silently ignored `shadows=off` and `animations=off` until some
+// unrelated setting moved the counter.
+static uint32_t g_generation = 1;
 
 int setting_register(const struct setting *s) {
     if (!s || !s->name || !*s->name || !s->label || !s->get) return 0;

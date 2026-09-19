@@ -7666,3 +7666,38 @@ by an exported function, a signature, the meaning of a wrapper's
 arguments. NOT adding a new exported function; an old program never
 calls it, and a new program against an old library already fails to
 resolve it by name, which reports itself clearly.
+
+## The settings generation starts at 1, so 0 can mean "never asked"
+
+Every cache holder that watches the settings registry keeps its own
+seen-generation in a `static uint32_t`, which zero-initialises, and
+early-outs when the registry's counter matches it. The counter also
+started at 0, so on a fresh boot the first poll compared EQUAL and the
+holder never adopted anything -- it sat on its compiled-in defaults
+until some unrelated setting happened to move the counter.
+
+That is not a theoretical gap. `desktop.shadows=off` and
+`desktop.animations=off` were being ignored on every boot: the file on
+disk said off, the desktop drew shadows, and changing any setting in
+Control Panel made them correct until the next reboot. `wm_idle`,
+`wm_tray` and the tray popups share the shape and had the same latent
+bug.
+
+`cursor_theme.c` was the one that worked, because it has an
+`cursor_theme_init()` that adopts unconditionally at startup. That is
+the other possible fix, and it was rejected as the PRIMARY one: it
+cures the instances, and the next poller written to the obvious shape
+breaks again in a way that is invisible until someone reboots with a
+non-default setting.
+
+So the invariant moved into the counter instead: a real generation is
+never 0, and 0 is reserved for "never asked". One line, and every
+present and future poller of this shape adopts on its first poll.
+`wm_setting_generation()` also returns 0 when the syscall fails, which
+now means a failure re-reads rather than silently keeping stale values
+-- the safe direction for a config cache.
+
+Linux's sysctl and GSettings both avoid the question by pushing change
+notifications rather than having readers poll a counter; a poll was
+kept here because the compositor already runs a loop and a push would
+need a subscription mechanism the registry does not have.
