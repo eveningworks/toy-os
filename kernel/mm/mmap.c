@@ -57,19 +57,31 @@ static int regions_grow(struct sched_mm *mm) {
     return 1;
 }
 
-static struct mmap_region *free_slot(struct sched_mm *mm) {
+// RETURNS AN INDEX, NEVER A POINTER, and that is the whole point.
+// Growing frees the old array, so any `struct mmap_region *` a caller
+// held across this call is dangling -- including one it obtained from
+// region_of() several statements earlier. A pointer return made that
+// mistake easy and silent (it shipped once: munmap's middle split kept
+// its head region across the growth and wrote through it). An index
+// cannot go stale, so callers re-derive after the call and the hazard
+// stops being something anyone has to remember.
+// -1 when the list is at MMAP_MAX_REGIONS or the allocation failed.
+static int free_slot(struct sched_mm *mm) {
     for (int i = 0; i < mm->region_cap; i++)
-        if (!mm->regions[i].base) return &mm->regions[i];
+        if (!mm->regions[i].base) return i;
     int was = mm->region_cap;
-    if (!regions_grow(mm)) return 0;
-    return &mm->regions[was];   // the first slot the growth just added
+    if (!regions_grow(mm)) return -1;
+    return was;   // the first slot the growth just added
 }
 
 // The growth is the thing worth a test and free_slot() is where it
 // happens, so mm_test.c reaches it by name rather than through 40 real
 // mappings, which would need an address space and 40 frames to prove
 // the same property.
-struct mmap_region *mmap_test_free_slot(struct sched_mm *mm) { return free_slot(mm); }
+struct mmap_region *mmap_test_free_slot(struct sched_mm *mm) {
+    int i = free_slot(mm);
+    return i < 0 ? 0 : &mm->regions[i];
+}
 
 // Frees the list. Idempotent, which is what lets both the teardown path
 // and a spawn reusing the slot call it without either having to know
@@ -206,8 +218,9 @@ int sys_mmap(struct syscall_ctx *c) {
         if (!base) { ret = -ENOMEM; goto out; }
     }
 
-    struct mmap_region *r = free_slot(mm);
-    if (!r) { ret = -ENOMEM; goto out; }
+    int r_slot = free_slot(mm);
+    if (r_slot < 0) { ret = -ENOMEM; goto out; }
+    struct mmap_region *r = &mm->regions[r_slot];
 
     r->npages   = npages;
     r->prot     = (uint8_t)m.prot;
@@ -278,8 +291,18 @@ int sys_munmap(struct syscall_ctx *c) {
     // rather than half-applying.
     struct mmap_region *tail = 0;
     if (addr > r->base && end < rend) {
-        tail = free_slot(mm);
-        if (!tail) { ret = -ENOMEM; goto out; }
+        // **free_slot() CAN MOVE THE LIST.** It grows by allocating a
+        // new array and freeing the old one, so `r` -- a pointer INTO
+        // the old one -- is dangling the moment it returns. Remember
+        // which SLOT r was and re-derive it afterwards; every line
+        // below writes through r, so getting this wrong is a
+        // use-after-free on the kernel heap that only appears once a
+        // process has enough mappings to trigger a growth.
+        int r_idx = (int)(r - mm->regions);
+        int t_slot = free_slot(mm);
+        if (t_slot < 0) { ret = -ENOMEM; goto out; }
+        r    = &mm->regions[r_idx];   // both re-derived: the array may have moved
+        tail = &mm->regions[t_slot];
     }
 
     for (uint64_t p = addr; p < end; p += 4096)

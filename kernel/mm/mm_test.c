@@ -584,3 +584,45 @@ KTEST("mm", "the mmap region list grows past the old fixed ceiling") {
     mmap_regions_reset(mm);                      // idempotent: a spawn calls it too
     kfree(mm);
 }
+
+// A SPLIT THAT GROWS THE LIST must not leave the caller writing through
+// a pointer into the freed array. free_slot() reallocates, so munmap's
+// middle-cut path re-derives its region by INDEX afterwards; this fills
+// the list exactly to its capacity so the next free_slot() is
+// guaranteed to move it, then checks the entries survived intact.
+KTEST("mm", "a region survives the list moving under it") {
+    struct sched_mm *mm = kzalloc(sizeof *mm);
+    KTEST_ASSERT(mm != 0);
+
+    // Past MMAP_REGIONS_INIT, so at least one growth happens mid-loop.
+    // Nothing holds a region pointer across a free_slot() call here --
+    // that is the very bug under test, and the first draft of this test
+    // had it: `first` was captured before the loop and written after,
+    // by which time the array had moved.
+    const int N = 20;
+    int grew = 0;
+    for (int i = 0; i < N; i++) {
+        int cap_before = mm->region_cap;
+        struct mmap_region *r = mmap_test_free_slot(mm);
+        KTEST_ASSERT(r != 0);
+        if (mm->region_cap != cap_before && i > 0) grew = 1;
+        r->base   = UADDR_MMAP_BASE + (uint64_t)(i + 1) * 4096;
+        r->npages = 1;
+        r->kind   = MMAP_KIND_ANON;
+    }
+    KTEST_ASSERT(grew);                       // the move really happened
+    KTEST_ASSERT(mm->region_cap >= N);
+
+    // Every entry written before the move is still there, exactly once.
+    // By VALUE, not by slot: growth is free to place them anywhere.
+    for (int i = 0; i < N; i++) {
+        uint64_t want = UADDR_MMAP_BASE + (uint64_t)(i + 1) * 4096;
+        int found = 0;
+        for (int j = 0; j < mm->region_cap; j++)
+            if (mm->regions[j].base == want && mm->regions[j].npages == 1) found++;
+        KTEST_ASSERT_EQ(found, 1);
+    }
+
+    mmap_regions_reset(mm);
+    kfree(mm);
+}
