@@ -57,19 +57,25 @@ and under QEMU, and it does not stop at "hello world from the kernel":
 - **Storage** — TFS3, a journaling filesystem with `fsck`, beside FAT32
   and a RAM filesystem, on MBR/GPT partitions the kernel reads and writes.
   It **installs itself** onto another disk and that disk boots.
-- **Networking** — ARP, IPv4, ICMP, UDP and client-side TCP over five NIC
+- **Networking** — ARP, IPv4, ICMP, UDP and client-side TCP over six NIC
   drivers, with DHCP, DNS, `ping`, `wget` and an `httpd` that serves this
   machine's own filesystem.
 - **A desktop, and it is not in the kernel** — the window manager is a
   ring-3 process and so is every app: a file manager, a terminal with tabs,
   an image viewer, an audio player, Minesweeper and DOOM. They share one
   toolkit, down to the file chooser, which opens as a modal window of its
-  own the way Windows' and KDE's do.
+  own the way Windows' and KDE's do. Minimize and maximize animate —
+  four effects including a macOS-style genie, at five speeds, or off.
 - **Sound** — AC'97, Intel HD Audio and USB Audio behind one device class,
   mixed by a ring-3 daemon; WAV and an MP3 decoder written here rather than
   vendored.
 - **Its own manual** — `doc ls` on the machine renders the same page this
   repository holds, wrapped to whatever the terminal actually is.
+- **A log that outlives the boot** — the kernel ring holds a few hundred
+  lines, so `logd` persists it and every service's output to `/var/log`,
+  one plain-text file per boot. `log -p 3` reads three boots back, which
+  is what an intermittent fault actually needs: the boot that went wrong
+  compared against the good ones around it.
 - **Its own test suite** — in-kernel tests with deliberate fault injection,
   ring-3 diagnostics, and a GUI suite that drives the desktop over a serial
   channel and asserts on pixels.
@@ -102,7 +108,7 @@ hubs, hot-plug, HID, Ethernet and audio; sound on three device classes,
 mixed by `soundd`, including DOOM with music; an Intel display driver
 that reads the panel's EDID and programs the mode itself, with runtime
 resolution changes and backlight control; ACPI tables and firmware-driven
-shutdown; networking on five NIC drivers — UDP, TCP, DHCP and DNS, so
+shutdown; networking on six NIC drivers — UDP, TCP, DHCP and DNS, so
 `wget` fetches a real page off the internet and `httpd` serves this
 machine's filesystem to a browser — one connection per child process
 under `inetd`, which makes a handler an ordinary filter, and `netlog`
@@ -152,8 +158,10 @@ A C toolchain, NASM, GRUB's rescue-image tools, and QEMU.
 | `python3` | Build-time disk seeding and the test/dev tools. Pillow (`pip install pillow`) is needed only for screenshots. |
 
 Verified firsthand on Arch/CachyOS; the Debian/Ubuntu list is what CI
-installs on every push. The rest are package-name translations of the
-same requirements — corrections welcome.
+installs when it runs — on a release tag or on demand, not on every
+push, because what a clean-checkout build is uniquely good at is not
+worth a gate that cries wolf. The rest are package-name translations of
+the same requirements — corrections welcome.
 </details>
 
 
@@ -340,7 +348,7 @@ Selected tools, each documented in its own docstring:
 | [docs/filesystem-layout.md](docs/filesystem-layout.md) | What lives where on the OS's own disk. Checked against the built image by `tools/check_layout.py`. |
 | [docs/gui-guidelines.md](docs/gui-guidelines.md) | How the GUI should look and behave, and how to verify a change to it properly. |
 | [docs/uapp-design.md](docs/uapp-design.md) | Toykit's design: how a ring-3 GUI app is written, and the staging that got there. |
-| [docs/wm-ring3-design.md](docs/wm-ring3-design.md) | Milestone 41 — how the window manager was moved out of the kernel, stage by stage. Complete. |
+| [docs/wm-ring3-design.md](docs/wm-ring3-design.md) | How the window manager was moved out of the kernel, stage by stage. A record of finished work: for what ring 0 still owns, [docs/winserver-ring3-design.md](docs/winserver-ring3-design.md) is the current word. |
 | [docs/init-design.md](docs/init-design.md) | The staged plan for an init as pid 1, the process tree under it, and the shell moving to ring 3. |
 | [docs/process-isolation.md](docs/process-isolation.md) | The full ring0/ring3 build-up, told as it was built, bugs included. |
 | [docs/tfs3-spec.md](docs/tfs3-spec.md) / [design](docs/tfs3-design.md) | Byte-level format of the default filesystem, and the reasoning behind it. |
