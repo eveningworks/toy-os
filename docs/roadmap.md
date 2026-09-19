@@ -869,7 +869,7 @@ run on, not by order.
 - [x] ~~Remove a network device when it is unplugged~~ DONE 2026-09-05 -- `net_unregister()`; net was the last class registry without one
 - [x] ~~`/bin/netd`: naming rules from `/etc/net.conf`, and a lease per card~~ DONE 2026-09-05 -- replaced the `dhcp` service
 - [ ] An RTT estimate, and Nagle -- the retransmit timeout is a fixed floor with backoff
-- [ ] TFTP `windowsize` (RFC 7440) -- one ACK per block puts a flash on the scheduler tick rather than the link
+- [ ] A DEEPER TFTP `windowsize` (RFC 7440) -- 3 is negotiated already, and it is the guest socket's limit rather than the link's
 - [x] ~~Run `dhcp` at boot~~ DONE 2026-08-29 -- init's `dhcp` one-shot; the kernel invents no address at all now
 - [x] ~~A link-local address when no server answers~~ DONE 2026-08-29 -- RFC 3927 / APIPA, probed over `SYS_NET_ARP_PROBE`
 - [ ] A restarted `netd` leaves an already-addressed card alone, so that lease is never renewed -- the lease file records no grant time

@@ -357,8 +357,12 @@ def do_exec(host, port, commands, timeout):
 # was 512-byte blocks before blksize was negotiated, and quoting it
 # extrapolates a flash six times longer than it takes.)
 #
-# `windowsize` is the lever nobody has pulled: this asks for a window
-# of 1, so every block still costs a round trip. See docs/roadmap.md.
+# `windowsize` IS NEGOTIATED NOW, at 3 -- the guest's tftpd.c caps it
+# there (WINDOW_MAX), so three blocks fly per ACK and a round trip buys
+# 3 * 1428 bytes instead of 512. This comment said "asks for a window of
+# 1, so every block still costs a round trip" long after that stopped
+# being true; the measurement above (~280 KB/s) is the CURRENT rate and
+# already includes it.
 #
 # 1428 IS THE CEILING, and it is the guest's, not a convention:
 # kernel/net/ipv4.c does not fragment or reassemble, so a block that
