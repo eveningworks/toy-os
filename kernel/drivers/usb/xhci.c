@@ -115,6 +115,13 @@ struct xhci_hc {
     // interrupt advances. Done inline it never returns, which is how it
     // froze a laptop the first time it was tried.
     volatile uint32_t diag_reset_pending;
+    // kernel.usb_hcreset / the give-up chain's last lever. DEFERRED for
+    // BOTH reasons above at once: it is written from a syscall, and it
+    // re-enumerates, which is synchronous control transfers that need
+    // the events a disabled interrupt cannot deliver. Run inline it
+    // stops dead on the first port that HAS a device -- measured, and
+    // it looked exactly like the controller failing to come back.
+    volatile uint32_t hcreset_pending;
     // kernel.usb_replug, same deferral and for the same reason.
     // Separate from the reset: they are different levers and the point
     // of having both is to tell which one a device needs.
@@ -650,6 +657,26 @@ static int reset_controller(void) {
     return 1;
 }
 
+// Point the controller at the rings. Split out of setup_rings() because
+// a controller RESET clears these registers while the frames behind
+// them are still ours -- so a recovery re-programs and must NOT
+// re-allocate. alloc_frame() identity-maps, so a ring's virtual address
+// is its physical one.
+static void program_rings(void) {
+    xhci_ring_init(&g_hc.cmd, (void *)g_hc.cmd.trb, g_hc.cmd.phys,
+                   g_hc.cmd.count, 0);
+    xhci_ring_init(&g_hc.evt, (void *)g_hc.evt.trb, g_hc.evt.phys,
+                   g_hc.evt.count, 1);
+    g_hc.erst[0].base = g_hc.evt.phys;
+    g_hc.erst[0].size = g_hc.evt.count;
+    mw64(g_hc.op, XHCI_DCBAAP, (uint64_t)(uintptr_t)g_hc.dcbaa);
+    mw64(g_hc.op, XHCI_CRCR, g_hc.cmd.phys | XHCI_CRCR_RCS);
+    mw32(g_hc.rt, XHCI_IR0 + XHCI_ERSTSZ, 1);
+    mw64(g_hc.rt, XHCI_IR0 + XHCI_ERDP, g_hc.evt.phys);
+    // ERSTBA LAST: writing it arms the interrupter.
+    mw64(g_hc.rt, XHCI_IR0 + XHCI_ERSTBA, (uint64_t)(uintptr_t)g_hc.erst);
+}
+
 static int setup_rings(void) {
     uint64_t dcbaa_phys = 0, cmd_phys = 0, evt_phys = 0, erst_phys = 0;
 
@@ -704,19 +731,7 @@ static int setup_rings(void) {
         klog_printf("usb: %u scratchpad page(s)\n", spb);
     }
 
-    USBT("usb: trace: DCBAAP\n");
-    mw64(g_hc.op, XHCI_DCBAAP, dcbaa_phys);
-    USBT("usb: trace: CRCR\n");
-    mw64(g_hc.op, XHCI_CRCR, cmd_phys | XHCI_CRCR_RCS);
-
-    USBT("usb: trace: ERSTSZ\n");
-    mw32(g_hc.rt, XHCI_IR0 + XHCI_ERSTSZ, 1);
-    USBT("usb: trace: ERDP\n");
-    mw64(g_hc.rt, XHCI_IR0 + XHCI_ERDP, evt_phys);
-    USBT("usb: trace: ERSTBA\n");
-    // ERSTBA LAST: writing it is what arms the interrupter, so the
-    // segment table and the dequeue pointer must already be valid.
-    mw64(g_hc.rt, XHCI_IR0 + XHCI_ERSTBA, erst_phys);
+    program_rings();
     return 1;
 }
 
@@ -2181,6 +2196,97 @@ static void software_replug(uint32_t p) {
                     "neither port power nor a port mux\n", p + 1);
 }
 
+static void power_ports(void);
+static void scan_ports(void);
+static void attach_root_port(uint32_t p);
+
+// A STAGE MARKER, because the failure this exists to find is SILENCE.
+// The first attempt stopped somewhere between the restart and the scan
+// and printed nothing at all for 150 s, so "where" could not be read
+// off the log (docs/bugs.md). One line per stage makes the boundary
+// visible in a single run; they stay because a recovery nobody can
+// watch is how this cost two attempts already.
+#define HCSTAGE(name) klog_printf("usb: hcreset stage: " name "\n")
+
+static int g_hc_reset_done;
+
+// ARMS the re-init; xhci_deferred_work() performs it. Returns 1 for
+// "accepted", which is all a caller can be told -- the work happens
+// later, off the interrupt-disabled path that asked for it.
+int usb_controller_reinit(void) {
+    if (!g_hc.present || !g_hc.running) return 0;
+    if (g_hc_reset_done || g_hc.hcreset_pending) {
+        klog_printf("usb: controller re-init already done or pending\n");
+        return 0;
+    }
+    g_hc.hcreset_pending = 1;
+    klog_printf("usb: controller re-init armed -- runs off the event path\n");
+    return 1;
+}
+
+static void hcreset_perform(void) {
+    if (g_hc_reset_done) return;
+    g_hc_reset_done = 1;
+    klog_printf(KLOG_WARN "usb: RE-INITIALISING THE CONTROLLER\n");
+
+    for (uint32_t p = 0; p < g_hc.max_ports && p < XHCI_MAX_PORTS; p++) {
+        if (mr32(g_hc.op, XHCI_PORTSC(p)) & XHCI_PORTSC_CCS)
+            usb_detach_root_port((uint8_t)(p + 1));
+    }
+    g_hc.detach_pending = 0;
+    g_hc.running = 0;
+    HCSTAGE("detached");
+
+    if (!reset_controller()) {
+        klog_printf(KLOG_ERR "usb: re-init FAILED at the reset\n");
+        return;
+    }
+    HCSTAGE("reset done");
+
+    uint32_t slots = g_hc.max_slots;
+    if (slots > XHCI_MAX_SLOTS) slots = XHCI_MAX_SLOTS;
+    mw32(g_hc.op, XHCI_CONFIG, slots);
+    for (uint32_t i = 1; i <= slots; i++) g_hc.dcbaa[i] = 0;
+    HCSTAGE("config + dcbaa");
+
+    program_rings();
+    HCSTAGE("rings programmed");
+
+    mw32(g_hc.op, XHCI_USBCMD, mr32(g_hc.op, XHCI_USBCMD) | XHCI_CMD_RS);
+    struct xhci_wait w; xhci_wait_start(&w, 100);
+    while (mr32(g_hc.op, XHCI_USBSTS) & XHCI_STS_HCH) {
+        if (xhci_wait_over(&w)) {
+            klog_printf(KLOG_ERR "usb: will not restart (usbsts 0x%x)\n",
+                        mr32(g_hc.op, XHCI_USBSTS));
+            return;
+        }
+    }
+    g_hc.running = 1;
+    HCSTAGE("running");
+
+    if (g_hc.irq || g_hc.msi_vector) {
+        mw32(g_hc.rt, XHCI_IR0 + XHCI_IMAN,
+             mr32(g_hc.rt, XHCI_IR0 + XHCI_IMAN) | XHCI_IMAN_IE);
+        mw32(g_hc.op, XHCI_USBCMD, mr32(g_hc.op, XHCI_USBCMD) | XHCI_CMD_INTE);
+    }
+    for (uint32_t p = 0; p < XHCI_MAX_PORTS; p++) {
+        g_hc.ports[p].connected = 0;
+        g_hc.ports[p].enabled = 0;
+        g_hc.ports[p].speed = 0;
+    }
+    HCSTAGE("interrupter armed");
+
+    power_ports();
+    HCSTAGE("ports powered");
+
+    for (uint32_t p = 0; p < g_hc.max_ports && p < XHCI_MAX_PORTS; p++) {
+        klog_printf("usb: hcreset scanning port %u (portsc 0x%x)\n",
+                    p + 1, mr32(g_hc.op, XHCI_PORTSC(p)));
+        attach_root_port(p);
+    }
+    HCSTAGE("scanned");
+}
+
 static void attach_root_port(uint32_t p) {
     // One mark for the whole attach, so the dump carries every attempt
     // -- the interesting comparison is what the retry did DIFFERENTLY,
@@ -2399,6 +2505,14 @@ static void scan_ports(void) {
 
 void xhci_deferred_work(void) {
     if (!g_hc.present || !g_hc.running) return;
+
+    // FIRST, and it takes every device with it -- so nothing below
+    // should run against the state it is about to replace.
+    if (g_hc.hcreset_pending) {
+        g_hc.hcreset_pending = 0;
+        hcreset_perform();
+        return;
+    }
 
     for (uint32_t p = 0; p < g_hc.max_ports && p < XHCI_MAX_PORTS; p++) {
         if (g_hc.detach_pending & (1u << p)) {

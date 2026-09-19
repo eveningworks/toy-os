@@ -383,6 +383,36 @@ static const struct setting usb_replug_setting = {
     .apply = usb_replug_apply,
 };
 
+// ---- kernel.usb_hcreset -----------------------------------------------
+// The last recovery lever: re-initialise the whole controller. A knob
+// for the reason usb_replug is one -- the mechanism can be checked on
+// a machine where everything currently works.
+static void usb_hcreset_get(char *out, uint32_t cap) { k_strlcpy(out, "off", cap); }
+
+static int usb_hcreset_choice(int index, char *out, uint32_t cap) {
+    if (index == 0) { k_strlcpy(out, "off", cap); return 1; }
+    if (index == 1) { k_strlcpy(out, "on", cap); return 1; }
+    return 0;
+}
+
+static const char *usb_hcreset_unavailable(void) {
+    if (!usb_controller_present()) return "no xHCI controller on this machine";
+    return 0;
+}
+
+static int usb_hcreset_apply(const char *value) {
+    if (!value || k_strcmp(value, "on") != 0) return SETTING_INVALID;
+    return usb_controller_reinit() ? SETTING_SAVED : SETTING_INVALID;
+}
+
+static const struct setting g_usb_hcreset_setting = {
+    .name = "usb_hcreset", .label = "Re-initialise the USB controller",
+    .type = SETTING_TYPE_ENUM, .file = CONFIG_PATH_RUNTIME,
+    .category = TUNABLE_CATEGORY, .group = "Diagnostics",
+    .choice = usb_hcreset_choice, .unavailable = usb_hcreset_unavailable,
+    .get = usb_hcreset_get, .apply = usb_hcreset_apply,
+};
+
 // ---- kernel.intel_cycle -----------------------------------------------
 //
 // Write-only, like hda_tone: `pipe` turns the laptop panel's transcoder
@@ -434,6 +464,7 @@ void tunables_register(void) {
     setting_register(&hda_tone_setting);
     setting_register(&usb_reset_setting);
     setting_register(&usb_replug_setting);
+    setting_register(&g_usb_hcreset_setting);
     setting_register(&ata_nodma_setting);
     setting_register(&kstack_track_setting);
     setting_register(&syscall_stall_setting);
