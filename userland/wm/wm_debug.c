@@ -221,6 +221,34 @@ static int parse_int(const char *s, int *out) {
 }
 
 // `--json` may appear anywhere in the remaining arguments.
+// FOR A COMMAND WHOSE ARGUMENT IS THE REST OF THE LINE. wants_json()
+// below cannot serve one: it walks the tail with next_tok(), which
+// NUL-TERMINATES IN PLACE, so the caller's pointer is left aiming at
+// "--json" and that becomes the argument. (`gui compositor` dodges it by
+// saving and restoring the cursor; a rest-of-line argument cannot,
+// because the damage is to the buffer, not the cursor.)
+//
+// Removes the flag from `rest` wherever it appears, closes the gap, and
+// trims what is left, so what remains is the argument and nothing else.
+static int take_json_flag(char *rest) {
+    static const char FLAG[] = "--json";
+    int found = 0;
+    for (char *q = rest; *q; q++) {
+        int i = 0;
+        while (FLAG[i] && q[i] == FLAG[i]) i++;
+        if (FLAG[i] || (q[i] != '\0' && q[i] != ' ')) continue;
+        char *dst = q, *src = q + i;
+        while (*src == ' ') src++;
+        while ((*dst++ = *src++)) { }
+        found = 1;
+        q--;   // re-examine this position: the tail moved into it
+    }
+    int n = 0;
+    while (rest[n]) n++;
+    while (n > 0 && rest[n - 1] == ' ') rest[--n] = '\0';
+    return found;
+}
+
 static int wants_json(char *rest) {
     char *p = rest, *t;
     while ((t = next_tok(&p)) != 0) {
@@ -383,6 +411,70 @@ static void cmd_windows(struct dbg_out *o, int json) {
 // raises -- "did my coordinate land where I thought" -- without a
 // screenshot. Regions are named the same way wm_input.c's hit-testing
 // thinks about them, so the answer maps onto the code that would run.
+// The client's own name for the control at this point, or NULL. TOPMOST
+// WINS -- the map is in the order the toolkit walked it, which is
+// containers before their children, so the LAST match is the innermost
+// one and that is the thing a click would reach.
+static const struct wm_widget *widget_at(const struct window *w, int px, int py) {
+    if (!w->widgets) return 0;
+    int cx = px - window_content_x(w), cy = py - window_content_y(w);
+    const struct wm_widget *best = 0;
+    for (int i = 0; i < w->widget_count; i++) {
+        const struct wm_widget *e = &w->widgets[i];
+        if (cx >= e->x && cx < e->x + e->w && cy >= e->y && cy < e->y + e->h)
+            best = e;
+    }
+    return best;
+}
+
+// EVERY NAMED CONTROL OF THE FRONTMOST WINDOW, or of the one named.
+// Content-relative, because that is the client's own frame of reference
+// and it survives the window being moved; `screen` is the same rect in
+// screen coordinates, so a test can click without doing the arithmetic.
+//
+// An empty list is the ordinary answer for a window whose client does
+// not report one -- a kernel-space app has no toolkit behind it -- and
+// says so rather than looking like a failure.
+static void cmd_widgets(struct dbg_out *o, const char *title, int json) {
+    int hit = -1;
+    for (int i = window_count - 1; i >= 0; i--) {
+        if (title && title[0]) {
+            if (k_strcmp(windows[i].title, title) == 0) { hit = i; break; }
+        } else if (windows[i].state != WIN_MINIMIZED) { hit = i; break; }
+    }
+    if (hit < 0) {
+        if (json) dbg_out_write(o, "{\"window\":-1,\"widgets\":[]}\r\n");
+        else      dbg_out_write(o, "gui: no such window\r\n");
+        return;
+    }
+    const struct window *w = &windows[hit];
+    int ox = window_content_x(w), oy = window_content_y(w);
+
+    if (json) {
+        dbg_out_printf(o, "{\"window\":%d,\"title\":\"%s\","
+                     "\"content\":{\"x\":%d,\"y\":%d},\"widgets\":[",
+                     hit, w->title, ox, oy);
+        for (int i = 0; i < w->widget_count; i++) {
+            const struct wm_widget *e = &w->widgets[i];
+            dbg_out_printf(o, "%s{\"name\":\"%s\",\"x\":%d,\"y\":%d,"
+                         "\"w\":%d,\"h\":%d,\"screen\":{\"x\":%d,\"y\":%d}}",
+                         i ? "," : "", e->name, e->x, e->y, e->w, e->h,
+                         ox + e->x, oy + e->y);
+        }
+        dbg_out_write(o, "]}\r\n");
+        return;
+    }
+    dbg_out_printf(o, "%s -- %d named widget(s), content-relative\r\n",
+                 w->title, w->widget_count);
+    for (int i = 0; i < w->widget_count; i++) {
+        const struct wm_widget *e = &w->widgets[i];
+        dbg_out_printf(o, "  %-16s %4d %4d %4dx%-4d  screen %4d %4d\r\n",
+                     e->name, e->x, e->y, e->w, e->h, ox + e->x, oy + e->y);
+    }
+    if (!w->widget_count)
+        dbg_out_write(o, "  (this client reports none)\r\n");
+}
+
 static void cmd_probe(struct dbg_out *o, int px, int py, int json) {
     const char *region = "desktop";
     int hit = -1;
@@ -437,12 +529,21 @@ static void cmd_probe(struct dbg_out *o, int px, int py, int json) {
             const struct window *w = &windows[hit];
             dbg_out_printf(o, ",\"content_rel\":{\"x\":%d,\"y\":%d}",
                          px - window_content_x(w), py - window_content_y(w));
+            const struct wm_widget *e = widget_at(w, px, py);
+            if (e)
+                dbg_out_printf(o, ",\"widget\":\"%s\",\"widget_rect\":"
+                             "{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}",
+                             e->name, e->x, e->y, e->w, e->h);
         }
         dbg_out_write(o, "}\r\n");
         return;
     }
 
     dbg_out_printf(o, "(%d,%d): %s", px, py, region);
+    if (hit >= 0) {
+        const struct wm_widget *e = widget_at(&windows[hit], px, py);
+        if (e) dbg_out_printf(o, " [%s]", e->name);
+    }
     if (hit >= 0) {
         const struct window *w = &windows[hit];
         dbg_out_printf(o, " of window %d \"%s\"; content-relative (%d,%d)",
@@ -1480,6 +1581,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "gui subcommands (all of these work while the desktop is up):\r\n");
     dbg_out_write(o, "  windows [--json]      open windows: rects, content rects, z-order, focus\r\n");
     dbg_out_write(o, "  probe X Y [--json]    what is at this point, and what would take the click\r\n");
+    dbg_out_write(o, "  widgets [title]       the client's named controls, content-relative\r\n");
     dbg_out_write(o, "  menu [--json]         start menu row geometry, as the kernel computes it\r\n");
     dbg_out_write(o, "  tooltip [--json]      what the hover tooltip says, and where\r\n");
     dbg_out_write(o, "  ctxmenu [--json]      the open right-click menu's rows, same shape as `menu`\r\n");
@@ -1764,6 +1866,15 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
         return 1;
     }
 
+    if (k_strcmp(sub, "widgets") == 0) {
+        // The title is optional and MAY CONTAIN SPACES, so the rest of
+        // the line is taken whole -- after wants_json() has removed its
+        // own flag from it.
+        int json = take_json_flag(p);
+        while (*p == ' ') p++;
+        cmd_widgets(o, p, json);
+        return 1;
+    }
     if (k_strcmp(sub, "probe") == 0) {
         char *ax = next_tok(&p), *ay = next_tok(&p);
         int x, y;

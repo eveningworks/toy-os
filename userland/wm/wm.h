@@ -26,8 +26,28 @@ struct gui_app; // full definition in gui_apps.h
 
 enum window_state { WIN_NORMAL, WIN_MINIMIZED, WIN_MAXIMIZED };
 
+// One named control inside a client's window, in CONTENT coordinates --
+// the client's own frame of reference, so it survives a move. See
+// abi/win_proto.h's WIN_REQ_WIDGET for why the client reports this
+// rather than the compositor working it out.
+struct wm_widget {
+    // Same width as the wire field the name arrives in (WIN_TITLE_LEN,
+    // abi/win_proto.h) -- spelled with this header's own constant
+    // because wm.h does not see the ABI header, and the two are equal.
+    char name[WIN_TITLE_MAX];
+    int x, y, w, h;
+};
+
 struct window {
     char title[WIN_TITLE_MAX];
+
+    // THE CLIENT'S WIDGET MAP, for `gui probe` and `gui widgets`.
+    // ALLOCATED ON FIRST REPORT, not inline: a window is not otherwise
+    // 2 KiB, the table grows on demand, and most windows never report
+    // one at all (a kernel-space app has no toolkit behind it). NULL is
+    // the ordinary state and every reader checks it.
+    struct wm_widget *widgets;
+    int widget_count;
     int x, y, w, h;                        // current geometry, screen coords,
                                             // (x,y) = top-left incl. title bar
     int saved_x, saved_y, saved_w, saved_h; // geometry to restore to after

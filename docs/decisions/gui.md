@@ -8641,3 +8641,55 @@ It is the same shape the toolkit uses for smooth scrolling.
 frames. A frame captured mid-ghost is neither the before nor the after,
 so `DebugConsole.settle()` waits for `anims` to reach zero exactly as it
 waits for `pending` -- without it the suite would flake on every open.
+
+## The client exports its widget map; the compositor cannot work it out
+
+`gui probe X Y` could name a window, its title bar, a resize edge and
+which overlay was in the way -- and then had nothing at all to say about
+the control actually under the pointer, which is the thing a GUI test
+wants. So every tool that needed one measured screenshots or scraped the
+layout log, and 26 of them hand-parse those `: layout ` lines today.
+
+**This is not an oversight in the compositor, it is the shape of the
+system.** A client hands over pixels; its buttons and lists are its own
+business, and nothing in the protocol ever told the window manager
+otherwise. X11 gets widget geometry free because a widget IS a window
+and `XQueryTree` walks them. Wayland cannot and does not: a compositor
+there knows nothing about widget structure, which is why GNOME and KDE
+expose it over AT-SPI, where the CLIENT exports its own accessibility
+tree and something else reads it. Windows UI Automation inverts that --
+the automation client calls into the provider and waits.
+
+**The client pushes, because there is nothing to pull with.** Events
+flow compositor -> client one way and carry no reply channel; the only
+round trip in this protocol is client -> compositor (`uchan_call`).
+Even the close "veto" is not transmitted -- the WM infers a refusal from
+the ABSENCE of a destroy, disambiguated from a hung client by a
+concurrent ping. Adding a WM-initiated question would have meant either
+a new `WIN_EV_*`/`WIN_REQ_*` pair correlated by a serial (the
+PING/PONG pattern, the only precedent) or a second reply slot in
+`uchan_page.h`. Both are real machinery for debug data. The client
+already knows its rects, so it sends them: `WIN_REQ_WIDGET_RESET` then
+N × `WIN_REQ_WIDGET`, and the compositor keeps the set per window.
+
+**Sent only when the map CHANGES.** The toolkit walks its named items
+every frame -- a few dozen pointer dereferences and no formatting -- and
+compares the result against what it last sent, so the messages go out on
+a resize or a layout swap and not otherwise. That is what keeps it off
+the per-frame cost of an app that redraws constantly.
+
+**And deliberately NOT through the log.** The string-building layout log
+(`uapp_log_layout()`, `desktop.layout_log`) stays exactly as it was:
+opt-in, and called by the four apps that call it. Routing the map
+through the log instead would have made `gui widgets` depend on a
+diagnostic setting -- and that setting had been left ON on the
+bare-metal laptop by a test tool, which turned one boot's persistent log
+into 183 KiB of layout lines, eleven times its neighbours. A debugging
+facility that floods the evidence is the wrong trade twice over.
+
+**A dropped message costs an out-of-date map and nothing else.** It does
+not round-trip and nothing decides anything on it; the next layout
+change replaces the set. `WIN_WIDGET_MAX` bounds one window's map at 48,
+and the allocation is made on first report rather than living in every
+`struct window`, because most windows never report one -- a
+kernel-space app has no toolkit behind it.

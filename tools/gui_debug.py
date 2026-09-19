@@ -54,6 +54,7 @@ enter_gui() does that.
 
 import json as _json
 import os
+import atexit
 import socket
 import sys
 import time
@@ -364,6 +365,40 @@ class DebugConsole:
 
     def probe(self, x, y):
         return self.json(f"gui probe {x} {y} --json")
+
+    def widgets(self, title=""):
+        """The client's named controls, keyed by name.
+
+        Each value carries the CONTENT-relative rect the client reported
+        plus `screen`, the same rect where a click goes -- so a caller
+        never does the window-origin arithmetic that is the usual source
+        of a test clicking 24 pixels off after a window moved.
+
+        The map comes from the CLIENT (abi/win_proto.h, WIN_REQ_WIDGET):
+        the compositor cannot see inside a window, so a client that
+        reports nothing -- a kernel-space app, one with no NAMED items --
+        answers {} rather than failing. `title` picks a window; the
+        default is the frontmost.
+        """
+        j = self.json(f"gui widgets {title} --json".replace("  ", " "))
+        return {w["name"]: w for w in j.get("widgets", [])}
+
+    def widget_at(self, x, y):
+        """The name of the control at a screen point, or None."""
+        return self.probe(x, y).get("widget")
+
+    def widget_center(self, name, title=""):
+        """Screen (x, y) to click for a named control.
+
+        Raises rather than returning a plausible-looking (0, 0): a click
+        at the origin lands on the window's corner and the test fails
+        somewhere else entirely.
+        """
+        w = self.widgets(title).get(name)
+        if not w:
+            have = ", ".join(sorted(self.widgets(title))) or "(none reported)"
+            raise KeyError(f"no widget named {name!r}; this window has: {have}")
+        return w["screen"]["x"] + w["w"] // 2, w["screen"]["y"] + w["h"] // 2
 
     def menu(self):
         return self.json("gui menu --json")
@@ -836,6 +871,32 @@ def changed_rows(rest_png, hover_png, box, threshold=1.0):
             "rest": rest, "hover": hover}
 
 
+# **AND PUT IT BACK.** This used to set the setting and walk away, which
+# costs nothing on a VM whose image is thrown away -- and permanently
+# enables it on the BARE-METAL machine, where `gui_regress.py --host`
+# runs these same tools. Found 2026-09-19: the laptop had been logging
+# every widget of every frame for an unknown number of boots, which
+# turned one boot's persistent log into 183 KiB of layout lines (11x its
+# neighbours) and left a mangled line in it that read as a subsystem
+# named "f". CLAUDE.md's own rule: a test that applies a setting changes
+# the machine for every later tool.
+#
+# Restored only if this process is what turned it ON -- a machine that
+# already had it set was told to, and is not ours to change back.
+def _enable_layout_log(sock):
+    c = DebugConsole(sock)
+    was_on = "on" in c.send("sh config get desktop.layout_log")
+    c.send("sh config set desktop.layout_log on")
+    if was_on:
+        return
+    def _restore():
+        try:
+            DebugConsole(sock).send("sh config set desktop.layout_log off")
+        except Exception:
+            pass
+    atexit.register(_restore)
+
+
 def wait_for_desktop(sock, timeout=8.0):
     """Block until the ring-3 desktop is answering on the serial console,
     or `timeout` elapses. Returns True if it came up.
@@ -914,7 +975,7 @@ def enter_gui(qmp, sock=".vm.serial", timeout=8.0):
             qmp.send_key("ret")
             ready = wait_for_desktop(sock, timeout)
     try:
-        DebugConsole(sock).send("sh config set desktop.layout_log on")
+        _enable_layout_log(sock)
     except Exception:
         # A tool that cannot reach the console has bigger problems than
         # the layout log, and its own first assertion will say so more

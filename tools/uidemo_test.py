@@ -154,6 +154,13 @@ class Demo:
         self._record(name, not any(unwanted in l for l in got), got,
                      f"did NOT want {unwanted!r}")
 
+    # For an assertion that is already a BOOLEAN rather than a search
+    # through captured lines -- the two above both parse events, and
+    # passing one a bool silently searches a bool, which is neither an
+    # error nor a test.
+    def check_is(self, name, ok, detail=""):
+        self._record(name, bool(ok), [str(detail)], "expected it to hold")
+
     def _record(self, name, ok, got, why):
         print(f"  {'PASS' if ok else 'FAIL'}  {name}")
         if ok:
@@ -414,6 +421,46 @@ def run(d, qmp):
                    "button 1")
 
 
+def check_widget_map(d):
+    """`gui widgets` against the LAYOUT LOG -- two sources, one truth.
+
+    THE COMPOSITOR CANNOT SEE INSIDE A WINDOW, so the map it answers
+    `gui probe` from is pushed by the CLIENT (abi/win_proto.h,
+    WIN_REQ_WIDGET). This tool already parses the same rects out of the
+    layout log, by a completely different route -- a string the app
+    logs, versus a message the toolkit sends -- which makes it the one
+    place that can check the new path against the established one
+    instead of against itself.
+
+    Compared only for names BOTH report: the log also carries a
+    widget's sub-parts (`listbox.row_h`) and the app's hand-logged
+    extras, which the map does not and should not.
+    """
+    mapped = d.dbg.widgets("UI Demo")
+    d.check_is("the client reports a widget map at all", mapped,
+               "gui widgets returned nothing")
+
+    shared = sorted(set(mapped) & set(d.layout))
+    d.check_is("gui widgets and the layout log name the same widgets", shared,
+               f"map={sorted(mapped)} log={sorted(d.layout)}")
+    if not shared:
+        return
+    bad = [(n, d.layout[n], (mapped[n]["x"], mapped[n]["y"],
+                             mapped[n]["w"], mapped[n]["h"]))
+           for n in shared
+           if (mapped[n]["x"], mapped[n]["y"], mapped[n]["w"], mapped[n]["h"])
+           != d.layout[n]]
+    d.check_is(f"gui widgets agrees with the layout log on {len(shared)} widget(s)",
+               not bad, bad)
+
+    # AND THE PROBE RESOLVES THE SAME RECTS. A map that is correct but
+    # reported in the wrong coordinate space passes everything above.
+    name = shared[0]
+    cx, cy = d.dbg.widget_center(name, "UI Demo")
+    got = d.dbg.widget_at(cx, cy)
+    d.check_is(f"gui probe at {name}'s centre names {name}", got == name, got)
+
+
 def check_containment(d, qmp, tmp):
     """The window manager must clip an app to its own window.
 
@@ -560,6 +607,9 @@ def main():
     d.open()
     print(f"uidemo_test: layout {d.layout}, row_h {d.row_h}")
     run(d, qmp)
+
+    print("\n== widget map ==")
+    check_widget_map(d)
 
     print("\n== containment ==")
     check_widgets_drawn(d, qmp, "/tmp")

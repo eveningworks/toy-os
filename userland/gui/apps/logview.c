@@ -196,19 +196,29 @@ static void read_klog(void) {
     struct query_klog r;
     static char acc[512];          // a line spans slices; this reassembles
     int acc_len = 0;
+    // THE FIRST LINE OUT OF A WRAPPED RING IS HEADLESS. The ring's oldest
+    // retained bytes begin wherever it wrapped, so what comes back first
+    // is the tail of a line whose start is already gone -- `dmesg` shows
+    // the same thing. It was given a blank Time cell (giving it 0.00
+    // would claim it happened at boot) and nothing else, so it read as
+    // corruption. Named `(cut)` instead: the bytes are real and are all
+    // that survive, and the row now says so rather than looking broken.
+    int first = 1;
     for (int i = 0; ; i++) {
         if (sys_query_record(QUERY_KLOG, (unsigned)i, &r, sizeof r) <= 0) break;
         for (unsigned j = 0; j < r.len; j++) {
             char c = (char)r.data[j];
             if (c == '\n') {
-                add_parsed_line("kernel", acc, acc_len);
+                add_parsed_line(first && acc_len && acc[0] != '[' ? "(cut)" : "kernel",
+                                acc, acc_len);
+                first = 0;
                 acc_len = 0;
             } else if (acc_len < (int)sizeof acc) {
                 acc[acc_len++] = c;
             }
         }
     }
-    if (acc_len) add_parsed_line("kernel", acc, acc_len);
+    if (acc_len) add_parsed_line(first && acc[0] != '[' ? "(cut)" : "kernel", acc, acc_len);
 }
 
 static void read_applog(void) {

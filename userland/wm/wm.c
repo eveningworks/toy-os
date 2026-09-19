@@ -23,6 +23,7 @@
 // screen, which is what makes the other common case -- the mouse moving
 // with nothing else changing -- cheap without needing real dirty-rect
 // tracking of the scene: see wm_render_cursor_move() in wm_render.c.
+#include <stdlib.h>   // free: the client widget map
 #include "wm_internal.h"
 #include "wm_shadow.h"
 #include "wm_anim.h"   // wm_damage_window_rect(): a window's rect plus its shadow
@@ -666,6 +667,13 @@ void close_window(int idx) {
         if (dragging == idx) dragging = -1;
         if (resizing == idx) resizing = -1;
     }
+
+    // THE WIDGET MAP IS THIS SLOT'S, and the shift below overwrites the
+    // pointer with the next window's. Freed here or it leaks one
+    // allocation per window closed, forever.
+    free(windows[idx].widgets);
+    windows[idx].widgets = 0;
+    windows[idx].widget_count = 0;
 
     for (int i = idx; i < window_count - 1; i++) windows[i] = windows[i + 1];
     window_count--;

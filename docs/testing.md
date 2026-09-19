@@ -152,6 +152,26 @@ next boot on a held port. Take a **fresh slot per boot**
 (`port_guard.find_free_instance()`) rather than waiting it out; until
 that is understood it reads as "the second configuration does not boot".
 
+**THE COMPOSITOR CANNOT SEE INSIDE A WINDOW, so a client exports its own
+widget map** (`docs/decisions.md`, and `abi/win_proto.h`'s
+`WIN_REQ_WIDGET`). `gui widgets` lists it and `gui probe` names the
+widget under a point, which is what stops a test deriving control
+positions from a screenshot:
+
+```python
+dbg.widgets()                  # {name: {x, y, w, h, screen:{x, y}}}, frontmost window
+dbg.widgets("Log Viewer")      # ...or a named one
+dbg.widget_center("search")    # the SCREEN point to click -- no window-origin arithmetic
+dbg.widget_at(x, y)            # the name of the control there, or None
+```
+
+Two things to know. The map is pushed **only when it changes**, so it is
+current after a `settle()` and not necessarily in the same instant a
+resize was asked for. And a client that reports **nothing** is the
+ordinary case, not a failure -- a kernel-space app has no toolkit behind
+it, and an app whose `uui_item`s have no `.name` has nothing to report.
+A name is what says "a test may want this".
+
 **`DebugConsole.send()` returns on a quiet period, not on completion.**
 So timing a command with it measures nothing, and output left in the
 socket by a previous command comes back attached to the next one. Assert
@@ -490,6 +510,8 @@ family now (`userland/wm/wm_debug.c`), live while the desktop is up:
 ```
 gui windows [--json]     rects, content rects, z-order, focus
 gui probe X Y [--json]   which window/region is at a point, and what overlay would take the click
+                         -- plus the CLIENT'S OWN NAME for the widget there, when it reports one
+gui widgets [title]      that client's named controls, content-relative and in screen coords
 gui menu | gui taskbar    row + button geometry, as the kernel computes it
 gui ctxmenu [--json]     the OPEN right-click menu's rows, same shape as `menu`
 gui state [--json]       overlays, cursor, armed drag/resize/press, damage rect

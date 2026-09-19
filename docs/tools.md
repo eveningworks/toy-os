@@ -275,6 +275,24 @@ manual steps to be worth automating:
   what it is drawing, and `enter_gui()` polls the desktop ready instead
   of sleeping.
 
+  **`widgets()` / `widget_center()` / `widget_at()` answer "where is
+  that control"** -- the question this module could not answer at all
+  until the client began exporting its widget map (`docs/decisions.md`,
+  and `abi/win_proto.h`'s `WIN_REQ_WIDGET`; the compositor cannot see
+  inside a window, so it is the CLIENT that reports). `widgets()`
+  returns `{name: {x, y, w, h, screen: {x, y}}}` for the frontmost
+  window or one named by title, keyed by the app's own `uui_item.name`;
+  `widget_center(name)` gives the SCREEN point to click, which is the
+  half that otherwise gets re-derived (and got wrong) per tool; and
+  `widget_at(x, y)` names what is under a point. `widget_center` RAISES
+  on an unknown name and lists what the window does report, because
+  returning a plausible `(0, 0)` lands the click on the window corner
+  and fails the test somewhere else entirely. An empty map is the
+  ordinary answer for a client with no named widgets, not an error.
+  **26 tools still hand-parse the `: layout ` lines** for the same
+  geometry; converting them is separate work, and `uidemo_test.py`
+  cross-checks the two sources against each other.
+
   **`cursor_shape()` reports what the compositor would DRAW under the
   pointer** -- `gui state --json`'s `cursor.shape`, a `WM_CURSOR_*`
   (`userland/wm/wm_internal.h`), with the frame's edge rules and the

@@ -264,6 +264,7 @@ static void copy_text(char *dst, const char *src) {
 }
 
 static void layout_log_flush(int src);
+static void wmap_sync(struct uapp *a);
 static int wmchan_send(uint32_t type, uint32_t window,
                        int aa, int bb, int cc, const char *text);
 
@@ -371,6 +372,7 @@ static void flush(struct uapp *a) {
     // from the last -- see uapp_log_layout(). Here rather than in the
     // apps because only the toolkit knows when a frame has ended.
     layout_log_flush(0);
+    wmap_sync(a);
     present(a);
 }
 
@@ -543,6 +545,35 @@ static void describe_line(void *ctx, const char *line) {
     uapp_log_layout_line(line);
 }
 
+// --- the widget map the compositor answers `gui probe` from ----------
+//
+// **THE COMPOSITOR CANNOT SEE INSIDE A WINDOW**, so a test could ask it
+// what window and what chrome were under a point and never what CONTROL
+// was. The client exports its own map instead -- AT-SPI's shape, which
+// is also what uui_describe.h is modelled on (abi/win_proto.h's
+// WIN_REQ_WIDGET has the reasoning).
+//
+// SENT ONLY WHEN IT CHANGES. The walk runs every frame because it is a
+// few dozen pointer derefs and no formatting; what it produces is
+// compared against the last set and the messages go out only on a
+// difference, which in practice is a resize or a layout swap. That is
+// what keeps this off the per-frame cost of an app that redraws
+// constantly, and out of the LOG -- the string-building layout log is
+// still opt-in behind `desktop.layout_log`, and deliberately separate.
+struct wmap_entry { char name[WIN_TITLE_LEN]; int x, y, w, h; };
+static struct wmap_entry g_wmap[WIN_WIDGET_MAX];
+static int g_wmap_n;
+static struct wmap_entry g_wmap_sent[WIN_WIDGET_MAX];
+static int g_wmap_sent_n = -1;   // -1: nothing sent yet, so the first
+                                 // walk always reports
+
+static void wmap_add(const char *name, int x, int y, int w, int h) {
+    if (g_wmap_n >= WIN_WIDGET_MAX) return;
+    struct wmap_entry *e = &g_wmap[g_wmap_n++];
+    copy_text(e->name, name);
+    e->x = x; e->y = y; e->w = w; e->h = h;
+}
+
 // A widget reachable both through `.layout` and through `.widgets` (the
 // usual shape: the tree draws it, the flat list routes it) is reported
 // ONCE -- the second sighting is skipped, not re-logged.
@@ -578,6 +609,53 @@ static void log_items(const char *prefix, struct uui_item *items, int count) {
             if (sub) log_items(prefix, sub, n);
         }
     }
+}
+
+static void wmap_items(struct uui_item *items, int count) {
+    for (int i = 0; i < count; i++) {
+        struct uui_item *it = &items[i];
+        if (it->hidden || !it->ops) continue;
+        if (it->name && it->ops->bounds && !log_seen(it->widget)) {
+            int x, y, w, h;
+            it->ops->bounds(it->widget, &x, &y, &w, &h);
+            wmap_add(it->name, x, y, w, h);
+        }
+        if (it->ops->children) {
+            int n = 0;
+            struct uui_item *sub = it->ops->children(it->widget, &n);
+            if (sub) wmap_items(sub, n);
+        }
+    }
+}
+
+// Walk, compare, and report only a change. Called from the draw path.
+static void wmap_sync(struct uapp *a) {
+    const struct uapp_desc *d = a->desc;
+    if (!d) return;
+    g_wmap_n = 0;
+    g_log_seen_n = 0;
+    if (d->layout) {
+        struct uui_item root = { .ops = &uui_layout_ops, .widget = (void *)d->layout };
+        wmap_items(&root, 1);
+    }
+    if (d->widgets && d->widget_count) wmap_items(d->widgets, d->widget_count);
+
+    int same = (g_wmap_n == g_wmap_sent_n);
+    for (int i = 0; same && i < g_wmap_n; i++) {
+        const struct wmap_entry *x = &g_wmap[i], *y = &g_wmap_sent[i];
+        if (x->x != y->x || x->y != y->y || x->w != y->w || x->h != y->h ||
+            strcmp(x->name, y->name) != 0) same = 0;
+    }
+    if (same) return;
+
+    wmchan_send(WIN_REQ_WIDGET_RESET, a->window, 0, 0, 0, 0);
+    for (int i = 0; i < g_wmap_n; i++) {
+        const struct wmap_entry *e = &g_wmap[i];
+        wmchan_send(WIN_REQ_WIDGET, a->window, e->x, e->y,
+                    WIN_WIDGET_WH(e->w, e->h), e->name);
+        g_wmap_sent[i] = *e;
+    }
+    g_wmap_sent_n = g_wmap_n;
 }
 
 void uapp_log_widget(struct uapp *a, const char *prefix, const char *name,

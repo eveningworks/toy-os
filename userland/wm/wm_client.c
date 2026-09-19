@@ -14,6 +14,7 @@
 // concern with its own external contract, exactly the split that
 // produced desktop.c/start_menu.c/context_menu.c. See wm.c's top
 // comment.
+#include <stdlib.h>   // malloc: the client widget map
 #include "wm_internal.h"
 #include "wm_shadow.h"
 #include "wm_anim.h"   // wm_damage_window_rect(): a window's rect plus its shadow
@@ -537,6 +538,41 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     if (first) wm_anim_open(idx);
     redraw_pending = 1;
     wm_resize_shown(idx, 0);
+}
+
+// --- the client's widget map -----------------------------------------
+//
+// The client reports it; nothing here derives it. See
+// abi/win_proto.h's WIN_REQ_WIDGET -- a compositor cannot see inside a
+// window, so this is the client exporting its own tree the way an
+// AT-SPI client does.
+static void on_widget_reset(int pid, uint32_t id) {
+    int idx = find_client_window(pid, id);
+    if (idx < 0) return;
+    struct window *w = &windows[idx];
+    if (!w->widgets) {
+        w->widgets = malloc(sizeof *w->widgets * WIN_WIDGET_MAX);
+        if (!w->widgets) return;   // debug data; a machine short of memory
+    }                              // has better uses for it than this
+    w->widget_count = 0;
+}
+
+static void on_widget(int pid, uint32_t id, const struct wmchan_msg *m) {
+    int idx = find_client_window(pid, id);
+    if (idx < 0) return;
+    struct window *w = &windows[idx];
+    // NO RESET SEEN YET, so there is nowhere to put it. Dropping is
+    // right: a map that began mid-batch would be a partial set claiming
+    // to be whole.
+    if (!w->widgets || w->widget_count >= WIN_WIDGET_MAX) return;
+    struct wm_widget *e = &w->widgets[w->widget_count++];
+    unsigned k = 0;
+    while (m->text[k] && k < sizeof e->name - 1) { e->name[k] = m->text[k]; k++; }
+    e->name[k] = '\0';
+    e->x = m->a;
+    e->y = m->b;
+    e->w = WIN_WIDGET_W(m->c);
+    e->h = WIN_WIDGET_H(m->c);
 }
 
 static void on_window_destroyed(int pid, uint32_t id) {
@@ -1092,6 +1128,12 @@ void wm_client_chan_pump(void) {
         }
         case WIN_REQ_DESTROY:
             on_window_destroyed(from, m.window);
+            break;
+        case WIN_REQ_WIDGET_RESET:
+            on_widget_reset(from, m.window);
+            break;
+        case WIN_REQ_WIDGET:
+            on_widget(from, m.window, &m);
             break;
         case WIN_REQ_TIMER:
             on_window_timer(from, m.window, (unsigned)m.a);

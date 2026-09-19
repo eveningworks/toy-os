@@ -1146,6 +1146,38 @@ struct win_popup_pos {
                            // A device reporting ABSOLUTE positions
                            // overwrites it with its next report.
 #define WIN_REQ_INHIBIT_SHORTCUTS 35
+// --- the client's WIDGET MAP, for testing ----------------------------
+//
+// **THE COMPOSITOR CANNOT KNOW WHAT IS INSIDE A WINDOW.** A client
+// hands over pixels; its buttons and lists are its own business. So
+// `gui probe X Y` could name a window, a title bar and a resize edge,
+// and then had nothing to say about the control actually under the
+// pointer -- which is the thing a GUI test wants.
+//
+// X11 gets this free because a widget IS a window and XQueryTree walks
+// them. Wayland cannot, and neither can this: the answer there is
+// AT-SPI, where the CLIENT exports its own tree and something else
+// reads it. That is the shape here, minus the bus -- the toolkit
+// already has `uui_describe.h`, modelled on QAccessible/AT-SPI, where
+// every widget reports its own bounds by name.
+//
+// RESET THEN N RECTS, and the set replaces whatever the window had.
+// Sent only when the map CHANGES, which is a resize or a layout swap --
+// not per frame. A dropped message (a full inbox) costs an out-of-date
+// map until the next change; this is debug data and nothing decides
+// anything on it, which is why it does not round-trip.
+#define WIN_REQ_WIDGET_RESET 37 // `window`: whose map to empty.
+#define WIN_REQ_WIDGET     38 // `window`: whose. a, b: x, y. c: w and h
+                           // packed, WIN_WIDGET_WH(). text: the name,
+                           // from uui_item.name -- the app's own word
+                           // for it, which is what a test already uses.
+#define WIN_WIDGET_WH(w, h) (int32_t)(((w) << 16) | ((h) & 0xffff))
+#define WIN_WIDGET_W(c)     (int)(((uint32_t)(c) >> 16) & 0xffff)
+#define WIN_WIDGET_H(c)     (int)((uint32_t)(c) & 0xffff)
+// What one window's map may hold. A window with more named widgets than
+// this reports the first WIN_WIDGET_MAX; nothing breaks, the tail is
+// simply not describable.
+#define WIN_WIDGET_MAX 48
 #define WIN_SHOT_PROBE   0x4 // ANSWER THE RECT AND COPY NOTHING. What a
                            // picker asks on every pointer move: it needs
                            // to know what it would get in order to draw
