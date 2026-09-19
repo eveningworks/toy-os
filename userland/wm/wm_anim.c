@@ -3,6 +3,7 @@
 #include "wm_anim.h"
 #include "wm_shadow.h"
 #include "wm_taskbar.h"
+#include "wm_log.h"   // the anim-end gap says so when it fires
 #include "wm/wm_conf.h"
 #include "lib/utween.h"
 #include "rt/sys.h"
@@ -52,6 +53,37 @@ int wm_anim_rect(int i, int *x, int *y, int *w, int *h, int *alpha) {
 
 static void finish(struct anim *a) {
     if (a->has_last) wm_damage_window_rect(a->cx, a->cy, a->cw, a->ch);
+    // AND THE WINDOW AS IT IS *NOW*, which is not where the ghost ended.
+    // A client may resize while its ghost is in flight -- Notepad does,
+    // once it has laid out the file it was opened with -- and the real
+    // window is hidden for the whole animation (wm_anim_hides), so the
+    // damage that resize reported was consumed by a frame that could not
+    // draw it. Damaging only the ghost's last rect then paints the window
+    // clipped to the size it had BEFORE the resize: no title-bar buttons,
+    // no scrollbar, no status bar, all of which live past that edge.
+    //
+    // AND IT DOES NOT HEAL. The taskbar clock damages the taskbar strip,
+    // not the screen, so the once-a-second repaint never covers the gap;
+    // only a full repaint does, which is why taking a screenshot appeared
+    // to fix it (wm_screenshot.c renders a frame and sets redraw_pending).
+    if (a->pid)
+        for (int i = 0; i < window_count; i++) {
+            const struct window *w = &windows[i];
+            if (w->client_pid != a->pid || w->client_win != a->win ||
+                w->state == WIN_MINIMIZED) continue;
+            // Says so when it actually had work to do -- the window
+            // reaching past where the ghost ended is the fault itself,
+            // and it cannot be photographed (a screenshot renders a
+            // frame and heals it) or reproduced in QEMU, where the
+            // window does not move or resize under its own ghost.
+            if (a->has_last && (w->x < a->cx || w->y < a->cy ||
+                                w->x + w->w > a->cx + a->cw ||
+                                w->y + w->h > a->cy + a->ch))
+                wm_logf("wm: anim end: window %d,%d %dx%d reaches past the ghost's "
+                            "%d,%d %dx%d -- damaging the window\n",
+                            w->x, w->y, w->w, w->h, a->cx, a->cy, a->cw, a->ch);
+            wm_damage_window_rect(w->x, w->y, w->w, w->h);
+        }
     free(a->snap);
     a->snap = 0;
     a->kind = NONE;
