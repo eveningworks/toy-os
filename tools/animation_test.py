@@ -183,6 +183,89 @@ def run(dbg, qmp, tmp, res):
         kill_app(dbg)
 
 
+def ghost_ms(dbg, label):
+    """How long a ghost stays in flight for one minimize, in ms, and
+    whether one appeared at all. Polls `anims` rather than pixels: this
+    is about DURATION, and a screenshot cannot time anything."""
+    tb = dbg.taskbar()
+    buttons = tb.get("buttons") if isinstance(tb, dict) else tb
+    b = next((x for x in (buttons or []) if "untitled" in str(x.get("title", ""))), None)
+    if not b:
+        return None, 0
+    t0 = time.time()
+    dbg.send(f"gui click {b['cx']} {b['cy']}")
+    peak, saw = 0, False
+    while time.time() - t0 < 4.0:
+        a = dbg.state().get("anims") or 0
+        peak = max(peak, a)
+        if a:
+            saw = True
+        elif saw:
+            break
+    ms = (time.time() - t0) * 1000.0
+    dbg.settle(0.8)
+    tb = dbg.taskbar()
+    buttons = tb.get("buttons") if isinstance(tb, dict) else tb
+    b = next((x for x in (buttons or []) if "untitled" in str(x.get("title", ""))), None)
+    if b:
+        dbg.send(f"gui click {b['cx']} {b['cy']}")   # restore, for the next round
+        dbg.settle(0.8)
+    return (ms if saw else None), peak
+
+
+def run_speed(dbg, res):
+    """`desktop.animation_speed` scales every animation -- KWin's shape.
+
+    ASSERTS THE ORDER, NOT THE MILLISECONDS. The durations are real
+    (125/250/500 ms at the time of writing) but a poll adds its own
+    overhead and the guest is a TCG machine, so pinning exact numbers
+    would be a flake generator. What must hold is that the knob does
+    something monotonic, and that `instant` means NO GHOST AT ALL --
+    not a very short one, since the point of instant is that nothing is
+    snapshotted and the real window is never hidden.
+    """
+    # ESTABLISH THE PRECONDITION. run() above ends on its `off` case, so
+    # arriving here with animations disabled would report "no ghost
+    # flies" for every speed -- a fixture failure wearing the costume of
+    # the thing under test.
+    dbg.send("sh config set desktop.animations on")
+    dbg.settle(1.2)
+    dbg.open_app("Notepad")
+    dbg.settle(1.5)
+    if not [w for w in dbg.windows() if w["title"] == "untitled"]:
+        res.check("speed: a window to minimize", False, "Notepad did not open")
+        return
+
+    got = {}
+    try:
+        for sp in ("instant", "fast", "normal", "slow"):
+            dbg.send(f"sh config set desktop.animation_speed {sp}")
+            dbg.settle(1.2)
+            ms, peak = ghost_ms(dbg, sp)
+            got[sp] = ms
+            if sp == "instant":
+                res.check("speed instant: no ghost is created at all",
+                          peak == 0, f"anims peaked at {peak}")
+            else:
+                res.check(f"speed {sp}: a ghost flies", ms is not None,
+                          "no ghost seen")
+    finally:
+        dbg.send("sh config set desktop.animation_speed normal")
+        dbg.settle(0.8)
+
+    if got.get("fast") and got.get("normal") and got.get("slow"):
+        res.check("speed: fast < normal < slow",
+                  got["fast"] < got["normal"] < got["slow"],
+                  f"fast={got['fast']:.0f} normal={got['normal']:.0f} "
+                  f"slow={got['slow']:.0f} ms")
+        # Slow is 2x normal by construction; allow wide margins for the
+        # poll and for TCG, but a knob that moved by 10% would be one
+        # nobody can feel.
+        res.check("speed: slow is markedly longer than fast",
+                  got["slow"] > got["fast"] * 2.0,
+                  f"fast={got['fast']:.0f} slow={got['slow']:.0f} ms")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     port_guard.add_instance_args(ap)
@@ -200,9 +283,11 @@ def main():
     dbg = DebugConsole(args.sock)
     try:
         run(dbg, qmp, tmp, res)
+        run_speed(dbg, res)
     finally:
         try:
             dbg.send("sh config set desktop.animations on")
+            dbg.send("sh config set desktop.animation_speed normal")
         finally:
             dbg.close()
     print(f"\nanimation_test: {len(res.passes)} passed, {len(res.fails)} failed")

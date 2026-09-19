@@ -1008,3 +1008,32 @@ one file per shape, six names (`arrow`, `resize-h`, `resize-v`,
   a large pointer for reasons that have nothing to do with text size.
   Scaling is integer nearest-neighbour, because a pointer wants a hard
   edge.
+
+
+## Animation speed is one multiplier, not a duration per effect
+
+`desktop.animation_speed` (instant / fast / normal / slow / very-slow)
+scales EVERY animation at once. It is KWin's Animation Speed slider:
+one knob that keeps the desktop's motion consistent as effects are
+added. macOS exposes the effect but not the speed; Windows exposes
+neither. A duration per effect was rejected because the set of effects
+is the thing that grows.
+
+- **`instant` is not a very short animation.** It skips the ghost
+  entirely -- nothing is snapshotted, nothing allocated, and the real
+  window is never hidden for a frame. `desktop.animations=off` takes
+  the same path, and `anim_wanted()` is the one place that decides it.
+- **The base is 250 ms** (`WM_ANIM_MS`), between Windows' minimize and
+  macOS's genie, and KWin's default for its own effects. It was 150,
+  which at ~13 ms a frame on a 1080p panel is about eleven frames --
+  enough to read as steps rather than motion.
+- **Travel eases IN and OUT; something appearing in place eases OUT.**
+  A minimize crosses the screen, and ease-out starts it at full speed,
+  which looks like the window was thrown at the taskbar rather than
+  moving there. Open and close scale in place, where ease-out is right
+  and is what every toolkit uses. `utween_start_curve()` picks;
+  `utween_start()` is still ease-out, so nothing else changed.
+- **A test asserts the ORDER, not the milliseconds.** The durations are
+  real, but a poll adds overhead and the guest is a TCG machine, so
+  `tools/animation_test.py` requires fast < normal < slow and that
+  `instant` creates no ghost at all.

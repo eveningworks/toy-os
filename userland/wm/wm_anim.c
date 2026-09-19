@@ -8,9 +8,15 @@
 #include "lib/utween.h"
 #include "rt/sys.h"
 #include <stdlib.h>
+#include "string.h"   // k_strcmp -- the speed names are matched in full
 
 #define DESKTOP_CONF "/etc/desktop.conf"
-#define WM_ANIM_MS   150      // Qt's and DWM's window animations, give or take
+// THE BASE DURATION, which `desktop.animation_speed` scales. 250 ms is
+// KWin's default for its window effects; Windows' minimize is nearer
+// 200 and macOS's genie nearer 500, so this sits between them. It was
+// 150, which at ~13 ms a frame on a 1080p panel bought about eleven
+// frames -- enough to see the steps rather than the motion.
+#define WM_ANIM_MS   250
 #define SCALE_IN_PCT 92       // Windows 11 opens a window from about this size
 #define PROGRESS     1000     // the tween runs 0..PROGRESS
 
@@ -31,6 +37,34 @@ struct anim {
 static struct anim g_anims[WM_ANIM_MAX];
 static int g_enabled = 1;
 static uint32_t g_seen_generation;
+
+// `desktop.animation_speed`: ONE multiplier over every animation, which
+// is KWin's shape (its Animation Speed slider scales every effect at
+// once) rather than a duration per effect. A knob per effect drifts as
+// effects are added; a multiplier cannot.
+//
+// INSTANT IS NOT A DURATION OF ZERO SOMEWHERE DOWNSTREAM -- it skips
+// the ghost entirely, so nothing snapshots, allocates or hides the
+// real window for a frame. `desktop.animations=off` is the same path.
+enum { SPEED_INSTANT = 0, SPEED_FAST, SPEED_NORMAL, SPEED_SLOW, SPEED_VERY_SLOW };
+static int g_speed = SPEED_NORMAL;
+
+// Numerator/denominator rather than a float: there is no floating point
+// in this desktop. KWin's slider is the same set of ratios.
+static unsigned anim_duration_ms(void) {
+    switch (g_speed) {
+    case SPEED_INSTANT:   return 0;
+    case SPEED_FAST:      return WM_ANIM_MS / 2;
+    case SPEED_SLOW:      return WM_ANIM_MS * 2;
+    case SPEED_VERY_SLOW: return WM_ANIM_MS * 4;
+    default:              return WM_ANIM_MS;
+    }
+}
+
+// Whether an animation should happen at all: the setting being off and
+// the speed being "instant" are the same answer, asked in one place so
+// the five entry points below cannot disagree about it.
+static int anim_wanted(void) { return g_enabled && anim_duration_ms() > 0; }
 
 // The surface every wm_surface() call draws into while a snapshot is
 // being rendered (wm_internal.h).
@@ -121,7 +155,15 @@ static int snapshot(struct anim *a, int idx) {
 static void start(struct anim *a, enum kind kind, int pid, uint32_t win) {
     a->kind = kind; a->pid = pid; a->win = win;
     a->has_last = 0;
-    utween_start(&a->tw, 0, PROGRESS, WM_ANIM_MS, sys_monotonic_ns());
+    // TRAVEL EASES IN AND OUT; something appearing in place eases OUT.
+    // A minimize crosses the screen, and ease-out starts it at full
+    // speed, which reads as the window being thrown at the taskbar
+    // rather than moving there. Open and close scale in place, where
+    // ease-out is right and is what every toolkit uses.
+    enum utween_curve curve = (kind == MINIMIZE || kind == RESTORE)
+                            ? UTWEEN_EASE_IN_OUT : UTWEEN_EASE_OUT;
+    utween_start_curve(&a->tw, 0, PROGRESS, anim_duration_ms(),
+                       sys_monotonic_ns(), curve);
     wm_anim_step();
 }
 
@@ -138,7 +180,7 @@ static void button_rect(int idx, int *x, int *y, int *w, int *h) {
 }
 
 void wm_anim_open(int idx) {
-    if (!g_enabled || idx < 0 || idx >= window_count) return;
+    if (!anim_wanted() || idx < 0 || idx >= window_count) return;
     struct window *w = &windows[idx];
     if (w->popup || w->fullscreen) return;
     struct anim *a = slot_for(w->client_pid, w->client_win);
@@ -150,7 +192,7 @@ void wm_anim_open(int idx) {
 }
 
 void wm_anim_close(int idx) {
-    if (!g_enabled || idx < 0 || idx >= window_count) return;
+    if (!anim_wanted() || idx < 0 || idx >= window_count) return;
     struct window *w = &windows[idx];
     if (w->popup || w->fullscreen || w->state == WIN_MINIMIZED) return;
     struct anim *a = slot_for(w->client_pid, w->client_win);
@@ -162,7 +204,7 @@ void wm_anim_close(int idx) {
 }
 
 void wm_anim_minimize(int idx) {
-    if (!g_enabled || idx < 0 || idx >= window_count) return;
+    if (!anim_wanted() || idx < 0 || idx >= window_count) return;
     struct window *w = &windows[idx];
     if (w->popup || w->fullscreen || w->state == WIN_MINIMIZED) return;
     struct anim *a = slot_for(w->client_pid, w->client_win);
@@ -174,7 +216,7 @@ void wm_anim_minimize(int idx) {
 }
 
 void wm_anim_restore(int idx) {
-    if (!g_enabled || idx < 0 || idx >= window_count) return;
+    if (!anim_wanted() || idx < 0 || idx >= window_count) return;
     struct window *w = &windows[idx];
     if (w->popup || w->fullscreen || w->state != WIN_MINIMIZED) return;
     struct anim *a = slot_for(w->client_pid, w->client_win);
@@ -228,12 +270,27 @@ void wm_anim_draw(void) {
     }
 }
 
+// The speed NAMES, matched in full. A prefix match would make "slow"
+// and "slower" the same answer, and the enum is ordered so a future
+// value can be added at either end.
+static int speed_of(const char *v) {
+    if (!k_strcmp(v, "instant"))   return SPEED_INSTANT;
+    if (!k_strcmp(v, "fast"))      return SPEED_FAST;
+    if (!k_strcmp(v, "slow"))      return SPEED_SLOW;
+    if (!k_strcmp(v, "very-slow")) return SPEED_VERY_SLOW;
+    return SPEED_NORMAL;           // including an unknown value
+}
+
 static void adopt(void) {
     char v[16];
     int on = 1;
     if (wm_conf_get(DESKTOP_CONF, "animations", v, sizeof v) && v[0])
         on = !(v[0] == 'o' && v[1] == 'f' && v[2] == 'f');
     g_enabled = on;
+    if (wm_conf_get(DESKTOP_CONF, "animation_speed", v, sizeof v) && v[0])
+        g_speed = speed_of(v);
+    else
+        g_speed = SPEED_NORMAL;
     if (!on) for (int i = 0; i < WM_ANIM_MAX; i++) if (g_anims[i].kind) finish(&g_anims[i]);
 }
 

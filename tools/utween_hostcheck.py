@@ -48,9 +48,11 @@ int main(int argc, char **argv) {
     unsigned dur = (unsigned)atoi(argv[3]);
     int rt_at = argc > 5 ? atoi(argv[4]) : -1;
     int rt_to = argc > 5 ? atoi(argv[5]) : 0;
+    // argv[6], when present, is the curve: 1 = ease-in-out.
+    int curve = argc > 6 ? atoi(argv[6]) : 0;
     struct utween tw;
     unsigned long long ms = 1000000ull;
-    utween_start(&tw, from, to, dur, 0);
+    utween_start_curve(&tw, from, to, dur, 0, (enum utween_curve)curve);
     for (unsigned t = 0; t <= 2 * dur + 5; t++) {  // past a retarget's own end too
         if ((int)t == rt_at) utween_retarget(&tw, rt_to, dur, t * ms);
         int v = utween_value(&tw, t * ms);
@@ -104,7 +106,7 @@ def run(exe, *args):
     return vals, act
 
 
-def check_motion(name, vals, act, frm, to, dur, fails):
+def check_motion(name, vals, act, frm, to, dur, fails, ease_out=True):
     def fail(msg):
         fails.append(f"{name}: {msg}")
 
@@ -119,8 +121,17 @@ def check_motion(name, vals, act, frm, to, dur, fails):
             break
     if dur >= 4 and abs(to - frm) >= 8:
         half = abs(vals[dur // 2] - frm)
-        if 2 * half <= abs(to - frm):
-            fail(f"not ease-out: half the time covered {half} of {abs(to - frm)}")
+        if ease_out:
+            if 2 * half <= abs(to - frm):
+                fail(f"not ease-out: half the time covered {half} of {abs(to - frm)}")
+        else:
+            # EASE-IN-OUT starts slowly, so the first half must cover at
+            # most half the distance -- the exact opposite property, and
+            # the one that distinguishes the two curves. Symmetry makes
+            # it land ON half, so allow a rounding pixel either way.
+            if 2 * half > abs(to - frm) + 4:
+                fail(f"not ease-in-out: half the time covered {half} "
+                     f"of {abs(to - frm)} -- it started fast")
     # active: true strictly before the end, false from the end on
     if any(not a for a in act[:dur]) and dur > 0:
         first = act[:dur].index(False)
@@ -164,7 +175,26 @@ def main():
         if vals[-1] != -50:
             fails.append(f"reverse retarget ends at {vals[-1]}, not -50")
 
-    total = len(triples) + 4
+        # --- EASE-IN-OUT, the curve travel uses ----------------------
+        #
+        # Same contract as ease-out for the things a caller relies on --
+        # exact endpoints, monotonic, goes inactive once -- and the
+        # OPPOSITE first-half property, which is the whole reason it
+        # exists: it must start SLOWLY, where ease-out starts at full
+        # speed.
+        for frm, to, dur in [(0, 100, 200), (100, 0, 200), (0, 1000, 240)]:
+            vals, act = run(exe, frm, to, dur, -1, 0, 1)
+            check_motion(f"in-out {frm}->{to}/{dur}ms", vals, act, frm, to,
+                         dur, fails, ease_out=False)
+
+        # Symmetric about the midpoint: f(1/2) = 1/2 exactly. A seam
+        # there is a visible hitch halfway through every animation.
+        vals, _ = run(exe, 0, 1000, 200, -1, 0, 1)
+        mid = vals[100]
+        if abs(mid - 500) > 2:
+            fails.append(f"ease-in-out is not symmetric: midpoint {mid}, not ~500")
+
+    total = len(triples) + 4 + 3 + 1
     if args.positive_control:
         if fails:
             print(f"utween_hostcheck: positive control FAILED as it must "

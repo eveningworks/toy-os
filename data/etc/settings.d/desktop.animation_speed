@@ -1,0 +1,7 @@
+Description=How long window animations take; scales every one of them
+Order=16
+Choice.instant=Instant (off)
+Choice.fast=Fast
+Choice.normal=Normal
+Choice.slow=Slow
+Choice.very-slow=Very slow
