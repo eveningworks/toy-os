@@ -95,6 +95,12 @@ void ugfx_clip_intersect(struct ugfx_surface *s, int x, int y, int w, int h);
 // pokes single pixels (a cursor sprite, a probe).
 void ugfx_put_pixel(struct ugfx_surface *s, int x, int y, uint32_t color);
 
+// Grow the dirty rect to cover a region written by hand. For a
+// rasteriser that writes `pixels` directly rather than through the calls
+// above -- ui/ugfx_tex.h is the one in this tree. Everything in this
+// header already does it for itself.
+void ugfx_mark_dirty_rect(struct ugfx_surface *s, int x, int y, int w, int h);
+
 // Reads back what is in the surface. Safe because a surface is ordinary
 // cached memory -- a window buffer or a compositor's own back buffer.
 // It is NOT a way to read the screen: the framebuffer behind

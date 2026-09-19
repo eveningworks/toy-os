@@ -20,6 +20,7 @@
 #include "rt/sys.h"
 #include "ui/ugfx.h"
 #include "ui/uui.h"
+#include "ui/ugfx_tex.h"
 #include "ui/uapp.h"
 #include "ui/utheme.h"
 #include "geom.h"
@@ -63,6 +64,16 @@ static struct uui_checkbox g_aa_check;
 // The cube's second toggle: filled and lit, or the wireframe it started
 // as. Same single-store rule as the anti-aliasing box.
 static struct uui_checkbox g_shade_check;
+static struct uui_checkbox g_tex_check;
+
+// THE TEXTURE, generated rather than loaded: a checkerboard is what
+// makes a mapping error obvious at a glance, which is the whole reason
+// to look at a textured cube in a demo. ui/ugfx_tex.h takes a plain
+// pixel buffer, so pointing this at a decoded QOI is a few lines
+// whenever an app wants a real image.
+#define TEX_SIZE 64
+static uint32_t g_tex_px[TEX_SIZE * TEX_SIZE];
+static struct ugfx_texture g_tex = { g_tex_px, TEX_SIZE, TEX_SIZE };
 static fx_t g_angle;            // in turns; wraps naturally
 static int g_speed = 3;         // angle steps per frame, in 1/1024 turns
 static int g_frames;
@@ -226,6 +237,9 @@ static void on_size(int *w, int *h) {
     // their labels here, once. on_open() re-inits with the same values.
     uui_checkbox_init(&g_aa_check, 0, 0, 0, "anti-aliased (A)", 0, 0);
     uui_checkbox_init(&g_shade_check, 0, 0, 0, "shaded (F)", 0, 0);
+    uui_checkbox_init(&g_tex_check, 0, 0, 0, "textured (T)", 0, 0);
+    ugfx_texture_checker(g_tex_px, TEX_SIZE, TEX_SIZE, 8,
+                         ugfx_rgb(235, 235, 240), ugfx_rgb(60, 80, 130));
     int bar_w = 2 * MARGIN + 4 * button_w() + 3 * 6;
     int aa_w = 0, sh_w = 0, hh = 0;
     uui_checkbox_natural_size(&g_aa_check, &aa_w, &hh);
@@ -272,6 +286,55 @@ static void draw_cube(struct ugfx_surface *s, int cx, int cy, enum geom_aa aa) {
     // make it look like a much simpler shape than it is.
     fx_t yaw = g_angle, pitch = fx_mul(g_angle, 24248 /* ~0.37 */);
     geom_transform3(CUBE, 8, yaw, pitch, 0, FX_ONE, CUBE_DIST, cx, cy, xs, ys, z);
+
+    if (g_tex_check.checked) {
+        // SAME ROTATION, SAME CULL as the shaded path below -- a second
+        // opinion about which faces are visible is how two branches of
+        // one renderer end up disagreeing. The difference is only what
+        // fills the face.
+        struct geom_pt3 r[8];
+        for (int i = 0; i < 8; i++) r[i] = geom_rotate3(CUBE[i], yaw, pitch, 0);
+
+        for (int f = 0; f < 6; f++) {
+            const uint8_t *q = CUBE_FACES[f];
+            struct geom_pt3 n = geom_face_normal3(r[q[0]], r[q[1]], r[q[2]]);
+            int64_t vx = -r[q[0]].x, vy = -r[q[0]].y, vz = -(int64_t)CUBE_DIST - r[q[0]].z;
+            if ((int64_t)n.x * vx + (int64_t)n.y * vy + (int64_t)n.z * vz <= 0) continue;
+
+            // The face's four corners, with the texture's four corners
+            // mapped to them in the same winding order -- so the image
+            // is upright on every face rather than mirrored on half.
+            //
+            // `z` IS THE VIEW DEPTH, and it has to be POSITIVE and in
+            // the same units for all four (ui/ugfx_tex.h): geom's z is
+            // measured from the model's centre, so the eye distance is
+            // added back to get a depth in front of the camera.
+            static const int UV[4][2] = {
+                { 0, 0 }, { TEX_SIZE - 1, 0 },
+                { TEX_SIZE - 1, TEX_SIZE - 1 }, { 0, TEX_SIZE - 1 },
+            };
+            struct ugfx_texvert tv[4];
+            for (int i = 0; i < 4; i++) {
+                tv[i].x = g_canvas.x + xs[q[i]];
+                tv[i].y = g_canvas.y + ys[q[i]];
+                // CUBE_DIST IS AN fx_t and z[] is one too, so the depth
+                // is computed in fixed point and converted ONCE --
+                // adding fx to an int gave a depth ~65536x too large,
+                // which flattened the perspective to nothing.
+                tv[i].z = fx_to_int(CUBE_DIST + z[q[i]]);
+                if (tv[i].z < 1) tv[i].z = 1;
+                tv[i].u = UV[i][0];
+                tv[i].v = UV[i][1];
+            }
+            // Lit like the shaded path, so turning the texture on does
+            // not also turn the lighting off -- the same Lambert term,
+            // applied to the texel instead of to a flat colour.
+            int lit = geom_shade(n, LIGHT);
+            ugfx_textured_quad(s, &g_tex, tv, 70 + lit * 185 / 255);
+        }
+        (void)aa;
+        return;
+    }
 
     if (g_shade_check.checked) {
         // The rotated corners again, in 3D this time: a face's normal
@@ -424,8 +487,14 @@ static void draw(struct ugfx_surface *s) {
     // Shading is a property of the cube: with the 2D scene up the box
     // is greyed and takes no click or key (see shade_toggle()).
     g_shade_check.disabled = g_scene != SCENE_3D;
+    g_tex_check.disabled = g_scene != SCENE_3D;
     uui_checkbox_set_geometry(&g_shade_check, MARGIN + aw + 3 * ugfx_char_w(), checkbox_y());
     uui_checkbox_draw(s, &g_shade_check);
+    int sw = 0, sh2 = 0;
+    uui_checkbox_natural_size(&g_shade_check, &sw, &sh2);
+    uui_checkbox_set_geometry(&g_tex_check,
+                              MARGIN + aw + sw + 6 * ugfx_char_w(), checkbox_y());
+    uui_checkbox_draw(s, &g_tex_check);
 
     // Readout, right-aligned so it does not jump around as digits change.
     char info[48];
@@ -469,6 +538,12 @@ static void shade_toggle(void) {
               ? "gfxdemo: shaded on\n" : "gfxdemo: shaded off\n");
 }
 
+static void tex_toggle(void) {
+    if (g_scene != SCENE_3D) { ulog("gfxdemo: textured ignored -- 2d scene\n"); return; }
+    ulog(uui_checkbox_toggle(&g_tex_check)
+              ? "gfxdemo: textured on\n" : "gfxdemo: textured off\n");
+}
+
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
     if (key == 'q') { uapp_quit(a, 0); return; } // Esc no longer closes -- Alt+F4 does
@@ -481,6 +556,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         log_scene();
     }
     if (key == 'f' || key == 'F') shade_toggle();
+    if (key == 't' || key == 'T') tex_toggle();
     if (key == '+' || key == '=') { if (g_speed < 40) { g_speed++; log_speed(); } }
     if (key == '-') { if (g_speed > 0) { g_speed--; log_speed(); } }
 }
@@ -496,6 +572,7 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
                   ? "gfxdemo: aa on\n" : "gfxdemo: aa off\n");
     }
     if (uui_checkbox_hit(&g_shade_check, x, y)) shade_toggle();
+    if (uui_checkbox_hit(&g_tex_check, x, y)) tex_toggle();
 }
 
 static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {

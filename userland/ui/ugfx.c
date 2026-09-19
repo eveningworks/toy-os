@@ -138,6 +138,16 @@ static inline void dirty_mark_rect(struct ugfx_surface *s, int x, int y, int w, 
     dirty_mark(s, x + w - 1, y + h - 1);
 }
 
+// THE SAME GROWTH, FOR A RASTERISER IN ANOTHER FILE. ugfx_tex.c writes
+// pixels directly for speed, so it cannot go through a drawing call that
+// would have marked the rect for it -- and a surface whose dirty rect
+// does not cover what was drawn is presented with the new pixels left
+// off, which reads as the drawing having never happened.
+void ugfx_mark_dirty_rect(struct ugfx_surface *s, int x, int y, int w, int h) {
+    if (!s) return;
+    dirty_mark_rect(s, x, y, w, h);
+}
+
 int ugfx_damage(const struct ugfx_surface *s, int *x, int *y, int *w, int *h) {
     if (!s || s->dirty_x1 <= s->dirty_x0) return 0;
     if (x) *x = s->dirty_x0;
