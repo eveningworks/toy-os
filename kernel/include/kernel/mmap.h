@@ -26,3 +26,23 @@ int mmap_inherits_at(void *mm, uint64_t va);
 int mmap_inherit_shm(uint64_t child_pml4, const struct sched_mm *mm);
 
 #endif
+
+// THE REGION LIST IS ALLOCATED (api/scheduler.h), so exactly one place
+// must free it and one must not share it.
+//
+// `mmap_release_regions` is that place: called from
+// release_process_state() (kernel/proc/syscall.c), which both the exit
+// path and the kill-from-outside path already funnel through. It is
+// idempotent, so a spawn reusing a slot calls it too rather than
+// trusting that a previous teardown ran.
+void mmap_release_regions(uint64_t pml4_phys);
+void mmap_regions_reset(struct sched_mm *mm);
+
+// A fork copies `struct sched_mm` by value, pointer included. This
+// gives the child its own copy; 0 means the allocation failed and the
+// child must not be started, because the alternative is two owners of
+// one array.
+int mmap_clone_regions(struct sched_mm *dst, const struct sched_mm *src);
+
+// mm_test.c only: free_slot(), which is where the list grows.
+struct mmap_region *mmap_test_free_slot(struct sched_mm *mm);

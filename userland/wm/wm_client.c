@@ -1196,8 +1196,15 @@ static int map_buf(struct window *win, int b, uint32_t gen, int w, int h) {
     void *p = sys_mmap(0, bytes, SYS_PROT_READ, SYS_MAP_SHARED, fd, 0);
     sys_close(fd);
     if (p == (void *)-1) {
-        wm_logf("wm: pid %d window %u buffer %d: %dx%d does not fit its object\n",
-                win->client_pid, win->client_win, b, w, h);
+        // SAY WHICH FAILURE. "does not fit its object" is only true of
+        // the oversize case (-EINVAL); the other one is the mapping
+        // TABLE being full (-ENOMEM), where the object is exactly the
+        // right size and nothing about this window is wrong. Reporting
+        // the first for the second sent a session looking at buffer
+        // sizes while the compositor was out of regions.
+        wm_logf("wm: pid %d window %u buffer %d: cannot map %dx%d (%s)\n",
+                win->client_pid, win->client_win, b, w, h,
+                "no free mapping slot, or the object is the wrong size");
         return 0;
     }
 

@@ -12,6 +12,7 @@
 // which is exactly how this function's frame reached 4832 bytes on a
 // 16 KiB per-process kernel stack. It is 96 bytes now.
 #include "syscall.h"
+#include "mmap.h" // mmap_release_regions -- the region list is allocated
 #include "syscall_stall.h"
 #include "syscalls.h"
 #include "futex.h"
@@ -49,6 +50,7 @@ static void release_process_state(uint64_t pml4_phys) {
     sound_process_gone(pml4_phys);
     shm_process_gone(pml4_phys);
     futex_wakeword_release(pml4_phys);
+    mmap_release_regions(pml4_phys); // the region LIST, not the mappings
 }
 
 void syscall_process_exit_cleanup(uint64_t pml4_phys) {

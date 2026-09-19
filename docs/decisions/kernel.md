@@ -7701,3 +7701,48 @@ Linux's sysctl and GSettings both avoid the question by pushing change
 notifications rather than having readers poll a counter; a poll was
 kept here because the compositor already runs a loop and a push would
 need a subscription mechanism the registry does not have.
+
+## The mmap region list is allocated and grown, not a fixed array
+
+`struct sched_mm` carried `struct mmap_region regions[32]`, and a
+process that wanted a 33rd got `-ENOMEM`. Two very different things
+ran into it. The dynamic loader spends four regions per shared library
+(one MAP_FIXED per PT_LOAD, plus an anonymous one where .bss runs past
+the file), so `/bin/wget` with four libraries was already at 16 before
+its own code ran. And the compositor spends THREE per client window --
+a uchan ring and two buffers -- so its sixth window failed, measured at
+16 baseline + 3 each.
+
+The compositor's failure was the bad one, because of WHERE it landed.
+With two slots left the create-time map of buffer 0 succeeded and the
+first present's buffer 1 did not, so the window appeared with full
+chrome and a taskbar button around a buffer nobody had ever written:
+solid black, silently, every frame. Whether a window died at create or
+opened black depended on `(32 - baseline) mod 3`, which is why it
+looked intermittent and app-specific.
+
+Raising the array was rejected. A region is **296 bytes** -- `path[256]`
+is nearly all of it -- so 32 slots across 64 process slots is ~592 KB
+of `.bss` resident on every boot, and doubling the ceiling doubles that
+for a limit almost no process approaches. Interning the paths was the
+other candidate (only file mappings use one, and a .so's four PT_LOADs
+repeat it), which would have made a region ~40 bytes.
+
+Neither was taken, because both keep a fixed ceiling that somebody has
+to size correctly in advance, and **no real system does that**: Linux
+keeps `vm_area_struct`s in a tree, NT keeps VADs in an AVL tree, and
+both grow on demand with a high safety limit (`max_map_count`, 65530).
+So the list is allocated, starts at 16 and doubles, with
+`MMAP_MAX_REGIONS` kept as that safety limit rather than as a size.
+Typical processes now use LESS memory than before, since nothing is
+resident for a ceiling they never reach.
+
+**What that costs, and where it is paid.** The old comment defended the
+fixed array on the grounds that a slot's teardown cannot leak it. True,
+and a pointer can, so the free lives at the one place both process-death
+paths already funnel through -- `release_process_state()`, beside
+`fd_release_all()` and the other per-address-space bookkeeping. Two
+other sites matter: a spawn frees any array a previous occupant of the
+slot left, so a recycled slot cannot leak; and **fork copies
+`struct sched_mm` by value, pointer included**, so it deep-copies the
+array or refuses the child -- sharing it would free one array twice.

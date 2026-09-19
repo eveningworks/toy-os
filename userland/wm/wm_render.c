@@ -1561,6 +1561,17 @@ static void render_scene(int mx, int my, int has_damage) {
             apply_scene_clip(has_damage);
             continue;
         }
+        // NOTHING UNTIL THE CLIENT'S FIRST PRESENT -- for a TOPLEVEL as
+        // well, which is the half this guard was missing. The buffer
+        // opened at create is whatever the client has drawn, and for a
+        // client that never gets to present it is whatever the pages
+        // came up as: compositing it painted a window of solid BLACK
+        // with full chrome around it, which reads as a broken app
+        // rather than as a compositor that ran out of something.
+        // Wayland's map-on-first-commit, the same rule the popup branch
+        // above already followed.
+        if (wm_client_is_client_window(&windows[i]) &&
+            windows[i].client_gen[windows[i].client_front] == 0) continue;
         // The shadow FIRST, so corners_save() below sees it beneath the
         // corners and the rounded cut reveals shadow, not desktop. None
         // for a maximized window: nothing beside it to fall on.

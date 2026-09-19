@@ -249,17 +249,36 @@ struct mmap_region {
 // count of mmap() CALLS a program makes -- it is mostly its DT_NEEDED
 // list, and a program never calling mmap() can still exhaust it.
 //
-// 16 was enough until /bin/wget grew libhttp.so and libssl.so beside
-// libuapp.so and libc.so: four libraries is 16 regions before .bss, and
-// the loader failed on the LAST one with "segment map failed", which
-// names the library that ran out rather than the one that filled it.
-// 32 leaves room for a fifth.
+// THE LIST GROWS, so this is no longer a count anybody has to get
+// right in advance. It was 16, then 32 when /bin/wget grew libhttp.so
+// and libssl.so beside libuapp.so and libc.so -- four libraries is 16
+// regions before .bss, and the loader failed on the LAST one with
+// "segment map failed", naming the library that ran out rather than
+// the one that filled it. The compositor then hit the same wall from
+// the other direction: three regions per client window (a uchan ring
+// and two buffers) meant the sixth window opened black.
 //
-// The cheaper alternative was linking the libraries `-z
-// noseparate-code` for two PT_LOADs each. Not taken: it lets a page
-// hold both code and data, and ~107 KB of .bss (104 bytes a region,
-// 64 slots) is the lesser cost.
-#define MMAP_MAX_REGIONS 32
+// Raising a fixed array again would have cost real memory for every
+// process to fit the worst one: 296 bytes a region (path[256] is
+// nearly all of it) x 64 slots is ~592 KB of .bss ALWAYS resident, for
+// a ceiling most processes never approach. So the array is allocated
+// and doubled on demand instead, which is what Linux and NT both do --
+// vm_area_struct in a tree, VADs in an AVL tree, no fixed cap.
+//
+// WHAT IS LOST, stated because the old comment made a point of it: an
+// embedded array cannot be leaked by a slot's teardown, and a pointer
+// can. It is freed from release_process_state() (kernel/proc/syscall.c)
+// -- the one place both the exit path and the kill-from-outside path
+// already funnel through, beside fd_release_all() and the rest of the
+// per-address-space bookkeeping -- and a spawn frees any stale array
+// before it starts, so a slot recycled without teardown cannot leak
+// either.
+#define MMAP_REGIONS_INIT 16    // first allocation; doubles from there
+
+// A SAFETY CEILING, not a storage size. Nothing is allocated for it;
+// it exists so a runaway process cannot spend the kernel heap on
+// region metadata, which is what Linux's max_map_count is for.
+#define MMAP_MAX_REGIONS 1024
 
 struct sched_mm {
     // The page after this process's loaded image ends -- where its heap
@@ -275,11 +294,13 @@ struct sched_mm {
     // past UADDR_STACK_FLOOR.
     uint64_t stack_bottom;
 
-    // SYS_MMAP's mappings, kernel/mm/mmap.c's to manage. Embedded
-    // rather than allocated so a slot's teardown cannot leak them --
-    // the frames behind them are freed by the address-space walk, and
-    // this metadata dies with the slot.
-    struct mmap_region regions[MMAP_MAX_REGIONS];
+    // SYS_MMAP's mappings, kernel/mm/mmap.c's to manage. NULL until the
+    // first mmap; `region_cap` is how many slots are behind it, and a
+    // free slot is one whose `base` is 0. See MMAP_REGIONS_INIT above
+    // for who frees it -- a raw pointer here is the one thing this
+    // struct cannot let a teardown forget.
+    struct mmap_region *regions;
+    int region_cap;
 };
 
 // A process's CURRENT DIRECTORY -- a normalized absolute path, exactly

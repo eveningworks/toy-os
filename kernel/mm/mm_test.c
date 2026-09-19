@@ -221,11 +221,15 @@ KTEST("mm", "a demand-paged mmap page comes from the high zone") {
     uint64_t four_gib = (uint64_t)4 * 1024 * 1024 * 1024;
     if (pmm_zone_free_frames(PMM_ZONE_ANY) == 0) KTEST_SKIP("guest has no memory above 4 GiB");
 
-    // kzalloc'd, not a local: struct sched_mm carries 16 regions and
-    // the kernel's frame budget is 1 KiB.
+    // kzalloc'd, not a local, because a trapframe-sized local is past
+    // the kernel's 1 KiB frame budget. The region list is allocated
+    // separately now (api/scheduler.h), so this test builds one.
     struct sched_mm *mm = kzalloc(sizeof *mm);
     uint64_t as = vmm_create_address_space();
     KTEST_ASSERT(mm != 0 && as != 0);
+    mm->regions = kzalloc(sizeof *mm->regions);
+    KTEST_ASSERT(mm->regions != 0);
+    mm->region_cap = 1;
 
     uint64_t base = UADDR_MMAP_BASE;
     mm->regions[0].base = base;
@@ -236,6 +240,7 @@ KTEST("mm", "a demand-paged mmap page comes from the high zone") {
     int mapped = mmap_fault_in(mm, as, base + 8);
     uint64_t phys = vmm_user_phys(as, base);
     vmm_destroy_address_space(as);
+    mmap_regions_reset(mm);
     kfree(mm);
 
     KTEST_ASSERT_EQ(mapped, 1);
@@ -536,4 +541,46 @@ KTEST("mm", "injector disarms itself after the armed count") {
     KTEST_ASSERT(c != 0);
     kfree(c);
     KTEST_ASSERT(fault_any_armed() == 0);
+}
+
+// THE REGION LIST GROWS, which is the property the compositor's sixth
+// window used to fall off (api/scheduler.h). Poking the list directly
+// rather than making 40 real mappings: what is under test is the
+// growth and the copy, and a real mmap would need an address space, a
+// process and 40 frames to prove the same thing.
+KTEST("mm", "the mmap region list grows past the old fixed ceiling") {
+    struct sched_mm *mm = kzalloc(sizeof *mm);
+    KTEST_ASSERT(mm != 0);
+    KTEST_ASSERT_EQ(mm->region_cap, 0);          // nothing until it is needed
+
+    // 40 is past the 32 that used to be the whole array.
+    for (int i = 0; i < 40; i++) {
+        struct mmap_region *r = mmap_test_free_slot(mm);
+        KTEST_ASSERT(r != 0);
+        r->base = UADDR_MMAP_BASE + (uint64_t)i * 4096;
+        r->npages = 1;
+        r->kind = MMAP_KIND_ANON;
+    }
+    KTEST_ASSERT(mm->region_cap >= 40);
+
+    // Every one survived the reallocations that happened under them.
+    for (int i = 0; i < 40; i++) {
+        uint64_t want = UADDR_MMAP_BASE + (uint64_t)i * 4096;
+        int found = 0;
+        for (int j = 0; j < mm->region_cap; j++)
+            if (mm->regions[j].base == want) found++;
+        KTEST_ASSERT_EQ(found, 1);
+    }
+
+    // A fork's child must not share the array -- that is a double free.
+    struct sched_mm child = *mm;                 // by value, as fork does
+    KTEST_ASSERT(mmap_clone_regions(&child, mm) != 0);
+    KTEST_ASSERT(child.regions != mm->regions);
+    KTEST_ASSERT_EQ(child.regions[7].base, mm->regions[7].base);
+
+    mmap_regions_reset(&child);
+    mmap_regions_reset(mm);
+    KTEST_ASSERT(mm->regions == 0 && mm->region_cap == 0);
+    mmap_regions_reset(mm);                      // idempotent: a spawn calls it too
+    kfree(mm);
 }

@@ -23,11 +23,13 @@
 #include "string.h"
 #include "kfmt.h"     // klog_printf
 #include "klog.h"   // KLOG_ERR -- the level on a failure line
+#include "heap.h"   // the region list is allocated now, not embedded
 
-// The region containing `addr`, or NULL. Linear: MMAP_MAX_REGIONS is
-// 16 and this runs per fault-in and per syscall, not per byte.
+// The region containing `addr`, or NULL. Linear over `region_cap`,
+// which is tens: this runs per fault-in and per syscall, not per byte.
 static struct mmap_region *region_of(struct sched_mm *mm, uint64_t addr) {
-    for (int i = 0; i < MMAP_MAX_REGIONS; i++) {
+    if (!mm->regions) return 0;
+    for (int i = 0; i < mm->region_cap; i++) {
         struct mmap_region *r = &mm->regions[i];
         if (!r->base) continue;
         if (addr >= r->base && addr < r->base + r->npages * 4096ULL) return r;
@@ -35,17 +37,75 @@ static struct mmap_region *region_of(struct sched_mm *mm, uint64_t addr) {
     return 0;
 }
 
+// Doubles the list, or makes the first one. The OLD array is copied and
+// freed, so every `struct mmap_region *` a caller is holding across
+// this call is dangling afterwards -- free_slot() is the only caller
+// for that reason, and it returns the new pointer rather than letting
+// anyone keep one.
+static int regions_grow(struct sched_mm *mm) {
+    int cap = mm->region_cap ? mm->region_cap * 2 : MMAP_REGIONS_INIT;
+    if (cap > MMAP_MAX_REGIONS) cap = MMAP_MAX_REGIONS;
+    if (cap <= mm->region_cap) return 0;            // already at the ceiling
+    struct mmap_region *n = kzalloc((uint32_t)cap * sizeof *n);
+    if (!n) return 0;
+    if (mm->regions) {
+        k_memcpy(n, mm->regions, (uint32_t)mm->region_cap * sizeof *n);
+        kfree(mm->regions);
+    }
+    mm->regions = n;
+    mm->region_cap = cap;
+    return 1;
+}
+
 static struct mmap_region *free_slot(struct sched_mm *mm) {
-    for (int i = 0; i < MMAP_MAX_REGIONS; i++)
+    for (int i = 0; i < mm->region_cap; i++)
         if (!mm->regions[i].base) return &mm->regions[i];
-    return 0;
+    int was = mm->region_cap;
+    if (!regions_grow(mm)) return 0;
+    return &mm->regions[was];   // the first slot the growth just added
+}
+
+// The growth is the thing worth a test and free_slot() is where it
+// happens, so mm_test.c reaches it by name rather than through 40 real
+// mappings, which would need an address space and 40 frames to prove
+// the same property.
+struct mmap_region *mmap_test_free_slot(struct sched_mm *mm) { return free_slot(mm); }
+
+// Frees the list. Idempotent, which is what lets both the teardown path
+// and a spawn reusing the slot call it without either having to know
+// whether the other ran.
+void mmap_regions_reset(struct sched_mm *mm) {
+    if (!mm) return;
+    kfree(mm->regions);
+    mm->regions = 0;
+    mm->region_cap = 0;
+}
+
+void mmap_release_regions(uint64_t pml4_phys) {
+    mmap_regions_reset(scheduler_mm_for_pml4(pml4_phys));
+}
+
+// A fork copied the parent's `struct sched_mm` BY VALUE, pointer and
+// all, so the child is holding the parent's array. Give it its own or
+// report failure -- sharing it would free it twice.
+int mmap_clone_regions(struct sched_mm *dst, const struct sched_mm *src) {
+    dst->regions = 0;
+    dst->region_cap = 0;
+    if (!src->regions || src->region_cap <= 0) return 1;
+    struct mmap_region *n = kzalloc((uint32_t)src->region_cap * sizeof *n);
+    if (!n) return 0;
+    k_memcpy(n, src->regions, (uint32_t)src->region_cap * sizeof *n);
+    dst->regions = n;
+    dst->region_cap = src->region_cap;
+    return 1;
 }
 
 // Any live region intersecting [base, base + npages*4096)?
 static struct mmap_region *overlap_of(struct sched_mm *mm, uint64_t base,
                                       uint64_t npages) {
     uint64_t end = base + npages * 4096ULL;
-    for (int i = 0; i < MMAP_MAX_REGIONS; i++) {
+    if (!mm->regions) return 0;
+    for (int i = 0; i < mm->region_cap; i++) {
         struct mmap_region *r = &mm->regions[i];
         if (!r->base) continue;
         uint64_t rend = r->base + r->npages * 4096ULL;
@@ -59,7 +119,7 @@ static struct mmap_region *overlap_of(struct sched_mm *mm, uint64_t base,
 // restarts the scan -- bounded by the region count, not by the arena.
 static uint64_t arena_pick(struct sched_mm *mm, uint64_t npages) {
     uint64_t addr = UADDR_MMAP_BASE;
-    for (int hops = 0; hops <= MMAP_MAX_REGIONS; hops++) {
+    for (int hops = 0; hops <= mm->region_cap; hops++) {
         if (addr + npages * 4096ULL > UADDR_MMAP_LIMIT) return 0;
         struct mmap_region *hit = overlap_of(mm, addr, npages);
         if (!hit) return addr;
@@ -302,7 +362,8 @@ int mmap_inherits_at(void *mm, uint64_t va) {
 }
 
 int mmap_inherit_shm(uint64_t child_pml4, const struct sched_mm *mm) {
-    for (int i = 0; i < MMAP_MAX_REGIONS; i++) {
+    if (!mm->regions) return 0;
+    for (int i = 0; i < mm->region_cap; i++) {
         const struct mmap_region *r = &mm->regions[i];
         if (!r->base || r->kind != MMAP_KIND_SHM) continue;
         if (shm_map_add(child_pml4, r->shm_idx, r->base, r->npages) < 0) {

@@ -20,7 +20,8 @@
 // Records for one process: image, heap, stack, then its live regions.
 static int records_of(struct sched_mm *mm) {
     int n = 3;
-    for (int i = 0; i < MMAP_MAX_REGIONS; i++)
+    if (!mm->regions) return 0;
+    for (int i = 0; i < mm->region_cap; i++)
         if (mm->regions[i].base) n++;
     return n;
 }
@@ -56,7 +57,7 @@ static void fill_one(struct query_procmap *q, int pid, struct sched_mm *mm,
         q->bytes = UADDR_STACK_VADDR + 4096 - mm->stack_bottom;
     } else {
         int seen = 3;
-        for (int i = 0; i < MMAP_MAX_REGIONS; i++) {
+        for (int i = 0; mm->regions && i < mm->region_cap; i++) {
             struct mmap_region *r = &mm->regions[i];
             if (!r->base) continue;
             if (seen++ != which) continue;

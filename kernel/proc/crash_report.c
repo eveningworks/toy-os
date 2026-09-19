@@ -96,7 +96,7 @@ uint32_t crash_report_write(const char *what, const uint64_t *regs, uint64_t cr2
         at = hdr_put(at, "map: image 0x%lx-0x%lx\n", (uint64_t)0x8000000000ULL /* the image base, uaddr.h */, mm->heap_base);
         at = hdr_put(at, "map: heap 0x%lx-0x%lx\n", mm->heap_base, mm->brk);
         at = hdr_put(at, "map: stack 0x%lx-0x%lx\n", mm->stack_bottom, UADDR_STACK_VADDR + 4096);
-        for (int r = 0; r < MMAP_MAX_REGIONS; r++) {
+        for (int r = 0; mm->regions && r < mm->region_cap; r++) {
             const struct mmap_region *g = &mm->regions[r];
             if (!g->base) continue;
             at = hdr_put(at, "map: %s 0x%lx-0x%lx prot %u %s\n",

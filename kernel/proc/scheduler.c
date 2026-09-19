@@ -1321,7 +1321,10 @@ static void mm_reset(int slot, uint64_t image_end) {
     procs[slot].mm.heap_base    = heap_base;
     procs[slot].mm.brk          = heap_base;
     procs[slot].mm.stack_bottom = UADDR_STACK_INIT_BOTTOM;
-    k_memset(procs[slot].mm.regions, 0, sizeof procs[slot].mm.regions);
+    // Frees any list a previous occupant of this slot left behind:
+    // the teardown path should have, and a slot recycled without one
+    // must not leak. Idempotent, so both calling is correct.
+    mmap_regions_reset(&procs[slot].mm);
 }
 
 // The loader every caller actually reaches: resolves `#!` first, then
@@ -2591,6 +2594,12 @@ int scheduler_fork(const uint64_t *regs) {
               sizeof procs[slot].exec_path);
     procs[slot].cpu_ns = 0;
     k_memcpy(&procs[slot].mm, &procs[leader].mm, sizeof procs[slot].mm);
+    // ...which copied the region POINTER. Give the child its own, or
+    // the two of them free one array twice.
+    if (!mmap_clone_regions(&procs[slot].mm, &procs[leader].mm)) {
+        procs[slot].state = SCHED_UNUSED;
+        return -1;
+    }
     k_memcpy(&procs[slot].cwd, &procs[leader].cwd, sizeof procs[slot].cwd);
     procs[slot].state = SCHED_READY;
     alive_count++;
