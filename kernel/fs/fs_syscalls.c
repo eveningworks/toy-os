@@ -243,14 +243,14 @@ int sys_open(struct syscall_ctx *c) {
                     kpath_put(name);
                     return 0;
                 }
-                k_strlcpy(fd_desc[di].file.name, name, sizeof fd_desc[di].file.name);
-                fd_desc[di].file.mode = want_write ? FD_MODE_WRITE : FD_MODE_READ;
-                fd_desc[di].file.pos = 0;
+                k_strlcpy(fd_desc_at(di)->file.name, name, sizeof fd_desc_at(di)->file.name);
+                fd_desc_at(di)->file.mode = want_write ? FD_MODE_WRITE : FD_MODE_READ;
+                fd_desc_at(di)->file.pos = 0;
                 // Read-only fds ignore it, so it is not worth refusing
                 // the combination -- but it is worth not SETTING it,
                 // since SYS_FSTAT reports nothing about it and a stray
                 // flag on a reader would be state nobody could see.
-                fd_desc[di].file.append = (uint8_t)(want_write && want_append);
+                fd_desc_at(di)->file.append = (uint8_t)(want_write && want_append);
                 c->regs[14] = (uint64_t)fd;
             }
         }

@@ -343,8 +343,9 @@ int mount_add(const struct block_device *dev, const char *fstype,
 // no new bookkeeping -- and bookkeeping that exists only to answer one
 // question is the kind that drifts out of step with what it counts.
 static int has_open_files(const struct mount *m) {
-    for (int i = 0; i < FD_DESC_MAX; i++) {
-        const struct open_file *f = &fd_desc[i];
+    for (int i = 0; i < fd_desc_count(); i++) {
+        const struct open_file *f = fd_desc_at(i);
+        if (!f) continue;
         if (f->refs <= 0 || f->kind != FD_KIND_FILE) continue;
         if (under(m->point, m->point_len, f->file.name)) return 1;
     }

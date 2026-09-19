@@ -68,15 +68,46 @@ static void *bounce_alloc(uint64_t *len) {
 // (kernel/fs/fs_syscalls.c) and SYS_SPAWN (proc_syscalls.c) index it
 // too; the storage is here, with the code that owns it.
 
-struct open_file fd_desc[FD_DESC_MAX];
+// DESCRIPTIONS ARE ALLOCATED ONE AT A TIME, and this is a table of
+// pointers to them -- so a description never moves and a caller may
+// hold `struct open_file *` across an unrelated allocation. The table
+// of POINTERS grows; the things it points at do not. (fd_get() hands
+// out such a pointer, and sys_accept() holds one while allocating the
+// accepted socket's description, so this is load-bearing rather than
+// tidiness.)
+static struct open_file **g_desc;
+static int g_desc_cap;
 
-// One descriptor table per ADDRESS SPACE. A flat array scanned
-// linearly: FD_SPACE_MAX is small, this is touched once per fd
-// operation rather than per byte, and a hash would be a data structure
-// pretending to be a design at this size.
+struct open_file *fd_desc_at(int i) {
+    if (i < 0 || i >= g_desc_cap) return NULL;
+    return g_desc[i];
+}
+int fd_desc_count(void) { return g_desc_cap; }
+
+// Grows the pointer table by doubling. The descriptions themselves are
+// untouched, so nothing a caller holds is invalidated.
+static int desc_table_grow(void) {
+    int cap = g_desc_cap ? g_desc_cap * 2 : 32;
+    if (cap > FD_DESC_MAX) cap = FD_DESC_MAX;
+    if (cap <= g_desc_cap) return 0;
+    struct open_file **n = kzalloc((uint32_t)cap * sizeof *n);
+    if (!n) return 0;
+    if (g_desc) {
+        k_memcpy(n, g_desc, (uint32_t)g_desc_cap * sizeof *n);
+        kfree(g_desc);
+    }
+    g_desc = n;
+    g_desc_cap = cap;
+    return 1;
+}
+
+// One descriptor table per ADDRESS SPACE, allocated when that space
+// first wants an fd. A table of pointers scanned linearly: it is
+// touched once per fd operation rather than per byte, and the count is
+// bounded by the process table.
 struct fd_space {
     uint64_t pml4;      // 0 = free slot
-    short    d[FD_MAX]; // d[fd] = index into fd_desc, or -1
+    short    d[FD_MAX]; // d[fd] = index into a description, or -1
     // **PER DESCRIPTOR, NOT PER DESCRIPTION.** open_file::nonblock is on
     // the description and is shared by every dup; close-on-exec is the
     // opposite and has to be, because a dup made precisely to survive an
@@ -84,7 +115,7 @@ struct fd_space {
     // Same split as Linux's.
     uint8_t  cloexec[FD_MAX];
 };
-static struct fd_space g_spaces[FD_SPACE_MAX];
+static struct fd_space *g_spaces[FD_SPACE_CEILING];
 
 // Which address space holds the console claim, so fd_release_all() can
 // tell "this process is dying" from "some other process is". Keyed by
@@ -92,8 +123,13 @@ static struct fd_space g_spaces[FD_SPACE_MAX];
 static uint64_t g_console_owner_pml4;
 
 int fd_desc_alloc(enum fd_kind kind, int aux_idx) {
-    for (int i = 0; i < FD_DESC_MAX; i++) {
-        if (fd_desc[i].refs) continue;
+    for (int i = 0; ; i++) {
+        if (i >= g_desc_cap && !desc_table_grow()) return -1;  // at the ceiling
+        if (!g_desc[i]) {
+            g_desc[i] = kzalloc(sizeof **g_desc);
+            if (!g_desc[i]) return -1;
+        }
+        if (g_desc[i]->refs) continue;
 
         // A FRESH DESCRIPTION CARRIES NOTHING FROM THE LAST ONE. These
         // slots are a pool, and every field left set is inherited by
@@ -103,18 +139,17 @@ int fd_desc_alloc(enum fd_kind kind, int aux_idx) {
         // once and every reply looked lost. It reproduced as `host`
         // failing only AFTER something unrelated had run, which is the
         // worst shape a bug can have.
-        k_memset(&fd_desc[i], 0, sizeof fd_desc[i]);
+        k_memset(g_desc[i], 0, sizeof *g_desc[i]);
 
-        fd_desc[i].refs = 1;
-        fd_desc[i].kind = kind;
+        g_desc[i]->refs = 1;
+        g_desc[i]->kind = kind;
         if (kind == FD_KIND_PIPE_R || kind == FD_KIND_PIPE_W)
-            fd_desc[i].pipe.idx = aux_idx;
+            g_desc[i]->pipe.idx = aux_idx;
         if (kind == FD_KIND_TTY_MASTER || kind == FD_KIND_TTY_SLAVE)
-            fd_desc[i].pty.idx = aux_idx;
-        if (kind == FD_KIND_SHM) fd_desc[i].shm.idx = aux_idx;
+            g_desc[i]->pty.idx = aux_idx;
+        if (kind == FD_KIND_SHM) g_desc[i]->shm.idx = aux_idx;
         return i;
     }
-    return -1;
 }
 
 // The one place that decides a stream is really gone. Everything that
@@ -122,8 +157,8 @@ int fd_desc_alloc(enum fd_kind kind, int aux_idx) {
 // dying -- lands here, so a pipe end cannot be closed twice or leaked
 // depending on which path got there.
 void fd_desc_unref(int di) {
-    if (di < 0 || di >= FD_DESC_MAX) return;
-    struct open_file *f = &fd_desc[di];
+    struct open_file *f = fd_desc_at(di);
+    if (!f) return;
     if (f->refs <= 0) return;
     if (--f->refs > 0) return; // somebody else still names it
 
@@ -150,8 +185,8 @@ void fd_desc_unref(int di) {
 }
 
 static struct fd_space *space_find(uint64_t pml4) {
-    for (int i = 0; i < FD_SPACE_MAX; i++)
-        if (g_spaces[i].pml4 == pml4) return &g_spaces[i];
+    for (int i = 0; i < FD_SPACE_CEILING; i++)
+        if (g_spaces[i] && g_spaces[i]->pml4 == pml4) return g_spaces[i];
     return NULL;
 }
 
@@ -159,12 +194,26 @@ int fd_space_open(uint64_t pml4) {
     if (!pml4) return -1;
     if (space_find(pml4)) return 0; // idempotent
 
+    // Allocated on demand: only a live address space pays for its
+    // table, and the slot array is bounded by the process table rather
+    // than by a number somebody picked.
     struct fd_space *sp = NULL;
-    for (int i = 0; i < FD_SPACE_MAX; i++)
-        if (!g_spaces[i].pml4) { sp = &g_spaces[i]; break; }
+    int slot = -1;
+    for (int i = 0; i < FD_SPACE_CEILING; i++) {
+        if (g_spaces[i] && !g_spaces[i]->pml4) { sp = g_spaces[i]; slot = i; break; }
+        if (!g_spaces[i] && slot < 0) slot = i;
+    }
     if (!sp) {
-        klog_write("fd: no free descriptor table -- too many address spaces\n");
-        return -1;
+        if (slot < 0) {
+            klog_write("fd: no free descriptor table -- too many address spaces\n");
+            return -1;
+        }
+        sp = kzalloc(sizeof *sp);
+        if (!sp) {
+            klog_write("fd: out of memory for a descriptor table\n");
+            return -1;
+        }
+        g_spaces[slot] = sp;
     }
 
     sp->pml4 = pml4;
@@ -180,7 +229,7 @@ int fd_space_open(uint64_t pml4) {
         sp->pml4 = 0;
         return -1;
     }
-    fd_desc[con].refs++; // named twice: stdin and stdout
+    fd_desc_at(con)->refs++; // named twice: stdin and stdout
     sp->d[FD_STDIN]  = (short)con;
     sp->d[FD_STDOUT] = (short)con;
     sp->d[FD_STDERR] = (short)err;
@@ -213,13 +262,13 @@ int fd_desc_index(uint64_t pml4, int fd) {
     struct fd_space *sp = space_get(pml4);
     if (!sp || fd < 0 || fd >= FD_MAX) return -1;
     int di = sp->d[fd];
-    if (di < 0 || !fd_desc[di].refs) return -1;
+    if (di < 0 || !fd_desc_at(di)->refs) return -1;
     return di;
 }
 
 struct open_file *fd_get(uint64_t pml4, int fd) {
     int di = fd_desc_index(pml4, fd);
-    return di < 0 ? NULL : &fd_desc[di];
+    return fd_desc_at(di);
 }
 
 // THE PEER THIS PROCESS IS TALKING TO, or 0 if it holds no connected
@@ -272,7 +321,7 @@ int fd_dup_from(uint64_t pml4, int oldfd, int min) {
     if (min >= FD_MAX) return -EMFILE;
     for (int fd = min; fd < FD_MAX; fd++) {
         if (sp->d[fd] >= 0) continue;
-        fd_desc[di].refs++;
+        fd_desc_at(di)->refs++;
         sp->d[fd] = (short)di;
         sp->cloexec[fd] = 0;
         return fd;
@@ -289,7 +338,7 @@ int fd_dup2(uint64_t pml4, int oldfd, int newfd) {
     // Getting that wrong destroys the stream it was asked to preserve.
     if (oldfd == newfd) return newfd;
     if (sp->d[newfd] >= 0) fd_desc_unref(sp->d[newfd]);
-    fd_desc[di].refs++;
+    fd_desc_at(di)->refs++;
     sp->d[newfd] = (short)di;
     return newfd;
 }
@@ -297,10 +346,10 @@ int fd_dup2(uint64_t pml4, int oldfd, int newfd) {
 int fd_set_desc(uint64_t pml4, int fd, int di) {
     struct fd_space *sp = space_get(pml4);
     if (!sp || fd < 0 || fd >= FD_MAX) return -1;
-    if (di < 0 || di >= FD_DESC_MAX || !fd_desc[di].refs) return -1;
+    { struct open_file *g = fd_desc_at(di); if (!g || !g->refs) return -1; }
     if (sp->d[fd] == di) return fd; // already there -- do not unref it
     if (sp->d[fd] >= 0) fd_desc_unref(sp->d[fd]);
-    fd_desc[di].refs++;
+    fd_desc_at(di)->refs++;
     sp->d[fd] = (short)di;
     return fd;
 }
@@ -335,8 +384,8 @@ void fd_inherit(uint64_t child, uint64_t parent) {
     for (int i = 0; i <= FD_STDERR; i++) {
         if (cs->d[i] >= 0) { fd_desc_unref(cs->d[i]); cs->d[i] = -1; }
         int di = ps->d[i];
-        if (di < 0 || !fd_desc[di].refs) continue;
-        fd_desc[di].refs++;
+        if (di < 0 || !fd_desc_at(di)->refs) continue;
+        fd_desc_at(di)->refs++;
         cs->d[i] = (short)di;
     }
 }
@@ -350,8 +399,8 @@ void fd_clone(uint64_t child, uint64_t parent) {
     for (int i = 0; i < FD_MAX; i++) {
         if (cs->d[i] >= 0) { fd_desc_unref(cs->d[i]); cs->d[i] = -1; }
         int di = ps->d[i];
-        if (di < 0 || !fd_desc[di].refs) continue;
-        fd_desc[di].refs++;
+        if (di < 0 || !fd_desc_at(di)->refs) continue;
+        fd_desc_at(di)->refs++;
         cs->d[i] = (short)di;
     }
 }
@@ -1211,7 +1260,7 @@ int sys_dup(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     int di = fd_desc_index(pml4, (int)c->a0);
     if (di < 0) { c->regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
-    fd_desc[di].refs++;
+    fd_desc_at(di)->refs++;
     int fd = fd_install(pml4, di);
     if (fd < 0) {
         fd_desc_unref(di); // undo: the table was full
@@ -1255,7 +1304,7 @@ int sys_socket(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)(int64_t)(di < 0 ? -ENFILE : -EMFILE);
         return 0;
     }
-    fd_desc[di].socket.idx = sock;
+    fd_desc_at(di)->socket.idx = sock;
     c->regs[14] = (uint64_t)fd;
     return 0;
 }
@@ -1579,7 +1628,7 @@ int sys_accept(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)(int64_t)(di < 0 ? -ENFILE : -EMFILE);
         return 0;
     }
-    fd_desc[di].socket.idx = conn;
+    fd_desc_at(di)->socket.idx = conn;
 
     if (c->a1) {
         net_sock_peer(conn, &m.addr, &m.port);

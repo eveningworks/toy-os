@@ -121,7 +121,13 @@ int main(void) {
     // intermittently, for months. dup() takes only a descriptor -- it
     // shares the description it copies -- so this loop fills the one
     // table it means to and cannot be affected by anything else running.
-    int held[64];
+    // STATIC, and sized past the kernel's per-space ceiling: FD_MAX is
+    // 256 now that the table grows (kernel/include/kernel/syscalls.h),
+    // and an array too small to reach it makes this loop end with the
+    // table half full -- which is the exact false conclusion the
+    // comment above warns about, arrived at from the other direction.
+    // Static because 300 ints is past the ring-3 frame budget.
+    static int held[300];
     int n = 0;
     while (n < (int)(sizeof held / sizeof held[0])) {
         int h = sys_dup(0);

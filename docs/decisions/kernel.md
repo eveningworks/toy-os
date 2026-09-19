@@ -7746,3 +7746,48 @@ other sites matter: a spawn frees any array a previous occupant of the
 slot left, so a recycled slot cannot leak; and **fork copies
 `struct sched_mm` by value, pointer included**, so it deep-copies the
 array or refuses the child -- sharing it would free one array twice.
+
+## The fd tables grow, and "address spaces that may hold fds" is not a number
+
+Three fixed arrays bounded the whole system: 32 open-file DESCRIPTIONS,
+16 descriptors per address space, and 24 ADDRESS SPACES that could hold
+fds at all. On a 1080p desktop that last one bound first. Every app is
+an address space, so about a dozen services plus ten windows filled it,
+and the desktop then could not open anything -- not a file, not a
+window, not a shell. It presented as the machine being "slow" with the
+CPU idle, RAM free and 22 of 64 process slots used, which is why it was
+read as a performance problem for some time.
+
+The tell was that closing windows did not always help and the count
+that mattered was PIDs, not windows.
+
+**What Linux and NT do.** Linux hangs a `struct fdtable` off the
+process and doubles it on demand from 64; `struct file` comes from a
+slab with no table at all. The ceilings are `RLIMIT_NOFILE` per process
+and `fs.file-max` globally, the latter computed from RAM at boot. NT
+grows a three-level sparse handle table per process, bounded by pool
+quota. Both grow on demand and keep a high ceiling. Neither has
+anything resembling FD_SPACE_MAX, because the table lives WITH the
+process and the question never arises.
+
+So here: descriptions are allocated one at a time behind a pointer
+table that doubles, a descriptor table is allocated per live address
+space, and the ceilings are what remain -- 1024 descriptions and 256
+descriptors, for the reason `fs.file-max` exists, so one runaway
+process cannot spend the kernel heap. FD_SPACE_CEILING is derived from
+`SCHED_MAX_PROCS` rather than picked: an address space that holds fds
+belongs to a process, plus the legacy `run` loader.
+
+**Why still keyed by CR3, and not moved into the process slot.** That
+was the tempting version and it breaks the legacy loader, which has no
+scheduler slot and therefore no pid -- the trap `SYS_SBRK` documents.
+CR3 is the identifier every path has. What went away is the fixed
+COUNT, which is what actually bound.
+
+**Why descriptions are individually allocated rather than one grown
+array.** A grown array moves, and `fd_get()` hands callers a
+`struct open_file *` that some of them hold across an allocation --
+`sys_accept()` does. Growing a table of POINTERS leaves the
+descriptions where they are. The mmap region list learned the other
+way round in the same session: there the array moved under a held
+pointer and corrupted the kernel heap.

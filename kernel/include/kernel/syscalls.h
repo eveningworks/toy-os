@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "syscall_table.h"
 #include "fs.h" // FS_PATH_MAX -- struct open_file's name
+#include "scheduler.h" // SCHED_MAX_PROCS -- the fd-space ceiling is derived from it
 
 struct tty; // kernel/tty.h -- fd_tty() below, without dragging it in here
 
@@ -65,9 +66,34 @@ struct tty; // kernel/tty.h -- fd_tty() below, without dragging it in here
 // therefore no pid, so keying this by pid would leave it with no fds
 // at all -- the same trap `SYS_SBRK` documents. CR3 is the identifier
 // every path has.
-#define FD_DESC_MAX  32 // open-file DESCRIPTIONS, shared across dup()
-#define FD_MAX       16 // DESCRIPTORS per address space (0..15)
-#define FD_SPACE_MAX 24 // address spaces that may hold fds at once
+// THESE ARE CEILINGS, NOT TABLE SIZES. They were 32 / 16 / 24 fixed
+// arrays, and on a 1080p desktop that bound long before memory did:
+// each client window costs the compositor descriptions and each app is
+// another address space, so the desktop stopped being able to open
+// ANYTHING at about ten windows -- with the CPU idle, RAM free and 22
+// of 64 process slots used, which is what made it so hard to read.
+//
+// Neither Linux nor NT has a small fixed table. Linux hangs a
+// dynamically grown `struct fdtable` off the process and allocates
+// `struct file` from a slab, bounding them with RLIMIT_NOFILE per
+// process and fs.file-max globally -- the latter computed from RAM at
+// boot. NT grows a sparse per-process handle table and bounds it with
+// pool quota. Both grow on demand and keep a high ceiling; neither
+// fixes a count at compile time.
+//
+// So: descriptions are allocated one at a time and the table of them
+// grows; a descriptor table is allocated per live address space. What
+// is left here is the ceiling each one refuses at, which exists for
+// the reason fs.file-max does -- one runaway process must not be able
+// to spend the kernel heap.
+#define FD_DESC_MAX  1024 // open-file DESCRIPTIONS, system-wide ceiling
+#define FD_MAX       256  // DESCRIPTORS per address space (0..255)
+
+// NOT AN ARBITRARY NUMBER, and no longer a table size: an address
+// space that can hold fds belongs to a process, so the bound is the
+// process table plus the legacy `run` loader, which has no scheduler
+// slot and is exactly why these are keyed by CR3 (see below).
+#define FD_SPACE_CEILING (SCHED_MAX_PROCS + 4)
 
 // The three every process starts with. Not magic numbers any more --
 // just the descriptors fd_space_open() pre-fills.
@@ -139,7 +165,16 @@ struct open_file {
     };
 };
 
-extern struct open_file fd_desc[FD_DESC_MAX];
+// ONE DESCRIPTION, BY INDEX. Allocated individually, so a description
+// never MOVES -- which is what lets a caller hold the pointer across
+// an unrelated fd_desc_alloc(). A grown array would not: the mmap
+// region list learned that the expensive way (docs/decisions.md).
+// NULL for an index that is out of range or not allocated.
+struct open_file *fd_desc_at(int i);
+
+// How many description slots exist right now -- the bound for a walk
+// over all of them (mount.c has the only one). Grows; never shrinks.
+int fd_desc_count(void);
 
 // --- descriptions ---
 // Allocates one with refs = 1. `aux_idx` is the pipe or pty index for
