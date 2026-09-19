@@ -259,6 +259,19 @@ void ugfx_blit_scaled_alpha(struct ugfx_surface *s, int x, int y, int w, int h,
     int dx = x, dy = y, dw = w, dh = h;
     if (!clip_rect(s, &dx, &dy, &dw, &dh)) return;
     unsigned a = alpha;
+    // THE SOURCE COLUMN, WITHOUT A DIVISION PER PIXEL. This was
+    // `(dx - x + i) * sw / w` inside the inner loop -- a 64-bit divide
+    // for every pixel written, and the divisor is a runtime value so
+    // nothing strength-reduces it. A full-size window ghost is ~910k
+    // pixels, which measured as nearly all of a 19.6 ms animation frame
+    // on the bare-metal 1080p panel (docs/bugs.md).
+    //
+    // Bresenham produces the IDENTICAL floor((col0 + i) * sw / w) from
+    // an add and a compare. The two divisions left seed the clipped
+    // start column, once per blit rather than once per pixel.
+    int col0 = dx - x;
+    int sx_start  = (int)((long long)col0 * sw / w);
+    int err_start = (int)((long long)col0 * sw % w);
     for (int j = 0; j < dh; j++) {
         // The destination row's source row, in the UNCLIPPED mapping, so
         // a clipped blit shows the same part of the source as a whole one.
@@ -266,9 +279,13 @@ void ugfx_blit_scaled_alpha(struct ugfx_surface *s, int x, int y, int w, int h,
         if (sy >= sh) sy = sh - 1;
         const uint32_t *srow = src + (uint32_t)sy * (uint32_t)src_pitch_px;
         uint32_t *drow = s->pixels + (uint32_t)(dy + j) * (uint32_t)s->w + (uint32_t)dx;
+        int sx_i = sx_start, err = err_start;
         for (int i = 0; i < dw; i++) {
-            int sx = (int)((long long)(dx - x + i) * sw / w);
+            int sx = sx_i;
             if (sx >= sw) sx = sw - 1;
+            // Advance to the next destination column's source column.
+            err += sw;
+            while (err >= w) { err -= w; sx_i++; }
             uint32_t sp = srow[sx] & 0x00FFFFFF;
             if (a == 255) { drow[i] = sp; continue; }
             uint32_t dp = drow[i], out = 0;
