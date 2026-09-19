@@ -252,6 +252,10 @@ TOOLS = [
     # that reboots its own VMs makes every other failure harder to read.
     ("netheal",     "netheal_test.py",         "reboot-once-if-no-network, and its loop guard", True, None,           False),
 
+    # REBOOTS ITS GUEST FIVE TIMES, for the same reason: retention across
+    # boots cannot be checked inside one.
+    ("logrotate",   "logrotate_test.py",       "one log file per boot, and log -p N",  True,  None,                 False),
+
     # --- display ------------------------------------------------------
     ("virtio_gpu",  "virtio_gpu_test.py",      "the virtio GPU driver",              True,  None,                   False),
     ("hires",       "hires_test.py",           "a desktop above 1280x720",           True,

@@ -2895,6 +2895,26 @@ window without going through it will find its layout polls timing out.
   positive control leaves the feature off, where a clean report would
   mean the tool is watching nothing.
 
+- **`logrotate_test.py`** -- `logd`'s per-boot retention:
+  `/var/log/boot/<n>.log`, `storage.log_keep`, and `log -p N`.
+  **REBOOTS ITS GUEST FIVE TIMES ON PURPOSE**, because retention across
+  boots cannot be checked inside one, so it needs `vm.py --reboot` and
+  lives in the sweep rather than the gate. Four assertions, each aimed
+  at a way the retention can look fine and not be: the numbering has no
+  gap and no reuse (a reused number silently OVERWRITES the evidence
+  somebody rebooted to keep); `log -p 1` and `log -p 3` return
+  DIFFERENT text, which a resolver ignoring `N` could not; `log -p 99`
+  is refused rather than answering with the wrong boot; `log -p -n 2`
+  still honours `-n`, since the optional count could swallow it; and
+  lowering `storage.log_keep` actually deletes rather than stranding
+  the files above the new limit. It finishes by squeezing
+  `storage.log_max` to 1 MiB and checking a boot that fills its share
+  stops and says so. Its positive control sets `log_keep 1` -- the old
+  two-file behaviour -- where a clean report would mean it is not
+  watching the depth. It RESTORES the two settings in a `finally`,
+  because a machine left at 1 MiB truncates every later tool's log and
+  that reads as a hang.
+
 - **`usb_test.py`** -- an xHCI controller and a HID boot keyboard and
   mouse (`vm.py --usb xhci` / `--usb xhci+mouse` / `--usb xhci+hub`, or
   `make run USB=xhci+mouse`). Five phases: keyboard, ring wrap, mouse,

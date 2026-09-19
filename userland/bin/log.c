@@ -14,17 +14,21 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
+#include <dirent.h>
 #include "rt/sys.h"
 #include "lib/cmd.h"
 
 #define LOG_PATH "/var/log/toyos.log"
-#define LOG_PREV "/var/log/toyos.log.1"
+#define BOOT_DIR "/var/log/boot"
+#define SEQ_PATH "/var/lib/logd.seq"
 
 static const char *USAGE =
-    "log [-n <lines>] [-u <tag>] [-l <level>] [-p] [-f] [--raw]\n"
+    "log [-n <lines>] [-u <tag>] [-l <level>] [-p [N]] [-f] [--raw] [--list]\n"
     "       -n  show only the last <lines>       -u  only lines from <tag>\n"
     "       -l  crit|err|warn|info|debug, or 0-7 -- that level and worse\n"
-    "       -p  the PREVIOUS boot's log          -f  follow as it grows\n"
+    "       -p  the previous boot's log; -p N goes N boots back\n"
+    "       --list  the retained boot logs       -f  follow as it grows\n"
     "       --raw  keep the <N> level marker the kernel wrote";
 
 // --raw, and -l. A KERNEL line carries "<N> " after its stamp (the
@@ -127,15 +131,106 @@ static int show(const char *path, const char *tag, int last_n) {
     return 0;
 }
 
+// THIS BOOT'S NUMBER, from the counter logd keeps. `-p N` is resolved
+// against it rather than against a directory listing, so a log deleted by
+// hand leaves a hole instead of shifting every older boot along.
+static unsigned long long boot_seq(void) {
+    int fd = open(SEQ_PATH, O_RDONLY);
+    if (fd < 0) return 0;
+    char buf[24] = {0};
+    ssize_t n = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    return n > 0 ? strtoull(buf, 0, 10) : 0;
+}
+
+// The first bracketed stamp on the first line. Boot-relative, because
+// nothing has set the wall clock that early -- useful for telling a short
+// boot from a long one and for nothing else.
+static void first_stamp(const char *path, char *out, unsigned cap) {
+    out[0] = '\0';
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return;
+    char buf[160] = {0};
+    ssize_t n = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    for (int i = 0; i + 1 < n; i++) {
+        if (buf[i] == '\n') return;
+        if (buf[i] != '[' || buf[i + 1] < '0' || buf[i + 1] > '9') continue;
+        unsigned j = 0;
+        for (i++; i < n && buf[i] != ']' && j + 1 < cap; i++) out[j++] = buf[i];
+        out[j] = '\0';
+        return;
+    }
+}
+
+// WHAT IS ACTUALLY THERE, which is not what storage.log_keep says: a
+// machine that has booted three times has three, and one whose setting
+// was just lowered still holds what the next boot will prune.
+//
+// A DIRECTORY WALK rather than probing numbers -- a probe costs a failed
+// open per absent number and the kernel logs every one, so the lister
+// would pollute the log it is listing.
+static int list_boots(void) {
+    char path[96], stamp[32];
+    struct stat st;
+    unsigned long long lo = 0, hi = 0;
+
+    DIR *d = opendir(BOOT_DIR);
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            if (e->d_type == DT_DIR) continue;
+            unsigned long long n = strtoull(e->d_name, 0, 10);
+            if (!n) continue;
+            if (!lo || n < lo) lo = n;
+            if (n > hi) hi = n;
+        }
+        closedir(d);
+    }
+
+    // Printed in numeric order: readdir promises none, and boot logs read
+    // out of sequence are worse than no listing at all.
+    printf("  boot      size  first stamp\n");
+    for (unsigned long long n = lo; n && n <= hi; n++) {
+        snprintf(path, sizeof path, BOOT_DIR "/%04llu.log", n);
+        if (stat(path, &st) != 0) continue;
+        first_stamp(path, stamp, sizeof stamp);
+        printf("  %4llu  %6ld K  %s\n", n, (long)st.st_size / 1024, stamp);
+    }
+    if (stat(LOG_PATH, &st) == 0) {
+        first_stamp(LOG_PATH, stamp, sizeof stamp);
+        printf("  %4llu  %6ld K  %s   (this boot)\n",
+               boot_seq(), (long)st.st_size / 1024, stamp);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     const char *tag = 0;
     const char *path = LOG_PATH;
+    char prev[96];
     int last_n = 0, follow = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-u") == 0 && i + 1 < argc) { tag = argv[++i]; }
         else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc) { last_n = atoi(argv[++i]); }
-        else if (strcmp(argv[i], "-p") == 0) { path = LOG_PREV; }
+        else if (strcmp(argv[i], "--list") == 0) { return list_boots(); }
+        else if (strcmp(argv[i], "-p") == 0) {
+            // THE COUNT IS OPTIONAL, so `-p` alone still means what it
+            // always did. Only a leading digit is taken as the count, or
+            // `log -p -n 50` would swallow the `-n`.
+            unsigned long long back = 1;
+            if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9')
+                back = (unsigned long long)atoi(argv[++i]);
+            unsigned long long seq = boot_seq();
+            if (!back || back > seq) {
+                fprintf(stderr, "log: no boot %llu back (this is boot %llu) -- "
+                                "try log --list\n", back, seq);
+                return 1;
+            }
+            snprintf(prev, sizeof prev, BOOT_DIR "/%04llu.log", seq - back);
+            path = prev;
+        }
         else if (strcmp(argv[i], "-f") == 0) { follow = 1; }
         else if (strcmp(argv[i], "--raw") == 0) { g_raw = 1; }
         else if (strcmp(argv[i], "-l") == 0 && i + 1 < argc) {

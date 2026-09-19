@@ -2725,3 +2725,28 @@ on a stashed HEAD, and `font` was actually BETTER with the change in
 (6 failures against 8). Only `files` was real. Running the failing
 tools alone against a stashed baseline took ~20 minutes and was the
 difference between one honest finding and five wrong ones.
+
+**2026-09-19: `vm.py start` RETURNS WHEN THE SHELL IS READY, NOT WHEN
+THE SERVICES HAVE FINISHED WHAT THEY DO AT STARTUP -- and the gap reads
+as an off-by-one in the code under test.** A retention test listed
+`/var/log/boot` immediately after boot and found three files where the
+setting said two, which looks exactly like a pruning loop that stops one
+short. It was `logd` not having reached its prune yet. The tell was that
+a second `ls`, seconds later, showed the right answer; the confirmation
+was `rm` on the "extra" file answering *no such file* while a plain `ls`
+still listed it, i.e. the two commands saw different moments.
+
+Two rules. **Wait on the ARTIFACT, bounded, not on a sleep and not on
+`start` having returned** -- poll until the directory holds what it
+should, give up after a few seconds, and report what you actually saw.
+And **when a count is off by exactly one, check the CLOCK before the
+arithmetic**: an off-by-one in a loop and a listing taken one moment too
+early are indistinguishable from the failure line alone, and only one of
+them is in your code.
+
+**The sibling trap in the same session: the LAST LINE of a captured
+reply is the one most likely to be missing.** `log --list` prints the
+live boot last, and an assertion counting its rows failed twice on a
+capture that ended one line short. Anything asserted from the tail of a
+serial capture wants a different oracle -- here, `ls` of the directory,
+which is what the assertion was actually about.

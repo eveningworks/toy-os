@@ -655,7 +655,7 @@ runners themselves; `--list` on either runner is the live answer.
 `hires_test.py`, `https_test.py`, `hwdata_test.py`, `init_test.py`,
 `install_test.py`, `jobs_test.py`, `kbd_test.py`,
 `keyboard_paths_test.py`, `ktest_run.py`, `latency_under_io.py`,
-`libc_diff.py`, `live_boot_test.py`, `ls_test.py`, `mkpart_test.py`,
+`libc_diff.py`, `live_boot_test.py`, `logrotate_test.py`, `ls_test.py`, `mkpart_test.py`,
 `module_test.py`, `msi_test.py`, `multidisk_test.py`, `net_test.py`,
 `netheal_test.py`, `ntp_test.py`, `partition_test.py`, `ping_rtt.py`, `pixel_probe.py`,
 `poweroff_test.py`, `predates.py`, `preflight.sh`, `qemu_matrix.py`,

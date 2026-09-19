@@ -34,6 +34,7 @@
 #include "etc_config.h"
 #include "string.h"
 #include "kfmt.h"      // k_snprintf
+#include "knum.h"      // k_parse_u32
 #include "timer.h"     // PIT_HZ
 #include "storage_config.h"
 #include "initcall.h"
@@ -48,6 +49,7 @@
 #define TMPDIR_KEY     "tmpdir"
 #define VARTMPDIR_KEY  "vartmpdir"
 #define LOG_MAX_KEY    "log_max"
+#define LOG_KEEP_KEY   "log_keep"
 
 // SECONDS OF QUIET before a deferred commit is forced. The visible half
 // of what ext4 spells `commit=5` and Linux spells
@@ -88,7 +90,19 @@
 // whatever it is told.
 #define LOG_MAX_MIN     0
 #define LOG_MAX_MAX     512
-#define LOG_MAX_DEFAULT 4
+#define LOG_MAX_DEFAULT 8
+
+// HOW MANY COMPLETED BOOTS /var/log/boot keeps. logrotate spells this
+// `rotate N` and journald `SystemMaxFiles`; the budget below it is
+// journald's SystemMaxUse, and logd divides log_max by keep+1 (the live
+// boot is the +1) rather than letting the count alone decide the size.
+//
+// TEN because the faults worth this are intermittent -- the USB NIC
+// wedge appears on roughly one boot in several, and a window of two was
+// never going to catch it.
+#define LOG_KEEP_MIN     1
+#define LOG_KEEP_MAX     50
+#define LOG_KEEP_DEFAULT 10
 
 // ORDERED BY SAFETY, strongest first, because that is the order a
 // person reads a choice list in and the default must be the first thing
@@ -135,6 +149,7 @@ static int g_batched = 1;   // 1 only in `batched`: whether commits defer
 static int g_writeback_s = WRITEBACK_DEFAULT;
 static int g_ramfs_size_mib = RAMFS_SIZE_DEFAULT;
 static int g_log_max_mib = LOG_MAX_DEFAULT;
+static int g_log_keep = LOG_KEEP_DEFAULT;
 
 // WHERE SCRATCH GOES (api/tmppath.h). Held as strings rather than read
 // per call because tmpdir_for() is on the path of every temp file the
@@ -321,6 +336,36 @@ static const struct setting g_log_max_setting = {
     .apply = log_max_apply,
 };
 
+static void log_keep_get(char *out, uint32_t out_size) {
+    k_snprintf(out, out_size, "%d", g_log_keep);
+}
+
+static int log_keep_apply(const char *value) {
+    uint32_t n = 0;
+    if (!k_parse_u32(value, &n) || n < LOG_KEEP_MIN || n > LOG_KEEP_MAX)
+        return SETTING_INVALID;
+    g_log_keep = (int)n;
+    return etc_config_set(STORAGE_CONFIG_FILE, LOG_KEEP_KEY, value)
+               ? SETTING_SAVED : SETTING_UNSAVED;
+}
+
+// READ BY logd AT EVERY BUDGET CHECK and once at startup, for the same
+// reason log_max is: a change should take effect without a restart, and
+// lowering it should actually delete files rather than strand them.
+static const struct setting g_log_keep_setting = {
+    .name  = LOG_KEEP_KEY,
+    .label = "Boot logs to keep",
+    .type  = SETTING_TYPE_INT,
+    .file  = STORAGE_CONFIG_FILE,
+    .category = "Storage",
+    .group    = "Filesystem",
+    .min   = LOG_KEEP_MIN,
+    .max   = LOG_KEEP_MAX,
+    .step  = 1,
+    .get   = log_keep_get,
+    .apply = log_keep_apply,
+};
+
 static void tmpdir_get(char *out, uint32_t out_size) {
     k_strlcpy(out, g_tmpdir, out_size);
 }
@@ -392,6 +437,7 @@ void storage_config_setting_register(void) {
     setting_register(&g_tmpdir_setting);
     setting_register(&g_vartmpdir_setting);
     setting_register(&g_log_max_setting);
+    setting_register(&g_log_keep_setting);
 }
 
 void storage_config_set_mode_for_test(int strict, int batched) {
@@ -441,6 +487,11 @@ void storage_config_init(void) {
             if (*p < '0' || *p > '9') ok = 0; else n = n * 10 + (*p - '0');
         }
         if (ok && n >= LOG_MAX_MIN && n <= LOG_MAX_MAX) g_log_max_mib = n;
+    }
+    if (etc_config_buf_get(&g_cfg, LOG_KEEP_KEY, value, sizeof value)) {
+        uint32_t n = 0;
+        if (k_parse_u32(value, &n) && n >= LOG_KEEP_MIN && n <= LOG_KEEP_MAX)
+            g_log_keep = (int)n;
     }
     if (etc_config_buf_get(&g_cfg, SYNC_KEY, value, sizeof value)) {
         // A hand-edited file reaches this reader without passing

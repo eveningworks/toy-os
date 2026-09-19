@@ -54,11 +54,27 @@ lost. A reader can tell the difference between a quiet machine
 and one whose evidence was destroyed, which is the whole reason `klog_read()`
 takes an absolute offset rather than a ring position.
 
-**Size** is `storage.log_max`, in MiB, shared between `toyos.log` and the
-previous boot's `toyos.log.1` — half each, so the pair fits the limit.
-Setting it to **0 disables logging**, and `logd` then exits cleanly rather
-than staying up doing nothing.
+**One file per boot.** `/var/log/toyos.log` is the current boot; when
+`logd` starts it files the previous one under its own number as
+`/var/log/boot/<n>.log` and deletes anything past `storage.log_keep` (10).
+The counter lives in `/var/lib/logd.seq` and is `fsync`ed, for netheal's
+reason — a number still in the write-back cache when the power goes is a
+number that never happened, and the next boot would overwrite the log it
+was meant to keep. journald's shape, minus the binary store and the query
+language; `log --list` and `log -p N` are the readers.
+
+**Size** is `storage.log_max`, in MiB, shared across every retained boot:
+each gets `log_max / (log_keep + 1)`, the `+1` being the live one. Setting
+it to **0 disables logging**, and `logd` then exits cleanly rather than
+staying up doing nothing.
+
+**A boot that fills its share STOPS**, writing one line saying so, rather
+than rotating within the boot. journald rotates; here that would let a
+single runaway logger flush every older boot, which is the exact failure
+the retention exists to survive. The tail of a chatty boot is the cheaper
+half to lose — a fault during enumeration is in the first few KiB.
 
 ## See also
 
-`log`, `dmesg`, `service status logd`, `config set storage.log_max <MiB>`.
+`log`, `log --list`, `dmesg`, `service status logd`,
+`config set storage.log_max <MiB>`, `config set storage.log_keep <N>`.

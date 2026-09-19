@@ -3079,3 +3079,47 @@ worth naming because "allocate it" is not always right:
   `/lib/modules/<name>.ko` and a cursor theme's shape file are bounded by
   their own shape rather than by what a caller may hand in, so they take a
   named constant of their own and stay on the stack.
+
+## The persistent log keeps one file per boot, and a boot that fills its share stops
+
+`logd` kept exactly two files until 2026-09-19: `toyos.log` for the
+current boot and `toyos.log.1` for the previous one, half the
+`storage.log_max` budget each. That answers "what did it say before I
+rebooted it", which is the right question after a machine has been
+rebooted once to recover it -- and the wrong one for a fault that
+appears on one boot in several. The USB NIC wedge on the bare-metal
+ASUS is exactly that shape, and diagnosing it means comparing a bad
+boot against the good ones around it, which a window of two cannot do.
+
+**One file per boot, numbered, rather than a deeper rotation chain.**
+logrotate's `rotate N` would have been the smaller change -- extend the
+existing `.1 -> .2` shift -- but it conflates two things. `logd` also
+rotates on SIZE, so under a chain "keep N files" does not mean "keep N
+boots": one chatty boot occupies several slots and the count stops
+describing anything a person wants. journald's answer is to record a
+boot identity and let `journalctl -b -2` resolve it, and that is the
+shape taken here, minus the binary store: `/var/log/boot/<n>.log`, with
+the counter in `/var/lib/logd.seq` so the number survives the reboot it
+is naming. `log -p 3` then means three BOOTS back, always.
+
+**And a boot that fills its share stops rather than rotating within the
+boot.** This is where toy-os deliberately differs from journald, which
+opens a new file and keeps going. That behaviour lets a single runaway
+logger -- the concrete case: a driver polling a device that had gone
+away, one line a second -- flush every older boot out of the retention
+window. Losing the history to the very fault the history exists to
+diagnose is the worst available outcome. So each boot gets
+`storage.log_max / (storage.log_keep + 1)`, and one that reaches it
+writes a line saying so and stops. The tail of a chatty boot is the
+cheaper half to lose: an enumeration fault is in the first few KiB, and
+the in-memory ring still has the tail for as long as the machine is up.
+
+**The counter is `fsync`ed** for `netheal`'s reason -- a number still in
+the write-back cache when the power goes is a number that never
+happened, and the next boot would then file its predecessor's log under
+a number already in use, overwriting the log it was meant to keep.
+
+**The defaults are 10 boots and 8 MiB**, raised from 4 MiB: at
+`8 MiB / 11` each boot gets about 745 KiB, comfortably more than the
+~10 KiB a quiet boot writes and enough for a noisy one. Ten because the
+faults worth retention are intermittent.

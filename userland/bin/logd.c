@@ -24,6 +24,14 @@
 // kernel` matches at a fixed offset rather than hunting for a substring
 // that a MESSAGE might also contain.
 //
+// ONE FILE PER BOOT. /var/log/toyos.log is this boot; the completed ones
+// are /var/log/boot/<n>.log, numbered by a counter in /var/lib/logd.seq
+// that survives the reboot, oldest deleted past `storage.log_keep`. It
+// kept a single rotated file until 2026-09-19, which answers "what did
+// the LAST boot say" and nothing further back -- no use at all for a
+// fault that shows up on one boot in several, which is what the USB NIC
+// wedge is.
+//
 // TWO SOURCES, ONE FILE: the kernel ring (QUERY_KLOG, bytes) and the
 // application ring (QUERY_APPLOG, records -- what a service wrote to a
 // stdout the spawn pointed at the log). They are drained on the same
@@ -34,6 +42,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include "rt/sys.h"
 #include "lib/usetting.h"
 #include "lib/utmppath.h"
@@ -41,9 +50,12 @@
 #include "applog.h"
 
 #define LOG_PATH   "/var/log/toyos.log"
-#define LOG_PREV   "/var/log/toyos.log.1"
+#define LOG_PREV   "/var/log/toyos.log.1"   // what this used to be; removed once
+#define BOOT_DIR   "/var/log/boot"
+#define SEQ_PATH   "/var/lib/logd.seq"
 #define TAG_W      6                  // "kernel", "toywm ", "netd  "
 #define POLL_MS    1000
+#define KEEP_DEFAULT 10
 
 // How far into the kernel's byte stream we have persisted. Absolute,
 // counted from the first byte ever logged -- NOT a ring position, which
@@ -58,6 +70,8 @@ static unsigned long long g_seq;
 
 static int g_fd = -1;
 static unsigned long long g_written;   // bytes in the current file
+static unsigned long long g_boot;      // this boot's number
+static int g_capped;                   // this boot filled its budget
 
 static void emit(const char *tag, const char *line, unsigned len) {
     if (g_fd < 0 || !len) return;
@@ -73,22 +87,67 @@ static void emit(const char *tag, const char *line, unsigned len) {
 // that is filling up should take effect without restarting the daemon.
 static unsigned long long cap_bytes(void) {
     int mib = 0;
-    if (!usetting_get_int("storage.log_max", &mib)) mib = 4;
+    if (!usetting_get_int("storage.log_max", &mib)) mib = 8;
     return (unsigned long long)mib * 1024 * 1024;
 }
 
-// TWO FILES, and the older one is what answers "what did the last boot
-// say" -- which is the question asked after a machine has been rebooted
-// to recover it, and the reason one file would not do.
-static void rotate_if_needed(void) {
+static int keep_count(void) {
+    int n = 0;
+    if (!usetting_get_int("storage.log_keep", &n) || n < 1) n = KEEP_DEFAULT;
+    return n;
+}
+
+// ONE FILE PER BOOT, journald's shape: /var/log/boot/<n>.log, numbered by
+// a counter that survives the reboot. The pair of files this used to keep
+// answered "what did the last boot say" and nothing further back, which is
+// the wrong question for a fault that appears on one boot in several.
+static void boot_path(char *out, unsigned cap, unsigned long long n) {
+    snprintf(out, cap, BOOT_DIR "/%04llu.log", n);
+}
+
+static unsigned long long seq_read(void) {
+    int fd = open(SEQ_PATH, O_RDONLY);
+    if (fd < 0) return 0;
+    char buf[24] = {0};
+    ssize_t n = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    return n > 0 ? strtoull(buf, 0, 10) : 0;
+}
+
+static void seq_write(unsigned long long v) {
+    mkdir("/var/lib", 0755);
+    int fd = open(SEQ_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    char buf[24];
+    int n = snprintf(buf, sizeof buf, "%llu\n", v);
+    if (n > 0) write(fd, buf, (size_t)n);
+    // FSYNC, like netheal's counter: a number still in the write-back
+    // cache when the machine loses power is a number that never happened,
+    // and the next boot would then overwrite the log it was meant to keep.
+    fsync(fd);
+    close(fd);
+}
+
+// A BOOT THAT FILLS ITS SHARE STOPS, rather than evicting the history.
+// The alternative -- rotating within the boot, which is what journald
+// does -- lets one runaway logger flush every older boot, and that is the
+// exact failure the retention exists to survive. The first lines of a
+// boot are also where an enumeration fault appears; the tail is the
+// cheaper half to lose.
+static void budget_check(void) {
     unsigned long long cap = cap_bytes();
-    if (!cap) return;
-    if (g_written < cap / 2) return;   // half each, so the pair fits the cap
-    if (g_fd >= 0) { close(g_fd); g_fd = -1; }
-    unlink(LOG_PREV);
-    rename(LOG_PATH, LOG_PREV);
-    g_fd = open(LOG_PATH, O_WRONLY | O_CREAT | O_TRUNC);
-    g_written = 0;
+    if (!cap || g_capped || g_fd < 0) return;
+    unsigned long long budget = cap / (unsigned long long)(keep_count() + 1);
+    if (g_written < budget) return;
+    char note[128];
+    int n = snprintf(note, sizeof note,
+                     "logd: boot %llu reached its %llu KiB share of "
+                     "storage.log_max -- no further lines are persisted",
+                     g_boot, budget / 1024);
+    if (n > 0) emit("logd", note, (unsigned)n);
+    g_capped = 1;
+    close(g_fd);
+    g_fd = -1;
 }
 
 // Split the kernel's byte stream into lines. A read can end mid-line, so
@@ -226,10 +285,41 @@ int main(void) {
         return 0;
     }
 
-    // The PREVIOUS file first: this boot's log belongs beside the last
-    // one, not on top of it.
+    // THE PREVIOUS BOOT'S FILE FIRST: this boot's log belongs beside the
+    // last one, not on top of it. The file still at LOG_PATH is whatever
+    // the boot before this one wrote, so it is filed under ITS number.
+    mkdir("/var/log", 0755);
+    mkdir(BOOT_DIR, 0755);
+    unsigned long long last = seq_read();
+    char path[64];
+
+    // THE FIRST BOOT UNDER THIS SCHEME still has a log to file. A machine
+    // upgrading from the two-file logd comes up with a toyos.log from the
+    // boot before the upgrade, and that boot may be exactly the one
+    // somebody is trying to read -- opening O_TRUNC over it would throw
+    // it away. Its toyos.log.1 is older and is dropped.
+    struct stat st;
+    if (!last && stat(LOG_PATH, &st) == 0) last = 1;
     unlink(LOG_PREV);
-    rename(LOG_PATH, LOG_PREV);
+    if (last) {
+        boot_path(path, sizeof path, last);
+        rename(LOG_PATH, path);
+    }
+    g_boot = last + 1;
+    seq_write(g_boot);
+
+    // PRUNE DOWNWARDS, a few past the boundary, so LOWERING storage.log_keep
+    // takes effect instead of stranding the files above the new limit
+    // forever -- there is no directory walk here on purpose, since the
+    // numbering already says which file is which.
+    int keep = keep_count();
+    for (int i = 0; i < 8; i++) {
+        unsigned long long drop = (unsigned long long)keep + (unsigned long long)i;
+        if (last <= drop) break;
+        boot_path(path, sizeof path, last - drop);
+        unlink(path);
+    }
+
     g_fd = open(LOG_PATH, O_WRONLY | O_CREAT | O_TRUNC);
     if (g_fd < 0) { sys_eprint("logd: cannot open " LOG_PATH "\n"); return 1; }
 
@@ -248,7 +338,7 @@ int main(void) {
         // hold it forever. Once the ring is drained there is nothing
         // more coming this second, so write what is held.
         for (unsigned i = 0; i < FRAG_TAGS; i++) frag_flush(i);
-        rotate_if_needed();
+        budget_check();
         sys_sleep_ms(POLL_MS);
     }
 }
