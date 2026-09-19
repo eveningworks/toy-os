@@ -32,6 +32,7 @@
 // CORB, RIRB and BDL share one pmm frame (the virtio rule), never a
 // static.
 #include "sound.h"
+#include "clocksource.h" // clocksource_delay_ms -- a delay that needs no interrupt
 #include "sound_abi.h"
 #include "pci.h"
 #include "pci_internal.h"
@@ -874,8 +875,7 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
         ctrl_teardown(h, "controller never left reset");
         return;
     }
-    uint64_t until = pit_ticks() + 3;
-    while (pit_ticks() < until) cpu_relax();
+    clocksource_delay_ms(30);   // was 3 ticks; real ms on a TSC
     mw16(h, HDA_WAKEEN, 0);
     uint16_t statests = mr16(h, HDA_STATESTS) & 0x7FFF;
     mw16(h, HDA_STATESTS, statests);

@@ -12,6 +12,7 @@
 //
 // driver-none: the transport core; rtl8153.c and rtl8156.c declare the drivers
 #include "rtl_usb.h"
+#include "clocksource.h" // clocksource_delay_ms -- a delay that needs no interrupt
 #include "xhci.h"
 #include "xhci_regs.h"
 #include "pmm.h"
@@ -28,11 +29,7 @@ static struct rtl_usb g_rtl;
 // budget, and this must be identity-mapped for the controller.
 static uint8_t g_reg_buf[8] __attribute__((aligned(64)));
 
-void rtl_wait_ms(uint32_t ms) {
-    uint64_t start = pit_ticks();
-    uint64_t ticks = (ms + 9) / 10 + 1;
-    while (pit_ticks() - start < ticks) { }
-}
+void rtl_wait_ms(uint32_t ms) { clocksource_delay_ms(ms); }
 
 static uint32_t le32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |

@@ -19,6 +19,7 @@
 // interrupt handler: every path does synchronous control transfers.
 // xhci_poll_source() is the one caller of usb_hub_service().
 #include "usb.h"
+#include "clocksource.h" // clocksource_delay_ms -- a delay that needs no interrupt
 #include "xhci.h"
 #include "xhci_regs.h"
 #include "klog.h"
@@ -70,11 +71,7 @@ struct usb_hub {
 
 static struct usb_hub g_hubs[USB_HUB_MAX];
 
-static void wait_ms(uint32_t ms) {
-    uint64_t start = pit_ticks();
-    uint64_t ticks = (ms + 9) / 10 + 1;
-    while (pit_ticks() - start < ticks) { }
-}
+static void wait_ms(uint32_t ms) { clocksource_delay_ms(ms); }
 
 // --- the class requests ------------------------------------------------
 

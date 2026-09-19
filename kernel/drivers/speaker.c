@@ -9,6 +9,7 @@
 // found, so a beep never leaves the speaker stuck on if something else
 // touches that port later.
 #include "speaker.h"
+#include "clocksource.h" // clocksource_delay_ms -- the tone's length
 #include "io.h"
 #include "timer.h"
 
@@ -39,12 +40,11 @@ void speaker_beep(uint32_t freq_hz, uint32_t duration_ms) {
     uint8_t prior = inb(SPEAKER_PORT);
     outb(SPEAKER_PORT, prior | 0x03); // gate channel 2 through + enable speaker data
 
-    // pit_ticks() is channel 0's 100Hz counter (kernel/core/timer.c),
-    // i.e. 10ms resolution -- the same busy-wait-until-deadline idiom
-    // used everywhere else in this codebase that needs to wait without
-    // a real sleep primitive (see speaker.h's top comment).
-    uint64_t deadline = pit_ticks() + (duration_ms + 9) / 10; // round up, not down
-    while (pit_ticks() < deadline) { }
+    // The shared delay, not a tick spin of its own: it uses the best
+    // clocksource and so does not need a timer interrupt to make
+    // progress, and it gives REAL milliseconds where this used to
+    // quantise every tone up to the next 10 ms.
+    clocksource_delay_ms(duration_ms);
 
     outb(SPEAKER_PORT, prior); // restore exactly what was there before, not just clear bits 0-1
 }

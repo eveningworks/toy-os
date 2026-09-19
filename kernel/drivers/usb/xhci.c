@@ -469,17 +469,10 @@ static void walk_xecp(uint32_t hcc1) {
 // the pit_ticks() loop there could never end. The PIT path is kept for
 // a machine whose clocksource cannot be trusted with a deadline, and
 // there it carries the old precondition -- interrupts on.
+// The policy moved to clocksource_delay_ms(), which five drivers had
+// each hand-rolled. This name stays because usb.h publishes it.
 void xhci_delay_ms(uint32_t ms) {
-    if (clocksource_deadline_capable()) {
-        uint64_t end = clocksource_now_ns() + (uint64_t)ms * 1000000ull;
-        while (clocksource_now_ns() < end) { }
-        return;
-    }
-    // Ticks are 10 ms and the first may land immediately, so ask for one
-    // more than the arithmetic needs.
-    uint64_t start = pit_ticks();
-    uint64_t want = (uint64_t)(ms / 10) + 1;
-    while (pit_ticks() - start < want) { }
+    clocksource_delay_ms(ms);
 }
 
 struct xhci_wait { uint32_t spins; uint64_t deadline; };
@@ -2396,8 +2389,7 @@ static void power_ports(void) {
     klog_printf("usb: ports powered on (PPC)\n");
     // Power-good plus the USB2 attach debounce, before the scan reads
     // CCS. A minimum, like reset_port()'s recovery wait.
-    uint64_t start = pit_ticks();
-    while (pit_ticks() - start < 10) { }   // 10 ticks = 100 ms
+    clocksource_delay_ms(100);
 }
 
 static void scan_ports(void) {

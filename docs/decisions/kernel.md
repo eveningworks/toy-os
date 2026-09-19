@@ -7791,3 +7791,40 @@ array.** A grown array moves, and `fd_get()` hands callers a
 descriptions where they are. The mmap region list learned the other
 way round in the same session: there the array moved under a held
 pointer and corrupted the kernel heap.
+
+
+## A delay uses the clocksource, because a tick needs an interrupt
+
+Five drivers had each hand-rolled the same busy-wait -- read
+`pit_ticks()`, spin until it has advanced far enough. Two of them
+(`usb_hub.c` and `rtl_usb.c`) were byte-identical copies of the same
+function, and `xhci.c` had a sixth version that was the only one doing
+it properly.
+
+**A tick counter only advances on a timer interrupt.** Anywhere that
+interrupt cannot land, every one of those loops is infinite. That is
+not hypothetical: it hung the machine when an xHCI recovery path called
+`power_ports()` -- whose spin was the naive kind -- from a syscall
+(docs/bugs.md). The failure has no symptom other than the machine
+stopping, which is the worst shape a wait can have.
+
+`clocksource_delay_ms()` is the one implementation now, and it is
+`xhci_delay_ms()`'s policy promoted to where the time actually lives:
+spin on `clocksource_now_ns()` when the current source can be read with
+interrupts off, and fall back to ticks only when it cannot -- which is
+the one case where the caller had nothing better anyway. Callers get
+REAL milliseconds on a TSC instead of everything quantised up to the
+next 10 ms tick, which the speaker's tone lengths were paying for.
+
+**What deliberately did NOT move**, because each is a tick spin for a
+reason rather than by accident:
+
+- `cpuid.c` and `lapic.c` calibrate the TSC and the LAPIC timer
+  AGAINST the PIT. Using the clocksource there would be circular.
+- `krandom.c` counts how many spins fit in a tick; the quantisation is
+  the measurement.
+- `ata.c` spins on `hlt`, which is a wait-for-INTERRUPT idiom and not a
+  delay at all -- moving it would break the DMA wait it exists for.
+- The timeout POLLS (`ac97.c`, `diag.c`) are a different shape: a
+  deadline around a condition, not a fixed delay. They want a deadline
+  helper, which is a separate change.

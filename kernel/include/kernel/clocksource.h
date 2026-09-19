@@ -98,6 +98,24 @@ const struct clocksource *clocksource_current(void);
 // fall back to spinning on clocksource_now_ns() forever.
 int clocksource_deadline_capable(void);
 
+// BUSY-WAIT `ms` MILLISECONDS, USING THE BEST SOURCE AVAILABLE.
+//
+// **THE POINT IS THAT IT DOES NOT NEED INTERRUPTS.** Five drivers had
+// hand-rolled the same spin on `pit_ticks()`, and a tick counter only
+// advances on a timer interrupt -- so every one of them was an infinite
+// loop anywhere that interrupt cannot land. That is not hypothetical:
+// it hung the machine when the xHCI recovery path called `power_ports()`
+// from a syscall (docs/bugs.md).
+//
+// Falls back to ticks only when the current source cannot be read with
+// interrupts off, which is the one case where there is nothing better
+// -- and where the caller was going to spin on ticks anyway.
+//
+// Resolution follows the source: real milliseconds on a TSC, and the
+// tick fallback still rounds UP to at least one whole 10 ms tick, so no
+// caller ever gets a shorter delay than it asked for.
+void clocksource_delay_ms(uint32_t ms);
+
 // Works out a mult/shift pair for a counter running at `freq` Hz, such
 // that ns = (delta * mult) >> shift holds to within rounding for any
 // delta up to `maxsec` seconds' worth. Picks the LARGEST shift that

@@ -14,6 +14,7 @@
 // reading it on every context switch is what guarantees it in practice.
 #include "clocksource.h"
 #include "timer.h"
+#include "barrier.h" // cpu_relax -- the delay below spins
 #include "klog.h"
 #include "kfmt.h"
 #include "driver.h" // DRIVER_DECLARE, driver_bound -- `lsdrv`
@@ -167,6 +168,21 @@ static struct clocksource g_pit_cs = {
     .mask   = CLOCKSOURCE_MASK(64),
     .rating = CLOCKSOURCE_RATING_PIT,
 };
+
+void clocksource_delay_ms(uint32_t ms) {
+    if (!ms) return;
+    if (clocksource_deadline_capable()) {
+        uint64_t end = clocksource_now_ns() + (uint64_t)ms * 1000000ull;
+        while (clocksource_now_ns() < end) cpu_relax();
+        return;
+    }
+    // TICKS ARE 10 ms AND THE FIRST MAY LAND IMMEDIATELY, so ask for one
+    // more than the arithmetic needs -- a caller that wanted 1 ms must
+    // not get 0.
+    uint64_t start = pit_ticks();
+    uint64_t want = (uint64_t)(ms / 10) + 1;
+    while (pit_ticks() - start < want) cpu_relax();
+}
 
 void clocksource_init(void) {
     // A generous maxsec: this counter is 64-bit and increments 100

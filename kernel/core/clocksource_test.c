@@ -101,3 +101,34 @@ KTEST("clocksource", "a source is registered and it is the best-rated one") {
     KTEST_ASSERT(cs->mult != 0);
     KTEST_ASSERT(cs->rating >= CLOCKSOURCE_RATING_PIT);
 }
+
+// A DELAY MUST ACTUALLY DELAY, and must never come back SHORT -- a
+// driver that asked for 100 ms of power-good and got 0 would read a
+// port before it settled.
+//
+// The upper bound is deliberately loose: this runs under TCG, where a
+// spin loop's wall-clock cost is whatever the host felt like, and a
+// tight bound here would be a flake generator rather than a check.
+KTEST("clocksource", "clocksource_delay_ms waits at least as long as asked") {
+    static const uint32_t MS[] = { 1, 5, 20 };
+    for (unsigned i = 0; i < sizeof MS / sizeof MS[0]; i++) {
+        uint64_t t0 = clocksource_now_ns();
+        clocksource_delay_ms(MS[i]);
+        uint64_t took_ns = clocksource_now_ns() - t0;
+
+        // On the tick fallback the granularity is a whole 10 ms tick and
+        // the delay rounds UP, so the floor is the request itself only
+        // when the source is deadline-capable; otherwise allow the tick
+        // quantisation the fallback is honest about.
+        uint64_t want_ns = (uint64_t)MS[i] * 1000000ull;
+        if (!clocksource_deadline_capable() && want_ns > 10000000ull)
+            want_ns -= 10000000ull;
+        KTEST_ASSERT(took_ns + 1000000ull >= want_ns);
+    }
+}
+
+KTEST("clocksource", "a zero delay returns without spinning") {
+    uint64_t t0 = clocksource_now_ns();
+    clocksource_delay_ms(0);
+    KTEST_ASSERT(clocksource_now_ns() - t0 < 5000000ull);   // well under a tick
+}
