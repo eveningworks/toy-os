@@ -143,24 +143,30 @@ static unsigned long long boot_seq(void) {
     return n > 0 ? strtoull(buf, 0, 10) : 0;
 }
 
-// The first bracketed stamp on the first line. Boot-relative, because
-// nothing has set the wall clock that early -- useful for telling a short
-// boot from a long one and for nothing else.
-static void first_stamp(const char *path, char *out, unsigned cap) {
+// WHEN A BOOT STARTED, out of the header logd writes as the file's first
+// line ("logd: boot <n> started <date>"). Empty when there is no header
+// -- a log written before this existed -- and "clock not set" verbatim
+// when the machine had no usable clock, which is logd's own wording and
+// is deliberately not turned back into a date here.
+//
+// ADVISORY, and `list_boots()` says so by marking one that goes
+// backwards. The NUMBER is what orders these files; this is a hint about
+// a clock nothing in the machine can vouch for.
+static void started_at(const char *path, char *out, unsigned cap) {
     out[0] = '\0';
     int fd = open(path, O_RDONLY);
     if (fd < 0) return;
-    char buf[160] = {0};
+    char buf[200] = {0};
     ssize_t n = read(fd, buf, sizeof buf - 1);
     close(fd);
-    for (int i = 0; i + 1 < n; i++) {
-        if (buf[i] == '\n') return;
-        if (buf[i] != '[' || buf[i + 1] < '0' || buf[i + 1] > '9') continue;
-        unsigned j = 0;
-        for (i++; i < n && buf[i] != ']' && j + 1 < cap; i++) out[j++] = buf[i];
-        out[j] = '\0';
-        return;
+    for (int i = 0; i < n; i++) {
+        if (buf[i] == '\n') { buf[i] = '\0'; break; }
     }
+    const char *m = strstr(buf, " started ");
+    if (!m) return;
+    m += 9;
+    if (strncmp(m, "-- ", 3) == 0) m += 3;   // "-- clock not set"
+    snprintf(out, cap, "%s", m);
 }
 
 // WHAT IS ACTUALLY THERE, which is not what storage.log_keep says: a
@@ -190,17 +196,30 @@ static int list_boots(void) {
 
     // Printed in numeric order: readdir promises none, and boot logs read
     // out of sequence are worse than no listing at all.
-    printf("  boot      size  first stamp\n");
+    //
+    // A `<` MARKS A BOOT WHOSE CLOCK WENT BACKWARDS against the boot
+    // before it. The numbering is still right -- it is a counter -- so
+    // what the mark says is "do not trust this date", which is the only
+    // honest thing available when a machine's RTC is wrong.
+    char prev_date[40] = {0};
+    printf("  boot      size  started\n");
     for (unsigned long long n = lo; n && n <= hi; n++) {
         snprintf(path, sizeof path, BOOT_DIR "/%04llu.log", n);
         if (stat(path, &st) != 0) continue;
-        first_stamp(path, stamp, sizeof stamp);
-        printf("  %4llu  %6ld K  %s\n", n, (long)st.st_size / 1024, stamp);
+        started_at(path, stamp, sizeof stamp);
+        // Lexicographic, which IS chronological for %Y-%m-%d %H:%M:%S --
+        // the reason logd writes that order rather than a friendlier one.
+        int back = prev_date[0] && stamp[0] && stamp[0] >= '0' &&
+                   strcmp(stamp, prev_date) < 0;
+        printf("  %4llu  %6ld K  %s%s\n", n, (long)st.st_size / 1024,
+               stamp[0] ? stamp : "(no header)", back ? "   < clock went back" : "");
+        if (stamp[0] >= '0' && stamp[0] <= '9') snprintf(prev_date, sizeof prev_date, "%s", stamp);
     }
     if (stat(LOG_PATH, &st) == 0) {
-        first_stamp(LOG_PATH, stamp, sizeof stamp);
+        started_at(LOG_PATH, stamp, sizeof stamp);
         printf("  %4llu  %6ld K  %s   (this boot)\n",
-               boot_seq(), (long)st.st_size / 1024, stamp);
+               boot_seq(), (long)st.st_size / 1024,
+               stamp[0] ? stamp : "(no header)");
     }
     return 0;
 }
@@ -229,6 +248,17 @@ int main(int argc, char **argv) {
                 return 1;
             }
             snprintf(prev, sizeof prev, BOOT_DIR "/%04llu.log", seq - back);
+            // PRUNED IS NOT THE SAME AS NEVER EXISTED, and the reader
+            // should hear about the BOOT rather than about a filename:
+            // `-p 99` on a machine that has booted 122 times names a
+            // real boot that storage.log_keep has already dropped.
+            struct stat st;
+            if (stat(prev, &st) != 0) {
+                fprintf(stderr, "log: boot %llu is no longer retained "
+                                "(storage.log_keep) -- try log --list\n",
+                        seq - back);
+                return 1;
+            }
             path = prev;
         }
         else if (strcmp(argv[i], "-f") == 0) { follow = 1; }

@@ -141,10 +141,30 @@ def run(inst, res, control):
               bool(a) and bool(b) and a != b,
               f"-p 1 -> {a!r}, -p 3 -> {b!r}")
 
+    # THE HEADER IS THE BOOT'S IDENTITY INSIDE THE FILE. Without it a
+    # log that has been copied anywhere says nothing about which boot it
+    # came from, and `--list`'s date column has nothing to read.
+    head = guest(inst, "log --list")
+    res.check("every boot's log opens with a header naming that boot",
+              re.search(r"boot \d+ started", guest(inst, "log -p 1")) is not None,
+              "no 'boot N started' line at the top of the previous boot's log")
+    res.check("log --list shows a date rather than a boot-relative stamp",
+              re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", head) is not None,
+              f"no date in: {head.strip()[-200:]!r}")
+
+    # TWO WAYS TO ASK FOR A BOOT THAT IS NOT THERE, and they are
+    # different questions: one is beyond the counter and never existed,
+    # the other existed and has been pruned. Answering either with the
+    # other's message sends a reader looking in the wrong place.
+    out = guest(inst, "log -p 99999")
+    res.check("log -p refuses a boot that never existed",
+              "no boot 99999 back" in out,
+              f"expected a refusal, got: {out.strip()[:140]!r}")
+
     out = guest(inst, "log -p 99")
-    res.check("log -p refuses a boot it does not have",
-              "no boot 99 back" in out,
-              f"expected a refusal, got: {out.strip()[:120]!r}")
+    ok = ("no longer retained" in out) or ("no boot 99 back" in out)
+    res.check("log -p says a pruned boot is pruned, naming the BOOT",
+              ok, f"expected a retention message, got: {out.strip()[:140]!r}")
 
     # -n MUST NOT BE SWALLOWED by the optional count.
     out = guest(inst, "log -p -n 2")

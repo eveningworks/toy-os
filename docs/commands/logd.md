@@ -54,6 +54,13 @@ lost. A reader can tell the difference between a quiet machine
 and one whose evidence was destroyed, which is the whole reason `klog_read()`
 takes an absolute offset rather than a ring position.
 
+**Every boot's file opens with a header** -- `logd: boot 115 started
+2026-09-19 17:05:28` -- so the boot's identity is INSIDE the file and
+not only in its name. The number is the identity; the date is advisory,
+and `clock not set` is written instead when the clock reads below a
+2020 plausibility floor. `docs/commands/log.md` has the three ways a
+clock is wrong and what each one does here.
+
 **One file per boot.** `/var/log/toyos.log` is the current boot; when
 `logd` starts it files the previous one under its own number as
 `/var/log/boot/<n>.log` and deletes anything past `storage.log_keep` (10).

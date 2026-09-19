@@ -43,6 +43,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <time.h>
 #include "rt/sys.h"
 #include "lib/usetting.h"
 #include "lib/utmppath.h"
@@ -56,6 +57,13 @@
 #define TAG_W      6                  // "kernel", "toywm ", "netd  "
 #define POLL_MS    1000
 #define KEEP_DEFAULT 10
+
+// A PLAUSIBILITY FLOOR, not a correctness check: 2020-01-01. A machine
+// with a dead CMOS battery reads 1970, 1980 or 2000, and writing one of
+// those as the boot's date is worse than writing nothing -- it looks
+// like data. Anything above this was set by SOMETHING, which is all
+// this can honestly claim.
+#define CLOCK_SANE_EPOCH 1577836800LL
 
 // How far into the kernel's byte stream we have persisted. Absolute,
 // counted from the first byte ever logged -- NOT a ring position, which
@@ -148,6 +156,44 @@ static void budget_check(void) {
     g_capped = 1;
     close(g_fd);
     g_fd = -1;
+}
+
+// THE FIRST LINE OF EVERY BOOT'S FILE: which boot it is, and when it
+// started. The NUMBER is the identity and the ORDER -- it comes from a
+// counter and cannot lie. The DATE is ADVISORY, because nothing here
+// can know whether the clock is right:
+//
+//   - never set (no RTC battery) -- caught by CLOCK_SANE_EPOCH and
+//     written as "clock not set" rather than as 1970.
+//   - set but WRONG (dead CMOS, an RTC in local time, a machine off for
+//     months) -- undetectable from inside one boot, which is why the
+//     counter rather than this is what `log -p N` counts back from.
+//     journald splits the same way: a boot ID is the identity and the
+//     realtime stamp is a hint, which is why `journalctl --list-boots`
+//     can show times that do not sort.
+//   - corrected LATER by ntpd -- this is the time at logd's start, so
+//     it is pre-correction. Nothing else in the file contradicts it;
+//     every other stamp is boot-relative.
+//
+// `log --list` marks a boot whose date is EARLIER than its
+// predecessor's, so a wrong clock is visible instead of quietly
+// misleading.
+static void write_header(void) {
+    char line[96];
+    time_t now = time(0);
+    int n;
+    if ((long long)now < CLOCK_SANE_EPOCH) {
+        n = snprintf(line, sizeof line,
+                     "logd: boot %llu started -- clock not set", g_boot);
+    } else {
+        struct tm tm;
+        localtime_r(&now, &tm);
+        n = snprintf(line, sizeof line,
+                     "logd: boot %llu started %04d-%02d-%02d %02d:%02d:%02d",
+                     g_boot, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                     tm.tm_hour, tm.tm_min, tm.tm_sec);
+    }
+    if (n > 0) emit("logd", line, (unsigned)n);
 }
 
 // Split the kernel's byte stream into lines. A read can end mid-line, so
@@ -322,6 +368,7 @@ int main(void) {
 
     g_fd = open(LOG_PATH, O_WRONLY | O_CREAT | O_TRUNC);
     if (g_fd < 0) { sys_eprint("logd: cannot open " LOG_PATH "\n"); return 1; }
+    write_header();
 
     // FROM THE OLDEST BYTE STILL RETAINED, not from now: everything the
     // kernel logged before this daemon started is exactly the part

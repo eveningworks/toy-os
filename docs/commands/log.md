@@ -32,10 +32,17 @@
   `/var/lib/logd.seq`, not against what the directory happens to hold, so
   a log deleted by hand leaves a hole rather than shifting everything
   along. Only a leading digit is taken as the count, so `log -p -n 50`
-  still means "the previous boot, last 50 lines".
-- `--list` -- print the retained boot logs: number, size, and the first
-  timestamp in each. What is actually on disk, which is not the same as
+  still means "the previous boot, last 50 lines". A depth past the
+  counter and a depth that lands on a boot `storage.log_keep` has
+  already pruned are DIFFERENT answers -- "no boot N back" and "boot N
+  is no longer retained" -- because they send you looking in different
+  places.
+- `--list` -- print the retained boot logs: number, size, and when each
+  one started. What is actually on disk, which is not the same as
   `storage.log_keep` -- a machine that has booted three times has three.
+  A log written before logd wrote headers shows `(no header)`, and a
+  boot whose clock reads EARLIER than its predecessor's is marked
+  `< clock went back` -- see **Which boot is which** below.
 - `-f` -- print the file and keep printing as it grows, ignoring `-n`.
   It never returns; Ctrl-C ends it.
 - `--raw` -- keep the `<N>` level marker in the output instead of hiding
@@ -78,12 +85,36 @@ now (`storage.log_keep`), so a bad boot can be compared against the good
 ones around it:
 
     $ log --list
-      boot      size  first stamp
-        14      93 K  0.00
-        15     104 K  0.00
-        16      97 K  0.00
-        17      31 K  0.00   (this boot)
+      boot      size  started
+        14      93 K  2026-09-19 14:02:11
+        15     104 K  2026-09-19 15:48:03
+        16      97 K  2026-09-19 17:05:28
+        17      31 K  2026-09-19 19:33:45   (this boot)
     $ log -p 2 -u kernel | grep usb
+
+**Which boot is which.** The first line of every boot's file is logd's
+own header:
+
+    [logd  ] logd: boot 115 started 2026-09-19 17:05:28
+
+**THE NUMBER IS THE IDENTITY AND THE ORDER; THE DATE IS ADVISORY.** The
+number comes from a counter in `/var/lib/logd.seq` and cannot lie, which
+is why `-p N` counts back from it. Nothing in the machine can vouch for
+the clock, so three cases are separated:
+
+- **never set** -- a machine whose RTC reads 1970, 1980 or 2000 gets
+  `clock not set` rather than a date that looks like data.
+- **set but wrong** -- a dead CMOS battery or an RTC in local time is
+  undetectable from inside one boot. `--list` marks a boot whose date
+  reads earlier than its predecessor's, so the fault is visible rather
+  than quietly misleading; the numbering is unaffected.
+- **corrected later by `ntpd`** -- the header is the time at logd's
+  start, so it is pre-correction. Nothing else in the file contradicts
+  it: every other stamp is boot-relative.
+
+journald splits the same way, and for the same reason -- a boot ID is
+the identity and the realtime stamp is a hint, which is why `journalctl
+--list-boots` can show times that do not sort.
 
 **A boot that fills its share STOPS rather than evicting the history.**
 Each boot gets `storage.log_max / (storage.log_keep + 1)`, and one that
