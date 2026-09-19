@@ -3123,3 +3123,40 @@ a number already in use, overwriting the log it was meant to keep.
 `8 MiB / 11` each boot gets about 745 KiB, comfortably more than the
 ~10 KiB a quiet boot writes and enough for a noisy one. Ten because the
 faults worth retention are intermittent.
+
+## Shutdown commits the FILESYSTEM, not just the disk cache
+
+`system_reboot()` and `system_poweroff()` called `atac_flush()` and
+nothing else. That reads like enough -- the comment beside it correctly
+said a write-back cache can still be holding a write that returned
+success -- and it is not, because the sector cache is a layer BELOW the
+filesystem. With `storage.sync = batched`, which is the default, TFS3
+keeps a journal transaction open across writes; blocks that transaction
+still owns have never been handed to the sector cache, so flushing the
+cache cannot save them. `fs_sync()` already knew this -- its stage 0
+commits each backend's deferred transaction before touching the device,
+and its own comment says flushing without committing first "would report
+a durability that had not been reached". The power path simply did not
+call it.
+
+**What it cost, measured 2026-09-19.** A `config set` followed
+immediately by `reboot` left `/etc/storage.conf` at ZERO BYTES and the
+setting silently back at its default. Losing the new value is the
+obvious half; the destructive half is that `fs_write()` truncates before
+it writes, and the truncation DID reach the platter while the data did
+not -- so the file's previous contents went too. It was found because a
+40-boot soak ran at `storage.log_keep 10` while `config get` answered 50
+the whole time, from memory, and pruned the boot logs the soak existed
+to collect.
+
+**Why the fix is `fs_sync()` before `atac_flush()` and not instead of
+it.** `fs_sync()` already ends with the device flushes, so the second
+call is usually redundant -- but it is the one that covers a mount whose
+backend has no `sync` hook and anything written outside a filesystem at
+all. Both report their own failure, because "some writes were NOT saved"
+is worth two different lines when a machine is about to stop.
+
+**The general shape**: a durability barrier belongs at the TOP of the
+stack that defers, not the bottom. Linux's `reboot(2)` path runs
+`ksys_sync()` -- filesystems first, then block devices -- for the same
+reason, and this is that ordering.

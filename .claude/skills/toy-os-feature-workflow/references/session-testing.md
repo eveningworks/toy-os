@@ -2750,3 +2750,21 @@ live boot last, and an assertion counting its rows failed twice on a
 capture that ended one line short. Anything asserted from the tail of a
 serial capture wants a different oracle -- here, `ls` of the directory,
 which is what the assertion was actually about.
+
+**2026-09-19: `vm.py exec` DOES NOT PARSE SHELL OPERATORS, and a `>` or
+a `|` in one arrives at the program as an ARGUMENT.** `ls /etc >
+/var/tmp/probe` exits 2 with a usage message, because `ls` was handed
+`>` and the path as two more operands; `log -u kernel | grep -c foo`
+prints `log`'s usage for the same reason. tosh itself lexes both (see
+`docs/conventions/shell.md`), so the instinct that they work is right
+about the SHELL and wrong about this transport.
+
+It matters because of how it fails: the redirection silently writes
+nothing, so a test that creates a fixture that way and then reads it
+back gets "no such file or directory" -- which is indistinguishable from
+whatever the test was actually checking having destroyed it. That cost a
+false failure in a durability test, where "the file is not there after
+the reboot" was exactly the bug under investigation.
+
+Write a fixture with a real program (`cp <something> <path>`), and do
+any filtering on the HOST from the captured text, not in the guest.

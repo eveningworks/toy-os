@@ -3,15 +3,33 @@
 #include "vga.h"
 #include "klog.h"
 #include "ata_cache.h"
+#include "fs.h"
 #include "acpi.h"
 
-// FLUSH FIRST. With a write-back cache under the disk (ata_cache.h) a
-// write that returned success may still be sitting in RAM, so both of
-// these would otherwise discard it -- and the user's last action before
-// a shutdown is exactly the one they would notice missing. Both paths
-// end the machine, so this is the last chance either gets; it is here
-// rather than at the call sites so a future caller cannot forget it.
+// COMMIT, THEN FLUSH -- and it must be fs_sync(), not atac_flush().
+// With a write-back cache under the disk (ata_cache.h) a write that
+// returned success may still be sitting in RAM, and the user's last
+// action before a shutdown is exactly the one they would notice
+// missing. Both paths end the machine, so this is the last chance
+// either gets; it is here rather than at the call sites so a future
+// caller cannot forget it.
+//
+// THE TRAP THIS EXISTS FOR: atac_flush() alone flushes the SECTOR
+// CACHE, which is a layer BELOW the filesystem. `storage.sync =
+// batched` (the default) keeps a TFS3 journal transaction open across
+// writes, so blocks the transaction still owns have not reached the
+// sector cache at all and a flush cannot save them -- fs_sync()'s own
+// stage 0 is what commits them. Reboot within the writeback window and
+// the write is lost; worse, fs_write() truncates first and THAT lands,
+// so the file's PREVIOUS contents go too. Measured on 2026-09-19: a
+// `config set` followed at once by `reboot` left a 0-byte
+// /etc/storage.conf and a setting silently back at its default.
 static void flush_before_stopping(const char *what) {
+    if (!fs_sync(0)) {
+        klog_write(KLOG_ERR "power: FILESYSTEM SYNC FAILED before ");
+        klog_write(what);
+        klog_write(" -- some writes were NOT saved\n");
+    }
     if (!atac_flush()) {
         klog_write(KLOG_ERR "power: DISK FLUSH FAILED before ");
         klog_write(what);

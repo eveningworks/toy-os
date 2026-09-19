@@ -256,6 +256,10 @@ TOOLS = [
     # boots cannot be checked inside one.
     ("logrotate",   "logrotate_test.py",       "one log file per boot, and log -p N",  True,  None,                 False),
 
+    # REBOOTS ITS GUEST FOUR TIMES. The property is what survives a
+    # reboot, so there is no way to check it inside one.
+    ("shutdownsync","shutdown_sync_test.py",   "a write just before reboot survives it", True, None,                False),
+
     # --- display ------------------------------------------------------
     ("virtio_gpu",  "virtio_gpu_test.py",      "the virtio GPU driver",              True,  None,                   False),
     ("hires",       "hires_test.py",           "a desktop above 1280x720",           True,

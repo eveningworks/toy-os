@@ -2915,6 +2915,27 @@ window without going through it will find its layout polls timing out.
   because a machine left at 1 MiB truncates every later tool's log and
   that reads as a hang.
 
+- **`shutdown_sync_test.py`** -- a write made just before `reboot` must
+  survive it. **REBOOTS ITS GUEST FOUR TIMES**, since the property is
+  precisely what survives a reboot, so it lives in the sweep. It exists
+  for a measured bug: `system_reboot()` flushed the ATA SECTOR CACHE and
+  nothing else, which is a layer BELOW the filesystem -- `storage.sync =
+  batched` keeps a TFS3 journal transaction open across writes, so
+  blocks that transaction still owns never reached the cache and a flush
+  could not save them. A `config set` followed at once by `reboot` left
+  `/etc/storage.conf` at ZERO BYTES: the new value lost, and the old one
+  too, because `fs_write()` truncates first and the truncation landed
+  while the data did not. The three assertions separate the cases that
+  fail differently -- updating an existing config file, creating one
+  that did not exist, and an ordinary file, so the property is shown to
+  be the filesystem's rather than one setting's. **The gap between the
+  write and the `reboot` is the whole experiment**: a `sync` or a second
+  of idle commits the transaction on its own and nothing is proved,
+  which is why the helper issues them as one command list. Its positive
+  control points the probe at `/tmp`, a tmpfs mount that CANNOT survive
+  a reboot by design -- a clean report there means the tool is not
+  reading back across the reboot at all.
+
 - **`usb_test.py`** -- an xHCI controller and a HID boot keyboard and
   mouse (`vm.py --usb xhci` / `--usb xhci+mouse` / `--usb xhci+hub`, or
   `make run USB=xhci+mouse`). Five phases: keyboard, ring wrap, mouse,
