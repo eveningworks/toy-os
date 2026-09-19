@@ -74,6 +74,19 @@ void uui_dropdown_drag_end(struct uui_dropdown *d);
 // value must not walk where the user cannot see it.
 int uui_dropdown_key(struct uui_dropdown *d, int key);
 int uui_dropdown_selected(const struct uui_dropdown *d);
+// The other half of the pair. Clamped to the item range, and -1 selects
+// nothing. For a caller whose item LIST is rebuilt while the control is
+// live -- re-initialising resets the selection to the first item, which
+// silently changes what the user was looking at.
+void uui_dropdown_set_selected(struct uui_dropdown *d, int index);
+
+// REPLACE THE ITEMS WITHOUT RE-INITIALISING. init() also resets x/y/w/h
+// to what it was passed, so a caller that re-inits to change the list
+// hands the widget a ZERO RECT -- and a layout that only assigns
+// geometry when something resizes never puts it back, so the control
+// simply stops being drawn. The selection is clamped, not reset; pair
+// this with set_selected() to restore one by name.
+void uui_dropdown_set_items(struct uui_dropdown *d, const char *const *items, int count);
 
 // Focus-only ops -- see uui_textbox.h's note.
 struct uui_widget_ops;

@@ -26,6 +26,22 @@ void uui_dropdown_init(struct uui_dropdown *d, int x, int y, int w, int h,
 
 int uui_dropdown_selected(const struct uui_dropdown *d) { return d->list.selected; }
 
+void uui_dropdown_set_items(struct uui_dropdown *d, const char *const *items, int count) {
+    if (!d) return;
+    int sel = d->list.selected;
+    uui_listbox_set_items(&d->list, items, count);
+    if (sel >= count) sel = count - 1;
+    if (sel < -1) sel = -1;
+    d->list.selected = sel;
+}
+
+void uui_dropdown_set_selected(struct uui_dropdown *d, int index) {
+    if (!d) return;
+    if (index < -1) index = -1;
+    if (index >= d->list.count) index = d->list.count - 1;
+    d->list.selected = index;
+}
+
 // THE POPUP IS A SURFACE WHEN THE COMPOSITOR GRANTS ONE, and the list
 // keeps its rect in the PARENT's content coordinates either way -- the
 // seam hands the placed position back in that space and translates

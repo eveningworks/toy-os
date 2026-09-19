@@ -30,12 +30,40 @@
 #include "applog.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <dirent.h>
 
 // Bounded, and the newest win: a ring that has wrapped has already lost
 // its oldest, so holding more than it retains buys nothing.
 #define MAX_LINES 400
 #define TEXT_MAX  152
 #define SRC_MAX   16
+
+// **OLDER BOOTS COME FROM FILES, NOT FROM THE RINGS.** The rings hold
+// this boot and nothing else -- that is what they are -- so everything
+// before it is read from what logd persisted, one file per boot
+// (docs/commands/logd.md). Same parse either way: logd writes the
+// kernel's bytes VERBATIM after a tag, so a stored line differs from a
+// live one only by that prefix.
+#define BOOT_DIR   "/var/log/boot"
+#define MAX_BOOTS  50            // storage.log_keep's own ceiling
+#define BOOT_LABEL 16
+
+// **THE SUBSYSTEM IS THE PREFIX BEFORE THE FIRST COLON**, which is this
+// kernel's own convention -- `usb: port 2: connected`, `dhcp: lease
+// 86400 seconds`, `wm: 19 desktop entries`. It is a SECOND level below
+// the Source column: every one of those is source `kernel`, and "which
+// part of the kernel" is the question a reader actually has.
+//
+// Derived rather than declared, because nothing in the ABI carries it --
+// klog stores the bytes a subsystem wrote and the prefix is a habit the
+// code keeps, not a field. So the list is whatever the loaded lines
+// actually contain, and a line with no prefix is never filtered out, for
+// the reason the Level filter already gives.
+#define SUBSYS_MAX   14
+#define MAX_SUBSYS   48
 
 struct line {
     unsigned cs;               // hundredths of a second since boot
@@ -49,6 +77,7 @@ struct line {
     int      stamped;
     int      level;            // 0..7, or -1 for a line that declares none
     char     source[SRC_MAX];  // "kernel", or the writing program's tag
+    char     subsys[SUBSYS_MAX];  // "usb", "dhcp", ... or "" for none
     char     text[TEXT_MAX];
 };
 
@@ -57,7 +86,7 @@ static int         g_count;
 static int         g_view[MAX_LINES];   // indices of g_lines that pass the filter
 static int         g_view_count;
 
-enum { ID_TABLE = 1, ID_LEVEL, ID_SEARCH };
+enum { ID_TABLE = 1, ID_LEVEL, ID_SEARCH, ID_BOOT, ID_SUBSYS };
 enum { COL_TIME = 0, COL_SOURCE, COL_LEVEL, COL_TEXT };
 
 static const struct uui_table_column COLUMNS[] = {
@@ -75,9 +104,9 @@ static const int LEVEL_MAX[] = { 7, 7, 6, 4, 3 };
 #define LEVEL_COUNT ((int)(sizeof LEVEL_NAMES / sizeof LEVEL_NAMES[0]))
 
 static struct uui_table    g_table;
-static struct uui_dropdown g_level;
+static struct uui_dropdown g_level, g_boot, g_subsys;
 static struct uui_textbox  g_search;
-static struct uui_label    g_level_label, g_search_label;
+static struct uui_label    g_level_label, g_search_label, g_boot_label, g_subsys_label;
 
 static const char *level_name(int level) {
     switch (level) {
@@ -101,7 +130,7 @@ static struct line *next_line(void) {
 }
 
 // "[7.03] <3> usb: ..." -> cs, level, and the text after both.
-static void add_kernel_line(const char *s, int len) {
+static void add_parsed_line(const char *src, const char *s, int len) {
     while (len > 0 && (s[len - 1] == '\n' || s[len - 1] == '\r')) len--;
     if (len <= 0) return;
 
@@ -128,11 +157,28 @@ static void add_kernel_line(const char *s, int len) {
     l->cs = secs * 100 + hund;
     l->stamped = stamped;
     l->level = level;
-    snprintf(l->source, sizeof l->source, "kernel");
+    snprintf(l->source, sizeof l->source, "%s", src);
     int n = len - i;
     if (n > (int)sizeof l->text - 1) n = (int)sizeof l->text - 1;
     memcpy(l->text, s + i, (unsigned)n);
     l->text[n] = 0;
+
+    // A PREFIX, NOT A WORD WITH A COLON IN IT: letters, digits, `_` and
+    // `-` only, ending at ": ". That rejects `syscall: kill(pgid 2,
+    // SIGHUP) by pid 14`'s later colons and, more importantly, a
+    // message whose first colon is inside prose.
+    l->subsys[0] = 0;
+    for (int k = 0; k < (int)sizeof l->subsys - 1 && l->text[k]; k++) {
+        char c = l->text[k];
+        if (c == ':' && l->text[k + 1] == ' ' && k > 0) {
+            memcpy(l->subsys, l->text, (unsigned)k);
+            l->subsys[k] = 0;
+            break;
+        }
+        int ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                 (c >= '0' && c <= '9') || c == '_' || c == '-';
+        if (!ok) break;
+    }
 }
 
 static void read_klog(void) {
@@ -144,14 +190,14 @@ static void read_klog(void) {
         for (unsigned j = 0; j < r.len; j++) {
             char c = (char)r.data[j];
             if (c == '\n') {
-                add_kernel_line(acc, acc_len);
+                add_parsed_line("kernel", acc, acc_len);
                 acc_len = 0;
             } else if (acc_len < (int)sizeof acc) {
                 acc[acc_len++] = c;
             }
         }
     }
-    if (acc_len) add_kernel_line(acc, acc_len);
+    if (acc_len) add_parsed_line("kernel", acc, acc_len);
 }
 
 static void read_applog(void) {
@@ -201,6 +247,137 @@ static void read_applog(void) {
     }
 }
 
+// --- older boots, out of /var/log/boot ---------------------------------
+
+// Newest first after "This boot", because the boot somebody wants is
+// almost always a recent one and a dropdown is read from the top.
+static unsigned long long g_boots[MAX_BOOTS];
+static int                g_boot_count;
+static char               g_boot_labels[MAX_BOOTS + 1][BOOT_LABEL];
+static const char        *g_boot_items[MAX_BOOTS + 1];
+static int                g_boot_item_count;
+
+static int cmp_desc(const void *a, const void *b) {
+    unsigned long long x = *(const unsigned long long *)a;
+    unsigned long long y = *(const unsigned long long *)b;
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+
+static void scan_boots(void) {
+    DIR *d = opendir(BOOT_DIR);
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d)) && g_boot_count < MAX_BOOTS) {
+            if (e->d_type == DT_DIR) continue;
+            unsigned long long n = strtoull(e->d_name, 0, 10);
+            if (n) g_boots[g_boot_count++] = n;
+        }
+        closedir(d);
+    }
+    qsort(g_boots, (unsigned)g_boot_count, sizeof g_boots[0], cmp_desc);
+
+    snprintf(g_boot_labels[0], BOOT_LABEL, "This boot");
+    g_boot_items[0] = g_boot_labels[0];
+    for (int i = 0; i < g_boot_count; i++) {
+        snprintf(g_boot_labels[i + 1], BOOT_LABEL, "Boot %llu", g_boots[i]);
+        g_boot_items[i + 1] = g_boot_labels[i + 1];
+    }
+    g_boot_item_count = g_boot_count + 1;
+}
+
+// A STORED LINE IS "[tag   ] <whatever the source wrote>". The tag is
+// padded to a fixed width so the file greps at a fixed offset, and
+// everything after it is byte-for-byte what the live ring holds -- which
+// is why this hands the remainder to the same parser the rings use.
+static void add_file_line(char *s, int len) {
+    while (len > 0 && (s[len - 1] == '\n' || s[len - 1] == '\r')) len--;
+    if (len <= 0) return;
+    char src[SRC_MAX] = "";
+    int i = 0;
+    if (s[0] == '[') {
+        int j = 1;
+        while (j < len && s[j] != ']') j++;
+        if (j < len) {
+            int n = j - 1;
+            while (n > 0 && s[n] == ' ') n--;     // the padding
+            if (n > (int)sizeof src - 1) n = (int)sizeof src - 1;
+            memcpy(src, s + 1, (unsigned)n);
+            src[n] = 0;
+            i = j + 1;
+            if (i < len && s[i] == ' ') i++;
+        }
+    }
+    add_parsed_line(src[0] ? src : "?", s + i, len - i);
+}
+
+static void read_boot_file(unsigned long long n) {
+    char path[64];
+    snprintf(path, sizeof path, BOOT_DIR "/%04llu.log", n);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return;
+    static char buf[2048];
+    static char line[512];
+    int line_len = 0;
+    int got;
+    while ((got = (int)read(fd, buf, sizeof buf)) > 0) {
+        for (int i = 0; i < got; i++) {
+            if (buf[i] == '\n') {
+                add_file_line(line, line_len);
+                line_len = 0;
+            } else if (line_len < (int)sizeof line - 1) {
+                line[line_len++] = buf[i];
+            }
+        }
+    }
+    if (line_len) add_file_line(line, line_len);
+    close(fd);
+}
+
+// --- the subsystem list ------------------------------------------------
+
+static char        g_subsys_names[MAX_SUBSYS + 1][SUBSYS_MAX];
+static const char *g_subsys_items[MAX_SUBSYS + 1];
+static int         g_subsys_item_count;
+
+static int cmp_name(const void *a, const void *b) {
+    return strcmp((const char *)a, (const char *)b);
+}
+
+// Rebuilt from whatever is loaded, and the SELECTION IS RESTORED BY
+// NAME. The live view reloads every second and a boot that has just
+// started logging `ahci:` would otherwise renumber the list under a
+// reader who had picked `usb:` -- silently showing them a different
+// subsystem than the one they chose.
+static void rebuild_subsys(void) {
+    // NOT WHILE THE POPUP IS OPEN: the list the reader is looking at
+    // must not renumber under them mid-choice.
+    if (g_subsys.open) return;
+    char keep[SUBSYS_MAX] = "";
+    int sel = uui_dropdown_selected(&g_subsys);
+    if (sel > 0 && sel < g_subsys_item_count)
+        snprintf(keep, sizeof keep, "%s", g_subsys_items[sel]);
+
+    int n = 0;
+    for (int i = 0; i < g_count && n < MAX_SUBSYS; i++) {
+        if (!g_lines[i].subsys[0]) continue;
+        int seen = 0;
+        for (int k = 0; k < n; k++)
+            if (strcmp(g_subsys_names[k + 1], g_lines[i].subsys) == 0) { seen = 1; break; }
+        if (!seen) snprintf(g_subsys_names[++n], SUBSYS_MAX, "%s", g_lines[i].subsys);
+    }
+    qsort(g_subsys_names[1], (unsigned)n, SUBSYS_MAX, cmp_name);
+
+    snprintf(g_subsys_names[0], SUBSYS_MAX, "All");
+    for (int k = 0; k <= n; k++) g_subsys_items[k] = g_subsys_names[k];
+    g_subsys_item_count = n + 1;
+
+    uui_dropdown_set_items(&g_subsys, g_subsys_items, g_subsys_item_count);
+    int restored = 0;
+    for (int k = 1; k < g_subsys_item_count; k++)
+        if (keep[0] && strcmp(g_subsys_items[k], keep) == 0) { restored = k; break; }
+    uui_dropdown_set_selected(&g_subsys, restored);
+}
+
 // --- the filter -------------------------------------------------------
 
 static void rebuild_view(void) {
@@ -212,6 +389,13 @@ static void rebuild_view(void) {
         // an application line declares none, and hiding every service's
         // output behind "Errors" would be worse than showing too much.
         if (g_lines[i].level >= 0 && g_lines[i].level > want) continue;
+        // A LINE WITH NO PREFIX IS NEVER FILTERED OUT by a subsystem
+        // choice -- the same rule the Level column keeps, and for the
+        // same reason: the prefix is a habit, not a field, so its
+        // absence must not hide a line behind a choice it never made.
+        int sub = uui_dropdown_selected(&g_subsys);
+        if (sub > 0 && sub < g_subsys_item_count && g_lines[i].subsys[0] &&
+            strcmp(g_lines[i].subsys, g_subsys_items[sub]) != 0) continue;
         if (needle && needle[0] && !strstr(g_lines[i].text, needle) &&
             !strstr(g_lines[i].source, needle)) continue;
         g_view[g_view_count++] = i;
@@ -219,10 +403,23 @@ static void rebuild_view(void) {
     uui_table_set_rows(&g_table, g_view_count);
 }
 
+// Index 0 is the live rings; anything else is a file, which does not
+// grow -- so on_tick() leaves a stored boot alone rather than re-reading
+// it every second and throwing away the reader's scroll position.
+static int viewing_live(void) {
+    return uui_dropdown_selected(&g_boot) == 0;
+}
+
 static void reload(void) {
     g_count = 0;
-    read_klog();
-    read_applog();
+    if (viewing_live()) {
+        read_klog();
+        read_applog();
+    } else {
+        int i = uui_dropdown_selected(&g_boot) - 1;
+        if (i >= 0 && i < g_boot_count) read_boot_file(g_boots[i]);
+    }
+    rebuild_subsys();
     rebuild_view();
 }
 
@@ -267,13 +464,15 @@ static int compare_rows(void *ctx, int a, int b, int col) {
 
 // --- the app ----------------------------------------------------------
 
-static struct uui_item   g_form_items[4];
+static struct uui_item   g_form_items[8];
 static struct uui_layout g_form;
 static struct uui_item   g_items[2];
 static struct uui_layout g_root;
 
 static struct uui_focusable g_focusables[] = {
+    { &g_boot,   &uui_dropdown_ops },
     { &g_level,  &uui_dropdown_ops },
+    { &g_subsys, &uui_dropdown_ops },
     { &g_search, &uui_textbox_focus_ops },
     { &g_table,  &uui_table_ops },
 };
@@ -281,20 +480,32 @@ static struct uui_focus g_focus;
 
 static void on_widget(struct uapp *a, int id, int reason) {
     (void)reason;
-    if (id == ID_LEVEL || id == ID_SEARCH) {
+    if (id == ID_BOOT) {
+        // A DIFFERENT SOURCE, so the lines are re-read rather than
+        // re-filtered -- and back to the top, since row 40 of one boot
+        // means nothing in another.
+        reload();
+        uui_table_set_rows(&g_table, g_view_count);
+        uapp_redraw(a);
+    } else if (id == ID_LEVEL || id == ID_SEARCH || id == ID_SUBSYS) {
         rebuild_view();
         uapp_redraw(a);
     }
 }
 
 static int on_tick(struct uapp *a) {
+    if (!viewing_live()) return 1;   // a stored boot is finished; leave it
     reload();
     uapp_redraw(a);
     return 1;
 }
 
 static void on_size(int *w, int *h) {
-    *w = ugfx_char_advance('n') * 100;
+    // WIDE ENOUGH FOR THE FILTER ROW. Four controls and their labels sit
+    // in one row, and uui_layout OVERFLOWS rather than shrinking below a
+    // natural size -- so the default has to fit them or the search box
+    // is pushed off the right edge with nothing to say so.
+    *w = ugfx_char_advance('n') * 118;
     *h = ugfx_char_h() * 32;
 }
 
@@ -306,21 +517,37 @@ int main(void) {
     uui_table_set_sort(&g_table, COL_TIME, 1);
     uui_table_set_seek_col(&g_table, COL_TEXT);
 
+    scan_boots();
+    uui_dropdown_init(&g_boot, 0, 0, 0, 0, g_boot_items, g_boot_item_count);
+    uui_label_init(&g_boot_label, "Boot:");
+    snprintf(g_subsys_names[0], SUBSYS_MAX, "All");
+    g_subsys_items[0] = g_subsys_names[0];
+    g_subsys_item_count = 1;
+    uui_dropdown_init(&g_subsys, 0, 0, 0, 0, g_subsys_items, g_subsys_item_count);
     uui_dropdown_init(&g_level, 0, 0, 0, 0, LEVEL_NAMES, LEVEL_COUNT);
     uui_textbox_init(&g_search, "");
     uui_label_init(&g_level_label, "Level:");
     uui_label_init(&g_search_label, "Search:");
+    uui_label_init(&g_subsys_label, "Subsystem:");
 
-    g_form_items[0] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_level_label,
+    g_form_items[0] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_boot_label,
+                                         .name = "bootlabel" };
+    g_form_items[1] = (struct uui_item){ .ops = &uui_dropdown_ops, .widget = &g_boot,
+                                         .id = ID_BOOT, .name = "boot" };
+    g_form_items[2] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_level_label,
                                          .name = "levellabel" };
-    g_form_items[1] = (struct uui_item){ .ops = &uui_dropdown_ops, .widget = &g_level,
+    g_form_items[3] = (struct uui_item){ .ops = &uui_dropdown_ops, .widget = &g_level,
                                          .id = ID_LEVEL, .name = "level" };
-    g_form_items[2] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_search_label,
+    g_form_items[4] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_subsys_label,
+                                         .name = "subsyslabel" };
+    g_form_items[5] = (struct uui_item){ .ops = &uui_dropdown_ops, .widget = &g_subsys,
+                                         .id = ID_SUBSYS, .name = "subsys" };
+    g_form_items[6] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_search_label,
                                          .name = "searchlabel" };
-    g_form_items[3] = (struct uui_item){ .ops = &uui_textbox_ops, .widget = &g_search,
+    g_form_items[7] = (struct uui_item){ .ops = &uui_textbox_ops, .widget = &g_search,
                                          .id = ID_SEARCH, .name = "search",
                                          .flags = UUI_FILL_W };
-    g_form = (struct uui_layout){ .dir = UUI_ROW, .items = g_form_items, .count = 4 };
+    g_form = (struct uui_layout){ .dir = UUI_ROW, .items = g_form_items, .count = 8 };
 
     g_items[0] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &g_form,
                                     .name = "form", .flags = UUI_FILL_W };
@@ -331,7 +558,7 @@ int main(void) {
 
     uui_focus_init(&g_focus, g_focusables,
                    (int)(sizeof g_focusables / sizeof g_focusables[0]));
-    uui_focus_set(&g_focus, 2);   // the log itself has the keyboard on open
+    uui_focus_set(&g_focus, 4);   // the log itself has the keyboard on open
 
     reload();
 
