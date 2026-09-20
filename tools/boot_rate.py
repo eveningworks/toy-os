@@ -15,6 +15,13 @@ It prints a line per boot and a rate at the end. The per-boot lines are
 the point as much as the rate: an intermittent that clusters is a
 different animal from one that is evenly spread, and a total hides that.
 
+`--transfer PATH` sends a file over TFTP immediately before each reboot,
+which is the shape of the population `docs/bugs.md`'s enumeration failure
+actually lives in: every recorded occurrence followed a `remote.py flash`,
+i.e. a reboot taken while the USB network adapter was carrying a transfer.
+A plain reboot loop measures the 0-in-43 population and will sit there
+looking clean.
+
 WHAT IT DOES NOT DO. It does not flash: measure one kernel, and change
 the kernel between runs deliberately. It does not interpret: `--grep` is
 a substring and the count is the count. And it does NOT reboot a machine
@@ -80,6 +87,12 @@ def main():
                     help="substring counted in dmesg after each boot")
     ap.add_argument("--down-timeout", type=int, default=60)
     ap.add_argument("--up-timeout", type=int, default=180)
+    ap.add_argument("--transfer", metavar="PATH",
+                    help="TFTP this local file to the machine just before "
+                         "each reboot, so the reboot happens while the USB "
+                         "NIC is carrying traffic -- the population every "
+                         "recorded occurrence of the enumeration failure "
+                         "came from (docs/bugs.md)")
     ap.add_argument("--show", action="store_true",
                     help="print the matching lines, not just the count -- a "
                          "count alone cannot say WHICH thing matched")
@@ -96,6 +109,18 @@ def main():
         # on, so a run of N gives N samples rather than N-1 and the
         # machine is left rebooted-and-up either way.
         if i > 1:
+            if a.transfer:
+                # Ignored if it fails: a refused transfer is worth a line
+                # and not worth losing the run over, and the reboot below
+                # is still a valid sample of the plain population.
+                rc = subprocess.run([sys.executable, f"{HERE}/remote.py",
+                                     "--host", a.host, "put", a.transfer,
+                                     "/var/tmp/boot_rate_probe.bin"],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL).returncode
+                if rc != 0:
+                    print(f"  boot {i:2d}: transfer FAILED -- "
+                          f"this sample is a plain reboot")
             remote(a.host, "reboot", timeout=10)
             if not wait_down(a.host, a.down_timeout):
                 print(f"boot_rate: {a.host} never went down -- did `reboot` "
