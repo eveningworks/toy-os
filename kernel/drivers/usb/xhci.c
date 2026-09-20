@@ -2212,7 +2212,52 @@ static void attach_root_port(uint32_t p);
 // watch is how this cost two attempts already.
 #define HCSTAGE(name) klog_printf("usb: hcreset stage: " name "\n")
 
+// THE USB2 ATTACH DEBOUNCE (TATTDB), in one place because two paths
+// need it and only one of them ever had it. A plug is a mechanical
+// event and a connection bounces; resetting inside the bounce is how
+// the high-speed chirp is lost, and a device that loses it comes up
+// FULL-speed -- docs/bugs.md's signature exactly. Linux waits for a
+// STABLE connection (hub_port_debounce_be_stable) before it touches
+// reset. Settable to 0 through kernel.usb_attach_delay, which is what
+// lets the failure be provoked rather than waited for at 1 boot in 50.
+static unsigned g_attach_delay_ms = 100;
+
+void usb_set_attach_delay_ms(unsigned ms) {
+    g_attach_delay_ms = ms > 1000 ? 1000 : ms;
+}
+unsigned usb_attach_delay_ms(void) { return g_attach_delay_ms; }
+
 static int g_hc_reset_done;
+
+// QUIESCE THE CONTROLLER ON THE WAY OUT, which is the one place this
+// driver never acted. Every recovery it has is on the way IN -- a port
+// reset, a warm reset of the SuperSpeed companion, a mux cycle, a
+// controller re-init -- and docs/bugs.md records each of them failing
+// to rescue a device that came up wrong. What none of them address is
+// how the device got there: a warm reboot resets the CPU and leaves the
+// xHC running with its links up, so a device is cut off mid-transfer
+// and never sees the link go down. The next boot then re-initialises a
+// controller whose devices are in a state neither side agreed on.
+//
+// Linux does this from the PCI ->shutdown() hook (`xhci_shutdown()`):
+// halt, and reset on the platforms that need the links dropped. This is
+// that, unconditionally, because a warm reboot is the only way this
+// machine ever restarts.
+//
+// HALT **AND** RESET, not halt alone: halting stops SOFs and a device
+// merely suspends, while HCRST returns the root ports to Disconnected
+// so the link partner re-trains from scratch. reset_controller() does
+// both, with deadline-bounded waits -- which matters here because this
+// runs from a syscall with interrupts off, and a wait that cannot end
+// would leave a machine unable to reboot at all. That is strictly worse
+// than the bug, so it is the one property this must not lose.
+void usb_shutdown(void) {
+    if (!g_hc.present || !g_hc.running) return;
+    klog_write("usb: halting the controller before the machine restarts\n");
+    if (!reset_controller())
+        klog_write(KLOG_WARN "usb: controller would not halt -- restarting anyway\n");
+    g_hc.running = 0;
+}
 
 // ARMS the re-init; xhci_deferred_work() performs it. Returns 1 for
 // "accepted", which is all a caller can be told -- the work happens
@@ -2569,10 +2614,9 @@ void xhci_deferred_work(void) {
             // the first keystrokes). A port that already has an
             // enumerated device is not a plug.
             if (usb_root_port_slot((uint8_t)(p + 1))) continue;
-            // The USB2 attach debounce (TATTDB): a plug is a mechanical
-            // event, and enumerating mid-bounce is what the retry would
-            // otherwise spend itself on.
-            xhci_delay_ms(100);
+            // The USB2 attach debounce (TATTDB), shared with the boot
+            // scan below -- see g_attach_delay_ms.
+            xhci_delay_ms(g_attach_delay_ms);
             attach_root_port(p);
         }
     }

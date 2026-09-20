@@ -5,6 +5,7 @@
 #include "ata_cache.h"
 #include "fs.h"
 #include "acpi.h"
+#include "usb.h"      // usb_shutdown() -- quiesce the links before the reset
 
 // COMMIT, THEN FLUSH -- and it must be fs_sync(), not atac_flush().
 // With a write-back cache under the disk (ata_cache.h) a write that
@@ -39,6 +40,17 @@ static void flush_before_stopping(const char *what) {
 
 void system_reboot(void) {
     flush_before_stopping("reboot");
+    // AFTER the flush, because a device may still be carrying the write
+    // out, and BEFORE the reset, because the point is that the links go
+    // down while something is still able to take them down. See
+    // usb_shutdown().
+    //
+    // ITS LOG LINE IS NOT IN THE BOOT LOG, and that is this ordering's
+    // one cost: everything klog_write()s from here on is emitted after
+    // the last fs_sync() and dies with the reset. Serial has it; the
+    // persistent log cannot. Do not go looking for it in
+    // /var/log/boot/NNNN.log and conclude the call did not run.
+    usb_shutdown();
 
     // ACPI first, the 8042 pulse second. That order rather than the
     // other way round because the reset register is what the firmware
@@ -59,6 +71,7 @@ void system_reboot(void) {
 
 void system_poweroff(void) {
     flush_before_stopping("power off");
+    usb_shutdown();
     klog_write("power: poweroff requested\n");
 
     // The real thing: the sleep type from this machine's own `_S5_`,

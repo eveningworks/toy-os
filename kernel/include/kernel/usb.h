@@ -275,6 +275,23 @@ int usb_diag_reset_port(unsigned port);
 // ran, and whether the machine has one at all, is in the log.
 int usb_diag_replug_port(unsigned port);
 
+// `kernel.usb_attach_delay`: how long a freshly connected port is left
+// alone before it is RESET, in milliseconds. The USB2 attach debounce
+// (TATTDB), and a DIAGNOSTIC lever: resetting a port whose connection
+// has not settled is the documented way to lose the high-speed chirp,
+// and a device that loses it comes up FULL-speed -- which is the
+// signature of the enumeration failure in docs/bugs.md. Settable to 0
+// so that failure can be provoked on demand instead of waited for.
+void usb_set_attach_delay_ms(unsigned ms);
+unsigned usb_attach_delay_ms(void);
+
+// Halt and reset the controller before the machine restarts, so devices
+// see their link drop instead of being cut off mid-transfer. Called
+// from kernel/core/power.c on both the reboot and the poweroff path.
+// A no-op on a machine with no xHC. See xhci.c for why this is the one
+// lever docs/bugs.md's enumeration failure had never been given.
+void usb_shutdown(void);
+
 // Re-initialise the whole controller (kernel.usb_hcreset). See xhci.c.
 int usb_controller_reinit(void);
 

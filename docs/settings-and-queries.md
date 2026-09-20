@@ -95,6 +95,19 @@ failure. Refused, in the log, on a controller whose HCCPARAMS1 says port
 power is not software-controllable -- the boot line says which kind a
 machine is (`port power software-controlled (PPC)` or `always on`).
 
+`kernel.usb_attach_delay` is the third of that family and the odd one
+out, because it READS BACK: it is a state rather than an action. It is
+the USB2 attach debounce (TATTDB) in milliseconds -- how long a freshly
+connected port is left alone before it is reset -- and it defaults to
+100. Resetting a port whose connection has not settled is the documented
+way to lose the high-speed chirp, and a device that loses it comes up
+FULL-speed, which is the signature of the enumeration failure in
+`docs/bugs.md`. Settable to 0 so that can be provoked instead of waited
+for at one boot in fifty. **It was the instrument that REFUTED that
+theory** (ten software replugs at 0 ms, ten high-speed results), which
+is what a diagnostic is for; it is kept because the same question comes
+back whenever the retry timing changes.
+
 **A tunable can also be a CONSENT switch, and `kernel.kbdtap` is the
 first.** The others trade performance against diagnostics — turning one
 on costs cycles and tells you more. That one gates whether the kernel

@@ -383,6 +383,45 @@ static const struct setting usb_replug_setting = {
     .apply = usb_replug_apply,
 };
 
+// ---- kernel.usb_attach_delay -------------------------------------------
+//
+// How long a freshly connected port is left alone before it is RESET,
+// in milliseconds -- the USB2 attach debounce (TATTDB). Unlike the two
+// knobs above this one READS BACK, because it is a state rather than an
+// action.
+//
+// It exists as a knob for one reason: the enumeration failure in
+// docs/bugs.md happens on about 1 boot in 50, and a lever that provokes
+// it turns a boot lottery into an experiment. Set it to 0, replug a
+// port in software, and see what speed the device negotiates.
+
+static void usb_attach_delay_get(char *out, uint32_t cap) {
+    k_snprintf(out, cap, "%u", usb_attach_delay_ms());
+}
+
+static int usb_attach_delay_apply(const char *value) {
+    if (!value || !value[0]) return SETTING_INVALID;
+    unsigned ms = 0;
+    for (const char *c = value; *c; c++) {
+        if (*c < '0' || *c > '9') return SETTING_INVALID;
+        ms = ms * 10 + (unsigned)(*c - '0');
+        if (ms > 1000) return SETTING_INVALID;
+    }
+    usb_set_attach_delay_ms(ms);
+    return SETTING_SAVED;
+}
+
+static const struct setting usb_attach_delay_setting = {
+    .name = "usb_attach_delay",
+    .label = "USB attach debounce (ms)",
+    .type = SETTING_TYPE_STRING,
+    .file = CONFIG_PATH_RUNTIME,
+    .category = TUNABLE_CATEGORY,
+    .group = "Diagnostics",
+    .get = usb_attach_delay_get,
+    .apply = usb_attach_delay_apply,
+};
+
 // ---- system.usb_recover -----------------------------------------------
 //
 // POLICY, not a diagnostic: whether a port that has exhausted every
@@ -515,6 +554,7 @@ void tunables_register(void) {
     setting_register(&hda_tone_setting);
     setting_register(&usb_reset_setting);
     setting_register(&usb_replug_setting);
+    setting_register(&usb_attach_delay_setting);
     setting_register(&g_usb_hcreset_setting);
     setting_register(&g_usb_recover_setting);
     setting_register(&ata_nodma_setting);
