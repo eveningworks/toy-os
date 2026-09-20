@@ -312,6 +312,48 @@ static const char *tosh_script_shell(char *buf, size_t cap);
 static int spawn_or_script(const char *path, const char *const *argv, int argc,
                            struct sys_spawn_opts *o);
 
+// WHY THE SPAWN FAILED, IN WORDS SOMEBODY CAN ACT ON. Both sites below
+// printed "cannot execute" for every failure, and the comment on one of
+// them even claimed "it is there; it would not start" -- which is wrong
+// for the commonest case. A word containing a `/` skips the PATH search
+// (that is what a path MEANS), so it never reaches the "not found" the
+// search would have printed: `./typo` reported a broken program rather
+// than a missing one, and the two have opposite fixes. dash and bash
+// both distinguish them for that reason.
+// `err` is sys_errno(), READ AT THE CALL SITE: sys_spawn_opts() returns
+// -1 and puts the reason in errno, so negating the return value gives
+// EPERM for everything -- which is what the first version of this
+// printed for a missing file.
+// Returns the STATUS to exit with, because the two answers have
+// different ones in every Bourne descendant: 127 for a command that is
+// not there, 126 for one that is and will not run (tosh.h). A script
+// testing $? cares about the difference for the same reason a person
+// does.
+static int report_spawn_failure(struct tosh *sh, const char *what,
+                                const char *path, int err) {
+    emit(sh, what);
+    // A DIRECTORY EXISTS, SO "not found" WOULD BE A LIE. The kernel
+    // answers ENOENT for one because there is no program there, which
+    // is true and unhelpful; bash says "Is a directory" and so does
+    // this. Asked only on the failure path, so the ordinary case pays
+    // nothing for it.
+    struct sys_stat dst;
+    if (path && sys_stat(path, &dst) == 0 && dst.is_dir) {
+        emit(sh, ": is a directory\n");
+        return TOSH_ST_NOEXEC;
+    }
+    if (err == ENOENT) {
+        emit(sh, ": not found\n");
+        return TOSH_ST_NOTFOUND;
+    }
+    // The errno, not a guess: "cannot execute" alone cost an afternoon
+    // once already when the real answer was in a number nobody printed.
+    emit(sh, ": cannot execute -- ");
+    emit(sh, sys_strerror(err));
+    emit(sh, "\n");
+    return TOSH_ST_NOEXEC;
+}
+
 static int run_external(struct tosh *sh, const char *path, const char **argv,
                         const char *label, int background) {
 
@@ -350,11 +392,7 @@ static int run_external(struct tosh *sh, const char *path, const char **argv,
     int argc_n = 0;
     while (argv[argc_n]) argc_n++;
     int pid = spawn_or_script(path, (const char *const *)argv, argc_n, &o);
-    if (pid < 0) {                        // it is there; it would not start
-        emit(sh, argv[0]);
-        emit(sh, ": cannot execute\n");
-        return TOSH_ST_NOEXEC;
-    }
+    if (pid < 0) return report_spawn_failure(sh, argv[0], path, sys_errno());
     int pgid = sys_getpgid(pid);
 
     // **A BACKGROUND JOB IS NOT GIVEN THE TERMINAL, AND THAT IS THE
@@ -688,9 +726,15 @@ static int spawn_or_script(const char *path, const char *const *argv, int argc,
 // Does this path name a file this shell could hand to an interpreter?
 // Existence only: the kernel decides whether it is executable, and
 // asking twice would be a second answer to drift from the first.
+//
+// **EXCEPT A DIRECTORY, WHICH IS NEVER A SCRIPT.** `./bin` used to
+// reach the interpreter, which opened it, failed, and reported
+// `cannot open ./bin: No such file` -- a message about the wrong thing
+// entirely, from a program the user never mentioned. Refusing here
+// lets the spawn's own errno be the answer.
 static int uaccess_ok(const char *path) {
     struct sys_stat st;
-    return path && path[0] && sys_stat(path, &st) == 0;
+    return path && path[0] && sys_stat(path, &st) == 0 && !st.is_dir;
 }
 
 // WHICH SHELL interprets a file that is not a program -- `system.shell`,
@@ -961,8 +1005,7 @@ static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
         // with a status nothing had earned, which is how a script that
         // would not run looked like the shell ignoring the command.
         if (st[i].pid <= 0) {
-            emit(sh, argv[0]);
-            emit(sh, ": cannot execute\n");
+            (void)report_spawn_failure(sh, argv[0], path, sys_errno());
         }
 
         if (st[i].pid > 0 && job_pgid <= 0)
