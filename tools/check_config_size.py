@@ -97,18 +97,26 @@ def saver_caps():
 
 
 def saver_text_problems():
-    """Over-long per-option text in a screensaver descriptor.
+    """Over-long per-option text in a screensaver or EFFECT descriptor.
 
     Same trap as the settings one below and a different set of fields: a
     `Desc.stars=` longer than the struct's array is `strlcpy`'d, so it
     reaches System Settings truncated mid-word with the file itself far
     under every size limit here.
+
+    **BOTH DIRECTORIES, because there are two kinds of descriptor now.**
+    A window effect declares its options the same way a saver does
+    (userland/lib/ueffect.h) and through the same struct, so it has the
+    same caps -- and the day effects arrived, a 126-character
+    `Desc.pieces` sailed past this check and reached the options dialog
+    cut off at "...each piece is thrown fu". A checker that knows one
+    producer of a format is a checker the next producer walks around.
     """
     caps = saver_caps()
     if not caps:
         return []
     out = []
-    for rel in tracked("data/wm/savers"):
+    for rel in tracked("data/wm/savers") + tracked("data/wm/effects"):
         path = os.path.join(REPO, rel)
         if not os.path.isfile(path) or rel.endswith(".md"):
             continue

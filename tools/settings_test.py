@@ -642,6 +642,104 @@ def main():
         drain(dbg)
         return True
 
+    # --- an EFFECT's own options, in a window of their own ------------
+    #
+    # A minimize effect declares what it lets you change
+    # (userland/lib/ueffect.h) and System Settings reaches those through
+    # a Settings... button, not rows on the page. Three things matter
+    # and none is visible in a screendump: the button appears ONLY where
+    # there is something to configure, the options are in the DIALOG and
+    # not on the page, and Cancel writes nothing.
+    #
+    # **EARLY, WHILE THE APP IS FRESH.** Run last, after the phases that
+    # move the page scroll, stage a change and drag the splitter, the
+    # sidebar click simply did not take -- and the failure said only
+    # "page is None". A phase establishes its own preconditions; the
+    # cheapest way here is not to inherit eighty checks of state.
+    eff_page = select_page("Effects", "Appearance/Effects")
+    if eff_page:
+        dbg.send("sh config set desktop.minimize_effect shatter")
+        dbg.settle(1.2)
+        mark_eff = len(drain(dbg))
+
+        def opts_button():
+            drain(dbg)
+            for line in reversed(_log):
+                m = re.search(r"settings: opts_button (-?\d+) (-?\d+) (-?\d+) "
+                              r"(-?\d+) opts (\d+)", line)
+                if m:
+                    return [int(v) for v in m.groups()]
+            return None
+
+        ob = opts_button()
+        check("effects: a Settings... button, because shatter declares options",
+              ob is not None and ob[4] > 0 and ob[2] > 0, f"opts_button={ob}")
+
+        # **ASKED BEFORE THE DIALOG EXISTS.** The app reports every slot
+        # it holds, whichever surface drew it -- so once the dialog is
+        # up its controls have real rects and "not on the page" cannot
+        # be read from the report any more. On the page alone they are
+        # unplaced, which is the thing worth asserting.
+        placed = [n for n, c in controls(dbg, mark_eff).items()
+                  if n.startswith("shatter.") and c["w"] > 0]
+        check("effects: the options are not drawn on the page",
+              not placed, f"placed on the page: {placed}")
+
+        if ob and ob[4] > 0:
+            geo_eff = layout(dbg)
+            pv = geo_eff.get("page", (px0, py0, pw0, ph0))
+            for _ in range(8):
+                ob = opts_button() or ob
+                if pv[1] <= ob[1] and ob[1] + ob[3] <= pv[1] + pv[3]:
+                    break
+                dbg.warp_cursor(qmp, cx + pv[0] + pv[2] // 2,
+                                cy + pv[1] + pv[3] // 2)
+                for _ in range(3):
+                    dbg.send("gui wheel -1")
+                dbg.settle()
+            # WAIT FOR THE WINDOW, don't sleep at it -- and click again
+            # once if it has not come. A fixed sleep passed twice and
+            # failed the third time: the app relayouts after the scroll,
+            # and a click landing in that window does nothing.
+            dlg = None
+            for attempt in range(2):
+                click(ob[0] + ob[2] // 2, ob[1] + ob[3] // 2)
+                deadline = time.time() + 6
+                while time.time() < deadline:
+                    dlg = dbg.window("Shatter options")
+                    if dlg:
+                        break
+                    time.sleep(0.25)
+                if dlg:
+                    break
+                dbg.settle(1.0)
+                ob = opts_button() or ob
+            check("effects: the button opens the effect's options window",
+                  dlg is not None,
+                  f"windows={[w['title'] for w in dbg.windows()]}")
+            if dlg:
+                # NAMED, not `shatter options`: the descriptor's token is
+                # the author's word and a title bar shows a name.
+                # `owner` is a window INDEX and -1 is the sentinel
+                # (wm_debug.c) -- 0 is a real owner, System Settings
+                # itself, which an `owner != 0` test called no owner.
+                check("effects: it is a MODAL dialog owned by the page",
+                      bool(dlg.get("dialog")) and bool(dlg.get("modal")) and
+                      dlg.get("owner", -1) >= 0,
+                      f"dialog={dlg.get('dialog')} modal={dlg.get('modal')} "
+                      f"owner={dlg.get('owner')}")
+
+                before = dbg.send("sh cat /etc/effects/shatter.conf") or ""
+                dc = dlg["content"]
+                # Cancel writes NOTHING -- it and the X are one answer.
+                dbg.send(f"gui click {dc['x'] + 92} {dc['y'] + dc['h'] - 22}")
+                time.sleep(1.5)
+                dbg.settle(1.0)
+                after = dbg.send("sh cat /etc/effects/shatter.conf") or ""
+                check("effects: Cancel closes it and writes nothing",
+                      dbg.window("Shatter options") is None and after == before,
+                      f"before={before.strip()!r} after={after.strip()!r}")
+
     # --- A GROUP PAGE CARRIES SEVERAL SETTINGS ------------------------
     #
     # The Mouse page is the fixture because its four settings come from

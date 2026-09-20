@@ -84,9 +84,15 @@ _Static_assert(UUI_TEXTBOX_MAX >= SETTING_ABI_VALUE_MAX,
 #define MAX_GROUPS     MAX_SETTINGS
 // Controls on one page. A group larger than this would be a page nobody
 // can take in anyway; the overflow is REPORTED rather than silently cut.
-// Sized by the Screensaver page, which is the only one that grows: its
-// two registry settings plus whatever the chosen saver declares.
-#define PAGE_MAX       (2 + USAVER_OPT_MAX)
+//
+// **IT COUNTS THE OPTIONS TOO, and that is why it is not 2 +
+// USAVER_OPT_MAX any more.** It was sized by the Screensaver page --
+// two registry settings plus what the saver declares -- and then
+// Appearance -> Effects gained an owner of its own with FIVE settings
+// above it, so the second of shatter's two options did not fit and
+// vanished with nothing on screen saying so. The ceiling has to cover
+// the biggest PAGE plus the most options an owner can declare.
+#define PAGE_MAX       (12 + USAVER_OPT_MAX)
 
 // Above this many choices a page uses a DROPDOWN rather than radio
 // buttons, unless /etc/settings.d says otherwise. Few mutually-exclusive
@@ -97,7 +103,8 @@ _Static_assert(UUI_TEXTBOX_MAX >= SETTING_ABI_VALUE_MAX,
 enum { CTRL_RADIO = 0, CTRL_COMBO, CTRL_SLIDER, CTRL_SPIN, CTRL_TEXT,
        CTRL_KEYCAP };
 
-enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST, ID_BUTTONS, ID_STATUS,
+enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST,
+       ID_OPTS, ID_OPTS_OK, ID_OPTS_CANCEL, ID_BUTTONS, ID_STATUS,
        ID_CONTROL_BASE = 100 }; // + slot, so a control names its own row
 
 // NON-ZERO on purpose: uui_button_group_take_activated() returns 0 for
@@ -310,6 +317,32 @@ static struct uui_checkbox  g_advanced_cb;
 // input exactly as it dismisses its own (wm_idle.h), so this needs no
 // protocol of its own and cannot stick.
 static struct uui_button    g_test_btn;
+
+// --- the effect's own options, in a window of their own ---------------
+//
+// **A BUTTON AND A DIALOG, NOT ROWS ON THE PAGE.** Windows puts
+// Settings... beside the screensaver dropdown and KDE puts a configure
+// button beside each effect that has one; both keep "which effect" and
+// "how that effect behaves" apart, and the page stops growing with
+// every effect that gains an option.
+//
+// The saver page keeps its options inline for now, and its own comment
+// says why that was right THERE: a dialog would cover the thing Test
+// is previewing. An effect has no Test, so the argument does not carry.
+static struct uui_button    g_opts_btn;   // "Settings..."
+static struct uui_button    g_opts_ok, g_opts_cancel;
+static struct uapp_window  *g_opts_win;
+// Which owner the OPEN page has, so the page, its prose and the button
+// agree about where the options are drawn.
+static const char          *g_page_owner_kind;
+static struct uui_item      DLG[PAGE_MAX * 5 + 4];
+static int                  DLG_COUNT;
+static struct uui_focusable DFOCUS[PAGE_MAX];
+static int                  DFOCUS_COUNT;
+static struct uui_focus     g_dlg_focus;
+static struct uui_layout    DLG_LAYOUT;
+static struct uui_layout    DLG_ROW;      // the OK/Cancel strip
+static struct uui_item      DLG_ROW_ITEMS[2];
 static int g_test_has;
 static struct uui_sidebar   g_tree;
 static struct uui_button    g_btn[3];
@@ -879,6 +912,11 @@ static void rebuild_owner_options(const char *kind, const char *saver) {
     if (g_saver_slot < 0) return;
     g_slot_count = g_saver_slot;
     g_saver_base = -1;
+    // NOT CLEARED HERE. A caller with no name is a dropdown whose
+    // staged value is momentarily empty, not a page without an owner --
+    // and clearing on it lost starfield's options when the saver
+    // dropdown was moved away and back. The page-has-no-owner case is
+    // open_group's, where the owner is known to be absent.
     if (!kind || !saver || !saver[0]) return;
 
     if (kind == OWNER_EFFECT) ueffect_load(saver, &g_saver);
@@ -947,6 +985,13 @@ static const char *owner_kind(int idx) {
 // The page's owner setting and its STAGED value -- what the options
 // below must belong to, which is the value the dropdown shows and not
 // the one on disk.
+// **ONLY AN EFFECT'S OPTIONS MOVE TO THE DIALOG.** A saver's stay on
+// its page, where its own comment says they belong: Test previews the
+// saver, and a window over the page would cover what is being
+// previewed. An effect has no Test, which is why the button is right
+// for it and not for the saver.
+static int owner_uses_dialog(const char *kind) { return kind == OWNER_EFFECT; }
+
 static const char *page_owner(const char **kind_out) {
     for (int i = 0; i < g_slot_count; i++) {
         if (g_slot[i].setting < 0 || opt_of(g_slot[i].setting)) continue;
@@ -1043,10 +1088,22 @@ static void open_group(int g) {
     // dialog would hide the thing Test is there to preview.
     const char *own_kind = 0;
     const char *own_name = page_owner(&own_kind);
+    g_page_owner_kind = own_kind;
     if (own_kind) {
         g_saver_slot = g_slot_count;
         rebuild_owner_options(own_kind, own_name);
+    } else {
+        // NO OWNER ON THIS PAGE MEANS NO OPTIONS, and g_saver must be
+        // emptied to say so. Leaving it is how the Effects page came to
+        // report the SCREENSAVER's three options and offer a button
+        // that opened nothing: the count is read from g_saver, and the
+        // previous page had filled it.
+        g_saver.opt_count = 0;
+        g_saver.name[0] = '\0';
     }
+    ulogf("settings: owner %s %s opts %d\n",
+          own_kind ? own_kind : "-", own_name ? own_name : "-",
+          g_saver.opt_count);
 
     g_advanced_cb.checked = g_show_advanced;
     // The checkbox appears only where there is something to reveal --
@@ -1384,6 +1441,118 @@ static int emit_slot(struct uui_item *out, int n, int i,
     return n;
 }
 
+// The options dialog's own item list: the SAME slots the page would
+// have shown inline, emitted into this window's array instead.
+static int control_changed(int slot_index);
+
+static void relayout_dialog(int content_w) {
+    int n = 0;
+    DFOCUS_COUNT = 0;
+    for (int i = g_saver_slot; i >= 0 && i < g_slot_count; i++) {
+        // FIT THE PROSE TO THIS WINDOW, not to the page's width.
+        // refit_prose() runs over every slot at the PAGE's label width
+        // and the page's on_draw is what triggers it -- a dialog has
+        // neither, so an option's explanation kept the row count it was
+        // given on a wider page and came out cut off mid-word
+        // ("...because each piece is thrown fu").
+        //
+        // The width is the one this window was CREATED with, which is
+        // the only number available before its layout has run.
+        struct slot *sl = &g_slot[i];
+        if (sl->setting >= 0) {
+            sl->explain.w = content_w;
+            fit_rows(&sl->explain, slot_prose(sl->setting));
+        }
+        n = emit_slot(DLG, n, i, DFOCUS, &DFOCUS_COUNT);
+    }
+
+    DLG_ROW_ITEMS[0] = (struct uui_item){ .ops = &uui_button_ops,
+                                          .widget = &g_opts_ok, .id = ID_OPTS_OK };
+    DLG_ROW_ITEMS[1] = (struct uui_item){ .ops = &uui_button_ops,
+                                          .widget = &g_opts_cancel, .id = ID_OPTS_CANCEL };
+    DLG_ROW = (struct uui_layout){ .dir = UUI_ROW, .items = DLG_ROW_ITEMS,
+                                   .count = 2, .margin = 0 };
+    DLG[n++] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &DLG_ROW,
+                                  .id = 0, .flags = UUI_FILL_W };
+
+    DLG_LAYOUT = (struct uui_layout){ .dir = UUI_COLUMN, .items = DLG,
+                                      .count = n, .margin = 0 };
+    DLG_COUNT = n;
+    uui_focus_init(&g_dlg_focus, DFOCUS, DFOCUS_COUNT);
+}
+
+// What the dialog is called and how big it is. FONT-DERIVED, never
+// pixels: this window holds a caption, an explanation and a control per
+// option, and a hardcoded size does not reflow when the font does.
+static void opts_window_size(int *w, int *h) {
+    int line = ugfx_char_h() > 0 ? ugfx_char_h() : 14;
+    int rows = 0;
+    for (int i = g_saver_slot; i >= 0 && i < g_slot_count; i++) rows += 5;
+    *w = ugfx_char_w() * 52;
+    *h = line * (rows + 6);
+}
+
+static void dlg_on_widget(struct uapp_window *win, int id, int reason) {
+    (void)reason;
+    if (id >= ID_CONTROL_BASE && id < ID_CONTROL_BASE + PAGE_MAX) {
+        control_changed(id - ID_CONTROL_BASE);
+        uapp_window_redraw(win);
+        return;
+    }
+    if (id == ID_OPTS_OK) {
+        // The staged values, written to the effect's own file. The
+        // page's Apply writes registered settings; an option is not
+        // one, so this is where it lands -- the same uconf_set() call
+        // the inline rows used.
+        for (int i = g_saver_slot; i >= 0 && i < g_slot_count; i++) {
+            struct slot *sl = &g_slot[i];
+            const struct usaver_opt *o = opt_of(sl->setting);
+            if (!o || sl->staged < 0) continue;
+            uconf_set(g_file[sl->setting], o->key, staged_value(sl));
+        }
+        uapp_window_close(win);
+        return;
+    }
+    if (id == ID_OPTS_CANCEL) uapp_window_close(win);
+}
+
+static void dlg_on_close(struct uapp_window *win) {
+    // NOTHING IS WRITTEN ON A CLOSE, which is Cancel's rule: the X and
+    // Cancel are the same answer, and a dialog that committed on the X
+    // would be the one shape of this nobody expects.
+    uapp_window_close(win);
+}
+
+static void open_options_dialog(struct uapp *a) {
+    if (g_opts_win && uapp_window_is_open(g_opts_win)) return;
+    if (g_saver_slot < 0 || g_slot_count <= g_saver_slot) return;
+    int w, h;
+    opts_window_size(&w, &h);
+    relayout_dialog(w - ugfx_char_w() * 2);
+
+    // THE TITLE IS A NAME, NOT A TOKEN. `shatter` is the word the
+    // descriptor's author chose, and usaver_display() is what turns one
+    // into something a title bar should say -- the same call the choice
+    // lists use, so "Shatter options" and the `Shatter` radio row agree.
+    //
+    // STATIC, because uapp_window_open() copies the DESC and not the
+    // strings in it: a stack buffer here is a title that outlives its
+    // own storage.
+    static char title[SETTING_ABI_LABEL_MAX + 16];
+    char shown[SETTING_ABI_LABEL_MAX];
+    usaver_display(g_saver.name, shown, sizeof shown);
+    snprintf(title, sizeof title, "%s options", shown);
+    g_opts_win = uapp_window_open(a, &(struct uapp_window_desc){
+        .title = title, .w = w, .h = h, .flags = UAPP_WIN_MODAL,
+        .widgets = DLG, .widget_count = DLG_COUNT,
+        .layout = &DLG_LAYOUT, .focus = &g_dlg_focus,
+        .on_widget = dlg_on_widget, .on_close = dlg_on_close,
+        // A window a test cannot ask about is one a test has to guess
+        // pixels at (ui/uapp.h).
+        .log_prefix = "settings.options",
+    });
+}
+
 static void relayout_page(void) {
     int n = 0;
     FOCUS_COUNT = 0;
@@ -1428,7 +1597,13 @@ static void relayout_page(void) {
     if (title_dup) g_page_desc_text[0] = '\0';
 
     g_page_captions = 0;
-    for (int i = 0; i < g_slot_count; i++) {
+    // THE OPTION ROWS ARE NOT ON THE PAGE. They belong to whichever
+    // effect or saver the dropdown names, and they are reached through
+    // the Settings... button below it -- see g_opts_btn. g_saver_slot
+    // is where they start, so the page stops there.
+    int page_slots = (g_saver_slot >= 0 && owner_uses_dialog(g_page_owner_kind))
+                     ? g_saver_slot : g_slot_count;
+    for (int i = 0; i < page_slots; i++) {
         struct slot *sl = &g_slot[i];
         n = emit_slot(PAGE, n, i, FOCUS, &FOCUS_COUNT);
 
@@ -1452,12 +1627,23 @@ static void relayout_page(void) {
                                             .widget = &g_test_btn,
                                             .id = ID_TEST };
         }
+        // SETTINGS... SITS UNDER THE CONTROL IT CONFIGURES, and only
+        // where there is something to configure: an effect that
+        // declares no options gets no button rather than a dialog that
+        // opens empty. Windows shows it greyed; this system has no
+        // greyed buttons and an absent one says the same thing.
+        if (sl->setting >= 0 && owner_uses_dialog(owner_kind(sl->setting)) &&
+            g_saver.opt_count > 0) {
+            PAGE[n++] = (struct uui_item){ .ops = &uui_button_ops,
+                                            .widget = &g_opts_btn,
+                                            .id = ID_OPTS };
+        }
 
         // The gap that separates this setting from the next -- see
         // `spacer`. NOT after the last one: a trailing blank row at the
         // bottom of a scroll view is space you can scroll to and find
         // nothing in.
-        if (i + 1 < g_slot_count) {
+        if (i + 1 < page_slots) {
             PAGE[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &sl->spacer,
                                             .id = 0, .flags = UUI_FILL_W };
         }
@@ -1535,35 +1721,20 @@ static void save_split(void) {
     uconf_set(SETTINGS_CONF, "sidebar", v);
 }
 
-static void on_widget(struct uapp *a, int id, int reason) {
-    // COMMIT ON RELEASE, docs/gui-guidelines.md's rule for every control
-    // here -- and this file used to discard `reason` entirely. The
-    // router delivers press, MOTION, release and wheel, so acting on all
-    // of them meant merely moving the pointer across the choice list
-    // applied a setting: each motion wrote /etc, bumped fs_generation()
-    // and made the desktop re-read every .desktop file. Hovering froze
-    // the machine for seconds.
-    // A KEY IS A DELIBERATE ACT AND STAGES; a motion is not. What the
-    // rule above is really about is not acting on a pointer merely
-    // crossing a control -- typing into a focused dropdown, or arrowing
-    // through an open one, is the user choosing a value, and it would
-    // otherwise change on screen and be silently dropped by Apply.
-    //
-    // **THE DIVIDER IS THE ONE EXCEPTION, and it has to be exempted
-    // HERE or its own "live" comment below is a lie** -- which it was:
-    // the layout re-ran only on release, so the columns jumped at the
-    // end of a drag instead of following the handle. Every real toolkit
-    // resizes panes during the drag (Qt's QSplitter `opaqueResize`,
-    // GtkPaned), and the reason motion is dangerous in this app does
-    // not apply to it: relaying out is free, and the /etc write it
-    // would be dangerous to repeat still waits for the release.
-    if (id != ID_SIDE_SPLIT &&
-        reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) return;
-
-    if (id >= ID_CONTROL_BASE && id < ID_CONTROL_BASE + PAGE_MAX) {
+// A CONTROL MOVED: stage its value, say so, and -- when the control is
+// the one that OWNS a page's options -- rebuild them.
+//
+// Shared with the options dialog, which routes the same slot ids
+// through its own window: staging is the slot's, not the surface's, so
+// a control changed in either place stages identically and one Apply
+// writes both.
+//
+// Returns 1 when the page's own item list has to be rebuilt.
+static int control_changed(int slot_index) {
+    int relayout = 0;
         // STAGED, not applied. The selection is remembered; Apply or OK
         // is what writes it.
-        struct slot *sl = &g_slot[id - ID_CONTROL_BASE];
+        struct slot *sl = &g_slot[slot_index];
         // A SPINBOX REPORTS A NUMBER, and it has already bounded it --
         // the widget cannot produce a value outside the range the
         // registry gave it. `staged` therefore holds the number itself
@@ -1598,8 +1769,38 @@ static void on_widget(struct uapp *a, int id, int reason) {
         if (sl->setting >= 0 && !opt_of(sl->setting) && owner_kind(sl->setting)) {
             rebuild_owner_options(owner_kind(sl->setting), staged_value(sl));
             g_prose_fitted = 0;   // the new rows' text has never been fitted
-            relayout_page();
+            relayout = 1;
         }
+    return relayout;
+}
+
+static void on_widget(struct uapp *a, int id, int reason) {
+    // COMMIT ON RELEASE, docs/gui-guidelines.md's rule for every control
+    // here -- and this file used to discard `reason` entirely. The
+    // router delivers press, MOTION, release and wheel, so acting on all
+    // of them meant merely moving the pointer across the choice list
+    // applied a setting: each motion wrote /etc, bumped fs_generation()
+    // and made the desktop re-read every .desktop file. Hovering froze
+    // the machine for seconds.
+    // A KEY IS A DELIBERATE ACT AND STAGES; a motion is not. What the
+    // rule above is really about is not acting on a pointer merely
+    // crossing a control -- typing into a focused dropdown, or arrowing
+    // through an open one, is the user choosing a value, and it would
+    // otherwise change on screen and be silently dropped by Apply.
+    //
+    // **THE DIVIDER IS THE ONE EXCEPTION, and it has to be exempted
+    // HERE or its own "live" comment below is a lie** -- which it was:
+    // the layout re-ran only on release, so the columns jumped at the
+    // end of a drag instead of following the handle. Every real toolkit
+    // resizes panes during the drag (Qt's QSplitter `opaqueResize`,
+    // GtkPaned), and the reason motion is dangerous in this app does
+    // not apply to it: relaying out is free, and the /etc write it
+    // would be dangerous to repeat still waits for the release.
+    if (id != ID_SIDE_SPLIT &&
+        reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) return;
+
+    if (id >= ID_CONTROL_BASE && id < ID_CONTROL_BASE + PAGE_MAX) {
+        if (control_changed(id - ID_CONTROL_BASE)) relayout_page();
         uapp_redraw(a);
         return;
     }
@@ -1629,6 +1830,10 @@ static void on_widget(struct uapp *a, int id, int reason) {
         g_show_advanced = g_advanced_cb.checked;
         if (g_page_group >= 0) open_group(g_page_group);
         break;
+    case ID_OPTS:
+        open_options_dialog(a);
+        return;
+
     case ID_TEST: {
         // THE SAVER AS IT IS CONFIGURED RIGHT NOW, staged value and all
         // -- previewing what is on disk rather than what is on screen
@@ -1744,7 +1949,14 @@ static int refit_prose(void) {
     int was = g_page_desc.rows;
     fit_rows(&g_page_desc, g_page_desc_text);
     if (g_page_desc.rows != was) changed = 1;
-    for (int i = 0; i < g_slot_count; i++) {
+    // THE PAGE FITS WHAT THE PAGE SHOWS. The option slots live past
+    // g_saver_slot and are drawn in the options DIALOG, at its narrower
+    // width -- and one `explain` label serves both surfaces, so a page
+    // that re-fitted them overwrote the dialog's fit on its next frame
+    // and cut an explanation off mid-word while the dialog was open.
+    int page_slots = (g_saver_slot >= 0 && owner_uses_dialog(g_page_owner_kind))
+                     ? g_saver_slot : g_slot_count;
+    for (int i = 0; i < page_slots; i++) {
         struct slot *sl = &g_slot[i];
         if (sl->setting < 0) continue;
         was = sl->explain.rows;
@@ -1892,6 +2104,12 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
         // of its own (docs/gui-guidelines.md).
         ulogf("settings: test_button %d %d %d %d shown %d\n",
               g_test_btn.x, g_test_btn.y, g_test_btn.w, g_test_btn.h, g_test_has);
+        // The options button, on the same terms: a test clicks what the
+        // app reports, and `opts` is how it learns whether this page
+        // has one at all.
+        ulogf("settings: opts_button %d %d %d %d opts %d\n",
+              g_opts_btn.x, g_opts_btn.y, g_opts_btn.w, g_opts_btn.h,
+              g_saver.opt_count);
         ulogf("settings: advanced_toggle %d %d %d %d shown %d\n",
               g_advanced_cb.x, g_advanced_cb.y, g_advanced_cb.w, g_advanced_cb.h,
               g_advanced_has);
@@ -2097,6 +2315,9 @@ int main(void) {
         g_slot[i].slider.fg = UTHEME_TEXT;
     }
     uui_button_init(&g_test_btn, 0, 0, 0, 0, "Test", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);
+    uui_button_init(&g_opts_btn, 0, 0, 0, 0, "Settings...", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);
+    uui_button_init(&g_opts_ok, 0, 0, 0, 0, "OK", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);
+    uui_button_init(&g_opts_cancel, 0, 0, 0, 0, "Cancel", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);
     uui_checkbox_init(&g_advanced_cb, 0, 0, 0, "Show advanced settings",
                        UTHEME_PANEL_BG, UTHEME_TEXT);
 

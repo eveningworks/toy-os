@@ -458,6 +458,9 @@ whenever a headline here tells you something you did not already know.
   DAMAGE THE WHOLE TRAVEL.**
 - **AN EFFECT'S OWN OPTIONS ARE A DESCRIPTOR, THE WAY A SCREENSAVER'S
   ARE** -- `/usr/wm/effects/<name>.effect`, `/etc/effects/<name>.conf`.
+- **AN EFFECT'S OPTIONS OPEN IN A DIALOG; A SAVER'S STAY ON ITS PAGE.**
+- **ONE `g_saver` SERVES WHICHEVER PAGE HAS AN OWNER, so a page without
+  one must CLEAR it.**
 - **AND THE STAGGER IS WHAT TELLS TWO PIECEWISE MOTIONS APART.**
 - **A WINDOW'S DAMAGE IS ITS OUTER RECT -- THE FRAME PLUS ITS SHADOW --
   AND `wm_damage_window_rect()` IS HOW IT IS DAMAGED.**

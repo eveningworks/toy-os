@@ -5,7 +5,7 @@
 Options=pieces,motion
 Option.pieces=enum:coarse,medium,fine:coarse
 Label.pieces=Pieces
-Desc.pieces=How many pieces the window breaks into. Fine scatters the most, because each piece is thrown further relative to its own size.
+Desc.pieces=How many pieces the window breaks into. Fine scatters the most.
 Widget.pieces=slider
 Option.motion=enum:pour,explode:pour
 Label.motion=Motion

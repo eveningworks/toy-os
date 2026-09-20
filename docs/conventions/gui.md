@@ -2124,6 +2124,28 @@ real scanout hardware does. Do not write a pixel assertion for one.
   edit there. **An effect with no descriptor has no options**, which is
   a state and not an error -- it is every effect but `shatter`.
 
+- **AN EFFECT'S OPTIONS OPEN IN A DIALOG; A SAVER'S STAY ON ITS PAGE.**
+  `Settings...` sits under the effect dropdown and opens a modal owned
+  window (`uapp_window_open()`, `UAPP_WIN_MODAL`) carrying the same
+  slots the page would have drawn -- `emit_slot()` builds a control for
+  either surface, so there is one switch and not two. The button
+  appears only where the selected owner declares options; an effect
+  without a descriptor gets none rather than a dialog that opens empty.
+  **The saver keeps its options inline** and that is not an
+  inconsistency: its page carries Test, and a window over it would
+  cover what Test is previewing. `owner_uses_dialog()` is where that
+  decision lives. Set the dialog's `log_prefix`, or a test has to guess
+  pixels at a window the toolkit would otherwise describe for free.
+
+- **ONE `g_saver` SERVES WHICHEVER PAGE HAS AN OWNER, so a page without
+  one must CLEAR it.** It held the last page's options otherwise, and
+  Appearance -> Effects offered a Settings... button reporting the
+  SCREENSAVER's three options and opening nothing. The inverse is just
+  as wrong: a dropdown whose staged name is momentarily empty must NOT
+  clear, or moving the saver dropdown away and back loses its options.
+  `open_group()` logs `settings: owner <kind> <name> opts <n>` so which
+  of the two happened is a fact rather than a symptom.
+
 - **AND THE STAGGER IS WHAT TELLS TWO PIECEWISE MOTIONS APART.** Shatter
   pours with a 35% row stagger, so the window empties from the edge
   nearest the taskbar; it explodes with 8%, because a burst whose bottom
