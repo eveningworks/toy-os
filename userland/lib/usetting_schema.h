@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "setting_abi.h"
+#include "lib/usetting_text.h"
 
 // A setting DECLARED by a file, and owned by ring 3.
 //
@@ -185,11 +186,31 @@ void uschema_choice_label(const struct uschema *s, const char *value,
                           char *out, uint32_t cap);
 
 // Fills a reply's presentation fields -- description, widget, sflags,
-// order -- from the declaration file. The same keys setting_text.c
-// reads for a kernel setting, read here because a schema setting has no
-// kernel side to read them.
+// order -- from /etc/settings.d.
+//
+// **BY (ns, name), BECAUSE IT SERVES BOTH HALVES NOW.** The kernel read
+// these files itself to answer for its own settings; it does not any
+// more (lib/usetting_text.h), so this is the one reader for the
+// directory. A setting the kernel registered and one declared by a file
+// get their description and their widget from exactly the same code.
 struct setting_msg;
+void uschema_text_for(const char *ns, const char *name, struct setting_msg *m);
 void uschema_text(const struct uschema *s, struct setting_msg *m);
+
+// The display name for one choice -- `Choice.<value>` -- and a page's
+// own Label/Description from `group.<category>.<group>`. Both were the
+// kernel's; both are here for the same reason.
+//
+// **IT WRITES ONLY WHEN THE FILE NAMES THE CHOICE, and returns whether
+// it did.** /etc/settings.d is the most specific of three sources: an
+// installation's rename wins over a label the setting COMPUTED (the
+// timezone database's "Los Angeles") which wins over the raw value. A
+// version of this that wrote the value as its own fallback would erase
+// the computed name on every choice the file says nothing about.
+int uschema_choice_label_for(const char *ns, const char *name,
+                             const char *value, char *out, uint32_t cap);
+int uschema_group_text(const char *category, const char *group,
+                       struct setting_msg *m);
 
 // Removes the key, so the setting falls back to `Default=` at the next
 // read. SETTING_OP_UNSET's half.

@@ -131,10 +131,13 @@ enum setting_op {
     // In: `index`. Fills name/label/file/type/value, and `count` with
     // how many choices this setting has.
     SETTING_OP_INFO   = 1,
-    // In: `index`, `choice`. Fills `value` with that choice's name, and
-    // `label` with its DISPLAY name if a text file gives one ("Los
-    // Angeles" for `losangeles`) -- otherwise `label` repeats `value`,
-    // so a client can always draw `label` and never has to decide.
+    // In: `index`, `choice`. Fills `value` with that choice's name,
+    // `label` with its DISPLAY name where the setting computes one
+    // ("Los Angeles" for `losangeles`) and otherwise a repeat of
+    // `value`, and `ns`/`name` with the setting it belongs to -- which
+    // is what lets the library apply /etc/settings.d's renames on top,
+    // since this op is addressed by index and the files are by name.
+    // A client can always draw `label` and never has to decide.
     //
     // The VALUE is what gets stored and what `config set` takes; the
     // display name is only ever shown. Keeping them apart is what lets
@@ -286,7 +289,7 @@ struct setting_msg {
     char group[SETTING_ABI_CATEGORY_MAX];
 
     // A one-line explanation of what this setting DOES, from
-    // /etc/settings.d/<ns>.<name> (api/setting_text.h). Empty when no
+    // /etc/settings.d/<ns>.<name> (userland/lib/usetting_text.h). Empty when no
     // text file describes it, which is a normal state -- the label is
     // the floor and a UI shows nothing extra. Out on INFO.
     char description[SETTING_ABI_DESC_MAX];

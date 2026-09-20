@@ -20,7 +20,6 @@
 #include "klog_config.h"
 #include "sound_config.h"
 #include "display_config.h"
-#include "setting_text.h"
 #include "keyboard_config.h"
 #include "target.h"
 #include "storage_config.h"
@@ -555,17 +554,20 @@ int setting_dispatch(struct setting_msg *msg) {
         // where every setting must land somewhere.
         k_strlcpy(msg->group, s->group ? s->group : SETTING_GROUP_DEFAULT,
                   sizeof msg->group);
-        // The text half, from /etc/settings.d -- absent is normal, and
-        // leaves the description empty and the widget AUTO.
-        setting_text_description(setting_namespace(s), s->name,
-                                 msg->description, sizeof msg->description);
-        msg->widget = setting_text_widget(setting_namespace(s), s->name);
+        // THE TEXT HALF IS RING 3'S (userland/lib/usetting_text.h). This
+        // used to read /etc/settings.d here; the registry says what a
+        // setting IS, and how it reads is the settings UI's business --
+        // which is also where the DECLARED settings' text was already
+        // being parsed, so this removed the second parser rather than
+        // moving the first. Left empty for the library to fill.
+        msg->description[0] = '\0';
+        msg->widget = SETTING_ABI_WIDGET_AUTO;
         // Why this one cannot be changed here, or empty. From the
         // registry rather than /etc: it describes the MACHINE.
         k_strlcpy(msg->unavailable, setting_unavailable(s) ? setting_unavailable(s) : "",
                   sizeof msg->unavailable);
-        msg->sflags = setting_text_sflags(setting_namespace(s), s->name);
-        msg->order  = setting_text_order(setting_namespace(s), s->name);
+        msg->sflags = 0;
+        msg->order  = 0;
         // ANYTHING UNRECOGNISED FALLS THROUGH TO STRING, which is not
         // laziness: every type here is carried as text, so a client
         // that has never heard of the newest one renders a text box and
@@ -606,6 +608,14 @@ int setting_dispatch(struct setting_msg *msg) {
     case SETTING_OP_CHOICE: {
         const struct setting *s = setting_at(msg->index);
         if (!setting_has_choices(s)) return 0;
+        // WHICH SETTING THIS CHOICE BELONGS TO, so the reply says what
+        // it is about. The op is addressed by INDEX, and the library
+        // that applies /etc/settings.d's display names on top of it
+        // needs the (ns, name) to find the file -- without these it
+        // silently renamed nothing, and every choice a file had a name
+        // for came out as its raw token.
+        k_strlcpy(msg->ns, setting_namespace(s), sizeof msg->ns);
+        k_strlcpy(msg->name, s->name, sizeof msg->name);
         msg->value[0] = '\0';
         if (!setting_choice_at(s, msg->choice, msg->value, sizeof msg->value))
             return 0;
@@ -613,22 +623,19 @@ int setting_dispatch(struct setting_msg *msg) {
         // draws `label` unconditionally and never decides. `value`
         // stays the token that gets stored.
         //
-        // THREE SOURCES, MOST SPECIFIC FIRST: /etc/settings.d, because
-        // that is where an installation renames or translates one
-        // choice; then the setting's own `choice_label`, for a list
-        // computed from data no file could enumerate; then the value
-        // itself, which is always presentable if not always pretty.
-        if (!setting_text_choice(setting_namespace(s), s->name, msg->value,
-                                 msg->label, sizeof msg->label)) {
-            // setting_text_choice() has already written the value into
-            // `label` as its own fallback, so a choice_label that
-            // declines leaves exactly what it would have left.
-            if (s->choice_label)
-                s->choice_label(msg->choice, msg->label, sizeof msg->label);
-            else if (s->choice_file)
-                choice_file_field(s->choice_file, msg->choice, -1,
-                                  msg->label, sizeof msg->label);
-        }
+        // TWO SOURCES HERE, AND A THIRD IN RING 3: the setting's own
+        // `choice_label`, for a list computed from data no file could
+        // enumerate; then the value itself, which is always presentable
+        // if not always pretty. /etc/settings.d is the most specific of
+        // the three and is applied by the library on top of this
+        // (userland/lib/usetting_schema.h), because an installation
+        // renaming a choice is presentation and no longer ring 0's.
+        k_strlcpy(msg->label, msg->value, sizeof msg->label);
+        if (s->choice_label)
+            s->choice_label(msg->choice, msg->label, sizeof msg->label);
+        else if (s->choice_file)
+            choice_file_field(s->choice_file, msg->choice, -1,
+                              msg->label, sizeof msg->label);
         return 1;
     }
 
@@ -650,25 +657,13 @@ int setting_dispatch(struct setting_msg *msg) {
         // "you typed a bad value".
         return 1;
 
-    case SETTING_OP_GROUP_TEXT: {
-        // "<category>/<group>" in `name`, split on the first slash --
-        // neither half may contain one, and a category is a UI section
-        // name rather than a path.
-        char cat[SETTING_ABI_CATEGORY_MAX];
-        const char *slash = 0;
-        for (const char *p = msg->name; *p; p++)
-            if (*p == '/') { slash = p; break; }
-        if (!slash) return 0;
-        uint32_t n = (uint32_t)(slash - msg->name);
-        if (n >= sizeof cat) return 0;
-        for (uint32_t i = 0; i < n; i++) cat[i] = msg->name[i];
-        cat[n] = '\0';
-        msg->label[0] = '\0';
-        msg->description[0] = '\0';
-        return setting_text_group(cat, slash + 1,
-                                  msg->label, sizeof msg->label,
-                                  msg->description, sizeof msg->description);
-    }
+    // SERVED BY RING 3 (userland/lib/usetting.h). A page's Label and
+    // Description live in /etc/settings.d beside every other piece of
+    // presentation, and the kernel no longer reads that directory --
+    // so it refuses the op rather than answering it emptily, which a
+    // client would render as a page that lost its title.
+    case SETTING_OP_GROUP_TEXT:
+        return 0;
 
     case SETTING_OP_FILE_COUNT:
         msg->count = config_file_count();

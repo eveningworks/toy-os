@@ -13,7 +13,6 @@
 #include <dirent.h>
 #include "lib/usetting_schema.h"
 #include "lib/uconf.h"
-#include "setting_text.h"
 #include "lib/ushortcuts.h" // shortcut_value_valid: see uschema_validate
 
 #define SCHEMA_PATH_MAX 192
@@ -331,34 +330,72 @@ int uschema_unset(const struct uschema *s) {
 
 // --- presentation ----------------------------------------------------
 
-static int schema_path(const struct uschema *s, char *out, uint32_t cap) {
-    return snprintf(out, cap, SETTING_TEXT_DIR "/%s.%s", s->ns, s->name) > 0;
+int uschema_choice_label_for(const char *ns, const char *name,
+                             const char *value, char *out, uint32_t cap) {
+    if (!out || !cap || !ns || !name || !value || !value[0]) return 0;
+
+    char path[SCHEMA_PATH_MAX], key[SETTING_ABI_VALUE_MAX + 8];
+    if (snprintf(path, sizeof path, SETTING_TEXT_DIR "/%s.%s", ns, name) <= 0)
+        return 0;
+    if (snprintf(key, sizeof key, SETTING_TEXT_CHOICE_PREFIX "%s", value) <= 0)
+        return 0;
+    char shown[SETTING_ABI_LABEL_MAX];
+    if (!uconf_get(path, key, shown, sizeof shown) || !shown[0]) return 0;
+    strlcpy(out, shown, cap);
+    return 1;
 }
 
+// The schema half's caller: a declared setting has no computed label
+// behind it, so the value IS the fallback and is written first.
 void uschema_choice_label(const struct uschema *s, const char *value,
                           char *out, uint32_t cap) {
     if (!out || !cap) return;
     strlcpy(out, value ? value : "", cap);
-    if (!s || !value || !value[0]) return;
+    if (s) uschema_choice_label_for(s->ns, s->name, value, out, cap);
+}
 
-    char path[SCHEMA_PATH_MAX], key[SETTING_ABI_VALUE_MAX + 8];
-    if (!schema_path(s, path, sizeof path)) return;
-    if (snprintf(key, sizeof key, SETTING_TEXT_CHOICE_PREFIX "%s", value) <= 0)
-        return;
-    char name[SETTING_ABI_LABEL_MAX];
-    if (uconf_get(path, key, name, sizeof name) && name[0])
-        strlcpy(out, name, cap);
+// A PAGE's own text, from `group.<category>.<group>`. Its own file
+// rather than a field on each setting, because the text belongs to the
+// group: four settings in a page would otherwise carry four copies of
+// one string.
+int uschema_group_text(const char *category, const char *group,
+                       struct setting_msg *m) {
+    if (!m) return 0;
+    m->label[0] = m->description[0] = '\0';
+    if (!category || !category[0] || !group || !group[0]) return 0;
+
+    char path[SCHEMA_PATH_MAX];
+    if (snprintf(path, sizeof path, SETTING_TEXT_DIR "/"
+                 SETTING_TEXT_GROUP_PREFIX "%s.%s", category, group) <= 0)
+        return 0;
+    struct etc_config_buf *buf = malloc(sizeof *buf);
+    if (!buf) return 0;
+    int ok = uconf_load(path, buf);
+    if (ok) {
+        str_key(buf, SETTING_TEXT_KEY_LABEL, m->label, sizeof m->label);
+        str_key(buf, SETTING_TEXT_KEY_DESC, m->description, sizeof m->description);
+    }
+    free(buf);
+    // A page with no text of its own is NORMAL -- it is titled by its
+    // group key -- so "no file" is reported as a miss, not an error.
+    return ok && (m->label[0] || m->description[0]);
 }
 
 void uschema_text(const struct uschema *s, struct setting_msg *m) {
-    if (!s || !m) return;
+    if (s) uschema_text_for(s->ns, s->name, m);
+}
+
+void uschema_text_for(const char *ns, const char *name, struct setting_msg *m) {
+    if (!m) return;
     m->description[0] = '\0';
     m->widget = SETTING_ABI_WIDGET_AUTO;
     m->sflags = 0;
     m->order  = 0;
+    if (!ns || !name) return;
 
     char path[SCHEMA_PATH_MAX];
-    if (!schema_path(s, path, sizeof path)) return;
+    if (snprintf(path, sizeof path, SETTING_TEXT_DIR "/%s.%s", ns, name) <= 0)
+        return;
     // ONE READ, MANY KEYS: etc_config_get() re-reads the whole document
     // per key, and this is four of them on a page a user is looking at.
     struct etc_config_buf *buf = malloc(sizeof *buf);

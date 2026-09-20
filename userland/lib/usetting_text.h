@@ -1,10 +1,18 @@
-#ifndef SETTING_TEXT_H
-#define SETTING_TEXT_H
+#ifndef ULIB_USETTING_TEXT_H
+#define ULIB_USETTING_TEXT_H
 
 #include <stdint.h>
 
 // The human-facing text for a setting: its description, and a display
 // name per choice. Read from /etc/settings.d, one file per setting.
+//
+// **THE KEYS ONLY -- THE READER IS lib/usetting_schema.h.** This was
+// api/setting_text.h, and ring 0 read these files to fill a reply's
+// description, widget and choice labels. It does not any more: the
+// kernel's registry says what a setting IS, and everything about how it
+// READS is ring 3's, which is where the settings UI lives and where the
+// declared settings' text was already being parsed. One parser for the
+// directory instead of two that could disagree.
 //
 // WHY A FILE AND NOT A STRING IN struct setting. `label` is compiled in
 // because a setting without one cannot be presented at all; prose is
@@ -59,34 +67,5 @@
 #define SETTING_TEXT_KEY_LABEL    "Label"
 #define SETTING_TEXT_CHOICE_PREFIX "Choice."
 #define SETTING_TEXT_GROUP_PREFIX  "group."
-
-// Fills `out` with the description for `ns`.`name`, or leaves it empty
-// when there is no text for it. Returns 1 if something was found.
-int setting_text_description(const char *ns, const char *name,
-                             char *out, uint32_t out_size);
-
-// Fills `out` with the display name for the choice `value` of
-// `ns`.`name`. Falls back to `value` itself, so a caller may always
-// draw what this returns. Returns 1 if a display name was found.
-int setting_text_choice(const char *ns, const char *name, const char *value,
-                        char *out, uint32_t out_size);
-
-// The presentation hint (SETTING_ABI_WIDGET_*), or AUTO when the file
-// says nothing -- which is also what an unrecognised name gives, since a
-// UI that cannot draw what was asked for must still draw something.
-uint32_t setting_text_widget(const char *ns, const char *name);
-
-// SETTING_ABI_SF_* for this setting, or 0 when the file says nothing.
-uint32_t setting_text_sflags(const char *ns, const char *name);
-
-// Position within its page; 0 (the default) leaves registration order.
-int setting_text_order(const char *ns, const char *name);
-
-// A PAGE's own label and description, from
-// /etc/settings.d/group.<category>.<group>. Either output may be left
-// empty. Returns 1 if the file existed.
-int setting_text_group(const char *category, const char *group,
-                       char *out_label, uint32_t label_size,
-                       char *out_desc, uint32_t desc_size);
 
 #endif

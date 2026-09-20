@@ -4,7 +4,7 @@
 #include "rt/sys.h"
 #include "knum.h"
 #include "lib/uconf.h"
-#include "setting_text.h"
+#include "lib/usetting_text.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -132,7 +132,20 @@ int usetting_dispatch(struct setting_msg *m) {
         uint32_t gen = 0;
         int kcount = kernel_count(&gen);
         if (kcount < 0) return -1;
-        if (m->index < kcount) return sys_setting(m);
+        if (m->index < kcount) {
+            // A KERNEL SETTING'S PRESENTATION IS READ HERE TOO. Ring 0
+            // answers what the setting IS -- its type, bounds, value --
+            // and stopped reading /etc/settings.d at all, so the
+            // description, the widget and a choice's display name are
+            // filled from the same reader the declared settings use.
+            // One parser for that directory instead of two.
+            int rc = sys_setting(m);
+            if (rc != 0) return rc;
+            if (m->op == SETTING_OP_INFO) uschema_text_for(m->ns, m->name, m);
+            else uschema_choice_label_for(m->ns, m->name, m->value,
+                                          m->label, sizeof m->label);
+            return 0;
+        }
 
         struct uschema s;
         if (!uschema_at(m->index - kcount, &s)) return -1;
@@ -218,10 +231,23 @@ int usetting_dispatch(struct setting_msg *m) {
         return 0;
     }
 
-    // GROUP_TEXT and the config-FILE registry are the kernel's in both
-    // arrangements: the page text is read from the same /etc/settings.d
-    // by name, and the file registry indexes documents rather than
-    // settings.
+    // A PAGE'S OWN TEXT IS RING 3'S NOW, with the rest of the
+    // presentation. The kernel refuses this op.
+    case SETTING_OP_GROUP_TEXT: {
+        char category[SETTING_ABI_CATEGORY_MAX];
+        const char *slash = strchr(m->name, '/');
+        if (!slash) return -1;
+        uint32_t n = (uint32_t)(slash - m->name);
+        if (n >= sizeof category) return -1;
+        memcpy(category, m->name, n);
+        category[n] = '\0';
+        kernel_count(&m->generation);
+        return uschema_group_text(category, slash + 1, m) ? 0 : -1;
+    }
+
+    // The config-FILE registry stays the kernel's: it indexes /etc
+    // DOCUMENTS, which is a fact about the machine rather than
+    // presentation, and a tunable's namespace is registered there.
     default:
         return sys_setting(m);
     }

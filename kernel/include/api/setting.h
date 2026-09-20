@@ -221,7 +221,7 @@ struct setting {
     //
     // /etc/settings.d STILL WINS where it says something, so an
     // installation can rename or translate one choice without the
-    // subsystem knowing. See setting_text.h.
+    // subsystem knowing. See userland/lib/usetting_text.h.
     int (*choice_label)(int index, char *out, uint32_t out_size);
 
     // The current value, as the string that would be written to `file`.
