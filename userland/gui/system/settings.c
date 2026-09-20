@@ -1493,7 +1493,17 @@ static void opts_window_size(int *w, int *h) {
 }
 
 static void dlg_on_widget(struct uapp_window *win, int id, int reason) {
-    (void)reason;
+    // **ONLY ON A RELEASE, exactly as the page's handler is.** Ignoring
+    // `reason` meant every event reached these branches -- and since
+    // the dialog opens CENTRED UNDER THE CURSOR, a pointer that landed
+    // on Cancel closed it on the first hover, ten milliseconds after it
+    // appeared. It looked like the window failing to open; it was
+    // Cancel doing its job on an event that was never a click.
+    //
+    // A KEY still counts: the focus ring reaches OK and Cancel, and a
+    // dialog that could not be dismissed from the keyboard would be the
+    // one modal window here that traps you.
+    if (reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) return;
     if (id >= ID_CONTROL_BASE && id < ID_CONTROL_BASE + PAGE_MAX) {
         control_changed(id - ID_CONTROL_BASE);
         uapp_window_redraw(win);

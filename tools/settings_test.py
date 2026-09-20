@@ -686,17 +686,25 @@ def main():
               not placed, f"placed on the page: {placed}")
 
         if ob and ob[4] > 0:
+            # **SCROLL TO THE BOTTOM FIRST, THEN READ ONCE.** Scrolling
+            # until the button is "inside the viewport" and clicking the
+            # position read during that loop races the relayout the
+            # scroll causes: the click landed elsewhere and the dialog
+            # never opened, with nothing in the log because nothing had
+            # been pressed. At the bottom the page cannot move again, so
+            # the position read after it is the position clicked.
             geo_eff = layout(dbg)
             pv = geo_eff.get("page", (px0, py0, pw0, ph0))
-            for _ in range(8):
-                ob = opts_button() or ob
-                if pv[1] <= ob[1] and ob[1] + ob[3] <= pv[1] + pv[3]:
-                    break
-                dbg.warp_cursor(qmp, cx + pv[0] + pv[2] // 2,
-                                cy + pv[1] + pv[3] // 2)
-                for _ in range(3):
-                    dbg.send("gui wheel -1")
-                dbg.settle()
+            dbg.warp_cursor(qmp, cx + pv[0] + pv[2] // 2,
+                            cy + pv[1] + pv[3] // 2)
+            for _ in range(12):
+                dbg.send("gui wheel -1")
+            dbg.settle(1.0)
+            time.sleep(0.5)
+            ob = opts_button() or ob
+            check("effects: the button is reachable on the page",
+                  pv[1] <= ob[1] and ob[1] + ob[3] <= pv[1] + pv[3],
+                  f"button {ob[:4]} against page {pv}")
             # WAIT FOR THE WINDOW, don't sleep at it -- and click again
             # once if it has not come. A fixed sleep passed twice and
             # failed the third time: the app relayouts after the scroll,
@@ -718,6 +726,18 @@ def main():
                   dlg is not None,
                   f"windows={[w['title'] for w in dbg.windows()]}")
             if dlg:
+                # **AND IT IS STILL THERE A MOMENT LATER.** The dialog
+                # opens CENTRED UNDER THE CURSOR, so an event reaching
+                # Cancel dismisses it -- which it did, ten milliseconds
+                # after appearing, on a machine where the pointer landed
+                # there. "It opened" is satisfied either way; this is
+                # the check that is not.
+                dbg.settle(1.0)
+                time.sleep(0.8)
+                check("effects: the dialog STAYS open",
+                      dbg.window("Shatter options") is not None,
+                      "it closed on its own after opening")
+
                 # NAMED, not `shatter options`: the descriptor's token is
                 # the author's word and a title bar shows a name.
                 # `owner` is a window INDEX and -1 is the sentinel
