@@ -420,6 +420,12 @@ int sys_net_resolved(const char *name, uint32_t ip);
 
 int sys_pci_count(void);
 int sys_pci_info(int index, struct pci_device *out);
+// A device's register file, mapped into this process -- stage 1 of
+// docs/umdf-design.md. `index` is SYS_PCI_INFO's, `bar` is 0..5.
+// Returns the address, or -1 with errno: EBUSY when a ring-0 driver
+// holds the device, ENOTSUP for an I/O BAR, EINVAL for a BAR with
+// nothing behind it.
+int64_t sys_dev_map_bar(int index, int bar);
 int sys_cpu_info(struct cpu_info *out);
 
 // Fills `buf` with `n` random bytes from the kernel's entropy source.

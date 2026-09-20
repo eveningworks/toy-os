@@ -707,6 +707,16 @@ int sys_pci_info(int index, struct pci_device *out) {
     return (int)err(syscall2(SYS_PCI_INFO, (uint64_t)(int64_t)index, (uint64_t)(uintptr_t)out));
 }
 
+// SYS_DEV_MAP_BAR. Returns the address the register file landed at, or
+// -1 with errno set -- this file's usual contract, not the kernel's
+// negative-errno one. EBUSY specifically means a ring-0 driver holds
+// that device, which a would-be ring-3 driver must handle rather than
+// retry (docs/umdf-design.md).
+int64_t sys_dev_map_bar(int index, int bar) {
+    return err(syscall2(SYS_DEV_MAP_BAR, (uint64_t)(int64_t)index,
+                        (uint64_t)(int64_t)bar));
+}
+
 int sys_cpu_info(struct cpu_info *out) {
     return (int)err(syscall1(SYS_CPU_INFO, (uint64_t)(uintptr_t)out));
 }

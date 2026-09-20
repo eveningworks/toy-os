@@ -238,6 +238,11 @@ struct mmap_region {
 #define MMAP_KIND_ANON 0
 #define MMAP_KIND_FILE 1
 #define MMAP_KIND_SHM  2 // MAP_SHARED over a SYS_SHM_OPEN descriptor
+// A DEVICE's register file (SYS_DEV_MAP_BAR). Its pages are BORROWED --
+// physical MMIO, owned by nobody -- so teardown unmaps and frees
+// nothing. Its own kind so `pmap` can say "mmio" instead of lying about
+// anonymous memory at an address no allocator ever handed out.
+#define MMAP_KIND_MMIO 3
 
 // Per address space, not per slot: a thread resolves to its group's
 // sched_mm the same way the heap does, so the group shares one list.

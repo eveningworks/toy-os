@@ -62,6 +62,7 @@ static void fill_one(struct query_procmap *q, int pid, struct sched_mm *mm,
             if (!r->base) continue;
             if (seen++ != which) continue;
             q->kind  = r->kind == MMAP_KIND_FILE ? QUERY_PROCMAP_FILE
+                     : r->kind == MMAP_KIND_MMIO ? QUERY_PROCMAP_MMIO
                                                  : QUERY_PROCMAP_ANON;
             q->base  = r->base;
             q->bytes = r->npages * 4096ULL;

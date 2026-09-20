@@ -49,6 +49,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     // negatives every libc wrapper already tests for.
     [SYS_MMAP]          = { "mmap",          sys_mmap,          { A_HEX }, R_HEX },
     [SYS_MUNMAP]        = { "munmap",        sys_munmap,        { A_HEX, A_INT } },
+    [SYS_DEV_MAP_BAR]   = { "dev_map_bar",   sys_dev_map_bar,   { A_INT, A_INT }, R_HEX },
     [SYS_SND_OPEN]      = { "snd_open",      sys_snd_open,      { 0 }, 0 },
     [SYS_SND_CTL]       = { "snd_ctl",       sys_snd_ctl,       { 0 }, 0 },
     // read()'s buffer isn't filled until the handler runs, and the

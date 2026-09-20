@@ -83,6 +83,17 @@ TESTS = [
     # that the generation MOVES when ring 3 writes /etc, which is the
     # only thing making the desktop notice a change.
     ("usetting_test", 0, None, None),
+    # A process mapping a device's register file and READING it --
+    # stage 1 of docs/umdf-design.md. The KTESTs beside dev_bar_check()
+    # cover every refusal and cannot cover this one: they run on the
+    # kernel context, which has no address space to map into.
+    #
+    # SPAWNED (exit code None), and it has to be: SYS_DEV_MAP_BAR
+    # resolves the caller's address space the way sbrk and mmap do, and
+    # the legacy `run` loader has no scheduler slot -- so every call
+    # comes back EPERM and the test fails reporting three refusals that
+    # never reached the code under test.
+    ("devbar_test", None, None, None),
     # The ring-3 half of termkey: the encoder is shared source compiled
     # twice, and the KTESTs would pass whether or not ring 3 linked it.
     ("termkey_test", 0, None, None),

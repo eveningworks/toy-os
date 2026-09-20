@@ -1224,6 +1224,11 @@ struct query_kbdtap {
 #define QUERY_PROCMAP_STACK 3
 #define QUERY_PROCMAP_ANON  4 // SYS_MMAP, MAP_ANONYMOUS
 #define QUERY_PROCMAP_FILE  5 // SYS_MMAP, file-backed
+// A DEVICE's register file (SYS_DEV_MAP_BAR). Named rather than folded
+// into ANON because it is the one mapping in a process that is not
+// memory at all: reading it touches hardware, and a reader counting a
+// process's anonymous pages would be counting a BAR.
+#define QUERY_PROCMAP_MMIO  6
 
 struct query_procmap {
     uint64_t pid;

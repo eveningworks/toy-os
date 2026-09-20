@@ -314,6 +314,10 @@ int sys_yield(struct syscall_ctx *c);
 int sys_sbrk(struct syscall_ctx *c);
 int sys_mmap(struct syscall_ctx *c);   // kernel/mm/mmap.c
 int sys_munmap(struct syscall_ctx *c); // kernel/mm/mmap.c
+int sys_dev_map_bar(struct syscall_ctx *c); // kernel/mm/mmap.c
+// SYS_DEV_MAP_BAR's validation, split out so a KTEST can reach it --
+// the syscall itself refuses the kernel context at its first line.
+int dev_bar_check(int index, int which, uint64_t *phys, uint64_t *npages);
 int sys_shm_open(struct syscall_ctx *c);   // kernel/mm/shm.c
 int sys_shm_unlink(struct syscall_ctx *c);
 int sys_futex_wait(struct syscall_ctx *c);

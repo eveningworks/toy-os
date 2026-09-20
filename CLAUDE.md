@@ -768,6 +768,9 @@ and several carry the honest case AGAINST:
 `cc-design.md` (**a `cc` that runs ON toy-os** -- PLANNED, nothing built;
 read before any compiler- or SDK-shaped work, and before believing the
 roadmap's "self-hosted C compiler is out of scope" line covers it),
+`umdf-design.md` (**a driver as a PROCESS** -- PLANNED, nothing built;
+read before any user-mode-driver work, and for why an IOMMU-less DMA
+driver in ring 3 buys crash isolation and NOT containment),
 `dynlink-design.md`, `signals-design.md` (read before Phase 1's
 signal/TTY/job-control work -- its point is that those are ONE problem),
 `blocking-design.md` (**read before touching `switch_to()`,

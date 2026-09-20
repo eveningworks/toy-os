@@ -55,7 +55,14 @@ int vmm_map_user_page_flags(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
 // region mapped WC must be written and not read back. That is exactly
 // the framebuffer's access pattern and exactly why the console had to
 // stop scrolling by reading pixels.
-enum vmm_memtype { VMM_MT_NORMAL = 0, VMM_MT_WC = 1 };
+//
+// **VMM_MT_UC IS FOR REGISTERS, AND IT IS NOT WC.** A device's register
+// file must be strongly uncacheable: write combining lets stores merge
+// and arrive out of order, which is right for pixels and wrong for a
+// doorbell written after the descriptor it announces. It costs no PAT
+// slot -- PCD|PWT selects entry 3, which is UC at reset and which
+// paging.c deliberately leaves alone.
+enum vmm_memtype { VMM_MT_NORMAL = 0, VMM_MT_WC = 1, VMM_MT_UC = 2 };
 
 // Both of the above plus the memory type. The type is a named argument
 // rather than a bit the caller sets, because the PAT bit's POSITION
@@ -174,6 +181,11 @@ uint64_t vmm_audit_space_cb(uint64_t pml4_phys, struct vmm_audit *out,
 // has to name the frame behind a page it just mapped, and nothing else
 // here answers that.
 uint64_t vmm_user_phys(uint64_t pml4_phys, uint64_t vaddr);
+
+// The `enum vmm_memtype` a live mapping carries. An absent mapping, or
+// one that is not a 4KiB leaf, answers VMM_MT_NORMAL -- so a caller
+// asking "is this UC?" gets a no rather than a maybe.
+int vmm_user_memtype(uint64_t pml4_phys, uint64_t vaddr);
 
 void vmm_switch_address_space(uint64_t pml4_phys);
 

@@ -2309,6 +2309,31 @@ struct mmap_msg {
                      // CLOEXEC), and whose pending signals are none.
                      // A caller with no scheduler slot gets -EPERM;
                      // a full process table -EAGAIN; no memory -ENOMEM.
+// RDI = the PCI device index (0 .. SYS_PCI_COUNT-1, the same index
+// SYS_PCI_INFO takes), RSI = which of its six BARs. Returns the address
+// the register file was mapped at, or a negative errno.
+//
+// **IT TAKES AN INDEX, NEVER AN ADDRESS, AND THAT IS THE WHOLE SAFETY
+// OF IT.** The kernel answers from its own enumeration -- a BAR's base
+// and its probed size -- so a caller cannot ask for "physical 0x100000"
+// and be handed the kernel image. A grant of an arbitrary range would
+// be /dev/mem, which is the thing VFIO exists to replace.
+//
+// REFUSED WHILE A RING-0 DRIVER IS BOUND to that device (-EBUSY), which
+// is vfio-pci's unbind-first rule: two drivers on one register file is
+// two doorbells and one device. An I/O BAR is refused too (-ENOTSUP) --
+// port I/O needs a permission model this kernel has not got.
+//
+// The mapping is UNCACHEABLE (api/vmm.h's VMM_MT_UC) and writable, and
+// it is BORROWED: unmapping it, or the process exiting, never hands a
+// device's registers to the frame allocator.
+//
+// WHAT THIS IS NOT: containment. A process holding a card's registers
+// can program that card to DMA anywhere in physical memory, and this
+// machine has no IOMMU. docs/umdf-design.md says so at length; the
+// value here is crash isolation and getting a PARSER out of ring 0.
+#define SYS_DEV_MAP_BAR 118
+
 #define SYS_EXEC 109 // RDI = pointer to a `struct spawn_msg`: `path`,
                      // `args` (with or without SPAWN_ARGV) and `env`
                      // as for SYS_SPAWN. Replaces the CALLER's image

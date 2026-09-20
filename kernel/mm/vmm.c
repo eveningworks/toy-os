@@ -13,6 +13,10 @@ extern uint64_t p4_table[512];
 #define PAGE_PRESENT  (1ULL << 0)
 #define PAGE_WRITABLE (1ULL << 1)
 #define PAGE_USER     (1ULL << 2)
+// With PAGE_PCD: PAT entry 3, which is strong UC at reset and is what a
+// device register file must be mapped as (see vmm.h's VMM_MT_UC).
+#define PAGE_PWT      (1ULL << 3)
+#define PAGE_PCD      (1ULL << 4)
 #define PAGE_HUGE     (1ULL << 7)  // a PDPT/PD entry that IS the leaf, not a table pointer
 // Bits 9-11 of a PTE are IGNORED by the hardware and reserved for the
 // OS. This one records that the mapping does NOT own the frame behind
@@ -159,6 +163,10 @@ static int map_user(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
     // here and setting it would silently repoint the mapping rather
     // than fault. Every page this function maps is 4KiB.
     if (memtype == VMM_MT_WC) flags |= PAGE_PAT_4K;
+    // PAT entry 3 (PAT=0, PCD=1, PWT=1) is UC at reset and nothing here
+    // reprograms it -- so strong uncacheable needs no slot of its own,
+    // unlike WC above. See vmm.h on why a register file may not be WC.
+    if (memtype == VMM_MT_UC) flags |= PAGE_PCD | PAGE_PWT;
     // Ownership, recorded in the PTE itself rather than in a side table:
     // the teardown walk has the PTE in hand and nothing else, and a side
     // table would have to be kept in step with every map and unmap.
@@ -765,6 +773,34 @@ static uint64_t user_phys_of_walk(uint64_t pml4_phys, uint64_t vaddr) {
 
 uint64_t vmm_user_phys(uint64_t pml4_phys, uint64_t vaddr) {
     return user_phys_of_walk(pml4_phys, vaddr);
+}
+
+// The memory type a live mapping CARRIES, decoded back from the PTE.
+//
+// It answers in the header's own vocabulary rather than handing out raw
+// PTE bits, because the question worth asking is "is this register file
+// really uncacheable?" and the bits that say so differ by page size.
+// A mapping that is absent, or not a 4KiB leaf, answers NORMAL -- there
+// is nothing to report and a caller checking for UC must not read that
+// as a yes.
+int vmm_user_memtype(uint64_t pml4_phys, uint64_t vaddr) {
+    int pml4_index = (int)((vaddr >> 39) & 0x1FF);
+    int pdpt_index = (int)((vaddr >> 30) & 0x1FF);
+    int pd_index   = (int)((vaddr >> 21) & 0x1FF);
+    int pt_index   = (int)((vaddr >> 12) & 0x1FF);
+
+    uint64_t e = table_at(pml4_phys)[pml4_index];
+    if (!(e & PAGE_PRESENT)) return VMM_MT_NORMAL;
+    e = table_at(e & ADDR_MASK)[pdpt_index];
+    if (!(e & PAGE_PRESENT) || (e & PAGE_HUGE)) return VMM_MT_NORMAL;
+    e = table_at(e & ADDR_MASK)[pd_index];
+    if (!(e & PAGE_PRESENT) || (e & PAGE_HUGE)) return VMM_MT_NORMAL;
+    e = table_at(e & ADDR_MASK)[pt_index];
+    if (!(e & PAGE_PRESENT)) return VMM_MT_NORMAL;
+
+    if (e & PAGE_PAT_4K) return VMM_MT_WC;
+    if ((e & PAGE_PCD) && (e & PAGE_PWT)) return VMM_MT_UC;
+    return VMM_MT_NORMAL;
 }
 
 // The walk every user access goes through, with ONE retry through the

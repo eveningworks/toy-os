@@ -100,7 +100,8 @@ uint32_t crash_report_write(const char *what, const uint64_t *regs, uint64_t cr2
             const struct mmap_region *g = &mm->regions[r];
             if (!g->base) continue;
             at = hdr_put(at, "map: %s 0x%lx-0x%lx prot %u %s\n",
-                         g->kind == MMAP_KIND_FILE ? "file" : "anon",
+                         g->kind == MMAP_KIND_FILE ? "file" :
+                         g->kind == MMAP_KIND_MMIO ? "mmio" : "anon",
                          g->base, g->base + g->npages * 4096, (unsigned)g->prot,
                          g->kind == MMAP_KIND_FILE ? g->path : "");
         }

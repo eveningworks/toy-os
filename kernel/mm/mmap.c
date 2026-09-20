@@ -24,6 +24,9 @@
 #include "kfmt.h"     // klog_printf
 #include "klog.h"   // KLOG_ERR -- the level on a failure line
 #include "heap.h"   // the region list is allocated now, not embedded
+#include "pci.h"          // SYS_DEV_MAP_BAR validates against the enumeration
+#include "pci_internal.h" // pci_bar_mem_size -- the probed size, not a guess
+#include "pci_driver.h"   // pci_device_driver -- is a ring-0 driver bound?
 
 // The region containing `addr`, or NULL. Linear over `region_cap`,
 // which is tens: this runs per fault-in and per syscall, not per byte.
@@ -248,6 +251,108 @@ int sys_mmap(struct syscall_ctx *c) {
     }
     r->base = base; // last: a non-zero base is what makes the slot live
 
+    ret = (int64_t)base;
+out:
+    c->regs[14] = (uint64_t)ret;
+    return 0;
+}
+
+// SYS_DEV_MAP_BAR -- a device's register file, mapped into a process.
+//
+// Stage 1 of docs/umdf-design.md. It lives here rather than in a driver
+// file because what it really is, is an mmap whose backing is a BAR:
+// the arena pick, the region slot and the teardown are all this file's,
+// and only the validation is new.
+//
+// **THE VALIDATION IS THE WHOLE SAFETY OF IT** -- see the contract in
+// abi/syscall_abi.h. Three refusals, each for its own reason:
+//
+//   - an unknown device index, or a BAR with no memory behind it, is
+//     EINVAL: there is nothing to map and a zero-size grant would be a
+//     mapping of whatever follows it.
+//   - an I/O BAR is ENOTSUP. Port I/O is a fourth primitive with its
+//     own permission model, and pretending otherwise would hand back a
+//     mapping of physical page 0 for an address that is not memory.
+//   - a device a ring-0 driver is BOUND to is EBUSY. That is
+//     vfio-pci's unbind-first rule, and the reason is not tidiness:
+//     two drivers writing one register file is two doorbells racing
+//     over one device, and the ring-0 one is holding an IRQ handler.
+// SPLIT OUT SO A KTEST CAN DRIVE THE EXACT PATH ring 3 drives, the same
+// reason setting_dispatch() is its own function: a KTEST runs on the
+// kernel context, which has no address space, so the syscall below
+// refuses it at the first line and every refusal underneath would go
+// untested. Returns 0 and fills `phys`/`npages`, or a negative errno.
+int dev_bar_check(int index, int which, uint64_t *phys, uint64_t *npages) {
+    if (index < 0 || index >= pci_device_count() || which < 0 || which >= 6)
+        return -EINVAL;
+    const struct pci_device *d = pci_device_at(index);
+    if (!d) return -EINVAL;
+
+    if (pci_bar_is_io(d->bar[which])) return -ENOTSUP;
+
+    uint64_t base = pci_bar_addr(d->bar[which]);
+    uint64_t size = pci_bar_mem_size(d, which);
+    if (!base || !size) return -EINVAL;
+
+    // BOUND MEANS TAKEN, and it is checked before anything is reserved
+    // so a refusal leaves the address space untouched.
+    if (pci_device_driver(d)) return -EBUSY;
+
+    // A BAR is naturally aligned and power-of-two sized, so an unaligned
+    // one would be a sub-page register file sharing its page with a
+    // neighbour -- the one case where a grant hands over registers it
+    // was not asked for. Refused rather than rounded down.
+    if (base & 0xFFF) return -ENOTSUP;
+
+    if (phys) *phys = base;
+    if (npages) *npages = (size + 4095) / 4096;
+    return 0;
+}
+
+int sys_dev_map_bar(struct syscall_ctx *c) {
+    struct sched_mm *mm = caller_mm();
+    int64_t ret;
+
+    if (!mm) { ret = -EPERM; goto out; }
+
+    int index = (int)(int64_t)c->a0;
+    int which = (int)(int64_t)c->a1;
+    uint64_t phys = 0, npages = 0;
+    ret = dev_bar_check(index, which, &phys, &npages);
+    if (ret != 0) goto out;
+
+    uint64_t base = arena_pick(mm, npages);
+    if (!base) { ret = -ENOMEM; goto out; }
+    int r_slot = free_slot(mm);
+    if (r_slot < 0) { ret = -ENOMEM; goto out; }
+
+    for (uint64_t i = 0; i < npages; i++) {
+        // BORROWED, so neither munmap nor process teardown ever hands a
+        // device's registers to the frame allocator; UC, because a
+        // register file may not be write-combined (kernel/vmm.h).
+        if (!vmm_map_user_borrowed(c->pml4, base + i * 4096,
+                                   phys + i * 4096, 1, 1, VMM_MT_UC)) {
+            // Unwind what took, or the next caller's arena pick walks
+            // over a half-mapped range this file has no record of.
+            for (uint64_t k = 0; k < i; k++)
+                vmm_unmap_user_page(c->pml4, base + k * 4096);
+            ret = -ENOMEM; goto out;
+        }
+    }
+
+    struct mmap_region *r = &mm->regions[r_slot];
+    r->npages   = npages;
+    r->prot     = SYS_PROT_READ | SYS_PROT_WRITE;
+    r->file_off = 0;
+    r->kind     = MMAP_KIND_MMIO;
+    r->shm_idx  = -1;
+    r->path[0]  = '\0';
+    r->base     = base; // last: a non-zero base is what makes the slot live
+
+    klog_printf("dev: pci %d bar %d -> %llx (%llu page(s)) at %llx for pid %d\n",
+                index, which, (unsigned long long)phys,
+                (unsigned long long)npages, (unsigned long long)base,
+                scheduler_current_pid());
     ret = (int64_t)base;
 out:
     c->regs[14] = (uint64_t)ret;
