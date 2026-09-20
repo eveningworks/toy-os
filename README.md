@@ -7,17 +7,11 @@
 </p>
 
 <p align="center">
-  <em>Written with Claude Code: a human makes the design calls, Claude does
-  the implementation and the testing.</em>
-</p>
-
-<p align="center">
   <a href="https://github.com/eveningworks/toy-os/actions/workflows/build.yml">
     <img alt="release build" src="https://github.com/eveningworks/toy-os/actions/workflows/build.yml/badge.svg">
   </a>
   <img alt="Language" src="https://img.shields.io/badge/language-C%20%2B%20NASM-blue">
   <img alt="Target" src="https://img.shields.io/badge/target-x86__64-lightgrey">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.4.0--dev-orange">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
@@ -41,10 +35,9 @@
 
 ## What this is
 
-A hobby operating system with a paper trail: every subsystem built one at
-a time, and every design decision written down with the reasoning behind
-it -- including the ones that turned out wrong. It boots on real hardware
-and under QEMU, and it does not stop at "hello world from the kernel":
+A hobby operating system built one subsystem at a time, with the
+reasoning behind each design decision written down — including the ones
+that turned out wrong. It boots on real hardware and under QEMU.
 
 - **The machine** — Multiboot2 and a long-mode transition done by hand, a
   physical frame allocator and per-process page tables, NX/W^X, SMEP/SMAP,
@@ -66,6 +59,13 @@ and under QEMU, and it does not stop at "hello world from the kernel":
   toolkit, down to the file chooser, which opens as a modal window of its
   own the way Windows' and KDE's do. Minimize and maximize animate —
   four effects including a macOS-style genie, at five speeds, or off.
+- **Display and input** — an Intel driver that reads the panel's EDID and
+  programs the mode itself, with runtime resolution changes, panel
+  fitting and backlight control, beside VESA, virtio-gpu and VMware
+  adapters. USB HID devices are driven through their own **report
+  descriptor**, parsed at bind time, so a five-button mouse has five
+  buttons, 16-bit axes and horizontal scroll rather than the three
+  buttons the boot protocol allows.
 - **Sound** — AC'97, Intel HD Audio and USB Audio behind one device class,
   mixed by a ring-3 daemon; WAV and an MP3 decoder written here rather than
   vendored.
@@ -89,9 +89,9 @@ GCC works with `-ffreestanding` and kernel-appropriate flags.
 
 ## Project status
 
-**Version 0.4.0-dev**; the latest release is
-[v0.3.0](https://github.com/eveningworks/toy-os/releases/tag/v0.3.0). A
-hobby project under active development, not production software.
+A hobby project under active development, not production software. The
+current version is in [VERSION](VERSION); tagged builds are on
+[Releases](https://github.com/eveningworks/toy-os/releases).
 
 **Works today** — booting on real hardware and under QEMU; the shell and
 its line editor; three filesystems behind one mount table, with `fsck`
@@ -104,7 +104,8 @@ with file-backed demand paging; dynamic linking, with tolibc shipped as
 which drivers are built as `.ko` files and the e1000 loaded by PCI match
 at boot; a TTY layer with pseudo-terminals, so `Ctrl-C` interrupts
 a job and a full-screen editor runs in a Terminal window; USB — xHCI with
-hubs, hot-plug, HID, Ethernet and audio; sound on three device classes,
+hubs, hot-plug, report-protocol HID, Ethernet and audio; sound on three
+device classes,
 mixed by `soundd`, including DOOM with music; an Intel display driver
 that reads the panel's EDID and programs the mode itself, with runtime
 resolution changes and backlight control; ACPI tables and firmware-driven
@@ -120,8 +121,8 @@ one table.
 **Known gaps** — **BIOS/CSM boot only; UEFI does not work.** GRUB's EFI
 build faults before the kernel runs, so a machine with CSM disabled will
 not boot this. No SMP: other cores are discovered through the MADT and
-every one of them reports offline. USB has no mass storage and no HID report-descriptor parsing. Dynamic linking is
-eager-binding with no `dlopen`; `mmap`'s `MAP_SHARED` works only over a
+every one of them reports offline. USB has no mass storage. Dynamic
+linking is eager-binding with no `dlopen`; `mmap`'s `MAP_SHARED` works only over a
 named shared-memory object, and there is no `mprotect`; `fork` is
 copy-on-write but `spawn` is still the door every program uses.
 Swap has its area and its page-table encoding and nothing that pages out
@@ -175,8 +176,9 @@ make run
 
 That builds the kernel, seeds a disk image, installs GRUB and the kernel
 onto it, and boots **the disk** in QEMU — no CD involved (`make run
-BOOT=cd` boots the ISO instead). **init brings the desktop up on its own**; *Exit to
-shell* in the Start menu drops to the `/>` prompt, and `gui` goes back.
+BOOT=cd` boots the ISO instead). **init brings the desktop up on its
+own**; *Exit to shell* in the Start menu drops to the `/>` prompt, and
+`gui` goes back.
 For a text-only boot, `make iso KCMDLINE="target=text"`. PageUp/PageDown
 scrolls the console history, including the boot log.
 
@@ -292,70 +294,51 @@ KTEST("mm", "kzalloc returns zeroed memory") {
 disk reads or `kmalloc` calls, which is how the error paths are tested
 at all.
 
-Selected tools, each documented in its own docstring:
+The tools in `tools/` drive the system headlessly — booting guests,
+running the suites, reading pixels and answering "was this already
+broken?". The ones worth knowing first:
 
 | Tool | What it's for |
 |---|---|
-| `vm.py` | Start a headless VM and run shell commands against it, getting **text** back: `vm.py run "fsck"`. Usually a better check than a screenshot. |
-| `ktest_run.py`, `usertest_run.py`, `faulttest_run.py` | The in-kernel suite, the ring-3 `/tests` diagnostics, and the ones that fault ON PURPOSE — asserted against the kernel's crash report rather than an exit code they don't have. |
+| `vm.py` | Start a headless VM and run shell commands against it, getting **text** back: `vm.py exec "fsck"`. Usually a better check than a screenshot. |
 | `boot_smoke_test.py` | Fast "does it still boot cleanly", no GUI. |
-| `gui_debug.py` | Asks the WM what it is doing — window rects, z-order, hit-testing, damage — instead of measuring a screenshot. |
+| `ktest_run.py`, `usertest_run.py` | The in-kernel suite and the ring-3 `/tests` diagnostics. |
 | `gui_regress.py` | Every GUI test tool, each on its own fresh disk image and VM, as one pass/fail table. |
-| `damage_sweep.py`, `damage_hunt.py` | Walk the interactions that break the compositor's damage invariant, over one seed or many. |
-| `flake_hunt.py` | Runs one tool N times and reports which CHECKS failed and how often — a rate, not a verdict. |
-| `pixel_probe.py` | Reads exact pixel values out of screenshots, so a rendering change is a number rather than an impression. |
-| `frame_balance.py`, `mem_stress.py` | Physical memory: does a process's teardown return exactly what it took, and does the machine survive running out? The patterns written are address-derived, so two mappings sharing one frame is detectable. |
-| `check_deps.py`, `check_layout.py`, `check_docs.py`, `check_dispatch.py`, `check_widget_ops.py`, `check_tool_commands.py` | The build's own invariants: header tracking is live, the disk matches its documented layout, the docs have no dead pointers, no dispatch chain has quietly grown big enough to want a table, no widget's ops table is missing a slot it needs, and no tool drives a guest command that has been renamed away. |
-| `ondemand_sweep.py` | Runs the test tools that neither the gate nor `gui_regress.py` covers, and reports which have rotted — two were found red by accident after failing for an unknown period. A skip is counted apart from a pass. Never a gate. |
+| `gui_debug.py` | Asks the window manager what it is doing — window rects, z-order, hit-testing, damage — instead of measuring a screenshot. |
 | `predates.py` | Answers "was this already broken?" by measuring: stashes the tree, rebuilds at HEAD, runs the command, restores, compares. |
-| `qmp_test.py`, `gui_flow.py`, `shell_flow.py` | Drive the GUI over QEMU's QMP socket, with the mouse/keyboard gotchas already handled. |
-| `tfs3_writer.py` | Read, write, inspect and corrupt-for-testing files inside a `disk.img` from the host, without booting. `--at-lba`/`--sectors` reach a filesystem inside a partition. |
-| `fs_switch_test.py` | Proves probe, wipefs, live `fsformat`, and reboot persistence. |
-| `fat32_test.py` | FAT32 and the mount table against an **independent implementation**: `mtools` reads back what the guest wrote and `fsck.fat` audits the volume. A self-test cannot catch an expectation being wrong; the strongest check is a 185 KiB binary extracted on the host and compared byte for byte. |
-| `partition_test.py` | Boots with the filesystem inside an MBR or GPT partition. Its real check is `df`: a kernel ignoring partitions still boots, so "it booted" proves nothing. Its last phase proves `fsformat` cannot be aimed at the bootloader. |
-| `install_grub.py` | Puts GRUB and the kernel onto `disk.img` -- the boot sector, `core.img` in the BIOS boot partition, `/boot` in the FAT32 one -- and answers which medium a launch should boot. |
-| `regex_hostcheck.py` | tolibc's `<regex.h>` against **glibc's**, over one shared case table — an oracle sharing no code is the only thing that catches a wrong expectation. |
-| `usb_test.py` | xHCI: a HID boot keyboard and mouse, hot-plug (QMP `device_add` on the running guest) and a `usb-hub` with both devices behind it. Self-controlling: QEMU routes keystrokes to `usb-kbd` once attached, so a broken driver receives nothing. Its real check is the ring wrap — past 256 TRBs, asserting the *last* file. |
-| `kbd_test.py`, `keyboard_paths_test.py` | The input path, asserted on both drivers: that the same keys produce the same keycode and character over PS/2 and virtio-input, and that `kbd`'s four columns say what each stage really did. |
+
+**[docs/tools.md](docs/tools.md) is the full reference** — every script,
+why it exists, and the traps it encodes.
 
 `CLAUDE.md` documents the conventions and environment quirks in depth.
 
 ## Documentation
 
+Everything under [docs/](docs/) is written as the work happens, including
+the decisions that turned out wrong. Start here:
+
 | Document | Contents |
 |---|---|
 | [docs/features.md](docs/features.md) | What is built, layer by layer, and where the interesting decisions were. The long version of "What this is". |
 | [docs/architecture.md](docs/architecture.md) | Which directory holds what, and why the boundaries are where they are. |
-| [docs/decisions.md](docs/decisions.md) | Topic-indexed answers to "why is this built this way?", over [docs/decisions/](docs/decisions/) — split by area. Start here when something looks odd. |
-| [docs/roadmap.md](docs/roadmap.md) | What's planned, grouped into layers from the kernel up, with a "ready now" list and the known issues. |
-| [docs/roadmap-details.md](docs/roadmap-details.md) | The per-item reasoning and test plans behind that list. |
-| [docs/bugs.md](docs/bugs.md) | What is currently BROKEN, one line each, with the reproduction in roadmap-details. Separate from the roadmap because "not built yet" and "misbehaving" are different questions. |
-| [docs/conventions/](docs/conventions/) | The conventions `CLAUDE.md` indexes by headline, written up in full and split by area: kernel, GUI, storage, shell, build. |
-| [docs/development-setup.md](docs/development-setup.md) | Setting up another machine or a fork: the packages, KVM and Docker groups, the SSH key, and the commit identity that fails silently. |
-| [docs/testing.md](docs/testing.md) | How to run and drive this OS headlessly, the QMP mechanics, and what the emulator does not model. |
-| [docs/tools.md](docs/tools.md) | Every script in `tools/`: what it does, why it exists, and the traps it encodes. |
-| [docs/settings-and-queries.md](docs/settings-and-queries.md) | Facts vs settings vs tunables, and how an app reads or changes either. |
-| [docs/query-design.md](docs/query-design.md) | How kernel state reaches ring 3, and why it is not `/proc`: `SYS_QUERY`, a self-describing registry, and a provider per fact. |
-| [docs/dynlink-design.md](docs/dynlink-design.md) | Shared libraries: what they took, staged — and the honest case against them at this scale. |
-| [docs/driver-guide.md](docs/driver-guide.md) | How to write a driver, ordered by the task rather than by topic. |
-| [docs/devices.md](docs/devices.md) | Every driver in the tree, by class registry, and what each one claims. |
-| [docs/libc-design.md](docs/libc-design.md) | `tolibc`, the C library — what it covers, and why its bar for adding a function is the opposite of the rest of the project. |
-| [docs/commands.md](docs/commands.md) | The command index; [docs/commands/](docs/commands/) has one page each. |
-| [docs/smp-design.md](docs/smp-design.md) | More than one core, staged — ACPI/MADT, the Local APIC, application processors, one kernel lock first and then splitting it. Stage 1 (the tables and the processor list) is built; the rest is designed, with the case against. |
-| [docs/signals-design.md](docs/signals-design.md) | Signals, a foreground process, and what `Ctrl-C` needs. Every stage is built — delivery, dispositions, job control, and ring-3 handlers with a `SA_RESTORER` from userland. |
-| [docs/tty-design.md](docs/tty-design.md) | The TTY layer: a terminal as an object, pseudo-terminals, and one implementation of `Ctrl-C` and `Ctrl-Z` for the console and a window alike. Stages 1–3 built; virtual terminals are what remain. |
-| [docs/boot-flags.md](docs/boot-flags.md) | Every word the kernel looks for on the GRUB command line. |
-| [docs/filesystem-layout.md](docs/filesystem-layout.md) | What lives where on the OS's own disk. Checked against the built image by `tools/check_layout.py`. |
-| [docs/gui-guidelines.md](docs/gui-guidelines.md) | How the GUI should look and behave, and how to verify a change to it properly. |
-| [docs/uapp-design.md](docs/uapp-design.md) | Toykit's design: how a ring-3 GUI app is written, and the staging that got there. |
-| [docs/wm-ring3-design.md](docs/wm-ring3-design.md) | How the window manager was moved out of the kernel, stage by stage. A record of finished work: for what ring 0 still owns, [docs/winserver-ring3-design.md](docs/winserver-ring3-design.md) is the current word. |
-| [docs/init-design.md](docs/init-design.md) | The staged plan for an init as pid 1, the process tree under it, and the shell moving to ring 3. |
-| [docs/process-isolation.md](docs/process-isolation.md) | The full ring0/ring3 build-up, told as it was built, bugs included. |
-| [docs/tfs3-spec.md](docs/tfs3-spec.md) / [design](docs/tfs3-design.md) | Byte-level format of the default filesystem, and the reasoning behind it. |
-| [docs/tfs2-spec.md](docs/tfs2-spec.md) | Byte-level format of the removed TFS2 backend, kept for the record. |
-| [docs/live-cd-design.md](docs/live-cd-design.md) | How the Live CD carries a filesystem image as a GRUB module. |
-| [docs/arch-portability.md](docs/arch-portability.md) | What is and isn't x86-64-specific, and what a second architecture would take. |
-| [kernel/README.md](kernel/README.md), [apps/README.md](apps/README.md) | Where a new file goes, and how to add an app. |
+| [docs/decisions.md](docs/decisions.md) | "Why is this built this way?", indexed by topic over [docs/decisions/](docs/decisions/). **Start here when something looks odd.** |
+| [docs/roadmap.md](docs/roadmap.md) | What is planned, grouped into layers from the kernel up. |
+| [docs/bugs.md](docs/bugs.md) | What is currently broken, one line each — kept apart from the roadmap, because "not built yet" and "misbehaving" are different questions. |
+| [docs/commands.md](docs/commands.md) | The command index; [docs/commands/](docs/commands/) has a page each, and those same pages ship on the machine. |
+| [docs/testing.md](docs/testing.md) | How to drive this OS headlessly, the QMP mechanics, and what the emulator does not model. |
+| [docs/tools.md](docs/tools.md) | Every script in `tools/`. |
+| [docs/development-setup.md](docs/development-setup.md) | Setting up another machine or a fork. |
+| [CLAUDE.md](CLAUDE.md) | The conventions a change is written under. |
+
+Reference material for one subsystem lives beside it —
+[driver-guide](docs/driver-guide.md) and [devices](docs/devices.md) for
+drivers, [gui-guidelines](docs/gui-guidelines.md) and
+[uapp-design](docs/uapp-design.md) for the desktop,
+[tfs3-spec](docs/tfs3-spec.md) for the filesystem's byte layout,
+[boot-flags](docs/boot-flags.md) for the GRUB command line, and a design
+document per staged subsystem (signals, TTY, SMP, dynamic linking, init).
+[kernel/README.md](kernel/README.md) and [apps/README.md](apps/README.md)
+say where a new file goes.
 
 ## Releases
 

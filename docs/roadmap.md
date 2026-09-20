@@ -846,7 +846,7 @@ run on, not by order.
 - [x] ~~Hot-plug: a device plugged in after boot enumerates, an unplugged one is torn down~~ DONE 2026-08-28
 - [x] ~~Composite devices: every boot interface binds, not just the first~~ DONE 2026-08-28
 - [x] ~~Bare-metal hardening: port power, enumeration retry, halt recovery, poll beside the IRQ~~ DONE 2026-08-28 -- all hardware-only paths
-- [ ] Full HID report-descriptor parsing, for a device that is not boot-protocol
+- [x] ~~Full HID report-descriptor parsing, for a device that is not boot-protocol~~ DONE 2026-09-20 -- boot protocol stays the fallback
 
 ### Networking
 **Needs:** nothing for the next item -- the stack, both NIC drivers and `ping` are built.
