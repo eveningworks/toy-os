@@ -2659,8 +2659,8 @@ The obvious fix is to make `fs_touch()`/`fs_mkdir()` return a negative
 errno instead of 1/0, since the backends already know exactly why they
 refused. That is the better long-term shape and it was NOT taken here.
 `fs.h`'s 1/0 contract is implemented three times (TFS3, ramfs, FAT32),
-consumed by every `fs_*` caller in the kernel and by `apps/shell_fs.c`
-and `kernel/lib/json.c`, and the diff would be far larger than the
+consumed by every `fs_*` caller in the kernel and by `apps/shell_fs.c`,
+and the diff would be far larger than the
 defect -- a one-site discarded return.
 
 What went in instead is `parent_dir_err()` in `kernel/fs/fs_syscalls.c`:

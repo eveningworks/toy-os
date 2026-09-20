@@ -17,8 +17,8 @@
 // by hand is a list that drifts.
 //
 // What replaced what: this kernel used to call pmm_selftest(),
-// heap_selftest(), json_selftest() and tfs_selftest() directly from
-// kernel_main(), on every single boot. They were real tests that caught
+// heap_selftest() and tfs_selftest() directly from kernel_main(), on
+// every single boot. They were real tests that caught
 // real bugs, but they ran whether you wanted them or not (the
 // filesystem one wrote 64 bytes at a 4.6GB offset every disk-backed
 // boot), couldn't be run individually, and a failure printed a line and

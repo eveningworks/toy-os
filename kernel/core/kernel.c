@@ -29,7 +29,6 @@
 #include "vesafb.h"
 #include "display.h"
 #include "fs.h"
-#include "json.h"
 #include "tz.h"
 #include "timer.h"
 #include "font_config.h"

@@ -49,9 +49,8 @@ path fixes, not a rewrite):
 - The scheduler's round-robin *policy* in `scheduler.c` (289 lines) --
   only one `hlt` in the idle path.
 - `kernel/lib/heap_core.c`/`heap.h` (the allocator, shared with ring 3's
-  malloc since 2026-08-18) and
-  `kernel/lib/json.c`/`json.h` (the JSON parser/serializer) -- plain
-  freestanding C, no CPU-specific content.
+  malloc since 2026-08-18) -- plain freestanding C, no CPU-specific
+  content.
 - Most of `apps/*.c`, `etc_config.c`, `klog.c`, `string.c`.
 - `kernel/proc/elf.c` -- aside from one machine-type check
   (`EM_X86_64` at line 90), which just needs an `#ifdef`/table entry
