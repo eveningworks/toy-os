@@ -2768,3 +2768,37 @@ the reboot" was exactly the bug under investigation.
 
 Write a fixture with a real program (`cp <something> <path>`), and do
 any filtering on the HOST from the captured text, not in the guest.
+
+**2026-09-20: `iso_guard` COMPARES SOURCE MTIMES, so EDITING the tree
+during a suite run stales the image -- not just building.** The known
+hazard was "don't rebuild under a running suite". Touching a `.c` file
+does it too: the guard's own message names the source and says the
+build "did not run, or it FAILED", which reads like a broken build
+rather than like a file saved two minutes ago. Both times it happened
+here, the suite reported ~40 tools as `FAIL ... 2s the guest never
+started` -- a wall of red that looks catastrophic and means nothing.
+
+The rule that covers both: **once a suite is running, the tree is
+frozen.** Queue the edits, or work in the scratchpad.
+
+**AND THE COROLLARY FOR `predates.py`: while it runs, the tree is
+SOMEONE ELSE'S.** It stashes the working tree to build HEAD, so every
+file read during that window shows HEAD's content. Half a diagnosis was
+drawn here from a `settings.c` that "still called `sys_setting`" -- it
+did, at HEAD, because the conversion was sitting in the stash. If a
+file's content contradicts an edit you are certain you made, check for
+a running `predates.py` before disbelieving yourself.
+
+**It also leaves the tree's DELETIONS unstaged** when it restores.
+`check_docs.py` then walks `git ls-files`, hits a header the change
+removed, and dies with a `FileNotFoundError` rather than a check
+failure. `git add -A` before the gate.
+
+**2026-09-20: A GUI SUITE'S FAILURE COUNT IS NOT COMPARABLE ACROSS JOB
+COUNTS.** `settings_test` reported 3 failures at `-j12`, 3 at `-j2`, 1
+at `-j3` and 1 at `-j1` -- the same tree each time. Two of its checks
+stage a spinbox change and assert the app logged it, and they lose that
+race under contention. A tool judged against HEAD must be run at the
+SAME job count as HEAD was, and a tool judged at all is worth one run at
+`-j1`: the 1-failure reading matched HEAD exactly and settled a question
+three concurrent runs had only muddied.
