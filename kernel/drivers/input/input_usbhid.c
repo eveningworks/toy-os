@@ -22,6 +22,7 @@
 #include "xhci_regs.h"
 #include "input.h"
 #include "klog.h"
+#include "hid_parse.h"   // the report descriptor, when a device has one worth reading
 #include "kfmt.h"
 #include "string.h"
 #include "driver.h" // driver_bound() -- `lsdrv`
@@ -34,6 +35,7 @@ DRIVER_DECLARE("usb-hid", "input", "USB HID keyboards and mice");
 #define HID_TYPE_CLASS_IF    0x21   // host->device, class, interface
 
 #define HID_PROTO_BOOT       0
+#define HID_PROTO_REPORT     1
 #define HID_SUB_BOOT         1
 #define HID_IF_KEYBOARD      1
 #define HID_IF_MOUSE         2
@@ -111,6 +113,12 @@ struct hid_dev {
     uint8_t ep;
     uint8_t prev[8];        // the last keyboard report, for the differ
     uint8_t buttons;        // the mouse's held mask
+    // THE DEVICE'S OWN FORMAT, when its descriptor gave one up. Unset
+    // means the BOOT format, which is what every device speaks and
+    // what this driver asked for until a five-button mouse turned out
+    // not to transmit its fifth button at all (api/hid_parse.h).
+    uint8_t use_report;
+    struct hid_layout layout;
     char    name[24];
     struct input_source src;
 };
@@ -241,6 +249,75 @@ void usb_hid_mouse_diff(uint8_t *buttons, const uint8_t *r, uint32_t len) {
     }
 }
 
+// The same device, decoded through its OWN descriptor rather than the
+// boot format. Everything here is a field lookup, because where the
+// fields are is exactly what the boot format could not tell us.
+static void hid_mouse_diff_report(struct hid_dev *d, const uint8_t *r, uint32_t len) {
+    const struct hid_layout *L = &d->layout;
+    const uint8_t *body = r;
+    uint32_t blen = len;
+
+    // A DESCRIPTOR WITH REPORT IDS PREFIXES EVERY REPORT WITH ONE, and
+    // the device sends the OTHER collections' reports down the same
+    // endpoint -- the G305's consumer and vendor collections share it.
+    // A report that is not ours is not a mouse report; decoding it
+    // anyway moves the pointer when somebody presses a media key.
+    if (L->report_id) {
+        if (len < 1 || r[0] != L->report_id) return;
+        body = r + 1;
+        blen = len - 1;
+    }
+
+    // FIVE BITS OUT OF HOWEVER MANY THE DEVICE HAS. The mask this
+    // kernel carries names left, right, middle and the two thumb
+    // buttons (kernel/input.h); a sixteen-button mouse's remaining
+    // eleven have nowhere to go yet, and dropping them is honest.
+    uint8_t mask = 0;
+    for (uint8_t b = 0; b < L->buttons.count && b < 5; b++)
+        if (hid_field_read(&L->buttons, body, blen, b))
+            mask |= (uint8_t)(1u << b);
+    if (mask != d->buttons) {
+        d->buttons = mask;
+        input_report_buttons(mask);
+    }
+
+    int dx = (int)hid_field_read(&L->x, body, blen, 0);
+    int dy = (int)hid_field_read(&L->y, body, blen, 0);
+    // Y NEGATED, the same as the boot path and for the same reason:
+    // input_report_rel() wants up-positive, HID reports down-positive.
+    if (dx || dy) input_report_rel(dx, -dy);
+
+    if (L->wheel.present) {
+        int w = (int)hid_field_read(&L->wheel, body, blen, 0);
+        if (w) input_report_wheel(w);
+    }
+}
+
+// A keyboard's report protocol, normalised back into the eight bytes
+// the differ already speaks: modifiers, a reserved byte, six usages.
+// Worth the copy rather than a second differ -- the rollover logic is
+// the subtle part and there should be one of it.
+static void hid_kbd_diff_report(struct hid_dev *d, const uint8_t *r, uint32_t len) {
+    const struct hid_layout *L = &d->layout;
+    const uint8_t *body = r;
+    uint32_t blen = len;
+    if (L->report_id) {
+        if (len < 1 || r[0] != L->report_id) return;
+        body = r + 1;
+        blen = len - 1;
+    }
+
+    uint8_t boot[8];
+    for (int i = 0; i < 8; i++) boot[i] = 0;
+    for (uint8_t b = 0; b < L->mods.count && b < 8; b++)
+        if (hid_field_read(&L->mods, body, blen, b))
+            boot[0] |= (uint8_t)(1u << b);
+    for (uint8_t k = 0; k < L->keys.count && k < 6; k++)
+        boot[2 + k] = (uint8_t)hid_field_read(&L->keys, body, blen, k);
+
+    usb_hid_keyboard_diff(d->prev, boot, sizeof boot);
+}
+
 // --- polling ----------------------------------------------------------
 
 static void hid_service_one(struct hid_dev *d) {
@@ -251,8 +328,14 @@ static void hid_service_one(struct hid_dev *d) {
     // moment, and taking one per poll would lag behind the typist.
     while ((n = xhci_take_report(d->slot, d->ep, report, sizeof report)) > 0) {
         g_reports++;
-        if (d->is_mouse) usb_hid_mouse_diff(&d->buttons, report, (uint32_t)n);
-        else             usb_hid_keyboard_diff(d->prev, report, (uint32_t)n);
+        if (d->use_report) {
+            if (d->is_mouse) hid_mouse_diff_report(d, report, (uint32_t)n);
+            else             hid_kbd_diff_report(d, report, (uint32_t)n);
+        } else if (d->is_mouse) {
+            usb_hid_mouse_diff(&d->buttons, report, (uint32_t)n);
+        } else {
+            usb_hid_keyboard_diff(d->prev, report, (uint32_t)n);
+        }
     }
 }
 
@@ -293,6 +376,55 @@ void usb_hid_service_all(void) {
 }
 
 // --- binding ----------------------------------------------------------
+
+// SET_PROTOCOL(report), but only once the descriptor has been read and
+// understood. The order matters: a device switched to its own format
+// before anyone knows what that format is reports bytes nobody can
+// decode, and a mouse whose axes are read from the wrong bits is worse
+// than a mouse missing a button.
+//
+// Returns 1 when the device is now in report protocol and `d->layout`
+// describes it.
+static int hid_try_report_protocol(struct hid_dev *d, uint8_t slot, uint8_t ifnum) {
+    // One buffer, reused: this runs at bind time, one device at a time,
+    // and a per-device copy of a descriptor nobody keeps would be 256
+    // bytes each for nothing. Static rather than on the stack because
+    // it is a DMA target -- usb_enum.c's rule, and the overrun that
+    // broke it there cost a panic (docs/bugs.md).
+    static uint8_t desc[256];
+    uint8_t get[8] = { 0x81, 0x06, 0x00, 0x22, ifnum, 0,
+                       (uint8_t)sizeof desc, (uint8_t)(sizeof desc >> 8) };
+    int n = xhci_control(slot, get, desc, (uint16_t)sizeof desc, 1);
+    if (n <= 0) return 0;
+    if (n > (int)sizeof desc) n = (int)sizeof desc;
+
+    if (!hid_parse_report_descriptor(desc, (uint32_t)n, d->is_mouse, &d->layout))
+        return 0;
+
+    uint8_t setup[8];
+    setup[0] = HID_TYPE_CLASS_IF; setup[1] = HID_REQ_SET_PROTOCOL;
+    setup[2] = HID_PROTO_REPORT;  setup[3] = 0;
+    setup[4] = ifnum;             setup[5] = 0;
+    setup[6] = 0;                 setup[7] = 0;
+    if (xhci_control(slot, setup, 0, 0, 0) < 0) return 0;
+
+    // SET_IDLE(0) as in the boot path: report on change, not on a timer.
+    setup[1] = HID_REQ_SET_IDLE;
+    setup[2] = 0; setup[3] = 0;
+    (void)xhci_control(slot, setup, 0, 0, 0);
+
+    if (d->is_mouse)
+        klog_printf("usb: slot %u if %u: report protocol -- %u button(s), "
+                    "%u-bit axes%s%s\n", slot, ifnum,
+                    d->layout.buttons.count, d->layout.x.bits,
+                    d->layout.wheel.present ? ", wheel" : "",
+                    d->layout.pan.present ? ", h-scroll" : "");
+    else
+        klog_printf("usb: slot %u if %u: report protocol -- %u modifier(s), "
+                    "%u key slot(s)\n", slot, ifnum,
+                    d->layout.mods.count, d->layout.keys.count);
+    return 1;
+}
 
 static int hid_set_idle_and_boot(uint8_t slot, uint8_t ifnum) {
     uint8_t setup[8];
@@ -355,7 +487,14 @@ int usb_hid_bind(struct usb_device_info *info) {
         d->ep       = ifc->ep;
         d->is_mouse = (ifc->if_protocol == HID_IF_MOUSE);
 
-        if (hid_set_idle_and_boot(info->slot, ifc->ifnum) < 0) {
+        // THE DESCRIPTOR FIRST, THE BOOT PROTOCOL AS THE FALLBACK.
+        // Asking a device for its own format is the only way to reach
+        // what the boot format has no room for -- a fourth and fifth
+        // button, 16-bit axes, horizontal scroll. A descriptor this
+        // does not understand simply leaves use_report clear and the
+        // device is driven exactly as it was before.
+        d->use_report = hid_try_report_protocol(d, info->slot, ifc->ifnum);
+        if (!d->use_report && hid_set_idle_and_boot(info->slot, ifc->ifnum) < 0) {
             klog_printf(KLOG_ERR "usb: slot %u if %u: set protocol(boot) failed\n",
                         info->slot, ifc->ifnum);
             continue;

@@ -4199,6 +4199,32 @@ window without going through it will find its layout polls timing out.
   end-to-end claim -- five buttons by name, and the thumb pair
   navigating the File Manager -- not the race.
 
+- **`hid_parse_hostcheck.py`** -- `kernel/lib/hid_parse.c` against HID
+  report descriptors CAPTURED off real devices, on the host. Run by
+  `ondemand_sweep.py`; needs gcc and nothing else.
+
+  **The fixtures are captured, not invented**: a Logitech G305
+  receiver's mouse and keyboard interfaces (read with
+  GET_DESCRIPTOR(0x22) at bind time) and QEMU's usb-mouse and usb-kbd.
+  A descriptor written by whoever wrote the parser proves only that the
+  two agree with each other.
+
+  **Why the host rather than a guest.** The parser decides where a
+  device's buttons and axes sit inside its reports, and its failure is
+  not a missing feature but a pointer flying across somebody's screen,
+  with a person as the only oracle. The descriptors are small and
+  fixed, so the whole question can be asked on the host -- which is
+  also the only way to cover a device nobody here can plug in.
+
+  It asserts the derived layout field by field (offsets written out by
+  hand from the decoded descriptor), that a keyboard's keycodes are an
+  ARRAY rather than a bitmap, a round trip through a synthesised report
+  including a NEGATIVE axis delta, and that every malformed input --
+  truncated, empty, garbage, an impossible report size -- is REFUSED
+  rather than turned into a plausible-looking layout. The refusals
+  matter most: a refusal sends the driver back to the boot protocol,
+  and a plausible-looking layout is the one that gets used.
+
 - **`hover_test.py`** -- that a hover change REPAINTS rather than only
   recording damage. Run by `gui_regress.py`.
 

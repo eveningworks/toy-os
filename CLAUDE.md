@@ -92,7 +92,7 @@ indexed by headline in the next section.
 digit loop, a formatter, a path join, or a rasteriser.** The headers are
 reachable through `kapi.h` and every one has KTESTs: `string.h`,
 `knum.h`, `kfmt.h`, `kpath.h`, `fixed.h`, `geom.h`, `rubberband.h`,
-`ttf.h`, `krandom.h`. What bites without warning:
+`ttf.h`, `krandom.h`, `hid_parse.h`. What bites without warning:
 
 - **`kfmt.h` is one header but TWO files** -- `kfmt.c` is freestanding
   and shared with ring 3, the kernel sinks live in `kfmt_print.c`; a
@@ -652,7 +652,7 @@ runners themselves; `--list` on either runner is the live answer.
 `filemanager_harness_hostcheck.py`, `fileop_test.py`, `flake_hunt.py`,
 `font_test.py`, `fs_switch_test.py`, `grep_test.py`,
 `gui_regress.py`, `guictl_test.py`,
-`hash_hostcheck.py`, `highmem_consume.py`, `highmem_test.py`,
+`hash_hostcheck.py`, `hid_parse_hostcheck.py`, `highmem_consume.py`, `highmem_test.py`,
 `hires_test.py`, `https_test.py`, `hwdata_test.py`, `init_test.py`,
 `install_test.py`, `jobs_test.py`, `kbd_test.py`,
 `keyboard_paths_test.py`, `ktest_run.py`, `latency_under_io.py`,

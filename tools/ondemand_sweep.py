@@ -73,6 +73,13 @@ TOOLS = [
     # are the oracle -- so it has no `needs` gate at all.
     ("hash_host",   "hash_hostcheck.py",       "crc32/sha256 against hashlib and zlib", False,
      None,                                                                                   False),
+    # The HID report-descriptor walker against descriptors CAPTURED off
+    # real devices -- a Logitech G305 receiver and QEMU's pair. Host-only
+    # for the same reason: the bytes are fixed, and the failure it exists
+    # to catch (an axis read from the wrong bits) is a pointer flying
+    # across somebody's screen with a person as the only oracle.
+    ("hid_parse",   "hid_parse_hostcheck.py",  "the HID descriptor parser vs real captures", False,
+     None,                                                                                   False),
     # The easing tween's invariants, on the host: it takes its clock as
     # an argument, so nothing here needs a guest.
     ("utween_host", "utween_hostcheck.py",     "the easing tween lands, is monotonic, eases out", False,

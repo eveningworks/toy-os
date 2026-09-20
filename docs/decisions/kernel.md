@@ -7872,3 +7872,51 @@ reverted, and both passed every check. The deterministic control is the
 KTEST ("a press and its release both survive one polling pass"), which
 feeds the two reports through `input_report_buttons()` with preemption
 off; the hardware is where the end-to-end claim was confirmed.
+
+## The HID report descriptor is parsed now, and the boot protocol is the fallback
+
+`input_usbhid.c` asked every device for the BOOT protocol: the fixed
+format a BIOS can drive without understanding anything, 8 bytes for a
+keyboard and 3 or 4 for a mouse. Its own header called the report
+descriptor "scope this driver deliberately does not have", and for
+"keyboard and mouse work" that was true for months.
+
+It stops being true at the first device with something the boot format
+has no room for. **A boot mouse report carries THREE buttons**, so on a
+five-button mouse the fourth and fifth are not mis-decoded, they are
+never transmitted: measured on a Logitech G305 receiver, `back` arrives
+as a courtesy bit in the spare bit 3 and `forward` does not exist on
+the wire at all. No amount of work downstream can recover a button the
+device was never asked to send.
+
+Linux has never had this problem because `usbhid` uses the REPORT
+protocol and parses the descriptor; boot protocol is its fallback, for
+quirky hardware. Windows does the same through HIDCLASS. So the shape
+here is the ordinary one, arrived at late.
+
+`kernel/lib/hid_parse.c` walks the item stream and derives ONE layout
+per device -- where the buttons are, how many, how wide the axes are,
+where the wheel and horizontal scroll sit. The driver asks for report
+protocol **only when a layout was derived**, and otherwise sets boot
+protocol exactly as before. That ordering is the whole safety argument:
+a device switched to its own format before anyone knows what that
+format is reports bytes nobody can decode, and a mouse whose axes are
+read from the wrong bits is a pointer flying across the screen -- worse
+than the missing button this was written to fix.
+
+**What it deliberately is not**: a general HID parser. No Feature or
+Output reports, no Push/Pop, no delimiters, no usages it has no use
+for. Unrecognised fields still ADVANCE the bit offset, which is the one
+thing it must get right -- a field skipped without advancing moves
+everything after it.
+
+What the G305 gains, beyond the missing button: sixteen buttons instead
+of three (five of which this kernel has names for), SIGNED 16-BIT axes
+instead of 8-bit -- so a fast flick stops clipping at +/-127 -- and the
+horizontal scroll the boot format cannot express.
+
+**Verified against descriptors captured off real devices**, not
+invented ones: `tools/hid_parse_hostcheck.py` runs the same parser on
+the host over the G305's two interfaces and QEMU's pair, and KTESTs
+cover the same bytes in the gate. A descriptor written by whoever wrote
+the parser proves only that the two agree.
