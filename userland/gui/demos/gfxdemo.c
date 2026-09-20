@@ -241,10 +241,15 @@ static void on_size(int *w, int *h) {
     ugfx_texture_checker(g_tex_px, TEX_SIZE, TEX_SIZE, 8,
                          ugfx_rgb(235, 235, 240), ugfx_rgb(60, 80, 130));
     int bar_w = 2 * MARGIN + 4 * button_w() + 3 * 6;
-    int aa_w = 0, sh_w = 0, hh = 0;
+    // EVERY BOX ON THE ROW, measured. A third checkbox was added to
+    // draw() without being added here, so the window was born narrower
+    // than its own controls and "textured (T)" ran under the readout.
+    int aa_w = 0, sh_w = 0, tx_w = 0, hh = 0;
     uui_checkbox_natural_size(&g_aa_check, &aa_w, &hh);
     uui_checkbox_natural_size(&g_shade_check, &sh_w, &hh);
-    int row_w = 2 * MARGIN + aa_w + 3 * cw + sh_w + 3 * cw + ugfx_text_width("speed 40");
+    uui_checkbox_natural_size(&g_tex_check, &tx_w, &hh);
+    int row_w = 2 * MARGIN + aa_w + 3 * cw + sh_w + 3 * cw + tx_w + 3 * cw
+                + ugfx_text_width("speed 40");
     g_w = WIN_W_MIN;
     if (bar_w > g_w) g_w = bar_w;
     if (row_w > g_w) g_w = row_w;

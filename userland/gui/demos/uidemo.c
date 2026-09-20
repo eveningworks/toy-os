@@ -146,11 +146,11 @@ static const char *const LIST_ITEMS[] = {
 // asserting on the log does not break when a label is reworded.
 enum widget_id { W_NONE = 0, W_BTN1, W_BTN2, W_BTN3, W_CHK_ALPHA,
                  W_CHK_BETA, W_RADIO, W_TEXTBOX, W_SCROLLBACK,
-                 W_DROPDOWN, W_LISTBOX };
+                 W_DROPDOWN, W_LISTBOX, W_BTNPAD };
 
 static const char *const WIDGET_NAMES[] = {
     "none", "btn1", "btn2", "btn3", "chk_alpha", "chk_beta",
-    "radio", "textbox", "scrollback", "dropdown", "listbox",
+    "radio", "textbox", "scrollback", "dropdown", "listbox", "btnpad",
 };
 
 static struct {
@@ -205,7 +205,15 @@ static int row_list(void)     { return row_dropdown() + dd_h() + ROW_GAP; }
 static int list_h(void)       { return LIST_ROWS * uui_listbox_row_h(&g.list) + 2; }
 static int row_scroll(void)   { return row_list() + list_h() + ROW_GAP; }
 static int scroll_h(void)     { return 5 * ugfx_char_h(); }
-static int row_status(void)   { return row_scroll() + scroll_h() + ROW_GAP; }
+// THE BUTTON PAD HAS A ROW OF ITS OWN. The mask used to be drawn at
+// row_status() - char_h, borrowing the gap above the status line -- and
+// a gap of ROW_GAP cannot hold a line of char_h, so on any face taller
+// than 8px the readout and its background ate the bottom of the text
+// view. A readout also needs somewhere obvious to press, which nothing
+// in this window said (xev gives you a window and says so).
+static int row_btnpad(void)   { return row_scroll() + scroll_h() + ROW_GAP; }
+static int btnpad_h(void)     { return 2 * ugfx_char_h() + 12; }
+static int row_status(void)   { return row_btnpad() + btnpad_h() + ROW_GAP; }
 
 static void logline(const char *msg) {
     char line[128];
@@ -316,6 +324,7 @@ static enum widget_id widget_at(int cx, int cy) {
     if (uui_radio_list_hit(&g.radio, cx, cy) >= 0) return W_RADIO;
     if (uui_textbox_hit(&g.textbox, cx, cy)) return W_TEXTBOX;
     if (uui_textview_hit(&g.view, cx, cy)) return W_SCROLLBACK;
+    if (uui_hit(PAD, row_btnpad(), VIEW_W, btnpad_h(), cx, cy)) return W_BTNPAD;
     return W_NONE;
 }
 
@@ -569,8 +578,12 @@ static void log_buttons(unsigned mods, const char *what) {
 }
 
 static void on_press(struct uapp *a, int cx, int cy, unsigned buttons) {
-    (void)a;
     log_buttons(buttons, "press");
+    // THE READOUT IS ONLY TRUE IF IT IS PAINTED. Without this the mask
+    // changed and nothing redrew, so a press showed up only when some
+    // later hover repainted the window -- which reads exactly like the
+    // button not being delivered. on_release has always had it.
+    uapp_redraw(a);
     layout();
     // Focus follows the click. uui_focus_click() only MOVES focus; it
     // never consumes the press, which the toolkit has already routed.
@@ -579,15 +592,32 @@ static void on_press(struct uapp *a, int cx, int cy, unsigned buttons) {
 
 // Painted OVER the widgets -- a status readout a widget would otherwise
 // be free to cover.
+// THE PLACE TO PRESS. A readout with no target is a readout nobody
+// finds: the mask only moves when a button goes down over this window,
+// and until there was a box saying so the way to discover that was to
+// press everywhere. `xev` and `evtest` both answer it the same way --
+// here is a region, act on it and watch.
+static void draw_btnpad(struct ugfx_surface *s) {
+    int x = PAD, y = row_btnpad(), w = VIEW_W, h = btnpad_h();
+    ugfx_fill_rect(s, x, y, w, h, UTHEME_WHITE);
+    ugfx_draw_rect(s, x, y, w, h, UTHEME_BORDER);
+    ugfx_draw_string_clipped(s, x + 6, y + 6, w - 12,
+                             "press any mouse button here",
+                             UTHEME_TEXT, UTHEME_WHITE);
+    ugfx_draw_string_clipped(s, x + 6, y + 6 + ugfx_char_h(), w - 12,
+                             g.btnmask[0] ? g.btnmask : "(no button yet)",
+                             UTHEME_TEXT, UTHEME_WHITE);
+}
+
 static void on_draw_over(struct uapp *a, struct uapp_draw *d) {
     (void)a;
     struct ugfx_surface *s = d->surface;
+    draw_btnpad(s);
     ugfx_draw_string_clipped(s, PAD, row_status(), s->w - 2 * PAD, g.status,
                              UTHEME_TEXT, UTHEME_PANEL_BG);
-    ugfx_draw_string_clipped(s, PAD, row_status() - ugfx_char_h(),
-                             s->w - 2 * PAD, g.btnmask,
-                             UTHEME_TEXT, UTHEME_PANEL_BG);
     uapp_logf_layout("uidemo: layout btnmask %s\n", g.btnmask);
+    uapp_logf_layout("uidemo: layout btnpad %d %d %d %d\n",
+                     PAD, row_btnpad(), VIEW_W, btnpad_h());
 }
 
 // So a held button is visibly RELEASED. Without it the readout keeps

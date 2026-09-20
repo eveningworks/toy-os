@@ -4251,3 +4251,27 @@ as characters, which is what a missing decoder looks like.
 `ESC O` begin a sequence; anything else means the ESC was the Esc key or
 a Meta prefix and is handed back. That keeps Alt-<key> working and costs
 Alt-[, which is the trade readline makes for the same reason.
+
+## A BUTTON OR A KEY IS AN EDGE AND IS QUEUED; A POSITION IS A LEVEL AND IS SAMPLED
+
+Ask which of the two a piece of input is before writing anything that
+carries it. Both mistakes are silent.
+
+**What the user DID is an edge**: a button going down, a key going up,
+a wheel notch. Queue it, drain it, and never ask "has the state changed
+since I last looked" -- a press and its release inside one polling
+interval cancel, and the whole click disappears with nothing to see.
+`mouse_try_get_button_transition()` and `keyboard_try_get_transition()`
+are the two queues; both are CONSUMING reads with exactly one reader.
+
+**Where the pointer IS is a level**: sample it, coalesce it, keep the
+newest. Ten queued moves are one position and replaying them makes the
+pointer crawl behind the hand -- Windows keeps one `WM_MOUSEMOVE` per
+queue and X compresses `MotionNotify`.
+
+The trap is that a level path LOOKS like it works: it works for
+everything held longer than the interval, which is every press a
+developer makes while testing on an idle machine. The thumb buttons are
+what exposed it, because a thumb tap is short -- see `docs/decisions.md`,
+"A pointer button is an edge, not a level", including why no QEMU guest
+reproduces the loss.

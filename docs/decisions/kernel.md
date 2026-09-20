@@ -7828,3 +7828,47 @@ reason rather than by accident:
 - The timeout POLLS (`ac97.c`, `diag.c`) are a different shape: a
   deadline around a condition, not a fixed delay. They want a deadline
   helper, which is a separate change.
+
+## A pointer button is an edge, not a level
+
+Every stage between a mouse and a client kept the button mask as a
+LEVEL and sampled it, and three of them could sample after the click
+had finished. `hid_service_one()` drains every queued USB report in one
+pass and keeps the last mask; `win_input_poll()` pushed an event only
+when the mask differed from the one it last saw, and it runs from
+`scheduler_idle()`; `wm_rawin_pump()` assigned the newest mask over
+whatever was there, while the comment at the top of that file promised
+the opposite. A press and its release landing between two looks cancel,
+and the click never happened.
+
+It was reported as "the File Manager's Back thumb button works maybe
+one time in twenty, and holding it makes it work" -- which is the shape
+of a lost EDGE rather than a lost button: holding one widens the window
+until some look catches it.
+
+Linux does not have this class of bug because evdev has no level to
+sample: a HID driver emits `EV_KEY`/`BTN_SIDE` 1 and 0 into a per-device
+buffer and the consumer drains it. NT's mouse class driver queues
+`MOUSE_INPUT_DATA` with per-button transition FLAGS rather than a state.
+This kernel's own keyboard already worked that way
+(`keyboard_try_get_transition()`, added when key releases arrived); the
+mouse was the outlier, so the fix is the shape already here, not a new
+idea: `mouse_try_get_button_transition()` queues every change,
+`win_input_poll()` drains it before sampling the position, and
+`wm_rawin_pump()` hands the frame one edge per frame.
+
+The position stays a sampled level on purpose, and that asymmetry is
+the point -- Windows holds one `WM_MOUSEMOVE` per queue and X compresses
+`MotionNotify` for the same reason. Ten queued moves are one position
+and replaying them makes the pointer crawl; ten queued button changes
+are ten things the user did.
+
+**The loss is not reproducible under QEMU, which is why it shipped.**
+The PS/2 path interrupts per packet and the idle loop that polls wakes
+on those interrupts, so it always gets a look between a press packet
+and a release packet; a USB guest is paced by the endpoint's polling
+interval, with the same result. Both were MEASURED with the fix
+reverted, and both passed every check. The deterministic control is the
+KTEST ("a press and its release both survive one polling pass"), which
+feeds the two reports through `input_report_buttons()` with preemption
+off; the hardware is where the end-to-end claim was confirmed.

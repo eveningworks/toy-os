@@ -295,11 +295,43 @@ void mouse_feed_abs(int x, int y, int max_x, int max_y) {
     clamp_to_bounds();
 }
 
+// **EVERY CHANGE IS ALSO QUEUED, BECAUSE THE LEVEL ALONE LOSES CLICKS.**
+// Two samplers sit above this -- the USB HID drain takes every queued
+// report in one pass, and win_input_poll() runs from scheduler_idle() --
+// so a press and its release both landing between two passes read back
+// as "nothing happened". evdev emits BTN_* transitions and NT's mouse
+// class driver queues per-button DOWN/UP flags; keyboard.c beside this
+// file already does it (keyboard_try_get_transition). The thumb buttons
+// made it visible because a thumb tap is short.
+#define BTN_TRANS_MAX 32
+static uint8_t btn_trans[BTN_TRANS_MAX];
+static int btn_trans_head, btn_trans_tail;
+
 // FIVE BITS: left, right, middle, then the two thumb buttons (SIDE and
 // EXTRA, kernel/input.h). Masked rather than stored whole so a driver
 // reporting a button nothing here has a name for cannot invent one --
 // a HID mouse's byte 0 has three more bits above these.
-void mouse_feed_buttons(uint8_t mask) { mouse_buttons = mask & 0x1F; }
+void mouse_feed_buttons(uint8_t mask) {
+    mask &= 0x1F;
+    if (mask != mouse_buttons) {
+        int next = (btn_trans_head + 1) % BTN_TRANS_MAX;
+        // Dropping the OLDEST keeps the most recent releases, which are
+        // the ones that un-stick a button -- keyboard.c's rule.
+        if (next == btn_trans_tail)
+            btn_trans_tail = (btn_trans_tail + 1) % BTN_TRANS_MAX;
+        btn_trans[btn_trans_head] = mask;
+        btn_trans_head = next;
+    }
+    mouse_buttons = mask;
+}
+
+int mouse_try_get_button_transition(uint8_t *out_mask) {
+    if (btn_trans_tail == btn_trans_head) return 0;
+    uint8_t m = btn_trans[btn_trans_tail];
+    btn_trans_tail = (btn_trans_tail + 1) % BTN_TRANS_MAX;
+    if (out_mask) *out_mask = m;
+    return 1;
+}
 
 void mouse_feed_wheel(int notches) { wheel_delta += notches; }
 

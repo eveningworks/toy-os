@@ -628,6 +628,7 @@ runners themselves; `--list` on either runner is the live answer.
 `gfxdemo_test.py`, `hover_test.py`, `icons_test.py`,
 `idle_desktop_test.py`, `imgview_test.py`, `keyup_test.py`, `kvm_soak.py`,
 `menubar_test.py`, `mines_test.py`, `modeset_test.py`,
+`mouse_buttons_test.py`,
 `network_tray_test.py`, `notepad_client_test.py`, `osk_test.py`,
 `pager_test.py`, `player_test.py`, `popup_test.py`,
 `resize_edges_test.py`, `resize_stride_test.py`, `sched_gui_test.py`,

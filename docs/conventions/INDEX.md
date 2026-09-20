@@ -32,6 +32,9 @@ whenever a headline here tells you something you did not already know.
 
 `docs/conventions/kernel.md`
 
+- **A BUTTON OR A KEY IS AN EDGE AND IS QUEUED; A POSITION IS A LEVEL
+  AND IS SAMPLED** -- a press and its release inside one polling
+  interval cancel, and a level path looks like it works
 - **Monotonic time is an INTERFACE, and wall clock is not one of its
   implementations.**
 - **THE WALL CLOCK IS A SOFTWARE CLOCK ANCHORED TO THE CLOCKSOURCE, AND

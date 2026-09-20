@@ -1308,10 +1308,6 @@ static int cmd_rclick(int x, int y) {
     return cmd_button_click(x, y, 2);
 }
 
-static int cmd_click(int x, int y) {
-    return cmd_button_click(x, y, 1);
-}
-
 // Interpolated so the WM sees real intermediate positions: a drag that
 // jumped straight to its destination would never exercise the
 // per-tick "is the cursor still over the armed control" tracking, which

@@ -62,6 +62,33 @@ static int g_mx, g_my;
 static uint8_t g_buttons;
 static int g_seeded;
 
+// **BUTTON MASKS ARE A QUEUE, AND THE FRAME TAKES ONE PER FRAME.** The
+// position above is a state and coalesces; a button change is a thing
+// the user did. Assigning both from the newest event -- which is what
+// this file did while the comment at the top claimed otherwise -- feeds
+// wm.c's edge detector only the LAST mask of the frame, so a press and
+// its release arriving together cancel and the click is gone. The
+// kernel already keeps them apart (win_input.c pushes one event per
+// edge, and its queue refuses to coalesce a move over a differing mask).
+#define WM_RAWIN_BTNS 32
+static uint8_t g_btn_q[WM_RAWIN_BTNS];
+static int g_btn_head, g_btn_tail;
+// The newest mask SEEN, which is what a queued edge is compared against.
+// g_buttons is the one being SHOWN this frame and can be several edges
+// behind it; every reader in the WM must agree within a frame, so the
+// queue advances in one place (the pump) rather than in the getter --
+// five other files ask for the pointer and a consuming read there would
+// let whichever ran first eat the frame's click.
+static uint8_t g_btn_latest;
+
+static void btn_push(uint8_t mask) {
+    int next = (g_btn_head + 1) % WM_RAWIN_BTNS;
+    // Oldest out, so the releases survive -- wm_rawin.c's key rule.
+    if (next == g_btn_tail) g_btn_tail = (g_btn_tail + 1) % WM_RAWIN_BTNS;
+    g_btn_q[g_btn_head] = mask;
+    g_btn_head = next;
+}
+
 // Discrete events, held until the frame asks for them.
 // One queue's worth. The same number as the kernel's depth rather than
 // a tuned one, because "how many can be waiting?" has exactly that
@@ -129,6 +156,8 @@ void wm_rawin_init(int screen_w, int screen_h) {
     g_mx = screen_w / 2;
     g_my = screen_h / 2;
     g_buttons = 0;
+    g_btn_latest = 0;
+    g_btn_head = g_btn_tail = 0;
     g_seeded = 1;
 }
 
@@ -152,10 +181,13 @@ void wm_rawin_pump(void) {
     while (budget-- > 0 && sys_poll_event(&ev) == 1) {
         switch (ev.type) {
         case WIN_EV_RAW_MOUSE:
-            // Coalesced by assignment -- the newest position wins.
+            // Position coalesced by assignment -- the newest wins.
             g_mx = ev.a;
             g_my = ev.b;
-            g_buttons = (uint8_t)ev.mods;
+            if ((uint8_t)ev.mods != g_btn_latest) {
+                g_btn_latest = (uint8_t)ev.mods;
+                btn_push(g_btn_latest);
+            }
             break;
         case WIN_EV_RAW_KEY:
             key_push(ev.a, (uint8_t)ev.mods, 1);
@@ -182,6 +214,16 @@ void wm_rawin_pump(void) {
             wm_client_handle_event(&ev);
             break;
         }
+    }
+
+    // ONE BUTTON EDGE PER FRAME, so wm.c's edge detector -- which
+    // compares this frame's mask against last frame's -- sees every
+    // press and every release. A tap whose two edges arrived in one
+    // pump takes two frames to play out, which is what makes it a
+    // click rather than nothing at all.
+    if (g_btn_tail != g_btn_head) {
+        g_buttons = g_btn_q[g_btn_tail];
+        g_btn_tail = (g_btn_tail + 1) % WM_RAWIN_BTNS;
     }
 }
 

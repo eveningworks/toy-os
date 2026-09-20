@@ -141,19 +141,33 @@ void win_input_poll(void) {
     int x = 0, y = 0;
     uint8_t buttons = 0;
     mouse_get_state(&x, &y, &buttons);
-    if (x != g_last_x || y != g_last_y || buttons != g_last_buttons) {
-        // The hardware cursor plane rides HERE, not on a request: the
-        // screen coordinates are already in hand, so pointer motion
-        // costs the compositor zero syscalls and the plane moves even
-        // before the WM's event loop wakes (win_proto.h's
-        // WIN_REQ_FB_CURSOR arms this).
-        if (win_server_hw_cursor_armed() && (x != g_last_x || y != g_last_y))
-            gfx_hw_cursor_move(x, y);
-        g_last_x = x;
-        g_last_y = y;
-        g_last_buttons = buttons;
-        push(WIN_EV_RAW_MOUSE, x, y, buttons);
+
+    // The hardware cursor plane rides HERE, not on a request: the
+    // screen coordinates are already in hand, so pointer motion
+    // costs the compositor zero syscalls and the plane moves even
+    // before the WM's event loop wakes (win_proto.h's
+    // WIN_REQ_FB_CURSOR arms this).
+    if (win_server_hw_cursor_armed() && (x != g_last_x || y != g_last_y))
+        gfx_hw_cursor_move(x, y);
+
+    // BUTTON EDGES ARE DRAINED; THE POSITION IS SAMPLED. This poll runs
+    // from scheduler_idle(), so on a busy machine a whole click can fall
+    // between two passes -- comparing the mask against the last one seen
+    // then reports nothing at all (api/mouse.h's transition queue). Each
+    // edge carries the position it is being delivered at, which is why
+    // draining one satisfies the motion push below as well.
+    uint8_t edge = 0;
+    int pushed = 0;
+    for (int budget = 32; budget > 0; budget--) {
+        if (!mouse_try_get_button_transition(&edge)) break;
+        push(WIN_EV_RAW_MOUSE, x, y, edge);
+        pushed = 1;
     }
+    if (!pushed && (x != g_last_x || y != g_last_y))
+        push(WIN_EV_RAW_MOUSE, x, y, buttons);
+    g_last_x = x;
+    g_last_y = y;
+    g_last_buttons = buttons;
 
     // Keys and wheel notches are CONSUMING reads, so each one is pushed
     // exactly once and there is no "on change" to apply -- a repeated

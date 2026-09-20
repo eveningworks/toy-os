@@ -501,6 +501,38 @@ class QMPSession:
         time.sleep(settle)
         self.mouse_up(button)
 
+    def tap(self, button="left"):
+        """Press and release with NO wait between them -- the shortest click
+        this harness can produce.
+
+        click() sleeps 100ms, which gives the guest many chances to look
+        at the button and makes a level-sampling input path pass. A tap
+        does not: the kernel samples pointer state from scheduler_idle()
+        and the USB HID path drains every queued report at once, so both
+        edges can land between two looks and cancel. Use it for any "is
+        this a real edge, or a sampled level?" question.
+
+        TWO COMMANDS, NOT ONE BATCH, PIPELINED. QEMU's PS/2 mouse
+        accumulates button state and only queues a packet at the batch's
+        sync, so a down and an up in ONE input-send-event net out to zero
+        and NOTHING is sent -- a tap that tests the harness rather than
+        the guest, which is exactly what it did on its first run (even a
+        primary-button tap went missing, on a build where clicking
+        plainly worked). Two commands each get their own sync and so
+        their own packet; sending both before reading either reply is
+        what keeps them microseconds apart rather than a round trip,
+        which is the difference between a control that reddens and one
+        that does not -- MEASURED: round-tripped, the guest polled in
+        between and the old sampling build passed.
+        """
+        down = {"execute": "input-send-event", "arguments": {"events": [
+            {"type": "btn", "data": {"down": True, "button": button}}]}}
+        up = {"execute": "input-send-event", "arguments": {"events": [
+            {"type": "btn", "data": {"down": False, "button": button}}]}}
+        self._sock.sendall((json.dumps(down) + "\n" + json.dumps(up) + "\n").encode())
+        self._recv_json()
+        self._recv_json()
+
     def click_at(self, x, y, **kw):
         self.goto(x, y)
         self.click(**kw)

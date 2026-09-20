@@ -62,6 +62,14 @@ void mouse_feed_wheel(int notches);
 // kernel/input.h). Position is clamped to the configured bounds.
 void mouse_get_state(int *x, int *y, uint8_t *buttons);
 
+// The next button mask the device passed THROUGH, oldest first, or 0
+// when none is waiting. A CONSUMING read, like the keyboard's
+// transition queue -- and for the same reason: mouse_get_state()'s mask
+// is a level, so a press and its release between two polls cancel out
+// and the click is gone. Whoever turns pointer state into events drains
+// this first and samples the level only when it is empty.
+int mouse_try_get_button_transition(uint8_t *out_mask);
+
 // The bounds the pointer is clamped to. These are NOT always the
 // display size -- they are whatever mouse_set_bounds() was last given,
 // which on a boot where nothing has set them is a small default.

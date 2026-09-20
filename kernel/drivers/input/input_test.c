@@ -225,6 +225,62 @@ KTEST("input", "buttons are a mask, so one button does not clear another") {
     KTEST_ASSERT_EQ(now, 0x09);
 
     input_report_buttons(before);
+    // Every report above queued an edge, and this runs in the live
+    // kernel: left there, a desktop would be handed a fistful of
+    // phantom clicks the moment win_input_poll() next ran.
+    while (mouse_try_get_button_transition(0)) ;
+}
+
+KTEST("input", "a press and its release both survive one polling pass") {
+    // THE BUG THIS REJECTS: mouse_get_state()'s mask is a LEVEL, and
+    // everything above it samples. A thumb tap whose press and release
+    // land between two passes of scheduler_idle() read back as no
+    // change at all, so the click never reached a client -- which is
+    // what "the back button works about one time in twenty" was.
+    //
+    // **NOTHING IS ASSERTED WHILE PREEMPTION IS OFF.** A KTEST_ASSERT
+    // returns from the test body, so an assertion inside the guarded
+    // region leaves the counter raised and the machine wedges -- which
+    // is what the first version of this test did to its own positive
+    // control: a hang instead of a red line.
+    scheduler_preempt_disable();
+    int x = 0, y = 0;
+    uint8_t before = 0;
+    mouse_get_state(&x, &y, &before);
+    while (mouse_try_get_button_transition(0)) ;   // whatever the desktop had coming
+
+    input_report_buttons(0x08);   // SIDE down -- the thumb's "back"
+    input_report_buttons(0);      // ...and up again, inside one pass
+
+    uint8_t level = 0;
+    mouse_get_state(&x, &y, &level);
+    uint8_t e1 = 0xFF, e2 = 0xFF, e3 = 0xFF;
+    int got1 = mouse_try_get_button_transition(&e1);
+    int got2 = mouse_try_get_button_transition(&e2);
+    int got3 = mouse_try_get_button_transition(&e3);
+
+    // A repeat of the same mask is not an edge: a device that re-reports
+    // what is already held must not manufacture a second press.
+    input_report_buttons(0x01);
+    input_report_buttons(0x01);
+    uint8_t r1 = 0xFF, r2 = 0xFF;
+    int rgot1 = mouse_try_get_button_transition(&r1);
+    int rgot2 = mouse_try_get_button_transition(&r2);
+
+    input_report_buttons(before);
+    while (mouse_try_get_button_transition(0)) ;
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT_EQ(level, 0);    // the level says nothing happened...
+    KTEST_ASSERT(got1);           // ...and the queue says otherwise
+    KTEST_ASSERT_EQ(e1, 0x08);
+    KTEST_ASSERT(got2);
+    KTEST_ASSERT_EQ(e2, 0);
+    KTEST_ASSERT(!got3);
+
+    KTEST_ASSERT(rgot1);
+    KTEST_ASSERT_EQ(r1, 0x01);
+    KTEST_ASSERT(!rgot2);
 }
 
 KTEST("input", "the PS/2 pair registered itself with the core") {

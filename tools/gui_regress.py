@@ -120,6 +120,7 @@ TOOLS = [
     ("stride", "resize_stride_test.py", "a resized window's buffers agree with its size"),
     ("resizeedges", "resize_edges_test.py", "all eight resize edges, and their cursors"),
     ("keyup", "keyup_test.py", "key RELEASES reaching a ring-3 client"),
+    ("mousebtn", "mouse_buttons_test.py", "five buttons, and a SHORT press, reaching a client"),
     ("hover", "hover_test.py", "a hover change REPAINTS, not just damages"),
     ("scrollbar", "scrollbar_test.py", "scrollbar behaviour, per the guidelines"),
     ("pager", "pager_test.py", "the shared pager under /bin/less and /bin/doc"),
@@ -193,6 +194,14 @@ EXTRA_VM_ARGS = {
     # triple-faulting guest stops rather than looping). This tool is the
     # one that deliberately reboots, so it gets a guest that can.
     "startmenu": ["--reboot"],
+    # A USB MOUSE, BECAUSE THE PS/2 ONE CANNOT LOSE A CLICK HERE. The
+    # stage that dropped short presses is the HID drain -- it takes every
+    # queued report in one pass, so a press and its release cancel before
+    # anything looks. The PS/2 path interrupts per packet and the idle
+    # loop wakes on those interrupts, so it gets a look in between no
+    # matter how fast the tap: with the fix reverted, the PS/2 guest
+    # still passed every check. MEASURED, not assumed.
+    "mousebtn": ["--usb", "xhci+mouse"],
 }
 
 COST_S = {

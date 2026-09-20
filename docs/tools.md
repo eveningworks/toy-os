@@ -4167,6 +4167,38 @@ window without going through it will find its layout polls timing out.
   a brand-new descriptor directory changed nothing at all and looked
   like a checker that did not work.
 
+- **`mouse_buttons_test.py`** -- that all five pointer buttons reach a
+  ring-3 client, and that a SHORT press reaches it too. Run by
+  `gui_regress.py`, on a guest with a USB mouse (`--usb xhci+mouse`).
+
+  **The check that matters is the TAP**, `QMPSession.tap()`: a press and
+  a release with no wait between them. `click()` sleeps 100ms, which
+  gives a level-sampling input path every chance to look and pass --
+  and the input path here sampled a level at three stages, so a tap
+  whose two edges landed between two looks cancelled out and the click
+  never happened (docs/decisions.md, "A pointer button is an edge, not a
+  level"). Check 2 -- the same button HELD -- is what passes on the
+  broken build, and the pair is what makes the difference legible.
+
+  **Two harness traps it paid for.** A down and an up in ONE
+  `input-send-event` send NOTHING: QEMU's PS/2 mouse accumulates button
+  state and only queues a packet at the batch's sync, so the two net out
+  -- caught because the primary-button tap went missing on a build where
+  clicking plainly worked. And the two commands are PIPELINED, both
+  written before either reply is read, because a round trip between them
+  is long enough for the guest to look.
+
+  **ITS POSITIVE CONTROL DOES NOT REDDEN, AND THAT IS MEASURED RATHER
+  THAN AN OVERSIGHT.** With the fix reverted this tool passed all ten
+  checks on a PS/2 guest and again on a USB one: the PS/2 path
+  interrupts per packet and the idle loop that polls wakes on those
+  interrupts, and a USB guest is paced by the endpoint's polling
+  interval, so under emulation something always looks in between. The
+  deterministic control for the lost edge is the KTEST `input`/"a press
+  and its release both survive one polling pass"; this tool's job is the
+  end-to-end claim -- five buttons by name, and the thumb pair
+  navigating the File Manager -- not the race.
+
 - **`hover_test.py`** -- that a hover change REPAINTS rather than only
   recording damage. Run by `gui_regress.py`.
 
