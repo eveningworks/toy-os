@@ -550,6 +550,17 @@ manual steps to be worth automating:
   **`/etc` IS SYNCED, but NEW FILES ONLY** (`USERLAND_TREES`), so a new
   service descriptor does arrive while the machine's own configuration
   -- which services are enabled, its address -- is never overwritten.
+  **A FLASH ADDS AND REPLACES; IT NEVER DELETES.** The sync sends what
+  the staging tree has and leaves everything else alone, so a file
+  REMOVED from `data/` stays on a machine that was flashed while it
+  existed -- with no error and nothing saying so. It bit on 2026-09-20:
+  two settings replaced by an effect descriptor were deleted from the
+  tree, and the laptop kept showing their rows in System Settings for
+  the rest of the session. `rm` the file on the machine (`remote.py
+  exec "rm <path>"`); there is no sweep, because "delete what the
+  staging tree does not have" would empty `/etc` of everything a
+  machine configured for itself.
+
   **`/etc/settings.d` IS THE EXCEPTION and is overwritten**, because
   those files are not that machine's configuration: they are shipped
   metadata declaring what each setting IS, and a stale copy with no
