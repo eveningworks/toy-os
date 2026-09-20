@@ -912,6 +912,10 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 
 static int on_tick(struct uapp *a) {
     (void)a;
+    // BEFORE anything that can return early. A double click descends
+    // from inside uui_fileview, so a mouse navigation reaches no
+    // fm_goto*(); this is where it gets recorded (fm_history.c).
+    fm_history_sync();
     int changed = poll_job();
     if (uui_toolbar_tick(&g_toolbar)) changed = 1;
     if (thumb_tick()) changed = 1;

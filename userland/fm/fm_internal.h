@@ -93,6 +93,11 @@ extern enum dialog_kind g_dialog_kind;
 // which is worse than having none, because Back then goes somewhere the
 // user has never been.
 void fm_history_record(int pane, const char *dir);
+// Record wherever the panes are NOW -- the backstop for a navigation the
+// widget made by itself (a double click). Call it per frame; see
+// fm_history.c for why that is cheaper than keeping a list of call
+// sites complete.
+void fm_history_sync(void);
 int  fm_history_back(int pane);
 int  fm_history_forward(int pane);
 int  fm_history_can_back(int pane);

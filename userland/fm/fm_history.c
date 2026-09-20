@@ -83,6 +83,26 @@ static int go(int pane, int delta) {
 int fm_history_back(int pane)    { return go(pane, -1); }
 int fm_history_forward(int pane) { return go(pane, +1); }
 
+// **AND THIS IS THE BACKSTOP, BECAUSE A PANE IS A WIDGET AND A WIDGET
+// NAVIGATES ON ITS OWN.** `uui_fileview_release()` activates a row on a
+// double click, from inside the widget, so a MOUSE descent passes
+// through none of the three functions below -- exactly as Enter and
+// Backspace did from inside the key handler. That bypass was fixed for
+// the keyboard by comparing the directory across the call and missed
+// for the mouse, which left Back dead for anyone navigating the way
+// people actually navigate a file manager.
+//
+// So this records by RESULT rather than by route: whatever moved a
+// pane, and whatever moves one in future, is caught. Safe to call as
+// often as you like -- record() already ignores a repeat of the same
+// place and anything during a replay -- which is what lets the caller
+// be a per-frame tick instead of a list of call sites somebody has to
+// keep complete.
+void fm_history_sync(void) {
+    for (int p = 0; p < 2; p++)
+        fm_history_record(p, uui_fileview_dir(&g_pane[p]));
+}
+
 // THE ONE PLACE A PANE'S DIRECTORY CHANGES. It used to change at four
 // call sites with nothing in common, which is exactly how a history
 // ends up describing somewhere the user has never been -- so the

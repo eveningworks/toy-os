@@ -66,8 +66,6 @@ UIDEMO_TITLE = "UI Demo"
 FILES_TITLE = "File Manager"
 OPEN_TIMEOUT_S = 20.0
 
-# `gui key` takes a code, so nothing here depends on the guest's layout.
-K_DOWN, K_ENTER = "0x92", "0x0a"   # api/keyboard.h
 
 
 class Result:
@@ -117,6 +115,25 @@ def pane_dir(dbg, pane=0):
                 seen = parts[i + 2]
                 break
     return seen
+
+
+def pane_geom(dbg):
+    """(x, rowy, rowh) for pane 0, from the app's own layout report.
+    Row 0's y is reported rather than derived, because deriving it as
+    "pane top + n * row height" lands on the row above -- the header is
+    in the way, and a neighbouring row is a plausible thing to have
+    clicked (fm_view.c says so at the line that logs it)."""
+    x = rowy = rowh = None
+    for line in dbg.logs("files: layout", clear=False):
+        p = line.split()
+        for i, w in enumerate(p):
+            if w == "pane" and i + 5 < len(p) and p[i + 1] == "0":
+                x = int(p[i + 2])
+            elif w == "rowy" and i + 2 < len(p) and p[i + 1] == "0":
+                rowy = int(p[i + 2])
+            elif w == "rowh" and i + 1 < len(p):
+                rowh = int(p[i + 1])
+    return x, rowy, rowh
 
 
 def open_app(dbg, title, timeout=OPEN_TIMEOUT_S):
@@ -195,12 +212,38 @@ def run(dbg, qmp, res):
     settle_input(dbg)
     start = pane_dir(dbg)
 
-    # Descend into whatever the pane's first row offers, so there is
-    # somewhere to go back FROM: Back with no history is a no-op, and a
-    # check made from the root could not fail.
-    dbg.key(K_DOWN)
-    dbg.key(K_ENTER)
-    settle_input(dbg, 1.5)
+    # **DESCEND WITH THE MOUSE, NOT THE KEYBOARD.** This used to press
+    # Down then Enter, and that is the one path that cannot fail: the
+    # app records history around its own key handler. A double click
+    # activates a row from INSIDE uui_fileview, reaching no fm_goto*()
+    # at all -- so with history recorded only at those call sites, Back
+    # was dead for everyone using a mouse and this check stayed green.
+    # Ask what a broken version would still pass (CLAUDE.md).
+    px, rowy, rowh = pane_geom(dbg)
+    res.check("5c. the File Manager reports its pane and row geometry",
+              None not in (px, rowy, rowh),
+              f"pane x={px} rowy={rowy} rowh={rowh}")
+    if None in (px, rowy, rowh):
+        return
+    # Row 0, a little in from the left edge so the click is on the name
+    # column rather than on a resize gutter. Twice: the fileview counts
+    # a double by the ROW, not by a clock.
+    #
+    # CONTENT-RELATIVE PLUS THE WINDOW'S ORIGIN: the app reports layout
+    # in its own surface's coordinates and `gui click` takes SCREEN
+    # ones, so clicking the reported numbers directly lands outside the
+    # window -- which reads exactly like a dead control.
+    ox, oy = files["content"]["x"], files["content"]["y"]
+    rx, ry = ox + px + 40, oy + rowy + rowh // 2
+    # BACK TO BACK, with no settle between them. dbg.click() settles,
+    # which puts about a second between the two halves -- and a pane
+    # RELOAD clears uui_fileview's last_click_row, so on a machine that
+    # is writing to disk (this one logs continuously) the second click
+    # is a fresh single click and nothing descends. Measured: settled,
+    # the pane stayed at '/'; back to back it reaches /bin.
+    dbg.send(f"gui click {rx} {ry}")
+    dbg.send(f"gui click {rx} {ry}")
+    settle_input(dbg, 2.0)
     inner = pane_dir(dbg)
     res.check("5b. the pane descends, so there is history to go back through",
               inner is not None and inner != start,
@@ -215,8 +258,9 @@ def run(dbg, qmp, res):
     now = pane_dir(dbg)
     res.check("4. a TAPPED thumb button navigates the File Manager back",
               now == start,
-              f"pane 0 is at {now!r}, not back at {start!r} -- "
-              "the tap never reached the client")
+              f"pane 0 is at {now!r}, not back at {start!r} -- either the "
+              "tap never reached the client, or the descent above recorded "
+              "no history for it to go back through (fm_history.c)")
 
 
 def main():
