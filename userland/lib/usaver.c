@@ -179,19 +179,6 @@ int usaver_load_files(const char *name, const char *desc_path,
         }
     }
 
-    // ONE LINE SAYING WHAT IT RESOLVED TO, here rather than in each
-    // saver. It is the only way to answer "did my option take" on a
-    // machine where reading pixels is not an option -- a bare-metal
-    // laptop -- and it distinguishes a value that was REFUSED (the
-    // default appears) from one that was never written. Once per saver
-    // start, which is once a screen blank.
-    char line[160];
-    unsigned n = 0;
-    n += (unsigned)snprintf(line, sizeof line, "opts %s:", name);
-    for (int i = 0; i < out->opt_count && n < sizeof line - 1; i++)
-        n += (unsigned)snprintf(line + n, sizeof line - n, " %s=%s",
-                                out->opt[i].key, out->opt[i].value);
-    ulogf("%s\n", line);
     return 1;
 }
 
@@ -200,7 +187,26 @@ int usaver_load(const char *saver, struct usaver *out) {
     char desc[96], conf[96];
     snprintf(desc, sizeof desc, "%s/%s.saver", SCREENSAVER_DESC_DIR, saver);
     usaver_conf_path(saver, conf, sizeof conf);
-    return usaver_load_files(saver, desc, conf, out);
+    if (!usaver_load_files(saver, desc, conf, out)) return 0;
+
+    // ONE LINE SAYING WHAT IT RESOLVED TO, here rather than in each
+    // saver. It is the only way to answer "did my option take" on a
+    // machine where reading pixels is not an option -- a bare-metal
+    // laptop -- and it distinguishes a value that was REFUSED (the
+    // default appears) from one that was never written.
+    //
+    // **IN THIS WRAPPER, NOT IN THE LOADER**: a saver start is once a
+    // screen blank, while the compositor re-reads an EFFECT's options
+    // whenever the filesystem changes -- which put three of these lines
+    // in the log in two seconds, and the klog ring holds a few hundred.
+    char line[160];
+    unsigned n = 0;
+    n += (unsigned)snprintf(line, sizeof line, "opts %s:", saver);
+    for (int i = 0; i < out->opt_count && n < sizeof line - 1; i++)
+        n += (unsigned)snprintf(line + n, sizeof line - n, " %s=%s",
+                                out->opt[i].key, out->opt[i].value);
+    ulogf("%s\n", line);
+    return 1;
 }
 
 const struct usaver_opt *usaver_find(const struct usaver *s, const char *key) {

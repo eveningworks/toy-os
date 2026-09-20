@@ -5,7 +5,7 @@
 Options=pieces,motion
 Option.pieces=enum:coarse,medium,fine:coarse
 Label.pieces=Pieces
-Desc.pieces=How many pieces the window breaks into. More is not better: a tile smaller than a thumbnail stops reading as part of your window.
+Desc.pieces=How many pieces the window breaks into. Fine scatters the most, because each piece is thrown further relative to its own size.
 Widget.pieces=slider
 Option.motion=enum:pour,explode:pour
 Label.motion=Motion

@@ -53,6 +53,7 @@ struct anim {
 static struct anim g_anims[WM_ANIM_MAX];
 static int g_enabled = 1;
 static uint32_t g_seen_generation;
+static uint64_t g_seen_fsgen;
 
 // `desktop.animation_speed`: ONE multiplier over every animation, which
 // is KWin's shape (its Animation Speed slider scales every effect at
@@ -647,33 +648,64 @@ static void adopt(void) {
         g_effect = effect_of(v);
     else
         g_effect = EFFECT_SCALE;
-    // THE EFFECT'S OWN OPTIONS, from its descriptor and whatever has
-    // been chosen (lib/ueffect.h). Read HERE, on the generation poll,
-    // rather than per ghost: it is two file reads, and a minimize is
-    // not the moment to do them.
-    //
-    // An effect with no descriptor leaves opt_count 0 and the defaults
-    // below stand -- which is every effect but `shatter`.
+    if (!on) for (int i = 0; i < WM_ANIM_MAX; i++) if (g_anims[i].kind) finish(&g_anims[i]);
+}
+
+// THE EFFECT'S OWN OPTIONS, from its descriptor and whatever has been
+// chosen (lib/ueffect.h).
+//
+// **SEPARATE FROM adopt(), AND WATCHED ON THE FILESYSTEM**, because an
+// option is NOT a registered setting: System Settings writes it with
+// uconf_set() straight to /etc/effects/<name>.conf, which moves no
+// generation the settings registry reports. Reading these in adopt()
+// meant the compositor kept whatever it had at boot -- every window
+// shattered into the default 24 pieces however the option was set, and
+// the only thing that ever fixed it was changing some OTHER setting.
+//
+// The screensavers do not have this problem and that is why it was not
+// noticed: a saver is a PROGRAM that reads its own conf each time it
+// starts, where the compositor is long-lived and caches.
+static void adopt_effect_opts(void) {
     g_shatter_pieces = PIECES_COARSE;
     g_shatter_motion = MOTION_POUR;
-    if (g_effect == EFFECT_SHATTER) {
-        struct usaver o;
-        if (ueffect_load("shatter", &o) && o.opt_count) {
-            const char *p = usaver_str(&o, "pieces", "coarse");
-            g_shatter_pieces = !k_strcmp(p, "fine")   ? PIECES_FINE
-                             : !k_strcmp(p, "medium") ? PIECES_MEDIUM
-                                                      : PIECES_COARSE;
-            const char *m = usaver_str(&o, "motion", "pour");
-            g_shatter_motion = !k_strcmp(m, "explode") ? MOTION_EXPLODE
-                                                       : MOTION_POUR;
-        }
+    if (g_effect != EFFECT_SHATTER) return;   // no other effect has options
+    struct usaver o;
+    if (!ueffect_load("shatter", &o) || !o.opt_count) return;
+    const char *p = usaver_str(&o, "pieces", "coarse");
+    g_shatter_pieces = !k_strcmp(p, "fine")   ? PIECES_FINE
+                     : !k_strcmp(p, "medium") ? PIECES_MEDIUM
+                                              : PIECES_COARSE;
+    const char *m = usaver_str(&o, "motion", "pour");
+    g_shatter_motion = !k_strcmp(m, "explode") ? MOTION_EXPLODE : MOTION_POUR;
+
+    // ON A CHANGE ONLY. This runs on every filesystem generation bump,
+    // so an unconditional line here is a log that outruns itself -- and
+    // the answer it exists to give ("did my option take") is worth
+    // nothing once the ring has rolled over.
+    static int last_p = -1, last_m = -1;
+    if (g_shatter_pieces != last_p || g_shatter_motion != last_m) {
+        last_p = g_shatter_pieces;
+        last_m = g_shatter_motion;
+        wm_logf("anim: shatter pieces=%s motion=%s",
+                g_shatter_pieces == PIECES_FINE ? "fine"
+              : g_shatter_pieces == PIECES_MEDIUM ? "medium" : "coarse",
+                g_shatter_motion == MOTION_EXPLODE ? "explode" : "pour");
     }
-    if (!on) for (int i = 0; i < WM_ANIM_MAX; i++) if (g_anims[i].kind) finish(&g_anims[i]);
 }
 
 void wm_anim_poll_config(void) {
     uint32_t gen = wm_setting_generation();
-    if (gen == g_seen_generation) return;
-    g_seen_generation = gen;
-    adopt();
+    if (gen != g_seen_generation) {
+        g_seen_generation = gen;
+        adopt();
+        adopt_effect_opts();   // the effect may have just changed
+    }
+    // AND THE FILESYSTEM, for the options -- see adopt_effect_opts().
+    // The taskbar watches the same clock for the same reason: a file
+    // nobody registered changes without the registry hearing about it.
+    uint64_t fsg = sys_fs_generation();
+    if (fsg != g_seen_fsgen) {
+        g_seen_fsgen = fsg;
+        adopt_effect_opts();
+    }
 }
