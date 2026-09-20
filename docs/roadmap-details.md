@@ -1951,6 +1951,35 @@ capabilities all sit between +0x8000 and +0x8480, well inside any
 plausible BAR, and its hang was the BIOS handoff. This is the guard
 becoming real rather than heuristic.
 
+### A driver in ring 3
+
+`docs/umdf-design.md` is the plan and the authority; this is the short
+version of what a reader of the roadmap needs.
+
+**Stage 1 is BUILT (2026-09-20).** `SYS_DEV_MAP_BAR` hands a process one
+PCI device's memory BAR, validated against the kernel's own enumeration
+-- the caller names an INDEX, never an address, which is the whole
+safety of it. Mapped `VMM_MT_UC` (a register file may not be
+write-combined) and BORROWED (teardown never hands registers to the
+frame allocator). Refused while a ring-0 driver is bound, which is
+vfio-pci's unbind-first rule.
+
+**What it buys, stated honestly: crash isolation, not containment.**
+This machine has no IOMMU, so a ring-3 driver that can DMA can point a
+card at any physical page. Windows UMDF resolves that by forbidding DMA
+in user mode; DriverKit and VFIO require an IOMMU. The plan takes
+UMDF's answer first, which is why the PARSING moves before the DMA.
+
+**The payoff is stage 3**, not stage 5: HDA's codec graph is ~250 lines
+of ring 0 walking what a card reports about itself -- untrusted input,
+the same argument that moved the font rasteriser and the image decoders
+out. Stage 2 (the claim) is what it waits on, and stage 5 (DMA) is
+gated on an IOMMU decision that is the maintainer's to make.
+
+**A split driver is a legitimate end state**, not a half-finished one:
+that is what DriverKit's audio drivers are, with the DMA engine behind
+the framework and the policy in the driver.
+
 ### USB
 **BUILT** for xHCI, a HID boot keyboard and a HID boot mouse; see
 `docs/conventions/kernel.md` and `docs/decisions/drivers.md`. What

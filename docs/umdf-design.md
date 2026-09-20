@@ -4,7 +4,11 @@ A staged plan, in the shape `docs/winserver-ring3-design.md` used. It
 answers "what would it take to run a device driver as a process here,
 what does that actually buy, and which driver goes first?"
 
-**Nothing below is built.** The stage markers are the authority.
+**STAGE 1 IS BUILT (2026-09-20); stages 2-5 are not.** The stage
+markers are the authority, and they are on the headings -- if a stage
+ever splits, put its marker on each half (the window-server plan's
+stage 6 split and its heading kept saying "outstanding" for eleven
+days).
 
 ## The finding that shapes the whole plan
 
@@ -46,20 +50,23 @@ the driver is written down as trusted-with-physical-memory in the same
 sentence that ships it. `enable_unsafe_noiommu_mode` is the precedent
 for saying that out loud rather than quietly.
 
-## What already exists, measured (2026-09-20)
+## What already exists, measured (2026-09-20, after stage 1)
 
-More than expected. Two of the three primitives are half-built, because
-the compositor needed the same things.
+More than expected when this was written: two of the three primitives
+were half-built already, because the compositor needed the same things.
 
 | what | where | state |
 |---|---|---|
+| map a device's BAR into a process | `SYS_DEV_MAP_BAR` | **BUILT, stage 1** |
 | map physical pages into a process | `vmm_map_user_borrowed()` | **built** -- the framebuffer grant uses it (`kernel/proc/win_surface.c`) |
-| a memory type for the mapping | `enum vmm_memtype` | **NORMAL and WC only.** MMIO registers need **UC**, which does not exist yet |
+| a memory type for a register file | `VMM_MT_UC` | **BUILT, stage 1**; `vmm_user_memtype()` reads one back |
 | find a device from ring 3 | `SYS_PCI_COUNT` / `SYS_PCI_INFO` | **built** -- `/bin/lspci` already walks every device and its BARs |
 | a BAR's address and size | `pci_bar_addr()`, `pci_bar_mem_size()` | **built**, size-probed once at enumeration |
+| is a ring-0 driver bound to it? | `pci_device_driver()`, `g_bound[]` | **built** -- stage 1 refuses on it |
 | single-holder access to a device | the compositor ROLE (`win_role.c`) | **the pattern exists**, for one device |
-| deliver an interrupt to a process | -- | **nothing** |
-| pinned, physically contiguous memory | `pmm_alloc_contiguous()` | built for kernel callers; no ring-3 path |
+| a CLAIM, and a way to make ring 0 let go | -- | **nothing** -- stage 2 |
+| deliver an interrupt to a process | -- | **nothing** -- stage 4 |
+| pinned, physically contiguous memory | `pmm_alloc_contiguous()` | built for kernel callers; no ring-3 path -- stage 5 |
 
 The sound stack, which is the worked example:
 
@@ -75,10 +82,43 @@ The mixing policy left ring 0 long ago; what is left is the hardware.
 
 ## The stages
 
-### Stage 1 -- a process can map a device's registers
+### Stage 1 -- a process can map a device's registers -- DONE 2026-09-20
 
 `VMM_MT_UC`, and a grant that hands a process ONE PCI device's memory
 BAR at its probed size.
+
+**What shipped** (`SYS_DEV_MAP_BAR`, 118):
+
+| piece | where |
+|---|---|
+| the validation, on its own so a KTEST can drive it | `dev_bar_check()`, `kernel/mm/mmap.c` |
+| the grant | `sys_dev_map_bar()`, beside it -- it is an mmap whose backing is a BAR |
+| the memory type | `VMM_MT_UC` and `vmm_user_memtype()`, `kernel/mm/vmm.c` |
+| the region kind | `MMAP_KIND_MMIO` / `QUERY_PROCMAP_MMIO`, so `pmap` prints `mmio` |
+| the wrapper | `sys_dev_map_bar()`, `userland/rt/sys.h` -- returns -1 and sets errno |
+| the tests | `kernel/mm/devbar_test.c` (4 KTESTs), `userland/tests/devbar_test.c` |
+
+**Four things it cost, worth not paying twice:**
+
+- **A ring-3 driver cannot be started with `run`.** The grant resolves
+  the caller's address space the way `mmap` does, and the legacy loader
+  has no scheduler slot -- every call comes back `EPERM`. `spawn`, and
+  in `tools/usertest_run.py` that means registering it SPAWNED.
+- **The wrapper returns -1 and sets `errno`**, not a negative errno.
+  `rt/sys.c`'s `err()` does that to every syscall, and a caller
+  comparing against `-EBUSY` sees a success.
+- **A census that stops at its first success is ordering-dependent.**
+  The probe checked "is some device EBUSY?" in the same loop it used to
+  find a grantable one, so whether it saw a refusal depended on which
+  device sorted first. It failed on a machine where the rule works.
+- **`check_syscalls.py` catches a number collision and nothing else
+  does** -- designated initializers keep the last row, so two syscalls
+  on one number is a silent dispatch to the wrong handler.
+
+**What it did NOT do:** nothing about sound moved, and no device changed
+hands. Any BAR a ring-0 driver holds is still refused, which is every
+device that matters -- so what a process can map today is whatever the
+kernel does not want.
 
 **THE VALIDATION IS THE WHOLE SAFETY OF IT.** The caller names a device
 and a BAR index, never an address: the kernel answers from its own
@@ -94,10 +134,45 @@ the descriptor it announces is a hang that reproduces once a week.
 
 ### Stage 2 -- a claim, so two drivers cannot hold one device
 
+**NOT BUILT. This is where the next session starts**, and stage 1 left
+it the smaller half of the job: the grant already refuses a bound
+device, so what stage 2 adds is the other direction -- a way for the
+kernel to LET GO, and a record of who holds a device once it has.
+
 A process claims a device by (bus, device, function). The kernel refuses
 if a ring-0 driver is bound to it (`DRIVER_DECLARE`) or another process
 holds the claim; the claim drops when the process exits, and the grant
 goes with it. That is `vfio-pci`'s unbind-then-bind, minus the sysfs.
+
+**What is already in place, so none of it needs designing again:**
+
+- `pci_device_driver()` answers "is a ring-0 driver bound to this?",
+  and `g_bound[]` in `kernel/drivers/pci_bind.c` is where that lives.
+  A claim writes to the same table or beside it.
+- `dev_bar_check()` is the single place a grant is decided, so the
+  claim check goes there and every caller inherits it.
+- The grant is recorded as an `MMAP_KIND_MMIO` region, so "drop the
+  claim when the process exits" already has the teardown half: the
+  region goes with the address space and the pages are borrowed.
+
+**The three questions stage 2 has to answer**, none of them settled:
+
+1. **Can a bound ring-0 driver be asked to let go, or only refused?**
+   `pci_driver_remove_table()` exists for module unload, which is the
+   nearest thing. The cheap version is "a device with a compiled-in
+   driver can never be claimed", which is honest and leaves HDA out of
+   reach -- and HDA is the whole point, so it is probably not enough.
+2. **What revokes a grant?** The compositor's answer is the one to copy
+   and the reason is written in `win_surface.c`: a process preempted
+   mid-store does not stop because the kernel decided it should, so a
+   revoked mapping points at a scratch page rather than becoming a
+   hole. A revoked BAR wants the same, or the symptom is a #PF in a
+   driver that did nothing wrong.
+3. **Who may claim at all?** There is no user model in this kernel
+   (`SETTING_OP_RELOAD`'s comment says so), so the first claim is also
+   the first thing in the tree that says "not you". The compositor role
+   is the precedent for single-holder-and-kernel-checked; what it does
+   NOT have is a notion of privilege, and a claim probably needs one.
 
 The compositor role is the in-tree precedent for a single-holder,
 kernel-checked claim, and its lesson comes too: `win_surface.c` keeps a
