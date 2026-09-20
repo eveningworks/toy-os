@@ -1300,6 +1300,90 @@ static struct uui_layout LAYOUT;
 // count is DERIVED from what was added, never written out: a literal
 // count that disagreed with its array once walked the router one item
 // past the end into a garbage ops table.
+// ONE SLOT'S ROWS -- its caption, its explanation and the one control
+// it actually uses -- written into a CALLER'S array.
+//
+// Split out of relayout_page() so the options dialog can build the same
+// rows from the same slots (`relayout_dialog()`): a control is a
+// control wherever it is drawn, and two copies of this switch would
+// drift the first time a widget kind was added.
+static int emit_slot(struct uui_item *out, int n, int i,
+                     struct uui_focusable *focus, int *nfocus) {
+        struct slot *sl = &g_slot[i];
+        int drop_caption = (sl->setting >= 0 &&
+                            strcasecmp(g_label[sl->setting], g_page_title_text) == 0);
+        if (!drop_caption) {
+            out[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &sl->caption,
+                                            .id = 0, .flags = UUI_FILL_W };
+            g_page_captions++;
+        }
+        // **ONLY WHEN IT SAYS SOMETHING.** An empty explanation used to
+        // be declared anyway, reserving a row so that a description
+        // appearing later could not reflow the page -- and the cost was
+        // a blank row between every caption and its own control, which
+        // is the gap that made this page look wrong. relayout_page()
+        // rebuilds the item list whenever the page changes, so a reason
+        // arriving simply adds its rows then; there is nothing to
+        // reserve against.
+        if (slot_prose(sl->setting)[0]) {
+            out[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &sl->explain,
+                                            .id = 0, .flags = UUI_FILL_W };
+        }
+        // ONLY THE CONTROL IN USE is declared. Declaring both and hiding
+        // one was the first version, and `hidden` is honoured -- but a
+        // hidden widget is still a layout child, and the pair left this
+        // page carrying twice the items it needed with one of every two
+        // contributing nothing. Emitting one keeps the item list
+        // describing exactly what is on screen, which is also what makes
+        // the reported geometry mean something.
+        if (sl->kind == CTRL_COMBO) {
+            out[n++] = (struct uui_item){ .ops = &uui_dropdown_ops,
+                                            .widget = &sl->combo,
+                                            .id = ID_CONTROL_BASE + i };
+            focus[(*nfocus)++] = (struct uui_focusable){ &sl->combo, &uui_dropdown_ops };
+        } else if (sl->kind == CTRL_SLIDER) {
+            out[n++] = (struct uui_item){ .ops = &uui_slider_ops,
+                                            .widget = &sl->slider,
+                                            .id = ID_CONTROL_BASE + i,
+                                            .flags = UUI_FILL_W };
+            focus[(*nfocus)++] = (struct uui_focusable){ &sl->slider, &uui_slider_ops };
+        } else if (sl->kind == CTRL_TEXT) {
+            // FILL_W, unlike the spinbox: a field has no natural width
+            // at all (uui_textbox_natural_size reports 0, meaning "no
+            // preference"), so an unstretched one would be invisible.
+            out[n++] = (struct uui_item){ .ops = &uui_textbox_ops,
+                                            .widget = &sl->text,
+                                            .id = ID_CONTROL_BASE + i,
+                                            .flags = UUI_FILL_W };
+            focus[(*nfocus)++] = (struct uui_focusable){ &sl->text, &uui_textbox_ops };
+        } else if (sl->kind == CTRL_KEYCAP) {
+            // NOT UUI_FILL_W: its natural size is measured from the
+            // longest thing it ever shows (the prompt), so stretching it
+            // across the page would leave a shortcut floating in a box
+            // four times its width.
+            out[n++] = (struct uui_item){ .ops = &uui_keycapture_ops,
+                                            .widget = &sl->keycap,
+                                            .id = ID_CONTROL_BASE + i };
+            focus[(*nfocus)++] = (struct uui_focusable){ &sl->keycap, &uui_keycapture_ops };
+        } else if (sl->kind == CTRL_SPIN) {
+            // NOT UUI_FILL_W: a spinbox wants exactly the width of its
+            // widest number plus its steppers, and stretching it across
+            // the page would put the arrows an inch from the digits.
+            // Its natural size is the right size.
+            out[n++] = (struct uui_item){ .ops = &uui_spinbox_ops,
+                                            .widget = &sl->spin,
+                                            .id = ID_CONTROL_BASE + i };
+            focus[(*nfocus)++] = (struct uui_focusable){ &sl->spin, &uui_spinbox_ops };
+        } else {
+            out[n++] = (struct uui_item){ .ops = &uui_radio_list_ops,
+                                            .widget = &sl->radio,
+                                            .id = ID_CONTROL_BASE + i,
+                                            .flags = UUI_FILL_W };
+            focus[(*nfocus)++] = (struct uui_focusable){ &sl->radio, &uui_radio_list_ops };
+        }
+    return n;
+}
+
 static void relayout_page(void) {
     int n = 0;
     FOCUS_COUNT = 0;
@@ -1346,77 +1430,7 @@ static void relayout_page(void) {
     g_page_captions = 0;
     for (int i = 0; i < g_slot_count; i++) {
         struct slot *sl = &g_slot[i];
-        int drop_caption = (sl->setting >= 0 &&
-                            strcasecmp(g_label[sl->setting], g_page_title_text) == 0);
-        if (!drop_caption) {
-            PAGE[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &sl->caption,
-                                            .id = 0, .flags = UUI_FILL_W };
-            g_page_captions++;
-        }
-        // **ONLY WHEN IT SAYS SOMETHING.** An empty explanation used to
-        // be declared anyway, reserving a row so that a description
-        // appearing later could not reflow the page -- and the cost was
-        // a blank row between every caption and its own control, which
-        // is the gap that made this page look wrong. relayout_page()
-        // rebuilds the item list whenever the page changes, so a reason
-        // arriving simply adds its rows then; there is nothing to
-        // reserve against.
-        if (slot_prose(sl->setting)[0]) {
-            PAGE[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &sl->explain,
-                                            .id = 0, .flags = UUI_FILL_W };
-        }
-        // ONLY THE CONTROL IN USE is declared. Declaring both and hiding
-        // one was the first version, and `hidden` is honoured -- but a
-        // hidden widget is still a layout child, and the pair left this
-        // page carrying twice the items it needed with one of every two
-        // contributing nothing. Emitting one keeps the item list
-        // describing exactly what is on screen, which is also what makes
-        // the reported geometry mean something.
-        if (sl->kind == CTRL_COMBO) {
-            PAGE[n++] = (struct uui_item){ .ops = &uui_dropdown_ops,
-                                            .widget = &sl->combo,
-                                            .id = ID_CONTROL_BASE + i };
-            FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &sl->combo, &uui_dropdown_ops };
-        } else if (sl->kind == CTRL_SLIDER) {
-            PAGE[n++] = (struct uui_item){ .ops = &uui_slider_ops,
-                                            .widget = &sl->slider,
-                                            .id = ID_CONTROL_BASE + i,
-                                            .flags = UUI_FILL_W };
-            FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &sl->slider, &uui_slider_ops };
-        } else if (sl->kind == CTRL_TEXT) {
-            // FILL_W, unlike the spinbox: a field has no natural width
-            // at all (uui_textbox_natural_size reports 0, meaning "no
-            // preference"), so an unstretched one would be invisible.
-            PAGE[n++] = (struct uui_item){ .ops = &uui_textbox_ops,
-                                            .widget = &sl->text,
-                                            .id = ID_CONTROL_BASE + i,
-                                            .flags = UUI_FILL_W };
-            FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &sl->text, &uui_textbox_ops };
-        } else if (sl->kind == CTRL_KEYCAP) {
-            // NOT UUI_FILL_W: its natural size is measured from the
-            // longest thing it ever shows (the prompt), so stretching it
-            // across the page would leave a shortcut floating in a box
-            // four times its width.
-            PAGE[n++] = (struct uui_item){ .ops = &uui_keycapture_ops,
-                                            .widget = &sl->keycap,
-                                            .id = ID_CONTROL_BASE + i };
-            FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &sl->keycap, &uui_keycapture_ops };
-        } else if (sl->kind == CTRL_SPIN) {
-            // NOT UUI_FILL_W: a spinbox wants exactly the width of its
-            // widest number plus its steppers, and stretching it across
-            // the page would put the arrows an inch from the digits.
-            // Its natural size is the right size.
-            PAGE[n++] = (struct uui_item){ .ops = &uui_spinbox_ops,
-                                            .widget = &sl->spin,
-                                            .id = ID_CONTROL_BASE + i };
-            FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &sl->spin, &uui_spinbox_ops };
-        } else {
-            PAGE[n++] = (struct uui_item){ .ops = &uui_radio_list_ops,
-                                            .widget = &sl->radio,
-                                            .id = ID_CONTROL_BASE + i,
-                                            .flags = UUI_FILL_W };
-            FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &sl->radio, &uui_radio_list_ops };
-        }
+        n = emit_slot(PAGE, n, i, FOCUS, &FOCUS_COUNT);
 
         // THE TEST BUTTON SITS UNDER THE CONTROL IT PREVIEWS, and it is
         // INSIDE the page for a reason that is not taste: the ROOT
