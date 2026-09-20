@@ -7915,6 +7915,19 @@ of three (five of which this kernel has names for), SIGNED 16-BIT axes
 instead of 8-bit -- so a fast flick stops clipping at +/-127 -- and the
 horizontal scroll the boot format cannot express.
 
+**AND THE BUTTON THAT STARTED THIS STILL DOES NOT WORK, FOR A REASON
+OUTSIDE THIS KERNEL.** The G305's forward button is a **G-Shift** in
+its onboard profile -- a modifier the mouse applies to its OWN buttons
+and never reports. Measured after the parser landed, with every report
+on that endpoint logged before the report-ID filter: 341 reports while
+it was pressed repeatedly, and the button byte was only ever `00` or
+`08` (back). No mouse report, no Consumer report on ID 3, no vendor
+report on ID 8. A host cannot decode a button the device does not
+send, in any protocol. Remapping it to "Forward" in the mouse's own
+onboard memory is the fix, and then it arrives as button 5 -- this
+kernel names the low five bits (kernel/input.h), so remapping it to
+button 6 or higher would not help either.
+
 **Verified against descriptors captured off real devices**, not
 invented ones: `tools/hid_parse_hostcheck.py` runs the same parser on
 the host over the G305's two interfaces and QEMU's pair, and KTESTs
