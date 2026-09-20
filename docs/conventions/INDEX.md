@@ -675,9 +675,16 @@ whenever a headline here tells you something you did not already know.
 - **THERE ARE THREE WORDS FOR SYSTEM STATE AND THEY ARE FIXED: FACT,
   SETTING, TUNABLE.**
 - **Setting a setting to the value it already has does NOTHING**
+- **A SETTING THE KERNEL DOES NOT APPLY IS DECLARED BY A FILE, NOT
+  REGISTERED IN C.**
+- **A RING-3 WRITE TO A SETTING'S FILE MUST ANNOUNCE ITSELF**, with
+  `SETTING_OP_TOUCH`.
 - **A RING-3 PROGRAM READS AND WRITES ONE SETTING THROUGH
   `userland/lib/usetting.h`, AND `usetting_set()` RETURNS THE REGISTRY'S
   THREE-WAY ANSWER.**
+- **ENUMERATION GOES THROUGH `usetting_dispatch()`, NEVER `sys_setting()`
+  directly** -- it is the MERGED registry, kernel settings then declared
+  ones.
 - **A CONFIG FILE CAN HAVE `[SECTIONS]`, THE SECTION IS AN ARGUMENT, AND
   A NEW KEY LANDS AT THE END OF ITS OWN SECTION**
 - **A `.desktop` OR `mimeapps.conf` FILE READS WITH ITS HEADER OR

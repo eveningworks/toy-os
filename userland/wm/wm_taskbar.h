@@ -1,6 +1,21 @@
 #ifndef WM_TASKBAR_H
 #define WM_TASKBAR_H
 
+// The height the strip may take, and what it is with nothing written.
+// **THE BOUNDS ARE THE DECLARATION'S TWIN** -- /etc/settings.d/
+// desktop.taskbar_height carries the same Min/Max/Step, because that is
+// what bounds a value arriving from System Settings or a hand edit.
+// These are what the code clamps with, and utaskbar_test.c asserts the
+// two agree.
+//
+// A PIXEL CONSTANT, not font-derived: the two tiers' fonts do not share
+// a line height, and a formula gave 36 on one side and 40 on the other.
+// Between KDE's 44 and XFCE's 26.
+#define TASKBAR_H_MIN  24
+#define TASKBAR_H_MAX  96
+#define TASKBAR_H_STEP 2
+#define TASKBAR_H_DEFAULT 40
+
 // The taskbar strip's LAYOUT, computed in one place and read by both
 // wm_render.c (drawing the buttons) and wm_input.c (hit-testing them).
 //
@@ -77,7 +92,7 @@ int taskbar_icon_size(void);
 #define TASKBAR_ICON_MAX 32
 
 // The strip's height with `desktop.taskbar_height` unset -- the
-// registry's constant (api/taskbar_config.h), NOT a font formula: the
+// declaration's twin above, NOT a font formula: the
 // two rings' fonts do not share a line height.
 int taskbar_default_h(void);
 

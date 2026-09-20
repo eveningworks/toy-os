@@ -81,9 +81,21 @@ int uconf_set_in(const char *path, const char *section,
         in->data[0] = '\0';
     }
 
+    // AN UNSET IS ANSWERED FROM THE DOCUMENT BEFORE THE REWRITE, because
+    // removing a file's only key produces an EMPTY one -- length 0, the
+    // same answer the rewriter gives for "it would not fit". Taking that
+    // as a failure refuses every unset of a lone key. The kernel's
+    // rewrite() carries this fix already (etc_config_file.c); this is
+    // the ring-3 half of the same function catching up.
+    char probe[128];
+    int absent = !value && !(in->valid &&
+                             etc_config_buf_get_in(in, section, key,
+                                                   probe, sizeof probe));
+    if (absent) goto done;
+
     uint32_t n = etc_config_buf_set_in(in->data, in->size, section, key, value,
                                        out, ETC_CONFIG_MAX);
-    if (n == 0) goto done;
+    if (n == 0 && value) goto done; // a SET that produced nothing did not fit
 
     // A WRITE THAT CHANGES NOTHING IS NOT PERFORMED, which is what
     // `config` already does for a setting. It stopped being free when
@@ -110,4 +122,8 @@ done:
 
 int uconf_set(const char *path, const char *key, const char *value) {
     return uconf_set_in(path, 0, key, value);
+}
+
+int uconf_unset(const char *path, const char *key) {
+    return uconf_set_in(path, 0, key, 0);
 }

@@ -182,8 +182,17 @@ int sys_open(struct syscall_ctx *c) {
             }
         }
 
+        // ENOENT IS NOT LOGGED, unlike every rejection above it. Those
+        // are misuse -- a bad path, O_EXCL without O_CREAT, a full fd
+        // table; a missing file is the most ordinary outcome open() has,
+        // and Linux says nothing about it either. Logging it put a
+        // kernel line in the middle of any program that probes for a
+        // config file, which broke the console-parsing tools once
+        // already (userland/libc/tz.c carries that scar) and costs the
+        // klog ring hundreds of lines when a client walks /etc. `strace`
+        // reports every syscall with its error, which is the tool for
+        // this question.
         if (!exists && !(want_write && want_creat)) {
-            klog_write("syscall: open() rejected -- file not found\n");
             c->regs[14] = (uint64_t)(int64_t)-ENOENT;
         } else {
             // A DESCRIPTION plus a descriptor naming it. Two steps

@@ -1,3 +1,10 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Smooth scrolling
+Category=Appearance
+Group=Effects
+Default=on
+Choices=on,off
 Description=Whether a wheel or keyboard scroll glides to its destination or lands there at once
 Order=10
 Choice.on=On

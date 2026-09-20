@@ -1,9 +1,265 @@
 // See usetting.h.
 #include "lib/usetting.h"
+#include "lib/usetting_schema.h"
 #include "rt/sys.h"
 #include "knum.h"
+#include "lib/uconf.h"
+#include "setting_text.h"
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+
+// --- the merged registry ---------------------------------------------
+
+// The kernel's own count, and the generation that rides every reply.
+// Asked before any index is split, which is what makes one syscall
+// answer both questions.
+static int kernel_count(uint32_t *generation) {
+    struct setting_msg m;
+    memset(&m, 0, sizeof m);
+    m.op = SETTING_OP_COUNT;
+    if (sys_setting(&m) != 0) return -1;
+    if (generation) *generation = m.generation;
+    return (int)m.count;
+}
+
+// Announce a change this process made by writing /etc itself. The
+// counter lives in the kernel because every consumer already polls it
+// (see SETTING_OP_TOUCH in abi/setting_abi.h).
+static void touch(uint32_t *generation) {
+    struct setting_msg m;
+    memset(&m, 0, sizeof m);
+    m.op = SETTING_OP_TOUCH;
+    if (sys_setting(&m) == 0 && generation) *generation = m.generation;
+}
+
+static void fill_from_schema(const struct uschema *s, struct setting_msg *m) {
+    strlcpy(m->name, s->name, sizeof m->name);
+    strlcpy(m->ns, s->ns, sizeof m->ns);
+    strlcpy(m->label, s->label, sizeof m->label);
+    strlcpy(m->file, s->file, sizeof m->file);
+    strlcpy(m->category, s->category, sizeof m->category);
+    strlcpy(m->group, s->group, sizeof m->group);
+    m->type = s->type;
+    m->count = uschema_choice_count(s);
+    m->imin = m->imax = m->istep = 0;
+    m->unit[0] = '\0';
+    if (s->type == SETTING_ABI_TYPE_INT) {
+        m->imin = s->min;
+        m->imax = s->max;
+        m->istep = s->step;
+        strlcpy(m->unit, s->unit, sizeof m->unit);
+    }
+    // ONE READ, NOT TWO: `value` is what the file says or the default,
+    // so asking uschema_get() after uschema_stored() would open and
+    // parse the same document a second time -- 50 reads across a `config
+    // list` rather than 25.
+    m->stored[0] = '\0';
+    uschema_stored(s, m->stored, sizeof m->stored);
+    strlcpy(m->value, m->stored[0] ? m->stored : s->def, sizeof m->value);
+    // A SCHEMA SETTING IS NEVER UNAVAILABLE. `unavailable` describes the
+    // MACHINE -- a control policy or hardware has taken away -- and that
+    // is a sentence only the owner of the knob can write. A declaration
+    // file cannot invent one, and inventing a way for it to would let
+    // /etc disable a control the kernel is perfectly willing to change.
+    m->unavailable[0] = '\0';
+    uschema_text(s, m);
+}
+
+// Which half owns `name`, and the schema when it is this one.
+#define OWNER_NONE   0
+#define OWNER_KERNEL 1
+#define OWNER_SCHEMA 2
+
+// How many schema settings a BARE name matches. Answered from the
+// cached listing, so it costs no I/O -- which is what makes it
+// affordable on every GET and SET.
+static int schema_bare_matches(const char *name, char *out_qualified,
+                               uint32_t cap) {
+    int n = 0;
+    for (int i = 0; i < uschema_count(); i++) {
+        struct uschema s;
+        if (!uschema_at(i, &s)) continue;
+        if (strcmp(s.name, name) != 0) continue;
+        if (out_qualified && cap) snprintf(out_qualified, cap, "%s.%s", s.ns, s.name);
+        n++;
+    }
+    return n;
+}
+
+// A BARE NAME MATCHING BOTH HALVES IS REFUSED, not resolved -- the rule
+// api/setting.h sets for the kernel registry, kept across the split.
+// Resolving by which half was asked first would make the answer depend
+// on where a setting happens to live, which is exactly what a
+// namespace exists to stop mattering.
+static int resolve(const char *name, struct uschema *out, uint32_t *generation) {
+    if (!name || !name[0]) return OWNER_NONE;
+
+    struct setting_msg probe;
+    memset(&probe, 0, sizeof probe);
+    probe.op = SETTING_OP_GET;
+    strlcpy(probe.name, name, sizeof probe.name);
+    int in_kernel = sys_setting(&probe) == 0;
+    if (in_kernel && generation) *generation = probe.generation;
+
+    if (strchr(name, '.')) {
+        if (in_kernel) return OWNER_KERNEL;
+        return uschema_find(name, out) ? OWNER_SCHEMA : OWNER_NONE;
+    }
+
+    char qualified[SETTING_ABI_QUALIFIED_MAX];
+    int matches = schema_bare_matches(name, qualified, sizeof qualified);
+    if (in_kernel) return matches ? OWNER_NONE : OWNER_KERNEL; // ambiguous
+    if (matches != 1) return OWNER_NONE;
+    return uschema_find(qualified, out) ? OWNER_SCHEMA : OWNER_NONE;
+}
+
+int usetting_dispatch(struct setting_msg *m) {
+    if (!m) return -1;
+
+    switch (m->op) {
+    case SETTING_OP_COUNT: {
+        uint32_t gen = 0;
+        int kcount = kernel_count(&gen);
+        if (kcount < 0) return -1;
+        m->count = kcount + uschema_count();
+        m->generation = gen;
+        return 0;
+    }
+
+    case SETTING_OP_INFO:
+    case SETTING_OP_CHOICE: {
+        uint32_t gen = 0;
+        int kcount = kernel_count(&gen);
+        if (kcount < 0) return -1;
+        if (m->index < kcount) return sys_setting(m);
+
+        struct uschema s;
+        if (!uschema_at(m->index - kcount, &s)) return -1;
+        m->generation = gen;
+        if (m->op == SETTING_OP_INFO) {
+            fill_from_schema(&s, m);
+            return 0;
+        }
+        if (!uschema_choice(&s, m->choice, m->value, sizeof m->value)) return -1;
+        uschema_choice_label(&s, m->value, m->label, sizeof m->label);
+        return 0;
+    }
+
+    case SETTING_OP_GET: {
+        struct uschema s;
+        uint32_t gen = 0;
+        switch (resolve(m->name, &s, &gen)) {
+        case OWNER_KERNEL: return sys_setting(m);
+        case OWNER_SCHEMA:
+            uschema_get(&s, m->value, sizeof m->value);
+            kernel_count(&m->generation);
+            return 0;
+        default: return -1;
+        }
+    }
+
+    case SETTING_OP_SET: {
+        struct uschema s;
+        uint32_t gen = 0;
+        switch (resolve(m->name, &s, &gen)) {
+        case OWNER_KERNEL: return sys_setting(m);
+        case OWNER_SCHEMA: {
+            // ANNOUNCED ONLY IF SOMETHING CHANGED. A refused value
+            // changed nothing, and so did setting a value to what it
+            // already was -- and the kernel's setting_set() skips the
+            // bump for exactly that second case, because everything
+            // watching the generation does real work when it moves.
+            int changed = 0;
+            m->result = (uint32_t)uschema_write(&s, m->value, &changed);
+            if (changed) touch(&m->generation);
+            else kernel_count(&m->generation);
+            return 0;
+        }
+        default: return -1;
+        }
+    }
+
+    case SETTING_OP_UNSET: {
+        struct uschema s;
+        uint32_t gen = 0;
+        switch (resolve(m->name, &s, &gen)) {
+        case OWNER_KERNEL: return sys_setting(m);
+        case OWNER_SCHEMA:
+            m->result = (uint32_t)uschema_unset(&s);
+            if (m->result != SETTING_INVALID) touch(&m->generation);
+            else kernel_count(&m->generation);
+            return 0;
+        default: return -1;
+        }
+    }
+
+    case SETTING_OP_RELOAD: {
+        // A DECLARATION FILE MAY HAVE BEEN ADDED OR EDITED, and the
+        // listing is cached, so the reload that re-reads /etc drops it.
+        uschema_invalidate();
+        int rc = sys_setting(m);
+        if (rc != 0) return rc;
+        // AND THE COUNT OF REJECTED VALUES COVERS BOTH HALVES. A
+        // schema setting has no live copy to re-apply -- its owner
+        // reads the file itself -- but `config reload`'s whole job is
+        // to say that a hand edit was refused, and a reload that
+        // reported only the kernel's settings would answer "Reloaded."
+        // for a /etc/desktop.conf somebody had just typed a bad value
+        // into. Validation is the only half there is here, so it is
+        // the half that runs.
+        for (int i = 0; i < uschema_count(); i++) {
+            struct uschema s;
+            char stored[SETTING_ABI_VALUE_MAX];
+            if (!uschema_at(i, &s)) continue;
+            if (!uschema_stored(&s, stored, sizeof stored) || !stored[0]) continue;
+            if (!uschema_validate(&s, stored)) m->count++;
+        }
+        return 0;
+    }
+
+    // GROUP_TEXT and the config-FILE registry are the kernel's in both
+    // arrangements: the page text is read from the same /etc/settings.d
+    // by name, and the file registry indexes documents rather than
+    // settings.
+    default:
+        return sys_setting(m);
+    }
+}
+
+// --- sidebar order ---------------------------------------------------
+
+// Shared by both lookups below: an `Order=` from one file in
+// /etc/settings.d, or 0 when the file or the key is absent -- which is
+// the same answer, because "no opinion" and "first" are both fine
+// defaults for a list that then falls back to first-seen order.
+static int order_of(const char *path) {
+    char v[16];
+    if (!uconf_get(path, SETTING_TEXT_KEY_ORDER, v, sizeof v) || !v[0]) return 0;
+    char *end = 0;
+    long n = strtol(v, &end, 10);
+    if (end == v || (end && *end)) return 0;
+    return (int)n;
+}
+
+int usetting_category_order(const char *category) {
+    char path[192];
+    if (!category || !category[0]) return 0;
+    if (snprintf(path, sizeof path, SETTING_TEXT_DIR "/category.%s", category) <= 0)
+        return 0;
+    return order_of(path);
+}
+
+int usetting_group_order(const char *category, const char *group) {
+    char path[192];
+    if (!category || !category[0] || !group || !group[0]) return 0;
+    if (snprintf(path, sizeof path, SETTING_TEXT_DIR "/group.%s.%s",
+                 category, group) <= 0)
+        return 0;
+    return order_of(path);
+}
+
+// --- the by-name helpers ---------------------------------------------
 
 int usetting_get(const char *name, char *out, size_t cap) {
     struct setting_msg m;
@@ -11,7 +267,7 @@ int usetting_get(const char *name, char *out, size_t cap) {
     memset(&m, 0, sizeof m);
     m.op = SETTING_OP_GET;
     strlcpy(m.name, name, sizeof m.name);
-    if (sys_setting(&m) != 0) return 0;
+    if (usetting_dispatch(&m) != 0) return 0;
     strlcpy(out, m.value, cap);
     return 1;
 }
@@ -31,7 +287,7 @@ int usetting_set(const char *name, const char *value) {
     m.op = SETTING_OP_SET;
     strlcpy(m.name, name, sizeof m.name);
     strlcpy(m.value, value, sizeof m.value);
-    if (sys_setting(&m) != 0) return -1;
+    if (usetting_dispatch(&m) != 0) return -1;
     return (int)m.result;
 }
 
@@ -40,13 +296,13 @@ int usetting_find(const char *name, struct setting_msg *out) {
     memset(out, 0, sizeof *out);
     memset(&m, 0, sizeof m);
     m.op = SETTING_OP_COUNT;
-    if (sys_setting(&m) != 0) return -1;
+    if (usetting_dispatch(&m) != 0) return -1;
     int count = (int)m.count;
     for (int i = 0; i < count; i++) {
         memset(&m, 0, sizeof m);
         m.op = SETTING_OP_INFO;
         m.index = i;
-        if (sys_setting(&m) != 0) continue;
+        if (usetting_dispatch(&m) != 0) continue;
         // Qualified, because a bare name is only unique until something
         // else registers one.
         char qualified[SETTING_ABI_QUALIFIED_MAX];

@@ -2,6 +2,7 @@
 #include "wm_internal.h"
 #include <time.h>
 #include "calendar_popup.h"
+#include "lib/usetting.h"
 #include "wm_shadow.h"
 #include "wm_tray.h"
 #include "wm_overlay.h"
@@ -187,12 +188,11 @@ void calendar_poll_config(void) {
     // values, so reading the file here would put a second copy of the
     // default in a second place.
     int want = 1;
-    struct setting_msg msg;
-    for (unsigned i = 0; i < sizeof msg; i++) ((uint8_t *)&msg)[i] = 0;
-    msg.op = SETTING_OP_GET;
-    k_strlcpy(msg.name, "desktop.week_start", sizeof msg.name);
-    if (sys_setting(&msg) == 0 && msg.value[0]) {
-        if (k_strcmp(msg.value, "sunday") == 0) want = 0;
+    // usetting_get(), not sys_setting(): a DECLARED setting
+    // (/etc/settings.d) is invisible to the syscall.
+    char value[SETTING_ABI_VALUE_MAX];
+    if (usetting_get("desktop.week_start", value, sizeof value) && value[0]) {
+        if (k_strcmp(value, "sunday") == 0) want = 0;
     }
     if (want == week_start_monday) return;
     week_start_monday = want;

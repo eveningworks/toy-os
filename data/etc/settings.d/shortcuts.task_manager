@@ -1,0 +1,7 @@
+Type=keycombo
+File=/etc/shortcuts.conf
+Label=Task Manager
+Category=Shortcuts
+Group=Applications
+Default=Ctrl+Alt+Delete
+Description=Open the task manager

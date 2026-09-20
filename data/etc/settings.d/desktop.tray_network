@@ -1,0 +1,7 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Network
+Category=Desktop
+Group=Tray
+Default=auto
+Choices=auto,always,never

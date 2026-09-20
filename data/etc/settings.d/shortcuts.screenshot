@@ -1,0 +1,7 @@
+Type=keycombo
+File=/etc/shortcuts.conf
+Label=Screenshot
+Category=Shortcuts
+Group=Applications
+Default=Shift+Super+S, Print Screen
+Description=Open the screenshot tool

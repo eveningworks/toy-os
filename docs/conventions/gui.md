@@ -2408,10 +2408,10 @@ real scanout hardware does. Do not write a pixel assertion for one.
 
 - **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME.**
   `desktop.wallpaper` (a filename stem under `/usr/share/wallpapers`, or
-  `none`) and `desktop.wallpaper_mode` (`fill`/`fit`), registered in
-  `kernel/lib/wallpaper_config.c` as PERSIST-ONLY descriptors -- the
-  kernel owns the description, the ring-3 desktop owns the behaviour and
-  notices through the generation counter. So `config set
+  `none`) and `desktop.wallpaper_mode` (`fill`/`fit`), DECLARED by
+  `/etc/settings.d/desktop.wallpaper*` -- a file says what the setting
+  is, the ring-3 desktop owns the behaviour and notices through the
+  generation counter. So `config set
   desktop.wallpaper dusk` works from any shell, System Settings gets a
   row for free. An unknown name is STORED, not refused -- the desktop
   logs why nothing appeared and shows its plain colour, the same as a
@@ -2425,9 +2425,9 @@ real scanout hardware does. Do not write a pixel assertion for one.
   the assertion.
 
 - **THE TASKBAR'S THICKNESS IS A REGISTERED SETTING:
-  `desktop.taskbar_height`, in PIXELS, 24..96, default 40.** Registered
-  in `kernel/lib/taskbar_config.c` as a PERSIST-ONLY `SETTING_TYPE_INT`
-  beside the Start button and the wallpaper in `/etc/desktop.conf`, so
+  `desktop.taskbar_height`, in PIXELS, 24..96, default 40.** DECLARED
+  by `/etc/settings.d/desktop.taskbar_height` as an `int`, beside the
+  Start button and the wallpaper in `/etc/desktop.conf`, so
   System Settings shows it as a spinbox with no app edit. A pixel count
   rather than small/medium/large because that is XFCE's "Row size
   (pixels)" and the number KDE stores for a panel (Windows 11 fixes 48,
@@ -2452,9 +2452,9 @@ real scanout hardware does. Do not write a pixel assertion for one.
   process table.
 
 - **THE START BUTTON'S APPEARANCE IS A REGISTERED SETTING:
-  `desktop.start_button` = `text` | `icon` | `both`.** Registered in
-  `kernel/lib/start_button_config.c` as a PERSIST-ONLY descriptor
-  sharing `/etc/desktop.conf` with the wallpaper -- which is what makes
+  `desktop.start_button` = `text` | `icon` | `both`.** DECLARED by
+  `/etc/settings.d/desktop.start_button`, sharing `/etc/desktop.conf`
+  with the wallpaper -- which is what makes
   it `desktop.`-namespaced, since a namespace is the registered name of
   the FILE. Three choices rather than a boolean because that is XFCE's
   Whisker Menu verbatim (Icon / Title / Icon and title) and KDE's
@@ -2811,9 +2811,9 @@ real scanout hardware does. Do not write a pixel assertion for one.
   month, because that is what opening it now would show.
 
 - **THE WEEK'S FIRST COLUMN IS A REGISTERED SETTING:
-  `desktop.week_start` = `monday` | `sunday`.** Registered in
-  `kernel/lib/week_start_config.c` as a PERSIST-ONLY descriptor sharing
-  `/etc/desktop.conf` with the wallpaper and the Start button -- the
+  `desktop.week_start` = `monday` | `sunday`.** DECLARED by
+  `/etc/settings.d/desktop.week_start`, sharing `/etc/desktop.conf`
+  with the wallpaper and the Start button -- the
   namespace is the registered name of the FILE. Persist-only because the
   calendar that reads it is drawn by a ring-3 process and
   `setting_register()` takes function pointers a process cannot supply;
@@ -4004,8 +4004,8 @@ with the bug present).
 ## A DRAG'S APPEARANCE IS A SETTING, AND `auto` LEARNS RATHER THAN GUESSES.
 
 `desktop.resize_mode` (`auto` | `live` | `outline`, default `auto`) and
-`desktop.move_mode` (`live` | `outline`, default `live`), registered in
-`kernel/lib/window_drag_config.c`, persisted to `/etc/desktop.conf`,
+`desktop.move_mode` (`live` | `outline`, default `live`), declared by
+their files in `/etc/settings.d`, persisted to `/etc/desktop.conf`,
 read by the WM when a drag BEGINS -- one syscall per drag, so there is
 no poll and no generation tracking.
 
@@ -4305,7 +4305,7 @@ cannot help with either.
 ## THE DESKTOP'S ICON SIZE IS A NAMED SETTING, THE ICONS ARE CENTRED, AND A CAPTION IS TWO LINES
 
 `desktop.icon_size` = `small` | `medium` | `large` (32/48/64 px),
-registered in `kernel/lib/icon_size_config.c`, persist-only, read by
+declared by `/etc/settings.d/desktop.icon_size`, read by
 the desktop on the same generation poll as the wallpaper and applied
 at once by the context menu. Named sizes rather than a pixel count
 because a menu can list three names with a tick and System Settings

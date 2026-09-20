@@ -746,7 +746,6 @@ LIBC_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBC_SRCS)) \
                $(BUILD)/userland/shared/heap_core.o \
                $(BUILD)/userland/shared/caltime.o \
                $(BUILD)/userland/shared/keycombo.o \
-               $(BUILD)/userland/shared/shortcut_actions.o \
                $(BUILD)/userland/shared/ksignal.o \
                $(BUILD)/userland/shared/kfmt_cases.o
 LIBC         = $(BUILD)/userland/libc.a
@@ -1066,7 +1065,6 @@ LIBC_PIC_OBJS = $(patsubst userland/%.c,$(BUILD)/userland-pic/%.o,$(filter-out u
                 $(BUILD)/userland-pic/shared/heap_core.o \
                 $(BUILD)/userland-pic/shared/caltime.o \
                 $(BUILD)/userland-pic/shared/keycombo.o \
-                $(BUILD)/userland-pic/shared/shortcut_actions.o \
                 $(BUILD)/userland-pic/shared/ksignal.o \
                 $(BUILD)/userland-pic/shared/kfmt_cases.o
 

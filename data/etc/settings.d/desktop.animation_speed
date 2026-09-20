@@ -1,3 +1,10 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Animation speed
+Category=Appearance
+Group=Effects
+Default=normal
+Choices=instant,fast,normal,slow,very-slow
 Description=How long window animations take; scales every one of them
 Order=16
 Choice.instant=Instant (off)

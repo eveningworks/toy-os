@@ -1,0 +1,7 @@
+Type=keycombo
+File=/etc/shortcuts.conf
+Label=Terminal
+Category=Shortcuts
+Group=Applications
+Default=Ctrl+Alt+T
+Description=Open a terminal window

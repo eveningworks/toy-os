@@ -3872,7 +3872,7 @@ protocol between two programs for something this system already has a
 mechanism for.
 
 It is two registered settings now -- `desktop.wallpaper` and
-`desktop.wallpaper_mode` (`kernel/lib/wallpaper_config.c`) -- and that
+`desktop.wallpaper_mode` (declared in `/etc/settings.d`) -- and that
 buys four things a private key could not:
 
 - `config set desktop.wallpaper dusk` works from any shell, and

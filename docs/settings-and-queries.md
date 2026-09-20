@@ -171,15 +171,22 @@ because no setting has that name — no special case needed.
 
 ## From an app
 
-Settings go through `SYS_SETTING` (`sys_setting()`, `struct setting_msg`):
+Settings go through `usetting_dispatch()` (`userland/lib/usetting.h`),
+which serves `struct setting_msg` against the MERGED registry — the
+kernel's settings and the declared ones as one list:
 
 ```c
 struct setting_msg m = { .op = SETTING_OP_SET };
 strlcpy(m.name,  "system.font_size", sizeof m.name);
 strlcpy(m.value, "16",               sizeof m.value);
-sys_setting(&m);
+usetting_dispatch(&m);
 // m.result: SETTING_INVALID / SETTING_SAVED / SETTING_UNSAVED
 ```
+
+**Not `sys_setting()` directly.** The syscall answers for the kernel's
+half only, so a client calling it sees the machine's settings with the
+desktop's missing — and two clients each merging for themselves is the
+second source of truth the registry exists to remove.
 
 Read the `result`, not just the return value — the call SUCCEEDED in
 asking; whether it applied and persisted is separate.
@@ -190,10 +197,11 @@ for you: `usetting_get(name, buf, cap)`, `usetting_set(name, value)`
 `_int` variants, and `usetting_find(name, &msg)` for the INFO record.
 
 Enumeration is `SETTING_OP_COUNT` → `SETTING_OP_INFO` → `SETTING_OP_CHOICE`,
-and `SETTING_OP_GET` reads one. That is all Control Panel does: it is
+and `SETTING_OP_GET` reads one. That is all System Settings does: it is
 GENERATED from the registry, which is why **a setting registered
-anywhere in the kernel gets a Control Panel row and a `config` entry
-with no edit to either.**
+anywhere in the kernel — or declared by a file in `/etc/settings.d` —
+gets a System Settings row and a `config` entry with no edit to
+either.**
 
 Facts go through `SYS_QUERY` (`struct query_msg`), wrapped by libsys:
 
@@ -223,9 +231,49 @@ among several.
 
 ## Adding a setting
 
-Register a `struct setting` (`api/setting.h`) from `settings_init()`:
-a name, a label, a type, its file, a **category**, a choice enumerator,
-a getter, and one `apply` that validates, applies AND persists.
+**First: which half owns it?** There are two, and one question separates
+them — *does ring 0 do anything with the value?*
+
+| | Declared by a file | Registered in the kernel |
+|---|---|---|
+| Where | `/etc/settings.d/<ns>.<name>`, with `Type=` | a `struct setting` from `settings_init()` |
+| Who validates and persists | `lib/usetting_schema.h`, in ring 3 | the registry, in ring 0 |
+| Who applies it | nobody — the owning process notices | the setting's own `apply` |
+| Use it when | the value is read by a ring-3 program (the desktop, the toolkit, an app) | the kernel itself acts on the value |
+| Examples | `desktop.wallpaper`, `desktop.taskbar_height`, `shortcuts.terminal` | `system.font_size`, `system.mouse_speed`, `storage.*`, `kernel.*` |
+
+Most new settings are the first kind, and adding one is **writing a
+file** — no C, no rebuild. `data/etc/settings.d/README.md` is the key
+reference. A declaration names its type, the `/etc` file it persists to,
+a label, a category and group, a default, and either its choices or its
+bounds:
+
+```
+# data/etc/settings.d/desktop.icon_size
+Type=enum
+File=/etc/desktop.conf
+Label=Size
+Category=Desktop
+Group=Icons
+Default=medium
+Choices=small,medium,large
+```
+
+An enum's options may also be computed: `ChoiceDir=` reads a directory
+(`ChoiceDirMode=stem` for the wallpapers, `subdir` for the cursor
+themes) and `ChoiceFile=` reads a file's lines, so dropping a
+screensaver into `/bin/wm/savers` gives it a row with no edit anywhere.
+
+**Do not add a persist-only `struct setting`** — one whose `apply` is 0.
+That is what a declaration replaced, and twelve files of them were
+deleted at once.
+
+### Registering one in the kernel
+
+For the second kind: register a `struct setting` (`api/setting.h`) from
+`settings_init()` — a name, a label, a type, its file, a **category**, a
+choice enumerator, a getter, and one `apply` that validates, applies AND
+persists.
 
 The `category` is a free string — `"Appearance"`, `"Input"`,
 `"Startup"` — and it is what files the setting under a heading in System
@@ -276,8 +324,9 @@ to be unwieldy there gets its own `/etc/<name>.conf` and an
 
 ## The text and hints in `/etc/settings.d`
 
-The kernel says what a setting IS; `/etc/settings.d` says how it reads
-and looks. One file per setting, named by its qualified name, in
+For a setting the kernel registered, `/etc/settings.d` says how it reads
+and looks (for a DECLARED one the same file says both, since it is the
+same file). One file per setting, named by its qualified name, in
 `etc_config`'s ordinary `name=value` format. No section: the parser has
 them (`docs/decisions/storage.md`), and a directory of small descriptors
 is what removes the need for one here.

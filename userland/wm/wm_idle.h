@@ -11,7 +11,7 @@
 // desktop already uses for everything else, so a saver is an ORDINARY
 // FULLSCREEN CLIENT out of /bin/wm/savers and not compositor code.
 //
-// Two settings, both persist-only (api/screensaver_config.h): which
+// Two settings, both persist-only (lib/usaver.h): which
 // saver, and the minutes of quiet before it starts, where zero means
 // never.
 //

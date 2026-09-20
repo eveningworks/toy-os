@@ -5,7 +5,7 @@
 #include "wm_log.h"
 #include "wm_rawin.h"
 #include "rt/sys.h"
-#include "screensaver_config.h"
+#include "lib/usaver.h"
 #include "string.h"
 #include <stdio.h>
 

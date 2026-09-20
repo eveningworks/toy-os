@@ -1,3 +1,10 @@
+Type=enum
+File=/etc/desktop.conf
+Label=While resizing
+Category=Appearance
+Group=Windows
+Default=auto
+Choices=auto,live,outline
 Description=Whether a window follows the pointer as it is resized, or an outline does until you let go
 Widget=radio
 Order=20

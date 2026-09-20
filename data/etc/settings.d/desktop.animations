@@ -1,3 +1,10 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Window animations
+Category=Appearance
+Group=Effects
+Default=on
+Choices=on,off
 Description=Windows open, close, minimize and come back with motion
 Order=15
 Choice.on=On

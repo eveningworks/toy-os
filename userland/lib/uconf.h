@@ -59,4 +59,11 @@ int uconf_set(const char *path, const char *key, const char *value);
 int uconf_set_in(const char *path, const char *section,
                  const char *key, const char *value);
 
+// Removes `key` from the file, rewriting the document around it. The
+// rewriter treats a NULL value as a removal, so this is uconf_set()
+// with one argument -- named rather than spelled at the call sites,
+// because "set it to nothing" and "take it out" are different requests
+// and only one of them is what a NULL means here.
+int uconf_unset(const char *path, const char *key);
+
 #endif // ULIB_UCONF_H

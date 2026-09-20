@@ -1,0 +1,7 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Start button
+Category=Desktop
+Group=Taskbar
+Default=both
+Choices=text,icon,both

@@ -1,3 +1,12 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Image
+Category=Desktop
+Group=Wallpaper
+Default=aurora
+Choices=none
+ChoiceDir=/usr/share/wallpapers
+ChoiceDirMode=stem
 Description=The desktop background, from /usr/share/wallpapers
 Widget=dropdown
 Choice.none=No wallpaper (plain colour)

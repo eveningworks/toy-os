@@ -2,7 +2,6 @@
 #include "lib/usaver.h"
 #include "lib/uconf.h"
 #include "ui/ulog.h"
-#include "screensaver_config.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>

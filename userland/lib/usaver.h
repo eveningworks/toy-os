@@ -4,6 +4,38 @@
 #include <stdint.h>
 #include <stddef.h>
 
+// Where the savers are. A program in here is a choice in System
+// Settings, because the setting's choice list IS this directory
+// (/etc/settings.d/desktop.screensaver's ChoiceDir).
+#define SCREENSAVER_DIR "/bin/wm/savers"
+
+// A saver's OPTIONS: what it declares, and what they are set to. Two
+// directories rather than one because the halves have different
+// lifetimes -- the descriptors ship with the programs and are
+// read-only, the values are written by whoever changes them.
+//
+// THE DESCRIPTORS ARE NOT IN SCREENSAVER_DIR, and that is not tidiness:
+// the setting's choice list IS that directory, so a `starfield.saver`
+// sitting beside `starfield` would become a saver you could select and
+// which would fail to start.
+#define SCREENSAVER_DESC_DIR "/usr/wm/savers"
+#define SCREENSAVER_CONF_DIR "/etc/savers"
+
+// The factory values, and the twin of the declaration file's `Default=`
+// and `Max=`. Minutes; ZERO MEANS NEVER, which is why there is no
+// separate enable -- an "off" that disagreed with a timeout is a
+// combination this cannot express.
+//
+// OFF BY DEFAULT, at the maintainer's request. Most desktops ship a
+// timeout, and this one deliberately does not: the saver is a
+// fullscreen window, so on a machine being driven by test tools it
+// silently becomes the thing every screenshot measures -- a scrollbar
+// measurement in this repo read the starfield for four rounds before
+// anyone noticed the window list.
+#define SCREENSAVER_DEFAULT "starfield"
+#define SCREENSAVER_IDLE_DEFAULT 0
+#define SCREENSAVER_IDLE_MAX 120
+
 // A SCREENSAVER'S OPTIONS -- what it DECLARES, and what the user chose.
 //
 // A saver is a program in /bin/wm/savers with no arguments and no

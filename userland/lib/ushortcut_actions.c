@@ -1,20 +1,18 @@
 // The bindable actions, and what counts as a legal binding.
 //
-// **ONE HEADER, TWO FILES**, the split kfmt.c/kfmt_print.c already
-// makes: this half is freestanding and COMPILED TWICE, because the
-// compositor needs the same table ring 0 registered the settings from --
-// a binding naming a program nothing launches would be a shortcut that
-// silently does nothing. shortcuts_config.c is the other half and is
-// kernel-only: it names setting_register() and etc_config_*, which ring
-// 3 has no business reaching.
+// **RING 3 ONLY, AND IT USED TO BE COMPILED TWICE.** The kernel half
+// (`shortcuts_config.c`) registered four settings so System Settings
+// could draw them, and needed this table to do it; the shortcuts are
+// declared by files in /etc/settings.d now, so nothing in ring 0 reads
+// this and the shared-source rule it lived under is gone.
 //
-// So nothing here may include a kernel header. That is the same trap
-// kfmt.h carries in as many words -- a kernel include in the shared half
-// takes the function away from userland, and says nothing until the
-// link fails.
+// What the table still is: the one place naming each action's COMMAND,
+// read by the compositor when a binding fires. A binding naming a
+// program nothing launches would be a shortcut that silently does
+// nothing, which is why the command and the /etc key stay together.
 #include "keycombo.h"
 #include "string.h"
-#include "shortcuts_config.h"
+#include "lib/ushortcuts.h"
 
 #define SHORTCUTS_CONFIG_FILE "/etc/shortcuts.conf"
 

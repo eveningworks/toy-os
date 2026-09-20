@@ -1,3 +1,10 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Placement
+Category=Desktop
+Group=Wallpaper
+Default=fill
+Choices=fill,fit
 Description=How the picture is placed when it is not the screen's shape
 Widget=radio
 Choice.fill=Fill the screen (crop)

@@ -1,0 +1,7 @@
+Type=enum
+File=/etc/desktop.conf
+Label=First day
+Category=Desktop
+Group=Calendar
+Default=monday
+Choices=monday,sunday

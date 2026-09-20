@@ -1,0 +1,7 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Log widget geometry for GUI tests
+Category=System
+Group=Diagnostics
+Default=off
+Choices=off,on

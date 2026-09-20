@@ -5,7 +5,7 @@
 // is the only thing that matches them.
 
 // The compositor's own bound on the action table, which the kernel's
-// side (api/shortcuts_config.h) may grow without this file changing --
+// side (lib/ushortcuts.h) may grow without this file changing --
 // anything past it is simply not bound, which is a visible shortfall
 // rather than memory corruption.
 #define SHORTCUT_ACTION_MAX 16

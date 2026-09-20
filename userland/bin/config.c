@@ -32,6 +32,7 @@
 #include "setting_abi.h" // enum setting_result, struct setting_msg
 #include <fcntl.h>
 #include <unistd.h>
+#include "lib/usetting.h" // the MERGED registry -- see the header
 
 static void put(const char *s) { sys_print(s); }
 
@@ -42,7 +43,7 @@ static void putline(const char *s) { sys_print(s); sys_print("\n"); }
 static int op(struct setting_msg *m, uint32_t which) {
     memset(m, 0, sizeof *m);
     m->op = which;
-    return sys_setting(m) == 0;
+    return usetting_dispatch(m) == 0;
 }
 
 // Every path that changes a setting goes through this, so the
@@ -134,7 +135,7 @@ static int resolve(const char *want, struct setting_msg *first, int complain) {
         memset(&m, 0, sizeof m);
         m.op = SETTING_OP_INFO;
         m.index = i;
-        if (sys_setting(&m) != 0) continue;
+        if (usetting_dispatch(&m) != 0) continue;
         if (!name_matches(&m, want)) continue;
         if (hits == 0 && first) *first = m;
         hits++;
@@ -150,7 +151,7 @@ static int resolve(const char *want, struct setting_msg *first, int complain) {
             memset(&m, 0, sizeof m);
             m.op = SETTING_OP_INFO;
             m.index = i;
-            if (sys_setting(&m) != 0) continue;
+            if (usetting_dispatch(&m) != 0) continue;
             if (!name_matches(&m, want)) continue;
             char q[SETTING_ABI_QUALIFIED_MAX];
             qualified(&m, q, sizeof q);
@@ -175,7 +176,7 @@ static int cmd_list(void) {
         memset(&m, 0, sizeof m);
         m.op = SETTING_OP_INFO;
         m.index = i;
-        if (sys_setting(&m) != 0) continue;
+        if (usetting_dispatch(&m) != 0) continue;
 
         // A value that differs from the file is flagged rather than
         // hidden: it means someone edited /etc and nothing reloaded,
@@ -266,7 +267,7 @@ static int cmd_get(const char *name) {
     memset(&m, 0, sizeof m);
     m.op = SETTING_OP_GET;
     qualified(&found, m.name, sizeof m.name);
-    if (sys_setting(&m) != 0) {
+    if (usetting_dispatch(&m) != 0) {
         putline("config: registry unavailable");
         return 1;
     }
@@ -305,7 +306,7 @@ static int cmd_set(const char *name, const char *value) {
     if (hits == 1) qualified(&found, m.name, sizeof m.name);
     else           strlcpy(m.name, name, sizeof m.name);
     strlcpy(m.value, value, sizeof m.value);
-    if (sys_setting(&m) != 0) { putline("config: registry unavailable"); return 1; }
+    if (usetting_dispatch(&m) != 0) { putline("config: registry unavailable"); return 1; }
 
     // A rejected value is worth more than "no": the registry knows the
     // legal ones, so say what they are rather than making the user go
@@ -336,7 +337,7 @@ static int cmd_set(const char *name, const char *value) {
             memset(&found, 0, sizeof found);
             found.op = SETTING_OP_INFO;
             found.index = i;
-            if (sys_setting(&found) != 0) continue;
+            if (usetting_dispatch(&found) != 0) continue;
             if (!name_matches(&found, name)) continue;
             // AN INT HAS NO CHOICES TO LIST -- it has a RANGE, and
             // saying so is the whole point of the refusal. Without this
@@ -360,7 +361,7 @@ static int cmd_set(const char *name, const char *value) {
                 ch.op = SETTING_OP_CHOICE;
                 ch.index = i;
                 ch.choice = c;
-                if (sys_setting(&ch) != 0) break;
+                if (usetting_dispatch(&ch) != 0) break;
                 put(" ");
                 // The DISPLAY name, which falls back to the value, so a
                 // refusal lists what a reader will see in the UI.
@@ -386,7 +387,7 @@ static int cmd_unset(const char *name) {
     m.op = SETTING_OP_UNSET;
     if (hits == 1) qualified(&found, m.name, sizeof m.name);
     else           strlcpy(m.name, name, sizeof m.name);
-    if (sys_setting(&m) != 0) { putline("config: registry unavailable"); return 1; }
+    if (usetting_dispatch(&m) != 0) { putline("config: registry unavailable"); return 1; }
 
     char line[160];
     if (m.result != SETTING_SAVED) {
@@ -429,7 +430,7 @@ static int cmd_diff(void) {
         memset(&m, 0, sizeof m);
         m.op = SETTING_OP_INFO;
         m.index = i;
-        if (sys_setting(&m) != 0) continue;
+        if (usetting_dispatch(&m) != 0) continue;
         if (!m.stored[0] || strcmp(m.value, m.stored) == 0) continue;
 
         char line[200];
@@ -477,7 +478,7 @@ static int cmd_files(void) {
         memset(&m, 0, sizeof m);
         m.op = SETTING_OP_FILE_INFO;
         m.index = i;
-        if (sys_setting(&m) != 0) continue;
+        if (usetting_dispatch(&m) != 0) continue;
 
         char line[220];
         snprintf(line, sizeof line, "%-11s %-22s %-9s %s%s",
@@ -510,7 +511,7 @@ static int cmd_show(const char *which) {
             memset(&m, 0, sizeof m);
             m.op = SETTING_OP_FILE_INFO;
             m.index = i;
-            if (sys_setting(&m) != 0) continue;
+            if (usetting_dispatch(&m) != 0) continue;
             if (strcmp(m.name, which) != 0) continue;
             strlcpy(path, m.file, sizeof path);
             break;
@@ -566,7 +567,7 @@ static int cmd_find(const char *text) {
         memset(&m, 0, sizeof m);
         m.op = SETTING_OP_FILE_INFO;
         m.index = i;
-        if (sys_setting(&m) != 0) continue;
+        if (usetting_dispatch(&m) != 0) continue;
         if (!m.count) continue; // not created yet
 
         static char buf[FILE_MAX];

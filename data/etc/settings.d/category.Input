@@ -1,0 +1,3 @@
+# Where this category's pages sit in the System Settings sidebar.
+# Lower first; see data/etc/settings.d/README.md.
+Order=50

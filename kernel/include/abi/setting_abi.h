@@ -56,6 +56,11 @@ enum setting_result {
 // this many exist.
 #define SETTING_ABI_UNIT_MAX 8 // "%", "px", "ms" -- see struct setting_msg
 #define SETTING_ABI_CATEGORY_MAX 24 // a UI section name, e.g. "Appearance"
+// What a setting with no category is filed under. In the ABI because
+// BOTH sides substitute it now: the kernel at its dispatch boundary,
+// and lib/usetting_schema.c for a setting declared by a file. Two
+// spellings of one default is a category that quietly splits in two.
+#define SETTING_ABI_CATEGORY_DEFAULT "General"
 #define SETTING_ABI_DESC_MAX 120 // one line of explanation, not a paragraph
 
 // `widget` above.
@@ -76,6 +81,14 @@ enum setting_result {
 // telling the same kind of lie SETTING_UNSAVED exists to prevent.
 #define SETTING_ABI_SF_REBOOT   (1u << 0) // takes effect at the next boot
 #define SETTING_ABI_SF_ADVANCED (1u << 1) // a UI may keep it behind a disclosure
+// **IT BOUNDS THE MERGED LIST, NOT THE KERNEL REGISTRY.** Since the
+// desktop's settings became declarations in /etc/settings.d, a client
+// sizes its array for the kernel's settings PLUS the declared ones
+// (lib/usetting.h), so this must cover both halves -- raising the
+// kernel's SETTING_MAX alone does not buy a declared setting any room,
+// and the two are separate ceilings now with only this one facing a
+// client.
+//
 // **RAISED TO 72 WHEN THE SHORTCUTS LANDED, AND THE OLD VALUE WAS
 // EXACTLY FULL.** 56 settings against a cap of 56 is not a system with
 // room; it is one where the next registration disappears. The symptom is
@@ -185,6 +198,27 @@ enum setting_op {
     // ask a subsystem to return to one. Say so rather than implying a
     // revert that only happens at reboot.
     SETTING_OP_UNSET      = 8,
+
+    // No inputs. Bumps the generation and does NOTHING else.
+    //
+    // WHO NEEDS IT: a setting DECLARED by a schema file is owned by ring
+    // 3 (userland/lib/usetting.h), so the library validates it and
+    // writes its /etc file directly -- the kernel is never asked, and
+    // the counter every consumer polls would never move. The desktop,
+    // the taskbar and the tray all learn about a change from
+    // setting_generation(); without this, a wallpaper set from System
+    // Settings would reach /etc and never reach the screen.
+    //
+    // NOT `RELOAD`, which also bumps: reload re-reads and re-applies
+    // every registered setting from disk, which is real work per slider
+    // release and re-applies values the caller never touched. Announcing
+    // a change and re-deriving every value are different requests.
+    //
+    // ONE COUNTER FOR THE MACHINE is the point -- the alternative was a
+    // second, ring-3 generation that every consumer would have to poll
+    // beside this one, and a consumer that polled only the old one would
+    // silently stop noticing half the settings.
+    SETTING_OP_TOUCH      = 10,
 };
 
 struct setting_msg {

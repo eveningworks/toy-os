@@ -1,0 +1,10 @@
+Type=int
+File=/etc/desktop.conf
+Label=Height
+Category=Desktop
+Group=Taskbar
+Default=40
+Min=24
+Max=96
+Step=2
+Unit=px

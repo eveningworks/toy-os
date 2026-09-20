@@ -3,6 +3,14 @@
 
 #include <stdint.h>
 
+// What the WM compares a tray item's visibility setting against
+// (`desktop.tray_brightness` and its neighbours). `auto` is the only
+// one that consults the hardware. The three are the declaration files'
+// `Choices=` spelled for the code that reads them.
+#define TRAY_SHOW_AUTO   "auto"
+#define TRAY_SHOW_ALWAYS "always"
+#define TRAY_SHOW_NEVER  "never"
+
 // The taskbar's notification area: a small right-to-left strip of
 // text items, drawn just left of (and including) the clock. Same
 // "factored out once it grew a concern of its own" reasoning as

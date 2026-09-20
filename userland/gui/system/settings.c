@@ -44,7 +44,7 @@
 #include "ui/uui_textbox.h"
 #include "ui/uui_keycapture.h"
 #include "ui/uui_button.h"
-#include "screensaver_config.h"
+#include "lib/usaver.h"
 #include "lib/usaver.h"
 #include "ui/uui_button_group.h"
 #include "ui/uui_statusbar.h"
@@ -55,6 +55,7 @@
 #include "setting_abi.h"
 #include "cpuinfo.h"
 #include "version.h"
+#include "lib/usetting.h" // the MERGED registry -- see the header
 
 _Static_assert(UUI_TEXTBOX_MAX >= SETTING_ABI_VALUE_MAX,
                "a text field must hold a whole setting value, or editing one "
@@ -155,6 +156,10 @@ static int  g_cat_count;
 static char g_group_cat[MAX_GROUPS][SETTING_ABI_CATEGORY_MAX];
 static char g_group_key[MAX_GROUPS][SETTING_ABI_CATEGORY_MAX];
 static char g_group_label[MAX_GROUPS][SETTING_ABI_LABEL_MAX];
+// Where each category and page sits, from /etc/settings.d (lib/
+// usetting.h). Parallel to the tables above and sorted with them.
+static int g_cat_order[MAX_CATEGORIES];
+static int g_group_order[MAX_GROUPS];
 // **THE SIDEBAR LABEL, WHICH IS THE PAGE'S OWN UNLESS IT COLLIDES.**
 // A flat list has no category captions to disambiguate by position, and
 // several names genuinely repeat: the Kernel category's pages are
@@ -347,12 +352,12 @@ static void rebuild_sidebar(void) {
     g_group_count = 0;
     g_node_count = 0;
 
-    // Categories and pages in FIRST-SEEN order. Registration order is
-    // the kernel's boot order, which groups related settings already; a
-    // sort would put "Appearance" above "Startup" on one boot and leave
-    // a ring-3 program's category wherever the alphabet says on the
-    // next, and a sidebar that reorders itself is one nobody builds
-    // muscle memory for.
+    // Categories and pages collected in FIRST-SEEN order, then sorted by
+    // a DECLARED weight below. The sort is not alphabetical, and that
+    // was the original objection to sorting at all: a sidebar that
+    // rearranges itself when a setting moves is one nobody builds
+    // muscle memory for. A weight in /etc/settings.d is the opposite --
+    // it is the one thing here that does not move when the code does.
     for (int i = 0; i < g_setting_count; i++) {
         int c = -1;
         for (int j = 0; j < g_cat_count; j++)
@@ -360,6 +365,7 @@ static void rebuild_sidebar(void) {
         if (c < 0 && g_cat_count < MAX_CATEGORIES) {
             c = g_cat_count++;
             strlcpy(g_cat[c], g_cat_of[i], sizeof g_cat[c]);
+            g_cat_order[c] = usetting_category_order(g_cat[c]);
         }
         const char *key = group_key_of(i);
         int g = -1;
@@ -376,16 +382,60 @@ static void rebuild_sidebar(void) {
             g = g_group_count++;
             strlcpy(g_group_cat[g], g_cat_of[i], sizeof g_group_cat[g]);
             strlcpy(g_group_key[g], key, sizeof g_group_key[g]);
+            g_group_order[g] = usetting_group_order(g_cat_of[i], key);
             // The page's own label, if /etc/settings.d gives it one --
             // otherwise the group key, which is already a human word.
             struct setting_msg m;
             memset(&m, 0, sizeof m);
             m.op = SETTING_OP_GROUP_TEXT;
             snprintf(m.name, sizeof m.name, "%s/%s", g_cat_of[i], key);
-            if (sys_setting(&m) == 0 && m.label[0])
+            if (usetting_dispatch(&m) == 0 && m.label[0])
                 strlcpy(g_group_label[g], m.label, sizeof g_group_label[g]);
             else
                 strlcpy(g_group_label[g], key, sizeof g_group_label[g]);
+        }
+    }
+
+    // **THE ORDER IS DECLARED, AND FIRST-SEEN IS ONLY THE TIE-BREAK.**
+    // It used to be first-seen alone, which was the kernel's boot
+    // sequence -- so moving a setting out of ring 0 rearranged a list
+    // people navigate by muscle memory, and nothing in the tree said
+    // where a page was supposed to be. /etc/settings.d carries an
+    // `Order=` per category and per page now (lib/usetting.h), which is
+    // the weight KDE and GNOME both give a panel.
+    //
+    // INSERTION SORT, because it is STABLE: everything sharing an order
+    // -- including everything with none, which is 0 -- keeps first-seen
+    // order between its peers, so a machine whose /etc says nothing
+    // looks exactly as it did.
+    for (int i = 1; i < g_cat_count; i++) {
+        for (int j = i; j > 0 && g_cat_order[j] < g_cat_order[j - 1]; j--) {
+            int t = g_cat_order[j]; g_cat_order[j] = g_cat_order[j - 1];
+            g_cat_order[j - 1] = t;
+            char tmp[SETTING_ABI_CATEGORY_MAX];
+            strlcpy(tmp, g_cat[j], sizeof tmp);
+            strlcpy(g_cat[j], g_cat[j - 1], sizeof g_cat[j]);
+            strlcpy(g_cat[j - 1], tmp, sizeof g_cat[j - 1]);
+        }
+    }
+    // The pages, by the same rule. A global sort is enough because the
+    // emit loop below filters by category -- two categories' pages
+    // interleaving in this table changes nothing about the sidebar.
+    for (int i = 1; i < g_group_count; i++) {
+        for (int j = i; j > 0 && g_group_order[j] < g_group_order[j - 1]; j--) {
+            int t = g_group_order[j]; g_group_order[j] = g_group_order[j - 1];
+            g_group_order[j - 1] = t;
+            char a[SETTING_ABI_CATEGORY_MAX], b[SETTING_ABI_CATEGORY_MAX];
+            char l[SETTING_ABI_LABEL_MAX];
+            strlcpy(a, g_group_cat[j], sizeof a);
+            strlcpy(b, g_group_key[j], sizeof b);
+            strlcpy(l, g_group_label[j], sizeof l);
+            strlcpy(g_group_cat[j], g_group_cat[j - 1], sizeof g_group_cat[j]);
+            strlcpy(g_group_key[j], g_group_key[j - 1], sizeof g_group_key[j]);
+            strlcpy(g_group_label[j], g_group_label[j - 1], sizeof g_group_label[j]);
+            strlcpy(g_group_cat[j - 1], a, sizeof g_group_cat[j - 1]);
+            strlcpy(g_group_key[j - 1], b, sizeof g_group_key[j - 1]);
+            strlcpy(g_group_label[j - 1], l, sizeof g_group_label[j - 1]);
         }
     }
 
@@ -478,7 +528,7 @@ static int reload_settings(void) {
     struct setting_msg m;
     memset(&m, 0, sizeof m);
     m.op = SETTING_OP_COUNT;
-    if (sys_setting(&m) != 0) { g_setting_count = 0; return 0; }
+    if (usetting_dispatch(&m) != 0) { g_setting_count = 0; return 0; }
 
     int n = m.count;
     if (n > MAX_SETTINGS) n = MAX_SETTINGS;
@@ -488,7 +538,7 @@ static int reload_settings(void) {
         memset(&m, 0, sizeof m);
         m.op = SETTING_OP_INFO;
         m.index = i;
-        if (sys_setting(&m) != 0) continue;
+        if (usetting_dispatch(&m) != 0) continue;
 
         int k = g_setting_count;
         strlcpy(g_label[k], m.label, sizeof g_label[k]);
@@ -759,7 +809,7 @@ static void load_slot(struct slot *sl, int idx) {
             m.op = SETTING_OP_CHOICE;
             m.index = idx;
             m.choice = c;
-            if (sys_setting(&m) != 0) break; // past the last one
+            if (usetting_dispatch(&m) != 0) break; // past the last one
             strlcpy(raw, m.value, sizeof raw);
             strlcpy(disp, m.label, sizeof disp);
         }
@@ -947,7 +997,7 @@ static void open_group(int g) {
     memset(&m, 0, sizeof m);
     m.op = SETTING_OP_GROUP_TEXT;
     snprintf(m.name, sizeof m.name, "%s/%s", g_group_cat[g], g_group_key[g]);
-    if (sys_setting(&m) == 0 && m.description[0])
+    if (usetting_dispatch(&m) == 0 && m.description[0])
         strlcpy(g_page_desc_text, m.description, sizeof g_page_desc_text);
 
     // THE TEST BUTTON BELONGS TO THE PAGE THAT CARRIES THE SAVER, found
@@ -1047,7 +1097,7 @@ static int apply_page(void) {
         m.op = SETTING_OP_SET;
         strlcpy(m.name, g_name[sl->setting], sizeof m.name);
         strlcpy(m.value, staged_value(sl), sizeof m.value);
-        if (sys_setting(&m) != 0) { failed++; continue; }
+        if (usetting_dispatch(&m) != 0) { failed++; continue; }
 
         ulogf("settings: set %s %s result %u\n", g_name[sl->setting],
               staged_value(sl), m.result);

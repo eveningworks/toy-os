@@ -12,6 +12,7 @@
 #include "ui/uui_focus.h"   // desc.focus -- keyboard focus ring
 #include "ui/ulog.h"        // uapp_log_layout()
 #include "setting_abi.h" // desktop.layout_log -- the gate below
+#include "lib/usetting.h" // ...and the MERGED registry that can see it
 #include <stdio.h>      // snprintf/vsnprintf, one layout line at a time
 #include <stdarg.h>
 #include "ui/utheme.h"
@@ -447,17 +448,18 @@ static int g_layout_log = -1;   // -1 = not yet asked
 
 static int layout_log_enabled(void) {
     if (g_layout_log < 0) {
-        struct setting_msg msg;
-        for (unsigned i = 0; i < sizeof msg; i++) ((uint8_t *)&msg)[i] = 0;
-        msg.op = SETTING_OP_GET;
         // The qualified name: identity is (namespace, name), and the
         // namespace is the registered name of the file it lives in.
-        const char *n = "desktop.layout_log";
-        unsigned k = 0;
-        while (n[k] && k < sizeof msg.name - 1) { msg.name[k] = n[k]; k++; }
-        msg.name[k] = '\0';
-        g_layout_log = (sys_setting(&msg) == 0 && msg.value[0] == 'o'
-                        && msg.value[1] == 'n') ? 1 : 0;
+        //
+        // **usetting_get(), NOT sys_setting().** This setting is
+        // DECLARED by /etc/settings.d/desktop.layout_log, so the
+        // syscall -- which answers for the kernel's registry alone --
+        // reads it as unset and silently turns layout logging off for
+        // every GUI tool that depends on it. Fourteen of them failed at
+        // once that way.
+        char value[SETTING_ABI_VALUE_MAX];
+        g_layout_log = (usetting_get("desktop.layout_log", value, sizeof value)
+                        && value[0] == 'o' && value[1] == 'n') ? 1 : 0;
     }
     return g_layout_log;
 }

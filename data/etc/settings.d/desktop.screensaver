@@ -1,3 +1,10 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Screensaver
+Category=Desktop
+Group=Screensaver
+Default=starfield
+ChoiceDir=/bin/wm/savers
 Description=What to show once the machine has been idle. Any key or a mouse movement ends it.
 Widget=dropdown
 Choice.blank=Blank screen

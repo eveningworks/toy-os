@@ -1,3 +1,10 @@
+Type=enum
+File=/etc/desktop.conf
+Label=While moving
+Category=Appearance
+Group=Windows
+Default=live
+Choices=live,outline
 Description=Whether a window follows the pointer as it is moved, or an outline does until you let go
 Widget=radio
 Order=21

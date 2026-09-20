@@ -22,18 +22,6 @@
 #include "display_config.h"
 #include "setting_text.h"
 #include "keyboard_config.h"
-#include "cursor_theme_config.h"
-#include "wallpaper_config.h"
-#include "start_button_config.h"
-#include "taskbar_config.h"
-#include "tray_config.h"
-#include "screensaver_config.h"
-#include "week_start_config.h"
-#include "icon_size_config.h"
-#include "window_drag_config.h"
-#include "smooth_scroll_config.h"
-#include "window_effects_config.h"
-#include "shortcuts_config.h"
 #include "target.h"
 #include "storage_config.h"
 #include "conn_log.h"
@@ -728,6 +716,15 @@ int setting_dispatch(struct setting_msg *msg) {
         msg->generation = g_generation;
         return 1;
 
+    // Announce a change this registry did not make. A schema-declared
+    // setting is owned by ring 3 and written there (lib/usetting.h), so
+    // without this the counter every consumer polls would never move for
+    // half the settings on the machine.
+    case SETTING_OP_TOUCH:
+        g_generation++;
+        msg->generation = g_generation;
+        return 1;
+
     default:
         return 0;
     }
@@ -746,18 +743,6 @@ void settings_init(void) {
     sound_config_setting_register();
     display_config_setting_register();
     keyboard_config_setting_register();
-    cursor_theme_setting_register();
-    wallpaper_setting_register();
-    start_button_setting_register();
-    taskbar_setting_register();
-    tray_setting_register();
-    screensaver_setting_register();
-    week_start_setting_register();
-    icon_size_setting_register();
-    window_drag_setting_register();
-    smooth_scroll_setting_register();
-    window_effects_setting_register();
-    shortcuts_setting_register();
     storage_config_setting_register();
     target_setting_register();
     tunables_register();

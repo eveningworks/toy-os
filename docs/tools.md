@@ -550,10 +550,17 @@ manual steps to be worth automating:
   **`/etc` IS SYNCED, but NEW FILES ONLY** (`USERLAND_TREES`), so a new
   service descriptor does arrive while the machine's own configuration
   -- which services are enabled, its address -- is never overwritten.
-  What that means for an INTERRUPTED flash is worth knowing, because it
-  is how this was misdiagnosed once: the trees go `bin`, `tests`, `usr`,
-  `etc`, `lib`, so a run cut short after `/bin` leaves NEITHER the new
-  `/etc` file NOR the new `/lib`. The missing service then looks like a
+  **`/etc/settings.d` IS THE EXCEPTION and is overwritten**, because
+  those files are not that machine's configuration: they are shipped
+  metadata declaring what each setting IS, and a stale copy with no
+  `Type=` line declares nothing -- every desktop setting would vanish
+  from System Settings on a flashed machine while the newly added ones
+  appeared. It is its own tree, ahead of `etc`, which is also how the
+  disk image has always treated it (`seed/sync`, content-hash synced).
+  What NEW FILES ONLY means for an INTERRUPTED flash is worth knowing,
+  because it is how this was misdiagnosed once: the trees go `bin`,
+  `tests`, `usr`, `etc/settings.d`, `etc`, `lib`, so a run cut short
+  after `/bin` leaves NEITHER the new `/etc` file NOR the new `/lib`. The missing service then looks like a
   policy ("flash must not touch /etc") rather than like the half-copy it
   is. If you are repairing one by hand, push the descriptor too:
   `put data/etc/services.d/<name> /etc/services.d/<name>`.

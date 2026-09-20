@@ -1,3 +1,10 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Minimize effect
+Category=Appearance
+Group=Effects
+Default=scale
+Choices=scale,genie,squash,glide
 Description=How a window travels to the taskbar and back
 Order=17
 Choice.scale=Scale (shrink into the button)

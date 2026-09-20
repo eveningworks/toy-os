@@ -1,3 +1,10 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Size
+Category=Desktop
+Group=Icons
+Default=medium
+Choices=small,medium,large
 Description=How big the icons on the desktop are
 Widget=radio
 Choice.small=Small

@@ -12,10 +12,10 @@
 #include "wm/wm_conf.h"   // wm_setting_generation()
 #include "rt/sys.h"
 #include "wm_tray.h"
+#include "lib/usetting.h"
 #include "wm_taskbar.h"     // taskbar_h
 #include "lib/icon_cache.h"
 #include "kapi.h"
-#include "tray_config.h"  // TRAY_SHOW_*
 #include "ui/uui_primitives.h" // uui_state_bg(), uui_fill_round_rect()
 
 // Eight: the clock, the on-screen keyboard, volume, brightness, the
@@ -97,13 +97,12 @@ int tray_want_shown(const char *key, int hardware_present) {
     char name[SETTING_ABI_QUALIFIED_MAX];
     k_snprintf(name, sizeof name, "desktop.tray_%s", key);
 
-    struct setting_msg msg;
-    k_memset(&msg, 0, sizeof msg);
-    msg.op = SETTING_OP_GET;
-    k_strlcpy(msg.name, name, sizeof msg.name);
-    if (sys_setting(&msg) == 0 && msg.value[0]) {
-        if (k_strcmp(msg.value, TRAY_SHOW_ALWAYS) == 0) return 1;
-        if (k_strcmp(msg.value, TRAY_SHOW_NEVER) == 0) return 0;
+    // usetting_get(), not sys_setting(): these are DECLARED settings
+    // (/etc/settings.d), which the syscall alone cannot see.
+    char value[SETTING_ABI_VALUE_MAX];
+    if (usetting_get(name, value, sizeof value) && value[0]) {
+        if (k_strcmp(value, TRAY_SHOW_ALWAYS) == 0) return 1;
+        if (k_strcmp(value, TRAY_SHOW_NEVER) == 0) return 0;
     }
     return hardware_present;
 }

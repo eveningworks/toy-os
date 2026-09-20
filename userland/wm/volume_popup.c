@@ -59,7 +59,12 @@ static void reload_devices(void) {
         m.op = SETTING_OP_CHOICE;
         m.index = index;
         m.choice = c;
-        if (sys_setting(&m) != 0) break;
+        // **THE INDEX CAME FROM usetting_find(), SO THE CHOICE MUST
+        // GO BACK THROUGH THE SAME REGISTRY.** They agree today only
+        // because the merged list puts the kernel's settings first and
+        // this is one of them; a declared setting's index means nothing
+        // to the syscall.
+        if (usetting_dispatch(&m) != 0) break;
         k_strlcpy(g_dev_value[g_dev_count], m.value, SETTING_ABI_VALUE_MAX);
         k_strlcpy(g_dev_label[g_dev_count], m.label, SETTING_ABI_LABEL_MAX);
         if (k_strcmp(m.value, current) == 0) g_dev_selected = g_dev_count;

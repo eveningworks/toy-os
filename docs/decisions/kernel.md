@@ -1155,6 +1155,71 @@ window is frontmost too. It compares the window's `client_pid` against
 the original's now. "It is on top" and "it is the same window" are
 different claims, and only the second one tests anything.
 
+## A setting the kernel does not apply is DECLARED BY A FILE, not registered in C
+
+The settings registry (the entry below) was built when every setting was
+the kernel's: the timezone, the font size, the keyboard layout. Then the
+desktop moved to ring 3 and kept registering its settings in ring 0
+anyway, because that was where the registry was. By 2026-09-20 twelve
+kernel source files -- ~1070 lines -- existed to describe the wallpaper,
+the taskbar height, the tray items, the screensaver, the window effects,
+the cursor theme and the four keyboard shortcuts. Every one of them was
+`apply = 0`: the kernel validated a string and wrote it to `/etc`, and
+a ring-3 process noticed on its generation poll and did the actual work.
+
+Those files are gone. A setting the kernel does not apply is now
+DECLARED by a file in `/etc/settings.d` -- `Type=`, `File=`, `Label=`,
+`Category=`, its choices or its bounds -- and `userland/lib/usetting.h`
+merges those declarations with the kernel's registry so a client sees
+one list. The kernel keeps the settings it can actually turn.
+
+**The test is "does ring 0 do anything with the value?"** -- not "is it
+a system setting". `system.font_size` stays registered because the
+kernel rasterises glyphs with it. `desktop.wallpaper` does not, and
+never did.
+
+**Why a schema file and not a registration syscall.** Letting the
+compositor publish its settings over `SYS_SETTING` was the obvious
+alternative and is what Wayland does with globals. It fails on
+LIFETIME: a setting would exist only while its owner ran, so `config
+list` at a `text` target would show half a machine, `config set
+desktop.wallpaper` would answer "no such setting", and a supervised
+restart would re-register 25 rows into a registry that might still hold
+the dead ones. A Wayland global is meaningless without its server; a
+setting is not -- it is a value on a disk, and the question "what can be
+configured on this machine?" has an answer whether or not the desktop is
+up.
+
+**Why not a settings daemon.** dconf has one, macOS has `cfprefsd`,
+Android has SettingsProvider -- and all three exist because their store
+is a private database. This store is `/etc`, which every process can
+already read and write (`lib/uconf.h` compiles the kernel's own parser
+into ring 3), so a daemon would arbitrate nothing and add a process that
+must be running for `config get` to work. GSettings is the closer
+parallel and the one followed: a schema is an installed FILE, schema
+lookup happens IN THE CLIENT, and no code is written per key.
+
+**What the kernel kept, and why it had to.** The generation counter.
+Everything watching for a settings change polls `setting_generation()`,
+and a library writing `/etc` directly bumps nothing -- so a wallpaper
+would reach the disk and never reach the screen. `SETTING_OP_TOUCH`
+announces a change the registry did not make. One counter for the
+machine was the point: a second, ring-3 one would have to be polled
+beside the first, and a consumer reading only one would silently stop
+noticing half the settings.
+
+**What it cost, stated rather than hidden.** The kernel can no longer
+answer for a desktop setting -- a KTEST cannot reach one, and neither
+can kernel code. Nothing did either before; if something ever needs to,
+the answer is that it has become a kernel setting and should be
+registered.
+
+**What it bought beyond the deletion:** a setting is a file now, so
+adding one is dropping a file in `/etc/settings.d` rather than editing
+two kernel files and rebuilding, and `SETTING_MAX` stopped being a
+ceiling the desktop competed for -- it had been raised four times, and
+the last raise found the old value exactly full.
+
 ## Settings are a REGISTRY, not a pile of syscalls -- and the files stay plain text
 
 Milestone 41 stage 4's last prerequisite was written down as "syscalls
@@ -7393,8 +7458,10 @@ It is cached on the filesystem generation, because enumerating is
 O(choices) by construction: System Settings asks for all 92 rows to
 fill one dropdown, and a whole-file read per row is the shape that made
 a nine-entry desktop reload cost 54 of them. The mechanism generalises
-to the next setting whose options are data rather than an enum, which
-`cursor_theme_config.c` says in its own first paragraph it wants.
+to the next setting whose options are data rather than an enum -- the
+cursor themes wanted exactly this, and got it when they became a
+declaration with a `ChoiceDir=` instead (see "A setting the kernel does
+not apply is DECLARED BY A FILE" above).
 
 **And the registry became the gate for an enum's value.** An enum with
 a choice list now refuses a value that is not one of them, in

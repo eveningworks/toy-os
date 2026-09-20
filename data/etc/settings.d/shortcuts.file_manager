@@ -1,0 +1,7 @@
+Type=keycombo
+File=/etc/shortcuts.conf
+Label=File Manager
+Category=Shortcuts
+Group=Applications
+Default=Super+E
+Description=Open the file manager

@@ -59,7 +59,7 @@ _Static_assert(SETTING_MAX == SETTING_ABI_MAX,
 // What a setting with no `category` is filed under. Named rather than
 // spelled in three places -- a UI, the ABI default and a test would
 // otherwise each carry the string.
-#define SETTING_CATEGORY_DEFAULT "General"
+#define SETTING_CATEGORY_DEFAULT SETTING_ABI_CATEGORY_DEFAULT
 
 // A setting with no `group` gets a page to itself. The UI substitutes
 // the setting's own label, so this is only ever seen if something

@@ -76,6 +76,13 @@ VM = os.path.join(REPO, "tools", "vm.py")
 # "all phases passed" and exit code 0.
 TESTS = [
     ("libc_test", 0, None, None),
+    # A setting DECLARED by a file in /etc/settings.d, rather than
+    # registered in kernel C (lib/usetting_schema.h). It runs here and
+    # not as a KTEST because the library it covers is ring 3's -- the
+    # kernel has no way to reach it -- and the check that matters is
+    # that the generation MOVES when ring 3 writes /etc, which is the
+    # only thing making the desktop notice a change.
+    ("usetting_test", 0, None, None),
     # The ring-3 half of termkey: the encoder is shared source compiled
     # twice, and the KTESTs would pass whether or not ring 3 linked it.
     ("termkey_test", 0, None, None),

@@ -1033,8 +1033,24 @@ def _verify_offline(host, tftp_port, local, want, timeout,
 # with: the laptop's /install/core.img was three weeks stale, from before
 # `gzio` joined CORE_MODULES, which is also the image `install
 # --bootloader` writes.
+#
+# **/etc/settings.d IS AN EXCEPTION TO THE /etc RULE, and it has to come
+# FIRST.** Those files are not that machine's configuration -- they are
+# shipped metadata describing what each setting IS (its type, bounds and
+# choices), and since the desktop's settings became declarations rather
+# than kernel C they are what makes a setting EXIST at all. New-files-
+# only would leave a machine's older copies in place, and an older copy
+# without a `Type=` line declares nothing: every desktop setting would
+# quietly vanish from System Settings on a flashed machine while the
+# newly-added ones appeared, which reads as a half-broken settings app.
+# The disk image has always treated this directory that way (it is under
+# seed/sync, content-hash synced, not seed/once), so this is the two
+# paths agreeing rather than a new policy. It precedes ("etc", ...)
+# because the /etc pass that follows skips whatever already exists.
 USERLAND_TREES = (("bin", "/bin", False), ("tests", "/tests", False),
-                  ("usr", "/usr", False), ("etc", "/etc", True),
+                  ("usr", "/usr", False),
+                  ("etc/settings.d", "/etc/settings.d", False),
+                  ("etc", "/etc", True),
                   ("home", "/home", True), ("lib", "/lib", False),
                   ("install", "/install", False))
 

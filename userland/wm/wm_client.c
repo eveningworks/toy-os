@@ -19,7 +19,7 @@
 #include "wm_shadow.h"
 #include "wm_anim.h"   // wm_damage_window_rect(): a window's rect plus its shadow
 #include "wm_shortcut.h"
-#include "screensaver_config.h"
+#include "lib/usaver.h"
 #include "wm_idle.h"
 #include "wm_dnd.h"
 #include "diag_abi.h"

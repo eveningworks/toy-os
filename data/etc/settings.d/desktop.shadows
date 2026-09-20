@@ -1,3 +1,10 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Window shadows
+Category=Appearance
+Group=Effects
+Default=on
+Choices=on,off
 Description=Drop shadows under windows and menus
 Order=20
 Choice.on=On

@@ -1,3 +1,11 @@
+Type=enum
+File=/etc/toyos.conf
+Label=Cursor theme
+Category=Input
+Group=Mouse
+Default=default
+ChoiceDir=/usr/share/cursors
+ChoiceDirMode=subdir
 Description=Which set of pointer shapes to draw
 # Appearance first, then behaviour -- which is NOT registration
 # order, since cursor_config registers before mouse_config.

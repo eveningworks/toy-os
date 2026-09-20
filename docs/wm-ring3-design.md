@@ -945,7 +945,9 @@ turned out NOT to need the surface they looked like they needed:
   the compositor notices by watching `setting_generation()`. So the
   DESCRIPTORS moved to `kernel/lib/cursor_theme_config.c`, beside the
   other four settings, and the kernel owns the description while the
-  compositor owns the behaviour. `apps/wm/cursor_theme.c`'s own comment
+  compositor owns the behaviour. (That file is gone as of the schema
+  conversion: both are declared by `/etc/settings.d/system.cursor_*`
+  now, which is the same split with the description in ring 3 too.) `apps/wm/cursor_theme.c`'s own comment
   had predicted this: "registering an apply callback here would have to
   be undone then."
 - **`etc_config_*` -- a SPLIT, not new surface.** `etc_config.c` now

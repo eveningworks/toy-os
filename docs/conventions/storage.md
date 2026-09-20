@@ -164,8 +164,10 @@ this the obvious way), not from how much history it accumulated.
   **setting** is read/write and persisted to `/etc`. A **tunable** is a
   SETTING whose `apply` also writes a live kernel variable -- a kind of
   setting, not a third registry. Facts live in the query registry
-  (`docs/query-design.md`); settings and tunables both live in the
-  setting registry (`api/setting.h`), and all three are BUILT. A
+  (`docs/query-design.md`); settings and tunables live in the setting
+  registry (`api/setting.h`) when the KERNEL applies them and in a
+  declaration file when it does not (see below), and all three are
+  BUILT. A
   tunable says "do not persist me" by naming `CONFIG_PATH_RUNTIME` as
   its file rather than by a flag -- which also gives it the `kernel`
   namespace, since identity is (namespace, name) and one without a
@@ -187,6 +189,33 @@ this the obvious way), not from how much history it accumulated.
   everything watching `setting_generation()` does real work when it
   moves (the desktop re-reads every `.desktop` file), so a UI that
   over-reports a change turns into disk I/O and a desktop-wide reload.
+- **A SETTING THE KERNEL DOES NOT APPLY IS DECLARED BY A FILE, NOT
+  REGISTERED IN C.** A file in `/etc/settings.d` carrying `Type=`
+  declares a setting outright -- its type, file, category, bounds and
+  choices -- and `userland/lib/usetting_schema.h` validates and persists
+  it from ring 3. One without `Type=` only describes a setting the
+  kernel registered, which is what that directory did before. The test
+  for which kind a new setting is: **does ring 0 do anything with the
+  value?** `system.font_size` does (the kernel rasterises with it), so
+  it stays a `struct setting` with an `apply`. The wallpaper does not --
+  the compositor reads it on its generation poll -- so registering it in
+  the kernel bought a validator and a file write, which is exactly what
+  a declaration gives without the C. `data/etc/settings.d/README.md` is
+  the format; `docs/settings-and-queries.md` says which half owns what.
+  **Do not add a persist-only `struct setting`** (an `apply` of 0): that
+  is the shape this replaced, and twelve files of them were deleted at
+  once.
+- **A RING-3 WRITE TO A SETTING'S FILE MUST ANNOUNCE ITSELF**, with
+  `SETTING_OP_TOUCH`. The generation counter every consumer polls lives
+  in the kernel and is bumped by `setting_set()`; a library writing
+  `/etc` itself bypasses that, so the value reaches the disk and the
+  desktop never notices -- a wallpaper that changes only at the next
+  reboot. `usetting_dispatch()` does it, and only when something
+  actually CHANGED: announcing a write of the value already there wakes
+  every consumer for nothing, which is the freeze the entry above is
+  about. ONE counter for the machine, deliberately -- a second, ring-3
+  one would have to be polled beside this one, and a consumer reading
+  only the old one would silently stop noticing half the settings.
 - **A RING-3 PROGRAM READS AND WRITES ONE SETTING THROUGH
   `userland/lib/usetting.h`, AND `usetting_set()` RETURNS THE REGISTRY'S
   THREE-WAY ANSWER.** `usetting_get()`/`_get_int()`, `usetting_set()`/
@@ -202,8 +231,15 @@ this the obvious way), not from how much history it accumulated.
   says which it means: `> 0` is live, `== SETTING_SAVED` is on disk.
   **Do not collapse that to a boolean in a new caller**: `SETTING_UNSAVED`
   reported as success is the lie `enum setting_result` exists to stop.
-  Enumeration by index stays with `struct setting_msg` directly --
-  System Settings and `config` want the whole record, not a name.
+  **ENUMERATION GOES THROUGH `usetting_dispatch()`, NEVER `sys_setting()`
+  directly.** It serves the same ops over the MERGED registry -- the
+  kernel's settings, then the ones declared by files -- in the same
+  message shape, so a client sees one list. A client calling the syscall
+  sees only the kernel half, which today is a minority of the machine's
+  settings; and two clients each merging for themselves is the second
+  source of truth this registry exists to remove. System Settings and
+  `config` want the whole record rather than a name, and they get it
+  from there.
 - **A CONFIG FILE CAN HAVE `[SECTIONS]`, THE SECTION IS AN ARGUMENT, AND
   A NEW KEY LANDS AT THE END OF ITS OWN SECTION.** `etc_config_get_in`/
   `_set_in`/`_unset_in` and their `_buf_`/`uconf_` twins take a section;

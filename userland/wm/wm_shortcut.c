@@ -15,7 +15,7 @@
 #include "wm_internal.h"
 #include "wm_shortcut.h"
 #include "keycombo.h"
-#include "shortcuts_config.h"
+#include "lib/ushortcuts.h"
 #include "lib/usetting.h"
 #include "ui/ulog.h"
 #include "rt/sys.h"

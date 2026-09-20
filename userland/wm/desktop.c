@@ -1,5 +1,6 @@
 // See desktop.h for the design writeup.
 #include "desktop.h"
+#include "lib/usetting.h" // the MERGED registry: these settings are declared, not registered
 #include "start_store.h"
 #include "wm_internal.h"
 #include "context_menu.h"
@@ -399,15 +400,14 @@ static void wallpaper_reload(void) {
 
     k_strlcpy(name, WALLPAPER_DEFAULT, sizeof name);
     k_strlcpy(mode, "fill", sizeof mode);
-    struct setting_msg msg;
-    for (unsigned i = 0; i < sizeof msg; i++) ((uint8_t *)&msg)[i] = 0;
-    msg.op = SETTING_OP_GET;
-    k_strlcpy(msg.name, "desktop.wallpaper", sizeof msg.name);
-    if (sys_setting(&msg) == 0 && msg.value[0]) k_strlcpy(name, msg.value, sizeof name);
-    for (unsigned i = 0; i < sizeof msg; i++) ((uint8_t *)&msg)[i] = 0;
-    msg.op = SETTING_OP_GET;
-    k_strlcpy(msg.name, "desktop.wallpaper_mode", sizeof msg.name);
-    if (sys_setting(&msg) == 0 && msg.value[0]) k_strlcpy(mode, msg.value, sizeof mode);
+    // usetting_get(), NOT sys_setting(): these are DECLARED in
+    // /etc/settings.d, and the syscall answers for the kernel's
+    // settings alone -- it would read both as unset.
+    char v[SETTING_ABI_VALUE_MAX];
+    if (usetting_get("desktop.wallpaper", v, sizeof v) && v[0])
+        k_strlcpy(name, v, sizeof name);
+    if (usetting_get("desktop.wallpaper_mode", v, sizeof v) && v[0])
+        k_strlcpy(mode, v, sizeof mode);
 
     int name_changed = k_strcmp(name, wallpaper_name) != 0;
     int mode_changed = k_strcmp(mode, wallpaper_mode) != 0;
@@ -474,12 +474,10 @@ static void wallpaper_reload(void) {
 // desktop knows the pixels. A change repaints the whole desktop; saved
 // cell positions are kept, since a cell is a (col, row) and not a pixel.
 static void icon_size_reload(void) {
-    struct setting_msg msg;
-    for (unsigned i = 0; i < sizeof msg; i++) ((uint8_t *)&msg)[i] = 0;
-    msg.op = SETTING_OP_GET;
-    k_strlcpy(msg.name, "desktop.icon_size", sizeof msg.name);
+    char value[SETTING_ABI_VALUE_MAX];
     const char *word = "medium";
-    if (sys_setting(&msg) == 0 && msg.value[0]) word = msg.value;
+    if (usetting_get("desktop.icon_size", value, sizeof value) && value[0])
+        word = value;
     if (k_strcmp(word, g_icon_size) == 0) return;
     k_strlcpy(g_icon_size, word, sizeof g_icon_size);
     g_icon_px = k_strcmp(word, "small") == 0 ? 32 :
@@ -1388,12 +1386,7 @@ static void launch_from_menu(void *ctx) {
 
 static void set_icon_size(void *ctx) {
     const char *word = (const char *)ctx;
-    struct setting_msg msg;
-    for (unsigned i = 0; i < sizeof msg; i++) ((uint8_t *)&msg)[i] = 0;
-    msg.op = SETTING_OP_SET;
-    k_strlcpy(msg.name, "desktop.icon_size", sizeof msg.name);
-    k_strlcpy(msg.value, word, sizeof msg.value);
-    if (sys_setting(&msg) != 0) {
+    if (usetting_set("desktop.icon_size", word) == SETTING_INVALID) {
         wm_logf("desktop: icon size %s refused", word);
         return;
     }

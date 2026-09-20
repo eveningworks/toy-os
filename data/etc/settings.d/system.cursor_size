@@ -1,3 +1,10 @@
+Type=enum
+File=/etc/toyos.conf
+Label=Cursor size
+Category=Input
+Group=Mouse
+Default=normal
+Choices=normal,large,huge
 Description=How large the mouse pointer is drawn
 # The values are cursor_theme_config.c's g_sizes[] -- there is no
 # "small", and a Choice line naming one would simply never match.

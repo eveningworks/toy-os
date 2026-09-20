@@ -2,6 +2,7 @@
 // what it does and why it is one file rather than three walks.
 #include "wm_internal.h"
 #include "wm_taskbar.h"
+#include "lib/usetting.h" // the MERGED registry -- see setting_get()
 #include "wm_anim.h"
 #include "wm_tray.h"
 #include "context_menu.h"
@@ -9,7 +10,6 @@
 #include "kapi.h"
 #include "rt/sys.h"
 #include "wm/wm_conf.h"   // struct setting_msg, SETTING_OP_*
-#include "taskbar_config.h" // TASKBAR_H_MIN/MAX/DEFAULT
 
 #define TB_GAP 4
 
@@ -43,11 +43,13 @@ int start_icon_size(void) {
 
 int taskbar_default_h(void) { return TASKBAR_H_DEFAULT; }
 
+// **THROUGH usetting_get(), NOT sys_setting().** These settings are
+// DECLARED by files in /etc/settings.d rather than registered in the
+// kernel, so the syscall does not know them -- it answers for the
+// kernel's half alone, and asking it reads every one of them as unset.
 static void setting_get(const char *name, struct setting_msg *msg) {
     for (unsigned i = 0; i < sizeof *msg; i++) ((uint8_t *)msg)[i] = 0;
-    msg->op = SETTING_OP_GET;
-    k_strlcpy(msg->name, name, sizeof msg->name);
-    if (sys_setting(msg) != 0) msg->value[0] = 0;
+    if (!usetting_get(name, msg->value, sizeof msg->value)) msg->value[0] = 0;
 }
 
 // `desktop.taskbar_height` as the registry answers it, or the default

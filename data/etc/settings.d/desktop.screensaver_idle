@@ -1,1 +1,11 @@
+Type=int
+File=/etc/desktop.conf
+Label=Start after
+Category=Desktop
+Group=Screensaver
+Default=0
+Min=0
+Max=120
+Step=1
+Unit=min
 Description=Minutes of no keyboard or mouse before the screensaver starts. Zero turns it off.
