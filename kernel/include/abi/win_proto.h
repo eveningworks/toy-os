@@ -251,75 +251,30 @@
                             // accumulator, not part of the level state.
 
 // 13 -- WIN_EV_DEBUG_OUT, retired with the channel (abi/diag_abi.h).
-#define WIN_EV_CLIENT_CREATED   15 // a: pid. A window exists; read it.
-#define WIN_EV_CLIENT_PRESENT   16 // a: pid, b: the FRONT buffer index
-                                    // and that buffer's GENERATION,
-                                    // packed by WIN_PRESENT_B(); mods:
-                                    // that buffer's own WIDTH and
-                                    // HEIGHT, packed by
-                                    // WIN_PRESENT_SIZE(). A compositor
-                                    // remembers this per window,
-                                    // because it also repaints for its
-                                    // own reasons (the clock, another
-                                    // window) when no present has
-                                    // arrived.
-                                    //
-                                    // **THE GENERATION NAMES THE
-                                    // MEMORY.** The buffer's NAME
-                                    // identifies the slot and never
-                                    // changes; the object in it is
-                                    // replaced on a resize, and the
-                                    // generation goes up when it is. A
-                                    // compositor holding a different one
-                                    // re-opens the name; the object it
-                                    // was reading stays alive under its
-                                    // own mapping until it lets go,
-                                    // which is wl_buffer.release. It
-                                    // rides the present rather than an
-                                    // event of its own because it is
-                                    // STATE: a lost invalidation event
-                                    // would be a compositor reading a
-                                    // freed object forever, where a
-                                    // stale generation costs one frame.
-                                    //
-                                    // **THE SIZE IS THE FRAME'S, NOT THE
-                                    // WINDOW'S.** It is what makes a
-                                    // resize invisible: a compositor
-                                    // adopts the geometry of the pixels
-                                    // it is about to show, so it never
-                                    // has to guess whether this frame
-                                    // was drawn before or after a
-                                    // resize it proposed.
-#define WIN_EV_CLIENT_DESTROYED 17 // a: pid. It is going away. THE
-                                    // PIXELS ARE STILL READABLE: the
-                                    // compositor's own mapping holds a
-                                    // reference to the object, so the
-                                    // frames go when it munmaps, not
-                                    // when the window does
-                                    // (wl_buffer.release).
-#define WIN_EV_CLIENT_TITLE     18 // a: pid. Title changed; re-read it.
-#define WIN_EV_CLIENT_HINTS     19 // a: pid. Hints changed; re-read.
-#define WIN_EV_CLIENT_RESIZED   20 // a: pid, b: new w, mods: new h. The
-                                    // client ACCEPTED a proposal: its
-                                    // BACK buffer is now this size.
-                                    // Nothing to re-map here -- the new
-                                    // object is picked up by the
-                                    // generation on the present that
-                                    // first shows it. **Not the moment
-                                    // to adopt the size** -- the front
-                                    // buffer still holds the last frame
-                                    // at the old one, and that frame is
-                                    // what is on screen until the
-                                    // present that carries the new size.
-                                    // Useful for pacing: a compositor
-                                    // resizing interactively can send
-                                    // its next proposal when this
-                                    // arrives.
-#define WIN_EV_CLIENT_PONG      21 // a: pid, b: the serial echoed back.
-#define WIN_EV_CLIENT_TIMER     22 // a: pid. This window's timer is due.
-#define WIN_EV_CLIENT_CLOSE     23 // a: pid, window unused. Close every
-                                    // window this pid owns -- the
-                                    // desktop's own "quit that app".
+// **15-20 ARE RETIRED, NOT FREE.** They were the compositor's side of a
+// client's life: CREATED, PRESENT, DESTROYED, TITLE, HINTS, RESIZED.
+// Every one of them now travels on the client's own channel
+// (userland/lib/uchan.h) with its payload, which is what let stage 6
+// delete the kernel's window table -- an event carrying `a: pid` and
+// nothing else only works while ring 0 holds the window it refers to.
+//
+// A number reused here would land an old client's event on a different
+// message, the same reason 19 below and abi/syscall_abi.h's holes exist.
+// Retired 2026-09-09 with the table; recorded here 2026-09-20, when a
+// session looking for work in this subsystem found six live-looking
+// opcodes that nothing sends and nothing handles.
+//
+// The originals, for anyone reading an old capture: 15 CREATED (a: pid),
+// 16 PRESENT (a: pid, b: front index -- it carried the frame's own size,
+// which is why a resize was invisible), 17 DESTROYED (a: pid; the pixels
+// outlived it, since the compositor's mapping held the reference --
+// wl_buffer.release), 18 TITLE, 19 HINTS, 20 RESIZED (a: pid, b: w,
+// mods: h).
+// **21-23 ARE RETIRED, NOT FREE**, with 15-20 above and for the same
+// reason: 21 PONG (a: pid, b: the serial echoed back), 22 TIMER (a: pid,
+// this window's timer is due) and 23 CLOSE (a: pid, close every window
+// it owns -- the desktop's own "quit that app"). All three are channel
+// messages now.
 #define WIN_EV_FONT      26 // No payload. THE FONT CHANGED -- a different
                            // face, or a different size. Call
                            // ugfx_font_init() again (the mapping is at a
@@ -346,15 +301,11 @@
                            // decides what that means for it.
 // 25 -- WIN_EV_CLIENT_DEBUG, retired: a provider is woken through its
 // WAKEWORD now, which a service with no window also has.
-#define WIN_EV_CLIENT_CURSOR    29 // a: pid, b: the WIN_CURSOR_* shape.
-                                    // The VALUE rides the event, unlike
-                                    // the thin ones above: it is one int
-                                    // and WIN_REQ_WINDOW_INFO has no
-                                    // return slot left. Cost: a dropped
-                                    // event is not recoverable by
-                                    // re-reading, which the compositor's
-                                    // content-area clamp bounds.
-
+// **29 IS RETIRED, NOT FREE.** It was CURSOR (a: pid, b: the
+// WIN_CURSOR_* shape) -- the one event that carried its value rather
+// than saying "re-read", because WIN_REQ_WINDOW_INFO had no return slot
+// left. Both are gone: the shape rides the channel with the rest of the
+// presentation state.
 // 24 WAS WIN_EV_CLIENT_ACTIVATE, and is RETIRED rather than reused. It
 // told the compositor which window the kernel had decided to raise for
 // a single-instance app's twin. The kernel could only decide that while

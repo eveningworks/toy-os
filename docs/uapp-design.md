@@ -878,9 +878,11 @@ both are reachable when something does.
   the window pixel-identical; and a positive control -- break the ack
   path deliberately and confirm the test goes red -- before a clean run
   is believed.
-- `make test` throughout: `win_server.c`'s realloc path wants KTESTs
-  with `fault_inject.h` failing the frame allocation, since "the server
-  refuses" is a path no interactive test will hit by accident.
+- `make test` throughout: the buffer-realloc path wants KTESTs with
+  `fault_inject.h` failing the frame allocation, since "the server
+  refuses" is a path no interactive test will hit by accident. It is the
+  CLIENT's path now -- `win_server.c` is gone, and the client allocates
+  its own buffer (`docs/winserver-ring3-design.md`, stage 5).
 
 ## Out of scope
 

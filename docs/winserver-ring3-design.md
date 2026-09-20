@@ -11,12 +11,33 @@ What that milestone deliberately did not move is the *memory* half --
 this plan is about.
 
 **The per-stage markers are the authority**, not any status sentence at
-the top of this file.
+the top of this file -- and they are on the SUBHEADINGS where a stage
+split (6a/6b/6c). Reading the stage headings alone says stage 6 is
+outstanding; it is not, and on 2026-09-20 that cost a session a wrong
+recommendation about what to work on.
 
-## What already exists, measured
+## EVERY STAGE IS DONE (0 through 8, finished 2026-09-09)
 
-`kernel/proc/win_*.c`, tests excluded, re-measured after stage 5b
-(2026-09-08):
+`win_server.c` does not exist. Neither do `win_events.c` or
+`win_transport.c`. What is left in `kernel/proc/`, tests excluded, is
+what this plan always said must stay -- a device mapping and evdev's
+job:
+
+| file | lines | what it owns |
+|---|---|---|
+| `win_role.c` | 502 | the compositor ROLE: who holds it, the framebuffer map, the cursor plane, the glyph tables, the pointer warp |
+| `win_surface.c` | 345 | the compositor's framebuffer grant |
+| `win_syscalls.c` | 193 | `SYS_WIN_REQUEST` |
+| `win_input.c` | 197 | raw input to whoever holds the role |
+
+The whole `WIN_EV_CLIENT_*` family is retired in `abi/win_proto.h`:
+every one of those events travels on the client's own channel now
+(`userland/lib/uchan.h`).
+
+## What it looked like before, measured
+
+`kernel/proc/win_*.c`, tests excluded, measured after stage 5b
+(2026-09-08) -- kept because the stages below are written against it:
 
 | file | lines | what it owns |
 |---|---|---|
@@ -155,7 +176,7 @@ is still held on the old one, so releasing `bufs[b].shm` puts the NEW
 object and frees it under a live mapping. `comp_ref_shm[]` is that
 record.
 
-### Stage 3 -- the general named channel
+### Stage 3 -- the general named channel -- DONE 2026-09-08
 
 A ring of fixed-size messages in shared memory, a wakeup when it goes
 non-empty, and a reply slot for the messages that need one. Async by
@@ -279,7 +300,18 @@ a round trip that existed only because the one message used to fetch
 all three. The number is retired rather than reused, as the deleted
 syscalls' are.
 
-### Stage 4 -- the rest of the presentation state
+### Stage 4 -- the rest of the presentation state -- DONE, WITH 6b
+
+**Described as its own stage and delivered inside another**, which is
+why it carried no marker until 2026-09-20: `TITLE`, `HINTS`, `CURSOR`,
+`TIMER`, `PONG` and `ACTIVATE` went to the channel, and the fields this
+paragraph says to drop went with the whole of `struct client_window`
+when 6b deleted the table. `WIN_REQ_WINDOW_INFO` retired on 2026-09-08.
+Nothing below is outstanding; it is kept because it states WHY the
+compositor is the authority on what a window is rather than a reader of
+the kernel's copy.
+
+What it said, as written:
 
 `TITLE`, `HINTS`, `CURSOR`, `TIMER`, `PONG` and `ACTIVATE` travel over
 the channel with their payloads. The kernel drops `title`, `app_id`,
@@ -469,7 +501,7 @@ which is worse, because a path taken once in a hundred resizes is a path
 that breaks unnoticed. This repo's own rule about producible fallbacks
 says the same thing from the other side.
 
-### Stage 6 -- delete the kernel's window table
+### Stage 6 -- delete the kernel's window table -- DONE 2026-09-09
 
 What is left in ring 0 is what must be: the framebuffer grant
 (`win_surface.c`, a device mapping) and raw input delivery to whoever
@@ -518,10 +550,11 @@ the decisions**, and they are open.
   reclaiming the slot. Declined: a kernel event (prompt, but per-client
   state in the file this stage exists to empty, and sheddable under
   load) and polling `QUERY_PROCESSES` (no new mechanism, but a scan per
-  frame duplicating what the channel carries). **NOT BUILT YET** -- it
-  belongs with 6b, where it REPLACES `WIN_EV_CLIENT_DESTROYED` rather
-  than running beside it; a second path that closes a window is two
-  chances to close it twice.
+  frame duplicating what the channel carries). **BUILT WITH 6b** --
+  it REPLACED `WIN_EV_CLIENT_DESTROYED` rather than running beside it,
+  because a second path that closes a window is two chances to close it
+  twice. (That event, and the whole `WIN_EV_CLIENT_*` family with it,
+  is a retired opcode number in `abi/win_proto.h` now.)
 - **How far in one go?** Two halves, 6a then 6b.
 
 #### 6a -- DONE (2026-09-09). Identity, and the boundary that moved

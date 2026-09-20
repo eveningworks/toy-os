@@ -125,7 +125,7 @@ disqualifies it:
 |---|---|
 | the sound PCM ring (`kernel/drivers/sound/sound.c`) | a live DMA target, and DMA32-contiguous |
 | window buffers | shm objects the CLIENT owns, mapped in two processes |
-| the shared font (`win_server.c`) | pages of the kernel image |
+| the shared font (`kernel/proc/win_role.c`) | pages of the kernel image |
 | shm frames, the `/lib` image cache (`kernel/mm/mmap.c`) | shared between processes |
 
 That alignment is not a coincidence to lean on quietly — it is the
