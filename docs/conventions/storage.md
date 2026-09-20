@@ -64,6 +64,14 @@ this the obvious way), not from how much history it accumulated.
   resolve too**, through the same `resolve_user_path()` in
   `kernel/fs/fs_syscalls.c` -- an absolute path is unchanged by
   resolution, so nothing that already worked behaves differently.
+  **AND SO DO `SYS_SPAWN` AND `SYS_EXEC`, which for a long time did
+  NOT**: they copied the program's path raw, so `./prog` was looked up
+  from the ROOT and failed from the very directory holding it. A shell
+  answers a failed exec by trying the file as a SCRIPT, so the symptom
+  was `Syntax error: ")" unexpected` from a perfectly good ELF rather
+  than anything mentioning the path. The helper is shared now, declared
+  in `kernel/syscalls.h`; a syscall that takes a path and does not call
+  it is the bug.
   **`tosh` no longer resolves anything**: `k_path_resolve()` handles
   `..` and `.` below the syscall where every caller reaches it. And
   **`getcwd` REFUSES rather than truncating** -- a shortened path names

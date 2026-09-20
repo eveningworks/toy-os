@@ -288,6 +288,15 @@ int sys_mount(struct syscall_ctx *c);
 int sys_umount(struct syscall_ctx *c);
 int sys_chdir(struct syscall_ctx *c);
 int sys_getcwd(struct syscall_ctx *c);
+
+// Copies a path argument out of user memory and resolves it against the
+// CALLER'S CWD into `out` (FS_PATH_MAX). Returns 0, or the negative
+// errno to hand back. Defined in kernel/fs/fs_syscalls.c.
+//
+// Every syscall that takes a path must use this, and that includes the
+// ones outside the filesystem: spawn and exec take one, and copying it
+// raw is what made `./prog` fail from the directory holding it.
+int resolve_user_path(uint64_t pml4, uint64_t uaddr, char *out);
 int sys_mkdir(struct syscall_ctx *c);
 int sys_rename(struct syscall_ctx *c);
 int sys_truncate(struct syscall_ctx *c);

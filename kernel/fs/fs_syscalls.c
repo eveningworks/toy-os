@@ -35,7 +35,8 @@
 // SYS_LISTDIR arm for why the array isn't bounced through the kernel
 // stack in one go.
 // Defined at the bottom, beside the cwd it resolves against.
-static int resolve_user_path(uint64_t pml4, uint64_t uaddr, char *out);
+// Defined at the bottom; declared in kernel/syscalls.h because spawn
+// and exec need it too -- see the comment on the definition.
 
 static uint64_t g_listdir_out = 0;
 static uint64_t g_listdir_pml4 = 0;
@@ -386,7 +387,17 @@ int sys_fs_generation(struct syscall_ctx *c) {
 // depending on whether the shell that typed it resolved first. An
 // absolute path is unchanged by resolution, so nothing that already
 // passed one behaves differently.
-static int resolve_user_path(uint64_t pml4, uint64_t uaddr, char *out) {
+//
+// **AND "EVERY" WAS ONLY EVER TRUE OF THIS FILE.** SYS_SPAWN and
+// SYS_EXEC take a path too, in kernel/proc/proc_syscalls.c, and copied
+// it raw -- so `./prog` from a shell whose cwd held it failed with
+// ENOENT while the same program spawned fine by absolute path. What
+// made that expensive rather than merely wrong is what a SHELL does
+// with a failed exec: dash falls back to reading the file as a script,
+// so running a binary printed `Syntax error: ")" unexpected` and an
+// exit status of 2. It is not static any more, and the claim above is
+// true again.
+int resolve_user_path(uint64_t pml4, uint64_t uaddr, char *out) {
     // Three buffers, none of them a local: the raw copy, the scratch
     // k_path_resolve() joins into, and the caller's `out`. At
     // FS_PATH_MAX = 4096 that is 16 KiB, a whole kernel stack.

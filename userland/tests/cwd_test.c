@@ -57,6 +57,7 @@ int main(void) {
     // filesystem, so establish the precondition rather than inherit it.
     sys_unlink(SUB_AT("/made"));
     sys_unlink(SUB_AT("/inherited"));
+    sys_unlink(SUB_AT("/by-relative-path"));
     sys_unlink(SUB);
     sys_unlink(BASE_AT("/renamed"));
     sys_unlink(BASE_AT("/linked"));
@@ -120,6 +121,29 @@ int main(void) {
     utest_check(exists(SUB_AT("/inherited")), "the child created it in OUR cwd");
     utest_check(!exists("/inherited"), "and NOT at the root");
 
+    // **AND THE PROGRAM'S OWN PATH IS RELATIVE TOO.** The check above
+    // spawns by ABSOLUTE path and passes a relative ARGUMENT; this one
+    // spawns `./mkdir` from /bin. SYS_SPAWN copied its path raw while
+    // every filesystem syscall resolved against the cwd, so a binary
+    // could not be run from the directory holding it -- and a shell
+    // answers a failed exec by reading the file as a SCRIPT, so this
+    // surfaced as `Syntax error: ")" unexpected` from running a
+    // perfectly good ELF.
+    utest_check(sys_chdir("/bin") == 0, "chdir /bin, where the programs are");
+    int rpid = sys_spawn("./mkdir", SUB_AT("/by-relative-path"), -1);
+    utest_check(rpid > 0, "spawn a program BY RELATIVE PATH");
+    if (rpid > 0) {
+        int rcode = -1;
+        sys_waitpid(rpid, &rcode);
+        utest_check(rcode == 0, "the relatively-spawned child succeeded");
+    }
+    utest_check(exists(SUB_AT("/by-relative-path")), "and it really ran");
+    // The other half: a relative path that does NOT exist here must
+    // still fail, or the resolution is not happening and something is
+    // finding the program some other way.
+    utest_check(sys_spawn("./no-such-program", 0, -1) < 0,
+                "a relative path to nothing is still refused");
+
     // --- the rest of the new calls ------------------------------------
     utest_check(sys_chdir(BASE) == 0, "chdir the scratch directory");
     struct sys_stat st;
@@ -160,6 +184,7 @@ int main(void) {
     sys_chdir("/");
     sys_unlink(SUB_AT("/made"));
     sys_unlink(SUB_AT("/inherited"));
+    sys_unlink(SUB_AT("/by-relative-path"));
     sys_unlink(SUB);
     sys_unlink(BASE_AT("/renamed"));
     sys_unlink(BASE_AT("/linked"));

@@ -560,10 +560,17 @@ static int spawn_args_collect(uint64_t pml4, const struct spawn_msg *msg,
         }
         a->env = a->envbuf;
     }
-    if (!vmm_copy_string_from_user(pml4, a->path, (uint64_t)(uintptr_t)msg->path, FS_PATH_MAX)) {
-        klog_printf(KLOG_ERR "syscall: %s() rejected -- invalid path pointer\n", who);
+    // RESOLVED AGAINST THE CWD, like every other path a syscall takes
+    // (kernel/syscalls.h). This used to be a raw copy, so `./prog` was
+    // looked up from the ROOT and failed with ENOENT from the very
+    // directory holding it -- and a shell answers a failed exec by
+    // trying the file as a script, which is why running a binary
+    // printed a syntax error rather than "not found".
+    int perr = resolve_user_path(pml4, (uint64_t)(uintptr_t)msg->path, a->path);
+    if (perr < 0) {
+        klog_printf(KLOG_ERR "syscall: %s() rejected -- bad path (%d)\n", who, perr);
         spawn_args_free(a);
-        return -EFAULT;
+        return perr;
     }
     // `args` becomes the VECTOR the loader carries. With SPAWN_ARGV it
     // arrives as one (copied like the environment, and refused past the
