@@ -96,7 +96,15 @@ enum setting_result {
 // happening twice, each time leaving the LAST category as a heading with
 // no children, which reads as "that category does nothing". Four
 // shortcut settings put it back on the line, so this moves.
-#define SETTING_ABI_MAX       72
+// **RAISED TO 96 AT 68 REGISTERED (2026-09-20).** Four spare is the
+// state this comment keeps describing as the one where the next
+// registration disappears, and it disappears SILENTLY -- the symptom
+// twice was the last category rendering as a heading with no children.
+// The cost of headroom is bss in System Settings, which sizes its
+// arrays from this; the cost of running out is a setting nobody can
+// find. Raised in the same change that added the two shatter knobs
+// rather than after they vanished.
+#define SETTING_ABI_MAX       96
 
 #define SETTING_ABI_NAME_MAX  24 // the /etc key, e.g. "font_size"
 #define SETTING_ABI_LABEL_MAX 40 // human-facing, e.g. "Font size"

@@ -1612,6 +1612,11 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LI
 	cp docs/commands/*.md $(SEED_DIR)/sync/usr/share/doc/cmd/
 	rm -f $(SEED_DIR)/sync/usr/share/doc/cmd/README.md
 	cp data/tests/sample.txt $(SEED_DIR)/sync/tests/sample.txt
+	# Two more fixtures, beside it: the shatter effect's option file in
+	# each of its motions. A test puts one in place with `cp` --
+	# the debug console's `sh` runs a program and does not lex a
+	# redirect, so a file a test needs on disk has to ship.
+	cp data/tests/shatter_pour.conf data/tests/shatter_explode.conf $(SEED_DIR)/sync/tests/
 	# Desktop entries -- what the Start menu and the desktop icons are
 	# built FROM (see docs/filesystem-layout.md). Hand-authored and
 	# tracked under data/wm/, staged here for the same reason pci.ids is:
@@ -1629,6 +1634,12 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LI
 	# directory, so an absent /etc/savers is a write that fails with the
 	# settings page reporting success.
 	mkdir -p $(SEED_DIR)/sync/etc/savers
+	# Window-effect option descriptors, and the directory their values
+	# land in -- the same pair as the savers above and the same reason
+	# (userland/lib/ueffect.h). An effect with no descriptor simply has
+	# no options, which is every effect but `shatter`.
+	mkdir -p $(SEED_DIR)/sync/usr/wm/effects $(SEED_DIR)/sync/etc/effects
+	cp data/wm/effects/*.effect $(SEED_DIR)/sync/usr/wm/effects/
 	# Terminal colour schemes -- one .scheme per palette the GUI Terminal
 	# offers (userland/term/term.h). Read-only data, so /usr/share rather
 	# than beside the binary; the chosen one is a key in /etc/terminal.conf.

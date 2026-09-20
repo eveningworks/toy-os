@@ -34,6 +34,14 @@ int  wm_anim_active(void);   // how many ghosts are in flight
 #define WM_ANIM_MAX 8
 int  wm_anim_rect(int i, int *x, int *y, int *w, int *h, int *alpha);
 
+// How many PIECES ghost `i` is drawn as -- 1 for every effect except
+// `shatter`, which breaks the window into tiles. Reported through
+// `gui state --json`, because a shatter and a scale move the same
+// bounding box toward the same button: without this a test cannot tell
+// one from the other, and an effect that quietly fell back to scale
+// would pass every assertion about where the ghost is.
+int  wm_anim_pieces(int i);
+
 // Starters. Each takes the window's index NOW, snapshots it, and the
 // caller then changes the state (or closes it) as it always did.
 void wm_anim_open(int idx);      // first present of a new toplevel: scale in from 92%

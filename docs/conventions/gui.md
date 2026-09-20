@@ -2099,6 +2099,38 @@ real scanout hardware does. Do not write a pixel assertion for one.
   `DebugConsole.settle()` waits them out -- a frame compared while one
   runs is a frame of a ghost. `desktop.animations` turns all of it off.
 
+- **AN EFFECT THAT PAINTS SOMETHING OTHER THAN ITS LERPED RECT MUST
+  DAMAGE THE WHOLE TRAVEL.** The genie fills a tube from the window's
+  top edge to the taskbar button; `shatter` strings staggered tiles
+  between the two. In both cases the rect `wm_anim_step()` computes
+  covers only part of what is drawn, so `damage_ghost()` special-cases
+  them -- and the failure is not subtle: shatter's first version damaged
+  the shrinking union and left **15,500 stale pixels** starting at the
+  window's own top-left, because the last tiles to leave were still
+  sitting there. `animation_test.py`'s "nothing stale once it has
+  settled" is the check that catches it, by comparing the settled screen
+  against a forced full repaint.
+
+- **AN EFFECT'S OWN OPTIONS ARE A DESCRIPTOR, THE WAY A SCREENSAVER'S
+  ARE.** `/usr/wm/effects/<name>.effect` declares what an effect lets
+  you change and `/etc/effects/<name>.conf` holds the values -- the same
+  format, the same parser (`usaver_load_files()`) and the same reason as
+  `/usr/wm/savers`: an option belongs to ONE effect, and a flat setting
+  in `/etc/settings.d` cannot say so. `shatter`'s piece count would
+  otherwise sit in Appearance -> Effects being asked about while Scale
+  is selected, and every effect added later would leave another orphan
+  row. System Settings synthesises the rows for whichever owner the page
+  carries (`owner_kind()`), so a second effect with options needs no
+  edit there. **An effect with no descriptor has no options**, which is
+  a state and not an error -- it is every effect but `shatter`.
+
+- **AND THE STAGGER IS WHAT TELLS TWO PIECEWISE MOTIONS APART.** Shatter
+  pours with a 35% row stagger, so the window empties from the edge
+  nearest the taskbar; it explodes with 8%, because a burst whose bottom
+  row leaves a third of a second before its top row reads as a window
+  PEELING rather than breaking. The kick is bounded
+  (`SHATTER_KICK_PCT`) precisely so the damage margin can be.
+
 - **A WINDOW'S DAMAGE IS ITS OUTER RECT -- THE FRAME PLUS ITS SHADOW --
   AND `wm_damage_window_rect()` IS HOW IT IS DAMAGED.** The compositor
   paints a drop shadow outside every toplevel and popup

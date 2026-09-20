@@ -6,6 +6,7 @@
 #include "wm_log.h"   // the anim-end gap says so when it fires
 #include "wm/wm_conf.h"
 #include "lib/utween.h"
+#include "lib/ueffect.h" // the shatter effect's own options
 #include "rt/sys.h"
 #include <stdlib.h>
 #include "string.h"   // k_strcmp -- the speed names are matched in full
@@ -31,11 +32,21 @@ struct anim {
     int a0, a1;                   // alpha from/to
     uint32_t *snap; int sw, sh;   // the ghost's pixels
     int cx, cy, cw, ch, ca;       // this frame's rect and alpha
+    // THIS FRAME'S PROGRESS, stored rather than re-derived in the draw.
+    // The damage is computed from it in the step; a draw reading the
+    // clock again would place a tile against a slightly later tween
+    // than the one that was damaged for, which is a stale pixel where
+    // the two disagree.
+    int cv;
     int has_last;
     // THE EFFECT IS FIXED AT START, not read per frame: changing the
     // setting mid-flight would otherwise switch a ghost's shape and
-    // its destination halfway across the screen.
+    // its destination halfway across the screen. The grid and the
+    // motion ride along for the same reason -- a window that changed
+    // from 24 pieces to 192 halfway would be two animations.
     unsigned char effect;
+    unsigned char motion;
+    short cols, rows;
     int bx, by, bw, bh;           // the taskbar button, for the genie's mouth
 };
 
@@ -63,8 +74,66 @@ static int g_speed = SPEED_NORMAL;
 // different from/to rects -- ugfx_blit_scaled_alpha() already scales
 // the axes independently, so only the geometry differs. GENIE is the
 // one that needs its own primitive (ugfx_blit_genie).
-enum { EFFECT_SCALE = 0, EFFECT_GENIE, EFFECT_SQUASH, EFFECT_GLIDE };
+enum { EFFECT_SCALE = 0, EFFECT_GENIE, EFFECT_SQUASH, EFFECT_GLIDE,
+       EFFECT_SHATTER };
 static int g_effect = EFFECT_SCALE;
+
+// SHATTER: the window breaks into tiles that pour into its taskbar
+// button, and stream back out of it on restore.
+//
+// **THE TILES CARRY THE WINDOW'S OWN PIXELS**, which is what separates
+// this from confetti: a ghost already owns a snapshot, and
+// ugfx_blit_scaled_alpha() takes a source PITCH -- so a tile is that
+// snapshot blitted from an offset with the full stride, and the effect
+// needed no new primitive (unlike the genie).
+//
+// SIX BY FOUR, and the count is a judgement rather than a measurement:
+// the per-frame PIXEL work is the same whatever the count -- every tile
+// together covers the window once -- so what a finer grid costs is call
+// overhead, and what it costs visually is that a tile stops looking
+// like a piece of your window and starts looking like noise. Compiz's
+// Explode and KWin's Fall Apart, the two effects this is modelled on,
+// both use chunks you can still read.
+// THE GRID IS A SETTING (`desktop.shatter_pieces`), and these are its
+// three steps. The per-frame PIXEL work is the same at every count --
+// the tiles together cover the window once however it is cut -- so what
+// a finer grid really costs is per-blit overhead, and what it costs
+// VISUALLY is that a tile stops looking like a piece of your window and
+// starts looking like noise. Coarse is the default for that reason,
+// not for the cost.
+#define SHATTER_MAX_COLS 16
+#define SHATTER_MAX_ROWS 12
+#define SHATTER_MAX_TILES (SHATTER_MAX_COLS * SHATTER_MAX_ROWS)
+enum { PIECES_COARSE = 0, PIECES_MEDIUM, PIECES_FINE };
+static int g_shatter_pieces = PIECES_COARSE;
+
+// `desktop.shatter_motion`. POUR runs every tile straight to the
+// button; EXPLODE gives it an outward kick first and lets it fall back
+// in, which is Compiz's Explode rather than a plain implosion.
+//
+// **THE KICK IS BOUNDED, and that is not a detail**: a tile that leaves
+// the window's bounds has to be damaged for, and an unbounded burst
+// means a near-full-screen repaint every frame on a software
+// compositor. SHATTER_KICK_PCT of the window's own size keeps the
+// damage a predictable box (see damage_ghost).
+enum { MOTION_POUR = 0, MOTION_EXPLODE };
+static int g_shatter_motion = MOTION_POUR;
+#define SHATTER_KICK_PCT  28   // of the window's half-extent, at the peak
+#define SHATTER_KICK_PEAK 300  // where the burst tops out, 0..PROGRESS
+// How much of the tween one tile's stagger may eat -- and it is PER
+// MOTION, because the stagger is most of what tells the two apart.
+//
+// A POUR wants it: the window empties from the edge nearest the
+// taskbar, row after row, which is what pouring looks like. A BURST
+// does not -- an explosion where the bottom row leaves first and the
+// top row a third of a second later reads as a window PEELING, which
+// is exactly how it looked before this was split. So explode keeps
+// just enough to break the rows out of lockstep.
+//
+// The last tile to leave still gets the rest of the run to travel in,
+// so nothing snaps home at the end.
+#define SHATTER_STAGGER_POUR    35
+#define SHATTER_STAGGER_EXPLODE 8
 
 // Numerator/denominator rather than a float: there is no floating point
 // in this desktop. KWin's slider is the same set of ratios.
@@ -208,6 +277,18 @@ static void button_rect(int idx, int *x, int *y, int *w, int *h) {
 //   SCALE   shrinks into the button (what this has always done)
 //   SQUASH  keeps its width and collapses onto the taskbar (KWin's)
 //   GLIDE   travels to the button at 60%, fading, with no distortion
+// The grid and the motion this ghost will use, fixed at start with the
+// effect and for the same reason. Defaults stand in until the settings
+// that choose them are wired (docs/conventions/gui.md).
+static void shatter_grid_of(struct anim *a) {
+    switch (g_shatter_pieces) {
+    case PIECES_FINE:   a->cols = 16; a->rows = 12; break;
+    case PIECES_MEDIUM: a->cols = 10; a->rows = 7;  break;
+    default:            a->cols = 6;  a->rows = 4;  break;
+    }
+    a->motion = (unsigned char)g_shatter_motion;
+}
+
 static void minimize_rects(const struct window *w, int bx, int by, int bw, int bh,
                            int effect, int *tx, int *ty, int *tw, int *th,
                            int *a0, int *a1) {
@@ -269,6 +350,7 @@ void wm_anim_minimize(int idx) {
     a->fx = w->x; a->fy = w->y; a->fw = w->w; a->fh = w->h;
     button_rect(idx, &a->bx, &a->by, &a->bw, &a->bh);
     a->effect = (unsigned char)g_effect;
+    shatter_grid_of(a);
     minimize_rects(w, a->bx, a->by, a->bw, a->bh, g_effect,
                    &a->tx, &a->ty, &a->tw_, &a->th, &a->a0, &a->a1);
     start(a, MINIMIZE, 0, 0);   // the live window is minimized: not drawn anyway
@@ -285,6 +367,7 @@ void wm_anim_restore(int idx) {
     // one thing going and coming back.
     button_rect(idx, &a->bx, &a->by, &a->bw, &a->bh);
     a->effect = (unsigned char)g_effect;
+    shatter_grid_of(a);
     int a0, a1;
     minimize_rects(w, a->bx, a->by, a->bw, a->bh, g_effect,
                    &a->fx, &a->fy, &a->fw, &a->fh, &a0, &a1);
@@ -309,6 +392,46 @@ int wm_anim_hides(const struct window *w) {
 // neck on screen -- the same stale-pixel fault the shadow and the
 // resize-under-a-ghost both were.
 static void damage_ghost(const struct anim *a, int x, int y, int w, int h) {
+    // SHATTER paints tiles strung out between the window and the
+    // button, so the lerped rect covers none of the ones in flight --
+    // the same stale-pixel fault the genie's tube has, with a box
+    // instead of a tube. It is bounded: the tiles only ever travel
+    // INWARD, so the union of the two ends contains every one of them.
+    if (a->effect == EFFECT_SHATTER && (a->kind == MINIMIZE || a->kind == RESTORE)) {
+        // **THE WHOLE TRAVEL, NOT THIS FRAME'S RECT** -- the genie's
+        // lesson, in a box instead of a tube. The tiles are STAGGERED,
+        // so the last of them is still sitting at the window's original
+        // position long after the lerped rect has shrunk past it: a
+        // union built from that rect stops covering the top rows
+        // half-way through, and they stay on screen. Measured as 15500
+        // stale pixels starting at the window's own top-left corner.
+        //
+        // It is bounded by construction: every tile travels from the
+        // window to the button, so the union of those two contains all
+        // of them for the whole run.
+        int wx = (a->kind == RESTORE) ? a->tx  : a->fx;
+        int wy = (a->kind == RESTORE) ? a->ty  : a->fy;
+        int ww = (a->kind == RESTORE) ? a->tw_ : a->fw;
+        int wh = (a->kind == RESTORE) ? a->th  : a->fh;
+        int x0 = wx < a->bx ? wx : a->bx;
+        int y0 = wy < a->by ? wy : a->by;
+        int x1 = wx + ww, y1 = wy + wh;
+        if (a->bx + a->bw > x1) x1 = a->bx + a->bw;
+        if (a->by + a->bh > y1) y1 = a->by + a->bh;
+        // EXPLODE THROWS TILES OUTSIDE THE WINDOW, so the union of the
+        // two ends no longer contains them. The kick is bounded on
+        // purpose (see SHATTER_KICK_PCT) precisely so this margin can
+        // be: the furthest a tile goes is its distance from the centre
+        // -- at most half the window -- times the kick plus its jitter.
+        if (a->motion == MOTION_EXPLODE) {
+            int mx = (ww * (SHATTER_KICK_PCT + 10)) / 200;
+            int my = (wh * (SHATTER_KICK_PCT + 10)) / 200;
+            x0 -= mx; y0 -= my; x1 += mx; y1 += my;
+        }
+        (void)x; (void)y; (void)w; (void)h;
+        wm_damage_window_rect(x0, y0, x1 - x0, y1 - y0);
+        return;
+    }
     if (a->effect == EFFECT_GENIE && (a->kind == MINIMIZE || a->kind == RESTORE)) {
         int top = y < a->by ? y : a->by;
         int bot = a->by + a->bh;
@@ -339,11 +462,115 @@ void wm_anim_step(void) {
         if (a->has_last) damage_ghost(a, a->cx, a->cy, a->cw, a->ch);
         damage_ghost(a, x, y, w, h);
         a->cx = x; a->cy = y; a->cw = w; a->ch = h; a->ca = al;
+        a->cv = v;
         a->has_last = 1;
         if (!utween_active(&a->tw)) { finish(a); continue; }
         any = 1;
     }
     if (any) redraw_pending = 1;
+}
+
+// ONE TILE'S RECT THIS FRAME, and whether it is on screen at all.
+//
+// Every tile travels the same way -- from where it sits in the window
+// to a point inside the taskbar button -- and differs only in WHEN it
+// starts. So a restore is the same walk with the progress reversed,
+// which is why there is no second copy of this for the other direction.
+//
+// Integer math throughout: this desktop has no floating point.
+static int shatter_tile(const struct anim *a, int i, int q,
+                        int *out_x, int *out_y, int *out_w, int *out_h,
+                        int *out_sx, int *out_sy, int *out_sw, int *out_sh) {
+    int cols = a->cols, rows = a->rows;
+    if (cols <= 0 || rows <= 0) return 0;
+    int col = i % cols, row = i / cols;
+
+    // The source tile, in snapshot pixels. The last column and row take
+    // the remainder so no strip of the window is left undrawn.
+    int tw = a->sw / cols, th = a->sh / rows;
+    if (tw <= 0 || th <= 0) return 0;
+    int sx = col * tw, sy = row * th;
+    int sw = (col == cols - 1) ? a->sw - sx : tw;
+    int sh = (row == rows - 1) ? a->sh - sy : th;
+    if (sw <= 0 || sh <= 0) return 0;
+
+    // THE BOTTOM ROWS LEAVE FIRST, which is what makes it read as
+    // pouring rather than dissolving -- the window empties from the
+    // edge nearest the taskbar. The column offset is small and only
+    // breaks up the row marching in lockstep.
+    int stagger = (a->motion == MOTION_EXPLODE) ? SHATTER_STAGGER_EXPLODE
+                                                : SHATTER_STAGGER_POUR;
+    int delay = ((rows - 1 - row) * stagger * PROGRESS) / (rows * 100)
+              + (col * stagger * PROGRESS) / (cols * 400);
+    int span = PROGRESS - delay;
+    if (span <= 0) span = 1;
+    int p = ((q - delay) * PROGRESS) / span;
+    if (p < 0) p = 0;
+    if (p > PROGRESS) p = PROGRESS;
+
+    // Where this tile starts: its place in the window, which is the
+    // FROM rect for a minimize and the TO rect for a restore.
+    int wx = (a->kind == RESTORE) ? a->tx  : a->fx;
+    int wy = (a->kind == RESTORE) ? a->ty  : a->fy;
+    int ww = (a->kind == RESTORE) ? a->tw_ : a->fw;
+    int wh = (a->kind == RESTORE) ? a->th  : a->fh;
+    if (ww <= 0 || wh <= 0) return 0;
+
+    int x0 = wx + (sx * ww) / a->sw, y0 = wy + (sy * wh) / a->sh;
+    int w0 = (sw * ww) / a->sw,      h0 = (sh * wh) / a->sh;
+
+    // ...and where it lands: spread across the button's width rather
+    // than all on one point, so the stream has a mouth the width of the
+    // thing it is pouring into.
+    int x1 = a->bx + (col * a->bw) / cols;
+    int y1 = a->by + a->bh / 2;
+    int w1 = a->bw / cols; if (w1 < 1) w1 = 1;
+    int h1 = 1;
+
+    *out_x = lerp(x0, x1, p); *out_y = lerp(y0, y1, p);
+    *out_w = lerp(w0, w1, p); *out_h = lerp(h0, h1, p);
+
+    // THE BURST, and the jitter that makes a grid look like debris.
+    //
+    // Every tile on a straight line to its own slot keeps its
+    // neighbours as neighbours, and the whole thing reads as a diagonal
+    // WIPE rather than a window coming apart -- which is exactly how
+    // the first version looked. The kick pushes each tile away from the
+    // window's centre and lets it fall back, so the pieces separate
+    // before they converge.
+    //
+    // A HASH, NOT A RANDOM: the offset has to be the same every frame
+    // of one animation, or a tile jitters in place instead of
+    // travelling. The tile index is the whole seed.
+    if (a->motion == MOTION_EXPLODE) {
+        int bump = (p < SHATTER_KICK_PEAK)
+                 ? (p * PROGRESS) / SHATTER_KICK_PEAK
+                 : ((PROGRESS - p) * PROGRESS) / (PROGRESS - SHATTER_KICK_PEAK);
+        // Away from the centre, so the corners throw furthest -- which
+        // is what a burst looks like and what a uniform push does not.
+        int cx = wx + ww / 2, cy = wy + wh / 2;
+        int dx = (x0 + w0 / 2) - cx, dy = (y0 + h0 / 2) - cy;
+        int h1_ = (i * 2654435761u) >> 13;      // Knuth's multiplicative hash
+        int jx = (int)(h1_ % 21) - 10;          // +/-10% of the kick
+        int jy = (int)((h1_ >> 5) % 21) - 10;
+        *out_x += ((dx * SHATTER_KICK_PCT / 100) * bump / PROGRESS)
+                + (dx * jx / 100) * bump / PROGRESS;
+        *out_y += ((dy * SHATTER_KICK_PCT / 100) * bump / PROGRESS)
+                + (dy * jy / 100) * bump / PROGRESS;
+    }
+    *out_sx = sx; *out_sy = sy; *out_sw = sw; *out_sh = sh;
+    return (*out_w > 0 && *out_h > 0);
+}
+
+// How many pieces a ghost is drawn as: 1 for every effect but this one.
+// Reported through `gui state --json` so a test can tell a shatter from
+// a scale -- both move one bounding box toward the same button, so
+// nothing else about the report distinguishes them.
+int wm_anim_pieces(int i) {
+    if (i < 0 || i >= WM_ANIM_MAX || !g_anims[i].kind) return 0;
+    const struct anim *a = &g_anims[i];
+    if (a->effect != EFFECT_SHATTER) return 1;
+    return (a->kind == MINIMIZE || a->kind == RESTORE) ? a->cols * a->rows : 1;
 }
 
 void wm_anim_draw(void) {
@@ -364,6 +591,24 @@ void wm_anim_draw(void) {
                             a->snap, a->sw, a->sh, a->sw, (uint8_t)a->ca);
             continue;
         }
+        if (a->effect == EFFECT_SHATTER &&
+            (a->kind == MINIMIZE || a->kind == RESTORE)) {
+            // The progress this frame, reversed for a restore so the
+            // same walk runs backwards and the tiles stream OUT.
+            int q = (a->kind == RESTORE) ? PROGRESS - a->cv : a->cv;
+            for (int t = 0; t < a->cols * a->rows; t++) {
+                int x, y, w, h, sx, sy, sw, sh;
+                if (!shatter_tile(a, t, q, &x, &y, &w, &h, &sx, &sy, &sw, &sh))
+                    continue;
+                // THE SOURCE PITCH IS THE WHOLE SNAPSHOT'S. That is what
+                // makes this a sub-rect blit and not a copy -- the
+                // pointer picks the tile, the pitch keeps the rows.
+                ugfx_blit_scaled_alpha(wm_surface(), x, y, w, h,
+                                       a->snap + (size_t)sy * a->sw + sx,
+                                       sw, sh, a->sw, (uint8_t)a->ca);
+            }
+            continue;
+        }
         ugfx_blit_scaled_alpha(wm_surface(), a->cx, a->cy, a->cw, a->ch,
                                a->snap, a->sw, a->sh, a->sw, (uint8_t)a->ca);
     }
@@ -376,6 +621,7 @@ static int effect_of(const char *v) {
     if (!k_strcmp(v, "genie"))  return EFFECT_GENIE;
     if (!k_strcmp(v, "squash")) return EFFECT_SQUASH;
     if (!k_strcmp(v, "glide"))  return EFFECT_GLIDE;
+    if (!k_strcmp(v, "shatter")) return EFFECT_SHATTER;
     return EFFECT_SCALE;           // including an unknown value
 }
 
@@ -401,6 +647,27 @@ static void adopt(void) {
         g_effect = effect_of(v);
     else
         g_effect = EFFECT_SCALE;
+    // THE EFFECT'S OWN OPTIONS, from its descriptor and whatever has
+    // been chosen (lib/ueffect.h). Read HERE, on the generation poll,
+    // rather than per ghost: it is two file reads, and a minimize is
+    // not the moment to do them.
+    //
+    // An effect with no descriptor leaves opt_count 0 and the defaults
+    // below stand -- which is every effect but `shatter`.
+    g_shatter_pieces = PIECES_COARSE;
+    g_shatter_motion = MOTION_POUR;
+    if (g_effect == EFFECT_SHATTER) {
+        struct usaver o;
+        if (ueffect_load("shatter", &o) && o.opt_count) {
+            const char *p = usaver_str(&o, "pieces", "coarse");
+            g_shatter_pieces = !k_strcmp(p, "fine")   ? PIECES_FINE
+                             : !k_strcmp(p, "medium") ? PIECES_MEDIUM
+                                                      : PIECES_COARSE;
+            const char *m = usaver_str(&o, "motion", "pour");
+            g_shatter_motion = !k_strcmp(m, "explode") ? MOTION_EXPLODE
+                                                       : MOTION_POUR;
+        }
+    }
     if (!on) for (int i = 0; i < WM_ANIM_MAX; i++) if (g_anims[i].kind) finish(&g_anims[i]);
 }
 

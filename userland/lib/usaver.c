@@ -135,14 +135,22 @@ static void parse_one(const char *key, struct usaver_opt *o) {
     strlcpy(o->value, o->def, sizeof o->value);
 }
 
-int usaver_load(const char *saver, struct usaver *out) {
-    char path[96], keys[USAVER_OPT_MAX * USAVER_KEY_MAX + 8];
+// THE GENERIC HALF, because a saver stopped being the only thing with
+// declared options: a window EFFECT has them too (lib/ueffect.h), and
+// the two differ in nothing but where their files live. Copying this
+// for the second owner would have been two parsers over one format.
+//
+// The TYPE keeps its `usaver` name. Renaming it touches 77 call sites
+// across five savers for no behaviour change, and the header says what
+// it really is.
+int usaver_load_files(const char *name, const char *desc_path,
+                      const char *conf_path, struct usaver *out) {
+    char keys[USAVER_OPT_MAX * USAVER_KEY_MAX + 8];
 
     memset(out, 0, sizeof *out);
-    strlcpy(out->name, saver, sizeof out->name);
+    strlcpy(out->name, name, sizeof out->name);
 
-    snprintf(path, sizeof path, "%s/%s.saver", SCREENSAVER_DESC_DIR, saver);
-    if (!uconf_load(path, &g_buf)) return 0;
+    if (!uconf_load(desc_path, &g_buf)) return 0;
 
     // THE ORDER OF THE PAGE IS THIS LINE. The parser has no way to
     // enumerate the keys of a document, and hand-walking the buffer for
@@ -162,8 +170,7 @@ int usaver_load(const char *saver, struct usaver *out) {
 
     // The saved values, over the defaults already in place. A file that
     // is not there yet is the normal state -- nothing has been changed.
-    usaver_conf_path(saver, path, sizeof path);
-    if (uconf_load(path, &g_buf)) {
+    if (uconf_load(conf_path, &g_buf)) {
         for (int i = 0; i < out->opt_count; i++) {
             char v[USAVER_VALUE_MAX];
             struct usaver_opt *o = &out->opt[i];
@@ -180,12 +187,20 @@ int usaver_load(const char *saver, struct usaver *out) {
     // start, which is once a screen blank.
     char line[160];
     unsigned n = 0;
-    n += (unsigned)snprintf(line, sizeof line, "saver %s:", saver);
+    n += (unsigned)snprintf(line, sizeof line, "opts %s:", name);
     for (int i = 0; i < out->opt_count && n < sizeof line - 1; i++)
         n += (unsigned)snprintf(line + n, sizeof line - n, " %s=%s",
                                 out->opt[i].key, out->opt[i].value);
     ulogf("%s\n", line);
     return 1;
+}
+
+// A SAVER's options: the generic loader over the two saver paths.
+int usaver_load(const char *saver, struct usaver *out) {
+    char desc[96], conf[96];
+    snprintf(desc, sizeof desc, "%s/%s.saver", SCREENSAVER_DESC_DIR, saver);
+    usaver_conf_path(saver, conf, sizeof conf);
+    return usaver_load_files(saver, desc, conf, out);
 }
 
 const struct usaver_opt *usaver_find(const struct usaver *s, const char *key) {

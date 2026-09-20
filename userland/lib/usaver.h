@@ -122,6 +122,15 @@ struct usaver {
 // reads before anybody measured it).
 int usaver_load(const char *saver, struct usaver *out);
 
+// THE SAME, OVER ANY PAIR OF FILES -- because a saver is no longer the
+// only thing with declared options. A window effect declares its own
+// the same way (lib/ueffect.h), and the two differ in nothing but where
+// the descriptor and the values live, so this is the one parser and
+// `struct usaver` is really "a set of declared options" with a name it
+// was given before it had a second owner.
+int usaver_load_files(const char *name, const char *desc_path,
+                      const char *conf_path, struct usaver *out);
+
 // The option named `key`, or NULL.
 const struct usaver_opt *usaver_find(const struct usaver *s, const char *key);
 

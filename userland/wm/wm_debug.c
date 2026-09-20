@@ -1097,8 +1097,10 @@ static void cmd_state(struct dbg_out *o, int json) {
                 int x, y, w, h, al;
                 int kind = wm_anim_rect(i, &x, &y, &w, &h, &al);
                 if (!kind) continue;
-                dbg_out_printf(o, "%s{\"kind\":%d,\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"alpha\":%d}",
-                             n ? "," : "", kind, x, y, w, h, al);
+                dbg_out_printf(o, "%s{\"kind\":%d,\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
+                             "\"alpha\":%d,\"pieces\":%d}",
+                             n ? "," : "", kind, x, y, w, h, al,
+                             wm_anim_pieces(i));
                 n++;
             }
         }

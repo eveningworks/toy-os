@@ -1,0 +1,13 @@
+# What Shatter lets you change. See userland/lib/ueffect.h for the
+# format -- it is the screensavers' descriptor format, because an
+# effect's options are the same kind of thing as a saver's. The values
+# chosen here are written to /etc/effects/shatter.conf.
+Options=pieces,motion
+Option.pieces=enum:coarse,medium,fine:coarse
+Label.pieces=Pieces
+Desc.pieces=How many pieces the window breaks into. More is not better: a tile smaller than a thumbnail stops reading as part of your window.
+Widget.pieces=slider
+Option.motion=enum:pour,explode:pour
+Label.motion=Motion
+Desc.motion=Whether the pieces pour straight to the taskbar or burst outward first.
+Widget.motion=radio

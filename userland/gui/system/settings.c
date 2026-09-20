@@ -45,7 +45,9 @@
 #include "ui/uui_keycapture.h"
 #include "ui/uui_button.h"
 #include "lib/usaver.h"
+#include "lib/ueffect.h" // an EFFECT declares options the same way
 #include "lib/usaver.h"
+#include "lib/ueffect.h" // an EFFECT declares options the same way
 #include "ui/uui_button_group.h"
 #include "ui/uui_statusbar.h"
 #include "ui/uui_scrollview.h"
@@ -146,6 +148,16 @@ static uint32_t g_generation;
 // is open. Synthesising rows keeps load_slot(), relayout_page(), the
 // focus ring and the staging logic on one path -- only the CHOICE LIST
 // and the WRITE know an option from a setting.
+// THE TWO SETTINGS THAT OWN OPTIONS BELOW THEM. A screensaver declares
+// what it lets you change, and since the shatter minimize effect does
+// too (userland/lib/ueffect.h) this page carries either kind -- the
+// same descriptor format, a different pair of directories.
+//
+// Keyed on the SETTING rather than the page's name, because a page
+// renamed in /etc/settings.d would otherwise silently lose its options.
+#define OWNER_SAVER  "desktop.screensaver"
+#define OWNER_EFFECT "desktop.minimize_effect"
+
 static struct usaver g_saver;
 static int g_saver_base = -1;  // first synthesised index, or -1 for none
 static int g_saver_slot = -1;  // first option's slot, or -1
@@ -863,13 +875,14 @@ static const char *staged_value(struct slot *sl);
 // truncates rather than rebuilding the page: re-opening the group would
 // discard a staged timeout, so picking a saver would silently undo the
 // change above it.
-static void rebuild_saver_options(const char *saver) {
+static void rebuild_owner_options(const char *kind, const char *saver) {
     if (g_saver_slot < 0) return;
     g_slot_count = g_saver_slot;
     g_saver_base = -1;
-    if (!saver || !saver[0]) return;
+    if (!kind || !saver || !saver[0]) return;
 
-    usaver_load(saver, &g_saver);
+    if (kind == OWNER_EFFECT) ueffect_load(saver, &g_saver);
+    else                      usaver_load(saver, &g_saver);
     if (!g_saver.opt_count) return;
     g_saver_base = g_setting_count;
 
@@ -891,7 +904,8 @@ static void rebuild_saver_options(const char *saver) {
         // could both claim.
         snprintf(g_name[k], sizeof g_name[k], "%s.%s", saver, o->key);
         g_ns[k][0] = '\0';
-        usaver_conf_path(saver, g_file[k], sizeof g_file[k]);
+        if (kind == OWNER_EFFECT) ueffect_conf_path(saver, g_file[k], sizeof g_file[k]);
+        else                      usaver_conf_path(saver, g_file[k], sizeof g_file[k]);
         g_cat_of[k][0] = '\0';
         g_group_of[k][0] = '\0';
         g_unavail[k][0] = '\0';
@@ -922,11 +936,25 @@ static void rebuild_saver_options(const char *saver) {
 
 // The saver the page is currently showing -- the STAGED one, not what
 // is on disk, so the options follow the dropdown immediately.
-static const char *page_saver(void) {
-    for (int i = 0; i < g_slot_count; i++)
-        if (g_slot[i].setting >= 0 && !opt_of(g_slot[i].setting) &&
-            strcmp(g_name[g_slot[i].setting], "desktop.screensaver") == 0)
-            return staged_value(&g_slot[i]);
+// Which of them setting `idx` is, or NULL for anything else.
+static const char *owner_kind(int idx) {
+    if (idx < 0) return 0;
+    if (!strcmp(g_name[idx], OWNER_SAVER))  return OWNER_SAVER;
+    if (!strcmp(g_name[idx], OWNER_EFFECT)) return OWNER_EFFECT;
+    return 0;
+}
+
+// The page's owner setting and its STAGED value -- what the options
+// below must belong to, which is the value the dropdown shows and not
+// the one on disk.
+static const char *page_owner(const char **kind_out) {
+    for (int i = 0; i < g_slot_count; i++) {
+        if (g_slot[i].setting < 0 || opt_of(g_slot[i].setting)) continue;
+        const char *k = owner_kind(g_slot[i].setting);
+        if (!k) continue;
+        if (kind_out) *kind_out = k;
+        return staged_value(&g_slot[i]);
+    }
     return 0;
 }
 
@@ -1013,9 +1041,11 @@ static void open_group(int g) {
     // that select it. One page rather than a Configure button: the
     // options are meaningless without the saver they belong to, and a
     // dialog would hide the thing Test is there to preview.
-    if (g_test_has) {
+    const char *own_kind = 0;
+    const char *own_name = page_owner(&own_kind);
+    if (own_kind) {
         g_saver_slot = g_slot_count;
-        rebuild_saver_options(page_saver());
+        rebuild_owner_options(own_kind, own_name);
     }
 
     g_advanced_cb.checked = g_show_advanced;
@@ -1551,9 +1581,8 @@ static void on_widget(struct uapp *a, int id, int reason) {
         // than at Apply, because a page still showing the previous
         // saver's controls is one where every value and every bound is
         // the wrong saver's.
-        if (sl->setting >= 0 && !opt_of(sl->setting) &&
-            strcmp(g_name[sl->setting], "desktop.screensaver") == 0) {
-            rebuild_saver_options(staged_value(sl));
+        if (sl->setting >= 0 && !opt_of(sl->setting) && owner_kind(sl->setting)) {
+            rebuild_owner_options(owner_kind(sl->setting), staged_value(sl));
             g_prose_fitted = 0;   // the new rows' text has never been fitted
             relayout_page();
         }

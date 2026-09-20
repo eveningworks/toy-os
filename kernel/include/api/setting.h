@@ -50,7 +50,7 @@
 // KTESTs' four scratch settings had filled the rest), to 48 when the
 // three network-time settings made 32, and to 56 when the two
 // `desktop.tray_*` visibility settings made 45.
-#define SETTING_MAX        72 // registered settings
+#define SETTING_MAX        96 // registered settings
 _Static_assert(SETTING_MAX == SETTING_ABI_MAX,
                "SETTING_MAX and SETTING_ABI_MAX must agree -- a client sizes "
                "its array from the ABI one and would truncate the list");

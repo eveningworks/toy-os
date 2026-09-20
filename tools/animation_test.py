@@ -267,12 +267,22 @@ def run_speed(dbg, res):
 
 
 def run_effects(dbg, qmp, tmp, res):
-    """`desktop.minimize_effect`: scale / genie / squash / glide.
+    """`desktop.minimize_effect`: scale / genie / squash / glide / shatter.
 
-    Two things per effect. It must ANIMATE -- a ghost in flight whose
+    Three things per effect. It must ANIMATE -- a ghost in flight whose
     reported rect actually changes, so an effect that silently fell back
     to drawing nothing would fail. And it must leave NO STALE PIXELS:
     the screen once it has settled must match a forced full repaint.
+
+    AND IT MUST BE THE EFFECT IT SAYS: `pieces` from `gui state --json`
+    is 1 for every effect that moves one box and the tile count for
+    SHATTER, which is the only thing distinguishing the two from
+    outside. A shatter that fell back to drawing a plain scale moves a
+    ghost, leaves no stale pixels, and passes both other checks.
+
+    SHATTER RUNS TWICE, once per motion: `explode` throws tiles OUTSIDE
+    the window, which is a different damage rule, and the stale-pixel
+    check is the only thing that would catch a margin set too small.
 
     THE GENIE IS WHY THE SECOND CHECK EXISTS. It paints a whole tube
     from the window's top edge down to the taskbar button, which is not
@@ -341,19 +351,33 @@ def run_effects(dbg, qmp, tmp, res):
     try:
         dbg.send("sh config set desktop.animation_speed normal")
         dbg.settle(1.0)
-        for eff in ("scale", "genie", "squash", "glide"):
+        for eff, motion in (("scale", None), ("genie", None), ("squash", None),
+                            ("glide", None), ("shatter", "pour"),
+                            ("shatter", "explode")):
+            name = eff if not motion else f"{eff}/{motion}"
+            if motion:
+                # The effect's OWN option file (userland/lib/ueffect.h),
+                # put in place with cp -- the debug console's `sh` runs a
+                # program and does not lex a redirect, so a fixture is
+                # how a test writes a file here.
+                dbg.send(f"sh cp /tests/shatter_{motion}.conf /etc/effects/shatter.conf")
+                # ...and a generation bump so the WM re-reads it: adopt()
+                # runs on a SETTING change, and setting the effect to what
+                # it already is does nothing at all.
+                dbg.send("sh config set desktop.minimize_effect scale")
+                dbg.settle(0.6)
             dbg.send(f"sh config set desktop.minimize_effect {eff}")
             dbg.settle(1.2)
             if not ensure_normal():
-                res.check(f"effect {eff}: the window is up before minimizing it",
+                res.check(f"effect {name}: the window is up before minimizing it",
                           False, "could not get it out of the taskbar")
                 continue
             b = button()
             if not b:
-                res.check(f"effect {eff}: a taskbar button to click", False)
+                res.check(f"effect {name}: a taskbar button to click", False)
                 continue
 
-            rects, peak, saw = set(), 0, False
+            rects, peak, saw, pieces = set(), 0, False, 0
             t0 = time.time()
             dbg.send(f"gui click {b['cx']} {b['cy']}")
             while time.time() - t0 < 4.0:
@@ -362,20 +386,27 @@ def run_effects(dbg, qmp, tmp, res):
                 peak = max(peak, a)
                 for r in st.get("anim_rects", []):
                     rects.add((r["x"], r["y"], r["w"], r["h"]))
+                    pieces = max(pieces, r.get("pieces", 0))
                 if a:
                     saw = True
                 elif saw:
                     break
-            res.check(f"effect {eff}: a ghost flies and MOVES",
+            res.check(f"effect {name}: a ghost flies and MOVES",
                       peak >= 1 and len(rects) >= 2,
                       f"anims peak={peak} distinct rects={len(rects)}")
+            # THE ONE CHECK A FALLBACK CANNOT PASS. Everything else here
+            # is satisfied by any effect that moves a box to the button.
+            want = "many" if eff == "shatter" else "one"
+            ok = pieces > 1 if eff == "shatter" else pieces == 1
+            res.check(f"effect {name}: drawn as {want} piece(s)", ok,
+                      f"pieces={pieces}")
 
             dbg.settle(1.5)
-            live_p = os.path.join(tmp, f"eff_{eff}_live.png")
+            live_p = os.path.join(tmp, f"eff_{name.replace(chr(47), chr(95))}_live.png")
             qmp.screenshot(live_p, settle=0.0, stable=True)
             live = Image.open(live_p).convert("RGB")
             full_repaint()
-            ref_p = os.path.join(tmp, f"eff_{eff}_full.png")
+            ref_p = os.path.join(tmp, f"eff_{name.replace(chr(47), chr(95))}_full.png")
             qmp.screenshot(ref_p, settle=0.0, stable=True)
             ref = Image.open(ref_p).convert("RGB")
 
@@ -385,7 +416,7 @@ def run_effects(dbg, qmp, tmp, res):
                     a_, c_ = live.getpixel((x, y)), ref.getpixel((x, y))
                     if max(abs(a_[i] - c_[i]) for i in range(3)) > 24:
                         bad.append((x, y))
-            res.check(f"effect {eff}: nothing stale once it has settled",
+            res.check(f"effect {name}: nothing stale once it has settled",
                       len(bad) == 0,
                       f"{len(bad)} px differ from a full repaint, first {bad[:3]}")
 
