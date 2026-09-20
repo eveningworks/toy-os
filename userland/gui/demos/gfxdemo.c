@@ -235,9 +235,16 @@ static void on_size(int *w, int *h) {
     int cw = ugfx_char_w();
     // The boxes are measured before on_open() has made them: give them
     // their labels here, once. on_open() re-inits with the same values.
-    uui_checkbox_init(&g_aa_check, 0, 0, 0, "anti-aliased (A)", 0, 0);
-    uui_checkbox_init(&g_shade_check, 0, 0, 0, "shaded (F)", 0, 0);
-    uui_checkbox_init(&g_tex_check, 0, 0, 0, "textured (T)", 0, 0);
+    // UUI_COLOR_UNSET, never 0: the sentinel is 0xFF000000 (ui/utheme.h),
+    // so a 0 here is an explicit BLACK that the theme never gets to
+    // answer -- which is what made one of these draw its glyphs blended
+    // against black on a light panel, and grey to black when disabled.
+    uui_checkbox_init(&g_aa_check, 0, 0, 0, "anti-aliased (A)",
+                       UUI_COLOR_UNSET, UUI_COLOR_UNSET);
+    uui_checkbox_init(&g_shade_check, 0, 0, 0, "shaded (F)",
+                       UUI_COLOR_UNSET, UUI_COLOR_UNSET);
+    uui_checkbox_init(&g_tex_check, 0, 0, 0, "textured (T)",
+                       UUI_COLOR_UNSET, UUI_COLOR_UNSET);
     ugfx_texture_checker(g_tex_px, TEX_SIZE, TEX_SIZE, 8,
                          ugfx_rgb(235, 235, 240), ugfx_rgb(60, 80, 130));
     int bar_w = 2 * MARGIN + 4 * button_w() + 3 * 6;
@@ -624,6 +631,10 @@ static void on_open(struct uapp *a) {
     // projection is real, and a solid hides the far edges that show it.
     uui_checkbox_init(&g_shade_check, 0, checkbox_y(), ugfx_char_h(),
                        "shaded (F)", UTHEME_PANEL_BG, UTHEME_TEXT);
+    // ...and the third one, which on_open used to leave with whatever
+    // on_size's measuring init gave it.
+    uui_checkbox_init(&g_tex_check, 0, checkbox_y(), ugfx_char_h(),
+                       "textured (T)", UTHEME_PANEL_BG, UTHEME_TEXT);
     layout();
 
     ulog("gfxdemo: ready\n");
