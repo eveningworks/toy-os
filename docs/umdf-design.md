@@ -4,7 +4,7 @@ A staged plan, in the shape `docs/winserver-ring3-design.md` used. It
 answers "what would it take to run a device driver as a process here,
 what does that actually buy, and which driver goes first?"
 
-**STAGE 1 IS BUILT (2026-09-20); stages 2-5 are not.** The stage
+**STAGES 1 AND 2 ARE BUILT (2026-09-20); stages 3-5 are not.** The stage
 markers are the authority, and they are on the headings -- if a stage
 ever splits, put its marker on each half (the window-server plan's
 stage 6 split and its heading kept saying "outstanding" for eleven
@@ -64,7 +64,7 @@ were half-built already, because the compositor needed the same things.
 | a BAR's address and size | `pci_bar_addr()`, `pci_bar_mem_size()` | **built**, size-probed once at enumeration |
 | is a ring-0 driver bound to it? | `pci_device_driver()`, `g_bound[]` | **built** -- stage 1 refuses on it |
 | single-holder access to a device | the compositor ROLE (`win_role.c`) | **the pattern exists**, for one device |
-| a CLAIM, and a way to make ring 0 let go | -- | **nothing** -- stage 2 |
+| a CLAIM, and a way to make ring 0 let go | `SYS_DEV_CLAIM`, `pci_device_release()` | **BUILT, stage 2** |
 | deliver an interrupt to a process | -- | **nothing** -- stage 4 |
 | pinned, physically contiguous memory | `pmm_alloc_contiguous()` | built for kernel callers; no ring-3 path -- stage 5 |
 
@@ -132,58 +132,77 @@ combining lets stores merge and arrive out of order, which is correct
 for pixels and wrong for a register file -- a doorbell written before
 the descriptor it announces is a hang that reproduces once a week.
 
-### Stage 2 -- a claim, so two drivers cannot hold one device
+### Stage 2 -- a claim, so two drivers cannot hold one device -- DONE 2026-09-20
 
-**NOT BUILT. This is where the next session starts**, and stage 1 left
-it the smaller half of the job: the grant already refuses a bound
-device, so what stage 2 adds is the other direction -- a way for the
-kernel to LET GO, and a record of who holds a device once it has.
+A process claims a device by index. The kernel unbinds its ring-0
+driver, records the holder, and the BAR grant then REQUIRES that claim
+-- so an unbound device stopped being a free-for-all too. The claim
+drops when the process dies. That is `vfio-pci`'s unbind-then-bind,
+minus the sysfs.
 
-A process claims a device by (bus, device, function). The kernel refuses
-if a ring-0 driver is bound to it (`DRIVER_DECLARE`) or another process
-holds the claim; the claim drops when the process exits, and the grant
-goes with it. That is `vfio-pci`'s unbind-then-bind, minus the sysfs.
+**What shipped** (`SYS_DEV_CLAIM` 119, `SYS_DEV_RELEASE` 120):
 
-**What is already in place, so none of it needs designing again:**
+| piece | where |
+|---|---|
+| the claim table, the syscalls and `QUERY_PCIDEV` | `kernel/drivers/dev_claim.c` |
+| the unbind, and the re-probe that undoes it | `pci_device_release()` / `pci_device_rebind()`, `kernel/drivers/pci_bind.c` |
+| is this device releasable at all? | `pci_device_removable()`, beside them |
+| the grant now requires the claim | `dev_bar_check()`, which grew a `pml4` argument |
+| the claim dies with its address space | `release_process_state()`, `kernel/proc/syscall.c` |
+| the first BUILT-IN driver that can let go | `hda_remove()`, `kernel/drivers/sound/hda.c` |
+| who has each device, from ring 3 | `lspci -k` |
+| the tests | 5 KTESTs in `dev_claim.c`, `userland/tests/devclaim_test.c`, `tools/devclaim_test.py` |
 
-- `pci_device_driver()` answers "is a ring-0 driver bound to this?",
-  and `g_bound[]` in `kernel/drivers/pci_bind.c` is where that lives.
-  A claim writes to the same table or beside it.
-- `dev_bar_check()` is the single place a grant is decided, so the
-  claim check goes there and every caller inherits it.
-- The grant is recorded as an `MMAP_KIND_MMIO` region, so "drop the
-  claim when the process exits" already has the teardown half: the
-  region goes with the address space and the pages are borrowed.
+**The three questions, answered:**
 
-**The three questions stage 2 has to answer**, none of them settled:
+1. **Can a bound driver be asked to let go?** Yes, and that is the
+   gate. A driver with no `remove()` can never be claimed -- a driver
+   CAPABILITY standing in for a privilege check this kernel has no uid
+   for. `hda` is the first BUILT-IN driver to gain one; `e1000` and
+   `r8169` already had one, because a module cannot be unloaded
+   without it. So the claimable set today is the sound card and the
+   NICs, and NO STORAGE CONTROLLER -- which is what keeps the root
+   filesystem out of reach, and is asserted by a KTEST rather than
+   assumed.
+2. **What revokes a grant?** Nothing needs to. The mapping is
+   BORROWED and dies with the address space, and the claim is dropped
+   in the same teardown -- so there is no window where a revoked
+   mapping is a hole, and `win_surface.c`'s poison page is not needed
+   here. A device is left UNBOUND when its holder dies, because a
+   supervised driver has to find it free when it restarts.
+3. **Who may claim?** Whoever asks, once the device is releasable.
+   Said plainly as NOT a permission model, the way `MKPART_CONFIRM` is.
+   `dev_claim_take()` is the one place a uid check would go.
 
-1. **Can a bound ring-0 driver be asked to let go, or only refused?**
-   `pci_driver_remove_table()` exists for module unload, which is the
-   nearest thing. The cheap version is "a device with a compiled-in
-   driver can never be claimed", which is honest and leaves HDA out of
-   reach -- and HDA is the whole point, so it is probably not enough.
-2. **What revokes a grant?** The compositor's answer is the one to copy
-   and the reason is written in `win_surface.c`: a process preempted
-   mid-store does not stop because the kernel decided it should, so a
-   revoked mapping points at a scratch page rather than becoming a
-   hole. A revoked BAR wants the same, or the symptom is a #PF in a
-   driver that did nothing wrong.
-3. **Who may claim at all?** There is no user model in this kernel
-   (`SETTING_OP_RELOAD`'s comment says so), so the first claim is also
-   the first thing in the tree that says "not you". The compositor role
-   is the precedent for single-holder-and-kernel-checked; what it does
-   NOT have is a notion of privilege, and a claim probably needs one.
+**Four things it cost, worth not paying twice:**
 
-The compositor role is the in-tree precedent for a single-holder,
-kernel-checked claim, and its lesson comes too: `win_surface.c` keeps a
-revoked mapping pointing at a scratch page rather than unmapping it,
-because a process preempted mid-store does not stop when the kernel
-decides it should. A revoked BAR needs the same treatment or the answer
-is a #PF in a driver that did nothing wrong.
+- **A `probe()` MAY NOT BE CALLED WITH INTERRUPTS OFF, and two routes
+  now do.** `hda_probe()` waits 30 ms for the link; on a machine whose
+  clocksource is the PIT that is a `pit_ticks()` loop, and a syscall
+  runs with IF clear -- the machine stopped dead at one instruction,
+  no panic, no log. `driver_ctx_enter()` in `pci_bind.c` now brackets
+  every probe AND every remove with interrupts on and preemption off.
+  `sys_modload` had the same latent bug through `pci_rebind()` and is
+  fixed by the same bracket.
+- **A released controller is handed over IN RESET, and its registers
+  then read ZERO.** `hda_remove()` writes GCTL.CRST low on its way
+  out, so a ring-3 driver's first job is to bring the controller up --
+  and CRST reading back high is the write being accepted, not the link
+  being ready: GCAP stays 0 until the codecs are out of reset. The
+  ring-3 driver SLEEPS for that, which is the thing the kernel's probe
+  cannot do.
+- **AN MMIO REGISTER IS READ AT ITS OWN WIDTH.** GCAP is 16 bits, and
+  reading it as two bytes gave `0x0001` against the kernel's `0x4401`
+  -- the byte at +1 does not decode, because a device models a
+  REGISTER, not memory. It passed a "not all-ones" check either way.
+- **A claim is not containment, and the kernel can still reach the
+  registers.** `paging_map_device()` returns the identity map for a BAR
+  below 4 GiB, so ring 0 never loses its view. What a claim removes is
+  the DRIVER, not the access.
 
 ### Stage 3 -- the codec graph moves, and nothing else
 
-HDA's widget enumeration -- ~250 lines that walk what the card reports
+**NEXT, and stage 2 unblocked it.** HDA's widget enumeration -- ~250 lines that walk what the card reports
 about itself -- becomes a ring-3 program reading the same registers
 through the stage-1 grant. **It needs no DMA and no interrupt:** CORB
 and RIRB are MMIO rings, polled.

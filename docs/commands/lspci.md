@@ -7,11 +7,18 @@
 ## Synopsis
 
 ```
-lspci [--update]
+lspci [-k] [--update]
 ```
 
 ## Options
 
+- `-k` -- add a line per device naming **who has it**: the bound ring-0
+  driver (`kernel driver: hda`), or the ring-3 process that has taken
+  the device off the kernel (`claimed by pid 14`), or `no driver`.
+  Linux's `-k` prints the first of those three; the second is toy-os's
+  own, and is what a device claim looks like from outside
+  (`docs/umdf-design.md`). See [lsdrv](lsdrv.md) for the same binding
+  seen from the driver's side.
 - `--update` -- refresh the id database from the internet and exit,
   printing nothing about the machine's own devices. It is
   `hwdata update pci`, which it hands off to; see

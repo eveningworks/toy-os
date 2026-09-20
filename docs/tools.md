@@ -2741,6 +2741,26 @@ window without going through it will find its layout polls timing out.
   get`, since boot chatter mentions `ac97` too and a substring match
   passed on a guest whose setting had not been restored at all. On
   demand, not in the gate: it boots its own guest with extra hardware.
+- **`devclaim_test.py`** -- a ring-3 process takes the sound card OFF
+  THE KERNEL, reads its registers, and gives it back (stage 2 of
+  `docs/umdf-design.md`). It boots its own guest with an
+  `ich9-intel-hda` because `hda` is the only driver whose device the
+  default headless boot both HAS and can let go of -- so this is the
+  only run in which the kernel actually releases a device it was
+  driving. **The
+  assertions are about the DRIVER's state, read from outside the
+  claim**, because the in-guest test's unbound-device leg is green on
+  any machine and would pass against a claim that recorded a pid and
+  unbound nothing: `lspci -k` says `kernel driver: hda` before, the
+  process reads `HD Audio 1.0` out of BAR0 while it holds it, and
+  `lspci -k` says `kernel driver: hda` again afterwards. The round trip
+  is `sound: hda0 registered` appearing TWICE in one boot -- once at
+  probe, once when `DEV_RELEASE_REBIND` re-probes -- which nothing but
+  a real remove-and-reprobe produces. `--no-card` is the positive
+  control: the same run with no controller, where the in-guest test
+  must SAY it skipped the unbind leg, so a tool whose HDA assertions
+  silently matched nothing cannot look like a pass. On demand, not in
+  the gate: it boots its own guest with extra hardware.
 - **`install_test.py`** gained an `mbr` medium (`--media mbr`) covering
   `install --mbr` end to end, and **three fixes to the tool itself, all
   of which made a healthy system report as broken**. `--instance auto`

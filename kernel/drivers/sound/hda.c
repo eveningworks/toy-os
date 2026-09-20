@@ -813,8 +813,10 @@ static const char *vendor_name(uint32_t vendor) {
 static void diag_tone(struct hda_ctrl *h, int16_t *ring);
 static struct hda_ctrl *test_ctrl(void);
 
-static void ctrl_teardown(struct hda_ctrl *h, const char *why) {
-    klog_printf("%s: %s -- not registered\n", h->name, why);
+// The hardware half: every engine off and the controller back in
+// reset. Shared with hda_remove(), which has nothing to apologise for
+// and so does not want ctrl_teardown()'s line.
+static void ctrl_quiesce(struct hda_ctrl *h) {
     mw32(h, HDA_INTCTL, 0);
     mw8(h, HDA_CORBCTL, 0);
     mw8(h, HDA_RIRBCTL, 0);
@@ -822,6 +824,11 @@ static void ctrl_teardown(struct hda_ctrl *h, const char *why) {
     if (h->dma_phys) pmm_free_contiguous(h->dma_phys, 1);
     h->dma_phys = 0;
     h->mmio = 0;
+}
+
+static void ctrl_teardown(struct hda_ctrl *h, const char *why) {
+    klog_printf("%s: %s -- not registered\n", h->name, why);
+    ctrl_quiesce(h);
 }
 
 static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index) {
@@ -1009,13 +1016,48 @@ static const struct pci_match hda_matches[] = { PCI_MATCH_CLASS(0x04, 0x03, PCI_
 
 // Once per controller: a laptop has the PCH's and the GPU's.
 static void hda_probe(const struct pci_device *d) {
-    if (g_nctrl >= HDA_MAX_CTRL) {
+    // A FREE SLOT, not the next one: hda_remove() frees one in the
+    // middle, and a bump counter would leak it and rename the
+    // controller on every re-probe. g_nctrl stays the high-water mark
+    // every walk over the array bounds itself with.
+    int slot = -1;
+    for (int i = 0; i < HDA_MAX_CTRL; i++) if (!g_hc[i].pci) { slot = i; break; }
+    if (slot < 0) {
         klog_printf("hda: a %dth controller at %02x:%02x.%u -- not driven\n",
-                    g_nctrl + 1, d->bus, d->device, d->function);
+                    HDA_MAX_CTRL + 1, d->bus, d->device, d->function);
         return;
     }
-    ctrl_init(&g_hc[g_nctrl], d, g_nctrl);
-    g_nctrl++;
+    ctrl_init(&g_hc[slot], d, slot);
+    if (slot >= g_nctrl) g_nctrl = slot + 1;
+}
+
+// What makes HDA claimable from ring 3 (docs/umdf-design.md stage 2).
+// The first remove() on a BUILT-IN driver; the two NIC modules already
+// had one, since a module cannot be unloaded without it. Order matters twice: the core
+// is told before the registers go, because its stop() writes to them;
+// and the interrupt is silenced before the controller is reset, or a
+// line still unmasked fires into a handler whose controller is gone.
+static void hda_remove(const struct pci_device *d) {
+    struct hda_ctrl *h = 0;
+    for (int i = 0; i < g_nctrl; i++) if (g_hc[i].pci == d) { h = &g_hc[i]; break; }
+    if (!h) return;
+
+    // `mmio` is 0 for a controller whose init failed: there is nothing
+    // to quiesce, but the SLOT still has to come free or the device can
+    // never be re-probed.
+    if (h->mmio) {
+        if (h->registered) sound_unregister(&h->dev);
+        h->registered = 0;
+
+        if (h->msi_vector) pci_msi_release(d, h->msi_vector);
+        else if (h->irq) { irq_mask(h->irq); irq_unregister_handler(h->irq, hda_irq); }
+        h->msi_vector = 0;
+        h->irq = 0;
+
+        ctrl_quiesce(h);
+    }
+    h->pci = 0;
+    klog_printf("%s: released %02x:%02x.%u\n", h->name, d->bus, d->device, d->function);
 }
 
 // --- KTESTs -- skip without the device, like ac97's -------------------
@@ -1065,4 +1107,4 @@ KTEST("hda", "a volume change lands in the route's amplifier") {
     KTEST_ASSERT_EQ(hda_cmd(h, h->spk.vol_nid, V4(VERB_GET_AMP, AMP_OUT | AMP_LEFT), &amp), 0);
     KTEST_ASSERT_EQ(amp & 0x7F, h->spk.vol_offset);
 }
-PCI_DRIVER("hda", hda_matches, hda_probe);
+PCI_DRIVER_REMOVABLE("hda", hda_matches, hda_probe, hda_remove);

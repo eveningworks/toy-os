@@ -505,6 +505,14 @@ struct query_fsstat {
 // how many it missed.
 #define QUERY_REMOTELOG 42
 
+// WHO HAS EACH PCI DEVICE: the ring-0 driver the bus bound, and the
+// ring-3 process that has taken it instead (docs/umdf-design.md stage
+// 2). One record per enumerated device, in SYS_PCI_INFO's order, so
+// `index` is the number SYS_DEV_CLAIM and SYS_DEV_MAP_BAR take. A
+// LIST: `lspci -k` is the reader, the way Linux's `lspci -k` shows
+// "Kernel driver in use".
+#define QUERY_PCIDEV 43
+
 #define QUERY_REMOTE_SESSION  0 // a session opened or closed
 #define QUERY_REMOTE_COMMAND  1 // a command line the remote shell ran
 #define QUERY_REMOTE_SPAWN    2 // a program a remote session started
@@ -870,6 +878,14 @@ struct query_driver {
     char file[64];      // the source file it declared itself in, for -v
     char desc[48];      // one line saying what it is, or "" -- also -v
     char devices[64];   // "enp3s0 usb:13", or "" for none
+};
+
+// QUERY_PCIDEV's record. Both fields can be empty at once -- a device
+// no driver matched and nobody has claimed, which is most of them.
+struct query_pcidev {
+    uint32_t index;      // SYS_PCI_INFO's, and SYS_DEV_CLAIM's
+    int32_t  holder_pid; // the process holding it, or 0
+    char     driver[16]; // the bound ring-0 driver, or ""
 };
 
 // QUERY_MODULE: one record per loaded module (kernel/core/module.c).

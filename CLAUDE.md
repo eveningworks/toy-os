@@ -645,6 +645,7 @@ runners themselves; `--list` on either runner is the live answer.
 
 `ahci_test.py`, `ansi_cursor_test.py`, `audio_test.py`, `boot_rate.py`,
 `console_bleed_test.py`, `console_shell_test.py`, `ctrlc_test.py`,
+`devclaim_test.py`,
 `cursor_ibeam_test.py`, `dash_gap.py`, `dash_test.py`, `diskmark_test.py`,
 `divti3_hostcheck.py`, `doc_test.py`, `doom_sound_test.py`,
 `dup_scan.py`,

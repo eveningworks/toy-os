@@ -2525,3 +2525,74 @@ the PIC-mode table a firmware hands an OS that never called `_PIC` --
 and QEMU's GSI handler fans every PIRQ out to the same-numbered I/O
 APIC input, so the BIOS's line IS the input. Making the reader execute
 `_CRS` to reach the same number would be the interpreter for no gain.
+
+## A device claim is state on the DEVICE, its gate is the driver's `remove()`, and a probe runs with interrupts on
+
+Stage 2 of `docs/umdf-design.md` (2026-09-20) -- the kernel letting go
+of a device so a ring-3 driver can have it. Stage 1 could only ever
+grant a device no ring-0 driver wanted, which is every device that does
+not matter.
+
+**What real systems do.** Linux VFIO splits it in two: a device is
+*released* by a runtime `unbind` write or a boot-time reservation
+(`vfio-pci.ids=`, `pci-stub`), and *claimed* by opening
+`/dev/vfio/<group>` -- the group fd IS the claim, closing it releases,
+and the node's permissions plus `CAP_SYS_ADMIN` are the authorization.
+Windows UMDF has no runtime release at all: the PnP manager assigns a
+device to a host process when the INF is installed. macOS DriverKit
+gates it on a code-signing entitlement. Genode's platform driver hands
+out device sessions by a policy file naming which component gets which
+device.
+
+**The claim is a syscall pair and a table beside the binding, not an
+fd.** The fd is VFIO's shape and `FD_KIND_SHM` is the in-tree precedent
+for one you may only mmap, so a new kind would have been cheap. Two
+things decided against it. A claim fd is inherited by `fork()` and
+`dup`able, so "exactly one holder" quietly becomes "one open-file
+description" and `lspci -k` can no longer name a pid. And the claim is
+state about the DEVICE, not about the process: keeping it next to
+`g_bound[]` means `pci_device_driver()` and `dev_claim_holder_pid()`
+answer the same question from one place. The fd remains the exit if a
+claim ever has to be passed between processes.
+
+**The gate is the driver's `remove()`, because there is no uid to
+check.** A device whose bound driver cannot let go can never be
+claimed; among releasable devices it is first come, first served. That
+is a driver CAPABILITY standing in for a privilege check, and it is
+said plainly rather than dressed up as a permission model -- the same
+honesty `MKPART_CONFIRM` is written with.
+
+**What it actually admits, measured rather than assumed:** `hda`, and
+the two NIC drivers -- a MODULE must have a `remove()` to be unloadable
+at all, so `e1000` and `r8169` were `PCI_DRIVER_REMOVABLE` before this
+existed. So a process can take the network card, which is a denial of
+service no worse than `kill`ing `netd`, and it is why the next ring-3
+driver starts at stage 3 rather than at zero. **No STORAGE controller
+has a `remove()`**, so the root filesystem cannot be claimed out from
+under the filesystem -- and that is the one a KTEST asserts directly,
+rather than trusting a list that will change. When a user model arrives
+the check has one home, `dev_claim_take()`.
+
+**A dropped claim does NOT rebind.** A process that dies holding a
+device leaves it unbound, because a supervised driver is restarted and
+must find it free -- taking it back there would race the restart and
+the ring-0 driver would win about half the time. `DEV_RELEASE_REBIND`
+is how a device goes back deliberately, which is the half vfio-pci's
+sticky unbind cannot do without sysfs.
+
+**AND A `probe()` RUNS WITH INTERRUPTS ON, which the bus now
+guarantees.** Every probe here was written for INITCALL context, where
+IF is set and a driver may sleep. Two routes reach one from a syscall
+-- `sys_modload` through `pci_rebind()`, and `SYS_DEV_RELEASE` through
+`pci_device_rebind()` -- where `context_switch.asm` leaves IF clear.
+`hda_probe()` waits 30 ms for the link, and on a machine whose
+clocksource is the PIT that is a `pit_ticks()` loop the timer can never
+advance: the machine stopped dead at one instruction, with no panic and
+no log, and QMP's `info registers` named it (`RBX=4`, the tick target
+`clocksource_delay_ms(30)` computes). `driver_ctx_enter()` brackets
+every probe AND every remove with interrupts on and preemption still
+disabled, so what a callback walks is not re-entered and only the timer
+is let in. Linux is
+the same shape. The `sys_modload` half of this was latent before stage
+2 and is fixed by the same function -- it had never bitten because the
+two modular drivers' probes do not sleep.

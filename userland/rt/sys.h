@@ -422,10 +422,27 @@ int sys_pci_count(void);
 int sys_pci_info(int index, struct pci_device *out);
 // A device's register file, mapped into this process -- stage 1 of
 // docs/umdf-design.md. `index` is SYS_PCI_INFO's, `bar` is 0..5.
-// Returns the address, or -1 with errno: EBUSY when a ring-0 driver
-// holds the device, ENOTSUP for an I/O BAR, EINVAL for a BAR with
-// nothing behind it.
+// Returns the address, or -1 with errno: EACCES when this process has
+// not CLAIMED the device, EBUSY when another one has (or a ring-0
+// driver still holds it), ENOTSUP for an I/O BAR, EINVAL for a BAR
+// with nothing behind it.
 int64_t sys_dev_map_bar(int index, int bar);
+
+// Take the device off the kernel -- stage 2. Unbinds its ring-0
+// driver, if any, and records this process as the holder; the claim is
+// what SYS_DEV_MAP_BAR then requires. Re-claiming is idempotent.
+// 0, or -1 with errno: ENOTSUP when the bound driver cannot let go
+// (the only gate there is -- see abi/syscall_abi.h), EBUSY when
+// another process holds it, EPERM from the legacy `run` loader.
+//
+// THE CLAIM IS DROPPED IF THIS PROCESS DIES, and the device is then
+// left unbound so a restarted driver finds it free.
+int sys_dev_claim(int index);
+
+// Give it back. With DEV_RELEASE_REBIND the kernel re-probes the
+// device so its ring-0 driver takes it again; without, it stays
+// unbound. -1 with EACCES when this process is not the holder.
+int sys_dev_release(int index, unsigned flags);
 int sys_cpu_info(struct cpu_info *out);
 
 // Fills `buf` with `n` random bytes from the kernel's entropy source.

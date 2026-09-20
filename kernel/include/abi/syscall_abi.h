@@ -2334,6 +2334,47 @@ struct mmap_msg {
 // value here is crash isolation and getting a PARSER out of ring 0.
 #define SYS_DEV_MAP_BAR 118
 
+// --- taking a device off the kernel (docs/umdf-design.md stage 2) ----
+//
+// SYS_DEV_MAP_BAR above could only ever grant a device NO ring-0 driver
+// wanted. These two are what make the kernel LET GO of one it had, and
+// what records who holds it afterwards -- vfio-pci's unbind-then-bind,
+// without the sysfs.
+//
+// **THE ONLY GATE IS THE DRIVER'S `remove()`.** This kernel has no uid
+// to check (abi/partition_abi.h says so at length), so a driver
+// CAPABILITY stands in for a privilege check: a device whose driver
+// cannot let go can never be claimed, and NO STORAGE CONTROLLER has
+// one -- so the root filesystem cannot be taken. The sound card and
+// the NICs can be, and among them it is first come, first served.
+// That is not a permission model and is not described as one.
+
+#define SYS_DEV_CLAIM 119 // RDI = the PCI device index (as SYS_PCI_INFO
+                          // and SYS_DEV_MAP_BAR take). Unbinds the
+                          // ring-0 driver, if any, and records the
+                          // caller as the holder. Re-claiming by the
+                          // same process is idempotent. Returns 0, or:
+                          // -EINVAL no such device, -EPERM the caller
+                          // has no address space (the legacy `run`
+                          // loader -- use `spawn`), -EBUSY another
+                          // process holds it, -ENOTSUP a ring-0 driver
+                          // is bound and has no remove().
+                          //
+                          // The claim drops when the process exits, and
+                          // the device is then left UNBOUND: a
+                          // supervised driver that crashed has to find
+                          // it free when it restarts.
+
+#define SYS_DEV_RELEASE 120 // RDI = the device index, RSI = flags.
+                            // Drops the claim. Returns 0, -EINVAL for
+                            // an unknown device, -EACCES when the
+                            // caller does not hold it.
+#define DEV_RELEASE_REBIND 1 // ...and let the ring-0 driver take the
+                             // device back, by re-probing it. Without
+                             // it the device stays unbound, which is
+                             // what a driver about to be restarted
+                             // wants.
+
 #define SYS_EXEC 109 // RDI = pointer to a `struct spawn_msg`: `path`,
                      // `args` (with or without SPAWN_ARGV) and `env`
                      // as for SYS_SPAWN. Replaces the CALLER's image

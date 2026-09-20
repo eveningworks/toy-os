@@ -717,6 +717,15 @@ int64_t sys_dev_map_bar(int index, int bar) {
                         (uint64_t)(int64_t)bar));
 }
 
+int sys_dev_claim(int index) {
+    return (int)err(syscall1(SYS_DEV_CLAIM, (uint64_t)(int64_t)index));
+}
+
+int sys_dev_release(int index, unsigned flags) {
+    return (int)err(syscall2(SYS_DEV_RELEASE, (uint64_t)(int64_t)index,
+                             (uint64_t)flags));
+}
+
 int sys_cpu_info(struct cpu_info *out) {
     return (int)err(syscall1(SYS_CPU_INFO, (uint64_t)(uintptr_t)out));
 }

@@ -94,6 +94,16 @@ TESTS = [
     # comes back EPERM and the test fails reporting three refusals that
     # never reached the code under test.
     ("devbar_test", None, None, None),
+    # And stage 2: the claim, and the kernel letting go of a device it
+    # was driving. SPAWNED for the same reason -- the claim is keyed to
+    # the caller's address space, which the legacy `run` loader has no
+    # scheduler slot for.
+    #
+    # Its HDA leg needs a controller the default headless boot has no
+    # reason to attach, so here it exercises the claim on an unbound
+    # device and NOTES the skip; tools/devclaim_test.py launches a
+    # guest with one for the leg that proves the unbind.
+    ("devclaim_test", None, None, None),
     # The ring-3 half of termkey: the encoder is shared source compiled
     # twice, and the KTESTs would pass whether or not ring 3 linked it.
     ("termkey_test", 0, None, None),

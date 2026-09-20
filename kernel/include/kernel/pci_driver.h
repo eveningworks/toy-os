@@ -64,6 +64,31 @@ const struct pci_driver *pci_driver_at(int i);
 // The driver pci_bind() handed this device to, or NULL.
 const char *pci_device_driver(const struct pci_device *d);
 
+// --- handing a device back ---------------------------------------------
+//
+// The kernel LETTING GO of a device, so a ring-3 driver can take it
+// (docs/umdf-design.md stage 2). vfio-pci's unbind, without the sysfs.
+//
+// A DRIVER WITHOUT remove() CAN NEVER LET GO, and that is the only gate
+// on the whole mechanism: this kernel has no uid to check, so a driver
+// CAPABILITY stands in for a privilege check. No STORAGE controller
+// has a remove(), so the root filesystem cannot be taken.
+
+// Whether pci_device_release() could succeed: 1 when a driver is
+// bound AND has a remove(). Asking is not the same as trying -- a
+// caller that probed by releasing would unbind a live device to
+// find out.
+int pci_device_removable(int index);
+
+// Calls the bound driver's remove() and clears the binding.
+// -ENOENT nothing bound, -EINVAL a bad index, -ENOTSUP no remove().
+int pci_device_release(int index);
+
+// Re-probes one device the bus left unbound -- what undoes a release.
+// 1 bound, 0 no driver matched, negative errno for a bad index or a
+// device that is already bound.
+int pci_device_rebind(int index);
+
 // --- tables that are not in the image: loadable modules ----------------
 //
 // pci_bind() walks the image's `.pci_drivers` section and every table

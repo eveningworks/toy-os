@@ -27,6 +27,7 @@
 #include "pci.h"          // SYS_DEV_MAP_BAR validates against the enumeration
 #include "pci_internal.h" // pci_bar_mem_size -- the probed size, not a guess
 #include "pci_driver.h"   // pci_device_driver -- is a ring-0 driver bound?
+#include "dev_claim.h"    // dev_claim_check -- and has this process claimed it?
 
 // The region containing `addr`, or NULL. Linear over `region_cap`,
 // which is tens: this runs per fault-in and per syscall, not per byte.
@@ -277,12 +278,18 @@ out:
 //     vfio-pci's unbind-first rule, and the reason is not tidiness:
 //     two drivers writing one register file is two doorbells racing
 //     over one device, and the ring-0 one is holding an IRQ handler.
+//   - a device THIS address space has not CLAIMED is refused: -EACCES
+//     when nobody holds it, -EBUSY when somebody else does
+//     (kernel/dev_claim.h). Two processes mapping one unbound device's
+//     registers is the same two-doorbells problem as two drivers.
 // SPLIT OUT SO A KTEST CAN DRIVE THE EXACT PATH ring 3 drives, the same
 // reason setting_dispatch() is its own function: a KTEST runs on the
-// kernel context, which has no address space, so the syscall below
-// refuses it at the first line and every refusal underneath would go
-// untested. Returns 0 and fills `phys`/`npages`, or a negative errno.
-int dev_bar_check(int index, int which, uint64_t *phys, uint64_t *npages) {
+// kernel context, whose address space can hold a claim but which the
+// syscall below refuses at its first line, so every refusal underneath
+// would go untested. Returns 0 and fills `phys`/`npages`, or a
+// negative errno.
+int dev_bar_check(int index, int which, uint64_t pml4,
+                  uint64_t *phys, uint64_t *npages) {
     if (index < 0 || index >= pci_device_count() || which < 0 || which >= 6)
         return -EINVAL;
     const struct pci_device *d = pci_device_at(index);
@@ -304,6 +311,12 @@ int dev_bar_check(int index, int which, uint64_t *phys, uint64_t *npages) {
     // was not asked for. Refused rather than rounded down.
     if (base & 0xFFF) return -ENOTSUP;
 
+    // LAST, so the refusals above are device facts a caller can learn
+    // without holding anything. SYS_DEV_CLAIM is the door.
+    if (!pml4) return -EPERM;
+    int claim = dev_claim_check(index, pml4);
+    if (claim != 0) return claim;
+
     if (phys) *phys = base;
     if (npages) *npages = (size + 4095) / 4096;
     return 0;
@@ -318,7 +331,7 @@ int sys_dev_map_bar(struct syscall_ctx *c) {
     int index = (int)(int64_t)c->a0;
     int which = (int)(int64_t)c->a1;
     uint64_t phys = 0, npages = 0;
-    ret = dev_bar_check(index, which, &phys, &npages);
+    ret = dev_bar_check(index, which, c->pml4, &phys, &npages);
     if (ret != 0) goto out;
 
     uint64_t base = arena_pick(mm, npages);

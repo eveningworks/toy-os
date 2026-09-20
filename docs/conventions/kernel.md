@@ -2634,6 +2634,46 @@ whose table matches. Five things to know:
   drivers bind at enumeration inside the xHCI's probe. Each has its own
   registry, which is the right place for its order.
 
+## A PROCESS CAN TAKE A PCI DEVICE OFF THE KERNEL, THE GATE IS THE DRIVER'S `remove()`, AND A DRIVER CALLBACK RUNS WITH INTERRUPTS ON
+
+`SYS_DEV_CLAIM` / `SYS_DEV_RELEASE` (`kernel/drivers/dev_claim.c`) --
+stage 2 of `docs/umdf-design.md`. A process claims a PCI device by its
+enumeration index; the kernel unbinds the ring-0 driver, records the
+holder, and `SYS_DEV_MAP_BAR` then REQUIRES that claim, so an unbound
+device is not a free-for-all either. `lspci -k` prints who has what.
+**It is crash isolation, not containment** -- there is no IOMMU, and
+`paging_map_device()` hands back the identity map for a BAR below 4
+GiB, so ring 0 never loses its view. What a claim removes is the
+DRIVER, not the access.
+
+**A DRIVER WITH NO `remove()` CAN NEVER BE CLAIMED, and that is the
+only gate.** There is no uid here, so a driver CAPABILITY stands in for
+a privilege check. What it admits today is `hda` and the two NIC
+drivers -- a MODULE needs a `remove()` to be unloadable, so `e1000` and
+`r8169` were `PCI_DRIVER_REMOVABLE` already. **NO STORAGE CONTROLLER
+HAS ONE**, so the root filesystem cannot be taken, and a KTEST asserts
+that directly rather than trusting the list. Ask
+`pci_device_removable()`; a caller that probes by releasing unbinds a
+live device to find out. Among releasable devices it is first come,
+first served, and that is NOT a permission model.
+
+**A DROPPED CLAIM DOES NOT REBIND.** A process that dies holding a
+device leaves it unbound, because a supervised driver is restarted and
+must find it free. `DEV_RELEASE_REBIND` is the deliberate way back.
+
+**AND A DRIVER CALLBACK RUNS WITH INTERRUPTS ON AND PREEMPTION OFF --
+`driver_ctx_enter()` in `pci_bind.c` is what guarantees it.** Every probe was written for
+INITCALL context, where IF is set and a driver may sleep, and two
+routes now reach one from a SYSCALL, where IF is clear: `sys_modload`
+through `pci_rebind()`, and `SYS_DEV_RELEASE` through
+`pci_device_rebind()`. `hda_probe()` waits 30 ms for the link; on a
+machine whose clocksource is the PIT that is a `pit_ticks()` loop, and
+the machine stops dead at one instruction with no panic and no log.
+Preemption stays OFF across the callback, so only the timer is let in.
+**A released controller is handed over IN RESET**, so a ring-3 driver's
+first job is to bring it up -- and CRST reading back high is the write
+being accepted, not the link being ready.
+
 ## A SYSCALL HANDLER RUNS WITH INTERRUPTS OFF, AND A WAIT ON `pit_ticks()` THERE NEVER ENDS
 
 `context_switch.asm` re-enables interrupts on the way OUT of a syscall

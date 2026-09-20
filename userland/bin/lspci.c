@@ -39,6 +39,7 @@
 #include <unistd.h>
 #include <stdlib.h>   // system() -- see update_ids()
 #include "lib/cmd.h"
+#include "query_abi.h" // QUERY_PCIDEV -- the driver, and who claimed it
 
 static void put(const char *s) {
     write(1, s, strlen(s));
@@ -245,6 +246,8 @@ static void load_names(void) {
     close((int)fd);
 }
 
+#define USAGE "lspci [-k] [--update]"
+
 // `lspci --update` is `hwdata update pci`, and it EXECS it rather than
 // repeating it. The fetch reaches TLS, and linking libhttp/libssl into
 // lspci would put mbedTLS behind a command whose whole job is to print
@@ -255,10 +258,34 @@ static int update_ids(void) {
     return system("/bin/hwdata update pci");
 }
 
+// WHO HAS EACH DEVICE, by enumeration index: the bound ring-0 driver
+// and the process that has claimed it (docs/umdf-design.md stage 2).
+// Read once into an array rather than queried per row, since the
+// listing walks devices and the query walks the same order.
+static uint32_t g_index[MAX_DEVS];  // each row's PCI enumeration index
+static struct query_pcidev g_own[MAX_DEVS];
+static int g_own_count;
+
+static void load_owners(void) {
+    struct query_pcidev q;
+    QUERY_FOREACH(QUERY_PCIDEV, q, i) {
+        if (g_own_count >= MAX_DEVS) break;
+        g_own[g_own_count++] = q;
+    }
+}
+
+static const struct query_pcidev *owner_of(uint32_t index) {
+    for (int i = 0; i < g_own_count; i++)
+        if (g_own[i].index == index) return &g_own[i];
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    int kernel_drivers = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--update")) return update_ids();
-        cmd_usage("lspci [--update]");
+        if (!strcmp(argv[i], "-k")) { kernel_drivers = 1; continue; }
+        cmd_usage(USAGE);
         return 1;
     }
 
@@ -270,10 +297,15 @@ int main(int argc, char **argv) {
     if (count > MAX_DEVS) count = MAX_DEVS; // more than this and names are the least of it
 
     for (int64_t i = 0; i < count; i++) {
-        if (sys_pci_info((int)i, &g_dev[g_count]) == 0) g_count++;
+        // The ENUMERATION index is kept, not assumed to be the row
+        // number: a device whose info read fails leaves a gap, and
+        // -k's lookup is by the index the kernel names.
+        if (sys_pci_info((int)i, &g_dev[g_count]) != 0) continue;
+        g_index[g_count++] = (uint32_t)i;
     }
 
     load_names();
+    if (kernel_drivers) load_owners();
 
     for (int i = 0; i < g_count; i++) {
         const struct pci_device *dev = &g_dev[i];
@@ -346,6 +378,25 @@ int main(int argc, char **argv) {
             if (g_device_name[i][0]) {
                 put("  ");
                 put(g_device_name[i]);
+            }
+            put("\n");
+        }
+
+        // `lspci -k`'s line, and the same fact Linux's prints: which
+        // driver is in use. The second half is toy-os's own -- a device
+        // a RING-3 process has taken off the kernel names that process
+        // instead (docs/umdf-design.md).
+        if (kernel_drivers) {
+            const struct query_pcidev *o = owner_of(g_index[i]);
+            put("           ");
+            if (o && o->holder_pid) {
+                put("claimed by pid ");
+                put_udec((uint32_t)o->holder_pid);
+            } else if (o && o->driver[0]) {
+                put("kernel driver: ");
+                put(o->driver);
+            } else {
+                put("no driver");
             }
             put("\n");
         }

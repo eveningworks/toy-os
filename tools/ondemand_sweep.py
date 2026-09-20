@@ -237,6 +237,14 @@ TOOLS = [
     # assertion rather than a guess.
     ("usb_audio",   "usb_audio_test.py",       "USB audio: isoch OUT, and which card plays", True, None,             False),
 
+    # --- a driver in ring 3 -------------------------------------------
+    # Boots its own guest with an HD Audio controller: nothing else
+    # here attaches one, so this is the only run in which the kernel
+    # actually LETS GO of a device it was driving. The second row is
+    # the control.
+    ("devclaim",    "devclaim_test.py",        "ring 3 takes the sound card off the kernel", True, None,             False),
+    ("devclaim_ctl", "devclaim_test.py --no-card", "...and the same with no card, which must skip the leg", True, None, False),
+
     # --- interrupts ---------------------------------------------------
     # The only run in which anything reaches the Local APIC. Its own
     # guest, with USB hardware, because the load-bearing check is that

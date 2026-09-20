@@ -6,6 +6,8 @@
 #include "kfmt.h"
 #include "ktest.h"
 #include "errno.h"
+#include "pci_internal.h" // pci_command_update -- stop a released card mastering
+#include "scheduler.h"    // preempt guard around a probe -- see probe_one()
 
 extern const struct pci_driver __pci_drivers_start[];
 extern const struct pci_driver __pci_drivers_end[];
@@ -54,6 +56,40 @@ int pci_match_device(const struct pci_match *m, const struct pci_device *d) {
     return 1;
 }
 
+// **A DRIVER CALLBACK RUNS WITH INTERRUPTS ON AND PREEMPTION OFF, and
+// the bus is what guarantees it** -- Linux's process context, sized for
+// here. probe() and remove() were written for INITCALL and module
+// teardown; three routes now reach one from a SYSCALL, where
+// `context_switch.asm` leaves IF clear. `hda_probe()` waits 30 ms for
+// the link, which on a PIT clocksource is a `pit_ticks()` loop the
+// timer can never advance: the machine stops dead at one instruction,
+// no panic, no log. Preemption stays off, so nothing a callback walks
+// is re-entered; only the timer is let in.
+static uint64_t driver_ctx_enter(void) {
+    uint64_t flags;
+    __asm__ volatile ("pushfq; popq %0" : "=r"(flags) :: "memory");
+    scheduler_preempt_disable();
+    __asm__ volatile ("sti" ::: "memory");
+    return flags;
+}
+
+static void driver_ctx_leave(uint64_t flags) {
+    if (!(flags & 0x200)) __asm__ volatile ("cli" ::: "memory");
+    scheduler_preempt_enable();
+}
+
+static void probe_one(const struct pci_driver *drv, const struct pci_device *d) {
+    uint64_t f = driver_ctx_enter();
+    drv->probe(d);
+    driver_ctx_leave(f);
+}
+
+static void remove_one(const struct pci_driver *drv, const struct pci_device *d) {
+    uint64_t f = driver_ctx_enter();
+    drv->remove(d);
+    driver_ctx_leave(f);
+}
+
 static const struct pci_driver *driver_for(const struct pci_device *d) {
     int n = pci_driver_count();
     for (int i = 0; i < n; i++) {
@@ -70,6 +106,49 @@ const char *pci_device_driver(const struct pci_device *d) {
     return 0;
 }
 
+// --- handing a device back (pci_driver.h) ------------------------------
+
+int pci_device_removable(int index) {
+    if (index < 0 || index >= pci_device_count() || index >= PCI_MAX_DEVICES)
+        return 0;
+    return g_bound[index] && g_bound[index]->remove ? 1 : 0;
+}
+
+int pci_device_release(int index) {
+    if (index < 0 || index >= pci_device_count() || index >= PCI_MAX_DEVICES)
+        return -EINVAL;
+    const struct pci_driver *drv = g_bound[index];
+    if (!drv) return -ENOENT;
+    if (!drv->remove) return -ENOTSUP;
+
+    const struct pci_device *d = pci_device_at(index);
+    remove_one(drv, d);
+    g_bound[index] = 0;
+    // The bus's own statement that nothing in ring 0 drives this any
+    // more. A driver's remove() quiesces its engine; this stops the
+    // CARD mastering whatever it was last pointed at, which is the
+    // closest thing to vfio-pci's device reset that this kernel has.
+    // Memory decode stays on -- the next holder needs the BAR.
+    pci_command_update(d, 0, PCI_CMD_BUS_MASTER);
+    klog_printf("pci: %s released %02x:%02x.%u\n",
+                drv->name, d->bus, d->device, d->function);
+    return 0;
+}
+
+int pci_device_rebind(int index) {
+    if (index < 0 || index >= pci_device_count() || index >= PCI_MAX_DEVICES)
+        return -EINVAL;
+    if (g_bound[index]) return -EBUSY;
+    const struct pci_device *d = pci_device_at(index);
+    const struct pci_driver *drv = driver_for(d);
+    if (!drv || !drv->probe) return 0;
+    g_bound[index] = drv;
+    probe_one(drv, d);
+    klog_printf("pci: %s took %02x:%02x.%u back\n",
+                drv->name, d->bus, d->device, d->function);
+    return 1;
+}
+
 // Unclaimed devices in enumeration order, the first matching driver
 // each. A probe that finds the device unusable says so itself; the
 // binding is still recorded, because "a driver looked at it" is the
@@ -82,7 +161,7 @@ static int bind_unbound(void) {
         const struct pci_driver *drv = driver_for(d);
         if (!drv || !drv->probe) continue;
         g_bound[i] = drv;
-        drv->probe(d);
+        probe_one(drv, d);
         bound++;
     }
     return bound;
@@ -146,7 +225,7 @@ int pci_driver_remove_table(const struct pci_driver *drivers) {
     }
     for (int i = 0; i < pci_device_count() && i < PCI_MAX_DEVICES; i++) {
         if (!g_bound[i] || !in_table(&g_tables[t], g_bound[i])) continue;
-        g_bound[i]->remove(pci_device_at(i));
+        remove_one(g_bound[i], pci_device_at(i));
         g_bound[i] = 0;
     }
     for (int k = t; k + 1 < g_table_count; k++) g_tables[k] = g_tables[k + 1];

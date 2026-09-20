@@ -1970,11 +1970,27 @@ card at any physical page. Windows UMDF resolves that by forbidding DMA
 in user mode; DriverKit and VFIO require an IOMMU. The plan takes
 UMDF's answer first, which is why the PARSING moves before the DMA.
 
+**Stage 2 is BUILT (2026-09-20).** `SYS_DEV_CLAIM` / `SYS_DEV_RELEASE`:
+the kernel unbinds the ring-0 driver, records the holding process, and
+the BAR grant then REQUIRES that claim -- so an unbound device is no
+longer a free-for-all either. The claim drops when the process dies and
+the device is left UNBOUND, so a supervised driver finds it free when
+it restarts; `DEV_RELEASE_REBIND` is how it goes back deliberately.
+
+**THE ONLY GATE IS THE DRIVER'S `remove()`.** There is no uid here, so a
+driver CAPABILITY stands in for a privilege check: a device whose driver
+cannot let go can never be claimed, and no block driver has one.
+`hda` is the first BUILT-IN driver with one; `e1000` and `r8169`
+already had one, since a module cannot be unloaded without it. So the
+claimable set is the sound card and the NICs, and no storage
+controller.
+That is not a permission model and is not described as one.
+
 **The payoff is stage 3**, not stage 5: HDA's codec graph is ~250 lines
 of ring 0 walking what a card reports about itself -- untrusted input,
 the same argument that moved the font rasteriser and the image decoders
-out. Stage 2 (the claim) is what it waits on, and stage 5 (DMA) is
-gated on an IOMMU decision that is the maintainer's to make.
+out. Stage 5 (DMA) is gated on an IOMMU decision that is the
+maintainer's to make.
 
 **A split driver is a legitimate end state**, not a half-finished one:
 that is what DriverKit's audio drivers are, with the DMA engine behind

@@ -14,9 +14,10 @@
 //     ACCEPTED, and says plainly when the machine has none rather than
 //     reporting a pass it did not earn.
 //
-// These run on the kernel context, which has no address space -- the
-// syscall refuses that at its first line, which is exactly why the
-// validation is a function of its own (kernel/syscalls.h).
+// These run on the kernel context: the syscall refuses that at its
+// first line, which is exactly why the validation is a function of its
+// own (kernel/syscalls.h). The kernel's address space can still hold a
+// CLAIM, so the accepting test below takes one the way ring 3 does.
 #include "ktest.h"
 #include "syscalls.h"
 #include "errno.h"
@@ -25,16 +26,17 @@
 #include "pci_driver.h"
 #include "vmm.h"
 #include "pmm.h"
+#include "dev_claim.h"
 
 #define TEST_VADDR 0x9100000000ULL // clear of uaccess_test's own space
 
 KTEST("devbar", "a BAR index outside the enumeration is refused") {
-    uint64_t phys = 0, npages = 0;
-    KTEST_ASSERT(dev_bar_check(-1, 0, &phys, &npages) == -EINVAL);
-    KTEST_ASSERT(dev_bar_check(pci_device_count(), 0, &phys, &npages) == -EINVAL);
+    uint64_t phys = 0, npages = 0, me = vmm_current_pml4();
+    KTEST_ASSERT(dev_bar_check(-1, 0, me, &phys, &npages) == -EINVAL);
+    KTEST_ASSERT(dev_bar_check(pci_device_count(), 0, me, &phys, &npages) == -EINVAL);
     // Six BARs exist; the seventh is a read off the end of the struct.
-    KTEST_ASSERT(dev_bar_check(0, 6, &phys, &npages) == -EINVAL);
-    KTEST_ASSERT(dev_bar_check(0, -1, &phys, &npages) == -EINVAL);
+    KTEST_ASSERT(dev_bar_check(0, 6, me, &phys, &npages) == -EINVAL);
+    KTEST_ASSERT(dev_bar_check(0, -1, me, &phys, &npages) == -EINVAL);
 }
 
 KTEST("devbar", "a device a ring-0 driver holds is refused, and an I/O BAR too") {
@@ -43,7 +45,7 @@ KTEST("devbar", "a device a ring-0 driver holds is refused, and an I/O BAR too")
         const struct pci_device *d = pci_device_at(i);
         if (!d) continue;
         for (int b = 0; b < 6; b++) {
-            int rc = dev_bar_check(i, b, 0, 0);
+            int rc = dev_bar_check(i, b, vmm_current_pml4(), 0, 0);
             if (pci_bar_is_io(d->bar[b])) {
                 // An I/O BAR is ENOTSUP whoever holds the device: port
                 // I/O needs a permission model this kernel has not got,
@@ -66,23 +68,35 @@ KTEST("devbar", "a device a ring-0 driver holds is refused, and an I/O BAR too")
         KTEST_SKIP("no bound device with a memory BAR, and no I/O BAR");
 }
 
-KTEST("devbar", "an unbound memory BAR is ACCEPTED, with its probed size") {
+KTEST("devbar", "an unbound memory BAR is ACCEPTED once it is CLAIMED") {
     int granted = 0;
+    uint64_t me = vmm_current_pml4();
     for (int i = 0; i < pci_device_count() && !granted; i++) {
         const struct pci_device *d = pci_device_at(i);
-        if (!d || pci_device_driver(d)) continue;
+        if (!d || pci_device_driver(d) || dev_claim_holder_pid(i)) continue;
+        if (dev_claim_take(i, me, 0) != 0) continue;
         for (int b = 0; b < 6; b++) {
             uint64_t phys = 0, npages = 0;
-            if (dev_bar_check(i, b, &phys, &npages) != 0) continue;
+            if (dev_bar_check(i, b, me, &phys, &npages) != 0) continue;
             // The check's own contract: what it fills is the BAR's
             // base and the pages its PROBED size covers, not a guess.
             KTEST_ASSERT(phys == pci_bar_addr(d->bar[b]));
             KTEST_ASSERT((phys & 0xFFF) == 0);
             KTEST_ASSERT(npages == (pci_bar_mem_size(d, b) + 4095) / 4096);
             KTEST_ASSERT(npages > 0);
+            // THE SAME DEVICE AND BAR, refused for the two reasons
+            // stage 2 added -- so what changed is the CLAIM and not
+            // some property of the device. A stranger's address space
+            // is EBUSY; no address space at all is EPERM.
+            KTEST_ASSERT(dev_bar_check(i, b, me + 0x1000, 0, 0) == -EBUSY);
+            KTEST_ASSERT(dev_bar_check(i, b, 0, 0, 0) == -EPERM);
+            dev_claim_drop(i, me, 0);
+            KTEST_ASSERT(dev_bar_check(i, b, me, 0, 0) == -EACCES);
+            KTEST_ASSERT(dev_claim_take(i, me, 0) == 0);
             granted = 1;
             break;
         }
+        dev_claim_drop(i, me, 1);
     }
     // THE POSITIVE CONTROL FOR EVERY REFUSAL ABOVE. Without it, a
     // dev_bar_check() returning -EINVAL unconditionally would leave

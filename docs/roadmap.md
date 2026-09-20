@@ -25,6 +25,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] Replace the preemption guard with a real sleeping lock -- `ata.c`'s sleep now NEEDS it: nothing may park inside `FS_OP()`  *(Scheduler: blocking, priorities, classes)*
+- [ ] HDA's codec graph as a ring-3 program -- the ~250 lines of untrusted-input parsing, which is the payoff  *(A driver in ring 3)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
@@ -729,8 +730,8 @@ run on, not by order.
 ### A driver in ring 3
 
 - [x] ~~A process can map a device's register file (`SYS_DEV_MAP_BAR`), UC and refused while a ring-0 driver holds it~~ DONE 2026-09-20
-- [ ] A device CLAIM, so a ring-0 driver can let go and exactly one holder has a device -- stage 2, and what stage 3 waits on
-- [ ] HDA's codec graph as a ring-3 program -- the ~250 lines of untrusted-input parsing, which is the payoff
+- [x] ~~A device CLAIM, so a ring-0 driver can let go and exactly one holder has a device~~ DONE 2026-09-20
+- [ ] **NEXT** HDA's codec graph as a ring-3 program -- the ~250 lines of untrusted-input parsing, which is the payoff
 - [ ] An interrupt as a wakeup: the handler masks and wakes a futex, the driver acks to unmask
 - [ ] DMA, gated on the IOMMU decision -- without one a ring-3 driver is trusted with physical memory
 
