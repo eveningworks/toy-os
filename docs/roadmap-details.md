@@ -2130,6 +2130,12 @@ CX20751 (`14f1:510f`): speakers, and the headphone jack switching
 both ways through unsolicited responses. The laptop's display-audio
 controller (`8086:160c`) is claimed too and its codec answers nothing
 useful without the GPU's power well, which is the HDMI item above.
+**AND THAT CONTROLLER IS ALSO WHAT THE RING-3 DRIVER WORK TARGETS**
+(`docs/umdf-design.md` stage 3): measured on the ASUS 2026-09-20,
+`00:03.0` is `gcap 0x3001` with codec `8086:2808` and no analog
+output, and it is the device the claim test takes precisely BECAUSE
+taking it cannot silence the machine. Both cannot own it; decide which
+before building either.
 `hdadump` on the GRUB line prints the widget graph; `config set
 kernel.hda_tone on` plays a kernel-written tone with nothing else in the
 loop, which is what found the PCH's NOSNOOP bit (clean sine in, clapping

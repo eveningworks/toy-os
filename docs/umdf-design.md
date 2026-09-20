@@ -207,6 +207,36 @@ about itself -- becomes a ring-3 program reading the same registers
 through the stage-1 grant. **It needs no DMA and no interrupt:** CORB
 and RIRB are MMIO rings, polled.
 
+**WHAT THE HARDWARE RUN ON 2026-09-20 ESTABLISHED, so stage 3 need not
+re-derive it.** On the ASUS (192.168.200.107) the whole round trip runs
+on a REAL controller: claim, map BAR0, bring it out of reset, read the
+codec, release with `DEV_RELEASE_REBIND`, and the kernel re-probes to
+the identical readout. Three facts worth having before starting:
+
+- **That machine has TWO HDA controllers, and they are not
+  interchangeable.** `00:03.0` is Broadwell-U display audio, `gcap
+  0x3001` (0 in, 3 out), codec `8086:2808` -- an HDMI codec with NO
+  analog output, so `hda.c` enumerates it and declines to register it
+  (`no codec with an analog output -- not registered`), from boot and
+  unrelated to any claim. `00:1b.0` is the Wildcat Point-LP / Conexant
+  CX20751, `gcap 0x4401`, and it is the one that drives the speakers.
+- **`00:03.0` IS THE SAFE TARGET and `00:1b.0` IS NOT.** The ring-3
+  test claims the first class-04:03 device, which is the display-audio
+  one, so nothing it does can silence the machine. A stage-3 program
+  that walked the Conexant instead would take the speakers with it.
+- **GCAP DIFFERS FROM QEMU's** (`0x3001` against `0x4401`), which is
+  what makes the readout evidence rather than a constant -- and means a
+  parser must not assume four output streams.
+
+**AND IT COLLIDES WITH THE HDMI/DisplayPort AUDIO ROADMAP ITEM**, which
+wants `00:03.0` driven in ring 0. Both cannot own that controller;
+which one does is a decision to take BEFORE either is built, not after.
+
+**One loose end from stage 2:** `pci_device_removable()` is public on
+`pci_driver.h` and read by nothing but KTESTs. A stage-3 driver asking
+"may I claim this?" is its first real caller; failing that, `lspci -k`
+should show it, or it should not be public.
+
 This is the stage with the real payoff, and it is deliberately first:
 the codec graph is UNTRUSTED INPUT. Node counts, widget types and
 connection lists come off the card, they are attacker-shaped on any

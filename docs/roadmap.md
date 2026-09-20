@@ -915,7 +915,7 @@ run on, not by order.
 - [x] ~~Volume mixer UI, persisted to `/etc`~~ DONE 2026-08-30 -- the tray flyout: slider, mute, device list, wheel
 - [ ] A per-application volume, now that the daemon tells its clients apart -- the flyout has one slider because it had one stream
 - [ ] Release the card when no client plays, PipeWire's suspend-on-idle -- `/tests/tone` needs `service stop soundd` today
-- [ ] HDMI/DisplayPort audio -- the display controller's codec enumerates now (`intel_display.c` holds the power well) and is left silent
+- [ ] HDMI/DisplayPort audio -- the codec enumerates and is left silent; ring-3 stage 3 wants the same `00:03.0`
 - [ ] One volume taper for every card -- `hda.c` and `sound_usb.c` share the 40 dB convention, `ac97.c` is still linear in attenuation steps
 - [ ] MPEG-2/2.5 Layer III (the half-rate sample rates), and Layer I/II -- refused with -ENOTSUP today
 - [ ] Intensity stereo in the MP3 decoder -- refused, because nothing available encodes it to test against
