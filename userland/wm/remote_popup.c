@@ -168,12 +168,16 @@ void remote_geometry(struct remote_geom *g) {
 
 // --- state ------------------------------------------------------------
 
-void remote_damage(void) {
+int remote_rect(int *x, int *y, int *w, int *h) {
     struct remote_geom g;
     remote_geometry(&g);
-    wm_damage_window_rect(g.x, g.y, g.w, g.h);   // plus its shadow (wm_shadow.h)
-    redraw_pending = 1;
+    *x = g.x; *y = g.y; *w = g.w; *h = g.h;
+    return 1;
 }
+
+// The rules -- the shadow, and the rect it last occupied -- are
+// the core's now (wm_overlay.h).
+void remote_damage(void) { wm_overlay_damage("remote"); }
 
 static void remote_open_now(void) {
     wm_overlay_close_others("remote");

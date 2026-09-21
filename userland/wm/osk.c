@@ -213,12 +213,14 @@ int osk_key_box(const char *cap, int *x, int *y, int *w, int *h) {
 
 // --- overlay ops ------------------------------------------------------
 
-void osk_damage(void) {
+int osk_rect(int *x, int *y, int *w, int *h) {
     struct osk_geom g;
     osk_geometry(&g);
-    wm_damage_rect(g.x, g.y, g.w, g.h);
-    redraw_pending = 1;
+    *x = g.x; *y = g.y; *w = g.w; *h = g.h;
+    return 1;
 }
+
+void osk_damage(void) { wm_overlay_damage("osk"); }
 
 static void osk_close_panel(void) {
     if (!osk_open) return;

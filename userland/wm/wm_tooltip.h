@@ -52,6 +52,9 @@ void wm_tooltip_cancel(void);
 extern int wm_tooltip_open;
 void wm_tooltip_draw(int mx, int my);
 void wm_tooltip_damage(void);
+// Where it is, for wm_overlay.h's automatic damage. 0 when it has
+// no rect to report.
+int wm_tooltip_rect(int *x, int *y, int *w, int *h);
 
 // What it currently says, and where -- for `gui tooltip`, so a test can
 // assert on the text rather than on pixels it would have to read twice.

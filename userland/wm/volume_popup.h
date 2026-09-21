@@ -64,6 +64,9 @@ int volume_handle_click(int mx, int my);
 // invisible hover rather than merely a slow one.
 int volume_hover_at(int mx, int my);
 void volume_damage(void);
+// Where it is, for wm_overlay.h's automatic damage. 0 when it has
+// no rect to report.
+int volume_rect(int *x, int *y, int *w, int *h);
 
 // Live press tracking, every tick, so the slider can be DRAGGED --
 // the same shape confirm_dialog_update_press() uses and for the same

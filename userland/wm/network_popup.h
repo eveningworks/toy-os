@@ -49,6 +49,9 @@ void network_draw(int mx, int my);
 int  network_handle_click(int mx, int my);
 int  network_hover_at(int mx, int my);
 void network_damage(void);
+// Where it is, for wm_overlay.h's automatic damage. 0 when it has
+// no rect to report.
+int network_rect(int *x, int *y, int *w, int *h);
 void network_close(void);
 
 // The panel's rect and the tray item's, from the one geometry function

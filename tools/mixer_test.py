@@ -43,6 +43,7 @@ sys.path.insert(0, HERE)
 
 import port_guard                      # noqa: E402
 from gui_debug import DebugConsole      # noqa: E402
+from qmp_test import QMPSession         # noqa: E402
 
 CONFIG = "/etc/sound.conf"
 FIXTURE = "/tests/sine1k.wav"
@@ -127,6 +128,10 @@ def main():
         time.sleep(1.0)
         dbg.send(f"sh rm {CONFIG}")     # a previous run's value is not a fixture
 
+        qmp = QMPSession(port=port_guard.instance_qmp(n))
+        ref_png = os.path.join(tmp, "wallpaper.png")
+        qmp.screenshot(ref_png)     # the desktop with nothing open over it
+
         g = vol(dbg)
         if not res.check("the volume flyout reports a tray item", g.get("tray", {}).get("w", 0) > 0,
                          str(g.get("tray"))):
@@ -195,9 +200,56 @@ def main():
                   log.count(want) > base,
                   f"{base} -> {log.count(want)} occurrence(s) of \"{want}\"")
 
+        # --- the panel SHRINKS BACK, and leaves no pixels behind -------
+        #
+        # A DAMAGE FAULT IS ONLY VISIBLE IN PIXELS. The panel is
+        # anchored above the taskbar, so its height growing moves its
+        # TOP UP; when the stream ends and it shrinks, the band it used
+        # to occupy is wallpaper again -- and damaging only the NEW rect
+        # left the old frame painted there. Reported from the ASUS by
+        # eye, because every check here passed while it was happening.
+        # A FRESH STREAM, caught while it is still playing: the earlier
+        # checks take longer than the 1.5s fixture, so by now the panel
+        # is already short and `tall` would be the shrunken one -- which
+        # is a check that measures nothing, and did on its first run.
+        tall = play_and_catch(dbg)
+        tall_h = tall.get("h", 0)
+        band = None
+        if tall.get("apps"):
+            for _ in range(20):                  # then let it end
+                g = vol(dbg)
+                if not g.get("apps"):
+                    # The band between the tall panel's top and the short
+                    # one's: exactly what a too-small damage rect fails
+                    # to repaint.
+                    band = (g["x"], tall["y"], g["x"] + g["w"], g["y"])
+                    short_h = g.get("h", 0)
+                    break
+                time.sleep(0.25)
+        if res.check("the panel shrinks again when the stream ends",
+                     band is not None and short_h < tall_h,
+                     f'{tall_h} -> {band and short_h}'):
+            # AGAINST THE SAME BAND BEFORE ANYTHING OPENED, not against
+            # "is it one colour": the wallpaper is a GRADIENT, so a
+            # band of it is legitimately hundreds of colours and that
+            # assertion could never pass. A self-comparison also
+            # survives someone changing the wallpaper.
+            from PIL import Image
+            after_png = os.path.join(tmp, "after.png")
+            qmp.screenshot(after_png)
+            with Image.open(ref_png) as a, Image.open(after_png) as b:
+                want = a.convert("RGB").crop(band).tobytes()
+                got = b.convert("RGB").crop(band).tobytes()
+            differing = sum(1 for x, y in zip(want, got) if x != y)
+            res.check("...and leaves no residue in the band it vacated",
+                      differing == 0,
+                      f"{differing} of {len(want)} subpixels differ from the "
+                      f"same band before the panel ever opened")
+
         # LEAVE THE IMAGE AS FOUND. A per-app volume left behind would
         # quieten aplay for every later tool on this disk, which is the
         # hazard CLAUDE.md records for settings_test's mouse values.
+        qmp.close()
         dbg.send(f"sh rm {CONFIG}")
         gone = dbg.send(f"sh cat {CONFIG}") or ""
         res.check("the test's own config is removed again",

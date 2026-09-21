@@ -228,12 +228,16 @@ int calendar_hover_at(int mx, int my) {
     return 0;
 }
 
-void calendar_damage(void) {
+int calendar_rect(int *x, int *y, int *w, int *h) {
     struct calendar_geom g;
     calendar_geometry(&g);
-    wm_damage_window_rect(g.x, g.y, g.w, g.h);   // plus its shadow (wm_shadow.h)
-    redraw_pending = 1;
+    *x = g.x; *y = g.y; *w = g.w; *h = g.h;
+    return 1;
 }
+
+// The rules -- the shadow, and the rect it last occupied -- are
+// the core's now (wm_overlay.h).
+void calendar_damage(void) { wm_overlay_damage("calendar"); }
 
 void calendar_draw(int mx, int my) {
     if (!calendar_open) return;

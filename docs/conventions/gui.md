@@ -4615,3 +4615,33 @@ editing `wm_shadow.c`:
 
 **`cov` is indexed from the UNCLIPPED `x`**, so clipping a run does not
 shift its coverage -- pass the run's true origin, not the clipped one.
+
+## AN OVERLAY ANSWERS WHERE IT IS; THE CORE DAMAGES IT
+
+`struct wm_overlay`'s `rect` op (`userland/wm/wm_overlay.h`). An overlay
+reports its rect and nothing else: **the core adds the shadow and the
+rect it was LAST DRAWN at**, because those are the two things an
+overlay that spells its own damage forgets.
+
+Both were got wrong before it existed. The volume flyout called
+`wm_damage_rect()` where every other shadowed popup called
+`wm_damage_window_rect()`, and left a ghost of its shadow on close. And
+when it grew a slider per audio stream it became the first overlay
+whose SIZE changes -- anchored above the taskbar, so gaining a row
+moves its TOP UP, and damaging only where it is now leaves the band it
+vacated holding the old frame.
+
+**`damage()` SHOULD BE ONE LINE**: `void volume_damage(void) {
+wm_overlay_damage("volume"); }`. Keep a hand-written one only where the
+damage is genuinely not one rect -- the context menu damages a rect per
+open submenu, the confirm dialog asks for a full repaint on purpose --
+and those two pass `rect = 0`.
+
+**The core records the rect after it DRAWS each overlay**, so "where
+was it" is bookkeeping nobody has to remember. `wm_render.c` already
+did this for WINDOWS, comparing each one's last-rendered rect against
+its current one, and its own comment called the overlay half "a
+deliberately scoped first cut, not the final word". Weston spells the
+same idea `weston_view_damage_below()`; wlroots' scene graph keeps each
+node's last-rendered box for it.
+

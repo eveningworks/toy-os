@@ -35,6 +35,9 @@ void remote_draw(int mx, int my);
 int  remote_handle_click(int mx, int my);
 int  remote_hover_at(int mx, int my);
 void remote_damage(void);
+// Where it is, for wm_overlay.h's automatic damage. 0 when it has
+// no rect to report.
+int remote_rect(int *x, int *y, int *w, int *h);
 void remote_close(void);
 int  remote_tray_hidden(void);
 

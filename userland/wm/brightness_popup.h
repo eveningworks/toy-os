@@ -24,6 +24,9 @@ void brightness_draw(int mx, int my);
 int  brightness_handle_click(int mx, int my);
 int  brightness_hover_at(int mx, int my);
 void brightness_damage(void);
+// Where it is, for wm_overlay.h's automatic damage. 0 when it has
+// no rect to report.
+int brightness_rect(int *x, int *y, int *w, int *h);
 void brightness_update_press(int mx, int my, uint8_t buttons);
 int  brightness_handle_wheel(int mx, int my, int notches);
 

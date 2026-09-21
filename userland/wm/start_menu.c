@@ -343,11 +343,14 @@ void start_menu_geometry(int *out_x, int *out_y, int *out_w, int *out_h,
     if (out_item_h) *out_item_h = L.item_h;
 }
 
-void start_menu_damage(void) {
+int start_menu_rect(int *x, int *y, int *w, int *h) {
     struct sm_layout L;
     layout(&L);
-    wm_damage_window_rect(L.x, L.y, L.w, L.h);   // plus its shadow (wm_shadow.h)
+    *x = L.x; *y = L.y; *w = L.w; *h = L.h;
+    return 1;
 }
+
+void start_menu_damage(void) { wm_overlay_damage("start"); }
 
 // The Start BUTTON is drawn lit while the menu is up (wm_render.c's
 // draw_taskbar), so opening and closing change it too. With no window

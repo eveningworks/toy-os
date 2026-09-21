@@ -49,6 +49,9 @@ void osk_draw(int mx, int my);
 int  osk_handle_click(int mx, int my);
 int  osk_hover_at(int mx, int my);
 void osk_damage(void);
+// Where it is, for wm_overlay.h's automatic damage. 0 when it has
+// no rect to report.
+int osk_rect(int *x, int *y, int *w, int *h);
 void osk_update_press(int mx, int my, uint8_t buttons);
 
 #endif

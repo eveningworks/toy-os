@@ -66,7 +66,42 @@ struct wm_overlay {
 
     // Damage its own rect. Required when hover_at is set; the core
     // never damages the whole screen for a hover.
+    //
+    // PREFER `rect` BELOW and make this a one-line delegation to
+    // wm_overlay_damage(): an overlay that computes its own damage has
+    // to remember the shadow AND that its rect may have changed since
+    // it was last drawn, and both were got wrong here.
     void (*damage)(void);
+
+    // WHERE IT IS, when it is open. 1 with the rect filled, 0 when it
+    // has none (closed, or nothing to show).
+    //
+    // WHY THE CORE WANTS THIS RATHER THAN A damage() PER OVERLAY. Two
+    // things have to be added to an overlay's rect before it is the
+    // right damage, and an overlay that spells its own damage can
+    // forget either:
+    //
+    //  - THE SHADOW, which paints OUTSIDE the rect (wm_shadow.h). The
+    //    volume flyout used wm_damage_rect() where every other shadowed
+    //    popup used wm_damage_window_rect(), and left a ghost of its
+    //    shadow behind on close.
+    //  - THE RECT IT LAST OCCUPIED. A popup whose size depends on its
+    //    contents is somewhere else after they change -- the volume
+    //    flyout grows a row per audio stream and is anchored ABOVE the
+    //    taskbar, so gaining one moves its TOP UP. Damaging only where
+    //    it is now leaves the band it vacated holding the old frame.
+    //
+    // The core records this rect after it draws the overlay, so the
+    // "where was it" half is bookkeeping no overlay has to do. That is
+    // what wm_render.c already does for WINDOWS, comparing each one's
+    // last-rendered rect against its current one; this is the same idea
+    // for the panel's own overlays, and Weston spells it
+    // weston_view_damage_below().
+    //
+    // NULL for an overlay whose damage is genuinely not one rect: the
+    // context menu damages a rect per open submenu, and the confirm
+    // dialog asks for a full repaint on purpose. Those keep damage().
+    int (*rect)(int *x, int *y, int *w, int *h);
 
     // Live press tracking, every tick, for a control that can be
     // DRAGGED -- a slider, a dialog button that arms on press. NULL
@@ -104,8 +139,16 @@ struct wm_overlay {
 };
 
 // Draws every open overlay, least modal first. Called once per frame
-// from wm_render.c, in place of six named calls.
+// from wm_render.c, in place of six named calls. ALSO records where
+// each one was drawn, which is what makes the damage above automatic.
 void wm_overlay_draw(int mx, int my);
+
+// Damage the named overlay: where it is now, where it was last drawn,
+// and the shadow around both. This is what an overlay's damage() op
+// should be -- `void volume_damage(void) { wm_overlay_damage("volume"); }`
+// -- so the rules live here instead of in ten files. A name that is not
+// in the table is a no-op, which is the same failure a missing op is.
+void wm_overlay_damage(const char *name);
 
 // Offers a left click to each open overlay, most modal first. Returns 1
 // when one of them consumed it.

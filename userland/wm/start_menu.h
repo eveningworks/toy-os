@@ -125,6 +125,9 @@ int start_menu_hover_at(int mx, int my);
 // which is what makes "the rows it just vacated" declarable by the code
 // that closes it.
 void start_menu_damage(void);
+// Where it is, for wm_overlay.h's automatic damage. 0 when it has
+// no rect to report.
+int start_menu_rect(int *x, int *y, int *w, int *h);
 
 // Handles a left-click at (mx, my) while the popup is open -- selects a
 // folder, launches an app, runs a system action, or closes the popup if

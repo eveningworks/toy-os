@@ -2,6 +2,7 @@
 // verbs rather than one.
 #include "wm_internal.h"
 #include "wm_overlay.h"
+#include "wm_shadow.h"   // wm_damage_window_rect: the rect PLUS its shadow
 #include "kapi.h"
 #include "start_menu.h"
 #include "context_menu.h"
@@ -43,28 +44,28 @@ static const struct wm_overlay g_overlays[] = {
     // about to make, which is the one thing every toolkit gets wrong
     // about them. No hover op either; it is not a control.
     { "tooltip",  open_tooltip,  wm_tooltip_draw,  tooltip_click,
-      0, wm_tooltip_damage, 0, 0, 0, wm_tooltip_cancel },
+      0, wm_tooltip_damage, wm_tooltip_rect, 0, 0, 0, wm_tooltip_cancel },
     { "confirm",  open_confirm,  draw_confirm,     confirm_dialog_handle_click,
-      confirm_dialog_hover_at,   confirm_dialog_damage,   confirm_dialog_update_press, 0, 0, 0 },
+      confirm_dialog_hover_at,   confirm_dialog_damage,   0 /* a full repaint, on purpose */, confirm_dialog_update_press, 0, 0, 0 },
     { "context",  open_context,  context_menu_draw, context_menu_handle_click,
-      context_menu_hover_at,     context_menu_damage,     0, 0, 0, context_menu_close },
+      context_menu_hover_at,     context_menu_damage,     0 /* a rect per submenu level */, 0, 0, 0, context_menu_close },
     { "start",    open_start,    start_menu_draw,  start_menu_handle_click,
-      start_menu_hover_at,       start_menu_damage,       0, start_menu_wheel, start_menu_key, start_menu_close },
+      start_menu_hover_at,       start_menu_damage,       start_menu_rect, 0, start_menu_wheel, start_menu_key, start_menu_close },
     { "calendar", open_calendar, calendar_draw,    calendar_handle_click,
-      calendar_hover_at,         calendar_damage,         0, 0, 0, calendar_close },
+      calendar_hover_at,         calendar_damage,         calendar_rect, 0, 0, 0, calendar_close },
     { "volume",   open_volume,   volume_draw,      volume_handle_click,
-      volume_hover_at,           volume_damage,           volume_update_press, 0, 0, volume_close },
+      volume_hover_at,           volume_damage,           volume_rect, volume_update_press, 0, 0, volume_close },
     { "brightness", open_brightness, brightness_draw, brightness_handle_click,
-      brightness_hover_at,       brightness_damage,       brightness_update_press, 0, 0, brightness_close },
+      brightness_hover_at,       brightness_damage,       brightness_rect, brightness_update_press, 0, 0, brightness_close },
     { "network",  open_network,  network_draw,     network_handle_click,
-      network_hover_at,          network_damage,          0, 0, 0, network_close },
+      network_hover_at,          network_damage,          network_rect, 0, 0, 0, network_close },
     { "remote",   open_remote,   remote_draw,      remote_handle_click,
-      remote_hover_at,           remote_damage,           0, 0, 0, remote_close },
+      remote_hover_at,           remote_damage,           remote_rect, 0, 0, 0, remote_close },
     // LAST, so it is the least modal: a menu overlapping the keyboard
     // takes the click and paints on top. No `close` op -- a keyboard
     // must survive the click that puts the caret where it is typing.
     { "osk",      open_osk,      osk_draw,         osk_handle_click,
-      osk_hover_at,              osk_damage,              osk_update_press, 0, 0, 0 },
+      osk_hover_at,              osk_damage,              osk_rect, osk_update_press, 0, 0, 0 },
 };
 #define OVERLAY_COUNT ((int)(sizeof g_overlays / sizeof g_overlays[0]))
 
@@ -84,6 +85,13 @@ int wm_overlay_any_open(void) {
 }
 const char *wm_overlay_parent(void) { return g_parent; }
 
+// WHERE EACH OVERLAY WAS LAST DRAWN, so damaging it can cover the rect
+// it has since left. Kept HERE rather than in each overlay because the
+// record-after-draw is the part they would forget -- the same argument
+// the hover compare above is built on. `w` of 0 means "not drawn since
+// it last closed", which is the state a closing damage leaves behind.
+static struct { int x, y, w, h; } g_drawn[OVERLAY_COUNT];
+
 void wm_overlay_draw(int mx, int my) {
     for (int i = OVERLAY_COUNT - 1; i >= 0; i--) {
         const struct wm_overlay *o = &g_overlays[i];
@@ -91,7 +99,33 @@ void wm_overlay_draw(int mx, int my) {
         // checks for itself -- context_menu_draw() always did, and a
         // draw that is safe to call closed is one less thing for a new
         // overlay to get wrong.
-        if (o->is_open()) o->draw(mx, my);
+        if (!o->is_open()) {
+            // Its closing damage has already covered where it was, so
+            // the record has done its job; keeping it would damage a
+            // dead rect on every later call.
+            g_drawn[i].w = 0;
+            continue;
+        }
+        o->draw(mx, my);
+        int x, y, w, h;
+        if (o->rect && o->rect(&x, &y, &w, &h))
+            g_drawn[i] = (typeof(g_drawn[0])){ x, y, w, h };
+    }
+}
+
+void wm_overlay_damage(const char *name) {
+    for (int i = 0; i < OVERLAY_COUNT; i++) {
+        if (k_strcmp(g_overlays[i].name, name) != 0) continue;
+        int x, y, w, h;
+        // WINDOW rect, so the shadow outside it is covered too -- an
+        // overlay never has to know whether it draws one.
+        if (g_overlays[i].rect && g_overlays[i].rect(&x, &y, &w, &h))
+            wm_damage_window_rect(x, y, w, h);
+        if (g_drawn[i].w > 0)
+            wm_damage_window_rect(g_drawn[i].x, g_drawn[i].y,
+                                  g_drawn[i].w, g_drawn[i].h);
+        redraw_pending = 1;
+        return;
     }
 }
 

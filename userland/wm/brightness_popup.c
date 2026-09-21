@@ -1,6 +1,7 @@
 // See brightness_popup.h. Everything but the `unavailable` sentence is
 // tray_slider_popup.c's.
 #include "wm_internal.h"
+#include "wm_overlay.h"
 #include "brightness_popup.h"
 #include "tray_slider_popup.h"
 #include "wm_tray.h"     // tray_want_shown, tray_set_hidden
@@ -78,11 +79,14 @@ static void slider_geom(struct tray_slider_geom *s) { geometry(s, 0); }
 
 // --- state ------------------------------------------------------------
 
-void brightness_damage(void) {
+int brightness_rect(int *x, int *y, int *w, int *h) {
     struct tray_slider_geom s;
     slider_geom(&s);
-    tray_slider_damage(&s);
+    *x = s.x; *y = s.y; *w = s.w; *h = s.h;
+    return 1;
 }
+
+void brightness_damage(void) { wm_overlay_damage("brightness"); }
 
 int brightness_hover_at(int mx, int my) {
     struct tray_slider_geom s;

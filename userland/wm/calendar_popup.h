@@ -53,6 +53,9 @@ void calendar_poll_config(void);
 // move: 1 = `<`, 2 = `>`, 3 = the title, 0 = none.
 int calendar_hover_at(int mx, int my);
 void calendar_damage(void);
+// Where it is, for wm_overlay.h's automatic damage. 0 when it has
+// no rect to report.
+int calendar_rect(int *x, int *y, int *w, int *h);
 
 void calendar_draw(int mx, int my);
 

@@ -100,10 +100,13 @@ void wm_tooltip_update(void) {
     redraw_pending = 1;
 }
 
-void wm_tooltip_damage(void) {
-    if (box_w <= 0 || box_h <= 0) return;
-    wm_damage_rect(box_x, box_y, box_w, box_h);
+int wm_tooltip_rect(int *x, int *y, int *w, int *h) {
+    if (box_w <= 0 || box_h <= 0) return 0;   // nothing shown
+    *x = box_x; *y = box_y; *w = box_w; *h = box_h;
+    return 1;
 }
+
+void wm_tooltip_damage(void) { wm_overlay_damage("tooltip"); }
 
 void wm_tooltip_draw(int mx, int my) {
     if (!wm_tooltip_open) return;

@@ -3,8 +3,10 @@
 // tray_slider_popup.c's; what is here is only the volume's own -- mute,
 // the device rows, and the speaker icon that follows the level.
 #include "wm_internal.h"
+#include "wm_overlay.h"
 #include "volume_popup.h"
 #include "tray_slider_popup.h"
+#include "wm_shadow.h"   // the damage a shadowed panel actually needs
 #include "wm_tray.h"
 #include "ui/uui.h"
 #include "ui/utheme.h"
@@ -273,12 +275,18 @@ int volume_row(int index, char *value, uint32_t value_size,
 
 // --- state ------------------------------------------------------------
 
-void volume_damage(void) {
+int volume_rect(int *x, int *y, int *w, int *h) {
     struct volume_geom g;
     volume_geometry(&g);
-    wm_damage_rect(g.x, g.y, g.w, g.h);
-    redraw_pending = 1;
+    *x = g.x; *y = g.y; *w = g.w; *h = g.h;
+    return 1;
 }
+
+// THE PANEL CHANGES SIZE -- it grows a row per audio stream, and it is
+// anchored above the taskbar, so gaining one moves its TOP UP. Covering
+// the rect it has left is the core's job now (wm_overlay.h), which is
+// what makes that true of every overlay rather than of this one.
+void volume_damage(void) { wm_overlay_damage("volume"); }
 
 static int row_at(const struct volume_geom *g, int mx, int my) {
     for (int i = 0; i < g->rows; i++)
@@ -516,4 +524,5 @@ void volume_draw(int mx, int my) {
                                  ry + (g.row_h - ugfx_char_h()) / 2,
                                  rw - 12, g_dev_label[i], row_fg, row_bg);
     }
+
 }

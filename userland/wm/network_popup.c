@@ -217,12 +217,16 @@ void network_geometry(struct network_geom *g) {
 
 // --- state ------------------------------------------------------------
 
-void network_damage(void) {
+int network_rect(int *x, int *y, int *w, int *h) {
     struct network_geom g;
     network_geometry(&g);
-    wm_damage_window_rect(g.x, g.y, g.w, g.h);   // plus its shadow (wm_shadow.h)
-    redraw_pending = 1;
+    *x = g.x; *y = g.y; *w = g.w; *h = g.h;
+    return 1;
 }
+
+// The rules -- the shadow, and the rect it last occupied -- are
+// the core's now (wm_overlay.h).
+void network_damage(void) { wm_overlay_damage("network"); }
 
 static void network_open_now(void) {
     wm_overlay_close_others("network");
