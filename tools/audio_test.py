@@ -34,6 +34,7 @@ On demand, not in the gate: it boots its own guest with extra hardware.
 """
 import argparse
 import os
+import re
 import subprocess
 import sys
 import struct
@@ -70,6 +71,38 @@ def wait_serial(sock, timeout_s=60):
             pass
         time.sleep(1.0)
     return None
+
+
+# Where the TFS3 volume starts inside a partitioned image. seed_disk.py
+# prints this line as it seeds, and it is the only place the number is
+# derived rather than guessed; a flat image answers (None, None).
+def fs_partition(disk):
+    out = subprocess.run([sys.executable, os.path.join(HERE, "seed_disk.py"),
+                          disk, os.path.join(REPO, "seed", "sync")],
+                         cwd=REPO, capture_output=True, text=True)
+    m = re.search(r"a partition \(LBA (\d+), (\d+) sectors\)",
+                  out.stdout + out.stderr)
+    return (int(m.group(1)), int(m.group(2))) if m else (None, None)
+
+
+# THE WHOLE FILE'S LOUDEST SAMPLE, with no tone/silence classification.
+# measure() above answers "was there a tone and what pitch", and its
+# 2000-per-window threshold is tuned for a full-scale one -- a
+# deliberately QUIET stream reads to it as no tone at all, which is a
+# property of the threshold rather than of the recording. An amplitude
+# question needs an amplitude oracle, and both sides of a ratio have to
+# be measured the same way.
+def peak_of(wav_path):
+    with open(wav_path, "rb") as f:
+        hdr = f.read(44)
+        raw = f.read()
+    if len(hdr) < 44 or hdr[:4] != b"RIFF" or hdr[8:12] != b"WAVE":
+        return 0
+    width = struct.unpack_from("<H", hdr, 34)[0] // 8
+    if width != 2 or len(raw) < 2:
+        return 0
+    total = len(raw) // 2
+    return max(abs(x) for x in struct.unpack(f"<{total}h", raw[:total * 2]))
 
 
 def measure(wav_path):
@@ -152,6 +185,7 @@ def main():
     wav_path = os.path.join(tmp, "out.wav")
     wav2_path = os.path.join(tmp, "out_wavplay.wav")
     wav3_path = os.path.join(tmp, "out_mp3play.wav")
+    wav4_path = os.path.join(tmp, "out_perapp.wav")
     img = os.path.join(tmp, "disk.img")
     subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
                    cwd=REPO, check=True)
@@ -282,6 +316,70 @@ def main():
         finally:
             halt()
 
+    # --- the per-application volume, measured as AMPLITUDE -------------
+    #
+    # The one check that a log line cannot fake. /etc/sound.conf names
+    # `aplay` at 25%; the taper spans 40 dB, so 25% is 30 dB down (not
+    # 20 -- the attenuation is 75% of the range, an error worth naming
+    # because it is easy to make twice), and the SAME fixture phase two
+    # recorded at full gain is played again. The assertion is a RATIO
+    # between two recordings of one file, not an absolute a quiet build
+    # could also produce.
+    #
+    # Written into the image with the host-side TFS3 writer because
+    # `vm.py exec` does not parse shell operators, so `echo > file` in
+    # the guest silently writes nothing.
+    gain_ok = False
+    cfg = os.path.join(tmp, "sound.conf")
+    with open(cfg, "w") as f:
+        f.write("aplay = 25\n")
+    lba, sectors = fs_partition(img)
+    w = [sys.executable, os.path.join(HERE, "tfs3_writer.py"), "write", img,
+         cfg, "/etc/sound.conf"]
+    if lba is not None:
+        w += ["--at-lba", str(lba), "--sectors", str(sectors)]
+    if subprocess.run(w, cwd=REPO, capture_output=True).returncode != 0:
+        res.check("the per-app volume could be written into the image", False)
+    elif boot(wav4_path).returncode != 0:
+        res.check("the guest rebooted for the per-app volume phase", False)
+    else:
+        try:
+            dbg = wait_serial(sock)
+            if res.check("the serial console answers (per-app phase)",
+                         dbg is not None):
+                # THE DAEMON HAS TO BE UP FIRST, and this is a
+                # PRECONDITION rather than a hope: usnd tries the daemon
+                # sink and falls through to the DEVICE when no beacon
+                # exists, which bypasses the per-app gain entirely and
+                # records at full scale -- a 1.0x ratio that reads as
+                # "the taper did nothing" rather than "the daemon was
+                # not there yet".
+                up = ""
+                for _ in range(30):
+                    up = dbg.send("sh dmesg") or ""
+                    if "soundd: serving" in up:
+                        break
+                    time.sleep(0.5)
+                daemon_up = res.check(
+                    "soundd is serving, so the daemon sink is the one used",
+                    "soundd: serving" in up)
+                out = dbg.send("sh aplay /tests/sine1k.wav") if daemon_up else ""
+                out = out or ""
+                if daemon_up:
+                    res.check("aplay played again with a per-app volume set",
+                              "sine1k" in out, out.strip()[-120:])
+                    # The daemon SAYING it applied the gain, which
+                    # separates "the taper is wrong" from "nothing was
+                    # looked up at all".
+                    log = dbg.send("sh dmesg") or ""
+                    res.check("...and soundd applied it to that client",
+                              "aplay volume 25%" in log,
+                              [l for l in log.splitlines() if "soundd:" in l][-3:])
+                gain_ok = daemon_up
+                dbg.close()
+        finally:
+            halt()
+
     # --- the host-side oracle ------------------------------------------
     rate, secs, hz, tone_peak, tone_secs = measure(wav_path)
     res.check("the host recording contains real signal",
@@ -321,8 +419,23 @@ def main():
     res.check("...for its whole length",
               1.2 < tone3 < 1.9, f"{tone3:.2f}s of tone for 1.5s of file")
 
+    if gain_ok:
+        loud, quiet = peak_of(wav2_path), peak_of(wav4_path)
+        res.check("the quieter stream still reached the device",
+                  quiet > 100, f"peak {quiet} against a full-scale {loud}")
+        # -30 dB is a factor of ~31.6. A WIDE band (15x..70x) on
+        # purpose: what is judged is that the taper is LOGARITHMIC, and
+        # the two failures it must reject are a LINEAR-in-amplitude gain
+        # (25% would be 4x, far below the band) and no gain at all (1x).
+        # The exact figure is not the point and tightening it would make
+        # the check about the recorder's noise floor instead.
+        ratio = (loud / quiet) if quiet else 0.0
+        res.check("...at ROUGHLY -30 dB, so the 40 dB taper was applied",
+                  15.0 < ratio < 70.0,
+                  f"peak {loud} at 100% against {quiet} at 25% -- {ratio:.1f}x")
+
     if args.keep:
-        print(f"  recordings kept: {wav_path}, {wav2_path}, {wav3_path}")
+        print(f"  recordings kept: {wav_path}, {wav2_path}, {wav3_path}, {wav4_path}")
 
     print(f"\naudio_test: {len(res.passes)} passed, {len(res.fails)} failed")
     for f in res.fails:

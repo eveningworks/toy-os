@@ -43,6 +43,12 @@
 
 #define SND_CTL_MAGIC 0x534e4431 // "SND1"
 
+// A client's application name, and deliberately PROC_NAME_MAX
+// (abi/proc_info.h) rather than a size of this ABI's own: it is filled
+// from the process's own name, and two different limits for one string
+// is a truncation nobody would predict.
+#define SND_APP_MAX 24
+
 struct snd_ctl_page {
     uint32_t magic;      // SND_CTL_MAGIC -- an app can sanity-check the map
     uint32_t rate;       // SND_RATE
@@ -71,6 +77,19 @@ struct snd_ctl_page {
     // ahead of it, which reads as "no room" forever and stalls the
     // client's decoder rather than merely playing quiet.
     uint32_t wr_pos;
+    // WHO IS PLAYING, for a per-application volume. A DAEMON CLIENT
+    // RING only; the kernel's own stream leaves it "".
+    //
+    // The ring's NAME is `snd.<pid>` and a pid is not an application:
+    // it means nothing next boot, so a volume keyed on it could not be
+    // remembered. This is the stable key -- the process's own name,
+    // which is why it is PROC_NAME_MAX and not a size of its own.
+    // PulseAudio keys application.name and the Windows mixer keys the
+    // executable for the same reason.
+    //
+    // Written by the client BEFORE `magic`, so the daemon never reads a
+    // half-filled one; empty is legal and mixes at full gain.
+    char app[SND_APP_MAX];
 };
 
 // --- the sound daemon's client rings ---------------------------------
@@ -94,8 +113,45 @@ struct snd_ctl_page {
 
 // The daemon's presence beacon: an object of this name exists exactly
 // while a daemon is running, which is how a client chooses a sink
-// without a connect() to fail. Its content is unused.
+// without a connect() to fail.
 #define SND_SERVER_NAME "snd.server"
+
+// AND ITS CONTENT IS THE ROSTER -- who is being mixed right now, and at
+// what gain. The beacon was a 4 KiB object with nothing in it; a mixer
+// UI needs exactly this list, and publishing it here costs no new IPC
+// and no second object. THE DAEMON IS THE ONLY WRITER and the page is
+// mapped read-only by everyone else, which is what keeps a UI from
+// reaching into a client's own ring to find out who it is.
+//
+// Torn reads are possible and deliberately tolerated: `gen` is bumped
+// before and after a rewrite, so a reader that sees an ODD value (or a
+// different one either side) looks again rather than locking. A volume
+// slider redrawing one frame late is not worth a lock in a page a
+// dying daemon can leave behind.
+#define SND_ROSTER_MAX 8
+
+struct snd_roster_entry {
+    char     app[SND_APP_MAX]; // "" when the client never said
+    int32_t  pid;              // from the ring's name, so a UI can
+                               // tell two copies of one program apart
+    uint32_t gain;             // 0..100, what the daemon is applying
+    uint32_t playing;          // 1 while it is actually feeding samples
+};
+
+struct snd_roster {
+    uint32_t magic;            // SND_CTL_MAGIC, so a reader can check
+    uint32_t gen;              // odd while being written; see above
+    uint32_t count;
+    uint32_t reserved;
+    struct snd_roster_entry e[SND_ROSTER_MAX];
+};
+
+// Per-application gains, by application name. A file of its own rather
+// than keys in /etc/toyos.conf: these accumulate one per program ever
+// played, which does not belong in the system's own config, and the
+// settings REGISTRY cannot hold them at all (it is a fixed catalogue of
+// build-time knobs, one System Settings row each).
+#define SND_CONFIG_FILE "/etc/sound.conf"
 
 // A client's own ring is "snd." plus its pid -- unique without a
 // registry, and the pid is what QUERY_SHM already reports, so the

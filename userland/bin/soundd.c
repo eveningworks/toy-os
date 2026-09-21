@@ -30,6 +30,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>   // atoi -- the pid out of the ring's name
+#include <sys/stat.h>
+#include "etc_config.h"
+#include <fcntl.h>
+#include <unistd.h>
 #include "rt/sys.h"
 #include "sound_abi.h"
 #include "syscall_abi.h"
@@ -41,7 +46,10 @@
 
 struct client {
     char     name[SHM_NAME_MAX];
+    char     app[SND_APP_MAX];  // what it is mixed UNDER, "" if it never said
+    int      pid;               // parsed out of `name`, for the roster
     int      fd;
+    int      gain;              // 0..100 from /etc/sound.conf; 100 by default
     volatile struct snd_ctl_page *ctl;
     volatile int16_t *ring;
 };
@@ -53,6 +61,36 @@ static volatile struct snd_ctl_page *g_hw;
 static volatile int16_t *g_hwring;
 static uint32_t g_wr;      // our write cursor into the hardware ring
 static int g_running;
+
+// A PERCENTAGE ONTO A MULTIPLIER, 40 dB of range, linear in dB -- the
+// same taper the cards use (`AUDIO_TAPER_DB` in sound_usb.c, `taper_gain`
+// in hda.c), because the per-app slider sits in the same flyout as the
+// master and two sliders that feel different at the same position is a
+// bug a user reports as "the volume is wrong".
+//
+// LINEAR IN AMPLITUDE WAS THE OTHER CANDIDATE and it is what
+// usnd_set_volume() still does (`g_acc[i] * g_volume / 100`), which
+// puts 50% at -6 dB against this table's -20 dB. That inconsistency is
+// the open "one volume taper for every card" roadmap item and is NOT
+// fixed here; what matters for this file is matching the knob beside it.
+//
+// Q15, every 5%, interpolated between -- 21 entries rather than 101
+// because the error is far below a step of the slider, and rather than
+// a pow() because there is no libm here. 0 is MUTE, not -40 dB, which
+// is the same choice the cards make at the bottom of the range.
+static const uint16_t g_taper[21] = {
+        0,   413,   519,   654,   823,  1036,  1305,  1642,  2068,  2603,
+     3277,  4125,  5193,  6538,  8231, 10362, 13045, 16423, 20675, 26029,
+    32768,
+};
+
+static int32_t gain_q15(int pct) {
+    if (pct <= 0) return 0;
+    if (pct >= 100) return 32768;
+    int i = pct / 5, frac = pct % 5;
+    int32_t a = g_taper[i], b = g_taper[i + 1];
+    return a + (b - a) * frac / 5;
+}
 
 // Saturating, because a sum of several s16 streams does not fit in one:
 // wrapping turns a loud moment into a crack, and clipping is what every
@@ -103,10 +141,121 @@ static void adopt(const char *name) {
         return;
     }
     strlcpy(c->name, name, sizeof c->name);
+    strlcpy(c->app, (const char *)ctl->app, sizeof c->app);
+    c->pid = atoi(name + sizeof SND_CLIENT_PREFIX - 1);
+    c->gain = 100;   // until the config is read; silence-by-default would
+                     // make a missing file sound like a broken daemon
     c->fd = fd;
     c->ring = (volatile int16_t *)((uintptr_t)p + 4096);
     c->ctl = ctl; // last: a non-null ctl is what makes the slot live
-    fprintf(stderr, "soundd: client %s\n", name);
+    fprintf(stderr, "soundd: client %s as \"%s\"\n", name,
+            c->app[0] ? c->app : "(unnamed)");
+}
+
+// --- per-application volume ------------------------------------------
+//
+// /etc/sound.conf, one `<app> = <percent>` key per program. Read HERE
+// rather than pushed by whoever moves the slider: the daemon has no
+// IPC at all, and giving it one to carry a single integer would be a
+// protocol built before the feature.
+//
+// RELOADED ON CHANGE, NOT ON A TIMER. The main loop runs every 20 ms,
+// and parsing the file at that rate is 50 reads a second for a value
+// that changes when a human drags something. `stat` is one syscall and
+// answers "has it changed" from the size and mtime, so the parse is
+// paid only when it actually did -- which also makes a slider feel
+// immediate rather than sampled.
+static uint64_t g_cfg_stamp;
+
+// READ IN RING 3, PARSED BY THE SHARED PARSER. `etc_config_load()` and
+// its siblings are kernel-only (they reach the VFS directly); what
+// crosses is `etc_config.c`'s buffer half, so a process does its own
+// I/O and hands the bytes over -- api/etc_config.h says so, and it is
+// how `service` reads a descriptor.
+static struct etc_config_buf g_cfg;
+
+static int load_config(void) {
+    g_cfg.valid = 0;
+    int fd = open(SND_CONFIG_FILE, O_RDONLY);
+    if (fd < 0) return 0;     // no file yet: everything at full gain
+    int64_t n = read(fd, g_cfg.data, sizeof g_cfg.data - 1);
+    close(fd);
+    if (n <= 0) return 0;
+    g_cfg.data[n] = '\0';
+    g_cfg.size = (uint32_t)n;
+    g_cfg.valid = 1;
+    return 1;
+}
+
+static void apply_gains(void) {
+    struct etc_config_buf *b = &g_cfg;
+    int have = load_config();
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        struct client *c = &g_cl[i];
+        if (!c->ctl) continue;
+        char v[8];
+        // AN UNNAMED CLIENT IS NOT LOOKED UP AT ALL. Its key would be
+        // "", which every other unnamed client shares -- one slider
+        // moving several programs at once.
+        int was = c->gain;
+        if (have && c->app[0] && etc_config_buf_get(b, c->app, v, sizeof v)) {
+            int pct = atoi(v);
+            c->gain = pct < 0 ? 0 : pct > 100 ? 100 : pct;
+        } else {
+            c->gain = 100;
+        }
+        // ON CHANGE ONLY -- the poll runs 50 times a second and a probe
+        // that outruns the klog ring destroys the evidence it gathers.
+        if (c->gain != was)
+            fprintf(stderr, "soundd: %s volume %d%%\n",
+                    c->app[0] ? c->app : c->name, c->gain);
+    }
+}
+
+// Cheap enough for the 20 ms loop, and the only thing that triggers a
+// parse. A file that does not exist is a stamp of 0, which is also what
+// it reads as before anything has ever set a per-app volume.
+static void gains_poll(int force) {
+    struct stat st;
+    uint64_t stamp = (stat(SND_CONFIG_FILE, &st) == 0)
+                   ? ((uint64_t)st.st_mtime << 32) ^ (uint64_t)st.st_size : 0;
+    if (!force && stamp == g_cfg_stamp) return;
+    g_cfg_stamp = stamp;
+    apply_gains();
+}
+
+// --- the roster ------------------------------------------------------
+//
+// Published into the BEACON, which was a 4 KiB object with nothing in
+// it. A mixer UI needs exactly this list and the daemon is the only
+// thing that has it; writing it here costs no new object and no new
+// protocol, and keeps a UI from opening each client's own ring to find
+// out who is playing.
+static void publish_roster(void) {
+    static volatile struct snd_roster *r;
+    if (!r) {
+        void *p = sys_mmap(0, 4096, SYS_PROT_READ | SYS_PROT_WRITE,
+                           SYS_MAP_SHARED, g_beacon, 0);
+        if (p == (void *)-1) return;
+        r = p;
+        r->magic = SND_CTL_MAGIC;
+    }
+    // ODD WHILE WRITING, so a reader that catches the middle sees it and
+    // looks again. A torn roster is a slider drawn one frame late, which
+    // is not worth a lock in a page a dying daemon can leave behind.
+    r->gen = r->gen + 1;
+    uint32_t n = 0;
+    for (int i = 0; i < MAX_CLIENTS && n < SND_ROSTER_MAX; i++) {
+        struct client *c = &g_cl[i];
+        if (!c->ctl) continue;
+        strlcpy((char *)r->e[n].app, c->app, SND_APP_MAX);
+        r->e[n].pid = c->pid;
+        r->e[n].gain = (uint32_t)c->gain;
+        r->e[n].playing = c->ctl->running ? 1 : 0;
+        n++;
+    }
+    r->count = n;
+    r->gen = r->gen + 1;
 }
 
 // Walk the shm namespace: adopt any ring we do not hold, and drop any
@@ -145,8 +294,12 @@ static void rescan(void) {
             drop(&g_cl[i]);
         }
     }
+    int adopted = 0;
     for (int j = 0; j < nseen; j++)
-        if (!find(seen[j])) adopt(seen[j]);
+        if (!find(seen[j])) { adopt(seen[j]); adopted = 1; }
+    // A NEW CLIENT NEEDS ITS GAIN BEFORE ITS FIRST CHUNK, and the file
+    // has not changed, so the mtime poll would not have looked.
+    if (adopted) gains_poll(1);
 }
 
 // One chunk: sum every running client into the hardware ring, then zero
@@ -172,8 +325,17 @@ static void mix_chunk(uint32_t dst) {
         if (src == c->ctl->wr_pos) continue; // nothing new: silence
 
         const volatile int16_t *s = c->ring + src / 2;
-        for (unsigned k = 0; k < SND_CHUNK_BYTES / 2; k++)
-            acc[k] = sat_add(acc[k], s[k]);
+        int32_t g = gain_q15(c->gain);
+        if (g == 32768) {
+            for (unsigned k = 0; k < SND_CHUNK_BYTES / 2; k++)
+                acc[k] = sat_add(acc[k], s[k]);
+        } else if (g != 0) {
+            for (unsigned k = 0; k < SND_CHUNK_BYTES / 2; k++)
+                acc[k] = sat_add(acc[k], ((int32_t)s[k] * g) >> 15);
+        }
+        // g == 0 is muted: the chunk is still CONSUMED and zeroed below,
+        // so a muted client keeps playing into nothing rather than
+        // stalling on a ring that never drains.
         for (unsigned k = 0; k < SND_CHUNK_BYTES / 2; k++)
             ((volatile int16_t *)s)[k] = 0;
         c->ctl->hw_pos = (src + SND_CHUNK_BYTES) % SND_RING_BYTES;
@@ -215,6 +377,8 @@ int main(void) {
     g_wr = 0;
     for (;;) {
         rescan();
+        gains_poll(0);
+        publish_roster();
 
         // Fill every chunk between our cursor and one behind the
         // hardware's. Before the engine starts hw_pos is 0, so the

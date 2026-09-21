@@ -20,12 +20,39 @@
 #include "query_abi.h"
 #include "sound_abi.h"
 #include "syscall_abi.h"
+#include "proc_info.h" // struct proc_info -- this process's own name
 
 static volatile struct snd_ctl_page *g_ctl;
 static volatile int16_t *g_ring;
 static uint32_t g_wr;
 static int g_fd = -1;
 static char g_name[SHM_NAME_MAX];
+// An explicit name beats the process's own, for a program that plays on
+// something else's behalf. Empty until usnd_set_app_name() is called.
+static char g_app[SND_APP_MAX];
+
+// This process's own name, which is the stable half of an identity a
+// per-application volume can be remembered by -- the ring is `snd.<pid>`
+// and a pid means nothing next boot. Walked by SLOT because that is
+// what SYS_PROC_INFO enumerates; an empty slot is a successful call
+// reporting pid 0, so this skips rather than stops.
+static void fill_app(volatile struct snd_ctl_page *ctl) {
+    if (g_app[0]) { strlcpy((char *)ctl->app, g_app, SND_APP_MAX); return; }
+    int me = sys_getpid();
+    struct proc_info info;
+    for (int i = 0; i < SYS_PROC_MAX; i++) {
+        if (sys_proc_info(i, &info) != 0) continue;
+        if (info.pid != me) continue;
+        strlcpy((char *)ctl->app, info.name, SND_APP_MAX);
+        return;
+    }
+    ctl->app[0] = '\0';   // unknown is legal: it mixes at full gain
+}
+
+void usnd_set_app_name(const char *name) {
+    if (name) strlcpy(g_app, name, sizeof g_app);
+    else g_app[0] = '\0';
+}
 
 static int daemon_open(void) {
     if (g_ctl) return -EBUSY;
@@ -72,6 +99,7 @@ static int daemon_open(void) {
     g_ctl->wr_pos = 0;
     g_ctl->running = 0;
     g_ctl->device_gone = 0;
+    fill_app(g_ctl);   // before the magic, like everything else here
     // LAST, and that is the handshake: the daemon ignores a ring whose
     // magic is unset, so every other field is in place before it may
     // look at any of them.

@@ -288,4 +288,12 @@ int      usnd_seek_to(uint64_t device_frame);
 void usnd_set_volume(int pct);
 int  usnd_volume(void);
 
+// The name this program is mixed under, for the per-application volume
+// in /etc/sound.conf (`soundd` applies it; the tray flyout sets it).
+// Defaults to the PROCESS's own name, which is right for `aplay` and
+// the Player. Call this BEFORE the first write when a program plays on
+// something else's behalf -- the name is published when the ring is
+// created and the daemon reads it once.
+void usnd_set_app_name(const char *name);
+
 #endif
