@@ -243,6 +243,7 @@ struct mmap_region {
 // nothing. Its own kind so `pmap` can say "mmio" instead of lying about
 // anonymous memory at an address no allocator ever handed out.
 #define MMAP_KIND_MMIO 3
+#define MMAP_KIND_DMA  4 // SYS_DEV_DMA_ALLOC; the frames belong to the claim
 
 // Per address space, not per slot: a thread resolves to its group's
 // sched_mm the same way the heap does, so the group shares one list.

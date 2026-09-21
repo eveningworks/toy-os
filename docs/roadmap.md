@@ -25,7 +25,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] Replace the preemption guard with a real sleeping lock -- `ata.c`'s sleep now NEEDS it: nothing may park inside `FS_OP()`  *(Scheduler: blocking, priorities, classes)*
-- [ ] HDA's codec graph as a ring-3 program -- the ~250 lines of untrusted-input parsing, which is the payoff  *(A driver in ring 3)*
+- [ ] An interrupt as a wakeup: the handler masks and wakes a futex, the driver acks to unmask  *(A driver in ring 3)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
@@ -731,9 +731,9 @@ run on, not by order.
 
 - [x] ~~A process can map a device's register file (`SYS_DEV_MAP_BAR`), UC and refused while a ring-0 driver holds it~~ DONE 2026-09-20
 - [x] ~~A device CLAIM, so a ring-0 driver can let go and exactly one holder has a device~~ DONE 2026-09-20
-- [ ] **NEXT** HDA's codec graph as a ring-3 program -- the ~250 lines of untrusted-input parsing, which is the payoff
-- [ ] An interrupt as a wakeup: the handler masks and wakes a futex, the driver acks to unmask
-- [ ] DMA, gated on the IOMMU decision -- without one a ring-3 driver is trusted with physical memory
+- [x] ~~HDA's codec graph as a ring-3 program -- `/bin/lscodec`, one parser compiled into both rings~~ DONE 2026-09-21
+- [ ] **NEXT** An interrupt as a wakeup: the handler masks and wakes a futex, the driver acks to unmask
+- [ ] The STREAM's DMA, gated on the IOMMU decision -- the command ring already has a trusted buffer (`SYS_DEV_DMA_ALLOC`)
 
 ### virtio, and a real GPU driver
 
@@ -915,7 +915,7 @@ run on, not by order.
 - [x] ~~Volume mixer UI, persisted to `/etc`~~ DONE 2026-08-30 -- the tray flyout: slider, mute, device list, wheel
 - [ ] A per-application volume, now that the daemon tells its clients apart -- the flyout has one slider because it had one stream
 - [ ] Release the card when no client plays, PipeWire's suspend-on-idle -- `/tests/tone` needs `service stop soundd` today
-- [ ] HDMI/DisplayPort audio -- the codec enumerates and is left silent; ring-3 stage 3 wants the same `00:03.0`
+- [ ] HDMI/DisplayPort audio -- `00:03.0` went to ring-3 stage 3, so this reclaims it or moves to ring 3 too
 - [ ] One volume taper for every card -- `hda.c` and `sound_usb.c` share the 40 dB convention, `ac97.c` is still linear in attenuation steps
 - [ ] MPEG-2/2.5 Layer III (the half-rate sample rates), and Layer I/II -- refused with -ENOTSUP today
 - [ ] Intensity stereo in the MP3 decoder -- refused, because nothing available encodes it to test against

@@ -726,6 +726,11 @@ int sys_dev_release(int index, unsigned flags) {
                              (uint64_t)flags));
 }
 
+int64_t sys_dev_dma_alloc(int index, uint64_t bytes, uint64_t *phys) {
+    return err(syscall3(SYS_DEV_DMA_ALLOC, (uint64_t)(int64_t)index, bytes,
+                        (uint64_t)(uintptr_t)phys));
+}
+
 int sys_cpu_info(struct cpu_info *out) {
     return (int)err(syscall1(SYS_CPU_INFO, (uint64_t)(uintptr_t)out));
 }

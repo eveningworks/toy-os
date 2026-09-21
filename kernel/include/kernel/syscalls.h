@@ -317,6 +317,7 @@ int sys_munmap(struct syscall_ctx *c); // kernel/mm/mmap.c
 int sys_dev_map_bar(struct syscall_ctx *c); // kernel/mm/mmap.c
 int sys_dev_claim(struct syscall_ctx *c);   // kernel/drivers/dev_claim.c
 int sys_dev_release(struct syscall_ctx *c); // beside it
+int sys_dev_dma_alloc(struct syscall_ctx *c); // kernel/mm/mmap.c
 // SYS_DEV_MAP_BAR's validation, split out so a KTEST can reach it --
 // the syscall itself refuses the kernel context at its first line.
 int dev_bar_check(int index, int which, uint64_t pml4,

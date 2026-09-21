@@ -32,6 +32,7 @@
 // CORB, RIRB and BDL share one pmm frame (the virtio rule), never a
 // static.
 #include "sound.h"
+#include "hda_codec.h" // the registers, the verbs and the graph parser
 #include "clocksource.h" // clocksource_delay_ms -- a delay that needs no interrupt
 #include "sound_abi.h"
 #include "pci.h"
@@ -55,41 +56,12 @@
 
 DRIVER_DECLARE("hda", "sound", "Intel High Definition Audio");
 
-// --- controller registers ---------------------------------------------
-#define HDA_GCAP      0x00 // 16: OSS 15:12, ISS 11:8, BSS 7:4, 64OK bit 0
-#define HDA_GCTL      0x08 // 32
-#define HDA_WAKEEN    0x0C // 16
-#define HDA_STATESTS  0x0E // 16, RW1C: a bit per codec that answered reset
-#define HDA_INTCTL    0x20 // 32
-#define HDA_INTSTS    0x24 // 32
-#define HDA_CORBLBASE 0x40
-#define HDA_CORBUBASE 0x44
-#define HDA_CORBWP    0x48 // 16
-#define HDA_CORBRP    0x4A // 16, bit 15 = reset
-#define HDA_CORBCTL   0x4C // 8
-#define HDA_CORBSIZE  0x4E // 8: 1:0 selected, 7:4 supported
-#define HDA_RIRBLBASE 0x50
-#define HDA_RIRBUBASE 0x54
-#define HDA_RIRBWP    0x58 // 16, bit 15 = reset (write-only)
-#define HDA_RINTCNT   0x5A // 16
-#define HDA_RIRBCTL   0x5C // 8
-#define HDA_RIRBSTS   0x5D // 8, RW1C
-#define HDA_RIRBSIZE  0x5E // 8
-#define HDA_SD_BASE   0x80 // stream descriptors, 0x20 apart, inputs first
+// The controller registers, the codec's verbs and the graph parser are
+// all in api/hda_codec.h, shared with /bin/lscodec.
+//
 // PCI config space, Intel SCH/PCH controllers only.
 #define HDA_INTEL_DEVC         0x78
 #define HDA_INTEL_DEVC_NOSNOOP (1u << 11)
-
-#define GCTL_CRST   0x001
-#define GCTL_UNSOL  0x100
-#define INTCTL_GIE  0x80000000u
-#define INTCTL_CIE  0x40000000u
-#define INTSTS_GIS  0x80000000u
-#define INTSTS_CIS  0x40000000u
-#define CORBCTL_RUN 0x02
-#define RIRBCTL_DMAEN 0x02
-#define RIRBCTL_RINTCTL 0x01
-#define RIRBSTS_ACK 0x05 // RINTFL | OIS
 
 // Stream descriptor, relative to its base.
 #define SD_CTL   0x00 // 24-bit; STS is the fourth byte of the same dword
@@ -115,108 +87,14 @@ DRIVER_DECLARE("hda", "sound", "Intel High Definition Audio");
 #define HDA_FMT_48K_S16_STEREO 0x0011
 #define HDA_STREAM_TAG 1
 
-// --- codec verbs -------------------------------------------------------
-// A 20-bit verb+payload: 12-bit verb with an 8-bit payload, or 4-bit
-// verb with 16 bits.
-#define V12(verb, pl) (((uint32_t)(verb) << 8) | ((pl) & 0xFF))
-#define V4(verb, pl)  (((uint32_t)(verb) << 16) | ((pl) & 0xFFFF))
-
-#define VERB_GET_PARAM        0xF00
-#define VERB_GET_CONN_LIST    0xF02
-#define VERB_SET_CONN_SEL     0x701
-#define VERB_GET_CONV         0xF06
-#define VERB_SET_CONV         0x706
-#define VERB_SET_POWER        0x705
-#define VERB_SET_PIN_CTL      0x707
-#define VERB_GET_PIN_CTL      0xF07
-#define VERB_SET_UNSOL        0x708
-#define VERB_GET_PIN_SENSE    0xF09
-#define VERB_SET_EAPD         0x70C
-#define VERB_GET_CONFIG_DEF   0xF1C
-#define VERB_SET_AMP          0x3 // 4-bit
-#define VERB_GET_AMP          0xB // 4-bit
-#define VERB_SET_FORMAT       0x2 // 4-bit
-
-#define PARAM_VENDOR_ID     0x00
-#define PARAM_NODE_COUNT    0x04
-#define PARAM_FUNC_TYPE     0x05
-#define PARAM_WIDGET_CAPS   0x09
-#define PARAM_PIN_CAPS      0x0C
-#define PARAM_AMP_IN_CAPS   0x0D
-#define PARAM_CONN_LIST_LEN 0x0E
-#define PARAM_AMP_OUT_CAPS  0x12
-
-#define FUNC_AUDIO 0x01
-
-// Widget capabilities (PARAM_WIDGET_CAPS).
-#define WCAP_TYPE(c)     (((c) >> 20) & 0xF)
-#define WCAP_IN_AMP      0x002
-#define WCAP_OUT_AMP     0x004
-#define WCAP_AMP_OVRD    0x008
-#define WCAP_UNSOL       0x080
-#define WCAP_CONN_LIST   0x100
-#define WCAP_DIGITAL     0x200
-#define WCAP_POWER       0x400
-#define WT_AUD_OUT  0x0
-#define WT_AUD_IN   0x1
-#define WT_MIXER    0x2
-#define WT_SELECTOR 0x3
-#define WT_PIN      0x4
-
-// Pin capabilities and the default configuration.
-#define PINCAP_PRESENCE 0x00004
-#define PINCAP_HP_DRIVE 0x00008
-#define PINCAP_OUTPUT   0x00010
-#define PINCAP_EAPD     0x10000
-#define DEFCFG_CONN(c)  (((c) >> 30) & 0x3) // 0 jack, 1 none, 2 fixed, 3 both
-#define DEFCFG_DEV(c)   (((c) >> 20) & 0xF)
-#define DEV_LINE_OUT 0x0
-#define DEV_SPEAKER  0x1
-#define DEV_HP_OUT   0x2
-
-#define PINCTL_HP_EN  0x80
-#define PINCTL_OUT_EN 0x40
-
-// SET_AMP payload bits.
-#define AMP_OUT   0x8000
-#define AMP_IN    0x4000
-#define AMP_LEFT  0x2000
-#define AMP_RIGHT 0x1000
-#define AMP_MUTE  0x0080
-#define AMP_IDX(i) (((i) & 0xF) << 8)
-
 // --- state ---------------------------------------------------------------
 #define HDA_MAX_CTRL   2   // a PCH controller and a display-audio one
-#define HDA_MAX_WIDGET 96
-#define HDA_PATH_MAX   6
-#define HDA_CONN_MAX   32
 #define HDA_UNSOL_TAG  1
 
 struct hda_bdl_entry {
     uint64_t addr;
     uint32_t len;
     uint32_t ioc; // bit 0
-};
-
-struct hda_widget {
-    uint8_t  nid;
-    uint8_t  type;
-    uint32_t caps;
-    uint32_t pincap; // pins only
-    uint32_t defcfg; // pins only
-};
-
-// One analog output: a pin, and the route from it back to a DAC.
-struct hda_out {
-    uint8_t pin, dac;
-    uint8_t path[HDA_PATH_MAX]; // pin first, DAC last
-    int     len;
-    // The volume knob on this route: the first widget from the DAC end
-    // with a stepped output amplifier. `offset` is the 0 dB step.
-    uint8_t vol_nid;
-    uint8_t vol_steps, vol_offset;
-    uint8_t vol_step_qdb; // dB per step, in quarter-dB (caps field + 1)
-    int     vol_mute;     // the amp can mute
 };
 
 struct hda_ctrl {
@@ -237,13 +115,10 @@ struct hda_ctrl {
     uint32_t resp;
     int      resp_ready;
 
-    uint8_t  cad, afg;
-    uint32_t vendor;
-    struct hda_widget widgets[HDA_MAX_WIDGET];
-    int nwidgets;
-
-    struct hda_out spk, hp;
-    int have_spk, have_hp;
+    uint8_t  cad;
+    // The graph, and the parser that walks it -- api/hda_codec.h, the
+    // same object /bin/lscodec builds over its own CORB/RIRB.
+    struct hda_codec codec;
     int hp_plugged;
     int jack_pending, in_jack;
 
@@ -353,10 +228,11 @@ static int hda_cmd(struct hda_ctrl *h, uint8_t nid, uint32_t verb20, uint32_t *o
     return ok ? 0 : -1;
 }
 
-static uint32_t param(struct hda_ctrl *h, uint8_t nid, uint8_t p) {
-    uint32_t v = 0;
-    hda_cmd(h, nid, V12(VERB_GET_PARAM, p), &v);
-    return v;
+// The parser's transport: one verb in, one response out. This is the
+// whole of what api/hda_codec.h needs from a controller, and what
+// /bin/lscodec supplies from its own CORB/RIRB.
+static int hda_codec_cmd(void *ctx, uint8_t nid, uint32_t verb20, uint32_t *out) {
+    return hda_cmd((struct hda_ctrl *)ctx, nid, verb20, out);
 }
 
 // Set the CORB and RIRB up and start them. Sizes come from what the
@@ -400,135 +276,44 @@ static int corb_rirb_init(struct hda_ctrl *h) {
 }
 
 // --- the codec graph ---------------------------------------------------
+//
+// THE WALK ITSELF IS IN kernel/lib/hda_codec.c, compiled into ring 3 as
+// well (docs/umdf-design.md stage 3). What stays here is the half that
+// WRITES -- routing, amplifiers, pin control -- and the klog dump.
 
-static struct hda_widget *widget(struct hda_ctrl *h, uint8_t nid) {
-    for (int i = 0; i < h->nwidgets; i++)
-        if (h->widgets[i].nid == nid) return &h->widgets[i];
-    return 0;
-}
-
-// The connection list of `nid`, expanded (a range entry stands for
-// every node between the previous entry and itself).
-static int conn_list(struct hda_ctrl *h, uint8_t nid, uint8_t *out, int cap) {
-    struct hda_widget *w = widget(h, nid);
-    if (!w || !(w->caps & WCAP_CONN_LIST)) return 0;
-    uint32_t len = param(h, nid, PARAM_CONN_LIST_LEN);
-    int n = (int)(len & 0x7F);
-    int longf = (len & 0x80) != 0;
-    int per = longf ? 2 : 4;
-    int count = 0;
-    for (int i = 0; i < n && count < cap; i += per) {
-        uint32_t r = 0;
-        if (hda_cmd(h, nid, V12(VERB_GET_CONN_LIST, i), &r) != 0) break;
-        for (int j = 0; j < per && i + j < n && count < cap; j++) {
-            uint32_t entry = longf ? (r >> (16 * j)) & 0xFFFF : (r >> (8 * j)) & 0xFF;
-            uint32_t range = longf ? 0x8000 : 0x80;
-            uint32_t mask  = longf ? 0x7FFF : 0x7F;
-            uint8_t  nid2  = (uint8_t)(entry & mask);
-            if ((entry & range) && count > 0) {
-                for (uint8_t k = (uint8_t)(out[count - 1] + 1); k <= nid2 && count < cap; k++)
-                    out[count++] = k;
-            } else {
-                out[count++] = nid2;
-            }
-        }
-    }
-    return count;
-}
-
-// `hdadump` on the GRUB line: every widget, its capabilities and its
-// connection list, one klog line each -- what a silent route on a new
-// machine is diagnosed from (docs/boot-flags.md).
 static int want_dump(void) {
     const char *c = multiboot_cmdline();
     return c && k_strstr(c, "hdadump");
 }
 
-static uint32_t amp_caps(struct hda_ctrl *h, struct hda_widget *w, int out);
-
 static void dump_widgets(struct hda_ctrl *h) {
-    for (int i = 0; i < h->nwidgets; i++) {
-        struct hda_widget *w = &h->widgets[i];
+    for (int i = 0; i < h->codec.nwidgets; i++) {
+        struct hda_widget *w = &h->codec.widgets[i];
         uint8_t conns[HDA_CONN_MAX];
-        int n = conn_list(h, w->nid, conns, HDA_CONN_MAX);
+        int n = hda_codec_conn_list(&h->codec, w->nid, conns, HDA_CONN_MAX);
         char cl[3 * 12 + 4] = "";
         int used = 0;
         for (int k = 0; k < n && k < 12; k++)
             used += k_snprintf(cl + used, sizeof cl - (uint32_t)used, " %02x", conns[k]);
-        uint32_t oc = (w->caps & WCAP_OUT_AMP) ? amp_caps(h, w, 1) : 0;
-        uint32_t ic = (w->caps & WCAP_IN_AMP) ? amp_caps(h, w, 0) : 0;
+        uint32_t oc = (w->caps & WCAP_OUT_AMP) ? hda_codec_amp_caps(&h->codec, w, 1) : 0;
+        uint32_t ic = (w->caps & WCAP_IN_AMP) ? hda_codec_amp_caps(&h->codec, w, 0) : 0;
         klog_printf("%s: nid %02x type %u caps %08x pincap %08x defcfg %08x oamp %08x iamp %08x conn%s%s\n",
                     h->name, w->nid, w->type, w->caps, w->pincap, w->defcfg, oc, ic,
                     cl, n > 12 ? " ..." : "");
     }
 }
 
-static int enumerate(struct hda_ctrl *h) {
-    uint32_t nodes = param(h, 0, PARAM_NODE_COUNT);
-    uint8_t fg_start = (uint8_t)(nodes >> 16), fg_count = (uint8_t)nodes;
-    h->afg = 0;
-    for (uint8_t i = 0; i < fg_count; i++) {
-        uint8_t nid = (uint8_t)(fg_start + i);
-        if ((param(h, nid, PARAM_FUNC_TYPE) & 0xFF) == FUNC_AUDIO) { h->afg = nid; break; }
-    }
-    if (!h->afg) return -1;
-    hda_cmd(h, h->afg, V12(VERB_SET_POWER, 0), 0); // D0
-
-    nodes = param(h, h->afg, PARAM_NODE_COUNT);
-    uint8_t start = (uint8_t)(nodes >> 16), count = (uint8_t)nodes;
-    h->nwidgets = 0;
-    for (uint8_t i = 0; i < count && h->nwidgets < HDA_MAX_WIDGET; i++) {
-        struct hda_widget *w = &h->widgets[h->nwidgets];
-        w->nid = (uint8_t)(start + i);
-        w->caps = param(h, w->nid, PARAM_WIDGET_CAPS);
-        w->type = (uint8_t)WCAP_TYPE(w->caps);
-        w->pincap = w->defcfg = 0;
-        if (w->type == WT_PIN) {
-            w->pincap = param(h, w->nid, PARAM_PIN_CAPS);
-            hda_cmd(h, w->nid, V12(VERB_GET_CONFIG_DEF, 0), &w->defcfg);
-        }
-        h->nwidgets++;
-    }
-    if (h->nwidgets && want_dump()) dump_widgets(h);
-    return h->nwidgets ? 0 : -1;
-}
-
-// Depth-first from a pin toward an analog DAC, through mixers and
-// selectors only. Fills `path` pin-first; returns its length or 0.
-static int find_path(struct hda_ctrl *h, uint8_t nid, uint8_t *path, int depth, uint32_t *visited) {
-    if (depth >= HDA_PATH_MAX) return 0;
-    struct hda_widget *w = widget(h, nid);
-    if (!w || (w->caps & WCAP_DIGITAL)) return 0;
-    if (visited[nid >> 5] & (1u << (nid & 31))) return 0;
-    visited[nid >> 5] |= 1u << (nid & 31);
-    path[depth] = nid;
-    if (w->type == WT_AUD_OUT) return depth + 1;
-    if (w->type != WT_PIN && w->type != WT_MIXER && w->type != WT_SELECTOR) return 0;
-    uint8_t conns[HDA_CONN_MAX];
-    int n = conn_list(h, nid, conns, HDA_CONN_MAX);
-    for (int i = 0; i < n; i++) {
-        int len = find_path(h, conns[i], path, depth + 1, visited);
-        if (len) return len;
-    }
-    return 0;
-}
-
-static uint32_t amp_caps(struct hda_ctrl *h, struct hda_widget *w, int out) {
-    uint8_t p = out ? PARAM_AMP_OUT_CAPS : PARAM_AMP_IN_CAPS;
-    return param(h, (w->caps & WCAP_AMP_OVRD) ? w->nid : h->afg, p);
-}
-
 // Route one output: power, the DAC's stream and format, every
 // amplifier on the way unmuted at 0 dB, the pin enabled for output.
 static void route_output(struct hda_ctrl *h, struct hda_out *o) {
-    o->vol_nid = 0;
+    hda_codec_pick_volume(&h->codec, o);
     for (int i = 0; i < o->len; i++) {
-        struct hda_widget *w = widget(h, o->path[i]);
+        struct hda_widget *w = hda_codec_widget(&h->codec, o->path[i]);
         if (!w) continue;
         if (w->caps & WCAP_POWER) hda_cmd(h, w->nid, V12(VERB_SET_POWER, 0), 0);
     }
     for (int i = o->len - 1; i >= 0; i--) {
-        struct hda_widget *w = widget(h, o->path[i]);
+        struct hda_widget *w = hda_codec_widget(&h->codec, o->path[i]);
         if (!w) continue;
         uint8_t next = (i + 1 < o->len) ? o->path[i + 1] : 0;
 
@@ -541,13 +326,13 @@ static void route_output(struct hda_ctrl *h, struct hda_out *o) {
         // the rest so a microphone loop does not ride along.
         if (next && (w->caps & WCAP_CONN_LIST)) {
             uint8_t conns[HDA_CONN_MAX];
-            int n = conn_list(h, w->nid, conns, HDA_CONN_MAX);
+            int n = hda_codec_conn_list(&h->codec, w->nid, conns, HDA_CONN_MAX);
             int idx = 0;
             for (int k = 0; k < n; k++) if (conns[k] == next) { idx = k; break; }
             if (n > 1 && w->type != WT_MIXER)
                 hda_cmd(h, w->nid, V12(VERB_SET_CONN_SEL, idx), 0);
             if (w->caps & WCAP_IN_AMP) {
-                uint32_t ic = amp_caps(h, w, 0);
+                uint32_t ic = hda_codec_amp_caps(&h->codec, w, 0);
                 uint16_t gain = (uint16_t)(ic & 0x7F); // the 0 dB step
                 for (int k = 0; k < n; k++) {
                     if (w->type != WT_MIXER && k != idx) continue;
@@ -559,18 +344,9 @@ static void route_output(struct hda_ctrl *h, struct hda_out *o) {
         }
 
         if (w->caps & WCAP_OUT_AMP) {
-            // Amp caps: 6:0 the 0 dB step (offset), 14:8 the step count,
-            // 22:16 the step size, 31 mute-capable.
-            uint32_t oc = amp_caps(h, w, 1);
-            uint8_t offset = (uint8_t)(oc & 0x7F), steps = (uint8_t)((oc >> 8) & 0x7F);
-            hda_cmd(h, w->nid, V4(VERB_SET_AMP, AMP_OUT | AMP_LEFT | AMP_RIGHT | offset), 0);
-            if (!o->vol_nid && (steps || (oc & 0x80000000u))) {
-                o->vol_nid = w->nid;
-                o->vol_steps = steps;
-                o->vol_offset = offset;
-                o->vol_step_qdb = (uint8_t)(((oc >> 16) & 0x7F) + 1);
-                o->vol_mute = (oc & 0x80000000u) != 0;
-            }
+            uint32_t oc = hda_codec_amp_caps(&h->codec, w, 1);
+            hda_cmd(h, w->nid, V4(VERB_SET_AMP,
+                                  AMP_OUT | AMP_LEFT | AMP_RIGHT | (oc & 0x7F)), 0);
         }
 
         if (w->type == WT_PIN) {
@@ -584,67 +360,22 @@ static void route_output(struct hda_ctrl *h, struct hda_out *o) {
     }
 }
 
-static int out_rank(struct hda_widget *w) {
-    if (w->type != WT_PIN || !(w->pincap & PINCAP_OUTPUT) || (w->caps & WCAP_DIGITAL)) return 0;
-    if (DEFCFG_CONN(w->defcfg) == 1) return 0; // nothing wired
-    switch (DEFCFG_DEV(w->defcfg)) {
-    case DEV_SPEAKER:  return DEFCFG_CONN(w->defcfg) == 0 ? 3 : 4;
-    case DEV_LINE_OUT: return 2;
-    case DEV_HP_OUT:   return 1;
-    default:           return 0;
-    }
-}
-
-// Choose the speaker (or line-out) pin and, separately, a headphone
-// jack; route each back to a DAC.
-static int pick_outputs(struct hda_ctrl *h) {
-    h->have_spk = h->have_hp = 0;
-    int best = 0;
-    struct hda_widget *spk = 0, *hp = 0;
-    for (int i = 0; i < h->nwidgets; i++) {
-        struct hda_widget *w = &h->widgets[i];
-        int r = out_rank(w);
-        if (r > best) { best = r; spk = w; }
-        if (r == 1 && !hp) hp = w;
-    }
-    if (!spk) return -1;
-    if (hp == spk) hp = 0; // headphones are the only output: always on
-
-    uint32_t visited[8] = {0};
-    h->spk.len = find_path(h, spk->nid, h->spk.path, 0, visited);
-    if (!h->spk.len) return -1;
-    h->spk.pin = spk->nid;
-    h->spk.dac = h->spk.path[h->spk.len - 1];
-    h->have_spk = 1;
-
-    if (hp) {
-        uint32_t v2[8] = {0};
-        h->hp.len = find_path(h, hp->nid, h->hp.path, 0, v2);
-        if (h->hp.len) {
-            h->hp.pin = hp->nid;
-            h->hp.dac = h->hp.path[h->hp.len - 1];
-            h->have_hp = 1;
-        }
-    }
-    return 0;
-}
-
 // Headphones in: the jack drives and the speaker pin is switched off,
 // as every laptop does it. Out: the reverse.
 static void apply_jack_state(struct hda_ctrl *h) {
-    if (!h->have_hp) return;
-    struct hda_widget *hpw = widget(h, h->hp.pin);
+    if (!h->codec.have_hp) return;
+    struct hda_widget *hpw = hda_codec_widget(&h->codec, h->codec.hp.pin);
     uint8_t hp_ctl = PINCTL_OUT_EN | ((hpw && (hpw->pincap & PINCAP_HP_DRIVE)) ? PINCTL_HP_EN : 0);
-    hda_cmd(h, h->hp.pin,  V12(VERB_SET_PIN_CTL, h->hp_plugged ? hp_ctl : 0), 0);
-    hda_cmd(h, h->spk.pin, V12(VERB_SET_PIN_CTL, h->hp_plugged ? 0 : PINCTL_OUT_EN), 0);
+    hda_cmd(h, h->codec.hp.pin,  V12(VERB_SET_PIN_CTL, h->hp_plugged ? hp_ctl : 0), 0);
+    hda_cmd(h, h->codec.spk.pin, V12(VERB_SET_PIN_CTL, h->hp_plugged ? 0 : PINCTL_OUT_EN), 0);
 }
 
 static void jack_update(struct hda_ctrl *h) {
-    if (!h->have_hp) { h->jack_pending = 0; return; }
+    if (!h->codec.have_hp) { h->jack_pending = 0; return; }
     h->in_jack = 1;
     h->jack_pending = 0;
     uint32_t sense = 0;
-    if (hda_cmd(h, h->hp.pin, V12(VERB_GET_PIN_SENSE, 0), &sense) == 0) {
+    if (hda_cmd(h, h->codec.hp.pin, V12(VERB_GET_PIN_SENSE, 0), &sense) == 0) {
         int plugged = (sense >> 31) & 1;
         if (plugged != h->hp_plugged) {
             h->hp_plugged = plugged;
@@ -685,8 +416,8 @@ static int stream_start(struct hda_ctrl *h) {
     // The codec side again: a stream reset leaves the converter as it
     // was, but a codec that was power-cycled would not be.
     for (int p = 0; p < 2; p++) {
-        struct hda_out *o = p ? &h->hp : &h->spk;
-        if (!(p ? h->have_hp : h->have_spk)) continue;
+        struct hda_out *o = p ? &h->codec.hp : &h->codec.spk;
+        if (!(p ? h->codec.have_hp : h->codec.have_spk)) continue;
         hda_cmd(h, o->dac, V4(VERB_SET_FORMAT, HDA_FMT_48K_S16_STEREO), 0);
         hda_cmd(h, o->dac, V12(VERB_SET_CONV, HDA_STREAM_TAG << 4), 0);
     }
@@ -725,8 +456,8 @@ static void set_volume(struct hda_ctrl *h, int pct) {
     if (pct > 100) pct = 100;
     uint8_t done = 0;
     for (int p = 0; p < 2; p++) {
-        struct hda_out *o = p ? &h->hp : &h->spk;
-        if (!(p ? h->have_hp : h->have_spk) || !o->vol_nid || o->vol_nid == done) continue;
+        struct hda_out *o = p ? &h->codec.hp : &h->codec.spk;
+        if (!(p ? h->codec.have_hp : h->codec.have_spk) || !o->vol_nid || o->vol_nid == done) continue;
         done = o->vol_nid;
         uint16_t pl = AMP_OUT | AMP_LEFT | AMP_RIGHT;
         if (pct == 0 && o->vol_mute) pl |= AMP_MUTE;
@@ -898,6 +629,8 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
                 h->name, d->bus, d->device, d->function, gcap, h->iss, h->oss, statests);
 
     corb_rirb_init(h);
+    h->codec.cmd = hda_codec_cmd;
+    h->codec.ctx = h;
 
     // The first codec with an audio function group and an analog
     // output. A display-audio controller's codec has only digital pins
@@ -911,13 +644,14 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
             klog_printf("%s: codec at cad %u did not answer\n", h->name, cad);
             continue;
         }
-        h->vendor = vendor;
-        if (enumerate(h) != 0) {
+        h->codec.vendor = vendor;
+        if (hda_codec_enumerate(&h->codec) != 0) {
             klog_printf("%s: codec %04x:%04x at cad %u has no audio function group\n",
                         h->name, vendor >> 16, vendor & 0xFFFF, cad);
             continue;
         }
-        if (pick_outputs(h) != 0) {
+        if (want_dump()) dump_widgets(h);
+        if (hda_codec_pick_outputs(&h->codec) != 0) {
             klog_printf("%s: codec %04x:%04x at cad %u has no analog output\n",
                         h->name, vendor >> 16, vendor & 0xFFFF, cad);
             continue;
@@ -926,26 +660,26 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     }
     if (!found) { ctrl_teardown(h, "no codec with an analog output"); return; }
 
-    route_output(h, &h->spk);
+    route_output(h, &h->codec.spk);
     if (want_dump())
         klog_printf("%s: spk route %02x %02x %02x %02x %02x %02x (%d) vol nid %02x offset %u steps %u\n",
-                    h->name, h->spk.path[0], h->spk.path[1], h->spk.path[2], h->spk.path[3],
-                    h->spk.path[4], h->spk.path[5], h->spk.len, h->spk.vol_nid,
-                    h->spk.vol_offset, h->spk.vol_steps);
-    if (h->have_hp) {
-        route_output(h, &h->hp);
+                    h->name, h->codec.spk.path[0], h->codec.spk.path[1], h->codec.spk.path[2], h->codec.spk.path[3],
+                    h->codec.spk.path[4], h->codec.spk.path[5], h->codec.spk.len, h->codec.spk.vol_nid,
+                    h->codec.spk.vol_offset, h->codec.spk.vol_steps);
+    if (h->codec.have_hp) {
+        route_output(h, &h->codec.hp);
         if (want_dump())
             klog_printf("%s: hp route %02x %02x %02x %02x %02x %02x (%d) vol nid %02x\n",
-                        h->name, h->hp.path[0], h->hp.path[1], h->hp.path[2], h->hp.path[3],
-                        h->hp.path[4], h->hp.path[5], h->hp.len, h->hp.vol_nid);
-        struct hda_widget *hpw = widget(h, h->hp.pin);
+                        h->name, h->codec.hp.path[0], h->codec.hp.path[1], h->codec.hp.path[2], h->codec.hp.path[3],
+                        h->codec.hp.path[4], h->codec.hp.path[5], h->codec.hp.len, h->codec.hp.vol_nid);
+        struct hda_widget *hpw = hda_codec_widget(&h->codec, h->codec.hp.pin);
         if (hpw && (hpw->pincap & PINCAP_PRESENCE) && (hpw->caps & WCAP_UNSOL)) {
-            hda_cmd(h, h->hp.pin, V12(VERB_SET_UNSOL, 0x80 | HDA_UNSOL_TAG), 0);
+            hda_cmd(h, h->codec.hp.pin, V12(VERB_SET_UNSOL, 0x80 | HDA_UNSOL_TAG), 0);
             uint32_t sense = 0;
-            if (hda_cmd(h, h->hp.pin, V12(VERB_GET_PIN_SENSE, 0), &sense) == 0)
+            if (hda_cmd(h, h->codec.hp.pin, V12(VERB_GET_PIN_SENSE, 0), &sense) == 0)
                 h->hp_plugged = (sense >> 31) & 1;
         } else {
-            h->have_hp = 0; // no jack sense: the speaker route alone
+            h->codec.have_hp = 0; // no jack sense: the speaker route alone
         }
         apply_jack_state(h);
     }
@@ -971,7 +705,7 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     }
     mw32(h, HDA_INTCTL, INTCTL_GIE | INTCTL_CIE); // jack events from here on
 
-    k_snprintf(h->label, sizeof h->label, "%s HD Audio", vendor_name(h->vendor));
+    k_snprintf(h->label, sizeof h->label, "%s HD Audio", vendor_name(h->codec.vendor));
     h->dev.name = h->name;
     h->dev.label = h->label;
     h->dev.driver = "hda";
@@ -982,8 +716,8 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     h->registered = 1;
     klog_printf("%s: %02x:%02x.%u codec %04x:%04x spk pin %#x dac %#x%s%#x %s\n",
                 h->name, d->bus, d->device, d->function,
-                h->vendor >> 16, h->vendor & 0xFFFF, h->spk.pin, h->spk.dac,
-                h->have_hp ? " hp pin " : " hp ", h->have_hp ? h->hp.pin : 0,
+                h->codec.vendor >> 16, h->codec.vendor & 0xFFFF, h->codec.spk.pin, h->codec.spk.dac,
+                h->codec.have_hp ? " hp pin " : " hp ", h->codec.have_hp ? h->codec.hp.pin : 0,
                 h->msi_vector ? "msi" : "intx");
 }
 
@@ -1071,7 +805,7 @@ KTEST("hda", "the controller is out of reset and a codec answered") {
     struct hda_ctrl *h = test_ctrl();
     if (!h) { KTEST_SKIP("no HDA on this machine"); return; }
     KTEST_ASSERT(mr32(h, HDA_GCTL) & GCTL_CRST);
-    KTEST_ASSERT(h->vendor != 0 && h->vendor != 0xFFFFFFFFu);
+    KTEST_ASSERT(h->codec.vendor != 0 && h->codec.vendor != 0xFFFFFFFFu);
     KTEST_ASSERT(sound_present());
 }
 
@@ -1079,10 +813,10 @@ KTEST("hda", "the speaker route ends at a DAC bound to stream 1") {
     struct hda_ctrl *h = test_ctrl();
     if (!h) { KTEST_SKIP("no HDA on this machine"); return; }
     uint32_t conv = 0;
-    KTEST_ASSERT_EQ(hda_cmd(h, h->spk.dac, V12(VERB_GET_CONV, 0), &conv), 0);
+    KTEST_ASSERT_EQ(hda_cmd(h, h->codec.spk.dac, V12(VERB_GET_CONV, 0), &conv), 0);
     KTEST_ASSERT_EQ((conv >> 4) & 0xF, HDA_STREAM_TAG);
     uint32_t ctl = 0;
-    KTEST_ASSERT_EQ(hda_cmd(h, h->spk.pin, V12(VERB_GET_PIN_CTL, 0), &ctl), 0);
+    KTEST_ASSERT_EQ(hda_cmd(h, h->codec.spk.pin, V12(VERB_GET_PIN_CTL, 0), &ctl), 0);
     KTEST_ASSERT(ctl & PINCTL_OUT_EN);
 }
 
@@ -1097,14 +831,14 @@ KTEST("hda", "start runs the stream and stop halts it") {
 
 KTEST("hda", "a volume change lands in the route's amplifier") {
     struct hda_ctrl *h = test_ctrl();
-    if (!h || !h->spk.vol_nid || !h->spk.vol_offset) { KTEST_SKIP("no stepped amplifier"); return; }
+    if (!h || !h->codec.spk.vol_nid || !h->codec.spk.vol_offset) { KTEST_SKIP("no stepped amplifier"); return; }
     set_volume(h, 50);
     uint32_t amp = 0;
-    KTEST_ASSERT_EQ(hda_cmd(h, h->spk.vol_nid, V4(VERB_GET_AMP, AMP_OUT | AMP_LEFT), &amp), 0);
-    KTEST_ASSERT_EQ(amp & 0x7F, taper_gain(&h->spk, 50));
-    KTEST_ASSERT((amp & 0x7F) < h->spk.vol_offset); // 50% really is quieter
+    KTEST_ASSERT_EQ(hda_cmd(h, h->codec.spk.vol_nid, V4(VERB_GET_AMP, AMP_OUT | AMP_LEFT), &amp), 0);
+    KTEST_ASSERT_EQ(amp & 0x7F, taper_gain(&h->codec.spk, 50));
+    KTEST_ASSERT((amp & 0x7F) < h->codec.spk.vol_offset); // 50% really is quieter
     set_volume(h, 100);
-    KTEST_ASSERT_EQ(hda_cmd(h, h->spk.vol_nid, V4(VERB_GET_AMP, AMP_OUT | AMP_LEFT), &amp), 0);
-    KTEST_ASSERT_EQ(amp & 0x7F, h->spk.vol_offset);
+    KTEST_ASSERT_EQ(hda_cmd(h, h->codec.spk.vol_nid, V4(VERB_GET_AMP, AMP_OUT | AMP_LEFT), &amp), 0);
+    KTEST_ASSERT_EQ(amp & 0x7F, h->codec.spk.vol_offset);
 }
 PCI_DRIVER_REMOVABLE("hda", hda_matches, hda_probe, hda_remove);

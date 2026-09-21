@@ -398,6 +398,11 @@ int main(int argc, char **argv) {
             } else {
                 put("no driver");
             }
+            // Whether a process could take it off the kernel. Said
+            // only where a driver HOLDS it, because that is where the
+            // answer is not obvious -- "no driver" already means free.
+            if (o && o->claimable && o->driver[0] && !o->holder_pid)
+                put("  (claimable)");
             put("\n");
         }
     }

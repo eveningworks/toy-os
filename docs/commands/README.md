@@ -118,6 +118,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`kbd`](kbd.md)
 - [`kstack`](kstack.md)
 - [`lsblk`](lsblk.md)
+- [`lscodec`](lscodec.md)
 - [`lscpu`](lscpu.md)
 - [`lsdisplay`](lsdisplay.md)
 - [`lsdrv`](lsdrv.md)

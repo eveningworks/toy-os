@@ -1,0 +1,364 @@
+// lscodec -- the HD Audio codec graph, read by a process.
+//
+// STAGE 3 of docs/umdf-design.md, and the first ring-3 driver in this
+// tree. It takes an HD Audio controller off the kernel, maps its
+// registers, drives its command ring itself, walks the codec graph, and
+// hands the controller back.
+//
+// THE PARSER IS NOT IN THIS FILE. kernel/lib/hda_codec.c is compiled
+// twice -- once into the kernel for hda.c, once into this binary --
+// so there is one implementation of the walk, not two that drift. What
+// is here is the TRANSPORT: bringing a controller out of reset, the
+// CORB and RIRB, and printing.
+//
+// WHY THIS IS WORTH DOING, in one line: the graph is untrusted input --
+// node counts, widget types and connection lists come off the card --
+// and in ring 3 a lie about them kills a program instead of the machine.
+//
+// THREE THINGS THAT BITE, all paid for already:
+//
+//  - THE CONTROLLER ARRIVES IN RESET and its whole register file reads
+//    zero, because hda_remove() writes GCTL.CRST low on its way out. So
+//    the first thing here is to bring it up -- and CRST reading back
+//    high is the write being ACCEPTED, not the link being ready. The
+//    codecs need the spec's 25 frames, which is what a process can just
+//    sleep for and hda_probe() cannot.
+//  - A REGISTER IS READ AT ITS OWN WIDTH. GCAP is 16 bits, and reading
+//    it as two bytes gives 0x0001: a device models a register, not
+//    memory.
+//  - IT NEEDS `spawn`, never `run`. The legacy loader has no scheduler
+//    slot, so every one of these calls comes back EPERM.
+//
+// AND IT MUST GIVE THE CONTROLLER BACK. A claim dropped by a dying
+// process deliberately does NOT rebind, so a crash here leaves the
+// machine with no sound until something claims and releases it again.
+// Every exit path below goes through finish().
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>   // usleep -- the thing a driver in a PROCESS can do
+#include <errno.h>
+#include "rt/sys.h"
+#include "pci.h"
+#include "hda_codec.h"
+#include "syscall_abi.h"
+#include "query_abi.h"
+#include "lib/cmd.h"
+
+#define USAGE "lscodec [-v] [-d INDEX]"
+
+#define HDA_CLASS 0x04
+#define HDA_SUBCLASS 0x03
+
+// --- the controller ----------------------------------------------------
+
+struct ctrl {
+    volatile uint8_t *mmio;
+    volatile uint32_t *corb;
+    volatile uint64_t *rirb;
+    uint16_t corb_ents, rirb_ents;
+    uint16_t rirb_rp;
+    uint8_t  cad;
+    int      dev;         // the PCI enumeration index
+    int      claimed;
+};
+
+static inline uint8_t  mr8(struct ctrl *h, uint32_t o)  { return *(volatile uint8_t *)(h->mmio + o); }
+static inline uint16_t mr16(struct ctrl *h, uint32_t o) { return *(volatile uint16_t *)(h->mmio + o); }
+static inline uint32_t mr32(struct ctrl *h, uint32_t o) { return *(volatile uint32_t *)(h->mmio + o); }
+static inline void mw8(struct ctrl *h, uint32_t o, uint8_t v)   { *(volatile uint8_t *)(h->mmio + o) = v; }
+static inline void mw16(struct ctrl *h, uint32_t o, uint16_t v) { *(volatile uint16_t *)(h->mmio + o) = v; }
+static inline void mw32(struct ctrl *h, uint32_t o, uint32_t v) { *(volatile uint32_t *)(h->mmio + o) = v; }
+
+// A bounded spin, then a sleep -- this is a process, so waiting costs
+// the scheduler nothing and there is no tick deadline to miss.
+static int wait_bits32(struct ctrl *h, uint32_t off, uint32_t mask, uint32_t want, int ms) {
+    for (int i = 0; i < ms * 10; i++) {
+        if ((mr32(h, off) & mask) == want) return 0;
+        usleep(100);
+    }
+    return -1;
+}
+
+// One verb, one response, polled. The kernel's hda_cmd() has to
+// serialise against its own interrupt handler; nothing here does,
+// because this process is the only thing touching the RIRB.
+static int corb_cmd(void *ctx, uint8_t nid, uint32_t verb20, uint32_t *out) {
+    struct ctrl *h = ctx;
+    if (out) *out = 0;
+
+    uint16_t wp = (uint16_t)((mr16(h, HDA_CORBWP) + 1) % h->corb_ents);
+    h->corb[wp] = ((uint32_t)h->cad << 28) | ((uint32_t)nid << 20) | (verb20 & 0xFFFFF);
+    mw16(h, HDA_CORBWP, wp);
+
+    // RIRBSTS IS ACKNOWLEDGED EVERY LAP, not just at the end. QEMU's
+    // controller stops fetching from the CORB while RINTCNT responses
+    // are pending and RINTFL is still set, so a polled path that never
+    // wrote it gets exactly one answer and then silence.
+    for (int spin = 0; spin < 2000; spin++) {
+        mw8(h, HDA_RIRBSTS, RIRBSTS_ACK);
+        uint16_t rwp = mr16(h, HDA_RIRBWP) & 0xFF;
+        while (h->rirb_rp != rwp) {
+            h->rirb_rp = (uint16_t)((h->rirb_rp + 1) % h->rirb_ents);
+            uint64_t e = h->rirb[h->rirb_rp];
+            if ((uint32_t)(e >> 32) & 0x10) continue;  // unsolicited: a jack event
+            if (out) *out = (uint32_t)e;
+            return 0;
+        }
+        usleep(100);
+    }
+    // A TIMEOUT RESYNCS THE READ POINTER, or the answer that arrives
+    // late is handed to the NEXT verb -- every reading after one slow
+    // codec shifted by one, which is a wrong graph rather than an
+    // error. Skipping to the write pointer discards it instead.
+    // Reduced mod the ring size, which the write pointer is NOT: it
+    // is 8 bits, and a controller reporting fewer than 256 entries
+    // would otherwise leave the read pointer outside its own ring.
+    h->rirb_rp = (uint16_t)((mr16(h, HDA_RIRBWP) & 0xFF) % h->rirb_ents);
+    return -1;
+}
+
+static int corb_rirb_start(struct ctrl *h, uint64_t dma_phys) {
+    uint8_t csz = mr8(h, HDA_CORBSIZE) >> 4;
+    uint8_t rsz = mr8(h, HDA_RIRBSIZE) >> 4;
+    uint8_t csel = (csz & 4) ? 2 : (csz & 2) ? 1 : 0;
+    uint8_t rsel = (rsz & 4) ? 2 : (rsz & 2) ? 1 : 0;
+    h->corb_ents = csel == 2 ? 256 : csel == 1 ? 16 : 2;
+    h->rirb_ents = rsel == 2 ? 256 : rsel == 1 ? 16 : 2;
+
+    mw8(h, HDA_CORBCTL, 0);
+    mw8(h, HDA_RIRBCTL, 0);
+
+    mw8(h, HDA_CORBSIZE, csel);
+    mw32(h, HDA_CORBLBASE, (uint32_t)(dma_phys + HDA_CORB_OFF));
+    mw32(h, HDA_CORBUBASE, (uint32_t)((dma_phys + HDA_CORB_OFF) >> 32));
+    mw16(h, HDA_CORBWP, 0);
+    // The read-pointer reset handshake: set, see it set, clear, see it
+    // clear. Some controllers never show the set half, so both waits
+    // are bounded and neither is fatal -- Linux tolerates the same.
+    mw16(h, HDA_CORBRP, 0x8000);
+    for (int i = 0; i < 100 && !(mr16(h, HDA_CORBRP) & 0x8000); i++) usleep(100);
+    mw16(h, HDA_CORBRP, 0);
+    for (int i = 0; i < 100 && (mr16(h, HDA_CORBRP) & 0x8000); i++) usleep(100);
+
+    mw8(h, HDA_RIRBSIZE, rsel);
+    mw32(h, HDA_RIRBLBASE, (uint32_t)(dma_phys + HDA_RIRB_OFF));
+    mw32(h, HDA_RIRBUBASE, (uint32_t)((dma_phys + HDA_RIRB_OFF) >> 32));
+    mw16(h, HDA_RIRBWP, 0x8000);
+    mw16(h, HDA_RINTCNT, 1);
+    mw8(h, HDA_RIRBSTS, RIRBSTS_ACK);
+    h->rirb_rp = 0;
+
+    mw8(h, HDA_CORBCTL, CORBCTL_RUN);
+    mw8(h, HDA_RIRBCTL, RIRBCTL_DMAEN | RIRBCTL_RINTCTL);
+    return 0;
+}
+
+// --- printing ----------------------------------------------------------
+
+static const char *widget_type(uint8_t t) {
+    switch (t) {
+    case WT_AUD_OUT:  return "dac";
+    case WT_AUD_IN:   return "adc";
+    case WT_MIXER:    return "mixer";
+    case WT_SELECTOR: return "select";
+    case WT_PIN:      return "pin";
+    default:          return "other";
+    }
+}
+
+static const char *pin_device(uint32_t defcfg) {
+    switch (DEFCFG_DEV(defcfg)) {
+    case DEV_LINE_OUT: return "line-out";
+    case DEV_SPEAKER:  return "speaker";
+    case DEV_HP_OUT:   return "headphone";
+    default:           return "other";
+    }
+}
+
+static void print_route(const char *what, struct hda_codec *c, struct hda_out *o) {
+    printf("  %s route:", what);
+    for (int i = 0; i < o->len; i++)
+        printf(" %s%02x", i ? "-> " : "", o->path[i]);
+    printf("  (pin %02x dac %02x)\n", o->pin, o->dac);
+    hda_codec_pick_volume(c, o);
+    if (!o->vol_nid) { printf("  %s volume: none on this route\n", what); return; }
+    printf("  %s volume: nid %02x, %u steps of %u.%u dB, 0 dB at %u%s\n",
+           what, o->vol_nid, o->vol_steps,
+           o->vol_step_qdb / 4, (o->vol_step_qdb % 4) * 25,
+           o->vol_offset, o->vol_mute ? ", mute-capable" : "");
+}
+
+static void print_widgets(struct hda_codec *c) {
+    for (int i = 0; i < c->nwidgets; i++) {
+        struct hda_widget *w = &c->widgets[i];
+        printf("  nid %02x %-6s caps %08x", w->nid, widget_type(w->type), w->caps);
+        if (w->type == WT_PIN)
+            printf(" pincap %08x defcfg %08x %s%s",
+                   w->pincap, w->defcfg, pin_device(w->defcfg),
+                   (w->caps & WCAP_DIGITAL) ? " digital" : "");
+        uint8_t conns[HDA_CONN_MAX];
+        int n = hda_codec_conn_list(c, w->nid, conns, HDA_CONN_MAX);
+        if (n) {
+            printf(" conn");
+            for (int k = 0; k < n; k++) printf(" %02x", conns[k]);
+        }
+        printf("\n");
+    }
+}
+
+// --- the device --------------------------------------------------------
+
+static struct ctrl g_h;
+static struct hda_codec g_codec;
+
+// THE ONLY WAY OUT. Without DEV_RELEASE_REBIND the kernel leaves the
+// controller unbound, and on a machine with one sound card that means
+// no sound until somebody claims and releases it again.
+static int finish(int code) {
+    if (g_h.claimed) sys_dev_release(g_h.dev, DEV_RELEASE_REBIND);
+    return code;
+}
+
+// Is this device claimable at all? QUERY_PCIDEV is how ring 3 asks,
+// and the alternative is to find out BY CLAIMING -- which unbinds a
+// live device to learn something the kernel already knows.
+static int claimable(int index) {
+    struct query_pcidev q;
+    QUERY_FOREACH(QUERY_PCIDEV, q, i) {
+        if ((int)q.index == index) return q.claimable ? 1 : 0;
+    }
+    return 0;
+}
+
+// The FIRST class-04:03 controller. On a machine with two that is the
+// display-audio one (00:03.0 on the test laptop), which has no analog
+// output and drives no speakers -- so the default target is the one
+// that cannot silence the machine. `-d` overrides it.
+static int find_controller(void) {
+    int count = sys_pci_count();
+    for (int i = 0; i < count; i++) {
+        struct pci_device d;
+        if (sys_pci_info(i, &d) != 0) continue;
+        if (d.class_code == HDA_CLASS && d.subclass == HDA_SUBCLASS) return i;
+    }
+    return -1;
+}
+
+int main(int argc, char **argv) {
+    int verbose = 0, want = -1;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-v")) { verbose = 1; continue; }
+        if (!strcmp(argv[i], "-d") && i + 1 < argc) { want = atoi(argv[++i]); continue; }
+        cmd_usage(USAGE);
+        return 1;
+    }
+
+    int index = want >= 0 ? want : find_controller();
+    if (index < 0) {
+        fprintf(stderr, "lscodec: no HD Audio controller on this machine\n");
+        return 1;
+    }
+    struct pci_device d;
+    if (sys_pci_info(index, &d) != 0) {
+        fprintf(stderr, "lscodec: no PCI device at index %d\n", index);
+        return 1;
+    }
+    if (!claimable(index)) {
+        fprintf(stderr, "lscodec: pci %d cannot be claimed -- a ring-0 driver "
+                        "holds it and has no remove() (lspci -k says which "
+                        "can)\n", index);
+        return 1;
+    }
+
+    g_h.dev = index;
+    if (sys_dev_claim(index) != 0) {
+        fprintf(stderr, "lscodec: cannot claim pci %d: %s\n", index, strerror(errno));
+        return 1;
+    }
+    g_h.claimed = 1;
+    printf("lscodec: pci %d %02x:%02x.%u %04x:%04x claimed\n",
+           index, d.bus, d.device, d.function, d.vendor_id, d.device_id);
+
+    int64_t bar0 = sys_dev_map_bar(index, 0);
+    if (bar0 <= 0) {
+        fprintf(stderr, "lscodec: bar0 did not map: %s\n", strerror(errno));
+        return finish(1);
+    }
+    g_h.mmio = (volatile uint8_t *)(uintptr_t)bar0;
+
+    uint64_t dma_phys = 0;
+    int64_t dma = sys_dev_dma_alloc(index, HDA_RING_BYTES, &dma_phys);
+    if (dma <= 0) {
+        fprintf(stderr, "lscodec: no DMA buffer: %s\n", strerror(errno));
+        return finish(1);
+    }
+    g_h.corb = (volatile uint32_t *)(uintptr_t)(dma + HDA_CORB_OFF);
+    g_h.rirb = (volatile uint64_t *)(uintptr_t)(dma + HDA_RIRB_OFF);
+    printf("lscodec: bar0 at %llx, command rings at %llx (phys %llx)\n",
+           (unsigned long long)bar0, (unsigned long long)dma,
+           (unsigned long long)dma_phys);
+
+    // Out of reset. CRST high is the write landing; the codecs answering
+    // is a separate wait, and GCAP reads 0 until then.
+    mw32(&g_h, HDA_INTCTL, 0);
+    mw32(&g_h, HDA_GCTL, mr32(&g_h, HDA_GCTL) & ~(uint32_t)GCTL_CRST);
+    wait_bits32(&g_h, HDA_GCTL, GCTL_CRST, 0, 100);
+    mw32(&g_h, HDA_GCTL, GCTL_CRST);
+    if (wait_bits32(&g_h, HDA_GCTL, GCTL_CRST, GCTL_CRST, 100) != 0) {
+        fprintf(stderr, "lscodec: the controller never left reset\n");
+        return finish(1);
+    }
+    usleep(50000);
+
+    uint16_t gcap = mr16(&g_h, HDA_GCAP);
+    uint16_t statests = mr16(&g_h, HDA_STATESTS) & 0x7FFF;
+    mw16(&g_h, HDA_STATESTS, statests);
+    mw32(&g_h, HDA_GCTL, GCTL_CRST | GCTL_UNSOL);
+    printf("lscodec: hd audio %u.%u gcap %#x (%u in, %u out) codecs %#x\n",
+           mr8(&g_h, HDA_VMAJ), mr8(&g_h, HDA_VMIN), gcap,
+           (gcap >> 8) & 0xF, (gcap >> 12) & 0xF, statests);
+    if (!statests) {
+        fprintf(stderr, "lscodec: no codec answered the reset\n");
+        return finish(1);
+    }
+
+    corb_rirb_start(&g_h, dma_phys);
+    g_codec.cmd = corb_cmd;
+    g_codec.ctx = &g_h;
+
+    int found = 0;
+    for (uint8_t cad = 0; cad < 15; cad++) {
+        if (!(statests & (1u << cad))) continue;
+        g_h.cad = cad;
+        uint32_t vendor = 0;
+        if (corb_cmd(&g_h, 0, V12(VERB_GET_PARAM, PARAM_VENDOR_ID), &vendor) != 0) {
+            printf("codec %u: did not answer\n", cad);
+            continue;
+        }
+        found++;
+        g_codec.vendor = vendor;
+        printf("codec %u: vendor %04x:%04x\n", cad, vendor >> 16, vendor & 0xFFFF);
+        if (hda_codec_enumerate(&g_codec) != 0) {
+            printf("  no audio function group\n");
+            continue;
+        }
+        printf("  afg nid %02x, %d widget(s)\n", g_codec.afg, g_codec.nwidgets);
+        if (verbose) print_widgets(&g_codec);
+
+        if (hda_codec_pick_outputs(&g_codec) != 0) {
+            // The honest answer on a display-audio codec, and the same
+            // one the kernel's hda.c gives before declining to register
+            // it: every pin is digital, so there is nothing to route.
+            printf("  no analog output -- nothing to route\n");
+            continue;
+        }
+        print_route("speaker", &g_codec, &g_codec.spk);
+        if (g_codec.have_hp) print_route("headphone", &g_codec, &g_codec.hp);
+    }
+
+    printf("lscodec: %d codec(s), releasing pci %d back to the kernel\n",
+           found, index);
+    return finish(found ? 0 : 1);
+}

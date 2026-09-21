@@ -52,6 +52,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_DEV_MAP_BAR]   = { "dev_map_bar",   sys_dev_map_bar,   { A_INT, A_INT }, R_HEX },
     [SYS_DEV_CLAIM]     = { "dev_claim",     sys_dev_claim,     { A_INT } },
     [SYS_DEV_RELEASE]   = { "dev_release",   sys_dev_release,   { A_INT, A_HEX } },
+    [SYS_DEV_DMA_ALLOC] = { "dev_dma_alloc", sys_dev_dma_alloc, { A_INT, A_INT, A_HEX }, R_HEX },
     [SYS_SND_OPEN]      = { "snd_open",      sys_snd_open,      { 0 }, 0 },
     [SYS_SND_CTL]       = { "snd_ctl",       sys_snd_ctl,       { 0 }, 0 },
     // read()'s buffer isn't filled until the handler runs, and the

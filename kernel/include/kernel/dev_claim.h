@@ -42,6 +42,30 @@ int dev_claim_check(int index, uint64_t pml4);
 // The holder's pid, or 0. `lspci`'s column.
 int dev_claim_holder_pid(int index);
 
+// A pinned, physically contiguous, DMA32 buffer for the device the
+// caller holds -- SYS_DEV_DMA_ALLOC. It also ENABLES BUS MASTERING,
+// which is the whole reason it is a separate grant: a claimed device
+// with only its registers mapped cannot reach memory.
+//
+// The frames belong to the CLAIM, not to the address space, so a
+// borrowed mapping of them may die with the process while the kernel
+// still clears bus mastering before handing them back to the allocator.
+//   -EINVAL  no such device, or `pages` is 0 or over DEV_DMA_MAX_BYTES
+//   -EACCES  `pml4` does not hold the device
+//   -EBUSY   it already has a buffer
+//   -ENOMEM  no contiguous run that long
+//
+// `base` is where the caller is about to map it: the claim remembers it
+// so a release can take the MAPPING down before the frames go back.
+int dev_claim_dma_take(int index, uint64_t pml4, uint64_t pages, uint64_t base,
+                       uint64_t *phys_out);
+
+// Gives that buffer back and lowers bus mastering, without dropping the
+// claim itself -- the unwind for a grant that failed after the frames
+// were taken, since they belong to the claim and no mapping teardown
+// would reach them.
+int dev_claim_dma_drop(int index, uint64_t pml4);
+
 // Every claim an address space holds, dropped without a rebind. Called
 // from release_process_state() -- a claim is one more thing keyed to a
 // dying address space that no mapping teardown would reach.

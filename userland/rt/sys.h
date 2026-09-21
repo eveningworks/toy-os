@@ -443,6 +443,20 @@ int sys_dev_claim(int index);
 // device so its ring-0 driver takes it again; without, it stays
 // unbound. -1 with EACCES when this process is not the holder.
 int sys_dev_release(int index, unsigned flags);
+
+// A pinned, physically contiguous buffer for the device this process
+// holds, and THE CALL THAT LETS THAT DEVICE REACH MEMORY AT ALL: it
+// raises PCI bus mastering, which drops again when the claim does.
+// `bytes` is rounded up to whole pages, at most DEV_DMA_MAX_BYTES, and
+// `*phys` receives the physical address to program the card with.
+// Returns the virtual address, or -1 with errno: EACCES when this
+// process does not hold the device, EBUSY when it already has a
+// buffer, ENOMEM when no contiguous run that long is free.
+//
+// The mapping is uncacheable; munmap does NOT free the frames, because
+// they belong to the claim and the device has to be stopped first.
+int64_t sys_dev_dma_alloc(int index, uint64_t bytes, uint64_t *phys);
+
 int sys_cpu_info(struct cpu_info *out);
 
 // Fills `buf` with `n` random bytes from the kernel's entropy source.

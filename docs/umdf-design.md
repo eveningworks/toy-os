@@ -4,7 +4,8 @@ A staged plan, in the shape `docs/winserver-ring3-design.md` used. It
 answers "what would it take to run a device driver as a process here,
 what does that actually buy, and which driver goes first?"
 
-**STAGES 1 AND 2 ARE BUILT (2026-09-20); stages 3-5 are not.** The stage
+**STAGES 1-3 ARE BUILT (stages 1-2 on 2026-09-20, stage 3 on
+2026-09-21); stages 4 and 5 are not.** The stage
 markers are the authority, and they are on the headings -- if a stage
 ever splits, put its marker on each half (the window-server plan's
 stage 6 split and its heading kept saying "outstanding" for eleven
@@ -66,7 +67,8 @@ were half-built already, because the compositor needed the same things.
 | single-holder access to a device | the compositor ROLE (`win_role.c`) | **the pattern exists**, for one device |
 | a CLAIM, and a way to make ring 0 let go | `SYS_DEV_CLAIM`, `pci_device_release()` | **BUILT, stage 2** |
 | deliver an interrupt to a process | -- | **nothing** -- stage 4 |
-| pinned, physically contiguous memory | `pmm_alloc_contiguous()` | built for kernel callers; no ring-3 path -- stage 5 |
+| pinned, physically contiguous memory | `SYS_DEV_DMA_ALLOC` | **BUILT, stage 3** -- one buffer per claimed device, capped at `DEV_DMA_MAX_BYTES` |
+| letting a claimed device master the bus | the same call | **BUILT, stage 3** -- it is what raises `PCI_COMMAND.BUS_MASTER` |
 
 The sound stack, which is the worked example:
 
@@ -200,49 +202,126 @@ minus the sysfs.
   below 4 GiB, so ring 0 never loses its view. What a claim removes is
   the DRIVER, not the access.
 
-### Stage 3 -- the codec graph moves, and nothing else
+### Stage 3 -- the codec graph moves, and nothing else -- DONE 2026-09-21
 
-**NEXT, and stage 2 unblocked it.** HDA's widget enumeration -- ~250 lines that walk what the card reports
-about itself -- becomes a ring-3 program reading the same registers
-through the stage-1 grant. **It needs no DMA and no interrupt:** CORB
-and RIRB are MMIO rings, polled.
+HDA's widget enumeration is a ring-3 program, `/bin/lscodec`, reading
+the same registers through the stage-1 grant and driving the command
+ring itself.
 
-**WHAT THE HARDWARE RUN ON 2026-09-20 ESTABLISHED, so stage 3 need not
-re-derive it.** On the ASUS (192.168.200.107) the whole round trip runs
-on a REAL controller: claim, map BAR0, bring it out of reset, read the
-codec, release with `DEV_RELEASE_REBIND`, and the kernel re-probes to
-the identical readout. Three facts worth having before starting:
+**WHAT SHIPPED:**
 
-- **That machine has TWO HDA controllers, and they are not
-  interchangeable.** `00:03.0` is Broadwell-U display audio, `gcap
-  0x3001` (0 in, 3 out), codec `8086:2808` -- an HDMI codec with NO
-  analog output, so `hda.c` enumerates it and declines to register it
-  (`no codec with an analog output -- not registered`), from boot and
-  unrelated to any claim. `00:1b.0` is the Wildcat Point-LP / Conexant
-  CX20751, `gcap 0x4401`, and it is the one that drives the speakers.
-- **`00:03.0` IS THE SAFE TARGET and `00:1b.0` IS NOT.** The ring-3
-  test claims the first class-04:03 device, which is the display-audio
-  one, so nothing it does can silence the machine. A stage-3 program
-  that walked the Conexant instead would take the speakers with it.
+| piece | where |
+|---|---|
+| the parser, compiled TWICE | `kernel/lib/hda_codec.c` + `kernel/include/api/hda_codec.h` |
+| its transport, in the kernel | `hda_codec_cmd()`, `kernel/drivers/sound/hda.c` |
+| its transport, in ring 3 | `corb_cmd()` / `corb_rirb_start()`, `userland/bin/lscodec.c` |
+| a DMA buffer for a claimed device | `SYS_DEV_DMA_ALLOC` (121), `sys_dev_dma_alloc()` in `kernel/mm/mmap.c` |
+| the frames, and the bus-master bit | `dev_claim_dma_take()` / `dev_claim_dma_drop()`, `kernel/drivers/dev_claim.c` |
+| the region kind, so `pmap` prints `dma` | `MMAP_KIND_DMA` / `QUERY_PROCMAP_DMA` |
+| may I claim this? | `query_pcidev.claimable`, and `lspci -k`'s `(claimable)` |
+| the tests | 4 KTESTs in `kernel/lib/hda_codec_test.c`, `userland/tests/devdma_test.c`, `tools/hdacodec_test.py` |
+
+**THE PLAN WAS WRONG ABOUT THE COMMAND PATH, AND THAT DECIDED THE
+SHAPE.** This section used to say "it needs no DMA and no interrupt:
+CORB and RIRB are MMIO rings, polled". **The CORB and RIRB are DMA
+rings.** `hda.c` takes a `pmm` frame and writes its PHYSICAL address
+into `CORBLBASE`/`RIRBLBASE`; the controller masters the bus to fetch
+verbs and post responses. The only DMA-free verb path in the spec is
+the Immediate Command Interface (`IC`/`IR`/`IRS` at 0x60/0x64/0x68),
+Linux's `single_cmd=1` fallback -- and **QEMU does not implement it**:
+its `intel-hda` register table runs `GCAP`..`DPUBASE` and then straight
+into the stream descriptors, so an ICI-only stage 3 would have had no
+automated coverage at all. So the first half of stage 5's primitive
+came forward, deliberately and with its cost named below.
+
+**THE PARSER IS ONE IMPLEMENTATION, NOT TWO.** The kernel still needs
+the graph -- it routes and plays -- so "moving" it could only have
+meant a second copy, which is the hazard `apps/wm/` cost 10,400 lines
+to end. `kernel/lib/hda_codec.c` is compiled into both rings instead,
+the `geom.c`/`klineedit.c` rule, with the transport as a callback. What
+that buys beyond avoiding drift: a KTEST can drive the parser from a
+FAKE CODEC -- a switch statement that lies -- so the untrusted-input
+half is tested on every boot, with no hardware.
+
+**THE SPLIT IS READ VERSUS WRITE, and that is a better line than
+"stage 3 moves the graph".** Everything that parses moved; everything
+that configures -- routing, amplifiers, pin control, the stream --
+stayed in ring 0. It falls out of the stage boundary rather than being
+imposed on it: the write half is what needs stages 4 and 5.
+
+**Four things it cost, worth not paying twice:**
+
+- **A GRANT THAT FAILS AFTER TAKING THE FRAMES MUST GIVE THEM BACK.**
+  They belong to the CLAIM, not to the address space, so no mapping
+  teardown reaches them: a failed `vmm_map_user_borrowed()` would have
+  left the caller holding a device with bus mastering on, a buffer it
+  cannot see, and `-EBUSY` on every retry. `dev_claim_dma_drop()` is
+  the unwind.
+- **BUS MASTERING IS CLEARED BEFORE THE FRAMES ARE FREED, and that
+  ordering is the whole safety of the teardown.** A process that dies
+  holding a claim does not stop its device; a card still mastering the
+  bus over freed frames writes into whatever the allocator hands out
+  next, and nothing would connect the corruption back to the driver
+  that died. `pci_clear_master()` is Linux's name for the same two
+  lines, and `pci_disable_device()` is what VFIO calls on close.
+- **AND SO IS THE MAPPING -- reasoning about the DEVICE stopping is
+  only half of it.** The first version of the teardown cleared bus
+  mastering and freed the frames, and left the caller's PTEs pointing
+  at them: an explicit `SYS_DEV_RELEASE` handed memory back to the
+  allocator that the releasing process could still write. `lscodec`
+  itself was the trigger, since it releases without unmapping.
+  `meminfo audit` has called exactly that a DANGLING mapping since it
+  was built, which is what `userland/tests/devdma_test.c` asserts
+  against now. **Found in review, not by a test** -- and the test that
+  covers it was written afterwards and confirmed red with the fix
+  reverted.
+- **A BUFFER ZEROED THROUGH THE IDENTITY MAP IS A WB ALIAS OF A UC
+  PAGE.** The kernel zeroes at `phys` (write-back) and the holder maps
+  the same frames `VMM_MT_UC`; a dirty line evicted later reverts a
+  descriptor ring 3 has already written, and the card fetches the stale
+  bytes. `wbinvd` after the zeroing, which is what `paging.c` does on
+  every framebuffer retype. **No test here can see this** -- TCG
+  ignores PAT -- so it rests on the precedent and on the hardware run.
+- **`pci_device_removable()` DOES NOT MEAN "CLAIMABLE".** It is
+  "a driver is bound AND it can let go", so it is 0 for an unbound
+  device -- which `dev_claim_take()` accepts happily. The first
+  ring-3 caller asked the wrong question and refused a device it could
+  have had. `query_pcidev.claimable` is the composed fact.
+- **A POSITIVE CONTROL HAS TO NAME THE RIGHT LINE.** Deleting the
+  widget-array clip reddened the parser's KTEST (`expected 96, got
+  508`); deleting the connection list's OUTER loop bound reddened
+  nothing, because the inner `count < cap` is the one that guards the
+  write. Both were checked separately rather than assumed.
+
+**THE CONTROLLER QUESTION WAS DECIDED: stage 3 takes `00:03.0`.** The
+maintainer's call, 2026-09-21. It is the only safe target -- Broadwell-U
+display audio, `gcap 0x3001`, codec `8086:2808`, no analog output, so
+nothing it does can silence the machine -- and ring-0 HDMI/DP audio
+could not be verified on that laptop anyway: its only external
+connector is micro-HDMI with no adapter, the same reason external DDI
+outputs were deferred on 2026-09-03. The roadmap item records that it
+must reclaim the controller, or move to ring 3 itself, when an adapter
+or the second laptop exists.
+
+**WHAT THE HARDWARE RUN ON 2026-09-20 ESTABLISHED**, and stage 3 did
+not re-derive:
+
+- **The ASUS has TWO HDA controllers, and they are not
+  interchangeable.** `00:03.0` is the display-audio one above;
+  `00:1b.0` is the Wildcat Point-LP / Conexant CX20751, `gcap 0x4401`,
+  and it is the one that drives the speakers. `lscodec` claims the
+  FIRST class-04:03 device, which is the first of those, and `-d`
+  is how to point it at the other one deliberately.
 - **GCAP DIFFERS FROM QEMU's** (`0x3001` against `0x4401`), which is
   what makes the readout evidence rather than a constant -- and means a
   parser must not assume four output streams.
 
-**AND IT COLLIDES WITH THE HDMI/DisplayPort AUDIO ROADMAP ITEM**, which
-wants `00:03.0` driven in ring 0. Both cannot own that controller;
-which one does is a decision to take BEFORE either is built, not after.
-
-**One loose end from stage 2:** `pci_device_removable()` is public on
-`pci_driver.h` and read by nothing but KTESTs. A stage-3 driver asking
-"may I claim this?" is its first real caller; failing that, `lspci -k`
-should show it, or it should not be public.
-
-This is the stage with the real payoff, and it is deliberately first:
+This is the stage with the real payoff, and it was deliberately first:
 the codec graph is UNTRUSTED INPUT. Node counts, widget types and
 connection lists come off the card, they are attacker-shaped on any
-machine where the card is not what it claims, and every one of them is
-parsed in ring 0 today. It is the same argument that moved `ttf.c`'s
-callers and the image decoders.
+machine where the card is not what it claims, and every one of them was
+parsed in ring 0. It is the same argument that moved `ttf.c`'s callers
+and the image decoders.
 
 ### Stage 4 -- an interrupt becomes a wakeup
 
@@ -268,6 +347,16 @@ choice is the user's to make when it is reached:
   over its physical address, and the driver programs the card. This
   works today and contains nothing: the write-up ships with the
   sentence, the way VFIO's no-IOMMU mode taints the kernel.
+
+**HALF OF THE SECOND OPTION IS ALREADY BUILT, and it was not free.**
+Stage 3 needed `SYS_DEV_DMA_ALLOC` for a 4 KiB command ring, so the
+"trusted" mechanism exists and is in use -- capped at
+`DEV_DMA_MAX_BYTES`, one buffer per device, and bus mastering off until
+it is asked for. What is NOT decided is whether the STREAM takes the
+same route: an audio ring is bigger, longer-lived and refilled by an
+app, and the argument for an IOMMU first is stronger there. The cap and
+the one-buffer rule are what keep stage 3's use from being read as that
+decision having been taken.
 
 Until one is chosen, HDA's stream stays in ring 0 and the ring-3 half
 is the control plane. **A split driver is a legitimate end state**, not
@@ -303,7 +392,12 @@ Worth reading before starting, because two of these are good.
   If stage 5 takes the trusted route, the machine ends with the same
   exposure and one more process. The reason to do it regardless is
   stage 3, which stands on its own and needs none of stage 5.
-- **In favour, and it is the strongest point:** stages 1 and 2 are
-  reusable. A BAR grant and a device claim are what any ring-3 driver
-  needs, and the next one -- a NIC, a second display -- starts at stage
-  3 rather than at zero.
+- **In favour, and it is the strongest point:** stages 1-3 are
+  reusable. A BAR grant, a device claim and a DMA buffer are what any
+  ring-3 driver needs, and the next one -- a NIC, a second display --
+  starts at stage 4 rather than at zero.
+- **And the "preventive, fixes no bug" objection is now half answered.**
+  Stage 3 did find one: `pci_device_removable()` was public, read only
+  by KTESTs, and does not mean what its first real caller assumed. A
+  predicate nobody outside a test had ever asked was wrong at the edge
+  it was about to be used at.

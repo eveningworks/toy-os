@@ -22,6 +22,7 @@ static const char *kind_name(unsigned long long k) {
     case QUERY_PROCMAP_ANON:  return "anon";
     case QUERY_PROCMAP_FILE:  return "file";
     case QUERY_PROCMAP_MMIO:  return "mmio";
+    case QUERY_PROCMAP_DMA:   return "dma";
     }
     return "?";
 }

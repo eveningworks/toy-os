@@ -2761,6 +2761,26 @@ window without going through it will find its layout polls timing out.
   must SAY it skipped the unbind leg, so a tool whose HDA assertions
   silently matched nothing cannot look like a pass. On demand, not in
   the gate: it boots its own guest with extra hardware.
+- **`hdacodec_test.py`** -- a ring-3 driver reads the HD Audio codec
+  graph and has to reach the SAME ANSWER the kernel does (stage 3 of
+  `docs/umdf-design.md`). It boots its own guest with an
+  `ich9-intel-hda`, for the same reason `devclaim_test.py` does, and
+  runs `/bin/lscodec`: claim, map BAR0, take a DMA buffer for the
+  command ring, bring the controller up, walk the graph, release with
+  `DEV_RELEASE_REBIND`. **A plausible graph is not evidence** -- a stub
+  that invented one would satisfy "it named a vendor and a route" -- so
+  the load-bearing assertion is the AGREEMENT: the kernel's `hda`
+  driver logs the pin and DAC it picked over its own CORB/RIRB, ring 3
+  prints the pin and DAC it picked over a granted DMA buffer, and the
+  two must match. Around it: `lspci -k` reports the card `(claimable)`
+  before the run, `dmesg` shows the DMA grant raising BUS MASTERING,
+  and `sound: hda0 registered` appears once more than the pre-claim
+  baseline. The inverse of the claimable check SKIPS rather than
+  passing quietly on a machine where every bound driver is removable,
+  which a plain QEMU guest is -- `dev_claim.c`'s KTEST covers that
+  half. `--no-card` is the positive control: `lscodec` must SAY there
+  is no controller and exit non-zero. On demand, not in the gate: it
+  boots its own guest with extra hardware.
 - **`install_test.py`** gained an `mbr` medium (`--media mbr`) covering
   `install --mbr` end to end, and **three fixes to the tool itself, all
   of which made a healthy system report as broken**. `--instance auto`

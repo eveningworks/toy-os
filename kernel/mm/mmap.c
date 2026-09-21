@@ -372,6 +372,108 @@ out:
     return 0;
 }
 
+// SYS_DEV_DMA_ALLOC -- abi/syscall_abi.h. The frames come from the
+// CLAIM (dev_claim_dma_take, which also raises bus mastering); this
+// side is the mapping, and it is the same borrowed-UC shape as the BAR
+// grant for the same reason: neither munmap nor process teardown may
+// hand these frames back, because only the claim knows the device has
+// been stopped first.
+//
+// UNCACHEABLE, not write-back. The kernel's own rings get away with WB
+// plus a barrier because ring 0 can issue one; a ring-3 driver writing
+// a descriptor and then a doorbell has no such instruction available to
+// it, so the mapping has to make the store order the program order.
+int sys_dev_dma_alloc(struct syscall_ctx *c) {
+    struct sched_mm *mm = caller_mm();
+    int64_t ret;
+
+    if (!mm) { ret = -EPERM; goto out; }
+
+    int index = (int)(int64_t)c->a0;
+    uint64_t len = c->a1;
+    if (!len || len > DEV_DMA_MAX_BYTES) { ret = -EINVAL; goto out; }
+    uint64_t npages = (len + 4095) / 4096;
+
+    // The claim first and read-only, so a caller that does not hold the
+    // device learns it without the arena being consulted.
+    ret = dev_claim_check(index, c->pml4);
+    if (ret != 0) goto out;
+
+    uint64_t base = arena_pick(mm, npages);
+    if (!base) { ret = -ENOMEM; goto out; }
+    int r_slot = free_slot(mm);
+    if (r_slot < 0) { ret = -ENOMEM; goto out; }
+
+    uint64_t phys = 0;
+    ret = dev_claim_dma_take(index, c->pml4, npages, base, &phys);
+    if (ret != 0) goto out;
+
+    // FROM HERE A FAILURE MUST GIVE THE FRAMES BACK. They are the
+    // claim's, not this address space's, so nothing else would: the
+    // caller would be left holding a device with bus mastering on, a
+    // buffer it cannot see, and -EBUSY on every retry.
+    for (uint64_t i = 0; i < npages; i++) {
+        // Writable, NOT executable -- this is a descriptor buffer in
+        // ordinary RAM, unlike the BAR grant above, and `r->prot` below
+        // says rw. Every other path in this file derives NX from prot;
+        // a W+X page of RAM that `pmap` reports as rw is a hole.
+        if (!vmm_map_user_borrowed(c->pml4, base + i * 4096,
+                                   phys + i * 4096, 1, 0, VMM_MT_UC)) {
+            for (uint64_t k = 0; k < i; k++)
+                vmm_unmap_user_page(c->pml4, base + k * 4096);
+            dev_claim_dma_drop(index, c->pml4);
+            ret = -ENOMEM; goto out;
+        }
+    }
+
+    if (!vmm_copy_to_user(c->pml4, c->a2, &phys, sizeof phys)) {
+        for (uint64_t k = 0; k < npages; k++)
+            vmm_unmap_user_page(c->pml4, base + k * 4096);
+        dev_claim_dma_drop(index, c->pml4);
+        ret = -EFAULT; goto out;
+    }
+
+    struct mmap_region *r = &mm->regions[r_slot];
+    r->npages   = npages;
+    r->prot     = SYS_PROT_READ | SYS_PROT_WRITE;
+    r->file_off = 0;
+    r->kind     = MMAP_KIND_DMA;
+    r->shm_idx  = -1;
+    r->path[0]  = '\0';
+    r->base     = base;
+
+    klog_printf("dev: pci %d dma %llu page(s) phys %llx at %llx for pid %d\n",
+                index, (unsigned long long)npages, (unsigned long long)phys,
+                (unsigned long long)base, scheduler_current_pid());
+    ret = (int64_t)base;
+out:
+    c->regs[14] = (uint64_t)ret;
+    return 0;
+}
+
+// A CLAIMED DEVICE'S DMA REGION, UNMAPPED AND FORGOTTEN -- called from
+// dev_claim_drop() BEFORE the frames are freed.
+//
+// The mapping is borrowed, so neither munmap nor teardown disposes of
+// these frames: the claim does. That leaves one window this closes --
+// an explicit SYS_DEV_RELEASE hands the frames back to the allocator
+// while the caller still holds a live writable PTE for every one of
+// them, so the next owner shares its memory with a process that can
+// still write it. `meminfo audit` calls that a DANGLING mapping and it
+// is the one thing that audit treats as a bug.
+//
+// Returns quietly when the caller has no such region: a KTEST claims
+// from the kernel context and has no `sched_mm` at all.
+void mmap_drop_dma_region(uint64_t base, uint64_t npages) {
+    struct sched_mm *mm = caller_mm();
+    if (!mm || !base) return;
+    struct mmap_region *r = region_of(mm, base);
+    if (!r || r->kind != MMAP_KIND_DMA || r->base != base) return;
+    for (uint64_t i = 0; i < npages; i++)
+        vmm_unmap_user_page(vmm_current_pml4(), base + i * 4096);
+    r->base = 0;   // first and last: a zero base is what frees the slot
+}
+
 int sys_munmap(struct syscall_ctx *c) {
     struct sched_mm *mm = caller_mm();
     uint64_t addr = c->a0, len = c->a1;

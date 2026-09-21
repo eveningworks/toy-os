@@ -25,6 +25,13 @@ int mmap_fault_in(struct sched_mm *mm, uint64_t pml4_phys, uint64_t vaddr);
 int mmap_inherits_at(void *mm, uint64_t va);
 int mmap_inherit_shm(uint64_t child_pml4, const struct sched_mm *mm);
 
+// A claimed device's DMA region, unmapped and its slot freed. Called
+// from dev_claim_drop() before the frames go back to the allocator,
+// because they are BORROWED and no mapping teardown disposes of them
+// (kernel/drivers/dev_claim.c). A no-op when the caller has no such
+// region -- a KTEST claims from the kernel context and has no mm.
+void mmap_drop_dma_region(uint64_t base, uint64_t npages);
+
 #endif
 
 // THE REGION LIST IS ALLOCATED (api/scheduler.h), so exactly one place

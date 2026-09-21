@@ -2674,6 +2674,55 @@ Preemption stays OFF across the callback, so only the timer is let in.
 first job is to bring it up -- and CRST reading back high is the write
 being accepted, not the link being ready.
 
+## A CLAIMED DEVICE CANNOT REACH MEMORY UNTIL `SYS_DEV_DMA_ALLOC`, AND THE TEARDOWN CLEARS BUS MASTERING BEFORE IT FREES ANYTHING
+
+Stage 3 of `docs/umdf-design.md`. A BAR grant hands over a register
+file, and a register file moves no data: a ring-3 driver needs a buffer
+whose PHYSICAL address it can give the card. `SYS_DEV_DMA_ALLOC`
+(`sys_dev_dma_alloc()` in `kernel/mm/mmap.c`, frames in
+`dev_claim.c`) is that buffer -- pinned, contiguous, DMA32,
+uncacheable, borrowed, one per device, capped at `DEV_DMA_MAX_BYTES`.
+
+**IT IS ALSO THE CALL THAT RAISES `PCI_COMMAND.BUS_MASTER`**, which is
+why it is separate from the BAR grant: a claimed device with only its
+registers mapped cannot master the bus at all. Linux spells the pair
+`pci_set_master()`/`pci_clear_master()`, and VFIO's close does the
+second one.
+
+**THE ORDER IN THE TEARDOWN IS LOAD-BEARING, AND THERE ARE TWO THINGS
+TO TAKE DOWN.** Bus mastering comes down first, because a process that
+dies holding a claim does not stop its device and a card still writing
+into freed frames corrupts whatever is handed out next. **Then the
+MAPPING, and only then the frames** -- the frames are borrowed, so no
+mapping teardown disposes of them, which means an explicit
+`SYS_DEV_RELEASE` would otherwise hand them to the allocator while the
+caller still holds a live writable PTE for every one. `meminfo audit`
+calls that a DANGLING mapping and it is the one thing that audit treats
+as a bug. Both exits go through `dma_release()`, which skips the unmap
+only for `dev_claim_space_gone()`, where the address space is already
+going.
+
+**THE FRAMES BELONG TO THE CLAIM, NOT TO THE ADDRESS SPACE**, so
+`munmap` and process teardown never free them and a grant that fails
+after taking them must call `dev_claim_dma_drop()` itself -- otherwise
+the caller holds a device with bus mastering on, a buffer it cannot
+see, and `-EBUSY` on every retry.
+
+**AND THE KERNEL ZEROES THE BUFFER THROUGH A WB ALIAS OF A UC PAGE, SO
+IT `wbinvd`s.** The identity map below 4 GiB is write-back and the
+holder maps the same frames uncacheable; a WB line evicted after ring 3
+has written a descriptor through the UC alias silently reverts it in
+RAM, and the device fetches what the CPU wrote earlier. **TCG IGNORES
+PAT, so no test here can see it** -- `paging.c` does the same on every
+framebuffer retype, and that is the precedent, not a measurement.
+
+**AND `pci_device_removable()` DOES NOT MEAN "CLAIMABLE".** It is
+"a driver is bound AND it can let go", so it answers 0 for an UNBOUND
+device, which `dev_claim_take()` accepts happily. Ask
+`query_pcidev.claimable` from ring 3 (`lspci -k` prints it), which is
+the composed fact; the first caller to reach for the bus predicate
+refused a device it could have had.
+
 ## A SYSCALL HANDLER RUNS WITH INTERRUPTS OFF, AND A WAIT ON `pit_ticks()` THERE NEVER ENDS
 
 `context_switch.asm` re-enables interrupts on the way OUT of a syscall

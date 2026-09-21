@@ -244,6 +244,10 @@ TOOLS = [
     # the control.
     ("devclaim",    "devclaim_test.py",        "ring 3 takes the sound card off the kernel", True, None,             False),
     ("devclaim_ctl", "devclaim_test.py --no-card", "...and the same with no card, which must skip the leg", True, None, False),
+    # Stage 3, on the same guest for the same reason: the only place a
+    # ring-3 process drives a real controller's command ring.
+    ("hdacodec",    "hdacodec_test.py",        "ring 3 reads the codec graph and agrees with the kernel", True, None, False),
+    ("hdacodec_ctl", "hdacodec_test.py --no-card", "...and the same with no card, which must say so", True, None, False),
 
     # --- interrupts ---------------------------------------------------
     # The only run in which anything reaches the Local APIC. Its own

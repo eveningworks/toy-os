@@ -2596,3 +2596,75 @@ is let in. Linux is
 the same shape. The `sys_modload` half of this was latent before stage
 2 and is fixed by the same function -- it had never bitten because the
 two modular drivers' probes do not sleep.
+
+## A ring-3 driver's DMA buffer is what turns bus mastering on, and the parser it walks with is the kernel's own
+
+Stage 3 of `docs/umdf-design.md` put HD Audio's codec graph in a
+process (`/bin/lscodec`). Two calls it forced, both with an obvious
+wrong answer.
+
+**The buffer had to exist at all, because the plan was wrong about the
+hardware.** Stage 3 was written as "no DMA and no interrupt: CORB and
+RIRB are MMIO rings, polled". They are DMA rings -- the controller is
+given a PHYSICAL address and masters the bus to fetch verbs and post
+responses. The spec's one DMA-free verb path is the Immediate Command
+Interface, Linux's `single_cmd=1` fallback, and QEMU's `intel-hda` does
+not implement it: its register table runs `GCAP`..`DPUBASE` and then
+the stream descriptors. So an ICI-only stage 3 would have been
+hardware-only, with no automated coverage on a project whose entire
+suite is QEMU. The alternative -- a kernel "send one verb" syscall with
+`hda` still bound, which is what Linux's `/dev/snd/hwdepC0D0` and
+`hda-verb` are -- would have moved the parsing and none of the driver,
+and left stages 1 and 2 unused by their first customer.
+
+**So `SYS_DEV_DMA_ALLOC` is a separate grant from `SYS_DEV_MAP_BAR`,
+and the separation is the point.** A claimed device with only its
+registers mapped has `PCI_COMMAND.BUS_MASTER` clear and cannot reach
+memory at all; the bit goes up when a buffer is asked for and comes
+down when the claim drops. That is `pci_set_master()`/
+`pci_clear_master()`, and `pci_disable_device()` is what VFIO calls on
+close. It is not containment -- there is no IOMMU, so a device that can
+be pointed at this buffer can be pointed anywhere -- but it does mean
+the capability is granted rather than assumed, and that the teardown
+has something to switch off. **Clearing it BEFORE the frames are freed
+is the load-bearing order**: a process that dies holding a claim does
+not stop its device, and a card still mastering the bus over freed
+frames corrupts whatever the allocator hands out next, with nothing to
+connect it back to the driver that died.
+
+**Two things about the teardown are not obvious and both were wrong
+first.** The frames belong to the CLAIM, so the mapping has to come
+down with them: they are borrowed, nothing else disposes of them, and
+an explicit release otherwise hands the allocator memory the releasing
+process can still write -- what `meminfo audit` calls a dangling
+mapping. And the kernel zeroes the buffer through the write-back
+identity map while the holder maps it uncacheable, so it `wbinvd`s
+afterwards; a dirty line evicted later would revert a descriptor ring 3
+had already written. Neither is visible to the test suite here -- the
+first needs a process to outlive its release, the second needs a real
+cache, and TCG ignores PAT.
+
+The buffer is capped (`DEV_DMA_MAX_BYTES`, 64 KiB), one per device, and
+DMA32. Small on purpose: every byte of it is memory a device can be
+told to write, and what stage 3 needed was 4 KiB of command ring. The
+cap is also what keeps this from reading as stage 5's decision having
+been taken -- the audio STREAM's buffer is bigger, longer-lived and
+refilled by an app, and the case for an IOMMU first is stronger there.
+
+**And the graph parser is COMPILED TWICE rather than moved.** The
+kernel still needs it: it routes the speaker and plays. "Moving" it
+would have meant a second implementation, which is the hazard the
+duplicate window manager cost 10,400 lines to end. `kernel/lib/
+hda_codec.c` builds into the kernel and into `/bin/lscodec`, the
+`geom.c`/`klineedit.c` rule, with the transport as a callback -- so the
+two rings cannot disagree about a codec, and `tools/hdacodec_test.py`
+asserts they do not by comparing the pin and DAC each picked.
+
+What that buys beyond avoiding drift is the thing the stage was for: a
+KTEST can drive the parser from a FAKE CODEC, a switch statement that
+lies about its node counts and connection lists, so the untrusted-input
+half is exercised on every boot with no hardware present. The split
+that fell out is READ versus WRITE -- everything that parses moved,
+everything that configures (routing, amplifiers, pin control, the
+stream) stayed in ring 0 -- and that is a better line than "the graph
+moves", because the write half is exactly what needs stages 4 and 5.

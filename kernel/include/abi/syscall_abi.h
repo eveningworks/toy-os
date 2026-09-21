@@ -2375,6 +2375,51 @@ struct mmap_msg {
                              // what a driver about to be restarted
                              // wants.
 
+// --- letting a claimed device DMA (docs/umdf-design.md stage 3) ------
+//
+// SYS_DEV_MAP_BAR hands over a register file, and a register file alone
+// cannot move data: HDA's command ring, every descriptor ring and every
+// audio buffer are memory the DEVICE reads and writes. So a ring-3
+// driver needs one buffer whose PHYSICAL address it may give the card.
+//
+// **THIS IS THE CALL THAT TURNS BUS MASTERING ON**, and that is the
+// point of it being separate. A claimed device with only a BAR mapping
+// has PCI_COMMAND.BUS_MASTER clear and cannot reach memory at all; the
+// bit goes up here and comes down when the claim drops, which is
+// Linux's `pci_set_master()`/`pci_clear_master()` pair and what
+// `pci_disable_device()` does on a VFIO close. Clearing it BEFORE the
+// frames are freed is what stops a dead driver's card writing into
+// memory the allocator has since handed to somebody else.
+//
+// WHAT THIS IS NOT: containment, and less so than SYS_DEV_MAP_BAR. This
+// machine has no IOMMU, so a device told to write at this buffer's
+// physical address can equally be told to write anywhere else. The
+// buffer is a CONVENIENCE -- pinned, contiguous, below 4 GiB so a
+// 32-bit engine can reach it -- not a boundary. docs/umdf-design.md
+// stage 5 is where that is either fixed with VT-d or written down.
+#define SYS_DEV_DMA_ALLOC 121 // RDI = the device index, RSI = bytes
+                              // (rounded up to whole pages, at most
+                              // DEV_DMA_MAX_BYTES), RDX = a user
+                              // uint64_t that receives the PHYSICAL
+                              // address. Returns the virtual address,
+                              // or: -EINVAL a bad index or size, -EACCES
+                              // the caller does not hold the claim,
+                              // -EBUSY the device already has a buffer,
+                              // -ENOMEM no contiguous run that long,
+                              // -EFAULT RDX is not a writable address.
+                              //
+                              // The mapping is uncacheable and BORROWED;
+                              // the FRAMES belong to the claim and are
+                              // freed when it drops, never by munmap.
+                              // One buffer per device, on purpose: a
+                              // driver that needs two rings carves them
+                              // out of it, as hda.c does.
+#define DEV_DMA_MAX_BYTES 65536 // Enough for a command ring and a
+                                // descriptor list. Small deliberately:
+                                // every byte of it is memory a device
+                                // can be pointed at, and nothing built
+                                // on this needs more (HDA uses 4096).
+
 #define SYS_EXEC 109 // RDI = pointer to a `struct spawn_msg`: `path`,
                      // `args` (with or without SPAWN_ARGV) and `env`
                      // as for SYS_SPAWN. Replaces the CALLER's image

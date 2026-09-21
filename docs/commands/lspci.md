@@ -17,8 +17,12 @@ lspci [-k] [--update]
   the device off the kernel (`claimed by pid 14`), or `no driver`.
   Linux's `-k` prints the first of those three; the second is toy-os's
   own, and is what a device claim looks like from outside
-  (`docs/umdf-design.md`). See [lsdrv](lsdrv.md) for the same binding
-  seen from the driver's side.
+  (`docs/umdf-design.md`). A bound driver that **can let go** is marked
+  `(claimable)` -- said only where a driver holds the device, because
+  `no driver` already means free, and it is the only way to learn it
+  without unbinding a live device to find out. See [lsdrv](lsdrv.md)
+  for the same binding seen from the driver's side, and
+  [lscodec](lscodec.md) for a program that takes one.
 - `--update` -- refresh the id database from the internet and exit,
   printing nothing about the machine's own devices. It is
   `hwdata update pci`, which it hands off to; see

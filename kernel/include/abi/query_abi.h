@@ -886,6 +886,11 @@ struct query_pcidev {
     uint32_t index;      // SYS_PCI_INFO's, and SYS_DEV_CLAIM's
     int32_t  holder_pid; // the process holding it, or 0
     char     driver[16]; // the bound ring-0 driver, or ""
+    // Could a process take this device with SYS_DEV_CLAIM? True when no
+    // ring-0 driver is bound, or when the bound one has a remove() --
+    // the gate, since this kernel has no uid. Asked rather than probed:
+    // probing means unbinding a live device to find out.
+    uint32_t claimable;
 };
 
 // QUERY_MODULE: one record per loaded module (kernel/core/module.c).
@@ -1245,6 +1250,10 @@ struct query_kbdtap {
 // memory at all: reading it touches hardware, and a reader counting a
 // process's anonymous pages would be counting a BAR.
 #define QUERY_PROCMAP_MMIO  6
+// A claimed device's DMA buffer (SYS_DEV_DMA_ALLOC). Ordinary memory,
+// unlike MMIO -- but pinned, physically contiguous and reachable by the
+// device, so it is not anonymous either.
+#define QUERY_PROCMAP_DMA   7
 
 struct query_procmap {
     uint64_t pid;

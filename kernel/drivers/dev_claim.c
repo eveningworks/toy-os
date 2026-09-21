@@ -7,6 +7,9 @@
 #include "dev_claim.h"
 #include "pci.h"
 #include "pci_driver.h"
+#include "pci_internal.h" // pci_command_update -- the bus-master bit
+#include "pmm.h"
+#include "mmap.h" // mmap_drop_dma_region -- the holder's view, dropped first
 #include "syscalls.h"
 #include "syscall_abi.h"
 #include "scheduler.h"
@@ -23,7 +26,16 @@
 // Keyed by the enumeration index, like g_bound[]. OCCUPANCY IS THE
 // PML4, NOT THE PID: the kernel context has no pid and a KTEST claims
 // from it, so a pid of 0 is a legitimate holder.
-static struct { uint64_t pml4; int pid; } g_claims[PCI_MAX_DEVICES];
+static struct {
+    uint64_t pml4;
+    int pid;
+    // The DMA buffer, if this holder asked for one. It belongs to the
+    // CLAIM: a borrowed mapping of it dies with the address space, and
+    // these frames are freed here, after bus mastering is off.
+    uint64_t dma_phys;
+    uint64_t dma_pages;
+    uint64_t dma_base;   // where the holder has it mapped, 0 if nowhere
+} g_claims[PCI_MAX_DEVICES];
 
 static int valid(int index) {
     return index >= 0 && index < pci_device_count() && index < PCI_MAX_DEVICES;
@@ -61,11 +73,74 @@ int dev_claim_take(int index, uint64_t pml4, int pid) {
     return 0;
 }
 
+int dev_claim_dma_take(int index, uint64_t pml4, uint64_t pages, uint64_t base,
+                       uint64_t *phys_out) {
+    int held = dev_claim_check(index, pml4);
+    if (held != 0) return held;
+    if (!pages || pages > DEV_DMA_MAX_BYTES / 4096) return -EINVAL;
+    if (g_claims[index].dma_phys) return -EBUSY;
+
+    // DMA32: a device that takes a 32-bit address must be able to reach
+    // it, and this kernel identity-maps below 4 GiB so it can be zeroed
+    // here rather than by the holder.
+    uint64_t phys = pmm_alloc_contiguous(pages, PMM_ZONE_DMA32);
+    if (!phys) return -ENOMEM;
+    k_memset((void *)(uintptr_t)phys, 0, (uint32_t)(pages * 4096));
+    // TWO MEMORY TYPES FOR ONE PAGE, so the dirty lines this just made
+    // have to go. The kernel zeroes through the identity map, which is
+    // WB; the holder maps the same frames UC. A WB line evicted after
+    // ring 3 has written a descriptor through the UC alias silently
+    // reverts it in RAM, and the card fetches what the CPU wrote
+    // earlier -- invisible under TCG, which ignores PAT. paging.c does
+    // the same on every framebuffer retype.
+    __asm__ volatile ("wbinvd" ::: "memory");
+
+    g_claims[index].dma_phys  = phys;
+    g_claims[index].dma_pages = pages;
+    g_claims[index].dma_base  = base;
+    pci_command_update(pci_device_at(index), PCI_CMD_BUS_MASTER, 0);
+    if (phys_out) *phys_out = phys;
+    klog_printf("dev: pid %d dma %llu page(s) at %llx on pci %d, bus master on\n",
+                g_claims[index].pid, (unsigned long long)pages,
+                (unsigned long long)phys, index);
+    return 0;
+}
+
+// Bus mastering OFF, then the frames back. The order is the whole
+// point: a card still mastering the bus over freed frames writes into
+// whatever the allocator hands out next, and nothing would connect the
+// corruption to the driver that died.
+// `unmap` is 0 only from dev_claim_space_gone(), where the address
+// space is already being torn down and there is nothing left to unmap.
+static void dma_release(int index, int unmap) {
+    if (!g_claims[index].dma_phys) return;
+    pci_command_update(pci_device_at(index), 0, PCI_CMD_BUS_MASTER);
+    // THE MAPPING GOES FIRST. The frames are borrowed, so no mapping
+    // teardown disposes of them -- which means an explicit release
+    // would otherwise hand them to the allocator while the caller still
+    // holds a live writable PTE for every one, and the next owner of
+    // those frames shares them with a process that can still write.
+    // `meminfo audit` calls exactly that a DANGLING mapping.
+    if (unmap) mmap_drop_dma_region(g_claims[index].dma_base,
+                                    g_claims[index].dma_pages);
+    pmm_free_contiguous(g_claims[index].dma_phys, g_claims[index].dma_pages);
+    g_claims[index].dma_phys = g_claims[index].dma_pages = 0;
+    g_claims[index].dma_base = 0;
+}
+
+int dev_claim_dma_drop(int index, uint64_t pml4) {
+    int held = dev_claim_check(index, pml4);
+    if (held != 0) return held;
+    dma_release(index, 1);
+    return 0;
+}
+
 int dev_claim_drop(int index, uint64_t pml4, int rebind) {
     if (!valid(index)) return -EINVAL;
     if (!g_claims[index].pml4 || g_claims[index].pml4 != pml4) return -EACCES;
 
     int pid = g_claims[index].pid;
+    dma_release(index, 1);
     g_claims[index].pml4 = 0;
     g_claims[index].pid  = 0;
     klog_printf("dev: pid %d released pci %d%s\n", pid, index,
@@ -85,6 +160,10 @@ void dev_claim_space_gone(uint64_t pml4) {
         // device goes back deliberately.
         klog_printf(KLOG_WARN "dev: pid %d died holding pci %d -- left unbound\n",
                     g_claims[i].pid, i);
+        // The mapping of these frames died with the address space, but
+        // the DEVICE did not stop: dma_release() clears bus mastering
+        // before they go back to the allocator.
+        dma_release(i, 0);
         g_claims[i].pml4 = 0;
         g_claims[i].pid  = 0;
     }
@@ -128,6 +207,9 @@ static int pcidev_fill(int index, void *out) {
     q->index = (uint32_t)index;
     q->holder_pid = dev_claim_holder_pid(index);
     const char *drv = pci_device_driver(pci_device_at(index));
+    // What dev_claim_take() would allow, not just what the bus calls
+    // removable: an UNBOUND device has no driver to ask for a remove().
+    q->claimable = (!drv || pci_device_removable(index)) ? 1 : 0;
     if (drv) k_strlcpy(q->driver, drv, sizeof q->driver);
     return 1;
 }

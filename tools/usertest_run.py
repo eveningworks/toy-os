@@ -104,6 +104,12 @@ TESTS = [
     # device and NOTES the skip; tools/devclaim_test.py launches a
     # guest with one for the leg that proves the unbind.
     ("devclaim_test", None, None, None),
+    # And stage 3's primitive: the DMA buffer, which is what makes a
+    # claimed device able to reach memory at all. SPAWNED for the same
+    # reason as the two above, and it is the only check that a released
+    # buffer's MAPPING goes with its frames -- a KTEST cannot see that,
+    # because the kernel context has no address space to map into.
+    ("devdma_test", None, None, None),
     # The ring-3 half of termkey: the encoder is shared source compiled
     # twice, and the KTESTs would pass whether or not ring 3 linked it.
     ("termkey_test", 0, None, None),
