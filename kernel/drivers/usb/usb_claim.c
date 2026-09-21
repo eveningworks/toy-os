@@ -190,7 +190,17 @@ int sys_usb_isoch_open(struct syscall_ctx *c) {
     if (!base) { ret = -ENOMEM; goto out; }
     uint64_t phys = pmm_alloc_contiguous(npages, PMM_ZONE_DMA32);
     if (!phys) { ret = -ENOMEM; goto out; }
-    if (!mmap_map_dma(c->pml4, base, phys, npages, 1, VMM_MT_UC)) {
+    // **WRITE-BACK, NOT UC, AND IT IS THE DIFFERENCE BETWEEN MUSIC AND
+    // CRACKLE.** This is ordinary RAM the controller DMAs out of, not a
+    // register file -- and x86 DMA snoops the caches, which is exactly
+    // why hda.c has to CLEAR NoSnoop rather than map anything uncached
+    // (docs/decisions/drivers.md). The driver fills it with 3-byte
+    // stores, so an uncached mapping makes every sample a separate bus
+    // transaction: ~1150 of them per wakeup at group 32, which is what
+    // made a bigger group SLOWER (5803 packets/s at 32, 393 at 64) and
+    // why KVM did not help. The kernel's own usb-audio driver writes
+    // its packet buffer through a normal write-back mapping.
+    if (!mmap_map_dma(c->pml4, base, phys, npages, 1, VMM_MT_NORMAL)) {
         pmm_free_contiguous(phys, npages);
         ret = -ENOMEM;
         goto out;
