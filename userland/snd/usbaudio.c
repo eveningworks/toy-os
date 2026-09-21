@@ -223,7 +223,10 @@ static int usbaudio_open(struct snd_dev *dev) {
     // costs latency nobody can hear.
     uint32_t per_ms = us >= 1000 ? 1 : 1000 / us;
     uint32_t fits = PKT_BYTES / g.wire_bytes;
-    uint32_t group = per_ms * 4;   // ~4 ms; MEASURED best -- 8 and 6 were worse
+    // MEASURED, not chosen: 4 ms per wakeup sustained 94% of the
+    // endpoint's rate, where 1 ms (the in-kernel driver's shape) gave
+    // 90% and 6 and 8 ms collapsed below 10%.
+    uint32_t group = per_ms * 4;
     if (group > fits / 3) group = fits / 3;
     if (group < per_ms) group = per_ms;
     g.group = (uint8_t)(group ? group : 1);
@@ -236,6 +239,10 @@ static int usbaudio_open(struct snd_dev *dev) {
     // collapsed the rate to 393 packets/s, where 96 sustained 5803.
     // Three groups is enough to cover a wakeup's turnaround and leaves
     // the ring two-thirds empty.
+    // THREE GROUPS. Deeper was measured WORSE, repeatedly and on both
+    // memory types -- 160 outstanding collapsed to 381 packets/s where
+    // 96 sustained 7516. Why a deeper cushion hurts is NOT established
+    // and docs/bugs.md says so.
     uint32_t want = g.group * 3;
     if (want > fits) want = fits - (fits % g.group);
     g.packets = (uint8_t)(want ? want : g.group);

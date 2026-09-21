@@ -163,8 +163,13 @@ static void isoch_close(void) {
     // ONE LINE, AT CLOSE. A probe per completion would outrun the klog
     // ring at an endpoint's service rate; this is the whole question --
     // did the controller ever come back -- asked once.
-    klog_printf("usb: isoch ep 0x%x closing -- %u posted, %u completed\n",
-                g_isoch.ep, (unsigned)g_isoch.posted, (unsigned)g_isoch.total);
+    // UNDERRUNS ARE THE DISCRIMINATOR: a ring that ran dry says the
+    // refill was late, and one that did not says the descriptors were
+    // there and something else dropped them.
+    klog_printf("usb: isoch ep 0x%x closing -- %u posted, %u completed, "
+                "%u underrun(s)\n",
+                g_isoch.ep, (unsigned)g_isoch.posted, (unsigned)g_isoch.total,
+                (unsigned)xhci_isoch_underruns(g_isoch.slot, g_isoch.ep));
     // THE MAPPING GOES BEFORE THE FRAMES. They are borrowed, so no
     // teardown disposes of them -- freeing first would hand the
     // allocator pages the holder still has a live writable PTE for.
