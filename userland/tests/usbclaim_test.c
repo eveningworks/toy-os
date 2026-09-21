@@ -101,18 +101,20 @@ int main(void) {
 
             // AN OFFSET PAST THE GRANT WOULD POINT THE CONTROLLER AT
             // SOMEBODY ELSE'S PAGE, so it has to be refused.
-            utest_check(sys_usb_isoch_post(slot, 0x01, 4096, 192, 1) < 0,
+            utest_check(sys_usb_isoch_post(slot, 0x01, 4096, 192, 1, 1, 0) < 0,
                         "a post past the end of the buffer is refused");
-            utest_check(sys_usb_isoch_post(slot, 0x02, 0, 192, 1) < 0,
+            utest_check(sys_usb_isoch_post(slot, 0x02, 0, 192, 1, 1, 0) < 0,
                         "a post to an endpoint nobody opened is refused");
 
             // SILENCE, which is real traffic: the completions are what
             // prove the controller fetched it.
-            int posted = 0;
-            for (int k = 0; k < 8; k++)
-                if (sys_usb_isoch_post(slot, 0x01, (unsigned)k * 192, 192,
-                                       k == 7) == 0) posted++;
-            utest_check(posted == 8, "posted 8 packets of silence");
+            // ONE CALL, EIGHT DESCRIPTORS -- the batching the endpoint
+            // rate needs, and the count comes back so a short queue is
+            // visible rather than silent.
+            int posted = sys_usb_isoch_post(slot, 0x01, 0, 192, 1, 8, 192);
+            utest_check(posted == 8, "one call queued 8 packets of silence");
+            utest_check(sys_usb_isoch_post(slot, 0x01, 0, 192, 1, 64, 192) < 0,
+                        "a group that would leave the buffer is refused");
 
             int done = 0;
             for (int k = 0; k < 200 && !done; k++) {

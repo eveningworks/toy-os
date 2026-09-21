@@ -36,7 +36,9 @@
 // One card, as the host hands it over. Everything here is already done
 // by the time open() is called.
 struct snd_dev {
-    int      pci;                     // PCI enumeration index (lspci's)
+    int      pci;                     // PCI enumeration index (lspci's),
+                                      // or -1 for a driver that found
+                                      // its own device on another bus
     struct pci_device info;           // what the bus says about it
 
     // Memory BARs the host mapped, or NULL. An I/O BAR is NOT mapped --
@@ -72,6 +74,12 @@ struct snd_driver {
     // Would this driver drive that device? Reads the PCI config the
     // host already has; the device is NOT claimed yet, so this must
     // not touch the hardware.
+    //
+    // **NULL MEANS THE DRIVER FINDS ITS OWN DEVICE**, because not every
+    // sound card is on the PCI bus -- a USB one is named by an xHCI
+    // slot, and the host has no way to enumerate a bus it does not know
+    // about. Such a driver is offered open() with `pci` = -1 and NO
+    // claim taken, and takes whatever claim its own bus needs.
     int  (*match)(const struct pci_device *d);
 
     // Bring the chip up and find its output. The card is claimed, its

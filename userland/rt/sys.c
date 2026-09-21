@@ -743,11 +743,13 @@ int sys_usb_isoch_open(struct usb_isoch_msg *m) {
     return (int)err(syscall1(SYS_USB_ISOCH_OPEN, (uint64_t)(uintptr_t)m));
 }
 
-int sys_usb_isoch_post(int slot, int ep, unsigned offset, unsigned len, int ioc) {
+int sys_usb_isoch_post(int slot, int ep, unsigned offset, unsigned len,
+                       int ioc, unsigned count, unsigned stride) {
     struct usb_isoch_post_msg m;
     __builtin_memset(&m, 0, sizeof m);
     m.slot = (uint32_t)slot; m.ep = (uint32_t)ep;
     m.offset = offset; m.len = len; m.ioc = ioc ? 1 : 0;
+    m.count = count; m.stride = stride;
     return (int)err(syscall1(SYS_USB_ISOCH_POST, (uint64_t)(uintptr_t)&m));
 }
 

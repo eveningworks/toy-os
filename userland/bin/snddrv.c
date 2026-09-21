@@ -70,6 +70,9 @@ static void give_back(void) {
     g_dev = -1;
 }
 
+// A driver that found its own device releases it in close(); the host
+// only knows about the PCI one it took.
+
 static void release_all(void) {
     if (g_running && g_drv) { g_drv->stop(&g_card); g_running = 0; }
     if (g_drv && g_drv->close) g_drv->close(&g_card);
@@ -116,7 +119,9 @@ static void load_plugins(const char *want) {
                     path, (unsigned)drv->abi, (unsigned)SND_DRIVER_ABI);
             continue;
         }
-        if (!drv->name || !drv->match || !drv->open || !drv->start ||
+        // `match` may be NULL -- that is a driver whose device is not
+        // on the PCI bus and which finds its own (snd_driver.h).
+        if (!drv->name || !drv->open || !drv->start ||
             !drv->stop || !drv->period) {
             fprintf(stderr, "snddrv: %s has an incomplete driver table\n", path);
             continue;
@@ -232,6 +237,7 @@ int main(int argc, char **argv) {
         struct pci_device info;
         if (sys_pci_info(i, &info) != 0) continue;
         for (int k = 0; k < g_nplugins && index < 0; k++) {
+            if (!g_plugins[k]->match) continue;   // finds its own; below
             if (!g_plugins[k]->match(&info)) continue;
             if (!claimable(i)) {
                 fprintf(stderr, "snddrv: pci %d cannot be claimed\n", i);
@@ -240,7 +246,24 @@ int main(int argc, char **argv) {
             if (bring_up(i, g_plugins[k], &info) == 0) index = i;
         }
     }
-    if (index < 0) {
+    // THEN THE DRIVERS THAT FIND THEIR OWN. A USB card is named by an
+    // xHCI slot, not a PCI index, so the host cannot enumerate it --
+    // the plugin does, and takes its own claim.
+    for (int k = 0; k < g_nplugins && index < 0 && want_pci < 0; k++) {
+        if (g_plugins[k]->match) continue;
+        memset(&g_card, 0, sizeof g_card);
+        g_card.pci = -1;
+        if (g_plugins[k]->open(&g_card) == 0) {
+            g_drv = g_plugins[k];
+            index = -1;          // nothing of ours to release on the PCI side
+            break;
+        }
+        if (g_verbose)
+            fprintf(stderr, "snddrv: %s found no device of its own\n",
+                    g_plugins[k]->name);
+    }
+
+    if (!g_drv) {
         fprintf(stderr, "snddrv: no sound card a loaded driver can play\n");
         release_all();
         return 1;
@@ -257,7 +280,11 @@ int main(int argc, char **argv) {
     // INTERRUPTS BEFORE REGISTRATION, and the sequence read before it:
     // from the moment the core knows about this driver it may post a
     // start, and a request that arrives during setup must be SEEN.
-    sys_dev_irq_enable(index);
+    // ONLY A PCI DEVICE HAS AN INTERRUPT TO ROUTE. A driver that found
+    // its own device on another bus is woken by whatever that bus's
+    // completion path bumps -- for USB, the kernel's isochronous
+    // callback bumps this same wakeword.
+    if (index >= 0) sys_dev_irq_enable(index);
     uint32_t seen_seq = g_sh->drv.seq;
     if (sys_snd_register(&m) != 0) {
         fprintf(stderr, "snddrv: cannot register: %s\n", strerror(errno));
@@ -299,8 +326,12 @@ int main(int argc, char **argv) {
         }
 
         // Acknowledge at the chip BEFORE the kernel unmasks, or a level
-        // line re-fires the instant it is let through.
-        if (sys_dev_irq_ack(index) > 0 && g_running) {
+        // line re-fires the instant it is let through. A driver with no
+        // PCI device has nothing to unmask, so it is simply ASKED on
+        // every wake -- its own period() answers SND_IRQ_NOT_MINE when
+        // nothing has completed.
+        int fired = (index >= 0) ? (sys_dev_irq_ack(index) > 0) : 1;
+        if (fired && g_running) {
             int pos = g_drv->period(&g_card);
             if (pos != SND_IRQ_NOT_MINE) {
                 sys_snd_period((uint32_t)pos);

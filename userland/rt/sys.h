@@ -494,9 +494,13 @@ int sys_usb_control(int slot, const uint8_t setup[8], void *buf,
 // queues them.
 int sys_usb_isoch_open(struct usb_isoch_msg *m);
 
-// Queue ONE descriptor from an offset in that buffer. `ioc` asks for a
-// completion event; a group normally carries it on the last one only.
-int sys_usb_isoch_post(int slot, int ep, unsigned offset, unsigned len, int ioc);
+// QUEUE A GROUP of `count` descriptors, the Nth at `offset + N*stride`,
+// with a completion asked for on the LAST when `ioc` is set. One call
+// per group rather than per packet, because an endpoint at 125 us wants
+// 8000 a second and a syscall each does not reach it -- syscall_abi.h
+// has the measurement. Returns how many were queued, or -1 with errno.
+int sys_usb_isoch_post(int slot, int ep, unsigned offset, unsigned len,
+                       int ioc, unsigned count, unsigned stride);
 
 // COMPLETIONS SINCE THE LAST CALL. The kernel's completion callback
 // runs in interrupt context and cannot call into a process, so it

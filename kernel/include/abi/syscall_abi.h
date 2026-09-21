@@ -2553,11 +2553,20 @@ struct usb_control_msg {
                                 // back with `addr` and `phys` filled
                                 // in. 0, or -EACCES/-EINVAL/-ENOMEM.
 
+// **IT QUEUES A GROUP, NOT A PACKET, AND THAT IS NOT AN OPTIMISATION.**
+// An isochronous endpoint at 125 us wants 8000 descriptors a second.
+// One syscall each was MEASURED at ~28 a second on a real device --
+// few posts, so few completions, so few wakeups, so few posts -- and
+// the device received a starved trickle and played nothing. A group
+// per call is what makes the rate reachable at all.
 #define SYS_USB_ISOCH_POST 131  // RDI = a `struct usb_isoch_post_msg`.
-                                // Queues ONE transfer descriptor from
-                                // an offset in that buffer. 0, or
-                                // -EACCES not the holder, -EINVAL no
-                                // such endpoint or a bad range.
+                                // Queues `count` descriptors, the Nth
+                                // at `offset + N * stride`, and asks
+                                // for a completion on the LAST one
+                                // when `ioc` is set. Returns how many
+                                // were queued, or -EACCES not the
+                                // holder, -EINVAL no such endpoint or
+                                // a range that leaves the buffer.
 
 // COMPLETIONS SINCE THE LAST CALL, because the kernel's own completion
 // callback runs in INTERRUPT CONTEXT and cannot call into a process.
@@ -2599,9 +2608,11 @@ struct usb_isoch_msg {
 struct usb_isoch_post_msg {
     uint32_t slot;
     uint32_t ep;
-    uint32_t offset;     // into the granted buffer
-    uint32_t len;
-    uint32_t ioc;        // ask for a completion event on this one
+    uint32_t offset;     // into the granted buffer, of the FIRST one
+    uint32_t len;        // bytes per descriptor
+    uint32_t ioc;        // a completion event on the LAST of the group
+    uint32_t count;      // descriptors to queue; 0 is read as 1
+    uint32_t stride;     // bytes between them; 0 is read as `len`
     uint32_t reserved;
 };
 

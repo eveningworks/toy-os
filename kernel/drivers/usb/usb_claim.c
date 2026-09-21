@@ -238,17 +238,32 @@ int sys_usb_isoch_post(struct syscall_ctx *c) {
         ret = -EINVAL;
         goto out;
     }
-    // THE RANGE IS CHECKED, not trusted: this becomes a PHYSICAL
-    // address in a descriptor the controller will read, so an offset
-    // past the grant would point the hardware at somebody else's page.
+    uint32_t count = m.count ? m.count : 1;
+    uint32_t stride = m.stride ? m.stride : m.len;
+    // THE RANGE IS CHECKED FOR THE WHOLE GROUP, not trusted: each of
+    // these becomes a PHYSICAL address in a descriptor the controller
+    // will read, so one past the grant would point the hardware at
+    // somebody else's page. Checked on the LAST, which bounds them all.
     uint64_t bytes = g_isoch.dma_pages * 4096;
-    if (!m.len || (uint64_t)m.offset + m.len > bytes) { ret = -EINVAL; goto out; }
+    uint64_t last = (uint64_t)m.offset + (uint64_t)(count - 1) * stride;
+    if (!m.len || !count || count > 256 || last + m.len > bytes) {
+        ret = -EINVAL;
+        goto out;
+    }
 
-    if (xhci_isoch_post((uint8_t)m.slot, (uint8_t)m.ep,
-                        g_isoch.dma_phys + m.offset, m.len,
-                        m.ioc ? 1 : 0) != 0) { ret = -EINVAL; goto out; }
-    g_isoch.posted++;
-    ret = 0;
+    // A COMPLETION ON THE LAST ONLY, which is what `IOC every N` means:
+    // an isochronous endpoint completes in order and an error reports
+    // itself regardless, so one event per group is all the driver needs.
+    uint32_t done = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        if (xhci_isoch_post((uint8_t)m.slot, (uint8_t)m.ep,
+                            g_isoch.dma_phys + m.offset + (uint64_t)i * stride,
+                            m.len, (m.ioc && i + 1 == count) ? 1 : 0) != 0)
+            break;
+        done++;
+    }
+    g_isoch.posted += done;
+    ret = done ? (int64_t)done : -EINVAL;
 out:
     c->regs[14] = (uint64_t)ret;
     return 0;

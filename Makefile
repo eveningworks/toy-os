@@ -1197,6 +1197,13 @@ $(BUILD)/lib/snd/hda.so: $(BUILD)/userland-pic/snd/hda.o $(BUILD)/userland-pic/s
 	@mkdir -p $(dir $@)
 	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname hda.so -o $@ 	      $(BUILD)/userland-pic/snd/hda.o $(BUILD)/userland-pic/shared/hda_codec.o $(LIBC_SO)
 
+# The USB audio descriptor walk, compiled a second time for ring 3 --
+# the same rule hda.so's codec parser follows.
+$(BUILD)/lib/snd/usbaudio.so: $(BUILD)/userland-pic/snd/usbaudio.o $(BUILD)/userland-pic/shared/usb_audio_parse.o $(LIBC_SO)
+	@mkdir -p $(dir $@)
+	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname usbaudio.so -o $@ \
+	      $(BUILD)/userland-pic/snd/usbaudio.o $(BUILD)/userland-pic/shared/usb_audio_parse.o $(LIBC_SO)
+
 $(BUILD)/lib/snd/%.so: $(BUILD)/userland-pic/snd/%.o $(LIBC_SO)
 	@mkdir -p $(dir $@)
 	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname $*.so -o $@ $< $(LIBC_SO)
