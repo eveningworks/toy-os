@@ -735,6 +735,14 @@ int sys_dev_irq_enable(int index) {
     return (int)err(syscall1(SYS_DEV_IRQ_ENABLE, (uint64_t)(int64_t)index));
 }
 
+int sys_usb_claim(int slot) {
+    return (int)err(syscall1(SYS_USB_CLAIM, (uint64_t)slot));
+}
+
+int sys_usb_release(int slot, unsigned flags) {
+    return (int)err(syscall2(SYS_USB_RELEASE, (uint64_t)slot, flags));
+}
+
 static int dev_io(struct dev_io_msg *m) {
     return (int)syscall1(SYS_DEV_IO, (uint64_t)(uintptr_t)m);
 }

@@ -2478,6 +2478,36 @@ struct mmap_msg {
                              // a bad width, a BAR that is not an I/O
                              // BAR, or an offset past its end.
 
+// CLAIM A USB DEVICE, so a ring-3 driver can have it.
+//
+// THE DIFFERENCE FROM SYS_DEV_CLAIM IS THE WHOLE DESIGN. A claimed PCI
+// device is handed over WHOLE -- its BARs are mapped into the holder,
+// which then programs the chip. A USB device cannot be: the host
+// controller is shared by every device on the bus, so xhci.c stays in
+// ring 0 and the holder asks IT to perform transfers. That is Linux's
+// usbfs, which is what libusb sits on -- and libusb does not drive the
+// host controller either.
+//
+// The device is named by its xHCI SLOT, which QUERY_USB reports, for
+// the reason SYS_DEV_MAP_BAR takes an index: a caller never names an
+// address, or a port, or anything it could have made up.
+#define SYS_USB_CLAIM 127    // RDI = the xHCI slot. Unbinds whatever
+                             // class driver holds it and records the
+                             // caller. 0, or: -EINVAL no such device,
+                             // -EBUSY somebody else holds it, -EPERM
+                             // not claimable (a hub) or no scheduler
+                             // slot.
+                             //
+                             // The claim DIES WITH THE PROCESS, and
+                             // does NOT rebind then -- a supervised
+                             // driver has to find its device free.
+
+#define SYS_USB_RELEASE 128  // RDI = the slot, RSI = flags.
+                             // USB_RELEASE_REBIND re-offers it to the
+                             // class drivers; without it the device is
+                             // left UNBOUND, as the PCI path does.
+#define USB_RELEASE_REBIND 1
+
 struct dev_io_msg {
     uint32_t index;   // the PCI device, as lspci counts
     uint32_t bar;     // which BAR, 0-5 -- never a port number

@@ -24,7 +24,7 @@
 // in kernel/proc/syscall_table.c -- the sibling table here was 64 while
 // the syscall table reached 107, so `kstack syscalls` had silently
 // reported nothing about the top third of the ABI.
-#define SYSCALL_STALL_MAX 128
+#define SYSCALL_STALL_MAX 160
 
 // The timestamp to hand syscall_stall_end(), or 0 when disarmed.
 uint64_t syscall_stall_begin(void);

@@ -666,7 +666,7 @@ void scheduler_set_init_pid(int pid);
 // end is dropped silently, and at 64 that was every number from
 // SYS_SHM_GRANT up. kernel/proc/syscall_table.c asserts this against the
 // table itself, which is the only place that can.
-#define SCHED_KSTACK_SYSCALL_MAX 128
+#define SCHED_KSTACK_SYSCALL_MAX 160
 
 struct sched_kstack_info {
     int slot, pid, state, wait_reason;

@@ -471,6 +471,14 @@ int sys_dev_irq_enable(int index);
 // 0 is a legitimate answer, meaning something else woke you.
 int sys_dev_irq_ack(int index);
 
+// CLAIM A USB DEVICE by its xHCI slot (QUERY_USB reports it), taking
+// it off whatever class driver had it. Releasing with
+// USB_RELEASE_REBIND offers it back to them; without, it is left
+// UNBOUND. syscall_abi.h says why this is not SYS_DEV_CLAIM.
+// 0, or -1 with errno.
+int sys_usb_claim(int slot);
+int sys_usb_release(int slot, unsigned flags);
+
 // READ OR WRITE AN I/O BAR of a device you hold. Ring 3 cannot run
 // in/out, so the kernel performs the access -- validated against that
 // device's OWN BARs, so it can never reach another device's ports.

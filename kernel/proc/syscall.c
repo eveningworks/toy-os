@@ -15,6 +15,7 @@
 #include "mmap.h" // mmap_release_regions -- the region list is allocated
 #include "syscall_stall.h"
 #include "syscalls.h"
+#include "usb_claim.h"
 #include "dev_claim.h"
 #include "futex.h"
 #include "syscall_table.h"
@@ -54,6 +55,7 @@ static void release_process_state(uint64_t pml4_phys) {
     mmap_release_regions(pml4_phys); // the region LIST, not the mappings
     dev_claim_space_gone(pml4_phys); // a claimed device, left UNBOUND
     sound_proc_space_gone(pml4_phys); // ...and the sound device it was
+    usb_claim_space_gone(pml4_phys); // a USB device held from ring 3
 }
 
 void syscall_process_exit_cleanup(uint64_t pml4_phys) {
