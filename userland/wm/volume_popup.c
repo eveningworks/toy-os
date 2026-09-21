@@ -372,6 +372,21 @@ int volume_handle_click(int mx, int my) {
     switch (what) {
     case TRAY_SLIDER_CLICK_NONE:
         return 0;
+    case TRAY_SLIDER_CLICK_OPENED:
+        // THE ROSTER, BEFORE THE FRAME THIS CLICK DRAWS. Nothing
+        // refreshes it while the panel is closed, and the refresh in
+        // volume_poll_config() is the NEXT frame -- which is not 4 ms
+        // away but however long the compositor idles for, since a
+        // panel opening is the last thing that happens in that frame.
+        // Measured on the ASUS: a stream that had ended while the
+        // panel was closed was still drawn as a row for 100-300 ms.
+        //
+        // volume_open_now() refreshes too and is NOT this path: a tray
+        // click opens the popup inside tray_slider_click(), so that
+        // function has no callers at all and fixing it there fixed
+        // nothing anybody could see.
+        refresh_apps();
+        return 1;
     case TRAY_SLIDER_CLICK_DISMISSED:
         // A dismissing click on the TASKBAR falls through, so the Start
         // button acts on the same click that closed this -- and so a
