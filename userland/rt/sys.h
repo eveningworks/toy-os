@@ -487,6 +487,23 @@ int sys_usb_release(int slot, unsigned flags);
 int sys_usb_control(int slot, const uint8_t setup[8], void *buf,
                     unsigned len, int in);
 
+// AN ISOCHRONOUS OUT ENDPOINT on a device you hold, plus the packet
+// buffer to feed it -- granted here because a transfer descriptor
+// names a PHYSICAL address. The holder cannot touch the transfer ring
+// (the controller is shared), so it hands over packets and the kernel
+// queues them.
+int sys_usb_isoch_open(struct usb_isoch_msg *m);
+
+// Queue ONE descriptor from an offset in that buffer. `ioc` asks for a
+// completion event; a group normally carries it on the last one only.
+int sys_usb_isoch_post(int slot, int ep, unsigned offset, unsigned len, int ioc);
+
+// COMPLETIONS SINCE THE LAST CALL. The kernel's completion callback
+// runs in interrupt context and cannot call into a process, so it
+// counts and bumps this holder's wakeword; this is how many landed.
+// Read-and-clear, so a missed wakeup still reports the true number.
+int sys_usb_isoch_status(int slot, int ep);
+
 // READ OR WRITE AN I/O BAR of a device you hold. Ring 3 cannot run
 // in/out, so the kernel performs the access -- validated against that
 // device's OWN BARs, so it can never reach another device's ports.

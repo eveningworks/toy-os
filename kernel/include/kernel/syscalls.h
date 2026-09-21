@@ -323,7 +323,10 @@ int sys_dev_irq_ack(struct syscall_ctx *c);
 int sys_dev_io(struct syscall_ctx *c);
 int sys_usb_claim(struct syscall_ctx *c);
 int sys_usb_release(struct syscall_ctx *c);
-int sys_usb_control(struct syscall_ctx *c);    // beside it
+int sys_usb_control(struct syscall_ctx *c);
+int sys_usb_isoch_open(struct syscall_ctx *c);
+int sys_usb_isoch_post(struct syscall_ctx *c);
+int sys_usb_isoch_status(struct syscall_ctx *c);    // beside it
 int sys_snd_register(struct syscall_ctx *c);  // kernel/drivers/sound/sound_proc.c
 int sys_snd_period(struct syscall_ctx *c);    // beside it
 // A ring-3 sound driver's registration dies with its address space --

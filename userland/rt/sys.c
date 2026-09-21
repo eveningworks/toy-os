@@ -735,6 +735,22 @@ int sys_dev_irq_enable(int index) {
     return (int)err(syscall1(SYS_DEV_IRQ_ENABLE, (uint64_t)(int64_t)index));
 }
 
+int sys_usb_isoch_open(struct usb_isoch_msg *m) {
+    return (int)err(syscall1(SYS_USB_ISOCH_OPEN, (uint64_t)(uintptr_t)m));
+}
+
+int sys_usb_isoch_post(int slot, int ep, unsigned offset, unsigned len, int ioc) {
+    struct usb_isoch_post_msg m;
+    __builtin_memset(&m, 0, sizeof m);
+    m.slot = (uint32_t)slot; m.ep = (uint32_t)ep;
+    m.offset = offset; m.len = len; m.ioc = ioc ? 1 : 0;
+    return (int)err(syscall1(SYS_USB_ISOCH_POST, (uint64_t)(uintptr_t)&m));
+}
+
+int sys_usb_isoch_status(int slot, int ep) {
+    return (int)err(syscall2(SYS_USB_ISOCH_STATUS, (uint64_t)slot, (uint64_t)ep));
+}
+
 int sys_usb_control(int slot, const uint8_t setup[8], void *buf,
                     unsigned len, int in) {
     struct usb_control_msg m;

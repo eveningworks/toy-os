@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <unistd.h>
 #include "rt/sys.h"
 #include "query_abi.h"
 #include "syscall_abi.h"
@@ -71,6 +72,59 @@ int main(void) {
         uint8_t set_cfg[8] = { 0x00, 9, 1, 0, 0, 0, 0, 0 };
         utest_check(sys_usb_control(slot, set_cfg, 0, 0, 0) < 0 &&
                     sys_errno() == EINVAL, "SET_CONFIGURATION is refused");
+    }
+
+    // THE ISOCHRONOUS ENDPOINT, which is what a ring-3 audio driver
+    // exists to drive. Alt 1 is where the endpoint lives -- alt 0 is
+    // the "idle, no bandwidth" setting every UAC device carries, and
+    // configuring an endpoint that alt 0 does not have fails.
+    {
+        uint8_t set_if[8] = { 0x01, 11, 1, 0, 1, 0, 0, 0 }; // SET_INTERFACE 1 alt 1
+        utest_check(sys_usb_control(slot, set_if, 0, 0, 0) == 0,
+                    "set the streaming interface to its alternate");
+
+        struct usb_isoch_msg im;
+        memset(&im, 0, sizeof im);
+        im.slot = (unsigned)slot;
+        im.ep = 0x01;
+        im.mps = 294;       // the G6's alt 1; a ceiling, not the rate's share
+        im.interval = 1;
+        im.dma_bytes = 4096;
+        int r = sys_usb_isoch_open(&im);
+        utest_check(r == 0, "opened the isochronous OUT endpoint");
+        if (r == 0) {
+            utest_check(im.addr && im.phys,
+                        "...and it granted a packet buffer, mapped and physical");
+            // WRITABLE, or the grant is useless -- this is the buffer a
+            // descriptor will name.
+            memset((void *)(uintptr_t)im.addr, 0, 4096);
+
+            // AN OFFSET PAST THE GRANT WOULD POINT THE CONTROLLER AT
+            // SOMEBODY ELSE'S PAGE, so it has to be refused.
+            utest_check(sys_usb_isoch_post(slot, 0x01, 4096, 192, 1) < 0,
+                        "a post past the end of the buffer is refused");
+            utest_check(sys_usb_isoch_post(slot, 0x02, 0, 192, 1) < 0,
+                        "a post to an endpoint nobody opened is refused");
+
+            // SILENCE, which is real traffic: the completions are what
+            // prove the controller fetched it.
+            int posted = 0;
+            for (int k = 0; k < 8; k++)
+                if (sys_usb_isoch_post(slot, 0x01, (unsigned)k * 192, 192,
+                                       k == 7) == 0) posted++;
+            utest_check(posted == 8, "posted 8 packets of silence");
+
+            int done = 0;
+            for (int k = 0; k < 200 && !done; k++) {
+                int n = sys_usb_isoch_status(slot, 0x01);
+                if (n > 0) done = n;
+                else usleep(1000);
+            }
+            utest_check(done > 0,
+                        "...and the controller COMPLETED them, so the wakeword fired");
+        }
+        uint8_t set_if0[8] = { 0x01, 11, 0, 0, 1, 0, 0, 0 }; // back to alt 0
+        sys_usb_control(slot, set_if0, 0, 0, 0);
     }
 
     utest_check(sys_usb_release(slot, USB_RELEASE_REBIND) == 0,

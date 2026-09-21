@@ -2540,6 +2540,53 @@ struct usb_control_msg {
     uint8_t  setup[8]; // bmRequestType, bRequest, wValue, wIndex, wLength
 };
 
+// AN ISOCHRONOUS OUT ENDPOINT, opened by the holder and driven by the
+// kernel. This is what makes a ring-3 USB audio driver possible: the
+// holder cannot touch the transfer ring (the controller is shared), so
+// it hands over packets and the kernel queues them.
+//
+// THE PACKET BUFFER IS GRANTED HERE, physically contiguous and mapped
+// into the holder, because a TD names a PHYSICAL address. It is the
+// holder's own buffer -- not the sound core's ring, which is a
+// separate grant with its own rules.
+#define SYS_USB_ISOCH_OPEN 130  // RDI = a `struct usb_isoch_msg`, read
+                                // back with `addr` and `phys` filled
+                                // in. 0, or -EACCES/-EINVAL/-ENOMEM.
+
+#define SYS_USB_ISOCH_POST 131  // RDI = a `struct usb_isoch_post_msg`.
+                                // Queues ONE transfer descriptor from
+                                // an offset in that buffer. 0, or
+                                // -EACCES not the holder, -EINVAL no
+                                // such endpoint or a bad range.
+
+// COMPLETIONS SINCE THE LAST CALL, because the kernel's own completion
+// callback runs in INTERRUPT CONTEXT and cannot call into a process.
+// It counts and bumps the holder's wakeword instead -- stage 4's
+// mechanism -- and the holder asks here how many landed.
+#define SYS_USB_ISOCH_STATUS 132 // RDI = the slot, RSI = the endpoint.
+                                 // Returns completions since the last
+                                 // call, or a negative errno.
+
+struct usb_isoch_msg {
+    uint32_t slot;
+    uint32_t ep;         // endpoint address, e.g. 0x01
+    uint32_t mps;        // wMaxPacketSize from the endpoint descriptor
+    uint32_t interval;   // bInterval, as the descriptor states it
+    uint32_t dma_bytes;  // the packet buffer to grant
+    uint32_t reserved;
+    uint64_t addr;       // OUT: where it is mapped
+    uint64_t phys;       // OUT: what a descriptor must name
+};
+
+struct usb_isoch_post_msg {
+    uint32_t slot;
+    uint32_t ep;
+    uint32_t offset;     // into the granted buffer
+    uint32_t len;
+    uint32_t ioc;        // ask for a completion event on this one
+    uint32_t reserved;
+};
+
 struct dev_io_msg {
     uint32_t index;   // the PCI device, as lspci counts
     uint32_t bar;     // which BAR, 0-5 -- never a port number

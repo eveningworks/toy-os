@@ -15,6 +15,8 @@
 #include "xhci.h"
 #include "pmm.h"
 #include "vmm.h"
+#include "mmap.h"
+#include "futex.h"
 
 #define USB_CLASS_HUB 9   // usb_enum.c's, and the same value the spec gives
 
@@ -23,6 +25,19 @@ static struct {
     uint64_t pml4;
     int      pid;
 } g_claims[USB_MAX_DEVICES];
+
+// ONE ISOCHRONOUS OUT ENDPOINT PER CLAIM. A UAC device streams on one;
+// a holder that needs two can ask when there is one.
+static struct {
+    uint8_t  slot, ep, open;
+    uint64_t dma_phys, dma_base, dma_pages;
+    // Written by the completion callback, which runs in INTERRUPT
+    // CONTEXT -- volatile, and read-and-cleared by the status call.
+    volatile uint32_t completions;
+    int pid;
+} g_isoch;
+
+static void isoch_close(void);
 
 static const struct usb_device_info *dev_by_slot(uint8_t slot) {
     for (int i = 0; i < usb_device_count(); i++) {
@@ -108,6 +123,10 @@ int usb_claim_drop(uint8_t slot, uint64_t pml4, int rebind) {
     if (pml4 && g_claims[i].pml4 != pml4) return -EACCES;
 
     int pid = g_claims[i].pid;
+    // THE ENDPOINT GOES WITH THE CLAIM. A holder that drops the device
+    // while TDs are posted would otherwise leave the controller
+    // fetching from frames the allocator has handed to somebody else.
+    if (g_isoch.open && g_isoch.slot == slot) isoch_close();
     k_memset(&g_claims[i], 0, sizeof g_claims[i]);
     klog_printf("usb: pid %d released slot %u%s\n", pid, slot,
                 rebind ? " (rebinding)" : "");
@@ -120,6 +139,120 @@ int usb_claim_drop(uint8_t slot, uint64_t pml4, int rebind) {
         struct usb_device_info *d = (struct usb_device_info *)dev_by_slot(slot);
         if (d && d->cfg && d->cfg_len) usb_bind_drivers(d, d->cfg, d->cfg_len);
     }
+    return 0;
+}
+
+// A TD GROUP FINISHED. From the event drain, so it does the two cheap
+// things and nothing else -- the holder does the refilling, which is
+// the whole point of it being in ring 3.
+static void isoch_done(void *ctx, uint32_t bytes) {
+    (void)ctx; (void)bytes;
+    if (!g_isoch.open) return;
+    g_isoch.completions++;
+    futex_note_ready(g_isoch.pid);
+}
+
+static void isoch_close(void) {
+    if (!g_isoch.open) return;
+    // THE MAPPING GOES BEFORE THE FRAMES. They are borrowed, so no
+    // teardown disposes of them -- freeing first would hand the
+    // allocator pages the holder still has a live writable PTE for.
+    if (g_isoch.dma_base)
+        mmap_drop_dma_region(g_isoch.dma_base, g_isoch.dma_pages);
+    if (g_isoch.dma_phys)
+        pmm_free_contiguous(g_isoch.dma_phys, g_isoch.dma_pages);
+    k_memset(&g_isoch, 0, sizeof g_isoch);
+}
+
+int sys_usb_isoch_open(struct syscall_ctx *c) {
+    struct usb_isoch_msg m;
+    int64_t ret;
+
+    if (!scheduler_current_mm()) { ret = -EPERM; goto out; }
+    if (!vmm_copy_from_user(c->pml4, &m, c->a0, sizeof m)) { ret = -EFAULT; goto out; }
+    if ((ret = usb_claim_check((uint8_t)m.slot, c->pml4)) != 0) goto out;
+    if (g_isoch.open) { ret = -EBUSY; goto out; }
+    if (!m.dma_bytes || m.dma_bytes > 64 * 1024 || !m.mps) { ret = -EINVAL; goto out; }
+
+    uint64_t npages = (m.dma_bytes + 4095) / 4096;
+    uint64_t base = mmap_dma_reserve(npages);
+    if (!base) { ret = -ENOMEM; goto out; }
+    uint64_t phys = pmm_alloc_contiguous(npages, PMM_ZONE_DMA32);
+    if (!phys) { ret = -ENOMEM; goto out; }
+    if (!mmap_map_dma(c->pml4, base, phys, npages)) {
+        pmm_free_contiguous(phys, npages);
+        ret = -ENOMEM;
+        goto out;
+    }
+
+    g_isoch.slot = (uint8_t)m.slot;
+    g_isoch.ep   = (uint8_t)m.ep;
+    g_isoch.dma_phys = phys;
+    g_isoch.dma_base = base;
+    g_isoch.dma_pages = npages;
+    g_isoch.pid = scheduler_current_pid();
+    g_isoch.open = 1;
+
+    if (xhci_add_isoch_out((uint8_t)m.slot, (uint8_t)m.ep, (uint16_t)m.mps,
+                           (uint8_t)m.interval, isoch_done, 0) < 0) {
+        isoch_close();
+        ret = -EIO;
+        goto out;
+    }
+
+    m.addr = base;
+    m.phys = phys;
+    if (!vmm_copy_to_user(c->pml4, c->a0, &m, sizeof m)) {
+        isoch_close();
+        ret = -EFAULT;
+        goto out;
+    }
+    klog_printf("usb: pid %d opened isoch ep 0x%x on slot %u, %llu page(s) at %llx\n",
+                g_isoch.pid, m.ep, (unsigned)m.slot,
+                (unsigned long long)npages, (unsigned long long)phys);
+    ret = 0;
+out:
+    c->regs[14] = (uint64_t)ret;
+    return 0;
+}
+
+int sys_usb_isoch_post(struct syscall_ctx *c) {
+    struct usb_isoch_post_msg m;
+    int64_t ret;
+
+    if (!scheduler_current_mm()) { ret = -EPERM; goto out; }
+    if (!vmm_copy_from_user(c->pml4, &m, c->a0, sizeof m)) { ret = -EFAULT; goto out; }
+    if ((ret = usb_claim_check((uint8_t)m.slot, c->pml4)) != 0) goto out;
+    if (!g_isoch.open || g_isoch.slot != m.slot || g_isoch.ep != m.ep) {
+        ret = -EINVAL;
+        goto out;
+    }
+    // THE RANGE IS CHECKED, not trusted: this becomes a PHYSICAL
+    // address in a descriptor the controller will read, so an offset
+    // past the grant would point the hardware at somebody else's page.
+    uint64_t bytes = g_isoch.dma_pages * 4096;
+    if (!m.len || (uint64_t)m.offset + m.len > bytes) { ret = -EINVAL; goto out; }
+
+    ret = xhci_isoch_post((uint8_t)m.slot, (uint8_t)m.ep,
+                          g_isoch.dma_phys + m.offset, m.len,
+                          m.ioc ? 1 : 0) == 0 ? 0 : -EINVAL;
+out:
+    c->regs[14] = (uint64_t)ret;
+    return 0;
+}
+
+int sys_usb_isoch_status(struct syscall_ctx *c) {
+    int64_t ret;
+    if (!scheduler_current_mm()) { ret = -EPERM; goto out; }
+    if ((ret = usb_claim_check((uint8_t)c->a0, c->pml4)) != 0) goto out;
+    if (!g_isoch.open || g_isoch.slot != (uint8_t)c->a0 ||
+        g_isoch.ep != (uint8_t)c->a1) { ret = -EINVAL; goto out; }
+    // READ AND CLEAR, so a caller that misses a wakeup still learns how
+    // many landed rather than one.
+    ret = (int64_t)g_isoch.completions;
+    g_isoch.completions = 0;
+out:
+    c->regs[14] = (uint64_t)ret;
     return 0;
 }
 
