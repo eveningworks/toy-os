@@ -2781,6 +2781,25 @@ window without going through it will find its layout polls timing out.
   half. `--no-card` is the positive control: `lscodec` must SAY there
   is no controller and exit non-zero. On demand, not in the gate: it
   boots its own guest with extra hardware.
+- **`mixer_test.py`** -- the PER-APPLICATION volume, from the tray
+  flyout down to what `soundd` actually applies. It boots its own guest
+  with an `ich9-intel-hda` because `volume_test.py` cannot cover this:
+  that guest has no sound card, so `soundd` exits with "no sound
+  device", there is no beacon, no roster, and the per-app section is
+  correctly absent from the panel it drives. **The assertions are a
+  ROUND TRIP through four components that share no code** -- a row
+  appears only while a client plays and carries the name `soundd` mixes
+  it under (not the `snd.<pid>` its ring is called), a click a quarter
+  along the track moves that row, `/etc/sound.conf` gains the key so
+  the value outlives the widget, and the daemon reads it back and says
+  so. That last one is counted as a DIFFERENCE from a baseline rather
+  than as "is the line present": `soundd` reloads the moment the flyout
+  writes, so the line already exists from the client still playing
+  then, and the first version of the check passed without the second
+  stream ever being mixed. It runs on a COPY of `disk.img` -- the
+  flyout genuinely writes `/etc/sound.conf`, and a crash between the
+  write and the cleanup would leave `aplay` quietened for every later
+  tool on the real image. On demand, not in the gate.
 - **`install_test.py`** gained an `mbr` medium (`--media mbr`) covering
   `install --mbr` end to end, and **three fixes to the tool itself, all
   of which made a healthy system report as broken**. `--instance auto`

@@ -249,6 +249,12 @@ TOOLS = [
     ("hdacodec",    "hdacodec_test.py",        "ring 3 reads the codec graph and agrees with the kernel", True, None, False),
     ("hdacodec_ctl", "hdacodec_test.py --no-card", "...and the same with no card, which must say so", True, None, False),
 
+    # --- the mixer's per-application volume ---------------------------
+    # Its own guest for the same reason as the two above: gui_regress's
+    # has no sound card, so soundd never starts and the per-app section
+    # is correctly absent from the flyout it drives.
+    ("mixer",       "mixer_test.py",           "a per-app volume, from the flyout to what soundd applies", True, None, False),
+
     # --- interrupts ---------------------------------------------------
     # The only run in which anything reaches the Local APIC. Its own
     # guest, with USB hardware, because the load-bearing check is that

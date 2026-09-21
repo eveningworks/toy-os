@@ -89,6 +89,13 @@ struct volume_geom {
     int slider_x, slider_y, slider_w, slider_h;
     int list_x, list_y, row_h;       // the device list; rows start at list_y
     int rows;                        // how many device rows, "auto" included
+    // The per-application sliders, between the master row and the
+    // device list. `apps` is 0 when nothing is playing, and the whole
+    // section -- heading and all -- is absent then rather than an empty
+    // box: a mixer with no streams has nothing to say.
+    int app_x, app_y, app_row_h;
+    int apps;
+    int app_slider_x, app_slider_w;  // the track inside a row
     int level;                       // 0..100, what the slider draws
     int muted;                       // 1 while the level is held at 0
     int selected_row;                // which row carries the tick
@@ -100,5 +107,10 @@ void volume_geometry(struct volume_geom *out);
 // always "auto". Returns 0 past the last row.
 int volume_row(int index, char *value, uint32_t value_size,
                char *label, uint32_t label_size);
+
+// One per-application row, for the debug console and its tests: the
+// name soundd is mixing it under and the gain being applied. Returns 0
+// past the last one.
+int volume_app_row(int index, char *app, uint32_t app_size, int *gain);
 
 #endif

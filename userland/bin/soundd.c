@@ -32,9 +32,7 @@
 #include <string.h>
 #include <stdlib.h>   // atoi -- the pid out of the ring's name
 #include <sys/stat.h>
-#include "etc_config.h"
-#include <fcntl.h>
-#include <unistd.h>
+#include "lib/uconf.h"   // /etc in ring 3, over the shared parser
 #include "rt/sys.h"
 #include "sound_abi.h"
 #include "syscall_abi.h"
@@ -167,29 +165,14 @@ static void adopt(const char *name) {
 // immediate rather than sampled.
 static uint64_t g_cfg_stamp;
 
-// READ IN RING 3, PARSED BY THE SHARED PARSER. `etc_config_load()` and
-// its siblings are kernel-only (they reach the VFS directly); what
-// crosses is `etc_config.c`'s buffer half, so a process does its own
-// I/O and hands the bytes over -- api/etc_config.h says so, and it is
-// how `service` reads a descriptor.
+// ONE READ, MANY KEYS -- uconf_load() rather than uconf_get() per
+// client, which re-reads the whole document per call (api's own note:
+// a nine-entry desktop reload once cost 54 whole-file reads).
 static struct etc_config_buf g_cfg;
-
-static int load_config(void) {
-    g_cfg.valid = 0;
-    int fd = open(SND_CONFIG_FILE, O_RDONLY);
-    if (fd < 0) return 0;     // no file yet: everything at full gain
-    int64_t n = read(fd, g_cfg.data, sizeof g_cfg.data - 1);
-    close(fd);
-    if (n <= 0) return 0;
-    g_cfg.data[n] = '\0';
-    g_cfg.size = (uint32_t)n;
-    g_cfg.valid = 1;
-    return 1;
-}
 
 static void apply_gains(void) {
     struct etc_config_buf *b = &g_cfg;
-    int have = load_config();
+    int have = uconf_load(SND_CONFIG_FILE, b);
     for (int i = 0; i < MAX_CLIENTS; i++) {
         struct client *c = &g_cl[i];
         if (!c->ctl) continue;

@@ -8750,3 +8750,54 @@ assumption about hardware rather than a guarantee from a document.
 `BTN_MIDDLE`, so codes `0x113`/`0x114` fell past it into the key branch
 and were delivered as KEYBOARD keycodes -- a thumb click injected a
 keystroke no keymap names. Found while widening the others.
+
+## The mixer's per-application sliders are keyed by application NAME, and the daemon publishes who is playing in its beacon
+
+The tray flyout had one slider because `soundd` mixed every client at
+one gain. Making it per-stream needed two things the system did not
+have: something stable to key a remembered volume on, and a way for the
+panel to know what is playing.
+
+**A stream's identity is its application's name, not its pid.** A
+client's ring is called `snd.<pid>`, which means nothing next boot, so
+a volume keyed on it could never be remembered -- and a mixer whose
+settings evaporate is one nobody uses twice. The client writes its own
+process name into the control page before the daemon may look at the
+ring (`SND_APP_MAX`, and deliberately `PROC_NAME_MAX` rather than a
+size of this ABI's own). PulseAudio keys `application.name` and the
+Windows Volume Mixer keys the executable; neither keys a process id,
+for this reason. The cost is honest and visible: two copies of one
+program share a slider, and an unnamed client gets none -- it is shown
+by pid and mixed at full gain, because `""` is every unnamed client's
+key and one slider moving several programs is worse than no slider.
+
+**The gains are a CONFIG FILE, not settings.** The registry is a fixed
+catalogue of build-time knobs, each of which renders a System Settings
+row; these keys appear one per program ever played, and could not be
+registered at runtime even if a row each were wanted. `/etc/sound.conf`
+is its own file rather than keys in `/etc/toyos.conf` for the same
+reason -- an arbitrary program's name does not belong in the system's
+own config. Both sides use the shared parser (`uconf_*` in ring 3),
+which is what stops the panel and the daemon disagreeing about what the
+file says.
+
+**The panel reads the roster out of the daemon's BEACON.** That object
+already existed as the "a daemon is running" rendezvous and carried
+nothing; it now carries who is being mixed and at what gain. The
+alternative was for the panel to open each client's own ring to read
+its name, which would make the shell a reader of every application's
+audio buffer for the sake of a label. The daemon is the only writer,
+the page is mapped read-only, and a torn read is tolerated rather than
+locked out -- a generation counter bumped either side of the rewrite,
+and a reader that catches the middle looks again. A slider drawn one
+frame late is not worth a lock in a page a dying daemon can leave
+behind.
+
+**The taper is the CARDS', not `usnd`'s.** A digital gain could have
+been linear in amplitude, which is what `usnd_set_volume()` still does,
+but the per-app slider sits in the same panel as the master and two
+sliders that differ at the same position is a bug a user reports as
+"the volume is wrong". Both are 40 dB, linear in dB, so 25% is 30 dB
+down on either. That leaves `usnd`'s own knob as the outlier, which is
+the open "one volume taper for every card" roadmap item rather than
+something this change fixed.

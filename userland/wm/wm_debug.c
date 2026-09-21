@@ -877,6 +877,20 @@ static void cmd_volume(struct dbg_out *o, int json) {
         dbg_out_printf(o, "\"slider\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"cy\":%d},",
                      g.slider_x, g.slider_y, g.slider_w, g.slider_h,
                      g.slider_y + g.slider_h / 2);
+        // The apps BEFORE the devices, in the order they are drawn, and
+        // each with the centre of its own track -- what a test clicks
+        // to set one, rather than deriving it from the panel's width.
+        dbg_out_write(o, "\"apps\":[");
+        for (int i = 0; i < g.apps; i++) {
+            char app[24];
+            int gain = 0;
+            if (!volume_app_row(i, app, sizeof app, &gain)) break;
+            dbg_out_printf(o, "%s{\"app\":\"%s\",\"gain\":%d,"
+                         "\"x\":%d,\"w\":%d,\"cy\":%d}", i ? "," : "", app, gain,
+                         g.app_slider_x, g.app_slider_w,
+                         g.app_y + i * g.app_row_h + g.app_row_h / 2);
+        }
+        dbg_out_write(o, "],");
         dbg_out_printf(o, "\"selected\":%d,\"devices\":[", g.selected_row);
         for (int i = 0; i < g.rows; i++) {
             char value[32], label[48];
@@ -898,6 +912,14 @@ static void cmd_volume(struct dbg_out *o, int json) {
     dbg_out_printf(o, "  mute=(%d,%d) slider x=%d y=%d w=%d\r\n",
                  g.mute_x + g.mute_w / 2, g.mute_y + g.mute_h / 2,
                  g.slider_x, g.slider_y, g.slider_w);
+    for (int i = 0; i < g.apps; i++) {
+        char app[24];
+        int gain = 0;
+        if (!volume_app_row(i, app, sizeof app, &gain)) break;
+        dbg_out_printf(o, "  app %-12s %3d%%  track x=%d w=%d cy=%d\r\n",
+                     app, gain, g.app_slider_x, g.app_slider_w,
+                     g.app_y + i * g.app_row_h + g.app_row_h / 2);
+    }
     for (int i = 0; i < g.rows; i++) {
         char value[32], label[48];
         if (!volume_row(i, value, sizeof value, label, sizeof label)) break;

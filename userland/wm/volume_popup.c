@@ -11,6 +11,10 @@
 #include "kapi.h"
 #include "rt/sys.h"
 #include "lib/usetting.h"
+#include "lib/uconf.h"       // /etc/sound.conf, over the shared parser
+#include "ui/uui_scale.h"
+#include "sound_abi.h"       // the daemon's roster, in its beacon
+#include "syscall_abi.h"
 
 #define VOLUME_SETTING "system.volume"
 #define DEVICE_SETTING "system.audio_device"
@@ -33,10 +37,88 @@ static char g_dev_label[VOLUME_MAX_DEVICES][SETTING_ABI_LABEL_MAX];
 static int  g_dev_count;
 static int  g_dev_selected;            // which row carries the tick
 
-// The overlay registry's hover token: the shared row's, or a device
-// row from TRAY_SLIDER_HOVER_OWNER up. Compared by the core, read by
-// the draw -- see wm_overlay.h.
+// The overlay registry's hover token: the shared row's, then the
+// per-app rows, then a device row. Compared by the core, read by the
+// draw -- see wm_overlay.h.
+#define HOVER_APP(i) (TRAY_SLIDER_HOVER_OWNER + (i))
+#define HOVER_DEV(i) (TRAY_SLIDER_HOVER_OWNER + SND_ROSTER_MAX + (i))
 static int g_hover;
+
+// --- the per-application sliders ---------------------------------------
+//
+// WHAT IS BEING MIXED comes from soundd's BEACON, which carries a
+// roster (abi/sound_abi.h). The daemon is the only writer and this maps
+// it READ-ONLY -- the alternative, opening each client's own ring to
+// read its name, would make the panel a reader of every app's audio
+// buffer for the sake of a label.
+//
+// THE GAIN IS NOT A SETTING, so none of tray_slider_popup.c's machinery
+// applies to these rows: the registry is a fixed catalogue of
+// build-time knobs with a System Settings row each, and these keys
+// appear one per program ever played. They live in /etc/sound.conf and
+// are written here with uconf_set().
+static volatile struct snd_roster *g_roster_page;
+static struct snd_roster g_roster;              // a SETTLED copy
+static struct uui_scale g_app_scale[SND_ROSTER_MAX];
+static int g_app_count;
+
+// Debounced exactly as the master level is, and for the same reason: a
+// write rewrites the whole document, so a dragged slider without the
+// delay is a hundred filesystem writes.
+static int g_app_pending = -1;                  // which row owes a write
+static unsigned long long g_app_pending_at;
+static int g_app_drag = -1;                     // which row the press is on
+
+// A TORN READ IS TOLERATED, NOT LOCKED OUT. `gen` is bumped either side
+// of the daemon's rewrite, so an odd value or a changed one means "look
+// again"; three tries, then keep the previous copy. A slider one frame
+// stale is not worth a lock in a page a dying daemon can leave behind.
+static void reload_roster(void) {
+    if (!g_roster_page) {
+        int fd = sys_shm_open(SND_SERVER_NAME, 0, 0);
+        if (fd < 0) { g_app_count = 0; return; }   // no daemon: no rows
+        void *p = sys_mmap(0, 4096, SYS_PROT_READ, SYS_MAP_SHARED, fd, 0);
+        sys_close(fd);
+        if (p == (void *)-1) { g_app_count = 0; return; }
+        g_roster_page = p;
+    }
+    for (int try = 0; try < 3; try++) {
+        uint32_t a = g_roster_page->gen;
+        if (a & 1) continue;
+        struct snd_roster tmp;
+        k_memcpy(&tmp, (const void *)g_roster_page, sizeof tmp);
+        if (g_roster_page->gen != a) continue;
+        if (tmp.magic != SND_CTL_MAGIC) { g_app_count = 0; return; }
+        g_roster = tmp;
+        g_app_count = (int)(tmp.count > SND_ROSTER_MAX ? SND_ROSTER_MAX : tmp.count);
+        return;
+    }
+}
+
+int volume_app_row(int index, char *app, uint32_t app_size, int *gain) {
+    if (index < 0 || index >= g_app_count) return 0;
+    if (app) k_strlcpy(app, (const char *)g_roster.e[index].app, app_size);
+    if (gain) *gain = (int)g_roster.e[index].gain;
+    return 1;
+}
+
+// The label a row carries. An UNNAMED client is shown by pid rather
+// than hidden: it is audible, so a mixer that omitted it would be
+// lying about what is playing -- and it is the one row whose slider
+// cannot be remembered, because "" is every unnamed client's key.
+static const char *app_label(int i, char *buf, uint32_t size) {
+    if (g_roster.e[i].app[0]) return (const char *)g_roster.e[i].app;
+    k_snprintf(buf, size, "pid %d", (int)g_roster.e[i].pid);
+    return buf;
+}
+
+static void commit_app(int i) {
+    if (i < 0 || i >= g_app_count) return;
+    if (!g_roster.e[i].app[0]) return;   // nothing stable to key on
+    char v[8];
+    k_snprintf(v, sizeof v, "%ld", uui_scale_value(&g_app_scale[i]));
+    uconf_set(SND_CONFIG_FILE, (const char *)g_roster.e[i].app, v);
+}
 
 // --- the settings behind it -------------------------------------------
 
@@ -119,6 +201,8 @@ static void geometry(struct tray_slider_geom *s, struct volume_geom *g) {
     int pad = ch / 2 + 2;
     int row_h = ch + 8;
     int rows = g_dev_count;
+    int apps = g_app_count;
+    int app_row_h = ch + 12;   // taller than a device row: it holds a track
     // Wide enough for the widest device label rather than a constant:
     // "Automatic (usb-audio)" is longer than anything else here, and a
     // panel sized for the shorter case clips it.
@@ -126,6 +210,11 @@ static void geometry(struct tray_slider_geom *s, struct volume_geom *g) {
     int extra_h = pad / 2 + 1 + pad / 2     // the rule
                   + ch + pad / 2            // "Output device"
                   + rows * row_h;
+    // The apps section only exists when something is playing, heading
+    // and rule included -- an empty "Applications" box would be a
+    // control that draws and says nothing.
+    if (apps)
+        extra_h += pad / 2 + 1 + pad / 2 + ch + pad / 2 + apps * app_row_h;
     tray_slider_geometry(&g_popup, want_w, extra_h, s);
     if (!g) return;
 
@@ -136,9 +225,32 @@ static void geometry(struct tray_slider_geom *s, struct volume_geom *g) {
     g->slider_x = s->slider_x; g->slider_y = s->slider_y;
     g->slider_w = s->slider_w; g->slider_h = s->slider_h;
     g->list_x = s->x + pad;
-    g->list_y = s->below_y + pad + 1 + ch + pad / 2;
+    g->app_x = s->x + pad;
+    g->apps = apps;
+    g->app_row_h = app_row_h;
+
+    int y = s->below_y;
+    if (apps) {
+        g->app_y = y + pad / 2 + 1 + pad / 2 + ch + pad / 2;
+        y = g->app_y + apps * app_row_h;
+    }
+    g->list_y = y + pad / 2 + 1 + pad / 2 + ch + pad / 2;
     g->row_h = row_h;
     g->rows = rows;
+
+    // The track sits right of the widest label this panel will draw, so
+    // every row's slider starts at the same x -- a ragged left edge on
+    // a column of sliders reads as a layout fault.
+    int label_w = ugfx_text_width("MMMMMMMM") + pad;
+    g->app_slider_x = g->app_x + label_w;
+    g->app_slider_w = (s->x + s->w - pad) - g->app_slider_x
+                      - ugfx_text_width("100%") - pad;
+    for (int i = 0; i < apps; i++) {
+        if (g->app_slider_w > 0)
+            uui_scale_set_geometry(&g_app_scale[i], g->app_slider_x,
+                                   g->app_y + i * app_row_h + (app_row_h - ch) / 2,
+                                   g->app_slider_w, ch);
+    }
     g->level = g_popup.level;
     g->muted = (g_popup.level == 0);
     g->selected_row = g_dev_selected;
@@ -183,8 +295,14 @@ int volume_hover_at(int mx, int my) {
     if (g_hover == TRAY_SLIDER_HOVER_NONE && g_popup.open) {
         struct volume_geom g;
         volume_geometry(&g);
+        // THE WHOLE ROW, not just the track: a slider whose row
+        // highlights only over eight pixels of thumb reads as dead.
+        for (int i = 0; i < g.apps; i++)
+            if (uui_hit(g.app_x, g.app_y + i * g.app_row_h,
+                        g.w - (g.app_x - g.x) * 2, g.app_row_h, mx, my))
+                return (g_hover = HOVER_APP(i));
         int row = row_at(&g, mx, my);
-        if (row >= 0) g_hover = TRAY_SLIDER_HOVER_OWNER + row;
+        if (row >= 0) g_hover = HOVER_DEV(row);
     }
     return g_hover;
 }
@@ -203,6 +321,28 @@ void volume_close(void) {
 
 void volume_poll_config(void) {
     tray_slider_poll(&g_popup);
+
+    // The roster only while the panel is OPEN: it is a shared-memory
+    // read per frame, and nothing draws it otherwise. Reopening is what
+    // picks up a stream that started meanwhile.
+    if (g_popup.open) {
+        int before = g_app_count;
+        reload_roster();
+        for (int i = 0; i < g_app_count; i++) {
+            if (i == g_app_drag || i == g_app_pending) continue;
+            uui_scale_init(&g_app_scale[i], 0, 100, (long)g_roster.e[i].gain);
+        }
+        // A STREAM APPEARING OR ENDING RESIZES THE PANEL, so the old
+        // rect has to be damaged or the part that shrank stays painted.
+        if (before != g_app_count) volume_damage();
+    }
+
+    if (g_app_pending >= 0 &&
+        sys_monotonic_ns() / 1000000ull - g_app_pending_at >= TRAY_SLIDER_COMMIT_MS &&
+        g_app_drag < 0) {
+        commit_app(g_app_pending);
+        g_app_pending = -1;
+    }
 }
 
 // --- input ------------------------------------------------------------
@@ -235,6 +375,21 @@ int volume_handle_click(int mx, int my) {
     case TRAY_SLIDER_CLICK_INSIDE: {
         struct volume_geom g;
         volume_geometry(&g);
+        // A PRESS ARMS THE DRAG, and the value follows the pointer from
+        // volume_update_press() -- on_click fires on button-DOWN, so a
+        // control that committed here could never be cancelled
+        // (docs/gui-guidelines.md).
+        for (int a = 0; a < g.apps; a++) {
+            if (!uui_scale_hit(&g_app_scale[a], mx, my)) continue;
+            g_app_drag = a;
+            uui_scale_set_value(&g_app_scale[a],
+                                uui_scale_value_at(&g_app_scale[a], mx));
+            g_roster.e[a].gain = (uint32_t)uui_scale_value(&g_app_scale[a]);
+            g_app_pending = a;
+            g_app_pending_at = sys_monotonic_ns() / 1000000ull;
+            volume_damage();
+            return 1;
+        }
         int i = row_at(&g, mx, my);
         if (i >= 0 && usetting_set(DEVICE_SETTING, g_dev_value[i]) > 0) {
             g_dev_selected = i;
@@ -252,6 +407,31 @@ int volume_handle_click(int mx, int my) {
 
 void volume_update_press(int mx, int my, uint8_t buttons) {
     (void)my;
+    // A PER-APP DRAG FIRST, and it ends on RELEASE rather than on the
+    // pointer leaving the track: a slider that let go the moment the
+    // cursor slipped a pixel off the row is the complaint every
+    // hand-rolled drag earns.
+    if (g_app_drag >= 0) {
+        struct volume_geom g;
+        volume_geometry(&g);          // places the scales before reading
+        if (g_app_drag < g.apps) {
+            uui_scale_set_value(&g_app_scale[g_app_drag],
+                                uui_scale_value_at(&g_app_scale[g_app_drag], mx));
+            g_roster.e[g_app_drag].gain =
+                (uint32_t)uui_scale_value(&g_app_scale[g_app_drag]);
+            g_app_pending = g_app_drag;
+            g_app_pending_at = sys_monotonic_ns() / 1000000ull;
+            volume_damage();
+        }
+        if (!(buttons & 1)) {
+            // COMMITTED AT ONCE ON RELEASE, as the master row is: the
+            // debounce exists for the drag, not for the last value.
+            commit_app(g_app_drag);
+            g_app_pending = -1;
+            g_app_drag = -1;
+        }
+        return;
+    }
     if (!g_popup.scale.dragging) return;
     struct tray_slider_geom s;
     slider_geom(&s);   // places the scale before the drag reads it
@@ -282,8 +462,43 @@ void volume_draw(int mx, int my) {
 
     tray_slider_draw(&g_popup, &s, icon_for(g.level), g_hover == TRAY_SLIDER_HOVER_ICON);
 
+    int ch = ugfx_char_h();
+
+    // --- the applications, when any are playing ------------------------
+    if (g.apps) {
+        int arule = g.mute_y + g.mute_h + 4;
+        ugfx_fill_rect(wm_surface(), g.x + 8, arule, g.w - 16, 1, border);
+        ugfx_draw_string_clipped(wm_surface(), g.app_x, arule + 6,
+                                 g.w - 16, "Applications", border, bg);
+        for (int i = 0; i < g.apps; i++) {
+            int ry = g.app_y + i * g.app_row_h;
+            int rw = g.w - (g.app_x - g.x) * 2;
+            if (g_hover == HOVER_APP(i))
+                ugfx_fill_rect(wm_surface(), g.app_x, ry, rw, g.app_row_h, hover_bg);
+            uint32_t row_bg = (g_hover == HOVER_APP(i)) ? hover_bg : bg;
+
+            char pidbuf[16];
+            const char *label = app_label(i, pidbuf, sizeof pidbuf);
+            // CLIPPED to where the track begins, never drawn over it:
+            // gfx_draw_string() does not clip and a long app name would
+            // otherwise paint across its own slider.
+            ugfx_draw_string_clipped(wm_surface(), g.app_x + 2,
+                                     ry + (g.app_row_h - ch) / 2,
+                                     g.app_slider_x - g.app_x - 6,
+                                     label, fg, row_bg);
+            if (g.app_slider_w > 0) uui_scale_draw(wm_surface(), &g_app_scale[i]);
+
+            char pct[8];
+            k_snprintf(pct, sizeof pct, "%ld%%", uui_scale_value(&g_app_scale[i]));
+            ugfx_draw_string_clipped(wm_surface(),
+                                     g.app_slider_x + g.app_slider_w + 6,
+                                     ry + (g.app_row_h - ch) / 2,
+                                     ugfx_text_width("100%") + 2, pct, fg, row_bg);
+        }
+    }
+
     // --- the rule and the heading -------------------------------------
-    int rule_y = g.mute_y + g.mute_h + 4;
+    int rule_y = g.list_y - ugfx_char_h() - 6 - 6;
     ugfx_fill_rect(wm_surface(), g.x + 8, rule_y, g.w - 16, 1, border);
     ugfx_draw_string_clipped(wm_surface(), g.list_x, rule_y + 6,
                              g.w - 16, "Output device", border, bg);
@@ -292,7 +507,7 @@ void volume_draw(int mx, int my) {
     for (int i = 0; i < g.rows; i++) {
         int ry = g.list_y + i * g.row_h;
         int rw = g.w - (g.list_x - g.x) * 2;
-        int over = (g_hover == TRAY_SLIDER_HOVER_OWNER + i);
+        int over = (g_hover == HOVER_DEV(i));
         uint32_t row_bg = bg, row_fg = fg;
         if (i == g.selected_row) { row_bg = accent; row_fg = UTHEME_ACCENT_TEXT; }
         else if (over)           { row_bg = hover_bg; }
