@@ -5,8 +5,12 @@ A staged plan, in the shape `docs/libc-design.md` and
 `docs/roadmap.md` has carried since Phase 4 -- **what would it take to
 have shared libraries here, and is it worth it?**
 
-**Status: in progress.** Stages 0-3 are BUILT; what remains is
-Stage 4 (`dlopen`) and the measured case for lazy binding. The C library
+**Status: Stages 0-4 are BUILT (0-3 on 2026-08-28, 4 on 2026-09-21);
+what remains is Stage 5, the measured case for lazy binding.**
+`dlopen`/`dlsym`/`dlclose`/`dlerror` work, and the open question below
+-- "is the plugin case actually wanted?" -- is ANSWERED: `/bin/snddrv`
+loads a sound driver per chip out of `/lib/snd/*.so`, so a new sound
+card is a file dropped in a directory rather than a rebuilt binary. The C library
 is and stays tolibc -- porting musl was sized and declined the day
 Stage 3 landed (`docs/decisions.md`, "tolibc stays").
 **There is a second shared library now**: `/lib/libhash.so`
@@ -203,11 +207,39 @@ dynamic program. The case-against above said the memory saving is near
 zero for libc, and it was; the toolkit measured differently -- see
 `docs/decisions.md`, "The toolkit is a shared library".
 
-### Stage 4 -- `dlopen`
+### Stage 4 -- `dlopen` -- DONE 2026-09-21
 
-`dlopen`/`dlsym`/`dlclose`, which is the plugin case and the reason
-worth doing any of this. Nothing else in the stack changes; the loader
-grows an entry point that runs after startup instead of before it.
+`dlopen`/`dlsym`/`dlclose`/`dlerror`, which is the plugin case and the
+reason worth doing any of this. It landed as predicted: nothing else in
+the stack changed and the loader grew entry points that run after
+startup instead of before it. Three things were not obvious in advance.
+
+**THE CALL GOES THE OTHER WAY ROUND.** `/lib/ld-toy.so` is a fixed-base
+`ET_EXEC` with no `.dynsym`, so nothing can resolve a symbol OUT of it.
+But it already looks symbols UP in what it loaded -- that is how the
+ABI stamp is read -- so libc DEFINES a vector (`abi/ldso_api.h`) and
+the loader FILLS IT IN before jumping to the entry point. `dlopen()` in
+libc is then one indirect call. A static program never runs the loader,
+so the vector stays zeroed and `dlopen()` says "no dynamic loader"
+rather than jumping through null.
+
+**A FAILURE HAD TO STOP BEING FATAL.** Every error path in the loader
+called `die()`, which is right at startup -- there is no program
+without its libraries -- and wrong inside `dlopen`, whose caller is
+running and expects a NULL. The load path returns a status now, and
+`resolve()` records an undefined symbol instead of killing the process
+when a `dlopen` is in progress.
+
+**NOTHING IS UNLOADED.** `dlclose()` returns 0 and keeps the object
+mapped. Unmapping means tracking each object's segments and
+refcounting what its `DT_NEEDED` pulled in, for no caller that wants
+it; `<dlfcn.h>` says so rather than implying otherwise.
+
+`/lib/libplug.so` is the proof, deliberately linked by NOTHING --
+`libhello.so` is a `DT_NEEDED` of its test, so `dlopen`ing that would
+only prove the already-loaded path works. `/tests/dyn_test` checks that
+the plugin's own `DT_NEEDED` on `libc.so` resolved, which is the half a
+bare "load one file" would miss.
 
 ### Stage 5 -- lazy binding, only if it is measured to matter
 
@@ -219,13 +251,13 @@ symbols resolves them in microseconds.
 
 ## Open questions
 
-- **Is the plugin case actually wanted?** If not, Stages 3-5 have no
-  argument behind them and Stage 0 should be built on its own merits
-  (`free()` returning memory), leaving this document as a record of a
-  decision NOT taken.
-- **Where do `.so` files live?** `docs/filesystem-layout.md` has no
-  `/lib`, and `tools/check_layout.py` enforces that table in both
-  directions, so adding one is a deliberate edit rather than a mkdir.
+- ~~**Is the plugin case actually wanted?**~~ ANSWERED YES, 2026-09-21,
+  by a real caller rather than an argument: `/bin/snddrv` loads one
+  `.so` per sound chip from `/lib/snd/`, so adding a card does not
+  rebuild the host. `docs/umdf-design.md` is where that lives.
+- ~~**Where do `.so` files live?**~~ `/lib`, and it is in
+  `docs/filesystem-layout.md` now. Plugins go one level down in
+  `/lib/snd/`, which is the same deliberate edit.
 - **Does the WM's client protocol survive a relocated address space?**
   Window buffers are mapped at computed addresses (`uaddr.h`'s
   per-window stride); PIC does not change that, but Stage 1 moving the

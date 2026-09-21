@@ -24,6 +24,7 @@
 #include "syscall_abi.h"
 #include "toyabi.h"
 #include "auxv.h"
+#include "ldso_api.h"
 
 // --- raw syscalls (rt/sys.c's inline, minus its __thread errno) ------
 
@@ -127,7 +128,9 @@ struct rela64 { uint64_t r_offset, r_info; int64_t r_addend; };
 
 // --- the object table ------------------------------------------------
 
-#define MAX_OBJS 8
+// Room for the executable, the libraries it links against, and the
+// plugins a program dlopen()s. It was 8, which predates dlopen.
+#define MAX_OBJS 24
 
 struct dobj {
     char name[64];          // "" for the executable
@@ -143,6 +146,38 @@ struct dobj {
 
 static struct dobj g_objs[MAX_OBJS];
 static int g_nobjs;
+
+// A LOAD FAILURE IS FATAL AT STARTUP AND A RETURN VALUE FOR dlopen.
+// There is no program without the libraries it links against, so the
+// startup path still dies with a sentence; a plugin that will not load
+// is the caller's problem to report, so dlopen records the reason and
+// answers NULL. `g_nonfatal` is set only while a dlopen is running,
+// which is single-threaded here.
+static char g_dlerr[192];
+static int  g_nonfatal;
+static int  g_reloc_failed;
+
+static void ld_append(char *d, const char *s, size_t cap) {
+    size_t n = 0;
+    while (d[n]) n++;
+    while (*s && n + 1 < cap) d[n++] = *s++;
+    d[n] = 0;
+}
+
+// The fd has to go back even on the failure path, because dlopen's
+// caller carries on running.
+static int close_fail(int fd, const char *what, const char *detail);
+
+static int ld_fail(const char *what, const char *detail) {
+    if (!g_nonfatal) die(what, detail);
+    g_dlerr[0] = 0;
+    ld_append(g_dlerr, what, sizeof g_dlerr);
+    if (detail) {
+        ld_append(g_dlerr, ": ", sizeof g_dlerr);
+        ld_append(g_dlerr, detail, sizeof g_dlerr);
+    }
+    return -1;
+}
 
 static uint32_t elf_hash(const char *name) {
     uint32_t h = 0, g;
@@ -180,8 +215,16 @@ static uint64_t resolve(const char *name, int weak) {
         if (s) return g_objs[i].bias + s->st_value;
     }
     if (weak) return 0;
+    // Inside a dlopen this must not kill the caller: the plugin is
+    // simply unusable, and dl_open() turns the flag into a NULL.
+    if (g_nonfatal) { g_reloc_failed = 1; ld_fail("undefined symbol", name); return 0; }
     die("undefined symbol", name);
     return 0;
+}
+
+static int close_fail(int fd, const char *what, const char *detail) {
+    sc1(SYS_CLOSE, (uint64_t)fd);
+    return ld_fail(what, detail);
 }
 
 // --- parsing one object's PT_DYNAMIC ---------------------------------
@@ -224,36 +267,43 @@ static int64_t pread_all(int fd, void *buf, uint64_t n, uint64_t off) {
 // ring-3 stack page.
 static uint8_t g_hdr[4096];
 
-static void load_library(const char *name) {
+// A BARE NAME IS LOOKED FOR IN /lib; ANYTHING WITH A '/' IS TAKEN AS
+// GIVEN. That is the DT_NEEDED rule, and dlopen("/lib/snd/hda.so")
+// wants the other half. Returns 0, or -1 with the reason recorded (see
+// ld_fail: fatal at startup, a return value inside dlopen).
+static int load_object(const char *name) {
     for (int i = 0; i < g_nobjs; i++)
-        if (ld_streq(g_objs[i].name, name)) return; // already loaded
-    if (g_nobjs >= MAX_OBJS) die("too many libraries", name);
+        if (ld_streq(g_objs[i].name, name)) return 0; // already loaded
+    if (g_nobjs >= MAX_OBJS) return ld_fail("too many libraries", name);
 
-    char path[80];
-    {   // "/lib/" + name
-        const char *pre = "/lib/";
+    char path[96];
+    {
+        int absolute = 0;
+        for (const char *p = name; *p; p++) if (*p == '/') absolute = 1;
         size_t n = 0;
-        for (const char *p = pre; *p; p++) path[n++] = *p;
+        if (!absolute) for (const char *p = "/lib/"; *p; p++) path[n++] = *p;
         for (const char *p = name; *p; p++) {
-            if (n + 1 >= sizeof path) die("library name too long", name);
+            if (n + 1 >= sizeof path) return ld_fail("library name too long", name);
             path[n++] = *p;
         }
         path[n] = 0;
     }
 
     int fd = (int)sc3(SYS_OPEN, (uint64_t)(uintptr_t)path, 0, 0);
-    if (fd < 0) die("library not found", path);
-    if (pread_all(fd, g_hdr, sizeof g_hdr, 0) < (int64_t)sizeof(struct ehdr64))
-        die("short read", path);
+    if (fd < 0) return ld_fail("library not found", path);
+    if (pread_all(fd, g_hdr, sizeof g_hdr, 0) < (int64_t)sizeof(struct ehdr64)) {
+        sc1(SYS_CLOSE, (uint64_t)fd);
+        return ld_fail("short read", path);
+    }
 
     const struct ehdr64 *eh = (const struct ehdr64 *)g_hdr;
     if (eh->e_ident[0] != 0x7F || eh->e_ident[1] != 'E' ||
         eh->e_ident[2] != 'L'  || eh->e_ident[3] != 'F' ||
         eh->e_type != 3 /* ET_DYN */)
-        die("not a shared object", path);
+        return close_fail(fd, "not a shared object", path);
     if (eh->e_phentsize != sizeof(struct phdr64) ||
         eh->e_phoff + (uint64_t)eh->e_phnum * sizeof(struct phdr64) > sizeof g_hdr)
-        die("program headers out of reach", path);
+        return close_fail(fd, "program headers out of reach", path);
     const struct phdr64 *ph = (const struct phdr64 *)(g_hdr + eh->e_phoff);
 
     // The span every PT_LOAD needs, as one reservation -- then carve
@@ -268,11 +318,11 @@ static void load_library(const char *name) {
         if (ALIGN_UP(ph[i].p_vaddr + ph[i].p_memsz) > hi)
             hi = ALIGN_UP(ph[i].p_vaddr + ph[i].p_memsz);
     }
-    if (lo >= hi || !dyn_vaddr) die("no loadable segments", path);
+    if (lo >= hi || !dyn_vaddr) return close_fail(fd, "no loadable segments", path);
 
     void *resv = ld_mmap(0, hi - lo, SYS_PROT_READ,
                          SYS_MAP_PRIVATE | SYS_MAP_ANONYMOUS, -1, 0);
-    if (resv == (void *)-1) die("out of address space", path);
+    if (resv == (void *)-1) return close_fail(fd, "out of address space", path);
     uint64_t bias = (uint64_t)(uintptr_t)resv - lo;
     sc3(SYS_MUNMAP, (uint64_t)(uintptr_t)resv, hi - lo, 0);
 
@@ -286,8 +336,8 @@ static void load_library(const char *name) {
         // with -z max-page-size=4096; a lib built without it fails
         // here, by name).
         if ((ph[i].p_vaddr & (PAGE - 1)) != (ph[i].p_offset & (PAGE - 1)))
-            die("segment not page-congruent (relink with -z max-page-size=4096)",
-                path);
+            return close_fail(fd, "segment not page-congruent "
+                              "(relink with -z max-page-size=4096)", path);
 
         uint64_t vpage = bias + ALIGN_DN(ph[i].p_vaddr);
         uint64_t fend  = bias + ph[i].p_vaddr + ph[i].p_filesz;
@@ -297,13 +347,13 @@ static void load_library(const char *name) {
             if (ld_mmap(vpage, ALIGN_UP(fend) - vpage, prot,
                         SYS_MAP_PRIVATE | SYS_MAP_FIXED, fd,
                         ALIGN_DN(ph[i].p_offset)) == (void *)-1)
-                die("segment map failed", path);
+                return close_fail(fd, "segment map failed", path);
         }
         if (ALIGN_UP(mend) > ALIGN_UP(fend)) {
             if (ld_mmap(ALIGN_UP(fend), ALIGN_UP(mend) - ALIGN_UP(fend), prot,
                         SYS_MAP_PRIVATE | SYS_MAP_ANONYMOUS | SYS_MAP_FIXED,
                         -1, 0) == (void *)-1)
-                die("bss map failed", path);
+                return close_fail(fd, "bss map failed", path);
         }
         // The tail of the last file-backed page holds whatever the
         // FILE holds there; .bss expects zeros. Only a writable
@@ -320,6 +370,7 @@ static void load_library(const char *name) {
     o->bias = bias;
     o->dynamic = (const struct dyn64 *)(uintptr_t)(bias + dyn_vaddr);
     parse_dynamic(o);
+    return 0;
 }
 
 // --- relocation ------------------------------------------------------
@@ -365,6 +416,74 @@ static void apply_rela(const struct dobj *o, const struct rela64 *r,
 
 // --- entry -----------------------------------------------------------
 
+// --- dlopen, and the vector libc reaches it through ------------------
+
+// LOAD, THEN RELOCATE ONLY WHAT IS NEW. Everything already in the table
+// was relocated at startup, and applying a relocation twice writes the
+// same answer -- but a plugin's DT_NEEDED may pull in a library nobody
+// had, and that one has to be relocated before anything calls it.
+static void *dl_open(const char *path, int flags) {
+    (void)flags; // RTLD_LAZY is accepted and ignored: binding is eager
+    if (!path) { ld_fail("dlopen(NULL)", 0); return 0; }
+
+    g_dlerr[0] = 0;
+    g_nonfatal = 1;
+    g_reloc_failed = 0;
+    int first = g_nobjs;
+    void *handle = 0;
+
+    if (load_object(path) == 0) {
+        // The plugin was already loaded: hand back the same object
+        // rather than a second handle onto it.
+        if (g_nobjs == first) {
+            for (int i = 0; i < g_nobjs; i++)
+                if (ld_streq(g_objs[i].name, path)) handle = &g_objs[i];
+        } else {
+            int ok = 1;
+            for (int i = first; i < g_nobjs && ok; i++)
+                for (const struct dyn64 *d = g_objs[i].dynamic;
+                     d->d_tag != DT_NULL; d++)
+                    if (d->d_tag == DT_NEEDED &&
+                        load_object(g_objs[i].strtab + d->d_val) != 0) { ok = 0; break; }
+            if (ok) {
+                for (int i = first; i < g_nobjs; i++) {
+                    const struct dobj *o = &g_objs[i];
+                    if (o->rela)   apply_rela(o, o->rela, o->relasz);
+                    if (o->jmprel) apply_rela(o, o->jmprel, o->pltrelsz);
+                }
+                // AN UNRESOLVED SYMBOL IS A FAILED dlopen, not a
+                // half-loaded one the caller can still call into. The
+                // object stays mapped -- there is no unload here -- but
+                // no handle escapes.
+                if (!g_reloc_failed) handle = &g_objs[first];
+            }
+        }
+    }
+    g_nonfatal = 0;
+    return handle;
+}
+
+static void *dl_sym(void *handle, const char *name) {
+    if (!handle || !name) return 0;
+    const struct dobj *o = (const struct dobj *)handle;
+    const struct sym64 *sym = lookup_in(o, name);
+    if (!sym) {
+        g_dlerr[0] = 0;
+        ld_append(g_dlerr, "undefined symbol: ", sizeof g_dlerr);
+        ld_append(g_dlerr, name, sizeof g_dlerr);
+        return 0;
+    }
+    return (void *)(uintptr_t)(o->bias + sym->st_value);
+}
+
+// NOTHING IS UNLOADED, and <dlfcn.h> says so. The object table is
+// fixed-size and every caller here loads its plugins once; unmapping
+// would mean tracking each object's segments and refcounting what its
+// DT_NEEDED pulled in, for no caller that wants it.
+static int dl_close(void *handle) { (void)handle; return 0; }
+
+static const char *dl_error(void) { return g_dlerr[0] ? g_dlerr : 0; }
+
 uint64_t ldso_main(uint64_t *sp) {
     // The SysV block: argc, argv..., NULL, envp..., NULL, auxv pairs.
     uint64_t argc = sp[0];
@@ -399,7 +518,7 @@ uint64_t ldso_main(uint64_t *sp) {
     for (int i = 0; i < g_nobjs; i++) {
         for (const struct dyn64 *d = g_objs[i].dynamic; d->d_tag != DT_NULL; d++)
             if (d->d_tag == DT_NEEDED)
-                load_library(g_objs[i].strtab + d->d_val);
+                load_object(g_objs[i].strtab + d->d_val);
     }
 
     // **A PROGRAM BUILT AGAINST A DIFFERENT ABI IS REFUSED HERE, BY
@@ -444,6 +563,23 @@ uint64_t ldso_main(uint64_t *sp) {
         const struct dobj *o = &g_objs[i];
         if (o->rela)   apply_rela(o, o->rela, o->relasz);
         if (o->jmprel) apply_rela(o, o->jmprel, o->pltrelsz);
+    }
+
+    // HAND libc THE ENTRY POINTS, after relocation so the vector is a
+    // real address. This loader has no `.dynsym` for anything to
+    // resolve out of, so the direction is reversed: libc defines the
+    // vector, this fills it in (abi/ldso_api.h). Weak on purpose -- a
+    // program linked against a libc without it still runs.
+    {
+        uint64_t v = resolve("__ldso_api", 1);
+        if (v) {
+            struct ldso_api *api = (struct ldso_api *)(uintptr_t)v;
+            api->dlopen  = dl_open;
+            api->dlsym   = dl_sym;
+            api->dlclose = dl_close;
+            api->dlerror = dl_error;
+            api->magic   = LDSO_API_MAGIC; // LAST: it is the ready flag
+        }
     }
 
     return at_entry;

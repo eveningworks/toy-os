@@ -1183,7 +1183,7 @@ $(BUILD)/userland/bin/reboot.elf: $(BUILD)/userland/bin/reboot.o $(USERLAND_RT) 
 # 2 MiB-aligned .so's offsets are not page-congruent under 4 KiB
 # pages -- ld-toy refuses such a file by name).
 LDSO    = $(BUILD)/lib/ld-toy.so
-DYNLIBS = $(BUILD)/lib/libhello.so $(BUILD)/lib/libhash.so $(LIBSSL_SO) $(LIBHTTP_SO)
+DYNLIBS = $(BUILD)/lib/libhello.so $(BUILD)/lib/libplug.so $(BUILD)/lib/libhash.so $(LIBSSL_SO) $(LIBHTTP_SO)
 
 $(BUILD)/userland/dynlib/%.o: USERLAND_CFLAGS := $(subst -fpie,-fpic,$(USERLAND_CFLAGS))
 
@@ -1194,6 +1194,13 @@ $(LDSO): $(BUILD)/userland/ldso/entry.o $(BUILD)/userland/ldso/ldso.o $(BUILD)/u
 $(BUILD)/lib/libhello.so: $(BUILD)/userland/dynlib/hello_dl.o
 	@mkdir -p $(dir $@)
 	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libhello.so -o $@ $<
+
+# libplug.so -- the dlopen proof. Nothing links against it on purpose:
+# a plugin reached at runtime is the case DT_NEEDED cannot test. It
+# links against libc.so so that dlopen has a DT_NEEDED to satisfy too.
+$(BUILD)/lib/libplug.so: $(BUILD)/userland/dynlib/plug_dl.o $(LIBC_SO)
+	@mkdir -p $(dir $@)
+	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libplug.so -o $@ $< $(LIBC_SO)
 
 # libhash.so -- the first shared library here that exists to be USED
 # rather than to prove the loader works. kcrc.o comes off the -fpic

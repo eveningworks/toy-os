@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include "rt/sys.h"
 #include <string.h>
+#include <dlfcn.h>
 #include <stdio.h>
 #include <errno.h>
 #include "syscall_abi.h"
@@ -56,6 +57,40 @@ int main(void) {
                 found = 1;
         }
         utest_check(found, "pmap shows /lib/libhello.so mapped");
+    }
+
+    // --- dlopen (dynlink stage 4) -------------------------------------
+    //
+    // /lib/libplug.so is linked by NOTHING, so every check below fails
+    // if runtime loading does not work -- the point DT_NEEDED cannot
+    // make.
+    {
+        void *h = dlopen("/lib/libplug.so", RTLD_NOW);
+        utest_check(h != NULL, "dlopen() loaded a library nothing links against");
+        if (h) {
+            int (*answer)(void) = dlsym(h, "plug_answer");
+            utest_check(answer && answer() == 42, "dlsym() found a function");
+
+            // The plugin's OWN DT_NEEDED had to be loaded and its
+            // relocations applied, or this calls through a null GOT.
+            int (*plen)(const char *) = dlsym(h, "plug_len");
+            utest_check(plen && plen("abcd") == 4,
+                        "the plugin's own DT_NEEDED (libc.so) was resolved");
+
+            int *counter = dlsym(h, "plug_counter");
+            utest_check(counter && *counter == 7, "dlsym() found a data symbol");
+
+            utest_check(dlsym(h, "plug_no_such_symbol") == NULL,
+                        "dlsym() answers NULL for a symbol that is not there");
+            utest_check(dlclose(h) == 0, "dlclose() reports success");
+
+            // The SAME object, not a second copy mapped over itself.
+            utest_check(dlopen("/lib/libplug.so", RTLD_NOW) == h,
+                        "dlopen() of an already-loaded object is the same handle");
+        }
+        utest_check(dlopen("/lib/libnope.so", RTLD_NOW) == NULL,
+                    "dlopen() of a missing file answers NULL, and does not die");
+        utest_check(dlerror() != NULL, "...and dlerror() says why");
     }
 
     return utest_end();

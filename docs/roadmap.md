@@ -287,7 +287,7 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [x] ~~Position-independent code in the userland build~~ DONE 2026-08-28 -- `-fpie -mcmodel=small`, same base; see `docs/dynlink-design.md`
 - [x] ~~Relocation processing at load time~~ DONE 2026-08-28 -- eager; RELATIVE/GLOB_DAT/JUMP_SLOT/64
 - [x] ~~A symbol table and resolution order across multiple objects~~ DONE 2026-08-28 -- exe first, then libraries in load order
-- [ ] `dlopen`/`dlsym`-style runtime loading, or an explicit decision not to have it
+- [x] ~~`dlopen`/`dlsym`-style runtime loading~~ DONE 2026-09-21 -- `/bin/snddrv`'s sound plugins are the caller
 - [ ] Shared text pages across processes using the same library, which is most of the point
 - [ ] Versioning, or a written decision to ignore it while there's one consumer of every library
 
