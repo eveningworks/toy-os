@@ -119,6 +119,12 @@ int usb_controller_present(void);
 // Returns 0 when there is none.
 int usb_controller_summary(char *buf, uint32_t cap);
 
+// Offers one device to every class driver, in the dispatch order
+// enumeration uses. Public because a CLAIM released with a rebind runs
+// the same pass.
+void usb_bind_drivers(struct usb_device_info *d, const uint8_t *cfg,
+                      uint32_t total);
+
 int usb_device_count(void);
 const struct usb_device_info *usb_device_at(int index);
 

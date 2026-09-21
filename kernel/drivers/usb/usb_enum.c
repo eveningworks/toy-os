@@ -394,6 +394,17 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
     // put its HID controls first and its audio second, and a dispatch
     // on ifs[0] alone never offers such a device to the audio driver at
     // all -- and offers a DAC with buttons to only one of the two.
+    usb_bind_drivers(d, g_desc_buf, total);
+    return (int)(d - g_devs);
+}
+
+// OFFERING ONE DEVICE TO EVERY CLASS DRIVER, factored out of the walk
+// above because a CLAIM RELEASED WITH REBIND runs exactly this again --
+// and a second copy of the dispatch order is a second thing to keep
+// true. `cfg` is the raw configuration; a re-bind passes the device's
+// own saved copy rather than re-reading it off the wire.
+void usb_bind_drivers(struct usb_device_info *d, const uint8_t *cfg,
+                      uint32_t total) {
     if (d->dev_class == USB_CLASS_HUB ||
         (d->if_count && d->ifs[0].if_class == USB_CLASS_HUB)) {
         usb_hub_bind(d);
@@ -403,14 +414,14 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
         // configuration_is_driveable), so nothing else is offered it.
         for (int i = 0; i < d->if_count; i++) {
             if (d->ifs[i].if_class != USB_CLASS_VENDOR) continue;
-            if (!usb_r8153_bind(d, g_desc_buf, total)) continue;
+            if (!usb_r8153_bind(d, cfg, total)) continue;
             break;
         }
         for (int i = 0; i < d->if_count; i++) {
             if (d->ifs[i].if_class != USB_CLASS_CDC) continue;
             // CDC is a family; only the Ethernet model is driven here.
             if (d->ifs[i].if_subclass != 0x06) continue;
-            usb_net_bind(d, g_desc_buf, total);
+            usb_net_bind(d, cfg, total);
             break;
         }
         for (int i = 0; i < d->if_count; i++) {
@@ -418,14 +429,12 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
             // The raw configuration goes with it: an audio device's
             // format and its volume control are CLASS-SPECIFIC
             // descriptors sitting between the standard ones, and the
-            // interface walk above keeps neither. g_desc_buf is still
-            // the one just read.
-            usb_audio_bind(d, g_desc_buf, total);
+            // interface walk above keeps neither.
+            usb_audio_bind(d, cfg, total);
             break;
         }
         usb_hid_bind(d);   // no-op on a device with no HID boot interface
     }
-    return (int)(d - g_devs);
 }
 
 int usb_enumerate_port(uint8_t port, uint8_t speed, int patient) {
