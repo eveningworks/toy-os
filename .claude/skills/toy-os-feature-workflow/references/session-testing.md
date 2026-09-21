@@ -2802,3 +2802,37 @@ race under contention. A tool judged against HEAD must be run at the
 SAME job count as HEAD was, and a tool judged at all is worth one run at
 `-j1`: the 1-failure reading matched HEAD exactly and settled a question
 three concurrent runs had only muddied.
+
+**2026-09-21: A RUN PIPED THROUGH `tail -N` HAS NO PROGRESS, AND A
+HEALTHY 25-MINUTE SUITE LOOKS EXACTLY LIKE A HANG.** `gui_regress.py
+... 2>&1 | tail -70` in the background buffers everything until the
+process exits, so the task's output file stays EMPTY the whole time.
+The maintainer asked "is that task stuck?" twice before anyone went
+looking. The progress signal was there all along -- `--logs DIR` writes
+one file per tool as it finishes, so `ls -t` on that directory answers
+"how far, and when was the last one" in one command. **Check the
+artifact the run is already producing before reporting a run as
+healthy OR as stuck**, and prefer letting a background run write its
+full output to the task file over trimming it at the pipe. The same
+mistake destroyed a `remote.py flash` file list on 2026-09-16
+(`docs/bugs.md`), which is the second time a pipe has eaten the
+evidence rather than the bug eating it.
+
+**And the reading error beside it: `grep -i FAILED` MATCHES `0
+failed`.** A summary built that way reported 44 of 44 tools as failing
+when 5 were. Match the COUNT (`[1-9][0-9]* failed`) or parse the pair,
+never the word -- a harness that over-reports failures burns the same
+trust as one that under-reports, and this one did it in front of the
+maintainer.
+
+**AND THE RULE ABOVE ABOUT FREEZING THE TREE WAS ALREADY WRITTEN TWICE
+WHEN IT WAS BROKEN AGAIN** -- 2026-09-15 and 2026-09-20, the second one
+the day before. Two suite runs were voided in one session: the first by
+a `make` for a positive control, the second by editing a `.h` and a
+`.c` while it ran. Knowing the rule is not the same as checking it, and
+the check is one question at launch: **what am I about to touch, and is
+a suite running?** What `iso_guard` actually watches is narrower than
+"the tree" and worth knowing exactly, because a needlessly broad rule
+is one people work around: `.c`, `.h`, `.asm` and `.ld` under
+`kernel/`, `apps/` and `userland/` (`SOURCE_TREES`/`SOURCE_SUFFIXES`).
+Editing `docs/` during a run is genuinely safe.
