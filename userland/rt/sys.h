@@ -457,6 +457,19 @@ int sys_dev_release(int index, unsigned flags);
 // they belong to the claim and the device has to be stopped first.
 int64_t sys_dev_dma_alloc(int index, uint64_t bytes, uint64_t *phys);
 
+// Route this device's interrupt to THIS PROCESS's wakeword -- so park
+// in sys_futex_wait() on the word registered with sys_wakeword(), and
+// the kernel bumps it when the device fires. The line is MASKED until
+// sys_dev_irq_ack(), because a level-triggered one re-asserts the
+// instant the handler returns otherwise.
+// 0, or -1 with errno: EACCES not the holder, EBUSY already armed,
+// ENODEV no wakeword registered, ENOTSUP no usable interrupt.
+int sys_dev_irq_enable(int index);
+
+// Unmask, and return HOW MANY interrupts arrived since the last ack --
+// 0 is a legitimate answer, meaning something else woke you.
+int sys_dev_irq_ack(int index);
+
 int sys_cpu_info(struct cpu_info *out);
 
 // Fills `buf` with `n` random bytes from the kernel's entropy source.

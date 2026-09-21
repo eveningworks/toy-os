@@ -2414,6 +2414,46 @@ struct mmap_msg {
                               // One buffer per device, on purpose: a
                               // driver that needs two rings carves them
                               // out of it, as hda.c does.
+// --- a claimed device's INTERRUPT (docs/umdf-design.md stage 4) ------
+//
+// THE HANDLER STAYS IN RING 0 because it must: it runs in interrupt
+// context. What it does is deliberately two things -- MASK the line and
+// bump the holder's WAKEWORD (SYS_WAKEWORD above, this kernel's
+// eventfd, already woken from the input IRQ by kernel/proc/win_input.c).
+// The driver wakes, services the device, and asks for the unmask.
+//
+// **MASK UNTIL ACKED IS NOT A NICETY.** An INTx line is LEVEL
+// triggered: unmask it before the device has been quiesced and it
+// re-asserts immediately, and the machine livelocks in the handler with
+// no process ever running to fix it. So the line comes back only when
+// the holder says the device is quiet, which is VFIO's
+// VFIO_IRQ_SET_ACTION_UNMASK.
+//
+// MSI is edge triggered and needs no masking; the ack still counts, so
+// a driver's loop is the same either way.
+#define SYS_DEV_IRQ_ENABLE 122 // RDI = the device index. Routes its
+                               // interrupt to the caller's wakeword.
+                               // Returns 0, or: -EACCES the caller does
+                               // not hold the claim, -EINVAL no such
+                               // device, -EBUSY it is already armed,
+                               // -ENOSPC no free slot, -ENOTSUP the
+                               // device has no usable interrupt.
+                               //
+                               // THE CALLER MUST HAVE A WAKEWORD
+                               // REGISTERED -- without one the bump has
+                               // nowhere to land and the driver would
+                               // wait forever. -ENODEV says so.
+
+#define SYS_DEV_IRQ_ACK 123    // RDI = the device index. Unmasks the
+                               // line and returns HOW MANY interrupts
+                               // arrived since the last ack -- which is
+                               // what tells a driver sharing one
+                               // wakeword between sources that this
+                               // device is the one that fired, and how
+                               // often. 0 is a legitimate answer (woken
+                               // by something else). -EACCES / -EINVAL
+                               // as above.
+
 #define DEV_DMA_MAX_BYTES 65536 // Enough for a command ring and a
                                 // descriptor list. Small deliberately:
                                 // every byte of it is memory a device

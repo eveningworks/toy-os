@@ -9,6 +9,8 @@
 #include "pci_driver.h"
 #include "pci_internal.h" // pci_command_update -- the bus-master bit
 #include "pmm.h"
+#include "irq.h"
+#include "futex.h"   // futex_note_ready -- the holder's wakeword
 #include "mmap.h" // mmap_drop_dma_region -- the holder's view, dropped first
 #include "syscalls.h"
 #include "syscall_abi.h"
@@ -26,6 +28,8 @@
 // Keyed by the enumeration index, like g_bound[]. OCCUPANCY IS THE
 // PML4, NOT THE PID: the kernel context has no pid and a KTEST claims
 // from it, so a pid of 0 is a legitimate holder.
+static void dev_irq_release(int index);   // defined with the stub below
+
 static struct {
     uint64_t pml4;
     int pid;
@@ -140,6 +144,7 @@ int dev_claim_drop(int index, uint64_t pml4, int rebind) {
     if (!g_claims[index].pml4 || g_claims[index].pml4 != pml4) return -EACCES;
 
     int pid = g_claims[index].pid;
+    dev_irq_release(index);
     dma_release(index, 1);
     g_claims[index].pml4 = 0;
     g_claims[index].pid  = 0;
@@ -163,10 +168,135 @@ void dev_claim_space_gone(uint64_t pml4) {
         // The mapping of these frames died with the address space, but
         // the DEVICE did not stop: dma_release() clears bus mastering
         // before they go back to the allocator.
+        dev_irq_release(i);
         dma_release(i, 0);
         g_claims[i].pml4 = 0;
         g_claims[i].pid  = 0;
     }
+}
+
+// --- a claimed device's interrupt --------------------------------------
+//
+// abi/syscall_abi.h carries the contract. What is here is the stub that
+// runs in INTERRUPT CONTEXT and the bookkeeping behind it.
+//
+// FOUR SLOTS AND A TRAMPOLINE EACH, because an irq_handler_fn is handed
+// only the register frame -- not the line it is being called for -- so
+// one shared stub could not tell which claimed device fired. hda.c
+// solves the same problem the same way for its two controllers.
+#define DEV_IRQ_SLOTS 4
+
+static struct {
+    int      used;     // 0 = free, which is what a static zero gives --
+                       // no initcall to establish a sentinel, and the
+                       // same "zero means nobody" the claim table uses
+    int      index;    // the PCI device
+    uint8_t  line;     // INTx, 0 when this is MSI
+    uint8_t  vector;   // MSI, 0 when this is INTx
+    uint32_t count;    // interrupts since the last ack
+    int      masked;
+} g_irq[DEV_IRQ_SLOTS];
+
+static void dev_irq_fire(int slot) {
+    if (slot < 0 || slot >= DEV_IRQ_SLOTS || !g_irq[slot].used) return;
+    // THE MASK FIRST, and before anything that could take time: a level
+    // line re-asserts the instant this returns otherwise, and the
+    // machine never leaves the handler.
+    if (g_irq[slot].line && !g_irq[slot].masked) {
+        irq_mask(g_irq[slot].line);
+        g_irq[slot].masked = 1;
+    }
+    g_irq[slot].count++;
+    // The holder's wakeword: bumped and woken from interrupt context,
+    // which win_input.c already does from the input IRQ.
+    futex_note_ready(dev_claim_holder_pid(g_irq[slot].index));
+}
+
+#define DEV_IRQ_STUB(n) static void dev_irq_stub##n(uint64_t *regs) { \
+    (void)regs; dev_irq_fire(n); }
+DEV_IRQ_STUB(0)
+DEV_IRQ_STUB(1)
+DEV_IRQ_STUB(2)
+DEV_IRQ_STUB(3)
+static const irq_handler_fn g_irq_stub[DEV_IRQ_SLOTS] = {
+    dev_irq_stub0, dev_irq_stub1, dev_irq_stub2, dev_irq_stub3,
+};
+
+static int irq_slot_of(int index) {
+    for (int i = 0; i < DEV_IRQ_SLOTS; i++)
+        if (g_irq[i].used && g_irq[i].index == index) return i;
+    return -1;
+}
+
+// Everything the arm did, undone. Called when the claim drops, so a
+// rebound ring-0 driver finds its line unmasked and unhandled.
+static void dev_irq_release(int index) {
+    int slot = irq_slot_of(index);
+    if (slot < 0) return;
+    const struct pci_device *d = pci_device_at(index);
+    if (g_irq[slot].vector) {
+        pci_msi_release(d, g_irq[slot].vector);
+    } else if (g_irq[slot].line) {
+        irq_unregister_handler(g_irq[slot].line, g_irq_stub[slot]);
+        // UNMASKED ON THE WAY OUT. A line left masked is one the next
+        // driver to bind this device never hears from, and nothing
+        // about a dead holder should be inherited.
+        irq_unmask(g_irq[slot].line);
+    }
+    k_memset(&g_irq[slot], 0, sizeof g_irq[slot]);   // used = 0: free
+}
+
+int dev_claim_irq_enable(int index, uint64_t pml4) {
+    int held = dev_claim_check(index, pml4);
+    if (held != 0) return held;
+    if (irq_slot_of(index) >= 0) return -EBUSY;
+    // WITHOUT A WAKEWORD THE BUMP HAS NOWHERE TO LAND, and the driver
+    // would park forever on a word nothing writes. Refused here rather
+    // than discovered as a hang.
+    if (!futex_wakeword_phys(dev_claim_holder_pid(index))) return -ENODEV;
+
+    int slot = -1;
+    for (int i = 0; i < DEV_IRQ_SLOTS; i++)
+        if (!g_irq[i].used) { slot = i; break; }
+    if (slot < 0) return -ENOSPC;
+
+    const struct pci_device *d = pci_device_at(index);
+    k_memset(&g_irq[slot], 0, sizeof g_irq[slot]);
+    g_irq[slot].used = 1;
+    g_irq[slot].index = index;
+
+    uint8_t vec = pci_msi_request(d, g_irq_stub[slot]);
+    if (vec) {
+        g_irq[slot].vector = vec;      // edge triggered: nothing to mask
+    } else {
+        uint8_t line = pci_irq_line(d);
+        if (line == 0xFF || line == 0 || line >= 16) {
+            g_irq[slot].used = 0;
+            return -ENOTSUP;
+        }
+        g_irq[slot].line = line;
+        irq_register_handler(line, g_irq_stub[slot]);
+        pci_command_update(d, 0, PCI_CMD_INTX_DISABLE);
+        irq_unmask(line);
+    }
+    klog_printf("dev: pci %d irq -> pid %d (%s)\n", index,
+                dev_claim_holder_pid(index),
+                g_irq[slot].vector ? "msi" : "intx");
+    return 0;
+}
+
+int dev_claim_irq_ack(int index, uint64_t pml4) {
+    int held = dev_claim_check(index, pml4);
+    if (held != 0) return held;
+    int slot = irq_slot_of(index);
+    if (slot < 0) return -EINVAL;
+    uint32_t n = g_irq[slot].count;
+    g_irq[slot].count = 0;
+    if (g_irq[slot].masked) {
+        g_irq[slot].masked = 0;
+        irq_unmask(g_irq[slot].line);   // the device is quiet: let it speak
+    }
+    return (int)n;
 }
 
 // --- syscalls ----------------------------------------------------------
@@ -186,6 +316,22 @@ int sys_dev_release(struct syscall_ctx *c) {
     int64_t ret = scheduler_current_mm()
         ? dev_claim_drop(index, c->pml4, rebind)
         : -EPERM;
+    c->regs[14] = (uint64_t)ret;
+    return 0;
+}
+
+int sys_dev_irq_enable(struct syscall_ctx *c) {
+    int index = (int)(int64_t)c->a0;
+    int64_t ret = scheduler_current_mm()
+        ? dev_claim_irq_enable(index, c->pml4) : -EPERM;
+    c->regs[14] = (uint64_t)ret;
+    return 0;
+}
+
+int sys_dev_irq_ack(struct syscall_ctx *c) {
+    int index = (int)(int64_t)c->a0;
+    int64_t ret = scheduler_current_mm()
+        ? dev_claim_irq_ack(index, c->pml4) : -EPERM;
     c->regs[14] = (uint64_t)ret;
     return 0;
 }

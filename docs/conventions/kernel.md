@@ -2723,6 +2723,42 @@ device, which `dev_claim_take()` accepts happily. Ask
 the composed fact; the first caller to reach for the bus predicate
 refused a device it could have had.
 
+## A CLAIMED DEVICE'S INTERRUPT BECOMES A WAKEWORD BUMP, AND THE LINE STAYS MASKED UNTIL THE HOLDER ACKS
+
+`SYS_DEV_IRQ_ENABLE` / `SYS_DEV_IRQ_ACK` (`kernel/drivers/dev_claim.c`)
+-- stage 4 of `docs/umdf-design.md`. The handler stays in ring 0
+because it must: it runs in interrupt context. It does two things --
+mask the line and bump the holder's WAKEWORD -- and the driver services
+the device and asks for the unmask.
+
+**THE WAKE HALF WAS ALREADY BUILT.** `SYS_WAKEWORD` is this kernel's
+eventfd and `futex_note_ready()` is already called from the input IRQ
+(`kernel/proc/win_input.c`), so waking a process from interrupt context
+is a solved problem here -- reach for it rather than inventing a second
+wait primitive.
+
+**MASK UNTIL ACKED IS NOT A NICETY.** An INTx line is LEVEL triggered:
+unmask it before the device has been quiesced and it re-asserts the
+instant the handler returns, and the machine livelocks with no process
+ever running to fix it. MSI is edge and needs no mask; the ack counts
+either way, so a driver's loop is the same shape.
+
+**THE ACK RETURNS HOW MANY FIRED**, because one wakeword serves every
+source a process has and a woken driver cannot otherwise tell its
+device from anything else. `0` is a legitimate answer.
+
+**AN `irq_handler_fn` IS HANDED ONLY THE REGISTER FRAME**, never the
+line, so one shared stub cannot tell which claimed device fired -- four
+slots with a trampoline each, the shape `hda.c` already uses for its
+two controllers.
+
+**AND THE INTERRUPT COUNT DOES NOT PROVE THE WAKEUP.** The stub bumps
+it whether or not the wake reaches anybody, and a driver with a
+deadline finishes either way with the same result. Count WAKEUPS
+AGAINST TIMEOUTS to tell them apart -- and note QEMU may never park at
+all, so this is a hardware measurement: `lscodec` reads 34/34/0 on the
+ASUS and 0/0 in QEMU, both correct.
+
 ## A SYSCALL HANDLER RUNS WITH INTERRUPTS OFF, AND A WAIT ON `pit_ticks()` THERE NEVER ENDS
 
 `context_switch.asm` re-enables interrupts on the way OUT of a syscall

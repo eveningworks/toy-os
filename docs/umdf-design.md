@@ -4,8 +4,8 @@ A staged plan, in the shape `docs/winserver-ring3-design.md` used. It
 answers "what would it take to run a device driver as a process here,
 what does that actually buy, and which driver goes first?"
 
-**STAGES 1-3 ARE BUILT (stages 1-2 on 2026-09-20, stage 3 on
-2026-09-21); stages 4 and 5 are not.** The stage
+**STAGES 1-4 ARE BUILT (1-2 on 2026-09-20, 3 and 4 on 2026-09-21);
+stage 5 is not.** The stage
 markers are the authority, and they are on the headings -- if a stage
 ever splits, put its marker on each half (the window-server plan's
 stage 6 split and its heading kept saying "outstanding" for eleven
@@ -323,7 +323,7 @@ machine where the card is not what it claims, and every one of them was
 parsed in ring 0. It is the same argument that moved `ttf.c`'s callers
 and the image decoders.
 
-### Stage 4 -- an interrupt becomes a wakeup
+### Stage 4 -- an interrupt becomes a wakeup -- DONE 2026-09-21
 
 The handler stays in ring 0 -- it must, it runs in interrupt context --
 and does exactly two things: mask the line and wake a futex the driver
@@ -334,6 +334,45 @@ has (`SYS_FUTEX_WAIT`/`_WAKE`, built 2026-09-08 for the window channel).
 The trap to write down before building it: a LEVEL-triggered line that
 is unmasked before the device is quiesced re-fires immediately and the
 machine livelocks in the handler. Mask-until-acked is not a nicety.
+
+**What shipped** (`SYS_DEV_IRQ_ENABLE` 122, `SYS_DEV_IRQ_ACK` 123):
+
+| piece | where |
+|---|---|
+| the stub that runs in interrupt context, and its four trampolines | `dev_irq_fire()`, `kernel/drivers/dev_claim.c` |
+| arm and ack | `dev_claim_irq_enable()` / `_irq_ack()`, beside it |
+| the wakeup itself | `futex_note_ready()` -- ALREADY BUILT, and already called from the input IRQ by `win_input.c` |
+| the first caller | `/bin/lscodec`, which parks instead of polling the RIRB |
+
+**THE WAKE HALF WAS ALREADY THERE.** `SYS_WAKEWORD` is this kernel's
+eventfd -- one word a process waits on for everything, named by its
+FRAME so the kernel can bump it from any context -- and
+`futex_note_ready()` was already being called from the input IRQ. So
+stage 4 is not "how do we wake a process from an interrupt"; it is
+routing a CLAIMED device's line to its holder, and the mask discipline
+around it.
+
+**AN `irq_handler_fn` IS HANDED ONLY THE REGISTER FRAME**, not the line
+it is being called for, so one shared stub cannot tell which claimed
+device fired. Four slots with a trampoline each, which is what `hda.c`
+already does for its two controllers.
+
+**THE COUNT IS RETURNED BY THE ACK, and that is what makes one wakeword
+serve several sources.** A driver woken cannot otherwise tell its
+device from anything else that bumped the word; `0` is a legitimate
+answer meaning "not mine".
+
+**QEMU CANNOT EXERCISE THE WAIT, AND THE HARDWARE CAN.** QEMU's
+controller answers a verb before the driver can look away, so
+`lscodec` drains synchronously and never parks: `0 wakeup(s), 0
+timeout(s)` is the correct reading there. The ASUS's Conexant is slow
+enough to park on every verb -- **34 interrupts, 34 wakeups, 0
+timeouts**, against **34 interrupts, 0 wakeups, 34 timeouts** with the
+wake deliberately removed. Same graph either way, which is the point:
+the interrupt count alone cannot tell the two apart, because the ring-0
+stub bumps it whether or not the wake reaches anybody, and the 50 ms
+deadline completes the walk regardless. Only the wakeup/timeout split
+does, and only on hardware.
 
 ### Stage 5 -- DMA, and the decision that gates it
 

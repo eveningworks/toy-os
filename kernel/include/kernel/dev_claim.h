@@ -66,6 +66,18 @@ int dev_claim_dma_take(int index, uint64_t pml4, uint64_t pages, uint64_t base,
 // would reach them.
 int dev_claim_dma_drop(int index, uint64_t pml4);
 
+// Route the device's interrupt to its holder's WAKEWORD -- stage 4 of
+// docs/umdf-design.md. The ring-0 stub masks the line and bumps the
+// word; the holder services the device and calls the ack, which is
+// what unmasks it. See abi/syscall_abi.h on why the mask is not
+// optional for a level-triggered line.
+int dev_claim_irq_enable(int index, uint64_t pml4);
+
+// Unmask, and answer how many interrupts arrived since the last ack --
+// which is how a driver sharing one wakeword between sources knows
+// this device fired. Negative is an errno.
+int dev_claim_irq_ack(int index, uint64_t pml4);
+
 // Every claim an address space holds, dropped without a rebind. Called
 // from release_process_state() -- a claim is one more thing keyed to a
 // dying address space that no mapping teardown would reach.

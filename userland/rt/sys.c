@@ -731,6 +731,14 @@ int64_t sys_dev_dma_alloc(int index, uint64_t bytes, uint64_t *phys) {
                         (uint64_t)(uintptr_t)phys));
 }
 
+int sys_dev_irq_enable(int index) {
+    return (int)err(syscall1(SYS_DEV_IRQ_ENABLE, (uint64_t)(int64_t)index));
+}
+
+int sys_dev_irq_ack(int index) {
+    return (int)err(syscall1(SYS_DEV_IRQ_ACK, (uint64_t)(int64_t)index));
+}
+
 int sys_cpu_info(struct cpu_info *out) {
     return (int)err(syscall1(SYS_CPU_INFO, (uint64_t)(uintptr_t)out));
 }

@@ -53,6 +53,14 @@
 
 // --- the controller ----------------------------------------------------
 
+// THE WAKEWORD, in a page of its own. The kernel bumps it from the IRQ
+// stub, so it has to be somewhere stable and CACHEABLE -- not the DMA
+// buffer, which is mapped uncacheable for the device's sake and would
+// have the kernel's write and this process's read disagreeing about
+// which copy is real. An shm page is what every other wakeword here
+// uses (userland/lib/uchan.c).
+struct wake_page { volatile uint32_t word; };
+
 struct ctrl {
     volatile uint8_t *mmio;
     volatile uint32_t *corb;
@@ -62,6 +70,11 @@ struct ctrl {
     uint8_t  cad;
     int      dev;         // the PCI enumeration index
     int      claimed;
+    int      irq;         // 1 once the interrupt is routed here
+    uint32_t irqs;        // how many the kernel reported, in total
+    uint32_t woken;       // waits the wakeword actually released
+    uint32_t timeouts;    // ...and waits that fell back to the deadline
+    volatile struct wake_page *wake;
 };
 
 static inline uint8_t  mr8(struct ctrl *h, uint32_t o)  { return *(volatile uint8_t *)(h->mmio + o); }
@@ -94,9 +107,12 @@ static int corb_cmd(void *ctx, uint8_t nid, uint32_t verb20, uint32_t *out) {
 
     // RIRBSTS IS ACKNOWLEDGED EVERY LAP, not just at the end. QEMU's
     // controller stops fetching from the CORB while RINTCNT responses
-    // are pending and RINTFL is still set, so a polled path that never
-    // wrote it gets exactly one answer and then silence.
-    for (int spin = 0; spin < 2000; spin++) {
+    // are pending and RINTFL is still set, so a path that never wrote
+    // it gets exactly one answer and then silence. It is also what
+    // quiesces the device before the interrupt is acked -- the ack
+    // unmasks the line, and a level line whose cause is still asserted
+    // re-fires at once.
+    for (int lap = 0; lap < 2000; lap++) {
         mw8(h, HDA_RIRBSTS, RIRBSTS_ACK);
         uint16_t rwp = mr16(h, HDA_RIRBWP) & 0xFF;
         while (h->rirb_rp != rwp) {
@@ -104,9 +120,32 @@ static int corb_cmd(void *ctx, uint8_t nid, uint32_t verb20, uint32_t *out) {
             uint64_t e = h->rirb[h->rirb_rp];
             if ((uint32_t)(e >> 32) & 0x10) continue;  // unsolicited: a jack event
             if (out) *out = (uint32_t)e;
+            if (h->irq) {
+                int n = sys_dev_irq_ack(h->dev);
+                if (n > 0) h->irqs += (uint32_t)n;
+            }
             return 0;
         }
-        usleep(100);
+        if (h->irq) {
+            // PARKED, not spinning: the controller raises an interrupt
+            // per response (RIRBCTL_RINTCTL with RINTCNT 1), the kernel
+            // stub bumps this word, and SYS_FUTEX_WAIT returns. The
+            // value is re-read each lap so a bump that landed between
+            // the drain and the park does not park on a stale one --
+            // which is the race the word's value argument closes.
+            uint32_t seen = h->wake->word;
+            int n = sys_dev_irq_ack(h->dev);   // unmask before waiting
+            if (n > 0) h->irqs += (uint32_t)n;
+            sys_futex_wait(&h->wake->word, seen, 50);
+            // WOKEN, OR MERELY OUT OF TIME. The interrupt COUNT cannot
+            // tell these apart -- it is bumped by the ring-0 stub,
+            // which runs whether or not the wake reaches anybody, and
+            // the deadline means the walk completes either way with
+            // the same graph. This is the only number that does.
+            if (h->wake->word != seen) h->woken++; else h->timeouts++;
+        } else {
+            usleep(100);
+        }
     }
     // A TIMEOUT RESYNCS THE READ POINTER, or the answer that arrives
     // late is handed to the NEXT verb -- every reading after one slow
@@ -217,6 +256,11 @@ static struct hda_codec g_codec;
 // controller unbound, and on a machine with one sound card that means
 // no sound until somebody claims and releases it again.
 static int finish(int code) {
+    // The wakeword goes before the claim does: the kernel drops the
+    // routing with the claim, but a registered word pointing into a
+    // page this process is about to unmap is not something to leave
+    // lying about.
+    if (g_h.wake) { sys_wakeword(0); sys_shm_unlink("snd.lscodec.wake"); }
     if (g_h.claimed) sys_dev_release(g_h.dev, DEV_RELEASE_REBIND);
     return code;
 }
@@ -325,6 +369,33 @@ int main(int argc, char **argv) {
     }
 
     corb_rirb_start(&g_h, dma_phys);
+
+    // --- the interrupt, if we can have one ---------------------------
+    //
+    // A WAKEWORD FIRST: the kernel refuses to route an interrupt to a
+    // process that has nowhere to be woken, rather than letting it park
+    // forever. Its page is shm because a wakeword has to stay mapped
+    // and this one is written by the kernel from interrupt context.
+    int wfd = sys_shm_open("snd.lscodec.wake", 4096, SHM_CREATE | SHM_EXCL);
+    if (wfd >= 0) {
+        void *wp = sys_mmap(0, 4096, SYS_PROT_READ | SYS_PROT_WRITE,
+                            SYS_MAP_SHARED, wfd, 0);
+        if (wp != (void *)-1) {
+            g_h.wake = wp;
+            g_h.wake->word = 0;
+            if (sys_wakeword(&g_h.wake->word) == 0 &&
+                sys_dev_irq_enable(index) == 0) {
+                g_h.irq = 1;
+                // The controller's own enable. Without it the RIRB
+                // raises nothing and the wait below would only ever
+                // time out -- slower than the poll it replaced.
+                mw32(&g_h, HDA_INTCTL, INTCTL_GIE | INTCTL_CIE);
+            }
+        }
+    }
+    printf("lscodec: responses are %s\n",
+           g_h.irq ? "interrupt-driven" : "polled (no interrupt available)");
+
     g_codec.cmd = corb_cmd;
     g_codec.ctx = &g_h;
 
@@ -358,6 +429,13 @@ int main(int argc, char **argv) {
         if (g_codec.have_hp) print_route("headphone", &g_codec, &g_codec.hp);
     }
 
+    // THE COUNT IS THE EVIDENCE. A build whose interrupts never arrived
+    // walks the same graph and prints the same routes -- it just waits
+    // out a 50 ms timeout per verb instead. Only this number tells the
+    // two apart.
+    if (g_h.irq)
+        printf("lscodec: %u interrupt(s), %u wakeup(s), %u timeout(s)\n",
+               g_h.irqs, g_h.woken, g_h.timeouts);
     printf("lscodec: %d codec(s), releasing pci %d back to the kernel\n",
            found, index);
     return finish(found ? 0 : 1);

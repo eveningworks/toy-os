@@ -183,6 +183,18 @@ def main():
         # BUS MASTERING is what the DMA grant turns on, and without it
         # the buffer the card was pointed at is unreachable to it.
         res.check("the DMA grant raised bus mastering", "bus master on" in dmesg)
+        # STAGE 4: the interrupt is routed to the holder. QEMU's
+        # controller answers a verb before the driver can look away, so
+        # it NEVER PARKS here and the wakeup path is not exercised --
+        # `0 wakeup(s), 0 timeout(s)` is the correct reading on this
+        # machine, and the ASUS's real codec is slow enough to show
+        # 34 and 34. So what is asserted here is the ROUTING, which is
+        # what QEMU can actually show.
+        res.check("the interrupt was routed to the ring-3 driver",
+                  "irq -> pid" in dmesg,
+                  [line for line in dmesg.splitlines() if "irq -> pid" in line][-1:])
+        res.check("...and the driver took the interrupt-driven path",
+                  "responses are interrupt-driven" in out)
         res.check("the bus logged the unbind", "pci: hda released" in dmesg)
 
         after = vm("exec", "lspci -k")
