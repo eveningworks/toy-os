@@ -1294,16 +1294,36 @@ static struct xhci_ep *ep_configure(uint8_t slot, uint8_t ep_addr, uint16_t mps,
                                     uint8_t interval, uint32_t ep_type,
                                     uint32_t cerr, int *out_cc) {
     *out_cc = 0;
-    struct xhci_ep *e = 0;
-    for (int i = 0; i < MAX_EPS; i++) if (!g_eps[i].in_use) { e = &g_eps[i]; break; }
-    if (!e) return 0;
 
+    // AN ENDPOINT ALREADY CONFIGURED IS RECONFIGURED, NOT DUPLICATED.
+    // This took the first free slot unconditionally, so configuring one
+    // twice made a SECOND entry with a fresh ring and the new callback
+    // -- while ep_find() kept answering with the FIRST. Every later
+    // post then rang the stale ring's doorbell and every completion
+    // went to the previous owner's callback. Measured against a real
+    // device: 8 packets posted, 0 completed, with the TDs sitting in a
+    // ring nothing was driving.
+    //
+    // Nothing had reconfigured an endpoint before a ring-3 driver could
+    // claim a device away from its class driver, which is why it never
+    // showed. The SEGMENT is reused rather than reallocated -- a second
+    // frame here would leak one per rebind.
+    struct xhci_ep *e = ep_find(slot, ep_addr);
+    void *seg = 0;
     uint64_t ring_phys = 0;
-    void *seg = alloc_frame(&ring_phys);
-    if (!seg) return 0;
+    if (e) {
+        seg = (void *)e->ring.trb;
+        ring_phys = e->ring.phys;
+    } else {
+        for (int i = 0; i < MAX_EPS; i++) if (!g_eps[i].in_use) { e = &g_eps[i]; break; }
+        if (!e) return 0;
+        seg = alloc_frame(&ring_phys);
+        if (!seg) return 0;
+    }
 
     k_memset(e, 0, sizeof *e);
     e->slot = slot; e->ep_addr = ep_addr; e->mps = mps;
+    k_memset(seg, 0, 4096);   // a reused segment still holds old TRBs
     xhci_ring_init(&e->ring, seg, ring_phys, TRBS_PER_RING, 0);
 
     struct xhci_slot *sl = &g_slots[slot];

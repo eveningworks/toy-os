@@ -34,6 +34,11 @@ static struct {
     // Written by the completion callback, which runs in INTERRUPT
     // CONTEXT -- volatile, and read-and-cleared by the status call.
     volatile uint32_t completions;
+    // NEVER CLEARED, unlike `completions` -- it is what the close line
+    // reports, and a total nobody resets is the one number that says
+    // whether the interrupt half ever ran at all.
+    volatile uint32_t total;
+    volatile uint32_t posted;
     int pid;
 } g_isoch;
 
@@ -149,11 +154,17 @@ static void isoch_done(void *ctx, uint32_t bytes) {
     (void)ctx; (void)bytes;
     if (!g_isoch.open) return;
     g_isoch.completions++;
+    g_isoch.total++;
     futex_note_ready(g_isoch.pid);
 }
 
 static void isoch_close(void) {
     if (!g_isoch.open) return;
+    // ONE LINE, AT CLOSE. A probe per completion would outrun the klog
+    // ring at an endpoint's service rate; this is the whole question --
+    // did the controller ever come back -- asked once.
+    klog_printf("usb: isoch ep 0x%x closing -- %u posted, %u completed\n",
+                g_isoch.ep, (unsigned)g_isoch.posted, (unsigned)g_isoch.total);
     // THE MAPPING GOES BEFORE THE FRAMES. They are borrowed, so no
     // teardown disposes of them -- freeing first would hand the
     // allocator pages the holder still has a live writable PTE for.
@@ -233,9 +244,11 @@ int sys_usb_isoch_post(struct syscall_ctx *c) {
     uint64_t bytes = g_isoch.dma_pages * 4096;
     if (!m.len || (uint64_t)m.offset + m.len > bytes) { ret = -EINVAL; goto out; }
 
-    ret = xhci_isoch_post((uint8_t)m.slot, (uint8_t)m.ep,
-                          g_isoch.dma_phys + m.offset, m.len,
-                          m.ioc ? 1 : 0) == 0 ? 0 : -EINVAL;
+    if (xhci_isoch_post((uint8_t)m.slot, (uint8_t)m.ep,
+                        g_isoch.dma_phys + m.offset, m.len,
+                        m.ioc ? 1 : 0) != 0) { ret = -EINVAL; goto out; }
+    g_isoch.posted++;
+    ret = 0;
 out:
     c->regs[14] = (uint64_t)ret;
     return 0;
