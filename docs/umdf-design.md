@@ -4,9 +4,11 @@ A staged plan, in the shape `docs/winserver-ring3-design.md` used. It
 answers "what would it take to run a device driver as a process here,
 what does that actually buy, and which driver goes first?"
 
-**STAGES 1-4 ARE BUILT (1-2 on 2026-09-20, 3 and 4 on 2026-09-21), AND
-STAGE 5 IS HALF BUILT: a ring-3 driver plays a tone, but nothing lets
-it be the system's sound device.** The stage
+**EVERY STAGE IS BUILT (1-2 on 2026-09-20, 3-5 on 2026-09-21). A
+process is the machine's HD Audio driver**: `/bin/hdad` claims the
+controller, routes the codec and registers as a `sound_device`, and
+`soundd`, `aplay` and the Audio Player play through it without a line
+changed. The stage
 markers are the authority, and they are on the headings -- if a stage
 ever splits, put its marker on each half (the window-server plan's
 stage 6 split and its heading kept saying "outstanding" for eleven
@@ -375,7 +377,7 @@ stub bumps it whether or not the wake reaches anybody, and the 50 ms
 deadline completes the walk regardless. Only the wakeup/timeout split
 does, and only on hardware.
 
-### Stage 5 -- DMA, and the decision that gates it -- HALF DONE 2026-09-21
+### Stage 5 -- DMA, and the decision that gates it -- DONE 2026-09-21
 
 Streaming audio needs the card writing into RAM. Two ways, and the
 choice is the user's to make when it is reached:
@@ -388,7 +390,7 @@ choice is the user's to make when it is reached:
   works today and contains nothing: the write-up ships with the
   sentence, the way VFIO's no-IOMMU mode taints the kernel.
 
-**THE TONE IS BUILT AND THE DECISION IS TAKEN: TRUSTED, AND SAID SO.**
+**THE DECISION IS TAKEN: TRUSTED, AND SAID SO.**
 `lscodec --tone` routes the codec itself, writes a sine into its granted
 DMA buffer and programs the stream descriptor -- a ring-3 driver making
 real sound, recorded on the HOST at 439.2 Hz by `tools/audio_test.py`
@@ -415,16 +417,41 @@ is -- so adding VT-d later changes what the number MEANS, not the
 signature, and no driver changes a line. The containment arrives when
 the IOMMU does; nothing here forecloses it.
 
-**WHAT IS NOT DONE, AND IT IS THE HALF THAT MATTERS TO A USER.** The
-tone is a DIAGNOSTIC. `soundd` is the mixer every application talks to,
-and a ring-3 driver claiming the card takes it away from `soundd`,
-`aplay` and the Player for as long as it runs. For a ring-3 driver to
-be the system's driver it must register as a `sound_device` so `soundd`
-mixes on top of it -- a syscall, a control page so the kernel can ask a
-PROCESS to start/stop/set volume, and an asynchronous `start()`. The
-`sound_device` contract is small and the driver would never touch the
-samples (it programs the card to read a ring `soundd` writes), so this
-is tractable -- it is simply not built.
+**AND THE HALF THAT MATTERS TO A USER IS BUILT TOO.** The tone was a
+DIAGNOSTIC -- a ring-3 driver claiming the card took it away from
+`soundd`, `aplay` and the Player for as long as it ran. `/bin/hdad` is
+the version the system uses: it registers as a `sound_device`
+(`SYS_SND_REGISTER`), so `soundd` mixes on top of it and nothing above
+knows. What that needed:
+
+| Piece | Where |
+|---|---|
+| a registration, and a ring physical address handed back | `SYS_SND_REGISTER`, `kernel/drivers/sound/sound_proc.c` |
+| a way for the core to ASK a process to start/stop/set volume | `struct snd_driver_page`, a request the kernel writes and the driver's wakeword |
+| a way for the driver to say where the card is | `SYS_SND_PERIOD`, which is also what publishes `running` |
+| the interrupt that triggers it | stage 4, unchanged -- a completion per chunk |
+
+**`start()` BECAME ASYNCHRONOUS, and it is the one real semantic
+change.** A ring-0 driver has programmed the engine by the time
+`start()` returns; this one has only posted a request. The core already
+published `running` for an app to watch rather than promising the
+engine was live, so nothing above changed -- but a caller that assumed
+otherwise would be wrong here first. `running` becomes true on the
+first period report, one chunk later, which at 48 kHz is 21 ms.
+
+**WHAT IS STILL IN RING 0: THE SAMPLES.** The shared ring, the
+exclusive stream and the consumed-chunk zeroing did not move, and that
+is not a shortfall -- it is what keeps the driver's exposure to one
+buffer's physical address. `hdad` never reads or writes a sample.
+
+**A CRASH LEAVES THE MACHINE MUTE, AND A POLITE KILL DOES NOT.** A
+claim dropped by a DYING process deliberately does not rebind (stage
+2), so `hdad` crashing leaves the card unbound until something claims
+and releases it again. `hdad` catches `SIGTERM` and releases with
+`DEV_RELEASE_REBIND` for exactly that reason -- Windows' UMDF host does
+the same on its way out. Nothing starts `hdad` at boot; that is
+deliberate while it is new, and `docs/roadmap.md` is where making it
+the default belongs.
 
 **HALF OF THE SECOND OPTION IS ALREADY BUILT, and it was not free.**
 Stage 3 needed `SYS_DEV_DMA_ALLOC` for a 4 KiB command ring, so the
@@ -436,10 +463,12 @@ app, and the argument for an IOMMU first is stronger there. The cap and
 the one-buffer rule are what keep stage 3's use from being read as that
 decision having been taken.
 
-Until one is chosen, HDA's stream stays in ring 0 and the ring-3 half
-is the control plane. **A split driver is a legitimate end state**, not
-a half-finished one -- it is what DriverKit's audio drivers are, with
-the DMA engine behind the framework and the policy in the driver.
+The route chosen was the trusted one, so the stream moved too. What
+stayed in ring 0 is the RING, not the engine: `hdad` programs the
+stream descriptor and `sound.c` owns the samples. **That split is a
+legitimate end state**, not a half-finished one -- it is what
+DriverKit's audio drivers are, with the buffer behind the framework and
+the policy in the driver.
 
 ## What does NOT move, and why that is not a compromise
 

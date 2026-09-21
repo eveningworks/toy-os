@@ -70,6 +70,11 @@ int sound_register(const struct sound_device *dev, void *ring, uint64_t ring_phy
 
 // A rate in Hz, or a depth in bits, as one of abi/sound_abi.h's mask
 // bits -- 0 for anything not in the list, never the nearest.
+// A device reporting whether its engine is actually running, for a
+// driver whose start() could only ASK -- see sound_proc.c. Ignored
+// unless `dev` is the active device.
+void sound_publish_running(const struct sound_device *dev, int running);
+
 uint32_t snd_rate_mask(uint32_t hz);
 uint32_t snd_depth_mask(uint32_t bits);
 

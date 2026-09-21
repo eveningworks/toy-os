@@ -10,6 +10,7 @@
 #include "errno.h"   // sys_errno()'s values
 #include "proc_info.h" // struct proc_info -- sys_proc_info() below
 #include "pci.h"     // struct pci_device, for sys_pci_info()
+#include "sound_abi.h" // struct snd_register_msg, for sys_snd_register()
 #include "cpuinfo.h" // struct cpu_info, for sys_cpu_info()
 #include "setting_abi.h"
 #include "query_abi.h"
@@ -469,6 +470,19 @@ int sys_dev_irq_enable(int index);
 // Unmask, and return HOW MANY interrupts arrived since the last ack --
 // 0 is a legitimate answer, meaning something else woke you.
 int sys_dev_irq_ack(int index);
+
+// BECOME THE MACHINE'S SOUND DEVICE. `m` is filled in by the caller and
+// read back: `ring_phys` is where the core's ring lives, which is what
+// a driver points a descriptor at. soundd then mixes into that ring
+// without knowing a process is driving the card.
+// 0, or -1 with errno -- EACCES without a claim on the device, ENODEV
+// without a wakeword, EBUSY when one is already registered.
+int sys_snd_register(struct snd_register_msg *m);
+
+// Tell the core where the hardware is in the ring, in bytes and on a
+// chunk boundary. It advances hw_pos and zeroes what the card has
+// consumed, which is what makes a stalled app play silence.
+int sys_snd_period(uint32_t pos);
 
 int sys_cpu_info(struct cpu_info *out);
 

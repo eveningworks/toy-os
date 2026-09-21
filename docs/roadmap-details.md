@@ -1986,15 +1986,33 @@ claimable set is the sound card and the NICs, and no storage
 controller.
 That is not a permission model and is not described as one.
 
-**The payoff is stage 3**, not stage 5: HDA's codec graph is ~250 lines
+**The payoff was stage 3**, not stage 5: HDA's codec graph is ~250 lines
 of ring 0 walking what a card reports about itself -- untrusted input,
 the same argument that moved the font rasteriser and the image decoders
-out. Stage 5 (DMA) is gated on an IOMMU decision that is the
-maintainer's to make.
+out.
+
+**Stages 3-5 are BUILT (2026-09-21), and the IOMMU decision was taken:
+TRUSTED, AND SAID SO.** The maintainer's call, on the grounds that VT-d
+is Intel's and requiring one would mean the ring-3 path silently not
+existing on much of the hardware this OS runs on. `/bin/hdad` is the
+end state -- a process claims the HD Audio controller, routes the
+codec, and registers as a `sound_device`, so `soundd`, `aplay` and the
+Audio Player play through it with nothing changed above it. What it
+buys is crash isolation, not containment, and `docs/umdf-design.md`
+says so in as many words.
 
 **A split driver is a legitimate end state**, not a half-finished one:
-that is what DriverKit's audio drivers are, with the DMA engine behind
-the framework and the policy in the driver.
+that is what DriverKit's audio drivers are. The split landed at the
+BUFFER, not the engine -- `sound.c` owns the ring and the
+consumed-chunk zeroing, `hdad` programs the card to read it and never
+touches a sample.
+
+**WHAT IS LEFT is making it the default.** Nothing starts `hdad` at
+boot, deliberately while it is new: a crash leaves the card unbound and
+the machine mute until something claims and releases it again. A
+polite `kill` is already safe (it releases with `DEV_RELEASE_REBIND`),
+so what a default needs is a supervisor that restarts it -- which is
+`init`'s job and what Windows' UMDF host reflector does.
 
 ### USB
 **BUILT** for xHCI, a HID boot keyboard and a HID boot mouse; see

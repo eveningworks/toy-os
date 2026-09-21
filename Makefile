@@ -785,9 +785,10 @@ EXTRA_OBJS_terminal   = term/term_conf term/term_prefs
 EXTRA_OBJS_gfxdemo    =
 # The HD Audio codec parser, compiled a second time for ring 3 -- the
 # geom.c/klineedit.c rule (see the shared-source section below), so
-# /bin/lscodec walks the graph with the kernel's own implementation
-# rather than a second copy of it.
+# /bin/lscodec and /bin/hdad walk the graph with the kernel's own
+# implementation rather than a second copy of it.
 EXTRA_OBJS_lscodec    = shared/hda_codec
+EXTRA_OBJS_hdad       = shared/hda_codec
 
 # ...and the one program that genuinely needs it: the window manager.
 # Its main() is userland/gui/system/toywm.c, which IS auto-discovered,

@@ -2431,6 +2431,36 @@ struct mmap_msg {
 //
 // MSI is edge triggered and needs no masking; the ack still counts, so
 // a driver's loop is the same either way.
+// --- a sound device implemented by a process -------------------------
+//
+// The end of docs/umdf-design.md: a ring-3 driver becomes the machine's
+// sound device and `soundd` mixes on top of it without knowing. The
+// core keeps the ring, the exclusivity and the zeroing; the driver
+// programs the card.
+#define SYS_SND_REGISTER 124 // RDI = a `struct snd_register_msg`
+                             // (abi/sound_abi.h), filled in and read
+                             // back -- `ring_phys` is the answer. The
+                             // caller must hold a CLAIM on the device
+                             // it drives and have a wakeword, for the
+                             // same reasons SYS_DEV_IRQ_ENABLE does.
+                             // 0, or: -EACCES no claim, -ENODEV no
+                             // wakeword, -EFAULT a bad pointer or
+                             // page, -EBUSY one is already registered,
+                             // -EINVAL a malformed message.
+                             //
+                             // The registration DIES WITH THE PROCESS,
+                             // like the claim and the stream.
+
+#define SYS_SND_PERIOD 125   // RDI = the hardware's position in the
+                             // ring, in bytes and on a chunk boundary.
+                             // What a ring-0 driver calls
+                             // sound_period_done() for: it advances
+                             // `hw_pos` and ZEROES the chunks the card
+                             // has consumed, which is the one rule of
+                             // abi/sound_abi.h and what makes a
+                             // stalled app play silence rather than
+                             // loop. Registered driver only (-EPERM).
+
 #define SYS_DEV_IRQ_ENABLE 122 // RDI = the device index. Routes its
                                // interrupt to the caller's wakeword.
                                // Returns 0, or: -EACCES the caller does

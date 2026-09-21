@@ -30,6 +30,13 @@ AC97 and expects the `hda` driver and KTESTs -- the same oracle, pointed
 at the other PCI sound driver. Everything after the driver line is the
 core and the library, and it is the same code either way.
 
+TWO PHASES RUN ONLY ON `--card hda`, because they are about the HD
+Audio codec graph and `--card ac97` attaches no such controller:
+`lscodec --tone` (a process plays, with the kernel driver unbound) and
+`/bin/hdad` (a process IS the sound device, with `aplay` and `soundd`
+playing through it none the wiser). Both are judged by the same
+host-side recording as everything else.
+
 On demand, not in the gate: it boots its own guest with extra hardware.
 """
 import argparse
@@ -46,6 +53,10 @@ REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
 from gui_debug import DebugConsole  # noqa: E402
+
+# abi/sound_abi.h's SND_CONFIG_FILE. Named once because two phases have
+# to agree on it, and neither can read the header.
+SND_CONFIG = "/etc/sound.conf"
 
 
 class Result:
@@ -187,6 +198,7 @@ def main():
     wav3_path = os.path.join(tmp, "out_mp3play.wav")
     wav4_path = os.path.join(tmp, "out_perapp.wav")
     wav5_path = os.path.join(tmp, "out_ring3.wav")
+    wav6_path = os.path.join(tmp, "out_hdad.wav")
     img = os.path.join(tmp, "disk.img")
     subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
                    cwd=REPO, check=True)
@@ -387,6 +399,14 @@ def main():
                     res.check("...and soundd applied it to that client",
                               "aplay volume 25%" in log,
                               [l for l in log.splitlines() if "soundd:" in l][-3:])
+                # AND IT CLEANS UP AFTER ITSELF. The disk image is
+                # shared by every phase here, so a gain left on it plays
+                # every LATER phase at 25% -- which the host oracle
+                # reads as silence, not as quiet, because measure()'s
+                # window threshold sits above it. That is CLAUDE.md's
+                # "a test that applies a setting changes the machine for
+                # every later tool", and it cost this file a red.
+                dbg.send(f"sh rm {SND_CONFIG}")
                 gain_ok = daemon_up
                 dbg.close()
         finally:
@@ -403,8 +423,14 @@ def main():
     # "playing" in a log is not sound: a build that routed nothing, or
     # pointed the card at the wrong address, prints exactly the same
     # line. The frequency measured on the HOST is the evidence.
+    # ONLY ON THE HDA ROW. `--card ac97` attaches no HD Audio
+    # controller, so lscodec correctly answers "no HD Audio controller"
+    # and every check below would be red about the FIXTURE rather than
+    # about the driver.
     ring3_ok = False
-    if boot(wav5_path).returncode != 0:
+    if card != "hda":
+        pass
+    elif boot(wav5_path).returncode != 0:
         res.check("the guest rebooted for the ring-3 driver phase", False)
     else:
         try:
@@ -478,6 +504,99 @@ def main():
                   15.0 < ratio < 70.0,
                   f"peak {loud} at 100% against {quiet} at 25% -- {ratio:.1f}x")
 
+    # --- the ring-3 driver IS the sound device (umdf, the end state) --
+    #
+    # The difference from the phase above, and the whole point of this
+    # one: nothing here knows the driver is a process. /bin/hdad claims
+    # the card and registers with the sound core, then `aplay` plays a
+    # file through `soundd` exactly as it does on every other row --
+    # same mixer, same resampler, same ring. What moved is underneath
+    # all of it.
+    #
+    # THE FIXTURE IS 44.1 kHz, so the host measuring 1000 Hz says the
+    # resampler ran, the mixer ran, AND a process programmed the
+    # hardware. A driver pointed at the wrong buffer records silence.
+    hdad_ok = False
+    if card != "hda":
+        pass
+    elif boot(wav6_path).returncode != 0:
+        res.check("the guest rebooted for the hdad phase", False)
+    else:
+        try:
+            dbg = wait_serial(sock)
+            if res.check("the serial console answers (hdad phase)", dbg is not None):
+                # Belt and braces with the removal above: this phase
+                # is judged on FULL-SCALE audio, so a stray gain here is
+                # a red about the fixture.
+                dbg.send(f"sh rm {SND_CONFIG}")
+                dbg.send("sh spawn /bin/hdad")
+                # BRING-UP IS SECONDS, not milliseconds: the codec walk
+                # goes verb by verb through a polled RIRB. Polled rather
+                # than slept for, so a faster build is not waited on and
+                # a slower one is not cut off.
+                deadline = time.time() + 45
+                listing = ""
+                while time.time() < deadline:
+                    listing = dbg.send("sh lssound") or ""
+                    if "hda-ring3" in listing:
+                        break
+                    time.sleep(1)
+                up = res.check("A PROCESS REGISTERED AS THE SOUND DEVICE",
+                               "hda-ring3" in listing, listing.strip()[-160:])
+                # The `*` column, so this is "it is the one playing",
+                # not merely "it is listed".
+                if up:
+                    res.check("...and it is the ACTIVE one",
+                              any(l.strip().startswith("*") and "hda-ring3" in l
+                                  for l in listing.splitlines()),
+                              listing.strip()[-160:])
+                    out = dbg.send("sh aplay /tests/sine1k.wav") or ""
+                    hdad_ok = res.check("...and aplay played through it unchanged",
+                                        "sine1k" in out, out.strip()[-120:])
+                    log = dbg.send("sh dmesg") or ""
+                    res.check("...at full scale, so the recording below is honest",
+                              "volume 25%" not in log,
+                              [l for l in log.splitlines() if "soundd:" in l][-3:])
+                    # THE HANDOVER. A polite kill must give the card
+                    # back: `hdad` releases with REBIND, the kernel
+                    # driver takes it, and the machine is not left mute.
+                    # Without this the only recovery is running hdad
+                    # again, which a person whose sound just died has no
+                    # reason to guess.
+                    pid = ""
+                    for line in (dbg.send("sh ps") or "").splitlines():
+                        if line.strip().endswith("hdad"):
+                            pid = line.split()[0]
+                    if res.check("...and hdad is findable by pid", bool(pid), pid):
+                        dbg.send(f"sh kill {pid}")
+                        deadline = time.time() + 20
+                        back = ""
+                        while time.time() < deadline:
+                            back = dbg.send("sh lssound") or ""
+                            if "hda0" in back:
+                                break
+                            time.sleep(1)
+                        res.check("...and killing it handed the card BACK to the kernel",
+                                  "hda0" in back and "hda-ring3" not in back,
+                                  back.strip()[-160:])
+                        # PROVEN WITHOUT PLAYING ANYTHING. This boot's
+                        # recording is judged by FREQUENCY below, and a
+                        # second sound in it is measured as a wrong
+                        # pitch -- a 1 kHz fixture followed by a chime
+                        # read as 890 Hz, exactly like a driver running
+                        # at the wrong rate. That hda0 plays is what
+                        # every phase above already establishes; what
+                        # is new here is that the kernel driver BOUND
+                        # the device again, which dmesg states.
+                        log = dbg.send("sh dmesg") or ""
+                        res.check("...and the kernel driver bound it again",
+                                  "hda took" in log,
+                                  [l for l in log.splitlines()
+                                   if "hda" in l][-3:])
+                dbg.close()
+        finally:
+            halt()
+
     if ring3_ok:
         rate5, secs5, hz5, peak5, tone5 = measure(wav5_path)
         res.check("THE RING-3 DRIVER'S TONE REACHED THE DEVICE",
@@ -491,8 +610,20 @@ def main():
         res.check("...at 440 Hz, so it is the tone and not noise",
                   abs(hz5 - 440.0) < 15, f"measured {hz5:.1f}Hz, wanted 440")
 
+    if hdad_ok:
+        rate6, secs6, hz6, peak6, tone6 = measure(wav6_path)
+        res.check("THE PROCESS-DRIVEN CARD EMITTED REAL AUDIO",
+                  tone6 >= 0.5 and peak6 > 4000,
+                  f"{tone6:.2f}s of tone, peak {peak6}")
+        # Same 3% bar as the kernel-driver row, deliberately: the mixer
+        # and the resampler above this are the SAME code, so a
+        # difference here is the driver underneath them.
+        res.check("...at 1 kHz, so soundd and the resampler ran on top of it",
+                  abs(hz6 - 1000.0) < 30, f"measured {hz6:.1f}Hz, wanted 1000")
+
     if args.keep:
-        print(f"  recordings kept: {wav_path}, {wav2_path}, {wav3_path}, {wav4_path}")
+        print(f"  recordings kept: {wav_path}, {wav2_path}, {wav3_path}, "
+              f"{wav4_path}, {wav5_path}, {wav6_path}")
 
     print(f"\naudio_test: {len(res.passes)} passed, {len(res.fails)} failed")
     for f in res.fails:

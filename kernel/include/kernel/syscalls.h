@@ -320,6 +320,12 @@ int sys_dev_release(struct syscall_ctx *c); // beside it
 int sys_dev_dma_alloc(struct syscall_ctx *c); // kernel/mm/mmap.c
 int sys_dev_irq_enable(struct syscall_ctx *c); // kernel/drivers/dev_claim.c
 int sys_dev_irq_ack(struct syscall_ctx *c);    // beside it
+int sys_snd_register(struct syscall_ctx *c);  // kernel/drivers/sound/sound_proc.c
+int sys_snd_period(struct syscall_ctx *c);    // beside it
+// A ring-3 sound driver's registration dies with its address space --
+// sound_proc.c.
+void sound_proc_space_gone(uint64_t pml4);
+int  sound_proc_registered(void);
 // SYS_DEV_MAP_BAR's validation, split out so a KTEST can reach it --
 // the syscall itself refuses the kernel context at its first line.
 int dev_bar_check(int index, int which, uint64_t pml4,

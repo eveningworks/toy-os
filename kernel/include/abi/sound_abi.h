@@ -182,6 +182,60 @@ struct snd_roster {
     struct snd_roster_entry e[SND_ROSTER_MAX];
 };
 
+// --- a sound device implemented by a PROCESS --------------------------
+//
+// docs/umdf-design.md's end state: the DRIVER is a ring-3 program and
+// `soundd` mixes on top of it, unchanged. The kernel's sound core still
+// owns the ring, the exclusivity and the consumed-chunk zeroing -- what
+// moves out is the code that talks to the card.
+//
+// THE CORE CANNOT CALL A PROCESS, so `start`/`stop`/`set_volume` become
+// a REQUEST the driver reads: the kernel writes the op, bumps `seq` and
+// wakes the driver's wakeword (SYS_WAKEWORD), and the driver acts and
+// answers in `running`. That makes `start()` ASYNCHRONOUS, which the
+// core already tolerates -- it publishes `running` and an app watches
+// it, rather than assuming the engine is live the moment it asked.
+//
+// The page is the DRIVER's, created and mapped by it (an shm object,
+// as every other cross-process page here is) and handed over at
+// registration. The kernel writes only the request half.
+#define SND_DRV_MAGIC 0x53445256u  // 'SDRV'
+
+#define SND_REQ_NONE   0
+#define SND_REQ_START  1  // begin at the ring's first chunk
+#define SND_REQ_STOP   2  // halt the engine; the ring stays
+#define SND_REQ_VOLUME 3  // `volume` holds 0..100
+
+struct snd_driver_page {
+    uint32_t magic;    // SND_DRV_MAGIC, written by the driver LAST
+    // BUMPED ON EVERY REQUEST, not just changed: two STARTs in a row
+    // are two requests, and a driver comparing only `op` would see the
+    // second as nothing new.
+    uint32_t seq;
+    uint32_t op;       // SND_REQ_*
+    uint32_t volume;   // 0..100, meaningful for SND_REQ_VOLUME
+    // The driver's answer, and what the core publishes to apps. A
+    // driver that cannot start says 0 here and the app sees the stream
+    // never came up, rather than silence with everything looking fine.
+    uint32_t running;
+    uint32_t reserved;
+};
+
+// What SYS_SND_REGISTER is handed. `ring_phys` comes back in it: the
+// core owns the ring, and a driver needs its PHYSICAL address to point
+// a descriptor at. It never needs to READ the samples -- soundd writes
+// them and the card fetches them -- so no mapping is granted.
+#define SND_DRV_NAME_MAX  16
+#define SND_DRV_LABEL_MAX 40
+
+struct snd_register_msg {
+    char     name[SND_DRV_NAME_MAX];    // "hda-ring3"
+    char     label[SND_DRV_LABEL_MAX];  // what a person sees
+    uint32_t rates, depths;             // SND_RATE_*/SND_DEPTH_*
+    uint64_t page;                      // the driver's snd_driver_page
+    uint64_t ring_phys;                 // OUT: where the ring is
+};
+
 // Per-application gains, by application name. A file of its own rather
 // than keys in /etc/toyos.conf: these accumulate one per program ever
 // played, which does not belong in the system's own config, and the

@@ -732,7 +732,9 @@ run on, not by order.
 - [x] ~~A device CLAIM, so a ring-0 driver can let go and exactly one holder has a device~~ DONE 2026-09-20
 - [x] ~~HDA's codec graph as a ring-3 program -- `/bin/lscodec`, one parser compiled into both rings~~ DONE 2026-09-21
 - [x] ~~An interrupt as a wakeup: the stub masks and bumps the holder's wakeword, the driver acks to unmask~~ DONE 2026-09-21
-- [ ] The STREAM's DMA, gated on the IOMMU decision -- the command ring already has a trusted buffer (`SYS_DEV_DMA_ALLOC`)
+- [x] ~~The STREAM's DMA, and the IOMMU decision -- trusted, and said so~~ DONE 2026-09-21
+- [x] ~~A ring-3 driver as the system's sound device -- `/bin/hdad` registers, `soundd` mixes on top of it unchanged~~ DONE 2026-09-21
+- [ ] Start `hdad` at boot instead of by hand, once it has run on hardware for a while
 
 ### virtio, and a real GPU driver
 

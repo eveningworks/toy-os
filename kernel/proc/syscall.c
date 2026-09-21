@@ -53,6 +53,7 @@ static void release_process_state(uint64_t pml4_phys) {
     futex_wakeword_release(pml4_phys);
     mmap_release_regions(pml4_phys); // the region LIST, not the mappings
     dev_claim_space_gone(pml4_phys); // a claimed device, left UNBOUND
+    sound_proc_space_gone(pml4_phys); // ...and the sound device it was
 }
 
 void syscall_process_exit_cleanup(uint64_t pml4_phys) {

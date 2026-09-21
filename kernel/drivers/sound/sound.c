@@ -226,6 +226,16 @@ void sound_set_volume(int pct) {
 // The consumed-chunk zeroing -- abi/sound_abi.h's one rule. `hw_pos`
 // only ever lands on chunk boundaries, and never laps itself between
 // interrupts (an interrupt per chunk), so walking last..now is exact.
+// WHAT THE DEVICE SAYS ABOUT ITSELF, published to the app watching the
+// control page. A ring-0 driver has no use for this -- its start()
+// returns having programmed the engine, so the core knows. A driver in
+// a PROCESS only ever ASKED, so the answer arrives later and this is
+// where it lands (kernel/drivers/sound/sound_proc.c).
+void sound_publish_running(const struct sound_device *dev, int running) {
+    if (!g_ctl || active() != dev) return;
+    g_ctl->running = running ? 1 : 0;
+}
+
 void sound_period_done(uint32_t hw_pos) {
     if (!g_ctl) return;
     uint32_t pos = g_last_pos;

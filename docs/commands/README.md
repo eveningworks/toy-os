@@ -113,6 +113,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`crashlog`](crashlog.md)
 - [`dmesg`](dmesg.md)
 - [`font`](font.md)
+- [`hdad`](hdad.md)
 - [`heap`](heap.md)
 - [`hwdata`](hwdata.md)
 - [`kbd`](kbd.md)

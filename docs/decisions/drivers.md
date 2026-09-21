@@ -2668,3 +2668,53 @@ that fell out is READ versus WRITE -- everything that parses moved,
 everything that configures (routing, amplifiers, pin control, the
 stream) stayed in ring 0 -- and that is a better line than "the graph
 moves", because the write half is exactly what needs stages 4 and 5.
+
+## A sound driver in ring 3 is asked to start, and reporting a period is what proves it did
+
+`SYS_SND_REGISTER` lets a process implement a `sound_device`, so
+`/bin/hdad` drives the HD Audio controller and `soundd`, `aplay` and the
+Audio Player mix on top of it without a line changed. The `sound_device`
+contract is four function pointers the core calls synchronously, and a
+process cannot be called. Three things fall out of that.
+
+**THE CORE ASKS, THROUGH A PAGE AND A WAKEWORD.** `start`, `stop` and
+`set_volume` become a request written into a `struct snd_driver_page`
+the driver shares, plus a bump of its wakeword — the same word stage 4
+already delivers the controller's interrupt on, so the driver waits once
+and both sources arrive there. The sequence number is BUMPED rather than
+set, because two STARTs in a row are two requests and a driver comparing
+only `op` would see the second as nothing new.
+
+**SO `start()` IS ASYNCHRONOUS, and that is the one real semantic
+change.** A ring-0 driver has programmed the engine by the time `start()`
+returns; this one has only asked. It got away with it because the core
+already published `running` for an app to watch rather than promising
+the engine was live — but a caller that had assumed otherwise would have
+been wrong here first, which is why it is written down.
+
+**AND `running` BECOMES TRUE ON THE FIRST PERIOD REPORT**, not on the
+request. `SYS_SND_PERIOD` is how the driver says where the card has
+reached, and a driver that reports a position has demonstrably programmed
+the engine — which is the only proof the core can have, since `start()`
+could merely have asked. It costs one chunk of latency, 21 ms at 48 kHz.
+The alternative considered was a poll hook the core calls per frame;
+there is no such hook in this kernel, and inventing one to answer a
+question a report already answers is a mechanism for nothing.
+
+**WHAT DID NOT MOVE IS THE SAMPLES.** The shared ring, the exclusive
+stream and the consumed-chunk zeroing stayed in `sound.c`; the driver is
+handed the ring's PHYSICAL address and points a buffer descriptor at it.
+That is what keeps a ring-3 driver's exposure to one buffer on a machine
+with no IOMMU, and it is the same split DriverKit's audio drivers have.
+Linux does the opposite — an ALSA driver owns its own DMA buffer — which
+is right when the driver is in the kernel and wrong when the question is
+what a process is trusted with.
+
+**A POLITE KILL HANDS THE CARD BACK; A CRASH DOES NOT.** A claim dropped
+by a dying process deliberately leaves the device UNBOUND, so `hdad`
+catches `SIGTERM` and releases with `DEV_RELEASE_REBIND` — otherwise
+`kill hdad` leaves the machine mute with no recovery a person would
+guess. Windows' UMDF host shuts its device down on the way out for the
+same reason. The crash case is left as it is on purpose: a card
+half-programmed by a driver that died is not something to hand a kernel
+driver automatically, and re-running `hdad` recovers it.

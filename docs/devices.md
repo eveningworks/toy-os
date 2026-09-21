@@ -56,6 +56,7 @@ person has to keep true.
 | `hda` | Any PCI HD Audio controller (class `04:03`) | Generic codec walk, no vendor quirks; `hdadump` is the diagnostic. |
 | `ac97` | Any PCI AC'97 codec (class `04:01`) | |
 | `usb-audio` | USB audio class, UAC1 and UAC2 | Isochronous OUT; no feedback endpoint yet. |
+| `ring3` | Nothing on a bus — a PROCESS binds it by calling `SYS_SND_REGISTER` | `/bin/hdad` is the one that does; `start()` is asynchronous there. See `docs/umdf-design.md`. |
 
 ## Buses, clocks and entropy
 

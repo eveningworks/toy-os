@@ -739,6 +739,14 @@ int sys_dev_irq_ack(int index) {
     return (int)err(syscall1(SYS_DEV_IRQ_ACK, (uint64_t)(int64_t)index));
 }
 
+int sys_snd_register(struct snd_register_msg *m) {
+    return (int)err(syscall1(SYS_SND_REGISTER, (uint64_t)(uintptr_t)m));
+}
+
+int sys_snd_period(uint32_t pos) {
+    return (int)err(syscall1(SYS_SND_PERIOD, pos));
+}
+
 int sys_cpu_info(struct cpu_info *out) {
     return (int)err(syscall1(SYS_CPU_INFO, (uint64_t)(uintptr_t)out));
 }
