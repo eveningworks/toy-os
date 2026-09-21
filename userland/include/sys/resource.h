@@ -29,6 +29,18 @@ struct rlimit {
 // The resources POSIX names. All of them read RLIM_INFINITY; they exist
 // so that code naming one compiles, and so a future limit has a number
 // already allocated rather than shifting everything below it.
+// setpriority()/getpriority(): nice-style, LOWER runs first, 0 the
+// default. Strict between levels and round-robin within one -- and it
+// CAN STARVE, because there is no ageing: only a process that BLOCKS
+// promptly should ask for a better one. A ring-3 DRIVER is what it
+// exists for; abi/syscall_abi.h has the measurement.
+#define PRIO_PROCESS 0
+
+int setpriority(int which, int who, int value);
+// A NEGATIVE RESULT IS LEGITIMATE, so a caller that cares clears errno
+// first and checks it -- POSIX's own rule for this call.
+int getpriority(int which, int who);
+
 #define RLIMIT_CPU     0
 #define RLIMIT_FSIZE   1
 #define RLIMIT_DATA    2

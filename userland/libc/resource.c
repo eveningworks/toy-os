@@ -2,6 +2,7 @@
 // accepting a number nothing enforces. See <sys/resource.h>.
 #include <sys/resource.h>
 #include <errno.h>
+#include "rt/sys.h"
 
 int getrlimit(int resource, struct rlimit *rlp) {
     if (resource < 0 || resource >= RLIMIT_NLIMITS || !rlp) {
@@ -25,4 +26,12 @@ int setrlimit(int resource, const struct rlimit *rlp) {
         return 0;
     errno = EPERM;
     return -1;
+}
+
+int setpriority(int which, int who, int value) {
+    return sys_setpriority(which, who, value);
+}
+
+int getpriority(int which, int who) {
+    return sys_getpriority(which, who);
 }

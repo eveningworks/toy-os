@@ -216,7 +216,18 @@ KTEST("pci", "every memory BAR is sized, aligned, and restored") {
         for (int b = 0; b < 6; b++) {
             KTEST_ASSERT_EQ(pci_config_read32(d, (uint8_t)(0x10 + b * 4)), d->bar[b]);
             uint64_t sz = pci_bar_mem_size(d, b);
-            if (pci_bar_is_io(d->bar[b]) || !pci_bar_mem_addr(d, b)) {
+            // AN I/O BAR HAS A SIZE NOW. It used to be skipped outright
+            // -- harmless while nothing read it, and not once SYS_DEV_IO
+            // began BOUNDS-CHECKING a ring-3 driver's port accesses
+            // against it. This asserted the old zero.
+            if (pci_bar_is_io(d->bar[b])) {
+                if (sz) {
+                    KTEST_ASSERT_EQ(sz & (sz - 1), 0);        // a power of two
+                    KTEST_ASSERT_EQ(pci_bar_addr(d->bar[b]) & (sz - 1), 0);
+                }
+                continue;
+            }
+            if (!pci_bar_mem_addr(d, b)) {
                 KTEST_ASSERT_EQ(sz, 0);
                 continue;
             }

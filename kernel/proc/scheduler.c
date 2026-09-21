@@ -354,6 +354,24 @@ struct sched_process {
     // interruptible sleeper to stop it promptly. When interruptible
     // syscalls land here, this is the decision to revisit.
     uint8_t stopped;
+
+    // SCHEDULING PRIORITY, nice-style: LOWER runs first, 0 is the
+    // default every process starts at, and the range is POSIX's
+    // -20..19. Strict between levels, round-robin within one.
+    //
+    // **IT EXISTS FOR ONE MEASURED REASON.** A ring-3 driver is woken
+    // by its device's interrupt and then WAITS ITS TURN: at a 10 ms
+    // timeslice, behind the compositor and the mixer, that was measured
+    // as ~17 ms of dead air 5.6 times a second on a USB audio endpoint
+    // whose buffer holds 12 ms. An in-kernel driver never sees it
+    // because it refills inside the interrupt handler.
+    //
+    // **STRICT PRIORITY CAN STARVE.** A busy process at a better level
+    // will hold the CPU against everything below it -- there is no
+    // ageing here and no budget, deliberately, because the only callers
+    // are drivers that block on a wakeword within microseconds of being
+    // run. A CPU-bound process must not be given one.
+    int8_t prio;
     // A SYSCALL REWOUND TO BE RE-ISSUED, NOT RUN YET. Set when a signal
     // wakes this process out of a park (its RIP is put back on the
     // `int $0x80`), cleared when it next enters a syscall. A signal
@@ -816,18 +834,50 @@ static int kernel_slot_runnable(void) {
 //
 // `start` may be -1 (nothing was running); the +MAX_PROCS+1 term keeps
 // the modulo positive for it.
+// A process's scheduling priority, by pid. The picker above is the
+// only reader; these are the only writers.
+int scheduler_set_priority(int pid, int value) {
+    int idx = pid - 1;
+    if (idx < 0 || idx >= MAX_PROCS || procs[idx].state == SCHED_UNUSED)
+        return -ESRCH;
+    procs[idx].prio = (int8_t)value;
+    return 0;
+}
+
+int scheduler_get_priority(int pid) {
+    int idx = pid - 1;
+    if (idx < 0 || idx >= MAX_PROCS || procs[idx].state == SCHED_UNUSED)
+        return -ESRCH;
+    return procs[idx].prio;
+}
+
+static int runnable_at(int idx) {
+    return procs[idx].state == SCHED_READY && !procs[idx].stopped;
+}
+
 static int find_next_runnable(int start) {
+    // THE BEST LEVEL PRESENT, first. Strict priority between levels and
+    // round-robin within one, which is what keeps the rotation fair
+    // among equals while letting a woken driver in ahead of the
+    // desktop. The kernel's own slot sits at the default level, so it
+    // is not starved by ordinary processes and IS outranked by a
+    // driver -- which is the point.
+    int best = 127;
+    for (int idx = 0; idx < MAX_PROCS; idx++)
+        if (runnable_at(idx) && procs[idx].prio < best) best = procs[idx].prio;
+    if (kernel_slot_runnable() && 0 < best) best = 0;
+
     for (int i = 1; i <= MAX_PROCS + 1; i++) {
         int idx = (start + i + MAX_PROCS + 1) % (MAX_PROCS + 1);
         if (idx == ROT_KERNEL) {
-            if (kernel_slot_runnable()) return ROT_KERNEL;
+            if (kernel_slot_runnable() && best >= 0) return ROT_KERNEL;
             continue;
         }
         // STOPPED IS CHECKED HERE AND NOWHERE ELSE. One picker means
         // one place suspension has to be honoured -- see the field's
         // comment in struct sched_process for why it is a flag rather
         // than a state.
-        if (procs[idx].state == SCHED_READY && !procs[idx].stopped) return idx;
+        if (runnable_at(idx) && procs[idx].prio == best) return idx;
     }
     return ROT_KERNEL;
 }

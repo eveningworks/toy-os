@@ -2594,6 +2594,31 @@ struct usb_control_msg {
                              // -EPERM not the registered driver,
                              // -ENOMEM no room, -EFAULT a bad pointer.
 
+// SCHEDULING PRIORITY, POSIX's shape: nice-style, LOWER runs first,
+// 0 the default, -20..19 the range. Strict between levels and
+// round-robin within one.
+//
+// **A DRIVER IS WHY THIS EXISTS.** A ring-3 driver is woken by its
+// device's interrupt and then waits its turn -- measured as ~17 ms of
+// dead air 5.6 times a second on a USB audio endpoint with 12 ms of
+// buffer, at a 10 ms timeslice behind the compositor and the mixer.
+// An in-kernel driver never sees it, because it refills inside the
+// handler. This is what every OS gives an audio thread: RT priority in
+// PipeWire and JACK, MMCSS "Pro Audio" on Windows.
+//
+// **AND IT CAN STARVE.** There is no ageing and no budget: a busy
+// process at a better level holds the CPU against everything below.
+// Only a process that BLOCKS promptly should ask for one.
+#define SYS_SETPRIORITY 134  // RDI = which (PRIO_PROCESS only), RSI =
+                             // who (0 = the caller), RDX = the value.
+                             // 0, or -EINVAL for an unknown `which` or
+                             // a value outside -20..19, -ESRCH for a
+                             // pid that is not there.
+#define SYS_GETPRIORITY 135  // RDI = which, RSI = who. The value, or
+                             // -EINVAL/-ESRCH. Note a negative RESULT
+                             // is legitimate here, so a caller checks
+                             // errno rather than the sign.
+
 struct usb_isoch_msg {
     uint32_t slot;
     uint32_t ep;         // endpoint address, e.g. 0x01

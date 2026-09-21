@@ -869,6 +869,14 @@ int scheduler_stop(int pid, int sig);
 // running.
 int scheduler_continue(int pid);
 
+// SCHEDULING PRIORITY, nice-style: LOWER runs first, 0 the default.
+// Strict between levels, round-robin within one -- and it CAN STARVE,
+// so only a process that blocks promptly should have one. See
+// abi/syscall_abi.h's SYS_SETPRIORITY for the measurement that made it
+// necessary. 0 / the value, or -ESRCH.
+int scheduler_set_priority(int pid, int value);
+int scheduler_get_priority(int pid);
+
 // 1 if `pid` is currently suspended.
 int scheduler_stopped(int pid);
 

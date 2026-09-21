@@ -769,6 +769,15 @@ int sys_usb_control(int slot, const uint8_t setup[8], void *buf,
     return (int)err(syscall1(SYS_USB_CONTROL, (uint64_t)(uintptr_t)&m));
 }
 
+int sys_setpriority(int which, int who, int value) {
+    return (int)err(syscall3(SYS_SETPRIORITY, (uint64_t)which, (uint64_t)who,
+                             (uint64_t)value));
+}
+
+int sys_getpriority(int which, int who) {
+    return (int)err(syscall2(SYS_GETPRIORITY, (uint64_t)which, (uint64_t)who));
+}
+
 int sys_usb_claim(int slot) {
     return (int)err(syscall1(SYS_USB_CLAIM, (uint64_t)slot));
 }

@@ -476,6 +476,11 @@ int sys_dev_irq_ack(int index);
 // USB_RELEASE_REBIND offers it back to them; without, it is left
 // UNBOUND. syscall_abi.h says why this is not SYS_DEV_CLAIM.
 // 0, or -1 with errno.
+// Scheduling priority, nice-style: LOWER runs first, 0 the default.
+// <sys/resource.h>'s setpriority()/getpriority() are the names to use.
+int sys_setpriority(int which, int who, int value);
+int sys_getpriority(int which, int who);
+
 int sys_usb_claim(int slot);
 int sys_usb_release(int slot, unsigned flags);
 

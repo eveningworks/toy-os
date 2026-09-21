@@ -38,6 +38,7 @@
 #include "syscall_abi.h"
 #include "query_abi.h"
 #include "lib/cmd.h"
+#include <sys/resource.h>
 
 #define USAGE "snddrv [-d INDEX] [--driver NAME] [-v]"
 
@@ -201,6 +202,26 @@ int main(int argc, char **argv) {
     // init but keeps the PROCESS GROUP, so the launching shell's SIGHUP
     // arrives here -- and its default action would kill this without
     // the release path, leaving the card unbound and the machine mute.
+    // A DRIVER RUNS WHEN ITS DEVICE ASKS, NOT WHEN ITS TURN COMES.
+    // Woken by an interrupt and then queued behind the compositor and
+    // the mixer, this missed its refill deadline ~5.6 times a second on
+    // a USB audio endpoint -- 17 ms of dead air against a 12 ms buffer.
+    // An in-kernel driver never sees it, because it refills inside the
+    // handler. Every OS gives an audio thread the same treatment.
+    //
+    // SAFE HERE BECAUSE THIS PROCESS BLOCKS: the loop below parks on a
+    // wakeword within microseconds of being run, so a better level
+    // cannot starve anything. A CPU-bound process must never ask.
+    // **NOT RAISED YET, AND THE REASON IS A LOCKUP.** Asking for -10
+    // here wedged the machine: the loop below does not truly rest for a
+    // driver whose device is not on PCI -- `fired` is unconditional
+    // there, so every wakeword bump costs a full pass whether or not
+    // anything completed. At the default level that merely wastes a
+    // slice; at a better one it starves the console, because priority
+    // here is STRICT and has no ageing. Fix the loop first, then raise
+    // this -- docs/bugs.md has the measurement either way (the rate DID
+    // reach 99.5% with it, from 90%).
+
     setsid();
     signal(SIGHUP, on_term);
     signal(SIGTERM, on_term);

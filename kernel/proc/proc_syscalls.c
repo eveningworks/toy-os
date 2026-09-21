@@ -947,3 +947,35 @@ void proc_syscall_release(uint64_t pml4_phys) {
         g_legacy_mm.brk = 0;
     }
 }
+
+// --- scheduling priority ------------------------------------------------
+//
+// abi/syscall_abi.h says why this exists and why it can starve.
+#define PRIO_PROCESS 0
+
+int sys_setpriority(struct syscall_ctx *c) {
+    int which = (int)(int64_t)c->a0;
+    int who   = (int)(int64_t)c->a1;
+    int value = (int)(int64_t)c->a2;
+    int64_t ret;
+
+    if (which != PRIO_PROCESS || value < -20 || value > 19) { ret = -EINVAL; goto out; }
+    if (!who) who = scheduler_current_pid();
+    ret = scheduler_set_priority(who, value);
+out:
+    c->regs[14] = (uint64_t)ret;
+    return 0;
+}
+
+int sys_getpriority(struct syscall_ctx *c) {
+    int which = (int)(int64_t)c->a0;
+    int who   = (int)(int64_t)c->a1;
+    int64_t ret;
+
+    if (which != PRIO_PROCESS) { ret = -EINVAL; goto out; }
+    if (!who) who = scheduler_current_pid();
+    ret = scheduler_get_priority(who);
+out:
+    c->regs[14] = (uint64_t)ret;
+    return 0;
+}
