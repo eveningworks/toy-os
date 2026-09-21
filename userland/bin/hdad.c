@@ -298,6 +298,21 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    // A DAEMON LEAVES THE SESSION THAT STARTED IT. `spawn` reparents to
+    // init but keeps the PROCESS GROUP, so the launching shell's SIGHUP
+    // still arrives here -- and SIGHUP's default action kills this
+    // without the release below, which leaves the card unbound and the
+    // machine mute. Measured on the ASUS: closing the shell that
+    // spawned hdad silenced the laptop. setsid() is what a real daemon
+    // does for exactly this; the SIGHUP handler is the second half, for
+    // anything that still delivers one.
+    setsid();
+    // ALL THREE HERE, not after the bring-up: the codec walk takes
+    // seconds, and a kill during it must still hand the card back.
+    signal(SIGHUP, on_term);
+    signal(SIGTERM, on_term);
+    signal(SIGINT, on_term);
+
     int cand[8], ncand = 0;
     if (want >= 0) {
         cand[ncand++] = want;
@@ -365,8 +380,6 @@ int main(int argc, char **argv) {
     g_ring_phys = m.ring_phys;
     fprintf(stderr, "hdad: serving pci %d as the machine's sound device\n", index);
 
-    signal(SIGTERM, on_term);
-    signal(SIGINT, on_term);
     while (!g_quit) {
         uint32_t w = g_sh->wake;
 
