@@ -26,6 +26,42 @@
 // format, and the one every card this registry will hold can do.
 // Rate/format negotiation is deliberately NOT in the v1 ABI: the field
 // exists so a reader can check it, not so a caller can choose.
+// --- WHAT A CARD CAN DO, as opposed to what this stack asks of it ----
+//
+// SND_RATE and SND_CHANNELS below are what the shared ring IS -- one
+// format the whole stack is compiled around. These masks are a
+// different thing: what the HARDWARE reports it could do, read from
+// the card and reported unchanged.
+//
+// THEY DRIVE NOTHING YET, deliberately. Knowing what the cards support
+// is the fact that decides whether a per-device format is worth
+// building, and this project reads the fact before acting on it -- the
+// EDID readout took the same shape. A mask of 0 means the driver does
+// not report; it does not mean "nothing".
+//
+// A COMMON ENCODING, not the hardware's. HDA has its own bit layout
+// (PARAM_PCM_SUPPORT), AC97 its own notion of variable rate, USB audio
+// a list of discrete rates in its descriptors -- so each driver
+// translates into these, and a reader compares cards without knowing
+// which bus it is looking at.
+#define SND_RATE_8000   (1u << 0)
+#define SND_RATE_11025  (1u << 1)
+#define SND_RATE_16000  (1u << 2)
+#define SND_RATE_22050  (1u << 3)
+#define SND_RATE_32000  (1u << 4)
+#define SND_RATE_44100  (1u << 5)
+#define SND_RATE_48000  (1u << 6)
+#define SND_RATE_88200  (1u << 7)
+#define SND_RATE_96000  (1u << 8)
+#define SND_RATE_176400 (1u << 9)
+#define SND_RATE_192000 (1u << 10)
+
+#define SND_DEPTH_8   (1u << 0)
+#define SND_DEPTH_16  (1u << 1)
+#define SND_DEPTH_20  (1u << 2)
+#define SND_DEPTH_24  (1u << 3)
+#define SND_DEPTH_32  (1u << 4)
+
 #define SND_RATE      48000
 #define SND_CHANNELS  2
 #define SND_FRAME_BYTES 4 // 2 channels x 16-bit

@@ -13,6 +13,7 @@
 // caller's capacity, the graph walk carries a visited set, and a nid is
 // a uint8_t -- 256 of them, which is what sizes the set.
 #include "hda_codec.h"
+#include "sound_abi.h"   // the common capability masks this translates into
 
 static int cmd(struct hda_codec *c, uint8_t nid, uint32_t verb20, uint32_t *out) {
     if (out) *out = 0;
@@ -248,4 +249,31 @@ void hda_codec_route_output(struct hda_codec *c, struct hda_out *o,
             if (w->pincap & PINCAP_EAPD) cmd(c, w->nid, V12(VERB_SET_EAPD, 0x02), 0);
         }
     }
+}
+
+// PARAM_PCM_SUPPORT's layout is the spec's: rates in bits 0..11 and
+// sizes in 16..20. WCAP bit 4 is FORMAT OVERRIDE -- a converter saying
+// its own answer differs from the function group's -- so that one is
+// asked when it is set, and the AFG otherwise.
+#define WCAP_FMT_OVRD 0x010
+
+void hda_codec_pcm_support(struct hda_codec *c, uint8_t dac,
+                           uint32_t *rates, uint32_t *depths) {
+    struct hda_widget *w = hda_codec_widget(c, dac);
+    uint8_t from = (w && (w->caps & WCAP_FMT_OVRD)) ? dac : c->afg;
+    uint32_t v = hda_codec_param(c, from, PARAM_PCM_SUPPORT);
+
+    static const uint32_t rate_bit[12] = {
+        SND_RATE_8000,  SND_RATE_11025, SND_RATE_16000, SND_RATE_22050,
+        SND_RATE_32000, SND_RATE_44100, SND_RATE_48000, SND_RATE_88200,
+        SND_RATE_96000, SND_RATE_176400, SND_RATE_192000, 0 /* 384k */,
+    };
+    static const uint32_t depth_bit[5] = {
+        SND_DEPTH_8, SND_DEPTH_16, SND_DEPTH_20, SND_DEPTH_24, SND_DEPTH_32,
+    };
+    uint32_t r = 0, d = 0;
+    for (int i = 0; i < 12; i++) if (v & (1u << i)) r |= rate_bit[i];
+    for (int i = 0; i < 5; i++)  if (v & (1u << (16 + i))) d |= depth_bit[i];
+    if (rates) *rates = r;
+    if (depths) *depths = d;
 }

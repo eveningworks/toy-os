@@ -41,6 +41,18 @@ struct sound_device {
 
     // 0..100 into whatever the hardware's volume is. Optional (NULL).
     void (*set_volume)(int pct);
+
+    // WHAT THE HARDWARE SAYS IT CAN DO -- SND_RATE_* and SND_DEPTH_*
+    // masks (abi/sound_abi.h), translated out of whatever the bus
+    // spells them in. 0 from a driver that does not report, which is
+    // not the same as "nothing".
+    //
+    // NOTHING READS THESE TO DECIDE ANYTHING. The stack is compiled
+    // around SND_RATE/SND_CHANNELS; this is the fact that would have
+    // to exist first for that to change, reported so the question can
+    // be answered with a measurement rather than a guess.
+    uint32_t rates;
+    uint32_t depths;
 };
 
 // A driver that found its hardware registers here, handing the core
@@ -55,6 +67,11 @@ struct sound_device {
 // it survives that card being unplugged and takes effect again when it
 // returns. See docs/decisions.md.
 int sound_register(const struct sound_device *dev, void *ring, uint64_t ring_phys);
+
+// A rate in Hz, or a depth in bits, as one of abi/sound_abi.h's mask
+// bits -- 0 for anything not in the list, never the nearest.
+uint32_t snd_rate_mask(uint32_t hz);
+uint32_t snd_depth_mask(uint32_t bits);
 
 // The device is GONE -- a USB card unplugged. If it was the active
 // one, the stream stops and `device_gone` is published to whoever holds

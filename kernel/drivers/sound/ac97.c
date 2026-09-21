@@ -123,6 +123,12 @@ static void ac97_set_volume(int pct) {
 static const struct sound_device ac97_dev = {
     .name = "ac97",
     .driver = "ac97",
+    // THE DRIVER'S SET, NOT THE CODEC'S CEILING. AC97 baseline is 48
+    // kHz 16-bit, and a codec with Variable Rate Audio can do more --
+    // but VRA is not programmed here, so reporting what the hardware
+    // might manage would describe something nothing can ask for.
+    .rates = SND_RATE_48000,
+    .depths = SND_DEPTH_16,
     .start = ac97_start,
     .stop = ac97_stop,
     .set_volume = ac97_set_volume,

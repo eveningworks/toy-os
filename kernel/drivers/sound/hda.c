@@ -629,6 +629,8 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     }
     mw32(h, HDA_INTCTL, INTCTL_GIE | INTCTL_CIE); // jack events from here on
 
+    hda_codec_pcm_support(&h->codec, h->codec.spk.dac,
+                          &h->dev.rates, &h->dev.depths);
     k_snprintf(h->label, sizeof h->label, "%s HD Audio", vendor_name(h->codec.vendor));
     h->dev.name = h->name;
     h->dev.label = h->label;

@@ -125,6 +125,7 @@
 #define PARAM_PIN_CAPS      0x0C
 #define PARAM_AMP_IN_CAPS   0x0D
 #define PARAM_CONN_LIST_LEN 0x0E
+#define PARAM_PCM_SUPPORT   0x0A
 #define PARAM_AMP_OUT_CAPS  0x12
 
 #define FUNC_AUDIO 0x01
@@ -250,5 +251,14 @@ void hda_codec_pick_volume(struct hda_codec *c, struct hda_out *o);
 // they are passed rather than known here.
 void hda_codec_route_output(struct hda_codec *c, struct hda_out *o,
                             uint16_t fmt, uint8_t stream_tag);
+
+// What the codec says it can convert, as abi/sound_abi.h's SND_RATE_*
+// and SND_DEPTH_* masks rather than HDA's own bit layout -- so a
+// caller can compare this card against a USB one without knowing
+// either bus. Read from the DAC when it overrides the function group's
+// answer, which is what the format-override capability means, and from
+// the function group otherwise.
+void hda_codec_pcm_support(struct hda_codec *c, uint8_t dac,
+                           uint32_t *rates, uint32_t *depths);
 
 #endif // API_HDA_CODEC_H

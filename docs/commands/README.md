@@ -124,6 +124,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`lsdrv`](lsdrv.md)
 - [`lsmod`](lsmod.md)
 - [`lspci`](lspci.md)
+- [`lssound`](lssound.md)
 - [`lsusb`](lsusb.md)
 - [`meminfo`](meminfo.md)
 - [`parttable`](parttable.md)

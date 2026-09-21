@@ -513,6 +513,12 @@ struct query_fsstat {
 // "Kernel driver in use".
 #define QUERY_PCIDEV 43
 
+// THE SOUND DEVICES, and what each says it can do. There was no way to
+// LIST them at all before this: the only view was the `audio_device`
+// setting's choice list, which answers "what may I pick" and not "what
+// is this". `lssound` reads it.
+#define QUERY_SOUND 44
+
 #define QUERY_REMOTE_SESSION  0 // a session opened or closed
 #define QUERY_REMOTE_COMMAND  1 // a command line the remote shell ran
 #define QUERY_REMOTE_SPAWN    2 // a program a remote session started
@@ -891,6 +897,19 @@ struct query_pcidev {
     // the gate, since this kernel has no uid. Asked rather than probed:
     // probing means unbinding a live device to find out.
     uint32_t claimable;
+};
+
+// QUERY_SOUND's record, one per registered sound device.
+struct query_sound {
+    char     name[16];    // "hda0", "ac97", "usb-audio"
+    char     label[40];   // "Conexant HD Audio"
+    char     driver[16];
+    uint32_t active;      // 1 for the one the stream is on
+    // SND_RATE_* and SND_DEPTH_* (abi/sound_abi.h) -- what the card
+    // SAYS, not what the stack uses, which is 48 kHz s16 stereo
+    // throughout. 0 means the driver does not report.
+    uint32_t rates;
+    uint32_t depths;
 };
 
 // QUERY_MODULE: one record per loaded module (kernel/core/module.c).

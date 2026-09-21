@@ -2,6 +2,9 @@
 // the stream and its policy, a driver owns its hardware) and
 // abi/sound_abi.h for the shared-ring ABI the app speaks.
 #include "sound.h"
+#include "query.h"
+#include "query_abi.h"
+#include "initcall.h"
 #include "sound_abi.h"
 #include "uaddr.h"
 #include "syscall_table.h"
@@ -470,3 +473,72 @@ KTEST("sound", "losing the active device publishes device_gone") {
     g_ctl->running = 0;
     sound_select(saved_pref);
 }
+
+// --- a rate or a depth as one of abi/sound_abi.h's bits --------------
+//
+// Shared because two drivers translate from a NUMBER rather than from
+// a bitmap: USB audio reads a rate out of each descriptor, and anything
+// else reporting a fixed set says it the same way. An unlisted value
+// answers 0 rather than the nearest -- a card offering 64 kHz is not
+// offering 48.
+uint32_t snd_rate_mask(uint32_t hz) {
+    switch (hz) {
+    case 8000:   return SND_RATE_8000;
+    case 11025:  return SND_RATE_11025;
+    case 16000:  return SND_RATE_16000;
+    case 22050:  return SND_RATE_22050;
+    case 32000:  return SND_RATE_32000;
+    case 44100:  return SND_RATE_44100;
+    case 48000:  return SND_RATE_48000;
+    case 88200:  return SND_RATE_88200;
+    case 96000:  return SND_RATE_96000;
+    case 176400: return SND_RATE_176400;
+    case 192000: return SND_RATE_192000;
+    default:     return 0;
+    }
+}
+
+uint32_t snd_depth_mask(uint32_t bits) {
+    switch (bits) {
+    case 8:  return SND_DEPTH_8;
+    case 16: return SND_DEPTH_16;
+    case 20: return SND_DEPTH_20;
+    case 24: return SND_DEPTH_24;
+    case 32: return SND_DEPTH_32;
+    default: return 0;
+    }
+}
+
+// --- QUERY_SOUND ------------------------------------------------------
+//
+// The only way to LIST the sound devices. The `audio_device` setting's
+// choices answer "what may I pick"; this answers "what IS this", which
+// is a different question and the one a capability belongs to.
+
+static int sound_q_count(void) { return g_dev_count; }
+
+static int sound_q_fill(int index, void *out) {
+    if (index < 0 || index >= g_dev_count) return 0;
+    const struct sound_device *d = g_devs[index];
+    struct query_sound *q = out;
+    k_memset(q, 0, sizeof *q);
+    k_strlcpy(q->name, d->name, sizeof q->name);
+    k_strlcpy(q->label, d->label ? d->label : d->name, sizeof q->label);
+    k_strlcpy(q->driver, d->driver ? d->driver : "", sizeof q->driver);
+    q->active = (index == g_active);
+    q->rates = d->rates;
+    q->depths = d->depths;
+    return 1;
+}
+
+static const struct query_provider sound_q_provider = {
+    .cls = QUERY_SOUND,
+    .name = "sound",
+    .record_size = sizeof(struct query_sound),
+    .flags = QUERY_F_LIST,
+    .count = sound_q_count,
+    .fill = sound_q_fill,
+};
+
+static void sound_query_init(void) { query_register(&sound_q_provider); }
+INITCALL(sound_query_init, INIT_QUERY);

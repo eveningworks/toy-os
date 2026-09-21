@@ -883,6 +883,14 @@ int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
     a->dev.start      = audio_start;
     a->dev.stop       = audio_stop;
     a->dev.set_volume = audio_set_volume;
+    // WHAT THE DESCRIPTORS OFFERED, every alternate setting the walk
+    // saw -- including the ones this driver cannot use. The refusal
+    // line above already prints them for a human; these are the same
+    // facts for a reader (abi/sound_abi.h).
+    for (uint8_t i = 0; i < rep.alt_count; i++) {
+        a->dev.rates  |= snd_rate_mask(rep.alts[i].rate);
+        a->dev.depths |= snd_depth_mask(rep.alts[i].bits);
+    }
 
     if (!sound_register(&a->dev, (void *)a->ring, 0)) {
         a->in_use = 0;
