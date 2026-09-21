@@ -479,6 +479,14 @@ int sys_dev_irq_ack(int index);
 int sys_usb_claim(int slot);
 int sys_usb_release(int slot, unsigned flags);
 
+// A CONTROL TRANSFER on a device you hold. The caller builds the
+// 8-byte setup packet; the kernel performs it, because the host
+// controller is shared and is not the holder's to drive.
+// SET_ADDRESS and SET_CONFIGURATION are REFUSED -- both change state
+// the kernel tracks. Returns the bytes transferred, or -1 with errno.
+int sys_usb_control(int slot, const uint8_t setup[8], void *buf,
+                    unsigned len, int in);
+
 // READ OR WRITE AN I/O BAR of a device you hold. Ring 3 cannot run
 // in/out, so the kernel performs the access -- validated against that
 // device's OWN BARs, so it can never reach another device's ports.

@@ -2508,6 +2508,38 @@ struct mmap_msg {
                              // left UNBOUND, as the PCI path does.
 #define USB_RELEASE_REBIND 1
 
+// A CONTROL TRANSFER ON A DEVICE YOU HOLD.
+//
+// The holder builds the 8-byte setup packet itself -- that is the
+// whole of what a USB control request is -- and the kernel performs
+// it, because the host controller is not the holder's to drive.
+//
+// TWO REQUESTS ARE REFUSED BY NAME: SET_ADDRESS and SET_CONFIGURATION.
+// Both change state the KERNEL tracks (the xHCI slot context, and the
+// configuration descriptor `usb_device_info` holds), so a holder
+// issuing them would desync the controller from its own bookkeeping
+// with no way to notice. Linux's usbfs refuses the first and routes
+// the second through its own ioctl for the same reason.
+#define SYS_USB_CONTROL 129  // RDI = a `struct usb_control_msg`. On a
+                             // device-to-host request the data is
+                             // copied back into `buf`. Returns the
+                             // bytes transferred, or: -EACCES not the
+                             // holder, -EINVAL a bad length or a
+                             // refused request, -EFAULT a bad pointer,
+                             // -EIO the device did not answer.
+
+#define USB_CONTROL_MAX 4096 // one page: every request a class driver
+                             // makes here is tens of bytes
+
+struct usb_control_msg {
+    uint32_t slot;
+    uint32_t len;      // bytes of data stage, 0 for none
+    uint32_t in;       // 1 = device-to-host
+    uint32_t reserved;
+    uint64_t buf;      // the data stage, or 0
+    uint8_t  setup[8]; // bmRequestType, bRequest, wValue, wIndex, wLength
+};
+
 struct dev_io_msg {
     uint32_t index;   // the PCI device, as lspci counts
     uint32_t bar;     // which BAR, 0-5 -- never a port number

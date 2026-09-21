@@ -12,6 +12,9 @@
 #include "string.h"
 #include "syscalls.h"
 #include "syscall_abi.h"
+#include "xhci.h"
+#include "pmm.h"
+#include "vmm.h"
 
 #define USB_CLASS_HUB 9   // usb_enum.c's, and the same value the spec gives
 
@@ -126,6 +129,63 @@ int sys_usb_claim(struct syscall_ctx *c) {
     int64_t ret = scheduler_current_mm()
         ? usb_claim_take((uint8_t)c->a0, c->pml4, scheduler_current_pid())
         : -EPERM;
+    c->regs[14] = (uint64_t)ret;
+    return 0;
+}
+
+// ONE BOUNCE PAGE, and it is shared.
+//
+// xhci_control() takes a KERNEL buffer and uses its virtual address as
+// the physical one, so neither a user pointer nor a kernel stack (which
+// has a guard page and is not identity-mapped) can be handed to it.
+//
+// A MODULE-LEVEL BUFFER REACHED FROM A SYSCALL is what
+// docs/smp-design.md says to read before adding, and the reason is
+// here: a ring-3 process is preemptible inside a syscall, so two
+// holders of two different devices would otherwise interleave through
+// this one page. The transfer runs under the same preemption guard
+// vfs.c's FS_OP() uses, for the same reason.
+static uint64_t g_bounce;
+
+int sys_usb_control(struct syscall_ctx *c) {
+    struct usb_control_msg m;
+    int64_t ret;
+
+    if (!scheduler_current_mm()) { ret = -EPERM; goto out; }
+    if (!vmm_copy_from_user(c->pml4, &m, c->a0, sizeof m)) { ret = -EFAULT; goto out; }
+    if ((ret = usb_claim_check((uint8_t)m.slot, c->pml4)) != 0) goto out;
+    if (m.len > USB_CONTROL_MAX || (m.len && !m.buf)) { ret = -EINVAL; goto out; }
+
+    // The two that would desync the kernel from the controller.
+    // bmRequestType 0 = host-to-device, standard, device.
+    if (m.setup[0] == 0x00 && (m.setup[1] == 5 || m.setup[1] == 9)) {
+        klog_printf("usb: pid %d asked for %s on slot %u -- refused\n",
+                    scheduler_current_pid(),
+                    m.setup[1] == 5 ? "SET_ADDRESS" : "SET_CONFIGURATION",
+                    (unsigned)m.slot);
+        ret = -EINVAL;
+        goto out;
+    }
+
+    if (!g_bounce) {
+        g_bounce = pmm_alloc_contiguous(1, PMM_ZONE_DMA32);
+        if (!g_bounce) { ret = -ENOMEM; goto out; }
+    }
+    uint8_t *buf = (uint8_t *)(uintptr_t)g_bounce;  // identity-mapped
+
+    if (m.len && !m.in &&
+        !vmm_copy_from_user(c->pml4, buf, m.buf, m.len)) { ret = -EFAULT; goto out; }
+
+    scheduler_preempt_disable();
+    int r = xhci_control((uint8_t)m.slot, m.setup, m.len ? buf : 0,
+                         (uint16_t)m.len, m.in ? 1 : 0);
+    scheduler_preempt_enable();
+
+    if (r < 0) { ret = -EIO; goto out; }
+    if (m.len && m.in &&
+        !vmm_copy_to_user(c->pml4, m.buf, buf, m.len)) { ret = -EFAULT; goto out; }
+    ret = (int64_t)m.len;
+out:
     c->regs[14] = (uint64_t)ret;
     return 0;
 }

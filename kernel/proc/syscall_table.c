@@ -58,6 +58,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_DEV_IO]        = { "dev_io",        sys_dev_io,        { A_HEX } },
     [SYS_USB_CLAIM]     = { "usb_claim",     sys_usb_claim,     { A_INT } },
     [SYS_USB_RELEASE]   = { "usb_release",   sys_usb_release,   { A_INT, A_INT } },
+    [SYS_USB_CONTROL]   = { "usb_control",   sys_usb_control,   { A_HEX } },
     [SYS_SND_REGISTER]  = { "snd_register",  sys_snd_register,  { A_HEX } },
     [SYS_SND_PERIOD]    = { "snd_period",    sys_snd_period,    { A_INT } },
     [SYS_SND_OPEN]      = { "snd_open",      sys_snd_open,      { 0 }, 0 },

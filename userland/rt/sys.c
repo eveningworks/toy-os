@@ -735,6 +735,18 @@ int sys_dev_irq_enable(int index) {
     return (int)err(syscall1(SYS_DEV_IRQ_ENABLE, (uint64_t)(int64_t)index));
 }
 
+int sys_usb_control(int slot, const uint8_t setup[8], void *buf,
+                    unsigned len, int in) {
+    struct usb_control_msg m;
+    __builtin_memset(&m, 0, sizeof m);
+    m.slot = (uint32_t)slot;
+    m.len = len;
+    m.in = in ? 1 : 0;
+    m.buf = (uint64_t)(uintptr_t)buf;
+    for (int i = 0; i < 8; i++) m.setup[i] = setup[i];
+    return (int)err(syscall1(SYS_USB_CONTROL, (uint64_t)(uintptr_t)&m));
+}
+
 int sys_usb_claim(int slot) {
     return (int)err(syscall1(SYS_USB_CLAIM, (uint64_t)slot));
 }
