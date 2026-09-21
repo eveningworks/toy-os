@@ -114,6 +114,18 @@ static const char *app_label(int i, char *buf, uint32_t size) {
     return buf;
 }
 
+// The roster, and a scale per row to match it. Damages on a COUNT
+// change, because that resizes the panel.
+static void refresh_apps(void) {
+    int before = g_app_count;
+    reload_roster();
+    for (int i = 0; i < g_app_count; i++) {
+        if (i == g_app_drag || i == g_app_pending) continue;
+        uui_scale_init(&g_app_scale[i], 0, 100, (long)g_roster.e[i].gain);
+    }
+    if (before != g_app_count) volume_damage();
+}
+
 static void commit_app(int i) {
     if (i < 0 || i >= g_app_count) return;
     if (!g_roster.e[i].app[0]) return;   // nothing stable to key on
@@ -319,6 +331,13 @@ void volume_open_now(void) {
     tray_slider_open(&g_popup);
     volume_open = g_popup.open;
     g_hover = TRAY_SLIDER_HOVER_NONE;
+    // BEFORE THE FIRST FRAME, not from the next poll. Nothing refreshes
+    // the roster while the panel is closed, so reopening it after the
+    // streams changed drew ONE frame from the stale list -- a panel a
+    // row too tall, with a dead application in it, replaced on the very
+    // next frame. That is not residue and it does not persist; it
+    // flashes, which is exactly how it was reported.
+    refresh_apps();
 }
 
 void volume_close(void) {
@@ -331,19 +350,8 @@ void volume_poll_config(void) {
     tray_slider_poll(&g_popup);
 
     // The roster only while the panel is OPEN: it is a shared-memory
-    // read per frame, and nothing draws it otherwise. Reopening is what
-    // picks up a stream that started meanwhile.
-    if (g_popup.open) {
-        int before = g_app_count;
-        reload_roster();
-        for (int i = 0; i < g_app_count; i++) {
-            if (i == g_app_drag || i == g_app_pending) continue;
-            uui_scale_init(&g_app_scale[i], 0, 100, (long)g_roster.e[i].gain);
-        }
-        // A STREAM APPEARING OR ENDING RESIZES THE PANEL, so the old
-        // rect has to be damaged or the part that shrank stays painted.
-        if (before != g_app_count) volume_damage();
-    }
+    // read per frame, and nothing draws it otherwise.
+    if (g_popup.open) refresh_apps();
 
     if (g_app_pending >= 0 &&
         sys_monotonic_ns() / 1000000ull - g_app_pending_at >= TRAY_SLIDER_COMMIT_MS &&

@@ -246,6 +246,48 @@ def main():
                       f"{differing} of {len(want)} subpixels differ from the "
                       f"same band before the panel ever opened")
 
+        # --- reopening after the streams changed ------------------------
+        #
+        # NOTHING REFRESHES THE ROSTER WHILE THE PANEL IS CLOSED, so a
+        # panel reopened after a stream ended used to draw ONE frame
+        # from the stale list -- a row too tall, with a dead
+        # application in it, gone on the next frame. It does not leave
+        # residue and it is not a damage fault: it FLASHES, which is
+        # how it was reported from the ASUS.
+        #
+        # The assertion is the state on the FIRST look after opening,
+        # with no frame in between to correct it.
+        # THE STALE STATE HAS TO BE ESTABLISHED FIRST, or this passes
+        # without testing anything -- which it did on its first run.
+        # The panel must be CLOSED while a stream is still playing, so
+        # its row count is left at 1 with nothing to correct it.
+        toggle = f"gui click {g['tray']['cx']} {g['tray']['cy']}"
+        staged = play_and_catch(dbg)
+        if res.check("a row is showing when the panel is closed",
+                     bool(staged.get("apps")), json.dumps(staged.get("apps"))):
+            dbg.send(toggle)             # close WHILE it still plays
+            dbg.settle()
+            for _ in range(20):          # let it end, panel closed
+                time.sleep(0.25)
+                if not (dbg.send("sh dmesg") or "").rstrip().endswith("gone"):
+                    pass
+                break
+            time.sleep(2.0)
+            dbg.send(toggle)             # reopen
+            first = vol(dbg)             # FIRST look, no settle
+            # AND THIS CANNOT SEE THE FLASH ITSELF. The stale frame is
+            # ONE frame; a serial round trip is slower than that, so a
+            # poll has always corrected the state before this can ask
+            # -- measured, by disabling the refresh in volume_open_now()
+            # and watching this still pass. What it holds is the
+            # invariant underneath (a reopened panel reports no dead
+            # row); the one-frame artifact is the maintainer's eye, or
+            # a photo of the panel.
+            res.check("reopening reports no row for a stream that ended meanwhile",
+                      not first.get("apps"),
+                      f'apps={first.get("apps")} h={first.get("h")}')
+            dbg.send(toggle)             # closed again
+
         # LEAVE THE IMAGE AS FOUND. A per-app volume left behind would
         # quieten aplay for every later tool on this disk, which is the
         # hazard CLAUDE.md records for settings_test's mouse values.
