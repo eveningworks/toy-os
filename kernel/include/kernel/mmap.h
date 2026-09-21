@@ -32,6 +32,14 @@ int mmap_inherit_shm(uint64_t child_pml4, const struct sched_mm *mm);
 // region -- a KTEST claims from the kernel context and has no mm.
 void mmap_drop_dma_region(uint64_t base, uint64_t npages);
 
+// A DMA GRANT, in two halves, shared by the PCI and USB paths.
+// reserve() picks an address and checks a region slot is free before
+// anything is allocated; map() maps the frames UC and NX and records
+// the region so teardown unmaps it. The frames belong to whoever
+// allocated them -- these BORROW.
+uint64_t mmap_dma_reserve(uint64_t npages);
+int mmap_map_dma(uint64_t pml4, uint64_t base, uint64_t phys, uint64_t npages);
+
 #endif
 
 // THE REGION LIST IS ALLOCATED (api/scheduler.h), so exactly one place

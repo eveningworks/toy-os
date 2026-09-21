@@ -383,6 +383,55 @@ out:
 // plus a barrier because ring 0 can issue one; a ring-3 driver writing
 // a descriptor and then a doorbell has no such instruction available to
 // it, so the mapping has to make the store order the program order.
+// PICK AN ADDRESS FOR A DMA GRANT, and check a region slot is free
+// before anything is allocated. Split from the mapping below because
+// the PCI path needs the address BEFORE the frames exist -- the claim
+// records where its buffer is mapped.
+// 0 when the address space has no room.
+uint64_t mmap_dma_reserve(uint64_t npages) {
+    struct sched_mm *mm = caller_mm();
+    if (!mm) return 0;
+    if (free_slot(mm) < 0) return 0;
+    return arena_pick(mm, npages);
+}
+
+// MAP A DMA GRANT and record it, so teardown unmaps it.
+//
+// UC because it is a buffer a device reads, and NX because it is data:
+// every other path in this file derives NX from prot, and a W+X page
+// of RAM that `pmap` reports as rw is a hole. BORROWED, so no mapping
+// teardown hands the frames to the allocator -- whoever allocated them
+// frees them.
+//
+// Shared by the PCI and USB grants. It was the PCI one's tail, and a
+// second copy for USB is what this exists to avoid.
+// 1 on success; on failure nothing is left mapped.
+int mmap_map_dma(uint64_t pml4, uint64_t base, uint64_t phys, uint64_t npages) {
+    struct sched_mm *mm = caller_mm();
+    if (!mm) return 0;
+    int r_slot = free_slot(mm);
+    if (r_slot < 0) return 0;
+
+    for (uint64_t i = 0; i < npages; i++) {
+        if (!vmm_map_user_borrowed(pml4, base + i * 4096,
+                                   phys + i * 4096, 1, 0, VMM_MT_UC)) {
+            for (uint64_t k = 0; k < i; k++)
+                vmm_unmap_user_page(pml4, base + k * 4096);
+            return 0;
+        }
+    }
+
+    struct mmap_region *r = &mm->regions[r_slot];
+    r->npages   = npages;
+    r->prot     = SYS_PROT_READ | SYS_PROT_WRITE;
+    r->file_off = 0;
+    r->kind     = MMAP_KIND_DMA;
+    r->shm_idx  = -1;
+    r->path[0]  = '\0';
+    r->base     = base;
+    return 1;
+}
+
 int sys_dev_dma_alloc(struct syscall_ctx *c) {
     struct sched_mm *mm = caller_mm();
     int64_t ret;
@@ -399,10 +448,8 @@ int sys_dev_dma_alloc(struct syscall_ctx *c) {
     ret = dev_claim_check(index, c->pml4);
     if (ret != 0) goto out;
 
-    uint64_t base = arena_pick(mm, npages);
+    uint64_t base = mmap_dma_reserve(npages);
     if (!base) { ret = -ENOMEM; goto out; }
-    int r_slot = free_slot(mm);
-    if (r_slot < 0) { ret = -ENOMEM; goto out; }
 
     uint64_t phys = 0;
     ret = dev_claim_dma_take(index, c->pml4, npages, base, &phys);
@@ -412,35 +459,16 @@ int sys_dev_dma_alloc(struct syscall_ctx *c) {
     // claim's, not this address space's, so nothing else would: the
     // caller would be left holding a device with bus mastering on, a
     // buffer it cannot see, and -EBUSY on every retry.
-    for (uint64_t i = 0; i < npages; i++) {
-        // Writable, NOT executable -- this is a descriptor buffer in
-        // ordinary RAM, unlike the BAR grant above, and `r->prot` below
-        // says rw. Every other path in this file derives NX from prot;
-        // a W+X page of RAM that `pmap` reports as rw is a hole.
-        if (!vmm_map_user_borrowed(c->pml4, base + i * 4096,
-                                   phys + i * 4096, 1, 0, VMM_MT_UC)) {
-            for (uint64_t k = 0; k < i; k++)
-                vmm_unmap_user_page(c->pml4, base + k * 4096);
-            dev_claim_dma_drop(index, c->pml4);
-            ret = -ENOMEM; goto out;
-        }
+    if (!mmap_map_dma(c->pml4, base, phys, npages)) {
+        dev_claim_dma_drop(index, c->pml4);
+        ret = -ENOMEM; goto out;
     }
 
     if (!vmm_copy_to_user(c->pml4, c->a2, &phys, sizeof phys)) {
-        for (uint64_t k = 0; k < npages; k++)
-            vmm_unmap_user_page(c->pml4, base + k * 4096);
+        mmap_drop_dma_region(base, npages);
         dev_claim_dma_drop(index, c->pml4);
         ret = -EFAULT; goto out;
     }
-
-    struct mmap_region *r = &mm->regions[r_slot];
-    r->npages   = npages;
-    r->prot     = SYS_PROT_READ | SYS_PROT_WRITE;
-    r->file_off = 0;
-    r->kind     = MMAP_KIND_DMA;
-    r->shm_idx  = -1;
-    r->path[0]  = '\0';
-    r->base     = base;
 
     klog_printf("dev: pci %d dma %llu page(s) phys %llx at %llx for pid %d\n",
                 index, (unsigned long long)npages, (unsigned long long)phys,
