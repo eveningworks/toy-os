@@ -2451,6 +2451,42 @@ struct mmap_msg {
                              // The registration DIES WITH THE PROCESS,
                              // like the claim and the stream.
 
+// PORT I/O ON A DEVICE YOU HOLD, because ring 3 cannot run in/out.
+//
+// SYS_DEV_MAP_BAR hands over a MEMORY BAR and a process reads it with
+// ordinary loads. An I/O BAR has no such option: `in`/`out` are ring-0
+// instructions, and the only ways to let a process run them are the
+// TSS I/O permission bitmap (Linux's ioperm(2), what X.org used for
+// years) or a syscall that does the access for it.
+//
+// THIS IS THE SECOND, WHICH IS VFIO'S ANSWER: an I/O BAR there is a
+// region you read() and write(), with the kernel performing the access.
+// The bitmap is faster and hands over the ports unconditionally and
+// forever, and it is per-task state the scheduler would have to swap on
+// every context switch. A syscall per access costs nothing at the rates
+// a sound card's mixer registers are touched -- a few per interrupt.
+//
+// EVERY ACCESS IS VALIDATED against the device's OWN BARs, so a holder
+// cannot reach a port belonging to anything else. The caller names a
+// BAR and an offset, never a port number, which is the same reason
+// SYS_DEV_MAP_BAR takes an index rather than an address.
+#define SYS_DEV_IO 126       // RDI = a `struct dev_io_msg`, filled in
+                             // and READ BACK -- `value` is the answer
+                             // on a read. A message rather than five
+                             // registers, the shape SYS_MMAP uses.
+                             // 0, or: -EACCES not the holder, -EINVAL
+                             // a bad width, a BAR that is not an I/O
+                             // BAR, or an offset past its end.
+
+struct dev_io_msg {
+    uint32_t index;   // the PCI device, as lspci counts
+    uint32_t bar;     // which BAR, 0-5 -- never a port number
+    uint32_t offset;  // bytes into that BAR
+    uint32_t width;   // 1, 2 or 4
+    uint32_t write;   // 0 to read, 1 to write
+    uint32_t value;   // the value written, or OUT: the value read
+};
+
 #define SYS_SND_PERIOD 125   // RDI = the hardware's position in the
                              // ring, in bytes and on a chunk boundary.
                              // What a ring-0 driver calls

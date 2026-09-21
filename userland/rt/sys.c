@@ -735,6 +735,26 @@ int sys_dev_irq_enable(int index) {
     return (int)err(syscall1(SYS_DEV_IRQ_ENABLE, (uint64_t)(int64_t)index));
 }
 
+static int dev_io(struct dev_io_msg *m) {
+    return (int)syscall1(SYS_DEV_IO, (uint64_t)(uintptr_t)m);
+}
+
+int sys_dev_io_read(int index, int bar, uint32_t offset, int width,
+                    uint32_t *out) {
+    struct dev_io_msg m = { (uint32_t)index, (uint32_t)bar, offset,
+                            (uint32_t)width, 0, 0 };
+    int r = dev_io(&m);
+    if (r == 0 && out) *out = m.value;
+    return r;
+}
+
+int sys_dev_io_write(int index, int bar, uint32_t offset, int width,
+                     uint32_t value) {
+    struct dev_io_msg m = { (uint32_t)index, (uint32_t)bar, offset,
+                            (uint32_t)width, 1, value };
+    return dev_io(&m);
+}
+
 int sys_dev_irq_ack(int index) {
     return (int)err(syscall1(SYS_DEV_IRQ_ACK, (uint64_t)(int64_t)index));
 }

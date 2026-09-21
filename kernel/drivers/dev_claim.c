@@ -16,6 +16,8 @@
 #include "syscall_abi.h"
 #include "scheduler.h"
 #include "errno.h"
+#include "io.h"     // inb/outb -- the whole reason SYS_DEV_IO exists
+#include "vmm.h"
 #include "klog.h"
 #include "kfmt.h"
 #include "ktest.h"
@@ -324,6 +326,47 @@ int sys_dev_irq_enable(struct syscall_ctx *c) {
     int index = (int)(int64_t)c->a0;
     int64_t ret = scheduler_current_mm()
         ? dev_claim_irq_enable(index, c->pml4) : -EPERM;
+    c->regs[14] = (uint64_t)ret;
+    return 0;
+}
+
+// PORT I/O ON A CLAIMED DEVICE -- syscall_abi.h says why this exists
+// and why it is not the TSS bitmap.
+//
+// THE VALIDATION IS THE WHOLE POINT. A holder names a BAR and an
+// offset, never a port, and the offset is checked against that BAR's
+// own size -- so this can never reach a port belonging to another
+// device, which `ioperm()` handing over a range could.
+int sys_dev_io(struct syscall_ctx *c) {
+    struct dev_io_msg m;
+    int64_t ret;
+
+    if (!scheduler_current_mm()) { ret = -EPERM; goto out; }
+    if (!vmm_copy_from_user(c->pml4, &m, c->a0, sizeof m)) { ret = -EFAULT; goto out; }
+    if ((ret = dev_claim_check((int)m.index, c->pml4)) != 0) goto out;
+    if (m.bar >= 6 || (m.width != 1 && m.width != 2 && m.width != 4)) {
+        ret = -EINVAL;
+        goto out;
+    }
+
+    const struct pci_device *d = pci_device_at((int)m.index);
+    if (!d || !pci_bar_is_io(d->bar[m.bar])) { ret = -EINVAL; goto out; }
+    // The offset AND the access's width must both be inside: a 4-byte
+    // read one byte from the end would otherwise walk off it.
+    uint64_t size = d->bar_size[m.bar];
+    if (!size || (uint64_t)m.offset + m.width > size) { ret = -EINVAL; goto out; }
+
+    uint16_t port = (uint16_t)(pci_bar_addr(d->bar[m.bar]) + m.offset);
+    if (m.write) {
+        if (m.width == 1) outb(port, (uint8_t)m.value);
+        else if (m.width == 2) outw(port, (uint16_t)m.value);
+        else outl(port, m.value);
+        ret = 0;
+    } else {
+        m.value = m.width == 1 ? inb(port) : m.width == 2 ? inw(port) : inl(port);
+        ret = vmm_copy_to_user(c->pml4, c->a0, &m, sizeof m) ? 0 : -EFAULT;
+    }
+out:
     c->regs[14] = (uint64_t)ret;
     return 0;
 }

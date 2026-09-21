@@ -213,6 +213,41 @@ static void ac97_probe(const struct pci_device *dev) {
                     g_nam, g_nabm, line);
 }
 
+// LETTING GO, which is the gate on being CLAIMED: a device whose
+// driver has no remove() can never be taken by a ring-3 driver
+// (kernel/drivers/dev_claim.c). /lib/snd/ac97.so is what wants it.
+//
+// THE ENGINE IS HALTED BEFORE THE INTERRUPT GOES, not after: a
+// completion arriving with no handler registered is a spurious vector,
+// and one arriving after the BDL frame is freed points a live DMA
+// engine at memory the allocator has handed to somebody else.
+static void ac97_remove(const struct pci_device *d) {
+    if (!g_pci || g_pci != d) return;
+
+    ac97_stop();
+    sound_unregister(&ac97_dev);
+
+    if (g_msi_vector) pci_msi_release(d, g_msi_vector);
+    else {
+        uint8_t line = pci_irq_line(d);
+        if (line != 0xFF && line && line < 16) {
+            irq_mask(line);
+            irq_unregister_handler(line, ac97_irq);
+        }
+    }
+    g_msi_vector = 0;
+
+    // BUS MASTERING OFF before the frame goes back: the claim path
+    // raises it again for whoever takes the device next.
+    pci_command_update(d, PCI_CMD_BUS_MASTER, 0);
+    if (g_bdl_phys) pmm_free_contiguous(g_bdl_phys, 1);
+    g_bdl = 0;
+    g_bdl_phys = 0;
+    g_nam = g_nabm = 0;
+    g_pci = 0;
+    klog_printf("ac97: released %02x:%02x.%u\n", d->bus, d->device, d->function);
+}
+
 // --- KTESTs -- skip without the device, like ahci's --------------------
 
 KTEST("ac97", "the controller registered and the codec is ready") {
@@ -228,4 +263,4 @@ KTEST("ac97", "start runs the engine and stop halts it") {
     ac97_stop();
     KTEST_ASSERT_EQ(inb(g_nabm + PO_CR) & CR_RPBM, 0);
 }
-PCI_DRIVER("ac97", ac97_matches, ac97_probe);
+PCI_DRIVER_REMOVABLE("ac97", ac97_matches, ac97_probe, ac97_remove);

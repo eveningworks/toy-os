@@ -466,7 +466,7 @@ VERSION_GEN := $(shell sh tools/gen_version.sh >/dev/null 2>&1 && echo ok)
 version:
 	@sh tools/gen_version.sh
 
-all: $(KERNEL) $(USERLAND_ELVES) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LIBUAPP_SO) $(MODULE_KOS) $(MODULE_ALIAS)
+all: $(KERNEL) $(USERLAND_ELVES) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) $(LIBC_SO) $(LIBUAPP_SO) $(MODULE_KOS) $(MODULE_ALIAS)
 
 # One explicit rule per module source, because the sources come from
 # two trees (kernel/drivers/ and modules/) and a pattern rule cannot
@@ -788,7 +788,6 @@ EXTRA_OBJS_gfxdemo    =
 # /bin/lscodec and /bin/hdad walk the graph with the kernel's own
 # implementation rather than a second copy of it.
 EXTRA_OBJS_lscodec    = shared/hda_codec
-EXTRA_OBJS_hdad       = shared/hda_codec
 
 # ...and the one program that genuinely needs it: the window manager.
 # Its main() is userland/gui/system/toywm.c, which IS auto-discovered,
@@ -1185,6 +1184,23 @@ $(BUILD)/userland/bin/reboot.elf: $(BUILD)/userland/bin/reboot.o $(USERLAND_RT) 
 LDSO    = $(BUILD)/lib/ld-toy.so
 DYNLIBS = $(BUILD)/lib/libhello.so $(BUILD)/lib/libplug.so $(BUILD)/lib/libhash.so $(LIBSSL_SO) $(LIBHTTP_SO)
 
+# /lib/snd/<name>.so -- one sound driver per chip, dlopen'd by
+# /bin/snddrv. **ADDING A CARD IS A FILE HERE AND NOTHING ELSE**: the
+# host scans the directory, so no list in this Makefile and no edit to
+# snddrv.c. Discovered like every other source in this tree.
+SND_PLUGIN_SRCS = $(shell find userland/snd -name '*.c' 2>/dev/null | sort)
+SND_PLUGINS = $(patsubst userland/snd/%.c,$(BUILD)/lib/snd/%.so,$(SND_PLUGIN_SRCS))
+
+# The codec parser comes off the -fpic shared path, so the graph walk
+# in ring 3 is the kernel's own implementation (the geom.c rule).
+$(BUILD)/lib/snd/hda.so: $(BUILD)/userland-pic/snd/hda.o $(BUILD)/userland-pic/shared/hda_codec.o $(LIBC_SO)
+	@mkdir -p $(dir $@)
+	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname hda.so -o $@ 	      $(BUILD)/userland-pic/snd/hda.o $(BUILD)/userland-pic/shared/hda_codec.o $(LIBC_SO)
+
+$(BUILD)/lib/snd/%.so: $(BUILD)/userland-pic/snd/%.o $(LIBC_SO)
+	@mkdir -p $(dir $@)
+	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname $*.so -o $@ $< $(LIBC_SO)
+
 $(BUILD)/userland/dynlib/%.o: USERLAND_CFLAGS := $(subst -fpie,-fpic,$(USERLAND_CFLAGS))
 
 $(LDSO): $(BUILD)/userland/ldso/entry.o $(BUILD)/userland/ldso/ldso.o $(BUILD)/userland/rt/stack_chk.o userland/ldso/link.ld
@@ -1551,13 +1567,18 @@ $(DISK_IMG):
 # holds the registry and the reasoning.
 EXTRAS ?=
 LICENSE ?=
-seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LIBUAPP_SO) $(MODULE_KOS) $(MODULE_ALIAS) $(BUILD)/conf.mk $(KERNEL_MEDIA)
+seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) $(LIBC_SO) $(LIBUAPP_SO) $(MODULE_KOS) $(MODULE_ALIAS) $(BUILD)/conf.mk $(KERNEL_MEDIA)
 	$(if $(EXTRAS),TOYOS_LICENSE=$(LICENSE) python3 tools/fetch_extras.py,@true)
 	mkdir -p $(SEED_DIR)/sync/bin $(SEED_DIR)/sync/tests
 	# The dynamic loader and the shared libraries -- /lib is theirs
 	# (docs/filesystem-layout.md).
 	mkdir -p $(SEED_DIR)/sync/lib
 	cp $(LDSO) $(DYNLIBS) $(LIBC_SO) $(LIBUAPP_SO) $(SEED_DIR)/sync/lib/
+	# The sound drivers, one .so per chip (userland/include/snd_driver.h).
+	# /bin/snddrv scans this directory, so a new card lands here and
+	# nothing else changes.
+	mkdir -p $(SEED_DIR)/sync/lib/snd
+	cp $(SND_PLUGINS) $(SEED_DIR)/sync/lib/snd/
 	# The loadable modules and their alias table (docs/modules-design.md).
 	mkdir -p $(SEED_DIR)/sync/lib/modules
 	cp $(MODULE_KOS) $(MODULE_ALIAS) $(SEED_DIR)/sync/lib/modules/

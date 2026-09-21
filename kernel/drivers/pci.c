@@ -99,13 +99,25 @@ static void probe_bar_sizes(struct pci_device *d) {
     for (int i = 0; i < nbars; i++) {
         uint32_t orig = d->bar[i];
         uint8_t  off  = (uint8_t)(0x10 + i * 4);
-        if (pci_bar_is_io(orig)) continue;   // memory BARs only
+        if (!orig) continue;
 
-        int wide = pci_bar_is_64(orig) && i + 1 < nbars;
+        // AN I/O BAR IS SIZED THE SAME WAY, with two low bits to mask
+        // instead of four, and is never 64-bit. It used to be skipped
+        // outright, which left bar_size 0 -- harmless while nothing
+        // read it, and not once SYS_DEV_IO began BOUNDS-CHECKING a
+        // ring-3 driver's port accesses against it. Every AC'97 access
+        // was refused.
+        int io = pci_bar_is_io(orig);
+        uint32_t addr_mask = io ? 0xFFFFFFFCu : 0xFFFFFFF0u;
+        int wide = !io && pci_bar_is_64(orig) && i + 1 < nbars;
         pci_config_write32(d, off, 0xFFFFFFFFu);
         if (wide) pci_config_write32(d, (uint8_t)(off + 4), 0xFFFFFFFFu);
-        uint64_t mask = pci_config_read32(d, off) & 0xFFFFFFF0u;
-        if (wide) mask |= (uint64_t)pci_config_read32(d, (uint8_t)(off + 4)) << 32;
+        uint64_t mask = pci_config_read32(d, off) & addr_mask;
+        // I/O space is 64 KiB, so only the low 16 bits of an I/O BAR's
+        // mask mean anything; sign-extending it the way a 32-bit memory
+        // BAR is would compute a 4 GiB port range.
+        if (io) mask |= 0xFFFFFFFFFFFF0000ull;
+        else if (wide) mask |= (uint64_t)pci_config_read32(d, (uint8_t)(off + 4)) << 32;
         else if (mask) mask |= 0xFFFFFFFF00000000ull;  // a 32-bit BAR's mask stops at bit 31
         if (wide) pci_config_write32(d, (uint8_t)(off + 4), d->bar[i + 1]);
         pci_config_write32(d, off, orig);

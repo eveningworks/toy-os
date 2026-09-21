@@ -33,7 +33,7 @@ core and the library, and it is the same code either way.
 TWO PHASES RUN ONLY ON `--card hda`, because they are about the HD
 Audio codec graph and `--card ac97` attaches no such controller:
 `lscodec --tone` (a process plays, with the kernel driver unbound) and
-`/bin/hdad` (a process IS the sound device, with `aplay` and `soundd`
+`/bin/snddrv` (a process IS the sound device, with `aplay` and `soundd`
 playing through it none the wiser). Both are judged by the same
 host-side recording as everything else.
 
@@ -198,7 +198,7 @@ def main():
     wav3_path = os.path.join(tmp, "out_mp3play.wav")
     wav4_path = os.path.join(tmp, "out_perapp.wav")
     wav5_path = os.path.join(tmp, "out_ring3.wav")
-    wav6_path = os.path.join(tmp, "out_hdad.wav")
+    wav6_path = os.path.join(tmp, "out_snddrv.wav")
     img = os.path.join(tmp, "disk.img")
     subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
                    cwd=REPO, check=True)
@@ -507,29 +507,36 @@ def main():
     # --- the ring-3 driver IS the sound device (umdf, the end state) --
     #
     # The difference from the phase above, and the whole point of this
-    # one: nothing here knows the driver is a process. /bin/hdad claims
-    # the card and registers with the sound core, then `aplay` plays a
-    # file through `soundd` exactly as it does on every other row --
+    # one: nothing here knows the driver is a process. /bin/snddrv
+    # dlopens a driver out of /lib/snd, claims the card and registers
+    # with the sound core, then `aplay` plays a file through `soundd`
+    # exactly as it does on every other row --
     # same mixer, same resampler, same ring. What moved is underneath
     # all of it.
     #
     # THE FIXTURE IS 44.1 kHz, so the host measuring 1000 Hz says the
     # resampler ran, the mixer ran, AND a process programmed the
     # hardware. A driver pointed at the wrong buffer records silence.
-    hdad_ok = False
+    snddrv_ok = False
     if card != "hda":
         pass
     elif boot(wav6_path).returncode != 0:
-        res.check("the guest rebooted for the hdad phase", False)
+        res.check("the guest rebooted for the snddrv phase", False)
     else:
         try:
             dbg = wait_serial(sock)
-            if res.check("the serial console answers (hdad phase)", dbg is not None):
+            if res.check("the serial console answers (snddrv phase)", dbg is not None):
                 # Belt and braces with the removal above: this phase
                 # is judged on FULL-SCALE audio, so a stray gain here is
                 # a red about the fixture.
                 dbg.send(f"sh rm {SND_CONFIG}")
-                dbg.send("sh spawn /bin/hdad")
+                # THE PLUGIN IS THE POINT: a host that found no driver
+                # would register nothing, and the check below would read
+                # as "the card does not work" rather than "the .so was
+                # not there".
+                res.check("the sound driver is a plugin on disk",
+                          "hda.so" in (dbg.send("sh ls /lib/snd") or ""))
+                dbg.send("sh spawn /bin/snddrv")
                 # BRING-UP IS SECONDS, not milliseconds: the codec walk
                 # goes verb by verb through a polled RIRB. Polled rather
                 # than slept for, so a faster build is not waited on and
@@ -551,23 +558,23 @@ def main():
                                   for l in listing.splitlines()),
                               listing.strip()[-160:])
                     out = dbg.send("sh aplay /tests/sine1k.wav") or ""
-                    hdad_ok = res.check("...and aplay played through it unchanged",
+                    snddrv_ok = res.check("...and aplay played through it unchanged",
                                         "sine1k" in out, out.strip()[-120:])
                     log = dbg.send("sh dmesg") or ""
                     res.check("...at full scale, so the recording below is honest",
                               "volume 25%" not in log,
                               [l for l in log.splitlines() if "soundd:" in l][-3:])
                     # THE HANDOVER. A polite kill must give the card
-                    # back: `hdad` releases with REBIND, the kernel
+                    # back: snddrv releases with REBIND, the kernel
                     # driver takes it, and the machine is not left mute.
-                    # Without this the only recovery is running hdad
+                    # Without this the only recovery is running snddrv
                     # again, which a person whose sound just died has no
                     # reason to guess.
                     pid = ""
                     for line in (dbg.send("sh ps") or "").splitlines():
-                        if line.strip().endswith("hdad"):
+                        if line.strip().endswith("snddrv"):
                             pid = line.split()[0]
-                    if res.check("...and hdad is findable by pid", bool(pid), pid):
+                    if res.check("...and snddrv is findable by pid", bool(pid), pid):
                         dbg.send(f"sh kill {pid}")
                         deadline = time.time() + 20
                         back = ""
@@ -610,7 +617,7 @@ def main():
         res.check("...at 440 Hz, so it is the tone and not noise",
                   abs(hz5 - 440.0) < 15, f"measured {hz5:.1f}Hz, wanted 440")
 
-    if hdad_ok:
+    if snddrv_ok:
         rate6, secs6, hz6, peak6, tone6 = measure(wav6_path)
         res.check("THE PROCESS-DRIVEN CARD EMITTED REAL AUDIO",
                   tone6 >= 0.5 and peak6 > 4000,

@@ -471,6 +471,21 @@ int sys_dev_irq_enable(int index);
 // 0 is a legitimate answer, meaning something else woke you.
 int sys_dev_irq_ack(int index);
 
+// READ OR WRITE AN I/O BAR of a device you hold. Ring 3 cannot run
+// in/out, so the kernel performs the access -- validated against that
+// device's OWN BARs, so it can never reach another device's ports.
+// VFIO's answer rather than ioperm()'s; syscall_abi.h has why.
+// A read answers the value; a write answers 0; -1 with errno on a bad
+// width, a BAR that is not an I/O BAR, or an offset past its end.
+// THE VALUE COMES BACK THROUGH `out`, NOT THE RETURN, deliberately: a
+// failure answering -1 is indistinguishable from a register that reads
+// all ones once a caller casts it to the width it asked for, and a
+// driver treating -EINVAL as 0xFF is how an unmapped card looks ready.
+int sys_dev_io_read(int index, int bar, uint32_t offset, int width,
+                    uint32_t *out);
+int     sys_dev_io_write(int index, int bar, uint32_t offset, int width,
+                         uint32_t value);
+
 // BECOME THE MACHINE'S SOUND DEVICE. `m` is filled in by the caller and
 // read back: `ring_phys` is where the core's ring lives, which is what
 // a driver points a descriptor at. soundd then mixes into that ring
