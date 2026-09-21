@@ -8,12 +8,19 @@
 // parser serves a CORB/RIRB in ring 0, another in ring 3, and a
 // synthetic codec in a KTEST.
 //
-// THE SPLIT IS READ VERSUS WRITE. Everything here parses; nothing here
-// configures. Routing, amplifiers, pin control and the stream stay in
-// hda.c, in ring 0, because that is the half that makes sound and the
-// half a wrong answer can damage. The read half is the untrusted one --
-// node counts, widget types and connection lists come off the card --
-// and it is the half stage 3 moved out.
+// THE SPLIT IS CODEC VERSUS CONTROLLER. Everything here talks to the
+// CODEC -- reading what it says about itself, and configuring the route
+// it should play through -- over one callback. What stays with the
+// controller (kernel/drivers/sound/hda.c, or /bin/lscodec) is the
+// CORB/RIRB, the stream descriptor, the buffer list and the interrupts.
+//
+// It was READ VERSUS WRITE until stage 5, on the argument that the
+// write half is what makes sound and so should stay in ring 0. That
+// line did not survive a ring-3 driver needing to route its own
+// output: routing is verbs to the codec, indistinguishable from the
+// reads beside them, and keeping it away meant duplicating the walk.
+// The reads are still the interesting half -- they are UNTRUSTED
+// INPUT, which is the argument that moved any of this.
 //
 // The controller registers are here rather than in hda.c because BOTH
 // transports need them: a ring-3 driver programming its own CORB/RIRB
@@ -57,6 +64,30 @@
 #define RIRBCTL_DMAEN 0x02
 #define RIRBCTL_RINTCTL 0x01
 #define RIRBSTS_ACK 0x05 // RINTFL | OIS
+
+// Stream descriptor, relative to its base.
+#define SD_CTL   0x00 // 24-bit; STS is the fourth byte of the same dword
+#define SD_STS   0x03 // 8, RW1C
+#define SD_LPIB  0x04 // 32: bytes played of the current lap
+#define SD_CBL   0x08 // 32: cyclic buffer length
+#define SD_LVI   0x0C // 16
+#define SD_FMT   0x12 // 16
+#define SD_BDPL  0x18
+#define SD_BDPU  0x1C
+
+#define SD_CTL_SRST 0x01
+#define SD_CTL_RUN  0x02
+#define SD_CTL_IOCE 0x04
+#define SD_CTL_FEIE 0x08
+#define SD_CTL_DEIE 0x10
+#define SD_CTL_STREAM_SHIFT 20
+#define SD_STS_ACK  0x1C // BCIS | FIFOE | DESE
+#define SD_STS_BCIS 0x04
+
+// 48 kHz base, 16-bit, 2 channels -- SND_RATE/SND_CHANNELS as the codec
+// spells them.
+#define HDA_FMT_48K_S16_STEREO 0x0011
+#define HDA_STREAM_TAG 1
 
 // The CORB is 256 4-byte verbs and the RIRB 256 8-byte responses, so a
 // transport's rings fit one 4 KiB frame with the RIRB at +1024. Both
@@ -211,5 +242,13 @@ int hda_codec_pick_outputs(struct hda_codec *c);
 // whose output amplifier has steps or can mute. Fills `o`'s vol_*
 // fields, leaving vol_nid 0 when the route has no such amplifier.
 void hda_codec_pick_volume(struct hda_codec *c, struct hda_out *o);
+
+// Make `o` the live output: power every widget on its path, put the
+// DAC on `stream_tag` at `fmt`, unmute each amplifier at 0 dB and
+// enable the pin. The two arguments are the CONTROLLER's business --
+// which stream this codec should listen to, and in what format -- so
+// they are passed rather than known here.
+void hda_codec_route_output(struct hda_codec *c, struct hda_out *o,
+                            uint16_t fmt, uint8_t stream_tag);
 
 #endif // API_HDA_CODEC_H

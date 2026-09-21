@@ -6,7 +6,7 @@
 // caller's callback and the graph lives in the caller's struct, which
 // is the same rule ttf.c follows for the same reason.
 //
-// EVERYTHING HERE PARSES UNTRUSTED INPUT. Node counts, widget types,
+// EVERYTHING HERE THAT READS PARSES UNTRUSTED INPUT. Node counts, widget types,
 // connection lists and default configurations all come off the card,
 // and a codec that lies about them must not be able to walk this off
 // the end of an array or into a loop. So: every write is bounded by the
@@ -182,5 +182,70 @@ void hda_codec_pick_volume(struct hda_codec *c, struct hda_out *o) {
         o->vol_step_qdb = (uint8_t)(((oc >> 16) & 0x7F) + 1);
         o->vol_mute = (oc & 0x80000000u) != 0;
         return;
+    }
+}
+
+// Route one output: power, the DAC's stream and format, every
+// amplifier on the way unmuted at 0 dB, the pin enabled for output.
+//
+// THIS WRITES, and it still belongs here. The line that matters is
+// CODEC versus CONTROLLER, not read versus write -- every verb below
+// goes to the codec through the same callback the reads use, and the
+// two controller-shaped values it needs (the stream format and the
+// tag) are arguments rather than knowledge. What stays with the
+// controller is the ring, the stream descriptor and the interrupts.
+void hda_codec_route_output(struct hda_codec *c, struct hda_out *o,
+                            uint16_t fmt, uint8_t stream_tag) {
+    hda_codec_pick_volume(c, o);
+    for (int i = 0; i < o->len; i++) {
+        struct hda_widget *w = hda_codec_widget(c, o->path[i]);
+        if (!w) continue;
+        if (w->caps & WCAP_POWER) cmd(c, w->nid, V12(VERB_SET_POWER, 0), 0);
+    }
+    for (int i = o->len - 1; i >= 0; i--) {
+        struct hda_widget *w = hda_codec_widget(c, o->path[i]);
+        if (!w) continue;
+        uint8_t next = (i + 1 < o->len) ? o->path[i + 1] : 0;
+
+        if (w->type == WT_AUD_OUT) {
+            cmd(c, w->nid, V4(VERB_SET_FORMAT, fmt), 0);
+            cmd(c, w->nid, V12(VERB_SET_CONV, (uint32_t)stream_tag << 4), 0);
+        }
+
+        // The input side: select `next`, unmute it, and on a mixer mute
+        // the rest so a microphone loop does not ride along.
+        if (next && (w->caps & WCAP_CONN_LIST)) {
+            uint8_t conns[HDA_CONN_MAX];
+            int n = hda_codec_conn_list(c, w->nid, conns, HDA_CONN_MAX);
+            int idx = 0;
+            for (int k = 0; k < n; k++) if (conns[k] == next) { idx = k; break; }
+            if (n > 1 && w->type != WT_MIXER)
+                cmd(c, w->nid, V12(VERB_SET_CONN_SEL, idx), 0);
+            if (w->caps & WCAP_IN_AMP) {
+                uint32_t ic = hda_codec_amp_caps(c, w, 0);
+                uint16_t gain = (uint16_t)(ic & 0x7F); // the 0 dB step
+                for (int k = 0; k < n; k++) {
+                    if (w->type != WT_MIXER && k != idx) continue;
+                    uint16_t pl = AMP_IN | AMP_LEFT | AMP_RIGHT | AMP_IDX(k) | gain;
+                    if (k != idx) pl |= AMP_MUTE;
+                    cmd(c, w->nid, V4(VERB_SET_AMP, pl), 0);
+                }
+            }
+        }
+
+        if (w->caps & WCAP_OUT_AMP) {
+            uint32_t oc = hda_codec_amp_caps(c, w, 1);
+            cmd(c, w->nid, V4(VERB_SET_AMP,
+                                  AMP_OUT | AMP_LEFT | AMP_RIGHT | (oc & 0x7F)), 0);
+        }
+
+        if (w->type == WT_PIN) {
+            uint8_t ctl = PINCTL_OUT_EN;
+            if (w->pincap & PINCAP_HP_DRIVE) ctl |= PINCTL_HP_EN;
+            cmd(c, w->nid, V12(VERB_SET_PIN_CTL, ctl), 0);
+            // EAPD: the external amplifier most laptops put between the
+            // codec and the speaker. Set wherever the pin says it can be.
+            if (w->pincap & PINCAP_EAPD) cmd(c, w->nid, V12(VERB_SET_EAPD, 0x02), 0);
+        }
     }
 }

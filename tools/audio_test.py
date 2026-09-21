@@ -186,6 +186,7 @@ def main():
     wav2_path = os.path.join(tmp, "out_wavplay.wav")
     wav3_path = os.path.join(tmp, "out_mp3play.wav")
     wav4_path = os.path.join(tmp, "out_perapp.wav")
+    wav5_path = os.path.join(tmp, "out_ring3.wav")
     img = os.path.join(tmp, "disk.img")
     subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
                    cwd=REPO, check=True)
@@ -380,6 +381,38 @@ def main():
         finally:
             halt()
 
+    # --- a RING-3 DRIVER makes the sound (umdf stage 5) ---------------
+    #
+    # /bin/lscodec takes the controller off the kernel, routes the codec
+    # itself, and programs the stream descriptor to read a tone it wrote
+    # into a granted DMA buffer. The kernel's hda driver is UNBOUND for
+    # the whole of it -- so what the recorder catches cannot have come
+    # from the ring-0 path, which is the entire claim being tested.
+    #
+    # "playing" in a log is not sound: a build that routed nothing, or
+    # pointed the card at the wrong address, prints exactly the same
+    # line. The frequency measured on the HOST is the evidence.
+    ring3_ok = False
+    if boot(wav5_path).returncode != 0:
+        res.check("the guest rebooted for the ring-3 driver phase", False)
+    else:
+        try:
+            dbg = wait_serial(sock)
+            if res.check("the serial console answers (ring-3 phase)", dbg is not None):
+                was = dbg.timeout
+                dbg.timeout = 60
+                out = dbg.send("sh lscodec --tone 2") or ""
+                dbg.timeout = was
+                res.check("the ring-3 driver claimed the card and routed it",
+                          "speaker route" in out, out.strip()[-160:])
+                ring3_ok = res.check("...and reported playing from ring 3",
+                                     "playing 440 Hz" in out)
+                res.check("...and gave the controller back",
+                          "releasing pci" in out)
+                dbg.close()
+        finally:
+            halt()
+
     # --- the host-side oracle ------------------------------------------
     rate, secs, hz, tone_peak, tone_secs = measure(wav_path)
     res.check("the host recording contains real signal",
@@ -433,6 +466,19 @@ def main():
         res.check("...at ROUGHLY -30 dB, so the 40 dB taper was applied",
                   15.0 < ratio < 70.0,
                   f"peak {loud} at 100% against {quiet} at 25% -- {ratio:.1f}x")
+
+    if ring3_ok:
+        rate5, secs5, hz5, peak5, tone5 = measure(wav5_path)
+        res.check("THE RING-3 DRIVER'S TONE REACHED THE DEVICE",
+                  tone5 >= 0.5 and peak5 > 4000,
+                  f"{tone5:.2f}s of tone, peak {peak5}")
+        # 440 Hz, measured by zero crossings on the host -- the same
+        # oracle the kernel driver is judged by, sharing no code with
+        # either. A driver that ran the engine over the wrong buffer
+        # records silence; one that got the format wrong records the
+        # wrong pitch.
+        res.check("...at 440 Hz, so it is the tone and not noise",
+                  abs(hz5 - 440.0) < 15, f"measured {hz5:.1f}Hz, wanted 440")
 
     if args.keep:
         print(f"  recordings kept: {wav_path}, {wav2_path}, {wav3_path}, {wav4_path}")

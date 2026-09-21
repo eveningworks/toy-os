@@ -2454,11 +2454,15 @@ struct mmap_msg {
                                // by something else). -EACCES / -EINVAL
                                // as above.
 
-#define DEV_DMA_MAX_BYTES 65536 // Enough for a command ring and a
-                                // descriptor list. Small deliberately:
-                                // every byte of it is memory a device
-                                // can be pointed at, and nothing built
-                                // on this needs more (HDA uses 4096).
+#define DEV_DMA_MAX_BYTES 131072 // A command ring, a descriptor list AND
+                                 // one audio ring (SND_RING_BYTES is 64
+                                 // KiB, and the rest is the CORB/RIRB
+                                 // page plus its buffer list). Still
+                                 // small deliberately: every byte is
+                                 // memory a device can be pointed at,
+                                 // so this is sized to what stage 5
+                                 // actually plays rather than rounded
+                                 // up for comfort.
 
 #define SYS_EXEC 109 // RDI = pointer to a `struct spawn_msg`: `path`,
                      // `args` (with or without SPAWN_ARGV) and `env`

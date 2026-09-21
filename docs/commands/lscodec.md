@@ -7,7 +7,7 @@
 ## Synopsis
 
 ```
-lscodec [-v] [-d INDEX]
+lscodec [-v] [-d INDEX] [--tone [SECONDS]]
 ```
 
 ## Options
@@ -16,6 +16,13 @@ lscodec [-v] [-d INDEX]
   a pin complex its pin capabilities, default configuration and
   connection list. Without it only the summary and the routes are
   printed.
+- `--tone [SECONDS]` -- **play a 440 Hz tone from ring 3**, 2 seconds by
+  default and at most 10. This is stage 5 of `docs/umdf-design.md`: the
+  program routes the codec itself, writes a sine into the DMA buffer it
+  was granted, and programs the controller's stream descriptor to read
+  it. **It takes the card away from the audio stack while it runs** --
+  `soundd`, `aplay` and the Player all go silent until it finishes and
+  hands the controller back. A diagnostic, not a way to play audio.
 - `-d INDEX` -- drive the PCI device at this enumeration index (the one
   [`lspci`](lspci.md) counts and [`lspci -k`](lspci.md) reports against)
   instead of the first HD Audio controller found.
@@ -68,11 +75,17 @@ before declining to register it.
 
 ## What it deliberately does not do
 
-**It does not configure anything.** Every verb it sends is a read, bar
-the one that powers the function group up so its widgets will answer.
-Routing, amplifiers, pin control and the stream stay in ring 0, in
-`kernel/drivers/sound/hda.c` -- that is the half that makes sound, and
-moving it needs stages 4 and 5 of the design.
+**It does not configure anything unless you ask for `--tone`.** Without
+that flag every verb it sends is a read, bar the one that powers the
+function group up so its widgets will answer. With it, the program
+routes the output and drives the stream -- which is the whole of a
+playback driver, and is why it is behind a flag.
+
+**It is not a way to play audio.** `soundd` is the mixer and the thing
+applications talk to; this claims the card out from under it. A ring-3
+driver that the SYSTEM uses would have to register as a sound device so
+`soundd` could mix on top of it, and nothing does that yet --
+`docs/umdf-design.md` says where that stands.
 
 **It is not a second parser.** `kernel/lib/hda_codec.c` is compiled
 twice, into the kernel and into this binary, so what it prints is what

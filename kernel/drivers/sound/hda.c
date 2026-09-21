@@ -63,29 +63,7 @@ DRIVER_DECLARE("hda", "sound", "Intel High Definition Audio");
 #define HDA_INTEL_DEVC         0x78
 #define HDA_INTEL_DEVC_NOSNOOP (1u << 11)
 
-// Stream descriptor, relative to its base.
-#define SD_CTL   0x00 // 24-bit; STS is the fourth byte of the same dword
-#define SD_STS   0x03 // 8, RW1C
-#define SD_LPIB  0x04 // 32: bytes played of the current lap
-#define SD_CBL   0x08 // 32: cyclic buffer length
-#define SD_LVI   0x0C // 16
-#define SD_FMT   0x12 // 16
-#define SD_BDPL  0x18
-#define SD_BDPU  0x1C
 
-#define SD_CTL_SRST 0x01
-#define SD_CTL_RUN  0x02
-#define SD_CTL_IOCE 0x04
-#define SD_CTL_FEIE 0x08
-#define SD_CTL_DEIE 0x10
-#define SD_CTL_STREAM_SHIFT 20
-#define SD_STS_ACK  0x1C // BCIS | FIFOE | DESE
-#define SD_STS_BCIS 0x04
-
-// 48 kHz base, 16-bit, 2 channels -- SND_RATE/SND_CHANNELS as the codec
-// spells them.
-#define HDA_FMT_48K_S16_STEREO 0x0011
-#define HDA_STREAM_TAG 1
 
 // --- state ---------------------------------------------------------------
 #define HDA_MAX_CTRL   2   // a PCH controller and a display-audio one
@@ -303,62 +281,6 @@ static void dump_widgets(struct hda_ctrl *h) {
     }
 }
 
-// Route one output: power, the DAC's stream and format, every
-// amplifier on the way unmuted at 0 dB, the pin enabled for output.
-static void route_output(struct hda_ctrl *h, struct hda_out *o) {
-    hda_codec_pick_volume(&h->codec, o);
-    for (int i = 0; i < o->len; i++) {
-        struct hda_widget *w = hda_codec_widget(&h->codec, o->path[i]);
-        if (!w) continue;
-        if (w->caps & WCAP_POWER) hda_cmd(h, w->nid, V12(VERB_SET_POWER, 0), 0);
-    }
-    for (int i = o->len - 1; i >= 0; i--) {
-        struct hda_widget *w = hda_codec_widget(&h->codec, o->path[i]);
-        if (!w) continue;
-        uint8_t next = (i + 1 < o->len) ? o->path[i + 1] : 0;
-
-        if (w->type == WT_AUD_OUT) {
-            hda_cmd(h, w->nid, V4(VERB_SET_FORMAT, HDA_FMT_48K_S16_STEREO), 0);
-            hda_cmd(h, w->nid, V12(VERB_SET_CONV, HDA_STREAM_TAG << 4), 0);
-        }
-
-        // The input side: select `next`, unmute it, and on a mixer mute
-        // the rest so a microphone loop does not ride along.
-        if (next && (w->caps & WCAP_CONN_LIST)) {
-            uint8_t conns[HDA_CONN_MAX];
-            int n = hda_codec_conn_list(&h->codec, w->nid, conns, HDA_CONN_MAX);
-            int idx = 0;
-            for (int k = 0; k < n; k++) if (conns[k] == next) { idx = k; break; }
-            if (n > 1 && w->type != WT_MIXER)
-                hda_cmd(h, w->nid, V12(VERB_SET_CONN_SEL, idx), 0);
-            if (w->caps & WCAP_IN_AMP) {
-                uint32_t ic = hda_codec_amp_caps(&h->codec, w, 0);
-                uint16_t gain = (uint16_t)(ic & 0x7F); // the 0 dB step
-                for (int k = 0; k < n; k++) {
-                    if (w->type != WT_MIXER && k != idx) continue;
-                    uint16_t pl = AMP_IN | AMP_LEFT | AMP_RIGHT | AMP_IDX(k) | gain;
-                    if (k != idx) pl |= AMP_MUTE;
-                    hda_cmd(h, w->nid, V4(VERB_SET_AMP, pl), 0);
-                }
-            }
-        }
-
-        if (w->caps & WCAP_OUT_AMP) {
-            uint32_t oc = hda_codec_amp_caps(&h->codec, w, 1);
-            hda_cmd(h, w->nid, V4(VERB_SET_AMP,
-                                  AMP_OUT | AMP_LEFT | AMP_RIGHT | (oc & 0x7F)), 0);
-        }
-
-        if (w->type == WT_PIN) {
-            uint8_t ctl = PINCTL_OUT_EN;
-            if (w->pincap & PINCAP_HP_DRIVE) ctl |= PINCTL_HP_EN;
-            hda_cmd(h, w->nid, V12(VERB_SET_PIN_CTL, ctl), 0);
-            // EAPD: the external amplifier most laptops put between the
-            // codec and the speaker. Set wherever the pin says it can be.
-            if (w->pincap & PINCAP_EAPD) hda_cmd(h, w->nid, V12(VERB_SET_EAPD, 0x02), 0);
-        }
-    }
-}
 
 // Headphones in: the jack drives and the speaker pin is switched off,
 // as every laptop does it. Out: the reverse.
@@ -660,14 +582,16 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     }
     if (!found) { ctrl_teardown(h, "no codec with an analog output"); return; }
 
-    route_output(h, &h->codec.spk);
+    hda_codec_route_output(&h->codec, &h->codec.spk,
+                           HDA_FMT_48K_S16_STEREO, HDA_STREAM_TAG);
     if (want_dump())
         klog_printf("%s: spk route %02x %02x %02x %02x %02x %02x (%d) vol nid %02x offset %u steps %u\n",
                     h->name, h->codec.spk.path[0], h->codec.spk.path[1], h->codec.spk.path[2], h->codec.spk.path[3],
                     h->codec.spk.path[4], h->codec.spk.path[5], h->codec.spk.len, h->codec.spk.vol_nid,
                     h->codec.spk.vol_offset, h->codec.spk.vol_steps);
     if (h->codec.have_hp) {
-        route_output(h, &h->codec.hp);
+        hda_codec_route_output(&h->codec, &h->codec.hp,
+                               HDA_FMT_48K_S16_STEREO, HDA_STREAM_TAG);
         if (want_dump())
             klog_printf("%s: hp route %02x %02x %02x %02x %02x %02x (%d) vol nid %02x\n",
                         h->name, h->codec.hp.path[0], h->codec.hp.path[1], h->codec.hp.path[2], h->codec.hp.path[3],

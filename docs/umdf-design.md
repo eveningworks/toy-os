@@ -4,8 +4,9 @@ A staged plan, in the shape `docs/winserver-ring3-design.md` used. It
 answers "what would it take to run a device driver as a process here,
 what does that actually buy, and which driver goes first?"
 
-**STAGES 1-4 ARE BUILT (1-2 on 2026-09-20, 3 and 4 on 2026-09-21);
-stage 5 is not.** The stage
+**STAGES 1-4 ARE BUILT (1-2 on 2026-09-20, 3 and 4 on 2026-09-21), AND
+STAGE 5 IS HALF BUILT: a ring-3 driver plays a tone, but nothing lets
+it be the system's sound device.** The stage
 markers are the authority, and they are on the headings -- if a stage
 ever splits, put its marker on each half (the window-server plan's
 stage 6 split and its heading kept saying "outstanding" for eleven
@@ -374,7 +375,7 @@ stub bumps it whether or not the wake reaches anybody, and the 50 ms
 deadline completes the walk regardless. Only the wakeup/timeout split
 does, and only on hardware.
 
-### Stage 5 -- DMA, and the decision that gates it
+### Stage 5 -- DMA, and the decision that gates it -- HALF DONE 2026-09-21
 
 Streaming audio needs the card writing into RAM. Two ways, and the
 choice is the user's to make when it is reached:
@@ -386,6 +387,44 @@ choice is the user's to make when it is reached:
   over its physical address, and the driver programs the card. This
   works today and contains nothing: the write-up ships with the
   sentence, the way VFIO's no-IOMMU mode taints the kernel.
+
+**THE TONE IS BUILT AND THE DECISION IS TAKEN: TRUSTED, AND SAID SO.**
+`lscodec --tone` routes the codec itself, writes a sine into its granted
+DMA buffer and programs the stream descriptor -- a ring-3 driver making
+real sound, recorded on the HOST at 439.2 Hz by `tools/audio_test.py`
+while the kernel's `hda` driver is unbound. A ring-3 driver here is
+trusted with physical memory, and this is the sentence that says so.
+
+**WHY NOT THE IOMMU: IT IS NOT PORTABLE ENOUGH TO DEPEND ON.** The
+maintainer's call, 2026-09-21, and the measurement that framed it is
+that the test laptop DOES have one -- a `DMAR` table, two remapping
+units, `0xfed91000` with `INCLUDE_PCI_ALL` covering the HDA controller.
+So this is not "the hardware cannot". It is that VT-d is INTEL's: AMD
+has AMD-Vi and ARM an SMMU, each a separate implementation, and plenty
+of Intel parts and firmwares do not offer it. Requiring one would mean
+the ring-3 driver path silently not existing on much of the hardware
+this OS runs on -- and because stage 3's command rings are DMA too, not
+even the codec walk would work there. Linux is the precedent for both
+halves: `vfio` refuses without an IOMMU, and keeps in-kernel drivers as
+the norm so that refusal costs nothing.
+
+**AND THE API DOES NOT CARE.** `SYS_DEV_DMA_ALLOC` returns "the address
+to program the card with". That is a physical address today and would
+be an IOVA behind an IOMMU, which is exactly what Linux's `dma_addr_t`
+is -- so adding VT-d later changes what the number MEANS, not the
+signature, and no driver changes a line. The containment arrives when
+the IOMMU does; nothing here forecloses it.
+
+**WHAT IS NOT DONE, AND IT IS THE HALF THAT MATTERS TO A USER.** The
+tone is a DIAGNOSTIC. `soundd` is the mixer every application talks to,
+and a ring-3 driver claiming the card takes it away from `soundd`,
+`aplay` and the Player for as long as it runs. For a ring-3 driver to
+be the system's driver it must register as a `sound_device` so `soundd`
+mixes on top of it -- a syscall, a control page so the kernel can ask a
+PROCESS to start/stop/set volume, and an asynchronous `start()`. The
+`sound_device` contract is small and the driver would never touch the
+samples (it programs the card to read a ring `soundd` writes), so this
+is tractable -- it is simply not built.
 
 **HALF OF THE SECOND OPTION IS ALREADY BUILT, and it was not free.**
 Stage 3 needed `SYS_DEV_DMA_ALLOC` for a 4 KiB command ring, so the

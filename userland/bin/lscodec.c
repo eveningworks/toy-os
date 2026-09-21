@@ -44,9 +44,11 @@
 #include "hda_codec.h"
 #include "syscall_abi.h"
 #include "query_abi.h"
+#include "sound_abi.h"   // the ring the card plays, and its chunking
+#include "fixed.h"       // fx_sin -- there is no floating point here
 #include "lib/cmd.h"
 
-#define USAGE "lscodec [-v] [-d INDEX]"
+#define USAGE "lscodec [-v] [-d INDEX] [--tone [SECONDS]]"
 
 #define HDA_CLASS 0x04
 #define HDA_SUBCLASS 0x03
@@ -68,6 +70,8 @@ struct ctrl {
     uint16_t corb_ents, rirb_ents;
     uint16_t rirb_rp;
     uint8_t  cad;
+    int      iss;         // input stream descriptors, from GCAP
+    uint32_t sd;          // OUR output descriptor's register base
     int      dev;         // the PCI enumeration index
     int      claimed;
     int      irq;         // 1 once the interrupt is routed here
@@ -194,6 +198,66 @@ static int corb_rirb_start(struct ctrl *h, uint64_t dma_phys) {
     return 0;
 }
 
+// --- the stream: stage 5's write half ----------------------------------
+//
+// THE CARD READS THE SAMPLES ITSELF. This process writes a sine into a
+// pinned buffer, hands the card that buffer's PHYSICAL address through
+// a descriptor list, and the controller fetches it without the CPU
+// touching it again. That is the whole of what DMA buys and the whole
+// of what it costs: the address is unchecked by any hardware, so a
+// wrong one is the card writing wherever it was told.
+//
+// The buffer list is CYCLIC by construction -- CBL is the whole ring
+// and LVI the last entry -- so the engine wraps forever rather than
+// halting, which is what hda.c does and what makes an underrun play
+// silence rather than stop.
+struct bdl_entry { uint64_t addr; uint32_t len; uint32_t ioc; };
+
+#define TONE_HZ 440
+
+static void tone_fill(volatile int16_t *ring) {
+    // 440 Hz at SND_RATE, in fixed point: fx_sin takes TURNS, so one
+    // period is FX_ONE and the step is that over the samples per cycle.
+    uint32_t per_cycle = SND_RATE / TONE_HZ;
+    for (uint32_t i = 0; i < SND_RING_BYTES / 4; i++) {
+        int32_t v = (fx_sin((fx_t)((i % per_cycle) * (FX_ONE / per_cycle))) * 8000) >> 16;
+        ring[2 * i] = ring[2 * i + 1] = (int16_t)v;
+    }
+}
+
+// Point the engine at the list and run it. `phys` is the DMA buffer's
+// physical base; the list sits at +3072 and the ring at +4096, the same
+// layout hda.c uses so the two are reading the same map.
+static int stream_start(struct ctrl *h, uint64_t phys) {
+    uint32_t sd = h->sd;
+    mw32(h, sd + SD_CTL, 0);
+    for (int i = 0; i < 100 && (mr32(h, sd + SD_CTL) & SD_CTL_RUN); i++) usleep(100);
+    // The reset handshake: assert, see it assert, release, see it go.
+    mw32(h, sd + SD_CTL, SD_CTL_SRST);
+    for (int i = 0; i < 100 && !(mr32(h, sd + SD_CTL) & SD_CTL_SRST); i++) usleep(100);
+    mw32(h, sd + SD_CTL, 0);
+    for (int i = 0; i < 100 && (mr32(h, sd + SD_CTL) & SD_CTL_SRST); i++) usleep(100);
+    if (mr32(h, sd + SD_CTL) & SD_CTL_SRST) return -1;
+
+    uint64_t bdl = phys + 3072;
+    mw32(h, sd + SD_BDPL, (uint32_t)bdl);
+    mw32(h, sd + SD_BDPU, (uint32_t)(bdl >> 32));
+    mw32(h, sd + SD_CBL, SND_RING_BYTES);
+    mw16(h, sd + SD_LVI, SND_CHUNKS - 1);
+    mw16(h, sd + SD_FMT, HDA_FMT_48K_S16_STEREO);
+    mw8(h, sd + SD_STS, SD_STS_ACK);
+    mw32(h, sd + SD_CTL,
+         ((uint32_t)HDA_STREAM_TAG << SD_CTL_STREAM_SHIFT) | SD_CTL_RUN);
+    return 0;
+}
+
+static void stream_stop(struct ctrl *h) {
+    uint32_t sd = h->sd;
+    mw32(h, sd + SD_CTL, mr32(h, sd + SD_CTL) & ~(uint32_t)SD_CTL_RUN & 0x00FFFFFF);
+    for (int i = 0; i < 100 && (mr32(h, sd + SD_CTL) & SD_CTL_RUN); i++) usleep(100);
+    mw8(h, sd + SD_STS, SD_STS_ACK);
+}
+
 // --- printing ----------------------------------------------------------
 
 static const char *widget_type(uint8_t t) {
@@ -291,10 +355,18 @@ static int find_controller(void) {
 }
 
 int main(int argc, char **argv) {
-    int verbose = 0, want = -1;
+    int verbose = 0, want = -1, tone_secs = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-v")) { verbose = 1; continue; }
         if (!strcmp(argv[i], "-d") && i + 1 < argc) { want = atoi(argv[++i]); continue; }
+        if (!strcmp(argv[i], "--tone")) {
+            tone_secs = 2;
+            if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9')
+                tone_secs = atoi(argv[++i]);
+            if (tone_secs < 1) tone_secs = 1;
+            if (tone_secs > 10) tone_secs = 10;
+            continue;
+        }
         cmd_usage(USAGE);
         return 1;
     }
@@ -332,8 +404,12 @@ int main(int argc, char **argv) {
     }
     g_h.mmio = (volatile uint8_t *)(uintptr_t)bar0;
 
+    // THE RING ONLY WHEN PLAYING. A read-only walk needs the command
+    // rings and nothing else, and every byte of this is memory the card
+    // can be pointed at -- so the size is what the run actually uses.
+    uint64_t want_dma = tone_secs ? HDA_RING_BYTES + SND_RING_BYTES : HDA_RING_BYTES;
     uint64_t dma_phys = 0;
-    int64_t dma = sys_dev_dma_alloc(index, HDA_RING_BYTES, &dma_phys);
+    int64_t dma = sys_dev_dma_alloc(index, want_dma, &dma_phys);
     if (dma <= 0) {
         fprintf(stderr, "lscodec: no DMA buffer: %s\n", strerror(errno));
         return finish(1);
@@ -360,6 +436,11 @@ int main(int argc, char **argv) {
     uint16_t statests = mr16(&g_h, HDA_STATESTS) & 0x7FFF;
     mw16(&g_h, HDA_STATESTS, statests);
     mw32(&g_h, HDA_GCTL, GCTL_CRST | GCTL_UNSOL);
+    g_h.iss = (gcap >> 8) & 0xF;
+    // The first OUTPUT descriptor follows the inputs -- the same
+    // derivation hda.c makes, and the reason GCAP is read rather than
+    // assumed (QEMU says 4 in, the ASUS's display audio says 0).
+    g_h.sd = HDA_SD_BASE + (uint32_t)g_h.iss * 0x20;
     printf("lscodec: hd audio %u.%u gcap %#x (%u in, %u out) codecs %#x\n",
            mr8(&g_h, HDA_VMAJ), mr8(&g_h, HDA_VMIN), gcap,
            (gcap >> 8) & 0xF, (gcap >> 12) & 0xF, statests);
@@ -399,7 +480,7 @@ int main(int argc, char **argv) {
     g_codec.cmd = corb_cmd;
     g_codec.ctx = &g_h;
 
-    int found = 0;
+    int found = 0, played = 0;
     for (uint8_t cad = 0; cad < 15; cad++) {
         if (!(statests & (1u << cad))) continue;
         g_h.cad = cad;
@@ -427,6 +508,33 @@ int main(int argc, char **argv) {
         }
         print_route("speaker", &g_codec, &g_codec.spk);
         if (g_codec.have_hp) print_route("headphone", &g_codec, &g_codec.hp);
+
+        if (tone_secs && !played) {
+            // ROUTE FIRST, THEN RUN. The codec has to be told which DAC
+            // listens to our stream tag and to unmute the path; without
+            // that the engine runs happily and nothing comes out.
+            hda_codec_route_output(&g_codec, &g_codec.spk,
+                                   HDA_FMT_48K_S16_STEREO, HDA_STREAM_TAG);
+            volatile int16_t *ring = (volatile int16_t *)(uintptr_t)(dma + 4096);
+            tone_fill(ring);
+            volatile struct bdl_entry *bdl =
+                (volatile struct bdl_entry *)(uintptr_t)(dma + 3072);
+            for (int k = 0; k < SND_CHUNKS; k++) {
+                bdl[k].addr = dma_phys + 4096 + (uint64_t)k * SND_CHUNK_BYTES;
+                bdl[k].len = SND_CHUNK_BYTES;
+                bdl[k].ioc = 1;
+            }
+            if (stream_start(&g_h, dma_phys) != 0) {
+                fprintf(stderr, "lscodec: the stream never left reset\n");
+            } else {
+                printf("lscodec: playing %d Hz for %d s from ring 3\n",
+                       TONE_HZ, tone_secs);
+                for (int k = 0; k < tone_secs * 10; k++) usleep(100000);
+                stream_stop(&g_h);
+                printf("lscodec: stream stopped\n");
+            }
+            played = 1;
+        }
     }
 
     // THE COUNT IS THE EVIDENCE. A build whose interrupts never arrived
