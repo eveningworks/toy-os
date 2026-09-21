@@ -218,11 +218,22 @@ def main():
                   next((line.strip() for line in dmesg.splitlines()
                         if f"{devname}:" in line), f"no {devname} line"))
 
-        # Harmless while soundd ships DISABLED, and kept for the day it
-        # does not: /tests/tone opens SYS_SND_OPEN directly and the
-        # `sound` KTESTs skip while any process holds the stream, so both
-        # are -EBUSY whenever the daemon is serving.
-        dbg.send("sh service stop soundd")
+        # THE DAEMON IS DELIBERATELY LEFT RUNNING. It used to have to be
+        # stopped here -- /tests/tone opens SYS_SND_OPEN directly and
+        # the `sound` KTESTs skip while any process holds the stream, so
+        # both were -EBUSY whenever soundd was serving. soundd now
+        # releases the card when nothing has played for a couple of
+        # seconds (PipeWire's suspend-on-idle), so NOT stopping it is
+        # the regression test: if that ever breaks, the two `0 skipped`
+        # checks below go back to skipping and say so.
+        #
+        # A pause first, because the release is on a timer and the boot
+        # itself plays nothing -- this is waiting for an idle timeout,
+        # not for the daemon.
+        for _ in range(20):
+            if "released the card" in (dbg.send("sh dmesg") or ""):
+                break
+            time.sleep(0.5)
 
         # The KTESTs that skip on every other boot -- 0 skipped is the
         # load-bearing half (the ahci_test lesson).

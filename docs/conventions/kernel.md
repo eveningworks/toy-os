@@ -2723,6 +2723,31 @@ device, which `dev_claim_take()` accepts happily. Ask
 the composed fact; the first caller to reach for the bus predicate
 refused a device it could have had.
 
+## THE PCM STREAM IS EXCLUSIVE, SO `soundd` GIVES IT BACK WHEN NOTHING PLAYS
+
+`SUSPEND_IDLE_MS` in `userland/bin/soundd.c` -- PipeWire's
+module-suspend-on-idle. The daemon used to hold the machine's one
+stream for its whole life, so nothing else could ever open it:
+`/tests/tone` and the `sound` KTESTs both wanted `service stop soundd`
+first, and that was written into `tools/audio_test.py`'s setup.
+
+**IT IS `SND_CTL_CLOSE`, NOT `SND_CTL_STOP`.** Stopping halts the
+engine and KEEPS the stream, and keeping it is the entire problem.
+After a close the control page is UNMAPPED, so nothing may touch it
+until the reopen -- which is why the daemon's loop checks that it holds
+the stream before reading `hw_pos`.
+
+**THE BEACON STAYS UP THROUGHOUT**, and that is what makes this safe: a
+client finds the daemon and writes into its own ring whether or not the
+card is held, so the daemon takes it back when it next looks (measured
+at ~40 ms). A client arriving while somebody ELSE holds the stream is
+not an error -- it is the sharing this exists to allow -- so the daemon
+waits rather than failing.
+
+**AND NOT STOPPING THE DAEMON IS NOW THE TEST.** `audio_test.py` waits
+for `released the card` instead of stopping soundd, so if this breaks,
+its two `0 skipped` assertions go back to skipping and say so.
+
 ## A CLAIMED DEVICE'S INTERRUPT BECOMES A WAKEWORD BUMP, AND THE LINE STAYS MASKED UNTIL THE HOLDER ACKS
 
 `SYS_DEV_IRQ_ENABLE` / `SYS_DEV_IRQ_ACK` (`kernel/drivers/dev_claim.c`)

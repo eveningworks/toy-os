@@ -913,7 +913,7 @@ run on, not by order.
 - [x] ~~Doom sound and music~~ DONE 2026-08-29 -- effects on `usnd` voices, music on Chocolate Doom's own OPL emulation
 - [x] ~~Volume mixer UI, persisted to `/etc`~~ DONE 2026-08-30 -- the tray flyout: slider, mute, device list, wheel
 - [x] ~~A per-application volume: a slider per stream in the tray flyout, keyed by application name~~ DONE 2026-09-21
-- [ ] Release the card when no client plays, PipeWire's suspend-on-idle -- `/tests/tone` needs `service stop soundd` today
+- [x] ~~Release the card when no client plays, PipeWire's suspend-on-idle~~ DONE 2026-09-21
 - [ ] HDMI/DisplayPort audio -- `00:03.0` went to ring-3 stage 3, so this reclaims it or moves to ring 3 too
 - [ ] One volume taper for every card -- `hda.c` and `sound_usb.c` share the 40 dB convention, `ac97.c` is still linear in attenuation steps
 - [ ] MPEG-2/2.5 Layer III (the half-rate sample rates), and Layer I/II -- refused with -ENOTSUP today

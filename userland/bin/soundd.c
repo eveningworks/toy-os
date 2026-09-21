@@ -60,6 +60,72 @@ static volatile int16_t *g_hwring;
 static uint32_t g_wr;      // our write cursor into the hardware ring
 static int g_running;
 
+// --- suspend on idle ---------------------------------------------------
+//
+// THE DAEMON USED TO HOLD THE CARD FOREVER. The PCM stream is
+// EXCLUSIVE, so while soundd was serving nothing else could open it --
+// `/tests/tone` and the `sound` KTESTs both wanted `service stop
+// soundd` first, and `tools/audio_test.py` does exactly that in its own
+// setup. It also kept a codec powered on a laptop with nothing playing.
+//
+// So the stream is released when no client has been running for a
+// while, and reopened when one turns up. PipeWire's
+// module-suspend-on-idle, and the same reason: a sound card is a
+// shared resource, and a mixer with nothing to mix should not be
+// holding it.
+//
+// TWO SECONDS. Long enough that the gap between two tracks does not
+// close and reopen the device -- which would be audible as a click on
+// hardware that powers its amplifier down -- and short enough that a
+// test can watch it happen. PipeWire's default is five; the difference
+// is that nothing here has a session manager to keep a stream alive
+// across a gap.
+#define SUSPEND_IDLE_MS 2000
+
+static int g_open;                       // is the stream ours right now?
+static unsigned long long g_idle_since;  // when the last client stopped
+
+static unsigned long long now_ms(void) { return sys_monotonic_ns() / 1000000ull; }
+
+// Take the stream and map it. The addresses are fixed, so reopening
+// lands where the pointers already are.
+static int stream_open(void) {
+    if (g_open) return 1;
+    if (sys_snd_open() != 0) return 0;
+    g_hw = (volatile struct snd_ctl_page *)(uintptr_t)SND_MAP_VADDR;
+    g_hwring = (volatile int16_t *)(uintptr_t)(SND_MAP_VADDR + 4096);
+    if (g_hw->magic != SND_CTL_MAGIC) { sys_snd_ctl(SND_CTL_CLOSE); return 0; }
+    g_wr = 0;
+    g_running = 0;
+    g_open = 1;
+    // SAID ON EVERY ACQUISITION, not just the first: "released the
+    // card" with nothing to answer it reads like the daemon gave up.
+    // The pair is also what a test watches to know the cycle happened.
+    fprintf(stderr, "soundd: took the card\n");
+    return 1;
+}
+
+// CLOSE, not STOP: stopping halts the engine and keeps the stream, and
+// keeping it is the whole problem. After this the control page is
+// UNMAPPED, so nothing may touch g_hw until stream_open() says so.
+static void stream_release(void) {
+    if (!g_open) return;
+    sys_snd_ctl(SND_CTL_CLOSE);
+    g_open = 0;
+    g_running = 0;
+    g_hw = 0;
+    g_hwring = 0;
+    fprintf(stderr, "soundd: idle -- released the card\n");
+}
+
+// Any client asking to be mixed? `running` is the client's own say-so,
+// which is what it clears when it stops.
+static int anyone_playing(void) {
+    for (int i = 0; i < MAX_CLIENTS; i++)
+        if (g_cl[i].ctl && g_cl[i].ctl->running) return 1;
+    return 0;
+}
+
 // A PERCENTAGE ONTO A MULTIPLIER, 40 dB of range, linear in dB -- the
 // same taper the cards use (`AUDIO_TAPER_DB` in sound_usb.c, `taper_gain`
 // in hda.c), because the per-app slider sits in the same flyout as the
@@ -333,15 +399,9 @@ int main(void) {
     // EXIT 0 WITH NO CARD, so `Restart=on-failure` leaves this `exited`
     // rather than crash-looping on every machine that has no sound
     // hardware -- which is most of the emulated ones.
-    if (sys_snd_open() != 0) {
+    if (!stream_open()) {
         fprintf(stderr, "soundd: no sound device -- nothing to serve\n");
         return 0;
-    }
-    g_hw = (volatile struct snd_ctl_page *)(uintptr_t)SND_MAP_VADDR;
-    g_hwring = (volatile int16_t *)(uintptr_t)(SND_MAP_VADDR + 4096);
-    if (g_hw->magic != SND_CTL_MAGIC) {
-        fprintf(stderr, "soundd: the stream is not the ABI I know\n");
-        return 1;
     }
 
 
@@ -355,13 +415,39 @@ int main(void) {
         return 1;
     }
     sys_notify_ready();
-    fprintf(stderr, "soundd: serving on the %s stream\n", "hardware");
+    // THE DAEMON IS UP AND HAS A DEVICE, which is a different fact from
+    // holding the card right now -- it keeps that one while suspending
+    // on idle hands the card back and forth. tools/soundd_test.py and
+    // tools/audio_test.py both wait on this line.
+    fprintf(stderr, "soundd: serving on the hardware stream\n");
 
     g_wr = 0;
+    g_idle_since = now_ms();
     for (;;) {
         rescan();
         gains_poll(0);
         publish_roster();
+
+        int playing = anyone_playing();
+        if (playing) {
+            g_idle_since = 0;
+            // A CLIENT CAN ARRIVE WHILE THE CARD IS RELEASED, which is
+            // the point: it writes into its own ring and finds the
+            // beacon whether or not we hold the stream, and this is
+            // where we go and get it back.
+            if (!g_open && !stream_open()) {
+                // Somebody else has it -- a KTEST, /tests/tone. Wait
+                // rather than spin: this is not an error, it is the
+                // sharing this whole mechanism exists to allow.
+                sys_sleep_ms(100);
+                continue;
+            }
+        } else if (g_open) {
+            if (!g_idle_since) g_idle_since = now_ms();
+            if (now_ms() - g_idle_since >= SUSPEND_IDLE_MS) stream_release();
+        }
+
+        if (!g_open) { sys_sleep_ms(20); continue; }
 
         // Fill every chunk between our cursor and one behind the
         // hardware's. Before the engine starts hw_pos is 0, so the
