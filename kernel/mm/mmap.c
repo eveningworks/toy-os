@@ -397,6 +397,10 @@ uint64_t mmap_dma_reserve(uint64_t npages) {
 
 // MAP A DMA GRANT and record it, so teardown unmaps it.
 //
+// `writable` 0 gives a READ-ONLY grant, which is what the sound ring's
+// is: a driver must READ the samples to convert them for its device,
+// and must not be able to scribble on the mixer's output.
+//
 // UC because it is a buffer a device reads, and NX because it is data:
 // every other path in this file derives NX from prot, and a W+X page
 // of RAM that `pmap` reports as rw is a hole. BORROWED, so no mapping
@@ -406,7 +410,8 @@ uint64_t mmap_dma_reserve(uint64_t npages) {
 // Shared by the PCI and USB grants. It was the PCI one's tail, and a
 // second copy for USB is what this exists to avoid.
 // 1 on success; on failure nothing is left mapped.
-int mmap_map_dma(uint64_t pml4, uint64_t base, uint64_t phys, uint64_t npages) {
+int mmap_map_dma(uint64_t pml4, uint64_t base, uint64_t phys, uint64_t npages,
+                 int writable, enum vmm_memtype mt) {
     struct sched_mm *mm = caller_mm();
     if (!mm) return 0;
     int r_slot = free_slot(mm);
@@ -414,7 +419,7 @@ int mmap_map_dma(uint64_t pml4, uint64_t base, uint64_t phys, uint64_t npages) {
 
     for (uint64_t i = 0; i < npages; i++) {
         if (!vmm_map_user_borrowed(pml4, base + i * 4096,
-                                   phys + i * 4096, 1, 0, VMM_MT_UC)) {
+                                   phys + i * 4096, writable, 0, mt)) {
             for (uint64_t k = 0; k < i; k++)
                 vmm_unmap_user_page(pml4, base + k * 4096);
             return 0;
@@ -423,7 +428,7 @@ int mmap_map_dma(uint64_t pml4, uint64_t base, uint64_t phys, uint64_t npages) {
 
     struct mmap_region *r = &mm->regions[r_slot];
     r->npages   = npages;
-    r->prot     = SYS_PROT_READ | SYS_PROT_WRITE;
+    r->prot     = SYS_PROT_READ | (writable ? SYS_PROT_WRITE : 0);
     r->file_off = 0;
     r->kind     = MMAP_KIND_DMA;
     r->shm_idx  = -1;
@@ -459,7 +464,7 @@ int sys_dev_dma_alloc(struct syscall_ctx *c) {
     // claim's, not this address space's, so nothing else would: the
     // caller would be left holding a device with bus mastering on, a
     // buffer it cannot see, and -EBUSY on every retry.
-    if (!mmap_map_dma(c->pml4, base, phys, npages)) {
+    if (!mmap_map_dma(c->pml4, base, phys, npages, 1, VMM_MT_UC)) {
         dev_claim_dma_drop(index, c->pml4);
         ret = -ENOMEM; goto out;
     }

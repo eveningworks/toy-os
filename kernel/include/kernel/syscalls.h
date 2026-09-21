@@ -328,7 +328,8 @@ int sys_usb_isoch_open(struct syscall_ctx *c);
 int sys_usb_isoch_post(struct syscall_ctx *c);
 int sys_usb_isoch_status(struct syscall_ctx *c);    // beside it
 int sys_snd_register(struct syscall_ctx *c);  // kernel/drivers/sound/sound_proc.c
-int sys_snd_period(struct syscall_ctx *c);    // beside it
+int sys_snd_period(struct syscall_ctx *c);
+int sys_snd_ring_map(struct syscall_ctx *c);    // beside it
 // A ring-3 sound driver's registration dies with its address space --
 // sound_proc.c.
 void sound_proc_space_gone(uint64_t pml4);

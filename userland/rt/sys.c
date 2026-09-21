@@ -735,6 +735,10 @@ int sys_dev_irq_enable(int index) {
     return (int)err(syscall1(SYS_DEV_IRQ_ENABLE, (uint64_t)(int64_t)index));
 }
 
+int64_t sys_snd_ring_map(uint64_t *addr) {
+    return err(syscall1(SYS_SND_RING_MAP, (uint64_t)(uintptr_t)addr));
+}
+
 int sys_usb_isoch_open(struct usb_isoch_msg *m) {
     return (int)err(syscall1(SYS_USB_ISOCH_OPEN, (uint64_t)(uintptr_t)m));
 }

@@ -31,6 +31,8 @@
 #include "kfmt.h"
 #include "string.h"
 #include "driver.h"
+#include "mmap.h"
+#include "pmm.h"
 
 // IT DECLARES ITSELF LIKE ANY OTHER, because the registry's question is
 // "what is bound to this device", and the honest answer is a process.
@@ -171,6 +173,43 @@ int sys_snd_register(struct syscall_ctx *c) {
     klog_printf("sound: ring-3 driver %s registered, ring at %llx\n",
                 g_drv.name, (unsigned long long)ring_phys);
     ret = 0;
+out:
+    c->regs[14] = (uint64_t)ret;
+    return 0;
+}
+
+// THE SAMPLES, READ-ONLY, AND ONLY TO THE DRIVER THAT ASKS.
+// abi/syscall_abi.h says why this exists at all and why hda.so and
+// ac97.so never call it.
+int sys_snd_ring_map(struct syscall_ctx *c) {
+    int64_t ret;
+
+    if (!scheduler_current_mm()) { ret = -EPERM; goto out; }
+    // THE REGISTERED DRIVER, not merely a process holding some device:
+    // this hands over the mixer's output, so the gate is being the one
+    // the core is talking to.
+    if (!g_drv.live || g_drv.pml4 != c->pml4) { ret = -EPERM; goto out; }
+
+    uint64_t ring_phys = 0;
+    if (!sound_ring_alloc(&ring_phys)) { ret = -ENOMEM; goto out; }
+    uint64_t npages = SND_RING_BYTES / 4096;
+
+    uint64_t base = mmap_dma_reserve(npages);
+    if (!base) { ret = -ENOMEM; goto out; }
+    // NOT WRITABLE, and NORMAL rather than UC: this is ordinary RAM the
+    // CPU reads a packet at a time, not a register file.
+    if (!mmap_map_dma(c->pml4, base, ring_phys, npages, 0, VMM_MT_NORMAL)) {
+        ret = -ENOMEM;
+        goto out;
+    }
+    if (!vmm_copy_to_user(c->pml4, c->a0, &base, sizeof base)) {
+        mmap_drop_dma_region(base, npages);
+        ret = -EFAULT;
+        goto out;
+    }
+    klog_printf("sound: ring mapped READ-ONLY to %s at %llx\n",
+                g_drv.name, (unsigned long long)base);
+    ret = (int64_t)SND_RING_BYTES;
 out:
     c->regs[14] = (uint64_t)ret;
     return 0;

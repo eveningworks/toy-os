@@ -62,6 +62,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_USB_ISOCH_OPEN]   = { "usb_isoch_open",   sys_usb_isoch_open,   { A_HEX } },
     [SYS_USB_ISOCH_POST]   = { "usb_isoch_post",   sys_usb_isoch_post,   { A_HEX } },
     [SYS_USB_ISOCH_STATUS] = { "usb_isoch_status", sys_usb_isoch_status, { A_INT, A_INT } },
+    [SYS_SND_RING_MAP]     = { "snd_ring_map",     sys_snd_ring_map,     { A_HEX } },
     [SYS_SND_REGISTER]  = { "snd_register",  sys_snd_register,  { A_HEX } },
     [SYS_SND_PERIOD]    = { "snd_period",    sys_snd_period,    { A_INT } },
     [SYS_SND_OPEN]      = { "snd_open",      sys_snd_open,      { 0 }, 0 },

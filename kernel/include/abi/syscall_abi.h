@@ -2567,6 +2567,24 @@ struct usb_control_msg {
                                  // Returns completions since the last
                                  // call, or a negative errno.
 
+// THE SOUND RING, READ-ONLY, TO THE DRIVER THAT ASKS.
+//
+// **THIS IS THE ONE PLACE A DRIVER SEES THE SAMPLES, AND IT IS OPT-IN.**
+// A PCI sound card DMAs straight out of the core's ring, so hda.so and
+// ac97.so are told a PHYSICAL address and never map it. USB cannot
+// work that way: every packet must be copied out of the ring and
+// CONVERTED to the device's sample width before it goes on the wire,
+// so somebody has to read it, and the driver is the only one who can.
+//
+// READ-ONLY, because a driver has no business changing what the mixer
+// produced -- and per-driver, because a grant nobody asked for is one
+// nobody weighed.
+#define SYS_SND_RING_MAP 133 // RDI = a pointer to a uint64_t, filled
+                             // with the address the ring is mapped at.
+                             // Returns its length in bytes, or:
+                             // -EPERM not the registered driver,
+                             // -ENOMEM no room, -EFAULT a bad pointer.
+
 struct usb_isoch_msg {
     uint32_t slot;
     uint32_t ep;         // endpoint address, e.g. 0x01

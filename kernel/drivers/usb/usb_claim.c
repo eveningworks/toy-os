@@ -190,7 +190,7 @@ int sys_usb_isoch_open(struct syscall_ctx *c) {
     if (!base) { ret = -ENOMEM; goto out; }
     uint64_t phys = pmm_alloc_contiguous(npages, PMM_ZONE_DMA32);
     if (!phys) { ret = -ENOMEM; goto out; }
-    if (!mmap_map_dma(c->pml4, base, phys, npages)) {
+    if (!mmap_map_dma(c->pml4, base, phys, npages, 1, VMM_MT_UC)) {
         pmm_free_contiguous(phys, npages);
         ret = -ENOMEM;
         goto out;

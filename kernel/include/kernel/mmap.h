@@ -7,6 +7,7 @@
 // uaddr.h's mmap-arena section for where they live and why.
 
 #include <stdint.h>
+#include "vmm.h"
 
 struct sched_mm;
 
@@ -38,7 +39,8 @@ void mmap_drop_dma_region(uint64_t base, uint64_t npages);
 // the region so teardown unmaps it. The frames belong to whoever
 // allocated them -- these BORROW.
 uint64_t mmap_dma_reserve(uint64_t npages);
-int mmap_map_dma(uint64_t pml4, uint64_t base, uint64_t phys, uint64_t npages);
+int mmap_map_dma(uint64_t pml4, uint64_t base, uint64_t phys, uint64_t npages,
+                 int writable, enum vmm_memtype mt);
 
 #endif
 

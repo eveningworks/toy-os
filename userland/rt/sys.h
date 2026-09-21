@@ -532,6 +532,13 @@ int sys_snd_register(struct snd_register_msg *m);
 // consumed, which is what makes a stalled app play silence.
 int sys_snd_period(uint32_t pos);
 
+// THE SOUND RING, READ-ONLY. Only the registered driver may ask, and
+// only a driver that must COPY samples needs to -- a card that DMAs
+// out of the ring is told a physical address instead and never sees
+// them. Returns the ring's length in bytes with `*addr` filled in, or
+// -1 with errno.
+int64_t sys_snd_ring_map(uint64_t *addr);
+
 int sys_cpu_info(struct cpu_info *out);
 
 // Fills `buf` with `n` random bytes from the kernel's entropy source.
