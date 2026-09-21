@@ -126,6 +126,13 @@ static void refresh_apps(void) {
     if (before != g_app_count) volume_damage();
 }
 
+// THE CORE CALLS THIS the moment the panel opens, before its first
+// frame (wm_overlay.h's on_open). The roster is not refreshed while the
+// panel is closed -- it is a shared-memory read per frame and nothing
+// draws it -- so without this the first frame shows whatever was
+// playing when it last closed.
+void volume_opened(void) { refresh_apps(); }
+
 static void commit_app(int i) {
     if (i < 0 || i >= g_app_count) return;
     if (!g_roster.e[i].app[0]) return;   // nothing stable to key on
@@ -331,13 +338,6 @@ void volume_open_now(void) {
     tray_slider_open(&g_popup);
     volume_open = g_popup.open;
     g_hover = TRAY_SLIDER_HOVER_NONE;
-    // BEFORE THE FIRST FRAME, not from the next poll. Nothing refreshes
-    // the roster while the panel is closed, so reopening it after the
-    // streams changed drew ONE frame from the stale list -- a panel a
-    // row too tall, with a dead application in it, replaced on the very
-    // next frame. That is not residue and it does not persist; it
-    // flashes, which is exactly how it was reported.
-    refresh_apps();
 }
 
 void volume_close(void) {
@@ -372,21 +372,6 @@ int volume_handle_click(int mx, int my) {
     switch (what) {
     case TRAY_SLIDER_CLICK_NONE:
         return 0;
-    case TRAY_SLIDER_CLICK_OPENED:
-        // THE ROSTER, BEFORE THE FRAME THIS CLICK DRAWS. Nothing
-        // refreshes it while the panel is closed, and the refresh in
-        // volume_poll_config() is the NEXT frame -- which is not 4 ms
-        // away but however long the compositor idles for, since a
-        // panel opening is the last thing that happens in that frame.
-        // Measured on the ASUS: a stream that had ended while the
-        // panel was closed was still drawn as a row for 100-300 ms.
-        //
-        // volume_open_now() refreshes too and is NOT this path: a tray
-        // click opens the popup inside tray_slider_click(), so that
-        // function has no callers at all and fixing it there fixed
-        // nothing anybody could see.
-        refresh_apps();
-        return 1;
     case TRAY_SLIDER_CLICK_DISMISSED:
         // A dismissing click on the TASKBAR falls through, so the Start
         // button acts on the same click that closed this -- and so a

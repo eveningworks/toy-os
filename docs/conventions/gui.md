@@ -4645,3 +4645,37 @@ deliberately scoped first cut, not the final word". Weston spells the
 same idea `weston_view_damage_below()`; wlroots' scene graph keeps each
 node's last-rendered box for it.
 
+## AN OVERLAY THAT REFRESHES ONLY WHILE OPEN GETS AN `on_open`, AND THE CORE FIRES IT
+
+`struct wm_overlay`'s `on_open` op. The core compares every overlay's
+`is_open()` against the last draw pass and calls the hook on the
+transition, from INSIDE `wm_overlay_draw()` -- which is after input and
+before drawing, so a click that opened the overlay is served in the
+frame that click belongs to.
+
+**THE PER-FRAME POLL IS NOT SOON ENOUGH, and the gap is not one frame's
+worth of milliseconds.** `volume_poll_config()` and its peers run
+BEFORE input, so the click that opens a panel is the last thing in that
+frame and the correcting poll is the NEXT one -- and the compositor
+idles between frames, so "next frame" is as long as that idle. Measured
+on the test laptop: the volume flyout drew a slider for an audio stream
+that had already ended, for 100-300 ms, reported three times as a
+flash before it was instrumented.
+
+**DO NOT PUT IT IN THE OVERLAY'S OWN OPEN PATH.** There is more than
+one: a tray popup opens inside `tray_slider_click()`, not in its own
+`*_open_now()` -- which turned out to have NO CALLERS, so the first
+attempt at this fix was dead code that changed nothing anybody could
+see. The core knows the transition; no overlay should have to.
+
+NULL for the overlays polled every frame regardless, which is most of
+them -- they are never more than a frame behind. It is for state an
+overlay deliberately does NOT track while closed because reading it
+costs something and nothing draws it.
+
+**AND THE FIELD IS LAST IN THE STRUCT ON PURPOSE**: the table is
+written with POSITIONAL initialisers, so a field added in the middle
+shifts every row's later ops by one. Adding this before `close` moved
+nine overlays' close op into it, and only
+`-Wmissing-field-initializers` said so.
+

@@ -33,6 +33,8 @@ whenever a headline here tells you something you did not already know.
 `docs/conventions/kernel.md`
 
 - **AN OVERLAY ANSWERS WHERE IT IS; THE CORE DAMAGES IT**
+- **AN OVERLAY THAT REFRESHES ONLY WHILE OPEN GETS AN `on_open`, AND
+  THE CORE FIRES IT**
 - **A BUTTON OR A KEY IS AN EDGE AND IS QUEUED; A POSITION IS A LEVEL
   AND IS SAMPLED** -- a press and its release inside one polling
   interval cancel, and a level path looks like it works

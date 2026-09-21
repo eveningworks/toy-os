@@ -136,6 +136,39 @@ struct wm_overlay {
     // dialog, the file picker), which another popup opening must not
     // dismiss; those two stay up through close_others().
     void (*close)(void);
+
+    // LAST IN THE STRUCT ON PURPOSE. The table below is written with
+    // POSITIONAL initialisers, so a field added in the middle silently
+    // shifts every row's later ops by one -- putting this before
+    // `close` moved nine overlays' close op into it, and only
+    // -Wmissing-field-initializers said so.
+    //
+    // IT HAS JUST OPENED, and this is called BEFORE its first frame is
+    // drawn -- from inside wm_overlay_draw(), which is after input and
+    // before drawing, so a click that opened the overlay is already
+    // accounted for in the frame that click belongs to.
+    //
+    // WHAT IT IS FOR. An overlay that refreshes something only WHILE
+    // OPEN (because reading it costs something and nothing draws it
+    // otherwise) has that thing stale at the moment it opens. Doing it
+    // from the per-frame poll is a frame late, and a frame is not
+    // 4 ms: the compositor idles between them, so the stale content is
+    // on screen for as long as that idle lasts -- 100-300 ms, measured
+    // on the test laptop, where the volume flyout showed a slider for
+    // an audio stream that had already ended.
+    //
+    // THE ALTERNATIVE THAT DOES NOT WORK is refreshing where the
+    // overlay opens itself. There is more than one such place -- a
+    // tray popup opens inside tray_slider_click(), not in its own
+    // *_open_now() -- so that is a thing to get right per open path,
+    // and the first attempt at this fix picked the path the mouse
+    // never takes. The core knows the transition; no overlay should
+    // have to.
+    //
+    // NULL when nothing goes stale while it is closed, which is most
+    // of them: an overlay polled every frame regardless is never more
+    // than a frame behind.
+    void (*on_open)(void);
 };
 
 // Draws every open overlay, least modal first. Called once per frame

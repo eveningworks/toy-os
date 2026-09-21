@@ -34,6 +34,11 @@ extern int volume_open;
 // Opens it, closing every other dismissable overlay (wm_overlay.h);
 // closes it with no action.
 void volume_open_now(void);
+
+// The panel has just opened: refresh what only changes while it is
+// open. Called by the overlay core (wm_overlay.h's on_open), never by
+// an open path -- there is more than one of those.
+void volume_opened(void);
 void volume_close(void);
 
 // Registers the tray item. Called once from wm_run()'s setup, after
