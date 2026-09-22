@@ -161,6 +161,12 @@ struct xhci_hc {
     uint32_t xfer_orphan;
     uint32_t last_bad_code;
     uint32_t ep_recoveries;
+    uint32_t timeouts;          // completions that never arrived
+    uint8_t  timeout_reported;  // ...and whether one has been logged
+    // GIVEN UP ON. Every re-init has been spent and commands still do
+    // not complete, so there is nothing left to try and every further
+    // attempt only takes the CPU away from the rest of the machine.
+    uint8_t  wedged;
 
     struct xhci_port_state ports[XHCI_MAX_PORTS];
 
@@ -806,16 +812,34 @@ static uint16_t default_mps(uint8_t speed) {
 // keeps enumeration working whether or not the IRQ is live, which is
 // what lets the polled fallback path be the same code. xhci_service()'s
 // re-entrancy guard is what makes the two safe together.
+// ONCE A CONTROLLER HAS MISSED ONE DEADLINE, IT DOES NOT DESERVE THE
+// FULL ONE AGAIN. A healthy command completes in microseconds, so the
+// second is for a controller that is merely slow -- and a controller
+// that has already failed to answer is not slow, it is sick. Measured
+// on the ASUS with a USB3 hub attached: 39 command timeouts in one
+// boot, 39 SECONDS of a spin that does not yield, across six ports,
+// which is what made the machine take seven seconds to open a menu.
+// Shortening the repeat turns that into under two.
+#define XHCI_WAIT_MS       1000
+#define XHCI_WAIT_SICK_MS    50
+
 static int wait_completion(volatile struct xhci_completion *c, const char *what) {
-    // A SECOND, which is a thousandfold what a healthy control transfer
-    // takes and the ceiling this driver used to hit on real hardware.
-    // Linux gives its command ring five.
-    struct xhci_wait w; xhci_wait_start(&w, 1000);
+    uint32_t ms = g_hc.cmd_recovered ? XHCI_WAIT_SICK_MS : XHCI_WAIT_MS;
+    struct xhci_wait w; xhci_wait_start(&w, ms);
     while (!c->done) {
         xhci_service();
         if (xhci_wait_over(&w)) {
-            klog_printf(KLOG_ERR "usb: %s timed out after %u polls (%s)\n", what, w.spins,
-                        w.deadline ? "1000 ms" : "poll ceiling, no usable clock");
+            // ONE LINE PER CONTROLLER, not per command. 39 of these is
+            // the probe outrunning the log CLAUDE.md warns about, and
+            // the tally below is what a reader actually needs.
+            if (!g_hc.timeout_reported) {
+                g_hc.timeout_reported = 1;
+                klog_printf(KLOG_ERR "usb: %s timed out after %u polls (%s)"
+                            " -- later ones are counted, not logged\n",
+                            what, w.spins,
+                            w.deadline ? "deadline" : "poll ceiling, no usable clock");
+            }
+            g_hc.timeouts++;
             return -1;
         }
     }
@@ -912,6 +936,12 @@ int xhci_selftest_cmd_recovery(void);   // below cmd_submit; see its comment
 // Completion event. Returns the completion code; `out_slot` receives
 // the slot id the controller assigned, when the command allocates one.
 static int cmd_submit(uint64_t param, uint32_t control, uint8_t *out_slot) {
+    // A CONTROLLER THAT HAS BEEN GIVEN UP ON IS NOT ASKED AGAIN. Without
+    // this the driver keeps queueing commands nothing will answer, at a
+    // spin apiece, for the life of the boot -- which is how one dead
+    // hub made a laptop take seven seconds to open a menu.
+    if (g_hc.wedged) return -XHCI_CC_INVALID - 1;
+
     // ARMED BEFORE THE PUSH, and the order is load-bearing.
     // xhci_ring_push() sets the cycle bit last, which is what hands the
     // TRB to the controller -- and a controller with CRR=1 may fetch it
@@ -2400,8 +2430,12 @@ int usb_controller_reinit(void) {
         // line per refusal is the probe outrunning the log.
         if (!g_hc_reset_refused) {
             g_hc_reset_refused = 1;
+            g_hc.wedged = 1;
             klog_printf(KLOG_ERR "usb: controller re-init refused -- %d "
-                        "already this boot, giving up on it\n", g_hc_resets);
+                        "already this boot. Giving up on the controller: "
+                        "%u command(s) never completed, and every further "
+                        "attempt only takes the CPU from the rest of the "
+                        "machine\n", g_hc_resets, g_hc.timeouts);
         }
         return 0;
     }
