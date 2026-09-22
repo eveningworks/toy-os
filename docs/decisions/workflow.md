@@ -294,9 +294,22 @@ only reason a later clean result could be trusted.
 
 The honest limits. The click detector needs a STEADY TONE: real music
 has transients that break the recurrence, so a click count on music is
-meaningless and only the dropout count survives. The floor is not zero
--- an MP3 stimulus carries the decoder's own ringing, and both drivers
-score ~0.3/s on it, so "at the floor" is the goal rather than "zero".
-And the cable is not normally connected, which is why the tool SKIPS
-rather than fails without it: an absent cable and a silent guest are the
-same flat hiss, and calling that red would convict the wrong half.
+meaningless and only the dropout count survives. The floor is not zero:
+both USB drivers score ~0.3/s, so "level with the in-kernel driver" is
+the goal rather than "zero". **That floor was first explained as the
+detector hearing the decoder's ringing, and that was WRONG** -- the
+decoder matches ffmpeg to 1/32768. It is a real residue, and finding
+where took a second instrument rather than a better argument: the same
+file captured DIGITALLY off the emulated AC97 is spotless, which puts
+the residue in the isochronous path both USB drivers share and AC97
+does not. And the cable is not normally connected, which is why the
+tool SKIPS rather than fails without it: an absent cable and a silent
+guest are the same flat hiss, and calling that red would convict the
+wrong half.
+
+Which is the wider lesson. The loopback rig measures the WHOLE path,
+analogue end included, so it cannot say which stage owns a fault. QEMU's
+`--audio-wav` on an emulated card is the opposite -- a perfect digital
+capture of one stage, with no analogue path at all. Neither is the
+better instrument; the pair is, because a fault present in one and
+absent in the other is LOCATED rather than merely measured.

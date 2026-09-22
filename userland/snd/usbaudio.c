@@ -261,13 +261,25 @@ static int usbaudio_open(struct snd_dev *dev) {
     //    160 packets (20 ms)    0.3 clicks/s   20 s played in 20.0 s
     //    192 packets (24 ms)    0.3 clicks/s   20 s played in 20.3 s
     //
-    // 0.3/s is the measurement's own FLOOR -- the in-kernel driver
-    // scores the same on the same file, because the stimulus is a
-    // decoded MP3 and the detector hears the decoder's ringing. So five
-    // groups is not "better", it is at the floor. The stretch is the
-    // same fact twice: an isochronous endpoint consumes a packet every
-    // 125 us whether or not one arrived, so a 16% shortfall in posting
-    // is a 16% longer stream.
+    // 0.3/s IS THE FLOOR OF THE USB PATH, NOT OF THE MEASUREMENT, and
+    // the difference was worth chasing. The in-kernel USB driver scores
+    // the same on the same file, so five groups is not "better", it is
+    // level with the kernel. What is NOT responsible for that residue:
+    // the source file (clean -- no clipping, largest sample step 0.17),
+    // the MP3 decoder (`usnd_hostcheck.py` matches ffmpeg to 1/32768),
+    // the 44.1->48 resampler (a pre-resampled 48 kHz copy sounds
+    // identical), and the decoder's CPU cost (a plain 48 kHz WAV sounds
+    // identical too). Nor is it the chain above the driver: the same
+    // WAV captured DIGITALLY off the emulated AC97 is spotless -- zero
+    // zero-runs, zero discontinuities, largest step 311 LSB over 30 s.
+    // So the residue lives in the isochronous path both USB drivers
+    // share and AC97 does not, and since these measurements are taken
+    // through QEMU USB PASSTHROUGH to a real G6, it may not be toy-os's
+    // at all. docs/bugs.md has how to settle that.
+    //
+    // The stretch is the same fact twice: an isochronous endpoint
+    // consumes a packet every 125 us whether or not one arrived, so a
+    // 16% shortfall in posting is a 16% longer stream.
     //
     // THE WAKEUP RATE IS NOT WHAT MATTERS, measured the same way: with
     // this depth pinned, IOC every 8, 16 and 32 give 34.9, 35.0 and
