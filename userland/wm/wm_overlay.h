@@ -183,6 +183,11 @@ void wm_overlay_draw(int mx, int my);
 // in the table is a no-op, which is the same failure a missing op is.
 void wm_overlay_damage(const char *name);
 
+// Covers the rect an open overlay has LEFT when something moved it with
+// no input -- a tray popup follows its tray item, and the tray's layout
+// shifts when an icon comes or goes. Call it in the poll phase.
+void wm_overlay_poll_geometry(void);
+
 // Offers a left click to each open overlay, most modal first. Returns 1
 // when one of them consumed it.
 int wm_overlay_click(int mx, int my);

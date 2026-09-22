@@ -1520,6 +1520,14 @@ void wm_run(void) {
         // redraw_pending at all, so a plain full redraw still happens
         // exactly when it used to. See wm_render.c's dirty-rectangle
         // comments for why this split is worth having.
+        // LAST, because the things that MOVE an overlay run late: the
+        // once-a-second block above hides or shows a tray icon and
+        // re-measures the clock, and a tray popup is anchored to its
+        // tray item -- so its rect changes after every other poll has
+        // run. Anything earlier cannot see it (measured: the check sat
+        // with the other polls and never fired once).
+        wm_overlay_poll_geometry();
+
         wmwd_phase("render");
         int rendered = 0;
         if (redraw_pending) {

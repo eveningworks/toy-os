@@ -8801,3 +8801,47 @@ sliders that differ at the same position is a bug a user reports as
 down on either. That leaves `usnd`'s own knob as the outlier, which is
 the open "one volume taper for every card" roadmap item rather than
 something this change fixed.
+
+## An overlay's damage is checked where it MOVES, not where it draws
+
+A tray popup is anchored to its tray ITEM, and the tray's layout is not
+fixed: hiding or showing an icon shifts everything left of it by that
+icon's width, and the clock is re-measured every second in a
+proportional font. So the panel's rect changes with nobody touching it,
+it paints at the new anchor, and the pixels at the old one stay on
+screen. Measured on the bare-metal laptop as a 46 px jump (one tray
+item) and a 1 px one (a clock digit), reported by the WM's own damage
+verifier as ~3 violations per 30 seconds of IDLE with a panel open.
+
+**THE CHECK RUNS LAST IN THE FRAME, IMMEDIATELY BEFORE RENDERING, AND
+THAT POSITION IS THE WHOLE FIX.** The obvious home is beside the other
+`*_poll_config()` calls, and there it NEVER FIRED ONCE: the things that
+move an overlay run late. `tray_update_clock()`, `remote_poll()` and
+`network_poll()` sit in a once-a-second block after input handling, so
+a tray popup's rect changes after every other poll has already run. A
+check placed earlier reads the OLD layout, compares it against the old
+drawn rect, finds them equal, and concludes nothing moved -- which is
+indistinguishable from working.
+
+**IT COMPARES AGAINST WHERE THE OVERLAY LAST DREW**, the `g_drawn`
+record the overlay core already keeps for `wm_overlay_damage()`, and
+damages BOTH rects: the one being vacated and the one being taken.
+Damaging only the new rect leaves the old pixels exactly as they were,
+which is the bug.
+
+**WHY NOT MAKE THE TRAY ANNOUNCE ITS OWN RELAYOUT.** It would be
+narrower and would need every future mover -- a resolution change, a
+font change, a taskbar that grows -- to remember to announce itself.
+Asking each open overlay where it is now is one comparison per open
+overlay per frame, of which there is almost never more than one, and it
+cannot be forgotten by something added later.
+
+**WHAT MADE THIS EXPENSIVE, and it is a testing lesson rather than a
+GUI one.** The fault does not reproduce under QEMU at all: it needs
+tray icons that come and go, and the laptop has one that lights up for
+REMOTE ACTIVITY -- so driving the machine to observe it was itself
+creating it. And with shadows ON the verifier's first differing pixel
+is the shadow's faint outer edge, a one-or-two-point blend difference
+that reads as "composited twice" when the real fault is a whole panel
+46 px from where it was. `config set shadows off` before reading those
+colours.

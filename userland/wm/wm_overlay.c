@@ -131,6 +131,34 @@ void wm_overlay_draw(int mx, int my) {
     }
 }
 
+// **AN OVERLAY CAN MOVE WITH NOBODY TOUCHING IT, and the rect it left
+// has to be covered.** A tray popup is anchored to its tray ITEM, and
+// the tray's layout is not fixed: an icon appearing or going away
+// shifts everything left of it by its own width, and the clock's width
+// changes with its digits on a proportional font. The panel then paints
+// at the new anchor and the pixels at the old one stay on screen --
+// measured on the laptop as a 46 px jump (one tray item) and a 1 px one
+// (a clock digit), which is the tray panel's leftover band in
+// docs/bugs.md.
+//
+// Called from the poll phase, BEFORE the frame's clip is derived, so
+// the repair lands on the same frame rather than the next one.
+void wm_overlay_poll_geometry(void) {
+    for (int i = 0; i < OVERLAY_COUNT; i++) {
+        const struct wm_overlay *o = &g_overlays[i];
+        if (!o->is_open() || !o->rect) continue;
+        if (g_drawn[i].w <= 0) continue;      // never drawn: nothing to cover
+        int x, y, w, h;
+        if (!o->rect(&x, &y, &w, &h)) continue;
+        if (g_drawn[i].x == x && g_drawn[i].y == y &&
+            g_drawn[i].w == w && g_drawn[i].h == h) continue;
+        // Both rects: the one being vacated and the one being taken.
+        wm_damage_window_rect(g_drawn[i].x, g_drawn[i].y, g_drawn[i].w, g_drawn[i].h);
+        wm_damage_window_rect(x, y, w, h);
+        redraw_pending = 1;
+    }
+}
+
 void wm_overlay_damage(const char *name) {
     for (int i = 0; i < OVERLAY_COUNT; i++) {
         if (k_strcmp(g_overlays[i].name, name) != 0) continue;

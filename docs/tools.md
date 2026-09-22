@@ -3731,10 +3731,12 @@ window without going through it will find its layout polls timing out.
   quietly, and says the flags to fix it (`vm.py --audio-wav <path>
   --audio both start`). Added 2026-09-22 after the maintainer
   photographed a sliver left behind by exactly this on bare metal;
-  nothing in the sweep had touched the tray before. **That sliver does
-  NOT reproduce under this sequence in QEMU** -- the steps run, the
-  fixture is confirmed present, and the verifier reports nothing, so the
-  coverage is real but the open bug is still open (`docs/bugs.md`).
+  nothing in the sweep had touched the tray before. **That sliver does NOT reproduce
+  under QEMU at all** -- it needed a tray icon coming and going, which
+  the laptop has and a guest does not -- and it was found and FIXED on
+  the hardware instead (`docs/decisions.md`, "An overlay's damage is
+  checked where it MOVES"). The coverage stays: a panel resizing under
+  an open popup is worth exercising whether or not it is broken today.
 
   **THE VERIFIER IS MORE SENSITIVE THAN A PERSON WATCHING, AND ON BARE
   METAL IT CATCHES THIS ONE.** Driving it by hand on the laptop --
