@@ -78,6 +78,7 @@ class Sweep:
         self.verbose = verbose
         self.hits = []
         self.voided = []
+        self.skipped = []   # fixtures that were ABSENT, reported not swallowed
         self.steps = 0
 
     def step(self, label, command):
@@ -162,6 +163,58 @@ def run_sequence(sw, inject=False):
     start = dbg.json("gui taskbar --json")["start"]
     sw.step("start-menu open", f"gui click {start['cx']} {start['cy']}")
     sw.step("start-menu dismiss", "gui click 940 300")
+
+    # THE TRAY'S VOLUME PANEL, WHICH RESIZES WHILE IT IS OPEN -- the one
+    # overlay whose geometry changes with no input at all. Its rows come
+    # from two live sources: the sound devices (a DAC plugged in or out)
+    # and the per-application roster (anything that opens the stream), so
+    # it grows and shrinks under an open panel and has to damage what the
+    # LARGER one covered. The maintainer photographed a sliver left
+    # behind by exactly this on 2026-09-22 (docs/bugs.md); nothing in
+    # this sweep touched the tray until then.
+    vol = dbg.json("gui volume --json")
+    sw.step("volume-panel open", f"gui click {vol['tray']['cx']} {vol['tray']['cy']}")
+
+    # An application row APPEARS: the Audio Player registers as a sound
+    # client when it starts, so the open panel gains a row and grows
+    # upward. Opened while the panel is up on purpose -- the resize with
+    # nobody touching the panel is the case that was never covered.
+    sw.step("volume-panel app row appears", "gui open Audio Player")
+
+    # **AND THE FIXTURE IS CHECKED, because a machine with no sound
+    # hardware grows NO ROW and the steps below would pass without
+    # testing anything.** `vm.py` attaches no card unless asked
+    # (--audio-wav/--audio), and the first version of this reported a
+    # clean sweep against a panel that never resized at all.
+    after = dbg.json("gui volume --json")
+    if not after.get("apps"):
+        sw.skipped.append(
+            "volume-panel resize: no application row appeared -- this guest has "
+            "no sound card, so the panel never changed size. Start the VM with "
+            "`vm.py --audio-wav <path> --audio both start` to cover it")
+    else:
+        # ...and GOES AWAY again, which is the direction that leaves a
+        # residue: the panel shrinks and something has to cover the rest.
+        # Closed BY TITLE -- the topmost window is not reliably the one
+        # just opened, and closing the wrong one removes no row.
+        ws = sw.windows()
+        idx = next((i for i, w in enumerate(ws)
+                    if w["title"] == "Audio Player"), None)
+        if idx is not None:
+            sw.step("volume-panel app row goes", f"gui close {idx}")
+
+    # A device row click: it rewrites "Automatic (hda0)" to name the new
+    # pick, so the panel's WIDTH moves under the pointer.
+    vol = dbg.json("gui volume --json")
+    if vol.get("open") and len(vol.get("devices", [])) > 1:
+        d = vol["devices"][-1]
+        sw.step(f"volume-panel pick {d['label']}", f"gui click {d['cx']} {d['cy']}")
+    else:
+        sw.skipped.append(
+            "volume-panel device pick: fewer than two device rows -- nothing to "
+            "switch between, so the label-width change was not exercised")
+
+    sw.step("volume-panel dismiss", "gui click 940 300")
 
     # Resize via the grip, both directions.
     for title in [w["title"] for w in sw.visible() if w["resizable"]]:
@@ -280,6 +333,10 @@ def main():
 
     print(f"\ndamage_sweep: {sw.steps} interactions, {len(sw.hits)} distinct "
           f"violation(s), {len(sw.voided)} report(s) the WM declared void")
+    # NOT SILENT: a step whose fixture was missing tested nothing, and a
+    # clean run that skipped it is weaker evidence than it looks.
+    for why in sw.skipped:
+        print(f"  NOT COVERED: {why}")
     for label, line in sw.hits:
         print(f"  {label}: {line}")
 

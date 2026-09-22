@@ -3721,6 +3721,21 @@ window without going through it will find its layout polls timing out.
   `--random N --seed S` walks the same interactions in orders nobody
   thought to list.
 
+  **IT ALSO DRIVES THE TRAY'S VOLUME PANEL, AND THAT PART NEEDS A GUEST
+  WITH SOUND HARDWARE.** That panel is the one overlay whose geometry
+  changes with NO input: its rows come from the registered sound devices
+  and from the per-application roster, so it grows and shrinks under an
+  open panel and has to cover what the larger one drew. On a guest with
+  no sound card no application row ever appears and the steps test
+  nothing -- so it prints `NOT COVERED:` for them instead of passing
+  quietly, and says the flags to fix it (`vm.py --audio-wav <path>
+  --audio both start`). Added 2026-09-22 after the maintainer
+  photographed a sliver left behind by exactly this on bare metal;
+  nothing in the sweep had touched the tray before. **That sliver does
+  NOT reproduce under this sequence in QEMU** -- the steps run, the
+  fixture is confirmed present, and the verifier reports nothing, so the
+  coverage is real but the open bug is still open (`docs/bugs.md`).
+
   **Read the two counts in its summary.** A *violation* is a real missed
   damage declaration and fails the run; a *report the WM declared void*
   is one the compositor itself could not conclude anything from, printed

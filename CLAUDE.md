@@ -633,7 +633,7 @@ runners themselves; `--list` on either runner is the live answer.
 `calculator_client_test.py`,
 `calendar_test.py`, `clipboard_test.py`, `compositor_death_test.py`,
 `compositor_test.py`, `crashtest_test.py`, `cursor_theme_test.py`,
-`damage_hunt.py`, `damage_sweep.py`, `desktop_entries_test.py`,
+`desktop_entries_test.py`,
 `dialog_test.py`, `filedialog_test.py`, `filemanager_test.py`,
 `forcequit_test.py`, `fullscreen_test.py`,
 `gfxdemo_test.py`, `hover_test.py`, `icons_test.py`,
@@ -745,6 +745,13 @@ answer different questions.
   count, whichever is larger, so look at the maximum. The per-tool
   timeout is a HANG GUARD sized against that maximum, not a budget.
   `DEFAULT_JOBS` is `min(12, cores//2)`.
+- **`damage_sweep.py` and `damage_hunt.py` are named by NO runner** --
+  deliberately, with the reason in `ondemand_sweep.py`'s exclusions
+  list. Run them by hand after touching anything that draws or damages.
+  **`damage_sweep.py` NEEDS A GUEST WITH SOUND HARDWARE to cover the
+  tray's volume panel** (`vm.py --audio-wav <path> --audio both start`);
+  without one it reports the panel's resize steps as NOT COVERED rather
+  than passing quietly.
 - **A clean `damage_sweep.py` proves nothing until `--positive-control`
   has shown the harness can fail.** Same for any positive control here.
 - **`iso_guard.py` refuses a stale `toy-os.iso`**, because `make all`
