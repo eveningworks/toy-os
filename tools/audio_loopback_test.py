@@ -307,6 +307,113 @@ def loop_probe(play, cap, tmp):
     return db(goertzel(sig[:int(1.2 * FS)], 1000.0)), got
 
 
+# --- the crackle A/B -------------------------------------------------------
+# WHY THIS IS A MODE AND NOT A SEPARATE TOOL: the finding it exists to
+# reproduce is a COMPARISON, and a number from one driver alone is what
+# misled this bug for weeks. Both legs must come off one cable, one
+# stimulus and one analyser, or the difference is not attributable.
+
+VM = os.path.join(HERE, "vm.py")
+
+
+def vm(*args, timeout=300):
+    return subprocess.run([sys.executable, VM] + list(args),
+                          capture_output=True, text=True, timeout=timeout).stdout
+
+
+def make_tone_mp3(path, seconds, freq=1000.0):
+    """A steady tone, encoded -- so the DECODER sits in the producer.
+
+    The stimulus is the whole point. A WAV of this same tone is pristine
+    through both drivers; it is the decode cost in `aplay` that brings
+    the crackle on, so an uncompressed fixture measures nothing.
+    """
+    wav = path[:-4] + ".wav"
+    write_tone(wav, seconds, freq=freq)
+    r = subprocess.run(["lame", "-b", "128", "--quiet", wav, path],
+                       capture_output=True)
+    return r.returncode == 0
+
+
+def leg(tag, guest_path, seconds, instance):
+    """Play the stimulus in the guest and measure what the G6 emitted."""
+    out = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"crackle_{tag}.wav")
+    rec = subprocess.Popen(
+        [sys.executable, os.path.abspath(__file__), "--record",
+         str(seconds + 12), "-o", out, "--keep-gain", "--quiet-analyse"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(2.5)                      # past the ADC start-up transient
+    vm("--instance", str(instance), "exec", f"spawn /bin/aplay {guest_path}")
+    rec.wait()
+    return analyse(read_wav(out), tag)
+
+
+def crackle(args):
+    """Measure the ring-3 driver against the in-kernel one, same file."""
+    from shutil import which
+    if not which("lame"):
+        print("SKIP: lame is not installed -- it encodes the stimulus, and a "
+              "check that cannot run on a clean checkout is one people learn "
+              "to skim past")
+        return 0
+    cap = card_index(CAP_CARD)
+    play = card_index(PLAY_CARD)
+    if cap is None or play is None:
+        print(f"SKIP: need both {PLAY_CARD!r} and {CAP_CARD!r} on the host -- "
+              f"the G6 must be plugged in and NOT already passed through")
+        return 0
+    set_capture_gain(cap)
+    amixer(play, "sset", "Speaker", str(G6_UNITY))
+
+    # THE CABLE IS PROVEN BEFORE THE GUEST TAKES THE DEVICE, because once
+    # QEMU holds the G6 the host cannot play through it to check.
+    lvl, _ = loop_probe(play, cap, os.environ.get("TMPDIR", "/tmp"))
+    print(f"loop probe: 1 kHz returned at {lvl:.2f} dBFS")
+    if lvl < LOOP_PRESENT_DBFS:
+        print("SKIP: the loop is OPEN -- patch the G6 headphone-out to line-in "
+              "cable in and re-run")
+        return 0
+
+    mp3 = os.path.join(os.environ.get("TMPDIR", "/tmp"), "crackle_tone.mp3")
+    print(f"encoding a {args.seconds:.0f} s 1 kHz tone as MP3 ...")
+    if not make_tone_mp3(mp3, args.seconds):
+        print("SKIP: lame failed to encode the stimulus")
+        return 0
+
+    inst = str(args.instance)
+    print("booting a guest with the G6 passed through ...")
+    vm("--instance", inst, "--usb-host", "041e:3256", "--usb", "xhci",
+       "--audio", "none", "start", timeout=400)
+    try:
+        vm("--instance", inst, "put", mp3, "/tmp/crackle.mp3")
+        # IN-KERNEL FIRST, while it still owns the device: it is the
+        # control, and it has to be taken before snddrv claims the card.
+        print("leg 1/2: the in-kernel usb-audio driver ...")
+        a = leg("kernel", "/tmp/crackle.mp3", args.seconds, inst)
+        print("leg 2/2: the ring-3 usbaudio.so ...")
+        vm("--instance", inst, "exec", "spawn /bin/snddrv --driver usbaudio")
+        time.sleep(1.5)
+        b = leg("ring3", "/tmp/crackle.mp3", args.seconds, inst)
+    finally:
+        vm("--instance", inst, "stop", timeout=120)
+
+    report(a)
+    report(b)
+    if "error" in a or "error" in b:
+        print("\nINCOMPLETE: a leg produced no audio, so there is nothing to "
+              "compare. Re-run; if it repeats, check that snddrv bound the G6.")
+        return 1
+    print("\n-- the comparison, which is the whole point --")
+    print(f"   clicks/s   in-kernel {a['click_rate']:7.2f}   "
+          f"ring-3 {b['click_rate']:7.2f}   ratio {b['click_rate']/max(a['click_rate'],1e-9):5.1f}x")
+    print(f"   wall clock in-kernel {a['seconds']:7.1f} s ring-3 {b['seconds']:7.1f} s "
+          f"for {args.seconds:.0f} s of material")
+    # A REPORT, NOT A GATE. The crackle is a known open bug (docs/bugs.md);
+    # a check that is permanently red is one people learn to ignore. What
+    # this must catch is the rig going wrong, not the bug still existing.
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--record", type=float, metavar="SECONDS",
@@ -320,7 +427,19 @@ def main():
                     help="the default: host plays, host records, loop proven")
     ap.add_argument("--keep-gain", action="store_true",
                     help="do not touch the mixer (the caller set it)")
+    ap.add_argument("--crackle", action="store_true",
+                    help="the A/B: the same MP3 through the in-kernel driver "
+                         "and the ring-3 one, on one cable and one analyser")
+    ap.add_argument("--seconds", type=float, default=60.0,
+                    help="length of the --crackle stimulus (default 60)")
+    ap.add_argument("--instance", type=int, default=0,
+                    help="vm.py slot for --crackle (see CLAUDE.md on ports)")
+    ap.add_argument("--quiet-analyse", action="store_true",
+                    help="record without printing the analysis (internal)")
     args = ap.parse_args()
+
+    if args.crackle:
+        return crackle(args)
 
     tmp = os.environ.get("TMPDIR", "/tmp")
 
@@ -344,6 +463,8 @@ def main():
         print(f"recording {args.record:.0f} s from card {cap} ({CAP_CARD}) "
               f"line in -> {args.out}")
         record(args.out, args.record, cap)
+        if args.quiet_analyse:
+            return 0
         a = analyse(read_wav(args.out), os.path.basename(args.out))
         report(a)
         if "error" in a:

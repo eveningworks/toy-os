@@ -2784,6 +2784,23 @@ window without going through it will find its layout polls timing out.
   measured baseline of the rig at unity gain (G6 `Speaker` 107) is
   0.02% THD, 70 dB channel separation and a ~60 dB SNR ceiling set by
   the ADC, not by the G6. `local_info.txt` has the full calibration.
+
+  **`--crackle` is the A/B the bug needed**, and it is one mode rather
+  than a second tool because the finding IS a comparison -- a number
+  from one driver alone is what misled `docs/bugs.md` for weeks. It
+  encodes a steady 1 kHz tone as an MP3 (the DECODER has to be in the
+  producer; a WAV of the same tone is pristine through both drivers and
+  measures nothing), boots a guest with the G6 passed through, and plays
+  it once through the in-kernel `usb-audio` and once through the ring-3
+  `usbaudio.so` -- one cable, one stimulus, one analyser, so the
+  difference is attributable. It proves the cable BEFORE the guest takes
+  the device, because once QEMU holds the G6 the host cannot play
+  through it to check. Needs `lame` and SKIPS without it, the same rule
+  that keeps ffmpeg out of the gate. **It is a REPORT, not a gate**: the
+  crackle is a known open bug, and a check that is permanently red is
+  one people learn to ignore, so it returns non-zero only when a leg
+  produced no audio at all -- that is the rig going wrong, not the bug
+  still existing.
 - **`devclaim_test.py`** -- a ring-3 process takes the sound card OFF
   THE KERNEL, reads its registers, and gives it back (stage 2 of
   `docs/umdf-design.md`). It boots its own guest with an
