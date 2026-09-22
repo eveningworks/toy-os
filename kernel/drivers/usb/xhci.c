@@ -58,6 +58,17 @@ struct xhci_port_state {
     // device that is simply broken would otherwise cycle, re-attach,
     // fail, and cycle again for the life of the machine.
     uint8_t power_cycled;
+    // HOW MANY TIMES THIS PORT HAS EXHAUSTED ITS ATTEMPTS, cleared
+    // ONLY by an enumeration that worked.
+    //
+    // `power_cycled` above was meant to bound the recovery and cannot,
+    // because the recovery DEFEATS IT: a mux cycle disconnects the
+    // device, and the detach path clears the flag -- so a device that
+    // is simply not going to enumerate cycles, re-attaches, fails and
+    // cycles again for the life of the machine. Measured on a USB3
+    // hub's USB2 half, where the loop starved the box badly enough to
+    // make the built-in keyboard unusable (docs/bugs.md).
+    uint8_t giveups;
 };
 
 // ONE PROTOCOL'S PORT RANGE, from a Supported Protocol capability.
@@ -2014,6 +2025,12 @@ static void reset_port(uint32_t p, int force) {
 // re-measuring if the failure rate ever drops.
 #define ATTACH_ATTEMPTS 3
 
+// HOW MANY FAILED EPISODES A PORT GETS before it is left alone. Each
+// episode is ATTACH_ATTEMPTS tries plus a warm reset, a mux cycle and a
+// re-attach, and all of that spins without yielding -- so this is a
+// bound on how much of the machine one dead device may consume.
+#define XHCI_MAX_GIVEUPS   3
+
 // A RE-ATTACH WE CAUSED IS NOT A CONNECT EVENT, and that difference
 // cost a device. Taking a port away and giving it back makes CCS rise
 // again -- but the change bits have to be acknowledged (or the port
@@ -2517,6 +2534,7 @@ static void attach_root_port(uint32_t p) {
         if (usb_enumerate_port((uint8_t)(p + 1), g_hc.ports[p].speed,
                                attempt) >= 0) {
             g_hc.ports[p].power_cycled = 0;   // this episode ended well
+            g_hc.ports[p].giveups     = 0;    // ...so the count starts over
             return;
         }
         // THE TWO OUTCOMES MUST NOT SHARE A PREFIX. "enumeration
@@ -2539,6 +2557,17 @@ static void attach_root_port(uint32_t p) {
         // is the one case where the log lines are worth their space.
         if (gave_up) {
             usb_trace_dump(trace_mark, (uint8_t)(p + 1));
+            // ABANDON A PORT THAT WILL NOT COME UP, rather than recover
+            // it round the same circle again. Every lever below takes
+            // the CPU for hundreds of milliseconds in a spin that does
+            // not yield, so an unbounded loop is not merely futile --
+            // it starves the machine.
+            if (++g_hc.ports[p].giveups >= XHCI_MAX_GIVEUPS) {
+                klog_printf(KLOG_ERR "usb: port %u: %u failed episodes -- "
+                            "abandoning it until something enumerates "
+                            "there\n", p + 1, g_hc.ports[p].giveups);
+                return;
+            }
             // AFTER the dump, so the trace covers the attempts that
             // failed rather than the recovery -- and the recovery's own
             // lines then follow it in order.
