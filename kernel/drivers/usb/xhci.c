@@ -946,6 +946,16 @@ static int cmd_submit(uint64_t param, uint32_t control, uint8_t *out_slot) {
             if (g_hc.cmd_recovered == 1)
                 klog_printf(KLOG_ERR "usb: command ring aborted and "
                                       "restarted after a timeout\n");
+        } else {
+            // THE RING WAS ALREADY PUT BACK AND A COMMAND STILL TIMED
+            // OUT, so what is wedged is the CONTROLLER and not the
+            // ring. Measured on the ASUS: the abort leaves `trb[0..2]
+            // ctrl 0 0 0` and CRR clear -- a clean ring -- and the next
+            // command times out regardless. Escalate to a re-init,
+            // which is bounded inside and refuses once it has had
+            // enough. Arming is just a flag; it runs off the event
+            // path, which is why this is safe to call from here.
+            usb_controller_reinit();
         }
         return -XHCI_CC_INVALID - 1;
     }
@@ -1936,7 +1946,15 @@ static void reset_port(uint32_t p, int force) {
         return;
     }
 
-    portsc_write(p, XHCI_PORTSC_PR, XHCI_PORTSC_CSC);
+    // A SUPERSPEED PORT TAKES A *WARM* RESET, NOT A HOT ONE. PR is the
+    // USB2 reset; USB3 defines WPR (bit 31), and it is the only one
+    // that re-trains the link and returns the device to Default. This
+    // matters because a port the FIRMWARE enabled is in a state we
+    // never put it in -- this controller comes from a BIOS handoff --
+    // and Address Device to such a device hangs it (docs/bugs.md).
+    uint32_t rst = (g_hc.ports[p].speed == XHCI_SPEED_SUPER)
+                 ? XHCI_PORTSC_WPR : XHCI_PORTSC_PR;
+    portsc_write(p, rst, XHCI_PORTSC_CSC);
 
     // WAIT FOR THE OUTCOME, NOT FOR THE CHANGE BIT. The spec says a
     // completed port reset raises PRC, and on real hardware it does --
@@ -1961,7 +1979,11 @@ static void reset_port(uint32_t p, int force) {
             return;
         }
     }
-    portsc_write(p, 0, XHCI_PORTSC_PRC | XHCI_PORTSC_CSC | XHCI_PORTSC_PEC);
+    // WRC is the warm reset's own change bit; PRC is the hot one's.
+    // Acknowledge both rather than branching -- a bit that was never
+    // raised is a harmless RW1C write.
+    portsc_write(p, 0, XHCI_PORTSC_PRC | XHCI_PORTSC_WRC |
+                       XHCI_PORTSC_CSC | XHCI_PORTSC_PEC);
 
     // The USB2 reset-recovery wait (TRSTRCY) is a MINIMUM, not a
     // timeout: the device is entitled to 10 ms of quiet before it is
@@ -2309,7 +2331,16 @@ void usb_set_attach_delay_ms(unsigned ms) {
 }
 unsigned usb_attach_delay_ms(void) { return g_attach_delay_ms; }
 
-static int g_hc_reset_done;
+// HOW MANY CONTROLLER RE-INITS A BOOT MAY HAVE. This was a boolean
+// latch, so the FIRST re-init disarmed recovery for the rest of the
+// boot -- and on a machine whose only NIC is a USB device that is the
+// difference between a bad boot and an unreachable one. Bounded rather
+// than unlimited because a controller that needs a fourth re-init is
+// not going to be talked round, and a re-init loop would be worse than
+// the wedge.
+#define XHCI_MAX_REINITS 3
+static int g_hc_resets;
+static int g_hc_reset_refused;
 
 // QUIESCE THE CONTROLLER ON THE WAY OUT, which is the one place this
 // driver never acted. Every recovery it has is on the way IN -- a port
@@ -2346,8 +2377,15 @@ void usb_shutdown(void) {
 // later, off the interrupt-disabled path that asked for it.
 int usb_controller_reinit(void) {
     if (!g_hc.present || !g_hc.running) return 0;
-    if (g_hc_reset_done || g_hc.hcreset_pending) {
-        klog_printf("usb: controller re-init already done or pending\n");
+    if (g_hc.hcreset_pending) return 0;
+    if (g_hc_resets >= XHCI_MAX_REINITS) {
+        // ONCE. This is asked on every later command timeout, and a
+        // line per refusal is the probe outrunning the log.
+        if (!g_hc_reset_refused) {
+            g_hc_reset_refused = 1;
+            klog_printf(KLOG_ERR "usb: controller re-init refused -- %d "
+                        "already this boot, giving up on it\n", g_hc_resets);
+        }
         return 0;
     }
     g_hc.hcreset_pending = 1;
@@ -2356,8 +2394,8 @@ int usb_controller_reinit(void) {
 }
 
 static void hcreset_perform(void) {
-    if (g_hc_reset_done) return;
-    g_hc_reset_done = 1;
+    if (g_hc_resets >= XHCI_MAX_REINITS) return;
+    g_hc_resets++;
     klog_printf(KLOG_WARN "usb: RE-INITIALISING THE CONTROLLER\n");
 
     for (uint32_t p = 0; p < g_hc.max_ports && p < XHCI_MAX_PORTS; p++) {
@@ -2434,10 +2472,14 @@ static void attach_root_port(uint32_t p) {
         // enumerated, while port 5 hit the same timeout, fell into the
         // retry, and died with nothing having changed between attempts.
         //
-        // NOT on a SuperSpeed port: asserting PR on one is a separate
-        // question (see reset_port()), and every failure measured here
-        // is low-, full- or high-speed. Attempt 0 read the speed.
-        int force = attempt && g_hc.ports[p].speed != XHCI_SPEED_SUPER;
+        // SUPERSPEED IS NO LONGER EXCLUDED. It was, because asserting
+        // PR on such a port is wrong -- but reset_port() now issues a
+        // WARM reset there, which is the right instrument, and a
+        // SuperSpeed port that arrives ENABLED from a BIOS handoff was
+        // otherwise never reset at all, not even on a retry. That is
+        // the state in which Address Device hangs this controller
+        // (docs/bugs.md). Attempt 0 read the speed.
+        int force = attempt != 0;
         uint8_t was_speed = g_hc.ports[p].speed;
         reset_port(p, force);
         uint32_t sc = mr32(g_hc.op, XHCI_PORTSC(p));
