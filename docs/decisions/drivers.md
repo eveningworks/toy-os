@@ -2718,3 +2718,40 @@ guess. Windows' UMDF host shuts its device down on the way out for the
 same reason. The crash case is left as it is on purpose: a card
 half-programmed by a driver that died is not something to hand a kernel
 driver automatically, and re-running `hdad` recovers it.
+
+## One USB DAC per driver host, named by its ids, rather than one plugin serving several
+
+The in-kernel USB audio driver keeps a single `g_audio`, so a second
+USB DAC is not bound at all. With two attached -- and the maintainer
+tests with two -- the second was silently unbound, and the ring-3
+plugin's answer to "which device" was whichever `QUERY_USB` listed
+first. The obvious fix is to make the plugin multi-instance: one
+`snddrv` registering a `sound_device` per DAC. That is not what this
+does.
+
+**A HOST PROCESS PER DEVICE, because that is what the split already
+is.** `snd_driver.h` exists so a driver is a file in `/lib/snd` that a
+system-provided host loads -- Windows' UMDF between `WUDFHost.exe` and
+a driver DLL, DriverKit between its host and a `.dext`. Both run one
+host INSTANCE per device, and for the same reason: a driver holding
+one device's state in file-scope data is the normal case, and making
+every plugin multi-instance to serve the one that needs it taxes
+`hda.so` and `ac97.so` for nothing. So `snddrv --usb-id VID:PID` picks
+the device and a second `snddrv` drives the second DAC.
+
+**THE SELECTOR IS NOT A CONVENIENCE, because "the first audio device"
+is not a stable phrase here.** `dev_alloc()` returns the first FREE
+entry in the kernel's device table, so unplugging anything moves the
+devices after it up: which DAC a host grabbed depended on what had
+been unplugged earlier in the boot. `--usb-id` is how a test says
+which path it exercised, which `docs/bugs.md` requires of any USB
+audio result.
+
+**AND THE PLUGIN NAMES THE DEVICE IT TOOK**, `usb-<vid><pid>`, filled
+into `struct snd_dev` by `open()`. Two hosts both registering
+`usbaudio-ring3` would collide, and the name is what the tray's volume
+popup and the `audio_device` setting select on -- so per-device naming
+is what makes a device picker possible at all, rather than a second UI.
+The label comes from the manufacturer string and falls back to the ids,
+because several devices here return mojibake for one descriptor while
+the next reads perfectly.

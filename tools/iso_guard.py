@@ -466,6 +466,50 @@ def check_staging_fresh(repo: Path = REPO, staging: str = "seed/sync"):
             f"build's files and the sync would call it up to date")
 
 
+def check_staged_file(local, repo: Path = REPO, staging: str = "seed/sync"):
+    """Is THIS file, about to be sent, a stale copy of a built one?
+
+    The whole-tree check above guards a flash, which sends the staging
+    tree. A single `put` slips past it: naming one `seed/sync/` file
+    by hand sends whatever the last `make iso` staged, and `make all`
+    does not restage. Measured 2026-09-22 -- a plugin was pushed to the
+    laptop twice from staging while the fix sat in build/, and the
+    second push reproduced the first push's symptom exactly, which
+    reads as the fix not working rather than as the fix not being
+    there.
+
+    Returns None when the file is fine to send, or a sentence naming
+    the build/ path to send instead.
+    """
+    try:
+        p = Path(local).resolve()
+        staged_root = (repo / staging).resolve()
+        rel = p.relative_to(staged_root)
+    except (ValueError, OSError):
+        return None          # not out of the staging tree; not ours to judge
+
+    built = repo / "build" / rel
+    if not built.is_file() or not p.is_file():
+        return None
+    if built.stat().st_mtime <= p.stat().st_mtime:
+        return None
+    return (f"{p.relative_to(repo)} is older than {built.relative_to(repo)} "
+            f"-- `make all` writes build/ and does not restage. Sending it "
+            f"would ship the PREVIOUS build. Send {built.relative_to(repo)}, "
+            f"or run `make iso` to restage")
+
+
+def assert_staged_file(local, repo: Path = REPO, staging: str = "seed/sync"):
+    """Refuse to send one stale staged file. Same bypass as the rest."""
+    if os.environ.get(BYPASS_ENV):
+        return
+    why = check_staged_file(local, repo, staging)
+    if why:
+        raise SystemExit(f"iso_guard: REFUSING to send a stale staged file.\n"
+                          f"  {why}\n"
+                          f"  Or set {BYPASS_ENV}=1.")
+
+
 def assert_staging_fresh(repo: Path = REPO, staging: str = "seed/sync"):
     """Refuse a flash from a stale staging tree. Bypassed by the same
     env var as the ISO check, since it is the same mistake."""

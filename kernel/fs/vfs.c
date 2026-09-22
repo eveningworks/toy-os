@@ -23,6 +23,7 @@
 #include "fs.h"
 #include "fs_ops.h"
 #include "errno.h"   // fs_chmod returns a negative errno
+#include "mmap.h"   // imgcache_forget: a rewritten /lib file must not serve stale pages
 #include "mount.h"
 #include "tmppath.h"
 #include "block.h"
@@ -454,6 +455,7 @@ int fs_touch(const char *path) {
 int fs_write(const char *path, const char *data, int append) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "write", path)) return 0;
+    imgcache_forget(path);
     return bumped(FS_OP(r.m, r.m->fs->write(r.sub, data, append)));
 }
 
@@ -521,6 +523,7 @@ uint32_t fs_read_range(const char *path, uint64_t offset, void *buf, uint32_t le
 int fs_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "write", path)) return 0;
+    imgcache_forget(path);
     return bumped(FS_OP(r.m, r.m->fs->write_range(r.sub, offset, buf, len)));
 }
 
@@ -608,12 +611,19 @@ int fs_rename(const char *oldpath, const char *newpath) {
         return 0;
     }
     if (!writable(&a, "rename", oldpath)) return 0;
+    // BOTH names change meaning, and the DESTINATION is the one that
+    // matters: an updated /lib file arrives by rename-into-place
+    // (tftpd's, dpkg's shape), so hooking only the write paths left the
+    // cache serving the file this replaces.
+    imgcache_forget(oldpath);
+    imgcache_forget(newpath);
     return bumped(FS_OP(a.m, a.m->fs->rename(a.sub, b.sub)));
 }
 
 int fs_truncate(const char *path, uint64_t size) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "truncate", path)) return 0;
+    imgcache_forget(path);
     return bumped(FS_OP(r.m, r.m->fs->truncate(r.sub, size)));
 }
 

@@ -3416,6 +3416,19 @@ window without going through it will find its layout polls timing out.
   deliberately booting an older image -- e.g. building an earlier commit
   to prove a failure predates your work.
 
+  **It guards the STAGING tree and single staged FILES too, which is the
+  same trap one layer down.** `make all` writes `build/` and stops;
+  `seed/sync/` is populated by the `seed` step `make iso` runs. So
+  `check_staging_fresh()` refuses a `remote.py flash` from stale
+  staging, and `check_staged_file()` refuses a `remote.py put` that
+  names one `seed/sync/` file older than its `build/` counterpart --
+  naming the `build/` path to send instead. The single-file case was
+  added 2026-09-22 after a rebuilt sound plugin was pushed twice from
+  staging while the fix sat in `build/`: the second push reproduced the
+  first push's symptom exactly, which reads as the fix not working
+  rather than as the fix never having been sent. Same
+  `TOYOS_ALLOW_STALE_ISO=1` bypass, because it is the same mistake.
+
   It also WARNS (never refuses) when a COPY of `disk.img` passed with
   `--disk` is older than the last seed. Testing against a copy is the
   documented way to dodge QEMU's write lock and to stop `make iso`

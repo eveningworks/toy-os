@@ -128,13 +128,22 @@ static int set_interface(uint8_t ifnum, uint8_t alt) {
 // through `clock_pins`.
 static uint8_t clock_entity(void) {
     if (!g.s.clock_is_selector) return g.s.clock_id;
+    if (!g.s.clock_pin_count) return g.s.clock_id;
     uint8_t pin = 0;
     uint8_t s[8] = { TYPE_IN_CLASS_IF, UAC2_REQ_CUR, 0, CX_CLOCK_SELECT,
                      g.s.ac_ifnum, g.s.clock_id, 1, 0 };
     if (sys_usb_control(g.slot, s, &pin, 1, 1) < 0 || !pin ||
-        pin > g.s.clock_pin_count)
-        return g.s.clock_id;          // answer it as stated, and let the
-                                      // rate request report the failure
+        pin > g.s.clock_pin_count) {
+        // **A SELECTOR IS NOT A SOURCE, so falling back to its own id
+        // cannot work** -- only a Clock Source carries the Sampling
+        // Frequency Control the rate is set through, and this asked
+        // entity 17 for a rate the G6 keeps on 15 and 16. Answering
+        // the first PIN is what the kernel driver does.
+        fprintf(stderr, "usbaudio: clock selector %u answered %u; "
+                        "using source %u\n",
+                g.s.clock_id, pin, g.s.clock_pins[0]);
+        return g.s.clock_pins[0];
+    }
     return g.s.clock_pins[pin - 1];
 }
 
@@ -152,6 +161,56 @@ static int set_clock_rate(void) {
     return r;
 }
 
+// --- picking one device out of several ---------------------------------
+
+// How many audio devices one pass will consider. A machine with more
+// USB DACs than this attached wants one host per device anyway.
+#define USBAUDIO_MAX_CAND 8
+
+// Does this device answer to `sel`? An empty selector takes anything.
+// The form is `VID:PID` in hex, as lsusb prints it, or a bare decimal
+// xHCI slot -- the slot is what the logs name, and it is the only way
+// to tell two identical DACs apart.
+static int wanted(const struct query_usb *q, const char *sel) {
+    if (!sel || !sel[0]) return 1;
+
+    const char *colon = strchr(sel, ':');
+    if (!colon) return (int)q->slot == atoi(sel);
+
+    char vid[8];
+    uint32_t n = (uint32_t)(colon - sel);
+    if (n >= sizeof vid) return 0;
+    memcpy(vid, sel, n);
+    vid[n] = 0;
+    return (uint32_t)strtoul(vid, 0, 16) == (uint32_t)q->vendor_id &&
+           (uint32_t)strtoul(colon + 1, 0, 16) == (uint32_t)q->product_id;
+}
+
+// A STRING OFF A USB DEVICE IS NOT TRUSTED TO BE TEXT. Several devices
+// here return mojibake or a bare "?" for one descriptor while the next
+// one reads perfectly (docs/bugs.md), so a label falls back to the ids
+// rather than showing rubbish in the tray.
+static int readable(const char *s) {
+    if (!s[0] || s[0] == '?') return 0;
+    for (const char *p = s; *p; p++)
+        if (*p < 0x20 || *p > 0x7e) return 0;
+    return 1;
+}
+
+// ONE ROW PER DAC, which is what lets the tray's device list pick
+// between them: the name is the id pair, unique and stable across the
+// table reshuffles that `select` exists for.
+static void device_names(struct snd_dev *dev, const struct query_usb *q) {
+    snprintf(dev->name, sizeof dev->name, "usb-%04x%04x",
+             (unsigned)q->vendor_id, (unsigned)q->product_id);
+    if (readable(q->manufacturer) &&
+        strlen(q->manufacturer) + sizeof(" USB Audio") <= sizeof dev->label)
+        snprintf(dev->label, sizeof dev->label, "%s USB Audio", q->manufacturer);
+    else
+        snprintf(dev->label, sizeof dev->label, "USB Audio %04x:%04x",
+                 (unsigned)q->vendor_id, (unsigned)q->product_id);
+}
+
 // --- the driver ops -----------------------------------------------------
 //
 // NO `match`. snd_driver.h's is handed a PCI device and a USB card is
@@ -164,52 +223,82 @@ static int usbaudio_open(struct snd_dev *dev) {
 
     // The device, and its configuration, both from QUERY -- which ring
     // 3 could already read before any of this existed.
+    //
+    // EVERY CANDIDATE, NOT THE FIRST. The kernel's device table hands
+    // out the first FREE entry, so unplugging one device moves the
+    // next one up and "the first audio device" is a function of unplug
+    // history -- and a device the kernel driver already holds cannot
+    // be claimed at all. So collect them, then try each until one
+    // takes; --usb-id narrows the list to one.
+    int cand[USBAUDIO_MAX_CAND];
+    struct query_usb info[USBAUDIO_MAX_CAND];
+    int ncand = 0;
     struct query_usb q;
     QUERY_FOREACH(QUERY_USB, q, i) {
         if (q.if_class != 1) continue;   // 1 = Audio
-        g.slot = (int)q.slot;
-        break;
+        if (ncand >= USBAUDIO_MAX_CAND) break;
+        if (!wanted(&q, dev->select)) continue;
+        info[ncand] = q;
+        cand[ncand++] = (int)q.slot;
     }
-    if (g.slot < 0) {
-        fprintf(stderr, "usbaudio: no USB audio device attached\n");
+    if (!ncand) {
+        if (dev->select && dev->select[0])
+            fprintf(stderr, "usbaudio: no USB audio device matches %s\n",
+                    dev->select);
+        else
+            fprintf(stderr, "usbaudio: no USB audio device attached\n");
         return -1;
     }
 
     static uint8_t cfg[4096];
-    uint32_t total = 0;
-    struct query_usbdesc d2;
-    QUERY_FOREACH(QUERY_USBDESC, d2, i) {
-        if ((int)d2.slot != g.slot) continue;
-        total = d2.total > sizeof cfg ? sizeof cfg : d2.total;
-        if (d2.offset + d2.len <= sizeof cfg)
-            memcpy(cfg + d2.offset, d2.data, d2.len);
-    }
-    if (!total) {
-        fprintf(stderr, "usbaudio: slot %d: no configuration descriptor\n", g.slot);
-        return -1;
-    }
-
-    // THE SAME WALK THE KERNEL USES, compiled for this ring.
     static struct usb_audio_report rep;
-    if (!usb_audio_parse(cfg, total, &g.s, &rep)) {
-        // THE REFUSAL'S EVIDENCE. "no 48 kHz stereo s16 stream" says
-        // nothing about what the device DOES offer, and the report is
-        // filled either way for exactly this.
-        fprintf(stderr, "usbaudio: slot %d: no 48 kHz stereo s16 stream "
-                        "(UAC %u.%u, %u alternate(s) seen)\n",
-                g.slot, rep.uac_major, rep.uac_minor, rep.alts_seen);
-        for (int i = 0; i < rep.alt_count; i++)
-            fprintf(stderr, "usbaudio:   if %u alt %u: %u ch %u-bit %u Hz "
-                            "ep 0x%02x mps %u\n",
-                    rep.alts[i].ifnum, rep.alts[i].alt, rep.alts[i].channels,
-                    rep.alts[i].bits, (unsigned)rep.alts[i].rate,
-                    rep.alts[i].ep, rep.alts[i].mps);
-        return -1;
+    uint32_t total = 0;
+    int pick = -1;
+
+    for (int c = 0; c < ncand && pick < 0; c++) {
+        int slot = cand[c];
+        total = 0;
+        memset(cfg, 0, sizeof cfg);
+        struct query_usbdesc d2;
+        QUERY_FOREACH(QUERY_USBDESC, d2, i) {
+            if ((int)d2.slot != slot) continue;
+            total = d2.total > sizeof cfg ? sizeof cfg : d2.total;
+            if (d2.offset + d2.len <= sizeof cfg)
+                memcpy(cfg + d2.offset, d2.data, d2.len);
+        }
+        if (!total) {
+            fprintf(stderr, "usbaudio: slot %d: no configuration descriptor\n", slot);
+            continue;
+        }
+
+        // THE SAME WALK THE KERNEL USES, compiled for this ring.
+        if (!usb_audio_parse(cfg, total, &g.s, &rep)) {
+            // THE REFUSAL'S EVIDENCE. "no 48 kHz stereo s16 stream" says
+            // nothing about what the device DOES offer, and the report is
+            // filled either way for exactly this.
+            fprintf(stderr, "usbaudio: slot %d: no 48 kHz stereo s16 stream "
+                            "(UAC %u.%u, %u alternate(s) seen)\n",
+                    slot, rep.uac_major, rep.uac_minor, rep.alts_seen);
+            for (int i = 0; i < rep.alt_count; i++)
+                fprintf(stderr, "usbaudio:   if %u alt %u: %u ch %u-bit %u Hz "
+                                "ep 0x%02x mps %u\n",
+                        rep.alts[i].ifnum, rep.alts[i].alt, rep.alts[i].channels,
+                        rep.alts[i].bits, (unsigned)rep.alts[i].rate,
+                        rep.alts[i].ep, rep.alts[i].mps);
+            continue;
+        }
+        if (sys_usb_claim(slot) != 0) {
+            // Usually the in-kernel driver already has it, which is a
+            // reason to try the next device rather than to give up.
+            fprintf(stderr, "usbaudio: slot %d: cannot claim it\n", slot);
+            continue;
+        }
+        pick = c;
+        g.slot = slot;
     }
-    if (sys_usb_claim(g.slot) != 0) {
-        fprintf(stderr, "usbaudio: slot %d: cannot claim it\n", g.slot);
-        return -1;
-    }
+    if (pick < 0) return -1;
+
+    device_names(dev, &info[pick]);
 
     // One service interval's share, in three units -- confusing them is
     // silent. `frames` is NOT the endpoint's wMaxPacketSize, which is a
@@ -279,9 +368,13 @@ static int usbaudio_open(struct snd_dev *dev) {
     // at FULL speed, plays cleanly and repeatedly. That is a different
     // code path, not the same one without an emulator: UAC2 negotiates
     // its rate through a Clock Source entity and runs this conversion
-    // at 8000 packets/s where UAC1 runs it at 1000. docs/bugs.md has
-    // the open entry; do not read "clean on bare metal" as "the driver
-    // is proven", because the faulty path has never run there.
+    // at 8000 packets/s where UAC1 runs it at 1000. **THAT PATH HAS NOW
+    // RUN ON REAL HARDWARE AND IS CLEAN** (2026-09-22, by ear, the G6
+    // hot-plugged so it binds high-speed): the crackle above is the
+    // EMULATOR's. What did NOT go away with it is a second playback
+    // through one snddrv being silent, with aplay parked afterwards --
+    // that reproduces on bare metal at high speed and not at full
+    // speed, so it is ours. docs/bugs.md has the open entry.
     //
     // The stretch is the same fact twice: an isochronous endpoint
     // consumes a packet every 125 us whether or not one arrived, so a
@@ -294,6 +387,14 @@ static int usbaudio_open(struct snd_dev *dev) {
     // then, so shrinking the group shrank the BUFFER with it, and the
     // buffer is all it measured.
     //
+    // THE DEPTH IS A TIME, AND THAT IS WHY IT TRANSFERS. `group` is
+    // per_ms * 4, so a group is 4 ms on any device and five of them is
+    // 20 ms whatever the packet size -- 160 packets of 125 us on the
+    // G6, 20 of 1 ms on an ASUS DAC (0b05:19a8, UAC1, ep 0x7). Tuned
+    // in PACKETS it would have had to be re-found per device; the
+    // second device was clean first try (2026-09-22, by ear: one
+    // dropout in 78 s, then a second playback with none).
+    //
     // THE CEILING IS THE TRANSFER RING, NOT THE BUFFER. xHCI's ring
     // here is 256 TRBs with one reserved for the Link and one
     // descriptor per TRB, so the packets OUTSTANDING must stay well
@@ -305,8 +406,15 @@ static int usbaudio_open(struct snd_dev *dev) {
     g.packets = (uint8_t)(want ? want : g.group);
 
     if (set_clock_rate() < 0) {
-        fprintf(stderr, "usbaudio: clock %u would not take %u Hz\n",
-                clock_entity(), (unsigned)SND_RATE);
+        // THE REFUSAL'S EVIDENCE, as for the parse above: which entity
+        // was asked is not enough to act on, because the interesting
+        // case is a SELECTOR being asked for a rate only a Source can
+        // take.
+        fprintf(stderr, "usbaudio: clock %u would not take %u Hz "
+                        "(id %u, %s, %u pin(s), ac if %u)\n",
+                clock_entity(), (unsigned)SND_RATE, g.s.clock_id,
+                g.s.clock_is_selector ? "selector" : "source",
+                g.s.clock_pin_count, g.s.ac_ifnum);
         sys_usb_release(g.slot, USB_RELEASE_REBIND);
         return -1;
     }

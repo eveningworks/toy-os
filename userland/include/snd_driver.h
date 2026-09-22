@@ -22,11 +22,12 @@
 
 #include <stdint.h>
 #include "pci.h"
+#include "sound_abi.h"
 
 // Bumped when anything below changes shape. The host refuses a plugin
 // that does not match rather than calling through a moved slot -- the
 // abi/toyabi.h rule, for the same reason.
-#define SND_DRIVER_ABI 1u
+#define SND_DRIVER_ABI 2u
 
 // The symbol every plugin exports, by this exact name.
 #define SND_DRIVER_SYMBOL "snd_driver"
@@ -58,6 +59,21 @@ struct snd_dev {
     uint32_t rates, depths;
 
     void    *priv;                    // the driver's own state
+
+    // WHICH DEVICE, for a driver that finds its own. Set by the host
+    // from --usb-id before open(); NULL or empty means "any". A USB
+    // driver cannot just take the first audio device it sees: the
+    // kernel's device table hands out the first FREE entry, so
+    // unplugging something reorders it and which DAC a host grabs
+    // depends on unplug history.
+    const char *select;
+
+    // Filled in by open() when one plugin can serve several devices,
+    // so each registers as its own row. Left empty, the host falls
+    // back to the driver's own name and label -- which is right for a
+    // plugin that drives exactly one chip.
+    char     name[SND_DRV_NAME_MAX];
+    char     label[SND_DRV_LABEL_MAX];
 };
 
 // A driver answers this after an interrupt.

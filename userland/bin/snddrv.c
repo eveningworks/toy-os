@@ -40,7 +40,7 @@
 #include "lib/cmd.h"
 #include <sys/resource.h>
 
-#define USAGE "snddrv [-d INDEX] [--driver NAME] [-v]"
+#define USAGE "snddrv [-d INDEX] [--driver NAME] [--usb-id VID:PID] [-v]"
 
 #define PLUGIN_DIR "/lib/snd"
 #define MAX_PLUGINS 8
@@ -190,9 +190,11 @@ static int bring_up(int index, const struct snd_driver *drv,
 int main(int argc, char **argv) {
     int want_pci = -1;
     const char *want_drv = 0;
+    const char *want_usb = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-d") && i + 1 < argc) { want_pci = atoi(argv[++i]); continue; }
         if (!strcmp(argv[i], "--driver") && i + 1 < argc) { want_drv = argv[++i]; continue; }
+        if (!strcmp(argv[i], "--usb-id") && i + 1 < argc) { want_usb = argv[++i]; continue; }
         if (!strcmp(argv[i], "-v")) { g_verbose = 1; continue; }
         cmd_usage(USAGE);
         return 1;
@@ -274,6 +276,7 @@ int main(int argc, char **argv) {
         if (g_plugins[k]->match) continue;
         memset(&g_card, 0, sizeof g_card);
         g_card.pci = -1;
+        g_card.select = want_usb;
         if (g_plugins[k]->open(&g_card) == 0) {
             g_drv = g_plugins[k];
             index = -1;          // nothing of ours to release on the PCI side
@@ -293,8 +296,15 @@ int main(int argc, char **argv) {
     struct snd_register_msg m;
     memset(&m, 0, sizeof m);
     g_sh->drv.magic = SND_DRV_MAGIC;
-    snprintf(m.name, sizeof m.name, "%s-ring3", g_drv->name);
-    strlcpy(m.label, g_drv->label ? g_drv->label : g_drv->name, sizeof m.label);
+    // A PLUGIN THAT CAN SERVE SEVERAL DEVICES NAMES THE ONE IT TOOK.
+    // Left empty it is the driver's own name, which is right for a
+    // plugin that drives exactly one chip -- but two USB DACs both
+    // registering as "usbaudio-ring3" would collide, and the second
+    // one is what the tray's device list needs to be able to pick.
+    if (g_card.name[0]) strlcpy(m.name, g_card.name, sizeof m.name);
+    else snprintf(m.name, sizeof m.name, "%s-ring3", g_drv->name);
+    strlcpy(m.label, g_card.label[0] ? g_card.label :
+                     g_drv->label ? g_drv->label : g_drv->name, sizeof m.label);
     m.rates = g_card.rates;
     m.depths = g_card.depths;
     m.page = (uint64_t)(uintptr_t)&g_sh->drv;

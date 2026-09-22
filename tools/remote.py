@@ -442,6 +442,10 @@ def _negotiate(s, host, port, req, timeout):
 
 
 def do_put(host, port, local, remote, timeout, quiet=False):
+    # A HAND-NAMED seed/sync FILE DODGES THE FLASH'S OWN GUARD, and
+    # sending one reads as the fix not working rather than as the fix
+    # not being sent. See iso_guard.check_staged_file().
+    iso_guard.assert_staged_file(local)
     with open(local, "rb") as f:
         data = f.read()
     s = _tftp_socket(timeout)

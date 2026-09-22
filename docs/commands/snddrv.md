@@ -7,7 +7,7 @@
 ## Synopsis
 
 ```
-snddrv [-d INDEX] [--driver NAME] [-v]
+snddrv [-d INDEX] [--driver NAME] [--usb-id VID:PID] [-v]
 ```
 
 ## Options
@@ -16,7 +16,34 @@ snddrv [-d INDEX] [--driver NAME] [-v]
   [`lspci`](lspci.md) counts) instead of searching every device.
 - `--driver NAME` -- load only the plugin with this name (`hda`,
   `ac97`), instead of every `.so` in `/lib/snd`.
+- `--usb-id VID:PID` -- for a driver that finds its own device on a bus
+  this host cannot enumerate, drive the one with these ids, as
+  [`lsusb`](lsusb.md) prints them (`--usb-id 0b05:19a8`). A bare decimal
+  is an xHCI slot instead, which is what the logs name and the only way
+  to tell two identical DACs apart.
 - `-v` -- say which plugins loaded, and which devices were declined.
+
+## One host per USB DAC
+
+**THE IN-KERNEL USB AUDIO DRIVER TAKES EXACTLY ONE DEVICE**, so on a
+machine with two DACs attached the second is left unbound -- it says so
+in [`dmesg`](dmesg.md) now, naming the `--usb-id` that would drive it.
+Start a second host for it:
+
+```
+/$ spawn /bin/snddrv --driver usbaudio --usb-id 0b05:19a8
+```
+
+Each host registers its own row, named `usb-<vid><pid>` and labelled
+from the device's manufacturer string, so the tray's volume popup and
+the `audio_device` setting can pick between them.
+
+**WITHOUT `--usb-id` THE DEVICE IS NOT PREDICTABLE, and that is not
+laziness in the plugin.** The kernel's device table hands out the first
+FREE entry, so unplugging one device moves the next one up: which DAC
+"the first audio device" means depends on what was unplugged earlier in
+the boot. The plugin skips devices it cannot claim and tries the next,
+but which of several it lands on is still history-dependent.
 
 ## Description
 

@@ -18,6 +18,11 @@ struct sched_mm;
 // both stay fatal to the toucher.
 int mmap_fault_in(struct sched_mm *mm, uint64_t pml4_phys, uint64_t vaddr);
 
+// Drop any cached /lib image pages for this path. Called when the file
+// is rewritten, because the cache's "immutable within a boot" premise
+// is false the moment a build is pushed onto a running machine.
+void imgcache_forget(const char *path);
+
 // The two halves of a fork's view of the arena. `mmap_inherits_at` is
 // vmm_fork_opts.inherit_borrowed: a borrowed leaf inside a SHM or FILE
 // region is the child's too. `mmap_inherit_shm` takes the child's own

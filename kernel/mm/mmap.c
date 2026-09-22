@@ -614,6 +614,21 @@ struct imgcache_ent {
 static struct imgcache_ent g_imgcache[IMGCACHE_MAX];
 static int g_imgcache_n;
 
+// A /lib FILE THAT IS REWRITTEN IS NO LONGER IMMUTABLE, and the
+// development loop rewrites them: `remote.py put` lands a rebuilt .so
+// straight onto the bare-metal machine, and without this the next
+// spawn ran the OLD code with the new file on disk -- which reads as
+// the fix not working. The frames are NOT freed, because a read-only
+// one may be borrowed into a live process; they are unhooked from the
+// lookup, so a later spawn reads the file again. Bounded by /lib's
+// size, and reclaimed by the reboot this replaces.
+void imgcache_forget(const char *path) {
+    for (int i = 0; i < g_imgcache_n; ) {
+        if (k_strcmp(g_imgcache[i].path, path) != 0) { i++; continue; }
+        g_imgcache[i] = g_imgcache[--g_imgcache_n];
+    }
+}
+
 static uint64_t imgcache_get(const char *path, uint64_t off) {
     for (int i = 0; i < g_imgcache_n; i++) {
         if (g_imgcache[i].off == off && !k_strcmp(g_imgcache[i].path, path))

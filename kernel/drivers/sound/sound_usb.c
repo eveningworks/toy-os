@@ -471,7 +471,18 @@ static void log_refusal(uint8_t slot, const struct usb_audio_report *rep) {
 
 int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
                    uint32_t total) {
-    if (!info || g_audio.in_use) return 0;
+    if (!info) return 0;
+    // ONE DEVICE, AND SAYING SO. This driver keeps a single `g_audio`,
+    // so a second USB DAC is declined -- and every other refusal below
+    // logs a reason, which made this one read as a device the parser
+    // had rejected. Drive the second from ring 3: `snddrv --usb-id`.
+    if (g_audio.in_use) {
+        klog_printf("usb-audio: slot %u: already driving slot %u -- "
+                    "not bound (try snddrv --usb-id %04x:%04x)\n",
+                    info->slot, g_audio.slot,
+                    info->vendor_id, info->product_id);
+        return 0;
+    }
 
     struct usb_audio_stream s;
     struct usb_audio_report rep;
