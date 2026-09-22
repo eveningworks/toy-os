@@ -466,6 +466,8 @@ VERSION_GEN := $(shell sh tools/gen_version.sh >/dev/null 2>&1 && echo ok)
 version:
 	@sh tools/gen_version.sh
 
+# FIVE OF THESE ARE STILL EMPTY HERE -- see the second `all:` line
+# beside SND_PLUGINS, which is what actually builds them.
 all: $(KERNEL) $(USERLAND_ELVES) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) $(LIBC_SO) $(LIBUAPP_SO) $(MODULE_KOS) $(MODULE_ALIAS)
 
 # One explicit rule per module source, because the sources come from
@@ -1190,6 +1192,26 @@ DYNLIBS = $(BUILD)/lib/libhello.so $(BUILD)/lib/libplug.so $(BUILD)/lib/libhash.
 # snddrv.c. Discovered like every other source in this tree.
 SND_PLUGIN_SRCS = $(shell find userland/snd -name '*.c' 2>/dev/null | sort)
 SND_PLUGINS = $(patsubst userland/snd/%.c,$(BUILD)/lib/snd/%.so,$(SND_PLUGIN_SRCS))
+
+# `all` IS DECLARED AT THE TOP so that it stays the default goal, but
+# five of its prerequisites are defined hundreds of lines BELOW it --
+# and make expands an explicit rule's prerequisites AS IT READS THE
+# RULE, so up there `$(LDSO)`, `$(DYNLIBS)`, `$(SND_PLUGINS)`,
+# `$(LIBC_SO)` and `$(LIBUAPP_SO)` were every one of them the empty
+# string. `make all` therefore skipped ld-toy.so, the dynamic
+# libraries, the ring-3 sound plugins, libc.so and libuapp.so in
+# silence: editing `userland/snd/usbaudio.c` and running `make all`
+# left the old .so in place BYTE FOR BYTE, with nothing printed and
+# nothing failing. Only `make iso` rebuilt them, because `seed` names
+# them below their definitions -- so the bug hid behind the one command
+# everybody runs anyway, and surfaced as a driver change that "did
+# nothing".
+#
+# Prerequisites are CUMULATIVE across several rules for one target when
+# at most one of them carries a recipe, so this line COMPLETES the rule
+# at the top rather than replacing it. Keep it below every variable it
+# names.
+all: $(LDSO) $(DYNLIBS) $(SND_PLUGINS) $(LIBC_SO) $(LIBUAPP_SO)
 
 # The codec parser comes off the -fpic shared path, so the graph walk
 # in ring 3 is the kernel's own implementation (the geom.c rule).
