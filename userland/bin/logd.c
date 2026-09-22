@@ -56,6 +56,19 @@
 #define SEQ_PATH   "/var/lib/logd.seq"
 #define TAG_W      6                  // "kernel", "toywm ", "netd  "
 #define POLL_MS    1000
+
+// HOW OFTEN THE BOOT LOG IS FORCED TO DISK, in polls. Nothing did at
+// all before this, which is a real gap in a log daemon --
+// systemd-journald's SyncIntervalSec is the same idea.
+//
+// WHAT IT IS NOT KNOWN TO FIX, said plainly: two boots on the
+// bare-metal ASUS came back 0 bytes with no header, and this was
+// written for them, but that is NOT established as the cause. The
+// control refuses to go red -- a guest power-cut (SIGKILL to QEMU)
+// keeps its log either way, because the guest's disk is a host file
+// and host writes outlive the process. So this can only be confirmed
+// on the machine that lost the logs.
+#define SYNC_POLLS 2
 #define KEEP_DEFAULT 10
 
 // A PLAUSIBILITY FLOOR, not a correctness check: 2020-01-01. A machine
@@ -80,6 +93,7 @@ static int g_fd = -1;
 static unsigned long long g_written;   // bytes in the current file
 static unsigned long long g_boot;      // this boot's number
 static int g_capped;                   // this boot filled its budget
+static int g_dirty;                    // written since the last fsync
 
 static void emit(const char *tag, const char *line, unsigned len) {
     if (g_fd < 0 || !len) return;
@@ -89,6 +103,15 @@ static void emit(const char *tag, const char *line, unsigned len) {
     write(g_fd, line, len);
     write(g_fd, "\n", 1);
     g_written += len + 1;
+    g_dirty = 1;
+}
+
+// Force what is held to the platter. Cheap when nothing was written,
+// which is the common case between polls.
+static void log_sync(void) {
+    if (g_fd < 0 || !g_dirty) return;
+    fsync(g_fd);
+    g_dirty = 0;
 }
 
 // The cap is read EACH TIME rather than cached: lowering it on a machine
@@ -369,6 +392,10 @@ int main(void) {
     g_fd = open(LOG_PATH, O_WRONLY | O_CREAT | O_TRUNC);
     if (g_fd < 0) { sys_eprint("logd: cannot open " LOG_PATH "\n"); return 1; }
     write_header();
+    // THE HEADER GOES DOWN AT ONCE. A boot that dies before the first
+    // periodic sync should still be identifiable rather than filed as
+    // "(no header)", which is what both lost boots looked like.
+    log_sync();
 
     // FROM THE OLDEST BYTE STILL RETAINED, not from now: everything the
     // kernel logged before this daemon started is exactly the part
@@ -378,6 +405,7 @@ int main(void) {
     struct query_applog a;
     if (sys_query_record(QUERY_APPLOG, 0, &a, sizeof a) > 0) g_seq = a.oldest - 1;
 
+    unsigned polls = 0;
     for (;;) {
         while (drain_klog()) { }
         while (drain_applog()) { }
@@ -386,6 +414,7 @@ int main(void) {
         // more coming this second, so write what is held.
         for (unsigned i = 0; i < FRAG_TAGS; i++) frag_flush(i);
         budget_check();
+        if (++polls >= SYNC_POLLS) { log_sync(); polls = 0; }
         sys_sleep_ms(POLL_MS);
     }
 }
