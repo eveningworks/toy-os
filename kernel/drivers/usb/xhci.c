@@ -2805,9 +2805,21 @@ static void wedged_heartbeat(void) {
     uint64_t now = clocksource_now_ns();
     if (now - last < 1000000000ull) return;
     last = now;
-    klog_printf(KLOG_WARN "usb: alive at %llu s, controller given up on "
-                "(%u timeout(s))\n",
-                (unsigned long long)(now / 1000000000ull), g_hc.timeouts);
+    // WHAT THE HARDWARE SAYS, not just that we are alive. USBSTS.HSE is
+    // the controller's own "I hit something fatal" bit and nothing in
+    // this driver has ever read it; the PCI status register carries the
+    // master/target abort and SERR bits. A machine that resets with a
+    // perfectly regular heartbeat, a clean memory audit and no
+    // over-current has to be leaving a mark SOMEWHERE, and these are
+    // the two registers nobody has looked at.
+    uint32_t sts = mr32(g_hc.op, XHCI_USBSTS);
+    uint32_t pcists = g_hc.pci
+                    ? (pci_config_read32(g_hc.pci, 0x04) >> 16) : 0;
+    klog_printf(KLOG_WARN "usb: alive at %llu s, given up on "
+                "(%u timeout(s)) usbsts 0x%x%s pcistatus 0x%x\n",
+                (unsigned long long)(now / 1000000000ull), g_hc.timeouts,
+                sts, (sts & XHCI_STS_HSE) ? " HOST-SYSTEM-ERROR" : "",
+                pcists);
 }
 
 void xhci_deferred_work(void) {
