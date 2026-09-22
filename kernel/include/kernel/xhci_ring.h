@@ -65,4 +65,10 @@ int xhci_ring_event_pop(struct xhci_ring *r, struct xhci_trb *out);
 // base plus the current dequeue index.
 uint64_t xhci_ring_erdp(const struct xhci_ring *r);
 
+// Where the NEXT push will land. A caller that must be ready for the
+// completion BEFORE the TRB is visible to the controller needs this:
+// xhci_ring_push() sets the cycle bit last, which hands the TRB over,
+// so anything armed after it has already lost the race.
+uint64_t xhci_ring_enq_phys(const struct xhci_ring *r);
+
 #endif

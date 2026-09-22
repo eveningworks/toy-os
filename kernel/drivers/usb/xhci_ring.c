@@ -40,6 +40,11 @@ void xhci_ring_init(struct xhci_ring *r, void *base, uint64_t phys,
     }
 }
 
+uint64_t xhci_ring_enq_phys(const struct xhci_ring *r) {
+    if (!r) return 0;
+    return r->phys + (uint64_t)r->enqueue * sizeof(struct xhci_trb);
+}
+
 uint64_t xhci_ring_push(struct xhci_ring *r, uint64_t param,
                         uint32_t status, uint32_t control) {
     if (!r || r->is_event || r->count < 2) return 0;

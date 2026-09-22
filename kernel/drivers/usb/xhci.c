@@ -824,14 +824,26 @@ static int wait_completion(volatile struct xhci_completion *c, const char *what)
 static void cmd_ring_report(const char *when) {
     uint64_t crcr = (uint64_t)mr32(g_hc.op, XHCI_CRCR) |
                     ((uint64_t)mr32(g_hc.op, XHCI_CRCR + 4) << 32);
+    // RCS IS NOT REPORTED, AND THAT IS DELIBERATE: xHCI 5.4.5 makes
+    // CRCR bits 2:0 and the pointer field read as ZERO, so printing
+    // RCS=0 forever only invited the conclusion that the controller had
+    // lost the cycle state. CRR is the one bit that does read back.
+    // `base` is the DRIVER's own idea of the ring; the controller's is
+    // unreadable, so the two cannot be compared here -- say which is
+    // which rather than implying agreement.
     klog_printf(KLOG_ERR
-                "usb: cmd ring %s: crcr 0x%llx (CRR=%u RCS=%u) enq %u cyc %u "
-                "base 0x%llx usbsts 0x%x\n",
+                "usb: cmd ring %s: crcr 0x%llx (CRR=%u) enq %u cyc %u "
+                "our base 0x%llx usbsts 0x%x\n",
                 when, (unsigned long long)crcr,
                 (unsigned)((crcr & XHCI_CRCR_CRR) ? 1 : 0),
-                (unsigned)(crcr & XHCI_CRCR_RCS),
                 g_hc.cmd.enqueue, g_hc.cmd.cycle,
                 (unsigned long long)g_hc.cmd.phys, mr32(g_hc.op, XHCI_USBSTS));
+    // The first three command TRBs' control dwords: a ring the
+    // controller is parsing differently shows up here as cycle bits
+    // that do not match what we believe we published.
+    klog_printf(KLOG_ERR "usb: cmd ring trb[0..2] ctrl %#x %#x %#x\n",
+                g_hc.cmd.trb[0].control, g_hc.cmd.trb[1].control,
+                g_hc.cmd.trb[2].control);
 }
 
 // ABORT THE COMMAND RING AND PUT IT BACK, which is the only lever a
@@ -889,9 +901,25 @@ int xhci_selftest_cmd_recovery(void);   // below cmd_submit; see its comment
 // Completion event. Returns the completion code; `out_slot` receives
 // the slot id the controller assigned, when the command allocates one.
 static int cmd_submit(uint64_t param, uint32_t control, uint8_t *out_slot) {
+    // ARMED BEFORE THE PUSH, and the order is load-bearing.
+    // xhci_ring_push() sets the cycle bit last, which is what hands the
+    // TRB to the controller -- and a controller with CRR=1 may fetch it
+    // without waiting for the doorbell. A completion drained in that
+    // window would find g_cmd_done.trb still holding the PREVIOUS
+    // command's address, be rejected as stale, and cost a full 1000 ms
+    // timeout on a command that actually succeeded.
+    g_cmd_done.trb  = xhci_ring_enq_phys(&g_hc.cmd);
     g_cmd_done.done = 0;
     uint64_t at = xhci_ring_push(&g_hc.cmd, param, 0, control);
-    g_cmd_done.trb = at;
+    // The two must agree, or the waiter is armed for a TRB the
+    // controller will never report -- every command would then time
+    // out, which is a failure mode worth naming rather than deducing.
+    if (at != g_cmd_done.trb) {
+        klog_printf(KLOG_ERR "usb: command armed for %#lx but pushed at "
+                    "%#lx -- ring bookkeeping disagrees\n",
+                    (unsigned long)g_cmd_done.trb, (unsigned long)at);
+        g_cmd_done.trb = at;
+    }
     ring_doorbell(0, 0);
 
     // The injector fakes the WAIT, not the controller: the command was
@@ -1635,10 +1663,18 @@ void xhci_service(void) {
                 g_cmd_done.done = 1;
             } else {
                 g_hc.cmd_stale++;
+                // THE CODE AND THE TYPE ARE THE WHOLE DIAGNOSIS. Without
+                // them this line cannot tell a genuinely stale event
+                // from CC 24 (Command Ring Stopped), which the abort
+                // path generates DELIBERATELY and whose TRB Pointer is
+                // the ring's dequeue pointer rather than any completed
+                // command -- so it lands here and reads as a fault.
                 klog_printf("usb: stale command completion for trb %#lx "
-                            "(waiting on %#lx) -- ignored\n",
+                            "(waiting on %#lx) cc=%u type=%u -- ignored\n",
                             (unsigned long)src,
-                            (unsigned long)g_cmd_done.trb);
+                            (unsigned long)g_cmd_done.trb,
+                            (unsigned)code,
+                            (unsigned)XHCI_TRB_TYPE(ev.control));
             }
         } else if (type == XHCI_TRB_TRANSFER_EVENT) {
             // A Transfer Event names the TRB that finished. Control
