@@ -2753,7 +2753,28 @@ static void scan_ports(void) {
         attach_root_port(p);
 }
 
+// ALIVE-AT, AND ONLY ON A BOOT THAT IS ALREADY BROKEN. A machine that
+// resets with nothing logged leaves the time of death unknown to within
+// the log's sync window, and that window is the only evidence there is.
+// This pins it to a second. It would be pure noise on a healthy boot,
+// so it runs solely once the controller has been given up on -- which
+// is exactly the boot that resets.
+static void wedged_heartbeat(void) {
+    static uint64_t last;
+    if (!g_hc.wedged) return;
+    uint64_t now = clocksource_now_ns();
+    if (now - last < 1000000000ull) return;
+    last = now;
+    klog_printf(KLOG_WARN "usb: alive at %llu s, controller given up on "
+                "(%u timeout(s))\n",
+                (unsigned long long)(now / 1000000000ull), g_hc.timeouts);
+}
+
 void xhci_deferred_work(void) {
+    // BEFORE the running check: a controller that has been given up on
+    // is usually no longer `running`, and that is precisely the boot
+    // this needs to time.
+    wedged_heartbeat();
     if (!g_hc.present || !g_hc.running) return;
 
     // FIRST, and it takes every device with it -- so nothing below

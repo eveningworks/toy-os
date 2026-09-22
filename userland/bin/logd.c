@@ -57,9 +57,12 @@
 #define TAG_W      6                  // "kernel", "toywm ", "netd  "
 #define POLL_MS    1000
 
-// HOW OFTEN THE BOOT LOG IS FORCED TO DISK, in polls. Nothing did at
-// all before this, which is a real gap in a log daemon --
-// systemd-journald's SyncIntervalSec is the same idea.
+// HOW OFTEN THE BOOT LOG IS FORCED TO DISK, in polls (POLL_MS each).
+// Nothing did at all before this, which is a real gap in a log daemon
+// -- systemd-journald's SyncIntervalSec is the same idea. ONE, not two,
+// because the gap is not a comfort setting: it is the blind window on
+// a machine that resets without warning, and every second of it is a
+// second of the failure nobody can see.
 //
 // VERIFIED ON THE MACHINE THAT LOST THEM, and not in QEMU, which
 // cannot show it: a guest power-cut (SIGKILL to QEMU) keeps its log
@@ -68,7 +71,7 @@
 // an unclean reset came back 0 bytes with no header before this and
 // 44 KiB each after -- and the first thing that log revealed was the
 // deterministic reset it had been hiding (docs/bugs.md).
-#define SYNC_POLLS 2
+#define SYNC_POLLS 1
 #define KEEP_DEFAULT 10
 
 // A PLAUSIBILITY FLOOR, not a correctness check: 2020-01-01. A machine
