@@ -249,3 +249,54 @@ The honest limit: a device that reports ABSOLUTE positions (a tablet,
 virtio-input) overwrites a warp with its next report. That is fine for
 what a warp is for -- parking a pointer while nothing is touching it --
 and it is why the reply is the driver's answer rather than an assumption.
+
+## Audio is judged by RECORDING it, because every counter we had pointed the wrong way
+
+A ring-3 USB audio driver crackled for weeks while every number we could
+read said it was healthy. The counters were not lying; they were
+answering a different question.
+
+`packets/s` measures whether the DRIVER is busy. Raising `snddrv`'s
+priority took it from 7217 to 7959 of the 8000 the endpoint wants -- and
+made the audio *worse*, because prioritising the last stage starved the
+two that fill the ring, so the driver posted a full-rate stream of an
+empty one. That was already recorded as a warning. What was not noticed
+is that the same metric had also chosen the buffer depth: judged by
+packets/s, a deeper cushion looked catastrophic ("192 outstanding
+collapsed to 393 packets/s"), so the driver shipped with three groups.
+
+Judged by the audio, that is exactly backwards. Recording the DAC's own
+analogue output back into the machine's line in and counting waveform
+discontinuities:
+
+      96 packets (12 ms)   33.1 clicks/s   20 s played in 23.6 s
+     160 packets (20 ms)    0.3 clicks/s   20 s played in 20.0 s
+
+The metric had not merely failed to see the fault. It had CAUSED it.
+
+So the rule here: **an output device is judged by what came out of it.**
+`tools/audio_loopback_test.py` is the instrument -- a cable from the
+DAC's headphone out into the motherboard's line in, a steady tone as the
+stimulus, and the sine recurrence `x[n] = 2cos(w)x[n-1] - x[n-2]` as the
+detector, so any break in the stream shows up as a residual spike. Its
+`--crackle` mode plays one file through the in-kernel driver and the
+ring-3 one so the difference is attributable to the driver rather than
+to the day.
+
+Two things this bought beyond the fix, both of which a counter would
+have hidden. The wall clock is a second, independent witness: an
+isochronous endpoint consumes a packet every 125 us whether or not one
+arrived, so a 16% shortfall in posting is a 16% longer stream, and the
+two numbers agreeing is what ruled out a mere measurement artefact. And
+the analyser's own negative control -- the host playing into its own
+cable -- caught a bug in the detector on its first run, which is the
+only reason a later clean result could be trusted.
+
+The honest limits. The click detector needs a STEADY TONE: real music
+has transients that break the recurrence, so a click count on music is
+meaningless and only the dropout count survives. The floor is not zero
+-- an MP3 stimulus carries the decoder's own ringing, and both drivers
+score ~0.3/s on it, so "at the floor" is the goal rather than "zero".
+And the cable is not normally connected, which is why the tool SKIPS
+rather than fails without it: an absent cable and a silent guest are the
+same flat hiss, and calling that red would convict the wrong half.

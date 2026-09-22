@@ -243,19 +243,46 @@ static int usbaudio_open(struct snd_dev *dev) {
     if (group < per_ms) group = per_ms;
     g.group = (uint8_t)(group ? group : 1);
 
-    // **THREE GROUPS, AND THE CEILING IS THE TRANSFER RING, NOT THE
-    // BUFFER.** xHCI's ring here is 256 TRBs with one reserved for the
-    // Link, and one descriptor is one TRB -- so the packets OUTSTANDING
-    // must stay well under that or a refill overwrites entries the
-    // controller has not consumed yet. Measured: 192 outstanding
-    // collapsed the rate to 393 packets/s, where 96 sustained 5803.
-    // Three groups is enough to cover a wakeup's turnaround and leaves
-    // the ring two-thirds empty.
-    // THREE GROUPS. Deeper was measured WORSE, repeatedly and on both
-    // memory types -- 160 outstanding collapsed to 381 packets/s where
-    // 96 sustained 7516. Why a deeper cushion hurts is NOT established
-    // and docs/bugs.md says so.
-    uint32_t want = g.group * 3;
+    // **FIVE GROUPS -- 20 ms OF TOLERANCE, AND TOLERANCE IS THE WHOLE
+    // PROBLEM.** This driver is not slow, it is LATE: it competes for
+    // the CPU with whatever is decoding, where the in-kernel driver
+    // refills inside the interrupt handler and never waits. So the one
+    // thing that matters is how long a buffer covers a missed turn.
+    //
+    // THIS WAS THREE GROUPS, AND IT WAS WRONG BECAUSE OF THE METRIC
+    // THAT CHOSE IT. Tuned by packets/s, deeper looked catastrophic
+    // ("192 outstanding collapsed to 393 packets/s"). Judged by the
+    // AUDIO -- recording the DAC's own analogue output and counting
+    // discontinuities, tools/audio_loopback_test.py --crackle -- it is
+    // the opposite, and not subtly:
+    //
+    //     96 packets (12 ms)   33.1 clicks/s   20 s played in 23.6 s
+    //    144 packets (18 ms)    0.9 clicks/s   20 s played in 20.0 s
+    //    160 packets (20 ms)    0.3 clicks/s   20 s played in 20.0 s
+    //    192 packets (24 ms)    0.3 clicks/s   20 s played in 20.3 s
+    //
+    // 0.3/s is the measurement's own FLOOR -- the in-kernel driver
+    // scores the same on the same file, because the stimulus is a
+    // decoded MP3 and the detector hears the decoder's ringing. So five
+    // groups is not "better", it is at the floor. The stretch is the
+    // same fact twice: an isochronous endpoint consumes a packet every
+    // 125 us whether or not one arrived, so a 16% shortfall in posting
+    // is a 16% longer stream.
+    //
+    // THE WAKEUP RATE IS NOT WHAT MATTERS, measured the same way: with
+    // this depth pinned, IOC every 8, 16 and 32 give 34.9, 35.0 and
+    // 35.1 clicks/s -- indistinguishable. An earlier sweep seemed to
+    // show tighter IOC hurting, but `want` was a multiple of `group`
+    // then, so shrinking the group shrank the BUFFER with it, and the
+    // buffer is all it measured.
+    //
+    // THE CEILING IS THE TRANSFER RING, NOT THE BUFFER. xHCI's ring
+    // here is 256 TRBs with one reserved for the Link and one
+    // descriptor per TRB, so the packets OUTSTANDING must stay well
+    // under that or a refill overwrites entries the controller has not
+    // consumed. 160 leaves 95 TRBs of slack; do not raise it without
+    // re-reading that limit, and `g.packets` is a uint8_t besides.
+    uint32_t want = g.group * 5;
     if (want > fits) want = fits - (fits % g.group);
     g.packets = (uint8_t)(want ? want : g.group);
 
