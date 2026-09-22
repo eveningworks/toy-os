@@ -82,6 +82,12 @@ static int g_running;
 // across a gap.
 #define SUSPEND_IDLE_MS 2000
 
+// How long `hw_pos` may sit still, while clients are playing, before
+// the engine is called stalled rather than the buffer called full. Long
+// enough that a slow start or a scheduling hiccup is not a stall; short
+// enough to be well inside the ring's own 341 ms.
+#define STALL_MS 500
+
 static int g_open;                       // is the stream ours right now?
 static unsigned long long g_idle_since;  // when the last client stopped
 
@@ -423,6 +429,9 @@ int main(void) {
 
     g_wr = 0;
     g_idle_since = now_ms();
+    uint32_t stall_pos = 0;
+    uint64_t stall_since = now_ms();
+    int stalled = 0;
     for (;;) {
         rescan();
         gains_poll(0);
@@ -458,6 +467,45 @@ int main(void) {
             g_wr = (g_wr + SND_CHUNK_BYTES) % SND_RING_BYTES;
         }
 
+        // A DEAD hw_pos IS ARITHMETICALLY IDENTICAL TO A FULL RING, and
+        // that is why a stalled engine used to be permanent silence
+        // with nothing logged at all. `limit` is derived from hw_pos,
+        // so when the consumer stops advancing `limit` stops with it --
+        // and a ring whose limit has reached our cursor is exactly what
+        // "fully buffered" looks like. The loop above then does the
+        // correct thing for a full ring, which is nothing, for ever.
+        // Measured on a stalled ring-3 USB driver: hw_pos frozen at
+        // 4096, limit computed to 2048, g_wr already 2048, so `filled`
+        // was 0 once a second for as long as it was watched while the
+        // card played silence and aplay never exited.
+        //
+        // ALSA does not trust the pointer either -- it has an xrun
+        // timeout beside snd_pcm_update_hw_ptr() for this exact case.
+        // A consumer that has not moved for STALL_MS while clients are
+        // playing is not a full buffer, it is a dead engine: say so,
+        // and ask for one restart. ONCE per stall, because the klog
+        // ring holds a few hundred lines and a probe that outruns it
+        // destroys the evidence it is gathering.
+        // AN ENGINE THAT HAS NOT STARTED YET IS NOT A STALLED ONE.
+        // hw_pos is legitimately 0 between taking the card and the
+        // driver programming the chip, and counting that as a stall
+        // fired a misleading line on every first client. The control
+        // page's `running` is the driver's own answer, so wait for it.
+        if (!playing || !g_hw->running) {
+            stall_since = now_ms();
+            stalled = 0;
+        } else if (g_hw->hw_pos != stall_pos) {
+            stall_pos = g_hw->hw_pos;
+            stall_since = now_ms();
+            stalled = 0;
+        } else if (!stalled && now_ms() - stall_since >= STALL_MS) {
+            stalled = 1;
+            fprintf(stderr, "soundd: hw_pos stuck at %u for %ums -- the engine "
+                            "has stalled, not the buffer; asking for a restart\n",
+                    (unsigned)stall_pos, (unsigned)STALL_MS);
+            g_running = 0;          // makes the START below fire
+        }
+
         // THE CONTROL PAGE OUTRANKS OUR OWN FLAG, usnd_sink_dev.c's
         // rule: the kernel clears `running` when the device this stream
         // was opened on goes away, and a daemon that trusted its own
@@ -466,8 +514,11 @@ int main(void) {
             if (sys_snd_ctl(SND_CTL_START) == 0) g_running = 1;
         }
 
-        // Half a chunk. Long enough that this is not a spin, short
-        // enough that the ring never runs dry between passes.
+        // NEARLY TWO CHUNKS, not half of one: a chunk is 2048 bytes =
+        // 512 frames = 10.67 ms at 48 kHz (the comment here used to say
+        // "half a chunk", which was wrong by 4x). It is still far
+        // inside the ring's 341 ms, which is what keeps it from running
+        // dry between passes.
         sys_sleep_ms(20);
     }
 }
