@@ -23,20 +23,22 @@ snddrv [-d INDEX] [--driver NAME] [--usb-id VID:PID] [-v]
   to tell two identical DACs apart.
 - `-v` -- say which plugins loaded, and which devices were declined.
 
-## One host per USB DAC
+## Aiming it at one USB DAC
 
-**THE IN-KERNEL USB AUDIO DRIVER TAKES EXACTLY ONE DEVICE**, so on a
-machine with two DACs attached the second is left unbound -- it says so
-in [`dmesg`](dmesg.md) now, naming the `--usb-id` that would drive it.
-Start a second host for it:
+**YOU DO NOT NEED THIS TO SEE A SECOND DAC.** The in-kernel driver
+binds every attached USB DAC (up to four) and each gets its own row --
+`usb-<vid><pid>`, labelled from the device's manufacturer string -- so
+the tray's volume popup and the `audio_device` setting pick between
+them with nothing started by hand. `--usb-id` is for running a chosen
+DAC through the RING-3 driver instead, which is what a test does when
+it needs to say which implementation a result came from:
 
 ```
 /$ spawn /bin/snddrv --driver usbaudio --usb-id 0b05:19a8
 ```
 
-Each host registers its own row, named `usb-<vid><pid>` and labelled
-from the device's manufacturer string, so the tray's volume popup and
-the `audio_device` setting can pick between them.
+The ring-3 host claims that device away from the kernel driver and
+registers its own row for it.
 
 **WITHOUT `--usb-id` THE DEVICE IS NOT PREDICTABLE, and that is not
 laziness in the plugin.** The kernel's device table hands out the first

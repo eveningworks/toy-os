@@ -345,6 +345,14 @@ enum setting_result setting_set(const char *name, const char *value);
 // interested parties live in other address spaces.
 uint32_t setting_generation(void);
 
+// **A CHOICE LIST CAN CHANGE WITHOUT A SET.** `audio_device`'s choices
+// are computed from the REGISTERED sound devices, so plugging a USB DAC
+// in changes what the setting answers while nothing was written -- and
+// a generation bumped only on a SET left the tray's device list showing
+// devices that had been unplugged. A subsystem whose choices are
+// derived from live state calls this when that state moves.
+void setting_choices_changed(void);
+
 // Called from kernel_main() after the filesystem is up and each
 // subsystem's own `*_init()` has run. Registers the settings the kernel
 // itself owns, each through its subsystem's `*_setting_register()`.

@@ -2719,28 +2719,49 @@ same reason. The crash case is left as it is on purpose: a card
 half-programmed by a driver that died is not something to hand a kernel
 driver automatically, and re-running `hdad` recovers it.
 
-## One USB DAC per driver host, named by its ids, rather than one plugin serving several
+## A sound op carries its device, so one driver can serve several cards
 
-The in-kernel USB audio driver keeps a single `g_audio`, so a second
-USB DAC is not bound at all. With two attached -- and the maintainer
-tests with two -- the second was silently unbound, and the ring-3
-plugin's answer to "which device" was whichever `QUERY_USB` listed
-first. The obvious fix is to make the plugin multi-instance: one
-`snddrv` registering a `sound_device` per DAC. That is not what this
-does.
+`struct sound_device`'s ops took NO argument -- `start(void)`,
+`stop(void)`, `set_volume(int)` -- so a driver had no way to tell which
+of its cards an op was for. Everything downstream followed from that:
+the USB driver kept a single `g_audio` and declined a second DAC, and
+`hda.c` served its two controllers by GENERATING A TRAMPOLINE PAIR per
+controller (`hda0_start`/`hda1_start`) whose only job was to name a
+different global. With two USB DACs attached the second could not
+appear in the tray's device list at all, which is what the maintainer
+hit.
 
-**A HOST PROCESS PER DEVICE, because that is what the split already
-is.** `snd_driver.h` exists so a driver is a file in `/lib/snd` that a
-system-provided host loads -- Windows' UMDF between `WUDFHost.exe` and
-a driver DLL, DriverKit between its host and a `.dext`. Both run one
-host INSTANCE per device, and for the same reason: a driver holding
-one device's state in file-scope data is the normal case, and making
-every plugin multi-instance to serve the one that needs it taxes
-`hda.so` and `ac97.so` for nothing. So `snddrv --usb-id VID:PID` picks
-the device and a second `snddrv` drives the second DAC.
+**THE OPS TAKE THEIR DEVICE, and a driver recovers its state from
+`dev->priv`.** Linux's `snd_pcm_ops` are handed a substream and NT's
+port/miniport model hands the miniport its own object, for exactly this
+reason: per-card context belongs in the call, not in a global the
+callee has to guess. The USB driver now holds an array and binds every
+DAC, `hda.c`'s trampolines collapse to one set, and `ac97`/`sound_proc`
+ignore the argument because they genuinely are single-instance. The
+alternative -- a `container_of` off the embedded struct -- was not
+taken because nothing else in this kernel has one, and `priv` is
+already how `snd_driver.h` spells the same idea in ring 3.
 
-**THE SELECTOR IS NOT A CONVENIENCE, because "the first audio device"
-is not a stable phrase here.** `dev_alloc()` returns the first FREE
+**WHAT THIS SUPERSEDES.** An earlier revision of this entry argued for
+a HOST PROCESS PER DEVICE as the answer to a second DAC -- a second
+`snddrv --usb-id` registering its own row, on the UMDF/DriverKit
+reading. That was solving the ops-signature problem from outside, and
+it left the second DAC invisible until somebody typed a command. The
+ring-3 host per device remains the right shape for running a driver
+OUT of the kernel, and `--usb-id` remains how a test aims it; it is no
+longer how a machine gets its second DAC.
+
+**A DEVICE NAME IS ITS IDS, not its port**, because `audio_device`
+persists the name across reboots and the kernel's device table hands
+out the first FREE entry -- so a port or an index moves when anything
+is unplugged. Two of the SAME model still collide, and the second takes
+a numbered form; which of an identical pair keeps the plain name
+follows enumeration order, so that pair cannot be pinned across a
+replug. That is inherent to identical devices rather than a gap to
+close.
+
+**THE RING-3 SELECTOR IS STILL NOT A CONVENIENCE, because "the first
+audio device" is not a stable phrase here.** `dev_alloc()` returns the first FREE
 entry in the kernel's device table, so unplugging anything moves the
 devices after it up: which DAC a host grabbed depended on what had
 been unplugged earlier in the boot. `--usb-id` is how a test says

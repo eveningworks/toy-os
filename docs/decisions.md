@@ -336,7 +336,7 @@ first before re-litigating it from scratch.
 - [A device claim is state on the DEVICE, its gate is the driver's `remove()`, and a probe runs with interrupts on](decisions/drivers.md#a-device-claim-is-state-on-the-device-its-gate-is-the-drivers-remove-and-a-probe-runs-with-interrupts-on)
 - [A ring-3 driver's DMA buffer is what turns bus mastering on, and the parser it walks with is the kernel's own](decisions/drivers.md#a-ring-3-drivers-dma-buffer-is-what-turns-bus-mastering-on-and-the-parser-it-walks-with-is-the-kernels-own)
 - [A sound driver in ring 3 is asked to start, and reporting a period is what proves it did](decisions/drivers.md#a-sound-driver-in-ring-3-is-asked-to-start-and-reporting-a-period-is-what-proves-it-did)
-- [One USB DAC per driver host, named by its ids, rather than one plugin serving several](decisions/drivers.md#one-usb-dac-per-driver-host-named-by-its-ids-rather-than-one-plugin-serving-several)
+- [A sound op carries its device, so one driver can serve several cards](decisions/drivers.md#a-sound-op-carries-its-device-so-one-driver-can-serve-several-cards)
 
 **GUI: window manager, compositor & widgets** -- [`decisions/gui.md`](decisions/gui.md) (224 entries)
 

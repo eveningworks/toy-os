@@ -84,7 +84,8 @@ static void ac97_irq(uint64_t *regs) {
     outw(g_nabm + PO_SR, sr & SR_ACK); // RW1C: only the bits seen
 }
 
-static int ac97_start(void) {
+static int ac97_start(const struct sound_device *dev) {
+    (void)dev;   // one AC'97 per machine
     // Reset the box, then arm it. RR self-clears when the reset is done.
     // A SPIN COUNT, not a tick deadline: this runs from SND_CTL_START,
     // a syscall, where interrupts are off and pit_ticks() stands still.
@@ -100,14 +101,16 @@ static int ac97_start(void) {
     return 0;
 }
 
-static void ac97_stop(void) {
+static void ac97_stop(const struct sound_device *dev) {
+    (void)dev;
     outb(g_nabm + PO_CR, 0);
     outw(g_nabm + PO_SR, SR_ACK);
 }
 
 // 0..100 onto the codec's attenuators: 0 dB at 100, mute at 0. Master
 // is 6-bit attenuation per channel, PCM out 5-bit.
-static void ac97_set_volume(int pct) {
+static void ac97_set_volume(const struct sound_device *dev, int pct) {
+    (void)dev;
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
     if (pct == 0) {
@@ -162,7 +165,7 @@ static void ac97_probe(const struct pci_device *dev) {
         return;
     }
     outw(g_nam + NAM_RESET, 1); // any write resets the mixer to defaults
-    ac97_set_volume(100);
+    ac97_set_volume(&ac97_dev, 100);
 
     uint64_t ring_phys = 0;
     void *ring = sound_ring_alloc(&ring_phys);
@@ -224,7 +227,7 @@ static void ac97_probe(const struct pci_device *dev) {
 static void ac97_remove(const struct pci_device *d) {
     if (!g_pci || g_pci != d) return;
 
-    ac97_stop();
+    ac97_stop(&ac97_dev);
     sound_unregister(&ac97_dev);
 
     if (g_msi_vector) pci_msi_release(d, g_msi_vector);
@@ -258,9 +261,9 @@ KTEST("ac97", "the controller registered and the codec is ready") {
 
 KTEST("ac97", "start runs the engine and stop halts it") {
     if (!g_pci || !g_bdl) { KTEST_SKIP("no AC97 on this machine"); return; }
-    KTEST_ASSERT_EQ(ac97_start(), 0);
+    KTEST_ASSERT_EQ(ac97_start(&ac97_dev), 0);
     KTEST_ASSERT(inb(g_nabm + PO_CR) & CR_RPBM);
-    ac97_stop();
+    ac97_stop(&ac97_dev);
     KTEST_ASSERT_EQ(inb(g_nabm + PO_CR) & CR_RPBM, 0);
 }
 PCI_DRIVER_REMOVABLE("ac97", ac97_matches, ac97_probe, ac97_remove);

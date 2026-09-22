@@ -73,7 +73,8 @@ static void post(uint32_t op, uint32_t volume) {
     futex_note_ready(g_drv.pid);
 }
 
-static int proc_start(void) {
+static int proc_start(const struct sound_device *dev) {
+    (void)dev;   // one ring-3 driver per process, and g_drv is it
     volatile struct snd_driver_page *p = page();
     if (!p) return -1;
     post(SND_REQ_START, 0);
@@ -83,7 +84,8 @@ static int proc_start(void) {
     return 0;
 }
 
-static void proc_stop(void) {
+static void proc_stop(const struct sound_device *dev) {
+    (void)dev;
     // PUBLISHED AT ONCE, unlike the start. "Stopped" is true the moment
     // the core decides it -- an app must not see `running` while the
     // engine is being torn down -- whereas "started" is only true once
@@ -93,7 +95,8 @@ static void proc_stop(void) {
     post(SND_REQ_STOP, 0);
 }
 
-static void proc_volume(int pct) {
+static void proc_volume(const struct sound_device *dev, int pct) {
+    (void)dev;
     post(SND_REQ_VOLUME, (uint32_t)(pct < 0 ? 0 : pct > 100 ? 100 : pct));
 }
 

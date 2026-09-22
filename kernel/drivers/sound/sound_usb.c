@@ -95,14 +95,18 @@ struct audio_dev {
     uint8_t  has_volume;
 
     char name[SOUND_NAME_MAX];
-    char label[32];
+    char label[40];   // query_sound.label's size, so nothing truncates
     struct sound_device dev;
 };
 
-// One is all the sound core can use anyway -- a second USB card would
-// register and sit inactive, which is exactly what a second one of any
-// kind does.
-static struct audio_dev g_audio;
+// ONE PER ATTACHED DAC. This was a single device, on the reasoning that
+// a second would "register and sit inactive" -- which is true and is
+// exactly what is wanted: it sits in the tray's device list until
+// somebody picks it. With two DACs attached the second was declined and
+// could never be chosen at all. Linux's snd-usb-audio gives each its
+// own card for the same reason.
+#define USB_AUDIO_MAX 4
+static struct audio_dev g_audio[USB_AUDIO_MAX];
 
 // --- descriptor parsing (pure, and KTESTed below) ---------------------
 
@@ -220,9 +224,9 @@ static void audio_packet_done(void *ctx, uint32_t bytes) {
 // argument rather than always the feature unit because UAC2 puts the
 // sample rate on a clock, and addressing it as the feature unit fails
 // the transfer with nothing to see.
-static int audio_control(uint8_t req, uint8_t type, uint8_t cs, uint8_t channel,
+static int audio_control(struct audio_dev *a,
+                         uint8_t req, uint8_t type, uint8_t cs, uint8_t channel,
                          uint8_t entity, uint8_t *buf, uint16_t len) {
-    struct audio_dev *a = &g_audio;
     uint8_t setup[8];
     setup[0] = type;
     setup[1] = req;
@@ -239,8 +243,7 @@ static int audio_control(uint8_t req, uint8_t type, uint8_t cs, uint8_t channel,
 // descriptor states a rate, so THIS REQUEST IS THE NEGOTIATION -- a
 // device that refuses it is one we cannot play through, which is why
 // it is checked at bind rather than assumed at start.
-static int set_clock_rate(void) {
-    struct audio_dev *a = &g_audio;
+static int set_clock_rate(struct audio_dev *a) {
     if (!a->s.uac2) return 0;               // UAC1: the rate is the format's
     if (!a->s.clock_id) {
         klog_write("usb-audio: UAC2 device names no clock for its stream\n");
@@ -255,7 +258,7 @@ static int set_clock_rate(void) {
         // silently override what the owner set on the hardware.
         if (!a->s.clock_pin_count) return -1;
         uint8_t pin = 0;
-        if (audio_control(UAC2_REQ_CUR, TYPE_IN_CLASS_IF, CX_CLOCK_SELECT, 0,
+        if (audio_control(a, UAC2_REQ_CUR, TYPE_IN_CLASS_IF, CX_CLOCK_SELECT, 0,
                           a->s.clock_id, &pin, 1) < 1 ||
             !pin || pin > a->s.clock_pin_count) {
             klog_printf("usb-audio: clock selector %u answered %u; using "
@@ -269,7 +272,7 @@ static int set_clock_rate(void) {
                      (uint8_t)((SND_RATE >> 8) & 0xFF),
                      (uint8_t)((SND_RATE >> 16) & 0xFF),
                      (uint8_t)((SND_RATE >> 24) & 0xFF) };
-    if (audio_control(AUDIO_REQ_SET_CUR, TYPE_OUT_CLASS_IF, CS_SAM_FREQ, 0,
+    if (audio_control(a, AUDIO_REQ_SET_CUR, TYPE_OUT_CLASS_IF, CS_SAM_FREQ, 0,
                       clock, v, 4) < 0) {
         klog_printf(KLOG_ERR "usb-audio: clock %u refused %u Hz\n", clock,
                     (unsigned)SND_RATE);
@@ -279,14 +282,14 @@ static int set_clock_rate(void) {
     return 0;
 }
 
-static int audio_start(void) {
-    struct audio_dev *a = &g_audio;
+static int audio_start(const struct sound_device *d) {
+    struct audio_dev *a = d->priv;
     if (!a->in_use || !a->ring) return -1;
     if (a->running) return 0;
 
     // The rate first: a UAC2 clock is independent of the alternate, and
     // setting it while the endpoint is idle is what every host does.
-    if (set_clock_rate() < 0) return -1;
+    if (set_clock_rate(a) < 0) return -1;
 
     // THE ALTERNATE SETTING FOLLOWS THE STREAM, not the bind. Alt 0 is
     // the "idle, no bandwidth" setting every UAC device carries, and
@@ -327,8 +330,8 @@ static int audio_start(void) {
     return 0;
 }
 
-static void audio_stop(void) {
-    struct audio_dev *a = &g_audio;
+static void audio_stop(const struct sound_device *d) {
+    struct audio_dev *a = d->priv;
     // Nothing is cancelled: the TDs already posted play out over the
     // next few milliseconds and the ring then goes quiet on its own.
     // Stopping an isochronous endpoint properly means Stop Endpoint
@@ -366,10 +369,10 @@ static void audio_stop(void) {
 
 // --- volume -----------------------------------------------------------
 
-static int16_t read_db(uint8_t req, int16_t fallback) {
+static int16_t read_db(struct audio_dev *a, uint8_t req, int16_t fallback) {
     uint8_t v[2] = {0, 0};
-    if (audio_control(req, TYPE_IN_CLASS_IF, AUDIO_CS_VOLUME, 1,
-                      g_audio.s.feature_unit, v, 2) < 2)
+    if (audio_control(a, req, TYPE_IN_CLASS_IF, AUDIO_CS_VOLUME, 1,
+                      a->s.feature_unit, v, 2) < 2)
         return fallback;
     return (int16_t)((uint16_t)v[0] | ((uint16_t)v[1] << 8));
 }
@@ -378,10 +381,10 @@ static int16_t read_db(uint8_t req, int16_t fallback) {
 // a block of subranges -- wNumSubRanges, then MIN/MAX/RES triples --
 // and the first subrange is the one this uses. Asking a UAC2 device
 // for GET_MIN is request 0x82, which it does not implement.
-static void read_range(int16_t *min, int16_t *max) {
+static void read_range(struct audio_dev *a, int16_t *min, int16_t *max) {
     uint8_t r[8] = {0};
-    if (audio_control(UAC2_REQ_RANGE, TYPE_IN_CLASS_IF, AUDIO_CS_VOLUME, 1,
-                      g_audio.s.feature_unit, r, sizeof r) < 8)
+    if (audio_control(a, UAC2_REQ_RANGE, TYPE_IN_CLASS_IF, AUDIO_CS_VOLUME, 1,
+                      a->s.feature_unit, r, sizeof r) < 8)
         return;
     if (!(r[0] | r[1])) return;               // wNumSubRanges == 0
     *min = (int16_t)((uint16_t)r[2] | ((uint16_t)r[3] << 8));
@@ -397,15 +400,15 @@ static void read_range(int16_t *min, int16_t *max) {
 // number.
 #define AUDIO_TAPER_DB 40
 
-static void audio_set_volume(int pct) {
-    struct audio_dev *a = &g_audio;
+static void audio_set_volume(const struct sound_device *d, int pct) {
+    struct audio_dev *a = d->priv;
     if (!a->in_use || !a->s.feature_unit) return;
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
 
     if (a->s.has_mute) {
         uint8_t mute = (uint8_t)(pct == 0);
-        audio_control(AUDIO_REQ_SET_CUR, TYPE_OUT_CLASS_IF, AUDIO_CS_MUTE,
+        audio_control(a, AUDIO_REQ_SET_CUR, TYPE_OUT_CLASS_IF, AUDIO_CS_MUTE,
                       0, a->s.feature_unit, &mute, 1);
     }
     if (!a->has_volume || pct == 0) return;
@@ -417,9 +420,9 @@ static void audio_set_volume(int pct) {
     // Channel 1 and 2 rather than 0: a feature unit commonly carries
     // volume per channel and only mute on the master, which is exactly
     // what QEMU's usb-audio reports.
-    audio_control(AUDIO_REQ_SET_CUR, TYPE_OUT_CLASS_IF, AUDIO_CS_VOLUME, 1,
+    audio_control(a, AUDIO_REQ_SET_CUR, TYPE_OUT_CLASS_IF, AUDIO_CS_VOLUME, 1,
                   a->s.feature_unit, v, 2);
-    audio_control(AUDIO_REQ_SET_CUR, TYPE_OUT_CLASS_IF, AUDIO_CS_VOLUME, 2,
+    audio_control(a, AUDIO_REQ_SET_CUR, TYPE_OUT_CLASS_IF, AUDIO_CS_VOLUME, 2,
                   a->s.feature_unit, v, 2);
 }
 
@@ -469,17 +472,50 @@ static void log_refusal(uint8_t slot, const struct usb_audio_report *rep) {
                    "here\", not \"none\"\n");
 }
 
+// A STRING OFF A USB DEVICE IS NOT TRUSTED TO BE TEXT. Both DACs on
+// the test laptop answer "?" for their PRODUCT while their MANUFACTURER
+// reads perfectly (docs/bugs.md has the mojibake entry), and "?" was
+// what the tray's device list showed. Same ladder as usbaudio.so's.
+static int str_readable(const char *s) {
+    if (!s[0] || s[0] == '?') return 0;
+    for (const char *p = s; *p; p++)
+        if (*p < 0x20 || *p > 0x7e) return 0;
+    return 1;
+}
+
+static void audio_label(struct audio_dev *a, const struct usb_device_info *info) {
+    if (str_readable(info->product)) {
+        k_strlcpy(a->label, info->product, sizeof a->label);
+        return;
+    }
+    if (str_readable(info->manufacturer)) {
+        // The suffix only when it fits -- a label that says the maker
+        // and nothing else still names the row, and lssound's own
+        // driver column already says what it is.
+        if (k_strlen(info->manufacturer) + sizeof(" USB Audio") <= sizeof a->label)
+            k_snprintf(a->label, sizeof a->label, "%s USB Audio", info->manufacturer);
+        else
+            k_strlcpy(a->label, info->manufacturer, sizeof a->label);
+        return;
+    }
+    k_snprintf(a->label, sizeof a->label, "USB Audio %04x:%04x",
+              info->vendor_id, info->product_id);
+}
+
 int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
                    uint32_t total) {
     if (!info) return 0;
-    // ONE DEVICE, AND SAYING SO. This driver keeps a single `g_audio`,
-    // so a second USB DAC is declined -- and every other refusal below
-    // logs a reason, which made this one read as a device the parser
-    // had rejected. Drive the second from ring 3: `snddrv --usb-id`.
-    if (g_audio.in_use) {
-        klog_printf("usb-audio: slot %u: already driving slot %u -- "
+
+    // A FREE SLOT, AND SAYING SO WHEN THERE IS NONE. Every other
+    // refusal below logs a reason; a silent one read as a device the
+    // parser had rejected.
+    struct audio_dev *a = 0;
+    for (int i = 0; i < USB_AUDIO_MAX; i++)
+        if (!g_audio[i].in_use) { a = &g_audio[i]; break; }
+    if (!a) {
+        klog_printf("usb-audio: slot %u: %d USB DACs already bound -- "
                     "not bound (try snddrv --usb-id %04x:%04x)\n",
-                    info->slot, g_audio.slot,
+                    info->slot, USB_AUDIO_MAX,
                     info->vendor_id, info->product_id);
         return 0;
     }
@@ -509,7 +545,6 @@ int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
         return 0;
     }
 
-    struct audio_dev *a = &g_audio;
     k_memset(a, 0, sizeof *a);
     a->slot = info->slot;
     a->s = s;
@@ -565,7 +600,7 @@ int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
     // PROVEN AT BIND, not assumed at start: on UAC2 this request is the
     // whole rate negotiation, and a device that refuses it is one this
     // driver cannot play through however well it parsed.
-    if (set_clock_rate() < 0) {
+    if (set_clock_rate(a) < 0) {
         klog_printf(KLOG_ERR "usb-audio: slot %u: cannot set %u Hz -- not bound\n",
                     info->slot, (unsigned)SND_RATE);
         a->in_use = 0;
@@ -575,19 +610,40 @@ int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
 
     if (s.has_volume) {
         if (s.uac2) {
-            read_range(&a->vol_min, &a->vol_max);
+            read_range(a, &a->vol_min, &a->vol_max);
         } else {
-            a->vol_min = read_db(AUDIO_REQ_GET_MIN, 0);
-            a->vol_max = read_db(AUDIO_REQ_GET_MAX, 0);
+            a->vol_min = read_db(a, AUDIO_REQ_GET_MIN, 0);
+            a->vol_max = read_db(a, AUDIO_REQ_GET_MAX, 0);
         }
         a->has_volume = (a->vol_max > a->vol_min);
     }
 
-    k_strlcpy(a->name, "usb-audio", sizeof a->name);
-    k_strlcpy(a->label, info->product[0] ? info->product : "USB Audio",
-              sizeof a->label);
+    // THE NAME IS THE STABLE ID the `audio_device` setting persists, so
+    // two DACs cannot both be "usb-audio". The ids are what lsusb
+    // prints and what --usb-id takes, and they survive the device-table
+    // reshuffles a port number does not. SOUND_NAME_MAX is 16 and this
+    // is 13.
+    k_snprintf(a->name, sizeof a->name, "usb-%04x%04x",
+               info->vendor_id, info->product_id);
+    // TWO OF THE SAME MODEL share a vendor/product pair, so the id is
+    // not unique by itself. The second one onwards takes a numbered
+    // form -- and WHICH of an identical pair keeps the plain name
+    // follows enumeration order, so `audio_device` cannot pin one of
+    // them across a replug. That is inherent to identical devices; a
+    // port number would move too.
+    for (int n = 2; n <= USB_AUDIO_MAX; n++) {
+        int taken = 0;
+        for (int i = 0; i < USB_AUDIO_MAX; i++)
+            if (&g_audio[i] != a && g_audio[i].in_use &&
+                k_strcmp(g_audio[i].name, a->name) == 0) taken = 1;
+        if (!taken) break;
+        k_snprintf(a->name, sizeof a->name, "usb%d-%04x%04x", n,
+                   info->vendor_id, info->product_id);
+    }
+    audio_label(a, info);
     a->dev.name       = a->name;
     a->dev.driver     = "usb-audio";
+    a->dev.priv       = a;          // how every op finds THIS DAC
     a->dev.label      = a->label;
     a->dev.start      = audio_start;
     a->dev.stop       = audio_stop;
@@ -618,8 +674,10 @@ int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
 }
 
 void usb_audio_unbind(uint8_t slot) {
-    struct audio_dev *a = &g_audio;
-    if (!a->in_use || a->slot != slot) return;
+    struct audio_dev *a = 0;
+    for (int i = 0; i < USB_AUDIO_MAX; i++)
+        if (g_audio[i].in_use && g_audio[i].slot == slot) { a = &g_audio[i]; break; }
+    if (!a) return;
     a->running = 0;
     a->in_use = 0;         // unpublished before the core can call start()
     sound_unregister(&a->dev);
@@ -628,7 +686,11 @@ void usb_audio_unbind(uint8_t slot) {
     a->pkt_phys = 0;
 }
 
-int usb_audio_bound(void) { return g_audio.in_use; }
+int usb_audio_bound(void) {
+    for (int i = 0; i < USB_AUDIO_MAX; i++)
+        if (g_audio[i].in_use) return 1;
+    return 0;
+}
 
 // --- KTESTs: the descriptor walk, device-free -------------------------
 //

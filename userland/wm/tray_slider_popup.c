@@ -152,7 +152,15 @@ void tray_slider_poll(struct tray_slider_popup *p) {
     // set`, a card appearing. Re-read, and let the owner re-read too.
     reload(p);
     if (p->on_reload) p->on_reload();
-    if (p->open) redraw_pending = 1;
+    // **DAMAGE, NOT JUST REPAINT: on_reload CAN RESIZE THE PANEL.** Its
+    // rows and their label widths both come from what it re-read, so a
+    // card appearing or going away moves the top and the left edge --
+    // and a plain repaint leaves the strip the LARGER panel covered
+    // sitting on the desktop. damage() covers the last drawn rect as
+    // well as the new one (wm_overlay.h); open and close already went
+    // through it, and this path did not.
+    if (p->open) damage(p);
+    else redraw_pending = 1;
 }
 
 // --- input ------------------------------------------------------------

@@ -480,6 +480,8 @@ enum setting_result setting_set(const char *name, const char *value) {
 
 uint32_t setting_generation(void) { return g_generation; }
 
+void setting_choices_changed(void) { g_generation++; }
+
 int settings_reload(void) {
     // Settings persist as ORDINARY TEXT FILES, on purpose -- /etc is
     // editable with `edit` and readable with `cat`, and the registry is

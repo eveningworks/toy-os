@@ -439,12 +439,12 @@ static void hda_irq(uint64_t *regs) {
 
 // --- the sound_device, one trampoline set per controller --------------
 
-#define HDA_DEV_OPS(n)                                                            \
-    static int  hda##n##_start(void)      { return stream_start(&g_hc[n]); }      \
-    static void hda##n##_stop(void)       { stream_stop(&g_hc[n]); }              \
-    static void hda##n##_volume(int pct)  { set_volume(&g_hc[n], pct); }
-HDA_DEV_OPS(0)
-HDA_DEV_OPS(1)
+// ONE SET, because the op carries its device now. This was a
+// trampoline PAIR generated per controller -- the only way to tell two
+// cards apart when the ops took no argument.
+static int  hda_dev_start(const struct sound_device *d)  { return stream_start(d->priv); }
+static void hda_dev_stop(const struct sound_device *d)   { stream_stop(d->priv); }
+static void hda_dev_volume(const struct sound_device *d, int pct) { set_volume(d->priv, pct); }
 
 static const char *vendor_name(uint32_t vendor) {
     switch (vendor >> 16) {
@@ -635,9 +635,10 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     h->dev.name = h->name;
     h->dev.label = h->label;
     h->dev.driver = "hda";
-    h->dev.start = index ? hda1_start : hda0_start;
-    h->dev.stop = index ? hda1_stop : hda0_stop;
-    h->dev.set_volume = index ? hda1_volume : hda0_volume;
+    h->dev.priv = h;
+    h->dev.start = hda_dev_start;
+    h->dev.stop = hda_dev_stop;
+    h->dev.set_volume = hda_dev_volume;
     if (!sound_register(&h->dev, ring, ring_phys)) return;
     h->registered = 1;
     klog_printf("%s: %02x:%02x.%u codec %04x:%04x spk pin %#x dac %#x%s%#x %s\n",

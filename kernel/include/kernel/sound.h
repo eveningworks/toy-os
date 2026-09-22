@@ -36,11 +36,21 @@ struct sound_device {
 
     // Start/stop the engine over the ring `sound_register()` supplied.
     // start() begins at the ring's first chunk.
-    int  (*start)(void);
-    void (*stop)(void);
+    //
+    // **EVERY OP TAKES ITS DEVICE**, so one driver can serve several
+    // cards: it embeds this struct per card and recovers its own state
+    // from the pointer. They took none, which is why the USB driver
+    // bound exactly one DAC and a second was declined -- with two
+    // attached, only one could ever appear in the tray's device list.
+    // The driver's own state for THIS card, its back-pointer from an
+    // op. `snd_driver.h`'s ring-3 contract spells it the same way.
+    void *priv;
+
+    int  (*start)(const struct sound_device *dev);
+    void (*stop)(const struct sound_device *dev);
 
     // 0..100 into whatever the hardware's volume is. Optional (NULL).
-    void (*set_volume)(int pct);
+    void (*set_volume)(const struct sound_device *dev, int pct);
 
     // WHAT THE HARDWARE SAYS IT CAN DO -- SND_RATE_* and SND_DEPTH_*
     // masks (abi/sound_abi.h), translated out of whatever the bus

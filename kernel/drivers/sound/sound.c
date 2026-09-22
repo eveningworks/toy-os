@@ -9,6 +9,7 @@
 #include "uaddr.h"
 #include "syscall_table.h"
 #include "errno.h"
+#include "setting.h"   // setting_choices_changed(): audio_device's choices ARE the device list
 #include "vmm.h"
 #include "pmm.h"
 #include "string.h"
@@ -79,13 +80,13 @@ static void activate(int idx) {
     // Audio Player holds its sink open across tracks, so choosing a
     // different device mid-session muted it permanently.
     int was_running = (g_ctl && g_ctl->running);
-    if (old) old->stop();
+    if (old) old->stop(old);
     g_active = idx;
     const struct sound_device *dev = active();
     // The volume follows the stream, not the card: a switch that reset
     // it to whatever the new hardware powered up with would be a
     // surprise nobody asked for.
-    if (dev && dev->set_volume) dev->set_volume(g_volume);
+    if (dev && dev->set_volume) dev->set_volume(dev, g_volume);
     if (dev && was_running) {
         // START resumes from the ring's first chunk, so the hardware is
         // briefly behind the writer and replays up to a ring's worth of
@@ -95,7 +96,7 @@ static void activate(int idx) {
         // changed -- it keeps writing where it was.
         g_ctl->hw_pos = 0;
         g_last_pos = 0;
-        if (dev->start() != 0) g_ctl->running = 0;
+        if (dev->start(dev) != 0) g_ctl->running = 0;
     }
 }
 
@@ -134,6 +135,11 @@ int sound_register(const struct sound_device *dev, void *ring, uint64_t ring_phy
 
     g_devs[g_dev_count++] = dev;
     driver_bound(dev->driver, dev->name);
+    // `audio_device`'s choices ARE this list, and a cache holder's only
+    // invalidation signal is the generation -- which a SET bumps and a
+    // plug did not, so the tray's device list showed devices that were
+    // no longer attached (api/setting.h).
+    setting_choices_changed();
     klog_printf("sound: %s registered (48kHz s16le stereo, %u KiB ring)\n",
                 dev->name, (unsigned)(SND_RING_BYTES / 1024));
 
@@ -158,7 +164,7 @@ void sound_unregister(const struct sound_device *dev) {
         // Stop through the DEVICE rather than through activate(): the
         // hardware is gone, and the stream's owner has to be told
         // rather than silently handed a ring nobody is playing.
-        dev->stop();
+        dev->stop(dev);
         if (g_ctl) {
             g_ctl->running = 0;
             g_ctl->device_gone = 1;
@@ -171,6 +177,7 @@ void sound_unregister(const struct sound_device *dev) {
     g_dev_count--;
     if (g_active > idx) g_active--;
     klog_printf("sound: %s removed\n", dev->name);
+    setting_choices_changed();
     if (was_active) {
         // `running` was cleared above, so activate() would not resume
         // on the fallback card -- restored here so it does. The stream
@@ -220,7 +227,7 @@ int sound_present(void) { return g_active >= 0; }
 void sound_set_volume(int pct) {
     g_volume = pct;
     const struct sound_device *dev = active();
-    if (dev && dev->set_volume) dev->set_volume(pct);
+    if (dev && dev->set_volume) dev->set_volume(dev, pct);
 }
 
 // The consumed-chunk zeroing -- abi/sound_abi.h's one rule. `hw_pos`
@@ -256,7 +263,7 @@ static void snd_unmap_owner(void) {
 
 static void snd_stop_and_release(void) {
     const struct sound_device *dev = active();
-    if (dev) dev->stop();
+    if (dev) dev->stop(dev);
     if (g_ctl) {
         g_ctl->running = 0;
         g_ctl->hw_pos = 0;
@@ -272,7 +279,7 @@ void sound_process_gone(uint64_t pml4_phys) {
     // silence thanks to the zeroing, but the device stays claimed).
     if (g_owner_pml4 && g_owner_pml4 == pml4_phys) {
         const struct sound_device *dev = active();
-        if (dev) dev->stop();
+        if (dev) dev->stop(dev);
         if (g_ctl) { g_ctl->running = 0; g_ctl->hw_pos = 0; }
         g_last_pos = 0;
         if (g_ring) k_memset(g_ring, 0, SND_RING_BYTES);
@@ -335,7 +342,7 @@ int sys_snd_ctl(struct syscall_ctx *c) {
     case SND_CTL_START:
         g_ctl->hw_pos = 0;
         g_last_pos = 0;
-        if (dev->start() != 0) {
+        if (dev->start(dev) != 0) {
             c->regs[14] = (uint64_t)(int64_t)-EIO;
             return 0;
         }
@@ -343,7 +350,7 @@ int sys_snd_ctl(struct syscall_ctx *c) {
         c->regs[14] = 0;
         return 0;
     case SND_CTL_STOP:
-        dev->stop();
+        dev->stop(dev);
         g_ctl->running = 0;
         c->regs[14] = 0;
         return 0;
@@ -394,8 +401,8 @@ KTEST("sound", "period zeroing walks exactly the consumed chunks") {
 // therefore starts by removing them, which keeps a failure from
 // poisoning the NEXT run as well as this one.
 
-static int ktest_snd_start(void) { return 0; }
-static void ktest_snd_stop(void) { }
+static int ktest_snd_start(const struct sound_device *d) { (void)d; return 0; }
+static void ktest_snd_stop(const struct sound_device *d) { (void)d; }
 static const struct sound_device g_ktest_a = {
     .name = "ktest-a", .label = "Fake A",
     .start = ktest_snd_start, .stop = ktest_snd_stop,

@@ -147,6 +147,13 @@ static void commit_app(int i) {
 // is why nothing here knows what a sound card is: the kernel's setting
 // computes its choices from the registered drivers, so a card plugged
 // in after boot turns up as a row.
+//
+// **THAT ONLY BECAME TRUE WHEN THE PLUG BUMPED THE GENERATION.** This
+// runs on a setting-generation change, and the generation was bumped
+// by a SET -- which registering a device is not -- so an unplugged DAC
+// stayed in the list until something else wrote a setting.
+// `sound_register`/`sound_unregister` call `setting_choices_changed()`
+// now (api/setting.h).
 static void reload_devices(void) {
     struct setting_msg m;
     int index = usetting_find(DEVICE_SETTING, &m);
@@ -410,9 +417,11 @@ int volume_handle_click(int mx, int my) {
         if (i >= 0 && usetting_set(DEVICE_SETTING, g_dev_value[i]) > 0) {
             g_dev_selected = i;
             // The labels move with the choice: "Automatic (ac97)" names
-            // what auto resolved to, and that changes when the pick does.
+            // what auto resolved to, and that changes when the pick does
+            // -- so the panel's WIDTH moves with it, and this has to
+            // damage rather than merely repaint.
             reload_devices();
-            redraw_pending = 1;
+            volume_damage();
         }
         return 1;   // a click inside the panel never falls through
     }
