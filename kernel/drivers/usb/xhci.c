@@ -955,6 +955,18 @@ static int cmd_submit(uint64_t param, uint32_t control, uint8_t *out_slot) {
     return (int)g_cmd_done.code;
 }
 
+// TURN A COMMAND RESULT INTO A FAILURE RETURN, and never by negating it
+// blindly. A completion code is POSITIVE (xHCI's own); this driver's
+// timeout is the NEGATIVE sentinel from cmd_submit() above. `-cc` on
+// that sentinel produced +1, and every caller tests `< 0` -- so a
+// timed-out Enable Slot was read as "you were given slot 1" and the
+// enumeration went on to drive, and then DISABLE, a slot belonging to
+// some other device. Live on the bare-metal ASUS: it is what puts the
+// `-1` in that machine's `short device descriptor (-1)`.
+static inline int xhci_fail(int cc) {
+    return cc < 0 ? cc : (cc ? -cc : -1);
+}
+
 // DRIVE THE COMMAND-RING RECOVERY ON PURPOSE, and then prove the ring
 // still works. Called by the KTEST in xhci_cmd_test.c.
 //
@@ -997,7 +1009,7 @@ int xhci_address_device(uint8_t root_port, uint32_t route, uint8_t speed,
     int cc = cmd_submit(0, XHCI_TRB_SET_TYPE(XHCI_TRB_ENABLE_SLOT), &slot);
     if (cc != XHCI_CC_SUCCESS) {
         klog_printf(KLOG_ERR "usb: enable slot failed: %s\n", xhci_completion_name((uint32_t)cc));
-        return -cc;
+        return xhci_fail(cc);
     }
     if (!slot || slot > XHCI_MAX_SLOTS) {
         klog_printf("usb: controller assigned slot %u, out of range\n", slot);
@@ -1063,7 +1075,7 @@ int xhci_address_device(uint8_t root_port, uint32_t route, uint8_t speed,
         klog_printf(KLOG_ERR "usb: address device (slot %u) failed: %s\n",
                     slot, xhci_completion_name((uint32_t)cc));
         xhci_disable_slot(slot);
-        return -cc;
+        return xhci_fail(cc);
     }
     return slot;
 }
@@ -1085,7 +1097,7 @@ int xhci_set_ep0_mps(uint8_t slot, uint16_t mps) {
     if (cc != XHCI_CC_SUCCESS) {
         klog_printf(KLOG_ERR "usb: evaluate context (slot %u, mps %u) failed: %s\n",
                     slot, mps, xhci_completion_name((uint32_t)cc));
-        return -cc;
+        return xhci_fail(cc);
     }
     return 0;
 }
@@ -1098,12 +1110,12 @@ int xhci_set_ep0_mps(uint8_t slot, uint16_t mps) {
 static int recover_halted(uint8_t slot, uint32_t dci, struct xhci_ring *ring) {
     int cc = cmd_submit(0, XHCI_TRB_SET_TYPE(XHCI_TRB_RESET_ENDPOINT) |
                            ((uint32_t)slot << 24) | (dci << 16), 0);
-    if (cc != XHCI_CC_SUCCESS) return -cc;
+    if (cc != XHCI_CC_SUCCESS) return xhci_fail(cc);
     uint64_t deq = ring->phys + (uint64_t)ring->enqueue * sizeof(struct xhci_trb);
     cc = cmd_submit(deq | (ring->cycle ? 1u : 0u),
                     XHCI_TRB_SET_TYPE(XHCI_TRB_SET_TR_DEQUEUE) |
                     ((uint32_t)slot << 24) | (dci << 16), 0);
-    if (cc != XHCI_CC_SUCCESS) return -cc;
+    if (cc != XHCI_CC_SUCCESS) return xhci_fail(cc);
     g_hc.ep_recoveries++;
     return 0;
 }
@@ -1406,7 +1418,7 @@ int xhci_add_interrupt_in(uint8_t slot, uint8_t ep_addr, uint16_t mps,
 
     int cc = 0;
     struct xhci_ep *e = ep_configure(slot, ep_addr, mps, interval, 7, 3, &cc);
-    if (!e) return cc ? -cc : -1;
+    if (!e) return xhci_fail(cc);
     e->buf = (uint8_t *)buf;
     e->buf_phys = buf_phys;
 
@@ -1424,7 +1436,7 @@ int xhci_add_isoch_out(uint8_t slot, uint8_t ep_addr, uint16_t mps,
     // CErr = 0: an isochronous transfer is not retried, and the spec
     // has the controller ignore the field on such an endpoint anyway.
     struct xhci_ep *e = ep_configure(slot, ep_addr, mps, interval, 1, 0, &cc);
-    if (!e) return cc ? -cc : -1;
+    if (!e) return xhci_fail(cc);
     e->is_iso   = 1;
     e->iso_done = done;
     e->iso_ctx  = ctx;
@@ -1453,7 +1465,7 @@ int xhci_add_bulk(uint8_t slot, uint8_t ep_addr, uint16_t mps,
     // bInterval is meaningless for bulk -- the controller moves data
     // whenever there is bandwidth -- and 0 is what the spec wants.
     struct xhci_ep *e = ep_configure(slot, ep_addr, mps, 0, type, 3, &cc);
-    if (!e) return cc ? -cc : -1;
+    if (!e) return xhci_fail(cc);
     e->is_bulk   = 1;
     e->bulk_done = done;
     e->bulk_ctx  = ctx;
@@ -1531,19 +1543,31 @@ void xhci_disable_slot(uint8_t slot) {
 
     // The controller first: Disable Slot stops every endpoint, so the
     // frames below have stopped being DMA targets before they are
-    // freed. A refusal is logged and the frames freed anyway -- the
-    // device is already gone, and a controller that will not answer
-    // this command has bigger problems than a leak.
+    // freed.
     int cc = cmd_submit(0, XHCI_TRB_SET_TYPE(XHCI_TRB_DISABLE_SLOT) |
                            ((uint32_t)slot << 24), 0);
-    if (cc != XHCI_CC_SUCCESS)
-        klog_printf("usb: disable slot %u: %s\n", slot,
-                    xhci_completion_name((uint32_t)cc));
+
+    // AND IF IT DID NOT ANSWER, THE FRAMES ARE NOT OURS TO TAKE BACK.
+    // This used to free them anyway, reasoning that a device is already
+    // gone and a leak is cheaper. That holds for an unplug and NOT for
+    // a stalled command ring, where the controller is still running
+    // (CRR=1) and may write into them at any time -- and alloc_frame()
+    // takes these from PMM_ZONE_DMA32, the same zone paging.c allocates
+    // PAGE TABLES from. A late DMA into what has become a PML4 is an
+    // instant, unlogged reset, and docs/bugs.md records exactly that on
+    // the bare-metal ASUS. Quarantining a few frames is the cheaper
+    // failure by a very wide margin.
+    int quarantine = (cc != XHCI_CC_SUCCESS);
+    if (quarantine)
+        klog_printf(KLOG_ERR "usb: disable slot %u: %s -- keeping its DMA "
+                    "frames, the controller may still be writing them\n",
+                    slot, xhci_completion_name((uint32_t)cc));
 
     for (int i = 0; i < MAX_EPS; i++) {
         struct xhci_ep *e = &g_eps[i];
         if (!e->in_use || e->slot != slot) continue;
         e->in_use = 0;   // unpublished before its memory goes away
+        if (quarantine) continue;
         pmm_free_contiguous(e->ring.phys, 1);
         // An isochronous endpoint has no buffer of ours -- the driver
         // owns it. Freeing "frame zero" would hand real memory back.
@@ -1553,9 +1577,11 @@ void xhci_disable_slot(uint8_t slot) {
     g_hc.dcbaa[slot] = 0;
     // Guarded: the address-failure path arrives here with some of these
     // never allocated, and freeing "frame zero" would free real memory.
-    if (sl->in_ctx_phys)  pmm_free_contiguous(sl->in_ctx_phys, 1);
-    if (sl->out_ctx_phys) pmm_free_contiguous(sl->out_ctx_phys, 1);
-    if (sl->ep0.phys)     pmm_free_contiguous(sl->ep0.phys, 1);
+    if (!quarantine) {
+        if (sl->in_ctx_phys)  pmm_free_contiguous(sl->in_ctx_phys, 1);
+        if (sl->out_ctx_phys) pmm_free_contiguous(sl->out_ctx_phys, 1);
+        if (sl->ep0.phys)     pmm_free_contiguous(sl->ep0.phys, 1);
+    }
     k_memset(sl, 0, sizeof *sl);
 }
 
