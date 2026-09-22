@@ -75,11 +75,30 @@ static void wait_ms(uint32_t ms) { clocksource_delay_ms(ms); }
 
 // --- the class requests ------------------------------------------------
 
+// A STATIC BOUNCE, NOT THE CALLER'S STACK. Measured on the bare-metal
+// ASUS: this read reports a FULL transfer with zero residual and leaves
+// the caller's `uint8_t hd[16]` untouched zeros, so the hub declines
+// with "0 ports" and everything behind it disappears -- while the
+// device and configuration descriptors, which land in the static
+// `g_desc_buf`, read perfectly on the same device. usb_enum.c already
+// made its buffers static after this class of fault corrupted a
+// caller's saved registers once. Whether the stack is genuinely the
+// variable is what this tests; if it is not, the copy costs 16 bytes
+// and nothing else.
+static uint8_t g_hub_desc[16] __attribute__((aligned(64)));
+
 static int hub_get_descriptor(uint8_t slot, uint8_t *buf, uint16_t len) {
+    if (len > sizeof g_hub_desc) len = sizeof g_hub_desc;
     uint8_t setup[8] = { HUB_GET_DESC_TYPE, REQ_GET_DESCRIPTOR,
                          0, DESC_HUB, 0, 0,
                          (uint8_t)(len & 0xFF), (uint8_t)(len >> 8) };
-    return xhci_control(slot, setup, buf, len, 1);
+    k_memset(g_hub_desc, 0, sizeof g_hub_desc);
+    int got = xhci_control(slot, setup, g_hub_desc, len, 1);
+    if (got > 0) {
+        if (got > (int)len) got = (int)len;
+        k_memcpy(buf, g_hub_desc, (uint32_t)got);
+    }
+    return got;
 }
 
 static int hub_port_feature(uint8_t slot, uint8_t req, uint8_t feature,
