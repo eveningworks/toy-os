@@ -198,10 +198,19 @@ int usb_hub_bind(struct usb_device_info *d) {
         return 0;
     }
 
+    // A SILENT DECLINE IS THE WORST FAILURE THIS DRIVER HAS. Everything
+    // plugged into the hub disappears, and no line anywhere says why --
+    // measured on a real hub, where the missing device looked like an
+    // enumeration fault two layers down.
     const struct usb_interface_info *ifc = 0;
     for (int i = 0; i < d->if_count; i++)
         if (d->ifs[i].if_class == 9 && d->ifs[i].ep) { ifc = &d->ifs[i]; break; }
-    if (!ifc) return 0;
+    if (!ifc) {
+        klog_printf(KLOG_ERR "usb: slot %u: hub has no interrupt-IN status "
+                    "endpoint (%u interface(s))\n",
+                    d->slot, (unsigned)d->if_count);
+        return 0;
+    }
 
     uint8_t hd[16] = { 0 };
     int got = hub_get_descriptor(d->slot, hd, sizeof hd);
@@ -210,7 +219,12 @@ int usb_hub_bind(struct usb_device_info *d) {
         return 0;
     }
     uint8_t n = hd[2];
-    if (!n) return 0;
+    if (!n) {
+        klog_printf(KLOG_ERR "usb: slot %u: hub reports 0 ports "
+                    "(descriptor %d bytes, %02x %02x %02x %02x)\n",
+                    d->slot, got, hd[0], hd[1], hd[2], hd[3]);
+        return 0;
+    }
     if (n > USB_HUB_MAX_PORTS) n = USB_HUB_MAX_PORTS;
 
     struct usb_hub *h = 0;
