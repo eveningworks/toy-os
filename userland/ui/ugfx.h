@@ -698,6 +698,13 @@ struct ugfx_diff {
     int count;             // pixels that differ
     int first_x, first_y;  // first difference in scan order, -1 if none
     int x0, y0, x1, y1;    // bounding box of the differences, half-open
+    // WHAT the first difference was and became. A count and a box say
+    // that something changed; these say WHAT, which is the difference
+    // between "the panel was not drawn in one pass" (wallpaper vs
+    // chrome) and "it was drawn twice" (a tone shifting by a little).
+    // Chasing a damage fault without them cost a session of guessing.
+    uint32_t first_was;    // the snapshot's pixel
+    uint32_t first_now;    // the back buffer's
 };
 
 // Takes the comparison copy. Returns 1 on success, 0 if the scratch

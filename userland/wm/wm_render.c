@@ -1916,7 +1916,7 @@ void wm_render_frame(int mx, int my) {
                 // scene is stable and the diff above is a real (a). If
                 // it does not, the comparison itself was measuring
                 // nothing and (a) cannot be concluded from it.
-                struct ugfx_diff again = { 0, -1, -1, 0, 0, 0, 0 };
+                struct ugfx_diff again = { 0, -1, -1, 0, 0, 0, 0, 0, 0 };
                 int probed = ugfx_verify_snapshot(&g_wm_screen);
                 if (probed) {
                     render_scene(mx, my, 0);
@@ -1947,6 +1947,14 @@ void wm_render_frame(int mx, int my) {
                 // different bug from a diff in an app's own pixels.
                 wm_logf("wm:   cursor now (%d,%d), prev drawn (%d,%d)\n",
                              mx, my, prev_cursor_x, prev_cursor_y);
+                // WHAT the pixel was and became, not just where. A
+                // wallpaper colour turning into chrome means a pass did
+                // not draw something; a tone shifting by a point or two
+                // means it was BLENDED a different number of times.
+                // Chasing the tray panel's leftover band without this
+                // cost a session of guessing.
+                wm_logf("wm:   first px 0x%06x -> 0x%06x\n",
+                             d.first_was & 0xFFFFFFu, d.first_now & 0xFFFFFFu);
                 wm_logf("wm:   diff is in %s%s%s, damage-intersecting=%d\n",
                              owner < 0 ? "no window (desktop/taskbar/overlay)" : "window '",
                              owner < 0 ? "" : windows[owner].title,

@@ -1396,7 +1396,7 @@ static int in_skip(const struct ugfx_skip_rect *skip, int nskip, int x, int y) {
 
 int ugfx_verify_diff_masked(struct ugfx_screen *sc, struct ugfx_diff *out,
                              const struct ugfx_skip_rect *skip, int nskip) {
-    struct ugfx_diff d = { 0, -1, -1, 0, 0, 0, 0 };
+    struct ugfx_diff d = { 0, -1, -1, 0, 0, 0, 0, 0, 0 };
     if (!sc || !sc->back.pixels || !sc->snapshot || !sc->snapshot_valid) {
         if (out) *out = d;
         return 0;
@@ -1408,6 +1408,8 @@ int ugfx_verify_diff_masked(struct ugfx_screen *sc, struct ugfx_diff *out,
             if (nskip && in_skip(skip, nskip, x, y)) continue;
             if (d.count == 0) {
                 d.first_x = x; d.first_y = y;
+                d.first_was = sc->snapshot[i];
+                d.first_now = sc->back.pixels[i];
                 d.x0 = x; d.y0 = y; d.x1 = x + 1; d.y1 = y + 1;
             } else {
                 if (x < d.x0) d.x0 = x;

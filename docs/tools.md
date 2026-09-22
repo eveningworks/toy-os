@@ -3745,6 +3745,16 @@ window without going through it will find its layout polls timing out.
   plus `dmesg` before concluding a damage fault is gone. It is not free
   -- every frame renders twice while it is on -- so turn it off again.
 
+  **IT REPORTS THE FIRST DIFFERING PIXEL'S COLOURS, and that line says
+  what KIND of fault it is.** `wm:   first px 0x2c7385 -> 0x2d7487`: a
+  wallpaper colour turning into chrome means a pass did not DRAW
+  something; a shift of a point or two per channel means the same
+  content was BLENDED a different number of times, which is a
+  completely different hunt. It also prints the cursor position and the
+  owning window on the two lines ABOVE the report, so grepping for
+  `DAMAGE BUG` alone throws most of the evidence away -- grep
+  `"first px|cursor now|diff is in|DAMAGE BUG"`.
+
   **Read the two counts in its summary.** A *violation* is a real missed
   damage declaration and fails the run; a *report the WM declared void*
   is one the compositor itself could not conclude anything from, printed
