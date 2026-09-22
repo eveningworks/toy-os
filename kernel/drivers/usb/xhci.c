@@ -1877,6 +1877,24 @@ static void xhci_poll_source(void) {
 
 static struct input_source g_hc_source;
 
+// A SECOND SOURCE, FOR A CONTROLLER THAT NEVER CAME UP AT ALL. The real
+// one polls hardware, so it cannot be registered before the reset
+// succeeds -- which left the boot that matters most with no
+// instrumentation whatever: `usb_probe()` returns early when the reset
+// fails, and the machine then ran a minute and reset with the log
+// ending at 3.7 s and nothing to say why. This touches no registers.
+static struct input_source g_hc_dead_source;
+
+static void xhci_dead_heartbeat(void) {
+    static uint64_t last;
+    uint64_t now = clocksource_now_ns();
+    if (now - last < 1000000000ull) return;
+    last = now;
+    klog_printf(KLOG_WARN "usb: alive at %llu s -- the controller never "
+                "initialised, nothing here is driving it\n",
+                (unsigned long long)(now / 1000000000ull));
+}
+
 // --- ports ------------------------------------------------------------
 
 // --- one socket, two port numbers -------------------------------------
@@ -2949,7 +2967,21 @@ static void usb_probe(const struct pci_device *d) {
     // the port scan below will find anyway.
     intel_port_mux(d);
 
-    if (!reset_controller()) return;
+    if (!reset_controller()) {
+        // THE MOST IMPORTANT BOOT TO INSTRUMENT IS THE ONE WHERE THIS
+        // FAILS, and it used to be the only one with no instrumentation
+        // at all. A controller left dirty by a previous boot's reset
+        // refuses both the firmware handoff and this, and the machine
+        // then has no USB, therefore no NIC, therefore no way to be
+        // asked anything.
+        klog_printf(KLOG_ERR "usb: giving up on the controller at probe -- "
+                    "no USB this boot\n");
+        g_hc_dead_source.name = "usb-dead";
+        g_hc_dead_source.caps = 0;
+        g_hc_dead_source.poll = xhci_dead_heartbeat;
+        input_register_source(&g_hc_dead_source);
+        return;
+    }
 
     // PAGESIZE is only meaningful after reset. Bit n set means 2^(n+12).
     uint32_t ps = mr32(g_hc.op, XHCI_PAGESIZE) & 0xFFFFu;
