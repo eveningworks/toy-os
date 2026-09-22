@@ -273,9 +273,15 @@ static int usbaudio_open(struct snd_dev *dev) {
     // WAV captured DIGITALLY off the emulated AC97 is spotless -- zero
     // zero-runs, zero discontinuities, largest step 311 LSB over 30 s.
     // So the residue lives in the isochronous path both USB drivers
-    // share and AC97 does not, and since these measurements are taken
-    // through QEMU USB PASSTHROUGH to a real G6, it may not be toy-os's
-    // at all. docs/bugs.md has how to settle that.
+    // share and AC97 does not -- and EVERY NUMBER ABOVE WAS TAKEN ON
+    // THE HIGH-SPEED/UAC2 BINDING, which is the one that misbehaves.
+    // The same driver on the bare-metal ASUS, where the G6 binds UAC1
+    // at FULL speed, plays cleanly and repeatedly. That is a different
+    // code path, not the same one without an emulator: UAC2 negotiates
+    // its rate through a Clock Source entity and runs this conversion
+    // at 8000 packets/s where UAC1 runs it at 1000. docs/bugs.md has
+    // the open entry; do not read "clean on bare metal" as "the driver
+    // is proven", because the faulty path has never run there.
     //
     // The stretch is the same fact twice: an isochronous endpoint
     // consumes a packet every 125 us whether or not one arrived, so a

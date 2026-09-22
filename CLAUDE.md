@@ -350,6 +350,16 @@ a broken thing look fine.
   -- right for a click, useless for a state that must survive a capture.
   **Assert the BAND, not the change**, and remember SELECTION OUTRANKS
   HOVER.
+- **A USB AUDIO RESULT SAYS WHICH PATH IT EXERCISED, OR IT SAYS
+  NOTHING.** One device binds DIFFERENTLY per speed -- a real G6 is
+  UAC2 at high speed (8000 packets/s, rate negotiated through a Clock
+  Source) and UAC1 at full speed (1000/s) -- and the faults live on the
+  high-speed one: ~0.4 cracks a second, only ONE playback per `snddrv`,
+  `aplay` parked for ever. The SAME driver on bare metal is clean,
+  because the G6 lands at FULL speed there, which is a different path
+  and not a vindication. **Read the `UAC1`/`UAC2` and the cadence out
+  of the bind line before comparing two runs**, and do not read "clean
+  on bare metal" as "the driver is proven". `docs/bugs.md` has it.
 - **`seed/sync/` KEEPS WHAT YOU DELETE FROM `data/`, and `make
   clean-disk` does not touch it.** The pair is `make clean` (wipes
   staging) THEN `make clean-disk` (wipes the image); either alone leaves
