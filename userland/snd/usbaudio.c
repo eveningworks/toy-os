@@ -19,6 +19,7 @@
 // is the untrusted half, which is the whole argument for being here.
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include "snd_driver.h"
@@ -60,6 +61,17 @@ static struct {
     uint32_t copy_pos;    // ring offset of the next packet to copy
     uint32_t play_pos;    // ring offset the hardware has reached
     int running;
+    // LATENESS, which is the only honest measure of this driver.
+    // `n` from isoch_status is how many completion GROUPS were already
+    // waiting when we got the CPU: 1 means we kept up, more means the
+    // endpoint drained by that many groups (4 ms each) while we were
+    // off it. Packets per second measures the driver; this measures
+    // whether it was in time, which is what the audio hears.
+    //
+    // OFF BY DEFAULT, because it is in the refill path and this driver
+    // has almost no margin -- see the comment on `probe` below.
+    int      probe;
+    uint32_t pr_polls, pr_ev, pr_late, pr_nmax, pr_ticks;
 } g;
 
 // --- the format conversion, the kernel driver's shape ------------------
@@ -320,6 +332,20 @@ static int usbaudio_start(struct snd_dev *dev, uint64_t ring_phys) {
     g.play_pos = 0;
     g.next = 0;
     g.running = 1;
+    // SET `USBAUDIO_PROBE=1` IN snddrv's ENVIRONMENT to turn the
+    // lateness counters on. Off by default because they sit in the
+    // refill path, which is the one place this driver has no margin:
+    // measured 2026-09-22, 66% of its wakeups already had more than
+    // one completion group waiting (nmax 3, so 4-12 ms behind against
+    // a 12 ms buffer). Turning them on did NOT measurably change the
+    // click rate -- that was suspected and then disproved by running
+    // the same build with them off -- so this is caution, not a
+    // known cost.
+    g.probe = getenv("USBAUDIO_PROBE") != 0;
+    g.pr_polls = g.pr_ev = g.pr_late = g.pr_nmax = g.pr_ticks = 0;
+    if (g.probe)
+        fprintf(stderr, "usbaudio: probe on -- packets=%u group=%u wire=%u frames=%u\n",
+                g.packets, g.group, g.wire_bytes, g.frames);
     // PRIME IT: an isochronous endpoint with nothing posted is idle,
     // and the first completion is what drives every refill after it.
     // The COPIES are per packet; the POSTS are one call per group, for
@@ -347,6 +373,22 @@ static int usbaudio_period(struct snd_dev *dev) {
     if (!g.running) return SND_IRQ_NOT_MINE;
     int n = sys_usb_isoch_status(g.slot, g.s.ep);
     if (n <= 0) return SND_IRQ_NOT_MINE;
+
+    // One line per ~250 events, about one a second at this endpoint's
+    // 8000 packets/s with IOC every 32 -- the klog ring holds a few
+    // hundred lines and a faster probe destroys its own evidence.
+    if (g.probe) {
+    g.pr_polls++;
+    g.pr_ev += (uint32_t)n;
+    if (n > 1) g.pr_late++;
+    if ((uint32_t)n > g.pr_nmax) g.pr_nmax = (uint32_t)n;
+    if (g.pr_ev - g.pr_ticks >= 250) {
+        g.pr_ticks = g.pr_ev;
+        fprintf(stderr, "usbaudio: ev=%u polls=%u late=%u nmax=%u\n",
+                g.pr_ev, g.pr_polls, g.pr_late, g.pr_nmax);
+        g.pr_nmax = 0;
+    }
+    }
 
     // ONE EVENT COVERS A GROUP -- only the last of each carries IOC --
     // so the ring advances by the whole group, per event.
