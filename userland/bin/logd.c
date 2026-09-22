@@ -61,13 +61,13 @@
 // all before this, which is a real gap in a log daemon --
 // systemd-journald's SyncIntervalSec is the same idea.
 //
-// WHAT IT IS NOT KNOWN TO FIX, said plainly: two boots on the
-// bare-metal ASUS came back 0 bytes with no header, and this was
-// written for them, but that is NOT established as the cause. The
-// control refuses to go red -- a guest power-cut (SIGKILL to QEMU)
-// keeps its log either way, because the guest's disk is a host file
-// and host writes outlive the process. So this can only be confirmed
-// on the machine that lost the logs.
+// VERIFIED ON THE MACHINE THAT LOST THEM, and not in QEMU, which
+// cannot show it: a guest power-cut (SIGKILL to QEMU) keeps its log
+// either way, because the guest's disk is a host file and host writes
+// outlive the process. On the bare-metal ASUS, two boots that ended in
+// an unclean reset came back 0 bytes with no header before this and
+// 44 KiB each after -- and the first thing that log revealed was the
+// deterministic reset it had been hiding (docs/bugs.md).
 #define SYNC_POLLS 2
 #define KEEP_DEFAULT 10
 
