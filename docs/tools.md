@@ -2741,6 +2741,49 @@ window without going through it will find its layout polls timing out.
   get`, since boot chatter mentions `ac97` too and a substring match
   passed on a guest whose setting had not been restored at all. On
   demand, not in the gate: it boots its own guest with extra hardware.
+- **`audio_loopback_test.py`** -- **the only tool here that judges the
+  SOUND rather than the driver.** A cable from the Creative G6's
+  headphone out into the motherboard's line in, so the analogue output
+  of a passed-through DAC can be recorded and counted. Everything else
+  in this section measures what the driver DID; this measures what came
+  out. It exists because `docs/bugs.md` records `usbaudio.so` as
+  "crackles", which is not a measurement, in an entry that is itself a
+  warning about trusting the wrong number -- packets per second went UP
+  while the audio got worse.
+
+  **How it counts a crackle.** A sine obeys `x[n] = 2cos(w)x[n-1] -
+  x[n-2]` exactly, so every sample is predictable from the two before
+  it and any break in the stream -- a gap, a repeated packet, a torn
+  buffer -- shows up as a residual spike. It reports DROPOUTS (the
+  envelope collapsing: the ring ran dry) separately from CLICKS (the
+  waveform tearing while the level holds: the samples were there and
+  wrong), because those have different causes.
+
+  **`--selftest` is the positive control and runs by default**: the
+  HOST plays a tone and records it, proving the loop carries signal
+  before any guest measurement is believed. It doubles as the
+  analyser's NEGATIVE control -- a known-clean tone must report zero
+  dropouts and zero clicks, so a glitch count on a guest capture is
+  real rather than a detector artefact. That control earned its place
+  immediately: the first run reported one dropout and one click on a
+  perfect signal, because the capture's leading and trailing silence
+  and the tone's own hard edges were being counted. Run the selftest
+  BEFORE passing the G6 through -- once QEMU holds the device the host
+  cannot open it for playback. Then `--record SECONDS` captures while
+  the guest plays, and `--analyse WAV` re-reads a capture later.
+
+  **It SKIPS when the loop is open, and that is deliberate.** The cable
+  is not normally connected; an absent cable and a silent guest are
+  both flat ADC hiss, so failing would convict the OS of a fault in the
+  test rig. Two traps it encodes, both measured: the ALC892 comes up
+  with **+30 dB `Capture` AND +30 dB `Line Boost`** -- 60 dB on a line
+  input fed by a headphone amp, which clips into mush and reads as a
+  broken cable -- and every capture opens with a **-26 dBFS ADC
+  start-up transient decaying over ~0.7 s**, louder than the tone's
+  noise floor, so anything hunting for a level finds it first. The
+  measured baseline of the rig at unity gain (G6 `Speaker` 107) is
+  0.02% THD, 70 dB channel separation and a ~60 dB SNR ceiling set by
+  the ADC, not by the G6. `local_info.txt` has the full calibration.
 - **`devclaim_test.py`** -- a ring-3 process takes the sound card OFF
   THE KERNEL, reads its registers, and gives it back (stage 2 of
   `docs/umdf-design.md`). It boots its own guest with an

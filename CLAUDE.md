@@ -588,6 +588,7 @@ The bar is "does this fix a rederive-from-scratch cost".
 | Is it INTERMITTENT, and at what rate? | `boot_rate.py` (bare metal), `flake_hunt.py` (VM) |
 | Test runners | `boot_smoke_test.py`, `ktest_run.py`, `usertest_run.py`, `faulttest_run.py`, `gui_regress.py`, `damage_sweep.py`, `damage_hunt.py` |
 | Diagnose | `panic_resolve.py` (**never hand-roll `nm`**), `acpi_dump.py`, `aml_walk.py`, `QMPSession.hmp()` (**the one oracle the guest cannot fake**), `corrupt_diff.py`, `window_resize_probe.py`, `pixel_probe.py`, `screenshot_diff.py`, `iso_guard.py` |
+| Does it actually SOUND right? | `audio_loopback_test.py` -- records the G6 back on line in; needs the cable patched in |
 | Check an implementation against a FOREIGN one | `libc_diff.py`, `uimg_codec_hostcheck.py`, `usnd_hostcheck.py`, `hash_hostcheck.py`, `divti3_hostcheck.py`, `regex_hostcheck.py`, `umd_hostcheck.py`, `ugfx_text_hostcheck.py`, `utext_hostcheck.py`, `utween_hostcheck.py`, `term_scheme_hostcheck.py` |
 | Measure | `idle_cpu.py` (quote DIFFERENCES only), `loc.py`, `dup_scan.py` (copy-paste; a REPORT, never a gate), `ping_rtt.py`, `latency_under_io.py`, `frame_balance.py` |
 | Disk images, from the host | `seed_disk.py`, `install_grub.py` (also `boot_medium()`), `tfs3_writer.py`, `mkpart_test.py`, `fetch_wad.py` |
@@ -643,8 +644,9 @@ runners themselves; `--list` on either runner is the live answer.
 
 *Run by `ondemand_sweep.py` (on demand, never a gate):*
 
-`ahci_test.py`, `ansi_cursor_test.py`, `audio_test.py`, `boot_rate.py`,
-`console_bleed_test.py`, `console_shell_test.py`, `ctrlc_test.py`,
+`ahci_test.py`, `ansi_cursor_test.py`, `audio_loopback_test.py`,
+`audio_test.py`, `boot_rate.py`, `console_bleed_test.py`,
+`console_shell_test.py`, `ctrlc_test.py`,
 `devclaim_test.py`, `hdacodec_test.py`, `mixer_test.py`,
 `cursor_ibeam_test.py`, `dash_gap.py`, `dash_test.py`, `diskmark_test.py`,
 `divti3_hostcheck.py`, `doc_test.py`, `doom_sound_test.py`,

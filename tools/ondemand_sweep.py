@@ -236,6 +236,16 @@ TOOLS = [
     # recording, which is the only way "which device played" is an
     # assertion rather than a guess.
     ("usb_audio",   "usb_audio_test.py",       "USB audio: isoch OUT, and which card plays", True, None,             False),
+    # THE ONLY TOOL HERE THAT JUDGES THE SOUND RATHER THAN THE DRIVER.
+    # It records the G6's analogue output back on the motherboard's line
+    # in and counts dropouts and clicks, which is what "it crackles" in
+    # docs/bugs.md was missing. `serial` because it owns the G6, and
+    # `usb_audio` above passes that same device through to a guest --
+    # the two must never overlap. It SKIPS when the cable is not patched
+    # in, which is most of the time; see its docstring for why that is a
+    # skip and not a failure.
+    ("loopback",    "audio_loopback_test.py",  "what the G6 actually plays, recorded back", True,
+     ("alsa_loop", "needs alsa-utils and both sound cards -- and the cable patched in"),      False),
 
     # --- a driver in ring 3 -------------------------------------------
     # Boots its own guest with an HD Audio controller: nothing else
@@ -378,6 +388,19 @@ def precondition_met(kind):
             if any(f.lower().endswith(".wad") for f in files):
                 return True, ""
         return False, why
+    if key == "alsa_loop":
+        # The CABLE itself is not checked here -- the tool probes it and
+        # skips with its own message, because proving the loop means
+        # playing a tone through it and that is the tool's job, not a
+        # precondition's. What this gates is the cheap half: the
+        # userspace and the two cards existing at all.
+        if not all(shutil.which(t) for t in ("aplay", "arecord", "amixer")):
+            return False, why
+        try:
+            cards = open("/proc/asound/cards").read()
+        except OSError:
+            return False, why
+        return ("[G6" in cards and "[Generic" in cards), why
     if key == "host_audio":
         # A HOST-side check rather than a guest one: it compiles the
         # decoder with the host gcc and compares against ffmpeg, so what
