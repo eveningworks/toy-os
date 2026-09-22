@@ -69,6 +69,7 @@ struct xhci_port_state {
     // hub's USB2 half, where the loop starved the box badly enough to
     // make the built-in keyboard unusable (docs/bugs.md).
     uint8_t giveups;
+    uint8_t oc_reported;   // over-current named once, not per poll
 };
 
 // ONE PROTOCOL'S PORT RANGE, from a Supported Protocol capability.
@@ -1664,6 +1665,27 @@ static void note_port_change(void) {
     for (uint32_t p = 0; p < g_hc.max_ports && p < XHCI_MAX_PORTS; p++) {
         uint32_t sc = mr32(g_hc.op, XHCI_PORTSC(p));
         uint32_t ack = sc & XHCI_PORTSC_RW1C;
+
+        // OVER-CURRENT WAS BEING CLEARED WITHOUT EVER BEING READ. OCC
+        // rides in the RW1C mask above, so the platform could be
+        // shedding a port's power and nothing here would say so -- and
+        // this controller reports no Port Power Control, so we cannot
+        // shed it ourselves either. Worth a line because the symptom it
+        // would explain (a machine that resets with a bus-powered hub
+        // attached and nothing logged) is otherwise indistinguishable
+        // from a software fault. Once per port per episode.
+        if (sc & (XHCI_PORTSC_OCA | XHCI_PORTSC_OCC)) {
+            if (!g_hc.ports[p].oc_reported) {
+                g_hc.ports[p].oc_reported = 1;
+                klog_printf(KLOG_ERR "usb: port %u: OVER-CURRENT (portsc "
+                            "0x%x, active=%u) -- the platform is limiting "
+                            "this port\n", p + 1, sc,
+                            (sc & XHCI_PORTSC_OCA) ? 1u : 0u);
+            }
+        } else {
+            g_hc.ports[p].oc_reported = 0;
+        }
+
         if (ack) portsc_write(p, 0, ack);
 
         uint8_t was = g_hc.ports[p].connected;
