@@ -3736,6 +3736,15 @@ window without going through it will find its layout polls timing out.
   fixture is confirmed present, and the verifier reports nothing, so the
   coverage is real but the open bug is still open (`docs/bugs.md`).
 
+  **THE VERIFIER IS MORE SENSITIVE THAN A PERSON WATCHING, AND ON BARE
+  METAL IT CATCHES THIS ONE.** Driving it by hand on the laptop --
+  `guictl damage verify on`, open the tray volume panel, leave it --
+  reports 3 violations in 20 seconds of IDLE, where the maintainer
+  watching the same screen saw nothing that time. So a quiet screen is
+  not evidence and the verifier is: reach for `guictl damage verify on`
+  plus `dmesg` before concluding a damage fault is gone. It is not free
+  -- every frame renders twice while it is on -- so turn it off again.
+
   **Read the two counts in its summary.** A *violation* is a real missed
   damage declaration and fails the run; a *report the WM declared void*
   is one the compositor itself could not conclude anything from, printed
