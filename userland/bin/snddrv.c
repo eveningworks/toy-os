@@ -40,7 +40,7 @@
 #include "lib/cmd.h"
 #include <sys/resource.h>
 
-#define USAGE "snddrv [-d INDEX] [--driver NAME] [--usb-id VID:PID] [-v]"
+#define USAGE "snddrv [-d INDEX] [--driver NAME] [--usb-id VID:PID] [--usb-clock ID] [-v]"
 
 #define PLUGIN_DIR "/lib/snd"
 #define MAX_PLUGINS 8
@@ -195,6 +195,16 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "-d") && i + 1 < argc) { want_pci = atoi(argv[++i]); continue; }
         if (!strcmp(argv[i], "--driver") && i + 1 < argc) { want_drv = argv[++i]; continue; }
         if (!strcmp(argv[i], "--usb-id") && i + 1 < argc) { want_usb = argv[++i]; continue; }
+        // A DIAGNOSTIC, not a tuning knob: a UAC2 clock SELECTOR's pins
+        // are different clocks (the G6 offers a DSP path and a direct
+        // one) and the device decides which it reports, so two runs can
+        // exercise different ones and sound different. This pins it so
+        // they can be compared. The plugin reads the environment, which
+        // the shell cannot set on a command line here.
+        if (!strcmp(argv[i], "--usb-clock") && i + 1 < argc) {
+            setenv("USBAUDIO_CLOCK", argv[++i], 1);
+            continue;
+        }
         if (!strcmp(argv[i], "-v")) { g_verbose = 1; continue; }
         cmd_usage(USAGE);
         return 1;

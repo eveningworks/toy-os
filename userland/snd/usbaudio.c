@@ -127,6 +127,15 @@ static int set_interface(uint8_t ifnum, uint8_t alt) {
 // only way to know. usb_audio_parse() maps the 1-based answer back
 // through `clock_pins`.
 static uint8_t clock_entity(void) {
+    // **`USBAUDIO_CLOCK=<id>` PINS THE CLOCK SOURCE, for comparing two
+    // of them by ear.** A selector's pins are not interchangeable: the
+    // G6 offers a DSP path and a direct one, and which it reports
+    // depends on the device's own front-panel state -- so two runs of
+    // the same build can exercise different clocks and sound
+    // different. A result that does not say which clock it was on says
+    // less than it looks (docs/bugs.md).
+    const char *want = getenv("USBAUDIO_CLOCK");
+    if (want && want[0]) return (uint8_t)atoi(want);
     if (!g.s.clock_is_selector) return g.s.clock_id;
     if (!g.s.clock_pin_count) return g.s.clock_id;
     uint8_t pin = 0;

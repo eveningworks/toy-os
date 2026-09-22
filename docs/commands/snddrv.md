@@ -7,7 +7,7 @@
 ## Synopsis
 
 ```
-snddrv [-d INDEX] [--driver NAME] [--usb-id VID:PID] [-v]
+snddrv [-d INDEX] [--driver NAME] [--usb-id VID:PID] [--usb-clock ID] [-v]
 ```
 
 ## Options
@@ -21,6 +21,13 @@ snddrv [-d INDEX] [--driver NAME] [--usb-id VID:PID] [-v]
   [`lsusb`](lsusb.md) prints them (`--usb-id 0b05:19a8`). A bare decimal
   is an xHCI slot instead, which is what the logs name and the only way
   to tell two identical DACs apart.
+- `--usb-clock ID` -- pin a UAC2 device's clock to this entity instead
+  of asking its clock SELECTOR which pin it is on. A DIAGNOSTIC: a
+  selector's pins are different clocks -- a Sound BlasterX G6 offers a
+  DSP path (15) and a stereo-direct one (16) -- and the DEVICE decides
+  which it reports, so two runs of one build can exercise different
+  clocks and sound different. Pin it to compare them by ear. The bind
+  line always says which clock was used.
 - `-v` -- say which plugins loaded, and which devices were declined.
 
 ## Aiming it at one USB DAC
