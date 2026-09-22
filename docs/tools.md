@@ -3755,6 +3755,24 @@ window without going through it will find its layout polls timing out.
   `DAMAGE BUG` alone throws most of the evidence away -- grep
   `"first px|cursor now|diff is in|DAMAGE BUG"`.
 
+  **TURN SHADOWS OFF BEFORE READING THOSE COLOURS** (`config set
+  shadows off`). A shadow reaches further than what casts it, so its
+  faint outer pixel is the FIRST in scan order and the reported colours
+  are a one-or-two-point blend difference -- which reads as "composited
+  twice" when the actual fault is a whole panel missing. That misread
+  cost a round on the tray-panel bug. With shadows off the same fault
+  reported a border colour against wallpaper, which is a different
+  investigation entirely. Turn them back on afterwards.
+
+  **AND IT LOGS TWO THINGS THAT ONLY APPEAR WHILE IT IS ON**: an
+  overlay opening or closing (`wm: overlay <name> opened`), because an
+  overlay that transitions BETWEEN the two render passes makes them
+  disagree about a whole panel for an innocent reason; and a tray
+  popup's anchor lookup falling back (`tray_item_rect(N) FAILED`),
+  because that silently moves the panel somewhere else. Both are gated
+  on verification so a tooltip's ordinary hover traffic does not drown
+  the log.
+
   **Read the two counts in its summary.** A *violation* is a real missed
   damage declaration and fails the run; a *report the WM declared void*
   is one the compositor itself could not conclude anything from, printed

@@ -5,6 +5,7 @@
 #include "tray_slider_popup.h"
 #include "wm_shadow.h"
 #include "wm_tray.h"
+#include "wm_log.h"   // the anchor-lookup probe below
 #include "ui/uui.h"
 #include "ui/utheme.h"
 #include "lib/icon_cache.h"
@@ -56,6 +57,12 @@ void tray_slider_geometry(struct tray_slider_popup *p, int want_w, int extra_h,
 
     int tx = 0, ty = 0, tw = 0, th = 0;
     if (!tray_item_rect(p->tray_id, &tx, &ty, &tw, &th)) {
+        // THE PANEL IS ANCHORED TO ITS TRAY ITEM, so a lookup that
+        // fails moves the whole panel -- which between two render
+        // passes reads as the panel vanishing from where it was.
+        if (wm_damage_verify_enabled())
+            wm_logf("wm: tray_item_rect(%d) FAILED -- %s falls back\n",
+                    p->tray_id, p->name ? p->name : "?");
         tx = screen_w - 32; ty = screen_h - taskbar_h; tw = 16; th = taskbar_h;
     }
     int x, y;

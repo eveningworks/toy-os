@@ -2,6 +2,7 @@
 // verbs rather than one.
 #include "wm_internal.h"
 #include "wm_overlay.h"
+#include "wm_log.h"   // overlay transitions, under damage verification
 #include "wm_shadow.h"   // wm_damage_window_rect: the rect PLUS its shadow
 #include "kapi.h"
 #include "start_menu.h"
@@ -109,6 +110,12 @@ void wm_overlay_draw(int mx, int my) {
         // just opened -- this pass runs after input, so a click that
         // opened it is handled in the frame that click belongs to.
         if (open && !g_was_open[i] && o->on_open) o->on_open();
+        // AN OVERLAY THAT OPENS OR CLOSES BETWEEN RENDER PASSES makes
+        // the damage verifier's two renders disagree about a whole
+        // panel, which reads as a missed damage declaration. Only while
+        // verification is on: a tooltip transitions on every hover.
+        if (open != g_was_open[i] && wm_damage_verify_enabled())
+            wm_logf("wm: overlay %s %s\n", o->name, open ? "opened" : "closed");
         g_was_open[i] = open;
         if (!open) {
             // Its closing damage has already covered where it was, so
