@@ -59,6 +59,7 @@ static volatile struct snd_ctl_page *g_hw;
 static volatile int16_t *g_hwring;
 static uint32_t g_wr;      // our write cursor into the hardware ring
 static int g_running;
+static uint32_t g_prev_lead; // the unstarted ring's fill, one pass ago
 
 // --- suspend on idle ---------------------------------------------------
 //
@@ -88,6 +89,21 @@ static int g_running;
 // enough to be well inside the ring's own 341 ms.
 #define STALL_MS 500
 
+// THE MIXER NEVER GETS AHEAD OF ITS INPUTS, except by this much. A
+// chunk is mixed when every playing client has a whole one ready, or
+// when the engine is within MIN_LEAD of what has been mixed -- only
+// then is silence committed, because only then is it a real underrun.
+// Filling the whole ring regardless wrote the gap between a client's
+// first write and its second into the middle of the sound (a 21-128 ms
+// hole in 7 playbacks of 8, always a whole number of chunks).
+//
+// EIGHT CHUNKS, 85 ms: one 20 ms pass of ours, plus a USB driver that
+// copies ~3 chunks ahead of the position it reports, plus slack. It is
+// also the buffer everyone plays on while ANY open client is idle --
+// a paused player is "not ready" for ever -- which is still four of
+// our passes.
+#define MIN_LEAD_BYTES (8u * SND_CHUNK_BYTES)
+
 static int g_open;                       // is the stream ours right now?
 static unsigned long long g_idle_since;  // when the last client stopped
 
@@ -103,6 +119,7 @@ static int stream_open(void) {
     if (g_hw->magic != SND_CTL_MAGIC) { sys_snd_ctl(SND_CTL_CLOSE); return 0; }
     g_wr = 0;
     g_running = 0;
+    g_prev_lead = 0;
     g_open = 1;
     // SAID ON EVERY ACQUISITION, not just the first: "released the
     // card" with nothing to answer it reads like the daemon gave up.
@@ -361,6 +378,17 @@ static void rescan(void) {
 // what each of them just gave us and move its position on. Zeroing is
 // the ABI's rule and it is what makes a dead client fall silent instead
 // of looping -- the kernel does exactly this for us.
+// Does every playing client have a whole chunk to give?
+static int clients_ready(void) {
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        const struct client *c = &g_cl[i];
+        if (!c->ctl || !c->ctl->running) continue;
+        uint32_t avail = (c->ctl->wr_pos + SND_RING_BYTES - c->ctl->hw_pos) % SND_RING_BYTES;
+        if (avail < SND_CHUNK_BYTES) return 0;
+    }
+    return 1;
+}
+
 static void mix_chunk(uint32_t dst) {
     static int16_t acc[SND_CHUNK_BYTES / 2];
     memset(acc, 0, sizeof acc);
@@ -458,13 +486,18 @@ int main(void) {
 
         if (!g_open) { sys_sleep_ms(20); continue; }
 
-        // Fill every chunk between our cursor and one behind the
-        // hardware's. Before the engine starts hw_pos is 0, so the
-        // first pass primes the whole ring.
+        // Fill toward one chunk behind the hardware -- but only with
+        // what the clients have actually produced, or with silence
+        // when the engine is about to run out (MIN_LEAD_BYTES). Before
+        // the engine runs there is no hurry, so nothing is padded.
+        int engine = g_running && g_hw->running;
         uint32_t limit = (g_hw->hw_pos + SND_RING_BYTES - SND_CHUNK_BYTES) % SND_RING_BYTES;
+        uint32_t lead = (g_wr + SND_RING_BYTES - g_hw->hw_pos) % SND_RING_BYTES;
         while (g_wr != limit) {
+            if (!clients_ready() && !(engine && lead < MIN_LEAD_BYTES)) break;
             mix_chunk(g_wr);
             g_wr = (g_wr + SND_CHUNK_BYTES) % SND_RING_BYTES;
+            lead += SND_CHUNK_BYTES;
         }
 
         // A DEAD hw_pos IS ARITHMETICALLY IDENTICAL TO A FULL RING, and
@@ -510,8 +543,15 @@ int main(void) {
         // rule: the kernel clears `running` when the device this stream
         // was opened on goes away, and a daemon that trusted its own
         // flag would mix into a ring nobody plays, forever.
+        //
+        // AND NOT BEFORE THERE IS SOMETHING TO PLAY: an engine started
+        // on two chunks is padding silence a pass later. A lead that
+        // stopped growing is a short sound that has all arrived.
         if (!g_running || !g_hw->running) {
-            if (sys_snd_ctl(SND_CTL_START) == 0) g_running = 1;
+            if (lead >= MIN_LEAD_BYTES || (lead && lead == g_prev_lead)) {
+                if (sys_snd_ctl(SND_CTL_START) == 0) g_running = 1;
+            }
+            g_prev_lead = lead;
         }
 
         // NEARLY TWO CHUNKS, not half of one: a chunk is 2048 bytes =

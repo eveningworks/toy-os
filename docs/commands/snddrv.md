@@ -104,8 +104,21 @@ in-kernel driver.
 **`start()` became asynchronous.** A ring-0 driver has programmed the
 engine by the time `start()` returns; this one has only had a request
 posted into a shared page. `running` — which apps already watch — is
-published when the first period is reported, one chunk later, which at
-48 kHz is 21 ms.
+nonetheless published the moment the request is posted, so it means
+"asked to run" here, and the first reported period is what proves the
+engine moved.
+
+**A start while running is a restart.** The core moves `hw_pos` back to
+0 on every start, so the engine is stopped and started from there
+rather than left where it was. That case arrives when a stop and a start
+land between two of this process's wakeups (it sees only the last
+request), and from `soundd`'s stall recovery.
+
+**The USB plugin logs one line per start and one per stop** —
+`usbaudio: start -- N stale group(s) drained, ring [#####...]` and
+`usbaudio: stop after ... N dry, at ms: ...`. The ring map is what the
+mixer had written when the start arrived; a *dry* event is the endpoint
+running out before the driver refilled it, which is a gap on the wire.
 
 **A polite kill hands the card back; a crash does not.** `snddrv`
 catches `SIGTERM`, `SIGINT` and `SIGHUP` and releases the device so the

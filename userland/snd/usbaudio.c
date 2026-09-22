@@ -72,7 +72,36 @@ static struct {
     // has almost no margin -- see the comment on `probe` below.
     int      probe;
     uint32_t pr_polls, pr_ev, pr_late, pr_nmax, pr_ticks;
+
+    // PER PLAYBACK, ALWAYS ON, one line at start and one at stop.
+    // `inflight` is completion groups posted and not yet reported, so it
+    // reaching 0 before a refill means the endpoint RAN DRY -- the
+    // underrun, seen from this side of the syscall.
+    int32_t  inflight;
+    uint64_t t0_ns;
+    uint32_t run_ev, run_dry, run_nmax;
+    uint16_t run_dry_ms[8];     // when the first eight happened
+    int      run_first_n;      // the first status call's answer; -1 until it comes
 } g;
+
+// One character per chunk: '#' holds samples, '.' is all zero. What the
+// mixer had written when we were asked to start -- priming copies from
+// offset 0, so a '.' in the first few is silence going on the wire.
+static const char *ring_map(void) {
+    static char m[SND_CHUNKS + 1];
+    for (uint32_t i = 0; i < SND_CHUNKS; i++) {
+        const uint8_t *c = g.ring + i * SND_CHUNK_BYTES;
+        uint32_t k = 0;
+        while (k < SND_CHUNK_BYTES && !c[k]) k++;
+        m[i] = k == SND_CHUNK_BYTES ? '.' : '#';
+    }
+    m[SND_CHUNKS] = 0;
+    return m;
+}
+
+static uint32_t ms_since_start(void) {
+    return (uint32_t)((sys_monotonic_ns() - g.t0_ns) / 1000000ull);
+}
 
 // --- the format conversion, the kernel driver's shape ------------------
 
@@ -377,13 +406,10 @@ static int usbaudio_open(struct snd_dev *dev) {
     // at FULL speed, plays cleanly and repeatedly. That is a different
     // code path, not the same one without an emulator: UAC2 negotiates
     // its rate through a Clock Source entity and runs this conversion
-    // at 8000 packets/s where UAC1 runs it at 1000. **THAT PATH HAS NOW
-    // RUN ON REAL HARDWARE AND IS CLEAN** (2026-09-22, by ear, the G6
-    // hot-plugged so it binds high-speed): the crackle above is the
-    // EMULATOR's. What did NOT go away with it is a second playback
-    // through one snddrv being silent, with aplay parked afterwards --
-    // that reproduces on bare metal at high speed and not at full
-    // speed, so it is ours. docs/bugs.md has the open entry.
+    // at 8000 packets/s where UAC1 runs it at 1000. On real hardware at
+    // high speed nearly all of that crackle goes away, so most of it is
+    // the EMULATOR's; the residue is in docs/bugs.md. The silent SECOND
+    // playback was stale completions -- see usbaudio_start().
     //
     // The stretch is the same fact twice: an isochronous endpoint
     // consumes a packet every 125 us whether or not one arrived, so a
@@ -490,6 +516,29 @@ static int usbaudio_start(struct snd_dev *dev, uint64_t ring_phys) {
         fprintf(stderr, "usbaudio: ring mapped read-only at %llx\n",
                 (unsigned long long)addr);
     }
+    // **THE LAST STREAM'S TDs OUTLIVE ITS STOP**, because stop cancels
+    // nothing -- and their completions pile up unread while we are
+    // stopped. Priming on top of them used to count those as the new
+    // stream's, so each one posted a group that had not been earned: 10
+    // groups in flight over a buffer of 5, the controller sending slots
+    // already rewritten (a crackle) at full speed, and at high speed 320
+    // TDs on a 255-TRB ring -- an overwritten ring and dead silence. So
+    // wait for them to land, which is at most one buffer (20 ms). The
+    // bound is for a device that went away with TDs on it.
+    uint64_t give_up = sys_monotonic_ns() + 100ull * 1000000ull;
+    int stale = 0;
+    while (g.inflight > 0) {
+        int n = sys_usb_isoch_status(g.slot, g.s.ep);
+        if (n < 0) break;
+        g.inflight -= n;
+        stale += n;
+        if (g.inflight <= 0 || sys_monotonic_ns() > give_up) break;
+        sys_sleep_ms(1);
+    }
+    if (g.inflight > 0)
+        fprintf(stderr, "usbaudio: %d group(s) never completed; priming anyway\n",
+                (int)g.inflight);
+    g.inflight = 0;
     g.copy_pos = 0;
     g.play_pos = 0;
     g.next = 0;
@@ -512,18 +561,35 @@ static int usbaudio_start(struct snd_dev *dev, uint64_t ring_phys) {
     // and the first completion is what drives every refill after it.
     // The COPIES are per packet; the POSTS are one call per group, for
     // the reason syscall_abi.h gives.
+    g.t0_ns = sys_monotonic_ns();
+    g.run_ev = g.run_dry = g.run_nmax = 0;
+    g.run_first_n = -1;
+    fprintf(stderr, "usbaudio: start -- %d stale group(s) drained, ring [%s]\n",
+            stale, ring_map());
+
     for (uint8_t k = 0; k < g.packets; k++) copy_one_packet(k);
+    // IN FLIGHT ONLY IF THE IOC TRB WENT ON: a post the kernel refused
+    // part-way (a full ring) will never complete.
     for (uint8_t k = 0; k + g.group <= g.packets; k = (uint8_t)(k + g.group))
-        sys_usb_isoch_post(g.slot, g.s.ep, (uint32_t)k * g.wire_bytes,
-                           g.wire_bytes, 1, g.group, g.wire_bytes);
+        if (sys_usb_isoch_post(g.slot, g.s.ep, (uint32_t)k * g.wire_bytes,
+                               g.wire_bytes, 1, g.group, g.wire_bytes) == g.group)
+            g.inflight++;
     g.next = 0;
     return 0;
 }
 
 static void usbaudio_stop(struct snd_dev *dev) {
     (void)dev;
+    char at[8 * 7 + 1] = "";
+    for (uint32_t i = 0, o = 0; i < g.run_dry && i < 8; i++)
+        o += (uint32_t)snprintf(at + o, sizeof at - o, " %u", g.run_dry_ms[i]);
+    fprintf(stderr, "usbaudio: stop after %u ms -- %u event(s), first status "
+                    "said %d, nmax %u, %d in flight, %u dry, at ms:%s\n",
+            ms_since_start(), g.run_ev, g.run_first_n, g.run_nmax,
+            (int)g.inflight, g.run_dry, at);
     // NOTHING IS CANCELLED: the TDs already posted play out over the
-    // next few milliseconds and the endpoint goes quiet on its own.
+    // next few milliseconds and the endpoint goes quiet on its own --
+    // and their completions are still owed, which start() collects.
     // Stopping one properly is Stop Endpoint plus Set TR Dequeue, which
     // buys latency and a command pair that can fail on a device that is
     // already unplugged.
@@ -535,6 +601,18 @@ static int usbaudio_period(struct snd_dev *dev) {
     if (!g.running) return SND_IRQ_NOT_MINE;
     int n = sys_usb_isoch_status(g.slot, g.s.ep);
     if (n <= 0) return SND_IRQ_NOT_MINE;
+
+    if (g.run_first_n < 0) g.run_first_n = n;
+    g.run_ev += (uint32_t)n;
+    if ((uint32_t)n > g.run_nmax) g.run_nmax = (uint32_t)n;
+    g.inflight -= n;
+    if (g.inflight <= 0) {
+        if (g.run_dry < 8) {
+            uint32_t ms = ms_since_start();
+            g.run_dry_ms[g.run_dry] = (uint16_t)(ms > 65535 ? 65535 : ms);
+        }
+        g.run_dry++;
+    }
 
     // One line per ~250 events, about one a second at this endpoint's
     // 8000 packets/s with IOC every 32 -- the klog ring holds a few
@@ -565,11 +643,13 @@ static int usbaudio_period(struct snd_dev *dev) {
         uint8_t run = room < g.group ? room : g.group;
         for (uint8_t k = 0; k < g.group; k++)
             copy_one_packet((uint8_t)((first + k) % g.packets));
-        sys_usb_isoch_post(g.slot, g.s.ep, (uint32_t)first * g.wire_bytes,
-                           g.wire_bytes, run == g.group, run, g.wire_bytes);
+        int ok = sys_usb_isoch_post(g.slot, g.s.ep, (uint32_t)first * g.wire_bytes,
+                                    g.wire_bytes, run == g.group, run, g.wire_bytes) == run;
         if (run < g.group)
-            sys_usb_isoch_post(g.slot, g.s.ep, 0, g.wire_bytes, 1,
-                               (uint8_t)(g.group - run), g.wire_bytes);
+            ok = sys_usb_isoch_post(g.slot, g.s.ep, 0, g.wire_bytes, 1,
+                                    (uint8_t)(g.group - run), g.wire_bytes) ==
+                 g.group - run;
+        if (ok) g.inflight++;     // one IOC per group, split or not
         g.next = (uint8_t)((first + g.group) % g.packets);
     }
     // ON A CHUNK BOUNDARY, which is the only granularity the core's

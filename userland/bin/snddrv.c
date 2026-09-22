@@ -348,11 +348,17 @@ int main(int argc, char **argv) {
                 // which is what an app watches, but silence with
                 // nothing in the log reads as a dead card rather than
                 // a driver that refused.
-                if (!g_running) {
-                    if (g_drv->start(&g_card, ring_phys) == 0) g_running = 1;
-                    else fprintf(stderr, "snddrv: %s failed to start the engine\n",
-                                 g_drv->name);
-                }
+                //
+                // A START WHILE RUNNING IS A RESTART, never a no-op: the
+                // core has just moved hw_pos back to 0, so an engine left
+                // where it was plays from the wrong place and reports
+                // periods that zero what the mixer just wrote. It arrives
+                // when a STOP and a START land between two wakeups (only
+                // the last op is visible) and from soundd's stall recovery.
+                if (g_running) { g_drv->stop(&g_card); g_running = 0; }
+                if (g_drv->start(&g_card, ring_phys) == 0) g_running = 1;
+                else fprintf(stderr, "snddrv: %s failed to start the engine\n",
+                             g_drv->name);
                 break;
             case SND_REQ_STOP:
                 if (g_running) { g_drv->stop(&g_card); g_running = 0; }

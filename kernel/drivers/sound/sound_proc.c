@@ -78,9 +78,10 @@ static int proc_start(const struct sound_device *dev) {
     volatile struct snd_driver_page *p = page();
     if (!p) return -1;
     post(SND_REQ_START, 0);
-    // ASKED, NOT DONE. Returning 0 says the request is with the driver;
-    // `running` is what says the engine is live, and the core publishes
-    // that from the driver's own answer via sound_proc_poll().
+    // ASKED, NOT DONE. Returning 0 says the request is with the driver.
+    // SND_CTL_START still publishes `running` at once on that 0, so an
+    // app sees it before the engine is live; sys_snd_period() sets it
+    // again from the driver's first report.
     return 0;
 }
 

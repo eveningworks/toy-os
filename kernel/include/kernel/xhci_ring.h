@@ -37,7 +37,9 @@ struct xhci_ring {
     uint64_t phys;                  // its physical address
     uint32_t count;                 // TRBs in the segment, Link TRB included
     uint32_t enqueue;               // producer index
-    uint32_t dequeue;               // consumer index (event rings)
+    uint32_t dequeue;               // consumer index (event rings); on a
+                                    // producer ring, the TRB after the last
+                                    // one an event named -- see _room()
     uint8_t  cycle;                 // producer cycle state
     uint8_t  ccs;                   // consumer cycle state (event rings)
     uint8_t  is_event;
@@ -70,5 +72,18 @@ uint64_t xhci_ring_erdp(const struct xhci_ring *r);
 // xhci_ring_push() sets the cycle bit last, which hands the TRB over,
 // so anything armed after it has already lost the race.
 uint64_t xhci_ring_enq_phys(const struct xhci_ring *r);
+
+// HOW MANY MORE TRBs A PRODUCER RING TAKES before a push would overwrite
+// one the controller has not provably consumed. A lapped ring does not
+// drop a packet: the controller meets the wrong cycle bit where it
+// expected its next TRB and stops for good. `dequeue` only moves when
+// the caller reports an event through xhci_ring_consumed(), so this is
+// conservative -- TRBs finished without an event still count as used.
+// One slot is always kept empty, which is what tells full from empty.
+uint32_t xhci_ring_room(const struct xhci_ring *r);
+
+// A Transfer Event named the TRB at `trb_phys`: the controller is past
+// it. A pointer outside the segment is ignored.
+void xhci_ring_consumed(struct xhci_ring *r, uint64_t trb_phys);
 
 #endif

@@ -167,9 +167,10 @@ static void isoch_close(void) {
     // refill was late, and one that did not says the descriptors were
     // there and something else dropped them.
     klog_printf("usb: isoch ep 0x%x closing -- %u posted, %u completed, "
-                "%u underrun(s)\n",
+                "%u underrun(s), %u refused\n",
                 g_isoch.ep, (unsigned)g_isoch.posted, (unsigned)g_isoch.total,
-                (unsigned)xhci_isoch_underruns(g_isoch.slot, g_isoch.ep));
+                (unsigned)xhci_isoch_underruns(g_isoch.slot, g_isoch.ep),
+                (unsigned)xhci_isoch_refused(g_isoch.slot, g_isoch.ep));
     // THE MAPPING GOES BEFORE THE FRAMES. They are borrowed, so no
     // teardown disposes of them -- freeing first would hand the
     // allocator pages the holder still has a live writable PTE for.
@@ -270,15 +271,16 @@ int sys_usb_isoch_post(struct syscall_ctx *c) {
     // an isochronous endpoint completes in order and an error reports
     // itself regardless, so one event per group is all the driver needs.
     uint32_t done = 0;
+    int r = 0;
     for (uint32_t i = 0; i < count; i++) {
-        if (xhci_isoch_post((uint8_t)m.slot, (uint8_t)m.ep,
+        r = xhci_isoch_post((uint8_t)m.slot, (uint8_t)m.ep,
                             g_isoch.dma_phys + m.offset + (uint64_t)i * stride,
-                            m.len, (m.ioc && i + 1 == count) ? 1 : 0) != 0)
-            break;
+                            m.len, (m.ioc && i + 1 == count) ? 1 : 0);
+        if (r != 0) break;
         done++;
     }
     g_isoch.posted += done;
-    ret = done ? (int64_t)done : -EINVAL;
+    ret = done ? (int64_t)done : r == -2 ? -ENOSPC : -EINVAL;
 out:
     c->regs[14] = (uint64_t)ret;
     return 0;

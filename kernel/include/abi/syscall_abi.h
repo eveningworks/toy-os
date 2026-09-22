@@ -2564,9 +2564,13 @@ struct usb_control_msg {
                                 // at `offset + N * stride`, and asks
                                 // for a completion on the LAST one
                                 // when `ioc` is set. Returns how many
-                                // were queued, or -EACCES not the
-                                // holder, -EINVAL no such endpoint or
-                                // a range that leaves the buffer.
+                                // were queued -- FEWER than `count`
+                                // when the transfer ring filled -- or
+                                // -EACCES not the holder, -ENOSPC the
+                                // ring is full (nothing queued, and
+                                // an IOC dropped with the rest),
+                                // -EINVAL no such endpoint or a range
+                                // that leaves the buffer.
 
 // COMPLETIONS SINCE THE LAST CALL, because the kernel's own completion
 // callback runs in INTERRUPT CONTEXT and cannot call into a process.

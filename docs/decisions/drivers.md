@@ -2776,3 +2776,65 @@ is what makes a device picker possible at all, rather than a second UI.
 The label comes from the manufacturer string and falls back to the ids,
 because several devices here return mojibake for one descriptor while
 the next reads perfectly.
+
+## A USB audio restart waits out the last stream's descriptors rather than cancelling them, and the kernel refuses a post that would lap the ring
+
+`usbaudio_stop()` cancels nothing: the descriptors already posted play
+out and the endpoint goes quiet by itself. Their completions still
+arrive, and while the driver is stopped nobody reads them. The next
+`start()` then counted them as the new stream's, and each one made it
+post a group it had not earned. At full speed that meant ten groups in
+flight over a five-group buffer, with the controller sending slots that
+had already been rewritten: a crackle on every second playback,
+measured 2 in 2 on the G6 by ear and by the driver's `stop` line. At
+high speed the same arithmetic is 320 TDs on a 255-TRB ring.
+
+**THE OBVIOUS FIX IS WHAT LINUX AND WINDOWS DO, AND IT WAS DECLINED.**
+snd-usb-audio kills its URBs on stop, which reaches xHCI as Stop
+Endpoint plus Set TR Dequeue Pointer; Windows aborts the pipe and gets
+the same pair. Here that is a new usbfs call and two xHCI commands, and
+the case that matters most -- a DAC unplugged mid-stream -- is exactly
+the one where those commands fail. Waiting instead costs at most one
+buffer (20 ms) per restart, needs no new ABI, and is bounded at 100 ms
+for a device that went away with TDs on it.
+
+**AND THE KERNEL GUARDS THE RING WHATEVER A DRIVER DOES.**
+`xhci_ring_push()` has no full check, and a lapped transfer ring does
+not drop a packet: the controller meets the wrong cycle bit where it
+expected its next TD and stops for good. A ring-3 driver must not be
+able to cause that, so `xhci_isoch_post()` refuses a TRB that would
+reach the last one an event named (`xhci_ring_room()`), as Linux's
+xhci does with `room_on_ring()`. It learns room only from events, so
+it sets IOC itself every 64 TRBs and reports only the ones the caller
+asked for -- otherwise a caller posting a whole ring without IOC would
+leave it "full" for ever, which a positive control did. QEMU's emulated
+controller survives a lapped ring, so the emulator cannot show what the
+guard prevents; only real hardware at high speed can.
+
+## The mixer never runs ahead of what its clients have produced
+
+soundd used to fill the whole hardware ring on every pass. A new
+client sets `running` after its FIRST write, so the pass that took the
+card often found 10-18 chunks of client audio and filled the other
+13-21 with silence, and the client's next writes landed after that. The
+result was a 21-128 ms hole inside the sound, always a whole number of
+chunks: 7 playbacks in 8 on the emulated AC97, and visible on the G6 as
+the ring map at `start`. The chain-above-the-driver capture that had
+been called spotless measured a first playback, which is the one case
+where it does not happen.
+
+**ALSA's dmix and PipeWire both mix only what exists**, and so does
+soundd now. A chunk is mixed when every playing client has a whole one
+ready, or when the engine is within `MIN_LEAD_BYTES` (8 chunks, 85 ms)
+of running out -- only then is silence committed, because only then is
+it a real underrun. The engine is not started until 8 chunks are there,
+or until the lead stops growing, which is a short sound that has all
+arrived. PulseAudio's other answer -- fill everything, then REWIND when
+late data comes -- was the alternative. It does not fit here: the USB
+driver copies ~3 chunks ahead of the position it reports, so a rewind
+would have to stay behind a copy cursor soundd cannot see.
+
+**THE COST**: a client that is open but idle (a paused player) is
+"not ready" for as long as it stays open, so everyone else plays on
+the minimum lead instead of a full ring while it does. 85 ms is still
+four of the mixer's 20 ms passes.

@@ -112,3 +112,17 @@ uint64_t xhci_ring_erdp(const struct xhci_ring *r) {
     if (!r) return 0;
     return r->phys + (uint64_t)r->dequeue * sizeof(struct xhci_trb);
 }
+
+uint32_t xhci_ring_room(const struct xhci_ring *r) {
+    if (!r || r->is_event || r->count < 2) return 0;
+    uint32_t usable = r->count - 1;               // the Link TRB is not ours
+    uint32_t used = (r->enqueue + usable - r->dequeue) % usable;
+    return usable - 1 - used;
+}
+
+void xhci_ring_consumed(struct xhci_ring *r, uint64_t trb_phys) {
+    if (!r || r->is_event || r->count < 2 || trb_phys < r->phys) return;
+    uint64_t idx = (trb_phys - r->phys) / sizeof(struct xhci_trb);
+    if (idx >= r->count - 1) return;              // outside, or the Link TRB
+    r->dequeue = idx + 1 == r->count - 1 ? 0 : (uint32_t)idx + 1;
+}

@@ -1312,7 +1312,19 @@ struct xhci_ep {
     void   (*iso_done)(void *ctx, uint32_t bytes);
     void    *iso_ctx;
     volatile uint32_t iso_underruns;
+    volatile uint32_t iso_refused;   // posts turned away by a full ring
+    // Which TRBs the CALLER asked a completion for. The kernel adds its
+    // own every ISO_FORCE_IOC (see xhci_isoch_post) and must not report
+    // those, or a driver counting completions per group miscounts.
+    uint8_t  iso_want_ioc[TRBS_PER_RING];
+    uint16_t iso_since_ioc;
 };
+
+// THE RING'S ROOM IS ONLY LEARNED FROM EVENTS, so a caller that posts
+// with no IOC for a whole ring would leave it "full" for ever -- the
+// guard itself becoming the silence it exists to prevent. Well above
+// any group a driver here uses, so a well-behaved one never sees it.
+#define ISO_FORCE_IOC 64
 
 // HID interfaces (a composite receiver is two on one device) plus one
 // status-change endpoint per hub.
@@ -1557,12 +1569,32 @@ int xhci_isoch_post(uint8_t slot, uint8_t ep_addr, uint64_t buf_phys,
     struct xhci_ep *e = ep_find(slot, ep_addr);
     if (!e || !e->is_iso) return -1;
 
+    // **A RING-3 DRIVER THAT OVER-POSTS MUST NOT BE ABLE TO LAP THE
+    // RING**, which silences the endpoint for good (xhci_ring_room()).
+    // Refused instead, as Linux's xhci does (room_on_ring()).
+    if (!xhci_ring_room(&e->ring)) {
+        if (!e->iso_refused++)
+            klog_printf(KLOG_ERR "usb: isoch ep 0x%x (slot %u) transfer ring full "
+                        "-- refusing posts\n", ep_addr, slot);
+        return -2;
+    }
+
+    int irq = ioc;
+    if (ioc) e->iso_since_ioc = 0;
+    else if (++e->iso_since_ioc >= ISO_FORCE_IOC) { irq = 1; e->iso_since_ioc = 0; }
+
+    // BEFORE the push: the push hands the TRB over, and a running
+    // endpoint can complete it before the next line runs.
+    uint32_t idx = (uint32_t)((xhci_ring_enq_phys(&e->ring) - e->ring.phys) /
+                              sizeof(struct xhci_trb));
+    if (idx < TRBS_PER_RING) e->iso_want_ioc[idx] = (uint8_t)(ioc ? 1 : 0);
+
     // SIA rather than a Frame ID: the alternative is tracking the
     // controller's own frame counter and predicting one interval ahead,
     // which buys nothing for a stream that is simply continuous.
     xhci_ring_push(&e->ring, buf_phys, len & 0x1FFFFu,
                    XHCI_TRB_SET_TYPE(XHCI_TRB_ISOCH) | XHCI_TRB_SIA |
-                   (ioc ? XHCI_TRB_IOC : 0));
+                   (irq ? XHCI_TRB_IOC : 0));
     ring_doorbell(e->slot, dci_of(e->ep_addr));
     return 0;
 }
@@ -1570,6 +1602,11 @@ int xhci_isoch_post(uint8_t slot, uint8_t ep_addr, uint64_t buf_phys,
 uint32_t xhci_isoch_underruns(uint8_t slot, uint8_t ep_addr) {
     struct xhci_ep *e = ep_find(slot, ep_addr);
     return e ? e->iso_underruns : 0;
+}
+
+uint32_t xhci_isoch_refused(uint8_t slot, uint8_t ep_addr) {
+    struct xhci_ep *e = ep_find(slot, ep_addr);
+    return e ? e->iso_refused : 0;
 }
 
 int xhci_take_report(uint8_t slot, uint8_t ep_addr, void *buf, uint32_t cap) {
@@ -1831,13 +1868,19 @@ void xhci_service(void) {
                     int ok = (code == XHCI_CC_SUCCESS || code == XHCI_CC_SHORT_PACKET);
                     if (e->bulk_done) e->bulk_done(e->bulk_ctx, phys, got, ok);
                 } else if (e && e->is_iso) {
+                    // How far the controller has provably got, which is
+                    // what xhci_isoch_post() measures its room against.
+                    xhci_ring_consumed(&e->ring, src);
+                    uint32_t idx = (uint32_t)((src - e->ring.phys) /
+                                              sizeof(struct xhci_trb));
+                    int want = idx < TRBS_PER_RING ? e->iso_want_ioc[idx] : 1;
                     // The driver refills and re-posts from here, inside
                     // the drain. That is safe because posting touches
                     // only its own transfer ring and a doorbell -- never
                     // the event ring this loop owns.
                     uint32_t resid = ev.status & 0xFFFFFFu;
                     uint32_t got = resid <= e->mps ? e->mps - resid : 0;
-                    if (e->iso_done) e->iso_done(e->iso_ctx, got);
+                    if (want && e->iso_done) e->iso_done(e->iso_ctx, got);
                 } else if (e && (code == XHCI_CC_SUCCESS || code == XHCI_CC_SHORT_PACKET)) {
                     uint32_t idx = (uint32_t)((src - e->ring.phys) /
                                               sizeof(struct xhci_trb));

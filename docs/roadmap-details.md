@@ -3313,6 +3313,57 @@ already resamples 8, 22.05 and 44.1 kHz material -- does the rest. What
 a new codec must NOT do is resample; that is the split the table exists
 to keep.
 
+## USB audio on real hardware
+
+The long form of the two USB audio entries in `docs/bugs.md`. Facts that
+are still true, in the order they cost something to learn.
+
+**WHICH PATH A RUN EXERCISED DECIDES WHAT IT SAYS.** One device binds
+differently per speed: the G6 (`041e:3256`) is UAC2 at HIGH speed
+(`6 frame(s) every 125 us`, 8000 packets/s, the rate set through a Clock
+Source) and UAC1 at FULL speed (1000 packets/s). The two are materially
+different code -- UAC2 walks a clock entity and runs the s16->24-bit
+conversion eight times as often -- so a clean full-speed run says nothing
+about the high-speed one.
+
+**THE SPEED IS DECIDED BY HOT-PLUG, NOT BY THE MACHINE.** On the ASUS the
+G6 comes up at full speed when present at boot (2 boots in 3; a warm
+reboot once kept high speed, so it is a rate, not a rule) and at high
+speed when plugged in after boot (3 replugs in 3). `config set usb_reset
+2` re-enumerates it at FULL speed, so a software port reset is not a
+substitute: every high-speed test needs a hand on the cable, and every
+flash drops the device back to full speed.
+
+**MOST OF THE CRACKLE THROUGH PASSTHROUGH IS THE EMULATOR'S.** Through
+`vm.py --usb-host` at high speed: 0.35-0.45 clicks/s on the loopback rig
+after the buffer fix, 35/s before it. On bare metal at high speed the
+maintainer's words were "almost gone" -- a little crackling mostly at the
+start and very small dropouts after it -- on three playbacks, so one
+earlier "clean" run was never enough to say clean.
+
+**ELIMINATED, each separately**: the source file; the MP3 decoder
+(`usnd_hostcheck.py` matches ffmpeg to 1/32768); the 44.1->48 resampler;
+the decoder's CPU cost; the clock source (both selector pins, 15 and 16,
+crackle alike and play in the same wall-clock time); and priming from an
+unwritten ring (the `start` line's map shows the mixer had written it).
+
+**TWO FAULTS THAT WERE OURS AND ARE FIXED.** The second-playback fault
+(stale completions counted as the new stream's) and soundd committing
+silence ahead of a client that had not filled its ring (a 21-128 ms hole
+inside 7 playbacks in 8 on the emulated AC97). `docs/decisions/drivers.md`
+has both. The AC97 capture once cited as proof that "the whole chain
+above the driver is spotless" measured a first playback, which is the one
+case where the second fault does not occur.
+
+**WHAT IS LEFT IS THE DRIVER RUNNING DRY** -- ~5 times a second at full
+speed on bare metal, each one a gap. The `usbaudio: stop` line prints the
+count and the first eight timestamps; `USBAUDIO_PROBE=1` in snddrv's
+environment adds a lateness line about once a second. The next step is
+wake preemption plus priority for the driver, which is what Linux (a
+wakeup that preempts, and PipeWire's RT thread) and Windows (a wait's
+priority boost, and MMCSS) both do; priority on its own was measured
+worse.
+
 ## Layer 5 -- System services and policy
 
 The first layer that is POLICY rather than mechanism, and the first that

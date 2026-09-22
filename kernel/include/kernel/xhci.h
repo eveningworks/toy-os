@@ -142,6 +142,9 @@ int xhci_isoch_post(uint8_t slot, uint8_t ep_addr, uint64_t buf_phys,
 // diagnostic counter, so a test can tell "it never played" from "it
 // played and stuttered".
 uint32_t xhci_isoch_underruns(uint8_t slot, uint8_t ep_addr);
+// Posts refused because the transfer ring had no room -- nonzero means
+// a driver queued more than it had been told completed.
+uint32_t xhci_isoch_refused(uint8_t slot, uint8_t ep_addr);
 
 // Takes the next completed report from that endpoint, if one has
 // arrived, copying at most `cap` bytes. Returns the byte count, or 0

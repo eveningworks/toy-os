@@ -169,3 +169,43 @@ KTEST("xhci-ring", "the consumer cycle state flips on wrap, with no Link TRB") {
     KTEST_ASSERT_EQ(xhci_ring_event_pop(&r, &ev), 1);
     KTEST_ASSERT_EQ(ev.p0, 0xF00Du);
 }
+
+// THE RING-FULL GUARD. An isochronous stream's producer is a process
+// that can over-post, and a lapped ring goes silent for good.
+KTEST("xhci-ring", "room counts down to zero and never lets a push lap the consumer") {
+    struct xhci_ring r;
+    xhci_ring_init(&r, g_seg, FAKE_PHYS, TEST_TRBS, 0);
+    const uint32_t usable = TEST_TRBS - 1;
+
+    KTEST_ASSERT_EQ(xhci_ring_room(&r), usable - 1);   // one slot kept empty
+    for (uint32_t i = 0; i < usable - 1; i++) {
+        KTEST_ASSERT_EQ(xhci_ring_room(&r), usable - 1 - i);
+        xhci_ring_push(&r, i, 0, XHCI_TRB_SET_TYPE(XHCI_TRB_ISOCH));
+    }
+    KTEST_ASSERT_EQ(xhci_ring_room(&r), 0u);
+    // Full is NOT empty: the next push would land on `dequeue`.
+    KTEST_ASSERT_EQ((r.enqueue + 1) % usable, r.dequeue);
+}
+
+KTEST("xhci-ring", "an event naming a TRB frees everything up to and including it") {
+    struct xhci_ring r;
+    xhci_ring_init(&r, g_seg, FAKE_PHYS, TEST_TRBS, 0);
+    const uint32_t usable = TEST_TRBS - 1;
+    uint64_t third = 0;
+    for (uint32_t i = 0; i < usable - 1; i++) {
+        uint64_t at = xhci_ring_push(&r, i, 0, XHCI_TRB_SET_TYPE(XHCI_TRB_ISOCH));
+        if (i == 2) third = at;
+    }
+    xhci_ring_consumed(&r, third);
+    KTEST_ASSERT_EQ(xhci_ring_room(&r), 3u);
+
+    // Across the wrap: consuming the slot before the Link TRB puts the
+    // consumer back at the top, not ON the Link.
+    xhci_ring_consumed(&r, FAKE_PHYS + (usable - 1) * sizeof(struct xhci_trb));
+    KTEST_ASSERT_EQ(r.dequeue, 0u);
+    // The Link TRB itself, and anything outside the segment, are ignored.
+    xhci_ring_consumed(&r, FAKE_PHYS + usable * sizeof(struct xhci_trb));
+    xhci_ring_consumed(&r, FAKE_PHYS - sizeof(struct xhci_trb));
+    xhci_ring_consumed(&r, FAKE_PHYS + 64 * sizeof(struct xhci_trb));
+    KTEST_ASSERT_EQ(r.dequeue, 0u);
+}
