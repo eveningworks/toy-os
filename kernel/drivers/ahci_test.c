@@ -71,10 +71,9 @@ KTEST("ahci", "a multi-entry PRDT gathers the same bytes as single-sector reads"
     uint8_t *one  = kmalloc(AHCI_SECTOR_SIZE);
     KTEST_ASSERT(bulk && one);
 
-    // The driver has one command slot and one bounce buffer, and a
-    // ring-3 process is preemptible inside a syscall -- the same
-    // reasoning vfs.c's FS_OP() guard exists for.
-    scheduler_preempt_disable();
+    // No preemption guard: the driver serialises its own commands
+    // (g_ahci_lock), and a lock taken under the guard is what kmutex.c's
+    // atomic-take check reports.
     int ok = ahci_read_sectors(0, n, bulk);
     int mismatch = -1;
     for (int i = 0; ok && i < n; i++) {
@@ -84,7 +83,6 @@ KTEST("ahci", "a multi-entry PRDT gathers the same bytes as single-sector reads"
             break;
         }
     }
-    scheduler_preempt_enable();
 
     kfree(bulk);
     kfree(one);
@@ -166,4 +164,41 @@ KTEST("ahci", "the drive acknowledges a flush") {
     int ok = ahci_flush();
     scheduler_preempt_enable();
     KTEST_ASSERT(ok);
+}
+
+// **A QUEUED BATCH READS THE SAME BYTES AS ONE COMMAND AT A TIME, AND IT
+// REALLY WAS QUEUED.** Scattered LBAs, so each tag is its own command
+// and a tag/LBA mix-up shows as a mismatch rather than as neighbouring
+// data. The NCQ round counter is the half that stops a silent fallback
+// to one-at-a-time from passing: that path reads the same bytes too.
+KTEST("ahci", "a queued batch reads the same bytes as single commands, and was queued") {
+    if (!hba_on_bus()) KTEST_SKIP("no AHCI controller on this machine");
+    if (!ahci_present()) KTEST_SKIP("no drive claimed");
+    if (ahci_ncq_depth() < 2) KTEST_SKIP("no NCQ on this drive or HBA");
+
+    enum { N = 12, SECT = 8 };              // 12 transfers of 4 KiB
+    uint8_t *buf = kmalloc(N * SECT * AHCI_SECTOR_SIZE);
+    uint8_t *one = kmalloc(SECT * AHCI_SECTOR_SIZE);
+    KTEST_ASSERT(buf && one);
+    struct blk_io io[N];
+    uint32_t span = ahci_sector_count() / (N + 1);
+    for (int i = 0; i < N; i++)
+        io[i] = (struct blk_io){ .lba = (uint32_t)i * span + (uint32_t)i * 7u, .count = SECT,
+                                 .write = 0, .buf = buf + i * SECT * AHCI_SECTOR_SIZE };
+
+    uint64_t rounds = ahci_ncq_rounds();
+    int all = ahci_submit_batch(io, N);
+    uint64_t queued = ahci_ncq_rounds() - rounds;
+    int mismatch = -1, each_ok = 1;
+    for (int i = 0; i < N; i++) {
+        if (io[i].ok != 1) each_ok = 0;
+        if (!ahci_read_sectors(io[i].lba, SECT, one)) { mismatch = 100 + i; break; }
+        if (k_memcmp(io[i].buf, one, SECT * AHCI_SECTOR_SIZE) != 0) { mismatch = i; break; }
+    }
+    kfree(buf);
+    kfree(one);
+    KTEST_ASSERT(all);
+    KTEST_ASSERT(each_ok);
+    KTEST_ASSERT_EQ(mismatch, -1);
+    KTEST_ASSERT(queued >= 1);              // <- NOT the fallback
 }

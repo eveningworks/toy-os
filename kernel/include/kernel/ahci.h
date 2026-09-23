@@ -96,6 +96,18 @@ int      ahci_active_port(void);        // the port carrying the drive, -1 if no
 uint8_t  ahci_irq_line(void);           // PIC line, 0 when polled
 int      ahci_irq_driven(void);         // completions arrive by interrupt
 uint64_t ahci_cmd_sleeps(void);         // command waits that parked, not polled
+
+// NCQ: how many tags this driver queues (0 = none -- the HBA or drive
+// lacks it, or completions do not interrupt), and several transfers in
+// flight at once as the block layer's submit_batch (block.h). The
+// counters say how many rounds and commands went queued, and how many
+// rounds failed and were replayed one command at a time.
+struct blk_io;
+int      ahci_ncq_depth(void);
+int      ahci_submit_batch(struct blk_io *io, int n);
+uint64_t ahci_ncq_rounds(void);
+uint64_t ahci_ncq_cmds(void);
+uint64_t ahci_ncq_fallbacks(void);
 int      ahci_lba48(void);              // the drive's own addressing
 const char *ahci_model(void);           // IDENTIFY's model string, "" if none
 

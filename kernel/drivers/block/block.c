@@ -353,6 +353,47 @@ int blkdev_write_sectors(const struct block_device *dev, uint32_t lba, int count
     return io_write(dev, lba, count, buf);
 }
 
+int blkdev_submit_batch(const struct block_device *dev, struct blk_io *io, int n) {
+    if (!dev || !io || n <= 0) return 0;
+    // THE FALLBACK IS THE ORDINARY PATH, one transfer at a time -- and
+    // it is what every device without a queue gets, so a batch is never
+    // a second behaviour to keep correct, only a faster way to the same.
+    // Fault injection is per transfer on both paths, so a test that arms
+    // one failure sees exactly one io report it.
+    int injected = 0;
+    for (int i = 0; i < n; i++) {
+        io[i].ok = 0;
+        int fail = io[i].write ? fault_should_fail_block_write() : fault_should_fail_block_read();
+        if (fail) { io[i].ok = -1; injected = 1; }
+    }
+    if (!dev->submit_batch || injected) {
+        int all = 1;
+        for (int i = 0; i < n; i++) {
+            if (io[i].ok == -1) { io[i].ok = 0; all = 0; continue; }
+            // Not io_read()/io_write(): those consult fault injection
+            // again, and the pass above already did, once per transfer.
+            uint64_t t0 = clocksource_now_ns();
+            io[i].ok = (int8_t)(io[i].write
+                ? dev->write_sectors(io[i].lba, io[i].count, io[i].buf)
+                : dev->read_sectors(io[i].lba, io[i].count, io[i].buf));
+            blk_stat_add(io[i].write ? BLK_STAT_WRITE : BLK_STAT_READ, io[i].count,
+                         clocksource_now_ns() - t0, io[i].ok);
+            if (!io[i].ok) all = 0;
+        }
+        return all;
+    }
+    uint64_t t0 = clocksource_now_ns();
+    int all = dev->submit_batch(io, n);
+    // One stat line per transfer, each charged an equal share of the
+    // batch: the per-command averages `blkstat` reports stay comparable
+    // with the one-at-a-time path, and the share is what overlap bought.
+    uint64_t share = (clocksource_now_ns() - t0) / (uint64_t)n;
+    for (int i = 0; i < n; i++)
+        blk_stat_add(io[i].write ? BLK_STAT_WRITE : BLK_STAT_READ,
+                     io[i].count, share, io[i].ok);
+    return all;
+}
+
 int blkdev_max_sectors_per_xfer(const struct block_device *dev) {
     return dev ? dev->max_sectors_per_xfer() : 1;
 }

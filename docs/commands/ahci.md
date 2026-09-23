@@ -14,16 +14,19 @@ The SATA host bus adapter: its version, how many ports it implements,
 how many command slots it offers, whether completions arrive by
 interrupt — and then the drive, and then every port.
 
-    ahci: HBA version 1.0, 6 ports implemented, 32 command slots, IRQ-driven
-      drive: "QEMU HARDDISK" on port 0
-      capacity: 18874368 sectors (9.0G), LBA48
-      transfers: DMA, up to 128 sectors each
+    ahci: HBA version 1.3, 1 port implemented, 32 command slots, IRQ-driven
+      drive: "SAMSUNG MZNLN128HAHQ-000H1" on port 0
+      capacity: 250069680 sectors (119.2G), LBA48
+      transfers: DMA, up to 512 sectors each
+      waits that slept: 103685
       TRIM: in use -- freed blocks are discarded to the host image
-      NCQ: offered by the HBA, not used (one command in flight)
-      64-bit addressing: offered, not needed (DMA buffers are below 4 GiB)
+      NCQ: 32 tags; 135 batch(es) of 272 commands queued, 0 replayed one at a time
+      64-bit addressing: offered, used for a queued buffer above 4 GiB
       port  link       speed     signature
-      0     device     1.5 Gbps  0x00000101  SATA disk  <- in use
-      1     empty      --        --
+      0     device     6 Gbps    0x00000101  SATA disk  <- in use
+
+(The ASUS test laptop. QEMU's `ich9-ahci` reports six ports, five of them
+`empty`, and a 1.5 Gbps link.)
 
 **The port table is the point.** "No drive" and "a drive this driver
 cannot speak to" both leave `df` reporting the same thing, and the
@@ -39,11 +42,16 @@ With it in use a deleted file's blocks are actually released and
 `disk.img` shrinks; without it the image only ever grows. It comes from
 IDENTIFY word 169, read at registration.
 
-**NCQ and 64-bit addressing are reported precisely because this driver
-does not use them.** The HBA offers both; the driver issues one command
-at a time in slot 0, and puts its DMA buffers below 4 GiB. Saying so
-beats leaving a reader to infer the capability from the hardware's own
-bits and assume it is in play.
+**NCQ is used for a BATCH and nothing else.** A batch is several
+independent transfers handed over together (`blkdev_submit_batch()`, the
+filesystem's journal commit today); the driver queues them on up to the
+tag count shown, each DMAing straight into its caller's buffer, and
+waits for all of them. One request at a time -- almost everything --
+still goes out alone in slot 0. The counts say how often the queue was
+used, and `replayed one at a time` is how many batches the drive refused
+and the driver redid command by command. `noncq` on the boot line turns
+the batch path off (`docs/boot-flags.md`). A queued buffer above 4 GiB
+is addressed with 64-bit PRDs when the HBA offers them.
 
 ## What it deliberately does not do
 

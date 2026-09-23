@@ -9,6 +9,7 @@
 #include "kmutex.h" // g_ahci_lock
 #include "scheduler.h"   // a command wait SLEEPS -- see sleep_command()
 #include "clocksource.h" // ...against a deadline
+#include "paging.h"      // paging_identity_limit() -- zero-copy DMA
 #include "ahci.h"
 #include "block.h"   // blk_dsm_pack() -- the DSM payload, shared with ata.c
 #include "pci.h"
@@ -69,6 +70,7 @@ DRIVER_DECLARE("ahci", "block", "SATA AHCI host controller");
 #define PX_SSTS  0x28
 #define PX_SCTL  0x2C
 #define PX_SERR  0x30
+#define PX_SACT  0x34   // NCQ tags outstanding -- set before PxCI, cleared by the drive
 #define PX_CI    0x38
 
 #define PXCMD_ST  (1u << 0)
@@ -126,6 +128,8 @@ struct cmd_table {
 #define ATA_WRITE_DMA_E 0x35
 #define ATA_FLUSH_EXT   0xEA
 #define ATA_DSM         0x06
+#define ATA_READ_FPDMA  0x60   // READ FPDMA QUEUED -- NCQ
+#define ATA_WRITE_FPDMA 0x61
 #define DSM_FEATURE_TRIM 0x01
 
 // DSM's payload layout is blk_dsm_pack()'s (block.h), shared with ata.c.
@@ -163,6 +167,29 @@ static volatile uint32_t g_irq_status;   // PxIS as the handler saw it
 // evidence the sleep path is the one in use (QUERY_AHCI).
 static const char g_cmd_chan;
 static uint64_t g_cmd_sleeps;
+
+// ---- NCQ state ------------------------------------------------------
+//
+// ONE TABLE PER TAG, because a queued command's table must stay put
+// until the drive has fetched it and there is no knowing when that is.
+// Small on purpose: a queued command is at most NCQ_MAX_SECTORS and
+// DMAs straight into the caller's buffer (ncq_addressable()), so it
+// needs a page-split PRDT, not the bounce buffer's 64 entries.
+#define NCQ_MAX         32
+#define NCQ_MAX_SECTORS 128               // 64 KiB per queued command
+#define NCQ_PRDT        17                // 64 KiB page-split, +1 misaligned
+#define NCQ_WAIT_TICKS  500               // 5 s for a whole round
+struct ncq_table {
+    uint8_t cfis[64];
+    uint8_t acmd[16];
+    uint8_t rsvd[48];
+    struct prd prdt[NCQ_PRDT];
+} __attribute__((aligned(128)));          // the HBA's CTBA alignment
+static struct ncq_table *g_ncq;
+static uint64_t g_ncq_phys;
+static int g_ncq_depth;                   // tags in use; 0 = no NCQ
+static int g_ncq_drive_depth;             // IDENTIFY word 75 + 1, 0 = none
+static uint64_t g_ncq_rounds, g_ncq_cmds, g_ncq_fallbacks;
 
 // ~1 s at PIT_HZ, the same budget ata.c gives a transfer. A drive that
 // has not answered in a second under an emulator is not going to.
@@ -285,7 +312,10 @@ static void irq_handler(uint64_t *regs) {
     // level-triggered line is a hang rather than a lost completion.
     px_w(g_preg, PX_IS, pis);
     hba_w(HBA_IS, is);
-    g_irq_status = pis;
+    // ACCUMULATED, not overwritten: with several NCQ tags in flight one
+    // interrupt can carry a completion and the next an error, and the
+    // waiter reads the union. run_command()/a batch round zero it first.
+    g_irq_status |= pis;
     g_irq_fired = 1;
     scheduler_wake(&g_cmd_chan, 0);   // interrupt-safe, by contract
 }
@@ -299,7 +329,7 @@ static int command_done(void) {
     if (g_irq_fired) return 1;
     uint32_t is = px_r(g_preg, PX_IS);
     if ((px_r(g_preg, PX_CI) & 1u) && !(is & PXIS_TFES)) return 0;
-    g_irq_status = is;
+    g_irq_status |= is;
     px_w(g_preg, PX_IS, is);
     hba_w(HBA_IS, hba_r(HBA_IS));
     return 1;
@@ -418,6 +448,164 @@ static int run_command(uint8_t command, uint8_t features, uint64_t lba, uint16_t
     return 1;
 }
 
+// ---- NCQ: several commands in flight ------------------------------
+//
+// READ/WRITE FPDMA QUEUED, one tag per command: set the tag's PxSACT bit,
+// then its PxCI bit, and the drive clears PxSACT bits as tags complete
+// (reported by a Set Device Bits FIS, which PXIE_MASK already enables).
+// The latency of each command OVERLAPS instead of adding -- which is the
+// only lever on a device whose cost is per command (measured: ~75 us of
+// the ~100 us an emulated AHCI read takes is waiting for the device).
+// Linux's libata issues the same commands; the error handling here is
+// deliberately simpler: see ncq_round().
+
+// Turns NCQ on when both ends offer it and completions interrupt; a
+// polled controller gains nothing from a queue it has to spin on.
+static void ncq_setup(void) {
+    if (!(g_cap & CAP_SNCQ) || !g_ncq_drive_depth || !ahci_irq_driven()) return;
+    int depth = g_ncq_drive_depth;
+    if (depth > ahci_command_slots()) depth = ahci_command_slots();
+    if (depth > NCQ_MAX) depth = NCQ_MAX;
+    uint32_t bytes = (uint32_t)depth * (uint32_t)sizeof(struct ncq_table);
+    uint64_t base = pmm_alloc_contiguous((bytes + 4095) / 4096, PMM_ZONE_DMA32);
+    if (!base) return;                    // no NCQ, and nothing else lost
+    k_memset((void *)(uintptr_t)base, 0, bytes);
+    g_ncq = (struct ncq_table *)(uintptr_t)base;
+    g_ncq_phys = base;
+    g_ncq_depth = depth;
+}
+
+int ahci_ncq_depth(void) { return g_ncq_depth; }
+
+// May the drive DMA straight into `buf`? Identity-mapped (so its virtual
+// address IS its physical one -- virtio-blk's rule), word-aligned (a PRD
+// base's bit 0 is reserved), and below 4 GiB unless the HBA has 64-bit
+// addressing. Anything else takes the bounce buffer, one at a time.
+static int ncq_addressable(const struct blk_io *io) {
+    uint64_t a = (uint64_t)(uintptr_t)io->buf;
+    uint64_t end = a + (uint64_t)io->count * AHCI_SECTOR_SIZE;
+    if (!io->buf || !io->count || io->count > NCQ_MAX_SECTORS) return 0;
+    if ((a & 1) || end > paging_identity_limit()) return 0;
+    if (!(g_cap & CAP_S64A) && end > 0x100000000ull) return 0;
+    return 1;
+}
+
+static void ncq_build(int tag, const struct blk_io *io) {
+    struct ncq_table *t = &g_ncq[tag];
+    uint64_t a = (uint64_t)(uintptr_t)io->buf;
+    uint32_t bytes = (uint32_t)io->count * AHCI_SECTOR_SIZE, done = 0;
+    int n = 0;
+    while (done < bytes) {                // page-split: n stays <= NCQ_PRDT
+        uint32_t chunk = 4096 - (uint32_t)((a + done) & 4095);
+        if (chunk > bytes - done) chunk = bytes - done;
+        t->prdt[n].dba  = (uint32_t)(a + done);
+        t->prdt[n].dbau = (uint32_t)((a + done) >> 32);
+        t->prdt[n].rsvd = 0;
+        t->prdt[n].dbc  = chunk - 1;
+        done += chunk;
+        n++;
+    }
+    uint8_t *f = t->cfis;
+    uint64_t lba = io->lba;
+    k_memset(f, 0, 64);
+    f[0]  = FIS_TYPE_H2D;
+    f[1]  = 0x80;
+    f[2]  = io->write ? ATA_WRITE_FPDMA : ATA_READ_FPDMA;
+    f[3]  = (uint8_t)io->count;           // FPDMA: the count is in FEATURES
+    f[4]  = (uint8_t)lba;
+    f[5]  = (uint8_t)(lba >> 8);
+    f[6]  = (uint8_t)(lba >> 16);
+    f[7]  = 0x40;
+    f[8]  = (uint8_t)(lba >> 24);
+    f[9]  = (uint8_t)(lba >> 32);
+    f[10] = (uint8_t)(lba >> 40);
+    f[11] = (uint8_t)(io->count >> 8);
+    f[12] = (uint8_t)(tag << 3);          // ...and the TAG is in the count
+    uint64_t phys = g_ncq_phys + (uint64_t)tag * sizeof(struct ncq_table);
+    g_clist[tag].flags = (uint16_t)(5u | (io->write ? (1u << 6) : 0));
+    g_clist[tag].prdtl = (uint16_t)n;
+    g_clist[tag].prdbc = 0;
+    g_clist[tag].ctba  = (uint32_t)phys;
+    g_clist[tag].ctbau = (uint32_t)(phys >> 32);
+}
+
+// 1 every tag in `mask` completed, -1 the drive reported an error, 0 not
+// yet. The accumulated g_irq_status carries an error the handler already
+// cleared out of PxIS.
+static int ncq_state(uint32_t mask) {
+    if ((px_r(g_preg, PX_IS) | g_irq_status) & PXIS_TFES) return -1;
+    if ((px_r(g_preg, PX_SACT) | px_r(g_preg, PX_CI)) & mask) return 0;
+    return 1;
+}
+
+// Waits for ncq_state() to leave 0: asleep when the caller can park,
+// halted on the interrupt from the kernel context, polling with
+// interrupts off. Returns the final state, 0 on timeout.
+static int ncq_wait(uint32_t mask) {
+    uint64_t deadline = clocksource_now_ns() + (uint64_t)NCQ_WAIT_TICKS * (1000000000ull / PIT_HZ);
+    for (;;) {
+        scheduler_wait_arm(&g_cmd_chan);
+        int st = ncq_state(mask);
+        if (st) { scheduler_wait_disarm(); return st; }
+        if (clocksource_now_ns() >= deadline) { scheduler_wait_disarm(); return 0; }
+        if (!scheduler_block_kernel_until(&g_cmd_chan, SCHED_WAIT_DISK, deadline)) {
+            scheduler_wait_disarm();
+            break;                        // nowhere to park
+        }
+        g_cmd_sleeps++;
+    }
+    if (!isr_in_progress()) {
+        uint64_t start = pit_ticks();
+        for (;;) {
+            int st = ncq_state(mask);
+            if (st) return st;
+            if (pit_ticks() - start > NCQ_WAIT_TICKS) return 0;
+            __asm__ volatile ("hlt");
+        }
+    }
+    for (uint64_t i = 0; i < (uint64_t)POLL_LIMIT * 4; i++) {
+        int st = ncq_state(mask);
+        if (st) return st;
+    }
+    return 0;
+}
+
+// One round: io[0..n) (n <= g_ncq_depth, every one ncq_addressable())
+// in flight together. Returns 1 if the drive completed all of them.
+//
+// **AN ERROR ABANDONS THE WHOLE ROUND**, and the caller replays it one
+// command at a time: a failed queued command aborts every outstanding
+// tag, and which one failed is in the drive's NCQ error log (READ LOG
+// EXT page 10h) -- what Linux reads. Replaying through the ordinary path
+// gives each transfer its own answer without that machinery, at the cost
+// of repeating the round's good transfers, which is only ever correct
+// for a transfer that has not been acknowledged to anyone yet.
+static int ncq_round(struct blk_io *io, int n) {
+    uint32_t mask = 0;
+    for (int t = 0; t < n; t++) { ncq_build(t, &io[t]); mask |= 1u << t; }
+    if (!wait_clear(g_preg, PX_TFD, PXTFD_BSY | PXTFD_DRQ, WAIT_TICKS)) return 0;
+    px_w(g_preg, PX_IS, px_r(g_preg, PX_IS));
+    px_w(g_preg, PX_SERR, px_r(g_preg, PX_SERR));
+    g_irq_fired = 0;
+    g_irq_status = 0;
+    kmb();                                // tables before the doorbell
+    px_w(g_preg, PX_SACT, mask);          // SACT first -- AHCI 1.3.1 5.3.2.1
+    px_w(g_preg, PX_CI, mask);
+    int st = ncq_wait(mask);
+    kmb();
+    if (st == 1) {
+        g_ncq_rounds++;
+        g_ncq_cmds += (uint64_t)n;
+        return 1;
+    }
+    klog_printf(KLOG_ERR "ahci: NCQ round of %d %s (sact 0x%x, ci 0x%x, tfd 0x%x) -- "
+                "replaying it one command at a time\n", n, st < 0 ? "failed" : "timed out",
+                px_r(g_preg, PX_SACT), px_r(g_preg, PX_CI), px_r(g_preg, PX_TFD));
+    port_recover(g_preg);                 // clearing ST drops every tag
+    g_ncq_fallbacks++;
+    return 0;
+}
+
 // ---- IDENTIFY -------------------------------------------------------
 
 // IDENTIFY's model string is 20 big-endian 16-bit words, i.e. every
@@ -440,6 +628,8 @@ static int identify(void) {
 
     // Word 169 bit 0: DATA SET MANAGEMENT's TRIM bit is supported.
     g_trim = (id[169] & 0x0001) != 0;
+    // Word 76 bit 8: NCQ; word 75 bits 4:0: its queue depth minus one.
+    g_ncq_drive_depth = (id[76] & (1u << 8)) ? (id[75] & 0x1F) + 1 : 0;
 
     uint64_t sectors;
     if (id[83] & (1u << 10)) {          // 48-bit addressing supported
@@ -649,6 +839,8 @@ static void ahci_probe(const struct pci_device *dev) {
         irq_unmask(g_irq);
     }
 
+    ncq_setup();
+
     klog_printf("ahci: port %u: \"%s\", %u sectors, LBA%s, %d sectors/transfer, %s\n",
                 g_ports[g_active].port, g_model, g_sectors, g_lba48 ? "48" : "28",
                 ahci_max_sectors_per_xfer(),
@@ -707,6 +899,42 @@ int ahci_write_sectors(uint32_t lba, int count, const void *buf) {
     kmutex_unlock(&g_ahci_lock);
     return r;
 }
+
+// The block layer's submit_batch: queue as many as the drive takes at
+// once, in ROUNDS of up to g_ncq_depth. A transfer that cannot be queued
+// (a buffer outside the identity map, one larger than NCQ_MAX_SECTORS)
+// goes through the ordinary one-at-a-time path in its place, and so does
+// every transfer of a round that failed -- see ncq_round().
+int ahci_submit_batch(struct blk_io *io, int n) {
+    if (n <= 0) return 0;
+    kmutex_lock(&g_ahci_lock);
+    int all = 1;
+    for (int i = 0; i < n; ) {
+        int k = 0;
+        if (g_ncq_depth && ahci_present())
+            while (i + k < n && k < g_ncq_depth && ncq_addressable(&io[i + k]) &&
+                   bounds_ok(io[i + k].lba, io[i + k].count))
+                k++;
+        if (k >= 2 && ncq_round(&io[i], k)) {
+            for (int j = 0; j < k; j++) io[i + j].ok = 1;
+        } else {
+            if (k == 0) k = 1;            // this one cannot be queued
+            for (int j = 0; j < k; j++) {
+                struct blk_io *x = &io[i + j];
+                x->ok = (int8_t)(x->write ? write_sectors(x->lba, x->count, x->buf)
+                                          : read_sectors(x->lba, x->count, x->buf));
+            }
+        }
+        for (int j = 0; j < k; j++) if (!io[i + j].ok) all = 0;
+        i += k;
+    }
+    kmutex_unlock(&g_ahci_lock);
+    return all;
+}
+
+uint64_t ahci_ncq_rounds(void) { return g_ncq_rounds; }
+uint64_t ahci_ncq_cmds(void) { return g_ncq_cmds; }
+uint64_t ahci_ncq_fallbacks(void) { return g_ncq_fallbacks; }
 
 // TRIM, through DATA SET MANAGEMENT. The range list travels DEVICE-WARD,
 // so this is a WRITE-direction transfer -- getting that backwards is

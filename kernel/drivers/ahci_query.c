@@ -36,6 +36,10 @@ static int hba_fill(int index, void *out) {
     a->irq              = ahci_irq_line();
     a->sector_count     = ahci_sector_count();
     a->cmd_sleeps       = ahci_cmd_sleeps();
+    a->ncq_depth        = (uint64_t)ahci_ncq_depth();
+    a->ncq_rounds       = ahci_ncq_rounds();
+    a->ncq_cmds         = ahci_ncq_cmds();
+    a->ncq_fallbacks    = ahci_ncq_fallbacks();
     a->max_sectors_xfer = ahci_present() ? (uint64_t)ahci_max_sectors_per_xfer() : 0;
 
     const char *model = ahci_model();
@@ -52,6 +56,9 @@ static const struct query_field hba_fields[] = {
     QUERY_FIELD(struct query_ahci, irq,              QUERY_TYPE_U64),
     QUERY_FIELD(struct query_ahci, sector_count,     QUERY_TYPE_U64),
     QUERY_FIELD(struct query_ahci, cmd_sleeps,       QUERY_TYPE_U64),
+    QUERY_FIELD(struct query_ahci, ncq_depth,        QUERY_TYPE_U64),
+    QUERY_FIELD(struct query_ahci, ncq_rounds,       QUERY_TYPE_U64),
+    QUERY_FIELD(struct query_ahci, ncq_fallbacks,    QUERY_TYPE_U64),
     QUERY_FIELD(struct query_ahci, max_sectors_xfer, QUERY_TYPE_U64),
 };
 

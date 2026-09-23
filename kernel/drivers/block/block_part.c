@@ -100,6 +100,18 @@ static int slot_write(struct part_slot *s, uint32_t lba, int count, const void *
 // the next partition's data -- and TRIM is unrecoverable, so this
 // refuses rather than truncating, the same call every parser in this
 // tree makes.
+// Shifted into the parent's LBAs IN PLACE and shifted back afterwards:
+// the caller's array is the batch, and a copy would need a bound this
+// file does not otherwise have.
+static int slot_submit_batch(struct part_slot *s, struct blk_io *io, int n) {
+    for (int i = 0; i < n; i++)
+        if (io[i].count == 0 || !range_ok(s, io[i].lba, io[i].count)) return 0;
+    for (int i = 0; i < n; i++) io[i].lba += s->base;
+    int ok = s->parent->submit_batch(io, n);
+    for (int i = 0; i < n; i++) io[i].lba -= s->base;
+    return ok;
+}
+
 static int slot_trim(struct part_slot *s, uint32_t lba, uint32_t count) {
     if (!range_ok(s, lba, (uint64_t)count)) return 0;
     return s->parent->trim(s->base + lba, count);
@@ -137,12 +149,13 @@ static int slot_trim_ranges(struct part_slot *s, const struct blk_range *r, int 
     static int p##i##_xfer(void) { return g_slots[i].parent ? g_slots[i].parent->max_sectors_per_xfer() : 1; } \
     static int p##i##_flush(void) { return g_slots[i].parent->flush(); }      \
     static int p##i##_trim(uint32_t l, uint32_t c) { return slot_trim(&g_slots[i], l, c); } \
-    static int p##i##_trim_ranges(const struct blk_range *r, int n) { return slot_trim_ranges(&g_slots[i], r, n); }
+    static int p##i##_trim_ranges(const struct blk_range *r, int n) { return slot_trim_ranges(&g_slots[i], r, n); } \
+    static int p##i##_batch(struct blk_io *io, int n) { return slot_submit_batch(&g_slots[i], io, n); }
 
 PART_THUNKS(0) PART_THUNKS(1) PART_THUNKS(2) PART_THUNKS(3)
 PART_THUNKS(4) PART_THUNKS(5) PART_THUNKS(6) PART_THUNKS(7)
 
-#define PART_OPS(i) { p##i##_count, p##i##_read, p##i##_write, p##i##_xfer, p##i##_flush, p##i##_trim, p##i##_trim_ranges }
+#define PART_OPS(i) { p##i##_count, p##i##_read, p##i##_write, p##i##_xfer, p##i##_flush, p##i##_trim, p##i##_trim_ranges, p##i##_batch }
 
 static const struct {
     uint32_t (*count)(void);
@@ -152,6 +165,7 @@ static const struct {
     int (*flush)(void);
     int (*trim)(uint32_t, uint32_t);
     int (*trim_ranges)(const struct blk_range *, int);
+    int (*batch)(struct blk_io *, int);
 } g_thunks[PART_SLOTS] = {
     PART_OPS(0), PART_OPS(1), PART_OPS(2), PART_OPS(3),
     PART_OPS(4), PART_OPS(5), PART_OPS(6), PART_OPS(7),
@@ -251,6 +265,7 @@ const struct block_device *blk_part_create(const struct block_device *parent,
     s->dev.flush = (parent->caps & BLK_CAP_FLUSH) ? g_thunks[free_slot].flush : NULL;
     s->dev.trim  = (parent->caps & BLK_CAP_TRIM)  ? g_thunks[free_slot].trim  : NULL;
     s->dev.trim_ranges = (parent->caps & BLK_CAP_TRIM) ? g_thunks[free_slot].trim_ranges : NULL;
+    s->dev.submit_batch = parent->submit_batch ? g_thunks[free_slot].batch : NULL;
 
     // Into the block table even though nothing is being made active --
     // the table is what gives a device its NAME, and an unnamed device

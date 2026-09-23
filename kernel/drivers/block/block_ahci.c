@@ -43,16 +43,19 @@ static struct block_device AHCI_DEV = {
 // `noahci` on the boot line forces the ATA fallback, matched as a whole
 // word. Same shape and same purpose as `novirtio`: a fallback nothing
 // can reach is a guess.
-static int ahci_disabled(void) {
+static int word_on_cmdline(const char *word) {
     const char *cmdline = multiboot_cmdline();
     if (!cmdline) return 0;
-    for (const char *p = cmdline; (p = k_strstr(p, "noahci")) != 0; p += 6) {
+    uint32_t n = (uint32_t)k_strlen(word);
+    for (const char *p = cmdline; (p = k_strstr(p, word)) != 0; p += n) {
         if (p != cmdline && p[-1] != ' ') continue;
-        char after = p[6];
+        char after = p[n];
         if (after == 0 || after == ' ') return 1;
     }
     return 0;
 }
+
+static int ahci_disabled(void) { return word_on_cmdline("noahci"); }
 
 int blk_ahci_init(void) {
     if (!ahci_present()) return 0;
@@ -63,6 +66,12 @@ int blk_ahci_init(void) {
         AHCI_DEV.trim = ahci_blk_trim;
         AHCI_DEV.trim_ranges = ahci_blk_trim_ranges;
     }
+
+    // Several commands in flight, when the driver queues any -- and
+    // `noncq` takes that away without touching anything else, so one
+    // build can be measured both ways (Linux's libata.force=noncq).
+    if (ahci_ncq_depth() && !word_on_cmdline("noncq"))
+        AHCI_DEV.submit_batch = ahci_submit_batch;
 
     // No announcement: blk_register() already logs the device it accepts.
     return blk_register(&AHCI_DEV);

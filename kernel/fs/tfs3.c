@@ -1443,14 +1443,46 @@ enum t3_commit {
     T3_COMMIT_UNAPPLIED = 2,   // committed; replay owns these blocks now
 };
 
+// THE JOURNAL IMAGES IN AS FEW COMMANDS AS THE DEVICE TAKES. The
+// journal's data blocks are contiguous on disk and g_txn_img is
+// contiguous in memory, so a commit that wrote them one 4 KiB command at
+// a time was paying per-command latency up to 32 times for one run.
+static int write_journal_images(void) {
+    uint32_t per = (uint32_t)blkdev_max_sectors_per_xfer(S->vol.dev) / T3_SPB;
+    if (per == 0) per = 1;
+    for (int i = 0; i < g_txn_count; ) {
+        uint32_t k = (uint32_t)(g_txn_count - i);
+        if (k > per) k = per;
+        if (!vol_write_sectors((S->jdata_block + (uint32_t)i) * T3_SPB,
+                               (int)(k * T3_SPB), g_txn_img[i])) return 0;
+        i += (int)k;
+    }
+    return 1;
+}
+
+// THE TARGETS ALL IN FLIGHT AT ONCE. They are scattered, independent,
+// and fenced by the barriers either side, so their order among
+// themselves never mattered -- which is exactly a batch
+// (blkdev_submit_batch(); AHCI queues it with NCQ, others loop). Static
+// for the frame budget, and safe for the reason g_txn_img is.
+static struct blk_io g_txn_io[T3_JSLOTS_MAX];
+
+static int write_targets(void) {
+    if (S->readonly) return 0;             // vol_write_sectors()'s gate
+    rcache_drop();                         // ...and its cache rule
+    for (int i = 0; i < g_txn_count; i++) {
+        uint32_t lba = g_txn_target[i] * T3_SPB;
+        if (lba + T3_SPB > S->vol.sector_count) return 0;
+        g_txn_io[i] = (struct blk_io){ .lba = S->vol.base_lba + lba, .count = T3_SPB,
+                                       .write = 1, .buf = g_txn_img[i] };
+    }
+    return blkdev_submit_batch(S->vol.dev, g_txn_io, g_txn_count);
+}
+
 static enum t3_commit txn_commit_raw(void) {
     if (g_txn_count == 0) return T3_COMMIT_OK;
     S->jrn_seq++;
-    for (int i = 0; i < g_txn_count; i++) {
-        if (!write_block(S->jdata_block + (uint32_t)i, g_txn_img[i])) {
-            txn_reset(); return T3_COMMIT_ABORTED;
-        }
-    }
+    if (!write_journal_images()) { txn_reset(); return T3_COMMIT_ABORTED; }
     if (!write_journal_header(1)) { txn_reset(); return T3_COMMIT_ABORTED; }
 
     // BARRIER 1, and it is checked. The journal's whole guarantee is
@@ -1468,10 +1500,7 @@ static enum t3_commit txn_commit_raw(void) {
         return T3_COMMIT_ABORTED;
     }
 
-    int ok = 1;
-    for (int i = 0; i < g_txn_count; i++) {
-        if (!write_block(g_txn_target[i], g_txn_img[i])) ok = 0;
-    }
+    int ok = write_targets();
 
     // BARRIER 2: the targets must be durable before the commit flag is
     // cleared below, or a crash after clearing it loses the record of

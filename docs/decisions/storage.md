@@ -3191,3 +3191,39 @@ tfs3 has no structure for. The queue here is flushed before the freeing
 operation returns and before any allocation, so that case cannot arise.
 Periodic `fstrim` remains the way to go further, and is not built.
 
+
+## Several commands in flight is a synchronous batch, not an asynchronous submit
+
+The roadmap said NCQ needed "an ASYNCHRONOUS block interface first":
+submit a request, get a completion later, the shape of Linux's
+`submit_bio()` and NT's IRP. What was built instead (2026-09-23) is
+`blkdev_submit_batch()`: hand the device several independent transfers,
+**wait for all of them**, read each one's answer. That is Linux's
+PLUG (`blk_start_plug()`/`blk_finish_plug()`) rather than its bio.
+
+**Why not the obvious async interface.** Nothing here could use one. The
+filesystem is one locked, synchronous caller (`vfs.c`'s `g_fs_lock`), so
+an async submit would need a completion path, a request lifetime and a
+caller that does useful work before the completion -- and the only such
+caller in the tree is the journal commit, which has a list of blocks and
+a barrier after them. A batch gives that caller everything async would,
+with no request that outlives a function call. The async interface is
+still the right end state for readahead and writeback, and a batch is
+what it would be built UNDER (a batch is "submit N, wait N").
+
+**The fallback is the ordinary path.** A device without a queue gets the
+same transfers one at a time through the same code a single transfer
+uses, so a batch is never a second behaviour to keep correct.
+
+**A failed round is replayed, not diagnosed.** A failed queued command
+aborts every outstanding tag, and which one failed is in the drive's NCQ
+error log (READ LOG EXT page 10h), which is what Linux reads. Here the
+port is recovered and the round's transfers are redone one at a time,
+each getting its own answer. That repeats the round's good transfers,
+which is safe only because none of them has been acknowledged to anyone
+yet -- the batch has not returned.
+
+Measured the same day, and worth knowing before building more on it: the
+queue works and buys nothing measurable YET, because tfs3's commits
+carry about two target blocks each (`docs/roadmap-details.md`, "Bigger
+batches").

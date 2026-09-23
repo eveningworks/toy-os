@@ -105,16 +105,22 @@ int main(int argc, char **argv) {
         printf("  no SATA drive on any implemented port\n");
     }
 
-    // NCQ is REPORTED because the HBA offers it and this driver does not
-    // use it -- one command in flight needs no queue, and a queue buys
-    // nothing until something can issue a second request while the first
-    // is running. docs/roadmap.md holds it.
-    printf("  NCQ: %s\n", (a.flags & QUERY_AHCI_NCQ)
-           ? "offered by the HBA, not used (one command in flight)"
-           : "not offered");
+    // NCQ is used only for a BATCH -- the block layer's submit_batch,
+    // whose one caller today is the filesystem's journal commit. One
+    // request at a time needs no queue, so the round count is the honest
+    // measure of how often it mattered. `noncq` on the boot line turns
+    // the batch path off while leaving the depth reported.
+    if (a.ncq_depth)
+        printf("  NCQ: %llu tags; %llu batch(es) of %llu commands queued, %llu replayed one at a time\n",
+               (unsigned long long)a.ncq_depth, (unsigned long long)a.ncq_rounds,
+               (unsigned long long)a.ncq_cmds, (unsigned long long)a.ncq_fallbacks);
+    else
+        printf("  NCQ: %s\n", (a.flags & QUERY_AHCI_NCQ)
+               ? "offered by the HBA, not used (the drive or its interrupt is missing)"
+               : "not offered");
     printf("  64-bit addressing: %s%s\n",
            (a.flags & QUERY_AHCI_64BIT) ? "offered" : "not offered",
-           (a.flags & QUERY_AHCI_64BIT) ? ", not needed (DMA buffers are below 4 GiB)" : "");
+           (a.flags & QUERY_AHCI_64BIT) ? ", used for a queued buffer above 4 GiB" : "");
 
     print_ports();
     return 0;

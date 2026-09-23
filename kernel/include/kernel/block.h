@@ -38,6 +38,17 @@
 // One run of sectors to discard.
 struct blk_range { uint32_t lba, count; };
 
+// One transfer of a batch (blkdev_submit_batch()). `buf` is written TO
+// for a read and read FROM for a write, and belongs to the caller until
+// the batch returns. `ok` is the device's answer for this one.
+struct blk_io {
+    uint32_t lba;
+    uint16_t count;      // sectors, at most the device's max per transfer
+    uint8_t  write;
+    int8_t   ok;
+    void    *buf;
+};
+
 struct block_device {
     const char *name;   // "ata", "ram" -- what `df` prints
 
@@ -74,6 +85,12 @@ struct block_device {
     // OPTIONAL: many runs in as few commands as the device allows. NULL
     // is fine -- blkdev_trim_ranges() then calls trim() once per run.
     int (*trim_ranges)(const struct blk_range *r, int n);
+    // OPTIONAL: several independent transfers IN FLIGHT AT ONCE, each
+    // reporting its own result in `io[i].ok`. Returns 1 only if every one
+    // succeeded. NULL is fine -- blkdev_submit_batch() then issues them
+    // one at a time. A device with a queue (AHCI's NCQ) is what makes it
+    // worth having: the per-command latency overlaps instead of adding.
+    int (*submit_batch)(struct blk_io *io, int n);
 };
 
 // ---- the device table ------------------------------------------------
@@ -316,6 +333,13 @@ int blkdev_max_sectors_per_xfer(const struct block_device *dev);
 int blkdev_flush(const struct block_device *dev);
 int blkdev_trim_supported(const struct block_device *dev);
 int blkdev_trim(const struct block_device *dev, uint32_t lba, uint32_t count);
+
+// Linux's plug: hand the device several transfers TOGETHER so it can
+// keep them all in flight, and wait for all of them. Returns 1 only if
+// every transfer succeeded; each also reports in io[i].ok, so a caller
+// can say which one failed. Waits either way -- this is a batch, not an
+// asynchronous submit.
+int blkdev_submit_batch(const struct block_device *dev, struct blk_io *io, int n);
 // Every run in one go: a filesystem freeing a big file hands over its
 // whole list rather than paying a command per run (a 512 MiB delete was
 // 313 TRIMs and 89 ms). 1 if every run was discarded.

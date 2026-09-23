@@ -25,7 +25,6 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] Finer filesystem locking -- a sleeping holder of the one lock costs others an operation PER call  *(Scheduler: blocking, priorities, classes)*
-- [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
@@ -791,9 +790,9 @@ run on, not by order.
 - [x] ~~Multi-sector transfers (PRDT scatter-gather)~~
 - [x] ~~Backend selection + fallback~~
 - [x] ~~Multi-sector transfers past 64 KiB~~ done -- 64 PRDT entries, 256 KiB per command, stepped fallback if the pool is fragmented
-- [ ] **NEXT** One AHCI command at a time costs ~7x virtio per command (measured) -- one slot and a bounce memcpy
+- [ ] Bigger batches: tfs3 commits carry ~2 targets, so NCQ overlaps little -- the per-command cost is still ~6x virtio
 - [x] ~~AHCI's command wait sleeps, as `ata.c`'s does~~ DONE 2026-09-23 -- ~6x less CPU held under disk load on the ASUS
-- [ ] NCQ (queued commands) -- needs an ASYNCHRONOUS block interface first, not more AHCI code
+- [x] ~~NCQ (queued commands)~~ DONE 2026-09-23 -- a synchronous batch (`blkdev_submit_batch()`), 32 tags on the ASUS
 - [ ] An asynchronous `block_device` submit/complete split, which NCQ, readahead and writeback all wait on
 - [x] ~~Batched journal barriers~~ done -- `storage.sync = batched` defers the COMMIT rather than generalising flush_begin/end
 - [x] ~~`fsync()`/`fdatasync()`~~ done -- `SYS_FSYNC`, scoped to the volume rather than the file

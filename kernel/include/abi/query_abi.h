@@ -1103,7 +1103,7 @@ struct query_ata {
 #define QUERY_AHCI_DRIVE   (1u << 1) // a SATA drive answered IDENTIFY
 #define QUERY_AHCI_IRQ     (1u << 2) // completions arrive by interrupt
 #define QUERY_AHCI_64BIT   (1u << 3) // CAP.S64A
-#define QUERY_AHCI_NCQ     (1u << 4) // CAP.SNCQ -- advertised, and not used
+#define QUERY_AHCI_NCQ     (1u << 4) // CAP.SNCQ -- the HBA offers NCQ
 #define QUERY_AHCI_SSS     (1u << 5) // CAP.SSS: staggered spin-up
 #define QUERY_AHCI_LBA48   (1u << 6) // the DRIVE's addressing, not the HBA's
 #define QUERY_AHCI_TRIM    (1u << 7) // DATA SET MANAGEMENT: freed blocks are discarded
@@ -1122,6 +1122,11 @@ struct query_ahci {
     char     model[QUERY_AHCI_MODEL_MAX];
     uint64_t cmd_sleeps;        // command waits that PARKED their caller
                                 // rather than polling; APPENDED
+    uint64_t ncq_depth;         // tags queued at once; 0 = NCQ not in use
+    uint64_t ncq_rounds;        // batches that went out queued
+    uint64_t ncq_cmds;          // commands those carried
+    uint64_t ncq_fallbacks;     // rounds that failed and were replayed
+                                // one at a time; all four APPENDED
 };
 
 // QUERY_AHCI_PORT's record. `port` is the HARDWARE's number and the
