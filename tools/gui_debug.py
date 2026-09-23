@@ -113,6 +113,8 @@ class DebugConsole:
         # settle()'s polling now issues reads of its own that would
         # otherwise consume them. See logs() / damage_bugs().
         self.log_lines = []
+        self._stale = False   # a reply timed out; resync before the next
+        self._resyncs = 0
         self._sync()
 
     def _read_to_prompt(self):
@@ -153,6 +155,7 @@ class DebugConsole:
                 self._s.settimeout(self.timeout)
                 self._s.connect(self.sock_path)
                 self.log_lines = []
+                self._stale = False
                 self._sync()
                 return True
             except OSError as e:
@@ -163,9 +166,23 @@ class DebugConsole:
         return False
 
     def send(self, command):
-        """Run one debug-console command, return its output as text."""
+        """Run one debug-console command, return its output as text.
+
+        A COMMAND THAT TIMES OUT LEAVES ITS OUTPUT AND PROMPT IN FLIGHT,
+        and reading to "the next prompt" then handed them to the NEXT
+        command -- every reply after it shifted by one for the rest of
+        the run (measured: `echo C` answered `BBB`). Counting owed
+        prompts is not enough, because a guest still booting can drop a
+        typed line and never print its prompt at all. So a timeout marks
+        the console out of step, and the next command first resyncs on a
+        marker nothing else can print (_resync()).
+        """
+        if self._stale:
+            self._resync()
         self._s.sendall((command + "\n").encode())
         buf = self._read_to_prompt().replace("\r", "")
+        if not buf.endswith(PROMPT):
+            self._stale = True
         if buf.startswith(command):
             buf = buf[len(command):]
         if buf.endswith(PROMPT):
@@ -173,6 +190,34 @@ class DebugConsole:
         out = buf.strip("\n")
         self.log_lines.extend(l for l in out.splitlines() if l.strip())
         return out
+
+    def _resync(self):
+        """Discard everything up to the answer to a unique unknown command.
+
+        The console echoes what is typed, so the marker is matched in the
+        REPLY (`unknown command: <tag>`), followed by a prompt. What is
+        read on the way -- late replies, boot chatter -- goes to
+        log_lines, where klog lines are expected to be.
+        """
+        self._resyncs += 1
+        tag = f"__resync_{self._resyncs}__"
+        want = f"unknown command: {tag}"
+        # The leading newline ends any line the guest is half-way through
+        # holding, so the marker arrives as a line of its own.
+        self._s.sendall(("\n" + tag + "\n").encode())
+        buf = ""
+        deadline = time.time() + 2 * self.timeout
+        while time.time() < deadline:
+            i = buf.find(want)
+            if i >= 0 and buf.find(PROMPT, i) >= 0:
+                self._stale = False
+                break
+            try:
+                buf += self._s.recv(65536).decode("utf-8", errors="replace")
+            except socket.timeout:
+                break
+        self.log_lines.extend(l for l in buf.replace("\r", "").splitlines()
+                              if l.strip() and tag not in l)
 
     def json(self, command):
         """Run a `--json` command and return the parsed object.

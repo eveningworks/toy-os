@@ -80,6 +80,31 @@ class Guest:
         return QMPSession(port=4445 + self.instance)
 
 
+# THE NAME A USB DAC REGISTERS UNDER is `usb-<vid><pid>` (f57e1134, so
+# two DACs can both be listed), and QEMU's usb-audio is 46f4:0002. The
+# class driver's own bind line still says `usb-audio`; that is a
+# different name for a different layer.
+USB_DEV = "usb-46f40002"
+
+
+def wait_card_free(dbg, timeout=20):
+    """Wait until soundd has let go of the card, or the timeout.
+
+    /tests/tone and the `sound` KTESTs open the stream directly, and
+    soundd holds it from boot until 2 s after its last client. Spawned
+    before then, the tone app is refused, writes no verdict, and the
+    device records silence -- which is how this tool reported "the
+    emulated device plays nothing" for a device that plays.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        log = dbg.send("sh dmesg") or ""
+        if log.count("released the card") >= log.count("soundd: took the card"):
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def play_tone(dbg, res, label, timeout=90):
     """Run /tests/tone and wait for the verdict it writes to a FILE.
 
@@ -87,6 +112,7 @@ def play_tone(dbg, res, label, timeout=90):
     output reaches the serial capture unreliably, and TCG stretch means
     2 s of audio can take several wall seconds.
     """
+    wait_card_free(dbg)
     dbg.send("sh rm /tmp/tone_done")
     dbg.send("sh spawn /tests/tone")
     out = ""
@@ -107,6 +133,10 @@ def phase_usb_only(g, res, wav):
         dbg = wait_serial(g.sock())
         if not res.check("the serial console answers", dbg is not None):
             return
+
+        # The image is a copy of whatever disk.img holds, and every
+        # recording below is an amplitude: audio_test.py's establish().
+        dbg.send("sh config set volume 100")
 
         dmesg = dbg.send("sh dmesg") or ""
         res.check("the class driver bound the device",
@@ -133,6 +163,7 @@ def phase_usb_only(g, res, wav):
         # load-bearing half (the ahci_test lesson): the usb-audio suite
         # is pure descriptor parsing and runs everywhere, but `sound`
         # covers the device list and would skip with a stream open.
+        wait_card_free(dbg)
         for suite in ("usb-audio", "sound"):
             kt = dbg.send(f"sh ktest {suite}") or ""
             res.check(f"ktest {suite} passes with 0 skipped",
@@ -163,9 +194,9 @@ def phase_usb_only(g, res, wav):
 
         lsdev = dbg.send("lsdev") or ""
         res.check("lsdev names it as the active sound device",
-                  "usb-audio  [active]" in lsdev,
+                  f"{USB_DEV}  [active]" in lsdev,
                   next((ln.strip() for ln in lsdev.splitlines()
-                        if "usb-audio" in ln), "no sound line"))
+                        if USB_DEV in ln), "no sound line"))
 
         play_tone(dbg, res, "usb only")
 
@@ -182,7 +213,7 @@ def phase_usb_only(g, res, wav):
         time.sleep(3)
         dmesg = dbg.send("sh dmesg") or ""
         res.check("unplugging it is reported, not ignored",
-                  "sound: usb-audio removed" in dmesg)
+                  f"sound: {USB_DEV} removed" in dmesg)
         lsdev = dbg.send("lsdev") or ""
         res.check("...and the machine is left with no sound device",
                   "Sound: no device" in lsdev,
@@ -207,14 +238,14 @@ def phase_two_cards(g, res, ac97_wav, usb_wav):
 
         lsdev = dbg.send("lsdev") or ""
         res.check("both cards are registered", "ac97" in lsdev and
-                  "usb-audio" in lsdev)
+                  USB_DEV in lsdev)
         # FIRST DISCOVERED wins with no choice made -- usb_init() runs
         # before ac97_init(), so this is the USB device. The assertion
         # is on the marker, not on the order of the lines.
         res.check("...and with no choice made the FIRST one is active",
-                  "usb-audio  [active]" in lsdev,
+                  f"{USB_DEV}  [active]" in lsdev,
                   " | ".join(ln.strip() for ln in lsdev.splitlines()
-                             if "ac97" in ln or "usb-audio" in ln))
+                             if "ac97" in ln or USB_DEV in ln))
         play_tone(dbg, res, "auto -> usb")
 
         # Now choose the other one. The setting is what the volume
@@ -224,9 +255,9 @@ def phase_two_cards(g, res, ac97_wav, usb_wav):
                   out.strip()[-80:])
         lsdev = dbg.send("lsdev") or ""
         res.check("...and the choice moves the active marker",
-                  "ac97  [active]" in lsdev and "usb-audio  [active]" not in lsdev,
+                  "ac97  [active]" in lsdev and f"{USB_DEV}  [active]" not in lsdev,
                   " | ".join(ln.strip() for ln in lsdev.splitlines()
-                             if "ac97" in ln or "usb-audio" in ln))
+                             if "ac97" in ln or USB_DEV in ln))
         play_tone(dbg, res, "chosen -> ac97")
         dbg.close()
     finally:
@@ -258,6 +289,7 @@ def phase_switch_mid_stream(g, res, ac97_wav, usb_wav):
                          dbg is not None):
             return
         dbg.send("sh config set audio_device auto")
+        wait_card_free(dbg)
         dbg.send("sh rm /tmp/tone_done")
         dbg.send("sh spawn /tests/tone")
         # Far enough in that the first card is demonstrably playing, and
@@ -296,15 +328,32 @@ def phase_persisted(g, res, wav, usb_wav):
         # check on a guest that had restored the setting perfectly
         # (measured 3 runs in 5). No chatter line is exactly a device
         # name, so equality keeps the strength and drops the ordering.
-        reply = (dbg.send("sh config get audio_device") or "").strip()
-        lines = [ln.strip() for ln in reply.splitlines() if ln.strip()]
+        #
+        # AND A REPLY CAN BE LOST ALTOGETHER while boot is still talking:
+        # the console answers `sh help` early, and a read then returned
+        # only boot chatter -- no setting and no Sound section. So wait
+        # for the boot to settle, and re-ask only a reply that holds NO
+        # answer; an answer that is wrong (`auto`) still fails at once.
+        wait_card_free(dbg)
+        lines = []
+        for _ in range(5):
+            reply = (dbg.send("sh config get audio_device") or "").strip()
+            lines = [ln.strip() for ln in reply.splitlines() if ln.strip()]
+            if any(ln in ("auto", "ac97") or ln.startswith("usb-") for ln in lines):
+                break
+            time.sleep(1)
         res.check("the chosen device came back from /etc", "ac97" in lines,
                   repr(lines[:3]))
-        lsdev = dbg.send("lsdev") or ""
+        lsdev = ""
+        for _ in range(5):
+            lsdev = dbg.send("lsdev") or ""
+            if "Sound (" in lsdev:
+                break
+            time.sleep(1)
         res.check("...and it is the active one on this boot",
                   "ac97  [active]" in lsdev,
                   " | ".join(ln.strip() for ln in lsdev.splitlines()
-                             if "ac97" in ln or "usb-audio" in ln))
+                             if "ac97" in ln or USB_DEV in ln))
         # Put it back, so a re-run of this tool starts from `auto` and
         # the disk image is not left configured by a test.
         dbg.send("sh config set audio_device auto")

@@ -275,6 +275,21 @@ manual steps to be worth automating:
   what it is drawing, and `enter_gui()` polls the desktop ready instead
   of sleeping.
 
+  **A REPLY THAT TIMES OUT USED TO SHIFT EVERY LATER REPLY BY ONE.**
+  `send()` reads to the next prompt; a command slower than `timeout`
+  (a long `dmesg` while a TCG guest is still booting) left its output
+  and prompt in flight, the next command stopped at THAT prompt, and
+  from then on each check was handed the previous command's answer --
+  measured by forcing one timeout: `echo C` answered `BBB`, for the rest
+  of the run. It surfaced as checks quoting unrelated output
+  (`resolv.conf`, `rectory`) and runs of empty replies, in more than one
+  audio tool. A timeout now marks the console out of step, and the next
+  `send()` first resyncs on a marker nothing else prints (`_resync()`:
+  an unknown command whose REPLY names a unique tag); what it skips goes
+  to `log_lines`. Counting owed prompts was tried first and is wrong: a
+  guest still booting can drop a typed line, and a prompt that never
+  comes then wedges every later read.
+
   **`widgets()` / `widget_center()` / `widget_at()` answer "where is
   that control"** -- the question this module could not answer at all
   until the client began exporting its widget map (`docs/decisions.md`,
@@ -2763,6 +2778,16 @@ window without going through it will find its layout polls timing out.
   get`, since boot chatter mentions `ac97` too and a substring match
   passed on a guest whose setting had not been restored at all. On
   demand, not in the gate: it boots its own guest with extra hardware.
+
+  **It reported "the emulated device plays nothing" (filed 2026-09-21),
+  and the device played.** `/tests/tone` opens the stream directly, soundd holds
+  it from boot until 2 s after its last client, and the tool spawned the
+  tone without waiting -- so the app was refused, wrote no verdict, and
+  the device recorded silence. It waits for the release now
+  (`wait_card_free()`), as `audio_test.py` always had to. Two more
+  staled with the OS: a USB DAC registers as `usb-<vid><pid>` since
+  f57e1134 (`USB_DEV`, QEMU's being 46f4:0002), and the tool sets volume
+  100 on its image copy, `audio_test.py`'s `establish()`.
 - **`audio_loopback_test.py`** -- **the only tool here that judges the
   SOUND rather than the driver.** A cable from the Creative G6's
   headphone out into the motherboard's line in, so the analogue output
