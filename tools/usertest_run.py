@@ -127,6 +127,10 @@ TESTS = [
     # fork() and exec(): SPAWNED (exit code None) because a fork needs a
     # scheduler slot, which the legacy `run` loader has not got.
     ("fork_test", None, None, None),
+    # A negative priority read back, and a new process's level being its
+    # parent's rather than whatever its reused slot last held. SPAWNED:
+    # the second needs a real slot to reuse.
+    ("prio_test", None, None, None),
     # SPAWN_FD_LOG: a child's stdout landing in the application log,
     # tagged with the CHILD's name. SPAWNED (exit code None) because the
     # thing under test is a spawn -- it waits for two children, which the

@@ -3315,8 +3315,9 @@ to keep.
 
 ## USB audio on real hardware
 
-The long form of the two USB audio entries in `docs/bugs.md`. Facts that
-are still true, in the order they cost something to learn.
+What getting USB audio clean on real hardware taught, for the next
+fault on this path. Facts that are still true, in the order they cost
+something to learn.
 
 **WHICH PATH A RUN EXERCISED DECIDES WHAT IT SAYS.** One device binds
 differently per speed: the G6 (`041e:3256`) is UAC2 at HIGH speed
@@ -3351,18 +3352,29 @@ unwritten ring (the `start` line's map shows the mixer had written it).
 (stale completions counted as the new stream's) and soundd committing
 silence ahead of a client that had not filled its ring (a 21-128 ms hole
 inside 7 playbacks in 8 on the emulated AC97). `docs/decisions/drivers.md`
-has both. The AC97 capture once cited as proof that "the whole chain
+has both. The first was confirmed at high speed on 2026-09-23: `5 stale
+group(s) drained` at every restart, `0 refused` at close. The AC97 capture once cited as proof that "the whole chain
 above the driver is spotless" measured a first playback, which is the one
 case where the second fault does not occur.
 
-**WHAT IS LEFT IS THE DRIVER RUNNING DRY** -- ~5 times a second at full
-speed on bare metal, each one a gap. The `usbaudio: stop` line prints the
-count and the first eight timestamps; `USBAUDIO_PROBE=1` in snddrv's
-environment adds a lateness line about once a second. The next step is
-wake preemption plus priority for the driver, which is what Linux (a
-wakeup that preempts, and PipeWire's RT thread) and Windows (a wait's
-priority boost, and MMCSS) both do; priority on its own was measured
-worse.
+**THE DRY RUNS WERE SCHEDULING, AND ARE FIXED** (2026-09-23): a wake
+of a better-level process now preempts, the preempted process resumes
+first, and `snddrv` runs at -10 (docs/decisions/kernel.md, "A wake
+preempts only from a better level, and the preempted process resumes
+first"). 0 dry and clean by ear at both speeds, against 161-227 dry at
+`--prio 0` under the same disturbance.
+
+**HOW TO MEASURE ONE OF THESE.** Run `snddrv` in the foreground of a
+long-lived `remote.py exec` (tosh has no `2>`, and `spawn` loses stderr)
+and read three lines: `usbaudio: stop` (dry count and when), the
+kernel's `isoch ep ... closing` (underruns, refused), and soundd's
+`released the card` (its longest gap between passes, and chunks a client
+left empty). A half-second DROPOUT with 0 dry is soundd starved; a
+crackle with dry events is the driver. **YOUR OWN PROBES ARE LOAD**: a
+`remote.py` session spawns a tosh, and three in a row made a driver at
+the default level run dry every 40 ms. That is the disturbance the A/B
+above used on purpose, and it read as "crackle throughout" before
+anyone noticed it lined up with the harness.
 
 ## Layer 5 -- System services and policy
 

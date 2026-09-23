@@ -105,6 +105,14 @@ static uint32_t g_prev_lead; // the unstarted ring's fill, one pass ago
 #define MIN_LEAD_BYTES (8u * SND_CHUNK_BYTES)
 
 static int g_open;                       // is the stream ours right now?
+
+// PER STREAM, said once at release: the longest wait between two of our
+// passes, and how many chunks a playing client had left empty. A long
+// gap is THIS daemon starved (the driver plays the zeroed ring: a clean
+// dropout); empty chunks are a CLIENT starved. The driver's own dry
+// count sees neither.
+static unsigned g_gap_max_ms, g_starved_chunks;
+static unsigned long long g_last_pass_ms;
 static unsigned long long g_idle_since;  // when the last client stopped
 
 static unsigned long long now_ms(void) { return sys_monotonic_ns() / 1000000ull; }
@@ -120,6 +128,8 @@ static int stream_open(void) {
     g_wr = 0;
     g_running = 0;
     g_prev_lead = 0;
+    g_gap_max_ms = g_starved_chunks = 0;
+    g_last_pass_ms = 0;
     g_open = 1;
     // SAID ON EVERY ACQUISITION, not just the first: "released the
     // card" with nothing to answer it reads like the daemon gave up.
@@ -138,7 +148,9 @@ static void stream_release(void) {
     g_running = 0;
     g_hw = 0;
     g_hwring = 0;
-    fprintf(stderr, "soundd: idle -- released the card\n");
+    fprintf(stderr, "soundd: idle -- released the card (longest gap between "
+                    "passes %u ms, %u chunk(s) a client left empty)\n",
+            g_gap_max_ms, g_starved_chunks);
 }
 
 // Any client asking to be mixed? `running` is the client's own say-so,
@@ -405,7 +417,7 @@ static void mix_chunk(uint32_t dst) {
         // chunk ahead of the writer, that reads as no room FOREVER and
         // stalls the client's decoder instead of merely going quiet
         // (aplay never exited; found on the laptop, not in QEMU).
-        if (src == c->ctl->wr_pos) continue; // nothing new: silence
+        if (src == c->ctl->wr_pos) { g_starved_chunks++; continue; } // silence
 
         const volatile int16_t *s = c->ring + src / 2;
         int32_t g = gain_q15(c->gain);
@@ -485,6 +497,11 @@ int main(void) {
         }
 
         if (!g_open) { sys_sleep_ms(20); continue; }
+
+        unsigned long long pass_ms = now_ms();
+        if (g_last_pass_ms && pass_ms - g_last_pass_ms > g_gap_max_ms)
+            g_gap_max_ms = (unsigned)(pass_ms - g_last_pass_ms);
+        g_last_pass_ms = pass_ms;
 
         // Fill toward one chunk behind the hardware -- but only with
         // what the clients have actually produced, or with silence

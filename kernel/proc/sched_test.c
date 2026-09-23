@@ -282,6 +282,75 @@ KTEST("sched", "a wake reaches only the channel it names") {
     KTEST_ASSERT_EQ(rax_b_after, 7);
 }
 
+KTEST("sched", "a wake preempts only when it OUTRANKS what is running") {
+    // The kernel context runs this test at the default level, 0. A wake
+    // at a better level must ask for a switch on the way out of the
+    // trap; one at the same level must not, or every interrupt would
+    // rotate the CPU.
+    uint64_t tf_hi[SCHED_TF_SLOTS] = {0}, tf_eq[SCHED_TF_SLOTS] = {0};
+    static const char chan_hi, chan_eq;
+
+    scheduler_preempt_disable();
+    (void)scheduler_test_take_resched();
+
+    int hi = scheduler_test_park(tf_hi, &chan_hi, SCHED_WAIT_EVENT);
+    int eq = scheduler_test_park(tf_eq, &chan_eq, SCHED_WAIT_EVENT);
+    int asked_eq = -1, asked_hi = -1, cur = scheduler_current_pid();
+
+    if (hi >= 0 && eq >= 0) {
+        scheduler_set_priority(hi + 1, -5);
+        scheduler_wake(&chan_eq, 0);
+        asked_eq = scheduler_test_take_resched();
+        scheduler_wake(&chan_hi, 0);
+        asked_hi = scheduler_test_take_resched();
+    }
+
+    scheduler_test_release(hi);
+    scheduler_test_release(eq);
+    scheduler_preempt_enable();
+
+    if (hi < 0 || eq < 0) KTEST_SKIP("no free process slots to fabricate");
+    if (cur) KTEST_SKIP("not run from the kernel context");
+
+    KTEST_ASSERT_EQ(asked_eq, 0);
+    KTEST_ASSERT_EQ(asked_hi, 1);
+}
+
+KTEST("sched", "a PREEMPTED process runs next at its level, not the one after it") {
+    // Two READY slots at a level nothing real uses. The plain scan from
+    // A's position picks B; A preempted must pick A -- or every wake of a
+    // better-level driver resets the round-robin to just past it and a
+    // slot scanned late is starved.
+    uint64_t tf_a[SCHED_TF_SLOTS] = {0}, tf_b[SCHED_TF_SLOTS] = {0};
+    static const char chan_a, chan_b;
+
+    scheduler_preempt_disable();
+    int a = scheduler_test_park(tf_a, &chan_a, SCHED_WAIT_EVENT);
+    int b = scheduler_test_park(tf_b, &chan_b, SCHED_WAIT_EVENT);
+    int plain = -2, head = -2, after = -2;
+
+    if (a >= 0 && b >= 0) {
+        scheduler_set_priority(a + 1, -17);
+        scheduler_set_priority(b + 1, -17);
+        scheduler_wake(&chan_a, 0);
+        scheduler_wake(&chan_b, 0);
+        (void)scheduler_test_take_resched();
+        plain = scheduler_test_pick(a, -1);
+        head  = scheduler_test_pick(a, a);
+        after = scheduler_test_pick(a, -1);   // a head is served ONCE
+    }
+
+    scheduler_test_release(a);
+    scheduler_test_release(b);
+    scheduler_preempt_enable();
+
+    if (a < 0 || b < 0) KTEST_SKIP("no free process slots to fabricate");
+
+    KTEST_ASSERT_EQ(plain, b);
+    KTEST_ASSERT_EQ(head, a);
+    KTEST_ASSERT_EQ(after, b);
+}
+
 KTEST("sched", "a wake on a channel nobody holds wakes nothing") {
     static const char lonely;
     // 0 is a normal answer, not an error: a waker cannot know whether

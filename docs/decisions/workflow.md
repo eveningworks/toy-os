@@ -260,7 +260,11 @@ answering a different question.
 priority took it from 7217 to 7959 of the 8000 the endpoint wants -- and
 made the audio *worse*, because prioritising the last stage starved the
 two that fill the ring, so the driver posted a full-rate stream of an
-empty one. That was already recorded as a warning. What was not noticed
+empty one. (The HOW was found later: each wake of a better-level driver
+restarted the round-robin just past its slot. The picker now gives the
+CPU back to the process it preempted -- docs/decisions/kernel.md, "A wake
+preempts only from a better level, and the preempted process resumes
+first".) That was already recorded as a warning. What was not noticed
 is that the same metric had also chosen the buffer depth: judged by
 packets/s, a deeper cushion looked catastrophic ("192 outstanding
 collapsed to 393 packets/s"), so the driver shipped with three groups.

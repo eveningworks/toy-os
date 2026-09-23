@@ -844,15 +844,44 @@ int scheduler_set_priority(int pid, int value) {
     return 0;
 }
 
-int scheduler_get_priority(int pid) {
+int scheduler_get_priority(int pid, int *value) {
     int idx = pid - 1;
     if (idx < 0 || idx >= MAX_PROCS || procs[idx].state == SCHED_UNUSED)
         return -ESRCH;
-    return procs[idx].prio;
+    *value = procs[idx].prio;
+    return 0;
+}
+
+// A WAKE THAT OUTRANKS WHAT IS RUNNING asks for a switch on the way out
+// of the trap it happened in (scheduler_trap_exit()) -- Linux's
+// TIF_NEED_RESCHED. Only a STRICTLY better level: a wake at the same
+// level would preempt on every interrupt and give nothing back.
+static int g_need_resched;
+
+// The level a wake has to beat: the running process's, or the kernel
+// slot's default when the kernel context is what runs.
+static int running_prio(void) {
+    return current_index >= 0 ? procs[current_index].prio : 0;
 }
 
 static int runnable_at(int idx) {
     return procs[idx].state == SCHED_READY && !procs[idx].stopped;
+}
+
+// WHOM A WAKE PREEMPTED, per level, as a rotation index + 1 (0: nobody).
+// It is served FIRST the next time its level runs -- the head of its
+// queue, Windows' rule for a preempted thread, where a quantum that ran
+// out goes to the tail. Without it the scan restarted after the
+// preempting driver on every wake, so the slots following the driver's
+// always won and one scanned late went unserved (soundd, 762 ms, which
+// is a dropout).
+#define PRIO_MIN (-20)
+#define PRIO_LEVELS 40
+static uint8_t g_preempted[PRIO_LEVELS];
+
+static void note_preempted(int rot_idx, int prio) {
+    if (prio >= PRIO_MIN && prio < PRIO_MIN + PRIO_LEVELS)
+        g_preempted[prio - PRIO_MIN] = (uint8_t)(rot_idx + 1);
 }
 
 static int find_next_runnable(int start) {
@@ -866,6 +895,17 @@ static int find_next_runnable(int start) {
     for (int idx = 0; idx < MAX_PROCS; idx++)
         if (runnable_at(idx) && procs[idx].prio < best) best = procs[idx].prio;
     if (kernel_slot_runnable() && 0 < best) best = 0;
+
+    // Consulted once, used or not: a head that has since blocked or
+    // exited is simply dropped.
+    if (best >= PRIO_MIN && best < PRIO_MIN + PRIO_LEVELS) {
+        int head = g_preempted[best - PRIO_MIN] - 1;
+        g_preempted[best - PRIO_MIN] = 0;
+        if (head == ROT_KERNEL && kernel_slot_runnable()) return ROT_KERNEL;
+        if (head >= 0 && head < MAX_PROCS && runnable_at(head) &&
+            procs[head].prio == best)
+            return head;
+    }
 
     for (int i = 1; i <= MAX_PROCS + 1; i++) {
         int idx = (start + i + MAX_PROCS + 1) % (MAX_PROCS + 1);
@@ -1495,6 +1535,9 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
     // -- scheduler_current_pid() returns 0 there, which is exactly the
     // "no parent" value, so this needs no special case.
     procs[slot].ppid = scheduler_current_tgid();
+    // SET, NOT LEFT: a reused slot otherwise hands the next tenant its
+    // last one's priority. Inherited, as posix_spawn does.
+    procs[slot].prio = current_index >= 0 ? procs[current_index].prio : 0;
     // NOTHING IS PENDING AND NOTHING IS IGNORED for a fresh process --
     // reset rather than inherited, and both matter. A slot is reused, so
     // a leftover pending bit would kill the NEXT tenant on its first
@@ -1753,6 +1796,10 @@ void scheduler_tick(uint64_t *regs) {
 // to justify two paths is gone.
 void scheduler_yield(uint64_t *regs) { scheduler_rotate(regs); }
 
+void scheduler_trap_exit(uint64_t *regs) {
+    if (g_need_resched) scheduler_rotate(regs);
+}
+
 void scheduler_preempt_disable(void) { g_preempt_depth++; }
 
 int scheduler_preempt_depth(void) { return g_preempt_depth; }
@@ -1819,6 +1866,12 @@ static void scheduler_rotate(uint64_t *regs) {
         if (current_index < 0) save_kernel_frame(regs);
         return;
     }
+
+    // Consumed only by a rotation that can happen: one refused above
+    // leaves it for the next trap rather than losing the wake.
+    if (g_need_resched)
+        note_preempted(current_index >= 0 ? current_index : ROT_KERNEL, running_prio());
+    g_need_resched = 0;
 
     if (current_index >= 0) {
         // This process was the one running for the tick that just
@@ -1934,9 +1987,21 @@ int scheduler_test_park(uint64_t *tf, const void *chan, int reason) {
         signal_state_reset(i);
         procs[i].pgid = i + 1;
         procs[i].sid = i + 1;
+        procs[i].prio = 0;
         return i;
     }
     return -1;
+}
+
+int scheduler_test_pick(int start, int preempted) {
+    if (preempted >= 0) note_preempted(preempted, procs[preempted].prio);
+    return find_next_runnable(start);
+}
+
+int scheduler_test_take_resched(void) {
+    int r = g_need_resched;
+    g_need_resched = 0;
+    return r;
 }
 
 // Releases a slot parked above, in EITHER state: a woken one is READY,
@@ -2264,6 +2329,7 @@ int scheduler_wake_n(const void *chan, int64_t value, int max) {
         // had reached by then.
         procs[i].wake_at_ns = 0;
         procs[i].state = SCHED_READY;
+        if (procs[i].prio < running_prio()) g_need_resched = 1;
         woken++;
     }
     return woken;
@@ -2542,6 +2608,7 @@ int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
     // never a wait() one.
     procs[slot].ppid     = leader + 1;
     procs[slot].pgid     = procs[leader].pgid;
+    procs[slot].prio     = procs[caller].prio;
     signal_state_reset(slot);
     // DISPOSITIONS ARE INHERITED, which is as close to POSIX's
     // per-process disposition as a per-thread table gets: a thread
@@ -2628,6 +2695,7 @@ int scheduler_fork(const uint64_t *regs) {
     procs[slot].detached = 0;
     fd_clone(as, procs[leader].pml4_phys);
     procs[slot].ppid = leader + 1;
+    procs[slot].prio = procs[caller].prio;
     signal_state_reset(slot);
     for (int i = 0; i <= SIGNAL_MAX; i++)
         procs[slot].actions[i] = procs[caller].actions[i];

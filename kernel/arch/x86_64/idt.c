@@ -717,6 +717,10 @@ static void isr_dispatch_body(uint64_t *regs) {
         for (;;) __asm__ volatile ("cli; hlt");
     }
 
+    // A WOKEN PROCESS THAT OUTRANKS THIS ONE RUNS NOW, before the
+    // signal check -- which still runs for this process when it resumes.
+    scheduler_trap_exit(regs);
+
     // THE ONE PLACE A SIGNAL IS ACTED ON: on the way back to ring 3,
     // which is where Unix delivers and for the same reason (see
     // kernel/signal.h). After the depth decrement, because this may not

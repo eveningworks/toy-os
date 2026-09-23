@@ -7,7 +7,7 @@
 ## Synopsis
 
 ```
-snddrv [-d INDEX] [--driver NAME] [--usb-id VID:PID] [--usb-clock ID] [-v]
+snddrv [-d INDEX] [--driver NAME] [--usb-id VID:PID] [--usb-clock ID] [--prio N] [-v]
 ```
 
 ## Options
@@ -28,6 +28,11 @@ snddrv [-d INDEX] [--driver NAME] [--usb-id VID:PID] [--usb-clock ID] [-v]
   which it reports, so two runs of one build can exercise different
   clocks and sound different. Pin it to compare them by ear. The bind
   line always says which clock was used.
+- `--prio N` -- run at this scheduling level instead of the default
+  -10. A DIAGNOSTIC: `--prio 0` is how the driver behaved before a woken
+  process could preempt, which is the A/B that shows the difference by
+  ear. At the default level a busy machine makes a USB DAC run dry and
+  crackle; the serving line says which level a run used.
 - `-v` -- say which plugins loaded, and which devices were declined.
 
 ## Aiming it at one USB DAC
@@ -64,7 +69,7 @@ a driver that is not in the kernel.
 
 ```
 /$ spawn /bin/snddrv
-snddrv: hda serving pci 6 as hda-ring3
+snddrv: hda serving pci 6 as hda-ring3, priority -10
 /$ lssound
 * hda-ring3  HD Audio (ring 3)        ring3
 

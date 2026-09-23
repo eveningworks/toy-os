@@ -486,10 +486,13 @@ the whole handler as they always were.
 
 `scheduler_wake()` is deliberately limited so it is safe to call from
 an interrupt handler: it only flips scheduler state and writes an
-already-saved trapframe, and never touches `g_next_kernel_rsp`. A woken
-process becomes eligible and runs at the next ordinary tick. An IRQ
+already-saved trapframe, and never touches `g_next_kernel_rsp`. An IRQ
 handler that tried to switch directly to the woken process would be
-re-creating exactly the reentrancy this design exists to avoid.
+re-creating exactly the reentrancy this design exists to avoid. A woken
+process that OUTRANKS the running one is switched to on the way out of
+the trap, by the same rotation the tick uses; any other waits for the
+next tick. See "A wake preempts only from a better level, and the
+preempted process resumes first".
 
 Full writeup in the commit that added it.
 
@@ -8000,3 +8003,59 @@ invented ones: `tools/hid_parse_hostcheck.py` runs the same parser on
 the host over the G305's two interfaces and QEMU's pair, and KTESTs
 cover the same bytes in the gate. A descriptor written by whoever wrote
 the parser proves only that the two agree.
+
+## A wake preempts only from a better level, and the preempted process resumes first
+
+A ring-3 driver is woken by its device and has to refill before its
+buffer drains. Before this, `scheduler_wake_n()` only marked it READY,
+and it ran when the rotation reached it. With four busy processes at a
+10 ms slice, that meant waiting 40 ms against a 20 ms USB audio buffer.
+Measured on the ASUS with a Sound BlasterX G6: the driver ran dry
+**exactly every 40 ms** while a few telnet sessions were busy, and was
+clean while they were idle. The in-kernel driver played the same file
+clean through the same disturbance, because it refills inside its
+interrupt handler.
+
+**What real systems do.** Linux marks the woken task (`check_preempt_curr`
+setting `TIF_NEED_RESCHED`) and switches on the way out of the interrupt
+or syscall. PipeWire's data thread runs `SCHED_FIFO` so that it wins that
+check. Windows boosts a thread whose wait completes and gives audio
+threads a priority band through MMCSS. Both have **wake preemption plus
+a better level**, and neither works without the other: preemption alone
+only reorders equals, and a better level alone still waits for the tick.
+
+**What toy-os does.** `scheduler_wake_n()` raises a flag when the woken
+process's level is strictly better than the running one's.
+`scheduler_trap_exit()`, at the bottom of `isr_dispatch_body()`, rotates
+when that flag is set. It uses the same rotation and the same refusals
+(`g_preempt_depth`, the legacy loader) as `scheduler_tick()`, which
+already rotates from an interrupt, so it adds no new place a switch can
+happen. `snddrv` asks for -10. Strictly better only: a wake at the same
+level preempting would rotate the CPU on every interrupt.
+
+**The preempted process goes back to the HEAD of its level.** This is the
+part the obvious version gets wrong, and it is Windows' rule: a thread
+that is preempted goes back to the front of its priority's ready queue,
+and only one whose quantum ran out goes to the back. Linux gets the same
+effect by leaving the preempted task's place in the tree alone. Without
+it, the round-robin restarted just past the driver's slot on every wake,
+250 times a second. So the slots after the driver's always won, and one
+scanned late (soundd, as pid 9 behind a driver at pid 15) went **762 ms**
+without a turn. It played as half-second dropouts with the driver
+reporting 0 dry. The same build and level with soundd at pid 15, just
+after the driver, gave 33 ms. `g_preempted[]` holds one head per level
+and is consulted once.
+
+**This explains the older measurement** that raising `snddrv`'s priority
+"starved the fillers" (docs/decisions/workflow.md, "Audio is judged by
+RECORDING it"). A driver at a better level cut in on every wake and reset
+the rotation each time, with or without preemption. The 2026-09-21 wedge
+at -10 is NOT explained; it did not recur in about ten runs at -10 on the
+ASUS and in QEMU. And **priority is still strict with no ageing**: a
+process at a better level that spins takes the machine.
+
+Measured 2026-09-23 on the ASUS, same script each time (an MP3 with a
+disturbance 20 s in), `--prio 0` against the new default: full speed
+227 dry against 0; high speed 161-216 against 0 over three pairs; kernel
+underruns 0 with the fix. By ear: the first of each pair crackled and
+stuttered, and the fixed one was clean at both speeds.

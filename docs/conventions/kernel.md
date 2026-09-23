@@ -1092,6 +1092,22 @@ LATCHED check of the invariant above at every switch. A missing entry in
 that ring is itself evidence -- it is what showed the function being
 re-entered in the middle.
 
+## A PER-PROCESS FIELD IS SET AT EVERY PLACE A PROCESS IS MADE -- SPAWN, THREAD AND FORK -- BECAUSE A SLOT IS REUSED
+
+`procs[]` slots are recycled, lowest free first, and a new process
+starts with whatever its slot's LAST tenant left in any field nobody
+writes. There are three creation sites in `kernel/proc/scheduler.c` --
+the spawn path, thread creation and fork -- and a new field needs a
+line in all three (or an explicit reset helper like
+`signal_state_reset()`), plus one in `scheduler_test_park()` if a
+KTEST fabricates slots.
+
+`prio` is the case that shipped. Nothing set it at creation, so a
+program started after a `-10` driver exited ran at `-10` without asking,
+and a strict-priority scheduler then let it starve everything below it.
+It read like a driver A/B result that made no sense. `prio_test` covers
+it now through a real spawn, since only a real spawn reuses a slot.
+
 ## A BOUNDED WAIT USES A DEADLINE WHERE THE CLOCK ADVANCES WITH INTERRUPTS OFF, AND A POLL COUNT WHERE IT DOES NOT
 
 **A POLL COUNT IS NOT A TIMEOUT.** `XHCI_POLL_BACKSTOP` spins take

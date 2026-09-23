@@ -775,7 +775,8 @@ int sys_setpriority(int which, int who, int value) {
 }
 
 int sys_getpriority(int which, int who) {
-    return (int)err(syscall2(SYS_GETPRIORITY, (uint64_t)which, (uint64_t)who));
+    int64_t r = syscall2(SYS_GETPRIORITY, (uint64_t)which, (uint64_t)who);
+    return is_err(r) ? (int)err(r) : 20 - (int)r;
 }
 
 int sys_usb_claim(int slot) {

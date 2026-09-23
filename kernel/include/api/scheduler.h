@@ -63,6 +63,14 @@ void scheduler_trace_dump(void);
 // scheduler_rotate()'s comment.
 void scheduler_yield(uint64_t *regs);
 
+// THE WAY OUT OF EVERY TRAP -- a hardware interrupt, an MSI, a syscall.
+// Rotates when a wake during it made READY a process at a strictly
+// better priority than the one running, so a driver woken by its device
+// runs now rather than at the next tick (up to a whole 10 ms slice per
+// process ahead of it). One load when nothing was woken. Safe wherever
+// scheduler_tick() is: it is the same rotation, with the same refusals.
+void scheduler_trap_exit(uint64_t *regs);
+
 // Called from syscall.c's SYS_EXIT handler INSTEAD of the old
 // process_context_restore(&g_process_ctx, ...) path, whenever
 // scheduler_current_pid() is non-zero (i.e. the exiting process is
@@ -873,9 +881,10 @@ int scheduler_continue(int pid);
 // Strict between levels, round-robin within one -- and it CAN STARVE,
 // so only a process that blocks promptly should have one. See
 // abi/syscall_abi.h's SYS_SETPRIORITY for the measurement that made it
-// necessary. 0 / the value, or -ESRCH.
+// necessary. 0, or -ESRCH -- the level comes back through `value`,
+// since a negative level and an error are otherwise the same number.
 int scheduler_set_priority(int pid, int value);
-int scheduler_get_priority(int pid);
+int scheduler_get_priority(int pid, int *value);
 
 // 1 if `pid` is currently suspended.
 int scheduler_stopped(int pid);
@@ -1167,6 +1176,14 @@ int  scheduler_test_park(uint64_t *tf, const void *chan, int reason);
 void scheduler_test_release(int idx);
 // The state of one slot, as a PROC_STATE_* value. -1 for a bad index.
 int  scheduler_test_state(int idx);
+// Whether a wake since the last rotation asked for preemption, and
+// clears it -- so a test's fabricated wake does not leave a spurious
+// rotation behind for the next trap.
+int  scheduler_test_take_resched(void);
+// The picker's answer from rotation position `start`, switching to
+// nothing. `preempted` (a slot index, or -1) is recorded first as a wake
+// would record the process it preempted.
+int  scheduler_test_pick(int start, int preempted);
 
 // The kernel's own "while I have nothing else to do" work, in ONE
 // place. Call it from any loop that is waiting rather than working;

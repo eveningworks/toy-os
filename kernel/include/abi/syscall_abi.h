@@ -2600,7 +2600,8 @@ struct usb_control_msg {
 
 // SCHEDULING PRIORITY, POSIX's shape: nice-style, LOWER runs first,
 // 0 the default, -20..19 the range. Strict between levels and
-// round-robin within one.
+// round-robin within one. INHERITED by whatever a process creates, as
+// POSIX's fork and posix_spawn do.
 //
 // **A DRIVER IS WHY THIS EXISTS.** A ring-3 driver is woken by its
 // device's interrupt and then waits its turn -- measured as ~17 ms of
@@ -2618,10 +2619,11 @@ struct usb_control_msg {
                              // 0, or -EINVAL for an unknown `which` or
                              // a value outside -20..19, -ESRCH for a
                              // pid that is not there.
-#define SYS_GETPRIORITY 135  // RDI = which, RSI = who. The value, or
-                             // -EINVAL/-ESRCH. Note a negative RESULT
-                             // is legitimate here, so a caller checks
-                             // errno rather than the sign.
+#define SYS_GETPRIORITY 135  // RDI = which, RSI = who. 20 - the value
+                             // (1..40), or -EINVAL/-ESRCH. Offset
+                             // because a negative level would read as
+                             // an error -- Linux's raw getpriority does
+                             // the same, and the wrapper undoes it.
 
 struct usb_isoch_msg {
     uint32_t slot;

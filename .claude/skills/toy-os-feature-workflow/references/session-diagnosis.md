@@ -1456,3 +1456,26 @@ a PTE, so a test that read the leaf's bit 7 reported the fixed code as
 broken and passed the positive control for the wrong reason -- the
 control's red has to be on the assertion that names the fix.
 
+
+## The crackle that was the harness, and the dropout that was the fix (2026-09-23)
+
+A USB DAC on the ASUS "crackled throughout" an MP3 whose driver logged
+1 dry event in 59 s, and I told the maintainer the dry count was not the
+artefact. That was wrong. The other 41 dry events sat exactly where my
+own `remote.py` session timed out and the next one spawned a tosh to
+send `kill`. **Line the artefact up against YOUR OWN ACTIONS' timestamps
+before you theorise.** The run that settled it had a quiet first 40 s
+and a scripted disturbance at 40 s. By ear and by log it was clean,
+then broke up at 40 s, dry every 40 ms like a clock. A disturbance on
+purpose, at a known time, beats hoping for a quiet machine.
+
+Two more from the same day. **A per-slot field no creation site writes
+survives into the next process**: an A/B "at priority 0" was really at
+-10, inherited from the previous tenant of slot 15. It showed as a
+baseline with 0 faults and a `getpriority()` of -1. When a control
+looks too good, ask what state it inherited. And **a fix that makes the
+driver perfect can move the fault upstream**: 0 dry, 0 underruns, and
+half-second silences. The silences were soundd starved for 762 ms by a
+round-robin that restarted after the driver on every wake. A counter at
+EACH stage (soundd now reports its longest gap between passes) is what
+tells a starved stage from a broken one. The driver's own count cannot.

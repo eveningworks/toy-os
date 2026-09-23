@@ -974,7 +974,9 @@ int sys_getpriority(struct syscall_ctx *c) {
 
     if (which != PRIO_PROCESS) { ret = -EINVAL; goto out; }
     if (!who) who = scheduler_current_pid();
-    ret = scheduler_get_priority(who);
+    int value = 0;
+    ret = scheduler_get_priority(who, &value);
+    if (ret == 0) ret = 20 - value;   // syscall_abi.h: never negative
 out:
     c->regs[14] = (uint64_t)ret;
     return 0;
