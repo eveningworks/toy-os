@@ -260,6 +260,16 @@ int ata_sync(uint32_t *out_written, uint32_t *out_pending);
 uint32_t ata_cache_dirty(void);
 void ata_flush_end_no_flush(void);
 
+// The idle write-back, for scheduler_idle(). Skips the round rather
+// than waiting when the drive is busy -- a caller may be idling INSIDE
+// a transfer.
+void ata_idle(void);
+
+// How many DMA waits parked their caller rather than polling. Rises
+// only for a scheduled process inside a syscall; the kernel context and
+// the legacy loader still poll (docs/blocking-design.md).
+uint64_t ata_dma_sleeps(void);
+
 // Phase 1 of the async-I/O roadmap item (docs/roadmap.md): a
 // non-blocking start/poll pair for the DMA path, built alongside the
 // existing blocking ata_read_sectors()/ata_write_sectors() rather than

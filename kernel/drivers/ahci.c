@@ -6,6 +6,7 @@
 // only after PxCLB/PxFB point at real memory, and the interrupt line is
 // unmasked only after the handler is registered. A level-triggered INTx
 // asserted with nobody willing to clear PxIS is never deasserted.
+#include "kmutex.h" // g_ahci_lock
 #include "ahci.h"
 #include "block.h"   // blk_dsm_pack() -- the DSM payload, shared with ata.c
 #include "pci.h"
@@ -613,13 +614,18 @@ int ahci_max_sectors_per_xfer(void) { return (int)(g_buf_frames * 4096 / AHCI_SE
 // A transfer is refused rather than clamped when it runs past the end
 // of the drive: a short read that reports success is how a filesystem
 // ends up parsing whatever the bounce buffer held last.
+// ONE COMMAND AT A TIME: one command slot and one bounce buffer
+// (g_buf), shared by every caller. Every public I/O entry takes this; it
+// was the filesystem's lock alone, which a raw block user does not hold.
+static struct kmutex g_ahci_lock;
+
 static int bounds_ok(uint32_t lba, int count) {
     if (count <= 0 || count > ahci_max_sectors_per_xfer()) return 0;
     if (lba > g_sectors || (uint32_t)count > g_sectors - lba) return 0;
     return 1;
 }
 
-int ahci_read_sectors(uint32_t lba, int count, void *buf) {
+static int read_sectors(uint32_t lba, int count, void *buf) {
     if (!ahci_present() || !buf || !bounds_ok(lba, count)) return 0;
     uint32_t bytes = (uint32_t)count * AHCI_SECTOR_SIZE;
     if (!run_command(ATA_READ_DMA_EX, 0, lba, (uint16_t)count, bytes, 0)) return 0;
@@ -627,11 +633,25 @@ int ahci_read_sectors(uint32_t lba, int count, void *buf) {
     return 1;
 }
 
-int ahci_write_sectors(uint32_t lba, int count, const void *buf) {
+int ahci_read_sectors(uint32_t lba, int count, void *buf) {
+    kmutex_lock(&g_ahci_lock);
+    int r = read_sectors(lba, count, buf);
+    kmutex_unlock(&g_ahci_lock);
+    return r;
+}
+
+static int write_sectors(uint32_t lba, int count, const void *buf) {
     if (!ahci_present() || !buf || !bounds_ok(lba, count)) return 0;
     uint32_t bytes = (uint32_t)count * AHCI_SECTOR_SIZE;
     k_memcpy(g_buf, buf, bytes);
     return run_command(ATA_WRITE_DMA_E, 0, lba, (uint16_t)count, bytes, 1);
+}
+
+int ahci_write_sectors(uint32_t lba, int count, const void *buf) {
+    kmutex_lock(&g_ahci_lock);
+    int r = write_sectors(lba, count, buf);
+    kmutex_unlock(&g_ahci_lock);
+    return r;
 }
 
 // TRIM, through DATA SET MANAGEMENT. The range list travels DEVICE-WARD,
@@ -639,7 +659,7 @@ int ahci_write_sectors(uint32_t lba, int count, const void *buf) {
 // silent: the drive acknowledges a command whose payload never arrived
 // and nothing is discarded (ata.c's DSM comment has the long version of
 // that failure, which cost a build there).
-int ahci_trim_ranges(const struct blk_range *r, int n) {
+static int trim_ranges(const struct blk_range *r, int n) {
     if (!ahci_trim_supported() || n <= 0) return 0;
     for (int i = 0; i < n; i++)
         if (r[i].lba > g_sectors || r[i].count > g_sectors - r[i].lba) return 0;
@@ -654,6 +674,13 @@ int ahci_trim_ranges(const struct blk_range *r, int n) {
     return 1;
 }
 
+int ahci_trim_ranges(const struct blk_range *r, int n) {
+    kmutex_lock(&g_ahci_lock);
+    int ok = trim_ranges(r, n);
+    kmutex_unlock(&g_ahci_lock);
+    return ok;
+}
+
 int ahci_trim(uint32_t lba, uint32_t count) {
     if (count == 0) return 0;
     struct blk_range one = { lba, count };
@@ -662,9 +689,16 @@ int ahci_trim(uint32_t lba, uint32_t count) {
 
 int ahci_trim_supported(void) { return ahci_present() && g_trim; }
 
-int ahci_flush(void) {
+static int flush(void) {
     if (!ahci_present()) return 0;
     return run_command(ATA_FLUSH_EXT, 0, 0, 0, 0, 0);
+}
+
+int ahci_flush(void) {
+    kmutex_lock(&g_ahci_lock);
+    int r = flush();
+    kmutex_unlock(&g_ahci_lock);
+    return r;
 }
 
 // ---- diagnostics -----------------------------------------------------

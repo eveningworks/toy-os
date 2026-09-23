@@ -1,4 +1,5 @@
 // See wm_anim.h.
+#include "wm/wm_watch.h" // the effect options' change counter
 #include "wm_internal.h"
 #include "wm_anim.h"
 #include "wm_shadow.h"
@@ -703,7 +704,7 @@ void wm_anim_poll_config(void) {
     // AND THE FILESYSTEM, for the options -- see adopt_effect_opts().
     // The taskbar watches the same clock for the same reason: a file
     // nobody registered changes without the registry hearing about it.
-    uint64_t fsg = sys_fs_generation();
+    uint64_t fsg = wm_watch_gen(WM_TOPIC_EFFECTS);
     if (fsg != g_seen_fsgen) {
         g_seen_fsgen = fsg;
         adopt_effect_opts();

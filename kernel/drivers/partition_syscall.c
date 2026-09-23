@@ -20,7 +20,6 @@
 #include "string.h"
 #include "vmm.h"
 #include "mount.h"     // disk_is_in_use() asks the mount table
-#include "scheduler.h" // the preemption guard around the write
 
 // driver-none: the syscall half of partition.c
 
@@ -114,10 +113,9 @@ int sys_mkpart(struct syscall_ctx *c) {
     }
 
     // STATIC, not a stack local: struct partition_table is ~1.5 KB
-    // against a 1 KB kernel frame budget. Safe because vfs.c's FS_OP()
-    // preemption guard does not cover this path, so the guard is taken
-    // explicitly below -- and because writing a partition table is a
-    // once-in-a-boot operation nobody races.
+    // against a 1 KB kernel frame budget. Safe because writing a
+    // partition table is a once-in-a-boot operation nobody races, and
+    // the write itself holds the filesystem lock (below).
     static struct partition_table tbl;
     k_memset(&tbl, 0, sizeof(tbl));
     tbl.kind = (req.kind == MKPART_KIND_GPT) ? PART_TABLE_GPT : PART_TABLE_MBR;
@@ -187,15 +185,14 @@ int sys_mkpart(struct syscall_ctx *c) {
 
     partition_fill_defaults(&tbl);
 
-    // The same preemption guard vfs.c's FS_OP() takes, for the same
-    // reason: partition.c reuses module-level scratch through
-    // blk_disk_*, and a ring-3 process is preemptible inside a syscall,
-    // so an interleaved filesystem read would fight this for the disk
-    // driver's buffers mid-table-write. Cheaper to hold it than to
-    // reason about which half of a GPT write is safe to be preempted in.
-    scheduler_preempt_disable();
+    // vfs.c's filesystem lock, held across the whole table write:
+    // partition.c reuses module-level scratch through blk_disk_*, and a
+    // filesystem call interleaved with it would fight it for the disk
+    // mid-table. A LOCK, not the preemption guard: a holder may be
+    // asleep in a disk wait, and the guard would spin behind it.
+    fs_exclusive_begin();
     int ok = partition_write_table_of(disk, &tbl);
-    scheduler_preempt_enable();
+    fs_exclusive_end();
 
     if (!ok) {
         c->regs[14] = (uint64_t)(int64_t)-EIO;
@@ -240,7 +237,7 @@ static int bios_boot_window(const struct block_device *disk,
                             uint32_t *out_lba, uint32_t *out_sectors) {
     // STATIC, not a stack local: struct partition_table is ~1.5 KB
     // against a 1 KB kernel frame budget. Safe for the same reason the
-    // table write below is -- the preemption guard is taken around it.
+    // table write below is -- the filesystem lock is held around it.
     static struct partition_table tbl;
     if (!partition_read_table_of(disk, &tbl)) return 0;
 
@@ -325,16 +322,16 @@ int sys_install_boot(struct syscall_ctx *c) {
     }
 
     // STATIC for the same frame-budget reason as the table above, and
-    // safe for the same one: the preemption guard is held across the
+    // safe for the same one: the filesystem lock is held across the
     // whole write.
     static uint8_t boot[BOOT_SECTOR_SIZE];
     static uint8_t sec[BOOT_SECTOR_SIZE];
 
-    scheduler_preempt_disable();
+    fs_exclusive_begin();
     int ok = 1;
 
     if (!vmm_copy_from_user(c->pml4, boot, req.boot_img, INSTALL_BOOT_SECTOR_BYTES)) {
-        scheduler_preempt_enable();
+        fs_exclusive_end();
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
@@ -344,7 +341,7 @@ int sys_install_boot(struct syscall_ctx *c) {
     // describes an empty disk.
     if (!blkdev_read_sectors(disk, 0, 1, sec)) {
         klog_write(KLOG_ERR "install_boot: could not read the target's boot sector\n");
-        scheduler_preempt_enable();
+        fs_exclusive_end();
         c->regs[14] = (uint64_t)(int64_t)-EIO;
         return 0;
     }
@@ -360,7 +357,7 @@ int sys_install_boot(struct syscall_ctx *c) {
         uint64_t left = req.core_size - i * BOOT_SECTOR_SIZE;
         if (left < want) { k_memset(sec, 0, BOOT_SECTOR_SIZE); want = (uint32_t)left; }
         if (!vmm_copy_from_user(c->pml4, sec, req.core_img + i * BOOT_SECTOR_SIZE, want)) {
-            scheduler_preempt_enable();
+            fs_exclusive_end();
             c->regs[14] = (uint64_t)(int64_t)-EFAULT;
             return 0;
         }
@@ -384,7 +381,7 @@ int sys_install_boot(struct syscall_ctx *c) {
         uint64_t left = req.core_size - i * BOOT_SECTOR_SIZE;
         if (left < want) { k_memset(sec, 0, BOOT_SECTOR_SIZE); want = (uint32_t)left; }
         if (!vmm_copy_from_user(c->pml4, sec, req.core_img + i * BOOT_SECTOR_SIZE, want)) {
-            scheduler_preempt_enable();
+            fs_exclusive_end();
             c->regs[14] = (uint64_t)(int64_t)-EFAULT;
             return 0;
         }
@@ -408,7 +405,7 @@ int sys_install_boot(struct syscall_ctx *c) {
     if (ok && !blkdev_write_sectors(disk, 0, 1, boot)) ok = 0;
     if (ok) blkdev_flush(disk);
 
-    scheduler_preempt_enable();
+    fs_exclusive_end();
 
     if (!ok) {
         klog_write(KLOG_ERR "install_boot: write failed\n");

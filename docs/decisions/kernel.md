@@ -8059,3 +8059,76 @@ disturbance 20 s in), `--prio 0` against the new default: full speed
 227 dry against 0; high speed 161-216 against 0 over three pairs; kernel
 underruns 0 with the fix. By ear: the first of each pair crackled and
 stuttered, and the fixed one was clean at both speeds.
+
+## A disk wait sleeps, and the three things that made it pay
+
+`ata.c`'s DMA and cache-flush waits park the caller on IRQ14 instead of
+polling with interrupts off (2026-09-23), which is stage 2 of
+`docs/blocking-design.md`. The obvious version -- swap the poll for
+`scheduler_block_kernel()` and stop -- made the compositor WORSE:
+0.6-1.7 s frames under a disk benchmark, against 5-22 ms before. Each
+of these is why it now pays, and each is the obvious thing done
+differently:
+
+**An unlock hands the lock to a parked waiter rather than dropping it.**
+Dropped, a releaser still running and about to make its next file call
+can re-take it before the woken waiter is scheduled, and a waiter can
+lose that race indefinitely -- the starvation Linux's mutex handoff
+(4.10) exists for. `kmutex_unlock()` names the owner itself
+(`scheduler_wake_one()`, best priority first) and the waiter claims it
+on resume. Measured honestly: the probes after it showed every WM wait
+was ONE holder operation (~17 ms), which is what handoff guarantees; how
+much worse it was without handoff was not measured separately.
+
+**A context woken MID-CALL runs next within its level.** An IRQ wake
+only made the waiter READY, so every DMA completion cost it up to a
+whole slice behind a busy peer -- and it was usually holding the
+filesystem lock the whole time, so everybody behind it waited too.
+CFS's wakeup preemption and NEXT_BUDDY, and 4.4BSD's PRIBIO for the same
+reason. Never across levels, so the audio driver's -10 still wins. This
+is the one exception to "a wake preempts only from a better level"
+above.
+
+**The cache FLUSH sleeps as well as the DMA.** Probed per syscall, the
+DMA waits totalled 1-2 ms per hundred commands; the stalls were CACHE
+FLUSH (0xE7), a host fsync under QEMU, 25-225 ms polled with interrupts
+off. It completes with the same IRQ14 and the bus-master IRQ bit reports
+it the same way, so it takes the same wait. The obvious reading of
+"make the disk wait sleep" was the DMA alone, and the DMA was never
+where the time was.
+
+What it did NOT fix is the convoy behind one global lock: a caller of
+the filesystem still waits one holder operation per call, which is why
+the compositor's config reads came off its frame path (next entry) and
+why `docs/fslock-design.md` exists.
+
+## The compositor's config is pushed, into the queue it already waits on
+
+The WM's pollers keyed on `fs_generation()`, one counter for every write
+in the machine, so a program writing to `/var/tmp` had the render loop
+re-reading `/etc` every frame -- and with a sleeping lock holder each of
+those reads queued ~17 ms. Now the settings registry pushes
+`WIN_EV_SETTING` on every generation bump, and `SYS_FS_WATCH` pushes
+`WIN_EV_FSWATCH` for a change at, or directly inside, a watched path.
+
+**Events on the compositor's existing queue, not an inotify descriptor.**
+inotify's shape is a readable fd, and the WM has no `poll()` over
+descriptors: it parks on its kernel event queue (`SYS_WAIT_READY`),
+which the kernel already uses for exactly this kind of fact --
+`WIN_EV_FONT`, `WIN_EV_SCREEN`. Windows delivers both halves the same
+way, as window messages (`WM_SETTINGCHANGE`, `SHChangeNotifyRegister`).
+The cost is that only the compositor can watch; a per-process
+descriptor is a roadmap item once there is a wait over more than one
+kind of object.
+
+**Matched by hash, and coalesced.** A watch stores the FNV-1a of its
+path and vfs.c hands over the hashes of the changed path and its
+parent, because a stepped write finishes with no path in hand and 16
+slots of a 4096-byte path would be 64 KiB of kernel data to avoid a
+collision whose only cost is a spurious reload. The queue keeps one
+pending event per watch and one SETTING, so a program writing all day
+costs one event, not a backlog that evicts input.
+
+**The fs generation is still there**, for a watch the kernel refused
+(the WM falls back to it and logs once) and for the other pollers that
+never ran on the frame path.

@@ -70,6 +70,7 @@
 #define PROC_WAIT_FUTEX  9 // a word in memory somebody will change
 #define PROC_WAIT_SIGNAL 10 // sigsuspend: any signal its mask lets through
 #define PROC_WAIT_LOCK   11 // a kernel lock another context holds
+#define PROC_WAIT_DISK   12 // a disk transfer it started -- Linux's D state
 
 struct proc_info {
     int32_t  pid;         // 0 means "this slot is empty"; see SYS_PROC_INFO

@@ -505,7 +505,10 @@ static int name_from_path(const char *path, char *out, uint32_t cap) {
     return 0;
 }
 
-int module_load(const char *path) {
+// `guard` holds preemption off around the LINK only, never the read:
+// the file read takes the filesystem lock, which a holder asleep in a
+// disk wait keeps -- and a guarded caller would spin behind it forever.
+static int load_path(const char *path, int guard) {
     char name[MODULE_NAME_MAX];
     if (!path || name_from_path(path, name, sizeof name)) return -EINVAL;
     uint64_t size = fs_size(path);
@@ -516,10 +519,16 @@ int module_load(const char *path) {
     uint32_t got = fs_read_into(path, buf, (uint32_t)size + 1);
     int rc;
     if (got != size) { klog_printf("module: %s: short read\n", path); rc = -EIO; }
-    else rc = module_load_image(name, buf, got);
+    else {
+        if (guard) scheduler_preempt_disable();
+        rc = module_load_image(name, buf, got);
+        if (guard) scheduler_preempt_enable();
+    }
     kfree(buf);
     return rc;
 }
+
+int module_load(const char *path) { return load_path(path, 0); }
 
 // --- boot: /etc/modules, then modules.alias against unclaimed devices ------
 
@@ -623,9 +632,7 @@ int sys_modload(struct syscall_ctx *c) {
         return 0;
     }
     // The registries have no locks; a load is short and rare.
-    scheduler_preempt_disable();
-    int rc = module_load(path);
-    scheduler_preempt_enable();
+    int rc = load_path(path, 1);
     c->regs[14] = (uint64_t)(int64_t)rc;
     return 0;
 }

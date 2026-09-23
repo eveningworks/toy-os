@@ -55,6 +55,14 @@ static int show(void) {
     sys_print((a.flags & QUERY_ATA_TRIM)
               ? "  TRIM: in use -- freed blocks are discarded to the host image\n"
               : "  TRIM: not supported by this drive\n");
+    // A DMA wait from a process SLEEPS and lets the machine run; one
+    // from the kernel itself still polls. Counting the first is what
+    // says the drive is not holding the desktop still.
+    if (a.flags & QUERY_ATA_DMA_ON) {
+        snprintf(line, sizeof line, "  waits that slept: %llu\n",
+                 (unsigned long long)a.dma_sleeps);
+        sys_print(line);
+    }
     return 0;
 }
 

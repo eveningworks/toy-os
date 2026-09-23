@@ -828,6 +828,10 @@ unsigned long long sys_monotonic_ns(void);
 // when it moves. Only ever increases, and is non-zero once a filesystem
 // is mounted, so 0 is safe as "not sampled yet".
 unsigned long long sys_fs_generation(void);
+// Watch `path` (and a directory's direct children) for the compositor:
+// a change posts WIN_EV_FSWATCH carrying the returned id. -EPERM from
+// anyone else. See SYS_FS_WATCH.
+int sys_fs_watch(const char *path);
 
 // Writes an MBR or GPT partition table to the disk. See
 // abi/partition_abi.h for the request shape and why this takes a table

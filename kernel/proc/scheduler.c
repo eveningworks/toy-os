@@ -125,8 +125,9 @@
 #include "strace.h"
 #include "uaddr.h"
 #include "clocksource.h" // CPU time is measured, not counted -- bill_current()
+#include "random_hw.h"   // arch_rdtsc() -- off-CPU time, see context_load_globals()
 #include "debug_console.h"
-#include "ata_cache.h" // the idle work scheduler_idle() owns
+#include "ata.h"       // ata_idle() -- the idle work scheduler_idle() owns
 #include "input.h"     // input_poll_sources() -- ditto, for a device with no IRQ
 #include "string.h" // k_strlcpy -- proc_name_from_path()
 #include <stddef.h>
@@ -252,6 +253,10 @@ struct sched_process {
     uint8_t parked_in_kernel;
     int preempt_depth;    // this context's scheduler_preempt_disable()
                           // nesting -- see g_preempt_depth
+    uint64_t offcpu_tsc;  // TSC ticks spent switched away, summed --
+                          // what a syscall timing subtracts, see
+                          // scheduler_offcpu_tsc()
+    uint64_t left_tsc;    // when it was last switched away; 0 = never
     int isr_depth;        // how deep this context is inside
                           // isr_dispatch() -- see idt.h's
                           // isr_depth_get(); travels with kernel_rsp
@@ -541,6 +546,7 @@ static int current_index = -1;    // -1 = kernel/shell in control, not
 static int scheduler_armed = 0;
 static int kernel_saved_isr_depth = 0; // the kernel slot's isr_depth_get()
 static int kernel_preempt_depth = 0;   // and its scheduler_preempt_depth()
+static uint64_t kernel_offcpu_tsc, kernel_left_tsc; // and its off-CPU time
 static struct kernel_context kernel_kctx; // and where the kernel context
                                           // itself is parked -- rip 0
                                           // until it has been left once
@@ -855,7 +861,8 @@ int scheduler_get_priority(int pid, int *value) {
 // A WAKE THAT OUTRANKS WHAT IS RUNNING asks for a switch on the way out
 // of the trap it happened in (scheduler_trap_exit()) -- Linux's
 // TIF_NEED_RESCHED. Only a STRICTLY better level: a wake at the same
-// level would preempt on every interrupt and give nothing back.
+// level would preempt on every interrupt and give nothing back. The one
+// exception is a context parked MID-CALL -- see g_wake_next.
 static int g_need_resched;
 
 // The level a wake has to beat: the running process's, or the kernel
@@ -879,6 +886,15 @@ static int runnable_at(int idx) {
 #define PRIO_LEVELS 40
 static uint8_t g_preempted[PRIO_LEVELS];
 
+// A CONTEXT WOKEN MID-CALL RUNS NEXT, within its level. It is inside a
+// syscall and usually holding something -- the filesystem lock, the
+// drive -- so every tick it waits READY is a tick everybody behind that
+// lock waits too; before this, each DMA completion cost the waiter up
+// to a whole slice behind a busy peer. CFS's wakeup preemption and
+// NEXT_BUDDY, and 4.4BSD's PRIBIO for the same reason. Never across
+// levels: a better-level process still goes first.
+static int g_wake_next = -1;
+
 static void note_preempted(int rot_idx, int prio) {
     if (prio >= PRIO_MIN && prio < PRIO_MIN + PRIO_LEVELS)
         g_preempted[prio - PRIO_MIN] = (uint8_t)(rot_idx + 1);
@@ -895,6 +911,12 @@ static int find_next_runnable(int start) {
     for (int idx = 0; idx < MAX_PROCS; idx++)
         if (runnable_at(idx) && procs[idx].prio < best) best = procs[idx].prio;
     if (kernel_slot_runnable() && 0 < best) best = 0;
+
+    if (g_wake_next >= 0) {
+        int n = g_wake_next;
+        g_wake_next = -1;
+        if (runnable_at(n) && procs[n].prio == best) return n;
+    }
 
     // Consulted once, used or not: a head that has since blocked or
     // exited is simply dropped.
@@ -1038,6 +1060,8 @@ static void proc_start_context(int slot, const uint64_t *tf) {
     procs[slot].isr_depth = 0;
     procs[slot].preempt_depth = 0;
     procs[slot].parked_in_kernel = 0;
+    procs[slot].offcpu_tsc = 0;
+    procs[slot].left_tsc = 0;
 }
 
 // WHO IS BEING SWITCHED AWAY FROM, PASSED IN RATHER THAN READ OFF
@@ -1091,11 +1115,21 @@ static void context_save_globals(int from) {
     int *preempt = from >= 0 ? &procs[from].preempt_depth : &kernel_preempt_depth;
     *depth = isr_depth_get();
     *preempt = g_preempt_depth;
+    *(from >= 0 ? &procs[from].left_tsc : &kernel_left_tsc) = arch_rdtsc();
 }
 
 static void context_load_globals(int to) {
     isr_depth_set(to >= 0 ? procs[to].isr_depth : kernel_saved_isr_depth);
     g_preempt_depth = to >= 0 ? procs[to].preempt_depth : kernel_preempt_depth;
+    uint64_t *left = to >= 0 ? &procs[to].left_tsc : &kernel_left_tsc;
+    uint64_t *off  = to >= 0 ? &procs[to].offcpu_tsc : &kernel_offcpu_tsc;
+    uint64_t now = arch_rdtsc();
+    if (*left && now > *left) *off += now - *left;
+    *left = 0;
+}
+
+uint64_t scheduler_offcpu_tsc(void) {
+    return current_index >= 0 ? procs[current_index].offcpu_tsc : kernel_offcpu_tsc;
 }
 
 static void switch_to(int from, int idx) {
@@ -1647,6 +1681,7 @@ static uint32_t reported_wait_reason(int reason) {
     case SCHED_WAIT_FUTEX: return PROC_WAIT_FUTEX;
     case SCHED_WAIT_SIGNAL: return PROC_WAIT_SIGNAL;
     case SCHED_WAIT_LOCK:  return PROC_WAIT_LOCK;
+    case SCHED_WAIT_DISK:  return PROC_WAIT_DISK;
     default:               return PROC_WAIT_NONE;
     }
 }
@@ -1993,6 +2028,12 @@ int scheduler_test_park(uint64_t *tf, const void *chan, int reason) {
     return -1;
 }
 
+void scheduler_test_park_deadline(int idx, uint64_t wake_at_ns, int in_kernel) {
+    if (idx < 0 || idx >= MAX_PROCS || procs[idx].state != SCHED_BLOCKED) return;
+    procs[idx].wake_at_ns = wake_at_ns;
+    procs[idx].parked_in_kernel = in_kernel ? 1 : 0;
+}
+
 int scheduler_test_pick(int start, int preempted) {
     if (preempted >= 0) note_preempted(preempted, procs[preempted].prio);
     return find_next_runnable(start);
@@ -2075,6 +2116,7 @@ const char *sched_wait_reason_name(int reason) {
     case SCHED_WAIT_FUTEX: return "futex";
     case SCHED_WAIT_SIGNAL: return "signal";
     case SCHED_WAIT_LOCK:  return "lock";
+    case SCHED_WAIT_DISK:  return "disk";
     default:               return "?";
     }
 }
@@ -2187,14 +2229,21 @@ int scheduler_wake_timers(uint64_t now_ns) {
         if (!procs[i].wake_at_ns) continue;   // parked with no deadline
         if (procs[i].wake_at_ns > now_ns) continue;
 
-        uint64_t *tf = (uint64_t *)(uintptr_t)procs[i].kernel_rsp;
         // SYS_SLEEP asked for exactly this and returns 0. Anything else
         // was waiting for an EVENT that did not come, so its handler
         // has to look again and decide -- it is the only code that
         // knows whether an empty queue at the deadline is a timeout or
         // a spurious wake.
-        tf[TF_RAX] = procs[i].wait_chan == SCHED_CHAN_TIMER
-                     ? 0 : (uint64_t)(int64_t)SYS_RETRY;
+        //
+        // NOT for a context parked MID-CALL: its kernel_rsp is the
+        // trapframe of a call still in progress, and its own C code
+        // re-tests the condition on return -- the same rule
+        // scheduler_wake_n() keeps.
+        if (!procs[i].parked_in_kernel) {
+            uint64_t *tf = (uint64_t *)(uintptr_t)procs[i].kernel_rsp;
+            tf[TF_RAX] = procs[i].wait_chan == SCHED_CHAN_TIMER
+                         ? 0 : (uint64_t)(int64_t)SYS_RETRY;
+        }
         procs[i].wake_at_ns = 0;
         procs[i].state = SCHED_READY;
         woken++;
@@ -2240,6 +2289,10 @@ int scheduler_wake(const void *chan, int64_t value) {
 // the park is otherwise lost, and this one has no ring-3 retry loop
 // underneath it to paper over that.
 int scheduler_block_kernel(const void *chan, int reason) {
+    return scheduler_block_kernel_until(chan, reason, 0);
+}
+
+int scheduler_block_kernel_until(const void *chan, int reason, uint64_t wake_at_ns) {
     if (current_index < 0) return 0;
     // **AND NOT WHILE THE PREEMPTION GUARD IS RAISED**, which is
     // Linux's "you cannot sleep holding a spinlock". The guard is what
@@ -2268,7 +2321,7 @@ int scheduler_block_kernel(const void *chan, int reason) {
     procs[idx].parked_in_kernel = 1;
     trace_sched("block_kernel", idx);
     procs[idx].wait_chan = chan;
-    procs[idx].wake_at_ns = 0;   // unbounded -- see block_common()
+    procs[idx].wake_at_ns = wake_at_ns;   // 0 = unbounded
     procs[idx].wait_reason = reason;
     current_index = -1;
 
@@ -2279,6 +2332,35 @@ int scheduler_block_kernel(const void *chan, int reason) {
     // Resumed, on our own stack, with every frame below us intact.
     procs[idx].parked_in_kernel = 0;
     return 1;
+}
+
+// One BLOCKED slot, made READY and answered -- the half of a wake that
+// acts on a parked process, shared by every way of choosing one.
+static void wake_slot(int i, int64_t value) {
+    // The saved trapframe's RAX slot IS the syscall's return value:
+    // isr_common's epilogue pops it straight into the register the
+    // ring-3 caller reads. Writing it here is what makes waking a
+    // process and answering its syscall the same act.
+    // ...but only for a process parked at a syscall ENTRY. One
+    // parked mid-call resumes its own C frames and computes its
+    // own answer, and its trapframe belongs to a call that has not
+    // finished -- writing a return value into it would be
+    // answering a question nobody asked.
+    if (!procs[i].parked_in_kernel) {
+        uint64_t *tf = (uint64_t *)(uintptr_t)procs[i].kernel_rsp;
+        tf[TF_RAX] = (uint64_t)value;
+    }
+    // The wait is over, so its deadline is too. Leaving it set
+    // would have the next timer tick "release" a process that is
+    // already running -- overwriting the RAX of whatever syscall it
+    // had reached by then.
+    procs[i].wake_at_ns = 0;
+    procs[i].state = SCHED_READY;
+    if (procs[i].prio < running_prio()) g_need_resched = 1;
+    if (procs[i].parked_in_kernel && procs[i].prio <= running_prio()) {
+        g_need_resched = 1;
+        g_wake_next = i;
+    }
 }
 
 int scheduler_wake_n(const void *chan, int64_t value, int max) {
@@ -2319,20 +2401,22 @@ int scheduler_wake_n(const void *chan, int64_t value, int max) {
         // own answer, and its trapframe belongs to a call that has not
         // finished -- writing a return value into it would be
         // answering a question nobody asked.
-        if (!procs[i].parked_in_kernel) {
-            uint64_t *tf = (uint64_t *)(uintptr_t)procs[i].kernel_rsp;
-            tf[TF_RAX] = (uint64_t)value;
-        }
-        // The wait is over, so its deadline is too. Leaving it set
-        // would have the next timer tick "release" a process that is
-        // already running -- overwriting the RAX of whatever syscall it
-        // had reached by then.
-        procs[i].wake_at_ns = 0;
-        procs[i].state = SCHED_READY;
-        if (procs[i].prio < running_prio()) g_need_resched = 1;
+        wake_slot(i, value);
         woken++;
     }
     return woken;
+}
+
+int scheduler_wake_one(const void *chan) {
+    if (!chan) return 0;
+    int pick = -1;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].state != SCHED_BLOCKED || procs[i].wait_chan != chan) continue;
+        if (pick < 0 || procs[i].prio < procs[pick].prio) pick = i;
+    }
+    if (pick < 0) return 0;
+    wake_slot(pick, 0);
+    return pick + 1;
 }
 
 // A CHILD HAS GONE: wake a parent parked in waitpid, and tell it.
@@ -3647,6 +3731,18 @@ int scheduler_kill(int pid, int exit_code) {
     if (procs[slot].state != SCHED_READY && procs[slot].state != SCHED_BLOCKED)
         return 0; // unused, already a zombie, or running (handled above)
 
+    // **PARKED MID-CALL, IT DIES ON THE WAY OUT, NOT HERE** -- Linux's D
+    // state. Its C frames may hold the filesystem lock across a disk
+    // wait, and zombifying it now abandons them with the lock taken:
+    // every later file call in the machine then waits forever. So the
+    // kill becomes a pending SIGKILL, delivered on its return to ring 3
+    // once the call completes. (A deferred kill reports SIGKILL whatever
+    // `exit_code` said; the one that matters, Force Quit's, already is.)
+    if (procs[slot].state == SCHED_BLOCKED && procs[slot].parked_in_kernel) {
+        procs[slot].stopped = 0;   // it must be able to finish the call
+        return scheduler_signal_raise(pid, SIGKILL);
+    }
+
     // A STOPPED PROCESS IS STILL KILLABLE, which is the reason SIGKILL
     // is exempt from suspension everywhere: a job suspended by Ctrl-Z
     // must not be unkillable until somebody resumes it. The flag is
@@ -3778,8 +3874,9 @@ void scheduler_idle(void) {
     // idle timer" half of the flush policy -- the dirty-line threshold
     // bounds how much can accumulate, this bounds how LONG it can sit
     // there, so a machine nobody is touching ends up with its writes on
-    // the platter rather than waiting for the next barrier.
-    atac_idle();
+    // the platter rather than waiting for the next barrier. Through
+    // ata.c, which skips the round if the drive is busy.
+    ata_idle();
     // ...and the same half of the policy for a FILESYSTEM that is
     // holding a journal transaction open (storage.sync = batched). The
     // slot ceiling bounds how much accumulates; this bounds how long,

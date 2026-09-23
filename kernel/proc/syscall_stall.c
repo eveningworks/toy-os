@@ -5,10 +5,10 @@
 // the whole handler, so while it runs no other process is scheduled, no
 // timer tick lands and a compositor parked on a frame deadline simply
 // wakes late -- which is what `gui latency`'s wake distribution counts
-// from the other end. A syscall that PARKS its caller still returns here
-// promptly (scheduler_block_current() marks the slot and returns; the
-// switch happens on the way out of the trap), so a blocking call
-// contributes the work it did, not the time its caller slept.
+// from the other end. A syscall that PARKS its caller suspends INSIDE
+// the handler (a switch moves the CPU on the spot), so end() subtracts
+// the time the context spent switched away: a blocking call contributes
+// the work it did, not the time its caller slept.
 //
 // **IT TIMES WITH rdtsc, NOT WITH clocksource_now_ns(), AND THAT IS THE
 // WHOLE REASON THIS FILE HAS A CLOCK OF ITS OWN.** The default
@@ -30,6 +30,7 @@
 #include "random_hw.h" // arch_rdtsc()
 #include "cpuinfo.h"
 #include "klog.h"
+#include "scheduler.h" // scheduler_offcpu_tsc() -- a parked handler held nothing
 #include "string.h"
 #include <stddef.h>
 
@@ -37,10 +38,13 @@ static int g_on;
 static uint32_t g_mhz;  // TSC ticks per microsecond; 0 until armed
 static struct syscall_stall_info g_stall[SYSCALL_STALL_MAX];
 
-uint64_t syscall_stall_begin(void) {
-    if (!g_on) return 0;
+struct syscall_stall_mark syscall_stall_begin(void) {
+    struct syscall_stall_mark m = { 0, 0 };
+    if (!g_on) return m;
     uint64_t t = arch_rdtsc();
-    return t ? t : 1; // 0 is the "not armed" sentinel
+    m.t0 = t ? t : 1; // 0 is the "not armed" sentinel
+    m.off0 = scheduler_offcpu_tsc();
+    return m;
 }
 
 void syscall_stall_record_us(int nr, uint64_t us) {
@@ -54,15 +58,19 @@ void syscall_stall_record_us(int nr, uint64_t us) {
     s->bucket[b]++;
 }
 
-void syscall_stall_end(int nr, uint64_t t0) {
+void syscall_stall_end(int nr, struct syscall_stall_mark m) {
+    uint64_t t0 = m.t0;
     if (!t0) return;
     uint64_t now = arch_rdtsc();
+    uint64_t away = scheduler_offcpu_tsc() - m.off0;
     // A backwards delta is not a measurement. It should not happen on
     // one core, and treating a wrapped or migrated read as an enormous
     // stall would put a bogus row at the top of the report -- which is
     // the one row anybody reads.
     if (now <= t0) return;
-    syscall_stall_record_us(nr, (now - t0) / g_mhz);
+    uint64_t held = now - t0;
+    held = away < held ? held - away : 0;
+    syscall_stall_record_us(nr, held / g_mhz);
 }
 
 void syscall_stall_reset(void) {

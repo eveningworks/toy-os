@@ -3979,13 +3979,14 @@ KTEST("fs", "deleting a big file discards it in ONE trim call, not one per run")
         wrote = fs_write_range(path, off, buf, sizeof buf);
     int synced = wrote && fs_sync(0);
 
-    // Nothing else may TRIM between the two reads.
-    scheduler_preempt_disable();
+    // Nothing else may TRIM between the two reads -- the lock, not the
+    // preemption guard, since a TRIM in flight may be asleep holding it.
+    fs_exclusive_begin();
     uint64_t before = 0, after = 0, sectors0 = 0, sectors1 = 0;
     blk_stat_get(BLK_STAT_TRIM, &before, &sectors0, NULL, NULL);
     int deleted = fs_delete(path) && fs_sync(0);
     blk_stat_get(BLK_STAT_TRIM, &after, &sectors1, NULL, NULL);
-    scheduler_preempt_enable();
+    fs_exclusive_end();
 
     KTEST_ASSERT(wrote == 1);
     KTEST_ASSERT(synced == 1);

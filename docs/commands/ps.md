@@ -49,7 +49,10 @@ line, which is the same reason `pstree` has an `-A` mode at all.
 
 **The STATE column says what a blocked process is waiting FOR** --
 `block(pipe)`, `block(key)`, `block(child)`, `block(timer)`,
-`block(event)`, `block(futex)`, `block(signal)`. A process listing where
+`block(event)`, `block(futex)`, `block(signal)`, `block(lock)` (a kernel
+lock another process holds) and `block(disk)` (a disk transfer it
+started -- Linux's `D` state, and like it, a kill waits for the transfer
+to finish). A process listing where
 half the machine reads `block` tells you nothing; those words are the
 difference between "waiting for input that is never coming" and "waiting
 for a child that has already exited". Linux puts this in a separate

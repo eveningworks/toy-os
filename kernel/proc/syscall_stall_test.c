@@ -84,9 +84,9 @@ KTEST("syscall_stall", "begin() reads no clock while disarmed") {
     // The sentinel IS the contract: a 0 from begin() is what end()
     // tests, so a disarmed begin() returning a real timestamp would
     // start recording without the tunable ever being set.
-    KTEST_ASSERT_EQ((int)syscall_stall_begin(), 0);
+    KTEST_ASSERT(syscall_stall_begin().t0 == 0);
     syscall_stall_set(1);
-    KTEST_ASSERT(syscall_stall_begin() != 0);
+    KTEST_ASSERT(syscall_stall_begin().t0 != 0);
     syscall_stall_set(0);
     syscall_stall_set(was_on);
 }

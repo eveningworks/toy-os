@@ -133,6 +133,11 @@ void mount_leave(const struct mount *m, void *prev) {
     if (m && m->fs->state_activate) m->fs->state_activate(prev);
 }
 
+// **EVERY SWAP OF A BACKEND'S LIVE STATE HOLDS THE FILESYSTEM LOCK.**
+// A context asleep inside an FS_OP (a disk wait) resumes on whatever
+// state is active; a probe or a mount that repointed it meanwhile would
+// hand that walk another volume's state. Recursive, so a probe run from
+// inside an FS_OP nests.
 int mount_scratch_begin(const struct fs_ops *fs, struct fs_scratch *sc) {
     sc->fs = fs;
     sc->st = NULL;
@@ -140,6 +145,7 @@ int mount_scratch_begin(const struct fs_ops *fs, struct fs_scratch *sc) {
     if (!fs->state_alloc) return 1;   // a backend with no state needs none
     void *st = fs->state_alloc();
     if (!st) return 0;
+    fs_exclusive_begin();             // released by mount_scratch_end()
     sc->prev = fs->state_activate(st);
     sc->st = st;
     return 1;
@@ -150,6 +156,7 @@ void mount_scratch_end(struct fs_scratch *sc) {
     sc->fs->state_activate(sc->prev);
     if (sc->st) sc->fs->state_free(sc->st);
     sc->st = NULL;
+    fs_exclusive_end();
 }
 
 // Is a backend already mounted somewhere, and how many times? A
@@ -324,9 +331,11 @@ int mount_add(const struct block_device *dev, const char *fstype,
         if (!state) { *why = "out of memory"; return 0; }
     }
 
+    fs_exclusive_begin();   // the swap -- see mount_scratch_begin()
     void *prev = chosen->state_activate ? chosen->state_activate(state) : NULL;
     int r = chosen->init(dev, size_bytes);
     if (chosen->state_activate) chosen->state_activate(prev);
+    fs_exclusive_end();
     if (r < 0) {
         if (state) chosen->state_free(state);
         *why = "the filesystem would not mount";
@@ -352,12 +361,24 @@ static int has_open_files(const struct mount *m) {
     return 0;
 }
 
+static int remove_locked(const char *point, const char **why);
+
 int mount_remove(const char *point, const char **why) {
     static const char *dummy;
     if (!why) why = &dummy;
     *why = "";
 
     if (!point) { *why = "no mount point given"; return 0; }
+    // HELD FOR THE WHOLE REMOVAL, so no backend call is mid-flight on
+    // this mount while it is torn down; one that resolved it earlier
+    // finds it gone once it gets the lock (vfs.c's FS_OP).
+    fs_exclusive_begin();
+    int ok = remove_locked(point, why);
+    fs_exclusive_end();
+    return ok;
+}
+
+static int remove_locked(const char *point, const char **why) {
     struct mount *m = find_point(point);
     if (!m) { *why = "nothing is mounted there"; return 0; }
     if (m->point_len == 1) { *why = "the root filesystem cannot be unmounted"; return 0; }

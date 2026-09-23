@@ -16,7 +16,7 @@
 #include "kfmt.h" // klog_printf
 #include <stddef.h>
 #include "initcall.h"
-#include "scheduler.h" // preempt guard -- see provider_fill() below
+#include "kmutex.h"   // the readers' lock -- see provider_fill() below
 
 
 // ---- calling a provider ----------------------------------------------
@@ -28,24 +28,31 @@
 // refuses on the stack. Both said "safe: the kernel is single-threaded"
 // -- true only while a syscall could not be preempted.
 //
-// Guarded HERE, not in each provider, for the reason vfs.c's FS_OP()
+// Locked HERE, not in each provider, for the reason vfs.c's FS_OP()
 // gives: this is the one place every caller passes through, so a
-// provider added later is covered without knowing it had to be. The
-// sections are short and bounded by QUERY_RECORD_MAX.
+// provider added later is covered without knowing it had to be.
+//
+// **A LOCK, NOT THE PREEMPTION GUARD, because a provider may SLEEP.**
+// fsinfo asks the filesystem for usage, and the filesystem lock's
+// holder may be asleep in a disk wait -- so under the guard `df` spun
+// forever behind it. A reader-vs-reader lock is all the file-scope
+// state above ever needed.
 //
 // Nesting is fine and happens: QUERY_PROVIDERS' own fill() asks every
-// other provider for its count, so the guard is a depth counter.
+// other provider for its count, and the lock is recursive.
+static struct kmutex g_query_lock;
+
 static int provider_fill(const struct query_provider *p, int index, void *out) {
-    scheduler_preempt_disable();
+    kmutex_lock(&g_query_lock);
     int ok = p->fill(index, out);
-    scheduler_preempt_enable();
+    kmutex_unlock(&g_query_lock);
     return ok;
 }
 
 static uint32_t provider_count(const struct query_provider *p) {
-    scheduler_preempt_disable();
+    kmutex_lock(&g_query_lock);
     uint32_t n = (uint32_t)(p->count ? p->count() : 1);
-    scheduler_preempt_enable();
+    kmutex_unlock(&g_query_lock);
     return n;
 }
 

@@ -15,6 +15,8 @@
 #include "caltime.h"
 #include "string.h"
 #include "tz.h"
+#include "fswatch.h"  // SYS_FS_WATCH
+#include "win_role.h" // ...which only the compositor may call
 #include "kpath.h"    // k_path_resolve() -- one resolution rule, kernel-side
 #include "kpath_buf.h" // a path is 4096 now and may not be a kernel local
 #include "scheduler.h" // struct sched_cwd -- the per-process current directory
@@ -369,6 +371,22 @@ int sys_listdir_at(struct syscall_ctx *c) {
         return 0;
     }
     return listdir_common(c, req.path, req.entries, req.max, req.start);
+}
+
+int sys_fs_watch(struct syscall_ctx *c) {
+    // The COMPOSITOR's: the event lands on the kernel's one event
+    // queue, which is its (abi/syscall_abi.h).
+    if (scheduler_current_tgid() != win_server_compositor_pid()) {
+        c->regs[14] = (uint64_t)(int64_t)-EPERM;
+        return 0;
+    }
+    char *path = kpath_get();
+    if (!path) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
+    int rc = resolve_user_path(c->pml4, c->a0, path);
+    if (!rc) rc = fswatch_add(scheduler_current_tgid(), path);
+    kpath_put(path);
+    c->regs[14] = (uint64_t)(int64_t)rc;
+    return 0;
 }
 
 int sys_fs_generation(struct syscall_ctx *c) {

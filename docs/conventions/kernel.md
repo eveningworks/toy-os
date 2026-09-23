@@ -4441,3 +4441,44 @@ developer makes while testing on an idle machine. The thumb buttons are
 what exposed it, because a thumb tap is short -- see `docs/decisions.md`,
 "A pointer button is an edge, not a level", including why no QEMU guest
 reproduces the loss.
+
+## A KMUTEX IS NEVER TAKEN FROM A CONTEXT THAT CAN NEITHER SLEEP NOR BE ROTATED AWAY
+
+The filesystem lock's holder can sleep in a disk wait (`ata.c`), so a
+contender that cannot sleep and cannot be preempted -- the preemption
+guard raised, or interrupts off with no scheduler slot -- spins behind
+it for the rest of the boot. The race is rare and the call site is not,
+so `kmutex_lock()` reports such a take on ENTRY, contended or not:
+`kmutex: ... taken from atomic context ... at <addr>`, once per site.
+That is Linux's `might_sleep()` under `CONFIG_DEBUG_ATOMIC_SLEEP`.
+
+The fix is always to make the path stop being atomic, never to make the
+lock spin smarter: read the file BEFORE raising a guard (`sys_modload`),
+give a registry its own sleeping lock rather than the guard (the query
+registry), or hold the filesystem lock itself with
+`fs_exclusive_begin()`/`_end()` where the guard was standing in for it
+(the partition syscalls, a tfs3 KTEST, the legacy loader's whole run).
+`kmutex_trylock()` is for a caller with somewhere better to be (the idle
+write-back) and never blocks.
+
+## A DRIVER WHOSE WAIT SLEEPS SERIALISES ITS OWN HARDWARE WITH ITS OWN LOCK
+
+Once a command wait parks the caller, something else runs while the
+command is on the wire, and the filesystem lock does not stop it
+reaching the drive -- the idle write-back, a raw partition write and a
+diagnostic all come in BELOW it. So the driver takes a kmutex at every
+public entry that touches the device (`g_ata_lock`, `g_ahci_lock`,
+virtio-blk's `g_blk_lock`), held across the sleep. Linux's old IDE layer
+did the same per channel (`hwgroup->busy`). A busy FLAG that fails the
+second caller is not this: it turns a wait into an I/O error.
+
+## A CONTEXT PARKED MID-CALL DIES ON ITS WAY OUT, NOT WHERE IT SLEEPS
+
+`scheduler_kill()` of a process parked inside kernel code (a disk wait,
+a kmutex) raises a pending SIGKILL instead of zombifying it -- Linux's
+D state. Its C frames may hold the filesystem lock, and abandoning them
+leaks it: every later file call in the machine waits forever. The
+signal is delivered on the return to ring 3 once the call completes, so
+the process finishes its I/O and then dies. **A thread GROUP is not
+covered**: a sibling parked mid-call when the group exits is released
+where it stands (`docs/bugs.md`).

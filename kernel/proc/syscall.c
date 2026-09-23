@@ -145,10 +145,10 @@ void syscall_dispatch(uint64_t *regs) {
     // interrupts off and therefore the stall everything else feels.
     // Disarmed this is one global compare; armed it is two clocksource
     // reads (kernel/syscall_stall.h says what that costs).
-    uint64_t stall_t0 = syscall_stall_begin();
+    struct syscall_stall_mark stall = syscall_stall_begin();
     if (d && d->fn) blocked = d->fn(&c);
     else c.regs[14] = (uint64_t)(int64_t)-ENOSYS;
-    syscall_stall_end((int)nr, stall_t0);
+    syscall_stall_end((int)nr, stall);
 
     // Diagnostic only, and a no-op unless `kstack track on` armed it.
     // Here rather than at entry because the point is how deep the

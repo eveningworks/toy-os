@@ -56,10 +56,10 @@ static int fsinfo_fill(int index, void *out) {
     // report the root's numbers under the ESP's name.
     //
     // THROUGH fs_mount_usage(), NOT `m->fs->disk_usage()` DIRECTLY. The
-    // direct call is one line shorter and skips vfs.c's preemption
-    // guard, and the backends are not re-entrant -- a provider read
-    // preempted inside a FAT chain walk is exactly the corruption that
-    // guard exists to stop. Correct as to WHICH volume because a
+    // direct call is one line shorter and skips vfs.c's filesystem
+    // lock, and the backends are not re-entrant -- a provider read
+    // interleaved with a FAT chain walk is exactly the corruption that
+    // lock exists to stop. Correct as to WHICH volume because a
     // backend is mounted exactly once (fs_ops.max_mounts).
     uint64_t used = 0, total = 0;
     if (fs_mount_usage(m, &used, &total)) {

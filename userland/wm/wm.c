@@ -23,6 +23,7 @@
 // screen, which is what makes the other common case -- the mouse moving
 // with nothing else changing -- cheap without needing real dirty-rect
 // tracking of the scene: see wm_render_cursor_move() in wm_render.c.
+#include "wm/wm_watch.h" // the config pollers' change counters
 #include <stdlib.h>   // free: the client widget map
 #include "wm_internal.h"
 #include "wm_shadow.h"
@@ -694,21 +695,13 @@ void close_window(int idx) {
 // ---- live reload of /usr/wm/applications ----
 //
 // Drop a .desktop file in and it appears, the way KDE and Explorer watch
-// their desktop folders. There is no inotify here, so the mechanism is
-// sys_fs_generation() (api/fs.h): a counter the VFS bumps on every change to
-// the filesystem.
-//
-// **The idle cost is one integer compare per frame and no I/O at all.**
-// That is the entire reason the counter exists rather than this
-// re-listing the directory on a timer -- a timer would mean a real disk
-// read every few seconds forever on a machine doing nothing, which is
-// the opposite of subtle.
-//
-// The counter is global, so any filesystem change wakes this, not just
-// one in /usr/wm/applications. A Notepad save costs one small directory read
-// and finds nothing changed. That is the deliberate trade: per-path
-// watches would need a registry, a lifetime and an eviction policy to
-// save a read that only happens when something already changed.
+// their desktop folders -- through a kernel WATCH on the directory
+// (wm_watch.h), so the counter compared here moves only when something
+// in /usr/wm/applications changed. The idle cost is one integer compare
+// per frame and no I/O at all. It was the global fs generation, which
+// every write anywhere moved; under a disk-heavy program that put a
+// directory read on the render path every 500 ms, queued behind the
+// program's disk wait for the filesystem lock.
 static void poll_desktop_entries(void) {
     static uint64_t seen_gen;
     static uint64_t quiet_until;
@@ -719,11 +712,11 @@ static void poll_desktop_entries(void) {
     // directory.
     if (!primed) {
         primed = 1;
-        seen_gen = sys_fs_generation();
+        seen_gen = wm_watch_gen(WM_TOPIC_APPS);
         return;
     }
 
-    uint64_t gen = sys_fs_generation();
+    uint64_t gen = wm_watch_gen(WM_TOPIC_APPS);
     if (gen == seen_gen) return; // the common case, and it is free
 
     // Never mid-interaction. The selection, the armed click and the drag
@@ -754,11 +747,11 @@ static void poll_desktop_entries(void) {
 
     seen_gen = gen;
 
-    // sys_fs_generation() is GLOBAL: it moves for a write anywhere, and
-    // almost every one of them is not a .desktop file. Ask the cheap
-    // question first -- one directory listing, no file reads -- so
-    // saving a setting stops costing a full re-read of every entry.
-    // That re-read froze the desktop for 2.5s under KVM.
+    // A change in the directory is not necessarily a new entry (and the
+    // fallback, when the watch was refused, is the global generation).
+    // Ask the cheap question first -- one directory listing, no file
+    // reads -- before re-reading every entry, which froze the desktop
+    // for 2.5 s under KVM.
     static uint64_t seen_fp;
     static int fp_primed;
     uint64_t fp = gui_apps_dir_fingerprint();
@@ -862,6 +855,7 @@ void wm_run(void) {
         sys_eprint("wm: cannot enter GUI mode -- compositor role refused\n");
         return;
     }
+    wm_watch_init();   // the kernel only takes watches from the compositor
     if (!ugfx_screen_init(&g_wm_screen)) {
         sys_eprint("wm: cannot enter GUI mode -- no framebuffer grant "
                    "(not the compositor, unsupported pixel format, or no "

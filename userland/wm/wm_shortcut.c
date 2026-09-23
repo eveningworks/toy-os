@@ -12,6 +12,7 @@
 // settings registry and re-read when the filesystem generation moves --
 // the same poll the wallpaper and the taskbar already use, because a
 // compositor is a process and has no other way to hear about a write.
+#include "wm/wm_watch.h" // wm_shortcut_poll()'s change counter
 #include "wm_internal.h"
 #include "wm_shortcut.h"
 #include "keycombo.h"
@@ -73,7 +74,7 @@ static void parse_value(const char *value, struct bound *out) {
 void wm_shortcut_poll(void) {
     static uint64_t seen;
     static int primed;
-    uint64_t gen = sys_fs_generation();
+    uint64_t gen = wm_watch_config_gen();
     if (!primed) { primed = 1; seen = gen; return; }
     if (gen == seen) return;
     seen = gen;

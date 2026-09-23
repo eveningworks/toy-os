@@ -221,6 +221,11 @@ they need are what's left:
 
 ### Storage hardening
 
+**`rename()` that replaces its destination atomically.** TFS3, FAT32 and ramfs all refuse an existing destination ("destination taken"), so a program publishing a file others read does it in three steps -- write `x.new`, move `x` to `x.old`, rename `x.new` to `x` -- and a reader in the gap finds no file at all. `tftpd` and init's status file (2026-09-23, after `service` read it half-written) both carry the dance. POSIX `rename(2)` replaces in one step, and the journal already stages a rename's two inodes in one transaction, so the backend change is removing the refusal and freeing the displaced inode inside that transaction.
+
+**Path watches for any process, not just the compositor.** `SYS_FS_WATCH` (2026-09-23) exists so the desktop stops polling the disk, and its event goes to the kernel's one event queue -- the compositor's. System Settings and the File Manager still poll on timers. The general shape is inotify's: a watch table per descriptor and a `read()` that returns records, which needs a readiness wait over more than one kind of object first.
+
+
 `root=` on the boot line -- `kernel/fs/vfs.c`'s `try_partitions()` mounts
 the FIRST partition any volume-relative backend claims, minus the ones
 whose GPT type says they are the firmware's. That is unambiguous while
@@ -1742,6 +1747,9 @@ Four pieces, roughly independent:
 
 ### AHCI/SATA driver
 
+**AHCI's command wait sleeps, as `ata.c`'s does.** `ata.c`'s DMA and cache-flush waits park the caller on IRQ14 since 2026-09-23; AHCI's `wait_command()` still busy-polls PxCI with interrupts off when called from a syscall, which on the ASUS is every flush -- measured at 0.66-3.3 ms on its SSD (`docs/pagecache-design.md`). The same `scheduler_block_kernel_until()` and a wake from the port's interrupt handler; the driver already has its own lock (`g_ahci_lock`) to hold across the sleep.
+
+
 **BUILT** -- `kernel/drivers/ahci.c` and `kernel/drivers/block/block_ahci.c`.
 A SATA drive behind a host bus adapter carries the root filesystem, with
 DMA transfers and interrupt-driven completion, on
@@ -2989,7 +2997,9 @@ existing.
 
 - [ ] **Two scheduling classes, Linux-shaped.** A compositor should outrank a background demo; today they are peers, which is why an actively-working app measurably degrades the desktop. Classes queried in priority order (realtime-ish, then normal), NOT a plugin interface -- see the Details entry for why.
 
-- [ ] **Replace the preemption guard with a real sleeping lock.** `scheduler_preempt_disable()` (added 2026-08-17) is a blunt critical section: correct, and it blocks EVERY process for the duration of a filesystem operation. A lock that sleeps the contender is the right shape once there is a wait queue to sleep it on.
+- [x] ~~**Replace the preemption guard with a real sleeping lock.**~~ DONE 2026-09-18 (69c02656), and its payoff landed 2026-09-23 when `ata.c`'s DMA and cache-flush waits started sleeping under it. What that took, and the convoy it exposed, is `docs/blocking-design.md`'s "What stage 2 found".
+
+- [ ] **Finer filesystem locking.** Measured 2026-09-23 under KVM: with the holder of the ONE filesystem lock asleep in a disk wait, the compositor queued ~17 ms per fs call behind `diskbench`, and dozens of calls a frame made 0.6-1.7 s frames. Pushed config took the WM's frame path off the disk, which is most of the win, but any fs call anywhere still waits one holder operation. `docs/fslock-design.md` is the staged plan -- explicit mount state, per-op scratch, then a journal with handles and an inode table carrying a per-inode lock -- and says why the batched transaction is the risk.
 
 - [ ] **Bound how long a frame can block on I/O.** Related but separate: see the "Get blocking disk I/O out of the WM's event loop" item under Known issues.
 

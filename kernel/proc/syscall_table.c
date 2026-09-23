@@ -183,6 +183,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_LISTEN]        = { "listen",        sys_listen,        { A_FD } },
     [SYS_ACCEPT]        = { "accept",        sys_accept,        { A_FD, A_HEX } },
     [SYS_WAIT_READY]    = { "wait_ready",    sys_wait_ready,    { A_INT } },
+    [SYS_FS_WATCH]      = { "fs_watch",      sys_fs_watch,      { A_PATH } },
     // 91 was SYS_WIN_CLIP, the kernel's clipboard. The clipboard is a
     // ring-3 service over shared memory now (userland/lib/uclip_page.h);
     // the number is refused rather than reused.

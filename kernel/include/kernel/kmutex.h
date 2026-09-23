@@ -29,6 +29,8 @@ struct kmutex {
     int owned;   // whether `owner` means anything -- pid 0 is the
                  // KERNEL context, a real owner, so it cannot double as
                  // "nobody"
+    int handed;  // an unlock GAVE it to `owner`, which is still parked
+                 // and has not resumed to claim it -- see kmutex_unlock()
 };
 
 // Blocks until the lock is held. A caller with a scheduler slot and no
@@ -47,6 +49,16 @@ struct kmutex {
 // worked from becoming a hang.
 void kmutex_lock(struct kmutex *m);
 void kmutex_unlock(struct kmutex *m);
+
+// Takes it only if that needs no wait (free, or already ours). 1 if
+// held now. For a caller that has somewhere better to be -- an idle
+// write-back -- and never blocks, so it is safe from any context.
+int kmutex_trylock(struct kmutex *m);
+
+// How many kmutex_lock() calls came from a context that could neither
+// sleep nor be rotated away (kmutex.c's might_sleep()). Each distinct
+// call site is also logged once. For a test; the log is the diagnostic.
+unsigned kmutex_atomic_takes(void);
 
 // For a diagnostic, and for an assertion in a test. Never a decision.
 int kmutex_held(const struct kmutex *m);

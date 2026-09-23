@@ -16,6 +16,7 @@
 // direction of desc[1] wrong is the mistake worth watching for: a read
 // whose data buffer is not marked device-writable completes normally
 // and silently returns whatever the buffer already held.
+#include "kmutex.h" // one request at a time -- see g_blk_lock
 #include "virtio.h"
 #include "virtio_blk.h"
 #include "block.h"
@@ -91,12 +92,11 @@ static int g_readonly = 0;
 static uint64_t g_capacity = 0;   // 512-byte sectors, as the device reports
 static uint32_t g_max_xfer = 128; // sectors per transfer
 
-// Not a lock -- there is no lock primitive in this kernel. It makes a
-// re-entrant call FAIL rather than corrupt the ring: outside syscall
-// context interrupts are on and the scheduler can preempt between
-// submit and poll, and two requests interleaving through one shared
-// header would produce silently wrong data.
-static int g_busy = 0;
+// ONE REQUEST AT A TIME, through the one shared header and status byte:
+// two interleaving would produce silently wrong data. A LOCK, so a
+// second caller WAITS -- it was a busy flag that made the second one
+// fail, from before this kernel had a lock primitive (kmutex.h).
+static struct kmutex g_blk_lock;
 
 int virtio_blk_present(void) { return g_present; }
 int virtio_blk_max_sectors_per_xfer(void) { return (int)g_max_xfer; }
@@ -114,12 +114,17 @@ uint32_t virtio_blk_sector_count(void) {
 }
 
 // The one request path. `data` may be NULL for a FLUSH.
+static int request_locked(uint32_t type, uint64_t sector, void *data, uint32_t len, int device_writes);
+
 static int do_request(uint32_t type, uint64_t sector, void *data, uint32_t len, int device_writes) {
     if (!g_present) return 0;
-    if (g_busy) {
-        klog_write(KLOG_ERR "virtio-blk: re-entrant request refused\n");
-        return 0;
-    }
+    kmutex_lock(&g_blk_lock);
+    int r = request_locked(type, sector, data, len, device_writes);
+    kmutex_unlock(&g_blk_lock);
+    return r;
+}
+
+static int request_locked(uint32_t type, uint64_t sector, void *data, uint32_t len, int device_writes) {
 
     // The device DMAs straight into the caller's buffer -- no bounce
     // buffer, because kernel memory is identity-mapped and therefore a
@@ -130,8 +135,6 @@ static int do_request(uint32_t type, uint64_t sector, void *data, uint32_t len, 
         klog_write(KLOG_ERR "virtio-blk: buffer outside the identity map refused\n");
         return 0;
     }
-
-    g_busy = 1;
 
     g_hdr.type = type;
     g_hdr.reserved = 0;
@@ -160,14 +163,12 @@ static int do_request(uint32_t type, uint64_t sector, void *data, uint32_t len, 
     int head = virtqueue_submit(&g_vq, out, n_out, in, n_in);
     if (head < 0) {
         klog_write("virtio-blk: no free descriptors\n");
-        g_busy = 0;
         return 0;
     }
     virtqueue_kick(&g_vq);
 
     uint32_t used_len = 0;
     int done = virtqueue_poll(&g_vq, head, &used_len);
-    g_busy = 0;
 
     if (!done) {
         // WHICH REQUEST, by name. virtqueue.c cannot say -- it is

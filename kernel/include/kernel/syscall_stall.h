@@ -26,11 +26,19 @@
 // reported nothing about the top third of the ABI.
 #define SYSCALL_STALL_MAX 160
 
-// The timestamp to hand syscall_stall_end(), or 0 when disarmed.
-uint64_t syscall_stall_begin(void);
+// What begin() hands end(). `t0` is 0 when disarmed.
+struct syscall_stall_mark {
+    uint64_t t0;
+    uint64_t off0;  // scheduler_offcpu_tsc() at begin
+};
 
-// `t0` is what begin() returned; 0 means "was not armed", and is ignored.
-void syscall_stall_end(int nr, uint64_t t0);
+// **A HANDLER THAT PARKS DID NOT HOLD THE MACHINE WHILE IT WAS PARKED.**
+// Since a switch moves the CPU on the spot, a sleep or a disk wait
+// suspends INSIDE the handler, so wall time between begin and end
+// counts somebody else's run as this call's stall. end() subtracts the
+// time this context spent switched away.
+struct syscall_stall_mark syscall_stall_begin(void);
+void syscall_stall_end(int nr, struct syscall_stall_mark m);
 
 // Arming from OFF also zeroes the counters. Returns 0 REFUSED -- a
 // machine with no calibrated TSC frequency cannot convert ticks to

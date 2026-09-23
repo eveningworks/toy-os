@@ -1,9 +1,11 @@
 # Blocking inside the kernel, and the lock that needs it
 
-**Status: the SINGLE SUSPEND SHAPE is BUILT and the in-kernel suite is
-green on it; `scheduler_block_kernel()` exists with no caller yet. The
-lock and the gate are designed, not built. Read this before touching
-`switch_to()`, `block_common()` or `FS_OP()`.**
+**Status: stages 1-3 are BUILT -- the single suspend shape, the
+sleeping lock over the filesystem (69c02656), and `ata.c`'s DMA and
+cache-flush waits sleeping on IRQ14. Stage 4, the trap gate, is not.
+Read this before touching `switch_to()`, `block_common()` or `FS_OP()`,
+and "What stage 2 found" below before adding anything that sleeps
+under the filesystem lock.**
 
 **AND THE TWO-SHAPE DESIGN BELOW WAS NOT BUILT.** The staging text that
 follows still describes it, because the argument it records is worth
@@ -172,6 +174,55 @@ documents follow.
 - **Stage 4 -- flip the gate**, and re-measure on
   `latency_under_io.py`, which now has a two-run baseline at both gates
   taken on one host.
+
+## What stage 2 found
+
+**A sleeping holder of ONE global lock turns "wait for one syscall"
+into "wait one holder operation PER CALL YOU MAKE".** With the DMA wait
+asleep, the compositor ran during `diskbench`'s disk waits -- and then
+queued ~17 ms for the filesystem lock on each of the dozens of config
+reads it made per frame: 0.6-1.7 s frames under KVM, against 5-22 ms at
+HEAD. Under the interrupt gate at HEAD nothing could be mid-call while
+the WM ran, so it had paid at most one syscall a frame. Four changes
+made stage 2 a net win, and each is load-bearing:
+
+- **The compositor stopped reading the disk on its frame path.** Its
+  config pollers keyed on `fs_generation()`, one counter for every write
+  in the machine; they are now pushed -- `WIN_EV_SETTING` from the
+  settings registry and `WIN_EV_FSWATCH` from per-path watches
+  (`SYS_FS_WATCH`, `kernel/fswatch.h`, `userland/wm/wm_watch.h`).
+- **The cache FLUSH sleeps too.** Probed per syscall, the remaining
+  stalls were CACHE FLUSH (0xE7), 25-225 ms of host fsync polled with
+  interrupts off -- not the DMA, which totalled 1-2 ms per 100 commands.
+- **An unlock HANDS the lock to a parked waiter** (Linux's mutex
+  handoff, 4.10), and **a context woken mid-call runs next within its
+  level** (CFS's wakeup preemption and NEXT_BUDDY): without them the
+  releaser re-took the lock before the woken waiter ever ran.
+- **init publishes its status file by rename**, because a truncate-then-
+  write left `service` a window a whole disk wait wide to read it empty.
+
+Measured under KVM, `latency_under_io.py`, loaded, against HEAD on one
+host (the delivered build's three runs; HEAD's two), both on disk images
+copied to TMPFS -- where the host fsync behind a cache flush costs
+almost nothing, so a real image on disk pays more for every flush and
+the flush-sleep change matters more there, not less: compositor wake avg
+5.9-7.4 ms (HEAD 11.9-12.0), p90 8.2 ms (16.4), max 10-19 ms (20-28);
+client ping max 10 ms (16-28). Frame WORK is the half that got worse:
+avg 3.4-4.4 ms (2.1-2.2), max 45-106 ms (5.5-5.8). That tail is what
+`docs/fslock-design.md` exists to remove -- any fs call left on the WM's
+path still queues behind one holder operation.
+
+**Who may block, answered.** A context with a scheduler slot and no
+preemption guard sleeps; anything else must not CONTEND a kmutex at all,
+because behind a sleeping holder it spins forever. `kmutex_lock()`
+reports such a take on entry (Linux's `might_sleep()`), and the callers
+it found were fixed rather than tolerated: the query registry took a
+lock of its own, `sys_modload` reads before raising its guard, the
+partition syscalls and a tfs3 KTEST take `fs_exclusive_begin()`, and the
+legacy loader holds the filesystem lock for a whole `run` (nothing else
+runs then anyway). A kill of a context parked mid-call becomes a pending
+SIGKILL -- Linux's D state -- because zombifying it abandoned its frames
+with the lock held.
 
 ## What the single shape cost
 

@@ -578,6 +578,9 @@ const void *scheduler_wait_chan_pid(int pid);
 // A kmutex another context holds (kernel/kmutex.h). The filesystem's
 // is the only one today; `ps` prints it as block(lock).
 #define SCHED_WAIT_LOCK  11
+// A disk transfer this context issued and is waiting out (ata.c). Parked
+// MID-CALL, never at an entry: the command is already on the wire.
+#define SCHED_WAIT_DISK  12
                             // promised to change (SYS_FUTEX_WAIT).
                             // Adding this one found a FOURTH site the
                             // list above does not name: /bin/ps has its
@@ -1087,6 +1090,20 @@ int scheduler_block_current(uint64_t *regs, const void *chan, int reason);
 // entry-point version requires. See docs/blocking-design.md.
 int scheduler_block_kernel(const void *chan, int reason);
 
+// The same, BOUNDED: the timer releases it once `wake_at_ns`
+// (clocksource_now_ns()) passes, if no wake came first. Returns exactly
+// as above -- 1 means it parked and is back, NOT that the event
+// happened, so the caller re-tests its condition and its own deadline.
+// 0 for wake_at_ns means unbounded.
+int scheduler_block_kernel_until(const void *chan, int reason, uint64_t wake_at_ns);
+
+// TSC ticks the CURRENT context has spent switched away, summed since
+// it started. A difference across a stretch of its own code is how
+// long SOMEBODY ELSE had the CPU inside it -- which syscall_stall.c
+// subtracts, because a handler that parks did not hold the machine
+// while it was parked.
+uint64_t scheduler_offcpu_tsc(void);
+
 // The same, BOUNDED: released by scheduler_wake() naming `chan`, or by
 // the timer once `wake_at_ns` passes, whichever happens first. A
 // deadline of 0 means no deadline and is exactly scheduler_block_current().
@@ -1119,6 +1136,13 @@ int scheduler_wake(const void *chan, int64_t value);
 // contended lock so all but one park again is the herd this mechanism
 // exists to avoid.
 int scheduler_wake_n(const void *chan, int64_t value, int max);
+
+// Wakes ONE process PARKED on `chan` -- the best priority, the lowest
+// slot among equals -- and returns its pid, or 0 if none is parked. A
+// process that has armed but not yet parked is NOT counted: the caller
+// is naming who gets something (a lock handoff), and an armed process
+// has not asked for it yet. Interrupt-safe, as scheduler_wake() is.
+int scheduler_wake_one(const void *chan);
 
 // --- TEST SUPPORT, for kernel/proc/sched_test.c ----------------------
 //
@@ -1174,6 +1198,9 @@ int scheduler_wake_n(const void *chan, int64_t value, int max);
 // fixture that always parked with 0 could not exercise that at all.
 int  scheduler_test_park(uint64_t *tf, const void *chan, int reason);
 void scheduler_test_release(int idx);
+// Give a slot parked above a deadline, and say whether it parked
+// MID-CALL (scheduler_block_kernel_until()) or at a syscall entry.
+void scheduler_test_park_deadline(int idx, uint64_t wake_at_ns, int in_kernel);
 // The state of one slot, as a PROC_STATE_* value. -1 for a bad index.
 int  scheduler_test_state(int idx);
 // Whether a wake since the last rotation asked for preemption, and

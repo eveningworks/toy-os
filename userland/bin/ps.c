@@ -55,6 +55,8 @@ static const char *wait_name(uint32_t w) {
         case PROC_WAIT_NET:   return "net";
         case PROC_WAIT_FUTEX: return "futex";
         case PROC_WAIT_SIGNAL: return "signal";
+        case PROC_WAIT_LOCK:  return "lock";
+        case PROC_WAIT_DISK:  return "disk";
         default:              return "?";
     }
 }

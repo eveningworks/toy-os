@@ -201,4 +201,15 @@ const struct fs_ops *mount_backend_named(const char *name);
 // next probe.
 int mount_wipe_others(const struct fs_ops *target, const struct block_device *dev);
 
+// Hold vfs.c's filesystem lock across a stretch that is not one fs_*
+// call: a raw partition-table write, a KTEST that must see nothing else
+// reach the disk, a legacy `run`. RECURSIVE, so fs_* inside it nests.
+//
+// **THIS, NOT scheduler_preempt_disable(), IS WHAT KEEPS THE DISK
+// QUIET.** A holder may be asleep in a disk wait, so the guard stops
+// nobody who already got in -- and a guarded caller that then contends
+// the lock spins forever (kmutex.c's might_sleep()).
+void fs_exclusive_begin(void);
+void fs_exclusive_end(void);
+
 #endif

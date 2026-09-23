@@ -86,6 +86,13 @@ void kbdtap_key(uint16_t wire, int extended, uint16_t keycode, int down,
 // any record has been opened.
 void kbdtap_produced(uint16_t code);
 
+// The provider's two halves, callable directly: record `index` into a
+// struct query_kbdtap, and how many are retained. A KTEST that holds
+// the preemption guard reads through these, never query_read() -- the
+// registry's lock may have a sleeping holder (query.c).
+int kbdtap_count(void);
+int kbdtap_fill(int index, void *out);
+
 // The QUERY_KBDTAP provider that reads this ring is declared with every
 // other one in api/query.h, and lives in keyboard_tap.c beside the code
 // that fills it.

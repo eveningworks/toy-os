@@ -1094,6 +1094,8 @@ struct query_ata {
     uint64_t flags;             // QUERY_ATA_*
     uint64_t max_sectors_xfer;  // per transfer
     uint64_t sector_count;      // the drive's capacity, in sectors
+    uint64_t dma_sleeps;        // DMA waits that PARKED their caller rather
+                                // than polling; APPENDED
 };
 
 // QUERY_AHCI's record.

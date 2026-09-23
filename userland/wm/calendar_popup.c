@@ -1,4 +1,5 @@
 // See calendar_popup.h for what this is and why the panel owns it.
+#include "wm/wm_watch.h" // calendar_poll_config()'s change counter
 #include "wm_internal.h"
 #include <time.h>
 #include "calendar_popup.h"
@@ -177,7 +178,7 @@ static void page_month(int delta) {
 void calendar_poll_config(void) {
     static uint64_t seen_gen;
     static int primed;
-    uint64_t gen = sys_fs_generation();
+    uint64_t gen = wm_watch_config_gen();
     if (primed && gen == seen_gen) return;
     seen_gen = gen;
     primed = 1;

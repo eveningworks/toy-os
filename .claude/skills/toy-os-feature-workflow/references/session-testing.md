@@ -2836,3 +2836,12 @@ a suite running?** What `iso_guard` actually watches is narrower than
 is one people work around: `.c`, `.h`, `.asm` and `.ld` under
 `kernel/`, `apps/` and `userland/` (`SOURCE_TREES`/`SOURCE_SUFFIXES`).
 Editing `docs/` during a run is genuinely safe.
+
+**2026-09-23: A DISK IMAGE'S HOST FILESYSTEM IS PART OF THE MEASUREMENT.**
+The scratchpad is TMPFS, so a `cp --reflink` "copy of disk.img" made
+there is a file whose `fsync` is free -- and every guest cache flush is
+a host fsync. The in-kernel suite took 16 s on such a copy and 37 s on
+the real `disk.img` (btrfs) with the same build, and HEAD did the same
+(16 s / 36 s): a "regression" that was only the two sides sitting on
+different filesystems. Before comparing two runs of anything that
+touches the disk, check `df -T` on both images.

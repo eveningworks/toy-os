@@ -27,6 +27,7 @@
 #include "setting_abi.h"
 #include "config_file.h"
 #include "fs.h"
+#include "win_role.h" // win_server_setting_changed() -- the push
 
 // Defined below, beside the three choice sources it asks about.
 static int setting_has_choices(const struct setting *s);
@@ -40,6 +41,14 @@ static int g_count = 0;
 // That silently ignored `shadows=off` and `animations=off` until some
 // unrelated setting moved the counter.
 static uint32_t g_generation = 1;
+
+// Every move of the generation goes through here, so the compositor is
+// TOLD rather than having to ask (WIN_EV_SETTING, abi/win_proto.h).
+static uint32_t bump_generation(void) {
+    ++g_generation;
+    win_server_setting_changed(g_generation);
+    return g_generation;
+}
 
 int setting_register(const struct setting *s) {
     if (!s || !s->name || !*s->name || !s->label || !s->get) return 0;
@@ -474,13 +483,13 @@ enum setting_result setting_set(const char *name, const char *value) {
     // The generation tracks APPLIED, not SAVED: a value that took effect
     // in memory but failed to persist is still a change a cache holder
     // has to see. SETTING_INVALID changed nothing.
-    if (r != SETTING_INVALID) g_generation++;
+    if (r != SETTING_INVALID) bump_generation();
     return r;
 }
 
 uint32_t setting_generation(void) { return g_generation; }
 
-void setting_choices_changed(void) { g_generation++; }
+void setting_choices_changed(void) { bump_generation(); }
 
 int settings_reload(void) {
     // Settings persist as ORDINARY TEXT FILES, on purpose -- /etc is
@@ -520,7 +529,7 @@ int settings_reload(void) {
     // Bumped unconditionally: a reload's whole premise is that the
     // files may have changed behind us, so a cache holder has to
     // re-read whether or not any single apply reported a change.
-    g_generation++;
+    bump_generation();
     return rejected;
 }
 
@@ -704,7 +713,7 @@ int setting_dispatch(struct setting_msg *msg) {
         // The generation moves because what is STORED changed, even
         // though nothing applied -- a client showing "modified on disk"
         // has to notice.
-        if (msg->result == SETTING_SAVED) msg->generation = ++g_generation;
+        if (msg->result == SETTING_SAVED) msg->generation = bump_generation();
         return 1;
     }
 
@@ -718,7 +727,7 @@ int setting_dispatch(struct setting_msg *msg) {
     // without this the counter every consumer polls would never move for
     // half the settings on the machine.
     case SETTING_OP_TOUCH:
-        g_generation++;
+        bump_generation();
         msg->generation = g_generation;
         return 1;
 

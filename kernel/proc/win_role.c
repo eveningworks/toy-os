@@ -5,6 +5,7 @@
 // window, no client state: a window is the compositor's
 // (userland/wm/wm_client.c) and a client's events ride its own channel
 // ring (lib/uwmchan.h). abi/win_proto.h is TWP, the protocol.
+#include "fswatch.h" // fswatch_owner_gone() -- a dead compositor's watches
 #include "win_role.h"
 #include "keyboard.h" // keyboard_suspend_blocking() -- who owns the keyboard follows the compositor role
 #include "vmm.h"
@@ -400,6 +401,11 @@ void win_server_font_changed(void) { broadcast(WIN_EV_FONT, 0, 0); }
 // The screen changed size. screen_set_mode() is the one caller.
 void win_server_screen_changed(int w, int h) { broadcast(WIN_EV_SCREEN, w, h); }
 
+void win_server_setting_changed(uint32_t generation) {
+    broadcast(WIN_EV_SETTING, (int32_t)(generation & 0x7FFFFFFFu), 0);
+}
+void win_server_fswatch_fired(int id) { broadcast(WIN_EV_FSWATCH, id, 0); }
+
 void win_server_client_gone(int pid) {
     if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return;
 
@@ -409,7 +415,10 @@ void win_server_client_gone(int pid) {
     // registration here also drops the per-window flags, so nothing
     // later tries to unmap out of an address space that no longer
     // exists.
-    if (pid == g_comp_pid) win_server_set_compositor(0, 0);
+    if (pid == g_comp_pid) {
+        win_server_set_compositor(0, 0);
+        fswatch_owner_gone(pid);   // the next compositor registers its own
+    }
     win_surface_client_gone(pid);
 
     // **NOTHING ELSE TO TEAR DOWN.** A client's windows were entries in

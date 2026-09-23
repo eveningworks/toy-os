@@ -48,9 +48,16 @@ static void tap_restore(int was) { kbdtap_set_enabled(was); }
 static int tap_records(void) {
     struct query_kbdtap r;
     int n = 0;
-    while (n < 4096 && query_read(QUERY_KBDTAP, n, &r, sizeof r) == (int)sizeof r)
-        n++;
+    while (n < 4096 && kbdtap_fill(n, &r)) n++;
     return n;
+}
+
+// query_read()'s return shape, straight from the provider. Every read
+// here is under the preemption guard, and the registry's lock may be
+// held by a reader asleep on the disk (query.c) -- which would spin
+// this test forever.
+static int tap_read(int index, struct query_kbdtap *r) {
+    return kbdtap_fill(index, r) ? (int)sizeof *r : -1;
 }
 
 KTEST("kbdtap", "a key event is recorded with every stage it passed") {
@@ -61,7 +68,7 @@ KTEST("kbdtap", "a key event is recorded with every stage it passed") {
     int n = tap_records();
 
     struct query_kbdtap r;
-    int got = query_read(QUERY_KBDTAP, n - 1, &r, sizeof r);
+    int got = tap_read(n - 1, &r);
     tap_restore(was);
     scheduler_preempt_enable();
 
@@ -81,7 +88,7 @@ KTEST("kbdtap", "a key with no scancode reports no scancode, not a zero-ish one"
     kbdtap_key(0, 0, 30, 1, 0);          // what input_report_key() does
     int n = tap_records();
     struct query_kbdtap r;
-    int got = query_read(QUERY_KBDTAP, n - 1, &r, sizeof r);
+    int got = tap_read(n - 1, &r);
     tap_restore(was);
     scheduler_preempt_enable();
 
@@ -101,7 +108,7 @@ KTEST("kbdtap", "an extended key carries the prefix as a flag, not as a record")
     kbdtap_produced(0x91);               // KEY_ARROW_UP
     int after = tap_records();
     struct query_kbdtap r;
-    query_read(QUERY_KBDTAP, after - 1, &r, sizeof r);
+    tap_read(after - 1, &r);
     tap_restore(was);
     scheduler_preempt_enable();
 
@@ -122,7 +129,7 @@ KTEST("kbdtap", "one event carries both codes of an Alt-<key> sequence") {
     kbdtap_produced('!');                // one past the cap: must be dropped
     int n = tap_records();
     struct query_kbdtap r;
-    query_read(QUERY_KBDTAP, n - 1, &r, sizeof r);
+    tap_read(n - 1, &r);
     tap_restore(was);
     scheduler_preempt_enable();
 
@@ -145,8 +152,8 @@ KTEST("kbdtap", "the ring wraps: the count saturates and the oldest record moves
 
     int n = tap_records();
     struct query_kbdtap oldest, newest;
-    int a = query_read(QUERY_KBDTAP, 0, &oldest, sizeof oldest);
-    int b = query_read(QUERY_KBDTAP, n - 1, &newest, sizeof newest);
+    int a = tap_read(0, &oldest);
+    int b = tap_read(n - 1, &newest);
 
     // Every record in order, checked as one walk rather than at the two
     // ends: a wrap that returned the right first and last record and
@@ -154,7 +161,7 @@ KTEST("kbdtap", "the ring wraps: the count saturates and the oldest record moves
     int contiguous = 1;
     struct query_kbdtap prev = oldest, cur;
     for (int i = 1; i < n; i++) {
-        if (query_read(QUERY_KBDTAP, i, &cur, sizeof cur) != (int)sizeof cur) {
+        if (tap_read(i, &cur) != (int)sizeof cur) {
             contiguous = 0;
             break;
         }
@@ -232,7 +239,7 @@ KTEST("kbdtap", "disabling wipes the ring rather than just stopping it") {
     struct query_kbdtap r;
     int leaked = 0;
     kbdtap_key(0, 0, 30, 1, 0);              // one fresh record to read
-    if (query_read(QUERY_KBDTAP, 0, &r, sizeof r) == (int)sizeof r)
+    if (tap_read(0, &r) == (int)sizeof r)
         leaked = (r.produced != 0);
 
     kbdtap_set_enabled(was);

@@ -4,6 +4,7 @@
 #include "gdt.h"
 #include "idt.h"
 #include "kstack.h" // this path has a real kernel stack now -- see below
+#include "mount.h"  // fs_exclusive_begin() -- held across the run, see below
 
 // The currently "in-flight" kernel caller waiting for a ring-3 process
 // to exit. See process.h's note on why there's only one of these.
@@ -86,8 +87,18 @@ int process_run_ring3(uint64_t pml4_phys, uint64_t entry, uint64_t user_rsp) {
 
 int process_run_ring3_args(uint64_t pml4_phys, uint64_t entry, uint64_t user_rsp,
                             uint64_t argc, uint64_t argv) {
+    // **THE FILESYSTEM LOCK IS HELD FOR THE WHOLE RUN.** A legacy
+    // program has no slot, so its syscalls can neither sleep nor be
+    // rotated away (interrupts are off and the rotation is frozen while
+    // armed) -- behind a holder asleep in a disk wait, its first file
+    // call would spin forever. Taken HERE, before the rotation stops,
+    // so a holder can still be rotated to and finish; nothing else runs
+    // during the program anyway, so holding it costs nobody anything.
+    // Its own fs calls nest (the kernel context owns it).
+    fs_exclusive_begin();
     int rc = process_context_save(&g_process_ctx);
     if (rc != 0) {
+        fs_exclusive_end();
         // Resumed via the exit syscall (syscall.c) or a caught ring-3
         // fault (idt.c, via process_context_recover() above) -- either
         // way this call is no longer in flight.

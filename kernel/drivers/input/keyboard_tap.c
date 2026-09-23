@@ -104,7 +104,7 @@ void kbdtap_produced(uint16_t code) {
 
 // --- the provider ----------------------------------------------------
 
-static int kbdtap_count(void) { return (int)g_written; }
+int kbdtap_count(void) { return (int)g_written; }
 
 // Record `index`, OLDEST RETAINED FIRST. The ring can move between two
 // of these calls -- it is fed by an interrupt -- so a reader that walks
@@ -113,7 +113,7 @@ static int kbdtap_count(void) { return (int)g_written; }
 // which is strictly better than an interface that pretended to be
 // atomic. Draining instead would make the log readable exactly once and
 // break the second reader.
-static int kbdtap_fill(int index, void *out) {
+int kbdtap_fill(int index, void *out) {
     if (index < 0 || (uint32_t)index >= g_written) return 0;
 
     // The oldest retained record is `g_written` back from the newest.

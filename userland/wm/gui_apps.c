@@ -240,8 +240,9 @@ static void load_entry(const char *file) {
 // A cheap answer to "could anything in this directory have changed?",
 // costing ONE directory listing and no per-file reads.
 //
-// The desktop reloads when sys_fs_generation() moves, and that counter is
-// GLOBAL -- it bumps for any write anywhere, so saving a setting made
+// The desktop reloads when its directory watch fires (wm_watch.h). That
+// was the GLOBAL fs generation -- it bumps for any write anywhere, so
+// saving a setting made
 // the desktop re-read and re-parse every .desktop file. Under KVM each
 // of those reads competes with whatever ring-3 app just did the saving,
 // and the reload measured 2.5 SECONDS with the desktop frozen for all

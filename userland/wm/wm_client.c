@@ -14,6 +14,7 @@
 // concern with its own external contract, exactly the split that
 // produced desktop.c/start_menu.c/context_menu.c. See wm.c's top
 // comment.
+#include "wm/wm_watch.h" // WIN_EV_FSWATCH / WIN_EV_SETTING land there
 #include <stdlib.h>   // malloc: the client widget map
 #include "wm_internal.h"
 #include "wm_shadow.h"
@@ -1358,6 +1359,14 @@ int wm_client_handle_event(const struct win_event *ev) {
     case WIN_EV_SCREEN:
         wm_screen_changed();
         broadcast_state(WIN_EV_SCREEN, screen_w, screen_h, WM_PEND_SCREEN);
+        break;
+    // Pushed configuration: move a topic's counter and let its poller
+    // re-read on the next frame (wm_watch.h).
+    case WIN_EV_FSWATCH:
+        wm_watch_fired(ev->a);
+        break;
+    case WIN_EV_SETTING:
+        wm_watch_setting();
         break;
     default:
         return 0; // not ours -- raw input, see wm_rawin.c

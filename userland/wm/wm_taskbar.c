@@ -1,5 +1,6 @@
 // The taskbar strip's layout and click routing -- see wm_taskbar.h for
 // what it does and why it is one file rather than three walks.
+#include "wm/wm_watch.h" // taskbar_poll_config()'s change counter
 #include "wm_internal.h"
 #include "wm_taskbar.h"
 #include "lib/usetting.h" // the MERGED registry -- see setting_get()
@@ -69,7 +70,7 @@ static int read_height(void) {
 void taskbar_poll_config(void) {
     static uint64_t seen_gen;
     static int primed;
-    uint64_t gen = sys_fs_generation();
+    uint64_t gen = wm_watch_config_gen();
     if (primed && gen == seen_gen) return;
     seen_gen = gen;
     primed = 1;

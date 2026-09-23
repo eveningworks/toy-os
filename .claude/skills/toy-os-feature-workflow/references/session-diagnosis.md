@@ -1479,3 +1479,26 @@ half-second silences. The silences were soundd starved for 762 ms by a
 round-robin that restarted after the driver on every wake. A counter at
 EACH stage (soundd now reports its longest gap between passes) is what
 tells a starved stage from a broken one. The driver's own count cannot.
+
+**2026-09-23 (the disk wait sleeps).** Three lessons, and they are one
+lesson: **ATTRIBUTE THE TIME BEFORE CHOOSING THE FIX.** Making the DMA
+wait sleep made the desktop worse, and two plausible fixes (lock
+handoff, then coalescing the WM's polls) were built on stories before a
+per-syscall accumulator -- time in the busy-bit poll, in the DMA wait,
+commands issued -- showed the DMA was 1-2 ms per hundred commands and
+the stalls were CACHE FLUSH at 25-225 ms. One probe that splits the time
+by where it went beats three that each test a theory.
+
+**A symptom that appears only with your change is not necessarily IN
+your change.** The kernel suite "took 37 s instead of 16" and "the
+desktop would not stop": both were `service` reading init's status file
+half-rewritten, a pre-existing truncate-then-write race that sleeping
+disk writes widened from two syscalls to a whole disk wait. And the
+37 s was the GUEST's clock -- timing the same run from the host said
+16 s on both builds. Ask the host before believing a guest duration.
+
+**A HEAD worktree with the SAME probe is the discriminating experiment
+for "is this new?"** -- `git worktree add --detach <dir> HEAD`, patch
+the probe in, build there, measure the same way. It settled "the
+busy-bit poll is slower now" in one run, where arguing from the code
+could not.

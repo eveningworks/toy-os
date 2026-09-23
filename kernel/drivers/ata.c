@@ -23,6 +23,9 @@
 #include "debugflags.h"
 #include "fault_inject.h"
 #include "ata_cache.h"
+#include "kmutex.h"      // the drive lock -- see g_ata_lock
+#include "scheduler.h"   // a DMA wait SLEEPS -- see sleep_dma_irq()
+#include "clocksource.h" // ...against a deadline
 #include <stddef.h>
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv`
 
@@ -368,13 +371,44 @@ static uint16_t g_bm_io = 0;
 // that decides "should a flush happen right now."
 static int g_flush_defer_depth = 0;
 
+// **ONE COMMAND AT A TIME, AND THE DRIVER KEEPS THAT TRUE ITSELF.** A
+// DMA wait now SLEEPS, so another context runs while a command is on
+// the wire -- and the filesystem lock does not stop it reaching the
+// drive: the idle write-back, a raw partition write and `dmatest` all
+// come in below it. Every public entry point that touches the drive or
+// the cache takes this; the idle write-back only tries (ata_idle()).
+// Linux's old IDE layer serialised a channel the same way (hwgroup->busy).
+static struct kmutex g_ata_lock;
+
+static int sleep_dma_irq(uint64_t budget_ticks);
+static volatile int g_dma_irq_fired;   // defined with its comment below
+static int dma_in_use(void);
+
+// ONE CACHE FLUSH, WAITED OUT ASLEEP when the caller can park. A flush
+// is the host's fsync under QEMU and a drive's cache write-back on real
+// hardware -- measured at 25-225 ms here under load, polled until now
+// with interrupts off, so the whole machine stood still for it. It ends
+// with the same IRQ14 a DMA does, and the bus-master IRQ bit reports it
+// the same way, so it sleeps on the same channel. Without a bus master
+// (a PIO-only controller) there is no such bit and it polls as before.
+static int flush_command(void) {
+    if (!wait_not_busy()) return 0;
+    int can_sleep = g_bm_io && dma_in_use();
+    if (can_sleep) {
+        g_dma_irq_fired = 0;
+        outb(g_bm_io + BM_STATUS, BM_STATUS_ERROR | BM_STATUS_IRQ); // W1C stale bits
+    }
+    outb(REG_COMMAND, CMD_CACHE_FLUSH);
+    if (can_sleep) sleep_dma_irq(DMA_WAIT_TICKS);   // -1/0: the poll below decides
+    int ok = wait_not_busy();
+    if (can_sleep) outb(g_bm_io + BM_STATUS, BM_STATUS_ERROR | BM_STATUS_IRQ);
+    return ok && !(inb(REG_STATUS) & STATUS_ERR);   // the read also acks INTRQ
+}
+
 static void maybe_flush(void) {
     if (g_flush_defer_depth != 0) return;
     if (!g_present) return; // nothing to flush, and REG_COMMAND would be meaningless
-    if (wait_not_busy()) {
-        outb(REG_COMMAND, CMD_CACHE_FLUSH);
-        wait_not_busy();
-    }
+    flush_command();
 }
 
 void ata_flush_begin(void) {
@@ -382,8 +416,10 @@ void ata_flush_begin(void) {
 }
 
 void ata_flush_end(void) {
+    kmutex_lock(&g_ata_lock);   // maybe_flush() issues a command
     if (g_flush_defer_depth > 0) g_flush_defer_depth--;
     maybe_flush();
+    kmutex_unlock(&g_ata_lock);
 }
 
 // Flushes RIGHT NOW, whatever the deferral depth. Everything above is
@@ -402,9 +438,7 @@ void ata_flush_end(void) {
 // This is what the write-back cache calls once its dirty lines are out.
 static int ata_flush_raw(void) {
     if (!g_present) return 1; // nothing to flush is success, not failure
-    if (!wait_not_busy()) return 0;
-    outb(REG_COMMAND, CMD_CACHE_FLUSH);
-    return wait_not_busy();
+    return flush_command();
 }
 
 // RETURNS A STATUS, and callers must look. It was `void`, which was
@@ -415,8 +449,11 @@ static int ata_flush_raw(void) {
 // keep the journal honest -- see ata_cache.h.
 int ata_flush_now(void) {
     if (!g_present) return 1;
-    if (atac_enabled()) return atac_flush(); // writes back, then ata_flush_raw()
-    return ata_flush_raw();
+    kmutex_lock(&g_ata_lock);
+    // writes back, then ata_flush_raw()
+    int ok = atac_enabled() ? atac_flush() : ata_flush_raw();
+    kmutex_unlock(&g_ata_lock);
+    return ok;
 }
 
 // Closes a deferral region WITHOUT the flush ata_flush_end() would
@@ -464,6 +501,15 @@ static uint32_t g_dma_buf_frames = 0; // 0 until ata_init_dma() succeeds
 
 static volatile int g_dma_irq_fired = 0;
 
+
+// How many times a DMA wait parked its caller instead of polling --
+// the evidence that the sleep path is the one in use (QUERY_ATA).
+static uint64_t g_dma_sleeps;
+
+// What a DMA waiter parks on and the IRQ wakes. Its ADDRESS is the
+// channel; nothing reads it.
+static const char g_dma_chan;
+
 // Registered for IRQ14 (see ata_init_dma()) -- every hardware-IRQ
 // handler has this signature (irq.h). The drive's own status register
 // still needs reading afterward to actually acknowledge its IRQ line
@@ -472,11 +518,47 @@ static volatile int g_dma_irq_fired = 0;
 static void ata_irq_handler(uint64_t *regs) {
     (void)regs;
     g_dma_irq_fired = 1;
+    scheduler_wake(&g_dma_chan, 0); // interrupt-safe, by contract
+}
+
+// Has the transfer finished? The flag is the IRQ having been SERVICED;
+// the bus-master status bit is the drive having RAISED it, which is
+// true earlier when interrupts are off. Either one is completion.
+static int dma_irq_seen(void) {
+    if (g_dma_irq_fired) return 1;
+    if (inb(g_bm_io + BM_STATUS) & BM_STATUS_IRQ) { g_dma_irq_fired = 1; return 1; }
+    return 0;
+}
+
+// Parks the caller until completion or `budget_ticks` -- the first of
+// wait_dma_irq()'s three ways, and the only one that lets anything else
+// run. 1 done, 0 timed out, -1 COULD NOT PARK (no scheduler slot, or
+// the preemption guard is up), and the caller falls back to the other
+// two. Armed before every test, so an IRQ landing between the test and
+// the park is a wake the park declines rather than one it sleeps through.
+static int sleep_dma_irq(uint64_t budget_ticks) {
+    uint64_t deadline = clocksource_now_ns() + budget_ticks * (1000000000ull / PIT_HZ);
+    for (;;) {
+        scheduler_wait_arm(&g_dma_chan);
+        if (dma_irq_seen()) { scheduler_wait_disarm(); return 1; }
+        if (clocksource_now_ns() >= deadline) { scheduler_wait_disarm(); return 0; }
+        if (!scheduler_block_kernel_until(&g_dma_chan, SCHED_WAIT_DISK, deadline)) {
+            scheduler_wait_disarm();
+            return -1;
+        }
+        g_dma_sleeps++;
+    }
 }
 
 // Blocks until ata_irq_handler() fires or a bounded wait elapses -- but
-// HOW it blocks depends on where this got called from, which is exactly
-// what isr_in_progress() (idt.h) answers:
+// HOW it blocks depends on where this got called from.
+//
+//   - A scheduled process (a ring-3 syscall, the usual case) SLEEPS in
+//     sleep_dma_irq(), and something else runs until IRQ14 wakes it.
+//     That is docs/blocking-design.md's stage 2. Everything below is
+//     what is left for a context with nowhere to park -- the kernel
+//     context, the legacy loader, a preemption-guarded caller -- and is
+//     unchanged, split on what isr_in_progress() (idt.h) answers:
 //
 //   - Called from ordinary kernel-space code (fs_init() at boot, or any
 //     of the apps/ code that calls fs_write()/fs_read() directly --
@@ -509,6 +591,9 @@ static void ata_irq_handler(uint64_t *regs) {
 //     iteration count (ATA_POLL_LIMIT), not wall-clock, matching
 //     wait_not_busy()/wait_drq() above.
 static int wait_dma_irq(uint64_t budget_ticks) {
+    int slept = sleep_dma_irq(budget_ticks);
+    if (slept >= 0) return slept;
+
     if (isr_in_progress()) {
         for (int i = 0; i < ATA_POLL_LIMIT; i++) {
             if (inb(g_bm_io + BM_STATUS) & BM_STATUS_IRQ) {
@@ -1074,9 +1159,11 @@ int ata_dma_forced_off(void) {
 // Notepad save) has no way to hear about that. Returns 1 if the mode
 // was applied, 0 if it was refused -- callers report the difference.
 int ata_set_dma_forced_off(int off) {
-    if (g_pending.in_flight) return 0;
-    g_dma_forced_off = off ? 1 : 0;
-    return 1;
+    kmutex_lock(&g_ata_lock);   // never mid-transfer, sleeping or not
+    int ok = !g_pending.in_flight;
+    if (ok) g_dma_forced_off = off ? 1 : 0;
+    kmutex_unlock(&g_ata_lock);
+    return ok;
 }
 
 // The real per-transfer sector cap for THIS boot. ATA_MAX_SECTORS_PER_
@@ -1169,7 +1256,7 @@ int ata_sync(uint32_t *out_written, uint32_t *out_pending) {
     return ok;
 }
 
-int ata_read_sectors(uint32_t lba, int count, void *buf) {
+static int read_sectors(uint32_t lba, int count, void *buf) {
     if (fault_should_fail_ata_read()) return 0;
     if (!g_present) return 0;
     if (count < 1 || count > ata_max_sectors_per_xfer()) return 0;
@@ -1178,7 +1265,7 @@ int ata_read_sectors(uint32_t lba, int count, void *buf) {
     return ata_read_sectors_raw(lba, count, buf);
 }
 
-int ata_write_sectors(uint32_t lba, int count, const void *buf) {
+static int write_sectors(uint32_t lba, int count, const void *buf) {
     if (fault_should_fail_ata_write()) return 0;
     if (!g_present) return 0;
     if (count < 1 || count > ata_max_sectors_per_xfer()) return 0;
@@ -1186,6 +1273,31 @@ int ata_write_sectors(uint32_t lba, int count, const void *buf) {
     if (atac_enabled()) return atac_write(lba, count, buf);
     return ata_write_sectors_raw(lba, count, buf);
 }
+
+int ata_read_sectors(uint32_t lba, int count, void *buf) {
+    kmutex_lock(&g_ata_lock);
+    int r = read_sectors(lba, count, buf);
+    kmutex_unlock(&g_ata_lock);
+    return r;
+}
+
+int ata_write_sectors(uint32_t lba, int count, const void *buf) {
+    kmutex_lock(&g_ata_lock);
+    int r = write_sectors(lba, count, buf);
+    kmutex_unlock(&g_ata_lock);
+    return r;
+}
+
+// The idle write-back, which scheduler_idle() calls from any waiting
+// loop -- including one inside a transfer. TRIES the lock: a drive that
+// is busy is a reason to skip this round, never to wait.
+void ata_idle(void) {
+    if (!kmutex_trylock(&g_ata_lock)) return;
+    atac_idle();
+    kmutex_unlock(&g_ata_lock);
+}
+
+uint64_t ata_dma_sleeps(void) { return g_dma_sleeps; }
 
 // Diagnostic only (the shell's `dmatest`, apps/shell_sys.c) -- proves
 // dma_transfer_start()/dma_transfer_poll() actually work, read-only so
@@ -1196,7 +1308,7 @@ int ata_write_sectors(uint32_t lba, int count, const void *buf) {
 // is always written (0 if this returns early). Requires the DMA path
 // to be active -- there's nothing to prove on a PIO-only machine, this
 // primitive doesn't exist there (see ata.h's top comment).
-int ata_dma_nonblocking_selftest(uint32_t lba, uint32_t *out_polls) {
+static int nonblocking_selftest(uint32_t lba, uint32_t *out_polls) {
     *out_polls = 0;
     if (!g_present || !dma_in_use()) return 0;
 
@@ -1243,6 +1355,13 @@ int ata_dma_nonblocking_selftest(uint32_t lba, uint32_t *out_polls) {
     rc = k_memcmp(via_blocking, via_poll, ATA_SECTOR_SIZE) == 0;
 out:
     kfree(buf);
+    return rc;
+}
+
+int ata_dma_nonblocking_selftest(uint32_t lba, uint32_t *out_polls) {
+    kmutex_lock(&g_ata_lock);
+    int rc = nonblocking_selftest(lba, out_polls);
+    kmutex_unlock(&g_ata_lock);
     return rc;
 }
 
@@ -1321,7 +1440,7 @@ static int dsm_send_block(const uint8_t *block) {
     return 1;
 }
 
-int ata_trim_ranges(const struct blk_range *r, int n) {
+static int trim_ranges(const struct blk_range *r, int n) {
     if (!ata_trim_supported() || n <= 0) return 0;
     for (int i = 0; i < n; i++)
         if (!lba_range_ok(r[i].lba, (int)r[i].count)) return 0;
@@ -1332,6 +1451,13 @@ int ata_trim_ranges(const struct blk_range *r, int n) {
     while (blk_dsm_pack(block, r, n, &ri, &done))
         if (!dsm_send_block(block)) return 0;
     return 1;
+}
+
+int ata_trim_ranges(const struct blk_range *r, int n) {
+    kmutex_lock(&g_ata_lock);
+    int ok = trim_ranges(r, n);
+    kmutex_unlock(&g_ata_lock);
+    return ok;
 }
 
 int ata_trim(uint32_t lba, uint32_t count) {

@@ -33,6 +33,7 @@
 #include "string.h"
 #include "scheduler.h"
 #include "kmutex.h"  // the one filesystem lock -- see FS_OP below
+#include "fswatch.h" // a mutation tells whoever watches its path
 #include "initcall.h"
 
 // EVERY backend call runs inside ONE LOCK, and a contender SLEEPS.
@@ -87,21 +88,34 @@ static struct kmutex g_fs_lock;
 // rather than taking and dropping it around the edges.
 int fs_lock_held(void)  { return kmutex_held(&g_fs_lock); }
 int fs_lock_owner(void) { return kmutex_owner(&g_fs_lock); }
+void fs_exclusive_begin(void) { kmutex_lock(&g_fs_lock); }
+void fs_exclusive_end(void)   { kmutex_unlock(&g_fs_lock); }
 
+// **THE MOUNT IS RE-CHECKED ONCE THE LOCK IS HELD.** It was resolved
+// before the lock, and a caller can SLEEP waiting for the lock -- so an
+// unmount can complete in between and zero the entry it is holding. A
+// mount gone by then fails the call with 0, which every backend op
+// already means as failure; the caller sees a path that no longer
+// resolves, which is what it now is.
 #define FS_OP(m, expr) ({                  \
     kmutex_lock(&g_fs_lock);               \
-    void *_fs_prev = mount_enter(m);       \
-    __auto_type _fs_r = (expr);            \
-    mount_leave(m, _fs_prev);              \
+    __typeof__(expr) _fs_r = 0;            \
+    if ((m)->used) {                       \
+        void *_fs_prev = mount_enter(m);   \
+        _fs_r = (expr);                    \
+        mount_leave(m, _fs_prev);          \
+    }                                      \
     kmutex_unlock(&g_fs_lock);             \
     _fs_r;                                 \
 })
 
 #define FS_OP_VOID(m, stmt) do {           \
     kmutex_lock(&g_fs_lock);               \
-    void *_fs_prev = mount_enter(m);       \
-    stmt;                                  \
-    mount_leave(m, _fs_prev);              \
+    if ((m)->used) {                       \
+        void *_fs_prev = mount_enter(m);   \
+        stmt;                              \
+        mount_leave(m, _fs_prev);          \
+    }                                      \
     kmutex_unlock(&g_fs_lock);             \
 } while (0)
 
@@ -446,23 +460,42 @@ static inline int bumped(int ok) {
     return ok;
 }
 
+// ...and tell anyone WATCHING that path or its directory (fswatch.h).
+// The generation is for "anything changed"; this is "THIS changed".
+static int changed(int ok, const char *path) {
+    if (!bumped(ok)) return ok;
+    uint64_t self, parent;
+    fswatch_hash(path, &self, &parent);
+    fswatch_note(self, parent);
+    return ok;
+}
+
+// Two names, one change: a rename or a link bumps once.
+static int changed2(int ok, const char *a, const char *b) {
+    if (!changed(ok, a)) return ok;
+    uint64_t self, parent;
+    fswatch_hash(b, &self, &parent);
+    fswatch_note(self, parent);
+    return ok;
+}
+
 int fs_touch(const char *path) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "touch", path)) return 0;
-    return bumped(FS_OP(r.m, r.m->fs->touch(r.sub)));
+    return changed(FS_OP(r.m, r.m->fs->touch(r.sub)), path);
 }
 
 int fs_write(const char *path, const char *data, int append) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "write", path)) return 0;
     imgcache_forget(path);
-    return bumped(FS_OP(r.m, r.m->fs->write(r.sub, data, append)));
+    return changed(FS_OP(r.m, r.m->fs->write(r.sub, data, append)), path);
 }
 
 int fs_mkdir(const char *path) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "mkdir", path)) return 0;
-    return bumped(FS_OP(r.m, r.m->fs->mkdir(r.sub)));
+    return changed(FS_OP(r.m, r.m->fs->mkdir(r.sub)), path);
 }
 
 int fs_delete(const char *path) {
@@ -479,7 +512,7 @@ int fs_delete(const char *path) {
             return 0;
         }
     }
-    return bumped(FS_OP(r.m, r.m->fs->del(r.sub)));
+    return changed(FS_OP(r.m, r.m->fs->del(r.sub)), path);
 }
 
 uint32_t fs_read_into(const char *path, void *buf, uint32_t cap) {
@@ -524,7 +557,7 @@ int fs_write_range(const char *path, uint64_t offset, const void *buf, uint32_t 
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "write", path)) return 0;
     imgcache_forget(path);
-    return bumped(FS_OP(r.m, r.m->fs->write_range(r.sub, offset, buf, len)));
+    return changed(FS_OP(r.m, r.m->fs->write_range(r.sub, offset, buf, len)), path);
 }
 
 // A STEP CARRIES NO PATH, so it cannot be resolved. The handle came
@@ -539,6 +572,8 @@ int fs_write_range(const char *path, uint64_t offset, const void *buf, uint32_t 
 struct step_handle {
     const struct mount *m;   // NULL = free slot, and = "already finished"
     void *inner;
+    uint64_t self, parent;   // the written path's fswatch hashes -- the
+                             // path itself is the caller's, and gone
 };
 
 static struct step_handle g_steps[8];
@@ -554,7 +589,9 @@ static void *step_wrap(const struct mount *m, void *inner) {
 void *fs_write_range_begin(const char *path, uint64_t offset, const void *buf, uint32_t len) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "write", path)) return 0;
-    return step_wrap(r.m, FS_OP(r.m, r.m->fs->write_range_begin(r.sub, offset, buf, len)));
+    struct step_handle *h = step_wrap(r.m, FS_OP(r.m, r.m->fs->write_range_begin(r.sub, offset, buf, len)));
+    if (h) fswatch_hash(path, &h->self, &h->parent);
+    return h;
 }
 
 enum fs_step_result fs_write_range_step(void *handle) {
@@ -568,13 +605,14 @@ enum fs_step_result fs_write_range_step(void *handle) {
     struct step_handle *h = handle;
     if (!h->m) return FS_STEP_FAILED;
     enum fs_step_result r = (enum fs_step_result)FS_OP(h->m, h->m->fs->write_range_step(h->inner));
+    uint64_t self = h->self, parent = h->parent;
     if (r == FS_STEP_DONE || r == FS_STEP_FAILED) { h->m = 0; h->inner = 0; }
     // Bump once, on completion -- not per step. A streamed write is one
     // change to the filesystem however many slices it took, and bumping
     // per step would wake a watcher repeatedly through a single save.
     // This path is the one Notepad saves through, so without it editing
     // a file in the editor would not be seen by anything watching.
-    if (r == FS_STEP_DONE) g_generation++;
+    if (r == FS_STEP_DONE) { g_generation++; fswatch_note(self, parent); }
     return r;
 }
 
@@ -617,14 +655,14 @@ int fs_rename(const char *oldpath, const char *newpath) {
     // cache serving the file this replaces.
     imgcache_forget(oldpath);
     imgcache_forget(newpath);
-    return bumped(FS_OP(a.m, a.m->fs->rename(a.sub, b.sub)));
+    return changed2(FS_OP(a.m, a.m->fs->rename(a.sub, b.sub)), oldpath, newpath);
 }
 
 int fs_truncate(const char *path, uint64_t size) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "truncate", path)) return 0;
     imgcache_forget(path);
-    return bumped(FS_OP(r.m, r.m->fs->truncate(r.sub, size)));
+    return changed(FS_OP(r.m, r.m->fs->truncate(r.sub, size)), path);
 }
 
 int fs_is_dir(const char *path) {
@@ -701,5 +739,5 @@ int fs_link(const char *existing, const char *newpath) {
     // Optional op -- the caps bit and this NULL check are the same
     // fact, and caps_are_honest() made sure they can't disagree.
     if (!a.m->fs->link) return 0;
-    return bumped(FS_OP(a.m, a.m->fs->link(a.sub, b.sub)));
+    return changed(FS_OP(a.m, a.m->fs->link(a.sub, b.sub)), newpath);
 }

@@ -4679,3 +4679,18 @@ shifts every row's later ops by one. Adding this before `close` moved
 nine overlays' close op into it, and only
 `-Wmissing-field-initializers` said so.
 
+## THE COMPOSITOR'S CONFIG IS PUSHED; NOTHING ON THE FRAME PATH POLLS `sys_fs_generation()`
+
+That counter moves on every write in the machine, so a poller keyed on
+it re-read its configs every frame under any disk-heavy program -- and
+each read queued for the one filesystem lock behind that program's disk
+wait (0.6-1.7 s frames, measured). The WM's pollers compare a TOPIC
+counter from `userland/wm/wm_watch.h` instead: `WM_TOPIC_SETTINGS` moves
+on `WIN_EV_SETTING` (the registry's generation bump, pushed), the path
+topics on `WIN_EV_FSWATCH` from a `SYS_FS_WATCH` on `/etc`,
+`/etc/effects`, `/usr/wm/applications` and `/home/desktop`. A new
+config poller picks a topic, or adds one with its path; it never reads
+the fs generation. The watch is on a directory's DIRECT children, so a
+file two levels down needs its own topic (that is why `/etc/effects` is
+separate from `/etc`). Hand edits are covered by the directory watch;
+the registry's own writes arrive both ways, which is harmless.

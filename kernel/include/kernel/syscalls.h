@@ -402,6 +402,7 @@ void uheap_fault_init(void);
 int sys_poll_event(struct syscall_ctx *c);
 int sys_wait_event(struct syscall_ctx *c);
 int sys_wait_ready(struct syscall_ctx *c);
+int sys_fs_watch(struct syscall_ctx *c);      // fswatch.h -- the compositor's path watches
 int sys_win_request(struct syscall_ctx *c);
 
 // kernel/core/sys_syscalls.c -- the machine: hardware, settings, power

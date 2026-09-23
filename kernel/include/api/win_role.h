@@ -43,6 +43,11 @@ void win_server_font_changed(void);
 // The screen's size changed (WIN_EV_SCREEN, a = w, b = h). One caller:
 // screen_set_mode().
 void win_server_screen_changed(int w, int h);
+// WIN_EV_SETTING (a = the registry generation) and WIN_EV_FSWATCH
+// (a = a watch id): pushed configuration -- see abi/win_proto.h. The
+// first from setting.c's generation bump, the second from fswatch.c.
+void win_server_setting_changed(uint32_t generation);
+void win_server_fswatch_fired(int id);
 
 // Handles one client request against `pid`. `req` is a KERNEL copy --
 // never the client's own page, which the client could change under us

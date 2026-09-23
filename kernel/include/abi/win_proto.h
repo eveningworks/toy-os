@@ -227,6 +227,17 @@
 // whole screen, and it presents with WIN_REQ_FB_PRESENT. With a = 0 the
 // client goes back to its own buffers and WIN_REQ_PRESENT.
 #define WIN_EV_SCANOUT    37
+// PUSHED CONFIGURATION, compositor only (the kernel's queue is its).
+// FSWATCH: a: the watch id SYS_FS_WATCH returned. Something changed AT
+// that path or, for a directory, directly inside it -- which one is not
+// said; re-read what the watch was for. SETTING: a setting changed from
+// anywhere (a: the registry generation, low 31 bits). Both are COALESCED
+// in the queue -- one pending per watch, one SETTING -- so a program
+// writing all day costs one event, not a backlog. inotify's watch
+// descriptors and Windows' WM_SETTINGCHANGE, delivered where the
+// compositor already waits.
+#define WIN_EV_FSWATCH    38
+#define WIN_EV_SETTING    39
 #define WIN_EV_POPUP_DONE 33 // `window`: a popup of this client the compositor
                              // DISMISSED -- a press landed outside every
                              // surface of the client's. It is already off the

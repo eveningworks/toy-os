@@ -1,4 +1,5 @@
 // See desktop.h for the design writeup.
+#include "wm/wm_watch.h" // desktop_poll_config()'s change counter
 #include "desktop.h"
 #include "lib/usetting.h" // the MERGED registry: these settings are declared, not registered
 #include "start_store.h"
@@ -496,7 +497,7 @@ const char *desktop_icon_size_word(void) { return g_icon_size; }
 void desktop_poll_config(void) {
     static uint64_t seen_gen;
     static int primed;
-    uint64_t gen = sys_fs_generation();
+    uint64_t gen = wm_watch_config_gen() + wm_watch_gen(WM_TOPIC_DESKTOP);
     if (!primed) {
         primed = 1;
         seen_gen = gen;

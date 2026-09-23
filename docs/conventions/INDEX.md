@@ -265,6 +265,11 @@ whenever a headline here tells you something you did not already know.
   SHELL'S**
 - **AN EXEC LOADS BEFORE IT TEARS DOWN, TAKES `struct spawn_msg`, AND
   KEEPS THE SLOT**
+- **A KMUTEX IS NEVER TAKEN FROM A CONTEXT THAT CAN NEITHER SLEEP NOR BE
+  ROTATED AWAY**
+- **A DRIVER WHOSE WAIT SLEEPS SERIALISES ITS OWN HARDWARE WITH ITS OWN
+  LOCK**
+- **A CONTEXT PARKED MID-CALL DIES ON ITS WAY OUT, NOT WHERE IT SLEEPS**
 
 ### GUI, Toykit and the desktop
 
@@ -659,6 +664,8 @@ whenever a headline here tells you something you did not already know.
   `/usr/wm/applications`, AND EVERY VERB IS A CHILD PROCESS**
 - **MARKS SURVIVE A RELOAD BY NAME, BECAUSE THE VOLUME'S GENERATION
   NEVER STOPS MOVING**
+- **THE COMPOSITOR'S CONFIG IS PUSHED; NOTHING ON THE FRAME PATH POLLS
+  `sys_fs_generation()`**
 
 ### Storage, the filesystem, and /etc
 
@@ -786,6 +793,7 @@ whenever a headline here tells you something you did not already know.
 - **THE WRITE PATH RESOLVES THROUGH THE PATH CACHE, BECAUSE `resolve()`
   CACHES AND NOT `lookup()`**
 - **UNDER `batched`, THE ALLOCATION BITMAP RIDES THE DEFERRED COMMIT**
+- **A FILE OTHER PROCESSES READ IS PUBLISHED, NEVER REWRITTEN IN PLACE**
 
 ### The shell, the console, and line editing
 

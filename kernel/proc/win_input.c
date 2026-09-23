@@ -63,6 +63,20 @@ int win_input_push(const struct win_event *ev) {
         }
     }
 
+    // PUSHED CONFIGURATION COALESCES: one pending per watch, one
+    // SETTING. It says "look again", and a second copy says nothing the
+    // first did not -- while a program writing all day would otherwise
+    // fill the queue with them.
+    if (ev->type == WIN_EV_FSWATCH || ev->type == WIN_EV_SETTING) {
+        for (int i = 0; i < q.count; i++) {
+            struct win_event *e = &q.ring[(q.head + i) % WIN_EVENT_QUEUE_MAX];
+            if (e->type == ev->type && (ev->type == WIN_EV_SETTING || e->a == ev->a)) {
+                *e = *ev;
+                return 1;   // already queued; its wake is already pending
+            }
+        }
+    }
+
     if (q.count == WIN_EVENT_QUEUE_MAX) {
         // Full: drop the OLDEST INPUT event, and only when there is
         // none the oldest of all. See WIN_EVENT_QUEUE_MAX's comment for

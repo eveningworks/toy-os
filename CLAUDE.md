@@ -229,15 +229,18 @@ Five things to know:
 
 ### The filesystem
 
-- **THE FILESYSTEM IS NOT RE-ENTRANT, and `vfs.c` holds a preemption
-  guard because of it.** `tfs3.c` walks through module-level scratch
-  buffers and a ring-3 process is preemptible inside a syscall, so two
-  interleaved reads overwrite each other's block. `FS_OP()` wraps every
-  backend call in `scheduler_preempt_disable()`/`_enable()`. It does NOT
-  make an `fs_list()` callback safe to call `fs_*` from (that is
-  recursion, which a depth counter cannot see), and an unbalanced
-  `disable()` hangs the machine -- which is why `_enable()` clamps at
-  zero.
+- **THE FILESYSTEM IS NOT RE-ENTRANT, and `vfs.c` holds ONE SLEEPING
+  LOCK because of it.** `tfs3.c` walks through module-level scratch
+  buffers, so `FS_OP()` takes `g_fs_lock` (a recursive `kmutex`) around
+  every backend call -- and its holder may SLEEP in a disk wait. So
+  **never take it, or any kmutex, with the preemption guard raised or
+  with interrupts off and no scheduler slot**: behind a sleeping holder
+  that spins forever. `kmutex_lock()` logs `taken from atomic context`
+  on entry when it happens. A stretch longer than one fs call that must
+  keep the disk quiet uses `fs_exclusive_begin()`/`_end()`, never the
+  preemption guard. It does NOT make an `fs_list()` callback safe to
+  call `fs_*` from (that is recursion). Finer locking is planned:
+  `docs/fslock-design.md`.
 - **THERE IS NO `fs_read()`. A whole-file read goes into memory the
   caller owns: `fs_read_into(path, buf, cap)`**, which REFUSES an
   oversized file rather than truncating; a file that may be large is
@@ -794,8 +797,10 @@ read before any user-mode-driver work, and for why an IOMMU-less DMA
 driver in ring 3 buys crash isolation and NOT containment),
 `dynlink-design.md`, `signals-design.md` (read before Phase 1's
 signal/TTY/job-control work -- its point is that those are ONE problem),
-`blocking-design.md` (**read before touching `switch_to()`,
-`block_common()` or `FS_OP()`**), `smp-design.md` (stage 1 BUILT; **read
+`blocking-design.md` (stages 1-3 BUILT; **read before touching
+`switch_to()`, `block_common()` or `FS_OP()`**), `fslock-design.md`
+(**finer filesystem locking** -- stage 0 BUILT; read before touching
+tfs3's scratch state or adding a caller that sleeps under the fs lock), `smp-design.md` (stage 1 BUILT; **read
 before adding a module-level buffer to anything a syscall reaches**),
 `modules-design.md`, `update-design.md`, `rootfs-design.md`,
 `winserver-ring3-design.md` (stages 0-1 BUILT; **read before touching

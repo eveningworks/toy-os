@@ -30,6 +30,7 @@ static int ata_fill(int index, void *out) {
     if (ata_trim_supported())          a->flags |= QUERY_ATA_TRIM;
     a->max_sectors_xfer = (uint64_t)ata_max_sectors_per_xfer();
     a->sector_count     = (uint64_t)ata_sector_count();
+    a->dma_sleeps       = ata_dma_sleeps();
     return 1;
 }
 
@@ -37,6 +38,7 @@ static const struct query_field ata_fields[] = {
     QUERY_FIELD(struct query_ata, flags,            QUERY_TYPE_U64),
     QUERY_FIELD(struct query_ata, max_sectors_xfer, QUERY_TYPE_U64),
     QUERY_FIELD(struct query_ata, sector_count,     QUERY_TYPE_U64),
+    QUERY_FIELD(struct query_ata, dma_sleeps,       QUERY_TYPE_U64),
 };
 
 static const struct query_provider ata_provider = {

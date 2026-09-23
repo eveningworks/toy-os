@@ -18,6 +18,7 @@
 #include "pipe.h"        // pipe_wait_chan() -- one channel per pipe
 #include "win_input.h"  // win_input_wait_chan() -- the compositor's own channel
 #include "proc_info.h"  // PROC_STATE_*
+#include "syscall_abi.h" // SYS_RETRY -- what an entry-parked waiter is answered
 #include <stddef.h>
 #include "timer.h"
 #include "elf_run.h" // elf_run_from_fs() -- the legacy blocking path
@@ -382,4 +383,43 @@ KTEST("sched", "every waitable object has its own channel") {
     // A bad pid has no channel, rather than aliasing slot 0's.
     KTEST_ASSERT_EQ(scheduler_wait_chan_pid(0), NULL);
     KTEST_ASSERT_EQ(scheduler_wait_chan_pid(99999), NULL);
+}
+
+KTEST("sched", "a deadline releases a mid-call park without answering it") {
+    // A context parked MID-CALL resumes its own C frames; its kernel_rsp
+    // is the trapframe of a syscall still in progress, so a timer that
+    // writes SYS_RETRY there corrupts that call's eventual return value.
+    // The entry-parked slot beside it is the control: same deadline,
+    // and it MUST be answered.
+    uint64_t tf_k[SCHED_TF_SLOTS] = {0}, tf_e[SCHED_TF_SLOTS] = {0};
+    static const char chan_k, chan_e;
+    const uint64_t SENTINEL = 0x5157;
+    tf_k[SCHED_TF_RAX] = SENTINEL;
+    tf_e[SCHED_TF_RAX] = SENTINEL;
+
+    scheduler_preempt_disable();
+    int k = scheduler_test_park(tf_k, &chan_k, SCHED_WAIT_DISK);
+    int e = scheduler_test_park(tf_e, &chan_e, SCHED_WAIT_NET);
+    int state_k = -1, state_e = -1;
+    uint64_t rax_k = 0, rax_e = 0;
+    if (k >= 0 && e >= 0) {
+        scheduler_test_park_deadline(k, 1, 1);   // long past
+        scheduler_test_park_deadline(e, 1, 0);
+        scheduler_wake_timers(2);
+        state_k = scheduler_test_state(k);
+        state_e = scheduler_test_state(e);
+        rax_k = tf_k[SCHED_TF_RAX];
+        rax_e = tf_e[SCHED_TF_RAX];
+    }
+    scheduler_test_park_deadline(k, 0, 0);
+    scheduler_test_release(k);
+    scheduler_test_release(e);
+    scheduler_test_take_resched();
+    scheduler_preempt_enable();
+
+    if (k < 0 || e < 0) KTEST_SKIP("no free process slots to fabricate");
+    KTEST_ASSERT_EQ(state_k, PROC_STATE_READY);    // released...
+    KTEST_ASSERT_EQ(rax_k, SENTINEL);              // ...and NOT answered
+    KTEST_ASSERT_EQ(state_e, PROC_STATE_READY);
+    KTEST_ASSERT_EQ((int64_t)rax_e, (int64_t)SYS_RETRY); // the control was
 }

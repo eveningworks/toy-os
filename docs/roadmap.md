@@ -24,7 +24,7 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] Replace the preemption guard with a real sleeping lock -- `ata.c`'s sleep now NEEDS it: nothing may park inside `FS_OP()`  *(Scheduler: blocking, priorities, classes)*
+- [ ] Finer filesystem locking -- a sleeping holder of the one lock costs others an operation PER call  *(Scheduler: blocking, priorities, classes)*
 - [ ] One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy  *(AHCI/SATA driver)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
@@ -67,8 +67,9 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] Two scheduling classes, Linux-shaped
 - [x] ~~Measure desktop latency under heavy disk I/O, the yardstick for the three items below~~ DONE 2026-09-12
 - [x] ~~A `schedule()` that suspends the KERNEL stack, so a caller can block mid-call~~ DONE 2026-09-18 -- one suspend shape
-- [ ] **NEXT** Replace the preemption guard with a real sleeping lock -- `ata.c`'s sleep now NEEDS it: nothing may park inside `FS_OP()`
-- [ ] **Interruptible syscalls** -- the trap gate; MEASURED as a 20x latency regression until the lock above lands
+- [x] ~~Replace the preemption guard with a real sleeping lock~~ DONE 2026-09-18 -- `ata.c`'s disk waits sleep under it
+- [ ] **NEXT** Finer filesystem locking -- a sleeping holder of the one lock costs others an operation PER call
+- [ ] **Interruptible syscalls** -- the trap gate; the lock and the sleeping disk wait have landed, so re-measure it at `0xEF`
 - [ ] Bound how long a frame can block on I/O
 
 ### Signals & process control
@@ -791,6 +792,7 @@ run on, not by order.
 - [x] ~~Backend selection + fallback~~
 - [x] ~~Multi-sector transfers past 64 KiB~~ done -- 64 PRDT entries, 256 KiB per command, stepped fallback if the pool is fragmented
 - [ ] **NEXT** One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy
+- [ ] AHCI's command wait sleeps, as `ata.c`'s does -- it still busy-polls with interrupts off, freezing the machine for a flush
 - [ ] NCQ (queued commands) -- needs an ASYNCHRONOUS block interface first, not more AHCI code
 - [ ] An asynchronous `block_device` submit/complete split, which NCQ, readahead and writeback all wait on
 - [x] ~~Batched journal barriers~~ done -- `storage.sync = batched` defers the COMMIT rather than generalising flush_begin/end
@@ -798,6 +800,8 @@ run on, not by order.
 - [x] ~~TFS3 stops re-reading pointer tables it already holds~~ done -- the write caches outlive a syscall
 - [x] ~~`SYS_WRITE_MAX` at 256 KiB~~ done -- it sets the TRANSACTION count, and write amplification fell 1.33x -> 1.086x
 - [ ] A VFS inode cache -- the path half is done in `resolve()`; what is left is ONE sector read per op, measured not worth the refactor yet
+- [ ] `rename()` that replaces its destination atomically -- every backend refuses, so a publish is three steps
+- [ ] Path watches for any process, not just the compositor -- `SYS_FS_WATCH` delivers to the kernel's one event queue
 - [x] ~~Batch TFS3's allocation bitmap into the deferred transaction~~ done -- 1138 -> 623 write commands per 64 MiB
 - [ ] Batch the dirty POINTER TABLES too -- blocked on `g_mcache` needing to flush a second mount's dirty entry rather than discard it
 - [ ] Remove one of the file path's two copies -- scatter/gather the PRDT over the kernel buffer instead of the driver's bounce
