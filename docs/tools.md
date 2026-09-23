@@ -2699,6 +2699,28 @@ window without going through it will find its layout polls timing out.
   HDA driver's first real bug in one run -- an amplifier-capability
   field read in the wrong order set "0 dB" to -53 dB, and a tone at
   4% amplitude measured as silence.
+
+  **Its last boot is FOUR RESTARTS, and it asserts on a hole's SHAPE.**
+  Each chime is played only once the log says soundd released the card,
+  so every one is a fresh open and START. The mixer used to fill the
+  whole ring on that first pass whatever the client had produced, and
+  the recording showed a hole inside the chime of exactly 2, 8, 10 or 12
+  chunks. TCG's padding is the reason not to assert "no gaps": the check
+  fails only on a gap that is a WHOLE NUMBER OF CHUNKS (10.67 ms), which
+  the mixer makes and TCG does not. Measured 2026-09-23: red 2 runs of
+  2 with only soundd's fill rule reverted (holes of 21.3-298.6 ms, every
+  one a whole number of chunks), green 3 of 3 on the fixed soundd.
+  **`--only restart` runs that boot alone**, about a minute instead of
+  the whole tool, which is what makes a positive control affordable.
+  Each chime prints how long the release wait and aplay took, so a stall
+  names its step instead of reading as the tool hanging.
+
+  **IT SETS THE MASTER VOLUME ITSELF** (`establish()`), because its
+  image is a copy of whatever `disk.img` holds. A `volume=25` left there
+  by an earlier run turned ten checks red with nothing wrong in the
+  build (the emulated AC97 plays 25% as silence, `docs/bugs.md`). A
+  failure here that the old build does not share should be retried on a
+  `make clean-disk` image before it is believed.
 - **`soundd_test.py`** -- the sound daemon, judged on the HOST by the
   one question no in-guest check can answer: are TWO programs audible at
   the same time? A mixer that silently served one client and dropped the

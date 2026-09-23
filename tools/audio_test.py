@@ -175,6 +175,116 @@ def measure(wav_path):
     return rate, secs, hz, peak_v, tone_secs
 
 
+# One mixer chunk (abi/sound_abi.h: 512 frames at 48 kHz), in ms.
+CHUNK_MS = 512 * 1000.0 / 48000
+
+
+def segments(wav_path, min_gap_ms=3.0):
+    """[(start_s, len_ms, gap_before_ms)] of the non-silent runs.
+
+    A run of exact zeros at least `min_gap_ms` long splits two segments.
+    Same hand-parsed header as measure(), for the same reason.
+    """
+    with open(wav_path, "rb") as f:
+        hdr = f.read(44)
+        raw = f.read()
+    if len(hdr) < 44 or hdr[:4] != b"RIFF":
+        return []
+    ch = struct.unpack_from("<H", hdr, 22)[0]
+    rate = struct.unpack_from("<I", hdr, 24)[0]
+    total = len(raw) // 2
+    s = struct.unpack(f"<{total}h", raw[:total * 2])[::max(ch, 1)]
+    need = int(rate * min_gap_ms / 1000)
+    out, i, n, prev_end = [], 0, len(s), None
+    while i < n:
+        while i < n and s[i] == 0:
+            i += 1
+        if i >= n:
+            break
+        start, zeros = i, 0
+        while i < n:
+            zeros = zeros + 1 if s[i] == 0 else 0
+            if zeros >= need:
+                break
+            i += 1
+        end = i - zeros + (1 if zeros else 0)
+        gap = None if prev_end is None else (start - prev_end) * 1000.0 / rate
+        out.append((start / rate, (end - start) * 1000.0 / rate, gap))
+        prev_end = end
+    return out
+
+
+# THE IMAGE IS A COPY OF WHATEVER disk.img HOLDS, settings included, and
+# every check here measures an amplitude. A master volume left at 25 by
+# some earlier run turned ten checks red with nothing wrong -- the AC97
+# maps 25% to about -105 dB. Set on the first boot, it persists on the
+# copy for every later one.
+def establish(dbg):
+    dbg.send("sh config set volume 100")
+
+
+def restart_phase(res, boot, halt, sock, wav7_path):
+    # --- EVERY PLAYBACK IS A RESTART, and none may have a hole in it ---
+    #
+    # soundd releases the card after 2 s of idle, so each chime below is
+    # a fresh open and START -- and the next is sent only once the log
+    # says the card was released, so that is established, not hoped. The
+    # mixer used to fill the whole ring on that first pass whatever the
+    # client had produced, putting a 21-128 ms hole INSIDE 7 playbacks in
+    # 8. Its signature is a gap that is a WHOLE NUMBER OF CHUNKS: TCG's
+    # host-side silence padding (see measure()) is not quantised, so the
+    # assertion is on the quantised kind and cannot flake on the other.
+    restarts = 0
+    if boot(wav7_path).returncode != 0:
+        res.check("the guest rebooted for the restart phase", False)
+    else:
+        try:
+            dbg = wait_serial(sock)
+            if res.check("the serial console answers (restart phase)",
+                         dbg is not None):
+                establish(dbg)
+                was = dbg.timeout
+                dbg.timeout = 60
+                for k in range(4):
+                    # One release at boot, then one after each chime.
+                    t0 = time.time()
+                    released = False
+                    for _ in range(40):
+                        if (dbg.send("sh dmesg") or "").count("released the card") > k:
+                            released = True
+                            break
+                        time.sleep(0.5)
+                    t1 = time.time()
+                    out = dbg.send("sh aplay /usr/share/sounds/chime.wav") or ""
+                    if "chime" in out:
+                        restarts += 1
+                    # WHICH STEP a slow run spent its time in: a stall here
+                    # otherwise reads as the whole tool hanging.
+                    print(f"    chime {k + 1}: card {'released' if released else 'NOT released'}"
+                          f" after {t1 - t0:.1f}s, aplay {'returned' if 'chime' in out else 'said nothing'}"
+                          f" after {time.time() - t1:.1f}s")
+                dbg.timeout = was
+                res.check("four chimes played, each after the card was released",
+                          restarts == 4, f"{restarts} of 4")
+                dbg.close()
+        finally:
+            halt()
+    if restarts:
+        segs = segments(wav7_path)
+        holes = [g for (_, _, g) in segs
+                 if g is not None and g < 1000 and
+                 abs(g / CHUNK_MS - round(g / CHUNK_MS)) < 0.05]
+        res.check("NO PLAYBACK HAS A WHOLE-CHUNK HOLE IN IT (the mixer ran "
+                  "ahead of its client)", not holes,
+                  f"holes of {', '.join(f'{h:.1f}' for h in holes)} ms" if holes
+                  else f"{len(segs)} segment(s)")
+        whole = [l for (_, l, _) in segs if abs(l - 420) < 15]
+        res.check("...and each chime came out whole, 420 ms",
+                  len(whole) == restarts,
+                  f"{len(whole)} of {restarts}; lengths "
+                  f"{', '.join(f'{l:.0f}' for (_, l, _) in segs)} ms")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--instance", type=int, default=0)
@@ -183,6 +293,9 @@ def main():
     ap.add_argument("--card", choices=("ac97", "hda"), default="ac97",
                     help="which PCI sound card to attach and which driver "
                          "to expect (default ac97)")
+    ap.add_argument("--only", choices=("restart",),
+                    help="run one phase on its own boot -- for a positive "
+                         "control, which the full run makes slow")
     args = ap.parse_args()
     card = args.card
     # The driver's boot line and the core's registration line name the
@@ -199,6 +312,7 @@ def main():
     wav4_path = os.path.join(tmp, "out_perapp.wav")
     wav5_path = os.path.join(tmp, "out_ring3.wav")
     wav6_path = os.path.join(tmp, "out_snddrv.wav")
+    wav7_path = os.path.join(tmp, "out_restart.wav")
     img = os.path.join(tmp, "disk.img")
     subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
                    cwd=REPO, check=True)
@@ -215,6 +329,11 @@ def main():
         subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),
                         "--instance", str(n), "stop"], capture_output=True)
 
+    if args.only == "restart":
+        restart_phase(res, boot, halt, sock, wav7_path)
+        print(f"\naudio_test: {len(res.passes)} passed, {len(res.fails)} failed")
+        return 1 if res.fails else 0
+
     if boot(wav_path).returncode != 0:
         res.check(f"the guest booted with an {card} attached", False)
         return 1
@@ -223,6 +342,7 @@ def main():
         dbg = wait_serial(sock)
         if not res.check("the serial console answers", dbg is not None):
             return 1
+        establish(dbg)
 
         dmesg = dbg.send("sh dmesg") or ""
         res.check("the driver claimed the controller",
@@ -628,9 +748,11 @@ def main():
         res.check("...at 1 kHz, so soundd and the resampler ran on top of it",
                   abs(hz6 - 1000.0) < 30, f"measured {hz6:.1f}Hz, wanted 1000")
 
+    restart_phase(res, boot, halt, sock, wav7_path)
+
     if args.keep:
         print(f"  recordings kept: {wav_path}, {wav2_path}, {wav3_path}, "
-              f"{wav4_path}, {wav5_path}, {wav6_path}")
+              f"{wav4_path}, {wav5_path}, {wav6_path}, {wav7_path}")
 
     print(f"\naudio_test: {len(res.passes)} passed, {len(res.fails)} failed")
     for f in res.fails:
