@@ -158,7 +158,7 @@ def _since(mark, pattern):
 
 
 CONTROL_RE = (r"settings: control (\d+) (\S+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) "
-               r"rows (\d+) kind (radio|combo|slider|spin|text)")
+               r"rows (\d+) kind (radio|combo|slider|spin|text|keycap)")
 
 
 def slots(dbg, mark):
@@ -602,8 +602,11 @@ def main():
     dupes = [l for l in labels if l != "-" and labels.count(l) > 1]
     check("no two pages share a name",
           not dupes, f"duplicated labels: {sorted(set(dupes))}")
+    # NOT Network: it has had two pages (Connection log, Recovery) since
+    # 53e2e6f7, so its rows are correctly named by page. Which categories
+    # are lone is the DATA's business; these two have been for a while.
     check("a lone page is named by its category, unqualified",
-          "Sound" in labels and "Storage" in labels and "Network" in labels,
+          "Sound" in labels and "Storage" in labels,
           f"labels={labels}")
 
     # Pages from three different categories, so the walk is exercised

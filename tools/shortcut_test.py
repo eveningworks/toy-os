@@ -61,6 +61,43 @@ class Result:
             print(f"        {detail}")
 
 
+# WHERE SETTINGS SAYS ITS CONTROLS ARE, content-relative: one `control`
+# line per slot when a page is drawn, and one `layout button` line per
+# button. Clicked from these rather than from fixed pixels -- the fixed
+# ones missed every control once the pages were reorganised, which read
+# as "capture does not suppress the shortcut" and "Apply does not
+# persist" (docs/bugs.md) while the clicks landed on nothing.
+CONTROL_RE = r"settings: control \d+ (\S+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) "
+BUTTON_RE = r"settings: layout button (\w+) (-?\d+) (-?\d+) (-?\d+) (-?\d+)"
+
+
+def settings_rects(dbg):
+    """{name: (x, y, w, h)} as the app last reported them.
+
+    Off the console WIRE (logs()), never `sh dmesg`: the log ring holds
+    ~14 KB, and every window poll's JSON reply pushes an app's lines out
+    of it within seconds.
+    """
+    rects = {}
+    for line in dbg.logs("settings: ", clear=False):
+        m = re.search(CONTROL_RE, line) or re.search(BUTTON_RE, line)
+        if m:
+            rects[m.group(1)] = tuple(int(v) for v in m.groups()[1:])
+    return rects
+
+
+def click_named(dbg, res, content, rects, suffix):
+    """Click the centre of the control whose name ends in `suffix`."""
+    hit = [r for name, r in rects.items() if name == suffix or name.endswith("." + suffix)]
+    if not hit:
+        res.check(f"Settings reports where {suffix} is", False,
+                  f"reported: {sorted(rects)}")
+        return False
+    x, y, w, h = hit[-1]
+    dbg.click(content["x"] + x + w // 2, content["y"] + y + h // 2)
+    return True
+
+
 def fired(dbg, wait=2.5):
     """The commands the compositor launched since the last call."""
     time.sleep(wait)
@@ -174,10 +211,16 @@ def run_rebinding(dbg, qmp, res):
     # compositor standing down (WIN_REQ_INHIBIT_SHORTCUTS) this launches
     # a file manager instead of recording, which is the whole reason the
     # inhibitor exists.
+    rects = settings_rects(dbg)
     before = len([l for l in (dbg.send("gui windows") or "").splitlines()
                   if "File Manager" in l])
     dbg.logs("wm: shortcut ->", clear=True)
-    dbg.click(489, 232)              # the Terminal row's capture box
+    # THE SCREENSHOT ROW, NOT THE TERMINAL ONE: the fourth row sits below
+    # the page's scroll viewport at the default window size, so a press
+    # there is clipped away and nothing arms -- and the File Manager it
+    # then launched covered the window for every click after it.
+    if not click_named(dbg, res, content, rects, "screenshot"):
+        return
     time.sleep(1.5)
     dbg.send("gui key e super")
     got = fired(dbg)
@@ -194,11 +237,13 @@ def run_rebinding(dbg, qmp, res):
     time.sleep(1)
 
     # --- the end-to-end rebinding -------------------------------------
-    dbg.click(489, 388)              # Task Manager's box
+    if not click_named(dbg, res, content, rects, "task_manager"):
+        return
     time.sleep(1.2)
     dbg.send("gui key 0x0D ctrl alt")   # Ctrl+Alt+M
     time.sleep(1.5)
-    dbg.click(263, 432)              # Apply
+    if not click_named(dbg, res, content, rects, "apply"):
+        return
     time.sleep(3)
     conf = dbg.send(f"sh cat {CONF}") or ""
     res.check("Apply writes the new binding to /etc/shortcuts.conf",

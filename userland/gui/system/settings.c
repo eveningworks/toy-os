@@ -489,9 +489,8 @@ static void rebuild_sidebar(void) {
     //
     // **A CATEGORY'S ONLY PAGE IS NAMED BY THE CATEGORY.** Its group key
     // is an internal word chosen to group settings, not to title a row:
-    // Sound's lone page is "Output", Storage's is "Filesystem" and
-    // Network's is named after its one setting, "Connection log". None
-    // of those is what the row should say at the top level, and the
+    // Sound's lone page is "Output" and Storage's is "Filesystem" --
+    // neither is what the row should say at the top level, and the
     // category already has the better word.
     unsigned char lone[MAX_GROUPS], dup[MAX_GROUPS];
     for (int g = 0; g < g_group_count; g++) {
@@ -1980,6 +1979,46 @@ static int refit_prose(void) {
     return changed;
 }
 
+
+// THE SHOWING CONTROL'S RECT, KIND AND DISABLED STATE, for the reports
+// below. One switch naming every kind: three hand-kept chains used to
+// answer these separately, and all three sent a key-capture control
+// down the radio branch -- so a shortcut slot reported 0 0 0 0 and a
+// test clicking it landed on the window's corner.
+static void slot_rect(const struct slot *sl, int *x, int *y, int *w, int *h) {
+    switch (sl->kind) {
+    case CTRL_COMBO:  *x = sl->combo.x;  *y = sl->combo.y;  *w = sl->combo.w;  *h = sl->combo.h;  break;
+    case CTRL_SLIDER: *x = sl->slider.x; *y = sl->slider.y; *w = sl->slider.w; *h = sl->slider.h; break;
+    case CTRL_SPIN:   *x = sl->spin.x;   *y = sl->spin.y;   *w = sl->spin.w;   *h = sl->spin.h;   break;
+    case CTRL_TEXT:   *x = sl->text.x;   *y = sl->text.y;   *w = sl->text.w;   *h = sl->text.h;   break;
+    case CTRL_KEYCAP: *x = sl->keycap.x; *y = sl->keycap.y; *w = sl->keycap.w; *h = sl->keycap.h; break;
+    default:          *x = sl->radio.x;  *y = sl->radio.y;  *w = sl->radio.w;  *h = sl->radio.h;  break;
+    }
+}
+
+static const char *slot_kind_name(const struct slot *sl) {
+    switch (sl->kind) {
+    case CTRL_COMBO:  return "combo";
+    case CTRL_SLIDER: return "slider";
+    case CTRL_SPIN:   return "spin";
+    case CTRL_TEXT:   return "text";
+    case CTRL_KEYCAP: return "keycap";
+    default:          return "radio";
+    }
+}
+
+// A key-capture control has no disabled state of its own.
+static int slot_disabled(const struct slot *sl) {
+    switch (sl->kind) {
+    case CTRL_COMBO:  return sl->combo.disabled;
+    case CTRL_SLIDER: return sl->slider.disabled;
+    case CTRL_SPIN:   return sl->spin.disabled;
+    case CTRL_TEXT:   return sl->text.disabled;
+    case CTRL_KEYCAP: return 0;
+    default:          return sl->radio.disabled;
+    }
+}
+
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     uapp_log_layout(a, "settings");   // tree, split (+frac), page, by name
     // WHICH LABEL'S WIDTH DECIDES, and when to do this again.
@@ -2045,10 +2084,8 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     int moved = g_slot_count != g_last_reported_count;
     for (int i = 0; i < g_slot_count && !moved; i++) {
         struct slot *sl = &g_slot[i];
-        int y = sl->kind == CTRL_COMBO ? sl->combo.y
-                : sl->kind == CTRL_SLIDER ? sl->slider.y
-                : sl->kind == CTRL_TEXT   ? sl->text.y
-                : sl->kind == CTRL_SPIN   ? sl->spin.y : sl->radio.y;
+        int x, y, w, hh;
+        slot_rect(sl, &x, &y, &w, &hh);
         if (y != g_last_y[i]) moved = 1;
     }
     if (moved) {
@@ -2056,17 +2093,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
         for (int i = 0; i < g_slot_count; i++) {
             struct slot *sl = &g_slot[i];
             int x, y, w, hh;
-            if (sl->kind == CTRL_COMBO) {
-                x = sl->combo.x; y = sl->combo.y; w = sl->combo.w; hh = sl->combo.h;
-            } else if (sl->kind == CTRL_SLIDER) {
-                x = sl->slider.x; y = sl->slider.y; w = sl->slider.w; hh = sl->slider.h;
-            } else if (sl->kind == CTRL_SPIN) {
-                x = sl->spin.x; y = sl->spin.y; w = sl->spin.w; hh = sl->spin.h;
-            } else if (sl->kind == CTRL_TEXT) {
-                x = sl->text.x; y = sl->text.y; w = sl->text.w; hh = sl->text.h;
-            } else {
-                x = sl->radio.x; y = sl->radio.y; w = sl->radio.w; hh = sl->radio.h;
-            }
+            slot_rect(sl, &x, &y, &w, &hh);
             g_last_y[i] = y;
             // The description's ROW COUNT, beside the control's
             // geometry and for the same reason: it is the only
@@ -2079,20 +2106,12 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
                   sl->setting >= 0 ? ugfx_text_width(g_desc[sl->setting]) : 0);
             ulogf("settings: control %d %s %d %d %d %d rows %d kind %s\n", i,
                   sl->setting >= 0 ? g_name[sl->setting] : "-", x, y, w, hh,
-                  sl->choice_count,
-                  sl->kind == CTRL_COMBO ? "combo"
-                    : sl->kind == CTRL_SLIDER ? "slider"
-                    : sl->kind == CTRL_TEXT ? "text"
-                    : sl->kind == CTRL_SPIN ? "spin" : "radio");
+                  sl->choice_count, slot_kind_name(sl));
             // READ FROM THE CONTROL THAT IS SHOWING. This asked the
             // radio whatever kind was on screen, which happened to be
             // right only because set_slot_enabled() sets all of them
             // together -- a fact one edit away from being false.
-            int shown_off = sl->kind == CTRL_COMBO  ? sl->combo.disabled
-                          : sl->kind == CTRL_SLIDER ? sl->slider.disabled
-                          : sl->kind == CTRL_SPIN   ? sl->spin.disabled
-                          : sl->kind == CTRL_TEXT   ? sl->text.disabled
-                                                    : sl->radio.disabled;
+            int shown_off = slot_disabled(sl);
             ulogf("settings: enabled %d %s %d\n", i,
                   sl->setting >= 0 ? g_name[sl->setting] : "-",
                   shown_off ? 0 : 1);
