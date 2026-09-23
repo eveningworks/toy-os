@@ -917,7 +917,7 @@ run on, not by order.
 - [x] ~~A per-application volume: a slider per stream in the tray flyout, keyed by application name~~ DONE 2026-09-21
 - [x] ~~Release the card when no client plays, PipeWire's suspend-on-idle~~ DONE 2026-09-21
 - [ ] HDMI/DisplayPort audio -- `00:03.0` went to ring-3 stage 3, so this reclaims it or moves to ring 3 too
-- [ ] One volume taper for every card -- `hda.c` and `sound_usb.c` share the 40 dB convention, `ac97.c` is still linear in attenuation steps
+- [x] ~~One volume taper for every card~~ DONE 2026-09-23 -- `ac97.c` joined the 40 dB convention on its master attenuator (2340e1ef)
 - [ ] MPEG-2/2.5 Layer III (the half-rate sample rates), and Layer I/II -- refused with -ENOTSUP today
 - [ ] Intensity stereo in the MP3 decoder -- refused, because nothing available encodes it to test against
 - [ ] An MP3 seek index, so seeking lands exactly rather than by average frame size
