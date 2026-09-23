@@ -13,6 +13,9 @@
 
 static uint64_t g_last_input;      // ticks
 static int g_saver_pid;
+// Adopted rather than started here: somebody else's child, which
+// waitpid() answers with an error rather than "still running".
+static int g_saver_adopted;
 static uint32_t g_seen_generation;
 static int g_idle_minutes = SCREENSAVER_IDLE_DEFAULT;
 static char g_saver[64] = SCREENSAVER_DEFAULT;
@@ -67,6 +70,7 @@ static void start_saver(void) {
     int pid = sys_spawn(path, 0, -1);
     if (pid > 0) {
         g_saver_pid = pid;
+        g_saver_adopted = 0;
         wm_track_launched(pid);   // so wm.c's reaper owns the zombie
         forget_cursor();
         wm_logf("wm: screensaver %s started as pid %d\n", g_saver, pid);
@@ -118,8 +122,17 @@ void wm_idle_poll(int active) {
     // A pid wm.c's reaper already collected answers here too: waitpid
     // on it is an error, which is not SYS_RETRY, which is "gone". Both
     // readings are the one this wants.
+    //
+    // AN ADOPTED SAVER IS NOT OUR CHILD, so waitpid() on it is an error
+    // from the moment it is adopted -- which read as "exited" the same
+    // instant, so `gui idle` reported pid 0 for a Test saver still on
+    // screen and nothing stopped it on input. Its liveness is asked of
+    // the process table instead.
     int code;
-    if (g_saver_pid && sys_waitpid_nohang(g_saver_pid, &code) != SYS_RETRY) {
+    int gone = !g_saver_pid ? 0
+             : g_saver_adopted ? !wm_pid_is_screensaver(g_saver_pid)
+             : sys_waitpid_nohang(g_saver_pid, &code) != SYS_RETRY;
+    if (gone) {
         wm_logf("wm: screensaver (pid %d) exited on its own\n", g_saver_pid);
         g_saver_pid = 0;
         g_last_input = sys_ticks();
@@ -170,6 +183,7 @@ void wm_idle_adopt_saver(int pid) {
     // screen is not a state with a right answer, and take this one.
     stop_saver();
     g_saver_pid = pid;
+    g_saver_adopted = 1;
     g_last_input = sys_ticks();   // it is on screen NOW, not in a minute
     forget_cursor();
     wm_logf("wm: adopted screensaver pid %d (started elsewhere)\n", pid);

@@ -49,6 +49,11 @@ int wm_idle_minutes(void);
 // claim to be a screensaver by naming itself one.
 void wm_idle_adopt_saver(int pid);
 
+// Is `pid` a live process spawned from /bin/wm/savers? What recognises a
+// saver's window (wm_client.c) and what tells an ADOPTED one is still
+// running -- it is not this compositor's child, so waitpid() cannot.
+int wm_pid_is_screensaver(int pid);
+
 // START AND STOP IT NOW, for `gui idle start|stop`. The shortest
 // timeout a person can configure is one minute, so a test that waited
 // for the clock would cost a minute a check -- these skip the WAIT and

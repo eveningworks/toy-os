@@ -944,7 +944,7 @@ static int identity_for_pid(int pid) {
 // linear scan and the same rule as identity_for_pid() above: what a
 // program IS comes from the path it was spawned from, never from
 // anything it said about itself.
-static int pid_is_screensaver(int pid) {
+int wm_pid_is_screensaver(int pid) {
     struct query_procpath r;
     uint32_t n = (uint32_t)k_strlen(SCREENSAVER_DIR);
     QUERY_FOREACH(QUERY_PROCPATH, r, i) {
@@ -1075,7 +1075,7 @@ void wm_client_chan_pump(void) {
                 // A SAVER IS A SAVER WHOEVER STARTED IT (wm_idle.h), so
                 // the Test button and a shell prompt get the same
                 // dismiss-on-input the idle clock's own does.
-                if (pid_is_screensaver(from)) wm_idle_adopt_saver(from);
+                if (wm_pid_is_screensaver(from)) wm_idle_adopt_saver(from);
             }
             uchan_server_reply(&g_chan, from, &r, sizeof r);
             break;
