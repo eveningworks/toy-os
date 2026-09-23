@@ -1014,7 +1014,10 @@ static uint32_t group_data_end(uint32_t g) {
 }
 
 // Try to allocate one specific block (the adjacent-first fast path).
+static void trim_flush(void);
+
 static int alloc_block_at(uint32_t blk) {
+    trim_flush();
     if (blk < S->group0 + S->meta_off) return 0;
     uint32_t g = (blk - S->group0) / T3_BPG;
     uint32_t i = (blk - S->group0) % T3_BPG;
@@ -1031,6 +1034,7 @@ static int alloc_block_at(uint32_t blk) {
 // block) first, then rotor scan of the preferred group, then every
 // other group. Returns the block number or 0.
 static uint32_t alloc_block(uint32_t prefer_group, uint32_t adjacent_to) {
+    trim_flush();
     if (adjacent_to && alloc_block_at(adjacent_to + 1)) return adjacent_to + 1;
     if (prefer_group >= S->sb.gc) prefer_group = 0;
     for (uint32_t n = 0; n < S->sb.gc; n++) {
@@ -1207,12 +1211,38 @@ static void alog_rollback(void) {
     g_alog.active = 0;
 }
 
-// TRIM freed blocks in runs, best-effort -- parity with TFS2's
-// free_block(): the block is free either way, a refused TRIM must not
-// fail the delete. Called with a sorted-ish run start/count.
+// TRIM freed blocks, best-effort -- parity with TFS2's free_block(): the
+// block is free either way, a refused TRIM must not fail the delete.
+//
+// QUEUED, MERGED, AND SENT AS ONE LIST, because the device's cost is per
+// COMMAND: a 512 MiB delete issued a TRIM per run, 313 of them, 89 ms
+// with nothing else able to run. A delete's runs are mostly adjacent (a
+// pointer table sits next to the data it maps), so they merge to a
+// handful, and the block layer packs 64 to a command.
+//
+// THE QUEUE MUST BE EMPTY BEFORE ANY BLOCK IS ALLOCATED: a discard
+// arriving after a freed block was reused and written destroys the new
+// data. So every freeing operation flushes before it returns, and both
+// allocators flush first as well, in case one did not.
+#define TRIM_QUEUE 64
+static struct blk_range g_trim_q[TRIM_QUEUE];
+static int g_trim_n;
+
+static void trim_flush(void) {
+    if (g_trim_n) blkdev_trim_ranges(S->vol.dev, g_trim_q, g_trim_n);
+    g_trim_n = 0;
+}
+
 static void trim_run(uint32_t first_blk, uint32_t count) {
     if (!count || !blkdev_trim_supported(S->vol.dev)) return;
-    blkdev_trim(S->vol.dev, S->vol.base_lba + first_blk * T3_SPB, count * T3_SPB);
+    uint32_t lba = S->vol.base_lba + first_blk * T3_SPB, n = count * T3_SPB;
+    for (int i = 0; i < g_trim_n; i++) {
+        struct blk_range *q = &g_trim_q[i];
+        if (q->lba + q->count == lba) { q->count += n; return; }
+        if (lba + n == q->lba) { q->lba = lba; q->count += n; return; }
+    }
+    if (g_trim_n == TRIM_QUEUE) trim_flush();
+    g_trim_q[g_trim_n++] = (struct blk_range){ lba, n };
 }
 
 // ---- journal: one fixed-size multi-block transaction ---------------------
@@ -1932,6 +1962,7 @@ static void free_all_blocks(struct t3_inode *node) {
     if (node->ptrs[12]) { free_tree_level(node->ptrs[12], 0); node->ptrs[12] = 0; }
     if (node->ptrs[13]) { free_tree_level(node->ptrs[13], 1); node->ptrs[13] = 0; }
     if (node->ptrs[14]) { free_tree_level(node->ptrs[14], 2); node->ptrs[14] = 0; }
+    trim_flush();
 }
 
 // depth 0: entries are data blocks; deeper: entries are tables.
@@ -2097,6 +2128,7 @@ static void trunc_free(struct t3_trunc *tr, uint32_t first) {
         tr->img[d] = 0;
         tr->used[d] = 0;
     }
+    trim_flush();
 }
 
 // ---- dirent editing (through the transaction) ------------------------------
@@ -3708,7 +3740,7 @@ static int tfs3_check(int repair, struct fs_check_result *out) {
             }
             if (!bbm_test(g, i)) free_b++;
         }
-        if (repair) trim_run(leak_run_start, leak_run_len);
+        if (repair) { trim_run(leak_run_start, leak_run_len); trim_flush(); }
 
         // Inode bitmap + free counts: reconcile, repair-only writes.
         uint32_t free_i = 0;
@@ -3928,6 +3960,41 @@ const struct fs_ops tfs3_ops = {
 // of this check called fs_check() and passed with the flush removed
 // entirely. So it reads the bitmap block back off the device.
 #include "ktest.h"
+#include "scheduler.h" // scheduler_preempt_disable() -- nothing else may TRIM mid-test
+
+KTEST("fs", "deleting a big file discards it in ONE trim call, not one per run") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    const struct mount *rm = mount_root();
+    if (!rm || rm->fs != &tfs3_ops) KTEST_SKIP("the root is not TFS3");
+    if (!blkdev_trim_supported(rm->dev)) KTEST_SKIP("the disk does not TRIM");
+
+    // 8 MiB: direct blocks, the single-indirect table and its data, and a
+    // double-indirect subtree -- six runs to the old per-run code.
+    const char *path = "/.ktest_trimq";
+    fs_delete(path);
+    static char buf[65536];
+    for (unsigned i = 0; i < sizeof buf; i++) buf[i] = (char)(i * 13u + 5u);
+    int wrote = 1;
+    for (uint32_t off = 0; wrote && off < 8u * 1024 * 1024; off += sizeof buf)
+        wrote = fs_write_range(path, off, buf, sizeof buf);
+    int synced = wrote && fs_sync(0);
+
+    // Nothing else may TRIM between the two reads.
+    scheduler_preempt_disable();
+    uint64_t before = 0, after = 0, sectors0 = 0, sectors1 = 0;
+    blk_stat_get(BLK_STAT_TRIM, &before, &sectors0, NULL, NULL);
+    int deleted = fs_delete(path) && fs_sync(0);
+    blk_stat_get(BLK_STAT_TRIM, &after, &sectors1, NULL, NULL);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT(wrote == 1);
+    KTEST_ASSERT(synced == 1);
+    KTEST_ASSERT(deleted == 1);
+    KTEST_ASSERT_EQ((int64_t)(after - before), 1);
+    // ...and that one call covered the whole file (8 MiB is 16384 sectors,
+    // plus its pointer tables).
+    KTEST_ASSERT(sectors1 - sectors0 >= 16384);
+}
 
 KTEST("fs", "a batched commit lands the allocation bitmap on disk") {
     if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");

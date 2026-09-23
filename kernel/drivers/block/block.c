@@ -377,6 +377,37 @@ int blkdev_trim(const struct block_device *dev, uint32_t lba, uint32_t count) {
     return io_trim(dev, lba, count);
 }
 
+int blkdev_trim_ranges(const struct block_device *dev, const struct blk_range *r, int n) {
+    if (!blkdev_trim_supported(dev) || n <= 0) return 0;
+    uint32_t sectors = 0;
+    for (int i = 0; i < n; i++) sectors += r[i].count;
+    uint64_t t0 = clocksource_now_ns();
+    int ok = 1;
+    if (dev->trim_ranges) ok = dev->trim_ranges(r, n);
+    else for (int i = 0; i < n; i++) ok &= dev->trim(r[i].lba, r[i].count) ? 1 : 0;
+    blk_stat_add(BLK_STAT_TRIM, sectors, clocksource_now_ns() - t0, ok);
+    return ok;
+}
+
+int blk_dsm_pack(uint8_t *block, const struct blk_range *r, int n, int *ri, uint32_t *done) {
+    k_memset(block, 0, 512);
+    int e = 0;
+    while (*ri < n && e < BLK_DSM_ENTRIES) {
+        uint32_t left = r[*ri].count - *done;
+        if (!left) { (*ri)++; *done = 0; continue; }
+        uint32_t chunk = left > BLK_DSM_MAX_RANGE ? BLK_DSM_MAX_RANGE : left;
+        uint32_t lba = r[*ri].lba + *done;
+        uint8_t *p = block + e * 8;
+        p[0] = (uint8_t)lba;         p[1] = (uint8_t)(lba >> 8);
+        p[2] = (uint8_t)(lba >> 16); p[3] = (uint8_t)(lba >> 24);
+        p[4] = 0; p[5] = 0;          // the block layer is 32-bit
+        p[6] = (uint8_t)chunk;       p[7] = (uint8_t)(chunk >> 8);
+        *done += chunk;
+        e++;
+    }
+    return e;
+}
+
 uint32_t blkdev_sector_count(const struct block_device *dev) {
     return dev ? dev->sector_count() : 0;
 }

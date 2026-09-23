@@ -35,6 +35,9 @@
 #define BLK_CAP_FLUSH 0x01
 #define BLK_CAP_TRIM  0x02
 
+// One run of sectors to discard.
+struct blk_range { uint32_t lba, count; };
+
 struct block_device {
     const char *name;   // "ata", "ram" -- what `df` prints
 
@@ -68,6 +71,9 @@ struct block_device {
     unsigned caps;      // BLK_CAP_*
     int (*flush)(void);                        // BLK_CAP_FLUSH, 1 = durable
     int (*trim)(uint32_t lba, uint32_t count); // BLK_CAP_TRIM
+    // OPTIONAL: many runs in as few commands as the device allows. NULL
+    // is fine -- blkdev_trim_ranges() then calls trim() once per run.
+    int (*trim_ranges)(const struct blk_range *r, int n);
 };
 
 // ---- the device table ------------------------------------------------
@@ -310,6 +316,19 @@ int blkdev_max_sectors_per_xfer(const struct block_device *dev);
 int blkdev_flush(const struct block_device *dev);
 int blkdev_trim_supported(const struct block_device *dev);
 int blkdev_trim(const struct block_device *dev, uint32_t lba, uint32_t count);
+// Every run in one go: a filesystem freeing a big file hands over its
+// whole list rather than paying a command per run (a 512 MiB delete was
+// 313 TRIMs and 89 ms). 1 if every run was discarded.
+int blkdev_trim_ranges(const struct block_device *dev, const struct blk_range *r, int n);
 uint32_t blkdev_sector_count(const struct block_device *dev);
+
+// ATA DATA SET MANAGEMENT's payload: 512-byte blocks of 64 eight-byte
+// entries, each a 48-bit LBA and a 16-bit count. Fills ONE block from
+// `r`, resuming at run *ri, sector *done within it, and returns how many
+// entries it wrote (0 once the list is spent). Shared by ata.c and
+// ahci.c, whose loops were identical.
+#define BLK_DSM_ENTRIES   64
+#define BLK_DSM_MAX_RANGE 0xFFFFu
+int blk_dsm_pack(uint8_t *block, const struct blk_range *r, int n, int *ri, uint32_t *done);
 
 #endif

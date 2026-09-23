@@ -83,6 +83,9 @@ int ata_trim_supported(void);
 // growing forever. Without it, an image is sparse only until something
 // writes to it once. See ata.c's own comment for the measured numbers.
 int ata_trim(uint32_t lba, uint32_t count);
+// Every run, packed 64 to a DSM command (kernel/block.h's list type).
+struct blk_range;
+int ata_trim_ranges(const struct blk_range *r, int n);
 
 // 1 if the Bus-Master DMA path is active (see this header's top
 // comment), 0 if every transfer is going through the PIO fallback --

@@ -3380,7 +3380,9 @@ anyone noticed it lined up with the harness.
 ring-3 driver at its default -10, `diskbench --size N` started 10 s in.
 The driver's `longest wait` matched `stalls`' single `unlink` to the
 millisecond, 60 ms at 256 MiB and 109 ms at 512 MiB, and nothing else
-in the benchmark left a gap. The script is the three lines above plus
+in the benchmark left a gap. 85% of it was TRIM, one command per freed
+run (313 at 512 MiB); batched, the same deletes take 12.6 and 21.7 ms
+and the driver's longest wait 19 and 24 ms. The script is the three lines above plus
 `stalls track on`/`stalls reset` before and `stalls` after. In 2 runs
 of 6 soundd also reported chunks aplay had left empty; that one is a
 client starved, not the driver.

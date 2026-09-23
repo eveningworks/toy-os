@@ -23,6 +23,7 @@ static int ata_dev_max_xfer(void) { return ata_max_sectors_per_xfer(); }
 static int ata_dev_flush(void) { return ata_flush_now(); }
 
 static int ata_dev_trim(uint32_t lba, uint32_t count) { return ata_trim(lba, count); }
+static int ata_dev_trim_ranges(const struct blk_range *r, int n) { return ata_trim_ranges(r, n); }
 
 // TRIM is advertised unconditionally and refused per-call by
 // ata_trim_supported() inside ata_trim(). The alternative -- deciding
@@ -42,6 +43,7 @@ static const struct block_device ATA_DEV = {
     .caps = BLK_CAP_FLUSH | BLK_CAP_TRIM,
     .flush = ata_dev_flush,
     .trim = ata_dev_trim,
+    .trim_ranges = ata_dev_trim_ranges,
 };
 
 void blk_ata_init(void) {

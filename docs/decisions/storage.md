@@ -3160,3 +3160,34 @@ is worth two different lines when a machine is about to stop.
 stack that defers, not the bottom. Linux's `reboot(2)` path runs
 `ksys_sync()` -- filesystems first, then block devices -- for the same
 reason, and this is that ordering.
+
+## A delete's TRIMs are merged and sent as one list, not deferred
+
+Deleting a 512 MiB file stopped the machine for 105 ms, and 89 ms of that
+was TRIM: tfs3 discarded each freed run as it went, one DATA SET
+MANAGEMENT command per run, 313 of them at about 0.29 ms each, inside
+`FS_OP()` with interrupts off. A USB audio driver with a 20 ms buffer
+heard it as a dropout.
+
+**What real systems do.** Linux's ext4 `discard` option collects freed
+extents and discards them at journal commit, and libata packs several
+ranges into one DSM command. Most distributions ship without that option
+and run `fstrim.timer` weekly instead. btrfs has defaulted to
+`discard=async` since 6.2, a background queue with rate limits. Windows
+sends delete notifications down the storage stack and re-trims weekly
+with Optimize Drives.
+
+**What toy-os does.** tfs3 queues the freed runs, merges neighbours (a
+pointer table usually sits next to the data it maps, so a sequential
+file collapses to a few ranges), and hands the list to
+`blkdev_trim_ranges()`. AHCI and legacy ATA pack up to 64 ranges per
+command through `blk_dsm_pack()`; a device without the list op gets one
+`trim()` per range. The 512 MiB delete went from 105 ms to 21.7 ms.
+
+**Why not deferred, which costs the delete nothing.** A deferred discard
+has to be kept away from a block that has been reallocated and
+rewritten, which btrfs does by tracking its free-space cache and which
+tfs3 has no structure for. The queue here is flushed before the freeing
+operation returns and before any allocation, so that case cannot arise.
+Periodic `fstrim` remains the way to go further, and is not built.
+

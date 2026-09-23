@@ -67,6 +67,9 @@ int ahci_max_sectors_per_xfer(void);
 // written once stays allocated on the host forever. Whether a real SSD
 // does anything with it is between the drive and its firmware.
 int ahci_trim(uint32_t lba, uint32_t count);
+// Every run, packed 64 to a DATA SET MANAGEMENT command.
+struct blk_range;
+int ahci_trim_ranges(const struct blk_range *r, int n);
 
 // Whether a TRIM issued right now would actually go out: a drive that
 // answered IDENTIFY with word 169 bit 0 set. Asked at REGISTRATION by

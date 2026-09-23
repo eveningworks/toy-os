@@ -7,6 +7,7 @@
 // unmasked only after the handler is registered. A level-triggered INTx
 // asserted with nobody willing to clear PxIS is never deasserted.
 #include "ahci.h"
+#include "block.h"   // blk_dsm_pack() -- the DSM payload, shared with ata.c
 #include "pci.h"
 #include "pci_internal.h"
 #include "pmm.h"
@@ -124,11 +125,7 @@ struct cmd_table {
 #define ATA_DSM         0x06
 #define DSM_FEATURE_TRIM 0x01
 
-// DSM's payload is 512-byte blocks of 8-byte range entries: a 48-bit
-// starting LBA in the low six bytes, then a 16-bit sector count. A zero
-// count terminates the list, which is why the block is zeroed first.
-#define DSM_ENTRIES_PER_BLOCK (AHCI_SECTOR_SIZE / 8)
-#define DSM_MAX_RANGE 0xFFFFu   // one entry's 16-bit sector count
+// DSM's payload layout is blk_dsm_pack()'s (block.h), shared with ata.c.
 
 // ---- state ----------------------------------------------------------
 
@@ -642,36 +639,25 @@ int ahci_write_sectors(uint32_t lba, int count, const void *buf) {
 // silent: the drive acknowledges a command whose payload never arrived
 // and nothing is discarded (ata.c's DSM comment has the long version of
 // that failure, which cost a build there).
-int ahci_trim(uint32_t lba, uint32_t count) {
-    if (!ahci_trim_supported() || count == 0) return 0;
-    if (lba > g_sectors || count > g_sectors - lba) return 0;
+int ahci_trim_ranges(const struct blk_range *r, int n) {
+    if (!ahci_trim_supported() || n <= 0) return 0;
+    for (int i = 0; i < n; i++)
+        if (r[i].lba > g_sectors || r[i].count > g_sectors - r[i].lba) return 0;
 
-    while (count > 0) {
-        k_memset(g_buf, 0, AHCI_SECTOR_SIZE);
-
-        int n = 0;
-        while (count > 0 && n < DSM_ENTRIES_PER_BLOCK) {
-            uint32_t chunk = count > DSM_MAX_RANGE ? DSM_MAX_RANGE : count;
-            uint8_t *e = &g_buf[n * 8];
-            e[0] = (uint8_t)(lba);
-            e[1] = (uint8_t)(lba >> 8);
-            e[2] = (uint8_t)(lba >> 16);
-            e[3] = (uint8_t)(lba >> 24);
-            e[4] = 0;   // the block layer is 32-bit, so the top 16 bits
-            e[5] = 0;   // of the 48-bit field are always zero
-            e[6] = (uint8_t)(chunk);
-            e[7] = (uint8_t)(chunk >> 8);
-            lba += chunk;
-            count -= chunk;
-            n++;
-        }
-
-        // The range list is already in the bounce buffer, so this does
-        // NOT go through the usual copy -- `count` here means descriptor
-        // BLOCKS, not sectors, which is DSM's own meaning for the field.
+    int ri = 0;
+    uint32_t done = 0;
+    // Packed straight into the bounce buffer, so this does NOT go through
+    // the usual copy -- `count` here means descriptor BLOCKS, not
+    // sectors, which is DSM's own meaning for the field.
+    while (blk_dsm_pack(g_buf, r, n, &ri, &done))
         if (!run_command(ATA_DSM, DSM_FEATURE_TRIM, 0, 1, AHCI_SECTOR_SIZE, 1)) return 0;
-    }
     return 1;
+}
+
+int ahci_trim(uint32_t lba, uint32_t count) {
+    if (count == 0) return 0;
+    struct blk_range one = { lba, count };
+    return ahci_trim_ranges(&one, 1);
 }
 
 int ahci_trim_supported(void) { return ahci_present() && g_trim; }

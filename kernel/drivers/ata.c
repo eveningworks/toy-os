@@ -9,6 +9,7 @@
 // polling a status register that will never change, rather than a
 // clean failure. This part is unchanged from before build 430.
 #include "ata.h"
+#include "block.h"   // blk_dsm_pack() -- the DSM payload, shared with ahci.c
 #include "io.h"
 #include "pci.h"
 #include "pmm.h"
@@ -1275,11 +1276,7 @@ out:
 // is still waiting for. That failure is completely silent from the
 // guest side -- worth knowing before trusting any DSM return value.
 //
-// The payload is a 512-byte block of 8-byte range entries: a 48-bit
-// starting LBA in the low 6 bytes, then a 16-bit sector count. A zero
-// count terminates the list, which is why the buffer is zeroed first.
-#define DSM_ENTRIES_PER_BLOCK (ATA_SECTOR_SIZE / 8)
-#define DSM_MAX_RANGE 0xFFFF // a single entry's 16-bit sector count
+// The payload's layout is blk_dsm_pack()'s (block.h), shared with ahci.c.
 
 // Issues one already-built descriptor block. Mirrors dma_issue()/
 // dma_finish() rather than calling them, because those hardcode
@@ -1324,32 +1321,21 @@ static int dsm_send_block(const uint8_t *block) {
     return 1;
 }
 
-int ata_trim(uint32_t lba, uint32_t count) {
-    if (!ata_trim_supported() || count == 0) return 0;
-    if (!lba_range_ok(lba, (int)count)) return 0;
+int ata_trim_ranges(const struct blk_range *r, int n) {
+    if (!ata_trim_supported() || n <= 0) return 0;
+    for (int i = 0; i < n; i++)
+        if (!lba_range_ok(r[i].lba, (int)r[i].count)) return 0;
 
     uint8_t block[ATA_SECTOR_SIZE];
-    while (count > 0) {
-        for (int i = 0; i < ATA_SECTOR_SIZE; i++) block[i] = 0;
-
-        int n = 0;
-        while (count > 0 && n < DSM_ENTRIES_PER_BLOCK) {
-            uint32_t chunk = count > DSM_MAX_RANGE ? DSM_MAX_RANGE : count;
-            uint8_t *e = &block[n * 8];
-            e[0] = (uint8_t)(lba & 0xFF);
-            e[1] = (uint8_t)((lba >> 8) & 0xFF);
-            e[2] = (uint8_t)((lba >> 16) & 0xFF);
-            e[3] = (uint8_t)((lba >> 24) & 0xFF);
-            e[4] = 0; // this driver is 28-bit LBA throughout; the top
-            e[5] = 0; // 16 bits of the 48-bit field are always zero
-            e[6] = (uint8_t)(chunk & 0xFF);
-            e[7] = (uint8_t)((chunk >> 8) & 0xFF);
-            lba += chunk;
-            count -= chunk;
-            n++;
-        }
-
+    int ri = 0;
+    uint32_t done = 0;
+    while (blk_dsm_pack(block, r, n, &ri, &done))
         if (!dsm_send_block(block)) return 0;
-    }
     return 1;
+}
+
+int ata_trim(uint32_t lba, uint32_t count) {
+    if (count == 0) return 0;
+    struct blk_range one = { lba, count };
+    return ata_trim_ranges(&one, 1);
 }

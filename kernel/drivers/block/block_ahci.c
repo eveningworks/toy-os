@@ -14,6 +14,7 @@ static int ahci_blk_write(uint32_t lba, int count, const void *buf) { return ahc
 static int ahci_blk_max_xfer(void) { return ahci_max_sectors_per_xfer(); }
 static int ahci_blk_flush(void) { return ahci_flush(); }
 static int ahci_blk_trim(uint32_t lba, uint32_t count) { return ahci_trim(lba, count); }
+static int ahci_blk_trim_ranges(const struct blk_range *r, int n) { return ahci_trim_ranges(r, n); }
 
 // FLUSH is unconditional and means a real FLUSH CACHE EXT reaching the
 // drive: there is no write-back cache above this one (ahci.h says why),
@@ -60,6 +61,7 @@ int blk_ahci_init(void) {
     if (ahci_trim_supported()) {
         AHCI_DEV.caps |= BLK_CAP_TRIM;
         AHCI_DEV.trim = ahci_blk_trim;
+        AHCI_DEV.trim_ranges = ahci_blk_trim_ranges;
     }
 
     // No announcement: blk_register() already logs the device it accepts.
