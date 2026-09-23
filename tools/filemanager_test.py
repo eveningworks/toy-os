@@ -413,6 +413,36 @@ def layout_now(dbg, win, tries=25):
     return None
 
 
+# THE CONTEXT MENU IS ASKED OF THE COMPOSITOR, not of the app. It is a
+# popup SURFACE, and opening one does not redraw the window that owns it
+# -- the Wayland xdg_popup shape -- so the app's `ctx` line (written by
+# the owner's on_draw) went on saying 0 under a menu that was open and
+# worked. The window list is live, and the app cannot get it wrong.
+# Tooltips are popups too, one text row tall; a menu is taller.
+MENU_POPUP_MIN_H = 40
+
+
+def _popup_state(dbg, win):
+    """(open, [x, y, w, h] relative to the content) of the menu popup,
+    or None if the compositor could not be asked."""
+    try:
+        ws = dbg.json("gui windows --json")["windows"]
+    except Exception:
+        return None
+    menus = [w for w in ws if w.get("popup") and w.get("h", 0) >= MENU_POPUP_MIN_H]
+    if not menus:
+        return 0, None
+    m, c = menus[-1], win["content"]
+    return 1, [m["x"] - c["x"], m["y"] - c["y"], m["w"], m["h"]]
+
+
+def _live(dbg, win, lay):
+    st = _popup_state(dbg, win)
+    if lay is not None and st is not None:
+        lay.ctx, lay.ctxbox = st
+    return lay
+
+
 def wait_layout(dbg, win, pred, timeout=12.0, grace=1.0):
     """Poll the app's own report until `pred` holds. Waiting on the
     OBSERVABLE rather than on a fixed sleep (CLAUDE.md).
@@ -451,12 +481,12 @@ def wait_layout(dbg, win, pred, timeout=12.0, grace=1.0):
     while time.time() < deadline:
         if _collect(dbg):
             quiet_since = time.time()
-            lay = _parse(win)
+            lay = _live(dbg, win, _parse(win))
             if lay and pred(lay):
                 return lay
         elif (_LAST_CURRENT and _LAST_LAYOUT is not None
               and time.time() - quiet_since >= grace
-              and pred(_LAST_LAYOUT)):
+              and pred(_live(dbg, win, _LAST_LAYOUT))):
             return _LAST_LAYOUT
         time.sleep(0.2)
     return None
@@ -1508,10 +1538,6 @@ def run(dbg, qmp, tmp, res):
     res.check("a right-click inside a pane opens a context menu",
               lay.ctx == 1 and lay.ctxbox is not None,
               f"ctx={lay and lay.ctx} box={lay and lay.ctxbox} tail={tail}")
-    res.check("...and it selects the row it was pointed at first",
-              lay.selected not in (None, "-") and lay.selected != before_sel,
-              f"selected {before_sel} -> {lay and lay.selected}")
-
     # The popup is placed AT the cursor, not at some fixed corner.
     ok_place = False
     if lay.ctxbox:
@@ -1529,6 +1555,13 @@ def run(dbg, qmp, tmp, res):
     res.check("Esc closes the context menu without committing",
               lay.ctx == 0 and lay.dir.get(0) == dir_before,
               f"ctx={lay and lay.ctx} dir={lay and lay.dir.get(0)}")
+    # READ ONCE THE MENU IS SHUT: the window that owns a popup does not
+    # repaint while the popup is up (ui/uapp.c), so its report of the
+    # selection the right-click made arrives when the menu closes.
+    sel = wait_layout(dbg, win, lambda l: l.ctx == 0 and
+                      l.selected not in (None, "-") and l.selected != before_sel)
+    res.check("...and the right-click selected the row it was pointed at first",
+              sel is not None, f"selected {before_sel} -> {(sel or lay).selected}")
 
     # Properties: the LAST row of the popup, and it opens a WINDOW.
     sel_name = None
@@ -1647,23 +1680,34 @@ def run(dbg, qmp, tmp, res):
     def ctx_on(view_row):
         sure_rclick(dbg, qmp, ox + px + pw // 2,
                     oy + lay.rowy[0] + lay.rowh * view_row + lay.rowh // 2)
-        return wait_layout(dbg, win, lambda l: l.ctx == 1 and l.ctxitems > 0)
+        return wait_layout(dbg, win, lambda l: l.ctx == 1 and l.ctxbox)
 
-    got = ctx_on(2)
+    # THE ROW IS MEASURED AS HEIGHT: the text file's menu is the
+    # binary's plus one row, which is the fact "Edit in Notepad is there"
+    # means. Read off the popup the compositor holds, not a count the
+    # app only logs when its own window happens to redraw.
+    # The selection each right-click made is read once its menu is shut,
+    # for the reason given above the Esc check.
+    text = ctx_on(2)
+    text_h = text.ctxbox[3] if text and text.ctxbox else None
+    dbg.key(K_ESC)
+    text = wait_layout(dbg, win, lambda l: l.ctx == 0 and l.selected == "t.txt") or text
+    binary = ctx_on(1)
+    bin_h = binary.ctxbox[3] if binary and binary.ctxbox else None
+    dbg.key(K_ESC)
+    binary = wait_layout(dbg, win, lambda l: l.ctx == 0 and l.selected == "prog") or binary
+    rowh = (text and text.rowh) or 20
     res.check("a text file's context menu carries Edit in Notepad",
-              got is not None and got.selected == "t.txt" and got.ctxitems == 15,
-              f"selected={got and got.selected} rows={got and got.ctxitems}")
-    dbg.key(K_ESC)
-    wait_layout(dbg, win, lambda l: l.ctx == 0)
-    got = ctx_on(1)
+              text is not None and text.selected == "t.txt" and text_h is not None
+              and bin_h is not None and text_h > bin_h,
+              f"selected={text and text.selected} height={text_h} vs binary {bin_h}")
     res.check("...and a binary's does not (control: one row fewer)",
-              got is not None and got.selected == "prog" and got.ctxitems == 14,
-              f"selected={got and got.selected} rows={got and got.ctxitems}")
-    dbg.key(K_ESC)
-    wait_layout(dbg, win, lambda l: l.ctx == 0)
+              binary is not None and binary.selected == "prog" and bin_h is not None
+              and text_h is not None and 0 < text_h - bin_h <= 2 * rowh,
+              f"selected={binary and binary.selected} height={bin_h} vs text {text_h}")
     # Pick it: the second row of the popup, and Notepad opens on the file.
     got = ctx_on(2)
-    if got and got.ctxbox and got.ctxitems == 15:
+    if got and got.ctxbox and text_h and bin_h and text_h > bin_h:
         cbx, cby, cbw, _ = got.ctxbox
         rowh = got.rowh or 20
         sure_click(dbg, qmp, ox + cbx + cbw // 2, oy + cby + rowh + rowh // 2 + 1)
