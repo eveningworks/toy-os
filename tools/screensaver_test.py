@@ -320,26 +320,13 @@ def write_conf(dbg, saver, values):
     are not registry settings, so `config set` cannot reach them.
     """
     path = f"{SAVER_CONF}/{saver}.conf"
-    dbg.send(f"sh rm {path}")
-    for i, (k, v) in enumerate(values):
-        # UNQUOTED, deliberately. The kernel shell's `spawn` passes a
-        # quoted word through WITH its quotes, so tosh re-lexes it as one
-        # word and runs a command called "echo colour=amber". `tosh -c`
-        # joins everything after the flag with spaces, so the plain form
-        # is the one that works.
-        dbg.send(f"sh spawn /bin/tosh -c echo {k}={v} "
-                 f"{'>' if i == 0 else '>>'} {path}")
-    # READ IT BACK, and retry the lines that did not land. Without this
-    # the fixture can be incomplete and the saver then draws its DEFAULT
-    # for the missing option -- which is indistinguishable from the
-    # saver ignoring the option, and was reported as exactly that.
-    for _ in range(4):
-        got = dbg.send(f"sh cat {path}") or ""
-        missing = [(k, v) for k, v in values if f"{k}={v}" not in got]
-        if not missing:
-            return path
-        for k, v in missing:
-            dbg.send(f"sh spawn /bin/tosh -c echo {k}={v} >> {path}")
+    # DebugConsole.write_lines(): unquoted, one line at a time, each read
+    # back before the next. Sending the `>` and the `>>` back to back let
+    # them land in either order, and a truncating `>` landing last wiped
+    # the line before it -- the saver then drew its DEFAULT for the lost
+    # option, which reads exactly like the option being ignored.
+    if dbg.write_lines(path, [f"{k}={v}" for k, v in values]):
+        return path
     check(f"the {saver} fixture reached the disk", False,
           f"{path} is {dbg.send(f'sh cat {path}')!r}, wanted {values}")
     return path

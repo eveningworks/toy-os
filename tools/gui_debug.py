@@ -247,6 +247,32 @@ class DebugConsole:
 
     # -- conveniences over the raw commands ------------------------------
 
+    def write_lines(self, path, lines, tries=25):
+        """Replace `path` in the guest with `lines`; True once all landed.
+
+        The only writer a test outside the guest has is `tosh -c` with a
+        redirection, and it has two traps. UNQUOTED: the kernel shell's
+        `spawn` passes a quoted word through WITH its quotes, so tosh
+        runs a command literally named "echo panes=2 > ..." and nothing
+        is written. And ONE LINE AT A TIME, each confirmed on disk before
+        the next: `spawn` returns at once, so a `>` and a `>>` sent back
+        to back can land in either order, and the truncating one landing
+        last wipes the line before it.
+        """
+        self.send(f"sh rm {path}")
+        for i, line in enumerate(lines):
+            self.send(f"sh spawn /bin/tosh -c echo {line} "
+                      f"{'>' if i == 0 else '>>'} {path}")
+            want = lines[:i + 1]
+            for _ in range(tries):
+                got = [ln.strip() for ln in (self.send(f"sh cat {path}") or "").splitlines()]
+                if all(w in got for w in want):
+                    break
+                time.sleep(0.2)
+            else:
+                return False
+        return True
+
     def events(self, prefix="uidemo:"):
         """Kernel log lines emitted since the last command, as a list.
 

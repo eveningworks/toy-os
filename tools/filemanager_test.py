@@ -87,7 +87,8 @@ K_LEFT, K_RIGHT = "0x95", "0x96"   # KEY_ARROW_LEFT/RIGHT (api/keyboard.h)
 # the next such change is one edit, and so a mismatch reads as "the
 # toolbar grew" instead of as the File Manager being broken.
 TB_COUNT = 16          # every item INCLUDING separators
-TB_BACK, TB_FORWARD, TB_UP = 0, 1, 2
+TB_BACK, TB_FORWARD, TB_UP, TB_REFRESH = 0, 1, 2, 3
+TB_MKDIR, TB_DELETE = 7, 9
 TB_DETAILS = 11
 TB_PANES, TB_TREE = 14, 15
 K_INSERT = "0xb3"
@@ -628,8 +629,15 @@ def setup_fixture(dbg):
     #
     # Written before the first launch, because the app reads this once
     # at startup. `panes=2` is what it writes for the commander.
-    dbg.send(f'sh spawn /bin/tosh -c "echo panes=2 > {FILES_CONF}"')
-    dbg.send(f'sh spawn /bin/tosh -c "echo tree=0 >> {FILES_CONF}"')
+    #
+    # Through write_lines(), because the quoted `tosh -c "echo ..."` this
+    # used wrote NOTHING (spawn keeps the quotes), so the app opened as
+    # an Explorer anyway and every commander check after the first
+    # View toggle failed -- the runtime-dependent failure count filed in
+    # docs/bugs.md.
+    if not dbg.write_lines(FILES_CONF, ["panes=2", "tree=0"]):
+        print(f"filemanager_test: WARNING -- {FILES_CONF} did not reach the disk: "
+              f"{dbg.send(f'sh cat {FILES_CONF}')!r}")
 
 
 def teardown_fixture(dbg):
@@ -1345,7 +1353,7 @@ def run(dbg, qmp, tmp, res):
     qmp.stable_pixels(png_on)
     from PIL import Image
     im = Image.open(png_on).convert("RGB")
-    r7, r1 = lay.tbitems.get(13), lay.tbitems.get(1)
+    r7, r1 = lay.tbitems.get(TB_TREE), lay.tbitems.get(TB_REFRESH)
     if r7 and r1:
         p7 = im.getpixel((ox + r7[0] + 2, oy + r7[1] + 2))
         p1 = im.getpixel((ox + r1[0] + 2, oy + r1[1] + 2))
@@ -1353,7 +1361,7 @@ def run(dbg, qmp, tmp, res):
                   p7 != p1, f"tree btn {p7} vs refresh btn {p1}")
     else:
         res.skip("the latched button's background differs from its resting sibling's",
-                 _toolbar_evidence(13 if not r7 else 1, lay))
+                 _toolbar_evidence(TB_TREE if not r7 else TB_REFRESH, lay))
 
     tb_click(TB_TREE, "folder tree")
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0)
@@ -1369,10 +1377,10 @@ def run(dbg, qmp, tmp, res):
     # SKIP, never return: bailing out of the function here would take
     # every check below it with it, which is the same "a fault loses
     # the rest of the run" shape the guards above exist to stop.
-    r1 = lay.tbitems.get(1)
+    r1 = lay.tbitems.get(TB_REFRESH)
     if not r1:
         res.skip("hovering a button shows its tooltip, and only then",
-                 _toolbar_evidence(1, lay))
+                 _toolbar_evidence(TB_REFRESH, lay))
     else:
         bx, by, bw, bh = r1
         tip_rect = (ox + bx, oy + by + bh, 120, 30)
@@ -1396,7 +1404,7 @@ def run(dbg, qmp, tmp, res):
     # commands WORK from up here: New folder must open the same prompt
     # F7 opens, and Delete the same confirm F8 opens.
     lay = wait_layout(dbg, win, lambda l: len(l.tbitems) == TB_COUNT) or lay
-    tb_click(5, "new folder")
+    tb_click(TB_MKDIR, "new folder")
     lay = wait_layout(dbg, win, lambda l: l.modal not in (None, 0)) or lay
     res.check("the toolbar's New folder opens the same prompt F7 does",
               lay.modal not in (None, 0), f"modal={lay and lay.modal}")
@@ -1409,7 +1417,7 @@ def run(dbg, qmp, tmp, res):
     # broken toolbar button.
     dbg.key("0x62")                          # 'b' seeks bin/
     lay = wait_layout(dbg, win, lambda l: l.selected not in (None, "-")) or lay
-    tb_click(7, "delete")
+    tb_click(TB_DELETE, "delete")
     lay = wait_layout(dbg, win, lambda l: l.dialog == 1) or lay
     res.check("the toolbar's Delete opens the same confirm F8 does",
               lay.dialog == 1, f"dialog={lay and lay.dialog}")
@@ -2766,10 +2774,10 @@ def run(dbg, qmp, tmp, res):
     # goes dead for exactly as long as its own tip is showing.
     lay = wait_layout(dbg, win, lambda l: len(l.tbitems) >= 14) or lay
     ox, oy = win["content"]["x"], win["content"]["y"]
-    r1 = lay.tbitems.get(1) if lay else None
+    r1 = lay.tbitems.get(TB_REFRESH) if lay else None
     if not r1:
         res.skip("a press while the tooltip is up is NOT swallowed",
-                 _toolbar_evidence(1, lay))
+                 _toolbar_evidence(TB_REFRESH, lay))
     else:
         bx, by, bw, bh = r1
         # BEFORE AND AFTER, never an absolute count: "exactly one popup
@@ -2788,7 +2796,7 @@ def run(dbg, qmp, tmp, res):
                   f"popups {n0} -> {len(tips)}, under the button: {len(near)}")
 
         before = lay.view and lay.view[3]
-        tb_click(13, "folder tree, with the tip up")
+        tb_click(TB_TREE, "folder tree, with the tip up")
         lay2 = wait_layout(dbg, win, lambda l: l.view and l.view[3] != before)
         res.check("a press while the tooltip is up is NOT swallowed",
                   lay2 is not None and lay2.view and lay2.view[3] != before,
