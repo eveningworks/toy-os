@@ -7,6 +7,8 @@
 // unmasked only after the handler is registered. A level-triggered INTx
 // asserted with nobody willing to clear PxIS is never deasserted.
 #include "kmutex.h" // g_ahci_lock
+#include "scheduler.h"   // a command wait SLEEPS -- see sleep_command()
+#include "clocksource.h" // ...against a deadline
 #include "ahci.h"
 #include "block.h"   // blk_dsm_pack() -- the DSM payload, shared with ata.c
 #include "pci.h"
@@ -156,6 +158,12 @@ static uint8_t g_msi_vector;   // LAPIC vector, 0 when not on one
 static volatile int g_irq_fired;
 static volatile uint32_t g_irq_status;   // PxIS as the handler saw it
 
+// What a command waiter parks on and the handler wakes -- its ADDRESS
+// is the channel. And how many waits parked rather than polled, the
+// evidence the sleep path is the one in use (QUERY_AHCI).
+static const char g_cmd_chan;
+static uint64_t g_cmd_sleeps;
+
 // ~1 s at PIT_HZ, the same budget ata.c gives a transfer. A drive that
 // has not answered in a second under an emulator is not going to.
 #define WAIT_TICKS 100
@@ -279,14 +287,60 @@ static void irq_handler(uint64_t *regs) {
     hba_w(HBA_IS, is);
     g_irq_status = pis;
     g_irq_fired = 1;
+    scheduler_wake(&g_cmd_chan, 0);   // interrupt-safe, by contract
 }
 
-// Waits for slot 0 to retire. Interrupts-off callers (a ring-3 syscall
-// reaching the filesystem -- see idt.h's isr_in_progress()) cannot be
-// woken by the handler and poll PxCI instead; the hardware clears it
-// either way, so both paths observe the same completion.
+// Has slot 0 retired, or failed? The handler having run is one answer;
+// PxCI clearing (or a task-file error, which retires the command WITHOUT
+// clearing it) is the other, and is true earlier when interrupts are off.
+// Found by reading the port, the ack the handler would have done is done
+// here -- unless the handler already ran, whose PxIS copy is the real one.
+static int command_done(void) {
+    if (g_irq_fired) return 1;
+    uint32_t is = px_r(g_preg, PX_IS);
+    if ((px_r(g_preg, PX_CI) & 1u) && !(is & PXIS_TFES)) return 0;
+    g_irq_status = is;
+    px_w(g_preg, PX_IS, is);
+    hba_w(HBA_IS, hba_r(HBA_IS));
+    return 1;
+}
+
+// Parks the caller until the command retires or `ticks` pass -- the only
+// wait that lets anything else run, and ata.c's sleep_dma_irq() shape.
+// 1 done, 0 timed out, -1 COULD NOT PARK (no scheduler slot, the
+// preemption guard up, or no interrupt at all), and the caller polls.
+static int sleep_command(uint64_t ticks) {
+    if (!ahci_irq_driven()) return -1;
+    uint64_t deadline = clocksource_now_ns() + ticks * (1000000000ull / PIT_HZ);
+    for (;;) {
+        scheduler_wait_arm(&g_cmd_chan);
+        if (command_done()) { scheduler_wait_disarm(); return 1; }
+        if (clocksource_now_ns() >= deadline) { scheduler_wait_disarm(); return 0; }
+        if (!scheduler_block_kernel_until(&g_cmd_chan, SCHED_WAIT_DISK, deadline)) {
+            scheduler_wait_disarm();
+            return -1;
+        }
+        g_cmd_sleeps++;
+    }
+}
+
+// Waits for slot 0 to retire. A scheduled caller SLEEPS until the
+// handler wakes it (sleep_command()). One with nowhere to park polls
+// PxCI when interrupts are off (a legacy `run`, a guarded caller) and
+// halts until the interrupt otherwise; the hardware clears PxCI either
+// way, so every path observes the same completion.
 static int wait_command(void) {
-    if (isr_in_progress() || !g_irq) {
+    int slept = sleep_command(WAIT_TICKS);
+    if (slept == 0) return 0;
+    if (slept == 1) {
+        if (g_irq_status & PXIS_TFES) return 1;
+        return wait_clear(g_preg, PX_CI, 1u, WAIT_TICKS);
+    }
+
+    // NOWHERE TO PARK. The hlt wait needs an interrupt -- INTx OR MSI;
+    // this tested `g_irq` alone, so an MSI controller (the ASUS's) always
+    // polled, even from the kernel context.
+    if (isr_in_progress() || !ahci_irq_driven()) {
         for (uint64_t i = 0; i < (uint64_t)POLL_LIMIT; i++) {
             if (!(px_r(g_preg, PX_CI) & 1u)) {
                 g_irq_status = px_r(g_preg, PX_IS);
@@ -713,6 +767,7 @@ uint8_t ahci_irq_line(void) { return g_irq; }
 // controller on a vector as POLLED -- the same shape as the
 // input_source.irq/msi_vector conflation in docs/conventions/kernel.md.
 int ahci_irq_driven(void) { return g_irq != 0 || g_msi_vector != 0; }
+uint64_t ahci_cmd_sleeps(void) { return g_cmd_sleeps; }
 int ahci_lba48(void) { return g_lba48; }
 const char *ahci_model(void) { return g_model; }
 int ahci_port_count(void) { return g_port_count; }

@@ -1747,7 +1747,7 @@ Four pieces, roughly independent:
 
 ### AHCI/SATA driver
 
-**AHCI's command wait sleeps, as `ata.c`'s does.** `ata.c`'s DMA and cache-flush waits park the caller on IRQ14 since 2026-09-23; AHCI's `wait_command()` still busy-polls PxCI with interrupts off when called from a syscall, which on the ASUS is every flush -- measured at 0.66-3.3 ms on its SSD (`docs/pagecache-design.md`). The same `scheduler_block_kernel_until()` and a wake from the port's interrupt handler; the driver already has its own lock (`g_ahci_lock`) to hold across the sleep.
+~~**AHCI's command wait sleeps, as `ata.c`'s does.**~~ DONE 2026-09-23. `wait_command()` parks a scheduled caller on the port's interrupt (`sleep_command()`), holding `g_ahci_lock` across the sleep. On the ASUS, `diskbench --size 32` under `stalls`: CPU held with interrupts off fell from ~1 s to ~0.17 s a run (`open` 409 -> 26 ms total, max 9.2 -> 0.36 ms; `read` 340 -> 72 ms; `write` 239 -> 72 ms; `unlink` max 9.0 -> 0.48 ms), two runs each side. Found on the way: the halt path tested `g_irq` alone, so the ASUS's MSI controller polled even from the kernel context; it tests "any interrupt" now.
 
 
 **BUILT** -- `kernel/drivers/ahci.c` and `kernel/drivers/block/block_ahci.c`.

@@ -1120,6 +1120,8 @@ struct query_ahci {
     uint64_t sector_count;
     uint64_t max_sectors_xfer;
     char     model[QUERY_AHCI_MODEL_MAX];
+    uint64_t cmd_sleeps;        // command waits that PARKED their caller
+                                // rather than polling; APPENDED
 };
 
 // QUERY_AHCI_PORT's record. `port` is the HARDWARE's number and the

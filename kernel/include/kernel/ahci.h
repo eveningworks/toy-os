@@ -95,6 +95,7 @@ int      ahci_command_slots(void);      // CAP.NCS + 1
 int      ahci_active_port(void);        // the port carrying the drive, -1 if none
 uint8_t  ahci_irq_line(void);           // PIC line, 0 when polled
 int      ahci_irq_driven(void);         // completions arrive by interrupt
+uint64_t ahci_cmd_sleeps(void);         // command waits that parked, not polled
 int      ahci_lba48(void);              // the drive's own addressing
 const char *ahci_model(void);           // IDENTIFY's model string, "" if none
 

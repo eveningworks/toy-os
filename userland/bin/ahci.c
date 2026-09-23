@@ -93,6 +93,9 @@ int main(int argc, char **argv) {
                (a.flags & QUERY_AHCI_LBA48) ? "48" : "28");
         printf("  transfers: DMA, up to %llu sectors each\n",
                (unsigned long long)a.max_sectors_xfer);
+        // A wait from a process SLEEPS and lets the machine run; one from
+        // the kernel itself still halts or polls (docs/blocking-design.md).
+        printf("  waits that slept: %llu\n", (unsigned long long)a.cmd_sleeps);
         // Stated rather than left as a flag, like `ata` does: TRIM is
         // about what happens to the HOST IMAGE, not to throughput.
         printf("  TRIM: %s\n", (a.flags & QUERY_AHCI_TRIM)

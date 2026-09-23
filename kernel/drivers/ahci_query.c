@@ -35,6 +35,7 @@ static int hba_fill(int index, void *out) {
     a->active_port      = (uint64_t)(int64_t)ahci_active_port();
     a->irq              = ahci_irq_line();
     a->sector_count     = ahci_sector_count();
+    a->cmd_sleeps       = ahci_cmd_sleeps();
     a->max_sectors_xfer = ahci_present() ? (uint64_t)ahci_max_sectors_per_xfer() : 0;
 
     const char *model = ahci_model();
@@ -50,6 +51,7 @@ static const struct query_field hba_fields[] = {
     QUERY_FIELD(struct query_ahci, active_port,      QUERY_TYPE_U64),
     QUERY_FIELD(struct query_ahci, irq,              QUERY_TYPE_U64),
     QUERY_FIELD(struct query_ahci, sector_count,     QUERY_TYPE_U64),
+    QUERY_FIELD(struct query_ahci, cmd_sleeps,       QUERY_TYPE_U64),
     QUERY_FIELD(struct query_ahci, max_sectors_xfer, QUERY_TYPE_U64),
 };
 

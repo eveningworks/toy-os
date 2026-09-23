@@ -792,7 +792,7 @@ run on, not by order.
 - [x] ~~Backend selection + fallback~~
 - [x] ~~Multi-sector transfers past 64 KiB~~ done -- 64 PRDT entries, 256 KiB per command, stepped fallback if the pool is fragmented
 - [ ] **NEXT** One AHCI command at a time costs ~7x virtio per command (measured) -- one slot, a busy-poll, and a bounce memcpy
-- [ ] AHCI's command wait sleeps, as `ata.c`'s does -- it still busy-polls with interrupts off, freezing the machine for a flush
+- [x] ~~AHCI's command wait sleeps, as `ata.c`'s does~~ DONE 2026-09-23 -- ~6x less CPU held under disk load on the ASUS
 - [ ] NCQ (queued commands) -- needs an ASYNCHRONOUS block interface first, not more AHCI code
 - [ ] An asynchronous `block_device` submit/complete split, which NCQ, readahead and writeback all wait on
 - [x] ~~Batched journal barriers~~ done -- `storage.sync = batched` defers the COMMIT rather than generalising flush_begin/end

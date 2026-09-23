@@ -69,6 +69,8 @@ puts a SATA drive on an ICH9 controller in front of this command.
 backend actually mounted, which is `virtio-blk` on a machine that has
 both.
 
+**`waits that slept`** counts command waits that parked their caller so something else could run -- a process's disk wait sleeps on the controller's interrupt, INTx or MSI. The kernel context still halts or polls, so a count that stays at 0 while a program writes means the sleep path is not being reached.
+
 ## See also
 
 `ata` is the same shape for the legacy IDE path. `df` says which backend

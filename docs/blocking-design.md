@@ -1,8 +1,9 @@
 # Blocking inside the kernel, and the lock that needs it
 
 **Status: stages 1-3 are BUILT -- the single suspend shape, the
-sleeping lock over the filesystem (69c02656), and `ata.c`'s DMA and
-cache-flush waits sleeping on IRQ14. Stage 4, the trap gate, is not.
+sleeping lock over the filesystem (69c02656), `ata.c`'s DMA and
+cache-flush waits sleeping on IRQ14, and AHCI's command wait sleeping on
+its port interrupt (INTx or MSI). Stage 4, the trap gate, is not.
 Read this before touching `switch_to()`, `block_common()` or `FS_OP()`,
 and "What stage 2 found" below before adding anything that sleeps
 under the filesystem lock.**
