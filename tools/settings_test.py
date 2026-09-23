@@ -688,6 +688,40 @@ def main():
         check("effects: the options are not drawn on the page",
               not placed, f"placed on the page: {placed}")
 
+        # **THE CONTROL PATH, as a person takes it.** The check above
+        # arrives by `config set` from outside, which is the page
+        # following a change made elsewhere. This one STAGES the choice
+        # in the effect's own control -- a radio group, five choices
+        # being under CHOICES_DROPDOWN_MIN -- scrolled into view first,
+        # and aimed at through the app's reported rect and row count, in
+        # the declared order (scale, genie, squash, glide, shatter).
+        # Genie has no options and Shatter has two, so the button must
+        # follow the STAGED choice both ways. Read only from lines
+        # emitted after each click: an unchanged report is not an answer.
+        def opts_since(mark):
+            drain(dbg)
+            hits = _since(mark, r"settings: opts_button (-?\d+) (-?\d+) (-?\d+) "
+                                r"(-?\d+) opts (\d+)")
+            return [int(v) for v in hits[-1].groups()] if hits else None
+
+        def pick(row):
+            mm = reveal("desktop.minimize_effect",
+                        controls(dbg, 0).get("desktop.minimize_effect"))
+            if not mm or mm["kind"] != "radio" or mm["rows"] < 5:
+                return None, mm
+            mark = len(drain(dbg))
+            click(mm["x"] + 12, mm["y"] + (2 * row + 1) * mm["h"] // (2 * mm["rows"]))
+            dbg.settle(1.0)
+            return opts_since(mark), mm
+
+        genie, mm = pick(1)
+        back, _ = pick(4)
+        check("effects: staging an effect with NO options takes the "
+              "Settings... button away", genie is not None and genie[4] == 0,
+              f"after Genie: {genie}; control {mm}")
+        check("...and staging shatter again brings it back",
+              back is not None and back[4] > 0, f"after Shatter: {back}")
+
         if ob and ob[4] > 0:
             # **SCROLL TO THE BOTTOM FIRST, THEN READ ONCE.** Scrolling
             # until the button is "inside the viewport" and clicking the

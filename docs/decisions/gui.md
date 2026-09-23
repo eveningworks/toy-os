@@ -8845,3 +8845,27 @@ is the shadow's faint outer edge, a one-or-two-point blend difference
 that reads as "composited twice" when the real fault is a whole panel
 46 px from where it was. `config set shadows off` before reading those
 colours.
+
+## System Settings follows changes made elsewhere, except on a page with edits pending
+
+A setting can change while System Settings is open: the tray toggles
+one, `config set` writes one, another program applies its own. Settings
+used to read the registry at startup and after its own Apply only, so an
+open page went on showing a value that had changed underneath it. A test
+found it (the Effects page kept offering the old effect's options), and
+a person would too.
+
+**What real systems do.** GNOME Settings applies every change at once,
+so it simply mirrors dconf's change notifications. KDE's System Settings
+stages edits behind Apply, like this one, and reloads a module when
+`KConfigWatcher` reports its file changed. The classic Windows control
+panels mostly do not follow outside changes at all.
+
+**What toy-os does.** KDE's shape, since this window stages. Twice a
+second it compares the settings registry's generation -- one cheap call,
+the same one the WM uses -- and when it has moved it re-reads the
+registry and redraws the open page. **A page with edits pending is left
+alone**: rebuilding it would throw the user's staged values away, so it
+is marked stale and refreshed as soon as those edits are applied or
+cancelled. The same holds while an options dialog is open over it.
+

@@ -1220,6 +1220,43 @@ static int apply_page(void) {
     return failed == 0;
 }
 
+// --- following changes made elsewhere ---------------------------------
+//
+// A SETTING CHANGED WHILE THIS WINDOW IS OPEN -- by the tray, by `config`,
+// by another program -- is re-read and the open page redrawn from it,
+// which is KDE's KConfigWatcher shape for a window that stages edits.
+// Settings used to read the registry at start and after its own Apply
+// only, so a page kept showing a value that had long since changed.
+//
+// A PAGE WITH EDITS PENDING IS LEFT ALONE: rebuilding it would throw the
+// user's staged values away. It is marked stale and refreshed as soon as
+// those edits are applied or cancelled. The same holds while an options
+// dialog is open over it.
+static int g_stale;
+
+static uint32_t registry_generation(void) {
+    struct setting_msg m;
+    memset(&m, 0, sizeof m);
+    m.op = SETTING_OP_COUNT;   // any op carries it; COUNT is the cheapest
+    return sys_setting(&m) == 0 ? m.generation : g_generation;
+}
+
+static int on_tick(struct uapp *a) {
+    (void)a;
+    if (registry_generation() == g_generation && !g_stale) return 0;
+    if (page_dirty() || (g_opts_win && uapp_window_is_open(g_opts_win))) {
+        g_stale = 1;
+        return 0;
+    }
+    g_stale = 0;
+    int keep_node = uui_sidebar_selected_id(&g_tree);
+    reload_settings();
+    uui_sidebar_select_id(&g_tree, keep_node);
+    if (!g_show_sysinfo && g_page_group >= 0 && g_page_group < g_group_count)
+        open_group(g_page_group);
+    return 1;
+}
+
 // --- the System Information page --------------------------------------
 
 static struct cpu_info g_cpu;
@@ -2412,6 +2449,8 @@ int main(void) {
         .on_size = on_size,
         .on_resize = on_resize,
         .on_font = on_font,
+        .on_tick = on_tick,
+        .tick_ms = 500,
     };
     return uapp_run(&desc);
 }
