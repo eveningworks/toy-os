@@ -3376,6 +3376,15 @@ the default level run dry every 40 ms. That is the disturbance the A/B
 above used on purpose, and it read as "crackle throughout" before
 anyone noticed it lined up with the harness.
 
+**UNDER DISK I/O, THE GAP IS ONE SYSCALL** (2026-09-23): MP3 through the
+ring-3 driver at its default -10, `diskbench --size N` started 10 s in.
+The driver's `longest wait` matched `stalls`' single `unlink` to the
+millisecond, 60 ms at 256 MiB and 109 ms at 512 MiB, and nothing else
+in the benchmark left a gap. The script is the three lines above plus
+`stalls track on`/`stalls reset` before and `stalls` after. In 2 runs
+of 6 soundd also reported chunks aplay had left empty; that one is a
+client starved, not the driver.
+
 ## Layer 5 -- System services and policy
 
 The first layer that is POLICY rather than mechanism, and the first that

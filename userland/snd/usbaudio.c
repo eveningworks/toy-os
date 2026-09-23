@@ -81,6 +81,10 @@ static struct {
     uint64_t t0_ns;
     uint32_t run_ev, run_dry, run_nmax;
     uint16_t run_dry_ms[8];     // when the first eight happened
+    // THE LONGEST TIME BETWEEN TWO REFILLS, and when it ended. `dry`
+    // counts wakeups that found the ring empty, so a 30 ms gap and a
+    // 110 ms one both read as one or two; this says which it was.
+    uint32_t run_last_ms, run_gap_ms, run_gap_at;
     int      run_first_n;      // the first status call's answer; -1 until it comes
 } g;
 
@@ -563,6 +567,7 @@ static int usbaudio_start(struct snd_dev *dev, uint64_t ring_phys) {
     // the reason syscall_abi.h gives.
     g.t0_ns = sys_monotonic_ns();
     g.run_ev = g.run_dry = g.run_nmax = 0;
+    g.run_last_ms = g.run_gap_ms = g.run_gap_at = 0;
     g.run_first_n = -1;
     fprintf(stderr, "usbaudio: start -- %d stale group(s) drained, ring [%s]\n",
             stale, ring_map());
@@ -584,9 +589,10 @@ static void usbaudio_stop(struct snd_dev *dev) {
     for (uint32_t i = 0, o = 0; i < g.run_dry && i < 8; i++)
         o += (uint32_t)snprintf(at + o, sizeof at - o, " %u", g.run_dry_ms[i]);
     fprintf(stderr, "usbaudio: stop after %u ms -- %u event(s), first status "
-                    "said %d, nmax %u, %d in flight, %u dry, at ms:%s\n",
+                    "said %d, nmax %u, %d in flight, %u dry, at ms:%s; "
+                    "longest wait %u ms, ending at %u\n",
             ms_since_start(), g.run_ev, g.run_first_n, g.run_nmax,
-            (int)g.inflight, g.run_dry, at);
+            (int)g.inflight, g.run_dry, at, g.run_gap_ms, g.run_gap_at);
     // NOTHING IS CANCELLED: the TDs already posted play out over the
     // next few milliseconds and the endpoint goes quiet on its own --
     // and their completions are still owed, which start() collects.
@@ -605,6 +611,12 @@ static int usbaudio_period(struct snd_dev *dev) {
     if (g.run_first_n < 0) g.run_first_n = n;
     g.run_ev += (uint32_t)n;
     if ((uint32_t)n > g.run_nmax) g.run_nmax = (uint32_t)n;
+    uint32_t now = ms_since_start();
+    if (now - g.run_last_ms > g.run_gap_ms) {
+        g.run_gap_ms = now - g.run_last_ms;
+        g.run_gap_at = now;
+    }
+    g.run_last_ms = now;
     g.inflight -= n;
     if (g.inflight <= 0) {
         if (g.run_dry < 8) {
