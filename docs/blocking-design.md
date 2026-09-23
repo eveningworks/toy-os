@@ -174,7 +174,20 @@ documents follow.
   argument for a single kernel lock before a locking audit.
 - **Stage 4 -- flip the gate**, and re-measure on
   `latency_under_io.py`, which now has a two-run baseline at both gates
-  taken on one host.
+  taken on one host. **RE-MEASURED 2026-09-23 with stages 1-3 in, NOT
+  flipped.** The regression is gone -- KVM, loaded, three runs: wake avg
+  5.1-6.2 ms at `0xEF` against 5.9-7.4 at `0xEE` (and 300-400 ms at
+  `0xEF` before the lock), wake max 17-20 against 10-19, frame work max
+  19-102 against 45-106 -- and so is any win: the disk waits already
+  yield under the interrupt gate, and what a trap gate would add is
+  preempting a handler's CPU stretch, which mostly holds the filesystem
+  lock anyway. `ktest` 826/0 three runs in three. `usertest_run.py` lost
+  one banner a run (`shm_test`, then `devclaim_test`), each test's own
+  output saying `all checks passed`: console lines from other processes
+  now land inside a line, the torn-line family `docs/bugs.md` already
+  has. Flipping is safe to measure and buys nothing yet; what would
+  make it pay is a workload with long CPU-bound syscalls, or signals
+  that must interrupt one.
 
 ## What stage 2 found
 

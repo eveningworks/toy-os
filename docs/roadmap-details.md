@@ -4893,6 +4893,8 @@ the numbers after the trap gate are ambiguous.
 
 ### Interruptible syscalls
 
+**Re-measured 2026-09-23 and NOT flipped.** With the sleeping lock and the sleeping disk waits in, `0xEF` costs nothing it used to -- the compositor's loaded wake latency matches `0xEE` (5.1-6.2 ms avg against 5.9-7.4) where it was 300-400 ms before -- and wins nothing measurable either, because a disk wait already yields under the interrupt gate. The one new cost seen was the console: `usertest_run.py` missed one test's banner per run (the test itself passed), torn by another process's line -- the kernel-side single-write fix `docs/bugs.md` asks for would take that away. Full numbers: `docs/blocking-design.md`, stage 4.
+
 `int 0x80` runs through an INTERRUPT gate (`idt_set_gate(128, isr128, 0,
 0xEE)`), so IF is clear for the whole syscall and a ring-3 process
 cannot be preempted inside one. That is what actually freezes the

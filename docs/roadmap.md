@@ -69,7 +69,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~A `schedule()` that suspends the KERNEL stack, so a caller can block mid-call~~ DONE 2026-09-18 -- one suspend shape
 - [x] ~~Replace the preemption guard with a real sleeping lock~~ DONE 2026-09-18 -- `ata.c`'s disk waits sleep under it
 - [ ] **NEXT** Finer filesystem locking -- a sleeping holder of the one lock costs others an operation PER call
-- [ ] **Interruptible syscalls** -- the trap gate; the lock and the sleeping disk wait have landed, so re-measure it at `0xEF`
+- [ ] **Interruptible syscalls** -- the trap gate; re-measured 2026-09-23: no regression, no win yet, so not flipped
 - [ ] Bound how long a frame can block on I/O
 
 ### Signals & process control
