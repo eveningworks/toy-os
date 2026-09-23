@@ -191,17 +191,18 @@ static int ac97_period(struct snd_dev *dev) {
     return (int)((uint32_t)civ * SND_CHUNK_BYTES);
 }
 
-// 0..100 onto the codec's attenuators: 0 dB at 100, mute at 0. Master
-// is 6-bit attenuation per channel, PCM out 5-bit.
+// The same taper as kernel/drivers/sound/ac97.c, which says why.
+#define AC97_TAPER_DB 40
+#define AC97_PCM_0DB  0x0808
+
 static void ac97_set_volume(struct snd_dev *dev, int pct) {
     (void)dev;
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
+    wnam16(NAM_PCM_VOL, AC97_PCM_0DB);
     if (pct == 0) { wnam16(NAM_MASTER_VOL, 0x8000); return; }
-    uint16_t att6 = (uint16_t)((100 - pct) * 63 / 100);
-    wnam16(NAM_MASTER_VOL, (uint16_t)((att6 << 8) | att6));
-    uint16_t att5 = (uint16_t)((100 - pct) * 31 / 100);
-    wnam16(NAM_PCM_VOL, (uint16_t)((att5 << 8) | att5));
+    uint16_t att = (uint16_t)(AC97_TAPER_DB * 2 * (100 - pct) / 300);
+    wnam16(NAM_MASTER_VOL, (uint16_t)((att << 8) | att));
 }
 
 const struct snd_driver snd_driver = {

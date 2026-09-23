@@ -217,8 +217,8 @@ def segments(wav_path, min_gap_ms=3.0):
 # THE IMAGE IS A COPY OF WHATEVER disk.img HOLDS, settings included, and
 # every check here measures an amplitude. A master volume left at 25 by
 # some earlier run turned ten checks red with nothing wrong -- the AC97
-# maps 25% to about -105 dB. Set on the first boot, it persists on the
-# copy for every later one.
+# driver then played 25% as silence. Set on the first boot, it persists
+# on the copy for every later one.
 def establish(dbg):
     dbg.send("sh config set volume 100")
 

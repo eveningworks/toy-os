@@ -2718,7 +2718,7 @@ window without going through it will find its layout polls timing out.
   **IT SETS THE MASTER VOLUME ITSELF** (`establish()`), because its
   image is a copy of whatever `disk.img` holds. A `volume=25` left there
   by an earlier run turned ten checks red with nothing wrong in the
-  build (the emulated AC97 plays 25% as silence, `docs/bugs.md`). A
+  build (the AC97 driver played 25% as silence then). A
   failure here that the old build does not share should be retried on a
   `make clean-disk` image before it is believed.
 - **`soundd_test.py`** -- the sound daemon, judged on the HOST by the

@@ -107,20 +107,28 @@ static void ac97_stop(const struct sound_device *dev) {
     outw(g_nabm + PO_SR, SR_ACK);
 }
 
-// 0..100 onto the codec's attenuators: 0 dB at 100, mute at 0. Master
-// is 6-bit attenuation per channel, PCM out 5-bit.
+// 0..100 onto the codec: 40 dB of attenuation across the slider, linear
+// in dB like hda.c and sound_usb.c, mute at 0 -- all of it on the MASTER
+// (1.5 dB steps, so at most 26, which a 5-bit codec also has). PCM out
+// is a GAIN, not an attenuation: 0x08 is 0 dB and 0 is +12 dB, and
+// attenuating both linearly put 25% at about -105 dB, i.e. silence.
+//
+// QEMU'S AC97 IS NOT dB-ACCURATE: it scales each register linearly in
+// steps and multiplies the two, so under it this slider spans about
+// 4 dB and 0x08 costs 2.6 dB (measured). A codec follows the spec.
+#define AC97_TAPER_DB 40
+#define AC97_PCM_0DB  0x0808
 static void ac97_set_volume(const struct sound_device *dev, int pct) {
     (void)dev;
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
+    outw(g_nam + NAM_PCM_VOL, AC97_PCM_0DB);
     if (pct == 0) {
         outw(g_nam + NAM_MASTER_VOL, 0x8000);
         return;
     }
-    uint16_t att6 = (uint16_t)((100 - pct) * 63 / 100);
-    outw(g_nam + NAM_MASTER_VOL, (uint16_t)((att6 << 8) | att6));
-    uint16_t att5 = (uint16_t)((100 - pct) * 31 / 100);
-    outw(g_nam + NAM_PCM_VOL, (uint16_t)((att5 << 8) | att5));
+    uint16_t att = (uint16_t)(AC97_TAPER_DB * 2 * (100 - pct) / 300);
+    outw(g_nam + NAM_MASTER_VOL, (uint16_t)((att << 8) | att));
 }
 
 static const struct sound_device ac97_dev = {
@@ -266,4 +274,22 @@ KTEST("ac97", "start runs the engine and stop halts it") {
     ac97_stop(&ac97_dev);
     KTEST_ASSERT_EQ(inb(g_nabm + PO_CR) & CR_RPBM, 0);
 }
+KTEST("ac97", "volume is a 40 dB taper on the master, and PCM stays at 0 dB") {
+    if (!g_pci) { KTEST_SKIP("no AC97 on this machine"); return; }
+    uint16_t master = inw(g_nam + NAM_MASTER_VOL), pcm = inw(g_nam + NAM_PCM_VOL);
+    ac97_set_volume(&ac97_dev, 25);
+    uint16_t at25 = inw(g_nam + NAM_MASTER_VOL), pcm25 = inw(g_nam + NAM_PCM_VOL);
+    ac97_set_volume(&ac97_dev, 1);
+    uint16_t at1 = inw(g_nam + NAM_MASTER_VOL);
+    ac97_set_volume(&ac97_dev, 0);
+    uint16_t at0 = inw(g_nam + NAM_MASTER_VOL);
+    outw(g_nam + NAM_PCM_VOL, pcm);
+    outw(g_nam + NAM_MASTER_VOL, master);
+
+    KTEST_ASSERT_EQ(at25, 0x1414);       // 20 steps of 1.5 dB: -30 dB, audible
+    KTEST_ASSERT_EQ(pcm25, AC97_PCM_0DB);
+    KTEST_ASSERT_EQ(at1, 0x1a1a);        // -39 dB: inside a 5-bit codec's range
+    KTEST_ASSERT(at0 & 0x8000);          // 0 is mute, not a number
+}
+
 PCI_DRIVER_REMOVABLE("ac97", ac97_matches, ac97_probe, ac97_remove);
