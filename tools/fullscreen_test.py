@@ -32,6 +32,7 @@ import time
 sys.path.insert(0, "tools")
 from gui_debug import DebugConsole            # noqa: E402
 from qmp_test import QMPSession               # noqa: E402
+import vm as vm_mod                           # noqa: E402 -- started_ok(), see its comment
 
 TITLE = "Fullscreen Client"
 FILL = (0x30, 0x60, 0xC0)   # fsclient.c's FILL, as RGB
@@ -161,12 +162,27 @@ def run(dbg, qmp, tmp, res):
         # An overlay above the client takes the lease away (a right
         # click is the CLIENT's inside its content, so the Start menu is
         # the overlay to open)...
+        # POLLED, not slept on: the lease ends on the next frame after
+        # the overlay opens, and a fixed 0.4 s is a guess about how fast
+        # an emulated guest gets there. The menu's own state rides along
+        # in the detail, which separates "the lease outlived the menu"
+        # from "the Super tap never opened one".
+        # BOTH EDGES: the Super gesture is on the RELEASE (wm.c), so a
+        # press alone opened nothing -- and the "leases again" check
+        # below then passed without a menu ever having been open.
         dbg.key(KEY_SUPER)
-        time.sleep(0.4)
+        dbg.key(KEY_SUPER, mods="up")
+        deadline = time.time() + 4
         fb = dbg.json("gui fb --json")
-        res.check("the Start menu over it ends the lease", fb.get("lease") == 0, fb)
+        while fb.get("lease") != 0 and time.time() < deadline:
+            time.sleep(0.25)
+            fb = dbg.json("gui fb --json")
+        menu = (dbg.state().get("overlays") or {}).get("start_menu")
+        res.check("the Start menu over it ends the lease", fb.get("lease") == 0,
+                  f"{fb}; start menu open: {menu}")
         # ...and closing it hands the lease back.
         dbg.key(KEY_SUPER)
+        dbg.key(KEY_SUPER, mods="up")
         fb = wait_lease(dbg, pid)
         res.check("closing the menu leases again", fb.get("lease") == pid, fb)
 
@@ -246,9 +262,18 @@ def main():
     args = ap.parse_args()
     n = args.instance
     launch = ["python3", "tools/vm.py", "--vga", "virtio", "--instance", str(n), "start"]
-    if subprocess.run(launch).returncode != 0:
+    boot = subprocess.run(launch, capture_output=True, text=True)
+    out = (boot.stdout or "") + (boot.stderr or "")
+    # "ALREADY RUNNING" EXITS 0 TOO (vm.py's started_ok()), and a guest
+    # somebody else started need not have the virtio GPU asked for here.
+    # Say which one this is, rather than failing the cursor-plane pair
+    # for a reason that points at the compositor.
+    if boot.returncode != 0 or not (vm_mod.started_ok(out) or "already running" in out):
         print("fullscreen_test: could not start the guest")
         return 1
+    if not vm_mod.started_ok(out):
+        print("fullscreen_test: using the guest already on this slot -- it "
+              "must have been started with --vga virtio")
     dbg = wait_for_desktop(n, 60)
     if dbg is None:
         print("fullscreen_test: the guest never reached a desktop")

@@ -202,6 +202,12 @@ EXTRA_VM_ARGS = {
     # matter how fast the tap: with the fix reverted, the PS/2 guest
     # still passed every check. MEASURED, not assumed.
     "mousebtn": ["--usb", "xhci+mouse"],
+    # THE ONE QEMU DISPLAY WITH A CURSOR PLANE, which the lease under test
+    # needs. The tool asks for it too, but the runner's guest is already
+    # on the slot by then -- `vm.py start` answers "already running" and
+    # exits 0 -- so without this it tested a standard VGA and failed the
+    # cursor-plane pair on every suite run while passing alone.
+    "fullscreen": ["--vga", "virtio"],
 }
 
 COST_S = {
