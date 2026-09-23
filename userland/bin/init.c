@@ -1183,10 +1183,26 @@ static void write_status(int settled) {
                                                        // nothing (kfmt.h)
     if (k_strcmp(g_status, g_status_prev) == 0) return;
 
-    int fd = open(STATUS_PATH, O_WRONLY | O_CREAT | O_TRUNC);
+    // **PUBLISHED, NEVER REWRITTEN IN PLACE.** A truncate-then-write
+    // let `service` read the file between the two and find it EMPTY --
+    // "init supervises no service called toywm" about a desktop that was
+    // up -- and once a disk write could sleep, that gap was a whole disk
+    // transfer wide. So: write a new file, move the old aside, rename the
+    // new in (rename here refuses an existing destination -- tftpd.c has
+    // the same three steps). A reader sees the old file, the new one, or
+    // for an instant none, and none is what service already retries on.
+    int fd = open(STATUS_PATH ".new", O_WRONLY | O_CREAT | O_TRUNC);
     if (fd < 0) return;                // no disk, or a full one: not fatal
-    write(fd, g_status, (size_t)n);
+    int wrote = (int)write(fd, g_status, (size_t)n) == n;
     close(fd);
+    if (!wrote) { remove(STATUS_PATH ".new"); return; }
+    int had_old = rename(STATUS_PATH, STATUS_PATH ".old") == 0;
+    if (rename(STATUS_PATH ".new", STATUS_PATH) != 0) {
+        if (had_old) rename(STATUS_PATH ".old", STATUS_PATH);
+        remove(STATUS_PATH ".new");
+        return;
+    }
+    if (had_old) remove(STATUS_PATH ".old");
     k_strlcpy(g_status_prev, g_status, sizeof g_status_prev);
 }
 

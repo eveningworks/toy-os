@@ -1426,3 +1426,17 @@ all still worked, so nothing pointed at paths. It is `ARGV_TAIL_MARGIN`
 now. When you move a constant, grep for ARITHMETIC on it, not just for
 its use as a size: `4096 - X` and `X * 2` are the shapes that change
 meaning rather than merely changing value.
+
+## A FILE OTHER PROCESSES READ IS PUBLISHED, NEVER REWRITTEN IN PLACE
+
+`open(O_TRUNC)` then `write()` leaves a window in which a reader finds
+the file EMPTY -- and a reader that parses "empty" as "nothing there"
+reports a falsehood rather than an error. It became a real window once
+a disk write could sleep: `service` read init's status file mid-rewrite
+and said `init supervises no service called toywm` about a running
+desktop, which took the kernel suite's desktop stop with it. Write
+`x.new`, move `x` to `x.old`, rename `x.new` to `x`, remove `x.old`
+(`rename()` here refuses an existing destination -- `tftpd.c` and
+`init.c`'s `write_status()` both do this). A reader then sees the old
+file, the new one, or for an instant none, and "none" is the case a
+reader already retries.
