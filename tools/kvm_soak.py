@@ -116,7 +116,11 @@ class Boot:
         run(["cp", "--reflink=auto", "--sparse=always", "disk.img", self.img])
         r = run(["python3", "tools/vm.py", "--kvm", "--instance", str(self.slot),
                  "--disk", self.img, "start"])
-        return vm.started_ok(r.stdout)
+        ok = vm.started_ok(r.stdout)
+        # SAY WHY. "did not come up" with nothing else is what this tool
+        # reported for rounds it never diagnosed.
+        self.why = "" if ok else (r.stdout + r.stderr).strip()[-400:]
+        return ok
 
     def stop(self):
         run(["python3", "tools/vm.py", "--instance", str(self.slot), "stop"])
@@ -154,7 +158,7 @@ K_UP, K_DOWN, K_LEFT, K_RIGHT = "0x91", "0x92", "0x95", "0x96"
 KEYS = {"spin": (K_UP, K_DOWN), "radio": (K_DOWN, K_UP), "slider": (K_RIGHT, K_LEFT)}
 
 
-def drive_workload(dbg, qmp, rounds):
+def drive_workload(dbg, qmp, rounds, themes=()):
     """Enter the GUI, open System Settings, and change settings on every
     page while the desktop's entry directory churns underneath.
 
@@ -182,8 +186,11 @@ def drive_workload(dbg, qmp, rounds):
             m = BUTTONS_RE.search(line)
             if m:
                 apply = tuple(int(v) for v in m.groups())
+            # EVERY ROW BUT A SEPARATOR IS A PAGE. The sidebar has been a
+            # FLAT list since 2026-09-14 (every destination depth 0); this
+            # kept only depth-1 rows, found none, and failed every round.
             m = ROW_RE.search(line)
-            if m and int(m.group(4)) == 1 and int(m.group(2)) not in [r[0] for r in rows]:
+            if m and m.group(5).strip() != "-" and int(m.group(2)) not in [r[0] for r in rows]:
                 rows.append((int(m.group(2)), int(m.group(3))))
         if tree and rows and apply:
             break
@@ -244,8 +251,23 @@ def drive_workload(dbg, qmp, rounds):
             time.sleep(0.9)
             dbg.send(f"sh rm /usr/wm/applications/zz{n}{which}.desktop")
             time.sleep(0.9)
+        # AND A CURSOR THEME LOAD per page, alternating between real
+        # themes. The WM only reloads a theme that CHANGED (its config is
+        # pushed), so without this the incomplete-load check saw no loads
+        # and passed on nothing. ONCE PER PAGE, after its keys: a config
+        # change makes System Settings reload the page it shows, which
+        # drops the focused control, and a key after it lands nowhere.
+        if len(themes) >= 2:
+            dbg.send(f"sh config set cursor_theme {sorted(themes)[n % len(themes)]}")
+            time.sleep(0.5)
         seen.extend(l.strip() for l in dbg.logs())
-        changes += sum(1 for l in seen[mark:] if l.startswith("settings: set "))
+        # IN the line, not at its start: the serial console interleaves the
+        # app log with command replies, and a `settings: set` can arrive
+        # glued to the tail of a JSON answer -- counted as zero changes,
+        # which failed every round.
+        changes += sum(1 for l in seen[mark:] if "settings: set " in l)
+    if "default" in themes:
+        dbg.send("sh config set cursor_theme default")
     time.sleep(1.0)
     seen.extend(l.strip() for l in dbg.logs())
     # The workload must have CHANGED something, or the disk saw nothing.
@@ -327,9 +349,10 @@ def main():
 
     for i in range(1, args.rounds + 1):
         if not boot.start():
-            print(f"  round {i}: ERROR -- the VM did not come up")
+            print(f"  round {i}: ERROR -- the VM did not come up: {boot.why}")
             bad_rounds += 1
             continue
+        qmp = dbg = None
         try:
             qmp = QMPSession(port=boot.qmp)
             # enter_gui() opens its own console to turn the layout log
@@ -348,14 +371,19 @@ def main():
                 dbg.send("sh config set cursor_theme default")
                 time.sleep(0.5)
                 dbg.logs()
-            log, ok = drive_workload(dbg, qmp, args.changes)
+            log, ok = drive_workload(dbg, qmp, args.changes, themes)
             if args.keep:
                 with open(os.path.join(args.keep, f"round{i}.log"), "w") as f:
                     f.write("\n".join(log))
             if not ok:
                 why = [l for l in log if l.startswith("kvm_soak: ")]
+                # A CRASH IS THE FINDING, not a missing layout: with the fs
+                # lock removed as a control, Settings page-faulted on what
+                # it read and this line used to say only "no layout".
+                crash = [l for l in log if "RING-3 CRASH" in l or "CR2=" in l]
                 print(f"  round {i}: ERROR -- System Settings never reported its layout, "
-                      f"or no setting changed ({why[-1] if why else 'no detail'})")
+                      f"or no setting changed ({why[-1] if why else 'no detail'})"
+                      + (f" -- {' '.join(crash)}" if crash else ""))
                 bad_rounds += 1
                 continue
             problems, info = check(log, args.slow_ms, themes)
@@ -374,6 +402,17 @@ def main():
             print(f"  round {i}: ERROR -- {type(e).__name__}: {e}")
             bad_rounds += 1
         finally:
+            # CLOSE OUR ENDS BEFORE THE GUEST DIES. With the QMP client
+            # still connected, QEMU closes first and its port sits in
+            # TIME_WAIT, which port_guard's plain bind reads as taken --
+            # so the NEXT round was refused and reported "did not come
+            # up", every round after the first.
+            for c in (dbg, qmp):
+                try:
+                    if c:
+                        c.close()
+                except Exception:                    # noqa: BLE001
+                    pass
             boot.stop()
 
     print()

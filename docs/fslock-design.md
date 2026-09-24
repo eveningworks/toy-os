@@ -145,3 +145,6 @@ with nothing logged. And every automated test here runs TCG, which
 serialises, so a missing lock passes the suite. The evidence has to be
 a KVM soak with a positive control that removes one lock and shows the
 soak failing -- `docs/smp-design.md`'s testing section is the shape.
+`tools/kvm_soak.py` is that soak, and its sensitivity is MEASURED: with
+the mount lock removed entirely it went red in 2 rounds of 6. Run it
+`-n 10` for a stage here, and run the control the same way.

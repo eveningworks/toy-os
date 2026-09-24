@@ -1517,7 +1517,21 @@ window without going through it will find its layout polls timing out.
   desktop only re-reads when that directory changed and a cached read
   never reaches the drive, so without it the tool does almost no disk
   I/O -- verified by disarming the VFS preemption guard entirely and
-  still getting four clean rounds.
+  still getting four clean rounds. **It also switches the cursor theme
+  once per page** between two real themes: the WM reloads a theme only
+  when it changes (pushed config), so without that the incomplete-load
+  check saw no loads and passed on nothing.
+  **ITS SENSITIVITY IS MEASURED, AND IT IS LOW: with every mount lock
+  made a no-op, 2 rounds of 6 went red** (System Settings page-faulting
+  on what it read); the rest passed. On one vCPU two contexts meet
+  inside a backend only when a holder sleeps in a disk wait, which is
+  timing. So **use `-n 10` for locking work** (~98% to see a red round
+  at that rate), and never read a 3-round pass as proof. It was broken
+  for weeks by three harness faults at once -- a sidebar filter left
+  over from the tree, a `settings: set` count that missed lines glued
+  to a JSON reply, and a QMP client left open so the next round's port
+  sat in TIME_WAIT -- and said nothing more useful than "did not come
+  up" (fixed 2026-09-24; it now says why).
 - **`serial_capture.py`** -- read a running VM's serial console RAW,
   optionally sending one command first. The case `gui_debug.py` cannot
   cover: a command that KILLS the guest. `DebugConsole` is
