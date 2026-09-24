@@ -43,6 +43,9 @@ that turned out wrong. It boots on real hardware and under QEMU.
   physical frame allocator and per-process page tables, NX/W^X, SMEP/SMAP,
   stack canaries and kernel ASLR. ACPI tables are parsed, and the machine
   powers off through its own firmware methods rather than a fixed port.
+  The timer is **one-shot and tickless when idle**, the way Linux's
+  hrtimers and NO_HZ work: a sleep ends within tens of microseconds of
+  its deadline, and an idle machine stops interrupting itself.
 - **Processes** — an ELF64 loader, a preemptive scheduler, an `init` as
   pid 1 that supervises services, pipes and `spawn`/`waitpid`, signals and
   job control, threads with real thread-local storage, and **dynamic
@@ -181,7 +184,8 @@ onto it, and boots **the disk** in QEMU — no CD involved (`make run
 BOOT=cd` boots the ISO instead). **init brings the desktop up on its
 own**; *Exit to shell* in the Start menu drops to the `/>` prompt, and
 `gui` goes back.
-For a text-only boot, `make iso KCMDLINE="target=text"`. PageUp/PageDown
+For a text-only boot, `make iso KCMDLINE="target=text"` (or `option
+cmdline` in `build.conf`, below). PageUp/PageDown
 scrolls the console history, including the boot log.
 
 ```bash
@@ -225,6 +229,28 @@ make run NET=virtio     # virtio-net instead of the e1000 (NET=none for no card)
 make run NODISK=1       # no disk attached at all
 make run LIVE=1         # the Live CD, no disk attached
 ```
+
+### Configuring the build
+
+**`build.conf`**, at the top of the tree, is how this checkout is built:
+which drivers are loadable modules, then the build options. Edit it and
+run `make iso`; only what a change affects is rebuilt. Some of its lines
+(the last one is an example -- the shipped file leaves `cmdline` unset):
+
+```ini
+e1000 = module            # a driver built as /lib/modules/e1000.ko
+option hz       = 1000    # the kernel's tick rate: 100, 250, 300, 500 or 1000
+option tick     = idle    # stop the tick when nothing runs (or periodic)
+option highres  = yes     # one-shot timer deadlines (no = check them per tick)
+option cmdline  = target=text   # boot words baked into the media
+```
+
+A value on the command line wins for one build (`make iso HZ=250`),
+and a misspelt name or value stops the build rather than being ignored.
+The comments in the file list every option. Some also have a **boot
+flag** that overrides them for one boot without rebuilding, such as
+`nohz=off` and `highres=off` -- see
+[docs/boot-flags.md](docs/boot-flags.md).
 
 <details>
 <summary>Troubleshooting</summary>
