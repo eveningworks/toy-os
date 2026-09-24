@@ -28,5 +28,6 @@ extern const struct fs_ops ramfs_ops;
 int ramfs_test_mount(uint64_t budget_bytes);
 void ramfs_test_unmount(void);
 uint64_t ramfs_test_used(void);
+void *ramfs_test_state(void);   // what a test hands every ramfs_ops call
 
 #endif

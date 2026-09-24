@@ -373,7 +373,8 @@ static int write_at(struct rnode *n, uint64_t off, const void *buf, uint32_t len
 
 // ---- fs_ops ---------------------------------------------------------
 
-static int ramfs_probe(const struct block_device *dev) {
+static int ramfs_probe(void *st, const struct block_device *dev) {
+    (void)st;
     (void)dev;
     // NEVER claims a device. ramfs is chosen by POLICY in vfs.c, not by
     // detection -- there is no superblock to recognise, and a backend
@@ -382,7 +383,8 @@ static int ramfs_probe(const struct block_device *dev) {
     return 0;
 }
 
-static int ramfs_wipe(const struct block_device *dev) {
+static int ramfs_wipe(void *st, const struct block_device *dev) {
+    (void)st;
     (void)dev;
     // Nothing on any disk bears its signature, so there is nothing to
     // erase. Success, per fs_ops.h ("nothing to wipe counts as
@@ -396,13 +398,15 @@ static void drop_everything(void) {
     S->used = 0;
 }
 
-static int ramfs_format(const struct block_device *dev) {
+static int ramfs_format(void *st, const struct block_device *dev) {
+    (void)st;
     (void)dev;
     drop_everything();
     return 1;
 }
 
-static int ramfs_init(const struct block_device *dev, uint64_t size_bytes) {
+static int ramfs_init(void *st, const struct block_device *dev, uint64_t size_bytes) {
+    (void)st;
     (void)dev; // ramfs has no volume -- it IS the volume
     drop_everything();
 
@@ -451,7 +455,8 @@ static int ramfs_init(const struct block_device *dev, uint64_t size_bytes) {
     return 0;
 }
 
-static int ramfs_touch(const char *path) {
+static int ramfs_touch(void *st, const char *path) {
+    (void)st;
     if (!S->mounted) return 0;
     int existing = find(path);
     if (existing >= 0) {
@@ -467,7 +472,8 @@ static int ramfs_touch(const char *path) {
     return node_alloc(name, parent, 0) >= 0;
 }
 
-static int ramfs_mkdir(const char *path) {
+static int ramfs_mkdir(void *st, const char *path) {
+    (void)st;
     if (!S->mounted) return 0;
     if (find(path) >= 0) return 0;
     int parent; const char *leaf; int len;
@@ -478,11 +484,12 @@ static int ramfs_mkdir(const char *path) {
     return node_alloc(name, parent, 1) >= 0;
 }
 
-static int ramfs_write(const char *path, const char *data, int append) {
+static int ramfs_write(void *st, const char *path, const char *data, int append) {
+    (void)st;
     if (!S->mounted || !data) return 0;
     int idx = find(path);
     if (idx < 0) {
-        if (!ramfs_touch(path)) return 0;
+        if (!ramfs_touch(st, path)) return 0;
         idx = find(path);
         if (idx < 0) return 0;
     }
@@ -497,7 +504,8 @@ static int ramfs_write(const char *path, const char *data, int append) {
     return write_at(n, n->size, data, len);
 }
 
-static int ramfs_del(const char *path) {
+static int ramfs_del(void *st, const char *path) {
+    (void)st;
     if (!S->mounted) return 0;
     int idx = find(path);
     if (idx <= 0) return 0;                  // no such thing, or the root
@@ -506,25 +514,28 @@ static int ramfs_del(const char *path) {
     return 1;
 }
 
-static uint64_t ramfs_size(const char *path) {
+static uint64_t ramfs_size(void *st, const char *path) {
+    (void)st;
     if (!S->mounted) return 0;
     int idx = find(path);
     if (idx < 0 || S->nodes[idx]->is_dir) return 0;
     return S->nodes[idx]->size;
 }
 
-static uint32_t ramfs_read_range(const char *path, uint64_t offset, void *buf, uint32_t len) {
+static uint32_t ramfs_read_range(void *st, const char *path, uint64_t offset, void *buf, uint32_t len) {
+    (void)st;
     if (!S->mounted || !buf || !len) return 0;
     int idx = find(path);
     if (idx < 0 || S->nodes[idx]->is_dir) return 0;
     return read_at(S->nodes[idx], offset, buf, len);
 }
 
-static int ramfs_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len) {
+static int ramfs_write_range(void *st, const char *path, uint64_t offset, const void *buf, uint32_t len) {
+    (void)st;
     if (!S->mounted || !buf) return 0;
     int idx = find(path);
     if (idx < 0) {
-        if (!ramfs_touch(path)) return 0;
+        if (!ramfs_touch(st, path)) return 0;
         idx = find(path);
         if (idx < 0) return 0;
     }
@@ -544,16 +555,18 @@ struct ramfs_step {
     uint32_t total;
 };
 
-static void *ramfs_write_range_begin(const char *path, uint64_t offset,
+static void *ramfs_write_range_begin(void *st, const char *path, uint64_t offset,
                                      const void *buf, uint32_t len) {
+    (void)st;
     struct ramfs_step *h = kmalloc(sizeof *h);
     if (!h) return 0;
-    h->ok = ramfs_write_range(path, offset, buf, len);
+    h->ok = ramfs_write_range(st, path, offset, buf, len);
     h->total = h->ok ? len : 0;
     return h;
 }
 
-static int ramfs_write_range_step(void *handle) {
+static int ramfs_write_range_step(void *st, void *handle) {
+    (void)st;
     struct ramfs_step *h = handle;
     if (!h) return FS_STEP_FAILED;
     int ok = h->ok;
@@ -561,16 +574,18 @@ static int ramfs_write_range_step(void *handle) {
     return ok ? FS_STEP_DONE : FS_STEP_FAILED;
 }
 
-static void *ramfs_read_range_begin(const char *path, uint64_t offset,
+static void *ramfs_read_range_begin(void *st, const char *path, uint64_t offset,
                                     void *buf, uint32_t len) {
+    (void)st;
     struct ramfs_step *h = kmalloc(sizeof *h);
     if (!h) return 0;
-    h->total = ramfs_read_range(path, offset, buf, len);
+    h->total = ramfs_read_range(st, path, offset, buf, len);
     h->ok = 1;   // a short read at EOF is a success, same as fs_read_range()
     return h;
 }
 
-static int ramfs_read_range_step(void *handle, uint32_t *out_total) {
+static int ramfs_read_range_step(void *st, void *handle, uint32_t *out_total) {
+    (void)st;
     struct ramfs_step *h = handle;
     if (!h) return FS_STEP_FAILED;
     if (out_total) *out_total = h->total;
@@ -578,7 +593,8 @@ static int ramfs_read_range_step(void *handle, uint32_t *out_total) {
     return FS_STEP_DONE;
 }
 
-static int ramfs_rename(const char *oldpath, const char *newpath) {
+static int ramfs_rename(void *st, const char *oldpath, const char *newpath) {
+    (void)st;
     if (!S->mounted) return 0;
     int idx = find(oldpath);
     if (idx <= 0) return 0;                   // nothing there, or the root
@@ -601,7 +617,8 @@ static int ramfs_rename(const char *oldpath, const char *newpath) {
     return 1;
 }
 
-static int ramfs_truncate(const char *path, uint64_t size) {
+static int ramfs_truncate(void *st, const char *path, uint64_t size) {
+    (void)st;
     if (!S->mounted) return 0;
     int idx = find(path);
     if (idx < 0 || S->nodes[idx]->is_dir) return 0;
@@ -632,18 +649,21 @@ static int ramfs_truncate(const char *path, uint64_t size) {
     return 1;
 }
 
-static int ramfs_is_dir(const char *path) {
+static int ramfs_is_dir(void *st, const char *path) {
+    (void)st;
     if (!S->mounted) return 0;
     int idx = find(path);
     return idx >= 0 && S->nodes[idx]->is_dir;
 }
 
-static int ramfs_exists(const char *path) {
+static int ramfs_exists(void *st, const char *path) {
+    (void)st;
     if (!S->mounted) return 0;
     return find(path) >= 0;
 }
 
-static void ramfs_list(const char *dir_path, void (*cb)(const char *, uint32_t, int)) {
+static void ramfs_list(void *st, const char *dir_path, void (*cb)(const char *, uint32_t, int)) {
+    (void)st;
     if (!S->mounted || !cb) return;
     int dir = find(dir_path);
     if (dir < 0 || !S->nodes[dir]->is_dir) return;
@@ -657,7 +677,8 @@ static void ramfs_list(const char *dir_path, void (*cb)(const char *, uint32_t, 
     }
 }
 
-static int ramfs_stat(const char *path, struct fs_stat_info *out) {
+static int ramfs_stat(void *st, const char *path, struct fs_stat_info *out) {
+    (void)st;
     if (!S->mounted || !out) return 0;
     int idx = find(path);
     if (idx < 0) return 0;
@@ -676,14 +697,16 @@ static int ramfs_stat(const char *path, struct fs_stat_info *out) {
     return 1;
 }
 
-static int ramfs_disk_usage(uint64_t *out_used, uint64_t *out_total) {
+static int ramfs_disk_usage(void *st, uint64_t *out_used, uint64_t *out_total) {
+    (void)st;
     if (!S->mounted) return 0;
     if (out_used) *out_used = S->used;
     if (out_total) *out_total = S->budget;
     return 1;
 }
 
-static int ramfs_check(int repair, struct fs_check_result *out) {
+static int ramfs_check(void *st, int repair, struct fs_check_result *out) {
+    (void)st;
     (void)repair;
     if (!S->mounted || !out) return 0;
     k_memset(out, 0, sizeof *out);
@@ -791,7 +814,7 @@ int ramfs_test_mount(uint64_t budget_bytes) {
     // Straight through init() now that a mount carries its own size --
     // this used to poke S->budget afterwards, which meant the test seam
     // exercised a path no real mount took.
-    if (ramfs_init(NULL, budget_bytes) < 0) { ramfs_test_unmount(); return 0; }
+    if (ramfs_init(g_test_state, NULL, budget_bytes) < 0) { ramfs_test_unmount(); return 0; }
     return 1;
 }
 
@@ -802,3 +825,4 @@ void ramfs_test_unmount(void) {
 }
 
 uint64_t ramfs_test_used(void) { return S->used; }
+void *ramfs_test_state(void) { return g_test_state; }

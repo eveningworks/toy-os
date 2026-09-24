@@ -97,17 +97,16 @@ struct fs_ops {
 
     // ---- per-mount state ---------------------------------------
     //
-    // Allocate, make current, free. A backend keeps its volume state
-    // in one heap struct reached through a `static struct X_state *S`,
-    // and these three are how the VFS says which mount a call belongs
-    // to. Linux hands `struct super_block *` to every op instead; this
-    // sets it at the chokepoint rather than threading it through
-    // twenty signatures, which it can do because the filesystem is
-    // already one global critical section (vfs.c's FS_OP preemption
-    // guard). THAT is the assumption to re-read on the day toy-os has
-    // a second core -- see docs/smp-design.md.
+    // A backend's volume state is one heap struct per mount, and EVERY
+    // op below is handed it as `st` -- Linux's `sb->s_fs_info`. vfs.c's
+    // FS_OP passes the mount's own, and a probe/format/wipe on a volume
+    // nothing mounted gets a scratch one (mount_scratch_begin()).
     //
-    // All three or none, checked at mount time.
+    // `state_activate` is the older mechanism -- a `static ... *S` the
+    // VFS repoints around every call -- and is OPTIONAL now; it goes
+    // once no backend reads a global (docs/fslock-design.md, stage 1).
+    //
+    // alloc and free: both or neither, checked at mount time.
     //
     // `state_activate` RETURNS WHAT WAS CURRENT, so a caller restores
     // rather than clearing. That is what makes the pair nest: an
@@ -140,7 +139,7 @@ struct fs_ops {
     //  -1  could not read the superblock at all -- vfs.c treats this
     //      as "refuse to touch the disk" (the data-loss lesson in
     //      tfs3.c's init comment), never as "blank, go format"
-    int (*probe)(const struct block_device *dev);
+    int (*probe)(void *st, const struct block_device *dev);
 
     // Erase every signature by which probe() would recognize this
     // backend's filesystem on the disk -- the primary superblock AND
@@ -152,7 +151,7 @@ struct fs_ops {
     // wipe() before formatting with the chosen one, so a reformat is
     // a clean identity change, not a seance. Idempotent; returns 1
     // on success (nothing to wipe counts as success).
-    int (*wipe)(const struct block_device *dev);
+    int (*wipe)(void *st, const struct block_device *dev);
 
     // Write a fresh, empty filesystem to the disk. Does NOT mount it
     // (fs_init()/fs_format_backend() call init() after). Returns 1 on
@@ -160,7 +159,7 @@ struct fs_ops {
     // called deliberately: from the blank/foreign-disk policy in
     // fs_init(), or from the user-facing `fsformat` command -- a
     // backend never formats on its own initiative anymore.
-    int (*format)(const struct block_device *dev);
+    int (*format)(void *st, const struct block_device *dev);
 
     // Called once this backend is chosen, from fs_init(). Mounts what
     // probe() claimed (or format() just wrote). Returns:
@@ -184,15 +183,15 @@ struct fs_ops {
     // decides. Only a backend whose capacity is NOT fixed by its device
     // has anything to do with it -- ramfs is the only one, and tfs3 and
     // fat32 ignore it because a volume's size is the volume's.
-    int (*init)(const struct block_device *dev, uint64_t size_bytes);
+    int (*init)(void *st, const struct block_device *dev, uint64_t size_bytes);
 
-    int (*touch)(const char *path);
-    int (*write)(const char *path, const char *data, int append);
-    int (*mkdir)(const char *path);
-    int (*del)(const char *path); // backs fs_delete() -- named del, not delete, to read fine if this header is ever pulled into a C++ tool
-    uint64_t (*size)(const char *path);
-    uint32_t (*read_range)(const char *path, uint64_t offset, void *buf, uint32_t len);
-    int (*write_range)(const char *path, uint64_t offset, const void *buf, uint32_t len);
+    int (*touch)(void *st, const char *path);
+    int (*write)(void *st, const char *path, const char *data, int append);
+    int (*mkdir)(void *st, const char *path);
+    int (*del)(void *st, const char *path); // backs fs_delete() -- named del, not delete, to read fine if this header is ever pulled into a C++ tool
+    uint64_t (*size)(void *st, const char *path);
+    uint32_t (*read_range)(void *st, const char *path, uint64_t offset, void *buf, uint32_t len);
+    int (*write_range)(void *st, const char *path, uint64_t offset, const void *buf, uint32_t len);
 
     // Steppable write -- Phase 2 of the async-I/O roadmap item (see
     // docs/roadmap.md). Same effect as write_range above, but split so
@@ -207,8 +206,8 @@ struct fs_ops {
     // implements them -- see this header's top comment on why a
     // mount-point scheme (which might want optional capabilities per
     // backend) isn't what this struct is for.
-    void *(*write_range_begin)(const char *path, uint64_t offset, const void *buf, uint32_t len);
-    int (*write_range_step)(void *handle); // returns an fs_step_result (fs.h) as a plain int -- see that header for why
+    void *(*write_range_begin)(void *st, const char *path, uint64_t offset, const void *buf, uint32_t len);
+    int (*write_range_step)(void *st, void *handle); // returns an fs_step_result (fs.h) as a plain int -- see that header for why
 
     // Steppable read -- Phase 4 of the async-I/O roadmap item, the read
     // counterpart to write_range_begin/_step above. Same reasoning for
@@ -218,30 +217,30 @@ struct fs_ops {
     // implementing these two must honor -- note read_range_step takes
     // an extra `out_total` out-param write_range_step doesn't need (a
     // read can finish short at EOF; a write can't).
-    void *(*read_range_begin)(const char *path, uint64_t offset, void *buf, uint32_t len);
-    int (*read_range_step)(void *handle, uint32_t *out_total); // returns an fs_step_result (fs.h) as a plain int
+    void *(*read_range_begin)(void *st, const char *path, uint64_t offset, void *buf, uint32_t len);
+    int (*read_range_step)(void *st, void *handle, uint32_t *out_total); // returns an fs_step_result (fs.h) as a plain int
 
     // Both required, both backends implement them -- see fs.h's
     // fs_rename()/fs_truncate() for the contract (what is refused,
     // and which backend promises atomicity).
-    int (*rename)(const char *oldpath, const char *newpath);
-    int (*truncate)(const char *path, uint64_t size);
+    int (*rename)(void *st, const char *oldpath, const char *newpath);
+    int (*truncate)(void *st, const char *path, uint64_t size);
 
-    int (*is_dir)(const char *path);
-    int (*exists)(const char *path);
-    void (*list)(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir));
-    int (*stat)(const char *path, struct fs_stat_info *out); // see fs.h's fs_stat() -- ino + epoch times, converted by the backend if its format stores something else
+    int (*is_dir)(void *st, const char *path);
+    int (*exists)(void *st, const char *path);
+    void (*list)(void *st, const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir));
+    int (*stat)(void *st, const char *path, struct fs_stat_info *out); // see fs.h's fs_stat() -- ino + epoch times, converted by the backend if its format stores something else
 
     // OPTIONAL -- a backend whose format has nowhere to store permission
     // bits leaves this NULL and fs_chmod() answers -ENOTSUP, which is
     // the honest reply. FS_CAP_MODE is the same fact stated for readers;
     // the VFS refuses a backend that claims the bit and omits this.
-    int (*chmod)(const char *path, uint16_t mode);
+    int (*chmod)(void *st, const char *path, uint16_t mode);
 
     // Backs fs_disk_usage() -- see fs.h's doc comment for the
     // byte-scaled, metadata-excluded contract every backend must
     // honor here.
-    int (*disk_usage)(uint64_t *out_used_bytes, uint64_t *out_total_bytes);
+    int (*disk_usage)(void *st, uint64_t *out_used_bytes, uint64_t *out_total_bytes);
 
     // Backs fs_check() -- see fs.h for the full contract (what a
     // repair pass will and won't fix, and why double-allocation is
@@ -256,7 +255,7 @@ struct fs_ops {
     // the DEVICE without first committing that transaction would report
     // durability it had not achieved. Returns 0 if the commit failed,
     // which fs_sync() must not treat as cosmetic.
-    int (*sync)(void);
+    int (*sync)(void *st);
 
     // Called from the kernel's idle work when nothing else is running.
     // OPTIONAL. A backend that defers anything uses it to bound how LONG
@@ -267,9 +266,9 @@ struct fs_ops {
     //
     // Must be cheap when there is nothing to do: it runs in every wait
     // loop in the kernel.
-    void (*idle)(void);
+    void (*idle)(void *st);
 
-    int (*check)(int repair, struct fs_check_result *out);
+    int (*check)(void *st, int repair, struct fs_check_result *out);
 
     // ---- optional ops (the caps rule becomes real here) ----
     //
@@ -285,14 +284,14 @@ struct fs_ops {
     // mount_remove() after the volume is flushed and before the slot is
     // forgotten, so a backend can drop caches and free per-mount
     // buffers. A backend with nothing to release leaves it NULL.
-    void (*umount)(const struct block_device *dev);
+    void (*umount)(void *st, const struct block_device *dev);
 
     // FS_CAP_HARDLINKS. Adds a second name for an existing FILE
     // (never a directory -- that makes the tree a graph); both names
     // are the same inode, and the data is freed only when the last
     // name goes. Paths follow the same normalized-absolute contract
     // as everything above.
-    int (*link)(const char *existing, const char *newpath);
+    int (*link)(void *st, const char *existing, const char *newpath);
 };
 
 #endif

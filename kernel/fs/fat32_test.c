@@ -117,6 +117,9 @@ static const struct block_device IMG2_DEV = {
 
 static const struct fs_ops *F(void) { return &fat32_ops; }
 
+// The state every F()->op() below runs on, unless a test names another.
+#define ST g_sc.st
+
 // A fresh, formatted, mounted volume. Returns 0 if the image could not
 // be allocated, which is a SKIP rather than a failure -- a fragmented
 // heap is not a bug in this filesystem.
@@ -137,7 +140,7 @@ static int fresh(void) {
     if (g_have_sc) { mount_scratch_end(&g_sc); g_have_sc = 0; }
     if (!mount_scratch_begin(F(), &g_sc)) return 0;
     g_have_sc = 1;
-    if (!F()->format(&IMG_DEV) || F()->init(&IMG_DEV, 0) != 1) {
+    if (!F()->format(ST, &IMG_DEV) || F()->init(ST, &IMG_DEV, 0) != 1) {
         mount_scratch_end(&g_sc);
         g_have_sc = 0;
         return 0;
@@ -147,19 +150,19 @@ static int fresh(void) {
 
 static void restore(void) {
     if (!g_have_sc) return;
-    if (F()->umount) F()->umount(&IMG_DEV);
+    if (F()->umount) F()->umount(ST, &IMG_DEV);
     mount_scratch_end(&g_sc);
     g_have_sc = 0;
 }
 
 KTEST("fat32", "formats a volume, mounts it, and the root is an empty directory") {
     if (!fresh()) { KTEST_SKIP("could not allocate a 512 KiB test volume"); }
-    KTEST_ASSERT(F()->is_dir("/"));
-    KTEST_ASSERT(F()->exists("/"));
-    KTEST_ASSERT(!F()->exists("/nothing"));
+    KTEST_ASSERT(F()->is_dir(ST, "/"));
+    KTEST_ASSERT(F()->exists(ST, "/"));
+    KTEST_ASSERT(!F()->exists(ST, "/nothing"));
 
     uint64_t used = 1, total = 0;
-    KTEST_ASSERT(F()->disk_usage(&used, &total));
+    KTEST_ASSERT(F()->disk_usage(ST, &used, &total));
     // Exactly one cluster is in use on a fresh volume: the root
     // directory's. A driver that counted the reserved entries as data
     // (or forgot the root) reports 0 or 2 here.
@@ -170,16 +173,16 @@ KTEST("fat32", "formats a volume, mounts it, and the root is an empty directory"
 
 KTEST("fat32", "a probe recognises what format() wrote, and refuses a blank volume") {
     if (!fresh()) { KTEST_SKIP("could not allocate a 512 KiB test volume"); }
-    KTEST_ASSERT_EQ(F()->probe(&IMG_DEV), 1);
+    KTEST_ASSERT_EQ(F()->probe(ST, &IMG_DEV), 1);
     // A blank volume is "readable, but not mine" -- 0, never -1, which
     // vfs.c reads as "could not read at all" and refuses to touch.
     k_memset(g_img, 0, TEST_BYTES);
-    KTEST_ASSERT_EQ(F()->probe(&IMG_DEV), 0);
+    KTEST_ASSERT_EQ(F()->probe(ST, &IMG_DEV), 0);
     // And wipe() must leave it in that state from a formatted one.
-    KTEST_ASSERT(F()->format(&IMG_DEV));
-    KTEST_ASSERT_EQ(F()->probe(&IMG_DEV), 1);
-    KTEST_ASSERT(F()->wipe(&IMG_DEV));
-    KTEST_ASSERT_EQ(F()->probe(&IMG_DEV), 0);
+    KTEST_ASSERT(F()->format(ST, &IMG_DEV));
+    KTEST_ASSERT_EQ(F()->probe(ST, &IMG_DEV), 1);
+    KTEST_ASSERT(F()->wipe(ST, &IMG_DEV));
+    KTEST_ASSERT_EQ(F()->probe(ST, &IMG_DEV), 0);
     restore();
 }
 
@@ -202,9 +205,9 @@ KTEST("fat32", "every volume size format() accepts is one probe() accepts") {
     for (uint32_t n = 128; n <= TEST_SECTORS; n++) {
         g_img_sectors = n;
         k_memset(g_img, 0, (uint32_t)n * 512);
-        if (!F()->format(&IMG_DEV)) continue;   // "too small" is a legitimate refusal
+        if (!F()->format(sc.st, &IMG_DEV)) continue;   // "too small" is a legitimate refusal
         checked++;
-        if (F()->probe(&IMG_DEV) != 1) { bad++; if (bad == 1) g_first_bad = n; }
+        if (F()->probe(sc.st, &IMG_DEV) != 1) { bad++; if (bad == 1) g_first_bad = n; }
     }
     g_img_sectors = TEST_SECTORS;
     mount_scratch_end(&sc);
@@ -216,18 +219,18 @@ KTEST("fat32", "every volume size format() accepts is one probe() accepts") {
 
 KTEST("fat32", "a short-named file is written, read back and deleted") {
     if (!fresh()) { KTEST_SKIP("could not allocate a 512 KiB test volume"); }
-    KTEST_ASSERT(F()->write("/hello.txt", "fat32", 0));
-    KTEST_ASSERT(F()->exists("/hello.txt"));
-    KTEST_ASSERT(!F()->is_dir("/hello.txt"));
-    KTEST_ASSERT_EQ((int)F()->size("/hello.txt"), 5);
+    KTEST_ASSERT(F()->write(ST, "/hello.txt", "fat32", 0));
+    KTEST_ASSERT(F()->exists(ST, "/hello.txt"));
+    KTEST_ASSERT(!F()->is_dir(ST, "/hello.txt"));
+    KTEST_ASSERT_EQ((int)F()->size(ST, "/hello.txt"), 5);
 
     char buf[16];
     k_memset(buf, 0, sizeof buf);
-    KTEST_ASSERT_EQ((int)F()->read_range("/hello.txt", 0, buf, sizeof buf), 5);
+    KTEST_ASSERT_EQ((int)F()->read_range(ST, "/hello.txt", 0, buf, sizeof buf), 5);
     KTEST_ASSERT_EQ(k_strcmp(buf, "fat32"), 0);
 
-    KTEST_ASSERT(F()->del("/hello.txt"));
-    KTEST_ASSERT(!F()->exists("/hello.txt"));
+    KTEST_ASSERT(F()->del(ST, "/hello.txt"));
+    KTEST_ASSERT(!F()->exists(ST, "/hello.txt"));
     restore();
 }
 
@@ -238,22 +241,22 @@ KTEST("fat32", "a short-named file is written, read back and deleted") {
 KTEST("fat32", "a long file name round-trips, and is not its 8.3 alias") {
     if (!fresh()) { KTEST_SKIP("could not allocate a 512 KiB test volume"); }
     const char *lname = "/a_very_long_filename_indeed.txt";
-    KTEST_ASSERT(F()->write(lname, "longname", 0));
-    KTEST_ASSERT(F()->exists(lname));
-    KTEST_ASSERT_EQ((int)F()->size(lname), 8);
+    KTEST_ASSERT(F()->write(ST, lname, "longname", 0));
+    KTEST_ASSERT(F()->exists(ST, lname));
+    KTEST_ASSERT_EQ((int)F()->size(ST, lname), 8);
 
     // The alias exists on disk and is NOT the name -- so a lookup that
     // silently fell back to the 8.3 entry would fail this, while a
     // lookup that found the long name passes both.
-    KTEST_ASSERT(!F()->exists("/A_VERY~1.TXT"));
+    KTEST_ASSERT(!F()->exists(ST, "/A_VERY~1.TXT"));
 
     // A SECOND long name sharing the first six characters must get a
     // different alias. Without the ~N collision search both entries
     // claim A_VERY~1.TXT and the second overwrites the first.
-    KTEST_ASSERT(F()->write("/a_very_long_filename_second.txt", "two", 0));
-    KTEST_ASSERT(F()->exists(lname));
-    KTEST_ASSERT(F()->exists("/a_very_long_filename_second.txt"));
-    KTEST_ASSERT_EQ((int)F()->size(lname), 8);
+    KTEST_ASSERT(F()->write(ST, "/a_very_long_filename_second.txt", "two", 0));
+    KTEST_ASSERT(F()->exists(ST, lname));
+    KTEST_ASSERT(F()->exists(ST, "/a_very_long_filename_second.txt"));
+    KTEST_ASSERT_EQ((int)F()->size(ST, lname), 8);
     restore();
 }
 
@@ -274,14 +277,14 @@ KTEST("fat32", "a file spanning hundreds of clusters reads back exactly") {
     }
     for (unsigned i = 0; i < N; i++) src[i] = (uint8_t)((i * 31u) ^ (i >> 11));
 
-    KTEST_ASSERT(F()->touch("/big.bin"));
-    KTEST_ASSERT(F()->write_range("/big.bin", 0, src, N));
-    KTEST_ASSERT_EQ((int)F()->size("/big.bin"), N);
+    KTEST_ASSERT(F()->touch(ST, "/big.bin"));
+    KTEST_ASSERT(F()->write_range(ST, "/big.bin", 0, src, N));
+    KTEST_ASSERT_EQ((int)F()->size(ST, "/big.bin"), N);
 
     k_memset(dst, 0, N);
     uint32_t got = 0;
     while (got < N) {
-        uint32_t n = F()->read_range("/big.bin", got, dst + got, N - got);
+        uint32_t n = F()->read_range(ST, "/big.bin", got, dst + got, N - got);
         if (!n) break;
         got += n;
     }
@@ -291,10 +294,10 @@ KTEST("fat32", "a file spanning hundreds of clusters reads back exactly") {
     // And deleting it gives the clusters back -- the free count is what
     // a leak would show up in.
     uint64_t used_before = 0, total = 0;
-    F()->disk_usage(&used_before, &total);
-    KTEST_ASSERT(F()->del("/big.bin"));
+    F()->disk_usage(ST, &used_before, &total);
+    KTEST_ASSERT(F()->del(ST, "/big.bin"));
     uint64_t used_after = 0;
-    F()->disk_usage(&used_after, &total);
+    F()->disk_usage(ST, &used_after, &total);
     KTEST_ASSERT(used_after < used_before);
     KTEST_ASSERT_EQ((int)(used_after / 512), 1); // just the root again
 
@@ -311,58 +314,58 @@ KTEST("fat32", "truncate grows with zeroes and shrinks, and a hole is not stale 
     uint8_t *junk = kmalloc(64 * 1024);
     if (!junk) { restore(); KTEST_SKIP("could not allocate the junk buffer"); }
     k_memset(junk, 0xAB, 64 * 1024);
-    KTEST_ASSERT(F()->touch("/junk.bin"));
-    KTEST_ASSERT(F()->write_range("/junk.bin", 0, junk, 64 * 1024));
-    KTEST_ASSERT(F()->del("/junk.bin"));
+    KTEST_ASSERT(F()->touch(ST, "/junk.bin"));
+    KTEST_ASSERT(F()->write_range(ST, "/junk.bin", 0, junk, 64 * 1024));
+    KTEST_ASSERT(F()->del(ST, "/junk.bin"));
     kfree(junk);
 
-    KTEST_ASSERT(F()->write("/grow.txt", "abc", 0));
-    KTEST_ASSERT(F()->truncate("/grow.txt", 40000));
-    KTEST_ASSERT_EQ((int)F()->size("/grow.txt"), 40000);
+    KTEST_ASSERT(F()->write(ST, "/grow.txt", "abc", 0));
+    KTEST_ASSERT(F()->truncate(ST, "/grow.txt", 40000));
+    KTEST_ASSERT_EQ((int)F()->size(ST, "/grow.txt"), 40000);
 
     uint8_t probe[512];
     k_memset(probe, 0xFF, sizeof probe);
-    KTEST_ASSERT_EQ((int)F()->read_range("/grow.txt", 30000, probe, sizeof probe), 512);
+    KTEST_ASSERT_EQ((int)F()->read_range(ST, "/grow.txt", 30000, probe, sizeof probe), 512);
     for (unsigned i = 0; i < sizeof probe; i++) KTEST_ASSERT_EQ(probe[i], 0);
 
     // The first three bytes survive the grow.
     k_memset(probe, 0, 8);
-    KTEST_ASSERT_EQ((int)F()->read_range("/grow.txt", 0, probe, 3), 3);
+    KTEST_ASSERT_EQ((int)F()->read_range(ST, "/grow.txt", 0, probe, 3), 3);
     KTEST_ASSERT_EQ(probe[0], 'a');
 
-    KTEST_ASSERT(F()->truncate("/grow.txt", 3));
-    KTEST_ASSERT_EQ((int)F()->size("/grow.txt"), 3);
+    KTEST_ASSERT(F()->truncate(ST, "/grow.txt", 3));
+    KTEST_ASSERT_EQ((int)F()->size(ST, "/grow.txt"), 3);
     // Reading past the new end is EOF, not the bytes that are still
     // physically in the cluster.
-    KTEST_ASSERT_EQ((int)F()->read_range("/grow.txt", 3, probe, 16), 0);
+    KTEST_ASSERT_EQ((int)F()->read_range(ST, "/grow.txt", 3, probe, 16), 0);
 
-    KTEST_ASSERT(F()->truncate("/grow.txt", 0));
-    KTEST_ASSERT_EQ((int)F()->size("/grow.txt"), 0);
+    KTEST_ASSERT(F()->truncate(ST, "/grow.txt", 0));
+    KTEST_ASSERT_EQ((int)F()->size(ST, "/grow.txt"), 0);
     restore();
 }
 
 KTEST("fat32", "directories nest, refuse deletion while occupied, and survive a rename") {
     if (!fresh()) { KTEST_SKIP("could not allocate a 512 KiB test volume"); }
-    KTEST_ASSERT(F()->mkdir("/a"));
-    KTEST_ASSERT(F()->is_dir("/a"));
-    KTEST_ASSERT(F()->mkdir("/a/b"));
-    KTEST_ASSERT(F()->write("/a/b/leaf.txt", "deep", 0));
-    KTEST_ASSERT_EQ((int)F()->size("/a/b/leaf.txt"), 4);
+    KTEST_ASSERT(F()->mkdir(ST, "/a"));
+    KTEST_ASSERT(F()->is_dir(ST, "/a"));
+    KTEST_ASSERT(F()->mkdir(ST, "/a/b"));
+    KTEST_ASSERT(F()->write(ST, "/a/b/leaf.txt", "deep", 0));
+    KTEST_ASSERT_EQ((int)F()->size(ST, "/a/b/leaf.txt"), 4);
 
     // A non-empty directory is refused, which is fs.h's contract.
-    KTEST_ASSERT(!F()->del("/a"));
-    KTEST_ASSERT(!F()->del("/a/b"));
+    KTEST_ASSERT(!F()->del(ST, "/a"));
+    KTEST_ASSERT(!F()->del(ST, "/a/b"));
 
     // Moving a directory has to fix its `..`, or its children point at
     // a parent it no longer lives in. The check that sees it: the
     // subtree is still reachable by its new path.
-    KTEST_ASSERT(F()->mkdir("/c"));
-    KTEST_ASSERT(F()->rename("/a/b", "/c/moved"));
-    KTEST_ASSERT(F()->is_dir("/c/moved"));
-    KTEST_ASSERT(!F()->exists("/a/b"));
-    KTEST_ASSERT_EQ((int)F()->size("/c/moved/leaf.txt"), 4);
+    KTEST_ASSERT(F()->mkdir(ST, "/c"));
+    KTEST_ASSERT(F()->rename(ST, "/a/b", "/c/moved"));
+    KTEST_ASSERT(F()->is_dir(ST, "/c/moved"));
+    KTEST_ASSERT(!F()->exists(ST, "/a/b"));
+    KTEST_ASSERT_EQ((int)F()->size(ST, "/c/moved/leaf.txt"), 4);
 
-    KTEST_ASSERT(F()->del("/a"));     // empty now
+    KTEST_ASSERT(F()->del(ST, "/a"));     // empty now
     restore();
 }
 
@@ -373,23 +376,23 @@ KTEST("fat32", "directories nest, refuse deletion while occupied, and survive a 
 // fails on the read back.
 KTEST("fat32", "a directory grows past one cluster and every entry survives") {
     if (!fresh()) { KTEST_SKIP("could not allocate a 512 KiB test volume"); }
-    KTEST_ASSERT(F()->mkdir("/many"));
+    KTEST_ASSERT(F()->mkdir(ST, "/many"));
     char path[64];
     for (int i = 0; i < 20; i++) {
         k_snprintf(path, sizeof path, "/many/entry_number_%d_of_twenty.txt", i);
-        KTEST_ASSERT(F()->write(path, "x", 0));
+        KTEST_ASSERT(F()->write(ST, path, "x", 0));
     }
     for (int i = 0; i < 20; i++) {
         k_snprintf(path, sizeof path, "/many/entry_number_%d_of_twenty.txt", i);
-        KTEST_ASSERT(F()->exists(path));
-        KTEST_ASSERT_EQ((int)F()->size(path), 1);
+        KTEST_ASSERT(F()->exists(ST, path));
+        KTEST_ASSERT_EQ((int)F()->size(ST, path), 1);
     }
     // And they all go away again, leaving the directory deletable.
     for (int i = 0; i < 20; i++) {
         k_snprintf(path, sizeof path, "/many/entry_number_%d_of_twenty.txt", i);
-        KTEST_ASSERT(F()->del(path));
+        KTEST_ASSERT(F()->del(ST, path));
     }
-    KTEST_ASSERT(F()->del("/many"));
+    KTEST_ASSERT(F()->del(ST, "/many"));
     restore();
 }
 
@@ -401,7 +404,7 @@ KTEST("fat32", "a directory grows past one cluster and every entry survives") {
 // same rule, which is the half a test can drive.
 KTEST("fat32", "probing a second volume does not disturb the mounted one") {
     if (!fresh()) { KTEST_SKIP("could not allocate a 512 KiB test volume"); }
-    KTEST_ASSERT(F()->write("/mounted.txt", "still here", 0));
+    KTEST_ASSERT(F()->write(ST, "/mounted.txt", "still here", 0));
 
     // A PROBE RUNS ON A SCRATCH STATE. That is mount.c's rule now
     // rather than a save/restore inside fat32_probe(), so this drives
@@ -410,14 +413,14 @@ KTEST("fat32", "probing a second volume does not disturb the mounted one") {
     if (elsewhere && elsewhere != &IMG_DEV) {
         struct fs_scratch sc;
         if (mount_scratch_begin(F(), &sc)) {
-            F()->probe(elsewhere);
+            F()->probe(sc.st, elsewhere);
             mount_scratch_end(&sc);   // puts this test's volume back
         }
     }
 
     // The mount is untouched.
-    KTEST_ASSERT(F()->exists("/mounted.txt"));
-    KTEST_ASSERT_EQ((int)F()->size("/mounted.txt"), 10);
+    KTEST_ASSERT(F()->exists(ST, "/mounted.txt"));
+    KTEST_ASSERT_EQ((int)F()->size(ST, "/mounted.txt"), 10);
     restore();
 }
 
@@ -429,7 +432,7 @@ KTEST("fat32", "probing a second volume does not disturb the mounted one") {
 KTEST("fat32", "two volumes are mounted at once and neither sees the other") {
     if (!fresh()) { KTEST_SKIP("could not allocate a 512 KiB test volume"); }
     void *first = g_sc.st;
-    KTEST_ASSERT(F()->write("/first.txt", "volume one", 0));
+    KTEST_ASSERT(F()->write(first, "/first.txt", "volume one", 0));
 
     uint8_t *img2 = kmalloc(TEST_BYTES);
     if (!img2) { restore(); KTEST_SKIP("could not allocate a second test volume"); }
@@ -442,25 +445,25 @@ KTEST("fat32", "two volumes are mounted at once and neither sees the other") {
         KTEST_SKIP("could not allocate a second backend state");
     }
     void *second = sc2.st;
-    int ok = F()->format(&IMG2_DEV) && F()->init(&IMG2_DEV, 0) == 1 &&
-             F()->write("/second.txt", "volume two, which is longer", 0);
+    int ok = F()->format(second, &IMG2_DEV) && F()->init(second, &IMG2_DEV, 0) == 1 &&
+             F()->write(second, "/second.txt", "volume two, which is longer", 0);
     KTEST_ASSERT(ok);
 
     // Each state sees only its own volume, and switching between them
     // is one call -- alternate, so a stale pointer cannot pass.
     F()->state_activate(first);
-    KTEST_ASSERT(F()->exists("/first.txt"));
-    KTEST_ASSERT(!F()->exists("/second.txt"));
+    KTEST_ASSERT(F()->exists(first, "/first.txt"));
+    KTEST_ASSERT(!F()->exists(first, "/second.txt"));
     F()->state_activate(second);
-    KTEST_ASSERT(F()->exists("/second.txt"));
-    KTEST_ASSERT(!F()->exists("/first.txt"));
+    KTEST_ASSERT(F()->exists(second, "/second.txt"));
+    KTEST_ASSERT(!F()->exists(second, "/first.txt"));
     F()->state_activate(first);
-    KTEST_ASSERT_EQ((int)F()->size("/first.txt"), 10);
+    KTEST_ASSERT_EQ((int)F()->size(first, "/first.txt"), 10);
     F()->state_activate(second);
-    KTEST_ASSERT_EQ((int)F()->size("/second.txt"), 27);
+    KTEST_ASSERT_EQ((int)F()->size(second, "/second.txt"), 27);
 
     F()->state_activate(second);
-    if (F()->umount) F()->umount(&IMG2_DEV);
+    if (F()->umount) F()->umount(second, &IMG2_DEV);
     mount_scratch_end(&sc2);
     kfree(img2);
     g_img2 = 0;

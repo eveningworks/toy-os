@@ -2360,7 +2360,8 @@ static int split_parent(const char *norm, uint64_t *out_parent,
 // superblock) while every path lookup failed. Saved and restored, which
 // is cheaper than a second superblock reader and keeps the one that is
 // tested.
-static int tfs3_probe(const struct block_device *dev) {
+static int tfs3_probe(void *st, const struct block_device *dev) {
+    (void)st;
     if (!dev) return 0;
     struct t3_vol saved = S->vol;
     set_flat_volume(dev);
@@ -2373,7 +2374,8 @@ static int tfs3_probe(const struct block_device *dev) {
 // sector AND both backups (positions derive from the volume size, the
 // same way load_superblock()'s fallback finds them). See fs_ops.h's
 // wipe contract for the mounted-a-corpse story that made this an op.
-static int tfs3_wipe_inner(const struct block_device *dev) {
+static int tfs3_wipe_inner(void *st, const struct block_device *dev) {
+    (void)st;
     if (!dev) return 1;
     set_flat_volume(dev);
     uint8_t zero[ATA_SECTOR_SIZE];
@@ -2406,7 +2408,8 @@ static int tfs3_wipe_inner(const struct block_device *dev) {
 
 // Kernel-side format, kept in lockstep with tfs3_writer.py's
 // cmd_format() -- one description of the layout, two writers of it.
-static int tfs3_format_inner(const struct block_device *dev) {
+static int tfs3_format_inner(void *st, const struct block_device *dev) {
+    (void)st;
     if (!dev) return 0;
     set_flat_volume(dev);
 
@@ -2657,7 +2660,8 @@ static void unmount_state(void) {
     txn_reset();
 }
 
-static int tfs3_init(const struct block_device *dev, uint64_t size_bytes) {
+static int tfs3_init(void *st, const struct block_device *dev, uint64_t size_bytes) {
+    (void)st;
     // A volume's capacity is the volume's; only a backend that lives
     // in memory has a size to be told (fs_ops.h).
     (void)size_bytes;
@@ -2819,13 +2823,15 @@ static uint32_t read_range_impl(const struct t3_inode *node, uint64_t offset,
     return total;
 }
 
-static uint64_t tfs3_size(const char *path) {
+static uint64_t tfs3_size(void *st, const char *path) {
+    (void)st;
     struct t3_inode node;
     if (!lookup(path, 0, &node) || node.type != T3_TYPE_FILE) return 0;
     return node.size;
 }
 
-static uint32_t tfs3_read_range(const char *path, uint64_t offset, void *buf, uint32_t len) {
+static uint32_t tfs3_read_range(void *st, const char *path, uint64_t offset, void *buf, uint32_t len) {
+    (void)st;
     struct t3_inode node;
     if (!lookup(path, 0, &node) || node.type != T3_TYPE_FILE) return 0;
     return read_range_impl(&node, offset, buf, len);
@@ -2838,7 +2844,8 @@ struct t3_read_step {
     uint32_t len, total;
 };
 
-static void *tfs3_read_range_begin(const char *path, uint64_t offset, void *buf, uint32_t len) {
+static void *tfs3_read_range_begin(void *st, const char *path, uint64_t offset, void *buf, uint32_t len) {
+    (void)st;
     struct t3_inode node;
     if (!lookup(path, 0, &node) || node.type != T3_TYPE_FILE) return 0;
     if (offset >= node.size) len = 0;
@@ -2846,43 +2853,45 @@ static void *tfs3_read_range_begin(const char *path, uint64_t offset, void *buf,
         uint64_t avail = node.size - offset;
         if ((uint64_t)len > avail) len = (uint32_t)avail;
     }
-    struct t3_read_step *st = kmalloc(sizeof(*st));
-    if (!st) return 0;
-    st->node = node;
-    st->dst = (uint8_t *)buf;
-    st->offset = offset;
-    st->len = len;
-    st->total = 0;
-    return st;
+    struct t3_read_step *step = kmalloc(sizeof(*step));
+    if (!step) return 0;
+    step->node = node;
+    step->dst = (uint8_t *)buf;
+    step->offset = offset;
+    step->len = len;
+    step->total = 0;
+    return step;
 }
 
-static int tfs3_read_range_step(void *handle, uint32_t *out_total) {
-    struct t3_read_step *st = (struct t3_read_step *)handle;
-    if (st->total < st->len) {
-        uint32_t got = read_range_impl(&st->node, st->offset + st->total,
-                                       st->dst + st->total,
+static int tfs3_read_range_step(void *st, void *handle, uint32_t *out_total) {
+    (void)st;
+    struct t3_read_step *step = (struct t3_read_step *)handle;
+    if (step->total < step->len) {
+        uint32_t got = read_range_impl(&step->node, step->offset + step->total,
+                                       step->dst + step->total,
                                        // one block per step, same
                                        // pacing contract as TFS2
-                                       T3_BLOCK - (uint32_t)((st->offset + st->total) % T3_BLOCK) <= st->len - st->total
-                                           ? T3_BLOCK - (uint32_t)((st->offset + st->total) % T3_BLOCK)
-                                           : st->len - st->total);
+                                       T3_BLOCK - (uint32_t)((step->offset + step->total) % T3_BLOCK) <= step->len - step->total
+                                           ? T3_BLOCK - (uint32_t)((step->offset + step->total) % T3_BLOCK)
+                                           : step->len - step->total);
         if (got == 0) {
-            if (out_total) *out_total = st->total;
-            kfree(st);
+            if (out_total) *out_total = step->total;
+            kfree(step);
             return 2 /* FS_STEP_FAILED */;
         }
-        st->total += got;
-        if (st->total < st->len) {
-            if (out_total) *out_total = st->total;
+        step->total += got;
+        if (step->total < step->len) {
+            if (out_total) *out_total = step->total;
             return 0 /* FS_STEP_PENDING */;
         }
     }
-    if (out_total) *out_total = st->total;
-    kfree(st);
+    if (out_total) *out_total = step->total;
+    kfree(step);
     return 1 /* FS_STEP_DONE */;
 }
 
-static int tfs3_is_dir(const char *path) {
+static int tfs3_is_dir(void *st, const char *path) {
+    (void)st;
     static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 1;
@@ -2891,7 +2900,8 @@ static int tfs3_is_dir(const char *path) {
     return node.type == T3_TYPE_DIR;
 }
 
-static int tfs3_exists(const char *path) {
+static int tfs3_exists(void *st, const char *path) {
+    (void)st;
     static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 1;
@@ -2899,7 +2909,8 @@ static int tfs3_exists(const char *path) {
     return resolve(norm, &ino) ? 1 : 0;
 }
 
-static void tfs3_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir)) {
+static void tfs3_list(void *st, const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir)) {
+    (void)st;
     struct t3_inode dir;
     static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(dir_path, norm)) return;
@@ -2942,7 +2953,8 @@ static void tfs3_list(const char *dir_path, void (*cb)(const char *name, uint32_
 }
 
 // Permission bits only -- the VFS has already masked the type off.
-static int tfs3_chmod(const char *path, uint16_t mode) {
+static int tfs3_chmod(void *st, const char *path, uint16_t mode) {
+    (void)st;
     static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return -ENOENT;
     if (k_strcmp(norm, "/") == 0) return -ENOENT;   // root has no entry
@@ -2958,7 +2970,8 @@ static int tfs3_chmod(const char *path, uint16_t mode) {
     return txn_commit() ? 0 : -EIO;
 }
 
-static int tfs3_stat(const char *path, struct fs_stat_info *out) {
+static int tfs3_stat(void *st, const char *path, struct fs_stat_info *out) {
+    (void)st;
     static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 0; // root has no entry
@@ -2977,7 +2990,8 @@ static int tfs3_stat(const char *path, struct fs_stat_info *out) {
     return 1;
 }
 
-static int tfs3_disk_usage(uint64_t *out_used, uint64_t *out_total) {
+static int tfs3_disk_usage(void *st, uint64_t *out_used, uint64_t *out_total) {
+    (void)st;
     if (!S->mounted) {
         if (out_used) *out_used = 0;
         if (out_total) *out_total = 0;
@@ -3080,7 +3094,8 @@ static int create_entry_inner(const char *path, uint8_t type, uint64_t *out_ino)
     return 1;
 }
 
-static int tfs3_touch(const char *path) {
+static int tfs3_touch(void *st, const char *path) {
+    (void)st;
     static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
@@ -3095,7 +3110,8 @@ static int tfs3_touch(const char *path) {
     return create_entry(path, T3_TYPE_FILE, 0);
 }
 
-static int tfs3_mkdir(const char *path) {
+static int tfs3_mkdir(void *st, const char *path) {
+    (void)st;
     static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
@@ -3103,7 +3119,8 @@ static int tfs3_mkdir(const char *path) {
     return create_entry(path, T3_TYPE_DIR, 0);
 }
 
-static int tfs3_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len) {
+static int tfs3_write_range(void *st, const char *path, uint64_t offset, const void *buf, uint32_t len) {
+    (void)st;
     static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
@@ -3116,7 +3133,8 @@ static int tfs3_write_range(const char *path, uint64_t offset, const void *buf, 
     return do_write(ino, &node, offset, buf, len);
 }
 
-static int tfs3_write(const char *path, const char *data, int append) {
+static int tfs3_write(void *st, const char *path, const char *data, int append) {
+    (void)st;
     static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
@@ -3150,7 +3168,8 @@ static int tfs3_write(const char *path, const char *data, int append) {
     return do_write(ino, &node, start, data, len);
 }
 
-static int tfs3_delete(const char *path) {
+static int tfs3_delete(void *st, const char *path) {
+    (void)st;
     static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 0;
@@ -3226,7 +3245,8 @@ static int tfs3_delete(const char *path) {
 // honesty check in vfs.c verifies the pair). Files only -- hardlinked
 // directories turn the tree into a graph, refused by every real Unix
 // filesystem for the same reason (see the design doc).
-static int tfs3_link(const char *existing, const char *newpath) {
+static int tfs3_link(void *st, const char *existing, const char *newpath) {
+    (void)st;
     static char norm[T3_PATH_BUF], newnorm[T3_PATH_BUF]; // see normalize()
     if (!S->mounted || !normalize(existing, norm) || !normalize(newpath, newnorm)) return 0;
     uint64_t ino, clash;
@@ -3305,7 +3325,8 @@ static int path_is_within(const char *parent, const char *child) {
 // counts -- five. Every other shape needs three or four, which is why
 // a v1 image can still rename freely and only refuses that one case,
 // with a message, instead of failing halfway.
-static int tfs3_rename(const char *oldpath, const char *newpath) {
+static int tfs3_rename(void *st, const char *oldpath, const char *newpath) {
+    (void)st;
     static char oldn[T3_PATH_BUF], newn[T3_PATH_BUF]; // see normalize()
     if (!S->mounted || !normalize(oldpath, oldn) || !normalize(newpath, newn)) return 0;
     if (k_strcmp(oldn, "/") == 0 || k_strcmp(newn, "/") == 0) return 0;
@@ -3382,7 +3403,8 @@ static int tfs3_rename(const char *oldpath, const char *newpath) {
 // Shrinking commits the smaller size FIRST and frees afterwards
 // (clear-after-persist): a crash in between costs leaked blocks that
 // fsck reclaims, never a live file pointing at freed space.
-static int tfs3_truncate(const char *path, uint64_t size) {
+static int tfs3_truncate(void *st, const char *path, uint64_t size) {
+    (void)st;
     static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     uint64_t ino;
@@ -3447,7 +3469,8 @@ struct t3_write_step {
     uint32_t last_alloc;
 };
 
-static void *tfs3_write_range_begin(const char *path, uint64_t offset, const void *buf, uint32_t len) {
+static void *tfs3_write_range_begin(void *st, const char *path, uint64_t offset, const void *buf, uint32_t len) {
+    (void)st;
     static char norm[T3_PATH_BUF]; // per-function, see normalize()
     if (!S->mounted || !normalize(path, norm)) return 0;
     if (!t3_range_fits(offset, len)) return 0;
@@ -3455,76 +3478,77 @@ static void *tfs3_write_range_begin(const char *path, uint64_t offset, const voi
     if (!resolve(norm, &ino)) {
         if (!create_entry(path, T3_TYPE_FILE, &ino)) return 0;
     }
-    struct t3_write_step *st = kmalloc(sizeof(*st));
-    if (!st) return 0;
-    if (!read_inode(ino, &st->node) || st->node.type != T3_TYPE_FILE) { kfree(st); return 0; }
-    st->ino = ino;
-    st->src = (const uint8_t *)buf;
-    st->offset = offset;
-    st->len = len;
-    st->total = 0;
-    st->last_alloc = 0;
+    struct t3_write_step *step = kmalloc(sizeof(*step));
+    if (!step) return 0;
+    if (!read_inode(ino, &step->node) || step->node.type != T3_TYPE_FILE) { kfree(step); return 0; }
+    step->ino = ino;
+    step->src = (const uint8_t *)buf;
+    step->offset = offset;
+    step->len = len;
+    step->total = 0;
+    step->last_alloc = 0;
     pcache_drop();
-    return st;
+    return step;
 }
 
-static int tfs3_write_range_step(void *handle) {
-    struct t3_write_step *st = (struct t3_write_step *)handle;
+static int tfs3_write_range_step(void *st, void *handle) {
+    (void)st;
+    struct t3_write_step *step = (struct t3_write_step *)handle;
     // Rollback scope is THIS STEP only -- other fs operations
     // interleave between steps of an async write, so a whole-stream
     // log can't be kept armed. Earlier completed steps of an
     // abandoned stream leak by design (crash-shaped); fsck reclaims.
     alog_begin();
-    if (st->total < st->len) {
-        uint64_t file_off = st->offset + st->total;
+    if (step->total < step->len) {
+        uint64_t file_off = step->offset + step->total;
         uint32_t bi = (uint32_t)(file_off / T3_BLOCK);
         uint32_t within = (uint32_t)(file_off % T3_BLOCK);
         uint32_t chunk = T3_BLOCK - within;
-        if (chunk > st->len - st->total) chunk = st->len - st->total;
+        if (chunk > step->len - step->total) chunk = step->len - step->total;
 
-        uint32_t prefer_group = (uint32_t)(st->ino / S->sb.ipg);
+        uint32_t prefer_group = (uint32_t)(step->ino / S->sb.ipg);
         uint32_t leaf_blk, leaf_slot, existing;
-        if (!map_get_or_alloc_tables(&st->node, bi, prefer_group, &leaf_blk, &leaf_slot, &existing)) {
-            pcache_drop(); alog_rollback(); kfree(st); return 2 /* FS_STEP_FAILED */;
+        if (!map_get_or_alloc_tables(&step->node, bi, prefer_group, &leaf_blk, &leaf_slot, &existing)) {
+            pcache_drop(); alog_rollback(); kfree(step); return 2 /* FS_STEP_FAILED */;
         }
         uint32_t blk = existing;
         int fresh = 0;
         if (!blk) {
-            blk = alloc_block(prefer_group, st->last_alloc);
-            if (!blk) { pcache_drop(); alog_rollback(); kfree(st); return 2; }
-            map_set_block(&st->node, leaf_blk, leaf_slot, blk);
+            blk = alloc_block(prefer_group, step->last_alloc);
+            if (!blk) { pcache_drop(); alog_rollback(); kfree(step); return 2; }
+            map_set_block(&step->node, leaf_blk, leaf_slot, blk);
             fresh = 1;
         }
-        st->last_alloc = blk;
+        step->last_alloc = blk;
 
         int ok;
         if (chunk == T3_BLOCK) {
-            ok = write_block(blk, st->src + st->total);
+            ok = write_block(blk, step->src + step->total);
         } else {
-            if (!block_has_live_bytes(fresh, bi, st->node.size)) {
+            if (!block_has_live_bytes(fresh, bi, step->node.size)) {
                 k_memset(g_blk, 0, T3_BLOCK);
             } else if (!read_block(blk, g_blk)) {
-                pcache_drop(); alog_rollback(); kfree(st); return 2;
+                pcache_drop(); alog_rollback(); kfree(step); return 2;
             }
-            k_memcpy(g_blk + within, st->src + st->total, chunk);
+            k_memcpy(g_blk + within, step->src + step->total, chunk);
             ok = write_block(blk, g_blk);
         }
-        if (!ok) { pcache_drop(); alog_rollback(); kfree(st); return 2; }
-        st->total += chunk;
-        if (st->total < st->len) return 0 /* FS_STEP_PENDING */;
+        if (!ok) { pcache_drop(); alog_rollback(); kfree(step); return 2; }
+        step->total += chunk;
+        if (step->total < step->len) return 0 /* FS_STEP_PENDING */;
     }
 
     // Final step: land the pointer cache, the allocation state, and
     // the inode -- the same commit point do_write() has.
-    if (!pcache_flush()) { pcache_drop(); alog_rollback(); kfree(st); return 2; }
-    if (st->offset + st->len > st->node.size) st->node.size = st->offset + st->len;
-    st->node.modified = now_epoch();
+    if (!pcache_flush()) { pcache_drop(); alog_rollback(); kfree(step); return 2; }
+    if (step->offset + step->len > step->node.size) step->node.size = step->offset + step->len;
+    step->node.modified = now_epoch();
     int ok = flush_alloc_state();
     if (ok) {
-        ok = txn_begin(1) && txn_stage_inode(st->ino, &st->node) && txn_commit();
+        ok = txn_begin(1) && txn_stage_inode(step->ino, &step->node) && txn_commit();
     }
     if (ok) alog_commit(); else alog_rollback();
-    kfree(st);
+    kfree(step);
     return ok ? 1 /* FS_STEP_DONE */ : 2;
 }
 
@@ -3705,7 +3729,8 @@ static void fsck_walk_dir(struct t3_fsck *fk, uint64_t dir_ino, uint64_t parent_
     }
 }
 
-static int tfs3_check(int repair, struct fs_check_result *out) {
+static int tfs3_check(void *st, int repair, struct fs_check_result *out) {
+    (void)st;
     struct fs_check_result local;
     struct fs_check_result *r = out ? out : &local;
     k_memset(r, 0, sizeof(*r));
@@ -3904,7 +3929,8 @@ static void tfs3_state_free(void *st) {
 // Land a deferred transaction. Ordered BEFORE the device flush by
 // fs_sync(), because committing after the barrier would leave the very
 // thing being made durable behind it.
-static int tfs3_sync(void) {
+static int tfs3_sync(void *st) {
+    (void)st;
     if (!S) return 1;
     return txn_flush_deferred();
 }
@@ -3926,7 +3952,8 @@ static uint64_t g_idle_commits;
 
 uint64_t tfs3_idle_commits(void) { return g_idle_commits; }
 
-static void tfs3_idle(void) {
+static void tfs3_idle(void *st) {
+    (void)st;
     if (!g_txn_deferred) return;
     uint32_t quiet = storage_writeback_ticks();
     if (pit_ticks() - g_txn_staged_tick < quiet) return;

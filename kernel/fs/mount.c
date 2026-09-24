@@ -146,15 +146,15 @@ int mount_scratch_begin(const struct fs_ops *fs, struct fs_scratch *sc) {
     void *st = fs->state_alloc();
     if (!st) return 0;
     fs_exclusive_begin();             // released by mount_scratch_end()
-    sc->prev = fs->state_activate(st);
+    if (fs->state_activate) sc->prev = fs->state_activate(st);
     sc->st = st;
     return 1;
 }
 
 void mount_scratch_end(struct fs_scratch *sc) {
-    if (!sc->fs->state_activate) return;
-    sc->fs->state_activate(sc->prev);
-    if (sc->st) sc->fs->state_free(sc->st);
+    if (!sc->st) return;   // a backend with no state: no lock was taken
+    if (sc->fs->state_activate) sc->fs->state_activate(sc->prev);
+    sc->fs->state_free(sc->st);
     sc->st = NULL;
     fs_exclusive_end();
 }
@@ -196,15 +196,15 @@ static int caps_are_honest(const struct fs_ops *fs) {
     // fs_has(); a real op behind an undeclared cap is a feature callers
     // can never find. display.c's rule, verbatim.
     if (((fs->caps & FS_CAP_HARDLINKS) != 0) != (fs->link != 0)) return 0;
-    // The three per-mount state ops are one fact stated three times.
-    // Two of three is the shape that mounts and then frees a state
-    // nothing ever made current.
-    int st_ops = (fs->state_alloc != 0) + (fs->state_free != 0) + (fs->state_activate != 0);
-    if (st_ops != 0 && st_ops != 3) return 0;
+    // alloc and free are one fact stated twice; activate, while it
+    // still exists, is meaningless without them.
+    int st_ops = (fs->state_alloc != 0) + (fs->state_free != 0);
+    if (st_ops == 1) return 0;
+    if (fs->state_activate && st_ops != 2) return 0;
     // And a backend cannot promise a second mount without them: its
     // volume would be one set of statics read by two mounts, which is
     // the silent corruption max_mounts exists to refuse.
-    if (fs->max_mounts > 1 && st_ops != 3) return 0;
+    if (fs->max_mounts > 1 && st_ops != 2) return 0;
     return 1;
 }
 
@@ -285,7 +285,7 @@ int mount_add(const struct block_device *dev, const char *fstype,
             if (!dev) { *why = "that filesystem needs a volume"; return 0; }
             struct fs_scratch sc;
             if (!mount_scratch_begin(chosen, &sc)) { *why = "out of memory"; return 0; }
-            int claimed = chosen->probe(dev);
+            int claimed = chosen->probe(sc.st, dev);
             mount_scratch_end(&sc);
             if (claimed != 1) { *why = "no such filesystem on that volume"; return 0; }
         }
@@ -300,7 +300,7 @@ int mount_add(const struct block_device *dev, const char *fstype,
             if (mounts_of(fs) >= fs->max_mounts) { at_limit = fs; continue; }
             struct fs_scratch sc;
             if (!mount_scratch_begin(fs, &sc)) continue;
-            int claimed = fs->probe(dev);
+            int claimed = fs->probe(sc.st, dev);
             mount_scratch_end(&sc);
             if (claimed == 1) { chosen = fs; break; }
         }
@@ -333,7 +333,7 @@ int mount_add(const struct block_device *dev, const char *fstype,
 
     fs_exclusive_begin();   // the swap -- see mount_scratch_begin()
     void *prev = chosen->state_activate ? chosen->state_activate(state) : NULL;
-    int r = chosen->init(dev, size_bytes);
+    int r = chosen->init(state, dev, size_bytes);
     if (chosen->state_activate) chosen->state_activate(prev);
     fs_exclusive_end();
     if (r < 0) {
@@ -400,7 +400,7 @@ static int remove_locked(const char *point, const char **why) {
     // report it to.
     if (m->dev) blkdev_flush(m->dev);
     void *prev = mount_enter(m);
-    if (m->fs->umount) m->fs->umount(m->dev);
+    if (m->fs->umount) m->fs->umount(m->state, m->dev);
     mount_leave(m, prev);
     // AFTER umount(), which is the last thing that may write: state_free
     // drops the caches this mount is holding, and a sync into a freed
@@ -762,7 +762,7 @@ static int try_partitions(void) {
             if (mounts_of(fs) >= fs->max_mounts) continue;
             struct fs_scratch sc;
             if (!mount_scratch_begin(fs, &sc)) continue;
-            int claimed = fs->probe(dev);
+            int claimed = fs->probe(sc.st, dev);
             mount_scratch_end(&sc);
             if (claimed == 1) {
                 klog_printf("fs: mounting %s from partition %d (LBA %u, %u sectors)\n",
@@ -987,7 +987,7 @@ int mount_wipe_others(const struct fs_ops *target, const struct block_device *de
         // being formatted, taking /bin with it.
         struct fs_scratch sc;
         if (!mount_scratch_begin(g_backends[i], &sc)) continue;
-        g_backends[i]->wipe(dev);
+        g_backends[i]->wipe(sc.st, dev);
         mount_scratch_end(&sc);
     }
     return 1;

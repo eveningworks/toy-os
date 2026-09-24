@@ -1251,7 +1251,8 @@ static int parse_bpb(const struct block_device *dev) {
 // A PROBE MUST NOT DISTURB A MOUNT -- parse_bpb() fills S->v, which IS
 // the mounted volume. It cannot any more: mount.c hands a probe a
 // SCRATCH state, so what this fills belongs to nobody.
-static int fat32_probe(const struct block_device *dev) {
+static int fat32_probe(void *st, const struct block_device *dev) {
+    (void)st;
     if (!dev) return 0;
     int r = parse_bpb(dev);
     S->v.mounted = 0; // init() re-parses from scratch either way
@@ -1261,7 +1262,8 @@ static int fat32_probe(const struct block_device *dev) {
 // Erase the signature the probe recognises: the boot sector's 0xAA55
 // and the FAT32 fields behind it, plus the backup boot sector at LBA 6
 // that mkfs writes. See fs_ops.h's wipe contract.
-static int fat32_wipe(const struct block_device *dev) {
+static int fat32_wipe(void *st, const struct block_device *dev) {
+    (void)st;
     if (!dev) return 1;
     uint32_t sectors = blkdev_sector_count(dev);
     if (sectors < 1) return 1;
@@ -1288,7 +1290,8 @@ static uint32_t pick_spc(uint32_t sectors) {
     return 64;
 }
 
-static int fat32_format(const struct block_device *dev) {
+static int fat32_format(void *st, const struct block_device *dev) {
+    (void)st;
     if (!dev) return 0;
     uint32_t total = blkdev_sector_count(dev);
     if (total < 128) {
@@ -1423,7 +1426,8 @@ static int fat32_format(const struct block_device *dev) {
     return 1;
 }
 
-static int fat32_init(const struct block_device *dev, uint64_t size_bytes) {
+static int fat32_init(void *st, const struct block_device *dev, uint64_t size_bytes) {
+    (void)st;
     // A volume's capacity is the volume's; only a backend that lives
     // in memory has a size to be told (fs_ops.h).
     (void)size_bytes;
@@ -1454,7 +1458,8 @@ static int fat32_init(const struct block_device *dev, uint64_t size_bytes) {
     return 1;
 }
 
-static void fat32_umount(const struct block_device *dev) {
+static void fat32_umount(void *st, const struct block_device *dev) {
+    (void)st;
     (void)dev;
     if (S->v.mounted) fat_sync();
     S->fatsec_lba = 0;
@@ -1464,14 +1469,16 @@ static void fat32_umount(const struct block_device *dev) {
 
 // ---- fs_ops: reading -----------------------------------------------------
 
-static int fat32_exists(const char *path) {
+static int fat32_exists(void *st, const char *path) {
+    (void)st;
     if (!S->v.mounted) return 0;
     if (path && k_strcmp(path, "/") == 0) return 1;
     struct dirent_info e;
     return lookup(path, &e);
 }
 
-static int fat32_is_dir(const char *path) {
+static int fat32_is_dir(void *st, const char *path) {
+    (void)st;
     if (!S->v.mounted) return 0;
     if (path && k_strcmp(path, "/") == 0) return 1;
     struct dirent_info e;
@@ -1479,14 +1486,16 @@ static int fat32_is_dir(const char *path) {
     return (e.attr & ATTR_DIRECTORY) != 0;
 }
 
-static uint64_t fat32_size(const char *path) {
+static uint64_t fat32_size(void *st, const char *path) {
+    (void)st;
     struct dirent_info e;
     if (!lookup(path, &e)) return 0;
     if (e.attr & ATTR_DIRECTORY) return 0;
     return e.size;
 }
 
-static uint32_t fat32_read_range(const char *path, uint64_t offset, void *buf, uint32_t len) {
+static uint32_t fat32_read_range(void *st, const char *path, uint64_t offset, void *buf, uint32_t len) {
+    (void)st;
     struct dirent_info e;
     if (!lookup(path, &e)) return 0;
     if (e.attr & ATTR_DIRECTORY) return 0;
@@ -1497,7 +1506,8 @@ static uint32_t fat32_read_range(const char *path, uint64_t offset, void *buf, u
 // The whole file into one staging buffer -- the same shape every
 // backend here has, and the same hazard: vfs.c refuses a NESTED call
 // because the buffer is freed and reallocated per read.
-static void fat32_list(const char *dir_path, void (*cb)(const char *, uint32_t, int)) {
+static void fat32_list(void *st, const char *dir_path, void (*cb)(const char *, uint32_t, int)) {
+    (void)st;
     if (!S->v.mounted || !cb) return;
     uint32_t dir;
     if (dir_path && k_strcmp(dir_path, "/") == 0) {
@@ -1516,7 +1526,8 @@ static void fat32_list(const char *dir_path, void (*cb)(const char *, uint32_t, 
     }
 }
 
-static int fat32_stat(const char *path, struct fs_stat_info *out) {
+static int fat32_stat(void *st, const char *path, struct fs_stat_info *out) {
+    (void)st;
     struct dirent_info e;
     if (!lookup(path, &e)) return 0;
     if (!out) return 1;
@@ -1542,7 +1553,8 @@ static int fat32_stat(const char *path, struct fs_stat_info *out) {
 
 // ---- fs_ops: writing -----------------------------------------------------
 
-static int fat32_touch(const char *path) {
+static int fat32_touch(void *st, const char *path) {
+    (void)st;
     if (!S->v.mounted) return 0;
     uint32_t dir;
     const char *leaf;
@@ -1560,7 +1572,8 @@ static int fat32_touch(const char *path) {
     return fat_sync();
 }
 
-static int fat32_mkdir(const char *path) {
+static int fat32_mkdir(void *st, const char *path) {
+    (void)st;
     if (!S->v.mounted) return 0;
     uint32_t dir;
     const char *leaf;
@@ -1571,11 +1584,12 @@ static int fat32_mkdir(const char *path) {
     return fat_sync();
 }
 
-static int fat32_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len) {
+static int fat32_write_range(void *st, const char *path, uint64_t offset, const void *buf, uint32_t len) {
+    (void)st;
     if (!S->v.mounted) return 0;
     struct dirent_info e;
     if (!lookup(path, &e)) {
-        if (!fat32_touch(path)) return 0;
+        if (!fat32_touch(st, path)) return 0;
         if (!lookup(path, &e)) return 0;
     }
     if (e.attr & ATTR_DIRECTORY) return 0;
@@ -1597,12 +1611,13 @@ static int fat32_write_range(const char *path, uint64_t offset, const void *buf,
     return fat_sync();
 }
 
-static int fat32_write(const char *path, const char *data, int append) {
+static int fat32_write(void *st, const char *path, const char *data, int append) {
+    (void)st;
     if (!S->v.mounted) return 0;
     uint32_t len = data ? (uint32_t)k_strlen(data) : 0;
     struct dirent_info e;
     if (!lookup(path, &e)) {
-        if (!fat32_touch(path)) return 0;
+        if (!fat32_touch(st, path)) return 0;
         if (!lookup(path, &e)) return 0;
     }
     if (e.attr & ATTR_DIRECTORY) return 0;
@@ -1618,10 +1633,11 @@ static int fat32_write(const char *path, const char *data, int append) {
         if (!lookup(path, &e)) return 0;
     }
     if (!len) return fat_sync();
-    return fat32_write_range(path, at, data, len);
+    return fat32_write_range(st, path, at, data, len);
 }
 
-static int fat32_truncate(const char *path, uint64_t size) {
+static int fat32_truncate(void *st, const char *path, uint64_t size) {
+    (void)st;
     if (!S->v.mounted) return 0;
     struct dirent_info e;
     if (!lookup(path, &e)) return 0;
@@ -1692,7 +1708,8 @@ static int fat32_truncate(const char *path, uint64_t size) {
     return fat_sync();
 }
 
-static int fat32_del(const char *path) {
+static int fat32_del(void *st, const char *path) {
+    (void)st;
     if (!S->v.mounted) return 0;
     struct dirent_info e;
     if (!lookup(path, &e)) return 0;
@@ -1714,7 +1731,8 @@ static int fat32_del(const char *path) {
     return fat_sync();
 }
 
-static int fat32_rename(const char *oldpath, const char *newpath) {
+static int fat32_rename(void *st, const char *oldpath, const char *newpath) {
+    (void)st;
     if (!S->v.mounted) return 0;
     struct dirent_info src;
     if (!lookup(oldpath, &src)) return 0;
@@ -1771,16 +1789,18 @@ static int fat32_rename(const char *oldpath, const char *newpath) {
 // the contract callers are written against.
 struct fat_step { int ok; uint32_t total; };
 
-static void *fat32_write_range_begin(const char *path, uint64_t offset,
+static void *fat32_write_range_begin(void *st, const char *path, uint64_t offset,
                                      const void *buf, uint32_t len) {
+    (void)st;
     struct fat_step *h = kmalloc(sizeof *h);
     if (!h) return 0;
-    h->ok = fat32_write_range(path, offset, buf, len);
+    h->ok = fat32_write_range(st, path, offset, buf, len);
     h->total = h->ok ? len : 0;
     return h;
 }
 
-static int fat32_write_range_step(void *handle) {
+static int fat32_write_range_step(void *st, void *handle) {
+    (void)st;
     struct fat_step *h = handle;
     if (!h) return FS_STEP_FAILED;
     int ok = h->ok;
@@ -1788,16 +1808,18 @@ static int fat32_write_range_step(void *handle) {
     return ok ? FS_STEP_DONE : FS_STEP_FAILED;
 }
 
-static void *fat32_read_range_begin(const char *path, uint64_t offset,
+static void *fat32_read_range_begin(void *st, const char *path, uint64_t offset,
                                     void *buf, uint32_t len) {
+    (void)st;
     struct fat_step *h = kmalloc(sizeof *h);
     if (!h) return 0;
-    h->total = fat32_read_range(path, offset, buf, len);
+    h->total = fat32_read_range(st, path, offset, buf, len);
     h->ok = 1; // a short read at EOF is a success, same as fs_read_range()
     return h;
 }
 
-static int fat32_read_range_step(void *handle, uint32_t *out_total) {
+static int fat32_read_range_step(void *st, void *handle, uint32_t *out_total) {
+    (void)st;
     struct fat_step *h = handle;
     if (!h) return FS_STEP_FAILED;
     if (out_total) *out_total = h->total;
@@ -1811,7 +1833,8 @@ static int fat32_read_range_step(void *handle, uint32_t *out_total) {
 // FSInfo's count is a HINT and is not trusted for this (see
 // fsinfo_load) -- `df` printing a number another OS left stale would be
 // worse than the scan's cost, which is one pass over the FAT.
-static int fat32_disk_usage(uint64_t *out_used, uint64_t *out_total) {
+static int fat32_disk_usage(void *st, uint64_t *out_used, uint64_t *out_total) {
+    (void)st;
     if (!S->v.mounted) return 0;
     uint64_t cluster_bytes = (uint64_t)S->v.sectors_per_cluster * SECTOR;
     uint64_t total = (uint64_t)S->v.cluster_count * cluster_bytes;
@@ -1837,7 +1860,8 @@ static int fat32_disk_usage(uint64_t *out_used, uint64_t *out_total) {
 // the bootloader is worse than a clear report. What this DOES check is
 // the pair of things a driver can be sure about: that the FAT copies
 // agree, and that no cluster is claimed by two chains.
-static int fat32_check(int repair, struct fs_check_result *out) {
+static int fat32_check(void *st, int repair, struct fs_check_result *out) {
+    (void)st;
     if (!S->v.mounted) return 0;
     if (out) k_memset(out, 0, sizeof *out);
     if (repair) {

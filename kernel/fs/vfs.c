@@ -97,26 +97,28 @@ void fs_exclusive_end(void)   { kmutex_unlock(&g_fs_lock); }
 // mount gone by then fails the call with 0, which every backend op
 // already means as failure; the caller sees a path that no longer
 // resolves, which is what it now is.
-#define FS_OP(m, expr) ({                  \
-    kmutex_lock(&g_fs_lock);               \
-    __typeof__(expr) _fs_r = 0;            \
-    if ((m)->used) {                       \
-        void *_fs_prev = mount_enter(m);   \
-        _fs_r = (expr);                    \
-        mount_leave(m, _fs_prev);          \
-    }                                      \
-    kmutex_unlock(&g_fs_lock);             \
-    _fs_r;                                 \
+// `op` is an fs_ops slot and the mount's own state goes in first, so a
+// call cannot be handed another mount's state.
+#define FS_OP(m, op, ...) ({                                        \
+    kmutex_lock(&g_fs_lock);                                        \
+    __typeof__((m)->fs->op((m)->state, ##__VA_ARGS__)) _fs_r = 0;   \
+    if ((m)->used) {                                                \
+        void *_fs_prev = mount_enter(m);                            \
+        _fs_r = (m)->fs->op((m)->state, ##__VA_ARGS__);             \
+        mount_leave(m, _fs_prev);                                   \
+    }                                                               \
+    kmutex_unlock(&g_fs_lock);                                      \
+    _fs_r;                                                          \
 })
 
-#define FS_OP_VOID(m, stmt) do {           \
-    kmutex_lock(&g_fs_lock);               \
-    if ((m)->used) {                       \
-        void *_fs_prev = mount_enter(m);   \
-        stmt;                              \
-        mount_leave(m, _fs_prev);          \
-    }                                      \
-    kmutex_unlock(&g_fs_lock);             \
+#define FS_OP_VOID(m, op, ...) do {                                 \
+    kmutex_lock(&g_fs_lock);                                        \
+    if ((m)->used) {                                                \
+        void *_fs_prev = mount_enter(m);                            \
+        (m)->fs->op((m)->state, ##__VA_ARGS__);                     \
+        mount_leave(m, _fs_prev);                                   \
+    }                                                               \
+    kmutex_unlock(&g_fs_lock);                                      \
 } while (0)
 
 // ---- resolution -----------------------------------------------------
@@ -217,7 +219,7 @@ int fs_format_device(const struct block_device *dev, const char *fstype) {
 
     struct fs_scratch sc;
     if (!mount_scratch_begin(target, &sc)) return 0;
-    int ok = target->format(dev) ? 1 : 0;
+    int ok = target->format(sc.st, dev) ? 1 : 0;
     mount_scratch_end(&sc);
     return ok;
 }
@@ -250,7 +252,7 @@ int fs_format_backend(const char *name) {
 
     struct fs_scratch sc;
     if (!mount_scratch_begin(target, &sc)) return 0;
-    int formatted = target->format(dev);
+    int formatted = target->format(sc.st, dev);
     mount_scratch_end(&sc);
     if (!formatted) return 0;
 
@@ -377,7 +379,7 @@ uint64_t fs_generation(void) { return g_generation; }
 int fs_sync_path(const char *path) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
-    if (r.m->fs->sync && !FS_OP(r.m, r.m->fs->sync())) {
+    if (r.m->fs->sync && !FS_OP(r.m, sync)) {
         klog_printf(KLOG_ERR "fs: fsync FAILED -- %s could not commit\n", r.m->point);
         return 0;
     }
@@ -399,7 +401,7 @@ void fs_idle(void) {
     for (int i = 0; i < mount_count(); i++) {
         const struct mount *m = mount_at(i);
         if (!m || !m->fs || !m->fs->idle) continue;
-        FS_OP_VOID(m, m->fs->idle());
+        FS_OP_VOID(m, idle);
     }
 }
 
@@ -416,7 +418,7 @@ int fs_sync(uint32_t *wrote_out) {
     for (int i = 0; i < mount_count(); i++) {
         const struct mount *m = mount_at(i);
         if (!m || !m->fs || !m->fs->sync) continue;
-        if (!FS_OP(m, m->fs->sync())) {
+        if (!FS_OP(m, sync)) {
             klog_printf(KLOG_ERR "fs: sync FAILED -- %s could not commit\n", m->point);
             ok = 0;
         }
@@ -482,20 +484,20 @@ static int changed2(int ok, const char *a, const char *b) {
 int fs_touch(const char *path) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "touch", path)) return 0;
-    return changed(FS_OP(r.m, r.m->fs->touch(r.sub)), path);
+    return changed(FS_OP(r.m, touch, r.sub), path);
 }
 
 int fs_write(const char *path, const char *data, int append) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "write", path)) return 0;
     imgcache_forget(path);
-    return changed(FS_OP(r.m, r.m->fs->write(r.sub, data, append)), path);
+    return changed(FS_OP(r.m, write, r.sub, data, append), path);
 }
 
 int fs_mkdir(const char *path) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "mkdir", path)) return 0;
-    return changed(FS_OP(r.m, r.m->fs->mkdir(r.sub)), path);
+    return changed(FS_OP(r.m, mkdir, r.sub), path);
 }
 
 int fs_delete(const char *path) {
@@ -512,7 +514,7 @@ int fs_delete(const char *path) {
             return 0;
         }
     }
-    return changed(FS_OP(r.m, r.m->fs->del(r.sub)), path);
+    return changed(FS_OP(r.m, del, r.sub), path);
 }
 
 uint32_t fs_read_into(const char *path, void *buf, uint32_t cap) {
@@ -523,7 +525,7 @@ uint32_t fs_read_into(const char *path, void *buf, uint32_t cap) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
 
-    uint64_t size = FS_OP(r.m, r.m->fs->size(r.sub));
+    uint64_t size = FS_OP(r.m, size, r.sub);
     // Room for the NUL as well, so a text caller can scan the result as
     // a string without a separate length check at every step.
     if (size == 0 || size + 1 > (uint64_t)cap) return 0;
@@ -533,7 +535,7 @@ uint32_t fs_read_into(const char *path, void *buf, uint32_t cap) {
     // whole file is how a truncated parse gets in.
     uint32_t got = 0;
     while (got < (uint32_t)size) {
-        uint32_t n = FS_OP(r.m, r.m->fs->read_range(r.sub, got, dst + got, (uint32_t)size - got));
+        uint32_t n = FS_OP(r.m, read_range, r.sub, got, dst + got, (uint32_t)size - got);
         if (n == 0) return 0; // EOF-before-size or a real failure; either way, refuse
         got += n;
     }
@@ -544,20 +546,20 @@ uint32_t fs_read_into(const char *path, void *buf, uint32_t cap) {
 uint64_t fs_size(const char *path) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
-    return FS_OP(r.m, r.m->fs->size(r.sub));
+    return FS_OP(r.m, size, r.sub);
 }
 
 uint32_t fs_read_range(const char *path, uint64_t offset, void *buf, uint32_t len) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
-    return FS_OP(r.m, r.m->fs->read_range(r.sub, offset, buf, len));
+    return FS_OP(r.m, read_range, r.sub, offset, buf, len);
 }
 
 int fs_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "write", path)) return 0;
     imgcache_forget(path);
-    return changed(FS_OP(r.m, r.m->fs->write_range(r.sub, offset, buf, len)), path);
+    return changed(FS_OP(r.m, write_range, r.sub, offset, buf, len), path);
 }
 
 // A STEP CARRIES NO PATH, so it cannot be resolved. The handle came
@@ -589,7 +591,7 @@ static void *step_wrap(const struct mount *m, void *inner) {
 void *fs_write_range_begin(const char *path, uint64_t offset, const void *buf, uint32_t len) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "write", path)) return 0;
-    struct step_handle *h = step_wrap(r.m, FS_OP(r.m, r.m->fs->write_range_begin(r.sub, offset, buf, len)));
+    struct step_handle *h = step_wrap(r.m, FS_OP(r.m, write_range_begin, r.sub, offset, buf, len));
     if (h) fswatch_hash(path, &h->self, &h->parent);
     return h;
 }
@@ -604,7 +606,7 @@ enum fs_step_result fs_write_range_step(void *handle) {
     if (!handle) return FS_STEP_FAILED;
     struct step_handle *h = handle;
     if (!h->m) return FS_STEP_FAILED;
-    enum fs_step_result r = (enum fs_step_result)FS_OP(h->m, h->m->fs->write_range_step(h->inner));
+    enum fs_step_result r = (enum fs_step_result)FS_OP(h->m, write_range_step, h->inner);
     uint64_t self = h->self, parent = h->parent;
     if (r == FS_STEP_DONE || r == FS_STEP_FAILED) { h->m = 0; h->inner = 0; }
     // Bump once, on completion -- not per step. A streamed write is one
@@ -619,7 +621,7 @@ enum fs_step_result fs_write_range_step(void *handle) {
 void *fs_read_range_begin(const char *path, uint64_t offset, void *buf, uint32_t len) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
-    return step_wrap(r.m, FS_OP(r.m, r.m->fs->read_range_begin(r.sub, offset, buf, len)));
+    return step_wrap(r.m, FS_OP(r.m, read_range_begin, r.sub, offset, buf, len));
 }
 
 enum fs_step_result fs_read_range_step(void *handle, uint32_t *out_total) {
@@ -631,7 +633,7 @@ enum fs_step_result fs_read_range_step(void *handle, uint32_t *out_total) {
     }
     struct step_handle *h = handle;
     if (!h->m) { if (out_total) *out_total = 0; return FS_STEP_FAILED; }
-    enum fs_step_result r = (enum fs_step_result)FS_OP(h->m, h->m->fs->read_range_step(h->inner, out_total));
+    enum fs_step_result r = (enum fs_step_result)FS_OP(h->m, read_range_step, h->inner, out_total);
     if (r == FS_STEP_DONE || r == FS_STEP_FAILED) { h->m = 0; h->inner = 0; }
     return r;
 }
@@ -655,26 +657,26 @@ int fs_rename(const char *oldpath, const char *newpath) {
     // cache serving the file this replaces.
     imgcache_forget(oldpath);
     imgcache_forget(newpath);
-    return changed2(FS_OP(a.m, a.m->fs->rename(a.sub, b.sub)), oldpath, newpath);
+    return changed2(FS_OP(a.m, rename, a.sub, b.sub), oldpath, newpath);
 }
 
 int fs_truncate(const char *path, uint64_t size) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "truncate", path)) return 0;
     imgcache_forget(path);
-    return changed(FS_OP(r.m, r.m->fs->truncate(r.sub, size)), path);
+    return changed(FS_OP(r.m, truncate, r.sub, size), path);
 }
 
 int fs_is_dir(const char *path) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
-    return FS_OP(r.m, r.m->fs->is_dir(r.sub));
+    return FS_OP(r.m, is_dir, r.sub);
 }
 
 int fs_exists(const char *path) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
-    return FS_OP(r.m, r.m->fs->exists(r.sub));
+    return FS_OP(r.m, exists, r.sub);
 }
 
 void fs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir)) {
@@ -685,13 +687,13 @@ void fs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, i
     // what it is handed (every caller here) is fine; one that called
     // back into fs_* would be re-entering the backend directly, which
     // no amount of preemption control can make safe.
-    FS_OP_VOID(r.m, r.m->fs->list(r.sub, cb));
+    FS_OP_VOID(r.m, list, r.sub, cb);
 }
 
 int fs_stat(const char *path, struct fs_stat_info *out) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
-    return FS_OP(r.m, r.m->fs->stat(r.sub, out));
+    return FS_OP(r.m, stat, r.sub, out);
 }
 
 int fs_chmod(const char *path, uint16_t mode) {
@@ -702,7 +704,7 @@ int fs_chmod(const char *path, uint16_t mode) {
     if (!r.m->fs->chmod) return -ENOTSUP;
     // PERMISSIONS ONLY. The type bits are the filesystem's, and a chmod
     // that could rewrite them would be a corruption primitive.
-    return FS_OP(r.m, r.m->fs->chmod(r.sub, (uint16_t)(mode & 07777)));
+    return FS_OP(r.m, chmod, r.sub, (uint16_t)(mode & 07777));
 }
 
 // THE ROOT's usage. `df` reports every mount by walking the mount table
@@ -711,7 +713,7 @@ int fs_chmod(const char *path, uint16_t mode) {
 int fs_disk_usage(uint64_t *out_used_bytes, uint64_t *out_total_bytes) {
     const struct mount *m = mount_root();
     if (!m) return 0;
-    return FS_OP(m, m->fs->disk_usage(out_used_bytes, out_total_bytes));
+    return FS_OP(m, disk_usage, out_used_bytes, out_total_bytes);
 }
 
 // Per-mount usage, guarded. See api/fs.h -- the point of this function
@@ -721,14 +723,14 @@ int fs_disk_usage(uint64_t *out_used_bytes, uint64_t *out_total_bytes) {
 int fs_mount_usage(const void *mount, uint64_t *out_used_bytes, uint64_t *out_total_bytes) {
     const struct mount *m = mount;
     if (!m || !m->fs) return 0;
-    return FS_OP(m, m->fs->disk_usage(out_used_bytes, out_total_bytes));
+    return FS_OP(m, disk_usage, out_used_bytes, out_total_bytes);
 }
 
 int fs_check(int repair, struct fs_check_result *out) {
     const struct mount *m = mount_root();
     if (!m) return 0;
     if (repair && (m->flags & MNT_RDONLY)) return 0;
-    return FS_OP(m, m->fs->check(repair, out));
+    return FS_OP(m, check, repair, out);
 }
 
 int fs_link(const char *existing, const char *newpath) {
@@ -739,5 +741,5 @@ int fs_link(const char *existing, const char *newpath) {
     // Optional op -- the caps bit and this NULL check are the same
     // fact, and caps_are_honest() made sure they can't disagree.
     if (!a.m->fs->link) return 0;
-    return changed(FS_OP(a.m, a.m->fs->link(a.sub, b.sub)), newpath);
+    return changed(FS_OP(a.m, link, a.sub, b.sub), newpath);
 }
