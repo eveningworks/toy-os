@@ -113,7 +113,7 @@ driver still plugs into `block_device`, `display_driver`, `clocksource`
 and the rest to actually be used. Registering wrongly makes a *report*
 wrong; it cannot make a device fail.
 
-**Not a module list.** A driver built as a module (`drivers.conf`)
+**Not a module list.** A driver built as a module (`build.conf`)
 appears here the moment it loads and leaves when it unloads, exactly
 like a built-in one -- its `DRIVER_DECLARE` lands in the same
 registry. Which MODULES are loaded, how big they are and whether they

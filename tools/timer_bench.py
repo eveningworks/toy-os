@@ -8,7 +8,7 @@
 
 Boots the build on a COPY of its disk, lets the desktop settle, and reports
 three things -- the numbers the `option hz` / `option tick` / `option
-highres` choice (drivers.conf) was made on:
+highres` choice (build.conf) was made on:
 
   IDLE     timer interrupts and periodic ticks per second across a quiet
            desktop, the share of time the tick was stopped, and the QEMU

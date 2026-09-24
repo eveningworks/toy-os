@@ -1600,7 +1600,7 @@ window without going through it will find its layout polls timing out.
   layer of the compositor-stall investigation in one command.
   **Sample a distribution, never one reading** -- it stops the vCPU, so
   a mostly-idle guest reads as halted every single time.
-- **`drivers_conf.py`** -- resolves `drivers.conf` (`<name> = builtin |
+- **`build_conf.py`** -- resolves `build.conf` (`<name> = builtin |
   module`) into the source files the Makefile builds as `.ko` modules.
   A name is a file's basename under `kernel/drivers/`, found by walking
   that tree so there is no name-to-path table; an unknown, ambiguous or
@@ -5653,6 +5653,6 @@ only a difference bigger than that, with `--runs`. Named by no runner:
 it produces a comparison, not a verdict.
 
 `tools/gen_kconfig.sh` writes the other half -- `build/gen/kconfig.h`
-from drivers.conf's `option hz/tick/highres`, at Makefile parse time and
+from build.conf's `option hz/tick/highres`, at Makefile parse time and
 only when a value changed, so the `.d` files rebuild exactly what
 includes it.

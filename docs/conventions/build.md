@@ -424,7 +424,7 @@ this the obvious way), not from how much history it accumulated.
   `flash` defaults to the media copy for that reason, falling back to
   the ELF when it has not been built.
 
-- **`drivers.conf` IS THE KERNEL CONFIG: WHICH DRIVERS ARE MODULES AND
+- **`build.conf` IS THE KERNEL CONFIG: WHICH DRIVERS ARE MODULES AND
   HOW THE BUILD IS TUNED.** `option <name> = <value>` lines sit beside
   the `<driver> = builtin|module` ones -- FreeBSD's `conf/GENERIC` and
   Linux's `.config` both keep the two together, because "what is in this

@@ -66,7 +66,7 @@ see it.
 silent skip — say so if you only drive one.
 
 **The same file can be built as a MODULE** -- `<name> = module` in
-`drivers.conf`, where the name is your file's basename -- with no
+`build.conf`, where the name is your file's basename -- with no
 change to the declarations: the loader runs and registers the same
 three tables. Two things then matter. Every kernel function you call
 must be an `EXPORT_SYMBOL` in `kernel/core/kexports.c` (the build

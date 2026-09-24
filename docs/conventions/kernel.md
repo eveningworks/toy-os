@@ -1306,7 +1306,7 @@ each core gets one of. Six things to know:
   LAPIC takes over, so anything calibrating against it still can and
   re-taking the tick is one write.
 - **TWO RATES, AND THEY ARE DIFFERENT THINGS.** `CONFIG_HZ`
-  (drivers.conf's `option hz`) is how often the tick interrupts a busy
+  (build.conf's `option hz`) is how often the tick interrupts a busy
   CPU. `PIT_HZ` is fixed at 100: the rate `pit_ticks()` counts at, and
   `SYS_TICKS`' `USER_HZ`. `pit_ticks()` is DERIVED from the clocksource
   where that runs without interrupts, and counted from the tick only
@@ -3625,7 +3625,7 @@ the kind that contradicts a deliberate, documented use somewhere else --
 and this one had a comment at the assignment saying why.
 
 
-## A DRIVER CAN BE A MODULE, `drivers.conf` SAYS WHICH, AND A MODULE MAY LINK ONLY AGAINST `kernel/core/kexports.c`
+## A DRIVER CAN BE A MODULE, `build.conf` SAYS WHICH, AND A MODULE MAY LINK ONLY AGAINST `kernel/core/kexports.c`
 
 `kernel/include/kernel/module.h`, `kernel/core/module.c`,
 `docs/modules-design.md`. A module is the driver's own `.c` compiled to
@@ -3638,10 +3638,10 @@ tables a built-in driver carries -- `.initcalls`, `.drivers`,
 and `INITCALL` are unchanged; a driver does not know which way it was
 built. Six things to know.
 
-**`drivers.conf` at the repo root decides**, `<name> = builtin |
+**`build.conf` at the repo root decides**, `<name> = builtin |
 module`, where the name is the source file's basename under
 `kernel/drivers/`; unlisted is builtin, an unknown name fails the build
-(`tools/drivers_conf.py`). `modules/*.c` are always modules and live
+(`tools/build_conf.py`). `modules/*.c` are always modules and live
 OUTSIDE `kernel/` because every `.c` under it is in the image.
 
 **THE EXPORT TABLE IS THE MODULE ABI, AND IT IS ONE FILE.**

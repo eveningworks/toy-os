@@ -120,7 +120,7 @@ KTEST("module", "a truncated or corrupted image is refused as ENOEXEC") {
 }
 
 KTEST("module", "a present 8086:100e is driven by the e1000 module") {
-    // The one built-as-a-module driver in drivers.conf, checked against
+    // The one built-as-a-module driver in build.conf, checked against
     // the device QEMU's default machine has. Nothing else in the gate
     // would notice boot-time loading breaking: netd would simply find
     // no card.

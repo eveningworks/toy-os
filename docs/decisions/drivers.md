@@ -2454,7 +2454,7 @@ their code. A stale export is a compile error in that one file either
 way. `tools/gen_modalias.py` checks every `.ko`'s imports against it at
 build time so the runtime refusal (by name) is never the first notice.
 
-**`drivers.conf` rather than a Makefile variable.** `MODULES=e1000` on
+**`build.conf` (named `drivers.conf` until 2026-09-24, when its build options outgrew the name) rather than a Makefile variable.** `MODULES=e1000` on
 the command line was the obvious shape and the wrong one: the choice
 is a property of the BUILD, meant to be read and edited like Linux's
 `.config`, not retyped per invocation. One tracked file,

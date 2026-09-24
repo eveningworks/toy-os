@@ -8,7 +8,7 @@
 
 BUILD = build
 
-# --- drivers.conf's OPTIONS half, and it must be read FIRST -----------
+# --- build.conf's OPTIONS half, and it must be read FIRST -----------
 #
 # Every setting it carries is a `?=` default further down this file
 # (KCMDLINE, GRUB_TIMEOUT, STRIP, COMPRESS), and `?=` takes the FIRST
@@ -26,13 +26,13 @@ BUILD = build
 #
 # The assignments are `?=`, so a command-line variable still wins: the
 # file is this checkout's default and `make STRIP=0` is one build.
-DRIVERS_CONF ?= drivers.conf
+BUILD_CONF ?= build.conf
 
-$(BUILD)/conf.mk: $(DRIVERS_CONF) tools/drivers_conf.py
+$(BUILD)/conf.mk: $(BUILD_CONF) tools/build_conf.py
 	@mkdir -p $(dir $@)
-	@python3 tools/drivers_conf.py $(DRIVERS_CONF) --options > $@.tmp \
+	@python3 tools/build_conf.py $(BUILD_CONF) --options > $@.tmp \
 	    && mv $@.tmp $@ || { rm -f $@.tmp; \
-	        echo "make: $(DRIVERS_CONF): see the message above" >&2; exit 1; }
+	        echo "make: $(BUILD_CONF): see the message above" >&2; exit 1; }
 
 -include $(BUILD)/conf.mk
 
@@ -393,17 +393,17 @@ USB_IDS = data/usb.ids
 # now IN the kernel image. There's no "scratch file in the source tree"
 # that the build ignores -- put throwaway code somewhere else.
 # --- loadable modules (docs/modules-design.md) ----------------------
-# drivers.conf says which drivers are MODULES (a .ko in /lib/modules,
+# build.conf says which drivers are MODULES (a .ko in /lib/modules,
 # loaded at boot by PCI match, from /etc/modules, or by `modload`);
-# everything else is in the image. tools/drivers_conf.py resolves the
+# everything else is in the image. tools/build_conf.py resolves the
 # names to files and REFUSES an unknown one. modules/*.c -- the test
 # modules -- are always modules; they are outside kernel/ because every
 # .c under kernel/ is in the image. Evaluated once (:=): a python call
 # per reference would be paid dozens of times.
-# DRIVERS_CONF is set at the top of this file, with the conf.mk include
-MODULE_DRIVER_SOURCES := $(shell python3 tools/drivers_conf.py $(DRIVERS_CONF) || echo DRIVERS_CONF_ERROR)
-ifneq ($(filter DRIVERS_CONF_ERROR,$(MODULE_DRIVER_SOURCES)),)
-$(error $(DRIVERS_CONF): see the message above)
+# BUILD_CONF is set at the top of this file, with the conf.mk include
+MODULE_DRIVER_SOURCES := $(shell python3 tools/build_conf.py $(BUILD_CONF) || echo BUILD_CONF_ERROR)
+ifneq ($(filter BUILD_CONF_ERROR,$(MODULE_DRIVER_SOURCES)),)
+$(error $(BUILD_CONF): see the message above)
 endif
 MODULE_SOURCES := $(MODULE_DRIVER_SOURCES) $(sort $(wildcard modules/*.c))
 MODULE_KOS     := $(foreach s,$(MODULE_SOURCES),$(BUILD)/modules/$(basename $(notdir $(s))).ko)
@@ -457,7 +457,7 @@ ASM_OBJECTS = $(patsubst %.asm, $(BUILD)/%.o, $(ASM_SOURCES))
 # it is just how a shell command runs at parse time.
 VERSION_GEN := $(shell sh tools/gen_version.sh >/dev/null 2>&1 && echo ok)
 
-# THE TIMER'S BUILD OPTIONS, as build/gen/kconfig.h -- drivers.conf's
+# THE TIMER'S BUILD OPTIONS, as build/gen/kconfig.h -- build.conf's
 # `option hz/tick/highres`, or `make HZ=250` for one build. Generated at
 # parse time for the reason version.h is, and rewritten only when a value
 # changed, so the .d files rebuild exactly what includes it. A value

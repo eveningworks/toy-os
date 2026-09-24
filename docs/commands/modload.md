@@ -23,7 +23,7 @@ A bare name loads `/lib/modules/<name>.ko`; an argument containing a
 ## Description
 
 Loads a kernel module -- a driver built as a `.ko` rather than into
-the kernel image (`drivers.conf` decides which). The kernel links it
+the kernel image (`build.conf` decides which). The kernel links it
 against its export table, runs its initcalls, and binds any PCI device
 its drivers match that no other driver has claimed.
 

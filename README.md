@@ -102,7 +102,7 @@ puts this system onto another disk; the ring-3 window manager and its
 apps; fonts loaded and rasterized from disk at runtime; ring-3 processes
 with pipes, `spawn`/`waitpid`, signals, threads and job control; `mmap`
 with file-backed demand paging; dynamic linking, with tolibc shipped as
-`/lib/libc.so`; loadable kernel modules, with `drivers.conf` saying
+`/lib/libc.so`; loadable kernel modules, with `build.conf` saying
 which drivers are built as `.ko` files and the e1000 loaded by PCI match
 at boot; a TTY layer with pseudo-terminals, so `Ctrl-C` interrupts
 a job and a full-screen editor runs in a Terminal window; USB — xHCI with

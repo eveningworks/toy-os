@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Resolve drivers.conf: which drivers are modules, and how the build is tuned.
+"""Resolve build.conf: which drivers are modules, and how the build is tuned.
 
 The Makefile calls this twice per build, for the file's two halves:
 
-    python3 tools/drivers_conf.py drivers.conf
+    python3 tools/build_conf.py build.conf
     kernel/drivers/net/e1000.c
 
-    python3 tools/drivers_conf.py drivers.conf --options
+    python3 tools/build_conf.py build.conf --options
     STRIP ?= 1
     KCMDLINE ?= video=1920x1080 nokaslr
 
@@ -39,7 +39,7 @@ are `?=` and make ranks a command-line variable above any makefile
 assignment. So the file is the checkout's default and `make STRIP=0` is
 this one build, which is the precedence anyone would expect.
 
-Another file: `make iso DRIVERS_CONF=my.conf`.
+Another file: `make iso BUILD_CONF=my.conf`.
 """
 import os
 import sys
@@ -154,10 +154,10 @@ def main():
     if want_options:
         args.remove("--options")
     if len(args) != 1:
-        sys.exit("usage: drivers_conf.py <drivers.conf> [--options]")
+        sys.exit("usage: build_conf.py <build.conf> [--options]")
     path = args[0]
     if not os.path.exists(path):
-        sys.exit(f"drivers_conf: {path}: no such file")
+        sys.exit(f"build_conf: {path}: no such file")
 
     seen_driver = {}
     seen_option = {}

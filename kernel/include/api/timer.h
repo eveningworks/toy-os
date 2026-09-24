@@ -6,7 +6,7 @@
 
 // TWO RATES, AND THEY ARE DIFFERENT THINGS.
 //
-// CONFIG_HZ (drivers.conf's `option hz`, build/gen/kconfig.h) is how
+// CONFIG_HZ (build.conf's `option hz`, build/gen/kconfig.h) is how
 // often the TICK interrupts a busy CPU. PIT_HZ is the rate pit_ticks()
 // counts at, and it is fixed at 100 -- a coarse monotonic clock for
 // timeouts measured in tens of milliseconds, and SYS_TICKS' USER_HZ.

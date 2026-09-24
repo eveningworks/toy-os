@@ -238,7 +238,7 @@ whenever a headline here tells you something you did not already know.
   PARSER'S BUFFER**
 - **A DRIVER DECLARES ITSELF AS DATA, AND THE CLASS REGISTRY NAMES EACH
   DEVICE IT BINDS**
-- **A DRIVER CAN BE A MODULE, `drivers.conf` SAYS WHICH, AND A MODULE
+- **A DRIVER CAN BE A MODULE, `build.conf` SAYS WHICH, AND A MODULE
   MAY LINK ONLY AGAINST `kernel/core/kexports.c`**
 - **A SEND WINDOW MAY NOT EXCEED THE RECEIVER'S SOCKET QUEUE, OR IT IS
   SLOWER THAN NO WINDOW**
@@ -891,7 +891,7 @@ whenever a headline here tells you something you did not already know.
 - **Every ring-3 program is just a `main()`.**
 - **WHAT GOES ON THE MEDIA IS `$(KERNEL_MEDIA)`, THE KERNEL GZIPPED, AND
   GRUB DECOMPRESSES IT**
-- **`drivers.conf` IS THE KERNEL CONFIG NOW -- `option <name> = <value>`
+- **`build.conf` IS THE KERNEL CONFIG NOW -- `option <name> = <value>`
   BESIDE THE DRIVER LINES** (FreeBSD's `conf/GENERIC`, Linux's
   `.config`): `strip`, `compress`, `cmdline`, `grub_timeout`, `extras`.
   An unknown option FAILS THE BUILD by name. **Its include is at the TOP

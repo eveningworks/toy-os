@@ -20,7 +20,7 @@
 #define R8169_DESC_FRAGLEN  0x00003FFFu
 
 // INLINE, so the KTESTs in the image link whether the driver is built
-// in or as a module (drivers.conf) -- a module's functions are not in
+// in or as a module (build.conf) -- a module's functions are not in
 // the image to link against.
 
 // opts1 for a single-buffer transmit: OWN, first, last and the length.

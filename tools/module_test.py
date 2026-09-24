@@ -10,7 +10,7 @@ the network away, loading it again brings the network back, with
 
 THE PHASES, and what a broken build would still pass
 
-  1. Boot-time autoload: e1000 is a module (drivers.conf) and QEMU's
+  1. Boot-time autoload: e1000 is a module (build.conf) and QEMU's
      default machine has the card, so `lsmod` must list it holding one
      device and the log must say it was loaded FOR 8086:100e. A kernel
      with e1000 built in would pass the network checks and fail here.
