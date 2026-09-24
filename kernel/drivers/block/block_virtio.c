@@ -79,6 +79,7 @@ int blk_virtio_init(void) {
     // is 0 there and this returns immediately.
     if (virtio_disabled()) return 0;
 
+    VIRTIO_DEV.block_size = virtio_blk_block_size();
     if (virtio_blk_flush_supported()) {
         VIRTIO_DEV.caps |= BLK_CAP_FLUSH;
         VIRTIO_DEV.flush = vblk_flush;

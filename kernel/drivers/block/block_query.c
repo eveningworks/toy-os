@@ -37,6 +37,7 @@ static int blkdev_fill(int index, void *out) {
     d->base_lba = (uint64_t)e->base_lba;
     d->is_root = (blk_active() == e->dev) ? 1 : 0;
     d->persistent = e->dev->persistent ? 1 : 0;
+    d->block_size = blkdev_block_size(e->dev);
     return 1;
 }
 

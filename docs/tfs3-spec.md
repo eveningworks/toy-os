@@ -21,7 +21,11 @@ both magics -- see "Coexistence with TFS2" below.
   alignment/padding never applies.
 - Disk I/O is in 512-byte sectors; addressing is in 4096-byte blocks
   (8 sectors). **Every block number is VOLUME-relative**: block `b`
-  starts at sector `volume_base_lba + b * 8`. Today the only volume
+  starts at sector `volume_base_lba + b * 8`. The "sector" is the block
+  layer's 512-byte unit even on a 4K-sector disk, where a block is one
+  device block and the one-sector metadata reads go through
+  `blkdev_*_partial()`. The journal header's v2 checksum sits at byte
+  **508** -- a fixed offset, never derived from a sector size. Today the only volume
   is the flat disk (`base = 0`); the format is identical inside a
   partition (see the design doc's "Volumes and partitions").
 - All checksums are FNV-1a-32 (offset basis `0x811C9DC5`, prime

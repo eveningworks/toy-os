@@ -38,6 +38,18 @@
 // nor an HBA.
 #define ATA_SECTOR_SIZE 512
 
+// IDENTIFY word 106 bit 12 plus words 117-118: the drive's LOGICAL
+// sector in bytes, 512 when it does not say otherwise. Shared by ata.c
+// and ahci.c, which both REFUSE a drive answering anything else: ATA
+// commands count logical sectors, so driving one with 512-byte LBAs
+// would read and write the wrong places. QEMU cannot present such a
+// drive (IDE and AHCI both insist on 512), which is why it is refused
+// rather than converted untested.
+static inline uint32_t ata_identify_logical_bytes(const uint16_t *id) {
+    if ((id[106] & 0xC000) != 0x4000 || !(id[106] & (1u << 12))) return 512;
+    return ((uint32_t)id[117] | ((uint32_t)id[118] << 16)) * 2u;
+}
+
 // Probes the primary bus for a master drive via IDENTIFY DEVICE and
 // records whether one was found; if one is, also attempts to set up
 // the Bus-Master DMA path described above (silently falling back to

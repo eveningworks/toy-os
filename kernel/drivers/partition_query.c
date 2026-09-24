@@ -54,6 +54,7 @@ static int parttable_fill(int index, void *out) {
     // The disk, not the mounted volume -- blk_disk_sector_count()
     // ignores any partition window, which is the point.
     t->disk_sectors = (uint64_t)blk_disk_sector_count();
+    t->block_size = blkdev_block_size(blk_whole_disk());
     if (g_table.kind == PART_TABLE_GPT) {
         k_memcpy(t->disk_guid, g_table.disk_guid, sizeof t->disk_guid);
     }

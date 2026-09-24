@@ -3010,6 +3010,21 @@ window without going through it will find its layout polls timing out.
   dispatching the vector. The control that DOES go red is returning 0
   from it outright -- 0 events decoded against 33 vectors delivered --
   and that is what shows the tool can see a dead path. On demand.
+- **`sector4k_test.py`** -- a **virtio disk with 4096-byte logical
+  sectors** (`logical_block_size=4096`) beside the IDE root: `mkpart`,
+  `mkfs -t fat32`, `mkfs`, mount both, copy a multi-block file onto each,
+  reboot, compare `sum`s. Two boots, on demand.
+
+  **Its oracles are the ones the guest cannot fake**: the GPT header at
+  byte 4096 with first-usable LBA 6, the FAT32 BPB's 4096, and mtools
+  extracting the file byte-identical. And it greps `dmesg` for the
+  block layer's "not whole ... blocks" refusal and virtio's IOERR line,
+  which is what went red when the control removed the alignment check
+  and reverted TFS3 to one-sector reads. **A mount point that failed to
+  mount is still a directory on the root**, so a `cp` into it reads back
+  fine; the read-back checks require the `mount` listing to show each
+  path on its own partition, which is how the first version passed a
+  failed TFS3 mount.
 - **`ahci_test.py`** -- boots with the filesystem on a **SATA drive
   behind an ICH9 host bus adapter**, which is the only thing here that
   reaches `kernel/drivers/ahci.c` at all. Several boots, on demand.

@@ -641,6 +641,32 @@ and one `continue` is worth keeping ahead of the backend that needs it;
 what is not worth keeping is a guard nobody consults, so
 `try_partitions()` reads it on every candidate.
 
+## AN LBA IS 512 BYTES ON EVERY DISK, AND A SUB-BLOCK TRANSFER GOES THROUGH `blkdev_*_partial()`
+
+A device reports its logical block (`blkdev_block_size()`: 512 or 4096),
+but every LBA and count the block layer takes stays in 512-byte sectors
+-- Linux's `sector_t`. On a 4K-sector disk a transfer that is not whole
+blocks is **refused and logged** (`block: read refused on virtio0 -- 1+1
+is not whole 4096-byte blocks`), never shortened or padded.
+
+**So a one-sector read into a 512-byte buffer is a bug on such a disk**,
+and the fix is `blkdev_read_partial()`/`blkdev_write_partial()`, not a
+bigger buffer at the call site. The write is a read-modify-write of the
+whole block: call it only on a block whose other sectors are yours under
+the lock you hold. Bulk data stays on the aligned calls, and a split
+must use `blkdev_max_sectors_per_xfer()`, which is rounded down to whole
+blocks.
+
+**A format defined in DEVICE blocks is scaled where it is parsed**: GPT
+and MBR in `partition.c`, the FAT32 BPB in `parse_bpb()`. Everything a
+query or syscall reports stays in 512-byte units, like Linux's sysfs.
+Why this and not device-native LBAs: `docs/decisions/storage.md`.
+
+**`tools/sector4k_test.py` is the check** -- a QEMU virtio disk with
+`logical_block_size=4096`, which answers a misaligned request with IOERR
+the way hardware does. `block_4k_test.c`'s RAM device COUNTS misaligned
+requests that reach it; keep that assertion in anything new.
+
 ## A DRIVE'S ROOT IS A PARTITION, OR IT IS RAMFS
 
 `probe_and_mount()` (`kernel/fs/vfs.c`) is a table of situations, not a
@@ -1199,8 +1225,10 @@ default** lives in `mount_boot_auto()` where a policy belongs.
 What the driver deliberately is not: **not FAT12/FAT16** (a different
 root-directory layout and FAT width — a whole second set of paths for a
 format nothing here uses, so a non-FAT32 volume is refused by name);
-**not 4096-byte sectors** (the block layer speaks 512, and reading with
-the wrong stride produces plausible garbage rather than an error); **not
+**not addressed in its own sectors** (`parse_bpb()` scales every BPB
+field to the block layer's 512-byte units, so a 4096-byte-sector volume
+runs the same code -- correctly and slowly, one 512-byte sector per
+transfer); **not
 Unicode** (long names are read as UCS-2 and anything outside ASCII
 becomes `?`; creating such a name is refused, because it could never be
 looked up again); and **not journalled, because FAT is not** — an

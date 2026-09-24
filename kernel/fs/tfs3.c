@@ -32,8 +32,6 @@
 #include "block_stat.h"     // the read counter lookup() brackets itself with
 #include "clocksource.h"    // clocksource_now_ns()
 #include "kfmt.h"           // klog_printf() -- the read-only transition says why
-#include "ata.h"   // ATA_SECTOR_SIZE only: 512 is the sector size every
-                    // block device here uses, and it is spelled once there
 #include "klog.h"
 #include "tz.h"
 #include "heap.h"
@@ -44,6 +42,10 @@
 
 #define T3_BLOCK        4096u
 #define T3_SPB          8u              // sectors per block
+// The block layer's ADDRESSING unit, not the device's: a 4K-sector disk
+// is still eight of these per block (block.h). Sub-block I/O below goes
+// through blkdev_*_partial(), which is what keeps that true.
+#define T3_SECTOR       512u
 #define T3_SB_BLOCK     8u
 #define T3_JH_BLOCK     9u
 #define T3_GDT_BLOCKS   16u             // fixed -- positions derive without a superblock
@@ -57,7 +59,7 @@
 // hold that plus a root directory is not a filesystem.
 #define T3_MIN_GROUP_BLOCKS 512u
 #define T3_INODE_SIZE   128u
-#define T3_INODES_PER_SECTOR (ATA_SECTOR_SIZE / T3_INODE_SIZE)
+#define T3_INODES_PER_SECTOR (T3_SECTOR / T3_INODE_SIZE)
 #define T3_BACKUP_BLOCKS (T3_GDT_BLOCKS + 1)
 #define T3_PTRS_PER_BLOCK (T3_BLOCK / 4u)
 
@@ -439,12 +441,14 @@ static int vol_read_sectors(struct t3_state *sbi, uint32_t lba, int count, void 
         for (int i = 0; i < sbi->txn_count; i++) {
             uint32_t base = sbi->txn_target[i] * T3_SPB;
             if (lba < base || lba + (uint32_t)count > base + T3_SPB) continue;
-            k_memcpy(buf, sbi->txn_img[i] + (lba - base) * ATA_SECTOR_SIZE,
-                     (uint32_t)count * ATA_SECTOR_SIZE);
+            k_memcpy(buf, sbi->txn_img[i] + (lba - base) * T3_SECTOR,
+                     (uint32_t)count * T3_SECTOR);
             return 1;
         }
     }
-    return blkdev_read_sectors(sbi->vol.dev, sbi->vol.base_lba + lba, count, buf);
+    // Partial: a one-sector metadata read (read_inode(), the superblock)
+    // is less than a block on a 4K-sector disk. Whole blocks pass through.
+    return blkdev_read_partial(sbi->vol.dev, sbi->vol.base_lba + lba, count, buf);
 }
 
 static void rcache_drop(struct t3_state *sbi);
@@ -519,7 +523,10 @@ static int vol_write_sectors(struct t3_state *sbi, uint32_t lba, int count, cons
     // before it was freed and reused as data would otherwise still be
     // cached under its old number.
     rcache_drop(sbi);
-    return blkdev_write_sectors(sbi->vol.dev, sbi->vol.base_lba + lba, count, buf);
+    // Partial for the one-sector writes (the journal header, format's
+    // superblock wipes): every one is under the mount's lock, which is
+    // what the read-modify-write on a 4K-sector disk needs.
+    return blkdev_write_partial(sbi->vol.dev, sbi->vol.base_lba + lba, count, buf);
 }
 
 static int read_block(struct t3_state *sbi, uint32_t blk, void *buf) {
@@ -661,7 +668,7 @@ static int backup_groups(uint32_t gc, uint32_t out[2]) {
 // mounted-ready (sbi->sb filled), 0 no valid superblock anywhere, -1
 // primary unreadable (refuse -- never treat a failing disk as blank).
 static int load_superblock(struct t3_state *sbi, int loud) {
-    uint8_t sec[ATA_SECTOR_SIZE];
+    uint8_t sec[T3_SECTOR];
     int got = 0;
     for (int i = 0; i < T3_SB_READ_RETRIES && !got; i++) {
         got = vol_read_sectors(sbi, T3_SB_BLOCK * T3_SPB, 1, sec);
@@ -822,7 +829,7 @@ struct t3_inode {
 static int read_inode(struct t3_state *sbi, uint64_t ino, struct t3_inode *out) {
     uint32_t lba, off;
     if (!inode_pos(sbi, ino, &lba, &off)) return 0;
-    uint8_t sec[ATA_SECTOR_SIZE];
+    uint8_t sec[T3_SECTOR];
     if (!vol_read_sectors(sbi, lba, 1, sec)) return 0;
     const uint8_t *p = sec + off;
     // Checksum covers bytes 0-87 and 92-127 (everything but itself).
@@ -1561,7 +1568,7 @@ static uint8_t *txn_stage(struct t3_state *sbi, uint32_t blk) {
 #define T3_JH_V1_SLOTS_OFF  12u
 #define T3_JH_V1_CKSUM_OFF  44u
 #define T3_JH_V2_SLOTS_OFF  16u
-#define T3_JH_V2_CKSUM_OFF  (ATA_SECTOR_SIZE - 4u)
+#define T3_JH_V2_CKSUM_OFF  508u   // ON-DISK: never derive it from a sector size
 
 static uint32_t jh_slots_off(uint32_t version) {
     return version >= 2 ? T3_JH_V2_SLOTS_OFF : T3_JH_V1_SLOTS_OFF;
@@ -1571,7 +1578,7 @@ static uint32_t jh_cksum_off(uint32_t version) {
 }
 
 static int write_journal_header(struct t3_state *sbi, int commit) {
-    uint8_t sec[ATA_SECTOR_SIZE];
+    uint8_t sec[T3_SECTOR];
     uint32_t slots = jh_slots_off(sbi->sb.version), ck = jh_cksum_off(sbi->sb.version);
     k_memset(sec, 0, sizeof(sec));
     sec[0] = 'J'; sec[1] = 'R'; sec[2] = 'N'; sec[3] = '3';
@@ -1726,7 +1733,7 @@ static int txn_commit(struct t3_state *sbi) {
 // write could reuse a block the journal names, and the replay is the
 // only thing that can still finish it.
 static int replay_journal(struct t3_state *sbi) {
-    uint8_t sec[ATA_SECTOR_SIZE];
+    uint8_t sec[T3_SECTOR];
     if (!vol_read_sectors(sbi, T3_JH_BLOCK * T3_SPB, 1, sec)) return 1;
     if (!(sec[0] == 'J' && sec[1] == 'R' && sec[2] == 'N' && sec[3] == '3')) return 1;
     uint32_t slots = jh_slots_off(sbi->sb.version), ck = jh_cksum_off(sbi->sb.version);
@@ -1793,7 +1800,7 @@ static int txn_stage_inode(struct t3_state *sbi, uint64_t ino, const struct t3_i
     uint32_t lba, off;
     if (!inode_pos(sbi, ino, &lba, &off)) return 0;
     uint32_t blk = lba / T3_SPB;
-    uint32_t within = (lba % T3_SPB) * ATA_SECTOR_SIZE + off;
+    uint32_t within = (lba % T3_SPB) * T3_SECTOR + off;
     uint8_t *img = txn_stage(sbi, blk);
     if (!img) return 0;
     if (node) pack_inode_into(img + within, node);
@@ -2620,7 +2627,7 @@ static int tfs3_wipe_inner(void *st, const struct block_device *dev) {
     struct t3_state *sbi = st;
     if (!dev) return 1;
     set_flat_volume(sbi, dev);
-    uint8_t zero[ATA_SECTOR_SIZE];
+    uint8_t zero[T3_SECTOR];
     k_memset(zero, 0, sizeof(zero));
     int ok = vol_write_sectors(sbi, T3_SB_BLOCK * T3_SPB, 1, zero);
     uint32_t vol_blocks = sbi->vol.sector_count / T3_SPB;
@@ -2702,7 +2709,7 @@ static int tfs3_format_inner(void *st, const struct block_device *dev) {
 
     // Superblock image (one sector's worth, zero-padded to a block by
     // the caller writes below).
-    uint8_t sb[ATA_SECTOR_SIZE];
+    uint8_t sb[T3_SECTOR];
     k_memset(sb, 0, sizeof(sb));
     sb[0] = 'T'; sb[1] = 'F'; sb[2] = 'S'; sb[3] = '3';
     sb[4] = T3_VERSION; sb[5] = 0;
@@ -2717,7 +2724,7 @@ static int tfs3_format_inner(void *st, const struct block_device *dev) {
     wr32(sb + 44, k_fnv1a(sb, 44));
 
     k_memset(sbi->blk, 0, T3_BLOCK);
-    k_memcpy(sbi->blk, sb, ATA_SECTOR_SIZE);
+    k_memcpy(sbi->blk, sb, T3_SECTOR);
     if (!write_block(sbi, T3_SB_BLOCK, sbi->blk)) return 0;
 
     // The wipefs rule applied WITHIN this format: an older version's
@@ -2727,7 +2734,7 @@ static int tfs3_format_inner(void *st, const struct block_device *dev) {
     // fs_ops.h's wipe contract describes, one format version apart
     // instead of one filesystem apart.
     {
-        uint8_t zero[ATA_SECTOR_SIZE];
+        uint8_t zero[T3_SECTOR];
         k_memset(zero, 0, sizeof(zero));
         for (uint32_t v = T3_VERSION_MIN; v < T3_VERSION; v++) {
             uint32_t old0 = group0_for_version(v);
@@ -2836,7 +2843,7 @@ static int tfs3_format_inner(void *st, const struct block_device *dev) {
 
     // Root inode (ino 1, group 0) + its dirent block (. and ..).
     {
-        uint8_t sec[ATA_SECTOR_SIZE];
+        uint8_t sec[T3_SECTOR];
         uint32_t table_lba = (sbi->group0 + 2) * T3_SPB;
         if (!vol_read_sectors(sbi, table_lba, 1, sec)) return 0;
         uint8_t *p = sec + T3_INO_ROOT * T3_INODE_SIZE;
@@ -2862,7 +2869,7 @@ static int tfs3_format_inner(void *st, const struct block_device *dev) {
 
     // Backup superblock copies, byte-identical to the primary.
     k_memset(sbi->blk, 0, T3_BLOCK);
-    k_memcpy(sbi->blk, sb, ATA_SECTOR_SIZE);
+    k_memcpy(sbi->blk, sb, T3_SECTOR);
     for (int j = 0; j < nb; j++) {
         // The group's REAL last block. A partial last group ends before
         // sbi->group0 + (g+1)*T3_BPG, and writing the backup superblock

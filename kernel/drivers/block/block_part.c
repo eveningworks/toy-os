@@ -207,6 +207,14 @@ const struct block_device *blk_part_create(const struct block_device *parent,
         klog_write(KLOG_ERR "block: partition refused -- empty window\n");
         return NULL;
     }
+    // On a 4K-sector disk a window must be whole blocks, or every
+    // transfer through it would be refused as misaligned.
+    uint32_t spb = blkdev_block_sectors(parent);
+    if (((base_lba | sectors) & (spb - 1)) != 0) {
+        klog_printf(KLOG_ERR "block: partition refused -- LBA %u+%u is not whole %u-byte blocks\n",
+                    base_lba, sectors, blkdev_block_size(parent));
+        return NULL;
+    }
     if ((uint64_t)base_lba + (uint64_t)sectors > (uint64_t)parent->sector_count()) {
         klog_printf(KLOG_ERR "block: partition refused -- LBA %u+%u past the end of %s (%u sectors)\n",
                     base_lba, sectors, parent->name, parent->sector_count());
@@ -261,6 +269,7 @@ const struct block_device *blk_part_create(const struct block_device *parent,
     // blk_register_over()'s both-directions honesty check keeps holding:
     // a partition of a device with no flush must not claim one.
     s->dev.persistent = parent->persistent;
+    s->dev.block_size = parent->block_size;
     s->dev.caps = parent->caps;
     s->dev.flush = (parent->caps & BLK_CAP_FLUSH) ? g_thunks[free_slot].flush : NULL;
     s->dev.trim  = (parent->caps & BLK_CAP_TRIM)  ? g_thunks[free_slot].trim  : NULL;

@@ -59,7 +59,8 @@ struct block_device {
     // a partition, whose driver is the whole disk's.
     const char *driver;
 
-    // Total addressable sectors, 512 bytes each.
+    // Total addressable sectors, 512 bytes each -- whatever `block_size`
+    // says. See block_size below.
     uint32_t (*sector_count)(void);
 
     // Both return 1 on success, 0 on failure. `count` sectors from
@@ -91,6 +92,17 @@ struct block_device {
     // one at a time. A device with a queue (AHCI's NCQ) is what makes it
     // worth having: the per-command latency overlaps instead of adding.
     int (*submit_batch)(struct blk_io *io, int n);
+
+    // THE DEVICE'S LOGICAL BLOCK, in bytes: 512 or 4096. 0 means 512.
+    //
+    // EVERY LBA AND COUNT IN THIS LAYER STAYS IN 512-BYTE UNITS -- Linux's
+    // `sector_t` rule. A 4K-sector disk is addressed as eight sectors per
+    // block, the driver converts, and the block layer REFUSES a transfer
+    // that does not start and end on a block boundary (Linux fails a
+    // misaligned bio the same way). A one-sector metadata read into a
+    // 512-byte buffer therefore fails loudly on such a disk instead of
+    // overflowing -- use blkdev_read_partial() for those.
+    uint32_t block_size;
 };
 
 // ---- the device table ------------------------------------------------
@@ -345,6 +357,28 @@ int blkdev_submit_batch(const struct block_device *dev, struct blk_io *io, int n
 // 313 TRIMs and 89 ms). 1 if every run was discarded.
 int blkdev_trim_ranges(const struct block_device *dev, const struct blk_range *r, int n);
 uint32_t blkdev_sector_count(const struct block_device *dev);
+
+// ---- logical block size ---------------------------------------------
+//
+// Bytes per logical block (512 when the device leaves it 0, or for NULL),
+// and the same in 512-byte sectors -- 1 or 8. A transfer on `dev` must
+// start and end on a multiple of blkdev_block_sectors(); one that does
+// not is refused and logged.
+uint32_t blkdev_block_size(const struct block_device *dev);
+uint32_t blkdev_block_sectors(const struct block_device *dev);
+
+// `count` sectors from `lba` WHATEVER THE ALIGNMENT, through a bounce
+// buffer covering the enclosing blocks; the aligned case goes straight
+// through. For small metadata (a superblock, a partition-table header),
+// never for bulk data. At most one transfer's worth.
+//
+// THE WRITE IS A READ-MODIFY-WRITE OF THE WHOLE BLOCK, so it rewrites
+// the neighbouring sectors with what was read a moment earlier: two
+// partial writes to one block that race lose one of them, and a torn
+// write can damage the neighbours. A caller shares a block only with
+// data it holds the lock for.
+int blkdev_read_partial(const struct block_device *dev, uint32_t lba, int count, void *buf);
+int blkdev_write_partial(const struct block_device *dev, uint32_t lba, int count, const void *buf);
 
 // ATA DATA SET MANAGEMENT's payload: 512-byte blocks of 64 eight-byte
 // entries, each a 48-bit LBA and a 16-bit count. Fills ONE block from

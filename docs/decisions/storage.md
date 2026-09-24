@@ -3336,3 +3336,58 @@ Measured the same day, and worth knowing before building more on it: the
 queue works and buys nothing measurable YET, because tfs3's commits
 carry about two target blocks each (`docs/roadmap-details.md`, "Bigger
 batches").
+
+## Block-layer LBAs stay 512-byte units on a 4K-sector disk
+
+A device carries its logical block size (`struct block_device.block_size`,
+512 or 4096), and **every LBA and count in the block layer stays in
+512-byte sectors whatever it says**. A 4K-sector disk is addressed as
+eight sectors per block; the driver converts if its protocol needs to,
+and the block layer REFUSES a transfer that does not start and end on a
+block boundary.
+
+**That is Linux's shape.** `sector_t` and `bio->bi_iter.bi_sector` are
+512-byte units on every device, the request queue carries
+`logical_block_size`, and a misaligned bio fails. virtio-blk's own wire
+protocol does the same -- its sector fields are 512-byte units even when
+`blk_size` is 4096 -- so toy-os's virtio driver needed no conversion at
+all. Windows reports `BytesPerLogicalSector` and has its filesystems
+format to it; that is the other half, and the one FAT32 follows here.
+
+**The obvious alternative was device-native LBAs** (an LBA is one device
+block, as in NVMe, ATA and GPT), and it was rejected for what it does to
+the ~20 places that read or write ONE SECTOR into a 512-byte buffer --
+TFS3's superblock and journal header, every partition-table read, the
+FAT32 probe, the swap header. With native LBAs each of those would
+silently transfer 4 KiB into 512 bytes on a 4K disk: a stack or heap
+overflow per call, found on real hardware. With 512-byte units the same
+call is a misaligned transfer the block layer refuses and logs. **The
+failure mode is a refusal instead of memory corruption**, which is what
+made it safe to convert the consumers one at a time. It also left TFS3's
+eight-sectors-per-block arithmetic, about forty sites, untouched.
+
+**What it costs.** The 32-bit sector index still caps a disk at 2 TiB,
+where native LBAs would have made that 16 TiB on a 4K disk -- a separate
+problem with a separate fix (a 64-bit index). And the table formats that
+are defined in device blocks -- GPT's header, entries and geometry, MBR's
+LBA fields, FAT32's BPB -- are scaled at the one place each is parsed or
+written, so two units meet in `partition.c` and `fat32.c`'s
+`parse_bpb()`, and nowhere else.
+
+**Sub-block I/O goes through `blkdev_read_partial()`/`_write_partial()`**,
+a bounce over the enclosing blocks. The write is a read-modify-write of
+the whole block, so it is only safe for data whose neighbours the caller
+holds the lock for -- true of every caller (a mount's metadata under its
+lock, a partition table, format-time writes). Linux has no such helper;
+its buffer cache reads whole blocks and a filesystem's block size is at
+least the device's. TFS3 already had 4 KiB blocks, which is why a helper
+for the few sub-block reads was cheaper than changing its unit.
+
+**What is refused rather than converted.** A 4K-logical SATA/IDE drive
+(`ata.c`, `ahci.c`: QEMU cannot present one, so a conversion would ship
+untested), BIOS boot from a 4K disk (`install` and `SYS_INSTALL_BOOT`:
+GRUB's i386-pc boot sector and blocklist are 512-byte formats), and a
+FAT32 whose bytes-per-sector is smaller than the device's block (Linux's
+vfat rule). The journal header's v2 checksum offset was `ATA_SECTOR_SIZE
+- 4`, and is now the literal 508: derived from a runtime sector size it
+would have changed the on-disk format on a 4K disk.

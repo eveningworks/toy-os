@@ -17,6 +17,7 @@
 #include "pic.h"
 #include "timer.h"
 #include "klog.h"
+#include "kfmt.h" // klog_printf
 #include "heap.h" // the selftest's sector buffers -- see its comment
 #include "string.h"
 #include "idt.h"
@@ -1073,6 +1074,11 @@ void ata_init(void) {
     uint16_t identify[256];
     for (int i = 0; i < 256; i++) identify[i] = inw(REG_DATA);
     g_sector_count = (uint32_t)identify[60] | ((uint32_t)identify[61] << 16);
+    if (ata_identify_logical_bytes(identify) != ATA_SECTOR_SIZE) {
+        klog_printf(KLOG_ERR "ata: drive has %u-byte logical sectors -- not driven\n",
+                    ata_identify_logical_bytes(identify));
+        return;
+    }
     // Word 169 bit 0: the drive supports DATA SET MANAGEMENT's TRIM bit.
     // Asked rather than assumed -- issuing an unsupported command gets
     // an ABRT and, on some real controllers, a wedged channel.

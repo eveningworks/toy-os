@@ -824,7 +824,9 @@ run on, not by order.
 - [x] ~~MSI/MSI-X interrupts -- NVMe doesn't use legacy pin-based IRQs~~ DONE 2026-08-30 -- `pci_msi.c`, proven on the xHCI
 - [ ] Namespace enumeration (an NVMe disk can present several)
 - [ ] Multiple queue pairs, and whether to bother before SMP exists
-- [ ] The 4KB-sector question: NVMe devices commonly aren't 512-byte
+- [x] ~~The 4KB-sector question~~ DONE 2026-09-24 -- LBAs stay 512-byte units; a device carries its block size
+- [ ] FAT32 on a 4K-sector disk does a read-modify-write per 512 bytes
+- [ ] A 4K-logical SATA/IDE drive is REFUSED by `ata.c` and `ahci.c`
 - [ ] A PRP list for transfers past one page, the equivalent of the PRD table `ata.c` already builds
 
 ### USB

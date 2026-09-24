@@ -10,6 +10,7 @@
 #include "driver.h" // driver_bound() -- `lsdrv`
 #include "block_stat.h"
 #include "clocksource.h" // clocksource_now_ns() -- the stat timers
+#include "heap.h"        // the partial-block bounce buffer
 
 // driver-none: the block class registry itself
 
@@ -163,6 +164,12 @@ int blk_register_over(const struct block_device *dev,
         klog_printf("block: %s has trim() without BLK_CAP_TRIM\n", dev->name);
         return 0;
     }
+    // 512 and 4096 are what disks are; anything else is a driver bug,
+    // and every filesystem here assumes a block fits in one of its 4 KiB.
+    if (dev->block_size && dev->block_size != 512 && dev->block_size != 4096) {
+        klog_printf("block: %s refused -- %u-byte blocks\n", dev->name, dev->block_size);
+        return 0;
+    }
 
     const struct blk_entry *e = table_add(dev, parent ? parent : dev, base_lba);
     if (!e) {
@@ -201,6 +208,31 @@ uint32_t blk_disk_sector_count(void) {
     return g_whole ? g_whole->sector_count() : 0;
 }
 
+uint32_t blkdev_block_size(const struct block_device *dev) {
+    return dev && dev->block_size ? dev->block_size : 512;
+}
+
+uint32_t blkdev_block_sectors(const struct block_device *dev) {
+    return blkdev_block_size(dev) / 512;
+}
+
+// A transfer that does not cover whole logical blocks. Logged for the
+// first few only: the caller is a bug to fix, and a loop repeating it
+// would push everything else out of the klog ring.
+static int g_misaligned_logged;
+
+static int aligned(const struct block_device *dev, uint32_t lba, uint32_t count,
+                   const char *what) {
+    uint32_t spb = blkdev_block_sectors(dev);
+    if (spb == 1 || ((lba | count) & (spb - 1)) == 0) return 1;
+    if (g_misaligned_logged < 8) {
+        g_misaligned_logged++;
+        klog_printf(KLOG_ERR "block: %s refused on %s -- %u+%u is not whole %u-byte blocks\n",
+                    what, blk_device_name(dev), lba, count, blkdev_block_size(dev));
+    }
+    return 0;
+}
+
 // ---- the timed driver calls -----------------------------------------
 //
 // EVERY path below goes through these four, so a caller cannot be
@@ -215,7 +247,7 @@ uint32_t blk_disk_sector_count(void) {
 static int io_read(const struct block_device *dev, uint32_t lba,
                    int count, void *buf) {
     if (fault_should_fail_block_read()) return 0;
-    if (!dev) return 0;
+    if (!dev || !aligned(dev, lba, (uint32_t)count, "read")) return 0;
     uint64_t t0 = clocksource_now_ns();
     int ok = dev->read_sectors(lba, count, buf);
     blk_stat_add(BLK_STAT_READ, (uint32_t)(count < 0 ? 0 : count),
@@ -226,7 +258,7 @@ static int io_read(const struct block_device *dev, uint32_t lba,
 static int io_write(const struct block_device *dev, uint32_t lba,
                     int count, const void *buf) {
     if (fault_should_fail_block_write()) return 0;
-    if (!dev) return 0;
+    if (!dev || !aligned(dev, lba, (uint32_t)count, "write")) return 0;
     uint64_t t0 = clocksource_now_ns();
     int ok = dev->write_sectors(lba, count, buf);
     blk_stat_add(BLK_STAT_WRITE, (uint32_t)(count < 0 ? 0 : count),
@@ -243,6 +275,7 @@ static int io_flush(const struct block_device *dev) {
 }
 
 static int io_trim(const struct block_device *dev, uint32_t lba, uint32_t count) {
+    if (!aligned(dev, lba, count, "trim")) return 0;
     uint64_t t0 = clocksource_now_ns();
     int ok = dev->trim(lba, count);
     blk_stat_add(BLK_STAT_TRIM, count, clocksource_now_ns() - t0, ok);
@@ -283,7 +316,7 @@ int blk_write_sectors(uint32_t lba, int count, const void *buf) {
 }
 
 int blk_max_sectors_per_xfer(void) {
-    return g_dev ? g_dev->max_sectors_per_xfer() : 1;
+    return blkdev_max_sectors_per_xfer(g_dev);
 }
 
 // RETURNS whether the data is actually durable. It was `void`, and a
@@ -360,9 +393,12 @@ int blkdev_submit_batch(const struct block_device *dev, struct blk_io *io, int n
     // a second behaviour to keep correct, only a faster way to the same.
     // Fault injection is per transfer on both paths, so a test that arms
     // one failure sees exactly one io report it.
-    int injected = 0;
     for (int i = 0; i < n; i++) {
         io[i].ok = 0;
+        if (!aligned(dev, io[i].lba, io[i].count, io[i].write ? "write" : "read")) return 0;
+    }
+    int injected = 0;
+    for (int i = 0; i < n; i++) {
         int fail = io[i].write ? fault_should_fail_block_write() : fault_should_fail_block_read();
         if (fail) { io[i].ok = -1; injected = 1; }
     }
@@ -394,8 +430,13 @@ int blkdev_submit_batch(const struct block_device *dev, struct blk_io *io, int n
     return all;
 }
 
+// Rounded DOWN to whole blocks, so a caller splitting a run at this
+// size never produces a misaligned tail on a 4K-sector disk.
 int blkdev_max_sectors_per_xfer(const struct block_device *dev) {
-    return dev ? dev->max_sectors_per_xfer() : 1;
+    if (!dev) return 1;
+    int spb = (int)blkdev_block_sectors(dev);
+    int n = dev->max_sectors_per_xfer() / spb * spb;
+    return n > 0 ? n : spb;
 }
 
 // Same contract as blk_flush(): 1 on a device with no cache, because
@@ -421,7 +462,10 @@ int blkdev_trim(const struct block_device *dev, uint32_t lba, uint32_t count) {
 int blkdev_trim_ranges(const struct block_device *dev, const struct blk_range *r, int n) {
     if (!blkdev_trim_supported(dev) || n <= 0) return 0;
     uint32_t sectors = 0;
-    for (int i = 0; i < n; i++) sectors += r[i].count;
+    for (int i = 0; i < n; i++) {
+        if (!aligned(dev, r[i].lba, r[i].count, "trim")) return 0;
+        sectors += r[i].count;
+    }
     uint64_t t0 = clocksource_now_ns();
     int ok = 1;
     if (dev->trim_ranges) ok = dev->trim_ranges(r, n);
@@ -451,4 +495,47 @@ int blk_dsm_pack(uint8_t *block, const struct blk_range *r, int n, int *ri, uint
 
 uint32_t blkdev_sector_count(const struct block_device *dev) {
     return dev ? dev->sector_count() : 0;
+}
+
+// ---- partial blocks ---------------------------------------------------
+
+// The blocks covering [lba, lba + count), as a bounce buffer. NULL when
+// the span is more than one transfer or the heap is out.
+static uint8_t *bounce_span(const struct block_device *dev, uint32_t lba, int count,
+                            uint32_t *first, uint32_t *span) {
+    uint32_t spb = blkdev_block_sectors(dev);
+    *first = lba & ~(spb - 1);
+    uint64_t end = ((uint64_t)lba + (uint64_t)count + spb - 1) & ~(uint64_t)(spb - 1);
+    *span = (uint32_t)(end - *first);
+    if (*span > (uint32_t)blkdev_max_sectors_per_xfer(dev)) return NULL;
+    return kmalloc((size_t)*span * 512);
+}
+
+int blkdev_read_partial(const struct block_device *dev, uint32_t lba, int count, void *buf) {
+    if (!dev || count <= 0 || !buf) return 0;
+    uint32_t spb = blkdev_block_sectors(dev);
+    if (((lba | (uint32_t)count) & (spb - 1)) == 0) return io_read(dev, lba, count, buf);
+    uint32_t first, span;
+    uint8_t *b = bounce_span(dev, lba, count, &first, &span);
+    if (!b) return 0;
+    int ok = io_read(dev, first, (int)span, b);
+    if (ok) k_memcpy(buf, b + (size_t)(lba - first) * 512, (size_t)count * 512);
+    kfree(b);
+    return ok;
+}
+
+int blkdev_write_partial(const struct block_device *dev, uint32_t lba, int count, const void *buf) {
+    if (!dev || count <= 0 || !buf) return 0;
+    uint32_t spb = blkdev_block_sectors(dev);
+    if (((lba | (uint32_t)count) & (spb - 1)) == 0) return io_write(dev, lba, count, buf);
+    uint32_t first, span;
+    uint8_t *b = bounce_span(dev, lba, count, &first, &span);
+    if (!b) return 0;
+    int ok = io_read(dev, first, (int)span, b);
+    if (ok) {
+        k_memcpy(b + (size_t)(lba - first) * 512, buf, (size_t)count * 512);
+        ok = io_write(dev, first, (int)span, b);
+    }
+    kfree(b);
+    return ok;
 }

@@ -42,6 +42,9 @@ int virtio_blk_discard(uint32_t lba, uint32_t count);
 // given `discard=unmap`.
 int virtio_blk_discard_supported(void);
 int virtio_blk_max_sectors_per_xfer(void);
+// Bytes per LOGICAL block -- 512, or 4096 on a 4K-sector disk. Every
+// sector number above stays in 512-byte units either way.
+uint32_t virtio_blk_block_size(void);
 int virtio_blk_flush_supported(void);
 
 #endif

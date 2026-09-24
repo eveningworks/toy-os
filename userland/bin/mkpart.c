@@ -82,16 +82,22 @@ static uint64_t parse_size(const char *s, uint64_t *out) {
 // a named one comes from QUERY_BLKDEV, which is the only place another
 // disk's size is reported. Returns 0 for a name that is not a whole
 // disk, which the syscall would refuse anyway.
-static uint64_t disk_sectors_of(const char *name) {
+//
+// `*spb` is the disk's logical block in 512-byte sectors -- 8 on a
+// 4K-sector disk, where every partition must be whole blocks.
+static uint64_t disk_sectors_of(const char *name, uint64_t *spb) {
+    *spb = 1;
     if (!name) {
         struct query_parttable t;
         if (sys_query_record(QUERY_PARTTABLE, 0, &t, sizeof t) < (int)sizeof t) return 0;
+        if (t.block_size > SECTOR_BYTES) *spb = t.block_size / SECTOR_BYTES;
         return t.disk_sectors;
     }
     struct query_blkdev b;
     for (int i = 0; sys_query_record(QUERY_BLKDEV, i, &b, sizeof b) >= (int)sizeof b; i++) {
         if (strcmp(b.name, name) != 0) continue;
         if (b.parent[0]) return 0; // a partition, not a disk
+        if (b.block_size > SECTOR_BYTES) *spb = b.block_size / SECTOR_BYTES;
         return b.sectors;
     }
     return 0;
@@ -111,7 +117,8 @@ int main(int argc, char **argv) {
         disk_name = argv[i + 1];
     }
 
-    uint64_t disk = disk_sectors_of(disk_name);
+    uint64_t spb;
+    uint64_t disk = disk_sectors_of(disk_name, &spb);
     if (disk == 0) {
         cmd_fail("mkpart", disk_name ? "no such disk" : "no disk");
         return 1;
@@ -181,10 +188,20 @@ int main(int argc, char **argv) {
     // no reordering: what was typed is what is written, in order, which
     // is the only layout a person can predict from the command line.
     uint64_t first = (req.kind == MKPART_KIND_GPT) ? GPT_FIRST_USABLE : MBR_FIRST_USABLE;
-    // The tail GPT reserves for its backup header and entry array. Left
-    // out for an MBR, which has no backup.
-    uint64_t tail = (req.kind == MKPART_KIND_GPT) ? 33 : 0;
+    // The tail GPT reserves for its backup header and 16 KiB entry array:
+    // 33 sectors on a 512-byte disk, five 4K blocks (40) on a 4K one.
+    // Left out for an MBR, which has no backup.
+    uint64_t tail = (req.kind == MKPART_KIND_GPT) ? (32 / spb + 1) * spb : 0;
     uint64_t usable = (disk > first + tail) ? disk - first - tail : 0;
+    usable -= usable % spb;
+    // Whole blocks, or the kernel refuses the table.
+    for (unsigned i = 0; i < n; i++) {
+        sizes[i] -= sizes[i] % spb;
+        if (sizes[i] == 0 && (int)i != rest_at) {
+            cmd_fail("mkpart", "a partition is smaller than one of this disk's blocks");
+            return 1;
+        }
+    }
 
     uint64_t fixed = 0;
     for (unsigned i = 0; i < n; i++) {

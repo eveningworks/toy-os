@@ -130,11 +130,12 @@ static int root_disk(char *out, int cap) {
     return 0;
 }
 
-static uint64_t disk_sectors(const char *name) {
+static uint64_t disk_sectors(const char *name, uint64_t *block_size) {
     struct query_blkdev b;
     for (int i = 0; sys_query_record(QUERY_BLKDEV, i, &b, sizeof b) >= (int)sizeof b; i++) {
         if (strcmp(b.name, name) != 0) continue;
         if (b.parent[0]) return 0;   // a partition, not a disk
+        *block_size = b.block_size ? b.block_size : SECTOR_BYTES;
         return b.sectors;
     }
     return 0;
@@ -492,9 +493,18 @@ int main(int argc, char **argv) {
 
     if (!payload_present(mbr)) return 1;
 
-    uint64_t sectors = disk_sectors(disk);
+    uint64_t block_size = SECTOR_BYTES;
+    uint64_t sectors = disk_sectors(disk, &block_size);
     if (!sectors) {
         printf("install: %s: no such disk (a WHOLE disk, as `lsblk` names it)\n", disk);
+        return 1;
+    }
+    // What this installs is BIOS-booted GRUB, whose boot sector and
+    // core.img blocklist are 512-byte formats -- the kernel refuses
+    // SYS_INSTALL_BOOT on anything else. Said before a byte is written.
+    if (block_size != SECTOR_BYTES) {
+        printf("install: %s has %llu-byte sectors; a BIOS boot needs 512\n",
+               disk, (unsigned long long)block_size);
         return 1;
     }
 

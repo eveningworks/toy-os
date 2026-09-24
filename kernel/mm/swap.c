@@ -45,7 +45,7 @@ static uint32_t slot_lba(uint32_t slot) { return slot * SWAP_SECTORS_PER_PAGE; }
 // optional even for eight sectors.
 static int xfer_page(uint32_t slot, uint64_t phys, int write) {
     if (!g_dev || slot == 0 || slot >= g_slots) return 0;
-    int cap = g_dev->max_sectors_per_xfer ? g_dev->max_sectors_per_xfer() : 1;
+    int cap = blkdev_max_sectors_per_xfer(g_dev);   // whole blocks on a 4K disk
     if (cap < 1) return 0;
 
     uint8_t *buf = (uint8_t *)(uintptr_t)phys;   // identity-mapped
@@ -97,7 +97,10 @@ int swap_format(const struct block_device *dev, const char **why) {
     h->slots     = slots;
     h->page_size = SWAP_PAGE_SIZE;
 
-    int ok = dev->write_sectors(0, 1, sec);
+    // Partial: the header is one sector, which is less than a block on a
+    // 4K-sector disk. Slot 0 is the header's alone, so the rewrite of the
+    // rest of its block touches nothing else.
+    int ok = blkdev_write_partial(dev, 0, 1, sec);
     kfree(sec);
     if (!ok) { *why = "the write failed"; return 0; }
 
@@ -118,7 +121,7 @@ int swap_on(const struct block_device *dev, const char **why) {
 
     uint8_t *sec = kmalloc(512);
     if (!sec) { *why = "out of memory"; return 0; }
-    if (!dev->read_sectors(0, 1, sec)) {
+    if (!blkdev_read_partial(dev, 0, 1, sec)) {
         kfree(sec); *why = "the read failed"; return 0;
     }
 

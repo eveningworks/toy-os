@@ -687,7 +687,7 @@ runners themselves; `--list` on either runner is the live answer.
 `module_test.py`, `msi_test.py`, `multidisk_test.py`, `net_test.py`,
 `netheal_test.py`, `ntp_test.py`, `partition_test.py`, `ping_rtt.py`, `pixel_probe.py`,
 `poweroff_test.py`, `predates.py`, `preflight.sh`, `qemu_matrix.py`,
-`remote.py`, `remote_test.py`, `serial_backpressure_test.py`,
+`remote.py`, `remote_test.py`, `sector4k_test.py`, `serial_backpressure_test.py`,
 `settings_harness_hostcheck.py`, `shutdown_sync_test.py`,
 `soundd_test.py`, `stdin_test.py`,
 `sum_test.py`, `taskbar_test.py`, `term_scheme_hostcheck.py`,

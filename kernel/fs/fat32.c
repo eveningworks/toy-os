@@ -25,10 +25,13 @@
 //    function here for a format nothing on this machine uses. A volume
 //    that is not FAT32 is REFUSED by name at probe(), not
 //    half-understood -- a parser rejects rather than guesses.
-//  * NOT 4096-BYTE SECTORS. `bytes_per_sector` must be 512, which is
-//    what the block layer speaks and what every image this OS produces
-//    has. A volume claiming anything else is refused rather than read
-//    with the wrong stride.
+//  * NOT ADDRESSED IN ITS OWN SECTORS. Every sector number in this file
+//    is the block layer's 512 bytes (block.h). parse_bpb() SCALES the
+//    BPB's fields by bytes_per_sector / 512, so a 4K-sector volume
+//    (bytes_per_sector = 4096, what a 4K-sector disk needs) runs through
+//    the same code with sub-block I/O going through blkdev_*_partial().
+//    That is correct and slow -- one 512-byte sector per transfer --
+//    which is fine for an ESP and would not be for a data volume.
 //  * NOT UNICODE. Long names are read as UCS-2 and anything outside
 //    ASCII becomes '?'; creating a name with a non-ASCII byte is
 //    refused. This kernel has no Unicode anywhere else either, and a
@@ -152,14 +155,17 @@ static void wr32(uint8_t *p, uint32_t v) {
 
 // ---- volume I/O ------------------------------------------------------
 
+// Partial, because a 512-byte sector is less than a block on a 4K-sector
+// disk. The read-modify-write that implies is safe here: every call runs
+// under the mount's lock, and FAT32 never drops it for I/O.
 static int vol_read(struct fat32_state *sbi, uint32_t lba, int count, void *buf) {
     if ((uint64_t)lba + (uint64_t)count > (uint64_t)sbi->v.total_sectors) return 0;
-    return blkdev_read_sectors(sbi->v.dev, lba, count, buf);
+    return blkdev_read_partial(sbi->v.dev, lba, count, buf);
 }
 
 static int vol_write(struct fat32_state *sbi, uint32_t lba, int count, const void *buf) {
     if ((uint64_t)lba + (uint64_t)count > (uint64_t)sbi->v.total_sectors) return 0;
-    return blkdev_write_sectors(sbi->v.dev, lba, count, buf);
+    return blkdev_write_partial(sbi->v.dev, lba, count, buf);
 }
 
 static uint32_t cluster_first_sector(struct fat32_state *sbi, uint32_t clus) {
@@ -1187,13 +1193,13 @@ static int parse_bpb(struct fat32_state *sbi, const struct block_device *dev) {
     sbi->v.dev = dev;
     sbi->v.total_sectors = blkdev_sector_count(dev); // provisional, for vol_read's bound
     if (sbi->v.total_sectors < 8) return 0;
-    if (!blkdev_read_sectors(dev, 0, 1, sbi->tmpsec)) return -1;
+    if (!blkdev_read_partial(dev, 0, 1, sbi->tmpsec)) return -1;
 
     if (rd16(sbi->tmpsec + 510) != 0xAA55) return 0;
 
-    uint16_t bps = rd16(sbi->tmpsec + 11);
-    uint8_t spc = sbi->tmpsec[13];
-    uint16_t reserved = rd16(sbi->tmpsec + 14);
+    uint32_t bps = rd16(sbi->tmpsec + 11);
+    uint32_t spc = sbi->tmpsec[13];
+    uint32_t reserved = rd16(sbi->tmpsec + 14);
     uint8_t nfats = sbi->tmpsec[16];
     uint16_t root_entries = rd16(sbi->tmpsec + 17);
     uint16_t tot16 = rd16(sbi->tmpsec + 19);
@@ -1201,15 +1207,19 @@ static int parse_bpb(struct fat32_state *sbi, const struct block_device *dev) {
     uint32_t tot32 = rd32(sbi->tmpsec + 32);
     uint32_t fatsz32 = rd32(sbi->tmpsec + 36);
     uint32_t root_clus = rd32(sbi->tmpsec + 44);
-    uint16_t fsinfo = rd16(sbi->tmpsec + 48);
+    uint32_t fsinfo = rd16(sbi->tmpsec + 48);
 
-    // 512-BYTE SECTORS ONLY (see this file's top comment). Refusing is
-    // the honest answer: the block layer speaks 512, and reading a
-    // 4096-byte-sector volume with a 512 stride would produce plausible
-    // garbage rather than an error.
-    if (bps != SECTOR) return 0;
+    // 512 to 4096 bytes per sector, and never smaller than the DEVICE's
+    // block -- Linux's vfat rule: a 512-byte FAT on a 4K-sector disk
+    // would make every write a read-modify-write of its neighbours.
+    if (bps < SECTOR || bps > 4096 || (bps & (bps - 1)) != 0) return 0;
+    if (bps < blkdev_block_size(dev)) return 0;
     if (spc == 0 || (spc & (spc - 1)) != 0 || spc > 128) return 0;
     if (reserved == 0 || nfats == 0) return 0;
+    // Everything below is in the block layer's 512-byte sectors.
+    uint32_t k = bps / SECTOR;
+    if ((uint64_t)tot32 * k > 0xFFFFFFFFull || (uint64_t)fatsz32 * k > 0xFFFFFFFFull) return 0;
+    spc *= k; reserved *= k; tot32 *= k; fatsz32 *= k; fsinfo *= k;
 
     // THE FAT32 DISCRIMINATOR. A FAT12/16 volume has a nonzero
     // fat_size_16 and a nonzero root_entry_count; FAT32 has neither and
@@ -1264,11 +1274,14 @@ static int fat32_wipe(void *st, const struct block_device *dev) {
     uint32_t sectors = blkdev_sector_count(dev);
     if (sectors < 1) return 1;
     k_memset(sbi->tmpsec, 0, SECTOR);
-    int ok = blkdev_write_sectors(dev, 0, 1, sbi->tmpsec) ? 1 : 0;
-    // The conventional backup location; harmless to zero on a volume
-    // that has none, and a real signature to a probe that finds one.
-    if (sectors > 6) {
-        if (!blkdev_write_sectors(dev, 6, 1, sbi->tmpsec)) ok = 0;
+    int ok = blkdev_write_partial(dev, 0, 1, sbi->tmpsec) ? 1 : 0;
+    // The conventional backup location -- FAT sector 6, which is a
+    // different 512-byte sector on a 4K-sector volume. Harmless to zero
+    // on a volume that has none, and a real signature to a probe that
+    // finds one.
+    uint32_t backup = 6 * blkdev_block_sectors(dev);
+    if (sectors > backup) {
+        if (!blkdev_write_partial(dev, backup, 1, sbi->tmpsec)) ok = 0;
     }
     return ok;
 }
@@ -1286,16 +1299,34 @@ static uint32_t pick_spc(uint32_t sectors) {
     return 64;
 }
 
+// Zeroes `n` sectors from `lba` in transfers of `chunk`. Whole blocks
+// on any disk: every caller's run and `chunk` are multiples of the block.
+static int zero_run(const struct block_device *dev, uint32_t lba, uint32_t n,
+                    uint32_t chunk, const uint8_t *zeros) {
+    for (uint32_t s = 0; s < n; ) {
+        uint32_t c = n - s < chunk ? n - s : chunk;
+        if (!blkdev_write_sectors(dev, lba + s, (int)c, zeros)) return 0;
+        s += c;
+    }
+    return 1;
+}
+
 static int fat32_format(void *st, const struct block_device *dev) {
     struct fat32_state *sbi = st;
     if (!dev) return 0;
-    uint32_t total = blkdev_sector_count(dev);
-    if (total < 128) {
+    // THE LAYOUT IS WORKED OUT IN FAT SECTORS, which are the device's
+    // blocks (bytes_per_sector = the block size, the rule parse_bpb()
+    // enforces), and scaled by `k` to the block layer's 512 at each write.
+    uint32_t k = blkdev_block_sectors(dev);
+    uint32_t bps = k * SECTOR;
+    uint32_t total = blkdev_sector_count(dev) / k;
+    if (total * k < 128) {
         klog_write("fat32: volume too small to format\n");
         return 0;
     }
 
-    uint32_t spc = pick_spc(total);
+    uint32_t spc = pick_spc(total * k) / k;   // the same cluster BYTES as at 512
+    if (spc == 0) spc = 1;
     uint32_t reserved = 32;   // mkfs.fat's FAT32 default: room for the backup at 6 and FSInfo at 1
     uint32_t nfats = 2;
 
@@ -1305,7 +1336,7 @@ static int fat32_format(void *st, const struct block_device *dev) {
     for (int pass = 0; pass < 8; pass++) {
         uint32_t data = total - reserved - nfats * fatsz;
         uint32_t clusters = data / spc;
-        uint32_t need = ((clusters + 2) * 4 + SECTOR - 1) / SECTOR;
+        uint32_t need = ((clusters + 2) * 4 + bps - 1) / bps;
         if (need == fatsz) break;
         fatsz = need;
     }
@@ -1328,7 +1359,7 @@ static int fat32_format(void *st, const struct block_device *dev) {
         uint32_t first = reserved + nfats * fatsz;
         if (first + spc > total) break;   // caught by the check below
         uint32_t cl = (total - first) / spc;
-        if ((uint64_t)(cl + 2) * 4 <= (uint64_t)fatsz * SECTOR) break;
+        if ((uint64_t)(cl + 2) * 4 <= (uint64_t)fatsz * bps) break;
         fatsz++;
     }
 
@@ -1339,12 +1370,25 @@ static int fat32_format(void *st, const struct block_device *dev) {
     }
     uint32_t clusters = (total - first_data) / spc;
     if (clusters < 2) return 0;
+    // FAT32 by the BPB's own fields, which is what this driver and Linux
+    // go by; Windows goes by the count, and reads this as FAT16. At 4K
+    // sectors a volume needs ~260 MiB to reach it.
+    if (clusters < 65525)
+        klog_printf("fat32: only %u clusters -- Windows reads fewer than 65525 as FAT16\n", clusters);
+
+    // Every write below is a whole block or a partial one; the reserved
+    // area is zeroed first so a 4K boot sector's tail is not whatever the
+    // disk held.
+    uint32_t chunk = (uint32_t)blkdev_max_sectors_per_xfer(dev);
+    if (chunk > 8) chunk = 8;
+    static const uint8_t zeros[8 * SECTOR];   // never written
+    if (!zero_run(dev, 0, reserved * k, chunk, zeros)) return 0;
 
     // ---- boot sector ----
     k_memset(sbi->tmpsec, 0, SECTOR);
     sbi->tmpsec[0] = 0xEB; sbi->tmpsec[1] = 0x58; sbi->tmpsec[2] = 0x90; // the jump mkfs writes
     k_memcpy(sbi->tmpsec + 3, "toy-os  ", 8);
-    wr16(sbi->tmpsec + 11, SECTOR);
+    wr16(sbi->tmpsec + 11, (uint16_t)bps);
     sbi->tmpsec[13] = (uint8_t)spc;
     wr16(sbi->tmpsec + 14, (uint16_t)reserved);
     sbi->tmpsec[16] = (uint8_t)nfats;
@@ -1368,8 +1412,8 @@ static int fat32_format(void *st, const struct block_device *dev) {
     k_memcpy(sbi->tmpsec + 71, "NO NAME    ", 11);
     k_memcpy(sbi->tmpsec + 82, "FAT32   ", 8);
     wr16(sbi->tmpsec + 510, 0xAA55);
-    if (!blkdev_write_sectors(dev, 0, 1, sbi->tmpsec)) return 0;
-    if (!blkdev_write_sectors(dev, 6, 1, sbi->tmpsec)) return 0;
+    if (!blkdev_write_partial(dev, 0, 1, sbi->tmpsec)) return 0;
+    if (!blkdev_write_partial(dev, 6 * k, 1, sbi->tmpsec)) return 0;
 
     // ---- FSInfo ----
     k_memset(sbi->tmpsec, 0, SECTOR);
@@ -1378,8 +1422,8 @@ static int fat32_format(void *st, const struct block_device *dev) {
     wr32(sbi->tmpsec + 488, clusters - 1); // the root's cluster is taken
     wr32(sbi->tmpsec + 492, 3);
     wr16(sbi->tmpsec + 510, 0xAA55);
-    if (!blkdev_write_sectors(dev, 1, 1, sbi->tmpsec)) return 0;
-    if (!blkdev_write_sectors(dev, 7, 1, sbi->tmpsec)) return 0;
+    if (!blkdev_write_partial(dev, 1 * k, 1, sbi->tmpsec)) return 0;
+    if (!blkdev_write_partial(dev, 7 * k, 1, sbi->tmpsec)) return 0;
 
     // ---- the FATs ----
     //
@@ -1387,18 +1431,9 @@ static int fat32_format(void *st, const struct block_device *dev) {
     // is 1024 sectors and there are two of them. Written in chunks the
     // device will actually take in one transfer rather than a sector at
     // a time.
-    uint32_t chunk = (uint32_t)blkdev_max_sectors_per_xfer(dev);
-    if (chunk > 8) chunk = 8;
-    if (chunk < 1) chunk = 1;
-    static const uint8_t zeros[8 * SECTOR];   // never written
     for (uint32_t f = 0; f < nfats; f++) {
-        uint32_t base = reserved + f * fatsz;
-        for (uint32_t s = 0; s < fatsz; ) {
-            uint32_t n = fatsz - s;
-            if (n > chunk) n = chunk;
-            if (!blkdev_write_sectors(dev, base + s, (int)n, zeros)) return 0;
-            s += n;
-        }
+        uint32_t base = (reserved + f * fatsz) * k;
+        if (!zero_run(dev, base, fatsz * k, chunk, zeros)) return 0;
         // The first two entries are reserved: the media byte in entry 0
         // and an end-of-chain in entry 1, then the root's own chain
         // terminator in entry 2.
@@ -1406,18 +1441,15 @@ static int fat32_format(void *st, const struct block_device *dev) {
         wr32(sbi->tmpsec, 0x0FFFFFF8u);
         wr32(sbi->tmpsec + 4, 0x0FFFFFFFu);
         wr32(sbi->tmpsec + 8, 0x0FFFFFFFu);
-        if (!blkdev_write_sectors(dev, base, 1, sbi->tmpsec)) return 0;
+        if (!blkdev_write_partial(dev, base, 1, sbi->tmpsec)) return 0;
     }
 
     // ---- the root directory ----
-    k_memset(sbi->tmpsec, 0, SECTOR);
-    for (uint32_t s = 0; s < spc; s++) {
-        if (!blkdev_write_sectors(dev, first_data + s, 1, sbi->tmpsec)) return 0;
-    }
+    if (!zero_run(dev, first_data * k, spc * k, chunk, zeros)) return 0;
 
     blkdev_flush(dev);
-    klog_printf("fat32: formatted %u sectors, %u clusters of %u sectors\n",
-                total, clusters, spc);
+    klog_printf("fat32: formatted %u %u-byte sectors, %u clusters of %u sectors\n",
+                total, bps, clusters, spc);
     return 1;
 }
 

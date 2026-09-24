@@ -39,11 +39,18 @@ and that is the normal state — a second drive is enumerated so that it
 
 ## Output
 
-    NAME        SIZE      TYPE   ROOT  WHERE
-    ata0        9.0G      disk         disk
-    ata0p1      1.0M      part         ata0 at lba 2048
-    ata0p2      64.0M     part         ata0 at lba 4096
-    ata0p3      8.9G      part   yes   ata0 at lba 135168
+    NAME        SIZE      SECTOR TYPE   ROOT  WHERE
+    ata0        9.0G      512    disk         disk
+    ata0p1      1.0M      512    part         ata0 at lba 2048
+    ata0p2      64.0M     512    part         ata0 at lba 4096
+    ata0p3      8.9G      512    part   yes   ata0 at lba 135168
+    virtio0     1.0G      4096   disk         disk
+
+`SECTOR` is the device's logical block: 512, or 4096 on a 4K-sector disk
+(a virtio or NVMe drive can be either). The `lba` in `WHERE` is always in
+512-byte units whatever it says -- the kernel counts in those everywhere,
+as Linux's sysfs does -- so a partition on a 4K disk starts at a multiple
+of 8.
 
 `WHERE` is the parent disk and starting LBA for a partition — the number
 that lines a row up against `parttable`. For a whole disk it says

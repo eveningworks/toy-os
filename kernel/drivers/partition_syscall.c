@@ -286,6 +286,16 @@ int sys_install_boot(struct syscall_ctx *c) {
     const struct block_device *disk = resolve_disk(req.device, c);
     if (!disk) return 0;   // resolve_disk() set the errno
 
+    // GRUB's i386-pc boot sector and core.img blocklist are BIOS formats
+    // fixed at 512-byte sectors; a 4K-sector disk boots through UEFI or
+    // not at all.
+    if (blkdev_block_size(disk) != BOOT_SECTOR_SIZE) {
+        klog_printf(KLOG_ERR "install_boot: refused -- %s has %u-byte sectors; BIOS boot needs 512\n",
+                    blk_device_name(disk), blkdev_block_size(disk));
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+        return 0;
+    }
+
     if (disk_is_in_use(disk) && !(req.flags & INSTALL_BOOT_CONFIRM)) {
         klog_printf(KLOG_ERR "install_boot: refused -- %s is in use and INSTALL_BOOT_CONFIRM was not set\n",
                     blk_device_name(disk));

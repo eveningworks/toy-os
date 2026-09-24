@@ -1659,9 +1659,11 @@ is a second set of paths through every function in the file, for a
 format nothing on this machine uses. A volume that is not FAT32 is
 REFUSED by name at `probe()` -- a parser rejects rather than guesses.
 
-**Not 4096-byte sectors.** The block layer speaks 512, and reading a
-4K-sector volume with a 512 stride produces plausible garbage rather
-than an error, which is the worst available failure.
+**4096-byte sectors: supported, slowly.** `parse_bpb()` scales the BPB
+to the block layer's 512-byte units and every sub-block access goes
+through `blkdev_*_partial()`, so a FAT32 on a 4K-sector disk is a
+read-modify-write per 512 bytes. Fine for an ESP; see the roadmap item
+under NVMe / modern storage if one is ever a data volume.
 
 **Not Unicode.** Long names are read as UCS-2 and anything outside ASCII
 becomes `?`; creating such a name is REFUSED, because it could never be
@@ -3213,7 +3215,9 @@ Listed with the honest reason each is or isn't attractive.
 
 **Items, in full.**
 
-- [ ] The 4KB-sector question: NVMe devices commonly aren't 512-byte, which neither TFS2's nor TFS3's on-disk assumptions (both 512-byte-sector based) have ever been tested against
+- [x] ~~The 4KB-sector question~~ -- the block layer keeps counting 512-byte sectors and a device carries its logical block size (`block.h`); misaligned transfers are refused, sub-block metadata goes through `blkdev_*_partial()`. GPT, TFS3, FAT32 and swap all run on a 4K-sector disk: `block_4k_test.c` over RAM, `tools/sector4k_test.py` over a QEMU virtio disk with `logical_block_size=4096`. The decision is "LBAs stay 512-byte units" in `docs/decisions/storage.md`
+- [ ] FAT32 on a 4K-sector disk does a read-modify-write per 512 bytes, because its walk is one 512-byte sector at a time. Correct, and fine for an ESP; a FAT32 DATA volume there would want the walk in FAT-sector units
+- [ ] A 4K-logical SATA/IDE drive is REFUSED by `ata.c` and `ahci.c` (IDENTIFY word 106). Supporting one is dividing LBAs by 8 in the driver, but QEMU cannot present such a drive (IDE and AHCI insist on 512), so it would ship untested
 
 ## Networking
 
@@ -6047,6 +6051,22 @@ size probe fails the same two checks, so neither is that change's.
   seeded image's free-block pattern, or the way the tool measures the
   file could each explain it. The next check, that deleting the file
   hands blocks back through discard, passes.
+- **2026-09-24: the growth check depends on the image's HISTORY.** On a
+  `disk.img` that `preflight.sh`'s ktest run had just written to,
+  `ahci_test.py` saw 0 MiB of growth; after `make clean-disk && make
+  iso` the same build passed 19/19. And with no growth, "deleting it
+  hands blocks back" passes vacuously -- it asserts the image ends near
+  its baseline, which it never left.
+
+## `tools/virtio_boot_test.py` fails `the PIO tunable reports the FORCING flag` every run
+
+Measured 2026-09-24 with `tools/predates.py` against a48a6b8e, on a fresh
+image: HEAD and the 4K-sector work fail identically, 10 of 11 checks
+passing. The tool types `config get kernel.ata_nodma` and reads back
+`tosh -- the toy-os shell, in ring 3. Ctrl-D to exit.` -- the banner of
+a shell starting -- where it wants `off`. Whether the command reached a
+freshly spawned shell or the tool read the wrong line of the transcript
+is not established.
 
 ## `damage_sweep.py` reports one violation on `start-menu dismiss`
 

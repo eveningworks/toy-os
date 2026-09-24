@@ -12,6 +12,7 @@
 #include "paging.h"      // paging_identity_limit() -- zero-copy DMA
 #include "ahci.h"
 #include "block.h"   // blk_dsm_pack() -- the DSM payload, shared with ata.c
+#include "ata.h"     // ata_identify_logical_bytes()
 #include "pci.h"
 #include "pci_internal.h"
 #include "pmm.h"
@@ -625,6 +626,11 @@ static int identify(void) {
 
     const uint16_t *id = (const uint16_t *)g_buf;
     copy_model(id);
+    if (ata_identify_logical_bytes(id) != 512) {
+        klog_printf(KLOG_ERR "ahci: drive has %u-byte logical sectors -- not driven\n",
+                    ata_identify_logical_bytes(id));
+        return 0;
+    }
 
     // Word 169 bit 0: DATA SET MANAGEMENT's TRIM bit is supported.
     g_trim = (id[169] & 0x0001) != 0;

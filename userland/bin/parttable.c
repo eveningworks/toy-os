@@ -64,6 +64,13 @@ int main(int argc, char **argv) {
              kind_name(t.kind), (unsigned long long)t.entry_count,
              t.entry_count == 1 ? "y" : "ies");
     sys_print(line);
+    // Only said when it is not 512, and then with the unit the LBAs
+    // below are in -- which is still 512-byte sectors, not the disk's.
+    if (t.block_size > SECTOR_BYTES) {
+        snprintf(line, sizeof line, "  %llu-byte sectors (LBAs below count 512 bytes)\n",
+                 (unsigned long long)t.block_size);
+        sys_print(line);
+    }
     if (t.kind == QUERY_PART_GPT) {
         put_guid(guid, sizeof guid, t.disk_guid);
         snprintf(line, sizeof line, "  disk GUID: %s\n", guid);

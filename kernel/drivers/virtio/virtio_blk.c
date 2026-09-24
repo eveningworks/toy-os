@@ -40,10 +40,12 @@
 // Device-configuration offsets (spec 5.2.4).
 #define VIRTIO_BLK_CFG_CAPACITY 0x00  // u64, ALWAYS in 512-byte sectors
 #define VIRTIO_BLK_CFG_SIZE_MAX 0x08  // u32
+#define VIRTIO_BLK_CFG_BLK_SIZE 0x14  // u32, the LOGICAL block
 
 #define VIRTIO_BLK_F_SIZE_MAX (1ull << 1)
 #define VIRTIO_BLK_F_SEG_MAX  (1ull << 2)
 #define VIRTIO_BLK_F_RO       (1ull << 5)
+#define VIRTIO_BLK_F_BLK_SIZE (1ull << 6)
 #define VIRTIO_BLK_F_FLUSH    (1ull << 9)
 #define VIRTIO_BLK_F_DISCARD  (1ull << 13)
 
@@ -91,6 +93,7 @@ static int g_present = 0;
 static int g_readonly = 0;
 static uint64_t g_capacity = 0;   // 512-byte sectors, as the device reports
 static uint32_t g_max_xfer = 128; // sectors per transfer
+static uint32_t g_blk_size = 512;  // bytes per logical block
 
 // ONE REQUEST AT A TIME, through the one shared header and status byte:
 // two interleaving would produce silently wrong data. A LOCK, so a
@@ -100,6 +103,7 @@ static struct kmutex g_blk_lock;
 
 int virtio_blk_present(void) { return g_present; }
 int virtio_blk_max_sectors_per_xfer(void) { return (int)g_max_xfer; }
+uint32_t virtio_blk_block_size(void) { return g_blk_size; }
 int virtio_blk_flush_supported(void) {
     return g_present && virtio_has_feature(&g_dev, VIRTIO_BLK_F_FLUSH);
 }
@@ -246,7 +250,7 @@ static void virtio_blk_probe(const struct pci_device *pci) {
 
     uint64_t wanted = VIRTIO_BLK_F_FLUSH | VIRTIO_BLK_F_SIZE_MAX
                     | VIRTIO_BLK_F_SEG_MAX | VIRTIO_BLK_F_RO
-                    | VIRTIO_BLK_F_DISCARD;
+                    | VIRTIO_BLK_F_DISCARD | VIRTIO_BLK_F_BLK_SIZE;
     if (!virtio_begin(&g_dev, wanted)) return;   // logged its own reason
 
     if (!virtqueue_setup(&g_dev, 0, &g_vq)) {
@@ -259,6 +263,11 @@ static void virtio_blk_probe(const struct pci_device *pci) {
     // wait for DRIVER_OK.
     g_capacity = virtio_cfg_read64(&g_dev, VIRTIO_BLK_CFG_CAPACITY);
     g_readonly = virtio_has_feature(&g_dev, VIRTIO_BLK_F_RO);
+    // Every sector field in the protocol stays in 512-byte units whatever
+    // this says -- the block layer's own rule -- so only the block layer
+    // needs to know it, to refuse a transfer QEMU would fail with IOERR.
+    if (virtio_has_feature(&g_dev, VIRTIO_BLK_F_BLK_SIZE))
+        g_blk_size = virtio_cfg_read32(&g_dev, VIRTIO_BLK_CFG_BLK_SIZE);
 
     if (virtio_has_feature(&g_dev, VIRTIO_BLK_F_SIZE_MAX)) {
         uint32_t size_max = virtio_cfg_read32(&g_dev, VIRTIO_BLK_CFG_SIZE_MAX);
@@ -281,8 +290,8 @@ static void virtio_blk_probe(const struct pci_device *pci) {
         klog_printf("virtio-blk: capacity %llu sectors exceeds the block layer's 32-bit"
                     " sector index -- exposing 4294967295\n", (unsigned long long)g_capacity);
     }
-    klog_printf("virtio-blk: %llu sectors, max %u per transfer, flush %s, discard %s%s\n",
-                (unsigned long long)g_capacity, g_max_xfer,
+    klog_printf("virtio-blk: %llu sectors, %u-byte blocks, max %u per transfer, flush %s, discard %s%s\n",
+                (unsigned long long)g_capacity, g_blk_size, g_max_xfer,
                 virtio_blk_flush_supported() ? "yes" : "no",
                 g_max_discard ? "yes" : "no",
                 g_readonly ? ", READ-ONLY" : "");

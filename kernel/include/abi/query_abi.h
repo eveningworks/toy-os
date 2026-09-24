@@ -950,6 +950,8 @@ struct query_blkdev {
     uint64_t base_lba;  // where it starts on its parent; 0 for a disk
     uint64_t is_root;   // 1 if this is the device the root is mounted from
     uint64_t persistent;// 0 for a RAM-backed live image
+    uint64_t block_size;// the device's logical block, bytes: 512 or 4096.
+                        // `sectors` and `base_lba` stay 512-byte units
 };
 
 // QUERY_NETDEV's record -- one registered network device.
@@ -1008,6 +1010,10 @@ struct query_parttable {
     // about without it: `mkpart` needs it to place `rest`, and a
     // reader needs it to say how much of the disk is unallocated.
     uint64_t disk_sectors;
+    // The disk's logical block, bytes. The table's own LBAs count these;
+    // every LBA a query reports is still 512-byte units, so a partition
+    // on a 4096 disk starts and ends on a multiple of 8.
+    uint64_t block_size;
 };
 
 // QUERY_PARTITION's record -- one partition.
@@ -1018,7 +1024,7 @@ struct query_parttable {
 // program that had to ask which one to walk before walking it.
 struct query_partition {
     uint64_t kind;         // QUERY_PART_*, so a record stands alone
-    uint64_t lba_start;    // both flavours, in sectors
+    uint64_t lba_start;    // both flavours, in 512-byte sectors
     uint64_t lba_count;    // GPT reports an END; this is the length either way
     uint64_t mbr_type;     // MBR only
     uint8_t  type_guid[16];   // GPT only

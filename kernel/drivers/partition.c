@@ -16,15 +16,19 @@
 #include "krandom.h" // GUIDs -- see guid_generate()
 #include "klog.h"
 #include "kfmt.h" // klog_printf
+#include "heap.h" // a GPT header's whole block
 
 // driver-none: MBR/GPT parsing, on a disk a driver already drives
 
-// Sector size, stated here rather than borrowed from a disk driver.
-// This file used to include ata.h for ATA_SECTOR_SIZE and call
-// ata_read_sector() directly, which predated block.h and meant the
-// parser could only ever see an IDE disk -- on `make run VIRTIO=1`
-// there is no IDE controller at all, so `parttable` was reading a disk
-// that was not there. 512 is the block layer's unit, not ATA's.
+// The block layer's unit, not ATA's (this file once read an IDE disk
+// directly). Every read and write below is in these units.
+//
+// TWO UNITS MEET HERE ON A 4K-SECTOR DISK. The table's own LBAs -- the
+// header's, every entry's -- count the DEVICE's logical blocks, per the
+// UEFI spec, while `struct partition_table` carries 512-byte sectors
+// like the rest of the kernel (Linux's sysfs `start`/`size` rule). So
+// every value crossing the disk boundary is scaled by `spb`, and every
+// sub-block read or write goes through blkdev_*_partial().
 #define PART_SECTOR_SIZE 512
 
 #define MBR_SIGNATURE_OFFSET 510
@@ -88,7 +92,7 @@ static void guid_generate(uint8_t *out) {
 // (type 0) slots. Used both for a plain PART_TABLE_MBR result and, in
 // the GPT case, only to have already scanned for the protective 0xEE
 // entry -- the GPT path re-fills out->entries itself afterward.
-static void parse_mbr_entries(const uint8_t *mbr, struct partition_table *out) {
+static void parse_mbr_entries(const uint8_t *mbr, uint32_t spb, struct partition_table *out) {
     out->entry_count = 0;
     for (int i = 0; i < MBR_ENTRY_COUNT; i++) {
         const uint8_t *e = mbr + MBR_ENTRY_TABLE_OFFSET + i * MBR_ENTRY_SIZE;
@@ -99,8 +103,8 @@ static void parse_mbr_entries(const uint8_t *mbr, struct partition_table *out) {
         k_memset(pe, 0, sizeof(*pe));
         pe->mbr_type = type;
         pe->mbr_active = (e[0] == 0x80);   // read back, so `parttable` can show it
-        pe->mbr_lba_start = read_le32(e + 8);
-        pe->mbr_num_sectors = read_le32(e + 12);
+        pe->mbr_lba_start = read_le32(e + 8) * spb;
+        pe->mbr_num_sectors = read_le32(e + 12) * spb;
     }
 }
 
@@ -143,13 +147,14 @@ static void gpt_name_to_ascii(const uint8_t *utf16le, char *out /* [37] */) {
 static __attribute__((noinline)) void parse_gpt_entries(const struct block_device *dev,
                               uint64_t entry_lba, uint32_t num_entries,
                               uint32_t entry_size, struct partition_table *out) {
+    uint32_t spb = blkdev_block_sectors(dev);
     uint32_t entries_per_sector = PART_SECTOR_SIZE / entry_size;
     uint32_t sectors_needed = (num_entries + entries_per_sector - 1) / entries_per_sector;
 
     out->entry_count = 0;
     for (uint32_t s = 0; s < sectors_needed; s++) {
         uint8_t buf[PART_SECTOR_SIZE];
-        if (!blkdev_read_sectors(dev, (uint32_t)entry_lba + s, 1, buf)) break;
+        if (!blkdev_read_partial(dev, (uint32_t)(entry_lba * spb) + s, 1, buf)) break;
 
         for (uint32_t i = 0; i < entries_per_sector && out->entry_count < PART_MAX_ENTRIES; i++) {
             const uint8_t *e = buf + i * entry_size;
@@ -162,8 +167,8 @@ static __attribute__((noinline)) void parse_gpt_entries(const struct block_devic
             k_memset(pe, 0, sizeof(*pe));
             guid_copy(pe->gpt_type_guid, e);
             guid_copy(pe->gpt_unique_guid, e + 16);
-            pe->gpt_lba_start = read_le64(e + 32);
-            pe->gpt_lba_end = read_le64(e + 40);
+            pe->gpt_lba_start = read_le64(e + 32) * spb;
+            pe->gpt_lba_end = (read_le64(e + 40) + 1) * spb - 1;   // inclusive
             gpt_name_to_ascii(e + 56, pe->gpt_name);
         }
     }
@@ -180,7 +185,7 @@ static __attribute__((noinline)) void parse_gpt_entries(const struct block_devic
 static __attribute__((noinline)) int parse_gpt(const struct block_device *dev,
                                                struct partition_table *out) {
     uint8_t hdr[PART_SECTOR_SIZE];
-    if (!blkdev_read_sectors(dev, GPT_HEADER_LBA, 1, hdr)) return 0;
+    if (!blkdev_read_partial(dev, GPT_HEADER_LBA * blkdev_block_sectors(dev), 1, hdr)) return 0;
     if (k_strncmp((const char *)hdr, GPT_SIGNATURE, 8) != 0) return 0;
 
     uint32_t header_size = read_le32(hdr + 12);
@@ -226,7 +231,8 @@ int partition_read_table_of(const struct block_device *dev,
     out->kind = PART_TABLE_NONE;
 
     uint8_t mbr[PART_SECTOR_SIZE];
-    if (!blkdev_read_sectors(dev, 0, 1, mbr)) return 0;
+    if (!blkdev_read_partial(dev, 0, 1, mbr)) return 0;
+    uint32_t spb = blkdev_block_sectors(dev);
 
     if (mbr[MBR_SIGNATURE_OFFSET] != 0x55 || mbr[MBR_SIGNATURE_OFFSET + 1] != 0xAA) {
         return 1; // readable disk, just no MBR/GPT signature -- PART_TABLE_NONE stands
@@ -234,7 +240,7 @@ int partition_read_table_of(const struct block_device *dev,
 
     if (!mbr_has_gpt_protective_entry(mbr)) {
         out->kind = PART_TABLE_MBR;
-        parse_mbr_entries(mbr, out);
+        parse_mbr_entries(mbr, spb, out);
         return 1;
     }
 
@@ -243,7 +249,7 @@ int partition_read_table_of(const struct block_device *dev,
     // rather than silently claiming PART_TABLE_NONE.
     if (!parse_gpt(dev, out)) {
         out->kind = PART_TABLE_MBR;
-        parse_mbr_entries(mbr, out);
+        parse_mbr_entries(mbr, spb, out);
     }
     return 1;
 }
@@ -267,14 +273,21 @@ int partition_read_table_of(const struct block_device *dev,
 // GPT's fixed geometry. 128 entries of 128 bytes is what every tool
 // writes and every tool expects; the header could declare otherwise,
 // but nothing is gained by being the one disk that does.
+//
+// The array is 16 KiB whatever the block size, so its length IN BLOCKS
+// is not a constant: 32 at 512 bytes, 4 at 4096 -- and the first usable
+// LBA (34 or 6) and the backup's position follow from it. Both in the
+// DEVICE's blocks, as the header records them.
 #define GPT_ENTRY_COUNT 128
 #define GPT_ENTRY_SIZE 128
-#define GPT_ENTRY_SECTORS ((GPT_ENTRY_COUNT * GPT_ENTRY_SIZE) / PART_SECTOR_SIZE) // 32
+#define GPT_ENTRY_BYTES (GPT_ENTRY_COUNT * GPT_ENTRY_SIZE)
+#define GPT_ENTRY_SECTORS (GPT_ENTRY_BYTES / PART_SECTOR_SIZE) // 32, in 512-byte units
 #define GPT_PRIMARY_ENTRY_LBA 2
-#define GPT_FIRST_USABLE_LBA (GPT_PRIMARY_ENTRY_LBA + GPT_ENTRY_SECTORS) // 34
 #define GPT_HEADER_SIZE 92
 #define GPT_REVISION 0x00010000
 
+static uint32_t gpt_entry_blocks(uint32_t spb) { return GPT_ENTRY_SECTORS / spb; }
+static uint32_t gpt_first_usable(uint32_t spb) { return GPT_PRIMARY_ENTRY_LBA + gpt_entry_blocks(spb); }
 // The Microsoft Basic Data type GUID --
 // EBD0A0A2-B9E5-4433-87C0-68B6B72699C7 in GPT's mixed-endian byte
 // order, which is why the bytes below do not read left to right.
@@ -329,18 +342,18 @@ int partition_is_esp(const struct partition_entry *pe,
 }
 
 // The sectors a table needs for ITSELF, and which no partition may
-// overlap. MBR: LBA 0. GPT: LBA 0 through 33 at the front, and the
-// last 33 (backup entry array + backup header) at the back.
-static void reserved_span(enum partition_table_kind kind, uint32_t disk_sectors,
+// overlap, in 512-byte units. MBR: block 0. GPT: blocks 0 through the
+// primary entry array at the front, and the backup array plus backup
+// header at the back -- 34 and 33 sectors at 512 bytes, 48 and 40 at 4K.
+static void reserved_span(enum partition_table_kind kind, uint32_t spb,
                           uint32_t *front, uint32_t *back) {
     if (kind == PART_TABLE_GPT) {
-        *front = GPT_FIRST_USABLE_LBA;                 // 0..33
-        *back = GPT_ENTRY_SECTORS + 1;                 // last 33
+        *front = gpt_first_usable(spb) * spb;
+        *back = (gpt_entry_blocks(spb) + 1) * spb;
     } else {
-        *front = 1;                                    // LBA 0
+        *front = spb;
         *back = 0;
     }
-    (void)disk_sectors;
 }
 
 // Every refusal the kernel can make on its own, before a byte is
@@ -368,8 +381,9 @@ int partition_validate_on(const struct block_device *dev,
         *why = "MBR holds at most 4 partitions -- use GPT"; return 0;
     }
 
+    uint32_t spb = blkdev_block_sectors(dev);
     uint32_t front, back;
-    reserved_span(in->kind, disk, &front, &back);
+    reserved_span(in->kind, spb, &front, &back);
     if ((uint64_t)front + (uint64_t)back >= (uint64_t)disk) {
         *why = "disk too small for this table"; return 0;
     }
@@ -387,6 +401,7 @@ int partition_validate_on(const struct block_device *dev,
         }
 
         if (a_count == 0) { *why = "empty partition"; return 0; }
+        if ((a_start | a_count) & (spb - 1)) { *why = "partition is not whole blocks of this disk"; return 0; }
         if (a_start < front) { *why = "partition overlaps the table itself"; return 0; }
         if (a_start + a_count > (uint64_t)disk - back) { *why = "partition runs past the end of the disk"; return 0; }
 
@@ -423,8 +438,9 @@ int partition_validate_on(const struct block_device *dev,
 // tools/mkpart_test.py does the same.
 static __attribute__((noinline)) int write_mbr(const struct block_device *dev,
                                                const struct partition_table *in, int protective) {
+    uint32_t spb = blkdev_block_sectors(dev);
     uint8_t sec[PART_SECTOR_SIZE];
-    if (!blkdev_read_sectors(dev, 0, 1, sec)) k_memset(sec, 0, sizeof(sec));
+    if (!blkdev_read_partial(dev, 0, 1, sec)) k_memset(sec, 0, sizeof(sec));
 
     k_memset(sec + MBR_ENTRY_TABLE_OFFSET, 0, MBR_ENTRY_SIZE * MBR_ENTRY_COUNT);
 
@@ -434,7 +450,7 @@ static __attribute__((noinline)) int write_mbr(const struct block_device *dev,
         // treat this disk as unpartitioned". Clamped to 0xFFFFFFFF
         // because that is all an MBR field can hold, which is exactly
         // why GPT exists.
-        uint64_t n = (uint64_t)blkdev_sector_count(dev) - 1;
+        uint64_t n = (uint64_t)blkdev_sector_count(dev) / spb - 1;
         if (n > 0xFFFFFFFFull) n = 0xFFFFFFFFull;
         uint8_t *e = sec + MBR_ENTRY_TABLE_OFFSET;
         e[4] = MBR_TYPE_GPT_PROTECTIVE;
@@ -445,8 +461,8 @@ static __attribute__((noinline)) int write_mbr(const struct block_device *dev,
             uint8_t *e = sec + MBR_ENTRY_TABLE_OFFSET + i * MBR_ENTRY_SIZE;
             e[0] = in->entries[i].mbr_active ? 0x80 : 0x00;   // the boot indicator
             e[4] = in->entries[i].mbr_type ? in->entries[i].mbr_type : 0x83; // 0x83 = Linux data, the sane default
-            write_le32(e + 8, in->entries[i].mbr_lba_start);
-            write_le32(e + 12, in->entries[i].mbr_num_sectors);
+            write_le32(e + 8, in->entries[i].mbr_lba_start / spb);
+            write_le32(e + 12, in->entries[i].mbr_num_sectors / spb);
             // CHS fields left zero. They are meaningless on any disk
             // this century and every LBA-aware reader ignores them;
             // faking a geometry would be inventing a fact.
@@ -455,17 +471,19 @@ static __attribute__((noinline)) int write_mbr(const struct block_device *dev,
 
     sec[MBR_SIGNATURE_OFFSET] = 0x55;
     sec[MBR_SIGNATURE_OFFSET + 1] = 0xAA;
-    return blkdev_write_sectors(dev, 0, 1, sec);
+    return blkdev_write_partial(dev, 0, 1, sec);
 }
 
-// Writes the 32-sector entry array at `lba` and returns its CRC32 --
-// built and hashed one sector at a time, because the whole array is
-// 16 KiB and a kernel stack is 16 KiB. Returns 0 on a write failure,
+// Writes the 16 KiB entry array at block `lba` and returns its CRC32 --
+// built and hashed one 512-byte sector at a time, because a kernel stack
+// is 16 KiB too. The array is whole blocks at either size, so on a 4K
+// disk the partial writes rewrite nothing but the array itself. Returns 0 on a write failure,
 // which is indistinguishable from a legitimate CRC of 0; `*ok` carries
 // the real answer.
 static __attribute__((noinline)) uint32_t write_gpt_entries(const struct block_device *dev,
                                                             const struct partition_table *in,
                                                             uint32_t lba, int *ok) {
+    uint32_t spb = blkdev_block_sectors(dev);
     uint32_t crc = KCRC32_INIT;
     *ok = 1;
     for (int s = 0; s < GPT_ENTRY_SECTORS; s++) {
@@ -481,8 +499,8 @@ static __attribute__((noinline)) uint32_t write_gpt_entries(const struct block_d
 
             k_memcpy(e, pe->gpt_type_guid, 16);
             k_memcpy(e + 16, pe->gpt_unique_guid, 16);
-            write_le64(e + 32, pe->gpt_lba_start);
-            write_le64(e + 40, pe->gpt_lba_end);
+            write_le64(e + 32, pe->gpt_lba_start / spb);
+            write_le64(e + 40, (pe->gpt_lba_end + 1) / spb - 1);   // inclusive
             // attributes (e + 48) left zero: no required-partition
             // flag, no legacy-BIOS-bootable flag. A BIOS boot off one
             // of these reaches GRUB through the MBR gap and the BIOS
@@ -499,22 +517,28 @@ static __attribute__((noinline)) uint32_t write_gpt_entries(const struct block_d
         }
 
         crc = kcrc32_update(crc, sec, PART_SECTOR_SIZE);
-        if (!blkdev_write_sectors(dev, lba + (uint32_t)s, 1, sec)) { *ok = 0; return 0; }
+        if (!blkdev_write_partial(dev, lba * spb + (uint32_t)s, 1, sec)) { *ok = 0; return 0; }
     }
     return KCRC32_FINAL(crc);
 }
 
-// One GPT header. `self` is the LBA it lives at, `other` its twin's,
+// One GPT header. `self` is the block it lives at, `other` its twin's,
 // `entry_lba` where ITS copy of the entry array starts -- the primary
 // and backup headers differ in exactly those three fields plus their
 // own CRC, which is why this is one function called twice rather than
-// two nearly-identical ones.
+// two nearly-identical ones. All in the device's blocks.
+//
+// The WHOLE block is written, the header's sector followed by zeros:
+// the spec reserves the rest of the header's block as zero, and a
+// partial write would keep whatever the disk held there.
 static __attribute__((noinline)) int write_gpt_header(const struct block_device *dev,
                                                       uint32_t self, uint32_t other,
                                                       uint32_t entry_lba, uint32_t entries_crc,
-                                                      const uint8_t *disk_guid, uint32_t disk_sectors) {
-    uint8_t sec[PART_SECTOR_SIZE];
-    k_memset(sec, 0, sizeof(sec));
+                                                      const uint8_t *disk_guid, uint32_t disk_blocks) {
+    uint32_t spb = blkdev_block_sectors(dev);
+    uint8_t *sec = kmalloc(spb * PART_SECTOR_SIZE);
+    if (!sec) return 0;
+    k_memset(sec, 0, spb * PART_SECTOR_SIZE);
 
     k_memcpy(sec, GPT_SIGNATURE, 8);
     write_le32(sec + 8, GPT_REVISION);
@@ -522,8 +546,8 @@ static __attribute__((noinline)) int write_gpt_header(const struct block_device 
     write_le32(sec + 16, 0); // header CRC, computed over this field as zero
     write_le64(sec + 24, self);
     write_le64(sec + 32, other);
-    write_le64(sec + 40, GPT_FIRST_USABLE_LBA);
-    write_le64(sec + 48, (uint64_t)disk_sectors - 1 - GPT_ENTRY_SECTORS - 1); // last usable
+    write_le64(sec + 40, gpt_first_usable(spb));
+    write_le64(sec + 48, (uint64_t)disk_blocks - 1 - gpt_entry_blocks(spb) - 1); // last usable
     k_memcpy(sec + 56, disk_guid, 16);
     write_le64(sec + 72, entry_lba);
     write_le32(sec + 80, GPT_ENTRY_COUNT);
@@ -531,7 +555,9 @@ static __attribute__((noinline)) int write_gpt_header(const struct block_device 
     write_le32(sec + 88, entries_crc);
 
     write_le32(sec + 16, kcrc32(sec, GPT_HEADER_SIZE));
-    return blkdev_write_sectors(dev, self, 1, sec);
+    int ok = blkdev_write_sectors(dev, self * spb, (int)spb, sec);
+    kfree(sec);
+    return ok;
 }
 
 int partition_write_table_of(const struct block_device *dev, const struct partition_table *in) {
@@ -556,8 +582,10 @@ int partition_write_table_of(const struct block_device *dev, const struct partit
     // LBA 0 yet) rather than one advertising a table whose header was
     // never written -- the same publish-last discipline the virtio
     // drivers follow with their interrupt enables.
-    uint32_t backup_hdr = disk - 1;
-    uint32_t backup_entries = backup_hdr - GPT_ENTRY_SECTORS;
+    uint32_t spb = blkdev_block_sectors(dev);
+    uint32_t disk_blocks = disk / spb;
+    uint32_t backup_hdr = disk_blocks - 1;
+    uint32_t backup_entries = backup_hdr - gpt_entry_blocks(spb);
 
     uint8_t disk_guid[16];
     guid_generate(disk_guid);
@@ -576,11 +604,11 @@ int partition_write_table_of(const struct block_device *dev, const struct partit
         return 0;
     }
 
-    if (!write_gpt_header(dev, backup_hdr, GPT_HEADER_LBA, backup_entries, crc_primary, disk_guid, disk)) {
+    if (!write_gpt_header(dev, backup_hdr, GPT_HEADER_LBA, backup_entries, crc_primary, disk_guid, disk_blocks)) {
         klog_write(KLOG_ERR "partition: GPT backup header write failed\n");
         return 0;
     }
-    if (!write_gpt_header(dev, GPT_HEADER_LBA, backup_hdr, GPT_PRIMARY_ENTRY_LBA, crc_primary, disk_guid, disk)) {
+    if (!write_gpt_header(dev, GPT_HEADER_LBA, backup_hdr, GPT_PRIMARY_ENTRY_LBA, crc_primary, disk_guid, disk_blocks)) {
         klog_write(KLOG_ERR "partition: GPT header write failed\n");
         return 0;
     }

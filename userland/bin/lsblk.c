@@ -26,7 +26,7 @@ int main(void) {
     char line[160], size[32];
     int n = 0;
 
-    sys_print("NAME        SIZE      TYPE   ROOT  WHERE\n");
+    sys_print("NAME        SIZE      SECTOR TYPE   ROOT  WHERE\n");
 
     // The loop ends on the record that is NOT THERE rather than on a
     // count read first: a list's length is itself a fact and can change
@@ -48,8 +48,12 @@ int main(void) {
             snprintf(where, sizeof where, "%s",
                      d.persistent ? "disk" : "memory (not persistent)");
 
-        snprintf(line, sizeof line, "%-11s %-9s %-6s %-5s %s\n",
-                 d.name, size, d.parent[0] ? "part" : "disk",
+        // SECTOR is the device's logical block -- 4096 on a 4K-sector
+        // disk -- while `lba` above stays in 512-byte units, as the
+        // kernel counts everywhere.
+        snprintf(line, sizeof line, "%-11s %-9s %-6llu %-6s %-5s %s\n",
+                 d.name, size, (unsigned long long)(d.block_size ? d.block_size : 512),
+                 d.parent[0] ? "part" : "disk",
                  d.is_root ? "yes" : "", where);
         sys_print(line);
     }
