@@ -72,6 +72,19 @@ def probe_result(text):
     return None
 
 
+def phase(text):
+    """The profile of the LATEST progress line, or None. The latest, not any:
+    the console hands back only a long report's tail, so an early phase's
+    lines are gone by the time a poll asks -- the first version of --during
+    waited ten minutes for lines that had scrolled out of the reply."""
+    last = None
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[:2] == ["diskbench:", "progress"]:
+            last = parts[2]
+    return last
+
+
 def spawn(dbg, cmd, report):
     dbg.send(f"sh rm {report}")
     out = dbg.send(f"gui spawn {cmd} --out {report}")
@@ -141,8 +154,21 @@ def main():
         # starts with SEQ-write, which creates its file (allocating), and a
         # probe started at the first progress line spends its window there.
         want = f"diskbench: progress {args.during}" if args.during else "diskbench: progress"
-        if wait_for(dbg, LOAD_OUT, want, args.timeout) is None:
-            print("fs_isolation: the load never started", file=sys.stderr)
+        deadline = time.time() + args.timeout
+        started = False
+        while time.time() < deadline:
+            p = phase(dbg.send(f"sh cat {LOAD_OUT}"))
+            if p and (not args.during or p == args.during):
+                started = True
+                break
+            time.sleep(0.5)
+        if not started:
+            # SAY WHAT IT DID SAY: "never started" alone cost a session a
+            # guess between a hung kernel and a mismatched phase name.
+            tail = [ln for ln in dbg.send(f"sh cat {LOAD_OUT}").splitlines()
+                    if "diskbench:" in ln][-4:]
+            print(f"fs_isolation: the load never reached `{want}`; its report "
+                  f"ends: {' | '.join(tail) or '(empty)'}", file=sys.stderr)
             return 1
         if not spawn(dbg, probe, PROBE_OUT):
             return 1
@@ -151,7 +177,11 @@ def main():
         if loaded is None:
             print("fs_isolation: the probe did not finish under load", file=sys.stderr)
             return 1
-        overlapped = "diskbench: done" not in dbg.send(f"sh cat {LOAD_OUT}")
+        # STILL IN THE PHASE, not merely still running: a probe that ran
+        # past the end of the phase it was meant for measured the next one.
+        tail = dbg.send(f"sh cat {LOAD_OUT}")
+        overlapped = "diskbench: done" not in tail and (
+            not args.during or phase(tail) == args.during)
         # Let the load finish, so the next run starts on a quiet machine.
         wait_for(dbg, LOAD_OUT, "diskbench: done", args.timeout)
     finally:
@@ -166,8 +196,8 @@ def main():
     for name, r in (("alone", alone), ("under load", loaded)):
         print(f"  {name:<12}" + "".join(f"{r[f]:>10}" for f in FIELDS))
     if not overlapped:
-        print("fs_isolation: THE LOAD FINISHED BEFORE THE PROBE -- the loaded arm "
-              "measured a quiet machine. Raise --load-size.", file=sys.stderr)
+        print("fs_isolation: THE LOAD (OR ITS --during PHASE) ENDED BEFORE THE PROBE -- "
+              "the loaded arm measured something else. Raise --load-size.", file=sys.stderr)
         return 1
     return 0
 

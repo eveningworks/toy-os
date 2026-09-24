@@ -24,7 +24,7 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] Finer filesystem locking -- a sleeping holder of the one lock costs others an operation PER call  *(Scheduler: blocking, priorities, classes)*
+- [ ] **Interruptible syscalls** -- the trap gate; re-measure with `fs_isolation.py`, which can see it  *(Scheduler: blocking, priorities, classes)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
@@ -67,8 +67,8 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~Measure desktop latency under heavy disk I/O, the yardstick for the three items below~~ DONE 2026-09-12
 - [x] ~~A `schedule()` that suspends the KERNEL stack, so a caller can block mid-call~~ DONE 2026-09-18 -- one suspend shape
 - [x] ~~Replace the preemption guard with a real sleeping lock~~ DONE 2026-09-18 -- `ata.c`'s disk waits sleep under it
-- [ ] **NEXT** Finer filesystem locking -- a sleeping holder of the one lock costs others an operation PER call
-- [ ] **Interruptible syscalls** -- the trap gate; re-measured 2026-09-23: no regression, no win yet, so not flipped
+- [ ] Journal commits off the volume lock -- fslock stage 5; a commit's flushes are what hold a volume longest now
+- [ ] **NEXT** **Interruptible syscalls** -- the trap gate; re-measure with `fs_isolation.py`, which can see it
 - [ ] Bound how long a frame can block on I/O
 
 ### Signals & process control

@@ -7,8 +7,10 @@ sleep, every other caller pays one of its operations per call. What
 would it take for callers touching DIFFERENT files not to wait on each
 other at all?**
 
-**Status: stages 0, 1 and 2 are BUILT (2026-09-23, 2026-09-24).
-Stages 3-4 are designed, not built.**
+**Status (2026-09-24): stages 0-2, 3a, 3b and 4a are BUILT; 4b was
+built, measured and DROPPED. What is left is stage 5 -- journal commits
+off the volume lock -- designed, not built. Each entry below says what
+it did and what it measured.**
 
 ## Why, in one measurement
 
@@ -172,12 +174,6 @@ Each ships on its own, and each is measured on
   allocating write, which still drops it): 7.5-8.1k, within the noise.
   It also skips re-reading its inode when nothing was staged meanwhile
   (`ino_gen`).
-- **Stage 3 -- inside one volume.** A journal lock with jbd2-style
-  handles, an allocator lock over the bitmaps and the TRIM queue, and a
-  name-cache lock. **The cheaper intermediate worth measuring first:**
-  release the volume lock across the data-block I/O in `do_write_inner`
-  and `read_range_impl` -- that is where the time goes, and it may
-  capture most of the latency before stage 4 exists.
 - **Stage 4a, BUILT 2026-09-24: per-inode locks, and their rules.**
   A per-mount table of HELD locks (a futex-hash shape, not an inode
   cache): readers take a file SHARED, writers and namespace changes
@@ -197,13 +193,39 @@ Each ships on its own, and each is measured on
   copy over a write made between its steps -- it now FAILS instead.
   Three KTESTs, each red under its control. No throughput change (ASUS
   random writes 7.8k IOPS, as 3b).
-- **Stage 4 -- an inode table with a per-inode rwsem.** Readers take it
-  shared; a directory operation locks the parent; a cross-directory
-  rename takes a per-mount rename mutex and then both parents in inode
-  order, and re-checks after locking. **This is the stage that fixes
-  the measured case** -- `/etc` against `/var/tmp` is one volume.
-  `t3_write_step` keeps an inode copy across calls, so a stepped write
-  either holds its inode lock across steps or re-reads.
+  The planned lock ORDER (parents by inode number) and per-mount
+  RENAME MUTEX were deliberately not built: no op holds a lock while
+  waiting, so neither has a deadlock to prevent (docs/decisions/
+  storage.md, "Inode locks: release everything and restart").
+- **Stage 4b, BUILT AND DROPPED 2026-09-24: allocating writes drop the
+  volume lock.** Under 4a's exclusive inode lock, `do_write_inner()`
+  dropped the volume lock for each whole-block data run -- which needed
+  a per-call rollback log (the mount's could be reset by another op in
+  the gap) and the pointer-table caches landed before every gap. It was
+  CORRECT: a two-appender race in `fsrace_test` lost about 6% of
+  its records (116 of 2048) with the inode lock disabled and none with it, in QEMU
+  and on the ASUS. It WON NOTHING MEASURABLE: `stat /etc` during
+  diskbench's SEQ-write averaged ~1.4 ms on 4a and 1.2-2.0 ms on 4b
+  (KVM, strict and batched sync), and on a disk throttled to 15 MB/s
+  4b's probe read 5.8-6.0 ms. And it COST: 52% more write commands
+  (8929 vs 5873 for 256 MiB; 5% more sectors) for the table flushes.
+  SEQ-write was simply not lock-bound the way the overwrite phase was
+  (~13 ms before 3b). Dropped by the rule it was measured under. One
+  thing it may have been doing unmeasured: on the throttled disk,
+  fs_isolation's own console polls (a `cat` spawned from `/`) could not
+  get through on 4a during SEQ-write and could on 4b. A spawn-latency
+  probe would settle it; that is a reason to measure again before
+  rebuilding it, not a claim that it helps.
+- **Stage 5 -- journal commits off the volume lock.** What still holds
+  the volume lock longest under the default `storage.sync = strict` is
+  a metadata commit: journal images, targets and two device-cache
+  flushes (25-225 ms per flush measured on the ASUS under load, ata.c).
+  jbd2's shape: an op reserves credits and stages into the RUNNING
+  transaction under a short journal lock, and a commit -- including its
+  flushes -- runs while other ops stage into the next one. The batched
+  transaction (`storage.sync = batched`) is the seed of it. This is the
+  biggest remaining source of long waits on one volume, and the riskiest
+  change in this plan (the honest risk below is about exactly this).
 
 ## The honest risk
 

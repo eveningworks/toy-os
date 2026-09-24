@@ -2997,7 +2997,7 @@ existing.
 
 - [x] ~~**Replace the preemption guard with a real sleeping lock.**~~ DONE 2026-09-18 (69c02656), and its payoff landed 2026-09-23 when `ata.c`'s DMA and cache-flush waits started sleeping under it. What that took, and the convoy it exposed, is `docs/blocking-design.md`'s "What stage 2 found".
 
-- [ ] **Finer filesystem locking.** Measured 2026-09-23 under KVM: with the holder of the ONE filesystem lock asleep in a disk wait, the compositor queued ~17 ms per fs call behind `diskbench`, and dozens of calls a frame made 0.6-1.7 s frames. Pushed config took the WM's frame path off the disk, which is most of the win, but any fs call anywhere still waits one holder operation. `docs/fslock-design.md` is the staged plan -- explicit mount state, per-op scratch, then a journal with handles and an inode table carrying a per-inode lock -- and says why the batched transaction is the risk. **Stages 1 and 2 are BUILT, 2026-09-24**: explicit mount state, then the journal and scratch in the mount and one lock per mount -- a `/tmp` call under disk load on `/` went from ~10 ms to ~70 us (`tools/fs_isolation.py`). The measured case, `/etc` against `/var/tmp`, is ONE volume and is stages 3-4.
+- [ ] **Journal commits off the volume lock.** The rest of `docs/fslock-design.md`, whose stages 0-4a are BUILT (2026-09-23/24): explicit mount state; the journal and scratch per mount and one lock per mount (a `/tmp` stat under disk load on `/` ~10 ms -> ~70 us); data reads and in-place overwrites with the volume lock dropped (an `/etc` stat during diskbench's overwrite phase 12.4-13.1 ms -> 53-83 us); per-inode locks that no op holds while waiting. 4b -- allocating writes unlocked -- was built, won nothing measurable and was dropped; the design doc has why. What still holds a volume longest under `storage.sync = strict` is a metadata COMMIT: journal images, targets and two device-cache flushes, 25-225 ms each on the ASUS under load. jbd2's shape is the plan: stage into a running transaction under a short journal lock, commit (flushes included) while the next one fills. The batched transaction is its seed, and it is exactly what the design doc's "honest risk" is about: a missing lock passes every TCG test, so the evidence is `kvm_soak.py -n 10` with a lock-removed control, and `fs_isolation.py --during` for the win.
 
 - [ ] **Bound how long a frame can block on I/O.** Related but separate: see the "Get blocking disk I/O out of the WM's event loop" item under Known issues.
 
@@ -5456,6 +5456,15 @@ See `docs/decisions.md`'s entry on why `FS_OP()` is not a sleeping lock,
 which records the full measurement -- including that a spin lock inside a
 syscall would deadlock rather than merely wait.
 
+
+**Re-measure it with `tools/fs_isolation.py` (2026-09-24).** The 09-23
+"no win" came from `latency_under_io.py`, which times the compositor --
+and with the filesystem lock split per mount and per inode (fslock
+stages 2-4a), what an unrelated call still waits for under disk load
+is largely the CPU: a syscall runs with interrupts off, so a probe on
+`/etc` during diskbench's SEQ-write averages ~1.4 ms on a lock nobody
+holds. That is the one thing the trap gate changes. Probe with
+`--during SEQ-write` on both gates, KVM `+invtsc`, several runs a side.
 ### The compositor should use the hardware cursor plane instead of a software sprite
 
 `display_driver` has had `cursor_define`/`cursor_move`/`cursor_show`

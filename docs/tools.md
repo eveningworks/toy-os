@@ -1503,7 +1503,11 @@ window without going through it will find its layout polls timing out.
   SEQ-write, which creates its file and so allocates, and a probe
   started at its first progress line measures mostly that -- fslock 3b
   (overwrites only) read as nothing there and ~200x faster
-  `--during RND4K-write`.
+  `--during RND4K-write`. **It follows the LATEST progress line and
+  requires the probe to END inside the phase** (exit 1 otherwise): the
+  console returns only a long report's tail, and a phase shorter than
+  the probe -- SEQ-write of 256 MiB is ~1.5 s under KVM -- measures the
+  next one. Size the load so the phase outlasts `--secs`.
 - **`kvm_soak.py`** -- the desktop under KVM, across FRESH BOOTS, failing
   on the symptoms that appear only there: a WM frame over a threshold, a
   file that exists but will not read, an incomplete cursor-theme load, a

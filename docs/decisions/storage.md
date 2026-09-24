@@ -3067,6 +3067,31 @@ at which it holds the volume lock, so a nested call releases only its
 own. A lock is never held across SYSCALLS -- a stepped write locks per
 step and detects a change between steps instead.
 
+## Allocating writes keep the volume lock (fslock 4b was built and dropped)
+
+**Decided 2026-09-24.** With per-inode locks in place (stage 4a), the
+obvious next step was to let an allocating or extending write drop the
+volume lock for its data transfer, as reads and in-place overwrites
+already do. It was built: a per-call rollback log, the pointer-table
+caches landed before every gap, the data run written unlocked under
+the file's exclusive inode lock. A two-appender race test showed it
+correct -- and showed the inode lock was what made it so.
+
+**It was dropped because it bought nothing measurable and cost
+something that was.** A `stat` on the same volume during diskbench's
+file-creating phase averaged ~1.4 ms with or without it (KVM, strict
+and batched sync), and on a disk throttled to USB-stick speed it read
+worse, 5.8-6.0 ms. The table flush before every gap made 52% more write
+commands. The phase was never lock-bound the way the overwrite phase was
+(~13 ms before stage 3b): what the probe waits for there is mostly CPU,
+since a syscall runs with interrupts off -- the trap gate's question,
+not this one.
+
+**Revisit it** only with a probe that shows allocating writes holding
+others up -- the one hint was that the measuring tool's own `cat` could
+not get through on a throttled disk without it, which a spawn-latency
+probe would settle. `docs/fslock-design.md` has the full account.
+
 ## A path has THREE bounds, not one: what a call may be handed, what a struct may remember, and what one component may be
 
 **Decided 2026-09-15**, when `FS_PATH_MAX` went from 64 to 4096 so a

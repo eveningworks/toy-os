@@ -2845,3 +2845,17 @@ the real `disk.img` (btrfs) with the same build, and HEAD did the same
 (16 s / 36 s): a "regression" that was only the two sides sitting on
 different filesystems. Before comparing two runs of anything that
 touches the disk, check `df -T` on both images.
+
+**2026-09-24: `pgrep -f` MATCHES THE SHELL THAT RUNS IT -- as a waiter AND
+as a killer.** CLAUDE.md already forbids waiting on a process by name; the
+same session then (1) left an `until ! pgrep -f "..."` waiter spinning for
+an hour because its own command line contained the pattern, and (2) killed
+its own cleanup shell with `for p in $(pgrep -f "..."); do kill $p` (exit
+144, halfway through). Find a PID from a pidfile, `$!`, or `ps` filtered
+with `grep -v grep` AND a check that the PID is not `$$` -- or put the loop
+in a script file, whose command line does not contain the pattern.
+
+**And a setting applied to a guest from outside must be READ BACK.** A
+QMP `block_set_io_throttle` sent right after boot silently did nothing on
+one run in two, and that run's "slow disk" numbers came from a fast one.
+`info block -v` shows whether it took.
