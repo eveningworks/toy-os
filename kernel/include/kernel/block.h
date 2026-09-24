@@ -245,6 +245,12 @@ int blk_virtio_init(void);
 // made in one place, kernel/fs/mount.c.
 int blk_ahci_init(void);
 
+// Registers every NVMe namespace the driver found: the first as the
+// active device, the rest named but not active. `nonvme` on the boot
+// line registers none. PRECEDENCE: after AHCI and before virtio, so an
+// NVMe drive beats SATA on real hardware and virtio still wins in a VM.
+int blk_nvme_init(void);
+
 // Registers a RAM-backed device over [base, base + bytes). For a live
 // image handed over by the bootloader; see kernel/drivers/block/block_ram.c.
 int blk_ram_register(uint64_t base, uint64_t bytes);

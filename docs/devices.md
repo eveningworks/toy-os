@@ -26,7 +26,8 @@ person has to keep true.
 
 | Driver | Claims | Notes |
 |---|---|---|
-| `ahci` | Any PCI SATA AHCI controller (class `01:06:01`) | The preferred disk on real hardware. |
+| `nvme` | Any PCI NVMe controller (class `01:08:02`) | Every namespace becomes a disk (`nvme0`, `nvme1`, ...), 512- or 4096-byte blocks; one I/O queue on MSI-X. Beats AHCI for the root; `nonvme` steps down. |
+| `ahci` | Any PCI SATA AHCI controller (class `01:06:01`) | The preferred disk on real hardware without NVMe. |
 | `ata` | Legacy IDE, PIO and busmaster DMA | The fallback; `noahci` forces it. |
 | `virtio-blk` | virtio block, modern and transitional | Preferred in a VM. |
 | `ram` | No hardware | A RAM-backed device, for `ramfs` and tests. |
@@ -69,7 +70,7 @@ person has to keep true.
 
 ## What there is no driver for
 
-NVMe, USB mass storage, Wi-Fi (the laptop's Intel 3160 is unclaimed),
+USB mass storage, Wi-Fi (the laptop's Intel 3160 is unclaimed),
 NVIDIA or AMD graphics, EHCI/UHCI, PS/2-over-USB legacy emulation, and
 any Ethernet controller not listed above. `lspci` on a machine shows
 what was found; a device with no driver is listed with none.

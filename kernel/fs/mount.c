@@ -1052,14 +1052,16 @@ static void probe_and_mount_root(void) {
     // table for the split this is half of.
     //
     // ORDER STILL SETS PRECEDENCE, because blk_register() is
-    // last-writer-wins: ATA, then AHCI, then VIRTIO, so virtio ends up
-    // the default root exactly as before -- it is the faster and
-    // better-tested path (block_virtio.c has the numbers), AHCI is what
-    // a modern machine presents, legacy IDE is the fallback and still
-    // the only disk on some hardware. `novirtio` and `noahci` step down
-    // a rung each, which keeps the lower paths reachable and tested.
+    // last-writer-wins: ATA, then AHCI, then NVMe, then VIRTIO, so virtio
+    // ends up the default root exactly as before -- it is the faster and
+    // better-tested path (block_virtio.c has the numbers), NVMe is what
+    // a laptop of this decade boots from, AHCI is what a SATA machine
+    // presents, legacy IDE is the fallback and still the only disk on
+    // some hardware. `novirtio`, `nonvme` and `noahci` step down a rung
+    // each, which keeps the lower paths reachable and tested.
     blk_ata_init();
     blk_ahci_init();
+    blk_nvme_init();
     blk_virtio_init();
 
     // The live image: asked for, or nothing else to mount. It registers

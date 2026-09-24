@@ -3010,6 +3010,21 @@ window without going through it will find its layout polls timing out.
   dispatching the vector. The control that DOES go red is returning 0
   from it outright -- 0 events decoded against 33 vectors delivered --
   and that is what shows the tool can see a dead path. On demand.
+- **`nvme_test.py`** -- one QEMU NVMe controller with TWO namespaces
+  and no other disk: namespace 1 a copy of `disk.img` (SeaBIOS boots it,
+  the root mounts from `nvme0p3`), namespace 2 blank with 4096-byte
+  blocks (`mkpart`, `mkfs`, mount, copy). Two boots, on demand.
+
+  Its load-bearing checks: `ktest nvme` with **0 skipped and every
+  KTEST in `nvme_test.c` run** (counted from the source, so a stale
+  filter fails); the `sum`s after a reboot; and TRIM measured from the
+  HOST, asserting the 4K image GREW by the 40 MiB written before it
+  asserts the delete shrank it -- without the growth, the shrink passes
+  vacuously (`docs/roadmap-details.md` has the tool where that
+  happened). The KTEST `a completion raises the interrupt` is what
+  proves MSI-X delivers: a dead vector fails no read, because a
+  sleeping waiter wakes at its deadline and reaps anyway. The control
+  that turned it red was a handler that never counted.
 - **`sector4k_test.py`** -- a **virtio disk with 4096-byte logical
   sectors** (`logical_block_size=4096`) beside the IDE root: `mkpart`,
   `mkfs -t fat32`, `mkfs`, mount both, copy a multi-block file onto each,

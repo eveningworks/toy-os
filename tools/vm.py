@@ -220,6 +220,9 @@ def cmd_start(args):
         cmd += ["-device", "ich9-ahci,id=ahci",
                 "-drive", f"file={args.disk},format=raw,if=none,id=sata0,discard=unmap",
                 "-device", "ide-hd,drive=sata0,bus=ahci.0"]
+    elif getattr(args, "disk_kind", "ide") == "nvme":
+        cmd += ["-drive", f"file={args.disk},format=raw,if=none,id=nvm0,discard=unmap",
+                "-device", "nvme,serial=toyos-nvme0,drive=nvm0"]
     else:
         cmd += ["-drive", f"file={args.disk},format=raw,if=ide,discard=unmap"]
     if args.kvm:
@@ -778,9 +781,9 @@ def main():
     ap.add_argument("--machine", default=None, metavar="TYPE",
                     help="QEMU machine type (e.g. q35). q35 implies --disk-kind ahci; "
                          "it is the ACPI 2.0 / XSDT / reset-register machine.")
-    ap.add_argument("--disk-kind", choices=("ide", "ahci"), default="ide",
+    ap.add_argument("--disk-kind", choices=("ide", "ahci", "nvme"), default="ide",
                     help="which controller --disk hangs off; ahci is an ICH9 HBA "
-                         "and is what exercises kernel/drivers/ahci.c")
+                         "(kernel/drivers/ahci.c), nvme an NVMe SSD (kernel/drivers/nvme.c)")
     ap.add_argument("--virtio-disk", default=None,
                     help="attach PATH as a virtio-blk disk. Off by default; with it "
                          "the guest gets a second disk on virtio-blk-pci, which is "

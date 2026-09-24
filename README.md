@@ -48,7 +48,9 @@ that turned out wrong. It boots on real hardware and under QEMU.
   job control, threads with real thread-local storage, and **dynamic
   linking** against `/lib/libc.so` and `/lib/libuapp.so`.
 - **Storage** — TFS3, a journaling filesystem with `fsck`, beside FAT32
-  and a RAM filesystem, on MBR/GPT partitions the kernel reads and writes.
+  and a RAM filesystem, on MBR/GPT partitions the kernel reads and writes,
+  over IDE, AHCI, NVMe or virtio-blk -- including disks with 4096-byte
+  sectors.
   It **installs itself** onto another disk and that disk boots.
 - **Networking** — ARP, IPv4, ICMP, UDP and client-side TCP over six NIC
   drivers, with DHCP, DNS, `ping`, `wget` and an `httpd` that serves this
@@ -198,7 +200,7 @@ any combination works without a target per combination. Each device
 class picks its implementation **by name** — `VIRTIO=1` just sets all
 three at once, and a per-class value overrides it, so `VIRTIO=1
 VGA=std` is legal. A name rather than a boolean because a boolean
-cannot express a third one, and NVMe is on the roadmap. `make help`
+cannot express a third one -- and NVMe was the fourth. `make help`
 lists every axis.
 
 ```bash
@@ -206,6 +208,7 @@ make run KVM=1          # KVM instead of emulation (needs /dev/kvm)
 make run VIRTIO=1       # virtio for every device class: disk, GPU, input
 make run DISK=virtio    # ...or one class at a time: virtio-blk, no IDE
 make run DISK=ahci      #    a SATA drive behind an ICH9 HBA
+make run DISK=nvme      #    an NVMe SSD
 make run VGA=virtio     #    the virtio-gpu driver
 make run VGA=vmware     #    the adapter with a hardware cursor
 make run INPUT=virtio   #    virtio keyboard, mouse and tablet

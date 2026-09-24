@@ -235,6 +235,9 @@ def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
         drive = (f"-device ich9-ahci,id=ahci "
                  f"-drive file={disk},format=raw,if=none,id=sata0,discard=unmap "
                  f"-device ide-hd,drive=sata0,bus=ahci.0 ")
+    elif disk_kind == "nvme":
+        drive = (f"-drive file={disk},format=raw,if=none,id=nvm0,discard=unmap "
+                 f"-device nvme,serial=toyos-nvme0,drive=nvm0 ")
     else:
         drive = f"-drive file={disk},format=raw,if=ide,discard=unmap "
     boot_args = " ".join(install_grub.qemu_boot_args(medium, iso))

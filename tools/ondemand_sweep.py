@@ -175,6 +175,7 @@ TOOLS = [
     ("virtio_boot", "virtio_boot_test.py",     "TFS3 on virtio-blk, no IDE",         True,  None,                   False),
     ("ahci",        "ahci_test.py",            "TFS3 on a SATA drive behind an HBA",  True,  None,                   False),
     ("sector4k",    "sector4k_test.py",        "GPT/TFS3/FAT32 on a 4K-sector disk", True,  None,                   False),
+    ("nvme",        "nvme_test.py",            "root on NVMe, a 4K namespace, TRIM", True,  None,                   False),
     ("diskmark",    "diskmark_test.py",        "the Disk Mark GUI benchmark",        True,  None,                   True),
     ("ls",          "ls_test.py",              "/bin/ls flags and the listing cap",  True,  None,                   False),
     ("fileop",      "fileop_test.py",          "lib/ufileop through cp/mv/rm",       True,  None,                   False),

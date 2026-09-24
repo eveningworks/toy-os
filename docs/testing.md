@@ -253,6 +253,13 @@ headless forms. Nothing in the gate boots that way, so every `ahci`
 KTEST skips on an ordinary run -- `tools/ahci_test.py` is what makes
 them execute, and it asserts the SKIP COUNT for exactly that reason.
 
+**TESTING ON NVMe** is the same shape: `make run DISK=nvme`,
+`vm.py --disk-kind nvme`, `launch_qemu_cmd(disk_kind="nvme")`, and
+`tools/nvme_test.py` as the tool that makes the `nvme` KTESTs run. That
+tool attaches TWO namespaces to one controller, the second with
+4096-byte blocks, because a 4K namespace is the ordinary case on real
+NVMe drives and QEMU's `nvme-ns` can present one.
+
 **The reason this is a CI job and not just an option:** it found a real
 driver bug that reproduced NOWHERE locally. The runner has QEMU 8.2.2
 against 11.1 here and its CPU makes the kernel pick a different

@@ -816,18 +816,21 @@ run on, not by order.
 
 ### NVMe / modern storage
 
-- [ ] PCIe NVMe controller discovery
-- [ ] Admin queue + identify command
-- [ ] I/O submission/completion queues
-- [ ] Backend parity with `ata.c` and the AHCI/SATA driver
-- [ ] Doorbell registers and the queue-wrap arithmetic they need
+- [x] ~~PCIe NVMe controller discovery~~ DONE 2026-09-24 -- `kernel/drivers/nvme.c`, `make run DISK=nvme`
+- [x] ~~Admin queue + identify command~~ DONE 2026-09-24
+- [x] ~~I/O submission/completion queues~~ DONE 2026-09-24 -- one pair, 31 commands in flight through `submit_batch`
+- [x] ~~Backend parity with `ata.c` and the AHCI/SATA driver~~ DONE 2026-09-24 -- flush, TRIM (Dataset Management)
+- [x] ~~Doorbell registers and the queue-wrap arithmetic they need~~ DONE 2026-09-24
 - [x] ~~MSI/MSI-X interrupts -- NVMe doesn't use legacy pin-based IRQs~~ DONE 2026-08-30 -- `pci_msi.c`, proven on the xHCI
-- [ ] Namespace enumeration (an NVMe disk can present several)
-- [ ] Multiple queue pairs, and whether to bother before SMP exists
+- [x] ~~Namespace enumeration (an NVMe disk can present several)~~ DONE 2026-09-24 -- up to four, each its own disk
+- [ ] Multiple queue pairs, and whether to bother before SMP exists -- not before a second CPU runs
+- [ ] NVMe on real hardware -- neither test laptop has an NVMe drive; everything is QEMU-verified
+- [ ] NVMe error recovery: a timed-out command disables the controller rather than aborting and resetting
+- [ ] NVMe shutdown notification (CC.SHN) at power-off
 - [x] ~~The 4KB-sector question~~ DONE 2026-09-24 -- LBAs stay 512-byte units; a device carries its block size
 - [ ] FAT32 on a 4K-sector disk does a read-modify-write per 512 bytes
 - [ ] A 4K-logical SATA/IDE drive is REFUSED by `ata.c` and `ahci.c`
-- [ ] A PRP list for transfers past one page, the equivalent of the PRD table `ata.c` already builds
+- [x] ~~A PRP list for transfers past one page, the equivalent of the PRD table `ata.c` already builds~~ DONE 2026-09-24
 
 ### USB
 

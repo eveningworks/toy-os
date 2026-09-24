@@ -2329,6 +2329,11 @@ allocator and `MSI_ADDR_DEST(lapic_id())` in `pci_msi.c` stops being a
 constant; that one line is where affinity will live, and it is the only
 place in the kernel that names a message's destination.
 
+**NVMe arrived first (2026-09-24), and the answer was still one vector.**
+The argument above is about CPUs, not devices, and it held: the driver
+creates ONE I/O queue pair and points it and the admin queue at table
+entry 0. See "NVMe runs one I/O queue on one vector" below.
+
 Two smaller calls fell out of the same work. **The ladder helper stops
 at MSI**, not at the pin: `pci_msi_request()` tries MSI-X then MSI and
 returns 0 for "use your pin", because what a driver does without a
@@ -2838,3 +2843,44 @@ would have to stay behind a copy cursor soundd cannot see.
 "not ready" for as long as it stays open, so everyone else plays on
 the minimum lead instead of a full ring while it does. 85 ms is still
 four of the mixer's 20 ms passes.
+
+## NVMe runs one I/O queue on one vector, and a timeout disables the controller
+
+`kernel/drivers/nvme.c` brings up the admin queue, one I/O queue pair
+(32 entries, so 31 commands in flight) and MSI-X table entry 0 shared by
+both. Linux's `nvme-pci` creates an I/O queue pair PER CPU, each on its
+own vector with its affinity set, and NT's `stornvme` does the same
+through StorPort. **What that buys is submission without a lock and
+completion on the submitting core** -- both of which need a second core
+to mean anything, and `QUERY_CPUS` has none online. So the shape is
+Linux's at a size of one: the queue is a real queue (a batch is up to 31
+commands behind one doorbell, through the block layer's
+`submit_batch`), and the per-CPU part waits for `docs/smp-design.md`,
+at which point the queue count and `pci_msix_enable()`'s single entry
+grow together.
+
+**Namespaces are disks, not partitions**, each registered on its own
+(`nvme0`, `nvme1`, ...), because that is what they are to a filesystem:
+separately sized, separately formatted -- one can be 512-byte and the
+next 4096 -- and addressed by the device, not by an offset. Linux names
+them `nvme0n1`, `nvme0n2`; here the block layer's `<driver><index>`
+scheme applies unchanged (`docs/decisions/storage.md` has why), which
+means a second CONTROLLER's first namespace would also be `nvmeN` --
+acceptable while one controller is driven, and the thing to revisit if
+a machine ever has two.
+
+**A timeout disables the controller.** A command that did not complete
+may still DMA into its buffer, and that buffer is about to be handed
+back to a caller who will reuse it. The one operation that guarantees
+the device has stopped is CC.EN=0, which is a controller reset -- so a
+timeout costs every namespace until reboot, loudly. Linux instead sends
+an ABORT for the command, and resets and re-creates the queues only if
+the abort also times out. That is the better answer and a roadmap item;
+what this avoids is the worse one, a stale DMA landing in memory the
+kernel has already given to someone else, which is corruption with no
+error at all.
+
+**FLUSH is advertised only with a volatile write cache.** IDENTIFY's VWC
+bit says whether the controller has one; without it a completed write is
+already durable, the block layer's flush is correctly a no-op, and
+claiming BLK_CAP_FLUSH would only add a command that does nothing.
