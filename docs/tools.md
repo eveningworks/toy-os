@@ -1482,6 +1482,23 @@ window without going through it will find its layout polls timing out.
   granularity of **0 means the clock never advanced**, the worst reading
   rather than the best, and the tool says so in words. On demand
   (`ondemand_sweep.py`).
+- **`fs_isolation.py`** -- DOES I/O ON ONE PATH SLOW THE FILESYSTEM DOWN
+  ON ANOTHER? The yardstick for `docs/fslock-design.md`, whose stages
+  are each a claim about who stops waiting for whom -- which
+  `latency_under_io.py` cannot see, since the compositor's reads all
+  land on `/`. Times a PROBE (`/tests/fslat_bench`: one `stat()` per
+  tick, each call timed) on one path alone, then again while a
+  `diskbench` LOAD runs on another, and prints count/avg/p99/max both
+  ways. Defaults: probe `/tmp` (ramfs), load `/var/tmp` (the disk) --
+  stage 2's claim; `--probe-path /etc` asks the same-volume question of
+  stages 3-4. **THE PROBE MUST SLEEP BETWEEN CALLS** (`--gap-ms`, default
+  1, which the timer rounds to a tick): a tight loop spends nearly all
+  its time holding the lock, so under ONE lock it starves the load
+  instead of waiting behind it, and the first version of this tool
+  reported stage 1 as the isolated one. **It exits 1 if the load
+  finished before the probe**, since that arm measured a quiet machine.
+  Attaches to a running guest; use `--kvm --cpu host,+invtsc`. Compare
+  two builds, never an absolute. On demand (`ondemand_sweep.py`).
 - **`kvm_soak.py`** -- the desktop under KVM, across FRESH BOOTS, failing
   on the symptoms that appear only there: a WM frame over a threshold, a
   file that exists but will not read, an incomplete cursor-theme load, a

@@ -10,13 +10,10 @@
 // nothing at all still waited. A lock stops only the contexts that
 // actually want the same thing.
 //
-// **IT IS ONE LOCK OVER A NON-RE-ENTRANT SUBSYSTEM, which is Linux's
-// Big Kernel Lock and is a first step rather than an end state** --
-// that one took from 2.0 to 2.6.39 to remove. What would make a finer
-// lock possible here is `tfs3.c`'s module-level scratch (`g_blk`,
-// `g_ptr_blk` and the journal images), because a per-mount lock cannot
-// protect state that is not per mount. `docs/smp-design.md` wants that
-// work anyway.
+// **IT STARTED AS ONE LOCK OVER A NON-RE-ENTRANT SUBSYSTEM, Linux's
+// Big Kernel Lock** -- which took from 2.0 to 2.6.39 to remove. It is
+// one per MOUNT now (docs/fslock-design.md, stage 2), and one per
+// volume is still a big lock over that volume.
 //
 // **ONE THING FROM THE BKL IS DELIBERATELY NOT COPIED: it was dropped
 // when its holder slept and retaken on return.** Here the lock must be

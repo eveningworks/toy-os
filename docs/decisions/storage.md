@@ -2998,6 +2998,46 @@ layer, which is why it lives in `tfs3.c` -- and it reads the ROOT's
 state (`mount_root()->state`) under `fs_exclusive_begin()`, because
 nothing else says which volume's bitmap to read.
 
+## One lock per mount, per-mount scratch, and "exclusive" is every mount's lock
+
+**Decided 2026-09-24**, stage 2 of `docs/fslock-design.md`. The
+filesystem had one sleeping lock, so a `/tmp` call waited behind a disk
+wait on `/` -- ~10 ms a call under `diskbench`, measured with
+`tools/fs_isolation.py`. Each mount now has its own (`struct mount`'s
+`lock`), and three choices in it had an obvious alternative.
+
+**Scratch is per MOUNT, not per call.** The design doc first planned a
+kmalloc'd context per backend call. One call per volume at a time is
+still true after this stage, so per mount is enough: no allocation per
+syscall, and tfs3's state grows to ~250 KiB (half of it journal, which
+Linux also keeps per superblock -- ext4's `s_journal`). Stage 3 drops a
+volume's lock mid-operation, and THAT is when anything held across the
+gap must become per call -- chosen by what it holds, not all of it now.
+
+**"Everything" is every slot's lock, parent mount first, not a new
+rwsem.** Linux has a per-superblock `s_umount` rwsem and
+`freeze_super()`; a global reader-writer lock taken shared by every
+FS_OP would be the closer copy. It was not built because a recursive
+SLEEPING rwsem is a new primitive with its own trap -- a nested reader
+behind a queued writer deadlocks, and nested FS_OPs are real here
+(`listdir_collect()` stats inside an `fs_list()` callback). Taking
+every mount lock needs nothing new, recursion keeps working, and the
+callers (partition writes, the legacy `run`, mount-table changes) are
+rare enough that its cost is irrelevant. The order is the one calls
+already nest in: a path under a mount point resolves to that mount or
+a deeper one, so a callback on `/` may take `/boot`'s lock and never
+the reverse.
+
+**A generation, not a reference count, keeps an unmount safe.** Linux
+pins a `vfsmount` with a refcount and refuses the unmount while it is
+held (`EBUSY`). Here a caller resolves a path, then may SLEEP waiting
+for the lock, and in that gap the mount can go and a new one take the
+slot. Refcounting every resolve would touch every fs call site; a
+generation read at resolve and compared under the lock turns that race
+into the failure the call would have had a moment later anyway ("no
+such path"). The slot's lock is never zeroed for the same reason -- a
+caller may be queued on it.
+
 ## A path has THREE bounds, not one: what a call may be handed, what a struct may remember, and what one component may be
 
 **Decided 2026-09-15**, when `FS_PATH_MAX` went from 64 to 4096 so a
@@ -3217,7 +3257,7 @@ submit a request, get a completion later, the shape of Linux's
 PLUG (`blk_start_plug()`/`blk_finish_plug()`) rather than its bio.
 
 **Why not the obvious async interface.** Nothing here could use one. The
-filesystem is one locked, synchronous caller (`vfs.c`'s `g_fs_lock`), so
+filesystem is a locked, synchronous caller (each mount's lock in `vfs.c`'s `FS_OP`), so
 an async submit would need a completion path, a request lifetime and a
 caller that does useful work before the completion -- and the only such
 caller in the tree is the journal commit, which has a list of blocks and

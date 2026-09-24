@@ -200,6 +200,10 @@ TOOLS = [
     # tool no runner names is never run at all. Quote a real measurement
     # from a `--kvm --cpu host,+invtsc` guest, not from this.
     ("latency_io",  "latency_under_io.py",     "desktop latency under heavy disk I/O", True, None,                  True),
+    # ATTACHES, like latency_io, and for the same reason quote a --kvm
+    # guest rather than the sweep's TCG one: under TCG the two workloads
+    # serialise on the one emulated CPU whatever the locks allow.
+    ("fs_isolation", "fs_isolation.py",        "I/O on one path vs. another (fs locks)", True, None,                True),
     ("terminal",    "terminal_probe.py",       "the GUI Terminal's keys and paging", True,  None,                   True),
     # ATTACHES to a running guest and needs a desktop up. Its
     # load-bearing check compares its answer against the SERIAL

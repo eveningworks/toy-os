@@ -229,18 +229,20 @@ Five things to know:
 
 ### The filesystem
 
-- **THE FILESYSTEM IS NOT RE-ENTRANT, and `vfs.c` holds ONE SLEEPING
-  LOCK because of it.** `tfs3.c` walks through module-level scratch
-  buffers, so `FS_OP()` takes `g_fs_lock` (a recursive `kmutex`) around
-  every backend call -- and its holder may SLEEP in a disk wait. So
-  **never take it, or any kmutex, with the preemption guard raised or
-  with interrupts off and no scheduler slot**: behind a sleeping holder
-  that spins forever. `kmutex_lock()` logs `taken from atomic context`
-  on entry when it happens. A stretch longer than one fs call that must
-  keep the disk quiet uses `fs_exclusive_begin()`/`_end()`, never the
-  preemption guard. It does NOT make an `fs_list()` callback safe to
-  call `fs_*` from (that is recursion). Finer locking is planned:
-  `docs/fslock-design.md`.
+- **THE FILESYSTEM IS NOT RE-ENTRANT, and each MOUNT has ONE SLEEPING
+  LOCK because of it.** A backend walks through per-mount scratch, so
+  `FS_OP()` takes that mount's `lock` (a recursive `kmutex` in `struct
+  mount`) around every backend call -- and its holder may SLEEP in a
+  disk wait. So **never take it, or any kmutex, with the preemption
+  guard raised or with interrupts off and no scheduler slot**: behind a
+  sleeping holder that spins forever. `kmutex_lock()` logs `taken from
+  atomic context` on entry when it happens. **The lock order is PARENT
+  MOUNT BEFORE CHILD** (an `fs_list()` callback on `/` may stat `/boot`,
+  never the reverse). A stretch longer than one fs call that must keep
+  the disk quiet uses `fs_exclusive_begin()`/`_end()` (EVERY mount's
+  lock, in that order), never the preemption guard. It does NOT make an
+  `fs_list()` callback safe to call `fs_*` on the same mount (that is
+  recursion). Finer locking inside a volume: `docs/fslock-design.md`.
 - **THERE IS NO `fs_read()`. A whole-file read goes into memory the
   caller owns: `fs_read_into(path, buf, cap)`**, which REFUSES an
   oversized file rather than truncating; a file that may be large is
@@ -604,7 +606,7 @@ The bar is "does this fix a rederive-from-scratch cost".
 | Diagnose | `panic_resolve.py` (**never hand-roll `nm`**), `acpi_dump.py`, `aml_walk.py`, `QMPSession.hmp()` (**the one oracle the guest cannot fake**), `corrupt_diff.py`, `window_resize_probe.py`, `pixel_probe.py`, `screenshot_diff.py`, `iso_guard.py` |
 | Does it actually SOUND right? | `audio_loopback_test.py` -- records the G6 back on line in; needs the cable patched in |
 | Check an implementation against a FOREIGN one | `libc_diff.py`, `uimg_codec_hostcheck.py`, `usnd_hostcheck.py`, `hash_hostcheck.py`, `divti3_hostcheck.py`, `regex_hostcheck.py`, `umd_hostcheck.py`, `ugfx_text_hostcheck.py`, `utext_hostcheck.py`, `utween_hostcheck.py`, `term_scheme_hostcheck.py` |
-| Measure | `idle_cpu.py` (quote DIFFERENCES only), `loc.py`, `dup_scan.py` (copy-paste; a REPORT, never a gate), `ping_rtt.py`, `latency_under_io.py`, `frame_balance.py` |
+| Measure | `idle_cpu.py` (quote DIFFERENCES only), `loc.py`, `dup_scan.py` (copy-paste; a REPORT, never a gate), `ping_rtt.py`, `latency_under_io.py`, `fs_isolation.py`, `frame_balance.py` |
 | Disk images, from the host | `seed_disk.py`, `install_grub.py` (also `boot_medium()`), `tfs3_writer.py`, `mkpart_test.py`, `fetch_wad.py` |
 | Generated data | `gen_version.sh`/`set_version.sh`, `genttf.py`, `gen_kbs.py`, `gen_cursors.py`, `gen_icons.py`, `gen_imgdata.py`, `gen_audio.py`, `gen_music.py`, `gen_mp3_tables.py`, `gen_signames.py`, `genrelocs.py`, `gen_syms.py`, `drivers_conf.py`, `gen_modalias.py`, `gen_decisions_index.py`, `gen_commands_index.py`, `gen_next_up.py`, `fetch_ca_bundle.py` |
 | The repo itself | `backup_repo.sh` -- run before ANY change to the repo's identity or history |
@@ -672,7 +674,7 @@ runners themselves; `--list` on either runner is the live answer.
 `hash_hostcheck.py`, `hid_parse_hostcheck.py`, `highmem_consume.py`, `highmem_test.py`,
 `hires_test.py`, `https_test.py`, `hwdata_test.py`, `init_test.py`,
 `install_test.py`, `jobs_test.py`, `kbd_test.py`,
-`keyboard_paths_test.py`, `ktest_run.py`, `latency_under_io.py`,
+`keyboard_paths_test.py`, `ktest_run.py`, `latency_under_io.py`, `fs_isolation.py`,
 `libc_diff.py`, `live_boot_test.py`, `logrotate_test.py`, `ls_test.py`, `mkpart_test.py`,
 `module_test.py`, `msi_test.py`, `multidisk_test.py`, `net_test.py`,
 `netheal_test.py`, `ntp_test.py`, `partition_test.py`, `ping_rtt.py`, `pixel_probe.py`,

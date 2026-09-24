@@ -11,7 +11,7 @@
 // THE MACHINE.** Every frame it moved, the WM re-read its wallpaper,
 // taskbar, shortcut and effect configs -- so a program writing to
 // /var/tmp all day had the render loop reading /etc every frame, each
-// read queuing for the one filesystem lock behind that program's disk
+// read queuing for the filesystem lock behind that program's disk
 // wait (0.6-1.7 s frames, measured). A counter here moves only when
 // something the topic reads can have changed.
 //

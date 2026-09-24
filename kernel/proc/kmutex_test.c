@@ -8,6 +8,7 @@
 // process doing file I/O, which is `usertest_run.py` and the whole GUI
 // suite; what is checked here is the state machine underneath it.
 #include "ktest.h"
+#include "mount.h"  // mount_resolve() -- is /tmp its own mount?
 #include "kmutex.h"
 #include "scheduler.h"
 #include "fs.h"
@@ -41,20 +42,29 @@ KTEST("kmutex", "the holder is named while held, and nobody after") {
 // would pass every other filesystem test in the tree and fail this one.
 static int g_saw_held;
 static int g_saw_owner;
+static int g_saw_other_held;
 static void lock_probe(const char *name, uint32_t size, int is_dir) {
     (void)name; (void)size; (void)is_dir;
-    if (fs_lock_held()) g_saw_held = 1;
-    g_saw_owner = fs_lock_owner();
+    if (fs_lock_held_at("/")) g_saw_held = 1;
+    g_saw_owner = fs_lock_owner_at("/");
+    // A DIFFERENT MOUNT'S LOCK IS NOT THIS ONE. With one lock for the
+    // whole filesystem, /tmp's would read as held in here too.
+    if (fs_lock_held_at("/tmp")) g_saw_other_held = 1;
 }
 
 KTEST("kmutex", "the filesystem holds it for the whole backend call") {
     g_saw_held = 0;
     g_saw_owner = -1;
-    KTEST_ASSERT(!fs_lock_held());          // nothing in flight out here
+    g_saw_other_held = 0;
+    int separate = mount_resolve("/tmp", 0) != mount_resolve("/", 0);
+    KTEST_ASSERT(!fs_lock_held_at("/"));    // nothing in flight out here
     fs_list("/", lock_probe);
     KTEST_ASSERT(g_saw_held);               // ...and held in there
     KTEST_ASSERT_EQ(g_saw_owner, scheduler_current_pid());
-    KTEST_ASSERT(!fs_lock_held());          // released on the way out
+    KTEST_ASSERT(!fs_lock_held_at("/"));    // released on the way out
+    // One lock per mount: /tmp's was free while /'s was held -- when
+    // /tmp is its own mount (the tmpfs service's ramfs) to check.
+    if (separate) KTEST_ASSERT(!g_saw_other_held);
 }
 
 // **THE CHECK THAT FINDS A DEADLOCK BEFORE THE RACE DOES.** A caller

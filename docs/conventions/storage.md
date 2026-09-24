@@ -1088,6 +1088,34 @@ Four things to know:
   drives a backend directly passes `sc.st` (or, for ramfs, the test
   seam's `ramfs_test_state()`).
 
+## ONE LOCK PER MOUNT, TAKEN PARENT BEFORE CHILD, AND A SLOT IS NEVER ZEROED
+
+`vfs.c`'s `FS_OP(m, gen, op, ...)` takes `struct mount`'s own `lock`
+around the backend call (stage 2 of `docs/fslock-design.md`), so a
+`/tmp` call does not wait behind a disk wait on `/`. Inside one volume
+it is still one call at a time. Four things to know:
+
+- **Parent mount before child is the only lock order.** It is the
+  order calls nest in: an `fs_list()` callback on `/` may stat `/boot`,
+  never the reverse, because a path under a mount point resolves to
+  that mount or a deeper one. Anything that takes a second mount's
+  lock while holding one must keep to it.
+- **`fs_exclusive_begin()` takes EVERY slot's lock, used or not**, in
+  that order, after a small `g_excl` that keeps two exclusive holders
+  from ordering against a table the other is changing. Every mount
+  table change (`mount_add`, `mount_remove`, the reprobe after a
+  format) runs under it, and so do scratch operations.
+- **A slot is emptied by `slot_clear()`, never a memset.** A caller
+  may be queued on its lock; zeroing a held kmutex corrupts it. `gen`
+  goes up instead, and FS_OP compares the resolve-time `gen` once it
+  holds the lock -- an unmount, or an unmount and a new mount in the
+  same slot, fails the call rather than running it on the wrong
+  filesystem.
+- **Anything global in `vfs.c` needs its own lock now.** The step
+  table (`g_steps`) was covered by the one fs lock by accident and has
+  `g_steps_lock`; `record()` publishes `used` last because
+  `mount_resolve()` reads the table unlocked.
+
 ## A PROBE MUST NOT DISTURB A MOUNT, AND THAT ONLY BECAME TRUE WHEN IT MATTERED
 
 `fs_ops.h` has always said `probe()` is detection only, with no side

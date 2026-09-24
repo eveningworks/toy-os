@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "fs.h"     // FS_PATH_MAX
 #include "fs_ops.h" // struct fs_ops
+#include "kmutex.h" // struct mount's lock
 
 struct block_device;
 
@@ -66,7 +67,23 @@ struct mount {
     // a backend that declares none. It is what makes two mounts of one
     // backend two filesystems rather than one read twice.
     void *state;
+
+    // ONE BACKEND CALL ON THIS VOLUME AT A TIME (vfs.c's FS_OP), and
+    // never one lock for all of them: a /tmp call does not wait behind a
+    // disk wait on /. Held across the call, which may sleep.
+    //
+    // THE SLOT OUTLIVES THE MOUNT, and both fields below are why. The
+    // lock is never zeroed (a caller may be queued on it); `gen` changes
+    // whenever the slot is emptied, so a caller that resolved a path
+    // before an unmount -- and perhaps a remount into the same slot --
+    // finds a different generation once it has the lock, and fails.
+    struct kmutex lock;
+    uint32_t gen;
 };
+
+// Lock one mount for a backend call; its state is behind it.
+void mount_lock(const struct mount *m);
+void mount_unlock(const struct mount *m);
 
 // A SCRATCH state, for an operation on a volume nothing has mounted:
 // probe, format, wipe -- pass `st` to the op. Returns 0 only when the
@@ -186,14 +203,21 @@ const struct fs_ops *mount_backend_named(const char *name);
 // next probe.
 int mount_wipe_others(const struct fs_ops *target, const struct block_device *dev);
 
-// Hold vfs.c's filesystem lock across a stretch that is not one fs_*
-// call: a raw partition-table write, a KTEST that must see nothing else
-// reach the disk, a legacy `run`. RECURSIVE, so fs_* inside it nests.
+// Hold EVERY mount's lock across a stretch that is not one fs_* call:
+// a raw partition-table write, a KTEST that must see nothing else reach
+// the disk, a legacy `run`, a change to the mount table itself.
+// RECURSIVE, so fs_* inside it nests. Linux's freeze_super(), applied to
+// every superblock at once.
 //
 // **THIS, NOT scheduler_preempt_disable(), IS WHAT KEEPS THE DISK
 // QUIET.** A holder may be asleep in a disk wait, so the guard stops
 // nobody who already got in -- and a guarded caller that then contends
 // the lock spins forever (kmutex.c's might_sleep()).
+//
+// **THE LOCK ORDER IS PARENT MOUNT BEFORE CHILD**, and this takes them
+// in that order. It is the order FS_OP calls nest in: an fs_list()
+// callback on `/` may stat `/boot`, never the reverse, because a path
+// under a mount point resolves to that mount or a deeper one.
 void fs_exclusive_begin(void);
 void fs_exclusive_end(void);
 

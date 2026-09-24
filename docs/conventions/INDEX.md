@@ -777,6 +777,8 @@ whenever a headline here tells you something you did not already know.
 - **A BACKEND DECLARES HOW MANY TIMES IT MAY BE MOUNTED, and all three
   say MOUNT_MAX**
 - **A BACKEND'S VOLUME STATE IS PER MOUNT, AND EVERY OP IS HANDED IT**
+- **ONE LOCK PER MOUNT, TAKEN PARENT BEFORE CHILD, AND A SLOT IS NEVER
+  ZEROED**
 - **A PROBE MUST NOT DISTURB A MOUNT, and that contract was only ever
   honoured by accident**
 - **`fs_ops.init()` TAKES A DEVICE, and `blk_active()` is not it**

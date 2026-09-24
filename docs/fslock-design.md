@@ -7,8 +7,8 @@ sleep, every other caller pays one of its operations per call. What
 would it take for callers touching DIFFERENT files not to wait on each
 other at all?**
 
-**Status: stages 0 and 1 are BUILT (2026-09-23, 2026-09-24), and stage
-2's first half. The rest is designed, not built.**
+**Status: stages 0, 1 and 2 are BUILT (2026-09-23, 2026-09-24).
+Stages 3-4 are designed, not built.**
 
 ## Why, in one measurement
 
@@ -101,7 +101,25 @@ Each ships on its own, and each is measured on
     lock. `t3_enter()` went with the owner. It also fixed a live bug:
     the file-scope read-side pointer cache served one TFS3 volume's
     table for another's block (`tfs3_test.c` goes red on the old code).
-  - **2b: one lock per mount.**
+  - **2b, BUILT 2026-09-24: one lock per mount.** `struct mount`
+    carries a recursive `kmutex` and a generation; `FS_OP` takes the
+    mount's lock and fails the call if the slot's generation moved
+    while it waited (an unmount, or an unmount and a new mount in the
+    same slot). A slot is emptied without zeroing its lock.
+    `fs_exclusive_begin()` takes every slot's lock, parent mount before
+    child -- the order `fs_list()` callbacks nest in -- behind a small
+    `g_excl` so two exclusive holders cannot order against a changing
+    table. Every mount-table change runs under it. `vfs.c`'s step table
+    got its own lock; the one fs lock had covered it by accident.
+    MEASURED with `tools/fs_isolation.py` (KVM, `+invtsc`, three
+    alternating runs a side against stage 1, 52f39e9e): a `stat` on
+    `/tmp` once a tick while `diskbench` loads `/var/tmp` averaged
+    9.6-10.7 ms at stage 1 (p99 18.5-20 ms) and 69-77 us here (p99
+    271-280 us); alone, 99-119 us against 12 us, because stage 1's one
+    lock also queued it behind the desktop's own work on `/`. What
+    remains under load is CPU, not the lock: a syscall runs with
+    interrupts off. `latency_under_io.py` sees none of this -- the
+    compositor's reads are on `/`, which is stage 3-4's problem.
 - **Stage 3 -- inside one volume.** A journal lock with jbd2-style
   handles, an allocator lock over the bitmaps and the TRIM queue, and a
   name-cache lock. **The cheaper intermediate worth measuring first:**

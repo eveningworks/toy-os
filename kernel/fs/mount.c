@@ -122,6 +122,70 @@ const struct mount *mount_resolve(const char *path, const char **out_sub) {
 
 // ---- mounting ------------------------------------------------------
 
+// ---- the locks -------------------------------------------------------
+
+// The lock is mutable state in an otherwise read-mostly table; callers
+// hold `const struct mount *` from mount_resolve().
+void mount_lock(const struct mount *m)   { kmutex_lock(&((struct mount *)m)->lock); }
+void mount_unlock(const struct mount *m) { kmutex_unlock(&((struct mount *)m)->lock); }
+
+static int depth_of(const struct mount *m) {
+    if (!m->used) return FS_PATH_MAX;           // empty slots last
+    if (m->point_len == 1) return 0;            // the root
+    int d = 0;
+    for (int i = 0; i < m->point_len; i++) if (m->point[i] == '/') d++;
+    return d;
+}
+
+// EVERY SLOT, used or not, so the set released is the set taken even if
+// the table changes in between -- which is what a mount under exclusion
+// does. Ordered parent before child (see mount.h); a nested call takes
+// each again, which the recursion makes free.
+//
+// g_excl FIRST, so the order is computed from a table no other exclusive
+// holder is changing -- the table only changes under exclusion.
+static struct kmutex g_excl;
+
+void fs_exclusive_begin(void) {
+    kmutex_lock(&g_excl);
+    int order[MOUNT_MAX];
+    for (int i = 0; i < MOUNT_MAX; i++) order[i] = i;
+    for (int i = 1; i < MOUNT_MAX; i++) {
+        int v = order[i], j = i;
+        while (j > 0 && depth_of(&g_mounts[order[j - 1]]) > depth_of(&g_mounts[v])) {
+            order[j] = order[j - 1];
+            j--;
+        }
+        order[j] = v;
+    }
+    for (int i = 0; i < MOUNT_MAX; i++) kmutex_lock(&g_mounts[order[i]].lock);
+}
+
+void fs_exclusive_end(void) {
+    for (int i = MOUNT_MAX - 1; i >= 0; i--) kmutex_unlock(&g_mounts[i].lock);
+    kmutex_unlock(&g_excl);
+}
+
+// Empty a slot. NOT a memset: the lock may have callers queued on it,
+// and `gen` is how they find out the mount they resolved has gone.
+static void slot_clear(struct mount *m) {
+    struct kmutex lock = m->lock;
+    uint32_t gen = m->gen + 1;
+    k_memset(m, 0, sizeof *m);
+    m->lock = lock;
+    m->gen = gen;
+}
+
+int fs_lock_held_at(const char *path) {
+    const struct mount *m = mount_resolve(path, 0);
+    return m ? kmutex_held(&m->lock) : 0;
+}
+
+int fs_lock_owner_at(const char *path) {
+    const struct mount *m = mount_resolve(path, 0);
+    return m ? kmutex_owner(&m->lock) : 0;
+}
+
 // ---- per-mount backend state ---------------------------------------
 
 // **A SCRATCH OPERATION HOLDS THE FILESYSTEM LOCK**, like any backend
@@ -194,11 +258,12 @@ static int caps_are_honest(const struct fs_ops *fs) {
     return 1;
 }
 
-// Fills a slot and announces it. `r` is what init() returned.
+// Fills a slot and announces it. `r` is what init() returned. `used`
+// goes LAST: mount_resolve() reads the table without a lock and skips a
+// slot that is not used, so it never matches a half-copied point.
 static void record(struct mount *slot, const struct fs_ops *fs,
                    const struct block_device *dev, const char *point,
                    unsigned flags, int r) {
-    slot->used = 1;
     k_strlcpy(slot->point, point, sizeof slot->point);
     slot->point_len = (int)k_strlen(slot->point);
     slot->fs = fs;
@@ -211,6 +276,7 @@ static void record(struct mount *slot, const struct fs_ops *fs,
     // then repeat to the user. A backend that says 0 (ramfs) is not
     // persistent whatever the device says.
     slot->persistent = (r == 1) && dev && dev->persistent;
+    __atomic_store_n(&slot->used, 1, __ATOMIC_RELEASE);
     klog_printf("fs: %s mounted at %s on %s%s%s\n", fs->name, slot->point,
                 dev ? dev->name : "(no device)",
                 (flags & MNT_RDONLY) ? ", read-only" : "",
@@ -390,7 +456,7 @@ static int remove_locked(const char *point, const char **why) {
     if (m->state) m->fs->state_free(m->state);
 
     klog_printf("fs: %s unmounted from %s\n", m->fs->name, m->point);
-    k_memset(m, 0, sizeof *m);
+    slot_clear(m);
     return 1;
 }
 
@@ -945,7 +1011,9 @@ void mount_boot_auto(void) {
 int mount_reprobe_root(const struct fs_ops *expect) {
     // Drop everything: a reformat invalidates the root, and anything
     // mounted under it was reached through a path the root owns.
-    for (int i = 0; i < MOUNT_MAX; i++) k_memset(&g_mounts[i], 0, sizeof g_mounts[i]);
+    fs_exclusive_begin();
+    for (int i = 0; i < MOUNT_MAX; i++) slot_clear(&g_mounts[i]);
+    fs_exclusive_end();
     g_tbl_valid = 0;
     probe_and_mount_root();
     const struct mount *root = mount_root();

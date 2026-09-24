@@ -405,6 +405,8 @@ EXCLUDED = [
                           "with `spawn /tests/stdio_bench` and read its log with "
                           "`cat /var/tmp/stdio_bench.log` -- it outlives a console "
                           "capture, which is why it writes one"),
+    ("fslat_bench",      "a benchmark, not a test: per-call fs latency, for "
+                          "tools/fs_isolation.py -- a timing number would make the gate flap"),
     ("crash_test",       "faults on purpose; the point is the kernel's recovery"),
     ("nx_test",          "faults on purpose (jumps into a data page) -- see faulttest_run.py"),
     ("stack_smash_test", "faults on purpose (trips the stack canary)"),

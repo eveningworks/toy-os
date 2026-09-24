@@ -11,7 +11,7 @@
 // fs_generation(), one counter for every write in the machine, and the
 // WM re-read its configs whenever it moved -- so a program writing to
 // /var/tmp all day had the compositor reading /etc every frame, each
-// read queuing for the one filesystem lock behind that program's disk
+// read queuing for the filesystem lock behind that program's disk
 // wait. inotify's shape, minus the fd: the events go where the
 // compositor already waits.
 //
