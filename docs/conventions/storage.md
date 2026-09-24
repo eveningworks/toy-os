@@ -1111,6 +1111,13 @@ it is still one call at a time. Four things to know:
   holds the lock -- an unmount, or an unmount and a new mount in the
   same slot, fails the call rather than running it on the wrong
   filesystem.
+- **A DEVICE FLUSH BELONGS UNDER THE LOCK OF THE MOUNT IT SERVES**
+  (`fs_sync_path()`), and `fs_sync()` runs under `fs_exclusive_begin()`.
+  A flush sleeps holding the driver's lock (`g_ata_lock`), and exclusion
+  promises its holder nothing is at the disk -- the legacy `run` then
+  freezes rotation and spins on any lock it meets. fsync's flush used to
+  follow the unlock, and logd's periodic fsync hung `usertest_run.py`
+  that way. `tfs3_test.c` asserts the lock is held at the device.
 - **Anything global in `vfs.c` needs its own lock now.** The step
   table (`g_steps`) was covered by the one fs lock by accident and has
   `g_steps_lock`; `record()` publishes `used` last because

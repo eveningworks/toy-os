@@ -11,7 +11,8 @@
 #include "block.h"
 #include "heap.h"
 #include "string.h"
-#include "mount.h"  // mount_scratch_begin/end -- each volume owns its state
+#include "mount.h"  // mount_scratch_begin/end, mount_add -- each volume owns its state
+#include "fs.h"     // fs_sync_path(), fs_lock_held_at()
 
 #define VOL_SECTORS 8192u           // 4 MiB
 #define VOL_BYTES   (VOL_SECTORS * 512u)
@@ -103,4 +104,68 @@ KTEST("tfs3", "a pointer table cached for one volume is not served to another") 
     KTEST_ASSERT(same0);
     KTEST_ASSERT_EQ((int)first1, 0x40 + 0x20 + 13);   // not 0: the hole in volume 0's table
     KTEST_ASSERT(same1);
+}
+
+// ---- the flush happens under the mount's lock ----------------------
+
+// A MOUNTED RAM volume whose flush() records whether its mount's lock is
+// held at that moment. fs_exclusive_begin() promises its holder that
+// nothing is at the disk, and the legacy `run` spins on any lock it then
+// meets -- so a flush issued after the mount lock is released (fsync did
+// this) is a hang waiting for a sleeping flusher. Both entry points are
+// asked, because they took different routes to the device.
+#define FLUSH_POINT "/var/tmp/.ktest_flushmnt"
+
+static int g_flush_watch, g_flush_calls, g_flush_locked;
+
+static int v0_flush(void) {
+    if (g_flush_watch) {
+        g_flush_calls++;
+        if (fs_lock_held_at(FLUSH_POINT "/f")) g_flush_locked++;
+    }
+    return 1;
+}
+
+static const struct block_device FLUSH_DEV = {
+    .name = "t3flush", .sector_count = vol_count, .read_sectors = v0_read,
+    .write_sectors = v0_write, .max_sectors_per_xfer = vol_xfer,
+    .caps = BLK_CAP_FLUSH, .flush = v0_flush,
+};
+
+KTEST("tfs3", "fsync and sync flush the device while its mount is locked") {
+    if (!g_vol[0]) g_vol[0] = kmalloc(VOL_BYTES);
+    if (!g_vol[0]) KTEST_SKIP("could not allocate a 4 MiB volume");
+    k_memset(g_vol[0], 0, VOL_BYTES);
+
+    struct fs_scratch sc;
+    int ok = mount_scratch_begin(T(), &sc);
+    if (ok) {
+        ok = T()->format(sc.st, &FLUSH_DEV);
+        mount_scratch_end(&sc);
+    }
+    fs_mkdir(FLUSH_POINT);
+    const char *why = 0;
+    int mounted = ok && mount_add(&FLUSH_DEV, "tfs3", FLUSH_POINT, 0, 0, &why);
+    int wrote = mounted && fs_write(FLUSH_POINT "/f", "x", 0);
+
+    g_flush_calls = g_flush_locked = 0;
+    g_flush_watch = 1;
+    int fsynced = wrote && fs_sync_path(FLUSH_POINT "/f");
+    int fsync_calls = g_flush_calls, fsync_locked = g_flush_locked;
+    g_flush_calls = g_flush_locked = 0;
+    int synced = wrote && fs_sync(0);
+    int sync_calls = g_flush_calls, sync_locked = g_flush_locked;
+    g_flush_watch = 0;
+
+    if (mounted) mount_remove(FLUSH_POINT, &why);
+    fs_delete(FLUSH_POINT);
+    kfree(g_vol[0]);
+    g_vol[0] = 0;
+
+    KTEST_ASSERT(mounted);
+    KTEST_ASSERT(fsynced && synced);
+    KTEST_ASSERT(fsync_calls >= 1);                 // the fixture reached the device
+    KTEST_ASSERT_EQ(fsync_locked, fsync_calls);     // ...and every flush was locked
+    KTEST_ASSERT(sync_calls >= 1);
+    KTEST_ASSERT_EQ(sync_locked, sync_calls);
 }

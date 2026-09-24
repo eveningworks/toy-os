@@ -240,7 +240,9 @@ Five things to know:
   MOUNT BEFORE CHILD** (an `fs_list()` callback on `/` may stat `/boot`,
   never the reverse). A stretch longer than one fs call that must keep
   the disk quiet uses `fs_exclusive_begin()`/`_end()` (EVERY mount's
-  lock, in that order), never the preemption guard. It does NOT make an
+  lock, in that order), never the preemption guard -- and anything that
+  reaches the DEVICE for a mount (a flush) does so under that mount's
+  lock, or exclusion stops promising a quiet disk. It does NOT make an
   `fs_list()` callback safe to call `fs_*` on the same mount (that is
   recursion). Finer locking inside a volume: `docs/fslock-design.md`.
 - **THERE IS NO `fs_read()`. A whole-file read goes into memory the

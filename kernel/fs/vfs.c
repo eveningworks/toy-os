@@ -360,17 +360,34 @@ uint64_t fs_generation(void) { return g_generation; }
 // Per-file granularity would need the write-back page cache
 // docs/pagecache-design.md stages, which is precisely why that document
 // puts fsync AFTER it.
+//
+// **THE DEVICE FLUSH HAPPENS UNDER THE MOUNT'S LOCK**, not after it. A
+// flush sleeps holding the DRIVER's lock (ata.c's g_ata_lock), and
+// fs_exclusive_begin() promises its holder that nothing is at the disk
+// -- the legacy `run` then freezes rotation and spins on any lock it
+// meets. Issued after the unlock, logd's periodic fsync slipped past
+// that promise and hung the machine: `run` spun on g_ata_lock behind a
+// flush that could never be rotated to. Linux's sync_filesystem() runs
+// under s_umount for the same reason. The cost is that calls on this
+// mount wait out the flush.
 int fs_sync_path(const char *path) {
     struct resolved r;
     if (!resolve(path, &r)) return 0;
-    if (r.m->fs->sync && !FS_OP(r.m, r.gen, sync)) {
-        klog_printf(KLOG_ERR "fs: fsync FAILED -- %s could not commit\n", r.m->point);
-        return 0;
+    mount_lock(r.m);
+    int ok = 0;
+    if (r.m->used && r.m->gen == r.gen) {
+        ok = 1;
+        if (r.m->fs->sync && !r.m->fs->sync(r.m->state)) {
+            klog_printf(KLOG_ERR "fs: fsync FAILED -- %s could not commit\n", r.m->point);
+            ok = 0;
+        } else if (r.m->dev) {
+            // A mount with no device (ramfs) has nothing to flush and is
+            // durable in the only sense it can be.
+            ok = blkdev_flush(r.m->dev);
+        }
     }
-    // A mount with no device (ramfs) has nothing to flush and is
-    // durable in the only sense it can be.
-    if (!r.m->dev) return 1;
-    return blkdev_flush(r.m->dev);
+    mount_unlock(r.m);
+    return ok;
 }
 
 // The kernel's idle work, for any backend that defers something --
@@ -389,7 +406,20 @@ void fs_idle(void) {
     }
 }
 
+// UNDER fs_exclusive_begin(), for fs_sync_path()'s reason: the ATA
+// write-back and the device flushes below sleep holding driver locks,
+// and they are per DEVICE rather than per mount. `sync` is rare
+// (the command, shutdown), so holding everything costs nothing real.
+static int fs_sync_locked(uint32_t *wrote_out);
+
 int fs_sync(uint32_t *wrote_out) {
+    fs_exclusive_begin();
+    int ok = fs_sync_locked(wrote_out);
+    fs_exclusive_end();
+    return ok;
+}
+
+static int fs_sync_locked(uint32_t *wrote_out) {
     uint32_t wrote = 0, pending = 0;
     int ok = 1;
 
