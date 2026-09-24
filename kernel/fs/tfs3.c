@@ -249,6 +249,12 @@ struct t3_state {
 
     uint32_t jrn_seq;          // this volume's journal sequence number
 
+    // Bumped by every block free. A read that dropped the mount's lock
+    // for its device I/O compares it afterwards: if any block was freed
+    // meanwhile, the file's mapping may have changed under the inode copy
+    // it is walking, so it stops short (vol_read_run()).
+    uint64_t free_gen;
+
     // Tiny name-lookup cache (dir ino + name -> child ino): path walks
     // are the hot loop, and every component is otherwise a dirent scan.
     // Invalidated wholesale on any mutation -- cheap and obviously
@@ -425,6 +431,33 @@ static void vol_go_readonly(struct t3_state *sbi, const char *why) {
     klog_printf("tfs3: %s -- the volume is read-only until the next boot "
                 "replays its journal\n", why);
     mount_force_readonly(sbi->vol.dev, why);
+}
+
+// A FILE-DATA run, read with the mount's lock DROPPED when that is safe
+// (mount.h's mount_io_begin()), so the rest of the volume is not held
+// up for the length of a disk transfer. Returns 1 read, 0 failed, and
+// -1 when the mount went away while unlocked -- the caller must then
+// return at once WITHOUT touching sbi, which is freed.
+//
+// Everything the gap needs is copied out first; nothing per-mount is
+// touched in it. A range a deferred transaction has STAGED is read
+// from the staging instead, which is per-mount state, so under the lock.
+static int vol_read_run(struct t3_state *sbi, uint32_t lba, int count, void *buf) {
+    if (lba + (uint32_t)count > sbi->vol.sector_count) return 0;
+    if (sbi->txn_deferred) {
+        for (int i = 0; i < sbi->txn_count; i++) {
+            uint32_t base = sbi->txn_target[i] * T3_SPB;
+            if (lba < base + T3_SPB && lba + (uint32_t)count > base)
+                return vol_read_sectors(sbi, lba, count, buf);
+        }
+    }
+    const struct block_device *dev = sbi->vol.dev;
+    uint32_t at = sbi->vol.base_lba + lba;
+    struct mount_io g;
+    if (!mount_io_begin(sbi, &g)) return blkdev_read_sectors(dev, at, count, buf);
+    int ok = blkdev_read_sectors(dev, at, count, buf);
+    if (!mount_io_end(&g)) return -1;
+    return ok;
 }
 
 static int vol_write_sectors(struct t3_state *sbi, uint32_t lba, int count, const void *buf) {
@@ -1087,6 +1120,11 @@ static void free_block_bit(struct t3_state *sbi, uint32_t blk) {
     uint32_t i = (blk - sbi->group0) % T3_BPG;
     if (g >= sbi->sb.gc) return;
     if (!bbm_test(sbi, g, i)) return; // double-free guard -- fsck's problem, not a crash
+    // NOT WHILE A READ IS AT THE DEVICE WITHOUT THE LOCK: the block could
+    // be reallocated and written before that read lands, and it would
+    // return another file's bytes. Linux's inode_dio_wait(), per mount.
+    mount_io_drain(sbi);
+    sbi->free_gen++;
     bbm_set(sbi, g, i, 0);
     sbi->gd[g].free_blocks++;
     mark_dirty(sbi->gdt_dirty, g);
@@ -2784,8 +2822,18 @@ static uint32_t read_range_impl(struct t3_state *sbi, const struct t3_inode *nod
                 if (!block_for_index(sbi, node, bi + run, &nxt) || nxt != blk + run) break;
                 run++;
             }
-            if (!vol_read_sectors(sbi, blk * T3_SPB, (int)(run * T3_SPB), dst + total)) break;
+            // THE ONE PLACE THE LOCK MAY DROP: a whole-block run straight
+            // into the caller's buffer (vol_read_run()). After it, a freed
+            // block anywhere on the volume means this inode copy may no
+            // longer describe the file -- stop SHORT and let the caller's
+            // next call look it up again. The run itself is good: frees
+            // wait for it (free_block_bit()).
+            uint64_t freed = sbi->free_gen;
+            int r = vol_read_run(sbi, blk * T3_SPB, (int)(run * T3_SPB), dst + total);
+            if (r < 0) return total;       // unmounted meanwhile: sbi is gone
+            if (!r) break;
             total += run * T3_BLOCK;
+            if (sbi->free_gen != freed) break;
             continue;
         } else {
             if (!read_block(sbi, blk, sbi->blk)) break;

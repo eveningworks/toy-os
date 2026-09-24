@@ -120,6 +120,25 @@ Each ships on its own, and each is measured on
     remains under load is CPU, not the lock: a syscall runs with
     interrupts off. `latency_under_io.py` sees none of this -- the
     compositor's reads are on `/`, which is stage 3-4's problem.
+- **Stage 3a, BUILT 2026-09-24: a data READ drops the volume's lock.**
+  A whole-block run is read straight into the caller's buffer with the
+  mount's lock released (`mount_io_begin()`/`_end()`, tfs3's
+  `vol_read_run()`), Linux's direct-I/O shape. What makes that safe is
+  a per-mount count of open gaps that three things wait on before they
+  proceed (`mount_io_drain()`, Linux's `inode_dio_wait()` but per mount):
+  a block FREE, `fs_exclusive_begin()`, and so unmount. A reader stops
+  short if any block was freed during its gap (`free_gen`), since its
+  inode copy may be stale. KTEST: the device sees the read unlocked,
+  and never under exclusion; `fsrace_test` races a reader against a
+  truncate-and-reuse and checks every byte. **The race is not reachable
+  today even without the drain** -- the reader holds the ATA driver's
+  lock for its transfer, so the reuse write queues behind it -- which is
+  `heaprace_test`'s lesson again: correct by inspection, a fixture for
+  when a driver queues commands. MEASURED (fs_isolation `/etc`, KVM,
+  three runs a side): 9.0-10.0 ms under load against 10.4-11.2 ms --
+  small, because what that probe waits behind is diskbench's WRITES.
+  One 3a run had a single 242 ms stall (HEAD's worst: 34 ms), not
+  explained. 3b is the write side.
 - **Stage 3 -- inside one volume.** A journal lock with jbd2-style
   handles, an allocator lock over the bitmaps and the TRIM queue, and a
   name-cache lock. **The cheaper intermediate worth measuring first:**

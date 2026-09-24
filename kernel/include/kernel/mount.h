@@ -79,11 +79,52 @@ struct mount {
     // finds a different generation once it has the lock, and fails.
     struct kmutex lock;
     uint32_t gen;
+
+    // Backend calls on this mount that are doing DEVICE I/O with the lock
+    // dropped (mount_io_begin() below). Written with atomics, read by
+    // mount_io_drain().
+    int io_gaps;
 };
 
 // Lock one mount for a backend call; its state is behind it.
 void mount_lock(const struct mount *m);
 void mount_unlock(const struct mount *m);
+
+// ---- device I/O without the mount's lock (fslock stage 3) ------------
+//
+// A backend may drop its mount's lock around a stretch of PURE device
+// I/O -- a transfer into or out of the caller's own buffer that touches
+// no per-mount state -- so other calls on the volume run meanwhile.
+// Linux's direct I/O does the same without i_rwsem, counted by
+// inode_dio_begin()/_end(), and truncate waits in inode_dio_wait().
+//
+//   struct mount_io g;
+//   if (mount_io_begin(sbi, &g)) {        // the lock is dropped
+//       ok = blkdev_read_sectors(dev, lba, n, buf);   // no sbi in here
+//       if (!mount_io_end(&g)) return;    // the mount went: touch NOTHING
+//   } else { ... the same I/O, still locked ... }
+//
+// begin() declines (returns 0, lock still held) unless the lock is held
+// exactly ONCE by this caller and not under fs_exclusive_begin() -- a
+// nested or excluded caller keeps it. end() retakes the lock and returns
+// 0 if the mount was unmounted meanwhile; the backend must then return
+// without touching its state, which is freed.
+//
+// **WHAT MAY NOT HAPPEN WHILE A GAP IS OPEN** is anything that would
+// make its I/O wrong: freeing a block (a reader would return whatever
+// the next owner writes there), unmounting, and exclusion's "nothing is
+// at the disk". Each of those calls mount_io_drain() first -- it waits,
+// holding the lock, for this mount's gaps to close. A gap decrements
+// BEFORE it retakes the lock, which is what lets a lock holder wait for
+// it without deadlock.
+struct mount_io {
+    struct mount *m;
+    uint32_t gen;
+};
+
+int mount_io_begin(void *st, struct mount_io *g);
+int mount_io_end(struct mount_io *g);
+void mount_io_drain(void *st);
 
 // A SCRATCH state, for an operation on a volume nothing has mounted:
 // probe, format, wipe -- pass `st` to the op. Returns 0 only when the

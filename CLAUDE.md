@@ -242,7 +242,9 @@ Five things to know:
   the disk quiet uses `fs_exclusive_begin()`/`_end()` (EVERY mount's
   lock, in that order), never the preemption guard -- and anything that
   reaches the DEVICE for a mount (a flush) does so under that mount's
-  lock, or exclusion stops promising a quiet disk. It does NOT make an
+  lock, or exclusion stops promising a quiet disk. The one exception is
+  a data read that DROPS its lock through `mount_io_begin()` -- and a
+  block free or exclusion waits for it (`mount_io_drain()`). It does NOT make an
   `fs_list()` callback safe to call `fs_*` on the same mount (that is
   recursion). Finer locking inside a volume: `docs/fslock-design.md`.
 - **THERE IS NO `fs_read()`. A whole-file read goes into memory the

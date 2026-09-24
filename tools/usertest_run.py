@@ -104,6 +104,9 @@ TESTS = [
     # device and NOTES the skip; tools/devclaim_test.py launches a
     # guest with one for the leg that proves the unbind.
     ("devclaim_test", None, None, None),
+    # A read WITHOUT the fs lock racing a truncate that frees and reuses
+    # its blocks (fslock stage 3). SPAWNED: it runs two threads.
+    ("fsrace_test", None, None, None),
     # And stage 3's primitive: the DMA buffer, which is what makes a
     # claimed device able to reach memory at all. SPAWNED for the same
     # reason as the two above, and it is the only check that a released

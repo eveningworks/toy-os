@@ -169,3 +169,84 @@ KTEST("tfs3", "fsync and sync flush the device while its mount is locked") {
     KTEST_ASSERT(sync_calls >= 1);
     KTEST_ASSERT_EQ(sync_locked, sync_calls);
 }
+
+// ---- a data read drops the mount's lock, and only where it may -------
+
+// fslock stage 3: a whole-block run is read with the mount's lock
+// DROPPED (tfs3.c's vol_read_run()), so the rest of the volume is not
+// held up for the transfer. This asserts both halves from the device's
+// side: an ordinary read reaches it UNLOCKED at least once, with the
+// gap counted; the same read under fs_exclusive_begin() never does --
+// exclusion promises its holder that nothing is at the disk, and a gap
+// opened under it is the hang 6fc7b6b5 fixed for flushes.
+#define GAP_POINT "/var/tmp/.ktest_gapmnt"
+
+static int g_gap_watch, g_gap_reads, g_gap_unlocked, g_gap_counted;
+
+static int gap_read(uint32_t lba, int n, void *b) {
+    if (g_gap_watch) {
+        g_gap_reads++;
+        if (!fs_lock_held_at(GAP_POINT "/f")) {
+            g_gap_unlocked++;
+            const struct mount *m = mount_resolve(GAP_POINT "/f", 0);
+            if (m && __atomic_load_n(&m->io_gaps, __ATOMIC_ACQUIRE) > 0) g_gap_counted++;
+        }
+    }
+    return vol_rw(0, lba, n, b, 0);
+}
+
+static const struct block_device GAP_DEV = {
+    .name = "t3gap", .sector_count = vol_count, .read_sectors = gap_read,
+    .write_sectors = v0_write, .max_sectors_per_xfer = vol_xfer,
+};
+
+KTEST("tfs3", "a whole-block read drops the mount's lock, and not under exclusion") {
+    if (!g_vol[0]) g_vol[0] = kmalloc(VOL_BYTES);
+    if (!g_vol[0]) KTEST_SKIP("could not allocate a 4 MiB volume");
+    k_memset(g_vol[0], 0, VOL_BYTES);
+
+    struct fs_scratch sc;
+    int ok = mount_scratch_begin(T(), &sc);
+    if (ok) {
+        ok = T()->format(sc.st, &GAP_DEV);
+        mount_scratch_end(&sc);
+    }
+    fs_mkdir(GAP_POINT);
+    const char *why = 0;
+    int mounted = ok && mount_add(&GAP_DEV, "tfs3", GAP_POINT, 0, 0, &why);
+    static uint8_t data[64 * 1024], back[64 * 1024];
+    for (unsigned i = 0; i < sizeof data; i++) data[i] = (uint8_t)(i * 13u + 5u);
+    int wrote = mounted && fs_write_range(GAP_POINT "/f", 0, data, sizeof data);
+
+    g_gap_reads = g_gap_unlocked = g_gap_counted = 0;
+    g_gap_watch = 1;
+    uint32_t got = wrote ? fs_read_range(GAP_POINT "/f", 0, back, sizeof back) : 0;
+    g_gap_watch = 0;
+    int plain_reads = g_gap_reads, plain_unlocked = g_gap_unlocked, plain_counted = g_gap_counted;
+    int same = got == sizeof back && k_memcmp(back, data, sizeof back) == 0;
+
+    g_gap_reads = g_gap_unlocked = 0;
+    fs_exclusive_begin();
+    g_gap_watch = 1;
+    uint32_t got_x = wrote ? fs_read_range(GAP_POINT "/f", 0, back, sizeof back) : 0;
+    g_gap_watch = 0;
+    fs_exclusive_end();
+    int excl_unlocked = g_gap_unlocked;
+
+    const struct mount *m = mount_resolve(GAP_POINT "/f", 0);
+    int gaps_after = m ? __atomic_load_n(&m->io_gaps, __ATOMIC_ACQUIRE) : -1;
+
+    if (mounted) mount_remove(GAP_POINT, &why);
+    fs_delete(GAP_POINT);
+    kfree(g_vol[0]);
+    g_vol[0] = 0;
+
+    KTEST_ASSERT(mounted && wrote);
+    KTEST_ASSERT(same);                              // the unlocked read is still right
+    KTEST_ASSERT(plain_reads >= 1);                  // the fixture reached the device
+    KTEST_ASSERT(plain_unlocked >= 1);               // ...without the lock
+    KTEST_ASSERT_EQ(plain_counted, plain_unlocked);  // ...and every such read counted a gap
+    KTEST_ASSERT_EQ((int)got_x, (int)sizeof back);
+    KTEST_ASSERT_EQ(excl_unlocked, 0);               // never under exclusion
+    KTEST_ASSERT_EQ(gaps_after, 0);                  // nothing left open
+}

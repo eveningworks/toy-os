@@ -25,6 +25,8 @@
 #include "multiboot.h"
 #include "partition.h"
 #include "syscalls.h" // fd_desc[] -- the open-file check in mount_remove()
+#include "scheduler.h" // the drain's park and wake
+#include "barrier.h"   // cpu_relax()
 
 // driver-none: re-registers a disk a driver already found
 
@@ -145,6 +147,7 @@ static int depth_of(const struct mount *m) {
 // g_excl FIRST, so the order is computed from a table no other exclusive
 // holder is changing -- the table only changes under exclusion.
 static struct kmutex g_excl;
+static void drain(struct mount *m);
 
 void fs_exclusive_begin(void) {
     kmutex_lock(&g_excl);
@@ -159,6 +162,64 @@ void fs_exclusive_begin(void) {
         order[j] = v;
     }
     for (int i = 0; i < MOUNT_MAX; i++) kmutex_lock(&g_mounts[order[i]].lock);
+    // AND NOTHING AT THE DISK: a call that dropped its lock for device
+    // I/O is still in the driver (mount_io_begin()).
+    for (int i = 0; i < MOUNT_MAX; i++) if (g_mounts[i].used) drain(&g_mounts[i]);
+}
+
+// ---- device I/O without the lock ----------------------------------------
+
+static struct mount *mount_of_state(void *st) {
+    if (!st) return NULL;
+    for (int i = 0; i < MOUNT_MAX; i++)
+        if (g_mounts[i].used && g_mounts[i].state == st) return &g_mounts[i];
+    return NULL;   // a scratch state (probe, format, a test): no mount to drop
+}
+
+// Wait until `m` has no open gap. The caller holds m's lock, so no new
+// gap can open; the ones in flight need only the device to finish.
+static void drain(struct mount *m) {
+    for (;;) {
+        scheduler_wait_arm(&m->io_gaps);
+        if (!__atomic_load_n(&m->io_gaps, __ATOMIC_ACQUIRE)) {
+            scheduler_wait_disarm();
+            return;
+        }
+        if (!scheduler_block_kernel(&m->io_gaps, SCHED_WAIT_LOCK)) {
+            scheduler_wait_disarm();
+            cpu_relax();   // no slot to park in: spin, preemptible
+        }
+    }
+}
+
+void mount_io_drain(void *st) {
+    struct mount *m = mount_of_state(st);
+    if (m) drain(m);
+}
+
+int mount_io_begin(void *st, struct mount_io *g) {
+    struct mount *m = mount_of_state(st);
+    g->m = NULL;
+    if (!m) return 0;
+    int me = scheduler_current_pid();
+    // EXACTLY ONCE, and ours: a nested hold would not really release it,
+    // and an exclusive holder has promised the disk is quiet.
+    if (m->lock.depth != 1 || !m->lock.owned || m->lock.owner != me || m->lock.handed)
+        return 0;
+    if (kmutex_held(&g_excl) && kmutex_owner(&g_excl) == me) return 0;
+    g->m = m;
+    g->gen = m->gen;
+    __atomic_add_fetch(&m->io_gaps, 1, __ATOMIC_ACQ_REL);
+    kmutex_unlock(&m->lock);
+    return 1;
+}
+
+int mount_io_end(struct mount_io *g) {
+    struct mount *m = g->m;
+    if (__atomic_sub_fetch(&m->io_gaps, 1, __ATOMIC_ACQ_REL) == 0)
+        scheduler_wake(&m->io_gaps, 0);
+    kmutex_lock(&m->lock);
+    return m->used && m->gen == g->gen;
 }
 
 void fs_exclusive_end(void) {

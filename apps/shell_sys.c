@@ -586,7 +586,13 @@ void cmd_stress(const char *args) {
     last_pct_printed = 0;
     for (uint32_t c = 0; c < chunks; c++) {
         uint64_t offset = (uint64_t)c * STRESS_CHUNK_BYTES;
-        uint32_t got = fs_read_range(STRESS_TEST_PATH, offset, readback, STRESS_CHUNK_BYTES);
+        // A LOOP: fs_read_range() may legitimately return short (fs.h),
+        // and does when a block on the volume is freed while it reads.
+        uint32_t got = 0, n;
+        while (got < STRESS_CHUNK_BYTES &&
+               (n = fs_read_range(STRESS_TEST_PATH, offset + got, readback + got,
+                                  STRESS_CHUNK_BYTES - got)) > 0)
+            got += n;
         if (got != STRESS_CHUNK_BYTES) {
             vga_write("stress: FAILED (short read at chunk ");
             vga_write_dec(c); vga_write(", got "); vga_write_dec(got); vga_write(" bytes)\n");

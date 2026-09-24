@@ -1118,6 +1118,15 @@ it is still one call at a time. Four things to know:
   freezes rotation and spins on any lock it meets. fsync's flush used to
   follow the unlock, and logd's periodic fsync hung `usertest_run.py`
   that way. `tfs3_test.c` asserts the lock is held at the device.
+- **A BACKEND MAY DROP ITS LOCK ONLY FOR PURE DEVICE I/O**
+  (`mount_io_begin()`/`_end()` in `mount.h`): copy out everything the
+  transfer needs first, touch NO per-mount state in the gap, and if
+  `_end()` returns 0 the mount is gone -- return without touching the
+  state at all. Anything that would make an open gap's I/O wrong waits
+  for it with `mount_io_drain()`: a block free (tfs3's
+  `free_block_bit()`), and `fs_exclusive_begin()`. A gap is declined
+  when the lock is nested or held under exclusion, so the legacy `run`
+  never sees one.
 - **Anything global in `vfs.c` needs its own lock now.** The step
   table (`g_steps`) was covered by the one fs lock by accident and has
   `g_steps_lock`; `record()` publishes `used` last because
