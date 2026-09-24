@@ -5037,7 +5037,10 @@ window without going through it will find its layout polls timing out.
 
   It builds its own boot image per phase (`make iso KCMDLINE=...`, then
   a copy), so **it rewrites `disk.img`'s GRUB line** and puts it back at
-  the end. On demand, not in any gate.
+  the end. **So it cannot run BESIDE another tool**: its rebuilds land
+  mid-run under anything else booting `toy-os.iso`, which `iso_guard`
+  then refuses as stale (seen with `install_test.py` alongside). On
+  demand, not in any gate.
 
 - **`net_test.py`** -- the network stack end to end, on both NICs, with
   the verdict taken on the HOST. The KTESTs in `kernel/net/net_test.c`

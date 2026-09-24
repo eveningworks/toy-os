@@ -247,7 +247,9 @@ commits inside one op, so no second mount can be between them". Holding
 one open across syscalls breaks that premise. Either the staging becomes
 per-mount (+128 KiB a mount, against a mount that costs ~7 KiB) or the
 VFS commits the open transaction whenever a DIFFERENT mount becomes
-active. The second is cheap and is the one to build.
+active. The second is cheap and is the one to build. (Stage 2 of
+`docs/fslock-design.md` later made the staging per mount after all,
+2026-09-24, because one lock per mount needed it.)
 
 Gated behind `storage.sync` like everything else here, default `strict`.
 

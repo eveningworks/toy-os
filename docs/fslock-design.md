@@ -7,8 +7,8 @@ sleep, every other caller pays one of its operations per call. What
 would it take for callers touching DIFFERENT files not to wait on each
 other at all?**
 
-**Status: stages 0 and 1 are BUILT (2026-09-23, 2026-09-24). Stages
-2-4 are designed, not built.**
+**Status: stages 0 and 1 are BUILT (2026-09-23, 2026-09-24), and stage
+2's first half. The rest is designed, not built.**
 
 ## Why, in one measurement
 
@@ -88,10 +88,20 @@ Each ships on its own, and each is measured on
   after -- no change, which is what a stage that moves no lock should
   show.
 - **Stage 2 -- per-op scratch, and the journal moves into the mount.**
-  One kmalloc'd context per backend call carrying every buffer above.
   After this, **one lock PER MOUNT** is honest -- a `/boot` read stops
   waiting behind `/` -- which `vfs.c`'s comment has always said is the
   first thing that would earn a finer lock.
+  - **2a, BUILT 2026-09-24: the state moves.** The journal, the pointer
+    caches, the TRIM queue, the rollback log and every per-call buffer
+    are in `struct t3_state` (~250 KiB, half journal); fat32's sector
+    buffers in its state. PER MOUNT rather than the per-call context
+    first planned here: one call per volume at a time is still true,
+    so per mount is enough, costs no allocation per call, and leaves
+    stage 3 to move to per-call only what it holds across a dropped
+    lock. `t3_enter()` went with the owner. It also fixed a live bug:
+    the file-scope read-side pointer cache served one TFS3 volume's
+    table for another's block (`tfs3_test.c` goes red on the old code).
+  - **2b: one lock per mount.**
 - **Stage 3 -- inside one volume.** A journal lock with jbd2-style
   handles, an allocator lock over the bitmaps and the TRIM queue, and a
   name-cache lock. **The cheaper intermediate worth measuring first:**

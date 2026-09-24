@@ -492,12 +492,13 @@ commit-per-write.
 If you touch this, know the four:
 
 - **`txn_begin()` commits any deferred transaction first.** It zeroes
-  `g_txn_count`, so an operation opening its own would discard every
+  `txn_count`, so an operation opening its own would discard every
   staged inode -- writes reported as succeeded, gone. Forced there so no
   call site has to remember.
-- **A NULL activation is NOT a mount switch.** `FS_OP` deactivates after
-  every backend call; treating that as "a different mount" committed on
-  every write and made the feature a no-op.
+- **The deferred transaction is the MOUNT's own.** The journal staging
+  lives in `struct t3_state` (fslock stage 2), so there is no owner to
+  compare and no other volume that could find it half-staged. It was
+  file-scope before, and a mount switch had to commit it.
 - **Reads consult the staged image at `vol_read_sectors()`**, not at
   `read_block()` -- `read_inode()` reads one SECTOR, so a block-level
   overlay misses the only read that matters.
@@ -1070,18 +1071,18 @@ Four things to know:
   reaches the state hides the dependency -- tfs3's `T3_WALK` passes
   `sbi` to `rcache_get()`, so any function using it needs `sbi` in
   scope.
-- **tfs3's `t3_enter(sbi)` opens EVERY tfs3 op.** The journal staging
-  is file-scope while a deferred transaction belongs to one mount, so
-  another mount's is committed first. A new op without it lets the
-  other mount's staged blocks sit until something else commits them.
-  It goes when stage 2 of `docs/fslock-design.md` moves the journal
-  into the mount.
+- **The per-call SCRATCH is per mount too** -- tfs3's journal images,
+  pointer caches, `blk`/`ptr_blk` and one path buffer per function
+  (`t3_state.pb`), fat32's three sector buffers. That is correct only
+  because ONE call runs per volume at a time. **Anything that drops the
+  mount's lock mid-operation must not hold any of it across the gap**
+  -- the first question for stage 3 of `docs/fslock-design.md`.
 - **Nothing checks that a state struct is COMPLETE.** A per-volume field
   left outside it is shared by every mount, and the symptom is
-  cross-volume corruption with no error anywhere. The scratch that
-  deliberately stays global says so where it is declared (tfs3's 128 KiB
-  of journal staging, fat32's three sector buffers) — per CALL, and one
-  call cannot span two mounts.
+  cross-volume corruption with no error anywhere. It has happened:
+  tfs3's read-side pointer cache was file-scope and served one volume's
+  table for another's block (`tfs3_test.c` reproduces it). Only
+  statistics counters stay file-scope now.
 - **A backend call from OUTSIDE `vfs.c` must bring its own state.** That
   is what `mount_scratch_begin()`/`_end()` are for, and every KTEST that
   drives a backend directly passes `sc.st` (or, for ramfs, the test
@@ -1279,7 +1280,7 @@ Three rules come with that, and each one is a real failure:
   volume-relative, and two TFS3 mounts number their blocks the same
   way.
 
-The read-side cache (`g_rcache`) takes the blunter rule instead -- ANY
+The read-side cache (`rcache`, per mount) takes the blunter rule instead -- ANY
 write drops it, unconditionally -- because it cannot tell which blocks
 are tables. That asymmetry is deliberate: the write side already knows.
 

@@ -99,11 +99,11 @@
 // ---- state ----------------------------------------------------------
 //
 // PER MOUNT, in struct fat32_state, and handed as `sbi` to every
-// function that touches a volume (fs_ops.h). The scratch sectors below are the exception and each
-// has a SINGLE purpose, deliberately: one general-purpose scratch shared
-// between a directory walk and the FAT lookup that walk makes would
-// corrupt the walk halfway through, which is the exact shape of the bug
-// tfs3.c's g_blk/g_ptr_blk split exists to prevent.
+// function that touches a volume (fs_ops.h). The scratch sectors in it
+// each have a SINGLE purpose, deliberately: one general-purpose scratch
+// shared between a directory walk and the FAT lookup that walk makes
+// would corrupt the walk halfway through, which is the exact shape of
+// the bug tfs3.c's blk/ptr_blk split exists to prevent.
 
 struct fat_vol {
     const struct block_device *dev;
@@ -131,13 +131,12 @@ struct fat32_state {
     uint32_t fatsec_lba;        // which one, 0 = nothing cached
     int fatsec_dirty;
 
+    // Per-call scratch, per MOUNT because one call runs per volume at a
+    // time (its lock) and two volumes' calls may run at once.
+    uint8_t dirsec[SECTOR];     // a directory sector during a walk
+    uint8_t datasec[SECTOR];    // file data for a partial-sector read/write
+    uint8_t tmpsec[SECTOR];     // probe, format, FSInfo -- never held across a walk
 };
-
-// Per CALL, not per volume: nothing here outlives one backend call, and
-// the filesystem is one global critical section (vfs.c's FS_OP).
-static uint8_t g_dirsec[SECTOR];   // a directory sector during a walk
-static uint8_t g_datasec[SECTOR];  // file data for a partial-sector read/write
-static uint8_t g_tmpsec[SECTOR];   // probe, format, FSInfo -- never held across a walk
 
 // ---- little-endian accessors ----------------------------------------
 
@@ -251,23 +250,23 @@ static void fsinfo_load(struct fat32_state *sbi) {
     sbi->v.free_hint = 0xFFFFFFFFu;
     sbi->v.free_count = 0xFFFFFFFFu;
     if (!sbi->v.fsinfo_sector) return;
-    if (!vol_read(sbi, sbi->v.fsinfo_sector, 1, g_tmpsec)) return;
-    if (rd32(g_tmpsec) != 0x41615252u) return;          // "RRaA"
-    if (rd32(g_tmpsec + 484) != 0x61417272u) return;    // "rrAa"
-    if (rd16(g_tmpsec + 510) != 0xAA55) return;
-    uint32_t free_count = rd32(g_tmpsec + 488);
-    uint32_t next_free = rd32(g_tmpsec + 492);
+    if (!vol_read(sbi, sbi->v.fsinfo_sector, 1, sbi->tmpsec)) return;
+    if (rd32(sbi->tmpsec) != 0x41615252u) return;          // "RRaA"
+    if (rd32(sbi->tmpsec + 484) != 0x61417272u) return;    // "rrAa"
+    if (rd16(sbi->tmpsec + 510) != 0xAA55) return;
+    uint32_t free_count = rd32(sbi->tmpsec + 488);
+    uint32_t next_free = rd32(sbi->tmpsec + 492);
     if (next_free >= 2 && next_free < sbi->v.cluster_count + 2) sbi->v.free_hint = next_free;
     if (free_count <= sbi->v.cluster_count) sbi->v.free_count = free_count;
 }
 
 static void fsinfo_store(struct fat32_state *sbi) {
     if (!sbi->v.fsinfo_sector) return;
-    if (!vol_read(sbi, sbi->v.fsinfo_sector, 1, g_tmpsec)) return;
-    if (rd32(g_tmpsec) != 0x41615252u) return;
-    wr32(g_tmpsec + 488, sbi->v.free_count);
-    wr32(g_tmpsec + 492, sbi->v.free_hint);
-    vol_write(sbi, sbi->v.fsinfo_sector, 1, g_tmpsec);
+    if (!vol_read(sbi, sbi->v.fsinfo_sector, 1, sbi->tmpsec)) return;
+    if (rd32(sbi->tmpsec) != 0x41615252u) return;
+    wr32(sbi->tmpsec + 488, sbi->v.free_count);
+    wr32(sbi->tmpsec + 492, sbi->v.free_hint);
+    vol_write(sbi, sbi->v.fsinfo_sector, 1, sbi->tmpsec);
 }
 
 // Every mutating operation ends here: the FAT cache is written back,
@@ -328,10 +327,10 @@ static uint32_t cluster_alloc(struct fat32_state *sbi, uint32_t prev) {
 }
 
 static int cluster_zero(struct fat32_state *sbi, uint32_t clus) {
-    k_memset(g_datasec, 0, SECTOR);
+    k_memset(sbi->datasec, 0, SECTOR);
     uint32_t base = cluster_first_sector(sbi, clus);
     for (uint32_t i = 0; i < sbi->v.sectors_per_cluster; i++) {
-        if (!vol_write(sbi, base + i, 1, g_datasec)) return 0;
+        if (!vol_write(sbi, base + i, 1, sbi->datasec)) return 0;
     }
     return 1;
 }
@@ -515,7 +514,7 @@ struct dirwalk {
     uint32_t start;        // the directory's first cluster
     uint32_t sec_in_clus;
     uint32_t off;          // byte offset in the loaded sector
-    uint32_t cur_sector;   // the LBA currently in g_dirsec
+    uint32_t cur_sector;   // the LBA currently in dirsec
     int loaded;
     // LFN accumulation
     char lfn[FAT_NAME_MAX + 1 + LFN_CHARS];
@@ -544,7 +543,7 @@ static int walk_load(struct fat32_state *sbi, struct dirwalk *w) {
     }
     uint32_t lba = cluster_first_sector(sbi, w->cluster) + w->sec_in_clus;
     if (w->loaded && w->cur_sector == lba) return 1;
-    if (!vol_read(sbi, lba, 1, g_dirsec)) { w->done = 1; return 0; }
+    if (!vol_read(sbi, lba, 1, sbi->dirsec)) { w->done = 1; return 0; }
     w->cur_sector = lba;
     w->loaded = 1;
     return 1;
@@ -566,7 +565,7 @@ static void walk_advance(struct dirwalk *w) {
 static int walk_next(struct fat32_state *sbi, struct dirwalk *w, struct dirent_info *out) {
     for (;;) {
         if (!walk_load(sbi, w)) return 0;
-        uint8_t *e = g_dirsec + w->off;
+        uint8_t *e = sbi->dirsec + w->off;
 
         if (e[0] == DIRENT_END) { w->done = 1; return 0; }
         if (e[0] == DIRENT_FREE) {
@@ -745,13 +744,13 @@ static uint64_t fat_to_epoch(uint16_t date, uint16_t time) {
 // entries and fifteen of them belong to somebody else.
 static int ent_patch(struct fat32_state *sbi, const struct dirloc *loc, uint32_t cluster, uint32_t size,
                      const uint16_t *wrt_date, const uint16_t *wrt_time) {
-    if (!vol_read(sbi, loc->sector, 1, g_tmpsec)) return 0;
-    uint8_t *e = g_tmpsec + loc->offset;
+    if (!vol_read(sbi, loc->sector, 1, sbi->tmpsec)) return 0;
+    uint8_t *e = sbi->tmpsec + loc->offset;
     ent_set_cluster(e, cluster);
     wr32(e + 28, size);
     if (wrt_date) wr16(e + 24, *wrt_date);
     if (wrt_time) wr16(e + 22, *wrt_time);
-    return vol_write(sbi, loc->sector, 1, g_tmpsec);
+    return vol_write(sbi, loc->sector, 1, sbi->tmpsec);
 }
 
 // Advances a directory cursor by one 32-byte entry, following the
@@ -785,15 +784,15 @@ static int ent_erase(struct fat32_state *sbi, const struct dirloc *loc) {
     // known start sector -- the set is at most LFN_MAX_ENTRIES + 1
     // entries, so at most two sectors are involved in practice.
     while (remaining > 0) {
-        if (!vol_read(sbi, sector, 1, g_tmpsec)) return 0;
+        if (!vol_read(sbi, sector, 1, sbi->tmpsec)) return 0;
         int dirty = 0;
         while (remaining > 0 && off < SECTOR) {
-            g_tmpsec[off] = DIRENT_FREE;
+            sbi->tmpsec[off] = DIRENT_FREE;
             dirty = 1;
             off += DIRENT_SIZE;
             remaining--;
         }
-        if (dirty && !vol_write(sbi, sector, 1, g_tmpsec)) return 0;
+        if (dirty && !vol_write(sbi, sector, 1, sbi->tmpsec)) return 0;
         if (remaining <= 0) break;
         // off has run past the sector; dir_step from the last entry
         // walks to the next sector (and the next cluster, if this was
@@ -821,9 +820,9 @@ static int dir_find_run(struct fat32_state *sbi, uint32_t dir_cluster, int need,
     for (;;) {
         for (uint32_t s = 0; s < sbi->v.sectors_per_cluster; s++) {
             uint32_t lba = cluster_first_sector(sbi, clus) + s;
-            if (!vol_read(sbi, lba, 1, g_dirsec)) return 0;
+            if (!vol_read(sbi, lba, 1, sbi->dirsec)) return 0;
             for (uint32_t o = 0; o < SECTOR; o += DIRENT_SIZE) {
-                uint8_t first = g_dirsec[o];
+                uint8_t first = sbi->dirsec[o];
                 if (first == DIRENT_END || first == DIRENT_FREE) {
                     if (run == 0) { run_sector = lba; run_off = o; }
                     if (++run == need) { *out_sector = run_sector; *out_off = run_off; return 1; }
@@ -866,8 +865,8 @@ static int dir_write_set(struct fat32_state *sbi, uint32_t sector, uint32_t off,
     static const int offs[LFN_CHARS] = {1,3,5,7,9, 14,16,18,20,22,24, 28,30};
 
     for (int index = lfn_entries; index >= 1; index--) {
-        if (!vol_read(sbi, sector, 1, g_tmpsec)) return 0;
-        uint8_t *e = g_tmpsec + off;
+        if (!vol_read(sbi, sector, 1, sbi->tmpsec)) return 0;
+        uint8_t *e = sbi->tmpsec + off;
         k_memset(e, 0, DIRENT_SIZE);
         e[0] = (uint8_t)(index | ((index == lfn_entries) ? 0x40 : 0));
         e[11] = ATTR_LFN;
@@ -886,12 +885,12 @@ static int dir_write_set(struct fat32_state *sbi, uint32_t sector, uint32_t off,
             else u = 0xFFFF;
             wr16(e + offs[c], u);
         }
-        if (!vol_write(sbi, sector, 1, g_tmpsec)) return 0;
+        if (!vol_write(sbi, sector, 1, sbi->tmpsec)) return 0;
         if (!dir_step(sbi, &sector, &off)) return 0;
     }
 
-    if (!vol_read(sbi, sector, 1, g_tmpsec)) return 0;
-    uint8_t *e = g_tmpsec + off;
+    if (!vol_read(sbi, sector, 1, sbi->tmpsec)) return 0;
+    uint8_t *e = sbi->tmpsec + off;
     k_memset(e, 0, DIRENT_SIZE);
     k_memcpy(e, raw11, 11);
     e[11] = attr;
@@ -903,7 +902,7 @@ static int dir_write_set(struct fat32_state *sbi, uint32_t sector, uint32_t off,
     wr16(e + 24, date);
     ent_set_cluster(e, cluster);
     wr32(e + 28, size);
-    return vol_write(sbi, sector, 1, g_tmpsec) ? 1 : 0;
+    return vol_write(sbi, sector, 1, sbi->tmpsec) ? 1 : 0;
 }
 
 // Marks `count` entries from (sector, off) free. What dir_create() uses
@@ -912,9 +911,9 @@ static int dir_write_set(struct fat32_state *sbi, uint32_t sector, uint32_t off,
 // silently ignores and this one used to report as a nameless file.
 static int dir_free_run(struct fat32_state *sbi, uint32_t sector, uint32_t off, int count) {
     while (count-- > 0) {
-        if (!vol_read(sbi, sector, 1, g_tmpsec)) return 0;
-        g_tmpsec[off] = DIRENT_FREE;
-        if (!vol_write(sbi, sector, 1, g_tmpsec)) return 0;
+        if (!vol_read(sbi, sector, 1, sbi->tmpsec)) return 0;
+        sbi->tmpsec[off] = DIRENT_FREE;
+        if (!vol_write(sbi, sector, 1, sbi->tmpsec)) return 0;
         if (count && !dir_step(sbi, &sector, &off)) return 0;
     }
     return 1;
@@ -964,15 +963,15 @@ static int make_alias(struct fat32_state *sbi, uint32_t dir_cluster, const char 
             // the alias must not duplicate -- two entries may have
             // different long names and the same 8.3 alias.
             //
-            // INTO g_tmpsec, NOT g_dirsec. g_dirsec is the WALK's
+            // INTO tmpsec, NOT dirsec. dirsec is the WALK's
             // sector and re-reading into it mid-walk is the
             // shared-scratch bug this file's state comment warns about:
             // the walk kept its "loaded" flag, carried on over the
             // other sector's bytes, and produced a directory full of
             // nonsense -- which surfaced as a create that failed and
             // left a nameless entry behind.
-            if (!vol_read(sbi, e.loc.sector, 1, g_tmpsec)) break;
-            short_name_unpack(g_tmpsec + e.loc.offset, 0, theirs);
+            if (!vol_read(sbi, e.loc.sector, 1, sbi->tmpsec)) break;
+            short_name_unpack(sbi->tmpsec + e.loc.offset, 0, theirs);
             if (name_eq(theirs, candidate)) { clash = 1; break; }
         }
         if (!clash) return 1;
@@ -1033,22 +1032,22 @@ static int dir_create(struct fat32_state *sbi, uint32_t dir_cluster, const char 
         // `..` pointing at the root is stored as 0, not as the root's
         // cluster number -- a rule that exists because FAT12/16 roots
         // have no cluster number at all.
-        k_memset(g_tmpsec, 0, SECTOR);
+        k_memset(sbi->tmpsec, 0, SECTOR);
         uint16_t date, time;
         now_fat(&date, &time);
-        uint8_t *dot = g_tmpsec;
+        uint8_t *dot = sbi->tmpsec;
         k_memset(dot, ' ', 11);
         dot[0] = '.';
         dot[11] = ATTR_DIRECTORY;
         wr16(dot + 22, time); wr16(dot + 24, date);
         ent_set_cluster(dot, first);
-        uint8_t *dotdot = g_tmpsec + DIRENT_SIZE;
+        uint8_t *dotdot = sbi->tmpsec + DIRENT_SIZE;
         k_memset(dotdot, ' ', 11);
         dotdot[0] = '.'; dotdot[1] = '.';
         dotdot[11] = ATTR_DIRECTORY;
         wr16(dotdot + 22, time); wr16(dotdot + 24, date);
         ent_set_cluster(dotdot, dir_cluster == sbi->v.root_cluster ? 0 : dir_cluster);
-        if (!vol_write(sbi, cluster_first_sector(sbi, first), 1, g_tmpsec)) return 0;
+        if (!vol_write(sbi, cluster_first_sector(sbi, first), 1, sbi->tmpsec)) return 0;
     }
 
     // CREATED MEANS FINDABLE, and it is worth reading back to say so.
@@ -1099,8 +1098,8 @@ static uint32_t chain_read(struct fat32_state *sbi, uint32_t start, uint32_t siz
             // one transfer per sector rather than one plus a memcpy.
             if (!vol_read(sbi, lba, 1, dst + got)) break;
         } else {
-            if (!vol_read(sbi, lba, 1, g_datasec)) break;
-            k_memcpy(dst + got, g_datasec + sec_off, take);
+            if (!vol_read(sbi, lba, 1, sbi->datasec)) break;
+            k_memcpy(dst + got, sbi->datasec + sec_off, take);
         }
         got += take;
         within += take;
@@ -1158,9 +1157,9 @@ static int chain_write(struct fat32_state *sbi, uint32_t *io_start, uint64_t off
         } else {
             // Read-modify-write: the rest of the sector belongs to this
             // file's other bytes, which a blind write would zero.
-            if (!vol_read(sbi, lba, 1, g_datasec)) return 0;
-            k_memcpy(g_datasec + sec_off, src + done, take);
-            if (!vol_write(sbi, lba, 1, g_datasec)) return 0;
+            if (!vol_read(sbi, lba, 1, sbi->datasec)) return 0;
+            k_memcpy(sbi->datasec + sec_off, src + done, take);
+            if (!vol_write(sbi, lba, 1, sbi->datasec)) return 0;
         }
         done += take;
         within += take;
@@ -1188,21 +1187,21 @@ static int parse_bpb(struct fat32_state *sbi, const struct block_device *dev) {
     sbi->v.dev = dev;
     sbi->v.total_sectors = blkdev_sector_count(dev); // provisional, for vol_read's bound
     if (sbi->v.total_sectors < 8) return 0;
-    if (!blkdev_read_sectors(dev, 0, 1, g_tmpsec)) return -1;
+    if (!blkdev_read_sectors(dev, 0, 1, sbi->tmpsec)) return -1;
 
-    if (rd16(g_tmpsec + 510) != 0xAA55) return 0;
+    if (rd16(sbi->tmpsec + 510) != 0xAA55) return 0;
 
-    uint16_t bps = rd16(g_tmpsec + 11);
-    uint8_t spc = g_tmpsec[13];
-    uint16_t reserved = rd16(g_tmpsec + 14);
-    uint8_t nfats = g_tmpsec[16];
-    uint16_t root_entries = rd16(g_tmpsec + 17);
-    uint16_t tot16 = rd16(g_tmpsec + 19);
-    uint16_t fatsz16 = rd16(g_tmpsec + 22);
-    uint32_t tot32 = rd32(g_tmpsec + 32);
-    uint32_t fatsz32 = rd32(g_tmpsec + 36);
-    uint32_t root_clus = rd32(g_tmpsec + 44);
-    uint16_t fsinfo = rd16(g_tmpsec + 48);
+    uint16_t bps = rd16(sbi->tmpsec + 11);
+    uint8_t spc = sbi->tmpsec[13];
+    uint16_t reserved = rd16(sbi->tmpsec + 14);
+    uint8_t nfats = sbi->tmpsec[16];
+    uint16_t root_entries = rd16(sbi->tmpsec + 17);
+    uint16_t tot16 = rd16(sbi->tmpsec + 19);
+    uint16_t fatsz16 = rd16(sbi->tmpsec + 22);
+    uint32_t tot32 = rd32(sbi->tmpsec + 32);
+    uint32_t fatsz32 = rd32(sbi->tmpsec + 36);
+    uint32_t root_clus = rd32(sbi->tmpsec + 44);
+    uint16_t fsinfo = rd16(sbi->tmpsec + 48);
 
     // 512-BYTE SECTORS ONLY (see this file's top comment). Refusing is
     // the honest answer: the block layer speaks 512, and reading a
@@ -1260,16 +1259,16 @@ static int fat32_probe(void *st, const struct block_device *dev) {
 // and the FAT32 fields behind it, plus the backup boot sector at LBA 6
 // that mkfs writes. See fs_ops.h's wipe contract.
 static int fat32_wipe(void *st, const struct block_device *dev) {
-    (void)st;
+    struct fat32_state *sbi = st;
     if (!dev) return 1;
     uint32_t sectors = blkdev_sector_count(dev);
     if (sectors < 1) return 1;
-    k_memset(g_tmpsec, 0, SECTOR);
-    int ok = blkdev_write_sectors(dev, 0, 1, g_tmpsec) ? 1 : 0;
+    k_memset(sbi->tmpsec, 0, SECTOR);
+    int ok = blkdev_write_sectors(dev, 0, 1, sbi->tmpsec) ? 1 : 0;
     // The conventional backup location; harmless to zero on a volume
     // that has none, and a real signature to a probe that finds one.
     if (sectors > 6) {
-        if (!blkdev_write_sectors(dev, 6, 1, g_tmpsec)) ok = 0;
+        if (!blkdev_write_sectors(dev, 6, 1, sbi->tmpsec)) ok = 0;
     }
     return ok;
 }
@@ -1288,7 +1287,7 @@ static uint32_t pick_spc(uint32_t sectors) {
 }
 
 static int fat32_format(void *st, const struct block_device *dev) {
-    (void)st;
+    struct fat32_state *sbi = st;
     if (!dev) return 0;
     uint32_t total = blkdev_sector_count(dev);
     if (total < 128) {
@@ -1342,45 +1341,45 @@ static int fat32_format(void *st, const struct block_device *dev) {
     if (clusters < 2) return 0;
 
     // ---- boot sector ----
-    k_memset(g_tmpsec, 0, SECTOR);
-    g_tmpsec[0] = 0xEB; g_tmpsec[1] = 0x58; g_tmpsec[2] = 0x90; // the jump mkfs writes
-    k_memcpy(g_tmpsec + 3, "toy-os  ", 8);
-    wr16(g_tmpsec + 11, SECTOR);
-    g_tmpsec[13] = (uint8_t)spc;
-    wr16(g_tmpsec + 14, (uint16_t)reserved);
-    g_tmpsec[16] = (uint8_t)nfats;
-    wr16(g_tmpsec + 17, 0);      // root_entry_count -- 0 marks FAT32
-    wr16(g_tmpsec + 19, 0);      // total_sectors_16
-    g_tmpsec[21] = 0xF8;         // media: fixed disk
-    wr16(g_tmpsec + 22, 0);      // fat_size_16 -- 0 marks FAT32
-    wr16(g_tmpsec + 24, 63);     // sectors per track, cosmetic
-    wr16(g_tmpsec + 26, 255);    // heads, cosmetic
-    wr32(g_tmpsec + 28, 0);      // hidden sectors: this is a VOLUME, offset 0
-    wr32(g_tmpsec + 32, total);
-    wr32(g_tmpsec + 36, fatsz);
-    wr16(g_tmpsec + 40, 0);      // ext_flags: all FATs mirrored
-    wr16(g_tmpsec + 42, 0);      // version
-    wr32(g_tmpsec + 44, 2);      // root cluster
-    wr16(g_tmpsec + 48, 1);      // FSInfo sector
-    wr16(g_tmpsec + 50, 6);      // backup boot sector
-    g_tmpsec[64] = 0x80;         // drive number
-    g_tmpsec[66] = 0x29;         // extended boot signature
-    wr32(g_tmpsec + 67, 0x544F5900u);
-    k_memcpy(g_tmpsec + 71, "NO NAME    ", 11);
-    k_memcpy(g_tmpsec + 82, "FAT32   ", 8);
-    wr16(g_tmpsec + 510, 0xAA55);
-    if (!blkdev_write_sectors(dev, 0, 1, g_tmpsec)) return 0;
-    if (!blkdev_write_sectors(dev, 6, 1, g_tmpsec)) return 0;
+    k_memset(sbi->tmpsec, 0, SECTOR);
+    sbi->tmpsec[0] = 0xEB; sbi->tmpsec[1] = 0x58; sbi->tmpsec[2] = 0x90; // the jump mkfs writes
+    k_memcpy(sbi->tmpsec + 3, "toy-os  ", 8);
+    wr16(sbi->tmpsec + 11, SECTOR);
+    sbi->tmpsec[13] = (uint8_t)spc;
+    wr16(sbi->tmpsec + 14, (uint16_t)reserved);
+    sbi->tmpsec[16] = (uint8_t)nfats;
+    wr16(sbi->tmpsec + 17, 0);      // root_entry_count -- 0 marks FAT32
+    wr16(sbi->tmpsec + 19, 0);      // total_sectors_16
+    sbi->tmpsec[21] = 0xF8;         // media: fixed disk
+    wr16(sbi->tmpsec + 22, 0);      // fat_size_16 -- 0 marks FAT32
+    wr16(sbi->tmpsec + 24, 63);     // sectors per track, cosmetic
+    wr16(sbi->tmpsec + 26, 255);    // heads, cosmetic
+    wr32(sbi->tmpsec + 28, 0);      // hidden sectors: this is a VOLUME, offset 0
+    wr32(sbi->tmpsec + 32, total);
+    wr32(sbi->tmpsec + 36, fatsz);
+    wr16(sbi->tmpsec + 40, 0);      // ext_flags: all FATs mirrored
+    wr16(sbi->tmpsec + 42, 0);      // version
+    wr32(sbi->tmpsec + 44, 2);      // root cluster
+    wr16(sbi->tmpsec + 48, 1);      // FSInfo sector
+    wr16(sbi->tmpsec + 50, 6);      // backup boot sector
+    sbi->tmpsec[64] = 0x80;         // drive number
+    sbi->tmpsec[66] = 0x29;         // extended boot signature
+    wr32(sbi->tmpsec + 67, 0x544F5900u);
+    k_memcpy(sbi->tmpsec + 71, "NO NAME    ", 11);
+    k_memcpy(sbi->tmpsec + 82, "FAT32   ", 8);
+    wr16(sbi->tmpsec + 510, 0xAA55);
+    if (!blkdev_write_sectors(dev, 0, 1, sbi->tmpsec)) return 0;
+    if (!blkdev_write_sectors(dev, 6, 1, sbi->tmpsec)) return 0;
 
     // ---- FSInfo ----
-    k_memset(g_tmpsec, 0, SECTOR);
-    wr32(g_tmpsec, 0x41615252u);
-    wr32(g_tmpsec + 484, 0x61417272u);
-    wr32(g_tmpsec + 488, clusters - 1); // the root's cluster is taken
-    wr32(g_tmpsec + 492, 3);
-    wr16(g_tmpsec + 510, 0xAA55);
-    if (!blkdev_write_sectors(dev, 1, 1, g_tmpsec)) return 0;
-    if (!blkdev_write_sectors(dev, 7, 1, g_tmpsec)) return 0;
+    k_memset(sbi->tmpsec, 0, SECTOR);
+    wr32(sbi->tmpsec, 0x41615252u);
+    wr32(sbi->tmpsec + 484, 0x61417272u);
+    wr32(sbi->tmpsec + 488, clusters - 1); // the root's cluster is taken
+    wr32(sbi->tmpsec + 492, 3);
+    wr16(sbi->tmpsec + 510, 0xAA55);
+    if (!blkdev_write_sectors(dev, 1, 1, sbi->tmpsec)) return 0;
+    if (!blkdev_write_sectors(dev, 7, 1, sbi->tmpsec)) return 0;
 
     // ---- the FATs ----
     //
@@ -1391,8 +1390,7 @@ static int fat32_format(void *st, const struct block_device *dev) {
     uint32_t chunk = (uint32_t)blkdev_max_sectors_per_xfer(dev);
     if (chunk > 8) chunk = 8;
     if (chunk < 1) chunk = 1;
-    static uint8_t zeros[8 * SECTOR];
-    k_memset(zeros, 0, sizeof zeros);
+    static const uint8_t zeros[8 * SECTOR];   // never written
     for (uint32_t f = 0; f < nfats; f++) {
         uint32_t base = reserved + f * fatsz;
         for (uint32_t s = 0; s < fatsz; ) {
@@ -1404,17 +1402,17 @@ static int fat32_format(void *st, const struct block_device *dev) {
         // The first two entries are reserved: the media byte in entry 0
         // and an end-of-chain in entry 1, then the root's own chain
         // terminator in entry 2.
-        k_memset(g_tmpsec, 0, SECTOR);
-        wr32(g_tmpsec, 0x0FFFFFF8u);
-        wr32(g_tmpsec + 4, 0x0FFFFFFFu);
-        wr32(g_tmpsec + 8, 0x0FFFFFFFu);
-        if (!blkdev_write_sectors(dev, base, 1, g_tmpsec)) return 0;
+        k_memset(sbi->tmpsec, 0, SECTOR);
+        wr32(sbi->tmpsec, 0x0FFFFFF8u);
+        wr32(sbi->tmpsec + 4, 0x0FFFFFFFu);
+        wr32(sbi->tmpsec + 8, 0x0FFFFFFFu);
+        if (!blkdev_write_sectors(dev, base, 1, sbi->tmpsec)) return 0;
     }
 
     // ---- the root directory ----
-    k_memset(g_tmpsec, 0, SECTOR);
+    k_memset(sbi->tmpsec, 0, SECTOR);
     for (uint32_t s = 0; s < spc; s++) {
-        if (!blkdev_write_sectors(dev, first_data + s, 1, g_tmpsec)) return 0;
+        if (!blkdev_write_sectors(dev, first_data + s, 1, sbi->tmpsec)) return 0;
     }
 
     blkdev_flush(dev);
@@ -1763,11 +1761,11 @@ static int fat32_rename(void *st, const char *oldpath, const char *newpath) {
     // has a child whose parent link points somewhere it no longer
     // lives, which every other FAT driver will believe.
     if ((src.attr & ATTR_DIRECTORY) && cluster_valid(sbi, src.cluster)) {
-        if (vol_read(sbi, cluster_first_sector(sbi, src.cluster), 1, g_tmpsec)) {
-            uint8_t *dd = g_tmpsec + DIRENT_SIZE;
+        if (vol_read(sbi, cluster_first_sector(sbi, src.cluster), 1, sbi->tmpsec)) {
+            uint8_t *dd = sbi->tmpsec + DIRENT_SIZE;
             if (dd[0] == '.' && dd[1] == '.') {
                 ent_set_cluster(dd, newdir == sbi->v.root_cluster ? 0 : newdir);
-                vol_write(sbi, cluster_first_sector(sbi, src.cluster), 1, g_tmpsec);
+                vol_write(sbi, cluster_first_sector(sbi, src.cluster), 1, sbi->tmpsec);
             }
         }
     }

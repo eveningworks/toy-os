@@ -209,8 +209,9 @@ live volume claim your files were safe. It says
 
 ## The filesystem is not re-entrant, so the VFS holds a preemption guard
 
-`kernel/fs/tfs3.c` walks directories, inodes and file data through
-module-level scratch buffers (`g_blk`, `g_ptr_blk`). That is fine for a
+`kernel/fs/tfs3.c` walked directories, inodes and file data through
+module-level scratch buffers (`g_blk`, `g_ptr_blk`; per mount since
+stage 2 of `docs/fslock-design.md`). That is fine for a
 filesystem only one thing uses at a time, and this kernel is not that:
 the kernel context is a scheduler participant and a ring-3 process is
 preemptible inside a syscall, so the WM reading a file and an app
@@ -299,11 +300,13 @@ triple-indirect walk agree about which slot a leaf occupies; numbering
 from the top puts the leaf at a different level per depth and evicts it
 on every step.
 
-**Per CALL, not per mount**, for the reason `g_txn_img` already is: the
-filesystem is one global critical section (`vfs.c`'s `FS_OP` preemption
-guard), so no second mount can be between a load and its use. Making it
-per mount would cost 12 KiB on every mount for a cache only one of them
-can be using.
+**Per mount, and it was wrong the first time.** It began file-scope,
+"per call" on the reasoning that one global critical section kept a
+second mount from being between a load and its use -- but nothing
+dropped it between CALLS, only on writes, so a read on a second TFS3
+mount could be served the first's table at the same block number.
+`tfs3_test.c` reproduces it against the old code; stage 2 of
+`docs/fslock-design.md` moved it into the mount (12 KiB each).
 
 **Invalidated by ANY write, in `vol_write_sectors()`.** This is the
 whole safety argument and it is deliberately blunt: an entry may only
@@ -447,7 +450,7 @@ old size with the blocks past it unreferenced. That is a LEAK, which
 risks a journal that cannot be replayed at all.
 
 **The commit is forced in `txn_begin()`, not at the call sites.**
-`txn_begin()` zeroes `g_txn_count`, so any operation opening its own
+`txn_begin()` zeroes `txn_count`, so any operation opening its own
 transaction while one was deferred would silently discard every inode
 staged in it -- writes reported as succeeded, gone. Forcing it in the
 one function every transaction passes through covers create, delete,
@@ -461,7 +464,8 @@ must commit it first. The first version tested `owner != st` -- and
 `FS_OP` deactivates after every backend call by activating NULL, so that
 was true every single time and every write still committed. Nothing can
 reach the journal while no state is current, so a NULL activation is
-ignored.
+ignored. (Moot since stage 2 of `docs/fslock-design.md`: the journal is
+per mount, and nothing activates anything.)
 
 **Readers consult the staged image, at `vol_read_sectors()`.** The
 newest inode lives in the staging buffer while the disk holds the
@@ -2513,11 +2517,11 @@ became stage 1 of that plan (2026-09-24, starting bf951457).
 **The one thing activation did that is still needed.** tfs3's
 activate committed ANOTHER mount's deferred journal transaction before
 the incoming mount ran, because the journal staging is file-scope while
-the deferred transaction belongs to one mount. That survives as
-`t3_enter()` at the top of every tfs3 op, until stage 2 moves the
-journal into the mount. Dropped instead, `fsformat` on the running root
-could leave a commit pending for the old volume that `idle` would then
-land on the new one.
+the deferred transaction belongs to one mount. That survived stage 1
+as `t3_enter()` at the top of every tfs3 op, and went in stage 2 when
+the journal moved into the mount. Dropped without that move, `fsformat`
+on the running root could have left a commit pending for the old volume
+that `idle` would then land on the new one.
 
 **Why the state moved into a struct rather than being saved and
 restored.** The alternative was to leave the statics alone and have each
@@ -2887,7 +2891,7 @@ They are keyed by block number, so keeping them is free until a block
 changes identity. The only way that happens is a free-and-reallocate,
 or a write that goes around the cache; both are now explicit
 (`map_cache_forget()`). That is strictly narrower than the rule the
-READ-side cache takes -- `vol_write_sectors()` drops `g_rcache` on any
+READ-side cache takes -- `vol_write_sectors()` drops `rcache` on any
 write at all -- and the asymmetry is the point: the read walk cannot
 tell a table block from a data block, and being wrong once serves
 another file's data. The write walk allocated the table, so it can.
@@ -3080,9 +3084,9 @@ worth naming because "allocate it" is not always right:
   `struct resolved` and with it a path local from every `fs_*()` in
   `vfs.c` -- nineteen frames, fixed by deleting a buffer rather than
   pooling one.
-- **`tfs3.c` uses one static buffer per function.** The backend is
-  non-reentrant by contract (`vfs.c`'s `FS_OP()` holds the fs lock),
-  which is already why `g_blk` and `dirblk` are module-level. One
+- **`tfs3.c` uses one buffer per function, per mount** (`t3_state.pb`).
+  One call runs per volume at a time (the mount's lock), which is why
+  they can outlive the call, as `blk` and `dirblk` do. One
   buffer per function rather than a shared stack with a depth counter:
   these calls nest and none recurses into itself, so separate buffers
   need no push/pop and cannot leak a slot down an early return.

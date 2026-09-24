@@ -90,7 +90,7 @@ counted in the tree on 2026-08-26.
 | "what is running" | `current_index`, `rotation_pos`, `g_next_kernel_rsp` -- three file-scope globals | each has to become per CPU. `g_next_kernel_rsp` is read by `isr_common`'s epilogue in assembly |
 | run queue | one `procs[64]` array scanned by `find_next_runnable()` | correct under a lock; a per-core queue is a later optimisation, not a correctness fix |
 | mutual exclusion | `scheduler_preempt_disable()`, 11 call sites outside tests, in 4 files | turning preemption off on ONE core stops nothing on another. Every one of these is a critical section that needs a real lock |
-| filesystem | `tfs3.c` parses through module-level scratch (`g_blk`, `g_ptr_blk`, the journal image; the bitmaps are per mount now, `S->bbm`) | two cores in one backend overwrite each other's block. `vfs.c`'s sleeping `g_fs_lock` serialises it today; `docs/fslock-design.md` is the plan past it |
+| filesystem | `tfs3.c`'s scratch, caches and journal are per MOUNT (`struct t3_state`, fslock stage 2), so two volumes are independent; inside one volume they are still shared | two cores in one VOLUME overwrite each other's block. One lock per mount serialises it; `docs/fslock-design.md` stages 3-4 are the plan past it |
 | kernel heap | one free list (`g_head`/`g_tail` in `heap_core.c`) | two concurrent `kmalloc`s corrupt the list |
 | console | `vga.c`'s cursor and back buffer | interleaved output, and a torn present |
 | ACPI | tables and the MADT (`kernel/acpi/`, 2026-08-30) | this row is now DONE -- the core count is a fact, and `/bin/acpi` prints it |
