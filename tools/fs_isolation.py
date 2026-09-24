@@ -10,6 +10,11 @@ measures the compositor, whose reads all land on /, so it cannot see
 stage 2 at all. This asks the question directly: time a PROBE on one path
 alone, then again while a LOAD hammers another path, and compare.
 
+USE --during TO PICK THE LOAD'S PHASE. A probe started at the load's
+first progress line spends its window in diskbench's SEQ-write, which
+creates its file; a stage that only frees OVERWRITES (fslock 3b) shows
+nothing there and ~200x during `--during RND4K-write`.
+
 The probe is /tests/fslat_bench -- stat() in a loop for a fixed time,
 timed CALL BY CALL -- not a throughput benchmark: a lock wait of one disk
 operation disappears into the average of thousands of microsecond calls
@@ -101,6 +106,9 @@ def main():
                     help="probe sleep between calls (default 1; 0 is a tight loop, "
                          "which under one lock STARVES the load rather than waiting)")
     ap.add_argument("--load-size", type=int, default=256, help="load MiB (default 256)")
+    ap.add_argument("--during", default="",
+                    help="start the probe when the load reaches this diskbench profile "
+                         "(e.g. RND4K-write); default: its first progress line")
     ap.add_argument("--timeout", type=float, default=600.0,
                     help="give up on a workload after this long (default 600)")
     args = ap.parse_args()
@@ -129,7 +137,11 @@ def main():
         if not spawn(dbg, f"/bin/diskbench --size {args.load_size} --path {args.load_path}",
                      LOAD_OUT):
             return 1
-        if wait_for(dbg, LOAD_OUT, "diskbench: progress", args.timeout) is None:
+        # WHICH PHASE THE PROBE OVERLAPS DECIDES WHAT IT MEASURES: diskbench
+        # starts with SEQ-write, which creates its file (allocating), and a
+        # probe started at the first progress line spends its window there.
+        want = f"diskbench: progress {args.during}" if args.during else "diskbench: progress"
+        if wait_for(dbg, LOAD_OUT, want, args.timeout) is None:
             print("fs_isolation: the load never started", file=sys.stderr)
             return 1
         if not spawn(dbg, probe, PROBE_OUT):
@@ -148,7 +160,8 @@ def main():
         dbg.close()
 
     print(f"fs_isolation: stat({args.probe_path}) every {args.gap_ms} ms for {args.secs}s, "
-          f"load diskbench {args.load_size} MiB on {args.load_path}")
+          f"load diskbench {args.load_size} MiB on {args.load_path}"
+          + (f", during {args.during}" if args.during else ""))
     print(f"  {'':<12}" + "".join(f"{f:>10}" for f in FIELDS))
     for name, r in (("alone", alone), ("under load", loaded)):
         print(f"  {name:<12}" + "".join(f"{r[f]:>10}" for f in FIELDS))

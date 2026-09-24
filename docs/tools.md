@@ -1499,6 +1499,11 @@ window without going through it will find its layout polls timing out.
   finished before the probe**, since that arm measured a quiet machine.
   Attaches to a running guest; use `--kvm --cpu host,+invtsc`. Compare
   two builds, never an absolute. On demand (`ondemand_sweep.py`).
+  **`--during PROFILE` picks the load's phase**: diskbench starts with
+  SEQ-write, which creates its file and so allocates, and a probe
+  started at its first progress line measures mostly that -- fslock 3b
+  (overwrites only) read as nothing there and ~200x faster
+  `--during RND4K-write`.
 - **`kvm_soak.py`** -- the desktop under KVM, across FRESH BOOTS, failing
   on the symptoms that appear only there: a WM frame over a threshold, a
   file that exists but will not read, an incomplete cursor-theme load, a

@@ -1127,6 +1127,12 @@ it is still one call at a time. Four things to know:
   `free_block_bit()`), and `fs_exclusive_begin()`. A gap is declined
   when the lock is nested or held under exclusion, so the legacy `run`
   never sees one.
+- **A WRITE MAY DROP IT ONLY AS AN OVERWRITE** (tfs3's `do_overwrite()`):
+  every block in range already the file's, all of it inside the size,
+  so nothing is allocated and no pointer changes. And it must not
+  commit the inode COPY it holds -- re-read, change the time only. An
+  allocating write that dropped the lock would lose another writer's
+  update to the same file; that needs stage 4's inode lock.
 - **Anything global in `vfs.c` needs its own lock now.** The step
   table (`g_steps`) was covered by the one fs lock by accident and has
   `g_steps_lock`; `record()` publishes `used` last because

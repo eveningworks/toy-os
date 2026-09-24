@@ -140,6 +140,38 @@ Each ships on its own, and each is measured on
   first read as a small gain; more runs put it inside the noise. The
   probe waits behind diskbench's WRITES, which is 3b. A single stall
   of 120-240 ms appears on BOTH builds (docs/bugs.md).
+- **Stage 3b, BUILT 2026-09-24: an OVERWRITE drops it too -- and only
+  an overwrite.** A write whose whole range is blocks the file already
+  has, inside its size, rewrites them with the lock dropped
+  (`do_overwrite()`, `vol_write_run()`). That is ext4's direct-I/O
+  overwrite, which it runs under a SHARED inode lock for the same
+  reason: it allocates nothing and changes no pointer. Allocating or
+  extending writes stay locked, because dropping the lock under them
+  loses updates -- a write holds an inode COPY from lookup to commit,
+  and two writers of one file would each commit theirs; that needs the
+  per-inode lock of stage 4. What the overwrite may NOT do is commit
+  its copy: it re-reads the inode and changes only the time. After a
+  gap, an inode freed on the volume fails the write (the number may be
+  another file now); a block freed re-reads the inode and re-checks the
+  range. `fsrace_test`'s phase 2 appends to a file one thread keeps
+  overwriting; its control (commit the stale copy) LOST 2034 of 2048
+  records, and it passes with the code. MEASURED with fs_isolation
+  `--during RND4K-write` (KVM, four runs a side against 275f5a1a):
+  `stat /etc` while diskbench overwrites went from 12.4-13.1 ms to
+  53-83 us, p99 >=20 ms to 0.6-0.8 ms, and the probe got all 400 of
+  its calls in rather than ~200. Measured over diskbench's first phase
+  instead -- SEQ-write, which creates its file and so allocates -- it
+  showed nothing, which is what the design predicts and how the first
+  measurement read it. **Throughput checked on the ASUS, and it caught a
+  regression the KVM runs could not:** the first version dropped the
+  read-side pointer cache on every overwrite, as every write does, and
+  since the overwrite finds its blocks through that cache, each 4 KiB
+  random overwrite re-read a table -- 5.3-5.7k IOPS against 3a's 8.0-8.4k
+  on the same machine. An overwrite's targets are live data blocks, so
+  it keeps the cache (a freed table can only become data through an
+  allocating write, which still drops it): 7.5-8.1k, within the noise.
+  It also skips re-reading its inode when nothing was staged meanwhile
+  (`ino_gen`).
 - **Stage 3 -- inside one volume.** A journal lock with jbd2-style
   handles, an allocator lock over the bitmaps and the TRIM queue, and a
   name-cache lock. **The cheaper intermediate worth measuring first:**

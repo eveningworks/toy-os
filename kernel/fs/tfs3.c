@@ -254,6 +254,13 @@ struct t3_state {
     // meanwhile, the file's mapping may have changed under the inode copy
     // it is walking, so it stops short (vol_read_run()).
     uint64_t free_gen;
+    // Bumped by every INODE free: an overwrite that dropped the lock
+    // cannot tell its file from a new one that reused the number.
+    uint64_t ino_free_gen;
+    // Bumped by every inode STAGED for update (txn_stage_inode()): an
+    // overwrite whose copy is still current -- nothing staged meanwhile --
+    // skips re-reading it, which on a 4 KiB random write is a disk read.
+    uint64_t ino_gen;
 
     // Tiny name-lookup cache (dir ino + name -> child ino): path walks
     // are the hot loop, and every component is otherwise a dirent scan.
@@ -456,6 +463,28 @@ static int vol_read_run(struct t3_state *sbi, uint32_t lba, int count, void *buf
     struct mount_io g;
     if (!mount_io_begin(sbi, &g)) return blkdev_read_sectors(dev, at, count, buf);
     int ok = blkdev_read_sectors(dev, at, count, buf);
+    if (!mount_io_end(&g)) return -1;
+    return ok;
+}
+
+// The write half, for OVERWRITES only (do_write()): a data run rewritten
+// in place, with the lock dropped. Returns as vol_read_run() does.
+//
+// **IT DOES NOT DROP THE READ-SIDE POINTER CACHE**, which every other
+// write does (vol_write_sectors()). That rule guards a block that WAS a
+// pointer table being reused as data under its old cached number; an
+// overwrite's targets are this file's live data blocks, found through its
+// own tables, so none of them is a table anyone has cached. Dropping it
+// anyway cost a table re-read per 4 KiB random overwrite: 30% of the
+// ASUS's random-write rate.
+static int vol_write_run(struct t3_state *sbi, uint32_t lba, int count, const void *buf) {
+    if (sbi->readonly) return 0;
+    if (lba + (uint32_t)count > sbi->vol.sector_count) return 0;
+    const struct block_device *dev = sbi->vol.dev;
+    uint32_t at = sbi->vol.base_lba + lba;
+    struct mount_io g;
+    if (!mount_io_begin(sbi, &g)) return blkdev_write_sectors(dev, at, count, buf);
+    int ok = blkdev_write_sectors(dev, at, count, buf);
     if (!mount_io_end(&g)) return -1;
     return ok;
 }
@@ -1157,6 +1186,7 @@ static void free_inode_bit(struct t3_state *sbi, uint64_t ino) {
     uint32_t g = (uint32_t)(ino / sbi->sb.ipg);
     uint32_t i = (uint32_t)(ino % sbi->sb.ipg);
     if (g >= sbi->sb.gc || !ibm_test(sbi, g, i)) return;
+    sbi->ino_free_gen++;
     ibm_set(sbi, g, i, 0);
     sbi->gd[g].free_inodes++;
     mark_dirty(sbi->gdt_dirty, g);
@@ -1646,6 +1676,7 @@ static void pack_inode_into(uint8_t *p, const struct t3_inode *node) {
 // block. `node == 0` zeroes the slot -- a dead inode fails its
 // checksum by design, the bitmap is the allocation authority.
 static int txn_stage_inode(struct t3_state *sbi, uint64_t ino, const struct t3_inode *node) {
+    sbi->ino_gen++;   // see t3_state.ino_gen
     uint32_t lba, off;
     if (!inode_pos(sbi, ino, &lba, &off)) return 0;
     uint32_t blk = lba / T3_SPB;
@@ -1842,6 +1873,8 @@ static int block_has_live_bytes(int fresh, uint32_t bi, uint64_t size) {
     return !fresh && (uint64_t)bi * T3_BLOCK < size;
 }
 
+static int stage_inode_update(struct t3_state *sbi, uint64_t ino, struct t3_inode *node);
+
 static int do_write_inner(struct t3_state *sbi, uint64_t ino, struct t3_inode *node, uint64_t offset,
                           const void *buf, uint32_t len) {
     const uint8_t *src = (const uint8_t *)buf;
@@ -1922,7 +1955,13 @@ static int do_write_inner(struct t3_state *sbi, uint64_t ino, struct t3_inode *n
 
     if (offset + len > node->size) node->size = offset + len;
     node->modified = now_epoch();
+    return stage_inode_update(sbi, ino, node);
+}
 
+// The inode half of a write: land the updated inode through the journal
+// (or the deferred transaction under `batched`), after the allocation
+// state it depends on. Shared by do_write_inner() and do_overwrite().
+static int stage_inode_update(struct t3_state *sbi, uint64_t ino, struct t3_inode *node) {
     // SET-BEFORE-USE, and under `batched` it rides the deferred commit
     // instead. Deferring is strictly SAFER than flushing per write: a
     // crash mid-batch then leaves the bitmap saying `free` and the
@@ -1964,6 +2003,80 @@ static int do_write_inner(struct t3_state *sbi, uint64_t ino, struct t3_inode *n
     return txn_commit(sbi);                       // the commit point: file grows atomically
 }
 
+// Is [offset, offset+len) entirely blocks the file already has, inside
+// its size? Then the write allocates nothing and changes no pointer --
+// the one shape that may drop the lock (do_overwrite()).
+static int is_overwrite(struct t3_state *sbi, const struct t3_inode *node,
+                        uint64_t offset, uint32_t len) {
+    if (!len || offset + len > node->size) return 0;
+    uint32_t first = (uint32_t)(offset / T3_BLOCK);
+    uint32_t last = (uint32_t)((offset + len - 1) / T3_BLOCK);
+    for (uint32_t bi = first; bi <= last; bi++) {
+        uint32_t b;
+        if (!block_for_index(sbi, node, bi, &b) || !b) return 0;
+    }
+    return 1;
+}
+
+// AN OVERWRITE IN PLACE, with the mount's lock dropped for each whole-
+// block run (vol_write_run()) -- ext4's direct-I/O overwrite, which it
+// runs under a SHARED inode lock for the same reason: it allocates
+// nothing and changes no pointer, so there is no half-built state for
+// another call to see. Partial blocks go through blk, under the lock.
+//
+// **WHAT IT MUST NOT DO IS COMMIT ITS INODE COPY**, which another call
+// may have changed while the lock was down -- an append's size, or a
+// truncate. So it re-reads the inode at the end and changes only the
+// time. And after each gap: an inode freed anywhere on the volume means
+// this number may now be somebody else's file, so the write fails; a
+// block freed means this copy may be stale, so it re-reads and checks
+// the rest of the range is still an overwrite, or fails.
+static int do_overwrite(struct t3_state *sbi, uint64_t ino, struct t3_inode *node,
+                        uint64_t offset, const void *buf, uint32_t len) {
+    const uint8_t *src = (const uint8_t *)buf;
+    uint64_t freed = sbi->free_gen, ino_freed = sbi->ino_free_gen, staged = sbi->ino_gen;
+    uint32_t total = 0;
+    while (total < len) {
+        uint64_t file_off = offset + total;
+        uint32_t bi = (uint32_t)(file_off / T3_BLOCK);
+        uint32_t within = (uint32_t)(file_off % T3_BLOCK);
+        uint32_t chunk = T3_BLOCK - within;
+        if (chunk > len - total) chunk = len - total;
+        uint32_t blk;
+        if (!block_for_index(sbi, node, bi, &blk) || !blk) return 0;
+        if (chunk == T3_BLOCK) {
+            uint32_t run = 1;
+            uint32_t want = (len - total) / T3_BLOCK;
+            uint32_t cap = (uint32_t)blkdev_max_sectors_per_xfer(sbi->vol.dev) / T3_SPB;
+            if (cap < 1) cap = 1;
+            if (want > cap) want = cap;
+            while (run < want) {
+                uint32_t nxt;
+                if (!block_for_index(sbi, node, bi + run, &nxt) || nxt != blk + run) break;
+                run++;
+            }
+            int r = vol_write_run(sbi, blk * T3_SPB, (int)(run * T3_SPB), src + total);
+            if (r <= 0) return 0;          // failed, or unmounted: sbi may be gone
+            total += run * T3_BLOCK;
+            if (sbi->ino_free_gen != ino_freed) return 0;
+            if (sbi->free_gen != freed) {
+                freed = sbi->free_gen;
+                if (!read_inode(sbi, ino, node) || node->type != T3_TYPE_FILE) return 0;
+                if (total < len && !is_overwrite(sbi, node, offset + total, len - total)) return 0;
+            }
+        } else {
+            if (!read_block(sbi, blk, sbi->blk)) return 0;
+            k_memcpy(sbi->blk + within, src + total, chunk);
+            if (!write_block(sbi, blk, sbi->blk)) return 0;
+            total += chunk;
+        }
+    }
+    if (sbi->ino_gen != staged && (!read_inode(sbi, ino, node) || node->type != T3_TYPE_FILE))
+        return 0;
+    node->modified = now_epoch();
+    return stage_inode_update(sbi, ino, node);
+}
+
 // The rollback shell: a runtime failure (refused write, out of space
 // midway) frees everything this call allocated -- see the alloc-log
 // comment. Only a CRASH is allowed to cost a leak.
@@ -1972,6 +2085,9 @@ static int do_write(struct t3_state *sbi, uint64_t ino, struct t3_inode *node, u
     // BEFORE anything is allocated: a refusal that came after would
     // leave the blocks behind for a write that never happened.
     if (!t3_range_fits(offset, len)) return 0;
+    // NOTHING TO ROLL BACK, AND NO SHARED LOG TO HOLD across the gaps it
+    // may open: alog is per mount, and another call would reset it.
+    if (is_overwrite(sbi, node, offset, len)) return do_overwrite(sbi, ino, node, offset, buf, len);
     alog_begin(sbi);
     int ok = do_write_inner(sbi, ino, node, offset, buf, len);
     if (ok) {

@@ -250,3 +250,76 @@ KTEST("tfs3", "a whole-block read drops the mount's lock, and not under exclusio
     KTEST_ASSERT_EQ(excl_unlocked, 0);               // never under exclusion
     KTEST_ASSERT_EQ(gaps_after, 0);                  // nothing left open
 }
+
+// ---- an overwrite drops the lock; an allocating write does not -------
+
+// fslock stage 3b: rewriting blocks a file already has, inside its size,
+// is written with the mount's lock dropped (tfs3.c's do_overwrite()) --
+// and ONLY that: a write that allocates or extends builds pointers and
+// uses the per-mount rollback log, so it stays locked. Asserted from the
+// device: the overwrite arrives unlocked at least once, the append never.
+#define OW_POINT "/var/tmp/.ktest_owmnt"
+
+static int g_ow_watch, g_ow_writes, g_ow_unlocked;
+
+static int ow_write(uint32_t lba, int n, const void *b) {
+    if (g_ow_watch) {
+        g_ow_writes++;
+        if (!fs_lock_held_at(OW_POINT "/f")) g_ow_unlocked++;
+    }
+    return vol_rw(0, lba, n, 0, b);
+}
+
+static const struct block_device OW_DEV = {
+    .name = "t3ow", .sector_count = vol_count, .read_sectors = v0_read,
+    .write_sectors = ow_write, .max_sectors_per_xfer = vol_xfer,
+};
+
+KTEST("tfs3", "an overwrite drops the mount's lock, an append does not") {
+    if (!g_vol[0]) g_vol[0] = kmalloc(VOL_BYTES);
+    if (!g_vol[0]) KTEST_SKIP("could not allocate a 4 MiB volume");
+    k_memset(g_vol[0], 0, VOL_BYTES);
+
+    struct fs_scratch sc;
+    int ok = mount_scratch_begin(T(), &sc);
+    if (ok) {
+        ok = T()->format(sc.st, &OW_DEV);
+        mount_scratch_end(&sc);
+    }
+    fs_mkdir(OW_POINT);
+    const char *why = 0;
+    int mounted = ok && mount_add(&OW_DEV, "tfs3", OW_POINT, 0, 0, &why);
+    static uint8_t a[64 * 1024], b[64 * 1024], back[68 * 1024];
+    for (unsigned i = 0; i < sizeof a; i++) { a[i] = (uint8_t)(i * 7u + 1u); b[i] = (uint8_t)~a[i]; }
+    int wrote = mounted && fs_write_range(OW_POINT "/f", 0, a, sizeof a);
+
+    g_ow_writes = g_ow_unlocked = 0;
+    g_ow_watch = 1;
+    int over = wrote && fs_write_range(OW_POINT "/f", 0, b, sizeof b);   // in place
+    g_ow_watch = 0;
+    int over_writes = g_ow_writes, over_unlocked = g_ow_unlocked;
+
+    g_ow_writes = g_ow_unlocked = 0;
+    g_ow_watch = 1;
+    int appended = over && fs_write_range(OW_POINT "/f", sizeof b, a, 4096);  // extends
+    g_ow_watch = 0;
+    int app_writes = g_ow_writes, app_unlocked = g_ow_unlocked;
+
+    uint64_t size = mounted ? fs_size(OW_POINT "/f") : 0;
+    uint32_t got = appended ? fs_read_range(OW_POINT "/f", 0, back, sizeof back) : 0;
+    int same = got == sizeof b + 4096 && k_memcmp(back, b, sizeof b) == 0 &&
+               k_memcmp(back + sizeof b, a, 4096) == 0;
+
+    if (mounted) mount_remove(OW_POINT, &why);
+    fs_delete(OW_POINT);
+    kfree(g_vol[0]);
+    g_vol[0] = 0;
+
+    KTEST_ASSERT(mounted && wrote && over && appended);
+    KTEST_ASSERT(over_writes >= 1);          // the overwrite reached the device
+    KTEST_ASSERT(over_unlocked >= 1);        // ...without the lock
+    KTEST_ASSERT(app_writes >= 1);
+    KTEST_ASSERT_EQ(app_unlocked, 0);        // the append never
+    KTEST_ASSERT_EQ((int)size, (int)(sizeof b + 4096));
+    KTEST_ASSERT(same);
+}
