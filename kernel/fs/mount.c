@@ -149,8 +149,48 @@ static int depth_of(const struct mount *m) {
 static struct kmutex g_excl;
 static void drain(struct mount *m);
 
+static void exclusive_take(void);
+static void exclusive_release(void);
+
+// AND NO PER-OBJECT LOCK HELD: an op that took an inode lock and dropped
+// the volume lock for its I/O is still mid-call, waiting to retake it --
+// so holding every mount lock would leave it stuck and us facing its
+// inode. Take, check, and if anything is held let go and wait for it.
+// Rare (partition writes, the legacy `run`, mount changes), so the retry
+// costs nothing that matters.
+//
+// Counts OTHER callers' locks (the backend's locks_held() says so): a
+// nested exclusion inside an op holding its own would otherwise wait on
+// itself forever. And a nested call skips the wait altogether -- the
+// outer one already did it.
+static char g_excl_wait;   // an address to park on; mount_locks_released() wakes it
+
+void mount_locks_released(void) { scheduler_wake(&g_excl_wait, 0); }
+
 void fs_exclusive_begin(void) {
+    int me = scheduler_current_pid();
+    int nested = kmutex_held(&g_excl) && kmutex_owner(&g_excl) == me;
     kmutex_lock(&g_excl);
+    for (;;) {
+        scheduler_wait_arm(&g_excl_wait);
+        exclusive_take();
+        int held = 0;
+        for (int i = 0; !nested && i < MOUNT_MAX; i++) {
+            struct mount *m = &g_mounts[i];
+            if (m->used && m->fs->locks_held && m->fs->locks_held(m->state)) held = 1;
+        }
+        if (!held) { scheduler_wait_disarm(); return; }
+        exclusive_release();
+        // A release happens under a mount lock we no longer hold, i.e.
+        // after the arm above, so it cannot be missed.
+        if (!scheduler_block_kernel(&g_excl_wait, SCHED_WAIT_LOCK)) {
+            scheduler_wait_disarm();
+            cpu_relax();
+        }
+    }
+}
+
+static void exclusive_take(void) {
     int order[MOUNT_MAX];
     for (int i = 0; i < MOUNT_MAX; i++) order[i] = i;
     for (int i = 1; i < MOUNT_MAX; i++) {
@@ -167,7 +207,13 @@ void fs_exclusive_begin(void) {
     for (int i = 0; i < MOUNT_MAX; i++) if (g_mounts[i].used) drain(&g_mounts[i]);
 }
 
+static void exclusive_release(void) {
+    for (int i = MOUNT_MAX - 1; i >= 0; i--) kmutex_unlock(&g_mounts[i].lock);
+}
+
 // ---- device I/O without the lock ----------------------------------------
+
+static int can_drop(struct mount *m);
 
 static struct mount *mount_of_state(void *st) {
     if (!st) return NULL;
@@ -201,17 +247,54 @@ int mount_io_begin(void *st, struct mount_io *g) {
     struct mount *m = mount_of_state(st);
     g->m = NULL;
     if (!m) return 0;
-    int me = scheduler_current_pid();
     // EXACTLY ONCE, and ours: a nested hold would not really release it,
     // and an exclusive holder has promised the disk is quiet.
-    if (m->lock.depth != 1 || !m->lock.owned || m->lock.owner != me || m->lock.handed)
-        return 0;
-    if (kmutex_held(&g_excl) && kmutex_owner(&g_excl) == me) return 0;
+    if (!can_drop(m)) return 0;
     g->m = m;
     g->gen = m->gen;
     __atomic_add_fetch(&m->io_gaps, 1, __ATOMIC_ACQ_REL);
     kmutex_unlock(&m->lock);
     return 1;
+}
+
+// Can this caller drop m's lock at all? Held exactly once, by it, and
+// not under exclusion -- mount_io_begin()'s test.
+static int can_drop(struct mount *m) {
+    int me = scheduler_current_pid();
+    if (m->lock.depth != 1 || !m->lock.owned || m->lock.owner != me || m->lock.handed)
+        return 0;
+    return !(kmutex_held(&g_excl) && kmutex_owner(&g_excl) == me);
+}
+
+int mount_wait(void *st, const void *chan) {
+    struct mount *m = mount_of_state(st);
+    if (!m || !can_drop(m)) return 0;
+    uint32_t gen = m->gen;
+    // ARMED BEFORE THE UNLOCK: the release that ends this wait happens
+    // under the lock, i.e. after this point, so it cannot be missed.
+    scheduler_wait_arm(chan);
+    kmutex_unlock(&m->lock);
+    if (!scheduler_block_kernel(chan, SCHED_WAIT_LOCK)) {
+        scheduler_wait_disarm();
+        cpu_relax();          // no slot to park in: retry, preemptibly
+    }
+    kmutex_lock(&m->lock);
+    return (m->used && m->gen == gen) ? 1 : -1;
+}
+
+int mount_can_wait(void *st) {
+    struct mount *m = mount_of_state(st);
+    return m && can_drop(m);
+}
+
+void mount_op_restart(void *st) {
+    struct mount *m = mount_of_state(st);
+    if (m) m->restart = 1;
+}
+
+int mount_op_depth(void *st) {
+    struct mount *m = mount_of_state(st);
+    return m ? m->lock.depth : 0;
 }
 
 int mount_io_end(struct mount_io *g) {
@@ -223,7 +306,7 @@ int mount_io_end(struct mount_io *g) {
 }
 
 void fs_exclusive_end(void) {
-    for (int i = MOUNT_MAX - 1; i >= 0; i--) kmutex_unlock(&g_mounts[i].lock);
+    exclusive_release();
     kmutex_unlock(&g_excl);
 }
 

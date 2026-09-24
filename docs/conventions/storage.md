@@ -1133,6 +1133,20 @@ it is still one call at a time. Four things to know:
   commit the inode COPY it holds -- re-read, change the time only. An
   allocating write that dropped the lock would lose another writer's
   update to the same file; that needs stage 4's inode lock.
+- **TFS3 LOCKS THE INODES AN OP TOUCHES, BEFORE IT CHANGES ANYTHING**
+  (`t3_lock()`, fslock stage 4): shared to read a file or directory,
+  exclusive to change a file, and the PARENT exclusive for any namespace
+  change. Every call site is `if (!t3_lock(...)) return <failure>;` and
+  must come before the first mutation: a 0 means the op waited (and
+  FS_OP will run it again from the top) or the mount is gone. Never
+  unlock by hand -- `op_end` releases an op's locks when it returns --
+  and never hold one lock while waiting for another; t3_lock() already
+  releases this op's before it waits.
+- **A STEPPED WRITE LOCKS PER STEP, NEVER ACROSS STEPS** -- a lock held
+  between syscalls outlives a process that dies mid-stream. So each step
+  checks the inode is the one the stream began from (`inode_same()`,
+  field by field: the struct has padding) and FAILS otherwise, and lands
+  the pointer cache before returning PENDING.
 - **Anything global in `vfs.c` needs its own lock now.** The step
   table (`g_steps`) was covered by the one fs lock by accident and has
   `g_steps_lock`; `record()` publishes `used` last because

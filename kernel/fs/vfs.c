@@ -85,12 +85,30 @@
 // caller sees a path that no longer resolves, which is what it now is.
 // `op` is an fs_ops slot and the mount's own state goes in first, so a
 // call cannot be handed another mount's state.
+//
+// **AND IT RUNS THE OP AGAIN WHEN THE OP ASKS.** A backend with its own
+// per-object locks (tfs3, fslock stage 4) that finds one busy releases
+// what it holds, waits with the volume lock DROPPED (mount_wait()), and
+// returns asking to be re-run -- what it looked up may have changed.
+// op_end releases whatever the op took, every time, still under the lock.
+// A mount gone while the op waited ends the loop WITHOUT calling op_end:
+// its state is freed.
+static inline int fs_op_again(const struct mount *m, uint32_t gen) {
+    if (!(m->used && m->gen == gen)) return 0;
+    if (m->fs->op_end) m->fs->op_end(m->state);
+    if (!m->restart) return 0;
+    ((struct mount *)m)->restart = 0;
+    return 1;
+}
+
 #define FS_OP(m, g, op, ...) ({                                     \
     const struct mount *_fs_m = (m);                                \
     mount_lock(_fs_m);                                              \
     __typeof__(_fs_m->fs->op(_fs_m->state, ##__VA_ARGS__)) _fs_r = 0; \
-    if (_fs_m->used && _fs_m->gen == (g))                           \
+    while (_fs_m->used && _fs_m->gen == (g)) {                      \
         _fs_r = _fs_m->fs->op(_fs_m->state, ##__VA_ARGS__);         \
+        if (!fs_op_again(_fs_m, (g))) break;                        \
+    }                                                               \
     mount_unlock(_fs_m);                                            \
     _fs_r;                                                          \
 })
@@ -98,8 +116,10 @@
 #define FS_OP_VOID(m, g, op, ...) do {                              \
     const struct mount *_fs_m = (m);                                \
     mount_lock(_fs_m);                                              \
-    if (_fs_m->used && _fs_m->gen == (g))                           \
+    while (_fs_m->used && _fs_m->gen == (g)) {                      \
         _fs_m->fs->op(_fs_m->state, ##__VA_ARGS__);                 \
+        if (!fs_op_again(_fs_m, (g))) break;                        \
+    }                                                               \
     mount_unlock(_fs_m);                                            \
 } while (0)
 

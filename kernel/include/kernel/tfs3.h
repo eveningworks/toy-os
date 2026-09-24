@@ -24,4 +24,8 @@ void tfs3_lookup_stats(uint64_t *calls, uint64_t *reads, uint64_t *ns);
 // transaction, which is the only way a test can tell the two apart.
 uint64_t tfs3_idle_commits(void);
 
+// TEST SEAM (tfs3_test.c): how `ino` is locked on this state right now --
+// 2 exclusive, 1 shared, 0 not held. See tfs3.c's t3_lock().
+int tfs3_test_lock_mode(void *st, uint64_t ino);
+
 #endif

@@ -178,6 +178,25 @@ Each ships on its own, and each is measured on
   release the volume lock across the data-block I/O in `do_write_inner`
   and `read_range_impl` -- that is where the time goes, and it may
   capture most of the latency before stage 4 exists.
+- **Stage 4a, BUILT 2026-09-24: per-inode locks, and their rules.**
+  A per-mount table of HELD locks (a futex-hash shape, not an inode
+  cache): readers take a file SHARED, writers and namespace changes
+  EXCLUSIVE, the parent directory too for create/delete/link/rename.
+  Locks are op-scoped -- `FS_OP` releases an op's through the new
+  `op_end` slot -- so no op unlocks by hand. **No op waits holding a
+  lock**: a busy one makes it release all of its own, wait with the
+  volume lock dropped (`mount_wait()`), and be re-run by FS_OP from its
+  lookup. That removes deadlock by construction, so the lock order and
+  the rename mutex this entry planned are not built: Linux needs them
+  because it holds and waits. `fs_exclusive_begin()` waits until no
+  OTHER op holds one. A read nested in an fs_list() callback cannot
+  wait and proceeds unlocked, which readers already tolerate. It also
+  fixed two faults in the stepped write that predate it: its pointer
+  cache was left dirty across steps, where another stream's begin()
+  dropped it (blocks read back as holes), and it committed a stale inode
+  copy over a write made between its steps -- it now FAILS instead.
+  Three KTESTs, each red under its control. No throughput change (ASUS
+  random writes 7.8k IOPS, as 3b).
 - **Stage 4 -- an inode table with a per-inode rwsem.** Readers take it
   shared; a directory operation locks the parent; a cross-directory
   rename takes a per-mount rename mutex and then both parents in inode

@@ -280,6 +280,16 @@ struct fs_ops {
     // name goes. Paths follow the same normalized-absolute contract
     // as everything above.
     int (*link)(void *st, const char *existing, const char *newpath);
+
+    // ---- per-object locks inside a volume (fslock stage 4) ----
+    //
+    // OPTIONAL, and only a backend that drops the volume lock mid-call
+    // needs them. `op_end` runs after EVERY op, still under the mount's
+    // lock, and releases what that op took -- so the op itself never
+    // unlocks on its ~40 return paths. `locks_held` is how many are held
+    // right now, which fs_exclusive_begin() waits to reach zero.
+    void (*op_end)(void *st);
+    int (*locks_held)(void *st);
 };
 
 #endif

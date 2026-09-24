@@ -3038,6 +3038,35 @@ into the failure the call would have had a moment later anyway ("no
 such path"). The slot's lock is never zeroed for the same reason -- a
 caller may be queued on it.
 
+## Inode locks: release everything and restart, rather than a lock order
+
+**Decided 2026-09-24**, stage 4 of `docs/fslock-design.md`. tfs3 has a
+per-inode shared/exclusive lock (a per-mount table of held locks), and
+an op that finds one busy has to wait for it without holding the volume
+lock -- the holder may need that lock to finish.
+
+**What Linux does**: a strict lock order (parent before child, two
+directories by address, `s_vfs_rename_mutex` for a cross-directory
+rename) so that holding one `i_rwsem` while waiting for the next cannot
+deadlock. It needs the order because it holds and waits.
+
+**What toy-os does instead**: never hold and wait. `t3_lock()` either
+takes the lock at once or releases every lock the op holds, waits with
+the volume lock dropped, and makes FS_OP run the op again from its
+lookup. With no hold-and-wait there is no cycle to form, so there is no
+order to keep and no rename mutex -- and a new op cannot break a rule
+nobody has to remember. The cost is re-running a lookup after a wait,
+which is cheap next to the wait itself, and a theoretical livelock that
+needs a writer to win every race.
+
+**What makes it workable is that locks are op-scoped.** `op_end` (a new
+optional fs_ops slot) releases an op's locks when FS_OP's call returns,
+so none of tfs3's ~40 return paths unlocks by hand, and "release all of
+this op's" is well defined: every entry carries its pid and the depth
+at which it holds the volume lock, so a nested call releases only its
+own. A lock is never held across SYSCALLS -- a stepped write locks per
+step and detects a change between steps instead.
+
 ## A path has THREE bounds, not one: what a call may be handed, what a struct may remember, and what one component may be
 
 **Decided 2026-09-15**, when `FS_PATH_MAX` went from 64 to 4096 so a

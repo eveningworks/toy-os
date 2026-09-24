@@ -323,3 +323,132 @@ KTEST("tfs3", "an overwrite drops the mount's lock, an append does not") {
     KTEST_ASSERT_EQ((int)size, (int)(sizeof b + 4096));
     KTEST_ASSERT(same);
 }
+
+// ---- inode locks (fslock stage 4) ------------------------------------
+
+// A mounted RAM volume for the tests below, with a device whose read and
+// write callbacks can report how the file under test is locked -- they
+// run in the middle of an op's unlocked gap.
+#define L4_POINT "/var/tmp/.ktest_l4mnt"
+static int g_l4_watch, g_l4_rd_mode = -1, g_l4_wr_mode = -1;
+static uint64_t g_l4_ino;
+static void *l4_state(void) {
+    const struct mount *m = mount_resolve(L4_POINT "/x", 0);
+    return m ? m->state : 0;
+}
+static int l4_read(uint32_t lba, int n, void *b) {
+    if (g_l4_watch && !fs_lock_held_at(L4_POINT "/x"))
+        g_l4_rd_mode = tfs3_test_lock_mode(l4_state(), g_l4_ino);
+    return vol_rw(0, lba, n, b, 0);
+}
+static int l4_write(uint32_t lba, int n, const void *b) {
+    if (g_l4_watch && !fs_lock_held_at(L4_POINT "/x"))
+        g_l4_wr_mode = tfs3_test_lock_mode(l4_state(), g_l4_ino);
+    return vol_rw(0, lba, n, 0, b);
+}
+static const struct block_device L4_DEV = {
+    .name = "t3l4", .sector_count = vol_count, .read_sectors = l4_read,
+    .write_sectors = l4_write, .max_sectors_per_xfer = vol_xfer,
+};
+
+static int l4_mount(void) {
+    if (!g_vol[0]) g_vol[0] = kmalloc(VOL_BYTES);
+    if (!g_vol[0]) return 0;
+    k_memset(g_vol[0], 0, VOL_BYTES);
+    struct fs_scratch sc;
+    int ok = mount_scratch_begin(T(), &sc);
+    if (ok) {
+        ok = T()->format(sc.st, &L4_DEV);
+        mount_scratch_end(&sc);
+    }
+    fs_mkdir(L4_POINT);
+    const char *why = 0;
+    return ok && mount_add(&L4_DEV, "tfs3", L4_POINT, 0, 0, &why);
+}
+static void l4_unmount(void) {
+    const char *why = 0;
+    mount_remove(L4_POINT, &why);
+    fs_delete(L4_POINT);
+    kfree(g_vol[0]);
+    g_vol[0] = 0;
+}
+static int l4_stream(const char *path, uint64_t off, const void *buf, uint32_t len, int steps) {
+    void *h = fs_write_range_begin(path, off, buf, len);
+    if (!h) return -1;
+    enum fs_step_result r = FS_STEP_PENDING;
+    for (int i = 0; (steps < 0 || i < steps) && r == FS_STEP_PENDING; i++) r = fs_write_range_step(h);
+    return (int)r;
+}
+
+KTEST("tfs3", "an unlocked read holds its file shared, an overwrite exclusive, and both let go") {
+    if (!l4_mount()) KTEST_SKIP("could not mount a 4 MiB volume");
+    static uint8_t buf[64 * 1024];
+    for (unsigned i = 0; i < sizeof buf; i++) buf[i] = (uint8_t)(i * 5u + 3u);
+    int wrote = fs_write_range(L4_POINT "/x", 0, buf, sizeof buf);
+    struct fs_stat_info si;
+    int statted = fs_stat(L4_POINT "/x", &si);
+    g_l4_ino = si.ino;
+
+    g_l4_rd_mode = g_l4_wr_mode = -1;
+    g_l4_watch = 1;
+    uint32_t got = fs_read_range(L4_POINT "/x", 0, buf, sizeof buf);   // gap: read
+    int over = fs_write_range(L4_POINT "/x", 0, buf, sizeof buf);      // gap: overwrite
+    g_l4_watch = 0;
+    int after = tfs3_test_lock_mode(l4_state(), g_l4_ino);
+    l4_unmount();
+
+    KTEST_ASSERT(wrote && statted && got == sizeof buf && over);
+    KTEST_ASSERT_EQ(g_l4_rd_mode, 1);   // shared, held across the read's gap
+    KTEST_ASSERT_EQ(g_l4_wr_mode, 2);   // exclusive across the overwrite's
+    KTEST_ASSERT_EQ(after, 0);          // op_end let go of both
+}
+
+// A STREAM SPANS SYSCALLS, and its lock is per step -- so another write
+// can land between two steps. The stream must then FAIL, not commit its
+// stale inode copy over the other write (its size would drop the append).
+KTEST("tfs3", "a stepped write fails, rather than undo, a write made between its steps") {
+    if (!l4_mount()) KTEST_SKIP("could not mount a 4 MiB volume");
+    static uint8_t a[8192], b[4096];
+    k_memset(a, 'a', sizeof a);
+    k_memset(b, 'b', sizeof b);
+    int base = fs_write_range(L4_POINT "/x", 0, a, 4096);
+    void *h = fs_write_range_begin(L4_POINT "/x", 0, a, sizeof a);
+    enum fs_step_result first = h ? fs_write_range_step(h) : FS_STEP_FAILED;
+    int appended = fs_write_range(L4_POINT "/x", sizeof a, b, sizeof b);   // between steps
+    enum fs_step_result last = FS_STEP_PENDING;
+    while (h && last == FS_STEP_PENDING) last = fs_write_range_step(h);
+    uint64_t size = fs_size(L4_POINT "/x");
+    l4_unmount();
+
+    KTEST_ASSERT(base && h && appended);
+    KTEST_ASSERT_EQ((int)first, (int)FS_STEP_PENDING);
+    KTEST_ASSERT_EQ((int)last, (int)FS_STEP_FAILED);    // noticed, not overwritten
+    KTEST_ASSERT_EQ((int)size, (int)(sizeof a + sizeof b));   // the append survived
+}
+
+// A stream builds its block pointers in the shared pointer-table cache,
+// and another stream's begin() drops that cache. So every PENDING step
+// lands it first -- or blocks written before the other stream began
+// read back as holes.
+KTEST("tfs3", "a stepped write's pointers survive another stream between its steps") {
+    if (!l4_mount()) KTEST_SKIP("could not mount a 4 MiB volume");
+    static uint8_t a[16 * 4096], back[16 * 4096], g[4096];
+    for (unsigned i = 0; i < sizeof a; i++) a[i] = (uint8_t)(i / 4096 + 1);   // block k holds k+1
+    k_memset(g, 'g', sizeof g);
+    void *h = fs_write_range_begin(L4_POINT "/x", 0, a, sizeof a);
+    int steps = 0;
+    enum fs_step_result r = FS_STEP_PENDING;
+    while (h && r == FS_STEP_PENDING && steps < 14) { r = fs_write_range_step(h); steps++; }
+    int other = l4_stream(L4_POINT "/y", 0, g, sizeof g, -1);       // begin() drops the cache
+    while (h && r == FS_STEP_PENDING) r = fs_write_range_step(h);
+    uint32_t got = fs_read_range(L4_POINT "/x", 0, back, sizeof back);
+    int holes = 0;
+    for (unsigned k = 0; k < 16; k++) if (back[k * 4096] != (uint8_t)(k + 1)) holes++;
+    l4_unmount();
+
+    KTEST_ASSERT(h);
+    KTEST_ASSERT_EQ(other, (int)FS_STEP_DONE);
+    KTEST_ASSERT_EQ((int)r, (int)FS_STEP_DONE);
+    KTEST_ASSERT_EQ((int)got, (int)sizeof back);
+    KTEST_ASSERT_EQ(holes, 0);
+}

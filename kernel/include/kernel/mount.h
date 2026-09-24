@@ -84,6 +84,11 @@ struct mount {
     // dropped (mount_io_begin() below). Written with atomics, read by
     // mount_io_drain().
     int io_gaps;
+
+    // The op running under the lock asked FS_OP to run it again: it had
+    // to wait for a per-object lock (mount_wait()), and waiting released
+    // the volume lock, so what it looked up may have changed.
+    int restart;
 };
 
 // Lock one mount for a backend call; its state is behind it.
@@ -125,6 +130,24 @@ struct mount_io {
 int mount_io_begin(void *st, struct mount_io *g);
 int mount_io_end(struct mount_io *g);
 void mount_io_drain(void *st);
+
+// ---- waiting for a backend's own lock (fslock stage 4) ---------------
+//
+// A backend whose per-object lock is busy must not wait holding the
+// mount's lock -- the holder may need it to finish. mount_wait() drops
+// it, parks until scheduler_wake(chan), retakes it: 1 waited (and the op
+// must now RETURN; mount_op_restart() makes FS_OP call it again), 0 it
+// could not drop (nested, or under exclusion -- decide without waiting),
+// -1 the mount went away meanwhile (touch nothing). mount_op_depth() is
+// how deep the calling op holds the lock, which tags what it takes.
+int mount_wait(void *st, const void *chan);
+int mount_can_wait(void *st);   // would mount_wait() be able to drop the lock?
+void mount_op_restart(void *st);
+int mount_op_depth(void *st);
+
+// A backend that released per-object locks says so, which is what a
+// waiting fs_exclusive_begin() parks on.
+void mount_locks_released(void);
 
 // A SCRATCH state, for an operation on a volume nothing has mounted:
 // probe, format, wipe -- pass `st` to the op. Returns 0 only when the

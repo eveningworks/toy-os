@@ -245,7 +245,10 @@ Five things to know:
   lock, or exclusion stops promising a quiet disk. The exceptions are
   a data read and an in-place OVERWRITE, which DROP the lock through
   `mount_io_begin()` -- a block free or exclusion waits for them
-  (`mount_io_drain()`), and an allocating write must never drop it. It does NOT make an
+  (`mount_io_drain()`), and an allocating write must never drop it.
+  Inside tfs3, an op locks every inode it touches BEFORE changing
+  anything (`t3_lock()`; a 0 means return now, FS_OP re-runs it), never
+  unlocks by hand, and never waits holding a lock. It does NOT make an
   `fs_list()` callback safe to call `fs_*` on the same mount (that is
   recursion). Finer locking inside a volume: `docs/fslock-design.md`.
 - **THERE IS NO `fs_read()`. A whole-file read goes into memory the

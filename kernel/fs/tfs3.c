@@ -38,6 +38,7 @@
 #include "tz.h"
 #include "heap.h"
 #include "kpath.h"
+#include "scheduler.h" // the inode locks: whose op, and the wake
 
 // ---- format constants (docs/tfs3-design.md; tfs3_writer.py mirrors) ----
 
@@ -261,6 +262,26 @@ struct t3_state {
     // overwrite whose copy is still current -- nothing staged meanwhile --
     // skips re-reading it, which on a 4 KiB random write is a disk read.
     uint64_t ino_gen;
+
+    // ---- INODE LOCKS (fslock stage 4) ----
+    //
+    // One entry per lock HELD, never per inode: a table, not a cache, the
+    // shape of a futex hash. An entry is an op's -- its pid and the depth
+    // at which it holds the mount's lock -- and op_end releases the op's
+    // entries when FS_OP's call returns, so no op unlocks by hand. Readers
+    // take an inode SHARED, writers and namespace changes EXCLUSIVE (the
+    // parent directory too). NO OP WAITS HOLDING ANOTHER: a busy lock
+    // makes it release all of its own, wait with the volume lock dropped,
+    // and be run again (t3_lock()) -- so there is no lock order to keep,
+    // and no rename mutex, which exist in Linux because it holds and waits.
+    struct {
+        uint64_t ino;
+        int pid;
+        int depth;
+        uint8_t excl;
+        uint8_t used;
+    } holds[64];
+    char ilock_chan;           // an address to park on; any release wakes it
 
     // Tiny name-lookup cache (dir ino + name -> child ino): path walks
     // are the hot loop, and every component is otherwise a dirent scan.
@@ -1033,6 +1054,98 @@ static int resolve(struct t3_state *sbi, const char *norm, uint64_t *out_ino) {
     lcache_put(sbi, norm, ino);
     *out_ino = ino;
     return 1;
+}
+
+// ---- inode locks (see t3_state.holds) ------------------------------------
+
+// Is `ino` held by ANOTHER op in a way that excludes this request?
+static int t3_conflict(struct t3_state *sbi, uint64_t ino, int excl, int me) {
+    for (unsigned i = 0; i < sizeof sbi->holds / sizeof sbi->holds[0]; i++) {
+        if (!sbi->holds[i].used || sbi->holds[i].ino != ino || sbi->holds[i].pid == me) continue;
+        if (excl || sbi->holds[i].excl) return 1;
+    }
+    return 0;
+}
+
+// Release every lock `me` holds at `depth` or deeper -- one op's, and the
+// ops nested inside it -- and wake anyone waiting on any of them.
+static void t3_release(struct t3_state *sbi, int me, int depth) {
+    int any = 0;
+    for (unsigned i = 0; i < sizeof sbi->holds / sizeof sbi->holds[0]; i++) {
+        if (sbi->holds[i].used && sbi->holds[i].pid == me && sbi->holds[i].depth >= depth) {
+            sbi->holds[i].used = 0;
+            any = 1;
+        }
+    }
+    if (any) {
+        scheduler_wake(&sbi->ilock_chan, 0);
+        mount_locks_released();
+    }
+}
+
+// Take `ino` for this op, shared or exclusive. Returns nonzero when held
+// (or when it need not be), 0 when the op must RETURN AT ONCE -- touching
+// nothing -- because:
+//   * it was busy: this op's locks were released, it waited with the
+//     volume lock dropped, and FS_OP will run it again from the top; or
+//   * the mount went away while it waited (sbi is freed); or
+//   * it was busy and this op cannot wait (nested, or under exclusion)
+//     and wanted it EXCLUSIVE -- the op fails. A SHARED request there
+//     proceeds without the lock: readers already tolerate a concurrent
+//     writer (read_range_impl()'s free_gen), and a nested read is an
+//     fs_list() callback's stat.
+// So every call site is `if (!t3_lock(...)) return <failure>;` BEFORE it
+// has changed anything.
+static int t3_lock(struct t3_state *sbi, uint64_t ino, int excl) {
+    int depth = mount_op_depth(sbi);
+    if (depth <= 0) return 1;      // a scratch state: nothing else can reach it
+    int me = scheduler_current_pid();
+    if (!t3_conflict(sbi, ino, excl, me)) {
+        for (unsigned i = 0; i < sizeof sbi->holds / sizeof sbi->holds[0]; i++) {
+            if (sbi->holds[i].used) continue;
+            sbi->holds[i].ino = ino;
+            sbi->holds[i].pid = me;
+            sbi->holds[i].depth = depth;
+            sbi->holds[i].excl = (uint8_t)(excl != 0);
+            sbi->holds[i].used = 1;
+            return 1;
+        }
+        // A FULL TABLE is waited out like a busy lock: 64 locks held at
+        // once means that many ops mid-flight, and one will finish.
+    }
+    if (!mount_can_wait(sbi)) return excl ? 0 : 1;
+    t3_release(sbi, me, depth);
+    if (mount_wait(sbi, &sbi->ilock_chan) > 0) mount_op_restart(sbi);
+    return 0;
+}
+
+// TEST SEAM: how `ino` is held right now, by anyone -- 2 exclusive, 1
+// shared, 0 not at all. tfs3_test.c asks it from inside a device
+// callback, i.e. in the middle of an op's unlocked gap.
+int tfs3_test_lock_mode(void *st, uint64_t ino) {
+    struct t3_state *sbi = st;
+    int mode = 0;
+    for (unsigned i = 0; i < sizeof sbi->holds / sizeof sbi->holds[0]; i++) {
+        if (!sbi->holds[i].used || sbi->holds[i].ino != ino) continue;
+        int m = sbi->holds[i].excl ? 2 : 1;
+        if (m > mode) mode = m;
+    }
+    return mode;
+}
+
+static void tfs3_op_end(void *st) {
+    struct t3_state *sbi = st;
+    t3_release(sbi, scheduler_current_pid(), mount_op_depth(sbi));
+}
+
+// Held by OTHER ops -- what fs_exclusive_begin() waits out. Its own are
+// not in its way (a nested exclusion inside an op holding some).
+static int tfs3_locks_held(void *st) {
+    struct t3_state *sbi = st;
+    int me = scheduler_current_pid(), n = 0;
+    for (unsigned i = 0; i < sizeof sbi->holds / sizeof sbi->holds[0]; i++)
+        if (sbi->holds[i].used && sbi->holds[i].pid != me) n++;
+    return n;
 }
 
 static int lookup(struct t3_state *sbi, const char *path, uint64_t *out_ino, struct t3_inode *out_node) {
@@ -2963,18 +3076,25 @@ static uint32_t read_range_impl(struct t3_state *sbi, const struct t3_inode *nod
 static uint64_t tfs3_size(void *st, const char *path) {
     struct t3_state *sbi = st;
     struct t3_inode node;
-    if (!lookup(sbi, path, 0, &node) || node.type != T3_TYPE_FILE) return 0;
+    uint64_t ino;
+    if (!lookup(sbi, path, &ino, &node) || node.type != T3_TYPE_FILE) return 0;
+    if (!t3_lock(sbi, ino, 0)) return 0;
     return node.size;
 }
 
 static uint32_t tfs3_read_range(void *st, const char *path, uint64_t offset, void *buf, uint32_t len) {
     struct t3_state *sbi = st;
     struct t3_inode node;
-    if (!lookup(sbi, path, 0, &node) || node.type != T3_TYPE_FILE) return 0;
+    uint64_t ino;
+    if (!lookup(sbi, path, &ino, &node) || node.type != T3_TYPE_FILE) return 0;
+    // SHARED, and held across read_range_impl()'s unlocked gap: a writer
+    // of this file waits for the read, so a read sees whole writes.
+    if (!t3_lock(sbi, ino, 0)) return 0;
     return read_range_impl(sbi, &node, offset, buf, len);
 }
 
 struct t3_read_step {
+    uint64_t ino;              // locked shared per step -- see t3_lock()
     struct t3_inode node;
     uint8_t *dst;
     uint64_t offset;
@@ -2984,7 +3104,9 @@ struct t3_read_step {
 static void *tfs3_read_range_begin(void *st, const char *path, uint64_t offset, void *buf, uint32_t len) {
     struct t3_state *sbi = st;
     struct t3_inode node;
-    if (!lookup(sbi, path, 0, &node) || node.type != T3_TYPE_FILE) return 0;
+    uint64_t ino;
+    if (!lookup(sbi, path, &ino, &node) || node.type != T3_TYPE_FILE) return 0;
+    if (!t3_lock(sbi, ino, 0)) return 0;
     if (offset >= node.size) len = 0;
     else {
         uint64_t avail = node.size - offset;
@@ -2992,6 +3114,7 @@ static void *tfs3_read_range_begin(void *st, const char *path, uint64_t offset, 
     }
     struct t3_read_step *step = kmalloc(sizeof(*step));
     if (!step) return 0;
+    step->ino = ino;
     step->node = node;
     step->dst = (uint8_t *)buf;
     step->offset = offset;
@@ -3003,6 +3126,9 @@ static void *tfs3_read_range_begin(void *st, const char *path, uint64_t offset, 
 static int tfs3_read_range_step(void *st, void *handle, uint32_t *out_total) {
     struct t3_state *sbi = st;
     struct t3_read_step *step = (struct t3_read_step *)handle;
+    // Per STEP, never across steps: a lock held between two syscalls
+    // would outlive a process that died mid-stream.
+    if (!t3_lock(sbi, step->ino, 0)) return 0 /* FS_STEP_PENDING: run again */;
     if (step->total < step->len) {
         uint32_t got = read_range_impl(sbi, &step->node, step->offset + step->total,
                                        step->dst + step->total,
@@ -3033,7 +3159,9 @@ static int tfs3_is_dir(void *st, const char *path) {
     if (!sbi->mounted || !normalize(sbi, path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 1;
     struct t3_inode node;
-    if (!lookup(sbi, path, 0, &node)) return 0;
+    uint64_t ino;
+    if (!lookup(sbi, path, &ino, &node)) return 0;
+    if (!t3_lock(sbi, ino, 0)) return 0;
     return node.type == T3_TYPE_DIR;
 }
 
@@ -3053,6 +3181,7 @@ static void tfs3_list(void *st, const char *dir_path, void (*cb)(const char *nam
     if (!sbi->mounted || !normalize(sbi, dir_path, norm)) return;
     uint64_t ino = T3_INO_ROOT;
     if (k_strcmp(norm, "/") != 0 && !resolve(sbi, norm, &ino)) return;
+    if (!t3_lock(sbi, ino, 0)) return;
     if (!read_inode(sbi, ino, &dir) || dir.type != T3_TYPE_DIR) return;
 
     uint32_t nblocks = (uint32_t)((dir.size + T3_BLOCK - 1) / T3_BLOCK);
@@ -3097,7 +3226,9 @@ static int tfs3_chmod(void *st, const char *path, uint16_t mode) {
     if (k_strcmp(norm, "/") == 0) return -ENOENT;   // root has no entry
     uint64_t ino;
     struct t3_inode node;
-    if (!resolve(sbi, norm, &ino) || !read_inode(sbi, ino, &node)) return -ENOENT;
+    if (!resolve(sbi, norm, &ino)) return -ENOENT;
+    if (!t3_lock(sbi, ino, 1)) return -EIO;   // or run again -- see t3_lock()
+    if (!read_inode(sbi, ino, &node)) return -ENOENT;
     if ((node.mode & 07777) == (mode & 07777)) return 0;  // already so
     node.mode = (uint16_t)(mode & 07777);
     // THROUGH THE JOURNAL, like every other inode change: a mode is a
@@ -3114,7 +3245,9 @@ static int tfs3_stat(void *st, const char *path, struct fs_stat_info *out) {
     if (k_strcmp(norm, "/") == 0) return 0; // root has no entry
     uint64_t ino;
     struct t3_inode node;
-    if (!resolve(sbi, norm, &ino) || !read_inode(sbi, ino, &node)) return 0;
+    if (!resolve(sbi, norm, &ino)) return 0;
+    if (!t3_lock(sbi, ino, 0)) return 0;
+    if (!read_inode(sbi, ino, &node)) return 0;
     if (out) {
         out->ino = ino;             // a real inode number -- FS_CAP_INODES
         out->created = node.created; // stored as epoch natively -- FS_CAP_EPOCH_TIME
@@ -3178,6 +3311,7 @@ static int create_entry_inner(struct t3_state *sbi, const char *path, uint8_t ty
     uint64_t parent_ino;
     const char *name; uint32_t name_len;
     if (!split_parent(sbi, norm, &parent_ino, &name, &name_len)) return 0;
+    if (!t3_lock(sbi, parent_ino, 1)) return 0;   // a namespace change: the parent
     struct t3_inode parent;
     if (!read_inode(sbi, parent_ino, &parent) || parent.type != T3_TYPE_DIR) return 0;
 
@@ -3241,6 +3375,7 @@ static int tfs3_touch(void *st, const char *path) {
         // Existing file: a no-op that succeeds; existing dir: refuse.
         // Matches tfs_touch()'s behavior exactly (incl. not bumping
         // `modified` -- see fs.h's fs_stat_info comment).
+        if (!t3_lock(sbi, ino, 0)) return 0;
         if (!read_inode(sbi, ino, &node)) return 0;
         return node.type == T3_TYPE_FILE;
     }
@@ -3265,6 +3400,7 @@ static int tfs3_write_range(void *st, const char *path, uint64_t offset, const v
     if (!resolve(sbi, norm, &ino)) {
         if (!create_entry(sbi, path, T3_TYPE_FILE, &ino)) return 0;
     }
+    if (!t3_lock(sbi, ino, 1)) return 0;
     if (!read_inode(sbi, ino, &node) || node.type != T3_TYPE_FILE) return 0;
     if (len == 0) return 1;
     return do_write(sbi, ino, &node, offset, buf, len);
@@ -3279,6 +3415,7 @@ static int tfs3_write(void *st, const char *path, const char *data, int append) 
     if (!resolve(sbi, norm, &ino)) {
         if (!create_entry(sbi, path, T3_TYPE_FILE, &ino)) return 0;
     }
+    if (!t3_lock(sbi, ino, 1)) return 0;
     if (!read_inode(sbi, ino, &node) || node.type != T3_TYPE_FILE) return 0;
 
     uint32_t len = (uint32_t)k_strlen(data);
@@ -3310,9 +3447,14 @@ static int tfs3_delete(void *st, const char *path) {
     char *const norm = sbi->pb.tfs3_delete_norm; // per-function, see normalize()
     if (!sbi->mounted || !normalize(sbi, path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 0;
-    uint64_t ino;
+    uint64_t ino, del_pino;
+    const char *del_name;
+    uint32_t del_len;
     struct t3_inode node;
-    if (!resolve(sbi, norm, &ino) || !read_inode(sbi, ino, &node)) return 0;
+    if (!resolve(sbi, norm, &ino)) return 0;
+    if (!split_parent(sbi, norm, &del_pino, &del_name, &del_len)) return 0;
+    if (!t3_lock(sbi, del_pino, 1) || !t3_lock(sbi, ino, 1)) return 0;
+    if (!read_inode(sbi, ino, &node)) return 0;
 
     if (node.type == T3_TYPE_DIR) {
         // Empty means "nothing but . and .." -- the no-recursive-
@@ -3395,6 +3537,8 @@ static int tfs3_link(void *st, const char *existing, const char *newpath) {
     uint64_t parent_ino;
     const char *name; uint32_t name_len;
     if (!split_parent(sbi, newnorm, &parent_ino, &name, &name_len)) return 0;
+    if (!t3_lock(sbi, parent_ino, 1) || !t3_lock(sbi, ino, 1)) return 0;
+    if (!read_inode(sbi, ino, &node)) return 0;   // under the lock
     struct t3_inode parent;
     if (!read_inode(sbi, parent_ino, &parent) || parent.type != T3_TYPE_DIR) return 0;
 
@@ -3482,6 +3626,11 @@ static int tfs3_rename(void *st, const char *oldpath, const char *newpath) {
     uint32_t src_len, dst_len;
     if (!split_parent(sbi, oldn, &src_pino, &src_name, &src_len)) return 0;
     if (!split_parent(sbi, newn, &dst_pino, &dst_name, &dst_len)) return 0;
+    // All three, taken as a set: none is held while waiting for another
+    // (t3_lock()), so there is no order to keep and no rename mutex.
+    if (!t3_lock(sbi, src_pino, 1) || !t3_lock(sbi, dst_pino, 1) || !t3_lock(sbi, ino, 1))
+        return 0;
+    if (!read_inode(sbi, ino, &node)) return 0;   // under the lock
 
     struct t3_inode src_parent, dst_parent;
     if (!read_inode(sbi, src_pino, &src_parent) || src_parent.type != T3_TYPE_DIR) return 0;
@@ -3548,7 +3697,9 @@ static int tfs3_truncate(void *st, const char *path, uint64_t size) {
     if (!sbi->mounted || !normalize(sbi, path, norm)) return 0;
     uint64_t ino;
     struct t3_inode node;
-    if (!resolve(sbi, norm, &ino) || !read_inode(sbi, ino, &node)) return 0;
+    if (!resolve(sbi, norm, &ino)) return 0;
+    if (!t3_lock(sbi, ino, 1)) return 0;
+    if (!read_inode(sbi, ino, &node)) return 0;
     if (node.type != T3_TYPE_FILE) return 0; // directories size themselves
     if (size > T3_MAX_FILE_SIZE) return 0;   // a sparse grow past what the format addresses
     if (node.size == size) return 1;
@@ -3599,9 +3750,21 @@ static int tfs3_truncate(void *st, const char *path, uint64_t size) {
 // the final step -- so a crash mid-stream leaks fresh blocks and
 // leaves the file at its old size, same contract the blocking path
 // gives (fs.h: on FS_STEP_DONE size/mtime/metadata are updated).
+// FIELD BY FIELD, never memcmp: the struct has padding (after `type`
+// and `links`) that read_inode() does not write, so two reads of one
+// unchanged inode compare unequal.
+static int inode_same(const struct t3_inode *a, const struct t3_inode *b) {
+    if (a->type != b->type || a->links != b->links || a->size != b->size ||
+        a->created != b->created || a->modified != b->modified || a->mode != b->mode)
+        return 0;
+    for (int i = 0; i < 15; i++) if (a->ptrs[i] != b->ptrs[i]) return 0;
+    return 1;
+}
+
 struct t3_write_step {
     uint64_t ino;
     struct t3_inode node;
+    struct t3_inode orig;      // the inode as begin() read it -- see the step
     const uint8_t *src;
     uint64_t offset;
     uint32_t len, total;
@@ -3617,9 +3780,11 @@ static void *tfs3_write_range_begin(void *st, const char *path, uint64_t offset,
     if (!resolve(sbi, norm, &ino)) {
         if (!create_entry(sbi, path, T3_TYPE_FILE, &ino)) return 0;
     }
+    if (!t3_lock(sbi, ino, 1)) return 0;
     struct t3_write_step *step = kmalloc(sizeof(*step));
     if (!step) return 0;
     if (!read_inode(sbi, ino, &step->node) || step->node.type != T3_TYPE_FILE) { kfree(step); return 0; }
+    step->orig = step->node;
     step->ino = ino;
     step->src = (const uint8_t *)buf;
     step->offset = offset;
@@ -3633,6 +3798,20 @@ static void *tfs3_write_range_begin(void *st, const char *path, uint64_t offset,
 static int tfs3_write_range_step(void *st, void *handle) {
     struct t3_state *sbi = st;
     struct t3_write_step *step = (struct t3_write_step *)handle;
+    // A STREAM SPANS SYSCALLS, and a lock may not (a process dying mid-
+    // stream would keep it), so each step locks the file on its own. What
+    // that leaves open is another writer between two steps -- and this
+    // stream commits its inode COPY at the end, which would silently undo
+    // the other write. So it checks the inode is still the one it began
+    // from, and FAILS rather than lose somebody's data. Blocks from its
+    // earlier steps leak, as an abandoned stream's always have; fsck
+    // reclaims them.
+    if (!t3_lock(sbi, step->ino, 1)) return 2 /* FS_STEP_FAILED -- or run again */;
+    struct t3_inode cur;
+    if (!read_inode(sbi, step->ino, &cur) || !inode_same(&cur, &step->orig)) {
+        kfree(step);
+        return 2 /* FS_STEP_FAILED */;
+    }
     // Rollback scope is THIS STEP only -- other fs operations
     // interleave between steps of an async write, so a whole-stream
     // log can't be kept armed. Earlier completed steps of an
@@ -3674,7 +3853,14 @@ static int tfs3_write_range_step(void *st, void *handle) {
         }
         if (!ok) { pcache_drop(sbi); alog_rollback(sbi); kfree(step); return 2; }
         step->total += chunk;
-        if (step->total < step->len) return 0 /* FS_STEP_PENDING */;
+        // LANDED BEFORE RETURNING: other ops run between two steps, and
+        // one that drops the pointer cache (another stream's begin())
+        // would discard this stream's block pointers with it.
+        if (step->total < step->len) {
+            if (!pcache_flush(sbi)) { pcache_drop(sbi); alog_rollback(sbi); kfree(step); return 2; }
+            alog_commit(sbi);
+            return 0 /* FS_STEP_PENDING */;
+        }
     }
 
     // Final step: land the pointer cache, the allocation state, and
@@ -4043,6 +4229,9 @@ static void tfs3_state_free(void *st) {
     struct t3_state *sbi = st;
     if (!sbi) return;
     unmount_state(sbi);          // the caches hanging off it, and the read buffer
+    // AN OP PARKED ON AN INODE LOCK must hear the mount go, or it sleeps
+    // on this freed address forever; it wakes to a changed generation.
+    scheduler_wake(&sbi->ilock_chan, 0);
     kfree(sbi);
 }
 
@@ -4098,6 +4287,8 @@ const struct fs_ops tfs3_ops = {
     .max_mounts = MOUNT_MAX,
     .state_alloc = tfs3_state_alloc,
     .state_free = tfs3_state_free,
+    .op_end = tfs3_op_end,
+    .locks_held = tfs3_locks_held,
     .probe = tfs3_probe,
     .wipe = tfs3_wipe_inner,
     .format = tfs3_format_inner,
