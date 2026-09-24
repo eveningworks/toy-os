@@ -135,10 +135,11 @@ Each ships on its own, and each is measured on
   lock for its transfer, so the reuse write queues behind it -- which is
   `heaprace_test`'s lesson again: correct by inspection, a fixture for
   when a driver queues commands. MEASURED (fs_isolation `/etc`, KVM,
-  three runs a side): 9.0-10.0 ms under load against 10.4-11.2 ms --
-  small, because what that probe waits behind is diskbench's WRITES.
-  One 3a run had a single 242 ms stall (HEAD's worst: 34 ms), not
-  explained. 3b is the write side.
+  nine runs a side against 3c06673a): **no measurable difference** --
+  8.9-11.9 ms under load against 9.2-10.9 ms. A three-run comparison
+  first read as a small gain; more runs put it inside the noise. The
+  probe waits behind diskbench's WRITES, which is 3b. A single stall
+  of 120-240 ms appears on BOTH builds (docs/bugs.md).
 - **Stage 3 -- inside one volume.** A journal lock with jbd2-style
   handles, an allocator lock over the bitmaps and the TRIM queue, and a
   name-cache lock. **The cheaper intermediate worth measuring first:**
