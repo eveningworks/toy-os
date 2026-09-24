@@ -776,8 +776,7 @@ whenever a headline here tells you something you did not already know.
   VOLUME STATE BACK**
 - **A BACKEND DECLARES HOW MANY TIMES IT MAY BE MOUNTED, and all three
   say MOUNT_MAX**
-- **A BACKEND'S VOLUME STATE IS PER MOUNT, AND THE VFS SAYS WHICH MOUNT
-  A CALL MEANS**
+- **A BACKEND'S VOLUME STATE IS PER MOUNT, AND EVERY OP IS HANDED IT**
 - **A PROBE MUST NOT DISTURB A MOUNT, and that contract was only ever
   honoured by accident**
 - **`fs_ops.init()` TAKES A DEVICE, and `blk_active()` is not it**

@@ -433,7 +433,7 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~A mount table (path prefix -> backend), replacing vfs.c's single `g_fs`~~ done -- `kernel/fs/mount.c`
 - [x] ~~Path resolution that picks a backend per-path~~ done -- longest prefix, at a component boundary
 - [x] ~~`mount`/`umount` shell commands~~ done -- `/bin` programs, over `SYS_MOUNT`/`SYS_UMOUNT`
-- [x] ~~Mount a second TFS3 image alongside the first~~ done -- per-mount state, `fs_ops.state_alloc`/`_activate`/`_free`
+- [x] ~~Mount a second TFS3 image alongside the first~~ done -- per-mount state, handed to every `fs_ops` op
 - [x] ~~Mount a FAT volume read-only (needs Runtime + interop's FAT driver)~~ done -- the ESP at `/boot`, read-only by default
 - [x] ~~Decide the lookup rule up front, including what shadowing means~~ done -- five rules, `kernel/mount.h`
 - [x] ~~Mounting over a non-empty directory -- allow and hide, or refuse~~ done -- allow and hide, Unix's rule

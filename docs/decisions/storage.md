@@ -2474,7 +2474,7 @@ every backend. Enumeration was never meant to change that; it changed
 whether the device could be NAMED and reached at all, which was the
 actual blocker. Per-mount state came later; see the entry below.
 
-## A backend's volume state is per mount, and the VFS makes one current instead of every op taking a handle
+## A backend's volume state is per mount, and every op is handed it
 
 An installer has to MOUNT its target to copy files onto it, and it
 could not: `fs_ops.max_mounts` was 1 for every backend, because each
@@ -2488,21 +2488,36 @@ operation; a Windows filesystem driver keeps a per-volume control block
 and the IRP names it. Neither swaps a global, and the reason is SMP: one
 current state would serialise the whole filesystem across cores.
 
-**Why toy-os does swap one.** This filesystem is ALREADY one global
-critical section. `vfs.c`'s `FS_OP` wraps every backend call in
-`scheduler_preempt_disable()`/`_enable()`, because the backends are not
-re-entrant — that guard has been there since the WM started reporting
-files that plainly exist as missing. So the thing Linux's design buys
-(two cores inside two filesystems at once) is not available here for
-unrelated reasons, and the thing it costs (a handle threaded through
-twenty op signatures, in three backends totalling ~5,800 lines) is
-real. Setting a current state at the chokepoint gets the capability for
-three new function pointers and no signature changes.
+**toy-os now does the same: every `fs_ops` op takes `void *st`, the
+mount's own state, and inside a backend it travels as `sbi`** (Linux's
+name for a superblock's private info). `vfs.c`'s `FS_OP(m, op, ...)`
+passes `m->state` itself, so a call cannot be handed another mount's.
 
-The cost is stated rather than glossed: **this is the assumption to
-re-read on the day toy-os has a second core** (`docs/smp-design.md`).
-The handle-on-every-op shape is what replaces it, and the roadmap
-carries it as the remaining item.
+**It first did it the other way, and why that stopped being right.**
+The first version kept a `static ... *S` per backend and had the mount
+table make a state CURRENT around every call (`state_activate`, with
+`mount_enter`/`mount_leave`). The filesystem was one global critical
+section with preemption held off, so a current pointer cost nothing
+and saved a handle threaded through twenty signatures in ~5,800 lines.
+The argument for the handle was SMP, and that looked far off.
+
+It stopped being right before SMP arrived. Once the fs lock became a
+sleeping mutex and disk waits slept under it (docs/blocking-design.md),
+the next step -- dropping the lock across a data-block I/O, or one lock
+per mount (docs/fslock-design.md) -- lets a second caller run while
+the first is asleep mid-operation. With a global "current mount" the
+sleeper resumes on whatever the other caller activated. Passing the
+state is what makes a lock that can be dropped possible at all, so it
+became stage 1 of that plan (2026-09-24, starting bf951457).
+
+**The one thing activation did that is still needed.** tfs3's
+activate committed ANOTHER mount's deferred journal transaction before
+the incoming mount ran, because the journal staging is file-scope while
+the deferred transaction belongs to one mount. That survives as
+`t3_enter()` at the top of every tfs3 op, until stage 2 moves the
+journal into the mount. Dropped instead, `fsformat` on the running root
+could leave a commit pending for the old volume that `idle` would then
+land on the new one.
 
 **Why the state moved into a struct rather than being saved and
 restored.** The alternative was to leave the statics alone and have each
@@ -2515,16 +2530,11 @@ remove that hazard (a new field can still be declared outside it) but it
 makes the right place obvious rather than remembered, and it costs
 nothing per call instead of ~2.8 KB per alternation.
 
-**`state_activate` returns the previous state, and that is not a
-refinement.** The first version cleared to NULL after every call, on
-the reasoning that a backend reached without an activate should fault
-loudly rather than write to whichever volume ran last. The machine
-panicked with a GP fault the first time init read a directory:
-`listdir_collect()` calls `fs_stat()` from inside an `fs_list()`
-callback, so a whole enter/leave runs INSIDE the walk and cleared the
-state out from under it. Restoring makes the pair nest, and the
-outermost restore is still NULL — so the fault-loudly property survives
-for the case it was actually for.
+**Nesting needs nothing now.** `listdir_collect()` calls `fs_stat()`
+from inside an `fs_list()` callback, which under activation meant a
+whole enter/leave INSIDE the walk -- and the first version, clearing
+rather than restoring, panicked the first time init read a directory.
+A call that carries its own state has nothing to restore.
 
 **What it deleted.** `struct t3_saved` and its save/restore wrappers
 around `tfs3_format()`/`tfs3_wipe()`; `fat32_probe()`'s save/restore of
@@ -2980,8 +2990,9 @@ that is what `batched` already promised.
 whose bitmap never reached the device is invisible until the next mount
 re-reads it; removing the flush entirely passed all 36 fs tests. The
 check that catches it reads the bitmap block back through the block
-layer, which is why it lives in `tfs3.c` -- and why it calls
-`mount_enter()` first, since `S` is NULL between operations by design.
+layer, which is why it lives in `tfs3.c` -- and it reads the ROOT's
+state (`mount_root()->state`) under `fs_exclusive_begin()`, because
+nothing else says which volume's bitmap to read.
 
 ## A path has THREE bounds, not one: what a call may be handed, what a struct may remember, and what one component may be
 
@@ -3070,8 +3081,8 @@ worth naming because "allocate it" is not always right:
   `vfs.c` -- nineteen frames, fixed by deleting a buffer rather than
   pooling one.
 - **`tfs3.c` uses one static buffer per function.** The backend is
-  non-reentrant by contract (`vfs.c`'s `FS_OP()` holds preemption off),
-  which is already why `S`, `g_blk` and `dirblk` are module-level. One
+  non-reentrant by contract (`vfs.c`'s `FS_OP()` holds the fs lock),
+  which is already why `g_blk` and `dirblk` are module-level. One
   buffer per function rather than a shared stack with a depth counter:
   these calls nest and none recurses into itself, so separate buffers
   need no push/pop and cannot leak a slot down an early return.

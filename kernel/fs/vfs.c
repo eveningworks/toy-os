@@ -65,11 +65,11 @@
 // in each backend.
 //
 // A SECOND MOUNT DOES NOT WEAKEN THIS, and it is why the lock is ONE
-// lock rather than one per mount. Two backends have separate state, but
-// `mount_enter()` swaps a GLOBAL "which mount is live" pointer and
-// tfs3.c's scratch is module-level rather than per mount -- so a
-// per-mount lock would protect neither. What would earn a finer lock is
-// making that state per mount, which docs/smp-design.md wants anyway.
+// lock rather than one per mount. Each call is handed its own mount's
+// state, but tfs3.c's scratch buffers and its journal staging are
+// module-level rather than per mount -- so a per-mount lock would
+// protect neither. Moving those into the mount is stage 2 of
+// docs/fslock-design.md, and what earns the finer lock.
 //
 // This is NOT the same thing as the nested-read refusal that guarded
 // the old fs_read()'s shared staging buffer -- that call and its buffer
@@ -102,22 +102,14 @@ void fs_exclusive_end(void)   { kmutex_unlock(&g_fs_lock); }
 #define FS_OP(m, op, ...) ({                                        \
     kmutex_lock(&g_fs_lock);                                        \
     __typeof__((m)->fs->op((m)->state, ##__VA_ARGS__)) _fs_r = 0;   \
-    if ((m)->used) {                                                \
-        void *_fs_prev = mount_enter(m);                            \
-        _fs_r = (m)->fs->op((m)->state, ##__VA_ARGS__);             \
-        mount_leave(m, _fs_prev);                                   \
-    }                                                               \
+    if ((m)->used) _fs_r = (m)->fs->op((m)->state, ##__VA_ARGS__);  \
     kmutex_unlock(&g_fs_lock);                                      \
     _fs_r;                                                          \
 })
 
 #define FS_OP_VOID(m, op, ...) do {                                 \
     kmutex_lock(&g_fs_lock);                                        \
-    if ((m)->used) {                                                \
-        void *_fs_prev = mount_enter(m);                            \
-        (m)->fs->op((m)->state, ##__VA_ARGS__);                     \
-        mount_leave(m, _fs_prev);                                   \
-    }                                                               \
+    if ((m)->used) (m)->fs->op((m)->state, ##__VA_ARGS__);          \
     kmutex_unlock(&g_fs_lock);                                      \
 } while (0)
 

@@ -68,30 +68,15 @@ struct mount {
     void *state;
 };
 
-// ---- making a mount's backend state current -------------------------
-//
-// EVERY backend call runs between these two. mount_enter() points the
-// backend at this mount and hands back what was current; mount_leave()
-// puts that back. RESTORE, not clear -- they NEST, because an fs_list()
-// callback that calls fs_* runs a whole enter/leave inside the walk.
-// At the outermost level the previous state is NULL, so a backend
-// reached with no enter at all still faults rather than reading
-// whichever volume ran last.
-//
-// Both are cheap (one indirect store) and both are safe on a backend
-// with no state ops.
-void *mount_enter(const struct mount *m);
-void mount_leave(const struct mount *m, void *prev);
-
 // A SCRATCH state, for an operation on a volume nothing has mounted:
-// probe, format, wipe. Returns 0 only when the backend could not
-// allocate one. This is what lets `mkfs` point a backend at a foreign
-// device without a mounted one noticing -- there is no longer anybody's
-// state to disturb, so there is nothing to save and restore.
+// probe, format, wipe -- pass `st` to the op. Returns 0 only when the
+// backend could not allocate one. This is what lets `mkfs` point a
+// backend at a foreign device without a mounted one noticing: nobody
+// else's state is involved. Holds the filesystem lock from begin to
+// end, because backends' per-call scratch is still module-level.
 struct fs_scratch {
     const struct fs_ops *fs;
     void *st;
-    void *prev;
 };
 
 int mount_scratch_begin(const struct fs_ops *fs, struct fs_scratch *sc);

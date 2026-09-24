@@ -269,7 +269,7 @@ first before re-litigating it from scratch.
 - [Why `/boot` is mounted read-only, and where that policy lives](decisions/storage.md#why-boot-is-mounted-read-only-and-where-that-policy-lives)
 - [Why a FAT32-only driver, and why it accepts an out-of-spec cluster count](decisions/storage.md#why-a-fat32-only-driver-and-why-it-accepts-an-out-of-spec-cluster-count)
 - [Enumerating every disk is a separate question from choosing the root](decisions/storage.md#enumerating-every-disk-is-a-separate-question-from-choosing-the-root)
-- [A backend's volume state is per mount, and the VFS makes one current instead of every op taking a handle](decisions/storage.md#a-backends-volume-state-is-per-mount-and-the-vfs-makes-one-current-instead-of-every-op-taking-a-handle)
+- [A backend's volume state is per mount, and every op is handed it](decisions/storage.md#a-backends-volume-state-is-per-mount-and-every-op-is-handed-it)
 - [The installer is five ordinary operations, and the kernel never learns what a bootloader is](decisions/storage.md#the-installer-is-five-ordinary-operations-and-the-kernel-never-learns-what-a-bootloader-is)
 - [The parent directory is resolved as its own step, rather than giving `fs_ops` an errno](decisions/storage.md#the-parent-directory-is-resolved-as-its-own-step-rather-than-giving-fs_ops-an-errno)
 - [A config file can have `[sections]`, and the section is an argument](decisions/storage.md#a-config-file-can-have-sections-and-the-section-is-an-argument)

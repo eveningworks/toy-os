@@ -89,10 +89,10 @@ struct fs_ops {
     // crash, it quietly re-points one set of statics, so the FIRST
     // mount starts reading the second one's volume.
     //
-    // The way past 1 is the three ops below -- the mount table owns a
-    // state object per mount and makes it CURRENT around every call.
-    // A backend that declares max_mounts > 1 without them is refused
-    // at mount time (mount.c's caps_are_honest()).
+    // The way past 1 is the state ops below -- the mount table owns a
+    // state object per mount and hands it to every call. A backend
+    // that declares max_mounts > 1 without them is refused at mount
+    // time (mount.c's caps_are_honest()).
     int max_mounts;
 
     // ---- per-mount state ---------------------------------------
@@ -100,29 +100,17 @@ struct fs_ops {
     // A backend's volume state is one heap struct per mount, and EVERY
     // op below is handed it as `st` -- Linux's `sb->s_fs_info`. vfs.c's
     // FS_OP passes the mount's own, and a probe/format/wipe on a volume
-    // nothing mounted gets a scratch one (mount_scratch_begin()).
+    // nothing mounted gets a scratch one (mount_scratch_begin()). There
+    // is no "current mount": a backend that kept one in a global would
+    // be wrong the moment its caller slept with the lock dropped.
     //
-    // `state_activate` is the older mechanism -- a `static ... *S` the
-    // VFS repoints around every call -- and is OPTIONAL now; it goes
-    // once no backend reads a global (docs/fslock-design.md, stage 1).
-    //
-    // alloc and free: both or neither, checked at mount time.
-    //
-    // `state_activate` RETURNS WHAT WAS CURRENT, so a caller restores
-    // rather than clearing. That is what makes the pair nest: an
-    // fs_list() callback that calls fs_* runs a second enter/leave
-    // inside the walk, and clearing instead of restoring left the outer
-    // walk with no state at all (a GP fault the moment init read a
-    // directory). The OUTERMOST leave still restores NULL, so a backend
-    // reached with no activate at all faults on a NULL deref -- a panic
-    // naming the line -- instead of writing one volume onto another.
+    // Both or neither, checked at mount time.
     //
     // THE TRAP: nothing checks that a state struct is COMPLETE. A
     // per-volume field left outside it is shared by every mount, and
     // the symptom is cross-volume corruption with no error anywhere.
     void *(*state_alloc)(void);
     void (*state_free)(void *st);
-    void *(*state_activate)(void *st);
 
     // Detection only -- read this backend's superblock location and
     // judge it. NEVER formats, never mounts, NO SIDE EFFECTS BEYOND THE

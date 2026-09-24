@@ -7,8 +7,8 @@ sleep, every other caller pays one of its operations per call. What
 would it take for callers touching DIFFERENT files not to wait on each
 other at all?**
 
-**Status: stage 0 is BUILT (2026-09-23). Stages 1-4 are designed, not
-built.**
+**Status: stages 0 and 1 are BUILT (2026-09-23, 2026-09-24). Stages
+2-4 are designed, not built.**
 
 ## Why, in one measurement
 
@@ -53,7 +53,8 @@ Measured against `tfs3.c` rather than assumed:
   the write-walk cache `g_mcache`, the allocation rollback log `g_alog`,
   the TRIM queue. The kernel stack is 16 KiB, so a per-op context has
   to be kmalloc'd or per-thread, never a stack local.
-- **Genuinely shared state**: the live-mount pointer `S`; ONE journal
+- **Genuinely shared state**: the live-mount pointer `S` (gone in
+  stage 1); ONE journal
   for the whole kernel (`g_txn_img[32]`, 128 KiB, plus `g_txn_owner`,
   `g_txn_deferred` and friends); per mount, the bitmaps, the rotor, the
   name caches `ncache`/`lcache` (flushed wholesale on any namespace
@@ -76,10 +77,16 @@ Each ships on its own, and each is measured on
   because an unmount can complete while a caller sleeps waiting for it.
   AHCI got a driver lock (one slot, one bounce buffer), and virtio-blk
   WAITS for its turn where a busy flag used to fail the request.
-- **Stage 1 -- mount state passed, not global.** The `fs_ops`
-  signatures take the backend state explicitly; `mount_enter()`/
-  `mount_leave()` and `S` go. Mechanical and wide: ~330 uses in tfs3,
-  ~120 in fat32, ~80 in ramfs.
+- **Stage 1 -- mount state passed, not global. BUILT 2026-09-24.**
+  Every `fs_ops` op takes `void *st`; inside a backend it is `sbi`, and
+  `S`, `state_activate` and `mount_enter()`/`mount_leave()` are gone.
+  One piece was not mechanical: activating a different tfs3 mount used
+  to commit the other mount's deferred transaction, which survives as
+  `t3_enter()` at the top of every tfs3 op -- and goes in stage 2 with
+  the journal. `latency_under_io.py` (KVM, `+invtsc`, three alternating
+  runs a side): loaded compositor wake 6.5-7.3 ms before, 6.6-7.5 ms
+  after -- no change, which is what a stage that moves no lock should
+  show.
 - **Stage 2 -- per-op scratch, and the journal moves into the mount.**
   One kmalloc'd context per backend call carrying every buffer above.
   After this, **one lock PER MOUNT** is honest -- a `/boot` read stops

@@ -124,36 +124,24 @@ const struct mount *mount_resolve(const char *path, const char **out_sub) {
 
 // ---- per-mount backend state ---------------------------------------
 
-void *mount_enter(const struct mount *m) {
-    if (m && m->fs->state_activate) return m->fs->state_activate(m->state);
-    return NULL;
-}
-
-void mount_leave(const struct mount *m, void *prev) {
-    if (m && m->fs->state_activate) m->fs->state_activate(prev);
-}
-
-// **EVERY SWAP OF A BACKEND'S LIVE STATE HOLDS THE FILESYSTEM LOCK.**
-// A context asleep inside an FS_OP (a disk wait) resumes on whatever
-// state is active; a probe or a mount that repointed it meanwhile would
-// hand that walk another volume's state. Recursive, so a probe run from
-// inside an FS_OP nests.
+// **A SCRATCH OPERATION HOLDS THE FILESYSTEM LOCK**, like any backend
+// call: its state is private, but a backend's per-call scratch buffers
+// (and tfs3's journal staging) are module-level until stage 2 of
+// docs/fslock-design.md. Recursive, so a probe run from inside an
+// FS_OP nests.
 int mount_scratch_begin(const struct fs_ops *fs, struct fs_scratch *sc) {
     sc->fs = fs;
     sc->st = NULL;
-    sc->prev = NULL;
     if (!fs->state_alloc) return 1;   // a backend with no state needs none
     void *st = fs->state_alloc();
     if (!st) return 0;
     fs_exclusive_begin();             // released by mount_scratch_end()
-    if (fs->state_activate) sc->prev = fs->state_activate(st);
     sc->st = st;
     return 1;
 }
 
 void mount_scratch_end(struct fs_scratch *sc) {
     if (!sc->st) return;   // a backend with no state: no lock was taken
-    if (sc->fs->state_activate) sc->fs->state_activate(sc->prev);
     sc->fs->state_free(sc->st);
     sc->st = NULL;
     fs_exclusive_end();
@@ -196,11 +184,9 @@ static int caps_are_honest(const struct fs_ops *fs) {
     // fs_has(); a real op behind an undeclared cap is a feature callers
     // can never find. display.c's rule, verbatim.
     if (((fs->caps & FS_CAP_HARDLINKS) != 0) != (fs->link != 0)) return 0;
-    // alloc and free are one fact stated twice; activate, while it
-    // still exists, is meaningless without them.
+    // alloc and free are one fact stated twice.
     int st_ops = (fs->state_alloc != 0) + (fs->state_free != 0);
     if (st_ops == 1) return 0;
-    if (fs->state_activate && st_ops != 2) return 0;
     // And a backend cannot promise a second mount without them: its
     // volume would be one set of statics read by two mounts, which is
     // the silent corruption max_mounts exists to refuse.
@@ -331,10 +317,8 @@ int mount_add(const struct block_device *dev, const char *fstype,
         if (!state) { *why = "out of memory"; return 0; }
     }
 
-    fs_exclusive_begin();   // the swap -- see mount_scratch_begin()
-    void *prev = chosen->state_activate ? chosen->state_activate(state) : NULL;
+    fs_exclusive_begin();   // a backend call -- see mount_scratch_begin()
     int r = chosen->init(state, dev, size_bytes);
-    if (chosen->state_activate) chosen->state_activate(prev);
     fs_exclusive_end();
     if (r < 0) {
         if (state) chosen->state_free(state);
@@ -399,9 +383,7 @@ static int remove_locked(const char *point, const char **why) {
     // surfaces at the flush, and after this the volume has no owner to
     // report it to.
     if (m->dev) blkdev_flush(m->dev);
-    void *prev = mount_enter(m);
     if (m->fs->umount) m->fs->umount(m->state, m->dev);
-    mount_leave(m, prev);
     // AFTER umount(), which is the last thing that may write: state_free
     // drops the caches this mount is holding, and a sync into a freed
     // state is the one ordering that does not survive being got wrong.

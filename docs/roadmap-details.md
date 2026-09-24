@@ -1618,19 +1618,13 @@ call means, and this kernel already has the second half: every backend
 call goes through `vfs.c`'s `FS_OP`, which holds a preemption guard
 across it. So the state moved into a `struct t3_state`/`fat32_state`/
 `ramfs_state` reached through a `static ... *S`, and the mount table
-sets `S` around every call (`fs_ops.state_alloc`/`_activate`/`_free`).
-Twenty signatures unchanged; all three backends declare `MOUNT_MAX`.
+set `S` around every call. All three backends declare `MOUNT_MAX`.
 
-`state_activate` RETURNS the previous state rather than being paired
-with a clear, and that is not a refinement -- clearing panicked the
-machine the first time init read a directory. `listdir_collect()` calls
-`fs_stat()` from inside an `fs_list()` callback, so a whole enter/leave
-runs *inside* the walk; restoring is what makes that nest.
-
-The remaining item is the one Linux actually does: a handle on every op
-instead of a current-state pointer. It buys nothing until toy-os has a
-second core, at which point a single current state serialises the whole
-filesystem -- see `docs/smp-design.md`.
+The handle on every op that this entry once called "the remaining item"
+landed as stage 1 of `docs/fslock-design.md` (2026-09-24): every
+`fs_ops` op takes the mount's state, and `S` is gone. It was needed
+before a second core after all -- a sleeping fs lock that is ever
+dropped mid-operation cannot share a current-state pointer.
 
 What replaced the second TFS3 image as the isolating proof along the
 way was **ramfs at `/mnt`**, and it is still what `kernel/fs/
@@ -3003,7 +2997,7 @@ existing.
 
 - [x] ~~**Replace the preemption guard with a real sleeping lock.**~~ DONE 2026-09-18 (69c02656), and its payoff landed 2026-09-23 when `ata.c`'s DMA and cache-flush waits started sleeping under it. What that took, and the convoy it exposed, is `docs/blocking-design.md`'s "What stage 2 found".
 
-- [ ] **Finer filesystem locking.** Measured 2026-09-23 under KVM: with the holder of the ONE filesystem lock asleep in a disk wait, the compositor queued ~17 ms per fs call behind `diskbench`, and dozens of calls a frame made 0.6-1.7 s frames. Pushed config took the WM's frame path off the disk, which is most of the win, but any fs call anywhere still waits one holder operation. `docs/fslock-design.md` is the staged plan -- explicit mount state, per-op scratch, then a journal with handles and an inode table carrying a per-inode lock -- and says why the batched transaction is the risk.
+- [ ] **Finer filesystem locking.** Measured 2026-09-23 under KVM: with the holder of the ONE filesystem lock asleep in a disk wait, the compositor queued ~17 ms per fs call behind `diskbench`, and dozens of calls a frame made 0.6-1.7 s frames. Pushed config took the WM's frame path off the disk, which is most of the win, but any fs call anywhere still waits one holder operation. `docs/fslock-design.md` is the staged plan -- explicit mount state, per-op scratch, then a journal with handles and an inode table carrying a per-inode lock -- and says why the batched transaction is the risk. **Stage 1 (explicit mount state) is BUILT, 2026-09-24**: no latency change, as expected; stage 2 is next.
 
 - [ ] **Bound how long a frame can block on I/O.** Related but separate: see the "Get blocking disk I/O out of the WM's event loop" item under Known issues.
 

@@ -1048,39 +1048,34 @@ is not decoration: a backend without per-mount state that declared 2
 would let `mount 3 /mnt` on a second TFS3 partition repoint one set of
 statics, and the ROOT would start reading the other volume with no error
 anywhere. `mount.c`'s `caps_are_honest()` refuses `max_mounts > 1`
-without the three state ops for exactly that reason.
+without the state ops for exactly that reason.
 
-## A BACKEND'S VOLUME STATE IS PER MOUNT, AND THE VFS SAYS WHICH MOUNT A CALL MEANS
+## A BACKEND'S VOLUME STATE IS PER MOUNT, AND EVERY OP IS HANDED IT
 
 Every per-volume field lives in one heap struct — `struct t3_state`,
-`fat32_state`, `ramfs_state` — reached through a `static ... *S`, and
-`fs_ops` carries three ops to manage it: `state_alloc`, `state_free`,
-and `state_activate`, which makes a state current **and returns
-whatever was**. `mount_add()` allocates one per mount and `vfs.c`'s
-`FS_OP` brackets every backend call with `mount_enter`/`mount_leave`.
-
-**Linux hands `struct super_block *` to every op instead.** toy-os sets
-it at the chokepoint rather than threading it through twenty
-signatures, and it can only do that because the filesystem is already
-ONE GLOBAL CRITICAL SECTION — `FS_OP` holds `scheduler_preempt_disable()`
-across the call. **That is the assumption to re-read on the day this
-kernel has a second core** (`docs/smp-design.md`): a single current
-state would then serialise the whole filesystem, and the handle-on-every-
-op shape is what replaces it. The roadmap carries it as the remaining
-item, not as a defect.
+`fat32_state`, `ramfs_state` — that `fs_ops.state_alloc`/`state_free`
+manage and `mount_add()` allocates per mount. **Every op takes it as
+`void *st`**, Linux's `sb->s_fs_info`; `vfs.c`'s `FS_OP(m, op, ...)`
+passes `m->state` itself, and a probe/format/wipe on an unmounted
+volume gets a scratch one from `mount_scratch_begin()`. Inside a
+backend it travels as `sbi`. There is NO "current mount" global, and a
+backend must not grow one: it would be wrong the moment a caller slept
+with the lock dropped (`docs/decisions/storage.md` has why this
+replaced activating a current state).
 
 Four things to know:
 
-- **`state_activate` RESTORES, it does not clear.** The first version
-  cleared to NULL after every call, and the machine panicked the moment
-  init read a directory: `listdir_collect()` calls `fs_stat()` from
-  inside an `fs_list()` callback, so a whole enter/leave runs *inside*
-  the walk and left the outer one with no state. Returning the previous
-  state is what makes the pair nest.
-- **The OUTERMOST leave still restores NULL**, deliberately. A backend
-  reached with no enter at all then faults on a NULL deref — a panic
-  naming the line — instead of writing one volume's metadata onto
-  another.
+- **A helper that touches the volume takes `sbi` as its first
+  parameter**, and so does everything that calls one. A macro that
+  reaches the state hides the dependency -- tfs3's `T3_WALK` passes
+  `sbi` to `rcache_get()`, so any function using it needs `sbi` in
+  scope.
+- **tfs3's `t3_enter(sbi)` opens EVERY tfs3 op.** The journal staging
+  is file-scope while a deferred transaction belongs to one mount, so
+  another mount's is committed first. A new op without it lets the
+  other mount's staged blocks sit until something else commits them.
+  It goes when stage 2 of `docs/fslock-design.md` moves the journal
+  into the mount.
 - **Nothing checks that a state struct is COMPLETE.** A per-volume field
   left outside it is shared by every mount, and the symptom is
   cross-volume corruption with no error anywhere. The scratch that
@@ -1089,7 +1084,8 @@ Four things to know:
   call cannot span two mounts.
 - **A backend call from OUTSIDE `vfs.c` must bring its own state.** That
   is what `mount_scratch_begin()`/`_end()` are for, and every KTEST that
-  drives a backend directly uses them.
+  drives a backend directly passes `sc.st` (or, for ramfs, the test
+  seam's `ramfs_test_state()`).
 
 ## A PROBE MUST NOT DISTURB A MOUNT, AND THAT ONLY BECAME TRUE WHEN IT MATTERED
 
@@ -1363,10 +1359,10 @@ batch whose bitmap never reached the device looks perfectly clean until
 the next mount re-reads it. A positive control that removed the flush
 entirely passed the whole fs suite. The KTEST that catches it lives in
 `tfs3.c` rather than `fs_test.c` and reads the bitmap block back off the
-device -- and it has to `mount_enter()` first, because `S` names the
-mount an operation is running on and is NULL between operations by
-design. Testing `S` without entering skipped the test on every boot,
-which reads exactly like a pass.
+device -- from the ROOT's state (`mount_root()->state`), taken under
+`fs_exclusive_begin()`. Its first version tested a state pointer that
+was NULL between operations, and skipped on every boot, which reads
+exactly like a pass.
 
 ## **A PATH HAS THREE BOUNDS AND THEY ARE NOT INTERCHANGEABLE: `FS_PATH_MAX` (4096) is what a CALL may be handed, `FS_PATH_STORED_MAX` (256) is what a STRUCT may remember, `FS_NAME_MAX` (255) is one COMPONENT**
 
