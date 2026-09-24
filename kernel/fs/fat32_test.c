@@ -124,8 +124,8 @@ static const struct fs_ops *F(void) { return &fat32_ops; }
 // be allocated, which is a SKIP rather than a failure -- a fragmented
 // heap is not a bug in this filesystem.
 // EVERY TEST BELOW RUNS ON ITS OWN STATE, which is what a backend call
-// outside vfs.c has to do now: fs_ops.h's state_activate is what says
-// which volume a call means. This also retired what restore() used to
+// outside vfs.c has to do now: the state a call is handed is what says
+// which volume it means. This also retired what restore() used to
 // have to do -- driving the backend directly no longer repoints the
 // machine's real /boot at a RAM image, because it is not the same state.
 static uint32_t g_first_bad;   // the size that failed, so a failure NAMES it
@@ -449,25 +449,19 @@ KTEST("fat32", "two volumes are mounted at once and neither sees the other") {
              F()->write(second, "/second.txt", "volume two, which is longer", 0);
     KTEST_ASSERT(ok);
 
-    // Each state sees only its own volume, and switching between them
-    // is one call -- alternate, so a stale pointer cannot pass.
-    F()->state_activate(first);
+    // Each state sees only its own volume -- alternate, so a stale
+    // pointer cannot pass.
     KTEST_ASSERT(F()->exists(first, "/first.txt"));
     KTEST_ASSERT(!F()->exists(first, "/second.txt"));
-    F()->state_activate(second);
     KTEST_ASSERT(F()->exists(second, "/second.txt"));
     KTEST_ASSERT(!F()->exists(second, "/first.txt"));
-    F()->state_activate(first);
     KTEST_ASSERT_EQ((int)F()->size(first, "/first.txt"), 10);
-    F()->state_activate(second);
     KTEST_ASSERT_EQ((int)F()->size(second, "/second.txt"), 27);
 
-    F()->state_activate(second);
     if (F()->umount) F()->umount(second, &IMG2_DEV);
     mount_scratch_end(&sc2);
     kfree(img2);
     g_img2 = 0;
 
-    F()->state_activate(first);
     restore();
 }
