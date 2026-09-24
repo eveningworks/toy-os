@@ -2394,3 +2394,20 @@ split to 4 KiB).**
 - **External outputs are deferred** until the maintainer's second
   Broadwell laptop: the test laptop has only micro-HDMI and no adapter.
 
+
+**2026-09-24 (one-shot timers, a tickless idle, `option hz`).**
+
+- **A PRECISE TIMER IS TWO THINGS, AND THE BENCHMARK FOUND THE SECOND.**
+  The one-shot deadline fired within ~60 us, and a 1 ms sleep under two
+  busy processes still ended 7 ms late: the woken process waited out the
+  busy one's slice. Measuring UNDER LOAD, not just idle, is what caught
+  it; the fix was a scheduler rule (a deadline wake preempts an equal
+  after 1 ms), not anything in the timer.
+- **Read the decisions file before changing a scheduler rule.** The
+  first version let EVERY equal-level wake preempt, which "A wake
+  preempts only from a better level" had rejected with a measured USB
+  audio reason. Narrowing it to deadline wakes kept that decision whole.
+- **A TIMER CHANGE CANNOT BE TESTED ON A CLOCK THAT IS THE TIMER.**
+  Plain TCG has no invariant TSC, so without the ACPI PM timer the
+  default guest would have run every test on the periodic fallback and
+  passed without exercising the one-shot path at all.

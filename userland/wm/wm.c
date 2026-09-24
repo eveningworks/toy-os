@@ -1005,9 +1005,11 @@ void wm_run(void) {
             uint32_t wait_ms = WM_IDLE_WAIT_MS;
             uint64_t due = wm_client_next_timer_due();
             if (due) {
-                uint64_t now_t = sys_ticks();
-                uint32_t in_ms = (due > now_t) ? (uint32_t)((due - now_t) * 10) : 0;
-                if (in_ms < wait_ms) wait_ms = in_ms;
+                // ROUNDED UP: a wait that ends short of the deadline
+                // finds nothing due and waits 0 ms -- a spin, not a timer.
+                uint64_t now_ns = sys_monotonic_ns();
+                uint64_t in_ms = due > now_ns ? (due - now_ns + 999999) / 1000000 : 0;
+                if (in_ms < wait_ms) wait_ms = (uint32_t)in_ms;
             }
             if (redraw_pending || wm_debug_work_pending()) wait_ms = 0;
             // A ghost in flight wants a frame every WM_ANIM_FRAME_MS, not

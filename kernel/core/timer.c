@@ -1,12 +1,13 @@
 #include "timer.h"
 #include "io.h"
 #include "serial.h"
+#include "clocksource.h"
 
 #define PIT_CHANNEL0 0x40
 #define PIT_COMMAND  0x43
 #define PIT_BASE_FREQ 1193182
 
-static volatile uint64_t ticks = 0;
+static volatile uint64_t ticks = 0;   // interrupts, at CONFIG_HZ
 
 void pit_init(uint32_t frequency_hz) {
     uint32_t divisor = PIT_BASE_FREQ / frequency_hz;
@@ -26,8 +27,12 @@ void timer_tick_advance(void) {
     serial_tx_poll(); // a queued log line still moves with nothing printing
 }
 
+uint64_t timer_irq_ticks(void) { return ticks; }
+
 uint64_t pit_ticks(void) {
-    return ticks;
+    if (clocksource_deadline_capable())
+        return clocksource_now_ns() / (1000000000ull / PIT_HZ);
+    return ticks * PIT_HZ / CONFIG_HZ;
 }
 
 #define CMOS_ADDR 0x70

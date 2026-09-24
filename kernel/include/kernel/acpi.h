@@ -117,6 +117,8 @@ struct acpi_state {
     // turning all of them off first.
     uint32_t gpe0_blk, gpe1_blk;
     uint8_t  gpe0_len, gpe1_len;
+    uint32_t pm_tmr;       // the PM timer's I/O port, 0 when there is none
+    uint8_t  pm_tmr_bits;  // 24 or 32 (FADT flags bit 8, TMR_VAL_EXT)
     uint32_t smi_cmd;
     uint8_t  acpi_enable;  // the value written to smi_cmd to enter ACPI mode
     uint8_t  slp_typ_a;    // from `_S5_`; meaningless unless ACPI_F_S5

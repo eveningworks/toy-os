@@ -9,6 +9,9 @@ void serial_putc(char c);
 // two move the backlog: the timer calls serial_tx_poll() so it drains
 // with nothing printing, and serial_write() flushes each line.
 void serial_tx_poll(void);
+// Bytes queued and not yet sent. A tickless idle keeps the tick while
+// this is true: only the tick moves a backlog nothing else is printing.
+int serial_tx_pending(void);
 void serial_flush(void);
 
 // Wires up COM1's IRQ4 for RX (see serial_try_getc() below) -- MUST be

@@ -425,6 +425,7 @@ static void r8169_probe(const struct pci_device *pci) {
         klog_printf("r8169: xid %x, on IRQ %u\n", xid, line);
     } else {
         g_dev.poll = r8169_poll;
+        g_dev.poll_ms = 10;
         klog_printf("r8169: xid %x, no usable interrupt -- receiving by poll\n", xid);
     }
 

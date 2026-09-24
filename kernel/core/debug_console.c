@@ -17,6 +17,7 @@
 // alone wouldn't fix the general case. Accepted as a known rough edge
 // for a debug-only tool rather than solved with new synchronization
 // machinery; see docs/decisions.md.
+#include "clocksource.h"
 #include "debug_console.h"
 #include "serial.h"
 #include "klog.h"
@@ -226,6 +227,14 @@ static void dbg_cmd_lsdev(void) {
         clockevent_summary(tick, sizeof tick);
         klog_printf("Tick: %s, %u lapic-timer interrupt(s)\r\n",
                     tick, lapic_timer_ticks());
+        struct clockevent_stats cs;
+        clockevent_get_stats(&cs);
+        klog_printf("Tick: %llu event(s), %llu tick(s), %llu idle stop(s), "
+                    "%llu ms stopped of %llu\r\n",
+                    (unsigned long long)cs.events, (unsigned long long)cs.ticks,
+                    (unsigned long long)cs.idle_stops,
+                    (unsigned long long)(cs.stopped_ns / 1000000),
+                    (unsigned long long)(clocksource_now_ns() / 1000000));
     }
 
     char usbline[96];

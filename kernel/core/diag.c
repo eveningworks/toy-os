@@ -7,6 +7,7 @@
 // one command at a time, an owner that lapses, a reply chunked back to
 // the caller -- and it sat in win_server.c only because the compositor
 // was the first service anybody wanted to interrogate.
+#include "clockevent.h" // clockevent_idle_halt()
 #include "diag.h"
 #include "string.h"
 #include "klog.h"
@@ -173,8 +174,10 @@ static int collect(char *out, int cap) {
 static int wait_here(struct provider *p, const char *line, char *out, int cap) {
     if (post(p, line) < 0) return -1;
     uint64_t deadline = pit_ticks() + DIAG_WAIT_TICKS;
-    while (!g_reply_ready && pit_ticks() < deadline)
-        __asm__ volatile ("sti; hlt");
+    while (!g_reply_ready && pit_ticks() < deadline) {
+        clockevent_idle_wake_at_tick(deadline);
+        clockevent_idle_halt();
+    }
 
     g_pending_valid = 0;
     if (!g_reply_ready) {

@@ -15,6 +15,8 @@
 // only the producer moves tail, only the consumer moves head. Copying
 // costs a memcpy per frame and buys the driver its DMA buffer back
 // immediately, which is what stops a slow consumer stalling the ring.
+#include "clocksource.h"
+#include "clockevent.h" // clockevent_idle_wake_by() -- polled devices and TCP timers
 #include "netdev.h"
 #include "net.h"   // eth_input(), tcp_tick()
 #include "klog.h"
@@ -271,13 +273,22 @@ void net_poll(void) {
     if (in_poll) return;
     in_poll = 1;
 
-    for (int i = 0; i < g_count; i++)
-        if (g_devs[i]->poll) g_devs[i]->poll(g_devs[i]);
+    uint64_t now = clocksource_now_ns();
+    for (int i = 0; i < g_count; i++) {
+        if (!g_devs[i]->poll) continue;
+        g_devs[i]->poll(g_devs[i]);
+        if (g_devs[i]->poll_ms)
+            clockevent_idle_wake_by(now + (uint64_t)g_devs[i]->poll_ms * 1000000ull);
+    }
 
     // Retransmission and any segment ARP deferred. BEFORE the drain, so
     // a process woken by its own retransmit deadline does the work it
     // woke up for even when no frame arrived.
     tcp_tick();
+    // An ORPHANED connection has no process parked on its deadline, so
+    // the idle loop is what has to wake for it.
+    uint64_t tcp_due = tcp_next_deadline();
+    if (tcp_due) clockevent_idle_wake_by(tcp_due);
 
     while (g_rx_head != g_rx_tail) {
         struct rx_slot *s = &g_rxq[g_rx_head];

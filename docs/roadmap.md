@@ -760,7 +760,7 @@ run on, not by order.
 - [x] ~~`virtio-input`: keyboard/mouse/tablet that isn't PS/2, on an input core with a source registry~~
 - [x] ~~A Local APIC, and MSI-X interrupts on top of it~~ DONE 2026-08-30 -- the xHCI is on a vector; `nomsi` falls back to the PIC
 - [x] ~~An I/O APIC and the MADT interrupt source overrides, so the legacy lines stop going through the 8259~~ DONE 2026-09-10
-- [ ] An ACPI PM-timer clocksource, so a machine without an invariant TSC still has a clock that advances with interrupts off
+- [x] ~~An ACPI PM-timer clocksource, a clock that runs with interrupts off without an invariant TSC~~ DONE 2026-09-24
 - [ ] A clocksource watchdog, cross-checking the TSC against a second source the way Linux does
 - [ ] MSI-X vectors per QUEUE rather than one per device -- wanted by multi-queue virtio and NVMe, worth it once a second CPU is online
 - [x] ~~Re-key `/etc/kbs` layouts to evdev keycodes, removing the input core's translation table~~ DONE 2026-09-12
@@ -937,6 +937,11 @@ run on, not by order.
 - [x] ~~ACPI reboot~~ DONE 2026-08-30 -- the FADT's reset register, with the 8042 pulse still the fallback
 - [ ] HPET as a third clocksource -- its table is found now, nothing reads it yet
 - [x] ~~APIC + a `clock_event_device` split~~ DONE 2026-09-12 -- `clockevent.c`, the LAPIC timer outranks the PIT
+- [x] ~~One-shot timer deadlines, a tickless idle, and `option hz`~~ DONE 2026-09-24 -- `nohz=off`, `highres=off`
+- [ ] TSC-deadline mode for the one-shot timer -- no calibration, and one MSR write per arm instead of MMIO
+- [ ] A one-shot PIT, so a machine without a LAPIC (or booted `nomsi`) can go tickless too
+- [ ] Nanosecond timeouts in `SYS_SLEEP`/futex waits -- every wait is still asked for in whole milliseconds
+- [ ] A kvmclock clocksource -- under KVM without `+invtsc` every PM-timer read is a VM exit
 - [ ] Battery + AC adapter status
 - [ ] Thermal zone reporting
 - [ ] S3 suspend/resume

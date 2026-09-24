@@ -194,6 +194,9 @@ whenever a headline here tells you something you did not already know.
   ARRIVES, AND A PCI PIN IS ROUTED BY `_PRT`**
 - **THE TICK IS A CLOCKEVENT, AND ON A MACHINE WITH A LAPIC IT IS NOT
   THE PIT**
+- **THE TICK IS ONE DEADLINE AMONG SEVERAL, AND IT STOPS ONLY IN THE
+  IDLE HELPER** -- idle work due at a time asks for its wake; every
+  switch re-arms the timer; a deadline wake preempts after 1 ms
 - **A VIRTIO DEVICE TAKES MSI-X ONLY, ITS QUEUE VECTORS ARE WRITTEN BY
   `virtqueue_setup()`, AND ITS ARMING WRITE IS `DRIVER_OK`**
 - **A USB ETHERNET ADAPTER IS A `net_device`, AND ITS CONFIGURATION IS A

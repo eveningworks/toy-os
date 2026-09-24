@@ -18,11 +18,14 @@
 #include "klog.h"
 #include "kfmt.h"
 #include "driver.h" // DRIVER_DECLARE, driver_bound -- `lsdrv`
+#include "multiboot.h" // clocksource=
+#include "string.h"
 
 static const struct clocksource *g_cs;
 static uint64_t g_last_raw;   // last raw value read from g_cs
 static uint64_t g_acc_ns;     // nanoseconds accumulated before that point
 static uint64_t g_max_delta;  // largest delta g_cs->mult can convert safely
+static uint64_t g_max_idle_ns;
 
 int clocksource_deadline_capable(void) {
     const struct clocksource *cs = clocksource_current();
@@ -58,44 +61,6 @@ void clocksource_calc_mult_shift(uint32_t *mult, uint32_t *shift,
     *shift = 0;
 }
 
-int clocksource_register(const struct clocksource *cs) {
-    // The honesty check. A source that cannot be read, cannot wrap, or
-    // converts every delta to zero is not a worse clock -- it is a
-    // stopped one, and a stopped clock installed over a working one is
-    // the failure this refuses to perform quietly.
-    if (!cs || !cs->read || !cs->mask || !cs->mult) {
-        klog_printf(KLOG_ERR "clocksource: REFUSED %s -- incomplete (read=%d mask=%d mult=%u)\n",
-                     cs && cs->name ? cs->name : "(unnamed)",
-                     cs && cs->read ? 1 : 0, cs && cs->mask ? 1 : 0,
-                     cs ? cs->mult : 0);
-        return 0;
-    }
-
-    // Ties keep the incumbent, so registration ORDER cannot decide
-    // which source wins -- only the rating can.
-    if (g_cs && cs->rating <= g_cs->rating) {
-        klog_printf("clocksource: %s (rating %d) kept behind %s (rating %d)\n",
-                     cs->name, cs->rating, g_cs->name, g_cs->rating);
-        return 0;
-    }
-
-    // Fold everything the outgoing source measured into the total
-    // BEFORE switching, or the interval between its last read and now
-    // is simply lost -- and with it, monotonicity across the switch.
-    if (g_cs) (void)clocksource_now_ns();
-
-    g_cs = cs;
-    // Here, not at registration: a source that was refused or out-rated
-    // drives nothing, and said so on the way past.
-    driver_bound(cs->name, "clock0");
-    g_last_raw = cs->read() & cs->mask;
-    g_max_delta = 0xFFFFFFFFFFFFFFFFULL / cs->mult;
-
-    klog_printf("clocksource: using %s (rating %d, mult %u shift %u)\n",
-                 cs->name, cs->rating, cs->mult, cs->shift);
-    return 1;
-}
-
 // READ, CONVERT AND ACCUMULATE ARE ONE CRITICAL SECTION, and interrupts
 // are what this is protecting against rather than preemption: the timer
 // ISR reads this clock too (CPU accounting), so a caller that has read
@@ -115,20 +80,99 @@ static inline void irq_restore(uint64_t f) {
     if (f & (1ull << 9)) __asm__ volatile ("sti" ::: "memory");
 }
 
-uint64_t clocksource_now_ns(void) {
-    if (!g_cs) return 0;
+static uint64_t clocksource_now_ns_locked(void);
 
+int clocksource_register(const struct clocksource *cs) {
+    // The honesty check. A source that cannot be read, cannot wrap, or
+    // converts every delta to zero is not a worse clock -- it is a
+    // stopped one, and a stopped clock installed over a working one is
+    // the failure this refuses to perform quietly.
+    if (!cs || !cs->read || !cs->mask || !cs->mult) {
+        klog_printf(KLOG_ERR "clocksource: REFUSED %s -- incomplete (read=%d mask=%d mult=%u)\n",
+                     cs && cs->name ? cs->name : "(unnamed)",
+                     cs && cs->read ? 1 : 0, cs && cs->mask ? 1 : 0,
+                     cs ? cs->mult : 0);
+        return 0;
+    }
+
+    // Ties keep the incumbent, so registration ORDER cannot decide
+    // which source wins -- only the rating can. `clocksource=` is the
+    // one exception, in both directions.
+    const char *forced = clocksource_forced();
+    int is_forced = forced && k_strcmp(forced, cs->name) == 0;
+    if (g_cs && forced && k_strcmp(forced, g_cs->name) == 0) {
+        klog_printf("clocksource: %s kept behind %s -- clocksource=%s\n",
+                     cs->name, g_cs->name, forced);
+        return 0;
+    }
+    if (g_cs && !is_forced && cs->rating <= g_cs->rating) {
+        klog_printf("clocksource: %s (rating %d) kept behind %s (rating %d)\n",
+                     cs->name, cs->rating, g_cs->name, g_cs->rating);
+        return 0;
+    }
+
+    // THE SWITCH IS ONE CRITICAL SECTION. The timer interrupt reads this
+    // clock, and one landing between publishing `g_cs` and setting its
+    // limits found a max_delta of 0: every read clamped, and at 1000 Hz
+    // the ISR's warning outlasted the tick, so registration never
+    // resumed -- a boot that spun printing "exceeds max 0" forever.
+    uint64_t max_delta = 0xFFFFFFFFFFFFFFFFULL / cs->mult;
+    uint64_t span = cs->mask < max_delta ? cs->mask : max_delta;
     uint64_t flags = irq_save();
 
+    // Fold everything the outgoing source measured into the total
+    // BEFORE switching, or the interval between its last read and now
+    // is simply lost -- and with it, monotonicity across the switch.
+    int had_source = g_cs != 0;
+    if (had_source) (void)clocksource_now_ns_locked();
+
+    g_last_raw = cs->read() & cs->mask;
+    g_max_delta = max_delta;
+    // THE FIRST SOURCE STARTS THE CLOCK AT ITS OWN ORIGIN, not at zero:
+    // the PIT's tick count began before this ran, and pit_ticks() --
+    // counted until now, derived from this clock later -- must not step
+    // backwards at the switch.
+    if (!had_source && g_last_raw <= g_max_delta)
+        g_acc_ns = (g_last_raw * cs->mult) >> cs->shift;
+    g_max_idle_ns = ((span >> 1) * cs->mult) >> cs->shift;
+    g_cs = cs;
+    irq_restore(flags);
+
+    // Here, not at registration: a source that was refused or out-rated
+    // drives nothing, and said so on the way past.
+    driver_bound(cs->name, "clock0");
+
+    klog_printf("clocksource: using %s (rating %d, mult %u shift %u)\n",
+                 cs->name, cs->rating, cs->mult, cs->shift);
+    return 1;
+}
+
+uint64_t clocksource_max_idle_ns(void) { return g_max_idle_ns; }
+
+const char *clocksource_forced(void) {
+    static char name[16];
+    static int looked;
+    if (!looked) {
+        looked = 1;
+        if (!multiboot_cmdline_value("clocksource=", name, sizeof name)) name[0] = 0;
+    }
+    return name[0] ? name : 0;
+}
+
+// The body, for a caller that already holds interrupts off. Reports a
+// clamp through `*clamped`/`*reported` rather than logging it here: a
+// print is far longer than the arithmetic, and inside the critical
+// section it is inside the timer ISR's way too.
+static uint64_t now_locked(int *clamped, uint64_t *reported) {
     uint64_t raw = g_cs->read() & g_cs->mask;
     // Masked subtraction, so a counter that wrapped since the last read
     // still yields the right delta -- this is the whole reason the
     // conversion is done on deltas rather than on the absolute value.
     uint64_t delta = (raw - g_last_raw) & g_cs->mask;
 
-    int clamped = delta > g_max_delta;
-    uint64_t reported = delta;   // before the clamp -- the offending value
-    if (clamped) {
+    *clamped = delta > g_max_delta;
+    *reported = delta;   // before the clamp -- the offending value
+    if (*clamped) {
         // Nothing read the clock for long enough that converting the
         // delta would overflow. Clamping loses time, which is bad --
         // but wrapping makes it go BACKWARDS, which breaks every
@@ -138,12 +182,23 @@ uint64_t clocksource_now_ns(void) {
 
     g_acc_ns += (delta * g_cs->mult) >> g_cs->shift;
     g_last_raw = raw;
-    uint64_t now = g_acc_ns;
+    return g_acc_ns;
+}
 
+static uint64_t clocksource_now_ns_locked(void) {
+    int clamped; uint64_t reported;
+    return now_locked(&clamped, &reported);
+}
+
+uint64_t clocksource_now_ns(void) {
+    if (!g_cs) return 0;
+
+    uint64_t flags = irq_save();
+    int clamped;
+    uint64_t reported;
+    uint64_t now = now_locked(&clamped, &reported);
     irq_restore(flags);
 
-    // Outside the section: klog is queued, but a print is still far
-    // longer than the arithmetic it would sit inside.
     if (clamped)
         klog_printf("clocksource: %s delta %lu exceeds max %lu -- time clamped\n",
                      g_cs->name, (unsigned long)reported,
@@ -154,13 +209,14 @@ uint64_t clocksource_now_ns(void) {
 
 // --- the PIT source ---------------------------------------------------
 //
-// Correct and coarse: it is the 100Hz tick counter, so it advances in
-// 10ms steps and can say nothing about anything shorter. That is
-// precisely the limitation the TSC source removes, and precisely why
-// sampled accounting could not see a client's sub-millisecond frame.
-static uint64_t pit_cs_read(void) { return pit_ticks(); }
+// Correct and coarse: it counts tick INTERRUPTS, so it advances in
+// 1/CONFIG_HZ steps and can say nothing about anything shorter -- and
+// nothing at all while the tick is stopped, which is why a tickless idle
+// refuses to run on it. That is precisely the limitation the TSC and
+// ACPI PM sources remove.
+static uint64_t pit_cs_read(void) { return timer_irq_ticks(); }
 
-DRIVER_DECLARE("pit", "clock", "8253/8254 interval timer, 100Hz");
+DRIVER_DECLARE("pit", "clock", "8253/8254 interval timer, counted per tick");
 
 static struct clocksource g_pit_cs = {
     .name   = "pit",
@@ -176,18 +232,17 @@ void clocksource_delay_ms(uint32_t ms) {
         while (clocksource_now_ns() < end) cpu_relax();
         return;
     }
-    // TICKS ARE 10 ms AND THE FIRST MAY LAND IMMEDIATELY, so ask for one
-    // more than the arithmetic needs -- a caller that wanted 1 ms must
-    // not get 0.
-    uint64_t start = pit_ticks();
-    uint64_t want = (uint64_t)(ms / 10) + 1;
-    while (pit_ticks() - start < want) cpu_relax();
+    // THE FIRST TICK MAY LAND IMMEDIATELY, so ask for one more than the
+    // arithmetic needs -- a caller that wanted 1 ms must not get 0.
+    uint64_t start = timer_irq_ticks();
+    uint64_t want = (uint64_t)ms * CONFIG_HZ / 1000 + 1;
+    while (timer_irq_ticks() - start < want) cpu_relax();
 }
 
 void clocksource_init(void) {
-    // A generous maxsec: this counter is 64-bit and increments 100
-    // times a second, so nothing here can overflow in any realistic
-    // uptime -- the bound exists to pick the shift, not to guard.
-    clocksource_calc_mult_shift(&g_pit_cs.mult, &g_pit_cs.shift, PIT_HZ, 3600);
+    // A generous maxsec: this counter is 64-bit and increments
+    // CONFIG_HZ times a second, so nothing here can overflow in any
+    // realistic uptime -- the bound exists to pick the shift, not to guard.
+    clocksource_calc_mult_shift(&g_pit_cs.mult, &g_pit_cs.shift, CONFIG_HZ, 3600);
     clocksource_register(&g_pit_cs);
 }

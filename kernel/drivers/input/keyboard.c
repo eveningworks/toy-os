@@ -1,3 +1,4 @@
+#include "clockevent.h" // clockevent_idle_halt()
 #include "keyboard.h"
 #include "keyboard_layout.h"
 #include "io.h"
@@ -586,8 +587,8 @@ int keyboard_getchar_mods(uint8_t *out_mods) {
     // about to be given (win_input.c drains the same queue, from the
     // scheduler_idle() call below).
     while (keyboard_blocking_suspended() || (ev = 0, !tty_pop(&ev))) {
-        // hlt wakes on every interrupt, not just a real keypress -- most
-        // commonly the 100Hz PIT tick -- so this is a convenient, cheap
+        // The halt wakes on every interrupt, not just a real keypress --
+        // and on the deadlines idle work asks for -- so this is a cheap
         // place to drive the framebuffer console's blinking cursor while
         // otherwise idle waiting for input. vga_cursor_tick() gates its
         // own actual work internally, so calling it this often costs
@@ -627,7 +628,9 @@ int keyboard_getchar_mods(uint8_t *out_mods) {
         if (!keyboard_blocking_suspended()) {
             vga_present();
         }
-        __asm__ volatile ("hlt");
+        // The machine's main idle point, so the one place the tick may
+        // stop (kernel/clockevent.h).
+        clockevent_idle_halt();
     }
 
     // PageUp/PageDown scroll the console's history rather than reaching

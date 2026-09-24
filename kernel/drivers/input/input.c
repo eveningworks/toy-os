@@ -5,6 +5,8 @@
 // that already exist (keyboard.c's key ring, mouse.c's pointer). It does
 // not own state of its own, because a third place to keep "where is the
 // pointer" would be a third place for it to be wrong.
+#include "clockevent.h" // clockevent_idle_wake_by() -- a polled source keeps a tickless idle waking
+#include "clocksource.h"
 #include "input.h"
 #include "keyboard.h"
 #include "mouse.h"
@@ -85,10 +87,17 @@ const struct input_source *input_source_at(int index) {
     return g_sources[index];
 }
 
+// About a full-speed HID's bInterval: what a polled mouse feels like.
+#define INPUT_POLL_MS 8
+
 void input_poll_sources(void) {
+    int periodic = 0;
     for (int i = 0; i < g_count; i++) {
-        if (g_sources[i]->poll) g_sources[i]->poll();
+        if (!g_sources[i]->poll) continue;
+        g_sources[i]->poll();
+        if (!g_sources[i]->poll_on_wake) periodic = 1;
     }
+    if (periodic) clockevent_idle_wake_by(clocksource_now_ns() + INPUT_POLL_MS * 1000000ull);
 }
 
 // --- a key, straight through -----------------------------------------

@@ -1142,6 +1142,8 @@ struct spawn_msg {
                           // same reason Windows separates End Task from
                           // End Process.
 
+#define USER_HZ 100 // SYS_TICKS' rate, fixed -- see below
+
 #define SYS_TICKS     32 // No arguments. Returns the monotonic timer tick
                           // count since boot.
                           //
@@ -1150,8 +1152,10 @@ struct spawn_msg {
                           // backwards when the clock is set and has
                           // one-second resolution, so it can measure
                           // neither an interval nor an animation. This
-                          // TICKS, at whatever rate the timer runs
-                          // (PIT_HZ, 100 today). Fine for pacing
+                          // TICKS AT USER_HZ -- 100 a second, whatever
+                          // rate the kernel's own tick runs at (Linux's
+                          // USER_HZ, for the same reason: the ABI must
+                          // not move with a build option). Fine for pacing
                           // something coarse; useless for measuring
                           // anything shorter than 10ms, which is why
                           // CPU accounting no longer uses it -- see

@@ -803,7 +803,7 @@ int wm_ensure_reachable(int idx) {
 // A proposal is with the client until it acks, and ignoring one is
 // legal, so an unanswered proposal cannot be allowed to take the grip
 // with it.
-#define RESIZE_ACK_TIMEOUT_TICKS (PIT_HZ / 2)
+#define RESIZE_ACK_TIMEOUT_TICKS (USER_HZ / 2)
 
 // The window the ask names, or -1. The pid/id pair is checked because
 // closing a window compacts windows[] -- a bare index would then name
@@ -867,7 +867,7 @@ void wm_resize_shown(int idx, int size_changed) {
     // The MEASUREMENT still needs a real one, or an unrelated repaint
     // arriving late would read as the client lagging.
     if (!size_changed) { resize_pump(); return; }
-    resize_lag_ms = (unsigned)((sys_ticks() - resize_sent_tick) * (1000 / PIT_HZ));
+    resize_lag_ms = (unsigned)((sys_ticks() - resize_sent_tick) * (1000 / USER_HZ));
     windows[idx].resize_lag_ms = resize_lag_ms;
 
     // ONE STRIKE, AND NO WAY BACK WITHIN THE DRAG. A client that missed

@@ -2,6 +2,7 @@
 // for why it lives under the ATA driver rather than in the block layer,
 // and for the invariant the whole thing rests on (a flush that cannot
 // report failure cannot keep a journal barrier honest).
+#include "clockevent.h" // the flush is due at a time, so a tickless idle must wake for it
 #include "ata_cache.h"
 #include "ata.h"
 #include "klog.h"
@@ -279,7 +280,10 @@ int atac_drop(void) {
 
 void atac_idle(void) {
     if (!atac_enabled() || g_busy || g_dirty == 0) return;
-    if (pit_ticks() - g_last_write_tick < ATAC_IDLE_TICKS) return;
+    if (pit_ticks() - g_last_write_tick < ATAC_IDLE_TICKS) {
+        clockevent_idle_wake_at_tick(g_last_write_tick + ATAC_IDLE_TICKS);
+        return;
+    }
     atac_flush();
 }
 

@@ -614,9 +614,9 @@ The bar is "does this fix a rederive-from-scratch cost".
 | Diagnose | `panic_resolve.py` (**never hand-roll `nm`**), `acpi_dump.py`, `aml_walk.py`, `QMPSession.hmp()` (**the one oracle the guest cannot fake**), `corrupt_diff.py`, `window_resize_probe.py`, `pixel_probe.py`, `screenshot_diff.py`, `iso_guard.py` |
 | Does it actually SOUND right? | `audio_loopback_test.py` -- records the G6 back on line in; needs the cable patched in |
 | Check an implementation against a FOREIGN one | `libc_diff.py`, `uimg_codec_hostcheck.py`, `usnd_hostcheck.py`, `hash_hostcheck.py`, `divti3_hostcheck.py`, `regex_hostcheck.py`, `umd_hostcheck.py`, `ugfx_text_hostcheck.py`, `utext_hostcheck.py`, `utween_hostcheck.py`, `term_scheme_hostcheck.py` |
-| Measure | `idle_cpu.py` (quote DIFFERENCES only), `loc.py`, `dup_scan.py` (copy-paste; a REPORT, never a gate), `ping_rtt.py`, `latency_under_io.py`, `fs_isolation.py`, `frame_balance.py` |
+| Measure | `idle_cpu.py` (quote DIFFERENCES only), `timer_bench.py` (a timer configuration, idle and under load), `loc.py`, `dup_scan.py` (copy-paste; a REPORT, never a gate), `ping_rtt.py`, `latency_under_io.py`, `fs_isolation.py`, `frame_balance.py` |
 | Disk images, from the host | `seed_disk.py`, `install_grub.py` (also `boot_medium()`), `tfs3_writer.py`, `mkpart_test.py`, `fetch_wad.py` |
-| Generated data | `gen_version.sh`/`set_version.sh`, `genttf.py`, `gen_kbs.py`, `gen_cursors.py`, `gen_icons.py`, `gen_imgdata.py`, `gen_audio.py`, `gen_music.py`, `gen_mp3_tables.py`, `gen_signames.py`, `genrelocs.py`, `gen_syms.py`, `drivers_conf.py`, `gen_modalias.py`, `gen_decisions_index.py`, `gen_commands_index.py`, `gen_next_up.py`, `fetch_ca_bundle.py` |
+| Generated data | `gen_version.sh`/`set_version.sh`, `gen_kconfig.sh`, `genttf.py`, `gen_kbs.py`, `gen_cursors.py`, `gen_icons.py`, `gen_imgdata.py`, `gen_audio.py`, `gen_music.py`, `gen_mp3_tables.py`, `gen_signames.py`, `genrelocs.py`, `gen_syms.py`, `drivers_conf.py`, `gen_modalias.py`, `gen_decisions_index.py`, `gen_commands_index.py`, `gen_next_up.py`, `fetch_ca_bundle.py` |
 | The repo itself | `backup_repo.sh` -- run before ANY change to the repo's identity or history |
 | Wait for something, safely | `wait_for.sh` -- a PID or a file, never a process NAME, always bounded |
 
@@ -705,13 +705,13 @@ runners themselves; `--list` on either runner is the live answer.
 `gen_commands_index.py`, `gen_cursors.py`, `gen_decisions_index.py`,
 `gen_icons.py`, `gen_imgdata.py`, `gen_kbs.py`, `gen_modalias.py`,
 `gen_mp3_tables.py`, `gen_music.py`, `gen_next_up.py`, `gen_signames.py`,
-`gen_syms.py`, `gen_version.sh`, `genrelocs.py`,
+`gen_kconfig.sh`, `gen_syms.py`, `gen_version.sh`, `genrelocs.py`,
 `gui_debug.py`, `gui_flow.py`, `idle_cpu.py`, `install_grub.py`, `loc.py`,
 `remote_gui.py`,
 `mem_stress.py`, `panic_resolve.py`, `port_guard.py`, `qmp_test.py`,
 `regex_hostcheck.py`, `run_release.sh`, `screenshot_diff.py`,
 `seed_disk.py`, `serial_capture.py`, `serial_console.py`,
-`set_version.sh`, `shell_flow.py`, `tfs3_writer.py`, `wait_for.sh`,
+`set_version.sh`, `shell_flow.py`, `tfs3_writer.py`, `timer_bench.py`, `wait_for.sh`,
 `watch_vm.sh`, `window_resize_probe.py`
 
 **HOST TOOLS THIS REPO EXPECTS, none required to build it** --

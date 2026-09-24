@@ -125,7 +125,7 @@ ASM = nasm
 #
 # This is the boundary CLAUDE.md has always described; before the split
 # every header sat in one flat directory and nothing enforced it.
-API_INCLUDES    = -Ikernel/include/api -Ikernel/include/abi
+API_INCLUDES    = -Ikernel/include/api -Ikernel/include/abi -I$(BUILD)/gen
 # The C library's PUBLIC headers, ring 3 only, and FIRST on the include
 # path ahead of API_INCLUDES -- which it has to be, because both
 # directories contain a `string.h` and an app asking for <string.h>
@@ -456,6 +456,17 @@ ASM_OBJECTS = $(patsubst %.asm, $(BUILD)/%.o, $(ASM_SOURCES))
 # correct when the graph is built. The variable is never used; assigning
 # it is just how a shell command runs at parse time.
 VERSION_GEN := $(shell sh tools/gen_version.sh >/dev/null 2>&1 && echo ok)
+
+# THE TIMER'S BUILD OPTIONS, as build/gen/kconfig.h -- drivers.conf's
+# `option hz/tick/highres`, or `make HZ=250` for one build. Generated at
+# parse time for the reason version.h is, and rewritten only when a value
+# changed, so the .d files rebuild exactly what includes it. A value
+# outside the known set stops the build here rather than reaching C.
+HZ      ?= 1000
+TICK    ?= idle
+HIGHRES ?= 1
+KCONFIG_GEN := $(shell sh tools/gen_kconfig.sh '$(HZ)' '$(TICK)' '$(HIGHRES)' $(BUILD)/gen/kconfig.h 2>&1 || echo FAILED)
+$(if $(findstring FAILED,$(KCONFIG_GEN)),$(error $(KCONFIG_GEN)))
 
 # The target stays for `make version` by hand. NOTHING DEPENDS ON IT any
 # more: the parse-time call above has already run by the time any rule is

@@ -224,6 +224,11 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // TSC against the PIT and so cannot itself depend on a TSC-backed
     // clock existing yet. The better source is registered after it.
     clocksource_init();
+    // ...and straight onto the PM timer where there is one: it needs no
+    // calibration, and unlike the PIT source it advances without the
+    // tick -- which is what a tickless idle needs on a machine with no
+    // invariant TSC. The TSC below still outranks it.
+    clocksource_init_acpi_pm();
 
     // Before anything can reach ring 3. The kernel itself never uses FP
     // (see fpu.h on why it's ring-3-only), so nothing above this line

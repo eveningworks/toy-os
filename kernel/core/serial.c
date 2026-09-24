@@ -162,6 +162,8 @@ void serial_flush(void) {
     tx_stalled = 1;
 }
 
+int serial_tx_pending(void) { return tx_head != tx_tail; }
+
 // The timer's call, so a backlog still moves when nothing is printing.
 void serial_tx_poll(void) {
     uint64_t f = irq_save();

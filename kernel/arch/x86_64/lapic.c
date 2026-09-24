@@ -206,6 +206,7 @@ void lapic_dispatch_vector(uint8_t vector, uint64_t *regs) {
 static uint32_t g_timer_rate;
 static uint8_t g_timer_vector;
 static uint32_t g_timer_ticks;
+static int g_timer_oneshot;     // LVT in one-shot mode (lapic_ce_set_oneshot)
 
 // How long to count for. Four PIT ticks is 40ms -- long enough that the
 // quantisation of a whole-tick reference is under a percent, short
@@ -247,7 +248,7 @@ static uint32_t lapic_timer_calibrate(void) {
     // wrong rather than failing anywhere visible.
     uint32_t counted = 0xFFFFFFFFu - remaining;
     if (!elapsed || !counted || !remaining) return 0;
-    return (uint32_t)(((uint64_t)counted * PIT_HZ) / elapsed);
+    return (uint32_t)(((uint64_t)counted * PIT_HZ) / elapsed); // pit_ticks() rate
 }
 
 static void lapic_timer_isr(uint64_t *regs) {
@@ -271,6 +272,7 @@ static int lapic_ce_start(uint32_t hz) {
 
     lapic_write(LAPIC_REG_TIMER_DIV, TIMER_DIV_16);
     lapic_write(LAPIC_REG_LVT_TIMER, LVT_TIMER_PERIODIC | g_timer_vector);
+    g_timer_oneshot = 0;
     // THE INITIAL COUNT IS THE ARMING WRITE, and it must be last: the
     // timer starts the instant it is written, so an LVT still holding a
     // masked or stale vector delivers the first tick somewhere wrong.
@@ -281,23 +283,48 @@ static int lapic_ce_start(uint32_t hz) {
     return 1;
 }
 
+// ONE-SHOT: LVT mode bits clear, and each arm is a single write of the
+// initial count -- which is also what cancels the previous one. The LVT
+// is rewritten only on the first arm, out of periodic mode.
+
+static void lapic_ce_set_oneshot(uint64_t ns) {
+    if (!g_base || !g_timer_rate) return;
+    if (!g_timer_oneshot) {
+        lapic_write(LAPIC_REG_TIMER_INIT, 0);
+        lapic_write(LAPIC_REG_LVT_TIMER, g_timer_vector);
+        g_timer_oneshot = 1;
+    }
+    // Capped BEFORE the multiply, which a TSC's hour-scale idle bound
+    // would overflow; an event that fires early is simply re-armed.
+    if (ns > 10000000000ull) ns = 10000000000ull;
+    // Rounded UP, so an event never lands before its deadline for want
+    // of a count -- early is harmless but costs a second interrupt.
+    uint64_t count = (ns * g_timer_rate + 999999999ull) / 1000000000ull;
+    if (count == 0) count = 1;
+    if (count > 0xFFFFFFFFull) count = 0xFFFFFFFFull; // fires early; re-armed then
+    lapic_write(LAPIC_REG_TIMER_INIT, (uint32_t)count);
+}
+
 static void lapic_ce_stop(void) {
     if (!g_base) return;
     lapic_write(LAPIC_REG_TIMER_INIT, 0);
     lapic_write(LAPIC_REG_LVT_TIMER, LVT_MASKED);
+    g_timer_oneshot = 0;
 }
 
 static const struct clockevent g_lapic_ce = {
     .name    = "lapic-timer",
     .start   = lapic_ce_start,
     .stop    = lapic_ce_stop,
+    .set_oneshot = lapic_ce_set_oneshot,
     .rating  = CLOCKEVENT_RATING_LAPIC,
     .per_cpu = 1,
 };
 
 void clockevent_init_lapic(void) {
-    if (!g_base) return; // no LAPIC, or `nomsi` -- the PIT keeps the tick
-    clockevent_register(&g_lapic_ce);
+    // No LAPIC, or `nomsi`: the PIT keeps the tick, and stays periodic.
+    if (g_base) clockevent_register(&g_lapic_ce);
+    clockevent_select_mode();
 }
 
 uint32_t lapic_timer_rate(void) { return g_timer_rate; }

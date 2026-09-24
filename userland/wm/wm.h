@@ -187,14 +187,13 @@ struct window {
     // outstanding.
     // --- the client's repeating timer (TWP's WIN_REQ_TIMER) ----------
     //
-    // `timer_ticks` is the interval, already converted from the
-    // client's milliseconds and floored at 1; 0 means no timer.
-    // `timer_due` is the tick it next fires on. Recomputed from NOW on
-    // each firing rather than advanced by the interval, so a client
-    // that falls behind never accumulates a backlog of overdue firings
-    // it would then receive all at once.
-    unsigned timer_ticks;
-    uint64_t timer_due;
+    // `timer_period_ns` is the interval, 0 for none; `timer_due_ns` is
+    // the sys_monotonic_ns() it next fires at. A firing ADVANCES the
+    // deadline by one period, so the cadence does not drift by however
+    // late each check ran -- but never leaves it in the past, so a
+    // client that fell behind gets one firing, not a backlog.
+    uint64_t timer_period_ns;
+    uint64_t timer_due_ns;
 
     uint32_t ping_serial;
     uint64_t ping_sent_tick;

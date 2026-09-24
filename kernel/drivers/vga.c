@@ -6,6 +6,7 @@
 // Every other file in the kernel just calls vga_write()/vga_putc()/etc and
 // doesn't need to know which backend is actually active.
 
+#include "clockevent.h" // clockevent_idle_wake_at_tick() -- the blink is due at a time
 #include "vga.h"
 #include "ansi.h"
 #include "io.h"
@@ -795,10 +796,9 @@ uint32_t vga_cols(void) {
 }
 
 // Called from keyboard_getchar()'s wait loop (see keyboard.c) on every
-// wake-up, which happens on every interrupt including the 100Hz PIT
-// tick -- so this runs roughly every 10ms while idle at a prompt, but
-// only actually does anything (a fill_rect) once every
-// CURSOR_BLINK_TICKS of those, toggling the cursor block on/off. A
+// wake-up, but only actually does anything (a fill_rect) once every
+// CURSOR_BLINK_TICKS, toggling the cursor block on/off -- and asks a
+// tickless idle to wake for that moment. A
 // plain no-op in legacy text mode, where the hardware cursor already
 // blinks on its own.
 void vga_cursor_tick(void) {
@@ -806,8 +806,12 @@ void vga_cursor_tick(void) {
     // for the physical console's blink logic to do while one's active.
     if (active_sink) return;
     if (!fb_mode) return;
-    if (pit_ticks() - cursor_last_toggle_tick < CURSOR_BLINK_TICKS) return;
+    if (pit_ticks() - cursor_last_toggle_tick < CURSOR_BLINK_TICKS) {
+        clockevent_idle_wake_at_tick(cursor_last_toggle_tick + CURSOR_BLINK_TICKS);
+        return;
+    }
     cursor_last_toggle_tick = pit_ticks();
+    clockevent_idle_wake_at_tick(cursor_last_toggle_tick + CURSOR_BLINK_TICKS);
     // Safe mid-line now that hiding restores the pixels it saved -- this
     // used to be suppressed off the append point, because the old
     // erase-to-black hide would have eaten the character underneath.

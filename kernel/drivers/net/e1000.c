@@ -317,6 +317,7 @@ static void e1000_probe(const struct pci_device *pci) {
         reg_write(REG_IMS, ICR_RXT0 | ICR_RXDMT0 | ICR_RXO);
     } else {
         g_dev.poll = e1000_poll;
+        g_dev.poll_ms = 10;
         klog_write("e1000: no usable interrupt line -- receiving by poll\n");
     }
 

@@ -27,6 +27,12 @@ void multiboot_mmap_foreach(void (*cb)(const struct multiboot_mmap_region *regio
 // expecting an empty string. First user: `nokaslr` (see reloc.h).
 const char *multiboot_cmdline(void);
 
+// The value of `key` (which carries its own `=`, e.g. "clocksource=")
+// on the command line. THE MATCH MUST START THE LINE OR FOLLOW A SPACE,
+// so `default_target=x` is not read as `target=x`. Returns 1 and a
+// NUL-terminated copy, or 0 when absent, empty, or too long for `out`.
+int multiboot_cmdline_value(const char *key, char *out, uint32_t out_size);
+
 // The ACPI Root System Description Pointer, as GRUB found it: tag 15
 // (ACPI 2.0+, has an XSDT) if present, else tag 14 (ACPI 1.0, RSDT
 // only). Returns 0 when neither tag is there, which is the answer on a

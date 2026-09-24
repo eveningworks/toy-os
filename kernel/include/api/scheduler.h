@@ -50,6 +50,31 @@ void scheduler_init(void);
 // scheduler hasn't been armed (see scheduler_demo_run()).
 void scheduler_tick(uint64_t *regs);
 
+// The one-shot counterpart (kernel/clockevent.h): an event at `now`,
+// which may be a tick, a deadline or a slice's end. Expires deadlines
+// and rotates if the slice is over.
+void scheduler_timer_event(uint64_t *regs, uint64_t now);
+
+// The earliest thing the scheduler needs a timer event for -- a blocked
+// process's deadline, or the running slice's end when somebody else is
+// runnable -- as a clocksource_now_ns() value, or 0 for nothing.
+uint64_t scheduler_next_event_ns(void);
+
+// Is a process other than the running one ready to run?
+int scheduler_any_ready(void);
+
+// Is the kernel context the one on the CPU?
+int scheduler_kernel_running(void);
+
+// kernel.timeslice_ms: how long a process runs before a rotation, when
+// something else is runnable. Returns 0 (and changes nothing) outside
+// the range.
+#define SCHED_TIMESLICE_DEFAULT_MS 4
+#define SCHED_TIMESLICE_MIN_MS     1
+#define SCHED_TIMESLICE_MAX_MS     100
+uint32_t scheduler_timeslice_ms(void);
+int scheduler_set_timeslice_ms(uint32_t ms);
+
 // Prints the last couple of dozen scheduler transitions, consecutive
 // duplicates collapsed. For reporting a state that cannot happen; not
 // for tracing normal operation.
@@ -1247,6 +1272,12 @@ int  scheduler_test_pick(int start, int preempted);
 void scheduler_cpu_time(uint64_t *proc_ns, uint64_t *kernel_ns);
 
 void scheduler_idle(void);
+
+// The kernel context's idle WAIT: `sti; hlt`, with the tick stopped for
+// the duration when nothing is runnable (kernel/clockevent.h's tickless
+// idle). Call it where a wait loop would `hlt`, after scheduler_idle().
+// A bare `hlt` still works -- it just keeps the tick running.
+void scheduler_idle_halt(void);
 
 // ---- critical sections that must not be preempted -------------------
 //

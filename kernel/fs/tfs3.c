@@ -17,6 +17,7 @@
 // probe loop hands in a partition's extent instead and nothing here
 // changes -- that seam is the point (see the design doc's "Volumes
 // and partitions").
+#include "clockevent.h" // the idle commit is due at a time
 #include "fs.h"
 #include "fs_ops.h"
 #include "errno.h"   // fs_chmod returns a negative errno
@@ -4272,7 +4273,10 @@ static void tfs3_idle(void *st) {
     struct t3_state *sbi = st;
     if (!sbi->txn_deferred) return;
     uint32_t quiet = storage_writeback_ticks();
-    if (pit_ticks() - sbi->txn_staged_tick < quiet) return;
+    if (pit_ticks() - sbi->txn_staged_tick < quiet) {
+        clockevent_idle_wake_at_tick(sbi->txn_staged_tick + quiet);
+        return;
+    }
     g_idle_commits++;
     txn_flush_deferred(sbi);
 }

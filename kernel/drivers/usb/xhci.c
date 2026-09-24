@@ -15,6 +15,7 @@
 // object starts at an arbitrary offset inside a frame, its 64-byte
 // alignment becomes something a human has to maintain, and a ring
 // straddling 64 KiB becomes possible again. Both failures are silent.
+#include "clockevent.h" // clockevent_idle_wake_by()
 #include "usb.h"
 #include "xhci.h"
 #include "xhci_regs.h"
@@ -1938,6 +1939,8 @@ static void xhci_poll_source(void) {
     usb_hid_service_all();
     usb_hub_service();
     xhci_deferred_work();
+    // The given-up heartbeat is the one deferred job due at a time.
+    if (g_hc.wedged) clockevent_idle_wake_by(clocksource_now_ns() + 1000000000ull);
 }
 
 static struct input_source g_hc_source;
@@ -3128,6 +3131,7 @@ static void usb_probe(const struct pci_device *d) {
     // per-HID sources still leave poll NULL when the IRQ is live; their
     // decode rides this one.
     g_hc_source.poll = xhci_poll_source;
+    g_hc_source.poll_on_wake = g_hc.msi_vector != 0; // an MSI is not a dead line
     g_hc_source.irq  = g_hc.irq;
     g_hc_source.msi_vector = g_hc.msi_vector;
     input_register_source(&g_hc_source);

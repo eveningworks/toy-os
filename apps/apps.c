@@ -82,7 +82,10 @@ static void console_standby(void) {
     klog_write("apps: kernel shell standing down -- the console belongs to "
                "init's shell (target=text)\n");
 
-    for (;;) scheduler_idle();
+    for (;;) {
+        scheduler_idle();
+        scheduler_idle_halt();
+    }
 }
 
 void apps_start(void) {

@@ -70,6 +70,15 @@ OPTIONS = {
     # is TRACKED, committing `yes` would turn every clone's build into
     # one that downloads. The licence prompt still gates it, and a build
     # with no terminal is still refused rather than prompted.
+    # The timer. Build options because they shape compiled code (Linux's
+    # CONFIG_HZ / NO_HZ_IDLE / HIGH_RES_TIMERS); `nohz=off` and
+    # `highres=off` still override the last two for one boot.
+    "hz":           ("HZ", ("100", "250", "300", "500", "1000"),
+                     "kernel tick rate; ring 3's SYS_TICKS stays 100/s"),
+    "tick":         ("TICK", ("idle", "periodic"),
+                     "idle stops the tick when nothing runs"),
+    "highres":      ("HIGHRES", "bool",
+                     "one-shot timer deadlines instead of tick-granular ones"),
     "extras":       ("EXTRAS", "bool",
                      "fetch optional differently-licensed material (NETWORK)"),
 }
@@ -122,6 +131,11 @@ def option_value(path, n, opt, value):
         if low in BOOL_FALSE:
             return var, "0"
         sys.exit(f"{path}:{n}: option {opt}: want yes or no, not {value!r}")
+    if isinstance(kind, tuple):
+        if value not in kind:
+            sys.exit(f"{path}:{n}: option {opt}: want one of "
+                     f"{', '.join(kind)}, not {value!r}")
+        return var, value
     if kind == "int":
         if not value.isdigit():
             sys.exit(f"{path}:{n}: option {opt}: want a number, not {value!r}")

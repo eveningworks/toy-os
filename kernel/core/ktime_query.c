@@ -4,6 +4,7 @@
 #include "query.h"
 #include "ktime.h"
 #include "clocksource.h"
+#include "clockevent.h"
 #include "string.h"
 #include "initcall.h"
 #include <stddef.h>
@@ -26,6 +27,14 @@ static int clock_fill(int index, void *out) {
     c->steps = ktime_step_count();
     const struct clocksource *cs = clocksource_current();
     k_strlcpy(c->source, cs ? cs->name : "none", sizeof c->source);
+    struct clockevent_stats st;
+    clockevent_get_stats(&st);
+    c->tick_hz = clockevent_hz();
+    c->tick_mode = st.oneshot ? (st.nohz ? 2 : 1) : 0;
+    c->tick_events = st.events;
+    c->tick_ticks = st.ticks;
+    c->tick_idle_stops = st.idle_stops;
+    c->tick_stopped_ns = st.stopped_ns;
     return 1;
 }
 
@@ -35,6 +44,12 @@ static const struct query_field clock_fields[] = {
     QUERY_FIELD(struct query_clock, monotonic_ns, QUERY_TYPE_U64),
     QUERY_FIELD(struct query_clock, last_step, QUERY_TYPE_U64),
     QUERY_FIELD(struct query_clock, steps, QUERY_TYPE_U64),
+    QUERY_FIELD(struct query_clock, tick_hz, QUERY_TYPE_U64),
+    QUERY_FIELD(struct query_clock, tick_mode, QUERY_TYPE_U64),
+    QUERY_FIELD(struct query_clock, tick_events, QUERY_TYPE_U64),
+    QUERY_FIELD(struct query_clock, tick_ticks, QUERY_TYPE_U64),
+    QUERY_FIELD(struct query_clock, tick_idle_stops, QUERY_TYPE_U64),
+    QUERY_FIELD(struct query_clock, tick_stopped_ns, QUERY_TYPE_U64),
 };
 
 static const struct query_provider clock_provider = {

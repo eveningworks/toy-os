@@ -125,6 +125,7 @@
 #include "strace.h"
 #include "uaddr.h"
 #include "clocksource.h" // CPU time is measured, not counted -- bill_current()
+#include "clockevent.h"  // clockevent_reprogram() on every switch, clockevent_in_idle()
 #include "random_hw.h"   // arch_rdtsc() -- off-CPU time, see context_load_globals()
 #include "debug_console.h"
 #include "ata.h"       // ata_idle() -- the idle work scheduler_idle() owns
@@ -1132,6 +1133,58 @@ uint64_t scheduler_offcpu_tsc(void) {
     return current_index >= 0 ? procs[current_index].offcpu_tsc : kernel_offcpu_tsc;
 }
 
+// THE TIME SLICE IS A DEADLINE, NOT A TICK COUNT (kernel.timeslice_ms).
+// Every switch starts a new one; a timer event that finds it over, with
+// somebody else runnable, rotates. On the periodic path that is checked
+// once a tick, so a slice shorter than a tick is a tick -- which at the
+// old 100 Hz is exactly the rotate-every-tick this replaced.
+static uint32_t g_timeslice_ms = SCHED_TIMESLICE_DEFAULT_MS;
+static uint64_t g_slice_start_ns, g_slice_end_ns;
+
+static void slice_restart(void) {
+    g_slice_start_ns = clocksource_now_ns();
+    g_slice_end_ns = g_slice_start_ns + (uint64_t)g_timeslice_ms * 1000000ull;
+}
+
+// A DEADLINE WAKE PREEMPTS AN EQUAL. A process whose own timeout came
+// due runs NOW rather than when the busy one's slice ends -- once that
+// one has had WAKE_GRAN_NS of its slice (CFS's wakeup granularity);
+// short of it, the slice is cut to it. Without this a deadline kept to
+// the microsecond was followed by up to a slice of waiting for the CPU.
+// ONLY for deadlines: an interrupt-driven wake keeps the strictly-better
+// rule in wake_slot() (docs/decisions/kernel.md, "A wake preempts only
+// from a better level"), since one armed deadline cannot be "every
+// interrupt".
+#define WAKE_GRAN_NS 1000000ull
+
+static void wake_preempt(int i) {
+    if (current_index < 0 && clockevent_in_idle()) return; // the idle path hands over already
+    if (procs[i].prio != running_prio()) return;           // better prio has its own rule
+    uint64_t gran_end = g_slice_start_ns + WAKE_GRAN_NS;
+    if (clocksource_now_ns() >= gran_end) {
+        g_need_resched = 1;
+        g_wake_next = i;
+    } else if (gran_end < g_slice_end_ns) {
+        g_slice_end_ns = gran_end;
+    }
+}
+
+uint32_t scheduler_timeslice_ms(void) { return g_timeslice_ms; }
+
+int scheduler_set_timeslice_ms(uint32_t ms) {
+    if (ms < SCHED_TIMESLICE_MIN_MS || ms > SCHED_TIMESLICE_MAX_MS) return 0;
+    g_timeslice_ms = ms;
+    return 1;
+}
+
+int scheduler_any_ready(void) {
+    for (int i = 0; i < MAX_PROCS; i++)
+        if (i != current_index && runnable_at(i)) return 1;
+    return 0;
+}
+
+int scheduler_kernel_running(void) { return current_index < 0; }
+
 static void switch_to(int from, int idx) {
 
     check_one_running("switch_to");
@@ -1162,6 +1215,8 @@ static void switch_to(int from, int idx) {
     procs[idx].state = SCHED_RUNNING;
     current_index = idx;
     rotation_pos = idx;
+    slice_restart();
+    clockevent_reprogram();   // a new slice, and the tick back if it was stopped
     process_context_restore_noirq(&procs[idx].kctx, 1);
 }
 
@@ -1182,6 +1237,8 @@ static void switch_to_kernel(int from) {
     // in, and without this the last scheduled thread's %fs would still
     // be loaded when it resumed.
     arch_set_fs_base(kernel_fs_base);
+    slice_restart();
+    clockevent_reprogram();
     // ALREADY THE KERNEL -- the overwhelmingly common case, since a tick
     // with nothing spawned lands here every time. It used to nominate
     // the frame the tick had just captured, which was a no-op by a
@@ -1812,18 +1869,45 @@ void scheduler_cpu_time(uint64_t *proc_ns, uint64_t *kernel_ns) {
     if (kernel_ns) *kernel_ns = g_kernel_ns;
 }
 
-// The rotation, shared by the 100Hz timer and by SYS_YIELD. They are
-// the same operation now that neither one is where billing happens --
-// see bill_current() above.
+// The rotation, shared by the timer and by SYS_YIELD. They are the same
+// operation now that neither one is where billing happens -- see
+// bill_current() above.
 static void scheduler_rotate(uint64_t *regs);
+
+// Whether a timer event should rotate: the slice is over -- or the
+// kernel context is IDLING with a process ready, which should run now
+// rather than when the idle loop's slice would have ended.
+static int timer_wants_rotation(uint64_t now) {
+    if (current_index < 0 && clockevent_in_idle()) return scheduler_any_ready();
+    return g_need_resched || now >= g_slice_end_ns;
+}
 
 void scheduler_tick(uint64_t *regs) {
     // BEFORE the rotation, and outside scheduler_rotate()'s armed
     // check: a sleeper's deadline has nothing to do with whether the
     // scheduler is currently rotating, and a woken process wants to be
     // eligible for the switch this very tick rather than the next one.
-    scheduler_wake_timers(clocksource_now_ns());
-    scheduler_rotate(regs);
+    uint64_t now = clocksource_now_ns();
+    scheduler_wake_timers(now);
+    if (timer_wants_rotation(now)) scheduler_rotate(regs);
+}
+
+void scheduler_timer_event(uint64_t *regs, uint64_t now) {
+    scheduler_wake_timers(now);
+    if (timer_wants_rotation(now)) scheduler_rotate(regs);
+}
+
+uint64_t scheduler_next_event_ns(void) {
+    uint64_t next = 0;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].state != SCHED_BLOCKED || !procs[i].wake_at_ns) continue;
+        if (!next || procs[i].wake_at_ns < next) next = procs[i].wake_at_ns;
+    }
+    // The slice's end matters only with somebody to hand over to. A
+    // process always has one -- the kernel context is a participant.
+    if (current_index >= 0 || scheduler_any_ready())
+        if (!next || g_slice_end_ns < next) next = g_slice_end_ns;
+    return next;
 }
 
 // SYS_YIELD's entry into the same rotation. Distinct from the tick only
@@ -1888,6 +1972,7 @@ static void scheduler_rotate(uint64_t *regs) {
     // physical shell while a client has a window open.
     if (process_context_is_armed()) {
         if (current_index < 0) save_kernel_frame(regs);
+        slice_restart();   // asked again a slice from now, not in a storm
         return;
     }
 
@@ -1899,6 +1984,7 @@ static void scheduler_rotate(uint64_t *regs) {
     // already billed above, so accounting is unaffected.
     if (g_preempt_depth > 0) {
         if (current_index < 0) save_kernel_frame(regs);
+        slice_restart();
         return;
     }
 
@@ -2210,11 +2296,9 @@ int scheduler_block_current_until(uint64_t *regs, const void *chan, int reason,
 // in the timer IRQ, so it only flips state and writes an already-saved
 // trapframe. The woken process runs at the next ordinary rotation.
 //
-// The sleep's RESOLUTION is therefore one tick -- a process asking for
-// 1 ms sleeps until the next tick, never less. That is deliberate:
-// programming a one-shot timer per sleeper is a real tickless design
-// and this kernel does not have one, so a caller gets no more precision
-// than the clock this loop runs on.
+// In one-shot mode the timer is armed for the earliest deadline
+// (scheduler_next_event_ns()), so a sleep ends on time; on the periodic
+// path its resolution is one tick.
 int scheduler_wake_timers(uint64_t now_ns) {
     int woken = 0;
     for (int i = 0; i < MAX_PROCS; i++) {
@@ -2246,6 +2330,7 @@ int scheduler_wake_timers(uint64_t now_ns) {
         }
         procs[i].wake_at_ns = 0;
         procs[i].state = SCHED_READY;
+        wake_preempt(i);
         woken++;
     }
     return woken;
@@ -3890,6 +3975,8 @@ void scheduler_idle(void) {
     // network. Costs one compare when no card is registered.
     net_poll();
 }
+
+void scheduler_idle_halt(void) { clockevent_idle_halt(); }
 
 // --- the rewound-syscall window (see struct sched_proc.syscall_reissue) --
 

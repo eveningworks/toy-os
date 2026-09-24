@@ -64,8 +64,9 @@ person has to keep true.
 | Driver | Claims | Notes |
 |---|---|---|
 | `xhci` | Any PCI xHCI controller (class `0C:03`) | USB 3. The only USB host controller — there is no EHCI or UHCI driver. `nousb` skips it. |
-| `tsc` | Invariant TSC | Calibrated against the PIT; deadline-capable. |
-| `pit` | 8253/8254, 100 Hz | The fallback clocksource; `notsc` forces it. |
+| `tsc` | Invariant TSC | Calibrated against the boot clock (the PM timer where there is one, else the PIT); deadline-capable. |
+| `acpi_pm` | ACPI PM timer, 3.579545 MHz | Named by the FADT; needs no calibration and runs without the tick, so a machine with no invariant TSC can still go tickless. 24 bits wrap in 4.7 s. |
+| `pit` | 8253/8254, counted per tick | The last-resort clocksource; `clocksource=pit` forces it. Advances only from the tick, so it keeps the timer periodic. |
 | `virtio-rng` | virtio entropy source | Seeds `krandom`, raising it above TSC jitter. |
 
 ## What there is no driver for

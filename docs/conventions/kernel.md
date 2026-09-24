@@ -1296,17 +1296,21 @@ each core gets one of. Six things to know:
   microsecond window where both fire, which double-counts at most one
   tick.
 - **CALIBRATING THE LAPIC TIMER NEEDS INTERRUPTS ON.** It counts against
-  `pit_ticks()`, which advances only from the timer interrupt, so
-  calibrating with IF clear waits forever -- the deadlock `cpuinfo.h`
-  describes for the TSC. `lapic_ce_start()` reads RFLAGS and refuses
-  rather than hanging. This is also why `clockevent_init_lapic()` is a
-  separate call from `kernel_main()` rather than part of `lapic_init()`.
+  `pit_ticks()`, which on a tick-driven clocksource advances only from
+  the timer interrupt, so calibrating with IF clear waits forever -- the
+  deadlock `cpuinfo.h` describes for the TSC. `lapic_ce_start()` reads
+  RFLAGS and refuses rather than hanging. This is also why
+  `clockevent_init_lapic()` is a separate call from `kernel_main()`
+  rather than part of `lapic_init()`.
 - **THE PIT IS MASKED, NOT STOPPED.** Channel 0 keeps counting when the
   LAPIC takes over, so anything calibrating against it still can and
-  re-taking the tick is one write. `pit_ticks()` keeps advancing either
-  way -- it is incremented by `clockevent_tick()`, whichever device
-  called it, which is why the name is the only thing about it that is
-  now wrong.
+  re-taking the tick is one write.
+- **TWO RATES, AND THEY ARE DIFFERENT THINGS.** `CONFIG_HZ`
+  (drivers.conf's `option hz`) is how often the tick interrupts a busy
+  CPU. `PIT_HZ` is fixed at 100: the rate `pit_ticks()` counts at, and
+  `SYS_TICKS`' `USER_HZ`. `pit_ticks()` is DERIVED from the clocksource
+  where that runs without interrupts, and counted from the tick only
+  where it does not.
 - **TESTING IT IS ABOUT DELIVERY, NOT CONFIGURATION** -- the same rule
   the MSI entry above states. A LAPIC timer configured and not
   delivering is a machine that has already stopped, and asking the LVT
@@ -1317,6 +1321,38 @@ each core gets one of. Six things to know:
 **`nomsi` KEEPS THE TICK ON THE PIT**, along with everything else, and
 so does a CPU with no APIC -- both paths verified, and neither logs a
 failure, because neither is one.
+
+## THE TICK IS ONE DEADLINE AMONG SEVERAL, AND IT STOPS ONLY IN THE IDLE HELPER
+
+With a LAPIC and a clocksource that runs without the tick (TSC or ACPI
+PM), the timer is ONE-SHOT: `clockevent_reprogram()` arms it for the
+earliest of a blocked process's `wake_at_ns`, the running slice's end
+and the next periodic tick -- Linux's hrtimer mode. In the kernel
+context's idle wait the tick drops out of that minimum (NO_HZ_IDLE).
+`clockevent_select_mode()` logs which mode it took, and why not the
+other; `config get clock.tick_mode` answers it from ring 3.
+
+- **ONLY `scheduler_idle_halt()` STOPS THE TICK.** A bare `hlt` in some
+  other wait loop keeps it running, which is the safe default for a loop
+  nobody has taught to ask for its wakes. Convert a loop to the helper
+  once it is the machine's idle point, not before.
+- **IDLE WORK THAT IS DUE AT A TIME MUST ASK FOR A WAKE**, every pass,
+  with `clockevent_idle_wake_by()` (or `_at_tick()` for a `pit_ticks()`
+  deadline). Otherwise it waits for an unrelated interrupt, which on a
+  quiet machine may be seconds. The ATA cache flush, the tfs3 idle
+  commit, the cursor blink, a polled NIC and TCP's orphan timers all do.
+  A polled INPUT source is periodic by default (`INPUT_POLL_MS`);
+  `poll_on_wake` opts out for a poll that only backs up a trusted MSI.
+- **EVERY CONTEXT SWITCH RE-ARMS THE TIMER** (`switch_to()`,
+  `switch_to_kernel()`), because the slice and the deadlines just
+  changed and a switch never returns into the handler that caused it.
+- **A DEADLINE WAKE PREEMPTS AN EQUAL, after a 1 ms granularity**
+  (`wake_preempt()`, CFS's wakeup granularity). Without it a precise
+  deadline was followed by up to a whole slice of waiting for the CPU --
+  a 1 ms sleep overshot by 7 ms under two busy processes, 44 us with it.
+  An INTERRUPT-driven wake still preempts only from a better level.
+- **THE PM TIMER'S 24-BIT COUNTER WRAPS IN 4.7 s**, so a stopped tick
+  still wakes every `clocksource_max_idle_ns()` just to read the clock.
 
 ## A VIRTIO DEVICE TAKES MSI-X ONLY, ITS QUEUE VECTORS ARE WRITTEN BY `virtqueue_setup()`, AND ITS ARMING WRITE IS `DRIVER_OK`
 
@@ -2806,7 +2842,9 @@ ASUS and 0/0 in QEMU, both correct.
 and nothing does so on the way in, so every handler -- and everything a
 handler calls, which includes every `sound_device.start()`/`stop()`,
 every setting's `apply`, every fd release -- runs with IF clear. A
-tick deadline in that context is not a deadline: `pit_ticks()` stands
+tick deadline in that context is not a deadline wherever the clocksource
+is the tick itself (the PIT source: `clocksource=pit`, or a machine with
+neither an invariant TSC nor an ACPI PM timer) -- `pit_ticks()` stands
 still, the loop exits only when the hardware condition comes true, and
 if it never does the machine is dead with no panic and no log -- the
 keyboard, the mouse and the network all stop at once, which reads as a

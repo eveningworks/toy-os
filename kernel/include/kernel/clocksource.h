@@ -34,6 +34,7 @@
 // anyone who has seen them before: 1-99 unfit for real timekeeping,
 // 100-199 functional but coarse, 200-299 good, 300-399 ideal.
 #define CLOCKSOURCE_RATING_PIT 110 // 10ms resolution -- correct, coarse
+#define CLOCKSOURCE_RATING_ACPI_PM 200 // 279 ns, one port read each
 #define CLOCKSOURCE_RATING_TSC 300 // sub-nanosecond, and free to read
 
 struct clocksource {
@@ -98,6 +99,13 @@ const struct clocksource *clocksource_current(void);
 // fall back to spinning on clocksource_now_ns() forever.
 int clocksource_deadline_capable(void);
 
+// THE LONGEST THE CLOCK MAY GO UNREAD, in nanoseconds: half of what
+// the current source can count before it wraps or overflows the
+// conversion. Accumulate-on-read loses time past it, so a tickless idle
+// that sleeps longer than this has to wake just to read the clock. The
+// PM timer's 24-bit counter wraps in 4.7 s, which is why this exists.
+uint64_t clocksource_max_idle_ns(void);
+
 // BUSY-WAIT `ms` MILLISECONDS, USING THE BEST SOURCE AVAILABLE.
 //
 // **THE POINT IS THAT IT DOES NOT NEED INTERRUPTS.** Five drivers had
@@ -143,5 +151,17 @@ void clocksource_init(void);
 // one: the two sources become available at genuinely different moments
 // in boot.
 void clocksource_init_tsc(void);
+
+// Registers the ACPI PM timer, if the FADT names one
+// (kernel/acpi/acpi_pmtimer.c). From kernel_main() right after
+// clocksource_init(): it needs no calibration -- its rate is fixed by
+// the spec -- so it can replace the PIT before anything calibrates
+// against the clock.
+void clocksource_init_acpi_pm(void);
+
+// The source named by `clocksource=` on the command line, or NULL.
+// Linux's parameter: that source wins whatever its rating, the moment
+// it registers; a name that never registers leaves rating order alone.
+const char *clocksource_forced(void);
 
 #endif

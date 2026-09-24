@@ -431,10 +431,16 @@ def cmd_start(args):
         # before the first connect is lost, which is fine: exec() gets a
         # fresh prompt by sending a newline rather than by matching the
         # boot banner.
-        "-serial", f"unix:{SERIAL_SOCK},server,nowait",
         "-qmp", f"tcp:127.0.0.1:{args.qmp_port},server,nowait",
         "-daemonize", "-pidfile", PIDFILE,
     ]
+    # --serial-log: the chardev's own `logfile=` copies everything the
+    # guest writes, while the socket still serves the debug console. The
+    # only record of a boot that dies before anything reads the socket.
+    log = getattr(args, "serial_log", None)
+    cmd += ["-chardev", f"socket,id=ser0,path={SERIAL_SOCK},server=on,wait=off"
+                        + (f",logfile={os.path.abspath(log)}" if log else ""),
+            "-serial", "chardev:ser0"]
     # `-no-reboot` BY DEFAULT, so a guest that triple-faults stops
     # instead of looping through the same boot forever while a test
     # waits out its timeout. `--reboot` is the opt-out, for the one kind
@@ -459,6 +465,13 @@ def cmd_start(args):
         except OSError:
             pass
         time.sleep(0.3)
+    # TWO FAILURES THAT USED TO PRINT ONE LINE. With -no-reboot a guest
+    # that resets (triple fault, panic) takes QEMU with it; one still
+    # running is hung. The first is a crash to look for in the serial log.
+    if _read_pid() is None:
+        print("vm: QEMU EXITED before the debug console answered -- the guest "
+              "reset or powered off (-no-reboot); --serial-log PATH keeps its output")
+        return 1
     print(f"vm: started but never reached the debug console within {args.timeout}s")
     return 1
 
@@ -843,6 +856,10 @@ def main():
                          "the ISO's KCMDLINE works on any of them; `vmware` is the "
                          "only one offering a HARDWARE cursor, so that path is "
                          "unreachable under the default `std`.")
+    ap.add_argument("--serial-log", default=None, metavar="PATH",
+                    help="also copy everything the guest writes to its serial port "
+                         "into PATH, from the first byte -- the record of a boot "
+                         "that dies before anything connects")
     ap.add_argument("--cpu", default=None,
                      help="QEMU -cpu model (e.g. max, Skylake-Client). The default "
                           "qemu64 reports as AMD and has no CPUID leaf 4, so this is "

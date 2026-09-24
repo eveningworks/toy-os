@@ -803,65 +803,48 @@ static int activate_twin_of(int asking_pid) {
 }
 
 // The client arming or cancelling its repeating timer (WIN_REQ_TIMER).
-//
-// Milliseconds in, ticks out, floored at ONE: a client asking for a
-// faster interval than the timer resolution gets "every tick" rather
-// than a refusal, and -- more importantly -- rather than an interval of
-// zero, which would make the due-check below fire on every single frame
-// and turn a request to slow down into the busiest possible loop.
+// Milliseconds in, nanoseconds kept: the kernel's timers are one-shot
+// deadlines now, so a 16 ms request is 16 ms rather than the next 10 ms
+// tick after it.
 static void on_window_timer(int pid, uint32_t id, unsigned ms) {
     int idx = find_client_window(pid, id);
     if (idx < 0) return;
 
-    if (ms == 0) {
-        windows[idx].timer_ticks = 0;
-        windows[idx].timer_due = 0;
-        return;
-    }
-
-    unsigned ticks = (ms * PIT_HZ) / 1000;
-    if (ticks == 0) ticks = 1;
-    windows[idx].timer_ticks = ticks;
-    windows[idx].timer_due = sys_ticks() + ticks;
+    windows[idx].timer_period_ns = (uint64_t)ms * 1000000ull;
+    windows[idx].timer_due_ns = ms ? sys_monotonic_ns() + windows[idx].timer_period_ns : 0;
 }
 
-// Once per frame: deliver WIN_EV_TIMER to every client whose interval
-// has come round.
-//
-// The next deadline is computed from NOW, not by adding the interval to
-// the old one. Those differ only when a client is slower than its own
-// timer -- and there the second form quietly builds a queue of overdue
-// firings that all arrive at once the moment it catches up, which is
-// the opposite of what a client asking to be woken less often wanted.
-// The earliest client timer deadline, in ticks, or 0 if no window has
-// one armed. The frame loop's wait must not outlast this, or a client
-// that asked to be woken every 16 ms would be woken on the compositor's
-// housekeeping cadence instead -- which is the timer service quietly
-// becoming slower than the timers it serves.
+// The earliest client timer deadline, or 0 if no window has one armed.
+// The frame loop's wait must not outlast this, or a client that asked
+// to be woken every 16 ms would be woken on the compositor's
+// housekeeping cadence instead.
 uint64_t wm_client_next_timer_due(void) {
     uint64_t soonest = 0;
     for (int i = 0; i < window_count; i++) {
         struct window *win = &windows[i];
-        if (!win->open || !win->timer_ticks) continue;
+        if (!win->open || !win->timer_period_ns) continue;
         if (!wm_client_is_client_window(win)) continue;
-        if (!soonest || win->timer_due < soonest) soonest = win->timer_due;
+        if (!soonest || win->timer_due_ns < soonest) soonest = win->timer_due_ns;
     }
     return soonest;
 }
 
+// Once per frame: deliver WIN_EV_TIMER to every client whose interval
+// has come round.
 void wm_client_check_timers(void) {
-    uint64_t now = sys_ticks();
+    uint64_t now = sys_monotonic_ns();
     for (int i = 0; i < window_count; i++) {
         struct window *win = &windows[i];
-        if (!win->open || !win->timer_ticks) continue;
+        if (!win->open || !win->timer_period_ns) continue;
         if (!wm_client_is_client_window(win)) continue;
-        if (now < win->timer_due) continue;
+        if (now < win->timer_due_ns) continue;
 
         struct win_event ev = {0};
         ev.type = WIN_EV_TIMER;
         ev.window = win->client_win;
         if (!win_events_push(win->client_pid, &ev)) note_dropped(win);
-        win->timer_due = now + win->timer_ticks;
+        win->timer_due_ns += win->timer_period_ns;
+        if (win->timer_due_ns <= now) win->timer_due_ns = now + win->timer_period_ns;
     }
 }
 

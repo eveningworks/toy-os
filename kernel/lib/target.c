@@ -28,32 +28,6 @@ static int target_valid(const char *name) {
     return 0;
 }
 
-// Finds `target=<word>` on the command line.
-//
-// Matching is by substring like every other boot word here, with ONE
-// extra condition: the match must start the line or follow a space.
-// Without it `default_target=graphical` -- which is what this key is
-// called everywhere else, and therefore exactly what somebody will
-// eventually type -- contains `target=` and would be read as the
-// override. A boot word that silently matches a different, longer word
-// is the kind of bug that is only ever found by the person it bites.
-static int cmdline_target(char *out, uint32_t out_size) {
-    const char *cmdline = multiboot_cmdline();
-    if (!cmdline) return 0;
-
-    for (const char *p = cmdline; (p = k_strstr(p, "target=")) != 0; p += 7) {
-        if (p != cmdline && p[-1] != ' ') continue;
-        const char *v = p + 7;
-        uint32_t n = 0;
-        while (v[n] && v[n] != ' ' && n + 1 < out_size) n++;
-        if (n == 0) return 0;
-        k_memcpy(out, v, n);
-        out[n] = '\0';
-        return 1;
-    }
-    return 0;
-}
-
 void target_init(void) {
     char value[16];
 
@@ -65,7 +39,8 @@ void target_init(void) {
     // target.h. An unrecognised name is ignored rather than fatal,
     // matching every other /etc reader here: a typo on the GRUB line
     // should not be the thing that stops a machine booting.
-    if (cmdline_target(value, sizeof value) && target_valid(value)) {
+    if (multiboot_cmdline_value("target=", value, sizeof value)
+        && target_valid(value)) {
         k_strlcpy(g_target, value, sizeof g_target);
         g_overridden = 1;
     }

@@ -62,6 +62,13 @@ struct input_source {
     uint32_t caps;
     void (*poll)(void);      // may be NULL
 
+    // A poll is PERIODIC by default: a tickless idle wakes every
+    // INPUT_POLL_MS to run it, because a polled device has nothing else
+    // to wake the CPU. Set this when the poll is only a safety net
+    // behind an interrupt that is trusted -- an MSI, which cannot be the
+    // dead shared line a BIOS INTx can be -- and it runs on wakes alone.
+    uint8_t poll_on_wake;
+
     // The IRQ line this device is serviced on, or 0 when it is polled.
     // Recorded so "how does this device get serviced?" is answerable
     // from OUTSIDE the kernel -- `lsdev` prints it. It used to be a boot

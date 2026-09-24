@@ -422,6 +422,39 @@ static const struct setting usb_attach_delay_setting = {
     .apply = usb_attach_delay_apply,
 };
 
+// ---- kernel.timeslice_ms ----------------------------------------------
+//
+// How long a process runs before the scheduler rotates, when something
+// else is runnable -- Linux's sched base_slice, and like it a runtime
+// knob rather than a build option. The tick rate (`option hz`) only
+// bounds how precisely it is enforced on the periodic path.
+
+static void timeslice_get(char *out, uint32_t cap) {
+    k_snprintf(out, cap, "%u", scheduler_timeslice_ms());
+}
+
+static int timeslice_apply(const char *value) {
+    if (!value || !value[0]) return SETTING_INVALID;
+    unsigned ms = 0;
+    for (const char *c = value; *c; c++) {
+        if (*c < '0' || *c > '9') return SETTING_INVALID;
+        ms = ms * 10 + (unsigned)(*c - '0');
+        if (ms > SCHED_TIMESLICE_MAX_MS) return SETTING_INVALID;
+    }
+    return scheduler_set_timeslice_ms(ms) ? SETTING_SAVED : SETTING_INVALID;
+}
+
+static const struct setting timeslice_setting = {
+    .name = "timeslice_ms",
+    .label = "Scheduler time slice (ms)",
+    .type = SETTING_TYPE_STRING,
+    .file = CONFIG_PATH_RUNTIME,
+    .category = TUNABLE_CATEGORY,
+    .group = "Scheduler",
+    .get = timeslice_get,
+    .apply = timeslice_apply,
+};
+
 // ---- system.usb_recover -----------------------------------------------
 //
 // POLICY, not a diagnostic: whether a port that has exhausted every
@@ -555,6 +588,7 @@ void tunables_register(void) {
     setting_register(&usb_reset_setting);
     setting_register(&usb_replug_setting);
     setting_register(&usb_attach_delay_setting);
+    setting_register(&timeslice_setting);
     setting_register(&g_usb_hcreset_setting);
     setting_register(&g_usb_recover_setting);
     setting_register(&ata_nodma_setting);

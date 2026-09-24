@@ -25,10 +25,12 @@
 #define FADT_PM1B_EVT_BLK   60
 #define FADT_PM1A_CNT_BLK   64
 #define FADT_PM1B_CNT_BLK   68
+#define FADT_PM_TMR_BLK     76
 #define FADT_GPE0_BLK       80
 #define FADT_GPE1_BLK       84
 #define FADT_PM1_EVT_LEN    88
 #define FADT_PM1_CNT_LEN    89
+#define FADT_PM_TMR_LEN     91
 #define FADT_GPE0_BLK_LEN   92
 #define FADT_GPE1_BLK_LEN   93
 #define FADT_FLAGS         112
@@ -37,6 +39,7 @@
 #define FADT_X_DSDT        140
 #define FADT_X_PM1A_EVT    148
 #define FADT_X_PM1B_EVT    160
+#define FADT_X_PM_TMR_BLK  208
 #define FADT_X_GPE0_BLK    220
 #define FADT_X_GPE1_BLK    232
 #define FADT_X_PM1A_CNT    172
@@ -45,6 +48,7 @@
 #define FADT_SLEEP_STATUS  256
 #define FADT_DSDT           40
 
+#define FADT_FLAG_TMR_VAL_EXT   (1u << 8)
 #define FADT_FLAG_RESET_REG_SUP (1u << 10)
 #define FADT_FLAG_HW_REDUCED    (1u << 20)
 
@@ -254,6 +258,14 @@ void acpi_fadt_init(void) {
                     ? (uint32_t)g.address : fadt_u32(FADT_GPE1_BLK);
     s->gpe0_len = fadt_u8(FADT_GPE0_BLK_LEN);
     s->gpe1_len = fadt_u8(FADT_GPE1_BLK_LEN);
+    // The PM timer: a 3.579545 MHz counter the chipset runs whatever the
+    // CPU is doing. A length other than 4 means the block is absent.
+    fadt_gas(FADT_X_PM_TMR_BLK, &g);
+    if (fadt_u8(FADT_PM_TMR_LEN) == 4) {
+        s->pm_tmr = (g.space_id == ACPI_GAS_IO && g.address)
+                      ? (uint32_t)g.address : fadt_u32(FADT_PM_TMR_BLK);
+        s->pm_tmr_bits = (flags & FADT_FLAG_TMR_VAL_EXT) ? 32 : 24;
+    }
 
     if (s->pm1a_cnt && (inw((uint16_t)s->pm1a_cnt) & PM1_CNT_SCI_EN))
         s->flags |= ACPI_F_ENABLED;
@@ -264,8 +276,8 @@ void acpi_fadt_init(void) {
                 "gpe0=0x%x/%u gpe1=0x%x/%u\n",
                 s->pm1a_evt, s->pm1b_evt, s->pm1_evt_len,
                 s->gpe0_blk, s->gpe0_len, s->gpe1_blk, s->gpe1_len);
-    klog_printf("acpi: FADT pm1a=0x%x pm1b=0x%x smi=0x%x%s%s\n",
-                s->pm1a_cnt, s->pm1b_cnt, s->smi_cmd,
+    klog_printf("acpi: FADT pm1a=0x%x pm1b=0x%x smi=0x%x pm_tmr=0x%x/%u%s%s\n",
+                s->pm1a_cnt, s->pm1b_cnt, s->smi_cmd, s->pm_tmr, s->pm_tmr_bits,
                 (s->flags & ACPI_F_HW_REDUCED) ? " hardware-reduced" : "",
                 (s->flags & ACPI_F_ENABLED) ? " (ACPI mode already on)" : "");
     if (s->flags & ACPI_F_S5)

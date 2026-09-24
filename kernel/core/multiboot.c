@@ -1,5 +1,6 @@
 #include "multiboot.h"
 #include "vga.h"
+#include "string.h"
 #include <stdint.h>
 
 static uint64_t mb_info_addr = 0;
@@ -132,6 +133,24 @@ const char *multiboot_cmdline(void) {
         if (tag->type == 0) break;
         if (tag->type == 1) return (const char *)(tag + 1);
         ptr += (tag->size + 7) & ~7u; // tags are 8-byte aligned
+    }
+    return 0;
+}
+
+int multiboot_cmdline_value(const char *key, char *out, uint32_t out_size) {
+    const char *cmdline = multiboot_cmdline();
+    if (!cmdline || !key || !out || out_size == 0) return 0;
+    uint32_t klen = (uint32_t)k_strlen(key);
+
+    for (const char *p = cmdline; (p = k_strstr(p, key)) != 0; p += klen) {
+        if (p != cmdline && p[-1] != ' ') continue;
+        const char *v = p + klen;
+        uint32_t n = 0;
+        while (v[n] && v[n] != ' ') n++;
+        if (n == 0 || n >= out_size) return 0;  // refused, not truncated
+        k_memcpy(out, v, n);
+        out[n] = '\0';
+        return 1;
     }
     return 0;
 }

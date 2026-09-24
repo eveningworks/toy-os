@@ -81,6 +81,9 @@ struct net_device {
     // driver with an IRQ leaves this NULL and calls net_rx() from its
     // handler instead.
     void (*poll)(struct net_device *dev);
+    // How often poll() must run with no interrupt to prompt it -- a
+    // tickless idle wakes for it. 0: it only needs the wakes it gets.
+    uint32_t poll_ms;
 
     void *drv;                // driver private state
 

@@ -8132,3 +8132,91 @@ costs one event, not a backlog that evicts input.
 **The fs generation is still there**, for a watch the kernel refused
 (the WM falls back to it and logs once) and for the other pollers that
 never ran on the frame path.
+
+## The tick is a deadline among several, and a faster tick was not the answer
+
+The question was "raise the 100 Hz tick, or get rid of it". What 100 Hz
+actually limited was every timed wait: a sleep, a timed futex wait and a
+client's `WIN_EV_TIMER` all expired only when a tick happened to check
+them, so a 16 ms frame timer landed on 20 ms and a 1 ms sleep on ~10.
+
+**What real systems do.** Linux keeps a periodic tick at `CONFIG_HZ`
+(100-1000) for accounting, and since 2.6.21 puts precise timers on
+one-shot clock events (hrtimers), stopping the tick on an idle CPU
+(`NO_HZ_IDLE`, the default). Windows keeps a coarse 15.6 ms clock
+interrupt, lets a process ask for 1 ms (`timeBeginPeriod`), gives
+precise wakeups without raising it (high-resolution waitable timers),
+and skips ticks while idle. Both keep a coarse periodic tick and put
+precision on one-shot deadlines. Raising the rate alone is the answer
+Linux gave up: 2.6.0 shipped 1000 Hz and 2.6.13 went to 250 for the
+cost, before NO_HZ existed.
+
+**So toy-os follows that shape** (`kernel/clockevent.h`):
+
+- **One-shot.** With a LAPIC timer and a clocksource that runs without
+  the tick, the timer is armed for the earliest of a blocked process's
+  deadline, the running slice's end and the next periodic tick. Every
+  context switch re-arms it. Without either (`nomsi`, the PIT as the
+  clock), the tick stays periodic and everything still works at its
+  granularity -- `highres=off` reaches that path on any machine.
+- **Tickless idle.** In `scheduler_idle_halt()`, with nothing runnable,
+  the tick drops out of that minimum. Idle work due at a time asks for
+  its own wake; ONLY that helper stops the tick, so a wait loop nobody
+  converted keeps it and stays correct. `nohz=off` is the A/B.
+- **The slice is a deadline too** (`kernel.timeslice_ms`, 4 ms), not a
+  tick count, so the tick rate stops deciding how long a process runs.
+  At the old 100 Hz on the periodic path it is exactly the old
+  rotate-every-tick.
+- **The ACPI PM timer is a clocksource.** Plain QEMU TCG cannot expose
+  an invariant TSC, so without it the default test guest -- every tool
+  in `gui_regress.py` -- could never have run one-shot. It needs no
+  calibration, and its 24 bits wrap in 4.7 s, which bounds how long a
+  stopped tick may sleep (`clocksource_max_idle_ns()`).
+
+**A DEADLINE WAKE PREEMPTS AN EQUAL -- an amendment to "A wake preempts
+only from a better level".** The first measurement of the one-shot timer
+found a 1 ms sleep ending 7 ms late under two busy processes: kept to
+the microsecond, then left waiting for the busy one's slice. An expired
+deadline now preempts a process at the same level once it has run 1 ms
+(CFS's wakeup granularity). That entry's reason for "strictly better
+only" still holds for INTERRUPT wakes, which keep the rule: a deadline
+is one wake the process armed for itself, never "every interrupt".
+
+**`pit_ticks()` stays at 100 a second, and so does `SYS_TICKS`.** The
+tick rate is a build option (`option hz`), and Linux's `USER_HZ` is why
+ring 3 must not see it: `times()` still counts at 100 whatever the
+kernel runs at. Inside the kernel the same split saved rewriting ~70
+coarse timeouts in `pit_ticks()` units. Everything precise already read
+`clocksource_now_ns()`. And `pit_ticks()` is now DERIVED from a
+free-running clocksource, so a wait on it ends inside a syscall -- the
+trap "A SYSCALL HANDLER RUNS WITH INTERRUPTS OFF" describes survives
+only on the PIT clock.
+
+**Choosing the rate.** With deadlines one-shot and the slice its own
+deadline, HZ decides only how often a BUSY CPU is interrupted, and how
+precisely the periodic fallback checks anything. `tools/timer_bench.py`,
+2026-09-24, TCG, medians of two runs (KVM agreed on every conclusion):
+
+| build | idle irq/s | 1 ms sleep late by | ...under 2 busy | work, 1 busy process |
+|---|---|---|---|---|
+| before (100 Hz periodic) | 100 | 9000 us | 29000 us | 17140 |
+| 100 Hz one-shot | 26 | 62 us | 56 us | 33390 |
+| 250 Hz one-shot | 34 | 64 us | 55 us | 33207 |
+| 1000 Hz one-shot | 74 | 49 us | 46 us | 33082 |
+| 1000 Hz periodic | 999 | 1000 us | 1000 us | 28236 |
+
+Between 100 and 1000 Hz one-shot nothing moved beyond noise, so the
+default is **1000** -- it costs nothing here and makes the periodic
+fallback ten times finer. Two findings came with it:
+
+- **A lone busy process used to get about HALF the CPU.** The kernel
+  context is a round-robin participant, and the idle one spent its turn
+  halted until the next tick. An idle kernel with a process ready now
+  hands over at once (`clockevent_idle_halt()`). The periodic path still
+  cannot -- nothing interrupts the halt early -- which is in
+  `docs/bugs.md`.
+- **Under KVM without `+invtsc` idle host CPU rose (2.5% to ~4.5%)**,
+  and the periodic 100 Hz build shows the same, so it is the CLOCK: the
+  PM timer is an I/O port, and every read of it is a VM exit where the
+  PIT source was a memory counter. Real hardware reads the TSC. A
+  paravirtual clock (kvmclock) is the fix, on the roadmap.

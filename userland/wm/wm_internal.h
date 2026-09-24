@@ -402,7 +402,7 @@ int wm_launched_max(void);
 // timer (TWP's WIN_REQ_TIMER) has come due, which is what lets a client
 // animate or refresh on a schedule while BLOCKING in between instead of
 // polling.
-// The earliest armed client timer, in ticks, or 0 for none -- the frame
+// The earliest armed client timer, in sys_monotonic_ns(), or 0 for none -- the frame
 // loop's wait is clamped to it. See wm_client_next_timer_due().
 uint64_t wm_client_next_timer_due(void);
 

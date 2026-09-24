@@ -1878,22 +1878,26 @@ clocksource cannot be exercised under plain QEMU at all: TCG does not
 implement `invtsc` (it warns and clears the bit) and KVM withholds it
 even under `-cpu host`, so the only way to run that path is
 `python3 tools/vm.py --kvm --cpu host,+invtsc`. HPET works under plain
-TCG. Adding it would make sub-microsecond timekeeping testable in the
+TCG. (The ACPI PM timer now gives plain TCG a free-running clock at
+279 ns, which took the urgency out of this.) Adding it would make
+sub-microsecond timekeeping testable in the
 DEFAULT environment -- CI and `gui_regress.py` included, where KVM is
 not a given -- which is worth more than the middle rating suggests. It
 would also give the CPU percentages real resolution on any machine
 without an invariant TSC, where they currently round sub-tick work to
 0% (see the known-issues entry).
 
-**APIC + a clock_event_device, the other half.** Timekeeping (a counter
-you read) and timer EVENTS (deciding when to interrupt) are separate
-jobs, and only the first one has an interface today -- the tick is still
-a fixed 100 Hz PIT interrupt, so there is no tickless idle and no
-one-shot deadline. Linux calls the second half `clock_event_device`;
-Windows went dynamic-tick for the same reason. This is what would let
-the machine actually sleep between an animating client's frames rather
-than being interrupted a hundred times a second regardless. Also a
-prerequisite for SMP.
+**APIC + a clock_event_device, the other half -- DONE, and then one-shot
+and tickless (2026-09-24).** The tick is a `clockevent`, on the LAPIC
+timer where there is one; with a free-running clocksource (TSC or the
+ACPI PM timer, which plain TCG has) it is ONE-SHOT, armed for the next
+deadline, and it stops in the idle helper. Measured on a quiet TCG
+desktop at `option hz = 1000`: the tick stopped ~95% of the time, ~70
+timer interrupts a second, sleeps ending within ~60 us of their
+deadline. `docs/decisions/kernel.md` has why it is not simply a faster
+tick. What is left is listed under this milestone: TSC-deadline mode, a
+one-shot PIT for machines without a LAPIC, and nanosecond waits in the
+ABI (every wait is still asked for in whole milliseconds).
 
 ### SMP
 **`docs/smp-design.md` is the full design**, staged so each step ships on

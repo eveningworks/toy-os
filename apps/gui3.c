@@ -60,12 +60,12 @@ void gui3_main(void) {
     // the kernel first, so the WM's departure costs a call rather than
     // the console.
     //
-    // hlt rather than a spin: the timer is what schedules the desktop we
-    // are waiting for.
+    // A halt rather than a spin: the desktop we are waiting for runs
+    // when this context idles.
     int code = -1;
     while (scheduler_poll(pid, &code) == SCHED_POLL_RUNNING) {
         scheduler_idle();
-        __asm__ volatile ("hlt");
+        scheduler_idle_halt();
     }
 
     // The console is restored by the kernel when the compositor role is

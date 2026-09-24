@@ -659,6 +659,17 @@ struct query_clock {
     uint64_t last_step;
     uint64_t steps;
     char     source[16];  // the clocksource carrying it: "tsc", "pit"
+    // THE TICK (kernel/clockevent.h). `tick_mode` is 0 periodic, 1
+    // one-shot with the tick kept in idle, 2 one-shot and tickless idle.
+    // The counters are since boot: every timer interrupt, the periodic
+    // ticks among them, how often the idle loop stopped the tick, and
+    // for how long in total.
+    uint64_t tick_hz;
+    uint64_t tick_mode;
+    uint64_t tick_events;
+    uint64_t tick_ticks;
+    uint64_t tick_idle_stops;
+    uint64_t tick_stopped_ns;
 };
 
 #define QUERY_KLOG_DATA 232

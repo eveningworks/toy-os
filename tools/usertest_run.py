@@ -167,6 +167,10 @@ TESTS = [
     # parent in waitpid, neither of which the legacy `run` loader has a
     # scheduler slot to do.
     ("futex_test", None, None, None),
+    # SYS_SLEEP returns, is never short, and -- in one-shot mode -- ends
+    # on its deadline rather than on the next tick. SPAWNED: a sleep
+    # parks, and the legacy `run` loader has no slot to park in.
+    ("sleep_test", None, None, None),
     # The message channel two ring-3 processes talk over, which is shm
     # plus a futex plus a wakeword and no kernel support of its own.
     # SPAWNED (exit code None) because the server half PARKS -- and a
@@ -427,9 +431,6 @@ EXCLUDED = [
     ("orphan_test",      "abandons children on purpose and exits at once; the "
                           "assertion is whether INIT reaps them, which is the process "
                           "table before and after -- tools/init_test.py"),
-    ("sleep_test",       "SYS_SLEEP refuses a caller with no scheduler slot, and `run` "
-                          "is the legacy loader, which has none. Driven by "
-                          "tools/init_test.py through `spawn` instead"),
     ("pipefull_test",    "the writer must BLOCK on a full pipe, and the legacy "
                           "`run` loader has no scheduler slot to park in -- so the "
                           "write reports 0 there and the test fails against a "
@@ -466,6 +467,9 @@ EXCLUDED = [
                           "for it, and the legacy `run` loader has neither a pid to "
                           "spawn from nor a waitpid that means anything. "
                           "kernel/proc/strace_test.c spawns it properly"),
+    ("timer_bench",      "a MEASUREMENT with no verdict -- it prints numbers for "
+                          "tools/timer_bench.py to compare between builds, and "
+                          "passes or fails nothing"),
     ("cputime_test",     "must be SCHEDULER-spawned to have a procs[] slot at all; "
                           "under `run` (the legacy process_run_ring3 path) it has none, "
                           "so it cannot find itself and nothing is billed to it either. "

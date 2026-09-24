@@ -179,7 +179,7 @@ int shell_exec_name(const char *name, const char *args, int report) {
         int code = -1;
         while (scheduler_poll(pid, &code) == SCHED_POLL_RUNNING) {
             scheduler_idle();
-            __asm__ volatile ("hlt");
+            scheduler_idle_halt();
         }
         exit_code = code;
     }

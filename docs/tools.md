@@ -700,6 +700,14 @@ manual steps to be worth automating:
   `boot_smoke_test.py` shuts down the same way, over a **unix** QMP
   socket -- no `port_guard` slot, so it cannot clash with another guest.
   See `docs/decisions.md`.
+- **`vm.py --serial-log PATH`** -- everything the guest writes to its
+  serial port, from the first byte, while the socket still serves the
+  debug console. **A `start` that fails says WHICH failure now**: QEMU
+  EXITED (with `-no-reboot`, the guest reset -- a crash) or still
+  running (a hang). Both used to print "never reached the debug
+  console", and the serial output of either went nowhere; this is what
+  found the boot livelock in `clocksource_register()` that only a dozen
+  guests booting at once could provoke.
 - **`vm.py --machine <type>`** -- the QEMU CHIPSET, default i440fx
   because that is what every existing test was written against.
   `--machine q35` is the only way to reach an ACPI 2.0-era machine here:
@@ -5617,3 +5625,34 @@ are tight enough to separate only because they were.
 
 **Do not run it beside anything else.** A second guest or a build
 competing for cores lands directly in the number.
+
+## `tools/timer_bench.py` -- what a timer configuration costs and buys
+
+Boots one build on a copy of its disk and reports three things: IDLE
+(timer interrupts and periodic ticks a second over a quiet desktop, the
+share of time the tick was stopped, and the QEMU process's host CPU),
+LATENCY (`/tests/timer_bench`'s sleep overshoot at 1/3/7/16 ms, alone
+and against two busy processes) and WORK (units one busy process
+completes in 2 s, and two). It is what `option hz`'s default was chosen
+on.
+
+    python3 tools/timer_bench.py                         # this checkout's build
+    python3 tools/timer_bench.py --kvm --runs 3 --label hz250 --json out.jsonl
+
+To compare rates, build each one and point the tool at its image:
+`make iso HZ=250`, copy `disk.img` somewhere, repeat, then run the tool
+once per copy with `--disk`. `KCMDLINE="highres=off"` measures the
+periodic path of the same build.
+
+**THE IDLE COUNTERS ARE THE KERNEL'S OWN** (`config get clock.tick_*`,
+QUERY_CLOCK), so a build from before them reports host CPU only. **SAY
+WHICH ACCELERATOR** -- TCG and KVM disagree on everything here, and a
+KVM guest without APICv pays VM exits per timer interrupt that TCG does
+not model. WORK moves a few percent between runs of ONE build; believe
+only a difference bigger than that, with `--runs`. Named by no runner:
+it produces a comparison, not a verdict.
+
+`tools/gen_kconfig.sh` writes the other half -- `build/gen/kconfig.h`
+from drivers.conf's `option hz/tick/highres`, at Makefile parse time and
+only when a value changed, so the `.d` files rebuild exactly what
+includes it.

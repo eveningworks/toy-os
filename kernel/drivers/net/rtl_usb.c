@@ -558,6 +558,7 @@ int usb_r8153_bind(struct usb_device_info *info, const uint8_t *cfg,
     d->dev.mtu = NET_MTU;
     d->dev.transmit = rtl_transmit;
     d->dev.poll = rtl_poll;        // link state only; receive is pushed
+    d->dev.poll_ms = 1000;         // rtl_poll()'s own cadence
     d->dev.drv = d;
 
     net_location_usb(&d->dev, info->root_port, info->port);
