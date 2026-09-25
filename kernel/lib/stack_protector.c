@@ -25,6 +25,7 @@
 #include "klog.h"
 #include "kfmt.h"     // klog_printf
 #include "krandom.h"
+#include "panic.h"
 
 uintptr_t __stack_chk_guard = 0xDEC0DE99AA55C3A5ULL;
 
@@ -85,5 +86,5 @@ void __stack_chk_fail(void) {
     // Same unconditional halt idt.c's non-recoverable fault path ends
     // on -- a stack-layout bug this deep is always fatal, there's no
     // "recoverable" case the way a ring-3 process fault has one.
-    for (;;) __asm__ volatile ("cli; hlt");
+    panic_finish();
 }

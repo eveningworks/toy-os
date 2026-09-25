@@ -28,7 +28,6 @@ buildable now. Something that MISBEHAVES is not here -- that is
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
 - [ ] Restore trust in the GUI suite: harness faults first, then the deterministic reds, intermittents kept with a rate  *(Kernel test harness)*
-- [ ] A panic RAM store, pstore-shaped, AND a panic that warm-resets after a countdown -- a power cycle loses RAM  *(Crash reporting & postmortem debugging)*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
 
@@ -1099,8 +1098,9 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [x] ~~A real kernel backtrace on panic -- walk the frame pointers, not just print RIP~~ DONE 2026-09-12 -- a stack SCAN instead
 - [x] ~~Resolve those addresses to function names: the build already emits DWARF (`-g`)~~ DONE 2026-09-12 -- `tools/panic_resolve.py`
 - [x] ~~A panic screen worth reading: registers, backtrace, the faulting address, what the kernel was doing~~ DONE 2026-09-12
-- [ ] **NEXT** A panic RAM store, pstore-shaped, AND a panic that warm-resets after a countdown -- a power cycle loses RAM
-- [ ] `crashlog --panics`, once the RAM store exists (it lists ring-3 reports today)
+- [x] ~~A panic RAM store, and a warm reset after a countdown~~ DONE 2026-09-25 -- logd files it in the dead boot's log
+- [ ] The panic store on real hardware: the ASUS resets HARD (0xCF9 = 6) and kept nothing, 1 panic in 1 -- try a warm reset
+- [ ] `crashlog --panics` -- a panic is in the dead boot's log (`log -p N`); crashlog lists ring-3 reports only
 - [x] ~~Core dumps for a faulting ring-3 process~~ DONE 2026-09-02 -- a text report plus the raw stack in `/var/crash`
 - [x] ~~A host-side script to inspect a core dump against the ELF's DWARF~~ DONE 2026-09-02 -- `panic_resolve.py --crash`
 - [x] ~~Distinguish "the kernel faulted" from "a process faulted and the kernel tore it down correctly"~~ DONE 2026-09-12

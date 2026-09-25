@@ -861,6 +861,28 @@ handlers did NOT gate any of this.
 
 ### Crash reporting & postmortem debugging
 
+**BUILT 2026-09-25**, as planned below except where the record lands:
+logd appends it to the DEAD boot's log rather than `/var/crash`, which
+the layout reserves for ring-3 reports (`docs/decisions/kernel.md`, "A
+panic keeps its log in RAM at a fixed address, and logd files it").
+`tools/panic_store_test.py` proves it in QEMU with a cold-restart
+positive control.
+
+**ON THE ASUS IT DID NOT SURVIVE, 1 panic in 1 (2026-09-25).** The panic,
+the countdown and the restart all worked -- the maintainer watched it
+count 10 to 0 -- and the next boot said `nothing recovered`. The
+machine's FADT asks for `0x6` to port `0xCF9`, a HARD reset that resets
+the memory controller, and Broadwell scrambles DRAM with a key a hard
+reset can change. Three readings, each leaving a different trace, and the
+probe now reports which (zeroes / other bytes / a damaged record with its
+magic intact) -- built, NOT yet flashed. Next, one mechanism per flash:
+the diagnostic alone; then a WARM reset from the panic path (`0xCF9 = 4`,
+or the 8042 pulse) with the BIOS warm-boot flag `0x1234` at physical
+`0x472`, which is what Linux's `reboot=warm` writes. To panic the laptop
+on purpose its `grub.cfg` needs `faultinject` -- `/boot` is read-only, so
+remount it (`umount /boot`, `mount ahci0p2 /boot`), `cp` from `/tmp`, and
+restore the original afterwards.
+
 **The panic store, planned 2026-09-02.** pstore's ramoops shape: a few
 frames at a fixed physical address, left out of the allocator, holding
 a signature, a checksum, the panic text and the tail of the kernel

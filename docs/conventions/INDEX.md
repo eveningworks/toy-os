@@ -76,6 +76,7 @@ whenever a headline here tells you something you did not already know.
 - **VIRTIO INTERRUPTS ARE OPT-IN, a forgotten ISR read hangs the
   machine, and ENABLING IS THE LAST STEP**
 - **USING A SUBSYSTEM BEFORE ITS init() IS A PANIC, not a soft failure**
+- **A KERNEL PANIC ENDS IN `panic_finish()`, NEVER IN ITS OWN `cli; hlt`**
 - **A RING-3 CRASH WRITES A REPORT TO `/var/crash`, AND A KERNEL PANIC
   DOES NOT**
 - **A panic NAMES THE FUNCTION**

@@ -37,6 +37,9 @@
   already pruned are DIFFERENT answers -- "no boot N back" and "boot N
   is no longer retained" -- because they send you looking in different
   places.
+  **A boot that panicked ends with a `THIS BOOT PANICKED` line and the
+  kernel's last lines after it** -- recovered from RAM on the next boot
+  and appended by logd, since logd itself died with the machine.
 - `--list` -- print the retained boot logs: number, size, and when each
   one started. What is actually on disk, which is not the same as
   `storage.log_keep` -- a machine that has booted three times has three.

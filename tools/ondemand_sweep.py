@@ -297,6 +297,10 @@ TOOLS = [
     # boots cannot be checked inside one.
     ("logrotate",   "logrotate_test.py",       "one log file per boot, and log -p N",  True,  None,                 False),
 
+    # PANICS AND REBOOTS ITS GUEST, on purpose: a warm reset is the only
+    # thing that carries the RAM store across, so it cannot be a KTEST.
+    ("panic_store", "panic_store_test.py",     "a kernel panic survives the warm reset, into the dead boot's log", True, None, False),
+
     # REBOOTS ITS GUEST FOUR TIMES. The property is what survives a
     # reboot, so there is no way to check it inside one.
     ("shutdownsync","shutdown_sync_test.py",   "a write just before reboot survives it", True, None,                False),

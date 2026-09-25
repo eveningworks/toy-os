@@ -6,6 +6,7 @@
 #include "fs.h"
 #include "acpi.h"
 #include "usb.h"      // usb_shutdown() -- quiesce the links before the reset
+#include "panic.h"    // power_reset_hardware()
 
 // COMMIT, THEN FLUSH -- and it must be fs_sync(), not atac_flush().
 // With a write-back cache under the disk (ata_cache.h) a write that
@@ -51,7 +52,10 @@ void system_reboot(void) {
     // persistent log cannot. Do not go looking for it in
     // /var/log/boot/NNNN.log and conclude the call did not run.
     usb_shutdown();
+    power_reset_hardware();
+}
 
+void power_reset_hardware(void) {
     // ACPI first, the 8042 pulse second. That order rather than the
     // other way round because the reset register is what the firmware
     // asked for, and a machine with no PS/2 controller at all still has
@@ -59,14 +63,21 @@ void system_reboot(void) {
     // today, so it stays as the fallback rather than being replaced.
     acpi_reset();
 
-    uint8_t status;
-    do {
-        status = inb(0x64);
+    // BOUNDED: with no controller at all the port reads 0xFF, whose
+    // "input buffer full" bit never clears.
+    for (int i = 0; i < 100000; i++) {
+        uint8_t status = inb(0x64);
         if (status & 1) inb(0x60);
-    } while (status & 2);
+        if (!(status & 2)) break;
+    }
     outb(0x64, 0xFE);
+    for (volatile int i = 0; i < 10000000; i++) { }
 
-    for (;;) __asm__ volatile ("hlt"); // in case the reset didn't take
+    // A triple fault resets every x86 there is: no IDT, then a trap.
+    static const struct { uint16_t limit; uint64_t base; } __attribute__((packed))
+        no_idt = { 0, 0 };
+    __asm__ volatile ("cli; lidt %0; int3" :: "m"(no_idt));
+    for (;;) __asm__ volatile ("hlt");
 }
 
 void system_poweroff(void) {

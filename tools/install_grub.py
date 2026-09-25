@@ -59,6 +59,7 @@ Usage:
 
 import argparse
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -539,6 +540,31 @@ def install(disk, kernel, grub_cfg, verbose=True, optional=False):
         print(f"install_grub: {disk} -- core.img in {where} at LBA {bios[1]} ({nsec} sectors), "
               f"/boot on partition {esp[0]} ({esp[2] // 2048} MiB), prefix {prefix}"
               + (" [formatted]" if fresh else ""))
+
+
+def add_boot_word(img, word):
+    """Append `word` to every multiboot2 line in the image's grub.cfg.
+
+    GRUB's command line is baked into /boot/grub/grub.cfg at `make iso`
+    time, so a test that needs a boot word rewrites that file inside its
+    image COPY -- the alternative, `make iso KCMDLINE=...`, rebuilds the
+    media every other tool shares. Returns (ok, why)."""
+    _bios, esp = parts_of(img)
+    if not esp:
+        return False, "the image has no FAT32 /boot partition"
+    cfg = mtype(img, esp, "::/boot/grub/grub.cfg")
+    if not cfg or "multiboot2" not in cfg:
+        return False, "could not read /boot/grub/grub.cfg out of the image"
+    patched = re.sub(r"^(\s*multiboot2\s+\S+.*)$", r"\1 " + word, cfg,
+                     flags=re.MULTILINE)
+    tmp = os.path.abspath(f"grub-{word}.cfg")
+    with open(tmp, "w") as f:
+        f.write(patched)
+    try:
+        mcopy_into(img, esp, [tmp], "::/boot/grub/grub.cfg")
+    finally:
+        os.unlink(tmp)
+    return True, ""
 
 
 def _is_gpt(disk):

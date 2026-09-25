@@ -36,6 +36,8 @@
 #include "sound.h"        // hda_diag_tone() -- kernel.hda_tone
 #include "usb.h"          // usb_diag_reset_port() -- kernel.usb_reset
 #include "intel_display.h" // intel_display_pipe_cycle()/_link_retrain() -- kernel.intel_cycle
+#include "crashtest.h"     // crash_trigger() -- kernel.crash
+#include "panic_store.h"   // panic_store_clear() -- kernel.panic_record
 
 #define TUNABLE_CATEGORY "Kernel"
 
@@ -581,7 +583,85 @@ static const struct setting intel_cycle_setting = {
     .unavailable = intel_cycle_unavailable,
 };
 
+// ---- kernel.crash ----------------------------------------------------
+//
+// Write-only: panics the machine the named way -- Linux's sysrq `c`,
+// without the GUI the Crash Test app needs. The kinds are crashtest.c's,
+// so both front ends list the same set, and the same `faultinject` boot
+// word arms both. Reads back as "off".
+
+static void crash_get(char *out, uint32_t cap) { k_strlcpy(out, "off", cap); }
+
+static int crash_choice(int index, char *out, uint32_t cap) {
+    if (index == 0) { k_strlcpy(out, "off", cap); return 1; }
+    const struct crash_kind *k = crash_kind_at(index - 1);
+    if (!k) return 0;
+    k_strlcpy(out, k->name, cap);
+    return 1;
+}
+
+static const char *crash_unavailable(void) {
+    if (!crash_armed()) return "Boot with faultinject on the GRUB line to arm deliberate kernel faults.";
+    return 0;
+}
+
+static int crash_apply(const char *value) {
+    if (k_strcmp(value, "off") == 0) return SETTING_SAVED;
+    for (int i = 0; i < crash_kind_count(); i++)
+        if (k_strcmp(value, crash_kind_at(i)->name) == 0)
+            return crash_trigger(i) ? SETTING_SAVED : SETTING_INVALID;
+    return SETTING_INVALID;
+}
+
+static const struct setting crash_setting = {
+    .name = "crash",
+    .label = "Panic the kernel now (diagnostic)",
+    .type = SETTING_TYPE_ENUM,
+    .file = CONFIG_PATH_RUNTIME,
+    .category = TUNABLE_CATEGORY,
+    .group = "Diagnostics",
+    .choice = crash_choice,
+    .get = crash_get,
+    .apply = crash_apply,
+    .unavailable = crash_unavailable,
+};
+
+// ---- kernel.panic_record ---------------------------------------------
+//
+// Write-only `clear`: the previous boot's panic record has been filed
+// (QUERY_PANIC), so stop reporting it. logd's call, after it appends the
+// record to the dead boot's log -- what deleting a file under
+// /sys/fs/pstore does on Linux.
+
+static void panic_record_get(char *out, uint32_t cap) { k_strlcpy(out, "off", cap); }
+
+static int panic_record_choice(int index, char *out, uint32_t cap) {
+    if (index == 0) { k_strlcpy(out, "off", cap); return 1; }
+    if (index == 1) { k_strlcpy(out, "clear", cap); return 1; }
+    return 0;
+}
+
+static int panic_record_apply(const char *value) {
+    if (k_strcmp(value, "off") == 0) return SETTING_SAVED;
+    if (k_strcmp(value, "clear") == 0) { panic_store_clear(); return SETTING_SAVED; }
+    return SETTING_INVALID;
+}
+
+static const struct setting panic_record_setting = {
+    .name = "panic_record",
+    .label = "Previous boot's panic record",
+    .type = SETTING_TYPE_ENUM,
+    .file = CONFIG_PATH_RUNTIME,
+    .category = TUNABLE_CATEGORY,
+    .group = "Diagnostics",
+    .choice = panic_record_choice,
+    .get = panic_record_get,
+    .apply = panic_record_apply,
+};
+
 void tunables_register(void) {
+    setting_register(&crash_setting);
+    setting_register(&panic_record_setting);
     setting_register(&intel_cycle_setting);
     setting_register(&heap_debug_setting);
     setting_register(&hda_tone_setting);

@@ -53,7 +53,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 from qmp_test import guarded_boot_args  # noqa: E402
 from multidisk_test import Result, connect, kill  # noqa: E402
-from ahci_test import add_boot_word  # noqa: E402
+from install_grub import add_boot_word  # noqa: E402
 
 DISK_MB = 1024
 FAT_MB = 300      # >= 65525 clusters at 4 KiB, so other systems read it as FAT32

@@ -1,4 +1,5 @@
 #include "idt.h"
+#include "panic.h"
 #include "vga.h"
 #include "klog.h"
 #include "kfmt.h"
@@ -615,6 +616,10 @@ static void isr_dispatch_body(uint64_t *regs) {
                     regs[14], regs[13], regs[12], regs[11]);
         vga_printf("RSI=%lx RDI=%lx RBP=%lx RSP=%lx\n",
                     regs[10], regs[9], regs[8], regs[20]);
+        klog_printf(KLOG_CRIT "  RAX=%lx RBX=%lx RCX=%lx RDX=%lx\n",
+                    regs[14], regs[13], regs[12], regs[11]);
+        klog_printf(KLOG_CRIT "  RSI=%lx RDI=%lx RBP=%lx RSP=%lx\n",
+                    regs[10], regs[9], regs[8], regs[20]);
 
         // Build and uptime, so a photograph identifies itself: matching a
         // panic against the wrong build is a whole wasted round trip.
@@ -701,7 +706,7 @@ static void isr_dispatch_body(uint64_t *regs) {
             }
         }
 
-        for (;;) __asm__ volatile ("cli; hlt");
+        panic_finish();
     }
 
     // A WOKEN PROCESS THAT OUTRANKS THIS ONE RUNS NOW, before the

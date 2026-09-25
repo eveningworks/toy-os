@@ -43,6 +43,7 @@
 // the boot tables where they are is what removes the "reload CR3 with
 // relocated page-table addresses" step the roadmap anticipated.
 #include "reloc.h"
+#include "panic_store.h"
 #include "klog.h"
 #include "multiboot.h"
 #include "random_hw.h"
@@ -227,6 +228,9 @@ static int slot_usable(uint64_t k, uint64_t img_start, uint64_t img_size,
     if (!range_fits_in_ram(start, end)) return 0;
     if (info_end > info_start && overlaps(start, end, info_start, info_end)) return 0;
     if (hits_a_module(start, end)) return 0;
+    // The panic store is read back on the NEXT boot, so a copy of the
+    // kernel over it would destroy the record this boot came up to report.
+    if (overlaps(start, end, PANIC_STORE_BASE, PANIC_STORE_BASE + PANIC_STORE_SIZE)) return 0;
     if (kernel_reloc_check((int64_t)delta) != 0) return 0; // would break a 32-bit reference
     return 1;
 }

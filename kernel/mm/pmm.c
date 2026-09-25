@@ -21,6 +21,7 @@
 #include "klog.h"
 #include "kfmt.h"
 #include "reloc.h"
+#include "panic_store.h"
 #include "uaddr.h"
 #include "paging.h"
 #include "string.h"
@@ -133,6 +134,11 @@ static int hits_reserved(uint64_t start, uint64_t end, uint64_t *bump) {
             return 1;
         }
     }
+    if (panic_store_usable() &&
+        overlaps(start, end, PANIC_STORE_BASE, PANIC_STORE_BASE + PANIC_STORE_SIZE)) {
+        *bump = align_up(PANIC_STORE_BASE + PANIC_STORE_SIZE);
+        return 1;
+    }
     return 0;
 }
 
@@ -211,6 +217,10 @@ static void reserve_range(uint64_t start, uint64_t end) {
 }
 
 void pmm_init(void) {
+    // FIRST: the previous boot's panic record is only safe until
+    // something is allowed to allocate, and the books below must be
+    // placed around it.
+    panic_store_probe();
     firmware_bytes = 0;
     highest_usable = 0;
     multiboot_mmap_foreach(size_cb);
@@ -262,6 +272,8 @@ void pmm_init(void) {
     if (multiboot_get_info_range(&info_start, &info_end)) reserve_range(info_start, info_end);
     // And the books themselves.
     reserve_range(bitmap_home, bitmap_home + bitmap_need);
+    if (panic_store_usable())
+        reserve_range(PANIC_STORE_BASE, PANIC_STORE_BASE + PANIC_STORE_SIZE);
 
     for (uint64_t f = 0; f < max_frames; f++) {
         if (!bit_is_used(f)) zone_free[zone_of(f)]++;

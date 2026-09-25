@@ -685,7 +685,7 @@ runners themselves; `--list` on either runner is the live answer.
 `keyboard_paths_test.py`, `ktest_run.py`, `latency_under_io.py`, `fs_isolation.py`,
 `libc_diff.py`, `live_boot_test.py`, `logrotate_test.py`, `ls_test.py`, `mkpart_test.py`,
 `module_test.py`, `msi_test.py`, `multidisk_test.py`, `net_test.py`,
-`netheal_test.py`, `ntp_test.py`, `nvme_test.py`, `partition_test.py`, `ping_rtt.py`, `pixel_probe.py`,
+`netheal_test.py`, `ntp_test.py`, `nvme_test.py`, `panic_store_test.py`, `partition_test.py`, `ping_rtt.py`, `pixel_probe.py`,
 `poweroff_test.py`, `predates.py`, `preflight.sh`, `qemu_matrix.py`,
 `remote.py`, `remote_test.py`, `sector4k_test.py`, `serial_backpressure_test.py`,
 `settings_harness_hostcheck.py`, `shutdown_sync_test.py`,

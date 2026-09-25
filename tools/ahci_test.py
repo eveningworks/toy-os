@@ -141,26 +141,6 @@ def esp_of(img):
     return esp
 
 
-def add_boot_word(img, word):
-    """Append `word` to every multiboot2 line in the image's grub.cfg."""
-    esp = esp_of(img)
-    if not esp:
-        return False, "the image has no FAT32 /boot partition"
-    cfg = install_grub.mtype(img, esp, "::/boot/grub/grub.cfg")
-    if not cfg or "multiboot2" not in cfg:
-        return False, "could not read /boot/grub/grub.cfg out of the image"
-    patched = re.sub(r"^(\s*multiboot2\s+\S+.*)$", r"\1 " + word, cfg,
-                     flags=re.MULTILINE)
-    tmp = os.path.abspath(f"grub-{word}.cfg")
-    with open(tmp, "w") as f:
-        f.write(patched)
-    try:
-        install_grub.mcopy_into(img, esp, [tmp], "::/boot/grub/grub.cfg")
-    finally:
-        os.unlink(tmp)
-    return True, ""
-
-
 def host_grub_cfg(img):
     esp = esp_of(img)
     if not esp:
@@ -329,7 +309,7 @@ def main():
 
     # ---- boot 3: `noahci` steps down ---------------------------------
     print("ahci_test: boot 3 -- `noahci` hands the disk back to legacy IDE")
-    ok, why = add_boot_word(args.work, "noahci")
+    ok, why = install_grub.add_boot_word(args.work, "noahci")
     if not ok:
         skip("`noahci` steps the precedence down one rung", why)
     else:

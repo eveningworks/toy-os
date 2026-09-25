@@ -347,6 +347,94 @@ static int drain_applog(void) {
     return 1;
 }
 
+// THE PREVIOUS BOOT'S PANIC GOES AT THE END OF THAT BOOT'S FILE -- the
+// tail it lost, since this daemon died with the machine and the kernel's
+// last lines never reached the disk. The kernel kept them in its RAM
+// store (QUERY_PANIC; kernel/panic_store.h). Only what follows the
+// file's last kernel line is appended, so no line is written twice; the
+// record is then cleared, which is systemd-pstore's job on Linux.
+static void write_kernel_line(int fd, const char *line, unsigned len) {
+    char pre[TAG_W + 4];
+    int n = snprintf(pre, sizeof pre, "[%-*s] ", TAG_W, "kernel");
+    if (n > 0) write(fd, pre, (unsigned)n);
+    write(fd, line, len);
+    write(fd, "\n", 1);
+}
+
+// Where in `text` the file stops: just past the file's last kernel line,
+// or 0 when that line is not in the record (it all happened after).
+static unsigned already_filed(const char *path, const char *text) {
+    static char tail[1024];   // static: main()'s frame budget
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    off_t end = lseek(fd, 0, SEEK_END);
+    off_t at = end > (off_t)sizeof tail - 1 ? end - (off_t)(sizeof tail - 1) : 0;
+    lseek(fd, at, SEEK_SET);
+    int n = end > 0 ? read(fd, tail, sizeof tail - 1) : 0;
+    close(fd);
+    if (n <= 0) return 0;
+    tail[n] = 0;
+    char key[TAG_W + 4];
+    snprintf(key, sizeof key, "[%-*s] ", TAG_W, "kernel");
+    char *last = 0;
+    for (char *p = strstr(tail, key); p; p = strstr(p + 1, key)) last = p;
+    if (!last) return 0;
+    char *line = last + strlen(key);
+    char *nl = strchr(line, '\n');
+    if (!nl) return 0;
+    nl[1] = 0;                        // the line, with its newline
+    const char *hit = 0;
+    for (const char *p = strstr(text, line); p; p = strstr(p + 1, line)) hit = p;
+    return hit ? (unsigned)(hit - text) + (unsigned)strlen(line) : 0;
+}
+
+static void file_panic(const char *path, unsigned long long boot) {
+    struct query_panic q;
+    if (sys_query_record(QUERY_PANIC, 0, &q, sizeof q) <= 0) return;
+    char *text = malloc(q.total + 1);
+    if (!text) return;
+    unsigned got = 0;
+    for (unsigned i = 0; got < q.total; i++) {
+        if (sys_query_record(QUERY_PANIC, i, &q, sizeof q) <= 0 || !q.len) break;
+        memcpy(text + got, q.data, q.len);
+        got += q.len;
+    }
+    text[got] = 0;
+
+    // Two opens: an fd here is a reader or a writer, never both.
+    unsigned from = already_filed(path, text);
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND);
+    if (fd < 0) { free(text); return; }
+    char line[160];
+    int n = snprintf(line, sizeof line,
+                     "logd: THIS BOOT PANICKED -- the rest was recovered from the kernel's "
+                     "RAM store on the next boot (build %s, up %llus)",
+                     q.build, (unsigned long long)(q.uptime_ns / 1000000000ull));
+    if (n > 0) {
+        char pre[TAG_W + 4];
+        int m = snprintf(pre, sizeof pre, "[%-*s] ", TAG_W, "logd");
+        if (m > 0) write(fd, pre, (unsigned)m);
+        write(fd, line, (unsigned)n);
+        write(fd, "\n", 1);
+    }
+    const char *p = text + from;
+    while (*p) {
+        const char *nl = strchr(p, '\n');
+        unsigned len = nl ? (unsigned)(nl - p) : (unsigned)strlen(p);
+        write_kernel_line(fd, p, len);
+        p += len + (nl ? 1 : 0);
+    }
+    fsync(fd);
+    close(fd);
+    free(text);
+
+    usetting_set("kernel.panic_record", "clear");
+    n = snprintf(line, sizeof line,
+                 "logd: boot %llu PANICKED -- its last kernel lines are at the end of %s",
+                 boot, path);
+    if (n > 0) emit("logd", line, (unsigned)n);
+}
+
 int main(void) {
     if (!cap_bytes()) {
         // 0 means the maintainer asked for no logging. Exiting cleanly
@@ -395,6 +483,10 @@ int main(void) {
     g_fd = open(LOG_PATH, O_WRONLY | O_CREAT | O_TRUNC);
     if (g_fd < 0) { sys_eprint("logd: cannot open " LOG_PATH "\n"); return 1; }
     write_header();
+    if (last) {
+        boot_path(path, sizeof path, last);   // the prune loop reused it
+        file_panic(path, last);
+    }
     // THE HEADER GOES DOWN AT ONCE. A boot that dies before the first
     // periodic sync should still be identifiable rather than filed as
     // "(no header)", which is what both lost boots looked like.

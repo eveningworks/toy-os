@@ -847,6 +847,17 @@ include there takes the function away from ring 3 silently.
 good documentation, and the silent failure was the defect. See
 `docs/decisions.md` for why not initcall levels.
 
+## A KERNEL PANIC ENDS IN `panic_finish()`, NEVER IN ITS OWN `cli; hlt`
+
+`kernel/include/kernel/panic.h`. Report first -- to the log, because the
+log is what gets kept -- then call `panic_finish()`, which copies the
+log ring into the RAM store, counts down `panic=` seconds and resets. A
+new panic site that halts by itself keeps the old behaviour: the machine
+sits halted, gets power-cycled, and the record is lost. Anything logged
+AFTER the call is not in the record. The three sites today are
+`idt.c`'s fatal exception path, `__stack_chk_fail()` and
+`boot_require()`.
+
 ## EVERY KEY REPORTS SOMETHING, AND THE KEYPAD REPORTS CHARACTERS.
 
 The `KEY_*` set grew one code per caller, which left Insert, the Menu

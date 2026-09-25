@@ -67,6 +67,15 @@ and `native` each run one mechanism of the Intel display's modeset (see
 `docs/conventions/kernel.md`'s EDID entry) and log every readback;
 `off` does nothing, and the value always reads back as `off`.
 
+`kernel.crash` is the destructive one: `config set kernel.crash gp-fault`
+panics the machine the named way -- Linux's sysrq `c` -- with the kinds
+the Crash Test app lists (`kernel/core/crashtest.c`), and is refused,
+with the reason, unless `faultinject` is on the GRUB line.
+`kernel.panic_record=clear` acknowledges the previous boot's panic record
+(`QUERY_PANIC`, `kernel/panic_store.h`); logd sets it once it has
+appended the record to the dead boot's log, which is what deleting a file
+under Linux's `/sys/fs/pstore` does.
+
 `kernel.usb_reset` takes a PORT NUMBER and forces that root port
 through a real reset and re-enumeration, without anyone touching the
 cable. It exists to settle one question: the intermittent USB

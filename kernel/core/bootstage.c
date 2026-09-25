@@ -3,6 +3,7 @@
 #include "vga.h"
 #include "klog.h"
 #include "kfmt.h"
+#include "panic.h"
 
 static uint32_t g_up;
 
@@ -33,5 +34,5 @@ void boot_require(uint32_t sub, const char *caller) {
                 " kernel/include/kernel/bootstage.h\n",
                 caller ? caller : "(unknown caller)", sub_name(sub));
 
-    for (;;) __asm__ volatile ("cli; hlt");
+    panic_finish();
 }

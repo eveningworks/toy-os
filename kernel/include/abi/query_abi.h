@@ -519,6 +519,13 @@ struct query_fsstat {
 // is this". `lssound` reads it.
 #define QUERY_SOUND 44
 
+// THE PREVIOUS BOOT'S PANIC, recovered from the RAM store
+// (kernel/panic_store.h) -- the kernel log as it stood when that boot
+// died. LIST of slices, QUERY_KLOG's shape; zero records means there is
+// none. logd appends it to the dead boot's log file and then clears it
+// with `kernel.panic_record=clear`, which is systemd-pstore's job.
+#define QUERY_PANIC 45
+
 #define QUERY_REMOTE_SESSION  0 // a session opened or closed
 #define QUERY_REMOTE_COMMAND  1 // a command line the remote shell ran
 #define QUERY_REMOTE_SPAWN    2 // a program a remote session started
@@ -689,6 +696,20 @@ struct query_klog {
 };
 
 _Static_assert(sizeof(struct query_klog) <= 256,
+               "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
+
+#define QUERY_PANIC_DATA 192
+#define QUERY_PANIC_BUILD_MAX 40
+
+struct query_panic {
+    uint32_t total;                   // text bytes in the whole record
+    uint32_t len;                     // valid bytes in data[]
+    uint64_t uptime_ns;               // how long the dead boot had run
+    char     build[QUERY_PANIC_BUILD_MAX]; // the build that panicked
+    uint8_t  data[QUERY_PANIC_DATA];  // text from offset index * QUERY_PANIC_DATA
+};
+
+_Static_assert(sizeof(struct query_panic) <= 256,
                "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
 
 // QUERY_USBDESC's record -- one slice of one device's configuration.

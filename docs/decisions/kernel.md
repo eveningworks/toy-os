@@ -43,7 +43,49 @@ crash-reporting milestone insists the two failure classes never share
 a list. A panic's record is a RAM store recovered on the next boot,
 pstore's shape, chosen over writing to disk from the panic path because
 a panic inside the storage stack cannot use the thing it would write
-through; it is planned, not built.
+through -- see "A panic keeps its log in RAM at a fixed address, and
+logd files it" below.
+
+## A panic keeps its log in RAM at a fixed address, and logd files it
+
+Built 2026-09-25. When the kernel panics it copies the log ring into
+32 KiB of RAM at physical 32 MiB, counts down (`panic=`, default 10 s)
+and resets; the next boot checks the record's CRC and logd appends it to
+the end of the DEAD boot's own log file, then clears it.
+
+**Why RAM and not the disk.** Windows writes its dump through a separate,
+minimal storage stack prepared at boot for exactly this; toy-os has one
+storage stack and a panic may be inside it, so the panic path touches no
+filesystem, lock or heap. Linux's pstore/ramoops is the shape copied: a
+reserved range, a header with a checksum, recovered on the next boot. It
+only survives a WARM reset, which is why a panic now restarts the machine
+instead of halting -- a halted machine gets power-cycled and the record
+goes with it.
+
+**Why a constant address.** ramoops takes its range from a boot
+parameter or the firmware's device tree; the range has to be known
+before anything could look it up here, because KASLR copies the kernel
+somewhere random before `kernel_main()` and pmm hands out frames right
+after. 32 MiB is above the kernel image (about 10 MiB) and below where
+GRUB's heap grows DOWN from the top of RAM. `panic_store_probe()`
+refuses the range with a reason in the log -- not RAM, the image grew
+into it, GRUB put something there -- rather than trusting it, and a
+record that did not survive fails its CRC, so the failure is "no
+record", never a wrong one.
+
+**Why the dead boot's file and not a file of its own.** The record is the
+tail that boot's log LOST: logd died with the machine, so its last lines
+never reached the disk. Appending them where they belong -- minus the
+lines logd did persist, found by the file's last kernel line -- means
+`log -p 1` simply ends with the panic. systemd-pstore archives to a
+directory of its own; that would be a second place to look for the end
+of one boot.
+
+**Why a keypress ends the countdown but a serial byte does not.** A test
+harness's resync bytes arrive on COM1 unasked, and ended the countdown
+after two seconds. Only a make code on the PS/2 keyboard counts, after
+draining what was already buffered -- otherwise the release of the Enter
+that ran the fatal command restarts the machine at once.
 
 ## The physical map is the identity map, extended -- not Linux's higher-half direct map
 

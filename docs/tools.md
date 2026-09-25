@@ -3160,6 +3160,19 @@ window without going through it will find its layout polls timing out.
   repaints no framebuffer pixels), because a device-composited cursor
   is handed to the display client out of band and never appears in a
   `screendump` at all. On demand, not in the gate.
+- **`panic_store_test.py`** -- the panic store (`kernel/panic_store.h`):
+  a kernel panic's log survives the warm reset that follows it, and
+  logd appends it to the DEAD boot's file. **IT PANICS ITS GUEST ON
+  PURPOSE**, through `config set kernel.crash gp-fault` on a disk COPY
+  whose GRUB line gains `faultinject` (`install_grub.add_boot_word()`),
+  so it needs `vm.py --reboot` and lives in the sweep. It checks that a
+  cold boot recovers nothing, that the countdown restarts after ~10 s
+  rather than at once, that the dead boot's log ends with the crash
+  announcement and the `#GP` report, and that a cleared record is not
+  filed again. The trigger runs in the BACKGROUND: a panicked guest never
+  answers, and waiting on the exec started the countdown's clock a whole
+  timeout late. `--positive-control` restarts COLD after the panic, where
+  every recovery check must go red.
 - **`netheal_test.py`** -- `/bin/netheal`, which reboots a machine once
   when it comes up with no network. **THIS TOOL REBOOTS ITS GUEST TWICE
   ON PURPOSE**, which is the property under test, so it needs
