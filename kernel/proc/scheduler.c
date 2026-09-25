@@ -1933,6 +1933,10 @@ void scheduler_preempt_enable(void) {
 
 static void scheduler_rotate(uint64_t *regs) {
     if (!scheduler_armed) return;
+    // A syscall reaches here too (scheduler_trap_exit(), SYS_YIELD), and
+    // under a trap gate it arrives with IF SET: a tick nested between
+    // "state = READY" and switch_to()'s save resumes a torn context.
+    sched_switch_begin();
 
 
     // UNCONDITIONALLY, and before anything can return early or switch:

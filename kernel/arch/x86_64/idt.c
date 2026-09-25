@@ -170,32 +170,19 @@ void idt_init(void) {
     // since a software interrupt's DPL is the *minimum* privilege
     // allowed to invoke it via the `int` instruction.
     //
-    // **STILL AN INTERRUPT GATE (0xEE), AND THE TRAP GATE (0xEF) IS ONE
-    // LINE AWAY -- it was tried, and it is not ready.** The one bit is
-    // whether IF survives the syscall: an interrupt gate clears it for
-    // the whole call, so nothing (timer, keyboard, mouse) is serviced
-    // until it returns. Measured: one write(2) holds the CPU 19.6 ms
-    // that way, and compositor wake latency goes 2.3 ms -> 12.2 ms
-    // under disk load.
+    // **STILL AN INTERRUPT GATE (0xEE), BY MEASUREMENT: THE TRAP GATE
+    // (0xEF) IS SAFE TO FLIP AND BUYS NOTHING YET.** The one bit is
+    // whether IF survives the syscall. With disk waits asleep and the
+    // filesystem locked per mount, a disk-bound syscall already yields,
+    // and neither the compositor's wake latency nor fs_isolation.py's
+    // probe improves at 0xEF. "Interruptible syscalls" in
+    // docs/roadmap-details.md has the numbers and what would make it pay.
     //
-    // **FLIPPING IT CORRUPTS AN UNRELATED PROCESS'S RESUME STATE AND
-    // PANICS THE KERNEL**, in 2 full-suite runs out of 3: a process
-    // blocked in a syscall comes back at an unmapped RIP, then
-    // isr_common double-faults in its push prologue with RSP=0 -- which
-    // means isr_dispatch() returned 0. Three control runs at 0xEE on the
-    // same tree are clean. Two win_input KTESTs also go red, and they
-    // are the small half.
+    // **EVERY FLIP SO FAR HAS FOUND A PATH THAT SWITCHED WITH IF SET** --
+    // most recently scheduler_rotate() reached from a syscall's exit.
+    // Nothing at 0xEE can exercise such a path, so a flip is tested by
+    // booting it repeatedly under load, not by the suite alone.
     //
-    // The two win_input KTESTs that used to hold it are FIXED -- an
-    // exit ran preemptible, so a tick inside one marked the exiting
-    // slot READY over its ZOMBIE and left it RUNNING for good
-    // (scheduler_on_exit). **Re-measured 2026-09-15: ktest is 10 runs
-    // of 10 clean at 0xEF and the mmaudit #GP that last held it did not
-    // reproduce, cause unidentified.** What is left is the userland
-    // suite, which fails at the SAME rate and in the same family at
-    // both gates -- a spawned test whose completion banner never
-    // arrives. docs/roadmap-details.md has the evidence and the
-    // instruments.
     // LOGGED, because which gate a boot is running decides whether a
     // syscall can be preempted -- and a build that did not pick up a
     // change to it looks exactly like the change not working.

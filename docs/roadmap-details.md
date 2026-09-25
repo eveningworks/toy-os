@@ -4901,6 +4901,17 @@ the numbers after the trap gate are ambiguous.
 
 ### Interruptible syscalls
 
+**Re-measured 2026-09-25 with `fs_isolation.py`, and NOT flipped again: it buys nothing there either.** Flipping HEAD to `0xEF` first PANICKED AT BOOT, 4 boots in 4 -- a #GP at `isr_resume_frame`'s `iretq`, a context resumed through a frame that was no longer its own. The cause: `scheduler_rotate()` switched with IF SET when reached from a syscall (`scheduler_trap_exit()` at every trap's exit, and `SYS_YIELD`), so a tick nested between "state = READY" and `switch_to()`'s save tore the switch. The block and exit paths already took `sched_switch_begin()`; the rotation did not. It predates the tickless timer (cb7c9e4f at `0xEF`: 1 GPF and 1 `RUNNING while cur=-1` invariant in 4 loaded boots), which made it frequent: every equal-priority deadline wake now sets `g_need_resched`, so nearly any syscall exit can rotate. Fixed; at `0xEF` 4 boots in 4 clean afterwards, plus 10 loaded runs with no panic or invariant. The measurement, KVM `+invtsc`, 256 MiB `diskbench` on `/`, 5 runs a side alternating, both builds fixed:
+
+| probe under load | gate | calls (~4780 alone) | avg us | p99 us | max ms |
+|---|---|---|---|---|---|
+| stat `/tmp` | 0xEE | 1624-2351 | 111-233 | 349-541 | 3.6-104 |
+| | 0xEF | 1287-2157 | 156-249 | 650-940 | 12-83 |
+| stat `/etc` | 0xEE | 548-623 | 4136-4785 | ~19-20k | 20-26 |
+| | 0xEF | 490-574 | 3944-5490 | ~19k | 21-32 |
+
+The same-volume probe waits on the volume, not on the gate (fslock stage 5's territory); the other-mount probe is no better and its p99 slightly worse. What would make the flip pay is unchanged from below: a long CPU-bound syscall, or a signal that must interrupt one.
+
 **Re-measured 2026-09-23 and NOT flipped.** With the sleeping lock and the sleeping disk waits in, `0xEF` costs nothing it used to -- the compositor's loaded wake latency matches `0xEE` (5.1-6.2 ms avg against 5.9-7.4) where it was 300-400 ms before -- and wins nothing measurable either, because a disk wait already yields under the interrupt gate. The one new cost seen was the console: `usertest_run.py` missed one test's banner per run (the test itself passed), torn by another process's line -- the kernel-side single-write fix `docs/bugs.md` asks for would take that away. Full numbers: `docs/blocking-design.md`, stage 4.
 
 `int 0x80` runs through an INTERRUPT gate (`idt_set_gate(128, isr128, 0,

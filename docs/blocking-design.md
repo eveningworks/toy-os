@@ -187,7 +187,11 @@ documents follow.
   now land inside a line, the torn-line family `docs/bugs.md` already
   has. Flipping is safe to measure and buys nothing yet; what would
   make it pay is a workload with long CPU-bound syscalls, or signals
-  that must interrupt one.
+  that must interrupt one. **Re-measured 2026-09-25 with
+  `fs_isolation.py`, same verdict** -- after fixing a rotation that
+  switched with IF set from a syscall's exit, which the tickless timer
+  had turned into a boot panic at `0xEF` (`docs/roadmap-details.md`,
+  "Interruptible syscalls").
 
 ## What stage 2 found
 
