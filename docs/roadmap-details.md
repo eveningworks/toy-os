@@ -4912,6 +4912,8 @@ the numbers after the trap gate are ambiguous.
 
 The same-volume probe waits on the volume, not on the gate (fslock stage 5's territory); the other-mount probe is no better and its p99 slightly worse. What would make the flip pay is unchanged from below: a long CPU-bound syscall, or a signal that must interrupt one.
 
+**Before a flip ships, `fsrace_test` needs a fixture that holds at 0xEF.** 30 `usertest_run.py` runs at HEAD with the fix: `fsrace_test` failed 14, always on the same check, `appended 2048 records against 0 overwrites` -- its overwriter thread never ran during the appends, so the race it exists to exercise was not exercised. Data was never wrong (`0 bad`, no lost append). It passed in the one 0xEE gate run that day. The spawned-test stalls (`docs/bugs.md`, `block(child)`) also still appear at 0xEF, 1 run in 30.
+
 **Re-measured 2026-09-23 and NOT flipped.** With the sleeping lock and the sleeping disk waits in, `0xEF` costs nothing it used to -- the compositor's loaded wake latency matches `0xEE` (5.1-6.2 ms avg against 5.9-7.4) where it was 300-400 ms before -- and wins nothing measurable either, because a disk wait already yields under the interrupt gate. The one new cost seen was the console: `usertest_run.py` missed one test's banner per run (the test itself passed), torn by another process's line -- the kernel-side single-write fix `docs/bugs.md` asks for would take that away. Full numbers: `docs/blocking-design.md`, stage 4.
 
 `int 0x80` runs through an INTERRUPT gate (`idt_set_gate(128, isr128, 0,
