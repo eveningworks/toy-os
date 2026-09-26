@@ -345,23 +345,24 @@ static int choice_file_field(const char *path, int index, int want,
 // the whole answer is one name, so there is no buffer to keep warm. The
 // cost is a walk per index, which is why the 92-row timezone list is a
 // FILE -- a directory of savers or themes is single digits.
-static int cd_want, cd_seen;
-static char cd_found[SETTING_VALUE_MAX];
+struct choice_dir_walk {
+    int want, seen;
+    char found[SETTING_VALUE_MAX];
+};
 
-static void choice_dir_cb(const char *name, uint32_t size, int is_dir) {
+static void choice_dir_cb(void *ctx, const char *name, uint32_t size, int is_dir) {
+    struct choice_dir_walk *w = ctx;
     (void)size;
     if (is_dir) return;
-    if (cd_seen == cd_want) k_strlcpy(cd_found, name, sizeof cd_found);
-    cd_seen++;
+    if (w->seen == w->want) k_strlcpy(w->found, name, sizeof w->found);
+    w->seen++;
 }
 
 static int choice_dir_at(const char *dir, int index, char *out, uint32_t out_size) {
-    cd_want = index;
-    cd_seen = 0;
-    cd_found[0] = '\0';
-    fs_list(dir, choice_dir_cb);
-    if (!cd_found[0]) return 0;
-    k_strlcpy(out, cd_found, out_size);
+    struct choice_dir_walk w = { .want = index };
+    fs_list(dir, choice_dir_cb, &w);   // the walk's state is the call's -- fs.h
+    if (!w.found[0]) return 0;
+    k_strlcpy(out, w.found, out_size);
     return 1;
 }
 

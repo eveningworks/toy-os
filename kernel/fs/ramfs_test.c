@@ -74,14 +74,12 @@ KTEST("ramfs", "directories nest, and a listing sees only its own children") {
     ramfs_test_unmount();
 }
 
-// The listing callback has no context pointer, so the count lands in a
-// file-scope counter -- same shape fs_test.c uses.
-static int g_seen;
-static int g_saw_dir;
-static void count_cb(const char *name, uint32_t size, int is_dir) {
+struct list_count { int seen, dirs; };
+static void count_cb(void *ctx, const char *name, uint32_t size, int is_dir) {
+    struct list_count *n = ctx;
     (void)name; (void)size;
-    g_seen++;
-    if (is_dir) g_saw_dir++;
+    n->seen++;
+    if (is_dir) n->dirs++;
 }
 
 KTEST("ramfs", "list reports a directory's children and nothing else") {
@@ -92,10 +90,10 @@ KTEST("ramfs", "list reports a directory's children and nothing else") {
     KTEST_ASSERT(R()->mkdir(ST, "/d/sub"));
     KTEST_ASSERT(R()->write(ST, "/elsewhere", "3", 0));   // must NOT appear
 
-    g_seen = g_saw_dir = 0;
-    R()->list(ST, "/d", count_cb);
-    KTEST_ASSERT_EQ(g_seen, 3);
-    KTEST_ASSERT_EQ(g_saw_dir, 1);
+    struct list_count n = { 0, 0 };
+    R()->list(ST, "/d", count_cb, &n);
+    KTEST_ASSERT_EQ(n.seen, 3);
+    KTEST_ASSERT_EQ(n.dirs, 1);
 
     ramfs_test_unmount();
 }
@@ -329,9 +327,9 @@ KTEST("ramfs", "list emits every child, past the old SYS_LISTDIR batch size") {
         KTEST_ASSERT(R()->touch(ST, path));
     }
 
-    g_seen = g_saw_dir = 0;
-    R()->list(ST, "/many", count_cb);
-    KTEST_ASSERT_EQ(g_seen, 300);
+    struct list_count n = { 0, 0 };
+    R()->list(ST, "/many", count_cb, &n);
+    KTEST_ASSERT_EQ(n.seen, 300);
 
     ramfs_test_unmount();
 }

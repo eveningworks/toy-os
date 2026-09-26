@@ -1533,7 +1533,7 @@ static uint32_t fat32_read_range(void *st, const char *path, uint64_t offset, vo
 // The whole file into one staging buffer -- the same shape every
 // backend here has, and the same hazard: vfs.c refuses a NESTED call
 // because the buffer is freed and reallocated per read.
-static void fat32_list(void *st, const char *dir_path, void (*cb)(const char *, uint32_t, int)) {
+static void fat32_list(void *st, const char *dir_path, fs_list_cb cb, void *ctx) {
     struct fat32_state *sbi = st;
     if (!sbi->v.mounted || !cb) return;
     uint32_t dir;
@@ -1549,7 +1549,7 @@ static void fat32_list(void *st, const char *dir_path, void (*cb)(const char *, 
     walk_begin(&w, dir);
     struct dirent_info e;
     while (walk_next(sbi, &w, &e)) {
-        cb(e.name, e.size, (e.attr & ATTR_DIRECTORY) ? 1 : 0);
+        cb(ctx, e.name, e.size, (e.attr & ATTR_DIRECTORY) ? 1 : 0);
     }
 }
 

@@ -3391,3 +3391,36 @@ FAT32 whose bytes-per-sector is smaller than the device's block (Linux's
 vfat rule). The journal header's v2 checksum offset was `ATA_SECTOR_SIZE
 - 4`, and is now the literal 508: derived from a runtime sector size it
 would have changed the on-disk format on a 4K disk.
+
+## `fs_list()` carries a context pointer, because every caller had invented a global
+
+`fs_list(path, cb, ctx)` hands `ctx` back to `cb` per entry. Until
+2026-09-26 the callback took only `(name, size, is_dir)`, so every
+caller that needed state across entries kept it in a file-scope global,
+and the comments said why that was safe: "syscalls in this kernel are
+never reentrant or concurrent", "nothing yields". Both stopped being
+true when a disk wait started to sleep -- a walk that finds an inode
+busy now waits with the mount lock DROPPED (`mount_wait()`).
+`SYS_LISTDIR`'s globals were re-armed by another process's listing in
+that gap: init read the desktop's app entries as the contents of
+`/etc/services.d` and the desktop's Start menu came back empty, 1 boot
+in 10 on `main`, measured with a probe that caught every instance.
+
+**The obvious fix was smaller and wrong for this repo:** move just the
+syscall's state somewhere per-process. It fixes the one instance that
+was caught and leaves four more in the same shape (`config_file.c`,
+`font_faces.c`, `keyboard_config.c`, `setting.c`), each with a comment
+explaining the global as a workaround for the missing parameter. The
+parameter is what was missing, so it is what was added: Linux's
+`iterate_dir()` passes a `struct dir_context *` through the backend to
+`filldir` for exactly this reason, and with it no listing needs a
+global at all. The cost was mechanical -- three backends thread one
+argument through, and each caller's state became a struct -- and
+`tests/listrace_test` forces the gap (the old code failed it 2 runs in
+3, the new one 0 in 10).
+
+**What it does NOT fix:** anything outside a listing that a syscall
+reaches and a lock drop can interleave. `docs/smp-design.md`'s rule --
+no module-level buffer in anything a syscall reaches -- is the general
+form, and this was one instance of it.
+

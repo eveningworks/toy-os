@@ -216,7 +216,7 @@ struct fs_ops {
 
     int (*is_dir)(void *st, const char *path);
     int (*exists)(void *st, const char *path);
-    void (*list)(void *st, const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir));
+    void (*list)(void *st, const char *dir_path, fs_list_cb cb, void *ctx);
     int (*stat)(void *st, const char *path, struct fs_stat_info *out); // see fs.h's fs_stat() -- ino + epoch times, converted by the backend if its format stores something else
 
     // OPTIONAL -- a backend whose format has nowhere to store permission

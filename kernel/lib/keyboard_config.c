@@ -87,35 +87,34 @@ int keyboard_config_save(const char *name) {
 // to be read off the disk at the moment it is asked for. An array
 // would have to be rebuilt every time a layout file appeared.
 //
-// The trap: fs_list() takes a bare callback with no user pointer, so
-// the walk's state is file-static. That is sound only because this
-// kernel is single-threaded and the state never outlives the one
-// fs_list() call below -- do not hold it across anything that yields.
+// The walk's state is the CALL's, passed through fs_list()'s context --
+// it used to be file-static on the grounds that nothing yields, and the
+// walk itself does (fs.h's fs_list()).
 
 #define KB_LAYOUT_DIR "/etc/kbs"
 
-static int g_walk_want;   // which index the caller asked for
-static int g_walk_seen;   // how many entries the walk has passed
-static char g_walk_name[KB_LAYOUT_NAME_MAX];
-static int g_walk_found;
+struct kb_walk_ctx {
+    int want;    // which index the caller asked for
+    int seen;    // how many entries the walk has passed
+    int found;
+    char name[KB_LAYOUT_NAME_MAX];
+};
 
-static void kb_walk(const char *name, uint32_t size, int is_dir) {
+static void kb_walk(void *ctx, const char *name, uint32_t size, int is_dir) {
+    struct kb_walk_ctx *w = ctx;
     (void)size;
-    if (is_dir || g_walk_found) return;
-    if (g_walk_seen++ != g_walk_want) return;
-    k_strlcpy(g_walk_name, name, sizeof g_walk_name);
-    g_walk_found = 1;
+    if (is_dir || w->found) return;
+    if (w->seen++ != w->want) return;
+    k_strlcpy(w->name, name, sizeof w->name);
+    w->found = 1;
 }
 
 static int kb_choice(int index, char *out, uint32_t out_size) {
     if (index < 0) return 0;
-    g_walk_want = index;
-    g_walk_seen = 0;
-    g_walk_found = 0;
-    g_walk_name[0] = '\0';
-    fs_list(KB_LAYOUT_DIR, kb_walk);
-    if (!g_walk_found) return 0;
-    k_strlcpy(out, g_walk_name, out_size);
+    struct kb_walk_ctx w = { .want = index };
+    fs_list(KB_LAYOUT_DIR, kb_walk, &w);
+    if (!w.found) return 0;
+    k_strlcpy(out, w.name, out_size);
     return 1;
 }
 

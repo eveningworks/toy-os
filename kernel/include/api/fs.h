@@ -246,13 +246,19 @@ int fs_is_dir(const char *path);
 // True if `path` names an existing file or directory (or is "/").
 int fs_exists(const char *path);
 
-// Calls cb(name, size, is_dir) for every direct child of `dir_path`
+// Calls cb(ctx, name, size, is_dir) for every direct child of `dir_path`
 // (which must be an existing directory, or "/") -- `name` is just that
 // child's own last path component (e.g. "notes.txt", not
 // "/docs/notes.txt"), and `size` is meaningless (0) for directories.
 // Table order, not sorted. Does nothing (no callback calls) if
 // `dir_path` doesn't exist or isn't a directory.
-void fs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir));
+// `ctx` is handed back to `cb` for every entry -- Linux's dir_context.
+// A listing's state goes in it, NEVER in a global: the walk can sleep
+// in a disk wait with the mount lock dropped, and another caller's
+// listing then runs in the gap (it did: init's SYS_LISTDIR delivered
+// the desktop's entries to itself).
+typedef void (*fs_list_cb)(void *ctx, const char *name, uint32_t size, int is_dir);
+void fs_list(const char *dir_path, fs_list_cb cb, void *ctx);
 
 // The canonical per-entry metadata every backend reports, whatever it
 // stores on disk.

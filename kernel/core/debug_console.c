@@ -300,10 +300,9 @@ static void dbg_cmd_lsdev(void) {
     }
 }
 
-// fs_list()'s callback has no userdata parameter (see fs.h's own
-// comment on that convention) -- nothing here needs cross-call state,
-// so a plain static function is enough.
-static void dbg_lsfs_cb(const char *name, uint32_t size, int is_dir) {
+// Nothing here needs state across entries, so the context is unused.
+static void dbg_lsfs_cb(void *ctx, const char *name, uint32_t size, int is_dir) {
+    (void)ctx;
     if (is_dir) klog_printf("  %s/\r\n", name);
     else        klog_printf("  %s  (%u bytes)\r\n", name, size);
 }
@@ -313,7 +312,7 @@ static void dbg_cmd_lsfs(const char *arg) {
     klog_write("ls ");
     klog_write(path);
     klog_write(":\r\n");
-    fs_list(path, dbg_lsfs_cb);
+    fs_list(path, dbg_lsfs_cb, NULL);
 }
 
 // Splits `line` into a command word and (optionally) one trailing

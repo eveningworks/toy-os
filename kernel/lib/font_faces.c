@@ -15,11 +15,18 @@ static uint64_t g_scanned_gen = (uint64_t)-1;
 static char g_selected[FONT_FACE_NAME_LEN] = "builtin";
 static char g_selected_mono[FONT_FACE_NAME_LEN] = "builtin";
 
-// fs_list()'s callback carries no user pointer, so the collection point
-// is a file-level static -- the same shape every other caller of it uses.
-static void scan_cb(const char *name, uint32_t size, int is_dir) {
+// A scan collects into the CALL's own struct and publishes it in one copy
+// that does not yield: the walk itself can (fs.h's fs_list()), and two
+// scans writing straight into the cache would interleave their results.
+struct face_scan {
+    char name[FACES_MAX][FONT_FACE_NAME_LEN];
+    int count;
+};
+
+static void scan_cb(void *ctx, const char *name, uint32_t size, int is_dir) {
+    struct face_scan *x = ctx;
     (void)size;
-    if (is_dir || !name || g_count >= FACES_MAX) return;
+    if (is_dir || !name || x->count >= FACES_MAX) return;
 
     int len = (int)k_strlen(name);
     int slen = (int)k_strlen(SUFFIX);
@@ -37,9 +44,9 @@ static void scan_cb(const char *name, uint32_t size, int is_dir) {
     int blen = (int)k_strlen(BOLD_TAIL);
     if (keep > blen && k_strcmp(base + keep - blen, BOLD_TAIL) == 0) return;
 
-    for (int i = 0; i < g_count; i++)
-        if (k_strcmp(g_name[i], base) == 0) return;
-    k_strlcpy(g_name[g_count++], base, FONT_FACE_NAME_LEN);
+    for (int i = 0; i < x->count; i++)
+        if (k_strcmp(x->name[i], base) == 0) return;
+    k_strlcpy(x->name[x->count++], base, FONT_FACE_NAME_LEN);
 }
 
 // RESCANS WHEN THE FILESYSTEM HAS MOVED, so a font copied in shows up
@@ -47,9 +54,12 @@ static void scan_cb(const char *name, uint32_t size, int is_dir) {
 static void refresh(void) {
     uint64_t gen = fs_generation();
     if (gen == g_scanned_gen) return;
-    g_scanned_gen = gen;
-    g_count = 0;
-    fs_list(FONT_FACE_DIR, scan_cb);
+    struct face_scan x;   // no initialiser: that is a memset, and there is none here
+    x.count = 0;
+    fs_list(FONT_FACE_DIR, scan_cb, &x);
+    for (int i = 0; i < x.count; i++) k_strlcpy(g_name[i], x.name[i], FONT_FACE_NAME_LEN);
+    g_count = x.count;
+    g_scanned_gen = gen;   // last: a scan that never finished is rescanned
 }
 
 int font_faces_count(void) { refresh(); return g_count; }

@@ -734,7 +734,7 @@ int fs_exists(const char *path) {
     return FS_OP(r.m, r.gen, exists, r.sub);
 }
 
-void fs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir)) {
+void fs_list(const char *dir_path, fs_list_cb cb, void *ctx) {
     struct resolved r;
     if (!resolve(dir_path, &r)) return;
     // The callback runs inside the section too -- it has to, since the
@@ -742,7 +742,7 @@ void fs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, i
     // what it is handed (every caller here) is fine; one that called
     // back into fs_* would be re-entering the backend directly, which
     // no amount of preemption control can make safe.
-    FS_OP_VOID(r.m, r.gen, list, r.sub, cb);
+    FS_OP_VOID(r.m, r.gen, list, r.sub, cb, ctx);
 }
 
 int fs_stat(const char *path, struct fs_stat_info *out) {

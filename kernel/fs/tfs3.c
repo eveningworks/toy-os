@@ -3182,7 +3182,7 @@ static int tfs3_exists(void *st, const char *path) {
     return resolve(sbi, norm, &ino) ? 1 : 0;
 }
 
-static void tfs3_list(void *st, const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir)) {
+static void tfs3_list(void *st, const char *dir_path, fs_list_cb cb, void *ctx) {
     struct t3_state *sbi = st;
     struct t3_inode dir;
     char *const norm = sbi->pb.tfs3_list_norm; // per-function, see normalize()
@@ -3217,7 +3217,7 @@ static void tfs3_list(void *st, const char *dir_path, void (*cb)(const char *nam
                     if (read_inode(sbi, e_ino, &child)) {
                         uint32_t sz = child.type == T3_TYPE_DIR ? 0
                                      : (child.size > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)child.size);
-                        cb(name, sz, child.type == T3_TYPE_DIR);
+                        cb(ctx, name, sz, child.type == T3_TYPE_DIR);
                     }
                 }
             }

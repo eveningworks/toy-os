@@ -5,6 +5,10 @@ which keeps the rules that bite callers elsewhere.
 
 ## The filesystem
 
+- **A listing's state goes in `fs_list()`'s `ctx`, never a global** -- the
+  walk can wait with the mount lock dropped, and another listing runs in
+  the gap (`docs/conventions/storage.md`).
+
 - **THE FILESYSTEM IS NOT RE-ENTRANT, and each MOUNT has ONE SLEEPING
   LOCK because of it.** A backend walks through per-mount scratch, so
   `FS_OP()` takes that mount's `lock` (a recursive `kmutex` in `struct

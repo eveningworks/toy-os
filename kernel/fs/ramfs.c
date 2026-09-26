@@ -658,7 +658,7 @@ static int ramfs_exists(void *st, const char *path) {
     return find(sbi, path) >= 0;
 }
 
-static void ramfs_list(void *st, const char *dir_path, void (*cb)(const char *, uint32_t, int)) {
+static void ramfs_list(void *st, const char *dir_path, fs_list_cb cb, void *ctx) {
     struct ramfs_state *sbi = st;
     if (!sbi->mounted || !cb) return;
     int dir = find(sbi, dir_path);
@@ -669,7 +669,7 @@ static void ramfs_list(void *st, const char *dir_path, void (*cb)(const char *, 
     for (int i = 0; i < RAMFS_MAX_NODES; i++) {
         struct rnode *n = sbi->nodes[i];
         if (!n || n->parent != dir) continue;
-        cb(n->name, (uint32_t)n->size, n->is_dir);
+        cb(ctx, n->name, (uint32_t)n->size, n->is_dir);
     }
 }
 

@@ -35,14 +35,9 @@
 #include "shell.h"
 #include "shell_internal.h"
 
-// fs_list() takes a plain callback with no context argument, so the
-// column state has to be file-scope. Only ever touched by rescue_ls()
-// and its callback, which cannot run concurrently -- the shell is one
-// thread and fs_list() does not yield to it.
-static int g_ls_count;
-
-static void rescue_ls_cb(const char *name, uint32_t size, int is_dir) {
-    g_ls_count++;
+// The count rides in fs_list()'s context (fs.h: never a global).
+static void rescue_ls_cb(void *ctx, const char *name, uint32_t size, int is_dir) {
+    (*(int *)ctx)++;
     vga_write("  ");
     vga_write(name);
     if (is_dir) {
@@ -80,11 +75,11 @@ static void rescue_ls(const char *args) {
     }
     vga_write(path);
     vga_write(":\n");
-    g_ls_count = 0;
-    fs_list(path, rescue_ls_cb);
+    int count = 0;
+    fs_list(path, rescue_ls_cb, &count);
     // An empty directory and a missing one read identically otherwise,
     // and telling them apart is most of the point of running this.
-    if (g_ls_count == 0) vga_write("  (empty)\n");
+    if (count == 0) vga_write("  (empty)\n");
 }
 
 // cmd_df() takes no arguments; every other entry takes the argument

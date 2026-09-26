@@ -11,6 +11,7 @@
 #include "string.h"
 #include "fs.h"
 #include "kpath.h"
+#include "heap.h"   // kmalloc -- the scan's state is the call's
 
 static struct config_file g_files[CONFIG_FILE_MAX];
 static int g_count = 0;
@@ -68,20 +69,24 @@ int config_file_register(const char *name, const char *path, const char *desc, i
 
 // --- the descriptor scan ---------------------------------------------
 
-// fs_list() takes a bare callback with no user pointer, so the walk
-// collects names here first and reads them afterwards -- reading a file
-// from inside an fs_list() callback would re-enter the filesystem
-// mid-walk. Same constraint keyboard_config.c's enumerator works
-// around, handled differently because this one needs every entry.
+// The walk collects names first and reads them afterwards -- reading a
+// file from inside an fs_list() callback would re-enter the filesystem
+// mid-walk. The names and the read buffer are the CALL's (fs.h's
+// fs_list() on why nothing a walk touches may be a global), heap-held
+// because together they are too big for a kernel frame.
 #define SCAN_MAX 16
-static char g_scan_names[SCAN_MAX][CONFIG_NAME_MAX + 8];
-static int g_scan_count;
+struct scan_ctx {
+    char names[SCAN_MAX][CONFIG_NAME_MAX + 8];
+    int count;
+    struct etc_config_buf buf;   // one read per descriptor, three keys out of it
+};
 
-static void scan_collect(const char *name, uint32_t size, int is_dir) {
+static void scan_collect(void *ctx, const char *name, uint32_t size, int is_dir) {
+    struct scan_ctx *x = ctx;
     (void)size;
-    if (is_dir || g_scan_count >= SCAN_MAX) return;
-    if (k_strlen(name) >= (int)sizeof g_scan_names[0]) return;
-    k_strlcpy(g_scan_names[g_scan_count++], name, sizeof g_scan_names[0]);
+    if (is_dir || x->count >= SCAN_MAX) return;
+    if (k_strlen(name) >= (int)sizeof x->names[0]) return;
+    k_strlcpy(x->names[x->count++], name, sizeof x->names[0]);
 }
 
 void config_files_scan(void) {
@@ -96,10 +101,6 @@ void config_files_scan(void) {
         keep++;
     }
     g_count = keep;
-
-// One read per descriptor, three keys out of it (etc_config.h); static
-// because 4 KiB does not belong on a 16 KiB kernel stack.
-static struct etc_config_buf g_scan_buf;
 
     // The kernel's own. Registered here rather than by each owning
     // subsystem because three of the four are DATA files with no
@@ -130,27 +131,30 @@ static struct etc_config_buf g_scan_buf;
     config_file_register(CONFIG_NAME_RUNTIME, CONFIG_PATH_RUNTIME,
                          "Kernel tunables -- runtime only, reset at boot", 1);
 
-    g_scan_count = 0;
-    fs_list(CONFIG_DESCRIPTOR_DIR, scan_collect);
+    struct scan_ctx *x = kmalloc(sizeof *x);
+    if (!x) return;   // the built-in floor above still stands
+    x->count = 0;
+    fs_list(CONFIG_DESCRIPTOR_DIR, scan_collect, x);
 
-    for (int i = 0; i < g_scan_count; i++) {
+    for (int i = 0; i < x->count; i++) {
         char full[CONFIG_PATH_MAX + CONFIG_NAME_MAX + 8];
         char name[CONFIG_NAME_MAX], path[CONFIG_PATH_MAX], desc[CONFIG_DESC_MAX];
 
-        if (!k_path_join(CONFIG_DESCRIPTOR_DIR, g_scan_names[i], full, sizeof full)) continue;
+        if (!k_path_join(CONFIG_DESCRIPTOR_DIR, x->names[i], full, sizeof full)) continue;
 
         // Name and Path are required; Description is not. A descriptor
         // missing either is skipped silently -- it is a file someone
         // may still be writing, and one bad file must not cost the
         // whole index.
-        if (!etc_config_load(full, &g_scan_buf)) continue;   // unreadable or oversize: skipped
-        if (!etc_config_buf_get(&g_scan_buf, "Name", name, sizeof name)) continue;
-        if (!etc_config_buf_get(&g_scan_buf, "Path", path, sizeof path)) continue;
-        if (!etc_config_buf_get(&g_scan_buf, "Description", desc, sizeof desc)) desc[0] = '\0';
+        if (!etc_config_load(full, &x->buf)) continue;   // unreadable or oversize: skipped
+        if (!etc_config_buf_get(&x->buf, "Name", name, sizeof name)) continue;
+        if (!etc_config_buf_get(&x->buf, "Path", path, sizeof path)) continue;
+        if (!etc_config_buf_get(&x->buf, "Description", desc, sizeof desc)) desc[0] = '\0';
         if (!name[0] || path[0] != '/') continue;
 
         config_file_register(name, path, desc, 0);
     }
+    kfree(x);
 }
 
 int config_file_is_runtime(const struct config_file *f) {

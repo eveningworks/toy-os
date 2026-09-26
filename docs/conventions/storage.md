@@ -906,6 +906,21 @@ real rather than an oversight: `cp` streams a directory and `ls` SORTS
 it, so paging `ls` means holding every entry at once. It reports the
 truncation instead. Roadmap.
 
+## A LISTING'S STATE GOES IN `fs_list()`'s CONTEXT, NEVER IN A GLOBAL
+
+`fs_list(path, cb, ctx)` hands `ctx` back to `cb` for every entry --
+Linux's `dir_context`. Whatever a walk accumulates (a count, an output
+pointer, the names it wants) lives in a struct the CALLER owns, on its
+stack or its heap. **A file-scope global is wrong even where nothing
+seems to run concurrently**: the walk can sleep in a disk wait, and it
+waits for a busy inode with the mount lock DROPPED (`mount_wait()`), so
+another process's listing runs in the gap. `SYS_LISTDIR` kept its state
+in globals and did exactly that -- init's listing of `/etc/services.d`
+came back holding the desktop's app entries, 1 boot in 10 on `main`.
+`tests/listrace_test` forces the gap. A CACHE that a scan refreshes
+(`font_faces.c`) scans into the call's struct and publishes in one copy
+that does not yield.
+
 ## `mkpart` CAN WRITE ANY DISK, AND A DISK NOTHING IS MOUNTED FROM IS RE-READ AT ONCE
 
 `struct mkpart_request` carries a `device` name (empty = the boot disk,

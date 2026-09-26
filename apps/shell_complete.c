@@ -62,24 +62,18 @@ static void complete_from_list(struct completion_collector *c,
     for (int i = 0; names[i]; i++) completion_add(c, names[i]);
 }
 
-// The listing callback the engine hands out has no context pointer, so
-// a completer that lists a directory itself collects through a
-// file-scope one -- same reasoning as the engine's own, and safe for the
-// same reason (nothing re-enters completion mid-listing).
-static struct completion_collector *g_arg_collector;
-
-static void arg_list_cb(const char *name, uint32_t size, int is_dir) {
+// The collector rides in fs_list()'s context -- nothing a listing
+// touches may be a global (fs.h).
+static void arg_list_cb(void *ctx, const char *name, uint32_t size, int is_dir) {
     (void)size; (void)is_dir;
-    completion_add(g_arg_collector, name);
+    completion_add(ctx, name);
 }
 
 // `keyboard <layout>`: whatever layout files are actually on disk, not
 // a hardcoded us/se -- the whole point of layouts being data files (see
 // docs/decisions.md) is that a third one can be added without a rebuild.
 static void complete_keyboard_layout(struct completion_collector *c) {
-    g_arg_collector = c;
-    if (fs_is_dir("/etc/kbs")) fs_list("/etc/kbs", arg_list_cb);
-    g_arg_collector = 0;
+    if (fs_is_dir("/etc/kbs")) fs_list("/etc/kbs", arg_list_cb, c);
 }
 
 // What `cmd`'s argument number `arg_index` offers. COMPLETION_PATHS
@@ -160,9 +154,15 @@ static enum completion_domain shell_arg_domain(struct completion_collector *c,
 // The two filesystem hooks. Ring 0 reaches fs_list()/fs_is_dir()
 // directly; ring 3's env calls sys_listdir(). This pair is the whole
 // reason struct completion_env exists.
-static void shell_list_dir(const char *path,
-                            void (*cb)(const char *, uint32_t, int)) {
-    fs_list(path, cb);
+// The engine's callback type is shared with ring 3 and takes no
+// context, so it rides in fs_list()'s context and this calls it.
+typedef void (*engine_list_cb)(const char *, uint32_t, int);
+static void engine_list_tramp(void *ctx, const char *name, uint32_t size, int is_dir) {
+    ((engine_list_cb)ctx)(name, size, is_dir);
+}
+
+static void shell_list_dir(const char *path, engine_list_cb cb) {
+    fs_list(path, engine_list_tramp, (void *)cb);
 }
 
 static int shell_is_dir(const char *path) { return fs_is_dir(path); }

@@ -24,85 +24,62 @@
 #include "kfmt.h"      // klog_printf
 #include <stddef.h>
 
-// SYS_LISTDIR scratch state -- fs_list() (fs.c) takes a plain callback
-// with no context/userdata parameter, so there's nowhere to thread "which
-// output array, how much room is left" through it directly. Bounce
-// through these file-scope globals for the duration of a single
-// SYS_LISTDIR call instead: safe because syscalls in this kernel are
-// never reentrant or concurrent (same assumption SYS_WIN_* above already
-// relies on).
-// g_listdir_out is a USER virtual address, not a pointer -- deliberately
-// typed as one so it cannot be dereferenced by accident. Each entry is
-// copied out with vmm_copy_to_user() as fs_list() reports it; see the
-// SYS_LISTDIR arm for why the array isn't bounced through the kernel
-// stack in one go.
-// Defined at the bottom, beside the cwd it resolves against.
-// Defined at the bottom; declared in kernel/syscalls.h because spawn
-// and exec need it too -- see the comment on the definition.
+// SYS_LISTDIR's per-call state, handed to fs_list() as its context and
+// back to listdir_collect() per entry. It was file-scope globals, on the
+// grounds that "syscalls in this kernel are never reentrant or
+// concurrent" -- untrue since a disk wait sleeps: the walk drops the
+// mount lock for a data read, another process's SYS_LISTDIR ran in the
+// gap and re-armed every global, and one listing's entries were copied
+// into the other's buffer (init read the desktop's app list as
+// /etc/services.d, 1 boot in 10). Linux's dir_context, for that reason.
+struct listdir_ctx {
+    uint64_t out;    // a USER address -- typed so it cannot be dereferenced
+    uint64_t pml4;
+    uint32_t max, count;
+    uint32_t start;  // SYS_LISTDIR_AT's offset
+    uint32_t seen;   // entries the walk has passed, skipped or not
+    const char *dir; // the directory, to build each entry's full path
+    char *full;      // kpath scratch for that path, one per call
+};
 
-static uint64_t g_listdir_out = 0;
-static uint64_t g_listdir_pml4 = 0;
-static uint32_t g_listdir_max = 0;
-static uint32_t g_listdir_count = 0;
-static uint32_t g_listdir_start = 0;  // SYS_LISTDIR_AT's offset
-static uint32_t g_listdir_seen = 0;   // entries the walk has passed, skipped or not
-// Holds the (already-validated, NUL-terminated) directory path for the
-// call in progress -- needed alongside `name` to build each entry's own
-// full path for the fs_stat() call below (fs_list()'s callback only
-// ever hands back the bare last component, per its own doc comment).
-static char g_listdir_dir_path[FS_PATH_MAX];
-
-static void listdir_collect(const char *name, uint32_t size, int is_dir) {
-    // SKIP the first `g_listdir_start` entries -- this is SYS_LISTDIR_AT's
-    // offset, applied here because fs_list() has no cursor of its own and
-    // walking to it is what a backend does anyway.
-    if (g_listdir_seen++ < g_listdir_start) return;
-    if (g_listdir_count >= g_listdir_max) return;
+static void listdir_collect(void *vctx, const char *name, uint32_t size, int is_dir) {
+    struct listdir_ctx *x = vctx;
+    // SKIP the first `start` entries -- SYS_LISTDIR_AT's offset, applied
+    // here because fs_list() has no cursor and walking to it is what a
+    // backend does anyway.
+    if (x->seen++ < x->start) return;
+    if (x->count >= x->max) return;
     struct sys_dirent entry;
     struct sys_dirent *e = &entry;
     k_strlcpy(e->name, name, sizeof e->name);
     e->size = size;
     e->is_dir = (uint32_t)is_dir;
 
-    // Build "<dir>/<name>" (or "/<name>" when dir is just "/") to look
-    // up this entry's own timestamps -- see struct sys_dirent's `modified`
-    // field comment (syscall_abi.h) for why this is here at all.
-    // Zeroed rather than left uninitialized on the rare failure path
-    // (shouldn't happen for anything fs_list() itself just reported),
-    // so a bug here shows up as an obviously-wrong 0000-00-00 rather
-    // than reading stale/garbage struct bytes.
-    // Static, not a local: this is a per-ENTRY callback, so allocating
-    // here would be one kmalloc per directory entry -- and the listdir
-    // path above it is already module-level scratch for the same
-    // non-reentrancy reason.
-    static char full_path[FS_PATH_MAX];
-    size_t dl = k_strlen(g_listdir_dir_path);
-    k_strlcpy(full_path, g_listdir_dir_path, sizeof full_path);
-    if (dl > 1) { // dir isn't just "/" -- needs a separating slash
-        if (dl + 1 < FS_PATH_MAX) { full_path[dl] = '/'; full_path[dl + 1] = '\0'; dl++; }
-    }
+    // "<dir>/<name>" (or "/<name>"), for this entry's own timestamps --
+    // see struct sys_dirent's `modified` (syscall_abi.h). Zeroed on the
+    // failure path so a bug shows as 0000-00-00, not stale bytes.
+    size_t dl = k_strlen(x->dir);
+    k_strlcpy(x->full, x->dir, FS_PATH_MAX);
+    if (dl > 1 && dl + 1 < FS_PATH_MAX) { x->full[dl] = '/'; x->full[dl + 1] = '\0'; dl++; }
     size_t nl = k_strlen(name);
-    if (dl + nl < FS_PATH_MAX) k_strlcpy(full_path + dl, name, FS_PATH_MAX - dl);
+    if (dl + nl < FS_PATH_MAX) k_strlcpy(x->full + dl, name, FS_PATH_MAX - dl);
 
     struct fs_stat_info st;
-    if (fs_stat(full_path, &st)) {
-        // The dirent ABI (syscall_abi.h) deliberately keeps struct
-        // rtc_time -- the epoch shape is kernel-internal (fs.h's
-        // fs_stat_info), converted back to civil time right here at
-        // the boundary so userland (ls -l) is untouched.
+    if (fs_stat(x->full, &st)) {
+        // The dirent ABI keeps struct rtc_time; the epoch shape is
+        // kernel-internal, converted here at the boundary.
         cal_epoch_to_rtc(st.modified, &e->modified);
     } else {
         k_memset(&e->modified, 0, sizeof(e->modified));
     }
 
-    // The range was validated once, before fs_list() started, so this
-    // cannot fail -- and if it somehow did, dropping the entry is the
-    // right answer, not writing a partial one.
-    if (!vmm_copy_to_user(g_listdir_pml4, g_listdir_out + (uint64_t)g_listdir_count * sizeof entry,
+    // The range was validated before fs_list() started, so this cannot
+    // fail -- and if it did, dropping the entry beats writing half one.
+    if (!vmm_copy_to_user(x->pml4, x->out + (uint64_t)x->count * sizeof entry,
                            &entry, sizeof entry)) {
         return;
     }
-    g_listdir_count++;
+    x->count++;
 }
 
 // Resolve the PARENT as its own step before creating anything: Linux's
@@ -320,17 +297,16 @@ static int listdir_common(struct syscall_ctx *c, uint64_t path_ptr,
         // SYS_LISTDIR_MAX of them is far too much to bounce through
         // an 8 KiB kernel stack. The range is validated up front so
         // each per-entry copy is a walk, not a second check.
-        g_listdir_out = out;
-        g_listdir_pml4 = pml4;
-        g_listdir_max = max;
-        g_listdir_count = 0;
-        g_listdir_seen = 0;
-        g_listdir_start = start;
-        k_strlcpy(g_listdir_dir_path, path, sizeof g_listdir_dir_path); // see listdir_collect()'s per-entry fs_stat()
-        fs_list(path, listdir_collect);
-        c->regs[14] = g_listdir_count;
-        g_listdir_out = 0; // don't leave a stale user pointer armed
-                            // between calls -- next call re-arms it
+        struct listdir_ctx x = { .out = out, .pml4 = pml4, .max = max,
+                                 .start = start, .dir = path, .full = kpath_get() };
+        if (!x.full) {
+            kpath_put(path);
+            c->regs[14] = (uint64_t)(int64_t)-ENOMEM;
+            return 0;
+        }
+        fs_list(path, listdir_collect, &x);
+        kpath_put(x.full);
+        c->regs[14] = x.count;
 
         // AN EMPTY DIRECTORY AND A MISSING ONE BOTH LEAVE THE COUNT AT
         // ZERO, because fs_list() returns void and "does nothing" is its
@@ -351,7 +327,7 @@ static int listdir_common(struct syscall_ctx *c, uint64_t path_ptr,
         // comes back empty -- that is how a caller learns it has read
         // the whole directory -- and reporting ENOENT for it would turn
         // the end of a listing into a missing directory.
-        if (g_listdir_count == 0 && start == 0) {
+        if (x.count == 0 && start == 0) {
             if (!fs_exists(path))      c->regs[14] = (uint64_t)(int64_t)-ENOENT;
             else if (!fs_is_dir(path)) c->regs[14] = (uint64_t)(int64_t)-ENOTDIR;
         }
