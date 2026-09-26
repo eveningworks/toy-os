@@ -150,3 +150,11 @@ KTEST("ata", "forcing PIO does not disable TRIM") {
     });
     KTEST_ASSERT_EQ(ata_trim_supported(), before); // restored
 }
+
+KTEST("ata", "a completion wake the bus master does not report is ignored") {
+    // Stopping the engine on a stale wake cancels a transfer mid-flight,
+    // and on QEMU 7.0-11.0.0 a cancelled TRIM deadlocks the emulator.
+    int r = ata_stale_wake_selftest();
+    if (r < 0) KTEST_SKIP("no bus master");
+    KTEST_ASSERT_EQ(r, 1);
+}

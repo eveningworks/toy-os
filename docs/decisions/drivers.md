@@ -214,6 +214,33 @@ any timeout that must survive one has to be denominated in real time.
 See `ata.c`'s `wait_not_busy()`/`DMA_WAIT_TICKS` comments and
 the git history.
 
+## An ATA command is done when the bus master says so, not when IRQ14 fires
+
+The obvious completion test is "the interrupt handler ran", and
+`ata.c` used exactly that: IRQ14 sets `g_dma_irq_fired`, and the waiter
+treated the flag as completion. The flag is only a WAKE-UP, and it can
+be stale -- an IRQ14 that lands while the next command is still
+running. Where it comes from is NOT established; the polled syscall
+path, which leaves its own IRQ14 pending for later, is one candidate. Measured on QEMU 11.1: about one such wake per
+`usertest_run.py` pass, always with the bus master still `ACTIVE` and its
+interrupt bit clear. The waiter then called the command finished and
+wrote `BM_CMD=0`, stopping the engine mid-transfer.
+
+On most QEMUs that is invisible, because the stop DRAINS the request
+before the write returns. On QEMU 7.0 through 11.0.0 a drain that lands
+during an IDE TRIM deadlocks the emulator itself (upstream `7e5cdb34`,
+fixed by `095c08a7ba` in 10.2.3/11.0.1) -- which is how this surfaced:
+Ubuntu 24.04's QEMU 8.2.2, the CI runner's, hung under the ring-3 suite
+4 runs in 17, and never with TRIM off.
+
+So `dma_irq_seen()` asks the hardware: the bus-master status register's
+interrupt bit is completion, and a flag without it is cleared and waited
+past. That is Linux's rule -- `ata_bmdma_port_intr()` treats an
+interrupt without `ATA_DMA_INTR` as not its own. Linux's other half,
+`ata_sff_lost_interrupt()`, which completes a command whose interrupt
+went missing, was NOT needed: the waiter already reads the bit on every
+wake and at the deadline.
+
 ## The PIO fallback is reachable on purpose (`ata nodma`), because unreachable fallback code is a guess
 
 `kernel/drivers/ata.c` has two transfer paths: Bus-Master DMA, and a PIO

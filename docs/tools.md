@@ -108,6 +108,14 @@ manual steps to be worth automating:
   diagnoses, on a loop costing ~90 s at best and sometimes failing for
   reasons of GitHub's own (one run died with `apt-get install` timing
   out after 8 minutes). This makes the second QEMU local and fast.
+  **`--suite usertest` runs the ring-3 `/tests` suite instead of ktest,
+  and `--runs N` turns a row into a RATE.** Both exist because the two
+  suites drive the disk differently: ktest never hung on 8.2.2 while the
+  ring-3 suite deadlocked the emulator 4 runs in 17 (see "An ATA command
+  is done when the bus master says so" in `docs/decisions.md`). A hung
+  run is reported as `HUNG`, its container killed BY NAME -- a timeout
+  on the `docker run` client alone leaves the container and its QEMU
+  running -- and each run's output and serial log are kept in `.qemu_matrix/`.
 - **`backup_repo.sh`** -- a complete, verifiable backup of the GitHub
   repo: mirror clone, a bundle of LOCAL refs (catching branches never
   pushed), **every release asset**, and the repo/PR/issue metadata.
@@ -873,6 +881,9 @@ manual steps to be worth automating:
   says nothing about the code under test. `pipe_test` is the worked
   example: it exits 3 under `run` because its `waitpid` finds no parent,
   and passes fine under the KTEST that spawns it properly.
+  **`--serial-log PATH` keeps the guest's serial output** (vm.py's own
+  flag, passed through) -- the one record left when the EMULATOR hangs,
+  since the table is only printed at the end.
   **An expected exit code of `None` means SPAWN IT INSTEAD**, and judge
   it by what it printed. `run` uses the legacy loader, which has no
   scheduler slot, so anything reaching the window server is refused

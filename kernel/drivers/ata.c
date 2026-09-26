@@ -44,6 +44,7 @@ DRIVER_DECLARE("ata", "block", "ATA/IDE disk, PIO and busmaster DMA");
 #define REG_DRIVE_HEAD  (ATA_PRIMARY_IO + 6)
 #define REG_STATUS      (ATA_PRIMARY_IO + 7)
 #define REG_COMMAND     (ATA_PRIMARY_IO + 7)
+#define REG_ALTSTATUS   0x3F6 // the status register WITHOUT acknowledging INTRQ
 
 #define STATUS_BSY 0x80
 #define STATUS_DRQ 0x08
@@ -274,6 +275,7 @@ static void select_lba(uint32_t lba, uint8_t count) {
 #define BM_CMD_START 0x01
 #define BM_CMD_READ  0x08 // direction bit: set = device writes to memory (an ATA READ)
 
+#define BM_STATUS_ACTIVE 0x01
 #define BM_STATUS_ERROR 0x02
 #define BM_STATUS_IRQ   0x04
 
@@ -506,6 +508,7 @@ static volatile int g_dma_irq_fired = 0;
 // How many times a DMA wait parked its caller instead of polling --
 // the evidence that the sleep path is the one in use (QUERY_ATA).
 static uint64_t g_dma_sleeps;
+static uint32_t g_dma_stale_wakes; // see dma_irq_seen()
 
 // What a DMA waiter parks on and the IRQ wakes. Its ADDRESS is the
 // channel; nothing reads it.
@@ -522,12 +525,21 @@ static void ata_irq_handler(uint64_t *regs) {
     scheduler_wake(&g_dma_chan, 0); // interrupt-safe, by contract
 }
 
-// Has the transfer finished? The flag is the IRQ having been SERVICED;
-// the bus-master status bit is the drive having RAISED it, which is
-// true earlier when interrupts are off. Either one is completion.
+// Has the command finished? ONLY THE BUS-MASTER IRQ BIT SAYS SO; the
+// flag is a wake-up, and a stale one arrives (an IRQ14 that is not
+// this command's) while the engine is still ACTIVE. Trusting it made
+// the caller stop the engine mid-transfer -- on QEMU 7.0-11.0.0, mid-
+// TRIM, which deadlocks the emulator. Linux's ata_bmdma_port_intr()
+// ignores an interrupt without the bit the same way; docs/decisions.md,
+// "An ATA command is done when the bus master says so".
 static int dma_irq_seen(void) {
-    if (g_dma_irq_fired) return 1;
     if (inb(g_bm_io + BM_STATUS) & BM_STATUS_IRQ) { g_dma_irq_fired = 1; return 1; }
+    if (g_dma_irq_fired) {
+        g_dma_irq_fired = 0;   // not ours: keep waiting
+        if (++g_dma_stale_wakes <= 4)
+            klog_printf(KLOG_WARN "ata: ignored a completion wake the bus master "
+                        "does not report (#%u)\n", g_dma_stale_wakes);
+    }
     return 0;
 }
 
@@ -607,7 +619,7 @@ static int wait_dma_irq(uint64_t budget_ticks) {
     }
 
     uint64_t start = pit_ticks();
-    while (!g_dma_irq_fired) {
+    while (!dma_irq_seen()) {
         if (pit_ticks() - start > budget_ticks) return 0;
         __asm__ volatile ("hlt");
     }
@@ -782,6 +794,26 @@ static int dma_finish(int ok, int count, void *buf, int is_write) {
 // not to have that problem again.
 static const char *g_dma_fail_reason = "unknown";
 
+// Names a DMA wait that gave up, BEFORE the bus-master stop that
+// follows it: that stop drains the request, which can deadlock QEMU
+// 7.0-11.0.0 mid-TRIM, so this line is the last evidence out.
+// Read with the ALTERNATE status register, which does not ack INTRQ.
+static void dma_timeout_note(const char *op, uint32_t lba, int count,
+                             int attempt, uint64_t budget_ticks) {
+    static uint32_t notes;
+    notes++;
+    if (notes > 16 && (notes % 64) != 0) return;   // a timeout costs >= 0.3 s, so this is a backstop
+    uint8_t alt = inb(REG_ALTSTATUS);
+    uint8_t bm = inb(g_bm_io + BM_STATUS);
+    klog_printf(KLOG_WARN "ata: %s lba %u n %d attempt %d gave up after %u ms (#%u): "
+                "drive 0x%02x%s, bus master 0x%02x%s%s\n",
+                op, lba, count, attempt,
+                (unsigned)(budget_ticks * 1000 / PIT_HZ), notes,
+                alt, (alt & STATUS_BSY) ? " BUSY" : "",
+                bm, (bm & BM_STATUS_ACTIVE) ? " ACTIVE" : "",
+                (bm & BM_STATUS_IRQ) ? " IRQ" : "");
+}
+
 static int dma_transfer(uint32_t lba, int count, void *buf, int is_write,
                         int attempt) {
     if (!dma_issue(lba, count, buf, is_write)) {
@@ -789,6 +821,8 @@ static int dma_transfer(uint32_t lba, int count, void *buf, int is_write,
         return 0;
     }
     int ok = wait_dma_irq(dma_attempt_ticks(attempt));
+    if (!ok) dma_timeout_note(is_write ? "write" : "read", lba, count, attempt,
+                              dma_attempt_ticks(attempt));
     if (!ok) g_dma_fail_reason = isr_in_progress()
                  ? "completion IRQ never arrived (polled, syscall context)"
                  : "completion IRQ never arrived within the wall-clock bound";
@@ -860,7 +894,7 @@ enum ata_poll_result dma_transfer_poll(void) {
         done = (inb(g_bm_io + BM_STATUS) & BM_STATUS_IRQ) != 0;
         if (done) g_dma_irq_fired = 1; // keep both paths' postcondition identical, same as wait_dma_irq()
     } else {
-        done = g_dma_irq_fired != 0;
+        done = dma_irq_seen();
     }
 
     if (!done) {
@@ -871,6 +905,7 @@ enum ata_poll_result dma_transfer_poll(void) {
         // syscall-context caller is responsible for bounding its own
         // poll loop, same as wait_dma_irq()'s ATA_POLL_LIMIT does today.
         if (!isr_in_progress() && elapsed > DMA_WAIT_TICKS) {
+            dma_timeout_note("async", 0, g_pending.count, 1, DMA_WAIT_TICKS);
             g_pending.in_flight = 0;
             dma_finish(0, g_pending.count, g_pending.buf, g_pending.is_write);
             return ATA_POLL_FAILED;
@@ -1364,6 +1399,17 @@ out:
     return rc;
 }
 
+int ata_stale_wake_selftest(void) {
+    if (!g_bm_io) return -1;
+    kmutex_lock(&g_ata_lock);   // no command in flight, so the IRQ bit is clear
+    outb(g_bm_io + BM_STATUS, BM_STATUS_ERROR | BM_STATUS_IRQ);
+    g_dma_irq_fired = 1;        // what a late IRQ14 leaves behind
+    int seen = dma_irq_seen();
+    int cleared = !g_dma_irq_fired;
+    kmutex_unlock(&g_ata_lock);
+    return !seen && cleared;
+}
+
 int ata_dma_nonblocking_selftest(uint32_t lba, uint32_t *out_polls) {
     kmutex_lock(&g_ata_lock);
     int rc = nonblocking_selftest(lba, out_polls);
@@ -1425,6 +1471,7 @@ static int dsm_send_block(const uint8_t *block) {
     outb(g_bm_io + BM_CMD, 0); // direction: memory -> device, same as a write
 
     if (!wait_not_busy()) return 0;
+    g_dma_irq_fired = 0; // armed before the command, as in dma_issue()
     outb(REG_FEATURES, DSM_FEATURE_TRIM);
     outb(REG_SECCOUNT, 1); // one 512-byte descriptor block
     outb(REG_LBA_LOW, 0);  // unused by DSM, and required to be zero
@@ -1432,11 +1479,12 @@ static int dsm_send_block(const uint8_t *block) {
     outb(REG_LBA_HIGH, 0);
     outb(REG_DRIVE_HEAD, 0xE0); // LBA mode, master
     outb(REG_COMMAND, CMD_DATA_SET_MGMT);
-
-    g_dma_irq_fired = 0;
     outb(g_bm_io + BM_CMD, BM_CMD_START);
 
     int ok = wait_dma_irq(DMA_WAIT_TICKS); // no retry loop here -- full bound
+    if (!ok) dma_timeout_note("trim", (uint32_t)block[0] | (uint32_t)block[1] << 8 |
+                                      (uint32_t)block[2] << 16 | (uint32_t)block[3] << 24,
+                              block[6] | block[7] << 8, 1, DMA_WAIT_TICKS); // first range
     outb(g_bm_io + BM_CMD, 0);
     uint8_t bm_status = inb(g_bm_io + BM_STATUS);
     outb(g_bm_io + BM_STATUS, BM_STATUS_ERROR | BM_STATUS_IRQ);

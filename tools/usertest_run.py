@@ -509,6 +509,8 @@ def vm(args, *argv, check=True):
     cmd = [sys.executable, VM, "--disk", args.disk]
     if args.instance:
         cmd += ["--instance", str(args.instance)]
+    if args.serial_log:
+        cmd += ["--serial-log", args.serial_log]
     cmd += list(argv)
     r = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
     if check and r.returncode != 0:
@@ -570,6 +572,9 @@ def main():
                     help="image to boot (default: a temporary copy of disk.img)")
     ap.add_argument("--instance", type=int, default=0,
                     help="vm.py slot, for running alongside another VM")
+    ap.add_argument("--serial-log", default=None, metavar="PATH",
+                    help="copy the guest's serial output to PATH (vm.py's own "
+                         "flag) -- the only record left when the emulator itself hangs")
     ap.add_argument("-k", metavar="SUBSTR", default="",
                     help="only tests whose name contains SUBSTR")
     ap.add_argument("--list", action="store_true",

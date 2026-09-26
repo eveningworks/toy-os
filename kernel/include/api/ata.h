@@ -310,4 +310,9 @@ enum ata_poll_result dma_transfer_poll(void);
 // caller wants a more specific message than this test's own 0/1).
 int ata_dma_nonblocking_selftest(uint32_t lba, uint32_t *out_polls);
 
+// KTEST hook: a completion wake with the bus master idle and its IRQ
+// bit clear must NOT count as done (ata.c's dma_irq_seen()). 1 pass,
+// 0 fail, -1 no bus master to ask.
+int ata_stale_wake_selftest(void);
+
 #endif
