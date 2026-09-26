@@ -158,9 +158,10 @@ before you start delivering -- don't reconstruct it from memory.
   tested changes. Tags and `gh release` publishing still get
   confirmed first.
 - **Release assets, if cutting one:** three of them --
-  `toy-os.iso`, gzipped `disk.img.gz` (`make clean-disk && make iso`
-  first so it's not carrying session-local test data, then `gzip -k -9
-  disk.img`), and `tools/run_release.sh` -- `gh release create v<version> toy-os.iso disk.img.gz
+  `toy-os.iso`, gzipped `disk.img.gz` (`make clean-disk && make iso
+  DEBUGCON=0` first -- so it carries no session-local test data and no
+  serial debug console, which is an unauthenticated root shell -- then
+  `gzip -k -9 disk.img`), and `tools/run_release.sh` -- `gh release create v<version> toy-os.iso disk.img.gz
   tools/run_release.sh --title ... --notes ...` attaches them directly.
 
 ## Direct local checkout, but as a background job (worktree-isolated)

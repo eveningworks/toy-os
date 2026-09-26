@@ -517,6 +517,30 @@ static int spawn_std_desc(uint64_t pml4, int fd, enum fd_kind want) {
     return fd_desc_index(pml4, fd);
 }
 
+// The child's fd 2. Anything the caller holds that an error can be
+// WRITTEN to -- a terminal, a log, a pipe's write end, a socket, a file
+// open for writing -- rather than stdout_fd's pipe-or-socket rule, which
+// exists because a parent READS its child's stdout. Refused by listing
+// what is allowed, not what is not: a pty MASTER is writable too, and a
+// write to it is INPUT, so a child's errors would be typed at the shell.
+static int spawn_err_desc(uint64_t pml4, int fd) {
+    if (fd == SPAWN_FD_LOG) return fd_desc_alloc(FD_KIND_LOG, -1);
+    if (fd == SPAWN_FD_KMSG) return fd_desc_alloc(FD_KIND_KLOG, -1);
+    struct open_file *f = fd_get(pml4, fd);
+    if (!f) return -1;
+    switch (f->kind) {
+    case FD_KIND_CONSOLE: case FD_KIND_KLOG: case FD_KIND_LOG:
+    case FD_KIND_PIPE_W: case FD_KIND_SOCKET: case FD_KIND_TTY_SLAVE:
+        break;
+    case FD_KIND_FILE:
+        if (f->file.mode != FD_MODE_WRITE) return -1;
+        break;
+    default:
+        return -1;
+    }
+    return fd_desc_index(pml4, fd);
+}
+
 // The three things a program is started with -- path, argument vector,
 // environment -- copied out of the caller's address space into memory
 // the kernel owns, for a spawn and for an exec alike (an exec's copies
@@ -674,7 +698,7 @@ int sys_spawn(struct syscall_ctx *c) {
     // mistake. Written as `>= 0` it silently swallowed
     // SPAWN_FD_LOG, so a service spawned onto the log printed to the
     // console with nothing refused and nothing logged.
-    int stdout_desc = -1, stdin_desc = -1;
+    int stdout_desc = -1, stdin_desc = -1, stderr_desc = -1;
     int ok = 1;
     if (msg.stdout_fd != -1) {
         stdout_desc = spawn_std_desc(pml4, (int)msg.stdout_fd, FD_KIND_PIPE_W);
@@ -688,6 +712,14 @@ int sys_spawn(struct syscall_ctx *c) {
         stdin_desc = spawn_std_desc(pml4, (int)msg.stdin_fd, FD_KIND_PIPE_R);
         if (stdin_desc < 0) {
             klog_write(KLOG_ERR "syscall: spawn() rejected -- stdin fd isn't this process's pipe read end or socket\n");
+            spawn_rc = -EBADF;
+            ok = 0;
+        }
+    }
+    if (ok && (msg.flags & SPAWN_STDERR)) {
+        stderr_desc = spawn_err_desc(pml4, (int)msg.stderr_fd);
+        if (stderr_desc < 0) {
+            klog_write(KLOG_ERR "syscall: spawn() rejected -- stderr fd isn't one this process can write to\n");
             spawn_rc = -EBADF;
             ok = 0;
         }
@@ -711,7 +743,8 @@ int sys_spawn(struct syscall_ctx *c) {
         // having failed before an address space existed.
         if (msg.flags & SPAWN_TRACE) strace_arm_for_current();
         int pid = scheduler_spawn_group(a.path, a.args, a.args_len, stdout_desc,
-                                         stdin_desc, a.env, msg.pgid, c->pml4);
+                                         stdin_desc, stderr_desc, a.env, msg.pgid,
+                                         c->pml4);
         strace_disarm();
         if (pid > 0) spawn_rc = pid;
         // SPAWN_FOREGROUND: the child's group in front of OUR fd 0,
@@ -753,6 +786,13 @@ int sys_spawn(struct syscall_ctx *c) {
         if (pid > 0 && (msg.flags & SPAWN_FOREGROUND))
             tty_set_fg_pgid(fd_tty(pml4, 0), scheduler_pgid(pid));
     }
+    // A sentinel's description was made for this spawn and its first
+    // reference is OURS: the child took its own through fd_set_desc(),
+    // so without this every service start leaked one description.
+    if (msg.stdout_fd == SPAWN_FD_LOG && stdout_desc >= 0) fd_desc_unref(stdout_desc);
+    if ((msg.stderr_fd == SPAWN_FD_LOG || msg.stderr_fd == SPAWN_FD_KMSG) &&
+        stderr_desc >= 0)
+        fd_desc_unref(stderr_desc);
     spawn_args_free(&a);
     c->regs[14] = (uint64_t)(int64_t)spawn_rc;
     return 0;

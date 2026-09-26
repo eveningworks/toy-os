@@ -203,6 +203,12 @@ def instance_sock(n):
     return ".vm.serial" if n == 0 else f".vm.{n}.serial"
 
 
+def log_sock_for(sock):
+    """The kernel-log socket (COM1) beside a debug-console socket (COM2):
+    `.vm.N.serial` -> `.vm.N.log`. None for a socket not named that way."""
+    return sock[: -len(".serial")] + ".log" if sock.endswith(".serial") else None
+
+
 def add_instance_args(ap):
     """`--instance N`, plus the legacy `--sock`/`--qmp-port` pair, on a
     tool that drives an already-running guest. Pair with

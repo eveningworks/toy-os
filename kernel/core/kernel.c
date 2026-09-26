@@ -298,7 +298,10 @@ void kernel_main(uint64_t multiboot_info_addr) {
     i8042_register_sources();
 
     serial_irq_init(); // COM1 RX -- see serial.c for why this can't run inside serial_init() itself
-    klog_write("toy-os: serial RX enabled (debug console on COM1, see docs/decisions.md)\n");
+    // Which port the debug console uses, if any, is debug_console_init()'s
+    // line: it is opt-in, and `debugcon=ttyS0` can move it.
+    klog_printf("toy-os: serial RX enabled -- COM1%s\n",
+                serial_dbg_separate() ? " and COM2" : "");
 
     heap_init(); // kmalloc()/kfree() -- built on pmm, needs it initialized first
 

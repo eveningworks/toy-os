@@ -276,6 +276,15 @@ manual steps to be worth automating:
 - **`gui_debug.py`** -- `DebugConsole`, the connection to the guest's
   serial debug console, and the thing to reach for BEFORE pixels: it
   returns facts to assert on rather than an image to interpret.
+  **It reads TWO sockets on a `vm.py` guest**: commands and replies on
+  the debug console's (`.vm.N.serial`, COM2), and the kernel log on
+  `.vm.N.log` (COM1) through a background thread, into the same buffer
+  `logs()`/`events()`/`damage_bugs()` have always read -- so a tool
+  waiting for an app's log line (`settings: layout ...`) does not
+  change. `events()` returns the log lines that arrived since the
+  command before its sweep began. On a one-port guest there is no log
+  socket and it reads the one wire as before. See docs/decisions.md,
+  "The kernel log and the debug console are two serial ports".
   `send(cmd)` runs a debug command, `json(cmd)` parses one with
   `--json`, `sh <cmd>` runs a KERNEL-shell command, and `settle()` waits
   for injected input to drain (never replace it with a fixed sleep --
@@ -708,9 +717,13 @@ manual steps to be worth automating:
   `boot_smoke_test.py` shuts down the same way, over a **unix** QMP
   socket -- no `port_guard` slot, so it cannot clash with another guest.
   See `docs/decisions.md`.
-- **`vm.py --serial-log PATH`** -- everything the guest writes to its
-  serial port, from the first byte, while the socket still serves the
-  debug console. **A `start` that fails says WHICH failure now**: QEMU
+- **A `vm.py` guest has TWO serial ports**: COM1, the kernel log alone,
+  on `.vm.N.log`; COM2, the debug console, on `.vm.N.serial` -- the name
+  every tool already connects to. `--instance N` derives both. A tool
+  that builds its own one-port QEMU line still works: the kernel keeps
+  both on COM1 when it finds no second UART.
+- **`vm.py --serial-log PATH`** -- everything the kernel LOGS (COM1),
+  from the first byte, whether or not anything reads the log socket. **A `start` that fails says WHICH failure now**: QEMU
   EXITED (with `-no-reboot`, the guest reset -- a crash) or still
   running (a hang). Both used to print "never reached the debug
   console", and the serial output of either went nowhere; this is what

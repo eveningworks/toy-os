@@ -1,7 +1,9 @@
 #ifndef DEBUG_CONSOLE_H
 #define DEBUG_CONSOLE_H
 
-// A tiny interactive command console over the serial port (COM1),
+// A tiny interactive command console over a serial port -- COM2 when a
+// second UART is present, COM1 otherwise, and ONLY when `debugcon` is on
+// the boot line (docs/boot-flags.md; it is an unauthenticated root shell),
 // independent of the VGA/keyboard physical shell and the GUI's
 // keyboard focus -- so kernel state (memory, the filesystem, PCI
 // devices) is inspectable over a second connection (e.g. QEMU's
@@ -28,8 +30,8 @@
 
 void debug_console_init(void);
 
-// Non-blocking -- drains whatever's arrived on COM1 since the last
-// call (via serial_try_getc()), echoing/buffering/dispatching as
+// Non-blocking -- drains whatever's arrived on the console's port since
+// the last call (serial_dbg_try_getc()), echoing/buffering/dispatching as
 // needed, and returns immediately either way. Meant to be called from
 // an existing idle-wait loop that already wakes on every interrupt
 // (see keyboard_getchar()'s hlt loop and userland/wm/wm.c's own event

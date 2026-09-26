@@ -6059,9 +6059,9 @@ waits:
 - **A fault before `exit()` loses buffered output.** With `sys_print`
   it is already on the wire. That matters most for the message printed
   just before something goes wrong, which is the one worth having.
-- **Ordering against fd 2 changes.** fd 2 is the KERNEL LOG here, not a
-  second terminal stream, so a program's stdout can appear after kernel
-  lines written during it. Several test tools read that shared console.
+- **Ordering against fd 2 changes.** fd 2 is the kernel log for a
+  process with no terminal, so such a program's stdout can appear after
+  kernel lines written during it. Several test tools read both.
 
 **The shape to build**, when it is built: convert ordinary output, keep
 `lib/cmd.h`'s `cmd_fail`/`cmd_usage` on the raw unbuffered write with a
@@ -6730,10 +6730,16 @@ Linux's shape -- kernel messages on `console=ttyS0`, a `getty` on
 another tty -- and QEMU's guest agent goes further with its own
 virtio-serial channel and framed JSON.
 
-Pieces: `serial.c` parameterised by port (COM2 is 0x2F8, IRQ 3); the
-debug console reading and writing COM2 through a tty; the kernel
-shell's spawn giving that tty to the command; `vm.py` and every tool
-taking a second socket (`--instance N` derives both). Real hardware
+**Half of it is BUILT** (2026-09-26): `serial.c` drives both ports,
+the debug console and every reply are on COM2 when a second UART
+answers the probe (COM1 otherwise), `vm.py` gives the guest both, and
+`DebugConsole` reads the log's socket on a thread
+(docs/decisions.md, "The kernel log and the debug console are two
+serial ports"). A command's console output reaches COM2 by swapping
+the VGA sink for its duration, which is what is left to replace: a
+serial-backed tty on COM2 that a foreground command gets as fds
+0/1/2, so it can READ the line and Ctrl-C reaches it through the
+line discipline. Real hardware
 mostly has no serial port -- `remote.py` drives it over the network --
 so this is a VM-harness change, not a product one.
 

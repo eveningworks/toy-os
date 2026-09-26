@@ -18,6 +18,7 @@ so there is no second format to maintain.
 | `After` | no | Space-separated service **names** that must be started first. |
 | `Before` | no | Space-separated service names this one must be started before. |
 | `StandardOutput` | no | `log` (default) or `inherit`. Where the service's fd 1 goes. |
+| `StandardError` | no | `kmsg` (default) or `inherit`. Where the service's fd 2 goes. |
 | `Ready` | no | `spawn` (default) or `notify` -- what "started" MEANS. |
 | `ReadyTimeout` | no | Milliseconds to wait for a `Ready=notify` service. Default 5000. |
 
@@ -134,6 +135,18 @@ anybody is reading.
 the console. **An interactive program needs it**, which is why `tosh`
 carries it: a shell whose prompt goes to a log file answers nothing.
 Nothing else here should.
+
+`StandardError=` is the same question for fd 2. By default (`kmsg`) a
+service's errors go to the **kernel log** -- `dmesg`, and the serial
+console -- because a service has no terminal to report to. `StandardError=inherit` means what systemd
+means by it, *the same place as stdout*, which is how `tosh`'s errors
+reach the console it is typing on. So:
+
+| `StandardOutput` | `StandardError` | fd 1 | fd 2 |
+|---|---|---|---|
+| `log` | `kmsg` | the application log | the kernel log |
+| `log` | `inherit` | the application log | the application log |
+| `inherit` | `inherit` | the console | the console |
 
 Two properties worth knowing. The log is a **sentinel, not a pipe**
 (`abi/syscall_abi.h`'s `SPAWN_FD_LOG`): it needs no resource, cannot

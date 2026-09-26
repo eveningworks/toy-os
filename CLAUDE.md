@@ -365,7 +365,7 @@ QMP. `docs/testing.md` has the `QMPSession`/`GuiFlow` API and its gotchas.
 - **TWO GUESTS ON ONE QMP PORT DO NOT FAIL AS A PORT CLASH** -- they
   surface MINUTES later as a `BrokenPipeError` in some other tool
   (`tools/port_guard.py` refuses at launch). **Every tool takes
-  `--instance N`** (QMP port and serial socket from one number); `auto`
+  `--instance N`** (the QMP port and both serial sockets -- the debug console's `.vm.N.serial` on COM2, the kernel log's `.vm.N.log` on COM1 -- from one number); `auto`
   belongs only to what LAUNCHES a guest; name a slot whenever anything
   else may run (`gui_regress.py` holds `0..DEFAULT_JOBS-1`). Concurrency
   is fine for an answer, not for judging the suite.

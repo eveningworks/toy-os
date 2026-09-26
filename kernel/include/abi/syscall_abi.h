@@ -855,10 +855,14 @@ struct listdir_request {
 // inherited would have to store an environment per process, and the
 // one thing every caller then wants -- "like my parent's, but with one
 // change" -- would need a second syscall to express.
-// stdout_fd: everything this program writes to fd 1 goes to the
-// application log, tagged with its own name (api/applog.h). What init
-// gives a service, so `log -u toywm` means what it says.
+// stdout_fd / stderr_fd: everything this program writes to that fd goes
+// to the application log, tagged with its own name (api/applog.h). What
+// init gives a service, so `log -u toywm` means what it says.
 #define SPAWN_FD_LOG (-2)
+// stderr_fd only: the KERNEL LOG, systemd's StandardError=kmsg. What a
+// detached start gives its child's diagnostics when the caller's own fd
+// 2 is a terminal nobody will be watching -- /bin/spawn's case.
+#define SPAWN_FD_KMSG (-3)
 
 struct spawn_msg {
     const char *path;
@@ -927,6 +931,14 @@ struct spawn_msg {
     // /proc/<pid>/cmdline is known for). An environment entry is never
     // empty, so `env` keeps its shape.
     uint32_t args_len;
+
+    // With SPAWN_STDERR: the child's fd 2 -- any descriptor this process
+    // can write to, SPAWN_FD_LOG or SPAWN_FD_KMSG. Without the flag it is NOT READ and
+    // the child inherits the caller's fd 2, the way `args_len` is gated
+    // by SPAWN_ARGV. Wider than stdout_fd's rule on purpose: stderr to
+    // the terminal the caller is on is the ordinary case (systemd's
+    // StandardError=inherit), not a mistake to refuse.
+    int32_t stderr_fd;
 };
 
 // The child is TRACED: every syscall it makes is decoded and printed
@@ -978,8 +990,13 @@ struct spawn_msg {
 // uses SYS_SETSID.
 #define SPAWN_SETSID 8
 
+// `stderr_fd` is set (above). A flag so a caller that predates the
+// field is unchanged, the same shape as SPAWN_ARGV.
+#define SPAWN_STDERR 16
+
 // Every flag this kernel knows. Anything outside it is -EINVAL.
-#define SPAWN_FLAGS_ALL (SPAWN_TRACE | SPAWN_FOREGROUND | SPAWN_ARGV | SPAWN_SETSID)
+#define SPAWN_FLAGS_ALL (SPAWN_TRACE | SPAWN_FOREGROUND | SPAWN_ARGV | SPAWN_SETSID | \
+                         SPAWN_STDERR)
 
 // The most an environment blob may be, including its terminator. It has
 // to fit the child's single argv/env stack page alongside the strings

@@ -58,6 +58,15 @@ GRUB_TIMEOUT ?= $(if $(MENU),5,0)
 # the kernel matches by substring and an unknown word is simply ignored.
 KCMDLINE ?=
 
+# The serial DEBUG CONSOLE listens only with `debugcon` on the kernel
+# command line -- it is an unauthenticated root shell on a serial port
+# (kernel/core/debug_console.c). ON by default here, because every test
+# tool drives the guest through it; RELEASE media are built with
+# DEBUGCON=0 (the delivery checklist says so). KCMDLINE is still yours:
+# this only appends the word.
+DEBUGCON ?= 1
+GRUB_KCMDLINE = $(strip $(KCMDLINE) $(if $(filter 1,$(DEBUGCON)),debugcon))
+
 GRUB_MKRESCUE := $(shell command -v grub-mkrescue 2>/dev/null || command -v grub2-mkrescue 2>/dev/null)
 
 # ccache in front of the compiler when it is installed, and plain gcc
@@ -1681,7 +1690,7 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	# hand-authored (CLAUDE.md's rule about sync/). A checkout without
 	# GRUB's BIOS target stages nothing and says so; that build still
 	# boots, it just cannot install itself.
-	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(KCMDLINE)|' grub.cfg > $(BUILD)/grub-disk.cfg
+	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(GRUB_KCMDLINE)|' grub.cfg > $(BUILD)/grub-disk.cfg
 	python3 tools/install_grub.py --stage-payload $(SEED_DIR)/sync/install \
 	    --kernel $(KERNEL_MEDIA) --grub-cfg $(BUILD)/grub-disk.cfg
 	mkdir -p $(SEED_DIR)/sync/usr/share/doc
@@ -1972,7 +1981,7 @@ iso: version $(KERNEL) $(USERLAND_ELVES) seed $(BUILD)/conf.mk $(KERNEL_MEDIA)
 	mkdir -p iso/boot/grub
 	rm -f iso/boot/live.img
 	cp $(KERNEL_MEDIA) iso/boot/kernel.bin
-	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(KCMDLINE)|' grub.cfg > iso/boot/grub/grub.cfg
+	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(GRUB_KCMDLINE)|' grub.cfg > iso/boot/grub/grub.cfg
 	@if [ -z "$(GRUB_MKRESCUE)" ]; then \
 		echo "make: grub-mkrescue not found (looked for grub-mkrescue and grub2-mkrescue)."; \
 		echo "      Install GRUB's rescue tools + xorriso + mtools -- see README.md's"; \
@@ -2007,7 +2016,7 @@ usb-image: version $(KERNEL) $(USERLAND_ELVES) seed $(BUILD)/conf.mk $(KERNEL_ME
 	rm -f $(USB_IMG)
 	truncate -s $(USB_SIZE) $(USB_IMG)
 	python3 tools/seed_disk.py $(USB_IMG) $(SEED_DIR)
-	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(KCMDLINE)|' \
+	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(GRUB_KCMDLINE)|' \
 	    grub.cfg > $(BUILD)/grub-usb.cfg
 	python3 tools/install_grub.py $(USB_IMG) --kernel $(KERNEL_MEDIA) \
 	    --grub-cfg $(BUILD)/grub-usb.cfg
@@ -2039,7 +2048,7 @@ live-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG) $(BUILD)/.compres
 	    cp $(LIVE_IMG) iso-live/boot/live.img.gz; \
 	    echo "  COMPRESS=0: live image shipped uncompressed, `stat -c%s iso-live/boot/live.img.gz` bytes"; \
 	fi
-	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(KCMDLINE)|' grub-live.cfg > iso-live/boot/grub/grub.cfg
+	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(GRUB_KCMDLINE)|' grub-live.cfg > iso-live/boot/grub/grub.cfg
 	@if [ -z "$(GRUB_MKRESCUE)" ]; then \
 		echo "make: grub-mkrescue not found -- see README.md's dependency table."; \
 		exit 1; \

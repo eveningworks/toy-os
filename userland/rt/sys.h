@@ -965,6 +965,9 @@ struct sys_spawn_opts {
     char      **env;    // NULL for an empty environment, not for `environ`
     int         stdin_fd;   // pipe read end or socket, or -1
     int         stdout_fd;  // pipe write end or socket, or -1
+    // Anything writable, SPAWN_FD_LOG or SPAWN_FD_KMSG; -1 inherits the
+    // caller's fd 2.
+    int         stderr_fd;
     int         pgid;       // 0 inherits, PGID_NEW leads a new group
     unsigned    flags;      // SPAWN_* (abi/syscall_abi.h)
 };

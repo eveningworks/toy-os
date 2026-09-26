@@ -123,6 +123,9 @@ static void wire_putc(char c) {
 
 void klog_serial_hold(void) { g_hold = 1; }
 
+static int g_tee_dbg;
+void klog_tee_dbg(int on) { g_tee_dbg = on && serial_dbg_separate(); }
+
 void klog_serial_release(void) {
     g_hold = 0;
     for (unsigned i = 0; i < g_hold_len; i++) serial_putc(g_hold_buf[i]);
@@ -139,6 +142,7 @@ void klog_serial_release(void) {
 void klog_putc(char c) {
     int to_console = g_line_level <= g_console_level;
     if (to_console) wire_putc(c); // raw wire byte, unchanged -- see top comment
+    if (to_console && g_tee_dbg) serial_dbg_putc(c);
     if (at_line_start) klog_write_timestamp();
     klog_buf_putc(c);
     at_line_start = (c == '\n');

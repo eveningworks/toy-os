@@ -11,6 +11,9 @@
 // the system went there, so the same program is run again with an
 // ordinary stdout and its marker must be ABSENT.
 //
+// The same pair for fd 2 (SPAWN_STDERR): the child is this program
+// again, run with `--stderr <marker>`.
+//
 // Prints one line per check and exits with the number of failures.
 #include <stdio.h>
 #include <string.h>
@@ -25,6 +28,25 @@
 // this run's assertion.
 static char g_logged[64];
 static char g_console[64];
+
+static char g_err_logged[64];
+static char g_err_kept[64];
+
+// This program again, as the child that writes to fd 2 -- with its fd 2
+// named in the spawn (SPAWN_STDERR) or left inherited (-1).
+static int run_err(const char *text, int stderr_fd) {
+    char args[96];
+    snprintf(args, sizeof args, "--stderr %s", text);
+    struct sys_spawn_opts o;
+    sys_spawn_opts_init(&o);
+    o.args = args;
+    o.stderr_fd = stderr_fd;
+    int pid = sys_spawn_opts("/tests/applog_test", &o);
+    if (pid <= 0) return -1;
+    int status = 0;
+    sys_waitpid(pid, &status);
+    return status;
+}
 
 static int run(const char *prog, const char *text, int stdout_fd) {
     int pid = sys_spawn(prog, text, stdout_fd);
@@ -47,13 +69,19 @@ static const char *find(const char *text, char *tag_out, unsigned cap) {
     }
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc == 3 && strcmp(argv[1], "--stderr") == 0) {
+        sys_write(2, argv[2], strlen(argv[2]));
+        return 0;
+    }
     utest_begin("applog_test", "a spawned child's stdout, tagged",
                 UTEST_VERDICT_FILE);
 
     unsigned long long stamp = sys_monotonic_ns();
     snprintf(g_logged, sizeof g_logged, "applog-logged-%llu", stamp);
     snprintf(g_console, sizeof g_console, "applog-console-%llu", stamp);
+    snprintf(g_err_logged, sizeof g_err_logged, "applog-stderr-%llu", stamp);
+    snprintf(g_err_kept, sizeof g_err_kept, "applog-stderr-kept-%llu", stamp);
 
     utest_check(run("/bin/echo", g_logged, SPAWN_FD_LOG) == 0,
                 "a child spawned onto the log runs and exits");
@@ -72,6 +100,18 @@ int main(void) {
     char other[APPLOG_TAG_MAX];
     utest_check(find(g_console, other, sizeof other) == 0,
                 "a child with an ordinary stdout leaves no record");
+
+    // STDERR, NAMED IN THE SPAWN (SPAWN_STDERR). The control is the same
+    // child with fd 2 left inherited, whose marker must NOT be logged --
+    // otherwise a kernel ignoring the field would pass.
+    char etag[APPLOG_TAG_MAX];
+    utest_check(run_err(g_err_logged, SPAWN_FD_LOG) == 0,
+                "a child spawned with its stderr on the log runs and exits");
+    utest_check(find(g_err_logged, etag, sizeof etag) != 0,
+                "what it wrote to fd 2 is in the application log");
+    utest_check(run_err(g_err_kept, -1) == 0 &&
+                find(g_err_kept, etag, sizeof etag) == 0,
+                "a child with an inherited stderr leaves no record");
 
     // A LINE BUILT FROM SEVERAL WRITES. cmd_fail_err() sends five, so
     // `cat` on a missing file is the natural fixture -- and the three

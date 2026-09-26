@@ -57,7 +57,9 @@ import os
 import atexit
 import socket
 import sys
+import threading
 import time
+import weakref
 
 PROMPT = "dbg> "
 
@@ -93,6 +95,15 @@ class DebugConsole:
     # nothing else, so a tool reaches real hardware without an edit of
     # its own -- and the alternative, a factory call in every tool, was
     # fifty chances to forget one. It says on stderr where it is pointed.
+    # Class-level so a subclass that never runs __init__'s log setup --
+    # remote_gui.RemoteConsole -- still has them for capture_panic() and
+    # events(): one stream, no log thread.
+    _log_thread = None
+    _log_s = None
+    _mark = _prev_mark = _consumed = 0
+    _all_log = ()
+    _lock = threading.Lock()
+
     def __new__(cls, *args, **kwargs):
         if cls is DebugConsole and os.environ.get("TOYOS_REMOTE_HOST"):
             from remote_gui import RemoteConsole
@@ -115,6 +126,45 @@ class DebugConsole:
         self.log_lines = []
         self._stale = False   # a reply timed out; resync before the next
         self._resyncs = 0
+        # THE KERNEL LOG MAY BE ON ITS OWN PORT. vm.py gives the guest two
+        # serial ports -- COM1 the log (`.vm.N.log`), COM2 this console --
+        # so a log line cannot tear a reply. The log still has to reach
+        # logs()/events()/damage_bugs(), which ~40 tools read, so a thread
+        # reads it into the same buffer. `_all_log` is append-only and
+        # `_mark` is where it stood when the latest command was sent:
+        # events() returns what arrived since the PREVIOUS command began,
+        # which is what it meant when both shared one wire. No log socket
+        # (a one-port guest): the log arrives in replies, as it always did.
+        self._lock = threading.Lock()
+        self._all_log = []
+        self._mark = self._prev_mark = self._consumed = 0
+        self._closing = False
+        self._log_thread = None
+        import port_guard
+        lp = port_guard.log_sock_for(sock_path)
+        # SPLIT ONLY IF THE LOG PORT ANSWERS, not because its path exists:
+        # a `.vm.log` left by a killed guest would otherwise put a one-port
+        # guest's console in split mode, and events() would read an empty
+        # log for ever while every event sat in the replies.
+        first = None
+        if lp:
+            try:
+                first = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                first.settimeout(0.5)
+                first.connect(lp)
+            except OSError:
+                first.close()
+                first = None
+        if first is not None:
+            self._log_s = first
+            # A WEAKREF, NOT `self._read_log`: a thread holding the console
+            # keeps it alive, so one a caller dropped without close() --
+            # `DebugConsole(sock).send(...)`, which several helpers do --
+            # was never collected, held COM2 open, and QEMU (one client
+            # per socket) gave the NEXT console no replies at all.
+            self._log_thread = threading.Thread(
+                target=_read_log, args=(weakref.ref(self), lp, first), daemon=True)
+            self._log_thread.start()
         self._sync()
 
     def _read_to_prompt(self):
@@ -179,6 +229,8 @@ class DebugConsole:
         """
         if self._stale:
             self._resync()
+        with self._lock:
+            self._prev_mark, self._mark = self._mark, len(self._all_log)
         self._s.sendall((command + "\n").encode())
         buf = self._read_to_prompt().replace("\r", "")
         if not buf.endswith(PROMPT):
@@ -188,7 +240,8 @@ class DebugConsole:
         if buf.endswith(PROMPT):
             buf = buf[: -len(PROMPT)]
         out = buf.strip("\n")
-        self.log_lines.extend(l for l in out.splitlines() if l.strip())
+        with self._lock:
+            self.log_lines.extend(l for l in out.splitlines() if l.strip())
         return out
 
     def _resync(self):
@@ -291,7 +344,20 @@ class DebugConsole:
         read. Sending an empty line collects them. click()/drag()/key()
         below already do this and return the result, which is usually
         what you want; call this directly to sweep up anything else."""
-        return [l for l in self.send("").splitlines() if l.startswith(prefix)]
+        reply = self.send("")
+        if self._log_thread is None:
+            return [l for l in reply.splitlines() if l.startswith(prefix)]
+        # The log is on its own port: what arrived since the command
+        # BEFORE this sweep began -- the click or key that caused it --
+        # after a moment for the tail of it to cross the wire.
+        # `_consumed` stops two sweeps in a row returning the same lines:
+        # both would otherwise start at the previous command's mark.
+        time.sleep(0.05)
+        with self._lock:
+            start = max(self._prev_mark, self._consumed)
+            new = self._all_log[start:]
+            self._consumed = len(self._all_log)
+        return [l for l in new if l.startswith(prefix)]
 
     def logs(self, match="", clear=True):
         """Every console line seen so far containing `match`, newest last.
@@ -302,9 +368,12 @@ class DebugConsole:
         message the kernel emitted since the last command is included.
         """
         self.send("")
-        hits = [l for l in self.log_lines if match in l]
-        if clear:
-            self.log_lines = [l for l in self.log_lines if match not in l]
+        if self._log_thread is not None:
+            time.sleep(0.05)   # the log's own port may be a moment behind
+        with self._lock:
+            hits = [l for l in self.log_lines if match in l]
+            if clear:
+                self.log_lines = [l for l in self.log_lines if match not in l]
         return hits
 
     # A verdict the WM itself declared void: the comparison measured
@@ -757,13 +826,23 @@ class DebugConsole:
         Pair it with tools/panic_resolve.py to name the addresses -- or
         just read it, since the kernel bakes a symbol table in now.
         """
+        # From the start of the LAST command, not from now: the fatal thing
+        # usually happened before this was called, and with the log on its
+        # own port the reader thread has already taken it off the wire.
+        with self._lock:
+            start = self._mark
         time.sleep(seconds)
         prev = self.timeout
         try:
             self.timeout = seconds
-            return self.send("")
+            reply = self.send("")
         finally:
             self.timeout = prev
+        if self._log_thread is None:
+            return reply
+        with self._lock:
+            logged = self._all_log[start:]
+        return "\n".join(logged + ([reply] if reply else []))
 
     def damage_verify(self, on=True):
         """Turn the damage-invariant checker on/off. Pair with
@@ -895,7 +974,26 @@ class DebugConsole:
         return self.menu_row(label)
 
     def close(self):
+        self._closing = True
         self._s.close()
+        # AT ONCE, not at the reader's next recv timeout: QEMU serves one
+        # client per socket, so a reader left attached for that half
+        # second keeps the NEXT console's reader queued -- and the lines
+        # logged meanwhile go to the dead one.
+        log_s = getattr(self, "_log_s", None)
+        if log_s is not None:
+            try:
+                log_s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            log_s.close()
+
+    def __del__(self):
+        # Ends the log thread too; see the weakref note in __init__.
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def __enter__(self):
         return self
@@ -903,6 +1001,61 @@ class DebugConsole:
     def __exit__(self, *exc):
         self.close()
 
+
+
+def _read_log(wself, path, first=None):
+    """COM1's lines, into the console's log_lines and _all_log, for the
+    life of the console -- re-attaching when the guest reboots and the
+    socket dies. Holds the console only through `wself`, and only while
+    appending, so dropping the console ends this thread."""
+    def alive():
+        c = wself()
+        return c is not None and not c._closing
+    while alive():
+        if first is not None:   # the constructor's own connection
+            s, first = first, None
+        else:
+            try:
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.settimeout(0.5)
+                s.connect(path)
+            except OSError:
+                time.sleep(0.5)
+                continue
+        c = wself()
+        if c is None:
+            s.close()
+            return
+        c._log_s = s   # so close() can end this connection at once
+        closing = c._closing
+        del c
+        if closing:
+            s.close()
+            return
+        part = ""
+        while alive():
+            try:
+                data = s.recv(65536)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            if not data:
+                break
+            part += data.decode("utf-8", errors="replace").replace("\r", "")
+            *lines, part = part.split("\n")
+            lines = [l for l in lines if l.strip()]
+            c = wself()
+            if lines and c is not None:
+                with c._lock:
+                    c.log_lines.extend(lines)
+                    c._all_log.extend(lines)
+            del c
+        try:
+            s.close()
+        except OSError:
+            pass
+        time.sleep(0.5)
 
 def changed_rows(rest_png, hover_png, box, threshold=1.0):
     """Which pixel ROWS inside `box` differ between two frames.
@@ -955,14 +1108,15 @@ def changed_rows(rest_png, hover_png, box, threshold=1.0):
 # Restored only if this process is what turned it ON -- a machine that
 # already had it set was told to, and is not ours to change back.
 def _enable_layout_log(sock):
-    c = DebugConsole(sock)
-    was_on = "on" in c.send("sh config get desktop.layout_log")
-    c.send("sh config set desktop.layout_log on")
+    with DebugConsole(sock) as c:
+        was_on = "on" in c.send("sh config get desktop.layout_log")
+        c.send("sh config set desktop.layout_log on")
     if was_on:
         return
     def _restore():
         try:
-            DebugConsole(sock).send("sh config set desktop.layout_log off")
+            with DebugConsole(sock) as c:
+                c.send("sh config set desktop.layout_log off")
         except Exception:
             pass
     atexit.register(_restore)

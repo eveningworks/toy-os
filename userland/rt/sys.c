@@ -969,6 +969,7 @@ void sys_spawn_opts_init(struct sys_spawn_opts *o) {
     o->env = 0;
     o->stdin_fd = -1;
     o->stdout_fd = -1;
+    o->stderr_fd = -1;
     o->pgid = 0;
     o->flags = 0;
 }
@@ -995,6 +996,8 @@ int sys_spawn_opts(const char *path, const struct sys_spawn_opts *o) {
     msg.env = g_envblob;
     msg.stdout_fd = o->stdout_fd;
     msg.stdin_fd = o->stdin_fd;
+    msg.stderr_fd = o->stderr_fd;
+    if (o->stderr_fd != -1) flags |= SPAWN_STDERR;
     msg.pgid = o->pgid;
     msg.flags = flags;
     int64_t rc = syscall1(SYS_SPAWN, (uint64_t)(uintptr_t)&msg);
@@ -1045,6 +1048,7 @@ int sys_execve(const char *path, char *const argv[], char *const envp[]) {
     msg.env = g_envblob;
     msg.stdout_fd = -1;
     msg.stdin_fd = -1;
+    msg.stderr_fd = -1;
     msg.pgid = 0;
     return (int)err(syscall1(SYS_EXEC, (uint64_t)(uintptr_t)&msg));
 }

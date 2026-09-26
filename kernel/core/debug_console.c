@@ -1,22 +1,12 @@
-// See debug_console.h for the design writeup. Output goes through
-// klog_write()/klog_write_dec()/klog_write_hex() rather than raw
-// serial_write() calls -- same "every kernel diagnostic goes through
-// klog" convention every other kernel-side message already follows,
-// which also means this console's own responses land in the `dmesg`
-// ring buffer alongside everything else (occasionally noisy, but
-// consistent, and reuses klog's number-formatting instead of this file
-// needing its own). Typed input is echoed with a raw serial_putc()
-// call instead, since that's local terminal echo, not a diagnostic
-// message -- it has no business in the dmesg ring buffer.
+// See debug_console.h for the design writeup.
 //
-// A second, unrelated writer sharing COM1's TX line with ordinary
-// klog_write() calls from anywhere else in the kernel (a driver
-// logging something while this console is mid-response, say) can
-// interleave byte-by-byte on the wire -- there's no output lock
-// anywhere in this kernel (see serial.c/klog.c), and adding one here
-// alone wouldn't fix the general case. Accepted as a known rough edge
-// for a debug-only tool rather than solved with new synchronization
-// machinery; see docs/decisions.md.
+// REPLIES ARE NOT LOG LINES. Everything this console prints goes to its
+// own port through dbg_write()/dbg_printf() -- COM2 when a UART is there,
+// COM1 otherwise (serial.h) -- and NOT through klog: a reply is not an
+// event, it has no business in dmesg, and while the two shared a wire a
+// log line could land inside a reply and tear it. With COM2 present the
+// log owns COM1 alone and nothing can interleave with a reply at all;
+// on a one-port machine `readfile` still frames a file atomically.
 #include "clocksource.h"
 #include "debug_console.h"
 #include "serial.h"
@@ -42,6 +32,8 @@
 #include "ktest_run.h"
 #include "shell.h" // shell_dispatch -- `sh` runs the real shell, it doesn't reimplement one
 #include "vga.h"
+#include <stdarg.h>
+#include "multiboot.h" // multiboot_cmdline() -- `debugcon`
 #include "kerrno.h" // EBUSY -- the gui channel is one slot
 
 #define DBG_LINE_MAX 128
@@ -50,19 +42,30 @@
 static char line_buf[DBG_LINE_MAX];
 static int line_len = 0;
 
+static void dbg_write(const char *s) { serial_dbg_write(s); }
+
+static void dbg_printf(const char *fmt, ...) {
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    k_vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    dbg_write(buf);
+}
+
 static void dbg_cmd_help(void) {
-    klog_write("Commands:\r\n");
-    klog_write("  help        - this list\r\n");
-    klog_write("  meminfo     - physical frame + kernel heap usage\r\n");
-    klog_write("  readfile P  - file P as one framed block, nothing interleaved\r\n");
-    klog_write("  lsdev       - enumerated PCI devices\r\n");
-    klog_write("  usb         - xHCI registers, rings and root ports\r\n");
-    klog_write("  aml         - the ACPI namespace (declarations, not methods)\r\n");
-    klog_write("  lsfs [path] - list a filesystem directory (default /)\r\n");
-    klog_write("  ktest [suite] - run the in-kernel test suite\r\n");
-    klog_write("  sh <command>  - run any shell command, output back here\r\n");
-    klog_write("  gui <sub>     - inspect/drive the window manager (`gui help`)\r\n");
-    klog_write("  diag [name [cmd]] - ask any registered service; no args lists them\r\n");
+    dbg_write("Commands:\r\n");
+    dbg_write("  help        - this list\r\n");
+    dbg_write("  meminfo     - physical frame + kernel heap usage\r\n");
+    dbg_write("  readfile P  - file P as one framed block, nothing interleaved\r\n");
+    dbg_write("  lsdev       - enumerated PCI devices\r\n");
+    dbg_write("  usb         - xHCI registers, rings and root ports\r\n");
+    dbg_write("  aml         - the ACPI namespace (declarations, not methods)\r\n");
+    dbg_write("  lsfs [path] - list a filesystem directory (default /)\r\n");
+    dbg_write("  ktest [suite] - run the in-kernel test suite\r\n");
+    dbg_write("  sh <command>  - run any shell command, output back here\r\n");
+    dbg_write("  gui <sub>     - inspect/drive the window manager (`gui help`)\r\n");
+    dbg_write("  diag [name [cmd]] - ask any registered service; no args lists them\r\n");
 }
 
 // The one command here that isn't read-only inspection. This console's
@@ -80,7 +83,7 @@ static void dbg_cmd_help(void) {
 // ktest_run_all() reports through vga_write(), which by default paints
 // the physical screen -- so run it behind a sink that redirects that
 // output down this wire instead. Without this the tests genuinely run
-// over serial but their report is invisible here (only the klog_write()
+// over serial but their report is invisible here (only the dbg_write()
 // lines from inside individual tests come through), which is exactly
 // how the first version of tools/ktest_run.py managed to time out
 // waiting for a verdict that was being printed to a screen nobody was
@@ -92,8 +95,8 @@ static void dbg_cmd_help(void) {
 // colours.
 static void dbg_sink_putc(void *ctx, char c) {
     (void)ctx;
-    if (c == '\n') serial_putc('\r'); // serial terminals want CRLF
-    serial_putc(c);
+    if (c == '\n') serial_dbg_putc('\r'); // serial terminals want CRLF
+    serial_dbg_putc(c);
 }
 static void dbg_sink_backspace(void *ctx) { (void)ctx; }
 static void dbg_sink_clear(void *ctx) { (void)ctx; }
@@ -147,7 +150,7 @@ static int dbg_is_blocked(const char *cmd) {
 // commands, no drift.
 static void dbg_cmd_sh(char *line) {
     if (!line || line[0] == '\0') {
-        klog_write("usage: sh <command>  (any shell command; try 'sh help')\r\n");
+        dbg_write("usage: sh <command>  (any shell command; try 'sh help')\r\n");
         return;
     }
 
@@ -157,11 +160,11 @@ static void dbg_cmd_sh(char *line) {
     while (line[i] && line[i] != ' ' && i < (int)sizeof(cmd) - 1) { cmd[i] = line[i]; i++; }
     cmd[i] = '\0';
     if (dbg_is_blocked(cmd)) {
-        klog_write("sh: '");
-        klog_write(cmd);
-        klog_write("' can't run from the serial console (it takes over the\r\n");
-        klog_write("screen, never returns, or needs keyboard input this console\r\n");
-        klog_write("can't provide). See debug_console.c's DBG_BLOCKED_CMDS.\r\n");
+        dbg_write("sh: '");
+        dbg_write(cmd);
+        dbg_write("' can't run from the serial console (it takes over the\r\n");
+        dbg_write("screen, never returns, or needs keyboard input this console\r\n");
+        dbg_write("can't provide). See debug_console.c's DBG_BLOCKED_CMDS.\r\n");
         return;
     }
 
@@ -180,9 +183,9 @@ static void dbg_cmd_ktest(const char *suite) {
 static void dbg_cmd_meminfo(void) {
     uint64_t total = pmm_total_frames(), free = pmm_free_frames();
     uint64_t used = total - free;
-    klog_printf("phys: %luK used / %luK total (%luK free)\r\n",
+    dbg_printf("phys: %luK used / %luK total (%luK free)\r\n",
                  used * 4, total * 4, free * 4);
-    klog_printf("heap: %lu bytes used / %lu bytes claimed from pmm\r\n",
+    dbg_printf("heap: %lu bytes used / %lu bytes claimed from pmm\r\n",
                  (unsigned long)heap_used_bytes(), (unsigned long)heap_total_bytes());
 }
 
@@ -197,7 +200,7 @@ static void dbg_cmd_lsdev(void) {
     if (disp) {
         struct display_surface s;
         display_get_surface(&s);
-        klog_printf("Display: %s  %ux%u x%u pitch %u  caps:%s%s%s%s%s\r\n",
+        dbg_printf("Display: %s  %ux%u x%u pitch %u  caps:%s%s%s%s%s\r\n",
                      disp->name, s.width, s.height, (unsigned)s.bpp, s.pitch,
                      display_has(DISPLAY_CAP_NEEDS_FLUSH) ? " flush" : "",
                      display_has(DISPLAY_CAP_CURSOR)      ? " cursor" : "",
@@ -205,7 +208,7 @@ static void dbg_cmd_lsdev(void) {
                      display_has(DISPLAY_CAP_ACCEL_COPY)  ? " copy" : "",
                      display_has(DISPLAY_CAP_MODESET)     ? " modeset" : "");
     } else {
-        klog_write("Display: none claimed\r\n");
+        dbg_write("Display: none claimed\r\n");
     }
 
     // The Local APIC, when there is one. Reported beside the USB
@@ -215,9 +218,9 @@ static void dbg_cmd_lsdev(void) {
     {
         char apic[96];
         if (lapic_summary(apic, sizeof apic))
-            klog_printf("LAPIC: %s, %u spurious\r\n", apic, idt_spurious_count());
+            dbg_printf("LAPIC: %s, %u spurious\r\n", apic, idt_spurious_count());
         else
-            klog_write("LAPIC: not enabled -- every device is on the 8259 PIC\r\n");
+            dbg_write("LAPIC: not enabled -- every device is on the 8259 PIC\r\n");
     }
 
     // WHICH DEVICE DRIVES THE TICK, and how many it has delivered. The
@@ -227,11 +230,11 @@ static void dbg_cmd_lsdev(void) {
     {
         char tick[96];
         clockevent_summary(tick, sizeof tick);
-        klog_printf("Tick: %s, %u lapic-timer interrupt(s)\r\n",
+        dbg_printf("Tick: %s, %u lapic-timer interrupt(s)\r\n",
                     tick, lapic_timer_ticks());
         struct clockevent_stats cs;
         clockevent_get_stats(&cs);
-        klog_printf("Tick: %llu event(s), %llu tick(s), %llu idle stop(s), "
+        dbg_printf("Tick: %llu event(s), %llu tick(s), %llu idle stop(s), "
                     "%llu ms stopped of %llu\r\n",
                     (unsigned long long)cs.events, (unsigned long long)cs.ticks,
                     (unsigned long long)cs.idle_stops,
@@ -241,26 +244,26 @@ static void dbg_cmd_lsdev(void) {
 
     char usbline[96];
     if (usb_controller_summary(usbline, sizeof usbline))
-        klog_printf("USB: %s\r\n", usbline);
+        dbg_printf("USB: %s\r\n", usbline);
     else
-        klog_write("USB: no controller\r\n");
+        dbg_write("USB: no controller\r\n");
 
     // The ACTIVE marker is the load-bearing half: a machine with two
     // cards looks identical to one with two working cards until you ask
     // which of them the next SYS_SND_OPEN would reach.
     int nsnd = sound_device_count();
     if (nsnd == 0) {
-        klog_write("Sound: no device\r\n");
+        dbg_write("Sound: no device\r\n");
     } else {
-        klog_printf("Sound (%d, preference %s):\r\n", nsnd, sound_preference());
+        dbg_printf("Sound (%d, preference %s):\r\n", nsnd, sound_preference());
         for (int i = 0; i < nsnd; i++)
-            klog_printf("  %s%s  \"%s\"\r\n", sound_device_name(i),
+            dbg_printf("  %s%s  \"%s\"\r\n", sound_device_name(i),
                         sound_device_is_active(i) ? "  [active]" : "",
                         sound_device_label(i));
     }
 
     int ns = input_source_count();
-    klog_printf("Input sources (%d):\r\n", ns);
+    dbg_printf("Input sources (%d):\r\n", ns);
     for (int i = 0; i < ns; i++) {
         const struct input_source *src = input_source_at(i);
         if (!src) continue;
@@ -275,7 +278,7 @@ static void dbg_cmd_lsdev(void) {
         else if (src->irq)
             k_snprintf(how, sizeof how, "irq %u", (unsigned)src->irq);
         else k_strlcpy(how, "polled", sizeof how);
-        klog_printf("  %s%s%s%s%s  [%s]\r\n", src->name,
+        dbg_printf("  %s%s%s%s%s  [%s]\r\n", src->name,
                      (src->caps & INPUT_CAP_KEYS)  ? "  keys" : "",
                      (src->caps & INPUT_CAP_REL)   ? "  rel" : "",
                      (src->caps & INPUT_CAP_ABS)   ? "  abs" : "",
@@ -286,16 +289,16 @@ static void dbg_cmd_lsdev(void) {
         // The event count, not just the device list: "is it claimed?"
         // and "is it delivering?" are different questions, and only the
         // second one distinguishes a working driver from a present one.
-        klog_printf("  (virtio-input: %u event(s) decoded)\r\n",
+        dbg_printf("  (virtio-input: %u event(s) decoded)\r\n",
                      (unsigned)virtio_input_events());
     }
 
     int n = pci_device_count();
-    klog_printf("PCI devices (%d):\r\n", n);
+    dbg_printf("PCI devices (%d):\r\n", n);
     for (int i = 0; i < n; i++) {
         const struct pci_device *d = pci_device_at(i);
         if (!d) continue;
-        klog_printf("  %u:%u.%u  0x%x:0x%x  %s\r\n",
+        dbg_printf("  %u:%u.%u  0x%x:0x%x  %s\r\n",
                      d->bus, d->device, d->function,
                      d->vendor_id, d->device_id,
                      pci_class_name(d->class_code, d->subclass));
@@ -305,8 +308,8 @@ static void dbg_cmd_lsdev(void) {
 // Nothing here needs state across entries, so the context is unused.
 static void dbg_lsfs_cb(void *ctx, const char *name, uint32_t size, int is_dir) {
     (void)ctx;
-    if (is_dir) klog_printf("  %s/\r\n", name);
-    else        klog_printf("  %s  (%u bytes)\r\n", name, size);
+    if (is_dir) dbg_printf("  %s/\r\n", name);
+    else        dbg_printf("  %s  (%u bytes)\r\n", name, size);
 }
 
 // A FILE AS ONE FRAMED BLOCK, for a harness to parse by frame rather
@@ -336,12 +339,12 @@ static void dbg_cmd_readfile(const char *path) {
 
     scheduler_preempt_disable();
     klog_serial_hold();
-    serial_write(hdr);
+    dbg_write(hdr);
     for (uint32_t i = 0; i < n; i++) {
-        serial_putc(buf[i]);
-        if ((i & 1023) == 1023) serial_flush();   // never outrun the 4 KiB TX ring
+        serial_dbg_putc(buf[i]);
+        if ((i & 1023) == 1023) serial_dbg_flush();   // never outrun the 4 KiB TX ring
     }
-    serial_write("\n>>>END\n");
+    dbg_write("\n>>>END\n");
     klog_serial_release();
     scheduler_preempt_enable();
     kfree(buf);
@@ -349,9 +352,9 @@ static void dbg_cmd_readfile(const char *path) {
 
 static void dbg_cmd_lsfs(const char *arg) {
     const char *path = (arg && arg[0]) ? arg : "/";
-    klog_write("ls ");
-    klog_write(path);
-    klog_write(":\r\n");
+    dbg_write("ls ");
+    dbg_write(path);
+    dbg_write(":\r\n");
     fs_list(path, dbg_lsfs_cb, NULL);
 }
 
@@ -385,7 +388,7 @@ static void dbg_cmd_diag(const char *name, const char *args) {
         // /bin/guictl issues the same command from ring 3 and the
         // channel is one slot, so a refusal here means somebody else is
         // mid-drain -- not a broken desktop.
-        klog_write("gui: busy -- another diagnostic is in flight\r\n");
+        dbg_write("gui: busy -- another diagnostic is in flight\r\n");
         return;
     }
     if (!rc) {
@@ -395,28 +398,28 @@ static void dbg_cmd_diag(const char *name, const char *args) {
         if (!diag_have_provider(name)) {
             char have[128];
             int n = diag_list(have, sizeof have);
-            klog_printf("diag: no provider named `%s'\r\n", name);
-            if (n > 0) klog_printf("      registered: %s\r\n", have);
-            else klog_write("      none registered\r\n");
+            dbg_printf("diag: no provider named `%s'\r\n", name);
+            if (n > 0) dbg_printf("      registered: %s\r\n", have);
+            else dbg_write("      none registered\r\n");
         } else {
-            klog_printf("diag: %s did not answer\r\n", name);
+            dbg_printf("diag: %s did not answer\r\n", name);
         }
         return;
     }
     if (msg.flags & DIAG_F_UNKNOWN) {
-        klog_printf("unknown %s subcommand -- try `%s help`\r\n", name, name);
+        dbg_printf("unknown %s subcommand -- try `%s help`\r\n", name, name);
         return;
     }
 
     for (int guard = 0; guard < 64; guard++) {
-        if (msg.len) klog_write(msg.text);
+        if (msg.len) dbg_write(msg.text);
         if (!(msg.flags & DIAG_F_MORE)) return;
 
         k_memset(&msg, 0, sizeof msg);
         msg.type = DIAG_MORE;
         if (!diag_request(DIAG_PID_KERNEL, &msg)) return;
     }
-    klog_write("\r\ndiag: (reply too long, stopped)\r\n");
+    dbg_write("\r\ndiag: (reply too long, stopped)\r\n");
 }
 
 static void dbg_cmd_gui(const char *args) { dbg_cmd_diag("gui", args); }
@@ -426,8 +429,8 @@ static void dbg_cmd_diag_cmd(char *line) {
     if (!line || !line[0]) {
         char have[128];
         int n = diag_list(have, sizeof have);
-        if (n > 0) klog_printf("providers: %s\r\n", have);
-        else klog_write("no diagnostic providers registered\r\n");
+        if (n > 0) dbg_printf("providers: %s\r\n", have);
+        else dbg_write("no diagnostic providers registered\r\n");
         return;
     }
     char name[DIAG_NAME_LEN];
@@ -467,24 +470,53 @@ static void dbg_dispatch(char *line) {
     else if (k_strcmp(line, "lsdev") == 0) dbg_cmd_lsdev();
     else if (k_strcmp(line, "lsfs") == 0) dbg_cmd_lsfs(arg);
     else if (k_strcmp(line, "readfile") == 0) dbg_cmd_readfile(arg);
-    else if (k_strcmp(line, "usb") == 0) usb_dump();
-    else if (k_strcmp(line, "aml") == 0) aml_dump();
+    // These two print through klog in their own files; tee the log to
+    // this port for the length of the dump so the reply carries it.
+    else if (k_strcmp(line, "usb") == 0) { klog_tee_dbg(1); usb_dump(); klog_tee_dbg(0); }
+    else if (k_strcmp(line, "aml") == 0) { klog_tee_dbg(1); aml_dump(); klog_tee_dbg(0); }
     else if (k_strcmp(line, "ktest") == 0) dbg_cmd_ktest(arg);
     else if (k_strcmp(line, "sh") == 0) dbg_cmd_sh((char *)arg);
     else {
-        klog_write("unknown command: ");
-        klog_write(line);
-        klog_write(" (try 'help')\r\n");
+        dbg_write("unknown command: ");
+        dbg_write(line);
+        dbg_write(" (try 'help')\r\n");
     }
+}
+
+// OFF UNLESS `debugcon` IS ON THE BOOT LINE. This console is an
+// unauthenticated root shell on a serial port -- `sh` runs anything,
+// `gui` drives the desktop, `readfile` reads any file -- so it listens
+// only when asked, the way Linux needs `kgdboc=` or a getty and Windows
+// needs `bcdedit /ems on`. `make iso` bakes the word into the dev and
+// test media; release media leave it out (docs/boot-flags.md). The
+// kernel LOG is unaffected: it only ever prints.
+static int g_enabled;
+
+static int boot_word(const char *cmdline, const char *w) {
+    size_t n = k_strlen(w);
+    for (const char *p = cmdline; (p = k_strstr(p, w)) != 0; p += n) {
+        if (p != cmdline && p[-1] != ' ') continue;
+        if (p[n] == 0 || p[n] == ' ') return 1;
+    }
+    return 0;
 }
 
 void debug_console_init(void) {
     line_len = 0;
-    klog_write("dbg: serial debug console ready (COM1) -- type 'help'");
-    klog_write("\n"); // terminate the line: on the physical console this is
-                        // followed by the shell banner, and the serial side
-                        // prints its own prompt below anyway
-    serial_write(DBG_PROMPT);
+    const char *cmdline = multiboot_cmdline();
+    g_enabled = cmdline && (boot_word(cmdline, "debugcon") ||
+                            boot_word(cmdline, "debugcon=ttyS0"));
+    if (g_enabled && boot_word(cmdline, "debugcon=ttyS0")) serial_dbg_use_com1();
+    if (!g_enabled) {
+        klog_write("dbg: serial debug console off -- boot with `debugcon` to enable it\n");
+        return;
+    }
+    // An EVENT as well as a greeting: the log records that the console
+    // came up and where, and the console's own port shows it too.
+    const char *where = serial_dbg_separate() ? "COM2" : "COM1";
+    klog_printf("dbg: serial debug console ready (%s)\n", where);
+    dbg_printf("dbg: serial debug console ready (%s) -- type 'help'", where);
+    dbg_write(DBG_PROMPT);
 }
 
 void debug_console_poll(void) {
@@ -496,25 +528,25 @@ void debug_console_poll(void) {
     // call costs nothing -- COM1's receive is interrupt-driven into a
     // ring buffer (serial.h), so the bytes wait there instead.
     static int in_poll = 0;
-    if (in_poll) return;
+    if (!g_enabled || in_poll) return;
     in_poll = 1;
 
     int c;
-    while ((c = serial_try_getc()) >= 0) {
+    while ((c = serial_dbg_try_getc()) >= 0) {
         if (c == '\r' || c == '\n') {
-            serial_write("\r\n");
+            dbg_write("\r\n");
             line_buf[line_len] = '\0';
             if (line_len > 0) dbg_dispatch(line_buf);
             line_len = 0;
-            serial_write(DBG_PROMPT);
+            dbg_write(DBG_PROMPT);
         } else if (c == '\b' || c == 0x7F) {
             if (line_len > 0) {
                 line_len--;
-                serial_write("\b \b");
+                dbg_write("\b \b");
             }
         } else if (line_len < DBG_LINE_MAX - 1 && c >= 32 && c < 127) {
             line_buf[line_len++] = (char)c;
-            serial_putc((char)c); // local echo -- see this file's top comment
+            serial_dbg_putc((char)c); // local echo
         }
         // other control bytes (Tab, Ctrl+*, ...) silently ignored
     }

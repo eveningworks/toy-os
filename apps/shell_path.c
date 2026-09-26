@@ -170,7 +170,7 @@ int shell_exec_name(const char *name, const char *args, int report) {
     if (report) {
         exit_code = elf_run_from_fs(bin_path, args);
     } else {
-        int pid = scheduler_spawn(bin_path, args);
+        int pid = scheduler_spawn_attached(bin_path, args);
         if (pid <= 0) {
             vga_write(name);
             vga_write(": could not start (spawn failed)\n");

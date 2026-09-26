@@ -255,11 +255,12 @@ class RemoteConsole(DebugConsole):
 
     # -- the kernel log, which does not share this wire ------------------
     #
-    # ON A VM THE KLOG AND THE COMMAND REPLIES ARE ONE STREAM: the debug
-    # console is the serial port the kernel also logs to, so `send()`
-    # sees an app's `uidemo: layout ...` lines for free, and every tool
-    # that drives a Toykit app by asking for its widget geometry is
-    # built on that. Over telnet there is no such stream -- `guictl`
+    # ON A VM THE KLOG REACHES THE CONSOLE OBJECT FOR FREE: in replies on
+    # a one-port guest, or through DebugConsole's COM1 reader thread when
+    # the log has its own port -- so an app's `uidemo: layout ...` lines
+    # arrive without asking, and every tool that drives a Toykit app by
+    # asking for its widget geometry is built on that. Over telnet there
+    # is no such stream -- `guictl`
     # returns one command's reply and nothing else -- so the log is
     # FETCHED instead, from the ring `dmesg` prints, and the delta since
     # the last fetch is what `send()` would have accumulated.

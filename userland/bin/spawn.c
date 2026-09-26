@@ -16,6 +16,11 @@
 // where its parent was writing, which is what you want when you are
 // starting something to watch. A caller wanting a pipe passes a real fd
 // through SYS_SPAWN directly; that is not this program's job.
+//
+// stderr is the KERNEL LOG (SPAWN_FD_KMSG), as `nohup` moves a detached
+// job's output off the terminal: the prompt is back before the child
+// has said anything, so its diagnostics belong where they can be read
+// later -- `dmesg` -- and where the harness reads a background test's.
 #include "rt/sys.h"
 #include "lib/cmd.h"
 #include <stdio.h>
@@ -41,7 +46,12 @@ int main(int argc, char **argv) {
         }
     }
 
-    int pid = sys_spawn(argv[1], args[0] ? args : 0, -1);
+    struct sys_spawn_opts o;
+    sys_spawn_opts_init(&o);
+    o.args = args[0] ? args : 0;
+    o.env = environ;
+    o.stderr_fd = SPAWN_FD_KMSG;
+    int pid = sys_spawn_opts(argv[1], &o);
     if (pid <= 0) {
         cmd_fail("spawn", argv[1]);
         return 1;

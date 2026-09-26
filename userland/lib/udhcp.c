@@ -26,8 +26,8 @@
 // why the first diagnosis of it had to be done by adding up timings.
 // tftpd.c carries the same note and solved it the same way.
 //
-// fd 2 IS THE KERNEL LOG here (abi/syscall_abi.h), so a diagnostic
-// written there lands in `dmesg`. At a prompt that is the wrong place --
+// A SERVICE'S fd 2 IS THE KERNEL LOG (init's), so a diagnostic written
+// there lands in `dmesg`. At a prompt that is the wrong place --
 // the person typing `dhcp net-718ebf` wants to see the answer -- so this
 // picks, and WHAT IT PICKS ON IS `-k`, not isatty().
 //

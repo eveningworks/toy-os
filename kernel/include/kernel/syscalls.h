@@ -104,10 +104,10 @@ struct tty; // kernel/tty.h -- fd_tty() below, without dragging it in here
 enum fd_mode { FD_MODE_READ, FD_MODE_WRITE };
 
 // CONSOLE and KLOG are descriptions like any other, which is what lets
-// a descriptor be moved off them. They are kept apart because stdout
-// and stderr genuinely differ here: stdout goes to the screen and may
-// be redirected into a pipe, while stderr goes to the kernel log so a
-// client with no terminal can still say something a test can read.
+// a descriptor be moved off them. KLOG is the stderr of a process with
+// no terminal -- a service, a desktop app -- so it can still say
+// something a test can read (docs/decisions.md, "stderr is the
+// terminal's, and the kernel log only without one").
 enum fd_kind {
     FD_KIND_FILE, FD_KIND_SOCKET, FD_KIND_PIPE_R, FD_KIND_PIPE_W,
     FD_KIND_CONSOLE, FD_KIND_KLOG,
@@ -192,8 +192,7 @@ struct tty *fd_tty(uint64_t pml4, int fd);
 void fd_desc_unref(int di);
 
 // --- descriptors ---
-// Gives `pml4` a descriptor table with 0/1 on the console and 2 on the
-// kernel log. Idempotent. Called for a process's own address space the
+// Gives `pml4` a descriptor table with 0/1/2 on the console. Idempotent. Called for a process's own address space the
 // first time anything asks about its fds.
 int  fd_space_open(uint64_t pml4);
 int  fd_dup_from(uint64_t pml4, int oldfd, int min);

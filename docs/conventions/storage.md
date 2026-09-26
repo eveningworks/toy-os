@@ -84,11 +84,11 @@ this the obvious way), not from how much history it accumulated.
   returns one 0 for three different reasons, so the handler tests
   existence itself and says `-EEXIST`. And **a small `/bin` command
   prints its errors through `userland/lib/cmd.h`**
-  (`cmd_fail`/`cmd_usage`), which writes to STDOUT and not stderr on
-  purpose: fd 2 is the KERNEL LOG here, so a diagnostic written there is
-  perfectly recorded in `dmesg` and invisible to whoever typed the
-  command. That flips the day a TTY gives fd 2 somewhere a terminal can
-  see -- one line, in one file, which is why the header exists.
+  (`cmd_fail`/`cmd_usage`), which writes to STDOUT and not stderr --
+  chosen when fd 2 was the kernel log for every process. It is now the
+  terminal's wherever there is one, so flipping is one line in one
+  file; what holds it is that services include the header too, and
+  their failures would move out of `log -u <name>` (the header says so).
 - **The disk has a WRITE-BACK CACHE, and its flush can fail**
   (`kernel/drivers/ata_cache.c`, under `ata_read_sectors()`/
   `ata_write_sectors()` rather than in the block layer -- TFS2 and

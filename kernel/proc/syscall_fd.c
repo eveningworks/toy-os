@@ -219,20 +219,23 @@ int fd_space_open(uint64_t pml4) {
     sp->pml4 = pml4;
     for (int i = 0; i < FD_MAX; i++) sp->d[i] = -1;
 
-    // The three a process starts with. They are descriptions like any
-    // other, so a later dup2 can move them.
+    // The three a process starts with: ALL THREE ON THE CONSOLE, one
+    // description named three times -- what login(1) hands a shell on a
+    // tty. A table built here belongs to a program the kernel started
+    // in the foreground (the shell's `run`), so its errors belong on the
+    // terminal it was run from. A DETACHED start is given the kernel log
+    // as stderr by its spawner instead (scheduler_spawn_env()), and that
+    // is where a service's stderr comes from: init's (docs/decisions.md,
+    // "stderr is the terminal's, and the kernel log only without one").
     int con = fd_desc_alloc(FD_KIND_CONSOLE, -1);
-    int err = fd_desc_alloc(FD_KIND_KLOG, -1);
-    if (con < 0 || err < 0) {
-        if (con >= 0) fd_desc_unref(con);
-        if (err >= 0) fd_desc_unref(err);
+    if (con < 0) {
         sp->pml4 = 0;
         return -1;
     }
-    fd_desc_at(con)->refs++; // named twice: stdin and stdout
+    fd_desc_at(con)->refs += 2; // one reference per descriptor
     sp->d[FD_STDIN]  = (short)con;
     sp->d[FD_STDOUT] = (short)con;
-    sp->d[FD_STDERR] = (short)err;
+    sp->d[FD_STDERR] = (short)con;
     return 0;
 }
 
@@ -790,15 +793,12 @@ SYSCALL_HANDLER sys_do_write_console(uint64_t *regs, uint64_t pml4, int kind,
         regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         const char *buf = kbuf;
-        // KLOG (stderr's default) goes to the KERNEL LOG. It is a
-        // separate DESCRIPTION rather than a test on the fd number,
-        // which is what lets a process redirect stdout without
-        // dragging its diagnostics along: folding the two corrupts
-        // whatever the parent was trying to read, and is exactly why
-        // Unix has two descriptors rather than one. The kernel log
-        // reaches the serial console and `dmesg` no matter where
-        // stdout went, so a GUI client with no terminal attached can
-        // still say something a test can read.
+        // KLOG -- the stderr of a process started with no terminal --
+        // goes to the KERNEL LOG. A kind of DESCRIPTION rather than a
+        // test on the fd number, so it moves with dup2 like any other
+        // stream. It reaches the serial console and `dmesg`, so a
+        // service or a GUI client can still say something a test can
+        // read; journald is the same answer to the same question.
         if (kind == FD_KIND_LOG) {
             // TAGGED BY WHO IS WRITING, which the kernel knows and the
             // program cannot lie about -- a tag a caller supplied would

@@ -2296,27 +2296,74 @@ and never deletes, so the old `/tests` copies had to be removed from
 the existing image explicitly (`tools/tfs3_writer.py delete`). Skipping
 that leaves stale binaries frozen at their last-synced content forever.
 
-## stderr goes to the kernel log, and is never redirected into a pipe
+## stderr is the terminal's, and the kernel log only without one
 
-`SYS_WRITE` treats fd 1 and fd 2 differently: fd 1 honours
-`SYS_SPAWN`'s stdout redirection (into a pipe, so a parent can read a
-child's output), fd 2 always goes to `klog_putc()` -- the serial console
-and `dmesg`.
+A process's fd 2 is wherever its terminal is -- the same place as fd 0
+and 1 -- when it has one, and the kernel log when it does not. That is
+Linux with systemd: a shell on a tty hands the tty to its children as
+0/1/2, and a service's stderr goes to the journal because it has no
+terminal. Windows splits the same way (a console process inherits the
+console's handles; a service has none and logs to the event log).
 
-They used to be identical, which was a bug with two faces. Redirecting
-stdout is a request to capture a program's OUTPUT; folding its
-diagnostics into the same stream corrupts whatever the parent was
-parsing, which is the precise problem Unix has two descriptors to
-avoid. And a GUI client has no terminal at all, so its `sys_print()`
-went to whatever sink the console happened to have -- which is how this
-was found: `tools/gfxdemo_test.py` could not see a single line the demo
-logged, because there was nowhere for a windowed ring-3 process to say
-anything.
+Concretely:
 
-The practical rule for app code: `sys_print()` for output, `sys_eprint()`
-for anything diagnostic. The second is readable regardless of who
-spawned the process or where its stdout went, which also makes it the
-channel a test tool asserts on -- the same path `strace` output takes.
+- **A fresh descriptor table puts the console on all three**
+  (`fd_space_open()`), and so does the kernel shell's FOREGROUND start
+  (`scheduler_spawn_attached()`, what a bare command name at the
+  physical or debug console runs). Errors reach whoever typed the
+  command.
+- **A DETACHED kernel-side spawn gets the kernel log on fd 2**
+  (`scheduler_spawn()` and friends): init, the shell's `spawn`, gui3's
+  compositor, the ktests' children. Nobody waits on the terminal for
+  them, so an error there would land on whatever the console shows by
+  then -- `systemd-run` sends a transient unit to the journal for the
+  same reason.
+- **init gives every service the kernel log on fd 2**, and the
+  compositor passes it on to every desktop app it launches. A
+  descriptor chooses with systemd's `StandardError=`: `kmsg` (the
+  default, named explicitly as `SPAWN_FD_KMSG` rather than inherited
+  from init) or `inherit`, meaning *the same as stdout* -- which is how
+  the console shell's errors reach the console it runs on.
+- **SYS_SPAWN can name the child's fd 2** (`SPAWN_STDERR` and
+  `stderr_fd`), for the reason `stdout_fd` exists: a spawn ABI has no
+  child-side window to dup2 in. Two sentinels: `SPAWN_FD_LOG` (the
+  application log) and `SPAWN_FD_KMSG` (the kernel log).
+- **`/bin/spawn` is the detached start from ring 3**, and names
+  `SPAWN_FD_KMSG` -- `nohup` taking a background job's output off the
+  terminal. The prompt is back before the child has said anything. It
+  is also what every harness tool's `sh spawn` goes through, and a
+  background test's verdict has to be readable afterwards.
+
+**THE DIFFERENCE FROM systemd IS THE DEFAULT.** systemd's
+`StandardError=` defaults to `inherit` (the journal, alongside stdout);
+here it is `kmsg`. A windowed app has no terminal and inherits the
+compositor's fd 2, and ~40 GUI test tools read those apps' lines
+(`uidemo: press`) out of the kernel log -- the channel that exists
+regardless of who spawned the process. Moving that is a change to the
+harness's oracle, not to stderr.
+
+**WHAT CAME BEFORE, AND WHY IT WAS WRONG.** fd 2 was the kernel log for
+EVERY process, set once in `fd_space_open()`. It solved a real problem
+-- a GUI client had nowhere to say anything a test could read, which is
+how `tools/gfxdemo_test.py` found it -- but solved it for everyone: a
+program run from a shell printed its errors into `dmesg`, invisible to
+the person who ran it, and the `/bin` commands answered by writing
+their errors to STDOUT instead (`userland/lib/cmd.h`). The debug console
+then made it visible: after COM1 and COM2 were split, `kfmt_test`,
+`memtest` and `malloc_test` reported their verdicts on the log port
+while the harness read the console port.
+
+**NOT DONE, deliberately: `cmd.h` still writes to stdout.** Its
+precondition -- a terminal that can see fd 2 -- now holds for a
+Terminal window, telnet, the console shell and the kernel shell's
+foreground. But ~70 programs include it, services among them, and a
+service's failure would move from `log -u <name>` (its stdout) to the
+kernel log (its stderr). That wants its own change, with services
+choosing `StandardError=inherit` where the application log is the right
+home.
+
+The rule for app code is unchanged: `sys_print()` for output,
+`sys_eprint()` for anything diagnostic.
 
 ## Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults
 
@@ -3822,7 +3869,8 @@ DESCRIPTOR is a number one address space uses to name a description.
 `dup2` copies the NAME; the description dies with the last descriptor
 naming it. Routing then switches on the description's KIND rather than
 on the fd number, which is what makes 0/1/2 unremarkable: they merely
-start out pointing at the console and the kernel log.
+start out pointing at the console -- or, for a detached process, fd 2
+at the kernel log.
 
 **Keyed by CR3, not by pid.** The legacy blocking loader (`run` at the
 physical shell) has its own address space and NO scheduler slot, so a
@@ -3833,12 +3881,12 @@ version of the spawn path read the parent from
 inherited nothing. `vmm_current_pml4()` is the identifier every path
 has.
 
-**CONSOLE and KLOG are separate kinds** because stdout and stderr
-genuinely differ here: stdout goes to the screen and may be redirected
-into a pipe, while stderr goes to the kernel log so a GUI client with no
-terminal can still say something a test can read. Making stderr a
-description rather than a test on the number is what lets a process
-redirect stdout without dragging its diagnostics along.
+**CONSOLE and KLOG are separate kinds** because a process with no
+terminal still needs somewhere for its diagnostics that a test can read
+-- "stderr is the terminal's, and the kernel log only without one" has
+who gets which. Being a description rather than a test on the number is
+what lets a process redirect stdout without dragging its diagnostics
+along.
 
 **Inheritance is what removes the need for `fork()`.** A spawned child
 copies its parent's whole descriptor table, sharing every description.
@@ -8355,4 +8403,52 @@ changes four call sites and nothing else can observe it.
 
 Measured: 0 pipe hangs and 0 vanished children in 20 full-suite runs
 after it, against 4 pipe hangs in 25 before.
+
+## The kernel log and the debug console are two serial ports
+
+Every harness here drove the guest over ONE serial line that carried
+two streams: the debug console's commands and replies, and the kernel
+log, written asynchronously from any context. A reply had no framing,
+so a log line could land inside it -- measured: `wrap_test: ` + two log
+lines + `all checks passed`, a passing test reported failed 4 full
+suite runs in 25. `readfile` framed the one reply that mattered most;
+this separates the streams for every tool.
+
+**The split.** COM1 carries the kernel log alone; COM2 the debug console
+(`serial_dbg_*` in `serial.h`). The kernel probes for a second UART
+with the scratch register and keeps everything on COM1 when there is
+none -- most real machines have one port or none, and every tool that
+builds its own one-port QEMU line keeps working untouched. Linux's
+`console=ttyS0` plus a getty on ttyS1 is the shape; QEMU's guest agent,
+on its own virtio-serial channel with framed JSON, is the same idea
+taken further.
+
+**The console's replies stopped being log lines.** It printed through
+`klog_write()`, so every reply also landed in `dmesg` -- the reason the
+two shared a stream at all. A reply is not an event; it goes to the
+console's port only. The console coming up IS an event, so that one
+line goes to both.
+
+**The harness absorbs it.** `vm.py` gives a guest both ports and keeps
+the debug console on the socket name every tool already uses
+(`.vm.N.serial`), with the log on `.vm.N.log`. About forty GUI tools
+wait for APP log lines (`settings: layout ...`, `uidemo: press`), which
+are kernel log now, so `DebugConsole` reads the log socket on a thread
+into the buffer `logs()`/`events()` have always read -- the tools did
+not change.
+
+**And the console is opt-in** (`debugcon`, docs/boot-flags.md). It is an
+unauthenticated root shell on a serial port. Linux listens on a serial
+line only when configured to (`kgdboc=`, a getty) and Windows' Special
+Administration Console only after `bcdedit /ems on`. `make iso` bakes
+the word in, because every test needs it; release media are built with
+`DEBUGCON=0`.
+
+**What a second port alone does NOT fix:** `sh cat` runs a ring-3
+program whose stdout is THE CONSOLE, reached through a global output
+sink the debug console swaps for the length of a command -- so another
+program printing to the physical console in that window lands in the
+reply (tosh's banner did, on the first try). Making COM2 a real
+terminal that the commands it launches inherit as stdout is the rest,
+and the roadmap's item for it.
 

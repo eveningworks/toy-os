@@ -26,10 +26,11 @@
 // code writes STDOUT_FILENO and would otherwise not compile over a
 // difference that is not real.
 //
-// fd 2 is worth one clause: it always reaches the kernel log here, so a
-// diagnostic is readable whoever spawned the process and wherever its
-// stdout went -- which is why sys_eprint() is the channel a test tool
-// asserts on. See docs/decisions.md, "stderr goes to the kernel log".
+// fd 2 is worth one clause: it is the terminal's when there is one and
+// the kernel log when there is not (a service, a desktop app), which is
+// why sys_eprint() is the channel a GUI test tool asserts on. See
+// docs/decisions.md, "stderr is the terminal's, and the kernel log only
+// without one".
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2

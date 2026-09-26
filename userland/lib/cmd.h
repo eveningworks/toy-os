@@ -16,14 +16,14 @@
 // the far side of --gc-sections either way; a command that includes it
 // and never fails links nothing.
 //
-// AND IT WRITES TO STDOUT, NOT STDERR, WHICH IS DELIBERATE HERE.
-// fd 2 is the KERNEL LOG in this OS, not a second terminal stream (see
-// abi/syscall_abi.h): a shell captures its child's stdout through a
-// pipe and never sees fd 2, so a diagnostic written there is perfectly
-// recorded in `dmesg` and invisible to the person who typed the
-// command. /bin/ls made the same call for the same reason. This flips
-// to stderr the day a TTY layer gives fd 2 somewhere a terminal can
-// see -- it is one line, in one file, because of this header.
+// AND IT WRITES TO STDOUT, NOT STDERR -- a choice made when fd 2 was
+// the kernel log for every process, so an error written there reached
+// `dmesg` and not the person who typed the command. /bin/ls made the
+// same call. fd 2 is now the TERMINAL's wherever there is one
+// (docs/decisions.md, "stderr is the terminal's, and the kernel log only
+// without one"), so flipping this is one line -- but services include it
+// too, and their failures would move from `log -u <name>` (stdout) to
+// the kernel log (stderr). That is the part still to decide.
 #include "rt/sys.h"
 
 // "<prog>: <subject>: <reason>", with the errno given rather than read.

@@ -48,7 +48,8 @@ import iso_guard
 import port_guard
 
 PIDFILE = ".vm.pid"
-SERIAL_SOCK = ".vm.serial"
+SERIAL_SOCK = ".vm.serial"   # COM2: the debug console
+LOG_SOCK = ".vm.log"         # COM1: the kernel log alone
 QMP_PORT = 4445
 VNC_DISPLAY = 5
 # The host port `put` reaches the guest's tftpd on, derived per slot like
@@ -92,7 +93,7 @@ def _apply_instance(args):
     so every existing caller and every test tool's default still works
     untouched.
     """
-    global PIDFILE, SERIAL_SOCK
+    global PIDFILE, SERIAL_SOCK, LOG_SOCK
     n = getattr(args, "instance", 0) or 0
     if n == "auto":
         n = port_guard.find_free_instance()
@@ -106,6 +107,7 @@ def _apply_instance(args):
     if n:
         PIDFILE = f".vm.{n}.pid"
         SERIAL_SOCK = f".vm.{n}.serial"
+        LOG_SOCK = f".vm.{n}.log"
     if getattr(args, "qmp_port", None) is None:
         args.qmp_port = QMP_PORT + n
     if getattr(args, "vnc", None) is None:
@@ -158,7 +160,7 @@ def cmd_start(args):
     if _read_pid():
         print("vm: already running (vm.py stop first, or vm.py exec ...)")
         return 0
-    for stale in (SERIAL_SOCK, PIDFILE):
+    for stale in (SERIAL_SOCK, LOG_SOCK, PIDFILE):
         if os.path.exists(stale):
             os.unlink(stale)
 
@@ -426,21 +428,29 @@ def cmd_start(args):
         # `--cpu` above and `ata nodma` -- a fallback nothing can reach
         # is a guess.
         "-vga", args.vga, "-vnc", f":{args.vnc}",
-        # A unix socket for COM1, with nowait so the guest boots
-        # immediately rather than waiting for a client. Anything printed
-        # before the first connect is lost, which is fine: exec() gets a
-        # fresh prompt by sending a newline rather than by matching the
-        # boot banner.
+        # Two unix sockets, both nowait so the guest boots at once
+        # rather than waiting for a client -- see the chardevs below.
         "-qmp", f"tcp:127.0.0.1:{args.qmp_port},server,nowait",
         "-daemonize", "-pidfile", PIDFILE,
     ]
-    # --serial-log: the chardev's own `logfile=` copies everything the
-    # guest writes, while the socket still serves the debug console. The
-    # only record of a boot that dies before anything reads the socket.
+    # TWO PORTS: COM1 carries the kernel log alone (LOG_SOCK), COM2 the
+    # debug console (SERIAL_SOCK, the name every tool already connects
+    # to). Split because a log line landing between two chunks of a
+    # command's reply tore it (docs/decisions.md, "The kernel log and the
+    # debug console are two serial ports"); gui_debug.DebugConsole reads
+    # both, so its logs()/events() still see the log. A one-port QEMU
+    # line still works -- the kernel then keeps both on COM1.
+    #
+    # --serial-log: the LOG chardev's `logfile=` copies everything the
+    # kernel logs -- the only record of a boot that dies before anything
+    # connects. Nothing reading LOG_SOCK costs nothing: QEMU drops a
+    # socket chardev's output while no client is attached.
     log = getattr(args, "serial_log", None)
-    cmd += ["-chardev", f"socket,id=ser0,path={SERIAL_SOCK},server=on,wait=off"
+    cmd += ["-chardev", f"socket,id=ser0,path={LOG_SOCK},server=on,wait=off"
                         + (f",logfile={os.path.abspath(log)}" if log else ""),
-            "-serial", "chardev:ser0"]
+            "-serial", "chardev:ser0",
+            "-chardev", f"socket,id=ser1,path={SERIAL_SOCK},server=on,wait=off",
+            "-serial", "chardev:ser1"]
     # `-no-reboot` BY DEFAULT, so a guest that triple-faults stops
     # instead of looping through the same boot forever while a test
     # waits out its timeout. `--reboot` is the opt-out, for the one kind
@@ -782,7 +792,7 @@ def cmd_stop(args):
         if not _running(pid):
             break
         time.sleep(0.1)
-    for f in (PIDFILE, SERIAL_SOCK):
+    for f in (PIDFILE, SERIAL_SOCK, LOG_SOCK):
         if os.path.exists(f):
             os.unlink(f)
     print("vm: stopped" + ("" if graceful else " (SIGTERM)"))

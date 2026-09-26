@@ -430,7 +430,17 @@ void scheduler_demo_run(void);
 // counterpart to elf_run_from_fs() the roadmap's Terminal async-spawn
 // item needed -- see userland/wm/wm.c's wm_run() poll loop (Milestone 1
 // phase 4b) for the first real caller.
+//
+// The child's fds 0/1 are the console and fd 2 is the KERNEL LOG: a
+// start from kernel context is detached, with nobody on the terminal
+// waiting for it (scheduler.c's spawn_kernel() says why).
 int scheduler_spawn(const char *path, const char *args);
+
+// The same, ATTACHED: fd 2 stays on the console with 0 and 1. For a
+// caller that waits on the child from a terminal -- the kernel shell
+// running a command in the foreground -- so its errors reach the person
+// who typed it.
+int scheduler_spawn_attached(const char *path, const char *args);
 
 // Same, but the child's stdout (fd 1) is redirected into `pipe_idx`
 // (pipe.h) instead of the console. -1 means "the console", i.e.
@@ -472,16 +482,17 @@ int scheduler_spawn_env(const char *path, const char *args, int pipe_idx,
 // gets the standard three. NAMED rather than read off CR3, because a
 // kernel-context caller runs with whatever address space the scheduler
 // last loaded (see spawn_from_fs()'s comment for the bug that was).
-// `stdin_desc` is the same shape as `pipe_idx` (which is really the
-// child's fd 1): a description index to install, or -1 to leave what
-// inheritance gave it. Both are applied AFTER fd_inherit(), so they win.
+// `stdin_desc` and `stderr_desc` are the same shape as `pipe_idx` (which
+// is really the child's fd 1): a description index to install, or -1 to
+// leave what inheritance gave it. All three are applied AFTER
+// fd_inherit(), so they win, and each takes its own reference.
 // `argv` is the child's argument VECTOR -- `argv_len` bytes of
 // NUL-terminated strings, the form elf_build_argv_on_stack() takes --
 // NOT the string the wrappers above take; they split it with
 // elf_argv_from_string() on the way here.
 int scheduler_spawn_group(const char *path, const char *argv, size_t argv_len,
-                           int pipe_idx, int stdin_desc, const char *env, int pgid,
-                           uint64_t parent_pml4);
+                           int pipe_idx, int stdin_desc, int stderr_desc,
+                           const char *env, int pgid, uint64_t parent_pml4);
 
 
 // Whether `pid` names a live or reaped-pending process started by

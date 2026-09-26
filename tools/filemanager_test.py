@@ -2167,7 +2167,11 @@ def run(dbg, qmp, tmp, res):
         first = dbg.send(cmd) or ""
         time.sleep(0.4)
         second = dbg.send("sh pwd") or ""
-        return first + "\n" + second
+        # AND THE KERNEL LOG: `spawn` gives the child's stderr to it
+        # (SPAWN_FD_KMSG), and with the log on COM1 and the console on
+        # COM2 a refusal like `open: nothing opens` is never in a reply.
+        logged = "\n".join(dbg.logs(match="open: "))
+        return first + "\n" + second + "\n" + logged
 
     spawn_out("sh spawn /bin/open -s .txt imgview")
     dbg.key("0x72")  # 'r' seeks readme.txt

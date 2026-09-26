@@ -127,4 +127,10 @@ void klog_set_console_echo(int on);
 void klog_serial_hold(void);
 void klog_serial_release(void);
 
+// While on, every log byte bound for the wire is ALSO copied to the
+// debug console's port (serial.h) -- for a debug command whose output
+// is printed through klog in another file (`usb`, `aml`). No effect on
+// a one-port machine, where they already share the wire.
+void klog_tee_dbg(int on);
+
 #endif

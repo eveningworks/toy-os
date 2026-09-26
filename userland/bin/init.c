@@ -237,6 +237,7 @@ struct service {
     // for good, and `Restart=no` never records a failure anywhere else.
     int  last_exit;
     int  stdout_log;            // 1 = stdout goes to the log, 0 = inherited
+    int  stderr_as_stdout;      // StandardError=inherit: fd 2 follows fd 1
     char after[SVC_DEPS_MAX];   // names that must be spawned before this
     char before[SVC_DEPS_MAX];  // names this must be spawned before
     int  seen;         // survived the last scan
@@ -472,6 +473,20 @@ static void load_service(const char *file) {
         if (k_strcmp(out, "inherit") == 0) s->stdout_log = 0;
         else if (k_strcmp(out, "log") != 0)
             logf1("init: %s has an unknown StandardOutput=, using log\n",
+                  s->name);
+    }
+
+    // systemd's StandardError=, with its two values that mean something
+    // here. `kmsg` (the default) puts fd 2 on the kernel log, where a
+    // service with nobody watching belongs.
+    // `inherit` is systemd's meaning of the word -- the SAME place as
+    // stdout -- so the console shell's errors reach its console.
+    char err[16];
+    s->stderr_as_stdout = 0;
+    if (etc_config_buf_get(&g_cfg, "StandardError", err, sizeof err)) {
+        if (k_strcmp(err, "inherit") == 0) s->stderr_as_stdout = 1;
+        else if (k_strcmp(err, "kmsg") != 0)
+            logf1("init: %s has an unknown StandardError=, using kmsg\n",
                   s->name);
     }
 
@@ -756,7 +771,16 @@ static void start_service(struct service *s) {
     // another.
     char args[SVC_ARGS_MAX];
     const char *use = s->args[0] ? expand_specifiers(s->args, args, sizeof args) : 0;
-    int pid = sys_spawn(s->exec, use, s->stdout_log ? SPAWN_FD_LOG : -1);
+    struct sys_spawn_opts o;
+    sys_spawn_opts_init(&o);
+    o.args = use;
+    o.env = environ;
+    o.stdout_fd = s->stdout_log ? SPAWN_FD_LOG : -1;
+    // Named even for the default, so `kmsg` means the kernel log however
+    // init itself was started. fd 1 is init's own stdout, the console.
+    if (s->stderr_as_stdout) o.stderr_fd = s->stdout_log ? SPAWN_FD_LOG : 1;
+    else o.stderr_fd = SPAWN_FD_KMSG;
+    int pid = sys_spawn_opts(s->exec, &o);
     if (pid > 0) {
         s->pid = pid;
         s->started_ms = now_ms();

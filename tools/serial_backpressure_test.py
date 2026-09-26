@@ -30,9 +30,12 @@ that changes on its own -- the same reason `idle_desktop_test.py` uses
 it as its motion control.
 
 POSITIVE CONTROL, verified: in `kernel/core/serial.c`, replace
-`serial_putc()`'s body with the original `while (!transmit_empty());
-outb(COM1, c);` and rebuild. This goes from 4-5 distinct clock images in
-8 to exactly 1, every run, and the responsiveness check fails too.
+`tx_putc()`'s body -- the one place both ports transmit -- with the
+original `while (!transmit_empty(u)); outb(u->base, c);` and rebuild.
+Measured 2026-09-26 with the log on COM1 and the console on COM2: 1
+distinct clock image in 8, 2 runs of 2, against 4-5 without it. (Before
+the split it was `serial_putc()`'s body, and one `sh dmesg` was load
+enough; see DMESG_DUMPS for why it is not now.)
 
 DO NOT "FIX" A FAILURE HERE BY DRAINING THE SOCKET. The whole point is
 that the guest must survive a consumer that stopped reading; a drainer
@@ -61,6 +64,9 @@ DEFAULT_SOCK = ".vm.serial"
 # talking about the same window.
 SAMPLES = 8
 INTERVAL_S = 0.35
+DMESG_DUMPS = 6   # see the send below for why one is not enough
+AML_DUMPS = 20
+FILL_S = 1.5
 
 
 class Results:
@@ -96,13 +102,29 @@ def main():
     # Attach and go deliberately deaf. `connect` alone is what creates
     # the backpressure: with NO peer the chardev discards and the guest
     # never blocks, so an unattached run cannot see this bug at all.
+    #
+    # BOTH PORTS, when the guest has two: the kernel log is on COM1
+    # (`.vm.N.log`) and the console on COM2, and a stall on COM1 -- a
+    # klog burst inside an FS_OP() -- is the hang this exists for. Deaf
+    # on the console alone, the log would go to a chardev with no peer
+    # and be discarded, and the positive control below would stay green.
     deaf = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     deaf.connect(args.sock)
+    deaf_log = None
+    log_path = port_guard.log_sock_for(args.sock)
+    if log_path and os.path.exists(log_path):
+        deaf_log = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        deaf_log.connect(log_path)
     try:
-        # Ask for something big enough to outrun the UART, and never read
-        # the reply. `dmesg` is the whole kernel ring -- several KB.
-        deaf.sendall(b"sh dmesg\n")
-        time.sleep(0.5)
+        # Ask for something big enough to outrun the UART AND the host
+        # socket's buffer, and never read the reply. `dmesg` is the whole
+        # ring on the console port; `aml` is ~11 KB THROUGH THE KERNEL LOG,
+        # so COM1 backs up too. One of each was absorbed by the socket
+        # buffers once the log had its own port, and the positive control
+        # stayed green -- so it is several, and the samples wait for them
+        # to fill.
+        deaf.sendall(b"sh dmesg\n" * DMESG_DUMPS + b"aml\n" * AML_DUMPS)
+        time.sleep(FILL_S)
 
         qmp = QMPSession(port=args.qmp_port)
         tmp = os.environ.get("TMPDIR", "/tmp")
@@ -120,6 +142,8 @@ def main():
         qmp.close()
     finally:
         deaf.close()
+        if deaf_log is not None:
+            deaf_log.close()
 
     # And the guest is still there afterwards -- a kernel that merely
     # survived the window but left the console wedged would pass the

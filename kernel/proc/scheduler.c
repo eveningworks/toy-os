@@ -1588,8 +1588,8 @@ static int build_image(const char *path, const char *argvec, size_t argvec_len,
 }
 
 static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len,
-                          int stdout_desc, int stdin_desc, const char *env,
-                          int want_pgid, uint64_t parent_pml4) {
+                          int stdout_desc, int stdin_desc, int stderr_desc,
+                          const char *env, int want_pgid, uint64_t parent_pml4) {
     int slot = slot_claim();   // BEFORE build_image(), which sleeps
     if (slot < 0) return -1;
 
@@ -1642,7 +1642,8 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
     //     saved = dup(1); dup2(f, 1); spawn(...); dup2(saved, 1);
     //
     // A kernel-context spawn has no table to inherit and the child
-    // gets the standard three (console, console, kernel log).
+    // gets the console on all three -- fd 2 then overridden with the
+    // kernel log for a detached start (spawn_kernel()).
     // THE PARENT IS WHOEVER IS EXECUTING, and that is CR3 -- not
     // procs[current_index]. The legacy blocking loader (`run` at the
     // physical shell) has its own address space and NO scheduler slot,
@@ -1668,6 +1669,7 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
         fd_set_desc(as, FD_STDOUT, stdout_desc);
     }
     if (stdin_desc >= 0) fd_set_desc(as, FD_STDIN, stdin_desc);
+    if (stderr_desc >= 0) fd_set_desc(as, FD_STDERR, stderr_desc);
     // The CALLER is the parent. 0 when the kernel context spawned this
     // -- scheduler_current_pid() returns 0 there, which is exactly the
     // "no parent" value, so this needs no special case.
@@ -3254,8 +3256,9 @@ int scheduler_spawn_piped(const char *path, const char *args, int pipe_idx) {
     return scheduler_spawn_env(path, args, pipe_idx, 0);
 }
 
-int scheduler_spawn_env(const char *path, const char *args, int pipe_idx,
-                         const char *env) {
+// The kernel-side spawns, all one path. `detached` decides fd 2 (below).
+static int spawn_kernel(const char *path, const char *args, int pipe_idx,
+                        const char *env, int detached) {
     // THE STRING FORM ENDS HERE: split into the vector everything below
     // carries. On the heap, since SPAWN_ARGS_MAX does not fit a frame.
     char *vec = kmalloc(SPAWN_ARGS_MAX + FS_PATH_MAX);
@@ -3267,17 +3270,37 @@ int scheduler_spawn_env(const char *path, const char *args, int pipe_idx,
         // caller wants: init's services and the demo's counters belong with
         // whatever started them. Parent 0 too: a kernel-side caller's child
         // gets the standard three fds (see spawn_from_fs()'s fd_inherit).
-        pid = scheduler_spawn_group(path, vec, vec_len, pipe_idx, -1, env, 0, 0);
+        //
+        // **A DETACHED SPAWN'S STDERR IS THE KERNEL LOG** -- init (and
+        // through it every service and the desktop), gui3's compositor,
+        // the ktests' children. /bin/spawn reaches the same answer from
+        // ring 3 with SPAWN_FD_KMSG. Nobody is waiting at the terminal for
+        // them, so an error printed there lands on whatever the console
+        // shows by then; `systemd-run` sends a transient unit's output to
+        // the journal for the same reason. An ATTACHED one -- the shell
+        // waiting on a command it ran -- keeps the console on all three.
+        int err = detached ? fd_desc_alloc(FD_KIND_KLOG, -1) : -1;
+        pid = scheduler_spawn_group(path, vec, vec_len, pipe_idx, -1, err, env, 0, 0);
+        if (err >= 0) fd_desc_unref(err); // the child holds its own
     }
     kfree(vec);
     return pid;
 }
 
+int scheduler_spawn_env(const char *path, const char *args, int pipe_idx,
+                         const char *env) {
+    return spawn_kernel(path, args, pipe_idx, env, 1);
+}
+
+int scheduler_spawn_attached(const char *path, const char *args) {
+    return spawn_kernel(path, args, -1, 0, 0);
+}
+
 int scheduler_spawn_group(const char *path, const char *argv, size_t argv_len,
-                           int pipe_idx, int stdin_desc, const char *env, int pgid,
-                           uint64_t parent_pml4) {
-    int slot = spawn_from_fs(path, argv, argv_len, pipe_idx, stdin_desc, env, pgid,
-                              parent_pml4);
+                           int pipe_idx, int stdin_desc, int stderr_desc,
+                           const char *env, int pgid, uint64_t parent_pml4) {
+    int slot = spawn_from_fs(path, argv, argv_len, pipe_idx, stdin_desc, stderr_desc,
+                              env, pgid, parent_pml4);
     if (slot < 0) return 0;
 
     // Clear any events left over from the previous tenant of this slot.
@@ -3996,8 +4019,8 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code) {
 }
 
 void scheduler_demo_run(void) {
-    int a = spawn_from_fs("/bin/counter_a", NULL, 0, -1, -1, 0, 0, 0);
-    int b = spawn_from_fs("/bin/counter_b", NULL, 0, -1, -1, 0, 0, 0);
+    int a = spawn_from_fs("/bin/counter_a", NULL, 0, -1, -1, -1, 0, 0, 0);
+    int b = spawn_from_fs("/bin/counter_b", NULL, 0, -1, -1, -1, 0, 0, 0);
     if (a < 0 || b < 0) {
         vga_write("schedtest: failed to spawn one or both counter processes --\n");
         vga_write("were /bin/counter_a and /bin/counter_b seeded onto disk.img?\n");

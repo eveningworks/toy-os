@@ -42,7 +42,8 @@ static void ld_write(const char *s) {
     sc3(SYS_WRITE, 2, (uint64_t)(uintptr_t)s, len);
 }
 
-// Loudly, to fd 2 (the kernel log): a loader that dies silently is a
+// Loudly, to fd 2 (the terminal, or the kernel log for a process with
+// none): a loader that dies silently is a
 // program that "crashed somewhere in libc" with no explanation.
 // Decimal, into `out`, returning how many characters it wrote. The
 // loader links no libc -- it IS what libc arrives through -- so there

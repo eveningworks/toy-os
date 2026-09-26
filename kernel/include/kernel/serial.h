@@ -32,4 +32,18 @@ void serial_irq_init(void);
 // console -- see docs/decisions.md.
 int serial_try_getc(void);
 
+// THE DEBUG CONSOLE'S PORT: COM2 when a UART is really there (probed at
+// serial_init()), else COM1 -- so the kernel log and the debug console
+// share a wire only on a machine with one port. serial_dbg_separate()
+// says which: 1 means COM2 carries the console and COM1 the log alone.
+int  serial_dbg_separate(void);
+// Keep the debug console on COM1 even though COM2 answered the probe --
+// `debugcon=ttyS0`, for a board that decodes a port it has no connector
+// for. Call before the console first talks.
+void serial_dbg_use_com1(void);
+int  serial_dbg_try_getc(void);
+void serial_dbg_putc(char c);
+void serial_dbg_write(const char *s);
+void serial_dbg_flush(void);
+
 #endif

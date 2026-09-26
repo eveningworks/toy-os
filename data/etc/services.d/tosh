@@ -29,6 +29,9 @@ Restart=always
 # Sent to the log instead, a `text` boot reaches a shell that answers
 # nothing.
 StandardOutput=inherit
+# ...and its errors, and every command's, go to the same console -- not
+# to the kernel log, where a mistyped path would answer with silence.
+StandardError=inherit
 # Ready at the first prompt: a shell that has printed nothing has not
 # installed its signal handlers or its job table yet.
 Ready=notify
