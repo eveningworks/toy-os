@@ -38,6 +38,7 @@
 #include "heap.h"
 #include "pci.h"
 #include "fs.h"
+#include "scheduler.h" // scheduler_preempt_disable() -- readfile's atomic frame
 #include "ktest_run.h"
 #include "shell.h" // shell_dispatch -- `sh` runs the real shell, it doesn't reimplement one
 #include "vga.h"
@@ -53,6 +54,7 @@ static void dbg_cmd_help(void) {
     klog_write("Commands:\r\n");
     klog_write("  help        - this list\r\n");
     klog_write("  meminfo     - physical frame + kernel heap usage\r\n");
+    klog_write("  readfile P  - file P as one framed block, nothing interleaved\r\n");
     klog_write("  lsdev       - enumerated PCI devices\r\n");
     klog_write("  usb         - xHCI registers, rings and root ports\r\n");
     klog_write("  aml         - the ACPI namespace (declarations, not methods)\r\n");
@@ -307,6 +309,44 @@ static void dbg_lsfs_cb(void *ctx, const char *name, uint32_t size, int is_dir) 
     else        klog_printf("  %s  (%u bytes)\r\n", name, size);
 }
 
+// A FILE AS ONE FRAMED BLOCK, for a harness to parse by frame rather
+// than by prompt. `sh cat` writes through a ring-3 process in chunks,
+// and the kernel log lands between them on the same wire -- a verdict
+// line came back as "wrap_test: " + two log lines + "all checks
+// passed". Here nothing else can run (preemption off) and the log is
+// held off the wire until the frame is out:
+//
+//   <<<FILE <n>\n  <exactly n bytes>  \n>>>END\n     (n = -1: no such file)
+//
+// Bounded: a verdict file is a few KiB, and this is not a transfer tool.
+#define READFILE_MAX (64u * 1024u)
+
+static void dbg_cmd_readfile(const char *path) {
+    uint32_t n = 0;
+    char *buf = NULL;
+    int missing = !path || path[0] != '/' || !fs_exists(path) || fs_is_dir(path);
+    if (!missing) {
+        buf = kmalloc(READFILE_MAX);
+        if (buf) n = fs_read_into(path, buf, READFILE_MAX);   // 0: empty, or refused
+        else missing = 1;
+    }
+    char hdr[32];
+    if (missing) k_snprintf(hdr, sizeof hdr, "\n<<<FILE -1\n");
+    else         k_snprintf(hdr, sizeof hdr, "\n<<<FILE %u\n", n);
+
+    scheduler_preempt_disable();
+    klog_serial_hold();
+    serial_write(hdr);
+    for (uint32_t i = 0; i < n; i++) {
+        serial_putc(buf[i]);
+        if ((i & 1023) == 1023) serial_flush();   // never outrun the 4 KiB TX ring
+    }
+    serial_write("\n>>>END\n");
+    klog_serial_release();
+    scheduler_preempt_enable();
+    kfree(buf);
+}
+
 static void dbg_cmd_lsfs(const char *arg) {
     const char *path = (arg && arg[0]) ? arg : "/";
     klog_write("ls ");
@@ -426,6 +466,7 @@ static void dbg_dispatch(char *line) {
     else if (k_strcmp(line, "meminfo") == 0) dbg_cmd_meminfo();
     else if (k_strcmp(line, "lsdev") == 0) dbg_cmd_lsdev();
     else if (k_strcmp(line, "lsfs") == 0) dbg_cmd_lsfs(arg);
+    else if (k_strcmp(line, "readfile") == 0) dbg_cmd_readfile(arg);
     else if (k_strcmp(line, "usb") == 0) usb_dump();
     else if (k_strcmp(line, "aml") == 0) aml_dump();
     else if (k_strcmp(line, "ktest") == 0) dbg_cmd_ktest(arg);

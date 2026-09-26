@@ -119,4 +119,12 @@ uint32_t klog_retained_bytes(void);
 // readable with PageUp once the shell is up.
 void klog_set_console_echo(int on);
 
+// HOLDS the log's bytes off the serial wire, so one reply can go out in
+// a single uninterrupted block (the debug console's `readfile`). Held
+// bytes still reach the ring and dmesg at once; the WIRE gets them on
+// release, in order. A hold that outgrows its buffer drops the overflow
+// from the wire only and says how much on release.
+void klog_serial_hold(void);
+void klog_serial_release(void);
+
 #endif

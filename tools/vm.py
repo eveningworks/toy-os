@@ -476,6 +476,35 @@ def cmd_start(args):
     return 1
 
 
+FRAME_HEAD_RE = __import__("re").compile(r"<<<FILE (-?\d+)\n")
+
+
+def parse_framed(text):
+    """The file inside a `readfile` reply, or None.
+
+    `readfile <path>` (the debug console's, not a shell command) prints
+    a file as one frame -- `<<<FILE n`, exactly n bytes, `>>>END` --
+    with preemption off and the kernel log held off the wire, so nothing
+    can land inside it. `sh cat` cannot promise that: its output crosses
+    the wire in chunks, and a log line between two of them tore verdict
+    lines in half. Taken BY LENGTH, and the end marker must follow, so a
+    file that itself contains `>>>END` still reads exactly. None means no
+    frame (an older image), no such file (n = -1), or a frame that did
+    not survive the wire; the caller decides what that means.
+    """
+    t = text.replace("\r", "")
+    m = FRAME_HEAD_RE.search(t)
+    if not m:
+        return None
+    n = int(m.group(1))
+    if n < 0:
+        return None
+    body = t[m.end():m.end() + n]
+    if len(body) != n or not t.startswith("\n>>>END", m.end() + n):
+        return None
+    return body
+
+
 def _exec_one(command, timeout=15.0):
     """Sends one command, returns its output text (without the prompt).
 

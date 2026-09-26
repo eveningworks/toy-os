@@ -6707,3 +6707,33 @@ Not measured: how many commands a typical barrier sends, or what merging
 would save. It is a lock-hold-time question as much as a throughput one,
 since the barrier holds the mount lock throughout.
 
+## The debug console as its own tty on COM2, so no tool's reply shares a wire with the kernel log
+
+Every harness here talks to the guest over ONE serial line that carries
+two streams: the debug console's commands and replies, and the kernel
+log, written to the same port asynchronously from any context. A reply
+has no framing -- `vm.py` ends it where the bytes happen to end with
+`dbg> ` -- so a log line can tear it, end it early, or ride inside it.
+Measured 2026-09-26: 4 full `usertest_run.py` runs in 25 lost a verdict
+that way (`wrap_test: ` + two log lines + `all checks passed`).
+`readfile` fixed the verdict reads by framing one reply and holding the
+log off the wire while it goes out; this is the general fix.
+
+**A second port alone is not enough, and the reason is the design.**
+`sh cat` runs a ring-3 program whose stdout is THE CONSOLE, which is
+mirrored to COM1 -- so with the debug console moved to COM2, a command's
+OUTPUT would still come back on COM1, mixed with the log. The debug
+console has to become a terminal of its own: a serial-backed tty on
+COM2 (the TTY layer and its line discipline already exist, from job
+control) that the commands it launches inherit as stdin/stdout. That is
+Linux's shape -- kernel messages on `console=ttyS0`, a `getty` on
+another tty -- and QEMU's guest agent goes further with its own
+virtio-serial channel and framed JSON.
+
+Pieces: `serial.c` parameterised by port (COM2 is 0x2F8, IRQ 3); the
+debug console reading and writing COM2 through a tty; the kernel
+shell's spawn giving that tty to the command; `vm.py` and every tool
+taking a second socket (`--instance N` derives both). Real hardware
+mostly has no serial port -- `remote.py` drives it over the network --
+so this is a VM-harness change, not a product one.
+

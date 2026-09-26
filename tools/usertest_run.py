@@ -47,6 +47,9 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from vm import parse_framed   # noqa: E402
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VM = os.path.join(REPO, "tools", "vm.py")
 
@@ -535,11 +538,21 @@ def verdict_file(args, name):
     deadline = time.time() + VERDICT_TIMEOUT_S
     text = ""
     while True:
-        b = vm(args, "exec", f"cat /tmp/{name}.out", "--label", check=False)
-        text = b.stdout + b.stderr
+        text = read_verdict(args, name)
         if any(d in text for d in VERDICT_DONE) or time.time() >= deadline:
             return text
         time.sleep(VERDICT_POLL_S)
+
+
+def read_verdict(args, name):
+    """/tmp/<name>.out, read as ONE FRAME (vm.parse_framed()) so no
+    kernel-log line can land inside it -- `cat` through the console tore
+    verdict lines 4 runs in 25. Falls back to the raw reply when there is
+    no frame, so a missing file still reads as missing."""
+    b = vm(args, "exec", f"readfile /tmp/{name}.out", "--raw", "--label", check=False)
+    raw = b.stdout + b.stderr
+    framed = parse_framed(raw)
+    return framed if framed is not None else raw
 
 
 def run_one(args, name, spawned=False):
@@ -666,8 +679,8 @@ def main():
             # failure.
             if problems:
                 post = vm(args, "exec", "ps", "--label", check=False)
-                whole = vm(args, "exec", f"cat /tmp/{name}.out", "--label",
-                           check=False)
+                whole = vm(args, "exec", f"readfile /tmp/{name}.out", "--raw",
+                           "--label", check=False)
                 log = vm(args, "exec", "dmesg", "--label", check=False)
                 out += ("\n--- after the failure ---\n"
                         + post.stdout + post.stderr

@@ -884,6 +884,12 @@ manual steps to be worth automating:
   **`--serial-log PATH` keeps the guest's serial output** (vm.py's own
   flag, passed through) -- the one record left when the EMULATOR hangs,
   since the table is only printed at the end.
+  **Verdicts are read with the debug console's `readfile`, not `sh
+  cat`** (`vm.parse_framed()`): one frame, taken by its declared length,
+  with preemption off and the kernel log held off the wire while it goes
+  out. `cat` crossed the wire in chunks and a log line between two of
+  them tore verdict lines -- 4 full runs in 25 reported a passing test
+  as failed. Any tool reading a file off the guest should do the same.
   **An expected exit code of `None` means SPAWN IT INSTEAD**, and judge
   it by what it printed. `run` uses the legacy loader, which has no
   scheduler slot, so anything reaching the window server is refused

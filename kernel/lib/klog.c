@@ -105,9 +105,40 @@ void klog_set_console_echo(int on) {
     g_console_echo = on ? 1 : 0;
 }
 
+// See klog_serial_hold(). Written from any context, IRQ included, so the
+// append is done with interrupts off.
+#define HOLD_CAP 4096
+static int g_hold;
+static char g_hold_buf[HOLD_CAP];
+static unsigned g_hold_len, g_hold_lost;
+
+static void wire_putc(char c) {
+    if (!g_hold) { serial_putc(c); return; }
+    uint64_t f;
+    __asm__ volatile ("pushfq; popq %0; cli" : "=r"(f) :: "memory");
+    if (g_hold_len < HOLD_CAP) g_hold_buf[g_hold_len++] = c;
+    else g_hold_lost++;
+    __asm__ volatile ("pushq %0; popfq" :: "r"(f) : "memory", "cc");
+}
+
+void klog_serial_hold(void) { g_hold = 1; }
+
+void klog_serial_release(void) {
+    g_hold = 0;
+    for (unsigned i = 0; i < g_hold_len; i++) serial_putc(g_hold_buf[i]);
+    g_hold_len = 0;
+    if (g_hold_lost) {
+        char note[64];
+        k_snprintf(note, sizeof note, "klog: %u byte(s) held off the wire were dropped\n", g_hold_lost);
+        for (const char *p = note; *p; p++) serial_putc(*p);
+        g_hold_lost = 0;
+    }
+    serial_flush();
+}
+
 void klog_putc(char c) {
     int to_console = g_line_level <= g_console_level;
-    if (to_console) serial_putc(c); // raw wire byte, unchanged -- see top comment
+    if (to_console) wire_putc(c); // raw wire byte, unchanged -- see top comment
     if (at_line_start) klog_write_timestamp();
     klog_buf_putc(c);
     at_line_start = (c == '\n');

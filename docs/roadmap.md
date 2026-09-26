@@ -1017,6 +1017,7 @@ hand as a throwaway probe during a real hunt (see roadmap-details).
 - [x] ~~`gfxdemo_test`'s two scene-restore checks fail under heavy parallel load~~ DONE 2026-08-19 -- it polls for the log line now
 - [ ] `flake_hunt.py` does not reset `disk.img` between runs, so any rate involving the filesystem is contaminated
 - [ ] The ATA fault-injection KTESTs leak a failed write into the NEXT test -- measured 2 fails in 4 clean runs
+- [ ] The debug console as its own tty on COM2, so no tool's reply shares a wire with the kernel log
 - [ ] Per-test timing, so a test that quietly becomes slow is visible
 - [ ] A `ktest -v` that reports each assertion, not just pass/fail
 - [ ] Tests for the boundary this kernel enforces by include path

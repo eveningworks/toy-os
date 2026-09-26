@@ -202,9 +202,13 @@ int shell_exec_name(const char *name, const char *args, int report) {
     // different axis from resolution.
     if (report) {
         vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-        vga_write("Process finished. Exit code: ");
-        vga_write_exit_code(exit_code);
-        vga_putc('\n');
+        // ONE write: three used to let another process's line land
+        // between the label and the number, and the harness read "no
+        // exit code" off a test that had passed.
+        char line[48];
+        if (exit_code < 0) k_snprintf(line, sizeof line, "Process finished. Exit code: CRASHED\n");
+        else               k_snprintf(line, sizeof line, "Process finished. Exit code: %d\n", exit_code);
+        vga_write(line);
         vga_set_color(shell_fg, VGA_BLACK);
     } else if (exit_code != 0) {
         // One terse line -- the shape the two builtin wrappers used
