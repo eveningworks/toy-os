@@ -333,40 +333,29 @@ def check_internal_doc_links(problems):
 
 
 def check_tools_are_documented(problems):
-    """Every tool in tools/ is named in CLAUDE.md AND in docs/tools.md.
+    """Every tool in tools/ has an entry in docs/tools.md.
 
-    CLAUDE.md already states the rule -- "any genuinely reusable tooling
-    built during a session belongs in tools/... update the files that
-    describe tools/ to match" -- and until now nothing enforced it. A
-    tool nobody documented is a tool the next session rewrites from
-    scratch, which is the exact cost the tools/ directory exists to
-    avoid.
-
-    **BOTH FILES, because checking one of them found the other missing.**
-    This asked CLAUDE.md alone, so `multidisk_test.py` was added to the
-    index, passed the gate, and was absent from `docs/tools.md` -- the
-    file CLAUDE.md itself calls "the full reference for every script in
-    tools/". The two halves are the same rule and an index that is true
-    while the reference it points at is not is the shape this repo keeps
-    deleting.
+    A tool nobody documented is a tool the next session rewrites from
+    scratch, which is the cost tools/ exists to avoid. This once asked
+    CLAUDE.md as well, through a hand-kept list of every tool by runner;
+    that list cost ~1k tokens of always-loaded context and `--list` on
+    each runner is the live answer, so the reference is the one place
+    now. It was the REFERENCE that went missing when only CLAUDE.md was
+    checked (`multidisk_test.py`), which is why this is the half kept.
 
     Deliberately a NAME check and nothing more: it says the tool is
-    mentioned, not that what is written about it is still true. That is
-    the honest limit of what a script can tell.
+    mentioned, not that what is written about it is still true.
     """
-    where = {"CLAUDE.md": read("CLAUDE.md"),
-             "docs/tools.md": read("docs/tools.md")}
+    text = read("docs/tools.md")
     tools_dir = os.path.join(REPO, "tools")
     if not os.path.isdir(tools_dir):
         return
     for name in sorted(os.listdir(tools_dir)):
         if os.path.splitext(name)[1] not in (".py", ".sh"):
             continue
-        for doc, text in where.items():
-            if name not in text:
-                hint = ("add it to the `## tools/` listing" if doc == "CLAUDE.md"
-                        else "add an entry -- CLAUDE.md calls this the full reference")
-                problems.append(f"tools/{name} is not mentioned in {doc} -- {hint}")
+        if name not in text:
+            problems.append(f"tools/{name} is not mentioned in docs/tools.md -- "
+                            "add an entry; it is the full reference")
 
 
 # Commands that are real but are not something a person types at a

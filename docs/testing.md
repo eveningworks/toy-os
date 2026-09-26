@@ -682,6 +682,21 @@ clean Ubuntu build, and `docs/development-setup.md` says how it differs
 from the bare-metal box.
 
 
+## Debugging with GDB
+
+`make debug` boots frozen at CPU reset (`-s -S`) for real
+breakpoint/single-step debugging via QEMU's own GDB stub -- **no
+kernel-side GDB protocol code needed**. `docs/decisions.md` says why an
+in-kernel serial stub was deliberately not built.
+
+```
+gdb build/kernel.bin -ex "target remote localhost:1234"
+```
+
+`CFLAGS`/`USERLAND_CFLAGS` both carry `-g`, so `kernel.bin` and every
+userland ELF have real DWARF. Kept at `-O2` deliberately -- same binary
+as every other build, so some locals show as "optimized out".
+
 ## Testing in QEMU headlessly, via QMP
 
 **First: is this actually a GUI change?** If not, `tools/vm.py` (above)

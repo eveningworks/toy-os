@@ -1,14 +1,13 @@
 # tools/
 
 The dev/build helper scripts — not compiled, not shipped as part of the
-OS. CLAUDE.md keeps a one-line index of these; this file is the full
+OS. CLAUDE.md keeps a question-to-tool index; this file is the full
 reference for each one: what it does, why it exists, and the traps it
 encodes.
 
 **The bar for adding one:** does it fix a rederive-from-scratch cost?
 That is the reasoning that produced every tool below. Add freely when it
-does — and add a line to CLAUDE.md's index, which `tools/check_docs.py`
-verifies.
+does — and add its entry here, which `tools/check_docs.py` verifies.
 
 Dev/build helper scripts, not compiled or shipped as part of the OS:
 `genttf.py` (font generation, pre-existing), `gen_kbs.py`
@@ -190,10 +189,11 @@ manual steps to be worth automating:
   resolved now, including one built from several adjacent literals, and
   the page's four-space code-block indent is accepted on either side.
 
-  **And a tool must be named in `docs/tools.md` as well as CLAUDE.md.**
-  Only the index was checked, so `multidisk_test.py` was added there,
-  passed the gate, and was missing from the file CLAUDE.md itself calls
-  the full reference. The `/bin` list comes from the SEED TREE
+  **And every tool must be named in `docs/tools.md`.** When only
+  CLAUDE.md's list was checked, `multidisk_test.py` passed the gate while
+  missing from the full reference; that list is gone from CLAUDE.md now
+  (it cost always-loaded context, and each runner's `--list` is the live
+  answer), so this file is the one the check reads. The `/bin` list comes from the SEED TREE
   rather than from `userland/bin/*.c`, because the Makefile renames some
   programs on the way in and the name on disk is the name people type --
   which also means this check is skipped in a checkout that has not run

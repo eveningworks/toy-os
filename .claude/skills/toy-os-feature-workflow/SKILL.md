@@ -405,8 +405,9 @@ to this file too).
      first or anonymize and say so.
    - Any genuinely reusable tooling from this session belongs in
      `tools/`, not left as scratch -- see CLAUDE.md's `## tools/`
-     section for the bar, and update CLAUDE.md's own `tools/` listing
-     (and any other doc that describes it) to match if you add one.
+     section for the bar, and give a new tool its `docs/tools.md` entry
+     (`tools/check_docs.py` enforces it) and a row in CLAUDE.md's
+     question-to-tool table if it answers a new question.
    - **AND A NEW TEST TOOL MUST BE NAMED BY A RUNNER, or nothing ever
      runs it again.** `preflight.sh`, `gui_regress.py` or
      `ondemand_sweep.py` -- one of the three, or the sweep's
