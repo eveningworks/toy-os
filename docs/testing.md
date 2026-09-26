@@ -673,13 +673,13 @@ its own module docstring for the same division stated in code.
 
 **GitHub Actions (`.github/workflows/build.yml`)** runs `make clean &&
 make all && make iso` plus `check_deps.py`, `check_layout.py`,
-`boot_smoke_test.py`, `ktest_run.py` and `usertest_run.py` on every
-push/PR
-to `main` -- so a build break or boot regression is caught
-automatically, independent of whether a session (or a human) remembered
-to verify locally first. This doesn't replace verifying locally before
-delivering a change (still do that -- see "Working in the cloud
-sandbox" above), it's a second, automatic check behind it.
+`boot_smoke_test.py`, `ktest_run.py` and `usertest_run.py` on a
+release tag and on demand (`gh workflow run build.yml`) -- not on every
+push, since 2026-08-19. What it answers is whether a CLEAN CHECKOUT
+builds on someone else's machine; it does not replace `preflight.sh`
+before delivering a change. A Claude Code cloud session is the other
+clean Ubuntu build, and `docs/development-setup.md` says how it differs
+from the bare-metal box.
 
 
 ## Testing in QEMU headlessly, via QMP

@@ -417,6 +417,10 @@ identity or history**.
   standing privacy convention, not a default to override** -- never let
   a commit here carry the maintainer's real name or personal email.
   `docs/development-setup.md` has the command sequence.
+- **A CLAUDE CODE CLOUD SESSION IS NOT THE CACHYOS BOX**: Ubuntu 24.04,
+  nothing installed, the container's own global identity, no KVM, and
+  pushes go to the session's `claude/...` branch with no `gh`.
+  `docs/development-setup.md`'s cloud section has the setup script.
 - `git push origin main` and `gh release create`/`upload` work from the
   session. Push ordinary verified work without asking; confirm tags,
   Releases, force-pushes and history rewrites first, since those are

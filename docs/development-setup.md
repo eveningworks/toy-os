@@ -83,3 +83,59 @@ version is a real variable: `tools/qemu_matrix.py` exists because a
 virtio-blk defect was invisible on one version and reproduced every time
 on another, so keeping two machines on the same distribution means a
 difference between them is your code rather than your toolchain.
+
+## A Claude Code cloud session (Ubuntu 24.04)
+
+The steps above are for the maintainer's bare-metal CachyOS box. A
+session on claude.ai/code runs in a throwaway Ubuntu 24.04 container
+instead, and differs in seven ways:
+
+- **Nothing is installed.** gcc, binutils, make, gdb, ruff and python3
+  are there; nasm, QEMU and GRUB are not. Put this in the cloud
+  environment's **Setup script** (network access `Trusted` reaches the
+  Ubuntu mirrors and PyPI) so every session starts ready:
+
+  ```bash
+  #!/bin/bash
+  set -e
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq -o Acquire::Retries=3
+  apt-get install -y -qq -o Acquire::Retries=3 \
+    nasm grub-pc-bin grub-common xorriso mtools libxkbcommon-tools \
+    qemu-system-x86 ccache shellcheck
+  python3 -m pip install -q --root-user-action=ignore pillow
+  ```
+
+- **Pillow comes from pip, not apt.** `python3` is a separate build in
+  `/usr/local`, which cannot load apt's `python3-pil`; the gate's
+  `genttf.py --check` fails on the import.
+- **The commit identity is the container's, not yours.** Its global git
+  config says `Claude <noreply@anthropic.com>`, and step 5 above has not
+  run in a fresh clone. Set it in the environment's **Environment
+  variables**, which override any config:
+
+  ```
+  GIT_AUTHOR_NAME=toy-os
+  GIT_AUTHOR_EMAIL=noreply@toy-os.local
+  GIT_COMMITTER_NAME=toy-os
+  GIT_COMMITTER_EMAIL=noreply@toy-os.local
+  ```
+
+  `preflight.sh` still wants a LOCAL identity, so run step 5 as well.
+- **binutils is 2.42**, older than CachyOS's. It cannot link userland
+  above 4 GiB unless GOT loads are left unrelaxed, which is what
+  `-Wa,-mrelax-relocations=no` in `USERLAND_CFLAGS` is for; the
+  Makefile comment beside it has the mechanism.
+- **Everything runs TCG.** There is no `/dev/kvm` and no Docker daemon,
+  so `kvm_soak.py`, `vm.py --kvm` and `qemu_matrix.py` cannot run, and
+  the cloud box answers nothing about the two bug classes TCG hides.
+  With four cores `gui_regress.py` runs two jobs at a time.
+- **Outbound HTTPS goes through a policy proxy**, which refuses
+  ftp.gnu.org, sourceware.org and GitHub archive downloads. The normal
+  build is offline and never notices; `EXTRAS=1` fetches from the
+  network and has not been tried there.
+- **The container is reclaimed when the session ends**, so unpushed work
+  is lost. A session pushes to its own `claude/...` branch rather than
+  `main`, and has no `gh` -- the maintainer merges. No other QEMU runs in
+  the container, so the "ask the user to close their QEMU" rule in
+  `CLAUDE.md` does not apply there.

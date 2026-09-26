@@ -163,8 +163,9 @@ A C toolchain, NASM, GRUB's rescue-image tools, and QEMU.
 | `qemu-system-x86_64` | Runs it. |
 | `python3` + Pillow | Build-time disk seeding and the test/dev tools. Pillow (`pip install pillow`) is needed for screenshots and by `preflight.sh`, whose `genttf.py --check` imports it. |
 
-Verified firsthand on Arch/CachyOS; the Debian/Ubuntu list is what CI
-installs when it runs — on a release tag or on demand, not on every
+Verified firsthand on Arch/CachyOS, and on Ubuntu 24.04 in a Claude Code
+cloud session (`docs/development-setup.md`); the Debian/Ubuntu list is
+what CI installs when it runs — on a release tag or on demand, not on every
 push, because what a clean-checkout build is uniquely good at is not
 worth a gate that cries wolf. The rest are package-name translations of
 the same requirements — corrections welcome.
