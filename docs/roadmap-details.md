@@ -6691,3 +6691,19 @@ image -- `/etc/services.d` has no inetd or tftpd, the bare-metal laptop
 enables them and a QEMU guest does not, which is why the first attempt
 at this found nothing listening. Spawned, not enabled: a service would
 persist into the next boot and change what every other tool is testing.
+
+## The cache's write-back sends one sector per command -- `atac_flush()` walks slots, not LBAs, and never merges neighbours
+
+Seen 2026-09-26 in gdb samples of a guest under `fsrace_test`: one
+`txn_barrier()` -> `blkdev_flush()` -> `atac_flush()` issued a separate
+DMA command per dirty line (`count=1` at LBAs 135641, 135819, 135822,
+...), each through the full issue-and-wait cycle, all under the mount
+lock. `write_back()` takes one line; `atac_flush()` loops over the cache
+array in slot order. Sorting the dirty lines by LBA and sending runs of
+neighbours as one command (up to `ATA_MAX_SECTORS_PER_XFER`) is the
+obvious shape -- the filesystem's own writes were coalesced the same way
+long ago ("Coalesce contiguous block writes into fewer ATA commands").
+Not measured: how many commands a typical barrier sends, or what merging
+would save. It is a lock-hold-time question as much as a throughput one,
+since the barrier holds the mount lock throughout.
+

@@ -486,6 +486,10 @@ struct sched_process {
     // job -- storing a percentage here would bake in a sampling interval
     // the kernel has no business choosing.
     uint64_t cpu_ns;   // measured, not counted -- see bill_current()
+    // CPU consumed, for PICKING -- see find_next_runnable(). cpu_ns is the
+    // report; this one is moved forward on a wake (vr_place()) so a long
+    // sleeper cannot come back owed a monopoly.
+    uint64_t vruntime;
 
     // This process's SYS_SBRK state: the break it can see, and how far
     // physical pages have actually been mapped behind it (separate,
@@ -867,7 +871,7 @@ static int kernel_slot_runnable(void) {
 
 // Scans the whole rotation -- all MAX_PROCS process slots PLUS the
 // kernel's own position -- starting just after `start` (wrapping), and
-// returns the first runnable one. Falls back to ROT_KERNEL when nothing
+// returns the runnable one at the best level that has run least. Falls back to ROT_KERNEL when nothing
 // else is runnable, which is the pre-rotation behaviour: a tick that
 // finds no ready process resumes the kernel, exactly as before.
 //
@@ -895,7 +899,8 @@ int scheduler_get_priority(int pid, int *value) {
 // of the trap it happened in (scheduler_trap_exit()) -- Linux's
 // TIF_NEED_RESCHED. Only a STRICTLY better level: a wake at the same
 // level would preempt on every interrupt and give nothing back. The one
-// exception is a context parked MID-CALL -- see g_wake_next.
+// exception is a context parked MID-CALL that has run less than what is
+// running -- see wake_slot().
 static int g_need_resched;
 
 // The level a wake has to beat: the running process's, or the kernel
@@ -908,36 +913,42 @@ static int runnable_at(int idx) {
     return procs[idx].state == SCHED_READY && !procs[idx].stopped;
 }
 
-// WHOM A WAKE PREEMPTED, per level, as a rotation index + 1 (0: nobody).
-// It is served FIRST the next time its level runs -- the head of its
-// queue, Windows' rule for a preempted thread, where a quantum that ran
-// out goes to the tail. Without it the scan restarted after the
-// preempting driver on every wake, so the slots following the driver's
-// always won and one scanned late went unserved (soundd, 762 ms, which
-// is a dropout).
-#define PRIO_MIN (-20)
-#define PRIO_LEVELS 40
-static uint8_t g_preempted[PRIO_LEVELS];
+// WHO RUNS NEXT WITHIN A LEVEL IS WHOEVER HAS RUN LEAST -- CFS's rule,
+// with the strict levels above it kept. Two tie-breaks this replaced
+// (a preempted process first, Windows'; a context woken mid-call first,
+// NEXT_BUDDY's) each held alone and together had no bound: a disk-bound
+// thread and the kernel context handed the CPU to each other on every
+// IRQ and every other READY process waited forever (docs/decisions.md,
+// "Within a level, whoever has run least runs next"). Both fall out of
+// this one: a preempted or long-parked context has used less.
+//
+// The kernel context takes part at level 0 with its own figure, which
+// its idle hlt does not advance -- idle is not running (Linux's idle
+// task is no CFS entity at all).
+static uint64_t kernel_vruntime;
+static uint64_t g_min_vruntime;      // the pack's floor; never goes back
+static int g_kernel_halting;         // inside scheduler_idle_halt()
 
-// A CONTEXT WOKEN MID-CALL RUNS NEXT, within its level. It is inside a
-// syscall and usually holding something -- the filesystem lock, the
-// drive -- so every tick it waits READY is a tick everybody behind that
-// lock waits too; before this, each DMA completion cost the waiter up
-// to a whole slice behind a busy peer. CFS's wakeup preemption and
-// NEXT_BUDDY, and 4.4BSD's PRIBIO for the same reason. Never across
-// levels: a better-level process still goes first.
-static int g_wake_next = -1;
+static uint64_t vr_credit_ns(void);  // one slice -- see g_timeslice_ms
 
-static void note_preempted(int rot_idx, int prio) {
-    if (prio >= PRIO_MIN && prio < PRIO_MIN + PRIO_LEVELS)
-        g_preempted[prio - PRIO_MIN] = (uint8_t)(rot_idx + 1);
+static uint64_t *vr_of(int rot) {
+    return rot == ROT_KERNEL ? &kernel_vruntime : &procs[rot].vruntime;
+}
+
+// A context arriving -- woken, spawned, or the kernel after idling --
+// goes no further back than one slice behind the pack. Without the
+// floor, a process that slept an hour is owed an hour (CFS's
+// place_entity()).
+static void vr_place(int rot) {
+    uint64_t c = vr_credit_ns();
+    uint64_t floor = g_min_vruntime > c ? g_min_vruntime - c : 0;
+    if (*vr_of(rot) < floor) *vr_of(rot) = floor;
 }
 
 static int find_next_runnable(int start) {
     // THE BEST LEVEL PRESENT, first. Strict priority between levels and
-    // round-robin within one, which is what keeps the rotation fair
-    // among equals while letting a woken driver in ahead of the
-    // desktop. The kernel's own slot sits at the default level, so it
+    // least-run-first within one (vruntime, above), which keeps equals
+    // fair while letting a woken driver in ahead of the desktop. The kernel's own slot sits at the default level, so it
     // is not starved by ordinary processes and IS outranked by a
     // driver -- which is the point.
     int best = 127;
@@ -945,36 +956,26 @@ static int find_next_runnable(int start) {
         if (runnable_at(idx) && procs[idx].prio < best) best = procs[idx].prio;
     if (kernel_slot_runnable() && 0 < best) best = 0;
 
-    if (g_wake_next >= 0) {
-        int n = g_wake_next;
-        g_wake_next = -1;
-        if (runnable_at(n) && procs[n].prio == best) return n;
-    }
-
-    // Consulted once, used or not: a head that has since blocked or
-    // exited is simply dropped.
-    if (best >= PRIO_MIN && best < PRIO_MIN + PRIO_LEVELS) {
-        int head = g_preempted[best - PRIO_MIN] - 1;
-        g_preempted[best - PRIO_MIN] = 0;
-        if (head == ROT_KERNEL && kernel_slot_runnable()) return ROT_KERNEL;
-        if (head >= 0 && head < MAX_PROCS && runnable_at(head) &&
-            procs[head].prio == best)
-            return head;
-    }
-
+    // Scanned in rotation order from `start`, so among equals the next
+    // one along wins, which is the old round-robin.
+    int pick = -1;
+    uint64_t pv = 0;
     for (int i = 1; i <= MAX_PROCS + 1; i++) {
         int idx = (start + i + MAX_PROCS + 1) % (MAX_PROCS + 1);
         if (idx == ROT_KERNEL) {
-            if (kernel_slot_runnable() && best >= 0) return ROT_KERNEL;
+            if (!kernel_slot_runnable() || best != 0) continue;
+            vr_place(ROT_KERNEL);   // idling left it behind: owed one slice, not the idle
+        } else if (!runnable_at(idx) || procs[idx].prio != best) {
+            // STOPPED IS CHECKED HERE AND NOWHERE ELSE (runnable_at()).
+            // One picker means one place suspension has to be honoured.
             continue;
         }
-        // STOPPED IS CHECKED HERE AND NOWHERE ELSE. One picker means
-        // one place suspension has to be honoured -- see the field's
-        // comment in struct sched_process for why it is a flag rather
-        // than a state.
-        if (runnable_at(idx) && procs[idx].prio == best) return idx;
+        uint64_t v = *vr_of(idx);
+        if (pick < 0 || v < pv) { pick = idx; pv = v; }
     }
-    return ROT_KERNEL;
+    if (pick < 0) return ROT_KERNEL;
+    if (pv > g_min_vruntime) g_min_vruntime = pv;
+    return pick;
 }
 
 // Hands the CPU to `idx`, including its floating-point registers.
@@ -1189,13 +1190,27 @@ static void slice_restart(void) {
 // interrupt".
 #define WAKE_GRAN_NS 1000000ull
 
+static uint64_t vr_credit_ns(void) { return (uint64_t)g_timeslice_ms * 1000000ull; }
+
+// Has `i` run less than what is running now, by more than a
+// granularity? The in-progress slice counts -- the running one has
+// been using the CPU since g_run_start_ns.
+static int vr_behind_running(int i) {
+    uint64_t now = clocksource_now_ns();
+    uint64_t run = now > g_run_start_ns ? now - g_run_start_ns : 0;
+    uint64_t cur = current_index >= 0 ? procs[current_index].vruntime + run
+                 : kernel_vruntime + (g_kernel_halting ? 0 : run);
+    return procs[i].vruntime + WAKE_GRAN_NS < cur;
+}
+
 static void wake_preempt(int i) {
     if (current_index < 0 && clockevent_in_idle()) return; // the idle path hands over already
     if (procs[i].prio != running_prio()) return;           // better prio has its own rule
+    vr_place(i);
+    if (!vr_behind_running(i)) return;                     // it has had its share
     uint64_t gran_end = g_slice_start_ns + WAKE_GRAN_NS;
     if (clocksource_now_ns() >= gran_end) {
         g_need_resched = 1;
-        g_wake_next = i;
     } else if (gran_end < g_slice_end_ns) {
         g_slice_end_ns = gran_end;
     }
@@ -1660,6 +1675,7 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
     // SET, NOT LEFT: a reused slot otherwise hands the next tenant its
     // last one's priority. Inherited, as posix_spawn does.
     procs[slot].prio = current_index >= 0 ? procs[current_index].prio : 0;
+    procs[slot].vruntime = g_min_vruntime;   // a newcomer joins the pack, not ahead of it
     // NOTHING IS PENDING AND NOTHING IS IGNORED for a fresh process --
     // reset rather than inherited, and both matter. A slot is reused, so
     // a leftover pending bit would kill the NEXT tenant on its first
@@ -1881,9 +1897,11 @@ static void bill_current(void) {
         uint64_t slice = now - g_run_start_ns;
         if (current_index >= 0) {
             procs[current_index].cpu_ns += slice;
+            procs[current_index].vruntime += slice;
             g_proc_ns += slice;
         } else {
             g_kernel_ns += slice;
+            if (!g_kernel_halting) kernel_vruntime += slice;
         }
     }
     // Reset unconditionally, including when the KERNEL context was
@@ -1945,7 +1963,24 @@ uint64_t scheduler_next_event_ns(void) {
 // SYS_YIELD's entry into the same rotation. Distinct from the tick only
 // so the call sites read honestly; the accounting difference that used
 // to justify two paths is gone.
-void scheduler_yield(uint64_t *regs) { scheduler_rotate(regs); }
+// A YIELD GOES TO THE BACK of its level: its vruntime is moved up to the
+// most anyone there has run, so every peer goes first -- the old
+// "SCHED_COMPAT_YIELD" behaviour of CFS. Without it the least-run rule
+// hands a yielder straight back the CPU it just gave up, since a
+// process that only yields has run almost nothing (cputime_test).
+void scheduler_yield(uint64_t *regs) {
+    if (current_index >= 0) {
+        int lvl = procs[current_index].prio;
+        uint64_t top = procs[current_index].vruntime;
+        for (int i = 0; i < MAX_PROCS; i++)
+            if (i != current_index && runnable_at(i) && procs[i].prio == lvl &&
+                procs[i].vruntime > top)
+                top = procs[i].vruntime;
+        if (lvl == 0 && kernel_slot_runnable() && kernel_vruntime > top) top = kernel_vruntime;
+        procs[current_index].vruntime = top;
+    }
+    scheduler_rotate(regs);
+}
 
 void scheduler_trap_exit(uint64_t *regs) {
     if (g_need_resched) scheduler_rotate(regs);
@@ -2026,8 +2061,6 @@ static void scheduler_rotate(uint64_t *regs) {
 
     // Consumed only by a rotation that can happen: one refused above
     // leaves it for the next trap rather than losing the wake.
-    if (g_need_resched)
-        note_preempted(current_index >= 0 ? current_index : ROT_KERNEL, running_prio());
     g_need_resched = 0;
 
     if (current_index >= 0) {
@@ -2146,6 +2179,7 @@ int scheduler_test_park(uint64_t *tf, const void *chan, int reason) {
         procs[i].pgid = i + 1;
         procs[i].sid = i + 1;
         procs[i].prio = 0;
+        procs[i].vruntime = g_min_vruntime;
         procs[i].parked_in_kernel = 0;   // a mid-call park is asked for, never inherited
         return i;
     }
@@ -2161,9 +2195,17 @@ void scheduler_test_park_deadline(int idx, uint64_t wake_at_ns, int in_kernel) {
     procs[idx].parked_in_kernel = in_kernel ? 1 : 0;
 }
 
-int scheduler_test_pick(int start, int preempted) {
-    if (preempted >= 0) note_preempted(preempted, procs[preempted].prio);
-    return find_next_runnable(start);
+int scheduler_test_pick(int start) { return find_next_runnable(start); }
+
+void scheduler_test_set_vruntime(int idx, uint64_t v) {
+    if (idx == -1) kernel_vruntime = v;
+    else if (idx >= 0 && idx < MAX_PROCS) procs[idx].vruntime = v;
+}
+
+uint64_t scheduler_test_vruntime(int idx) {
+    if (idx == -1) return kernel_vruntime;
+    if (idx == -2) return g_min_vruntime;
+    return (idx >= 0 && idx < MAX_PROCS) ? procs[idx].vruntime : 0;
 }
 
 int scheduler_test_take_resched(void) {
@@ -2371,7 +2413,7 @@ int scheduler_wake_timers(uint64_t now_ns) {
         }
         procs[i].wake_at_ns = 0;
         procs[i].state = SCHED_READY;
-        wake_preempt(i);
+        wake_preempt(i);   // places it, too
         woken++;
     }
     return woken;
@@ -2482,11 +2524,14 @@ static void wake_slot(int i, int64_t value) {
     // had reached by then.
     procs[i].wake_at_ns = 0;
     procs[i].state = SCHED_READY;
+    vr_place(i);
     if (procs[i].prio < running_prio()) g_need_resched = 1;
-    if (procs[i].parked_in_kernel && procs[i].prio <= running_prio()) {
+    // MID-CALL, AT THE SAME LEVEL: it is usually holding the filesystem
+    // lock, so it cuts in -- but only while it has run less than what it
+    // would preempt. That bound is what the unconditional version lacked.
+    else if (procs[i].parked_in_kernel && procs[i].prio == running_prio() &&
+             vr_behind_running(i))
         g_need_resched = 1;
-        g_wake_next = i;
-    }
 }
 
 int scheduler_wake_n(const void *chan, int64_t value, int max) {
@@ -2817,6 +2862,7 @@ int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
     procs[slot].ppid     = leader + 1;
     procs[slot].pgid     = procs[leader].pgid;
     procs[slot].prio     = procs[caller].prio;
+    procs[slot].vruntime = g_min_vruntime;
     signal_state_reset(slot);
     // DISPOSITIONS ARE INHERITED, which is as close to POSIX's
     // per-process disposition as a per-thread table gets: a thread
@@ -2904,6 +2950,7 @@ int scheduler_fork(const uint64_t *regs) {
     fd_clone(as, procs[leader].pml4_phys);
     procs[slot].ppid = leader + 1;
     procs[slot].prio = procs[caller].prio;
+    procs[slot].vruntime = g_min_vruntime;
     signal_state_reset(slot);
     for (int i = 0; i <= SIGNAL_MAX; i++)
         procs[slot].actions[i] = procs[caller].actions[i];
@@ -3828,6 +3875,7 @@ int scheduler_signal_raise(int pid, int sig) {
             tf[TF_RAX] = (uint64_t)(int64_t)-EINTR;
         }
         p->state = SCHED_READY;
+        vr_place((int)(p - procs));
         p->wait_chan = 0;
         p->wake_at_ns = 0;   // the wait is over; see scheduler_wake()
     }
@@ -3871,8 +3919,8 @@ int scheduler_kill(int pid, int exit_code) {
     // once the call completes. (A deferred kill reports SIGKILL whatever
     // `exit_code` said; the one that matters, Force Quit's, already is.)
     // READY COUNTS TOO: woken but not yet resumed, it is still inside
-    // those frames. Testing BLOCKED alone tore such a context down and
-    // left the root mount's lock owned by a pid that no longer existed.
+    // those frames -- and since a mid-call wake waits its turn (see
+    // wake_slot()), that window is a slice long, not a few instructions.
     if (procs[slot].parked_in_kernel) {
         procs[slot].stopped = 0;   // it must be able to finish the call
         return scheduler_signal_raise(pid, SIGKILL);
@@ -4026,7 +4074,20 @@ void scheduler_idle(void) {
     net_poll();
 }
 
-void scheduler_idle_halt(void) { clockevent_idle_halt(); }
+// Interrupts off around each bill: a tick that rotates bills too, and
+// two interleaved bill_current()s would charge one slice twice.
+void scheduler_idle_halt(void) {
+    uint64_t f;
+    __asm__ volatile ("pushfq; popq %0; cli" : "=r"(f) :: "memory");
+    bill_current();          // what the kernel ran up to here IS charged...
+    g_kernel_halting = 1;    // ...the halt is not (see kernel_vruntime)
+    __asm__ volatile ("pushq %0; popfq" :: "r"(f) : "memory", "cc");
+    clockevent_idle_halt();
+    __asm__ volatile ("pushfq; popq %0; cli" : "=r"(f) :: "memory");
+    bill_current();
+    g_kernel_halting = 0;
+    __asm__ volatile ("pushq %0; popfq" :: "r"(f) : "memory", "cc");
+}
 
 // --- the rewound-syscall window (see struct sched_proc.syscall_reissue) --
 

@@ -389,6 +389,7 @@ No dependency on the phases above; ordered among themselves.
 - [ ] Run the kernel suite on AHCI too -- CI covers ATA and virtio-blk, so an AHCI-only defect has no coverage
 - [ ] A sector cache on the AHCI and virtio paths -- `ata_cache.c` is wired only into `ata.c`, and `atac_ops` is already the seam
 - [ ] A block/buffer cache with write-back
+- [ ] The cache's write-back sends one sector per command -- `atac_flush()` walks slots, not LBAs, and never merges neighbours
 - [ ] Directory index
 - [x] ~~`fs_rename()`~~ done
 - [x] ~~`fs_truncate()`~~ done

@@ -213,9 +213,12 @@ made stage 2 a net win, and each is load-bearing:
   stalls were CACHE FLUSH (0xE7), 25-225 ms of host fsync polled with
   interrupts off -- not the DMA, which totalled 1-2 ms per 100 commands.
 - **An unlock HANDS the lock to a parked waiter** (Linux's mutex
-  handoff, 4.10), and **a context woken mid-call runs next within its
-  level** (CFS's wakeup preemption and NEXT_BUDDY): without them the
-  releaser re-took the lock before the woken waiter ever ran.
+  handoff, 4.10), and **a context woken mid-call cuts in within its
+  level** (CFS's wakeup preemption) while it has run less than what it
+  preempts: without them the releaser re-took the lock before the woken
+  waiter ever ran. The bound came later, 2026-09-26, after the
+  unconditional version starved everything else -- docs/decisions.md,
+  "Within a level, whoever has run least runs next".
 - **init publishes its status file by rename**, because a truncate-then-
   write left `service` a window a whole disk wait wide to read it empty.
 

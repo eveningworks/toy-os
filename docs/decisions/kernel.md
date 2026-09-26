@@ -533,8 +533,8 @@ handler that tried to switch directly to the woken process would be
 re-creating exactly the reentrancy this design exists to avoid. A woken
 process that OUTRANKS the running one is switched to on the way out of
 the trap, by the same rotation the tick uses; any other waits for the
-next tick. See "A wake preempts only from a better level, and the
-preempted process resumes first".
+next tick. See "A wake preempts only from a better level" and "Within
+a level, whoever has run least runs next".
 
 Full writeup in the commit that added it.
 
@@ -8046,7 +8046,7 @@ the host over the G305's two interfaces and QEMU's pair, and KTESTs
 cover the same bytes in the gate. A descriptor written by whoever wrote
 the parser proves only that the two agree.
 
-## A wake preempts only from a better level, and the preempted process resumes first
+## A wake preempts only from a better level
 
 A ring-3 driver is woken by its device and has to refill before its
 buffer drains. Before this, `scheduler_wake_n()` only marked it READY,
@@ -8075,18 +8075,16 @@ already rotates from an interrupt, so it adds no new place a switch can
 happen. `snddrv` asks for -10. Strictly better only: a wake at the same
 level preempting would rotate the CPU on every interrupt.
 
-**The preempted process goes back to the HEAD of its level.** This is the
-part the obvious version gets wrong, and it is Windows' rule: a thread
-that is preempted goes back to the front of its priority's ready queue,
-and only one whose quantum ran out goes to the back. Linux gets the same
-effect by leaving the preempted task's place in the tree alone. Without
-it, the round-robin restarted just past the driver's slot on every wake,
-250 times a second. So the slots after the driver's always won, and one
-scanned late (soundd, as pid 9 behind a driver at pid 15) went **762 ms**
-without a turn. It played as half-second dropouts with the driver
-reporting 0 dry. The same build and level with soundd at pid 15, just
-after the driver, gave 33 ms. `g_preempted[]` holds one head per level
-and is consulted once.
+**The preempted process has to run first when its level comes back**,
+Windows' rule for a preempted thread. Without it the round-robin
+restarted just past the driver's slot on every wake, 250 times a second,
+so the slots after the driver's always won and one scanned late
+(soundd, as pid 9 behind a driver at pid 15) went **762 ms** without a
+turn -- half-second dropouts with the driver reporting 0 dry; the same
+build with soundd at pid 15 gave 33 ms. A per-level head
+(`g_preempted[]`) did this until 2026-09-26; it is now a consequence of
+"Within a level, whoever has run least runs next", since a preempted
+process has run less than whoever kept going.
 
 **This explains the older measurement** that raising `snddrv`'s priority
 "starved the fillers" (docs/decisions/workflow.md, "Audio is judged by
@@ -8122,14 +8120,16 @@ on resume. Measured honestly: the probes after it showed every WM wait
 was ONE holder operation (~17 ms), which is what handoff guarantees; how
 much worse it was without handoff was not measured separately.
 
-**A context woken MID-CALL runs next within its level.** An IRQ wake
-only made the waiter READY, so every DMA completion cost it up to a
-whole slice behind a busy peer -- and it was usually holding the
-filesystem lock the whole time, so everybody behind it waited too.
-CFS's wakeup preemption and NEXT_BUDDY, and 4.4BSD's PRIBIO for the same
-reason. Never across levels, so the audio driver's -10 still wins. This
-is the one exception to "a wake preempts only from a better level"
-above.
+**A context woken MID-CALL cuts in within its level -- while it has run
+less than what it would preempt.** An IRQ wake only made the waiter
+READY, so every DMA completion cost it up to a whole slice behind a busy
+peer -- and it was usually holding the filesystem lock the whole time,
+so everybody behind it waited too. CFS's wakeup preemption, and 4.4BSD's
+PRIBIO for the same reason. Never across levels, so the audio driver's
+-10 still wins. This is the one exception to "a wake preempts only from
+a better level" above. It was UNCONDITIONAL until 2026-09-26 (a
+`g_wake_next` naming the next process), which is the half of CFS's rule
+that was copied without the other half; see the next-but-one entry.
 
 **The cache FLUSH sleeps as well as the DMA.** Probed per syscall, the
 DMA waits totalled 1-2 ms per hundred commands; the stalls were CACHE
@@ -8143,6 +8143,72 @@ What it did NOT fix is the convoy behind one global lock: a caller of
 the filesystem still waits one holder operation per call, which is why
 the compositor's config reads came off its frame path (next entry) and
 why `docs/fslock-design.md` exists.
+
+## Within a level, whoever has run least runs next
+
+Each process carries a `vruntime`, the CPU it has consumed as the picker
+counts it, and so does the kernel context. `find_next_runnable()` keeps
+the strict levels and, within the best one, runs the lowest `vruntime`;
+the old rotation order only breaks ties. A wake at the same level may
+cut in only when the woken context is behind what runs by more than
+`WAKE_GRAN_NS`. That is CFS's rule (EEVDF's since 6.6), minus weights,
+because the levels already are the weights here.
+
+**What it replaced was two tie-breaks with no bound between them.** A
+context woken MID-CALL ran next (`g_wake_next`), and a context a wake
+preempted resumed first (`g_preempted[]`). Each was measured to fix a
+real starvation (the entries above). Together, a thread doing
+back-to-back synchronous disk I/O and the kernel context handed the CPU
+to each other on every IRQ, and the ordinary scan that would reach
+everyone else never ran. Caught on a live guest through QEMU's gdbstub
+(2026-09-26): 15 minutes into a 20-second `fsrace_test`, EVERY other
+process was READY with its CPU time frozen -- the test's main thread,
+toywm, init, the daemons -- and the debug console was dead, because the
+kernel context serves it. `fsrace_test` alone failed 7 runs in 10 on
+`2daae758`; with this, 0 in 10. The desktop saw the same thing in
+milder form: under `diskbench`, `latency_under_io.py` measured the
+compositor's `wake` at 22.9 ms average and 378 ms worst before, and
+0.04 ms and 0.37 ms after (KVM, one run each).
+
+**Both old behaviours fall out of the one rule**, which is why they are
+gone rather than bounded: a preempted process has run less than the one
+that kept going, and a disk waiter that sleeps most of the time has run
+less than a busy peer -- until it has not, which is exactly when it
+should stop cutting in.
+
+**Four details that are the difference between this and a starvation
+of its own:**
+- **A wake PLACES the woken context** no further back than one slice
+  behind the pack's floor (`vr_place()`, CFS's `place_entity()`). A
+  process asleep for an hour is otherwise owed an hour.
+- **The kernel context's idle halt is not running**
+  (`scheduler_idle_halt()` bills around it). Linux's idle task is not a
+  CFS entity at all; here the kernel context also runs the shell and
+  the debug console, so it has to compete, but only for what it
+  actually used.
+- **A new process starts at the floor**, not at 0, or every spawn would
+  be owed the whole uptime.
+- **`SYS_YIELD` goes to the back**: the yielder's `vruntime` is raised
+  to the most any peer at its level has run, CFS's old compat-yield.
+  Without it a process that only yields has run nothing and is handed
+  straight back the CPU it gave up -- `cputime_test` caught exactly
+  that, billing 50% of a window to a pure yield loop.
+
+**And one bug it exposed rather than caused.** `scheduler_kill()`
+deferred a kill for a context BLOCKED mid-call (the D state) but tore
+down one that had been WOKEN mid-call and not yet resumed -- READY, still
+inside its kernel frames, possibly holding the mount lock. Under the old
+rules that window was a few instructions, because a mid-call wake always
+ran next; under this one it is up to a slice, and the desktop killing
+its screensaver landed in it: the root mount's lock owned by a pid that
+no longer existed, and every file call in the machine waiting on it. The
+kill now defers on `parked_in_kernel` whatever the state.
+
+**Not done, deliberately:** no weights within a level (nice values are
+levels here, strict, and ageing across them is still absent -- a
+better-level spinner still takes the machine); and the same-level
+cut-in stays limited to MID-CALL wakes, as before, rather than every
+wake as in CFS, so ordinary interrupts still do not rotate the CPU.
 
 ## The compositor's config is pushed, into the queue it already waits on
 

@@ -318,18 +318,18 @@ KTEST("sched", "a wake preempts only when it OUTRANKS what is running") {
     KTEST_ASSERT_EQ(asked_hi, 1);
 }
 
-KTEST("sched", "a PREEMPTED process runs next at its level, not the one after it") {
-    // Two READY slots at a level nothing real uses. The plain scan from
-    // A's position picks B; A preempted must pick A -- or every wake of a
-    // better-level driver resets the round-robin to just past it and a
-    // slot scanned late is starved.
+KTEST("sched", "within a level, whoever has run least runs next") {
+    // Two READY slots at a level nothing real uses. Equal: the scan
+    // order decides, so from A's position it is B (the old round-robin).
+    // A behind: A, although B comes first in the scan -- which is what a
+    // preempted process, or one back from a long wait, needs.
     uint64_t tf_a[SCHED_TF_SLOTS] = {0}, tf_b[SCHED_TF_SLOTS] = {0};
     static const char chan_a, chan_b;
 
     scheduler_preempt_disable();
     int a = scheduler_test_park(tf_a, &chan_a, SCHED_WAIT_EVENT);
     int b = scheduler_test_park(tf_b, &chan_b, SCHED_WAIT_EVENT);
-    int plain = -2, head = -2, after = -2;
+    int equal = -2, behind = -2;
 
     if (a >= 0 && b >= 0) {
         scheduler_set_priority(a + 1, -17);
@@ -337,9 +337,12 @@ KTEST("sched", "a PREEMPTED process runs next at its level, not the one after it
         scheduler_wake(&chan_a, 0);
         scheduler_wake(&chan_b, 0);
         (void)scheduler_test_take_resched();
-        plain = scheduler_test_pick(a, -1);
-        head  = scheduler_test_pick(a, a);
-        after = scheduler_test_pick(a, -1);   // a head is served ONCE
+        // Small figures: below the floor, so the picks move nothing.
+        scheduler_test_set_vruntime(a, 0);
+        scheduler_test_set_vruntime(b, 0);
+        equal = scheduler_test_pick(a);
+        scheduler_test_set_vruntime(b, 1000000);
+        behind = scheduler_test_pick(a);
     }
 
     scheduler_test_release(a);
@@ -348,9 +351,54 @@ KTEST("sched", "a PREEMPTED process runs next at its level, not the one after it
 
     if (a < 0 || b < 0) KTEST_SKIP("no free process slots to fabricate");
 
-    KTEST_ASSERT_EQ(plain, b);
-    KTEST_ASSERT_EQ(head, a);
-    KTEST_ASSERT_EQ(after, b);
+    KTEST_ASSERT_EQ(equal, b);
+    KTEST_ASSERT_EQ(behind, a);
+}
+
+KTEST("sched", "a mid-call wake cuts in only while it has run less than what runs") {
+    // THE LIVELOCK THIS REPLACED: a disk-bound thread woken by every IRQ
+    // cut in unconditionally, and with the kernel context it held the CPU
+    // while every other READY process waited forever. Ahead: no switch.
+    // Behind: a switch, which is why the cut-in exists at all (it
+    // usually holds the filesystem lock) -- the control.
+    uint64_t tf[SCHED_TF_SLOTS] = {0};
+    static const char chan;
+
+    scheduler_preempt_disable();
+    (void)scheduler_test_take_resched();
+    uint64_t kv = scheduler_test_vruntime(-1), base = scheduler_test_vruntime(-2);
+    int w = scheduler_test_park(tf, &chan, SCHED_WAIT_DISK);
+    int cur = scheduler_current_pid(), ahead = -1, behind = -1;
+
+    if (w >= 0 && !cur) {
+        scheduler_test_set_vruntime(-1, base + 10000000000ull);   // the kernel: 10 s in
+        scheduler_test_park_deadline(w, 0, 1);                    // parked mid-call
+        scheduler_test_set_vruntime(w, base + 20000000000ull);    // 20 s: ahead of it
+        scheduler_wake(&chan, 0);
+        ahead = scheduler_test_take_resched();
+
+        scheduler_test_release(w);
+        w = scheduler_test_park(tf, &chan, SCHED_WAIT_DISK);
+        if (w >= 0) {
+            scheduler_test_park_deadline(w, 0, 1);
+            scheduler_test_set_vruntime(w, base);                 // 10 s behind
+            scheduler_wake(&chan, 0);
+            behind = scheduler_test_take_resched();
+        }
+    }
+
+    scheduler_test_set_vruntime(-1, kv);
+    if (w >= 0) {
+        scheduler_test_park_deadline(w, 0, 0);
+        scheduler_test_release(w);
+    }
+    scheduler_preempt_enable();
+
+    if (cur) KTEST_SKIP("not run from the kernel context");
+    if (w < 0) KTEST_SKIP("no free process slots to fabricate");
+
+    KTEST_ASSERT_EQ(ahead, 0);
+    KTEST_ASSERT_EQ(behind, 1);
 }
 
 KTEST("sched", "a wake on a channel nobody holds wakes nothing") {

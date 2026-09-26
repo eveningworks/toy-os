@@ -1236,9 +1236,12 @@ void scheduler_test_slot_unclaim(int slot);
 // rotation behind for the next trap.
 int  scheduler_test_take_resched(void);
 // The picker's answer from rotation position `start`, switching to
-// nothing. `preempted` (a slot index, or -1) is recorded first as a wake
-// would record the process it preempted.
-int  scheduler_test_pick(int start, int preempted);
+// nothing.
+int  scheduler_test_pick(int start);
+// A slot's vruntime -- how much it counts as having run -- set and read.
+// -1 is the kernel context; -2 (read only) the pack's floor.
+void     scheduler_test_set_vruntime(int idx, uint64_t v);
+uint64_t scheduler_test_vruntime(int idx);
 
 // The kernel's own "while I have nothing else to do" work, in ONE
 // place. Call it from any loop that is waiting rather than working;
