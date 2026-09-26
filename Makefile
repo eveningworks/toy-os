@@ -253,7 +253,8 @@ USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-pro
 # ldso/link.ld), where ld's GOTPCRELX relaxation to a 32-bit immediate
 # cannot hold the address. binutils 2.42 (Ubuntu 24.04) fails the link
 # with `failed to convert GOTPCREL relocation` instead of keeping the GOT
-# slot, so every ELF fails; plain GOTPCREL is never relaxed.
+# slot, so every ELF fails. Plain GOTPCREL rules out only that form: ld
+# still turns the load into a direct `lea`, so static links pay nothing.
 #
 # -ftls-model=local-exec: a `__thread` variable is reached as a fixed
 # offset from %fs and nothing else. Right for EXECUTABLES; objects

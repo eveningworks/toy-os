@@ -161,7 +161,7 @@ A C toolchain, NASM, GRUB's rescue-image tools, and QEMU.
 | `nasm` | Assembles the boot, interrupt and context-switch stubs. |
 | `grub-mkrescue` + `xorriso` + `mtools` | Builds the bootable ISO. `grub-mkrescue` needs all three, and the BIOS modules package (`grub-pc-bin` on Debian, `grub2-pc-modules` on Fedora, `grub2-i386-pc` on openSUSE) is easy to miss. The same three also make `disk.img` bootable: `grub-mkimage` builds the disk's `core.img` out of that modules package, and `mtools` writes the FAT32 `/boot` with no root and no loop device. |
 | `qemu-system-x86_64` | Runs it. |
-| `python3` | Build-time disk seeding and the test/dev tools. Pillow (`pip install pillow`) is needed only for screenshots. |
+| `python3` + Pillow | Build-time disk seeding and the test/dev tools. Pillow (`pip install pillow`) is needed for screenshots and by `preflight.sh`, whose `genttf.py --check` imports it. |
 
 Verified firsthand on Arch/CachyOS; the Debian/Ubuntu list is what CI
 installs when it runs — on a release tag or on demand, not on every
