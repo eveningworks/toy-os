@@ -244,11 +244,17 @@ DISK_IMG = disk.img
 # memcpy), so an FP-enabled kernel would need an FXSAVE on every
 # interrupt vector rather than only where the scheduler swaps processes.
 USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fpie \
-                   -mno-direct-extern-access \
+                   -mno-direct-extern-access -Wa,-mrelax-relocations=no \
                    -mno-red-zone -mcmodel=small -ftls-model=local-exec \
                    -Wall -Wextra -Wframe-larger-than=2048 -O2 -g -c $(LIBC_INCLUDES) $(API_INCLUDES) -Iuserland \
                    -ffunction-sections -fdata-sections -MMD -MP \
                    -fno-tree-loop-distribute-patterns
+# -Wa,-mrelax-relocations=no: userland links ABOVE 4 GiB (rt/link.ld,
+# ldso/link.ld), where ld's GOTPCRELX relaxation to a 32-bit immediate
+# cannot hold the address. binutils 2.42 (Ubuntu 24.04) fails the link
+# with `failed to convert GOTPCREL relocation` instead of keeping the GOT
+# slot, so every ELF fails; plain GOTPCREL is never relaxed.
+#
 # -ftls-model=local-exec: a `__thread` variable is reached as a fixed
 # offset from %fs and nothing else. Right for EXECUTABLES; objects
 # destined for a shared library (dynlink Stage 3) compile separately
