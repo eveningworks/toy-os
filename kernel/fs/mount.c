@@ -130,6 +130,7 @@ const struct mount *mount_resolve(const char *path, const char **out_sub) {
 // hold `const struct mount *` from mount_resolve().
 void mount_lock(const struct mount *m)   { kmutex_lock(&((struct mount *)m)->lock); }
 void mount_unlock(const struct mount *m) { kmutex_unlock(&((struct mount *)m)->lock); }
+int mount_trylock(const struct mount *m) { return kmutex_trylock(&((struct mount *)m)->lock); }
 
 static int depth_of(const struct mount *m) {
     if (!m->used) return FS_PATH_MAX;           // empty slots last

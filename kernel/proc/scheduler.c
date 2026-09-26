@@ -2113,6 +2113,7 @@ int scheduler_test_park(uint64_t *tf, const void *chan, int reason) {
         procs[i].pgid = i + 1;
         procs[i].sid = i + 1;
         procs[i].prio = 0;
+        procs[i].parked_in_kernel = 0;   // a mid-call park is asked for, never inherited
         return i;
     }
     return -1;
@@ -3827,7 +3828,10 @@ int scheduler_kill(int pid, int exit_code) {
     // kill becomes a pending SIGKILL, delivered on its return to ring 3
     // once the call completes. (A deferred kill reports SIGKILL whatever
     // `exit_code` said; the one that matters, Force Quit's, already is.)
-    if (procs[slot].state == SCHED_BLOCKED && procs[slot].parked_in_kernel) {
+    // READY COUNTS TOO: woken but not yet resumed, it is still inside
+    // those frames. Testing BLOCKED alone tore such a context down and
+    // left the root mount's lock owned by a pid that no longer existed.
+    if (procs[slot].parked_in_kernel) {
         procs[slot].stopped = 0;   // it must be able to finish the call
         return scheduler_signal_raise(pid, SIGKILL);
     }

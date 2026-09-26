@@ -26,6 +26,7 @@
 #include "paging.h"  // paging_kernel_leaf() -- the guard-page checks below
 #include "kfmt.h"    // klog_printf -- the timeout report below
 #include "process.h" // process_context_is_armed()
+#include "signal_abi.h" // SIGKILL -- a deferred kill is a pending one
 
 // The silent long-running spinner this test drives -- see
 // userland/spin_test.c for why it has to be silent (this test's own
@@ -422,4 +423,33 @@ KTEST("sched", "a deadline releases a mid-call park without answering it") {
     KTEST_ASSERT_EQ(rax_k, SENTINEL);              // ...and NOT answered
     KTEST_ASSERT_EQ(state_e, PROC_STATE_READY);
     KTEST_ASSERT_EQ((int64_t)rax_e, (int64_t)SYS_RETRY); // the control was
+}
+
+KTEST("sched", "a kill waits for a context WOKEN mid-call, not only a parked one") {
+    // Woken but not yet resumed, it is still inside its kernel frames and
+    // may hold the filesystem lock; tearing it down orphans the lock and
+    // every later file call waits forever. Measured: the desktop killing
+    // its screensaver did exactly that. The kill must become a pending
+    // SIGKILL and leave the slot READY.
+    uint64_t tf[SCHED_TF_SLOTS] = {0};
+    static const char chan;
+
+    scheduler_preempt_disable();
+    int w = scheduler_test_park(tf, &chan, SCHED_WAIT_DISK);
+    int state = -1;
+    uint32_t pending = 0;
+    if (w >= 0) {
+        scheduler_test_park_deadline(w, 0, 1);   // parked mid-call
+        scheduler_wake(&chan, 0);                // ...and woken: READY
+        (void)scheduler_test_take_resched();
+        scheduler_kill(w + 1, 1);
+        state = scheduler_test_state(w);
+        pending = scheduler_signal_pending(w + 1);
+        scheduler_test_release(w);
+    }
+    scheduler_preempt_enable();
+
+    if (w < 0) KTEST_SKIP("no free process slots to fabricate");
+    KTEST_ASSERT_EQ(state, PROC_STATE_READY);
+    KTEST_ASSERT(pending & (1u << SIGKILL));
 }

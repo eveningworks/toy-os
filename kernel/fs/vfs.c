@@ -422,7 +422,17 @@ void fs_idle(void) {
     for (int i = 0; i < mount_count(); i++) {
         const struct mount *m = mount_at(i);
         if (!m || !m->fs || !m->fs->idle) continue;
-        FS_OP_VOID(m, m->gen, idle);
+        // TRIED, NEVER WAITED FOR -- a busy mount is not idle. This runs
+        // in the kernel context, which cannot sleep, so a blocking take
+        // spun behind a holder in a disk wait; and every disk IRQ handed
+        // that holder the CPU back, so nothing else ran at all.
+        if (!mount_trylock(m)) continue;
+        uint32_t g = m->gen;
+        while (m->used && m->gen == g) {
+            m->fs->idle(m->state);
+            if (!fs_op_again(m, g)) break;
+        }
+        mount_unlock(m);
     }
 }
 

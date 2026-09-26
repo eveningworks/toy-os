@@ -94,6 +94,10 @@ struct mount {
 // Lock one mount for a backend call; its state is behind it.
 void mount_lock(const struct mount *m);
 void mount_unlock(const struct mount *m);
+// Takes it only if that needs no wait (kmutex_trylock()). For IDLE work,
+// which must never wait: the kernel context cannot sleep, so a blocking
+// take there spins behind a holder in a disk wait.
+int mount_trylock(const struct mount *m);
 
 // ---- device I/O without the mount's lock (fslock stage 3) ------------
 //
