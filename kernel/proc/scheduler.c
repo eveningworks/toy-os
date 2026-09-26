@@ -523,6 +523,38 @@ _Static_assert(sizeof(((struct mmap_region *)0)->path) == FS_PATH_STORED_MAX,
 
 static struct sched_process procs[MAX_PROCS];
 
+// A SLOT BEING BUILT IS CLAIMED, and only the allocators look. A spawn
+// picks a slot and then reads the ELF from disk, which SLEEPS -- and the
+// slot stayed SCHED_UNUSED meanwhile, so a second spawn in that window
+// took the same one. Both filled it; the first child never existed and
+// its descriptor table, holding its parent's pipe end, was never
+// released, so the parent read forever (argv_test in block(pipe), about
+// 1 suite run in 5). Linux's TASK_NEW is the same idea as a state; a
+// flag only the allocators consult keeps every other scan of the table
+// seeing "not a process" without auditing each one.
+static uint8_t g_slot_claimed[MAX_PROCS];
+
+static int slot_claim(void) {
+    uint64_t f;
+    __asm__ volatile ("pushfq; popq %0; cli" : "=r"(f) :: "memory");
+    int slot = -1;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].state == SCHED_UNUSED && !g_slot_claimed[i]) {
+            g_slot_claimed[i] = 1;
+            slot = i;
+            break;
+        }
+    }
+    __asm__ volatile ("pushq %0; popfq" :: "r"(f) : "memory", "cc");
+    return slot;
+}
+
+// Published (its state is no longer UNUSED) or abandoned: either way the
+// claim is over.
+static void slot_unclaim(int slot) {
+    if (slot >= 0 && slot < MAX_PROCS) g_slot_claimed[slot] = 0;
+}
+
 // Defined further down, beside scheduler_kill() -- its other caller.
 static void reparent_children(int dead_pid);
 
@@ -1543,15 +1575,14 @@ static int build_image(const char *path, const char *argvec, size_t argvec_len,
 static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len,
                           int stdout_desc, int stdin_desc, const char *env,
                           int want_pgid, uint64_t parent_pml4) {
-    int slot = -1;
-    for (int i = 0; i < MAX_PROCS; i++) {
-        if (procs[i].state == SCHED_UNUSED) { slot = i; break; }
-    }
+    int slot = slot_claim();   // BEFORE build_image(), which sleeps
     if (slot < 0) return -1;
 
     uint64_t as = 0, entry = 0, user_rsp = 0, image_end = 0;
-    if (!build_image(path, argvec, argvec_len, env, &as, &entry, &user_rsp, &image_end))
+    if (!build_image(path, argvec, argvec_len, env, &as, &entry, &user_rsp, &image_end)) {
+        slot_unclaim(slot);
         return -1;
+    }
 
     // Synthesize this process's very first trapframe, at the top of its
     // own dedicated kernel stack -- laid out exactly like a real one
@@ -1712,6 +1743,7 @@ static int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len
     }
 
     procs[slot].state      = SCHED_READY;
+    slot_unclaim(slot);
     alive_count++;
     return slot;
 }
@@ -2094,9 +2126,10 @@ const void *scheduler_wait_chan_pid(int pid) {
 // would make the scheduler believe there is one more thing to run.
 int scheduler_test_park(uint64_t *tf, const void *chan, int reason) {
     if (!tf) return -1;
-    for (int i = 0; i < MAX_PROCS; i++) {
-        if (procs[i].state != SCHED_UNUSED) continue;
+    int i = slot_claim();
+    if (i >= 0) {
         procs[i].state = SCHED_BLOCKED;
+        slot_unclaim(i);   // published: its state is no longer UNUSED
         procs[i].wait_chan = chan;
         procs[i].wait_reason = reason;
         procs[i].kernel_rsp = (uint64_t)tf;
@@ -2118,6 +2151,9 @@ int scheduler_test_park(uint64_t *tf, const void *chan, int reason) {
     }
     return -1;
 }
+
+int  scheduler_test_slot_claim(void)     { return slot_claim(); }
+void scheduler_test_slot_unclaim(int s)  { slot_unclaim(s); }
 
 void scheduler_test_park_deadline(int idx, uint64_t wake_at_ns, int in_kernel) {
     if (idx < 0 || idx >= MAX_PROCS || procs[idx].state != SCHED_BLOCKED) return;
@@ -2736,9 +2772,7 @@ int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
     if (!vmm_validate_user_range(procs[leader].pml4_phys, user_rsp - 64, 64))
         return -EFAULT;
 
-    int slot = -1;
-    for (int i = 0; i < MAX_PROCS; i++)
-        if (procs[i].state == SCHED_UNUSED) { slot = i; break; }
+    int slot = slot_claim();
     if (slot < 0) return -EAGAIN;
 
     // The same synthesized first trapframe a spawn builds, minus
@@ -2803,6 +2837,7 @@ int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
     k_memset(&procs[slot].mm, 0, sizeof procs[slot].mm);
     procs[slot].cwd.path[0] = '\0';
     procs[slot].state = SCHED_READY;
+    slot_unclaim(slot);
     alive_count++;
     return slot + 1;
 }
@@ -2827,9 +2862,7 @@ int scheduler_fork(const uint64_t *regs) {
     int caller = current_index;
     int leader = leader_index(caller);
 
-    int slot = -1;
-    for (int i = 0; i < MAX_PROCS; i++)
-        if (procs[i].state == SCHED_UNUSED) { slot = i; break; }
+    int slot = slot_claim();
     if (slot < 0) return -EAGAIN;
 
     uint64_t pinned[MAX_PROCS + 1];
@@ -2842,9 +2875,10 @@ int scheduler_fork(const uint64_t *regs) {
     }
     struct vmm_fork_opts o = { pinned, npin, fork_inherits_borrowed, &procs[leader].mm };
     uint64_t as = vmm_fork_address_space(procs[leader].pml4_phys, &o);
-    if (!as) return -ENOMEM;
+    if (!as) { slot_unclaim(slot); return -ENOMEM; }
     if (mmap_inherit_shm(as, &procs[leader].mm) < 0) {
         vmm_destroy_address_space(as);
+        slot_unclaim(slot);
         return -ENOMEM;
     }
 
@@ -2889,11 +2923,19 @@ int scheduler_fork(const uint64_t *regs) {
     // ...which copied the region POINTER. Give the child its own, or
     // the two of them free one array twice.
     if (!mmap_clone_regions(&procs[slot].mm, &procs[leader].mm)) {
+        // After fd_clone(): the child's table holds references to the
+        // parent's descriptions (a pipe end among them), so it has to be
+        // released, or that pipe never reaches EOF -- and the address
+        // space was leaked outright.
+        fd_release_all(as);
+        vmm_destroy_address_space(as);
         procs[slot].state = SCHED_UNUSED;
+        slot_unclaim(slot);
         return -1;
     }
     k_memcpy(&procs[slot].cwd, &procs[leader].cwd, sizeof procs[slot].cwd);
     procs[slot].state = SCHED_READY;
+    slot_unclaim(slot);
     alive_count++;
     return slot + 1;
 }

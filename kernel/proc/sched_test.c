@@ -453,3 +453,23 @@ KTEST("sched", "a kill waits for a context WOKEN mid-call, not only a parked one
     KTEST_ASSERT_EQ(state, PROC_STATE_READY);
     KTEST_ASSERT(pending & (1u << SIGKILL));
 }
+
+KTEST("sched", "a slot being built is never handed out twice") {
+    // A spawn claims its slot and then SLEEPS reading the ELF. The slot
+    // stayed UNUSED meanwhile, so a second spawn took the same one and
+    // the first child never existed -- its parent then read its pipe
+    // forever. A claimed slot must be skipped by the next claim, and
+    // must still look like nothing to every other scan of the table.
+    scheduler_preempt_disable();
+    int a = scheduler_test_slot_claim();
+    int b = scheduler_test_slot_claim();
+    int state_a = a >= 0 ? scheduler_test_state(a) : -1;
+    scheduler_test_slot_unclaim(a);
+    scheduler_test_slot_unclaim(b);
+    scheduler_preempt_enable();
+
+    if (a < 0 || b < 0) KTEST_SKIP("fewer than two free process slots");
+    KTEST_ASSERT(a != b);
+    KTEST_ASSERT_EQ(state_a, PROC_STATE_UNUSED);   // not a process to anyone else
+}
+

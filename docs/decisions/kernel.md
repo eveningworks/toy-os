@@ -8262,3 +8262,31 @@ fallback ten times finer. Two findings came with it:
   PM timer is an I/O port, and every read of it is a VM exit where the
   PIT source was a memory counter. Real hardware reads the TSC. A
   paravirtual clock (kvmclock) is the fix, on the roadmap.
+
+## A slot being built is claimed by a flag, not a new process state
+
+A spawn picks a free slot, then reads the ELF from disk -- which sleeps
+since disk waits park -- and only marks the slot READY at the end. The
+slot stayed `SCHED_UNUSED` in between, so a second spawn in that window
+took the same slot: both filled it, and the first child never existed.
+Its descriptor table was never released, so a parent reading the
+child's stdout pipe waited forever (`argv_test` in `block(pipe)`, about
+1 full-suite run in 5), and a parent in `waitpid()` could lose its
+child outright. Proven with a probe: the orphaned table had been opened
+by the parent's spawn and was owned by no process.
+
+Linux gets the same guarantee from `TASK_NEW`: the task is in the table
+from the start, in a state nothing schedules, kills or reaps, and
+`wake_up_new_task()` publishes it. **toy-os uses a flag instead**
+(`g_slot_claimed[]`, `slot_claim()`), which only the four allocators
+consult -- spawn, fork, thread create and the test fabricator. Every
+other scan of the table still sees `SCHED_UNUSED`, "not a process",
+which is exactly what a half-built slot is. A new state would have been
+correct too, but `scheduler.c` compares against the states in about
+sixty places, and any one that treated the new state as live would
+have made a half-built slot killable, waitable or schedulable. The flag
+changes four call sites and nothing else can observe it.
+
+Measured: 0 pipe hangs and 0 vanished children in 20 full-suite runs
+after it, against 4 pipe hangs in 25 before.
+

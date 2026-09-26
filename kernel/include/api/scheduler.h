@@ -1228,6 +1228,9 @@ void scheduler_test_release(int idx);
 void scheduler_test_park_deadline(int idx, uint64_t wake_at_ns, int in_kernel);
 // The state of one slot, as a PROC_STATE_* value. -1 for a bad index.
 int  scheduler_test_state(int idx);
+// Claim a free slot the way spawn/fork/thread create do, and give it back.
+int  scheduler_test_slot_claim(void);
+void scheduler_test_slot_unclaim(int slot);
 // Whether a wake since the last rotation asked for preemption, and
 // clears it -- so a test's fabricated wake does not leave a spurious
 // rotation behind for the next trap.
