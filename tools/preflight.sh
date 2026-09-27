@@ -192,6 +192,9 @@ python3 tools/check_chains.py || fail "chain freeze"
 step "check_tool_commands.py (a tool driving a command that no longer exists)"
 python3 tools/check_tool_commands.py || fail "tool command check"
 
+step "remote_hang_test.py (a remote.py wait with no end, against fakes that misbehave)"
+python3 tools/remote_hang_test.py || fail "remote.py hang check"
+
 step "check_tool_coverage.py (a test tool no runner runs)"
 python3 tools/check_tool_coverage.py || fail "tool coverage check"
 

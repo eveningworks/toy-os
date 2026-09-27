@@ -555,9 +555,25 @@ manual steps to be worth automating:
   and returned 1 -- the same failure, finally visible.
 
   Redirect (`> log 2>&1`) rather than pipe: that preserves the status.
-  And note that **stderr is unbuffered while stdout is not**, so in such
-  a log the error lines appear at the TOP, before the output that
-  preceded them; read it by content, not by position.
+  **stdout is LINE-BUFFERED now** (2026-09-27): block-buffered, a flash
+  that hung and was killed lost every progress line and kept only its
+  stderr, so where it hung went unrecorded.
+
+  **NO WAIT IN IT IS UNBOUNDED, and `tools/remote_hang_test.py` holds it
+  to that.** Three were, all found after a flash blocked for 25 minutes
+  and stranded the Lenovo: a TFTP `put` answered only by a STALE ACK
+  resent its window forever (any reply reset the retry count, and a
+  zero-block "advance" reset the stall), `get` did the same on a
+  repeated block, and `read_until_line` checked its deadline only when a
+  `recv` timed out -- so a peer that never stopped talking never let it.
+  A transfer now gives up when nothing has MOVED it for `STALL_ROUNDS`
+  timeouts, silence or chatter alike. **And the chmod pass uses the
+  flash's HELD session**: it opened a fresh one, which is exactly what
+  dies once `/bin` is new and `/lib` old -- `could not set execute bits
+  (connection closed)` -- leaving every mode unset. Which of these hung
+  that flash is NOT established; the lost stdout is why. The docstring's
+  "do not put a wall-clock timeout around this" stands: a flash killed
+  mid-sync is the half-replaced machine, so the bound is per step.
 
   **What that failure actually was** is the `/bin`-before-`/lib` hazard
   now handled by the single held session (above) -- the first diagnosis
@@ -3267,6 +3283,15 @@ window without going through it will find its layout polls timing out.
   to stop it. Works over QEMU's stub and the kernel's. `kdebug_test.py`
   checks all three, and turning the unwinder's recognition off reddens
   exactly its check.
+- **`remote_hang_test.py`** -- `remote.py` cannot hang, checked against
+  fakes on localhost in about seven seconds (in `preflight.sh`): a TFTP
+  server that only repeats a stale ACK (`put` must give up), one that
+  resends one block forever (`get` must), a telnet peer that never stops
+  talking (`read_until_line` must still time out), and `_mark_executable`
+  handed a session must use it rather than open one. `--against PATH`
+  runs the same checks on another copy of `remote.py`; the pre-fix one
+  (`git show 807338a4:tools/remote.py`) fails all four, three of them
+  as real hangs the test's own 20 s limit ends.
 - **`kdebug_bridge.py`** -- carries GDB's TCP to the debugger's keyed
   UDP (`kdebug=net`), the role WinDbg's KDNET client plays on Windows:
   `gdb -> 127.0.0.1:1235 -> [bridge] -> target:50000`. Defaults match

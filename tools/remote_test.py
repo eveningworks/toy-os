@@ -92,8 +92,9 @@ def main():
     tmp = tempfile.mkdtemp(prefix="remote_test_")
     print("remote_test: booting a guest with telnet and tftp forwarded")
     vm("stop")
-    boot = vm("--hostfwd", f"tcp::{TELNET_PORT}-:23",
-              "--hostfwd", f"udp::{TFTP_PORT}-:69", "start", timeout=300)
+    # Telnet only: vm.py forwards TFTP_PORT onto 69 for every guest it
+    # starts (since 3f1b9700), and QEMU refuses the same rule twice.
+    boot = vm("--hostfwd", f"tcp::{TELNET_PORT}-:23", "start", timeout=300)
     if "ready" not in boot.stdout:
         print(f"remote_test: guest did not boot\n{boot.stdout}\n{boot.stderr}")
         return 1

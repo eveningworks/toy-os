@@ -163,8 +163,14 @@ class Telnet:
             for i, line in enumerate(lines):
                 if is_end(line):
                     return lines[:i]
-            self.s.settimeout(max(0.1, end - time.time()))
+            # THE DEADLINE IS CHECKED, not only a quiet recv: a peer that
+            # keeps talking without ever sending the marker never lets
+            # recv time out, and this looped forever on one.
+            left = end - time.time()
             try:
+                if left <= 0:
+                    raise socket.timeout
+                self.s.settimeout(left)
                 chunk = self.s.recv(4096)
             except socket.timeout:
                 # NAME THE FIX. A command that simply runs longer than
@@ -380,6 +386,11 @@ WANT_WINDOW = 3          # the guest's socket holds 3 datagrams -- see
                          # what was agreed), so this is belt and braces.
 
 
+# A TFTP transfer gives up when nothing has MOVED it for this many
+# timeouts -- silence or chatter alike.
+STALL_ROUNDS = 6
+
+
 def _tftp_socket(timeout):
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.settimeout(timeout)
@@ -463,8 +474,16 @@ def do_put(host, port, local, remote, timeout, quiet=False):
         acked = 0             # blocks the server has confirmed
         tries = 0
         sent_bytes = 0
+        # PROGRESS BOUNDS THIS, NOT ONLY SILENCE. `tries` counts quiet
+        # waits, and any reply resets nothing towards it -- so a server
+        # repeating a stale ACK kept the loop resending one window forever.
+        stall = time.time() + timeout * STALL_ROUNDS
 
         while acked < total:
+            if time.time() > stall:
+                raise RuntimeError(f"no progress past block {acked} in "
+                                   f"{timeout * STALL_ROUNDS:.0f}s -- the server "
+                                   "answers, but nothing it says moves the transfer")
             # Send one window without waiting -- this is the whole point
             # of RFC 7440. A 16-deep window is 16 blocks per round trip
             # rather than one.
@@ -489,13 +508,17 @@ def do_put(host, port, local, remote, timeout, quiet=False):
             # A PARTIAL ACK IS THE RECOVERY PATH, not an error: it says
             # how far the server got, and the next window starts there.
             want = (acked + n) & 0xFFFF
+            before = acked
             if a == want:
                 acked += n
             elif ((a - acked) & 0xFFFF) <= n:
                 acked += (a - acked) & 0xFFFF
-            else:
-                continue      # a stale ACK from before this window
+            # Only a MOVE is progress: an ACK for the block already
+            # confirmed advances nothing, and resetting on it was a hang.
+            if acked == before:
+                continue
             tries = 0
+            stall = time.time() + timeout * STALL_ROUNDS
             sent_bytes = min(acked * blksize, len(data))
     finally:
         s.close()
@@ -577,7 +600,12 @@ def do_get(host, port, remote, local, timeout):
         expect = 1
         acked = 0
         tries = 0
+        stall = time.time() + timeout * STALL_ROUNDS   # see do_put()
         while True:
+            if time.time() > stall:
+                raise RuntimeError(f"no progress past block {expect - 1} in "
+                                   f"{timeout * STALL_ROUNDS:.0f}s -- the server "
+                                   "answers, but nothing it sends is the next block")
             if pending is not None:
                 pkt, pending = pending, None
             else:
@@ -603,6 +631,7 @@ def do_get(host, port, remote, local, timeout):
             payload = pkt[4:]
             out += payload
             expect += 1
+            stall = time.time() + timeout * STALL_ROUNDS
             final = len(payload) < blksize
             if final or (expect - 1 - acked) >= window:
                 acked = expect - 1
@@ -807,7 +836,8 @@ def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
     else:
         print(f"remote: sent {sent} file(s)")
 
-    _mark_executable(host, telnet_port, local_dir, remote_dir, timeout)
+    _mark_executable(host, telnet_port, local_dir, remote_dir, timeout,
+                     None if own_session else sess)
     return 0
 
 
@@ -818,7 +848,7 @@ def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
 EXEC_DIRS = ("bin", "tests")
 
 
-def _mark_executable(host, telnet_port, local_dir, remote_dir, timeout):
+def _mark_executable(host, telnet_port, local_dir, remote_dir, timeout, sess=None):
     """chmod 755 everything under /bin and /tests on the target.
 
     **A SYNC CANNOT LEAVE THE MODE TO THE KERNEL'S DEFAULT, and this is
@@ -858,7 +888,13 @@ def _mark_executable(host, telnet_port, local_dir, remote_dir, timeout):
                     names.append(f"{remote_dir.rstrip('/')}/{d}/{f}")
     if not names:
         return
-    sess = Session(host, telnet_port, timeout)
+    # THE FLASH'S HELD SESSION WHEN THERE IS ONE. A fresh session is
+    # exactly what dies once /bin is new and /lib old -- the whole reason
+    # do_flash holds one -- and this used to open its own, so a flash
+    # printed "could not set execute bits" and left every mode unset.
+    own = sess is None
+    if own:
+        sess = Session(host, telnet_port, timeout)
     try:
         for n in names:
             # A failure is not fatal: the filesystem may not store modes
@@ -868,7 +904,8 @@ def _mark_executable(host, telnet_port, local_dir, remote_dir, timeout):
     except Exception as e:      # noqa: BLE001 -- reported, never raised
         print(f"remote: could not set execute bits ({e})", file=sys.stderr)
     finally:
-        sess.close()
+        if own:
+            sess.close()
     print(f"remote: marked {len(names)} file(s) executable")
 
 
@@ -1354,6 +1391,10 @@ def do_shell(host, port, timeout):
 
 
 def main():
+    # LINE-BUFFERED, so a flash redirected to a file records how far it
+    # got: block-buffered, a killed run lost every progress line and kept
+    # only stderr -- which is how a hang's location went unrecorded.
+    sys.stdout.reconfigure(line_buffering=True)
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--host", required=True, help="the toy-os machine")
     ap.add_argument("--telnet-port", type=int, default=DEFAULT_TELNET_PORT)
