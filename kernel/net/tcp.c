@@ -548,6 +548,7 @@ void tcp_tick(void) {
         }
 
         if (++c->retries > TCP_MAX_RETRIES) {
+            if (c->pending) { tcp_release(i); continue; }   // see backlog_depth()
             c->reset = 1;                  // gave up: report it like a reset
             c->state = TCP_STATE_CLOSED;
             c->rto_at_ns = 0;
@@ -609,6 +610,13 @@ static struct tcp_conn *find_listener(uint16_t dst_port) {
     return 0;
 }
 
+// A PENDING CONNECTION THAT DIES BEFORE accept() IS RELEASED WHERE IT
+// DIES -- the give-up in tcp_tick() and the RST above. Nobody owns it,
+// accept() only takes a live one, and backlog_depth() counts it whatever
+// its state: left in place, TCP_BACKLOG dead handshakes silenced a
+// listener until reboot (telnetd, 2026-09-27). Linux frees a half-open
+// request the same way, from its own SYN-queue timer.
+//
 // How many connections a listener has produced that nobody has accepted
 // yet. This IS the backlog: there is no separate queue, because a
 // half-finished connection needs a full block anyway.
@@ -704,6 +712,7 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
         c->reset = 1;
         c->state = TCP_STATE_CLOSED;
         c->rto_at_ns = 0;
+        if (c->pending) tcp_release((int)(c - g_conns));   // see backlog_depth()
         return 1;
     }
 
