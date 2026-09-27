@@ -5,10 +5,12 @@ A staged plan, in the shape `docs/fslock-design.md` and
 `gdb` stop a toy-os machine that no emulator is standing behind, set a
 breakpoint in it, read and write its memory, and let it go?**
 
-**Status (2026-09-27): stage 2, the halting stub over serial, is BUILT.
-Stage 1 (live inspection without halting) and stage 3 (the network
-transport) are designed, not built. Stage 2 came first at the
-maintainer's choice, because it is the part every later stage stands on.**
+**Status (2026-09-27): stage 2, the halting stub over serial, is BUILT;
+stage 3a, the network transport on a dedicated e1000, is BUILT and
+tested under QEMU. Stage 3b (the Lenovo's r8169) and 3c (the ASUS's USB
+NIC) are designed, not built, and so is stage 1 (live inspection without
+halting). Stage 2 came first at the maintainer's choice, because every
+later stage stands on it.**
 
 ## Why
 
@@ -127,33 +129,69 @@ ASUS today with no transport work.
 - Gated like `telnetd`: off unless enabled, since it hands the network
   the kernel's memory.
 
-## Stage 3: the network transport -- DESIGNED
+## Stage 3: the network transport
 
 KDNET's shape, because it is the only one that works on a machine whose
-kernel is stopped:
+kernel is stopped.
 
-- **The stub owns the NIC while stopped, through a polled path of its
-  own**: a `poll_tx`/`poll_rx` pair per driver that runs with interrupts
-  off, allocates nothing and touches no lock -- Linux's netpoll
-  contract. A minimal ARP responder and UDP framing live in the stub,
-  NOT the kernel's stack (`kernel/net/`), which is frozen mid-whatever
-  when the machine stops.
-- **While the kernel runs, the OS driver owns the NIC**, and a hook in
-  `net_rx()` hands the debugger's UDP port to the stub: that is the
-  break-in, the network's `^C`.
-- **A key, set on the boot line with the port** (`kdebug=net,...`), and
-  every datagram authenticated with it; a wrong one is dropped
-  unanswered. The serial stub needs none -- the cable is the access
-  control -- but a LAN is not a cable. GDB speaks plain RSP, so a host
-  bridge (`tools/`) carries GDB's TCP to the authenticated UDP, the role
-  WinDbg's own KDNET client plays on Windows.
-- **Driver order is by risk**: e1000 and virtio-net (QEMU, testable
-  headless), then `r8169` (the Lenovo's onboard NIC, a PCIe device with
-  a simple ring), then **the ASUS last: its only NIC is the UE300 behind
-  xHCI**, so a polled path means driving xHCI's event ring by hand with
-  interrupts off (`xhci_service()` is public) from a stop that may have
-  landed inside the xHCI interrupt handler itself. That is the riskiest
-  piece of the plan, and why it is last.
+### 3a: a dedicated e1000 -- BUILT
+
+`kdebug=net,ip=A.B.C.D,key=HEX[,port=N][,nic=BB:DD.F][,wait]`.
+
+- **The debugger OWNS a whole NIC**, claimed from the PCI bus before any
+  driver binds it (`pci_device_claim()`): the last 82540EM, or the one
+  `nic=` names. `kernel/drivers/net/e1000_kdb.c` drives it by polling
+  alone, behind the `kdb_nic` interface (`kdebug_nic.h`) -- no
+  interrupt, no lock, no allocation after bring-up. **Chosen over
+  sharing the OS's NIC** (Linux netpoll's shape) because no NIC driver
+  here has a lock: a stop that lands mid-transmit or mid-ISR leaves a
+  ring half-updated, and reusing it corrupts it. A dedicated card has
+  one owner by construction. The cost is a second NIC.
+- **Its own ARP and UDP framing** (`kernel/debug/kdebug_net.c`), NOT
+  `kernel/net/`, which is frozen mid-call when the machine stops. It
+  answers ARP for its `ip=`, announces itself once at boot, and replies
+  to the MAC, IP and port of the last authenticated datagram -- so it
+  never has to resolve anything.
+- **Every datagram is authenticated**: `TKDH`/`TKDT` magic (the
+  direction, so a reflected datagram fails), a sequence number, the
+  first 16 bytes of HMAC-SHA256 under the key, then RSP bytes. A host
+  datagram must carry a sequence number above every one accepted
+  before, which is the replay protection. **Not encrypted**, at the
+  maintainer's choice: KDNET encrypts, but a cipher here costs a kernel
+  implementation and a third-party Python package on the host, since
+  the stdlib has none; `hmac`/`hashlib` are stdlib. A sniffer on the LAN
+  can read what a session reads. SHA-256 is `kernel/lib/ksha256.c`,
+  shared with `libhash`.
+- **Break-in** is the serial path's: the tick's poll reads the card's
+  RX ring, so a `^C` or an attaching packet stops the kernel.
+- **GDB reaches it through `tools/kdebug_bridge.py`**, TCP to keyed
+  UDP. RSP's own acks and retransmits cover a lost datagram; the stub
+  does no retransmission of its own.
+
+**The trap it shipped with**: 8254x RDLEN/TDLEN must be multiples of 128
+bytes, so eight descriptors is the minimum ring. A 4-descriptor TX ring
+made the card resend a STALE buffer -- the boot-time ARP announcement --
+in place of every reply, and the stub sat forever waiting for an ack to
+a packet that never left. A pcap of the debugger's netdev
+(`-object filter-dump`) and QEMU's `info registers` found it in two
+steps.
+
+### 3b: the Lenovo's r8169 -- DESIGNED
+
+A second `kdb_nic` backend. The r8169's ring hands descriptors back and
+forth with an OWN bit and a doorbell, with no index registers to keep in
+step, so a polled copy is simpler than the e1000's. Owning the onboard
+card means the OS networks through the UE300 on that machine.
+
+### 3c: single-NIC machines (the ASUS) -- DESIGNED
+
+The ASUS's only NIC is the UE300 behind xHCI, so a dedicated card is not
+an option there. The answer is KDNET's KDNIC: the debugger owns the
+hardware and the OS's traffic is tunnelled THROUGH the debugger's driver
+as a virtual `net_device`, so the ring still has one owner. Driving
+xHCI's event ring by hand with interrupts off (`xhci_service()` is
+public), from a stop that may have landed inside the xHCI interrupt
+handler itself, is the riskiest piece of the plan and why it is last.
 
 ## Not planned
 

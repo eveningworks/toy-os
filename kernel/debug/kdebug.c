@@ -21,12 +21,31 @@ static const struct kdb_transport kdb_serial = {
     .putc = serial_kdb_putc,
 };
 
+static void arm(const struct kdb_transport *io, int wait, const char *where) {
+    kdb.io = io;
+    kdb.armed = 1;
+    if (wait) {
+        klog_printf("kdebug: waiting for a debugger on %s\n", where);
+        serial_flush();
+        kdb.pending_sig = KDB_SIGTRAP;
+        kdb_arch_breakpoint();
+    }
+}
+
 int kdebug_armed(void) { return kdb.armed; }
 
-// `kdebug=ttySN` or `kdebug=ttySN,wait`, N in 1..3. ttyS0 is the log.
+// `kdebug=ttySN[,wait]`, N in 1..3 (ttyS0 is the log), or
+// `kdebug=net,...` (kdebug_net.c).
 void kdebug_init(void) {
-    char v[16] = {0};
+    char v[192] = {0};
     if (!multiboot_cmdline_value("kdebug=", v, sizeof v)) return;
+    if (v[0] == 'n') {
+        int wait = 0;
+        const struct kdb_transport *io = kdb_net_init(v, &wait);
+        k_memset(v, 0, sizeof v);   // it held the key
+        if (io) arm(io, wait, "the network");
+        return;
+    }
     int wait = v[5] && k_strcmp(v + 5, ",wait") == 0;
     if (k_strncmp(v, "ttyS", 4) != 0 || v[4] < '1' || v[4] > '3' || (v[5] && !wait)) {
         klog_printf(KLOG_WARN "kdebug: `kdebug=%s` not understood -- ttyS1..ttyS3, optionally ,wait\n", v);
@@ -37,16 +56,10 @@ void kdebug_init(void) {
         klog_printf(KLOG_WARN "kdebug: no UART at ttyS%d -- the debugger is NOT armed\n", port);
         return;
     }
-    kdb.io = &kdb_serial;
-    kdb.armed = 1;
     klog_printf(KLOG_WARN "kdebug: GDB stub armed on ttyS%d -- whoever holds that port owns this machine\n",
                 port);
-    if (wait) {
-        klog_printf("kdebug: waiting for a debugger on ttyS%d\n", port);
-        serial_flush();
-        kdb.pending_sig = KDB_SIGTRAP;
-        kdb_arch_breakpoint();
-    }
+    v[5] = 0;   // "ttySN" for the wait message
+    arm(&kdb_serial, wait, v);
 }
 
 // --- breakpoints -------------------------------------------------------

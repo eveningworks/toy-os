@@ -36,6 +36,12 @@ uint8_t kdb_checksum(const char *s, int n) {
 
 // --- the wire ----------------------------------------------------------
 
+// A datagram transport sends nothing until told: every ack and every
+// packet is flushed, or the debugger waits on bytes still in a buffer.
+static void flush(void) {
+    if (kdb.io->flush) kdb.io->flush();
+}
+
 static int getc_wait(void) {
     if (kdb.pushback >= 0) {
         int c = kdb.pushback;
@@ -64,9 +70,11 @@ static int get_packet(void) {
         int hi = kdb_hexval(getc_wait()), lo = kdb_hexval(getc_wait());
         if (over || hi < 0 || lo < 0 || ((hi << 4) | lo) != kdb_checksum(g_in, n)) {
             kdb.io->putc('-');
+            flush();
             continue;
         }
         kdb.io->putc('+');
+        flush();
         g_in[n] = 0;
         return n;
     }
@@ -82,6 +90,7 @@ static void put_packet(void) {
         kdb.io->putc('#');
         kdb.io->putc(g_hex[sum >> 4]);
         kdb.io->putc(g_hex[sum & 15]);
+        flush();
         for (;;) {
             int c = getc_wait();
             if (c == '+') return;

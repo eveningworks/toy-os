@@ -58,6 +58,7 @@ VNC_DISPLAY = 5
 # everything else. SLIRP is a NAT, so a file only travels INTO a guest
 # through a forward -- see cmd_put().
 TFTP_PORT = 6969
+KDB_NET_PORT = 51000   # + the slot: the host UDP port onto the debugger NIC's 50000
 PROMPT = "dbg> "
 
 
@@ -117,6 +118,7 @@ def _apply_instance(args):
         args.vnc = VNC_DISPLAY + n
     if getattr(args, "tftp_port", None) is None:
         args.tftp_port = TFTP_PORT + n
+    args.kdb_net_port = KDB_NET_PORT + n
 
 
 def _running(pid):
@@ -420,6 +422,13 @@ def cmd_start(args):
         if net in ("virtio", "both"):
             cmd += ["-netdev", "user,id=n1",
                     "-device", "virtio-net-pci,netdev=n1,disable-legacy=on"]
+    # THE DEBUGGER'S OWN CARD, after every other NIC so it enumerates
+    # last -- `kdebug=net` takes the last e1000 it finds, and the OS's
+    # driver keeps the first. Its own SLIRP, so its hostfwd collides
+    # with nothing.
+    if getattr(args, "kdebug_net", False):
+        cmd += ["-netdev", f"user,id=kdbn,hostfwd=udp:127.0.0.1:{args.kdb_net_port}-:50000",
+                "-device", "e1000,netdev=kdbn"]
     cmd += [
         # A VNC head rather than -display none: input routing needs a
         # display head to exist even when nothing connects to it (see
@@ -924,6 +933,10 @@ def main():
                     help="attach COM3 as the unix socket .vm[.N].kdb, for the kernel's "
                          "GDB stub; the image needs `kdebug=ttyS2` on its GRUB line. "
                          "`gdb build/kernel.bin -ex 'target remote .vm.kdb'`")
+    ap.add_argument("--kdebug-net", action="store_true",
+                    help="attach a SECOND e1000 for the kernel debugger's network transport, "
+                         "on its own SLIRP, with host udp 127.0.0.1:51000+N forwarded to its "
+                         "port 50000; the image needs `kdebug=net,ip=10.0.2.15,key=...`")
     ap.add_argument("--serial-log", default=None, metavar="PATH",
                     help="also copy everything the guest writes to its serial port "
                          "into PATH, from the first byte -- the record of a boot "

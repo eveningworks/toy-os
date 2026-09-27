@@ -73,10 +73,22 @@ DEBUGCON ?= 1
 # `make iso`/`make run` takes it out again. Then, in another terminal:
 #     gdb build/kernel.bin -ex "target remote localhost:1235"
 # Not 1234, which is QEMU's own gdbstub under `make debug`.
+#
+# KDEBUG=net -- the NETWORK transport instead: a second e1000 the
+# debugger owns, on its own SLIRP with host udp 127.0.0.1:50000 forwarded
+# to it, and a key generated once into build/kdebug.key (so `make clean`
+# makes a new one). Then `python3 tools/kdebug_bridge.py`, which reads
+# the same file, and the same gdb line as above.
 KDEBUG ?=
 KDEBUG_PORT ?= 1235
+KDEBUG_NET_PORT ?= 50000
+KDEBUG_KEY = $(shell mkdir -p $(BUILD) && { test -s $(BUILD)/kdebug.key || \
+               od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > $(BUILD)/kdebug.key; } && \
+               cat $(BUILD)/kdebug.key)
+KDEBUG_NET_WORD = kdebug=net,ip=10.0.2.15,key=$(KDEBUG_KEY)
 GRUB_KCMDLINE = $(strip $(KCMDLINE) $(if $(filter 1,$(DEBUGCON)),debugcon) \
-                        $(if $(filter 1,$(KDEBUG)),kdebug=ttyS1))
+                        $(if $(filter 1,$(KDEBUG)),kdebug=ttyS1) \
+                        $(if $(filter net,$(KDEBUG)),$(KDEBUG_NET_WORD)))
 
 GRUB_MKRESCUE := $(shell command -v grub-mkrescue 2>/dev/null || command -v grub2-mkrescue 2>/dev/null)
 
@@ -1285,15 +1297,17 @@ $(BUILD)/lib/libplug.so: $(BUILD)/userland/dynlib/plug_dl.o $(LIBC_SO)
 	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libplug.so -o $@ $< $(LIBC_SO)
 
 # libhash.so -- the first shared library here that exists to be USED
-# rather than to prove the loader works. kcrc.o comes off the -fpic
-# shared path (the same source the kernel compiles for its GPT headers),
-# so one polynomial serves ring 0 and every ring-3 caller. It links
+# rather than to prove the loader works. kcrc.o and ksha256.o come off
+# the -fpic shared path (the same sources the kernel compiles for its GPT
+# headers and its debugger's link), so one implementation serves both. It links
 # against libc.so for memcpy/strcmp: ld-toy loads a library's own
 # DT_NEEDED breadth-first, so nothing else has to know.
-$(BUILD)/lib/libhash.so: $(BUILD)/userland/dynlib/uhash.o $(BUILD)/userland-pic/shared/kcrc.o $(LIBC_SO)
+$(BUILD)/lib/libhash.so: $(BUILD)/userland/dynlib/uhash.o $(BUILD)/userland-pic/shared/kcrc.o \
+                         $(BUILD)/userland-pic/shared/ksha256.o $(LIBC_SO)
 	@mkdir -p $(dir $@)
 	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libhash.so -o $@ \
-	      $(BUILD)/userland/dynlib/uhash.o $(BUILD)/userland-pic/shared/kcrc.o $(LIBC_SO)
+	      $(BUILD)/userland/dynlib/uhash.o $(BUILD)/userland-pic/shared/kcrc.o \
+	      $(BUILD)/userland-pic/shared/ksha256.o $(LIBC_SO)
 
 # libssl.so -- mbedTLS, vendored, as one shared object.
 #
@@ -2363,7 +2377,10 @@ QEMU_BOOT = $(if $(filter disk,$(BOOT_MEDIUM)),-boot order=c,-boot order=d -cdro
 # After -serial stdio, so it is COM2 (see KDEBUG above).
 QEMU_KDEBUG_ARGS = -chardev socket,id=kdb,host=127.0.0.1,port=$(KDEBUG_PORT),server=on,wait=off \
                    -serial chardev:kdb
-QEMU_KDEBUG = $(if $(filter 1,$(KDEBUG)),$(QEMU_KDEBUG_ARGS))
+# After QEMU_NET, so it enumerates last: `kdebug=net` takes the LAST e1000.
+QEMU_KDEBUG_NET_ARGS = -netdev user,id=kdbn,hostfwd=udp:127.0.0.1:$(KDEBUG_NET_PORT)-:50000 \
+                       -device e1000,netdev=kdbn
+QEMU_KDEBUG = $(if $(filter 1,$(KDEBUG)),$(QEMU_KDEBUG_ARGS))$(if $(filter net,$(KDEBUG)),$(QEMU_KDEBUG_NET_ARGS))
 
 QEMU_RUN = qemu-system-x86_64 $(QEMU_BOOT) $(QEMU_ACCEL) $(QEMU_DISK) \
 	  $(QEMU_INPUT) $(QEMU_USB) \

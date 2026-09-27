@@ -7,12 +7,13 @@
 #include <stdint.h>
 #include "kdebug_arch.h"
 
-// WHERE THE BYTES GO. Serial today; the network transport planned in
-// docs/kdebug-design.md is a second one, and the KTEST's script a third.
-// getc() never blocks: -1 means nothing yet.
+// WHERE THE BYTES GO: serial, the network (kdebug_net.c), and the
+// KTEST's script. getc() never blocks: -1 means nothing yet. flush()
+// pushes out what putc() buffered -- a datagram -- and may be NULL.
 struct kdb_transport {
     int  (*getc)(void);
     void (*putc)(char c);
+    void (*flush)(void);
 };
 
 // GDB's own signal numbers, which are not Linux's past 9.
@@ -59,6 +60,32 @@ extern struct kdb_state kdb;
 int  kdb_bp_insert(int type, uint64_t addr, int len);
 int  kdb_bp_remove(int type, uint64_t addr, int len);
 void kdb_bp_clear_all(void);
+
+// kdebug_net.c: `kdebug=net,ip=A.B.C.D,key=HEX[,port=N][,nic=BB:DD.F][,wait]`.
+#define KDB_NET_KEY_MIN 16
+#define KDB_NET_KEY_MAX 64
+struct kdb_net_cfg {
+    uint32_t ip;                   // host byte order
+    uint16_t port;
+    uint8_t  key[KDB_NET_KEY_MAX];
+    int      klen;
+    int      wait;
+    int      nic_bus, nic_dev, nic_fn;   // -1: the last card a backend matches
+};
+int kdb_net_parse(const char *v, struct kdb_net_cfg *c);   // 1 when usable
+const struct kdb_transport *kdb_net_init(const char *v, int *wait);
+
+// The wire: magic, a little-endian sequence number, the first 16 bytes of
+// HMAC-SHA256(key, magic | seq | payload), then the payload -- RSP bytes.
+// A host datagram must carry a sequence number above every one accepted
+// before it, so a captured datagram cannot be replayed.
+#define KDB_NET_HDR 28
+void kdb_net_configure(const struct kdb_net_cfg *c);   // key + fresh sequence state
+int  kdb_net_seal(const char magic[4], uint64_t seq, const uint8_t *payload, int len,
+                  uint8_t *out, int cap);
+int  kdb_net_open(const uint8_t *dgram, int len, const uint8_t **payload);
+void kdb_hmac_sha256(const uint8_t *key, int klen, const uint8_t *a, int alen,
+                     const uint8_t *b, int blen, uint8_t out[32]);
 
 // gdbstub.c: talk until the debugger resumes the machine.
 enum kdb_resume kdb_gdb_session(void);

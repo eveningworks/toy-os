@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The kernel debugger: a GDB stub over COM3, driven end to end.
+"""The kernel debugger: a GDB stub over COM3 or the network, end to end.
 
 kernel/debug/ is a GDB remote-protocol stub in the kernel (Linux's KGDB,
 Windows' KD), armed by `kdebug=ttyS2` on the boot line. This boots a COPY
@@ -26,12 +26,19 @@ Then, if `gdb` is on PATH, a real GDB attaches to the same port and must
 disassemble a function BY NAME -- which needs its symbols relocated by
 qOffsets and the stub's memory read, together.
 
+--net runs every check above over the NETWORK transport instead: a second
+e1000 the debugger owns (`vm.py --kdebug-net`), `kdebug=net,...` with a
+fresh random key, and the keyed datagrams of tools/kdebug_bridge.py. It
+adds that a datagram under the WRONG key, and an exact REPLAY of an
+accepted one, both get silence -- and runs the real GDB through the
+bridge.
+
 --positive-control boots the same image WITHOUT `kdebug=`: the attach
 must then get no answer, or this is not testing the stub.
 
 ON DEMAND (ondemand_sweep.py): it boots its own VM.
 
-    python3 tools/kdebug_test.py [--instance 6] [--positive-control]
+    python3 tools/kdebug_test.py [--instance 6] [--net] [--positive-control]
 """
 
 import argparse
@@ -49,6 +56,7 @@ TOOLS = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(TOOLS)
 sys.path.insert(0, TOOLS)
 import install_grub  # noqa: E402
+import kdebug_bridge  # noqa: E402
 from qmp_test import QMPSession  # noqa: E402
 
 VM = [sys.executable, os.path.join(TOOLS, "vm.py")]
@@ -104,9 +112,8 @@ def elf_bytes(vaddr, n):
 class Rsp:
     """Just enough of a GDB client: packets with acks, a ^C, and waits."""
 
-    def __init__(self, path):
-        self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.s.connect(path)
+    def __init__(self, link):
+        self.s = link          # a connected socket, or kdebug_bridge.UdpLink
         self.buf = b""
 
     def close(self):
@@ -120,7 +127,7 @@ class Rsp:
             self.s.settimeout(left)
             try:
                 chunk = self.s.recv(4096)
-            except socket.timeout:
+            except (socket.timeout, BlockingIOError):
                 raise TimeoutError
             if not chunk:
                 raise ConnectionError("the port closed")
@@ -167,8 +174,12 @@ def rip_of(g_reply):
 
 # --- the run -----------------------------------------------------------------
 
+NET = None   # the key, when --net
+
+
 def vm(inst, disk, log, *args, timeout=240):
-    cmd = VM + ["--instance", str(inst), "--disk", disk, "--serial-log", log, "--kdebug"] + list(args)
+    port = ["--kdebug-net"] if NET else ["--kdebug"]
+    cmd = VM + ["--instance", str(inst), "--disk", disk, "--serial-log", log] + port + list(args)
     try:
         r = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -188,22 +199,54 @@ def sock_path(inst):
     return os.path.join(REPO, ".vm.kdb" if inst == 0 else f".vm.{inst}.kdb")
 
 
+def connect(inst):
+    if NET:
+        return kdebug_bridge.UdpLink("127.0.0.1", 51000 + inst, NET)
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(sock_path(inst))
+    return s
+
+
+def auth_silence(inst, res, label, datagram):
+    """A datagram the stub must ignore: no reply, authentic or not."""
+    probe = kdebug_bridge.UdpLink("127.0.0.1", 51000 + inst, NET)
+    probe.send_raw(datagram)
+    probe.settimeout(3.0)
+    raw = b""
+    try:
+        raw, _ = probe.s.recvfrom(65536)
+    except socket.timeout:
+        pass
+    probe.close()
+    res.check(label, raw == b"", f"got {raw[:40]!r}")
+
+
 def run(inst, disk, log, res):
     boot = vm(inst, disk, log, "start", timeout=300)
     if "ready" not in boot:
         res.check("the guest boots", False, boot[-400:] + serial(log)[-400:])
         return
-    armed = "kdebug: GDB stub armed on ttyS2" in serial(log)
+    armed = ("kdebug: GDB stub armed on the network" if NET
+             else "kdebug: GDB stub armed on ttyS2") in serial(log)
     res.check("the boot log says the stub is armed", armed,
               "\n".join(l for l in serial(log).splitlines() if "kdebug" in l)[-300:])
 
-    rsp = Rsp(sock_path(inst))
+    if NET:
+        wrong = bytes(b ^ 0xFF for b in NET)
+        auth_silence(inst, res, "a datagram under the WRONG key gets silence",
+                     kdebug_bridge.seal(wrong, b"TKDH", time.time_ns(), b"$?#3f"))
+
+    link = connect(inst)
+    rsp = Rsp(link)
     try:
         steps(inst, disk, log, res, rsp)
     except (TimeoutError, ConnectionError) as e:
         res.check("the protocol exchange completes", False, f"{type(e).__name__}: {e}")
     finally:
         rsp.close()
+
+    if NET and link.first:
+        auth_silence(inst, res, "an exact REPLAY of an accepted datagram gets silence", link.first)
 
     if shutil.which("gdb"):
         real_gdb(inst, res)
@@ -303,19 +346,42 @@ def steps(inst, disk, log, res, rsp):
 
 
 def real_gdb(inst, res):
-    """A real GDB: symbols relocated by qOffsets, a disassembly by NAME."""
+    """A real GDB: symbols relocated by qOffsets, a disassembly by NAME --
+    over the bridge, with --net."""
+    target, bridge = sock_path(inst), None
+    if NET:
+        lport = 1300 + inst
+        bridge = subprocess.Popen(
+            [sys.executable, os.path.join(TOOLS, "kdebug_bridge.py"),
+             "--target", f"127.0.0.1:{51000 + inst}", "--listen", f"127.0.0.1:{lport}",
+             "--key", NET.hex()], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        bridge.stdout.readline()   # listening
+        target = f"localhost:{lport}"
+    try:
+        real_gdb_run(target, res)
+    finally:
+        if bridge:
+            bridge.kill()
+            bridge.wait()
+
+
+def real_gdb_run(target, res):
     r = subprocess.run(
         ["gdb", "-nx", "-batch", KERNEL,
          "-ex", "set pagination off",
-         "-ex", f"target remote {sock_path(inst)}",
+         "-ex", f"target remote {target}",
          "-ex", f"x/2i {BP_FUNC}",
          "-ex", "info registers rip",
          "-ex", "detach"],
         cwd=REPO, capture_output=True, text=True, timeout=120)
     out = r.stdout + r.stderr
     dis = [l for l in out.splitlines() if f"<{BP_FUNC}" in l]
-    res.check("a real GDB disassembles a function by name", len(dis) >= 2
-              and "Cannot access memory" not in out, out[-600:])
+    # ATTACHED, not read off the file: GDB disassembles kernel.bin from disk
+    # when the connection fails, so the live register read is the proof.
+    live = re.search(r"^rip\s+0x[0-9a-f]+", out, re.M) is not None
+    res.check("a real GDB attaches and disassembles a function by name",
+              live and len(dis) >= 2 and "Cannot access memory" not in out
+              and "no registers" not in out, out[-600:])
     res.check("...and detaches cleanly", "Detaching" in out or "detached" in out.lower(), out[-300:])
 
 
@@ -324,6 +390,8 @@ def main():
     ap.add_argument("--instance", type=int, default=6)
     ap.add_argument("--disk", default=os.path.join(REPO, "disk.img"),
                     help="seed image to COPY (never written to directly)")
+    ap.add_argument("--net", action="store_true",
+                    help="the network transport: a debugger-owned e1000 and keyed UDP")
     ap.add_argument("--positive-control", action="store_true",
                     help="boot WITHOUT kdebug=; the attach must then fail")
     ap.add_argument("--keep", help="keep the serial log at this path")
@@ -338,8 +406,13 @@ def main():
     disk = os.path.join(work, "disk.img")
     log = os.path.join(work, "serial.log")
     subprocess.run(["cp", "--reflink=auto", "--sparse=always", args.disk, disk], check=True)
+    global NET
+    word = "kdebug=ttyS2"
+    if args.net:
+        NET = os.urandom(32)
+        word = f"kdebug=net,ip=10.0.2.15,key={NET.hex()}"
     if not args.positive_control:
-        ok, why = install_grub.add_boot_word(disk, "kdebug=ttyS2")
+        ok, why = install_grub.add_boot_word(disk, word)
         if not ok:
             print(f"kdebug_test: cannot arm the copy: {why}")
             return 2

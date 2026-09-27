@@ -715,6 +715,16 @@ make run KDEBUG=1                                   # COM2 as localhost:1235
 gdb build/kernel.bin -ex "target remote localhost:1235"
 ```
 
+Or over the NETWORK, the transport a laptop without a serial port needs
+-- a second e1000 the debugger owns, keyed UDP, and a bridge that carries
+GDB's TCP to it:
+
+```
+make run KDEBUG=net                                 # terminal 1
+python3 tools/kdebug_bridge.py                      # terminal 2; key from build/kdebug.key
+gdb build/kernel.bin -ex "target remote localhost:1235"
+```
+
 Attaching stops a RUNNING kernel (the first packet is a break-in), `^C`
 breaks in again after `continue`, and a kernel fault or panic stops in
 the debugger at the faulting frame before the panic runs. It answers
@@ -723,7 +733,8 @@ by itself. `break`, `hbreak`, `watch`/`awatch` (four hardware slots;
 x86 has no `rwatch`), `stepi`, `x`, `set var` and `bt` work; `bt` stops
 at `isr_common`, the interrupt frame. Headless: `tools/vm.py --kdebug`
 adds a COM3 socket (`.vm[.N].kdb`) for an image carrying
-`kdebug=ttyS2`, which is what `tools/kdebug_test.py` does.
+`kdebug=ttyS2`, and `--kdebug-net` the debugger's own e1000 (host udp
+51000+N); `tools/kdebug_test.py [--net]` drives either.
 
 `CFLAGS`/`USERLAND_CFLAGS` both carry `-g`, so `kernel.bin` and every
 userland ELF have real DWARF. Kept at `-O2` deliberately -- same binary

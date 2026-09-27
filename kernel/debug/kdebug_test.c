@@ -58,7 +58,7 @@ static void script_putc(char c) {
     g_log[g_lpos] = 0;
 }
 
-static const struct kdb_transport script_io = { script_getc, script_putc };
+static const struct kdb_transport script_io = { .getc = script_getc, .putc = script_putc };
 
 // "$data#xx+": a packet, then the ack for the stub's reply to it.
 static void script_add(const char *data, int ack) {
@@ -123,4 +123,73 @@ KTEST("kdebug", "a software breakpoint stops, reports the PC and resumes") {
     KTEST_ASSERT(g != 0);
     KTEST_ASSERT(k_strncmp(g + 1 + 256, rip, 16) == 0);
     KTEST_ASSERT_EQ(*(volatile uint8_t *)(uintptr_t)at, before);   // lifted for good
+}
+
+// --- the network transport's pieces --------------------------------------
+
+static void to_hex(const uint8_t *b, int n, char *out) {
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < n; i++) {
+        out[i * 2] = hex[b[i] >> 4];
+        out[i * 2 + 1] = hex[b[i] & 15];
+    }
+    out[n * 2] = 0;
+}
+
+KTEST("kdebug", "HMAC-SHA256 matches RFC 4231 test case 2") {
+    static const char data[] = "what do ya want for nothing?";
+    uint8_t mac[32];
+    char hex[65];
+    kdb_hmac_sha256((const uint8_t *)"Jefe", 4, (const uint8_t *)data, 10,
+                    (const uint8_t *)data + 10, (int)sizeof data - 11, mac);   // split: two pieces
+    to_hex(mac, 32, hex);
+    KTEST_ASSERT(k_strcmp(hex, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843") == 0);
+}
+
+KTEST("kdebug", "kdebug=net parses, and refuses rather than guesses") {
+    struct kdb_net_cfg c;
+    KTEST_ASSERT(kdb_net_parse("net,ip=10.0.2.15,key=00112233445566778899aabbccddeeff,wait", &c));
+    KTEST_ASSERT(c.ip == 0x0A00020F && c.port == 50000 && c.klen == 16 && c.wait);
+    KTEST_ASSERT(c.nic_bus == -1);
+    KTEST_ASSERT(kdb_net_parse("net,ip=1.2.3.4,port=6000,nic=00:04.0,key=00112233445566778899aabbccddeeff", &c));
+    KTEST_ASSERT(c.port == 6000 && c.nic_bus == 0 && c.nic_dev == 4 && c.nic_fn == 0);
+    // a short key, no key, no address, a bad address, an unknown word
+    KTEST_ASSERT(!kdb_net_parse("net,ip=10.0.2.15,key=0011", &c));
+    KTEST_ASSERT(!kdb_net_parse("net,ip=10.0.2.15", &c));
+    KTEST_ASSERT(!kdb_net_parse("net,key=00112233445566778899aabbccddeeff", &c));
+    KTEST_ASSERT(!kdb_net_parse("net,ip=10.0.2.256,key=00112233445566778899aabbccddeeff", &c));
+    KTEST_ASSERT(!kdb_net_parse("net,ip=10.0.2.15,key=00112233445566778899aabbccddeeff,fast", &c));
+}
+
+KTEST("kdebug", "a datagram is refused when forged, damaged or replayed") {
+    if (kdb.armed) KTEST_SKIP("the stub is armed for a real debugger on this boot");
+    static uint8_t d[64];
+    struct kdb_net_cfg c;
+    KTEST_ASSERT(kdb_net_parse("net,ip=10.0.2.15,key=000102030405060708090a0b0c0d0e0f", &c));
+    kdb_net_configure(&c);
+    const uint8_t *payload;
+
+    int n = kdb_net_seal("TKDH", 7, (const uint8_t *)"$?#3f", 5, d, sizeof d);
+    KTEST_ASSERT_EQ(n, KDB_NET_HDR + 5);
+    KTEST_ASSERT_EQ(kdb_net_open(d, n, &payload), 5);
+    KTEST_ASSERT(k_strncmp((const char *)payload, "$?#3f", 5) == 0);
+    KTEST_ASSERT_EQ(kdb_net_open(d, n, &payload), -1);          // the same one again
+
+    n = kdb_net_seal("TKDH", 8, (const uint8_t *)"$g#67", 5, d, sizeof d);
+    d[n - 1] ^= 1;                                               // one bit of payload
+    KTEST_ASSERT_EQ(kdb_net_open(d, n, &payload), -1);
+    d[n - 1] ^= 1;
+    KTEST_ASSERT_EQ(kdb_net_open(d, n, &payload), 5);           // intact, it is accepted
+
+    n = kdb_net_seal("TKDT", 9, (const uint8_t *)"x", 1, d, sizeof d);
+    KTEST_ASSERT_EQ(kdb_net_open(d, n, &payload), -1);           // the target's own, reflected
+
+    struct kdb_net_cfg other;
+    KTEST_ASSERT(kdb_net_parse("net,ip=10.0.2.15,key=ff0102030405060708090a0b0c0d0e0f", &other));
+    kdb_net_configure(&other);
+    n = kdb_net_seal("TKDH", 10, (const uint8_t *)"x", 1, d, sizeof d);
+    kdb_net_configure(&c);
+    KTEST_ASSERT_EQ(kdb_net_open(d, n, &payload), -1);           // the wrong key
+    k_memset(&c, 0, sizeof c);
+    kdb_net_configure(&c);
 }

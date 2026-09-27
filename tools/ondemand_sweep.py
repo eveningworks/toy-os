@@ -307,6 +307,7 @@ TOOLS = [
     # ITS OWN BOOT, with `kdebug=ttyS2` on a copy and a third serial
     # port: the stub is off on every other guest, deliberately.
     ("kdebug",      "kdebug_test.py",          "the kernel GDB stub: breakpoints, watchpoints, break-in, KASLR", True, None, False),
+    ("kdebug_net",  "kdebug_test.py --net",    "the same over the network: a debugger-owned e1000, keyed UDP", True, None, False),
 
     # REBOOTS ITS GUEST FOUR TIMES. The property is what survives a
     # reboot, so there is no way to check it inside one.

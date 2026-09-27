@@ -729,6 +729,11 @@ manual steps to be worth automating:
   "target remote .vm.N.kdb"`. It must be the third `-serial` to be COM3,
   which is why it is a flag here rather than something `QEMU_EXTRA`
   appends.
+- **`vm.py --kdebug-net`** -- a SECOND e1000, on its own SLIRP netdev,
+  for the debugger's network transport: host udp `127.0.0.1:51000+N`
+  forwards to its port 50000. It comes after every other NIC on the
+  command line because `kdebug=net` takes the LAST 82540EM and the OS's
+  driver keeps the first. Inert without `kdebug=net,...` on the image.
 - **`vm.py --serial-log PATH`** -- everything the kernel LOGS (COM1),
   from the first byte, whether or not anything reads the log socket. **A `start` that fails says WHICH failure now**: QEMU
   EXITED (with `-no-reboot`, the guest reset -- a crash) or still
@@ -3244,7 +3249,24 @@ window without going through it will find its layout polls timing out.
   inlined**: `dbg_cmd_meminfo` is static and called once, so `-O2`
   inlined it away, and `g_events` is a static name in two files.
   `--positive-control` boots without `kdebug=`, where the attach must
-  get no answer. In `ondemand_sweep.py`.
+  get no answer. **`--net`** runs all of it over the network transport
+  (`vm.py --kdebug-net`, a fresh random key each run, the real GDB
+  through `kdebug_bridge.py`) and adds two checks that a datagram under
+  the WRONG key and an exact REPLAY of an accepted one both get silence;
+  removing the sequence rule turns the replay check red. **The real-GDB
+  check requires a live `info registers rip`**: GDB disassembles
+  `kernel.bin` from DISK when the connection fails, which once passed a
+  run where the attach had timed out. Both modes are in
+  `ondemand_sweep.py`.
+- **`kdebug_bridge.py`** -- carries GDB's TCP to the debugger's keyed
+  UDP (`kdebug=net`), the role WinDbg's KDNET client plays on Windows:
+  `gdb -> 127.0.0.1:1235 -> [bridge] -> target:50000`. Defaults match
+  `make run KDEBUG=net` (target `127.0.0.1:50000`, key from
+  `build/kdebug.key`); for a real machine, `--target IP:50000 --key HEX`.
+  Only the stdlib (`hmac`, `hashlib`). Its sequence numbers start at the
+  wall clock in nanoseconds, so a restarted bridge is never below what
+  the target has already accepted. `UdpLink` is socket-shaped, which is
+  how `kdebug_test.py --net` puts its protocol client on it.
 - **`netheal_test.py`** -- `/bin/netheal`, which reboots a machine once
   when it comes up with no network. **THIS TOOL REBOOTS ITS GUEST TWICE
   ON PURPOSE**, which is the property under test, so it needs

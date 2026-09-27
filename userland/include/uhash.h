@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "ksha256.h"
 
 // Checksums and digests, as a TABLE rather than one function per
 // algorithm. A third algorithm is a row in the table and a line in
@@ -20,7 +21,8 @@
 // md5sum/sha1sum/sha256sum family for the reason this project keeps
 // legislating for C: a binary per algorithm multiplies. Nothing here is
 // a MAC or a password hash -- SHA-256 is here to answer "did these bytes
-// survive the trip", and toy-os has no crypto.
+// survive the trip". The algorithm is kernel/lib/ksha256.c, shared with
+// the kernel, whose debugger builds an HMAC on it.
 
 #define UHASH_DIGEST_MAX 32
 
@@ -28,12 +30,7 @@
 // knowing which row it picked.
 union uhash_ctx {
     uint32_t crc;
-    struct {
-        uint32_t h[8];
-        uint64_t len;         // total bytes fed in, for the length pad
-        unsigned char buf[64];
-        unsigned n;           // bytes sitting in buf
-    } sha256;
+    struct ksha256 sha256;    // kernel/lib/ksha256.c, shared with ring 0
 };
 
 struct uhash_alg {

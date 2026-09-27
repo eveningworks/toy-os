@@ -298,7 +298,8 @@ target for a combination. Check with `make -n run <FLAGS>`: `KVM=1
 VIRTIO=1 AUDIO=1 NOGRAPHIC=1 MENU=1 MEM=512`, `DISK=`/`VGA=`/`INPUT=virtio`,
 `WINDOW=full|fit` (sdl cannot scale; `fit` alone helps a bigger guest
 mode, and alone blurs the font), `LIVE=1`, `BOOT=cd|disk`, `STRIP=0`,
-`COMPRESS=0`, `KDEBUG=1` (the kernel's GDB stub on localhost:1235).
+`COMPRESS=0`, `KDEBUG=1|net` (the kernel's GDB stub on localhost:1235;
+`net` needs `tools/kdebug_bridge.py` running).
 
 - **`VIRTIO=1` MEANS EVERY DEVICE CLASS** -- disk, GPU and input; a
   per-class value overrides it.
@@ -484,8 +485,8 @@ caller sleeping under the fs lock), `smp-design.md` (stage 1 BUILT --
 before a module-level buffer anything a syscall reaches uses),
 `modules-design.md`, `update-design.md`, `rootfs-design.md`,
 `winserver-ring3-design.md` (stages 0-1 BUILT -- before
-`kernel/proc/win_*.c`), `kdebug-design.md` (stage 2 BUILT -- the GDB
-stub; the NETWORK transport is stage 3).
+`kernel/proc/win_*.c`), `kdebug-design.md` (the GDB stub: serial BUILT,
+the network on a dedicated e1000 BUILT; real hardware is next).
 
 **Rules for editing docs/:**
 

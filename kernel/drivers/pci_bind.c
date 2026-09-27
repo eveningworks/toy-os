@@ -149,6 +149,14 @@ int pci_device_rebind(int index) {
     return 1;
 }
 
+int pci_device_claim(int index, const struct pci_driver *owner) {
+    if (g_bind_ran || index < 0 || index >= pci_device_count() || index >= PCI_MAX_DEVICES)
+        return 0;
+    if (g_bound[index]) return 0;
+    g_bound[index] = owner;
+    return 1;
+}
+
 // Unclaimed devices in enumeration order, the first matching driver
 // each. A probe that finds the device unusable says so itself; the
 // binding is still recorded, because "a driver looked at it" is the

@@ -1110,7 +1110,9 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [x] ~~Distinguish "the kernel faulted" from "a process faulted and the kernel tore it down correctly"~~ DONE 2026-09-12
 - [x] ~~Stack-overflow detection via a guard page, reported as such rather than as a mystery fault~~ done
 - [x] ~~A kernel debugger GDB can attach to on bare metal~~ DONE 2026-09-27 -- `kdebug=ttySN`, stage 2 of `docs/kdebug-design.md`
-- [ ] The kernel debugger over the NETWORK, KDNET's shape: a polled NIC path and a keyed UDP transport -- `docs/kdebug-design.md` stage 3
+- [x] ~~The kernel debugger over the network, on a NIC it owns, with keyed UDP~~ DONE 2026-09-27 -- `kdebug=net`, stage 3a
+- [ ] The network debugger on real hardware: an r8169 backend (the Lenovo) -- `docs/kdebug-design.md` stage 3b
+- [ ] The network debugger on a one-NIC machine: the OS's traffic through the debugger's card (KDNIC) -- stage 3c
 - [ ] Live kernel memory inspection without halting, drgn's shape, over `remote.py` -- `docs/kdebug-design.md` stage 1
 - [ ] The kernel debugger's processes as GDB threads, and `monitor` commands (`ps`, `dmesg`)
 

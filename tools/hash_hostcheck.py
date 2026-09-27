@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
 
 
 def build(tmp, poison=False):
-    """Compile uhash.c + kcrc.c + the driver with the host gcc.
+    """Compile uhash.c + kcrc.c + ksha256.c + the driver with the host gcc.
 
     Both sources are COPIED into the temp directory, which is what makes
     --positive-control possible without leaving a test hook in shipped
@@ -86,13 +86,14 @@ def build(tmp, poison=False):
     # which would shadow the host's and take memcpy/strcmp away from a
     # compile that has no toy-os libc under it. In the guest build
     # -Iuserland/include comes first and resolves them; here nothing does.
-    shutil.copy(os.path.join(ROOT, "kernel/include/api/kcrc.h"),
-                os.path.join(tmp, "kcrc.h"))
+    for h in ("kcrc.h", "ksha256.h"):
+        shutil.copy(os.path.join(ROOT, "kernel/include/api", h), os.path.join(tmp, h))
     shutil.copy(os.path.join(ROOT, "userland/include/uhash.h"),
                 os.path.join(tmp, "uhash.h"))
 
     srcs = []
-    for src, edits in (("userland/dynlib/uhash.c",
+    for src, edits in (("userland/dynlib/uhash.c", []),
+                       ("kernel/lib/ksha256.c",
                         [("ror(e, 6) ^", "ror(e, 7) ^")]),
                        ("kernel/lib/kcrc.c",
                         [("0xEDB88320u", "0xEDB88321u")])):

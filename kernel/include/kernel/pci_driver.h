@@ -101,6 +101,12 @@ int pci_device_rebind(int index);
 int pci_driver_add_table(const struct pci_driver *drivers, int n);
 int pci_driver_remove_table(const struct pci_driver *drivers);
 int pci_rebind(void); // devices newly bound, or -1 before pci_bind() ran
+
+// Takes device `index` for `owner` BEFORE pci_bind() runs, so no driver
+// ever probes it -- the kernel debugger's own NIC. The owner has no
+// probe or remove: `lspci` names it, and release/rebind refuse it.
+// 0 once binding has run, or when the device is already taken.
+int pci_device_claim(int index, const struct pci_driver *owner);
 // How many devices the drivers of `table` currently hold -- what stops
 // its module unloading when a driver has no remove().
 int pci_driver_table_bound(const struct pci_driver *drivers);

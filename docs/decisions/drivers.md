@@ -187,8 +187,16 @@ choices that differ from the obvious ones:
   `build/kernel.bin` relocates its own symbols in GDB. Linux leaves this
   to the user (`nokaslr`, or `add-symbol-file` by hand).
 
-The NETWORK transport, the one that reaches the laptops without a serial
-port, is designed but not built: `docs/kdebug-design.md`. `-g` stays in
+**The network transport OWNS its NIC and authenticates without
+encrypting.** `kdebug=net` claims a whole card before any driver binds
+it, because no NIC driver here has a lock, and a stop landing mid-ring-
+update in a SHARED card's driver corrupts the ring -- the hazard any
+netpoll-shaped transport (Linux's out-of-tree kgdboe) carries, and the
+one KDNET avoids by owning the hardware. Its datagrams carry HMAC-SHA256 and a
+rising sequence number but no cipher: KDNET encrypts, but a cipher costs
+a kernel implementation plus a third-party host package, while the MAC
+needs only Python's stdlib. `docs/kdebug-design.md` has the rest,
+including KDNIC for the one-NIC ASUS. `-g` stays in
 `CFLAGS` at `-O2` for both stubs -- the same binary as every other
 build, at the cost of some locals showing "optimized out".
 
