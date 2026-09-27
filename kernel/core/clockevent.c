@@ -10,6 +10,7 @@
 #include "irq.h"
 #include "klog.h"
 #include "kfmt.h"
+#include "kdebug.h"     // kdebug_poll(), and a tick that stays on for it
 
 static const struct clockevent *g_ce;
 static uint32_t g_hz;
@@ -34,6 +35,7 @@ static uint64_t next_boundary(uint64_t now) {
 // device is simply re-armed.
 void clockevent_tick(uint64_t *regs) {
     g_events++;
+    kdebug_poll(regs);
     if (!g_oneshot) {
         g_ticks++;
         timer_tick_advance();
@@ -99,7 +101,8 @@ void clockevent_idle_halt(void) {
     g_idle = 1;
     if (g_oneshot) {
         uint64_t now = clocksource_now_ns();
-        if (g_nohz && !scheduler_any_ready() && !serial_tx_pending()) {
+        // The tick is also what hears a debugger's break-in.
+        if (g_nohz && !scheduler_any_ready() && !serial_tx_pending() && !kdebug_armed()) {
             if (!g_stopped) {
                 g_stopped = 1;
                 g_stopped_at_ns = now;

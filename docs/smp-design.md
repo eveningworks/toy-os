@@ -196,6 +196,12 @@ not the scheduler, is the first thing to change in this stage.
 
 `cpuinfo` now reports the APs as online, which is the whole test.
 
+**The kernel debugger must stop the APs from here on.** `kernel/debug/`
+clears CR0.WP to write a breakpoint and assumes nothing else runs while
+it is stopped -- both true only on one CPU. An NMI IPI that parks every
+other core before a stop (KGDB's `kgdb_roundup_cpus()`) lands with this
+stage (`docs/kdebug-design.md`).
+
 ### Stage 4 -- a real spinlock, and the kernel lock
 
 Two things, in this order.

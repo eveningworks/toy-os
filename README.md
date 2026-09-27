@@ -269,10 +269,12 @@ flag** that overrides them for one boot without rebuilding, such as
 | `disk.img` is 9 GB | It's a *sparse* file — it costs only what is actually written. `make clean-disk` wipes it. |
 
 For breakpoint debugging, `make debug` boots frozen against QEMU's own
-GDB stub — no kernel-side GDB code involved:
+GDB stub, and `make run KDEBUG=1` boots with the kernel's OWN stub — the
+one that also works on real hardware, over a serial port (`kdebug=ttySN`):
 
 ```bash
-gdb build/kernel.bin -ex "target remote localhost:1234"
+gdb build/kernel.bin -ex "target remote localhost:1234"   # make debug
+gdb build/kernel.bin -ex "target remote localhost:1235"   # make run KDEBUG=1
 ```
 
 Both `CFLAGS` and `USERLAND_CFLAGS` carry `-g`, so the kernel and every

@@ -304,7 +304,7 @@ first before re-litigating it from scratch.
 - [PCI enumeration is a brute-force flat scan, not bridge-aware recursion](decisions/drivers.md#pci-enumeration-is-a-brute-force-flat-scan-not-bridge-aware-recursion)
 - [Nordic keyboard/character support: Latin-1, not UTF-8; 3 remapped keys, not a full layout](decisions/drivers.md#nordic-keyboardcharacter-support-latin-1-not-utf-8-3-remapped-keys-not-a-full-layout)
 - [Keyboard layouts are data files (`/etc/kbs/<name>`) generated from Linux's own XKB data, not a compiled-in enum](decisions/drivers.md#keyboard-layouts-are-data-files-etckbsname-generated-from-linuxs-own-xkb-data-not-a-compiled-in-enum)
-- [GDB debugging: QEMU's built-in stub, not an in-kernel serial protocol implementation](decisions/drivers.md#gdb-debugging-qemus-built-in-stub-not-an-in-kernel-serial-protocol-implementation)
+- [GDB debugging: QEMU's stub under QEMU, the kernel's own stub on bare metal](decisions/drivers.md#gdb-debugging-qemus-stub-under-qemu-the-kernels-own-stub-on-bare-metal)
 - [ATA's waits are bounded by wall-clock in one context and a spin count in the other](decisions/drivers.md#atas-waits-are-bounded-by-wall-clock-in-one-context-and-a-spin-count-in-the-other)
 - [An ATA command is done when the bus master says so, not when IRQ14 fires](decisions/drivers.md#an-ata-command-is-done-when-the-bus-master-says-so-not-when-irq14-fires)
 - [The PIO fallback is reachable on purpose (`ata nodma`), because unreachable fallback code is a guess](decisions/drivers.md#the-pio-fallback-is-reachable-on-purpose-ata-nodma-because-unreachable-fallback-code-is-a-guess)

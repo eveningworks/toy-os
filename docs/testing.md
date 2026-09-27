@@ -696,14 +696,34 @@ from the bare-metal box.
 
 ## Debugging with GDB
 
-`make debug` boots frozen at CPU reset (`-s -S`) for real
-breakpoint/single-step debugging via QEMU's own GDB stub -- **no
-kernel-side GDB protocol code needed**. `docs/decisions.md` says why an
-in-kernel serial stub was deliberately not built.
+**Two stubs, and they answer different questions.** `make debug` boots
+frozen at CPU reset (`-s -S`) under QEMU's own GDB stub -- the EMULATOR
+stopping the CPU, so it reaches the first instruction and a machine too
+wedged to run anything, but only in QEMU:
 
 ```
 gdb build/kernel.bin -ex "target remote localhost:1234"
 ```
+
+The KERNEL's own stub (`kernel/debug/`, `docs/kdebug-design.md`) is the
+one that works on bare metal, because the kernel itself speaks the
+protocol -- Linux's KGDB. It is armed by `kdebug=ttySN` on the boot line
+and nothing else:
+
+```
+make run KDEBUG=1                                   # COM2 as localhost:1235
+gdb build/kernel.bin -ex "target remote localhost:1235"
+```
+
+Attaching stops a RUNNING kernel (the first packet is a break-in), `^C`
+breaks in again after `continue`, and a kernel fault or panic stops in
+the debugger at the faulting frame before the panic runs. It answers
+`qOffsets`, so GDB relocates `kernel.bin`'s symbols to the KASLR base
+by itself. `break`, `hbreak`, `watch`/`awatch` (four hardware slots;
+x86 has no `rwatch`), `stepi`, `x`, `set var` and `bt` work; `bt` stops
+at `isr_common`, the interrupt frame. Headless: `tools/vm.py --kdebug`
+adds a COM3 socket (`.vm[.N].kdb`) for an image carrying
+`kdebug=ttyS2`, which is what `tools/kdebug_test.py` does.
 
 `CFLAGS`/`USERLAND_CFLAGS` both carry `-g`, so `kernel.bin` and every
 userland ELF have real DWARF. Kept at `-O2` deliberately -- same binary

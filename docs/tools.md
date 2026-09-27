@@ -722,6 +722,13 @@ manual steps to be worth automating:
   every tool already connects to. `--instance N` derives both. A tool
   that builds its own one-port QEMU line still works: the kernel keeps
   both on COM1 when it finds no second UART.
+- **`vm.py --kdebug`** -- a THIRD port, COM3, as the unix socket
+  `.vm[.N].kdb`, for the kernel's GDB stub. Inert unless the image's GRUB
+  line carries `kdebug=ttyS2` (add it to a COPY with
+  `install_grub.add_boot_word()`); then `gdb build/kernel.bin -ex
+  "target remote .vm.N.kdb"`. It must be the third `-serial` to be COM3,
+  which is why it is a flag here rather than something `QEMU_EXTRA`
+  appends.
 - **`vm.py --serial-log PATH`** -- everything the kernel LOGS (COM1),
   from the first byte, whether or not anything reads the log socket. **A `start` that fails says WHICH failure now**: QEMU
   EXITED (with `-no-reboot`, the guest reset -- a crash) or still
@@ -3220,6 +3227,24 @@ window without going through it will find its layout polls timing out.
   answers, and waiting on the exec started the countdown's clock a whole
   timeout late. `--positive-control` restarts COLD after the panic, where
   every recovery check must go red.
+- **`kdebug_test.py`** -- the kernel's GDB stub (`kernel/debug/`),
+  end to end over a real serial port: its own boot of a disk COPY with
+  `kdebug=ttyS2` and `vm.py --kdebug`. A small protocol client in the
+  tool makes each assertion one packet, so it needs no GDB: attaching
+  stops a RUNNING kernel; `qOffsets` equals the KASLR delta the boot log
+  printed, and memory at a symbol plus that delta is `kernel.bin`'s own
+  bytes (read from its `PT_LOAD` segments -- `kernel.debug` has no
+  code); a breakpoint in `heap_total_bytes()` stops `meminfo` with the PC
+  ON it; a step moves one instruction and executes the real one, not the
+  int3; a write watchpoint on `clockevent.c`'s `g_ticks` fires and names
+  its address; an NMI from the monitor and a `^C` each break in; detach
+  resumes the stopped command. Then, if `gdb` is on PATH, a real GDB
+  must disassemble a function BY NAME, which needs qOffsets and memory
+  reads together. **Pick a target symbol that is unique and not
+  inlined**: `dbg_cmd_meminfo` is static and called once, so `-O2`
+  inlined it away, and `g_events` is a static name in two files.
+  `--positive-control` boots without `kdebug=`, where the attach must
+  get no answer. In `ondemand_sweep.py`.
 - **`netheal_test.py`** -- `/bin/netheal`, which reboots a machine once
   when it comes up with no network. **THIS TOOL REBOOTS ITS GUEST TWICE
   ON PURPOSE**, which is the property under test, so it needs

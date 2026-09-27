@@ -304,6 +304,10 @@ TOOLS = [
     # thing that carries the RAM store across, so it cannot be a KTEST.
     ("panic_store", "panic_store_test.py",     "a kernel panic survives the warm reset, into the dead boot's log", True, None, False),
 
+    # ITS OWN BOOT, with `kdebug=ttyS2` on a copy and a third serial
+    # port: the stub is off on every other guest, deliberately.
+    ("kdebug",      "kdebug_test.py",          "the kernel GDB stub: breakpoints, watchpoints, break-in, KASLR", True, None, False),
+
     # REBOOTS ITS GUEST FOUR TIMES. The property is what survives a
     # reboot, so there is no way to check it inside one.
     ("shutdownsync","shutdown_sync_test.py",   "a write just before reboot survives it", True, None,                False),

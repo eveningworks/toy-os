@@ -298,7 +298,7 @@ target for a combination. Check with `make -n run <FLAGS>`: `KVM=1
 VIRTIO=1 AUDIO=1 NOGRAPHIC=1 MENU=1 MEM=512`, `DISK=`/`VGA=`/`INPUT=virtio`,
 `WINDOW=full|fit` (sdl cannot scale; `fit` alone helps a bigger guest
 mode, and alone blurs the font), `LIVE=1`, `BOOT=cd|disk`, `STRIP=0`,
-`COMPRESS=0`.
+`COMPRESS=0`, `KDEBUG=1` (the kernel's GDB stub on localhost:1235).
 
 - **`VIRTIO=1` MEANS EVERY DEVICE CLASS** -- disk, GPU and input; a
   per-class value overrides it.
@@ -349,8 +349,10 @@ mode, and alone blurs the font), `LIVE=1`, `BOOT=cd|disk`, `STRIP=0`,
 
 ## Debugging with GDB
 
-`make debug` boots frozen for QEMU's own GDB stub -- `docs/testing.md`,
-"Debugging with GDB", has the command and the build flags.
+`make debug` boots frozen for QEMU's own GDB stub; **the kernel's OWN
+stub (`kdebug=ttySN`, `make run KDEBUG=1`) is the one that works on bare
+metal** -- `docs/testing.md`, "Debugging with GDB", has both. Its stopped
+path takes no lock, allocates nothing and does not log.
 
 ## Testing in QEMU headlessly, via QMP
 
@@ -482,7 +484,8 @@ caller sleeping under the fs lock), `smp-design.md` (stage 1 BUILT --
 before a module-level buffer anything a syscall reaches uses),
 `modules-design.md`, `update-design.md`, `rootfs-design.md`,
 `winserver-ring3-design.md` (stages 0-1 BUILT -- before
-`kernel/proc/win_*.c`).
+`kernel/proc/win_*.c`), `kdebug-design.md` (stage 2 BUILT -- the GDB
+stub; the NETWORK transport is stage 3).
 
 **Rules for editing docs/:**
 

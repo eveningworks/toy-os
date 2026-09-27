@@ -51,4 +51,12 @@ void serial_dbg_putc(char c);
 void serial_dbg_write(const char *s);
 void serial_dbg_flush(void);
 
+// THE KERNEL DEBUGGER'S PORT (kernel/debug/): ttyS1..ttyS3, POLLED and
+// never interrupt-driven, because it is read with the machine stopped.
+// Claiming COM2 takes it away from the debug console, which falls back
+// to COM1. Call before serial_irq_init(). 0 if no UART answers there.
+int  serial_kdb_claim(int ttys);
+int  serial_kdb_getc(void);   // -1 when nothing is waiting
+void serial_kdb_putc(char c); // waits for the UART, bounded
+
 #endif

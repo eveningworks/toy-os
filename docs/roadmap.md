@@ -1109,6 +1109,10 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [x] ~~A host-side script to inspect a core dump against the ELF's DWARF~~ DONE 2026-09-02 -- `panic_resolve.py --crash`
 - [x] ~~Distinguish "the kernel faulted" from "a process faulted and the kernel tore it down correctly"~~ DONE 2026-09-12
 - [x] ~~Stack-overflow detection via a guard page, reported as such rather than as a mystery fault~~ done
+- [x] ~~A kernel debugger GDB can attach to on bare metal~~ DONE 2026-09-27 -- `kdebug=ttySN`, stage 2 of `docs/kdebug-design.md`
+- [ ] The kernel debugger over the NETWORK, KDNET's shape: a polled NIC path and a keyed UDP transport -- `docs/kdebug-design.md` stage 3
+- [ ] Live kernel memory inspection without halting, drgn's shape, over `remote.py` -- `docs/kdebug-design.md` stage 1
+- [ ] The kernel debugger's processes as GDB threads, and `monitor` commands (`ps`, `dmesg`)
 
 ### Programming on the machine
 

@@ -8,6 +8,7 @@ question to answer when adding one.
 |---|---|---|
 | `arch/x86_64/` | Multiboot entry, GDT/TSS, IDT, PIC, IRQ dispatch, page tables, the ring switch, FPU/SSE enable + FXSAVE, CPUID, RDSEED/RDRAND/RDTSC (`random_hw.c`) | Would this be rewritten wholesale on a different CPU architecture? |
 | `core/` | `kernel_main`, multiboot parsing, timer, serial + the debug console, power | Does it own the machine as a whole, rather than one resource? |
+| `debug/` | The kernel debugger's GDB stub: the protocol and the breakpoint bookkeeping (its CPU half is `arch/x86_64/kdebug_x86.c`) | Is it the debugger, and would it survive a change of CPU? |
 | `mm/` | Physical frames, address spaces, the kernel heap's platform half (`heap_os.c`; the allocator itself is `lib/heap_core.c`, shared with ring 3) | Is it about memory? |
 | `proc/` | ELF loading, the syscall table + dispatcher, the fd namespace, processes, the scheduler | Is it about *running* something? |
 | `fs/` | The probe-selecting VFS + two backends (TFS3 default, TFS2 legacy), and the path-keyed syscalls | Is it about files? |

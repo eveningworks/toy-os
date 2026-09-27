@@ -104,15 +104,18 @@ static int rx_getc(struct uart *u) {
 
 // --- bring-up ----------------------------------------------------------
 
-static void uart_program(uint16_t base) {
+// 115200 / divisor baud: 3 is 38400, the log's and the console's.
+static void uart_program_div(uint16_t base, uint8_t divisor) {
     outb(base + 1, 0x00);
     outb(base + 3, 0x80);
-    outb(base + 0, 0x03);
+    outb(base + 0, divisor);
     outb(base + 1, 0x00);
     outb(base + 3, 0x03);
     outb(base + 2, 0xC7);
     outb(base + 4, 0x0B);
 }
+
+static void uart_program(uint16_t base) { uart_program_div(base, 3); }
 
 // IS A UART REALLY THERE? The scratch register (base+7) holds whatever is
 // written to it; an unassigned I/O port reads back 0xFF whatever you
@@ -255,4 +258,32 @@ void serial_dbg_write(const char *s) {
     struct uart *u = dbg_port();
     while (*s) tx_putc(u, *s++);
     tx_flush(u);
+}
+
+// --- the kernel debugger's port ----------------------------------------
+
+// NO RING AND NO IRQ: the debugger talks with interrupts off and nothing
+// else running, and while the kernel runs it is polled from the tick for
+// a break-in. IER stays 0, so COM3 sharing IRQ4 with COM1 costs nothing.
+static uint16_t g_kdb_base;
+
+int serial_kdb_claim(int ttys) {
+    static const uint16_t bases[] = { COM1, COM2, 0x3E8, 0x2E8 };
+    if (ttys < 1 || ttys > 3 || !uart_probe(bases[ttys])) return 0;
+    if (ttys == 1) g_com2.present = 0;  // the debug console moves to COM1
+    uart_program_div(bases[ttys], 1);   // 115200, KGDB's usual rate
+    g_kdb_base = bases[ttys];
+    return 1;
+}
+
+int serial_kdb_getc(void) {
+    if (!g_kdb_base || !(inb(g_kdb_base + 5) & 0x01)) return -1;
+    return inb(g_kdb_base);
+}
+
+void serial_kdb_putc(char c) {
+    if (!g_kdb_base) return;
+    for (uint32_t i = 0; i < SERIAL_TX_SPIN && !(inb(g_kdb_base + 5) & 0x20); i++)
+        cpu_relax();
+    outb(g_kdb_base, (uint8_t)c);
 }

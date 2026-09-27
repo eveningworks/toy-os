@@ -137,6 +137,19 @@ this the obvious way), not from how much history it accumulated.
   conflates the system working with the system failing. The buffers are
   statics, not locals: the writer runs on the faulting process's kernel
   stack.
+- **THE KERNEL DEBUGGER'S STOPPED PATH TAKES NO LOCK, ALLOCATES NOTHING
+  AND DOES NOT LOG.** `kernel/debug/` (armed by `kdebug=ttySN`,
+  `docs/kdebug-design.md`) runs with interrupts off at whatever
+  instruction the trap landed on -- inside `kmalloc`, holding a mount
+  lock, halfway through a klog line -- so anything it shared with the
+  running kernel could be the thing that is broken, or the thing it
+  interrupted. Its buffers are static, its port is polled, its memory
+  access walks the page tables instead of faulting. Two consequences
+  when adding to it: **a new hook into the trap path must be one load
+  and a branch while unarmed** (`kdb.armed`), since it sits on every
+  `#DB`, NMI, `#BP` and timer tick; and **software breakpoints are
+  written only while the kernel RUNS** -- lifted on every stop -- so
+  code that reads kernel text while stopped sees the real bytes.
 - **A panic NAMES THE FUNCTION**, on screen and in the log:
   `in crash_gp_fault+0xa`, plus the faulting context, the general
   registers, the build id and the uptime. The symbol table is baked into

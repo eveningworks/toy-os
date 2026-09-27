@@ -25,6 +25,7 @@
 #include "ksyms.h" // a panic names the function, not just an address
 #include "version.h" // TOYOS_VERSION_FULL -- a photographed panic identifies its build
 #include "clocksource.h" // uptime, so a panic says WHEN
+#include "kdebug.h" // the kernel debugger takes #DB/#BP/NMI when armed
 
 struct idt_entry {
     uint16_t offset_low;
@@ -462,6 +463,11 @@ static void isr_dispatch_body(uint64_t *regs) {
             syscall_dispatch(regs);
         }
     } else if (vector < 32) {
+        // THE KERNEL DEBUGGER SEES ITS OWN TRAPS FIRST (kdebug.h) -- and
+        // only when `kdebug=` armed it; otherwise these three panic as
+        // they always did.
+        if ((vector == 1 || vector == 2 || vector == 3) && kdebug_trap(vector, regs))
+            return;
         uint64_t error_code = regs[16];
         uint64_t rip = regs[17];
         uint64_t cs = regs[18];
@@ -706,6 +712,8 @@ static void isr_dispatch_body(uint64_t *regs) {
             }
         }
 
+        // A debugger gets the faulting frame before the machine goes.
+        if ((cs & 3) == 0) kdebug_fatal(vector, regs);
         panic_finish();
     }
 

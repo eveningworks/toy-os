@@ -1,0 +1,166 @@
+# A kernel debugger
+
+A staged plan, in the shape `docs/fslock-design.md` and
+`docs/smp-design.md` use. It answers one question: **how does a real
+`gdb` stop a toy-os machine that no emulator is standing behind, set a
+breakpoint in it, read and write its memory, and let it go?**
+
+**Status (2026-09-27): stage 2, the halting stub over serial, is BUILT.
+Stage 1 (live inspection without halting) and stage 3 (the network
+transport) are designed, not built. Stage 2 came first at the
+maintainer's choice, because it is the part every later stage stands on.**
+
+## Why
+
+QEMU's own stub (`make debug`) needs no guest code, and was the whole
+answer while every toy-os machine was emulated. Two laptops run toy-os
+now, and most of `docs/bugs.md` reproduces only on them; diagnosing one
+has meant klog lines, a rebuild and a reflash per question. What a
+debugger buys is asking the next question without the rebuild.
+
+## What real systems do
+
+- **Windows** has KD in every kernel image, off until `bcdedit /debug
+  on` and a reboot -- the running system cannot turn it on. Transports:
+  serial, 1394, USB, and since Windows 8 **KDNET**, which drives the NIC
+  itself through a small polled module of its own, never through the
+  OS's NIC driver or its TCP/IP stack, because those are frozen while
+  the kernel is stopped. Traffic is encrypted with a key set at
+  `bcdedit /dbgsettings net`. Separately, **local kernel debugging**
+  (`kd -kl`, LiveKd) reads a running kernel's memory without stopping
+  it.
+- **Linux** has **KGDB**, a GDB remote-protocol stub (`kernel/debug/`,
+  with `arch/x86/kernel/kgdb.c` for the CPU half), armed by `kgdboc=` on
+  the boot line and `kgdbwait` to stop early. Mainline transports are
+  serial (`kgdboc`) and the EHCI debug port; **there is no network
+  transport in mainline** -- kgdboe existed out of tree, over netpoll,
+  and was never merged. For looking at a RUNNING kernel Linux mostly
+  does not stop it at all: `drgn` over `/proc/kcore` reads live memory
+  with full types, and kprobes, ftrace and eBPF trace without halting.
+- **QEMU's gdbstub** stops the emulated CPU, so it works before the
+  kernel runs and on a machine too wedged to run anything -- and only
+  under QEMU.
+
+toy-os follows **Linux's shape for the stub** (the standard GDB protocol,
+generic protocol code beside an arch half, armed only from the boot
+line) and **Windows' shape for the network** (a transport that owns the
+NIC through its own polled path, with a key). Copying the protocol
+rather than inventing one is the decision with the most weight: GDB,
+its DWARF reader and its disassembler are the expensive part, and a
+stock `gdb` is on every developer machine.
+
+## Stage 2: the halting stub over serial -- BUILT
+
+`kdebug=ttyS1` (or `ttyS2`, `ttyS3`, optionally `,wait`) claims that port
+at boot, polled and never interrupt-driven. From then on:
+
+- **Entry.** `#BP` (a breakpoint or a compiled-in `int3`), `#DB` (a
+  step, or a DR0-3 slot firing), an NMI, a `^C` or the first `$` of an
+  attaching debugger (polled from the timer tick), a ring-0 fault about
+  to panic (`kdebug_fatal()`, at the faulting frame), and
+  `panic_finish()` for the panics that have no trap frame.
+- **Protocol** (`kernel/debug/gdbstub.c`): `?`, `g`/`G` (the 24 core
+  registers; GDB marks x87/SSE unavailable), `m`/`M`, `c`/`s`, `Z0`-`Z4`
+  (software breakpoints; `Z1` hardware execute; `Z2` write and `Z4`
+  access watchpoints -- x86 has no read-only watch, so `Z3` is "not
+  supported"), `D`/`k` (both detach -- a kernel is not killed by its
+  debugger), `qSupported`, `qOffsets` (the KASLR delta, so GDB relocates
+  an unmodified `kernel.bin`), `qAttached`. Everything else gets the
+  empty reply, which the protocol defines as "unsupported".
+- **CPU half** (`kernel/arch/x86_64/kdebug_x86.c`): the trap frame as
+  GDB's register file, DR0-DR7, and memory through a page-table walk of
+  the current CR3 -- an address nothing maps is an `E14` reply, not a
+  fault with interrupts off. Kernel text is read-only (W^X), so a
+  breakpoint is written with CR0.WP cleared for that one store. A
+  read-only USER page is refused: it may be copy-on-write shared.
+
+**The traps, each of which breaks something silently:**
+
+- **Nothing on the stopped path may take a lock, allocate or log.** It
+  runs at an arbitrary instruction with interrupts off -- inside
+  kmalloc, holding a mount lock, halfway through a klog line.
+- **Software breakpoints are patched only while the kernel runs**:
+  lifted on every stop, written back on every resume (KGDB does the
+  same). A step does not patch the one it starts on, or it would
+  execute the int3 instead of the real instruction.
+- **The idle loop keeps its tick while the stub is armed**, because the
+  tick is what hears a break-in. A tickless idle with nothing to do
+  would sleep through the `^C`.
+- **A single step masks IF** so it lands on the next instruction rather
+  than in the timer's ISR, and restores it after -- so stepping a
+  `cli`/`sti`/`popf` gets IF wrong. KGDB has the same blind spot.
+- **Clearing CR0.WP is safe only with one CPU running.** SMP stage 3
+  (`docs/smp-design.md`) must stop the other CPUs first -- an NMI IPI,
+  KGDB's `kgdb_roundup_cpus()` -- before a breakpoint write or any stop.
+- **Stopping stops time for everything the kernel talks to.** A USB
+  audio stream underruns, TCP peers retransmit and may give up, and
+  timers fire late all at once on resume. That is the nature of a
+  halting debugger, not a bug to fix; stage 1 is the answer for the
+  cases that cannot afford it.
+- **`bt` stops at `isr_common`**, the interrupt frame: there is no CFI
+  for the hop from a trap frame to what it interrupted. `info registers`
+  on the stopped frame is the way across.
+- **On real hardware a break-in can lose bytes**: the tick polls one
+  byte per tick and a 16550's FIFO holds 16, so the rest of GDB's first
+  packet can overrun. The packet fails its checksum and GDB resends it;
+  QEMU's socket chardev is flow-controlled and never loses one.
+
+Tested by `kdebug_test` KTESTs (a scripted transport plays GDB through a
+real breakpoint in kernel text) and `tools/kdebug_test.py` (a real port,
+a protocol client, then a real GDB).
+
+## Stage 1: live inspection without halting -- DESIGNED
+
+The drgn / `kd -kl` shape: read (and, deliberately, write) kernel memory
+and resolve symbols on a RUNNING machine, reached over the network that
+already works -- `remote.py` to `telnetd`. Nothing stops, so nothing a
+halt breaks (audio, TCP, the desktop) is disturbed, and it works on the
+ASUS today with no transport work.
+
+- A privileged read/write of kernel virtual memory through the same
+  page-table walk as stage 2 (`kdb_arch_mem_read/write`), exposed as a
+  `/bin` program, and symbol-to-address lookup (`ksyms` only goes the
+  other way today).
+- Host-side, the useful half is `drgn`-like: a `tools/` script that
+  reads a structure by NAME using `kernel.debug`'s DWARF and the KASLR
+  delta, over `remote.py exec`.
+- Gated like `telnetd`: off unless enabled, since it hands the network
+  the kernel's memory.
+
+## Stage 3: the network transport -- DESIGNED
+
+KDNET's shape, because it is the only one that works on a machine whose
+kernel is stopped:
+
+- **The stub owns the NIC while stopped, through a polled path of its
+  own**: a `poll_tx`/`poll_rx` pair per driver that runs with interrupts
+  off, allocates nothing and touches no lock -- Linux's netpoll
+  contract. A minimal ARP responder and UDP framing live in the stub,
+  NOT the kernel's stack (`kernel/net/`), which is frozen mid-whatever
+  when the machine stops.
+- **While the kernel runs, the OS driver owns the NIC**, and a hook in
+  `net_rx()` hands the debugger's UDP port to the stub: that is the
+  break-in, the network's `^C`.
+- **A key, set on the boot line with the port** (`kdebug=net,...`), and
+  every datagram authenticated with it; a wrong one is dropped
+  unanswered. The serial stub needs none -- the cable is the access
+  control -- but a LAN is not a cable. GDB speaks plain RSP, so a host
+  bridge (`tools/`) carries GDB's TCP to the authenticated UDP, the role
+  WinDbg's own KDNET client plays on Windows.
+- **Driver order is by risk**: e1000 and virtio-net (QEMU, testable
+  headless), then `r8169` (the Lenovo's onboard NIC, a PCIe device with
+  a simple ring), then **the ASUS last: its only NIC is the UE300 behind
+  xHCI**, so a polled path means driving xHCI's event ring by hand with
+  interrupts off (`xhci_service()` is public) from a stop that may have
+  landed inside the xHCI interrupt handler itself. That is the riskiest
+  piece of the plan, and why it is last.
+
+## Not planned
+
+- **User-space debugging.** A debugger for ring-3 processes is `ptrace`
+  and belongs with signals and `strace` (`docs/signals-design.md`), not
+  with the kernel stub.
+- **Processes as GDB threads** (`qfThreadInfo`, `Hg`) and **`monitor`
+  commands** (`qRcmd` -- `monitor ps`, `monitor dmesg`, Windows' `!process`
+  extensions, KDB's commands) are real improvements with no blocker;
+  they are roadmap items, not stages.

@@ -69,6 +69,7 @@ extern char __kimage_start[];
 #include <stdint.h>
 #include "kversion.h" // kversion_banner(), kversion_query_init() -- QUERY_VERSION
 #include "driver.h"   // driver_query_init() -- QUERY_DRIVER
+#include "kdebug.h"    // kdebug_init() -- the GDB stub, when `kdebug=` asks
 
 // Zero-padded 2-digit decimal, for the RTC boot-time log line below.
 // klog_write_dec() (klog.h) deliberately doesn't pad, so this used to
@@ -297,6 +298,10 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // advertise something that does not work yet.
     i8042_register_sources();
 
+    // Before serial_irq_init(): claiming COM2 for the debugger must happen
+    // before its IRQ is wired for the debug console. `kdebug=ttySN,wait`
+    // stops right here until a debugger attaches.
+    kdebug_init();
     serial_irq_init(); // COM1 RX -- see serial.c for why this can't run inside serial_init() itself
     // Which port the debug console uses, if any, is debug_console_init()'s
     // line: it is opt-in, and `debugcon=ttyS0` can move it.

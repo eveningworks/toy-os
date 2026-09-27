@@ -10,6 +10,7 @@
 #include "serial.h"   // serial_flush()
 #include "clocksource.h"
 #include "io.h"
+#include "kdebug.h"
 
 int panic_parse_secs(const char *value, int *out) {
     int64_t v;
@@ -63,6 +64,7 @@ void panic_finish(void) {
     // or count a second time, just get the machine back.
     static int entered;
     if (entered++) power_reset_hardware();
+    kdebug_panic();
 
     int secs = panic_secs();
     if (secs > 0)

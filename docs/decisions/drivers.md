@@ -149,39 +149,48 @@ its key list, which silently broke Enter the moment the shell started
 loading layouts from generated files instead of the old compiled-in
 ones -- found live, not by review).
 
-## GDB debugging: QEMU's built-in stub, not an in-kernel serial protocol implementation
+## GDB debugging: QEMU's stub under QEMU, the kernel's own stub on bare metal
 
-`make debug` (`CLAUDE.md`'s "Debugging with GDB" section) boots toy-os
-frozen at CPU reset (`-s -S`) so a real `gdb` on the host can attach
-via `target remote localhost:1234` -- real breakpoints, single-step,
-register/memory inspection. This is QEMU's own built-in GDB remote
-stub: QEMU emulates the CPU directly, so it can expose full debugger
-control over whatever's running in the guest without the guest OS
-needing to implement anything at all.
+**Two stubs, because they answer different questions.** `make debug`
+boots frozen at CPU reset (`-s -S`) under QEMU's own GDB stub: the
+emulator stops the CPU, so it needs no guest code at all, reaches the
+first instruction after GRUB, and still works on a machine too wedged
+to run anything. That was the whole answer while every machine this OS
+ran on was emulated, and this entry used to say an in-kernel stub was
+"simply unnecessary".
 
-Worth stating explicitly because the first framing of this idea (a
-`/btw` suggestion) got it wrong: it proposed toy-os's kernel would need
-to "speak the GDB remote serial protocol" itself -- real, substantial
-protocol work (packet framing, register/memory read-write commands,
-breakpoint handling) on top of `kernel/core/debug_console.c`'s existing
-scope (a handful of if/else-dispatched diagnostic commands). That's
-simply unnecessary: `-s`/`-S` are ordinary QEMU flags, no different in
-kind from `-vnc`/`-serial file:...` already used throughout
-`tools/qmp_test.py`'s testing setup, and they work today with zero
-toy-os code changes. Confirmed directly, not just asserted: `break
-kernel_main` + `continue` over a real `gdb` session correctly ran the
-CPU from reset through GRUB/multiboot2 and stopped exactly at
-`kernel_main`, with a real backtrace showing source file/line.
+**Bare metal made it necessary.** Two laptops now run toy-os, most of
+`docs/bugs.md` reproduces only on them, and no emulator stands behind a
+real CPU. The only thing that can stop one is the kernel itself -- which
+is why Linux has KGDB and Windows KD, both in the kernel image and both
+off until the boot line asks (`kgdboc=`, `bcdedit /debug on`). So
+`kernel/debug/` is a GDB Remote Serial Protocol stub, armed by
+`kdebug=ttySN` and nothing else. It speaks the standard protocol rather
+than a toy-os one because GDB, its DWARF reader and its disassembler are
+the expensive part, and a stock `gdb` is on every developer machine.
 
-The one actual gap, now closed: `CFLAGS`/`USERLAND_CFLAGS` never
-carried `-g`, so `kernel.bin` and every userland ELF had zero DWARF
-debug info -- GDB could still technically attach, but would only ever
-see raw addresses, no function names or source lines, making
-`break kernel_main`-style debugging impossible. Added `-g` to both,
-kept at `-O2` rather than dropping to `-Og`/`-O0` for a separate debug
-build -- same binary as always, just now carrying symbols, at the cost
-of some locals showing "optimized out" in GDB. A real, deliberate
-build-config-simplicity tradeoff, not an oversight.
+**The shape is Linux's**: the protocol (`kernel/debug/gdbstub.c`) is
+generic and the CPU half (`kernel/arch/x86_64/kdebug_x86.c`) is not, as
+`kernel/debug/gdbstub.c` and `arch/x86/kernel/kgdb.c` split. Three
+choices that differ from the obvious ones:
+
+- **Software breakpoints are patched only while the kernel runs** --
+  lifted on every stop, written back on every resume. Memory reads while
+  stopped then show the real bytes, and the stub's own serial poll can
+  never land on one mid-conversation. KGDB does the same.
+- **Memory is reached through a page-table walk first**, so a bad
+  address from GDB is an `E14` reply rather than a fault inside the
+  debugger with interrupts off. Linux uses exception fixups
+  (`copy_from_kernel_nofault`); this kernel has no fixup table, and a
+  walk needs none.
+- **KASLR is reported with `qOffsets`**, so an unmodified
+  `build/kernel.bin` relocates its own symbols in GDB. Linux leaves this
+  to the user (`nokaslr`, or `add-symbol-file` by hand).
+
+The NETWORK transport, the one that reaches the laptops without a serial
+port, is designed but not built: `docs/kdebug-design.md`. `-g` stays in
+`CFLAGS` at `-O2` for both stubs -- the same binary as every other
+build, at the cost of some locals showing "optimized out".
 
 ## ATA's waits are bounded by wall-clock in one context and a spin count in the other
 

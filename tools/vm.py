@@ -51,6 +51,7 @@ import port_guard
 PIDFILE = ".vm.pid"
 SERIAL_SOCK = ".vm.serial"   # COM2: the debug console
 LOG_SOCK = ".vm.log"         # COM1: the kernel log alone
+KDB_SOCK = ".vm.kdb"         # COM3, with --kdebug: the kernel debugger (kdebug=ttyS2)
 QMP_PORT = 4445
 VNC_DISPLAY = 5
 # The host port `put` reaches the guest's tftpd on, derived per slot like
@@ -94,7 +95,7 @@ def _apply_instance(args):
     so every existing caller and every test tool's default still works
     untouched.
     """
-    global PIDFILE, SERIAL_SOCK, LOG_SOCK
+    global PIDFILE, SERIAL_SOCK, LOG_SOCK, KDB_SOCK
     n = getattr(args, "instance", 0) or 0
     if n == "auto":
         n = port_guard.find_free_instance()
@@ -109,6 +110,7 @@ def _apply_instance(args):
         PIDFILE = f".vm.{n}.pid"
         SERIAL_SOCK = f".vm.{n}.serial"
         LOG_SOCK = f".vm.{n}.log"
+        KDB_SOCK = f".vm.{n}.kdb"
     if getattr(args, "qmp_port", None) is None:
         args.qmp_port = QMP_PORT + n
     if getattr(args, "vnc", None) is None:
@@ -452,6 +454,12 @@ def cmd_start(args):
             "-serial", "chardev:ser0",
             "-chardev", f"socket,id=ser1,path={SERIAL_SOCK},server=on,wait=off",
             "-serial", "chardev:ser1"]
+    # A THIRD PORT for the kernel debugger, which must be the third
+    # -serial to be COM3. It does nothing unless the image's GRUB line
+    # carries `kdebug=ttyS2` (tools/kdebug_test.py adds it to a copy).
+    if getattr(args, "kdebug", False):
+        cmd += ["-chardev", f"socket,id=ser2,path={KDB_SOCK},server=on,wait=off",
+                "-serial", "chardev:ser2"]
     # `-no-reboot` BY DEFAULT, so a guest that triple-faults stops
     # instead of looping through the same boot forever while a test
     # waits out its timeout. `--reboot` is the opt-out, for the one kind
@@ -912,6 +920,10 @@ def main():
                          "the ISO's KCMDLINE works on any of them; `vmware` is the "
                          "only one offering a HARDWARE cursor, so that path is "
                          "unreachable under the default `std`.")
+    ap.add_argument("--kdebug", action="store_true",
+                    help="attach COM3 as the unix socket .vm[.N].kdb, for the kernel's "
+                         "GDB stub; the image needs `kdebug=ttyS2` on its GRUB line. "
+                         "`gdb build/kernel.bin -ex 'target remote .vm.kdb'`")
     ap.add_argument("--serial-log", default=None, metavar="PATH",
                     help="also copy everything the guest writes to its serial port "
                          "into PATH, from the first byte -- the record of a boot "

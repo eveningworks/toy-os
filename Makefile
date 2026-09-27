@@ -65,7 +65,18 @@ KCMDLINE ?=
 # DEBUGCON=0 (the delivery checklist says so). KCMDLINE is still yours:
 # this only appends the word.
 DEBUGCON ?= 1
-GRUB_KCMDLINE = $(strip $(KCMDLINE) $(if $(filter 1,$(DEBUGCON)),debugcon))
+
+# KDEBUG=1 -- the kernel's own GDB stub (kernel/debug/). `make run`
+# adds a second serial port, a TCP socket on localhost:$(KDEBUG_PORT);
+# `-serial stdio` is COM1, so it is COM2 and the boot word is
+# `kdebug=ttyS1`. Baked into the media like MENU=1: the next plain
+# `make iso`/`make run` takes it out again. Then, in another terminal:
+#     gdb build/kernel.bin -ex "target remote localhost:1235"
+# Not 1234, which is QEMU's own gdbstub under `make debug`.
+KDEBUG ?=
+KDEBUG_PORT ?= 1235
+GRUB_KCMDLINE = $(strip $(KCMDLINE) $(if $(filter 1,$(DEBUGCON)),debugcon) \
+                        $(if $(filter 1,$(KDEBUG)),kdebug=ttyS1))
 
 GRUB_MKRESCUE := $(shell command -v grub-mkrescue 2>/dev/null || command -v grub2-mkrescue 2>/dev/null)
 
@@ -94,13 +105,10 @@ ASM = nasm
 # changed -- see that -include line's comment for the full reasoning
 # and kernel/include/api/version.h's generation (tools/gen_version.sh) for
 # the one subtlety this tracking requires upstream of it.
-# -g: DWARF debug info, for `make debug` (see that target below) --
-# GDB can already attach to QEMU's own built-in gdbstub with zero
-# kernel-side code (see docs/decisions.md for why an in-kernel GDB
-# remote-serial-protocol stub is unnecessary: QEMU emulates the CPU
-# directly, so real breakpoints/single-step/register-memory inspection
-# work regardless of what the guest OS does), but without -g GDB only
-# ever sees raw addresses -- no function names, no source lines. Kept
+# -g: DWARF debug info, for GDB -- attached to QEMU's own gdbstub
+# (`make debug`) or to the kernel's own stub (`make run KDEBUG=1`,
+# docs/kdebug-design.md). Without -g GDB only ever sees raw
+# addresses -- no function names, no source lines. Kept
 # at -O2 (not dropped to -Og/-O0) deliberately -- same binary as
 # always, just now carrying symbols; some locals may show "optimized
 # out" in GDB, a tradeoff accepted in favor of not needing a second
@@ -2352,10 +2360,15 @@ BOOT_MEDIUM = $(if $(NODISK)$(LIVE),cd,\
                     $(if $(DISK_BOOTABLE),disk,cd))))
 QEMU_BOOT = $(if $(filter disk,$(BOOT_MEDIUM)),-boot order=c,-boot order=d -cdrom $(QEMU_ISO))
 
+# After -serial stdio, so it is COM2 (see KDEBUG above).
+QEMU_KDEBUG_ARGS = -chardev socket,id=kdb,host=127.0.0.1,port=$(KDEBUG_PORT),server=on,wait=off \
+                   -serial chardev:kdb
+QEMU_KDEBUG = $(if $(filter 1,$(KDEBUG)),$(QEMU_KDEBUG_ARGS))
+
 QEMU_RUN = qemu-system-x86_64 $(QEMU_BOOT) $(QEMU_ACCEL) $(QEMU_DISK) \
 	  $(QEMU_INPUT) $(QEMU_USB) \
 	  -serial stdio -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) $(QEMU_FULLSCREEN) -m $(MEM) \
-	  $(QEMU_AUDIO) $(QEMU_NET) $(QEMU_EXTRA)
+	  $(QEMU_AUDIO) $(QEMU_NET) $(QEMU_KDEBUG) $(QEMU_EXTRA)
 
 run: $(RUN_PREREQ)
 	$(QEMU_RUN)
@@ -2446,8 +2459,8 @@ run: $(RUN_PREREQ)
 #   stub, exposed on the standard GDB-over-QEMU port. Emulates the CPU
 #   directly, so it can already do real breakpoints/single-stepping/
 #   register+memory inspection on toy-os with ZERO kernel-side GDB
-#   protocol code -- see docs/decisions.md for why an in-kernel stub
-#   isn't needed. -g in CFLAGS/USERLAND_CFLAGS above is what makes this
+#   protocol code -- in QEMU only; `make run KDEBUG=1` is the kernel's
+#   own stub, the one bare metal has. -g in CFLAGS/USERLAND_CFLAGS above is what makes this
 #   actually useful (DWARF symbols -- function names/source lines, not
 #   just raw addresses).
 # -S: freeze the CPU at reset instead of booting immediately, so it
