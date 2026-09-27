@@ -329,7 +329,7 @@ int keyboard_getchar_mods(uint8_t *out_mods);
 void keyboard_suspend_blocking(int on);
 
 // The SECOND reason the ring-0 reader stands down: a ring-3 process is
-// reading the physical console through fd 0 (syscall_fd.c). Claimed by
+// reading the physical console through fd 0 (kernel/tty/tty_fd.c). Claimed by
 // the first such read and released when that process dies, so the
 // kernel shell's prompt comes back on its own if the reader crashes.
 //

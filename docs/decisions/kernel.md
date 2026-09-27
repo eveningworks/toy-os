@@ -3100,7 +3100,7 @@ agree on the alternative: Linux defines each call with
 implementations in Io/Ob/Ps/Mm. Neither has a dispatch chain, and
 neither keeps the implementations together -- the table is the only
 central thing. The handlers here now live in `kernel/proc/syscall_fd.c`,
-`kernel/fs/fs_syscalls.c`, `kernel/proc/proc_syscalls.c`,
+`kernel/net/net_syscalls.c`, `kernel/fs/fs_syscalls.c`, `kernel/proc/proc_syscalls.c`,
 `kernel/proc/win_syscalls.c` and `kernel/core/sys_syscalls.c`.
 
 **Why the trace description shares the row.** This is where toy-os
@@ -3770,8 +3770,8 @@ asks that question now, with the taskbar clock as its own control.
 ## fd 0 is the console, it BLOCKS, and the first ring-3 reader takes the keyboard
 
 `sys_read(0, ...)` reads the physical console keyboard and parks the
-caller when nothing is typed (`kernel/proc/syscall_fd.c`'s
-`sys_do_read_console()`). It exists because a ring-3 shell had nowhere
+caller when nothing is typed (`kernel/tty/tty_fd.c`'s
+`console_read()`). It exists because a ring-3 shell had nowhere
 to read a line from: `SYS_READ_KEY` is non-blocking by hard requirement,
 so `/bin/tosh` would have had to spin-poll the keyboard for its whole
 idle life. That is why this file used to say there was no `/bin/tosh`
@@ -3843,7 +3843,7 @@ reader would have made a crash a machine you cannot type at.
 Whoever waits for a key also FLUSHES the screen: the console draws into
 a back buffer and the ring-0 reader's idle loop is what normally
 presents it. That loop is suspended on this reader's behalf, so
-`sys_do_read_console()` presents once before parking -- the same
+`console_read()` presents once before parking -- the same
 "output is finished, we are waiting for a human" moment.
 
 None of this is console ownership done properly. A per-TTY input queue
@@ -3927,7 +3927,7 @@ SILENTLY. That was latent while the only reader was a shell draining
 continuously; `|` makes the reader another process that may not have
 been scheduled yet, so the pipe fills every time.
 
-Atomicity is affordable rather than aspirational: `sys_do_write_pipe()`
+Atomicity is affordable rather than aspirational: `pipe_fd_write()`
 CLAMPS a pipe write to `PIPE_BUF_SIZE`, so one write always fits once
 the pipe drains and a parked writer can never be waiting on a request
 too large to satisfy. POSIX guarantees the same for writes up to
@@ -8452,7 +8452,7 @@ program printing to the physical console in that window landed in the
 reply, and nothing typed on COM2 could reach the program or stop it.
 Now the port's RX IRQ feeds the line discipline; the console reads
 whole lines from it; and a command's program gets the terminal as
-0/1/2 (`fd_set_kernel_tty()`, an `FD_KIND_TTY` descriptor) and leads a
+0/1/2 (`fd_set_kernel_tty()`, a `tty_fd_ops` descriptor) and leads a
 session on it (`tty_attach_kernel_session()`). So it can read the line,
 Ctrl-C and Ctrl-D work -- in the IRQ, while the command runs -- and it
 can ask the terminal's size or go raw. The sink swap stays for the
@@ -8464,7 +8464,7 @@ command, so its child inherits the terminal; a dozen tools start
 long-running programs that way, and their later output would land in
 the middle of later replies. So the console hangs the terminal up when
 each command returns (`tty_hangup()`, a new session GENERATION that
-every `FD_KIND_TTY` descriptor carries). A descriptor from an old
+every `tty_fd_ops` descriptor carries). A descriptor from an old
 session then behaves as a CONSOLE one: writes go to the machine
 console, reads come from its keyboard, and termios and job control name
 tty0 -- what a leftover job had before this terminal existed. Linux's
@@ -8498,3 +8498,41 @@ owner, and the discipline delivers Ctrl-C to that owner's own group
 (`kernel_session`) -- a pty holds it back from the owner's group,
 because there the owner is a shell reading its own terminal.
 
+
+## A description carries an ops pointer, not a kind
+
+`struct open_file` has `const struct fd_ops *ops` where it had
+`enum fd_kind kind`, and `sys_read()`/`sys_write()`/`lseek`/`fstat`/
+close dispatch through it. Each kind's table lives with the subsystem
+that owns the stream: `file_fd_ops` in `kernel/fs/fs_syscalls.c`, the
+pipe ends' in `pipe.c`, `socket_fd_ops` in `kernel/net/net_syscalls.c`,
+the terminals' in `kernel/tty/tty_fd.c`, the logs' in
+`kernel/core/log_fd.c`, `shm_fd_ops` in `shm.c`.
+
+**The obvious way was the one the code had**: an enum, and a `switch
+(f->kind)` in each of read, write, close, fstat, lseek and `fd_tty()`,
+with every kind's I/O in `syscall_fd.c`. It held while there were three
+kinds and stopped holding at eleven. A new kind had to find five or more
+switches, and missing one did not fail to compile -- it fell through a
+`default:` into EBADF. That is how the app log once shipped logging
+nothing.
+
+**Why a pointer and not a table indexed by the enum.** Indexing
+`fd_ops_of[f->kind]` would have been the smaller diff and kept every
+`kind ==` test elsewhere valid. It was declined because the enum is the
+part that does not scale: every kind still has to be named in one
+central header, so a driver cannot define a stream in its own file.
+Linux's `f_op` and NT's `DriverObject->MajorFunction` both put the
+dispatch table's ADDRESS on the object for exactly this reason -- a
+`/dev` node or a driver-as-a-process (`docs/umdf-design.md`) supplies its
+ops without touching the descriptor layer. "Which kind is this" is then
+asked by identity, `f->ops == &pipe_write_fd_ops`, which is what Linux's
+`get_pipe_info()` does with `f_op == &pipefifo_fops`.
+
+**What the table deliberately does not have.** No `poll` op, because
+nothing would call it: there is no `poll()`/`select()`, and the slot
+arrives with the syscall that needs it. And the ops do not change how
+anything blocks. `read`/`write` return 1 when they PARKED the caller --
+NT's STATUS_PENDING, the wake writes RAX -- which is the contract the
+`sys_do_*` helpers already had, so each op keeps its own check-and-park
+under the preemption guard rather than having one imposed.

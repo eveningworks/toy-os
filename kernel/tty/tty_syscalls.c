@@ -3,9 +3,8 @@
 // Here rather than in kernel/proc/ because the subsystem that owns a
 // facility owns its handlers -- the shape kernel/include/kernel/
 // syscalls.h describes and syscall_table.c assembles. What is NOT here
-// is reading and writing a pty, which is syscall_fd.c's: those are
-// routed by fd KIND alongside files and pipes, and splitting them out
-// would put half of "what does an fd do" in each of two files.
+// is reading and writing a pty: those are the pty's fd_ops, in
+// tty_fd.c, which syscall_fd.c dispatches to alongside files and pipes.
 #include "syscalls.h"
 #include "syscall_abi.h"
 #include "tty.h"
@@ -31,8 +30,8 @@ int sys_openpty(struct syscall_ctx *c) {
         return 0;
     }
 
-    int mdesc = fd_desc_alloc(FD_KIND_TTY_MASTER, idx);
-    int sdesc = mdesc >= 0 ? fd_desc_alloc(FD_KIND_TTY_SLAVE, idx) : -1;
+    int mdesc = fd_desc_alloc(&pty_master_fd_ops, idx);
+    int sdesc = mdesc >= 0 ? fd_desc_alloc(&pty_slave_fd_ops, idx) : -1;
     int mfd = mdesc >= 0 ? fd_install(c->pml4, mdesc) : -1;
     int sfd = sdesc >= 0 ? fd_install(c->pml4, sdesc) : -1;
 
@@ -102,7 +101,7 @@ int sys_tcsetattr(struct syscall_ctx *c) {
 // fcntl(F_SETFL, O_NONBLOCK), and only that. Here rather than in
 // syscall_fd.c because the one thing that needs it is a terminal
 // emulator draining its child (see SYS_SET_NONBLOCK's ABI note) -- and
-// because syscall_fd.c already routes; this sets.
+// because the fd_ops already route; this sets.
 int sys_set_nonblock(struct syscall_ctx *c) {
     struct open_file *f = fd_get(c->pml4, (int)(int32_t)c->a0);
     if (!f) { c->regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }

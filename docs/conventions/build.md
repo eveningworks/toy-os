@@ -161,7 +161,7 @@ this the obvious way), not from how much history it accumulated.
   a stronger promise and paying for it. **And raising it nearly
   deadlocked pipes** -- `pipe_write()` is all-or-nothing and parks a
   writer that does not fit, which was safe only while 1024 <
-  `PIPE_BUF_SIZE`; `sys_do_write_pipe()` clamps explicitly now. A
+  `PIPE_BUF_SIZE`; `pipe_fd_write()` clamps explicitly now. A
   constant three files away was load-bearing for an invariant nothing
   checked.
 - **`sys_write()` COMPLETES THE WHOLE BUFFER, because the kernel caps one

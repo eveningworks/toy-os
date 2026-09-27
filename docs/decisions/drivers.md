@@ -2577,7 +2577,7 @@ out device sessions by a policy file naming which component gets which
 device.
 
 **The claim is a syscall pair and a table beside the binding, not an
-fd.** The fd is VFIO's shape and `FD_KIND_SHM` is the in-tree precedent
+fd.** The fd is VFIO's shape and `shm_fd_ops` is the in-tree precedent
 for one you may only mmap, so a new kind would have been cheap. Two
 things decided against it. A claim fd is inherited by `fork()` and
 `dup`able, so "exactly one holder" quietly becomes "one open-file

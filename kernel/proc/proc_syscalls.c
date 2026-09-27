@@ -503,17 +503,17 @@ static size_t copy_env_from_user(uint64_t pml4, uint64_t uptr, char *out, size_t
 // a connected SOCKET is accepted for either, which is what lets a
 // handler spawned per connection be an ordinary filter. Returns -1 for
 // anything else, including an fd this process does not hold.
-static int spawn_std_desc(uint64_t pml4, int fd, enum fd_kind want) {
+static int spawn_std_desc(uint64_t pml4, int fd, const struct fd_ops *want) {
     // The sentinel is not an fd and is not looked up: it asks for a
     // FRESH log description, which the child then owns. Only for the
     // child's stdout -- there is nothing to read back from a log, so
     // accepting it for stdin would be a descriptor that answers every
     // read with failure.
-    if (fd == SPAWN_FD_LOG && want == FD_KIND_PIPE_W)
-        return fd_desc_alloc(FD_KIND_LOG, -1);
+    if (fd == SPAWN_FD_LOG && want == &pipe_write_fd_ops)
+        return fd_desc_alloc(&applog_fd_ops, -1);
     struct open_file *f = fd_get(pml4, fd);
     if (!f) return -1;
-    if (f->kind != want && f->kind != FD_KIND_SOCKET) return -1;
+    if (f->ops != want && f->ops != &socket_fd_ops) return -1;
     return fd_desc_index(pml4, fd);
 }
 
@@ -524,21 +524,12 @@ static int spawn_std_desc(uint64_t pml4, int fd, enum fd_kind want) {
 // what is allowed, not what is not: a pty MASTER is writable too, and a
 // write to it is INPUT, so a child's errors would be typed at the shell.
 static int spawn_err_desc(uint64_t pml4, int fd) {
-    if (fd == SPAWN_FD_LOG) return fd_desc_alloc(FD_KIND_LOG, -1);
-    if (fd == SPAWN_FD_KMSG) return fd_desc_alloc(FD_KIND_KLOG, -1);
+    if (fd == SPAWN_FD_LOG) return fd_desc_alloc(&applog_fd_ops, -1);
+    if (fd == SPAWN_FD_KMSG) return fd_desc_alloc(&klog_fd_ops, -1);
     struct open_file *f = fd_get(pml4, fd);
     if (!f) return -1;
-    switch (f->kind) {
-    case FD_KIND_CONSOLE: case FD_KIND_KLOG: case FD_KIND_LOG:
-    case FD_KIND_PIPE_W: case FD_KIND_SOCKET: case FD_KIND_TTY_SLAVE:
-    case FD_KIND_TTY:
-        break;
-    case FD_KIND_FILE:
-        if (f->file.mode != FD_MODE_WRITE) return -1;
-        break;
-    default:
-        return -1;
-    }
+    if (!f->ops->write || (f->ops->flags & FD_OPS_WRITE_IS_INPUT)) return -1;
+    if (f->ops == &file_fd_ops && f->file.mode != FD_MODE_WRITE) return -1;
     return fd_desc_index(pml4, fd);
 }
 
@@ -702,7 +693,7 @@ int sys_spawn(struct syscall_ctx *c) {
     int stdout_desc = -1, stdin_desc = -1, stderr_desc = -1;
     int ok = 1;
     if (msg.stdout_fd != -1) {
-        stdout_desc = spawn_std_desc(pml4, (int)msg.stdout_fd, FD_KIND_PIPE_W);
+        stdout_desc = spawn_std_desc(pml4, (int)msg.stdout_fd, &pipe_write_fd_ops);
         if (stdout_desc < 0) {
             klog_write(KLOG_ERR "syscall: spawn() rejected -- stdout fd isn't this process's pipe write end or socket\n");
             spawn_rc = -EBADF;
@@ -710,7 +701,7 @@ int sys_spawn(struct syscall_ctx *c) {
         }
     }
     if (ok && msg.stdin_fd != -1) {
-        stdin_desc = spawn_std_desc(pml4, (int)msg.stdin_fd, FD_KIND_PIPE_R);
+        stdin_desc = spawn_std_desc(pml4, (int)msg.stdin_fd, &pipe_read_fd_ops);
         if (stdin_desc < 0) {
             klog_write(KLOG_ERR "syscall: spawn() rejected -- stdin fd isn't this process's pipe read end or socket\n");
             spawn_rc = -EBADF;
@@ -723,10 +714,10 @@ int sys_spawn(struct syscall_ctx *c) {
     int detach_in = -1, detach_out = -1;
     if (ok && (msg.flags & SPAWN_DETACH)) {
         struct open_file *f0 = fd_get(pml4, 0), *f1 = fd_get(pml4, 1);
-        if (stdin_desc < 0 && f0 && f0->kind == FD_KIND_TTY)
-            stdin_desc = detach_in = fd_desc_alloc(FD_KIND_CONSOLE, -1);
-        if (stdout_desc < 0 && f1 && f1->kind == FD_KIND_TTY)
-            stdout_desc = detach_out = fd_desc_alloc(FD_KIND_CONSOLE, -1);
+        if (stdin_desc < 0 && f0 && f0->ops == &tty_fd_ops)
+            stdin_desc = detach_in = fd_desc_alloc(&console_fd_ops, -1);
+        if (stdout_desc < 0 && f1 && f1->ops == &tty_fd_ops)
+            stdout_desc = detach_out = fd_desc_alloc(&console_fd_ops, -1);
     }
     if (ok && (msg.flags & SPAWN_STDERR)) {
         stderr_desc = spawn_err_desc(pml4, (int)msg.stderr_fd);
@@ -772,7 +763,7 @@ int sys_spawn(struct syscall_ctx *c) {
             // **AND THE TERMINAL BECOMES THE NEW SESSION'S**, which is
             // POSIX acquiring a controlling terminal when a session
             // leader gets one. Ownership is otherwise claimed on the
-            // first READ of a pty slave (syscall_fd.c) -- fine for a
+            // first READ of a pty slave (tty_fd.c) -- fine for a
             // shell that reads before it asks, and wrong for one that
             // asks first: dash calls tcgetpgrp() during startup, got
             // -ENODEV because nobody owned the terminal yet, and

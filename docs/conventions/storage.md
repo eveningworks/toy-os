@@ -1418,7 +1418,7 @@ and TFS3's run coalescing asks rather than assuming: AHCI carries
 scatter-gather. A 256 KiB syscall on ATA becomes four commands inside
 ONE transaction, which is where most of the win is anyway.
 
-Raising it is safe because `bounce_alloc()` HALVES to a 1 KiB floor
+Raising it is safe because `fd_bounce_alloc()` HALVES to a 1 KiB floor
 rather than failing, so a fragmented heap costs throughput and not
 `-ENOMEM`, and because a pipe write is clamped to `PIPE_BUF_SIZE`
 separately -- without that clamp this constant would park a writer on a

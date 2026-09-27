@@ -35,7 +35,7 @@ int heap_os_should_fail_alloc(void) { return fault_should_fail_alloc(); }
 // Making the syscall gate a TRAP gate is what falsifies "nothing
 // preempts kernel code mid-kmalloc": a timer tick lands inside a
 // syscall, switches to a process that also allocates, and two walkers
-// share one free list. bounce_alloc() is on every read and write, so
+// share one free list. fd_bounce_alloc() is on every read and write, so
 // this is the hot path rather than a corner.
 //
 // scheduler_preempt_disable() is enough BECAUSE NO INTERRUPT HANDLER

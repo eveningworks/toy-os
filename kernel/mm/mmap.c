@@ -185,7 +185,7 @@ int sys_mmap(struct syscall_ctx *c) {
     int shm_idx = -1;
     if (shared) {
         f = fd_get(c->pml4, m.fd);
-        if (!f || f->kind != FD_KIND_SHM) { ret = -EBADF; goto out; }
+        if (!f || f->ops != &shm_fd_ops) { ret = -EBADF; goto out; }
         shm_idx = f->shm.idx;
         // The object's size is fixed at creation, so a mapping longer
         // than it would have pages nothing can fault in.
@@ -196,7 +196,7 @@ int sys_mmap(struct syscall_ctx *c) {
         // "Open the wrong way" is EBADF here (errno.h's own words): a
         // mapping is a read of the file, so a write-mode fd cannot
         // back one.
-        if (!f || f->kind != FD_KIND_FILE || f->file.mode != FD_MODE_READ) {
+        if (!f || f->ops != &file_fd_ops || f->file.mode != FD_MODE_READ) {
             ret = -EBADF; goto out;
         }
     }

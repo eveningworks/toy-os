@@ -36,11 +36,9 @@ struct tty; // kernel/tty.h -- fd_tty() below, without dragging it in here
 //
 // One shared namespace for every kind, as in real Unix, rather than a
 // parallel table per kind: a new kind costs close and teardown nothing.
-// Socket fds carry no real state yet (no domain/type distinction, no
-// transport) -- the `socket` arm of the union below is deliberately
-// empty; it exists so a socket slot has *some* member to be valid C,
-// and as the obvious place to grow per-socket state once a NIC driver
-// exists.
+// What a description is, and what it does, comes from its `ops` (struct
+// fd_ops below); whatever state that kind keeps per description lives in
+// its arm of the union, read only by its own ops.
 //
 // ---- TWO LEVELS, which is the whole design ----
 //
@@ -56,8 +54,8 @@ struct tty; // kernel/tty.h -- fd_tty() below, without dragging it in here
 // field on the process, set once at spawn. So there was nowhere for
 // `dup2(pipe, 1)` to record itself, and `>` could not be expressed.
 // Now they are ordinary descriptors that merely start out pointing at
-// the console, and every routing decision is made on the description's
-// KIND rather than on the number.
+// the console, and every routing decision is made through the
+// description's OPS rather than on the number.
 //
 // ---- keyed by CR3, not by pid ----
 //
@@ -103,42 +101,65 @@ struct tty; // kernel/tty.h -- fd_tty() below, without dragging it in here
 
 enum fd_mode { FD_MODE_READ, FD_MODE_WRITE };
 
-// CONSOLE and KLOG are descriptions like any other, which is what lets
-// a descriptor be moved off them. KLOG is the stderr of a process with
-// no terminal -- a service, a desktop app -- so it can still say
-// something a test can read (docs/decisions.md, "stderr is the
-// terminal's, and the kernel log only without one").
-enum fd_kind {
-    FD_KIND_FILE, FD_KIND_SOCKET, FD_KIND_PIPE_R, FD_KIND_PIPE_W,
-    FD_KIND_CONSOLE, FD_KIND_KLOG,
-    // The two ends of a pseudo-terminal (kernel/pty.h). Two kinds rather
-    // than one with a flag, because every switch in syscall_fd.c
-    // dispatches on the kind and the two ends do OPPOSITE things: a
-    // write to the master is input, a write to the slave is output.
-    FD_KIND_TTY_MASTER, FD_KIND_TTY_SLAVE,
-    // A named shared-memory object (kernel/mm/shm.c). It is never read
-    // or written through -- the only thing you may do with one is
-    // SYS_MMAP it -- so every I/O path refuses it by falling off its
-    // kind switch, which is what a new kind should cost.
-    FD_KIND_SHM,
-    // A write goes to the application log (api/applog.h), tagged with
-    // the writing program's name. What a SERVICE's stdout is, so its
-    // ordinary output is captured and attributed instead of landing on
-    // a console nobody is reading. Never readable: there is nothing to
-    // read back through a descriptor, and `log` reads the file.
-    FD_KIND_LOG,
-    // A terminal by TTY INDEX, whatever its driver -- the serial debug
-    // console's today. Unlike a pty end it has no second end to close,
-    // so it records the SESSION GENERATION it was opened in instead: a
-    // descriptor that outlives its session (tty_hangup()) behaves as a
-    // CONSOLE one from then on -- what a leftover job had before this
-    // terminal existed.
-    FD_KIND_TTY
+struct open_file;
+struct syscall_ctx;
+struct sys_stat;
+
+// WHAT A DESCRIPTION DOES, as a table -- Linux's `struct file_operations`,
+// NT's driver dispatch table. Each kind of stream defines one beside the
+// subsystem that owns it (a pipe's in pipe.c, a socket's in
+// kernel/net/net_syscalls.c) and the descriptor layer only dispatches, so
+// a new kind of stream is a new table and nothing here changes.
+//
+// **read AND write RETURN 1 WHEN THEY PARKED THE CALLER**, and then the
+// syscall has no result yet -- the wake writes RAX (NT's STATUS_PENDING).
+// Otherwise they return 0 with the result already in c->regs[14]. Each
+// op keeps its own check-and-park dance; the table does not add one.
+//
+// A NULL slot is an answer, not an omission: no read or write is EBADF
+// (the wrong end of a pipe, a log that has no reader), no seek is
+// ESPIPE, and no tty() means isatty() is false.
+struct fd_ops {
+    const char *name;       // what a log line calls this kind
+    int  (*read)(struct syscall_ctx *c, struct open_file *f, uint64_t ubuf, uint64_t len);
+    int  (*write)(struct syscall_ctx *c, struct open_file *f, uint64_t ubuf, uint64_t len);
+    // fd_desc_alloc()'s `aux` -- the index into the owner's own table --
+    // stored wherever this kind keeps it. NULL for a kind that has none.
+    void (*open)(struct open_file *f, int aux);
+    void (*release)(struct open_file *f); // the LAST reference is gone
+    // SYS_LSEEK: the new position, or a negative errno.
+    int64_t (*seek)(struct open_file *f, int64_t off, uint64_t whence);
+    void (*stat)(struct open_file *f, struct sys_stat *out); // size, if it has one
+    struct tty *(*tty)(struct open_file *f); // the terminal, or NULL if hung up
+    unsigned flags;
 };
+
+// A WRITE TO IT IS INPUT, not output -- a pty master's is typed at the
+// terminal. What stops a child's stderr being pointed at one.
+#define FD_OPS_WRITE_IS_INPUT 0x1
+
+// Every kind there is, each defined by its owner.
+extern const struct fd_ops file_fd_ops;        // kernel/fs/fs_syscalls.c
+extern const struct fd_ops pipe_read_fd_ops;   // kernel/proc/pipe.c
+extern const struct fd_ops pipe_write_fd_ops;  // kernel/proc/pipe.c
+extern const struct fd_ops shm_fd_ops;         // kernel/mm/shm.c
+extern const struct fd_ops socket_fd_ops;      // kernel/net/net_syscalls.c
+extern const struct fd_ops console_fd_ops;     // kernel/tty/tty_fd.c
+extern const struct fd_ops pty_master_fd_ops;  // kernel/tty/tty_fd.c
+extern const struct fd_ops pty_slave_fd_ops;   // kernel/tty/tty_fd.c
+extern const struct fd_ops tty_fd_ops;         // kernel/tty/tty_fd.c
+extern const struct fd_ops klog_fd_ops;        // kernel/core/log_fd.c
+extern const struct fd_ops applog_fd_ops;      // kernel/core/log_fd.c
+
+// A kernel buffer for one transfer: asks for `*len` and halves down to a
+// 1 KiB floor on a fragmented heap, reporting what it got -- the caller
+// then moves less, which every read and write op already handles as a
+// short transfer. kfree() it. NULL only below the floor.
+void *fd_bounce_alloc(uint64_t *len);
 
 struct open_file {
     int refs; // 0 = free. dup() makes it 2; the last unref tears down.
-    enum fd_kind kind;
+    const struct fd_ops *ops; // NULL only while free
     // SYS_SET_NONBLOCK: a read that would park returns -EAGAIN instead.
     // On the DESCRIPTION, so a dup2'd copy shares it -- which is what
     // Linux does with O_NONBLOCK and is what makes "set it once on the
@@ -188,9 +209,9 @@ struct open_file *fd_desc_at(int i);
 int fd_desc_count(void);
 
 // --- descriptions ---
-// Allocates one with refs = 1. `aux_idx` is the pipe or pty index for
-// the kinds that have one, and ignored for the rest.
-int  fd_desc_alloc(enum fd_kind kind, int aux_idx);
+// Allocates one with refs = 1. `aux_idx` goes to ops->open -- the pipe,
+// pty, shm or tty index for the kinds that have one.
+int  fd_desc_alloc(const struct fd_ops *ops, int aux_idx);
 
 // The TERMINAL an fd names, or NULL when it is not one. What
 // SYS_TCSETPGRP, SYS_TCGETPGRP and the termios calls resolve first --
@@ -276,6 +297,8 @@ int sys_read(struct syscall_ctx *c);
 int sys_close(struct syscall_ctx *c);
 int sys_dup(struct syscall_ctx *c);
 int sys_dup2(struct syscall_ctx *c);
+
+// kernel/net/net_syscalls.c -- sockets, and configuring the stack
 int sys_socket(struct syscall_ctx *c);
 int sys_send(struct syscall_ctx *c);
 int sys_recv(struct syscall_ctx *c);
@@ -289,6 +312,8 @@ int sys_net_config(struct syscall_ctx *c);
 int sys_net_rename(struct syscall_ctx *c);
 int sys_net_resolved(struct syscall_ctx *c);
 int sys_net_arp_probe(struct syscall_ctx *c);
+
+// kernel/proc/pipe.c
 int sys_pipe(struct syscall_ctx *c);
 
 // kernel/fs/fs_syscalls.c -- the path-keyed filesystem calls

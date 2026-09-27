@@ -3,8 +3,8 @@
 // Every ring-3 `int 0x80` arrives here. What happens next is one
 // bounds-checked call through the table in syscall_table.c; the
 // handlers themselves live with the subsystem that owns them
-// (syscall_fd.c, ../fs/fs_syscalls.c, proc_syscalls.c, win_syscalls.c,
-// ../core/sys_syscalls.c).
+// (syscall_fd.c, ../fs/fs_syscalls.c, ../net/net_syscalls.c, proc_syscalls.c,
+// win_syscalls.c, ../core/sys_syscalls.c).
 //
 // This file used to be that chain -- 37 branches of `else if (rax ==
 // ...)` over 40 syscalls, with every handler's locals summed onto one

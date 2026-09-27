@@ -84,6 +84,7 @@ whenever a headline here tells you something you did not already know.
 - **Kernel stacks are 16 KiB, have a GUARD PAGE, and carry a CANARY**
 - **A FAILED SYSCALL RETURNS `-ERRNO`, AND `-1` IS `-EPERM`.**
 - **FILE DESCRIPTORS ARE TWO LEVELS, AND 0/1/2 ARE ORDINARY ENTRIES.**
+- **A KIND OF STREAM IS A `struct fd_ops`, DEFINED BESIDE ITS OWNER.**
 - **A FULL PIPE BLOCKS ITS WRITER, AND A CHILD INHERITS ONLY 0/1/2.**
 - **One process can run another and read its output**
 - **Per-process facts exist, and Task Manager is a ring-3 app.**

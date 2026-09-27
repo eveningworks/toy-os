@@ -191,7 +191,7 @@ an `fs_ops` entry taking a resolved handle, or a VFS inode cache keyed
 by path and invalidated on rename and delete -- the second being smaller
 and bounded by the same correctness question stage 2 must answer anyway.
 
-**Note what is NOT a target here.** `sys_do_write_file()` resolves twice
+**Note what is NOT a target here.** `file_fd_write()` resolves twice
 on an `O_APPEND` write, once for `fs_size()` and once for the write, and
 its comment says why: re-reading the size is what makes two appenders
 interleave whole writes instead of overwriting each other. That is a

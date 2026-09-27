@@ -256,7 +256,7 @@ running a handler is a place a switching handler can strand.**
 
 1. **The preemption guard was left raised across a park.** Every
    blocking syscall calls `scheduler_preempt_enable()` AFTER
-   `scheduler_block_current()` -- see `sys_do_read_pipe()`. Under the
+   `scheduler_block_current()` -- see `pipe_fd_read()`. Under the
    old switch that line still ran; under this one it does not run until
    the process is resumed, so the whole machine stopped preempting
    while somebody else held the CPU. Measured as three tty tests

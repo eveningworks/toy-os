@@ -4,7 +4,7 @@
 WHAT IS UNDER TEST
 ------------------
 A ring-3 process reading the physical console. Until fd 0 could be read
-(kernel/proc/syscall_fd.c's sys_do_read_console) the only way into ring
+(kernel/tty/tty_fd.c's console_read) the only way into ring
 3 from the keyboard was the non-blocking SYS_READ_KEY, so a shell would
 have had to spin-poll the keyboard forever -- which is why
 docs/decisions.md recorded that there was no /bin/tosh yet.

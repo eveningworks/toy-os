@@ -803,7 +803,7 @@ run on, not by order.
 - [x] ~~Batch TFS3's allocation bitmap into the deferred transaction~~ done -- 1138 -> 623 write commands per 64 MiB
 - [ ] Batch the dirty POINTER TABLES too -- blocked on `g_mcache` needing to flush a second mount's dirty entry rather than discard it
 - [ ] Remove one of the file path's two copies -- scatter/gather the PRDT over the kernel buffer instead of the driver's bounce
-- [ ] Reuse the read/write bounce buffer instead of a `kmalloc` per syscall -- `bounce_alloc()` allocates and frees up to 256 KiB every call
+- [ ] Reuse the read/write bounce buffer instead of a `kmalloc` per syscall -- `fd_bounce_alloc()` allocates and frees up to 256 KiB a call
 - [ ] Scatter-gather in `ata.c`, so legacy ATA can exceed 64 KiB per command -- one PRD's byte count is 16-bit and it uses a single entry
 - [ ] Read-ahead on sequential reads -- wants the asynchronous `block_device` split first, to issue a read while the last is consumed
 - [ ] A write-back page cache -- `docs/pagecache-design.md`, DEMOTED there by measurement: the workload is not read-bound

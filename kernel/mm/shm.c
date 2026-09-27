@@ -329,7 +329,7 @@ int sys_shm_open(struct syscall_ctx *c) {
     // A DESCRIPTION plus a descriptor naming it, fs_syscalls.c's pairing:
     // fd_desc_alloc() hands back the ONE reference and fd_install() only
     // points at it, so the unref belongs on the failure path alone.
-    int di = fd_desc_alloc(FD_KIND_SHM, idx);
+    int di = fd_desc_alloc(&shm_fd_ops, idx);
     if (di < 0) { shm_put(idx); ret = -ENFILE; goto out; }
     int fd = fd_install(c->pml4, di);
     if (fd < 0) { fd_desc_unref(di); ret = -EMFILE; goto out; }
@@ -524,3 +524,17 @@ KTEST("shm", "a dead address space drops its mappings") {
     shm_put(idx);
     KTEST_ASSERT_EQ((int)shm_npages(idx), 0);
 }
+
+// --- a shared-memory object as a descriptor ----------------------------
+//
+// Never read or written through -- the only thing to do with one is
+// SYS_MMAP it -- so it has no read or write op and both calls refuse it.
+
+static void shm_fd_open(struct open_file *f, int idx) { f->shm.idx = idx; }
+// A MAPPING outlives its descriptor, so this drops one reference and not
+// necessarily the object -- POSIX's close-then-keep-the-map.
+static void shm_fd_release(struct open_file *f) { shm_put(f->shm.idx); }
+
+const struct fd_ops shm_fd_ops = {
+    .name = "shm", .open = shm_fd_open, .release = shm_fd_release,
+};

@@ -550,7 +550,7 @@ static int has_open_files(const struct mount *m) {
     for (int i = 0; i < fd_desc_count(); i++) {
         const struct open_file *f = fd_desc_at(i);
         if (!f) continue;
-        if (f->refs <= 0 || f->kind != FD_KIND_FILE) continue;
+        if (f->refs <= 0 || f->ops != &file_fd_ops) continue;
         if (under(m->point, m->point_len, f->file.name)) return 1;
     }
     return 0;

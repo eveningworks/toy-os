@@ -95,7 +95,7 @@
 // its own per-transfer cap (blkdev_max_sectors_per_xfer()) and legacy
 // ATA's is still 64 KiB, one PRD's 16-bit byte count.
 //
-// Safe to raise because bounce_alloc() HALVES to a 1 KiB floor rather
+// Safe to raise because fd_bounce_alloc() HALVES to a 1 KiB floor rather
 // than failing, so a fragmented heap costs throughput and not -ENOMEM,
 // and because a pipe write is clamped to PIPE_BUF_SIZE separately (see
 // api/pipe.h -- without that clamp this constant would park a writer on

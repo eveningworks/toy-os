@@ -205,26 +205,39 @@ this the obvious way), not from how much history it accumulated.
   A DESCRIPTION is what a stream is (file, pipe end, console, kernel
   log) and is refcounted; a DESCRIPTOR is a number one address space
   uses to name one, and `dup`/`dup2` copy the NAME. `sys_read`/
-  `sys_write` route on the description's KIND, never on the fd number --
-  which is what makes redirection expressible at all. Four things to
+  `sys_write` route through the description's OPS, never on the fd
+  number -- which is what makes redirection expressible at all. Four things to
   know. **The table is keyed by CR3, not by pid**: the legacy `run`
   loader has an address space and no scheduler slot, and reading the
   parent from `procs[current_index]` made its children inherit nothing
   (use `vmm_current_pml4()`). **A spawned child INHERITS the whole
   table**, which is why no `fork()` is needed for `>` and `<` -- the
   shell redirects itself around the spawn, exactly what `posix_spawn()`
-  exists for. **CONSOLE and KLOG are different kinds** so stdout can be
+  exists for. **The console and the kernel log are different kinds** so stdout can be
   redirected without dragging stderr along. And **when a refcount moves
   down a layer, delete the old one**: `SYS_SPAWN` kept its
   `pipe_add_writer()` after the child began taking a reference to the
   description, counted the child twice, and the pipe never reached EOF.
   See `docs/decisions/kernel.md`.
+- **A KIND OF STREAM IS A `struct fd_ops`, DEFINED BESIDE ITS OWNER.**
+  Linux's `file_operations`: the description carries `ops`, and
+  `syscall_fd.c` only dispatches through it -- a file's are in
+  `kernel/fs/`, a pipe's in `pipe.c`, a socket's in
+  `kernel/net/net_syscalls.c`, a terminal's in `kernel/tty/tty_fd.c`,
+  the logs' in `kernel/core/log_fd.c`. So a new kind is a new table and
+  no switch anywhere learns about it. **A NULL slot is an answer**: no
+  `read`/`write` is EBADF, no `seek` is ESPIPE (and fstat's SEEKABLE),
+  no `tty` is isatty() false. **`read`/`write` return 1 when they
+  PARKED the caller** and the wake writes RAX -- NT's STATUS_PENDING --
+  so each op keeps its own check-and-park; the table adds none. "Which
+  kind is this" is asked by identity (`f->ops == &pipe_write_fd_ops`),
+  which is what `f_op == &pipefifo_fops` is in Linux.
 - **A FULL PIPE BLOCKS ITS WRITER, AND A CHILD INHERITS ONLY 0/1/2.**
   Both were forced by `|`. `pipe_write()` is ALL-OR-NOTHING and parks
   when the buffer is full: taking what fitted and reporting a short
   count is something nothing in ring 3 loops on, so a producer faster
   than its reader silently lost the remainder. Atomicity is affordable
-  because `sys_do_write_pipe()` CLAMPS a pipe write to `PIPE_BUF_SIZE`,
+  because `pipe_fd_write()` CLAMPS a pipe write to `PIPE_BUF_SIZE`,
   so a write always fits once drained -- POSIX's `PIPE_BUF` guarantee,
   for the same reason. **That clamp used to be free and is not any
   more**: it held with nothing enforcing it while `SYS_WRITE_MAX` was
@@ -800,8 +813,8 @@ this the obvious way), not from how much history it accumulated.
   because it woke everybody. See `docs/decisions.md`.
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
   The number in `abi/syscall_abi.h`, a handler in the subsystem that
-  owns it (`kernel/proc/syscall_fd.c` for anything taking an fd,
-  `kernel/fs/fs_syscalls.c`, `kernel/proc/proc_syscalls.c`,
+  owns it (`kernel/proc/syscall_fd.c` for the descriptor calls,
+  `kernel/net/net_syscalls.c` for sockets, `kernel/fs/fs_syscalls.c`, `kernel/proc/proc_syscalls.c`,
   `kernel/proc/win_syscalls.c`, `kernel/core/sys_syscalls.c`) with its
   prototype in `kernel/include/kernel/syscalls.h`, and a row in
   `kernel/proc/syscall_table.c`. There is no registry and no init call
@@ -1986,7 +1999,7 @@ connection's retransmission timers are left to the idle loop.
 ## A SERVICE'S STDOUT IS A LOG RECORD TAGGED WITH ITS NAME, AND `SPAWN_FD_LOG` IS HOW A SPAWN ASKS FOR IT
 
 `SPAWN_FD_LOG` (-2) in a spawn's `stdout_fd` gives the child a
-description of kind `FD_KIND_LOG`: everything it writes to fd 1 becomes
+description with `applog_fd_ops`: everything it writes to fd 1 becomes
 one record in the APPLICATION ring (`api/applog.h`), tagged with the
 child's own name. `logd` drains that ring alongside the kernel's and
 writes both to `/var/log/toyos.log`, so `log -u netd` is everything
@@ -2023,10 +2036,10 @@ not a history; the history is the file. A reader compares the sequence it
 wants against the `oldest` every `QUERY_APPLOG` record reports, so a gap
 is visible and `logd` says how many lines it lost.
 
-**A NEW `enum fd_kind` NEEDS ITS ROW IN `sys_write()`'s SWITCH** as well
-as its description: adding `FD_KIND_LOG` without one left every write to
-it falling through the default, so a spawn that took effect still logged
-nothing. `docs/decisions.md` has the rest.
+**ITS `write` OP IS WHAT MAKES IT A LOG** (`applog_fd_ops`,
+`kernel/core/log_fd.c`): a description is only as writable as its ops
+say, which is why the kind once shipped logging nothing -- it had a
+description and no route to a write. `docs/decisions.md` has the rest.
 
 **INIT SPAWNS EVERY SERVICE THIS WAY** unless its descriptor says
 `StandardOutput=inherit`, which is systemd's default and its opt-out.
@@ -4406,7 +4419,7 @@ unable to take the terminal its parent owned -- the very thing sessions
 were added for, failing in the test written for it.
 
 **Ownership is claimed on the first READ of a pty slave**, not at open
-(`kernel/proc/syscall_fd.c` says why: the opener is a terminal emulator
+(`kernel/tty/tty_fd.c` says why: the opener is a terminal emulator
 and the reader is the shell). The terminal joins the READER's session,
 so that is the moment the session is decided.
 

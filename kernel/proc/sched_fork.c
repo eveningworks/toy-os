@@ -793,8 +793,8 @@ static int spawn_kernel(const char *path, const char *args, int pipe_idx,
         // while the serial debug console runs a command, a fresh table
         // names that terminal (fd_set_kernel_tty()), and a job started
         // in the background must not write into the console's replies.
-        int err = detached ? fd_desc_alloc(FD_KIND_KLOG, -1) : -1;
-        int con = detached && fd_kernel_tty() ? fd_desc_alloc(FD_KIND_CONSOLE, -1) : -1;
+        int err = detached ? fd_desc_alloc(&klog_fd_ops, -1) : -1;
+        int con = detached && fd_kernel_tty() ? fd_desc_alloc(&console_fd_ops, -1) : -1;
         pid = scheduler_spawn_group(path, vec, vec_len, pipe_idx >= 0 ? pipe_idx : con,
                                     con, err, env, 0, 0);
         if (err >= 0) fd_desc_unref(err); // the child holds its own

@@ -199,7 +199,7 @@ void tty_set_termios(struct tty *t, const struct tty_termios *tio);
 // always answered, asked of one terminal among several.
 
 // The process that owns `t`, or 0. On the console this is the first
-// process to read fd 0 (syscall_fd.c's rule, unchanged); on a pty it is
+// process to read fd 0 (tty_fd.c's rule, unchanged); on a pty it is
 // set when the pty is created, because the process that opened it is
 // unambiguously the one that has it.
 int  tty_owner(const struct tty *t);
@@ -230,15 +230,21 @@ int  tty_set_fg_pgid(struct tty *t, int pgid);
 void tty_attach_kernel_session(struct tty *t, int pid);
 // Ends the session: no owner, no foreground, and a new GENERATION, so a
 // descriptor from the old one no longer reads or writes HERE -- it falls
-// back to the machine console (syscall_fd.c's FD_KIND_TTY). vhangup(),
+// back to the machine console (tty_fd.c's tty_fd_ops). vhangup(),
 // for a leftover job, except that Linux fails those calls with EIO.
 void tty_hangup(struct tty *t);
 unsigned tty_generation(const struct tty *t);
 
+// kernel/tty/tty_fd.c: an address space is gone, so any console claim it
+// held is released and the kernel shell's prompt comes back.
+void tty_fd_process_gone(uint64_t pml4_phys);
+// ...and an exec moved it to a new address space.
+void tty_fd_rekey(uint64_t old_pml4, uint64_t new_pml4);
+
 // --- the console, as it was ------------------------------------------
 //
 // The pre-layer spelling, kept because the callers are right to ask
-// about "the console" specifically -- syscall_fd.c claims it, and
+// about "the console" specifically -- tty_fd.c claims it, and
 // SYS_TCSETPGRP with no fd means it. One line each, over tty0.
 int  tty_console_owner(void);
 void tty_set_console_owner(int pid);

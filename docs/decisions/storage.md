@@ -153,7 +153,7 @@ timer (`dirty_expire_centisecs`, 30 s), and the journal commits every
 toy-os makes a STRONGER promise -- every write durable when it returns
 -- and pays roughly a thousandfold for it. Closing that gap is a
 write-back cache, not a bigger constant. And it is not free: a 64 KiB
-buffer wants sixteen CONTIGUOUS frames, so `bounce_alloc()` asks for
+buffer wants sixteen CONTIGUOUS frames, so `fd_bounce_alloc()` asks for
 what the call actually needs and halves down to a 1 KiB floor rather
 than failing, which is a short transfer and every caller already handles
 one.
@@ -165,7 +165,7 @@ to retry the whole thing. That is safe only while one write can always
 eventually fit -- which held for free while 1024 < `PIPE_BUF_SIZE`
 (4096), with nothing enforcing it and a header comment stating it as a
 happy consequence. At 64 KiB a writer would park on a request the pipe
-could never satisfy. `sys_do_write_pipe()` clamps explicitly now.
+could never satisfy. `pipe_fd_write()` clamps explicitly now.
 The general shape: **a constant three files away was load-bearing for
 an invariant nothing checked**, and the comment that noticed the
 relationship described it as a coincidence rather than a requirement.

@@ -22,7 +22,7 @@ int main(void) {
     if (sys_openpty(&master, &slave) < 0) return 1;
 
     // **OWNERSHIP IS CLAIMED ON THE FIRST READ OF THE SLAVE**, not at
-    // open -- see syscall_fd.c, where the comment explains that the
+    // open -- see kernel/tty/tty_fd.c, where the comment explains that the
     // opener is a terminal emulator and the reader is the shell. So
     // write something first and read it back, and THIS process is the
     // owner from here on.

@@ -961,7 +961,7 @@ numbers inside `QUERY_FSINFO`.
 
 **A process can be blocked on the console without owning it**, and `tty`
 reports that honestly rather than smoothing it over. Under a compositor
-`sys_do_read_console()` parks the reader *before* claiming anything,
+`console_read()` (`kernel/tty/tty_fd.c`) parks the reader *before* claiming anything,
 because `win_input.c` drains the same key ring to feed the desktop and
 popping a key here would make keystrokes vanish from the desktop at
 random. So a graphical boot with a `/bin/tosh` parked on fd 0 correctly

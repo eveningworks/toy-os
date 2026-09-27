@@ -7,7 +7,7 @@
 // turns keystrokes into a line.
 //
 // What made it possible is a blocking stdin. Until fd 0 could be read
-// (kernel/proc/syscall_fd.c's sys_do_read_console), a ring-3 program
+// (kernel/tty/tty_fd.c's console_read), a ring-3 program
 // had only the non-blocking SYS_READ_KEY and would have had to
 // spin-poll the keyboard for its entire idle life.
 //

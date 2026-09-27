@@ -22,6 +22,7 @@
 #include "scheduler.h" // struct sched_cwd -- the per-process current directory
 #include "ata.h"       // the ATA write-back cache SYS_SYNC writes back
 #include "kfmt.h"      // klog_printf
+#include "heap.h"      // fd_bounce_alloc()'s buffers are kfree()d
 #include <stddef.h>
 
 // SYS_LISTDIR's per-call state, handed to fs_list() as its context and
@@ -177,7 +178,7 @@ int sys_open(struct syscall_ctx *c) {
             // A DESCRIPTION plus a descriptor naming it. Two steps
             // rather than one because dup2 can later point a second
             // descriptor at this same open file.
-            int di = fd_desc_alloc(FD_KIND_FILE, -1);
+            int di = fd_desc_alloc(&file_fd_ops, -1);
             int fd = di >= 0 ? fd_install(pml4, di) : -1;
             if (fd < 0) {
                 if (di >= 0) fd_desc_unref(di);
@@ -662,7 +663,7 @@ int sys_link(struct syscall_ctx *c) {
 // than to the file, and why fdatasync is the same call.
 int sys_fsync(struct syscall_ctx *c) {
     struct open_file *f = fd_get(c->pml4, (int)c->a0);
-    if (!f || f->kind != FD_KIND_FILE) {
+    if (!f || f->ops != &file_fd_ops) {
         c->regs[14] = (uint64_t)(int64_t)-EBADF;
         return 0;
     }
@@ -682,3 +683,137 @@ int sys_sync(struct syscall_ctx *c) {
     c->regs[14] = wrote;
     return 0;
 }
+
+// --- an open file as a descriptor ------------------------------------
+
+static int file_fd_write(struct syscall_ctx *c, struct open_file *f,
+                         uint64_t buf_ptr, uint64_t len) {
+    uint64_t *regs = c->regs;
+    uint64_t pml4 = c->pml4;
+    if (f->file.mode != FD_MODE_WRITE) {
+        klog_write(KLOG_ERR "syscall: write() rejected -- fd is read-only\n");
+        regs[14] = (uint64_t)(int64_t)-EBADF;
+        return 0;
+    }
+    // fs_write_range(), NOT fs_write(). This used to copy into a
+    // NUL-terminated scratch buffer and call fs_write(name, tmp, 1),
+    // which treats its argument as a C STRING -- so a write containing
+    // a zero byte stopped there, wrote only the prefix, AND RETURNED
+    // `len` as if all of it had landed. Text files were unaffected and
+    // everything binary was silently truncated: /bin/mkfiles asking for
+    // 1207 bytes of a derived pattern got 82, because each of its two
+    // chunks stopped at its own first zero.
+    //
+    // fs_write_range() takes an explicit length and treats the buffer
+    // as raw bytes, which is what a write(2) means.
+    //
+    // Heap, not stack -- see fd_fd_bounce_alloc(). This one sits
+    // directly above the whole TFS3 journal and ATA path, which is the
+    // deepest chain in the kernel.
+    char *tmp = fd_bounce_alloc(&len);
+    if (!tmp) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
+    if (!vmm_copy_from_user(pml4, tmp, buf_ptr, len)) {
+        klog_write(KLOG_ERR "syscall: write() rejected -- invalid buffer pointer\n");
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
+        kfree(tmp);
+        return 0;
+    }
+    // AT THE FD'S POSITION, which is what write(2) means -- this used
+    // to append unconditionally and ignore the position the read path
+    // maintained, and a position that writes ignore is not a position
+    // to seek. SYS_O_APPEND is how a caller asks for the old behaviour;
+    // it re-reads the size on every write rather than trusting a cached
+    // end, because that is what makes two appenders to one file
+    // interleave whole writes instead of overwriting each other.
+    //
+    // Nothing that opens with SYS_O_TRUNC changes behaviour: position 0
+    // of an emptied file is its end.
+    uint64_t at = f->file.append ? fs_size(f->file.name) : f->file.pos;
+    int ok = fs_write_range(f->file.name, at, tmp, (uint32_t)len);
+    if (ok) f->file.pos = at + len;
+    // The COUNT IS NOW HONEST. Reporting `len` unconditionally is what
+    // let the truncation go unnoticed: every caller checked its return
+    // value and every one of them was told it had succeeded.
+    regs[14] = ok ? len : (uint64_t)(int64_t)-EIO;
+    kfree(tmp);
+    return 0;
+}
+
+static int file_fd_read(struct syscall_ctx *c, struct open_file *f,
+                        uint64_t buf_ptr, uint64_t len) {
+    uint64_t *regs = c->regs;
+    uint64_t pml4 = c->pml4;
+    if (f->file.mode != FD_MODE_READ) {
+        klog_write(KLOG_ERR "syscall: read() rejected -- fd is write-only\n");
+        regs[14] = (uint64_t)(int64_t)-EBADF;
+        return 0;
+    }
+    // fs_read_range(), NOT fs_read(). fs_read() reads the WHOLE file into
+    // a kmalloc'd buffer, so streaming one cost (file size) of disk reads
+    // per call -- /bin/lspci reading the 1.6MB pci.ids in 1KB chunks
+    // turned that into ~2.6GB of reads and 35 seconds. With a range read
+    // it is ~0.6s.
+    //
+    // fs_read_range() reports 0 both at EOF and on any error (fs.h says
+    // so explicitly), which is exactly the behaviour wanted here -- a
+    // file deleted mid-read by another shell should read as EOF, not
+    // fabricate data or fault. It fills a KERNEL buffer which is then
+    // copied out; handing it the user pointer directly is what SMAP
+    // forbids (vmm.h). len is capped at SYS_WRITE_MAX by the caller.
+    uint64_t off = f->file.pos;
+    char *kbuf = fd_bounce_alloc(&len);
+    if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
+    uint32_t n = fs_read_range(f->file.name, off, kbuf, (uint32_t)len);
+    if (!vmm_copy_to_user(pml4, buf_ptr, kbuf, n)) {
+        klog_write(KLOG_ERR "syscall: read() rejected -- invalid buffer pointer\n");
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
+        kfree(kbuf);
+        return 0;
+    }
+    f->file.pos += n;
+    regs[14] = n;
+    kfree(kbuf);
+    return 0;
+}
+
+static int64_t file_fd_seek(struct open_file *f, int64_t off, uint64_t whence) {
+    // SIGNED arithmetic all the way, in 64 bits, because SEEK_END with
+    // a negative offset is the ordinary way to read a file's tail and
+    // an unsigned base would wrap it into a seek past the end -- which
+    // is legal, so nothing downstream would report it.
+    int64_t base;
+    switch (whence) {
+    case SYS_SEEK_SET: base = 0; break;
+    case SYS_SEEK_CUR: base = (int64_t)f->file.pos; break;
+    case SYS_SEEK_END: base = (int64_t)fs_size(f->file.name); break;
+    default:
+        return -EINVAL;
+    }
+    int64_t want = base + off;
+    // Before byte zero is the one result that is an ERROR rather than a
+    // strange-but-legal position. Past the end is fine: fs_write_range()
+    // zero-fills a gap and fs_read_range() reports 0 there, so both
+    // halves already behave the way POSIX says a sparse seek behaves.
+    if (want < 0) {
+        return -EINVAL;
+    }
+    f->file.pos = (uint64_t)want;
+    return want;
+}
+
+static void file_fd_stat(struct open_file *f, struct sys_stat *out) {
+    // Deliberately NOT a call into fs_stat() for the timestamps: this is
+    // the same path-keyed answer SYS_STAT gives, and duplicating the
+    // conversion here is how the two would drift. What an fd adds is the
+    // flags; for the rest, a caller that wants an inode and civil
+    // timestamps has SYS_STAT and a name.
+    out->size = fs_size(f->file.name);
+    out->is_dir = 0; // SYS_OPEN refuses a directory, so an fd is never one
+}
+
+// No release: fs.c holds no per-open state, so a file needs nothing.
+const struct fd_ops file_fd_ops = {
+    .name = "file",
+    .read = file_fd_read, .write = file_fd_write,
+    .seek = file_fd_seek, .stat = file_fd_stat,
+};

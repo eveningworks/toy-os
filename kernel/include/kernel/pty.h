@@ -40,7 +40,7 @@
 // Returns its index, or -1 when none are free.
 //
 // **IT HAS NO OWNER YET, AND THAT IS THE CONSOLE'S RULE.** A terminal is
-// claimed by the first process to READ it (syscall_fd.c), not by the one
+// claimed by the first process to READ it (tty_fd.c), not by the one
 // that made it -- because those are different processes and the reader
 // is the one that needs it. A terminal emulator OPENS the pty and then
 // hands the slave to a shell; if opening had claimed it, the emulator

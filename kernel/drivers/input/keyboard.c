@@ -526,7 +526,7 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
 // TWO INDEPENDENT REASONS THE RING-0 BLOCKING READER STANDS DOWN, and
 // they must not share one flag: a compositor holds the screen
 // (win_server.c), or a ring-3 process is reading the console through
-// fd 0 (syscall_fd.c). Both can be true at once, and with a single
+// fd 0 (kernel/tty/tty_fd.c). Both can be true at once, and with a single
 // boolean whichever released second would hand the keyboard back while
 // the other still owned it -- a shell executing keys typed at somebody
 // else's prompt, which is the exact bug keyboard_suspend_blocking() was

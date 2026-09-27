@@ -25,7 +25,7 @@
 // "no SIGPIPE (there are no signals yet)", which was true when it was
 // written and then quietly stopped being. A write with no readers left
 // raises SIGPIPE and fails EPIPE at the SYSCALL layer
-// (sys_do_write_pipe); this layer still just reports the condition,
+// (pipe.c's pipe_fd_write); this layer still just reports the condition,
 // because a pipe does not know which process is writing it.
 //
 // What is still deliberately absent: O_NONBLOCK on the pipe itself
@@ -60,7 +60,7 @@ void pipe_close_writer(int idx);
 // **THE CALLER MUST NOT TREAT THAT ZERO AS A SHORT WRITE.** It is a
 // dead pipe, and reporting it as "wrote nothing, try again" is what
 // made a single mistyped command spin a process at full CPU until the
-// machine stopped answering. sys_do_write_pipe() turns it into SIGPIPE
+// machine stopped answering. pipe_fd_write() turns it into SIGPIPE
 // plus EPIPE, which is what POSIX means by it.
 //
 // It used to take what fitted and report a short count. Nothing in ring
@@ -78,7 +78,7 @@ void pipe_close_writer(int idx);
 // SYS_WRITE_MAX was 1024 against a 4096-byte pipe the property held
 // with nothing enforcing it; raising the cap to 64 KiB would have
 // parked writers on requests the pipe could never satisfy -- a
-// deadlock, from a constant three files away. sys_do_write_pipe()
+// deadlock, from a constant three files away. pipe_fd_write()
 // enforces it explicitly now.
 int64_t pipe_write(int idx, const char *src, uint32_t len);
 
