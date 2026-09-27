@@ -77,13 +77,15 @@ void kdb_arch_set_pc(uint64_t *regs, uint64_t pc) { regs[F_RIP] = pc; }
 #define CR0_WP   (1ULL << 16)
 #define CR4_SMAP (1ULL << 21)
 
-// The leaf mapping `va` in the current address space. W and U are ANDed
-// down the walk, as the CPU does. 0 when anything on the way is absent.
-static int walk(uint64_t va, uint64_t *flags, uint64_t *page_end) {
+static uint64_t read_cr3(void) { uint64_t v; __asm__ volatile ("mov %%cr3, %0" : "=r"(v)); return v; }
+
+// The leaf mapping `va` in address space `cr3` (0: the current one). W
+// and U are ANDed down the walk, as the CPU does; *phys is where `va`
+// itself lives. 0 when anything on the way is absent.
+static int walk(uint64_t cr3, uint64_t va, uint64_t *flags, uint64_t *page_end, uint64_t *phys) {
     uint64_t top = va >> 47;
     if (top != 0 && top != 0x1FFFF) return 0;   // non-canonical
-    uint64_t cr3;
-    __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+    if (!cr3) cr3 = read_cr3();
     uint64_t table = cr3 & PTE_ADDR;
     uint64_t acc = PTE_W | PTE_U;
     for (int shift = 39; shift >= 12; shift -= 9) {
@@ -96,6 +98,7 @@ static int walk(uint64_t va, uint64_t *flags, uint64_t *page_end) {
             uint64_t size = 1ULL << shift;
             *flags = acc;
             *page_end = (va & ~(size - 1)) + size;
+            if (phys) *phys = (e & PTE_ADDR & ~(size - 1)) + (va & (size - 1));
             return 1;
         }
         table = e & PTE_ADDR;
@@ -137,7 +140,7 @@ uint64_t kdb_arch_mem_read(uint64_t va, void *dst, uint64_t len) {
     uint64_t done = 0;
     while (done < len) {
         uint64_t flags, end, at = va + done;
-        if (!walk(at, &flags, &end)) break;
+        if (!walk(0, at, &flags, &end, 0)) break;
         uint64_t n = end - at;
         if (n > len - done) n = len - done;
         mem_access(at, (uint8_t *)dst + done, n, 0, (flags & PTE_U) != 0);
@@ -150,7 +153,7 @@ uint64_t kdb_arch_mem_write(uint64_t va, const void *src, uint64_t len) {
     uint64_t done = 0;
     while (done < len) {
         uint64_t flags, end, at = va + done;
-        if (!walk(at, &flags, &end)) break;
+        if (!walk(0, at, &flags, &end, 0)) break;
         int user = (flags & PTE_U) != 0, ro = !(flags & PTE_W);
         if (ro && user) break;
         uint64_t n = end - at;
@@ -236,4 +239,40 @@ void kdb_arch_resume(uint64_t *regs, int step) {
 // value from before it. Linux's KGDB has the same blind spot.
 void kdb_arch_step_done(uint64_t *regs) {
     regs[F_RFLAGS] = (regs[F_RFLAGS] & ~RFLAGS_TF) | g_step_if;
+}
+
+// ANOTHER THREAD'S ADDRESS SPACE. The kernel half is shared by every
+// space, so only a USER page differs -- and that one is reached through
+// its physical address, which the identity map covers for all RAM. The
+// current space is the ordinary path. A read-only user page is still
+// refused for a write: it may be copy-on-write shared.
+static uint64_t mem_in(uint64_t cr3, uint64_t va, void *buf, uint64_t len, int write) {
+    if (!cr3 || (cr3 & PTE_ADDR) == (read_cr3() & PTE_ADDR))
+        return write ? kdb_arch_mem_write(va, buf, len) : kdb_arch_mem_read(va, buf, len);
+    uint64_t done = 0;
+    while (done < len) {
+        uint64_t flags, end, phys, at = va + done;
+        if (!walk(cr3, at, &flags, &end, &phys)) break;
+        uint64_t n = end - at;
+        if (n > len - done) n = len - done;
+        if (!(flags & PTE_U)) {   // kernel: the same mapping here
+            uint64_t got = write ? kdb_arch_mem_write(at, (uint8_t *)buf + done, n)
+                                 : kdb_arch_mem_read(at, (uint8_t *)buf + done, n);
+            done += got;
+            if (got < n) break;
+            continue;
+        }
+        if ((write && !(flags & PTE_W)) || phys + n > paging_identity_limit()) break;
+        mem_access(phys, (uint8_t *)buf + done, n, write, 0);
+        done += n;
+    }
+    return done;
+}
+
+uint64_t kdb_arch_mem_read_in(uint64_t cr3, uint64_t va, void *dst, uint64_t len) {
+    return mem_in(cr3, va, dst, len, 0);
+}
+
+uint64_t kdb_arch_mem_write_in(uint64_t cr3, uint64_t va, const void *src, uint64_t len) {
+    return mem_in(cr3, va, (void *)(uintptr_t)src, len, 1);
 }

@@ -4,6 +4,7 @@
 #include "sched_debug.h"
 #include "sched_internal.h"
 #include "string.h"
+#include "vmm.h"   // vmm_kernel_pml4_phys()
 
 static void from_slot(int i, struct sched_debug_thread *out) {
     const struct sched_process *p = &procs[i];
@@ -13,6 +14,7 @@ static void from_slot(int i, struct sched_debug_thread *out) {
     out->stopped = p->stopped;
     k_strlcpy(out->name, p->name[0] ? p->name : "?", sizeof out->name);
     out->kctx = out->running ? 0 : &p->kctx;
+    out->pml4 = p->pml4_phys;
 }
 
 static void kernel_thread(struct sched_debug_thread *out) {
@@ -23,6 +25,7 @@ static void kernel_thread(struct sched_debug_thread *out) {
     out->stopped = 0;
     k_strlcpy(out->name, "kernel", sizeof out->name);
     out->kctx = out->running || !k->rip ? 0 : k;
+    out->pml4 = vmm_kernel_pml4_phys();
 }
 
 static int live(int i) {

@@ -354,7 +354,8 @@ mode, and alone blurs the font), `LIVE=1`, `BOOT=cd|disk`, `STRIP=0`,
 stub (`kdebug=ttySN`, `make run KDEBUG=1`) is the one that works on bare
 metal** -- `docs/testing.md`, "Debugging with GDB", has both. Its stopped
 path takes no lock, allocates nothing and does not log. `-x
-tools/gdb/toyos.py` adds `toy-dmesg`, `toy-ps` and a `bt` past `isr_common`.
+tools/gdb/toyos.py` adds `toy-dmesg`, `toy-ps`, `toy-symbols` (modules,
+user programs) and a `bt` past `isr_common`.
 
 ## Testing in QEMU headlessly, via QMP
 

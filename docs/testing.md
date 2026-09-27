@@ -726,8 +726,12 @@ gdb build/kernel.bin -ex "target remote localhost:1235"
 ```
 
 **Load the helpers**: `gdb -x tools/gdb/toyos.py build/kernel.bin ...`
-gives `toy-dmesg [N]`, `toy-ps`, and a `bt` that continues past
-`isr_common` into whatever the interrupt landed on. `info threads` lists
+gives `toy-dmesg [N]`, `toy-ps`, `toy-symbols`, and a `bt` that
+continues past `isr_common` into whatever the interrupt landed on.
+`toy-symbols` loads every kernel module (so `break e1000_transmit`
+works) and the selected thread's program and libraries -- `thread N`,
+`toy-symbols`, `bt` goes from the scheduler through the syscall into
+that program's `main`, with source lines. `info threads` lists
 every process by name and state, and `thread <Id>` then `bt` shows where
 that one is parked -- through its syscall, down to its user-space PC.
 

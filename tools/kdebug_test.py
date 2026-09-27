@@ -18,7 +18,12 @@ here, so every assertion is about one packet and needs no GDB installed:
     (`T05thread:<tid>;watch:<addr>;`);
   - every process is a thread: `qfThreadInfo` lists the kernel context
     (0x3e8) and pid 1, `qThreadExtraInfo` names it `init`, and `g` on a
-    PARKED thread marks the registers nobody saved as unavailable;
+    PARKED thread marks the registers nobody saved as unavailable, and
+    memory is read in the SELECTED thread's address space -- init's and
+    tosh's first bytes at 0x8000000000 are each their own ELF's;
+  - `toy-symbols` loads a kernel module (e1000_transmit disassembles by
+    name at its real address) and a dynamic program with its /lib
+    libraries: tosh's bt runs from the scheduler into tosh.c's main;
   - a memory write round-trips;
   - an NMI from QEMU's monitor, and a ^C byte, each break into a running
     kernel;
@@ -175,6 +180,24 @@ def is_stop(reply, sig):
     return re.fullmatch(rf"T{sig}thread:[0-9a-f]+;", reply) is not None
 
 
+def elf_head(program, vaddr=0x8000000000, n=64):
+    """n bytes a program's host ELF puts at `vaddr`, as `m` returns them --
+    read from the PT_LOAD that covers it."""
+    sys.path.insert(0, TOOLS)
+    import panic_resolve
+    elf = panic_resolve.elf_for_program(program)
+    with open(elf, "rb") as f:
+        data = f.read()
+    phoff, = struct.unpack_from("<Q", data, 0x20)
+    phentsize, phnum = struct.unpack_from("<HH", data, 0x36)
+    for i in range(phnum):
+        p_type, _fl, p_off, p_vaddr, _pa, p_filesz = struct.unpack_from(
+            "<IIQQQQ", data, phoff + i * phentsize)
+        if p_type == 1 and p_vaddr <= vaddr and vaddr + n <= p_vaddr + p_filesz:
+            return data[p_off + vaddr - p_vaddr:p_off + vaddr - p_vaddr + n].hex()
+    return None
+
+
 def rip_of(g_reply):
     """rip from a `g` reply: 16 GPRs of 8 bytes precede it, little-endian."""
     return int.from_bytes(bytes.fromhex(g_reply[256:272]), "little")
@@ -280,9 +303,33 @@ def steps(inst, disk, log, res, rsp):
     extra = rsp.cmd("qThreadExtraInfo,1")
     name = bytes.fromhex(extra).decode(errors="replace") if re.fullmatch(r"[0-9a-f]+", extra) else extra
     res.check("qThreadExtraInfo names pid 1 `init`", name.startswith("init, "), name)
-    ok = rsp.cmd("Hg1")
+    # A thread that is NOT the one that stopped -- attach can land while
+    # any process runs, init included.
+    current = rsp.cmd("qC")[2:]
+    other = next((t for t in threads[1:].split(",") if t != current), "1")
+    ok = rsp.cmd(f"Hg{other}")
     parked = rsp.cmd("g")
+    rsp.cmd("Hg1")
+    init_head = rsp.cmd("m8000000000,40")
     rsp.cmd("Hg0")
+    # Memory per thread: the same user address in two processes is two
+    # programs' bytes, each checked against its own ELF on the host.
+    names = {}
+    for t in threads[1:].split(","):
+        x = rsp.cmd(f"qThreadExtraInfo,{t}")
+        if re.fullmatch(r"[0-9a-f]+", x):
+            names[bytes.fromhex(x).decode(errors="replace").split(",")[0]] = t
+    tosh_head = ""
+    if "tosh" in names:
+        rsp.cmd(f"Hg{names['tosh']}")
+        tosh_head = rsp.cmd("m8000000000,40")
+        rsp.cmd("Hg0")
+    want_init = elf_head("/bin/init")
+    want_tosh = elf_head("/bin/tosh")
+    res.check("memory is read in the SELECTED thread's address space (init, tosh)",
+              init_head == want_init and tosh_head == want_tosh and want_init != want_tosh,
+              f"init {init_head[:24]} want {(want_init or '')[:24]}; tosh {tosh_head[:24]} "
+              f"want {(want_tosh or '')[:24]}; threads {names}")
     res.check("`g` on a parked thread gives rip and rsp, and 'xx' for what was never saved",
               ok == "OK" and len(parked) == 328 and "xx" in parked and
               "x" not in parked[256:272], parked[:80])
@@ -425,6 +472,29 @@ def real_gdb_run(target, res):
     res.check("a parked thread's bt goes PAST isr_common and stops at the user frame",
               "isr_common" in out and "syscall_dispatch" in out and
               "Backtrace stopped: frame did not save the PC" in out, out[-900:])
+
+    # toy-symbols: a module, then a dynamic program and its libraries.
+    tosh = re.search(r"^\*?\s*(\d+)\s+Thread \d+ \(tosh,", out, re.M)
+    r = subprocess.run(
+        ["gdb", "-nx", "-batch", "-x", os.path.join(TOOLS, "gdb", "toyos.py"), KERNEL,
+         "-ex", "set pagination off",
+         "-ex", f"target remote {target}",
+         "-ex", "info threads",
+         "-ex", f"thread {tosh.group(1) if tosh else 2}",
+         "-ex", "toy-symbols",
+         "-ex", "x/2i e1000_transmit",
+         "-ex", "bt",
+         "-ex", "detach"],
+        cwd=REPO, capture_output=True, text=True, timeout=120)
+    sym = r.stdout + r.stderr
+    mod = re.search(r"module e1000 at (0x[0-9a-f]+)", sym)
+    dis = re.search(r"^\s*(0x[0-9a-f]+) <e1000_transmit>:", sym, re.M)
+    res.check("toy-symbols loads a module: e1000_transmit disassembles by name, inside it",
+              mod is not None and dis is not None and int(dis.group(1), 16) >= int(mod.group(1), 16),
+              sym[-700:])
+    res.check("...and a dynamic program with its /lib libraries: tosh's bt reaches its main",
+              tosh is not None and "/lib/libc.so at" in sym and "isr_common" in sym and
+              re.search(r" main \(.*tosh\.c:\d+", sym) is not None, sym[-900:])
 
 
 def main():

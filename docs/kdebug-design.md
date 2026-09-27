@@ -223,8 +223,10 @@ A thread that is not the one that stopped is read from where it is
 PARKED (`struct kernel_context`: rsp, rip and the callee-saved
 registers); everything else was never saved, and goes out as GDB's
 "unavailable" rather than as a guess. Parked threads are read-only (`G`
-refuses), and memory is still read through the stopped context's CR3 --
-kernel stacks are the same in every address space, a user address is not.
+refuses). **Memory is read in the SELECTED thread's address space**: its
+page tables are walked and a user page is reached through its physical
+address, which the identity map covers for all RAM; kernel addresses
+are the same in every space and take the ordinary path.
 `kernel/proc/sched_debug.c` is the scheduler's read-only, lock-free view
 for this, so `kernel/debug/` never includes the scheduler's internals.
 
@@ -235,5 +237,20 @@ GDB could not get past: `isr_common` has no CFI, so every backtrace used
 to end there. At its call's return address (and at `isr_resume_frame`)
 RSP points at the frame `isr.asm` pushed, so the unwinder reads it and
 hands GDB the interrupted code's registers. A ring-3 frame ends the
-backtrace (user code has no symbols here, and GDB's fallback walks its
-stack into garbage), and so does `kernel_main` (`boot.asm` has no CFI).
+backtrace unless its program's symbols are loaded (GDB's fallback walks
+a symbol-less stack into garbage), and so does `kernel_main` (`boot.asm`
+has no CFI).
+
+**`toy-symbols`** is Linux's `lx-symbols`: symbols for what `kernel.bin`
+does not hold, read out of the stopped machine. A loaded MODULE is
+`g_mods[]`'s base plus a per-section layout the host RECOMPUTES from
+`build/modules/<name>.o` -- the kernel keeps only the base, and
+`module.c`'s `layout()` is two passes in section-index order (text,
+then the rest of SHF_ALLOC after the page-rounded text), which the
+helper repeats. The SELECTED thread's program is `procs[].exec_path`,
+mapped to its ELF by `panic_resolve.elf_for_program()` (by basename, so
+two programs sharing one can be confused -- the helper names the file it
+loaded); executables and `ld-toy.so` are fixed-base ET_EXEC, so no
+offset; each `/lib/*.so` is the file mapping of it at file offset 0,
+whose base is the bias. There is no `r_debug`: ld-toy keeps its own
+table in process memory, and the kernel's region list already says it.

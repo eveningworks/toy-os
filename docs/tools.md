@@ -3276,7 +3276,9 @@ window without going through it will find its layout polls timing out.
   `ondemand_sweep.py`.
 - **`gdb/toyos.py`** -- gdb helpers for a stopped kernel, loaded with
   `gdb -x tools/gdb/toyos.py build/kernel.bin`: `toy-dmesg [N]` (the klog
-  ring, read from memory), `toy-ps` (the process table), and an unwinder
+  ring, read from memory), `toy-ps` (the process table), `toy-symbols`
+  (every loaded kernel module, and the SELECTED thread's program, ld-toy
+  and `/lib` libraries -- rerun it after `thread N`), and an unwinder
   that takes `bt` past `isr_common` by reading the trap frame `isr.asm`
   pushed. A ring-3 frame and `kernel_main` end a backtrace rather than
   letting GDB walk into garbage -- which it does, fluently, with no CFI

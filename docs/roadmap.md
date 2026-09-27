@@ -1115,6 +1115,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [ ] The network debugger on a one-NIC machine: the OS's traffic through the debugger's card (KDNIC) -- stage 3c
 - [ ] Live kernel memory inspection without halting, drgn's shape, over `remote.py` -- `docs/kdebug-design.md` stage 1
 - [x] ~~The kernel debugger's processes as GDB threads, and `ps`/`dmesg`~~ DONE 2026-09-27 -- threads, and `tools/gdb/toyos.py`
+- [x] ~~Symbols for kernel modules and user programs in the debugger, and memory per thread~~ DONE 2026-09-27 -- `toy-symbols`
 
 ### Programming on the machine
 

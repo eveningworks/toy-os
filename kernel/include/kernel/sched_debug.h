@@ -20,6 +20,7 @@ struct sched_debug_thread {
     char name[PROC_NAME_MAX];
     const struct kernel_context *kctx;   // where it is parked; NULL while running,
                                          // or before the kernel context was ever left
+    uint64_t pml4;                       // its address space's page-table root
 };
 
 // The Nth live thread (N from 0), or 0 past the end. Zombies are skipped:

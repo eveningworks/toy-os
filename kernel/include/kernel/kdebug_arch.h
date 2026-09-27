@@ -30,6 +30,9 @@ void     kdb_arch_set_pc(uint64_t *regs, uint64_t pc);
 // refused, because it may be copy-on-write shared with another process.
 uint64_t kdb_arch_mem_read(uint64_t va, void *dst, uint64_t len);
 uint64_t kdb_arch_mem_write(uint64_t va, const void *src, uint64_t len);
+// The same in address space `cr3` -- another thread's (0: the current).
+uint64_t kdb_arch_mem_read_in(uint64_t cr3, uint64_t va, void *dst, uint64_t len);
+uint64_t kdb_arch_mem_write_in(uint64_t cr3, uint64_t va, const void *src, uint64_t len);
 
 #define KDB_BREAK_INSN 0xCC
 void kdb_arch_breakpoint(void);   // a compiled-in int3

@@ -200,11 +200,20 @@ static void write_regs(const char *p) {
     out_str("OK");
 }
 
+// Memory is read in the SELECTED thread's address space: `thread N` then
+// `x` on a user address means that process's memory, not the stopped one's.
+static uint64_t sel_space(void) {
+    struct sched_debug_thread t;
+    if (!kdb.sel_tid || kdb.sel_tid == current_tid() || !sched_debug_find(kdb.sel_tid, &t))
+        return 0;
+    return t.pml4;
+}
+
 static void read_mem(const char *p) {
     uint64_t addr, len;
     if (!parse_range(&p, &addr, &len)) { out_str("E01"); return; }
     if (len > sizeof g_mem) len = sizeof g_mem;
-    uint64_t got = kdb_arch_mem_read(addr, g_mem, len);
+    uint64_t got = kdb_arch_mem_read_in(sel_space(), addr, g_mem, len);
     if (!got && len) { out_str("E14"); return; }
     for (uint64_t i = 0; i < got; i++) out_byte(g_mem[i]);
 }
@@ -221,7 +230,7 @@ static void write_mem(const char *p) {
         if (lo < 0) { out_str("E01"); return; }
         g_mem[i] = (uint8_t)((hi << 4) | lo);
     }
-    out_str(kdb_arch_mem_write(addr, g_mem, len) == len ? "OK" : "E14");
+    out_str(kdb_arch_mem_write_in(sel_space(), addr, g_mem, len) == len ? "OK" : "E14");
 }
 
 // Z/z type,addr,kind
