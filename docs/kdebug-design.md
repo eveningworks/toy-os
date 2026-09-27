@@ -210,7 +210,30 @@ handler itself, is the riskiest piece of the plan and why it is last.
 - **User-space debugging.** A debugger for ring-3 processes is `ptrace`
   and belongs with signals and `strace` (`docs/signals-design.md`), not
   with the kernel stub.
-- **Processes as GDB threads** (`qfThreadInfo`, `Hg`) and **`monitor`
-  commands** (`qRcmd` -- `monitor ps`, `monitor dmesg`, Windows' `!process`
-  extensions, KDB's commands) are real improvements with no blocker;
-  they are roadmap items, not stages.
+- **`monitor` commands** (`qRcmd` -- KDB's shape): replaced by host-side
+  gdb helpers, below, which make a stopped kernel run no code at all.
+
+## Threads and the gdb helpers -- BUILT
+
+**Every process is a GDB thread** (thread id = pid) and the kernel
+context is one more, id 1000 -- KGDB presents tasks the same way. The
+stub answers `qfThreadInfo`, `qC`, `Hg`, `T` and `qThreadExtraInfo`
+(`init, blocked`), and a stop reply names its thread (`T05thread:a;`).
+A thread that is not the one that stopped is read from where it is
+PARKED (`struct kernel_context`: rsp, rip and the callee-saved
+registers); everything else was never saved, and goes out as GDB's
+"unavailable" rather than as a guess. Parked threads are read-only (`G`
+refuses), and memory is still read through the stopped context's CR3 --
+kernel stacks are the same in every address space, a user address is not.
+`kernel/proc/sched_debug.c` is the scheduler's read-only, lock-free view
+for this, so `kernel/debug/` never includes the scheduler's internals.
+
+**`tools/gdb/toyos.py`** is Linux's `scripts/gdb` shape -- `lx-dmesg`,
+`lx-ps` -- and WinDbg's `!process`: helpers that READ the stopped machine
+from the host. `toy-dmesg`, `toy-ps`, and an UNWINDER for the one frame
+GDB could not get past: `isr_common` has no CFI, so every backtrace used
+to end there. At its call's return address (and at `isr_resume_frame`)
+RSP points at the frame `isr.asm` pushed, so the unwinder reads it and
+hands GDB the interrupted code's registers. A ring-3 frame ends the
+backtrace (user code has no symbols here, and GDB's fallback walks its
+stack into garbage), and so does `kernel_main` (`boot.asm` has no CFI).

@@ -3258,6 +3258,15 @@ window without going through it will find its layout polls timing out.
   `kernel.bin` from DISK when the connection fails, which once passed a
   run where the attach had timed out. Both modes are in
   `ondemand_sweep.py`.
+- **`gdb/toyos.py`** -- gdb helpers for a stopped kernel, loaded with
+  `gdb -x tools/gdb/toyos.py build/kernel.bin`: `toy-dmesg [N]` (the klog
+  ring, read from memory), `toy-ps` (the process table), and an unwinder
+  that takes `bt` past `isr_common` by reading the trap frame `isr.asm`
+  pushed. A ring-3 frame and `kernel_main` end a backtrace rather than
+  letting GDB walk into garbage -- which it does, fluently, with no CFI
+  to stop it. Works over QEMU's stub and the kernel's. `kdebug_test.py`
+  checks all three, and turning the unwinder's recognition off reddens
+  exactly its check.
 - **`kdebug_bridge.py`** -- carries GDB's TCP to the debugger's keyed
   UDP (`kdebug=net`), the role WinDbg's KDNET client plays on Windows:
   `gdb -> 127.0.0.1:1235 -> [bridge] -> target:50000`. Defaults match

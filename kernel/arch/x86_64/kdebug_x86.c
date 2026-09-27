@@ -3,6 +3,7 @@
 // kernel/debug/gdbstub.c).
 #include "kdebug_arch.h"
 #include "paging.h"   // paging_identity_limit()
+#include "context_switch.h"
 
 // isr.asm's frame, as uint64_t slots: r15 is regs[0], rax regs[14].
 #define F_RIP    17
@@ -45,6 +46,21 @@ void kdb_arch_reg_set(uint64_t *regs, int n, uint64_t v) {
     if (n == 18 || n == 19) return;
     if (n == 17) v = (regs[F_RFLAGS] & ~0xFFFFFFFFULL) | (v & 0xFFFFFFFFULL);
     regs[g_slot[n]] = v;
+}
+
+uint64_t kdb_arch_ctx_reg(const struct kernel_context *k, int n, int *have) {
+    *have = 1;
+    switch (n) {   // GDB's numbering, as in g_slot above
+    case 1:  return k->rbx;
+    case 6:  return k->rbp;
+    case 7:  return k->rsp;
+    case 12: return k->r12;
+    case 13: return k->r13;
+    case 14: return k->r14;
+    case 15: return k->r15;
+    case 16: return k->rip;
+    default: *have = 0; return 0;
+    }
 }
 
 uint64_t kdb_arch_pc(const uint64_t *regs) { return regs[F_RIP]; }

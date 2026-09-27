@@ -1,6 +1,7 @@
 // The GDB Remote Serial Protocol, the subset a kernel stub needs: stop
 // reasons, registers, memory, continue/step, breakpoints and
-// watchpoints, and qOffsets for KASLR. Everything else gets the empty
+// watchpoints, qOffsets for KASLR, and every process as a THREAD (KGDB
+// shows tasks the same way). Everything else gets the empty
 // reply, which the protocol defines as "not supported", and GDB falls
 // back. Linux's kernel/debug/gdbstub.c is the same shape.
 //
@@ -10,6 +11,7 @@
 #include "kdebug_internal.h"
 #include "reloc.h"     // kernel_reloc_delta() -- qOffsets
 #include "barrier.h"   // cpu_relax()
+#include "sched_debug.h"  // processes as threads
 
 // PacketSize=1000 (hex) in qSupported: GDB sends nothing longer, and
 // sizes its memory reads so a reply fits.
@@ -137,9 +139,21 @@ static int parse_range(const char **p, uint64_t *addr, uint64_t *len) {
 
 // --- packets -----------------------------------------------------------
 
+// --- threads: every process, and the kernel context ----------------------
+
+static int current_tid(void) {
+    struct sched_debug_thread t;
+    for (int n = 0; sched_debug_thread(n, &t); n++)
+        if (t.running) return t.tid;
+    return SCHED_DEBUG_KERNEL_TID;
+}
+
 static void stop_reply(void) {
-    out_str(kdb.watch_kind ? "T" : "S");
+    out_str("T");
     out_byte((uint8_t)kdb.sig);
+    out_str("thread:");
+    out_num((uint64_t)current_tid());
+    out_str(";");
     if (kdb.watch_kind) {
         out_str(kdb.watch_kind == 'w' ? "watch:" : "awatch:");
         out_num(kdb.watch_addr);
@@ -147,14 +161,32 @@ static void stop_reply(void) {
     }
 }
 
+// A thread that is not the stopped one is read from where it is parked;
+// what was never saved goes out as "xx", GDB's "unavailable".
 static void read_regs(void) {
+    struct sched_debug_thread t;
+    const struct kernel_context *k = 0;
+    if (kdb.sel_tid && kdb.sel_tid != current_tid()) {
+        if (!sched_debug_find(kdb.sel_tid, &t)) { out_str("E01"); return; }
+        k = t.kctx;
+    }
+    int other = kdb.sel_tid && kdb.sel_tid != current_tid();
     for (int n = 0; n < KDB_NREGS; n++) {
-        uint64_t v = kdb_arch_reg_get(kdb.regs, n);
-        for (int i = 0; i < kdb_arch_reg_size(n); i++) out_byte((uint8_t)(v >> (i * 8)));
+        int have = 1;
+        uint64_t v = !other ? kdb_arch_reg_get(kdb.regs, n)
+                   : k ? kdb_arch_ctx_reg(k, n, &have) : (have = 0, 0);
+        for (int i = 0; i < kdb_arch_reg_size(n); i++) {
+            if (have) out_byte((uint8_t)(v >> (i * 8)));
+            else out_str("xx");
+        }
     }
 }
 
 static void write_regs(const char *p) {
+    if (kdb.sel_tid && kdb.sel_tid != current_tid()) {
+        out_str("E01");   // a parked thread's registers are the scheduler's
+        return;
+    }
     for (int n = 0; n < KDB_NREGS; n++) {
         uint64_t v = 0;
         int size = kdb_arch_reg_size(n);
@@ -209,8 +241,66 @@ static int starts(const char *s, const char *prefix) {
     return 1;
 }
 
+static const char *state_name(const struct sched_debug_thread *t) {
+    if (t->running) return "running";
+    if (t->stopped) return "stopped";
+    switch (t->state) {   // enum sched_state
+    case 1:  return "ready";
+    case 2:  return "running";
+    case 4:  return "blocked";
+    case -1: return "parked";
+    default: return "?";
+    }
+}
+
+static void thread_query(const char *q) {
+    struct sched_debug_thread t;
+    if (starts(q, "fThreadInfo")) {
+        out_str("m");
+        for (int n = 0; sched_debug_thread(n, &t); n++) {
+            if (n) out_str(",");
+            out_num((uint64_t)t.tid);
+        }
+    } else if (starts(q, "sThreadInfo")) {
+        out_str("l");   // the whole list went in the first reply
+    } else if (starts(q, "ThreadExtraInfo,")) {
+        const char *p = q + 16;
+        uint64_t tid;
+        if (!parse_num(&p, &tid) || !sched_debug_find((int)tid, &t)) { out_str("E01"); return; }
+        // Hex-encoded text: "toywm, blocked".
+        for (const char *s = t.name; *s; s++) out_byte((uint8_t)*s);
+        out_byte(','); out_byte(' ');
+        for (const char *s = state_name(&t); *s; s++) out_byte((uint8_t)*s);
+    }
+}
+
+// Hg<tid> picks the thread `g` reads; 0 and -1 mean the stopped one.
+// Hc is accepted and changes nothing: a stop is the whole machine.
+static void set_thread(const char *p) {
+    if (p[0] != 'g') { out_str("OK"); return; }
+    p++;
+    if (p[0] == '-' || (p[0] == '0' && p[1] == 0)) { kdb.sel_tid = 0; out_str("OK"); return; }
+    uint64_t tid;
+    struct sched_debug_thread t;
+    if (!parse_num(&p, &tid) || !sched_debug_find((int)tid, &t)) { out_str("E01"); return; }
+    kdb.sel_tid = (int)tid;
+    out_str("OK");
+}
+
+static void thread_alive(const char *p) {
+    uint64_t tid;
+    struct sched_debug_thread t;
+    out_str(parse_num(&p, &tid) && sched_debug_find((int)tid, &t) ? "OK" : "E01");
+}
+
 static void query(const char *q) {
-    if (starts(q, "Supported")) {
+    if (q[0] == 'C' && q[1] == 0) {
+        out_str("QC");
+        out_num((uint64_t)current_tid());
+    } else if (starts(q, "fThreadInfo") || starts(q, "sThreadInfo") ||
+               starts(q, "ThreadExtraInfo,")) {
+        thread_query(q);
+    } else if (starts(q, "Supported")) {
         out_str("PacketSize=1000");
     } else if (starts(q, "Offsets")) {
         // KASLR: the whole image moved by one delta, so GDB relocates the
@@ -238,7 +328,8 @@ static int dispatch(const char *p) {
     case 'm': read_mem(p + 1); return -1;
     case 'M': write_mem(p + 1); return -1;
     case 'Z': case 'z': breakpoint(p); return -1;
-    case 'H': case 'T': out_str("OK"); return -1;
+    case 'H': set_thread(p + 1); return -1;
+    case 'T': thread_alive(p + 1); return -1;
     case 'q': query(p + 1); return -1;
     case 'c': case 's':
         a = p + 1;
@@ -251,6 +342,7 @@ static int dispatch(const char *p) {
 }
 
 enum kdb_resume kdb_gdb_session(void) {
+    kdb.sel_tid = 0;
     // A debugger that is waiting on `c` needs to be told; one that has
     // not attached yet asks with `?` when it does.
     if (kdb.connected) {

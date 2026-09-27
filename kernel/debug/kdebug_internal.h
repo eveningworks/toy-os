@@ -48,6 +48,7 @@ struct kdb_state {
     const struct kdb_transport *io;
     uint64_t *regs;             // the stopped frame
     int sig;                    // why it stopped
+    int sel_tid;                // the thread `g` reads (Hg); 0 = the one that stopped
     char watch_kind;            // 'w'/'a' when a watchpoint fired, else 0
     uint64_t watch_addr;
     uint32_t stops;

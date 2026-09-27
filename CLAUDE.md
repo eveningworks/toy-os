@@ -353,7 +353,8 @@ mode, and alone blurs the font), `LIVE=1`, `BOOT=cd|disk`, `STRIP=0`,
 `make debug` boots frozen for QEMU's own GDB stub; **the kernel's OWN
 stub (`kdebug=ttySN`, `make run KDEBUG=1`) is the one that works on bare
 metal** -- `docs/testing.md`, "Debugging with GDB", has both. Its stopped
-path takes no lock, allocates nothing and does not log.
+path takes no lock, allocates nothing and does not log. `-x
+tools/gdb/toyos.py` adds `toy-dmesg`, `toy-ps` and a `bt` past `isr_common`.
 
 ## Testing in QEMU headlessly, via QMP
 

@@ -15,7 +15,10 @@ here, so every assertion is about one packet and needs no GDB installed:
     the machine when `meminfo` runs, at exactly that address;
   - a single step moves the PC one instruction on;
   - a hardware WRITE watchpoint on the tick counter fires, and says so
-    (`T05watch:<addr>`);
+    (`T05thread:<tid>;watch:<addr>;`);
+  - every process is a thread: `qfThreadInfo` lists the kernel context
+    (0x3e8) and pid 1, `qThreadExtraInfo` names it `init`, and `g` on a
+    PARKED thread marks the registers nobody saved as unavailable;
   - a memory write round-trips;
   - an NMI from QEMU's monitor, and a ^C byte, each break into a running
     kernel;
@@ -167,6 +170,11 @@ class Rsp:
         self.s.sendall(b"\x03")
 
 
+def is_stop(reply, sig):
+    """`T<sig>thread:<tid>;` -- the stop names the thread that stopped."""
+    return re.fullmatch(rf"T{sig}thread:[0-9a-f]+;", reply) is not None
+
+
 def rip_of(g_reply):
     """rip from a `g` reply: 16 GPRs of 8 bytes precede it, little-endian."""
     return int.from_bytes(bytes.fromhex(g_reply[256:272]), "little")
@@ -263,7 +271,21 @@ def steps(inst, disk, log, res, rsp):
     if not res.check("attaching stops a running kernel and answers qSupported",
                      "PacketSize=" in sup, sup):
         return
-    res.check("the stop reason is SIGINT", rsp.cmd("?") == "S02")
+    stop = rsp.cmd("?")
+    res.check("the stop reason is SIGINT, with its thread", is_stop(stop, "02"), stop)
+
+    threads = rsp.cmd("qfThreadInfo")
+    res.check("qfThreadInfo lists the kernel context and pid 1",
+              threads.startswith("m3e8,") and "1" in threads[5:].split(","), threads)
+    extra = rsp.cmd("qThreadExtraInfo,1")
+    name = bytes.fromhex(extra).decode(errors="replace") if re.fullmatch(r"[0-9a-f]+", extra) else extra
+    res.check("qThreadExtraInfo names pid 1 `init`", name.startswith("init, "), name)
+    ok = rsp.cmd("Hg1")
+    parked = rsp.cmd("g")
+    rsp.cmd("Hg0")
+    res.check("`g` on a parked thread gives rip and rsp, and 'xx' for what was never saved",
+              ok == "OK" and len(parked) == 328 and "xx" in parked and
+              "x" not in parked[256:272], parked[:80])
 
     off = rsp.cmd("qOffsets")
     m = re.match(r"Text=([0-9a-f]+);Data=\1;Bss=\1$", off)
@@ -294,7 +316,7 @@ def steps(inst, disk, log, res, rsp):
     trigger = subprocess.Popen(VM + ["--instance", str(inst), "exec", "meminfo"],
                                cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     stop = rsp.recv(timeout=30)
-    res.check("running `meminfo` stops at the breakpoint (S05)", stop == "S05", stop)
+    res.check("running `meminfo` stops at the breakpoint (T05)", is_stop(stop, "05"), stop)
     pc = rip_of(rsp.cmd("g"))
     res.check("...with the PC ON the breakpoint, not one past its int3", pc == bp,
               f"pc 0x{pc:x}, breakpoint 0x{bp:x}")
@@ -305,7 +327,7 @@ def steps(inst, disk, log, res, rsp):
     stop = rsp.recv(timeout=10)
     pc2 = rip_of(rsp.cmd("g"))
     res.check("a single step stops again one instruction on",
-              stop == "S05" and bp < pc2 <= bp + 15, f"{stop}, pc 0x{pc2:x}")
+              is_stop(stop, "05") and bp < pc2 <= bp + 15, f"{stop}, pc 0x{pc2:x}")
     res.check("z0 removes it", rsp.cmd(f"z0,{bp:x},1") == "OK")
 
     # A hardware write watchpoint.
@@ -314,7 +336,7 @@ def steps(inst, disk, log, res, rsp):
     rsp.send("c")
     stop = rsp.recv(timeout=10)
     res.check("the tick's write to the counter fires it, and names the address",
-              stop == f"T05watch:{w:x};", stop)
+              re.fullmatch(rf"T05thread:[0-9a-f]+;watch:{w:x};", stop) is not None, stop)
     res.check("z2 removes it", rsp.cmd(f"z2,{w:x},8") == "OK")
     res.check("a read-only watch is 'not supported' (x86 has none)", rsp.cmd(f"Z3,{w:x},8") == "")
 
@@ -328,12 +350,12 @@ def steps(inst, disk, log, res, rsp):
     time.sleep(0.5)
     QMPSession(port=4445 + inst).hmp("nmi")
     stop = rsp.recv(timeout=10)
-    res.check("an NMI from QEMU's monitor breaks in (S02)", stop == "S02", stop)
+    res.check("an NMI from QEMU's monitor breaks in (T02)", is_stop(stop, "02"), stop)
     rsp.send("c")
     time.sleep(0.5)
     rsp.interrupt()
     stop = rsp.recv(timeout=10)
-    res.check("a ^C byte breaks in (S02)", stop == "S02", stop)
+    res.check("a ^C byte breaks in (T02)", is_stop(stop, "02"), stop)
 
     res.check("D detaches", rsp.cmd("D") == "OK")
     try:
@@ -367,22 +389,42 @@ def real_gdb(inst, res):
 
 def real_gdb_run(target, res):
     r = subprocess.run(
-        ["gdb", "-nx", "-batch", KERNEL,
+        ["gdb", "-nx", "-batch", "-x", os.path.join(TOOLS, "gdb", "toyos.py"), KERNEL,
          "-ex", "set pagination off",
          "-ex", f"target remote {target}",
          "-ex", f"x/2i {BP_FUNC}",
          "-ex", "info registers rip",
+         "-ex", "echo @@helpers\\n",
+         "-ex", "toy-ps",
+         "-ex", "toy-dmesg 3",
+         "-ex", "info threads",
+         "-ex", "thread 2",
+         "-ex", "bt",
          "-ex", "detach"],
         cwd=REPO, capture_output=True, text=True, timeout=120)
     out = r.stdout + r.stderr
-    dis = [l for l in out.splitlines() if f"<{BP_FUNC}" in l]
+    # Each check reads its own part: a bt that walks into garbage must
+    # not fail the disassembly check with its "Cannot access memory".
+    head = out.split("@@helpers")[0]
+    dis = [l for l in head.splitlines() if f"<{BP_FUNC}" in l]
     # ATTACHED, not read off the file: GDB disassembles kernel.bin from disk
     # when the connection fails, so the live register read is the proof.
-    live = re.search(r"^rip\s+0x[0-9a-f]+", out, re.M) is not None
+    live = re.search(r"^rip\s+0x[0-9a-f]+", head, re.M) is not None
     res.check("a real GDB attaches and disassembles a function by name",
-              live and len(dis) >= 2 and "Cannot access memory" not in out
-              and "no registers" not in out, out[-600:])
+              live and len(dis) >= 2 and "Cannot access memory" not in head
+              and "no registers" not in head, head[-600:])
     res.check("...and detaches cleanly", "Detaching" in out or "detached" in out.lower(), out[-300:])
+    res.check("toy-ps lists pid 1 as init", re.search(r"^\s+1\s+0\s+\S+\s+init$", out, re.M) is not None,
+              out[:600])
+    res.check("toy-dmesg prints the log ring", re.search(r"^\[\s*\d+\.\d+\]", out, re.M) is not None,
+              out[:600])
+    res.check("info threads shows the processes by name",
+              "Thread 1000 (kernel" in out and "(init, " in out, out[:900])
+    # thread 2 is the first process: parked in a syscall, so its stack
+    # runs down through isr_common into ring 3 -- and stops there.
+    res.check("a parked thread's bt goes PAST isr_common and stops at the user frame",
+              "isr_common" in out and "syscall_dispatch" in out and
+              "Backtrace stopped: frame did not save the PC" in out, out[-900:])
 
 
 def main():

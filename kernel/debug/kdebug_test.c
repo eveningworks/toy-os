@@ -92,6 +92,8 @@ KTEST("kdebug", "a software breakpoint stops, reports the PC and resumes") {
     // remove it, go.
     k_strlcpy(g_script + k_strlen(g_script), "+", sizeof g_script - k_strlen(g_script));
     script_add("g", 1);
+    script_add("qfThreadInfo", 1);
+    script_add("qThreadExtraInfo,1", 1);
     bp[0] = 'z';
     script_add(bp, 1);
     script_add("c", 0);
@@ -109,7 +111,9 @@ KTEST("kdebug", "a software breakpoint stops, reports the PC and resumes") {
 
     KTEST_ASSERT_EQ(r, 16);                    // the patched instruction ran as itself
     KTEST_ASSERT_EQ((int)(kdb.stops - stops), 2);
-    KTEST_ASSERT(k_strstr(g_log, "$S05#b8") != 0);   // the breakpoint's stop reply
+    // The breakpoint's stop reply names the thread that hit it.
+    const char *stop = k_strstr(g_log, "$T05thread:");
+    KTEST_ASSERT(stop != 0);
 
     // The `g` reply opens with 16 GPRs (256 hex digits); rip follows,
     // little-endian -- and must be the breakpoint, not one past the int3.
@@ -118,11 +122,15 @@ KTEST("kdebug", "a software breakpoint stops, reports the PC and resumes") {
         uint8_t byte = (uint8_t)(at >> (i * 8));
         k_snprintf(rip + i * 2, 3, "%02x", byte);
     }
-    const char *g = k_strstr(g_log, "$S05#b8");
-    g = g ? k_strstr(g + 7, "$") : 0;
+    const char *g = stop ? k_strstr(stop + 1, "$") : 0;
     KTEST_ASSERT(g != 0);
     KTEST_ASSERT(k_strncmp(g + 1 + 256, rip, 16) == 0);
     KTEST_ASSERT_EQ(*(volatile uint8_t *)(uintptr_t)at, before);   // lifted for good
+
+    // Threads: the kernel context first (1000 = 0x3e8), and pid 1 by name
+    // -- "init, " hex-encoded is 696e69742c20.
+    KTEST_ASSERT(k_strstr(g_log, "$m3e8,1") != 0);
+    KTEST_ASSERT(k_strstr(g_log, "$696e69742c20") != 0);
 }
 
 // --- the network transport's pieces --------------------------------------

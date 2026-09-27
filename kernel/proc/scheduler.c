@@ -210,6 +210,7 @@ static uint64_t kernel_offcpu_tsc, kernel_left_tsc; // and its off-CPU time
 static struct kernel_context kernel_kctx; // and where the kernel context
                                           // itself is parked -- rip 0
                                           // until it has been left once
+const struct kernel_context *scheduler_kernel_kctx(void) { return &kernel_kctx; }
 static uint64_t kernel_saved_rsp = 0; // refreshed every tick that finds
                                         // current_index == -1
 volatile int alive_count = 0;

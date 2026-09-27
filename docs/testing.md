@@ -725,13 +725,19 @@ python3 tools/kdebug_bridge.py                      # terminal 2; key from build
 gdb build/kernel.bin -ex "target remote localhost:1235"
 ```
 
+**Load the helpers**: `gdb -x tools/gdb/toyos.py build/kernel.bin ...`
+gives `toy-dmesg [N]`, `toy-ps`, and a `bt` that continues past
+`isr_common` into whatever the interrupt landed on. `info threads` lists
+every process by name and state, and `thread <Id>` then `bt` shows where
+that one is parked -- through its syscall, down to its user-space PC.
+
 Attaching stops a RUNNING kernel (the first packet is a break-in), `^C`
 breaks in again after `continue`, and a kernel fault or panic stops in
 the debugger at the faulting frame before the panic runs. It answers
 `qOffsets`, so GDB relocates `kernel.bin`'s symbols to the KASLR base
 by itself. `break`, `hbreak`, `watch`/`awatch` (four hardware slots;
-x86 has no `rwatch`), `stepi`, `x`, `set var` and `bt` work; `bt` stops
-at `isr_common`, the interrupt frame. Headless: `tools/vm.py --kdebug`
+x86 has no `rwatch`), `stepi`, `x`, `set var` and `bt` work -- `bt`
+stops at `isr_common`, the interrupt frame, unless the helpers are loaded. Headless: `tools/vm.py --kdebug`
 adds a COM3 socket (`.vm[.N].kdb`) for an image carrying
 `kdebug=ttyS2`, and `--kdebug-net` the debugger's own e1000 (host udp
 51000+N); `tools/kdebug_test.py [--net]` drives either.

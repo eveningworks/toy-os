@@ -1114,7 +1114,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [x] ~~The network debugger on real hardware: an r8169 backend (the Lenovo)~~ DONE 2026-09-27 -- stage 3b
 - [ ] The network debugger on a one-NIC machine: the OS's traffic through the debugger's card (KDNIC) -- stage 3c
 - [ ] Live kernel memory inspection without halting, drgn's shape, over `remote.py` -- `docs/kdebug-design.md` stage 1
-- [ ] The kernel debugger's processes as GDB threads, and `monitor` commands (`ps`, `dmesg`)
+- [x] ~~The kernel debugger's processes as GDB threads, and `ps`/`dmesg`~~ DONE 2026-09-27 -- threads, and `tools/gdb/toyos.py`
 
 ### Programming on the machine
 

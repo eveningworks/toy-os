@@ -15,6 +15,11 @@
 int      kdb_arch_reg_size(int n);
 uint64_t kdb_arch_reg_get(const uint64_t *regs, int n);
 void     kdb_arch_reg_set(uint64_t *regs, int n, uint64_t v);
+// A PARKED context's registers (context_switch.h): rsp, rip and the
+// callee-saved ones. Nothing else was saved, so *have is 0 for the rest
+// and GDB is told they are unavailable rather than shown a guess.
+struct kernel_context;
+uint64_t kdb_arch_ctx_reg(const struct kernel_context *k, int n, int *have);
 uint64_t kdb_arch_pc(const uint64_t *regs);
 void     kdb_arch_set_pc(uint64_t *regs, uint64_t pc);
 
