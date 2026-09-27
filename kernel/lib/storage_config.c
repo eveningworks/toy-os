@@ -3,7 +3,7 @@
 //
 // WHAT `batched` GIVES UP, which is much less than `lazy`. A write's
 // DATA blocks and its allocation bitmaps reach the disk before the
-// transaction is even opened (tfs3.c's do_write_inner) -- the
+// transaction is even opened (tfs3_write.c's do_write_inner) -- the
 // transaction covers the INODE block alone. So deferring the commit
 // risks the inode update, not the data: a just-extended file comes back
 // at its old size with the blocks past it unreferenced. That is a LEAK,

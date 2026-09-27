@@ -824,7 +824,7 @@ def _mark_executable(host, telnet_port, local_dir, remote_dir, timeout):
     **A SYNC CANNOT LEAVE THE MODE TO THE KERNEL'S DEFAULT, and this is
     not belt-and-braces.** A file arrives here through the kernel rather
     than through the host seeder, so it gets whatever
-    kernel/fs/tfs3.c's T3_MODE_DEFAULT says -- and a file that did NOT
+    kernel/fs/tfs3_internal.h's T3_MODE_DEFAULT says -- and a file that did NOT
     change is not re-sent at all, so it keeps whatever mode it was
     written with, possibly years and several defaults ago. That left
     /bin/cat at 0644 on the laptop after a full --force flash, and dash

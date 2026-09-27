@@ -135,7 +135,7 @@ QEMU goes away without the guest being told, so anything mid-write is
 simply lost.
 
 That is not a filesystem bug, and the distinction is the whole point of
-this entry. `tfs3.c`'s `flush_alloc_state()` writes the allocation
+this entry. `tfs3_alloc.c`'s `t3_flush_alloc_state()` writes the allocation
 bitmap **unjournaled and set-before-use**, so a crash between marking a
 block allocated and committing the transaction that references it leaks
 that block -- deliberately, because the alternative ordering risks

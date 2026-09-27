@@ -49,4 +49,4 @@ rather than a fact about the file. That was not merely incomplete: on
 real hardware it made `dash` unable to run any external command, because
 files written by `remote.py sync` go through the kernel at the default
 mode and dash's exec path refuses a file with no execute bit. See
-`kernel/fs/tfs3.c`'s `T3_MODE_DEFAULT` for the measurement.
+`kernel/fs/tfs3_internal.h`'s `T3_MODE_DEFAULT` for the measurement.

@@ -41,7 +41,7 @@ int mkdir(const char *path, mode_t mode);
 
 // **ACCEPTED, RECORDED, AND APPLIED TO NOTHING.** A umask subtracts bits
 // from the mode a creation asks for -- but nothing here passes a mode to
-// creation: a file gets the default for its type (kernel/fs/tfs3.c's
+// creation: a file gets the default for its type (kernel/fs/tfs3_internal.h's
 // T3_MODE_DEFAULT) and there is no chmod to change it afterwards. The
 // value is stored and returned so the get-and-restore idiom every shell
 // uses (`old = umask(0); umask(old)`) behaves, and so a caller can read

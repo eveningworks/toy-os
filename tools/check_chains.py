@@ -32,7 +32,9 @@ BASELINE = {
     "kernel/core/multiboot.c": 5,
     "kernel/drivers/ata.c": 11,
     "kernel/drivers/pci.c": 1,
-    "kernel/fs/tfs3.c": 14,
+    "kernel/fs/tfs3.c": 8,
+    "kernel/fs/tfs3_fsck.c": 5,
+    "kernel/fs/tfs3_journal.c": 1,
     "kernel/test/ktest.c": 11,
 }
 

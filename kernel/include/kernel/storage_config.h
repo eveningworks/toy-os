@@ -6,7 +6,7 @@
 // `storage.sync` -- whether a write is durable when it returns.
 //
 // TFS3 commits one journal transaction per fs_write*() call and ends it
-// with TWO real device flushes (tfs3.c's txn_commit). That is a
+// with TWO real device flushes (tfs3_journal.c's t3_txn_commit). That is a
 // stronger promise than Linux or Windows make: there, a write(2) lands
 // in the page cache and returns, writeback runs on a timer, and the
 // journal commits every few seconds with one barrier for thousands of

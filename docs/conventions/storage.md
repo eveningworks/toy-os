@@ -532,7 +532,7 @@ disabled entirely.
 
 Every `fs_write*()` call is one TFS3 transaction ending in two real
 device flushes. `storage.sync` (default `batched`, above) is the switch;
-`txn_barrier()` in `tfs3.c` is the one place both barriers go through.
+`txn_barrier()` in `tfs3_journal.c` is the one place both barriers go through.
 
 **`lazy` risks corruption, not just lost writes.** Both barriers order
 the journal against the targets and the targets against the commit

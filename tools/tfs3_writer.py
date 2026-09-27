@@ -66,7 +66,7 @@ MIN_GROUP_BLOCKS = 512
 # fixed region between the superblock and the group descriptors, so
 # making it bigger moves everything after it. v1 had four slots, which
 # cannot hold the five-block transaction a cross-directory directory
-# move needs; v2 has 32. Keep in lockstep with kernel/fs/tfs3.c's
+# move needs; v2 has 32. Keep in lockstep with kernel/fs/tfs3_internal.h's
 # T3_V1_*/T3_V2_* sets -- and note each version's numbers are
 # CONSTANTS, which is what lets a reader with an unreadable primary
 # superblock still find the backups by trying both.
@@ -95,7 +95,7 @@ def set_geometry(version):
 def journal_cksum_off(version):
     # Four v1 slot entries end exactly where v1 put the header
     # checksum, so v2 moves the slot table to 16 and the checksum to
-    # the end of the sector. See tfs3.c's jh_cksum_off().
+    # the end of the sector. See tfs3_journal.c's t3_jh_cksum_off().
     return SECTOR - 4 if version >= 2 else 44
 
 
@@ -215,7 +215,7 @@ def pack_inode(typ, links, size, created, modified, ptrs, mode=None):
     zero. That is what makes it an extension rather than a format
     revision: an older kernel still validates the checksum because it
     already folds 92..127 in, and reads mode 0, which it answers with
-    its own default. See kernel/fs/tfs3.c's `struct t3_inode`.
+    its own default. See kernel/fs/tfs3_internal.h's `struct t3_inode`.
 
     None means "the default for the type", which is what the kernel
     would have supplied anyway -- written out explicitly so a stored

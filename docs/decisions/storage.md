@@ -1626,7 +1626,7 @@ zeros, so a grow moves the size field and nothing else. `truncate f
 1000000000` is one inode write and no blocks.
 
 Both backends implement this the same way and separately
-(`trunc_begin`/`trunc_free` in tfs3.c, `trunc_detach_tail`/
+(`trunc_begin`/`trunc_free` in tfs3_write.c, `trunc_detach_tail`/
 `trunc_free_tail` in tfs.c), consistent with their already-parallel
 block-map walks -- they persist through completely different mechanisms
 (a journal transaction vs. a record write), which is most of what the
