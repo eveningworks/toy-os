@@ -53,6 +53,7 @@ import install_grub
 # COM1 exposed as a TCP socket. Deliberately NOT the QMP port (4445) and
 # not in the range tools/gui_regress.py leases (4445-4448).
 DEFAULT_PORT = 4555
+PROMPT_MARK = "dbg> "   # the debug console listening again -- see send()
 
 
 def launch_cmd(iso, disk, port, virtio_disk=None, memory=256):
@@ -145,6 +146,7 @@ class SerialGuest:
         self.memory = memory
 
         self.transcript = ""
+        self._sent_at = None   # transcript length when the last command went out
         self.proc = None
         self.sock = None
         self.started_at = None
@@ -264,11 +266,29 @@ class SerialGuest:
                 return True
         return False
 
-    def send(self, line):
-        """Send one command line. False if the wire is already gone."""
+    def send(self, line, prompt_wait=60.0):
+        """Send one command line. False if the wire is already gone.
+
+        WAITS FOR THE PREVIOUS COMMAND'S PROMPT FIRST (bounded). The debug
+        console is a terminal, and on a terminal a line typed while a
+        command runs is that COMMAND's input -- `ktest` sent while
+        `sh fsck repair` was still running arrived as `nt`, the rest read
+        by fsck. What a caller waits for before sending (`fsck: clean.`)
+        prints before the command has finished, so the prompt is the only
+        boundary that means "the console is listening again". A caller
+        that deliberately types AT a running command passes 0.
+        """
         if self.sock is None:
             return False
+        if self._sent_at is not None and prompt_wait > 0:
+            deadline = time.time() + prompt_wait
+            while (PROMPT_MARK not in self.transcript[self._sent_at:]
+                   and self.sock is not None and time.time() < deadline):
+                self.pump()
+            if self.sock is None:
+                return False
         try:
+            self._sent_at = len(self.transcript)
             self.sock.sendall((line + "\n").encode())
             return True
         except OSError as e:

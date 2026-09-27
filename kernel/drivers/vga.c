@@ -8,6 +8,7 @@
 
 #include "clockevent.h" // clockevent_idle_wake_at_tick() -- the blink is due at a time
 #include "vga.h"
+#include "scheduler.h" // scheduler_preempt_disable() -- vga_putc_console()
 #include "ansi.h"
 #include "io.h"
 #include "gfx.h"
@@ -1029,6 +1030,23 @@ static void vga_ansi_ctrl(const struct ansi_parser *p) {
     } else {
         legacy_update_cursor();
     }
+}
+
+// THE PHYSICAL CONSOLE, whatever sink is installed. A sink redirects the
+// KERNEL SHELL's own output for the length of a command; ring-3 output
+// to the console is somebody else's, and while the serial debug console
+// ran a command it landed in that command's reply -- a leftover job's
+// output inside the next answer. PREEMPTION off across the swap -- not
+// interrupts, since a scroll is megabytes of copying -- so the kernel
+// shell cannot print while the sink is lifted; an IRQ that echoes comes
+// through here too, and nests.
+void vga_putc_console(char c) {
+    scheduler_preempt_disable();
+    const struct vga_sink *s = active_sink;
+    active_sink = 0;
+    vga_putc(c);
+    active_sink = s;
+    scheduler_preempt_enable();
 }
 
 void vga_putc(char c) {

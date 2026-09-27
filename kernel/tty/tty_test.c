@@ -18,6 +18,7 @@
 #include "pty.h"
 #include "fs.h"
 #include "timer.h"
+#include "signal_abi.h" // SIGINT -- what the kernel-led session delivers
 
 KTEST("tty", "the console provider is registered and agrees with the tty layer") {
     struct query_tty t;
@@ -419,6 +420,73 @@ KTEST("tty", "a fabricated slot leads its own session") {
     KTEST_ASSERT_EQ(refused, -EPERM);
     // A group nobody is in is not in any session.
     KTEST_ASSERT_EQ(scheduler_sid_has_pgid(sid, 0), 0);
+}
+
+// THE SERIAL DEBUG CONSOLE'S SESSION RULES, on a scratch terminal and a
+// fabricated process. tools/debug_tty_test.py covers the same through
+// the real port; these are the kernel's half, run by every gate.
+KTEST("tty", "a hang-up ends the session but keeps the input typed ahead") {
+    struct tty *t = scratch(TTY_ICANON);
+    if (!t) KTEST_SKIP("no free terminal slot");
+    uint64_t tf[SCHED_TF_SLOTS] = {0};
+    int idx = scheduler_test_park(tf, tf, SCHED_WAIT_EVENT);
+    if (idx < 0) { tty_destroy(t); KTEST_SKIP("no free slot"); }
+    int pid = idx + 1;
+
+    tty_attach_kernel_session(t, pid);
+    int owner = tty_owner(t), fg = tty_fg_pgid(t);
+    unsigned gen0 = tty_generation(t);
+    feed(t, "next\n");   // the NEXT command, typed while this one ran
+    tty_hangup(t);
+    int owner_after = tty_owner(t), fg_after = tty_fg_pgid(t);
+    unsigned gen1 = tty_generation(t);
+    char buf[16] = {0};
+    unsigned n = tty_read(t, buf, sizeof buf);
+
+    scheduler_test_release(idx);
+    tty_destroy(t);
+
+    KTEST_ASSERT_EQ(owner, pid);
+    KTEST_ASSERT(fg != 0);   // an owned terminal always has a foreground
+    KTEST_ASSERT_EQ(owner_after, 0);
+    KTEST_ASSERT_EQ(fg_after, 0);
+    // A NEW generation is what marks every old descriptor as hung up.
+    KTEST_ASSERT(gen1 != gen0);
+    // ...and the typed-ahead line survives: it is the console's next
+    // command, not the old session's property.
+    KTEST_ASSERT_EQ((int)n, 5);
+    KTEST_ASSERT_EQ(buf[0], 'n');
+}
+
+KTEST("tty", "INTR reaches the owner's own group only in a kernel-led session") {
+    // A shell reading its own terminal must NOT be interrupted by its
+    // own Ctrl-C (ldisc.c's signal_char()), so INTR there falls through
+    // as a byte. The debug console's session has no shell process: the
+    // owner IS the command, and INTR must be taken as a signal. The
+    // control is the same process as an ordinary owner.
+    struct tty *t = scratch(TTY_ISIG);
+    if (!t) KTEST_SKIP("no free terminal slot");
+    uint64_t tf[SCHED_TF_SLOTS] = {0};
+    int idx = scheduler_test_park(tf, tf, SCHED_WAIT_EVENT);
+    if (idx < 0) { tty_destroy(t); KTEST_SKIP("no free slot"); }
+    int pid = idx + 1;
+
+    tty_set_owner(t, pid);
+    tty_input(t, 0x03, 0);
+    char buf[4];
+    unsigned as_byte = tty_read(t, buf, sizeof buf);
+
+    tty_attach_kernel_session(t, pid);
+    tty_input(t, 0x03, 0);
+    unsigned kernel_led = tty_read(t, buf, sizeof buf);
+    uint32_t pending = scheduler_signal_pending(pid);
+
+    scheduler_test_release(idx);
+    tty_destroy(t);
+
+    KTEST_ASSERT_EQ((int)as_byte, 1);     // control: an ordinary owner keeps it
+    KTEST_ASSERT_EQ((int)kernel_led, 0);  // taken as a signal, not queued
+    KTEST_ASSERT(pending & (1u << SIGINT));
 }
 
 #define SESSION_TEST_PATH "/tests/session_test"

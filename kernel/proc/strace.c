@@ -105,6 +105,7 @@ static int g_armed_by = 0;
 // Which terminal the trace prints to, as a tty INDEX. 0 is the physical
 // console, which is also the fallback.
 static int g_sink = 0;
+static unsigned g_sink_gen; // tty_generation() then: a hung-up sink is the console
 static uint64_t g_calls = 0;
 
 // Long enough for the worst realistic line: a name, three arguments,
@@ -146,11 +147,12 @@ void strace_claim(uint64_t pml4_phys) {
     // redirects output far more often than input. Only a tracer with
     // BOTH ends redirected has no terminal to name.
     //
-    // fd 2 is not consulted at all: in this OS it is the KERNEL LOG
-    // rather than a second terminal stream -- see decision 3 above.
+    // fd 2 is not consulted: for a process with no terminal it is the
+    // kernel log, which the trace reaches anyway (sink_write()).
     struct tty *t = fd_tty(vmm_current_pml4(), 1);
     if (!t) t = fd_tty(vmm_current_pml4(), 0);
     g_sink = t ? tty_index(t) : 0;
+    g_sink_gen = tty_generation(t);
 }
 
 int strace_active(void) {
@@ -446,6 +448,10 @@ static void sink_write(const char *line) {
     unsigned n = 0;
     while (line[n]) n++;
     struct tty *t = tty_at(g_sink);
+    // The serial debug console hangs its terminal up when the command
+    // that started a trace returns; a leftover trace goes to the console
+    // from then on, as the traced program's own output does.
+    if (t && tty_generation(t) != g_sink_gen) t = tty_console();
     if (t) tty_output(t, line, n);
     else vga_write(line); // a sink that went away mid-trace
     klog_write(line);

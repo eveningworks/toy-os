@@ -57,6 +57,12 @@ its parent was writing, which is what you want when starting something
 to watch. A caller that needs a pipe passes a real descriptor through
 `SYS_SPAWN` directly; that is not this program's job.
 
+**Started from the serial debug console, the child DETACHES from its
+terminal** and gets the machine console as stdin and stdout instead:
+that terminal is one command's session, and a background job would
+otherwise print into the next command's reply. Anywhere else -- a
+Terminal window, the physical console -- stdout is inherited as above.
+
 **stderr goes to the kernel log** (`dmesg`), as `nohup` takes a
 detached job's output off the terminal: the prompt is back before the
 child has said anything, so its errors land where they can be read

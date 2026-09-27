@@ -126,7 +126,14 @@ enum fd_kind {
     // ordinary output is captured and attributed instead of landing on
     // a console nobody is reading. Never readable: there is nothing to
     // read back through a descriptor, and `log` reads the file.
-    FD_KIND_LOG
+    FD_KIND_LOG,
+    // A terminal by TTY INDEX, whatever its driver -- the serial debug
+    // console's today. Unlike a pty end it has no second end to close,
+    // so it records the SESSION GENERATION it was opened in instead: a
+    // descriptor that outlives its session (tty_hangup()) behaves as a
+    // CONSOLE one from then on -- what a leftover job had before this
+    // terminal existed.
+    FD_KIND_TTY
 };
 
 struct open_file {
@@ -162,6 +169,10 @@ struct open_file {
         struct {
             int idx; // index into shm.c's object table
         } shm;
+        struct {
+            int idx;      // tty_at() index
+            unsigned gen; // tty_generation() when opened
+        } tty;
     };
 };
 
@@ -192,9 +203,17 @@ struct tty *fd_tty(uint64_t pml4, int fd);
 void fd_desc_unref(int di);
 
 // --- descriptors ---
-// Gives `pml4` a descriptor table with 0/1/2 on the console. Idempotent. Called for a process's own address space the
+// Gives `pml4` a descriptor table with 0/1/2 on the console -- or on the
+// kernel-context terminal, while one is set. Idempotent. Called for a process's own address space the
 // first time anything asks about its fds.
 int  fd_space_open(uint64_t pml4);
+// THE KERNEL CONTEXT'S TERMINAL: what a table fd_space_open() builds
+// names on 0/1/2 while it is set, instead of the console. The serial
+// debug console sets it for the length of one command, so the program
+// that command runs -- and only it -- is handed the serial terminal.
+// NULL restores the console.
+void fd_set_kernel_tty(struct tty *t);
+struct tty *fd_kernel_tty(void);
 int  fd_dup_from(uint64_t pml4, int oldfd, int min);
 // -1 queries, 0 clears, 1 sets; returns the flag as it was before.
 int  fd_cloexec(uint64_t pml4, int fd, int op);

@@ -994,9 +994,18 @@ struct spawn_msg {
 // field is unchanged, the same shape as SPAWN_ARGV.
 #define SPAWN_STDERR 16
 
+// The child is a BACKGROUND job that must not hold the serial debug
+// console's terminal: where the caller's fd 0 or 1 is that terminal (a
+// per-command session, hung up when the command returns), the child
+// gets the machine console there instead. Anything else -- a pty, the
+// console -- is inherited as usual. /bin/spawn passes it; without it, a
+// job it started put its first output into the command's reply and the
+// rest on the screen (tools/ansi_cursor_test.py drew half a picture).
+#define SPAWN_DETACH 32
+
 // Every flag this kernel knows. Anything outside it is -EINVAL.
 #define SPAWN_FLAGS_ALL (SPAWN_TRACE | SPAWN_FOREGROUND | SPAWN_ARGV | SPAWN_SETSID | \
-                         SPAWN_STDERR)
+                         SPAWN_STDERR | SPAWN_DETACH)
 
 // The most an environment blob may be, including its terminator. It has
 // to fit the child's single argv/env stack page alongside the strings

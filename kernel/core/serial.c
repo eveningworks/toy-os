@@ -75,9 +75,15 @@ static void irq_restore(uint64_t f) {
 // by the 0xC7 written below) in one pass. A full software ring drops the
 // newest byte -- nothing typed at this console needs guaranteed
 // delivery under a burst.
+static void (*g_dbg_rx)(uint8_t c);
+
 static void rx_drain(struct uart *u) {
     while (inb(u->base + 5) & 0x01) { // LSR bit 0: data ready
         uint8_t c = (uint8_t)inb(u->base);
+        // The debug port's bytes go STRAIGHT to its terminal when one is
+        // attached, so the line discipline runs here in the IRQ -- which
+        // is what lets Ctrl-C reach a command that is still running.
+        if (g_dbg_rx && u == dbg_port()) { g_dbg_rx(c); continue; }
         uint8_t next = (uint8_t)(u->rx_head + 1);
         if (next != u->rx_tail) {
             u->rx_buf[u->rx_head] = c;
@@ -230,7 +236,18 @@ int serial_dbg_separate(void) { return g_com2.present && !g_dbg_com1; }
 // A Super I/O chip can decode 0x2F8 with no connector fitted, so the
 // probe says "COM2" on a machine whose only wired port is COM1.
 void serial_dbg_use_com1(void) { g_dbg_com1 = 1; }
-int serial_dbg_try_getc(void) { return rx_getc(dbg_port()); }
+// BYTES THAT ARRIVED FIRST ARE HANDED OVER, in order: a harness types
+// its command as soon as the port is up -- ktest_run.py does, from the
+// first boot output -- and the terminal is created later in boot. Left
+// in the ring they would be read by nothing, and the command lost.
+void serial_dbg_set_rx(void (*fn)(uint8_t c)) {
+    uint64_t f = irq_save();   // the IRQ must not deliver past the backlog
+    struct uart *u = dbg_port();
+    int c;
+    if (fn) while ((c = rx_getc(u)) >= 0) fn((uint8_t)c);
+    g_dbg_rx = fn;
+    irq_restore(f);
+}
 void serial_dbg_putc(char c) { tx_putc(dbg_port(), c); }
 void serial_dbg_flush(void) { tx_flush(dbg_port()); }
 

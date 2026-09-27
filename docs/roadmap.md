@@ -27,7 +27,6 @@ buildable now. Something that MISBEHAVES is not here -- that is
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
-- [ ] The debug console as its own tty on COM2, so no tool's reply shares a wire with the kernel log -- ports BUILT, tty not  *(Kernel test harness)*
 - [ ] Restore trust in the GUI suite: harness faults first, then the deterministic reds, intermittents kept with a rate  *(Kernel test harness)*
 - [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
@@ -1018,7 +1017,7 @@ hand as a throwaway probe during a real hunt (see roadmap-details).
 - [x] ~~`gfxdemo_test`'s two scene-restore checks fail under heavy parallel load~~ DONE 2026-08-19 -- it polls for the log line now
 - [ ] `flake_hunt.py` does not reset `disk.img` between runs, so any rate involving the filesystem is contaminated
 - [ ] The ATA fault-injection KTESTs leak a failed write into the NEXT test -- measured 2 fails in 4 clean runs
-- [ ] **NEXT** The debug console as its own tty on COM2, so no tool's reply shares a wire with the kernel log -- ports BUILT, tty not
+- [x] ~~The debug console as its own tty on COM2, so no tool's reply shares a wire with the kernel log~~ DONE 2026-09-27
 - [ ] Per-test timing, so a test that quietly becomes slow is visible
 - [ ] A `ktest -v` that reports each assertion, not just pass/fail
 - [ ] Tests for the boundary this kernel enforces by include path

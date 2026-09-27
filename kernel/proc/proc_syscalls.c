@@ -531,6 +531,7 @@ static int spawn_err_desc(uint64_t pml4, int fd) {
     switch (f->kind) {
     case FD_KIND_CONSOLE: case FD_KIND_KLOG: case FD_KIND_LOG:
     case FD_KIND_PIPE_W: case FD_KIND_SOCKET: case FD_KIND_TTY_SLAVE:
+    case FD_KIND_TTY:
         break;
     case FD_KIND_FILE:
         if (f->file.mode != FD_MODE_WRITE) return -1;
@@ -716,6 +717,17 @@ int sys_spawn(struct syscall_ctx *c) {
             ok = 0;
         }
     }
+    // SPAWN_DETACH: the serial debug console's terminal is not handed
+    // on. A fresh console description stands in for each standard stream
+    // that names it and was not named explicitly above.
+    int detach_in = -1, detach_out = -1;
+    if (ok && (msg.flags & SPAWN_DETACH)) {
+        struct open_file *f0 = fd_get(pml4, 0), *f1 = fd_get(pml4, 1);
+        if (stdin_desc < 0 && f0 && f0->kind == FD_KIND_TTY)
+            stdin_desc = detach_in = fd_desc_alloc(FD_KIND_CONSOLE, -1);
+        if (stdout_desc < 0 && f1 && f1->kind == FD_KIND_TTY)
+            stdout_desc = detach_out = fd_desc_alloc(FD_KIND_CONSOLE, -1);
+    }
     if (ok && (msg.flags & SPAWN_STDERR)) {
         stderr_desc = spawn_err_desc(pml4, (int)msg.stderr_fd);
         if (stderr_desc < 0) {
@@ -793,6 +805,8 @@ int sys_spawn(struct syscall_ctx *c) {
     if ((msg.stderr_fd == SPAWN_FD_LOG || msg.stderr_fd == SPAWN_FD_KMSG) &&
         stderr_desc >= 0)
         fd_desc_unref(stderr_desc);
+    if (detach_in >= 0) fd_desc_unref(detach_in);
+    if (detach_out >= 0) fd_desc_unref(detach_out);
     spawn_args_free(&a);
     c->regs[14] = (uint64_t)(int64_t)spawn_rc;
     return 0;

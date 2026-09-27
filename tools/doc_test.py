@@ -52,6 +52,7 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "tools"))
 import port_guard                                  # noqa: E402
+import vm as vm_mod                                # noqa: E402 -- strip_terminal_codes()
 
 _fail = 0
 
@@ -206,15 +207,18 @@ def main():
         check("...and near names are suggested",
               "cmd/lsdisplay" in out or "cmd/lsblk" in out, out[:200])
 
-        # 6. Colour never arrives as TEXT. The console PARSES the
-        #    escapes, so a styled page and a plain one read identically
-        #    here -- what this catches is the failure where they do not
-        #    get parsed and `[1;36m` prints beside every code span, which
-        #    is exactly the check tools/ls_test.py makes about `ls`.
-        out = vm.sh("doc --no-pager --color=always ls")
+        # 6. Colour never arrives as TEXT. The debug console is a terminal,
+        #    so the escapes arrive on the wire (read with --escapes; vm.py
+        #    strips them otherwise) -- what this catches is a malformed
+        #    one, which a real terminal would print as `[1;36m` beside
+        #    every code span. The same check tools/ls_test.py makes.
+        raw = vm.run("exec", "--escapes", "doc --no-pager --color=always ls")
+        plain = vm_mod.strip_terminal_codes(raw)
+        check("styling arrives as escape sequences", "\x1b[" in raw, raw[:120])
         check("styling never prints as literal text",
-              "[36m" not in out and "[1m" not in out and "\x1b" not in out,
-              out[:200])
+              "[36m" not in plain and "[1m" not in plain and "\x1b" not in plain,
+              plain[:200])
+        out = vm.sh("doc --no-pager --color=always ls")
         check("...and the page is still all there", "SYNOPSIS" in out, out[:120])
 
         # 7. -l lists every category's pages.

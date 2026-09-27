@@ -189,6 +189,9 @@ TOOLS = [
     # --- shell, console, terminal ------------------------------------
     ("console",     "console_shell_test.py",   "a text boot reaching a ring-3 shell", True, None,                   False),
     ("ctrlc",       "ctrlc_test.py",           "Ctrl-C interrupting a real job",     True,  None,                   False),
+    # ATTACHES: types raw bytes at the debug console's own port -- a
+    # line for `sh cat`, Ctrl-D, Ctrl-C -- and watches a leftover job.
+    ("debug_tty",   "debug_tty_test.py",       "the serial debug console as a tty",  True,  None,                   True),
     ("jobs",        "jobs_test.py",            "job control: fg, bg, &, Ctrl-Z",     True,  None,                   False),
     # wants_vm: stdin_test ATTACHES to a running guest (its own docstring
     # says to start one first), and without it dies instantly on the

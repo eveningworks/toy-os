@@ -229,12 +229,16 @@ def main():
         check("-S lists the largest first", sizes == sorted(sizes, reverse=True), f"{sizes}")
 
         print("colour")
-        # The console consumes ESC[..m, so colour cannot be SEEN here --
-        # what is asserted is that the escapes were consumed rather than
-        # printed. A missing parser shows up as literal "[1;36m" text.
-        root = "\n".join(vm.sh("ls /"))
+        # The debug console is a TERMINAL, so `ls` colours there and the
+        # escapes arrive on the wire -- read with --escapes, since vm.py
+        # otherwise strips them. Two halves: colour is ON for a tty, and
+        # every "[1;36m" comes WITH its ESC -- a malformed sequence would
+        # print as literal text on a real terminal.
+        raw = vm.run("exec", "--escapes", "ls /")
+        check("on a terminal, ls colours its directories",
+              "\x1b[1;36m" in raw, repr(raw[:120]))
         check("escape sequences never arrive as literal text",
-              "[1;36m" not in root and "\x1b" not in root, repr(root[:120]))
+              "[1;36m" not in vm_mod.strip_terminal_codes(raw), repr(raw[:120]))
         check("a directory still carries its trailing slash with colour off",
               any(l.strip().endswith("/") for l in vm.sh("ls --color=never /")))
 

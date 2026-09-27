@@ -1,6 +1,8 @@
 #ifndef SERIAL_H
 #define SERIAL_H
 
+#include <stdint.h>
+
 void serial_init(void);
 void serial_write(const char *s);
 void serial_putc(char c);
@@ -41,7 +43,10 @@ int  serial_dbg_separate(void);
 // `debugcon=ttyS0`, for a board that decodes a port it has no connector
 // for. Call before the console first talks.
 void serial_dbg_use_com1(void);
-int  serial_dbg_try_getc(void);
+// Hand every byte the debug port receives to `fn`, IN THE IRQ -- the
+// serial tty's input (kernel/tty/serial_tty.c). Until it is set, bytes
+// wait in the port's ring, and setting it hands them over first.
+void serial_dbg_set_rx(void (*fn)(uint8_t c));
 void serial_dbg_putc(char c);
 void serial_dbg_write(const char *s);
 void serial_dbg_flush(void);

@@ -57,7 +57,7 @@ struct tty_driver {
     void (*winsize)(struct tty *t, uint16_t *rows, uint16_t *cols);
 };
 
-#define TTY_MAX 8 // terminals, kernel-wide: tty0 plus one per window
+#define TTY_MAX 9 // terminals, kernel-wide: tty0, the serial debug console, one per window
 
 // Sets up tty0 -- the physical console -- and nothing else. Called from
 // kernel_main() before anything can type.
@@ -185,6 +185,9 @@ void tty_get_winsize(struct tty *t, struct tty_winsize *out);
 void tty_set_winsize(struct tty *t, const struct tty_winsize *ws);
 
 void tty_get_termios(const struct tty *t, struct tty_termios *out);
+// The state every terminal is created in (TTY_LFLAG_DEFAULT and the
+// POSIX control characters) -- for a driver that puts one back.
+void tty_termios_defaults(struct tty_termios *tio);
 // Setting it DISCARDS a partly-typed canonical line rather than
 // carrying it into raw mode, where its bytes would suddenly become
 // readable in a way the program that switched modes never asked for.
@@ -215,6 +218,22 @@ int  tty_fg_pgid(const struct tty *t);
 // interrupts, and letting it would be a way to point somebody else's
 // interrupt at a process of your choosing.
 int  tty_set_fg_pgid(struct tty *t, int pgid);
+
+// --- a session the KERNEL leads --------------------------------------
+//
+// The serial debug console is a terminal whose "shell" is kernel code,
+// so no process ever claims it by reading. The console hands each
+// foreground command its terminal the way login(1) hands one to a
+// shell: `pid` becomes the owner, its session the terminal's, and its
+// group the foreground -- and Ctrl-C reaches that group even though it
+// is the owner's own (ldisc.c's signal_char()).
+void tty_attach_kernel_session(struct tty *t, int pid);
+// Ends the session: no owner, no foreground, and a new GENERATION, so a
+// descriptor from the old one no longer reads or writes HERE -- it falls
+// back to the machine console (syscall_fd.c's FD_KIND_TTY). vhangup(),
+// for a leftover job, except that Linux fails those calls with EIO.
+void tty_hangup(struct tty *t);
+unsigned tty_generation(const struct tty *t);
 
 // --- the console, as it was ------------------------------------------
 //

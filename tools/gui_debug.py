@@ -54,6 +54,7 @@ enter_gui() does that.
 
 import json as _json
 import os
+import re
 import atexit
 import socket
 import sys
@@ -85,6 +86,10 @@ SETTLE_S = 0.25       # post-drain grace, and the fallback when polling can't ru
 SPAWN_TIMEOUT_S = 15.0  # how long spawn() waits for a client's window to appear
 RETRIES_ON_SPLICED_JSON = 3  # see json() -- a klog line can land mid-object
 FIRST_PRESENT_S = 0.4  # grace after a client's window appears -- see spawn()
+# The debug console is a tty, so replies carry terminal control sequences
+# (`ls` colours its names). Dropped as vm.py's strip_terminal_codes() does.
+_CSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+OPEN_WAIT_S = 5.0     # open_app(): how long a launched app may take to map
 SETTLE_TIMEOUT_S = 15.0  # give up rather than hang if the queue never empties
 
 
@@ -233,6 +238,8 @@ class DebugConsole:
             self._prev_mark, self._mark = self._mark, len(self._all_log)
         self._s.sendall((command + "\n").encode())
         buf = self._read_to_prompt().replace("\r", "")
+        if not command.startswith("readfile"):
+            buf = _CSI.sub("", buf)
         if not buf.endswith(PROMPT):
             self._stale = True
         if buf.startswith(command):
@@ -770,12 +777,37 @@ class DebugConsole:
         The reply is still returned on success, so existing callers that
         read it are unaffected.
         """
+        before = self._window_snapshot()
         out = self.send(f"gui open {name}") or ""
         if "no app named" in out:
             known = [ln.strip() for ln in out.splitlines() if ln.strip()]
             raise ValueError(f"gui open {name!r} was refused by the guest: "
                              + " | ".join(known[:12]))
+        # AND WAIT FOR THE WINDOW, not just the launch. `gui open` answers
+        # once the process is SPAWNED; its window maps some hundreds of ms
+        # later, and a tool that opened an app to sit BEHIND its subject
+        # (winclient_test) had that app map on top of the subject instead
+        # whenever a build ran a little slower. "The list changed" covers
+        # a new window and a single-instance app raising its old one; an
+        # app already open and focused changes nothing and costs the
+        # bound, which is the only price.
+        # An unreadable BEFORE would make any answer look like a change,
+        # so the wait is skipped rather than ended at once by accident.
+        deadline = time.time() + OPEN_WAIT_S
+        while before is not None and time.time() < deadline:
+            now = self._window_snapshot()
+            if now is not None and now != before:
+                break
+            time.sleep(0.05)
         return out
+
+    def _window_snapshot(self):
+        try:
+            w = self.json("gui windows --json")
+        except ValueError:
+            return None
+        return (w.get("focused"),
+                frozenset((x.get("client_pid"), x.get("title")) for x in w.get("windows", [])))
 
     def spawn(self, path, title=None, timeout=SPAWN_TIMEOUT_S):
         """Run a ring-3 binary and (optionally) wait for its window.

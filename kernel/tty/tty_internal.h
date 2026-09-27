@@ -82,6 +82,17 @@ struct tty {
     // so a second Ctrl-D is needed to end input twice, exactly as on a
     // real terminal.
     int eof_pending;
+
+    // THE SESSION GENERATION, bumped by tty_hangup(). A descriptor
+    // records the generation it was opened in, so one outliving its
+    // session is recognised as hung up rather than handed the next
+    // session's input.
+    unsigned gen;
+    // The session is the KERNEL's (the serial debug console), which has
+    // no process of its own -- so the owner is the command it started,
+    // and Ctrl-C must reach that owner's group rather than being held
+    // back as it is for a shell reading its own terminal (ldisc.c).
+    int kernel_session;
 };
 
 // ldisc.c's entry points, called by tty.c.

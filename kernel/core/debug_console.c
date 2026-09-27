@@ -35,12 +35,20 @@
 #include <stdarg.h>
 #include "multiboot.h" // multiboot_cmdline() -- `debugcon`
 #include "kerrno.h" // EBUSY -- the gui channel is one slot
+#include "tty.h"        // the console reads its terminal, and leads a session per command
+#include "serial_tty.h"
+#include "syscalls.h"   // fd_set_kernel_tty() -- the command's fds 0/1/2
 
 #define DBG_LINE_MAX 128
 #define DBG_PROMPT "\r\ndbg> "
 
 static char line_buf[DBG_LINE_MAX];
 static int line_len = 0;
+static int line_overlong; // the rest of this line is dropped
+
+// The serial terminal (kernel/tty/serial_tty.c): input arrives through
+// its line discipline, and a command's program gets it as 0/1/2.
+static struct tty *g_tty;
 
 static void dbg_write(const char *s) { serial_dbg_write(s); }
 
@@ -168,8 +176,20 @@ static void dbg_cmd_sh(char *line) {
         return;
     }
 
+    // ONE COMMAND, ONE SESSION. The program the command runs gets the
+    // serial terminal as 0/1/2 (fd_set_kernel_tty()) and leads a session
+    // on it, so it can read the line and Ctrl-C reaches it. The sink swap
+    // stays for the kernel shell's OWN output, which is vga_write(). When
+    // the command returns the session is hung up: a job it left running
+    // reads and writes the machine console from then on, never a later
+    // reply (docs/decisions.md, "The kernel log and the debug console are
+    // two serial ports"), and the line gets its default settings back.
     const struct vga_sink *prev = vga_set_sink(&g_serial_sink);
+    fd_set_kernel_tty(g_tty);
     shell_dispatch(line, &g_serial_sink);
+    fd_set_kernel_tty(0);
+    tty_hangup(g_tty);
+    serial_tty_reset();
     vga_set_sink(prev);
 }
 
@@ -513,6 +533,7 @@ void debug_console_init(void) {
     }
     // An EVENT as well as a greeting: the log records that the console
     // came up and where, and the console's own port shows it too.
+    g_tty = serial_tty_create();
     const char *where = serial_dbg_separate() ? "COM2" : "COM1";
     klog_printf("dbg: serial debug console ready (%s)\n", where);
     dbg_printf("dbg: serial debug console ready (%s) -- type 'help'", where);
@@ -525,30 +546,38 @@ void debug_console_poll(void) {
     // here (scheduler_idle()). `arg` in dbg_dispatch() points INTO
     // line_buf, so a nested call assembling the next command overwrites
     // the running one's arguments underneath it. Refusing the nested
-    // call costs nothing -- COM1's receive is interrupt-driven into a
-    // ring buffer (serial.h), so the bytes wait there instead.
+    // call costs nothing -- the port's receive is interrupt-driven into
+    // the terminal's queue, so the bytes wait there instead (and a
+    // running command's program may be the one to read them).
     static int in_poll = 0;
     if (!g_enabled || in_poll) return;
     in_poll = 1;
 
-    int c;
-    while ((c = serial_dbg_try_getc()) >= 0) {
-        if (c == '\r' || c == '\n') {
-            dbg_write("\r\n");
+    // WHOLE LINES, from the terminal's canonical mode: the discipline has
+    // already echoed them and applied erase and kill, so what arrives is
+    // what the user meant. The echo of Enter is the "\r\n" this console
+    // used to write itself.
+    //
+    // ONE BYTE AT A TIME, stopping at each line's end to run it: anything
+    // typed AFTER the command stays queued in the terminal, where the
+    // program that command starts reads it -- a real terminal's type-ahead.
+    char c;
+    while (g_tty && tty_read(g_tty, &c, 1) == 1) {
+        if (c == '\n') {
             line_buf[line_len] = '\0';
-            if (line_len > 0) dbg_dispatch(line_buf);
+            if (line_len > 0 && !line_overlong) dbg_dispatch(line_buf);
+            else if (line_overlong) dbg_write("dbg: line too long, ignored\r\n");
             line_len = 0;
+            line_overlong = 0;
             dbg_write(DBG_PROMPT);
-        } else if (c == '\b' || c == 0x7F) {
-            if (line_len > 0) {
-                line_len--;
-                dbg_write("\b \b");
-            }
-        } else if (line_len < DBG_LINE_MAX - 1 && c >= 32 && c < 127) {
-            line_buf[line_len++] = (char)c;
-            serial_dbg_putc((char)c); // local echo
+        } else if (line_len < DBG_LINE_MAX - 1) {
+            line_buf[line_len++] = c;
+        } else {
+            line_overlong = 1;
         }
-        // other control bytes (Tab, Ctrl+*, ...) silently ignored
     }
+    // Ctrl-D at the prompt means nothing here; consume it so it cannot
+    // end the next command's input early.
+    if (g_tty) (void)tty_eof_pending(g_tty);
     in_poll = 0;
 }

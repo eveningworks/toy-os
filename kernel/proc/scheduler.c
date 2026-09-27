@@ -94,6 +94,7 @@
 #include "shm.h"    // shm_process_gone() -- undoing a half-inherited arena, and an exec
 #include "sound.h"  // sound_process_gone() -- an exec drops the stream
 #include "syscalls.h" // the fd table: a child inherits its parent's descriptors
+#include "tty.h"      // a kernel-context terminal session (spawn_kernel())
 #include "remote_log.h" // a session created from a socket is a REMOTE session
 #include "vmm.h"
 #include "pmm.h"
@@ -3279,9 +3280,21 @@ static int spawn_kernel(const char *path, const char *args, int pipe_idx,
         // shows by then; `systemd-run` sends a transient unit's output to
         // the journal for the same reason. An ATTACHED one -- the shell
         // waiting on a command it ran -- keeps the console on all three.
+        //
+        // AND A DETACHED ONE NEVER GETS THE KERNEL CONTEXT'S TERMINAL:
+        // while the serial debug console runs a command, a fresh table
+        // names that terminal (fd_set_kernel_tty()), and a job started
+        // in the background must not write into the console's replies.
         int err = detached ? fd_desc_alloc(FD_KIND_KLOG, -1) : -1;
-        pid = scheduler_spawn_group(path, vec, vec_len, pipe_idx, -1, err, env, 0, 0);
+        int con = detached && fd_kernel_tty() ? fd_desc_alloc(FD_KIND_CONSOLE, -1) : -1;
+        pid = scheduler_spawn_group(path, vec, vec_len, pipe_idx >= 0 ? pipe_idx : con,
+                                    con, err, env, 0, 0);
         if (err >= 0) fd_desc_unref(err); // the child holds its own
+        if (con >= 0) fd_desc_unref(con);
+        // An ATTACHED one leads the kernel context's terminal session, if
+        // there is one: its group is what Ctrl-C there interrupts.
+        if (pid > 0 && !detached && fd_kernel_tty())
+            tty_attach_kernel_session(fd_kernel_tty(), pid);
     }
     kfree(vec);
     return pid;

@@ -51,6 +51,9 @@ int main(int argc, char **argv) {
     o.args = args[0] ? args : 0;
     o.env = environ;
     o.stderr_fd = SPAWN_FD_KMSG;
+    // Off the serial debug console's per-command terminal, onto the
+    // machine console -- a background job outlives the command.
+    o.flags = SPAWN_DETACH;
     int pid = sys_spawn_opts(argv[1], &o);
     if (pid <= 0) {
         cmd_fail("spawn", argv[1]);

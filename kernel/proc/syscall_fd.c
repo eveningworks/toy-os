@@ -148,6 +148,10 @@ int fd_desc_alloc(enum fd_kind kind, int aux_idx) {
         if (kind == FD_KIND_TTY_MASTER || kind == FD_KIND_TTY_SLAVE)
             g_desc[i]->pty.idx = aux_idx;
         if (kind == FD_KIND_SHM) g_desc[i]->shm.idx = aux_idx;
+        if (kind == FD_KIND_TTY) {
+            g_desc[i]->tty.idx = aux_idx;
+            g_desc[i]->tty.gen = tty_generation(tty_at(aux_idx));
+        }
         return i;
     }
 }
@@ -183,6 +187,10 @@ void fd_desc_unref(int di) {
     }
     f->kind = FD_KIND_FILE;
 }
+
+static struct tty *g_kernel_tty;
+void fd_set_kernel_tty(struct tty *t) { g_kernel_tty = t; }
+struct tty *fd_kernel_tty(void) { return g_kernel_tty; }
 
 static struct fd_space *space_find(uint64_t pml4) {
     for (int i = 0; i < FD_SPACE_CEILING; i++)
@@ -227,7 +235,8 @@ int fd_space_open(uint64_t pml4) {
     // as stderr by its spawner instead (scheduler_spawn_env()), and that
     // is where a service's stderr comes from: init's (docs/decisions.md,
     // "stderr is the terminal's, and the kernel log only without one").
-    int con = fd_desc_alloc(FD_KIND_CONSOLE, -1);
+    int con = g_kernel_tty ? fd_desc_alloc(FD_KIND_TTY, tty_index(g_kernel_tty))
+                           : fd_desc_alloc(FD_KIND_CONSOLE, -1);
     if (con < 0) {
         sp->pml4 = 0;
         return -1;
@@ -488,10 +497,32 @@ sys_do_read_pty_master(uint64_t *regs, uint64_t pml4, int idx,
 }
 
 static __attribute__((noinline)) int
-sys_do_read_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
-                      uint64_t buf_ptr, uint64_t len, int nonblock) {
-    struct tty *t = pty_tty(idx);
+sys_do_read_console(uint64_t *regs, uint64_t pml4, uint64_t buf_ptr, uint64_t len);
+
+// Is the terminal behind `f` gone for good? A pty slave's is when its
+// master has closed -- a read then answers end of file; an FD_KIND_TTY's
+// when its session has been hung up -- it then reads the console.
+static int tty_desc_hung_up(const struct open_file *f) {
+    if (f->kind == FD_KIND_TTY_SLAVE) return !pty_master_open(f->pty.idx);
+    return tty_generation(tty_at(f->tty.idx)) != f->tty.gen;
+}
+
+// A read from a terminal that is not the console: a pty slave, or a
+// terminal named by index (FD_KIND_TTY). One path, because everything
+// that differs between them is whether the far end is still there.
+static __attribute__((noinline)) int
+sys_do_read_tty(uint64_t *regs, uint64_t pml4, const struct open_file *f,
+                uint64_t buf_ptr, uint64_t len) {
+    int nonblock = f->nonblock;
+    struct tty *t = f->kind == FD_KIND_TTY_SLAVE ? pty_tty(f->pty.idx) : tty_at(f->tty.idx);
     if (!t) { regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
+    // HUNG UP BEFORE ANYTHING IS TAKEN: an old session's reader must not
+    // claim the terminal or eat the input that is now somebody else's.
+    // It reads the MACHINE CONSOLE instead -- what it had before this
+    // terminal existed, as its writes do (sys_do_write_tty()), so a shell
+    // `sh spawn` started keeps working on the keyboard.
+    if (f->kind == FD_KIND_TTY && tty_desc_hung_up(f))
+        return sys_do_read_console(regs, pml4, buf_ptr, len);
 
     char *kbuf = bounce_alloc(&len);
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
@@ -502,6 +533,17 @@ sys_do_read_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
     // is the shell, and the shell is who needs to move the foreground
     // group. Claiming at open instead made tcsetpgrp() answer -EPERM to
     // the only process that had any business calling it.
+    //
+    // UNDER THE GUARD, together with the read itself: the hung-up check
+    // above could be passed, the caller preempted, and the session hung
+    // up before it continued -- and a leftover reader would then claim
+    // the terminal and take the line typed for the NEXT command.
+    scheduler_preempt_disable();
+    if (f->kind == FD_KIND_TTY && tty_desc_hung_up(f)) {
+        scheduler_preempt_enable();
+        kfree(kbuf);
+        return sys_do_read_console(regs, pml4, buf_ptr, len);
+    }
     if (!tty_owner(t)) tty_set_owner(t, scheduler_current_tgid());
 
     // The same rule as the physical console one screen up, and it has to
@@ -510,13 +552,13 @@ sys_do_read_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
     {
         int bg = tty_check_background_read(t);
         if (bg) {
+            scheduler_preempt_enable();
             regs[14] = (uint64_t)(int64_t)(bg > 0 ? SYS_RETRY : bg);
             kfree(kbuf);
             return 0;
         }
     }
 
-    scheduler_preempt_disable();
     unsigned n = tty_read(t, kbuf, (unsigned)len);
     int blocked = 0;
     if (n && !vmm_copy_to_user(pml4, buf_ptr, kbuf, (uint64_t)n)) {
@@ -529,9 +571,9 @@ sys_do_read_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
         // OF INPUT means to a program -- and the only reason `cat` with
         // no arguments can ever finish.
         regs[14] = 0;
-    } else if (nonblock && pty_master_open(idx)) {
+    } else if (nonblock && !tty_desc_hung_up(f)) {
         regs[14] = (uint64_t)(int64_t)-EAGAIN;
-    } else if (!pty_master_open(idx)) {
+    } else if (tty_desc_hung_up(f)) {
         // END OF FILE, and this is the one case that distinguishes a pty
         // slave from the physical console: a console has no end of input
         // because the keyboard is always there, but a terminal WINDOW
@@ -539,7 +581,10 @@ sys_do_read_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
         // than parked forever on a master that will never write again.
         regs[14] = 0;
     } else if (!scheduler_block_current(regs, tty_wait_chan(t), SCHED_WAIT_KEY)) {
-        regs[14] = 0;
+        // Nowhere to park: the legacy `run` loader has no slot. A pty
+        // slave says EOF; the serial terminal says "not yet", as the
+        // console does, because its input is still coming.
+        regs[14] = f->kind == FD_KIND_TTY ? (uint64_t)SYS_RETRY : 0;
     } else {
         blocked = 1;
     }
@@ -596,6 +641,34 @@ sys_do_write_pty_slave(uint64_t *regs, uint64_t pml4, int idx,
     return blocked;
 }
 
+// A program's output to a terminal named by index. Never parks: the
+// serial driver queues and drops rather than waiting (serial.c's trap).
+//
+// **A HUNG-UP SESSION'S DESCRIPTOR BECOMES A CONSOLE ONE**, not an
+// error: writes go to the machine console, reads come from it, and
+// fd_tty() names tty0. That is what a job left running by a debug-
+// console command had before this terminal existed, and it keeps such a
+// job's output out of the NEXT command's reply -- the torn-reply problem
+// the port split removed. Linux answers EIO here; tools/ansi_cursor_test.py
+// screenshots such a job's VGA output, and tools/stdin_test.py types at
+// a tosh started this way.
+static __attribute__((noinline)) void
+sys_do_write_tty(uint64_t *regs, uint64_t pml4, const struct open_file *f,
+                 uint64_t buf_ptr, uint64_t len) {
+    char *kbuf = bounce_alloc(&len);
+    if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return; }
+    if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
+        klog_write(KLOG_ERR "syscall: write() rejected -- invalid buffer pointer\n");
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
+        kfree(kbuf);
+        return;
+    }
+    struct tty *t = tty_desc_hung_up(f) ? tty_console() : tty_at(f->tty.idx);
+    tty_output(t ? t : tty_console(), kbuf, (unsigned)len);
+    regs[14] = len;
+    kfree(kbuf);
+}
+
 // The TERMINAL an fd names, or NULL. ONE place knows that fd 0 on the
 // console means tty0, so the four terminal syscalls do not each have to
 // -- and so a future virtual terminal changes one function.
@@ -606,6 +679,11 @@ struct tty *fd_tty(uint64_t pml4, int fd) {
     case FD_KIND_CONSOLE:    return tty_console();
     case FD_KIND_TTY_MASTER:
     case FD_KIND_TTY_SLAVE:  return pty_tty(f->pty.idx);
+    // HUNG UP: no terminal at all for termios and job control, as
+    // Linux's EIO. Reads and writes fall back to the console, but a
+    // leftover job re-applying the serial line's saved settings must not
+    // land them on tty0 -- its erase character is DEL, not '\b'.
+    case FD_KIND_TTY:        return tty_desc_hung_up(f) ? NULL : tty_at(f->tty.idx);
     default:                 return NULL;
     }
 }
@@ -812,7 +890,9 @@ SYSCALL_HANDLER sys_do_write_console(uint64_t *regs, uint64_t pml4, int kind,
         } else if (kind == FD_KIND_KLOG) {
             for (uint64_t i = 0; i < len; i++) klog_putc(buf[i]);
         } else {
-            for (uint64_t i = 0; i < len; i++) vga_putc(buf[i]);
+            // The PHYSICAL console, not whatever sink the kernel shell has
+            // installed for its own output (vga.h's vga_putc_console()).
+            for (uint64_t i = 0; i < len; i++) vga_putc_console(buf[i]);
         }
         regs[14] = len; // bytes written, back via RAX
     }
@@ -1038,6 +1118,9 @@ int sys_write(struct syscall_ctx *c) {
     case FD_KIND_TTY_SLAVE:
         // A program's output. CAN park, when the master is behind.
         return sys_do_write_pty_slave(c->regs, pml4, f->pty.idx, buf_ptr, len);
+    case FD_KIND_TTY:
+        sys_do_write_tty(c->regs, pml4, f, buf_ptr, len);
+        break;
     case FD_KIND_FILE:
         if (f->file.mode != FD_MODE_WRITE) {
             klog_write(KLOG_ERR "syscall: write() rejected -- fd is read-only\n");
@@ -1092,7 +1175,11 @@ int sys_read(struct syscall_ctx *c) {
         return sys_do_read_pty_master(c->regs, pml4, f->pty.idx, buf_ptr, len, f->nonblock);
     case FD_KIND_TTY_SLAVE:
         // What was typed at it -- whole lines in canonical mode.
-        return sys_do_read_pty_slave(c->regs, pml4, f->pty.idx, buf_ptr, len, f->nonblock);
+        return sys_do_read_tty(c->regs, pml4, f, buf_ptr, len);
+    case FD_KIND_TTY:
+        // A terminal by index -- the serial debug console's. Same rules
+        // as a slave; a hung-up session reads the machine console.
+        return sys_do_read_tty(c->regs, pml4, f, buf_ptr, len);
 
     case FD_KIND_SOCKET:
         // A CONNECTED STREAM IS A STREAM. POSIX guarantees read() and
@@ -1219,6 +1306,7 @@ int sys_fstat(struct syscall_ctx *c) {
     case FD_KIND_CONSOLE:
     case FD_KIND_TTY_MASTER:
     case FD_KIND_TTY_SLAVE:
+    case FD_KIND_TTY:
         // What isatty() will read. A pty end is as much a terminal as
         // the console is -- that is the entire claim of the tty layer,
         // and a flag that said otherwise would make a program behave

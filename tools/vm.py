@@ -39,6 +39,7 @@ nothing about whether a button is drawn in the right place.
 
 import argparse
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -515,7 +516,20 @@ def parse_framed(text):
     return body
 
 
-def _exec_one(command, timeout=15.0):
+# A TERMINAL'S CONTROL SEQUENCES, which a reply now carries: the debug
+# console is a real tty, so `ls` colours its names there as on any
+# terminal. A harness is a program reading that terminal as text, so it
+# drops them -- CSI sequences, which is all this OS emits. gui_debug.py's
+# DebugConsole does the same. `readfile` is exempt: its frame is exact
+# bytes, measured by length.
+_CSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def strip_terminal_codes(text):
+    return _CSI.sub("", text)
+
+
+def _exec_one(command, timeout=15.0, keep_escapes=False):
     """Sends one command, returns its output text (without the prompt).
 
     Returns None if the console didn't answer in time -- the caller
@@ -550,6 +564,8 @@ def _exec_one(command, timeout=15.0):
                 break
         # Strip the echoed command line and the trailing prompt.
         text = buf.replace("\r", "")
+        if not keep_escapes and not command.startswith("readfile"):
+            text = strip_terminal_codes(text)
         if text.startswith(command):
             text = text[len(command):]
         if text.endswith(PROMPT):
@@ -563,7 +579,8 @@ def cmd_exec(args):
         return 1
     failed = 0
     for command in args.commands:
-        out = _exec_one(f"sh {command}" if not args.raw else command, timeout=args.timeout)
+        out = _exec_one(f"sh {command}" if not args.raw else command, timeout=args.timeout,
+                        keep_escapes=args.escapes)
         if out is None:
             print(f"--- {command} ---\nvm: no response within {args.timeout}s")
             failed = 1
@@ -921,6 +938,8 @@ def main():
     p_exec.add_argument("--raw", action="store_true",
                         help="send to the debug console directly instead of wrapping in `sh`")
     p_exec.add_argument("--label", action="store_true", help="always print a --- command --- header")
+    p_exec.add_argument("--escapes", action="store_true",
+                        help="keep terminal control sequences (stripped by default)")
     p_exec.set_defaults(func=cmd_exec)
 
     p_put = sub.add_parser("put", help="copy a host file INTO the running guest")

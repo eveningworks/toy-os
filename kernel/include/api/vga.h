@@ -14,6 +14,9 @@ enum vga_color {
 void vga_init(void);
 void vga_clear(void);
 void vga_putc(char c);
+// The same, to the PHYSICAL console even while a sink is installed --
+// for output that is not the sink installer's (ring 3's, tty0's echo).
+void vga_putc_console(char c);
 void vga_write(const char *s);
 void vga_write_dec(uint32_t n);
 void vga_write_hex(uint64_t n);

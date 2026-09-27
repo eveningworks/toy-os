@@ -75,7 +75,19 @@ static void echo_erase(struct tty *t) {
 // it is safe from here for the same reason (abi/signal_abi.h).
 static int signal_char(struct tty *t, int sig) {
     if (!t->owner_pid || !t->fg_pgid) return 0;
-    if (t->fg_pgid == scheduler_pgid(t->owner_pid)) return 0;
+    if (t->fg_pgid == scheduler_pgid(t->owner_pid)) {
+        // The owner's own group in front. On a pty or the console that
+        // is a shell at its prompt, and both characters stay bytes.
+        //
+        // IN A KERNEL-LED SESSION (the serial debug console) the owner is
+        // the COMMAND, and INTR must stop it -- but only INTR: a stopped
+        // command has nobody to continue it, and the console waiting on
+        // it would never get its prompt back. And not when the owner
+        // ignores SIGINT, which is what a shell run as the command does:
+        // then Ctrl-C is a byte, and cancels the line it is editing.
+        if (!t->kernel_session || sig != SIGINT) return 0;
+        if (scheduler_signal_ignored(t->owner_pid, SIGINT)) return 0;
+    }
 
     signal_send_group(t->fg_pgid, sig);
     // POSIX flushes the input queue on a signal-generating character.

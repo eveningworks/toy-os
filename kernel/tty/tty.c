@@ -32,7 +32,7 @@ static struct tty g_ttys[TTY_MAX];
 
 static void console_output(struct tty *t, const char *buf, unsigned len) {
     (void)t;
-    for (unsigned i = 0; i < len; i++) vga_putc(buf[i]);
+    for (unsigned i = 0; i < len; i++) vga_putc_console(buf[i]);
 }
 
 // DERIVED, never stored: the font size is a setting, so the console's
@@ -59,7 +59,7 @@ static const struct tty_driver console_driver = {
 // and not the other is a Ctrl-Z that works on the console and not in a
 // window, which is exactly the kind of difference the tty layer exists
 // to abolish.
-static void tty_termios_defaults(struct tty_termios *tio) {
+void tty_termios_defaults(struct tty_termios *tio) {
     tio->lflag = TTY_LFLAG_DEFAULT;
     tio->cc[TTY_VINTR]  = 0x03; // ^C
     tio->cc[TTY_VERASE] = '\b';
@@ -281,6 +281,29 @@ void tty_set_owner(struct tty *t, int pid) {
 }
 
 int tty_fg_pgid(const struct tty *t) { return t ? t->fg_pgid : 0; }
+
+void tty_attach_kernel_session(struct tty *t, int pid) {
+    if (!t) return;
+    tty_set_owner(t, pid);
+    t->kernel_session = pid ? 1 : 0;
+}
+
+// Linux's vhangup(), minus the signal: nobody is left to send SIGHUP on
+// behalf of, since the session's "shell" is the kernel. Typed-ahead
+// input is KEPT -- it is the next command, meant for the console.
+void tty_hangup(struct tty *t) {
+    if (!t || !t->used) return;
+    t->gen++;
+    t->owner_pid = 0;
+    t->sid = 0;
+    t->fg_pgid = 0;
+    t->kernel_session = 0;
+    t->eof_pending = 0;
+    tty_ldisc_discard_line(t);
+    scheduler_wake(tty_wait_chan(t), SYS_RETRY); // a parked reader retries, and finds the console
+}
+
+unsigned tty_generation(const struct tty *t) { return t ? t->gen : 0; }
 
 // **PERMISSION IS THE SESSION, NOT THE OWNING PID** -- POSIX's rule,
 // and the reason is a nested shell. /bin/dash started from /bin/tosh is

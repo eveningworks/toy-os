@@ -6730,53 +6730,14 @@ Linux's shape -- kernel messages on `console=ttyS0`, a `getty` on
 another tty -- and QEMU's guest agent goes further with its own
 virtio-serial channel and framed JSON.
 
-**Half of it is BUILT** (2026-09-26): `serial.c` drives both ports,
-the debug console and every reply are on COM2 when a second UART
-answers the probe (COM1 otherwise), `vm.py` gives the guest both, and
-`DebugConsole` reads the log's socket on a thread
-(docs/decisions.md, "The kernel log and the debug console are two
-serial ports"). A command's console output reaches COM2 by swapping
-the VGA sink for its duration, which is what is left to replace: a
-serial-backed tty on COM2 that a foreground command gets as fds
-0/1/2, so it can READ the line and Ctrl-C reaches it through the
-line discipline.
+**BUILT** -- the two ports 2026-09-26, the terminal 2026-09-27. How it
+works, and why a leftover job falls back to the machine console rather
+than failing as Linux's `vhangup()` makes it: docs/
+decisions.md, "The kernel log and the debug console are two serial
+ports". What is still not done: Ctrl-C reaches a program started by
+bare name, not one run by the legacy `run` loader, which has no pid to
+signal.
 
-**The design for the tty half** (worked out 2026-09-26, not built):
-
-- A `tty_driver` whose output is `serial_dbg_putc()` (with `\n` ->
-  `\r\n`), and an RX hook in `serial.c` so the debug port's IRQ feeds
-  `tty_input()` -- Ctrl-C is then handled IN THE IRQ by the line
-  discipline, while the command is still running, which the polled
-  input today cannot do. `TTY_MAX` goes up by one so ptys keep theirs.
-- The debug console reads whole lines with `tty_read()`; the
-  discipline does echo and erase, and the bytes the harness sees are
-  unchanged (`cmd\r\n`, output, `\r\ndbg> `). `TTY_CANON_MAX` (256)
-  bounds a line, above the console's own 128.
-- A generic `FD_KIND_TTY` naming a tty by index, reading the way a pty
-  slave does (`sys_do_read_pty_slave()` generalised), and a
-  kernel-context terminal the debug console sets around a command so
-  `fd_space_open()` and `scheduler_spawn_attached()` hand it out.
-- Job control: a kernel-spawned child leads its own group and session,
-  so the console makes it the tty's owner and foreground group directly
-  (`tty_set_fg_pgid()`'s permission check assumes a ring-3 caller).
-
-**OPEN QUESTION, and the reason it stopped at a design: what happens
-to a program still running when the command that started it returns.**
-`sh spawn` goes through `/bin/spawn`, a foreground command, so its child
-would inherit the debug terminal -- and a dozen tools start long-running
-programs that way (`ansi_cursor_test.py` screenshots `/tests/ansidraw`'s
-VGA output). Their later output would reach COM2 in the middle of later
-replies, which is the torn-reply problem back from a new source. Linux
-answers at logout with `vhangup()`: leftover jobs get EIO on write and
-EOF on read. The options on the table:
-
-1. Hang up at the end of each command, and let a leftover process's
-   WRITES fall back to the machine console (what they reach today) --
-   no tool changes, and background output can never reach a reply.
-2. Hang up Linux-exact (EIO), and rework the tools that screenshot a
-   spawned program's VGA output to start it on tty0 another way.
-3. Input and Ctrl-C only: keep today's output path (the sink swap) and
-   give a foreground command COM2 as stdin. Smallest, least faithful. Real hardware
-mostly has no serial port -- `remote.py` drives it over the network --
+Real hardware mostly has no serial port -- `remote.py` drives it over the network --
 so this is a VM-harness change, not a product one.
 

@@ -8444,11 +8444,57 @@ Administration Console only after `bcdedit /ems on`. `make iso` bakes
 the word in, because every test needs it; release media are built with
 `DEBUGCON=0`.
 
-**What a second port alone does NOT fix:** `sh cat` runs a ring-3
-program whose stdout is THE CONSOLE, reached through a global output
-sink the debug console swaps for the length of a command -- so another
-program printing to the physical console in that window lands in the
-reply (tosh's banner did, on the first try). Making COM2 a real
-terminal that the commands it launches inherit as stdout is the rest,
-and the roadmap's item for it.
+**The console's port is a real TERMINAL** (`kernel/tty/serial_tty.c`,
+a `tty_driver` on the debug port). A second port alone left `sh cat`
+running a program whose stdio was THE CONSOLE -- output reached COM2
+only through a global sink swapped for the command, so any other
+program printing to the physical console in that window landed in the
+reply, and nothing typed on COM2 could reach the program or stop it.
+Now the port's RX IRQ feeds the line discipline; the console reads
+whole lines from it; and a command's program gets the terminal as
+0/1/2 (`fd_set_kernel_tty()`, an `FD_KIND_TTY` descriptor) and leads a
+session on it (`tty_attach_kernel_session()`). So it can read the line,
+Ctrl-C and Ctrl-D work -- in the IRQ, while the command runs -- and it
+can ask the terminal's size or go raw. The sink swap stays for the
+kernel shell's own `vga_write()` output.
+
+**ONE COMMAND, ONE SESSION, and a leftover job is hung up -- onto the
+machine console.** `sh spawn` goes through `/bin/spawn`, a foreground
+command, so its child inherits the terminal; a dozen tools start
+long-running programs that way, and their later output would land in
+the middle of later replies. So the console hangs the terminal up when
+each command returns (`tty_hangup()`, a new session GENERATION that
+every `FD_KIND_TTY` descriptor carries). A descriptor from an old
+session then behaves as a CONSOLE one: writes go to the machine
+console, reads come from its keyboard, and termios and job control name
+tty0 -- what a leftover job had before this terminal existed. Linux's
+`vhangup()` fails those calls with EIO instead; that was the other
+option, declined because `tools/ansi_cursor_test.py` and its kind
+screenshot a spawned program's VGA output. Reads were first to end the
+way Linux's do, at end of file, and a shell started with `sh spawn` then
+exited the moment its command returned -- falling back in both
+directions is the consistent answer. What a job prints BEFORE the
+command returns still reaches the reply, as on any terminal.
+
+**AND `sh spawn` DETACHES outright** (`SPAWN_DETACH`, which /bin/spawn
+passes): where the caller's fd 0 or 1 is this terminal, the child gets
+the machine console there instead, so a background job never touches
+the port at all -- `tools/ansi_cursor_test.py` screenshots a spawned
+program's drawing, and its first rows went into the reply. A pty or
+the console is inherited as before, so `spawn` in a Terminal window
+still prints into that window.
+
+**TYPE-AHEAD IS THE RUNNING COMMAND'S**, as on any terminal: the
+console reads its line one byte at a time, so what is typed after it
+stays queued for the program the command starts. A harness therefore
+sends a command only once the previous one's prompt is back
+(`tools/serial_console.py`'s `send()`; `vm.py` and `DebugConsole`
+always did) -- `ktest_run.py` sent `ktest` while `sh fsck repair` was
+still running and the console received `nt`.
+
+**Why the kernel leads the session.** The console's "shell" is kernel
+code with no process, so the command's program is made the terminal's
+owner, and the discipline delivers Ctrl-C to that owner's own group
+(`kernel_session`) -- a pty holds it back from the owner's group,
+because there the owner is a shell reading its own terminal.
 

@@ -131,6 +131,18 @@ run` window is never at risk. GUI/rendering work still needs
 `qmp_test.py`/`gui_flow.py` -- a text transcript says nothing about
 whether a button is drawn in the right place.
 
+**The console is a terminal, one session per command.** A program run
+with `sh <name>` reads COM2 as its stdin, so a test can feed it lines
+(`sh cat`, then `hello`, then Ctrl-D, `\x04`), and Ctrl-C (`\x03`)
+stops it. `sh spawn` DETACHES its job onto the machine console (VGA
+and keyboard) from the start, so none of its output reaches the port;
+a job a command leaves behind any other way (a shell's `&`) is moved
+there when the command returns and the session is hung up -- what it
+printed before that is in the reply, as on any terminal.
+**And the reply carries terminal control sequences** (`ls` colours its
+names on a tty): `vm.py` and `DebugConsole` strip them, `readfile`'s
+exact frame excepted.
+
 
 ### Five ways a harness built on `vm.py` reports the wrong thing
 

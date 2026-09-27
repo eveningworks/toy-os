@@ -960,6 +960,12 @@ manual steps to be worth automating:
   bugs that used to print the same sentence. **Sample `diagnostics()`
   while the guest is still up** -- after teardown every failure reports
   "QEMU exited with code 0", which is the harness's own kill.
+  **`send()` waits for the previous command's prompt** (bounded): the
+  console is a terminal, so a line typed while a command runs is that
+  command's INPUT -- `ktest` sent under a running `sh fsck repair`
+  arrived as `nt`. A string printed during a command is not the
+  boundary; the prompt is. `prompt_wait=0` types at a running command
+  on purpose.
 - **`faulttest_run.py`** -- the ring-3 diagnostics that FAULT ON
   PURPOSE, which `usertest_run.py` correctly excludes and which
   therefore nothing ran at all. A faulting binary has no exit code and
@@ -1296,6 +1302,17 @@ window without going through it will find its layout polls timing out.
   out (`_` is Shift over the key US calls `/`). And **`altgr` is not a
   qcode** -- `alt_r` is; an invalid one is refused by QMP and sends
   nothing, which reads exactly like the guest dropping the key.
+- **`debug_tty_test.py`** -- **the serial debug console is a terminal.**
+  Attaches to a running guest and types raw bytes at the console's own
+  port: `sh cat` reads a typed line, Ctrl-D ends it, Ctrl-C stops a
+  `spin_test` that is confirmed still running, Ctrl-Z does NOT strand a
+  command, a program that went raw does not leave the line raw, a job a
+  command leaves behind (`tosh -c "counter_a &"`) prints NOTHING on the
+  port once the prompt is back (it is confirmed alive across the
+  window), `sh spawn`'s job is detached from the start, and a spawned
+  reader does not take the next command's line. Its docstring lists a
+  positive control per check, each verified. Not DebugConsole, because
+  it has to speak while a command runs.
 - **`ctrlc_test.py`** -- **`Ctrl-C` interrupts the foreground JOB and
   nothing else**, end to end through the real keyboard (stages 0-2 of
   `docs/signals-design.md`). Boots the `text` target twice, the same way
