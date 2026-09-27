@@ -87,9 +87,10 @@ const struct pci_device *pci_device_at(int index);
 // A short human-readable label for a class/subclass pair (e.g. "network
 // controller", "IDE controller", "VGA-compatible controller") -- covers
 // the class codes a QEMU machine or ordinary PC actually presents, not
-// the full PCI class-code table. Falls back to "unknown (0x%02x)" for
+// the full PCI class-code table. Falls back to "unknown device" for
 // anything else. Used by the `lspci` shell command (apps/shell_sys.c)
-// so its output reads like something, not just raw hex.
+// so its output reads like something, not just raw hex -- and by
+// /bin/lspci: kernel/lib/pci_class.c compiles into both rings.
 const char *pci_class_name(uint8_t class_code, uint8_t subclass);
 
 // True if BAR `bar` (a raw value from struct pci_device.bar[]) is an

@@ -19,22 +19,15 @@
 // below are two-line wrappers that pick the buffer and the sink, which
 // is the part that really is this file's business.
 //
-// `pci_class_name()` itself
-// can't be called from here even though its declaration is visible via
-// "pci.h" (Makefile's USERLAND_CFLAGS pulls in kernel/include) --
-// that's kernel-space code in kernel/drivers/pci.c, never linked into
-// a userland ELF (see userland/link.ld: one object file, no kernel
-// code). So this file carries its own small copy of the same
-// class/subclass -> name table instead. If pci_class_name() ever grows
-// a new case, this table doesn't pick it up automatically -- the one
-// duplication here that is still real, since that table lives in a
-// kernel driver rather than in the shared toolkit.
+// pci_class_name() is the kernel's own table, compiled into libuapp
+// as well (kernel/lib/pci_class.c), so the two lspci outputs cannot
+// name a class differently.
 #include <stdint.h>
 #include "rt/sys.h"
 #include <string.h> // strlen
 #include "knum.h"       // k_htoa -- fixed-width hex, which kfmt has no
                          // conversion for (no `*` width in its printf)
-#include "pci.h" // struct pci_device only -- see this file's top comment
+#include "pci.h" // struct pci_device, pci_class_name()
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdlib.h>   // system() -- see update_ids()
@@ -58,50 +51,6 @@ static void put_hex_digits(uint32_t v, int digits) {
     char buf[17];
     k_htoa(v, buf, sizeof buf, (unsigned)digits);
     put(buf);
-}
-
-// Small local duplicate of pci_class_name() (kernel/drivers/pci.c) --
-// see this file's top comment for why it can't just call that one.
-// Same subset of class/subclass pairs (what a QEMU machine or ordinary
-// PC actually presents), same fallback for anything else.
-static const char *class_name(uint8_t class_code, uint8_t subclass) {
-    switch (class_code) {
-        case 0x00: return "unclassified device";
-        case 0x01:
-            switch (subclass) {
-                case 0x01: return "IDE controller";
-                case 0x06: return "SATA controller";
-                default:   return "mass storage controller";
-            }
-        case 0x02:
-            switch (subclass) {
-                case 0x00: return "ethernet controller";
-                default:   return "network controller";
-            }
-        case 0x03:
-            switch (subclass) {
-                case 0x00: return "VGA-compatible controller";
-                default:   return "display controller";
-            }
-        case 0x04: return "multimedia controller";
-        case 0x05: return "memory controller";
-        case 0x06:
-            switch (subclass) {
-                case 0x00: return "host bridge";
-                case 0x01: return "ISA bridge";
-                case 0x04: return "PCI-to-PCI bridge";
-                default:   return "bridge device";
-            }
-        case 0x07: return "communication controller";
-        case 0x08: return "system peripheral";
-        case 0x09: return "input device controller";
-        case 0x0C:
-            switch (subclass) {
-                case 0x03: return "USB controller";
-                default:   return "serial bus controller";
-            }
-        default: return "unknown device";
-    }
 }
 
 // ---------------------------------------------------------------------
@@ -320,7 +269,7 @@ int main(int argc, char **argv) {
         put(":");
         put_hex_digits(dev->device_id, 4);
         put("  ");
-        put(class_name(dev->class_code, dev->subclass));
+        put(pci_class_name(dev->class_code, dev->subclass));
 
         // IRQ line and nonzero BARs, matching what the kernel-side
         // cmd_lspci() printed before it started deferring to this
