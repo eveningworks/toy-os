@@ -5,46 +5,58 @@
 #include <stdint.h>
 #include "pci.h"
 
-// Covers the class/subclass pairs a QEMU machine or an ordinary PC
-// actually presents -- not the full PCI class-code table (dozens of
-// entries most of which nothing in this kernel will ever see). See
-// pci.h's own comment on this function.
+// The class/subclass pairs a QEMU machine, or the machines toy-os is
+// tested on, present -- not the full class-code table, which /bin/lspci
+// reads from pci.ids. **SPELLED AS pci.ids SPELLS THEM**, so wherever
+// both have a name they agree, and the database only ever adds names.
 const char *pci_class_name(uint8_t class_code, uint8_t subclass) {
     switch (class_code) {
-        case 0x00: return "unclassified device";
+        case 0x00: return "Unclassified device";
         case 0x01:
             switch (subclass) {
-                case 0x01: return "IDE controller";
+                case 0x00: return "SCSI storage controller";
+                case 0x01: return "IDE interface";
                 case 0x06: return "SATA controller";
-                default:   return "mass storage controller";
+                case 0x07: return "Serial Attached SCSI controller";
+                case 0x08: return "Non-Volatile memory controller";
+                default:   return "Mass storage controller";
             }
         case 0x02:
             switch (subclass) {
-                case 0x00: return "ethernet controller";
-                default:   return "network controller";
+                case 0x00: return "Ethernet controller";
+                default:   return "Network controller";
             }
         case 0x03:
             switch (subclass) {
-                case 0x00: return "VGA-compatible controller";
-                default:   return "display controller";
+                case 0x00: return "VGA compatible controller";
+                case 0x02: return "3D controller";
+                default:   return "Display controller";
             }
-        case 0x04: return "multimedia controller";
-        case 0x05: return "memory controller";
+        case 0x04:
+            switch (subclass) {
+                case 0x01: return "Multimedia audio controller";
+                case 0x03: return "Audio device";
+                default:   return "Multimedia controller";
+            }
+        case 0x05: return "Memory controller";
         case 0x06:
             switch (subclass) {
-                case 0x00: return "host bridge";
+                case 0x00: return "Host bridge";
                 case 0x01: return "ISA bridge";
-                case 0x04: return "PCI-to-PCI bridge";
-                default:   return "bridge device";
+                case 0x04: return "PCI bridge";
+                default:   return "Bridge";
             }
-        case 0x07: return "communication controller";
-        case 0x08: return "system peripheral";
-        case 0x09: return "input device controller";
+        case 0x07: return "Communication controller";
+        case 0x08: return "Generic system peripheral";
+        case 0x09: return "Input device controller";
         case 0x0C:
             switch (subclass) {
                 case 0x03: return "USB controller";
-                default:   return "serial bus controller";
+                case 0x05: return "SMBus";
+                default:   return "Serial bus controller";
             }
-        default: return "unknown device";
+        case 0x0D: return "Wireless controller";
+        case 0x11: return "Signal processing controller";
+        default: return "Unknown device";
     }
 }

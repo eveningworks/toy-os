@@ -46,8 +46,8 @@ follows in brackets: `[msix/4]` (MSI-X, with the table size in entries)
 or `[msi]`. A device with a capability and no vector is one whose driver
 did not ask, or is not present at all:
 
-    00:07.0  1af4:1041  ethernet controller  msix vector 51  [msix/4]  ...
-    00:06.0  8086:2415  multimedia controller  irq 10  ...
+    00:07.0  1af4:1041  Ethernet controller  msix vector 51  [msix/4]  ...
+    00:06.0  8086:2415  Multimedia audio controller  irq 10  ...
 
 QEMU's AC97, e1000 and ich9-ahci models advertise neither capability, so
 those three show a bare `irq N` on any emulated boot however their
@@ -55,10 +55,14 @@ drivers are written.
 
 ## The names come from a file, and it goes stale
 
-The vendor and device names are read from `/usr/share/hwdata/pci.ids`,
-streamed a kilobyte at a time rather than held in memory -- it is 1.6 MB
-and the answer is usually a handful of lines from it. A missing file is
-not an error: `lspci` says so once on stderr and prints numeric ids.
+The vendor, device and class names are read from
+`/usr/share/hwdata/pci.ids`, streamed in 16 KiB reads rather than held in
+memory -- it is 1.6 MB and the answer is a handful of lines from it. The
+class names sit at the END of the file, so every run reads all of it. A
+class the file does not name falls back to the kernel's short built-in
+table, which spells the ones it has the same way. A missing file is not
+an error: `lspci` says so once on stderr and prints numeric ids with the
+built-in class names.
 
 That file ships with the system, so it is as old as the build. A machine
 whose devices came out later shows numbers where a name should be, which

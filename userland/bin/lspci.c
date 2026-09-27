@@ -19,9 +19,9 @@
 // below are two-line wrappers that pick the buffer and the sink, which
 // is the part that really is this file's business.
 //
-// pci_class_name() is the kernel's own table, compiled into libuapp
-// as well (kernel/lib/pci_class.c), so the two lspci outputs cannot
-// name a class differently.
+// A class is named from pci.ids's class section when it has one, as
+// pciutils' lspci does, and from the kernel's own table otherwise
+// (pci_class_name(), kernel/lib/pci_class.c, compiled into libuapp too).
 #include <stdint.h>
 #include "rt/sys.h"
 #include <string.h> // strlen
@@ -54,7 +54,7 @@ static void put_hex_digits(uint32_t v, int digits) {
 }
 
 // ---------------------------------------------------------------------
-// Vendor/device names, from the PCI ID Database
+// Vendor, device and class names, from the PCI ID Database
 // ---------------------------------------------------------------------
 //
 // /usr/share/hwdata/pci.ids is a verbatim copy of the file the PCI ID
@@ -69,6 +69,16 @@ static void put_hex_digits(uint32_t v, int digits) {
 //     <TAB>7010  82371SB PIIX3 IDE [Natoma/Triton II]
 //     <TAB><TAB>1af4 1100  Subsystem name        <- ignored here
 //
+// and, after every vendor, the CLASS section in the same shape:
+//
+//     C 04  Multimedia controller
+//     <TAB>03  Audio device
+//     <TAB><TAB>00  prog-if name                  <- ignored here
+//
+// **THE CLASS SECTION IS THE LAST THING IN THE FILE**, so naming classes
+// means reading all of it -- the early exit below only stops once every
+// class is named too, which is at the end.
+//
 // **Parsed as a single streaming pass, never held in memory.** The file
 // is ~1.6MB and this process's heap is a bump allocator (SYS_SBRK) with
 // no free -- so the loop below reads 1KB at a time, keeps only the
@@ -80,13 +90,18 @@ static void put_hex_digits(uint32_t v, int digits) {
 #define MAX_DEVS         32
 #define VENDOR_NAME_MAX  40
 #define DEVICE_NAME_MAX  64
+#define CLASS_NAME_MAX  48
 #define LINE_MAX        256
-#define CHUNK           1024 // local read buffer; SYS_READ is capped at
-                             // SYS_WRITE_MAX, far above this
+#define CHUNK           16384 // read buffer: the whole 1.6MB file is read
+                              // now, and 1 KiB reads cost 16x the syscalls
 
 static struct pci_device g_dev[MAX_DEVS];
 static char g_vendor_name[MAX_DEVS][VENDOR_NAME_MAX];
 static char g_device_name[MAX_DEVS][DEVICE_NAME_MAX];
+// From pci.ids's class section: the SUBCLASS's name when it has one,
+// which is the more specific, else the class's.
+static char g_subclass_name[MAX_DEVS][CLASS_NAME_MAX];
+static char g_class_name[MAX_DEVS][CLASS_NAME_MAX];
 static int  g_count;
 
 static void put_err(const char *s) {
@@ -118,14 +133,52 @@ static int32_t parse_hex(const char *s, int digits) {
 static int all_resolved(void) {
     for (int i = 0; i < g_count; i++) {
         if (!g_vendor_name[i][0] || !g_device_name[i][0]) return 0;
+        if (!g_subclass_name[i][0]) return 0;
     }
     return 1;
 }
 
-static void handle_line(char *line, int32_t *cur_vendor) {
+// A class section line: "C 04  Multimedia controller", or a subclass
+// under it, "\t03  Audio device". `*cur_class` is -1 outside the section.
+static void handle_class_line(const char *line, int32_t *cur_class) {
+    if (line[0] == 'C') {
+        int32_t id = parse_hex(line + 2, 2);
+        *cur_class = id;
+        if (id < 0) return;
+        const char *name = line + 4;
+        while (*name == ' ') name++;
+        for (int i = 0; i < g_count; i++)
+            if (g_dev[i].class_code == (uint8_t)id)
+                strlcpy(g_class_name[i], name, CLASS_NAME_MAX);
+        return;
+    }
+    if (*cur_class < 0 || line[1] == '\t') return;   // a prog-if -- not used here
+    int32_t sub = parse_hex(line + 1, 2);
+    if (sub < 0) return;
+    const char *name = line + 3;
+    while (*name == ' ') name++;
+    for (int i = 0; i < g_count; i++)
+        if (g_dev[i].class_code == (uint8_t)*cur_class && g_dev[i].subclass == (uint8_t)sub)
+            strlcpy(g_subclass_name[i], name, CLASS_NAME_MAX);
+}
+
+// The name printed for device `i`: the database's, most specific first,
+// then the built-in table's.
+static const char *class_label(int i) {
+    if (g_subclass_name[i][0]) return g_subclass_name[i];
+    if (g_class_name[i][0]) return g_class_name[i];
+    return pci_class_name(g_dev[i].class_code, g_dev[i].subclass);
+}
+
+static void handle_line(char *line, int32_t *cur_vendor, int32_t *cur_class) {
     if (line[0] == '#' || line[0] == '\0') return;
 
+    if ((line[0] == 'C' && line[1] == ' ') || (line[0] == '\t' && *cur_class >= 0)) {
+        handle_class_line(line, cur_class);
+        return;
+    }
     if (line[0] != '\t') {                       // vendor: "8086  Intel Corporation"
+        *cur_class = -1;
         int32_t id = parse_hex(line, 4);
         if (id < 0) return;
         *cur_vendor = id;
@@ -164,10 +217,10 @@ static void load_names(void) {
         return;
     }
 
-    char chunk[CHUNK];
+    static char chunk[CHUNK];   // static: 16 KiB is not a stack frame
     char line[LINE_MAX];
     uint64_t line_len = 0;
-    int32_t cur_vendor = -1;
+    int32_t cur_vendor = -1, cur_class = -1;
     int overlong = 0; // dropping the tail of a too-long line, not restarting mid-way
 
     for (;;) {
@@ -181,7 +234,7 @@ static void load_names(void) {
                 continue;
             }
             line[line_len] = '\0';
-            if (!overlong) handle_line(line, &cur_vendor);
+            if (!overlong) handle_line(line, &cur_vendor, &cur_class);
             line_len = 0;
             overlong = 0;
         }
@@ -190,7 +243,7 @@ static void load_names(void) {
 
     if (line_len > 0 && !overlong) {  // last line without a trailing newline
         line[line_len] = '\0';
-        handle_line(line, &cur_vendor);
+        handle_line(line, &cur_vendor, &cur_class);
     }
     close((int)fd);
 }
@@ -269,7 +322,7 @@ int main(int argc, char **argv) {
         put(":");
         put_hex_digits(dev->device_id, 4);
         put("  ");
-        put(pci_class_name(dev->class_code, dev->subclass));
+        put(class_label(i));
 
         // IRQ line and nonzero BARs, matching what the kernel-side
         // cmd_lspci() printed before it started deferring to this
