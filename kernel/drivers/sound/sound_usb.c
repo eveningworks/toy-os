@@ -352,7 +352,7 @@ static void audio_stop(const struct sound_device *d) {
     // POLLED, NOT WAITED ON, and that is not a preference: this is
     // reached from process teardown with INTERRUPTS OFF, where nothing
     // decrements the counter and the PIT does not advance either -- a
-    // first version waited on `pit_ticks()` and hung the machine solid
+    // first version waited on `coarse_ticks()` and hung the machine solid
     // (RFL with IF clear, spinning in ring 0). Draining the event ring
     // by hand is what makes the wait independent of both. The backstop
     // is the driver's usual one, for a controller that has stopped

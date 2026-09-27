@@ -29,8 +29,8 @@ KTEST("cwd", "chdir/getcwd, the path syscalls, and inheritance across spawn") {
 
     int code = -1;
     int exited = 0;
-    uint64_t start = pit_ticks();
-    while (pit_ticks() - start < TIMEOUT_TICKS) {
+    uint64_t start = coarse_ticks();
+    while (coarse_ticks() - start < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     KTEST_ASSERT(exited);

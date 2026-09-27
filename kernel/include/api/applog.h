@@ -35,7 +35,7 @@ struct applog_rec {
     // offset gives, and it exists for the same reason -- a gap a reader
     // cannot see is indistinguishable from a quiet machine.
     uint64_t seq;
-    // Hundredths of a second since boot, from the same pit_ticks() klog
+    // Hundredths of a second since boot, from the same coarse_ticks() klog
     // stamps its lines with -- so a merged log of both sources can be
     // read in order. Stamped at the WRITE, not when a reader drains it,
     // which can be a second later.

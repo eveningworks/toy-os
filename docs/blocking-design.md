@@ -281,7 +281,7 @@ running a handler is a place a switching handler can strand.**
    never sent either. The in-service bit stayed set, the LAPIC
    delivered no further timer interrupt, and **nothing preempted a
    ring-3 process that made no syscalls** -- while the PIT kept
-   `pit_ticks()` limping along, so the machine looked alive and merely
+   `coarse_ticks()` limping along, so the machine looked alive and merely
    unfair. FIXED the same way. MSIs share that path and are safe with
    an early ack, being edge-triggered by construction.
 

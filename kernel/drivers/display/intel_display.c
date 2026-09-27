@@ -28,7 +28,7 @@
 #include "kfmt.h"
 #include "string.h"   // k_memset
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv -v` names THIS file
-#include "timer.h"  // pit_ticks -- rate-limiting the live-scanout probe
+#include "timer.h"  // coarse_ticks -- rate-limiting the live-scanout probe
 #include "intel_internal.h"
 
 DRIVER_DECLARE("intel-display", "display", "Intel gen8 display engine: eDP modeset, cursor plane, backlight");
@@ -361,7 +361,7 @@ static int intel_scanout_live(void) {
     for (int b = 0; b < g_scanouts; b++)
         if (g_scanout_ggtt[b] == live) return b;
     g_live_miss++;
-    uint64_t now = pit_ticks();
+    uint64_t now = coarse_ticks();
     if (now - g_live_last_log >= 100) {     // 100 Hz: one line a second
         g_live_last_log = now;
         klog_printf("intel-display: DSPSURFLIVE %#x matches no scanout (%llu of %llu) -- "

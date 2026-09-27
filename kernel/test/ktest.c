@@ -75,7 +75,7 @@ int ktest_run_all(const char *suite_filter) {
     uint32_t total = span / (uint32_t)sizeof(struct ktest_case);
 
     uint32_t ran = 0, passed = 0, failed = 0, skipped = 0;
-    uint64_t start_ticks = pit_ticks();
+    uint64_t start_ticks = coarse_ticks();
 
     vga_write("ktest: ");
     vga_write_dec(total);
@@ -166,7 +166,7 @@ int ktest_run_all(const char *suite_filter) {
         }
     }
 
-    uint64_t elapsed = pit_ticks() - start_ticks; // 100Hz PIT -- see timer.h
+    uint64_t elapsed = coarse_ticks() - start_ticks; // 100Hz PIT -- see timer.h
 
     // The summary line is what tools/ktest_run.py matches on, so its
     // shape is load-bearing: "ktest: PASSED" / "ktest: FAILED" first,

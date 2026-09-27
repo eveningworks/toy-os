@@ -128,7 +128,7 @@ uint64_t kernel_reloc_check(int64_t delta) {
 //     serial_init() has not run, so every decision here is recorded in
 //     a global and printed by kernel_main() once it can.
 //   * It cannot call krandom_init(). That harvests jitter by spinning
-//     until pit_ticks() changes, and the PIT is not initialised yet --
+//     until coarse_ticks() changes, and the PIT is not initialised yet --
 //     on a machine without RDSEED/RDRAND (QEMU's default qemu64, which
 //     is most test runs) it would spin forever. So the base gets its
 //     own minimal entropy path, and reports honestly which one it got.

@@ -2099,7 +2099,7 @@ default `qemu64` model reports as AuthenticAMD and populates neither
 leaf 4 nor AMD's `8000001DH`, so AMD's older `80000005H`/`80000006H`
 are a real fallback rather than legacy completeness -- without them the
 default VM shows no caches at all. And **the clock calibration has to
-happen at boot, not on first use**: it spins waiting for `pit_ticks()`
+happen at boot, not on first use**: it spins waiting for `coarse_ticks()`
 to advance, and every interrupt gate here (including `int 0x80`) clears
 IF, so a lazy calibration reached through the syscall waits forever for
 a tick that cannot arrive. That was found as `/bin/lscpu` hanging with
@@ -2185,7 +2185,7 @@ path was tested at all*. `docs/gui-guidelines.md` asks for that
 explicitly -- press-drag-off-release is a separate test from
 press-release, and only the second one had ever been run on these two.
 
-## Start menu click flash: a deferred close via pit_ticks(), not a blocking sleep
+## Start menu click flash: a deferred close via coarse_ticks(), not a blocking sleep
 
 A Start menu click used to run the row's action and close the menu in
 the same frame -- no visible confirmation the click landed, just an
@@ -2197,8 +2197,8 @@ sleep -- that would freeze mouse/keyboard handling for every window,
 not just the menu, for the duration.
 
 Solved the same way the existing once-a-second clock redraw already
-does (`wm_run()`'s `last_second`/`pit_ticks()` check): record a
-`pit_ticks()` deadline (`start_menu_flash_until`) instead of blocking,
+does (`wm_run()`'s `last_second`/`coarse_ticks()` check): record a
+`coarse_ticks()` deadline (`start_menu_flash_until`) instead of blocking,
 and check it every loop tick (`wm_update_start_menu_flash()`, called
 unconditionally from `wm_run()`'s loop). The row's action still runs
 immediately on click -- only the menu's `start_menu_open = 0` is
@@ -2206,7 +2206,7 @@ deferred until the deadline passes. This is the first *deliberately
 timed* (not just event-triggered) UI state this codebase has beyond
 that clock tick; if a future feature wants something similar (a toast
 notification, a temporary status message), this is the pattern to
-reuse rather than reinventing a delay mechanism -- `pit_ticks()`
+reuse rather than reinventing a delay mechanism -- `coarse_ticks()`
 deadline + a per-tick check, never a blocking sleep in the WM loop.
 See the commit that added it for the full mechanism.
 

@@ -371,8 +371,8 @@ KTEST("tty", "a pty carries a line, and INTR through it, from ring 3") {
 
     int code = -1;
     int exited = 0;
-    uint64_t start = pit_ticks();
-    while (pit_ticks() - start < PTY_TIMEOUT_TICKS) {
+    uint64_t start = coarse_ticks();
+    while (coarse_ticks() - start < PTY_TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     KTEST_ASSERT(exited);
@@ -499,8 +499,8 @@ KTEST("tty", "a child in the same session may take the terminal, from ring 3") {
     KTEST_ASSERT(pid != 0);
 
     int code = -1, exited = 0;
-    uint64_t start = pit_ticks();
-    while (pit_ticks() - start < SESSION_TIMEOUT_TICKS) {
+    uint64_t start = coarse_ticks();
+    while (coarse_ticks() - start < SESSION_TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     KTEST_ASSERT(exited);
@@ -530,8 +530,8 @@ KTEST("tty", "dash runs a background job, foregrounds it, and survives Ctrl-C") 
     KTEST_ASSERT(pid != 0);
 
     int code = -1, exited = 0;
-    uint64_t start = pit_ticks();
-    while (pit_ticks() - start < DASHJOBS_TIMEOUT_TICKS) {
+    uint64_t start = coarse_ticks();
+    while (coarse_ticks() - start < DASHJOBS_TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     KTEST_ASSERT(exited);
@@ -562,8 +562,8 @@ KTEST("tty", "system.shell is honoured, not just stored") {
     KTEST_ASSERT(pid != 0);
 
     int code = -1, exited = 0;
-    uint64_t start = pit_ticks();
-    while (pit_ticks() - start < SHELLSET_TIMEOUT_TICKS) {
+    uint64_t start = coarse_ticks();
+    while (coarse_ticks() - start < SHELLSET_TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     KTEST_ASSERT(exited);

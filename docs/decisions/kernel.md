@@ -1643,7 +1643,7 @@ declines the request, leaves the old loop in place. That is what keeps
 this additive: no existing app changed behaviour by not opting in, and
 an older server does not produce an app that simply never ticks.
 
-This also fixed `PIT_HZ` being a bare literal at the `pit_init()` call
+This also fixed `COARSE_HZ` being a bare literal at the `pit_init()` call
 and a "100 Hz" remark in two comments -- fine until something had to
 convert milliseconds to ticks and would have hardcoded it a fourth
 time, where being wrong makes every interval silently the wrong length.
@@ -2984,7 +2984,7 @@ page tables the CPU is currently walking.
 ### The base's entropy is bounded by RAM, and cannot come from the normal RNG
 
 `krandom_init()` cannot be called this early. It harvests jitter by
-spinning until `pit_ticks()` changes, and the PIT is not initialised
+spinning until `coarse_ticks()` changes, and the PIT is not initialised
 yet -- so on a machine without RDSEED/RDRAND, which is QEMU's default
 `qemu64` and therefore most test runs, it would spin forever. The base
 gets its own minimal source instead: RDSEED, then RDRAND, then the
@@ -7130,7 +7130,7 @@ the same thing for the same reason.
 
 **Why calibration is in `kernel_main()` and not in `lapic_init()`.** The
 LAPIC timer counts at a bus frequency nothing reports, so it has to be
-measured, and the only reference this early is the PIT. `pit_ticks()`
+measured, and the only reference this early is the PIT. `coarse_ticks()`
 advances only from the timer interrupt, so calibrating with interrupts
 off waits forever -- the deadlock `cpuinfo.h` already describes for the
 TSC, which is why `cpu_info_init()` is a separate call too. The
@@ -7142,7 +7142,7 @@ stops.
 modern Linux prefers: it needs no calibration, but it is one-shot, so
 the tick has to re-arm on every interrupt and the periodic path would
 still exist for machines without it. Two mechanisms for one tick is
-worth it when tickless idle arrives and not before. And `pit_ticks()`
+worth it when tickless idle arrives and not before. And `coarse_ticks()`
 kept its name through this change even though the PIT no longer feeds
 it -- 163 call sites in 43 files, renamed separately so the interesting
 diff stayed readable.
@@ -7581,7 +7581,7 @@ get it is to bracket the handler in `syscall_dispatch()` with
 `clocksource_now_ns()`, the kernel's one monotonic clock.
 
 That measures nothing, on every default boot. The clocksource is the
-PIT, and its `read` is `pit_ticks()` -- a counter the timer INTERRUPT
+PIT, and its `read` is `coarse_ticks()` -- a counter the timer INTERRUPT
 increments. A syscall handler runs with interrupts off for its whole
 duration, so both reads return the same value and every stall is zero.
 It is not a precision problem that a better source would improve; it is
@@ -7956,7 +7956,7 @@ pointer and corrupted the kernel heap.
 ## A delay uses the clocksource, because a tick needs an interrupt
 
 Five drivers had each hand-rolled the same busy-wait -- read
-`pit_ticks()`, spin until it has advanced far enough. Two of them
+`coarse_ticks()`, spin until it has advanced far enough. Two of them
 (`usb_hub.c` and `rtl_usb.c`) were byte-identical copies of the same
 function, and `xhci.c` had a sixth version that was the only one doing
 it properly.
@@ -8338,12 +8338,12 @@ deadline now preempts a process at the same level once it has run 1 ms
 only" still holds for INTERRUPT wakes, which keep the rule: a deadline
 is one wake the process armed for itself, never "every interrupt".
 
-**`pit_ticks()` stays at 100 a second, and so does `SYS_TICKS`.** The
+**`coarse_ticks()` stays at 100 a second, and so does `SYS_TICKS`.** The
 tick rate is a build option (`option hz`), and Linux's `USER_HZ` is why
 ring 3 must not see it: `times()` still counts at 100 whatever the
 kernel runs at. Inside the kernel the same split saved rewriting ~70
-coarse timeouts in `pit_ticks()` units. Everything precise already read
-`clocksource_now_ns()`. And `pit_ticks()` is now DERIVED from a
+coarse timeouts in `coarse_ticks()` units. Everything precise already read
+`clocksource_now_ns()`. And `coarse_ticks()` is now DERIVED from a
 free-running clocksource, so a wait on it ends inside a syscall -- the
 trap "A SYSCALL HANDLER RUNS WITH INTERRUPTS OFF" describes survives
 only on the PIT clock.

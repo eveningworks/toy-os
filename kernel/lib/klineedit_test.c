@@ -13,7 +13,7 @@
 #include "heap.h"   // kmalloc/kfree -- the editor takes its memory from the caller
 #include "fs.h"        // fs_exists -- the ring-3 half is a /tests binary
 #include "scheduler.h" // scheduler_spawn/_poll, same shape as tty_test.c
-#include "timer.h"     // pit_ticks -- the spawn deadline
+#include "timer.h"     // coarse_ticks -- the spawn deadline
 
 // The ring-0 allocator, handed to the editor because klineedit.c cannot
 // name one (see klineedit.h). The undo cases need it: a snapshot that
@@ -349,8 +349,8 @@ KTEST("klineedit", "dash edits with this editor, over a pty") {
     KTEST_ASSERT(pid != 0);
 
     int code = -1, exited = 0;
-    uint64_t start = pit_ticks();
-    while (pit_ticks() - start < DASHEDIT_TIMEOUT_TICKS) {
+    uint64_t start = coarse_ticks();
+    while (coarse_ticks() - start < DASHEDIT_TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     KTEST_ASSERT(exited);

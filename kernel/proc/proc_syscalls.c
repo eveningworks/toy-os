@@ -18,8 +18,8 @@
 #include "ksignal.h" // signal_name(), for the log line
 #include "fs.h"
 #include "kpath_buf.h" // a path is 4096 now and may not be a kernel local
-#include "timer.h"       // pit_ticks() -- SYS_TICKS
-_Static_assert(PIT_HZ == USER_HZ, "SYS_TICKS returns pit_ticks()");
+#include "timer.h"       // coarse_ticks() -- SYS_TICKS
+_Static_assert(COARSE_HZ == USER_HZ, "SYS_TICKS returns coarse_ticks()");
 #include "clocksource.h" // clocksource_now_ns() -- SYS_MONOTONIC_NS
 #include "uaddr.h"
 #include "string.h"
@@ -429,7 +429,7 @@ int sys_proc_info(struct syscall_ctx *c) {
 }
 
 int sys_ticks(struct syscall_ctx *c) {
-    c->regs[14] = pit_ticks();
+    c->regs[14] = coarse_ticks();
     return 0;
 }
 

@@ -229,8 +229,8 @@ KTEST("win_input", "a ring-3 process blocks in SYS_WAIT_EVENT and is woken") {
     // Let it reach its first SYS_WAIT_EVENT and park. Pushing before it
     // blocks would still work (the events just queue up), but then this
     // wouldn't be testing the blocking path at all.
-    uint64_t start = pit_ticks();
-    while (pit_ticks() - start < 25) { }
+    uint64_t start = coarse_ticks();
+    while (coarse_ticks() - start < 25) { }
 
     // Still alive, and holding no CPU: it must be parked, not spinning
     // and not exited.
@@ -243,13 +243,13 @@ KTEST("win_input", "a ring-3 process blocks in SYS_WAIT_EVENT and is woken") {
     for (int i = 0; i < WANT; i++) {
         struct win_event ev = key_event('a' + i);
         KTEST_ASSERT(win_input_push(&ev));
-        uint64_t t = pit_ticks();
-        while (pit_ticks() - t < 10) { }
+        uint64_t t = coarse_ticks();
+        while (coarse_ticks() - t < 10) { }
     }
 
     int exited = 0, samples = 0, blocked = 0;
-    start = pit_ticks();
-    while (pit_ticks() - start < TIMEOUT_TICKS) {
+    start = coarse_ticks();
+    while (coarse_ticks() - start < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &exit_code) == SCHED_POLL_EXITED) { exited = 1; break; }
         struct proc_info pi;
         for (int i = 0; i < SCHED_MAX_PROCS; i++) {
@@ -285,8 +285,8 @@ KTEST("win_input", "SYS_WAIT_READY times out, wakes early, and consumes nothing"
     // Its first sub-check is a 100 ms wait on an EMPTY queue, so the
     // push below must not land during it -- 40 ticks leaves 30 of slack
     // for the spawn and the ELF load on top of that 10.
-    uint64_t start = pit_ticks();
-    while (pit_ticks() - start < 40) { }
+    uint64_t start = coarse_ticks();
+    while (coarse_ticks() - start < 40) { }
 
     // Still parked in the second wait, not exited: a wait_ready that
     // never blocked at all would have run to the end by now.
@@ -297,8 +297,8 @@ KTEST("win_input", "SYS_WAIT_READY times out, wakes early, and consumes nothing"
     KTEST_ASSERT(win_input_push(&ev));
 
     int exited = 0;
-    start = pit_ticks();
-    while (pit_ticks() - start < TIMEOUT_TICKS) {
+    start = coarse_ticks();
+    while (coarse_ticks() - start < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &exit_code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
 
@@ -317,8 +317,8 @@ KTEST("win_input", "only the compositor may wait for kernel events") {
     // No role given: its first SYS_WAIT_EVENT is refused, and it exits
     // with the count it had -- zero.
     int exit_code = -1, exited = 0;
-    uint64_t start = pit_ticks();
-    while (pit_ticks() - start < TIMEOUT_TICKS) {
+    uint64_t start = coarse_ticks();
+    while (coarse_ticks() - start < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &exit_code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     KTEST_ASSERT(exited);

@@ -7,28 +7,29 @@
 // TWO RATES, AND THEY ARE DIFFERENT THINGS.
 //
 // CONFIG_HZ (build.conf's `option hz`, build/gen/kconfig.h) is how
-// often the TICK interrupts a busy CPU. PIT_HZ is the rate pit_ticks()
+// often the TICK interrupts a busy CPU. COARSE_HZ is the rate coarse_ticks()
 // counts at, and it is fixed at 100 -- a coarse monotonic clock for
 // timeouts measured in tens of milliseconds, and SYS_TICKS' USER_HZ.
 // Anything finer than that reads clocksource_now_ns(), never a tick.
-// (The name predates the LAPIC timer; pit_ticks() is not the PIT's.)
+// (Formerly pit_ticks(); it has not read the PIT since the tick moved
+// to the LAPIC timer.)
 #include "kconfig.h"
-#define PIT_HZ 100   // == USER_HZ; proc_syscalls.c asserts it
+#define COARSE_HZ 100   // == USER_HZ; proc_syscalls.c asserts it
 #define TICK_NS (1000000000ull / CONFIG_HZ)
 
 void pit_init(uint32_t frequency_hz);
-// Advances the tick counter pit_ticks() returns, and drains the queued
+// Advances the tick counter coarse_ticks() returns, and drains the queued
 // kernel log. Called from clockevent_tick(), NOT from an interrupt
 // handler directly -- which device is interrupting is the clockevent's
 // business (kernel/clockevent.h), and by the time this runs it may not
 // be the PIT at all.
 void timer_tick_advance(void);
 
-// PIT_HZ ticks since boot. Derived from the clocksource when that runs
+// COARSE_HZ ticks since boot. Derived from the clocksource when that runs
 // without interrupts (clocksource_deadline_capable()), so it advances
 // through a stopped tick and inside a syscall; counted from the tick
 // interrupt otherwise, where it stands still with IF clear.
-uint64_t pit_ticks(void);
+uint64_t coarse_ticks(void);
 
 // Tick INTERRUPTS delivered, at CONFIG_HZ while the tick runs. What the
 // PIT clocksource reads, and what a test counts to see the tick stop.

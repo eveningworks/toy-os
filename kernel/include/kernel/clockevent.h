@@ -2,7 +2,7 @@
 #define CLOCKEVENT_H
 
 #include <stdint.h>
-#include "timer.h" // PIT_HZ
+#include "timer.h" // COARSE_HZ
 
 // The device that decides WHEN to interrupt -- Linux's
 // clock_event_device, and the half clocksource.h says is missing here.
@@ -96,10 +96,10 @@ void clockevent_idle_halt(void);
 // again every pass for as long as it has something due.
 void clockevent_idle_wake_by(uint64_t deadline_ns);
 
-// The same, for a deadline kept in pit_ticks() -- the coarse clock most
+// The same, for a deadline kept in coarse_ticks() -- the coarse clock most
 // idle work already times itself with.
 static inline void clockevent_idle_wake_at_tick(uint64_t pit_tick) {
-    clockevent_idle_wake_by(pit_tick * (1000000000ull / PIT_HZ));
+    clockevent_idle_wake_by(pit_tick * (1000000000ull / COARSE_HZ));
 }
 
 // Is the kernel context inside clockevent_idle_halt()? The scheduler's
@@ -124,7 +124,7 @@ void clockevent_init(void);
 // Offers the LAPIC timer. From kernel_main(), after lapic_init(),
 // because calibrating it needs a LAPIC to count AND a PIT already
 // ticking to count against. **It also needs interrupts ON**: the
-// reference is pit_ticks(), which only advances from the timer
+// reference is coarse_ticks(), which only advances from the timer
 // interrupt, so calibrating with IF clear waits forever -- the same
 // deadlock cpuinfo.h describes for the TSC. lapic_ce_start() refuses
 // rather than hanging.

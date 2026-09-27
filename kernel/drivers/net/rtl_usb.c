@@ -346,7 +346,7 @@ static int rtl_transmit(struct net_device *dev, const void *frame, uint32_t len)
 static void rtl_poll(struct net_device *dev) {
     struct rtl_usb *d = dev->drv;
     if (!d->in_use || d->link_gone) return;
-    uint64_t now = pit_ticks();
+    uint64_t now = coarse_ticks();
     if (d->link_checked && now - d->link_checked < 100) return;
     d->link_checked = now;
 

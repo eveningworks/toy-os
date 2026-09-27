@@ -5,7 +5,7 @@
 // subsystem) and applog stores RECORDS carrying a tag (application
 // output's useful fact is WHO said it); they are separate so a chatty
 // program cannot flush kernel evidence, which this project has paid
-// for. api/applog.h stamps both with the same `cs` from `pit_ticks()`
+// for. api/applog.h stamps both with the same `cs` from `coarse_ticks()`
 // "so a merged log of both sources can be read in order" -- this is the
 // reader that does.
 //

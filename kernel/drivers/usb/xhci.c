@@ -124,7 +124,7 @@ struct xhci_hc {
     // kernel.usb_reset, one bit per port. DEFERRED for the same reason
     // hot-plug is, plus a sharper one: the tunable is written from a
     // SYSCALL, which runs with interrupts off, and reset_port()'s
-    // recovery wait spins on pit_ticks() -- a counter the timer
+    // recovery wait spins on coarse_ticks() -- a counter the timer
     // interrupt advances. Done inline it never returns, which is how it
     // froze a laptop the first time it was tried.
     volatile uint32_t diag_reset_pending;
@@ -484,7 +484,7 @@ static void walk_xecp(uint32_t hcc1) {
 //
 // Both callers below are MINIMA the USB spec owes a device -- reset
 // recovery and the attach debounce -- so they burn time rather than
-// detect anything. They used pit_ticks() with the note that it was
+// detect anything. They used coarse_ticks() with the note that it was
 // "the only 10 ms-granularity source here", which stopped being true
 // when the clocksource arrived: clocksource_now_ns() is finer AND, when
 // it is deadline-capable, advances with interrupts off, where a counter
@@ -492,7 +492,7 @@ static void walk_xecp(uint32_t hcc1) {
 //
 // That difference is not academic. It is why `kernel.usb_reset` froze a
 // laptop on its first outing: a syscall runs with interrupts off, and
-// the pit_ticks() loop there could never end. The PIT path is kept for
+// the coarse_ticks() loop there could never end. The PIT path is kept for
 // a machine whose clocksource cannot be trusted with a deadline, and
 // there it carries the old precondition -- interrupts on.
 // The policy moved to clocksource_delay_ms(), which five drivers had
@@ -2751,7 +2751,7 @@ int usb_diag_replug_port(unsigned port) {
     // answer to the question the knob exists to ask.
     //
     // QUEUED for the same reason the forced reset is: the caller is a
-    // syscall with interrupts off, and this waits on pit_ticks().
+    // syscall with interrupts off, and this waits on coarse_ticks().
     g_hc.diag_power_pending |= (1u << (port - 1));
     klog_printf("usb: port %u: replug queued\n", port);
     return 1;
@@ -2761,7 +2761,7 @@ int usb_diag_reset_port(unsigned port) {
     if (!g_hc.running) return 0;
     if (port < 1 || port > g_hc.max_ports || port > XHCI_MAX_PORTS) return 0;
     // QUEUED, NEVER DONE HERE. The caller is a syscall (kernel.usb_reset)
-    // and this work spins on pit_ticks(), which only the timer interrupt
+    // and this work spins on coarse_ticks(), which only the timer interrupt
     // advances -- see diag_reset_pending. Returns 1 for "accepted"; the
     // OUTCOME is in the log a moment later, because there is nobody left
     // to return it to.

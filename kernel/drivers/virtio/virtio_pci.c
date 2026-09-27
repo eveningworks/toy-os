@@ -287,9 +287,9 @@ int virtio_begin(struct virtio_device *d, uint64_t wanted) {
     //    device agreeing. Skipping the read-back works on QEMU and
     //    hangs on hardware, which is the worst possible split.
     mmio_w8(d->common, VIRTIO_COMMON_STATUS, 0);
-    uint32_t start = pit_ticks();
+    uint32_t start = coarse_ticks();
     while (mmio_r8(d->common, VIRTIO_COMMON_STATUS) != 0) {
-        if (pit_ticks() - start > VIRTIO_RESET_TICKS) {
+        if (coarse_ticks() - start > VIRTIO_RESET_TICKS) {
             klog_printf("virtio: %s did not acknowledge reset\n", d->name ? d->name : "device");
             return 0;
         }

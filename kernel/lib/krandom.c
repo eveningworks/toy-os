@@ -101,14 +101,14 @@ static int hw_u64(uint64_t *out) {
 
 static void harvest_jitter(void) {
     for (int i = 0; i < JITTER_SAMPLES; i++) {
-        uint64_t start_tick = pit_ticks();
+        uint64_t start_tick = coarse_ticks();
         uint64_t t0 = arch_rdtsc();
         uint64_t spins = 0;
         // Spin until the tick changes, counting iterations. BOTH results
         // are mixed in: the elapsed cycle count and how many times this
         // loop got around, which are not the same measurement when
         // anything else (an interrupt, a cache miss) interrupts it.
-        while (pit_ticks() == start_tick) spins++;
+        while (coarse_ticks() == start_tick) spins++;
         uint64_t t1 = arch_rdtsc();
         pool = mix64(pool ^ (t1 - t0)) ^ mix64(spins + i);
     }

@@ -8,7 +8,7 @@
 #include "string.h"
 #include "cpuinfo.h"
 #include "clockevent.h"
-#include "timer.h"   // pit_ticks(), PIT_HZ -- the calibration reference
+#include "timer.h"   // coarse_ticks(), COARSE_HZ -- the calibration reference
 #include "barrier.h" // cpu_relax()
 
 // The MSR that says where the LAPIC is and whether it is enabled. Its
@@ -181,7 +181,7 @@ void lapic_dispatch_vector(uint8_t vector, uint64_t *regs) {
     // in-service bit stays set, the LAPIC delivers no further timer
     // interrupt, and nothing preempts a ring-3 process that makes no
     // syscalls. It presented as one background compute job starving the
-    // whole machine while the PIT kept pit_ticks() limping along, so
+    // whole machine while the PIT kept coarse_ticks() limping along, so
     // the machine looked alive and merely unfair. irq.c's EOI moved for
     // the same reason and on the same day; this is its twin, and the
     // one that was missed first time.
@@ -223,7 +223,7 @@ static int interrupts_enabled(void) {
 // PIT is the only reference that exists this early, and it is exact by
 // construction rather than measured.
 static uint32_t lapic_timer_calibrate(void) {
-    // WITHOUT INTERRUPTS THIS NEVER RETURNS. pit_ticks() advances only
+    // WITHOUT INTERRUPTS THIS NEVER RETURNS. coarse_ticks() advances only
     // from the timer interrupt, so the loops below would spin forever --
     // the deadlock cpuinfo.h describes for the TSC, refused here rather
     // than hit.
@@ -232,14 +232,14 @@ static uint32_t lapic_timer_calibrate(void) {
     lapic_write(LAPIC_REG_TIMER_DIV, TIMER_DIV_16);
     lapic_write(LAPIC_REG_LVT_TIMER, LVT_MASKED); // count, deliver nothing
 
-    uint64_t edge = pit_ticks();
-    while (pit_ticks() == edge) cpu_relax(); // start on a tick boundary
+    uint64_t edge = coarse_ticks();
+    while (coarse_ticks() == edge) cpu_relax(); // start on a tick boundary
 
     lapic_write(LAPIC_REG_TIMER_INIT, 0xFFFFFFFFu);
-    uint64_t t0 = pit_ticks();
-    while (pit_ticks() - t0 < CALIBRATE_PIT_TICKS) cpu_relax();
+    uint64_t t0 = coarse_ticks();
+    while (coarse_ticks() - t0 < CALIBRATE_PIT_TICKS) cpu_relax();
     uint32_t remaining = lapic_read(LAPIC_REG_TIMER_CUR);
-    uint64_t elapsed = pit_ticks() - t0;
+    uint64_t elapsed = coarse_ticks() - t0;
     lapic_write(LAPIC_REG_TIMER_INIT, 0);
 
     // A counter that reached ZERO ran out mid-window, so the count is a
@@ -248,7 +248,7 @@ static uint32_t lapic_timer_calibrate(void) {
     // wrong rather than failing anywhere visible.
     uint32_t counted = 0xFFFFFFFFu - remaining;
     if (!elapsed || !counted || !remaining) return 0;
-    return (uint32_t)(((uint64_t)counted * PIT_HZ) / elapsed); // pit_ticks() rate
+    return (uint32_t)(((uint64_t)counted * COARSE_HZ) / elapsed); // coarse_ticks() rate
 }
 
 static void lapic_timer_isr(uint64_t *regs) {

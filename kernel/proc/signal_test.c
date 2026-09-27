@@ -704,8 +704,8 @@ KTEST("signal", "a STOPPED process stops accruing CPU time, and resumes accruing
     // Let it run first, so the measurement has something to compare
     // against -- a process that never got the CPU at all would show a
     // flat cpu_ns for reasons having nothing to do with the stop.
-    uint64_t t0 = pit_ticks();
-    while (pit_ticks() - t0 < 20) { }
+    uint64_t t0 = coarse_ticks();
+    while (coarse_ticks() - t0 < 20) { }
     KTEST_ASSERT(scheduler_proc_info(slot, &info));
     uint64_t ran_before = info.cpu_ns;
 
@@ -714,14 +714,14 @@ KTEST("signal", "a STOPPED process stops accruing CPU time, and resumes accruing
     // suspends it may still bill the slice it was in the middle of.
     KTEST_ASSERT(scheduler_proc_info(slot, &info));
     uint64_t stopped_at = info.cpu_ns;
-    t0 = pit_ticks();
-    while (pit_ticks() - t0 < 20) { }
+    t0 = coarse_ticks();
+    while (coarse_ticks() - t0 < 20) { }
     KTEST_ASSERT(scheduler_proc_info(slot, &info));
     uint64_t while_stopped = info.cpu_ns;
 
     signal_send(pid, SIGCONT);
-    t0 = pit_ticks();
-    while (pit_ticks() - t0 < 20) { }
+    t0 = coarse_ticks();
+    while (coarse_ticks() - t0 < 20) { }
     KTEST_ASSERT(scheduler_proc_info(slot, &info));
     uint64_t after_cont = info.cpu_ns;
 
@@ -740,12 +740,12 @@ KTEST("signal", "a real process is terminated by a signal and reports 128 + it")
     // SPAWNED, not `run`: the legacy loader has no procs[] slot, so the
     // child would have no pid, no group and no pending mask -- every
     // check inside it would measure the absence of a process.
-    uint64_t t0 = pit_ticks();
+    uint64_t t0 = coarse_ticks();
     int pid = scheduler_spawn(SIGNAL_TEST_PATH, 0);
     KTEST_ASSERT(pid != 0);
 
     int code = -1, exited = 0;
-    while (pit_ticks() - t0 < TIMEOUT_TICKS) {
+    while (coarse_ticks() - t0 < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     KTEST_ASSERT(exited);
@@ -773,12 +773,12 @@ KTEST("signal", "a real process is terminated by a signal and reports 128 + it")
 KTEST("signal", "tolibc's POSIX headers agree with the syscalls underneath them") {
     if (!fs_exists(POSIX_TEST_PATH)) KTEST_SKIP("no " POSIX_TEST_PATH " on this boot");
 
-    uint64_t t0 = pit_ticks();
+    uint64_t t0 = coarse_ticks();
     int pid = scheduler_spawn(POSIX_TEST_PATH, 0);
     KTEST_ASSERT(pid != 0);
 
     int code = -1, exited = 0;
-    while (pit_ticks() - t0 < TIMEOUT_TICKS) {
+    while (coarse_ticks() - t0 < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     KTEST_ASSERT(exited);

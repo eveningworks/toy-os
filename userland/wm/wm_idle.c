@@ -20,7 +20,7 @@ static uint32_t g_seen_generation;
 static int g_idle_minutes = SCREENSAVER_IDLE_DEFAULT;
 static char g_saver[64] = SCREENSAVER_DEFAULT;
 
-// PIT_HZ ticks a second (api/timer.h), which is what sys_ticks() counts.
+// COARSE_HZ ticks a second (api/timer.h), which is what sys_ticks() counts.
 #define TICKS_PER_SEC 100u
 
 static void adopt_settings(void) {

@@ -1556,7 +1556,7 @@ static void tfs3_idle(void *st) {
     struct t3_state *sbi = st;
     if (!sbi->txn_deferred) return;
     uint32_t quiet = storage_writeback_ticks();
-    if (pit_ticks() - sbi->txn_staged_tick < quiet) {
+    if (coarse_ticks() - sbi->txn_staged_tick < quiet) {
         clockevent_idle_wake_at_tick(sbi->txn_staged_tick + quiet);
         return;
     }

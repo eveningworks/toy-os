@@ -259,8 +259,8 @@ KTEST("storage", "a deferred commit lands on the idle path, unprompted") {
     // passed with the idle path disabled entirely.
     uint64_t idle0 = tfs3_idle_commits();
     int landed = 0;
-    uint64_t deadline = pit_ticks() + storage_writeback_ticks() * 4 + PIT_HZ;
-    while (pit_ticks() < deadline) {
+    uint64_t deadline = coarse_ticks() + storage_writeback_ticks() * 4 + COARSE_HZ;
+    while (coarse_ticks() < deadline) {
         fs_idle();
         if (tfs3_idle_commits() > idle0) { landed = 1; break; }
     }

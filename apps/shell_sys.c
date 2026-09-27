@@ -549,11 +549,11 @@ void cmd_stress(const char *args) {
     }
 
     uint32_t chunks = mb; // 1 chunk == 1MB by construction
-    uint64_t start_ticks = pit_ticks();
+    uint64_t start_ticks = coarse_ticks();
 
     vga_write("stress: writing "); vga_write_dec(mb); vga_write(" MB to ");
     vga_write(STRESS_TEST_PATH); vga_write(" ...\n");
-    uint64_t write_start_ticks = pit_ticks();
+    uint64_t write_start_ticks = coarse_ticks();
     uint32_t last_pct_printed = 0;
     for (uint32_t c = 0; c < chunks; c++) {
         stress_fill_pattern(c);
@@ -574,15 +574,15 @@ void cmd_stress(const char *args) {
         // a huge `mb` either.
         uint32_t pct = ((c + 1) * 100) / mb;
         if (pct > last_pct_printed) {
-            stress_print_progress("wrote", c + 1, mb, pit_ticks() - write_start_ticks);
+            stress_print_progress("wrote", c + 1, mb, coarse_ticks() - write_start_ticks);
             last_pct_printed = pct;
         }
     }
-    uint64_t write_ticks = pit_ticks() - write_start_ticks;
+    uint64_t write_ticks = coarse_ticks() - write_start_ticks;
 
     vga_write("stress: reading back and verifying ...\n");
     static uint8_t readback[STRESS_CHUNK_BYTES];
-    uint64_t read_start_ticks = pit_ticks();
+    uint64_t read_start_ticks = coarse_ticks();
     last_pct_printed = 0;
     for (uint32_t c = 0; c < chunks; c++) {
         uint64_t offset = (uint64_t)c * STRESS_CHUNK_BYTES;
@@ -613,18 +613,18 @@ void cmd_stress(const char *args) {
         }
         uint32_t pct = ((c + 1) * 100) / mb;
         if (pct > last_pct_printed) {
-            stress_print_progress("verified", c + 1, mb, pit_ticks() - read_start_ticks);
+            stress_print_progress("verified", c + 1, mb, coarse_ticks() - read_start_ticks);
             last_pct_printed = pct;
         }
     }
-    uint64_t read_ticks = pit_ticks() - read_start_ticks;
+    uint64_t read_ticks = coarse_ticks() - read_start_ticks;
 
     if (!fs_delete(STRESS_TEST_PATH)) {
         vga_write("stress: WARNING -- test passed but couldn't delete ");
         vga_write(STRESS_TEST_PATH); vga_write(" (clean up manually)\n");
     }
 
-    uint64_t elapsed_ticks = pit_ticks() - start_ticks; // 100Hz PIT -- see timer.h
+    uint64_t elapsed_ticks = coarse_ticks() - start_ticks; // 100Hz PIT -- see timer.h
     uint32_t write_speed_x10 = (uint32_t)((uint64_t)mb * 1000 / (write_ticks ? write_ticks : 1));
     uint32_t read_speed_x10 = (uint32_t)((uint64_t)mb * 1000 / (read_ticks ? read_ticks : 1));
     vga_write("stress: PASSED -- "); vga_write_dec(mb);

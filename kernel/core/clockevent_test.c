@@ -16,7 +16,7 @@
 #define TICK_WAIT_SPINS 200000000u
 
 // Spins until a tick INTERRUPT is delivered. Returns 0 if none was.
-// Not pit_ticks(): that is derived from the clocksource wherever it can
+// Not coarse_ticks(): that is derived from the clocksource wherever it can
 // be, so it moves with no interrupt at all -- which let this pass, and
 // the delivery check below fail, depending on where a 10 ms edge fell.
 static int wait_a_tick(void) {
@@ -142,17 +142,17 @@ KTEST("clockevent", "an idle deadline wakes on time, not on a tick") {
     KTEST_ASSERT(late[n / 2] < TICK_NS / 4);
 }
 
-// pit_ticks() RUNS WITH INTERRUPTS OFF where the clocksource does -- the
-// property every `while (pit_ticks() - t < N)` inside a syscall needed
+// coarse_ticks() RUNS WITH INTERRUPTS OFF where the clocksource does -- the
+// property every `while (coarse_ticks() - t < N)` inside a syscall needed
 // and did not have.
-KTEST("clockevent", "pit_ticks advances with interrupts off on a free-running clock") {
+KTEST("clockevent", "coarse_ticks advances with interrupts off on a free-running clock") {
     if (!clocksource_deadline_capable()) KTEST_SKIP("the clocksource is the tick");
     uint64_t flags;
     __asm__ volatile ("pushfq; popq %0; cli" : "=r"(flags) :: "memory");
-    uint64_t t0 = pit_ticks();
-    uint64_t end = clocksource_now_ns() + 3 * (1000000000ull / PIT_HZ);
+    uint64_t t0 = coarse_ticks();
+    uint64_t end = clocksource_now_ns() + 3 * (1000000000ull / COARSE_HZ);
     while (clocksource_now_ns() < end) cpu_relax();
-    uint64_t t1 = pit_ticks();
+    uint64_t t1 = coarse_ticks();
     if (flags & (1ull << 9)) __asm__ volatile ("sti" ::: "memory");
     KTEST_ASSERT(t1 - t0 >= 2);
 }

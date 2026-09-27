@@ -32,13 +32,13 @@
 KTEST("sched", "a yielding process is not billed more ticks than elapsed") {
     if (!fs_exists(CPUTIME_TEST_PATH)) KTEST_SKIP("no " CPUTIME_TEST_PATH " on this boot");
 
-    uint64_t t0 = pit_ticks();
+    uint64_t t0 = coarse_ticks();
     int pid = scheduler_spawn(CPUTIME_TEST_PATH, 0);
     KTEST_ASSERT(pid != 0);
 
     int code = -1;
     int exited = 0;
-    while (pit_ticks() - t0 < TIMEOUT_TICKS) {
+    while (coarse_ticks() - t0 < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     KTEST_ASSERT(exited);

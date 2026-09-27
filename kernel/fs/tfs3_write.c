@@ -135,7 +135,7 @@ int t3_stage_inode_update(struct t3_state *sbi, uint64_t ino, struct t3_inode *n
             if (!t3_txn_begin(sbi, (int)sbi->jslots)) return 0;
             sbi->txn_deferred = 1;
         }
-        sbi->txn_staged_tick = pit_ticks();
+        sbi->txn_staged_tick = coarse_ticks();
         if (!t3_txn_stage_inode(sbi, ino, node)) {
             // Out of slots: commit what is there and start again. The
             // retry cannot fail for the same reason, because the fresh

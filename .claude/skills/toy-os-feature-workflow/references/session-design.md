@@ -978,7 +978,7 @@ Where the project stands after it, so a session does not re-derive it:
 **THE DESIGN LESSON, which generalises past virtio: A BOUND THAT CAN
 LIE IS WORSE THAN AN APPROXIMATE ONE.** `virtqueue_poll()` took three
 attempts. A fixed spin (~12 ms) that the code presented as 5 s, because
-`pit_ticks()` cannot advance with interrupts off and interrupts are off
+`coarse_ticks()` cannot advance with interrupts off and interrupts are off
 for most of the test suite and every syscall. Then a
 `clocksource_now_ns()` deadline, which is correct for the TSC and wrong
 for the PIT -- whose counter wraps every ~55 ms and needs the tick --

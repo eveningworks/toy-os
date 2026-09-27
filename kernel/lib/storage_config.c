@@ -35,7 +35,7 @@
 #include "string.h"
 #include "kfmt.h"      // k_snprintf
 #include "knum.h"      // k_parse_u32
-#include "timer.h"     // PIT_HZ
+#include "timer.h"     // COARSE_HZ
 #include "storage_config.h"
 #include "initcall.h"
 #include "tmppath.h"
@@ -192,7 +192,7 @@ int storage_sync_batched(void) { return g_batched; }
 // In PIT TICKS, converted here rather than at the call site so the
 // unit conversion lives with the setting that owns the number.
 uint32_t storage_writeback_ticks(void) {
-    return (uint32_t)g_writeback_s * PIT_HZ;
+    return (uint32_t)g_writeback_s * COARSE_HZ;
 }
 
 static int mode_choice(int index, char *out, uint32_t out_size) {

@@ -17,7 +17,7 @@
 #include "pmm.h"
 #include "string.h"
 #include "scheduler.h" // the preemption guard around a page-table walk
-#include "timer.h"     // pit_ticks -- rate-limiting the free_back probe
+#include "timer.h"     // coarse_ticks -- rate-limiting the free_back probe
 #include "debugflags.h" // `debug wm on` -- the rotation trace
 
 static int      g_holder;      // pid holding the grant, or 0
@@ -115,7 +115,7 @@ static int free_back(void) {
     // WM moved to ring 3 (nothing in userland/ can read a kernel flag),
     // and this is the half of the WM that stayed behind.
     if (dbgflag_enabled(DBGFLAG_WM)) {
-        uint64_t t = pit_ticks();
+        uint64_t t = coarse_ticks();
         if (t - g_back_last_log >= 100) {
             g_back_last_log = t;
             klog_printf("win_surface: rotate front %d live %d of %d (presents %llu, fallback %llu)\n",
@@ -125,7 +125,7 @@ static int free_back(void) {
     for (int b = 0; b < g_count; b++)
         if (b != g_front && b != live) return b;
     g_back_fallback++;
-    uint64_t now = pit_ticks();
+    uint64_t now = coarse_ticks();
     if (now - g_back_last_log >= 100) {   // 100 Hz: one line a second
         g_back_last_log = now;
         klog_printf("win_surface: no free buffer (front %d live %d of %d) -- handing back 0, "

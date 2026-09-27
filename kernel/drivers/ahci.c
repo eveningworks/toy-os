@@ -192,10 +192,10 @@ static int g_ncq_depth;                   // tags in use; 0 = no NCQ
 static int g_ncq_drive_depth;             // IDENTIFY word 75 + 1, 0 = none
 static uint64_t g_ncq_rounds, g_ncq_cmds, g_ncq_fallbacks;
 
-// ~1 s at PIT_HZ, the same budget ata.c gives a transfer. A drive that
+// ~1 s at COARSE_HZ, the same budget ata.c gives a transfer. A drive that
 // has not answered in a second under an emulator is not going to.
 #define WAIT_TICKS 100
-// The interrupts-off bound, where pit_ticks() cannot advance -- same
+// The interrupts-off bound, where coarse_ticks() cannot advance -- same
 // reasoning as ata.c's ATA_POLL_LIMIT.
 #define POLL_LIMIT 2000000
 
@@ -210,12 +210,12 @@ static volatile uint8_t *port_regs(int port) {
 
 // Waits for `mask` to read back clear in `reg`, up to ~`ticks`. Returns
 // 0 on timeout. Bounded by an iteration count as well, because
-// pit_ticks() is frozen when this is reached with interrupts off.
+// coarse_ticks() is frozen when this is reached with interrupts off.
 static int wait_clear(volatile uint8_t *p, uint32_t reg, uint32_t mask, uint64_t ticks) {
-    uint64_t start = pit_ticks();
+    uint64_t start = coarse_ticks();
     for (uint64_t guard = 0; guard < (uint64_t)POLL_LIMIT; guard++) {
         if (!(px_r(p, reg) & mask)) return 1;
-        if (pit_ticks() - start > ticks) return 0;
+        if (coarse_ticks() - start > ticks) return 0;
     }
     return 0;
 }
@@ -342,7 +342,7 @@ static int command_done(void) {
 // preemption guard up, or no interrupt at all), and the caller polls.
 static int sleep_command(uint64_t ticks) {
     if (!ahci_irq_driven()) return -1;
-    uint64_t deadline = clocksource_now_ns() + ticks * (1000000000ull / PIT_HZ);
+    uint64_t deadline = clocksource_now_ns() + ticks * (1000000000ull / COARSE_HZ);
     for (;;) {
         scheduler_wait_arm(&g_cmd_chan);
         if (command_done()) { scheduler_wait_disarm(); return 1; }
@@ -391,9 +391,9 @@ static int wait_command(void) {
         return 0;
     }
 
-    uint64_t start = pit_ticks();
+    uint64_t start = coarse_ticks();
     while (!g_irq_fired) {
-        if (pit_ticks() - start > WAIT_TICKS) return 0;
+        if (coarse_ticks() - start > WAIT_TICKS) return 0;
         __asm__ volatile ("hlt");
     }
     // The completion interrupt and the slot retiring are two events, and
@@ -543,7 +543,7 @@ static int ncq_state(uint32_t mask) {
 // halted on the interrupt from the kernel context, polling with
 // interrupts off. Returns the final state, 0 on timeout.
 static int ncq_wait(uint32_t mask) {
-    uint64_t deadline = clocksource_now_ns() + (uint64_t)NCQ_WAIT_TICKS * (1000000000ull / PIT_HZ);
+    uint64_t deadline = clocksource_now_ns() + (uint64_t)NCQ_WAIT_TICKS * (1000000000ull / COARSE_HZ);
     for (;;) {
         scheduler_wait_arm(&g_cmd_chan);
         int st = ncq_state(mask);
@@ -556,11 +556,11 @@ static int ncq_wait(uint32_t mask) {
         g_cmd_sleeps++;
     }
     if (!isr_in_progress()) {
-        uint64_t start = pit_ticks();
+        uint64_t start = coarse_ticks();
         for (;;) {
             int st = ncq_state(mask);
             if (st) return st;
-            if (pit_ticks() - start > NCQ_WAIT_TICKS) return 0;
+            if (coarse_ticks() - start > NCQ_WAIT_TICKS) return 0;
             __asm__ volatile ("hlt");
         }
     }
@@ -668,9 +668,9 @@ static int identify(void) {
 static void bios_handoff(void) {
     if (!(hba_r(HBA_CAP2) & CAP2_BOH)) return;
     hba_w(HBA_BOHC, hba_r(HBA_BOHC) | BOHC_OOS);
-    uint64_t start = pit_ticks();
+    uint64_t start = coarse_ticks();
     while (hba_r(HBA_BOHC) & BOHC_BOS) {
-        if (pit_ticks() - start > WAIT_TICKS) {
+        if (coarse_ticks() - start > WAIT_TICKS) {
             klog_write("ahci: firmware did not release the HBA -- taking it anyway\n");
             return;
         }

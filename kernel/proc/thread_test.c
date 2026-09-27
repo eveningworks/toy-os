@@ -26,12 +26,12 @@
 KTEST("thread", "a ring-3 program can create, join and share with threads") {
     if (!fs_exists(THREAD_TEST_PATH)) KTEST_SKIP("no " THREAD_TEST_PATH " on this boot");
 
-    uint64_t t0 = pit_ticks();
+    uint64_t t0 = coarse_ticks();
     int pid = scheduler_spawn(THREAD_TEST_PATH, 0);
     KTEST_ASSERT(pid != 0);
 
     int code = -1, exited = 0;
-    while (pit_ticks() - t0 < TIMEOUT_TICKS) {
+    while (coarse_ticks() - t0 < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     KTEST_ASSERT(exited);
@@ -59,11 +59,11 @@ KTEST("thread", "a process's threads are gone when it is") {
         if (scheduler_proc_info(i, &info) && info.pid) before++;
     }
 
-    uint64_t t0 = pit_ticks();
+    uint64_t t0 = coarse_ticks();
     int pid = scheduler_spawn(THREAD_TEST_PATH, 0);
     KTEST_ASSERT(pid != 0);
     int code = -1, exited = 0;
-    while (pit_ticks() - t0 < TIMEOUT_TICKS) {
+    while (coarse_ticks() - t0 < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     KTEST_ASSERT(exited);
@@ -85,12 +85,12 @@ KTEST("thread", "a process's threads are gone when it is") {
 KTEST("thread", "the ring-3 allocator survives four threads hammering it") {
     if (!fs_exists(HEAPRACE_PATH)) KTEST_SKIP("no " HEAPRACE_PATH " on this boot");
 
-    uint64_t t0 = pit_ticks();
+    uint64_t t0 = coarse_ticks();
     int pid = scheduler_spawn(HEAPRACE_PATH, 0);
     KTEST_ASSERT(pid != 0);
 
     int code = -1, exited = 0;
-    while (pit_ticks() - t0 < TIMEOUT_TICKS) {
+    while (coarse_ticks() - t0 < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     // A CRASH IS A FAILURE OF THIS TEST, not an inconclusive run: a
@@ -109,7 +109,7 @@ KTEST("thread", "the ring-3 allocator survives four threads hammering it") {
 KTEST("thread", "a thread is reported as one, with its leader's identity") {
     if (!fs_exists(THREAD_TEST_PATH)) KTEST_SKIP("no " THREAD_TEST_PATH " on this boot");
 
-    uint64_t t0 = pit_ticks();
+    uint64_t t0 = coarse_ticks();
     int pid = scheduler_spawn(THREAD_TEST_PATH, 0);
     KTEST_ASSERT(pid != 0);
 
@@ -118,7 +118,7 @@ KTEST("thread", "a thread is reported as one, with its leader's identity") {
     // Poll until one appears. The child creates its first thread within
     // a few instructions of starting, and the timeout is the same one
     // its own run gets.
-    while (pit_ticks() - t0 < TIMEOUT_TICKS && !found) {
+    while (coarse_ticks() - t0 < TIMEOUT_TICKS && !found) {
         for (int i = 0; i < scheduler_max_procs() && !found; i++) {
             struct proc_info info;
             if (!scheduler_proc_info(i, &info) || !info.pid) continue;
@@ -140,7 +140,7 @@ KTEST("thread", "a thread is reported as one, with its leader's identity") {
     // process in `ps --tree`.
     KTEST_ASSERT_EQ(thread.ppid, leader.pid);
 
-    while (pit_ticks() - t0 < TIMEOUT_TICKS)
+    while (coarse_ticks() - t0 < TIMEOUT_TICKS)
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) break;
 }
 
@@ -156,9 +156,9 @@ KTEST("thread", "an ordinary process is its own thread group") {
     KTEST_ASSERT_EQ(info.tgid, pid);
     KTEST_ASSERT_EQ(scheduler_tgid(pid), pid);
 
-    uint64_t t0 = pit_ticks();
+    uint64_t t0 = coarse_ticks();
     int code = 0;
-    while (pit_ticks() - t0 < TIMEOUT_TICKS)
+    while (coarse_ticks() - t0 < TIMEOUT_TICKS)
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) break;
 }
 

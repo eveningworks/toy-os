@@ -187,7 +187,7 @@ build-config-simplicity tradeoff, not an oversight.
 
 Every wait in `kernel/drivers/ata.c` that can block looks like it's
 written twice, and the duplication is deliberate. A wall-clock budget
-needs `pit_ticks()` to advance, and it doesn't inside a syscall: `int
+needs `coarse_ticks()` to advance, and it doesn't inside a syscall: `int
 0x80` is wired as an interrupt gate, so IF stays clear for the whole
 handler and no timer IRQ ever increments the counter. A wall-clock loop
 reached from there wouldn't time out, it would hang the machine. So
@@ -2618,7 +2618,7 @@ IF is set and a driver may sleep. Two routes reach one from a syscall
 -- `sys_modload` through `pci_rebind()`, and `SYS_DEV_RELEASE` through
 `pci_device_rebind()` -- where `context_switch.asm` leaves IF clear.
 `hda_probe()` waits 30 ms for the link, and on a machine whose
-clocksource is the PIT that is a `pit_ticks()` loop the timer can never
+clocksource is the PIT that is a `coarse_ticks()` loop the timer can never
 advance: the machine stopped dead at one instruction, with no panic and
 no log, and QMP's `info registers` named it (`RBX=4`, the tick target
 `clocksource_delay_ms(30)` computes). `driver_ctx_enter()` brackets

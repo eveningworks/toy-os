@@ -4,7 +4,7 @@
 // only writer). An AUX transaction cannot disturb the pipe.
 //
 // THE INVARIANT: every wait is an iteration-bounded spin. This runs
-// from the display probe, before the timer, and a pit_ticks() wait
+// from the display probe, before the timer, and a coarse_ticks() wait
 // hangs the one machine that has this hardware.
 //
 // THE TRAP: the transaction's bit clock divider and precharge are the

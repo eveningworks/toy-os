@@ -16,7 +16,7 @@
 #include "font_face.h" // ...or the runtime atlas, when a face is loaded
 #include "gfx.h"      // gfx_font_size() -- which variant is active
 #include "win_surface.h" // the compositor's framebuffer grant (M41 stage 4a)
-#include "timer.h"       // pit_ticks() -- the ring-3 debug leg's deadline
+#include "timer.h"       // coarse_ticks() -- the ring-3 debug leg's deadline
 #include "win_input.h"   // the compositor's queue -- tell_compositor(), and reset with the role
 #include "mouse.h"       // mouse_set_position() -- WIN_REQ_WARP_POINTER
 #include "vga.h"         // vga_resume() -- hand the screen back (R7)

@@ -85,7 +85,7 @@ static uint8_t g_cached_source = CPU_MHZ_UNKNOWN;
 // 100% one, short enough not to be a visible hang. This is the whole
 // reason the result is cached.
 #define CALIBRATE_TICKS 20
-// PIT_HZ comes from timer.h -- it used to be redefined here, which is
+// COARSE_HZ comes from timer.h -- it used to be redefined here, which is
 // two statements of one fact that a tick-rate change would have split.
 
 // RDTSC against the PIT. Deliberately the fallback, not the first
@@ -99,26 +99,26 @@ static uint8_t g_cached_source = CPU_MHZ_UNKNOWN;
 // environment, not a bug here, and `lscpu` labels the source so the
 // reader can tell.
 static uint32_t measure_mhz(void) {
-    uint64_t start_tick = pit_ticks();
+    uint64_t start_tick = coarse_ticks();
     // Wait for the next tick edge first, so the measurement window
     // starts aligned rather than partway through a tick.
-    while (pit_ticks() == start_tick) { __asm__ volatile ("pause"); }
+    while (coarse_ticks() == start_tick) { __asm__ volatile ("pause"); }
 
     uint64_t t0 = read_tsc();
-    uint64_t tick0 = pit_ticks();
-    while (pit_ticks() - tick0 < CALIBRATE_TICKS) { __asm__ volatile ("pause"); }
+    uint64_t tick0 = coarse_ticks();
+    while (coarse_ticks() - tick0 < CALIBRATE_TICKS) { __asm__ volatile ("pause"); }
     uint64_t t1 = read_tsc();
-    uint64_t ticks = pit_ticks() - tick0;
+    uint64_t ticks = coarse_ticks() - tick0;
     if (ticks == 0) return 0;
 
-    // cycles per second = delta_tsc / (ticks / PIT_HZ); then / 1e6 for MHz.
+    // cycles per second = delta_tsc / (ticks / COARSE_HZ); then / 1e6 for MHz.
     uint64_t cycles = t1 - t0;
-    return (uint32_t)((cycles * PIT_HZ) / (ticks * 1000000ull));
+    return (uint32_t)((cycles * COARSE_HZ) / (ticks * 1000000ull));
 }
 
 // Calibrates once, at boot. **This cannot be done lazily on first use,
 // and that isn't a preference -- it deadlocks.** measure_mhz() spins
-// waiting for pit_ticks() to advance, and pit_ticks() only advances
+// waiting for coarse_ticks() to advance, and coarse_ticks() only advances
 // from the timer IRQ. Every interrupt gate in this kernel (including
 // the int 0x80 syscall gate) clears IF on entry, so a lazy calibration
 // reached through SYS_CPU_INFO waits forever for a tick that cannot

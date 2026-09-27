@@ -72,7 +72,7 @@ DRIVER_DECLARE("ata", "block", "ATA/IDE disk, PIO and busmaster DMA");
 // OFF -- which is most of the kernel test suite, and every syscall,
 // because `int 0x80` is an interrupt gate. The wall-clock bounds below
 // look like the real limits and are unreachable in exactly the cases
-// that matter: pit_ticks() cannot advance with interrupts disabled, so
+// that matter: coarse_ticks() cannot advance with interrupts disabled, so
 // the code falls back to this count.
 //
 // ~12 ms was enough on a developer machine and not on a shared CI
@@ -140,7 +140,7 @@ static int spin_not_busy(void) {
 // command already in flight.
 //
 // Bounded two different ways for the same reason wait_dma_irq() is: a
-// wall-clock budget needs pit_ticks() to advance, and it doesn't inside
+// wall-clock budget needs coarse_ticks() to advance, and it doesn't inside
 // a syscall, because `int 0x80` is an interrupt gate so IF stays clear
 // for the whole handler (see idt.h's isr_in_progress()). So this spends
 // real time when it can and falls back to the fixed spin when it can't.
@@ -162,7 +162,7 @@ static int spin_not_busy(void) {
 static int wait_not_busy(void) {
     if (isr_in_progress()) return spin_not_busy();
 
-    uint64_t start = pit_ticks();
+    uint64_t start = coarse_ticks();
     // The iteration cap is belt-and-braces, not the real bound: this
     // path assumes ticks advance whenever isr_in_progress() is false,
     // which holds today, but a wall-clock loop that's WRONG about that
@@ -170,7 +170,7 @@ static int wait_not_busy(void) {
     // BUSY_WAIT_TICKS so it never fires first in normal operation.
     for (uint64_t guard = 0; guard < (uint64_t)ATA_POLL_LIMIT * 200; guard++) {
         if (!(inb(REG_STATUS) & STATUS_BSY)) return 1;
-        if (pit_ticks() - start > BUSY_WAIT_TICKS) return 0;
+        if (coarse_ticks() - start > BUSY_WAIT_TICKS) return 0;
         io_wait();
     }
     return 0;
@@ -216,7 +216,7 @@ static int spin_drq(void) {
 // Being a per-sector hot loop, the ordering here matters in a way it
 // doesn't up there: status is read and both exits are taken BEFORE the
 // clock is consulted, so the overwhelmingly common case (DRQ already
-// set on the first look) costs one extra `pit_ticks()` per sector and
+// set on the first look) costs one extra `coarse_ticks()` per sector and
 // nothing else. That's a volatile counter read next to a port-I/O read
 // that dominates it -- measured throughput was unchanged.
 //
@@ -230,12 +230,12 @@ static int spin_drq(void) {
 static int wait_drq(void) {
     if (isr_in_progress()) return spin_drq();
 
-    uint64_t start = pit_ticks();
+    uint64_t start = coarse_ticks();
     for (uint64_t guard = 0; guard < (uint64_t)ATA_POLL_LIMIT * 200; guard++) {
         uint8_t status = inb(REG_STATUS);
         if (status & STATUS_ERR) { g_pio_fail_reason = "drive reported ERR"; return 0; }
         if (status & STATUS_DRQ) return 1;
-        if (pit_ticks() - start > DRQ_WAIT_TICKS) {
+        if (coarse_ticks() - start > DRQ_WAIT_TICKS) {
             g_pio_fail_reason = "DRQ never asserted within the wall-clock bound";
             return 0;
         }
@@ -550,7 +550,7 @@ static int dma_irq_seen(void) {
 // two. Armed before every test, so an IRQ landing between the test and
 // the park is a wake the park declines rather than one it sleeps through.
 static int sleep_dma_irq(uint64_t budget_ticks) {
-    uint64_t deadline = clocksource_now_ns() + budget_ticks * (1000000000ull / PIT_HZ);
+    uint64_t deadline = clocksource_now_ns() + budget_ticks * (1000000000ull / COARSE_HZ);
     for (;;) {
         scheduler_wait_arm(&g_dma_chan);
         if (dma_irq_seen()) { scheduler_wait_disarm(); return 1; }
@@ -599,7 +599,7 @@ static int sleep_dma_irq(uint64_t budget_ticks) {
 //     own pending IRQ14 from this transfer gets cleared for free the
 //     next time interrupts are re-enabled -- irq_dispatch() always
 //     sends EOI, so the eventual, otherwise-harmless spurious call to
-//     ata_irq_handler() cleans it up.) pit_ticks() is frozen for the
+//     ata_irq_handler() cleans it up.) coarse_ticks() is frozen for the
 //     same "interrupts are off" reason, so the bound here is a plain
 //     iteration count (ATA_POLL_LIMIT), not wall-clock, matching
 //     wait_not_busy()/wait_drq() above.
@@ -618,9 +618,9 @@ static int wait_dma_irq(uint64_t budget_ticks) {
         return 0;
     }
 
-    uint64_t start = pit_ticks();
+    uint64_t start = coarse_ticks();
     while (!dma_irq_seen()) {
-        if (pit_ticks() - start > budget_ticks) return 0;
+        if (coarse_ticks() - start > budget_ticks) return 0;
         __asm__ volatile ("hlt");
     }
     return 1;
@@ -808,7 +808,7 @@ static void dma_timeout_note(const char *op, uint32_t lba, int count,
     klog_printf(KLOG_WARN "ata: %s lba %u n %d attempt %d gave up after %u ms (#%u): "
                 "drive 0x%02x%s, bus master 0x%02x%s%s\n",
                 op, lba, count, attempt,
-                (unsigned)(budget_ticks * 1000 / PIT_HZ), notes,
+                (unsigned)(budget_ticks * 1000 / COARSE_HZ), notes,
                 alt, (alt & STATUS_BSY) ? " BUSY" : "",
                 bm, (bm & BM_STATUS_ACTIVE) ? " ACTIVE" : "",
                 (bm & BM_STATUS_IRQ) ? " IRQ" : "");
@@ -873,7 +873,7 @@ int dma_transfer_start(uint32_t lba, int count, void *buf, int is_write) {
     g_pending.count = count;
     g_pending.buf = buf;
     g_pending.is_write = is_write;
-    g_pending.start_tick = pit_ticks();
+    g_pending.start_tick = coarse_ticks();
     return 1;
 }
 
@@ -898,9 +898,9 @@ enum ata_poll_result dma_transfer_poll(void) {
     }
 
     if (!done) {
-        uint64_t elapsed = isr_in_progress() ? 0 : pit_ticks() - g_pending.start_tick;
+        uint64_t elapsed = isr_in_progress() ? 0 : coarse_ticks() - g_pending.start_tick;
         // The syscall-context path has no wall-clock bound available
-        // (pit_ticks() is frozen with interrupts off, same reason
+        // (coarse_ticks() is frozen with interrupts off, same reason
         // wait_dma_irq() uses ATA_POLL_LIMIT there instead) -- a
         // syscall-context caller is responsible for bounding its own
         // poll loop, same as wait_dma_irq()'s ATA_POLL_LIMIT does today.
@@ -958,9 +958,9 @@ static void retry_backoff(int attempt) {
         for (int i = 0; i < ATA_POLL_LIMIT * attempt; i++) io_wait();
         return;
     }
-    uint64_t start = pit_ticks();
+    uint64_t start = coarse_ticks();
     uint64_t want = (uint64_t)attempt * RETRY_BACKOFF_TICKS;
-    while (pit_ticks() - start < want) __asm__ volatile ("hlt");
+    while (coarse_ticks() - start < want) __asm__ volatile ("hlt");
 }
 
 static int dma_transfer_with_retry(uint32_t lba, int count, void *buf, int is_write) {

@@ -1284,7 +1284,7 @@ struct query_kbdtap {
     // printed, so a record it has already seen is recognisable and a
     // GAP is a burst it missed rather than a silent loss.
     uint64_t seq;
-    uint64_t ticks;      // pit_ticks() when it arrived (api/timer.h)
+    uint64_t ticks;      // coarse_ticks() when it arrived (api/timer.h)
     uint64_t flags;      // QUERY_KBDTAP_*
     // The PS/2 wire byte, INCLUDING its release bit -- 0x1E is A down
     // and 0x9E is A up, which is what the wire really said. **ZERO

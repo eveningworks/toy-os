@@ -29,10 +29,10 @@ void timer_tick_advance(void) {
 
 uint64_t timer_irq_ticks(void) { return ticks; }
 
-uint64_t pit_ticks(void) {
+uint64_t coarse_ticks(void) {
     if (clocksource_deadline_capable())
-        return clocksource_now_ns() / (1000000000ull / PIT_HZ);
-    return ticks * PIT_HZ / CONFIG_HZ;
+        return clocksource_now_ns() / (1000000000ull / COARSE_HZ);
+    return ticks * COARSE_HZ / CONFIG_HZ;
 }
 
 #define CMOS_ADDR 0x70

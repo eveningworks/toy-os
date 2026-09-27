@@ -128,7 +128,7 @@ struct cpu_info {
 //
 // This exists as a separate init rather than being folded into the
 // first cpu_info_get() because a lazy calibration deadlocks: it spins
-// waiting for pit_ticks() to advance, and every interrupt gate here --
+// waiting for coarse_ticks() to advance, and every interrupt gate here --
 // the int 0x80 syscall gate included -- clears IF, so a calibration
 // reached through SYS_CPU_INFO waits forever for a tick that can't
 // arrive. See cpuid.c.

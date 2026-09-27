@@ -341,7 +341,7 @@ struct rtl_usb {
     volatile uint8_t tx_busy[RTL_BUFS];
     uint8_t tx_next;
 
-    uint64_t link_checked;         // pit_ticks() of the last PHY read
+    uint64_t link_checked;         // coarse_ticks() of the last PHY read
     // Consecutive failed link reads, and the latch that stops them. A
     // device that has gone away without a detach event is polled
     // forever otherwise -- see rtl_poll().

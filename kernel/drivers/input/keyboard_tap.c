@@ -29,7 +29,7 @@
 
 struct tap_rec {
     uint32_t seq;         // 1-based; 0 marks a slot never written
-    uint32_t ticks;       // pit_ticks() truncated -- see the note in fill()
+    uint32_t ticks;       // coarse_ticks() truncated -- see the note in fill()
     uint16_t wire;        // PS/2 byte, | TAP_WIRE_EXT; 0 = not from PS/2
     uint16_t keycode;
     uint16_t produced[QUERY_KBDTAP_PRODUCED_MAX];
@@ -80,7 +80,7 @@ void kbdtap_key(uint16_t wire, int extended, uint16_t keycode, int down,
     if (!g_enabled) return;
     struct tap_rec *r = &g_ring[g_seq & (TAP_MAX - 1)];
     r->seq       = ++g_seq;
-    r->ticks     = (uint32_t)pit_ticks();
+    r->ticks     = (uint32_t)coarse_ticks();
     r->wire      = (uint16_t)(wire ? (wire | (extended ? TAP_WIRE_EXT : 0)) : 0);
     r->keycode   = keycode;
     r->mods      = mods;
@@ -124,7 +124,7 @@ int kbdtap_fill(int index, void *out) {
     k_memset(q, 0, sizeof *q);
     q->seq     = r->seq;
     // Widened here rather than stored wide. It is a TICK COUNT, not a
-    // time: 10ms steps (PIT_HZ), truncated to 32 bits, so it wraps after
+    // time: 10ms steps (COARSE_HZ), truncated to 32 bits, so it wraps after
     // ~497 days of uptime. A caller uses it for the INTERVAL between two
     // adjacent events -- telling autorepeat from a second press -- which
     // a wrap breaks for exactly one pair of lines.

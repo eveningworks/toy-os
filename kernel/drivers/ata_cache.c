@@ -8,7 +8,7 @@
 #include "klog.h"
 #include "kfmt.h"
 #include "string.h"
-#include "timer.h" // pit_ticks
+#include "timer.h" // coarse_ticks
 #include <stddef.h>
 
 // driver-none: the write-back cache above the ATA driver
@@ -203,7 +203,7 @@ int atac_write(uint32_t lba, int count, const void *buf) {
     if (!atac_enabled()) return g_ops ? g_ops->write(lba, count, buf) : 0;
 
     const uint8_t *src = (const uint8_t *)buf;
-    g_last_write_tick = pit_ticks();
+    g_last_write_tick = coarse_ticks();
 
     if (count > ATAC_MAX_LINES) {
         if (!reconcile_range(lba, count, 1)) return 0;
@@ -280,7 +280,7 @@ int atac_drop(void) {
 
 void atac_idle(void) {
     if (!atac_enabled() || g_busy || g_dirty == 0) return;
-    if (pit_ticks() - g_last_write_tick < ATAC_IDLE_TICKS) {
+    if (coarse_ticks() - g_last_write_tick < ATAC_IDLE_TICKS) {
         clockevent_idle_wake_at_tick(g_last_write_tick + ATAC_IDLE_TICKS);
         return;
     }

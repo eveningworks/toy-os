@@ -12,7 +12,7 @@
 //
 // **IT TIMES WITH rdtsc, NOT WITH clocksource_now_ns(), AND THAT IS THE
 // WHOLE REASON THIS FILE HAS A CLOCK OF ITS OWN.** The default
-// clocksource is the PIT, whose read is pit_ticks() -- a counter the
+// clocksource is the PIT, whose read is coarse_ticks() -- a counter the
 // timer INTERRUPT increments. Interrupts are off for exactly the stretch
 // being measured, so that counter stands still and every duration comes
 // out as zero: not coarse, structurally blind, and reported as a machine

@@ -76,7 +76,7 @@ static void klog_buf_putc(char c) {
 // physical port, and doesn't itself count as "starting a new line" for
 // at_line_start purposes).
 static void klog_write_timestamp(void) {
-    uint64_t ticks = pit_ticks(); // 100 Hz -- see top comment
+    uint64_t ticks = coarse_ticks(); // 100 Hz -- see top comment
     uint32_t secs = (uint32_t)(ticks / 100);
     uint32_t hund = (uint32_t)(ticks % 100);
 

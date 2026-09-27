@@ -1147,7 +1147,7 @@ property of the source rather than its name: `struct clocksource` now
 carries `irq_independent`. The TSC sets it -- a free-running CPU
 counter, and `clocksource_tsc.c` already refuses to register a
 non-invariant one. The PIT source does NOT: its `read()` is
-`pit_ticks()`, a count the timer INTERRUPT increments, so with IF clear
+`coarse_ticks()`, a count the timer INTERRUPT increments, so with IF clear
 it stands still however long the caller waits and a deadline off it
 never expires. That was the original objection to deadlines in the xHCI
 driver and it was correct; what it lacked was a way to ask.
@@ -1320,7 +1320,7 @@ each core gets one of. Six things to know:
   microsecond window where both fire, which double-counts at most one
   tick.
 - **CALIBRATING THE LAPIC TIMER NEEDS INTERRUPTS ON.** It counts against
-  `pit_ticks()`, which on a tick-driven clocksource advances only from
+  `coarse_ticks()`, which on a tick-driven clocksource advances only from
   the timer interrupt, so calibrating with IF clear waits forever -- the
   deadlock `cpuinfo.h` describes for the TSC. `lapic_ce_start()` reads
   RFLAGS and refuses rather than hanging. This is also why
@@ -1331,8 +1331,8 @@ each core gets one of. Six things to know:
   re-taking the tick is one write.
 - **TWO RATES, AND THEY ARE DIFFERENT THINGS.** `CONFIG_HZ`
   (build.conf's `option hz`) is how often the tick interrupts a busy
-  CPU. `PIT_HZ` is fixed at 100: the rate `pit_ticks()` counts at, and
-  `SYS_TICKS`' `USER_HZ`. `pit_ticks()` is DERIVED from the clocksource
+  CPU. `COARSE_HZ` is fixed at 100: the rate `coarse_ticks()` counts at, and
+  `SYS_TICKS`' `USER_HZ`. `coarse_ticks()` is DERIVED from the clocksource
   where that runs without interrupts, and counted from the tick only
   where it does not.
 - **TESTING IT IS ABOUT DELIVERY, NOT CONFIGURATION** -- the same rule
@@ -1361,7 +1361,7 @@ other; `config get clock.tick_mode` answers it from ring 3.
   nobody has taught to ask for its wakes. Convert a loop to the helper
   once it is the machine's idle point, not before.
 - **IDLE WORK THAT IS DUE AT A TIME MUST ASK FOR A WAKE**, every pass,
-  with `clockevent_idle_wake_by()` (or `_at_tick()` for a `pit_ticks()`
+  with `clockevent_idle_wake_by()` (or `_at_tick()` for a `coarse_ticks()`
   deadline). Otherwise it waits for an unrelated interrupt, which on a
   quiet machine may be seconds. The ATA cache flush, the tfs3 idle
   commit, the cursor blink, a polled NIC and TCP's orphan timers all do.
@@ -2743,7 +2743,7 @@ INITCALL context, where IF is set and a driver may sleep, and two
 routes now reach one from a SYSCALL, where IF is clear: `sys_modload`
 through `pci_rebind()`, and `SYS_DEV_RELEASE` through
 `pci_device_rebind()`. `hda_probe()` waits 30 ms for the link; on a
-machine whose clocksource is the PIT that is a `pit_ticks()` loop, and
+machine whose clocksource is the PIT that is a `coarse_ticks()` loop, and
 the machine stops dead at one instruction with no panic and no log.
 Preemption stays OFF across the callback, so only the timer is let in.
 **A released controller is handed over IN RESET**, so a ring-3 driver's
@@ -2860,7 +2860,7 @@ AGAINST TIMEOUTS to tell them apart -- and note QEMU may never park at
 all, so this is a hardware measurement: `lscodec` reads 34/34/0 on the
 ASUS and 0/0 in QEMU, both correct.
 
-## A SYSCALL HANDLER RUNS WITH INTERRUPTS OFF, AND A WAIT ON `pit_ticks()` THERE NEVER ENDS
+## A SYSCALL HANDLER RUNS WITH INTERRUPTS OFF, AND A WAIT ON `coarse_ticks()` THERE NEVER ENDS
 
 `context_switch.asm` re-enables interrupts on the way OUT of a syscall
 and nothing does so on the way in, so every handler -- and everything a
@@ -2868,7 +2868,7 @@ handler calls, which includes every `sound_device.start()`/`stop()`,
 every setting's `apply`, every fd release -- runs with IF clear. A
 tick deadline in that context is not a deadline wherever the clocksource
 is the tick itself (the PIT source: `clocksource=pit`, or a machine with
-neither an invariant TSC nor an ACPI PM timer) -- `pit_ticks()` stands
+neither an invariant TSC nor an ACPI PM timer) -- `coarse_ticks()` stands
 still, the loop exits only when the hardware condition comes true, and
 if it never does the machine is dead with no panic and no log -- the
 keyboard, the mouse and the network all stop at once, which reads as a
@@ -2927,7 +2927,7 @@ QEMU guest under `diskbench`: `write` held the CPU for **220 ms** in one
 call, against 857 us on the same machine idle.
 
 **IT TIMES WITH `rdtsc`, AND A CLOCKSOURCE READ THERE WOULD MEASURE
-NOTHING AT ALL.** The default clocksource reads `pit_ticks()` -- a
+NOTHING AT ALL.** The default clocksource reads `coarse_ticks()` -- a
 counter the timer INTERRUPT increments -- and the interrupt is off for
 precisely the window being measured, so both reads return the same value
 and every stall comes out as zero. Not coarse: structurally blind, and
@@ -3845,7 +3845,7 @@ things to know.
   against that generation's PRM, not adding an id.
 - **THE PROBE RUNS BEFORE THE TIMER**, like every display probe, so its
   waits are iteration-bounded spins. Nothing in this driver may wait on
-  `pit_ticks()` -- on this laptop that hangs the machine solid.
+  `coarse_ticks()` -- on this laptop that hangs the machine solid.
 - **THE CURSOR IMAGE LIVES IN SYSTEM MEMORY BEHIND A GGTT ENTRY THE
   FIRMWARE NEVER MAPPED** (the first slot past the stolen region), with
   the framebuffer PTE's own low bits copied for cache attributes, the

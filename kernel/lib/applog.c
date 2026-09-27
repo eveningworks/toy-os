@@ -38,7 +38,7 @@ void applog_write(const char *tag, const char *text, uint32_t len) {
 
     struct applog_rec *r = &g_rec[g_next % APPLOG_RECS];
     r->seq = g_next;
-    r->cs = pit_ticks();
+    r->cs = coarse_ticks();
     k_strlcpy(r->tag, (tag && tag[0]) ? tag : "?", APPLOG_TAG_MAX);
     k_memcpy(r->text, text, len);
     r->text[len] = '\0';

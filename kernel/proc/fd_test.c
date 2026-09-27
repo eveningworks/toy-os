@@ -26,8 +26,8 @@ KTEST("fd", "dup, dup2 and inheritance, in a real process") {
 
     int code = -1;
     int exited = 0;
-    uint64_t start = pit_ticks();
-    while (pit_ticks() - start < TIMEOUT_TICKS) {
+    uint64_t start = coarse_ticks();
+    while (coarse_ticks() - start < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     KTEST_ASSERT(exited);
@@ -53,8 +53,8 @@ KTEST("fd", "a full pipe blocks its writer instead of truncating") {
 
     int code = -1;
     int exited = 0;
-    uint64_t start = pit_ticks();
-    while (pit_ticks() - start < TIMEOUT_TICKS) {
+    uint64_t start = coarse_ticks();
+    while (coarse_ticks() - start < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     // Not exiting is itself the failure this guards: before the writer

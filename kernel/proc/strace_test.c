@@ -21,7 +21,7 @@
 #include "kapi.h"
 #include "scheduler.h"
 #include "fs.h"
-#include "timer.h" // pit_ticks() -- the spawn's timeout
+#include "timer.h" // coarse_ticks() -- the spawn's timeout
 
 static int eq(const char *a, const char *b) { return k_strcmp(a, b) == 0; }
 
@@ -128,8 +128,8 @@ KTEST("strace", "a trace reaches the TRACER'S terminal, not the console") {
 
     int code = -1;
     int exited = 0;
-    uint64_t start = pit_ticks();
-    while (pit_ticks() - start < TRACE_TIMEOUT_TICKS) {
+    uint64_t start = coarse_ticks();
+    while (coarse_ticks() - start < TRACE_TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     KTEST_ASSERT(exited);

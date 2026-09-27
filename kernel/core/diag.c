@@ -13,7 +13,7 @@
 #include "klog.h"
 #include "kfmt.h"   // klog_printf
 #include "kerrno.h"
-#include "timer.h"   // pit_ticks() -- the owner lapse and the console's wait
+#include "timer.h"   // coarse_ticks() -- the owner lapse and the console's wait
 #include "futex.h"   // futex_note_ready() -- how a provider is woken
 #include "syscalls.h"
 #include "syscall_abi.h"
@@ -173,8 +173,8 @@ static int collect(char *out, int cap) {
 // very process being waited for.
 static int wait_here(struct provider *p, const char *line, char *out, int cap) {
     if (post(p, line) < 0) return -1;
-    uint64_t deadline = pit_ticks() + DIAG_WAIT_TICKS;
-    while (!g_reply_ready && pit_ticks() < deadline) {
+    uint64_t deadline = coarse_ticks() + DIAG_WAIT_TICKS;
+    while (!g_reply_ready && coarse_ticks() < deadline) {
         clockevent_idle_wake_at_tick(deadline);
         clockevent_idle_halt();
     }
@@ -263,7 +263,7 @@ int diag_request(int pid, struct diag_msg *msg) {
         if (g_awaiting) {
             int n = collect(g_reply, (int)sizeof g_reply);
             if (n < 0) {
-                if (pit_ticks() >= g_await_until) {
+                if (coarse_ticks() >= g_await_until) {
                     klog_write("diag: provider did not answer in time\n");
                     g_awaiting = 0; g_pending_valid = 0; g_owner = 0;
                     msg->type = DIAG_OUT; msg->len = 0; msg->text[0] = '\0';
@@ -285,7 +285,7 @@ int diag_request(int pid, struct diag_msg *msg) {
     }
 
     case DIAG_CMD: {
-        if (g_owner && g_owner != pid && pit_ticks() < g_owner_until)
+        if (g_owner && g_owner != pid && coarse_ticks() < g_owner_until)
             return -EBUSY;
 
         struct provider *p = find(msg->name);
@@ -295,7 +295,7 @@ int diag_request(int pid, struct diag_msg *msg) {
         }
 
         g_owner = pid;
-        g_owner_until = pit_ticks() + DIAG_OWNER_TICKS;
+        g_owner_until = coarse_ticks() + DIAG_OWNER_TICKS;
         g_len = 0; g_sent = 0; g_reply_flags = 0;
 
         if (pid > 0) {
@@ -308,7 +308,7 @@ int diag_request(int pid, struct diag_msg *msg) {
                 return 0;
             }
             g_awaiting = 1;
-            g_await_until = pit_ticks() + DIAG_WAIT_TICKS;
+            g_await_until = coarse_ticks() + DIAG_WAIT_TICKS;
             msg->type = DIAG_OUT; msg->flags = DIAG_F_PENDING;
             msg->len = 0; msg->text[0] = '\0';
             return 1;

@@ -88,7 +88,7 @@ static int ac97_start(const struct sound_device *dev) {
     (void)dev;   // one AC'97 per machine
     // Reset the box, then arm it. RR self-clears when the reset is done.
     // A SPIN COUNT, not a tick deadline: this runs from SND_CTL_START,
-    // a syscall, where interrupts are off and pit_ticks() stands still.
+    // a syscall, where interrupts are off and coarse_ticks() stands still.
     outb(g_nabm + PO_CR, CR_RR);
     uint32_t spins = 0;
     while ((inb(g_nabm + PO_CR) & CR_RR) && ++spins < 1000000u) { }
@@ -166,8 +166,8 @@ static void ac97_probe(const struct pci_device *dev) {
 
     // Cold reset released, then wait for the codec to report ready.
     outl(g_nabm + GLOB_CNT, GC_COLD_RESET);
-    uint64_t deadline = pit_ticks() + 100; // a real codec takes ~1ms
-    while (!(inl(g_nabm + GLOB_STA) & GS_CODEC_READY) && pit_ticks() < deadline) { }
+    uint64_t deadline = coarse_ticks() + 100; // a real codec takes ~1ms
+    while (!(inl(g_nabm + GLOB_STA) & GS_CODEC_READY) && coarse_ticks() < deadline) { }
     if (!(inl(g_nabm + GLOB_STA) & GS_CODEC_READY)) {
         klog_write("ac97: codec never came ready -- not driving it\n");
         return;

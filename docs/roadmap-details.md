@@ -2152,7 +2152,7 @@ reliably get in and out) -> TCP + the existing socket syscalls. Two
 smaller gaps along the way, both confirmed to matter beyond just
 networking (not scoped to TCP specifically, even though that's where
 they were first identified): there's a kernel-internal tick counter
-(`pit_ticks()`, `kernel/core/timer.c`) but nothing exposes it to ring 3
+(`coarse_ticks()`, `kernel/core/timer.c`) but nothing exposes it to ring 3
 -- `SYS_GETTIME` is wall-clock/second-resolution only -- so a
 millisecond-ish clock needs its own syscall before TCP's timers (or
 anything else timing-sensitive in ring 3) can measure elapsed time at
@@ -2208,7 +2208,7 @@ items still open:
   possible output" by explicit request, not a freq/duration-adjustable
   command). Blocks for the tone's duration -- no scheduler-aware
   sleep/delay primitive exists yet (same gap as Networking's own
-  item), so this busy-waits on `pit_ticks()` like everything else in
+  item), so this busy-waits on `coarse_ticks()` like everything else in
   this codebase that needs to wait a while.
 - AC97 or HDA PCI audio device driver -- QEMU emulates AC97
   (`-device AC97`), the simpler of the two to target first; HDA is
@@ -4206,7 +4206,7 @@ guess.*
 
 - [x] ~~Taskbar notification area (tray)~~ -- done, see the commit that added it: a dynamic `tray_register()`/ `tray_set_text()`/`tray_unregister()` API (`apps/wm/wm.h`), with the taskbar clock as its first item (`apps/wm/wm_tray.c`). No other GUI app registers a tray item yet -- the API is there for one to use next time a feature calls for it (an async job's progress, a background download, etc).
 
-- [x] ~~**A tween/easing helper, once a second real caller exists.** Nothing in the tree interpolates anything over time: the Start menu's click flash and the tray clock are both "is the deadline reached?" checks, not motion. `kernel/include/api/fixed.h` already has what one needs (Q16.16, `fx_mul`/`fx_div`, `fx_sin` for ease-in/out), so this is small when it is wanted. Deliberately NOT built yet: the obvious consumers -- a cursor walking a path and an animated window drag -- turn out to be the same caller ("walk a point from A to B over N ms"), which fails this repo's second-real-caller bar. Build it when a genuinely different consumer turns up: a WM animation, or The GUI in ring 3's `WIN_EV_TIMER`. **Pace it by `pit_ticks()`, not by frame count** -- `wm_run()` is a free-running loop paced only by `hlt` (`apps/wm/wm.c:592`), so it wakes on any interrupt and runs much slower under `gui damage verify on`; a frame-paced animation would silently change speed between an ordinary boot and a test run.~~ DONE 2026-09-18 -- `userland/lib/utween.c` (Q16.16 cubic ease-out, clock passed in, checked by `tools/utween_hostcheck.py`); the second caller was smooth scrolling (`ui/uui_scrollanim.h`), which paces by `sys_monotonic_ns()` as this entry asked. The WM's window effects are its next caller.
+- [x] ~~**A tween/easing helper, once a second real caller exists.** Nothing in the tree interpolates anything over time: the Start menu's click flash and the tray clock are both "is the deadline reached?" checks, not motion. `kernel/include/api/fixed.h` already has what one needs (Q16.16, `fx_mul`/`fx_div`, `fx_sin` for ease-in/out), so this is small when it is wanted. Deliberately NOT built yet: the obvious consumers -- a cursor walking a path and an animated window drag -- turn out to be the same caller ("walk a point from A to B over N ms"), which fails this repo's second-real-caller bar. Build it when a genuinely different consumer turns up: a WM animation, or The GUI in ring 3's `WIN_EV_TIMER`. **Pace it by `coarse_ticks()`, not by frame count** -- `wm_run()` is a free-running loop paced only by `hlt` (`apps/wm/wm.c:592`), so it wakes on any interrupt and runs much slower under `gui damage verify on`; a frame-paced animation would silently change speed between an ordinary boot and a test run.~~ DONE 2026-09-18 -- `userland/lib/utween.c` (Q16.16 cubic ease-out, clock passed in, checked by `tools/utween_hostcheck.py`); the second caller was smooth scrolling (`ui/uui_scrollanim.h`), which paces by `sys_monotonic_ns()` as this entry asked. The WM's window effects are its next caller.
 
 
 ## Desktop productivity apps
@@ -4754,7 +4754,7 @@ refer to them by number.
 
 - [x] **Time sources -- DONE (2026-08-17).** `kernel/clocksource.h` registers PIT (rating 110) and TSC (300), and CPU accounting bills measured nanoseconds against whichever is live. See `docs/decisions.md`. The two pieces NOT done are both scheduled under ACPI + real power/timer, which is where they belong -- **HPET as a third clocksource** (it needed ACPI's HPET table to discover the base address; that table is found as of 2026-08-30, so only the driver is left) and the **`clock_event_device` half**, since timer EVENTS are still a fixed 100Hz PIT with no tickless idle. See that milestone's Details for why HPET matters more than its middle rating suggests. The original survey text follows.
 
-- [ ] **~~Time sources -- the strongest candidate~~ (superseded above).** The tree names concrete clocks directly: `pit_ticks()` (monotonic 100Hz, the scheduler's billing unit and `SYS_TICKS`) and the TSC (calibrated in `cpuinfo`, used by `gfxbench` and the relocation path). Three call conventions, no abstraction. ACPI + real power/timer (ACPI + real power/timer) brings HPET and TSC-deadline, which is the real trigger; a Linux-style `clocksource` (monotonic, resolution, "is it reliable across sleep") is the natural shape.
+- [ ] **~~Time sources -- the strongest candidate~~ (superseded above).** The tree names concrete clocks directly: `coarse_ticks()` (monotonic 100Hz, the scheduler's billing unit and `SYS_TICKS`) and the TSC (calibrated in `cpuinfo`, used by `gfxbench` and the relocation path). Three call conventions, no abstraction. ACPI + real power/timer (ACPI + real power/timer) brings HPET and TSC-deadline, which is the real trigger; a Linux-style `clocksource` (monotonic, resolution, "is it reliable across sleep") is the natural shape.
 
 - [ ] **Stack block devices rather than hooking the filesystem, for M18 encryption at rest.** `block_device` is already shaped so a device can wrap another, device-mapper style, and encryption is size-preserving so it composes cleanly -- this is dm-crypt, and writing it as a block layer instead of as TFS3 hooks is the decision that is cheap now and expensive to undo later. Same for M36 swap. Note TFS2 deliberately calls `ata_*` directly, so a stacking layer covers TFS3 only; that is fine, TFS2 is legacy.
 
@@ -5675,7 +5675,7 @@ lane status read back at each step and the voltage swing/pre-emphasis
 loop (`DDI_BUF_TRANS` entries for eDP on BDW), then the normal pattern.
 Around it: the pipe/transcoder disable order from the PRM, `PP_CONTROL`
 with the sequencer's own delays honoured by iteration-bounded spins
-(this runs inside a syscall on the laptop -- no `pit_ticks()`), and the
+(this runs inside a syscall on the laptop -- no `coarse_ticks()`), and the
 backlight last. Every wait is bounded, every step logs its readback,
 and the exit criterion is the readout above reporting `MATCHES` after
 the driver's own programming. Only the laptop can show any of it, with

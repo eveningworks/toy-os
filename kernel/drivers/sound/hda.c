@@ -134,7 +134,7 @@ static inline void irq_restore(uint64_t f) {
 }
 
 // Spin until (reg & mask) == want, bounded by a SPIN COUNT rather than
-// pit_ticks(): start()/stop() run from a syscall, where interrupts are
+// coarse_ticks(): start()/stop() run from a syscall, where interrupts are
 // off (context_switch.asm) and a tick deadline never arrives. ~1M
 // MMIO reads is milliseconds on anything real, tens under TCG.
 #define HDA_SPIN_MAX 1000000u
@@ -194,7 +194,7 @@ static int hda_cmd(struct hda_ctrl *h, uint8_t nid, uint32_t verb20, uint32_t *o
     kmb();
     mw16(h, HDA_CORBWP, wp);
     // A codec answers within a frame; a few ms of spinning is the
-    // generous bound, and pit_ticks() cannot be used with IF clear.
+    // generous bound, and coarse_ticks() cannot be used with IF clear.
     for (uint32_t spins = 0; !h->resp_ready && spins < 4000000u; spins++) {
         rirb_drain(h);
         cpu_relax();
@@ -402,7 +402,7 @@ static void hda_irq_one(struct hda_ctrl *h) {
             klog_printf(KLOG_ERR "%s: stream error sts %#x (fifoe %u dese %u)\n", h->name, s, h->fifoe, h->dese);
         if ((s & SD_STS_BCIS) && h->diag) {
             // The diagnostic tone: count it down and stop the engine
-            // from here, with no waiting -- pit_ticks() does not advance
+            // from here, with no waiting -- coarse_ticks() does not advance
             // inside a handler, so stream_stop()'s deadline cannot.
             if (--h->diag == 0) {
                 mw32(h, h->sd + SD_CTL, mr32(h, h->sd + SD_CTL) & ~(uint32_t)(SD_CTL_RUN | SD_CTL_IOCE) & 0x00FFFFFF);
@@ -654,7 +654,7 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
 // codec only, so what crackles here is not the app or the core. It
 // plays over whatever stream is open, which is fine for a diagnostic.
 // NON-BLOCKING: the handler counts the completions and stops the
-// engine -- a wait on pit_ticks() from a syscall hung the test laptop.
+// engine -- a wait on coarse_ticks() from a syscall hung the test laptop.
 static void diag_tone(struct hda_ctrl *h, int16_t *ring) {
     for (uint32_t i = 0; i < SND_RING_BYTES / 4; i++) {
         int32_t v = (fx_sin((fx_t)((i % 128) * (FX_ONE / 128))) * 8000) >> 16;

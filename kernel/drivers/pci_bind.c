@@ -61,7 +61,7 @@ int pci_match_device(const struct pci_match *m, const struct pci_device *d) {
 // here. probe() and remove() were written for INITCALL and module
 // teardown; three routes now reach one from a SYSCALL, where
 // `context_switch.asm` leaves IF clear. `hda_probe()` waits 30 ms for
-// the link, which on a PIT clocksource is a `pit_ticks()` loop the
+// the link, which on a PIT clocksource is a `coarse_ticks()` loop the
 // timer can never advance: the machine stops dead at one instruction,
 // no panic, no log. Preemption stays off, so nothing a callback walks
 // is re-entered; only the timer is let in.

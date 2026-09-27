@@ -169,7 +169,7 @@ whenever a headline here tells you something you did not already know.
 - **THE PCM STREAM IS EXCLUSIVE, SO `soundd` GIVES IT BACK WHEN
   NOTHING PLAYS**
 - **A SYSCALL HANDLER RUNS WITH INTERRUPTS OFF, AND A WAIT ON
-  `pit_ticks()` THERE NEVER ENDS**
+  `coarse_ticks()` THERE NEVER ENDS**
 - **A SIGNAL CAN BE BLOCKED FROM RING 3 NOW, AND `sigsuspend` IS THE ONE
   WAIT THAT IS NEVER RESTARTED**
 - **A SYSCALL'S DURATION IS A STALL EVERYTHING ELSE FEELS, AND `stalls`

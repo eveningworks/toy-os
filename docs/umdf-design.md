@@ -183,7 +183,7 @@ minus the sysfs.
 
 - **A `probe()` MAY NOT BE CALLED WITH INTERRUPTS OFF, and two routes
   now do.** `hda_probe()` waits 30 ms for the link; on a machine whose
-  clocksource is the PIT that is a `pit_ticks()` loop, and a syscall
+  clocksource is the PIT that is a `coarse_ticks()` loop, and a syscall
   runs with IF clear -- the machine stopped dead at one instruction,
   no panic, no log. `driver_ctx_enter()` in `pci_bind.c` now brackets
   every probe AND every remove with interrupts on and preemption off.

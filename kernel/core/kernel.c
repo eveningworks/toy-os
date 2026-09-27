@@ -255,7 +255,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
 
     // The tick moves to the LAPIC timer, if there is one. AFTER
     // lapic_init() for the obvious reason and after idt_init() for a
-    // less obvious one: calibrating it counts against pit_ticks(), which
+    // less obvious one: calibrating it counts against coarse_ticks(), which
     // needs the PIT already ticking and interrupts already on. A machine
     // with no APIC, or one booted with `nomsi`, keeps the PIT's tick and
     // nothing here fails.

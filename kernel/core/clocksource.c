@@ -129,7 +129,7 @@ int clocksource_register(const struct clocksource *cs) {
     g_last_raw = cs->read() & cs->mask;
     g_max_delta = max_delta;
     // THE FIRST SOURCE STARTS THE CLOCK AT ITS OWN ORIGIN, not at zero:
-    // the PIT's tick count began before this ran, and pit_ticks() --
+    // the PIT's tick count began before this ran, and coarse_ticks() --
     // counted until now, derived from this clock later -- must not step
     // backwards at the switch.
     if (!had_source && g_last_raw <= g_max_delta)

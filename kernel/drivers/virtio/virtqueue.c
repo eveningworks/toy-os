@@ -52,7 +52,7 @@
 
 // The two-path wait budget, taken from ata.c's rather than picked as a
 // round number -- the reasoning there applies unchanged. A wall-clock
-// bound needs pit_ticks() to advance, and it does not inside a syscall,
+// bound needs coarse_ticks() to advance, and it does not inside a syscall,
 // because `int 0x80` is an interrupt gate so IF stays clear for the
 // whole handler (see idt.h's isr_in_progress()). So this spends real
 // time when it can and falls back to a fixed spin when it cannot.

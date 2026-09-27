@@ -53,7 +53,7 @@ struct clocksource {
 
     // DOES read() ADVANCE WITH INTERRUPTS OFF? The TSC does -- it is a
     // free-running CPU counter. The PIT source does NOT: its read() is
-    // pit_ticks(), a count the timer INTERRUPT increments, so with IF
+    // coarse_ticks(), a count the timer INTERRUPT increments, so with IF
     // clear it stands still however long the caller waits.
     //
     // The distinction matters to any bounded WAIT: a deadline computed
@@ -109,7 +109,7 @@ uint64_t clocksource_max_idle_ns(void);
 // BUSY-WAIT `ms` MILLISECONDS, USING THE BEST SOURCE AVAILABLE.
 //
 // **THE POINT IS THAT IT DOES NOT NEED INTERRUPTS.** Five drivers had
-// hand-rolled the same spin on `pit_ticks()`, and a tick counter only
+// hand-rolled the same spin on `coarse_ticks()`, and a tick counter only
 // advances on a timer interrupt -- so every one of them was an infinite
 // loop anywhere that interrupt cannot land. That is not hypothetical:
 // it hung the machine when the xHCI recovery path called `power_ports()`

@@ -59,13 +59,13 @@ KTEST("sched", "kernel context keeps running while a process is ready") {
     int pid = scheduler_spawn(SPIN_PATH, 0);
     KTEST_ASSERT(pid != 0);
 
-    uint64_t start = pit_ticks();
+    uint64_t start = coarse_ticks();
     uint64_t last_seen = start;
     int observed_ticks = 0; // distinct ticks seen while it was RUNNING
     int exited = 0;
     int exit_code = -1;
 
-    while (pit_ticks() - start < TIMEOUT_TICKS) {
+    while (coarse_ticks() - start < TIMEOUT_TICKS) {
         enum sched_poll_result r = scheduler_poll(pid, &exit_code);
         if (r == SCHED_POLL_EXITED) { exited = 1; break; }
         KTEST_ASSERT(r == SCHED_POLL_RUNNING); // never INVALID for a live pid
@@ -75,7 +75,7 @@ KTEST("sched", "kernel context keeps running while a process is ready") {
         // proves time passed with the process still alive -- i.e. that
         // the kernel was scheduled back after the process had the CPU,
         // which is the actual claim.
-        uint64_t now = pit_ticks();
+        uint64_t now = coarse_ticks();
         if (now != last_seen) {
             last_seen = now;
             observed_ticks++;
@@ -98,10 +98,10 @@ KTEST("sched", "a slot is reusable after the process is reaped") {
         int pid = scheduler_spawn(SPIN_PATH, 0);
         KTEST_ASSERT(pid != 0);
 
-        uint64_t start = pit_ticks();
+        uint64_t start = coarse_ticks();
         int exit_code = -1;
         int exited = 0;
-        while (pit_ticks() - start < TIMEOUT_TICKS) {
+        while (coarse_ticks() - start < TIMEOUT_TICKS) {
             if (scheduler_poll(pid, &exit_code) == SCHED_POLL_EXITED) { exited = 1; break; }
         }
         KTEST_ASSERT(exited);
@@ -138,8 +138,8 @@ KTEST("sched", "a scheduled process survives a legacy process running alongside"
 
     // Let it get going, so it is genuinely mid-flight rather than not
     // yet started when the legacy process runs.
-    uint64_t start = pit_ticks();
-    while (pit_ticks() - start < 20) { }
+    uint64_t start = coarse_ticks();
+    while (coarse_ticks() - start < 20) { }
     int code = -1;
     KTEST_ASSERT(scheduler_poll(pid, &code) == SCHED_POLL_RUNNING);
 
@@ -153,8 +153,8 @@ KTEST("sched", "a scheduled process survives a legacy process running alongside"
     // fixes it faulted instead, and its exit code came back as the
     // crash sentinel.
     int exited = 0;
-    start = pit_ticks();
-    while (pit_ticks() - start < TIMEOUT_TICKS) {
+    start = coarse_ticks();
+    while (coarse_ticks() - start < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
     }
     if (!exited) {

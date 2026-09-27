@@ -420,7 +420,7 @@ first before re-litigating it from scratch.
 - [CPU info: one syscall, because "supported" and "enabled" sit on opposite sides of a privilege boundary](decisions/gui.md#cpu-info-one-syscall-because-supported-and-enabled-sit-on-opposite-sides-of-a-privilege-boundary)
 - [Floating point is ring-3 only, and eager -- the same call Linux and Windows made](decisions/gui.md#floating-point-is-ring-3-only-and-eager----the-same-call-linux-and-windows-made)
 - [Button groups commit on RELEASE, and there is no ui_button_group_click()](decisions/gui.md#button-groups-commit-on-release-and-there-is-no-ui_button_group_click)
-- [Start menu click flash: a deferred close via pit_ticks(), not a blocking sleep](decisions/gui.md#start-menu-click-flash-a-deferred-close-via-pit_ticks-not-a-blocking-sleep)
+- [Start menu click flash: a deferred close via coarse_ticks(), not a blocking sleep](decisions/gui.md#start-menu-click-flash-a-deferred-close-via-coarse_ticks-not-a-blocking-sleep)
 - [Title-bar buttons: press-then-commit-on-release, reusing the content_pressed shape](decisions/gui.md#title-bar-buttons-press-then-commit-on-release-reusing-the-content_pressed-shape)
 - [apps/ui/: a directory for retained-widget objects, once there were three](decisions/gui.md#appsui-a-directory-for-retained-widget-objects-once-there-were-three)
 - [Calculator is the first `multi_instance` GUI app](decisions/gui.md#calculator-is-the-first-multi_instance-gui-app)

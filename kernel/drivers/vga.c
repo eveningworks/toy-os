@@ -364,7 +364,7 @@ static void cursor_hide(void) {
 static void cursor_show_and_reset_blink(void) {
     if (!fb_mode) return;
     cursor_draw();
-    cursor_last_toggle_tick = pit_ticks(); // full interval before the next auto-toggle,
+    cursor_last_toggle_tick = coarse_ticks(); // full interval before the next auto-toggle,
                                             // so it doesn't flicker right after typing
 }
 
@@ -411,7 +411,7 @@ int vga_cursor_style_parse(const char *name, enum vga_cursor_style *out) {
 static void present_now(void) {
     gfx_present();
     gfx_flush();
-    fb_last_present_tick = pit_ticks();
+    fb_last_present_tick = coarse_ticks();
 }
 
 void vga_present_force(void) {
@@ -441,7 +441,7 @@ void vga_present(void) {
 // caught by vga_present() from the idle loop, so nothing relies on this
 // firing on the last line.
 static void fb_present_throttled(void) {
-    if (pit_ticks() == fb_last_present_tick) return;
+    if (coarse_ticks() == fb_last_present_tick) return;
     vga_present();
 }
 
@@ -807,11 +807,11 @@ void vga_cursor_tick(void) {
     // for the physical console's blink logic to do while one's active.
     if (active_sink) return;
     if (!fb_mode) return;
-    if (pit_ticks() - cursor_last_toggle_tick < CURSOR_BLINK_TICKS) {
+    if (coarse_ticks() - cursor_last_toggle_tick < CURSOR_BLINK_TICKS) {
         clockevent_idle_wake_at_tick(cursor_last_toggle_tick + CURSOR_BLINK_TICKS);
         return;
     }
-    cursor_last_toggle_tick = pit_ticks();
+    cursor_last_toggle_tick = coarse_ticks();
     clockevent_idle_wake_at_tick(cursor_last_toggle_tick + CURSOR_BLINK_TICKS);
     // Safe mid-line now that hiding restores the pixels it saved -- this
     // used to be suppressed off the append point, because the old

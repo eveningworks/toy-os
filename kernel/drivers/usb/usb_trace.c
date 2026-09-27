@@ -6,7 +6,7 @@
 #include "usb_trace.h"
 #include "xhci_regs.h"
 #include "clocksource.h"
-#include "timer.h"   // pit_ticks() -- the fallback when the clocksource cannot be trusted
+#include "timer.h"   // coarse_ticks() -- the fallback when the clocksource cannot be trusted
 #include "klog.h"
 #include "kfmt.h"
 
@@ -42,7 +42,7 @@ void usb_trace(uint8_t kind, uint8_t port, uint8_t slot,
     // column worthless.
     e->ns   = clocksource_deadline_capable()
                 ? clocksource_now_ns()
-                : (uint64_t)pit_ticks() * 10000000ull;
+                : (uint64_t)coarse_ticks() * 10000000ull;
     e->kind = kind;
     e->port = port;
     e->slot = slot;
