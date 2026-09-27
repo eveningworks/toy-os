@@ -138,7 +138,7 @@ CASES = [
 
 
 # Scripts run BY NAME rather than through `dash <path>` -- the `#!` line
-# is the LOADER's job (kernel/proc/scheduler.c's shebang_read), so this
+# is the LOADER's job (kernel/proc/sched_fork.c's shebang_read), so this
 # is the only case set here that tests the kernel rather than the shell.
 # Each is (name, script, expected lines).
 SHEBANG = [

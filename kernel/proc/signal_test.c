@@ -224,7 +224,7 @@ KTEST("signal", "a BLOCKED process is woken by REWINDING its syscall") {
     // RAX; it is rewound over its own `int $0x80` instead, so it
     // re-enters the kernel at a delivery point with the call NOT YET RUN
     // -- which is the only state in which SA_RESTART can exist at all
-    // (kernel/proc/scheduler.c has the full argument).
+    // (kernel/proc/sched_job.c has the full argument).
     //
     // **THE VECTOR IS WHAT MAKES THIS TEST REACH THE CODE.** The
     // fabricated frame has to say it came from a syscall, because the

@@ -43,7 +43,7 @@ int elf_argv_from_string(const char *path, const char *args, char *out, size_t c
                          size_t *out_len);
 
 // The argv-layout half of elf_run_from_fs() above, exposed on its own
-// for scheduler.c's spawn_from_fs() (the scheduler's non-blocking
+// for sched_fork.c's spawn_from_fs() (the scheduler's non-blocking
 // counterpart) to reuse. `argv` is a VECTOR: `argv_len` bytes of
 // NUL-terminated strings back to back, argv[0] first
 // (elf_argv_from_string() builds one from the string form); a NULL or

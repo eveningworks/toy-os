@@ -2,7 +2,7 @@
 //
 // It spawns N short-lived children and exits IMMEDIATELY without
 // waiting for any of them. Each child therefore outlives its parent,
-// is adopted by init (scheduler.c's reparent_children()), and must end
+// is adopted by init (sched_exit.c's reparent_children()), and must end
 // up reaped -- slot freed -- rather than sitting as a zombie for the
 // rest of the boot, which is what happened before init existed.
 //

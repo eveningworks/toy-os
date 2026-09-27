@@ -649,7 +649,7 @@ this the obvious way), not from how much history it accumulated.
   the proof is `userland/tests/stackgrow_test.c`.
 - **The ring-3 address-space map is `kernel/include/kernel/uaddr.h`,
   stated once.** Heap floor, heap limit, guard region, the stack's
-  floor/initial bottom/top and page counts, read by `scheduler.c`'s
+  floor/initial bottom/top and page counts, read by `sched_fork.c`'s
   spawn path, `elf_run.c`'s legacy loader, `SYS_SBRK` and `idt.c`'s
   fault report. **Two boundaries are NOT here and cannot be** --
   `heap_base` and `stack_bottom` are per process and live in
@@ -1107,7 +1107,7 @@ re-entered in the middle.
 
 `procs[]` slots are recycled, lowest free first, and a new process
 starts with whatever its slot's LAST tenant left in any field nobody
-writes. There are three creation sites in `kernel/proc/scheduler.c` --
+writes. There are three creation sites in `kernel/proc/sched_fork.c` --
 the spawn path, thread creation and fork -- and a new field needs a
 line in all three (or an explicit reset helper like
 `signal_state_reset()`), plus one in `scheduler_test_park()` if a
@@ -2154,7 +2154,7 @@ with EINTR" is the check, and only the full suite reaches the window.
 
 ## A CHILD'S DEATH RAISES SIGCHLD, AND THE NOTIFICATION HAS ONE HOME.
 
-`notify_parent()` in `kernel/proc/scheduler.c`. Every death goes through
+`notify_parent()` in `kernel/proc/sched_exit.c`. Every death goes through
 it, and it does two things that look alike and are not: it WAKES a
 parent parked in `SYS_WAITPID` on that child's channel, and it SENDS
 `SIGCHLD` to the parent whether or not one is parked.
@@ -2350,7 +2350,7 @@ tty0.
 
 ## A THREAD IS A SLOT WHOSE `tgid` NAMES SOMEBODY ELSE.
 
-`kernel/proc/scheduler.c`. There is no thread object and no second kind
+`kernel/proc/scheduler.c`, created in `sched_fork.c`. There is no thread object and no second kind
 of scheduler entity: `SYS_THREAD_CREATE` takes another `procs[]` slot
 and points it at the caller's address space. `tgid != pid` is the whole
 definition of "this is a thread" -- Linux's, where `clone(CLONE_VM |
@@ -4287,7 +4287,7 @@ also took away the shell `remote.py flash` needs to replace the kernel.
 
 ## THERE IS A `fork()` NOW, IT SHARES COPY-ON-WRITE, AND SPAWN IS STILL THE DOOR
 
-`SYS_FORK` (`scheduler_fork()`, `kernel/proc/scheduler.c`) duplicates the
+`SYS_FORK` (`scheduler_fork()`, `kernel/proc/sched_fork.c`) duplicates the
 calling thread into a new slot: the address space through
 `vmm_fork_address_space()` -- every present leaf shared, a writable one
 with W cleared and `PAGE_COW` (PTE bit 11) set in BOTH, the frame's
@@ -4337,7 +4337,7 @@ over `sys_spawn_opts()` for everything that is not a ported shell.
 
 ## A SCRIPT RUNS BY NAME, AND `#!` IS THE LOADER'S JOB -- NEVER A SHELL'S
 
-`build_image()` (kernel/proc/scheduler.c) reads the first line before it
+`build_image()` (kernel/proc/sched_fork.c) reads the first line before it
 tries the ELF loader, so a `#!` file runs identically from a bare name at
 either prompt, from `SYS_SPAWN` and from `execve()`. That is Linux's
 position -- `binfmt_script`, not bash -- and the reason to copy it is

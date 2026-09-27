@@ -108,7 +108,7 @@ static int argv_count(const char *argv, size_t argv_len) {
 // by the page, which is the wrong limit for a shell that globs.
 //
 // Not static -- exposed via elf_run.h as elf_build_argv_on_stack() so
-// scheduler.c's spawn_from_fs() (the scheduler's own, non-blocking
+// sched_fork.c's spawn_from_fs() (the scheduler's own, non-blocking
 // counterpart to elf_run_from_fs() below) can lay out a real argv the
 // same way.
 int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,

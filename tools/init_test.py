@@ -42,7 +42,7 @@ loader is not a scheduled process, so its children have ppid 0 already
 and there is nothing to orphan. A version of this test written with
 `run` would pass against a kernel with adoption removed entirely.
 
-POSITIVE CONTROL, for whoever changes this. In scheduler.c's
+POSITIVE CONTROL, for whoever changes this. In sched_exit.c's
 reparent_children(), set `heir = 0` unconditionally (i.e. put back the
 stage-0 behaviour) and rebuild: the "orphans are reaped" and "the table
 returns to its baseline" checks must go red and everything else must

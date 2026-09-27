@@ -303,7 +303,7 @@ KTEST("futex", "a SECOND source bumps the same wakeword") {
 
     // THE HELPER, NOT THE CALL SITE, and that gap is worth stating: a
     // real child death cannot be provoked from a KTEST, so what proves
-    // scheduler.c's notify_parent() actually calls this is init serving
+    // sched_exit.c's notify_parent() actually calls this is init serving
     // its channel while reaping -- an end-to-end check, not this one.
     futex_note_ready(pid);
     KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f.frame, 1u);

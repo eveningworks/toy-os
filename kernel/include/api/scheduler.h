@@ -101,7 +101,7 @@ void scheduler_trap_exit(uint64_t *regs);
 // scheduler_current_pid() is non-zero (i.e. the exiting process is
 // scheduler-managed, not a legacy process_run_ring3() caller). Marks
 // the current process SCHED_ZOMBIE (holding `code` for a later
-// scheduler_poll() -- see scheduler.c's own comment on that enum
+// scheduler_poll() -- see sched_internal.h's own comment on that enum
 // value, not freed to SCHED_UNUSED immediately the way it used to be)
 // and hands its CPU slot to the next ready process, or back to
 // whatever kernel code called scheduler_spawn()/scheduler_demo_run()
@@ -433,7 +433,7 @@ void scheduler_demo_run(void);
 //
 // The child's fds 0/1 are the console and fd 2 is the KERNEL LOG: a
 // start from kernel context is detached, with nobody on the terminal
-// waiting for it (scheduler.c's spawn_kernel() says why).
+// waiting for it (sched_fork.c's spawn_kernel() says why).
 int scheduler_spawn(const char *path, const char *args);
 
 // The same, ATTACHED: fd 2 stays on the console with 0 and 1. For a
@@ -699,8 +699,8 @@ void scheduler_set_init_pid(int pid);
 // reaped -- see scheduler_poll(). The WM reaps the ones it launched.
 // How big each per-process kernel stack is, in KiB -- exported only so
 // the fault reporter can say what was overrun without a second copy of
-// the number. The definition lives in scheduler.c beside the guard-page
-// machinery it belongs to.
+// the number. The definition lives in sched_info.c; the size itself is
+// sched_internal.h's PROC_KSTACK_SIZE.
 // --- the kernel-stack debug surface (`kstack` at the shell) ----------
 //
 // Everything here is diagnostic: none of it is on a hot path, and the
@@ -907,7 +907,7 @@ const void *scheduler_sigsuspend_chan(int pid);
 // process exists (including one already stopped, which is a no-op), 0
 // otherwise. A stopped process keeps everything it holds and stays in
 // whatever state it was in -- READY or BLOCKED -- because `stopped` is
-// a flag beside the state rather than a state of its own; scheduler.c's
+// a flag beside the state rather than a state of its own; sched_internal.h's
 // struct sched_process says why.
 int scheduler_stop(int pid, int sig);
 
@@ -1009,7 +1009,7 @@ int scheduler_setpgid(int pid, int pgid);
 // a live parent in a different group of the same session, so nothing
 // outside it could ever continue it if it stopped. What a terminal uses
 // to answer a background read with EIO instead of stopping a process
-// that could never be resumed. See scheduler.c.
+// that could never be resumed. See sched_job.c.
 int scheduler_pgid_orphaned(int pgid);
 
 int scheduler_pgid_live(int pgid);
@@ -1219,8 +1219,8 @@ int scheduler_wake_one(const void *chan);
 // the index it would have overrun. A test that cannot reach the code
 // under test is the trap CLAUDE.md names; the fix is a real frame.
 #define SCHED_TF_SLOTS 22
-// The indices a caller outside scheduler.c needs. Checked against the
-// real trapframe layout by _Static_asserts in scheduler.c.
+// The indices a caller outside the scheduler needs. Checked against the
+// real trapframe layout (sched_internal.h) by _Static_asserts in scheduler.c.
 #define SCHED_TF_RDI     9 // a signal handler's one argument
 #define SCHED_TF_RAX    14 // where a wake writes the return value
 #define SCHED_TF_VECTOR 15 // 0x80 for a syscall -- what a rewind checks

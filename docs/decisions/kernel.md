@@ -2690,7 +2690,7 @@ is the case it exists for.
 
 `kernel/include/kernel/uaddr.h` states the ring-3 address-space map
 once -- heap base, heap limit, guard region, stack bottom and top --
-and `scheduler.c`'s spawn path, `elf_run.c`'s legacy loader,
+and `sched_fork.c`'s spawn path, `elf_run.c`'s legacy loader,
 `syscall.c`'s `SYS_SBRK` and `idt.c`'s fault report all read it. It used
 to be two identical copies (`PROC_USTACK_*` and `ELF_RUN_STACK_*`) with
 nothing keeping them equal, and the fault classifier would have been a
@@ -5132,7 +5132,7 @@ a day before anything sent one. Wiring it up is three lines; the two
 decisions worth recording are where the send lives and what it is sent
 FOR.
 
-**Where: `notify_parent()` in `kernel/proc/scheduler.c`, called by both
+**Where: `notify_parent()` in `kernel/proc/sched_exit.c`, called by both
 `scheduler_on_exit()` and `scheduler_kill()`.** The tempting spellings
 were the two obvious ones and both are worse. Putting it in the CALLERS
 -- `sys_exit`, the signal-termination path, Task Manager's force quit --
@@ -5271,7 +5271,7 @@ it". This is that replacement.
 
 **Why not simply raise the page count, which is one line.** Because the
 loader maps stack pages EAGERLY -- a `pmm_alloc_frame()` per page in
-both `scheduler.c` and `elf_run.c` -- so the count is not a limit, it is
+both `sched_fork.c` and `elf_run.c` -- so the count is not a limit, it is
 a per-process tax. A 1 MiB stack would be a megabyte of physical memory
 handed to every process at spawn whether it recursed or not, and this
 system runs a desktop, a taskbar, a handful of clients and an init: the

@@ -80,7 +80,7 @@ the build cannot disagree.
 A file starting with `#!/bin/dash` runs as a command in its own right --
 `/tmp/build.sh arg` rather than `dash /tmp/build.sh arg`. **That is the
 LOADER's doing, not this shell's** (`build_image()` in
-kernel/proc/scheduler.c, the position Linux's `binfmt_script` takes), so
+kernel/proc/sched_fork.c, the position Linux's `binfmt_script` takes), so
 it works the same from `tosh`, from `execve()` and from a bare name at
 either prompt. The interpreter receives the script's path as its first
 argument and `$0` is the script, as on every Unix.

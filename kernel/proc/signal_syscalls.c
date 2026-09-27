@@ -7,7 +7,7 @@
 // this file look like "everything signal-shaped" when what it actually
 // is, is the calls that had nowhere else to go.
 //
-// Each of these is a thin wrapper: the rules live in scheduler.c (the
+// Each of these is a thin wrapper: the rules live in sched_job.c (the
 // state) and tty.c (the console's foreground group), so a caller reaching
 // them through the shell or through a syscall cannot get different
 // answers. All five report -errno on failure, per abi/errno.h.

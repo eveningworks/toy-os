@@ -7,7 +7,7 @@
 //   before init existed an orphan -- a process whose parent died first
 //   -- held its slot for the rest of the boot with nothing in the
 //   system able to free it. The kernel does the adopting
-//   (scheduler.c's reparent_children()); this side is the loop that
+//   (sched_exit.c's reparent_children()); this side is the loop that
 //   then collects them.
 //
 //   SUPERVISES. It reads the boot TARGET (api/target.h) and starts
@@ -972,7 +972,7 @@ static void on_hup(int sig) {
     g_hup = 1;
     // AND BUMP THE WAKEWORD, because the wait this interrupts is
     // RESTARTED rather than failed: a signal rewinds RIP over the
-    // syscall (kernel/proc/scheduler.c), so a futex wait re-runs, finds
+    // syscall (kernel/proc/sched_job.c), so a futex wait re-runs, finds
     // its word unchanged and parks again with the doorbell unanswered.
     // Moving the word is what makes the restarted wait return at once.
     // The waitpid path below needs no such thing -- it uses the
@@ -1377,7 +1377,7 @@ int main(void) {
         } else if (g_chan.beacon) {
             // ONE WAIT OVER BOTH, which is what the wakeword is for: a
             // client's request bumps it and so does a child dying
-            // (notify_parent(), kernel/proc/scheduler.c), so this parks
+            // (notify_parent(), kernel/proc/sched_exit.c), so this parks
             // for either. Without it a supervisor has to choose which of
             // the two it is willing to notice.
             //

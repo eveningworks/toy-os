@@ -377,7 +377,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // overflows now faults on its guard page instead of silently
     // overwriting the next slot's saved trapframe -- which is exactly
     // what it used to do, presenting as a #GP on iretq in an innocent
-    // process. See scheduler.c's PROC_KSTACK_SIZE comment.
+    // process. See sched_internal.h's PROC_KSTACK_SIZE comment.
     scheduler_guard_pages_init();
     // The legacy blocking loader has its own kernel stack and therefore
     // its own guard page. `run` and `config set` from the physical

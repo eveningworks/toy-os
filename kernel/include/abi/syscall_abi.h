@@ -1930,7 +1930,7 @@ struct sys_stat {
 #define SYS_THREAD_EXIT 73 // RDI = exit code. Ends the CALLING thread
                            // and does not return. From the initial
                            // thread it exits the process instead --
-                           // see kernel/proc/scheduler.c's
+                           // see kernel/proc/sched_exit.c's
                            // scheduler_on_thread_exit() for why.
 
 #define SYS_THREAD_JOIN 74 // RDI = tid. Blocks until that thread of

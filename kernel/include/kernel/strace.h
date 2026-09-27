@@ -34,7 +34,7 @@ void strace_arm_for_current(void);
 void strace_disarm(void);
 
 // Called once per new address space, from wherever a process is about
-// to be created (kernel/proc/elf_run.c, kernel/proc/scheduler.c).
+// to be created (kernel/proc/elf_run.c, kernel/proc/sched_fork.c).
 // Claims the arm if the process making it is the one that armed;
 // otherwise a no-op. This is also where the trace's SINK is decided --
 // see kernel/proc/strace.c.

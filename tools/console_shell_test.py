@@ -250,7 +250,7 @@ def main():
         while time.time() < deadline and not (row and row[1] == 4):
             time.sleep(0.3)
             row = tosh_row(dbg)
-        # 4 == SCHED_BLOCKED (kernel/proc/scheduler.c's enum sched_state).
+        # 4 == SCHED_BLOCKED (kernel/proc/sched_internal.h's enum sched_state).
         check("an idle tosh is BLOCKED, not spinning",
               bool(row) and row[1] == 4,
               f"pid {row[0]} state {row[1]}" if row else "no tosh in kstack slots")

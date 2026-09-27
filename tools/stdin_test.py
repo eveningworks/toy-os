@@ -189,7 +189,7 @@ def main():
     check("tosh is running as a ring-3 process", bool(tosh),
           f"{tosh}" if tosh else f"slots: {rows}")
 
-    # 4 == SCHED_BLOCKED (kernel/proc/scheduler.c's enum sched_state).
+    # 4 == SCHED_BLOCKED (kernel/proc/sched_internal.h's enum sched_state).
     check("an idle tosh is BLOCKED, not spinning", bool(tosh) and tosh[0][2] == 4,
           f"state {tosh[0][2]}" if tosh else "no tosh row")
 
