@@ -18,7 +18,7 @@
 #include "kfmt.h"
 #include "string.h"
 
-static const struct kdb_nic *const g_backends[] = { &kdb_nic_e1000 };
+static const struct kdb_nic *const g_backends[] = { &kdb_nic_e1000, &kdb_nic_r8169 };
 
 // The PCI "driver" `lspci` shows for the card the debugger took.
 static const struct pci_driver g_owner = { .name = "kdebug" };

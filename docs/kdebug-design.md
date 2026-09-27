@@ -7,9 +7,10 @@ breakpoint in it, read and write its memory, and let it go?**
 
 **Status (2026-09-27): stage 2, the halting stub over serial, is BUILT;
 stage 3a, the network transport on a dedicated e1000, is BUILT and
-tested under QEMU. Stage 3b (the Lenovo's r8169) and 3c (the ASUS's USB
-NIC) are designed, not built, and so is stage 1 (live inspection without
-halting). Stage 2 came first at the maintainer's choice, because every
+tested under QEMU; stage 3b, the Lenovo's onboard r8169, is BUILT and
+has stopped real hardware -- a breakpoint hit from a syscall, a
+backtrace, memory, detach. Stage 3c (the ASUS's one USB NIC) and stage 1
+(live inspection without halting) are designed, not built. Stage 2 came first at the maintainer's choice, because every
 later stage stands on it.**
 
 ## Why
@@ -176,12 +177,23 @@ a packet that never left. A pcap of the debugger's netdev
 (`-object filter-dump`) and QEMU's `info registers` found it in two
 steps.
 
-### 3b: the Lenovo's r8169 -- DESIGNED
+### 3b: the Lenovo's r8169 -- BUILT
 
-A second `kdb_nic` backend. The r8169's ring hands descriptors back and
-forth with an OWN bit and a doorbell, with no index registers to keep in
-step, so a polled copy is simpler than the e1000's. Owning the onboard
-card means the OS networks through the UE300 on that machine.
+A second `kdb_nic` backend, `kernel/drivers/net/r8169_kdb.c`: the ring
+hands descriptors back and forth with an OWN bit and a doorbell, with no
+index registers to keep in step, and the bring-up is `r8169.c`'s order
+without the interrupt or the PHY kick. The debugger owns the onboard NIC
+at .104 and the OS networks through the RTL8156B USB adapter at .112.
+**Verified 2026-09-27 on the Lenovo**: attach stopped it in its idle
+loop, a breakpoint in `heap_total_bytes()` was hit by `meminfo` run over
+the OS's own NIC, `bt` read through `sys_query` and `syscall_dispatch`,
+and detach let the command finish.
+
+**What it cost to get there, both in `docs/bugs.md`**: with BOTH NICs up
+in the OS on one subnet, replies leave through the first matching
+device, so run one per subnet; and a half-open TCP connection that never
+completed used to hold its listener's backlog slot forever -- two of
+them silenced telnetd until reboot. That one is fixed.
 
 ### 3c: single-NIC machines (the ASUS) -- DESIGNED
 

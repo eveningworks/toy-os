@@ -15,6 +15,7 @@ person has to keep true.
 
 | Driver | Claims | Notes |
 |---|---|---|
+| `r8169-kdb` | Realtek RTL8111/8168 (`10ec:8168`), RTL8101 (`10ec:8136`) | The kernel DEBUGGER's card on the Lenovo: with `kdebug=net,...` the onboard NIC is claimed before PCI binding and driven by polling, and the OS networks through a USB adapter instead. `r8169.c`'s bring-up order (re(4)'s) without the interrupt or the PHY kick, rings of 8 and 8. No emulator models this chip, so real hardware is its only test. `docs/kdebug-design.md`, stage 3b. |
 | `e1000-kdb` | Intel 82540EM (`8086:100E`) | The kernel DEBUGGER's card, not the OS's: with `kdebug=net,...` the last 82540EM is claimed before PCI binding (`pci_device_claim()`, so `lspci` names its driver `kdebug`) and driven by polling alone -- no interrupt, no lock, no allocation after bring-up (`kdebug_nic.h`). Rings of 8 and 8, the minimum: RDLEN/TDLEN must be multiples of 128 bytes, and a 4-descriptor TX ring made the card resend a stale buffer. `docs/kdebug-design.md`, stage 3. |
 | `e1000` | Intel 82540EM (`8086:100E`) | QEMU's default NIC. Legacy descriptors, no offload. Built as a MODULE by default (`build.conf`), loaded at boot by PCI match; the one driver with a `remove()`, so it can be unloaded and reloaded. |
 | `r8169` | Realtek `10EC:8168` (RTL8111/8168/8211/8411), `10EC:8136` (RTL8101/8102/8106) | The Ethernet built into most x86 laptops. No emulator models it — see `docs/decisions.md`. Built as a MODULE by default (`build.conf`) with a `remove()`, so it reloads on the laptop without a reboot. |

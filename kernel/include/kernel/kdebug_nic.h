@@ -24,5 +24,6 @@ struct kdb_nic {
 };
 
 extern const struct kdb_nic kdb_nic_e1000;
+extern const struct kdb_nic kdb_nic_r8169;
 
 #endif
