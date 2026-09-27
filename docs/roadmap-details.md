@@ -1921,6 +1921,41 @@ tick. What is left is listed under this milestone: TSC-deadline mode, a
 one-shot PIT for machines without a LAPIC, and nanosecond waits in the
 ABI (every wait is still asked for in whole milliseconds).
 
+**Calibrate the TSC and LAPIC timer against the PM timer directly.**
+Measured on the ASUS (2026-09-27), from its boot log: `cpu_info_init()`
+runs from 0.00 to 0.21 s and the LAPIC timer's calibration to 0.26 s,
+so ~260 ms of every boot is two loops counting `coarse_ticks()` -- 20 of
+them for the TSC (`cpuid.c`'s `measure_mhz()`), 4 for the LAPIC timer
+(`lapic.c`), each after waiting for a tick edge. On that machine the
+counter is already derived from the ACPI PM timer, which becomes the
+clocksource before either runs; what costs the time is counting it in
+10 ms steps. Reading the PM timer (3.579545 MHz, needs no calibration of
+its own) directly over a ~10 ms window with interrupts OFF is what
+Linux's `pit_calibrate_tsc()`/pmtimer fallback does, and it removes the
+"calibration deadlocks with IF clear" trap both functions carry. The PIT
+stays the reference only where there is no PM timer. CPUID leaf 0x15/0x16
+answers directly where it exists (Skylake+; the ASUS is Broadwell).
+
+**And the TSC rate is kept in whole MHz.** `measure_mhz()` returns
+`uint32_t` MHz and `clocksource_tsc.c` builds its multiplier from
+`mhz * 1000000`: the ASUS runs its TSC clock at exactly 998.0 MHz
+(`mult 4202709 shift 22`), so the fraction is simply dropped -- an error
+bound of about 0.1%, up to ~3.6 s an hour between NTP steps. That bound
+is COMPUTED from the code, not measured as drift. Linux keeps `tsc_khz`.
+`lscpu` can keep showing MHz; the clock should not be built from it.
+
+**Leave the PIT unprogrammed when nothing needs it.** Once the tick is
+on the LAPIC timer and the clock is the TSC or the PM timer -- and
+calibration no longer counts PIT ticks -- the PIT's channel 0 is started
+at boot only to be masked (`docs/decisions/kernel.md`, "the PIT is
+masked rather than stopped"). Linux has skipped initialising it since
+about 5.3 when `apic_needs_pit()` says so. Here that means `pit_init()`
+only on the paths that use it: no LAPIC, `nomsi`, `clocksource=pit`,
+`highres=off` where the PIT is the tick. Under QEMU a programmed PIT is
+also a host timer firing at its rate whether or not the guest listens,
+so `tools/idle_cpu.py` is the before/after. Channel 2 (the PC speaker,
+`speaker.c`) is separate and stays.
+
 ### SMP
 **`docs/smp-design.md` is the full design**, staged so each step ships on
 its own -- ACPI tables, then the Local APIC, then application processors

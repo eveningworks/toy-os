@@ -937,6 +937,8 @@ run on, not by order.
 - [ ] HPET as a third clocksource -- its table is found now, nothing reads it yet
 - [x] ~~APIC + a `clock_event_device` split~~ DONE 2026-09-12 -- `clockevent.c`, the LAPIC timer outranks the PIT
 - [x] ~~One-shot timer deadlines, a tickless idle, and `option hz`~~ DONE 2026-09-24 -- `nohz=off`, `highres=off`
+- [ ] Calibrate the TSC and LAPIC timer against the PM timer directly -- ~260 ms of every boot, and a TSC rate truncated to whole MHz
+- [ ] Leave the PIT unprogrammed when nothing needs it, Linux's `apic_needs_pit()` -- a last resort, not a device every boot starts
 - [ ] TSC-deadline mode for the one-shot timer -- no calibration, and one MSR write per arm instead of MMIO
 - [ ] A one-shot PIT, so a machine without a LAPIC (or booted `nomsi`) can go tickless too
 - [ ] Nanosecond timeouts in `SYS_SLEEP`/futex waits -- every wait is still asked for in whole milliseconds
