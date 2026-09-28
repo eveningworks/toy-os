@@ -908,6 +908,27 @@ manual steps to be worth automating:
   something you are still using, so re-run `gui_regress.py` after acting
   on that warning**, and treat a test that still works after a file
   moved as evidence it is testing the old copy.
+- **`ubsan_run.py`** -- builds a COPY of the tree (tracked files plus
+  new ones, uncommitted edits included) with `make UBSAN=1 iso` in a
+  scratch directory, then runs a desktop boot (reading `dmesg` AND `log`,
+  since a service's stderr goes to the application log), the kernel
+  suite and the ring-3 suite on it, and lists every site that reported
+  undefined behaviour, once each, with where it fired. Exit 0 clean, 1
+  sites found, 2 build or control failure. On demand, in
+  `ondemand_sweep.py`; a clean full run is a few minutes.
+  **Why a copy:** a UBSAN build re-seeds `disk.img` and rewrites
+  `toy-os.iso`, which a runner must not do to a checkout unasked.
+  **The positive control is two sites it EXPECTS:** `kernel/lib/ubsan_test.c`
+  and `userland/tests/ubsan_test.c` each commit one real signed overflow
+  in an instrumented build. Either missing means the flags did not reach
+  that ring, and a clean result would mean nothing -- exit 2.
+  **A suite failing here is printed but is not a finding**: the
+  instrumented build is slower, so a test with a wall-clock budget
+  (`sched`'s "kernel context keeps running while a process is ready"
+  failed once in two runs) can fail here and pass normally. Only
+  reported sites decide the exit code. `--keep DIR` keeps the tree for
+  `addr2line` against its ELFs; a ring-3 report's `pc` is link-time for
+  an executable and a runtime address inside a shared library.
 - **`usertest_run.py`** -- runs the self-checking ring-3 diagnostics in
   `/tests` (`libc_test`, `fpu_test`, `klineedit_test`, `newsyscalls_test`,
   `file_test`, `write_test`, `exit_test`, `random_test`, `memtest`,
@@ -925,6 +946,10 @@ manual steps to be worth automating:
   **`--serial-log PATH` keeps the guest's serial output** (vm.py's own
   flag, passed through) -- the one record left when the EMULATOR hangs,
   since the table is only printed at the end.
+  **`--transcript PATH` keeps every test's captured output, passed or
+  not.** A `/tests` program's stdout and stderr go to the CONSOLE, which
+  the harness reads over the debug console -- they are NOT on the serial
+  log, so `--serial-log` alone never shows what a passing test printed.
   **Verdicts are read with the debug console's `readfile`, not `sh
   cat`** (`vm.parse_framed()`): one frame, taken by its declared length,
   with preemption off and the kernel log held off the wire while it goes

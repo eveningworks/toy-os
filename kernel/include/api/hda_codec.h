@@ -197,6 +197,8 @@ struct hda_out {
 // The transport. Returns 0 with *out filled, or -1 if the codec did not
 // answer -- and the parser treats a timeout as a zero parameter rather
 // than giving up, because one unanswered widget must not lose the graph.
+// `out` is NULL for a SET verb, whose answer nobody reads, so a
+// transport must check it.
 struct hda_codec {
     int (*cmd)(void *ctx, uint8_t nid, uint32_t verb20, uint32_t *out);
     void *ctx;

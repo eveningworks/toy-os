@@ -279,47 +279,17 @@ void isr_depth_set(int d) { g_isr_depth = d; }
 extern char __ktext_start[];
 extern char __ktext_end[];
 
-// What a panic needs to be diagnosable from a pasted log rather than a
-// photograph, printed to the SERIAL log (klog) where it can be copied.
-//
-// **The relocation offset is the load-bearing line.** The kernel moves
-// itself to a random base at boot, so a raw RIP means nothing on its
-// own -- resolving one used to mean scrolling back to the boot banner
-// and doing the subtraction by hand. It prints the link-time address
-// here, ready to paste into `addr2line -f -e build/kernel.bin`.
-//
 // The backtrace is a STACK SCAN, not a frame-pointer walk: this kernel
 // builds at -O2, which omits frame pointers, so an RBP chain would be
 // fiction. Scanning for values that land inside .text overreports --
 // stale return addresses from earlier calls are still down there -- and
 // that is the honest trade, because the alternative is nothing at all.
 // Read the list as candidates, most recent first, not as a call chain.
-// `scan_from` overrides where the stack scan starts. 0 means "use RSP",
-// which is right for every fault except a kernel stack OVERFLOW: there
-// RSP is on the unmapped guard page, so the scan reads nothing and the
-// one thing worth having -- the call chain that got too deep -- is
-// exactly what is missing. For that case the caller passes the stack's
-// BASE, i.e. the first mapped word above the guard, where the deepest
-// frames are.
-static void panic_report_context(uint64_t rip, const uint64_t *regs,
-                                  uint64_t scan_from) {
+void idt_log_stack_scan(uint64_t rsp, int max_shown) {
     uint64_t delta = kernel_reloc_delta();
     uint64_t tstart = (uint64_t)(uintptr_t)__ktext_start;
     uint64_t tend   = (uint64_t)(uintptr_t)__ktext_end;
 
-    if (delta) {
-        klog_printf("  kernel relocated +0x%lx -- link-time RIP = 0x%lx\n",
-                     delta, rip - delta);
-    }
-    // The name in the LOG too, not only on screen: the log is what gets
-    // pasted into a report, and an address alone was the whole problem.
-    uint32_t rip_off = 0;
-    const char *rip_sym = ksyms_lookup(rip, &rip_off);
-    if (rip_sym) klog_printf("  in %s+0x%x\n", rip_sym, rip_off);
-    klog_printf("  resolve with: addr2line -f -e build/kernel.bin 0x%lx\n",
-                 rip - delta);
-
-    uint64_t rsp = scan_from ? scan_from : regs[20];
     // Only walk a stack that could plausibly be one. A wild RSP is
     // exactly what some faults leave behind, and faulting again inside
     // the panic handler loses the report entirely -- which is the one
@@ -332,7 +302,7 @@ static void panic_report_context(uint64_t rip, const uint64_t *regs,
     klog_printf("  stack scan from RSP=0x%lx (candidates, newest first):\n", rsp);
     const uint64_t *sp = (const uint64_t *)(uintptr_t)rsp;
     int shown = 0;
-    for (int i = 0; i < 128 && shown < 12; i++) {
+    for (int i = 0; i < 128 && shown < max_shown; i++) {
         // Every page, not just the first: a stack OVERFLOW leaves RSP on
         // an unmapped guard page, so the plausibility check above is
         // satisfied and the read still faults -- inside the panic
@@ -355,6 +325,42 @@ static void panic_report_context(uint64_t rip, const uint64_t *regs,
         shown++;
     }
     if (!shown) klog_printf("    (nothing in .text found on the stack)\n");
+}
+
+
+// What a panic needs to be diagnosable from a pasted log rather than a
+// photograph, printed to the SERIAL log (klog) where it can be copied.
+//
+// **The relocation offset is the load-bearing line.** The kernel moves
+// itself to a random base at boot, so a raw RIP means nothing on its
+// own -- resolving one used to mean scrolling back to the boot banner
+// and doing the subtraction by hand. It prints the link-time address
+// here, ready to paste into `addr2line -f -e build/kernel.bin`.
+//
+// `scan_from` overrides where the stack scan starts. 0 means "use RSP",
+// which is right for every fault except a kernel stack OVERFLOW: there
+// RSP is on the unmapped guard page, so the scan reads nothing and the
+// one thing worth having -- the call chain that got too deep -- is
+// exactly what is missing. For that case the caller passes the stack's
+// BASE, i.e. the first mapped word above the guard, where the deepest
+// frames are.
+static void panic_report_context(uint64_t rip, const uint64_t *regs,
+                                  uint64_t scan_from) {
+    uint64_t delta = kernel_reloc_delta();
+
+    if (delta) {
+        klog_printf("  kernel relocated +0x%lx -- link-time RIP = 0x%lx\n",
+                     delta, rip - delta);
+    }
+    // The name in the LOG too, not only on screen: the log is what gets
+    // pasted into a report, and an address alone was the whole problem.
+    uint32_t rip_off = 0;
+    const char *rip_sym = ksyms_lookup(rip, &rip_off);
+    if (rip_sym) klog_printf("  in %s+0x%x\n", rip_sym, rip_off);
+    klog_printf("  resolve with: addr2line -f -e build/kernel.bin 0x%lx\n",
+                 rip - delta);
+
+    idt_log_stack_scan(scan_from ? scan_from : regs[20], 12);
 }
 
 static void isr_dispatch_body(uint64_t *regs) {

@@ -643,21 +643,24 @@ fuzz for a fixed number of seconds, keep any failing seed as a permanent
 regression test in the corpus. That way the suite grows with what's
 actually been found rather than what someone predicted.
 
-### UBSAN in the kernel: `-fsanitize=undefined` with our own handlers, aimed first at the parsers of untrusted input
+### UBSAN in both rings: `-fsanitize=undefined` with our own handlers
 
-GCC's UBSAN instruments signed overflow, shifts out of range, division
-by zero, out-of-bounds indexing of a known-size array, misaligned and
-NULL pointer use, and unreachable code; each check calls a
-`__ubsan_handle_*` function the runtime provides. Freestanding, there
-is no runtime, so the kernel supplies the handlers -- Linux's
-`lib/ubsan.c` is about fifteen of them, each printing the source
-location and the operand values and returning. It needs no shadow
-memory and no allocator, which is why it is the cheap one.
+**DONE 2026-09-28.** `make UBSAN=1` builds the kernel and all of ring 3
+(Doom and dash excepted) with `-fsanitize=undefined -fno-sanitize=alignment`.
+The handlers are `kernel/lib/ubsan.c`, compiled into both rings as
+`kfmt.c` is: a failed check logs one line per SITE and returns, with a
+stack scan in the kernel and to stderr in ring 3. `tools/ubsan_run.py`
+builds a scratch copy of the tree and reads a desktop boot, the kernel
+suite and the ring-3 suite for reports. Why each of those choices is in
+`docs/decisions/build.md`, "UBSAN is opt-in, logs and carries on, and is
+run from a scratch copy".
 
-The first targets are the code that reads bytes someone else wrote:
-`ttf.c`, the MP3 and SoundFont decoders, `hid_parse.c`, the AML walk,
-TLS. A build flag rather than always-on: the instrumented kernel is
-bigger and slower, and the checks belong in the test runs.
+Its first run found a real kernel out-of-bounds write (the /lib image
+cache's check-then-sleep race), a test fake storing through NULL, and
+signed left shifts in `fixed.h` and `geom.c`; all fixed in the same
+change. What it does NOT cover: code no run reaches (the runner boots a
+desktop and runs the suites, nothing more -- no network, no audio, no
+USB), and the two vendored ports.
 
 ### KASAN-style shadow memory for the kernel heap -- after UBSAN, which is a fraction of the cost
 

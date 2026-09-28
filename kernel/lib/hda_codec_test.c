@@ -39,7 +39,7 @@ static int fake_cmd(void *ctx, uint8_t nid, uint32_t verb20, uint32_t *out) {
     struct fake *f = ctx;
     uint32_t verb = verb20 >> 8, payload = verb20 & 0xFF;
     f->calls++;
-    *out = 0;
+    if (out) *out = 0;   // NULL for a SET verb -- hda_codec.h
 
     if (verb == VERB_GET_PARAM) {
         switch (payload) {

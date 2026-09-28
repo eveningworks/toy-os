@@ -8,6 +8,11 @@ struct interrupt_frame;
 void idt_init(void);
 void idt_set_gate(uint8_t vector, void (*handler)(void), uint8_t ist, uint8_t type_attr);
 
+// Logs up to `max_shown` candidate return addresses found on the stack
+// at `rsp`, newest first, with their symbols -- the panic report's
+// backtrace, also used by UBSAN's. A stack SCAN, so it overreports.
+void idt_log_stack_scan(uint64_t rsp, int max_shown);
+
 // Installs a callback invoked when a CPU exception (vector < 32) occurs
 // while the faulting code was running in ring 3 (CS RPL == 3) -- after
 // the generic "KERNEL PANIC" banner and register dump are printed, but

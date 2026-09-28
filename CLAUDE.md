@@ -83,7 +83,7 @@ indexed by headline in the next section.
 **Check `kernel/lib/` before hand-rolling a digit loop, a formatter, a
 path join or a rasteriser.** Reachable through `kapi.h`, each with
 KTESTs: `string.h`, `knum.h`, `kfmt.h`, `kpath.h`, `fixed.h`, `geom.h`,
-`rubberband.h`, `ttf.h`, `krandom.h`, `hid_parse.h`. What bites:
+`rubberband.h`, `krandom.h`, `hid_parse.h`. What bites:
 
 - **`kfmt.h` is one header but TWO files** -- `kfmt.c` is freestanding
   and shared with ring 3, the kernel sinks live in `kfmt_print.c`; a
@@ -96,9 +96,10 @@ KTESTs: `string.h`, `knum.h`, `kfmt.h`, `kpath.h`, `fixed.h`, `geom.h`,
 - **`krandom.h` is NOT a CSPRNG**; `krandom_quality()` says how much to
   trust it (the enum is ORDERED BY TRUST). Read
   `kernel/lib/stack_protector.c` before moving the canary randomisation.
-- **`ttf.h` PARSES UNTRUSTED INPUT** -- every read in `ttf.c` is
-  bounds-checked -- and allocates NOTHING (a caller's `struct
-  ttf_scratch`), which is what lets ring 0, ring 3 and a test share it.
+- **`ttf.h` PARSES UNTRUSTED INPUT, IN RING 3 ONLY** --
+  `userland/lib/ttf.c`, for `/bin/fontd`; the kernel parses no font
+  (f34019fc). Every read is bounds-checked, and it allocates NOTHING (a
+  caller's `struct ttf_scratch`).
 - **Draw through `gfx_draw_line()`/`gfx_draw_circle()`/
   `gfx_fill_ellipse()` in the kernel and `uui_canvas` in ring 3**, not
   `geom_*`. `geom.c`/`rubberband.c` compile TWICE from one source, so
@@ -404,7 +405,7 @@ fix a rederive-from-scratch cost". `--list` on `preflight.sh`,
 | Run the GUI TOOLS on it | `gui_regress.py --host <ip>`, over `remote_gui.py` |
 | Drive a VM | `vm.py` (text in, text out), `qmp_test.py`, `gui_debug.py`, `gui_flow.py`, `shell_flow.py`, `serial_console.py`, `serial_capture.py`, `watch_vm.sh`, `run_release.sh` |
 | Is it INTERMITTENT, and at what rate? | `boot_rate.py` (bare metal), `flake_hunt.py` (VM) |
-| Test runners | `boot_smoke_test.py`, `ktest_run.py`, `usertest_run.py`, `faulttest_run.py`, `gui_regress.py`, `damage_sweep.py`, `damage_hunt.py` |
+| Test runners | `boot_smoke_test.py`, `ktest_run.py`, `usertest_run.py`, `faulttest_run.py`, `gui_regress.py`, `damage_sweep.py`, `damage_hunt.py`, `ubsan_run.py` (undefined behaviour, both rings, in a scratch copy) |
 | Diagnose | `panic_resolve.py` (**never hand-roll `nm`**), `acpi_dump.py`, `aml_walk.py`, `QMPSession.hmp()` (**the one oracle the guest cannot fake**), `corrupt_diff.py`, `window_resize_probe.py`, `pixel_probe.py`, `screenshot_diff.py`, `iso_guard.py` |
 | Does it actually SOUND right? | `audio_loopback_test.py` -- records the G6 back on line in; needs the cable patched in |
 | Check an implementation against a FOREIGN one | `libc_diff.py`, `uimg_codec_hostcheck.py`, `usnd_hostcheck.py`, `midi_hostcheck.py` (vs FluidSynth), `hash_hostcheck.py`, `divti3_hostcheck.py`, `regex_hostcheck.py`, `umd_hostcheck.py`, `ugfx_text_hostcheck.py`, `utext_hostcheck.py`, `utween_hostcheck.py`, `term_scheme_hostcheck.py` |

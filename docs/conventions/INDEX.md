@@ -911,6 +911,10 @@ whenever a headline here tells you something you did not already know.
 - **`STRIP=0` KEEPS THE KERNEL'S DEBUG INFO IN `kernel.bin` AND
   `COMPRESS=0` SHIPS THE LIVE IMAGE PLAIN; BOTH DEFAULT ON, AND BOTH
   NEED THEIR STAMP FILE**
+- **`UBSAN=1` INSTRUMENTS BOTH RINGS, AND ITS STAMP IS A PREREQUISITE
+  OF EVERY COMPILE RULE** -- code with no handler goes in
+  `UBSAN_EXCLUDE`; a shift of a possibly-negative value is a multiply;
+  run it through `tools/ubsan_run.py`
 - **THE KERNEL'S DEBUG INFO IS SPLIT OUT (`build/kernel.debug`), AND
   `--add-gnu-debuglink` IS WHAT KEEPS `addr2line`, `gdb` AND
   `panic_resolve.py` WORKING**

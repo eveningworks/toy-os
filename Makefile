@@ -177,7 +177,8 @@ KERNEL_INCLUDES = $(API_INCLUDES) -Ikernel/include/kernel
 CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
          -mno-red-zone -mcmodel=kernel -mno-mmx -mno-sse -mno-sse2 \
          -fno-asynchronous-unwind-tables \
-         -Wall -Wextra -Wframe-larger-than=1024 -O2 -g -c $(KERNEL_INCLUDES) -Iapps -MMD -MP
+         -Wall -Wextra -Wframe-larger-than=1024 -O2 -g -c $(KERNEL_INCLUDES) -Iapps -MMD -MP \
+         $(UBSAN_FOR)
 
 # apps/ gets a looser frame budget than kernel/ on purpose. The tight
 # 1024 above bounds what runs on a PER-PROCESS kernel stack -- i.e. what
@@ -277,7 +278,7 @@ USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-pro
                    -mno-red-zone -mcmodel=small -ftls-model=local-exec \
                    -Wall -Wextra -Wframe-larger-than=2048 -O2 -g -c $(LIBC_INCLUDES) $(API_INCLUDES) -Iuserland \
                    -ffunction-sections -fdata-sections -MMD -MP \
-                   -fno-tree-loop-distribute-patterns
+                   -fno-tree-loop-distribute-patterns $(UBSAN_FOR)
 # -Wa,-mrelax-relocations=no: userland links ABOVE 4 GiB (rt/link.ld,
 # ldso/link.ld), where ld's GOTPCRELX relaxation to a 32-bit immediate
 # cannot hold the address. binutils 2.42 (Ubuntu 24.04) fails the link
@@ -523,7 +524,7 @@ all: $(KERNEL) $(USERLAND_ELVES) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) $(LIBC_SO) $(
 # needs the symbol table and nothing else, and /lib/modules is on the
 # disk.
 define MODULE_RULE
-$$(BUILD)/modules/$(basename $(notdir $(1))).o: $(1)
+$$(BUILD)/modules/$(basename $(notdir $(1))).o: $(1) $$(BUILD)/.ubsan-flag
 	@mkdir -p $$(dir $$@)
 	$$(CC) $$(MODULE_CFLAGS) $$< -o $$@
 endef
@@ -669,11 +670,42 @@ $(BUILD)/.compress-flag: FORCE
 	@mkdir -p $(dir $@)
 	@echo '$(COMPRESS)' | cmp -s - $@ || echo '$(COMPRESS)' > $@
 
-$(BUILD)/%.o: %.c
+# --- UBSAN=1: the undefined-behaviour sanitizer, OFF by default --------
+#
+# GCC's -fsanitize=undefined in BOTH rings. A failed check calls a
+# __ubsan_handle_* in kernel/lib/ubsan.c, which logs the site ONCE and
+# returns (Linux's CONFIG_UBSAN, not a trap). It roughly doubles the
+# kernel's .text, hence opt-in; tools/ubsan_run.py is what runs it.
+# -fno-sanitize=alignment as Linux does on x86: the CPU does not care,
+# and packed wire structs would bury everything else.
+#
+# UBSAN_EXCLUDE is matched against each rule's SOURCE ($<): the runtime
+# itself (it would report into itself), code linked where no handler is
+# (crt0/rt, the dynamic loader), the kernel debugger's stopped path, the
+# relocation walk (a descriptor's pointers are half-patched while it
+# runs), and the vendored Doom and dash, whose own UB is not ours to
+# fix. userland/dynlib/ cannot be listed: its `:=` expands the flags at
+# parse time, before there is a $<.
+UBSAN ?=
+UBSAN_CFLAGS = -fsanitize=undefined -fno-sanitize=alignment -DTOYOS_UBSAN=1
+UBSAN_EXCLUDE = kernel/lib/ubsan.c kernel/lib/ubsan_report.c userland/libc/ubsan_emit.c \
+                kernel/arch/x86_64/reloc.c kernel/debug/% \
+                userland/rt/% userland/ldso/% \
+                userland/ports/doom/% userland/backends/doom/% \
+                userland/ports/dash/% userland/backends/dash/% $(BUILD)/dash/%
+UBSAN_FOR = $(if $(filter 1,$(UBSAN)),$(if $(filter $(UBSAN_EXCLUDE),$<),,$(UBSAN_CFLAGS)))
+
+# A prerequisite of EVERY compile rule, for the reason the two stamps
+# above exist: the .d files track headers, not flags.
+$(BUILD)/.ubsan-flag: FORCE
+	@mkdir -p $(dir $@)
+	@echo '$(UBSAN)' | cmp -s - $@ || echo '$(UBSAN)' > $@
+
+$(BUILD)/%.o: %.c $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(if $(filter apps/%,$<),$(APPS_CFLAGS),$(CFLAGS)) $< -o $@
 
-$(BUILD)/%.o: %.asm
+$(BUILD)/%.o: %.asm $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(ASM) $(ASMFLAGS) $< -o $@
 
@@ -682,7 +714,7 @@ $(BUILD)/%.o: %.asm
 # a .c file in userland/gui, userland/bin or userland/tests and nothing
 # else -- the directory says both that it is a program and where it
 # seeds to (see "userland source layout" above).
-$(BUILD)/userland/%.o: userland/%.c
+$(BUILD)/userland/%.o: userland/%.c $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
@@ -750,7 +782,8 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/etc_config_cases.o \
                $(BUILD)/userland/shared/tmppath.o \
                $(BUILD)/userland/shared/kcrc.o \
-               $(BUILD)/userland/shared/pci_class.o
+               $(BUILD)/userland/shared/pci_class.o \
+               $(BUILD)/userland/shared/ubsan_cases.o
 LIBUAPP      = $(BUILD)/userland/libuapp.a
 
 # libc.a -- the C LIBRARY, a second archive beside the toolkit.
@@ -798,7 +831,8 @@ LIBC_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBC_SRCS)) \
                $(BUILD)/userland/shared/caltime.o \
                $(BUILD)/userland/shared/keycombo.o \
                $(BUILD)/userland/shared/ksignal.o \
-               $(BUILD)/userland/shared/kfmt_cases.o
+               $(BUILD)/userland/shared/kfmt_cases.o \
+               $(BUILD)/userland/shared/ubsan.o
 LIBC         = $(BUILD)/userland/libc.a
 
 # The `rm -f` is load-bearing: `ar rcs` UPDATES an existing archive,
@@ -816,7 +850,7 @@ $(LIBUAPP): $(LIBUAPP_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
 
-$(BUILD)/userland/%.o: userland/%.S
+$(BUILD)/userland/%.o: userland/%.S $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
@@ -919,7 +953,7 @@ DOOM_CFLAGS = $(subst -Wframe-larger-than=2048,-Wframe-larger-than=16384,\
 # pushed through all eighty.
 $(BUILD)/userland/ports/doom/midifile.o: DOOM_CFLAGS += -include SDL.h
 
-$(BUILD)/userland/ports/doom/%.o: userland/ports/doom/%.c
+$(BUILD)/userland/ports/doom/%.o: userland/ports/doom/%.c $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(DOOM_CFLAGS) $< -o $@
 
@@ -990,11 +1024,11 @@ DASH_CFLAGS = $(subst -Wall,-w,$(subst -Wextra,,$(USERLAND_CFLAGS))) \
 # renamed in the BUILD so neither copy is edited.
 $(BUILD)/userland/dash/port/main.o: DASH_CFLAGS += -Dmain=dash_main
 
-$(BUILD)/userland/dash/backend/%.o: userland/backends/dash/%.c
+$(BUILD)/userland/dash/backend/%.o: userland/backends/dash/%.c $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(USERLAND_CFLAGS) -Iuserland -Iuserland/backends/dash -c $< -o $@
 
-$(BUILD)/userland/dash/port/%.o: $(DASH_SRC)/%.c $(DASH_GEN)/.stamp
+$(BUILD)/userland/dash/port/%.o: $(DASH_SRC)/%.c $(DASH_GEN)/.stamp $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(DASH_CFLAGS) $< -o $@
 
@@ -1012,7 +1046,7 @@ $(BUILD)/userland/dash/port/%.o: $(DASH_SRC)/%.c $(DASH_GEN)/.stamp
 $(DASH_GEN)/%.c $(DASH_GEN)/%.h: $(DASH_GEN)/.stamp
 	@:
 
-$(BUILD)/userland/dash/gen/%.o: $(DASH_GEN)/%.c $(DASH_GEN)/.stamp
+$(BUILD)/userland/dash/gen/%.o: $(DASH_GEN)/%.c $(DASH_GEN)/.stamp $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(DASH_CFLAGS) $< -o $@
 
@@ -1122,23 +1156,24 @@ LIBC_PIC_OBJS = $(patsubst userland/%.c,$(BUILD)/userland-pic/%.o,$(filter-out u
                 $(BUILD)/userland-pic/shared/caltime.o \
                 $(BUILD)/userland-pic/shared/keycombo.o \
                 $(BUILD)/userland-pic/shared/ksignal.o \
-                $(BUILD)/userland-pic/shared/kfmt_cases.o
+                $(BUILD)/userland-pic/shared/kfmt_cases.o \
+                $(BUILD)/userland-pic/shared/ubsan.o
 
 LIBC_NONSHARED = $(BUILD)/userland/libc_nonshared.a
 
-$(BUILD)/userland-pic/%.o: userland/%.c
+$(BUILD)/userland-pic/%.o: userland/%.c $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBC_PIC_CFLAGS) $< -o $@
 
-$(BUILD)/userland-pic/%.o: userland/%.S
+$(BUILD)/userland-pic/%.o: userland/%.S $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBC_PIC_CFLAGS) $< -o $@
 
-$(BUILD)/userland-pic/shared/%.o: kernel/lib/%.c
+$(BUILD)/userland-pic/shared/%.o: kernel/lib/%.c $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBC_PIC_SHARED_CFLAGS) -Iapps $< -o $@
 
-$(BUILD)/userland-pic/shared/%.o: apps/%.c
+$(BUILD)/userland-pic/shared/%.o: apps/%.c $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBC_PIC_SHARED_CFLAGS) -Iapps $< -o $@
 
@@ -1361,14 +1396,14 @@ MBEDTLS_SRCS = $(filter-out %/net_sockets.c %/timing.c, \
                  $(wildcard userland/ports/mbedtls/library/*.c))
 MBEDTLS_OBJS = $(patsubst userland/%.c,$(BUILD)/userland-pic/%.o,$(MBEDTLS_SRCS))
 
-$(BUILD)/userland-pic/ports/mbedtls/library/%.o: userland/ports/mbedtls/library/%.c
+$(BUILD)/userland-pic/ports/mbedtls/library/%.o: userland/ports/mbedtls/library/%.c $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(MBEDTLS_CFLAGS) $< -o $@
 
 # OUR backend keeps every warning, exactly as userland/backends/doom/
 # does. It needs mbedTLS's headers and the same -nostdinc treatment,
 # because it includes them.
-$(BUILD)/userland-pic/backends/mbedtls/%.o: userland/backends/mbedtls/%.c
+$(BUILD)/userland-pic/backends/mbedtls/%.o: userland/backends/mbedtls/%.c $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(subst -Wframe-larger-than=2048,-Wframe-larger-than=2048,$(LIBC_PIC_CFLAGS)) \
 	      -nostdinc -isystem $(GCC_FREESTANDING_INC) \
@@ -1461,11 +1496,11 @@ $(BUILD)/userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/rt/link.l
 # rather than something the comment above asks for.
 SHARED_CFLAGS = $(subst $(LIBC_INCLUDES),,$(USERLAND_CFLAGS))
 
-$(BUILD)/userland/shared/%.o: kernel/lib/%.c
+$(BUILD)/userland/shared/%.o: kernel/lib/%.c $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(SHARED_CFLAGS) -Iapps $< -o $@
 
-$(BUILD)/userland/shared/%.o: apps/%.c
+$(BUILD)/userland/shared/%.o: apps/%.c $(BUILD)/.ubsan-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(SHARED_CFLAGS) -Iapps $< -o $@
 

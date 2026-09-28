@@ -629,21 +629,41 @@ void imgcache_forget(const char *path) {
     }
 }
 
-static uint64_t imgcache_get(const char *path, uint64_t off) {
+static uint64_t imgcache_find(const char *path, uint64_t off) {
     for (int i = 0; i < g_imgcache_n; i++) {
         if (g_imgcache[i].off == off && !k_strcmp(g_imgcache[i].path, path))
             return g_imgcache[i].frame;
     }
+    return 0;
+}
+
+static uint64_t imgcache_get(const char *path, uint64_t off) {
+    uint64_t hit = imgcache_find(path, off);
+    if (hit) return hit;
     if (g_imgcache_n >= IMGCACHE_MAX) return 0; // full: caller reads the disk
 
     uint64_t frame = pmm_alloc_frame(PMM_ZONE_ANY);
     if (!frame) return 0;
     for (int i = 0; i < 4096; i++) ((uint8_t *)(uintptr_t)frame)[i] = 0;
     fs_read_range(path, off, (void *)(uintptr_t)frame, 4096);
+
+    // THE READ CAN SLEEP, and another process may have cached this page,
+    // or taken the last slot, meanwhile -- so both checks run AGAIN
+    // before a slot is claimed, with nothing that can switch away between
+    // them and the claim. Without this a boot wrote g_imgcache[512]
+    // (found by UBSAN=1). Linux's add_to_page_cache() -EEXIST, same shape.
+    scheduler_preempt_disable();
+    hit = imgcache_find(path, off);
+    if (hit || g_imgcache_n >= IMGCACHE_MAX) {
+        scheduler_preempt_enable();
+        pmm_free_frame(frame);
+        return hit;
+    }
     struct imgcache_ent *e = &g_imgcache[g_imgcache_n++];
     k_strlcpy(e->path, path, sizeof e->path);
     e->off = off;
     e->frame = frame;
+    scheduler_preempt_enable();
     return frame;
 }
 

@@ -1849,3 +1849,65 @@ and that is the image `--bootloader` writes.
 The sequence is worth remembering as a shape: measure, find the layer
 below already does it, delete the thing you built. Twice, on the same
 question, a week's worth of planned work each time.
+
+---
+
+## UBSAN is opt-in, logs and carries on, and is run from a scratch copy
+
+`make UBSAN=1` builds both rings with GCC's `-fsanitize=undefined`, and
+`tools/ubsan_run.py` is how it is run. Three choices in that, each with
+an obvious alternative that was measured or considered and not taken.
+
+**Opt-in, not always on.** Measured on the kernel's own objects:
+`-fsanitize=undefined` took `.text` from 1.0 MB to 2.6 MB and added
+0.9 MB of descriptor data; without the alignment check, 2.2 MB and
+0.6 MB. Every check is a compare and a branch on a hot path, and every
+automated test here runs under TCG, where that is paid again. Linux
+makes the same call (`CONFIG_UBSAN` is a debug option, not a default).
+The cost of opt-in is rot, which is why the runner is named by
+`tools/ondemand_sweep.py` and carries a positive control.
+
+**Log once per site and return, not trap.** `-fsanitize-trap=undefined`
+was the cheap alternative -- +0.27 MB of `.text`, no runtime at all --
+but a trap is fatal and reports only an address: no check kind, no
+operand values. Logging is Linux's default shape (`lib/ubsan.c`) and
+compiler-rt's, and it lets one boot collect every site instead of
+stopping at the first. The once-per-site bit is the top bit of the
+site's `column`, as both of those use, so a loop cannot flood the klog
+ring -- which holds a few hundred lines and is this project's evidence.
+`__builtin_unreachable()` is the exception: GCC declares its handler
+noreturn, so it reports and then panics (ring 0) or aborts (ring 3).
+
+**Alignment is not checked.** x86 does not fault on an unaligned access,
+packed wire structures (USB descriptors, network headers, on-disk
+formats) are read in place all over the kernel, and Linux turns the
+same check off on x86 for the same reason. Every other check in
+`-fsanitize=undefined` is on.
+
+**Both rings from one source.** `kernel/lib/ubsan.c` is compiled into
+the kernel and into libc, as `kfmt.c` is; only where a line goes differs
+(`ubsan_emit()`: klog with a stack scan in ring 0, stderr in ring 3,
+which for a service is the application log). Most of the input this
+system parses from strangers -- fonts, MP3, SoundFonts, images, TLS --
+is parsed in ring 3, so a kernel-only UBSAN would have missed most of
+what it is for.
+
+**Doom and dash are not instrumented.** They are vendored, and their UB
+is upstream's to fix; instrumenting them would make every run report
+sites nobody here will change, and a report nobody acts on trains
+people to skim the list.
+
+**The runner builds a copy of the tree.** `make UBSAN=1 iso` in the
+checkout re-seeds `disk.img` and rewrites `toy-os.iso`, and a test
+runner doing that unasked is the thing `ondemand_sweep.py` already
+refuses to do (`DIRTIES_IMAGE`). Overriding `BUILD`, `ISO` and
+`DISK_IMG` was the other way, and does not isolate: `iso/` and `seed/`
+are fixed paths shared by every build. The copy costs a cold build
+(ccache still helps) and isolates completely.
+
+**What it found on its first run** is why the positive control matters
+as much as the report: a real out-of-bounds write in the kernel (the
+/lib image cache's check-then-sleep race, 6 boots in 8 before the fix),
+a test fake writing through NULL into physical page 0, and signed
+left shifts in `fixed.h` and `geom.c` -- none of which any test had
+noticed.

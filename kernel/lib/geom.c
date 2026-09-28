@@ -37,7 +37,7 @@ static void line_bresenham(const struct geom_target *t, int x0, int y0, int x1, 
     for (;;) {
         put(t, x0, y0, color, 255);
         if (x0 == x1 && y0 == y1) break;
-        int e2 = err << 1;
+        int e2 = err * 2;   // err goes negative; << on it is UB
         if (e2 > -dy) { err -= dy; x0 += sx; }
         if (e2 <  dx) { err += dx; y0 += sy; }
     }

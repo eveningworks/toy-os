@@ -479,6 +479,30 @@ this the obvious way), not from how much history it accumulated.
   the variable arrived -- the hazard the `make run` axes document at
   length.
 
+- **`UBSAN=1` INSTRUMENTS BOTH RINGS, AND ITS STAMP IS A PREREQUISITE
+  OF EVERY COMPILE RULE.** `-fsanitize=undefined` goes into `CFLAGS` and
+  `USERLAND_CFLAGS` (so every variable derived from them), and a failed
+  check calls `kernel/lib/ubsan.c`, which is compiled into the kernel
+  and into libc. Three things to keep true:
+
+  - **A new compile rule lists `$(BUILD)/.ubsan-flag`**, or toggling
+    `UBSAN` leaves that rule's objects built the other way -- a mixed
+    build that links and says nothing.
+  - **Code that runs where no handler can be called goes in
+    `UBSAN_EXCLUDE`**: crt0/`userland/rt/` and `ld-toy` (linked without
+    libc), the relocation walk, the kdebug stub, and the runtime itself.
+    It is matched against `$<`, so a rule whose flags are a parse-time
+    `:=` (`userland/dynlib/`) cannot be excluded that way.
+  - **A shift of a value that can be negative is a MULTIPLY**
+    (`v * FX_ONE`, `err * 2`). C leaves `-1 << n` undefined; GCC
+    defines it, but UBSAN reports it and the planned on-machine `cc`
+    need not honour it. The result is the same for every value that
+    fits; one that does not now reports instead of wrapping silently.
+
+  **Run it with `tools/ubsan_run.py`, not a hand-typed `make UBSAN=1
+  iso`**, which re-seeds your `disk.img`: the tool builds a copy of the
+  tree in scratch and reads all three places a report can land.
+
 - **THE KERNEL'S DEBUG INFO IS SPLIT OUT, AND `--add-gnu-debuglink` IS
   WHAT KEEPS EVERY TOOL WORKING.** `build/kernel.bin` is stripped and
   `build/kernel.debug` holds the DWARF; the link between them is a

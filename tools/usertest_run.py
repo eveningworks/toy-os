@@ -268,9 +268,12 @@ TESTS = [
     # that libc.a has the same kfmt at all, which is the gap a
     # kernel-only include in the shared half opens silently.
     ("kfmt_test", 0, None, None),
-    # The TrueType rasterizer's SECOND compilation, and the same gap
-    # klineedit_test covers: userland/lib/ttf.c has KTESTs, and every one
-    # of them would pass whether or not ring 3 could link a byte of it.
+    # The UBSAN runtime's case table through libc's copy, and in a UBSAN=1
+    # build one real overflow -- tools/ubsan_run.py counts on it.
+    ("ubsan_test", 0, None, None),
+    # The TrueType rasterizer's ONLY test: userland/lib/ttf.c has been
+    # ring 3's alone since the kernel stopped parsing fonts (f34019fc),
+    # so no KTEST reaches it any more.
     # SKIPS ITSELF on an image built with no fonts, so it must not
     # require a pass line that only appears when there is a font.
     ("ttf_test", 0,
@@ -598,6 +601,9 @@ def main():
     ap.add_argument("--serial-log", default=None, metavar="PATH",
                     help="copy the guest's serial output to PATH (vm.py's own "
                          "flag) -- the only record left when the emulator itself hangs")
+    ap.add_argument("--transcript", default=None, metavar="PATH",
+                    help="write every test's captured output to PATH, passed or "
+                         "not -- a program's own console output is NOT on the serial log")
     ap.add_argument("-k", metavar="SUBSTR", default="",
                     help="only tests whose name contains SUBSTR")
     ap.add_argument("--list", action="store_true",
@@ -697,6 +703,11 @@ def main():
         vm(args, "stop", check=False)
         if tmp:
             os.unlink(tmp.name)
+
+    if args.transcript:
+        with open(args.transcript, "w") as f:
+            for name, _problems, out in results:
+                f.write(f"=== {name}\n{out}\n")
 
     failed = 0
     print()

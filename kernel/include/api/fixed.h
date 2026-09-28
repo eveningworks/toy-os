@@ -25,7 +25,11 @@ typedef int32_t fx_t;
 #define FX_ONE   (1 << FX_SHIFT)
 #define FX_HALF  (FX_ONE / 2)
 
-static inline fx_t fx_from_int(int v)  { return (fx_t)(v << FX_SHIFT); }
+// A MULTIPLY, not `v << FX_SHIFT`: shifting a negative value left is
+// undefined in C (GCC defines it; UBSAN=1 and other compilers do not).
+// Same result for every |v| < 32768; past that the shift wrapped
+// silently, where the multiply's overflow is UB that UBSAN=1 reports.
+static inline fx_t fx_from_int(int v)  { return (fx_t)(v * FX_ONE); }
 static inline int   fx_to_int(fx_t v)  { return (int)(v >> FX_SHIFT); }
 
 // Rounds to nearest rather than truncating -- truncation biases every
@@ -43,7 +47,7 @@ static inline fx_t fx_mul(fx_t a, fx_t b) {
 
 static inline fx_t fx_div(fx_t a, fx_t b) {
     if (b == 0) return 0; // no traps here; a caller dividing by zero gets 0
-    return (fx_t)(((int64_t)a << FX_SHIFT) / b);
+    return (fx_t)(((int64_t)a * FX_ONE) / b);   // not <<: see fx_from_int()
 }
 
 // sin/cos of an angle in TURNS. Any input is valid -- the angle wraps,

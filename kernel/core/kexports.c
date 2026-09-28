@@ -21,6 +21,7 @@
 #include "driver.h"
 #include "ktest.h"
 #include "module.h"
+#include "ubsan.h"
 #include "multiboot.h"
 #include <stddef.h>
 
@@ -29,6 +30,23 @@ extern uintptr_t __stack_chk_guard;
 void __stack_chk_fail(void);
 EXPORT_SYMBOL(__stack_chk_guard);
 EXPORT_SYMBOL(__stack_chk_fail);
+
+// --- ubsan.h: an instrumented module (`make UBSAN=1`) calls these ------
+EXPORT_SYMBOL(__ubsan_handle_add_overflow);
+EXPORT_SYMBOL(__ubsan_handle_sub_overflow);
+EXPORT_SYMBOL(__ubsan_handle_mul_overflow);
+EXPORT_SYMBOL(__ubsan_handle_negate_overflow);
+EXPORT_SYMBOL(__ubsan_handle_divrem_overflow);
+EXPORT_SYMBOL(__ubsan_handle_shift_out_of_bounds);
+EXPORT_SYMBOL(__ubsan_handle_out_of_bounds);
+EXPORT_SYMBOL(__ubsan_handle_type_mismatch_v1);
+EXPORT_SYMBOL(__ubsan_handle_pointer_overflow);
+EXPORT_SYMBOL(__ubsan_handle_builtin_unreachable);
+EXPORT_SYMBOL(__ubsan_handle_load_invalid_value);
+EXPORT_SYMBOL(__ubsan_handle_vla_bound_not_positive);
+EXPORT_SYMBOL(__ubsan_handle_nonnull_arg);
+EXPORT_SYMBOL(__ubsan_handle_nonnull_return_v1);
+EXPORT_SYMBOL(__ubsan_handle_invalid_builtin);
 
 // --- klog.h / kfmt.h ---------------------------------------------------
 EXPORT_SYMBOL(klog_write);
