@@ -49,10 +49,12 @@ static void scan_cb(void *ctx, const char *name, uint32_t size, int is_dir) {
     k_strlcpy(x->name[x->count++], base, FONT_FACE_NAME_LEN);
 }
 
-// RESCANS WHEN THE FILESYSTEM HAS MOVED, so a font copied in shows up
-// without a reboot -- and costs one comparison when it has not.
+// RESCANS WHEN THE FONT DIRECTORY HAS MOVED, so a font copied in shows
+// up without a reboot -- and costs one comparison when it has not. Its
+// OWN generation, not the whole filesystem's, or every log line was a
+// rescan.
 static void refresh(void) {
-    uint64_t gen = fs_generation();
+    uint64_t gen = fs_generation_of(FONT_FACE_DIR);
     if (gen == g_scanned_gen) return;
     struct face_scan x;   // no initialiser: that is a memset, and there is none here
     x.count = 0;

@@ -439,7 +439,8 @@ whenever a headline here tells you something you did not already know.
 - **A ring-3 compositor delivers events by WRITING THEM, not by calling
   the kernel.**
 - **`SYS_FS_GENERATION` is how ring 3 asks "has the filesystem
-  changed?"**
+  changed?" -- and `SYS_FS_GENERATION_OF(path)` asks it of ONE
+  directory, which is what a watcher of one directory should use.**
 - **A ring-3 process can own a real window**
 - **`Exec=builtin:` is GONE, and ring 0 contains no applications.**
 - **The Start menu is built from FILES**

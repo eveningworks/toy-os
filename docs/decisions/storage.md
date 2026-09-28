@@ -3003,10 +3003,13 @@ re-read the root and parent inodes.
 
 **What it bought:** per empty-file create 10.5 reads and 2.40 ms (from
 29.6 and 4.08), per 4 KiB create 18.1 reads and 4.68 ms (from 35.0 and
-6.09). **What it did NOT buy:** a `stat` beside a stream of creates
-waits no less (`docs/bugs.md`, the `stat` entry) -- the wait there is set
-by how the volume lock is shared, not by one create's cost. The two
-flushes a create's commit still pays are now half of it.
+6.09). **What it did NOT buy, and what did:** a `stat` beside a stream of
+creates waited no less -- because one `stat()` was FOUR fs calls, four
+lock acquisitions, each queued behind a create's. Making it one
+(`fs_stat()` reports type and size too; the separate calls remain only
+for the implicit root) halved to thirded the wait on both laptops
+(`docs/bugs.md`, the `stat` entry). The two flushes a create's commit
+still pays are now half of what is left.
 
 ## Why `batched` defers the allocation bitmap too, and why that is safer
 

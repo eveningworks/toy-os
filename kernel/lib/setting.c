@@ -289,7 +289,7 @@ static uint64_t cf_gen;           // passes a string literal from a
 static int cf_valid;              // `struct setting`, which outlives us
 
 static int choice_file_load(const char *path) {
-    uint64_t gen = fs_generation();
+    uint64_t gen = fs_generation_of(path);   // this file's, not the disk's
     if (cf_valid && cf_path == path && cf_gen == gen) return 1;
     cf_valid = 0;
     cf_path = path;

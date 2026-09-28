@@ -1507,6 +1507,8 @@ static int tfs3_stat(void *st, const char *path, struct fs_stat_info *out) {
         // not a file nobody may touch -- see struct t3_inode.
         out->mode = node.mode ? node.mode : (uint16_t)T3_MODE_DEFAULT(node.type);
         out->nlink = node.links;
+        out->is_dir = node.type == T3_TYPE_DIR;
+        out->size = node.type == T3_TYPE_FILE ? node.size : 0;
     }
     return 1;
 }

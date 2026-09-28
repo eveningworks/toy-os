@@ -346,6 +346,26 @@ static uint64_t g_generation;
 
 uint64_t fs_generation(void) { return g_generation; }
 
+// PER-DIRECTORY GENERATIONS (api/fs.h, fs_generation_of()). Counters
+// indexed by the path hashes fswatch already computes, bumped for the
+// changed path AND its parent -- so one moves when a thing or a direct
+// child of it changes. NO REGISTRY: a collision only makes an unrelated
+// change look like one, the false positive the global counter gives on
+// every change.
+#define DIRGEN_BUCKETS 256
+static uint64_t g_dirgen[DIRGEN_BUCKETS];
+
+static void dirgen_note(uint64_t self, uint64_t parent) {
+    g_dirgen[self % DIRGEN_BUCKETS]++;
+    g_dirgen[parent % DIRGEN_BUCKETS]++;
+}
+
+uint64_t fs_generation_of(const char *path) {
+    uint64_t h;
+    fswatch_hash(path, &h, 0);
+    return g_dirgen[h % DIRGEN_BUCKETS] + 1;   // never 0: "not sampled yet"
+}
+
 // Everything buffered anywhere on the way to a platter, on EVERY
 // mounted volume. Two stages, because they are two different places
 // data can be sitting and only one of them used to be emptied:
@@ -513,6 +533,7 @@ static int changed(int ok, const char *path) {
     uint64_t self, parent;
     fswatch_hash(path, &self, &parent);
     fswatch_note(self, parent);
+    dirgen_note(self, parent);
     return ok;
 }
 
@@ -522,6 +543,7 @@ static int changed2(int ok, const char *a, const char *b) {
     uint64_t self, parent;
     fswatch_hash(b, &self, &parent);
     fswatch_note(self, parent);
+    dirgen_note(self, parent);
     return ok;
 }
 
@@ -669,7 +691,7 @@ enum fs_step_result fs_write_range_step(void *handle) {
     // per step would wake a watcher repeatedly through a single save.
     // This path is the one Notepad saves through, so without it editing
     // a file in the editor would not be seen by anything watching.
-    if (r == FS_STEP_DONE) { g_generation++; fswatch_note(self, parent); }
+    if (r == FS_STEP_DONE) { g_generation++; fswatch_note(self, parent); dirgen_note(self, parent); }
     return r;
 }
 

@@ -378,6 +378,15 @@ int sys_fs_watch(struct syscall_ctx *c) {
     return 0;
 }
 
+int sys_fs_generation_of(struct syscall_ctx *c) {
+    char *path = kpath_get();
+    if (!path) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
+    int rc = resolve_user_path(c->pml4, c->a0, path);   // the VFS's own spelling
+    c->regs[14] = rc ? (uint64_t)(int64_t)rc : fs_generation_of(path);
+    kpath_put(path);
+    return 0;
+}
+
 int sys_fs_generation(struct syscall_ctx *c) {
     // One integer, no user pointer to validate -- see
     // syscall_abi.h for why this is not a SYS_SYSINFO field.
@@ -569,7 +578,16 @@ int sys_stat(struct syscall_ctx *c) {
         return 0;
     }
     int is_root = k_strcmp(path, "/") == 0;
-    if (!is_root && !fs_exists(path)) {
+    // ONE fs call where the backend can answer everything: each takes the
+    // volume's lock, and exists-then-is_dir-then-size-then-stat queued
+    // behind whatever else held the volume FOUR times per stat() -- a
+    // stat beside a stream of creates waited ~5 ms for a 20 us call.
+    // Linux's stat is one lookup and one getattr. The separate calls stay
+    // for what fs_stat() cannot describe (the implicit root).
+    struct fs_stat_info st;
+    k_memset(&st, 0, sizeof st);
+    int have = !is_root && fs_stat(path, &st);
+    if (!is_root && !have && !fs_exists(path)) {
         c->regs[14] = (uint64_t)(int64_t)-ENOENT;
         kpath_put(path);
         return 0;
@@ -577,13 +595,12 @@ int sys_stat(struct syscall_ctx *c) {
 
     struct sys_stat out;
     k_memset(&out, 0, sizeof out);
-    out.is_dir = (uint32_t)(is_root || fs_is_dir(path));
-    if (!out.is_dir) out.size = fs_size(path);
+    out.is_dir = (uint32_t)(is_root || (have ? st.is_dir : fs_is_dir(path)));
+    if (!out.is_dir) out.size = have ? st.size : fs_size(path);
     if (fs_has(FS_CAP_INODES)) out.flags |= SYS_STAT_INODES;
     if (fs_has(FS_CAP_MODE))   out.flags |= SYS_STAT_MODE;
 
-    struct fs_stat_info st;
-    if (fs_stat(path, &st)) {
+    if (have) {
         out.ino = st.ino;
         // Epoch is kernel-internal (fs.h); civil time crosses the
         // boundary, exactly as struct sys_dirent's `modified` does.

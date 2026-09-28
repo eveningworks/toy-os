@@ -2666,6 +2666,14 @@ struct usb_control_msg {
                              // compositor's; -ENOSPC past FSWATCH_MAX.
                              // Watches end with the process. A path need
                              // not exist yet; creating it is a change.
+#define SYS_FS_GENERATION_OF 138 // RDI = a path. SYS_FS_GENERATION scoped
+                             // to it: a counter that moves when the path
+                             // itself or a DIRECT CHILD changes, for any
+                             // process -- a polled watch with no
+                             // registry (api/fs.h, fs_generation_of()).
+                             // May move for an unrelated change (a hash
+                             // collision), never stays for a real one.
+                             // Never 0; -errno for a bad path.
 
 struct usb_isoch_msg {
     uint32_t slot;

@@ -106,6 +106,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_SETTING]       = { "setting",       sys_setting,       { A_HEX } },
     [SYS_SYSINFO]       = { "sysinfo",       sys_sysinfo,       { A_HEX } },
     [SYS_FS_GENERATION] = { "fs_generation", sys_fs_generation, { A_END } },
+    [SYS_FS_GENERATION_OF] = { "fs_generation_of", sys_fs_generation_of, { A_PATH, A_END } },
     [SYS_MKPART]        = { "mkpart",        sys_mkpart,        { A_HEX } },
     [SYS_INSTALL_BOOT]  = { "install_boot",  sys_install_boot,  { A_HEX } },
     [SYS_CRASHTEST]     = { "crashtest",     sys_crashtest,     { A_HEX } },

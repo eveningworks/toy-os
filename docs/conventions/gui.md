@@ -1747,11 +1747,17 @@ this the obvious way), not from how much history it accumulated.
   writers bump it). `WIN_EV_FONT`/`WIN_EV_SCREEN` reach the compositor
   on its queue and it forwards them, DRM-hotplug-uevent style.
 - **`SYS_FS_GENERATION` is how ring 3 asks "has the filesystem
-  changed?"** -- no arguments, the counter in RAX. Its own syscall
-  rather than a `SYS_SYSINFO` field on purpose: the desktop polls it
-  ONCE PER FRAME to decide whether to re-read `/usr/wm/applications/`, and a
-  free poll is the entire reason the counter exists instead of a
-  directory scan. It says something changed, never what.
+  changed?" -- and `SYS_FS_GENERATION_OF(path)` asks it of ONE
+  directory, which is what a watcher of one directory should use.** No
+  arguments for the first, the counter in RAX; a free poll is the
+  entire reason it exists instead of a directory scan. But it moves for
+  EVERY change on the disk -- every line `logd` writes -- so a reader
+  that rescans on it rescans constantly: `init` re-read all twelve
+  service descriptors per wake until 2026-09-28. The scoped one moves
+  only when that path or a direct child changes (a hash collision can
+  move it spuriously; nothing can make it miss). The compositor itself
+  uses `SYS_FS_WATCH` events now. Either says something changed, never
+  what.
 - **A ring-3 process can own a real window** (`userland/wm/wm_client.c` +
   `kernel/proc/win_role.c`, protocol in
   `kernel/include/abi/win_proto.h`). Two rules matter before touching

@@ -828,6 +828,11 @@ unsigned long long sys_monotonic_ns(void);
 // when it moves. Only ever increases, and is non-zero once a filesystem
 // is mounted, so 0 is safe as "not sampled yet".
 unsigned long long sys_fs_generation(void);
+// The same for ONE path: moves when `path` or a direct child of it
+// changes, so a reader of one directory is not woken by every write on
+// the disk. May move for an unrelated change (a false positive), never
+// misses a real one. -1 and errno for a bad path.
+long long sys_fs_generation_of(const char *path);
 // Watch `path` (and a directory's direct children) for the compositor:
 // a change posts WIN_EV_FSWATCH carrying the returned id. -EPERM from
 // anyone else. See SYS_FS_WATCH.

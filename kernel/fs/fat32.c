@@ -1575,6 +1575,8 @@ static int fat32_stat(void *st, const char *path, struct fs_stat_info *out) {
     if (e.attr & ATTR_DIRECTORY) out->mode = ro ? 0555 : 0755;
     else                             out->mode = ro ? 0444 : 0644;
     out->nlink = 1;
+    out->is_dir = (e.attr & ATTR_DIRECTORY) ? 1 : 0;
+    out->size = out->is_dir ? 0 : e.size;
     return 1;
 }
 

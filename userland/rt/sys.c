@@ -860,6 +860,10 @@ unsigned long long sys_fs_generation(void) {
     return (unsigned long long)syscall0(SYS_FS_GENERATION);
 }
 
+long long sys_fs_generation_of(const char *path) {
+    return (long long)err(syscall1(SYS_FS_GENERATION_OF, (uint64_t)(uintptr_t)path));
+}
+
 int sys_fs_watch(const char *path) {
     return (int)syscall1(SYS_FS_WATCH, (uint64_t)(uintptr_t)path);
 }

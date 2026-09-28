@@ -295,6 +295,11 @@ struct fs_stat_info {
     // or was supplied.
     uint16_t mode;
     uint16_t nlink;   // hard links; 1 where the format has no count
+    // What fs_is_dir() and fs_size() would say, so ONE call answers a
+    // stat(): each fs_*() call takes the volume's lock, and three in a
+    // row queued behind whatever else was using the volume three times.
+    uint8_t  is_dir;
+    uint64_t size;    // 0 for a directory, as fs_size() reports it
 };
 
 // Fills *out with `path`'s identity + timestamps. Returns 1 on
@@ -357,12 +362,20 @@ int fs_link(const char *existing, const char *newpath);
 // which means a real disk read every few seconds forever on a
 // completely idle machine -- the thing this exists to avoid.
 //
-// Deliberately GLOBAL rather than per-path: a watcher gets woken by
-// changes it does not care about, and pays one directory read for a
-// false positive. Per-path watches would need a registry, a lifetime
-// and an eviction policy, all to save a read that only happens when
-// something actually changed anyway.
+// GLOBAL: a watcher gets woken by changes it does not care about. That
+// was meant to cost "one directory read for a false positive", and for
+// two readers it was far more -- init re-read all twelve service
+// descriptors, ~40 fs calls, whenever anything anywhere changed. A
+// reader that wants ONE directory uses fs_generation_of() below.
 uint64_t fs_generation(void);
+
+// The same, SCOPED: moves when `path` itself or a direct child of it
+// changes (a create, delete, rename, write or truncate there). No
+// registry and no lifetime -- a small table indexed by the path's hash,
+// so a collision can make an unrelated change look like one (a false
+// positive, never a missed change). `path` must be absolute and
+// normalized, as every fs_*() caller's is. Never 0.
+uint64_t fs_generation_of(const char *path);
 
 // Reformat the disk with the named backend ("tfs3") and
 // remount by re-running the probe loop. DESTROYS the current

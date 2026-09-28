@@ -690,6 +690,8 @@ static int ramfs_stat(void *st, const char *path, struct fs_stat_info *out) {
     // because a caller cannot act on "unknown" -- see fs.h.
     out->mode = sbi->nodes[idx]->is_dir ? 0755 : 0644;
     out->nlink = 1;
+    out->is_dir = sbi->nodes[idx]->is_dir ? 1 : 0;
+    out->size = sbi->nodes[idx]->is_dir ? 0 : sbi->nodes[idx]->size;
     return 1;
 }
 

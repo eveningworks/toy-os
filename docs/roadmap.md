@@ -65,7 +65,11 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~Measure desktop latency under heavy disk I/O, the yardstick for the three items below~~ DONE 2026-09-12
 - [x] ~~A `schedule()` that suspends the KERNEL stack, so a caller can block mid-call~~ DONE 2026-09-18 -- one suspend shape
 - [x] ~~Replace the preemption guard with a real sleeping lock~~ DONE 2026-09-18 -- `ata.c`'s disk waits sleep under it
-- [ ] Journal commits off the volume lock -- fslock stage 5; a commit's flushes are what hold a volume longest now
+- [x] ~~A delete reads its pointer tables with the volume lock dropped~~ DONE 2026-09-28 -- fslock stage 3c; `/` was held 28-41 ms
+- [x] ~~A small-file create walks its path once, through cached directory inodes~~ DONE 2026-09-28 -- 29.6 -> 10.5 reads per create
+- [x] ~~`stat()` in one filesystem call, not four lock acquisitions~~ DONE 2026-09-28
+- [x] ~~A change counter per DIRECTORY, so a watcher is not woken by every write on the disk~~ DONE 2026-09-28 -- `SYS_FS_GENERATION_OF`
+- [ ] Journal commits off the volume lock -- fslock stage 5; under `strict` a commit held `/` 146-181 ms, under `batched` 8-75 ms
 - [ ] **Interruptible syscalls** -- the trap gate; safe to flip, and measured twice to buy nothing yet
 - [ ] Bound how long a frame can block on I/O
 
@@ -797,9 +801,10 @@ run on, not by order.
 - [x] ~~`fsync()`/`fdatasync()`~~ done -- `SYS_FSYNC`, scoped to the volume rather than the file
 - [x] ~~TFS3 stops re-reading pointer tables it already holds~~ done -- the write caches outlive a syscall
 - [x] ~~`SYS_WRITE_MAX` at 256 KiB~~ done -- it sets the TRANSACTION count, and write amplification fell 1.33x -> 1.086x
-- [ ] A VFS inode cache -- the path half is done in `resolve()`; what is left is ONE sector read per op, measured not worth the refactor yet
+- [ ] A VFS inode cache -- tfs3 caches DIRECTORY inodes itself since 2026-09-28; the VFS-level one is still not worth the refactor
 - [ ] `rename()` that replaces its destination atomically -- every backend refuses, so a publish is three steps
-- [ ] Path watches for any process, not just the compositor -- `SYS_FS_WATCH` delivers to the kernel's one event queue
+- [ ] Path watches for any process, not just the compositor -- polled per-directory counters exist (`SYS_FS_GENERATION_OF`); events do not
+- [ ] The File Manager reloads both panes on ANY filesystem change -- move it to `SYS_FS_GENERATION_OF` per pane
 - [x] ~~Batch TFS3's allocation bitmap into the deferred transaction~~ done -- 1138 -> 623 write commands per 64 MiB
 - [ ] Batch the dirty POINTER TABLES too -- blocked on `g_mcache` needing to flush a second mount's dirty entry rather than discard it
 - [ ] Remove one of the file path's two copies -- scatter/gather the PRDT over the kernel buffer instead of the driver's bounce

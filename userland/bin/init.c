@@ -700,12 +700,19 @@ static void load_services(int announce) {
     build_order();
 }
 
-// Has anything on the filesystem changed since the last look? One
-// integer compare, no I/O -- the same trick the desktop uses to notice a
-// new `.desktop` file, and the reason SYS_FS_GENERATION exists. It says
-// SOMETHING changed, never what, so a move means rescan.
+// Has anything in SERVICES_DIR changed since the last look? One integer
+// compare, no I/O. SCOPED TO THE DIRECTORY (SYS_FS_GENERATION_OF): the
+// whole-filesystem counter moved for every log line logd wrote, and each
+// move re-read every descriptor -- about forty file calls per wake, all
+// taking the volume lock. It says something there changed, never what,
+// so a move means rescan.
+static unsigned long long services_gen(void) {
+    long long g = sys_fs_generation_of(SERVICES_DIR);
+    return g > 0 ? (unsigned long long)g : sys_fs_generation();   // a refusal: the old scope
+}
+
 static int services_changed(void) {
-    unsigned long long gen = sys_fs_generation();
+    unsigned long long gen = services_gen();
     if (gen == g_fs_gen) return 0;
     g_fs_gen = gen;
     return 1;
@@ -1324,7 +1331,7 @@ int main(void) {
     unlink(CONTROL_PATH);
     unlink(STATUS_PATH);
     load_target();
-    g_fs_gen = sys_fs_generation();
+    g_fs_gen = services_gen();
     load_services(1);
 
     for (;;) {
