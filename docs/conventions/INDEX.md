@@ -807,6 +807,8 @@ whenever a headline here tells you something you did not already know.
 - **A FILE OTHER PROCESSES READ IS PUBLISHED, NEVER REWRITTEN IN PLACE**
 - **A DELETE READS ITS TABLES IN THE LOCK'S GAPS, AND EVERY ALLOCATOR
   MUST EMPTY THE TRIM QUEUE BEFORE HANDING OUT A BLOCK**
+- **A TFS3 INODE CHANGES ONLY THROUGH `t3_txn_stage_inode()`** -- the
+  directory inode cache depends on it
 
 ### The shell, the console, and line editing
 

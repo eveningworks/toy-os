@@ -13,6 +13,8 @@
 #include "string.h"
 #include "mount.h"  // mount_scratch_begin/end, mount_add -- each volume owns its state
 #include "fs.h"     // fs_sync_path(), fs_lock_held_at()
+#include "block_stat.h" // blk_stat_get() -- the device reads a create costs
+#include "kfmt.h"   // k_snprintf, klog_printf
 
 #define VOL_SECTORS 8192u           // 4 MiB
 #define VOL_BYTES   (VOL_SECTORS * 512u)
@@ -338,6 +340,91 @@ KTEST("tfs3", "a delete reads its tables unlocked, and a write in that gap survi
     KTEST_ASSERT(deleted_g && have1);
     KTEST_ASSERT_EQ(used1, used0);               // every block of both files came back
     KTEST_ASSERT_EQ(gaps_after, 0);
+}
+
+// ---- the directory inode cache follows every change -----------------
+
+// t3_read_inode() caches DIRECTORY inodes. A stale entry is silent and
+// serious: a cached size one block short makes a listing stop early and
+// a lookup miss names that exist. So the cache is driven through the
+// changes a directory's inode sees -- its link count (a subdirectory
+// made and removed) and its SIZE (enough entries to need a second
+// block) -- and each is read straight back. Then the cost it exists
+// for: creates in a warm directory, counted in device reads.
+#define IC_POINT "/var/tmp/.ktest_icmnt"
+
+static int g_ic_listed;
+static void ic_count(void *ctx, const char *name, uint32_t size, int is_dir) {
+    (void)ctx; (void)name; (void)size; (void)is_dir;
+    g_ic_listed++;
+}
+
+static const struct block_device IC_DEV = {
+    .name = "t3ic", .sector_count = vol_count, .read_sectors = v0_read,
+    .write_sectors = v0_write, .max_sectors_per_xfer = vol_xfer,
+};
+
+KTEST("tfs3", "a cached directory inode follows its link count and its size") {
+    if (!g_vol[0]) g_vol[0] = kmalloc(VOL_BYTES);
+    if (!g_vol[0]) KTEST_SKIP("could not allocate a 4 MiB volume");
+    k_memset(g_vol[0], 0, VOL_BYTES);
+    struct fs_scratch sc;
+    int ok = mount_scratch_begin(T(), &sc);
+    if (ok) {
+        ok = T()->format(sc.st, &IC_DEV);
+        mount_scratch_end(&sc);
+    }
+    fs_mkdir(IC_POINT);
+    const char *why = 0;
+    int mounted = ok && mount_add(&IC_DEV, "tfs3", IC_POINT, 0, 0, &why);
+    int made = mounted && fs_mkdir(IC_POINT "/d");
+
+    // Links: read (and so cache) the parent, change it, read it again.
+    struct fs_stat_info st;
+    int l0 = made && fs_stat(IC_POINT "/d", &st) ? st.nlink : -1;
+    int sub = made && fs_mkdir(IC_POINT "/d/sub");
+    int l1 = sub && fs_stat(IC_POINT "/d", &st) ? st.nlink : -1;
+    int gone = sub && fs_delete(IC_POINT "/d/sub");
+    int l2 = gone && fs_stat(IC_POINT "/d", &st) ? st.nlink : -1;
+
+    // Size: enough names that the directory needs a second block, listed
+    // after every create has been through the cached parent.
+    enum { NAMES = 400 };
+    char path[64];
+    int touched = 0;
+    for (int i = 0; made && i < NAMES; i++) {
+        k_snprintf(path, sizeof path, IC_POINT "/d/entry_%03d", i);
+        touched += fs_touch(path);
+    }
+    g_ic_listed = 0;
+    fs_list(IC_POINT "/d", ic_count, 0);
+    int listed = g_ic_listed;
+
+    // Cost: creates in a warm directory, in device reads.
+    enum { WARM = 32 };
+    uint64_t r0 = 0, r1 = 0;
+    blk_stat_get(BLK_STAT_READ, &r0, 0, 0, 0);
+    int warm = 0;
+    for (int i = 0; made && i < WARM; i++) {
+        k_snprintf(path, sizeof path, IC_POINT "/w_%02d", i);
+        warm += fs_touch(path);
+    }
+    blk_stat_get(BLK_STAT_READ, &r1, 0, 0, 0);
+    klog_printf("ktest: %d warm creates read %lu blocks\n", warm, (unsigned long)(r1 - r0));
+
+    if (mounted) mount_remove(IC_POINT, &why);
+    fs_delete(IC_POINT);
+    kfree(g_vol[0]);
+    g_vol[0] = 0;
+
+    KTEST_ASSERT(mounted && made);
+    KTEST_ASSERT(sub && gone);
+    KTEST_ASSERT_EQ(l1, l0 + 1);                 // the cached parent saw the subdirectory
+    KTEST_ASSERT_EQ(l2, l0);                     // ...and its removal
+    KTEST_ASSERT_EQ(touched, NAMES);
+    KTEST_ASSERT_EQ(listed, NAMES);              // no name hidden past a stale size
+    KTEST_ASSERT_EQ(warm, WARM);
+    KTEST_ASSERT((r1 - r0) <= 5u * WARM);        // 6 per create before (cache, no flush)
 }
 
 // ---- an overwrite drops the lock; an allocating write does not -------

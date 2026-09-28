@@ -178,6 +178,42 @@ struct t3_gd { uint32_t free_blocks, free_inodes; };
 #define T3_NCACHE 16
 #define T3_NCACHE_NAME 48
 
+struct t3_inode {
+    uint8_t type;
+    uint16_t links;
+    uint64_t size;
+    uint64_t created, modified;
+    uint32_t ptrs[15]; // 12 direct + single + double + triple
+    // **PERMISSION BITS, AND ZERO MEANS "NOT SET" RATHER THAN "NO
+    // ACCESS".** Stored at offset 92, inside the range the checksum has
+    // always covered (bytes 0..87 and 92..127) and which every version
+    // of this format has written as zero. That is what makes this an
+    // extension and not a format revision: an inode written by an older
+    // kernel reads back mode 0, and an inode written with a mode still
+    // validates against an older kernel's checksum, because that kernel
+    // already folds 92..127 in. No version bump, no migration, and
+    // T3_VERSION_MIN is untouched.
+    //
+    // A zero is answered with mode_default() at read time, so a disk
+    // that predates this field behaves exactly as it did.
+    uint16_t mode;
+};
+
+// THE DIRECTORY INODE CACHE (Linux's icache, for directories only):
+// every path walk reads an inode per component, and a create walked its
+// path five times, re-reading the root and its parent from disk each
+// time. Kept coherent by rule, not by snooping writes: an inode is only
+// ever CHANGED through t3_txn_stage_inode(), which forgets its entry
+// and records it, and the transaction forgets every inode it staged
+// AGAIN when it ends -- committed or not -- because a read in between
+// sees the OLD disk copy (only a deferred transaction's images are
+// visible to reads) and may have cached it. Nothing else is evicted, so
+// the root and a parent survive a create's commit; a failed commit and
+// a mount drop everything. A file's inode is not cached: it changes on
+// every write.
+#define T3_ICACHE 8
+#define T3_TXN_INO 16   // inodes one transaction remembers; past it, drop all
+
 // THE RESOLVED-PATH CACHE. Sized 64 bytes because `fs.h`'s FS_PATH_MAX
 // is 64, so every path arriving through the VFS fits; a longer one
 // (T3_PATH_BUF is 256, for internal use) is simply not cached, which is
@@ -296,6 +332,14 @@ struct t3_state {
     } lcache[T3_LCACHE];
     int lcache_next;
 
+    struct {
+        uint64_t ino;               // 0 = empty slot
+        struct t3_inode node;
+    } icache[T3_ICACHE];
+    int icache_next;
+    uint64_t txn_ino[T3_TXN_INO];   // what the open transaction staged
+    int txn_nino;                   // may exceed T3_TXN_INO: then drop all
+
     // One-deep cache of the last-level pointer block being filled, so a
     // long sequential write patches it in RAM and writes it once per
     // 1024 data blocks instead of read-modify-writing 4 KiB per block.
@@ -381,26 +425,6 @@ static inline void wr32(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uin
 static inline void wr64(uint8_t *p, uint64_t v) { wr32(p, (uint32_t)v); wr32(p + 4, (uint32_t)(v >> 32)); }
 static inline void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
 
-struct t3_inode {
-    uint8_t type;
-    uint16_t links;
-    uint64_t size;
-    uint64_t created, modified;
-    uint32_t ptrs[15]; // 12 direct + single + double + triple
-    // **PERMISSION BITS, AND ZERO MEANS "NOT SET" RATHER THAN "NO
-    // ACCESS".** Stored at offset 92, inside the range the checksum has
-    // always covered (bytes 0..87 and 92..127) and which every version
-    // of this format has written as zero. That is what makes this an
-    // extension and not a format revision: an inode written by an older
-    // kernel reads back mode 0, and an inode written with a mode still
-    // validates against an older kernel's checksum, because that kernel
-    // already folds 92..127 in. No version bump, no migration, and
-    // T3_VERSION_MIN is untouched.
-    //
-    // A zero is answered with mode_default() at read time, so a disk
-    // that predates this field behaves exactly as it did.
-    uint16_t mode;
-};
 
 // ---- shared helpers ---------------------------------------------------
 
@@ -412,6 +436,8 @@ uint32_t t3_group_base(struct t3_state *sbi, uint32_t g);
 uint32_t t3_group_span(struct t3_state *sbi, uint32_t g);
 int t3_inode_pos(struct t3_state *sbi, uint64_t ino, uint32_t *out_lba, uint32_t *out_off);
 void t3_ncache_flush(struct t3_state *sbi);
+void t3_icache_drop(struct t3_state *sbi);              // every entry
+void t3_icache_forget(struct t3_state *sbi, uint64_t ino); // one inode
 int t3_normalize(struct t3_state *sbi, const char *path, char *out /* T3_PATH_BUF */);
 void t3_rcache_drop(struct t3_state *sbi);
 int t3_read_block(struct t3_state *sbi, uint32_t blk, void *buf);

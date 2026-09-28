@@ -1185,6 +1185,16 @@ it is still one call at a time. Four things to know:
   late discard wipe a block just reused and written. `tfs3_test.c` runs
   a write inside the delete's gap on a disk whose TRIM really zeroes,
   and removing the allocators' flush turns it red.
+- **A TFS3 INODE CHANGES ONLY THROUGH `t3_txn_stage_inode()`**, because
+  the directory inode cache (`t3_read_inode()`) is kept coherent by that
+  rule rather than by watching writes: staging forgets the inode and the
+  transaction forgets every directory it staged again when it ends, since
+  a read while it was open saw the old disk copy. A new path that writes
+  an inode table block directly -- a repair, a format step on a live
+  mount -- must call `t3_icache_drop()`, or a stale directory keeps its
+  old size and a listing silently stops short. `tfs3_test.c`'s cache
+  KTEST goes red on the link count when the forgets are removed, and
+  ordinary file writes across the suite fail with it.
 - **TFS3 LOCKS THE INODES AN OP TOUCHES, BEFORE IT CHANGES ANYTHING**
   (`t3_lock()`, fslock stage 4): shared to read a file or directory,
   exclusive to change a file, and the PARENT exclusive for any namespace

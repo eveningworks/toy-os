@@ -32,10 +32,20 @@
 // flag first -- may commit or drop it. Every other caller that resets
 // on failure is unwinding its OWN transaction, and after a refused
 // t3_txn_begin() it has none.
+// The transaction is over, committed or not: forget every inode it
+// staged, since a read while it was open saw the old disk copy and may
+// have cached it (tfs3_internal.h, the inode cache).
+static void txn_forget_staged(struct t3_state *sbi) {
+    if (sbi->txn_nino > T3_TXN_INO) t3_icache_drop(sbi);
+    else for (int i = 0; i < sbi->txn_nino; i++) t3_icache_forget(sbi, sbi->txn_ino[i]);
+    sbi->txn_nino = 0;
+}
+
 void t3_txn_reset(struct t3_state *sbi) {
     if (sbi->txn_deferred) return;
     sbi->txn_count = 0;
     sbi->txn_credits = 0;
+    txn_forget_staged(sbi);
 }
 
 // Open a transaction that will stage at most `credits` DISTINCT blocks,
@@ -281,6 +291,7 @@ static enum t3_commit txn_commit_raw(struct t3_state *sbi) {
 // nothing, because there is nothing it may undo.
 int t3_txn_commit(struct t3_state *sbi) {
     enum t3_commit r = txn_commit_raw(sbi);
+    if (r != T3_COMMIT_OK) t3_icache_drop(sbi);   // staged and disk may now disagree
     if (r == T3_COMMIT_UNAPPLIED) {
         t3_alog_cancel(sbi);
         t3_vol_go_readonly(sbi, "a committed transaction could not be applied");
@@ -358,6 +369,15 @@ static void pack_inode_into(uint8_t *p, const struct t3_inode *node) {
 // checksum by design, the bitmap is the allocation authority.
 int t3_txn_stage_inode(struct t3_state *sbi, uint64_t ino, const struct t3_inode *node) {
     sbi->ino_gen++;   // see t3_state.ino_gen
+    t3_icache_forget(sbi, ino);
+    // Only a directory can be cached again before this ends (a freed
+    // inode's type is unknown here, so it counts too). Recording every
+    // file a deferred transaction stages would overflow the list and
+    // empty the cache at each deferred commit.
+    if (!node || node->type == T3_TYPE_DIR) {
+        if (sbi->txn_nino < T3_TXN_INO) sbi->txn_ino[sbi->txn_nino] = ino;
+        if (sbi->txn_nino <= T3_TXN_INO) sbi->txn_nino++;   // one past: "too many, drop all"
+    }
     uint32_t lba, off;
     if (!t3_inode_pos(sbi, ino, &lba, &off)) return 0;
     uint32_t blk = lba / T3_SPB;

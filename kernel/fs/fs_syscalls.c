@@ -210,19 +210,31 @@ int sys_open(struct syscall_ctx *c) {
                 int ferr = 0;
                 const char *why = 0;
                 if (want_write) {
+                    int created = 0;
                     if (!exists) {
-                        ferr = parent_dir_err(name);
-                        if (ferr)
-                            why = ferr == -ENOTDIR ? "a path component is not a directory"
-                                : ferr == -ENOENT  ? "no such directory to create it in"
-                                                   : "the path is too long";
-                        else if (!fs_touch(name)) {
-                            ferr = -ENOSPC; why = "the record table is full";
+                        // CREATE FIRST, ASK WHY ONLY IF IT FAILED: every
+                        // backend refuses a missing or non-directory
+                        // parent, and working out which one is two more
+                        // path walks -- a cost every create paid when the
+                        // check came first.
+                        if (fs_touch(name)) {
+                            created = 1;
+                        } else {
+                            ferr = parent_dir_err(name);
+                            if (ferr)
+                                why = ferr == -ENOTDIR ? "a path component is not a directory"
+                                    : ferr == -ENOENT  ? "no such directory to create it in"
+                                                       : "the path is too long";
+                            else {
+                                ferr = -ENOSPC; why = "the record table is full";
+                            }
                         }
                     }
                     // 0 = overwrite, not append. Discarding this left an
-                    // fd over a file that still held its old contents.
-                    if (!ferr && want_trunc && !fs_write(name, "", 0)) {
+                    // fd over a file that still held its old contents. A
+                    // file just created is empty already: truncating it
+                    // again was one more path walk and one more commit.
+                    if (!ferr && want_trunc && !created && !fs_write(name, "", 0)) {
                         ferr = -EIO; why = "truncate refused";
                     }
                 }

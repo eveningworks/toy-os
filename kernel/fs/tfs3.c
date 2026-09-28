@@ -34,9 +34,12 @@
 // file scope; they are in struct t3_state now (see its last section).
 
 // FLUSHES BOTH CACHES, and the resolved-path one rides here rather than
-// getting its own entry point on purpose: the five call sites that
-// already invalidate names -- create, delete, link, rename, unmount --
-// are exactly the operations that can change which inode a path names.
+// getting its own entry point on purpose: the call sites that already
+// invalidate names -- delete, link, rename, unmount -- are exactly the
+// operations that can change which inode a path names. NOT CREATE: both
+// caches hold only names that resolved, and adding a name changes none
+// of them; its flush cost every create in a directory a walk from the
+// root.
 // A second function would have to be added to all five, and the one
 // that got missed would hand back a stale inode number, which is a read
 // of somebody else's file.
@@ -447,7 +450,36 @@ int t3_inode_pos(struct t3_state *sbi, uint64_t ino, uint32_t *out_lba, uint32_t
 }
 
 
+static int read_inode_uncached(struct t3_state *sbi, uint64_t ino, struct t3_inode *out);
+
+void t3_icache_drop(struct t3_state *sbi) {
+    for (int i = 0; i < T3_ICACHE; i++) sbi->icache[i].ino = 0;
+    sbi->icache_next = 0;
+}
+
+void t3_icache_forget(struct t3_state *sbi, uint64_t ino) {
+    for (int i = 0; i < T3_ICACHE; i++)
+        if (sbi->icache[i].ino == ino) sbi->icache[i].ino = 0;
+}
+
 int t3_read_inode(struct t3_state *sbi, uint64_t ino, struct t3_inode *out) {
+    for (int i = 0; ino && i < T3_ICACHE; i++) {
+        if (sbi->icache[i].ino == ino) {
+            *out = sbi->icache[i].node;
+            return 1;
+        }
+    }
+    int ok = read_inode_uncached(sbi, ino, out);
+    if (ok && ino && out->type == T3_TYPE_DIR) {
+        int s = sbi->icache_next;
+        sbi->icache_next = (sbi->icache_next + 1) % T3_ICACHE;
+        sbi->icache[s].ino = ino;
+        sbi->icache[s].node = *out;
+    }
+    return ok;
+}
+
+static int read_inode_uncached(struct t3_state *sbi, uint64_t ino, struct t3_inode *out) {
     uint32_t lba, off;
     if (!t3_inode_pos(sbi, ino, &lba, &off)) return 0;
     uint8_t sec[T3_SECTOR];
@@ -1113,6 +1145,7 @@ static void unmount_state(struct t3_state *sbi) {
     if (sbi->ibm) { kfree(sbi->ibm); sbi->ibm = 0; }
     if (sbi->rotor) { kfree(sbi->rotor); sbi->rotor = 0; }
     t3_ncache_flush(sbi);
+    t3_icache_drop(sbi);
     t3_pcache_drop(sbi);
     t3_txn_reset(sbi);
 }
@@ -1157,6 +1190,7 @@ static int tfs3_init(void *st, const struct block_device *dev, uint64_t size_byt
     // volume read-only rather than being mounted over.
     if (!t3_replay_journal(sbi))
         t3_vol_go_readonly(sbi, "a committed journal transaction could not be replayed");
+    t3_icache_drop(sbi);   // replay rewrote inode tables behind any cache
 
     sbi->gd = kmalloc(sizeof(struct t3_gd) * sbi->sb.gc);
     sbi->bbm = kmalloc((size_t)sbi->sb.gc * T3_BLOCK);

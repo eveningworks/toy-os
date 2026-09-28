@@ -29,6 +29,9 @@ which keeps the rules that bite callers elsewhere.
   (`mount_io_drain()`), and an allocating write must never drop it.
   **Every block allocator must flush the TRIM queue before handing out
   a block**: a delete's queued discards cross its gaps on that promise.
+  **A tfs3 inode changes only through `t3_txn_stage_inode()`** -- the
+  directory inode cache is coherent by that rule alone; anything that
+  writes an inode table block directly must `t3_icache_drop()`.
   Inside tfs3, an op locks every inode it touches BEFORE changing
   anything (`t3_lock()`; a 0 means return now, FS_OP re-runs it), never
   unlocks by hand, and never waits holding a lock. It does NOT make an

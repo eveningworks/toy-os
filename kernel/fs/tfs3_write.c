@@ -719,20 +719,38 @@ static int split_parent(struct t3_state *sbi, const char *norm, uint64_t *out_pa
 // at it) + parent inode block for mkdir's link-count bump. <= 3
 // slots; directory growth runs as its own transaction inside
 // dirent_insert() (see its comment).
-static int create_entry_inner(struct t3_state *sbi, const char *path, uint8_t type, uint64_t *out_ino);
+static int create_entry_inner(struct t3_state *sbi, const char *path, uint8_t type,
+                              uint64_t *out_ino, uint64_t *out_existing);
 
-static int create_entry(struct t3_state *sbi, const char *path, uint8_t type, uint64_t *out_ino) {
+// Create `path`, or 0. `out_existing`, when given, gets the inode of a
+// name that was ALREADY there (and stays 0 otherwise), so a caller that
+// accepts an existing file -- touch -- need not look the path up first:
+// that lookup is a directory scan for a name that is usually absent,
+// and create_entry_inner() has to do it anyway.
+static int create_entry_ex(struct t3_state *sbi, const char *path, uint8_t type,
+                           uint64_t *out_ino, uint64_t *out_existing) {
+    if (out_existing) *out_existing = 0;
     t3_alog_begin(sbi);
-    int ok = create_entry_inner(sbi, path, type, out_ino);
-    if (ok) t3_alog_commit(sbi); else t3_alog_rollback(sbi);
+    int ok = create_entry_inner(sbi, path, type, out_ino, out_existing);
+    if (ok) t3_alog_commit(sbi);
+    else if (out_existing && *out_existing) t3_alog_cancel(sbi);   // nothing was allocated
+    else t3_alog_rollback(sbi);
     return ok;
 }
 
-static int create_entry_inner(struct t3_state *sbi, const char *path, uint8_t type, uint64_t *out_ino) {
+static int create_entry(struct t3_state *sbi, const char *path, uint8_t type, uint64_t *out_ino) {
+    return create_entry_ex(sbi, path, type, out_ino, 0);
+}
+
+static int create_entry_inner(struct t3_state *sbi, const char *path, uint8_t type,
+                              uint64_t *out_ino, uint64_t *out_existing) {
     char *const norm = sbi->pb.create_entry_inner_norm; // per-function, see t3_normalize()
     if (!sbi->mounted || !t3_normalize(sbi, path, norm)) return 0;
     uint64_t existing;
-    if (t3_resolve(sbi, norm, &existing)) return 0; // caller decides what exists means
+    if (t3_resolve(sbi, norm, &existing)) {    // caller decides what exists means
+        if (out_existing) *out_existing = existing;
+        return 0;
+    }
     uint64_t parent_ino;
     const char *name; uint32_t name_len;
     if (!split_parent(sbi, norm, &parent_ino, &name, &name_len)) return 0;
@@ -785,7 +803,10 @@ static int create_entry_inner(struct t3_state *sbi, const char *path, uint8_t ty
         if (!t3_txn_stage_inode(sbi, parent_ino, &parent)) { t3_txn_reset(sbi); t3_free_inode_bit(sbi, ino); t3_flush_alloc_state(sbi); return 0; }
     }
     if (!t3_txn_commit(sbi)) { t3_free_inode_bit(sbi, ino); t3_flush_alloc_state(sbi); return 0; }
-    t3_ncache_flush(sbi);
+    // NO NAME-CACHE FLUSH: both caches hold only names that resolved, and
+    // adding a name cannot change what any of them names. Flushing here
+    // threw away the root and parent the next create in the same
+    // directory walks through again (see t3_ncache_flush()).
     if (out_ino) *out_ino = ino;
     return 1;
 }
@@ -796,15 +817,14 @@ int tfs3_touch(void *st, const char *path) {
     if (!sbi->mounted || !t3_normalize(sbi, path, norm)) return 0;
     uint64_t ino;
     struct t3_inode node;
-    if (t3_resolve(sbi, norm, &ino)) {
-        // Existing file: a no-op that succeeds; existing dir: refuse.
-        // Matches tfs_touch()'s behavior exactly (incl. not bumping
-        // `modified` -- see fs.h's fs_stat_info comment).
-        if (!t3_lock(sbi, ino, 0)) return 0;
-        if (!t3_read_inode(sbi, ino, &node)) return 0;
-        return node.type == T3_TYPE_FILE;
-    }
-    return create_entry(sbi, path, T3_TYPE_FILE, 0);
+    if (create_entry_ex(sbi, path, T3_TYPE_FILE, 0, &ino)) return 1;
+    if (!ino) return 0;   // not there, and could not be made
+    // Existing file: a no-op that succeeds; existing dir: refuse.
+    // Matches tfs_touch()'s behavior exactly (incl. not bumping
+    // `modified` -- see fs.h's fs_stat_info comment).
+    if (!t3_lock(sbi, ino, 0)) return 0;
+    if (!t3_read_inode(sbi, ino, &node)) return 0;
+    return node.type == T3_TYPE_FILE;
 }
 
 int tfs3_mkdir(void *st, const char *path) {

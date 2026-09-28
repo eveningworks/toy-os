@@ -2968,6 +2968,46 @@ resolution, or per-inode state worth caching. It is not worth building
 for what it buys today, and the honest version of that is a number
 rather than a preference.
 
+## A directory inode cache inside tfs3 -- not the VFS inode cache declined above
+
+The entry above declined a VFS inode cache for "one sector read per
+operation". A small-file CREATE turned out to cost far more than that,
+measured on the Lenovo on 2026-09-28: 29.6 device reads per empty-file
+create, 4.08 ms, all of it disk waits under the volume lock. Traced
+under QEMU, one `open(O_CREAT|O_TRUNC)` walked its path from the root
+FIVE times (`fs_exists`, `parent_dir_err()`'s `fs_is_dir`, `fs_touch`,
+`create_entry`'s own resolve, and a truncate of the file it had just
+created empty), and the path cache could not help: a create FLUSHED it,
+and a name that does not exist yet is never cached anyway, so every walk
+re-read the root and parent inodes.
+
+**What was built instead, and why it is not the declined design:**
+
+- **Fewer walks** (`sys_open()`, `tfs3_touch()`): the parent is examined
+  only after a create fails, a just-created file is not truncated, and
+  touch no longer looks up a name `create_entry` looks up anyway.
+- **A create no longer flushes the path caches.** Both hold only names
+  that resolved; adding a name changes none of them.
+- **A cache of DIRECTORY inodes inside tfs3** (`t3_read_inode()`), eight
+  entries per mount. No `fs_ops` change, no inode identity at the VFS,
+  no per-backend payload: none of the cost the entry above weighed. It
+  is coherent by one rule -- an inode changes only through
+  `t3_txn_stage_inode()` -- with one subtlety: only a DEFERRED
+  transaction's images are visible to reads, so during an ordinary one
+  a read of a just-staged directory sees the OLD disk copy, and the
+  transaction forgets every directory it staged again when it ends. The
+  first version cleared the whole cache on every reset instead, which
+  `txn_commit_raw()` calls on every SUCCESSFUL commit too -- so it was
+  coherent only because it was empty; a positive control that stayed
+  green is what showed it.
+
+**What it bought:** per empty-file create 10.5 reads and 2.40 ms (from
+29.6 and 4.08), per 4 KiB create 18.1 reads and 4.68 ms (from 35.0 and
+6.09). **What it did NOT buy:** a `stat` beside a stream of creates
+waits no less (`docs/bugs.md`, the `stat` entry) -- the wait there is set
+by how the volume lock is shared, not by one create's cost. The two
+flushes a create's commit still pays are now half of it.
+
 ## Why `batched` defers the allocation bitmap too, and why that is safer
 
 `do_write_inner()` flushed the dirty bitmap and group descriptors on
