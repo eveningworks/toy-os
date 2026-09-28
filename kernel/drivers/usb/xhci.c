@@ -71,6 +71,12 @@ struct xhci_port_state {
     // make the built-in keyboard unusable (docs/bugs.md).
     uint8_t giveups;
     uint8_t oc_reported;   // over-current named once, not per poll
+    // Warm resets since the last enumeration that WORKED -- cleared only
+    // there, as `giveups` is, for the reason above: the reset itself
+    // produces a connect, so clearing on connect would loop forever on a
+    // link that fails again straight after.
+    uint8_t warm_tries;
+    uint32_t gone_sc;      // PORTSC when the device last went away
 };
 
 // ONE PROTOCOL'S PORT RANGE, from a Supported Protocol capability.
@@ -121,6 +127,9 @@ struct xhci_hc {
     // event drain would deadlock on the single-consumer guard.
     volatile uint32_t attach_pending;
     volatile uint32_t detach_pending;
+    // A USB3 port whose link failed (xhci_portsc_needs_warm()): warm-reset
+    // it from the deferred work, which can wait for the reset to finish.
+    volatile uint32_t warm_pending;
     // kernel.usb_reset, one bit per port. DEFERRED for the same reason
     // hot-plug is, plus a sharper one: the tunable is written from a
     // SYSCALL, which runs with interrupts off, and reset_port()'s
@@ -1739,9 +1748,11 @@ static void note_port_change(void) {
         // bit survives until the poll gets to it.
         if (now && !was) g_hc.attach_pending |= (1u << p);
         if (!now && was) {
+            g_hc.ports[p].gone_sc = sc;
             g_hc.detach_pending |= (1u << p);
             g_hc.attach_pending &= ~(1u << p);   // it left before we got there
         }
+        if (!now && xhci_portsc_needs_warm(sc)) g_hc.warm_pending |= (1u << p);
     }
 }
 
@@ -2217,15 +2228,18 @@ static void requeue_if_connected(uint32_t p) {
 //
 // Refused on anything but a USB2 port with a declared companion, so a
 // controller whose ranges this driver could not read does nothing new.
+// Only ever a USB3 port: WPR is meaningless on a USB2 one, and asserting
+// a reserved bit is not a diagnostic.
+static int is_usb3_port(uint32_t p) {
+    return g_hc.usb3.count && p + 1 >= g_hc.usb3.first &&
+           p + 1 < (uint32_t)g_hc.usb3.first + g_hc.usb3.count;
+}
+
 static void warm_reset_companion(uint32_t p) {
     int c = companion_port(p);
     if (c < 0) return;
-    // Only ever the USB3 half: WPR is meaningless on a USB2 port, and
-    // asserting a reserved bit is not a diagnostic.
-    if (!g_hc.usb3.count) return;
     uint32_t cp = (uint32_t)c;
-    if (cp + 1 < g_hc.usb3.first ||
-        cp + 1 >= (uint32_t)g_hc.usb3.first + g_hc.usb3.count) return;
+    if (!is_usb3_port(cp)) return;
 
     klog_printf("usb: port %u gave up -- warm-resetting its SuperSpeed "
                 "companion, port %u\n", p + 1, cp + 1);
@@ -2655,6 +2669,7 @@ static void attach_root_port(uint32_t p) {
                                attempt) >= 0) {
             g_hc.ports[p].power_cycled = 0;   // this episode ended well
             g_hc.ports[p].giveups     = 0;    // ...so the count starts over
+            g_hc.ports[p].warm_tries  = 0;
             return;
         }
         // THE TWO OUTCOMES MUST NOT SHARE A PREFIX. "enumeration
@@ -2868,6 +2883,67 @@ static void wedged_heartbeat(void) {
                 pcists);
 }
 
+static const char *pls_name(uint32_t sc) {
+    static const char *const n[16] = {
+        "U0", "U1", "U2", "U3", "Disabled", "RxDetect", "SS.Inactive", "Polling",
+        "Recovery", "Hot Reset", "Compliance", "Test", "?", "?", "?", "Resume",
+    };
+    return n[XHCI_PORTSC_PLS(sc)];
+}
+
+// A USB3 LINK THAT FAILED, with the device still plugged in: SS.Inactive
+// or Compliance (xhci_portsc_needs_warm()). The port stays dark until a
+// warm reset retrains it -- a replug does not -- and this is Linux's
+// response too (hub_port_warm_reset_required()). If the device answers,
+// it re-enters through attach_pending like any connect. Bounded by
+// XHCI_MAX_WARM tries between working enumerations.
+#define XHCI_MAX_WARM 3
+static void link_recover(uint32_t p) {
+    uint32_t sc = mr32(g_hc.op, XHCI_PORTSC(p));
+    if (!is_usb3_port(p) || !xhci_portsc_needs_warm(sc)) return;
+    if (g_hc.ports[p].warm_tries >= XHCI_MAX_WARM) {
+        if (g_hc.ports[p].warm_tries == XHCI_MAX_WARM) {   // once; saturates
+            g_hc.ports[p].warm_tries++;
+            klog_printf(KLOG_ERR "usb: port %u: link still %s after %d warm "
+                        "resets -- giving up until a device enumerates there\n",
+                        p + 1, pls_name(sc), XHCI_MAX_WARM);
+        }
+        return;
+    }
+    g_hc.ports[p].warm_tries++;
+    klog_printf("usb: port %u: link %s -- warm reset %u of %d\n", p + 1,
+                pls_name(sc), g_hc.ports[p].warm_tries, XHCI_MAX_WARM);
+    portsc_write(p, XHCI_PORTSC_WPR, XHCI_PORTSC_CSC);
+    // NOT WRC ALONE: the port-change interrupt acknowledges every change
+    // bit, WRC included, and can do so before this loop reads it (QEMU
+    // completes the reset inside the write). PR is not a change bit: it
+    // clears when the reset ends, and the link has then left 6/10.
+    struct xhci_wait w; xhci_wait_start(&w, 500);
+    for (;;) {
+        uint32_t now = mr32(g_hc.op, XHCI_PORTSC(p));
+        if ((now & XHCI_PORTSC_WRC) ||
+            (!(now & XHCI_PORTSC_PR) && !xhci_portsc_needs_warm(now)))
+            break;
+        if (xhci_wait_over(&w)) {
+            klog_printf("usb: port %u: warm reset did not complete, portsc 0x%x\n",
+                        p + 1, mr32(g_hc.op, XHCI_PORTSC(p)));
+            return;
+        }
+    }
+    portsc_write(p, 0, XHCI_PORTSC_WRC | XHCI_PORTSC_CSC | XHCI_PORTSC_PEC |
+                       XHCI_PORTSC_PRC | XHCI_PORTSC_PLC);
+    xhci_delay_ms(20);
+    sc = mr32(g_hc.op, XHCI_PORTSC(p));
+    klog_printf("usb: port %u: after warm reset portsc 0x%x, link %s%s\n", p + 1,
+                sc, pls_name(sc), (sc & XHCI_PORTSC_CCS) ? " -- device back" : "");
+    if (sc & XHCI_PORTSC_CCS) {
+        // The change bits were cleared above, so no event will announce
+        // it: queue it the way note_port_change() would have.
+        g_hc.ports[p].connected = 1;
+        __atomic_fetch_or(&g_hc.attach_pending, 1u << p, __ATOMIC_SEQ_CST);
+    }
+}
+
 void xhci_deferred_work(void) {
     // BEFORE the running check: a controller that has been given up on
     // is usually no longer `running`, and that is precisely the boot
@@ -2891,8 +2967,17 @@ void xhci_deferred_work(void) {
             // it -- the flag is "already tried for THIS device", not
             // "tried once ever".
             g_hc.ports[p].power_cycled = 0;
-            klog_printf("usb: port %u: device removed\n", p + 1);
+            // The link state says WHY: RxDetect is an unplug, SS.Inactive
+            // a failed link with the device still there.
+            uint32_t gone = g_hc.ports[p].gone_sc;
+            klog_printf("usb: port %u: device removed (portsc 0x%x, link %s)\n",
+                        p + 1, gone, pls_name(gone));
             usb_detach_root_port((uint8_t)(p + 1));
+        }
+        if (g_hc.warm_pending & (1u << p)) {
+            // Atomic: the interrupt sets other ports' bits in between.
+            __atomic_fetch_and(&g_hc.warm_pending, ~(1u << p), __ATOMIC_SEQ_CST);
+            link_recover(p);
         }
         // The forced diagnostic reset (kernel.usb_reset). Before the
         // attach below, so a port that is pending both is reset once

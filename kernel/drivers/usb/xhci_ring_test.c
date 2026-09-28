@@ -16,6 +16,7 @@
 #include "xhci_ring.h"
 #include "ktest.h"
 #include "string.h"
+#include "xhci_regs.h"   // xhci_portsc_needs_warm() -- pure, like the rings
 
 // Small enough that a test can wrap it in a few pushes, which is the
 // point: the real ring is 256 and wrapping it in a KTEST would be slow
@@ -208,4 +209,16 @@ KTEST("xhci-ring", "an event naming a TRB frees everything up to and including i
     xhci_ring_consumed(&r, FAKE_PHYS - sizeof(struct xhci_trb));
     xhci_ring_consumed(&r, FAKE_PHYS + 64 * sizeof(struct xhci_trb));
     KTEST_ASSERT_EQ(r.dequeue, 0u);
+}
+
+// The link-failure rule, on the Lenovo's own readings (2026-09-28): port
+// 12 went dark with an RTL8156B still plugged in, reading 0x2c0 (SS.Inactive),
+// while every empty port read 0x2a0 (RxDetect). Only the first wants a warm
+// reset -- an unplugged port must not be reset on every event.
+KTEST("xhci", "a failed SuperSpeed link, and only that, wants a warm reset") {
+    KTEST_ASSERT(xhci_portsc_needs_warm(0x000002c0));    // SS.Inactive, the Lenovo
+    KTEST_ASSERT(xhci_portsc_needs_warm(0x00000340));    // Compliance Mode
+    KTEST_ASSERT(!xhci_portsc_needs_warm(0x000002a0));   // RxDetect: nothing there
+    KTEST_ASSERT(!xhci_portsc_needs_warm(0x00001203));   // U0, a working SS device
+    KTEST_ASSERT(!xhci_portsc_needs_warm(0x00000a03));   // a USB2 low-speed device
 }

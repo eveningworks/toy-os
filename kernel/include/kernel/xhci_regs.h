@@ -110,6 +110,19 @@
 #define XHCI_PORTSC_PLC     (1u << 22)  // Port Link State Change  -- RW1C
 #define XHCI_PORTSC_CEC     (1u << 23)  // Port Config Error Chg   -- RW1C
 
+// Port Link State values (xHCI 1.2, 5.4.8).
+#define XHCI_PLS_SS_INACTIVE 6
+#define XHCI_PLS_COMPLIANCE  10
+
+// A USB3 port whose LINK has failed: SS.Inactive or Compliance Mode. It
+// reads as disconnected (CCS=0) with the device still plugged in, and it
+// does NOT recover by itself or on a replug -- only a WARM reset retrains
+// it. Linux's hub_port_warm_reset_required() is the same test.
+static inline int xhci_portsc_needs_warm(uint32_t sc) {
+    uint32_t pls = XHCI_PORTSC_PLS(sc);
+    return pls == XHCI_PLS_SS_INACTIVE || pls == XHCI_PLS_COMPLIANCE;
+}
+
 // Every RW1C bit in PORTSC, as one mask. Writing this back verbatim
 // would clear all of them, which is why a read-modify-write must mask
 // it OFF and only then set the bit it wants.
