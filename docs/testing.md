@@ -431,6 +431,34 @@ and spelled `gui warp X Y`), not in the emulator. `DebugConsole.
 warp_cursor()` uses it on both machines now; the old aim-measure-correct
 loop through QMP remains only for a guest whose WM predates it.
 
+### How long does one operation hold a volume, on the hardware?
+
+**A probe in the FOREGROUND, the load in the BACKGROUND, in ONE
+`remote.py exec` session** -- a hang-up ends a background job, so the
+two must share a session:
+
+```
+python3 tools/remote.py --host <ip> exec "mkdir /k" \
+    "mkfiles /k 4000 0 &" \
+    "/tests/fslat_bench --path /etc --secs 6 --gap-ms 1 --out /var/tmp/lat.txt" \
+    "fg" "cat /var/tmp/lat.txt"
+```
+
+`fslat: calls N avg-us A p99-us P max-us M` is the stat() wait beside
+the load; run the same line with no load for the quiet figure, and
+compare arms, never absolutes. `stalls reset` before and `stalls` after
+gives each syscall's on-CPU time in the same run (sleeps subtracted).
+For device work per operation, read `'block_stat.c'::g_stat` over the
+kernel debugger before and after (Lenovo) -- that is how a create was
+found to be 29.6 reads (`docs/bugs.md`). Three traps, all hit once:
+- **`storage.sync` is a persistent setting.** A script that changes it
+  must restore it, and a run that loses the network cannot -- check
+  `config get storage.sync` on both machines afterwards.
+- **Give every run its own directory** (`/k<run><arm>`): a scratch
+  directory left over makes the next "create" run a rewrite.
+- **`rm -r` cannot empty a directory of more than 256 entries in one
+  pass** (`docs/bugs.md`): loop it until `stat` says the path is gone.
+
 
 ## Interactive runs, and the two extra ISOs
 

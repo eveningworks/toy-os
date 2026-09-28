@@ -115,6 +115,16 @@ a protocol client, then a real GDB).
 
 ## Stage 1: live inspection without halting -- DESIGNED
 
+**Status (2026-09-28): the maintainer chose a shape, and it is NOT
+BUILT.** Rather than the CLI and host-side DWARF script described
+below, GDB itself as the reader -- `gdb vmlinux /proc/kcore`'s shape --
+reached through the same keyed session transport as stage 3, with
+writes behind a separate boot word. A Claude session attempted it that
+day and did not complete it; nothing of it is in the tree. For a live
+read today, the halting stub (stage 2/3) stops the machine briefly --
+which is how `docs/bugs.md`'s AHCI and block counters were read on the
+Lenovo.
+
 The drgn / `kd -kl` shape: read (and, deliberately, write) kernel memory
 and resolve symbols on a RUNNING machine, reached over the network that
 already works -- `remote.py` to `telnetd`. Nothing stops, so nothing a

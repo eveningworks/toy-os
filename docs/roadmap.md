@@ -70,6 +70,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~`stat()` in one filesystem call, not four lock acquisitions~~ DONE 2026-09-28
 - [x] ~~A change counter per DIRECTORY, so a watcher is not woken by every write on the disk~~ DONE 2026-09-28 -- `SYS_FS_GENERATION_OF`
 - [ ] Journal commits off the volume lock -- fslock stage 5; under `strict` a commit held `/` 146-181 ms, under `batched` 8-75 ms
+- [ ] Let a create join the deferred transaction under `batched`, as a write does -- its commit's two flushes are half a create now
 - [ ] **Interruptible syscalls** -- the trap gate; safe to flip, and measured twice to buy nothing yet
 - [ ] Bound how long a frame can block on I/O
 
@@ -885,6 +886,7 @@ run on, not by order.
 - [x] ~~**TCP**~~ DONE 2026-08-29 -- client side: active open, in-order stream, retransmission, orderly close
 - [x] ~~Out-of-order reassembly -- hold a segment past `rcv_nxt`~~ DONE 2026-09-10 -- held in `rcv` at its own offset
 - [ ] A transmit the driver refuses is a DROPPED frame (`rtl_usb` says -ENOSPC with every buffer busy) -- queue it in the stack
+- [ ] A watchdog for a USB NIC whose link stays up while traffic stops -- Linux's `dev_watchdog`; wait for a second sighting
 - [x] ~~**A passive open: listen and accept**, so something can connect TO toy-os~~ DONE 2026-08-29 -- `/bin/httpd` serves the filesystem
 - [x] ~~**A connection per child process**~~ DONE 2026-08-29 -- `/bin/inetd`; the spawn NAMES fd 0/1, so `inetd -p 7 /bin/cat` echoes
 - [x] ~~An RTL8111/8168 driver, for the Ethernet built into most laptops~~ DONE 2026-09-05 -- `r8169.c`; DHCP and 5.5 MB of TFTP
