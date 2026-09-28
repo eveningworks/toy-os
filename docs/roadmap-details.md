@@ -643,6 +643,32 @@ fuzz for a fixed number of seconds, keep any failing seed as a permanent
 regression test in the corpus. That way the suite grows with what's
 actually been found rather than what someone predicted.
 
+### UBSAN in the kernel: `-fsanitize=undefined` with our own handlers, aimed first at the parsers of untrusted input
+
+GCC's UBSAN instruments signed overflow, shifts out of range, division
+by zero, out-of-bounds indexing of a known-size array, misaligned and
+NULL pointer use, and unreachable code; each check calls a
+`__ubsan_handle_*` function the runtime provides. Freestanding, there
+is no runtime, so the kernel supplies the handlers -- Linux's
+`lib/ubsan.c` is about fifteen of them, each printing the source
+location and the operand values and returning. It needs no shadow
+memory and no allocator, which is why it is the cheap one.
+
+The first targets are the code that reads bytes someone else wrote:
+`ttf.c`, the MP3 and SoundFont decoders, `hid_parse.c`, the AML walk,
+TLS. A build flag rather than always-on: the instrumented kernel is
+bigger and slower, and the checks belong in the test runs.
+
+### KASAN-style shadow memory for the kernel heap -- after UBSAN, which is a fraction of the cost
+
+KASAN maps one shadow byte per eight bytes of kernel memory and checks
+it on every load and store (`-fsanitize=kernel-address`), which finds
+use-after-free and heap overflow at the access rather than at the later
+crash. It costs an eighth of memory for the shadow, a reserved virtual
+range, and allocator hooks for poisoning redzones and freed blocks.
+Worth it once UBSAN is in and a heap corruption is being chased;
+not before.
+
 ### TTY / virtual terminals
 
 The shell doesn't run *on* a terminal today -- it **is** the terminal. It
@@ -922,6 +948,26 @@ overflow deserves its own detection (a guard page) for the same reason:
 today it presents as an arbitrary fault somewhere unrelated, which is
 exactly the confusing shape `text_scrollback`-on-the-stack already
 produced once (see `docs/decisions.md`).
+
+### A lockup detector: a CPU that stops scheduling, and a task stuck in an uninterruptible wait
+
+Linux runs two separate checks. `softlockup` has a per-CPU timer notice
+that the CPU's watchdog thread has not run for ~20 s -- something is
+spinning in the kernel with preemption off; the NMI `hardlockup` variant
+catches the same with interrupts off, off a perf counter. `hung_task`
+walks the task list every 120 s for a task in `TASK_UNINTERRUPTIBLE`
+whose switch count has not moved, and prints its stack.
+
+Both failure shapes are written into this repo's rules already: a
+kmutex or mount lock taken with the preemption guard raised spins
+forever behind a sleeping holder, and a disk wait that never completes
+parks its caller for good. Today either is found by a person noticing
+the machine stopped. The cheap half is `hung_task`'s: a periodic scan
+of the process table from the timer path, logging a pid, its wait
+channel and a backtrace once per stuck task. The softlockup half needs a
+timer interrupt that still arrives while the CPU spins, which the LAPIC
+timer does unless interrupts are off; the NMI half is later and wants
+the performance-counter setup nothing here has yet.
 
 ### Shell pipes & job control
 
@@ -1522,6 +1568,16 @@ applet: display settings (font size + color theme), since both already
 exist as the `fontsize`/`color` shell commands, so the applet is mostly a
 GUI wrapper around logic that's already implemented and tested.
 
+### Undo/redo for editable text, in `uui_edit` where every edit already passes -- Notepad, text fields and `/bin/edit` all lack it
+
+`uui_edit` owns the cursor, selection and keymap for Notepad,
+`uui_textbox` and `/bin/edit`, and delegates each write to the buffer's
+owner -- so every insertion and deletion already passes through one
+place. An undo log there serves all three. Qt keeps it on the document
+(`QTextDocument` with `QUndoStack`); GTK's `GtkTextBuffer` does the
+same. The two decisions are the grouping (consecutive typing is one
+step, as in every real editor) and the bound on the log's memory.
+
 ### GUI clipboard + drag-and-drop
 
 The clipboard half is BUILT, and it landed differently from the sketch
@@ -1956,6 +2012,59 @@ also a host timer firing at its rate whether or not the guest listens,
 so `tools/idle_cpu.py` is the before/after. Channel 2 (the PC speaker,
 `speaker.c`) is separate and stays.
 
+### Deeper CPU idle than `hlt`: MWAIT C-states from a per-model table, Linux's `intel_idle` -- judged by RAPL's package energy
+
+The idle loop halts, which is C1. On Broadwell the package reaches C6
+and deeper only when every core asks for it with `MWAIT` and a C-state
+hint. Linux's `intel_idle` carries a per-model table of hints, exit
+latencies and target residencies (`bdw_cstates`) and picks the deepest
+state whose residency fits the time to the next timer -- which the
+tickless idle already knows. No AML is needed, unlike ACPI `_CST`.
+
+TCG does not model `MWAIT`, so this is judged on the laptops. The
+instrument is RAPL's package energy counter (`MSR_PKG_ENERGY_STATUS`)
+sampled across an idle minute, before and after; the package C-state
+residency MSRs say where the time went.
+
+### CPU frequency scaling without HWP: ratios from `MSR_PLATFORM_INFO` into `IA32_PERF_CTL`, `intel_pstate`'s legacy mode
+
+HWP -- the CPU choosing its own frequency -- arrived with Skylake, so
+neither Broadwell laptop has it. `intel_pstate` still drives these parts
+without ACPI: minimum and maximum non-turbo ratios from
+`MSR_PLATFORM_INFO`, turbo from `MSR_TURBO_RATIO_LIMIT`, and a target
+ratio written to `IA32_PERF_CTL` from a load estimate each sample. The
+ACPI `_PSS` route (`acpi-cpufreq`) is often in SSDTs the firmware loads
+dynamically from `_PDC`, which needs AML execution this kernel does not
+have. Same instrument as the idle item: RAPL energy under a fixed
+workload.
+
+### Laptop input
+
+What the two test laptops' own input devices do beyond a plain keyboard
+and a pointer. Both items start by establishing what the hardware
+actually sends; neither has been.
+
+### Touchpad scrolling and tap-to-click -- the pads act as a plain PS/2 mouse; their native protocol is not established
+
+A laptop touchpad on i8042 answers the standard PS/2 mouse protocol by
+default and switches to its native one only when asked. Linux's
+`psmouse` probes in turn for Synaptics, Elantech, ALPS and FocalTech
+(the last written for ASUS laptops); a Windows Precision Touchpad is
+instead an I2C-HID device, which Linux drives with `i2c-hid` +
+`hid-multitouch`. Step one is a probe log on each laptop. If either is
+I2C-HID, `hid_parse.h` already parses the report descriptor, and the
+new work is the I2C controller. Scrolling feeds the wheel path the
+mouse already has.
+
+### Laptop Fn keys for brightness and volume -- both settings and their tray flyouts exist; no key reaches them
+
+How the key arrives is per machine. Some send an extended i8042
+scancode (Linux maps these to `KEY_BRIGHTNESSUP` and friends in
+`atkbd`); many send nothing on the keyboard at all and raise an ACPI
+Notify instead -- the ACPI video device's 0x86/0x87 for brightness, or
+ASUS's ATK/WMI device for everything -- which needs AML method
+execution. Log a keypress on each laptop before designing anything.
+
 ### SMP
 **`docs/smp-design.md` is the full design**, staged so each step ships on
 its own -- ACPI tables, then the Local APIC, then application processors
@@ -2202,6 +2311,24 @@ structure, including its working IRQ-driven Bus-Master DMA path, is a
 reasonable template, and the existing `*_test.c` diagnostic pattern is a
 natural fit for early loopback/ARP verification -- but this is its own
 multi-session project with its own milestones, not a single build bump.
+
+### IPv6, or a written decision against it -- link-local, neighbour discovery and SLAAC first
+
+The minimum is link-local addressing, neighbour discovery (IPv6's ARP,
+over ICMPv6), SLAAC from router advertisements, and a second address
+family through UDP, TCP and the resolver's AAAA records. Next to the
+IPv4 stack that exists this is moderate, but it touches every socket
+path. Whichever way it goes, the reason should be recorded in
+`docs/decisions/` so it is not re-argued.
+
+### Wi-Fi, or a written decision against it -- both laptops have an Intel card; the USB NICs stand in for it
+
+The ASUS has an Intel Wireless 7265, the Lenovo a 3160, both unclaimed.
+Linux's `iwlwifi` loads a firmware blob and still needs an 802.11 stack
+(`mac80211`) for scanning, association and management frames, plus WPA2
+in `wpa_supplicant`. Each of those is a project. The USB Ethernet
+adapters cover the need today, so the likely entry is a decision against
+it, with the reason.
 
 ### Sound
 
@@ -2791,6 +2918,22 @@ compile, and the failure looks like a broken compiler rather than a
 broken SDK.
 
 ---
+
+### A debugger for ring-3 programs -- `ptrace`'s job, or the kdebug stub's protocol aimed at one pid, gdbserver's shape
+
+`docs/kdebug-design.md` keeps user-space debugging out of the kernel
+stub and says it belongs with signals and `strace`. On Linux it is
+`ptrace(2)` -- attach, stop, read and write memory and registers,
+single-step -- and `gdbserver` speaks GDB's remote protocol on top of
+it, so the debugger itself can run on another machine. NT does the same
+job with debug objects and `DbgUi`.
+
+The kernel stub already speaks the remote protocol and presents
+processes as threads. The shape that reuses most: a ring-3 server that
+attaches to one pid through a small `ptrace`-shaped syscall set and
+speaks the same protocol over TCP or a serial port, so host GDB with the
+program's DWARF debugs it. This matters once `/bin/cc` builds programs
+on the machine.
 
 ## Legend: the old milestone numbers
 

@@ -711,6 +711,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Word wrap as a toggle in Notepad~~ DONE 2026-09-07 -- View > Word wrap, and a horizontal scrollbar when it is off
 - [x] ~~A Markdown preview in Notepad~~ DONE 2026-09-07 -- `uui_markdown`, over the same parser `/bin/doc` uses
 - [ ] Find/replace in Notepad
+- [ ] Undo/redo for editable text, in `uui_edit` where every edit already passes -- Notepad, text fields and `/bin/edit` all lack it
 - [x] ~~An image viewer~~ DONE 2026-08-23 -- Image Viewer browses a directory rather than opening a file dialog
 - [x] ~~A Help browser over `docs/`~~ DONE 2026-09-14 -- `/bin/wm/apps/help`, a sidebar of categories over `uui_markdown`
 - [x] ~~A Log Viewer~~ DONE 2026-09-15 -- both rings merged on their shared stamp, a level filter and a search field
@@ -912,6 +913,8 @@ run on, not by order.
 - [ ] A TLS *server*, so `httpd` can speak https -- needs a private key on disk and a decision about where it lives
 - [ ] Certificate revocation: nothing reads a CRL or speaks OCSP, so a revoked certificate still verifies
 - [ ] `wget` following redirects, which most https URLs now answer with
+- [ ] IPv6, or a written decision against it -- link-local, neighbour discovery and SLAAC first
+- [ ] Wi-Fi, or a written decision against it -- both laptops have an Intel card; the USB NICs stand in for it
 - [x] ~~A second NIC driver, to prove the interface isn't shaped around the first~~ DONE 2026-08-29 -- both landed together
 
 ### Sound
@@ -958,7 +961,14 @@ run on, not by order.
 - [ ] A kvmclock clocksource -- under KVM without `+invtsc` every PM-timer read is a VM exit
 - [ ] Battery + AC adapter status
 - [ ] Thermal zone reporting
+- [ ] Deeper CPU idle than `hlt`: MWAIT C-states from a per-model table, Linux's `intel_idle` -- judged by RAPL's package energy
+- [ ] CPU frequency scaling without HWP: ratios from `MSR_PLATFORM_INFO` into `IA32_PERF_CTL`, `intel_pstate`'s legacy mode
 - [ ] S3 suspend/resume
+
+### Laptop input
+
+- [ ] Touchpad scrolling and tap-to-click -- the pads act as a plain PS/2 mouse; their native protocol is not established
+- [ ] Laptop Fn keys for brightness and volume -- both settings and their tray flyouts exist; no key reaches them
 
 ### UEFI boot
 
@@ -1092,6 +1102,8 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [ ] `fault_inject.h` extended to fail at a *random* point rather than the Nth, driven by the same seed
 - [ ] A corpus of past failures kept as regression tests
 - [ ] Run it in CI on a time budget, not to completion
+- [ ] UBSAN in the kernel: `-fsanitize=undefined` with our own handlers, aimed first at the parsers of untrusted input
+- [ ] KASAN-style shadow memory for the kernel heap -- after UBSAN, which is a fraction of the cost
 
 ### Observability
 
@@ -1127,6 +1139,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [x] ~~The network debugger on real hardware: an r8169 backend (the Lenovo)~~ DONE 2026-09-27 -- stage 3b
 - [ ] The network debugger on a one-NIC machine: the OS's traffic through the debugger's card (KDNIC) -- stage 3c
 - [ ] Live kernel memory inspection without halting, drgn's shape, over `remote.py` -- `docs/kdebug-design.md` stage 1
+- [ ] A lockup detector: a CPU that stops scheduling, and a task stuck in an uninterruptible wait -- Linux's `softlockup` and `hung_task`
 - [x] ~~The kernel debugger's processes as GDB threads, and `ps`/`dmesg`~~ DONE 2026-09-27 -- threads, and `tools/gdb/toyos.py`
 - [x] ~~Symbols for kernel modules and user programs in the debugger, and memory per thread~~ DONE 2026-09-27 -- `toy-symbols`
 - [x] ~~Send a file to the machine through the debugger~~ DONE 2026-09-28 -- `remote put`, written by `/bin/kdfiled`
@@ -1143,6 +1156,7 @@ section.
 - [ ] The same compiler running ON toy-os, emitting `ET_EXEC` at `0x8000000000` with `PT_INTERP=/lib/ld-toy.so`
 - [ ] `/bin/cc`, our own driver over it, plus `docs/commands/cc.md`
 - [ ] A corpus compiled on the machine whose output is compared against the host gcc's
+- [ ] A debugger for ring-3 programs -- `ptrace`'s job, or the kdebug stub's protocol aimed at one pid, gdbserver's shape
 
 ### In-OS documentation
 **Needs:** TTY / virtual terminals, for the front end.
