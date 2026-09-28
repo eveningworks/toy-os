@@ -1705,8 +1705,8 @@ def main():
     sx, sy, sw, sh = layout(dbg)["search"]
     click(sx + sw // 2, sy + sh // 2)
     mark = len(drain(dbg))
-    for ch in "cursor":
-        dbg.key(ord(ch), settle=False)
+    for letter in "cursor":
+        dbg.key(ord(letter), settle=False)
     dbg.settle()
     time.sleep(0.6)
     drain(dbg)
@@ -1726,6 +1726,36 @@ def main():
     check("...and clearing it brings every page back",
           bool(filt) and filt[-1].group(1) == "" and int(filt[-1].group(2)) == len(rows),
           f"{[m.group(0) for m in filt][-1:]} against {len(rows)} rows")
+
+    # A PAGE WITH A CHANGE STAYS LISTED under a filter that excludes it:
+    # the filter may not navigate away from staged work, so hiding its row
+    # left the sidebar highlighting some other page beside it.
+    if select_page("Mouse"):
+        speed_ctl = reveal("system.mouse_speed",
+                            controls(dbg, 0).get("system.mouse_speed", speed_ctl))
+        held = stage_down()
+        click(sx + sw // 2, sy + sh // 2)
+        mark = len(drain(dbg))
+        for letter in "network":
+            dbg.key(ord(letter), settle=False)
+        dbg.settle()
+        time.sleep(0.6)
+        drain(dbg)
+        # The rows reported AFTER THE LAST filter line only: every letter
+        # filters, and "n" alone lists Mouse, so earlier rows prove nothing.
+        since = max((i for i in range(mark, len(_log))
+                    if 'settings: filter "network"' in _log[i]), default=len(_log))
+        shown = [m.group(1) for m in
+                 _since(since, r"settings: row \d+ id \d+ y -?\d+ depth 1 (.+)")]
+        check("a page with a change stays listed under a filter that excludes it",
+              held is not None and "Mouse" in shown and "Recovery" in shown,
+              f"staged {held!r}, pages {shown[-6:]}")
+        for _ in range(len("network")):
+            dbg.key("0x08", settle=False)
+        dbg.settle()
+        time.sleep(0.4)
+        press("reset")
+        time.sleep(0.4)
 
     return report()
 

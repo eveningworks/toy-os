@@ -126,6 +126,10 @@ static int setting_matches(int i) {
 
 int group_matches(int g) {
     if (!g_filter[0]) return 1;
+    // THE OPEN PAGE STAYS LISTED WHILE IT HOLDS A CHANGE: the filter may
+    // not navigate away from it, so filtering its row out would leave the
+    // sidebar highlighting some other page beside it.
+    if (g == g_page_group && !g_show_sysinfo && page_dirty()) return 1;
     if (has_word(g_group_label[g], g_filter) || has_word(g_group_cat[g], g_filter)) return 1;
     for (int i = 0; i < g_setting_count; i++)
         if (!strcmp(g_cat_of[i], g_group_cat[g]) &&
