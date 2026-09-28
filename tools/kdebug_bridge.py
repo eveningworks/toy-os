@@ -17,10 +17,12 @@ The defaults match `make run KDEBUG=net`: target 127.0.0.1:50000 (QEMU's
 forward onto the debugger's card) and the key in build/kdebug.key. For a
 real machine: --target <its ip>:50000 --key <the hex on its GRUB line>.
 
-A datagram that fails its MAC, or does not carry a sequence number above
-the last one accepted, is dropped without a word, in both directions.
-The sequence numbers this sends start at the wall clock in nanoseconds,
-so a restarted bridge is never below what the target has already seen.
+EVERY GDB CONNECT OPENS A SESSION: a keyed hello carrying a fresh nonce,
+answered by the target with one of its own, and every datagram's MAC then
+covers both. A datagram recorded in any other session or boot fails its
+MAC, in either direction, and so does one that fails it or does not carry
+a sequence number above the last accepted -- dropped without a word. So
+the bridge can outlive the target: a reboot needs only a reconnect.
 Only the stdlib: hmac and hashlib.
 """
 
@@ -36,24 +38,43 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KEY_FILE = os.path.join(REPO, "build", "kdebug.key")
 HDR = 28
+NONCE = 16
 PAYLOAD_MAX = 1400
 
 
-def seal(key, magic, seq, payload):
+def mac16(key, data):
+    return hmac.new(key, data, hashlib.sha256).digest()[:16]
+
+
+def seal(key, magic, seq, payload, nonces):
+    """A data datagram of the session `nonces` (host nonce + target nonce)."""
     head = magic + seq.to_bytes(8, "little")
-    mac = hmac.new(key, head + payload, hashlib.sha256).digest()[:16]
-    return head + mac + payload
+    return head + mac16(key, head + nonces + payload) + payload
 
 
-def open_(key, magic, data, last_seq):
-    """(seq, payload) for an authentic datagram newer than last_seq, else None."""
+def open_(key, magic, data, last_seq, nonces):
+    """(seq, payload) for an authentic datagram of this session newer than
+    last_seq, else None."""
     if len(data) < HDR or data[:4] != magic:
         return None
     seq = int.from_bytes(data[4:12], "little")
-    want = hmac.new(key, data[:12] + data[HDR:], hashlib.sha256).digest()[:16]
+    want = mac16(key, data[:12] + nonces + data[HDR:])
     if not hmac.compare_digest(want, data[12:HDR]) or seq <= last_seq:
         return None
     return seq, data[HDR:]
+
+
+def hello_query(key, hn):
+    return b"TKDQ" + hn + mac16(key, b"TKDQ" + hn)
+
+
+def hello_answer(key, hn, data):
+    """The target's nonce from its answer to OUR hello `hn`, else None."""
+    if len(data) != 4 + 2 * NONCE + 16 or data[:4] != b"TKDN" or data[4:4 + NONCE] != hn:
+        return None
+    if not hmac.compare_digest(mac16(key, data[:4 + 2 * NONCE]), data[4 + 2 * NONCE:]):
+        return None
+    return data[4 + NONCE:4 + 2 * NONCE]
 
 
 class UdpLink:
@@ -64,15 +85,55 @@ class UdpLink:
         self.key = key
         self.addr = (host, port)
         self.s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.seq = time.time_ns()
-        self.last_rx = 0
+        self.nonces = None     # set by hello()
+        self.seq = self.last_rx = 0
         self.pending = b""
         self.first = None      # the first datagram sent, for a replay test
+        self.first_rx = None   # and the first received
+
+    def hello(self, tries=5, wait=1.0):
+        """Open a session. Each try has its OWN nonce, so a late answer to
+        an earlier one cannot set the session. False if nothing answered."""
+        old = self.s.gettimeout()
+        try:
+            for _ in range(tries):
+                hn = os.urandom(NONCE)
+                self.s.sendto(hello_query(self.key, hn), self.addr)
+                end = time.monotonic() + wait
+                while time.monotonic() < end:
+                    self.s.settimeout(max(end - time.monotonic(), 0.01))
+                    try:
+                        data, _ = self.s.recvfrom(65536)
+                    except (socket.timeout, BlockingIOError):
+                        break
+                    tn = hello_answer(self.key, hn, data)
+                    if tn:
+                        self.nonces = hn + tn
+                        self.seq = self.last_rx = 0
+                        self.pending = b""
+                        return True
+            return False
+        finally:
+            self.s.settimeout(old)
+
+    def seal(self, payload):
+        self.seq += 1
+        return seal(self.key, b"TKDH", self.seq, payload, self.nonces)
+
+    def open(self, data):
+        """An authentic reply's payload (and the counter moved on), else None."""
+        got = open_(self.key, b"TKDT", data, self.last_rx, self.nonces)
+        if not got:
+            return None
+        self.first_rx = self.first_rx or data
+        self.last_rx, payload = got
+        return payload
 
     def sendall(self, data):
+        if self.nonces is None and not self.hello():
+            raise ConnectionError("the target did not answer the hello")
         for i in range(0, max(len(data), 1), PAYLOAD_MAX):
-            self.seq += 1
-            d = seal(self.key, b"TKDH", self.seq, data[i:i + PAYLOAD_MAX])
+            d = self.seal(data[i:i + PAYLOAD_MAX])
             self.first = self.first or d
             self.s.sendto(d, self.addr)
 
@@ -85,9 +146,7 @@ class UdpLink:
     def recv(self, n):
         while not self.pending:
             data, _ = self.s.recvfrom(65536)
-            got = open_(self.key, b"TKDT", data, self.last_rx)
-            if got:
-                self.last_rx, self.pending = got
+            self.pending = self.open(data) or b""
         out, self.pending = self.pending[:n], self.pending[n:]
         return out
 
@@ -111,7 +170,13 @@ def serve(listen, link):
           flush=True)
     while True:
         conn, _ = srv.accept()
-        print("kdebug_bridge: debugger connected", flush=True)
+        link.s.setblocking(True)
+        if not link.hello():
+            print(f"kdebug_bridge: no answer from {link.addr[0]}:{link.addr[1]} -- "
+                  "is it armed, and is this its key?", flush=True)
+            conn.close()
+            continue
+        print("kdebug_bridge: debugger connected, new session", flush=True)
         link.s.setblocking(False)
         try:
             while True:
@@ -126,9 +191,8 @@ def serve(listen, link):
                         data, _ = link.s.recvfrom(65536)
                     except BlockingIOError:
                         continue
-                    got = open_(link.key, b"TKDT", data, link.last_rx)
-                    if got:
-                        link.last_rx, payload = got
+                    payload = link.open(data)
+                    if payload:
                         conn.sendall(payload)
         finally:
             conn.close()

@@ -169,13 +169,42 @@ KTEST("kdebug", "kdebug=net parses, and refuses rather than guesses") {
     KTEST_ASSERT(!kdb_net_parse("net,ip=10.0.2.15,key=00112233445566778899aabbccddeeff,fast", &c));
 }
 
-KTEST("kdebug", "a datagram is refused when forged, damaged or replayed") {
+// A host's hello under `key`, as kdebug_bridge.py builds it.
+static int hello_q(const uint8_t *key, int klen, uint8_t fill, uint8_t *q) {
+    uint8_t mac[32];
+    k_memcpy(q, "TKDQ", 4);
+    k_memset(q + 4, fill, KDB_NONCE);
+    kdb_hmac_sha256(key, klen, q, 4 + KDB_NONCE, 0, 0, mac);
+    k_memcpy(q + 4 + KDB_NONCE, mac, 16);
+    return KDB_HELLO_Q;
+}
+
+KTEST("kdebug", "a datagram is refused when forged, damaged, replayed or from another session") {
     if (kdb.armed) KTEST_SKIP("the stub is armed for a real debugger on this boot");
-    static uint8_t d[64];
+    static uint8_t d[64], old[64], q[KDB_HELLO_Q], r[KDB_HELLO_R];
+    static const uint8_t key[16] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
     struct kdb_net_cfg c;
     KTEST_ASSERT(kdb_net_parse("net,ip=10.0.2.15,key=000102030405060708090a0b0c0d0e0f", &c));
     kdb_net_configure(&c);
     const uint8_t *payload;
+
+    // Nothing is accepted, or sealed, before a hello.
+    KTEST_ASSERT_EQ(kdb_net_seal("TKDH", 1, (const uint8_t *)"x", 1, d, sizeof d), -1);
+
+    // A hello under the wrong key gets no session.
+    static const uint8_t wrong[16] = { 0xff, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
+    hello_q(wrong, 16, 0x11, q);
+    KTEST_ASSERT_EQ(kdb_net_hello(q, KDB_HELLO_Q, r, sizeof r), -1);
+
+    // The right one: the reply echoes the host's nonce and is keyed.
+    hello_q(key, 16, 0x11, q);
+    KTEST_ASSERT_EQ(kdb_net_hello(q, KDB_HELLO_Q, r, sizeof r), KDB_HELLO_R);
+    uint8_t mac[32];
+    kdb_hmac_sha256(key, 16, r, 4 + 2 * KDB_NONCE, 0, 0, mac);
+    KTEST_ASSERT(k_memcmp(r, "TKDN", 4) == 0 && k_memcmp(r + 4, q + 4, KDB_NONCE) == 0);
+    KTEST_ASSERT(k_memcmp(mac, r + 4 + 2 * KDB_NONCE, 16) == 0);
+    uint8_t tn1[KDB_NONCE];
+    k_memcpy(tn1, r + 4 + KDB_NONCE, KDB_NONCE);
 
     int n = kdb_net_seal("TKDH", 7, (const uint8_t *)"$?#3f", 5, d, sizeof d);
     KTEST_ASSERT_EQ(n, KDB_NET_HDR + 5);
@@ -192,12 +221,16 @@ KTEST("kdebug", "a datagram is refused when forged, damaged or replayed") {
     n = kdb_net_seal("TKDT", 9, (const uint8_t *)"x", 1, d, sizeof d);
     KTEST_ASSERT_EQ(kdb_net_open(d, n, &payload), -1);           // the target's own, reflected
 
-    struct kdb_net_cfg other;
-    KTEST_ASSERT(kdb_net_parse("net,ip=10.0.2.15,key=ff0102030405060708090a0b0c0d0e0f", &other));
-    kdb_net_configure(&other);
-    n = kdb_net_seal("TKDH", 10, (const uint8_t *)"x", 1, d, sizeof d);
-    kdb_net_configure(&c);
-    KTEST_ASSERT_EQ(kdb_net_open(d, n, &payload), -1);           // the wrong key
+    // ANOTHER SESSION -- a reconnect, or a reboot -- where the counters
+    // start again: a datagram recorded in the first fails, even one with
+    // a sequence number far above anything accepted since.
+    int on = kdb_net_seal("TKDH", 1000, (const uint8_t *)"$c#63", 5, old, sizeof old);
+    KTEST_ASSERT_EQ(kdb_net_hello(q, KDB_HELLO_Q, r, sizeof r), KDB_HELLO_R);   // the SAME hello, replayed
+    KTEST_ASSERT(k_memcmp(r + 4 + KDB_NONCE, tn1, KDB_NONCE) != 0);            // a fresh target nonce
+    KTEST_ASSERT_EQ(kdb_net_open(old, on, &payload), -1);
+    n = kdb_net_seal("TKDH", 1, (const uint8_t *)"$?#3f", 5, d, sizeof d);
+    KTEST_ASSERT_EQ(kdb_net_open(d, n, &payload), 5);            // the new session's own
+
     k_memset(&c, 0, sizeof c);
     kdb_net_configure(&c);
 }

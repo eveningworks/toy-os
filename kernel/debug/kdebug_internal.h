@@ -77,14 +77,20 @@ int kdb_net_parse(const char *v, struct kdb_net_cfg *c);   // 1 when usable
 const struct kdb_transport *kdb_net_init(const char *v, int *wait);
 
 // The wire: magic, a little-endian sequence number, the first 16 bytes of
-// HMAC-SHA256(key, magic | seq | payload), then the payload -- RSP bytes.
-// A host datagram must carry a sequence number above every one accepted
-// before it, so a captured datagram cannot be replayed.
+// HMAC-SHA256(key, magic | seq | host nonce | target nonce | payload),
+// then the payload -- RSP bytes. The nonces come from the SESSION's hello
+// (kdb_net_hello) and are never sent with data, so a datagram from any
+// other session or boot fails its MAC; within one, a host datagram must
+// carry a sequence number above every one accepted before it.
 #define KDB_NET_HDR 28
+#define KDB_NONCE   16
+#define KDB_HELLO_Q (4 + KDB_NONCE + 16)       // "TKDQ" | host nonce | MAC
+#define KDB_HELLO_R (4 + 2 * KDB_NONCE + 16)   // "TKDN" | both nonces | MAC
 void kdb_net_configure(const struct kdb_net_cfg *c);   // key + fresh sequence state
 int  kdb_net_seal(const char magic[4], uint64_t seq, const uint8_t *payload, int len,
                   uint8_t *out, int cap);
 int  kdb_net_open(const uint8_t *dgram, int len, const uint8_t **payload);
+int  kdb_net_hello(const uint8_t *dgram, int len, uint8_t *reply, int cap);
 void kdb_hmac_sha256(const uint8_t *key, int klen, const uint8_t *a, int alen,
                      const uint8_t *b, int blen, uint8_t out[32]);
 

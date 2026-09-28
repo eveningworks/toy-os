@@ -8,9 +8,19 @@
 // an ARP cache this could corrupt. Only its pure checksum is borrowed.
 // Replies go to the MAC, IP and port of the last authenticated
 // datagram, so the stub never has to resolve anything itself.
+//
+// A SESSION PER CONNECT. The key lives for the boot, so a sequence number
+// alone would let a recorded datagram be replayed in a later boot, or a
+// later session, where the counters have started again. Every connect
+// therefore begins with a keyed hello: the host sends a fresh nonce, the
+// target answers with one of its own, and every datagram's MAC covers
+// both. A datagram from any other session fails its MAC in either
+// direction, and the counters can restart at each hello.
 #include "kdebug_internal.h"
 #include "kdebug_nic.h"
 #include "ksha256.h"
+#include "krandom.h"
+#include "random_hw.h"   // arch_rdtsc()
 #include "net.h"      // net_checksum() -- pure
 #include "pci.h"
 #include "pci_driver.h"
@@ -31,6 +41,11 @@ static uint8_t  g_key[KDB_NET_KEY_MAX];
 static int      g_klen;
 static uint64_t g_rx_seq, g_tx_seq;
 static uint16_t g_ip_id;
+
+static int      g_session;           // a hello has set the nonces below
+static uint8_t  g_hn[KDB_NONCE], g_tn[KDB_NONCE];   // host's, target's
+static uint8_t  g_seed[32];          // from krandom at arm time
+static uint64_t g_hellos;
 
 static int      g_have_peer;
 static uint8_t  g_peer_mac[6];
@@ -138,6 +153,8 @@ void kdb_net_configure(const struct kdb_net_cfg *c) {
     g_ip = c->ip;
     g_port = c->port;
     g_rx_seq = g_tx_seq = 0;
+    g_session = 0;
+    krandom_bytes(g_seed, sizeof g_seed);   // running, not stopped: may reseed
     g_have_peer = 0;
     g_in_head = g_in_tail = 0;
     g_out_len = 0;
@@ -166,33 +183,80 @@ void kdb_hmac_sha256(const uint8_t *key, int klen, const uint8_t *a, int alen,
     ksha256_final(&c, out);
 }
 
+// Constant time: no early exit on the first mismatch.
+static int mac_ok(const uint8_t *want, const uint8_t *got) {
+    uint8_t diff = 0;
+    for (int i = 0; i < 16; i++) diff |= (uint8_t)(want[i] ^ got[i]);
+    return diff == 0;
+}
+
+// The MAC of a data datagram: magic, sequence, then BOTH session nonces,
+// then the payload. The nonces are not sent; each side already has them.
+static void data_mac(const uint8_t *magic_seq, const uint8_t *payload, int len, uint8_t mac[32]) {
+    uint8_t head[12 + 2 * KDB_NONCE];
+    k_memcpy(head, magic_seq, 12);
+    k_memcpy(head + 12, g_hn, KDB_NONCE);
+    k_memcpy(head + 12 + KDB_NONCE, g_tn, KDB_NONCE);
+    kdb_hmac_sha256(g_key, g_klen, head, (int)sizeof head, payload, len, mac);
+}
+
 int kdb_net_seal(const char magic[4], uint64_t seq, const uint8_t *payload, int len,
                  uint8_t *out, int cap) {
-    if (len < 0 || KDB_NET_HDR + len > cap) return -1;
+    if (!g_session || len < 0 || KDB_NET_HDR + len > cap) return -1;
     k_memcpy(out, magic, 4);
     for (int i = 0; i < 8; i++) out[4 + i] = (uint8_t)(seq >> (i * 8));
     uint8_t mac[32];
-    kdb_hmac_sha256(g_key, g_klen, out, 12, payload, len, mac);
+    data_mac(out, payload, len, mac);
     k_memcpy(out + 12, mac, 16);
     k_memcpy(out + KDB_NET_HDR, payload, (size_t)len);
     return KDB_NET_HDR + len;
 }
 
-// A host datagram's payload length, or -1: wrong magic, a forged or
-// damaged MAC, or a sequence number not above the last accepted one.
+// A host datagram's payload length, or -1: no session yet, wrong magic,
+// a forged or damaged MAC (another session's is one), or a sequence
+// number not above the last accepted one.
 int kdb_net_open(const uint8_t *d, int len, const uint8_t **payload) {
-    if (len < KDB_NET_HDR || d[0] != 'T' || d[1] != 'K' || d[2] != 'D' || d[3] != 'H')
-        return -1;
+    if (!g_session || len < KDB_NET_HDR || k_memcmp(d, "TKDH", 4) != 0) return -1;
     uint64_t seq = 0;
     for (int i = 0; i < 8; i++) seq |= (uint64_t)d[4 + i] << (i * 8);
     uint8_t mac[32];
-    kdb_hmac_sha256(g_key, g_klen, d, 12, d + KDB_NET_HDR, len - KDB_NET_HDR, mac);
-    uint8_t diff = 0;   // constant time: no early exit on the first mismatch
-    for (int i = 0; i < 16; i++) diff |= (uint8_t)(mac[i] ^ d[12 + i]);
-    if (diff || seq <= g_rx_seq) return -1;
+    data_mac(d, d + KDB_NET_HDR, len - KDB_NET_HDR, mac);
+    if (!mac_ok(mac, d + 12) || seq <= g_rx_seq) return -1;
     g_rx_seq = seq;
     *payload = d + KDB_NET_HDR;
     return len - KDB_NET_HDR;
+}
+
+// The hello: "TKDQ" | host nonce | MAC, answered by "TKDN" | host nonce |
+// target nonce | MAC. A FRESH target nonce EVERY TIME -- a replayed hello
+// then opens a session no recorded datagram belongs to, so the worst it
+// does is end the current one. The nonce is the arm-time seed, a count
+// and the TSC through SHA-256: krandom may reseed from a device, which
+// the stopped path cannot call. Returns the reply's length, or -1.
+int kdb_net_hello(const uint8_t *d, int len, uint8_t *reply, int cap) {
+    if (len != KDB_HELLO_Q || cap < KDB_HELLO_R || k_memcmp(d, "TKDQ", 4) != 0) return -1;
+    uint8_t mac[32];
+    kdb_hmac_sha256(g_key, g_klen, d, 4 + KDB_NONCE, 0, 0, mac);
+    if (!mac_ok(mac, d + 4 + KDB_NONCE)) return -1;
+
+    struct ksha256 c;
+    uint64_t mix[2] = { ++g_hellos, arch_rdtsc() };
+    uint8_t h[KSHA256_LEN];
+    ksha256_init(&c);
+    ksha256_update(&c, g_seed, sizeof g_seed);
+    ksha256_update(&c, mix, sizeof mix);
+    ksha256_final(&c, h);
+    k_memcpy(g_hn, d + 4, KDB_NONCE);
+    k_memcpy(g_tn, h, KDB_NONCE);
+    g_rx_seq = g_tx_seq = 0;
+    g_session = 1;
+
+    k_memcpy(reply, "TKDN", 4);
+    k_memcpy(reply + 4, g_hn, KDB_NONCE);
+    k_memcpy(reply + 4 + KDB_NONCE, g_tn, KDB_NONCE);
+    kdb_hmac_sha256(g_key, g_klen, reply, 4 + 2 * KDB_NONCE, 0, 0, mac);
+    k_memcpy(reply + 4 + 2 * KDB_NONCE, mac, 16);
+    return KDB_HELLO_R;
 }
 
 // --- framing -----------------------------------------------------------
@@ -216,7 +280,41 @@ static void arp_send(uint16_t oper, const uint8_t *to_mac, uint32_t to_ip) {
     put32(f + 28, g_ip);
     k_memcpy(f + 32, to_mac, 6);
     put32(f + 38, to_ip);
+    k_memset(f + 42, 0, 18);     // padding, not the last frame's bytes
     g_nic->send(f, 60);          // padded to the Ethernet minimum
+}
+
+static void set_peer(const uint8_t *f, const uint8_t *ip, const uint8_t *udp) {
+    k_memcpy(g_peer_mac, f + 6, 6);
+    g_peer_ip = get32(ip + 12);
+    g_peer_port = get16(udp);
+    g_have_peer = 1;
+}
+
+// One datagram, already sealed, to the peer.
+static void udp_send(const uint8_t *data, int dlen) {
+    uint8_t *f = g_txf, *ip = f + 14, *udp = ip + 20;
+    if (dlen < 0 || dlen > FRAME_MAX - 42) return;
+    if (data != udp + 8) k_memcpy(udp + 8, data, (size_t)dlen);
+    k_memcpy(f, g_peer_mac, 6);
+    k_memcpy(f + 6, g_mac, 6);
+    put16(f + 12, 0x0800);
+    ip[0] = 0x45; ip[1] = 0;
+    put16(ip + 2, (uint16_t)(20 + 8 + dlen));
+    put16(ip + 4, g_ip_id++);
+    put16(ip + 6, 0x4000);       // don't fragment
+    ip[8] = 64; ip[9] = 17;
+    put16(ip + 10, 0);
+    put32(ip + 12, g_ip);
+    put32(ip + 16, g_peer_ip);
+    put16(ip + 10, net_checksum(ip, 20));   // host order, as icmp.c stores it
+    put16(udp, g_port);
+    put16(udp + 2, g_peer_port);
+    put16(udp + 4, (uint16_t)(8 + dlen));
+    put16(udp + 6, 0);           // IPv4 UDP checksum is optional; the HMAC is stronger
+    int flen = 14 + 20 + 8 + dlen;
+    if (flen < 60) k_memset(f + flen, 0, (size_t)(60 - flen));
+    g_nic->send(f, flen < 60 ? 60 : flen);
 }
 
 static void in_push(const uint8_t *p, int n) {
@@ -232,7 +330,8 @@ static void frame_in(const uint8_t *f, int len) {
     if (len < 42) return;
     uint16_t type = get16(f + 12);
     if (type == 0x0806) {
-        if (get16(f + 20) == 1 && get32(f + 38) == g_ip)
+        if (get16(f + 14) == 1 && get16(f + 16) == 0x0800 && f[18] == 6 && f[19] == 4 &&
+            get16(f + 20) == 1 && get32(f + 38) == g_ip)
             arp_send(2, f + 22, get32(f + 28));
         return;
     }
@@ -250,11 +349,18 @@ static void frame_in(const uint8_t *f, int len) {
 
     const uint8_t *payload;
     int n = kdb_net_open(udp + 8, ulen - 8, &payload);
-    if (n < 0) return;   // unauthenticated, damaged or replayed: silence
-    k_memcpy(g_peer_mac, f + 6, 6);
-    g_peer_ip = get32(ip + 12);
-    g_peer_port = get16(udp);
-    g_have_peer = 1;
+    if (n < 0) {
+        uint8_t reply[KDB_HELLO_R];
+        if (kdb_net_hello(udp + 8, ulen - 8, reply, sizeof reply) < 0)
+            return;   // unauthenticated, damaged or replayed: silence
+        // A new session: whatever the last one left half-sent is void.
+        g_in_head = g_in_tail = 0;
+        g_out_len = 0;
+        set_peer(f, ip, udp);
+        udp_send(reply, KDB_HELLO_R);
+        return;
+    }
+    set_peer(f, ip, udp);
     in_push(payload, n);
 }
 
@@ -288,29 +394,11 @@ static void net_flush(void) {
     if (!g_out_len) return;
     int len = g_out_len;
     g_out_len = 0;
-    if (!g_have_peer) return;   // nobody has spoken yet: nobody to answer
+    if (!g_have_peer || !g_session) return;   // nobody to answer
 
-    uint8_t *f = g_txf, *ip = f + 14, *udp = ip + 20;
-    int dlen = kdb_net_seal("TKDT", ++g_tx_seq, g_out, len, udp + 8, FRAME_MAX - 42);
-    if (dlen < 0) return;
-    k_memcpy(f, g_peer_mac, 6);
-    k_memcpy(f + 6, g_mac, 6);
-    put16(f + 12, 0x0800);
-    ip[0] = 0x45; ip[1] = 0;
-    put16(ip + 2, (uint16_t)(20 + 8 + dlen));
-    put16(ip + 4, g_ip_id++);
-    put16(ip + 6, 0x4000);       // don't fragment
-    ip[8] = 64; ip[9] = 17;
-    put16(ip + 10, 0);
-    put32(ip + 12, g_ip);
-    put32(ip + 16, g_peer_ip);
-    put16(ip + 10, net_checksum(ip, 20));   // host order, as icmp.c stores it
-    put16(udp, g_port);
-    put16(udp + 2, g_peer_port);
-    put16(udp + 4, (uint16_t)(8 + dlen));
-    put16(udp + 6, 0);           // IPv4 UDP checksum is optional; the HMAC is stronger
-    int flen = 14 + 20 + 8 + dlen;
-    g_nic->send(f, flen < 60 ? 60 : flen);
+    uint8_t *udp_data = g_txf + 14 + 20 + 8;
+    int dlen = kdb_net_seal("TKDT", ++g_tx_seq, g_out, len, udp_data, FRAME_MAX - 42);
+    if (dlen >= 0) udp_send(udp_data, dlen);
 }
 
 static void net_putc(char c) {

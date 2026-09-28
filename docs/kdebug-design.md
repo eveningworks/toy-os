@@ -156,9 +156,21 @@ kernel is stopped.
   never has to resolve anything.
 - **Every datagram is authenticated**: `TKDH`/`TKDT` magic (the
   direction, so a reflected datagram fails), a sequence number, the
-  first 16 bytes of HMAC-SHA256 under the key, then RSP bytes. A host
-  datagram must carry a sequence number above every one accepted
-  before, which is the replay protection. **Not encrypted**, at the
+  first 16 bytes of HMAC-SHA256 under the key, then RSP bytes.
+- **Every connect is a new SESSION, and that is the replay protection.**
+  The key lives as long as the boot line, and a sequence number alone
+  only protects one run of the counters: the target's restarted at
+  every boot, so a datagram recorded in one boot was accepted in the
+  next. So the bridge opens each gdb connection with a keyed hello
+  (`TKDQ` + its fresh nonce), the target answers (`TKDN` + that nonce +
+  a fresh one of its own, made on EVERY hello), and each datagram's MAC
+  then covers both nonces, which are never sent with data. A datagram
+  from any other session or boot fails its MAC in both directions; the
+  sequence rule only has to hold within one. A replayed hello opens a
+  session no recorded datagram belongs to, so the most it does is end
+  the current one -- which an unkeyed flood can do anyway. The target's nonce is its arm-time seed from `krandom`, a
+  count and the TSC through SHA-256, since `krandom` may reseed from a
+  device and the stopped path cannot call it. **Not encrypted**, at the
   maintainer's choice: KDNET encrypts, but a cipher here costs a kernel
   implementation and a third-party Python package on the host, since
   the stdlib has none; `hmac`/`hashlib` are stdlib. A sniffer on the LAN
