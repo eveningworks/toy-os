@@ -64,5 +64,6 @@ void kdb_arch_hw_disable(void);                        // DR7 = 0
 // step_done() puts IF back as it was.
 void kdb_arch_resume(uint64_t *regs, int step);
 void kdb_arch_step_done(uint64_t *regs);
+int  kdb_arch_step_in_place(uint64_t *regs);   // 1: a step the CPU must not run (HLT), done
 
 #endif

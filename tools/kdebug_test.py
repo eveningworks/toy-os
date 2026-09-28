@@ -272,8 +272,8 @@ def run(inst, disk, log, res):
 
     if NET:
         wrong = bytes(b ^ 0xFF for b in NET)
-        auth_silence(inst, res, "a datagram under the WRONG key gets silence",
-                     kdebug_bridge.seal(wrong, b"TKDH", time.time_ns(), b"$?#3f"))
+        auth_silence(inst, res, "a hello under the WRONG key gets silence",
+                     kdebug_bridge.hello_query(wrong, os.urandom(kdebug_bridge.NONCE)))
 
     link = connect(inst)
     rsp = Rsp(link)
@@ -286,6 +286,16 @@ def run(inst, disk, log, res):
 
     if NET and link.first:
         auth_silence(inst, res, "an exact REPLAY of an accepted datagram gets silence", link.first)
+        # A NEW SESSION -- what a reconnect or a reboot makes -- restarts
+        # the counters, so only the MAC's nonces keep the old datagrams out.
+        fresh = kdebug_bridge.UdpLink("127.0.0.1", 51000 + inst, NET)
+        if res.check("a new session opens (the keyed hello is answered)", fresh.hello()):
+            auth_silence(inst, res, "a datagram from an EARLIER session gets silence", link.first)
+            res.check("...and the bridge refuses a reply from an earlier session",
+                      link.first_rx is not None and fresh.open(link.first_rx) is None
+                      and link.first_rx[4:12] == (1).to_bytes(8, "little"),
+                      "no reply was recorded" if link.first_rx is None else "")
+        fresh.close()
 
     if shutil.which("gdb"):
         real_gdb(inst, res, disk, log)
@@ -407,6 +417,27 @@ def steps(inst, disk, log, res, rsp):
     res.check("the tick's write to the counter fires it, and names the address",
               re.fullmatch(rf"T05thread:[0-9a-f]+;watch:{w:x};", stop) is not None, stop)
     res.check("z2 removes it", rsp.cmd(f"z2,{w:x},8") == "OK")
+
+    # A step onto HLT. Stepped for real it would halt with the IF the step
+    # masks, and nothing but an NMI would ever wake it.
+    h = hlt_in("clockevent_idle_halt")
+    if res.check("clockevent_idle_halt has a hlt to stop on", h is not None):
+        h += delta
+        rsp.cmd(f"Z0,{h:x},1")
+        rsp.send("c")
+        stop = rsp.recv(timeout=30)
+        at = rip_of(rsp.cmd("g"))
+        rsp.cmd(f"z0,{h:x},1")
+        if res.check("the idle loop stops ON its hlt", is_stop(stop, "05") and at == h,
+                     f"{stop}, pc 0x{at:x}, hlt 0x{h:x}"):
+            rsp.send("s")
+            try:
+                stop = rsp.recv(timeout=10)
+            except TimeoutError:
+                stop = "(no answer: the step halted with interrupts masked)"
+            at = rip_of(rsp.cmd("g")) if is_stop(stop, "05") else 0
+            res.check("a step onto HLT comes back at once, one byte on",
+                      is_stop(stop, "05") and at == h + 1, f"{stop}, pc 0x{at:x}")
     res.check("a read-only watch is 'not supported' (x86 has none)", rsp.cmd(f"Z3,{w:x},8") == "")
 
     # A memory write round trip, on the watched counter itself.
@@ -465,10 +496,44 @@ def real_gdb(inst, res, disk, log):
     try:
         real_gdb_run(target, res)
         put_check(target, res, inst, disk, log)
+        if bridge:
+            # The SAME bridge across a reboot of the target, whose counters
+            # start again: a reconnect's new session is all it needs.
+            vm(inst, disk, log, "stop")
+            boot = vm(inst, disk, log, "start", timeout=300)
+            out = gdb_batch(target, ["info registers rip"]) if "ready" in boot else boot
+            res.check("one bridge outlives a reboot of the target: gdb reconnects",
+                      re.search(r"^rip\s+0x", out, re.M) is not None, out[-300:])
     finally:
         if bridge:
             bridge.kill()
             bridge.wait()
+
+
+def gdb_batch(target, cmds, timeout=90):
+    args = ["gdb", "-nx", "-batch", KERNEL, "-ex", "set pagination off",
+            "-ex", f"target remote {target}"]
+    for c in cmds + ["detach"]:
+        args += ["-ex", c]
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout).stdout
+    except subprocess.TimeoutExpired:
+        return "(gdb timed out)"
+
+
+def hlt_in(func):
+    """The link-time address of the first `hlt` in `func`, from kernel.bin."""
+    out = subprocess.run(["objdump", "-d", "--no-show-raw-insn", KERNEL],
+                         capture_output=True, text=True).stdout
+    inside = False
+    for line in out.splitlines():
+        if line.endswith(f"<{func}>:"):
+            inside = True
+        elif inside and not line.strip():
+            break
+        elif inside and re.search(r"\thlt\b", line):
+            return int(line.split(":")[0], 16)
+    return None
 
 
 def put_check(target, res, inst, disk, log):

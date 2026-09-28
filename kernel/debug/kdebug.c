@@ -146,7 +146,12 @@ static void stop(uint64_t *regs, int sig) {
     kdb_arch_hw_disable();
     swbp_lift_all();
 
-    enum kdb_resume how = kdb_gdb_session();
+    enum kdb_resume how;
+    while ((how = kdb_gdb_session()) == KDB_STEP && kdb_arch_step_in_place(regs)) {
+        kdb.sig = KDB_SIGTRAP;   // stepped without running: stopped again, here
+        kdb.watch_kind = 0;
+        kdb.stops++;
+    }
     if (how == KDB_DETACH) {
         kdb_bp_clear_all();
         kdb.connected = 0;

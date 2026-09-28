@@ -235,6 +235,17 @@ void kdb_arch_resume(uint64_t *regs, int step) {
     regs[F_RFLAGS] |= RFLAGS_RF;
 }
 
+// A STEP ONTO HLT IS DONE IN PLACE: stepped for real it would halt with
+// the IF the step masked, and the break-in poll runs from the tick, so
+// only an NMI could wake it. The PC moves past it, as if an interrupt had
+// ended the halt at once.
+int kdb_arch_step_in_place(uint64_t *regs) {
+    uint8_t op;
+    if (kdb_arch_mem_read(regs[F_RIP], &op, 1) != 1 || op != 0xF4) return 0;
+    regs[F_RIP] += 1;
+    return 1;
+}
+
 // TRAP: a stepped cli/sti/popf changed IF itself, and this puts back the
 // value from before it. Linux's KGDB has the same blind spot.
 void kdb_arch_step_done(uint64_t *regs) {
