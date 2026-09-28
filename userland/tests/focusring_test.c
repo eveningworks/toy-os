@@ -165,8 +165,8 @@ int main(int argc, char **argv) {
     check("uui_table", &uui_table_ops, &tt);
 
     struct uui_tree_node nodes[] = {
-        { "root", 0, 1, UUI_TREE_AUTO }, { "child", 1, 2, UUI_TREE_AUTO },
-        { "other", 0, 3, UUI_TREE_AUTO },
+        { "root", 0, 1, UUI_TREE_AUTO, 0 }, { "child", 1, 2, UUI_TREE_AUTO, 0 },
+        { "other", 0, 3, UUI_TREE_AUTO, 0 },
     };
     static struct uui_tree tr;
     uui_tree_init(&tr, 10, 10, 200, 120, nodes, 3);

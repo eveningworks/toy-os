@@ -52,6 +52,10 @@ void uui_button_draw(struct ugfx_surface *s, int x, int y, int w, int h,
     // The nudge is what makes a press feel physical; the darker fill on
     // its own reads as a colour change.
     if (state == UUI_STATE_PRESSED) { lx += UUI_PRESSED_NUDGE; ly += UUI_PRESSED_NUDGE; }
+    // A disabled button's LABEL fades as well as its face -- the face
+    // alone moved a few levels and read as live (uui_checkbox fades its
+    // label the same way).
+    if (state == UUI_STATE_DISABLED) fg = uui_state_bg(fg, UUI_STATE_DISABLED);
     ugfx_draw_string_clipped(s, lx, ly, w, label, fg, fill);
 }
 

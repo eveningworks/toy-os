@@ -60,6 +60,11 @@ struct uui_tree_node {
     // new array's `kind` is the new truth. GtkTreeView's
     // row-expanded/test-expand-row split, minus the model.
     int kind;
+    // An icon NAME (lib/icon_cache.h: /usr/share/icons/<name>.qoi), drawn
+    // at the text's height before the label; NULL for none. When ANY node
+    // has one, every row gets the gutter, so labels at one depth still
+    // line up -- the rule uui_sidebar learned for its headings.
+    const char *icon;
 };
 
 struct uui_tree {

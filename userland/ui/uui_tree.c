@@ -5,6 +5,7 @@
 #include "ui/uui_widget.h"
 #include "ui/uui_scrollbar.h" // uui_scrollbar_natural_size()
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
+#include "lib/icon_cache.h" // icon_get() -- a node may carry an icon
 
 #define UUI_TREE_PAD_X   4  // left inset before the first expander
 #define UUI_TREE_INDENT  12 // per depth level
@@ -249,15 +250,23 @@ static void tree_clamp(struct uui_tree *t) {
     if (t->top < 0) t->top = 0;
 }
 
+// The icon column: the text's height plus a gap, or 0 in a tree where no
+// node has an icon -- so an existing tree draws exactly as it did.
+static int icon_gutter(const struct uui_tree *t) {
+    for (int i = 0; i < t->count; i++)
+        if (t->nodes[i].icon) return ugfx_char_h() + 4;
+    return 0;
+}
+
 // The widget WANTS room for its deepest, longest row -- measured with
 // every node counted, collapsed or not, because natural size must not
 // depend on the widget's current state any more than on where it is.
 // A tree that shrank when collapsed would make a layout twitch as the
 // user clicked. See CLAUDE.md on natural_size.
 void uui_tree_natural_size(const struct uui_tree *t, int *out_w, int *out_h) {
-    int widest = 0;
+    int widest = 0, gutter = icon_gutter(t);
     for (int i = 0; i < t->count; i++) {
-        int w = t->nodes[i].depth * UUI_TREE_INDENT + UUI_TREE_EXP_W +
+        int w = t->nodes[i].depth * UUI_TREE_INDENT + UUI_TREE_EXP_W + gutter +
                 ugfx_text_width(t->nodes[i].label);
         if (w > widest) widest = w;
     }
@@ -269,7 +278,7 @@ void uui_tree_natural_size(const struct uui_tree *t, int *out_w, int *out_h) {
 
 static int row_text_x(const struct uui_tree *t, int node) {
     return t->x + UUI_TREE_PAD_X + t->nodes[node].depth * UUI_TREE_INDENT +
-           UUI_TREE_EXP_W;
+           UUI_TREE_EXP_W + icon_gutter(t);
 }
 
 // A small filled triangle: right when collapsed, down when expanded --
@@ -335,10 +344,20 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
                            ry + rh / 2, 3, 1, t->guide);
         }
 
+        // ugfx_blit_alpha(), never ugfx_blit(): an icon's corners are
+        // transparent (docs/conventions/gui.md).
+        int tx = row_text_x(t, node);
+        if (t->nodes[node].icon) {
+            int isz = ugfx_char_h();
+            const struct uimg *ic = icon_get(t->nodes[node].icon, isz);
+            int ix = tx - icon_gutter(t);
+            if (ic && ix + ic->w <= t->x + t->w - bar)
+                ugfx_blit_alpha(s, ix, ry + (rh - ic->h) / 2, ic->w, ic->h, ic->px, ic->w);
+        }
+
         // CLIPPED, always: a label longer than the pane must not run
         // into the page beside it. gfx_draw_string does not clip, and
         // that has caused the identical overlap bug twice already.
-        int tx = row_text_x(t, node);
         int avail = t->x + t->w - bar - tx - UUI_TREE_PAD_X;
         if (avail > 0)
             ugfx_draw_string_clipped(s, tx, ry + (rh - ugfx_char_h()) / 2, avail,
