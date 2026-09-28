@@ -22,6 +22,7 @@ It works over QEMU's own stub (`make debug`) as well as the kernel's.
 """
 
 import os
+import re
 import struct
 import sys
 
@@ -227,10 +228,14 @@ class FrameId:
 
 
 class TrapFrameUnwinder(gdb.unwinder.Unwinder):
-    """isr_common has no CFI, so GDB stops there. At the return address
-    of its `call isr_dispatch`, and at isr_resume_frame (where a context
-    that never ran starts), RSP points AT the pushed frame -- read it and
-    hand GDB the interrupted code's registers."""
+    """isr_common has no CFI, so GDB stops there. From its `mov rdi, rsp`
+    (the frame just completed) to isr_return_to, and at isr_resume_frame
+    (where a context that never ran starts), RSP points AT the pushed
+    frame -- read it and hand GDB the interrupted code's registers.
+
+    NOT FROM isr_common ITSELF: during the pushes the frame is half
+    built, and an NMI or a step that stops there would be handed
+    garbage registers as the interrupted code's."""
 
     def __init__(self):
         super().__init__("toy-os trap frame")
@@ -240,11 +245,20 @@ class TrapFrameUnwinder(gdb.unwinder.Unwinder):
         # garbage; asked about one of these, this ends the backtrace.
         self.user = set()
 
-    def _bounds(self):
+    def _bounds(self, arch=None):
         if self.lo is None:
-            self.lo = addr("isr_common")
-            self.hi = addr("isr_return_to")
+            lo, hi = addr("isr_common"), addr("isr_return_to")
+            arch = arch or gdb.selected_inferior().architecture()
+            ready = [i["addr"] for i in arch.disassemble(lo, hi - 1)
+                     if re.search(r"\bmov\s+(%rsp,\s*%rdi|rdi,\s*rsp)\b", i["asm"])]
+            # Not found: claim no part of isr_common rather than guess.
+            self.lo, self.hi = (ready[0], hi) if ready else (hi, hi)
             self.resume = addr("isr_resume_frame")
+
+    def claims(self, pc, arch=None):
+        """Whether RSP at `pc` points at a whole trap frame."""
+        self._bounds(arch)
+        return self.lo <= pc < self.hi or pc == self.resume
 
     # A ring-3 frame goes on only once toy-symbols has loaded its program:
     # without them GDB's fallback walks the user stack into garbage.
@@ -266,15 +280,15 @@ class TrapFrameUnwinder(gdb.unwinder.Unwinder):
         return fn is not None and fn.name == "kernel_main"
 
     def __call__(self, pending):
-        try:
-            self._bounds()
-        except gdb.error:
-            return None
         pc = int(pending.read_register("rip"))
         sp = int(pending.read_register("rsp"))
+        try:
+            ours = self.claims(pc, pending.architecture())
+        except gdb.error:
+            return None
         if ((sp, pc) in self.user and not self._has_symbols(pc)) or self._is_entry(pc):
             return pending.create_unwind_info(FrameId(sp, pc))   # no saved PC: stop
-        if not (self.lo <= pc < self.hi or pc == self.resume):
+        if not ours:
             return None
         mem = gdb.selected_inferior().read_memory(sp, 8 * len(FRAME))
         v = dict(zip(FRAME, (int.from_bytes(bytes(mem[i * 8:i * 8 + 8]), "little")
@@ -291,4 +305,5 @@ class TrapFrameUnwinder(gdb.unwinder.Unwinder):
 Dmesg()
 Ps()
 Symbols()
-gdb.unwinder.register_unwinder(None, TrapFrameUnwinder(), replace=True)
+TRAP_UNWINDER = TrapFrameUnwinder()
+gdb.unwinder.register_unwinder(None, TRAP_UNWINDER, replace=True)

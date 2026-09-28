@@ -3291,17 +3291,22 @@ window without going through it will find its layout polls timing out.
   (every loaded kernel module, and the SELECTED thread's program, ld-toy
   and `/lib` libraries -- rerun it after `thread N`), and an unwinder
   that takes `bt` past `isr_common` by reading the trap frame `isr.asm`
-  pushed. A ring-3 frame and `kernel_main` end a backtrace rather than
-  letting GDB walk into garbage -- which it does, fluently, with no CFI
-  to stop it. Works over QEMU's stub and the kernel's. `kdebug_test.py`
-  checks all three, and turning the unwinder's recognition off reddens
-  exactly its check.
+  pushed -- claimed only from the `mov rdi, rsp` after the last push
+  (found by disassembly, not a byte count) and at `isr_resume_frame`,
+  never mid-push, where the frame is half built. A ring-3 frame and
+  `kernel_main` end a backtrace rather than letting GDB walk into
+  garbage -- which it does, fluently, with no CFI to stop it. Works over
+  QEMU's stub and the kernel's. `kdebug_test.py` checks all three, asks
+  the unwinder (`TRAP_UNWINDER.claims()`) about four addresses, and
+  turning the recognition off reddens exactly its checks.
 - **`remote_hang_test.py`** -- `remote.py` cannot hang, checked against
   fakes on localhost in about seven seconds (in `preflight.sh`): a TFTP
   server that only repeats a stale ACK (`put` must give up), one that
   resends one block forever (`get` must), a telnet peer that never stops
   talking (`read_until_line` must still time out), and `_mark_executable`
-  handed a session must use it rather than open one. `--against PATH`
+  handed a session must use it rather than open one. A give-up must be
+  THE give-up -- a `RuntimeError` saying "no progress" -- since a
+  `NameError` in the code under test ends the call too. `--against PATH`
   runs the same checks on another copy of `remote.py`; the pre-fix one
   (`git show 807338a4:tools/remote.py`) fails the first four, three of
   them as real hangs the test's own 20 s limit ends. A fifth fake LOSES

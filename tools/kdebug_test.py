@@ -560,6 +560,17 @@ def put_check(target, res, inst, disk, log):
               re.search(r"/boot\s+fat32\s+ro", got) is not None, got[-300:])
 
 
+# What the unwinder claims as a WHOLE trap frame, at isr_common, one
+# instruction into its pushes, the return address of its call, and
+# isr_resume_frame: must be [0, 0, 1, 1].
+CLAIMS = ("python v=lambda e:int(gdb.parse_and_eval(e)); "
+          "lo,hi=v('(long)&isr_common'),v('(long)&isr_return_to'); "
+          "ins=gdb.selected_inferior().architecture().disassemble(lo,hi-1); "
+          "ret=[ins[i+1]['addr'] for i in range(len(ins)-1) if 'call' in ins[i]['asm']][0]; "
+          "print('@@claims',[int(TRAP_UNWINDER.claims(x)) for x in "
+          "(lo,lo+1,ret,v('(long)&isr_resume_frame'))])")
+
+
 def real_gdb_run(target, res):
     r = subprocess.run(
         ["gdb", "-nx", "-batch", "-x", os.path.join(TOOLS, "gdb", "toyos.py"), KERNEL,
@@ -567,6 +578,7 @@ def real_gdb_run(target, res):
          "-ex", f"target remote {target}",
          "-ex", f"x/2i {BP_FUNC}",
          "-ex", "info registers rip",
+         "-ex", CLAIMS,
          "-ex", "echo @@helpers\\n",
          "-ex", "toy-ps",
          "-ex", "toy-dmesg 3",
@@ -595,6 +607,9 @@ def real_gdb_run(target, res):
               "Thread 1000 (kernel" in out and "(init, " in out, out[:900])
     # thread 2 is the first process: parked in a syscall, so its stack
     # runs down through isr_common into ring 3 -- and stops there.
+    res.check("the unwinder claims a trap frame only once it is whole, not mid-push",
+              "@@claims [0, 0, 1, 1]" in out,
+              next((l for l in out.splitlines() if "@@claims" in l or "Error" in l), out[-300:]))
     res.check("a parked thread's bt goes PAST isr_common and stops at the user frame",
               "isr_common" in out and "syscall_dispatch" in out and
               "Backtrace stopped: frame did not save the PC" in out, out[-900:])

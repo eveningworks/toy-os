@@ -137,6 +137,12 @@ def chatty_telnet():
     return srv.getsockname()[1]
 
 
+def gave_up(err):
+    """The bounded give-up, and nothing else: a NameError or TypeError in
+    the code under test ends the call too, and must not pass for this."""
+    return isinstance(err, RuntimeError) and "no progress" in str(err)
+
+
 class FakeSession:
     def __init__(self):
         self.ran = []
@@ -167,12 +173,12 @@ def main():
         port = udp_server(stale_acks)
         done, err = bounded(lambda: r.do_put("127.0.0.1", port, src, "/x", 0.5, quiet=True))
         check("put gives up on a server that only repeats a stale ACK",
-              done and err is not None, "still running" if not done else f"returned without error: {err!r}")
+              done and gave_up(err), "still running" if not done else f"ended with {err!r}")
 
         port = udp_server(same_block)
         done, err = bounded(lambda: r.do_get("127.0.0.1", port, "/x", os.path.join(tmp, "out"), 0.5))
         check("get gives up on a server that resends one block forever",
-              done and err is not None, "still running" if not done else f"returned without error: {err!r}")
+              done and gave_up(err), "still running" if not done else f"ended with {err!r}")
 
         port, want = lost_ack_server()
         out = os.path.join(tmp, "out2")
