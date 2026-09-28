@@ -3892,6 +3892,17 @@ window without going through it will find its layout polls timing out.
   ignored while every cheaper check passed. It leaves
   `/etc/shortcuts.conf` removed, so the machine is as it was found. In
   `gui_regress.py`.
+- **`devmgr_test.py`** -- the Device Manager (`userland/gui/system/devmgr.c`
+  over `lib/udevice.c`): the tree is DRAWN with its icons, "By connection"
+  keeps the selection, and Disable/Enable on the network card round-trip
+  through the confirm dialog. **Whether a device is bound is read from
+  `devctl list`, never from the app's own report** -- the app says what it
+  believes. The icon check counts saturated pixels AND the columns they
+  span, since a saturated selection wash would pass a bare count. It
+  closes a Device Manager already open first: the app is single-instance,
+  so a leftover window takes the spawn with the layout log still off. It
+  never ticks "Keep disabled", so it leaves `/etc/devices.conf` as found.
+  In `gui_regress.py`.
 - **`taskmgr_test.py`** -- the ring-3 Task Manager: `uui_table`, resize
   reflow, and ending a process (12 checks). Its resize check asserts the
   table grew by ROUGHLY WHAT THE WINDOW GREW BY, not merely that it

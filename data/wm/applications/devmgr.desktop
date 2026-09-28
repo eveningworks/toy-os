@@ -1,0 +1,6 @@
+# Device Manager -- see this directory's README.md for the format.
+Name=Device Manager
+Exec=/bin/wm/system/devmgr
+Category=system
+Comment=The machine's devices, their drivers, and Disable/Enable
+Icon=devmgr

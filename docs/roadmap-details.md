@@ -1599,6 +1599,16 @@ kernel can already release and rebind a PCI device
 (`pci_device_release()`/`pci_device_rebind()`). The app is the view, and
 the one new capability is asking for an unbind or rebind from ring 3.
 
+**Built 2026-09-28** (`userland/gui/system/devmgr.c`, `/bin/devctl`, both
+over `userland/lib/udevice.c`). No new kernel call was needed: disable is
+`SYS_DEV_CLAIM` then `SYS_DEV_RELEASE` without a rebind (the USB pair for
+USB), enable is the same pair with it. Layout A from the mockups -- a
+tree By type / By connection beside a properties pane -- with icons added
+to `uui_tree`. A device can stay disabled across a restart:
+`/etc/devices.conf`, re-applied by the `devices` service before `netd`
+and `soundd`. Not built: a properties sheet per device (resources, IRQ,
+BARs), and ACPI/platform devices beyond PS/2 and the CPUs.
+
 ### A Network tab in Task Manager: per-card throughput, address, lease and the connection log
 
 Chosen 2026-09-28, as a TAB for the reason the Performance graphs are

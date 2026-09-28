@@ -717,7 +717,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~A Log Viewer~~ DONE 2026-09-15 -- both rings merged on their shared stamp, a level filter and a search field
 - [x] ~~CPU/memory over time as a TAB in Task Manager~~ DONE 2026-09-15 -- history is collected whether or not the tab is showing
 - [ ] Scientific mode for Calculator
-- [ ] Device Manager: devices by bus with their bound driver, properties, and unbind/rebind -- Windows' Device Manager, KDE Info Center
+- [x] ~~Device Manager: devices by bus with their bound driver, properties, and unbind/rebind~~ DONE 2026-09-28
 - [ ] A Network tab in Task Manager: per-card throughput, address, lease and the connection log -- Windows' Performance > Ethernet
 - [ ] A hex viewer, read-only first, for disk images, fonts and WADs on the machine itself -- Okteta, HxD
 - [ ] Paint: pencil, shapes, fill, select and copy, saving PNG/JPEG/QOI -- needs a reusable colour-picker widget

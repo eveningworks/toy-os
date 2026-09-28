@@ -773,6 +773,36 @@ def icon_cat_system():
     return im
 
 
+def icon_devmgr():
+    # An expansion card: a board, a chip on it, and the gold fingers
+    # along its edge -- the DEVICE rather than the machine (System is a
+    # tower, Kernel a bare chip).
+    im, d = tile((70, 110, 160))
+    d.rounded_rectangle([10, 14, 54, 42], radius=3, outline=WHITE, width=4)
+    d.rectangle([18, 21, 31, 34], fill=WHITE)            # the chip
+    d.line([36, 24, 46, 24], fill=WHITE, width=3)         # traces
+    d.line([36, 31, 46, 31], fill=WHITE, width=3)
+    for x in range(16, 50, 6):
+        d.line([x, 44, x, 51], fill=WHITE, width=3)       # the fingers
+    return im
+
+
+def icon_dev_usb():
+    # The USB trident: a stem with an arrowhead, a branch ending in a
+    # circle and one ending in a square, on a base dot.
+    im, d = tile((95, 120, 140))
+    d.line([32, 18, 32, 48], fill=WHITE, width=4)
+    d.polygon([(32, 9), (25, 19), (39, 19)], fill=WHITE)             # arrowhead
+    d.line([32, 38, 20, 30], fill=WHITE, width=4)
+    d.line([20, 30, 20, 25], fill=WHITE, width=4)
+    d.ellipse([15, 19, 25, 29], fill=WHITE)                          # circle end
+    d.line([32, 42, 44, 34], fill=WHITE, width=4)
+    d.line([44, 34, 44, 28], fill=WHITE, width=4)
+    d.rectangle([39, 22, 49, 30], fill=WHITE)                        # square end
+    d.ellipse([27, 46, 37, 56], fill=WHITE)                          # base
+    return im
+
+
 def icon_cat_favourites():
     # A STAR, which is what a pinned thing is called everywhere. Drawn
     # as a polygon rather than a glyph so it stays sharp at the folder
@@ -929,6 +959,8 @@ ICONS = {
     "cat-display": icon_cat_display,
     "cat-storage": icon_cat_storage,
     "cat-sound": icon_cat_sound,
+    "devmgr": icon_devmgr,
+    "dev-usb": icon_dev_usb,
     "start": icon_start,
     "toyos": icon_toyos,
     "notepad": icon_notepad,

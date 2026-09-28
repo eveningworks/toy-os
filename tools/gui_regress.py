@@ -142,6 +142,7 @@ TOOLS = [
     ("crash", "crashtest_test.py", "fault paths: ring-3 crashes, and the gate on kernel panics"),
     ("entries", "desktop_entries_test.py", "ShowIn= and live .desktop reload"),
     ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),
+    ("devmgr", "devmgr_test.py", "the device tree and its icons, disable/enable through the dialog"),
     ("singleinst", "single_instance_test.py", "one copy of an app, and relaunch raises it"),
     ("osk", "osk_test.py", "the on-screen keyboard types into the focused client"),
     ("settings", "settings_test.py", "the settings registry, in ring 3"),
@@ -236,6 +237,7 @@ COST_S = {
     "saver": 22,
     "uapp": 19,
     "taskmgr": 19,
+    "devmgr": 25,      # a row-by-row select twice, a disable and an enable
     "uidemo": 17,
     "blank": 17,
     "wingeom": 70,

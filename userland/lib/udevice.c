@@ -18,10 +18,10 @@ static const char *const TYPE_NAME[UDEV_T_COUNT] = {
     "USB controllers", "Input devices", "Processors", "System devices", "Other devices",
 };
 // The Settings sidebar's category art, which already draws these; the
-// two it has no page for are the Device Manager's own.
+// USB has no page there, so it is the Device Manager's own.
 static const char *const TYPE_ICON[UDEV_T_COUNT] = {
     "cat-display", "cat-network", "cat-sound", "cat-storage",
-    "dev-usb", "cat-input", "dev-cpu", "cat-system", "cat-system",
+    "dev-usb", "cat-input", "cat-kernel", "cat-system", "cat-system",
 };
 
 const char *udevice_type_name(enum udev_type t) { return t < UDEV_T_COUNT ? TYPE_NAME[t] : "?"; }
