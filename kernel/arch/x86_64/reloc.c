@@ -43,6 +43,7 @@
 // the boot tables where they are is what removes the "reload CR3 with
 // relocated page-table addresses" step the roadmap anticipated.
 #include "reloc.h"
+#include "kasan.h"
 #include "panic_store.h"
 #include "klog.h"
 #include "multiboot.h"
@@ -282,6 +283,10 @@ uint64_t kernel_reloc_slots(void) { return g_slots; }
 const char *kernel_reloc_note(void) { return g_note; }
 
 uint64_t kernel_relocate_boot(uint64_t mb2_info) {
+    // FIRST, before anything instrumented can run: KASAN=1's stack
+    // redzones are written from the first instrumented function on, and
+    // this is the first C the kernel executes. A no-op otherwise.
+    kasan_early_init();
     uint64_t img_start = (uint64_t)(uintptr_t)__kimage_start;
     uint64_t old_end = (uint64_t)(uintptr_t)_kernel_end;
     uint64_t img_size = old_end - img_start;

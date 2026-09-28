@@ -1855,7 +1855,7 @@ question, a week's worth of planned work each time.
 ## UBSAN is opt-in, logs and carries on, and is run from a scratch copy
 
 `make UBSAN=1` builds both rings with GCC's `-fsanitize=undefined`, and
-`tools/ubsan_run.py` is how it is run. Three choices in that, each with
+`tools/sanitize_run.py` is how it is run. Three choices in that, each with
 an obvious alternative that was measured or considered and not taken.
 
 **Opt-in, not always on.** Measured on the kernel's own objects:
@@ -1911,3 +1911,64 @@ as much as the report: a real out-of-bounds write in the kernel (the
 a test fake writing through NULL into physical page 0, and signed
 left shifts in `fixed.h` and `geom.c` -- none of which any test had
 noticed.
+
+---
+
+## KASAN is Linux's generic mode, with a fixed shadow slot and outline checks
+
+`make KASAN=1` builds the kernel with GCC's `-fsanitize=kernel-address`;
+`kernel/include/api/kasan.h` has the layout and `tools/sanitize_run.py`
+runs it beside UBSAN. The choices, and the alternatives each beat:
+
+**Generic (shadow-memory) mode, not tags or sampling.** Linux has three
+KASAN modes. The two tag-based ones need the top byte of a pointer to
+be ignored by the MMU (ARM's TBI, or MTE in hardware); x86-64 has
+neither in a form this kernel could use. KFENCE -- a few guard-paged
+objects sampled at random -- is cheap enough for production but finds
+a given bug only eventually; this is a debug build, where finding it on
+the first run is the point.
+
+**A fixed shadow at `0xFFFFC00000000000`, top-level slot 384.** GCC
+writes stack redzones straight into shadow memory at a compile-time
+offset, so the shadow has to sit at a known address in every address
+space. Every kernel address is in the identity map below 512 GiB, so
+the shadow is 64 GiB of virtual space in an otherwise unused higher-half
+slot, copied into each process's PML4 the way slot 0 is, supervisor-only
+and non-executable. Only RAM's share of it is backed: a 256 MiB guest
+spends 32 MiB, and everything else maps one shared zero page. The
+alternative -- no stack or global checks, and a shadow array anywhere
+-- was offered and not chosen: stack and global overflows are half of
+what KASAN is for.
+
+**Mapped in two stages.** Stack instrumentation writes shadow from the
+first instrumented function, long before there is a frame allocator to
+back an eighth of RAM. So `kasan_early_init()` points the whole slot at
+one zero page from the first line of C (`kernel_relocate_boot()`), and
+`kasan_init()` swaps real pages in over usable RAM once the identity
+map covers all of it. Nothing is CHECKED until then; early writes land
+in the shared page and are wiped.
+
+**Outline calls, not inline checks.** With the call threshold at 0 every
+load and store calls `__asan_{load,store}N_noabort`, so the runtime,
+not the compiler, decides what is checkable: a user address, MMIO above
+RAM, or anything before the shadow is live is skipped. Inline checks
+are faster and would read shadow for every such address -- including
+ones with no shadow behind them.
+
+**The heap gets exact bounds and a quarantine.** A block is poisoned
+whole and then opened to exactly the size asked for (the size is kept
+at the block's end, so `kmalloc_size()` agrees with it), and a freed
+block sits poisoned in a 1 MiB FIFO before it can merge or be reused --
+Linux's quarantine, without which a use-after-free finds the NEXT
+owner's data. The heap's own debug red-zones (`heap debug on`) stay:
+they check at FREE time in a normal build; KASAN checks at the access,
+in an instrumented one.
+
+**Kernel stacks double.** Redzones grow every frame with an array in it,
+and 16 KiB is already the depth budget. Linux doubles `THREAD_SIZE`
+under KASAN for the same reason; the frame-size warning goes to 2048.
+
+**Kernel only.** Ring 3's `malloc` is the same `heap_core.c`, but
+checking ring 3 is AddressSanitizer proper: a shadow in each process,
+`mmap` and signal handling that know about it, and a runtime in libc.
+A separate project, and UBSAN already covers ring 3's arithmetic.

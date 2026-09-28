@@ -364,7 +364,7 @@ TOOLS = [
     # A whole second build, instrumented, in a scratch copy of the tree --
     # so it never touches disk.img, but it boots three guests of its own
     # and wants the CPU: `serial`.
-    ("ubsan",       "ubsan_run.py",            "undefined behaviour, both rings (UBSAN=1)", True, None,         False),
+    ("sanitize",    "sanitize_run.py",         "UBSAN (both rings) and KASAN (kernel)", True, None,             False),
     ("doom",        "doom_test.py",            "DOOM runs, draws and takes input",   True,
      ("iwad", "no IWAD fetched -- see tools/fetch_wad.py"),                                   True),
     # Boots its OWN guests (twice, with an AC97 attached), so wants_vm is

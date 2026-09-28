@@ -1,4 +1,5 @@
 #include "vmm.h"
+#include "kasan.h"
 #include "pmm.h"
 #include "swap.h"
 #include "string.h" // k_memcpy() -- the user-copy helpers below
@@ -66,6 +67,9 @@ uint64_t vmm_create_address_space(void) {
 
     uint64_t *pml4 = table_at(pml4_phys);
     pml4[0] = p4_table[0]; // share the kernel's identity-mapped low 4GiB
+    // and KASAN's shadow, which instrumented code reads and writes in
+    // every address space (0 in a build without KASAN).
+    pml4[KASAN_PML4_INDEX] = p4_table[KASAN_PML4_INDEX];
 
     return pml4_phys;
 }
@@ -467,6 +471,7 @@ void vmm_destroy_address_space(uint64_t pml4_phys) {
     // vmm_create_address_space()); walking into it here would free
     // memory every other process (and the kernel itself) still needs.
     for (int i = 1; i < 512; i++) {
+        if (i == KASAN_PML4_INDEX) continue;   // shared, like entry 0
         if (pml4[i] & PAGE_PRESENT) destroy_pdpt(pml4[i] & ADDR_MASK);
     }
     pmm_free_frame(pml4_phys);
@@ -553,6 +558,7 @@ uint64_t vmm_fork_address_space(uint64_t parent, const struct vmm_fork_opts *o) 
 
     uint64_t *pml4 = table_at(parent);
     for (int i = 1; i < 512 && !why; i++) {
+        if (i == KASAN_PML4_INDEX) continue;   // shared, and the child already has it
         if (!(pml4[i] & PAGE_PRESENT)) continue;
         uint64_t *pdpt = table_at(pml4[i] & ADDR_MASK);
         for (int j = 0; j < 512 && !why; j++) {
@@ -720,6 +726,7 @@ uint64_t vmm_audit_space_cb(uint64_t pml4_phys, struct vmm_audit *out,
     // the page tables -- none of which this audit's invariant covers.
     // Same reason vmm_destroy_address_space() starts there.
     for (int i = 1; i < 512; i++) {
+        if (i == KASAN_PML4_INDEX) continue;   // the kernel's, like entry 0
         if (!(pml4[i] & PAGE_PRESENT)) continue;
         uint64_t *pdpt = table_at(pml4[i] & ADDR_MASK);
         for (int j = 0; j < 512; j++) {

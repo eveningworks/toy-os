@@ -59,6 +59,7 @@
 #include "virtio_gpu.h"   // virtio-gpu -- a display_driver on the virtio transport
 #include "virtio_input.h" // virtio-input -- keyboards/mice/tablets, into the input core
 #include "usb.h"         // xHCI, and USB HID keyboards/mice into the same core
+#include "kasan.h"
 #include "reloc.h"        // the image's own relocation table -- kernel_relocate()
 
 // Where the running image starts -- a relocated symbol, so under kernel
@@ -175,6 +176,11 @@ void kernel_main(uint64_t multiboot_info_addr) {
         uint64_t hi = paging_extend_identity_map();
         if (hi) klog_printf("toy-os: identity map extended by %lu MiB above 4 GiB\n", hi >> 20);
     }
+    // KASAN=1: real shadow behind every usable RAM range -- after the
+    // identity map covers all of it, since the shadow frames are zeroed
+    // through it -- then the globals' redzones. No-ops otherwise.
+    kasan_init();
+    kasan_run_constructors();
 
     // Display drivers register, then probe -- specific cards first, the
     // generic GRUB framebuffer last as the fallback that always claims.

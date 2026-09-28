@@ -11,7 +11,7 @@
 //
 // EACH SITE REPORTS ONCE: the handler sets the top bit of the site's
 // `column`, as compiler-rt and Linux do, so a loop cannot flood the log.
-// Every line starts "UBSAN: ", which is what tools/ubsan_run.py counts.
+// Every line starts "UBSAN: ", which is what tools/sanitize_run.py counts.
 //
 // The handlers are compiled into every build, instrumented or not, so
 // the KTESTs can drive them with hand-made descriptors.

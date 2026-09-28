@@ -649,7 +649,7 @@ actually been found rather than what someone predicted.
 (Doom and dash excepted) with `-fsanitize=undefined -fno-sanitize=alignment`.
 The handlers are `kernel/lib/ubsan.c`, compiled into both rings as
 `kfmt.c` is: a failed check logs one line per SITE and returns, with a
-stack scan in the kernel and to stderr in ring 3. `tools/ubsan_run.py`
+stack scan in the kernel and to stderr in ring 3. `tools/sanitize_run.py`
 builds a scratch copy of the tree and reads a desktop boot, the kernel
 suite and the ring-3 suite for reports. Why each of those choices is in
 `docs/decisions/build.md`, "UBSAN is opt-in, logs and carries on, and is
@@ -662,15 +662,32 @@ change. What it does NOT cover: code no run reaches (the runner boots a
 desktop and runs the suites, nothing more -- no network, no audio, no
 USB), and the two vendored ports.
 
-### KASAN-style shadow memory for the kernel heap -- after UBSAN, which is a fraction of the cost
+### KASAN: shadow memory over the kernel's heap, frames, stacks and globals
 
-KASAN maps one shadow byte per eight bytes of kernel memory and checks
-it on every load and store (`-fsanitize=kernel-address`), which finds
-use-after-free and heap overflow at the access rather than at the later
-crash. It costs an eighth of memory for the shadow, a reserved virtual
-range, and allocator hooks for poisoning redzones and freed blocks.
-Worth it once UBSAN is in and a heap corruption is being chased;
-not before.
+**DONE 2026-09-28.** `make KASAN=1` builds the kernel with GCC's
+`-fsanitize=kernel-address` in Linux's generic mode: a shadow byte per 8
+bytes at a fixed higher-half slot, outline checks on every load and
+store, GCC's own stack redzones, globals registered by constructors,
+the heap with exact bounds and a 1 MiB quarantine, and freed frames
+poisoned. `tools/sanitize_run.py` runs it beside UBSAN. Why each choice
+is in `docs/decisions/build.md`, "KASAN is Linux's generic mode, with a
+fixed shadow slot and outline checks".
+
+Its first run found a real kernel use-after-free: a dying compositor's
+page tables were freed before the window server revoked its framebuffer
+grant, and the revoke then walked them. What it does not cover: ring 3
+(the next item), DMA (a device writes memory no instrumentation sees),
+and anything no run reaches.
+
+### AddressSanitizer for ring 3: a shadow per process, and libc's malloc poisoning it as the kernel heap does
+
+`heap_core.c` is ring 3's `malloc` too, and its KASAN hooks are already
+the right shape. What ring 3 lacks is the rest: a shadow region in each
+process's address space (reserved at exec, demand-paged, zero means
+accessible), `mmap`/`munmap` and thread stacks keeping it current, a
+signal handler's frames unpoisoned on `sigreturn`, and the checks'
+runtime in libc -- compiler-rt's shape rather than the kernel's. The
+vendored ports would want it most and would report the most.
 
 ### TTY / virtual terminals
 

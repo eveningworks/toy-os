@@ -1102,8 +1102,9 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [ ] `fault_inject.h` extended to fail at a *random* point rather than the Nth, driven by the same seed
 - [ ] A corpus of past failures kept as regression tests
 - [ ] Run it in CI on a time budget, not to completion
-- [x] ~~UBSAN in both rings: `-fsanitize=undefined` with our own handlers~~ DONE 2026-09-28 -- `make UBSAN=1`, run by `tools/ubsan_run.py`
-- [ ] KASAN-style shadow memory for the kernel heap -- after UBSAN, which is a fraction of the cost
+- [x] ~~UBSAN in both rings: `-fsanitize=undefined` with our own handlers~~ DONE 2026-09-28 -- `make UBSAN=1`, `tools/sanitize_run.py`
+- [x] ~~KASAN: shadow memory over the kernel's heap, frames, stacks and globals~~ DONE 2026-09-28 -- `make KASAN=1`
+- [ ] AddressSanitizer for ring 3: a shadow per process, and libc's malloc poisoning it as the kernel heap does
 
 ### Observability
 

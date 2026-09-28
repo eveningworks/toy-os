@@ -485,9 +485,10 @@ this the obvious way), not from how much history it accumulated.
   check calls `kernel/lib/ubsan.c`, which is compiled into the kernel
   and into libc. Three things to keep true:
 
-  - **A new compile rule lists `$(BUILD)/.ubsan-flag`**, or toggling
-    `UBSAN` leaves that rule's objects built the other way -- a mixed
-    build that links and says nothing.
+  - **A new compile rule lists `$(BUILD)/.sanitize-flag`** (one stamp
+    for `UBSAN` and `KASAN`), or toggling either leaves that rule's
+    objects built the other way -- a mixed build that links and says
+    nothing.
   - **Code that runs where no handler can be called goes in
     `UBSAN_EXCLUDE`**: crt0/`userland/rt/` and `ld-toy` (linked without
     libc), the relocation walk, the kdebug stub, and the runtime itself.
@@ -499,9 +500,34 @@ this the obvious way), not from how much history it accumulated.
     need not honour it. The result is the same for every value that
     fits; one that does not now reports instead of wrapping silently.
 
-  **Run it with `tools/ubsan_run.py`, not a hand-typed `make UBSAN=1
+  **Run it with `tools/sanitize_run.py`, not a hand-typed `make UBSAN=1
   iso`**, which re-seeds your `disk.img`: the tool builds a copy of the
   tree in scratch and reads all three places a report can land.
+
+- **`KASAN=1` IS THE KERNEL'S ADDRESS SANITIZER, AND FOUR THINGS KEEP ITS
+  SHADOW TRUE.** GCC's `-fsanitize=kernel-address` checks every kernel
+  load and store against a shadow byte per 8 bytes (`api/kasan.h`); the
+  shadow is only as right as the code that writes it:
+
+  - **An allocator poisons what it takes back and unpoisons what it
+    hands out** -- `heap_core.c` (redzones, a quarantine) and `pmm.c`
+    (free frames) do. A new allocator of kernel memory does the same
+    through `kasan_poison()`/`kasan_unpoison()`, which are no-ops
+    without KASAN, and is itself in `KASAN_EXCLUDE` if it writes
+    metadata inside memory it has poisoned.
+  - **A stack that is REUSED is unpoisoned first** (`kstack_arm()`), and
+    **a resume that abandons frames calls `kasan_unpoison_stack_below()`**:
+    only a RETURN clears a frame's redzones, so a killed process's
+    frames, or a longjmp-style resume, leave poison that the next deep
+    call reports as a stack overflow.
+  - **Code that reads memory it does not own ON PURPOSE is
+    `__attribute__((no_sanitize_address))`** (`idt_log_stack_scan()`
+    reads every stack word, redzones included), and **a test that
+    corrupts memory on purpose brackets it with
+    `kasan_suppress_begin()`/`_end()`**.
+  - **A new top-level page-table walker skips `KASAN_PML4_INDEX`** as it
+    skips slot 0: the shadow is shared by every address space, and
+    `vmm_destroy_address_space()` freeing it would free the kernel's.
 
 - **THE KERNEL'S DEBUG INFO IS SPLIT OUT, AND `--add-gnu-debuglink` IS
   WHAT KEEPS EVERY TOOL WORKING.** `build/kernel.bin` is stripped and

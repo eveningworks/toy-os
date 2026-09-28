@@ -24,7 +24,13 @@
 // x64 kernel stack. Depth here is many medium frames rather than one
 // big one -- see docs/decisions.md, and CFLAGS' -Wframe-larger-than,
 // which is the other half of keeping it that way.
+// DOUBLED under KASAN=1, as Linux's KASAN_STACK_ORDER does: GCC's stack
+// redzones grow every frame with an array in it.
+#ifdef TOYOS_KASAN
+#define KSTACK_BYTES        32768
+#else
 #define KSTACK_BYTES        16384
+#endif
 #define KSTACK_GUARD_BYTES  4096
 
 // Written at the very bottom and checked at every context switch --

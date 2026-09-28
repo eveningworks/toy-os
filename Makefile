@@ -178,7 +178,7 @@ CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-gu
          -mno-red-zone -mcmodel=kernel -mno-mmx -mno-sse -mno-sse2 \
          -fno-asynchronous-unwind-tables \
          -Wall -Wextra -Wframe-larger-than=1024 -O2 -g -c $(KERNEL_INCLUDES) -Iapps -MMD -MP \
-         $(UBSAN_FOR)
+         $(UBSAN_FOR) $(KASAN_FOR)
 
 # apps/ gets a looser frame budget than kernel/ on purpose. The tight
 # 1024 above bounds what runs on a PER-PROCESS kernel stack -- i.e. what
@@ -193,7 +193,7 @@ APPS_CFLAGS = $(subst -Wframe-larger-than=1024,-Wframe-larger-than=2048,\
 
 LDFLAGS = -n -T linker.ld -nostdlib
 
-ASMFLAGS = -f elf64
+ASMFLAGS = -f elf64 $(if $(filter 1,$(KASAN)),-DTOYOS_KASAN)
 
 KERNEL = $(BUILD)/kernel.bin
 
@@ -447,7 +447,10 @@ MODULE_KOS     := $(foreach s,$(MODULE_SOURCES),$(BUILD)/modules/$(basename $(no
 MODULE_ALIAS   := $(BUILD)/modules/modules.alias
 # The large code model is what lets a module's frames sit anywhere
 # (kernel/include/kernel/module.h); every other flag is the kernel's.
-MODULE_CFLAGS = $(subst -mcmodel=kernel,-mcmodel=large,$(CFLAGS))
+# KASAN=1: no global redzones in a module -- nothing runs a module's
+# constructors, so they would never be registered.
+MODULE_CFLAGS = $(subst -mcmodel=kernel,-mcmodel=large,$(CFLAGS)) \
+                $(if $(filter 1,$(KASAN)),--param asan-globals=0)
 
 C_SOURCES   = $(filter-out $(MODULE_SOURCES),$(shell find kernel apps -name '*.c' | sort))
 ASM_SOURCES = $(shell find kernel -name '*.asm' | sort)
@@ -524,7 +527,7 @@ all: $(KERNEL) $(USERLAND_ELVES) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) $(LIBC_SO) $(
 # needs the symbol table and nothing else, and /lib/modules is on the
 # disk.
 define MODULE_RULE
-$$(BUILD)/modules/$(basename $(notdir $(1))).o: $(1) $$(BUILD)/.ubsan-flag
+$$(BUILD)/modules/$(basename $(notdir $(1))).o: $(1) $$(BUILD)/.sanitize-flag
 	@mkdir -p $$(dir $$@)
 	$$(CC) $$(MODULE_CFLAGS) $$< -o $$@
 endef
@@ -675,7 +678,7 @@ $(BUILD)/.compress-flag: FORCE
 # GCC's -fsanitize=undefined in BOTH rings. A failed check calls a
 # __ubsan_handle_* in kernel/lib/ubsan.c, which logs the site ONCE and
 # returns (Linux's CONFIG_UBSAN, not a trap). It roughly doubles the
-# kernel's .text, hence opt-in; tools/ubsan_run.py is what runs it.
+# kernel's .text, hence opt-in; tools/sanitize_run.py is what runs it.
 # -fno-sanitize=alignment as Linux does on x86: the CPU does not care,
 # and packed wire structs would bury everything else.
 #
@@ -695,17 +698,46 @@ UBSAN_EXCLUDE = kernel/lib/ubsan.c kernel/lib/ubsan_report.c userland/libc/ubsan
                 userland/ports/dash/% userland/backends/dash/% $(BUILD)/dash/%
 UBSAN_FOR = $(if $(filter 1,$(UBSAN)),$(if $(filter $(UBSAN_EXCLUDE),$<),,$(UBSAN_CFLAGS)))
 
-# A prerequisite of EVERY compile rule, for the reason the two stamps
-# above exist: the .d files track headers, not flags.
-$(BUILD)/.ubsan-flag: FORCE
-	@mkdir -p $(dir $@)
-	@echo '$(UBSAN)' | cmp -s - $@ || echo '$(UBSAN)' > $@
+# --- KASAN=1: the kernel address sanitizer, OFF by default ------------
+#
+# GCC's -fsanitize=kernel-address, Linux's generic mode, KERNEL ONLY (ring
+# 3's malloc would be ASan, a separate project). kernel/include/api/kasan.h
+# has the shadow layout; kernel/lib/kasan.c the runtime; the heap, the
+# frame allocator and the kernel stacks keep the shadow current.
+#
+# OUTLINE loads and stores (call threshold 0), so the runtime filters
+# addresses; GCC still writes STACK redzones inline at the fixed offset,
+# which is why the offset is a constant here and a matching one in
+# kasan.h (asserted there). Frames grow with their redzones: the frame
+# warning goes to 2048 as Linux's does, and kstack.h doubles the stacks.
+#
+# KASAN_EXCLUDE: the runtime and the shadow's page tables; the heap and
+# the frame allocator, which write their own metadata inside poisoned
+# memory; the relocation walk, which runs before the shadow is mapped;
+# and the kdebug stub. Excluded files still see -DTOYOS_KASAN, which is
+# what switches the heap's redzones and quarantine on.
+KASAN ?=
+KASAN_SHADOW_OFFSET = 0xFFFFC00000000000
+KASAN_CFLAGS = -fsanitize=kernel-address -fasan-shadow-offset=$(KASAN_SHADOW_OFFSET) \
+               --param asan-instrumentation-with-call-threshold=0 \
+               --param asan-stack=1 --param asan-globals=1 -Wframe-larger-than=2048
+KASAN_DEFS = -DTOYOS_KASAN=1 -DKASAN_SHADOW_OFFSET_CFG=$(KASAN_SHADOW_OFFSET)ULL
+KASAN_EXCLUDE = kernel/lib/kasan.c kernel/mm/kasan_shadow.c kernel/lib/heap_core.c \
+                kernel/mm/pmm.c kernel/arch/x86_64/reloc.c kernel/debug/%
+KASAN_FOR = $(if $(filter 1,$(KASAN)),$(KASAN_DEFS) $(if $(filter $(KASAN_EXCLUDE),$<),,$(KASAN_CFLAGS)))
 
-$(BUILD)/%.o: %.c $(BUILD)/.ubsan-flag
+# A prerequisite of EVERY compile rule, for the reason the two stamps
+# above exist: the .d files track headers, not flags. One stamp for both
+# sanitizers.
+$(BUILD)/.sanitize-flag: FORCE
+	@mkdir -p $(dir $@)
+	@echo 'UBSAN=$(UBSAN) KASAN=$(KASAN)' | cmp -s - $@ || echo 'UBSAN=$(UBSAN) KASAN=$(KASAN)' > $@
+
+$(BUILD)/%.o: %.c $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(if $(filter apps/%,$<),$(APPS_CFLAGS),$(CFLAGS)) $< -o $@
 
-$(BUILD)/%.o: %.asm $(BUILD)/.ubsan-flag
+$(BUILD)/%.o: %.asm $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(ASM) $(ASMFLAGS) $< -o $@
 
@@ -714,7 +746,7 @@ $(BUILD)/%.o: %.asm $(BUILD)/.ubsan-flag
 # a .c file in userland/gui, userland/bin or userland/tests and nothing
 # else -- the directory says both that it is a program and where it
 # seeds to (see "userland source layout" above).
-$(BUILD)/userland/%.o: userland/%.c $(BUILD)/.ubsan-flag
+$(BUILD)/userland/%.o: userland/%.c $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
@@ -850,7 +882,7 @@ $(LIBUAPP): $(LIBUAPP_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
 
-$(BUILD)/userland/%.o: userland/%.S $(BUILD)/.ubsan-flag
+$(BUILD)/userland/%.o: userland/%.S $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
@@ -953,7 +985,7 @@ DOOM_CFLAGS = $(subst -Wframe-larger-than=2048,-Wframe-larger-than=16384,\
 # pushed through all eighty.
 $(BUILD)/userland/ports/doom/midifile.o: DOOM_CFLAGS += -include SDL.h
 
-$(BUILD)/userland/ports/doom/%.o: userland/ports/doom/%.c $(BUILD)/.ubsan-flag
+$(BUILD)/userland/ports/doom/%.o: userland/ports/doom/%.c $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(DOOM_CFLAGS) $< -o $@
 
@@ -1024,11 +1056,11 @@ DASH_CFLAGS = $(subst -Wall,-w,$(subst -Wextra,,$(USERLAND_CFLAGS))) \
 # renamed in the BUILD so neither copy is edited.
 $(BUILD)/userland/dash/port/main.o: DASH_CFLAGS += -Dmain=dash_main
 
-$(BUILD)/userland/dash/backend/%.o: userland/backends/dash/%.c $(BUILD)/.ubsan-flag
+$(BUILD)/userland/dash/backend/%.o: userland/backends/dash/%.c $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(USERLAND_CFLAGS) -Iuserland -Iuserland/backends/dash -c $< -o $@
 
-$(BUILD)/userland/dash/port/%.o: $(DASH_SRC)/%.c $(DASH_GEN)/.stamp $(BUILD)/.ubsan-flag
+$(BUILD)/userland/dash/port/%.o: $(DASH_SRC)/%.c $(DASH_GEN)/.stamp $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(DASH_CFLAGS) $< -o $@
 
@@ -1046,7 +1078,7 @@ $(BUILD)/userland/dash/port/%.o: $(DASH_SRC)/%.c $(DASH_GEN)/.stamp $(BUILD)/.ub
 $(DASH_GEN)/%.c $(DASH_GEN)/%.h: $(DASH_GEN)/.stamp
 	@:
 
-$(BUILD)/userland/dash/gen/%.o: $(DASH_GEN)/%.c $(DASH_GEN)/.stamp $(BUILD)/.ubsan-flag
+$(BUILD)/userland/dash/gen/%.o: $(DASH_GEN)/%.c $(DASH_GEN)/.stamp $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(DASH_CFLAGS) $< -o $@
 
@@ -1161,19 +1193,19 @@ LIBC_PIC_OBJS = $(patsubst userland/%.c,$(BUILD)/userland-pic/%.o,$(filter-out u
 
 LIBC_NONSHARED = $(BUILD)/userland/libc_nonshared.a
 
-$(BUILD)/userland-pic/%.o: userland/%.c $(BUILD)/.ubsan-flag
+$(BUILD)/userland-pic/%.o: userland/%.c $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBC_PIC_CFLAGS) $< -o $@
 
-$(BUILD)/userland-pic/%.o: userland/%.S $(BUILD)/.ubsan-flag
+$(BUILD)/userland-pic/%.o: userland/%.S $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBC_PIC_CFLAGS) $< -o $@
 
-$(BUILD)/userland-pic/shared/%.o: kernel/lib/%.c $(BUILD)/.ubsan-flag
+$(BUILD)/userland-pic/shared/%.o: kernel/lib/%.c $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBC_PIC_SHARED_CFLAGS) -Iapps $< -o $@
 
-$(BUILD)/userland-pic/shared/%.o: apps/%.c $(BUILD)/.ubsan-flag
+$(BUILD)/userland-pic/shared/%.o: apps/%.c $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBC_PIC_SHARED_CFLAGS) -Iapps $< -o $@
 
@@ -1396,14 +1428,14 @@ MBEDTLS_SRCS = $(filter-out %/net_sockets.c %/timing.c, \
                  $(wildcard userland/ports/mbedtls/library/*.c))
 MBEDTLS_OBJS = $(patsubst userland/%.c,$(BUILD)/userland-pic/%.o,$(MBEDTLS_SRCS))
 
-$(BUILD)/userland-pic/ports/mbedtls/library/%.o: userland/ports/mbedtls/library/%.c $(BUILD)/.ubsan-flag
+$(BUILD)/userland-pic/ports/mbedtls/library/%.o: userland/ports/mbedtls/library/%.c $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(MBEDTLS_CFLAGS) $< -o $@
 
 # OUR backend keeps every warning, exactly as userland/backends/doom/
 # does. It needs mbedTLS's headers and the same -nostdinc treatment,
 # because it includes them.
-$(BUILD)/userland-pic/backends/mbedtls/%.o: userland/backends/mbedtls/%.c $(BUILD)/.ubsan-flag
+$(BUILD)/userland-pic/backends/mbedtls/%.o: userland/backends/mbedtls/%.c $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(subst -Wframe-larger-than=2048,-Wframe-larger-than=2048,$(LIBC_PIC_CFLAGS)) \
 	      -nostdinc -isystem $(GCC_FREESTANDING_INC) \
@@ -1496,11 +1528,11 @@ $(BUILD)/userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/rt/link.l
 # rather than something the comment above asks for.
 SHARED_CFLAGS = $(subst $(LIBC_INCLUDES),,$(USERLAND_CFLAGS))
 
-$(BUILD)/userland/shared/%.o: kernel/lib/%.c $(BUILD)/.ubsan-flag
+$(BUILD)/userland/shared/%.o: kernel/lib/%.c $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(SHARED_CFLAGS) -Iapps $< -o $@
 
-$(BUILD)/userland/shared/%.o: apps/%.c $(BUILD)/.ubsan-flag
+$(BUILD)/userland/shared/%.o: apps/%.c $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
 	$(CC) $(SHARED_CFLAGS) -Iapps $< -o $@
 

@@ -143,7 +143,7 @@ static int wav_open(struct usnd_stream *s) {
 // difference below the noise floor of the card this plays through.
 static int16_t sample_of(const uint8_t *b, int bits) {
     switch (bits) {
-    case 8:  return (int16_t)(((int)b[0] - 128) << 8);   // 8-bit WAV is UNSIGNED
+    case 8:  return (int16_t)(((int)b[0] - 128) * 256); // 8-bit WAV is UNSIGNED; * not <<, it goes negative
     case 16: return (int16_t)((uint16_t)b[0] | ((uint16_t)b[1] << 8));
     case 24: return (int16_t)((uint16_t)b[1] | ((uint16_t)b[2] << 8));
     default: return (int16_t)((uint16_t)b[2] | ((uint16_t)b[3] << 8));

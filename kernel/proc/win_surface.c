@@ -206,7 +206,8 @@ void win_surface_revoke(int pid) {
     if (!g_holder || g_holder != pid) return;
     win_surface_lease_end(0);
     // The whole span, padding included: a padded page is a real mapping.
-    for (int b = 0; b < g_span_count; b++)
+    // None left when the holder's address space has already gone.
+    for (int b = 0; g_pml4 && b < g_span_count; b++)
         for (uint64_t i = 0; i < g_span_pages; i++)
             vmm_unmap_user_page(g_pml4, WIN_FB_VADDR + (uint64_t)b * WIN_FB_BUFFER_STRIDE + i * 4096);
     // The console draws into buffer 0 and knows nothing about flips, so
@@ -222,7 +223,7 @@ void win_surface_revoke(int pid) {
 }
 
 int win_surface_remode(void) {
-    if (!g_holder) return 1;
+    if (!g_holder || !g_pml4) return 1;   // no holder, or one whose tables are gone
     // A lessee's mapping is the OLD geometry; the compositor learns of
     // the mode change (WIN_EV_SCREEN) and re-leases if it still wants to.
     win_surface_lease_end(0);
@@ -331,6 +332,12 @@ void win_surface_space_gone(uint64_t pml4) {
     if (!pml4) return;
     if (g_lessee && g_lessee_pml4 == pml4) win_surface_client_gone(g_lessee);
     if (g_stale && g_stale_pml4 == pml4) { g_stale = 0; g_stale_pml4 = 0; }
+    // THE HOLDER'S mappings die with its tables, which are freed next --
+    // but the grant is the ROLE's and is revoked later, when the exit
+    // reaches the window server. Forget the tables now so that revoke
+    // has nothing to unmap; it used to walk them after they were freed
+    // (found by KASAN=1).
+    if (g_holder && g_pml4 == pml4) g_pml4 = 0;
 }
 
 void win_surface_client_gone(int pid) {

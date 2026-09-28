@@ -4,10 +4,15 @@
 
 #include "kstack.h"
 #include "paging.h"
+#include "kasan.h"
 
 void kstack_arm(struct kstack *k, uint32_t reserve_top, uint32_t *peak) {
     uint64_t base = kstack_base(k);
     uint64_t top  = kstack_top(k);
+    // KASAN=1: a reused slot still carries the redzones of frames that
+    // never returned (a killed process's), and the fill below would
+    // report every one of them.
+    kasan_unpoison((const void *)(uintptr_t)base, KSTACK_BYTES);
     // Everything except the canary word and whatever the caller has
     // already written at the top (a synthesized trapframe, for a
     // process that has never run).

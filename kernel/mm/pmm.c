@@ -25,6 +25,7 @@
 #include "uaddr.h"
 #include "paging.h"
 #include "string.h"
+#include "kasan.h"
 #include <stddef.h>
 
 // Linker symbols from linker.ld: the running image's extent. With
@@ -321,6 +322,7 @@ static uint64_t alloc_one_in(int z, uint64_t floor) {
             refs[f] = 1;
             zone_free[z]--;
             zone_hint[z] = f + 1;
+            kasan_unpoison((const void *)(uintptr_t)(f * FRAME_SIZE), FRAME_SIZE);
             return f * FRAME_SIZE;
         }
     }
@@ -363,6 +365,16 @@ static void free_one(uint64_t f) {
     refs[f] = 0;
     mark_free_bit(f);
     zone_free[zone_of(f)]++;
+    kasan_poison((const void *)(uintptr_t)(f * FRAME_SIZE), FRAME_SIZE, KASAN_PAGE_FREE);
+}
+
+// KASAN's starting state: every frame the allocator holds free is
+// poisoned, so a touch of one before it is handed out is reported.
+void pmm_kasan_poison_free(void) {
+    for (uint64_t f = 0; f < max_frames; f++) {
+        if (!bit_is_used(f))
+            kasan_poison((const void *)(uintptr_t)(f * FRAME_SIZE), FRAME_SIZE, KASAN_PAGE_FREE);
+    }
 }
 
 void pmm_free_frame(uint64_t phys_addr) {
@@ -398,6 +410,7 @@ static uint64_t alloc_run_in(int z, uint64_t count, uint64_t floor) {
                 }
                 zone_free[z] -= count;
                 zone_hint[z] = run_start + count; // keep the single-frame hint sensible too
+                kasan_unpoison((const void *)(uintptr_t)(run_start * FRAME_SIZE), count * FRAME_SIZE);
                 return run_start * FRAME_SIZE;
             }
         } else {

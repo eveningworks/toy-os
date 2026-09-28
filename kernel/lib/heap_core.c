@@ -65,6 +65,7 @@
 #include "heap_os.h"  // the three things this file deliberately does not know
 #include "kfmt.h"     // k_snprintf -- freestanding half, see kfmt.h
 #include "string.h"
+#include "kasan.h"    // no-ops unless this is the KERNEL's copy in a KASAN=1 build
 
 #define HEAP_ALIGN 16
 #define HEAP_PAGE_SIZE 4096
@@ -85,6 +86,21 @@
 #define HEAP_IN_USE 0
 #define HEAP_FREE 1
 #define HEAP_FREE_POISONED 2
+// KASAN only: freed, and parked in the quarantine below -- neither
+// reusable nor mergeable until it leaves, so a stale pointer still
+// finds poison rather than somebody else's allocation.
+#define HEAP_HELD 3
+
+// KASAN only: every block carries this much more, at its END. Live, the
+// last word is the size the caller asked for (kmalloc_size()'s answer,
+// since the payload is opened to exactly that); held, the two words are
+// the quarantine link and the state the block leaves in.
+#ifdef TOYOS_KASAN
+#define HEAP_KASAN_TAIL 16
+#define HEAP_KASAN_HOLD_BYTES (1u << 20)
+#else
+#define HEAP_KASAN_TAIL 0
+#endif
 
 // Sits in the four bytes of padding the compiler was inserting after
 // `free` anyway, so it costs nothing, and it is what makes kfree()'s
@@ -135,6 +151,7 @@ static struct heap_block *append_region(uint64_t pages) {
     if (!g_head) g_head = b;
 
     g_total_bytes += b->size;
+    kasan_poison(region, pages * HEAP_PAGE_SIZE, KASAN_HEAP_UNUSED);
     return b;
 }
 
@@ -287,10 +304,62 @@ static void quarantine(struct heap_block *b) {
 // into a report. Deliberately cheap and always on, debug mode or not.
 static int header_plausible(const struct heap_block *b) {
     if (b->magic != HEAP_HDR_MAGIC) return 0;
-    if (b->free != HEAP_IN_USE && b->free != HEAP_FREE && b->free != HEAP_FREE_POISONED) return 0;
+    if (b->free != HEAP_IN_USE && b->free != HEAP_FREE && b->free != HEAP_FREE_POISONED &&
+        b->free != HEAP_HELD) return 0;
     if (b->size == 0 || b->size > g_total_bytes) return 0;
     return 1;
 }
+
+// ---- KASAN (kernel, KASAN=1 only) ----
+
+static void release(struct heap_block *b);
+
+#ifdef TOYOS_KASAN
+static uint64_t *kasan_tail(struct heap_block *b) {
+    return (uint64_t *)((uint8_t *)(b + 1) + b->size - HEAP_KASAN_TAIL);
+}
+
+// Everything the block owns -- header, red-zones, slack, tail -- is off
+// limits, then exactly `open` bytes of payload are opened.
+static void *kasan_open(struct heap_block *b, void *p, uint64_t open) {
+    kasan_poison(b, sizeof *b + b->size, KASAN_HEAP_REDZONE);
+    kasan_unpoison(p, open);
+    kasan_tail(b)[1] = open;
+    return p;
+}
+
+static struct heap_block *g_held_head, *g_held_tail;
+static uint64_t g_held_bytes;
+
+// A freed block is poisoned and parked, oldest leaving first once the
+// quarantine holds more than HEAP_KASAN_HOLD_BYTES -- Linux's KASAN
+// quarantine, which is what lets a use-after-free find poison instead of
+// the next owner's data.
+static void kasan_hold(struct heap_block *b, int state) {
+    kasan_poison(b + 1, b->size, KASAN_HEAP_FREE);
+    b->free = HEAP_HELD;
+    uint64_t *t = kasan_tail(b);
+    t[0] = 0;
+    t[1] = (uint64_t)state;
+    if (g_held_tail) kasan_tail(g_held_tail)[0] = (uint64_t)(uintptr_t)b;
+    else g_held_head = b;
+    g_held_tail = b;
+    g_held_bytes += b->size;
+    while (g_held_bytes > HEAP_KASAN_HOLD_BYTES && g_held_head) {
+        struct heap_block *old = g_held_head;
+        g_held_head = (struct heap_block *)(uintptr_t)kasan_tail(old)[0];
+        if (!g_held_head) g_held_tail = 0;
+        g_held_bytes -= old->size;
+        old->free = (int)kasan_tail(old)[1];
+        release(old);
+    }
+}
+#else
+static void *kasan_open(struct heap_block *b, void *p, uint64_t open) {
+    (void)b; (void)open;
+    return p;
+}
+#endif
 
 // THE BODY, called with the lock held. The public entry points below
 // are thin wrappers so that every one of these `return`s does not have
@@ -305,10 +374,10 @@ static void *kmalloc_locked(size_t size) {
     if (size == 0) return 0;
     uint64_t span = align_up(size, HEAP_ALIGN);
     uint64_t rz = g_debug ? HEAP_RZ_SIZE : 0;
-    uint64_t need = span + 2 * rz; // a red-zone on each side of the payload
+    uint64_t need = span + 2 * rz + HEAP_KASAN_TAIL; // a red-zone on each side of the payload
 
     for (struct heap_block *b = g_head; b; b = b->next) {
-        if (b->free == HEAP_IN_USE || b->size < need) continue;
+        if (b->free == HEAP_IN_USE || b->free == HEAP_HELD || b->size < need) continue;
         // A poisoned block is verified BEFORE it is split or handed
         // out -- once it is reused, the evidence is gone.
         if (b->free == HEAP_FREE_POISONED && !rz_check_poison(b)) {
@@ -318,7 +387,7 @@ static void *kmalloc_locked(size_t size) {
         split_block(b, need);
         b->free = HEAP_IN_USE;
         g_used_bytes += b->size;
-        return rz ? rz_arm(b, span) : (void *)(b + 1);
+        return kasan_open(b, rz ? rz_arm(b, span) : (void *)(b + 1), rz ? span : size);
     }
 
     struct heap_block *grown = grow_heap(need);
@@ -326,7 +395,7 @@ static void *kmalloc_locked(size_t size) {
     split_block(grown, need);
     grown->free = HEAP_IN_USE;
     g_used_bytes += grown->size;
-    return rz ? rz_arm(grown, span) : (void *)(grown + 1);
+    return kasan_open(grown, rz ? rz_arm(grown, span) : (void *)(grown + 1), rz ? span : size);
 }
 
 void *kmalloc(size_t size) {
@@ -351,7 +420,7 @@ void *kzalloc(size_t size) {
 // here).
 static void try_merge_next(struct heap_block *b) {
     struct heap_block *n = b->next;
-    if (!n || n->free == HEAP_IN_USE) return;
+    if (!n || n->free == HEAP_IN_USE || n->free == HEAP_HELD) return;
     if ((uint8_t *)(b + 1) + b->size != (uint8_t *)n) return; // not physically adjacent
 
     b->size += sizeof(struct heap_block) + n->size;
@@ -395,16 +464,24 @@ uint64_t kmalloc_size(const void *ptr) {
     const struct heap_block *b = (const struct heap_block *)ptr - 1;
     if (!header_plausible((struct heap_block *)b)) return 0;
     if (b->free != HEAP_IN_USE) return 0;
+#ifdef TOYOS_KASAN
+    return kasan_tail((struct heap_block *)b)[1];   // what was opened, exactly
+#else
     return b->size;
+#endif
 }
 
-static void kfree_locked(void *ptr) {
+static void kfree_locked(void *ptr, uintptr_t ip) {
+    (void)ip;
 
     struct heap_block *b;
     uint64_t span = 0;
     int armed = rz_armed(ptr);
     if (armed) {
         b = (struct heap_block *)((uint8_t *)ptr - HEAP_RZ_SIZE) - 1;
+#ifdef TOYOS_KASAN
+        if (b->free == HEAP_HELD) kasan_report_bad_free(ptr, "double-free", ip);
+#endif
         if (b->free != HEAP_IN_USE) return; // double-free, same contract as below
         if (!rz_check(b, ptr, &span)) {
             // Accounting stays as-is: a quarantined block is still
@@ -421,19 +498,33 @@ static void kfree_locked(void *ptr) {
                        "heap: CORRUPT HEADER at 0x%lx (size=%lu state=%lu) -- refusing to free\n",
                        (uint64_t)(uintptr_t)b, b->size, (uint64_t)b->free);
             heap_os_report(msg);
+#ifdef TOYOS_KASAN
+            kasan_report_bad_free(ptr, "invalid-free", ip);
+#endif
             return;
         }
     }
+#ifdef TOYOS_KASAN
+    if (b->free == HEAP_HELD) kasan_report_bad_free(ptr, "double-free", ip);
+#endif
     if (b->free != HEAP_IN_USE) return; // double-free -- silently ignored, same "trust the caller, don't crash" contract as pmm_free_frame()
 
     g_used_bytes -= b->size;
+    int state = HEAP_FREE;
     if (armed) {
         k_memset(ptr, HEAP_POISON, span);
-        b->free = HEAP_FREE_POISONED;
-    } else {
-        b->free = HEAP_FREE;
+        state = HEAP_FREE_POISONED;
     }
+#ifdef TOYOS_KASAN
+    kasan_hold(b, state);
+#else
+    b->free = state;
+    release(b);
+#endif
+}
 
+// A freed block rejoins the free list: merged with any free neighbour.
+static void release(struct heap_block *b) {
     try_merge_next(b);            // pull a free right-neighbor into b
     // Pull b (now possibly bigger) into a free left-neighbor -- but
     // ONLY if that left-neighbor is itself free. try_merge_next()
@@ -450,7 +541,8 @@ static void kfree_locked(void *ptr) {
     // LATER kfree() of that same corrupted block subtracting its
     // inflated size from g_used_bytes, underflowing the unsigned
     // counter. See docs/decisions.md for the full story.
-    if (b->prev && b->prev->free != HEAP_IN_USE) try_merge_next(b->prev);
+    if (b->prev && b->prev->free != HEAP_IN_USE && b->prev->free != HEAP_HELD)
+        try_merge_next(b->prev);
 }
 
 void kfree(void *ptr) {
@@ -458,7 +550,7 @@ void kfree(void *ptr) {
     // legal and common, and it has no business taking a lock.
     if (!ptr) return;
     heap_os_lock();
-    kfree_locked(ptr);
+    kfree_locked(ptr, (uintptr_t)__builtin_return_address(0));
     heap_os_unlock();
 }
 

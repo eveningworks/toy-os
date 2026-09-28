@@ -352,7 +352,18 @@ KTEST("mm", "freeing then reallocating the same size reuses space") {
 // the same way would not help: the window that matters there is between
 // the kfree and the scan, and the scan itself walks the whole heap. See
 // docs/roadmap.md.
+// The heap's own debug red-zones, tested by corrupting them on purpose.
+// Under KASAN=1 every such write is a report, and its quarantine holds a
+// freed block where these expect to find it back on the free list --
+// KASAN checks the same bugs at the access instead.
+#ifdef TOYOS_KASAN
+#define NOT_UNDER_KASAN() KTEST_SKIP("KASAN=1 replaces the heap's debug red-zones")
+#else
+#define NOT_UNDER_KASAN() do { } while (0)
+#endif
+
 KTEST("heap-debug", "a red-zoned block survives a full-width write") {
+    NOT_UNDER_KASAN();
     scheduler_preempt_disable();
     uint64_t bad = heap_violations();
     uint64_t used = heap_used_bytes();
@@ -376,6 +387,7 @@ KTEST("heap-debug", "a red-zoned block survives a full-width write") {
 }
 
 KTEST("heap-debug", "one byte past the request is caught at free") {
+    NOT_UNDER_KASAN();
     uint64_t bad = heap_violations();
 
     heap_set_debug(1);
@@ -389,6 +401,7 @@ KTEST("heap-debug", "one byte past the request is caught at free") {
 }
 
 KTEST("heap-debug", "an underflow into the length word is caught at free") {
+    NOT_UNDER_KASAN();
     uint64_t bad = heap_violations();
 
     heap_set_debug(1);
@@ -406,6 +419,7 @@ KTEST("heap-debug", "an underflow into the length word is caught at free") {
 // a plain one, so kfree() would otherwise take its header from 16
 // bytes inside the real header and unlink whatever it found.
 KTEST("heap-debug", "an underflow that smashes the magic is caught as a corrupt header") {
+    NOT_UNDER_KASAN();
     uint64_t bad = heap_violations();
 
     heap_set_debug(1);
@@ -419,6 +433,7 @@ KTEST("heap-debug", "an underflow that smashes the magic is caught as a corrupt 
 }
 
 KTEST("heap-debug", "freeing poisons the payload") {
+    NOT_UNDER_KASAN();
     heap_set_debug(1);
     uint8_t *a = kmalloc(64), *b = kmalloc(64), *c = kmalloc(64);
     KTEST_ASSERT(a != 0 && b != 0 && c != 0);
@@ -438,6 +453,7 @@ KTEST("heap-debug", "freeing poisons the payload") {
 }
 
 KTEST("heap-debug", "a write through a freed pointer is caught by heap_check()") {
+    NOT_UNDER_KASAN();
     heap_set_debug(1);
     uint8_t *a = kmalloc(64), *b = kmalloc(64), *c = kmalloc(64);
     KTEST_ASSERT(a != 0 && b != 0 && c != 0);
@@ -455,6 +471,7 @@ KTEST("heap-debug", "a write through a freed pointer is caught by heap_check()")
 }
 
 KTEST("heap-debug", "an untouched freed block passes heap_check()") {
+    NOT_UNDER_KASAN();
     heap_set_debug(1);
     uint8_t *a = kmalloc(64), *b = kmalloc(64), *c = kmalloc(64);
     KTEST_ASSERT(a != 0 && b != 0 && c != 0);
@@ -471,6 +488,7 @@ KTEST("heap-debug", "an untouched freed block passes heap_check()") {
 // both kinds coexist, and kfree() tells them apart from the pointer
 // alone. If that ever breaks, it breaks silently on the freeing path.
 KTEST("heap-debug", "blocks allocated either side of a toggle both free correctly") {
+    NOT_UNDER_KASAN();
     scheduler_preempt_disable();
     uint64_t bad = heap_violations();
     uint64_t used = heap_used_bytes();
@@ -495,6 +513,7 @@ KTEST("heap-debug", "blocks allocated either side of a toggle both free correctl
 }
 
 KTEST("heap-debug", "debug off allocates plain blocks") {
+    NOT_UNDER_KASAN();
     scheduler_preempt_disable();
     uint64_t bad = heap_violations();
     uint64_t used = heap_used_bytes();

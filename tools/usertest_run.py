@@ -269,7 +269,7 @@ TESTS = [
     # kernel-only include in the shared half opens silently.
     ("kfmt_test", 0, None, None),
     # The UBSAN runtime's case table through libc's copy, and in a UBSAN=1
-    # build one real overflow -- tools/ubsan_run.py counts on it.
+    # build one real overflow -- tools/sanitize_run.py counts on it.
     ("ubsan_test", 0, None, None),
     # The TrueType rasterizer's ONLY test: userland/lib/ttf.c has been
     # ring 3's alone since the kernel stopped parsing fonts (f34019fc),

@@ -285,6 +285,9 @@ extern char __ktext_end[];
 // stale return addresses from earlier calls are still down there -- and
 // that is the honest trade, because the alternative is nothing at all.
 // Read the list as candidates, most recent first, not as a call chain.
+// no_sanitize_address: it reads every word of the stack on purpose,
+// live frames' redzones included.
+__attribute__((no_sanitize_address))
 void idt_log_stack_scan(uint64_t rsp, int max_shown) {
     uint64_t delta = kernel_reloc_delta();
     uint64_t tstart = (uint64_t)(uintptr_t)__ktext_start;

@@ -134,4 +134,7 @@ uint64_t pmm_firmware_bytes(void);
 // no-GUI-surface infrastructure initialized correctly.
 int pmm_selftest(void); // 1 = passed, 0 = failed (details logged) -- wrapped by a KTEST
 
+// KASAN=1 only (kasan_init): poisons the shadow of every free frame.
+void pmm_kasan_poison_free(void);
+
 #endif

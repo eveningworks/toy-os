@@ -216,8 +216,10 @@ static void j_fdct(int32_t *b) {
 
         tmp10 = tmp0 + tmp3; tmp13 = tmp0 - tmp3;
         tmp11 = tmp1 + tmp2; tmp12 = tmp1 - tmp2;
-        d[0] = (tmp10 + tmp11) << J_PASS1_BITS;
-        d[4] = (tmp10 - tmp11) << J_PASS1_BITS;
+        // Multiplies, not <<: these go negative, and shifting a negative
+        // value left is undefined in C (found by UBSAN=1).
+        d[0] = (tmp10 + tmp11) * (1 << J_PASS1_BITS);
+        d[4] = (tmp10 - tmp11) * (1 << J_PASS1_BITS);
 
         z1 = (tmp12 + tmp13) * J_F_0_541196100;
         d[2] = J_DESCALE(z1 + tmp13 * J_F_0_765366865, J_CONST_BITS - J_PASS1_BITS);

@@ -1,4 +1,5 @@
 #include "process.h"
+#include "kasan.h"
 #include "context_switch.h"
 #include "vmm.h"
 #include "gdt.h"
@@ -116,6 +117,12 @@ int process_run_ring3_args(uint64_t pml4_phys, uint64_t entry, uint64_t user_rsp
         // place to force that counter back to 0 instead of trusting the
         // now-unreachable decrements that should have run.
         isr_reset_depth();
+        // The abandoned frames' stack redzones, likewise (KASAN=1 only).
+        {
+            uint64_t sp;
+            __asm__ volatile ("mov %%rsp, %0" : "=r"(sp));
+            kasan_unpoison_stack_below(sp);
+        }
         // Biases the real exit code by +1 so a genuine exit(0) is
         // distinguishable from process_context_save()'s normal 0 return
         // -- see context_switch.h.

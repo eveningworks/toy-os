@@ -914,7 +914,12 @@ whenever a headline here tells you something you did not already know.
 - **`UBSAN=1` INSTRUMENTS BOTH RINGS, AND ITS STAMP IS A PREREQUISITE
   OF EVERY COMPILE RULE** -- code with no handler goes in
   `UBSAN_EXCLUDE`; a shift of a possibly-negative value is a multiply;
-  run it through `tools/ubsan_run.py`
+  run it through `tools/sanitize_run.py`
+- **`KASAN=1` IS THE KERNEL'S ADDRESS SANITIZER, AND FOUR THINGS KEEP ITS
+  SHADOW TRUE** -- allocators poison and unpoison; a reused or abandoned
+  stack is unpoisoned; a deliberate reader is `no_sanitize_address` and
+  a deliberate corrupter is suppressed; a PML4 walker skips the shadow
+  slot
 - **THE KERNEL'S DEBUG INFO IS SPLIT OUT (`build/kernel.debug`), AND
   `--add-gnu-debuglink` IS WHAT KEEPS `addr2line`, `gdb` AND
   `panic_resolve.py` WORKING**

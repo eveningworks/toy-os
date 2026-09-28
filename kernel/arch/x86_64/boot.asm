@@ -36,8 +36,16 @@ mb2_header_end:
 
 section .bss
 align 16
+; Exported for KASAN's stack unpoisoning (kernel/mm/kasan_shadow.c), and
+; doubled under KASAN=1 for the same reason kstack.h doubles KSTACK_BYTES.
+global stack_bottom
+global stack_top
 stack_bottom:
+%ifdef TOYOS_KASAN
+    resb 32768
+%else
     resb 16384
+%endif
 stack_top:
 
 align 4096
