@@ -251,7 +251,9 @@ active. The second is cheap and is the one to build. (Stage 2 of
 `docs/fslock-design.md` later made the staging per mount after all,
 2026-09-24, because one lock per mount needed it.)
 
-Gated behind `storage.sync` like everything else here, default `strict`.
+Gated behind `storage.sync` like everything else here, default `strict`
+when written; built as `batched`, which became the default on 2026-09-04
+(`kernel/lib/storage_config.c`).
 
 **Buys:** most of the 56-69%, with no cache, no eviction and no reclaim
 mechanism. **Does not buy:** repeat reads, which is what the page cache
@@ -376,7 +378,7 @@ fit in the journal's 32 slots.
 
 **Gated behind the setting from the start.** `storage.sync` gains a
 third mode, and `strict` stays the default, so nothing changes for
-anyone until they ask. That is what makes this landable incrementally
+anyone until they ask. (Since 2026-09-04 the default is `batched`.) That is what makes this landable incrementally
 rather than as a single switch-flip nobody can bisect.
 
 **Buys:** the flush cost -- the 53% and 67% above.

@@ -235,9 +235,14 @@ Each ships on its own, and each is measured on
   probe would settle it; that is a reason to measure again before
   rebuilding it, not a claim that it helps.
 - **Stage 5 -- journal commits off the volume lock.** What still holds
-  the volume lock longest under the default `storage.sync = strict` is
-  a metadata commit: journal images, targets and two device-cache
-  flushes (25-225 ms per flush measured on the ASUS under load, ata.c).
+  the volume lock longest is a metadata commit: journal images, targets
+  and two device-cache flushes (25-225 ms per flush measured on the ASUS
+  under load, ata.c). Measured 2026-09-28 on both laptops (`docs/bugs.md`,
+  the `stat` stall): a `stat` on `/` during `diskbench` waits 146-181 ms
+  at worst under `storage.sync = strict`, a commit per write, and 8-75 ms
+  under the default `batched`, which defers it -- so under the default
+  what this stage buys is those tails. It does NOT touch the ~4 ms
+  average a small-file create holds the lock for, in either mode.
   jbd2's shape: an op reserves credits and stages into the RUNNING
   transaction under a short journal lock, and a commit -- including its
   flushes -- runs while other ops stage into the next one. The batched

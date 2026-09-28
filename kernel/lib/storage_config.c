@@ -27,9 +27,8 @@
 // shutdown, `sync`, and the ATA cache's idle timer all still flush, so
 // `lazy` is about CRASHES, not about whether data eventually lands.
 //
-// STRICT IS THE DEFAULT and an unparseable value leaves it strict --
-// the same tolerance every other /etc reader here has, chosen the safe
-// way round because this one trades correctness for speed.
+// `batched` IS THE DEFAULT (below, with why), and an unparseable value
+// leaves it -- the same tolerance every other /etc reader here has.
 #include "setting.h"
 #include "etc_config.h"
 #include "string.h"
@@ -496,7 +495,8 @@ void storage_config_init(void) {
     if (etc_config_buf_get(&g_cfg, SYNC_KEY, value, sizeof value)) {
         // A hand-edited file reaches this reader without passing
         // through setting_set(), so it is validated here too -- and an
-        // unrecognised value leaves STRICT rather than guessing.
+        // unrecognised value leaves the built-in default rather than
+        // guessing.
         mode_set(value);
     }
 }
