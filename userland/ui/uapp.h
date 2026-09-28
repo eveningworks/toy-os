@@ -494,9 +494,12 @@ void uapp_quit(struct uapp *a, int status);
 // (abi/win_proto.h), so an idle app still reaps within a ping rather
 // than waiting for somebody to touch its window.
 //
+// `arg` is ONE argument, carried whole -- a path with spaces in it stays
+// one path -- or NULL for none.
+//
 // Returns the pid, or negative -- the caller still reports a failed
 // launch, because only it knows what it was trying to start.
-int uapp_spawn(struct uapp *a, const char *path, const char *args);
+int uapp_spawn(struct uapp *a, const char *path, const char *arg);
 
 // The same tracking for a pid obtained some other way -- uopen_path(),
 // where choosing the program is the library's job and starting it is

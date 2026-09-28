@@ -1233,8 +1233,9 @@ void uapp_track_child(struct uapp *a, int pid) {
     ulogf("uapp: child table full -- pid %d will not be reaped\n", pid);
 }
 
-int uapp_spawn(struct uapp *a, const char *path, const char *args) {
-    int pid = sys_spawn(path, args, -1);
+int uapp_spawn(struct uapp *a, const char *path, const char *arg) {
+    char *const argv[] = { (char *)path, (char *)arg, 0 };
+    int pid = sys_spawn_argv(path, argv);
     if (pid > 0) uapp_track_child(a, pid);
     return pid;
 }

@@ -38,11 +38,9 @@ static int g_job_failures;
 
 // --- jobs -------------------------------------------------------------
 //
-// sys_spawn() takes ONE whitespace-separated argument string, so a path
-// containing a space cannot be passed. FS_PATH_MAX paths here are made
-// by this OS's own tools and do not contain one, but that is a limit of
-// the spawn ABI rather than a property of the filesystem -- worth
-// knowing before someone adds a rename that can produce one.
+// A path handed to a CHILD goes as an argv vector (sys_spawn_argv(),
+// uapp_spawn()), never through sys_spawn()'s string, which splits on
+// whitespace -- names with spaces exist (F2 can make one).
 static int queue_from(int op, const char *what, struct uui_fileview *fv,
                       const char *dest) {
     if (g_job_count > 0) { set_note("busy"); return 0; }

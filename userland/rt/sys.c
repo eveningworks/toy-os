@@ -930,6 +930,14 @@ int sys_spawn(const char *path, const char *args, int stdout_fd) {
     return sys_spawn_env(path, args, stdout_fd, environ);
 }
 
+int sys_spawn_argv(const char *path, char *const *argv) {
+    struct sys_spawn_opts o;
+    sys_spawn_opts_init(&o);
+    o.argv = argv;
+    o.env = environ;
+    return sys_spawn_opts(path, &o);
+}
+
 int sys_spawn_env(const char *path, const char *args, int stdout_fd, char **env) {
     // 0 = inherit the caller's group, which is what every caller that
     // does not care about job control wants.

@@ -986,6 +986,12 @@ void sys_spawn_opts_init(struct sys_spawn_opts *o);
 
 int sys_spawn_opts(const char *path, const struct sys_spawn_opts *o);
 
+// execv(): `argv` (argv[0] included, NULL-terminated) carried WHOLE, with
+// the caller's environment. What a caller passing a PATH wants -- the
+// string form of sys_spawn() splits on whitespace, so a file name with a
+// space in it arrives as two arguments.
+int sys_spawn_argv(const char *path, char *const *argv);
+
 // BLOCKS until `pid` exits, then reaps it. Writes the exit code to
 // `*out_code` if non-NULL. Returns the pid, or -1.
 //

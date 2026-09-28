@@ -113,13 +113,20 @@ int uopen_resolve(const char *path, char *exec, int cap) {
     return declared_exec(ext, exec, cap);
 }
 
+// The path as ONE argument: the string form of a spawn splits on
+// whitespace, which cut "my notes.txt" to "my".
+static int spawn_with(const char *exec, const char *path) {
+    char *const argv[] = { (char *)exec, (char *)path, 0 };
+    return sys_spawn_argv(exec, argv);
+}
+
 int uopen_spawn(const char *path) {
     char exec[UOPEN_PATH_MAX];
     if (uopen_resolve(path, exec, sizeof exec))
-        return sys_spawn(exec, path, -1);
+        return spawn_with(exec, path);
     // A directory opens where directories live -- Explorer's rule.
     struct sys_dirent probe;
     if (sys_listdir(path, &probe, 1) >= 0)
-        return sys_spawn("/bin/wm/apps/files", path, -1);
+        return spawn_with("/bin/wm/apps/files", path);
     return -1;
 }
