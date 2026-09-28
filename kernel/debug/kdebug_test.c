@@ -169,6 +169,41 @@ KTEST("kdebug", "kdebug=net parses, and refuses rather than guesses") {
     KTEST_ASSERT(!kdb_net_parse("net,ip=10.0.2.15,key=00112233445566778899aabbccddeeff,fast", &c));
 }
 
+KTEST("kdebug", "memory being freed loses its breakpoints, and its int3s their bytes") {
+    if (kdb.armed) KTEST_SKIP("the stub is armed for a real debugger on this boot");
+    static uint8_t mem[64] __attribute__((aligned(64)));
+    mem[8] = 0x55;
+    mem[40] = 0x66;
+    uint64_t base = (uint64_t)(uintptr_t)mem;
+    KTEST_ASSERT_EQ(kdb_bp_insert(0, base + 8, 1), 1);
+    KTEST_ASSERT_EQ(kdb_bp_insert(0, base + 40, 1), 1);
+    KTEST_ASSERT_EQ(kdb_bp_insert(2, base + 16, 8), 1);   // a write watch inside
+    KTEST_ASSERT_EQ(kdb_bp_insert(2, base + 48, 8), 1);   // and one outside
+    // What a resume leaves behind: both int3s patched in.
+    for (int i = 0; i < KDB_SWBP_MAX; i++) {
+        struct kdb_swbp *b = &kdb.sw[i];
+        if (!b->used) continue;
+        b->saved = *(uint8_t *)(uintptr_t)b->addr;
+        *(uint8_t *)(uintptr_t)b->addr = KDB_BREAK_INSN;
+        b->patched = 1;
+    }
+
+    kdebug_forget_range(base, base + 32);
+
+    KTEST_ASSERT_EQ(mem[8], 0x55);                 // the original byte, not 0xCC
+    KTEST_ASSERT_EQ(mem[40], KDB_BREAK_INSN);      // outside: untouched
+    int sw = 0, hw = 0;
+    for (int i = 0; i < KDB_SWBP_MAX; i++)
+        if (kdb.sw[i].used) { sw++; KTEST_ASSERT_EQ(kdb.sw[i].addr, base + 40); }
+    for (int i = 0; i < KDB_HW_SLOTS; i++)
+        if (kdb.hw[i].used) { hw++; KTEST_ASSERT_EQ(kdb.hw[i].addr, base + 48); }
+    KTEST_ASSERT_EQ(sw, 1);
+    KTEST_ASSERT_EQ(hw, 1);
+
+    mem[40] = 0x66;
+    kdb_bp_clear_all();
+}
+
 // A host's hello under `key`, as kdebug_bridge.py builds it.
 static int hello_q(const uint8_t *key, int klen, uint8_t fill, uint8_t *q) {
     uint8_t mac[32];

@@ -115,7 +115,8 @@ int kdb_stage_close(int fd) {
     return 0;
 }
 
-// On resume, not while stopped: wake kdfiled if a file is waiting.
+// From the tick after a stop (kdebug_poll), never from the trap: wake
+// kdfiled if a file is waiting.
 void kdb_stage_kick(void) {
     for (int i = 0; i < STAGE_FILES; i++)
         if (g_files[i].state == F_READY) { scheduler_wake(&g_ready_chan, 0); return; }

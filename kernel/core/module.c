@@ -6,6 +6,7 @@
 // after the allocation unwinds it. The parse is of untrusted input
 // (a file on disk read in ring 0), so every offset is checked against
 // the image length before it is used, the way ttf.c does it.
+#include "kdebug.h"   // kdebug_forget_range()
 #include "module.h"
 #include "kexport.h"
 #include "paging.h"
@@ -486,6 +487,7 @@ int module_unload(const char *name) {
     for (int i = 0; i < m->nexits; i++)
         if (m->exits[i].fn) m->exits[i].fn();
     if (m->ndrivers) driver_remove_table(m->drivers);
+    kdebug_forget_range(m->base, m->base + (uint64_t)m->pages * 4096);
     free_frames(m);
     klog_printf("module: %s unloaded\n", name);
     g_mod_used[m - g_mods] = 0;

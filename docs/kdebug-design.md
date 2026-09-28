@@ -230,8 +230,10 @@ other vFile op, `remote get` included.
 inside `kmalloc`, holding a mount lock, or halfway through a disk wait --
 so the work is split in two. While stopped, `kdebug_files.c` only COPIES
 the bytes into an 8 MiB area taken from the page allocator when the stub
-is armed (the stopped path allocates nothing). On resume it wakes
-`/bin/kdfiled`, a service, which takes each complete file through
+is armed (the stopped path allocates nothing). The first tick after the
+resume wakes `/bin/kdfiled`, a service -- the tick, NOT the trap, since
+a trap can land inside the scheduler's own interrupts-off code and a
+wake from there would re-enter it -- which takes each complete file through
 `SYS_KDFILE` (`kdfile_abi.h`), writes it beside its target, renames it
 into place and keeps the previous version as `<stem>.old` -- `kernel.old`
 is the file GRUB's rescue entry boots, so only a path's FIRST put in a

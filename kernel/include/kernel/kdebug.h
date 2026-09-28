@@ -36,4 +36,11 @@ void kdebug_panic(void);
 // stops the kernel at `regs`, the frame the tick interrupted.
 void kdebug_poll(uint64_t *regs);
 
+// [start, end) is about to be freed -- a module unloading. Every
+// breakpoint and watchpoint in it is dropped, and a patched int3 gets its
+// original byte back first, or every later stop and resume would write
+// into whatever reuses the memory. Linux's KGDB does this from a module
+// notifier. Not while stopped.
+void kdebug_forget_range(uint64_t start, uint64_t end);
+
 #endif

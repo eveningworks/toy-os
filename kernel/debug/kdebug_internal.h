@@ -52,6 +52,7 @@ struct kdb_state {
     char watch_kind;            // 'w'/'a' when a watchpoint fired, else 0
     uint64_t watch_addr;
     uint32_t stops;
+    int kick;                   // a staged file is ready: wake kdfiled at the next tick
     struct kdb_swbp sw[KDB_SWBP_MAX];
     struct kdb_hw hw[KDB_HW_SLOTS];
 };

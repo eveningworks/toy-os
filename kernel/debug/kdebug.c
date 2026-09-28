@@ -131,6 +131,27 @@ int kdb_bp_remove(int type, uint64_t addr, int len) {
     return 1;
 }
 
+void kdebug_forget_range(uint64_t start, uint64_t end) {
+    int n = 0, hw = 0;
+    for (int i = 0; i < KDB_SWBP_MAX; i++) {
+        struct kdb_swbp *b = &kdb.sw[i];
+        if (!b->used || b->addr < start || b->addr >= end) continue;
+        // UNUSED FIRST: a stop landing between these lifts it (patched
+        // is all swbp_lift_all() reads) and then cannot re-apply it.
+        b->used = 0;
+        __asm__ volatile ("" ::: "memory");
+        if (b->patched) kdb_arch_mem_write(b->addr, &b->saved, 1);
+        b->patched = 0;
+        n++;
+    }
+    for (int i = 0; i < KDB_HW_SLOTS; i++) {
+        struct kdb_hw *h = &kdb.hw[i];
+        if (h->used && h->addr < end && h->addr + h->len > start) h->used = 0, hw = 1, n++;
+    }
+    if (hw && kdb.armed) kdb_arch_hw_install(kdb.hw);
+    if (n) klog_printf("kdebug: dropped %d breakpoint(s) in memory being freed\n", n);
+}
+
 void kdb_bp_clear_all(void) {
     for (int i = 0; i < KDB_SWBP_MAX; i++) kdb.sw[i].used = 0;
     for (int i = 0; i < KDB_HW_SLOTS; i++) kdb.hw[i].used = 0;
@@ -164,7 +185,10 @@ static void stop(uint64_t *regs, int sig) {
     kdb.watch_kind = 0;
     kdb.regs = 0;
     kdb.active = 0;
-    kdb_stage_kick();   // a `remote put` finished while stopped
+    // NOT a wake from here: a trap can land inside the scheduler's own
+    // interrupts-off code, and a wake would re-enter it half-way. The
+    // tick cannot interrupt that code, so the wake goes there.
+    kdb.kick = 1;
 }
 
 int kdebug_trap(uint64_t vector, uint64_t *regs) {
@@ -235,6 +259,10 @@ void kdebug_panic(void) {
 // either stops it here. The `$` is kept so the session reads its packet.
 void kdebug_poll(uint64_t *regs) {
     if (!kdb.armed || kdb.active) return;
+    if (kdb.kick) {   // a `remote put` finished while stopped
+        kdb.kick = 0;
+        kdb_stage_kick();
+    }
     int c = kdb.io->getc();
     if (c != 0x03 && c != '$') return;
     if (c == '$') kdb.pushback = '$';
