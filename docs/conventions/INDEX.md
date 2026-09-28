@@ -407,6 +407,11 @@ whenever a headline here tells you something you did not already know.
   CONTAINMENT.**
 - **A SETTING DECLARES ITS CATEGORY, and the sidebar is generated from
   it.**
+- **SYSTEM SETTINGS PICKS A SETTING'S CONTROL FROM ITS VALUES**
+- **A TEST THAT STAGES A CHANGE IN SYSTEM SETTINGS MUST APPLY OR RESET IT
+  BEFORE IT NAVIGATES.**
+- **A FOCUSED `uui_button` PRESSES ON SPACE OR ENTER, AND A DISABLED ONE
+  REFUSES FOCUS.**
 - **`uui_table` is the multi-column widget**
 - **Editable text has ONE implementation of what editing means**
 - **A ring-3 app does NOT route mouse input to its widgets -- the

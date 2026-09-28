@@ -3648,8 +3648,12 @@ window without going through it will find its layout polls timing out.
 - **`settings_test.py`** -- the ring-3 System Settings app and, through
   it, the settings registry. Run it after touching
   `kernel/lib/setting.c`, `SYS_SETTING`/`SYS_SYSINFO`, or
-  `uui_sidebar`/`uui_radio_list`/`uui_spinbox`/`uui_statusbar`/
-  `uui_layout`'s `hidden` handling. ~70 checks. (It was `cpanel_test.py` until the app was renamed on
+  `uui_sidebar`/`uui_setting_row`/`uui_switch`/`uui_segmented`/
+  `uui_radio_list`/`uui_spinbox`/`uui_dialog`/`uui_layout`'s `hidden`
+  handling. ~100 checks, including Reset, the Apply / Discard / Cancel
+  question on leaving a changed page, and the search box. **A section
+  that stages a change Applies or Resets it before navigating**, or the
+  next sidebar click opens that question instead of a page. (It was `cpanel_test.py` until the app was renamed on
   2026-08-19 -- Control Panel is Windows' name, and this shows exactly
   the SETTINGS registry.) Two things it encodes. A change is verified by reading the
   BYTES ON DISK through the console's own `sh cat`, not by believing the
@@ -3875,7 +3879,10 @@ window without going through it will find its layout polls timing out.
   test.
 - **`shortcut_test.py`** -- global keyboard shortcuts: the default
   bindings, the Super gesture, and rebinding one through System Settings
-  (15 checks). **It asserts on what the compositor LAUNCHED**, from its
+  (15 checks). It reaches the Shortcuts page by TYPING "shortcuts" into
+  the Settings search box, which needs no pixel; a fixed click after a
+  blind scroll was what failed two of its checks for weeks. **It asserts
+  on what the compositor LAUNCHED**, from its
   own `wm: shortcut -> <command>` line, not on a window appearing -- a
   window is also what a Start-menu click gives you, and this is about the
   key path. Four traps it pins, each of which has already bitten:

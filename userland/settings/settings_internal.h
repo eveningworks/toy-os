@@ -12,6 +12,7 @@
 #include <stdarg.h>
 #include "rt/sys.h"
 #include <string.h>
+#include <strings.h>      // strncasecmp
 #include <stdio.h>
 #include "ui/uapp.h"
 #include "ui/uui.h"
@@ -28,10 +29,12 @@
 #include "ui/uui_textbox.h"
 #include "ui/uui_keycapture.h"
 #include "ui/uui_button.h"
+#include "ui/uui_switch.h"
+#include "ui/uui_segmented.h"
+#include "ui/uui_setting_row.h"
+#include "ui/uui_dialog.h"
 #include "lib/usaver.h"
 #include "lib/ueffect.h" // an EFFECT declares options the same way
-#include "ui/uui_button_group.h"
-#include "ui/uui_statusbar.h"
 #include "ui/uui_scrollview.h"
 #include "ui/utheme.h"
 #include "lib/uconf.h"   // the sidebar width, remembered
@@ -77,32 +80,34 @@ _Static_assert(UUI_TEXTBOX_MAX >= SETTING_ABI_VALUE_MAX,
 // the biggest PAGE plus the most options an owner can declare.
 #define PAGE_MAX       (12 + USAVER_OPT_MAX)
 
-// Above this many choices a page uses a DROPDOWN rather than radio
-// buttons, unless /etc/settings.d says otherwise. Few mutually-exclusive
-// options are better all visible; ninety-two timezones are not.
+// From this many choices a page uses a DROPDOWN rather than a list, unless
+// /etc/settings.d says otherwise. Few mutually-exclusive options are
+// better all visible; ninety-two timezones are not.
 #define CHOICES_DROPDOWN_MIN 7
 
 // struct slot's `kind`.
 enum { CTRL_RADIO = 0, CTRL_COMBO, CTRL_SLIDER, CTRL_SPIN, CTRL_TEXT,
-       CTRL_KEYCAP };
+       CTRL_KEYCAP, CTRL_SWITCH, CTRL_SEGMENTED };
 
 enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST,
-       ID_OPTS, ID_OPTS_OK, ID_OPTS_CANCEL, ID_BUTTONS, ID_STATUS,
+       ID_OPTS, ID_OPTS_OK, ID_OPTS_CANCEL, ID_SEARCH, ID_RESET, ID_APPLY,
+       ID_ASK, ID_FOOTER,
        ID_CONTROL_BASE = 100 }; // + slot, so a control names its own row
 
-// NON-ZERO on purpose: uui_button_group_take_activated() returns 0 for
-// "nothing committed", so a button coded 0 could never be told apart
-// from a press that was dragged off.
-enum { BTN_OK = 201, BTN_APPLY = 202, BTN_CANCEL = 203 };
+// The focus ring: FOCUS_LEAD entries before the page's controls (search,
+// sidebar), and room after them for Test, Settings..., the advanced
+// toggle and the footer's two buttons.
+#define FOCUS_LEAD 2
+#define FOCUS_MAX  (FOCUS_LEAD + PAGE_MAX + 5)
 
 #define NODE_SYSINFO       1
 #define NODE_CATEGORY_BASE 1000
 #define NODE_GROUP_BASE    2000
 
 
-// title, description, then caption/explain/control/spacer per slot,
-// then the advanced toggle.
-#define PAGE_ITEMS (2 + PAGE_MAX * 5 + 1)
+// Title, description, a card per slot, Test and Settings..., the advanced
+// toggle.
+#define PAGE_ITEMS (2 + PAGE_MAX + 2 + 1)
 
 #define GROUP_DISPLAY_MAX (SETTING_ABI_CATEGORY_MAX + SETTING_ABI_LABEL_MAX + 3)
 
@@ -121,22 +126,9 @@ extern const char OWNER_SAVER[], OWNER_EFFECT[];
 // hold a pointer grab is a different kind of problem.
 struct slot {
     int setting;               // index into the arrays above, or -1
-    struct uui_label     caption;
-    struct uui_label     explain;
-    // AN EMPTY LABEL AFTER THE CONTROL, and it is the whole of this
-    // page's vertical rhythm. A setting is a caption, an optional
-    // explanation and a control, and those three belong TOGETHER; what
-    // needs separating is one setting from the next. Before this, the
-    // only space on the page was the explanation's reserved row, which
-    // sits between a caption and its own control -- so on a page whose
-    // settings have no descriptions (Diagnostics: none of them do) every
-    // element was closer to the wrong neighbour. Proximity is the oldest
-    // rule in layout and it was inverted.
-    //
-    // A label rather than a spacer widget because there is no spacer
-    // widget, and one that existed only here would be a widget with a
-    // single caller -- this project's bar for adding one is a second.
-    struct uui_label     spacer;
+    // The card the page shows it in; its `control` is whichever of the
+    // presentations below `kind` names.
+    struct uui_setting_row row;
     struct uui_radio_list radio;
     struct uui_dropdown   combo;
     struct uui_slider     slider;
@@ -151,7 +143,10 @@ struct slot {
     // and `staged` is a changed FLAG, because a combination is no
     // more an index than a free string is.
     struct uui_keycapture keycap;
-    // Which of the five is showing. A KIND rather than a set of flags:
+    struct uui_switch     sw;       // a two-valued state (onoff pairs)
+    struct uui_segmented  seg;      // a few short names, side by side
+    int on_idx;                     // CTRL_SWITCH: the "on" value's index
+    // Which presentation is showing. A KIND rather than a set of flags:
     // booleans can express "both" and "neither", and neither is a state
     // this page has.
     int kind;
@@ -181,6 +176,10 @@ struct slot {
 
 // settings.c
 extern struct uui_sidebar g_tree;
+// Around a rebuild of FOCUS: open() notes the focused widget, close()
+// appends the footer's buttons, re-inits the ring and restores it.
+void focus_ring_open(void);
+void focus_ring_close(void);
 
 // set_registry.c
 extern char     g_label[MAX_SETTINGS][SETTING_ABI_LABEL_MAX];
@@ -213,6 +212,8 @@ extern struct uui_sidebar_row g_nodes[MAX_CATEGORIES + MAX_GROUPS + 1];
 extern int g_node_count;
 const char *group_key_of(int i);
 const char *category_icon(const char *cat);
+extern char g_filter[UUI_TEXTBOX_MAX];
+int group_matches(int g);
 void rebuild_sidebar(void);
 int reload_settings(void);
 uint32_t registry_generation(void);
@@ -231,7 +232,7 @@ int owner_uses_dialog(const char *kind);
 extern struct uui_button    g_opts_ok, g_opts_cancel;
 extern struct uapp_window  *g_opts_win;
 extern const char          *g_page_owner_kind;
-extern struct uui_item      DLG[PAGE_MAX * 5 + 4];
+extern struct uui_item      DLG[PAGE_MAX + 4];
 extern int                  DLG_COUNT;
 extern struct uui_focusable DFOCUS[PAGE_MAX];
 extern int                  DFOCUS_COUNT;
@@ -273,6 +274,7 @@ void keycap_done(void *ctx, const char *text);
 void set_slot_enabled(struct slot *sl, int idx);
 void load_slot(struct slot *sl, int idx);
 int page_dirty(void);
+int page_changes(void);
 extern int g_page_captions;
 void open_group(int g);
 const char *staged_value(struct slot *sl);
@@ -281,7 +283,7 @@ extern struct uui_item PAGE[PAGE_ITEMS];
 extern int PAGE_COUNT;
 extern struct uui_layout PAGE_LAYOUT;
 extern struct uui_scrollview PAGE_SCROLL;
-extern struct uui_focusable FOCUS[PAGE_MAX];
+extern struct uui_focusable FOCUS[FOCUS_MAX];
 extern int FOCUS_COUNT;
 extern struct uui_focus PAGE_FOCUS;
 int emit_slot(struct uui_item *out, int n, int i,

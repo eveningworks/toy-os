@@ -3,9 +3,9 @@
 
 Run it after touching the settings registry (kernel/lib/setting.c,
 api/setting.h, kernel/lib/setting_text.c), SYS_SETTING/SYS_SYSINFO, or
-any widget the page is built from -- uui_tree, uui_label,
-uui_radio_list, uui_dropdown, uui_checkbox, uui_statusbar and
-uui_layout's `hidden` handling.
+any widget the page is built from -- uui_sidebar, uui_setting_row,
+uui_switch, uui_segmented, uui_radio_list, uui_dropdown, uui_label,
+uui_checkbox, uui_dialog and uui_layout's `hidden` handling.
 
 FOUR CHECKS CARRY THE WEIGHT, and each exists because of a bug
 everything else stayed green through:
@@ -158,7 +158,7 @@ def _since(mark, pattern):
 
 
 CONTROL_RE = (r"settings: control (\d+) (\S+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) "
-               r"rows (\d+) kind (radio|combo|slider|spin|text|keycap)")
+               r"rows (\d+) kind (radio|combo|slider|spin|text|keycap|switch|segmented)")
 
 
 def slots(dbg, mark):
@@ -369,14 +369,18 @@ def main():
     cx, cy = win["content"]["x"], win["content"]["y"]
     geo = layout(dbg)
     check("it reports its own geometry",
-          all(k in geo for k in ("tree", "page", "buttons")),
+          all(k in geo for k in ("search", "tree", "page", "reset", "apply")),
           f"keys={sorted(geo)}")
-    if "tree" not in geo:
+    if "tree" not in geo or "apply" not in geo:
         return report()
 
     tx, ty, tw, th = geo["tree"]
     px0, py0, pw0, ph0 = geo["page"]
-    bx, by, bw, bh = geo["buttons"]
+
+    def press(button):
+        """Click the footer's Reset or Apply where the app last said it is."""
+        x, y, w, h = layout(dbg).get(button, geo[button])
+        return click(x + w // 2, y + h // 2)
 
     n = setting_count(dbg)
     # From the REGISTRY, not a list in the app. >= rather than ==: the
@@ -391,16 +395,16 @@ def main():
             rows.append({"row": int(m.group(1)), "id": int(m.group(2)),
                           "y": int(m.group(3)), "depth": int(m.group(4)),
                           "label": m.group(5).strip()})
-    # **FLAT: ONE DEPTH, AND EVERY ROW A DESTINATION.** This asserted
-    # the opposite until 2026-09-14 -- that the sidebar had two depths --
-    # which was right while categories were captions over their pages.
-    # Half those captions then collapsed into clickable rows and half
-    # did not, and the two rendered identically, so the sidebar was
-    # flattened: there are no captions to mistake for buttons now.
-    check("the sidebar is a FLAT list, one depth",
-          rows and {r["depth"] for r in rows} == {0},
+    # **A HEADING PER CATEGORY, ITS PAGES UNDER IT.** Every heading
+    # (depth 0) is an inert caption and every page (depth 1) a
+    # destination, so the two can never be mistaken for each other --
+    # which a flat list of pages and captions rendered alike once did.
+    check("the sidebar is headings over pages",
+          rows and {r["depth"] for r in rows} == {0, 1}
+          and all(r["id"] == 0 for r in rows if r["depth"] == 0)
+          and all(r["id"] > 0 for r in rows if r["depth"] == 1),
           f"{len(rows)} rows, depths={sorted({r['depth'] for r in rows})}")
-    pages = [r for r in rows if r["label"] != "-"]
+    pages = [r for r in rows if r["depth"] == 1]
     check("its pages come from the registry's groups",
           len(pages) >= 10, f"{len(pages)} pages")
 
@@ -461,8 +465,9 @@ def main():
         px0, py0, pw0, ph0 = geo.get("page", (px0, py0, pw0, ph0))
 
     def row_named(sub):
+        """The first PAGE whose label contains `sub` -- never a heading."""
         for r in rows:
-            if sub.lower() in r["label"].lower():
+            if r["depth"] == 1 and sub.lower() in r["label"].lower():
                 return r
         return None
 
@@ -475,13 +480,11 @@ def main():
         return tx + tw // 2, row_y(rows, r["row"], top)
 
     def item_point(sb):
-        """A visible SELECTABLE row, never a separator -- so anything
-        restoring the scroll position does not depend on the inert-row
-        case the checks below are testing. Keyed on the label rather
-        than on depth: the sidebar is flat, so every row reports depth
-        0 and a depth test selects nothing at all."""
+        """A visible PAGE row, never a heading -- so anything restoring
+        the scroll position does not depend on the inert-row case the
+        checks below are testing."""
         for r in rows:
-            if r["label"] != "-" and sb["top"] <= r["row"] < sb["top"] + sb["visible"]:
+            if r["depth"] == 1 and sb["top"] <= r["row"] < sb["top"] + sb["visible"]:
                 return row_point(r, sb["top"])
         return tx + tw // 2, ty + th // 2
 
@@ -581,39 +584,42 @@ def main():
     # both shipped stranded when MAX_GROUPS was a hand-picked 24 and 24
     # pages existed; with the caps derived from MAX_SETTINGS a dropped
     # page now shows up here as a missing row.
-    captions = [r["label"] for r in rows if 1000 <= r["id"] < 2000]
-    check("the sidebar is flat -- no row is an inert caption",
-          not captions, f"captions still present: {captions}")
+    # EVERY HEADING HAS A PAGE UNDER IT. The failure this guards against
+    # (a page-table overflow) cuts whatever is LAST, which leaves a
+    # heading with nothing beneath it -- asserted over every row rather
+    # than a named category, so adding one cannot quietly retire it.
+    orphans = [r["label"] for i, r in enumerate(rows)
+               if r["depth"] == 0 and (i + 1 >= len(rows) or rows[i + 1]["depth"] != 1)]
+    check("every heading has a page under it", not orphans, f"bare headings: {orphans}")
+
+    def under(heading):
+        """The page labels listed under `heading`."""
+        out, inside = [], False
+        for r in rows:
+            if r["depth"] == 0:
+                inside = r["label"] == heading
+            elif inside:
+                out.append(r["label"])
+        return out
 
     # The kernel tunables are registered with no /etc file at all, so
-    # this asserts that "no file" did not quietly mean "no row". Their
-    # pages are the ones whose names collide with a top-level page and
-    # are qualified by their category.
-    labels = [r["label"] for r in rows]
-    check("the kernel tunables have pages of their own",
-          "Memory" in labels and "Kernel: Diagnostics" in labels,
-          f"labels={labels}")
-
-    # **A COLLIDING NAME IS QUALIFIED, AND A UNIQUE ONE IS NOT.** Both
-    # halves matter: qualifying only one of a colliding pair leaves the
-    # other ambiguous (which an earlier version did, by rewriting the
-    # array it was still comparing against), and qualifying a lone page
-    # spells its category twice ("Sound: Sound").
-    dupes = [l for l in labels if l != "-" and labels.count(l) > 1]
-    check("no two pages share a name",
-          not dupes, f"duplicated labels: {sorted(set(dupes))}")
-    # NOT Network: it has had two pages (Connection log, Recovery) since
-    # 53e2e6f7, so its rows are correctly named by page. Which categories
-    # are lone is the DATA's business; these two have been for a while.
-    check("a lone page is named by its category, unqualified",
-          "Sound" in labels and "Storage" in labels,
-          f"labels={labels}")
+    # this asserts that "no file" did not quietly mean "no row".
+    check("the kernel tunables have pages of their own, under Kernel",
+          "Memory" in under("Kernel") and "Diagnostics" in under("Kernel"),
+          f"Kernel: {under('Kernel')}")
+    # A name MAY repeat across categories now -- position says which --
+    # but never within one, where nothing would tell the two apart.
+    heads = [r["label"] for r in rows if r["depth"] == 0]
+    dupes = [(h, l) for h in heads for l in set(under(h)) if under(h).count(l) > 1]
+    check("no two pages in one category share a name", not dupes, f"{dupes}")
+    # A category's only page keeps its own name, under the category's.
+    check("a lone page sits under its category's heading",
+          len(under("Sound")) == 1 and len(under("Storage")) == 1,
+          f"Sound: {under('Sound')} Storage: {under('Storage')}")
 
     # Pages from three different categories, so the walk is exercised
-    # across the list rather than at one end of it. "Diagnostics" is
-    # qualified because Kernel has one too -- which is the collision
-    # rule being asserted from the other side.
-    for group in ("Shell", "System: Diagnostics", "Wallpaper"):
+    # across the list rather than at one end of it.
+    for group in ("Shell", "Diagnostics", "Wallpaper"):
         check(f"the sidebar offers a {group} page",
               row_named(group) is not None,
               f"labels={[r['label'] for r in rows]}")
@@ -661,6 +667,22 @@ def main():
     # cheapest way here is not to inherit eighty checks of state.
     eff_page = select_page("Effects", "Appearance/Effects")
     if eff_page:
+        # AN ON/OFF SETTING IS A SWITCH, and flipping it STAGES the other
+        # value -- read from the app's report, then put back with Reset so
+        # nothing below inherits it.
+        sws = {n: c for n, c in controls(dbg, 0).items() if c["kind"] == "switch"}
+        if check("effects: an on/off setting is a switch", bool(sws),
+                 f"kinds={ {n: c['kind'] for n, c in controls(dbg, 0).items()} }"):
+            name, c = sorted(sws.items())[0]
+            was = choice_shown(dbg, 0, name)
+            mk = len(drain(dbg))
+            click(c["x"] + c["w"] // 4, c["y"] + c["h"] // 2)
+            got = staged_for(dbg, mk, name)
+            check("...and clicking it stages the other value",
+                  got in ("on", "off") and was is not None and got != was[0],
+                  f"{name}: {was} -> {got!r}")
+            press("reset")
+            time.sleep(0.4)
         dbg.send("sh config set desktop.minimize_effect shatter")
         dbg.settle(1.2)
         mark_eff = len(drain(dbg))
@@ -847,13 +869,12 @@ def main():
     tz = [s for s in tz_slots if "timezone" in s["name"]]
     check("the timezone page loaded every city", tz and tz[-1]["choices"] >= 50,
           f"{tz[-1]['choices'] if tz else 0} choices")
-    # A ONE-CONTROL PAGE DOES NOT PRINT ITS OWN NAME TWICE. A setting
-    # with no `group` gets a page named by its LABEL, so the heading and
-    # the sole caption were the same string -- "Time zone" over "Time
-    # zone", and the same on every other single-setting page.
+    # A ONE-SETTING PAGE IS ONE CARD, and the card is titled even when
+    # the page's name is the same word: a card is read on its own, as it
+    # is in Windows 11's Settings.
     tz_page = page_line(dbg, mark)
-    check("a one-control page does not repeat its title as a caption",
-          tz_page is not None and tz_page["slots"] == 1 and tz_page["captions"] == 0,
+    check("a one-setting page is one titled card",
+          tz_page is not None and tz_page["slots"] == 1 and tz_page["captions"] == 1,
           f"{tz_page}" if tz_page else "no page line")
 
     check("...and a long list uses a DROPDOWN, not radio buttons",
@@ -862,9 +883,10 @@ def main():
     # NOT mouse_speed any more -- it became SETTING_TYPE_INT and has no
     # choices to be short. cursor_size is the short ENUM on this page,
     # and it is what this check was always about.
+    # Three short names fit side by side: a segmented control.
     mouse_speed = [s for s in page_slots if "cursor_size" in s["name"]]
-    check("...while a short list stays radio buttons",
-          bool(mouse_speed) and mouse_speed[-1]["kind"] == "radio",
+    check("...while a few short names sit side by side, segmented",
+          bool(mouse_speed) and mouse_speed[-1]["kind"] == "segmented",
           f"kind={mouse_speed[-1]['kind'] if mouse_speed else '?'}")
 
     # --- THE TIMEZONE DROPDOWN: names, hover, and type-ahead ----------
@@ -994,6 +1016,10 @@ def main():
 
     dbg.key(0x1B)   # Esc: put the popup away before the next section
     dbg.settle()
+    # AND DISCARD WHAT THE KEYS STAGED: leaving a page with a change asks
+    # now, and the next section navigates away.
+    press("reset")
+    time.sleep(0.4)
     # And put the pointer back where the WM starts it, so the sections
     # below photograph the same screen they always did.
     dbg.warp_cursor(qmp, 640, 360)
@@ -1096,7 +1122,7 @@ def main():
           f"staged={staged!r}, any set line={last(r'settings: set .*')!r}")
 
     # Now Apply.
-    click(bx + bw + 6 + bw // 2, by + bh // 2)   # the middle button
+    press("apply")
     time.sleep(0.5)
     drain(dbg)
     after = stored_value(dbg, "mouse_speed")
@@ -1132,12 +1158,12 @@ def main():
               or ctls.get("system.mouse_accel"))
     accel_ctl = reveal("system.mouse_accel", at_top)
     qmp.screenshot(f"{args.tmp}/settings_slider.png")
-    # THE CONTROL'S OWN y, not a count of re-reported lines: a page with
-    # nothing left to scroll re-reports nothing and would fail a count
-    # while behaving perfectly.
-    check("scrolling moved the page's controls",
-          at_top is not None and accel_ctl is not None
-          and accel_ctl["y"] < at_top["y"],
+    # WHOLLY INSIDE THE VIEWPORT, scrolled there if it was not: a press
+    # outside the view is clipped away. (The Mouse page fits the default
+    # window since the cards, so there may be nothing to scroll; the
+    # Effects phase above is the one that has to.)
+    check("the slider is inside the page, scrolled to if it was not",
+          accel_ctl is not None and fully_inside(accel_ctl, py0, ph0),
           f"accel y {at_top and at_top['y']} -> {accel_ctl and accel_ctl['y']}")
     if accel_ctl:
         mark3 = len(drain(dbg))
@@ -1157,6 +1183,9 @@ def main():
         # a drag that moved one stop would pass a weaker check.
         check("...and a drag to the end selects the last option",
               dragged == "high", f"got {dragged!r}, wanted 'high'")
+        # Discarded, or leaving the page would stop at the question.
+        press("reset")
+        time.sleep(0.4)
 
     # --- Advanced= keeps a setting off the page until asked ----------
     #
@@ -1164,7 +1193,11 @@ def main():
     # must NOT be on its page by default and MUST appear once the toggle
     # is checked. Both halves matter: the first alone would pass if the
     # setting had simply vanished from the registry.
-    appearance = row_named("Console cursor") or row_named("Appearance")
+    # The Console page carries it (cursor_config.c's group). This looked
+    # for "Console cursor" or "Appearance" until the sidebar grew
+    # headings -- neither was a page, so the check was silently skipped.
+    appearance = row_named("Console")
+    check("the sidebar offers the Console page", appearance is not None)
     if appearance:
         mark = len(drain(dbg))
         open_row(appearance)
@@ -1240,9 +1273,10 @@ def main():
             bx = cx + px0 + 8
             by = cy + py0 + 3 * 22
             crop = im.crop((bx, by, bx + pw0 - 16, cy + py0 + ph0 - 8))
-            px = list(crop.getdata())
-            bg = max(set(px), key=px.count)     # the panel colour, whatever it is
-            return sum(1 for p in px if p != bg)
+            # TEXT INK -- dark pixels -- not "anything but the background":
+            # a page of white cards is all non-background and would
+            # swamp a page of plain text lines.
+            return sum(1 for p in crop.getdata() if sum(p) < 300)
 
         # BOTH PAGES CONFIRMED OPEN before their pixels are compared.
         # System Information is the LAST row of thirty-one and the
@@ -1326,7 +1360,7 @@ def main():
                   stored_value(dbg, "ntp_server") == before_server,
                   f"{before_server!r} -> {stored_value(dbg, 'ntp_server')!r}")
 
-            click(bx + bw + 6 + bw // 2, by + bh // 2)   # Apply
+            press("apply")
             time.sleep(0.5)
             drain(dbg)
             after_server = stored_value(dbg, "ntp_server")
@@ -1387,14 +1421,11 @@ def main():
             check(name, got is not None,
                   f"top {sidebar_state(dbg) and sidebar_state(dbg)['top']}, wanted {want}")
 
-        # Over an INERT row -- a separator. Not a row the sidebar can
+        # Over an INERT row -- a heading. Not a row the sidebar can
         # select, and therefore not one it would scroll under either.
-        # (This used to look for a depth-0 heading; the flat sidebar has
-        # no headings, and every row reports depth 0, so that found a
-        # perfectly selectable page and tested nothing.)
-        head = next((r for r in rows[:sb["visible"]] if r["label"] == "-"), None)
+        head = next((r for r in rows[:sb["visible"]] if r["depth"] == 0), None)
         if head:
-            wheels_from("a separator row", *row_point(head, 0))
+            wheels_from("a heading row", *row_point(head, 0))
         # Over the SCROLLBAR strip itself, where every desktop scrolls.
         wheels_from("the scrollbar", tx + tw - 2, ty + th // 2)
 
@@ -1479,12 +1510,12 @@ def main():
               f"saver={started_on!r} rows={[o['name'] for o in opts]}")
         # THE DECLARATION DECIDES THE CONTROL, which is the half a row
         # count cannot see: `Option.stars=int:50..2000:420` has to become
-        # a spinbox and `Option.colour=enum:...` a radio list, or the
+        # a spinbox and `Option.colour=enum:...` a choice control, or the
         # descriptor's types are being ignored and every option is a
         # string box.
         kinds = {o["kind"] for o in opts}
         check("...and each option's control comes from its declared type",
-              "spin" in kinds and "radio" in kinds,
+              "spin" in kinds and kinds & {"radio", "segmented", "switch", "combo"},
               f"kinds={sorted(kinds)} from {[o['name'] for o in opts]}")
 
         def pick_saver(want=None, avoid=None, tries=14):
@@ -1593,7 +1624,7 @@ def main():
                 check("...and writes nothing until Apply",
                       key + "=" not in dbg.send(f"sh cat {conf}"),
                       f"{conf} holds {key} already")
-                click(bx + bw + 6 + bw // 2, by + bh // 2)   # Apply
+                press("apply")
                 time.sleep(1.2)
                 on_disk = None
                 for line in dbg.send(f"sh cat {conf}").splitlines():
@@ -1612,31 +1643,89 @@ def main():
             dbg.send(f"sh config set desktop.screensaver {started_on}")
         dbg.settle()
 
-    # --- Cancel closes without writing --------------------------------
+    # --- Reset discards; leaving a changed page asks ------------------
     mark = len(drain(dbg))
     open_row(mouse_row)
     speed_ctl = reveal("system.mouse_speed",
                         controls(dbg, mark).get("system.mouse_speed", speed_ctl))
     on_disk = stored_value(dbg, "mouse_speed")
-    # Step it DOWN this time, so the staged value differs from the one
-    # the Apply test above left behind -- staging the value that is
-    # already stored does nothing at all (setting_set() short-circuits
-    # it), and a Cancel test whose change was a no-op proves nothing.
-    mark_stage = len(drain(dbg))
-    click(speed_ctl["x"] + speed_ctl["w"] - 7,
-          speed_ctl["y"] + speed_ctl["h"] * 3 // 4)
-    # THE STAGE IS ASSERTED BEFORE THE CANCEL. "The value on disk did not
-    # change" is satisfied just as well by a click that never reached the
-    # control, which is what this check used to be measuring.
-    staged_down = staged_for(dbg, mark_stage, "system.mouse_speed")
-    check("the step down stages a change for Cancel to discard",
+
+    def stage_down():
+        """Step the speed DOWN -- a value different from what Apply left,
+        since staging the stored value is no change at all. Asserted
+        before anything is discarded: an unchanged disk is satisfied just
+        as well by a click that never reached the control."""
+        mk = len(drain(dbg))
+        click(speed_ctl["x"] + speed_ctl["w"] - 7, speed_ctl["y"] + speed_ctl["h"] * 3 // 4)
+        return staged_for(dbg, mk, "system.mouse_speed")
+
+    staged_down = stage_down()
+    check("the step down stages a change for Reset to discard",
           staged_down is not None and staged_down != on_disk,
           f"staged {staged_down!r}, on disk {on_disk!r}")
-    click(bx + 2 * (bw + 6) + bw // 2, by + bh // 2)   # Cancel
+    mark = len(drain(dbg))
+    press("reset")
     time.sleep(0.6)
-    check("Cancel discards the staged change",
-          staged_down is not None and stored_value(dbg, "mouse_speed") == on_disk,
+    drain(dbg)
+    check("Reset discards the staged change and writes nothing",
+          bool(_since(mark, r"settings: reset$")) and
+          stored_value(dbg, "mouse_speed") == on_disk,
           f"{on_disk!r} still on disk, staged was {staged_down!r}")
+
+    # LEAVING A PAGE WITH A CHANGE ASKS, and Discard goes on without
+    # writing. The question is asserted on the app's own line, the
+    # answer on the disk and on which page then opened.
+    speed_ctl = reveal("system.mouse_speed",
+                        controls(dbg, 0).get("system.mouse_speed", speed_ctl))
+    staged_again = stage_down()
+    mark = len(drain(dbg))
+    open_row(tz_row)
+    asked = _since(mark, r"settings: ask leave page changes (\d+)")
+    check("leaving a page with a change asks first",
+          staged_again is not None and bool(asked) and asked[-1].group(1) == "1",
+          f"staged {staged_again!r}, asked {[m.group(0) for m in asked]}")
+    buttons = {}
+    for m in _since(mark, r"settings: layout ask\.button (\d) (-?\d+) (-?\d+) (\d+) (\d+)"):
+        buttons[int(m.group(1))] = tuple(int(v) for v in m.groups()[1:])
+    if check("...with Apply, Discard and Cancel", len(buttons) == 3, f"{buttons}"):
+        x, y, w, h = buttons[1]                       # Discard
+        mark = len(drain(dbg))
+        click(x + w // 2, y + h // 2)
+        went = wait_page(dbg, mark, "Time zone")
+        check("Discard goes on to the page asked for, writing nothing",
+              went is not None and stored_value(dbg, "mouse_speed") == on_disk,
+              f"page {went and went['page']!r}, on disk "
+              f"{stored_value(dbg, 'mouse_speed')!r} (was {on_disk!r})")
+
+    # --- THE SEARCH BOX FILTERS THE SIDEBAR -----------------------------
+    #
+    # By the words a person uses: "cursor" is in no page's NAME, only in
+    # its settings' labels, so a filter that matched page names alone
+    # would find nothing and fail here.
+    sx, sy, sw, sh = layout(dbg)["search"]
+    click(sx + sw // 2, sy + sh // 2)
+    mark = len(drain(dbg))
+    for ch in "cursor":
+        dbg.key(ord(ch), settle=False)
+    dbg.settle()
+    time.sleep(0.6)
+    drain(dbg)
+    filt = _since(mark, r'settings: filter "([^"]*)" rows (\d+)')
+    shown = [m.group(1) for m in _since(mark, r"settings: row \d+ id \d+ y -?\d+ depth 1 (.+)")]
+    check("typing in the search box filters the sidebar by setting",
+          bool(filt) and filt[-1].group(1) == "cursor"
+          and 0 < int(filt[-1].group(2)) < len(rows) and "Mouse" in shown,
+          f"filter {[m.group(0) for m in filt][-1:]} pages {shown[-8:]}")
+    mark = len(drain(dbg))
+    for _ in range(len("cursor")):
+        dbg.key("0x08", settle=False)   # hex: a bare "8" is typed as the digit
+    dbg.settle()
+    time.sleep(0.6)
+    drain(dbg)
+    filt = _since(mark, r'settings: filter "([^"]*)" rows (\d+)')
+    check("...and clearing it brings every page back",
+          bool(filt) and filt[-1].group(1) == "" and int(filt[-1].group(2)) == len(rows),
+          f"{[m.group(0) for m in filt][-1:]} against {len(rows)} rows")
 
     return report()
 

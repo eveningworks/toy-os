@@ -28,7 +28,6 @@ buildable now. Something that MISBEHAVES is not here -- that is
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
 - [ ] Restore trust in the GUI suite: harness faults first, then the deterministic reds, intermittents kept with a rate  *(Kernel test harness)*
-- [ ] System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons  *(Known limitations and papercuts (unscheduled))*
 <!-- END next-up -->
 
 
@@ -1223,7 +1222,7 @@ this to be better?".
 - [ ] `toywm` links DYNAMICALLY, so the static set's rescue argument no longer covers the desktop
 - [ ] The WM's context menu has no keyboard: `uui_menubar_key()` exists and nothing routes the overlay key op to it
 - [ ] Widget-local RGB literals bypass `utheme` -- ~12 widgets unconverted, plus five colours no palette role matches
-- [ ] **NEXT** System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons
+- [x] ~~System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons~~ DONE 2026-09-28
 - [ ] Audit the bare `redraw_pending = 1` sites in `userland/wm/` for a rect they could damage -- a focus change's title colour is next
 - [ ] Disk Mark's dropdown cannot be typed at while CLOSED -- the app routes no keys, so only the overlay path reaches it
 - [ ] On a machine with no invariant TSC, CPU percentages round to 0% for sub-tick work

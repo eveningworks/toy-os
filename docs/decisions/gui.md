@@ -7477,6 +7477,12 @@ to differ; choosing to is separate, and reversible in one setting.
 
 ## A settings category with one page collapses, and that needed a third row kind
 
+**Superseded for System Settings on 2026-09-28** by "System Settings is
+cards under a searchable sidebar, and leaving a changed page asks": every
+category now keeps its heading, and a lone page sits under it like any
+other. `UUI_SIDEBAR_TOP` stays in the widget -- the file chooser's
+places list uses it.
+
 System Settings generates its sidebar from the categories the settings
 themselves declare, so the taxonomy is data and the widget is generic.
 Splitting Appearance -- which had accumulated the wallpaper, the taskbar,
@@ -8868,4 +8874,47 @@ registry and redraws the open page. **A page with edits pending is left
 alone**: rebuilding it would throw the user's staged values away, so it
 is marked stale and refreshed as soon as those edits are applied or
 cancelled. The same holds while an options dialog is open over it.
+
+## System Settings is cards under a searchable sidebar, and leaving a changed page asks
+
+Rebuilt 2026-09-28, from mockups the maintainer chose between. The page
+had been a column of bold captions, grey descriptions and bare controls,
+with every choice suffixed "(current)", square radio markers, OK / Apply /
+Cancel bottom-left and a status bar repeating the page's name; the
+sidebar was a flat list whose categories showed only as rules.
+
+**What real systems do.** Windows 11 Settings, GNOME Settings (libadwaita
+boxed lists) and KDE Plasma 6 (FormCard) all draw a setting as a ROW: its
+name and a line of description on the left, its control on the right, a
+toggle for anything on/off, and search at the top of the navigation.
+Windows, GNOME and macOS apply every change at once; KDE's System
+Settings STAGES behind Apply, with Defaults and Reset beside it, and asks
+Apply / Discard / Cancel when you leave a module with changes.
+
+**What toy-os does.** The row look of all four, and KDE's model for
+changes, which this app already had (the decision above on following
+outside changes depends on it). Concretely:
+
+- each setting is a `uui_setting_row` card, and its control is picked
+  from what its values ARE -- a switch for an on/off pair, a segmented
+  control for a few short names, a list inside the card for a few long
+  ones, a dropdown for many -- rather than from a count alone;
+- the footer counts what is staged ("2 changes not applied") and holds
+  Reset and Apply, live only while something is staged; OK and Cancel
+  went, because closing the window is the cancel and leaving asks;
+- leaving a page, or closing the window, with a change asks Apply /
+  Discard / Cancel. The old rule discarded silently with a status line,
+  which is how a user learns not to trust the app;
+- the sidebar is a heading per category with its pages under it, and a
+  search box above it filters by page name, category, and each setting's
+  label, description and choice names -- the words a person searches by;
+- one focus ring covers the window: search, sidebar, the page's controls,
+  Reset, Apply; Tab scrolls the page to the card it focused.
+
+**Rejected.** Instant apply, which would reverse the staging this app
+and its outside-change handling are built on, and needs a revert timer
+for the settings that can lose the screen (resolution) -- KDE's model is
+the one that is safe without one. A home page of category tiles (Windows
+11, GNOME) was offered and not chosen; search in the sidebar answers the
+same question without a second navigation level.
 

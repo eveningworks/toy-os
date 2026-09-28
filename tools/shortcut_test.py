@@ -187,20 +187,23 @@ def run_rebinding(dbg, qmp, res):
         return
     content = win["content"]
 
-    # Reach the Shortcuts page. The sidebar scrolls; its lone page is
-    # named after the category (settings.c's rule), so the row says
-    # "Shortcuts".
-    dbg.warp_cursor(qmp, content["x"] + 150, content["y"] + 200)
-    for _ in range(8):
-        qmp.wheel("down", 3)
-        time.sleep(0.25)
-    time.sleep(1)
+    # Reach the Shortcuts page BY SEARCHING, which needs no pixel: typing
+    # the category's name filters the sidebar to it, and the first match
+    # opens (settings.c's search_changed). This clicked a fixed (150, 211)
+    # after a blind scroll, which stopped landing on the row.
+    search = None
+    for line in dbg.logs("settings: layout search", clear=False):
+        m = re.search(r"settings: layout search (-?\d+) (-?\d+) (\d+) (\d+)", line)
+        if m:
+            search = [int(v) for v in m.groups()]
     row = None
-    for line in (dbg.send("sh dmesg") or "").splitlines():
-        if "settings: page Shortcuts" in line:
-            row = line
-    dbg.click(150, 211)
-    time.sleep(2)
+    if search:
+        dbg.send(f"gui click {content['x'] + search[0] + search[2] // 2} "
+                 f"{content['y'] + search[1] + search[3] // 2}")
+        time.sleep(0.5)
+        for ch in "shortcuts":
+            dbg.send(f"gui key {ord(ch)}")
+        time.sleep(2)
     page = [l for l in (dbg.send("sh dmesg") or "").splitlines()
             if "settings: page Shortcuts" in l]
     res.check("the Shortcuts page lists every action",

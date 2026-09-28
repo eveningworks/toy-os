@@ -1374,11 +1374,30 @@ this the obvious way), not from how much history it accumulated.
   `userland/gui/system/settings.c`, `/bin/wm/system/settings`, driven by
   `tools/settings_test.py`. Renamed because Control Panel is Windows'
   name and this shows exactly the SETTINGS registry (not facts, not
-  tunables). The shape is KDE System Settings': a `uui_sidebar` on
-  the left, one page, a status bar. **The rename left a stale
+  tunables). The shape: a searchable `uui_sidebar` of category
+  headings and their pages on the left, the page as `uui_setting_row`
+  cards, and a footer with Reset and Apply. **The rename left a stale
   `/bin/wm/system/cpanel` on any existing `disk.img`**, because `make
   iso` re-seeds by SYNC -- `make clean-disk && make iso` for a fresh
   image, or delete it by hand.
+- **SYSTEM SETTINGS PICKS A SETTING'S CONTROL FROM ITS VALUES**
+  (`pick_kind()` in `userland/settings/set_page.c`): a `uui_switch` for
+  an on/off pair (on/off, yes/no, true/false, enabled/disabled, 1/0), a
+  `uui_segmented` for two to four names that fit side by side, a
+  `uui_radio_list` inside the card for a few long ones, a dropdown from
+  `CHOICES_DROPDOWN_MIN` up. `Widget=dropdown` and `Widget=slider` in
+  `/etc/settings.d` still win; `Widget=radio` now means the same as
+  `auto`. A number is a spinbox, a string a field, a key combination a
+  capture control, as before.
+- **A TEST THAT STAGES A CHANGE IN SYSTEM SETTINGS MUST APPLY OR RESET IT
+  BEFORE IT NAVIGATES.** Leaving a page with a change asks Apply /
+  Discard / Cancel (`settings: ask leave page changes N`), so a sidebar
+  click after an unfinished stage opens a question instead of the page,
+  and every check after it reads the wrong page.
+- **A FOCUSED `uui_button` PRESSES ON SPACE OR ENTER, AND A DISABLED ONE
+  REFUSES FOCUS.** A NULL `accepts_focus` means "yes", so a button with no
+  focus slots sat in rings it could neither show nor act on. Its ring is
+  drawn OUTSIDE the face, or an accent (primary) button hides it.
 - **`uui_table` is the multi-column widget** (`userland/ui/uui_table.h`)
   -- columns with per-column width (in CHARACTERS, or 0 to stretch) and
   alignment, a header, selection, scrolling. **It PULLS its rows through

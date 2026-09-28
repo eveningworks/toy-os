@@ -96,7 +96,48 @@ const char *category_icon(const char *cat) {
     return 0;
 }
 
+// THE SEARCH FILTER, as typed; empty shows everything. Matched without
+// case against a page's name and category and against each of its
+// settings' label, description and choice names -- the words a person
+// would search by, not the registry's keys (GNOME and Windows search the
+// same way).
+char g_filter[UUI_TEXTBOX_MAX];
+
+static int has_word(const char *hay, const char *needle) {
+    size_t n = strlen(needle);
+    for (; *hay; hay++)
+        if (!strncasecmp(hay, needle, n)) return 1;
+    return 0;
+}
+
+static int setting_matches(int i) {
+    if (has_word(g_label[i], g_filter) || has_word(g_desc[i], g_filter)) return 1;
+    for (int c = 0; c < MAX_CHOICES; c++) {
+        struct setting_msg m;
+        memset(&m, 0, sizeof m);
+        m.op = SETTING_OP_CHOICE;
+        m.index = i;
+        m.choice = c;
+        if (usetting_dispatch(&m) != 0) break;
+        if (has_word(m.label, g_filter)) return 1;
+    }
+    return 0;
+}
+
+int group_matches(int g) {
+    if (!g_filter[0]) return 1;
+    if (has_word(g_group_label[g], g_filter) || has_word(g_group_cat[g], g_filter)) return 1;
+    for (int i = 0; i < g_setting_count; i++)
+        if (!strcmp(g_cat_of[i], g_group_cat[g]) &&
+            !strcmp(group_key_of(i), g_group_key[g]) && setting_matches(i))
+            return 1;
+    return 0;
+}
+
 void rebuild_sidebar(void) {
+    // Read BEFORE g_nodes is rewritten: the sidebar holds a row index into
+    // this same array, so afterwards it would name whatever row took its place.
+    int keep = uui_sidebar_selected_id(&g_tree);
     g_cat_count = 0;
     g_group_count = 0;
     g_node_count = 0;
@@ -188,88 +229,50 @@ void rebuild_sidebar(void) {
         }
     }
 
-    // The display labels, once the whole group table is known -- two
-    // passes, because a name is only a collision relative to the others.
-    //
-    // **A CATEGORY'S ONLY PAGE IS NAMED BY THE CATEGORY.** Its group key
-    // is an internal word chosen to group settings, not to title a row:
-    // Sound's lone page is "Output" and Storage's is "Filesystem" --
-    // neither is what the row should say at the top level, and the
-    // category already has the better word.
-    unsigned char lone[MAX_GROUPS], dup[MAX_GROUPS];
-    for (int g = 0; g < g_group_count; g++) {
-        int siblings = 0;
-        for (int j = 0; j < g_group_count; j++)
-            if (strcmp(g_group_cat[j], g_group_cat[g]) == 0) siblings++;
-        lone[g] = siblings == 1;
-        strlcpy(g_group_display[g],
-                 lone[g] ? g_group_cat[g] : g_group_label[g],
-                 sizeof g_group_display[g]);
-    }
-    // **DECIDED BEFORE ANYTHING IS REWRITTEN.** Qualifying in the same
-    // pass that compares comes out asymmetric: the first of a colliding
-    // pair is rewritten, the second then matches nothing and stays bare,
-    // so exactly one of the two is left ambiguous.
-    for (int g = 0; g < g_group_count; g++) {
-        dup[g] = 0;
-        for (int j = 0; j < g_group_count && !dup[g]; j++)
-            if (j != g && strcmp(g_group_display[j], g_group_display[g]) == 0)
-                dup[g] = 1;
-    }
-    for (int g = 0; g < g_group_count; g++) {
-        // A LONE PAGE IS ALREADY ITS CATEGORY, so qualifying it spells
-        // the word twice ("Sound: Sound"). The other side of the
-        // collision carries the qualifier instead, which is the half
-        // that needed it.
-        if (!dup[g] || lone[g]) continue;
-        char base[GROUP_DISPLAY_MAX];
-        strlcpy(base, g_group_display[g], sizeof base);
-        snprintf(g_group_display[g], sizeof g_group_display[g], "%s: %s",
-                  g_group_cat[g], base);
-    }
+    // THE ROW LABEL IS THE PAGE'S OWN. Every page sits under a heading
+    // naming its category, so position disambiguates -- "Display" under
+    // Kernel is not "Display" under Display -- and a category's only page
+    // keeps the label its descriptor gives it ("Sound" > "Output").
+    for (int g = 0; g < g_group_count; g++)
+        strlcpy(g_group_display[g], g_group_label[g], sizeof g_group_display[g]);
 
-    // **A FLAT LIST: EVERY ROW IS A PAGE.** There are no captions at
-    // all, which is the shape GNOME's Settings and macOS's have. The
-    // sidebar used to mix two kinds of top-level row -- an inert
-    // caption over its pages, and a category that had collapsed to a
-    // single clickable page -- and they rendered identically, so
-    // "Display" did nothing while "Sound" beside it opened a page and
-    // nothing on screen said why.
-    //
-    // Categories survive as ORDER and as the icon each page carries, so
-    // related pages stay adjacent and look related; a SEP rule marks
-    // where one category's run ends.
+    // A HEADING PER CATEGORY, ITS PAGES UNDER IT -- KDE System Settings'
+    // and macOS's sidebar. Every destination is an indented ITEM and
+    // every heading an inert caption, so which rows can be clicked is
+    // never ambiguous (the flat list with rules this replaced named no
+    // category at all). A search filter keeps only matching pages and
+    // the headings over them.
+    int rows_max = (int)(sizeof g_nodes / sizeof g_nodes[0]);
+    int shown = 0;
     for (int c = 0; c < g_cat_count; c++) {
-        int first = 1;
+        int heading = 0;
         for (int g = 0; g < g_group_count; g++) {
-            if (strcmp(g_group_cat[g], g_cat[c]) != 0) continue;
-            if (g_node_count >= (int)(sizeof g_nodes / sizeof g_nodes[0])) break;
-            // The rule goes BEFORE each run but the first, so the list
-            // never opens or closes on one.
-            if (first && g_node_count > 0)
+            if (strcmp(g_group_cat[g], g_cat[c]) != 0 || !group_matches(g)) continue;
+            if (g_node_count + 2 > rows_max) break;
+            if (!heading) {
+                heading = 1;
                 g_nodes[g_node_count++] = (struct uui_sidebar_row){
-                    .kind = UUI_SIDEBAR_SEP
-                };
-            first = 0;
-            if (g_node_count >= (int)(sizeof g_nodes / sizeof g_nodes[0])) break;
+                    .label = g_cat[c], .kind = UUI_SIDEBAR_HEADING,
+                    .icon = category_icon(g_cat[c]) };
+            }
             g_nodes[g_node_count++] = (struct uui_sidebar_row){
-                .label = g_group_display[g], .kind = UUI_SIDEBAR_TOP,
-                .id = NODE_GROUP_BASE + g,
-                .icon = category_icon(g_cat[c])
-            };
+                .label = g_group_display[g], .kind = UUI_SIDEBAR_ITEM,
+                .id = NODE_GROUP_BASE + g };
+            shown++;
         }
     }
-    // A page with no category over it, and the same kind as every other
-    // row now.
-    if (g_node_count + 1 < (int)(sizeof g_nodes / sizeof g_nodes[0])) {
-        g_nodes[g_node_count++] = (struct uui_sidebar_row){ .kind = UUI_SIDEBAR_SEP };
+    if (!g_filter[0] && g_node_count + 2 <= rows_max) {
         g_nodes[g_node_count++] = (struct uui_sidebar_row){
-            .label = "System Information", .kind = UUI_SIDEBAR_TOP,
-            .id = NODE_SYSINFO
-        };
+            .label = "About", .kind = UUI_SIDEBAR_HEADING };
+        g_nodes[g_node_count++] = (struct uui_sidebar_row){
+            .label = "System Information", .kind = UUI_SIDEBAR_ITEM, .id = NODE_SYSINFO };
     }
+    if (g_filter[0] && !shown)
+        g_nodes[g_node_count++] = (struct uui_sidebar_row){
+            .label = "No settings match", .kind = UUI_SIDEBAR_HEADING };
 
     uui_sidebar_set_rows(&g_tree, g_nodes, g_node_count);
+    if (keep >= 0) uui_sidebar_select_id(&g_tree, keep);
 }
 
 int reload_settings(void) {

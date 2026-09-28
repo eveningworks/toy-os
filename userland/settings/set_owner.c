@@ -155,7 +155,7 @@ struct uapp_window  *g_opts_win;
 // Which owner the OPEN page has, so the page, its prose and the button
 // agree about where the options are drawn.
 const char          *g_page_owner_kind;
-struct uui_item      DLG[PAGE_MAX * 5 + 4];
+struct uui_item      DLG[PAGE_MAX + 4];
 int                  DLG_COUNT;
 struct uui_focusable DFOCUS[PAGE_MAX];
 int                  DFOCUS_COUNT;
@@ -172,21 +172,16 @@ void relayout_dialog(int content_w) {
     int n = 0;
     DFOCUS_COUNT = 0;
     for (int i = g_saver_slot; i >= 0 && i < g_slot_count; i++) {
-        // FIT THE PROSE TO THIS WINDOW, not to the page's width.
-        // refit_prose() runs over every slot at the PAGE's label width
-        // and the page's on_draw is what triggers it -- a dialog has
-        // neither, so an option's explanation kept the row count it was
-        // given on a wider page and came out cut off mid-word
-        // ("...because each piece is thrown fu").
-        //
-        // The width is the one this window was CREATED with, which is
-        // the only number available before its layout has run.
+        // FIT EACH CARD TO THIS WINDOW, not the page's width: the dialog
+        // has no on_draw to refit from, so the width it was CREATED with
+        // is the only number there is before its layout runs. Emitted
+        // first, since the fit measures the card's text and control.
+        n = emit_slot(DLG, n, i, DFOCUS, &DFOCUS_COUNT);
         struct slot *sl = &g_slot[i];
         if (sl->setting >= 0) {
-            sl->explain.w = content_w;
-            fit_rows(&sl->explain, slot_prose(sl->setting));
+            sl->row.w = content_w;
+            uui_setting_row_fit(&sl->row);
         }
-        n = emit_slot(DLG, n, i, DFOCUS, &DFOCUS_COUNT);
     }
 
     DLG_ROW_ITEMS[0] = (struct uui_item){ .ops = &uui_button_ops,
@@ -204,15 +199,11 @@ void relayout_dialog(int content_w) {
     uui_focus_init(&g_dlg_focus, DFOCUS, DFOCUS_COUNT);
 }
 
-// What the dialog is called and how big it is. FONT-DERIVED, never
-// pixels: this window holds a caption, an explanation and a control per
-// option, and a hardcoded size does not reflow when the font does.
+// How wide the dialog is -- FONT-DERIVED, so it reflows with the font.
+// Its height is the content's, measured in open_options_dialog().
 void opts_window_size(int *w, int *h) {
-    int line = ugfx_char_h() > 0 ? ugfx_char_h() : 14;
-    int rows = 0;
-    for (int i = g_saver_slot; i >= 0 && i < g_slot_count; i++) rows += 5;
     *w = ugfx_char_w() * 52;
-    *h = line * (rows + 6);
+    *h = 0;   // measured from the cards once they are built -- see below
 }
 
 void dlg_on_widget(struct uapp_window *win, int id, int reason) {
@@ -262,6 +253,9 @@ void open_options_dialog(struct uapp *a) {
     int w, h;
     opts_window_size(&w, &h);
     relayout_dialog(w - ugfx_char_w() * 2);
+    // AS TALL AS ITS CONTENT, measured rather than guessed per option, so
+    // OK and Cancel sit at the bottom edge whatever the cards came to.
+    uui_layout_natural_size(&DLG_LAYOUT, 0, &h);
 
     // THE TITLE IS A NAME, NOT A TOKEN. `shatter` is the word the
     // descriptor's author chose, and usaver_display() is what turns one
