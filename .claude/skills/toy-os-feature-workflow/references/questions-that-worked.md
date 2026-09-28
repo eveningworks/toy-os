@@ -472,3 +472,26 @@ The general shape: **when a choice the user already made turns out to
 rest on something you got wrong, re-ask once, with the number.** Do not
 silently switch (they chose), and do not keep going because they chose
 (they chose on your evidence).
+
+## A layout choice is asked with MOCKUPS in view (2026-09-28)
+
+Choosing the Device Manager's layout, three options went out as an
+`AskUserQuestion` with ASCII previews. The maintainer answered "can you
+create a mockup of these first before answering" -- and after seeing
+three artboards on a Design canvas picked one at once, adding: "I think
+we should use those in future when doing GUI work. Helps a lot."
+
+What made the mockups useful rather than decorative:
+
+- **The real theme**: `utheme_default()`'s palette, the WM's focused
+  title bar, Liberation Sans (Arimo on the web). A generic "clean UI"
+  would have been judged as a different desktop.
+- **Real data**: the ASUS's actual PCI and USB devices from
+  `local_info.txt`, a driver-less Wi-Fi card, a ring-3 holder -- so an
+  option that hides the interesting case shows it.
+- **The same device selected across options where it could be**, so the
+  difference on screen was the layout, not the content.
+
+So: **for anything with a visible layout, publish the mockups first and
+ask with them open.** ASCII previews are a fallback, not the question.
+Rationale for each option stays in the chat, never on an artboard.
