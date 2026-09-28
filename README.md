@@ -73,7 +73,8 @@ that turned out wrong. It boots on real hardware and under QEMU.
   buttons the boot protocol allows.
 - **Sound** — AC'97, Intel HD Audio and USB Audio behind one device class,
   mixed by a ring-3 daemon; WAV and an MP3 decoder written here rather than
-  vendored.
+  vendored, and MIDI through a SoundFont synthesiser with a General MIDI
+  bank generated here (or a real one, with `EXTRAS=1`).
 - **Its own manual** — `doc ls` on the machine renders the same page this
   repository holds, wrapped to whatever the terminal actually is.
 - **A log that outlives the boot** — the kernel ring holds a few hundred

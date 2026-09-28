@@ -122,6 +122,26 @@ EXTRAS = [
         dest="data/etc/ssl/certs/mozilla-roots.pem",
         fetch=[sys.executable, os.path.join(HERE, "fetch_ca_bundle.py")],
     ),
+    Extra(
+        name="soundfont",
+        what="GeneralUser GS, a ~31 MB General MIDI SoundFont of recorded "
+             "instruments. MIDI files play through it instead of the small "
+             "built-in bank (toy-gm.sf2), which stays as the fallback.",
+        licence="GeneralUser GS License v2.0 (bespoke, permissive; not an OSI licence)",
+        summary=(
+            "Use without restriction, private or commercial, including in "
+            "software projects, modified or not. The author cannot vouch for "
+            "the origin of every sample (none from commercial packages, no "
+            "complaint since 2000) and asks that a WEBSITE not hotlink his "
+            "downloads. It is DATA read by our synth, not linked code, so "
+            "there is no licence interaction with this repository. The "
+            "licence text is fetched with it and seeded beside it."
+        ),
+        source="https://github.com/mrbumpy409/GeneralUser-GS -- the author's "
+               "repository (see tools/fetch_soundfont.py)",
+        dest="data/soundfonts/GeneralUser-GS.sf2",
+        fetch=[sys.executable, os.path.join(HERE, "fetch_soundfont.py")],
+    ),
 ]
 
 

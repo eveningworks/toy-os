@@ -20,4 +20,9 @@ int usnd_clip_drain(struct usnd_stream *s, struct usnd_clip *c);
 // tools/usnd_hostcheck.py both run it before anything else. 0 on success.
 int usnd_mp3_selftest(void);
 
+// The SoundFont the MIDI codec plays with, in place of the one it would
+// find in /usr/share/soundfonts; NULL restores the search. For tests,
+// which need a bank whose every sample they know.
+void usnd_mid_set_soundfont(const char *path);
+
 #endif

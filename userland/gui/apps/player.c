@@ -13,7 +13,7 @@
 // of the library existing (see usnd.h for the three seams).
 //
 // It is handed a directory or a file on the command line -- `Handles=`
-// in its .desktop entry points .wav and .mp3 here, so the File Manager
+// in its .desktop entry points .wav, .mp3 and .mid here, so the File Manager
 // opens either with it -- and defaults to /usr/share/music.
 #include <stdint.h>
 #include <string.h>

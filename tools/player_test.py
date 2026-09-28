@@ -207,14 +207,14 @@ def run(dbg, qmp, tmp, res):
 
     # --- 2. the listing is by PROBE, not by extension ------------------
     #
-    # The app now opens on /usr/share/music, so what it lists is MP3s --
-    # and it lists them because usnd_probe() recognises the bytes, not
-    # because anything matched ".mp3". That is the property worth
-    # asserting: an extension filter would have needed editing to show
-    # them at all.
-    want = len([f for f in os.listdir(HOST_MUSIC) if f.endswith(".mp3")])
+    # The app now opens on /usr/share/music, so what it lists is MP3s and
+    # MIDI files -- and it lists them because usnd_probe() recognises the
+    # bytes, not because anything matched an extension. That is the
+    # property worth asserting: an extension filter would have needed
+    # editing to show them at all.
+    want = len([f for f in os.listdir(HOST_MUSIC) if f.endswith((".mp3", ".mid"))])
     res.check("the music directory has something in it (host side)", want > 0,
-              f"data/usr/share/music holds {want} mp3(s)")
+              f"data/usr/share/music holds {want} track(s)")
     res.check("the player lists it", lay.has("list"), "no list widget reported")
 
     # --- 3. the controls are DRAWN, not merely present -----------------
@@ -275,12 +275,22 @@ def run(dbg, qmp, tmp, res):
                   for l in parsed)
               or any("player:" in l for l in logs),
               f"log lines: {parsed[-3:]}")
-    # ...and specifically an MP3, since that is what the default directory
-    # now holds. A decoder that refused the file would still have produced
-    # a log line above, so this names the format rather than trusting that.
-    res.check("...and the file it decoded was an MP3",
-              any("mp3" in l.lower() or "Layer III" in l for l in logs),
-              f"log lines: {[l for l in logs if 'player:' in l][-3:]}")
+    # ...and by FORMAT, since a decoder that refused the file would still
+    # have produced a log line above. The directory lists first-boot.mid
+    # ahead of first-boot.mp3 -- the same score twice -- so the first row
+    # is the MIDI codec (which describes a song WITHOUT loading its
+    # SoundFont) and Next is the MP3 decoder.
+    opened = [l for l in logs if "player: opened" in l]
+    res.check("...the first row identified as MIDI",
+              any(" -- midi, " in l and "first-boot.mid" in l for l in opened),
+              f"log lines: {opened[-3:]}")
+    nx, ny, nw, nh = lay.screen_rect("next")
+    dbg.click(nx + nw // 2, ny + nh // 2)
+    dbg.settle()
+    opened = [l for l in poll_logs(dbg) if "player: opened" in l]
+    res.check("...and Next identified the MP3",
+              any(" -- mp3, " in l and "Layer III" in l for l in opened),
+              f"log lines: {opened[-3:]}")
 
     dbg.send("gui close Audio Player")
 

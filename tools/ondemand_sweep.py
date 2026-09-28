@@ -69,6 +69,11 @@ TOOLS = [
     # a decoder that shares no code with it.
     ("usnd_host",   "usnd_hostcheck.py",       "the MP3 decoder against ffmpeg",     False,
      ("host_audio", "needs gcc, lame and ffmpeg on PATH"),                                   False),
+    # The MIDI codec and SoundFont synth against FluidSynth, plus an ASan
+    # fuzz of both parsers. On the built-in bank only: a fetched one is
+    # the maintainer's to pass with --sf2.
+    ("midi_host",   "midi_hostcheck.py",       "the MIDI synth against FluidSynth",  False,
+     ("host_fluidsynth", "needs gcc and fluidsynth on PATH"),                               False),
     # Needs only gcc and the Python standard library -- hashlib and zlib
     # are the oracle -- so it has no `needs` gate at all.
     ("hash_host",   "hash_hostcheck.py",       "crc32/sha256 against hashlib and zlib", False,
@@ -426,6 +431,11 @@ def precondition_met(kind):
         # must not start requiring lame and ffmpeg on every checkout,
         # the same rule that keeps Docker out of preflight.
         return all(shutil.which(t) for t in ("gcc", "lame", "ffmpeg")), why
+    if key == "host_fluidsynth":
+        # FluidSynth is the ORACLE: without it the check would run only
+        # its fuzz half and still print a pass. A skip, like lame and
+        # ffmpeg above.
+        return all(shutil.which(t) for t in ("gcc", "fluidsynth")), why
     if key == "host_pillow":
         # Host gcc plus Pillow, which is the ORACLE rather than a
         # convenience: both image harnesses judge our codecs against it.

@@ -233,6 +233,12 @@ TESTS = [
     # UNPLAYABLE rather than as broken.
     ("usnd_test", 0,
      None, None),
+    # The MIDI codec and the SoundFont synth, over a bank and songs built
+    # byte by byte -- a 1 kHz sine sample, so pitches and onsets are
+    # exact. A REAL bank is judged against FluidSynth on the host
+    # instead (tools/midi_hostcheck.py).
+    ("midi_test", 0,
+     None, None),
     # Error codes reaching ring 3. Its load-bearing check is that a full
     # descriptor table and a missing file are DIFFERENT answers, which
     # needs a process that has really run out of fds -- see the file.

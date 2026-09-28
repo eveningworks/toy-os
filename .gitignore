@@ -140,6 +140,9 @@ ci-virtio.img
 # project's git history is a different act, and not one this repo needs
 # to perform to work. See docs/decisions.md.
 /data/doom/
+# A fetched SoundFont (tools/fetch_soundfont.py) -- somebody else's ~31 MB
+# of samples, seeded only under EXTRAS=1. The built-in bank is tracked.
+/data/soundfonts/
 # Fetched by `make iso EXTRAS=1`, never vendored: Mozilla's CA roots are
 # MPL-2.0. Only the fetched file -- the README beside it is ours and is
 # tracked.

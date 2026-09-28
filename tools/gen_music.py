@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""tools/gen_music.py -- the MP3 files that ship with toy-os.
+"""tools/gen_music.py -- the music files that ship with toy-os: MP3s, and
+the same score as a MIDI file.
 
 Written here rather than fetched, the same call tools/gen_audio.py made
 for the WAVs and for the same reason: a build-time dependency on
@@ -27,10 +28,11 @@ playback by counting zero crossings in QEMU's own recording -- an oracle
 that shares no code with the decoder. Music cannot be measured that way;
 a sine can.
 
-    python3 tools/gen_music.py [--out-music DIR] [--out-tests DIR]
+    python3 tools/gen_music.py [--out-music DIR] [--out-tests DIR] [--midi-only]
 
-Needs `lame` on PATH to encode. Nothing in the build runs this: the MP3s
-are tracked, and this is how they are regenerated and reviewed.
+Needs `lame` on PATH to encode (not for --midi-only). Nothing in the
+build runs this: the outputs are tracked, and this is how they are
+regenerated and reviewed.
 """
 import argparse
 import array
@@ -378,6 +380,123 @@ def write_wav(path, chans, gain, rate=RATE):
         f.write(hdr + bytes(body))
 
 
+# --- the same piece, as a Standard MIDI File --------------------------
+#
+# first-boot.mid is THIS SCORE, played by whatever SoundFont the machine
+# has, so the two files can be compared by ear. It is format 1 with a
+# conductor track, and it deliberately uses what a GM file uses: program
+# changes, the drum channel, running status, a sustain pedal, pan and
+# modulation controllers, a pitch-bend scoop, and a tempo map with a
+# ritardando -- the data alone exercises userland/lib/usnd_mid.c.
+
+PPQ = 480
+
+
+def _vlq(n):
+    out = [n & 0x7F]
+    n >>= 7
+    while n:
+        out.append(0x80 | (n & 0x7F))
+        n >>= 7
+    return bytes(reversed(out))
+
+
+def _track(events, running=True):
+    """events: (tick, bytes). Stable-sorted, so same-tick order holds."""
+    out, last, status = b"", 0, None
+    for tick, data in sorted(events, key=lambda e: e[0]):
+        body = data
+        if running and data[0] < 0xF0 and data[0] == status:
+            body = data[1:]             # running status
+        # A meta event cancels running status (SMF 1.0), so a writer
+        # must restate it -- even though usnd_mid.c would not need it.
+        status = data[0] if data[0] < 0xF0 else None
+        out += _vlq(tick - last) + body
+        last = tick
+    out += _vlq(0) + b"\xff\x2f\x00"
+    return b"MTrk" + struct.pack(">I", len(out)) + out
+
+
+def score_midi():
+    T = lambda bars, beats=0.0: int(round((bars * 4 + beats) * PPQ))
+    on = lambda ch, n, v: bytes([0x90 | ch, n, v])
+    # Note-off as a zero-velocity note-on, which is what lets a track
+    # run on one status byte.
+    off = lambda ch, n: bytes([0x90 | ch, n, 0])
+    cc = lambda ch, c, v: bytes([0xB0 | ch, c, v])
+
+    tempo = []
+    def set_bpm(tick, bpm):
+        tempo.append((tick, b"\xff\x51\x03" + int(60e6 / bpm).to_bytes(3, "big")))
+    title = b"First Boot"
+    tempo.append((0, b"\xff\x03" + bytes([len(title)]) + title))
+    tempo.append((0, b"\xff\x58\x04\x04\x02\x18\x08"))
+    set_bpm(0, BPM)
+    for i, bpm in enumerate((96, 92, 86, 78, 70)):  # the last two bars slow
+        set_bpm(T(30, i * 1.5), bpm)
+
+    PAD, BASS, ARP, LEAD, DRUMS = 0, 1, 2, 3, 9
+    ev = {k: [] for k in (PAD, BASS, ARP, LEAD, DRUMS)}
+    ev[PAD] += [(0, bytes([0xC0 | PAD, 89])), (0, cc(PAD, 7, 88)), (0, cc(PAD, 10, 64))]
+    ev[BASS] += [(0, bytes([0xC0 | BASS, 38])), (0, cc(BASS, 7, 96))]
+    ev[ARP] += [(0, bytes([0xC0 | ARP, 46])), (0, cc(ARP, 7, 80))]
+    ev[LEAD] += [(0, bytes([0xC0 | LEAD, 73])), (0, cc(LEAD, 7, 104)),
+                 (0, cc(LEAD, 10, 72))]
+    ev[DRUMS] += [(0, cc(DRUMS, 7, 100))]
+
+    for bar in range(BARS):
+        root, notes = CHORDS[bar % 4]
+        t0 = T(bar)
+        # The pad is re-struck each bar under a held pedal, lifted just
+        # before the next chord so the change is clean.
+        ev[PAD].append((t0, cc(PAD, 64, 127)))
+        for m in notes:
+            ev[PAD].append((t0, on(PAD, m, 70)))
+            ev[PAD].append((t0 + PPQ, off(PAD, m)))
+        ev[PAD].append((t0 + T(1) - 12, cc(PAD, 64, 0)))
+
+        if 4 <= bar < 28:
+            ev[BASS].append((t0, on(BASS, root, 100)))
+            ev[BASS].append((t0 + T(1) - 30, off(BASS, root)))
+            for b in range(4):
+                ev[DRUMS].append((t0 + T(0, b), on(DRUMS, 36, 112 if b % 2 == 0 else 80)))
+                ev[DRUMS].append((t0 + T(0, b) + 60, off(DRUMS, 36)))
+            for b in range(8):
+                ev[DRUMS].append((t0 + T(0, b * 0.5), on(DRUMS, 42, 70 if b % 2 else 90)))
+                ev[DRUMS].append((t0 + T(0, b * 0.5) + 40, off(DRUMS, 42)))
+                m = notes[b % 3] + (12 if b >= 4 else 0)
+                ev[ARP].append((t0 + T(0, b * 0.5), cc(ARP, 10, 24 if b % 2 else 104)))
+                ev[ARP].append((t0 + T(0, b * 0.5), on(ARP, m, 84)))
+                ev[ARP].append((t0 + T(0, b * 0.5 + 0.45), off(ARP, m)))
+        if 12 <= bar < 28:
+            for b in (1, 3):
+                ev[DRUMS].append((t0 + T(0, b), on(DRUMS, 38, 100)))
+                ev[DRUMS].append((t0 + T(0, b) + 60, off(DRUMS, 38)))
+            if bar == 20:
+                ev[DRUMS].append((t0, on(DRUMS, 49, 110)))
+                ev[DRUMS].append((t0 + 60, off(DRUMS, 49)))
+            for mb, beat, length, m in MELODY:
+                if mb != bar % 8:
+                    continue
+                note = m + (12 if bar >= 20 else 0)
+                at = t0 + T(0, beat)
+                if mb == 0 and beat == 0.0:
+                    # A scoop: start a whole tone flat and bend up.
+                    ev[LEAD].append((at, bytes([0xE0 | LEAD, 0x00, 0x00])))
+                    for k in range(1, 9):
+                        v = k * 8192 // 8
+                        v = min(v, 8192)
+                        ev[LEAD].append((at + k * 12, bytes([0xE0 | LEAD, v & 0x7F, v >> 7])))
+                ev[LEAD].append((at, on(LEAD, note, 96)))
+                ev[LEAD].append((at + T(0, length) - 20, off(LEAD, note)))
+                if length >= 2:
+                    ev[LEAD].append((at + T(0, 1), cc(LEAD, 1, 64)))
+                    ev[LEAD].append((at + T(0, length) - 20, cc(LEAD, 1, 0)))
+
+    tracks = [_track(tempo)] + [_track(ev[k]) for k in (PAD, BASS, ARP, LEAD, DRUMS)]
+    return b"MThd" + struct.pack(">IHHH", 6, 1, len(tracks), PPQ) + b"".join(tracks)
+
+
 def encode(wav, mp3, args):
     cmd = ["lame", "--quiet"] + args + [wav, mp3]
     subprocess.run(cmd, check=True)
@@ -391,14 +510,23 @@ def main():
     ap.add_argument("--out-music",
                     default=os.path.join(REPO, "data/usr/share/music"))
     ap.add_argument("--out-tests", default=os.path.join(REPO, "data/tests"))
+    ap.add_argument("--midi-only", action="store_true",
+                    help="write first-boot.mid and skip the MP3 encodes")
     args = ap.parse_args()
+
+    os.makedirs(args.out_music, exist_ok=True)
+    os.makedirs(args.out_tests, exist_ok=True)
+
+    mid = os.path.join(args.out_music, "first-boot.mid")
+    with open(mid, "wb") as f:
+        f.write(score_midi())
+    print(f"  {os.path.relpath(mid, REPO)}  {os.path.getsize(mid)} bytes")
+    if args.midi_only:
+        return 0
 
     if not shutil.which("lame"):
         print("gen_music: no `lame` on PATH -- cannot encode", file=sys.stderr)
         return 1
-
-    os.makedirs(args.out_music, exist_ok=True)
-    os.makedirs(args.out_tests, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="genmusic.")
 
     print("music:")

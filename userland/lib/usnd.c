@@ -21,8 +21,10 @@
 // Order is PROBE order, and WAV goes first because its magic is four
 // bytes at offset 0 while MP3's is a sync pattern that a stray 0xFF can
 // imitate -- the cheaper, stricter test should get the first look.
+// MIDI's `MThd` is as strict as WAV's `RIFF`, so it goes ahead of MP3 too.
 static const struct usnd_codec *const g_codecs[] = {
     &usnd_codec_wav,
+    &usnd_codec_mid,
     &usnd_codec_mp3,
 };
 #define CODEC_COUNT ((int)(sizeof g_codecs / sizeof g_codecs[0]))
@@ -48,9 +50,10 @@ int usnd_probe(const void *data, size_t n) {
 
 // --- opening ----------------------------------------------------------
 
-static int open_stream(const char *path, struct usnd_stream *s) {
+static int open_stream(const char *path, struct usnd_stream *s, int info_only) {
     memset(s, 0, sizeof *s);
     s->fd = -1;
+    s->info_only = info_only;
 
     int fd = sys_open(path, 0);
     if (fd < 0) { usnd_fail("cannot open file"); return -ENOENT; }
@@ -90,7 +93,7 @@ static int open_stream(const char *path, struct usnd_stream *s) {
 
 int usnd_load_info(const char *path, struct usnd_info *out) {
     struct usnd_stream s;
-    int rc = open_stream(path, &s);
+    int rc = open_stream(path, &s, 1);
     if (rc != 0) return rc;
 
     memset(out, 0, sizeof *out);
@@ -106,7 +109,7 @@ int usnd_load_info(const char *path, struct usnd_info *out) {
 }
 
 int usnd_open(const char *path, struct usnd_stream *s) {
-    int rc = open_stream(path, s);
+    int rc = open_stream(path, s, 0);
     if (rc != 0) return rc;
 
     s->src_cap = SRC_FRAMES;

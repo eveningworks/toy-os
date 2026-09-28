@@ -1903,6 +1903,50 @@ window without going through it will find its layout polls timing out.
   structural check on purpose, since swapping two codewords of equal
   length leaves the code complete and prefix-free. Not in any gate: it
   needs `lame` and `ffmpeg`.
+- **`midi_hostcheck.py`** -- the MIDI codec, the SoundFont parser and
+  the synth (`userland/lib/usnd_mid.c`, `usnd_sf2.c`, `usnd_synth.c`)
+  compiled with the host gcc, playing `first-boot.mid` and a GM tour
+  through a bank and compared against **FluidSynth**, which shares no
+  code with them. **It compares SHAPE, not samples**: two correct
+  SoundFont synths never agree sample for sample, so it checks the
+  loudness envelope (20 ms windows, correlated), that the level ratio
+  per section is CONSTANT (a wrong attenuation or velocity curve makes
+  it wander), and each tour instrument's pitch (autocorrelation, half a
+  semitone) and brightness. Each tour segment starts with All Sound
+  Off, so a window holds one instrument rather than a long pad's tail
+  under the next attack. Then it FUZZES both parsers under ASan/UBSan
+  -- mutated songs, and banks mutated where the indices are.
+
+  **Run it with `--sf2` on a real bank too**, not only the built-in one:
+  the shipped bank uses no modulators, so every modulator bug is
+  invisible to it. Against GeneralUser GS it found the missing
+  modulator lists, the 0.4 dB attenuation unit and the convex
+  modulation-envelope attack, each confirmed by the fix and then by
+  breaking it again. Positive controls that turned it red: a root key
+  off by a semitone, the attenuation generator ignored, note-offs
+  ignored, velocity-to-filter-envelope modulators dropped.
+  `--render SONG OUT.wav` just renders, for listening. Needs `gcc`;
+  the oracle half needs `fluidsynth` (skipped, loudly, without it).
+  Run by `ondemand_sweep.py`.
+- **`gen_sf2.py`** -- generates `toy-gm.sf2`, the built-in General MIDI
+  SoundFont, into `data/usr/share/soundfonts/` (tracked). Every bank
+  worth hearing is somebody else's and tens of megabytes, so the
+  repository carries a small one of its own and `fetch_soundfont.py`
+  adds a real one. **Each melodic sample is an attack plus ONE EXACT
+  CYCLE**: additive partials with their own decays for T seconds, then
+  frozen amplitudes for the loop, seamless because the sample's rate is
+  `L x f0` for an integer cycle length L. One root per octave,
+  band-limited for its zone; twenty timbres shared by the 128 programs
+  through preset-level generator offsets; drums as one-shots. **It
+  writes attenuations divided by 0.4**, because every synth that matters
+  reads the generator as 0.4 dB a unit. Deterministic; pure Python, no
+  numpy; nothing in the build runs it.
+- **`fetch_soundfont.py`** -- fetches GeneralUser GS (~31 MB) and its
+  licence into `data/soundfonts/` (gitignored) for `make iso EXTRAS=1`,
+  which is the only thing that runs it -- the `soundfont` row in
+  `fetch_extras.py`. `--from PATH` copies any local `.sf2` instead
+  (FluidR3_GM, say). Checks RIFF/sfbk and a preset chunk before writing
+  anything, since an error page is still a 200.
 - **`gen_mp3_tables.py`** -- regenerates
   `userland/lib/usnd_mp3_tables.h`, the three Layer III tables that have
   no generating formula (the Huffman codes, the 512-tap synthesis window,
@@ -1938,7 +1982,11 @@ window without going through it will find its layout polls timing out.
   `data/tests/sine1k.mp3` is mono CBR with no tag at all -- and it is a
   steady 1 kHz tone because `audio_test.py` judges playback by counting
   zero crossings in QEMU's own recording, which music cannot be judged
-  by. Needs `lame`; nothing in the build runs it.
+  by. It also writes `first-boot.mid`, THE SAME SCORE as a Standard
+  MIDI File -- format 1 with a conductor track, running status, a
+  sustain pedal, pan and modulation, a pitch-bend scoop and a closing
+  ritardando, so the data alone exercises the MIDI codec. Needs `lame`
+  (not for `--midi-only`); nothing in the build runs it.
 - **`gen_cursors.py`** -- generates the shipped cursor themes into
   `data/cursors/`, which the Makefile's `seed` target stages onto the
   image. **Into `data/`, NOT `seed/sync/`** -- that tree is gitignored

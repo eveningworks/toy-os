@@ -19,8 +19,9 @@
 // not built yet:
 //
 //   CODECS -- a `struct usnd_codec` row (probe/open/read/seek/close).
-//   WAV today; MP3 is a file and a row. The registry shape
-//   display_driver, block_device and uimg_codec already use here.
+//   WAV, MP3 and MIDI (rendered through a SoundFont), each a file and a
+//   row. The registry shape display_driver, block_device and uimg_codec
+//   already use here.
 //
 //   THE SINK -- where mixed samples GO (usnd_sink.h). One row today,
 //   the exclusive device. A system-wide sound daemon is a second row,
@@ -98,6 +99,10 @@ struct usnd_codec {
 struct usnd_stream {
     const struct usnd_codec *codec;
     int fd;
+    // Set for usnd_load_info(): the stream is opened to be DESCRIBED and
+    // will never be read, so a codec may skip what only playing needs
+    // (the MIDI codec's 30 MB SoundFont).
+    int info_only;
     struct usnd_format fmt;
     uint64_t frames;            // file frames, 0 when unknown
     void *priv;                 // the codec's
@@ -153,6 +158,7 @@ void usnd_close(struct usnd_stream *s);
 // The codec table. Adding MP3 is one .c file and one row in usnd.c.
 extern const struct usnd_codec usnd_codec_wav;
 extern const struct usnd_codec usnd_codec_mp3;
+extern const struct usnd_codec usnd_codec_mid;   // renders through a SoundFont
 
 // --- playback ---------------------------------------------------------
 //

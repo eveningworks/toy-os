@@ -10,9 +10,15 @@
 
 ## Description
 
-Play an audio file, or say what one contains. WAV and MP3 today, and the
-second one arrived exactly as the codec table (`userland/lib/usnd.h`)
+Play an audio file, or say what one contains. WAV, MP3 and MIDI, and
+each arrived exactly as the codec table (`userland/lib/usnd.h`)
 promised it would: a file and a row, not a second mechanism.
+
+A MIDI file is rendered through a SoundFont from `/usr/share/soundfonts`
+-- the built-in `toy-gm.sf2`, or any other `.sf2` installed there, which
+outranks it. `-i` names the bank it would use without loading it, so it
+answers instantly even for a 30 MB bank; playing loads the bank first,
+which is the pause before the first note.
 
 The MP3 side is MPEG-1 Layer III only. Layer I/II, the half-rate
 MPEG-2/2.5 sample rates, free-format and intensity stereo are refused by
@@ -51,6 +57,7 @@ across programs needs a sound daemon, which is a roadmap item.
 
     aplay /usr/share/sounds/chime.wav
     aplay -i /tests/sine1k.wav
+    aplay /usr/share/music/first-boot.mid
     aplay -v 40 /usr/share/sounds/win.wav
 
 ## See also

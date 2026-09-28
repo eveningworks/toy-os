@@ -991,6 +991,8 @@ def main():
     p_run.add_argument("commands", nargs="+")
     p_run.add_argument("--raw", action="store_true")
     p_run.add_argument("--label", action="store_true")
+    # cmd_run hands its args to cmd_exec, so it needs every exec flag.
+    p_run.add_argument("--escapes", action="store_true")
     p_run.set_defaults(func=cmd_run)
 
     args = ap.parse_args()

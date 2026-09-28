@@ -935,6 +935,12 @@ run on, not by order.
 - [ ] MPEG-2/2.5 Layer III (the half-rate sample rates), and Layer I/II -- refused with -ENOTSUP today
 - [ ] Intensity stereo in the MP3 decoder -- refused, because nothing available encodes it to test against
 - [ ] An MP3 seek index, so seeking lands exactly rather than by average frame size
+- [x] ~~MIDI playback~~ DONE 2026-09-28 -- a SoundFont synth as `usnd`'s third codec row, a generated GM bank, a real one via `EXTRAS=1`
+- [ ] Reverb and chorus for the MIDI synth -- the CC91/CC93 sends are computed and dropped
+- [ ] A live MIDI output port in `soundd` -- for a USB MIDI keyboard, and Doom's music off its OPL
+- [ ] Load the SoundFont off the caller's thread -- the first play of a 31 MB bank blocks the Player's UI
+- [ ] The SoundFont as a setting, rather than "any other `.sf2` outranks the built-in one"
+- [ ] RMID (`.rmi`), SF3 and DLS banks, GS/XG SysEx beyond a reset, linked SF2 modulators
 
 ### ACPI + real power/timer
 

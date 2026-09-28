@@ -2395,13 +2395,46 @@ real scanout hardware does. Do not write a pixel assertion for one.
   agreement is ~1.6e-6 -- one LSB in 32768 -- so a real break is never
   subtle.
 
+- **MIDI IS THE CODEC TABLE'S THIRD ROW: A SCORE RENDERED THROUGH A
+  SOUNDFONT, ON A FIXED BLOCK GRID**
+
+  Three files, split by concern: `usnd_mid.c` (the Standard MIDI File
+  parser and sequencer, and the codec row), `usnd_synth.c` (a GM
+  synthesiser -- voices, envelopes, LFOs, filter, modulators) and
+  `usnd_sf2.c` (the SoundFont 2 parser, which flattens presets x
+  instruments into regions). The bank is `/usr/share/soundfonts/`: any
+  `.sf2` there outranks the built-in `toy-gm.sf2`
+  (`tools/gen_sf2.py`), which stays as the fallback.
+
+  What bites. **The synth's output must not depend on how the CALLER
+  chunks its reads**: control blocks sit on a fixed 64-frame grid of
+  song time, and a seek re-aligns it (`usynth_align()`), or a seek
+  cannot land where continuous playback would have -- `midi_test`
+  seeks OFF the grid on purpose, because a seek to a multiple of 64
+  passes without the fix. **The per-sample path is integer**: under
+  TCG every SSE instruction is a softfloat call, and the float version
+  dropped out on a real bank. **Every controller reaches sound through
+  the region's MODULATORS** -- velocity, CC7/10/11, the wheel, the bend
+  are the SF2 defaults merged with the bank's, never a side path that
+  a bank's own modulator could not override. **The attenuation
+  generator counts 0.4 dB a unit** (FluidSynth's and the EMU8000's
+  reading, which real banks are voiced against), and **the modulation
+  envelope's attack is convex**. **`usnd_load_info()` does not load the
+  bank** (`info_only`), so selecting a file in the Player never waits
+  on 30 MB.
+
+  Verify with `tools/midi_hostcheck.py` -- the shipped bank AND a real
+  one (`--sf2`) against FluidSynth, plus a sanitizer fuzz of both
+  parsers -- and `/tests/midi_test`, whose byte-built sine bank makes
+  every pitch and onset exact.
+
 - **AUDIO IS DECODED AND MIXED IN RING 3, AND `lib/usnd.h` HAS THREE
   SEAMS.** The kernel gives out ONE exclusive PCM stream and never mixes,
   so formats, rate conversion and playing several sounds at once are all
   this library's -- the same call `uimg.h` makes about images, and what
   ALSA's dmix, PulseAudio, PipeWire and Windows' audio engine all do.
-  The seams: a **codec table** (`probe/open/read/seek/close`, WAV today,
-  MP3 a file and a row), a **sink** (`usnd_sink.h`, where mixed samples
+  The seams: a **codec table** (`probe/open/read/seek/close`: WAV, MP3
+  and MIDI, each a file and a row), a **sink** (`usnd_sink.h`, where mixed samples
   go -- the exclusive device today, a sound daemon as a second row), and
   **voices** (an eight-voice per-process mixer; with a daemon it becomes
   the app's submix). **A CODEC NEVER RESAMPLES** -- it reports its file's

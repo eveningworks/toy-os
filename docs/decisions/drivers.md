@@ -1770,6 +1770,71 @@ and a seek cannot land exactly without an index. It jumps by the average
 frame size and lets the reservoir refill, which is what every player does
 with a file that has no seek table.
 
+## MIDI is a codec that renders through a SoundFont, and the bank is built here
+
+**What real systems do.** Windows plays MIDI through a software
+wavetable synthesiser with a small bank that always ships (the
+Microsoft GS Wavetable Synth, a ~3 MB `gm.dls` of Roland samples);
+macOS does the same with Apple's DLS synth. Linux ships no default:
+FluidSynth or TiMidity++ plus a SoundFont somebody installs (FluidR3_GM,
+141 MB, MIT; GeneralUser GS, ~31 MB). DOS-era players used the OPL FM
+chip, which DOSBox and libADLMIDI emulate. toy-os follows Windows'
+shape -- a synth plus a bank that is always present -- with Linux's
+escape hatch: any SoundFont dropped into `/usr/share/soundfonts`
+outranks the built-in one.
+
+**A codec row, not a MIDI port.** A `.mid` renders to PCM behind
+`struct usnd_codec` (`userland/lib/usnd_mid.c`), which is how
+GStreamer's fluiddec and TiMidity-as-a-decoder treat it, and is why
+Audio Player, `aplay` and the File Manager play MIDI with no change but
+a `Handles=` line. The alternative -- a live MIDI output port in
+`soundd`, the shape of Windows' `midiOut`, the ALSA sequencer and
+CoreMIDI -- is what a USB MIDI keyboard would need, and nothing needs
+it yet; the synth (`usnd_synth.h`) takes channel messages and knows
+nothing about files, so a port would be a second driver of the same
+calls rather than a rewrite. It is on the roadmap.
+
+**SoundFont 2, not OPL or a procedural synth.** SF2 is the format real
+banks exist in, so the same engine plays a 1.4 MB generated bank and a
+31 MB recorded one. OPL was rejected because every emulator worth using
+is GPL or LGPL (the Doom port's `dbopl.c` is GPL-2, and `usnd` is MIT)
+and it can only ever sound like 1992; a procedural synth, because it
+can only ever sound like a game console. **The built-in bank is
+GENERATED** (`tools/gen_sf2.py`): additive synthesis for an attack,
+then one exact cycle as the loop -- seamless because each sample's rate
+is `L x f0` for an integer cycle length -- one root per octave,
+band-limited for its zone, and twenty timbres shared by the 128 GM
+programs through preset-level generator offsets, the way a 1990s ROM
+synth fitted GM into a few megabytes. It is ours, so the repository's
+licence covers it; `make iso EXTRAS=1` fetches GeneralUser GS
+(`tools/fetch_soundfont.py`) for anyone who wants recorded instruments.
+
+**Faithful to FluidSynth where the spec is silent or wrong in
+practice**, because the banks people have are voiced against it: the
+attenuation generator counts 0.4 dB a unit (`ALT_ATTENUATION_SCALE`,
+the EMU8000's reading -- read as the spec's centibel, quiet
+instruments come out 2.5x too quiet); the default modulator list is
+FluidSynth's, including a velocity-to-filter modulator that only acts
+below velocity 64; and the modulation envelope's attack is convex, as
+the spec says and a linear one got wrong. **Modulators are applied, not
+skipped** as TinySoundFont does: GeneralUser GS sets each instrument's
+velocity curve and velocity-driven filter sweep with them, and every
+difference `tools/midi_hostcheck.py` found against FluidSynth before
+they were implemented was one of those.
+
+**The bank is read into memory, not mapped.** A page fault in the mixer
+thread is a dropout, which is why FluidSynth loads and `mlock()`s its
+banks by default. It is cached per process, and `usnd_load_info()`
+never loads it -- a song's length comes from the score -- so browsing
+MIDI files in the Player does not wait on 31 MB.
+
+**The per-sample path is integer** (a 32.32 position, Q24 gains, a Q28
+biquad on 24-bit samples). Under TCG every SSE instruction is a
+softfloat helper call; the float version rendered GeneralUser at 4.3x
+real time on the light first bars of the demo song and dropped out on
+the dense ones, and the integer one runs at 10.6x under TCG and 60x
+(the built-in bank) on the ASUS.
+
 ## usnd: audio files are decoded and mixed in ring 3, behind a sink
 
 The kernel's contract stops at "one exclusive stream of 48 kHz stereo

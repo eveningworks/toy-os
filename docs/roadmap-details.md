@@ -2253,6 +2253,25 @@ items still open:
 - A sound-producing test app -- proves the whole path end to end, same
   `*_test.c` diagnostic-app pattern used elsewhere.
 
+**Load the SoundFont off the caller's thread.** `usnd_open()` loads the
+bank on whichever thread calls `usnd_play()` -- the Player's UI thread
+-- and reads all of it, because a page fault in the mixer is a dropout.
+Measured under TCG: GeneralUser GS (31 MB) took 2.8 s cold and 0.4 s
+warm to open; the built-in bank opens in 15 ms on the ASUS. Browsing is
+already free (`usnd_load_info()` skips the bank); what remains is the
+first PLAY freezing the window for that long. The fix is the Player's
+worker, or `usnd_play()` itself, doing the open and reporting back --
+not mapping the bank, which moves the stall into the audio thread.
+
+**A live MIDI output port in `soundd`.** The shape of Windows'
+`midiOut`, the ALSA sequencer and CoreMIDI: a client sends channel
+messages and a synth in the daemon renders them. `usnd_synth.h` already
+takes channel messages and knows nothing about files, so this is a
+second driver of the same calls. It is what a USB MIDI keyboard (the
+USB MIDI class driver is its own item) and a Doom whose music leaves
+its GPL OPL emulator would need; nothing needs it today, which is why
+the file player came first.
+
 ### Dynamic linking / shared libraries
 
 New milestone, lightly scoped, deliberately placed after Runtime + interop's
