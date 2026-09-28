@@ -22,15 +22,13 @@
 #include <string.h>
 #include <stdlib.h>   // system() -- the --update hand-off
 #include "query_abi.h"
+#include "lib/uhwids.h"
 #include <fcntl.h>
 #include <unistd.h>
 
-#define USB_IDS_PATH "/usr/share/hwdata/usb.ids"
 #define MAX_DEVS         8
 #define VENDOR_NAME_MAX  48
 #define PRODUCT_NAME_MAX 64
-#define LINE_MAX        256
-#define CHUNK           1024   // local read buffer; SYS_READ is capped
                                // at SYS_WRITE_MAX, far above this
 
 static struct query_usb g_dev[MAX_DEVS];
@@ -83,102 +81,24 @@ static const char *hid_protocol_name(unsigned long long cls,
     return ", Boot Interface Subclass";
 }
 
-// Exactly `digits` hex characters, or -1. Strict on purpose: a
-// malformed line is skipped rather than half-parsed into a plausible
-// wrong id -- the same rule lspci.c's parse_hex() states.
-static int parse_hex(const char *s, int digits) {
-    int v = 0;
-    for (int i = 0; i < digits; i++) {
-        char c = s[i];
-        int d;
-        if (c >= '0' && c <= '9') d = c - '0';
-        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
-        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
-        else return -1;
-        v = (v << 4) | d;
-    }
-    return v;
-}
-
-static int all_resolved(void) {
-    for (int i = 0; i < g_count; i++)
-        if (!g_vendor_name[i][0] || !g_product_name[i][0]) return 0;
-    return 1;
-}
-
-// usb.ids has the same two significant levels pci.ids does:
-//
-//     0627  Adomax Technology Co., Ltd
-//     <TAB>0001  QEMU USB Keyboard
-//
-// plus a trailing class section beginning "C 00", which this ignores.
-static void handle_line(char *line, int *cur_vendor) {
-    if (!line[0] || line[0] == '#') return;
-
-    if (line[0] != '\t') {
-        // A vendor line -- or the class section, which starts with a
-        // letter and must not be parsed as a vendor.
-        int id = parse_hex(line, 4);
-        if (id < 0) { *cur_vendor = -1; return; }
-        if (line[4] != ' ') { *cur_vendor = -1; return; }
-        *cur_vendor = id;
-        const char *name = line + 4;
-        while (*name == ' ') name++;
-        for (int i = 0; i < g_count; i++)
-            if (g_dev[i].vendor_id == (unsigned)id && !g_vendor_name[i][0])
-                strlcpy(g_vendor_name[i], name, VENDOR_NAME_MAX);
-        return;
-    }
-
-    if (*cur_vendor < 0) return;          // a product line before any vendor
-    if (line[1] == '\t') return;          // a third level; not used here
-    int id = parse_hex(line + 1, 4);
-    if (id < 0) return;
-    const char *name = line + 5;
-    while (*name == ' ') name++;
-    for (int i = 0; i < g_count; i++)
-        if (g_dev[i].vendor_id == (unsigned)*cur_vendor &&
-            g_dev[i].product_id == (unsigned)id && !g_product_name[i][0])
-            strlcpy(g_product_name[i], name, PRODUCT_NAME_MAX);
-}
-
-// Streams the database rather than holding it. It is ~730 KB and this
-// process's heap is a bump allocator with no free, so the loop keeps
-// one line and copies out only the names of devices actually present --
-// peak memory is a few KB however large the database grows. Identical
-// reasoning to lspci.c, which says it at length.
+// The names the database has for each device present (lib/uhwids.c,
+// shared with lspci and the Device Manager). Without the file the
+// numeric ids still print, with a note on stderr.
 static void load_names(void) {
-    int64_t fd = open(USB_IDS_PATH, O_RDONLY);
-    if (fd < 0) {
-        fprintf(stderr, "lsusb: %s not found -- showing numeric ids only\n",
-                USB_IDS_PATH);
+    static struct uhwids_entry e[MAX_DEVS];   // static: 2 KiB is past the frame budget
+    for (int i = 0; i < g_count; i++) {
+        e[i].vendor = (uint16_t)g_dev[i].vendor_id;
+        e[i].device = (uint16_t)g_dev[i].product_id;
+        e[i].cls = e[i].subclass = -1;      // usb.ids' class section is not read
+    }
+    if (uhwids_resolve(UHWIDS_USB, e, g_count) < 0) {
+        fprintf(stderr, "lsusb: %s not found -- showing numeric ids only\n", UHWIDS_USB);
         return;
     }
-    char chunk[CHUNK], line[LINE_MAX];
-    unsigned line_len = 0;
-    int cur_vendor = -1, overlong = 0;
-
-    for (;;) {
-        int64_t n = read((int)fd, chunk, CHUNK);
-        if (n <= 0) break;
-        for (int64_t i = 0; i < n; i++) {
-            char c = chunk[i];
-            if (c != '\n') {
-                if (line_len + 1 < LINE_MAX) line[line_len++] = c;
-                else overlong = 1;      // drop the tail, do not restart mid-line
-                continue;
-            }
-            line[line_len] = '\0';
-            if (!overlong) handle_line(line, &cur_vendor);
-            line_len = 0; overlong = 0;
-        }
-        if (all_resolved()) break;
+    for (int i = 0; i < g_count; i++) {
+        strlcpy(g_vendor_name[i], e[i].vendor_name, VENDOR_NAME_MAX);
+        strlcpy(g_product_name[i], e[i].device_name, PRODUCT_NAME_MAX);
     }
-    if (line_len > 0 && !overlong) {
-        line[line_len] = '\0';
-        handle_line(line, &cur_vendor);
-    }
-    close((int)fd);
 }
 
 // --- the raw configuration descriptor (-D) ----------------------------

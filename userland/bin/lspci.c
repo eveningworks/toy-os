@@ -28,10 +28,10 @@
 #include "knum.h"       // k_htoa -- fixed-width hex, which kfmt has no
                          // conversion for (no `*` width in its printf)
 #include "pci.h" // struct pci_device, pci_class_name()
-#include <fcntl.h>
 #include <unistd.h>
 #include <stdlib.h>   // system() -- see update_ids()
 #include "lib/cmd.h"
+#include "lib/uhwids.h"
 #include "query_abi.h" // QUERY_PCIDEV -- the driver, and who claimed it
 
 static void put(const char *s) {
@@ -63,37 +63,12 @@ static void put_hex_digits(uint32_t v, int digits) {
 // the same file `lspci` reads there. See LICENSE's "Third-party data"
 // section: it's redistributed under its 3-clause BSD option, not MIT.
 //
-// The format is two significant levels, tab-indented, sorted by id:
-//
-//     8086  Intel Corporation
-//     <TAB>7010  82371SB PIIX3 IDE [Natoma/Triton II]
-//     <TAB><TAB>1af4 1100  Subsystem name        <- ignored here
-//
-// and, after every vendor, the CLASS section in the same shape:
-//
-//     C 04  Multimedia controller
-//     <TAB>03  Audio device
-//     <TAB><TAB>00  prog-if name                  <- ignored here
-//
-// **THE CLASS SECTION IS THE LAST THING IN THE FILE**, so naming classes
-// means reading all of it -- the early exit below only stops once every
-// class is named too, which is at the end.
-//
-// **Parsed as a single streaming pass, never held in memory.** The file
-// is ~1.6MB and this process's heap is a bump allocator (SYS_SBRK) with
-// no free -- so the loop below reads 1KB at a time, keeps only the
-// current line, and copies out just the handful of names that match a
-// device actually present. Peak memory is a few KB regardless of how
-// large the database grows. It also means no seeking, which matters:
-// SYS_READ advances a per-fd offset and there is no lseek yet.
-#define PCI_IDS_PATH "/usr/share/hwdata/pci.ids"
+// Parsed by lib/uhwids.c, which lsusb and the Device Manager share; the
+// format, and why it is streamed rather than held, are described there.
 #define MAX_DEVS         32
 #define VENDOR_NAME_MAX  40
 #define DEVICE_NAME_MAX  64
 #define CLASS_NAME_MAX  48
-#define LINE_MAX        256
-#define CHUNK           16384 // read buffer: the whole 1.6MB file is read
-                              // now, and 1 KiB reads cost 16x the syscalls
 
 static struct pci_device g_dev[MAX_DEVS];
 static char g_vendor_name[MAX_DEVS][VENDOR_NAME_MAX];
@@ -108,60 +83,6 @@ static void put_err(const char *s) {
     sys_call(SYS_WRITE, 2, (uint64_t)(uintptr_t)s, strlen(s));
 }
 
-// Exactly `digits` lowercase-or-uppercase hex characters, or -1. Strict
-// on purpose: a malformed line should be skipped, not half-parsed into
-// a plausible wrong id (the toolkit's "a parser rejects rather than
-// guesses" rule, see CLAUDE.md).
-static int32_t parse_hex(const char *s, int digits) {
-    int32_t v = 0;
-    for (int i = 0; i < digits; i++) {
-        char c = s[i];
-        int d;
-        if (c >= '0' && c <= '9') d = c - '0';
-        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
-        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
-        else return -1;
-        v = (v << 4) | d;
-    }
-    return v;
-}
-
-// True once every device has both names, so the scan can stop early
-// rather than always reading all 1.6MB. Devices missing from the
-// database never resolve, so this is an optimization for the common
-// case, not something the loop's correctness depends on.
-static int all_resolved(void) {
-    for (int i = 0; i < g_count; i++) {
-        if (!g_vendor_name[i][0] || !g_device_name[i][0]) return 0;
-        if (!g_subclass_name[i][0]) return 0;
-    }
-    return 1;
-}
-
-// A class section line: "C 04  Multimedia controller", or a subclass
-// under it, "\t03  Audio device". `*cur_class` is -1 outside the section.
-static void handle_class_line(const char *line, int32_t *cur_class) {
-    if (line[0] == 'C') {
-        int32_t id = parse_hex(line + 2, 2);
-        *cur_class = id;
-        if (id < 0) return;
-        const char *name = line + 4;
-        while (*name == ' ') name++;
-        for (int i = 0; i < g_count; i++)
-            if (g_dev[i].class_code == (uint8_t)id)
-                strlcpy(g_class_name[i], name, CLASS_NAME_MAX);
-        return;
-    }
-    if (*cur_class < 0 || line[1] == '\t') return;   // a prog-if -- not used here
-    int32_t sub = parse_hex(line + 1, 2);
-    if (sub < 0) return;
-    const char *name = line + 3;
-    while (*name == ' ') name++;
-    for (int i = 0; i < g_count; i++)
-        if (g_dev[i].class_code == (uint8_t)*cur_class && g_dev[i].subclass == (uint8_t)sub)
-            strlcpy(g_subclass_name[i], name, CLASS_NAME_MAX);
-}
-
 // The name printed for device `i`: the database's, most specific first,
 // then the built-in table's.
 static const char *class_label(int i) {
@@ -170,82 +91,28 @@ static const char *class_label(int i) {
     return pci_class_name(g_dev[i].class_code, g_dev[i].subclass);
 }
 
-static void handle_line(char *line, int32_t *cur_vendor, int32_t *cur_class) {
-    if (line[0] == '#' || line[0] == '\0') return;
-
-    if ((line[0] == 'C' && line[1] == ' ') || (line[0] == '\t' && *cur_class >= 0)) {
-        handle_class_line(line, cur_class);
-        return;
-    }
-    if (line[0] != '\t') {                       // vendor: "8086  Intel Corporation"
-        *cur_class = -1;
-        int32_t id = parse_hex(line, 4);
-        if (id < 0) return;
-        *cur_vendor = id;
-        const char *name = line + 4;
-        while (*name == ' ') name++;
-        for (int i = 0; i < g_count; i++) {
-            if (g_dev[i].vendor_id == (uint16_t)id && !g_vendor_name[i][0]) {
-                strlcpy(g_vendor_name[i], name, VENDOR_NAME_MAX);
-            }
-        }
-        return;
-    }
-
-    if (line[1] == '\t') return;                 // subsystem line -- not used here
-    if (*cur_vendor < 0) return;                 // device line before any vendor: malformed
-
-    int32_t id = parse_hex(line + 1, 4);         // device: "\t7010  82371SB PIIX3 IDE"
-    if (id < 0) return;
-    const char *name = line + 5;
-    while (*name == ' ') name++;
-    for (int i = 0; i < g_count; i++) {
-        if (g_dev[i].vendor_id == (uint16_t)*cur_vendor &&
-            g_dev[i].device_id == (uint16_t)id && !g_device_name[i][0]) {
-            strlcpy(g_device_name[i], name, DEVICE_NAME_MAX);
-        }
-    }
-}
-
-// Fills in whatever names the database has. Silent no-op if the file
-// isn't there -- the numeric output below still works, which is the
-// point of keeping the two separable.
+// Fills in whatever names the database has (lib/uhwids.c, shared with
+// lsusb and the Device Manager). Silent past one line if the file isn't
+// there -- the numeric output below still works, which is the point of
+// keeping the two separable.
 static void load_names(void) {
-    int64_t fd = open(PCI_IDS_PATH, O_RDONLY);
-    if (fd < 0) {
-        put_err("lspci: " PCI_IDS_PATH " not found -- showing numeric ids only\n");
+    static struct uhwids_entry e[MAX_DEVS];   // static: ~16 KiB is not a stack frame
+    for (int i = 0; i < g_count; i++) {
+        e[i].vendor = g_dev[i].vendor_id;
+        e[i].device = g_dev[i].device_id;
+        e[i].cls = g_dev[i].class_code;
+        e[i].subclass = g_dev[i].subclass;
+    }
+    if (uhwids_resolve(UHWIDS_PCI, e, g_count) < 0) {
+        put_err("lspci: " UHWIDS_PCI " not found -- showing numeric ids only\n");
         return;
     }
-
-    static char chunk[CHUNK];   // static: 16 KiB is not a stack frame
-    char line[LINE_MAX];
-    uint64_t line_len = 0;
-    int32_t cur_vendor = -1, cur_class = -1;
-    int overlong = 0; // dropping the tail of a too-long line, not restarting mid-way
-
-    for (;;) {
-        int64_t n = read((int)fd, chunk, CHUNK);
-        if (n <= 0) break;
-        for (int64_t i = 0; i < n; i++) {
-            char c = chunk[i];
-            if (c != '\n') {
-                if (line_len + 1 < LINE_MAX) line[line_len++] = c;
-                else overlong = 1;
-                continue;
-            }
-            line[line_len] = '\0';
-            if (!overlong) handle_line(line, &cur_vendor, &cur_class);
-            line_len = 0;
-            overlong = 0;
-        }
-        if (all_resolved()) break;
+    for (int i = 0; i < g_count; i++) {
+        strlcpy(g_vendor_name[i], e[i].vendor_name, VENDOR_NAME_MAX);
+        strlcpy(g_device_name[i], e[i].device_name, DEVICE_NAME_MAX);
+        strlcpy(g_class_name[i], e[i].class_name, CLASS_NAME_MAX);
+        strlcpy(g_subclass_name[i], e[i].subclass_name, CLASS_NAME_MAX);
     }
-
-    if (line_len > 0 && !overlong) {  // last line without a trailing newline
-        line[line_len] = '\0';
-        handle_line(line, &cur_vendor, &cur_class);
-    }
-    close((int)fd);
 }
 
 #define USAGE "lspci [-k] [--update]"
