@@ -10,6 +10,9 @@ guest, no network, a few seconds:
     must give up rather than resend the window forever;
   - a TFTP server that resends the same DATA block forever: `get` must
     give up the same way;
+  - a TFTP server that LOSES the ACK ending a window and resends the
+    window, as tftpd does, faster than the client's own timeout: `get`
+    must re-ACK on the duplicate and finish, or the server gives up;
   - a telnet peer that talks without end and never sends the marker:
     `read_until_line` must still honour its timeout;
   - `_mark_executable` given the flash's held session must USE it, not
@@ -87,6 +90,35 @@ def same_block(s, pkt, addr):
     s.sendto(bytes([0, 3, 0, 1]) + b"x" * 512, addr)
 
 
+def lost_ack_server():
+    """Two blocks. The first ACK of block 1 is 'lost': block 1 is resent
+    every 0.3 s -- inside the client's 0.5 s timeout, so only a re-ACK on
+    the duplicate moves it -- and after five, the server gives up."""
+    state = {"acks": 0, "moved": False}
+    one = bytes([0, 3, 0, 1]) + b"a" * 512
+    two = bytes([0, 3, 0, 2]) + b"b" * 100
+
+    def resend(s, addr):
+        for _ in range(5):
+            time.sleep(0.3)
+            if state["moved"]:
+                return
+            s.sendto(one, addr)
+        if not state["moved"]:
+            s.sendto(bytes([0, 5, 0, 0]) + b"gave up\0", addr)
+
+    def behave(s, pkt, addr):
+        if pkt[1] == 1:                                    # RRQ: options ignored
+            s.sendto(one, addr)
+            threading.Thread(target=resend, args=(s, addr), daemon=True).start()
+        elif pkt[1] == 4 and pkt[2:4] == b"\0\1":
+            state["acks"] += 1
+            if state["acks"] > 1 and not state["moved"]:
+                state["moved"] = True
+                s.sendto(two, addr)
+    return udp_server(behave), b"a" * 512 + b"b" * 100
+
+
 def chatty_telnet():
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
@@ -142,6 +174,13 @@ def main():
         check("get gives up on a server that resends one block forever",
               done and err is not None, "still running" if not done else f"returned without error: {err!r}")
 
+        port, want = lost_ack_server()
+        out = os.path.join(tmp, "out2")
+        done, err = bounded(lambda: r.do_get("127.0.0.1", port, "/x", out, 0.5))
+        got = open(out, "rb").read() if done and err is None and os.path.exists(out) else b""
+        check("get re-ACKs a resent window, so a lost ACK does not end it",
+              got == want, "still running" if not done else f"{err!r}, {len(got)} bytes")
+
         port = chatty_telnet()
         t = r.Telnet("127.0.0.1", port, 1.0)
         done, err = bounded(lambda: t.read_until_line("__done0__", 1.0))
@@ -171,7 +210,7 @@ def main():
             r.Session = real_session
         check("the chmod pass uses the flash's held session", used, detail)
 
-    print(f"\nremote_hang_test: {4 - len(fails)} passed, {len(fails)} failed")
+    print(f"\nremote_hang_test: {5 - len(fails)} passed, {len(fails)} failed")
     # Daemon threads may still be spinning inside a hung call: leave hard.
     sys.stdout.flush()
     os._exit(1 if fails else 0)

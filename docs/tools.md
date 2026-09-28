@@ -3269,9 +3269,14 @@ window without going through it will find its layout polls timing out.
   fails on every unarmed boot -- and `kdfiled` must have exited (armed,
   it must be waiting blocked; it once spun on every unarmed boot). **`--net`** runs all of it over the network transport
   (`vm.py --kdebug-net`, a fresh random key each run, the real GDB
-  through `kdebug_bridge.py`) and adds two checks that a datagram under
-  the WRONG key and an exact REPLAY of an accepted one both get silence;
-  removing the sequence rule turns the replay check red. The real GDB
+  through `kdebug_bridge.py`) and adds checks that a hello under the
+  WRONG key and an exact REPLAY of an accepted datagram both get
+  silence (removing the sequence rule turns the replay check red); that
+  after a NEW session a datagram from the old one gets silence and the
+  bridge refuses a reply from it; and that one bridge outlives a real
+  REBOOT of the guest, gdb simply reconnecting. Both modes step onto the
+  idle loop's `hlt`, which must come back one byte on rather than halt
+  with the interrupts the step masks. The real GDB
   also sends a 300 KB file with `remote put` to `/tmp` and to the
   read-only `/boot`, and the guest's own `sum -a sha256` must match the
   host's, with `/boot` read-only again after; a garbled `pwrite` must
@@ -3298,16 +3303,21 @@ window without going through it will find its layout polls timing out.
   talking (`read_until_line` must still time out), and `_mark_executable`
   handed a session must use it rather than open one. `--against PATH`
   runs the same checks on another copy of `remote.py`; the pre-fix one
-  (`git show 807338a4:tools/remote.py`) fails all four, three of them
-  as real hangs the test's own 20 s limit ends.
+  (`git show 807338a4:tools/remote.py`) fails the first four, three of
+  them as real hangs the test's own 20 s limit ends. A fifth fake LOSES
+  the ACK that ends a window and resends it faster than the client's
+  timeout, as tftpd does: `get` must re-ACK on the duplicate and finish
+  (`git show e56925d4:tools/remote.py` fails it).
 - **`kdebug_bridge.py`** -- carries GDB's TCP to the debugger's keyed
   UDP (`kdebug=net`), the role WinDbg's KDNET client plays on Windows:
   `gdb -> 127.0.0.1:1235 -> [bridge] -> target:50000`. Defaults match
   `make run KDEBUG=net` (target `127.0.0.1:50000`, key from
   `build/kdebug.key`); for a real machine, `--target IP:50000 --key HEX`.
-  Only the stdlib (`hmac`, `hashlib`). Its sequence numbers start at the
-  wall clock in nanoseconds, so a restarted bridge is never below what
-  the target has already accepted. `UdpLink` is socket-shaped, which is
+  Only the stdlib (`hmac`, `hashlib`). **Each gdb connection is a new
+  session** -- a keyed hello and a nonce from each side, which every MAC
+  then covers -- so the bridge may outlive the target: after a reboot,
+  reconnect gdb. "no answer ... is it armed, and is this its key?"
+  means the hello got nothing back. `UdpLink` is socket-shaped, which is
   how `kdebug_test.py --net` puts its protocol client on it.
 - **`netheal_test.py`** -- `/bin/netheal`, which reboots a machine once
   when it comes up with no network. **THIS TOOL REBOOTS ITS GUEST TWICE

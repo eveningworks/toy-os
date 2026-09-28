@@ -600,6 +600,7 @@ def do_get(host, port, remote, local, timeout):
         expect = 1
         acked = 0
         tries = 0
+        last_nudge = 0.0
         stall = time.time() + timeout * STALL_ROUNDS   # see do_put()
         while True:
             if time.time() > stall:
@@ -627,7 +628,16 @@ def do_get(host, port, remote, local, timeout):
                 continue
             b = int.from_bytes(pkt[2:4], "big")
             if b != (expect & 0xFFFF):
-                continue      # a gap or a duplicate: do not advance
+                # A gap or a duplicate: do not advance, but say where we
+                # are. A duplicate is the server resending a window whose
+                # ACK was lost, and it gives up (tftpd: a few 2 s retries)
+                # long before our own timeout would re-ACK. Rate-limited,
+                # so a resent window costs one ACK, not one per block.
+                now = time.time()
+                if now - last_nudge > 0.25:
+                    last_nudge = now
+                    s.sendto(bytes([0, OP_ACK]) + (acked & 0xFFFF).to_bytes(2, "big"), peer)
+                continue
             payload = pkt[4:]
             out += payload
             expect += 1
