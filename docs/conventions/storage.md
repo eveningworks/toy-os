@@ -1174,6 +1174,17 @@ it is still one call at a time. Four things to know:
   commit the inode COPY it holds -- re-read, change the time only. An
   allocating write that dropped the lock would lose another writer's
   update to the same file; that needs stage 4's inode lock.
+- **A DELETE READS ITS TABLES IN THE LOCK'S GAPS, AND EVERY ALLOCATOR
+  MUST EMPTY THE TRIM QUEUE BEFORE HANDING OUT A BLOCK** (tfs3's
+  `free_all_blocks()`, `t3_alloc_block()`/`alloc_block_at()`). The gap
+  is safe because the file is past its commit, its inode locked and its
+  blocks still allocated until freed, so nobody writes a table meanwhile.
+  Its queued discards cross the gaps -- which keeps a big delete one
+  TRIM list -- and are safe ONLY because an op allocating in a gap
+  flushes them first: an allocator that skipped the flush would let a
+  late discard wipe a block just reused and written. `tfs3_test.c` runs
+  a write inside the delete's gap on a disk whose TRIM really zeroes,
+  and removing the allocators' flush turns it red.
 - **TFS3 LOCKS THE INODES AN OP TOUCHES, BEFORE IT CHANGES ANYTHING**
   (`t3_lock()`, fslock stage 4): shared to read a file or directory,
   exclusive to change a file, and the PARENT exclusive for any namespace

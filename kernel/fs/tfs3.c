@@ -125,6 +125,14 @@ static int vol_read_run(struct t3_state *sbi, uint32_t lba, int count, void *buf
     return ok;
 }
 
+// A POINTER TABLE read the same way -- for a table only this op can reach:
+// its file is past its commit, locked, and its blocks not yet freed, so
+// nobody writes the table while the lock is dropped (free_all_blocks()).
+// Returns as vol_read_run() does.
+int t3_read_block_unlocked(struct t3_state *sbi, uint32_t blk, void *buf) {
+    return vol_read_run(sbi, blk * T3_SPB, (int)T3_SPB, buf);
+}
+
 // The write half, for OVERWRITES only (do_write()): a data run rewritten
 // in place, with the lock dropped. Returns as vol_read_run() does.
 //

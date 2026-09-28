@@ -23,9 +23,12 @@ which keeps the rules that bite callers elsewhere.
   lock, in that order), never the preemption guard -- and anything that
   reaches the DEVICE for a mount (a flush) does so under that mount's
   lock, or exclusion stops promising a quiet disk. The exceptions are
-  a data read and an in-place OVERWRITE, which DROP the lock through
+  a data read, an in-place OVERWRITE and a deleted file's pointer-table
+  reads (`free_all_blocks()`), which DROP the lock through
   `mount_io_begin()` -- a block free or exclusion waits for them
   (`mount_io_drain()`), and an allocating write must never drop it.
+  **Every block allocator must flush the TRIM queue before handing out
+  a block**: a delete's queued discards cross its gaps on that promise.
   Inside tfs3, an op locks every inode it touches BEFORE changing
   anything (`t3_lock()`; a 0 means return now, FS_OP re-runs it), never
   unlocks by hand, and never waits holding a lock. It does NOT make an

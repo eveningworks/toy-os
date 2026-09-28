@@ -415,6 +415,8 @@ void t3_ncache_flush(struct t3_state *sbi);
 int t3_normalize(struct t3_state *sbi, const char *path, char *out /* T3_PATH_BUF */);
 void t3_rcache_drop(struct t3_state *sbi);
 int t3_read_block(struct t3_state *sbi, uint32_t blk, void *buf);
+// 1 read, 0 failed, -1 the mount went while unlocked (touch nothing).
+int t3_read_block_unlocked(struct t3_state *sbi, uint32_t blk, void *buf);
 int t3_read_inode(struct t3_state *sbi, uint64_t ino, struct t3_inode *out);
 int t3_resolve(struct t3_state *sbi, const char *norm, uint64_t *out_ino);
 int t3_lock(struct t3_state *sbi, uint64_t ino, int excl);

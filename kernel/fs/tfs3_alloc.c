@@ -251,8 +251,12 @@ void t3_alog_rollback(struct t3_state *sbi) {
 //
 // THE QUEUE MUST BE EMPTY BEFORE ANY BLOCK IS ALLOCATED: a discard
 // arriving after a freed block was reused and written destroys the new
-// data. So every freeing operation flushes before it returns, and both
-// allocators flush first as well, in case one did not.
+// data. So every freeing operation flushes before it returns, and BOTH
+// ALLOCATORS FLUSH FIRST -- which is load-bearing, not belt and braces: a
+// whole-file free (tfs3_write.c's free_all_blocks()) reads its tables
+// with the volume lock dropped, other ops allocate in those gaps, and the
+// queue it has built so far is safe only because they flush it before
+// taking a block. A third allocator must do the same.
 
 void t3_trim_flush(struct t3_state *sbi) {
     if (sbi->trim_n) blkdev_trim_ranges(sbi->vol.dev, sbi->trim_q, sbi->trim_n);

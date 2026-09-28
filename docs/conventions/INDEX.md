@@ -805,6 +805,8 @@ whenever a headline here tells you something you did not already know.
   CACHES AND NOT `lookup()`**
 - **UNDER `batched`, THE ALLOCATION BITMAP RIDES THE DEFERRED COMMIT**
 - **A FILE OTHER PROCESSES READ IS PUBLISHED, NEVER REWRITTEN IN PLACE**
+- **A DELETE READS ITS TABLES IN THE LOCK'S GAPS, AND EVERY ALLOCATOR
+  MUST EMPTY THE TRIM QUEUE BEFORE HANDING OUT A BLOCK**
 
 ### The shell, the console, and line editing
 

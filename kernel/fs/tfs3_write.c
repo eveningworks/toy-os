@@ -257,9 +257,54 @@ static int do_write(struct t3_state *sbi, uint64_t ino, struct t3_inode *node, u
 // TRIMming as it goes, and leave the pointer fields zeroed. The
 // caller must have ALREADY committed the inode/dirent transaction
 // that makes these blocks unreachable -- clear-after-persist.
+//
+// THE POINTER-TABLE READS DROP THE VOLUME'S LOCK. A 512 MiB file has
+// ~130 tables, and reading them locked made every other call on the
+// volume wait out ~130 disk commands: a stat on / waited 28-41 ms on
+// the laptops (docs/bugs.md). The file is past its commit and its inode
+// locked, and its blocks stay allocated until freed here, so nobody
+// writes a table while it is read -- the argument fslock stage 3a makes
+// for data reads. ext4 and XFS likewise hold only the inode's and the
+// allocation group's locks across a truncate, never the volume's.
+//
+// Each table is read in a gap and freed straight after, under the lock.
+// THE QUEUED TRIMS MAY CROSS A GAP: a block freed here and reallocated
+// in one could only be reused through t3_alloc_block()/alloc_block_at(),
+// and both flush the queue before handing a block out -- so a discard
+// never lands on a reused block, and a big delete stays one TRIM list.
+// After a gap that reports the mount gone (-1), sbi is not touched again.
+// Returns 1, or -1 for that.
 static void free_tree_level(struct t3_state *sbi, uint32_t table_blk, int depth);
 
-static void free_all_blocks(struct t3_state *sbi, struct t3_inode *node) {
+// A table block, after what it maps. `tbl` NULL: it could not be read,
+// so what it maps leaks -- fsck reclaims -- as free_tree_level() does.
+static void free_leaf(struct t3_state *sbi, uint32_t blk, const uint8_t *tbl) {
+    uint32_t run_start = 0, run_len = 0;
+    for (uint32_t i = 0; tbl && i < T3_PTRS_PER_BLOCK; i++) {
+        uint32_t e = rd32(tbl + i * 4);
+        if (!e) continue;
+        t3_free_block_bit(sbi, e);
+        if (run_len && e == run_start + run_len) run_len++;
+        else { t3_trim_run(sbi, run_start, run_len); run_start = e; run_len = 1; }
+    }
+    t3_trim_run(sbi, run_start, run_len);
+    t3_free_block_bit(sbi, blk);
+    t3_trim_run(sbi, blk, 1);
+}
+
+// Every leaf a depth-1 table `mid` lists. 1, or -1: the mount went.
+static int free_leaves_of(struct t3_state *sbi, const uint8_t *mid, uint8_t *leaf) {
+    for (uint32_t i = 0; i < T3_PTRS_PER_BLOCK; i++) {
+        uint32_t e = rd32(mid + i * 4);
+        if (!e) continue;
+        int g = t3_read_block_unlocked(sbi, e, leaf);
+        if (g < 0) return -1;
+        free_leaf(sbi, e, g ? leaf : 0);
+    }
+    return 1;
+}
+
+static int free_all_blocks(struct t3_state *sbi, struct t3_inode *node) {
     uint32_t run_start = 0, run_len = 0;
     for (int i = 0; i < 12; i++) {
         uint32_t blk = node->ptrs[i];
@@ -271,10 +316,48 @@ static void free_all_blocks(struct t3_state *sbi, struct t3_inode *node) {
         node->ptrs[i] = 0;
     }
     t3_trim_run(sbi, run_start, run_len);
-    if (node->ptrs[12]) { free_tree_level(sbi, node->ptrs[12], 0); node->ptrs[12] = 0; }
-    if (node->ptrs[13]) { free_tree_level(sbi, node->ptrs[13], 1); node->ptrs[13] = 0; }
-    if (node->ptrs[14]) { free_tree_level(sbi, node->ptrs[14], 2); node->ptrs[14] = 0; }
+
+    uint8_t *buf = kmalloc(3 * T3_BLOCK);   // a leaf, a middle table, the top
+    if (!buf) {
+        // No memory: the old walk, every read locked.
+        if (node->ptrs[12]) free_tree_level(sbi, node->ptrs[12], 0);
+        if (node->ptrs[13]) free_tree_level(sbi, node->ptrs[13], 1);
+        if (node->ptrs[14]) free_tree_level(sbi, node->ptrs[14], 2);
+        k_memset(node->ptrs + 12, 0, 3 * sizeof node->ptrs[0]);
+        t3_trim_flush(sbi);
+        return 1;
+    }
+    uint8_t *leaf = buf, *mid = buf + T3_BLOCK, *top = buf + 2 * T3_BLOCK;
+    uint32_t single = node->ptrs[12], dbl = node->ptrs[13], tri = node->ptrs[14];
+    k_memset(node->ptrs + 12, 0, 3 * sizeof node->ptrs[0]);
+    int g;
+    if (single) {
+        if ((g = t3_read_block_unlocked(sbi, single, leaf)) < 0) goto gone;
+        free_leaf(sbi, single, g ? leaf : 0);
+    }
+    if (dbl) {
+        if ((g = t3_read_block_unlocked(sbi, dbl, mid)) < 0) goto gone;
+        if (g && free_leaves_of(sbi, mid, leaf) < 0) goto gone;
+        free_leaf(sbi, dbl, 0);
+    }
+    if (tri) {
+        if ((g = t3_read_block_unlocked(sbi, tri, top)) < 0) goto gone;
+        for (uint32_t i = 0; g && i < T3_PTRS_PER_BLOCK; i++) {
+            uint32_t e = rd32(top + i * 4);
+            if (!e) continue;
+            int gm = t3_read_block_unlocked(sbi, e, mid);
+            if (gm < 0) goto gone;
+            if (gm && free_leaves_of(sbi, mid, leaf) < 0) goto gone;
+            free_leaf(sbi, e, 0);
+        }
+        free_leaf(sbi, tri, 0);
+    }
     t3_trim_flush(sbi);
+    kfree(buf);
+    return 1;
+gone:
+    kfree(buf);   // the mount went while unlocked: sbi is freed, touch nothing
+    return -1;
 }
 
 // depth 0: entries are data blocks; deeper: entries are tables.
@@ -774,7 +857,7 @@ int tfs3_write(void *st, const char *path, const char *data, int append) {
         if (!t3_txn_begin(sbi, 1)) return 0;
         if (!t3_txn_stage_inode(sbi, ino, &node)) { t3_txn_reset(sbi); return 0; }
         if (!t3_txn_commit(sbi)) return 0;
-        free_all_blocks(sbi, &old);
+        if (free_all_blocks(sbi, &old) < 0) return 0;   // unmounted meanwhile
         t3_flush_alloc_state(sbi);
         start = 0;
     } else if (!append) {
@@ -854,8 +937,10 @@ int tfs3_delete(void *st, const char *path) {
     t3_ncache_flush(sbi);
 
     if (gone) {
-        // clear-after-persist: nothing references these anymore.
-        free_all_blocks(sbi, &node);
+        // clear-after-persist: nothing references these anymore. The
+        // delete has committed, so a mount gone meanwhile still succeeded
+        // -- with its blocks leaked, which fsck reclaims.
+        if (free_all_blocks(sbi, &node) < 0) return 1;
         t3_free_inode_bit(sbi, ino);
         t3_flush_alloc_state(sbi);
     }

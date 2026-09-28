@@ -251,6 +251,95 @@ KTEST("tfs3", "a whole-block read drops the mount's lock, and not under exclusio
     KTEST_ASSERT_EQ(gaps_after, 0);                  // nothing left open
 }
 
+// ---- a delete reads its pointer tables with the lock dropped ----------
+
+// free_all_blocks() reads a dead file's tables in the lock's gaps, so a
+// large delete no longer holds the volume for every table read. Asserted
+// from the device: the table read arrives unlocked; ANOTHER OP RUN IN
+// THAT GAP (a write, from the read's own callback) completes and reads
+// back intact on a disk whose TRIM really zeroes -- a discard queued
+// before the gap and sent after it would have wiped blocks that write
+// reused; and every block of both files comes back.
+#define DEL_POINT "/var/tmp/.ktest_delmnt"
+
+static int g_del_watch, g_del_unlocked, g_del_nested, g_del_nested_ok;
+static uint8_t g_del_other[16 * 1024];
+
+static int del_read(uint32_t lba, int n, void *b) {
+    int r = vol_rw(0, lba, n, b, 0);
+    if (g_del_watch && !fs_lock_held_at(DEL_POINT "/f")) {
+        g_del_unlocked++;
+        if (!g_del_nested) {
+            g_del_nested = 1;
+            g_del_watch = 0;
+            g_del_nested_ok = fs_write_range(DEL_POINT "/g", 0, g_del_other, sizeof g_del_other);
+            g_del_watch = 1;
+        }
+    }
+    return r;
+}
+
+static int del_trim(uint32_t lba, uint32_t count) {   // a discard really loses the data
+    if ((uint64_t)lba + count > VOL_SECTORS) return 0;
+    k_memset(g_vol[0] + (uint64_t)lba * 512, 0, (size_t)count * 512);
+    return 1;
+}
+
+static const struct block_device DEL_DEV = {
+    .name = "t3del", .sector_count = vol_count, .read_sectors = del_read,
+    .write_sectors = v0_write, .max_sectors_per_xfer = vol_xfer,
+    .caps = BLK_CAP_TRIM, .trim = del_trim,
+};
+
+KTEST("tfs3", "a delete reads its tables unlocked, and a write in that gap survives") {
+    if (!g_vol[0]) g_vol[0] = kmalloc(VOL_BYTES);
+    if (!g_vol[0]) KTEST_SKIP("could not allocate a 4 MiB volume");
+    k_memset(g_vol[0], 0, VOL_BYTES);
+
+    struct fs_scratch sc;
+    int ok = mount_scratch_begin(T(), &sc);
+    if (ok) {
+        ok = T()->format(sc.st, &DEL_DEV);
+        mount_scratch_end(&sc);
+    }
+    fs_mkdir(DEL_POINT);
+    const char *why = 0;
+    int mounted = ok && mount_add(&DEL_DEV, "tfs3", DEL_POINT, 0, 0, &why);
+    const struct mount *m = mounted ? mount_resolve(DEL_POINT "/f", 0) : 0;
+    uint64_t used0 = 0, used1 = 0, total = 0;
+    int have0 = m && fs_mount_usage(m, &used0, &total);
+
+    // 64 blocks: twelve direct and a single-indirect table to read.
+    static uint8_t data[256 * 1024], back[sizeof g_del_other];
+    for (unsigned i = 0; i < sizeof data; i++) data[i] = (uint8_t)(i * 7u + 3u);
+    for (unsigned i = 0; i < sizeof g_del_other; i++) g_del_other[i] = (uint8_t)(i * 29u + 11u);
+    int wrote = have0 && fs_write_range(DEL_POINT "/f", 0, data, sizeof data);
+
+    g_del_unlocked = g_del_nested = g_del_nested_ok = 0;
+    g_del_watch = 1;
+    int deleted = wrote && fs_delete(DEL_POINT "/f");
+    g_del_watch = 0;
+
+    uint32_t got = g_del_nested_ok ? fs_read_range(DEL_POINT "/g", 0, back, sizeof back) : 0;
+    int intact = got == sizeof back && k_memcmp(back, g_del_other, sizeof back) == 0;
+    int deleted_g = g_del_nested_ok && fs_delete(DEL_POINT "/g");
+    int have1 = m && fs_mount_usage(m, &used1, &total);
+    int gaps_after = m ? __atomic_load_n(&m->io_gaps, __ATOMIC_ACQUIRE) : -1;
+
+    if (mounted) mount_remove(DEL_POINT, &why);
+    fs_delete(DEL_POINT);
+    kfree(g_vol[0]);
+    g_vol[0] = 0;
+
+    KTEST_ASSERT(mounted && have0 && wrote && deleted);
+    KTEST_ASSERT(g_del_unlocked >= 1);          // the table read had the lock dropped
+    KTEST_ASSERT(g_del_nested && g_del_nested_ok); // ...and another op ran in that gap
+    KTEST_ASSERT(intact);                        // ...whose data no late discard reached
+    KTEST_ASSERT(deleted_g && have1);
+    KTEST_ASSERT_EQ(used1, used0);               // every block of both files came back
+    KTEST_ASSERT_EQ(gaps_after, 0);
+}
+
 // ---- an overwrite drops the lock; an allocating write does not -------
 
 // fslock stage 3b: rewriting blocks a file already has, inside its size,

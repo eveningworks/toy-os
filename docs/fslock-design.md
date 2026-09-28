@@ -174,6 +174,24 @@ Each ships on its own, and each is measured on
   allocating write, which still drops it): 7.5-8.1k, within the noise.
   It also skips re-reading its inode when nothing was staged meanwhile
   (`ino_gen`).
+- **Stage 3c, BUILT 2026-09-28: a delete reads its pointer tables with
+  the volume's lock dropped.** A whole-file free (`free_all_blocks()`,
+  delete and truncate-to-zero) read every table under the lock: a
+  512 MiB file is ~130 disk commands, and a `stat` on `/` running across
+  the `rm` waited 27.5-29.9 ms at worst on the Lenovo and 38.3-41.1 ms on
+  the ASUS, against 9.9-18.0 ms quiet -- growing with the file, so the
+  reads and not the commit. Safe for the reason 3a is: the free runs
+  after the commit, with the file's inode locked and its blocks still
+  allocated, so nobody writes a table in a gap. **The TRIMs it has
+  queued cross the gaps**, keeping a big delete one discard list, which
+  is safe only because both allocators flush the queue before handing
+  out a block (flushing before every gap instead broke the one-list
+  property, which a KTEST asserts). After, 3 runs each: **7.2-10.9 ms on
+  the Lenovo** (inside its quiet 5.0-16.4) and **17.3-17.4 ms on the
+  ASUS** (quiet 10.1-13.7). What the ASUS still holds is not
+  established; what remains under the lock is the frees, the one final
+  TRIM and the bitmap writes. ext4 and XFS hold only the inode's and the
+  allocation group's locks across a truncate, never a volume's.
 - **Stage 4a, BUILT 2026-09-24: per-inode locks, and their rules.**
   A per-mount table of HELD locks (a futex-hash shape, not an inode
   cache): readers take a file SHARED, writers and namespace changes
