@@ -2654,6 +2654,10 @@ struct usb_control_msg {
                              // because a negative level would read as
                              // an error -- Linux's raw getpriority does
                              // the same, and the wrapper undoes it.
+#define SYS_KDFILE 137       // RDI = a KDFILE_* op, RSI/RDX its arguments:
+                             // files staged by the kernel debugger's
+                             // `remote put`, for /bin/kdfiled to write.
+                             // kdfile_abi.h has the contract.
 #define SYS_FS_WATCH 136     // RDI = a path. Watches it, and a directory's
                              // direct children, for the COMPOSITOR: a
                              // change posts WIN_EV_FSWATCH with the

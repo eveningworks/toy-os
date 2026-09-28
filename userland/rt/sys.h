@@ -871,6 +871,10 @@ int sys_mkfs(const struct mkfs_request *req);
 int sys_install_boot(const struct install_boot_request *req);
 int sys_umount(const char *point);
 
+// SYS_KDFILE: files the kernel debugger staged (`remote put`) -- kdfile_abi.h.
+// Only /bin/kdfiled has a use for it.
+int64_t sys_kdfile(int op, uint64_t arg1, uint64_t arg2);
+
 // Powers the machine off (`reboot` = 0) or restarts it (1). DOES NOT
 // RETURN on success, so a caller that continues past it should treat
 // that as a failure. The disk cache is flushed first either way.

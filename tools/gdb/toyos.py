@@ -63,7 +63,9 @@ class Dmesg(gdb.Command):
         raw = bytes(gdb.selected_inferior().read_memory(addr("klog_buf"), size))
         start = (head - count) % size
         text = (raw[start:] + raw[:start])[:count] if count == size else raw[start:start + count]
-        lines = text.decode("utf-8", "replace").splitlines()
+        # A NUL in the ring (a torn write, an unused tail) must not end the
+        # command: gdb refuses to print a string that carries one.
+        lines = text.replace(b"\0", b"").decode("utf-8", "replace").splitlines()
         for line in lines[-n:]:
             print(line)
 

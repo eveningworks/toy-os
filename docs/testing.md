@@ -735,6 +735,13 @@ that program's `main`, with source lines. `info threads` lists
 every process by name and state, and `thread <Id>` then `bt` shows where
 that one is parked -- through its syscall, down to its user-space PC.
 
+`remote put build/kernel.bin /boot/boot/kernel.bin`, then `continue`,
+replaces the kernel over the debugger's own link: the stub stages the
+file and `/bin/kdfiled` writes it once the machine runs, keeping the old
+one as `kernel.old` (`docs/kdebug-design.md`, "Files through the
+debugger"). `toy-dmesg` then shows its `kdfiled wrote` line with the
+SHA-256.
+
 Attaching stops a RUNNING kernel (the first packet is a break-in), `^C`
 breaks in again after `continue`, and a kernel fault or panic stops in
 the debugger at the faulting frame before the panic runs. It answers

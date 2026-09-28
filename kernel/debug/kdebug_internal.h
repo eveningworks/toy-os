@@ -88,6 +88,15 @@ int  kdb_net_open(const uint8_t *dgram, int len, const uint8_t **payload);
 void kdb_hmac_sha256(const uint8_t *key, int klen, const uint8_t *a, int alen,
                      const uint8_t *b, int blen, uint8_t out[32]);
 
+// kdebug_files.c: `remote put`. The stage_* calls are the STOPPED half --
+// bytes into RAM, nothing else; kick() wakes /bin/kdfiled after resume.
+void    kdb_files_init(void);
+int     kdb_stage_open(const char *path);                  // fd, or -errno
+int64_t kdb_stage_write(int fd, uint64_t off, const uint8_t *data, uint32_t len);
+int     kdb_stage_close(int fd);   // -EIO, and the file dropped, if any write failed
+void    kdb_stage_fail(int fd);    // a write gdb sent could not be applied
+void    kdb_stage_kick(void);
+
 // gdbstub.c: talk until the debugger resumes the machine.
 enum kdb_resume kdb_gdb_session(void);
 uint8_t kdb_checksum(const char *s, int n);

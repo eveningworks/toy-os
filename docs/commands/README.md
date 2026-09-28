@@ -192,6 +192,7 @@ a command), and the `gui3`/`nano` aliases.
 ### Diagnostics
 
 - [`diskbench`](diskbench.md)
+- [`kdfiled`](kdfiled.md)
 - [`log`](log.md)
 - [`logd`](logd.md)
 - [`stalls`](stalls.md)

@@ -24,6 +24,7 @@ static const struct kdb_transport kdb_serial = {
 static void arm(const struct kdb_transport *io, int wait, const char *where) {
     kdb.io = io;
     kdb.armed = 1;
+    kdb_files_init();
     if (wait) {
         klog_printf("kdebug: waiting for a debugger on %s\n", where);
         serial_flush();
@@ -158,6 +159,7 @@ static void stop(uint64_t *regs, int sig) {
     kdb.watch_kind = 0;
     kdb.regs = 0;
     kdb.active = 0;
+    kdb_stage_kick();   // a `remote put` finished while stopped
 }
 
 int kdebug_trap(uint64_t vector, uint64_t *regs) {

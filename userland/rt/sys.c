@@ -514,6 +514,10 @@ int sys_futex_wait(volatile uint32_t *word, uint32_t expected, int timeout_ms) {
                               expected, (uint64_t)timeout_ms));
 }
 
+int64_t sys_kdfile(int op, uint64_t arg1, uint64_t arg2) {
+    return err(syscall3(SYS_KDFILE, (uint64_t)op, arg1, arg2));
+}
+
 int sys_shm_grant(const char *name, int pid) {
     return (int)err(syscall2(SYS_SHM_GRANT, (uint64_t)(uintptr_t)name,
                               (uint64_t)pid));

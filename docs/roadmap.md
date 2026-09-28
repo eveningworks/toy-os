@@ -1116,6 +1116,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [ ] Live kernel memory inspection without halting, drgn's shape, over `remote.py` -- `docs/kdebug-design.md` stage 1
 - [x] ~~The kernel debugger's processes as GDB threads, and `ps`/`dmesg`~~ DONE 2026-09-27 -- threads, and `tools/gdb/toyos.py`
 - [x] ~~Symbols for kernel modules and user programs in the debugger, and memory per thread~~ DONE 2026-09-27 -- `toy-symbols`
+- [x] ~~Send a file to the machine through the debugger~~ DONE 2026-09-28 -- `remote put`, written by `/bin/kdfiled`
 
 ### Programming on the machine
 

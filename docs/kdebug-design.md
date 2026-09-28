@@ -9,7 +9,8 @@ breakpoint in it, read and write its memory, and let it go?**
 stage 3a, the network transport on a dedicated e1000, is BUILT and
 tested under QEMU; stage 3b, the Lenovo's onboard r8169, is BUILT and
 has stopped real hardware -- a breakpoint hit from a syscall, a
-backtrace, memory, detach. Stage 3c (the ASUS's one USB NIC) and stage 1
+backtrace, memory, detach. Files can be sent to the machine through the
+debugger (`remote put`, below). Stage 3c (the ASUS's one USB NIC) and stage 1
 (live inspection without halting) are designed, not built. Stage 2 came first at the maintainer's choice, because every
 later stage stands on it.**
 
@@ -204,6 +205,42 @@ as a virtual `net_device`, so the ring still has one owner. Driving
 xHCI's event ring by hand with interrupts off (`xhci_service()` is
 public), from a stop that may have landed inside the xHCI interrupt
 handler itself, is the riskiest piece of the plan and why it is last.
+
+## Files through the debugger -- BUILT
+
+**`remote put <host file> <target path>`** writes a file on the stopped
+machine, so a kernel can be replaced over the debugger's own link on a
+machine whose OS has no network. GDB sends it as `vFile:open`/`pwrite`/
+`close` packets (host I/O); the stub answers those and refuses every
+other vFile op, `remote get` included.
+
+**THE STOPPED STUB MAY NOT TOUCH THE FILESYSTEM** -- it may have stopped
+inside `kmalloc`, holding a mount lock, or halfway through a disk wait --
+so the work is split in two. While stopped, `kdebug_files.c` only COPIES
+the bytes into an 8 MiB area taken from the page allocator when the stub
+is armed (the stopped path allocates nothing). On resume it wakes
+`/bin/kdfiled`, a service, which takes each complete file through
+`SYS_KDFILE` (`kdfile_abi.h`), writes it beside its target, renames it
+into place and keeps the previous version as `<stem>.old` -- `kernel.old`
+is the file GRUB's rescue entry boots, so only a path's FIRST put in a
+boot rotates it. A read-only mount (`/boot`) is
+remounted read-write for the write and read-only after. Windows'
+`.kdfiles` has the same rule: the target pulls from the debugger at a
+point of its own choosing, never from inside the stop.
+
+**Nothing is lost for the boot by an interruption**: an open that finds a
+file still open reclaims it (GDB opens one at a time, so it was an
+abandoned put), and a file its taker died holding goes back to the next
+taker. **A FILE WITH ONE FAILED WRITE IS DISCARDED AT CLOSE (`EIO`), never handed
+on**: GDB closes after an error, and a partial `kernel.bin` renamed into
+place would boot nothing. The outcome is logged with the SHA-256 of the
+staged bytes -- `kdebug: kdfiled wrote <path>, <n> bytes, sha256 <hex>`
+-- which `toy-dmesg` in the same session can compare with `sha256sum`.
+
+**The network transport takes a frame off the card only while a whole
+payload fits in its input FIFO**: a `pwrite` is a burst of full frames,
+and a frame taken with no room for it was lost from the middle of a
+packet. Leaving it on the card lets the NIC's own ring hold it.
 
 ## Not planned
 

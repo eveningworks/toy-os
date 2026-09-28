@@ -24,6 +24,10 @@ here, so every assertion is about one packet and needs no GDB installed:
   - `toy-symbols` loads a kernel module (e1000_transmit disassembles by
     name at its real address) and a dynamic program with its /lib
     libraries: tosh's bt runs from the scheduler into tosh.c's main;
+  - `remote put` (vFile, staged, written by /bin/kdfiled after resume)
+    lands a 300 KB file in /tmp and in the read-only /boot with the
+    host's sha256, and leaves /boot read-only; a transfer with a failed
+    pwrite is REFUSED at close and never reaches the disk;
   - a memory write round-trips;
   - an NMI from QEMU's monitor, and a ^C byte, each break into a running
     kernel;
@@ -252,6 +256,10 @@ def auth_silence(inst, res, label, datagram):
     res.check(label, raw == b"", f"got {raw[:40]!r}")
 
 
+NO_DEBUGGER_KDFILED = "with no debugger, kdfiled has exited"
+ATTACH = "attaching stops a running kernel and answers qSupported"
+
+
 def run(inst, disk, log, res):
     boot = vm(inst, disk, log, "start", timeout=300)
     if "ready" not in boot:
@@ -280,7 +288,7 @@ def run(inst, disk, log, res):
         auth_silence(inst, res, "an exact REPLAY of an accepted datagram gets silence", link.first)
 
     if shutil.which("gdb"):
-        real_gdb(inst, res)
+        real_gdb(inst, res, disk, log)
     else:
         print("  SKIP  a real GDB attaches -- gdb is not installed")
 
@@ -288,11 +296,23 @@ def run(inst, disk, log, res):
     res.check("the machine runs on after every detach", re.search(r"up [0-9]", out) is not None,
               out[-200:])
 
+    # kdfiled once spun on every boot WITHOUT a debugger (it tested the
+    # wrapper's -1 against -ENODEV), which only an unrelated idle KTEST
+    # noticed. Armed it must wait BLOCKED; unarmed it must be gone.
+    ps = vm(inst, disk, log, "exec", "ps", timeout=60)
+    kd = [l for l in ps.splitlines() if l.rstrip().endswith("kdfiled")]
+    if armed:
+        res.check("kdfiled waits for a file, blocked", bool(kd) and "block" in kd[0], ps[-400:])
+    else:
+        res.check(NO_DEBUGGER_KDFILED, not kd, ps[-400:])
+
 
 def steps(inst, disk, log, res, rsp):
-    sup = rsp.cmd("qSupported:swbreak+;hwbreak+", timeout=15)
-    if not res.check("attaching stops a running kernel and answers qSupported",
-                     "PacketSize=" in sup, sup):
+    try:
+        sup = rsp.cmd("qSupported:swbreak+;hwbreak+", timeout=15)
+    except TimeoutError:
+        sup = "(no answer)"
+    if not res.check(ATTACH, "PacketSize=" in sup, sup):
         return
     stop = rsp.cmd("?")
     res.check("the stop reason is SIGINT, with its thread", is_stop(stop, "02"), stop)
@@ -319,17 +339,19 @@ def steps(inst, disk, log, res, rsp):
         x = rsp.cmd(f"qThreadExtraInfo,{t}")
         if re.fullmatch(r"[0-9a-f]+", x):
             names[bytes.fromhex(x).decode(errors="replace").split(",")[0]] = t
-    tosh_head = ""
-    if "tosh" in names:
-        rsp.cmd(f"Hg{names['tosh']}")
-        tosh_head = rsp.cmd("m8000000000,40")
+    # A second program, whichever is up: attach can come before tosh starts.
+    other = next((n for n in ("tosh", "clipboardd", "fontd", "logd") if n in names), None)
+    other_head = ""
+    if other:
+        rsp.cmd(f"Hg{names[other]}")
+        other_head = rsp.cmd("m8000000000,40")
         rsp.cmd("Hg0")
     want_init = elf_head("/bin/init")
-    want_tosh = elf_head("/bin/tosh")
-    res.check("memory is read in the SELECTED thread's address space (init, tosh)",
-              init_head == want_init and tosh_head == want_tosh and want_init != want_tosh,
-              f"init {init_head[:24]} want {(want_init or '')[:24]}; tosh {tosh_head[:24]} "
-              f"want {(want_tosh or '')[:24]}; threads {names}")
+    want_other = elf_head(f"/bin/{other}") if other else None
+    res.check(f"memory is read in the SELECTED thread's address space (init, {other})",
+              init_head == want_init and other_head == want_other and want_init != want_other,
+              f"init {init_head[:24]} want {(want_init or '')[:24]}; {other} {other_head[:24]} "
+              f"want {(want_other or '')[:24]}; threads {names}")
     res.check("`g` on a parked thread gives rip and rsp, and 'xx' for what was never saved",
               ok == "OK" and len(parked) == 328 and "xx" in parked and
               "x" not in parked[256:272], parked[:80])
@@ -404,17 +426,31 @@ def steps(inst, disk, log, res, rsp):
     stop = rsp.recv(timeout=10)
     res.check("a ^C byte breaks in (T02)", is_stop(stop, "02"), stop)
 
+    # A failed pwrite poisons the transfer: close refuses (EIO) and the
+    # file must never be written -- a partial kernel.bin would replace
+    # the real one.
+    bad = "/tmp/kdbad.bin".encode().hex()
+    fd = rsp.cmd(f"vFile:open:{bad},601,1ed")
+    garbled = rsp.cmd(f"vFile:pwrite:{fd[1:]},zz,xyz")
+    shut = rsp.cmd(f"vFile:close:{fd[1:]}")
+    res.check("a transfer with a failed pwrite is refused at close (EIO)",
+              fd.startswith("F") and not fd.startswith("F-") and garbled.startswith("F-1")
+              and shut == "F-1,5", f"open {fd!r} pwrite {garbled!r} close {shut!r}")
+
     res.check("D detaches", rsp.cmd("D") == "OK")
     try:
         out, _ = trigger.communicate(timeout=60)
     except subprocess.TimeoutExpired:
         trigger.kill()
         out = "(still stopped)"
+    time.sleep(2)
+    gone = vm(inst, disk, log, "exec", "stat /tmp/kdbad.bin", timeout=60)
+    res.check("...and the refused file never reached the disk", "no such file" in gone, gone[-200:])
     res.check("the `meminfo` that hit the breakpoint completes once resumed",
               trigger.returncode == 0 and "free" in out.lower(), out[-200:])
 
 
-def real_gdb(inst, res):
+def real_gdb(inst, res, disk, log):
     """A real GDB: symbols relocated by qOffsets, a disassembly by NAME --
     over the bridge, with --net."""
     target, bridge = sock_path(inst), None
@@ -428,10 +464,35 @@ def real_gdb(inst, res):
         target = f"localhost:{lport}"
     try:
         real_gdb_run(target, res)
+        put_check(target, res, inst, disk, log)
     finally:
         if bridge:
             bridge.kill()
             bridge.wait()
+
+
+def put_check(target, res, inst, disk, log):
+    """gdb `remote put`, over whichever transport `target` is."""
+    import hashlib
+    blob = os.urandom(300000)
+    want = hashlib.sha256(blob).hexdigest()
+    src = os.path.join(tempfile.gettempdir(), f"kdput.{os.getpid()}.bin")
+    with open(src, "wb") as f:
+        f.write(blob)
+    r = subprocess.run(
+        ["gdb", "-nx", "-batch", KERNEL, "-ex", "set pagination off",
+         "-ex", f"target remote {target}",
+         "-ex", f"remote put {src} /tmp/kdput.bin",
+         "-ex", f"remote put {src} /boot/kdput.bin",
+         "-ex", "detach"], cwd=REPO, capture_output=True, text=True, timeout=300)
+    os.unlink(src)
+    time.sleep(3)   # kdfiled runs once the machine does
+    got = vm(inst, disk, log, "exec", "sum -a sha256 /tmp/kdput.bin /boot/kdput.bin", "mount",
+             timeout=60)
+    res.check("remote put lands a 300 KB file in /tmp and the read-only /boot, sha256 intact",
+              got.count(want) == 2, (r.stdout + r.stderr)[-300:] + got[-400:])
+    res.check("...and /boot is read-only again after",
+              re.search(r"/boot\s+fat32\s+ro", got) is not None, got[-300:])
 
 
 def real_gdb_run(target, res):
@@ -539,11 +600,16 @@ def main():
         shutil.rmtree(work, ignore_errors=True)
 
     if args.positive_control:
-        if res.fails:
-            print(f"\nkdebug_test: positive control FAILED as it must ({len(res.fails)} finding(s))")
+        # THE ATTACH ITSELF must be what failed: "the boot log says the stub
+        # is armed" fails on every unarmed boot, so "anything failed" could
+        # never turn this red.
+        if ATTACH in res.fails and NO_DEBUGGER_KDFILED in res.passes:
+            print("\nkdebug_test: positive control: the attach FAILED as it must, "
+                  "and kdfiled exited")
             return 0
-        print("\nkdebug_test: positive control PASSED -- something other than the stub answered",
-              file=sys.stderr)
+        print("\nkdebug_test: positive control is wrong -- "
+              + ("something answered the attach" if ATTACH not in res.fails
+                 else "kdfiled is still running with no debugger"), file=sys.stderr)
         return 1
 
     print(f"\nkdebug_test: {len(res.passes)} passed, {len(res.fails)} failed")

@@ -386,6 +386,7 @@ int dev_bar_check(int index, int which, uint64_t pml4,
 int sys_shm_open(struct syscall_ctx *c);   // kernel/mm/shm.c
 int sys_shm_unlink(struct syscall_ctx *c);
 int sys_futex_wait(struct syscall_ctx *c);
+int sys_kdfile(struct syscall_ctx *c);      // kernel/debug/kdebug_files.c
 int sys_futex_wake(struct syscall_ctx *c);
 int sys_wakeword(struct syscall_ctx *c);
 int sys_shm_grant(struct syscall_ctx *c); // kernel/mm/shm.c

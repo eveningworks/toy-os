@@ -12,6 +12,7 @@
 #include "reloc.h"     // kernel_reloc_delta() -- qOffsets
 #include "barrier.h"   // cpu_relax()
 #include "sched_debug.h"  // processes as threads
+#include "errno.h"        // the staging calls' -errno, mapped to GDB's numbers
 
 // PacketSize=1000 (hex) in qSupported: GDB sends nothing longer, and
 // sizes its memory reads so a reply fits.
@@ -325,9 +326,77 @@ static void query(const char *q) {
     }
 }
 
+// --- vFile: gdb's host I/O, for `remote put` -------------------------------
+//
+// The STOPPED half of kdebug_files.c: bytes into the staging area and
+// nothing more. Replies are `F<n>` or `F-1,<errno>` in hex. Reading a
+// file (`remote get`) would need the filesystem while stopped, so it is
+// refused rather than attempted.
+
+static void f_reply(int64_t r) {
+    out_str("F");
+    if (r < 0) { out_str("-1,"); out_num((uint64_t)-r); }
+    else out_num((uint64_t)r);
+}
+
+static int unhex_into(const char *p, int n, char *out, int cap) {
+    int k = 0;
+    for (; n >= 2 && kdb_hexval(p[0]) >= 0 && kdb_hexval(p[1]) >= 0; p += 2, n -= 2) {
+        if (k == cap - 1) return -1;
+        out[k++] = (char)(kdb_hexval(p[0]) << 4 | kdb_hexval(p[1]));
+    }
+    out[k] = 0;
+    return k;
+}
+
+static void vfile(const char *p, int n) {
+    const char *end = p + n;
+    uint64_t a, b;
+    if (starts(p, "setfs:")) {
+        f_reply(0);   // one filesystem namespace here
+    } else if (starts(p, "open:")) {
+        static char path[256];
+        p += 5;
+        const char *comma = p;
+        while (comma < end && *comma != ',') comma++;
+        if (unhex_into(p, (int)(comma - p), path, sizeof path) <= 0 || comma == end) {
+            f_reply(-22);   // EINVAL
+            return;
+        }
+        p = comma + 1;
+        if (!parse_num(&p, &a)) { f_reply(-22); return; }
+        if (!(a & 3)) { f_reply(-13); return; }   // read-only open: EACCES, see above
+        int fd = kdb_stage_open(path);
+        f_reply(fd < 0 ? (fd == -ENAMETOOLONG ? -91 : fd == -EMFILE ? -24 : -13) : fd);
+    } else if (starts(p, "pwrite:")) {
+        p += 7;
+        if (!parse_num(&p, &a) || *p++ != ',' || !parse_num(&p, &b) || *p++ != ',') {
+            kdb_stage_fail((int)a);
+            f_reply(-22);
+            return;
+        }
+        // Binary data, escaped: 0x7d then the byte XOR 0x20. Unescaped in
+        // place -- it only ever shrinks.
+        uint8_t *d = (uint8_t *)(uintptr_t)p;
+        uint32_t len = 0;
+        for (const char *q = p; q < end; q++) {
+            uint8_t c = (uint8_t)*q;
+            if (c == 0x7d && q + 1 < end) c = (uint8_t)(*++q ^ 0x20);
+            d[len++] = c;
+        }
+        int64_t r = kdb_stage_write((int)a, b, d, len);
+        f_reply(r == -ENOSPC ? -28 : r < 0 ? -9 : r);
+    } else if (starts(p, "close:")) {
+        p += 6;
+        f_reply(!parse_num(&p, &a) ? -9 : kdb_stage_close((int)a) == 0 ? 0 : -5);   // EIO
+    } else {
+        f_reply(-22);   // pread, fstat, unlink...: not while stopped
+    }
+}
+
 // -1: reply and keep talking. Otherwise how to resume (with a reply
 // only if one was built -- `c`, `s` and `k` have none).
-static int dispatch(const char *p) {
+static int dispatch(const char *p, int n) {
     uint64_t addr;
     const char *a;
     switch (p[0]) {
@@ -346,6 +415,9 @@ static int dispatch(const char *p) {
         return p[0] == 's' ? KDB_STEP : KDB_CONTINUE;
     case 'D': out_str("OK"); return KDB_DETACH;
     case 'k': return KDB_DETACH;   // a kernel is not killed by its debugger
+    case 'v':
+        if (starts(p, "vFile:")) vfile(p + 6, n - 6);
+        return -1;                 // anything else: "unsupported"
     default: return -1;
     }
 }
@@ -360,10 +432,10 @@ enum kdb_resume kdb_gdb_session(void) {
         put_packet();
     }
     for (;;) {
-        get_packet();
+        int n = get_packet();
         kdb.connected = 1;
         g_outlen = 0;
-        int r = dispatch(g_in);
+        int r = dispatch(g_in, n);
         if (r < 0 || g_outlen) put_packet();
         if (r >= 0) return (enum kdb_resume)r;
     }

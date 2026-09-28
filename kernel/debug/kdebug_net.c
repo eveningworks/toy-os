@@ -258,8 +258,16 @@ static void frame_in(const uint8_t *f, int len) {
     in_push(payload, n);
 }
 
+// ONLY WHILE A WHOLE PAYLOAD FITS: a frame taken off the card is kept or
+// lost, so taking one the FIFO cannot hold drops the middle of a packet.
+// Small protocol packets never came near the limit; `remote put`'s 4 KiB
+// pwrites, several datagrams each, were cut up. STILL BOUNDED: frames
+// frame_in() drops never fill the FIFO, and this runs from the tick with
+// interrupts off, so a flood of junk must not keep it here.
 static void pump(void) {
     for (int i = 0; i < 16; i++) {
+        uint32_t used = (g_in_head + sizeof g_in - g_in_tail) % sizeof g_in;
+        if (sizeof g_in - 1 - used < PAYLOAD_MAX) return;
         int n = g_nic->recv(g_rxf, FRAME_MAX);
         if (n <= 0) return;
         frame_in(g_rxf, n);

@@ -1,0 +1,7 @@
+# Files a kernel debugger sent with `remote put` (docs/kdebug-design.md),
+# written to disk once the machine runs again. EXITS AT ONCE on a boot
+# with no `kdebug=` -- the kernel says so -- and the default
+# Restart=on-failure leaves a clean exit alone, so it costs nothing there.
+Name=kdfiled
+Description=Write files sent through the kernel debugger
+Exec=/bin/kdfiled

@@ -3264,12 +3264,18 @@ window without going through it will find its layout polls timing out.
   reads together. **Pick a target symbol that is unique and not
   inlined**: `dbg_cmd_meminfo` is static and called once, so `-O2`
   inlined it away, and `g_events` is a static name in two files.
-  `--positive-control` boots without `kdebug=`, where the attach must
-  get no answer. **`--net`** runs all of it over the network transport
+  `--positive-control` boots without `kdebug=`, where THE ATTACH CHECK
+  ITSELF must fail -- not merely something, since "the stub is armed"
+  fails on every unarmed boot -- and `kdfiled` must have exited (armed,
+  it must be waiting blocked; it once spun on every unarmed boot). **`--net`** runs all of it over the network transport
   (`vm.py --kdebug-net`, a fresh random key each run, the real GDB
   through `kdebug_bridge.py`) and adds two checks that a datagram under
   the WRONG key and an exact REPLAY of an accepted one both get silence;
-  removing the sequence rule turns the replay check red. **The real-GDB
+  removing the sequence rule turns the replay check red. The real GDB
+  also sends a 300 KB file with `remote put` to `/tmp` and to the
+  read-only `/boot`, and the guest's own `sum -a sha256` must match the
+  host's, with `/boot` read-only again after; a garbled `pwrite` must
+  make the close answer `EIO` and leave no file. **The real-GDB
   check requires a live `info registers rip`**: GDB disassembles
   `kernel.bin` from DISK when the connection fails, which once passed a
   run where the attach had timed out. Both modes are in

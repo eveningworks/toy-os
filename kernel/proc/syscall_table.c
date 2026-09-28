@@ -197,6 +197,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_DIAG]          = { "diag",          sys_diag,          { A_HEX } },
     [SYS_MODLOAD]       = { "modload",       sys_modload,       { A_PATH } },
     [SYS_MODUNLOAD]     = { "modunload",     sys_modunload,     { A_PATH } },
+    [SYS_KDFILE]        = { "kdfile",        sys_kdfile,        { A_INT, A_HEX, A_INT } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])
