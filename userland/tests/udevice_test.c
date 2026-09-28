@@ -16,6 +16,7 @@
 #include "rt/sys.h"
 #include "lib/uconf.h"
 #include "lib/udevice.h"
+#include "lib/uhwids.h"
 #include "lib/utest.h"
 
 static struct udevice g_dev[UDEV_MAX];
@@ -41,6 +42,21 @@ int main(void) {
     }
     utest_checkf(pci > 0, "PCI devices are listed (%d devices in all)", n);
     utest_checkf(named > 0, "a device is named from the hwdata databases");
+
+    // Each USB device named from usb.ids by ITS OWN ids -- resolved here
+    // one at a time, so a list that mixed up its lookups cannot agree.
+    int usb = 0, usb_ok = 0;
+    for (int i = 0; i < n; i++) {
+        if (g_dev[i].bus != UDEV_USB) continue;
+        struct uhwids_entry e = { .vendor = g_dev[i].vendor, .device = g_dev[i].device,
+                                  .cls = -1, .subclass = -1 };
+        uhwids_resolve(UHWIDS_USB, &e, 1);
+        usb++;
+        if (!e.vendor_name[0] || !strcmp(e.vendor_name, g_dev[i].vendor_name)) usb_ok++;
+        else printf("udevice_test: %s is \"%s\", usb.ids says \"%s\"\n",
+                    g_dev[i].id, g_dev[i].vendor_name, e.vendor_name);
+    }
+    if (usb) utest_checkf(usb_ok == usb, "%d of %d USB devices carry their own usb.ids vendor", usb_ok, usb);
 
     utest_checkf(store != 0, "a storage controller with a driver is listed");
     if (store) {

@@ -267,7 +267,7 @@ int udevice_list(struct udevice *out, int cap) {
 
     adopt_class_drivers(out, npci);
 
-    add_usb(out, &n, cap, ids + npci, xhci);
+    add_usb(out, &n, cap, ids, xhci);          // indexes ids[] by the shared n, as add_pci does
     int nusb = n - npci;
     uhwids_resolve(UHWIDS_USB, ids + npci, nusb);
     for (int i = 0; i < nusb; i++) {

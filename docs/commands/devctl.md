@@ -34,7 +34,7 @@ ID                   TYPE         DRIVER     STATE      NAME
 pci:00:02.0          Display adap bochs      ok         VGA compatible controller
 pci:00:05.0          Network adap e1000      ok         82540EM Gigabit Ethernet Controller
 pci:00:04.0          Sound        ac97       ok         82801AA AC'97 Audio Controller
-usb:5:0627:0001      Input device usb-hid    ok         QEMU USB Keyboard
+usb:5:0627:0001      Input device usb-hid    ok         QEMU Tablet
 ...
 /$ devctl disable pci:00:04.0
 devctl: disabled pci:00:04.0 (82801AA AC'97 Audio Controller)

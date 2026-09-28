@@ -76,7 +76,7 @@ static struct uui_dialog g_ask;
 static char g_st_count[32], g_st_problem[32], g_st_note[96];
 static char g_ask_line[2][112];
 static const char *g_ask_rows[2];
-static int g_ask_dev = -1;
+static char g_ask_id[24];   // by ID: the tick may relist under the open dialog
 
 // Pane geometry, placed by layout_all() and drawn by on_draw().
 static int g_px, g_py, g_pw, g_ph;
@@ -183,6 +183,12 @@ static const struct udevice *selected(void) {
     return id >= 0 && id < g_n ? &g_dev[id] : 0;
 }
 
+static const struct udevice *find_id(const char *id) {
+    for (int i = 0; id[0] && i < g_n; i++)
+        if (!strcmp(g_dev[i].id, id)) return &g_dev[i];
+    return 0;
+}
+
 // Rebuilds the nodes and keeps the selection on the same DEVICE (by its
 // stable id), since the index of a device can change with a relist.
 static void rebuild_tree(const char *keep_id) {
@@ -258,7 +264,7 @@ static void report(const struct udevice *d, int r, const char *verb) {
 static void ask_disable(struct uapp *a) {
     const struct udevice *d = selected();
     if (!d || !d->can_disable || uui_dialog_is_open(&g_ask)) return;
-    g_ask_dev = (int)(d - g_dev);
+    strlcpy(g_ask_id, d->id, sizeof g_ask_id);
     snprintf(g_ask_line[0], sizeof g_ask_line[0], "Disable %s?", d->name);
     snprintf(g_ask_line[1], sizeof g_ask_line[1], "%s",
              g_keep.checked ? "It stays disabled after a restart, until you enable it."
@@ -488,13 +494,13 @@ static void on_widget(struct uapp *a, int id, int reason) {
     case ID_ASK: {
         int code = uui_dialog_take_code(&g_ask);     // -1 on every press
         if (code < 0) return;
-        if (code == ASK_DISABLE && g_ask_dev >= 0 && g_ask_dev < g_n) {
-            const struct udevice *d = &g_dev[g_ask_dev];
+        const struct udevice *d = code == ASK_DISABLE ? find_id(g_ask_id) : 0;
+        if (d && d->can_disable) {
             report(d, udevice_disable(d, g_keep.checked), "disabled");
             relist();
             g_sig = signature();
         }
-        g_ask_dev = -1;
+        g_ask_id[0] = 0;
         uapp_redraw(a);
         return;
     }
