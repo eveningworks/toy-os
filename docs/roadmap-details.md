@@ -1641,6 +1641,16 @@ then Extract to a chosen directory. Stored and deflated zip entries
 decompress with `userland/lib/uinflate.c`; writing an archive needs a
 compressor, which does not exist, and is a separate item if wanted.
 
+
+### Disk Usage: a treemap of where the space went -- Filelight, WinDirStat; needs a treemap widget
+
+Put on the roadmap 2026-09-28 (not scheduled). A scan of one mount, then
+nested rectangles sized by bytes (WinDirStat's treemap; Filelight draws
+rings instead), with the largest directories named and a click to
+descend. The per-directory change counters (`SYS_FS_GENERATION_OF`) let
+it rescan only what changed. The treemap is a `userland/ui/` widget
+with a second plausible caller in Task Manager's memory view.
+
 ### Undo/redo for editable text, in `uui_edit` where every edit already passes -- Notepad, text fields and `/bin/edit` all lack it
 
 `uui_edit` owns the cursor, selection and keymap for Notepad,
