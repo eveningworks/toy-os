@@ -286,7 +286,7 @@ int usb_hub_bind(struct usb_device_info *d) {
     wait_ms((uint32_t)hd[5] * 2 + 100);
 
     klog_printf("usb: slot %u: hub with %u port(s)\n", d->slot, n);
-    d->bound = 1;
+    usb_mark_bound(d, "hub");
 
     for (uint8_t p = 1; p <= n; p++) {
         int64_t st = hub_port_status(d->slot, p);

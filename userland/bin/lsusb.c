@@ -398,9 +398,10 @@ int main(int argc, char **argv) {
                (unsigned)d->port, (unsigned)d->slot,
                (unsigned)d->vendor_id, (unsigned)d->product_id,
                g_vendor_name[i][0] ? g_vendor_name[i] : "(unknown vendor)");
-        printf("  %s%s, %sb/s%s\n",
+        printf("  %s, %sb/s, %s%s\n",
                g_product_name[i][0] ? g_product_name[i] : "(unknown product)",
-               "", speed_name(d->speed), d->bound ? "" : ", no driver");
+               speed_name(d->speed), d->driver[0] ? "driver " : "",
+               d->driver[0] ? d->driver : d->bound ? "bound" : "no driver");
         printf("  Class %02x %s%s\n",
                (unsigned)d->if_class, class_name(d->if_class),
                hid_protocol_name(d->if_class, d->if_subclass,

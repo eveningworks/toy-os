@@ -1087,6 +1087,7 @@ struct query_usb {
     uint64_t bound;         // 1 when a driver in this build claimed it
     char     manufacturer[32];
     char     product[32];
+    char     driver[16];    // which one, as QUERY_DRIVER names it; "" if none
 };
 
 // QUERY_USB's speed values. Named rather than passing the xHCI protocol

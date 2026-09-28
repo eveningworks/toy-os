@@ -527,7 +527,7 @@ int usb_hid_bind(struct usb_device_info *info) {
         input_register_source(&d->src);
 
         if (!info->hid_ep) info->hid_ep = ifc->ep;
-        info->bound = 1;
+        usb_mark_bound(info, "usb-hid");
         took++;
         klog_printf("usb: slot %u: bound as %s on endpoint 0x%x\n",
                     info->slot, d->name, ifc->ep);

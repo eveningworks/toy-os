@@ -662,7 +662,7 @@ int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
         pmm_free_contiguous(a->pkt_phys, 1);
         return 0;
     }
-    info->bound = 1;
+    usb_mark_bound(info, "usb-audio");
     klog_printf("usb: slot %u: bound as usb-audio, UAC%u, if %u alt %u, "
                 "ep 0x%x %u-bit\n", info->slot, s.uac2 ? 2 : 1,
                 s.ifnum, s.alt, s.ep, s.bits);

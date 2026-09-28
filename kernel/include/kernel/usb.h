@@ -86,6 +86,9 @@ struct usb_device_info {
     // hid_ep for the tests that predate composite support.
     uint8_t  bound;
     uint8_t  hid_ep;
+    // WHICH driver, by the name `lsdrv` knows it -- set with `bound` by
+    // usb_mark_bound(), cleared with it on a claim. A static string.
+    const char *driver;
 
     // THE CONFIGURATION DESCRIPTOR, KEPT. One DMA frame per device,
     // freed on detach. It is here because the interesting half of a
@@ -96,6 +99,14 @@ struct usb_device_info {
     uint64_t cfg_phys;
     uint32_t cfg_len;
 };
+
+// A class driver took `d`: what lsusb, QUERY_USB and the Device Manager
+// report. `driver` is the name its DRIVER_DECLARE uses, so a caller can
+// join the device to QUERY_DRIVER.
+static inline void usb_mark_bound(struct usb_device_info *d, const char *driver) {
+    d->bound = 1;
+    d->driver = driver;
+}
 
 // Finds and brings up an xHCI controller, enumerates what is attached,
 // and registers any HID keyboard or mouse with the input core.

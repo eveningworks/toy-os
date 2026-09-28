@@ -57,6 +57,10 @@ they also paste straight into a KTEST fixture, which is how a device
 nobody here owns gets tested at all (`sound_usb.c`'s fixture is QEMU's,
 captured exactly this way).
 
+After the speed comes the driver that took the device, by the name
+`lsdrv` uses (`, driver usb-hid`, `, driver r8153`, `, driver hub`), so
+the two listings join -- the way `lspci -k` names a PCI device's driver.
+
 `, no driver` after the speed means the device was enumerated and
 described but nothing in this build claimed it. That is not an error —
 this build binds HID boot keyboards and mice, hubs, and UAC1 audio, so a

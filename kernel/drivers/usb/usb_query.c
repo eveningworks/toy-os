@@ -48,6 +48,7 @@ static int usb_q_fill(int index, void *out) {
     q->bound       = d->bound;
     k_strlcpy(q->manufacturer, d->manufacturer, sizeof q->manufacturer);
     k_strlcpy(q->product, d->product, sizeof q->product);
+    if (d->driver) k_strlcpy(q->driver, d->driver, sizeof q->driver);
     return 1;
 }
 

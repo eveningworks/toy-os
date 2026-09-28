@@ -397,7 +397,7 @@ int usb_net_bind(struct usb_device_info *info, const uint8_t *cfg,
     for (int i = 0; i < NET_BUFS; i++)
         xhci_bulk_post(info->slot, e.ep_in, d->rx_phys[i], NET_BUF_SIZE);
 
-    info->bound = 1;
+    usb_mark_bound(info, "cdc-ecm");
     klog_printf("usb: slot %u: bound as cdc-ecm, if %u alt %u, "
                 "ep in 0x%02x out 0x%02x, %u B/packet, mtu %u\n",
                 info->slot, e.data_ifnum, e.data_alt, e.ep_in, e.ep_out,

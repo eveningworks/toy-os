@@ -20,11 +20,13 @@ int main(void) {
     // QUERY_USB, which ring 3 could already read.
     struct query_usb q;
     int slot = -1, was_bound = 0;
+    char was_driver[16] = "";
     unsigned want_vid = 0, want_pid = 0;
     QUERY_FOREACH(QUERY_USB, q, i) {
         if (q.if_class != 1) continue;          // 1 = Audio
         slot = (int)q.slot;
         was_bound = (int)q.bound;
+        strlcpy(was_driver, q.driver, sizeof was_driver);
         want_vid = (unsigned)q.vendor_id;
         want_pid = (unsigned)q.product_id;
         break;
@@ -34,6 +36,8 @@ int main(void) {
         return utest_end();
     }
     utest_check(was_bound, "a class driver had the device before the claim");
+    utest_check(strcmp(was_driver, "usb-audio") == 0,
+                "...and QUERY_USB names it, as lsdrv does");
 
     utest_check(sys_usb_claim(slot) == 0, "claimed it");
     utest_check(sys_usb_claim(slot) == 0, "...and claiming it again is idempotent");
@@ -41,9 +45,14 @@ int main(void) {
     // THE UNBIND IS THE POINT, so it is asserted rather than assumed:
     // `bound` going false is the class driver having let go.
     int still_bound = 1;
+    char held_driver[16] = "?";
     QUERY_FOREACH(QUERY_USB, q, i)
-        if ((int)q.slot == slot) still_bound = (int)q.bound;
+        if ((int)q.slot == slot) {
+            still_bound = (int)q.bound;
+            strlcpy(held_driver, q.driver, sizeof held_driver);
+        }
     utest_check(!still_bound, "...and the class driver let go of it");
+    utest_check(held_driver[0] == '\0', "...and its name went with it");
 
     // A CONTROL TRANSFER FROM RING 3, and the device descriptor is the
     // one request whose answer this test can CHECK rather than merely
@@ -132,9 +141,14 @@ int main(void) {
     utest_check(sys_usb_release(slot, USB_RELEASE_REBIND) == 0,
                 "released it with a rebind");
     int rebound = 0;
+    char back_driver[16] = "";
     QUERY_FOREACH(QUERY_USB, q, i)
-        if ((int)q.slot == slot) rebound = (int)q.bound;
+        if ((int)q.slot == slot) {
+            rebound = (int)q.bound;
+            strlcpy(back_driver, q.driver, sizeof back_driver);
+        }
     utest_check(rebound, "...and the class driver took it back");
+    utest_check(strcmp(back_driver, was_driver) == 0, "...under the same name");
 
     utest_check(sys_usb_release(slot, 0) < 0 && sys_errno() == EACCES,
                 "releasing one nobody holds is refused");

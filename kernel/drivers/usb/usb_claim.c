@@ -113,6 +113,7 @@ int usb_claim_take(uint8_t slot, uint64_t pml4, int pid) {
     // place that unbinds a device which then stays present; a DETACH
     // takes the whole entry away.
     ((struct usb_device_info *)d)->bound = 0;
+    ((struct usb_device_info *)d)->driver = 0;
 
     g_claims[free_slot].slot = slot;
     g_claims[free_slot].pml4 = pml4;

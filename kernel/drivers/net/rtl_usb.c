@@ -571,7 +571,7 @@ int usb_r8153_bind(struct usb_device_info *info, const uint8_t *cfg,
     for (int i = 0; i < RTL_BUFS; i++)
         xhci_bulk_post(info->slot, ep_in, d->rx_phys[i], RTL_RX_BUF);
 
-    info->bound = 1;
+    usb_mark_bound(info, d->ops->name);
     klog_printf("usb: slot %u: bound as %s, ep in 0x%02x out 0x%02x, "
                 "%u B/packet\n", info->slot, d->ops->name, ep_in, ep_out, mps);
     return 1;
