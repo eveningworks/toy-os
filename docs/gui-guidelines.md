@@ -18,8 +18,10 @@ REAL CALLER, not a plausible one.
 | Widget | For |
 |---|---|
 | `uui_button`, `uui_button_group` | One button; a GRID of them (a keypad) |
-| `uui_checkbox` | An independent on/off |
+| `uui_checkbox` | An independent on/off OPTION, in a form or a dialog |
+| `uui_switch` | An on/off STATE that takes effect -- a setting (Windows 11's toggle) |
 | `uui_radio_list` | A few mutually-exclusive options, all visible |
+| `uui_segmented` | Two to four SHORT mutually-exclusive choices side by side; a view switch |
 | `uui_dropdown` | Many mutually-exclusive options, one visible |
 | `uui_slider` | An ORDERED enum, where "more" and "less" is the point |
 | `uui_listbox`, `uui_table` | Rows; rows with columns, a header and sorting |
@@ -28,12 +30,16 @@ REAL CALLER, not a plausible one.
 | `uui_textbox`, `utext` | One line of editable text; a document |
 | `uui_menubar`, `uui_statusbar` | Menus with submenus; status panes |
 | `uui_layout`, `uui_scrollview` | Arrangement; a viewport onto more than fits |
+| `uui_setting_row` | One setting as a card: name and description left, its control right (or under) |
 | `uui_canvas` | Drawing, clipped, when no widget fits |
 
-**The same data can take three shapes.** A radio list, a dropdown and a
-slider all take the same `options` array and yield an index, so a
-setting chooses between them in `/etc/settings.d` with no code change.
-Pick by what the values ARE: few and unordered, many, or ordered.
+**The same data can take several shapes.** A radio list, a segmented
+control, a dropdown and a slider all take the same `options` array and
+yield an index, so a setting's presentation needs no code change. Pick
+by what the values ARE: an on/off pair (a switch), a few short names
+(segmented), a few long ones (a radio list), many (a dropdown), or
+ordered levels (a slider). System Settings picks this way itself and
+`/etc/settings.d`'s `Widget=` can still insist on a dropdown or slider.
 
 **A NEW WIDGET MUST FILL ITS OPS TABLE** (`uui_widget.h`), and
 `tools/check_widget_ops.py` fails the build if it does not. Fill it

@@ -68,6 +68,7 @@ void uui_textbox_init(struct uui_textbox *f, const char *initial) {
     f->ed.cursor = i;
     f->active = 0;
     f->disabled = 0;
+    f->placeholder = 0;
     // Left UNSET so the theme answers at DRAW time -- see utheme.h.
     // These were four literals that happened to equal the default
     // palette, which meant a theme change reached everything except the
@@ -234,6 +235,9 @@ void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f) {
     // wrong: if the windowing ever miscomputes, text stops at the edge
     // rather than drawing through the border.
     ugfx_draw_string_clipped(s, x + pad, ty, w - 2 * pad, shown, fg, bg);
+    if (!f->len && f->placeholder)
+        ugfx_draw_string_clipped(s, x + pad + CARET_W + 1, ty, w - 2 * pad, f->placeholder,
+                                 uui_state_bg(fg, UUI_STATE_DISABLED), bg);
 
     if (f->active) {
         ugfx_fill_rect(s, x + pad + ugfx_text_width_n(shown, f->ed.cursor - start),

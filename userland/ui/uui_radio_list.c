@@ -91,12 +91,20 @@ void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l)
             ugfx_fill_rect(s, cx, cy, radio_col_w(l), radio_row_h(l), row_bg);
         }
 
+        // A CIRCLE, which is what says "one of these" -- a square marker
+        // reads as a checkbox. Ring then field then dot, each a capsule
+        // blended over the one before; the chosen one takes the accent,
+        // as Breeze and Windows 11 both draw it.
         int m = radio_marker(l);
         int my = cy + (radio_row_h(l) - m) / 2;
-        ugfx_draw_rect(s, cx, my, m, m, fg);
+        uint32_t ring = i == selected && !l->disabled ? UTHEME_ACCENT
+                      : uui_state_bg(fg, UUI_STATE_DISABLED);
+        uui_fill_round_rect(s, cx, my, m, m, UUI_CAPSULE, ring);
+        uui_fill_round_rect(s, cx + 1, my + 1, m - 2, m - 2, UUI_CAPSULE, UTHEME_WHITE);
         if (i == selected) {
-            int inset = m / 4 > 0 ? m / 4 : 1;
-            ugfx_fill_rect(s, cx + inset, my + inset, m - 2 * inset, m - 2 * inset, fg);
+            int inset = m / 4 > 1 ? m / 4 : 2;
+            uui_fill_round_rect(s, cx + inset, my + inset, m - 2 * inset, m - 2 * inset,
+                                UUI_CAPSULE, l->disabled ? fg : UTHEME_ACCENT);
         }
         ugfx_draw_string_clipped(s, cx + m + 6, cy + (radio_row_h(l) - ugfx_char_h()) / 2,
                                   radio_col_w(l) - m - 8, l->options[i], fg, row_bg);

@@ -9,10 +9,12 @@
 // three; drawing into a plain surface covers all of them, in a few
 // milliseconds, with no compositor involved.
 //
-// EACH WIDGET IS ASSERTED BOTH WAYS -- the accent must be ABSENT before
-// the widget is focused and PRESENT after. A one-sided check passes on
-// a widget that rings itself unconditionally, which is a control that
-// lies about holding the keyboard rather than one that says nothing.
+// EACH WIDGET IS ASSERTED BOTH WAYS -- focusing it must ADD accent
+// pixels that were not there unfocused. A one-sided check passes on a
+// widget that rings itself unconditionally, which is a control that lies
+// about holding the keyboard rather than one that says nothing. It is a
+// DIFFERENCE, not "no accent at all when unfocused", because a chosen
+// radio, an on switch and a selected segment wear the accent too.
 //
 // AND THE ROW WIDGETS ARE ASSERTED ON THE RING'S HEIGHT, which is what
 // tells "on the selected row" from "round the whole box" -- both draw
@@ -35,11 +37,15 @@
 #include "ui/uui_table.h"
 #include "ui/uui_textbox.h"
 #include "ui/uui_tree.h"
+#include "ui/uui_switch.h"
+#include "ui/uui_segmented.h"
+#include "ui/uui_button.h"
 
 #define SURF_W 320
 #define SURF_H 240
 
 static uint32_t g_px[SURF_W * SURF_H];
+static uint32_t g_unfocused[SURF_W * SURF_H];
 static struct ugfx_surface g_surf;
 // UTEST_VERDICT_FILE carries the per-check lines rather than only the
 // count -- a spawned program's console output arrives while the harness
@@ -84,15 +90,16 @@ static int paint(const struct uui_widget_ops *ops, void *w, int focused, int *ou
 // The pair every widget below is held to.
 static void check(const char *name, const struct uui_widget_ops *ops, void *w) {
     char detail[96];
-    int h_off = 0, h_on = 0;
-    int off = paint(ops, w, 0, &h_off);
-    int on  = paint(ops, w, 1, &h_on);
-    snprintf(detail, sizeof detail, "%s: %d accent px unfocused", name, off);
-    ok(name, off == 0 && on > 0, detail);
-    if (off != 0 || on <= 0) {
-        utest_notef("(%s: unfocused %d, focused %d)", name, off, on);
-    }
-    (void)h_off;
+    int off = paint(ops, w, 0, 0);
+    memcpy(g_unfocused, g_px, sizeof g_px);
+    int on = paint(ops, w, 1, 0);
+    int added = 0;
+    for (int i = 0; i < SURF_W * SURF_H; i++)
+        if (g_px[i] == UTHEME_ACCENT && g_unfocused[i] != UTHEME_ACCENT) added++;
+    snprintf(detail, sizeof detail, "%s: focusing added %d accent px", name, added);
+    ok(name, added > 0, detail);
+    if (added <= 0) utest_notef("(%s: unfocused %d, focused %d)", name, off, on);
+    ops->set_focused(w, 0);
 }
 
 // --- fixtures ----------------------------------------------------------
@@ -181,6 +188,24 @@ int main(int argc, char **argv) {
     static struct uui_sidebar sb;
     uui_sidebar_init(&sb, 10, 10, 160, 120, rows, 3);
     check("uui_sidebar", &uui_sidebar_ops, &sb);
+
+    // --- the ones that joined with System Settings' redesign ----------
+    static struct uui_switch swc;
+    uui_switch_init(&swc, 1);
+    uui_switch_set_geometry(&swc, 10, 10);
+    check("uui_switch", &uui_switch_ops, &swc);
+
+    static struct uui_segmented seg;
+    uui_segmented_init(&seg, ITEMS, 3, 1);
+    uui_segmented_set_geometry(&seg, 10, 10);
+    check("uui_segmented", &uui_segmented_ops, &seg);
+
+    static struct uui_button btn;
+    uui_button_init(&btn, 10, 10, 90, 24, "Apply", UTHEME_ACCENT, UTHEME_ACCENT_TEXT, 1);
+    check("uui_button, even an accent one", &uui_button_ops, &btn);
+    btn.disabled = 1;
+    ok("a disabled uui_button refuses focus", !uui_button_ops.accepts_focus(&btn),
+       "the ring would park on it");
 
     static struct uui_fileview fv;
     memset(&fv, 0, sizeof fv);

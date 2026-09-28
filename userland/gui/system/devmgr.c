@@ -24,7 +24,7 @@
 #include "ui/utheme.h"
 #include "ui/ulog.h"
 #include "ui/uui_menubar.h"
-#include "ui/uui_tabs.h"
+#include "ui/uui_segmented.h"
 #include "ui/uui_tree.h"
 #include "ui/uui_splitter.h"
 #include "ui/uui_button.h"
@@ -36,7 +36,7 @@
 #include "lib/udevice.h"
 
 #define ID_MENU    1
-#define ID_TABS    2
+#define ID_VIEW    2
 #define ID_TREE    3
 #define ID_SPLIT   4
 #define ID_TOGGLE  5
@@ -64,8 +64,10 @@ static int g_node_count;
 static char g_label[UDEV_MAX][120];
 
 static struct uui_menubar g_menu;
-static struct uui_tab TABS[] = { { "By type", 0 }, { "By connection", 0 } };
-static struct uui_tabs g_tabs;
+// A VIEW SWITCH, so a segmented control -- what Windows and macOS put
+// over a list that can be grouped two ways; tabs would promise two pages.
+static const char *const VIEWS[] = { "By type", "By connection" };
+static struct uui_segmented g_view;
 static struct uui_tree g_tree;
 static struct uui_splitter g_split;
 static struct uui_button g_toggle, g_refresh;
@@ -106,7 +108,7 @@ static const struct uui_menu_item menu_items[] = {
 // item first.
 static struct uui_item g_widgets[] = {
     { .ops = &uui_menubar_ops,   .widget = &g_menu,    .id = ID_MENU,    .name = "menu" },
-    { .ops = &uui_tabs_ops,      .widget = &g_tabs,    .id = ID_TABS,    .name = "view" },
+    { .ops = &uui_segmented_ops, .widget = &g_view,    .id = ID_VIEW,    .name = "view" },
     { .ops = &uui_tree_ops,      .widget = &g_tree,    .id = ID_TREE,    .name = "tree" },
     { .ops = &uui_splitter_ops,  .widget = &g_split,   .id = ID_SPLIT,   .name = "split" },
     { .ops = &uui_checkbox_ops,  .widget = &g_keep,    .id = ID_KEEP,    .name = "keep" },
@@ -118,7 +120,7 @@ static struct uui_item g_widgets[] = {
 
 static struct uui_focusable g_focusables[] = {
     { &g_tree,    &uui_tree_ops },
-    { &g_tabs,    &uui_tabs_ops },
+    { &g_view,    &uui_segmented_ops },
     { &g_keep,    &uui_checkbox_ops },
     { &g_refresh, &uui_button_ops },
     { &g_toggle,  &uui_button_ops },
@@ -304,7 +306,7 @@ static void keep_changed(void) {
 
 static void layout_all(int cw, int ch) {
     int mb = uui_menubar_height(&g_menu), sb = uui_statusbar_height(&g_status);
-    int th = uui_tabs_height(), pad = utheme_pad(), bt = utheme_control_h();
+    int pad = utheme_pad(), bt = utheme_control_h();
     int top = mb, bottom = ch - sb;
 
     uui_menubar_set_geometry(&g_menu, 0, 0, cw, mb);
@@ -317,7 +319,8 @@ static void layout_all(int cw, int ch) {
     int left = uui_splitter_before(&g_split), bar = uui_splitter_thickness();
     uui_splitter_set_geometry(&g_split, uui_splitter_pos(&g_split), top, bar, bottom - top);
 
-    uui_tabs_set_geometry(&g_tabs, 0, top, left, th);
+    uui_segmented_set_geometry(&g_view, pad, top + pad);
+    int th = g_view.h + 2 * pad;
     g_tree.x = 0; g_tree.y = top + th; g_tree.w = left; g_tree.h = bottom - top - th;
 
     g_px = left + bar;
@@ -460,7 +463,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 
 static void set_view(struct uapp *a, int by_conn) {
     g_by_conn = by_conn;
-    uui_tabs_select(&g_tabs, by_conn);
+    g_view.selected = by_conn;
     const struct udevice *d = selected();
     char keep[24] = "";
     if (d) strlcpy(keep, d->id, sizeof keep);
@@ -504,8 +507,8 @@ static void on_widget(struct uapp *a, int id, int reason) {
         uapp_redraw(a);
         return;
     }
-    case ID_TABS:
-        if (g_tabs.selected != g_by_conn) set_view(a, g_tabs.selected);
+    case ID_VIEW:
+        if (g_view.selected != g_by_conn) set_view(a, g_view.selected);
         return;
     }
     if (reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) {
@@ -567,7 +570,7 @@ static void on_size(int *w, int *h) {
 
 int main(void) {
     uui_menubar_init(&g_menu, menu_items, (int)(sizeof menu_items / sizeof menu_items[0]));
-    uui_tabs_init(&g_tabs, TABS, 2, NULL);
+    uui_segmented_init(&g_view, VIEWS, 2, 0);
     uui_tree_init(&g_tree, 0, 0, 0, 0, g_nodes, 0);
     uui_splitter_init(&g_split, 1, 430);
     uui_button_init(&g_toggle, 0, 0, 0, 0, "Disable device", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_TOGGLE);

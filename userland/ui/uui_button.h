@@ -19,6 +19,7 @@ struct uui_button {
     int pressed;         // OWNED -- driven by uui_button_group_press/_release
     int hovered;         // OWNED -- driven by uui_button_group_hover
     int disabled;
+    int focused;         // OWNED -- the focus ring's set_focused
 };
 
 void uui_button_init(struct uui_button *b, int x, int y, int w, int h,

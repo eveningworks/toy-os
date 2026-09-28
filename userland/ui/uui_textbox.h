@@ -60,6 +60,10 @@ struct uui_textbox {
     // nowhere to carry three colours. An app that wants different ones
     // assigns them after init.
     uint32_t bg, fg, border, sel_bg;
+
+    // Shown dimmed while the field is EMPTY ("Find a setting"); NULL for
+    // none. A hint, never a value: it is not in `buf`.
+    const char *placeholder;
 };
 
 void uui_textbox_init(struct uui_textbox *f, const char *initial);

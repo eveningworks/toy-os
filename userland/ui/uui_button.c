@@ -10,6 +10,7 @@ void uui_button_init(struct uui_button *b, int x, int y, int w, int h,
     b->pressed = 0;
     b->hovered = 0;
     b->disabled = 0;
+    b->focused = 0;
 }
 
 void uui_button_natural_size(const struct uui_button *b, int *out_w, int *out_h) {
@@ -54,7 +55,11 @@ static int btn_hit(const void *w, int cx, int cy) {
 }
 
 static void btn_draw(struct ugfx_surface *s, const void *w) {
-    uui_button_draw_one(s, (const struct uui_button *)w);
+    const struct uui_button *b = w;
+    uui_button_draw_one(s, b);
+    // OUTSIDE the face, as uui_checkbox's is: an accent ring on an
+    // accent-filled button (a primary action) would not show at all.
+    if (b->focused && !b->disabled) uui_focus_ring(s, b->x - 2, b->y - 2, b->w + 4, b->h + 4);
 }
 
 // --- routed pointer input, so a LONE button works --------------------
@@ -107,6 +112,20 @@ static int btn_release(void *w, int cx, int cy) {
     return was; // 1 = committed, and the app is told which widget by id
 }
 
+// KEYBOARD: a focused button presses on Space or Enter, as a Win32 and a
+// Qt push button do. A key has no drag to cancel, so it commits at once;
+// the router then names the button to its app with UUI_REASON_KEY. A
+// disabled button refuses focus -- the ring steps over it -- because a
+// NULL accepts_focus means "yes", and the ring used to park on disabled
+// buttons that could neither show the focus nor act on it.
+static int btn_key(void *w, int key, unsigned mods) {
+    (void)mods;
+    const struct uui_button *b = w;
+    return !b->disabled && (key == ' ' || key == '\n' || key == '\r');
+}
+static void btn_set_focused(void *w, int f) { ((struct uui_button *)w)->focused = f; }
+static int btn_accepts_focus(const void *w) { return !((const struct uui_button *)w)->disabled; }
+
 static void button_bounds_op(const void *w, int *x, int *y, int *ow, int *oh) {
     const struct uui_button *c = w;
     *x = c->x; *y = c->y; *ow = c->w; *oh = c->h;
@@ -121,4 +140,7 @@ const struct uui_widget_ops uui_button_ops = {
     .press        = btn_press,
     .motion       = btn_motion,
     .release      = btn_release,
+    .key          = btn_key,
+    .set_focused  = btn_set_focused,
+    .accepts_focus = btn_accepts_focus,
 };
