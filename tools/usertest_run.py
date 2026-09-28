@@ -137,6 +137,10 @@ TESTS = [
     # A path WITH SPACES handed to an app through uopen_spawn() and
     # uapp_spawn() arrives whole. SPAWNED: it waits for its children.
     ("spacepath_test", None, None, None),
+    # lib/udevice.c: the storage controller refuses to be disabled, and
+    # the network card survives a disable/enable round trip. SPAWNED:
+    # an unbind needs a scheduler slot.
+    ("udevice_test", None, None, None),
     # fork() and exec(): SPAWNED (exit code None) because a fork needs a
     # scheduler slot, which the legacy `run` loader has not got.
     ("fork_test", None, None, None),

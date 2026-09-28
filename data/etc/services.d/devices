@@ -1,0 +1,12 @@
+# Re-disables the devices /etc/devices.conf lists -- what the Device
+# Manager's "Keep disabled after restart" and `devctl disable -p` write.
+# A ONE-SHOT, run after the scratch directory is mounted (the runtime
+# record lives there) and before the services that would otherwise
+# start on a device about to be switched off.
+Name=devices
+Description=Re-apply the devices disabled across restarts
+Exec=/bin/devctl
+Args=apply
+Restart=no
+After=tmpfs
+Before=netd soundd

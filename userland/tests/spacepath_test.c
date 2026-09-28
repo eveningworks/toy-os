@@ -49,11 +49,11 @@ static void seen(char *out, int cap) {
 
 static void check_spawn(const char *how, int pid) {
     char got[256];
-    utest_checkf(pid > 0, "%s: the spawn was refused (%d)", how, pid);
+    utest_checkf(pid > 0, "%s: the spawn was accepted (pid %d)", how, pid);
     if (pid > 0) sys_waitpid(pid, 0);
     seen(got, sizeof got);
     utest_checkf(strcmp(got, TARGET) == 0,
-                 "%s: the app was given \"%s\", wanted \"%s\"", how, got, TARGET);
+                 "%s: the app was given the whole path (got \"%s\", wanted \"%s\")", how, got, TARGET);
     unlink(SEEN);
 }
 
@@ -63,13 +63,13 @@ int main(int argc, char **argv) {
     utest_begin("spacepath_test", "a path with spaces reaches the app whole",
                 UTEST_VERDICT_FILE);
     FILE *t = fopen(TARGET, "w");
-    utest_checkf(t != 0, "could not create \"%s\"", TARGET);
+    utest_checkf(t != 0, "created \"%s\"", TARGET);
     if (t) fclose(t);
     unlink(SEEN);
 
     // The literal-path override, as `open -s .spt /tests/spacepath_test`
     // writes it: this binary is the app for the test's own extension.
-    utest_checkf(uconf_set(UOPEN_CONF, EXT, SELF), "could not set the %s override", EXT);
+    utest_checkf(uconf_set(UOPEN_CONF, EXT, SELF), "set the %s override", EXT);
     check_spawn("uopen_spawn", uopen_spawn(TARGET));
     uconf_unset(UOPEN_CONF, EXT);
 

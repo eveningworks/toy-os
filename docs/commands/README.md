@@ -111,6 +111,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`ahci`](ahci.md)
 - [`ata`](ata.md)
 - [`crashlog`](crashlog.md)
+- [`devctl`](devctl.md)
 - [`dmesg`](dmesg.md)
 - [`font`](font.md)
 - [`heap`](heap.md)

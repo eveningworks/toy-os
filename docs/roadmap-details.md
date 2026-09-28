@@ -7021,3 +7021,35 @@ signal.
 Real hardware mostly has no serial port -- `remote.py` drives it over the network --
 so this is a VM-harness change, not a product one.
 
+### `SYS_DEV_CLAIM` HANDS OUT A DEVICE THAT A DRIVER USES WITHOUT A PCI BINDING -- the IDE controller under `ata`, the boot VGA under the display driver.
+
+Found 2026-09-28. The claim's gate (`dev_claim.c`) is "no ring-0 PCI
+driver is bound, or the bound one has a `remove()`". Two drivers here
+use a PCI device without binding it: the legacy ATA driver talks to an
+IDE controller's fixed ports, and the display registry's drivers
+(`bochs`, `vesafb`, `intel_display`) take the boot VGA. To the gate both
+devices look free.
+
+Repro: in `userland/lib/udevice.c`, delete the `d[i].can_disable = 0;`
+under the `ata` adoption, rebuild, and run
+`usertest_run.py -k udevice` on a default guest -- `disabling
+pci:00:01.1` returns 0 instead of `-ENOTSUP`. The same claim from any
+process succeeds today; SYS_DEV_MAP_BAR would then map the registers,
+and a release clears bus mastering under a driver that is using it.
+
+The fix belongs in the kernel: a driver that uses a PCI device outside
+the binding should mark it (`pci_device_claim()` exists for exactly the
+early-boot case), so the gate sees it held.
+
+### `vm.py exec` right after `vm.py start` returns NO OUTPUT for its first command.
+
+Seen 2026-09-28. `vm.py start` reports `vm: ready`, the next `vm.py
+exec "<cmd>"` prints only its `--- <cmd> ---` header, and every later
+exec works. Directly: 3 starts in 4 (`lsusb`, `lspci`, `devctl`). Through
+`usertest_run.py` on a UBSAN+KASAN build (slow boot): its first test,
+`libc_test`, 3 runs in 3, and the guest's log shows the command never
+reached the shell (no `elf_run` line). A normal build's usertest run
+does not show it. Cause not established -- whether `ready` is declared
+before the debug console's shell is taking commands, or the first
+command is consumed by something else, was not measured.
+
