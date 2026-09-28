@@ -35,6 +35,7 @@
 #define REG_RAH    0x5404
 
 #define CTRL_SLU   (1u << 6)   // set link up
+#define CTRL_RST   (1u << 26)  // global reset; clears itself when done
 #define CTRL_ASDE  (1u << 5)   // auto-speed detection
 
 #define RCTL_EN    (1u << 1)
@@ -77,6 +78,19 @@ struct tx_desc {
     uint8_t  css;
     uint16_t special;
 } __attribute__((packed));
+
+// A descriptor handed to the card and not yet written back.
+static inline int e1000_tx_busy(const struct tx_desc *d) {
+    return d->cmd && !(d->status & TX_STATUS_DD);
+}
+
+// Full when the slot about to be used OR THE ONE AFTER IT is still the
+// card's. The second is the trap: posting into the last free slot moves
+// TDT onto TDH, which the card reads as an EMPTY ring -- every queued
+// frame stalls. So one slot always stays free.
+static inline int e1000_tx_full(const struct tx_desc *ring, uint32_t n, uint32_t cur) {
+    return e1000_tx_busy(&ring[cur]) || e1000_tx_busy(&ring[(cur + 1) % n]);
+}
 
 _Static_assert(sizeof(struct rx_desc) == 16, "rx descriptor is 16 bytes");
 _Static_assert(sizeof(struct tx_desc) == 16, "tx descriptor is 16 bytes");

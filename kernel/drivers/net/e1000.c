@@ -125,10 +125,9 @@ static int e1000_transmit(struct net_device *dev, const void *frame, uint32_t le
     struct e1000 *e = &g_e1000;
     struct tx_desc *d = &e->tx[e->tx_cur];
 
-    // The ring is full when the descriptor we are about to reuse has
-    // not been written back. Report it rather than overwriting a frame
-    // the device may still be reading.
-    if (d->cmd && !(d->status & TX_STATUS_DD)) return -ENOSPC;
+    // Full (e1000_tx_full(), which keeps one slot free): report it rather
+    // than overwriting a frame the device may still be reading.
+    if (e1000_tx_full(e->tx, TX_DESCS, e->tx_cur)) return -ENOSPC;
 
     k_memcpy(e->tx_buf + (uint64_t)e->tx_cur * BUF_SIZE, frame, len);
     d->addr = e->tx_buf_phys + (uint64_t)e->tx_cur * BUF_SIZE;

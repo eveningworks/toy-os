@@ -51,6 +51,25 @@ static int e1k_claim(const struct pci_device *pci, uint8_t mac[6]) {
     g_txbuf_phys = txb;
 
     pci_enable_bus_master(pci);
+    // A GLOBAL RESET FIRST: firmware (a PXE or UEFI network stack) may
+    // have left the card running, DMAing into rings that are not ours.
+    // Receive and transmit off, then CTRL.RST, which clears itself; the
+    // EEPROM reload that follows is what sets RAH.AV again. Both waits
+    // are bounded -- a card that never finishes is refused, not hung on.
+    wr(REG_IMC, 0xFFFFFFFFu);
+    wr(REG_RCTL, 0);
+    wr(REG_TCTL, 0);
+    rd(REG_STATUS);
+    wr(REG_CTRL, rd(REG_CTRL) | CTRL_RST);
+    for (int i = 0; i < 1000; i++) cpu_relax();   // no register access for ~1 us
+    for (int spin = 0; rd(REG_CTRL) & CTRL_RST; spin++) {
+        if (spin > 1000000) return 0;
+        cpu_relax();
+    }
+    for (int spin = 0; !(rd(REG_RAH) & RAH_AV); spin++) {
+        if (spin > 1000000) return 0;
+        cpu_relax();
+    }
     wr(REG_IMC, 0xFFFFFFFFu);   // polled: no interrupt, ever
     rd(REG_ICR);
     wr(REG_CTRL, rd(REG_CTRL) | CTRL_SLU | CTRL_ASDE);
@@ -101,7 +120,7 @@ static int e1k_send(const void *frame, int len) {
     if (len > KBUF) return 0;
     struct tx_desc *d = &g_tx[g_tx_cur];
     // Bounded: a card that never completes must not hang the debugger.
-    for (int spin = 0; d->cmd && !(d->status & TX_STATUS_DD); spin++) {
+    for (int spin = 0; e1000_tx_full(g_tx, KTX, g_tx_cur); spin++) {
         if (spin > 1000000) return 0;
         cpu_relax();
     }
