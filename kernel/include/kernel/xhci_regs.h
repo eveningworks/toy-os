@@ -111,6 +111,7 @@
 #define XHCI_PORTSC_CEC     (1u << 23)  // Port Config Error Chg   -- RW1C
 
 // Port Link State values (xHCI 1.2, 5.4.8).
+#define XHCI_PLS_RXDETECT    5   // nothing on the other end: an unplug
 #define XHCI_PLS_SS_INACTIVE 6
 #define XHCI_PLS_COMPLIANCE  10
 
@@ -256,5 +257,14 @@ struct xhci_erst_entry {
     uint32_t size;    // TRBs in the segment
     uint32_t rsvd;
 } __attribute__((packed));
+
+// A Supported Protocol range -- 1-based ports first..first+count-1 -- as
+// a mask with bit (port - 1) set, for the first 32 ports.
+static inline uint32_t xhci_port_range_mask(uint32_t first, uint32_t count) {
+    uint32_t m = 0;
+    for (uint32_t n = first; n < first + count && n <= 32; n++)
+        if (n) m |= 1u << (n - 1);
+    return m;
+}
 
 #endif

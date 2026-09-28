@@ -125,6 +125,9 @@ struct xhci_hc {
     // event dispatch, consumed by xhci_deferred_work() -- enumeration
     // is synchronous control transfers, and running those inside the
     // event drain would deadlock on the single-consumer guard.
+    // EVERY update goes through pend_set()/pend_clear(): the interrupt
+    // sets bits while the deferred work clears others, and a plain |= or
+    // &= there loses whichever landed between its load and its store.
     volatile uint32_t attach_pending;
     volatile uint32_t detach_pending;
     // A USB3 port whose link failed (xhci_portsc_needs_warm()): warm-reset
@@ -186,6 +189,10 @@ struct xhci_hc {
     // would be a generation this driver does not know and is ignored
     // rather than guessed at.
     struct xhci_proto_range usb2, usb3;
+    // EVERY USB3 port, from every Supported Protocol range with major 3;
+    // `usb3` keeps one range, for companion_port(), and a controller may
+    // list 3.0 and 3.1 separately.
+    uint32_t usb3_ports;
 };
 
 // One addressed device. The contexts are the controller's view of it,
@@ -202,6 +209,13 @@ struct xhci_slot {
 };
 
 static struct xhci_hc g_hc;
+
+static inline void pend_set(volatile uint32_t *mask, uint32_t bit) {
+    __atomic_fetch_or(mask, 1u << bit, __ATOMIC_SEQ_CST);
+}
+static inline void pend_clear(volatile uint32_t *mask, uint32_t bit) {
+    __atomic_fetch_and(mask, ~(1u << bit), __ATOMIC_SEQ_CST);
+}
 static struct xhci_slot g_slots[XHCI_MAX_SLOTS + 1];   // slot ids are 1-based
 
 // Where a synchronous waiter picks up its answer. The event ring has
@@ -425,6 +439,7 @@ static void walk_xecp(uint32_t hcc1) {
             // socket looks like it moved sockets.
             struct xhci_proto_range *r = major == 2 ? &g_hc.usb2
                                        : major == 3 ? &g_hc.usb3 : 0;
+            if (major == 3) g_hc.usb3_ports |= xhci_port_range_mask(first, cnt);
             if (r && first && cnt) {
                 r->major = (uint8_t)major;
                 r->first = (uint8_t)first;
@@ -1746,13 +1761,13 @@ static void note_port_change(void) {
         // that would deadlock on the single-consumer guard. A plug
         // while the machine is busy still lands, because the pending
         // bit survives until the poll gets to it.
-        if (now && !was) g_hc.attach_pending |= (1u << p);
+        if (now && !was) pend_set(&g_hc.attach_pending, p);
         if (!now && was) {
             g_hc.ports[p].gone_sc = sc;
-            g_hc.detach_pending |= (1u << p);
-            g_hc.attach_pending &= ~(1u << p);   // it left before we got there
+            pend_set(&g_hc.detach_pending, p);
+            pend_clear(&g_hc.attach_pending, p);   // it left before we got there
         }
-        if (!now && xhci_portsc_needs_warm(sc)) g_hc.warm_pending |= (1u << p);
+        if (!now && xhci_portsc_needs_warm(sc)) pend_set(&g_hc.warm_pending, p);
     }
 }
 
@@ -2189,7 +2204,7 @@ static void requeue_if_connected(uint32_t p) {
     // waited for. The pending detach is dropped with it: it describes
     // this same transition, and left set it would tear down whatever
     // comes back.
-    g_hc.detach_pending &= ~(1u << p);
+    pend_clear(&g_hc.detach_pending, p);
     if (usb_root_port_slot((uint8_t)(p + 1))) {
         klog_printf("usb: port %u: tearing down the device the cycle "
                     "disconnected\n", p + 1);
@@ -2203,7 +2218,7 @@ static void requeue_if_connected(uint32_t p) {
     if (!(mr32(g_hc.op, XHCI_PORTSC(p)) & XHCI_PORTSC_CCS)) return;
     klog_printf("usb: port %u: still connected after the cycle -- "
                 "re-attaching\n", p + 1);
-    g_hc.attach_pending |= (1u << p);
+    pend_set(&g_hc.attach_pending, p);
 }
 
 // A LAST RESORT FOR A DEVICE THAT FELL BACK TO USB2 AND THEN FAILED:
@@ -2231,8 +2246,7 @@ static void requeue_if_connected(uint32_t p) {
 // Only ever a USB3 port: WPR is meaningless on a USB2 one, and asserting
 // a reserved bit is not a diagnostic.
 static int is_usb3_port(uint32_t p) {
-    return g_hc.usb3.count && p + 1 >= g_hc.usb3.first &&
-           p + 1 < (uint32_t)g_hc.usb3.first + g_hc.usb3.count;
+    return p < 32 && (g_hc.usb3_ports & (1u << p));
 }
 
 static void warm_reset_companion(uint32_t p) {
@@ -2767,7 +2781,7 @@ int usb_diag_replug_port(unsigned port) {
     //
     // QUEUED for the same reason the forced reset is: the caller is a
     // syscall with interrupts off, and this waits on coarse_ticks().
-    g_hc.diag_power_pending |= (1u << (port - 1));
+    pend_set(&g_hc.diag_power_pending, port - 1);
     klog_printf("usb: port %u: replug queued\n", port);
     return 1;
 }
@@ -2780,7 +2794,7 @@ int usb_diag_reset_port(unsigned port) {
     // advances -- see diag_reset_pending. Returns 1 for "accepted"; the
     // OUTCOME is in the log a moment later, because there is nobody left
     // to return it to.
-    g_hc.diag_reset_pending |= (1u << (port - 1));
+    pend_set(&g_hc.diag_reset_pending, port - 1);
     klog_printf("usb: port %u: forced reset queued\n", port);
     return 1;
 }
@@ -2940,7 +2954,7 @@ static void link_recover(uint32_t p) {
         // The change bits were cleared above, so no event will announce
         // it: queue it the way note_port_change() would have.
         g_hc.ports[p].connected = 1;
-        __atomic_fetch_or(&g_hc.attach_pending, 1u << p, __ATOMIC_SEQ_CST);
+        pend_set(&g_hc.attach_pending, p);
     }
 }
 
@@ -2961,7 +2975,7 @@ void xhci_deferred_work(void) {
 
     for (uint32_t p = 0; p < g_hc.max_ports && p < XHCI_MAX_PORTS; p++) {
         if (g_hc.detach_pending & (1u << p)) {
-            g_hc.detach_pending &= ~(1u << p);
+            pend_clear(&g_hc.detach_pending, p);
             // A REAL DISCONNECT ENDS THE EPISODE, so a device unplugged
             // and plugged back in gets the power cycle again if it needs
             // it -- the flag is "already tried for THIS device", not
@@ -2970,20 +2984,22 @@ void xhci_deferred_work(void) {
             // The link state says WHY: RxDetect is an unplug, SS.Inactive
             // a failed link with the device still there.
             uint32_t gone = g_hc.ports[p].gone_sc;
+            // A real unplug ends the warm-reset episode too, so the next
+            // device in this socket gets its tries even after a give-up.
+            if (XHCI_PORTSC_PLS(gone) == XHCI_PLS_RXDETECT) g_hc.ports[p].warm_tries = 0;
             klog_printf("usb: port %u: device removed (portsc 0x%x, link %s)\n",
                         p + 1, gone, pls_name(gone));
             usb_detach_root_port((uint8_t)(p + 1));
         }
         if (g_hc.warm_pending & (1u << p)) {
-            // Atomic: the interrupt sets other ports' bits in between.
-            __atomic_fetch_and(&g_hc.warm_pending, ~(1u << p), __ATOMIC_SEQ_CST);
+            pend_clear(&g_hc.warm_pending, p);
             link_recover(p);
         }
         // The forced diagnostic reset (kernel.usb_reset). Before the
         // attach below, so a port that is pending both is reset once
         // deliberately rather than attached and then reset under it.
         if (g_hc.diag_power_pending & (1u << p)) {
-            g_hc.diag_power_pending &= ~(1u << p);
+            pend_clear(&g_hc.diag_power_pending, p);
             // FORCED, so the once-per-episode guard is cleared first:
             // the operator asking for it is the whole point, and a
             // refusal saying "already cycled" would be answering a
@@ -2992,11 +3008,11 @@ void xhci_deferred_work(void) {
             software_replug(p);
         }
         if (g_hc.diag_reset_pending & (1u << p)) {
-            g_hc.diag_reset_pending &= ~(1u << p);
+            pend_clear(&g_hc.diag_reset_pending, p);
             diag_reset_port(p);
         }
         if (g_hc.attach_pending & (1u << p)) {
-            g_hc.attach_pending &= ~(1u << p);
+            pend_clear(&g_hc.attach_pending, p);
             // The bring-up ITSELF raises a connect change for a device
             // that was there all along, before scan_ports() has
             // recorded anything -- and acting on that re-resets a

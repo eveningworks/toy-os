@@ -215,6 +215,16 @@ KTEST("xhci-ring", "an event naming a TRB frees everything up to and including i
 // 12 went dark with an RTL8156B still plugged in, reading 0x2c0 (SS.Inactive),
 // while every empty port read 0x2a0 (RxDetect). Only the first wants a warm
 // reset -- an unplugged port must not be reset on every event.
+KTEST("xhci", "every Supported Protocol range counts, as a mask of 1-based ports") {
+    KTEST_ASSERT_EQ(xhci_port_range_mask(1, 4), 0x0000000Fu);
+    KTEST_ASSERT_EQ(xhci_port_range_mask(13, 4), 0x0000F000u);   // the Lenovo's USB3 half
+    // Two ranges -- USB 3.0 and 3.1 listed apart -- are both USB3 ports.
+    KTEST_ASSERT_EQ(xhci_port_range_mask(5, 2) | xhci_port_range_mask(7, 2), 0x000000F0u);
+    KTEST_ASSERT_EQ(xhci_port_range_mask(0, 2), 0x00000001u);    // no port 0
+    KTEST_ASSERT_EQ(xhci_port_range_mask(31, 4), 0xC0000000u);   // clamped at 32
+    KTEST_ASSERT_EQ(xhci_port_range_mask(3, 0), 0u);
+}
+
 KTEST("xhci", "a failed SuperSpeed link, and only that, wants a warm reset") {
     KTEST_ASSERT(xhci_portsc_needs_warm(0x000002c0));    // SS.Inactive, the Lenovo
     KTEST_ASSERT(xhci_portsc_needs_warm(0x00000340));    // Compliance Mode
