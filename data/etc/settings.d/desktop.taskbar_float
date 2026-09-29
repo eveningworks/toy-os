@@ -1,0 +1,11 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Floating panel
+Category=Desktop
+Group=Taskbar
+Default=off
+Choices=off,on
+Description=Stand the panel off the screen's edges while no window is maximized
+Order=30
+Choice.off=Off
+Choice.on=On

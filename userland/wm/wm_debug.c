@@ -18,6 +18,7 @@
 #include "start_menu.h"
 #include "start_store.h"
 #include "wm_tooltip.h"
+#include "wm_peek.h"
 #include "context_menu.h"
 #include "confirm_dialog.h"
 #include "gui_apps.h"
@@ -652,6 +653,35 @@ static const char *menu_kind_name(int kind) {
 // own command rather than a field on `gui menu`, because it is the
 // panel's and not the menu's -- the taskbar and the tray are the next
 // things to use it.
+// The taskbar peek card: where it is and each entry's thumbnail and
+// close rects, from the same functions that draw and hit-test them.
+static void cmd_peek(struct dbg_out *o, int json) {
+    static const char *const modes[] = { "off", "preview", "highlight" };
+    struct wm_peek_entry_info e[8];
+    int x = 0, y = 0, w = 0, h = 0;
+    int n = wm_peek_state(&x, &y, &w, &h, e, 8);
+    int hl = wm_peek_highlight_index();
+    if (json) {
+        dbg_out_printf(o, "{\"open\":%s,\"mode\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
+                          "\"highlight\":\"%s\",\"entries\":[",
+                       wm_peek_open ? "true" : "false", modes[wm_peek_mode()], x, y, w, h,
+                       hl >= 0 ? windows[hl].title : "");
+        for (int i = 0; i < n; i++)
+            dbg_out_printf(o, "%s{\"title\":\"%s\",\"thumb\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d},"
+                              "\"close\":{\"x\":%d,\"y\":%d,\"s\":%d}}",
+                           i ? "," : "", e[i].title, e[i].thumb_x, e[i].thumb_y,
+                           e[i].thumb_w, e[i].thumb_h, e[i].close_x, e[i].close_y, e[i].close_s);
+        dbg_out_write(o, "]}\r\n");
+        return;
+    }
+    if (!n) { dbg_out_printf(o, "peek: closed (%s)\r\n", modes[wm_peek_mode()]); return; }
+    dbg_out_printf(o, "peek: %d entr%s at %d,%d %dx%d%s%s\r\n", n, n == 1 ? "y" : "ies",
+                   x, y, w, h, hl >= 0 ? ", highlighting " : "", hl >= 0 ? windows[hl].title : "");
+    for (int i = 0; i < n; i++)
+        dbg_out_printf(o, "  \"%s\" thumb %dx%d at %d,%d\r\n", e[i].title,
+                       e[i].thumb_w, e[i].thumb_h, e[i].thumb_x, e[i].thumb_y);
+}
+
 static void cmd_tooltip(struct dbg_out *o, int json) {
     const char *text = "";
     int x = 0, y = 0, w = 0, h = 0;
@@ -753,7 +783,7 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
     struct taskbar_geom g;
     taskbar_geom(&g);
     const struct taskbar_palette *pal = taskbar_palette();
-    static const char *const style_names[] = { "classic", "centered", "floating" };
+    static const char *const button_names[] = { "labelled", "icons" };
     char start_mark_buf[48];
     static struct taskbar_button btns[64];
     int nb = taskbar_layout(btns, 64);
@@ -776,13 +806,17 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
         // `start` is the HIT rect (the band's height, and from x=0 when
         // Start is leftmost); `panel` is where the strip is drawn, and
         // `edge`/`bar` are its colours as 0xRRGGBB for a pixel check.
-        // TWO CALLS: one line is KFMT_LINE_MAX, and this header outgrew it.
-        dbg_out_printf(o, "{\"y\":%d,\"h\":%d,\"style\":\"%s\",\"theme\":\"%s\","
-                     "\"floating\":%s,\"panel\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"r\":%d},"
-                     "\"btn_y\":%d,\"btn_h\":%d,\"bar\":%u,\"edge\":%u,\"ink\":%u,\"hover\":%d,",
-                     bar_y, taskbar_h, style_names[taskbar_style()],
+        // THREE CALLS: one line is KFMT_LINE_MAX, and this header outgrew it.
+        dbg_out_printf(o, "{\"y\":%d,\"h\":%d,\"buttons_kind\":\"%s\",\"align_center\":%s,"
+                     "\"theme\":\"%s\",\"float\":%s,\"start_center\":%s,\"floating\":%s,",
+                     bar_y, taskbar_h, button_names[taskbar_buttons()],
+                     taskbar_align_centered() ? "true" : "false",
                      taskbar_dark() ? "dark" : "light",
-                     taskbar_floating() ? "true" : "false",
+                     taskbar_float_on() ? "true" : "false",
+                     taskbar_start_centered() ? "true" : "false",
+                     taskbar_floating() ? "true" : "false");
+        dbg_out_printf(o, "\"panel\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"r\":%d},"
+                     "\"btn_y\":%d,\"btn_h\":%d,\"bar\":%u,\"edge\":%u,\"ink\":%u,\"hover\":%d,",
                      g.px, g.py, g.pw, g.ph, g.radius, g.btn_y, g.btn_h,
                      (unsigned)pal->bar_rgb, (unsigned)pal->edge_rgb,
                      (unsigned)pal->text_rgb, taskbar_hover());
@@ -818,8 +852,11 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
 
     dbg_out_printf(o, "taskbar: y=%d h=%d tray_x=%d tray_pressed=%d hidden=%d\r\n",
                  bar_y, taskbar_h, tray_left(), tray_pressed_item(), taskbar_hidden());
-    dbg_out_printf(o, "  style=%s theme=%s floating=%d panel=(%d,%d %dx%d)\r\n",
-                   style_names[taskbar_style()], taskbar_dark() ? "dark" : "light",
+    dbg_out_printf(o, "  buttons=%s align=%s start=%s theme=%s floating=%d panel=(%d,%d %dx%d)\r\n",
+                   button_names[taskbar_buttons()],
+                   taskbar_align_centered() ? "center" : "left",
+                   taskbar_start_centered() ? "center" : "left",
+                   taskbar_dark() ? "dark" : "light",
                    taskbar_floating(), g.px, g.py, g.pw, g.ph);
     dbg_out_write(o, "  start   x="); col_int(o, ssx, 6);
     dbg_out_write(o, "w="); col_int(o, ssw, 6);
@@ -1633,6 +1670,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  click X Y [BUTTON]    BUTTON 1-5; 4 and 5 are the thumb buttons\r\n");
     dbg_out_write(o, "  menu [--json]         start menu row geometry, as the kernel computes it\r\n");
     dbg_out_write(o, "  tooltip [--json]      what the hover tooltip says, and where\r\n");
+    dbg_out_write(o, "  peek [--json]         the taskbar's window preview: card, thumbnails, highlight\r\n");
     dbg_out_write(o, "  ctxmenu [--json]      the open right-click menu's rows, same shape as `menu`\r\n");
     dbg_out_write(o, "  dialog [--json]       the open confirm dialog's message and button centres\r\n");
     dbg_out_write(o, "  rclick X Y            right-click, which is what opens a context menu\r\n");
@@ -1730,6 +1768,7 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
     if (k_strcmp(sub, "windows") == 0)      { cmd_windows(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "menu") == 0)         { cmd_menu(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "tooltip") == 0)      { cmd_tooltip(o, wants_json(p)); return 1; }
+    if (k_strcmp(sub, "peek") == 0)         { cmd_peek(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "ctxmenu") == 0)      { cmd_ctxmenu(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "dialog") == 0)       { cmd_dialog(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "taskbar") == 0)      { cmd_taskbar(o, wants_json(p)); return 1; }

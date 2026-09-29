@@ -1,0 +1,11 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Button position
+Category=Desktop
+Group=Taskbar
+Default=left
+Choices=left,center
+Description=Where the window buttons sit on the taskbar
+Order=11
+Choice.left=Left
+Choice.center=Centre

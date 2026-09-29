@@ -1,6 +1,7 @@
 // See wm_overlay.h for what this is and why the table drives three
 // verbs rather than one.
 #include "wm_internal.h"
+#include "wm_peek.h"
 #include "wm_overlay.h"
 #include "wm_log.h"   // overlay transitions, under damage verification
 #include "wm_shadow.h"   // wm_damage_window_rect: the rect PLUS its shadow
@@ -39,6 +40,8 @@ static int open_osk(void)     { return osk_open; }
 static int open_tooltip(void) { return wm_tooltip_open; }
 static int tooltip_click(int mx, int my) { (void)mx; (void)my; return 0; }
 
+static int open_peek(void) { return wm_peek_open; }
+
 static const struct wm_overlay g_overlays[] = {
     // FIRST, so it is PAINTED LAST and lands on top of everything --
     // including the menu whose row it describes. Its click op always
@@ -47,6 +50,11 @@ static const struct wm_overlay g_overlays[] = {
     // about them. No hover op either; it is not a control.
     { "tooltip",  open_tooltip,  wm_tooltip_draw,  tooltip_click,
       0, wm_tooltip_damage, wm_tooltip_rect, 0, 0, 0, wm_tooltip_cancel, 0, 0 },
+    // The taskbar's window preview (wm_peek.h): above every menu, since
+    // it only opens while none is up, and its click falls through when
+    // it lands outside the card.
+    { "peek",     open_peek,     wm_peek_draw,     wm_peek_click,
+      wm_peek_hover_at,          wm_peek_damage,          wm_peek_rect, 0, 0, 0, wm_peek_close, 0, 0 },
     { "confirm",  open_confirm,  draw_confirm,     confirm_dialog_handle_click,
       confirm_dialog_hover_at,   confirm_dialog_damage,   0 /* a full repaint, on purpose */, confirm_dialog_update_press, 0, 0, 0, 0, 0 },
     { "context",  open_context,  context_menu_draw, context_menu_handle_click,

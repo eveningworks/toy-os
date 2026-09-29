@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
-"""tools/taskbar_style_test.py -- the taskbar's three styles and two
-themes, each checked where it is DRAWN as well as where it is reported.
+"""tools/taskbar_style_test.py -- the taskbar's independent layout
+settings and its two themes, each checked where it is DRAWN as well as
+where it is reported.
 
 WHAT THIS IS
 ------------
-`desktop.taskbar_style` is classic | centered | floating and
-`desktop.taskbar_theme` dark | light (userland/wm/wm_taskbar.h). One
+`desktop.taskbar_buttons` labelled | icons, `desktop.taskbar_align` and
+`desktop.start_position` left | center, `desktop.taskbar_float` off | on
+and `desktop.taskbar_theme` dark | light (userland/wm/wm_taskbar.h). One
 layout function and one draw function serve all of them, reading
 taskbar_geom(), so each check pairs the WM's report (`gui taskbar
 --json`, from that same function) with a pixel the report could not
 fake:
 
-  * classic: the default -- labelled buttons from the left, the panel
-    filling the band, the Start button icon-only and owning the corner.
+  * the defaults -- labelled buttons from the left, the panel filling
+    the band, the Start button icon-only and owning the corner.
   * floating: the band grows by the gap and the panel stands off the
     edges -- the screen's corner pixel is NOT the strip's colour -- and
     it DEFLATES to fill the band while a window is maximized.
-  * centered: square icon-only buttons centred with Start; hovering
-    one lights it and arms the tooltip with the window's full title.
+  * icons + centre + Start centre (Windows 11): 48px icon buttons
+    centred with Start; hovering one lights it and (with peek off) arms
+    the tooltip with the full title. Start left instead puts it at x=0
+    and centres the rest; that floats too. Icons from the LEFT pack
+    straight after Start; labelled buttons can be centred; and Start
+    centred over left-aligned buttons sits alone in the middle with the
+    buttons clear of it.
   * light: the strip is drawn in the light palette.
 
     python3 tools/vm.py --disk <copy> start
@@ -32,7 +39,7 @@ the deflate check with them; dropping the `hovered` fill in
 draw_taskbar() turns "the hovered button is drawn lit" red while the
 JSON hover check stays green -- the reason both exist.
 
-It leaves the style and theme UNSET on the way out: `make iso` syncs
+It leaves every taskbar setting UNSET on the way out: `make iso` syncs
 rather than reformats, so a setting written here outlives the run.
 """
 
@@ -109,7 +116,8 @@ def main():
     with DebugConsole(args.sock) as dbg:
         dbg.settle()
         # A clean fixture: nothing a previous tool left behind.
-        for k in ("taskbar_style", "taskbar_theme", "taskbar_height", "start_button"):
+        for k in ("taskbar_buttons", "taskbar_align", "taskbar_float", "start_position", "taskbar_theme",
+                  "taskbar_height", "start_button", "taskbar_peek"):
             dbg.send(f"sh config unset desktop.{k}")
         dbg.settle()
         for app in ("Terminal", "Notepad"):
@@ -121,12 +129,13 @@ def main():
 
         # --- classic, the default ------------------------------------
         print("classic (the default)")
-        tb = set_and_wait(dbg, "desktop.taskbar_style", None,
-                          lambda t: t.get("style") == "classic")
+        tb = set_and_wait(dbg, "desktop.taskbar_buttons", None,
+                          lambda t: t.get("buttons_kind") == "labelled")
         sh = tb["y"] + tb["h"]
-        res.check("the default style is classic, dark, 48px",
-                  tb.get("style") == "classic" and tb.get("theme") == "dark" and tb["h"] == 48,
-                  f"style={tb.get('style')} theme={tb.get('theme')} h={tb['h']}")
+        res.check("the defaults are labelled, left, Start left, dark, 48px",
+                  tb.get("buttons_kind") == "labelled" and tb.get("align_center") is False
+                  and tb.get("start_center") is False and tb.get("theme") == "dark" and tb["h"] == 48,
+                  f"{ {k: tb.get(k) for k in ('buttons_kind', 'align_center', 'start_center', 'theme', 'h')} }")
         p = tb["panel"]
         res.check("classic's panel fills the band",
                   p["x"] == 0 and p["y"] == tb["y"] and p["h"] == tb["h"] and p["r"] == 0, f"{p}")
@@ -143,8 +152,8 @@ def main():
 
         # --- floating ------------------------------------------------
         print("floating")
-        tb = set_and_wait(dbg, "desktop.taskbar_style", "floating",
-                          lambda t: t.get("style") == "floating")
+        tb = set_and_wait(dbg, "desktop.taskbar_float", "on",
+                          lambda t: t.get("float") is True)
         p = tb["panel"]
         res.check("the band grows by the gap and the panel stands off the edges",
                   tb.get("floating") is True and tb["h"] == 56 and tb["y"] + tb["h"] == sh
@@ -193,13 +202,20 @@ def main():
                 dbg.click(*row)
         dbg.settle()
 
-        # --- centered ------------------------------------------------
-        print("centered")
-        tb = set_and_wait(dbg, "desktop.taskbar_style", "centered",
-                          lambda t: t.get("style") == "centered")
+        # --- icons, centred with Start (Windows 11) ---------------------
+        print("icons, centred with Start")
+        set_and_wait(dbg, "desktop.taskbar_float", None, lambda t: t.get("float") is False)
+        # The tooltip half below is the peek-OFF behaviour; peek has its
+        # own tool (taskbar_peek_test.py).
+        dbg.send("sh config set desktop.taskbar_peek off")
+        dbg.send("sh config set desktop.taskbar_buttons icons")
+        dbg.send("sh config set desktop.taskbar_align center")
+        tb = set_and_wait(dbg, "desktop.start_position", "center",
+                          lambda t: t.get("buttons_kind") == "icons" and t.get("align_center")
+                          and t.get("start_center"))
         btns = tb["buttons"]
         sw = dbg.state()["screen"]["w"]
-        square = all(b["w"] == tb["btn_h"] + 4 for b in btns)
+        square = all(b["w"] == tb["btn_h"] + 8 for b in btns)
         left = tb["start"]["x"]
         right = max(b["x"] + b["w"] for b in btns) if btns else 0
         res.check("the buttons are square icons, centred with Start",
@@ -235,6 +251,61 @@ def main():
         else:
             res.check("a non-focused button to hover", False, f"{btns}")
 
+        # START LEFT: x=0, and the buttons still centred on their own,
+        # clear of it.
+        tb = set_and_wait(dbg, "desktop.start_position", None,
+                          lambda t: t.get("start_center") is False)
+        btns = tb["buttons"]
+        left = btns[0]["x"] if btns else 0
+        right = max(b["x"] + b["w"] for b in btns) if btns else 0
+        res.check("Start left puts it in the corner and the icons stay centred",
+                  tb["start"]["x"] == 0 and abs((left + right) / 2 - sw / 2) <= 3
+                  and left > tb["start"]["w"],
+                  f"start {tb['start']}, buttons {left}..{right}")
+        # AND IT FLOATS: the two settings are independent.
+        tb = set_and_wait(dbg, "desktop.taskbar_float", "on",
+                          lambda t: t.get("floating") is True)
+        corner = pixel(qmp, tmp, "centred-float", 2, sh - 4)
+        res.check("the centred icons float too",
+                  tb["buttons_kind"] == "icons" and tb["panel"]["x"] == 8 and corner != rgb(tb["bar"]),
+                  f"buttons {tb['buttons_kind']} panel {tb['panel']} corner {corner}")
+        set_and_wait(dbg, "desktop.taskbar_float", None, lambda t: t.get("float") is False)
+
+        # ICONS FROM THE LEFT (Plasma's default): packed straight after Start.
+        tb = set_and_wait(dbg, "desktop.taskbar_align", None,
+                          lambda t: t.get("align_center") is False)
+        btns = tb["buttons"]
+        packed = all(btns[k + 1]["x"] - btns[k]["x"] == btns[k]["w"] + 4 for k in range(len(btns) - 1))
+        res.check("icons from the left pack straight after Start",
+                  btns and btns[0]["x"] == tb["start"]["x"] + tb["start"]["w"] + 4 and packed,
+                  f"start {tb['start']}, buttons {[(b['x'], b['w']) for b in btns]}")
+
+        # START CENTRED OVER LEFT-ALIGNED BUTTONS: alone in the middle,
+        # and no button reaches it.
+        tb = set_and_wait(dbg, "desktop.start_position", "center",
+                          lambda t: t.get("start_center") is True)
+        st = tb["start"]
+        right = max(b["x"] + b["w"] for b in tb["buttons"]) if tb["buttons"] else 0
+        res.check("a centred Start over left buttons sits alone in the middle",
+                  abs(st["x"] + st["w"] / 2 - sw / 2) <= 2 and right < st["x"]
+                  and tb["buttons"] and tb["buttons"][0]["x"] < 60,
+                  f"start {st}, buttons end at {right}")
+        set_and_wait(dbg, "desktop.start_position", None, lambda t: t.get("start_center") is False)
+
+        # LABELLED AND CENTRED: the labels survive, the group centres.
+        dbg.send("sh config unset desktop.taskbar_buttons")
+        tb = set_and_wait(dbg, "desktop.taskbar_align", "center",
+                          lambda t: t.get("align_center") and t.get("buttons_kind") == "labelled")
+        btns = tb["buttons"]
+        left = btns[0]["x"] if btns else 0
+        right = max(b["x"] + b["w"] for b in btns) if btns else 0
+        res.check("labelled buttons can be centred too",
+                  btns and all(b["label"] == b["title"] for b in btns)
+                  and abs((left + right) / 2 - sw / 2) <= 3,
+                  f"buttons {left}..{right} on {sw}, labels {[b['label'] for b in btns]}")
+        set_and_wait(dbg, "desktop.taskbar_align", None, lambda t: t.get("align_center") is False)
+        dbg.send("sh config unset desktop.taskbar_peek")
+
         # --- the light theme -------------------------------------------
         print("light")
         tb = set_and_wait(dbg, "desktop.taskbar_theme", "light",
@@ -245,7 +316,8 @@ def main():
 
         # Back to the defaults for every later tool.
         set_and_wait(dbg, "desktop.taskbar_theme", None, lambda t: t.get("theme") == "dark")
-        set_and_wait(dbg, "desktop.taskbar_style", None, lambda t: t.get("style") == "classic")
+        for k in ("taskbar_buttons", "taskbar_align", "start_position", "taskbar_float"):
+            dbg.send(f"sh config unset desktop.{k}")
 
     n_ok, n_bad = len(res.passes), len(res.fails)
     print(f"\ntaskbar_style_test: {n_ok} passed, {n_bad} failed")

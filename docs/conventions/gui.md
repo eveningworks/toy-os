@@ -1564,25 +1564,37 @@ this the obvious way), not from how much history it accumulated.
   `WIN_REQ_WINDOW_INFO`'s single `text` is the title. A window with no
   identity groups by client pid instead. See
   `docs/decisions.md`, and `tools/taskbar_test.py` for the thresholds.
-- **THE TASKBAR HAS THREE STYLES OVER ONE LAYOUT, AND EVERY RECT COMES
-  FROM `taskbar_geom()`.** `desktop.taskbar_style` = `classic`
-  (labelled buttons, the default) | `centered` (icon-only, Windows 11's)
-  | `floating` (a detached rounded panel, Plasma 6's), and
-  `desktop.taskbar_theme` = `dark` | `light` picks
-  `taskbar_palette()`. A style is MEASUREMENTS, not a second taskbar:
-  `taskbar_layout()` branches once for the centred row, and
-  `draw_taskbar()` once per indicator. **Hit-test against the BAND,
+- **THE TASKBAR'S LAYOUT IS FOUR INDEPENDENT SETTINGS, AND EVERY RECT
+  COMES FROM `taskbar_geom()`.** `desktop.taskbar_buttons` = `labelled` |
+  `icons`, `desktop.taskbar_align` and `desktop.start_position` = `left`
+  | `center`, `desktop.taskbar_float` = `off` | `on` -- Plasma's shape,
+  where each is its own control -- and `desktop.taskbar_theme` = `dark` |
+  `light` picks `taskbar_palette()`. ONE `taskbar_layout()` places every
+  combination: Start first, taking its room out of the strip, then the
+  buttons sized for what is left and placed by alignment; a centred
+  Start over left-aligned buttons sits alone in the middle.
+  `draw_taskbar()` branches once per indicator. **Hit-test against the BAND,
   draw inside the PANEL**: the screen's bottom edge hits the button
-  above it in every style (Fitts), the Start button owns the corner when
-  it is leftmost (`taskbar_start_hit_rect()`), and the gap under a
-  floating panel is the strip's, not the desktop's. **A floating panel
-  DEFLATES while any window is maximized** -- `taskbar_h` never moves
-  with the panel's shape, so nothing derived from the work area
-  re-lays. `gui taskbar --json` reports `style`, `theme`, `floating`,
-  `panel`, `btn_y`/`btn_h` and the strip's colours as `0xRRGGBB`;
-  `tools/taskbar_style_test.py` checks each style where it is drawn.
-
-
+  above it (Fitts), the Start button owns the corner when it is
+  leftmost (`taskbar_start_hit_rect()`), and the gap under a floating
+  panel is the strip's, not the desktop's. **A floating panel DEFLATES
+  while any window is maximized** -- `taskbar_h` never moves with the
+  panel's shape. **The strip lists and groups in OPEN order**
+  (`struct window.open_seq`), never `windows[]` order, which is z-order
+  and changes on every click. `gui taskbar --json` reports all of it;
+  `tools/taskbar_style_test.py` checks each where it is drawn.
+- **TASKBAR PEEK IS AN OVERLAY THAT HOLDS WINDOWS BY `open_seq`.**
+  `userland/wm/wm_peek.c`, `desktop.taskbar_peek` = `off` | `preview` |
+  `highlight`: a card of box-averaged CONTENT thumbnails (no chrome),
+  rescaled on the client's present and at most every 200 ms, never per
+  frame. It opens after the tooltip's delay, switches between buttons at
+  once, survives a short grace crossing the gap to the card, and stays
+  shut after a click until the pointer leaves the button. Highlight is
+  drawn by `render_scene()`: every other window, a dim, then the lifted
+  one again through `draw_one_window()`. **A client buffer is
+  `0x00RRGGBB`** -- scale one through `uimg_scale()` with `has_alpha`
+  0, which reads alpha as opaque; the first build scaled every
+  thumbnail to black. `gui peek --json`; `tools/taskbar_peek_test.py`.
 - **The WM has a SLOW-FRAME WATCHDOG** (`userland/wm/wm_watchdog.c`): it
   times each `wm_run()` iteration by phase and logs anything over a
   threshold (150ms by default). The design point worth preserving: it
@@ -2661,7 +2673,7 @@ real scanout hardware does. Do not write a pixel assertion for one.
   clamp, the overlays), factored out so a height change and a mode
   change cannot re-derive the usable area differently. **It is the
   BAR's thickness; `taskbar_h` is the BAND**, which is the bar plus
-  `TASKBAR_FLOAT_GAP` in the floating style -- size things from
+  `TASKBAR_FLOAT_GAP` while the panel floats -- size things from
   `taskbar_bar_h()`, reserve space with `taskbar_h`. A button's icon is
   half the bar (24 at the default, Windows 11's) and a tray icon two
   thirds of it (32), CAPPED at `TASKBAR_ICON_MAX` and that plus 4,

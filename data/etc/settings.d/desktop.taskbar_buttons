@@ -1,0 +1,11 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Buttons
+Category=Desktop
+Group=Taskbar
+Default=labelled
+Choices=labelled,icons
+Description=What a window's taskbar button shows
+Order=10
+Choice.labelled=Labelled
+Choice.icons=Icons

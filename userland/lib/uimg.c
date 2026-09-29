@@ -263,9 +263,14 @@ void uimg_fit_size(int sw, int sh, int bw, int bh, enum uimg_fit mode,
 // premultiplying, resampling and unpremultiplying, without the two extra
 // passes over the image. It costs a multiply per channel and it is used
 // even for an opaque image, where alpha is constant and cancels exactly.
+// `opaque` reads every alpha byte as 255: an image whose has_alpha is 0
+// is opaque by definition, and a buffer in 0x00RRGGBB (a client
+// window's) would otherwise weight every colour by zero and scale to
+// black.
 static void resample_axis(const uint32_t *src, uint32_t *dst,
                           int src_n, int dst_n, int lines,
-                          int src_step, int src_line, int dst_step, int dst_line) {
+                          int src_step, int src_line, int dst_step, int dst_line,
+                          int opaque) {
     if (dst_n >= src_n) {
         // Enlarge: linear interpolation between the two nearest samples.
         // The map is (i + 0.5) * src/dst - 0.5 in 16.16, clamped at the
@@ -282,7 +287,7 @@ static void resample_axis(const uint32_t *src, uint32_t *dst,
                 const uint32_t *sp = src + (size_t)l * src_line;
                 uint32_t a = sp[(size_t)s0 * src_step];
                 uint32_t b = sp[(size_t)s1 * src_step];
-                int aa = (int)(a >> 24), ab = (int)(b >> 24);
+                int aa = opaque ? 255 : (int)(a >> 24), ab = opaque ? 255 : (int)(b >> 24);
                 int wa = (65536 - frac), wb = frac;
                 int alpha = (aa * wa + ab * wb) >> 16;
                 int64_t caw = (int64_t)aa * wa, cbw = (int64_t)ab * wb;
@@ -319,7 +324,7 @@ static void resample_axis(const uint32_t *src, uint32_t *dst,
                 int64_t w = (end < hi ? end : hi) - (start > lo ? start : lo);
                 if (w <= 0) continue;
                 uint32_t v = sp[(size_t)s * src_step];
-                int64_t a = (int64_t)((v >> 24) & 0xFF);
+                int64_t a = opaque ? 255 : (int64_t)((v >> 24) & 0xFF);
                 int64_t aw = a * w;
                 acc[0] += (int64_t)((v >> 16) & 0xFF) * aw;
                 acc[1] += (int64_t)((v >> 8) & 0xFF) * aw;
@@ -375,11 +380,11 @@ int uimg_scale(const struct uimg *src, int dw, int dh, struct uimg *out) {
     }
 
     // Horizontal: each source row becomes a dw-wide row.
-    resample_axis(src->px, mid, src->w, dw, src->h, 1, src->w, 1, dw);
+    resample_axis(src->px, mid, src->w, dw, src->h, 1, src->w, 1, dw, !src->has_alpha);
     // Vertical: each of the dw columns is resampled down its own stride,
     // which is the transposed view the same routine handles by walking
     // with a stride instead of by one.
-    resample_axis(mid, dst, src->h, dh, dw, dw, 1, dw, 1);
+    resample_axis(mid, dst, src->h, dh, dw, dw, 1, dw, 1, !src->has_alpha);
     free(mid);
 
     out->w = dw;

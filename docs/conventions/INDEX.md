@@ -433,8 +433,9 @@ whenever a headline here tells you something you did not already know.
 - **A WINDOW'S APPLICATION IDENTITY IS THE KERNEL'S, not the app's**
 - **The TASKBAR'S LAYOUT IS ONE FUNCTION, and past a floor it groups by
   app**
-- **THE TASKBAR HAS THREE STYLES OVER ONE LAYOUT, AND EVERY RECT COMES
-  FROM `taskbar_geom()`**
+- **THE TASKBAR'S LAYOUT IS FOUR INDEPENDENT SETTINGS, AND EVERY RECT
+  COMES FROM `taskbar_geom()`**
+- **TASKBAR PEEK IS AN OVERLAY THAT HOLDS WINDOWS BY `open_seq`**
 - **The WM has a SLOW-FRAME WATCHDOG**
 - **There is a Crash Test app**
 - **THE KERNEL CONSOLE STOPS PRESENTING WHILE A COMPOSITOR OWNS THE

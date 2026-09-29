@@ -8,3 +8,4 @@ Min=24
 Max=96
 Step=2
 Unit=px
+Order=5

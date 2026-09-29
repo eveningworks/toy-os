@@ -12,8 +12,8 @@
 // 48 is Windows 11's; KDE's is 44.
 //
 // This is the BAR's thickness. `taskbar_h` (wm_internal.h) is the BAND
-// the strip reserves, which is the bar plus TASKBAR_FLOAT_GAP when the
-// style is `floating` -- see struct taskbar_geom.
+// the strip reserves, which is the bar plus TASKBAR_FLOAT_GAP while
+// `desktop.taskbar_float` is on -- see struct taskbar_geom.
 #define TASKBAR_H_MIN  24
 #define TASKBAR_H_MAX  96
 #define TASKBAR_H_STEP 2
@@ -131,16 +131,22 @@ enum start_button_mode taskbar_start_mode(void);
 // start_btn_w() reserves it.
 int start_icon_size(void);
 
-// HOW THE STRIP IS LAID OUT AND DRAWN -- `desktop.taskbar_style`.
-// Three shapes, one layout function and one draw function each asking
-// taskbar_geom() below, so a style is a set of measurements rather than
-// a second taskbar.
-enum taskbar_style {
-    TASKBAR_STYLE_CLASSIC,   // labelled buttons from the left -- the DEFAULT
-    TASKBAR_STYLE_CENTERED,  // icon-only buttons centred with Start, Windows 11's
-    TASKBAR_STYLE_FLOATING,  // a detached rounded panel, KDE Plasma 6's
+// FOUR INDEPENDENT SETTINGS, as Plasma keeps them (Windows has only the
+// alignment): what a window button shows -- `desktop.taskbar_buttons`,
+// labelled | icons; where the buttons sit -- `desktop.taskbar_align`,
+// left | center; where Start sits -- `desktop.start_position`, left |
+// center; and whether the panel floats -- `desktop.taskbar_float`. One
+// layout function places every combination (taskbar_layout()), and it
+// and the draw function ask taskbar_geom() below, so none of them is a
+// second taskbar.
+enum taskbar_buttons {
+    TASKBAR_BUTTONS_LABELLED,  // icon and title -- the DEFAULT
+    TASKBAR_BUTTONS_ICONS,     // the icon alone, larger; the title is the tooltip's
 };
-enum taskbar_style taskbar_style(void);
+enum taskbar_buttons taskbar_buttons(void);
+int taskbar_align_centered(void);
+int taskbar_start_centered(void);  // the Start MENU opens centred when this is
+int taskbar_float_on(void);
 
 // The strip's colours -- `desktop.taskbar_theme` (dark | light), apart
 // from the window theme because Windows and KDE both let the panel be
@@ -174,7 +180,7 @@ struct taskbar_geom {
     int btn_r;            // and its corners
 };
 void taskbar_geom(struct taskbar_geom *g);
-int taskbar_floating(void);   // drawn detached right now
+int taskbar_floating(void);   // drawn detached right now (set, and not deflated)
 int taskbar_bar_h(void);      // `desktop.taskbar_height`, clamped
 
 // The Start button's box (btn_y/btn_h tall). Its HIT rect is this
@@ -189,6 +195,11 @@ void taskbar_start_hit_rect(int *x, int *y, int *w, int *h);
 // with a window's full title where the button does not show it (the
 // icon-only style, or a label cut short).
 #define TASKBAR_HOVER_START (-2)
+
+// What a plain click on a window's button does: restore it, recover it
+// from off-screen, minimize it if it is focused, else raise it. The
+// peek card's click does the same (wm_peek.c).
+void taskbar_activate(int i);
 void taskbar_update_hover(int mx, int my, uint8_t buttons);
 int taskbar_hover(void);
 

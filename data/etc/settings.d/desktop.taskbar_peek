@@ -1,0 +1,12 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Window preview
+Category=Desktop
+Group=Taskbar
+Default=preview
+Choices=off,preview,highlight
+Description=What resting the pointer on a window's button shows
+Order=50
+Choice.off=Off -- the title only
+Choice.preview=A preview of the window
+Choice.highlight=A preview, and the window picked out

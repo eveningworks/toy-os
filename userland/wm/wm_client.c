@@ -17,6 +17,7 @@
 #include "wm/wm_watch.h" // WIN_EV_FSWATCH / WIN_EV_SETTING land there
 #include <stdlib.h>   // malloc: the client widget map
 #include "wm_internal.h"
+#include "wm_peek.h"
 #include "wm_shadow.h"
 #include "wm_anim.h"   // wm_damage_window_rect(): a window's rect plus its shadow
 #include "wm_shortcut.h"
@@ -516,6 +517,7 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     if (!map_buf(win, front, gen, w, h)) return;
     win->client_front = front;
     win->client_buf = win->client_px[front];
+    wm_peek_presented(win->open_seq);   // its peek thumbnail is stale
     // THE FRAME BRINGS ITS OWN SIZE, and this is where a resize lands.
     // Adopting it when the client ACCEPTED the proposal instead would
     // put the chrome around a buffer with nothing in it yet -- a whole

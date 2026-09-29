@@ -2668,22 +2668,38 @@ window without going through it will find its layout polls timing out.
   hover stayed DEAD until the 2026-09-29 redesign gave the tray a
   hover (`docs/decisions.md`). Skips cleanly with no Pillow. In
   `gui_regress.py`.
-- **`taskbar_style_test.py`** -- the taskbar's three styles
-  (`desktop.taskbar_style`) and two themes (`desktop.taskbar_theme`),
-  each checked in the WM's report (`gui taskbar --json`) AND in a pixel
-  the report could not fake: classic's panel fills the band and the
-  screen's corner is the strip; floating's band grows by the gap, the
-  corner pixel is NOT the strip, and maximizing the topmost window
-  DEFLATES it to fill the band; centred's buttons are square and centred
-  with Start, the one under the pointer is reported hovered AND drawn
-  lit, and its tooltip names the window; light draws `#ECECEC`. **The
-  gap probe is placed from the SCREEN's edge, not from the reported
-  panel** -- its first version derived it from the panel, so a wrong
-  report moved the probe off the screen and crashed the tool instead of
-  failing a check. Positive control: `taskbar_floating()` returning 0
-  reddens the floating checks, and dropping the hover fill reddens
-  "drawn lit" while the JSON hover check stays green -- which is why
-  both exist. Unsets both settings on the way out. In `gui_regress.py`.
+- **`taskbar_style_test.py`** -- the taskbar's independent layout
+  settings (`desktop.taskbar_buttons`, `_align`, `desktop.start_position`,
+  `desktop.taskbar_float`) and its two themes, each checked in the WM's
+  report (`gui taskbar --json`) AND in a pixel the report could not
+  fake: the defaults fill the band and the screen's corner is the strip;
+  floating's band grows by the gap, the corner pixel is NOT the strip,
+  and maximizing the topmost window DEFLATES it; icons centred with
+  Start are 48px, the one under the pointer is reported hovered AND
+  drawn lit, and (peek off) its tooltip names the window; Start left
+  goes to x=0 with the icons still centred, and that floats; icons from
+  the left pack straight after Start; a centred Start over left buttons
+  sits alone in the middle; labelled buttons centre with their labels
+  whole; light draws `#ECECEC`. **The gap probe is placed from the
+  SCREEN's edge, not from the reported panel** -- its first version
+  derived it from the panel, so a wrong report moved the probe off the
+  screen and crashed the tool instead of failing a check. Positive
+  control: forcing `taskbar_floating()` to 0 reddens the floating
+  checks, and dropping the hover fill reddens "drawn lit" while the JSON
+  hover check stays green -- which is why both exist. Unsets every
+  taskbar setting on the way out. In `gui_regress.py`.
+- **`taskbar_peek_test.py`** -- the taskbar's window preview
+  (`desktop.taskbar_peek`, `userland/wm/wm_peek.h`) against `gui peek
+  --json`: resting on a button opens a card over it; **the thumbnail is
+  a picture** -- 49 samples of its rect must be neither near-black nor
+  flat, which is the check the first build failed (every thumbnail
+  black, card otherwise perfect); moving along the strip switches at
+  once and leaving for the desktop closes it; clicking the entry
+  activates the window; in `highlight` a wallpaper pixel darkens by a
+  quarter while one inside the lifted window keeps its value; the x
+  closes the window; `off` opens nothing. Positive control: restoring
+  the alpha-weighted scale reddens exactly the thumbnail check. In
+  `gui_regress.py`.
 - **`brightness_test.py`** -- the taskbar's brightness flyout, driven
   on a machine with NO backlight, which is every QEMU adapter. It
   asserts the degraded path honestly: the tray item exists, the panel

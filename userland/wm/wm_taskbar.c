@@ -13,6 +13,7 @@
 #include "wm/wm_conf.h"   // struct setting_msg, SETTING_OP_*
 #include "wm_tooltip.h"
 #include "start_menu.h"   // start_menu_open
+#include "wm_peek.h"
 #include "wm_shadow.h"
 #include "ui/utheme.h"
 
@@ -50,15 +51,21 @@ int taskbar_default_h(void) { return TASKBAR_H_DEFAULT; }
 
 // --- style, theme and the panel's geometry ------------------------------
 
-static enum taskbar_style g_style = TASKBAR_STYLE_CLASSIC;
+static enum taskbar_buttons g_buttons = TASKBAR_BUTTONS_LABELLED;
+static int g_float;
+static int g_align_center;
+static int g_start_center;
 static int g_dark = 1;
 static int g_bar_h = TASKBAR_H_DEFAULT;
 static int g_deflated;   // a floating panel filling its band, see below
 
-enum taskbar_style taskbar_style(void) { return g_style; }
+enum taskbar_buttons taskbar_buttons(void) { return g_buttons; }
+int taskbar_align_centered(void) { return g_align_center; }
 int taskbar_dark(void) { return g_dark; }
 int taskbar_bar_h(void) { return g_bar_h; }
-int taskbar_floating(void) { return g_style == TASKBAR_STYLE_FLOATING && !g_deflated; }
+int taskbar_float_on(void) { return g_float; }
+int taskbar_start_centered(void) { return g_start_center; }
+int taskbar_floating(void) { return g_float && !g_deflated; }
 
 static struct taskbar_palette g_pal;
 static int g_pal_for = -1;   // which theme g_pal holds; -1 = not yet filled
@@ -163,7 +170,7 @@ static int read_height(void) {
 }
 
 void taskbar_poll_config(void) {
-    int defl = g_style == TASKBAR_STYLE_FLOATING && want_deflated();
+    int defl = g_float && want_deflated();
     if (defl != g_deflated) {
         g_deflated = defl;
         damage_strip();
@@ -181,23 +188,35 @@ void taskbar_poll_config(void) {
     // anchor. wm_layout_changed() re-derives all of that, the same walk
     // a screen-size change makes.
     struct setting_msg msg;
-    setting_get("desktop.taskbar_style", &msg);
-    enum taskbar_style style = TASKBAR_STYLE_CLASSIC;   // every value named, see below
-    if (k_strcmp(msg.value, "centered") == 0)      style = TASKBAR_STYLE_CENTERED;
-    else if (k_strcmp(msg.value, "floating") == 0) style = TASKBAR_STYLE_FLOATING;
-    else if (k_strcmp(msg.value, "classic") == 0)  style = TASKBAR_STYLE_CLASSIC;
+    setting_get("desktop.taskbar_buttons", &msg);
+    enum taskbar_buttons buttons = k_strcmp(msg.value, "icons") == 0
+        ? TASKBAR_BUTTONS_ICONS : TASKBAR_BUTTONS_LABELLED;
+    setting_get("desktop.taskbar_align", &msg);
+    int ac = k_strcmp(msg.value, "center") == 0;
+    setting_get("desktop.taskbar_float", &msg);
+    int fl = k_strcmp(msg.value, "on") == 0;
+    setting_get("desktop.start_position", &msg);
+    int sc = k_strcmp(msg.value, "center") == 0;
     setting_get("desktop.taskbar_theme", &msg);
     int dark = k_strcmp(msg.value, "light") != 0;
+    setting_get("desktop.taskbar_peek", &msg);
+    wm_peek_set_mode(k_strcmp(msg.value, "off") == 0 ? WM_PEEK_OFF :
+                     k_strcmp(msg.value, "highlight") == 0 ? WM_PEEK_HIGHLIGHT :
+                     WM_PEEK_PREVIEW);
 
-    int look_changed = style != g_style || dark != g_dark;
-    g_style = style;
+    int look_changed = buttons != g_buttons || ac != g_align_center ||
+                       sc != g_start_center || dark != g_dark;
+    g_buttons = buttons;
+    g_align_center = ac;
+    g_float = fl;
+    g_start_center = sc;
     g_dark = dark;
-    g_deflated = g_style == TASKBAR_STYLE_FLOATING && want_deflated();
+    g_deflated = g_float && want_deflated();
 
-    // The BAND grows by the float gap in the floating style, so a
-    // style change can move the work area as a height change does.
+    // The BAND grows by the float gap while the panel floats, so a
+    // float change can move the work area as a height change does.
     g_bar_h = read_height();
-    int h = g_bar_h + (g_style == TASKBAR_STYLE_FLOATING ? TASKBAR_FLOAT_GAP : 0);
+    int h = g_bar_h + (g_float ? TASKBAR_FLOAT_GAP : 0);
     if (h != taskbar_h) {
         taskbar_h = h;
         wm_layout_changed();
@@ -346,9 +365,11 @@ static int fit_width(int avail, int n, int natural) {
 // The icon square inside a button, derived from the strip's height so it
 // scales with the font like everything else on it.
 int taskbar_icon_size(void) {
-    // Half the BAR, not the band -- a floating panel's gap is not room
-    // for a bigger icon. 24 in the 48px default, Windows 11's size.
-    int s = g_bar_h / 2;
+    // From the BAR, not the band -- a floating panel's gap is not room
+    // for a bigger icon. Half of it beside a label (24 in the 48px
+    // default, Windows 11's size); two thirds when the icon IS the
+    // button, since 24 read as "really small" on a 1080p laptop panel.
+    int s = g_buttons == TASKBAR_BUTTONS_ICONS ? g_bar_h * 2 / 3 : g_bar_h / 2;
     // Capped: the masters are 64px and a thick strip would otherwise
     // ask for an upscaled icon.
     if (s > TASKBAR_ICON_MAX) s = TASKBAR_ICON_MAX;
@@ -451,32 +472,91 @@ static void fill_button(struct taskbar_button *b, int first, int members,
     b->elided = make_label(b->label, (int)sizeof b->label, name, label_w, members);
 }
 
-// The Start button's left edge, which the centred style derives from
-// the buttons beside it -- so one function answers both.
+// The Start button's left edge, which a centred Start derives from the
+// buttons beside it -- so one function answers both.
 static int g_start_x;
 
-// Icon-only buttons, centred on the screen as one group with Start --
-// Windows 11's shape. They never shrink: past the room there is, they
-// group, and past that the extras are dropped and counted as hidden,
-// the same response to pressure as the labelled layout below.
-static int layout_centered(struct taskbar_button *out, int max,
-                           const struct taskbar_geom *g, int listed) {
-    int bw = g->btn_h + 4;
+// ONE LAYOUT FOR EVERY COMBINATION of the three independent settings:
+// labelled or icon buttons, the buttons left or centred, Start left or
+// centred. Start is placed first and takes its room out of the strip;
+// the buttons are sized for what is left, then placed by alignment.
+//
+//   Start left            the corner; the buttons get everything after it
+//   Start centre, buttons centre   Start leads the centred group (Windows 11)
+//   Start centre, buttons left     Start alone in the middle; the buttons
+//                                  fill the left half up to it
+int taskbar_layout(struct taskbar_button *out, int max) {
+    g_hidden = 0;
+    stamp_unopened();
+    struct taskbar_geom g;
+    taskbar_geom(&g);
+    int icons = g_buttons == TASKBAR_BUTTONS_ICONS;
     int sw = start_btn_w();
-    int lo = g->px + 4, hi = tray_left() - 8;
-    int room = (hi - lo) - sw;                 // for the window buttons and their gaps
-    int n = listed, grouped = 0;
-    if (n * (bw + TB_GAP) > room) { n = group_count(); grouped = 1; }
-    int fit = room / (bw + TB_GAP);
-    if (fit < 0) fit = 0;
+    int lo = g.px + 4, hi = tray_left() - 8;
+    int with_group = g_start_center && g_align_center;
+
+    if (!g_start_center) {
+        g_start_x = lo;
+        lo += sw + TB_GAP;
+    } else if (!g_align_center) {
+        g_start_x = screen_w / 2 - sw / 2;
+        if (hi > g_start_x - TB_GAP) hi = g_start_x - TB_GAP;
+    } else {
+        g_start_x = screen_w / 2 - sw / 2;   // alone until there are buttons
+    }
+    int avail = hi - lo - (with_group ? sw + TB_GAP : 0);
+
+    int listed = listed_count();
+    if (!out || max <= 0 || listed <= 0 || avail <= 0) { g_hidden = listed; return 0; }
+
+    // THE WIDTH, and whether to group. Labelled buttons shrink first and
+    // group only if shrinking is not enough -- two windows of one app
+    // stay two buttons while there is room, since grouping is a response
+    // to pressure, not a policy. An icon button never shrinks; it is
+    // already the icon.
+    int n = listed, grouped = 0, w;
+    if (icons) {
+        w = g.btn_h + 8;                       // 48 at the default: the icon is the button
+        if (n * (w + TB_GAP) - TB_GAP > avail) { n = group_count(); grouped = 1; }
+    } else {
+        int natural = win_btn_w(), floor_w = btn_floor();
+        if (avail < floor_w) { g_hidden = listed; return 0; }
+        w = fit_width(avail, n, natural);
+        if (w < floor_w) {
+            n = group_count();
+            grouped = 1;
+            w = fit_width(avail, n, natural);
+        }
+        if (w < floor_w) w = floor_w;          // past this the extras simply do not fit
+        // A GROUPED button may be wider than a plain one: there are few of
+        // them and its label carries a count as well as a name ("notepad
+        // (32)" at the plain width is "not (32)"). The icon is part of the
+        // allowance, since make_label() is handed w minus the icon column.
+        if (grouped) {
+            int icon = taskbar_icon_size();
+            int cap = natural + ugfx_text_width(" (99+)") + (icon ? icon + TB_ICON_GAP : 0);
+            int wide = fit_width(avail, n, cap);
+            if (wide > w) w = wide;
+        }
+    }
+    int fit = (avail + TB_GAP) / (w + TB_GAP);
     if (n > fit) n = fit;
     if (n > max) n = max;
 
-    int total = sw + n * (bw + TB_GAP);
-    int sx = screen_w / 2 - total / 2;
-    if (sx + total > hi) sx = hi - total;      // the tray wins over the centre
-    if (sx < lo) sx = lo;
-    g_start_x = sx;
+    // THE PLACE. A centred group is centred on the SCREEN, as Windows'
+    // is, and pushed aside only by what it would otherwise overlap.
+    int row = n > 0 ? n * (w + TB_GAP) - TB_GAP : 0;
+    int group = row + (with_group ? sw + (n > 0 ? TB_GAP : 0) : 0);
+    int x = lo;
+    if (g_align_center) {
+        x = screen_w / 2 - group / 2;
+        if (x + group > hi) x = hi - group;
+        if (x < lo) x = lo;
+    }
+    if (with_group) {
+        g_start_x = x;
+        x += sw + TB_GAP;
+    }
 
     int count = 0;
     uint32_t seq = 0;
@@ -486,71 +566,7 @@ static int layout_centered(struct taskbar_button *out, int max,
         int members = grouped ? group_size(i) : 1;
         if (count >= n) { g_hidden += members; continue; }
         fill_button(&out[count], grouped ? group_front(i) : i, members,
-                    sx + sw + TB_GAP + count * (bw + TB_GAP), bw, 0);
-        count++;
-    }
-    return count;
-}
-
-int taskbar_layout(struct taskbar_button *out, int max) {
-    g_hidden = 0;
-    stamp_unopened();
-    struct taskbar_geom g;
-    taskbar_geom(&g);
-    g_start_x = g.px + 4;
-    int listed = listed_count();
-    if (!out || max <= 0 || listed <= 0) {
-        g_hidden = listed;
-        if (g_style == TASKBAR_STYLE_CENTERED)   // Start alone, still centred
-            g_start_x = screen_w / 2 - start_btn_w() / 2;
-        return 0;
-    }
-    if (g_style == TASKBAR_STYLE_CENTERED) return layout_centered(out, max, &g, listed);
-
-    int x0 = g_start_x + start_btn_w() + TB_GAP;
-    int x1 = tray_left() - 8;
-    int avail = x1 - x0;
-    int natural = win_btn_w(), floor_w = btn_floor();
-    if (avail < floor_w) { g_hidden = listed; return 0; }
-
-    // Shrink first, group only if shrinking is not enough. Two windows
-    // of the same app stay two buttons while there is room for two --
-    // grouping is a response to pressure, not a policy.
-    int n = listed, grouped = 0;
-    int w = fit_width(avail, n, natural);
-    if (w < floor_w) {
-        n = group_count();
-        grouped = 1;
-        w = fit_width(avail, n, natural);
-    }
-    if (w < floor_w) w = floor_w; // past this the extras simply do not fit
-
-    // A GROUPED button may be wider than a plain one, because there are
-    // by definition few of them and its label carries a count as well as
-    // a name -- at the plain natural width "notepad (32)" truncates to
-    // "not (32)", which names nothing. Five characters is the widest
-    // count suffix (" (99+)").
-    //
-    // THE ICON IS PART OF THE ALLOWANCE: make_label() is handed w MINUS
-    // the icon column, so leaving it out here spent the widening on the
-    // icon. Still capped by fit_width, so this can only spend space that
-    // is genuinely spare.
-    if (grouped) {
-        int icon = taskbar_icon_size();
-        int cap = natural + ugfx_text_width(" (99+)") + (icon ? icon + TB_ICON_GAP : 0);
-        int wide = fit_width(avail, n, cap);
-        if (wide > w) w = wide;
-    }
-
-    int count = 0;
-    uint32_t seq = 0;
-    for (int i; (i = next_opened(&seq)) >= 0; ) {
-        if (unlisted(i)) continue;
-        if (grouped && !starts_group(i)) continue;
-        int x = x0 + count * (w + TB_GAP);
-        int members = grouped ? group_size(i) : 1;
-        if (count >= max || x + w > x1) { g_hidden += members; continue; }
-        fill_button(&out[count], grouped ? group_front(i) : i, members, x, w, 1);
+                    x + count * (w + TB_GAP), w, !icons);
         count++;
     }
     return count;
@@ -591,6 +607,7 @@ void taskbar_update_hover(int mx, int my, uint8_t buttons) {
     int want = -1;
     const char *tip = 0;
     int tx = 0, tw = 0;
+    int peek_wins[8], peek_n = 0, peek_x = 0, peek_w = 0;
     int band = my >= screen_h - taskbar_h && my < screen_h && !wm_top_covers_screen();
     if (band) {
         int sx, sy, sw, sh;
@@ -604,14 +621,29 @@ void taskbar_update_hover(int mx, int my, uint8_t buttons) {
                 if (!uui_hit(b[k].x, screen_h - taskbar_h, b[k].w, taskbar_h, mx, my))
                     continue;
                 want = b[k].first;
-                // Only where the button does not already say it --
-                // Explorer's rule. A grouped button's list is one click away.
-                if ((g_style == TASKBAR_STYLE_CENTERED || b[k].elided) && b[k].count == 1)
+                // THE PEEK CARD, where it can show every window the
+                // button stands for -- in open order, as the strip is.
+                if (wm_peek_mode() != WM_PEEK_OFF) {
+                    uint32_t seq = 0;
+                    for (int i; peek_n < 8 && (i = next_opened(&seq)) >= 0; )
+                        if (!unlisted(i) && (i == b[k].first ||
+                                             (b[k].count > 1 && same_app(i, b[k].first))))
+                            peek_wins[peek_n++] = i;
+                    for (int j = 0; j < peek_n; j++)
+                        if (!wm_peek_can_show(peek_wins[j])) peek_n = 0;
+                    peek_x = b[k].x; peek_w = b[k].w;
+                }
+                // Otherwise the title, only where the button does not
+                // already say it -- Explorer's rule. A grouped button's
+                // list is one click away.
+                if (!peek_n && (g_buttons == TASKBAR_BUTTONS_ICONS || b[k].elided) &&
+                    b[k].count == 1)
                     { tip = windows[b[k].first].title; tx = b[k].x; tw = b[k].w; }
                 break;
             }
         }
     }
+    wm_peek_hover(peek_wins, peek_n, peek_x, peek_w, mx, my);
     if (tip && !start_menu_open) {
         struct taskbar_geom g;
         taskbar_geom(&g);
@@ -676,7 +708,8 @@ static void open_group_menu(const struct taskbar_button *b) {
 // only handle a window with a modal dialog has out here -- its own title
 // bar takes no press (wm_handle_left_click()) -- so raising it and
 // burying the dialog underneath would leave the app looking wedged.
-static void activate(int i) {
+void taskbar_activate(int i) {
+    if (i < 0 || i >= window_count) return;
     if (windows[i].state == WIN_MINIMIZED) {
         wm_anim_restore(i);
         windows[i].state = WIN_NORMAL;
@@ -706,7 +739,7 @@ int taskbar_handle_click(int mx, int my) {
         if (!uui_hit(btns[b].x, ty, btns[b].w, taskbar_h, mx, my)) continue;
         if (g_tip_ours) { wm_tooltip_cancel(); g_tip_ours = 0; }
         if (btns[b].count > 1) open_group_menu(&btns[b]);
-        else activate(btns[b].first);
+        else taskbar_activate(btns[b].first);
         redraw_pending = 1;
         return 1;
     }

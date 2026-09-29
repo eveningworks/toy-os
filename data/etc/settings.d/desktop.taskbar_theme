@@ -6,6 +6,6 @@ Group=Taskbar
 Default=dark
 Choices=dark,light
 Description=The taskbar's colours, apart from the windows'
-Order=15
+Order=40
 Choice.dark=Dark
 Choice.light=Light

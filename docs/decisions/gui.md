@@ -8489,25 +8489,37 @@ radius, so a tray item lights exactly as a window button does; a
 full-height block reads as a section of the bar rather than as a
 control. The rasteriser is `uui_fill_round_rect()`.
 
-## The taskbar has three styles over one layout, and a floating panel deflates rather than the band moving
+## The taskbar's layout is four independent settings over one layout function, and a floating panel deflates rather than the band moving
 
-`desktop.taskbar_style` is `classic` | `centered` | `floating`, and
-`desktop.taskbar_theme` is `dark` | `light`. The maintainer chose from
-three mockups -- labelled buttons (Windows 10 / Plasma's labelled task
-manager), centred icons (Windows 11), a floating panel (Plasma 6) --
-and asked for the first as the default with the other two selectable.
+`desktop.taskbar_buttons` is `labelled` | `icons`, `desktop.taskbar_align`
+and `desktop.start_position` are `left` | `center`, `desktop.taskbar_float`
+is `off` | `on`, and `desktop.taskbar_theme` is `dark` | `light`. The
+maintainer chose from three mockups -- labelled buttons (Windows 10 /
+Plasma's labelled task manager), centred icons (Windows 11), a floating
+panel (Plasma 6) -- with the first as the default.
 
-**A style is measurements, not a second taskbar.** One
-`taskbar_layout()` places the buttons for every style (branching once,
-for the centred row) and one `draw_taskbar()` draws them (branching
+**Independent settings, not a list of styles.** It shipped as one enum,
+`taskbar_style` = classic | centered | floating, and every request after
+it was a combination the enum could not name: floating WITH icons, icons
+on the LEFT, Start in the corner beside centred icons. The maintainer
+asked for the controls to be separate, which is Plasma's own shape --
+"icons only" is a task-manager option, floating a panel property, the
+launcher a widget placed anywhere. Windows 11 exposes only alignment,
+and moves Start with the icons; that is one of the combinations here.
+Every combination is valid, including a centred Start over left-aligned
+buttons, which sits alone in the middle with the buttons clear of it.
+
+**A layout is measurements, not a second taskbar.** One
+`taskbar_layout()` places the buttons for every combination and one
+`draw_taskbar()` draws them (branching
 once per indicator: an underline, a pill, a tinted frame), and both ask
 `taskbar_geom()` for the panel and button rects. The obvious shape --
-a draw-and-hit-test pair per style -- is three copies of the thing
+a draw-and-hit-test pair per look -- is several copies of the thing
 `wm_taskbar.h` exists to keep single: the strip once ran off the screen
 because three walks of the window list disagreed.
 
 **The band never changes with the panel's shape.** `taskbar_h` is the
-bar plus `TASKBAR_FLOAT_GAP` in the floating style, and a floating
+bar plus `TASKBAR_FLOAT_GAP` while the panel floats, and a floating
 panel DEFLATES to fill that band while any window is maximized -- the
 case where a gap would be a strip of wallpaper between a window and
 the bar. Plasma 6 does the same. The alternative, reserving only the
@@ -8527,10 +8539,54 @@ strip was already dark over light chrome. The accent follows utheme's,
 lightened on the dark strip so a three-pixel indicator still reads; the
 hover tint is `uui_state_bg()`, as every control's is.
 
+**The strip lists in OPEN order.** `windows[]` is z-order and a click
+raises, so listing by index moved a button to the end of the strip every
+time it was clicked -- which Windows and KDE never do. `struct
+window.open_seq`, stamped where a window is created, is the order.
+
 **Not built: Windows 11's grouped network-and-volume button.** The
 centred mockup showed the two as one target; this desktop has one
 flyout per tray item and no combined Quick Settings panel to open, so
-the tray stays per-item in every style (`docs/roadmap.md`).
+the tray stays per-item in every layout (`docs/roadmap.md`).
+
+## Taskbar peek is content thumbnails, rescaled on present, held by open order
+
+Resting on a taskbar button shows a card of the window (Windows 11's
+preview, Plasma's task tooltip): `desktop.taskbar_peek` = `off` |
+`preview` (default) | `highlight`, the last dimming the desktop under the
+window while the pointer is on its entry (Plasma's "Highlight windows",
+Windows' Aero Peek). The maintainer chose Windows' card shape -- title,
+close, thumbnail -- from mockups over Plasma's thumbnail-then-title,
+because the close button is the action a preview is most often used for.
+
+**Content, not chrome.** The thumbnail is the client's buffer, not the
+framed window `wm_anim.c` snapshots for its ghosts: a title bar scaled
+to a fifth is a stripe of unreadable text, and the card has its own
+title row.
+
+**Box-averaged once, not scaled per frame.** `uimg_scale()` reads every
+source pixel, which is what keeps a thumbnail legible; the nearest-
+neighbour blit the animations use is per-frame cheap and turns text to
+noise. So the scaled copy is CACHED, marked stale by the client's
+present, and rescaled at most every 200 ms -- a game presenting at
+60 Hz costs five rescales a second while its card is up, and nothing
+while it is not.
+
+**Held by `open_seq`, never by index.** The card outlives clicks and
+raises, both of which reorder `windows[]`.
+
+**Highlight redraws the window rather than masking around it.** The
+scene is drawn with the lifted window skipped, dimmed, and the window
+drawn once more on top through the same `draw_one_window()` -- so the
+dim and the lift obey the frame's damage clip like everything else,
+and a minimized window can be lifted where it would be.
+
+**A client buffer's alpha byte is zero, and the scaler now knows an
+opaque image when it sees one.** `uimg_scale()` weighted colour by
+alpha, so a `0x00RRGGBB` window scaled to black; `has_alpha == 0` --
+already defined as "every pixel is opaque" -- now reads alpha as 255.
+Decoded images carry 255 there anyway, so their results are unchanged
+(`uimg_hostcheck.py`, `uimg_codec_hostcheck.py`).
 
 ## The greys are a ladder with the page in the middle, macOS/Windows 10 spacing, not Breeze's
 

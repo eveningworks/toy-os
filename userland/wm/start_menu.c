@@ -346,6 +346,9 @@ static void layout(struct sm_layout *L) {
         int sx, sy, sw, sh;
         taskbar_start_rect(&sx, &sy, &sw, &sh);
         L->x = sx;
+        // Centred Start, centred menu -- Windows 11's.
+        if (taskbar_start_centered())
+            L->x = screen_w / 2 - L->w / 2;
         if (L->x + L->w > screen_w - 4) L->x = screen_w - 4 - L->w;
         if (L->x < 4) L->x = 4;
     }

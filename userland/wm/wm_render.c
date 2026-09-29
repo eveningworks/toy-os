@@ -20,6 +20,7 @@
 #include "wm_tray.h"
 #include "rt/sys.h"   // sys_monotonic_ns(), for the frame timer below
 #include "wm_taskbar.h"
+#include "wm_peek.h"
 #include "wm_shadow.h"
 #include "wm_anim.h"
 #include "lib/icon_cache.h"
@@ -1214,15 +1215,15 @@ static void tb_fade(int x, int y, int w, int h, uint32_t ground) {
         ugfx_blend_hspan(wm_surface(), x, y + r, w, ground, 0, 128);
 }
 
-// The strip, in whichever of the three styles `desktop.taskbar_style`
-// names. Every rect comes from taskbar_geom()/taskbar_layout(), which
-// wm_input.c hit-tests against too (wm_taskbar.h).
+// The strip, for whatever combination of the taskbar settings is set
+// (wm_taskbar.h). Every rect comes from taskbar_geom()/taskbar_layout(),
+// which wm_input.c hit-tests against too.
 static void draw_taskbar(void) {
     struct ugfx_surface *s = wm_surface();
     const struct taskbar_palette *p = taskbar_palette();
     struct taskbar_geom g;
     taskbar_geom(&g);
-    enum taskbar_style style = taskbar_style();
+    int icons = taskbar_buttons() == TASKBAR_BUTTONS_ICONS;
     int light = !taskbar_dark();
     int hover = taskbar_hover();
 
@@ -1278,7 +1279,7 @@ static void draw_taskbar(void) {
 
         uint32_t bg = p->bar, edge = p->focus_edge;
         int ringed = 0;
-        if (focused && style == TASKBAR_STYLE_FLOATING) {
+        if (focused && taskbar_float_on() && !icons) {
             // An accent-tinted frame rather than a grey fill, so the
             // one lit button on a panel reads from across the room.
             bg = ugfx_blend(p->bar, p->accent, hovered ? 77 : 56);
@@ -1295,7 +1296,7 @@ static void draw_taskbar(void) {
         const struct uimg *ico = tb->icon ? icon_get(tb->icon, isz) : NULL;
         int ty = y + (h - ugfx_char_h()) / 2;
 
-        if (style == TASKBAR_STYLE_CENTERED) {
+        if (icons) {
             // Icon-only; the title is the tooltip's (wm_taskbar.c).
             if (ico) {
                 ugfx_blit_alpha(s, x + (w - ico->w) / 2, y + (h - ico->h) / 2,
@@ -1331,8 +1332,9 @@ static void draw_taskbar(void) {
         }
         ugfx_draw_string_clipped(s, lx, ty, x + w - TB_PAD - lx, tb->label,
                                  minimized ? p->dim : p->text, bg);
-        // Windows 10's underline, inset from the corners.
-        if (focused && style == TASKBAR_STYLE_CLASSIC)
+        // Windows 10's underline, inset from the corners; a floating
+        // panel's focused button has its tinted frame instead.
+        if (focused && !taskbar_float_on())
             ugfx_fill_rect(s, x + 8, y + h - 2, w - 16, 2, p->accent);
     }
 
@@ -1590,6 +1592,77 @@ int wm_top_covers_screen(void) {
     return w->fullscreen && w->x == 0 && w->y == 0 && w->w >= screen_w && w->h >= screen_h;
 }
 
+// ONE WINDOW OF THE SCENE, with its shadow, chrome, content and grip --
+// the body of render_scene()'s back-to-front walk, and called once more
+// for the window taskbar peek lifts above the dim (wm_peek.h).
+static void draw_one_window(int i, int focus, int covered, int has_damage, int lifted) {
+    // `lifted`: the peek highlight draws this window above the dim
+    // whatever its state -- a minimized one included, where it would be.
+    if (windows[i].state == WIN_MINIMIZED && !lifted) return;
+    if (wm_render_hidden_pid() &&
+        wm_client_is_client_window(&windows[i]) &&
+        windows[i].client_pid == wm_render_hidden_pid()) return;
+    if (wm_anim_hides(&windows[i])) return;   // its ghost is on screen instead (wm_anim.h)
+    if (has_damage && !window_intersects_damage(&windows[i])) return;
+    if (covered && i < focus && !windows[i].popup) return; // under the fullscreen window
+    if (windows[i].popup || windows[i].fullscreen) {
+        // NO CHROME, NO CORNERS, NO GRIP -- and nothing at all until
+        // the client's first present: the buffer opened at create is
+        // whatever the client has drawn so far, which for one frame
+        // is nothing, and a menu that flashes black before it
+        // appears is the flash Wayland's map-on-first-commit avoids.
+        if (windows[i].client_gen[windows[i].client_front] == 0) return;
+        // A menu's small shadow, under it (wm_shadow.h); a fullscreen
+        // window has nothing beside it to shadow.
+        if (windows[i].popup)
+            wm_shadow_draw(windows[i].x, windows[i].y, windows[i].w, windows[i].h, 0,
+                           WM_SHADOW_POPUP);
+        clip_to_window_content(&windows[i], has_damage);
+        wm_client_draw(&windows[i]);
+        apply_scene_clip(has_damage);
+        return;
+    }
+    // NOTHING UNTIL THE CLIENT'S FIRST PRESENT -- for a TOPLEVEL as
+    // well, which is the half this guard was missing. The buffer
+    // opened at create is whatever the client has drawn, and for a
+    // client that never gets to present it is whatever the pages
+    // came up as: compositing it painted a window of solid BLACK
+    // with full chrome around it, which reads as a broken app
+    // rather than as a compositor that ran out of something.
+    // Wayland's map-on-first-commit, the same rule the popup branch
+    // above already followed.
+    if (wm_client_is_client_window(&windows[i]) &&
+        windows[i].client_gen[windows[i].client_front] == 0) return;
+    // The shadow FIRST, so corners_save() below sees it beneath the
+    // corners and the rounded cut reveals shadow, not desktop. None
+    // for a maximized window: nothing beside it to fall on.
+    if (windows[i].state != WIN_MAXIMIZED)
+        wm_shadow_draw(windows[i].x, windows[i].y, windows[i].w, windows[i].h,
+                       corner_radius(&windows[i]),
+                       i == focus ? WM_SHADOW_FOCUSED : WM_SHADOW_INACTIVE);
+    corners_save(&windows[i]);   // what is beneath, before this window covers it
+    draw_window_chrome(&windows[i], i, i == focus);
+    if (windows[i].app && windows[i].app->on_draw) {
+        // Only the app's own draw is confined to its content area.
+        // The chrome above and the grip below are the WM's own
+        // pixels and deliberately live at/outside that boundary.
+        clip_to_window_content(&windows[i], has_damage);
+        windows[i].app->on_draw(&windows[i]);
+        apply_scene_clip(has_damage);
+    } else if (wm_client_is_client_window(&windows[i])) {
+        // A ring-3 client's window: its content is just the pixels
+        // it has already drawn into its shared buffer, blitted.
+        // Same content clip an app's on_draw() gets, for the same
+        // reason -- a client that reports a size larger than its
+        // window must not be able to paint over the chrome.
+        clip_to_window_content(&windows[i], has_damage);
+        wm_client_draw(&windows[i]);
+        apply_scene_clip(has_damage);
+    }
+    draw_resize_grip(&windows[i]); // after on_draw() -- see its own comment
+    corners_round(&windows[i]);    // last: the arc cuts chrome, content and grip alike
+}
+
 static void render_scene(int mx, int my, int has_damage) {
     apply_scene_clip(has_damage);
 
@@ -1621,70 +1694,17 @@ static void render_scene(int mx, int my, int has_damage) {
             break;
         }
     }
-    for (int i = 0; i < window_count; i++) {
-        if (windows[i].state == WIN_MINIMIZED) continue;
-        if (wm_render_hidden_pid() &&
-            wm_client_is_client_window(&windows[i]) &&
-            windows[i].client_pid == wm_render_hidden_pid()) continue;
-        if (wm_anim_hides(&windows[i])) continue;   // its ghost is on screen instead (wm_anim.h)
-        if (has_damage && !window_intersects_damage(&windows[i])) continue;
-        if (covered && i < focus && !windows[i].popup) continue; // under the fullscreen window
-        if (windows[i].popup || windows[i].fullscreen) {
-            // NO CHROME, NO CORNERS, NO GRIP -- and nothing at all until
-            // the client's first present: the buffer opened at create is
-            // whatever the client has drawn so far, which for one frame
-            // is nothing, and a menu that flashes black before it
-            // appears is the flash Wayland's map-on-first-commit avoids.
-            if (windows[i].client_gen[windows[i].client_front] == 0) continue;
-            // A menu's small shadow, under it (wm_shadow.h); a fullscreen
-            // window has nothing beside it to shadow.
-            if (windows[i].popup)
-                wm_shadow_draw(windows[i].x, windows[i].y, windows[i].w, windows[i].h, 0,
-                               WM_SHADOW_POPUP);
-            clip_to_window_content(&windows[i], has_damage);
-            wm_client_draw(&windows[i]);
-            apply_scene_clip(has_damage);
-            continue;
-        }
-        // NOTHING UNTIL THE CLIENT'S FIRST PRESENT -- for a TOPLEVEL as
-        // well, which is the half this guard was missing. The buffer
-        // opened at create is whatever the client has drawn, and for a
-        // client that never gets to present it is whatever the pages
-        // came up as: compositing it painted a window of solid BLACK
-        // with full chrome around it, which reads as a broken app
-        // rather than as a compositor that ran out of something.
-        // Wayland's map-on-first-commit, the same rule the popup branch
-        // above already followed.
-        if (wm_client_is_client_window(&windows[i]) &&
-            windows[i].client_gen[windows[i].client_front] == 0) continue;
-        // The shadow FIRST, so corners_save() below sees it beneath the
-        // corners and the rounded cut reveals shadow, not desktop. None
-        // for a maximized window: nothing beside it to fall on.
-        if (windows[i].state != WIN_MAXIMIZED)
-            wm_shadow_draw(windows[i].x, windows[i].y, windows[i].w, windows[i].h,
-                           corner_radius(&windows[i]),
-                           i == focus ? WM_SHADOW_FOCUSED : WM_SHADOW_INACTIVE);
-        corners_save(&windows[i]);   // what is beneath, before this window covers it
-        draw_window_chrome(&windows[i], i, i == focus);
-        if (windows[i].app && windows[i].app->on_draw) {
-            // Only the app's own draw is confined to its content area.
-            // The chrome above and the grip below are the WM's own
-            // pixels and deliberately live at/outside that boundary.
-            clip_to_window_content(&windows[i], has_damage);
-            windows[i].app->on_draw(&windows[i]);
-            apply_scene_clip(has_damage);
-        } else if (wm_client_is_client_window(&windows[i])) {
-            // A ring-3 client's window: its content is just the pixels
-            // it has already drawn into its shared buffer, blitted.
-            // Same content clip an app's on_draw() gets, for the same
-            // reason -- a client that reports a size larger than its
-            // window must not be able to paint over the chrome.
-            clip_to_window_content(&windows[i], has_damage);
-            wm_client_draw(&windows[i]);
-            apply_scene_clip(has_damage);
-        }
-        draw_resize_grip(&windows[i]); // after on_draw() -- see its own comment
-        corners_round(&windows[i]);    // last: the arc cuts chrome, content and grip alike
+    // TASKBAR PEEK'S HIGHLIGHT: every other window, then a dim over the
+    // desktop, then the lifted one on top (wm_peek.h). The dim is drawn
+    // under the current clip like everything else, so a damage rect
+    // inside it re-dims only what it repaints.
+    int lifted = wm_peek_highlight_index();
+    for (int i = 0; i < window_count; i++)
+        if (i != lifted) draw_one_window(i, focus, covered, has_damage, 0);
+    if (lifted >= 0) {
+        for (int y = 0; y < screen_h - taskbar_h; y++)
+            ugfx_blend_hspan(wm_surface(), 0, y, screen_w, ugfx_rgb(8, 8, 12), 0, 150);
+        draw_one_window(lifted, focus, covered, has_damage, 1);
     }
 
     if (!covered) draw_taskbar();
