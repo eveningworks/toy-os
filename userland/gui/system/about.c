@@ -17,11 +17,9 @@
 // misread a laptop by three commits, which is what the mismatch row
 // below exists to catch.
 //
-// WHAT IS NOT HERE, AND WHY. The processor MODEL: `kernel/arch/x86_64/
-// cpuid.c` reads the 48-byte brand string, but QUERY_CPUS carries only
-// acpi/apic ids and flags, so ring 3 cannot ask for it. Reporting the
-// count is the honest answer until that record grows a field. Adding
-// one is an ABI change, not a side effect of this window.
+// TWO COLUMNS, KDE's "About This System": the mark, name and version on
+// the left; Software and Hardware on the right; Copy to clipboard (the
+// whole report as text, for a bug report) and Close in a footer.
 #include <stdint.h>
 #include "rt/sys.h"
 #include "ui/ugfx.h"
@@ -32,15 +30,20 @@
 #include "version.h"        // TOYOS_VERSION*, generated -- tools/gen_version.sh
 #include "build_date.h"     // TOYOS_BUILD_DATE -- the DAY this program was built
 #include "cpuinfo.h"        // struct cpu_info -- SYS_CPU_INFO, the brand and topology
+#include "ui/uui_button.h"
+#include "ui/uui_focus.h"
+#include "ui/uui_route.h"   // UUI_REASON_*
+#include "ui/ulog.h"
+#include "lib/uclip.h"
 #include <stdio.h>
 #include <string.h>
 
-#define MARGIN    14
-#define LINE_GAP  6
-#define LOGO      48
-#define LOGO_GAP  12
-#define LABEL_GAP 10
-#define SECTION_GAP 10
+// Font-derived, so the window reflows with the session font.
+static int pad(void)       { return utheme_pad() * 2; }
+static int line_h(void)    { return ugfx_char_h() + ugfx_char_h() / 3; }
+static int logo_px(void)   { return ugfx_char_h() * 5; }
+static int label_gap(void) { return ugfx_char_w() * 3 / 2; }
+static int footer_h(void)  { return utheme_control_h() + 2 * utheme_pad(); }
 
 // A row is a label and a value, or a HEADING (value empty, label set,
 // `heading` true), or a full-width NOTE (label empty). One table so the
@@ -81,7 +84,7 @@ static void fill_rows(void) {
     snprintf(g_title, sizeof g_title, "toy-os %s",
              have_kv ? kv.version : TOYOS_VERSION);
 
-    add("Software", 1, 0);
+    add("SOFTWARE", 1, 0);
 
     struct row *r = add("Kernel", 0, 0);
     if (have_kv) snprintf(r->value, sizeof r->value, "%s (%s)", kv.version, kv.build_id);
@@ -118,10 +121,20 @@ static void fill_rows(void) {
                      (fs.flags & QUERY_FS_RDONLY) ? ", read-only" : "");
     }
 
-    add("Hardware", 1, 0);
+    add("HARDWARE", 1, 0);
+
+    // THE MACHINE BY NAME, when the firmware gave one (SMBIOS type 1);
+    // a nameless one is simply not mentioned, as /bin/about does.
+    struct query_smbios sm;
+    if (sys_query_record(QUERY_SMBIOS, 0, &sm, sizeof sm) >= (int)sizeof sm &&
+        sm.found && (sm.sys_vendor[0] || sm.product[0])) {
+        r = add("Device", 0, 0);
+        snprintf(r->value, sizeof r->value, "%s%s%s", sm.sys_vendor,
+                 sm.sys_vendor[0] && sm.product[0] ? " " : "", sm.product);
+    }
 
     // A LIST class: count the records rather than asking for a count
-    // nobody publishes. See the note at the top on the missing model.
+    // nobody publishes.
     int cpus = 0;
     struct query_cpu c;
     while (cpus < 256 &&
@@ -189,8 +202,6 @@ static void fill_rows(void) {
     }
 }
 
-static int line_h(void) { return ugfx_char_h() + LINE_GAP; }
-
 static int label_col(void) {
     int w = 0;
     for (int i = 0; i < g_nrows; i++) {
@@ -201,21 +212,88 @@ static int label_col(void) {
     return w;
 }
 
-// A heading gets the gap ABOVE it, except the first.
+// A heading after the first gets a blank half-line above it.
 static int row_y(int i) {
     int y = 0;
     for (int k = 0; k < i; k++)
-        y += line_h() + (g_rows[k + 1].heading && k ? SECTION_GAP : 0);
+        y += line_h() + (g_rows[k + 1].heading ? line_h() / 2 : 0);
     return y;
+}
+
+// --- the left column: the mark, the name, the version -----------------
+
+static const char *const TAGLINE[] = { "x86-64 hobby", "operating system" };
+
+// g_title is "toy-os <version>"; the column shows the two on two lines.
+static const char *version_text(void) { return g_title + sizeof "toy-os"; }
+
+static int left_w(void) {
+    int w = logo_px();
+    if (ugfx_char_w() * 16 > w) w = ugfx_char_w() * 16;
+    const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
+    if (ugfx_text_width("toy-os") > w) w = ugfx_text_width("toy-os");
+    ugfx_set_font(was);
+    if (ugfx_text_width(version_text()) > w) w = ugfx_text_width(version_text());
+    for (unsigned i = 0; i < sizeof TAGLINE / sizeof TAGLINE[0]; i++)
+        if (ugfx_text_width(TAGLINE[i]) > w) w = ugfx_text_width(TAGLINE[i]);
+    return w;
+}
+
+static int left_h(void) { return logo_px() + line_h() / 2 + 4 * line_h(); }
+
+// The right column starts here, past the divider.
+static int right_x(void) { return pad() + left_w() + pad() + 1 + pad(); }
+
+// --- the footer: Copy to clipboard, Close ------------------------------
+
+enum { ID_COPY = 1, ID_CLOSE };
+static char g_copy_label[24] = "Copy to clipboard";
+static struct uui_button g_copy, g_close;
+static struct uui_item g_widgets[] = {
+    { .ops = &uui_button_ops, .widget = &g_copy,  .id = ID_COPY,  .name = "copy" },
+    { .ops = &uui_button_ops, .widget = &g_close, .id = ID_CLOSE, .name = "close" },
+};
+static struct uui_focusable g_focusables[] = {
+    { &g_copy,  &uui_button_ops },
+    { &g_close, &uui_button_ops },
+};
+static struct uui_focus g_focus;
+
+// Sized for the WIDEST label the Copy button can show, so "Copied" does
+// not shrink it under the pointer.
+static int button_w(const struct uui_button *b) {
+    int w, h;
+    uui_button_natural_size(b, &w, &h);
+    int min = ugfx_text_width("Copy to clipboard") + 2 * utheme_pad();
+    return w > min ? w : min;
+}
+
+// The whole report as text -- what a bug report wants pasted into it.
+static void copy_report(void) {
+    static char buf[MAX_ROWS * 96 + 64];
+    int n = snprintf(buf, sizeof buf, "%s\n", g_title);
+    for (int i = 0; i < g_nrows && n < (int)sizeof buf; i++) {
+        const struct row *r = &g_rows[i];
+        if (r->heading)
+            n += snprintf(buf + n, sizeof buf - n, "\n%s\n", r->label);
+        else if (r->label[0])
+            n += snprintf(buf + n, sizeof buf - n, "%s: %s\n", r->label, r->value);
+        else
+            n += snprintf(buf + n, sizeof buf - n, "%s\n", r->value);
+    }
+    if (n >= (int)sizeof buf) n = (int)sizeof buf - 1;
+    // SAID EITHER WAY: a Copy that did nothing visible reads as broken.
+    strlcpy(g_copy_label, uclip_set_text(buf, n) ? "Copied" : "Copy failed",
+            sizeof g_copy_label);
+    ulogf("about: copy %d %s\n", n, g_copy_label);
 }
 
 static void about_size(int *w, int *h) {
     fill_rows();
     int lab = label_col();
-    // MEASURE IN THE WEIGHT THAT DRAWS: the title and the headings are
-    // bold, and bold is wider.
+    // MEASURE IN THE WEIGHT THAT DRAWS: the headings are bold.
     const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
-    int widest = ugfx_text_width(g_title);
+    int widest = 0;
     for (int i = 0; i < g_nrows; i++)
         if (g_rows[i].heading && ugfx_text_width(g_rows[i].label) > widest)
             widest = ugfx_text_width(g_rows[i].label);
@@ -224,69 +302,85 @@ static void about_size(int *w, int *h) {
         if (g_rows[i].heading) continue;
         int tw = !g_rows[i].label[0]
                  ? ugfx_text_width(g_rows[i].value)
-                 : lab + LABEL_GAP + ugfx_text_width(g_rows[i].value);
+                 : lab + label_gap() + ugfx_text_width(g_rows[i].value);
         if (tw > widest) widest = tw;
     }
-    int head = LOGO > 2 * ugfx_char_h() ? LOGO : 2 * ugfx_char_h();
-    *w = 2 * MARGIN + (LOGO + LOGO_GAP + widest);
-    *h = 2 * MARGIN + head + SECTION_GAP + row_y(g_nrows);
+    int body = row_y(g_nrows);
+    if (left_h() > body) body = left_h();
+    *w = right_x() + widest + pad();
+    int buttons = pad() + button_w(&g_copy) + utheme_gap() + button_w(&g_close) + pad();
+    if (buttons > *w) *w = buttons;
+    *h = pad() + body + pad() + footer_h();
 }
 
 static void about_draw(struct uapp *a, struct uapp_draw *d) {
     (void)a;
     fill_rows();
-    ugfx_fill(d->surface, UTHEME_PANEL_BG);
+    struct ugfx_surface *s = d->surface;
+    int foot_y = s->h - footer_h();
+    ugfx_fill(s, UTHEME_PANEL_BG);
 
-    // The logo, then the name beside it -- the arrangement every About
-    // box uses, and the reason the mark got a plate (see gen_icons.py's
-    // icon_toyos: the Start button paints its own background, nothing
-    // sits behind this one).
-    const struct uimg *logo = icon_get("toyos", LOGO);
+    // --- left: centred in its column ---
+    int lw = left_w(), lx = pad(), cx = lx + lw / 2, y = pad();
+    const struct uimg *logo = icon_get("toyos", logo_px());
     if (logo)
-        ugfx_blit_alpha(d->surface, MARGIN, MARGIN, logo->w, logo->h,
-                        logo->px, logo->w);
-    int text_x = MARGIN + LOGO + LOGO_GAP;
-    int right = d->surface->w - MARGIN;
-    // The title and the section headings are BOLD -- the desktop font's
-    // bold weight, which falls back to regular where the face has none.
+        ugfx_blit_alpha(s, cx - logo->w / 2, y, logo->w, logo->h, logo->px, logo->w);
+    y += logo_px() + line_h() / 2;
     const struct ugfx_font *bold = ugfx_font_session(UGFX_FONT_BOLD);
     const struct ugfx_font *was = ugfx_set_font(bold);
-    ugfx_draw_string_clipped(d->surface, text_x, MARGIN + 6, right - text_x,
-                             g_title, UTHEME_TEXT, UTHEME_PANEL_BG);
+    ugfx_draw_string_clipped(s, cx - ugfx_text_width("toy-os") / 2, y, lw, "toy-os",
+                             UTHEME_TEXT, UTHEME_PANEL_BG);
     ugfx_set_font(was);
-    ugfx_draw_string_clipped(d->surface, text_x, MARGIN + 6 + line_h(),
-                             right - text_x, "a hobby x86-64 operating system",
-                             UTHEME_BORDER, UTHEME_PANEL_BG);
+    y += line_h();
+    ugfx_draw_string_clipped(s, cx - ugfx_text_width(version_text()) / 2, y, lw,
+                             version_text(), UTHEME_TEXT, UTHEME_PANEL_BG);
+    y += line_h();
+    for (unsigned i = 0; i < sizeof TAGLINE / sizeof TAGLINE[0]; i++, y += line_h())
+        ugfx_draw_string_clipped(s, cx - ugfx_text_width(TAGLINE[i]) / 2, y, lw,
+                                 TAGLINE[i], UTHEME_BORDER, UTHEME_PANEL_BG);
 
-    int head = LOGO > 2 * ugfx_char_h() ? LOGO : 2 * ugfx_char_h();
-    int top = MARGIN + head + SECTION_GAP;
-    int lab = label_col();
+    // --- the divider, then the sections ---
+    ugfx_fill_rect(s, lx + lw + pad(), pad(), 1, foot_y - 2 * pad(), UTHEME_SEPARATOR);
+    int text_x = right_x(), right = s->w - pad(), lab = label_col();
     for (int i = 0; i < g_nrows; i++) {
         struct row *r = &g_rows[i];
-        int y = top + row_y(i);
-        // Clipped, like anything in a fixed box (docs/gui-guidelines.md):
-        // the window is resizable, so a narrowed one truncates rather
-        // than painting past its own edge.
+        int ry = pad() + row_y(i);
+        // Clipped, like anything in a fixed box (docs/gui-guidelines.md).
         if (r->heading) {
             ugfx_set_font(bold);
-            ugfx_draw_string_clipped(d->surface, text_x, y, right - text_x,
-                                     r->label, UTHEME_ACCENT, UTHEME_PANEL_BG);
+            ugfx_draw_string_clipped(s, text_x, ry, right - text_x, r->label,
+                                     UTHEME_ACCENT, UTHEME_PANEL_BG);
             ugfx_set_font(was);
             continue;
         }
         if (r->label[0])
-            ugfx_draw_string_clipped(d->surface,
-                                     text_x + (lab - ugfx_text_width(r->label)),
-                                     y, lab, r->label,
-                                     UTHEME_BORDER, UTHEME_PANEL_BG);
-        int vx = r->label[0] ? text_x + lab + LABEL_GAP : text_x;
-        ugfx_draw_string_clipped(d->surface, vx, y, right - vx, r->value,
-                                 r->warn ? UTHEME_ACCENT : UTHEME_TEXT,
-                                 UTHEME_PANEL_BG);
+            ugfx_draw_string_clipped(s, text_x + (lab - ugfx_text_width(r->label)), ry,
+                                     lab, r->label, UTHEME_BORDER, UTHEME_PANEL_BG);
+        int vx = r->label[0] ? text_x + lab + label_gap() : text_x;
+        ugfx_draw_string_clipped(s, vx, ry, right - vx, r->value,
+                                 r->warn ? UTHEME_ACCENT : UTHEME_TEXT, UTHEME_PANEL_BG);
     }
+
+    // --- the footer bar; the library draws the buttons on top ---
+    ugfx_fill_rect(s, 0, foot_y, s->w, footer_h(), UTHEME_WINDOW_BG);
+    ugfx_fill_rect(s, 0, foot_y, s->w, 1, UTHEME_SEPARATOR);
+    int bh = utheme_control_h(), by = foot_y + (footer_h() - bh) / 2;
+    uui_button_set_geometry(&g_copy, pad(), by, button_w(&g_copy), bh);
+    int cw = button_w(&g_close);
+    uui_button_set_geometry(&g_close, s->w - pad() - cw, by, cw, bh);
+}
+
+static void on_widget(struct uapp *a, int id, int reason) {
+    if (reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) return;
+    if (id == ID_COPY) { copy_report(); uapp_redraw(a); }
+    else if (id == ID_CLOSE) uapp_quit(a, 0);
 }
 
 int main(void) {
+    uui_button_init(&g_copy, 0, 0, 0, 0, g_copy_label, UTHEME_BUTTON_BG, UTHEME_TEXT, ID_COPY);
+    uui_button_init(&g_close, 0, 0, 0, 0, "Close", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_CLOSE);
+    g_copy.outlined = g_close.outlined = 1;
+    uui_focus_init(&g_focus, g_focusables, 2);
     struct uapp_desc desc = {
         .title   = "About",
         // A second identical, static About box is never what the user
@@ -294,6 +388,10 @@ int main(void) {
         .app_id  = "about",
         .on_size = about_size,
         .on_draw = about_draw,
+        .widgets = g_widgets,
+        .widget_count = 2,
+        .focus   = &g_focus,
+        .on_widget = on_widget,
         // FIXED SIZE: the window is sized from its rows, and nothing in
         // it reflows -- every About box is (macOS, GNOME, KDE Info Center).
         .flags   = UAPP_SINGLE_INSTANCE,

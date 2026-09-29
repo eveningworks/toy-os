@@ -1189,7 +1189,7 @@ Things this OS does not do yet, or does in a way worth improving --
 `docs/bugs.md`; the test is "is something broken?", not "would I like
 this to be better?".
 
-- [ ] About shows a processor COUNT, not a model -- `QUERY_CPUS` carries no brand string, so ring 3 cannot ask for one
+- [x] ~~About shows a processor COUNT, not a model~~ DONE (540dd6e5) -- `SYS_CPU_INFO` hands ring 3 the brand string and topology
 - [x] ~~Run the full gate over the About rewrite and the logo~~ DONE 2026-09-02 -- preflight and `gui_regress.py` green
 - [ ] A key event carries the translated code only, not the physical keycode
 
