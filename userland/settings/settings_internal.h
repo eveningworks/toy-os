@@ -234,7 +234,7 @@ extern struct uapp_window  *g_opts_win;
 extern const char          *g_page_owner_kind;
 extern struct uui_item      DLG[PAGE_MAX + 4];
 extern int                  DLG_COUNT;
-extern struct uui_focusable DFOCUS[PAGE_MAX];
+extern struct uui_focusable DFOCUS[PAGE_MAX + 2];
 extern int                  DFOCUS_COUNT;
 extern struct uui_focus     g_dlg_focus;
 extern struct uui_layout    DLG_LAYOUT;
@@ -244,6 +244,7 @@ void opts_window_size(int *w, int *h);
 void dlg_on_widget(struct uapp_window *win, int id, int reason);
 void dlg_on_close(struct uapp_window *win);
 void open_options_dialog(struct uapp *a);
+int commit_option(struct slot *sl);   // 1 written, 0 nothing to do, -1 refused
 
 // set_page.c
 extern char g_status[160];

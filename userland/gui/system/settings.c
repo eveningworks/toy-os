@@ -304,16 +304,8 @@ static void on_widget(struct uapp *a, int id, int reason) {
         // commits unasked. A saver reads its file at startup, so a Test
         // that skipped this would preview the options you did NOT pick.
         int wrote = 0;
-        for (int i = 0; i < g_slot_count; i++) {
-            struct slot *sl = &g_slot[i];
-            const struct usaver_opt *o = sl->setting >= 0 ? opt_of(sl->setting) : 0;
-            if (!o || sl->staged == sl->baseline) continue;
-            if (uconf_set(g_file[sl->setting], o->key, staged_value(sl))) {
-                sl->baseline = sl->staged;
-                sl->row.changed = 0;
-                wrote++;
-            }
-        }
+        for (int i = 0; i < g_slot_count; i++)
+            if (commit_option(&g_slot[i]) > 0) wrote++;
         char path[128];
         snprintf(path, sizeof path, "%s/%s", SCREENSAVER_DIR, name);
         int pid = sys_spawn(path, 0, -1);

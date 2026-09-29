@@ -819,6 +819,80 @@ def main():
                       dbg.window("Shatter options") is None and after == before,
                       f"before={before.strip()!r} after={after.strip()!r}")
 
+                # AN EDIT, THEN CANCEL OR OK -- the cases the check above
+                # cannot see, since it cancels an untouched dialog. The
+                # options are the page's own slots, so an edit left staged
+                # after Cancel is one the page's Apply writes, and one left
+                # unsynced after OK is one it writes AGAIN. Driven from the
+                # KEYBOARD, which is also the check that Tab reaches OK
+                # and Cancel: the ring is Pieces, Motion, OK, Cancel.
+                # HEX STRINGS: `gui key 9` types the DIGIT nine.
+                TAB, RIGHT, LEFT, ENTER = "0x09", "0x96", "0x95", "0x0a"
+
+                def open_opts():
+                    for _ in range(2):
+                        b = opts_button() or ob
+                        click(b[0] + b[2] // 2, b[1] + b[3] // 2)
+                        deadline = time.time() + 6
+                        while time.time() < deadline:
+                            if dbg.window("Shatter options"):
+                                dbg.settle(1.0)
+                                return True
+                            time.sleep(0.25)
+                    return False
+
+                def edit_then(tabs_to_button):
+                    mk = len(drain(dbg))
+                    dbg.key(TAB)       # onto Pieces, a slider
+                    dbg.key(RIGHT)
+                    got = staged_for(dbg, mk, "shatter.pieces")
+                    if got is None:    # already at its last notch
+                        dbg.key(LEFT)
+                        got = staged_for(dbg, mk, "shatter.pieces")
+                    for _ in range(tabs_to_button):
+                        dbg.key(TAB)
+                    dbg.key(ENTER)
+                    deadline = time.time() + 4
+                    while time.time() < deadline and dbg.window("Shatter options"):
+                        time.sleep(0.25)
+                    dbg.settle(1.0)
+                    return got
+
+                def apply_writes():
+                    """Whether the page's Apply writes an option now."""
+                    mk = len(drain(dbg))
+                    press("apply")
+                    time.sleep(0.6)
+                    drain(dbg)
+                    return bool(_since(mk, r"settings: set shatter\."))
+
+                conf = "/etc/effects/shatter.conf"
+                if check("effects: the dialog opens again", open_opts()):
+                    got = edit_then(3)             # Motion, OK, Cancel
+                    now = dbg.send(f"sh cat {conf}") or ""
+                    check("effects: an edit, then Cancel from the keyboard, "
+                          "closes it and writes nothing",
+                          got is not None and dbg.window("Shatter options") is None
+                          and now == before,
+                          f"staged={got!r} before={before.strip()!r} now={now.strip()!r}")
+                    check("effects: ...and the page's Apply does not write "
+                          "the cancelled edit", not apply_writes() and
+                          (dbg.send(f"sh cat {conf}") or "") == before)
+
+                if check("effects: and opens a third time", open_opts()):
+                    got = edit_then(2)             # Motion, OK
+                    now = dbg.send(f"sh cat {conf}") or ""
+                    check("effects: an edit, then OK, writes it",
+                          got is not None and f"pieces={got}" in now,
+                          f"staged={got!r} now={now.strip()!r}")
+                    check("effects: ...and leaves nothing for the page's "
+                          "Apply to write again", not apply_writes())
+                # Put the file back for every later run.
+                if "=" in before:
+                    dbg.write_lines(conf, [ln for ln in before.strip().splitlines() if "=" in ln])
+                else:
+                    dbg.send(f"sh rm {conf}")
+
     # --- A GROUP PAGE CARRIES SEVERAL SETTINGS ------------------------
     #
     # The Mouse page is the fixture because its four settings come from

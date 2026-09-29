@@ -157,7 +157,7 @@ struct uapp_window  *g_opts_win;
 const char          *g_page_owner_kind;
 struct uui_item      DLG[PAGE_MAX + 4];
 int                  DLG_COUNT;
-struct uui_focusable DFOCUS[PAGE_MAX];
+struct uui_focusable DFOCUS[PAGE_MAX + 2]; // + OK and Cancel
 int                  DFOCUS_COUNT;
 struct uui_focus     g_dlg_focus;
 struct uui_layout    DLG_LAYOUT;
@@ -196,6 +196,8 @@ void relayout_dialog(int content_w) {
     DLG_LAYOUT = (struct uui_layout){ .dir = UUI_COLUMN, .items = DLG,
                                       .count = n, .margin = 0 };
     DLG_COUNT = n;
+    DFOCUS[DFOCUS_COUNT++] = (struct uui_focusable){ &g_opts_ok, &uui_button_ops };
+    DFOCUS[DFOCUS_COUNT++] = (struct uui_focusable){ &g_opts_cancel, &uui_button_ops };
     uui_focus_init(&g_dlg_focus, DFOCUS, DFOCUS_COUNT);
 }
 
@@ -204,6 +206,29 @@ void relayout_dialog(int content_w) {
 void opts_window_size(int *w, int *h) {
     *w = ugfx_char_w() * 52;
     *h = 0;   // measured from the cards once they are built -- see below
+}
+
+// The dialog's options back to what the file holds. Its controls are
+// the page's own slots, so a cancelled edit left staged here is one the
+// page's Apply would write.
+static void revert_options(void) {
+    for (int i = g_saver_slot; i >= 0 && i < g_slot_count; i++)
+        if (g_slot[i].setting >= 0 && g_slot[i].staged != g_slot[i].baseline)
+            load_slot(&g_slot[i], g_slot[i].setting);
+}
+
+// Writes one option slot's staged value to its owner's file. On success
+// the written value becomes the slot's baseline AND its g_value, so a
+// later load_slot() (a revert) reloads what is on disk now.
+int commit_option(struct slot *sl) {
+    const struct usaver_opt *o = sl->setting >= 0 ? opt_of(sl->setting) : 0;
+    if (!o || sl->staged < 0 || sl->staged == sl->baseline) return 0;
+    const char *v = staged_value(sl);
+    if (!uconf_set(g_file[sl->setting], o->key, v)) return -1;
+    strlcpy(g_value[sl->setting], v, sizeof g_value[sl->setting]);
+    sl->baseline = sl->staged;
+    sl->row.changed = 0;
+    return 1;
 }
 
 void dlg_on_widget(struct uapp_window *win, int id, int reason) {
@@ -228,23 +253,26 @@ void dlg_on_widget(struct uapp_window *win, int id, int reason) {
         // page's Apply writes registered settings; an option is not
         // one, so this is where it lands -- the same uconf_set() call
         // the inline rows used.
-        for (int i = g_saver_slot; i >= 0 && i < g_slot_count; i++) {
-            struct slot *sl = &g_slot[i];
-            const struct usaver_opt *o = opt_of(sl->setting);
-            if (!o || sl->staged < 0) continue;
-            uconf_set(g_file[sl->setting], o->key, staged_value(sl));
-        }
+        int failed = 0;
+        for (int i = g_saver_slot; i >= 0 && i < g_slot_count; i++)
+            if (commit_option(&g_slot[i]) < 0) failed++;
+        if (failed)
+            snprintf(g_status, sizeof g_status, "%d option(s) could not be saved", failed);
+        revert_options();   // a refused write is not left staged either
         uapp_window_close(win);
+        if (g_app) uapp_redraw(g_app);  // the footer's change count
         return;
     }
-    if (id == ID_OPTS_CANCEL) uapp_window_close(win);
+    if (id == ID_OPTS_CANCEL) dlg_on_close(win);
 }
 
 void dlg_on_close(struct uapp_window *win) {
     // NOTHING IS WRITTEN ON A CLOSE, which is Cancel's rule: the X and
     // Cancel are the same answer, and a dialog that committed on the X
     // would be the one shape of this nobody expects.
+    revert_options();
     uapp_window_close(win);
+    if (g_app) uapp_redraw(g_app);
 }
 
 void open_options_dialog(struct uapp *a) {
