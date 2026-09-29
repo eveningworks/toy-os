@@ -4267,9 +4267,14 @@ is inside it, and every window button on the strip starts to the right of
 that -- so the default moving shifts the entire taskbar under every
 pixel-based GUI check in one commit. Shipping `text` meant the setting
 arrived without that churn, and the argument was a migration one: it
-expired once the setting existed and the checks had been read. `both` is
-what Windows shipped and what the maintainer asked for; the churn was
-paid once, deliberately, rather than avoided forever.
+expired once the setting existed and the checks had been read. `both`
+followed, what Windows shipped and what the maintainer asked for then.
+**Since 2026-09-29 it is `icon`** -- the mark alone, KDE's default and
+Windows 11's shape -- because the redesigned strip the maintainer chose
+from mockups (see "The taskbar has three styles") draws Start as a
+square, and in the centred style a word would sit in the middle of a
+row of icons. The churn was paid each time, deliberately, rather than
+avoided forever.
 
 **One decision, three readers.** `start_mark()` decides whether a mark
 is shown at all; `start_btn_w()`, `draw_taskbar()` and
@@ -8449,50 +8454,83 @@ straight into the compositor's buffer and has neither a widget tree nor
 surfaces, so what carries over is the RULES -- the delay constant, the
 no-grab rule, re-arming on a move -- and not the code.
 
-## A tray icon answers a press and ignores a hover
+## A tray icon answers a hover and a press, and nothing latches
 
-Every tray item now fills with a rounded `uui_state_bg(panel,
-UUI_STATE_PRESSED)` while the left button is held on it, and shows
-nothing at any other time -- no hover state, and no lit item while the
-popup a press opened is still up.
+Every tray item fills with a rounded `uui_state_bg(bar,
+UUI_STATE_HOVER)` while the pointer rests on it and
+`UUI_STATE_PRESSED` while the left button is held on it -- Windows 11's
+and Breeze's rule, and the one the strip's window buttons follow.
 
-**That is the odd one out, deliberately.** Windows 11 gives a tray
-button a rounded hover highlight, a pressed state AND a lit state while
-its flyout is open; Plasma's system tray and GNOME Shell's quick
-settings both do the hover half too. macOS menu-bar extras are the
-exception: no hover feedback whatever, and a click fills the item while
-its menu is down. The maintainer asked for press-only, so the shape
-copied is macOS's, minus the latch.
-
-**Why press-only is defensible and not just a preference.** The tray is
-the one strip where the pointer is constantly passing THROUGH on its way
-to the clock or to the screen edge, and a hover highlight there fires on
-travel rather than on intent -- the same reason this project's guidance
-warns that a hover which shouts is worse than none. A press is
-unambiguous: nothing arms it by accident.
+**It was press-only until 2026-09-29**, the macOS menu-bar rule, at the
+maintainer's request -- argued at the time on the tray being a strip
+the pointer passes THROUGH. The maintainer reversed it with the taskbar
+redesign: once every other control on the strip lights on hover, a tray
+that alone does not reads as dead rather than as quiet.
 
 **Nothing latches, and that cost a decision.** Lighting the item while
-its popup is open is the more informative behaviour and is what every
-desktop named above does. It was dropped because it makes the fill mean
-two things -- "your press landed" and "this flyout is the open one" --
-and the second is already said by the flyout itself being on screen,
-anchored to that item. A fill that means one thing is testable; the
-check for it is the last pair in `tray_press_test.py`, which asserts
-the calendar is open AND the clock is back at rest.
+its popup is open is the more informative behaviour and is what Windows
+11 does. It was dropped because it makes the fill mean two things --
+"your press landed" and "this flyout is the open one" -- and the second
+is already said by the flyout itself being on screen, anchored to that
+item. The check for it is the last pair in `tray_press_test.py`: the
+calendar open, the pointer gone, the clock back at rest.
 
 **Where it lives, and why not in each popup.** `wm_tray.c` owns the
-pressed id and applies it inside the single right-to-left walk that
-draws the strip, so the clock, the four flyout items, the on-screen
-keyboard and anything registered later all get it with no code of their
-own. The alternative -- each popup marking its own item -- is six call
-sites to keep in step and a seventh to forget, which is the failure
-`wm_overlay.h`'s registry exists to prevent.
+hovered and pressed ids and applies them inside the single right-to-left
+walk that draws the strip, so the clock, the flyout items, the
+on-screen keyboard and anything registered later all get it with no
+code of their own. The alternative -- each popup marking its own item --
+is six call sites to keep in step and a seventh to forget, which is the
+failure `wm_overlay.h`'s registry exists to prevent.
 
-**And the pill is a shape, not a band.** It is inset from the strip's
-edges and rounded at `taskbar_h / 8`, Windows 11's taskbar-button
-proportion; a full-height block reads as a section of the bar rather
-than as a control. The rasteriser is `uui_fill_round_rect()`, promoted
-out of `uui_scrollbar.c` when this became its second real caller.
+**And the fill is a shape, not a band.** It spans the strip's button
+box (`btn_y`/`btn_h` from `taskbar_geom()`) with the buttons' corner
+radius, so a tray item lights exactly as a window button does; a
+full-height block reads as a section of the bar rather than as a
+control. The rasteriser is `uui_fill_round_rect()`.
+
+## The taskbar has three styles over one layout, and a floating panel deflates rather than the band moving
+
+`desktop.taskbar_style` is `classic` | `centered` | `floating`, and
+`desktop.taskbar_theme` is `dark` | `light`. The maintainer chose from
+three mockups -- labelled buttons (Windows 10 / Plasma's labelled task
+manager), centred icons (Windows 11), a floating panel (Plasma 6) --
+and asked for the first as the default with the other two selectable.
+
+**A style is measurements, not a second taskbar.** One
+`taskbar_layout()` places the buttons for every style (branching once,
+for the centred row) and one `draw_taskbar()` draws them (branching
+once per indicator: an underline, a pill, a tinted frame), and both ask
+`taskbar_geom()` for the panel and button rects. The obvious shape --
+a draw-and-hit-test pair per style -- is three copies of the thing
+`wm_taskbar.h` exists to keep single: the strip once ran off the screen
+because three walks of the window list disagreed.
+
+**The band never changes with the panel's shape.** `taskbar_h` is the
+bar plus `TASKBAR_FLOAT_GAP` in the floating style, and a floating
+panel DEFLATES to fill that band while any window is maximized -- the
+case where a gap would be a strip of wallpaper between a window and
+the bar. Plasma 6 does the same. The alternative, reserving only the
+panel and growing the work area when it floats, would re-lay every
+maximized window each time one was maximized, which is the moment it
+matters least.
+
+**Hit-test against the band, draw inside the panel.** The gap under a
+floating panel is the strip's, not the desktop's, and the screen's
+bottom edge hits the button above it -- a click thrown at the edge
+should land, which is why Windows and KDE both do it. The Start button
+owns the screen's corner whenever it is leftmost.
+
+**The theme is the strip's own**, not the window theme's: Windows and
+KDE both let the panel be dark over light windows, and this desktop's
+strip was already dark over light chrome. The accent follows utheme's,
+lightened on the dark strip so a three-pixel indicator still reads; the
+hover tint is `uui_state_bg()`, as every control's is.
+
+**Not built: Windows 11's grouped network-and-volume button.** The
+centred mockup showed the two as one target; this desktop has one
+flyout per tray item and no combined Quick Settings panel to open, so
+the tray stays per-item in every style (`docs/roadmap.md`).
 
 ## The greys are a ladder with the page in the middle, macOS/Windows 10 spacing, not Breeze's
 

@@ -2,6 +2,7 @@
 #define WM_TRAY_H
 
 #include <stdint.h>
+#include "wm_taskbar.h"   // struct taskbar_geom, struct taskbar_palette
 
 // What the WM compares a tray item's visibility setting against
 // (`desktop.tray_brightness` and its neighbours). `auto` is the only
@@ -61,11 +62,10 @@ void tray_init(void);
 // last_second check used to call draw_clock_area()'s own rtc_read_local().
 void tray_update_clock(void);
 
-// Draws every active tray item right-to-left, starting at the
-// taskbar's right edge -- called from draw_taskbar() in place of the
-// old draw_clock_area(). `taskbar_y`/`bg`/`fg` match draw_taskbar()'s
-// own locals exactly.
-void draw_tray(int taskbar_y, uint32_t bg, uint32_t fg);
+// Draws every active tray item right-to-left from the panel's right
+// edge, in the strip's palette -- called from draw_taskbar() with the
+// geometry and colours it drew the panel with.
+void draw_tray(const struct taskbar_geom *g, const struct taskbar_palette *p);
 
 // The clock's own box in the taskbar strip -- 0 when no clock is
 // registered (which cannot happen after tray_init(), but a caller

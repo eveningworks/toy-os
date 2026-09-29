@@ -1415,6 +1415,17 @@ Still open: menu/taskbar-content-click/dialog redraws still fall back
 to a full-screen repaint (no damage reported for those yet) -- a
 natural next step, not attempted this round.
 
+
+**A Quick Settings flyout.** The centred taskbar style was chosen from a
+mockup that drew the network and volume icons as one hover target
+opening one panel, as Windows 11's Quick Settings does. What shipped
+keeps one target and one flyout per tray item in every style, because
+there is no combined panel for the group to open -- `volume_popup.c`,
+`network_popup.c` and `brightness_popup.c` are separate overlays. The
+work is a panel that hosts their controls (the sliders already live in
+`tray_slider_popup.c`) plus a tray item that stands for several; the
+styles themselves need nothing.
+
 ### A layout engine for the GUI
 
 Every widget position in `apps/` is arithmetic somebody worked out by

@@ -70,9 +70,9 @@ SCREEN_H = 720
 # and pixel-scan for the top border row and the divider row between the
 # app list and the system actions -- both draw in THEME_BORDER, a solid
 # distinctive colour run, unlike the surrounding text glyph rows.
-TASKBAR_H = 40       # desktop.taskbar_height's default (api/taskbar_config.h)
+TASKBAR_H = 48       # desktop.taskbar_height's default (wm_taskbar.h's TASKBAR_H_DEFAULT)
 ITEM_H = 22           # Start menu row height (gfx_char_h() + 6 -- see above)
-START_BTN = (50, 703)  # inside the taskbar's Start button, safely off any edge
+START_BTN = (20, 706)  # inside the taskbar's Start button (icon-only by default), off any edge
 
 # THERE IS NO MIRRORED LIST OF APPS HERE ANY MORE, and there was one
 # until 2026-08-20. `APP_ORDER` copied what the WM builds from

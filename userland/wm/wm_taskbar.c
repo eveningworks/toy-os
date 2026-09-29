@@ -11,6 +11,10 @@
 #include "kapi.h"
 #include "rt/sys.h"
 #include "wm/wm_conf.h"   // struct setting_msg, SETTING_OP_*
+#include "wm_tooltip.h"
+#include "start_menu.h"   // start_menu_open
+#include "wm_shadow.h"
+#include "ui/utheme.h"
 
 #define TB_GAP 4
 
@@ -18,8 +22,8 @@
 // over. Font-derived, like every other measurement on this strip: three
 // characters plus the button's own padding is the point below which a
 // label stops telling you anything, which is roughly where Windows and
-// KDE both stop shrinking too.
-static int btn_floor(void) { return 3 * ugfx_char_w() + 16; }
+// KDE both stop shrinking too. An icon-only button never shrinks.
+static int btn_floor(void) { return 3 * ugfx_char_w() + 2 * TB_PAD; }
 
 static int g_hidden;
 
@@ -43,6 +47,97 @@ int start_icon_size(void) {
 }
 
 int taskbar_default_h(void) { return TASKBAR_H_DEFAULT; }
+
+// --- style, theme and the panel's geometry ------------------------------
+
+static enum taskbar_style g_style = TASKBAR_STYLE_CLASSIC;
+static int g_dark = 1;
+static int g_bar_h = TASKBAR_H_DEFAULT;
+static int g_deflated;   // a floating panel filling its band, see below
+
+enum taskbar_style taskbar_style(void) { return g_style; }
+int taskbar_dark(void) { return g_dark; }
+int taskbar_bar_h(void) { return g_bar_h; }
+int taskbar_floating(void) { return g_style == TASKBAR_STYLE_FLOATING && !g_deflated; }
+
+static struct taskbar_palette g_pal;
+static int g_pal_for = -1;   // which theme g_pal holds; -1 = not yet filled
+
+static uint32_t hex(uint32_t rgb) {
+    return ugfx_rgb((uint8_t)(rgb >> 16), (uint8_t)(rgb >> 8), (uint8_t)rgb);
+}
+
+// FILLED AT RUNTIME, as utheme's is: ugfx_rgb() knows the surface's
+// pixel format and a static initialiser cannot.
+const struct taskbar_palette *taskbar_palette(void) {
+    if (g_pal_for == g_dark) return &g_pal;
+    struct taskbar_palette *p = &g_pal;
+    uint32_t accent = UTHEME_ACCENT;
+    if (g_dark) {
+        p->bar_rgb = 0x1E1E22; p->edge_rgb = 0x2E2E35;
+        p->focus = hex(0x383842);
+        p->focus_edge = 0;
+        p->text_rgb = 0xE6E6E6; p->dim = hex(0x9C9CA6);
+        p->running = hex(0x8A8A94);
+        p->accent = ugfx_blend(accent, hex(0xFFFFFF), 77);
+    } else {
+        p->bar_rgb = 0xECECEC; p->edge_rgb = 0xCDCDD2;
+        p->focus = hex(0xFFFFFF);
+        p->focus_edge = hex(0xC8C8D0);
+        p->text_rgb = 0x141414; p->dim = hex(0x62626A);
+        p->running = hex(0x8C8C96);
+        p->accent = accent;
+    }
+    p->bar = hex(p->bar_rgb);
+    p->edge = hex(p->edge_rgb);
+    p->text = hex(p->text_rgb);
+    // Derived, never picked: uui_state_bg() lightens a dark ground and
+    // darkens a light one, as every control's hover does.
+    p->hover = uui_state_bg(p->bar, UUI_STATE_HOVER);
+    g_pal_for = g_dark;
+    return p;
+}
+
+void taskbar_geom(struct taskbar_geom *g) {
+    int band_y = screen_h - taskbar_h;
+    if (taskbar_floating()) {
+        g->px = TASKBAR_FLOAT_GAP;
+        g->pw = screen_w - 2 * TASKBAR_FLOAT_GAP;
+        g->py = band_y;
+        g->ph = g_bar_h;
+        // Breeze's proportion -- half the line height -- the radius
+        // this desktop's windows already use.
+        g->radius = ugfx_char_h() / 2;
+    } else {
+        g->px = 0; g->pw = screen_w;
+        g->py = band_y; g->ph = taskbar_h;
+        g->radius = 0;
+    }
+    if (g->radius > g->ph / 2) g->radius = g->ph / 2;
+    int inset = g_bar_h / 12;             // 4 at the 48px default
+    if (inset < 2) inset = 2;
+    g->btn_h = g_bar_h - 2 * inset;
+    g->btn_y = g->py + (g->ph - g->btn_h) / 2;
+    // Nested corners stay concentric: the panel's radius less the inset.
+    g->btn_r = g->radius > inset ? g->radius - inset : 4;
+}
+
+// A floating panel DEFLATES while any window is maximized -- the one
+// case where a gap under the panel would be a strip of wallpaper
+// between the window and the bar. Asked once a frame (taskbar_poll_config)
+// so the drawing and the hit tests of one frame agree.
+static int want_deflated(void) {
+    for (int i = 0; i < window_count; i++)
+        if (windows[i].state == WIN_MAXIMIZED && !windows[i].popup) return 1;
+    return 0;
+}
+
+// The band, and the shadow a floating panel casts above it.
+static void damage_strip(void) {
+    int m = wm_shadow_margin();
+    redraw_pending = 1;
+    wm_damage_rect(0, screen_h - taskbar_h - m, screen_w, taskbar_h + m);
+}
 
 // **THROUGH usetting_get(), NOT sys_setting().** These settings are
 // DECLARED by files in /etc/settings.d rather than registered in the
@@ -68,6 +163,12 @@ static int read_height(void) {
 }
 
 void taskbar_poll_config(void) {
+    int defl = g_style == TASKBAR_STYLE_FLOATING && want_deflated();
+    if (defl != g_deflated) {
+        g_deflated = defl;
+        damage_strip();
+    }
+
     static uint64_t seen_gen;
     static int primed;
     uint64_t gen = wm_watch_config_gen();
@@ -79,14 +180,33 @@ void taskbar_poll_config(void) {
     // it: the desktop grid, every maximized window, the Start menu's
     // anchor. wm_layout_changed() re-derives all of that, the same walk
     // a screen-size change makes.
-    int h = read_height();
+    struct setting_msg msg;
+    setting_get("desktop.taskbar_style", &msg);
+    enum taskbar_style style = TASKBAR_STYLE_CLASSIC;   // every value named, see below
+    if (k_strcmp(msg.value, "centered") == 0)      style = TASKBAR_STYLE_CENTERED;
+    else if (k_strcmp(msg.value, "floating") == 0) style = TASKBAR_STYLE_FLOATING;
+    else if (k_strcmp(msg.value, "classic") == 0)  style = TASKBAR_STYLE_CLASSIC;
+    setting_get("desktop.taskbar_theme", &msg);
+    int dark = k_strcmp(msg.value, "light") != 0;
+
+    int look_changed = style != g_style || dark != g_dark;
+    g_style = style;
+    g_dark = dark;
+    g_deflated = g_style == TASKBAR_STYLE_FLOATING && want_deflated();
+
+    // The BAND grows by the float gap in the floating style, so a
+    // style change can move the work area as a height change does.
+    g_bar_h = read_height();
+    int h = g_bar_h + (g_style == TASKBAR_STYLE_FLOATING ? TASKBAR_FLOAT_GAP : 0);
     if (h != taskbar_h) {
         taskbar_h = h;
         wm_layout_changed();
+    } else if (look_changed) {
+        damage_strip();
     }
 
-    // The default when nothing is written; it must match
-    // start_button_config.c's DEFAULT_MODE, which is what the registry
+    // The default when nothing is written; it must match Default= in
+    // /etc/settings.d/desktop.start_button, which is what the registry
     // answers with and what System Settings shows.
     //
     // **EVERY MODE IS NAMED, including the default one.** This tested
@@ -96,8 +216,7 @@ void taskbar_poll_config(void) {
     // worked, and the taskbar simply ignored the setting for one of its
     // three values. Found by icons_test, which had been passing that
     // case for the wrong reason.
-    enum start_button_mode want = START_BUTTON_BOTH;
-    struct setting_msg msg;
+    enum start_button_mode want = START_BUTTON_ICON;
     setting_get("desktop.start_button", &msg);
     if (k_strcmp(msg.value, "text") == 0)      want = START_BUTTON_TEXT;
     else if (k_strcmp(msg.value, "icon") == 0) want = START_BUTTON_ICON;
@@ -110,8 +229,7 @@ void taskbar_poll_config(void) {
     // of them. Damaging the strip rather than the screen because that
     // is all that can have changed -- the Start MENU is closed-height
     // zero when it is not open, and opening it damages its own rect.
-    redraw_pending = 1;
-    wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);
+    damage_strip();
 }
 
 // Do these two windows belong to the same application?
@@ -139,18 +257,42 @@ static int same_app(int a, int b) {
             windows[a].client_pid == windows[b].client_pid;
 }
 
-// Window i starts a group iff no earlier window shares its app. That
-// makes the group order the windows[] order of each group's FIRST
-// member, which is what keeps a button from jumping left along the
-// strip every time one of its siblings is raised.
 // A menu is not a window the strip lists -- and neither is a DIALOG,
 // which belongs to the window that owns it (Win32 gives an owned window
 // no button of its own either). Both are `unlisted`.
 static int unlisted(int i) { return windows[i].popup || windows[i].dialog; }
 
+// THE STRIP LISTS IN OPEN ORDER (`open_seq`), never windows[] order:
+// windows[] is z-order, a click raises, and a raise moves the window to
+// the end -- so a button listed by index jumped to the end of the strip
+// every time it was clicked. Walked by next_opened(), which needs no
+// buffer for a table that can grow.
+static int next_opened(uint32_t *seq) {
+    int best = -1;
+    for (int j = 0; j < window_count; j++)
+        if (windows[j].open_seq > *seq &&
+            (best < 0 || windows[j].open_seq < windows[best].open_seq))
+            best = j;
+    if (best >= 0) *seq = windows[best].open_seq;
+    return best;
+}
+
+// Every window is stamped where it is created; a path that forgot
+// would make its window invisible to next_opened(), so one that
+// arrives unstamped is stamped here rather than lost.
+static void stamp_unopened(void) {
+    for (int j = 0; j < window_count; j++)
+        if (!windows[j].open_seq) windows[j].open_seq = wm_next_open_seq();
+}
+
+// Window i starts a group iff no window of its app OPENED before it, so
+// a group sits where its first window did, whichever member is raised.
 static int starts_group(int i) {
     if (unlisted(i)) return 0;
-    for (int j = 0; j < i; j++) if (same_app(i, j)) return 0;
+    for (int j = 0; j < window_count; j++)
+        if (j != i && !unlisted(j) && same_app(i, j) &&
+            windows[j].open_seq < windows[i].open_seq)
+            return 0;
     return 1;
 }
 
@@ -173,15 +315,15 @@ static int group_count(void) {
 // like whichever of its windows happened to open first.
 static int group_front(int i) {
     int front = i;
-    for (int j = i + 1; j < window_count; j++)
-        if (!unlisted(j) && same_app(i, j)) front = j;
+    for (int j = 0; j < window_count; j++)
+        if (j > front && !unlisted(j) && same_app(i, j)) front = j;
     return front;
 }
 
 static int group_size(int i) {
     int n = 1;
-    for (int j = i + 1; j < window_count; j++)
-        if (!unlisted(j) && same_app(i, j)) n++;
+    for (int j = 0; j < window_count; j++)
+        if (j != i && !unlisted(j) && same_app(i, j)) n++;
     return n;
 }
 
@@ -204,17 +346,22 @@ static int fit_width(int avail, int n, int natural) {
 // The icon square inside a button, derived from the strip's height so it
 // scales with the font like everything else on it.
 int taskbar_icon_size(void) {
-    int s = taskbar_h - 10;
+    // Half the BAR, not the band -- a floating panel's gap is not room
+    // for a bigger icon. 24 in the 48px default, Windows 11's size.
+    int s = g_bar_h / 2;
     // Capped: the masters are 64px and a thick strip would otherwise
-    // ask for an upscaled icon. 32 is Windows 11's in a 48px bar.
+    // ask for an upscaled icon.
     if (s > TASKBAR_ICON_MAX) s = TASKBAR_ICON_MAX;
     return s < 8 ? 0 : s;
 }
 
-static void make_label(char *dst, int cap, const char *src, int w, int count) {
-    // 24 matches win_btn_w()'s own padding, so a full-width label sits
+// Returns 1 when the name was cut short -- and then it ends in "..",
+// ugfx_draw_string_elided()'s mark (the font has no U+2026), so a cut
+// title reads as cut rather than as a shorter title.
+static int make_label(char *dst, int cap, const char *src, int w, int count) {
+    // Matches win_btn_w()'s own padding, so a full-width label sits
     // inside the button rather than touching its edges.
-    int avail = w - 24;
+    int avail = w - 2 * TB_PAD;
     if (avail < 0) avail = 0;
 
     char suffix[8];
@@ -241,14 +388,22 @@ static void make_label(char *dst, int cap, const char *src, int w, int count) {
     int nameavail = avail - sufw;
     if (nameavail < 0) nameavail = 0;
 
+    int len = src ? (int)k_strlen(src) : 0;
     int nameroom = src ? ugfx_text_fit_chars(src, nameavail) : 0;
-    if (nameroom > cap - 1 - sn) nameroom = cap - 1 - sn;
+    int elided = nameroom < len;
+    if (elided) {
+        nameroom = ugfx_text_fit_chars(src, nameavail - ugfx_text_width(".."));
+        if (nameroom < 1) nameroom = 1;   // one letter and the mark beats the mark alone
+    }
+    if (nameroom > cap - 3 - sn) { nameroom = cap - 3 - sn; elided = 1; }
     if (nameroom < 0) nameroom = 0;
 
     int n = 0;
     for (; src && src[n] && n < nameroom; n++) dst[n] = src[n];
+    if (elided) { dst[n++] = '.'; dst[n++] = '.'; }
     for (int k = 0; k < sn && n < cap - 1; k++) dst[n++] = suffix[k];
     dst[n] = '\0';
+    return elided;
 }
 
 int taskbar_button_rect_for(int idx, int *x, int *y, int *w, int *h) {
@@ -258,19 +413,101 @@ int taskbar_button_rect_for(int idx, int *x, int *y, int *w, int *h) {
     int n = taskbar_layout(b, 64);
     for (int k = 0; k < n; k++) {
         if (b[k].first != idx && !same_app(b[k].first, idx)) continue;
+        struct taskbar_geom g;
+        taskbar_geom(&g);
         *x = b[k].x; *w = b[k].w;
-        *y = screen_h - taskbar_h; *h = taskbar_h;
+        *y = g.btn_y; *h = g.btn_h;
         return 1;
     }
     return 0;
 }
 
+// The label and icon for button `slot`, standing for `members` windows
+// from `first`, `w` pixels wide. `labelled` is 0 for an icon-only
+// button, whose label is kept whole for the tooltip and the debug report.
+static void fill_button(struct taskbar_button *b, int first, int members,
+                        int x, int w, int labelled) {
+    b->x = x;
+    b->w = w;
+    b->first = first;
+    b->count = members;
+    // A GROUPED button is named after the APPLICATION, an ungrouped
+    // one after its window -- which is what Windows and KDE both
+    // show, and the only naming that stays true when the group's
+    // frontmost window changes underneath it. Falls back to the
+    // title for a window whose client declared no app id.
+    const char *name = windows[first].title;
+    if (members > 1 && windows[first].app_id[0]) name = windows[first].app_id;
+    b->icon = wm_window_icon_name(first);
+    if (!labelled) {
+        b->elided = 0;
+        k_strlcpy(b->label, name, sizeof b->label);
+        return;
+    }
+    // The label gets what the ICON does not take. Reserved from the
+    // same taskbar_icon_size() the renderer blits with, so the two
+    // cannot disagree about where the text starts.
+    int label_w = w - (b->icon ? taskbar_icon_size() + TB_ICON_GAP : 0);
+    b->elided = make_label(b->label, (int)sizeof b->label, name, label_w, members);
+}
+
+// The Start button's left edge, which the centred style derives from
+// the buttons beside it -- so one function answers both.
+static int g_start_x;
+
+// Icon-only buttons, centred on the screen as one group with Start --
+// Windows 11's shape. They never shrink: past the room there is, they
+// group, and past that the extras are dropped and counted as hidden,
+// the same response to pressure as the labelled layout below.
+static int layout_centered(struct taskbar_button *out, int max,
+                           const struct taskbar_geom *g, int listed) {
+    int bw = g->btn_h + 4;
+    int sw = start_btn_w();
+    int lo = g->px + 4, hi = tray_left() - 8;
+    int room = (hi - lo) - sw;                 // for the window buttons and their gaps
+    int n = listed, grouped = 0;
+    if (n * (bw + TB_GAP) > room) { n = group_count(); grouped = 1; }
+    int fit = room / (bw + TB_GAP);
+    if (fit < 0) fit = 0;
+    if (n > fit) n = fit;
+    if (n > max) n = max;
+
+    int total = sw + n * (bw + TB_GAP);
+    int sx = screen_w / 2 - total / 2;
+    if (sx + total > hi) sx = hi - total;      // the tray wins over the centre
+    if (sx < lo) sx = lo;
+    g_start_x = sx;
+
+    int count = 0;
+    uint32_t seq = 0;
+    for (int i; (i = next_opened(&seq)) >= 0; ) {
+        if (unlisted(i)) continue;
+        if (grouped && !starts_group(i)) continue;
+        int members = grouped ? group_size(i) : 1;
+        if (count >= n) { g_hidden += members; continue; }
+        fill_button(&out[count], grouped ? group_front(i) : i, members,
+                    sx + sw + TB_GAP + count * (bw + TB_GAP), bw, 0);
+        count++;
+    }
+    return count;
+}
+
 int taskbar_layout(struct taskbar_button *out, int max) {
     g_hidden = 0;
+    stamp_unopened();
+    struct taskbar_geom g;
+    taskbar_geom(&g);
+    g_start_x = g.px + 4;
     int listed = listed_count();
-    if (!out || max <= 0 || listed <= 0) { g_hidden = listed; return 0; }
+    if (!out || max <= 0 || listed <= 0) {
+        g_hidden = listed;
+        if (g_style == TASKBAR_STYLE_CENTERED)   // Start alone, still centred
+            g_start_x = screen_w / 2 - start_btn_w() / 2;
+        return 0;
+    }
+    if (g_style == TASKBAR_STYLE_CENTERED) return layout_centered(out, max, &g, listed);
 
-    int x0 = 4 + start_btn_w() + 8;
+    int x0 = g_start_x + start_btn_w() + TB_GAP;
     int x1 = tray_left() - 8;
     int avail = x1 - x0;
     int natural = win_btn_w(), floor_w = btn_floor();
@@ -292,52 +529,101 @@ int taskbar_layout(struct taskbar_button *out, int max) {
     // by definition few of them and its label carries a count as well as
     // a name -- at the plain natural width "notepad (32)" truncates to
     // "not (32)", which names nothing. Five characters is the widest
-    // count suffix (" (99+)"). Still capped by fit_width above, so this
-    // can only spend space that is genuinely spare.
+    // count suffix (" (99+)").
     //
-    // THE ICON IS PART OF THE ALLOWANCE, and leaving it out meant the
-    // widening bought nothing: make_label() is handed w MINUS the icon
-    // square, so those five characters were spent on the icon and
-    // "notepad (26)" still came out as "notep (26)". Reserved here from
-    // the same taskbar_icon_size() the loop below subtracts, which is
-    // the same "one source for a measurement" rule that pairs the icon
-    // with the renderer.
+    // THE ICON IS PART OF THE ALLOWANCE: make_label() is handed w MINUS
+    // the icon column, so leaving it out here spent the widening on the
+    // icon. Still capped by fit_width, so this can only spend space that
+    // is genuinely spare.
     if (grouped) {
         int icon = taskbar_icon_size();
-        int cap = natural + ugfx_text_width(" (99+)") + (icon ? icon + 4 : 0);
+        int cap = natural + ugfx_text_width(" (99+)") + (icon ? icon + TB_ICON_GAP : 0);
         int wide = fit_width(avail, n, cap);
         if (wide > w) w = wide;
     }
 
     int count = 0;
-    for (int i = 0; i < window_count; i++) {
+    uint32_t seq = 0;
+    for (int i; (i = next_opened(&seq)) >= 0; ) {
         if (unlisted(i)) continue;
         if (grouped && !starts_group(i)) continue;
         int x = x0 + count * (w + TB_GAP);
         int members = grouped ? group_size(i) : 1;
         if (count >= max || x + w > x1) { g_hidden += members; continue; }
-        out[count].x = x;
-        out[count].w = w;
-        out[count].first = grouped ? group_front(i) : i;
-        out[count].count = members;
-        // A GROUPED button is named after the APPLICATION, an ungrouped
-        // one after its window -- which is what Windows and KDE both
-        // show, and the only naming that stays true when the group's
-        // frontmost window changes underneath it. Falls back to the
-        // title for a window whose client declared no app id.
-        const char *name = windows[out[count].first].title;
-        if (members > 1 && windows[out[count].first].app_id[0])
-            name = windows[out[count].first].app_id;
-        // The label gets what the ICON does not take. Reserved from the
-        // same taskbar_icon_size() the renderer blits with, so the two
-        // cannot disagree about where the text starts.
-        out[count].icon = wm_window_icon_name(out[count].first);
-        int label_w = w - (out[count].icon ? taskbar_icon_size() + 4 : 0);
-        make_label(out[count].label, (int)sizeof out[count].label,
-                    name, label_w, members);
+        fill_button(&out[count], grouped ? group_front(i) : i, members, x, w, 1);
         count++;
     }
     return count;
+}
+
+void taskbar_start_rect(int *x, int *y, int *w, int *h) {
+    static struct taskbar_button b[64];   // static: see taskbar_button_rect_for()
+    taskbar_layout(b, 64);                // places g_start_x
+    struct taskbar_geom g;
+    taskbar_geom(&g);
+    *x = g_start_x; *y = g.btn_y;
+    *w = start_btn_w(); *h = g.btn_h;
+}
+
+void taskbar_start_hit_rect(int *x, int *y, int *w, int *h) {
+    int sx, sy, sw, sh;
+    taskbar_start_rect(&sx, &sy, &sw, &sh);
+    struct taskbar_geom g;
+    taskbar_geom(&g);
+    // The screen's corner is the Start button whenever nothing sits
+    // between them -- Windows' rule since 95.
+    if (sx <= g.px + 4) { sw += sx; sx = 0; }
+    *x = sx; *w = sw;
+    *y = screen_h - taskbar_h; *h = taskbar_h;
+}
+
+// ---- hover -----------------------------------------------------------
+
+static int g_hover = -1;
+static int g_tip_ours;   // the panel tooltip is showing OUR text, so ours to cancel
+
+int taskbar_hover(void) { return g_hover; }
+
+void taskbar_update_hover(int mx, int my, uint8_t buttons) {
+    // A held button keeps what it had -- the rule wm_overlay_hover()
+    // applies to every overlay.
+    if (buttons & 0x1) return;
+    int want = -1;
+    const char *tip = 0;
+    int tx = 0, tw = 0;
+    int band = my >= screen_h - taskbar_h && my < screen_h && !wm_top_covers_screen();
+    if (band) {
+        int sx, sy, sw, sh;
+        taskbar_start_hit_rect(&sx, &sy, &sw, &sh);
+        if (uui_hit(sx, sy, sw, sh, mx, my)) {
+            want = TASKBAR_HOVER_START;
+        } else {
+            static struct taskbar_button b[64];
+            int n = taskbar_layout(b, 64);
+            for (int k = 0; k < n; k++) {
+                if (!uui_hit(b[k].x, screen_h - taskbar_h, b[k].w, taskbar_h, mx, my))
+                    continue;
+                want = b[k].first;
+                // Only where the button does not already say it --
+                // Explorer's rule. A grouped button's list is one click away.
+                if ((g_style == TASKBAR_STYLE_CENTERED || b[k].elided) && b[k].count == 1)
+                    { tip = windows[b[k].first].title; tx = b[k].x; tw = b[k].w; }
+                break;
+            }
+        }
+    }
+    if (tip && !start_menu_open) {
+        struct taskbar_geom g;
+        taskbar_geom(&g);
+        wm_tooltip_track(tip, tx, g.btn_y, tw, g.btn_h);
+        g_tip_ours = 1;
+    } else if (g_tip_ours) {
+        wm_tooltip_cancel();
+        g_tip_ours = 0;
+    }
+    if (want == g_hover) return;
+    g_hover = want;
+    damage_strip();
 }
 
 // ---- clicks ----------------------------------------------------------
@@ -361,19 +647,14 @@ static void row_raise(void *ctx) {
     redraw_pending = 1;
 }
 
-static void row_close(void *ctx) {
-    int i = *(int *)ctx;
-    if (i < 0 || i >= window_count) return;
-    wm_request_close(i);
-}
-
 // Opens the list of windows a collapsed button stands for -- Windows'
 // jump list, KDE's grouped-task popup. Anchored at the button's top-left
 // on the taskbar; context_menu_open_at() lifts it clear of the strip.
 static void open_group_menu(const struct taskbar_button *b) {
     int n = 0;
-    for (int i = 0; i < window_count && n < TB_GROUP_ROWS; i++) {
-        if (!same_app(b->first, i)) continue;
+    uint32_t seq = 0;
+    for (int i; n < TB_GROUP_ROWS && (i = next_opened(&seq)) >= 0; ) {
+        if (unlisted(i) || !same_app(b->first, i)) continue;
         int k = 0;
         for (; windows[i].title[k] && k < (int)sizeof g_row_label[n] - 1; k++)
             g_row_label[n][k] = windows[i].title[k];
@@ -423,6 +704,7 @@ int taskbar_handle_click(int mx, int my) {
     int ty = screen_h - taskbar_h;
     for (int b = 0; b < n; b++) {
         if (!uui_hit(btns[b].x, ty, btns[b].w, taskbar_h, mx, my)) continue;
+        if (g_tip_ours) { wm_tooltip_cancel(); g_tip_ours = 0; }
         if (btns[b].count > 1) open_group_menu(&btns[b]);
         else activate(btns[b].first);
         redraw_pending = 1;
@@ -440,11 +722,9 @@ int taskbar_handle_right_click(int mx, int my) {
         if (btns[b].count > 1) {
             open_group_menu(&btns[b]);
         } else {
-            g_row_target[0] = btns[b].first;
-            g_rows[0].label = "Close window"; // a literal, so no copy into g_row_label
-            g_rows[0].on_select = row_close;
-            g_rows[0].ctx = &g_row_target[0];
-            context_menu_open_at(mx, my, g_rows, 1);
+            // The window's own menu, as the title bar opens it -- what
+            // KDE's task menu and Windows' Shift+right-click both offer.
+            wm_open_window_menu(btns[b].first, mx, my);
         }
         return 1;
     }

@@ -433,6 +433,8 @@ whenever a headline here tells you something you did not already know.
 - **A WINDOW'S APPLICATION IDENTITY IS THE KERNEL'S, not the app's**
 - **The TASKBAR'S LAYOUT IS ONE FUNCTION, and past a floor it groups by
   app**
+- **THE TASKBAR HAS THREE STYLES OVER ONE LAYOUT, AND EVERY RECT COMES
+  FROM `taskbar_geom()`**
 - **The WM has a SLOW-FRAME WATCHDOG**
 - **There is a Crash Test app**
 - **THE KERNEL CONSOLE STOPS PRESENTING WHILE A COMPOSITOR OWNS THE
@@ -549,7 +551,7 @@ whenever a headline here tells you something you did not already know.
 - **A NAME IS EDITED WHERE IT IS, AND THE APP DOES THE RENAME**
 - **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME**
 - **THE TASKBAR'S THICKNESS IS A REGISTERED SETTING:
-  `desktop.taskbar_height`, in PIXELS, 24..96, default 40.**
+  `desktop.taskbar_height`, in PIXELS, 24..96, default 48.**
 - **THE START BUTTON'S APPEARANCE IS A REGISTERED SETTING**
 - **DIAGNOSTICS ARE A NAMED REGISTRY, AND THE COMPOSITOR IS THE PROVIDER
   `gui`**

@@ -2648,28 +2648,42 @@ window without going through it will find its layout polls timing out.
   empty and unwritable on a machine with no sound card -- it says so and
   skips them rather than failing, so the rows going missing on a machine
   that HAS a card still reads as a failure.
-- **`tray_press_test.py`** -- the notification area's press feedback:
-  a rounded fill while an item is held, and nothing on hover. Driven on
-  the CLOCK, the one tray item that is registered whatever hardware the
-  guest has. Every assertion is a pixel value read from the item's
-  four-column left padding strip -- **a band the glyphs never reach, so
-  the seconds ticking underneath cannot move it**, which is what lets an
-  ordinary pixel comparison work on a control that redraws once a
-  second. **The hover half is the point**: the cursor is PARKED on the
-  item with the button up (`DebugConsole.warp_cursor`, never `gui move`)
-  and that strip must not move by one value -- a build that added a
-  hover state as well would pass every "the press works" check. The
-  direction of the wash is READ, not assumed (`uui_state_bg()` darkens a
-  light panel and lightens a dark one; this guest's panel is dark, and
-  an assertion phrased as "darker" would fail on a correct build). It
-  also asserts the fill is ROUNDED -- its corner pixel must sit nearer
-  the panel's colour than its interior -- that a drag off the item
-  disarms and a re-entry re-arms, and that the press does NOT latch: the
-  calendar it opened is still up while the clock is back at rest. Three
-  positive controls were run: removing the fill reddens three checks,
-  squaring its corners reddens exactly one, and adding a hover state
-  reddens the two hover checks and the two latch checks -- each on the
-  right assertion. Skips cleanly with no Pillow. In `gui_regress.py`.
+- **`tray_press_test.py`** -- the notification area's feedback: a
+  rounded fill while the pointer rests on an item, a different one while
+  it is held, and neither latching. Driven on the CLOCK, the one tray
+  item that is registered whatever hardware the guest has. Every
+  assertion is a pixel value read from the item's left padding strip --
+  **a band the glyphs never reach, so the seconds ticking underneath
+  cannot move it**, which is what lets an ordinary pixel comparison work
+  on a control that redraws once a second. The cursor is PARKED on the
+  item (`DebugConsole.warp_cursor`, never `gui move`): the strip must
+  change on hover while `tray_pressed` stays -1, and change AGAIN when
+  held. The direction of the wash is READ, not assumed
+  (`uui_state_bg()` darkens a light panel and lightens a dark one). It
+  also asserts the fill is ROUNDED -- the pixel at the fill's own corner
+  (`btn_y` from the report) must sit nearer the panel's colour than its
+  interior -- that a drag off the item disarms and a re-entry re-arms,
+  and that nothing latches: the calendar the press opened is still up
+  while the clock, the pointer gone, is back at rest. It asserted
+  hover stayed DEAD until the 2026-09-29 redesign gave the tray a
+  hover (`docs/decisions.md`). Skips cleanly with no Pillow. In
+  `gui_regress.py`.
+- **`taskbar_style_test.py`** -- the taskbar's three styles
+  (`desktop.taskbar_style`) and two themes (`desktop.taskbar_theme`),
+  each checked in the WM's report (`gui taskbar --json`) AND in a pixel
+  the report could not fake: classic's panel fills the band and the
+  screen's corner is the strip; floating's band grows by the gap, the
+  corner pixel is NOT the strip, and maximizing the topmost window
+  DEFLATES it to fill the band; centred's buttons are square and centred
+  with Start, the one under the pointer is reported hovered AND drawn
+  lit, and its tooltip names the window; light draws `#ECECEC`. **The
+  gap probe is placed from the SCREEN's edge, not from the reported
+  panel** -- its first version derived it from the panel, so a wrong
+  report moved the probe off the screen and crashed the tool instead of
+  failing a check. Positive control: `taskbar_floating()` returning 0
+  reddens the floating checks, and dropping the hover fill reddens
+  "drawn lit" while the JSON hover check stays green -- which is why
+  both exist. Unsets both settings on the way out. In `gui_regress.py`.
 - **`brightness_test.py`** -- the taskbar's brightness flyout, driven
   on a machine with NO backlight, which is every QEMU adapter. It
   asserts the degraded path honestly: the tray item exists, the panel

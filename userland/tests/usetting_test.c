@@ -117,7 +117,7 @@ int main(void) {
                 !on_disk[0], "and the file no longer carries it");
     char now[SETTING_ABI_VALUE_MAX];
     utest_check(usetting_get("desktop.taskbar_height", now, sizeof now) &&
-                strcmp(now, "40") == 0, "so the declared default answers");
+                strcmp(now, "48") == 0, "so the declared default answers");
 
     // --- the schema half is reachable directly -----------------------
     struct uschema s;

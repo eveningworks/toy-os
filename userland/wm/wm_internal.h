@@ -75,10 +75,20 @@ void wm_render_window_into(struct ugfx_surface *dst, struct window *ghost, int f
 // The Start button's mark, when `desktop.start_button` asks for one --
 // a NAME under /usr/share/icons like any other icon, not a path.
 #define START_ICON  "start"
-#define WIN_LABEL_MAX_CHARS 7 // how many chars of a window's title the taskbar button shows
+#define WIN_LABEL_MAX_CHARS 14 // how many chars of a window's title a labelled taskbar button budgets for
 
 int start_btn_w(void);
 int win_btn_w(void);
+
+// A new window's place in OPEN order, stamped into `open_seq` where it
+// is created. windows[] is z-order and changes on every raise; the
+// taskbar lists by this instead, so a click cannot move its button.
+uint32_t wm_next_open_seq(void);
+
+// The window menu (Minimize/Restore, Maximize, Fullscreen, Close) for
+// windows[idx] at (mx, my) -- the title bar's right-click, and the
+// taskbar button's.
+void wm_open_window_menu(int idx, int mx, int my);
 int btn_size(void);
 
 // THE RESIZE BORDER IS MOSTLY OUTSIDE THE WINDOW, which is how

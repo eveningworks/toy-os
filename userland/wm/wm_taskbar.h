@@ -3,18 +3,21 @@
 
 // The height the strip may take, and what it is with nothing written.
 // **THE BOUNDS ARE THE DECLARATION'S TWIN** -- /etc/settings.d/
-// desktop.taskbar_height carries the same Min/Max/Step, because that is
-// what bounds a value arriving from System Settings or a hand edit.
-// These are what the code clamps with, and utaskbar_test.c asserts the
-// two agree.
+// desktop.taskbar_height carries the same Min/Max/Step/Default, because
+// that is what bounds a value arriving from System Settings or a hand
+// edit. These are what the code clamps with; change both together.
 //
 // A PIXEL CONSTANT, not font-derived: the two tiers' fonts do not share
 // a line height, and a formula gave 36 on one side and 40 on the other.
-// Between KDE's 44 and XFCE's 26.
+// 48 is Windows 11's; KDE's is 44.
+//
+// This is the BAR's thickness. `taskbar_h` (wm_internal.h) is the BAND
+// the strip reserves, which is the bar plus TASKBAR_FLOAT_GAP when the
+// style is `floating` -- see struct taskbar_geom.
 #define TASKBAR_H_MIN  24
 #define TASKBAR_H_MAX  96
 #define TASKBAR_H_STEP 2
-#define TASKBAR_H_DEFAULT 40
+#define TASKBAR_H_DEFAULT 48
 
 // The taskbar strip's LAYOUT, computed in one place and read by both
 // wm_render.c (drawing the buttons) and wm_input.c (hit-testing them).
@@ -62,6 +65,7 @@ struct taskbar_button {
     int x, w;
     int first;
     int count;
+    int elided;          // the label was cut short to fit
     char label[32];
 };
 
@@ -91,14 +95,20 @@ int taskbar_button_rect_for(int idx, int *x, int *y, int *w, int *h);
 int taskbar_icon_size(void);
 #define TASKBAR_ICON_MAX 32
 
+// A labelled button's padding either side, and the gap between its icon
+// and label. win_btn_w(), make_label() and the renderer all count from
+// these, so the drawn text starts where the layout reserved it.
+#define TB_PAD      12
+#define TB_ICON_GAP 8
+
 // The strip's height with `desktop.taskbar_height` unset -- the
 // declaration's twin above, NOT a font formula: the
 // two rings' fonts do not share a line height.
 int taskbar_default_h(void);
 
 // HOW THE START BUTTON LOOKS: the word, the mark, or both --
-// `desktop.start_button`, an enum the registry owns
-// (kernel/lib/start_button_config.c). XFCE's Whisker Menu offers this
+// `desktop.start_button`, an enum DECLARED in
+// /etc/settings.d/desktop.start_button. XFCE's Whisker Menu offers this
 // same three-way (Icon / Title / Icon and title) and KDE's launcher the
 // same choice against an icon-only default; a boolean cannot express
 // `both`, which is what Windows 95 through 7 shipped.
@@ -110,8 +120,8 @@ int taskbar_default_h(void);
 // same rule the icon column above states.
 enum start_button_mode {
     START_BUTTON_TEXT,   // "Start" alone
-    START_BUTTON_ICON,   // the mark alone, KDE Plasma's default
-    START_BUTTON_BOTH,   // mark then word, Windows 95's -- the DEFAULT
+    START_BUTTON_ICON,   // the mark alone, KDE Plasma's -- the DEFAULT
+    START_BUTTON_BOTH,   // mark then word, Windows 95's
 };
 enum start_button_mode taskbar_start_mode(void);
 
@@ -121,8 +131,70 @@ enum start_button_mode taskbar_start_mode(void);
 // start_btn_w() reserves it.
 int start_icon_size(void);
 
-// Re-reads `desktop.taskbar_height` and `desktop.start_button` if
-// anything on the filesystem has changed. Called once per frame from wm.c, beside desktop_poll_config()
+// HOW THE STRIP IS LAID OUT AND DRAWN -- `desktop.taskbar_style`.
+// Three shapes, one layout function and one draw function each asking
+// taskbar_geom() below, so a style is a set of measurements rather than
+// a second taskbar.
+enum taskbar_style {
+    TASKBAR_STYLE_CLASSIC,   // labelled buttons from the left -- the DEFAULT
+    TASKBAR_STYLE_CENTERED,  // icon-only buttons centred with Start, Windows 11's
+    TASKBAR_STYLE_FLOATING,  // a detached rounded panel, KDE Plasma 6's
+};
+enum taskbar_style taskbar_style(void);
+
+// The strip's colours -- `desktop.taskbar_theme` (dark | light), apart
+// from the window theme because Windows and KDE both let the panel be
+// dark over light windows. `accent` follows utheme's, lightened on dark
+// so an indicator three pixels tall still reads.
+struct taskbar_palette {
+    uint32_t bar, edge, hover, focus, focus_edge, text, dim, accent, running;
+    // `edge` again as 0xRRGGBB, for `gui taskbar --json`: a test
+    // comparing screenshot pixels cannot know the surface's format.
+    uint32_t edge_rgb, bar_rgb, text_rgb;
+};
+const struct taskbar_palette *taskbar_palette(void);
+int taskbar_dark(void);
+
+// How far a floating panel stands off the screen's edges.
+#define TASKBAR_FLOAT_GAP 8
+
+// WHERE THE STRIP IS DRAWN, inside the band `taskbar_h` reserves.
+//
+// **THE BAND NEVER CHANGES WITH THE PANEL'S SHAPE**: everything
+// derived from `screen_h - taskbar_h` (the work area, maximized
+// windows, every popup's clamp) stays put while a floating panel
+// deflates to fill the band -- which it does whenever a window is
+// maximized, as Plasma 6's does. And every HIT test uses the band, not
+// the panel, so the screen's bottom edge still hits the button above
+// it (Fitts's law; the gap under a floating panel is not the desktop).
+struct taskbar_geom {
+    int px, py, pw, ph;   // the panel
+    int radius;           // its corners; 0 when it fills the band
+    int btn_y, btn_h;     // every button's box, vertically
+    int btn_r;            // and its corners
+};
+void taskbar_geom(struct taskbar_geom *g);
+int taskbar_floating(void);   // drawn detached right now
+int taskbar_bar_h(void);      // `desktop.taskbar_height`, clamped
+
+// The Start button's box (btn_y/btn_h tall). Its HIT rect is this
+// widened to the band's height -- and to the screen's left edge when
+// the button is the leftmost thing on the strip.
+void taskbar_start_rect(int *x, int *y, int *w, int *h);
+void taskbar_start_hit_rect(int *x, int *y, int *w, int *h);
+
+// What the pointer is over on the strip: a windows[] index (a group's
+// front member), TASKBAR_HOVER_START, or -1. Updated on pointer motion
+// from wm.c; a change damages the band. Also arms the panel tooltip
+// with a window's full title where the button does not show it (the
+// icon-only style, or a label cut short).
+#define TASKBAR_HOVER_START (-2)
+void taskbar_update_hover(int mx, int my, uint8_t buttons);
+int taskbar_hover(void);
+
+// Re-reads `desktop.taskbar_height`, `_style`, `_theme` and
+// `desktop.start_button` if anything on the filesystem has changed, and
+// every frame re-asks whether a floating panel should deflate. Called once per frame from wm.c, beside desktop_poll_config()
 // and for the same reason -- there is no inotify here, so a generation
 // counter is what says "ask again". The idle cost is one compare.
 void taskbar_poll_config(void);

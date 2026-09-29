@@ -41,6 +41,10 @@ struct wm_widget {
 struct window {
     char title[WIN_TITLE_MAX];
 
+    // When it opened, relative to the others (wm_next_open_seq()). The
+    // taskbar's order; windows[] itself is z-order.
+    uint32_t open_seq;
+
     // THE CLIENT'S WIDGET MAP, for `gui probe` and `gui widgets`.
     // ALLOCATED ON FIRST REPORT, not inline: a window is not otherwise
     // 2 KiB, the table grows on demand, and most windows never report

@@ -166,9 +166,6 @@ int wm_find_resize_zone(int mx, int my, int *out_edges) {
     return -1;
 }
 
-// Defined below, beside the ctx_* handlers it wires up -- both this
-// file's click paths open it, and the title-bar one comes first.
-static void wm_open_window_menu(int idx, int mx, int my);
 static void wm_toggle_maximize(int i);
 
 // The last title-bar press, for the double-click below.
@@ -203,9 +200,9 @@ void wm_handle_left_click(int mx, int my) {
     }
 
     if (my >= screen_h - taskbar_h && !wm_top_covers_screen()) {
-        int ty = screen_h - taskbar_h;
-        int sbw = start_btn_w();
-        if (uui_hit(4, ty, sbw, taskbar_h, mx, my)) {
+        int sx, sy, sw, sh;
+        taskbar_start_hit_rect(&sx, &sy, &sw, &sh);
+        if (uui_hit(sx, sy, sw, sh, mx, my)) {
             start_menu_open_now();   // closes the other popups itself
             redraw_pending = 1;
             return;
@@ -455,6 +452,7 @@ static void ctx_close_window(void *ctx) { wm_request_close(*(int *)ctx); }
 
 static void ctx_minimize_window(void *ctx) {
     int i = *(int *)ctx;
+    if (i < 0 || i >= window_count) return;
     wm_anim_minimize(i);
     windows[i].state = WIN_MINIMIZED;
     redraw_pending = 1;
@@ -583,14 +581,33 @@ static void ctx_add_to_desktop(void *ctx) { desktop_add_launcher((const struct g
 // a rule stop agreeing -- Close in particular has to stay
 // wm_request_close() (ASK the client) rather than close_window() (seize
 // it), which is a bug this file has already shipped once.
-static void wm_open_window_menu(int idx, int mx, int my) {
+static void ctx_restore_window(void *ctx) {
+    int i = *(int *)ctx;
+    if (i < 0 || i >= window_count || windows[i].state != WIN_MINIMIZED) return;
+    wm_anim_restore(i);
+    windows[i].state = WIN_NORMAL;
+    wm_ensure_reachable(i);
+    raise_with_dialogs(i);
+    redraw_pending = 1;
+}
+
+void wm_open_window_menu(int idx, int mx, int my) {
     if (idx < 0 || idx >= window_count) return;
     const struct window *w = &windows[idx];
     g_ctx_window_target = idx;
     static struct context_menu_item items[4];
     int n = 0;
-    items[n].label = "Minimize"; items[n].on_select = ctx_minimize_window; items[n].ctx = &g_ctx_window_target; n++;
-    if (w->resizable) {
+    // A MINIMIZED window -- reachable only from its taskbar button --
+    // offers the way back instead of a Minimize that would do nothing.
+    if (w->state == WIN_MINIMIZED) {
+        items[n].label = "Restore"; items[n].on_select = ctx_restore_window;
+    } else {
+        items[n].label = "Minimize"; items[n].on_select = ctx_minimize_window;
+    }
+    items[n].ctx = &g_ctx_window_target; n++;
+    // Nothing that sizes a window it cannot see: maximizing or going
+    // fullscreen from minimized would leave it resized and still hidden.
+    if (w->resizable && w->state != WIN_MINIMIZED) {
         items[n].label = (w->state == WIN_MAXIMIZED) ? "Restore" : "Maximize";
         items[n].on_select = ctx_toggle_maximize_window; items[n].ctx = &g_ctx_window_target; n++;
         items[n].label = w->fullscreen ? "Exit Fullscreen" : "Fullscreen";

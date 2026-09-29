@@ -65,14 +65,16 @@ int start_btn_w(void) {
     int size = 0;
     const struct uimg *ico = start_mark(&size);
     int label_w = ugfx_text_width(START_LABEL);
-    if (!ico) return label_w + 24;
+    if (!ico) return label_w + 2 * TB_PAD;
     if (taskbar_start_mode() == START_BUTTON_ICON) {
-        // A SQUARE, near enough -- one text button's worth of padding,
-        // so an icon-only button still reads as a button rather than as
-        // a picture floating on the strip.
-        return size + 16;
+        // A SQUARE, near enough -- as tall as the strip's buttons, so an
+        // icon-only Start reads as a button rather than as a picture
+        // floating on the strip.
+        struct taskbar_geom g;
+        taskbar_geom(&g);
+        return size + 16 > g.btn_h ? size + 16 : g.btn_h;
     }
-    return size + 5 + label_w + 24;
+    return TB_PAD + size + TB_ICON_GAP + label_w + TB_PAD;
 }
 
 // WHERE THE MARK GOES, or NULL when the word is drawn instead -- the
@@ -83,12 +85,13 @@ const struct uimg *start_icon(int *out_x, int *out_y, int *out_size) {
     int size = 0;
     const struct uimg *ico = start_mark(&size);
     if (!ico) return 0;
+    int x, y, w, h;
+    taskbar_start_rect(&x, &y, &w, &h);
     // CENTRED when it is alone in the button, left-aligned when a word
     // follows it -- which is what makes `icon` read as a square button
     // and `both` read as a labelled one.
-    *out_x = (taskbar_start_mode() == START_BUTTON_ICON)
-                 ? 4 + (start_btn_w() - size) / 2 : 4 + 8;
-    *out_y = screen_h - taskbar_h + 5;
+    *out_x = (taskbar_start_mode() == START_BUTTON_ICON) ? x + (w - size) / 2 : x + TB_PAD;
+    *out_y = y + (h - size) / 2;
     *out_size = size;
     return ico;
 }
@@ -105,7 +108,7 @@ int win_btn_w(void) {
     // before taskbar_layout() starts shrinking and grouping them.
     int per = ugfx_char_advance('n');
     if (per <= 0) per = ugfx_char_w();
-    return WIN_LABEL_MAX_CHARS * per + 24 + (icon ? icon + 4 : 0);
+    return WIN_LABEL_MAX_CHARS * per + 2 * TB_PAD + (icon ? icon + TB_ICON_GAP : 0);
 }
 
 // The minimize/maximize/close title-bar buttons used to be a fixed
@@ -1187,71 +1190,153 @@ static void draw_resize_grip(const struct window *win) {
     }
 }
 
+// The running pill's thickness: 3px at the 48px default.
+static int g_pill_h(void) {
+    int t = taskbar_bar_h() / 16;
+    return t < 2 ? 2 : t;
+}
+
+// One control's ground on the strip: rounded, and ringed by a 1px
+// `edge` when `ringed` (the light theme's focused button, which is white
+// on a near-white strip and needs the line to exist at all).
+static void tb_ground(int x, int y, int w, int h, int r, uint32_t fill,
+                      int ringed, uint32_t edge) {
+    struct ugfx_surface *s = wm_surface();
+    if (!ringed) { uui_fill_round_rect(s, x, y, w, h, r, fill); return; }
+    uui_fill_round_rect(s, x, y, w, h, r, edge);
+    uui_fill_round_rect(s, x + 1, y + 1, w - 2, h - 2, r > 1 ? r - 1 : 0, fill);
+}
+
+// Half-fades a drawn icon toward the ground under it -- a MINIMIZED
+// window's, as Plasma and Windows 10 show one: there, but not in front.
+static void tb_fade(int x, int y, int w, int h, uint32_t ground) {
+    for (int r = 0; r < h; r++)
+        ugfx_blend_hspan(wm_surface(), x, y + r, w, ground, 0, 128);
+}
+
+// The strip, in whichever of the three styles `desktop.taskbar_style`
+// names. Every rect comes from taskbar_geom()/taskbar_layout(), which
+// wm_input.c hit-tests against too (wm_taskbar.h).
 static void draw_taskbar(void) {
-    uint32_t bg = ugfx_rgb(30, 30, 34), fg = ugfx_rgb(230, 230, 230);
-    int ty = screen_h - taskbar_h;
-    ugfx_fill_rect(wm_surface(), 0, ty, screen_w, taskbar_h, bg);
+    struct ugfx_surface *s = wm_surface();
+    const struct taskbar_palette *p = taskbar_palette();
+    struct taskbar_geom g;
+    taskbar_geom(&g);
+    enum taskbar_style style = taskbar_style();
+    int light = !taskbar_dark();
+    int hover = taskbar_hover();
 
-    int sbw = start_btn_w();
+    // THE PANEL. Floating, the band around it is left alone -- the
+    // scene under it (wallpaper, a window slid below) was painted in
+    // this same pass, which is also what the round corners blend over.
+    if (g.radius > 0) {
+        if (wm_shadow_enabled())
+            wm_shadow_draw(g.px, g.py, g.pw, g.ph, g.radius, WM_SHADOW_POPUP);
+        tb_ground(g.px, g.py, g.pw, g.ph, g.radius, p->bar, 1, p->edge);
+    } else {
+        ugfx_fill_rect(s, g.px, g.py, g.pw, g.ph, p->bar);
+        ugfx_fill_rect(s, g.px, g.py, g.pw, 1, p->edge);
+    }
 
-    uint32_t start_bg = start_menu_open ? ugfx_rgb(70, 70, 90) : ugfx_rgb(50, 50, 60);
-    // THE THREE MODES. `text` draws the button exactly as it always
-    // did, label centred by uui_button_draw(); the other two draw the
-    // button with an EMPTY label and place the mark (and, for `both`,
-    // the word) by hand -- the same arrangement the window buttons on
-    // this strip already use, and for the same reason: a centred label
-    // beside a left-hand icon reads as neither centred nor aligned.
-    int sx, sy, sisz;
-    const struct uimg *sico = start_icon(&sx, &sy, &sisz);
-    // The button carries the word only when there is no mark -- with
-    // one, the label is placed by hand beside it (BOTH) or omitted
-    // (ICON), because uui_button_draw() CENTRES its label and a centred
-    // label beside a left-hand mark reads as neither.
-    uui_button_draw(wm_surface(), 4, ty + 4, sbw, taskbar_h - 8,
-                     sico ? "" : START_LABEL, start_bg, fg, UUI_STATE_REST);
-    if (sico) {
-        ugfx_blit_alpha(wm_surface(), sx, sy, sico->w, sico->h, sico->px, sico->w);
-        if (taskbar_start_mode() == START_BUTTON_BOTH) {
-            ugfx_draw_string_clipped(wm_surface(), sx + sisz + 5,
-                                     ty + 4 + (taskbar_h - 8 - ugfx_char_h()) / 2,
-                                     4 + sbw - 8 - (sx + sisz + 5) + 4,
-                                     START_LABEL, fg, start_bg);
+    // START. Lit while its menu is up, hovered otherwise.
+    {
+        int sx, sy, sw, sh;
+        taskbar_start_rect(&sx, &sy, &sw, &sh);
+        uint32_t bg = p->bar;
+        if (start_menu_open) bg = p->focus;
+        else if (hover == TASKBAR_HOVER_START) bg = p->hover;
+        if (bg != p->bar)
+            tb_ground(sx, sy, sw, sh, g.btn_r, bg, light && start_menu_open, p->focus_edge);
+        int ty = sy + (sh - ugfx_char_h()) / 2;
+        int mx, my, msz;
+        const struct uimg *m = start_icon(&mx, &my, &msz);
+        if (m) {
+            // SYMBOLIC, like the tray: the mark takes the strip's ink.
+            ugfx_blit_tinted(s, mx, my, m->w, m->h, m->px, m->w, p->text);
+            if (taskbar_start_mode() == START_BUTTON_BOTH) {
+                int lx = mx + msz + TB_ICON_GAP;
+                ugfx_draw_string_clipped(s, lx, ty, sx + sw - TB_PAD - lx,
+                                         START_LABEL, p->text, bg);
+            }
+        } else {
+            int lw = ugfx_text_width(START_LABEL);
+            ugfx_draw_string_clipped(s, sx + (sw - lw) / 2, ty, sw, START_LABEL, p->text, bg);
         }
     }
 
-    // The buttons come from taskbar_layout(), which is also what
-    // wm_input.c hit-tests against -- this loop used to walk the windows
-    // itself with a fixed step, and so did both hit-tests, which is how
-    // the strip came to run off the screen edge (wm_taskbar.h).
+    // THE WINDOW BUTTONS.
     static struct taskbar_button btns[64];
     int nb = taskbar_layout(btns, 64);
+    int isz = taskbar_icon_size();
     for (int b = 0; b < nb; b++) {
-        int i = btns[b].first;
-        int is_front_and_visible = (i == wm_focus_index() && windows[i].state != WIN_MINIMIZED);
-        uint32_t wbg = is_front_and_visible ? ugfx_rgb(70, 70, 90) : ugfx_rgb(50, 50, 60);
+        const struct taskbar_button *tb = &btns[b];
+        int i = tb->first;
+        int minimized = windows[i].state == WIN_MINIMIZED;
+        int focused = i == wm_focus_index() && !minimized;
+        int hovered = hover == i;
+        int x = tb->x, y = g.btn_y, w = tb->w, h = g.btn_h;
 
-        // AN ICON WHERE THERE IS ONE, and the label shifted past it --
-        // as on every taskbar since Windows 95. The button is drawn with
-        // an EMPTY label and the text placed here, because
-        // uui_button_draw() centres its label and a centred label beside
-        // a left-hand icon reads as neither centred nor aligned. The
-        // width the label was truncated to already accounts for the
-        // column (wm_taskbar.h says why both live in one place).
-        const struct uimg *ico = btns[b].icon ?
-            icon_get(btns[b].icon, taskbar_icon_size()) : NULL;
-        uui_button_draw(wm_surface(), btns[b].x, ty + 4, btns[b].w, taskbar_h - 8,
-                         ico ? "" : btns[b].label, wbg, fg, UUI_STATE_REST);
-        if (ico) {
-            ugfx_blit_alpha(wm_surface(), btns[b].x + 4, ty + 5, ico->w, ico->h,
-                            ico->px, ico->w);
-            int tx = btns[b].x + 6 + ico->w;
-            ugfx_draw_string_clipped(wm_surface(), tx, ty + 4 + (taskbar_h - 8 - ugfx_char_h()) / 2,
-                                     btns[b].x + btns[b].w - 4 - tx,
-                                     btns[b].label, fg, wbg);
+        uint32_t bg = p->bar, edge = p->focus_edge;
+        int ringed = 0;
+        if (focused && style == TASKBAR_STYLE_FLOATING) {
+            // An accent-tinted frame rather than a grey fill, so the
+            // one lit button on a panel reads from across the room.
+            bg = ugfx_blend(p->bar, p->accent, hovered ? 77 : 56);
+            edge = ugfx_blend(p->bar, p->accent, 153);
+            ringed = 1;
+        } else if (focused) {
+            bg = hovered ? ugfx_blend(p->focus, p->text, 20) : p->focus;
+            ringed = light;
+        } else if (hovered) {
+            bg = p->hover;
         }
+        if (bg != p->bar || ringed) tb_ground(x, y, w, h, g.btn_r, bg, ringed, edge);
+
+        const struct uimg *ico = tb->icon ? icon_get(tb->icon, isz) : NULL;
+        int ty = y + (h - ugfx_char_h()) / 2;
+
+        if (style == TASKBAR_STYLE_CENTERED) {
+            // Icon-only; the title is the tooltip's (wm_taskbar.c).
+            if (ico) {
+                ugfx_blit_alpha(s, x + (w - ico->w) / 2, y + (h - ico->h) / 2,
+                                ico->w, ico->h, ico->px, ico->w);
+            } else {
+                char two[3] = { tb->label[0], tb->label[1], 0 };
+                int lw = ugfx_text_width(two);
+                ugfx_draw_string_clipped(s, x + (w - lw) / 2, ty, w, two, p->text, bg);
+            }
+            // THE PILL: short and grey for an open window, long and in
+            // the accent for the focused one, doubled for a group --
+            // Windows 11's running indicator.
+            int ph = g_pill_h();
+            int py = y + h - ph - 2;
+            if (focused) {
+                uui_fill_round_rect(s, x + (w - 16) / 2, py, 16, ph, UUI_CAPSULE, p->accent);
+            } else if (tb->count > 1) {
+                uui_fill_round_rect(s, x + w / 2 - 7, py, 6, ph, UUI_CAPSULE, p->running);
+                uui_fill_round_rect(s, x + w / 2 + 1, py, 6, ph, UUI_CAPSULE, p->running);
+            } else {
+                uui_fill_round_rect(s, x + (w - 6) / 2, py, 6, ph, UUI_CAPSULE, p->running);
+            }
+            continue;
+        }
+
+        // LABELLED: icon, then the title the layout already fitted.
+        int lx = x + TB_PAD;
+        if (ico) {
+            int iy = y + (h - ico->h) / 2;
+            ugfx_blit_alpha(s, lx, iy, ico->w, ico->h, ico->px, ico->w);
+            if (minimized) tb_fade(lx, iy, ico->w, ico->h, bg);
+            lx += ico->w + TB_ICON_GAP;
+        }
+        ugfx_draw_string_clipped(s, lx, ty, x + w - TB_PAD - lx, tb->label,
+                                 minimized ? p->dim : p->text, bg);
+        // Windows 10's underline, inset from the corners.
+        if (focused && style == TASKBAR_STYLE_CLASSIC)
+            ugfx_fill_rect(s, x + 8, y + h - 2, w - 16, 2, p->accent);
     }
 
-    draw_tray(ty, bg, fg);
+    draw_tray(&g, p);
 }
 
 // The content rectangles of every visible CLIENT window -- the pixels

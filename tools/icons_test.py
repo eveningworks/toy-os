@@ -414,11 +414,13 @@ def run(dbg, qmp, tmp, res):
     # feature failure's clothes.
     import json as _json
     btns = []
+    tbj = {}
     start = tb.rfind("{\"y\"")
     if start < 0:
         start = tb.rfind("{")
     try:
-        btns = _json.loads(tb[start:]).get("buttons", []) if start >= 0 else []
+        tbj = _json.loads(tb[start:]) if start >= 0 else {}
+        btns = tbj.get("buttons", [])
     except ValueError:
         pass
     res.check("the taskbar reports a button for the open window", len(btns) >= 1,
@@ -429,20 +431,21 @@ def run(dbg, qmp, tmp, res):
         if word.endswith("px") and word[:-2].isdigit():
             strip_h = int(word[:-2])
             break
-    if btns:
+    if btns and "btn_y" in tbj:
         b = btns[0]
-        h = im3.height
-        # The strip is taskbar_h tall at the bottom; the icon sits 5px in
-        # from the button's top-left (wm_render.c's draw_taskbar()).
-        # taskbar_icon_size() is taskbar_h - 10 (wm_taskbar.c). The
-        # strip height comes from the guest, so this tracks a font change
-        # instead of assuming 22px.
-        size = max(8, strip_h - 10)
+        # The button's box comes from the guest (`btn_y`/`btn_h`); the
+        # icon sits TB_PAD (12px) in from its left edge, vertically
+        # centred, and taskbar_icon_size() is half the bar (wm_taskbar.c)
+        # -- the bar being the panel's height, so this tracks a
+        # `desktop.taskbar_height` change instead of assuming one.
+        bar_h = tbj["panel"]["h"] if tbj.get("floating") else strip_h
+        size = max(8, min(32, bar_h // 2))
         want = host_icon("notepad", size)
-        row_bg = p3[b["x"] + b["w"] - 3, h - strip_h + strip_h // 2]
+        by, bh = tbj["btn_y"], tbj["btn_h"]
+        row_bg = p3[b["x"] + b["w"] - 3, by + bh // 2]
         worst = 0
         for dx, dy in ((size // 2, size // 2), (size // 2, size // 3)):
-            got = p3[b["x"] + 4 + dx, h - strip_h + 5 + dy]
+            got = p3[b["x"] + 12 + dx, by + (bh - size) // 2 + dy]
             exp = over(want.getpixel((dx, dy)), row_bg)
             worst = max(worst, diff(got, exp))
         res.check("the taskbar button carries the app's icon", worst <= TOL + 8,
@@ -634,7 +637,15 @@ def run(dbg, qmp, tmp, res):
               bool(mark), f"start: {(tj or {}).get('start')}")
     if mark:
         mx, my, msz = mark["x"], mark["y"], mark["size"]
-        swant = host_icon("start", msz)
+        # The mark is SYMBOLIC now, drawn in the strip's ink (`ink` in
+        # the report) rather than in its own white, so the file's alpha
+        # is what is compared.
+        ink = (tj or {}).get("ink", 0xFFFFFF)
+        ink_rgb = ((ink >> 16) & 255, (ink >> 8) & 255, ink & 255)
+        from PIL import Image
+        raw = host_icon("start", msz)
+        swant = Image.new("RGBA", raw.size, ink_rgb + (0,))
+        swant.putalpha(raw.getchannel("A"))
         # The button's own background, sampled from a corner the mark
         # does not reach.
         btn_bg = p5[6, my + msz - 1]
@@ -660,11 +671,11 @@ def run(dbg, qmp, tmp, res):
               (taskbar_json() or {}).get("start", {}).get("mark") is None,
               "a mark is still reported with the button set to text")
 
-    # The check above already left it on `text`, which is the default --
-    # deliberate, not incidental. `make iso` re-seeds disk.img by SYNC
-    # and never reformats, so a setting written here outlives the run
-    # and every later tool would inherit it (CLAUDE.md's dirty-fixture
-    # rule).
+    # BACK TO THE DEFAULT, by unsetting rather than by naming it.
+    # `make iso` re-seeds disk.img by SYNC and never reformats, so a
+    # setting written here outlives the run and every later tool would
+    # inherit it (CLAUDE.md's dirty-fixture rule).
+    dbg.send("sh config unset desktop.start_button")
 
     # --- 7. the cache is a cache -------------------------------------
     #

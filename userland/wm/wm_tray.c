@@ -44,6 +44,14 @@ struct tray_item {
 
 static struct tray_item tray_items[TRAY_MAX_ITEMS];
 static int clock_tray_id = -1;
+// The clock's second line, ISO 8601 like the build stamp on the desktop
+// -- the one date format with no locale to get wrong.
+static char clock_date[11];
+
+// An item's box reaches this far past its content either side, and
+// neighbouring boxes stand TRAY_GAP apart.
+#define TRAY_PAD 8
+#define TRAY_GAP 4
 
 // This DOES damage the taskbar strip now. It deliberately didn't, for
 // two stated reasons, and both have since stopped applying -- the
@@ -180,6 +188,8 @@ void tray_update_clock(void) {
     sys_gettime(&t);
     tz_localize(&t);
 
+    k_snprintf(clock_date, sizeof clock_date, "%04d-%02d-%02d",
+               (int)t.year, (int)t.month, (int)t.day);
     char buf[9];
     buf[0] = '0' + (t.hour / 10);
     buf[1] = '0' + (t.hour % 10);
@@ -198,9 +208,29 @@ void tray_update_clock(void) {
 // button's padding around it. Font-derived like everything else here
 // (docs/gui-guidelines.md): the taskbar's height is, so this is.
 static int tray_icon_size(void) {
-    int s = taskbar_h - 6;
+    // 32 at the 48px default. The redesign's mockup drew 20, and on a
+    // real 1920-wide panel that read as "really small" (2026-09-29).
+    int s = taskbar_bar_h() * 2 / 3;
     if (s > TASKBAR_ICON_MAX + 4) s = TASKBAR_ICON_MAX + 4; // still larger than a button's
     return s < 8 ? 0 : s;
+}
+
+// The clock takes two lines -- time over date, as Windows 11's and
+// Plasma's do -- whenever the buttons are tall enough to hold them.
+static int clock_two_lines(void) {
+    struct taskbar_geom g;
+    taskbar_geom(&g);
+    return clock_date[0] && g.btn_h >= 2 * ugfx_char_h() + 2;
+}
+
+static int item_width(int i) {
+    if (tray_items[i].icon) return tray_icon_size();
+    int w = ugfx_text_width(tray_items[i].text);
+    if (i == clock_tray_id && clock_two_lines()) {
+        int dw = ugfx_text_width(clock_date);
+        if (dw > w) w = dw;
+    }
+    return w;
 }
 
 // THE one right-to-left walk. draw_tray(), tray_left() and
@@ -213,7 +243,10 @@ static int tray_icon_size(void) {
 // Returns the leftmost x the tray occupies.
 static int tray_walk(int want, int *out_x, int *out_w,
                      void (*visit)(int id, int x, int w, void *ctx), void *ctx) {
-    int cx = screen_w - 16;
+    struct taskbar_geom g;
+    taskbar_geom(&g);
+    int cx = g.px + g.pw - 4 - TRAY_PAD;   // the last box 4px in, as Start is
+    int left = cx;
     // THE CLOCK IS ALWAYS RIGHTMOST, whatever slot it holds. It used to
     // be leftmost by accident -- it takes slot 0 and the walk runs from
     // the highest slot down -- so the first item registered after it
@@ -225,29 +258,29 @@ static int tray_walk(int want, int *out_x, int *out_w,
         if (!tray_items[i].active || tray_items[i].hidden) continue;
         if ((pass == 0) != (i == clock_tray_id)) continue;
         // Measured, never strlen * char_w: the face is proportional now.
-        int text_w = tray_items[i].icon ? tray_icon_size()
-                                       : ugfx_text_width(tray_items[i].text);
+        int text_w = item_width(i);
         cx -= text_w;
-        // The item's BOX, not its text: the fill draw_tray() paints
-        // starts 4px left of the glyphs and runs 4px past them, and a
-        // click landing in that padding is a click on the item.
-        if (i == want) { if (out_x) *out_x = cx - 4; if (out_w) *out_w = text_w + 8; }
+        // The item's BOX, not its text: the ground draw_tray() paints
+        // runs TRAY_PAD either side of the content, and a click landing
+        // in that padding is a click on the item.
+        if (i == want) { if (out_x) *out_x = cx - TRAY_PAD; if (out_w) *out_w = text_w + 2 * TRAY_PAD; }
         if (visit) visit(i, cx, text_w, ctx);
-        cx -= 12;
+        left = cx - TRAY_PAD;
+        cx -= 2 * TRAY_PAD + TRAY_GAP;
     }
-    return cx - 4;
+    return left;
 }
 
 int tray_left(void) { return tray_walk(-1, 0, 0, 0, 0); }
 
-// --- the pressed pill -------------------------------------------------
+// --- hover and the pressed ground ----------------------------------------
 //
-// A tray item has NO hover feedback and lights up only while it is held
-// down. That is the macOS menu-bar rule rather than Windows 11's or
-// Breeze's, both of which also highlight on hover; the maintainer asked
-// for the quieter one. Nothing latches either -- the pill clears on
-// release even when the click opened a popup, so it says "that press
-// landed" and nothing more.
+// A tray item lights on HOVER and darker while HELD, as the strip's own
+// buttons do -- Windows 11's and Breeze's rule. (It was press-only, the
+// macOS menu-bar rule, until the taskbar redesign gave every control on
+// the strip a hover.) Nothing latches: the ground clears on release even
+// when the click opened a popup.
+static int tray_hovered = -1;        // the item under the pointer, or -1
 static int tray_pressed = -1;        // the item drawn pressed, or -1
 static int tray_press_origin = -1;   // the item the button went down on
 static uint8_t tray_prev_buttons;
@@ -259,7 +292,7 @@ static void tray_at_visit(int id, int x, int w, void *vctx) {
     // The item's BOX, the same 4px-either-side padding draw_tray()
     // fills and tray_item_rect() reports -- asked of the one walk, so a
     // press cannot light up an item a click would miss.
-    if (uui_hit(x - 4, screen_h - taskbar_h, w + 8, taskbar_h, c->mx, c->my))
+    if (uui_hit(x - TRAY_PAD, screen_h - taskbar_h, w + 2 * TRAY_PAD, taskbar_h, c->mx, c->my))
         c->id = id;
 }
 
@@ -279,12 +312,16 @@ void tray_update_press(int mx, int my, uint8_t buttons) {
     // docs/gui-guidelines.md's rule for every control here. Nothing
     // arms while a fullscreen window covers the strip, which is the
     // same condition wm_handle_left_click() refuses the taskbar under.
+    int under = wm_top_covers_screen() ? -1 : tray_item_at(mx, my);
     int now = -1;
-    if (tray_press_origin >= 0 && !wm_top_covers_screen() &&
-        tray_item_at(mx, my) == tray_press_origin)
+    if (tray_press_origin >= 0 && under == tray_press_origin)
         now = tray_press_origin;
-    if (now == tray_pressed) return;
+    // No hover while the button is down: a press dragged off its item
+    // falls back to REST, not hover (docs/gui-guidelines.md).
+    int hov = down ? -1 : under;
+    if (now == tray_pressed && hov == tray_hovered) return;
     tray_pressed = now;
+    tray_hovered = hov;
     tray_damage();
 }
 
@@ -323,35 +360,23 @@ int tray_clock_rect(int *out_x, int *out_y, int *out_w, int *out_h) {
     return 1;
 }
 
-struct tray_draw_ctx { int taskbar_y; uint32_t bg; uint32_t fg; };
-
-// The pressed pill's inset from the strip's edges and its corner
-// radius, both derived from the taskbar's height -- the only metric
-// this strip has, and itself a setting. The inset is what keeps the
-// fill reading as a control rather than as a band across the bar;
-// the radius is Win11's taskbar-button proportion, a soft rect and
-// not a capsule.
-static void tray_pill_geom(int *inset, int *radius) {
-    int in = taskbar_h / 16;              // 2 at the 40px default
-    if (in < 2) in = 2;
-    if (taskbar_h - 2 * in < 8) in = 0;   // a very short bar keeps its full height
-    *inset = in;
-    *radius = (taskbar_h - 2 * in) / 8;
-}
+struct tray_draw_ctx {
+    const struct taskbar_geom *g;
+    const struct taskbar_palette *p;
+};
 
 static void tray_draw_item(int id, int x, int w, void *vctx) {
     struct tray_draw_ctx *c = (struct tray_draw_ctx *)vctx;
-    uint32_t bg = c->bg;
-    ugfx_fill_rect(wm_surface(), x - 4, c->taskbar_y, w + 8, taskbar_h, bg);
-    if (id == tray_pressed) {
-        int in, r;
-        tray_pill_geom(&in, &r);
-        // Derived from the panel's own colour, never a picked tint --
-        // on this near-white theme that darkens (uui_state_bg()).
-        bg = uui_state_bg(c->bg, UUI_STATE_PRESSED);
-        uui_fill_round_rect(wm_surface(), x - 4, c->taskbar_y + in,
-                            w + 8, taskbar_h - 2 * in, r, bg);
-    }
+    const struct taskbar_geom *g = c->g;
+    const struct taskbar_palette *p = c->p;
+    uint32_t bg = p->bar;
+    // Derived from the strip's own colour, never a picked tint
+    // (uui_state_bg()), as the window buttons' hover is.
+    if (id == tray_pressed)      bg = uui_state_bg(p->bar, UUI_STATE_PRESSED);
+    else if (id == tray_hovered) bg = p->hover;
+    if (bg != p->bar)
+        uui_fill_round_rect(wm_surface(), x - TRAY_PAD, g->btn_y, w + 2 * TRAY_PAD,
+                            g->btn_h, g->btn_r, bg);
     if (tray_items[id].icon) {
         const struct uimg *ico = icon_get(tray_items[id].icon, w);
         // No letter-tile fallback here, unlike an app icon: a tray item
@@ -363,18 +388,28 @@ static void tray_draw_item(int id, int x, int w, void *vctx) {
         // one. Every tray item today is the shell's own indicator; an
         // app-registered icon would have to say it is not symbolic.
         if (ico)
-            ugfx_blit_tinted(wm_surface(), x, c->taskbar_y + (taskbar_h - ico->h) / 2,
-                             ico->w, ico->h, ico->px, ico->w, c->fg);
+            ugfx_blit_tinted(wm_surface(), x, g->btn_y + (g->btn_h - ico->h) / 2,
+                             ico->w, ico->h, ico->px, ico->w, p->text);
         return;
     }
-    int text_y = c->taskbar_y + (taskbar_h - ugfx_char_h()) / 2;
-    // `bg`, not c->bg: the glyph cells are painted opaque, so a pressed
-    // clock would otherwise punch the strip's colour back through its
-    // own pill.
-    ugfx_draw_string_clipped(wm_surface(), x, text_y, w, tray_items[id].text, c->fg, bg);
+    int ch = ugfx_char_h();
+    // `bg`, not the strip's: the glyph cells are painted opaque, so a
+    // lit item would otherwise punch the strip's colour back through
+    // its own ground.
+    if (id == clock_tray_id && clock_two_lines()) {
+        int y = g->btn_y + (g->btn_h - 2 * ch) / 2;
+        const char *t = tray_items[id].text;
+        // Right-aligned, both lines, against the screen edge.
+        ugfx_draw_string_clipped(wm_surface(), x + w - ugfx_text_width(t), y, w, t, p->text, bg);
+        ugfx_draw_string_clipped(wm_surface(), x + w - ugfx_text_width(clock_date), y + ch, w,
+                                 clock_date, p->dim, bg);
+        return;
+    }
+    ugfx_draw_string_clipped(wm_surface(), x, g->btn_y + (g->btn_h - ch) / 2, w,
+                             tray_items[id].text, p->text, bg);
 }
 
-void draw_tray(int taskbar_y, uint32_t bg, uint32_t fg) {
-    struct tray_draw_ctx ctx = { taskbar_y, bg, fg };
+void draw_tray(const struct taskbar_geom *g, const struct taskbar_palette *p) {
+    struct tray_draw_ctx ctx = { g, p };
     tray_walk(-1, 0, 0, tray_draw_item, &ctx);
 }

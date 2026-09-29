@@ -305,9 +305,11 @@ def check_height(dbg, qmp, res):
     x = tb["tray_x"] - 8 if tb["tray_x"] > 8 else img.width // 2
     top = img.getpixel((x, sh - want))
     above = img.getpixel((x, sh - want - 1))
+    e = tb.get("edge", 0x1E1E22)
+    edge = ((e >> 16) & 255, (e >> 8) & 255, e & 255)
     res.check("the strip's top edge is drawn where it is reported",
-              top == (30, 30, 34) and above != (30, 30, 34),
-              f"row {sh - want} = {top}, row above = {above}")
+              top == edge and above != edge,
+              f"row {sh - want} = {top} (edge {edge}), row above = {above}")
     dbg.send("sh config unset desktop.taskbar_height")
     dbg.settle()
     time.sleep(0.5)

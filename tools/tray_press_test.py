@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""The notification area's press feedback: a pill while held, and
-nothing at all on hover.
+"""The notification area's feedback: a rounded fill on hover, a
+different one while held, and nothing that latches.
 
 WHAT IS UNDER TEST
 ------------------
 A tray item (userland/wm/wm_tray.c) draws a rounded fill behind itself
-while the left button is held on it, and draws nothing different at any
-other time. That is deliberately NOT what Windows 11 or Breeze do -- both
-also highlight on hover -- and is the macOS menu-bar rule instead.
+while the pointer rests on it and another while the left button is held
+on it -- Windows 11's and Breeze's rule, and the taskbar's own buttons'.
+(Press-only, the macOS menu-bar rule, until the 2026-09-29 redesign.)
 
 The clock is the item driven here because it is the one item that is
 always registered, whatever hardware the guest has.
@@ -19,11 +19,10 @@ WHAT THIS ASSERTS THAT AN "IT RESPONDS" CHECK WOULD NOT
    move them) must darken while the button is held and be byte-identical
    to rest otherwise.
 
-2. HOVER STAYS DEAD. The cursor is PARKED on the item with the button up
-   -- DebugConsole.warp_cursor, never `gui move`, which lasts one wm_run()
-   iteration -- and the same strip must not move by one pixel value. This
-   is the half of the request a "feedback works" check would pass while
-   quietly adding a hover state too.
+2. HOVER IS DRAWN, AND IS NOT THE PRESS. The cursor is PARKED on the
+   item with the button up -- DebugConsole.warp_cursor, never `gui move`,
+   which lasts one wm_run() iteration -- and the strip must change, but
+   `tray_pressed` must not, and the held fill must differ from it again.
 
 3. IT IS A PILL, NOT A BLOCK. The fill's top-left corner pixel must stay
    nearer the panel's colour than the fill's interior, which is what
@@ -96,7 +95,7 @@ def main():
         enter_gui(qmp, args.sock)
 
     dbg = DebugConsole(args.sock)
-    print("tray press feedback (the clock: pill while held, nothing on hover)")
+    print("tray feedback (the clock: a fill on hover, another while held)")
 
     # A popup left open by an earlier tool would be dismissed by this
     # tool's first press, which is a different code path from the one
@@ -110,10 +109,10 @@ def main():
                  str(clock)):
         return report()
 
-    # THE PADDING STRIP, four columns wide: the item's box starts 4px
-    # left of its glyphs (wm_tray.c's walk), so this band is inside the
-    # pill and outside the text -- which is what makes it immune to the
-    # seconds ticking underneath the comparison.
+    # THE PADDING STRIP, four columns wide: the item's box starts
+    # TRAY_PAD (8px) left of its glyphs (wm_tray.c's walk), so this band
+    # is inside the fill and outside the text -- which is what makes it
+    # immune to the seconds ticking underneath the comparison.
     bx, by, bh = clock["x"], clock["y"], clock["h"]
     cy = by + bh // 2
     strip = (bx, cy - 3, bx + 4, cy + 3)
@@ -134,12 +133,12 @@ def main():
     check("nothing is pressed at rest", pressed_id(dbg) == -1,
           f"tray_pressed={pressed_id(dbg)}")
 
-    # --- 2. hover changes NOTHING -------------------------------------
+    # --- 2. hover is drawn, and is not a press ------------------------
     dbg.warp_cursor(qmp, clock["cx"], clock["cy"])
     dbg.settle(); time.sleep(0.4)
     hovered, _ = sample("tray_hover.png")
-    check("the cursor ON the item draws no hover state", hovered == rest,
-          "identical" if hovered == rest else "the strip changed under the cursor")
+    check("the cursor ON the item draws its hover fill", hovered != rest,
+          "the strip did not change under the cursor" if hovered == rest else "changed")
     check("...and the WM agrees nothing is pressed", pressed_id(dbg) == -1)
 
     # --- 1. held: the pill -------------------------------------------
@@ -148,8 +147,9 @@ def main():
     held_id = pressed_id(dbg)
     check("holding the button arms the item", held_id >= 0, f"tray_pressed={held_id}")
     held, held_im = sample("tray_held.png")
-    check("...and the padding strip is repainted", held != rest,
-          "identical pixels" if held == rest else "pixels changed")
+    check("...and the padding strip is repainted, unlike the hover",
+          held != rest and held != hovered,
+          "same as rest or hover" if held in (rest, hovered) else "pixels changed")
 
     rest_l = lum(rest_im.getpixel((bx + 2, cy)))
     held_l = lum(held_im.getpixel((bx + 2, cy)))
@@ -162,10 +162,10 @@ def main():
           f"panel {rest_l} -> held {held_l}")
 
     # --- 3. it is a PILL ----------------------------------------------
-    # The inset wm_tray.c's tray_pill_geom() uses, re-derived: the corner
-    # sampled has to be the fill's, not the strip's above it.
-    inset = max(2, bh // 16)
-    corner = lum(held_im.getpixel((bx, by + inset)))
+    # The fill spans the buttons' box (`btn_y` in the report), so its
+    # top-left pixel is the corner -- sampled there and not above it,
+    # where the strip itself would pass this trivially.
+    corner = lum(held_im.getpixel((bx, bar["btn_y"])))
     interior = lum(held_im.getpixel((bx + 2, cy)))
     check("the fill's corner is rounded, not square",
           abs(corner - rest_l) < abs(interior - rest_l),
@@ -182,7 +182,7 @@ def main():
     check("dragging off the item disarms it", pressed_id(dbg) == -1,
           f"tray_pressed={pressed_id(dbg)}")
     off, _ = sample("tray_dragged_off.png")
-    check("...and the pill is gone from the pixels", off == rest,
+    check("...and the fill is gone from the pixels", off == rest,
           "restored" if off == rest else "the strip is still filled")
 
     dbg.warp_cursor(qmp, clock["cx"], clock["cy"])
@@ -196,14 +196,17 @@ def main():
     check("releasing clears it", pressed_id(dbg) == -1,
           f"tray_pressed={pressed_id(dbg)}")
 
-    # Nothing latches: the press opened the calendar, and the item must
-    # still go back to rest while that popup is up.
+    # Nothing latches: the press opened the calendar, and once the pointer
+    # leaves, the item must go back to rest while that popup is up. The
+    # pointer leaves DOWNWARD-LEFT along the strip, not into the popup.
     still_open = dbg.json("gui calendar --json")["open"]
     check("the press opened the calendar (so the item is lit BY the press, "
           "not by the popup)", still_open)
+    dbg.warp_cursor(qmp, bar["tray_x"] - 60, cy)
+    dbg.settle(); time.sleep(0.4)
     lit, _ = sample("tray_after_release.png")
     check("...and the item is at rest again anyway", lit == rest,
-          "restored" if lit == rest else "the pill outlived the press")
+          "restored" if lit == rest else "the fill outlived the press")
 
     # Leave the desktop as it was found.
     dbg.send("gui click 640 300")

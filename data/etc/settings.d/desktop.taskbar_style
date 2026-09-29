@@ -1,0 +1,13 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Style
+Category=Desktop
+Group=Taskbar
+Default=classic
+Choices=classic,centered,floating
+Description=How the taskbar lays out its buttons
+Widget=radio
+Order=10
+Choice.classic=Classic, labelled buttons
+Choice.centered=Centered icons
+Choice.floating=Floating panel

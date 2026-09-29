@@ -1564,6 +1564,23 @@ this the obvious way), not from how much history it accumulated.
   `WIN_REQ_WINDOW_INFO`'s single `text` is the title. A window with no
   identity groups by client pid instead. See
   `docs/decisions.md`, and `tools/taskbar_test.py` for the thresholds.
+- **THE TASKBAR HAS THREE STYLES OVER ONE LAYOUT, AND EVERY RECT COMES
+  FROM `taskbar_geom()`.** `desktop.taskbar_style` = `classic`
+  (labelled buttons, the default) | `centered` (icon-only, Windows 11's)
+  | `floating` (a detached rounded panel, Plasma 6's), and
+  `desktop.taskbar_theme` = `dark` | `light` picks
+  `taskbar_palette()`. A style is MEASUREMENTS, not a second taskbar:
+  `taskbar_layout()` branches once for the centred row, and
+  `draw_taskbar()` once per indicator. **Hit-test against the BAND,
+  draw inside the PANEL**: the screen's bottom edge hits the button
+  above it in every style (Fitts), the Start button owns the corner when
+  it is leftmost (`taskbar_start_hit_rect()`), and the gap under a
+  floating panel is the strip's, not the desktop's. **A floating panel
+  DEFLATES while any window is maximized** -- `taskbar_h` never moves
+  with the panel's shape, so nothing derived from the work area
+  re-lays. `gui taskbar --json` reports `style`, `theme`, `floating`,
+  `panel`, `btn_y`/`btn_h` and the strip's colours as `0xRRGGBB`;
+  `tools/taskbar_style_test.py` checks each style where it is drawn.
 
 
 - **The WM has a SLOW-FRAME WATCHDOG** (`userland/wm/wm_watchdog.c`): it
@@ -2626,7 +2643,7 @@ real scanout hardware does. Do not write a pixel assertion for one.
   the assertion.
 
 - **THE TASKBAR'S THICKNESS IS A REGISTERED SETTING:
-  `desktop.taskbar_height`, in PIXELS, 24..96, default 40.** DECLARED
+  `desktop.taskbar_height`, in PIXELS, 24..96, default 48.** DECLARED
   by `/etc/settings.d/desktop.taskbar_height` as an `int`, beside the
   Start button and the wallpaper in `/etc/desktop.conf`, so
   System Settings shows it as a spinbox with no app edit. A pixel count
@@ -2642,13 +2659,17 @@ real scanout hardware does. Do not write a pixel assertion for one.
   and relays through `wm_layout_changed()` -- the walk
   `wm_screen_changed()` already made (icon grid, maximized windows, the
   clamp, the overlays), factored out so a height change and a mode
-  change cannot re-derive the usable area differently. Two things that
-  scale with it are CAPPED: a button's icon at `TASKBAR_ICON_MAX` (32,
-  Windows 11's in a 48px bar) and the tray's at that plus 4, because the
-  masters are 64px and a 96px strip would otherwise upscale. And **a
-  button's natural width includes the icon column** (`win_btn_w()`),
-  since `make_label()` subtracts it -- at 40px the icon grew to 30 and
-  "untitled" drew as "un" until it did. `tools/taskbar_test.py` sets,
+  change cannot re-derive the usable area differently. **It is the
+  BAR's thickness; `taskbar_h` is the BAND**, which is the bar plus
+  `TASKBAR_FLOAT_GAP` in the floating style -- size things from
+  `taskbar_bar_h()`, reserve space with `taskbar_h`. A button's icon is
+  half the bar (24 at the default, Windows 11's) and a tray icon two
+  thirds of it (32), CAPPED at `TASKBAR_ICON_MAX` and that plus 4,
+  because the masters are 64px and a 96px strip would otherwise
+  upscale. And **a button's
+  natural width includes the icon column** (`win_btn_w()`), since
+  `make_label()` subtracts it -- "untitled" once drew as "un" until it
+  did. `tools/taskbar_test.py` sets,
   reads back and unsets it, before its overflow section fills the
   process table.
 
@@ -2660,8 +2681,9 @@ real scanout hardware does. Do not write a pixel assertion for one.
   the FILE. Three choices rather than a boolean because that is XFCE's
   Whisker Menu verbatim (Icon / Title / Icon and title) and KDE's
   launcher option, and because a boolean cannot say `both`, which is
-  what Windows 95 through 7 shipped, and what the default is. **It was
-  `text` until 2026-09-07**, so that a machine with nothing written
+  what Windows 95 through 7 shipped. **The default is `icon`** (since
+  2026-09-29, with the taskbar redesign); **it was `text` until
+  2026-09-07 and `both` between**, so that a machine with nothing written
   looked as it had before the setting existed; the cost of moving it is
   that the button's width is derived from what is in it and every window
   button starts to the right of it, so the whole strip shifts under every

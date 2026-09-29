@@ -426,6 +426,7 @@ void open_app(const struct gui_app *app) {
     for (; app->name[i] && i < WIN_TITLE_MAX - 1; i++) win->title[i] = app->name[i];
     win->title[i] = '\0';
 
+    win->open_seq = wm_next_open_seq();
     window_count++;
     // AFTER window_count++, because restoring takes an INDEX: it calls
     // wm_ensure_reachable(), which addresses windows by index and would
@@ -805,6 +806,11 @@ void wm_screen_changed(void) {
 // re-derived here: the icon grid's rows, each maximized window's size,
 // every other window's clamp, and the overlays, which are simply closed
 // since they re-clamp on their next open.
+uint32_t wm_next_open_seq(void) {
+    static uint32_t seq;
+    return ++seq;
+}
+
 void wm_layout_changed(void) {
     desktop_entries_changed();   // the icon grid's rows depend on the height
 
@@ -1281,6 +1287,11 @@ void wm_run(void) {
         // it also needs to react to the button being released even if
         // the mouse hasn't moved since.
         if (mouse_moved) wm_update_title_hover(mx, my);
+        // The strip's own hover, and its tooltip for a title the button
+        // does not show (wm_taskbar.h). EVERY FRAME, not on motion: a
+        // click raises a window and reorders windows[], so the answer
+        // changes under a still pointer. Damages only when it changes.
+        taskbar_update_hover(mx, my, buttons);
         wm_update_title_btn_press(mx, my, buttons);
 
         // Modal overlays track their own press/hover the same way, and

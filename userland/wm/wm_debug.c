@@ -748,7 +748,12 @@ static void cmd_menu(struct dbg_out *o, int json) {
 // all -- which is the number a test asserts is zero.
 static void cmd_taskbar(struct dbg_out *o, int json) {
     int bar_y = screen_h - taskbar_h;
-    int sw = start_btn_w();
+    int ssx, ssy, ssw, ssh;
+    taskbar_start_hit_rect(&ssx, &ssy, &ssw, &ssh);
+    struct taskbar_geom g;
+    taskbar_geom(&g);
+    const struct taskbar_palette *pal = taskbar_palette();
+    static const char *const style_names[] = { "classic", "centered", "floating" };
     char start_mark_buf[48];
     static struct taskbar_button btns[64];
     int nb = taskbar_layout(btns, 64);
@@ -768,11 +773,24 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
                 k_strlcpy(start_mark_buf, "null", sizeof start_mark_buf);
             }
         }
-        dbg_out_printf(o, "{\"y\":%d,\"h\":%d,\"start\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
+        // `start` is the HIT rect (the band's height, and from x=0 when
+        // Start is leftmost); `panel` is where the strip is drawn, and
+        // `edge`/`bar` are its colours as 0xRRGGBB for a pixel check.
+        // TWO CALLS: one line is KFMT_LINE_MAX, and this header outgrew it.
+        dbg_out_printf(o, "{\"y\":%d,\"h\":%d,\"style\":\"%s\",\"theme\":\"%s\","
+                     "\"floating\":%s,\"panel\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"r\":%d},"
+                     "\"btn_y\":%d,\"btn_h\":%d,\"bar\":%u,\"edge\":%u,\"ink\":%u,\"hover\":%d,",
+                     bar_y, taskbar_h, style_names[taskbar_style()],
+                     taskbar_dark() ? "dark" : "light",
+                     taskbar_floating() ? "true" : "false",
+                     g.px, g.py, g.pw, g.ph, g.radius, g.btn_y, g.btn_h,
+                     (unsigned)pal->bar_rgb, (unsigned)pal->edge_rgb,
+                     (unsigned)pal->text_rgb, taskbar_hover());
+        dbg_out_printf(o, "\"start\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
                      "\"cx\":%d,\"cy\":%d,\"mark\":%s},\"tray_x\":%d,"
                      "\"tray_pressed\":%d,\"hidden\":%d,\"buttons\":[",
-                     bar_y, taskbar_h, 0, bar_y, sw, taskbar_h,
-                     sw / 2, bar_y + taskbar_h / 2, start_mark_buf,
+                     ssx, ssy, ssw, ssh,
+                     ssx + ssw / 2, bar_y + taskbar_h / 2, start_mark_buf,
                      tray_left(), tray_pressed_item(), taskbar_hidden());
         dbg_out_reserve(o, 48); // room for the ending -- see cmd_windows()
         int listed = 0;
@@ -780,10 +798,11 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
             if (o->overflow) break;
             int mark = dbg_out_mark(o);
             dbg_out_printf(o, "%s{\"index\":%d,\"title\":\"%s\",\"app_id\":\"%s\","
-                         "\"label\":\"%s\",\"x\":%d,\"w\":%d,"
+                         "\"label\":\"%s\",\"elided\":%s,\"x\":%d,\"w\":%d,"
                          "\"count\":%d,\"cx\":%d,\"cy\":%d}",
                          i ? "," : "", btns[i].first, windows[btns[i].first].title,
                          windows[btns[i].first].app_id, btns[i].label,
+                         btns[i].elided ? "true" : "false",
                          btns[i].x, btns[i].w, btns[i].count,
                          btns[i].x + btns[i].w / 2, bar_y + taskbar_h / 2);
             if (o->overflow) { dbg_out_rollback(o, mark); break; }
@@ -799,9 +818,12 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
 
     dbg_out_printf(o, "taskbar: y=%d h=%d tray_x=%d tray_pressed=%d hidden=%d\r\n",
                  bar_y, taskbar_h, tray_left(), tray_pressed_item(), taskbar_hidden());
-    dbg_out_write(o, "  start   x="); col_int(o, 0, 6);
-    dbg_out_write(o, "w="); col_int(o, sw, 6);
-    dbg_out_printf(o, "centre=(%d,%d)\r\n", sw / 2, bar_y + taskbar_h / 2);
+    dbg_out_printf(o, "  style=%s theme=%s floating=%d panel=(%d,%d %dx%d)\r\n",
+                   style_names[taskbar_style()], taskbar_dark() ? "dark" : "light",
+                   taskbar_floating(), g.px, g.py, g.pw, g.ph);
+    dbg_out_write(o, "  start   x="); col_int(o, ssx, 6);
+    dbg_out_write(o, "w="); col_int(o, ssw, 6);
+    dbg_out_printf(o, "centre=(%d,%d)\r\n", ssx + ssw / 2, bar_y + taskbar_h / 2);
     for (int i = 0; i < nb; i++) {
         dbg_out_write(o, "  win "); col_int(o, btns[i].first, 4);
         dbg_out_write(o, "x="); col_int(o, btns[i].x, 6);

@@ -658,6 +658,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] The Start menu's app column does not scroll -- it is as tall as the biggest folder, so a folder that outgrows the screen is clipped
 - [ ] Full dirty-rect compositor
 - [x] ~~Taskbar notification area (tray)~~ done
+- [x] ~~A modern taskbar~~ DONE 2026-09-29 -- `desktop.taskbar_style` (classic, centred, floating) and `desktop.taskbar_theme`
+- [ ] A Quick Settings flyout -- network and volume as ONE tray target, Windows 11's grouping, which the centred style's mockup drew
 - [ ] Alt+Tab window switching
 - [ ] Window snapping (half/quarter screen)
 - [ ] Resize from any edge or corner -- only the bottom-right grip works today

@@ -6,6 +6,7 @@
 #include "wm_overlay.h"
 #include "lib/icon_cache.h"
 #include "wm_internal.h"
+#include "wm_taskbar.h"   // taskbar_start_rect()
 #include "confirm_dialog.h"
 #include "ui/uui.h"
 #include "ui/utheme.h"
@@ -339,7 +340,15 @@ static void layout(struct sm_layout *L) {
 
     L->w = L->side_w + 1 + L->pane_w;
     L->h = L->pane_h + L->desc_h + L->search_h;
-    L->x = 4;
+    // Over the Start button, wherever the style put it -- clamped to the
+    // screen, so a centred button's menu cannot hang off the right edge.
+    {
+        int sx, sy, sw, sh;
+        taskbar_start_rect(&sx, &sy, &sw, &sh);
+        L->x = sx;
+        if (L->x + L->w > screen_w - 4) L->x = screen_w - 4 - L->w;
+        if (L->x < 4) L->x = 4;
+    }
     L->y = (screen_h - taskbar_h) - L->h;
     L->pane_x = L->x + L->side_w + 1;
 }
@@ -372,7 +381,9 @@ void start_menu_damage(void) { wm_overlay_damage("start"); }
 // close: start_menu_damage() runs on every hover change, and a whole
 // strip repaint per hover made every Start-menu frame heavier.
 static void damage_start_button(void) {
-    wm_damage_rect(0, screen_h - taskbar_h, 4 + start_btn_w() + 8, taskbar_h);
+    int x, y, w, h;
+    taskbar_start_hit_rect(&x, &y, &w, &h);
+    wm_damage_rect(x, y, w, h);
 }
 
 // --- what the app column holds ----------------------------------------

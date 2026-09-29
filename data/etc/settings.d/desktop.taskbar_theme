@@ -1,0 +1,11 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Colour
+Category=Desktop
+Group=Taskbar
+Default=dark
+Choices=dark,light
+Description=The taskbar's colours, apart from the windows'
+Order=15
+Choice.dark=Dark
+Choice.light=Light

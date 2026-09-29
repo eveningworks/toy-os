@@ -246,6 +246,7 @@ static int on_window_created(int pid, uint32_t id,
     // focus, and uapp starts in that state.)
     if (window_count > 0) wm_client_send_focus(&windows[window_count - 1], 0);
 
+    windows[window_count].open_seq = wm_next_open_seq();
     window_count++;
     // AFTER window_count++ (restoring addresses windows by index) and
     // after app_id is set, which is what the saved geometry is keyed
@@ -335,6 +336,7 @@ static int on_popup_created(int pid, uint32_t id, uint32_t parent_id, int w, int
     win->client_last_my = INT32_MIN;
     k_strlcpy(win->title, "Popup", sizeof win->title);
 
+    windows[window_count].open_seq = wm_next_open_seq();
     window_count++;
     redraw_pending = 1;  // compute_window_damage() sees a new rect
     return 1;
@@ -401,6 +403,7 @@ static int on_dialog_created(int pid, uint32_t id, uint32_t owner_id,
     wm_damage_window_rect(windows[window_count - 1].x, windows[window_count - 1].y,
                           windows[window_count - 1].w, windows[window_count - 1].h);
 
+    windows[window_count].open_seq = wm_next_open_seq();
     window_count++;
     redraw_pending = 1;
     wm_logf("wm: client pid %d opened dialog %u (%dx%d) of %u\n", pid, id, w, h, owner_id);

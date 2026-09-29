@@ -2859,3 +2859,12 @@ in a script file, whose command line does not contain the pattern.
 QMP `block_set_io_throttle` sent right after boot silently did nothing on
 one run in two, and that run's "slow disk" numbers came from a fast one.
 `info block -v` shows whether it took.
+
+**2026-09-29: A RUNNING `gui_regress` OWNS THE TREE UNTIL IT ENDS.** Twice
+in one session a full run came back with ~20 tools "failed" in 2 s each,
+every one `iso_guard: REFUSING to boot a stale image`: once after a
+`make all` for the bare-metal laptop, once after editing two WM sources
+to fix code-review findings. Each tool boots a fresh copy when its turn
+comes, so anything that makes the image stale mid-run stops every later
+tool -- correctly, and at the cost of the whole run. Build for the
+laptop, and land review fixes, before or after a suite, never during it.
