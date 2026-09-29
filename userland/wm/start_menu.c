@@ -134,13 +134,47 @@ static int have_favourites(void) {
     return 0;   // a pin whose app is gone is not a folder
 }
 
-static int have_recent(void) {
+// RECENT AS IT WAS WHEN THE MENU OPENED. A launch records itself while
+// the menu is still on screen, and a live order moved the launched row
+// to the top under the pointer mid-click -- Windows' Recommended and
+// Kickoff's Recent both change on the next open, not this one. App ids,
+// not pointers, so an app removed while the menu is up is skipped.
+static char g_recent[SM_RECENT_MAX][GUI_APP_ICON_MAX];
+static int g_recent_n;
+
+// A SELECTION SORT over the visible apps, newest sequence first. A few
+// dozen apps, once per open.
+static void snapshot_recent(void) {
+    uint32_t ceiling = 0xFFFFFFFFu;
     int apps = gui_app_visible_count(GUI_SHOW_STARTMENU);
-    for (int i = 0; i < apps; i++)
-        if (start_store_last_seq(gui_app_visible_at(GUI_SHOW_STARTMENU, i)->app_id))
-            return 1;
+    for (g_recent_n = 0; g_recent_n < SM_RECENT_MAX; g_recent_n++) {
+        uint32_t best = 0;
+        struct gui_app *pick = 0;
+        for (int i = 0; i < apps; i++) {
+            struct gui_app *a = gui_app_visible_at(GUI_SHOW_STARTMENU, i);
+            uint32_t seq = start_store_last_seq(a->app_id);
+            if (!seq || seq >= ceiling || seq <= best) continue;
+            best = seq;
+            pick = a;
+        }
+        if (!pick) break;
+        k_strlcpy(g_recent[g_recent_n], pick->app_id, sizeof g_recent[g_recent_n]);
+        ceiling = best;
+    }
+}
+
+static struct gui_app *recent_at(int n) {
+    // Frozen only while OPEN: a closed menu reports what the next open
+    // will show, which is what a caller reading its geometry expects.
+    if (!start_menu_open) snapshot_recent();
+    for (int i = 0; i < g_recent_n; i++) {
+        struct gui_app *a = gui_app_by_id(GUI_SHOW_STARTMENU, g_recent[i]);
+        if (a && n-- == 0) return a;
+    }
     return 0;
 }
+
+static int have_recent(void) { return recent_at(0) != 0; }
 
 // The pseudo-folders that exist right now, in order. Returned as a
 // count plus a kind-for-index rather than a table, because which ones
@@ -201,9 +235,10 @@ static const char *folder_icon_at(int n) {
     return buf;
 }
 
-// The n'th app of folder `f`, or NULL past its end. Recent is the only
-// one that has to ORDER anything: the registry is already sorted by
-// (category, name), and the pins carry the order they were made in.
+// The n'th app of folder `f`, or NULL past its end. Only Recent has to
+// ORDER anything, and snapshot_recent() did that at open: the registry
+// is already sorted by (category, name), and the pins carry the order
+// they were made in.
 static struct gui_app *folder_app_at(int f, int n) {
     if (n < 0) return 0;
     switch (folder_kind_at(f)) {
@@ -215,31 +250,8 @@ static struct gui_app *folder_app_at(int f, int n) {
         }
         return 0;
     }
-    case FOLDER_RECENT: {
-        // A SELECTION SORT over the visible apps, newest sequence
-        // first, stopping at the row asked for. The list is at most a
-        // few dozen and this runs per row of a menu that is being
-        // drawn, so the cost is nothing and there is no second copy of
-        // the ordering to keep true.
-        if (n >= SM_RECENT_MAX) return 0;
-        uint32_t ceiling = 0xFFFFFFFFu;
-        struct gui_app *pick = 0;
-        for (int taken = 0; taken <= n; taken++) {
-            uint32_t best = 0;
-            pick = 0;
-            int apps = gui_app_visible_count(GUI_SHOW_STARTMENU);
-            for (int i = 0; i < apps; i++) {
-                struct gui_app *a = gui_app_visible_at(GUI_SHOW_STARTMENU, i);
-                uint32_t seq = start_store_last_seq(a->app_id);
-                if (!seq || seq >= ceiling || seq <= best) continue;
-                best = seq;
-                pick = a;
-            }
-            if (!pick) return 0;
-            ceiling = best;
-        }
-        return pick;
-    }
+    case FOLDER_RECENT:
+        return recent_at(n);
     case FOLDER_ALL:
         return gui_app_visible_at(GUI_SHOW_STARTMENU, n);
     default:
@@ -684,6 +696,7 @@ int start_menu_hover_at(int mx, int my) {
 void start_menu_open_now(void) {
     wm_overlay_close_others("start");
     start_menu_open = 1;
+    snapshot_recent();
     flash_row = -1;
     hover_token = 0;
     // OPENS ON WHAT YOU USE, when there is such a thing: Favourites if

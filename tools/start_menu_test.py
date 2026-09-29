@@ -507,6 +507,46 @@ def run(dbg, qmp, tmp, res):
               not any(a["label"] == "Notepad" and a["pinned"]
                       for a in dbg.menu().get("apps", [])))
 
+    # --- 12. Recent keeps its order while the menu is up -------------------
+    # A launch records itself before the menu has gone, and a live order
+    # moved the launched row to the top UNDER THE POINTER. The rows are
+    # read in the instant after the click, while the menu still reports
+    # itself open; a second app launched first makes the list two long,
+    # so the bottom row is not already the top one.
+    open_menu(dbg, want=False)
+    for app in ("Minesweeper",):
+        dbg.open_app(app)
+        deadline = time.time() + 20
+        while time.time() < deadline and dbg.window(app) is None:
+            time.sleep(0.5)
+        if dbg.window(app) is not None:
+            dbg.key(KEY_F4, mods="alt")
+            time.sleep(0.8)
+    open_menu(dbg)
+    dbg.menu_select_folder("Recent")
+    before = [r["label"] for r in rows_of(dbg.menu(), "app")]
+    during, was_open = before, False
+    if len(before) >= 2:
+        x, y = dbg.menu_app_row(before[-1])
+        dbg.send(f"gui click {x} {y}")
+        m = dbg.menu()
+        during, was_open = [r["label"] for r in rows_of(m, "app")], bool(m.get("open"))
+    res.check("clicking Recent's bottom row does not reorder it while the menu is up",
+              len(before) >= 2 and was_open and during == before,
+              f"{before} -> {during} (open={was_open})")
+    deadline = time.time() + 20
+    while len(before) >= 2 and time.time() < deadline and dbg.window(before[-1]) is None:
+        time.sleep(0.5)
+    if len(before) >= 2 and dbg.window(before[-1]) is not None:
+        dbg.key(KEY_F4, mods="alt")
+        time.sleep(0.8)
+    open_menu(dbg)
+    dbg.menu_select_folder("Recent")
+    again = [r["label"] for r in rows_of(dbg.menu(), "app")]
+    res.check("...and the next time it opens, that app is first",
+              bool(again) and len(before) >= 2 and again[0] == before[-1],
+              f"{again}")
+
     # Leave nothing open: a left-over menu eats the next tool's first
     # click, anywhere on screen.
     open_menu(dbg, want=False)
