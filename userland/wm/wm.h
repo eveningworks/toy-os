@@ -41,9 +41,14 @@ struct wm_widget {
 struct window {
     char title[WIN_TITLE_MAX];
 
-    // When it opened, relative to the others (wm_next_open_seq()). The
-    // taskbar's order; windows[] itself is z-order.
+    // When it opened, relative to the others (wm_next_open_seq()) -- a
+    // window's identity for the taskbar and peek, since windows[] is
+    // z-order and an index moves on every raise.
     uint32_t open_seq;
+    // Its place on the taskbar: open order until a button is dragged,
+    // then renumbered from the same counter, so a window opened later
+    // still lands at the end.
+    uint32_t task_rank;
 
     // THE CLIENT'S WIDGET MAP, for `gui probe` and `gui widgets`.
     // ALLOCATED ON FIRST REPORT, not inline: a window is not otherwise

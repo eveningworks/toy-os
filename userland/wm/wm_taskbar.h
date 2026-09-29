@@ -66,6 +66,11 @@ struct taskbar_button {
     int first;
     int count;
     int elided;          // the label was cut short to fit
+    // The open_seq of the window that STARTS this button (the group's
+    // lowest-ranked member) -- stable while the button exists, whichever
+    // member is in front. What a drag and a glide follow.
+    uint32_t key;
+    int dragging;        // this button is under the pointer in a drag; x follows it
     char label[32];
 };
 
@@ -200,6 +205,32 @@ void taskbar_start_hit_rect(int *x, int *y, int *w, int *h);
 // from off-screen, minimize it if it is focused, else raise it. The
 // peek card's click does the same (wm_peek.c).
 void taskbar_activate(int i);
+
+// DRAG TO REORDER: a press on a window button ARMS it and a release on
+// it activates (Windows acts on release too); moving 4px first -- the
+// SM_CXDRAG default -- makes it a drag instead, the button following
+// the pointer while the others glide aside, and the release commits the
+// order into `task_rank`. For the rest of the session only, as Windows
+// keeps an order only for pinned apps. ALSO: while a cross-window drag
+// (wm_dnd) rests on a button, that window comes forward, so the drop
+// can land in it. Every tick, from wm.c.
+void taskbar_update_press(int mx, int my, uint8_t buttons);
+int taskbar_drag_state(int *armed, int *dragging);   // `gui taskbar --json`
+uint32_t taskbar_armed_key(void);                    // the pressed button's key, or 0
+
+// Where button `b` is DRAWN this frame: its layout x, glided there over
+// a short tween when its slot changes (`desktop.animations` off: at
+// once). Hit tests use the layout x; only drawing asks this.
+int taskbar_draw_x(const struct taskbar_button *b);
+// 1 while any button is still gliding -- the strip needs another frame.
+int taskbar_gliding(void);
+// How many frames have drawn a glide since the desktop started. A 150 ms
+// glide can begin and end between two samples of taskbar_gliding(); a
+// counter cannot miss one.
+uint32_t taskbar_glide_frames(void);
+// draw_taskbar() calls this after drawing the buttons: it damages the
+// strip for the next frame while a glide is still in flight.
+void taskbar_glide_frame_done(void);
 void taskbar_update_hover(int mx, int my, uint8_t buttons);
 int taskbar_hover(void);
 
@@ -216,9 +247,11 @@ void taskbar_poll_config(void);
 // stopped overflowing rather than assert on pixels.
 int taskbar_hidden(void);
 
-// Handles a left click at (mx, my) inside the taskbar's window-button
-// area. Returns 1 if a button claimed it. A grouped button opens its
-// window list; an ungrouped one raises/minimizes as it always did.
+// A left PRESS at (mx, my) inside the taskbar's window-button area.
+// Returns 1 if a button claimed it -- which ARMS it: the click itself
+// (a grouped button's window list, or raise/minimize) happens on the
+// release, unless the pointer moved far enough to make it a drag. See
+// taskbar_update_press().
 int taskbar_handle_click(int mx, int my);
 
 // Same, for a right click: opens the per-window context menu, or the

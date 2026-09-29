@@ -820,6 +820,14 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
                      g.px, g.py, g.pw, g.ph, g.radius, g.btn_y, g.btn_h,
                      (unsigned)pal->bar_rgb, (unsigned)pal->edge_rgb,
                      (unsigned)pal->text_rgb, taskbar_hover());
+        {
+            int armed = 0, dragging = 0;
+            taskbar_drag_state(&armed, &dragging);
+            dbg_out_printf(o, "\"armed\":%s,\"dragging\":%s,\"gliding\":%s,\"glide_frames\":%u,",
+                           armed ? "true" : "false", dragging ? "true" : "false",
+                           taskbar_gliding() ? "true" : "false",
+                           (unsigned)taskbar_glide_frames());
+        }
         dbg_out_printf(o, "\"start\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
                      "\"cx\":%d,\"cy\":%d,\"mark\":%s},\"tray_x\":%d,"
                      "\"tray_pressed\":%d,\"hidden\":%d,\"buttons\":[",
@@ -832,11 +840,12 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
             if (o->overflow) break;
             int mark = dbg_out_mark(o);
             dbg_out_printf(o, "%s{\"index\":%d,\"title\":\"%s\",\"app_id\":\"%s\","
-                         "\"label\":\"%s\",\"elided\":%s,\"x\":%d,\"w\":%d,"
-                         "\"count\":%d,\"cx\":%d,\"cy\":%d}",
+                         "\"label\":\"%s\",\"elided\":%s,\"key\":%u,\"dragging\":%s,"
+                         "\"x\":%d,\"w\":%d,\"count\":%d,\"cx\":%d,\"cy\":%d}",
                          i ? "," : "", btns[i].first, windows[btns[i].first].title,
                          windows[btns[i].first].app_id, btns[i].label,
-                         btns[i].elided ? "true" : "false",
+                         btns[i].elided ? "true" : "false", (unsigned)btns[i].key,
+                         btns[i].dragging ? "true" : "false",
                          btns[i].x, btns[i].w, btns[i].count,
                          btns[i].x + btns[i].w / 2, bar_y + taskbar_h / 2);
             if (o->overflow) { dbg_out_rollback(o, mark); break; }

@@ -1269,17 +1269,33 @@ static void draw_taskbar(void) {
     static struct taskbar_button btns[64];
     int nb = taskbar_layout(btns, 64);
     int isz = taskbar_icon_size();
+    int armed = 0, dragging = 0;
+    taskbar_drag_state(&armed, &dragging);
+    // Twice: the DRAGGED button last, so it rides over the ones it passes.
+    for (int pass = 0; pass < 2; pass++)
     for (int b = 0; b < nb; b++) {
         const struct taskbar_button *tb = &btns[b];
+        if (tb->dragging != pass) continue;
         int i = tb->first;
         int minimized = windows[i].state == WIN_MINIMIZED;
         int focused = i == wm_focus_index() && !minimized;
         int hovered = hover == i;
-        int x = tb->x, y = g.btn_y, w = tb->w, h = g.btn_h;
+        int x = taskbar_draw_x(tb), y = g.btn_y, w = tb->w, h = g.btn_h;
 
         uint32_t bg = p->bar, edge = p->focus_edge;
         int ringed = 0;
-        if (focused && taskbar_float_on() && !icons) {
+        if (tb->dragging) {
+            // LIFTED: a raised ground and a popup's shadow, as the mockup
+            // drew it -- the one button not sitting in the row.
+            if (wm_shadow_enabled())
+                wm_shadow_draw(x, y, w, h, g.btn_r, WM_SHADOW_POPUP);
+            bg = p->focus;
+            ringed = light;
+        } else if (armed && !dragging && tb->key == taskbar_armed_key()) {
+            // PRESSED, not yet a drag. (A press dragged off its button
+            // has already become a drag, so no hover test is needed.)
+            bg = uui_state_bg(focused ? p->focus : p->bar, UUI_STATE_PRESSED);
+        } else if (focused && taskbar_float_on() && !icons) {
             // An accent-tinted frame rather than a grey fill, so the
             // one lit button on a panel reads from across the room.
             bg = ugfx_blend(p->bar, p->accent, hovered ? 77 : 56);
@@ -1337,6 +1353,8 @@ static void draw_taskbar(void) {
         if (focused && !taskbar_float_on())
             ugfx_fill_rect(s, x + 8, y + h - 2, w - 16, 2, p->accent);
     }
+
+    taskbar_glide_frame_done();
 
     draw_tray(&g, p);
 }

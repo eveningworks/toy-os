@@ -2700,6 +2700,18 @@ window without going through it will find its layout polls timing out.
   closes the window; `off` opens nothing. Positive control: restoring
   the alpha-weighted scale reddens exactly the thumbnail check. In
   `gui_regress.py`.
+- **`taskbar_drag_test.py`** -- dragging taskbar buttons: mid-drag the
+  reported row has the dragged button under the pointer and the one it
+  passed in its old slot, and a screenshot has it drawn lifted; the drop
+  commits the order and activates nothing; the glide is measured by the
+  WM's `glide_frames` COUNTER (a 150 ms glide fits between two samples of
+  a `gliding` flag -- the first version sampled one and read False), and
+  with `desktop.animations` off the counter does not move; a plain click
+  still activates, on release; a new window lands at the end; a file
+  dragged off the desktop and rested on a button raises its window, and
+  is let go over the empty strip where nothing takes a drop. Positive
+  controls, both run: without `apply_drag()` six checks go red; with the
+  glide made a jump, exactly the glide check does. In `gui_regress.py`.
 - **`brightness_test.py`** -- the taskbar's brightness flyout, driven
   on a machine with NO backlight, which is every QEMU adapter. It
   asserts the degraded path honestly: the tray item exists, the panel

@@ -1312,6 +1312,9 @@ void wm_run(void) {
         // the overlays' is: the pill has to go out when the button is
         // released or dragged off, and neither is a button-down edge.
         tray_update_press(mx, my, buttons);
+        // The strip's own press: a click on release, or a drag to reorder;
+        // and a cross-window drag resting on a button (wm_taskbar.h).
+        taskbar_update_press(mx, my, buttons);
 
         // Content hover, on the same only-when-the-mouse-moved cheap
         // path as the title-bar hover above. It also has to run once

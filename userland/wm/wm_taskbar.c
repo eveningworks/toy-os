@@ -14,6 +14,8 @@
 #include "wm_tooltip.h"
 #include "start_menu.h"   // start_menu_open
 #include "wm_peek.h"
+#include "wm_dnd.h"
+#include "lib/utween.h"
 #include "wm_shadow.h"
 #include "ui/utheme.h"
 
@@ -281,36 +283,40 @@ static int same_app(int a, int b) {
 // no button of its own either). Both are `unlisted`.
 static int unlisted(int i) { return windows[i].popup || windows[i].dialog; }
 
-// THE STRIP LISTS IN OPEN ORDER (`open_seq`), never windows[] order:
+// THE STRIP LISTS IN `task_rank` ORDER, never windows[] order:
 // windows[] is z-order, a click raises, and a raise moves the window to
 // the end -- so a button listed by index jumped to the end of the strip
-// every time it was clicked. Walked by next_opened(), which needs no
-// buffer for a table that can grow.
-static int next_opened(uint32_t *seq) {
+// every time it was clicked. Walked by next_in_order(), which needs no
+// buffer for a table that can grow. Ranks are unique: every one comes
+// from wm_next_open_seq().
+static int next_in_order(uint32_t *rank) {
     int best = -1;
     for (int j = 0; j < window_count; j++)
-        if (windows[j].open_seq > *seq &&
-            (best < 0 || windows[j].open_seq < windows[best].open_seq))
+        if (windows[j].task_rank > *rank &&
+            (best < 0 || windows[j].task_rank < windows[best].task_rank))
             best = j;
-    if (best >= 0) *seq = windows[best].open_seq;
+    if (best >= 0) *rank = windows[best].task_rank;
     return best;
 }
 
 // Every window is stamped where it is created; a path that forgot
-// would make its window invisible to next_opened(), so one that
+// would make its window invisible to next_in_order(), so one that
 // arrives unstamped is stamped here rather than lost.
 static void stamp_unopened(void) {
-    for (int j = 0; j < window_count; j++)
+    for (int j = 0; j < window_count; j++) {
         if (!windows[j].open_seq) windows[j].open_seq = wm_next_open_seq();
+        // A new window joins at the END of the strip.
+        if (!windows[j].task_rank) windows[j].task_rank = wm_next_open_seq();
+    }
 }
 
-// Window i starts a group iff no window of its app OPENED before it, so
-// a group sits where its first window did, whichever member is raised.
+// Window i starts a group iff no window of its app RANKS before it, so
+// a group sits where its first window does, whichever member is raised.
 static int starts_group(int i) {
     if (unlisted(i)) return 0;
     for (int j = 0; j < window_count; j++)
         if (j != i && !unlisted(j) && same_app(i, j) &&
-            windows[j].open_seq < windows[i].open_seq)
+            windows[j].task_rank < windows[i].task_rank)
             return 0;
     return 1;
 }
@@ -446,8 +452,10 @@ int taskbar_button_rect_for(int idx, int *x, int *y, int *w, int *h) {
 // The label and icon for button `slot`, standing for `members` windows
 // from `first`, `w` pixels wide. `labelled` is 0 for an icon-only
 // button, whose label is kept whole for the tooltip and the debug report.
-static void fill_button(struct taskbar_button *b, int first, int members,
+static void fill_button(struct taskbar_button *b, int starter, int first, int members,
                         int x, int w, int labelled) {
+    b->key = windows[starter].open_seq;
+    b->dragging = 0;
     b->x = x;
     b->w = w;
     b->first = first;
@@ -475,6 +483,39 @@ static void fill_button(struct taskbar_button *b, int first, int members,
 // The Start button's left edge, which a centred Start derives from the
 // buttons beside it -- so one function answers both.
 static int g_start_x;
+
+// A PRESS ON A WINDOW BUTTON, and whether it has become a drag. Held by
+// the button's `key`, never by index or position -- both move under it.
+static struct {
+    int armed, dragging;
+    uint32_t key;
+    int press_x, press_y;
+    int grab_dx;          // pointer x minus the button's x at the press
+    int mx;               // the pointer now
+} g_drag;
+#define TB_DRAG_START 4   // px before a press becomes a drag: Windows' SM_CXDRAG
+
+// THE LIVE REORDER: the dragged button leaves its slot and follows the
+// pointer, clamped to the row; the slot it is nearest is where it would
+// land, and the others close up around that slot. Done HERE, in the one
+// layout, so drawing, the drop and `gui taskbar` all see the same row.
+static void apply_drag(struct taskbar_button *out, int count, int w) {
+    int d = -1;
+    for (int k = 0; k < count; k++) if (out[k].key == g_drag.key) d = k;
+    if (d < 0 || count < 2) return;
+    int pitch = w + TB_GAP, x0 = out[0].x;
+    int vis = g_drag.mx - g_drag.grab_dx;
+    if (vis < x0) vis = x0;
+    if (vis > x0 + (count - 1) * pitch) vis = x0 + (count - 1) * pitch;
+    int t = (vis - x0 + pitch / 2) / pitch;
+    struct taskbar_button moved = out[d];
+    if (t > d) for (int k = d; k < t; k++) out[k] = out[k + 1];
+    else       for (int k = d; k > t; k--) out[k] = out[k - 1];
+    out[t] = moved;
+    for (int k = 0; k < count; k++) out[k].x = x0 + k * pitch;
+    out[t].x = vis;
+    out[t].dragging = 1;
+}
 
 // ONE LAYOUT FOR EVERY COMBINATION of the three independent settings:
 // labelled or icon buttons, the buttons left or centred, Start left or
@@ -560,15 +601,16 @@ int taskbar_layout(struct taskbar_button *out, int max) {
 
     int count = 0;
     uint32_t seq = 0;
-    for (int i; (i = next_opened(&seq)) >= 0; ) {
+    for (int i; (i = next_in_order(&seq)) >= 0; ) {
         if (unlisted(i)) continue;
         if (grouped && !starts_group(i)) continue;
         int members = grouped ? group_size(i) : 1;
         if (count >= n) { g_hidden += members; continue; }
-        fill_button(&out[count], grouped ? group_front(i) : i, members,
+        fill_button(&out[count], i, grouped ? group_front(i) : i, members,
                     x + count * (w + TB_GAP), w, !icons);
         count++;
     }
+    if (g_drag.dragging) apply_drag(out, count, w);
     return count;
 }
 
@@ -625,7 +667,7 @@ void taskbar_update_hover(int mx, int my, uint8_t buttons) {
                 // button stands for -- in open order, as the strip is.
                 if (wm_peek_mode() != WM_PEEK_OFF) {
                     uint32_t seq = 0;
-                    for (int i; peek_n < 8 && (i = next_opened(&seq)) >= 0; )
+                    for (int i; peek_n < 8 && (i = next_in_order(&seq)) >= 0; )
                         if (!unlisted(i) && (i == b[k].first ||
                                              (b[k].count > 1 && same_app(i, b[k].first))))
                             peek_wins[peek_n++] = i;
@@ -685,7 +727,7 @@ static void row_raise(void *ctx) {
 static void open_group_menu(const struct taskbar_button *b) {
     int n = 0;
     uint32_t seq = 0;
-    for (int i; n < TB_GROUP_ROWS && (i = next_opened(&seq)) >= 0; ) {
+    for (int i; n < TB_GROUP_ROWS && (i = next_in_order(&seq)) >= 0; ) {
         if (unlisted(i) || !same_app(b->first, i)) continue;
         int k = 0;
         for (; windows[i].title[k] && k < (int)sizeof g_row_label[n] - 1; k++)
@@ -731,6 +773,8 @@ void taskbar_activate(int i) {
     redraw_pending = 1;
 }
 
+// The PRESS only arms the button: whether it was a click or the start of
+// a drag is decided by what the pointer does next (taskbar_update_press).
 int taskbar_handle_click(int mx, int my) {
     static struct taskbar_button btns[TB_BUTTONS_MAX];
     int n = taskbar_layout(btns, TB_BUTTONS_MAX);
@@ -738,12 +782,178 @@ int taskbar_handle_click(int mx, int my) {
     for (int b = 0; b < n; b++) {
         if (!uui_hit(btns[b].x, ty, btns[b].w, taskbar_h, mx, my)) continue;
         if (g_tip_ours) { wm_tooltip_cancel(); g_tip_ours = 0; }
-        if (btns[b].count > 1) open_group_menu(&btns[b]);
-        else taskbar_activate(btns[b].first);
-        redraw_pending = 1;
+        wm_peek_close();
+        g_drag.armed = 1;
+        g_drag.dragging = 0;
+        g_drag.key = btns[b].key;
+        g_drag.press_x = g_drag.mx = mx;
+        g_drag.press_y = my;
+        g_drag.grab_dx = mx - btns[b].x;
+        damage_strip();
         return 1;
     }
     return 0;
+}
+
+uint32_t taskbar_armed_key(void) { return g_drag.armed ? g_drag.key : 0; }
+
+int taskbar_drag_state(int *armed, int *dragging) {
+    if (armed) *armed = g_drag.armed;
+    if (dragging) *dragging = g_drag.dragging;
+    return g_drag.armed;
+}
+
+// THE DROP: the row as apply_drag() left it becomes the order. Every
+// listed window is re-ranked, a group's members together and in their
+// existing order, from the same counter new windows draw from -- so the
+// ranks stay unique and a window opened later still lands at the end.
+static void commit_order(void) {
+    static struct taskbar_button b[TB_BUTTONS_MAX];
+    int n = taskbar_layout(b, TB_BUTTONS_MAX);
+    for (int k = 0; k < n; k++) {
+        int starter = -1;
+        for (int i = 0; i < window_count; i++)
+            if (windows[i].open_seq == b[k].key) starter = i;
+        if (starter < 0) continue;
+        if (b[k].count == 1) { windows[starter].task_rank = wm_next_open_seq(); continue; }
+        // A group: its members in their current rank order.
+        uint32_t seq = 0;
+        int members[TB_BUTTONS_MAX], m = 0;
+        for (int i; m < TB_BUTTONS_MAX && (i = next_in_order(&seq)) >= 0; )
+            if (!unlisted(i) && same_app(i, starter)) members[m++] = i;
+        for (int j = 0; j < m; j++) windows[members[j]].task_rank = wm_next_open_seq();
+    }
+}
+
+// Raise without the toggle a click has: a drag-over wants the window IN
+// FRONT, and minimizing it because it happened to be focused would be
+// the opposite of what the drop needs.
+static void bring_forward(int i) {
+    if (i < 0 || i >= window_count) return;
+    if (windows[i].state == WIN_MINIMIZED) {
+        wm_anim_restore(i);
+        windows[i].state = WIN_NORMAL;
+    }
+    wm_ensure_reachable(i);
+    raise_with_dialogs(i);
+    redraw_pending = 1;
+}
+
+#define TB_DND_RAISE_TICKS 50   // a drag resting this long on a button raises its window
+
+void taskbar_update_press(int mx, int my, uint8_t buttons) {
+    int down = buttons & 0x1;
+
+    // A CROSS-WINDOW DRAG resting on a button brings that window forward,
+    // as Windows and KDE do, so the drop can land in it. Once per rest.
+    static uint32_t dnd_key;
+    static uint64_t dnd_since;
+    if (wm_dnd_active() && down && my >= screen_h - taskbar_h && !wm_top_covers_screen()) {
+        static struct taskbar_button b[TB_BUTTONS_MAX];
+        int n = taskbar_layout(b, TB_BUTTONS_MAX);
+        uint32_t key = 0;
+        int first = -1;
+        for (int k = 0; k < n; k++)
+            if (uui_hit(b[k].x, screen_h - taskbar_h, b[k].w, taskbar_h, mx, my))
+                { key = b[k].key; first = b[k].first; }
+        uint64_t now = sys_ticks();
+        if (key != dnd_key) { dnd_key = key; dnd_since = key ? now : 0; }
+        else if (key && dnd_since && now - dnd_since >= TB_DND_RAISE_TICKS) {
+            bring_forward(first);
+            dnd_since = 0;
+        }
+    } else {
+        dnd_key = 0;
+    }
+
+    if (!g_drag.armed) return;
+    if (down) {
+        if (mx == g_drag.mx && g_drag.dragging) return;
+        g_drag.mx = mx;
+        int dx = mx - g_drag.press_x, dy = my - g_drag.press_y;
+        if (!g_drag.dragging && (dx > TB_DRAG_START || dx < -TB_DRAG_START ||
+                                 dy > TB_DRAG_START || dy < -TB_DRAG_START))
+            g_drag.dragging = 1;
+        if (g_drag.dragging) damage_strip();
+        return;
+    }
+
+    // THE RELEASE. A drag commits its order; a press that never became
+    // one is a click -- if it was released on the button it went down on.
+    if (g_drag.dragging) {
+        commit_order();
+    } else {
+        static struct taskbar_button b[TB_BUTTONS_MAX];
+        int n = taskbar_layout(b, TB_BUTTONS_MAX);
+        for (int k = 0; k < n; k++) {
+            if (b[k].key != g_drag.key) continue;
+            if (!uui_hit(b[k].x, screen_h - taskbar_h, b[k].w, taskbar_h, mx, my)) break;
+            if (b[k].count > 1) open_group_menu(&b[k]);
+            else taskbar_activate(b[k].first);
+            break;
+        }
+    }
+    g_drag.armed = 0;
+    g_drag.dragging = 0;
+    damage_strip();
+}
+
+// ---- the glide ----------------------------------------------------------
+
+#define TB_GLIDE_MS 150
+#define TB_GLIDE_MAX 64
+
+static struct glide {
+    uint32_t key;
+    int target;
+    struct utween tw;
+    uint64_t used;        // the frame it was last asked about; oldest is reused
+} g_glide[TB_GLIDE_MAX];
+static uint64_t g_frame;
+static int g_gliding, g_gliding_prev;
+static uint32_t g_glide_frames;   // frames that drew a glide, ever -- a test's counter
+
+int taskbar_gliding(void) { return g_gliding_prev; }
+uint32_t taskbar_glide_frames(void) { return g_glide_frames; }
+
+int taskbar_draw_x(const struct taskbar_button *b) {
+    unsigned long long now = sys_monotonic_ns();
+    struct glide *e = 0, *oldest = &g_glide[0];
+    for (int k = 0; k < TB_GLIDE_MAX; k++) {
+        if (g_glide[k].key == b->key) { e = &g_glide[k]; break; }
+        if (g_glide[k].used < oldest->used) oldest = &g_glide[k];
+    }
+    if (!e) {
+        // A button seen for the first time APPEARS where it belongs.
+        e = oldest;
+        e->key = b->key;
+        e->target = b->x;
+        utween_start(&e->tw, b->x, b->x, 0, now);
+    }
+    e->used = ++g_frame;
+    if (b->dragging || !wm_anim_enabled()) {
+        // Under the pointer: exactly where it is. Recorded as the
+        // resting value, so the drop glides FROM here into its slot.
+        e->target = b->x;
+        utween_start(&e->tw, b->x, b->x, 0, now);
+        return b->x;
+    }
+    if (b->x != e->target) {
+        e->target = b->x;
+        utween_retarget(&e->tw, b->x, TB_GLIDE_MS, now);
+    }
+    int x = utween_value(&e->tw, now);
+    if (utween_active(&e->tw)) g_gliding = 1;
+    return x;
+}
+
+// Called once per strip draw: whether anything glided this frame decides
+// whether the strip asks for the next one.
+void taskbar_glide_frame_done(void) {
+    g_gliding_prev = g_gliding;
+    if (g_gliding) g_glide_frames++;
+    g_gliding = 0;
+    if (g_gliding_prev) damage_strip();
 }
 
 int taskbar_handle_right_click(int mx, int my) {

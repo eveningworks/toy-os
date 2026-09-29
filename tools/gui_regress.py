@@ -157,6 +157,7 @@ TOOLS = [
     ("calendar", "calendar_test.py", "the tray clock's calendar popup, and week_start"),
     ("taskbar_style", "taskbar_style_test.py", "the taskbar's buttons, alignment, Start position, floating and themes, drawn and reported"),
     ("taskbar_peek", "taskbar_peek_test.py", "the taskbar's window preview: opens, shows the window, acts, highlights, switches off"),
+    ("taskbar_drag", "taskbar_drag_test.py", "dragging taskbar buttons to reorder, the glide, click on release, drag-over raise"),
     ("mines", "mines_test.py", "Minesweeper, and a secondary click reaching a client"),
     ("volume", "volume_test.py", "the tray volume flyout: slider, mute, wheel, devices"),
     ("traypress", "tray_press_test.py", "the tray's hover and pressed fills, and that neither latches"),

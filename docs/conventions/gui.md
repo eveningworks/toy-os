@@ -1579,9 +1579,14 @@ this the obvious way), not from how much history it accumulated.
   leftmost (`taskbar_start_hit_rect()`), and the gap under a floating
   panel is the strip's, not the desktop's. **A floating panel DEFLATES
   while any window is maximized** -- `taskbar_h` never moves with the
-  panel's shape. **The strip lists and groups in OPEN order**
-  (`struct window.open_seq`), never `windows[]` order, which is z-order
-  and changes on every click. `gui taskbar --json` reports all of it;
+  panel's shape. **The strip lists and groups by `struct
+  window.task_rank`**, never `windows[]` order, which is z-order and
+  changes on every click; `open_seq` is a window's IDENTITY (peek, a
+  button's `key`), `task_rank` its PLACE. **A press on a button only
+  ARMS it**: the click acts on release, and 4px of movement first makes
+  it a drag, which `taskbar_layout()` itself turns into the live row
+  (`apply_drag()`) and the release commits into ranks. Buttons are
+  DRAWN at `taskbar_draw_x()` (a glide) and HIT at their layout x. `gui taskbar --json` reports all of it;
   `tools/taskbar_style_test.py` checks each where it is drawn.
 - **TASKBAR PEEK IS AN OVERLAY THAT HOLDS WINDOWS BY `open_seq`.**
   `userland/wm/wm_peek.c`, `desktop.taskbar_peek` = `off` | `preview` |

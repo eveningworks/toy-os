@@ -8588,6 +8588,42 @@ already defined as "every pixel is opaque" -- now reads alpha as 255.
 Decoded images carry 255 there anyway, so their results are unchanged
 (`uimg_hostcheck.py`, `uimg_codec_hostcheck.py`).
 
+## Taskbar buttons drag to reorder, live, and a drop commits a rank
+
+A press on a taskbar button arms it; a release on it activates the
+window, as Windows does -- the press no longer acts, because a press
+that acts cannot become a drag. Moving 4px first (Windows'
+`SM_CXDRAG`) starts one: the button follows the pointer and the others
+glide aside to open the slot it would land in, the maintainer's choice
+from mockups (Windows 11 and Plasma 6 both do this; the alternative,
+an insertion marker with nothing moving, is a tab bar's). A file
+dragged across windows (`wm_dnd`) resting half a second on a button
+brings that window forward, which is the other half of dragging onto
+a taskbar in both desktops.
+
+**The live row is the layout's, not the renderer's.** `apply_drag()`
+runs inside `taskbar_layout()`, so what is drawn, what `gui taskbar`
+reports and what the drop commits are one answer -- the rule the
+layout function exists for.
+
+**Order is `task_rank`, identity is `open_seq`.** Two fields, because
+they answer different questions: peek and the glide follow a window
+across reorders by `open_seq`, and the strip sorts by `task_rank`. A
+drop re-ranks every listed window from the same counter new windows
+draw from, so ranks stay unique and a window opened later still lands
+at the end.
+
+**The order lasts the session.** Windows keeps a taskbar order only for
+pinned apps, and toy-os has no pinned taskbar apps; remembering an
+unpinned app's slot across restarts would be inventing the half of
+pinning that is not visible. When pinning exists, its order is the one
+to persist.
+
+**The glide is time, not frames**: `utween_retarget()` per button keyed
+by `open_seq`, 150 ms, so a slot that changes again mid-glide continues
+from where the button is. `desktop.animations` off makes every move a
+jump.
+
 ## The greys are a ladder with the page in the middle, macOS/Windows 10 spacing, not Breeze's
 
 The default palette's neutral rungs, brightest first: `field_bg` (a

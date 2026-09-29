@@ -660,6 +660,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Taskbar notification area (tray)~~ done
 - [x] ~~A modern taskbar~~ DONE 2026-09-29 -- labelled or centred, floating or not, dark or light (`desktop.taskbar_*`)
 - [x] ~~Taskbar window previews (peek)~~ DONE 2026-09-29 -- `desktop.taskbar_peek`, with a highlight mode
+- [x] ~~Drag taskbar buttons to reorder~~ DONE 2026-09-29 -- live, gliding; a drag resting on a button raises its window
+- [ ] Pinned taskbar apps -- a launcher that stays on the strip, and the order that should then persist
 - [ ] A Quick Settings flyout -- network and volume as ONE tray target, Windows 11's grouping, which the centred style's mockup drew
 - [ ] Alt+Tab window switching
 - [ ] Window snapping (half/quarter screen)
