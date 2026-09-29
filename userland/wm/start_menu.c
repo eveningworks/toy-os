@@ -705,6 +705,29 @@ int start_menu_hover_at(int mx, int my) {
     return hover_token;
 }
 
+// A pin or unpin that keeps the open folder the SAME folder. sel_cat is
+// an index, and Favourites appearing or going shifts every index after
+// it -- the pane would swap to another folder under the pointer.
+void start_menu_toggle_pin(const char *app_id) {
+    enum folder_kind k = folder_kind_at(sel_cat);
+    int cat = sel_cat - pseudo_count();          // FOLDER_CAT's offset
+    if (start_store_is_pinned(app_id)) start_store_unpin(app_id);
+    else start_store_pin(app_id);
+    if (k == FOLDER_CAT) {
+        sel_cat = pseudo_count() + cat;
+    } else {
+        sel_cat = 0;                             // it went: open's default
+        for (int i = 0; i < pseudo_count(); i++)
+            if (folder_kind_at(i) == k) { sel_cat = i; break; }
+    }
+    if (k == FOLDER_FAV || folder_kind_at(sel_cat) != k) {
+        sel_row = -1;                            // a different list now
+        scroll = 0;
+    }
+    start_menu_damage();
+    redraw_pending = 1;
+}
+
 // --- open / close -----------------------------------------------------
 
 void start_menu_open_now(void) {
@@ -1020,8 +1043,13 @@ int start_menu_key(int key, uint8_t mods) {
     case '\n':
     case '\r':
         if (rows > 0) {
-            int row = sel_row >= 0 ? sel_row : 0;
-            int n = L.cats + wm_system_action_count + row;
+            // activate() takes a SCREEN row and sel_row is a LIST index:
+            // bring the selection into view, then subtract the scroll.
+            scroll_to_selection(&L);
+            int first = 0;
+            pane_visible(&L, &first);
+            int row = sel_row >= 0 ? sel_row : first;
+            int n = L.cats + wm_system_action_count + (row - first);
             if (activate(n)) flash(n);
             redraw_pending = 1;
         }

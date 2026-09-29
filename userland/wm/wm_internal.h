@@ -84,6 +84,10 @@ int win_btn_w(void);
 // is created. windows[] is z-order and changes on every raise; the
 // taskbar lists by this instead, so a click cannot move its button.
 uint32_t wm_next_open_seq(void);
+// The window stamped `seq`, as an index into windows[] NOW, or -1. The
+// way to hold a window across a frame: an index is reused by the next
+// close_window(), which compacts the array.
+int wm_window_by_seq(uint32_t seq);
 
 // The window menu (Minimize/Restore, Maximize, Fullscreen, Close) for
 // windows[idx] at (mx, my) -- the title bar's right-click, and the

@@ -624,10 +624,7 @@ void wm_open_window_menu(int idx, int mx, int my) {
 static void ctx_toggle_pin(void *ctx) {
     const struct gui_app *app = (const struct gui_app *)ctx;
     if (!app || !app->app_id) return;
-    if (start_store_is_pinned(app->app_id)) start_store_unpin(app->app_id);
-    else start_store_pin(app->app_id);
-    start_menu_damage();
-    redraw_pending = 1;
+    start_menu_toggle_pin(app->app_id);
 }
 
 // A THUMB BUTTON GOES STRAIGHT TO THE CLIENT UNDER THE POINTER, and

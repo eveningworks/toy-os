@@ -707,12 +707,14 @@ void taskbar_update_hover(int mx, int my, uint8_t buttons) {
 // so a stack local would be a dangling read the moment this returns.
 #define TB_GROUP_ROWS 12
 static struct context_menu_item g_rows[TB_GROUP_ROWS];
-static int g_row_target[TB_GROUP_ROWS];
+static uint32_t g_row_target[TB_GROUP_ROWS];   // open_seq: see row_raise()
 static char g_row_label[TB_GROUP_ROWS][WIN_LABEL_MAX_CHARS * 3];
 
+// BY open_seq, NOT INDEX: any window closing while the menu is open
+// compacts windows[], and a held index would raise another app's window.
 static void row_raise(void *ctx) {
-    int i = *(int *)ctx;
-    if (i < 0 || i >= window_count) return; // the window may have closed while the menu was open
+    int i = wm_window_by_seq(*(uint32_t *)ctx);
+    if (i < 0) return;   // it closed while the menu was open
     if (windows[i].state == WIN_MINIMIZED) { wm_anim_restore(i); windows[i].state = WIN_NORMAL; }
     wm_ensure_reachable(i);
     raise_with_dialogs(i);
@@ -731,7 +733,7 @@ static void open_group_menu(const struct taskbar_button *b) {
         for (; windows[i].title[k] && k < (int)sizeof g_row_label[n] - 1; k++)
             g_row_label[n][k] = windows[i].title[k];
         g_row_label[n][k] = '\0';
-        g_row_target[n] = i;
+        g_row_target[n] = windows[i].open_seq;
         g_rows[n].label = g_row_label[n];
         g_rows[n].on_select = row_raise;
         g_rows[n].ctx = &g_row_target[n];

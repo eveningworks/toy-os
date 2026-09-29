@@ -112,6 +112,9 @@ void start_menu_open_now(void);
 // call when it is already closed.
 void start_menu_close(void);
 
+// Pins or unpins `app_id`, keeping the open folder the same folder.
+void start_menu_toggle_pin(const char *app_id);
+
 // Draws the popup at its fixed taskbar-anchored position, using the
 // live mouse position for hover -- a no-op if start_menu_open is 0.
 void start_menu_draw(int mx, int my);

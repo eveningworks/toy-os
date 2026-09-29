@@ -811,6 +811,13 @@ uint32_t wm_next_open_seq(void) {
     return ++seq;
 }
 
+int wm_window_by_seq(uint32_t seq) {
+    if (!seq) return -1;
+    for (int i = 0; i < window_count; i++)
+        if (windows[i].open_seq == seq) return i;
+    return -1;
+}
+
 void wm_layout_changed(void) {
     desktop_entries_changed();   // the icon grid's rows depend on the height
 

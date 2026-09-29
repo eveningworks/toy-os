@@ -116,13 +116,35 @@ static const char *app_label(int i, char *buf, uint32_t size) {
 
 // The roster, and a scale per row to match it. Damages on a COUNT
 // change, because that resizes the panel.
+//
+// A HELD ROW (dragged, or owing a write) IS FOLLOWED BY PID AND NAME,
+// not index: soundd compacts the roster, so a client ahead of it going
+// away shifts it down one -- and the write would then land on whichever
+// app moved into the old index.
+static int relocate(int i, const struct snd_roster_entry *was) {
+    if (i < 0) return -1;
+    for (int j = 0; j < g_app_count; j++)
+        if (g_roster.e[j].pid == was->pid &&
+            k_strcmp((const char *)g_roster.e[j].app, (const char *)was->app) == 0)
+            return j;
+    return -1;   // it left: nothing to write to
+}
+
 static void refresh_apps(void) {
     int before = g_app_count;
+    struct snd_roster_entry drag_was = {0}, pend_was = {0};
+    struct uui_scale drag_sc = {0}, pend_sc = {0};
+    if (g_app_drag >= 0) { drag_was = g_roster.e[g_app_drag]; drag_sc = g_app_scale[g_app_drag]; }
+    if (g_app_pending >= 0) { pend_was = g_roster.e[g_app_pending]; pend_sc = g_app_scale[g_app_pending]; }
     reload_roster();
+    g_app_drag = relocate(g_app_drag, &drag_was);
+    g_app_pending = relocate(g_app_pending, &pend_was);
     for (int i = 0; i < g_app_count; i++) {
         if (i == g_app_drag || i == g_app_pending) continue;
         uui_scale_init(&g_app_scale[i], 0, 100, (long)g_roster.e[i].gain);
     }
+    if (g_app_pending >= 0) g_app_scale[g_app_pending] = pend_sc;
+    if (g_app_drag >= 0) g_app_scale[g_app_drag] = drag_sc;
     if (before != g_app_count) volume_damage();
 }
 

@@ -54,12 +54,7 @@ void wm_peek_set_mode(enum wm_peek_mode m) {
 }
 enum wm_peek_mode wm_peek_mode(void) { return g_mode; }
 
-static int find_seq(uint32_t seq) {
-    if (!seq) return -1;
-    for (int i = 0; i < window_count; i++)
-        if (windows[i].open_seq == seq) return i;
-    return -1;
-}
+static int find_seq(uint32_t seq) { return wm_window_by_seq(seq); }
 
 int wm_peek_can_show(int idx) {
     if (idx < 0 || idx >= window_count) return 0;

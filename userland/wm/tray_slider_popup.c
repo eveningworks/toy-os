@@ -140,23 +140,27 @@ void tray_slider_set_level(struct tray_slider_popup *p, int level, int commit_no
 }
 
 void tray_slider_poll(struct tray_slider_popup *p) {
+    int refused = 0;
     if (p->pending) {
         unsigned long long now = sys_monotonic_ns();
-        if (p->pending_at == 0 ||
-            now - p->pending_at >= (unsigned long long)TRAY_SLIDER_COMMIT_MS * 1000000ull) {
-            usetting_set_int(p->setting, p->level);
-            p->pending = 0;
-            // Our own write bumps the generation; adopting it here stops
-            // the reload below from re-reading what we just wrote.
-            p->seen_generation = wm_setting_generation();
-        }
-        return;
+        if (p->pending_at != 0 &&
+            now - p->pending_at < (unsigned long long)TRAY_SLIDER_COMMIT_MS * 1000000ull)
+            return;
+        p->pending = 0;
+        refused = usetting_set_int(p->setting, p->level) <= 0;
+        // Our own write bumps the generation; adopting it here stops the
+        // reload below from re-reading what we just wrote. A REFUSED
+        // write goes on to that reload, so the slider shows what the
+        // registry holds rather than the value it would not take.
+        p->seen_generation = wm_setting_generation();
+        if (!refused) return;
     }
     uint32_t gen = wm_setting_generation();
-    if (gen == p->seen_generation) return;
+    if (gen == p->seen_generation && !refused) return;
     p->seen_generation = gen;
     // Something else changed a setting -- System Settings, `config
-    // set`, a card appearing. Re-read, and let the owner re-read too.
+    // set`, a card appearing -- or ours was refused. Re-read, and let
+    // the owner re-read too.
     reload(p);
     if (p->on_reload) p->on_reload();
     // **DAMAGE, NOT JUST REPAINT: on_reload CAN RESIZE THE PANEL.** Its

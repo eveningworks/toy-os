@@ -384,6 +384,28 @@ def run(dbg, qmp, tmp, res):
         res.check("End reaches the last row, and it is ON SCREEN",
                   m3.get("scroll", 0) == listed - shown and len(sel) == 1,
                   f"scroll={m3.get('scroll')} of {listed - shown}, selected={sel}")
+        # ENTER ON A SCROLLED LIST LAUNCHES THE HIGHLIGHTED ROW. Enter
+        # once added the scroll to a list index a second time, so at End
+        # it named a row past the pane and did nothing at all.
+        if len(sel) == 1:
+            runs = {a["label"]: a.get("runs", 0) for a in m3.get("apps", [])}
+            titles = {w["title"] for w in dbg.windows()}
+            dbg.key(KEY_ENTER)
+            deadline = time.time() + 20
+            new = []
+            while time.time() < deadline and not new:
+                new = [w for w in dbg.windows() if w["title"] not in titles]
+                time.sleep(0.5)
+            if new:
+                dbg.key(KEY_F4, mods="alt")   # the launched app has focus
+                time.sleep(0.8)
+            open_menu(dbg)
+            after = {a["label"]: a.get("runs", 0) for a in dbg.menu().get("apps", [])}
+            res.check("Enter at End launches the highlighted last row",
+                      bool(new) and after.get(sel[0], 0) == runs.get(sel[0], 0) + 1,
+                      f"selected={sel[0]} runs {runs.get(sel[0])} -> {after.get(sel[0])} "
+                      f"new windows={[w['title'] for w in new]}")
+            dbg.menu_select_folder("All Apps")
         dbg.key(KEY_HOME)
         res.check("Home goes back to the top",
                   dbg.menu().get("scroll", 0) == 0)
@@ -438,12 +460,19 @@ def run(dbg, qmp, tmp, res):
     labels = pin_menu("Unpin from Start")   # a no-op when it is not pinned
     res.check("an app row offers the pin toggle, by the name of what it does",
               "Pin to Start" in labels or "Unpin from Start" in labels, f"{labels}")
+    dbg.menu_app_row("Notepad")            # its own folder, not Favourites
+    folder_was = dbg.menu().get("category")
     labels = pin_menu("Pin to Start")
     res.check("...and once unpinned it offers Pin to Start",
               "Pin to Start" in labels, f"{labels}")
     res.check("pinning makes a Favourites folder",
               any(c["label"] == "Favourites"
                   for c in rows_of(dbg.menu(), "category")))
+    # THE OPEN FOLDER STAYS PUT. It was an index, and Favourites arriving
+    # ahead of it shifted the pane to the folder before it.
+    res.check("...and the folder that was open stays open",
+              dbg.menu().get("category") == folder_was,
+              f"{folder_was!r} -> {dbg.menu().get('category')!r}")
     # THROUGH AN INDEPENDENT PATH: the menu believing it is pinned and
     # the file saying so are different claims, and only the second
     # survives a boot.
