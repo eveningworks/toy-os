@@ -1145,6 +1145,8 @@ EXTRA_OBJS_files = fm/fm_view fm/fm_jobs fm/fm_tree fm/fm_thumbs fm/fm_modal \
 # System Settings, the same way: userland/settings/ is its parts.
 EXTRA_OBJS_settings = settings/set_registry settings/set_page settings/set_owner \
                       settings/set_sysinfo
+# Task Manager, the same way: userland/taskmgr/ is its pages.
+EXTRA_OBJS_taskmgr = taskmgr/tm_procs taskmgr/tm_perf taskmgr/tm_services
 
 EXTRA_OBJS_cjson_test = ports/cjson/cJSON
 EXTRA_OBJS_cjson_bench = ports/cjson/cJSON

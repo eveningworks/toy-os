@@ -1620,13 +1620,15 @@ to `uui_tree`. A device can stay disabled across a restart:
 and `soundd`. Not built: a properties sheet per device (resources, IRQ,
 BARs), and ACPI/platform devices beyond PS/2 and the CPUs.
 
-### A Network tab in Task Manager: per-card throughput, address, lease and the connection log
+### A Network tab in Task Manager
 
-Chosen 2026-09-28, as a TAB for the reason the Performance graphs are
-one: that is where Windows and KDE put it. Throughput needs per-card
-byte counters sampled over time, as the CPU and memory history already
-is; the address, lease and connection log come from what `netd` and
-`/bin/netlog` read today.
+Chosen 2026-09-28: per-card throughput, address, lease and the
+connection log. BUILT 2026-09-29 as Windows has it, not as a tab: Task
+Manager became a navigation rail, and each card is an Ethernet device on
+its Performance page, beside CPU, Memory and Disk -- throughput from
+QUERY_NETDEV's counters sampled per tick, the lease from netd's
+`/var/dhcp-<card>.lease`, and the log from QUERY_CONNLOG, the ring
+`netlog` reads.
 
 ### A hex viewer, read-only first, for disk images, fonts and WADs on the machine itself
 

@@ -102,6 +102,11 @@ int uui_chart_hover_index(const struct uui_chart *c);
 uint32_t uui_chart_sample(const struct uui_chart *c, int i);
 // How many samples are actually DRAWN -- min(count, width).
 int uui_chart_drawn(const struct uui_chart *c);
+// The sample `back` pushes ago (0 = the newest), or 0 past the history.
+// Independent of the chart's WIDTH, unlike uui_chart_sample(): a chart
+// that is never laid out -- a trace drawn somewhere else, like Task
+// Manager's device list -- has drawn nothing and still has its history.
+uint32_t uui_chart_recent(const struct uui_chart *c, int back);
 
 void uui_chart_natural_size(const struct uui_chart *c, int *out_w, int *out_h);
 void uui_chart_set_geometry(struct uui_chart *c, int x, int y, int w, int h);

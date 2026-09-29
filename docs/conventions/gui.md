@@ -4928,3 +4928,34 @@ been ticked on one. No stock setting is `Advanced=1` now --
 `system.cursor_style`, the only one, is a plain setting on the Console
 page -- so the checkbox appears only for a setting a user adds.
 
+## `uui_table` GROUPS AND ITS TREE ARE ORDERINGS, AND THE FOLDED STATE IS THE APP'S
+
+`uui_table_set_groups()` and `uui_table_set_tree()` add to the sort, in
+one `order`: groups outermost (ascending, never re-sorted), then the
+parent tree, then the comparator among SIBLINGS -- so a sorted tree keeps
+each child under its parent, as GtkTreeView and KDE System Monitor do. A
+group's caption is a VIEW row with no app row: `uui_table_source_row()`
+answers -1 for it, keys step over it and nothing selects it. A parent in
+another group does not nest, and a cycle is cut rather than followed.
+
+**The table never stores whether a parent is folded.** It asks
+`collapsed(row)` and leaves an expander click, or Left/Right, in
+`toggled` for `uui_table_take_toggled()`; the app flips its own state,
+keyed by what the row IS (Task Manager: the pid), and calls set_rows(). A
+row index moves on every refresh, so a table that remembered "row 7 is
+folded" would fold whichever process slid into row 7. Cell HEAT
+(`uui_table_set_heat()`, 0..255) is shaded in the theme's accent, and
+selection outranks it. `userland/tests/table_tree_test.c` covers all of
+it with a fixture stored out of screen order.
+
+## A BUTTON'S `on_widget` FIRES ON PRESS, MOTION AND RELEASE; ACT ON RELEASE OR KEY
+
+The router names a widget to its app whenever the widget reports a
+change, with the reason (`UUI_REASON_*`). A lone `uui_button` changes on
+the press (armed), on motion (dragged off), and on the release -- and
+only the release, or a key, is the click. An app that acts on every
+report acts three or four times: Task Manager's first rail build sent
+SIGSTOP four times per click and four init requests per service click,
+the extra three timing out behind the first. Test
+`reason == UUI_REASON_RELEASE || reason == UUI_REASON_KEY` before a verb.
+

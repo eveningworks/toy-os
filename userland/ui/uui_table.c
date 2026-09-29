@@ -16,6 +16,8 @@
 // than the layout.
 #define UUI_TABLE_CELL_MAX 96
 
+static int vcount(const struct uui_table *t);
+
 // A fixed column's width, RESERVED IN DIGITS rather than in the widest
 // glyph -- `uui_statusbar.c`'s `fixed_w()` in full, for the same reason
 // and with the same consequence when it is got wrong: `char_w` is the
@@ -61,6 +63,14 @@ void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
     t->tint = 0;
     t->fade = 0;
     t->icon = 0;
+    t->heat = 0;
+    t->group = 0;
+    t->group_title = 0;
+    t->parent = 0;
+    t->collapsed = 0;
+    t->toggled = -1;
+    t->structured = 0;
+    t->view_count = 0;
     t->sort_col = UUI_TABLE_UNSORTED;
     t->sort_dir = 1;
     t->order_rows = 0;
@@ -125,7 +135,7 @@ int uui_table_visible_rows(const struct uui_table *t) {
 }
 
 int uui_table_scrollbar_visible(const struct uui_table *t) {
-    return t->row_count > uui_table_visible_rows(t);
+    return vcount(t) > uui_table_visible_rows(t);
 }
 
 // Clamps `top` so the view always fills when it can -- a table scrolled
@@ -133,12 +143,12 @@ int uui_table_scrollbar_visible(const struct uui_table *t) {
 // data rather than as the end of the list.
 static void table_clamp(struct uui_table *t) {
     int vis = uui_table_visible_rows(t);
-    int max_top = t->row_count > vis ? t->row_count - vis : 0;
+    int max_top = vcount(t) > vis ? vcount(t) - vis : 0;
     if (t->top > max_top) t->top = max_top;
     if (t->top < 0) t->top = 0;
 }
 
-// --- sorting ----------------------------------------------------------
+// --- ordering: the sort, groups and the tree ------------------------
 //
 // See uui_table.h for why the app compares and the widget permutes.
 // Everything below maintains `order`, a view-position -> app-row map;
@@ -146,21 +156,30 @@ static void table_clamp(struct uui_table *t) {
 // unconditionally and there is no second, unsorted code path to keep
 // in step.
 
-static void order_identity(struct uui_table *t) {
-    int n = t->row_count;
-    if (n > UUI_TABLE_MAX_ROWS) n = UUI_TABLE_MAX_ROWS;
-    for (int i = 0; i < n; i++) t->order[i] = i;
-    t->order_rows = t->row_count;
+// Rows on screen. The row count itself while the order is stale -- the
+// same fallback source_row() takes -- so nothing indexes past it.
+static int vcount(const struct uui_table *t) {
+    return t->order_rows == t->row_count ? t->view_count : t->row_count;
 }
 
-static void order_rebuild(struct uui_table *t) {
-    order_identity(t);
+int uui_table_view_count(const struct uui_table *t) { return vcount(t); }
+
+// Scratch for a rebuild. Static because a rebuild is never re-entered
+// and a table's struct is already large; nothing survives the call.
+static int   s_sorted[UUI_TABLE_MAX_ROWS];
+static short s_stk[UUI_TABLE_MAX_ROWS], s_pos[UUI_TABLE_MAX_ROWS];
+static unsigned char s_grp[UUI_TABLE_MAX_ROWS];
+
+static int row_collapsed(const struct uui_table *t, int r) {
+    return t->collapsed && t->collapsed(t->ctx, r);
+}
+
+// The app rows in comparator order, into s_sorted.
+static void sort_rows(struct uui_table *t, int n) {
+    for (int i = 0; i < n; i++) s_sorted[i] = i;
     // Not bounded by col_count: a column a narrow view HIDES can still be
     // what it is sorted by (uui_fileview drops trailing columns).
     if (!t->compare || t->sort_col < 0) return;
-
-    int n = t->row_count;
-    if (n > UUI_TABLE_MAX_ROWS) n = UUI_TABLE_MAX_ROWS;
 
     // Insertion sort: STABLE, which is what makes a second sort on a
     // different column keep the previous column's order within ties --
@@ -169,35 +188,137 @@ static void order_rebuild(struct uui_table *t) {
     // so the quadratic worst case is 256 rows of a handful of
     // comparisons. There is no qsort in this toolkit.
     for (int i = 1; i < n; i++) {
-        int v = t->order[i];
+        int v = s_sorted[i];
         int j = i - 1;
         while (j >= 0) {
-            int c = t->compare(t->ctx, t->order[j], v, t->sort_col) * t->sort_dir;
+            int c = t->compare(t->ctx, s_sorted[j], v, t->sort_col) * t->sort_dir;
             if (c <= 0) break;   // <= keeps equal elements in place: stable
-            t->order[j + 1] = t->order[j];
+            s_sorted[j + 1] = s_sorted[j];
             j--;
         }
-        t->order[j + 1] = v;
+        s_sorted[j + 1] = v;
     }
 }
 
+// Each row's effective parent: in range, in the same group, and not on
+// a cycle. Every member of a cycle walks back to itself within n steps,
+// so the first one visited is cut and the rest then end at a root.
+static void link_rows(struct uui_table *t, int n) {
+    for (int r = 0; r < n; r++) {
+        int p = t->parent ? t->parent(t->ctx, r) : -1;
+        if (p < 0 || p >= n || p == r || s_grp[p] != s_grp[r]) p = -1;
+        t->up[r] = (short)p;
+        t->kids[r] = 0;
+        t->depth[r] = 0;
+    }
+    for (int r = 0; r < n; r++) {
+        int x = t->up[r];
+        for (int steps = 0; x >= 0 && steps <= n; steps++) {
+            if (x == r) { t->up[r] = -1; break; }
+            x = t->up[x];
+        }
+    }
+    for (int r = 0; r < n; r++)
+        if (t->up[r] >= 0) t->kids[t->up[r]] = 1;
+}
+
+// A root and every OPEN descendant, depth-first, children in sorted
+// order. Iterative: a chain of 256 nested rows is a legal input.
+static int emit_subtree(struct uui_table *t, int n, int root, int v) {
+    t->order[v++] = root;
+    int sp = 0;
+    if (t->kids[root] && !row_collapsed(t, root)) { s_stk[sp] = (short)root; s_pos[sp++] = 0; }
+    while (sp > 0) {
+        int top = s_stk[sp - 1], found = -1, j;
+        for (j = s_pos[sp - 1]; j < n; j++)
+            if (t->up[s_sorted[j]] == top) { found = s_sorted[j]; break; }
+        if (found < 0) { sp--; continue; }
+        s_pos[sp - 1] = (short)(j + 1);
+        int d = t->depth[top] + 1;
+        t->depth[found] = (unsigned char)(d > 255 ? 255 : d);
+        t->order[v++] = found;
+        if (t->kids[found] && !row_collapsed(t, found)) { s_stk[sp] = (short)found; s_pos[sp++] = 0; }
+    }
+    return v;
+}
+
+static void order_rebuild(struct uui_table *t) {
+    int n = t->row_count;
+    if (n > UUI_TABLE_MAX_ROWS) n = UUI_TABLE_MAX_ROWS;
+    sort_rows(t, n);
+    t->order_rows = t->row_count;
+    // Past capacity the rows beyond it show unsorted after the rest, and
+    // a caption or a nesting would have nowhere to go -- so plain order.
+    t->structured = (t->group || t->parent) && t->row_count <= UUI_TABLE_MAX_ROWS;
+
+    if (!t->structured) {
+        for (int i = 0; i < n; i++) {
+            t->order[i] = s_sorted[i];
+            t->up[i] = -1; t->kids[i] = 0; t->depth[i] = 0;
+        }
+        t->view_count = t->row_count;
+        return;
+    }
+
+    for (int r = 0; r < n; r++) {
+        int g = t->group ? t->group(t->ctx, r) : 0;
+        if (g < 0) g = 0;
+        if (g >= UUI_TABLE_MAX_GROUPS) g = UUI_TABLE_MAX_GROUPS - 1;
+        s_grp[r] = (unsigned char)g;
+    }
+    link_rows(t, n);
+
+    int v = 0;
+    for (int g = 0; g < UUI_TABLE_MAX_GROUPS; g++) {
+        int captioned = 0;
+        for (int i = 0; i < n; i++) {
+            int r = s_sorted[i];
+            if (s_grp[r] != g || t->up[r] >= 0) continue;
+            if (t->group && !captioned) { t->order[v++] = UUI_TABLE_CAPTION(g); captioned = 1; }
+            v = emit_subtree(t, n, r, v);
+        }
+    }
+    t->view_count = v;
+
+    // A selection folded away moves to the nearest ancestor on screen,
+    // so an action never lands on a row the user cannot see.
+    if (t->selected >= 0 && t->selected < n && uui_table_view_row(t, t->selected) < 0) {
+        int x = t->up[t->selected];
+        while (x >= 0 && uui_table_view_row(t, x) < 0) x = t->up[x];
+        t->selected = x;
+    }
+    if (t->hovered >= 0 && uui_table_view_row(t, t->hovered) < 0) t->hovered = -1;
+}
+
 int uui_table_source_row(const struct uui_table *t, int view_row) {
-    if (view_row < 0 || view_row >= t->row_count) return -1;
-    // Past the permutation's capacity, or built for a different row
-    // count: fall back to identity rather than reading a stale slot.
-    // Showing the tail unsorted is a visible oddity; indexing the wrong
-    // row is a silent one.
-    if (view_row >= UUI_TABLE_MAX_ROWS || t->order_rows != t->row_count) return view_row;
-    return t->order[view_row];
+    if (view_row < 0) return -1;
+    // Built for a different row count: fall back to identity rather than
+    // reading a stale slot. Showing the tail unsorted is a visible
+    // oddity; indexing the wrong row is a silent one.
+    if (t->order_rows != t->row_count) return view_row < t->row_count ? view_row : -1;
+    if (view_row >= t->view_count) return -1;
+    // Past the permutation's capacity, in plain order only.
+    if (!t->structured && view_row >= UUI_TABLE_MAX_ROWS) return view_row;
+    int e = t->order[view_row];
+    return e >= 0 ? e : -1;   // a caption has no app row
 }
 
 int uui_table_view_row(const struct uui_table *t, int source_row) {
     if (source_row < 0 || source_row >= t->row_count) return -1;
-    if (source_row >= UUI_TABLE_MAX_ROWS || t->order_rows != t->row_count) return source_row;
-    for (int i = 0; i < t->row_count && i < UUI_TABLE_MAX_ROWS; i++) {
+    if (t->order_rows != t->row_count) return source_row;
+    if (!t->structured && source_row >= UUI_TABLE_MAX_ROWS) return source_row;
+    int n = t->view_count < UUI_TABLE_MAX_VIEW ? t->view_count : UUI_TABLE_MAX_VIEW;
+    for (int i = 0; i < n; i++) {
         if (t->order[i] == source_row) return i;
     }
-    return source_row;
+    return -1;   // folded under a collapsed parent
+}
+
+int uui_table_caption_at(const struct uui_table *t, int view_row) {
+    if (!t->structured || t->order_rows != t->row_count) return -1;
+    if (view_row < 0 || view_row >= t->view_count) return -1;
+    int e = t->order[view_row];
+    return e <= UUI_TABLE_CAPTION(0) ? UUI_TABLE_CAPTION(0) - e : -1;
 }
 
 void uui_table_set_compare(struct uui_table *t, uui_table_cmp_fn compare) {
@@ -209,12 +330,38 @@ void uui_table_set_icon(struct uui_table *t, uui_table_icon_fn icon) {
     t->icon = icon;
 }
 
+void uui_table_set_heat(struct uui_table *t, uui_table_heat_fn heat) {
+    t->heat = heat;
+}
+
 void uui_table_set_fade(struct uui_table *t, uui_table_fade_fn fade) {
     t->fade = fade;
 }
 
 void uui_table_set_tint(struct uui_table *t, uui_table_tint_fn tint) {
     t->tint = tint;
+}
+
+void uui_table_set_groups(struct uui_table *t, uui_table_group_fn group,
+                           uui_table_group_title_fn title) {
+    t->group = group;
+    t->group_title = title;
+    order_rebuild(t);
+    table_clamp(t);
+}
+
+void uui_table_set_tree(struct uui_table *t, uui_table_parent_fn parent,
+                         uui_table_collapsed_fn collapsed) {
+    t->parent = parent;
+    t->collapsed = collapsed;
+    order_rebuild(t);
+    table_clamp(t);
+}
+
+int uui_table_take_toggled(struct uui_table *t) {
+    int r = t->toggled;
+    t->toggled = -1;
+    return r;
 }
 
 void uui_table_set_sort(struct uui_table *t, int col, int dir) {
@@ -231,6 +378,7 @@ void uui_table_set_rows(struct uui_table *t, int row_count) {
     // has to think about it.
     if (t->selected >= row_count) t->selected = row_count > 0 ? row_count - 1 : -1;
     if (t->hovered >= row_count) t->hovered = -1;
+    if (t->toggled >= row_count) t->toggled = -1;
     // The app just told us its data changed, so the permutation is what
     // is stale. Rebuilding HERE is why an app that already calls this
     // after a refresh needs no sorting hook of its own -- Task Manager
@@ -280,6 +428,53 @@ void uui_table_column_rect(const struct uui_table *t, int col,
     if (out_w) *out_w = width;
 }
 
+// One tree level's indent, which is also the expander's box.
+static int tree_indent(void) { return ugfx_char_h(); }
+
+// Where row `row`'s expander sits, content-relative, for the hit test.
+static void expander_rect(const struct uui_table *t, int row, int *x, int *w) {
+    int cx;
+    uui_table_column_rect(t, 0, &cx, 0);
+    *x = cx + UUI_TABLE_PAD_X + t->depth[row] * tree_indent();
+    *w = tree_indent();
+}
+
+// A triangle: pointing RIGHT when collapsed, DOWN when open -- KDE's and
+// GTK's expander. Stacked spans rather than a glyph, like the sort
+// arrow, so it stays font-derived.
+static void draw_expander(struct ugfx_surface *s, int x, int y, int box, int h,
+                          int collapsed, uint32_t c) {
+    int a = box / 4 > 2 ? box / 4 : 2;
+    int x0 = x + (box - (collapsed ? a : 2 * a + 1)) / 2;
+    if (collapsed) {
+        int y0 = y + (h - (2 * a + 1)) / 2;
+        for (int r = 0; r <= 2 * a; r++) {
+            int w = a + 1 - (r > a ? r - a : a - r);
+            ugfx_fill_rect(s, x0, y0 + r, w, 1, c);
+        }
+    } else {
+        int y0 = y + (h - (a + 1)) / 2;
+        for (int r = 0; r <= a; r++)
+            ugfx_fill_rect(s, x0 + r, y0 + r, 2 * (a - r) + 1, 1, c);
+    }
+}
+
+// A group's caption row: its title in bold, in the accent, on the
+// table's own ground -- a heading, so no hover and no selection.
+static void draw_caption(struct ugfx_surface *s, const struct uui_table *t,
+                         int group, int ry) {
+    char buf[UUI_TABLE_CELL_MAX];
+    buf[0] = '\0';
+    if (t->group_title) t->group_title(t->ctx, group, buf, (int)sizeof buf);
+    if (!buf[0]) return;
+    const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
+    int ty = ry + (uui_table_row_h(t) - ugfx_char_h()) / 2;
+    ugfx_draw_string_clipped(s, t->x + UUI_TABLE_PAD_X, ty,
+                             t->w - 2 * UUI_TABLE_PAD_X, buf,
+                             UTHEME_ACCENT, uui_table_c_bg(t));
+    ugfx_set_font(was);
+}
+
 // One cell's text, drawn clipped to its column and aligned per the
 // column's own rule.
 static void draw_cell(struct ugfx_surface *s, const struct uui_table *t,
@@ -295,6 +490,17 @@ static void draw_cell(struct ugfx_surface *s, const struct uui_table *t,
     if (avail <= 0) return;
 
     int tx = cx + UUI_TABLE_PAD_X;
+    if (col == 0 && t->structured && t->parent) {
+        // The tree's indent and expander, before the icon: a row with no
+        // children keeps the expander's gap so siblings line up.
+        int ind = tree_indent(), d = t->depth[row];
+        if (t->kids[row] && avail > (d + 1) * ind)
+            draw_expander(s, tx + d * ind, ry, ind, uui_table_row_h(t),
+                          row_collapsed(t, row), ugfx_blend(bg, fg, 150));
+        tx += (d + 1) * ind;
+        avail -= (d + 1) * ind;
+        if (avail <= 0) return;
+    }
     if (col == 0 && t->icon) {
         // The icon at the text's height, then the text after it; a row
         // with no icon keeps the gap, so the names still line up.
@@ -409,13 +615,15 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
     for (int i = 0; i < vis + 1 + extra; i++) {
         int view = first + i;
         if (view < 0) continue;
-        if (view >= t->row_count) break;
+        if (view >= vcount(t)) break;
         // The app's row for this SCREEN position. `selected` and
         // `hovered` are app rows too, so the comparisons below are
         // apples to apples and a selection survives a re-sort.
+        int ry = t->y + hh + (view - t->top) * rh + disp;
+        int cap = uui_table_caption_at(t, view);
+        if (cap >= 0) { draw_caption(s, t, cap, ry); continue; }
         int idx = uui_table_source_row(t, view);
         if (idx < 0) break;
-        int ry = t->y + hh + (view - t->top) * rh + disp;
 
         uint32_t rbg = uui_table_c_bg(t), rfg = uui_table_c_fg(t);
         uint32_t tint = t->tint ? t->tint(t->ctx, idx) : 0;
@@ -429,7 +637,20 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
         if (t->fade && t->fade(t->ctx, idx)) rfg = ugfx_blend(rfg, rbg, 128);
 
         if (rbg != uui_table_c_bg(t)) ugfx_fill_rect(s, t->x, ry, t->w - bar, rh, rbg);
-        for (int c = 0; c < t->col_count; c++) draw_cell(s, t, c, idx, ry, rfg, rbg);
+        for (int c = 0; c < t->col_count; c++) {
+            uint32_t cbg = rbg;
+            int heat = (t->heat && idx != t->selected) ? t->heat(t->ctx, idx, c) : 0;
+            if (heat > 0) {
+                // At most ~40% accent, so black text stays readable on
+                // the hottest cell.
+                if (heat > 255) heat = 255;
+                cbg = ugfx_blend(rbg, UTHEME_ACCENT, (uint8_t)(heat * 100 / 255));
+                int hx, hw;
+                uui_table_column_rect(t, c, &hx, &hw);
+                ugfx_fill_rect(s, hx, ry, hw, rh, cbg);
+            }
+            draw_cell(s, t, c, idx, ry, rfg, cbg);
+        }
     }
     ugfx_clip_restore(s, &saved);
 
@@ -439,12 +660,12 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
         // scroll. IN PIXELS, so the thumb glides with the rows: the
         // ratios are the row ones scaled by rh, which lands the thumb
         // on the same pixels the row-unit hit test computes.
-        int max_px = (t->row_count - vis) * rh;
-        int off_px = (t->row_count - vis - t->top) * rh + disp;
+        int max_px = (vcount(t) - vis) * rh;
+        int off_px = (vcount(t) - vis - t->top) * rh + disp;
         if (off_px < 0) off_px = 0;
         if (off_px > max_px) off_px = max_px;
         uui_scrollbar_draw(s, t->x + t->w - bar, t->y + hh, bar, t->h - hh,
-                            t->row_count * rh, vis * rh, off_px,
+                            vcount(t) * rh, vis * rh, off_px,
                             uui_table_c_track_bg(t), uui_table_c_thumb_bg(t), 0);
     }
 
@@ -507,7 +728,7 @@ int uui_table_hit(const struct uui_table *t, int cx, int cy) {
     // `top` shows through a positive displacement.
     int rel = cy - t->y - hh - t->anim.disp;
     int view = t->top + (rel >= 0 ? rel / rh : -((-rel + rh - 1) / rh));
-    if (view < 0 || view >= t->row_count) return -1;
+    if (view < 0 || view >= vcount(t)) return -1;
     // The APP's row, not the screen position -- every public row index
     // on this widget means the same thing (uui_table.h).
     return uui_table_source_row(t, view);
@@ -537,6 +758,15 @@ int uui_table_click(struct uui_table *t, int cx, int cy) {
     }
 
     int idx = uui_table_hit(t, cx, cy);
+    if (idx >= 0 && t->structured && t->parent && t->kids[idx]) {
+        int ex, ew;
+        expander_rect(t, idx, &ex, &ew);
+        if (cx >= ex && cx < ex + ew) {
+            t->toggled = idx;
+            t->selected = idx;
+            return 1;
+        }
+    }
     if (idx < 0 || idx == t->selected) return 0;
     t->selected = idx;
     return 1;
@@ -553,12 +783,12 @@ static int table_bar_x(const struct uui_table *t) {
 }
 
 static int table_offset(const struct uui_table *t) {
-    return t->row_count - uui_table_visible_rows(t) - t->top;
+    return vcount(t) - uui_table_visible_rows(t) - t->top;
 }
 
 static int table_set_offset(struct uui_table *t, int offset) {
     int before = t->top;
-    t->top = t->row_count - uui_table_visible_rows(t) - offset;
+    t->top = vcount(t) - uui_table_visible_rows(t) - offset;
     table_clamp(t);
     return t->top != before;
 }
@@ -574,11 +804,11 @@ int uui_table_press(struct uui_table *t, int cx, int cy) {
     int off = table_offset(t);
     enum uui_scrollbar_zone zone =
         uui_scrollbar_hit(bx, t->y + hh, t->bar_w, t->h - hh,
-                           t->row_count, vis, off, cx, cy, 0);
+                           vcount(t), vis, off, cx, cy, 0);
 
     if (zone == UUI_SB_THUMB) {
         int thumb_y, thumb_h;
-        uui_scrollbar_thumb_rect(t->y + hh, t->h - hh, t->row_count, vis, off,
+        uui_scrollbar_thumb_rect(t->y + hh, t->h - hh, vcount(t), vis, off,
                                   &thumb_y, &thumb_h, t->bar_w, 0);
         // The offset WITHIN the thumb, so it tracks the cursor rather
         // than snapping its top to it.
@@ -600,7 +830,7 @@ int uui_table_drag(struct uui_table *t, int cx, int cy) {
     if (t->thumb_grab < 0) return 0;
     int hh = uui_table_header_h(t);
     int vis = uui_table_visible_rows(t);
-    int off = uui_scrollbar_offset_for_drag(t->y + hh, t->h - hh, t->row_count,
+    int off = uui_scrollbar_offset_for_drag(t->y + hh, t->h - hh, vcount(t),
                                              vis, cy, t->thumb_grab, t->bar_w, 0);
     return table_set_offset(t, off);
 }
@@ -654,7 +884,7 @@ static void tb_seek_text(void *ctx, int view_row, char *out, int cap) {
 static int table_seek(struct uui_table *t, int key) {
     if (t->seek_col < 0 || !t->cell) return 0;
     int view = uui_table_view_row(t, t->selected);
-    int idx = uui_seek_key(&t->seek, key, t->row_count, view,
+    int idx = uui_seek_key(&t->seek, key, vcount(t), view,
                             tb_seek_text, t);
     if (idx < 0) return 0;
     int row = uui_table_source_row(t, idx);
@@ -664,8 +894,42 @@ static int table_seek(struct uui_table *t, int key) {
     return 1;
 }
 
+// Off a caption: `dir` first, the other way at the ends. A caption is a
+// heading, never a keyboard stop.
+static int skip_caption(const struct uui_table *t, int view, int dir) {
+    int n = vcount(t), v = view;
+    while (v >= 0 && v < n && uui_table_caption_at(t, v) >= 0) v += dir;
+    if (v >= 0 && v < n) return v;
+    v = view;
+    while (v >= 0 && v < n && uui_table_caption_at(t, v) >= 0) v -= dir;
+    return (v >= 0 && v < n) ? v : -1;
+}
+
+// Left and Right in a tree, as in every tree view: Right opens a closed
+// parent, then steps to its first child; Left closes an open one, then
+// steps to the parent. Opening and closing are the APP's (`toggled`).
+static int tree_key(struct uui_table *t, int key) {
+    int r = t->selected;
+    if (r < 0 || r >= t->row_count || r >= UUI_TABLE_MAX_ROWS) return 0;
+    if (key == KEY_ARROW_RIGHT) {
+        if (!t->kids[r]) return 0;
+        if (row_collapsed(t, r)) { t->toggled = r; return 1; }
+        int child = uui_table_source_row(t, uui_table_view_row(t, r) + 1);
+        if (child < 0 || t->up[child] != r) return 0;
+        t->selected = child;
+    } else {
+        if (t->kids[r] && !row_collapsed(t, r)) { t->toggled = r; return 1; }
+        if (t->up[r] < 0) return 0;
+        t->selected = t->up[r];
+    }
+    table_reveal(t);
+    return 1;
+}
+
 int uui_table_key(struct uui_table *t, int key) {
-    if (t->row_count <= 0) return 0;
+    if (vcount(t) <= 0) return 0;
+    if ((key == KEY_ARROW_LEFT || key == KEY_ARROW_RIGHT) && t->structured && t->parent)
+        return tree_key(t, key);
     uui_scrollanim_arm(&t->anim); // a key that scrolls the view glides it
     int before = t->selected;
     int vis = uui_table_visible_rows(t);
@@ -676,19 +940,22 @@ int uui_table_key(struct uui_table *t, int key) {
     // is the bug that makes arrow keys jump around a sorted table.
     int view = uui_table_view_row(t, t->selected);
     if (view < 0) view = 0;
+    int dir = 1;   // which way to step off a caption
 
-    if (key == KEY_ARROW_UP)        { if (view > 0) view--; }
-    else if (key == KEY_ARROW_DOWN) { if (view < t->row_count - 1) view++; }
+    if (key == KEY_ARROW_UP)        { if (view > 0) view--; dir = -1; }
+    else if (key == KEY_ARROW_DOWN) { if (view < vcount(t) - 1) view++; }
     else if (key == KEY_HOME)       { view = 0; }
-    else if (key == KEY_END)        { view = t->row_count - 1; }
-    else if (key == KEY_PAGE_UP)    { view -= vis; if (view < 0) view = 0; }
+    else if (key == KEY_END)        { view = vcount(t) - 1; dir = -1; }
+    else if (key == KEY_PAGE_UP)    { view -= vis; if (view < 0) view = 0; dir = -1; }
     else if (key == KEY_PAGE_DOWN)  { view += vis;
-                                       if (view >= t->row_count) view = t->row_count - 1; }
+                                       if (view >= vcount(t)) view = vcount(t) - 1; }
     // A PRINTABLE KEY IS A SEARCH, not a keystroke to pass on.
     else if (uui_seek_is_key(key)) return table_seek(t, key);
     else return 0;
 
     if (view < 0) view = 0;
+    view = skip_caption(t, view, dir);
+    if (view < 0) return 0;   // nothing but captions
     t->selected = uui_table_source_row(t, view);
     if (t->selected < 0) t->selected = 0;
     // A movement key ends a search in progress, so the next letter
@@ -789,6 +1056,7 @@ static void tb_ops_describe(const void *w, const struct uui_describe *d) {
         uui_describe_rect_i(d, "col", c, cx, t->y, cw, t->h);
     }
     uui_describe_int(d, "selected", t->selected);
+    uui_describe_int(d, "shown", vcount(t));
 }
 
 static void tb_ops_bounds(const void *w, int *x, int *y, int *ow, int *oh) {

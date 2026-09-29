@@ -36,6 +36,7 @@ Needs Pillow (see docs/tools.md's host-tools section).
 """
 import argparse
 import io
+import math
 import os
 import sys
 
@@ -573,6 +574,26 @@ def icon_tb_details():
     for i, yy in enumerate((12, 27, 42)):
         d.rectangle([8, yy, 16, yy + 8], fill=TB_INK)
         d.rectangle([22, yy, 56, yy + 8], fill=TB_INK)
+    return im
+
+
+# Task Manager's rail: Performance is a trend over an axis, Services a
+# gear -- the toolbar's ink, so the three rail rows read as one set.
+def icon_tb_chart():
+    im, d = _tb()
+    d.line([(8, 8), (8, 56), (58, 56)], fill=TB_INK, width=6)
+    d.line([(14, 44), (26, 28), (36, 38), (54, 14)], fill=TB_INK, width=7, joint="curve")
+    return im
+
+
+def icon_tb_gear():
+    im, d = _tb()
+    for k in range(8):
+        a = k * math.pi / 4
+        cx, cy = 32 + 22 * math.cos(a), 32 + 22 * math.sin(a)
+        d.ellipse([cx - 6, cy - 6, cx + 6, cy + 6], fill=TB_INK)
+    d.ellipse([12, 12, 52, 52], fill=TB_INK)
+    d.ellipse([24, 24, 40, 40], fill=(0, 0, 0, 0))
     return im
 
 
@@ -1250,6 +1271,8 @@ ICONS = {
     "drive": icon_drive,
     "drive-ram": icon_drive_ram,
     "tb-details": icon_tb_details,
+    "tb-chart": icon_tb_chart,
+    "tb-gear": icon_tb_gear,
     "tb-icons": icon_tb_icons,
     "tb-panes": icon_tb_panes,
     "tb-tree": icon_tb_tree,

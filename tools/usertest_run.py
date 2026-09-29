@@ -230,6 +230,12 @@ TESTS = [
     # still passes. The fixture is stored in reverse for that reason.
     ("typeahead_test", 0,
      None, None),
+    # uui_table's groups, tree and heat -- Task Manager's Processes page.
+    # The fixture is stored OUT of screen order (children before parents,
+    # a cycle, a parent in another group), so an ordering that walked the
+    # app's array would fail rather than pass by coincidence.
+    ("table_tree_test", None,   # spawned: it draws, so it needs the font
+     None, None),
     # The audio decode path -- the half of lib/usnd.h that needs no
     # sound card. Playback is judged on the HOST instead
     # (tools/audio_test.py records what the device emitted), so these

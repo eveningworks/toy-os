@@ -60,6 +60,11 @@ uint32_t uui_chart_sample(const struct uui_chart *c, int i) {
     return c->samples[drawn_slot(c, i)];
 }
 
+uint32_t uui_chart_recent(const struct uui_chart *c, int back) {
+    if (back < 0 || back >= c->count || back >= UUI_CHART_MAX) return 0;
+    return c->samples[(c->head + UUI_CHART_MAX - 1 - back) % UUI_CHART_MAX];
+}
+
 int uui_chart_hover_index(const struct uui_chart *c) { return c->hover; }
 
 // The top of the scale: the caller's, or the largest sample in view.

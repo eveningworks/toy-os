@@ -708,6 +708,10 @@ whenever a headline here tells you something you did not already know.
 - **THE TEXT CARET BLINKS FROM ONE PHASE PER PROCESS
   (`ui/uui_caret.h`), AND STOPS SOLID TEN SECONDS AFTER THE LAST INPUT**
 - **"SHOW ADVANCED SETTINGS" APPEARS ONLY ON A PAGE THAT HAS ONE**
+- **`uui_table` GROUPS AND ITS TREE ARE ORDERINGS, AND THE FOLDED STATE
+  IS THE APP'S**
+- **A BUTTON'S `on_widget` FIRES ON PRESS, MOTION AND RELEASE; ACT ON
+  RELEASE OR KEY**
 
 ### Storage, the filesystem, and /etc
 

@@ -96,14 +96,54 @@ typedef int (*uui_table_fade_fn)(void *ctx, int row);
 struct uimg;
 typedef const struct uimg *(*uui_table_icon_fn)(void *ctx, int row, int px);
 
+// A cell's HEAT, 0..255: how strongly to shade it in the theme's accent
+// -- Windows Task Manager's busy CPU and Memory cells. 0 = unshaded.
+// The table picks the colour, so it follows the theme; selection still
+// outranks it, since a shaded selected row would hide the selection.
+typedef int (*uui_table_heat_fn)(void *ctx, int row, int col);
+
+// --- groups and a tree --------------------------------------------------
+//
+// Both are ORDERINGS, so they live beside the sort in `order`: groups
+// outermost, then the tree, then the comparator among SIBLINGS -- so a
+// sorted tree keeps each child under its parent, which is what
+// GtkTreeView, Qt's QTreeView and KDE System Monitor's tree all do.
+//
+// A GROUP is a band of rows under an inert CAPTION row, Windows Task
+// Manager's "Apps" / "Background processes" and Explorer's group-by. The
+// app numbers them; they show in ascending number, never re-sorted.
+// Caption rows take no selection, hover, focus or keyboard stop -- they
+// have no app row, and every public function still speaks app rows.
+typedef int (*uui_table_group_fn)(void *ctx, int row);   // 0..UUI_TABLE_MAX_GROUPS-1
+typedef void (*uui_table_group_title_fn)(void *ctx, int group, char *out, int cap);
+
+// A TREE nests a row under its PARENT (an app row, or -1 for a root). A
+// parent in a DIFFERENT group does not count: the row is a root of its
+// own group. Cycles are cut, never followed.
+//
+// **THE EXPANDED STATE IS THE APP'S**, as the rows are: the table asks
+// `collapsed` and never stores it, because an app row is an index that
+// moves on every refresh while the app knows what the row IS (a pid).
+// A click on the expander, or Left/Right on the keyboard, leaves the row
+// in `toggled`; the app flips its own state and calls set_rows().
+typedef int (*uui_table_parent_fn)(void *ctx, int row);
+typedef int (*uui_table_collapsed_fn)(void *ctx, int row); // 1 = children hidden
+
+#define UUI_TABLE_MAX_GROUPS 8
+
 // The permutation is a fixed array because Toykit has no allocator.
 // Past this many rows the table shows the first UUI_TABLE_MAX_ROWS in
 // sorted order and the rest unsorted after them, rather than silently
-// dropping any -- see uui_table.c. Task Manager's ceiling is
-// SYS_PROC_MAX (64).
+// dropping any -- see uui_table.c; groups and the tree are off in that
+// case. Task Manager's ceiling is SYS_PROC_MAX (64).
 #define UUI_TABLE_MAX_ROWS 256
+#define UUI_TABLE_MAX_VIEW (UUI_TABLE_MAX_ROWS + UUI_TABLE_MAX_GROUPS)
 
 #define UUI_TABLE_UNSORTED (-1)
+
+// An `order` entry for group g's caption row. Never >= 0, so every
+// "is this an app row" test is `>= 0`.
+#define UUI_TABLE_CAPTION(g) (-2 - (g))
 
 // A cell's inset from its column's edges -- public because a widget
 // laid over a cell (uui_fileview's rename field) has to line up with
@@ -139,17 +179,32 @@ struct uui_table {
     uui_table_tint_fn tint;  // NULL = no row ever tinted
     uui_table_fade_fn fade;  // NULL = no row ever faded
     uui_table_icon_fn icon;  // NULL = no icon column
+    uui_table_heat_fn heat;  // NULL = no cell shaded
+    uui_table_group_fn group;             // NULL = no groups
+    uui_table_group_title_fn group_title;
+    uui_table_parent_fn parent;           // NULL = a flat list
+    uui_table_collapsed_fn collapsed;     // NULL = every parent open
     int sort_col;   // UUI_TABLE_UNSORTED, or a column index
     int sort_dir;   // 1 ascending, -1 descending
 
-    // view row -> app row. Rebuilt by uui_table_set_rows() and by
-    // uui_table_set_sort(), which is why an app that already calls
-    // set_rows() after refreshing its data needs no other hook.
-    // `order_rows` is what it was built for, so a row_count that
-    // changed without a rebuild is detectable rather than silently
-    // indexing stale positions.
-    int order[UUI_TABLE_MAX_ROWS];
+    // view row -> app row, or UUI_TABLE_CAPTION(g) for a group's caption.
+    // Rebuilt by uui_table_set_rows() and by uui_table_set_sort(), which
+    // is why an app that already calls set_rows() after refreshing its
+    // data needs no other hook. `order_rows` is the row_count it was
+    // built for, so a count that changed without a rebuild is detectable
+    // rather than silently indexing stale positions. `view_count` is the
+    // rows ON SCREEN: captions in, collapsed children out.
+    int order[UUI_TABLE_MAX_VIEW];
     int order_rows;
+    int view_count;
+
+    // Per APP row, from the last rebuild: its depth in the tree, whether
+    // it has children, and its effective parent (-1 = a root). OWNED.
+    unsigned char depth[UUI_TABLE_MAX_ROWS];
+    unsigned char kids[UUI_TABLE_MAX_ROWS];
+    short up[UUI_TABLE_MAX_ROWS];
+    int toggled;    // app row whose expander was used, or -1; see take_toggled()
+    int structured; // OWNED: groups or a tree are in force this rebuild
 
     // A table with NO header: no column titles, no sort arrow, no
     // clickable header row, and the rows start at the widget's top.
@@ -208,6 +263,22 @@ void uui_table_set_tint(struct uui_table *t, uui_table_tint_fn tint);
 void uui_table_set_fade(struct uui_table *t, uui_table_fade_fn fade);
 // See uui_table_icon_fn. NULL turns it off again.
 void uui_table_set_icon(struct uui_table *t, uui_table_icon_fn icon);
+// See uui_table_heat_fn. NULL turns it off again.
+void uui_table_set_heat(struct uui_table *t, uui_table_heat_fn heat);
+// Groups and the tree; NULL for either half turns it off. Both rebuild
+// the order at once.
+void uui_table_set_groups(struct uui_table *t, uui_table_group_fn group,
+                           uui_table_group_title_fn title);
+void uui_table_set_tree(struct uui_table *t, uui_table_parent_fn parent,
+                         uui_table_collapsed_fn collapsed);
+// The app row whose expander was clicked or keyed since the last take,
+// or -1. Taking clears it.
+int  uui_table_take_toggled(struct uui_table *t);
+// Rows on screen, captions included and collapsed children not.
+int  uui_table_view_count(const struct uui_table *t);
+// The group whose CAPTION is at view position `view_row`, or -1 for an
+// ordinary row.
+int  uui_table_caption_at(const struct uui_table *t, int view_row);
 
 // Shows or hides the header row. On by default; a table with it off
 // still sorts if it has a comparator, it just has nothing to click.

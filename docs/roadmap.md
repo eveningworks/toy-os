@@ -723,7 +723,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~CPU/memory over time as a TAB in Task Manager~~ DONE 2026-09-15 -- history is collected whether or not the tab is showing
 - [ ] Scientific mode for Calculator
 - [x] ~~Device Manager: devices by bus with their bound driver, properties, and unbind/rebind~~ DONE 2026-09-28
-- [ ] A Network tab in Task Manager: per-card throughput, address, lease and the connection log -- Windows' Performance > Ethernet
+- [x] ~~A Network tab in Task Manager~~ DONE 2026-09-29 -- an Ethernet device on the Performance page, as Windows has it
 - [ ] A hex viewer, read-only first, for disk images, fonts and WADs on the machine itself -- Okteta, HxD
 - [ ] Paint: pencil, shapes, fill, select and copy, saving PNG/JPEG/QOI -- needs a reusable colour-picker widget
 - [ ] Clock: timer, stopwatch, alarms through `soundd`, and a world clock over the timezone city list

@@ -3998,8 +3998,17 @@ window without going through it will find its layout polls timing out.
   so a leftover window takes the spawn with the layout log still off. It
   never ticks "Keep disabled", so it leaves `/etc/devices.conf` as found.
   In `gui_regress.py`.
-- **`taskmgr_test.py`** -- the ring-3 Task Manager: `uui_table`, resize
-  reflow, and ending a process (12 checks). Its resize check asserts the
+- **`taskmgr_test.py`** -- the ring-3 Task Manager's three pages: the
+  Processes table in its Grouped, Tree and List views (the ORDER each
+  gives, read from the app's `taskmgr: order` line), sorting, folding a
+  parent, the filter, Stop/Continue checked through `ps`, Force Quit's
+  arm-then-commit, the Performance device list and Ethernet's connection
+  log, and stopping and starting `ntpd` checked through `service list`.
+  **Two checks count LOG LINES PER CLICK** -- one SIGSTOP, one init
+  request -- because a button names itself on press, motion and release
+  and the first build acted on all of them (four signals, four requests,
+  three of which timed out); removing the commit-only test reddens both.
+  Its resize check asserts the
   table grew by ROUGHLY WHAT THE WINDOW GREW BY, not merely that it
   changed -- the bug it was written after grew the width correctly and
   the height by 16 px against 300, so "it changed" was satisfied. On its

@@ -156,7 +156,7 @@ static int bcmp(void *ctx, int a, int b, int col) {
 }
 
 static void table_checks(void) {
-    struct uui_table t;
+    static struct uui_table t;   // static: the struct outgrew a 2 KiB frame
 
     // Unsorted first: the plain case.
     uui_table_init(&t, 0, 0, 300, 200, COLS, 2, tcell, 0);
