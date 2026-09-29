@@ -108,9 +108,9 @@ static int g_hist_n, g_hist_pos = -1;
 static int g_here = NO_TARGET;
 
 static const struct uui_toolbar_item TOOLBAR[] = {
-    { "tb-back",    "Back (Alt+Left)",     CMD_BACK },
-    { "tb-forward", "Forward (Alt+Right)", CMD_FORWARD },
-    { "tb-home",    "Home (Alt+Home)",     CMD_HOME },
+    { "tb-back",    "Back (Alt+Left)",     CMD_BACK, 0, 0 },
+    { "tb-forward", "Forward (Alt+Right)", CMD_FORWARD, 0, 0 },
+    { "tb-home",    "Home (Alt+Home)",     CMD_HOME, 0, 0 },
 };
 static struct uui_toolbar g_toolbar;
 
@@ -616,26 +616,31 @@ int main(void) {
     LEFT[1] = (struct uui_item){ .ops = &uui_tree_ops, .widget = &g_tree,
                                  .id = ID_TREE, .name = "tree",
                                  .flags = UUI_FILL_W | UUI_FILL_H };
-    LEFT_L = (struct uui_layout){ .dir = UUI_COLUMN, .items = LEFT, .count = 2 };
+    LEFT_L = (struct uui_layout){ .dir = UUI_COLUMN, .items = LEFT, .count = 2, .gap = 6 };
 
     RIGHT[0] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_crumb,
                                   .name = "crumb", .flags = UUI_FILL_W };
     RIGHT[1] = (struct uui_item){ .ops = &uui_markdown_ops, .widget = &g_md,
                                   .id = ID_DOC, .name = "doc",
                                   .flags = UUI_FILL_W | UUI_FILL_H };
-    RIGHT_L = (struct uui_layout){ .dir = UUI_COLUMN, .items = RIGHT, .count = 2 };
+    RIGHT_L = (struct uui_layout){ .dir = UUI_COLUMN, .items = RIGHT, .count = 2, .gap = 6 };
 
     BODY[0] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &LEFT_L,
                                  .flags = UUI_FILL_H };
     BODY[1] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &RIGHT_L,
                                  .flags = UUI_FILL_W | UUI_FILL_H };
-    BODY_L = (struct uui_layout){ .dir = UUI_ROW, .items = BODY, .count = 2 };
+    // The toolbar runs edge to edge, as in Files; the body keeps a small
+    // margin of its own -- the root's default (a character cell on every
+    // side) framed the whole window in panel grey.
+    BODY_L = (struct uui_layout){ .dir = UUI_ROW, .items = BODY, .count = 2,
+                                  .margin = 6, .gap = 6 };
 
     ITEMS[0] = (struct uui_item){ .ops = &uui_toolbar_ops, .widget = &g_toolbar,
                                   .id = ID_TOOLBAR, .name = "toolbar", .flags = UUI_FILL_W };
     ITEMS[1] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &BODY_L,
                                   .flags = UUI_FILL_W | UUI_FILL_H };
-    ROOT_L = (struct uui_layout){ .dir = UUI_COLUMN, .items = ITEMS, .count = 2 };
+    ROOT_L = (struct uui_layout){ .dir = UUI_COLUMN, .items = ITEMS, .count = 2,
+                                  .margin = 1, .gap = 1 };
     static struct uui_item root = { .ops = &uui_layout_ops, .widget = &ROOT_L };
 
     struct uapp_desc desc = {
