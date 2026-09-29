@@ -3,6 +3,10 @@
 // One of the File Manager's units -- see fm_internal.h for what is
 // where and why these share their state directly.
 #include "fm_internal.h"
+#include "lib/icon_cache.h"
+#include "lib/ufiletype.h"
+#include "lib/udate.h"
+#include "lib/human.h"
 #include "lib/ufileop.h"
 #include "ui/uui_dialog.h"
 #include <pthread.h>
@@ -448,33 +452,101 @@ void do_move(void) {
 
 // The dialog's rows are caller-owned for as long as it is up
 // (ui/uui_dialog.h), so they live here rather than on the stack.
-static char g_del_row[PATH_MAX_LEN + 48];
-static const char *const g_del_rows[] = { g_del_row, "This cannot be undone." };
+// The delete card's words, and its picture. File-scope because the dialog
+// keeps pointers (ui/uui_dialog.h).
+static char g_del_title[PATH_MAX_LEN + 24];
+static char g_del_facts[96];
+static char g_del_where[PATH_MAX_LEN + 8];
+static const char *const g_del_rows[] = { g_del_facts, g_del_where };
+static char g_del_path[PATH_MAX_LEN];   // the one file shown, for its thumbnail
+
+// The picture on the card: the file's own thumbnail when one is ready,
+// else its type's icon. Asked again when a thumbnail lands (files.c's
+// on_user), since the first ask usually only queued the decode.
+void delete_picture(void) {
+    if (g_dialog_kind != DIALOG_DELETE || !uui_dialog_is_open(&g_dialog)) return;
+    int px = ugfx_char_h() * 4;
+    const struct uimg *pic = 0;
+    if (g_del_path[0]) {
+        struct sys_stat st;
+        if (sys_stat(g_del_path, &st) == 0) {
+            if (!st.is_dir && g_opt.thumbs) {
+                struct sys_dirent e;
+                memset(&e, 0, sizeof e);
+                strlcpy(e.name, k_path_basename(g_del_path), sizeof e.name);
+                e.size = (uint32_t)st.size;
+                e.modified = st.modified;
+                char dir[PATH_MAX_LEN];
+                k_path_dirname(g_del_path, dir, sizeof dir);
+                pic = pane_thumb(0, dir, &e, px);
+            }
+            if (!pic) pic = icon_get(ufiletype_icon(k_path_basename(g_del_path), st.is_dir), px);
+        }
+    } else {
+        pic = icon_get("file", px);
+    }
+    if (pic != g_dialog.picture) uui_dialog_set_picture(&g_dialog, pic);
+}
 
 void do_delete(void) {
     int n = operand_count();
     if (n == 0) { set_note("nothing selected"); return; }
+    // Options can say not to ask -- and then this is the whole question.
+    if (!g_opt.confirm_delete) { commit_delete(); return; }
 
+    struct uui_fileview *fv = active();
+    int marks = uui_fileview_mark_count(fv);
+    g_del_path[0] = '\0';
     if (n == 1) {
-        const char *name = uui_fileview_selected_name(active());
-        int marks = uui_fileview_mark_count(active());
-        char one[PATH_MAX_LEN];
-        if (marks == 1) {
-            uui_fileview_marked_path(active(), 0, one, sizeof one);
-            name = k_path_basename(one);
+        if (marks == 1) uui_fileview_marked_path(fv, 0, g_del_path, sizeof g_del_path);
+        else uui_fileview_selected_path(fv, g_del_path, sizeof g_del_path);
+        const char *name = k_path_basename(g_del_path);
+        snprintf(g_del_title, sizeof g_del_title, "Delete %s?", name);
+        struct sys_stat st;
+        char h[24], when[32];
+        if (sys_stat(g_del_path, &st) == 0) {
+            rtc_format_iso(when, sizeof when, &st.modified, 0);
+            if (st.is_dir) {
+                snprintf(g_del_facts, sizeof g_del_facts, "Folder, modified %s -- and everything in it", when);
+            } else {
+                human_size(h, sizeof h, st.size);
+                snprintf(g_del_facts, sizeof g_del_facts, "%s, %s, modified %s",
+                         ufiletype_name(name, 0), h, when);
+            }
+        } else {
+            g_del_facts[0] = '\0';
         }
-        snprintf(g_del_row, sizeof g_del_row, "Delete %s?", name ? name : "");
     } else {
-        snprintf(g_del_row, sizeof g_del_row, "Delete %d marked items?", n);
+        unsigned long long bytes = 0;
+        int dirs = 0;
+        char path[PATH_MAX_LEN], h[24];
+        for (int i = 0; i < marks; i++) {
+            struct sys_stat st;
+            if (!uui_fileview_marked_path(fv, i, path, sizeof path)) continue;
+            if (uui_fileview_marked_is_dir(fv, i)) dirs++;
+            else if (sys_stat(path, &st) == 0) bytes += st.size;
+        }
+        human_size(h, sizeof h, bytes);
+        snprintf(g_del_title, sizeof g_del_title, "Delete %d items?", n);
+        if (dirs)
+            snprintf(g_del_facts, sizeof g_del_facts, "%d file%s (%s) and %d folder%s with what is in them",
+                     n - dirs, n - dirs == 1 ? "" : "s", h, dirs, dirs == 1 ? "" : "s");
+        else
+            snprintf(g_del_facts, sizeof g_del_facts, "%d files, %s in all", n, h);
     }
+    snprintf(g_del_where, sizeof g_del_where, "in %s", uui_fileview_dir(fv));
     // Verb buttons, the KDE/GNOME/macOS rule: the button says what it
-    // does. Delete is the default, as it was when Enter meant yes.
+    // does. Delete is the default, as it was when Enter meant yes, and
+    // red, because it cannot be taken back.
     static const struct uui_dialog_button btns[] = {
-        { "Delete", DLG_DELETE },
-        { "Cancel", DLG_CANCEL },
+        { "Cancel", DLG_CANCEL, 0 },
+        { "Delete", DLG_DELETE, UUI_DLG_DANGER },
     };
     g_dialog_kind = DIALOG_DELETE;
-    uui_dialog_open(&g_dialog, "Delete", g_del_rows, 2, btns, 2, 0, DLG_CANCEL);
+    uui_dialog_open(&g_dialog, g_del_title, g_del_rows, 2, btns, 2, 1, DLG_CANCEL);
+    uui_dialog_set_note(&g_dialog,
+                        "It is deleted for good -- there is no Recycle Bin to get it back from.");
+    delete_picture();
 }
 
 void commit_delete(void) {
@@ -529,10 +601,15 @@ void commit_newfile(const char *name) {
 }
 
 void commit_rename(const char *name) {
+    const char *from = uui_fileview_selected_name(active());
+    if (from) commit_rename_named(from, name);
+}
+
+void commit_rename_named(const char *from_name, const char *name) {
     char from[PATH_MAX_LEN], to[PATH_MAX_LEN];
-    ulogf("files: rename to %s in %s\n", name, uui_fileview_dir(active()));
+    ulogf("files: rename %s to %s in %s\n", from_name, name, uui_fileview_dir(active()));
     if (!name[0]) return;
-    if (!uui_fileview_selected_path(active(), from, sizeof from)) return;
+    if (!k_path_join(uui_fileview_dir(active()), from_name, from, sizeof from)) return;
     if (!k_path_join(uui_fileview_dir(active()), name, to, sizeof to)) {
         set_note("path too long");
         return;

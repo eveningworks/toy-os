@@ -91,7 +91,7 @@ void details_draw(struct ugfx_surface *s) {
     // --- the preview: the picture itself, else the type's icon ---------
     int bx = g_dx + PAD, by = g_dy + PAD, bw = g_dw - 2 * PAD, bh = preview_h();
     const struct uimg *pic = 0;
-    if (e && !e->is_dir && marks <= 1) pic = pane_thumb(0, dir, e, bh);
+    if (e && !e->is_dir && marks <= 1 && g_opt.thumbs) pic = pane_thumb(0, dir, e, bh);
     if (pic) {
         int x = bx + (bw - pic->w) / 2, y = by + (bh - pic->h) / 2;
         if (pic->has_alpha) ugfx_blit_alpha(s, x, y, pic->w, pic->h, pic->px, pic->w);

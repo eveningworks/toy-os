@@ -168,7 +168,7 @@ struct uui_fileview *other(void)   { return &g_pane[!g_active]; }
 // or on a key -- and every drop-down row names its key, so the F-keys
 // are still discoverable.
 static const struct uui_menu_item new_items[] = {
-    UUI_MENU("Folder",         CMD_MKDIR,    "F7"),
+    UUI_MENU("Folder",         CMD_MKDIR,    "Ctrl+Shift+N"),
     UUI_MENU("Text file",      CMD_NEW_FILE, 0),
 };
 
@@ -202,6 +202,7 @@ static const struct uui_menu_item more_items[] = {
     UUI_MENU("Other pane",         CMD_SWAP,       "Tab"),
     UUI_MENU_SEP,
     UUI_MENU("Properties",         CMD_PROPERTIES, 0),
+    UUI_MENU("Options...",         CMD_OPTIONS,    0),
     UUI_MENU_SEP,
     UUI_MENU("Close",              CMD_EXIT,       "Alt+F4"),
 };
@@ -532,11 +533,13 @@ void path_sync(void) {
     snprintf(g_search_hint, sizeof g_search_hint, "Search %s", base);
 }
 
-// SEARCH IS A FILTER ON THE FOLDER YOU ARE IN, by name -- Dolphin's
-// filter bar rather than Explorer's recursive search, which would walk
-// the disk on every keystroke. Case-insensitive, anywhere in the name.
-static int search_filter(void *ctx, const char *dir, const struct sys_dirent *e) {
+// EACH PANE'S ONE FILTER: hidden names (Options), then the search --
+// a filter on the folder you are in, by name, Dolphin's filter bar
+// rather than Explorer's recursive search, which would walk the disk on
+// every keystroke. Case-insensitive, anywhere in the name.
+static int pane_filter(void *ctx, const char *dir, const struct sys_dirent *e) {
     (void)dir;
+    if (!g_opt.hidden && e->name[0] == '.') return 0;
     const char *q = g_query[(int)(intptr_t)ctx];
     int qn = (int)strlen(q), n = (int)strlen(e->name);
     for (int i = 0; i + qn <= n; i++)
@@ -546,8 +549,6 @@ static int search_filter(void *ctx, const char *dir, const struct sys_dirent *e)
 
 void search_apply(void) {
     strlcpy(g_query[g_active], uui_textbox_text(&g_search), sizeof g_query[g_active]);
-    int on = g_query[g_active][0] != '\0';
-    uui_fileview_set_filter(active(), on ? search_filter : 0, (void *)(intptr_t)g_active);
     reload_pane(active());
     ulogf("files: search \"%s\" rows %d\n", uui_textbox_text(&g_search),
           uui_fileview_count(active()));
@@ -558,9 +559,8 @@ void search_clear(void) {
     g_search_on = 0;
     uui_textbox_set_active(&g_search, 0);
     for (int i = 0; i < 2; i++)
-        if (g_pane[i].filter) {
+        if (g_query[i][0]) {
             g_query[i][0] = '\0';
-            uui_fileview_set_filter(&g_pane[i], 0, 0);
             reload_pane(&g_pane[i]);
         }
 }
@@ -600,6 +600,36 @@ static void open_dropdown(int code) {
     uui_menubar_open_at(&g_ctx, items, n, x, y + h);
 }
 
+// NEW, IN PLACE: the item is created under a free name and its name is
+// then edited where it stands -- Explorer's New folder, Dolphin's too.
+static void create_and_rename(int cmd) {
+    char name[PATH_MAX_LEN], path[PATH_MAX_LEN];
+    const char *base = cmd == CMD_MKDIR ? "New folder" : "New text file.txt";
+    struct sys_stat st;
+    strlcpy(name, base, sizeof name);
+    if (k_path_join(uui_fileview_dir(active()), base, path, sizeof path) &&
+        sys_stat(path, &st) == 0 &&
+        !ufileop_unique_name(uui_fileview_dir(active()), base, name, sizeof name)) {
+        set_note("no free name");
+        return;
+    }
+    if (cmd == CMD_MKDIR) commit_mkdir(name);
+    else commit_newfile(name);
+    if (uui_fileview_select_name(active(), name)) uui_fileview_begin_rename(active());
+}
+
+// A rename the pane finished (Enter, or a click elsewhere): do it.
+static void rename_poll(void) {
+    char from[PATH_MAX_LEN], to[PATH_MAX_LEN];
+    for (int i = 0; i < 2; i++)
+        if (uui_fileview_take_rename(&g_pane[i], from, to, sizeof from)) {
+            int was = g_active;
+            g_active = i;
+            commit_rename_named(from, to);
+            g_active = was;
+        }
+}
+
 static void set_view(int code) {
     struct uui_fileview *fv = active();
     fv->icon_px = code == CMD_VIEW_LARGE ? ugfx_char_h() * 6 : 0;
@@ -627,13 +657,22 @@ void do_command(struct uapp *a, int code) {
     case CMD_COPY:   do_copy(); break;
     case CMD_MOVE:   do_move(); break;
     case CMD_DELETE: do_delete(); break;
-    case CMD_MKDIR:  open_prompt(CMD_MKDIR, "New folder", ""); break;
+    case CMD_MKDIR:
+        if (g_opt.rename_dialog) open_prompt(CMD_MKDIR, "New folder", "New folder");
+        else create_and_rename(CMD_MKDIR);
+        break;
     case CMD_RENAME: {
         const char *name = uui_fileview_selected_name(active());
         if (!name) { set_note("nothing selected"); break; }
-        open_prompt(CMD_RENAME, "Rename", name);
+        // Options: the name edited where it is (Explorer's F2), or asked
+        // for in a dialog.
+        if (g_opt.rename_dialog) open_prompt(CMD_RENAME, "Rename", name);
+        else uui_fileview_begin_rename(active());
         break;
     }
+    case CMD_OPTIONS:
+        options_open(a);
+        break;
     case CMD_BACK:
         if (!fm_history_back(g_active)) set_note("nothing to go back to");
         break;
@@ -706,7 +745,8 @@ void do_command(struct uapp *a, int code) {
         open_dropdown(code);
         break;
     case CMD_NEW_FILE:
-        open_prompt(CMD_NEW_FILE, "New text file", "new.txt");
+        if (g_opt.rename_dialog) open_prompt(CMD_NEW_FILE, "New text file", "New text file.txt");
+        else create_and_rename(CMD_NEW_FILE);
         break;
     case CMD_SORT_NAME: case CMD_SORT_MODIFIED: case CMD_SORT_TYPE: case CMD_SORT_SIZE: {
         int dir;
@@ -770,6 +810,15 @@ static void on_widget(struct uapp *a, int id, int reason) {
     // under it, and acting on that could open a second modal over the
     // first. The menu's parked code is TAKEN so it cannot replay later.
     char taken[PATH_MAX_LEN];
+    // The dialog IS the modal when it asks for a name, so it answers
+    // before the gate below -- behind it, Esc and both buttons were
+    // parked and never taken, and the window stayed modal for good.
+    if (id == ID_DIALOG) {
+        int code = uui_dialog_take_code(&g_dialog);
+        if (code > 0) answer_dialog(code);
+        uapp_redraw(a);
+        return;
+    }
     if (g_modal != MODAL_NONE) {
         if (id == ID_CTX) (void)uui_menubar_take_code(&g_ctx);
         if (id == ID_TOOLBAR) (void)uui_toolbar_take_code(&g_toolbar);
@@ -812,12 +861,6 @@ static void on_widget(struct uapp *a, int id, int reason) {
     if (id == ID_DP_OPEN || id == ID_DP_PROPS) {
         if (reason == UUI_REASON_RELEASE)
             do_command(a, id == ID_DP_OPEN ? CMD_OPEN : CMD_PROPERTIES);
-        return;
-    }
-    if (id == ID_DIALOG) {
-        int code = uui_dialog_take_code(&g_dialog);
-        if (code > 0) answer_dialog(code);
-        uapp_redraw(a);
         return;
     }
     if (id == ID_ADDR_L || id == ID_ADDR_R) {
@@ -925,6 +968,15 @@ static void on_widget(struct uapp *a, int id, int reason) {
 // A SECONDARY CLICK ARMS THE CONTEXT MENU. It opens on the release --
 // uui_menubar.h says why in full, and it is not a style choice.
 static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
+    // A press anywhere but the name being edited in place KEEPS the edit
+    // (Explorer's rule) -- a press in the pane itself does this inside
+    // the widget; this catches the toolbar, the places, the other pane.
+    for (int i = 0; i < 2; i++)
+        if (g_pane[i].renaming && !uui_textbox_hit(&g_pane[i].rename_box, x, y)) {
+            uui_fileview_finish_rename(&g_pane[i]);
+            rename_poll();
+            uapp_redraw(a);
+        }
     // A press anywhere but the field being edited ends the edit,
     // keeping the path as it was -- Dolphin's and Explorer's rule, and
     // the only one under which a click on a row cannot ALSO navigate.
@@ -999,7 +1051,15 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         uapp_redraw(a);
         return;
     }
-    if (modal_key(a, key)) return;
+    // THE NAME BEING EDITED IN PLACE takes every key -- F2, Delete and
+    // Ctrl+C mean text editing inside it, not file operations.
+    if (uui_fileview_renaming(active())) {
+        uui_fileview_key(active(), key);
+        rename_poll();
+        refresh_status();
+        uapp_redraw(a);
+        return;
+    }
 
     // THE SEARCH BOX, while it has the keyboard: every key edits the
     // query and the listing follows it; Esc empties it, Enter hands the
@@ -1055,6 +1115,9 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         return;
     }
     if (key == 0x01) { do_command(a, CMD_SELECT_ALL); return; }   // Ctrl-A
+    // Ctrl+Shift+N: a new folder, Explorer's key. Ctrl+N arrives as its
+    // control code with Shift as a modifier bit (api/keyboard.h).
+    if (key == 0x0E && (mods & KEY_MOD_SHIFT)) { do_command(a, CMD_MKDIR); return; }
 
     // ESC STOPS A RUNNING OPERATION, and only then -- asked AFTER the
     // dialog and the prompts above, so an Esc meant for one of those
@@ -1214,10 +1277,9 @@ static void on_pane_dir(void *ctx, const char *dir) {
     int i = (int)(intptr_t)ctx;
     // A NEW FOLDER ENDS A SEARCH, Explorer's rule: the query was about
     // the folder you left. Re-listed without the filter.
-    if (g_pane[i].filter) {
+    if (g_query[i][0]) {
         g_query[i][0] = '\0';
         if (i == g_active) uui_textbox_set_text(&g_search, "");
-        uui_fileview_set_filter(&g_pane[i], 0, 0);
         uui_fileview_reload(&g_pane[i]);
     }
     refresh_dim();   // the reload cleared the bits; see refresh_dim()
@@ -1297,6 +1359,11 @@ static void answer_conflict(int code) {
 static void answer_dialog(int code) {
     enum dialog_kind kind = g_dialog_kind;
     g_dialog_kind = DIALOG_NONE;
+    if (kind == DIALOG_PROMPT) {
+        answer_prompt(code);
+        refresh_status();
+        return;
+    }
     if (kind == DIALOG_DELETE) {
         if (code == DLG_DELETE) commit_delete();
         else set_note("cancelled");
@@ -1320,12 +1387,12 @@ static void raise_conflict(struct uapp *a) {
     describe(g_dlg_rows[2], sizeof g_dlg_rows[2], "New:     ", src);
 
     static const struct uui_dialog_button btns[] = {
-        { "Overwrite",     DLG_OVERWRITE },
-        { "Overwrite all", DLG_OVERWRITE_ALL },
-        { "Skip",          DLG_SKIP },
-        { "Skip all",      DLG_SKIP_ALL },
-        { "Rename",        DLG_RENAME },
-        { "Cancel",        DLG_CANCEL },
+        { "Overwrite",     DLG_OVERWRITE, 0 },
+        { "Overwrite all", DLG_OVERWRITE_ALL, 0 },
+        { "Skip",          DLG_SKIP, 0 },
+        { "Skip all",      DLG_SKIP_ALL, 0 },
+        { "Rename",        DLG_RENAME, 0 },
+        { "Cancel",        DLG_CANCEL, 0 },
     };
     uui_dialog_open(&g_dialog, "File already exists", g_dlg_row_ptr, 3,
                      btns, (int)(sizeof btns / sizeof btns[0]),
@@ -1342,7 +1409,11 @@ static int on_user(struct uapp *a, int a0, int a1) {
         fm_job_finished();
         return 1;
     }
-    if (a0 == POST_THUMB) return thumb_posted();
+    if (a0 == POST_THUMB) {
+        int got = thumb_posted();
+        if (got) delete_picture();   // the delete card may be waiting on it
+        return got;
+    }
     return 0;
 }
 
@@ -1417,10 +1488,16 @@ int main(int argc, char **argv) {
     // Argument first, then the remembered directory, then the root. An
     // explicit argument must win: "open the file manager HERE" is a
     // statement about this launch, not a new preference.
+    options_load();
     char saved_left[PATH_MAX_LEN], saved_right[PATH_MAX_LEN];
     if (!uconf_get(FILES_CONF, "left", saved_left, sizeof saved_left)) saved_left[0] = '\0';
     if (!uconf_get(FILES_CONF, "right", saved_right, sizeof saved_right)) saved_right[0] = '\0';
 
+    // Options' "Open in": where the last run left off, Home, or the root.
+    if (g_opt.start != FM_START_LAST) {
+        strlcpy(saved_left, g_opt.start == FM_START_HOME ? "/home" : "/", sizeof saved_left);
+        strlcpy(saved_right, saved_left, sizeof saved_right);
+    }
     const char *left = (argc > 1 && argv[1][0]) ? argv[1]
                         : (saved_left[0] ? saved_left : "/");
     const char *right = (argc > 2 && argv[2][0]) ? argv[2]
@@ -1470,7 +1547,10 @@ int main(int argc, char **argv) {
                            i ? g_right_entries : g_left_entries, PANE_FILES);
         g_pane[i].on_open = on_pane_open;
         g_pane[i].ctx = (void *)(intptr_t)i;
-        uui_fileview_set_thumb(&g_pane[i], pane_thumb, 0);
+        uui_fileview_set_thumb(&g_pane[i], g_opt.thumbs ? pane_thumb : 0, 0);
+        uui_fileview_set_filter(&g_pane[i], pane_filter, (void *)(intptr_t)i);
+        g_pane[i].single_click = g_opt.single_click;
+        g_pane[i].hide_ext = !g_opt.extensions;
     }
 
     // The remembered view options. Unknown values fall back to the

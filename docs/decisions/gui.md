@@ -4560,6 +4560,17 @@ The places list and the breadcrumb are widgets rather than parts of the
 app because the file chooser (`uui_filedialog`) has both, and two
 implementations of "where Documents is" had already begun to differ.
 
+**Rename is in place, and Options can say otherwise** (2026-09-29). F2
+and New edit the name where it stands, as Explorer and Dolphin do; a
+dialog is the Options alternative for anyone who prefers it. Options is
+a window of its own with a sidebar of pages (Dolphin's Configure
+dialog), holding the start folder, single- or double-click, the view a
+new window uses, thumbnails, hidden names, extensions, how Rename works
+and whether Delete asks. **Delete asks by default and says why**: there
+is no Recycle Bin, so the card names the file, what it is and that it
+cannot come back -- the answer every desktop gives only for a
+PERMANENT delete, which is the only kind here.
+
 ## File operations are child processes, not loops inside the window
 
 F5 spawns `/bin/cp`, F8 spawns `/bin/rm`, and `on_tick()` reaps them

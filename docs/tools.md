@@ -2745,7 +2745,10 @@ window without going through it will find its layout polls timing out.
   (`BTN`, one table mapping a name to its strip -- the nav buttons, the
   command bar or the status bar's view switch -- and its index there),
   and drop-down rows by the row rects the menu itself logs
-  (`view_pick()`), never by pitch. **Run by `ondemand_sweep.py --only files`, not
+  (`view_pick()`), never by pitch. F7, F2 and Ctrl+Shift+N are checked
+  as IN-PLACE edits (the app's `renaming` line); the Options window is
+  driven to "Rename in a dialog" to check that F2 then asks, and back to
+  Defaults for what follows. **Run by `ondemand_sweep.py --only files`, not
   `gui_regress.py`** (moved 2026-09-29): it is the slowest GUI tool by far
   and carried two standing reds, so run it after touching the File
   Manager or `userland/fm/`. **A check runs only after its prerequisite**:

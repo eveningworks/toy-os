@@ -91,7 +91,7 @@ enum {
     CMD_SORT_NAME, CMD_SORT_MODIFIED, CMD_SORT_TYPE, CMD_SORT_SIZE,
     CMD_SORT_ASC, CMD_SORT_DESC,
     CMD_VIEW_LARGE, CMD_VIEW_DPANE,
-    CMD_SELECT_ALL,
+    CMD_SELECT_ALL, CMD_OPTIONS,
 };
 
 // The dialog's answers. ONE widget serves both questions the app asks
@@ -100,9 +100,9 @@ enum {
 enum {
     DLG_OVERWRITE = 1, DLG_OVERWRITE_ALL, DLG_SKIP, DLG_SKIP_ALL,
     DLG_RENAME, DLG_RENAME_ALL, DLG_CANCEL,
-    DLG_DELETE,
+    DLG_DELETE, DLG_OK,
 };
-enum dialog_kind { DIALOG_NONE, DIALOG_CONFLICT, DIALOG_DELETE };
+enum dialog_kind { DIALOG_NONE, DIALOG_CONFLICT, DIALOG_DELETE, DIALOG_PROMPT };
 extern enum dialog_kind g_dialog_kind;
 
 // --- navigation history, per pane (fm_history.c) ---------------------
@@ -173,6 +173,28 @@ extern struct uui_button g_dp_open, g_dp_props;
 void search_apply(void);         // re-filter the active pane by g_search
 void search_clear(void);
 void path_sync(void);            // breadcrumb, places and placeholder follow the active pane
+
+// --- Options (fm_options.c) -------------------------------------------------
+//
+// The File Manager's own preferences, in FILES_CONF beside the rest of its
+// state, edited in a window of its own (See more > Options). Explorer's
+// Folder Options and Dolphin's Configure dialog are the same idea.
+enum { FM_START_LAST, FM_START_HOME, FM_START_ROOT };
+enum { FM_VIEW_ICONS, FM_VIEW_LARGE, FM_VIEW_DETAILS };
+struct fm_options {
+    int start;           // FM_START_*
+    int single_click;    // a click opens, not a double click
+    int view;            // FM_VIEW_* -- what a new window shows
+    int thumbs;          // pictures show themselves
+    int hidden;          // names that start with a dot are listed
+    int extensions;      // "dusk.jpg", not "dusk"
+    int rename_dialog;   // F2 asks in a dialog rather than editing in place
+    int confirm_delete;  // Delete asks first
+};
+extern struct fm_options g_opt;
+void options_load(void);           // from FILES_CONF, defaults for what is missing
+void options_apply(void);          // to both panes, now
+void options_open(struct uapp *a); // the window
 
 // --- the details pane (fm_details.c) --------------------------------------
 int  details_width(int cw);
@@ -266,10 +288,14 @@ void do_drop(struct uui_fileview *src, const char *dest, int copy);
 // A drop from ANOTHER window: the files are in the drag slot (lib/uclip.h).
 void do_drop_extern(const char *dest, int copy);
 void do_delete(void);     // opens the dialog; commit_delete() acts
+void delete_picture(void);   // the delete card's picture, again (a thumbnail landed)
 void commit_delete(void);
 void commit_mkdir(const char *name);
 void commit_newfile(const char *name);
 void commit_rename(const char *name);
+// The in-place rename's answer: the file called `from` in the active
+// pane's folder becomes `to` (names, not paths).
+void commit_rename_named(const char *from, const char *to);
 int  poll_job(void);
 
 // --- the worker, and the question it can ask --------------------------
@@ -305,8 +331,7 @@ enum modal_kind { MODAL_NONE, MODAL_PROMPT };
 extern enum modal_kind g_modal;
 
 void open_prompt(int cmd, const char *title, const char *initial);
-int  modal_key(struct uapp *a, int key);
-void draw_modal(struct ugfx_surface *s);
+void answer_prompt(int code);
 
 // --- layout and drawing (fm_view.c) ----------------------------------
 

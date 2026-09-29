@@ -1,87 +1,86 @@
-// The app's own modal: Rename and New folder -- the two prompts with a
-// text field. (The delete confirmation is a uui_dialog, in files.c.)
+// The name prompt: Rename, New folder and New text file when Options
+// says "in a dialog" -- the card dialog (ui/uui_dialog.h) with a text
+// field as its body. The in-place rename is the fileview's own
+// (uui_fileview_begin_rename) and does not come here.
 //
 // One of the File Manager's units -- see fm_internal.h for what is
 // where and why these share their state directly.
 #include "fm_internal.h"
+#include "ui/uui_dialog.h"
 #include "ui/utheme.h"
-#include "keyboard.h"
+#include "lib/icon_cache.h"
+#include "lib/ufiletype.h"
 #include <string.h>
 #include <stdio.h>
 
-// --- the modal ---------------------------------------------------------
-//
-// Its own, in this window, exactly as Notepad's dialog is: a client
-// cannot open a WM-level dialog (there is no such request). Not a
-// uui_dialog because that widget has no text field; the day it grows
-// one, this file goes.
+// Up while the prompt is. Kept as a flag of its own because the input
+// code gates on "is something modal up" in several places.
 enum modal_kind g_modal;
-static char g_modal_title[64];
-static struct uui_textbox g_modal_field;
+static struct uui_textbox g_field;
+static struct uui_item g_field_item = { .ops = &uui_textbox_ops, .widget = &g_field,
+                                        .name = "prompt" };
 static int g_modal_cmd;          // what to do when it commits
-
-// --- commands ---------------------------------------------------------
+static char g_modal_row[UUI_FILEVIEW_PATH_MAX + 24];
+static const char *const g_modal_rows[] = { g_modal_row };
 
 void open_prompt(int cmd, const char *title, const char *initial) {
     g_modal = MODAL_PROMPT;
     g_modal_cmd = cmd;
-    strlcpy(g_modal_title, title, sizeof g_modal_title);
-    uui_textbox_init(&g_modal_field, initial ? initial : "");
-    uui_textbox_set_active(&g_modal_field, 1);
+    g_dialog_kind = DIALOG_PROMPT;
+
+    uui_textbox_init(&g_field, initial ? initial : "");
+    uui_textbox_set_active(&g_field, 1);
+    // The name, not the extension (a rename); everything else starts
+    // selected so typing replaces it.
+    int n = (int)strlen(g_field.buf), stem = n;
+    const char *dot = strrchr(g_field.buf, '.');
+    if (cmd != CMD_MKDIR && dot && dot != g_field.buf) stem = (int)(dot - g_field.buf);
+    uui_textbox_select(&g_field, 0, stem);
+
+    // What it is about, under the title: the file being renamed, or
+    // where the new one goes.
+    const char *about = uui_fileview_dir(active());
+    if (cmd == CMD_RENAME)
+        snprintf(g_modal_row, sizeof g_modal_row, "%s -- %s", initial,
+                 ufiletype_name(initial, uui_fileview_selected_is_dir(active())));
+    else
+        snprintf(g_modal_row, sizeof g_modal_row, "in %s", about);
+
+    static const struct uui_dialog_button rename_btns[] = {
+        { "Cancel", DLG_CANCEL, 0 }, { "Rename", DLG_OK, UUI_DLG_PRIMARY },
+    };
+    static const struct uui_dialog_button create_btns[] = {
+        { "Cancel", DLG_CANCEL, 0 }, { "Create", DLG_OK, UUI_DLG_PRIMARY },
+    };
+    uui_dialog_open(&g_dialog, title, g_modal_rows, 1,
+                    cmd == CMD_RENAME ? rename_btns : create_btns, 2, 1, DLG_CANCEL);
+    int fh;
+    uui_textbox_natural_size(&g_field, 0, &fh);
+    uui_dialog_set_body(&g_dialog, &g_field_item, ugfx_char_w() * 30, fh);
+    uui_dialog_focus(&g_dialog, &g_field_item);
+
+    const char *icon = cmd == CMD_MKDIR ? "folder"
+                     : cmd == CMD_NEW_FILE ? "file-text"
+                     : ufiletype_icon(initial, uui_fileview_selected_is_dir(active()));
+    // The file's own picture when a thumbnail is ready, as on the delete
+    // card; its type's icon otherwise.
+    const struct uimg *pic = 0;
+    const struct sys_dirent *e = cmd == CMD_RENAME ? uui_fileview_selected_entry(active()) : 0;
+    if (e && !e->is_dir && g_opt.thumbs)
+        pic = pane_thumb(0, uui_fileview_dir(active()), e, ugfx_char_h() * 4);
+    uui_dialog_set_picture(&g_dialog, pic ? pic : icon_get(icon, ugfx_char_h() * 4));
 }
 
-// --- the modal's own input --------------------------------------------
-
-int modal_key(struct uapp *a, int key) {
-    if (g_modal == MODAL_NONE) return 0;
-
-    if (key == 0x1B) { g_modal = MODAL_NONE; set_note("cancelled"); uapp_redraw(a); return 1; }
-
-    if (key == '\n' || key == '\r') {
-        int cmd = g_modal_cmd;
-        char text[UUI_TEXTBOX_MAX];
-        strlcpy(text, uui_textbox_text(&g_modal_field), sizeof text);
-        // Closed BEFORE the action runs: an action that opens another
-        // modal (or logs) must not find this one still up.
-        g_modal = MODAL_NONE;
-        if (cmd == CMD_MKDIR) commit_mkdir(text);
-        else if (cmd == CMD_RENAME) commit_rename(text);
-        else if (cmd == CMD_NEW_FILE) commit_newfile(text);
-        uapp_redraw(a);
-        return 1;
-    }
-
-    if (uui_textbox_key(&g_modal_field, key)) uapp_redraw(a);
-    return 1; // modal: swallow everything else
-}
-
-// The modal's box, centred. Derived, never constant: every size here
-// comes from the font (docs/gui-guidelines.md).
-static void modal_rect(int cw, int ch, int *x, int *y, int *w, int *h) {
-    int pad = utheme_pad();
-    int lines = 3;
-    *w = cw * 3 / 4;
-    *h = pad * 2 + lines * (ugfx_char_h() + utheme_gap()) + utheme_control_h();
-    *x = (cw - *w) / 2;
-    *y = (ch - *h) / 2;
-}
-
-void draw_modal(struct ugfx_surface *s) {
-    if (g_modal == MODAL_NONE) return;
-
-    int x, y, w, h;
-    modal_rect(s->w, s->h, &x, &y, &w, &h);
-    int pad = utheme_pad(), lh = ugfx_char_h() + utheme_gap();
-
-    ugfx_fill_rect(s, x, y, w, h, UTHEME_PANEL_BG);
-    ugfx_draw_rect(s, x, y, w, h, UTHEME_BORDER);
-    ugfx_draw_string_clipped(s, x + pad, y + pad, w - pad * 2, g_modal_title,
-                              UTHEME_TEXT, UTHEME_PANEL_BG);
-
-    uui_textbox_set_geometry(&g_modal_field, x + pad, y + pad + lh,
-                              w - pad * 2, utheme_control_h());
-    uui_textbox_draw(s, &g_modal_field);
-    ugfx_draw_string_clipped(s, x + pad, y + pad + lh + utheme_control_h() + utheme_gap(),
-                              w - pad * 2, "Enter = ok, Esc = cancel",
-                              UTHEME_TEXT, UTHEME_PANEL_BG);
+// The dialog answered. Called from files.c's answer_dialog() with the
+// button's code; the field is read before it is taken down.
+void answer_prompt(int code) {
+    int cmd = g_modal_cmd;
+    char text[UUI_TEXTBOX_MAX];
+    strlcpy(text, uui_textbox_text(&g_field), sizeof text);
+    g_modal = MODAL_NONE;
+    uui_dialog_set_body(&g_dialog, NULL, 0, 0);
+    if (code != DLG_OK) { set_note("cancelled"); return; }
+    if (cmd == CMD_MKDIR) commit_mkdir(text);
+    else if (cmd == CMD_RENAME) commit_rename(text);
+    else if (cmd == CMD_NEW_FILE) commit_newfile(text);
 }

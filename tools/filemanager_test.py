@@ -95,6 +95,7 @@ STRIP_COUNT = {"nav": 4, "tb": 12, "vb": 2}
 # The View drop-down's rows, separators counted (files.c's view_items).
 VIEW_ROW = {"large": 0, "icons": 1, "details": 2, "dpane": 4, "panes": 5, "tree": 6}
 NEW_ROW = {"folder": 0, "file": 1}
+MORE_ROW = {"options": 8}   # files.c's more_items, separators counted
 K_INSERT = "0xb3"
 K_HOME = "0x97"
 K_F2, K_F5, K_F6, K_F7, K_F8 = "0x9a", "0xac", "0xad", "0xae", "0xaf"
@@ -158,6 +159,7 @@ class Layout:
         self.dpsel = None     # the name the details pane describes, "-" for the folder
         self.status = None    # (items text, selection text)
         self.searching = None # does the search box have the keyboard
+        self.renaming = None  # (pane 0, pane 1, the active field's text)
         self.treesel = None   # (selected node's path, visible tree rows)
         self.treerow = {}     # visible tree row -> the node's path
         self.drag = None      # (in flight, count, copy) -- a drag session
@@ -267,6 +269,8 @@ class Layout:
             self.placesel = int(p[1])
         elif p[0] == "search" and len(p) >= 5:
             self.searchbox = [int(v) for v in p[1:5]]
+        elif p[0] == "renaming" and len(p) >= 4:
+            self.renaming = (int(p[1]), int(p[2]), " ".join(p[3:]))
         elif p[0] == "searching" and len(p) >= 2:
             self.searching = int(p[1])
         elif p[0] == "status":
@@ -968,9 +972,13 @@ def run(dbg, qmp, tmp, res):
               f"{victim!r} still in {gone}")
 
     # --- 7. a new directory --------------------------------------------
+    # IN PLACE by default (Options): F7 makes "New folder" and its name
+    # becomes the field, all of it selected so typing replaces it.
     dbg.key(K_F7)
-    lay = wait_layout(dbg, win, lambda l: l.modal == 1) or lay
-    res.check("F7 asks for a name", lay.modal == 1, f"modal {lay.modal}")
+    lay = wait_layout(dbg, win, lambda l: l.renaming and l.renaming[1] == 1) or lay
+    res.check("F7 makes a New folder and edits its name in place",
+              lay.renaming is not None and lay.renaming[1] == 1 and lay.renaming[2] == "New folder",
+              f"renaming={lay.renaming}")
     # settle=True (the default) for every typed character: sent
     # back-to-back with settle=False they outrun the client, and the
     # field commits empty -- which reads exactly like a broken mkdir.
@@ -979,12 +987,14 @@ def run(dbg, qmp, tmp, res):
     dbg.key(K_ENTER)
     made = wait_listing(dbg, DST, lambda n: "newdir" in n)
     res.check("typing a name and pressing Enter creates the directory",
-              "newdir" in made, f"{DST} holds {made}")
+              "newdir" in made and "New folder" not in made, f"{DST} holds {made}")
 
     # --- 8. rename ------------------------------------------------------
     lay = wait_layout(dbg, win, lambda l: l.selected == "newdir") or lay
     dbg.key(K_F2)
-    lay = wait_layout(dbg, win, lambda l: l.modal == 1) or lay
+    lay = wait_layout(dbg, win, lambda l: l.renaming and l.renaming[1] == 1) or lay
+    res.check("F2 edits the name in place, holding the current one",
+              lay.renaming is not None and lay.renaming[2] == "newdir", f"renaming={lay.renaming}")
     # The field is pre-filled with the current name, so clear it first.
     for _ in range(8):
         dbg.key(K_BACKSPACE)
@@ -994,6 +1004,14 @@ def run(dbg, qmp, tmp, res):
     renamed = wait_listing(dbg, DST, lambda n: "renamed" in n)
     res.check("F2 renames the selection", "renamed" in renamed and "newdir" not in renamed,
               f"{DST} holds {renamed}")
+
+    # Ctrl+Shift+N is Explorer's New folder; Esc keeps the default name.
+    dbg.key("0x0e", mods="shift ctrl")
+    lay = wait_layout(dbg, win, lambda l: l.renaming and l.renaming[1] == 1) or lay
+    dbg.key(K_ESC)
+    made = wait_listing(dbg, DST, lambda n: "New folder" in n)
+    res.check("Ctrl+Shift+N makes a New folder too", "New folder" in made, f"{DST} holds {made}")
+    # (Left in DST: the teardown removes the whole fixture.)
 
     # --- 9. an association opens the right app --------------------------
     dbg.click(*lay.pane_centre(0))
@@ -1509,15 +1527,23 @@ def run(dbg, qmp, tmp, res):
 
     # --- 13b. the verbs on the command bar --------------------------------
     # The proof the command bar works is that the commands do what their
-    # keys do: New > Folder must open the same prompt F7 opens, and
-    # Delete the same confirm F8 opens.
+    # keys do: New > Folder must do what F7 does, and Delete open the
+    # same confirm F8 opens.
     lay = wait_layout(dbg, win, strips_complete) or lay
     dropdown_pick(dbg, qmp, win, lay, "new", NEW_ROW["folder"], res, "New > Folder")
-    lay = wait_layout(dbg, win, lambda l: l.modal not in (None, 0)) or lay
-    res.check("the command bar's New > Folder opens the same prompt F7 does",
-              lay.modal not in (None, 0), f"modal={lay and lay.modal}")
+    lay = wait_layout(dbg, win, lambda l: l.renaming and 1 in l.renaming[:2]) or lay
+    res.check("the command bar's New > Folder does what F7 does",
+              lay.renaming is not None and lay.renaming[2] == "New folder",
+              f"renaming={lay and lay.renaming}")
     dbg.key(K_ESC)
-    lay = wait_layout(dbg, win, lambda l: l.modal == 0) or lay
+    # It made a real folder, here at the root: delete it again (F8, and
+    # Enter takes the default, Delete).
+    lay = wait_layout(dbg, win, lambda l: l.selected == "New") or lay
+    dbg.key(K_F8)
+    lay = wait_layout(dbg, win, lambda l: l.dialog == 1) or lay
+    dbg.key(K_ENTER)
+    gone = wait_listing(dbg, "/", lambda n: "New folder" not in n)
+    res.check("(...and it is deleted again)", "New folder" not in gone, f"/ holds {gone}")
 
     # Delete needs something selected. SEEKED, not clicked: the pane's
     # centre is below the last row in a short directory, so the click
@@ -1681,6 +1707,77 @@ def run(dbg, qmp, tmp, res):
               lay.status[1].startswith("1 item selected"),
               f"status={lay.status}")
 
+    # --- 13f. Options ----------------------------------------------------
+    # A window of its own (See more > Options). Switching Rename to "In a
+    # dialog" must make F2 ASK, with a field -- the other half of the
+    # in-place checks above -- and Defaults then puts it back.
+    def opt_rect(key):
+        for line in reversed(dbg.logs(f"options: layout {key} ", clear=False)):
+            try:
+                return [int(v) for v in line.split(f"layout {key} ", 1)[1].split()[:4]]
+            except ValueError:
+                return None
+        return None
+
+    def open_options():
+        dropdown_pick(dbg, qmp, win, last_layout() or lay, "more", MORE_ROW["options"], res,
+                      "See more > Options")
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            ow = [w2 for w2 in dbg.windows() if w2["title"] == "File Manager Options"]
+            if ow and opt_rect("pages"):
+                return ow[-1]
+            time.sleep(0.3)
+        return None
+
+    ow = open_options()
+    res.check("See more > Options opens the Options window", ow is not None,
+              f"windows {[w2['title'] for w2 in dbg.windows()]}")
+    if ow:
+        oc = ow["content"]
+        pg = opt_rect("pages")
+        # The third page, "Rename and delete", at the row pitch the sidebar
+        # reports (`pages.row_h`), never a guessed one.
+        rh = None
+        for line in reversed(dbg.logs("options: layout pages.row_h ", clear=False)):
+            rh = int(line.split("pages.row_h", 1)[1].split()[0])
+            break
+        rh = rh or 20
+        dbg.send(f"gui click {oc['x'] + pg[0] + 30} {oc['y'] + pg[1] + 2 * rh + rh // 2}")
+        dbg.settle(0.6)
+        sl = opt_rect("rename.slot 1")
+        ok = opt_rect("ok")
+        if sl and ok:
+            dbg.send(f"gui click {oc['x'] + sl[0] + sl[2] // 2} {oc['y'] + sl[1] + sl[3] // 2}")
+            dbg.settle(0.4)
+            dbg.send(f"gui click {oc['x'] + ok[0] + ok[2] // 2} {oc['y'] + ok[1] + ok[3] // 2}")
+            dbg.settle(1.0)
+        conf = dbg.send(f"sh cat {FILES_CONF}") or ""
+        res.check("OK writes the choice to /etc/files.conf", "rename=dialog" in conf,
+                  f"conf: {conf!r}")
+        dbg.key(K_HOME)
+        dbg.key(K_DOWN)
+        lay = wait_layout(dbg, win, lambda l: l.selected not in (None, "-")) or lay
+        dbg.key(K_F2)
+        lay = wait_layout(dbg, win, lambda l: l.dialog == 1 and l.modal == 1) or lay
+        res.check("...and F2 then asks in a dialog, with the name in a field",
+                  lay.dialog == 1 and lay.modal == 1 and
+                  (lay.renaming is None or lay.renaming[:2] == (0, 0)),
+                  f"dialog={lay.dialog} modal={lay.modal} renaming={lay.renaming}")
+        dbg.key(K_ESC)
+        lay = wait_layout(dbg, win, lambda l: l.dialog == 0) or lay
+        # Defaults, and OK: the in-place rename is back for what follows.
+        ow = open_options()
+        df, ok = opt_rect("defaults"), opt_rect("ok")
+        if ow and df and ok:
+            oc = ow["content"]
+            dbg.send(f"gui click {oc['x'] + df[0] + df[2] // 2} {oc['y'] + df[1] + df[3] // 2}")
+            dbg.settle(0.4)
+            dbg.send(f"gui click {oc['x'] + ok[0] + ok[2] // 2} {oc['y'] + ok[1] + ok[3] // 2}")
+            dbg.settle(1.0)
+        conf = dbg.send(f"sh cat {FILES_CONF}") or ""
+        res.check("Defaults puts Rename back in place", "rename=inplace" in conf, f"conf: {conf!r}")
+
     # --- 14. the context menu, and Properties ---------------------------
     # A SECONDARY click inside a pane. Two things a broken version would
     # still pass if they were not both asserted: that the menu opened at
@@ -1690,8 +1787,13 @@ def run(dbg, qmp, tmp, res):
     lay = wait_layout(dbg, win, lambda l: 0 in l.pane and l.rows.get(0, 0) > 2) or lay
     px, py, pw, _ = lay.pane[0]
     row_h = lay.rowh or (lay.treebox[4] if lay.treebox else 16)
-    # Row 2 of the listing: past "..", and not whatever is selected now.
+    # The first entry past ".." (table index 1, drawn under the column
+    # header). Home first puts the selection on ".." (reported as "-"):
+    # a right-click on the row that is ALREADY selected cannot show that
+    # it selected anything, and an earlier section may have left it there.
     target = (ox + px + pw // 2, oy + py + row_h * 2 + row_h // 2)
+    dbg.key(K_HOME)
+    lay = wait_layout(dbg, win, lambda l: l.selected == "-") or lay
     before_sel = lay.selected
     sure_rclick(dbg, qmp, *target)
     lay = wait_layout(dbg, win, lambda l: l.ctx == 1 and l.ctxbox) or lay

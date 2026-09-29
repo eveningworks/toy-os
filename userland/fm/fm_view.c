@@ -293,6 +293,9 @@ void log_layout(void) {
     }
     uapp_logf_layout("files: layout selected %s\n", sel ? sel : "-");
     uapp_logf_layout("files: layout modal %d\n", (int)g_modal);
+    // An in-place rename, per pane, and what its field holds.
+    uapp_logf_layout("files: layout renaming %d %d %s\n", g_pane[0].renaming, g_pane[1].renaming,
+                     active()->renaming ? uui_textbox_text(&active()->rename_box) : "-");
     // The status bar's note, which is where a refusal is said.
     uapp_logf_layout("files: layout note %s\n", g_stat_note);
     // Which address bar is being edited, -1 for none -- and its text,
@@ -370,12 +373,9 @@ void on_draw(struct uapp *a, struct uapp_draw *d) {
 }
 
 void on_draw_over(struct uapp *a, struct uapp_draw *d) {
-    (void)a;
-    // ONLY the modal may live here: on_draw_over runs after the
-    // router's overlay pass, so anything drawn from it sits on top of
-    // an open menu. The active-pane outline moved into the widget for
-    // exactly that reason (uui_fileview.h's active_mark).
-    draw_modal(d->surface);
+    (void)a; (void)d;
+    // Nothing: the prompts are uui_dialog now, drawn by the router, and
+    // anything drawn here would sit on top of an open menu.
 }
 
 // Which VISIBLE pane holds this point, or -1. The pane's RECT, so a
