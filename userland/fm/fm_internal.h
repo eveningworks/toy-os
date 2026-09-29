@@ -117,7 +117,7 @@ void fm_history_record(int pane, const char *dir);
 // fm_history.c for why that is cheaper than keeping a list of call
 // sites complete.
 void fm_history_sync(void);
-int  fm_history_back(int pane);
+int  fm_history_back(int pane);      // 1 moved, 0 nowhere to go, -1 all gone
 int  fm_history_forward(int pane);
 int  fm_history_can_back(int pane);
 int  fm_history_can_forward(int pane);

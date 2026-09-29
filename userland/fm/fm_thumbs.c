@@ -94,12 +94,14 @@ static unsigned long long g_batch_t0;
 // inside its PNGs. QOI has nowhere to put one.
 //
 // Refused when the result will not fit sys_dirent's 64-byte name, which
-// is what cache_sweep() lists through; that file is thumbnailed in
-// memory only.
+// is what cache_sweep() lists through, and for a source with a '%' in
+// it, which would read back as a '/' (`/a%b` and `/a/b` would share a
+// file); either is thumbnailed in memory only.
 static int cache_path(const char *src, int px, char *out, int cap) {
     char m[64];
     size_t n = 0;
     for (const char *p = src; *p; p++) {
+        if (*p == '%') return 0;
         if (*p == '/' && n == 0) continue;   // no leading '%'
         if (n + 1 >= sizeof m) return 0;
         m[n++] = (*p == '/') ? '%' : *p;
@@ -130,23 +132,53 @@ static int cache_fresh(const char *cache, uint64_t src_epoch) {
 // its file, so this evicts by age rather than by use -- an
 // approximation, and the cheap one: recording a use would mean writing
 // to the disk on every cache hit.
+//
+// PAGED: one sys_listdir() returns at most SYS_LISTDIR_MAX names, fewer
+// than THUMB_CACHE_MAX, so a single listing could never see enough files
+// to evict any. A pass counts them and keeps the THUMB_SWEEP_EVERY
+// oldest; passes repeat while the excess is larger (a cache that grew
+// before this bound held), and stop when a pass removes nothing.
+struct sweep_victim { uint64_t epoch; char name[sizeof ((struct sys_dirent *)0)->name]; };
+
+static int sweep_pass(struct sys_dirent *e, struct sweep_victim *old) {
+    int files = 0, kept = 0, newest = 0;   // `newest`: the kept one to replace next
+    for (int start = 0;; ) {
+        int n = sys_listdir_at(THUMB_CACHE_DIR, e, SYS_LISTDIR_MAX, start);
+        if (n <= 0) break;
+        for (int i = 0; i < n; i++) {
+            if (e[i].is_dir) continue;
+            files++;
+            uint64_t t = cal_rtc_to_epoch(&e[i].modified);
+            if (kept == THUMB_SWEEP_EVERY && t >= old[newest].epoch) continue;
+            int slot = kept < THUMB_SWEEP_EVERY ? kept++ : newest;
+            old[slot].epoch = t;
+            strlcpy(old[slot].name, e[i].name, sizeof old[slot].name);
+            for (int k = 0; k < kept; k++)
+                if (old[k].epoch > old[newest].epoch) newest = k;
+        }
+        start += n;
+        if (n < SYS_LISTDIR_MAX) break;
+    }
+    // Oldest first, so an excess smaller than `kept` spares the newest.
+    int removed = 0;
+    for (int drop = files - THUMB_CACHE_MAX; drop > 0 && kept > 0; drop--) {
+        int o = 0;
+        for (int k = 1; k < kept; k++)
+            if (old[k].epoch < old[o].epoch) o = k;
+        char p[THUMB_CACHE_PATH];
+        if (k_path_join(THUMB_CACHE_DIR, old[o].name, p, sizeof p) && sys_unlink(p) >= 0)
+            removed++;
+        old[o] = old[--kept];
+    }
+    return files - removed > THUMB_CACHE_MAX && removed > 0;   // go again
+}
+
 static void cache_sweep(void) {
     struct sys_dirent *e = malloc(sizeof *e * SYS_LISTDIR_MAX);
-    if (!e) return;
-    int n = sys_listdir(THUMB_CACHE_DIR, e, SYS_LISTDIR_MAX);
-    for (int drop = n - THUMB_CACHE_MAX; drop > 0; drop--) {
-        int old = -1;
-        for (int i = 0; i < n; i++) {
-            if (!e[i].name[0] || e[i].is_dir) continue;
-            if (old < 0 || cal_rtc_to_epoch(&e[i].modified) <
-                           cal_rtc_to_epoch(&e[old].modified)) old = i;
-        }
-        if (old < 0) break;
-        char p[THUMB_CACHE_PATH];
-        if (k_path_join(THUMB_CACHE_DIR, e[old].name, p, sizeof p))
-            sys_unlink(p);
-        e[old].name[0] = '\0';
-    }
+    struct sweep_victim *old = malloc(sizeof *old * THUMB_SWEEP_EVERY);
+    if (e && old)
+        while (sweep_pass(e, old)) {}
+    free(old);
     free(e);
 }
 

@@ -1628,6 +1628,52 @@ def run(dbg, qmp, tmp, res):
               lay.dir.get(0) == (dir0 or SRC) and lay.pathedit == 0,
               f"dir0={lay.dir.get(0)} path.editing={lay.pathedit}")
 
+    # --- 13d2. Back over a deleted directory; the tree shown deep -------
+    # Back into a directory deleted since it was visited steps OVER it and
+    # says so. The tree shown while the pane is deep opens to it: the
+    # path is one nothing else here visits, because a top-level one (or
+    # an ancestor left open by an earlier step) passes either way.
+    def goto(path):
+        dbg.key(K_CTRL_L)
+        wait_layout(dbg, win, lambda l: l.pathedit == 1)
+        type_path(path)
+        dbg.key(K_ENTER)
+        return wait_layout(dbg, win, lambda l: l.dir.get(0) == path) or layout_now(dbg, win)
+
+    home = lay.dir.get(0) or SRC
+    gone = f"{SRC}/gone"
+    dbg.send(f"sh mkdir {gone}")
+    goto(f"{SRC}/sub")
+    goto(gone)
+    goto(home)
+    dbg.send(f"sh rm -r {gone}")
+    dbg.key(K_LEFT, mods="alt")
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) != home) or layout_now(dbg, win) or lay
+    res.check("Back steps over a directory deleted since it was visited, and says so",
+              lay.dir.get(0) == f"{SRC}/sub" and "gone" in (lay.note or ""),
+              f"dir0={lay.dir.get(0)} note={lay.note!r}")
+    dbg.key(K_RIGHT, mods="alt")
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == home) or layout_now(dbg, win) or lay
+    res.check("...and Forward steps over it the other way",
+              lay.dir.get(0) == home, f"dir0={lay.dir.get(0)} note={lay.note!r}")
+
+    deep = "/bin/wm/system"
+    tree_was = bool(lay.view and lay.view[3] == 1)
+    if tree_was:
+        view_pick(dbg, qmp, win, last_layout() or lay, "tree", res)
+        wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0)
+    goto(deep)
+    view_pick(dbg, qmp, win, last_layout() or lay, "tree", res)
+    lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 1 and
+                      l.treesel and l.treesel[0] == deep) or layout_now(dbg, win) or lay
+    res.check("showing the tree opens it to the active pane's directory, however deep",
+              lay.treesel is not None and lay.treesel[0] == deep,
+              f"dir0={lay.dir.get(0)} treesel={lay.treesel}")
+    if not tree_was:
+        view_pick(dbg, qmp, win, last_layout() or lay, "tree", res)
+        wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0)
+    lay = goto(home) or lay
+
     # --- 13e. the breadcrumb, Places, search and the details pane --------
     # Each asserted on the DIRECTORY or the ROWS the app reports after, and
     # each with the geometry the widget itself logged -- never a pitch.

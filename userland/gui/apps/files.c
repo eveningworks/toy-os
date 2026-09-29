@@ -674,10 +674,10 @@ void do_command(struct uapp *a, int code) {
         options_open(a);
         break;
     case CMD_BACK:
-        if (!fm_history_back(g_active)) set_note("nothing to go back to");
+        if (fm_history_back(g_active) == 0) set_note("nothing to go back to");
         break;
     case CMD_FORWARD:
-        if (!fm_history_forward(g_active)) set_note("nothing to go forward to");
+        if (fm_history_forward(g_active) == 0) set_note("nothing to go forward to");
         break;
     case CMD_UP:
         fm_goto_up(g_active);
@@ -771,10 +771,7 @@ void do_command(struct uapp *a, int code) {
         break;
     case CMD_VIEW_TREE:
         g_tree_on = !g_tree_on;
-        if (g_tree_on) {
-            tree_rebuild();
-            tree_select_path(uui_fileview_dir(active()));
-        }
+        if (g_tree_on) tree_reveal_path(uui_fileview_dir(active()));
         uconf_set(FILES_CONF, "tree", g_tree_on ? "1" : "0");
         g_seen_generation = sys_fs_generation();
         break;
@@ -1611,10 +1608,7 @@ int main(int argc, char **argv) {
     // app with an explicit argument does not silently rewrite the
     // remembered pair -- an argument is a statement about this launch.
     for (int i = 0; i < 2; i++) g_pane[i].on_dir_changed = on_pane_dir;
-    if (g_tree_on) {
-        tree_rebuild();
-        tree_select_path(uui_fileview_dir(active()));
-    }
+    if (g_tree_on) tree_reveal_path(uui_fileview_dir(active()));
     // ASKED ONCE AT STARTUP: the broadcast only fires on a CHANGE, so an
     // app that opens after somebody else copied would show Paste greyed
     // until the next one.

@@ -16,6 +16,7 @@
 // visited 32 directories does not want the 33rd-from-last back.
 #include "fm_internal.h"
 #include "ui/uui_fileview.h"
+#include "kpath.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -61,23 +62,36 @@ int fm_history_can_forward(int pane) {
     return pane >= 0 && pane <= 1 && g_hist[pane].at + 1 < g_hist[pane].count;
 }
 
-// Move by one and put the pane there. Returns 0 when there is nowhere
-// to go, so a caller can say so rather than silently doing nothing.
+// Move by one and put the pane there. Returns 1 on arriving, 0 when
+// there is nowhere to go, -1 when every entry that way has gone away.
+//
+// A DIRECTORY THAT HAS GONE AWAY since it was visited is STEPPED OVER,
+// checked before the pane moves: set_dir() on it would leave the pane
+// showing a dead path as an empty folder (ui/uui_fileview.h). The entry
+// stays, because it may exist again by the time Back comes past.
 static int go(int pane, int delta) {
     if (pane < 0 || pane > 1) return 0;
     struct pane_history *h = &g_hist[pane];
-    int want = h->at + delta;
-    if (want < 0 || want >= h->count) return 0;
-    h->at = want;
-    g_replaying = 1;
-    int ok = uui_fileview_set_dir(&g_pane[pane], h->dir[want]);
-    g_replaying = 0;
-    // A DIRECTORY THAT HAS GONE AWAY since it was visited leaves the
-    // pane empty (ui/uui_fileview.h). Stepping back over it rather than
-    // stranding the user there is what a browser does with a dead tab
-    // restore; the entry stays, because going the other way may still
-    // work.
-    return ok;
+    int dead = -1;
+    for (int want = h->at + delta; want >= 0 && want < h->count; want += delta) {
+        struct sys_stat st;
+        if (sys_stat(h->dir[want], &st) != 0 || !st.is_dir) {
+            if (dead < 0) dead = want;
+            continue;
+        }
+        h->at = want;
+        g_replaying = 1;
+        uui_fileview_set_dir(&g_pane[pane], h->dir[want]);
+        g_replaying = 0;
+        if (dead >= 0)
+            snprintf(g_stat_note, sizeof g_stat_note, "skipped %s -- it no longer exists",
+                     k_path_basename(h->dir[dead]));
+        return 1;
+    }
+    if (dead < 0) return 0;
+    snprintf(g_stat_note, sizeof g_stat_note, "no such folder: %s",
+             k_path_basename(h->dir[dead]));
+    return -1;
 }
 
 int fm_history_back(int pane)    { return go(pane, -1); }

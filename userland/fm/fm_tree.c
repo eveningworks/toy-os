@@ -78,8 +78,9 @@ void tree_select_path(const char *path) {
 }
 
 // Open every ANCESTOR of `path` (not the node itself), rebuild, select.
-// Called on a NAVIGATION and never on a toggle, which is what keeps it
-// from fighting a branch the user collapsed while standing in it: the
+// Called on a NAVIGATION and when the panel is shown, never on a node's
+// toggle, which is what keeps it from fighting a branch the user
+// collapsed while standing in it: the
 // collapse stays until the next directory change (Dolphin's folder
 // panel behaves this way; Explorer's "expand to current folder" is the
 // same, as an option).
