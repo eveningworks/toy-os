@@ -182,6 +182,11 @@ TOOLS = [
     ("sector4k",    "sector4k_test.py",        "GPT/TFS3/FAT32 on a 4K-sector disk", True,  None,                   False),
     ("nvme",        "nvme_test.py",            "root on NVMe, a 4K namespace, TRIM", True,  None,                   False),
     ("diskmark",    "diskmark_test.py",        "the Disk Mark GUI benchmark",        True,  None,                   True),
+    # OUT OF gui_regress.py since 2026-09-29, at the maintainer's request:
+    # ~150 checks and ~6 minutes, the slowest tool there by far, with two
+    # long-standing reds (docs/bugs.md) that made every suite run read as
+    # failing. Run it after touching the File Manager or userland/fm/.
+    ("files",       "filemanager_test.py",     "the File Manager: panes, marks, file ops", True, None,                 True),
     ("ls",          "ls_test.py",              "/bin/ls flags and the listing cap",  True,  None,                   False),
     ("fileop",      "fileop_test.py",          "lib/ufileop through cp/mv/rm",       True,  None,                   False),
     # ATTACHES to a running guest: it only types at the debug console and

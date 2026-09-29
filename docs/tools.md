@@ -2736,7 +2736,10 @@ window without going through it will find its layout polls timing out.
   timing out changes nothing about the app; and a respawned window
   inherits none of the old one's geometry. Seconds, no guest.
 - **`filemanager_test.py`** -- the File Manager: two panes, marking, and
-  real file operations. **A check runs only after its prerequisite**:
+  real file operations. **Run by `ondemand_sweep.py --only files`, not
+  `gui_regress.py`** (moved 2026-09-29): it is the slowest GUI tool by far
+  and carried two standing reds, so run it after touching the File
+  Manager or `userland/fm/`. **A check runs only after its prerequisite**:
   the view toggles are driven through `toolbar_click()`, which requires
   the item's reported rect, and a step whose prerequisite failed is
   printed as `SKIP` with the reason rather than attempted -- the

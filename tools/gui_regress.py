@@ -161,7 +161,6 @@ TOOLS = [
     ("network", "network_tray_test.py", "the tray network item: its state, panel and visibility"),
     ("modeset", "modeset_test.py", "a runtime resolution change: device, desktop and setting agree"),
     ("wallpaper", "wallpaper_mode_test.py", "fit vs fill, at a mode where they differ, and when the picture is decoded"),
-    ("files", "filemanager_test.py", "the File Manager: two panes, marks, and real file operations"),
     ("thumbcache", "thumbcache_test.py", "thumbnail decode rate, and the disk cache under it"),
     ("shortcut", "shortcut_test.py", "global keyboard shortcuts, and rebinding them"),
 ]
@@ -224,7 +223,6 @@ COST_S = {
     # forcequit from ~71s to ~35s (it waits on observable client death
     # now, not a real ping timeout), so notepad (~41s) is the straggler.
     "notepad": 41,     # the current ceiling -- slowest single tool
-    "files": 31,       # measured 2026-08-23, first run
     "forcequit": 35,
     "menubar": 32,
     "popup": 30,       # a resize, a drag, five settled frames
