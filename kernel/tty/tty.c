@@ -11,6 +11,7 @@
 // splitting.
 #include "tty_internal.h"
 #include "termkey.h"   // a key crosses a terminal as a sequence
+#include "keyboard.h"  // KEY_MOD_*, IS_PRINTABLE_KEY
 #include "scheduler.h"
 #include "signal.h"
 #include "signal_abi.h"
@@ -164,6 +165,16 @@ void tty_input(struct tty *t, uint8_t byte, uint8_t mods) {
     // there is no separate keysym queue, so it reached the compositor
     // too and every GUI client started seeing escape sequences.
     if (tty_bypassed(t)) { tty_ldisc_input(t, byte, mods); return; }
+
+    // **CTRL AND ALT ARE ENCODED HERE TOO, and only here** -- the keyboard
+    // delivers the key with its modifier bit (api/keyboard.h, "Ctrl and
+    // Alt"). A terminal has no code for Ctrl with a character that is not
+    // a letter, so that is dropped; Alt is readline's meta prefix, ESC
+    // then the key. Ctrl+letter arrives as its control code already, and
+    // a KEY_* special (an arrow, Alt+F4's F4) is never prefixed.
+    if (IS_PRINTABLE_KEY(byte) && (mods & KEY_MOD_CTRL)) return;
+    if ((mods & KEY_MOD_ALT) && !(byte >= KEY_ARROW_UP && byte <= KEY_PRINT_SCREEN))
+        tty_ldisc_input(t, 0x1B, mods);
 
     char seq[TERMKEY_MAX];
     int n = termkey_encode(byte, seq, sizeof seq);

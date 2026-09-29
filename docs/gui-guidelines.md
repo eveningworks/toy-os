@@ -442,10 +442,10 @@ the client's surfaces dismisses it and is consumed. Still pass
 `uui_menubar_set_bounds()` the content rect: it is the in-window
 fallback when no surface is granted. See `docs/decisions.md`.
 
-**Alt+letter mnemonics do not exist here and should not be added while
-Alt is an ESC prefix** (`api/keyboard.h`): Alt-F arrives as ESC then
-'f', which cannot be told from the Esc that closes the menu. `KEY_F10`
-focuses the bar instead -- Windows' own second binding.
+**Alt+letter mnemonics do not exist here yet.** They became possible
+when Alt stopped being an ESC prefix for windows (`api/keyboard.h`,
+"Ctrl and Alt"): Alt-F is now 'f' with `KEY_MOD_ALT`, distinct from
+Esc. `KEY_F10` focuses the bar -- Windows' own second binding.
 
 ## Closing a window: Esc doesn't, Alt+F4 does
 

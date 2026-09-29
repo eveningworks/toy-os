@@ -255,6 +255,19 @@
 // Modifier PRESSES arrive as WIN_EV_RAW_KEY, since the byte stream the
 // ordinary raw keys come from cannot carry them.
 #define WIN_EV_RAW_KEY_UP 28
+// Every key edge BY POSITION, for a registered compositor
+// (api/keyboard.h's keyboard_try_get_physical()): a = the evdev keycode
+// (abi/input_keys.h), b = 1 press / 0 release, mods = KEY_MOD_* after it.
+// No autorepeat, and a modifier changes nothing about the key reported.
+#define WIN_EV_RAW_KEY_PHYS 40
+// The same, delivered to the focused window when it set
+// WIN_HINT_PHYS_KEYS -- IN ADDITION to WIN_EV_KEY/KEY_UP, never instead:
+// text entry and shortcuts stay on those. SDL's scancode beside its text
+// event, Windows' WM_KEYDOWN beside WM_CHAR, Wayland's wl_keyboard.key.
+// A window that loses focus gets no releases for keys still held; it
+// treats WIN_EV_FOCUS a=0 as all of them coming up, as a Wayland client
+// does wl_keyboard.leave.
+#define WIN_EV_KEY_PHYS 41
 
 #define WIN_EV_RAW_WHEEL 12 // a: notches, + = up/away, - = down/toward.
                             // Separate from RAW_MOUSE because the
@@ -943,6 +956,10 @@ struct win_event {
 // widget app that blends must not say this; a game or a video decoder
 // that only stores pixels should.
 #define WIN_HINT_SCANOUT   0x04 // (0x02 is uapp's SINGLE_INSTANCE, sent as-is)
+// This window wants WIN_EV_KEY_PHYS as well as the translated keys. OPT-IN
+// because every key would otherwise cost every client a second event it
+// never reads.
+#define WIN_HINT_PHYS_KEYS 0x08
 
 // --- popup surfaces (WIN_REQ_POPUP) ------------------------------------
 //

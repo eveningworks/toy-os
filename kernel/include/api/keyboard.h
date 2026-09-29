@@ -39,11 +39,10 @@
 #define KEY_CTRL_ARROW_RIGHT  0xA3
 
 // F10 -- focuses an application's menu bar (ui/uui_menubar.h), which is
-// what it does on Windows and in KDE. It exists rather than Alt+letter
-// mnemonics because Alt is encoded terminal-style as an ESC PREFIX (see
-// "Ctrl and Alt" below), so Alt-F arrives as ESC then 'f' and cannot be
-// told apart from the Esc that has to close the menu. F10 has no such
-// ambiguity, and is the binding both of those desktops offer anyway.
+// what it does on Windows and in KDE. Alt+letter mnemonics are possible
+// now that Alt reaches a window as a bit (see "Ctrl and Alt" below) --
+// they were not while it was an ESC prefix -- but are not built; F10 is
+// the binding both of those desktops offer anyway.
 #define KEY_F10               0xA4
 
 // F4 -- exists for Alt+F4, which CLOSES the focused window. That is a
@@ -154,35 +153,41 @@
 
 // ---- Ctrl and Alt ----
 //
-// These do NOT get KEY_* codes of their own. They're encoded the way a
-// real terminal encodes them, which is what bash and every other
-// readline program already expect:
+// These do NOT get KEY_* codes of their own (Ctrl+Left/Right aside,
+// above). What a key with them held becomes depends on who reads it --
+// the split X11 and Wayland make between a keysym and a terminal's bytes:
 //
-//   Ctrl-<letter>  ->  the control code, 0x01-0x1A. Ctrl-A is 0x01,
-//                      Ctrl-E is 0x05, Ctrl-W is 0x17.
-//   Alt-<key>      ->  ESC (0x1B) followed by the key itself, so
-//                      Alt-B arrives as the two-byte sequence 0x1B 'b'.
-//                      This is readline's "meta prefix".
+//   A WINDOW (the compositor holds the keyboard):
+//     Ctrl-<letter>  ->  the control code, 0x01-0x1A (Ctrl-A is 0x01,
+//                        Ctrl-S 0x13), with KEY_MOD_CTRL set. Every
+//                        app's shortcuts are written against these.
+//     anything else  ->  THE KEY ITSELF with KEY_MOD_CTRL / KEY_MOD_ALT
+//                        in `mods`: Ctrl+1 is '1' + Ctrl, Alt-B is 'b' +
+//                        Alt. A character with either held is a SHORTCUT,
+//                        never text (ui/uui_widget.h's uui_key_is_shortcut).
+//
+//   A TERMINAL (kernel/tty/tty.c's tty_input(), and the GUI Terminal for
+//   its pty) encodes the way every terminal does:
+//     Ctrl-<letter>  ->  the control code, as above.
+//     Alt-<key>      ->  ESC (0x1B) then the key: readline's meta prefix,
+//                        so Alt-B is the two bytes 0x1B 'b'.
+//     Ctrl-<char>    ->  nothing: a terminal has no code for Ctrl+1.
 //
 // Two consequences worth knowing before adding a binding:
 //
 // 1. Ctrl-H, Ctrl-I, Ctrl-J and Ctrl-M are indistinguishable from
 //    backspace, Tab, newline and Return -- because in this encoding
-//    they ARE those keys. That's correct, not a collision to work
-//    around: it's exactly how they behave in a terminal, so
-//    Ctrl-H-as-backspace and Ctrl-I-as-completion come out right with
-//    no code at all.
-// 2. A lone Esc and the start of an Alt sequence look identical at
-//    this layer, which is a real ambiguity a physical terminal has
-//    too. The line editor resolves it by holding the ESC and deciding
-//    on the NEXT key (see klineedit.h); anything that needs a bare Esc
-//    -- leaving GUI mode, exiting the editor -- sees it unchanged
-//    because those consumers never sit inside a line edit.
+//    they ARE those keys, exactly as in a terminal.
+// 2. On a terminal a lone Esc and the start of an Alt sequence look
+//    identical, as on a physical one; the line editor holds the ESC and
+//    decides on the NEXT key (see klineedit.h). A window never sees
+//    that ambiguity.
 //
-// Ctrl with a non-letter is dropped rather than assigned a made-up
-// code, and AltGr is deliberately NOT Meta: it stays a layout modifier
-// so a Nordic layout's third-level characters keep working (see
-// keyboard.c's comment where the two Alt keys are told apart).
+// AltGr is deliberately NOT Alt: it stays a layout modifier so a Nordic
+// layout's third-level characters keep working (see keyboard.c's
+// comment where the two Alt keys are told apart). A game that wants keys
+// by POSITION, untouched by any modifier, reads keyboard_try_get_physical()'s
+// stream through the compositor (abi/win_proto.h's WIN_EV_KEY_PHYS).
 
 // The six Latin-1 codepoints this build's font (font_ttf.h,
 // tools/genttf.py) and `se` keyboard layout (keyboard.c) support --
@@ -276,11 +281,10 @@ int keyboard_wire_keycode(uint8_t sc, int extended, uint16_t *out);
 // follow, and for the same reason: a modifier release racing a keypress
 // must resolve one way, not two. See docs/decisions.md.
 //
-// Note KEY_MOD_CTRL and KEY_MOD_ALT are reported for completeness, but a
-// GUI generally should NOT act on them for letter keys -- by the time
-// the key arrives, Ctrl-A has already become 0x01, so `key=='a' &&
-// (mods & KEY_MOD_CTRL)` is never true. Match the control code itself.
-// Shift is the useful one, because it does not fold the key away.
+// KEY_MOD_CTRL is set on a Ctrl-letter too, but by then Ctrl-A has
+// become 0x01, so `key=='a' && (mods & KEY_MOD_CTRL)` is never true --
+// match the control code. For every other key the Ctrl and Alt bits ARE
+// the modifier (see "Ctrl and Alt").
 #define KEY_MOD_SHIFT 0x01
 #define KEY_MOD_CTRL  0x02
 #define KEY_MOD_ALT   0x04 // LEFT Alt (Meta) only -- AltGr is separate, see above
@@ -401,6 +405,18 @@ int keyboard_try_getchar_mods(uint8_t *out_mods);
 // and 0 for a release.
 int keyboard_try_get_transition(uint16_t *out_code, int *out_down,
                                  uint8_t *out_mods);
+
+// EVERY KEY'S EDGES, BY POSITION: the evdev keycode (abi/input_keys.h),
+// 1 for a press and 0 for a release, and the KEY_MOD_* state after it.
+// Nothing is translated, no modifier changes what is reported, and an
+// autorepeat is NOT an edge -- what a game asks ("is the key under my
+// ring finger held?"), which the codes above cannot answer once Ctrl
+// has turned a letter into a control code. SDL's scancodes, Windows'
+// WM_KEYDOWN beside WM_CHAR, Wayland's wl_keyboard.key. The compositor
+// drains it for the windows that ask (WIN_EV_KEY_PHYS). Returns 1 and
+// fills the outputs, or 0 when nothing is waiting; any may be NULL.
+int keyboard_try_get_physical(uint16_t *out_keycode, int *out_down,
+                              uint8_t *out_mods);
 
 // The modifiers held RIGHT NOW (KEY_MOD_*), for a caller that has no key
 // event to read them off. A mouse click is the case: it carries no

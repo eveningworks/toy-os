@@ -3347,7 +3347,7 @@ Ctrl-C, which is most of what makes it a terminal.
 
 - [ ] A line discipline (line editing, echo control) separate from the shell's own input loop. **Partly built ahead of this milestone**: `kernel/lib/klineedit.c` is a real, shared line editor (readline keymap, kill ring, undo) that the physical shell and the GUI Terminal both drive, so "two clients of the same editing layer" already holds. What's still missing is the *discipline* half -- it's a library each front end calls, not something they read through, and it has no echo control or raw/cooked distinction. see the git history.
 
-- [ ] `Ctrl+C`/`Ctrl+D`/`Ctrl+Z` as terminal signals, not keystrokes an app happens to notice. The *encoding* groundwork is done -- the keyboard driver emits Ctrl as control codes and Alt as an ESC prefix, so these keys now reach an app at all (they didn't before); today `Ctrl+C` abandons the input line and `Ctrl+D` on an empty line is recognised but has nothing to exit to.
+- [ ] `Ctrl+C`/`Ctrl+D`/`Ctrl+Z` as terminal signals, not keystrokes an app happens to notice. The *encoding* groundwork is done -- the keyboard driver emits Ctrl+letter as control codes (and a terminal gets Alt as an ESC prefix from `tty_input()`), so these keys now reach an app at all (they didn't before); today `Ctrl+C` abandons the input line and `Ctrl+D` on an empty line is recognised but has nothing to exit to.
 
 ## Shell pipes & job control
 

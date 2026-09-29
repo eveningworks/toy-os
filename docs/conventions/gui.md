@@ -1821,8 +1821,8 @@ this the obvious way), not from how much history it accumulated.
   is a SURFACE of its own now** (the entry below; the bounds rect the app
   passes in is the in-window fallback when no surface is granted); and
   **there are no
-  Alt+letter mnemonics on purpose** -- Alt is an ESC prefix here, so
-  Alt-F is ambiguous with Esc, and `KEY_F10` focuses the bar instead.
+  Alt+letter mnemonics yet** -- possible since Alt reaches a window as
+  a bit rather than an ESC prefix; `KEY_F10` focuses the bar.
   **A file needed by both the kernel and a client is COMPILED TWICE,
   never copied** (`build/userland/shared/`): the two builds use
   different code models so the objects can't be shared, but the source
@@ -3128,6 +3128,21 @@ real scanout hardware does. Do not write a pixel assertion for one.
   Proven by `tools/keyup_test.py`, whose load-bearing check uses
   `QMPSession.key_down()` -- `send-key` presses and releases together
   and so cannot tell a real release path from a synthesised one.
+- **A CHARACTER WITH Ctrl OR Alt HELD IS A SHORTCUT, NEVER TEXT; A GAME
+  READS KEYS BY POSITION.** A window gets Ctrl+1 as `'1'` with
+  `KEY_MOD_CTRL` and Alt+B as `'b'` with `KEY_MOD_ALT`
+  (`api/keyboard.h`, "Ctrl and Alt"); Ctrl+letter is still its control
+  code. uapp routes such a key past the widgets straight to `on_key`, a
+  text widget declines it, and **an app that hands keys to an editor
+  itself must check `uui_key_is_shortcut()` first** -- Notepad and the
+  File Manager's rename do, or Ctrl+1 types a 1. A TERMINAL wants the
+  old bytes: `tty_input()` and the GUI Terminal add the ESC prefix and
+  drop Ctrl-with-a-character, and nothing else may. **A game sets
+  `uapp_desc.on_phys_key`** for evdev keycodes (`abi/input_keys.h`),
+  both edges, no repeats, alongside the translated keys; it gets no
+  releases for keys held when focus leaves, so `on_focus(0)` releases
+  them. `gui key` injects TRANSLATED keys only -- drive a physical-key
+  client through QMP. See `docs/decisions/gui.md`.
 - **A SECONDARY CLICK IS THE CLIENT'S INSIDE ITS CONTENT AREA, AND THE
   WM'S EVERYWHERE ELSE.** A right-click on a window's own pixels is
   delivered as `WIN_EV_MOUSE_DOWN` with button bit `0x2`
@@ -3161,8 +3176,8 @@ real scanout hardware does. Do not write a pixel assertion for one.
   ON** -- the first are noise nobody is allowed to act on, the second is
   the Stack Clash guarantee. **`api/keyboard.h` and `doomkeys.h` cannot
   share a translation unit** (both define `KEY_F2`/`F3`/`F4`/`F10` with
-  different values), so they meet through `dg_toyos.h`, whose `TOYKEY_*`
-  copies `doom.c` static-asserts against the real macros. **The IWAD is
+  different values), so they meet through `dg_toyos.h`, and keys cross
+  it as evdev KEYCODES (`abi/input_keys.h`), which neither defines. **The IWAD is
   not in the repository** -- `tools/fetch_wad.py`, and the app says so in
   its own window when there is none, rather than showing black. And
   **what the port actually needed was measured**: key releases were
@@ -3610,10 +3625,10 @@ always followed, and the reason a Wayland client cannot grab a key.
   AND NOTHING CHECKS IT AT BUILD TIME.** Two of the first four were
   wrong; the symptom is `pid -1` in the log and no window.
   `tools/shortcut_test.py` compares the lists.
-- **THIS KEYBOARD CANNOT DELIVER Ctrl WITH A NON-LETTER.** The driver
-  drops it, so `Ctrl+Shift+Esc` is unbindable however well it parses.
-  Ctrl+letter folds to a control code before anyone sees it, which
-  `keycombo_matches()` undoes -- do not re-derive that anywhere else.
+- **Ctrl WITH A NON-LETTER ARRIVES AS THE KEY PLUS `KEY_MOD_CTRL`**
+  (it used to be dropped by the driver). Ctrl+letter still folds to a
+  control code before anyone sees it, which `keycombo_matches()` undoes
+  -- do not re-derive that anywhere else.
 - **A CONTROL THAT RECORDS A SHORTCUT MUST HOLD
   `uapp_inhibit_shortcuts()`** while it listens, or the compositor spends
   the very keys it is waiting for. It lapses on focus loss by design.
@@ -4278,12 +4293,13 @@ to close. The cost is that the compositor contains a keyboard; see
 
 Four things to know before editing it:
 
-- **IT ENCODES KEYS THE WAY `keyboard.c` DOES, and every branch fails
-  SILENTLY if it does not.** Ctrl-C is the control code `0x03`, not
-  `'c'` with `KEY_MOD_CTRL` -- `api/keyboard.h` tells an app not to test
-  that bit for a letter, so the naive version reaches the Terminal and
-  does nothing at all. Alt-B is ESC then `'b'`, two keystrokes. Ctrl
-  with a non-letter is DROPPED rather than given an invented code.
+- **IT ENCODES KEYS THE WAY `keyboard.c` DOES FOR A WINDOW, and every
+  branch fails SILENTLY if it does not.** Ctrl-C is the control code
+  `0x03`, not `'c'` with `KEY_MOD_CTRL` -- `api/keyboard.h` tells an app
+  not to test that bit for a letter, so the naive version reaches the
+  Terminal and does nothing at all. Alt-B is `'b'` with `KEY_MOD_ALT`,
+  one keystroke (the Terminal adds the ESC its pty wants), and Ctrl with
+  a non-letter is the key with `KEY_MOD_CTRL`.
 - **ITS LAYOUT IS A SECOND COPY OF `FALLBACK_US`** in
   `kernel/lib/keyboard_layout.c`, and the two must agree character for
   character. A cap that disagrees types something the physical keyboard

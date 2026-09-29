@@ -144,6 +144,46 @@ int keyboard_try_get_transition(uint16_t *out_code, int *out_down,
     return 1;
 }
 
+// EVERY KEY'S EDGES, BY POSITION (api/keyboard.h's
+// keyboard_try_get_physical()). `phys_held` is what makes a PS/2
+// typematic repeat -- another make code for a key already down -- NOT an
+// edge; USB and virtio report no repeats at all. Same drop-the-oldest
+// overflow as the transition queue, and a keycode past the bitmap is
+// left out rather than wrapped into someone else's bit.
+#define PHYS_KEYCODES 256
+#define PHYS_MAX 64
+struct phys_edge {
+    uint16_t keycode;
+    uint8_t  down;
+    uint8_t  mods;
+};
+static struct phys_edge phys[PHYS_MAX];
+static unsigned phys_head, phys_tail;
+static uint8_t phys_held[PHYS_KEYCODES / 8];
+
+static void phys_push(uint16_t keycode, int down) {
+    if (keycode >= PHYS_KEYCODES) return;
+    uint8_t bit = (uint8_t)(1u << (keycode & 7));
+    int held = (phys_held[keycode >> 3] & bit) != 0;
+    if (held == !!down) return;          // a repeat, or a release of nothing
+    if (down) phys_held[keycode >> 3] |= bit;
+    else      phys_held[keycode >> 3] &= (uint8_t)~bit;
+    unsigned next = (phys_head + 1) % PHYS_MAX;
+    if (next == phys_tail) phys_tail = (phys_tail + 1) % PHYS_MAX;
+    phys[phys_head] = (struct phys_edge){ keycode, (uint8_t)(down ? 1 : 0), current_mods() };
+    phys_head = next;
+}
+
+int keyboard_try_get_physical(uint16_t *out_keycode, int *out_down, uint8_t *out_mods) {
+    if (phys_tail == phys_head) return 0;
+    struct phys_edge e = phys[phys_tail];
+    phys_tail = (phys_tail + 1) % PHYS_MAX;
+    if (out_keycode) *out_keycode = e.keycode;
+    if (out_down) *out_down = e.down;
+    if (out_mods) *out_mods = e.mods;
+    return 1;
+}
+
 // THE KEYCODE CURRENTLY BEING TRANSLATED, so ring_push() can record what
 // this key produced without every one of its ~20 call sites having to
 // pass it. Set once at the top of keyboard_key_event() and read only
@@ -354,6 +394,9 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     case INPUT_KEY_RIGHTMETA:  super_pressed = down; mod_code = KEY_SUPER; break;
     default: break;
     }
+    // After the modifier state moved, so a Shift press reports Shift held
+    // -- the same "the world after this key" the transitions report.
+    phys_push(keycode, down);
     if (mod_code) {
         // A modifier produces NO code in the byte stream, so the tap
         // records the event and nothing produced -- which is the honest
@@ -419,11 +462,9 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     case INPUT_KEY_DELETE:   ring_push(KEY_DELETE); return;
     // THE WHOLE FUNCTION ROW. It was four -- F2/F3 (the file manager),
     // F10 (the menu bar) and F4 (Alt+F4) -- added one per caller; Doom
-    // binds F1 through F11 and made the rest worth having. Pushed
-    // here rather than through the layout is also what keeps Alt+F4
-    // whole -- it returns before the Alt-prefixes-with-ESC path below,
-    // so the key arrives once, with KEY_MOD_ALT set, rather than as ESC
-    // followed by something.
+    // binds F1 through F11 and made the rest worth having. A KEY_*
+    // special is never meta-prefixed, even on a terminal (tty_input()),
+    // so Alt+F4 is always one key with KEY_MOD_ALT set.
     case INPUT_KEY_F1:  ring_push(KEY_F1); return;
     case INPUT_KEY_F2:  ring_push(KEY_F2); return;
     case INPUT_KEY_F3:  ring_push(KEY_F3); return;
@@ -486,37 +527,25 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     char c = keyboard_layout_translate(keycode, shift_pressed, altgr_pressed);
     if (!c) return;
 
-    // Ctrl and Alt are encoded the way a real terminal encodes them --
-    // see keyboard.h's "Ctrl and Alt" comment for the full reasoning.
-    //
     // Ctrl folds a letter to its control code (Ctrl-A -> 0x01), which
     // is why Ctrl-H/I/J/M come out as backspace/tab/newline/return with
     // no special cases: in this encoding they ARE those keys, exactly as
-    // in bash. Ctrl with anything that isn't a letter is dropped rather
-    // than guessed at -- Ctrl-[ really is Esc on a physical terminal,
-    // but nothing here wants that, and inventing codes for the rest
-    // would be making up an encoding instead of following one.
+    // in bash -- and every app's Ctrl+S is written against 0x13.
+    //
+    // **EVERYTHING ELSE IS THE KEY, WITH THE MODIFIER IN `mods`.** Ctrl
+    // with a non-letter and Alt with anything arrive as the plain key
+    // plus KEY_MOD_CTRL / KEY_MOD_ALT -- an X11 or Wayland keysym and its
+    // state. What a TERMINAL wants instead (Alt as an ESC prefix, Ctrl
+    // with a digit as nothing) is tty_input()'s job below the bypass, the
+    // same split that turns an arrow into `ESC [ A` there and nowhere
+    // else. Encoding it here reached windows too: Alt+Space in Doom was
+    // an Esc press that never came up.
     if (ctrl_pressed) {
         int lower = k_tolower((unsigned char)c);
-        if (lower < 'a' || lower > 'z') return;
-        uint16_t code = (uint16_t)(lower - 'a' + 1);
-        // **INTR IS NOT SPECIAL HERE ANY MORE.** Ctrl-C used to be
-        // recognised on this line, with a comment saying it belonged to
-        // a line discipline and there was not one yet. There is
-        // (kernel/tty/ldisc.c), so 0x03 goes through as an ordinary
-        // control code and the terminal decides what it means -- which
-        // is what makes a Terminal WINDOW able to have the same Ctrl-C
-        // as this keyboard.
-        ring_push(code);
-        return;
-    }
-
-    // Alt (Meta) prefixes the key with ESC, so Alt-B arrives as the two
-    // bytes 0x1B 'b'. Two pushes rather than one combined code: this is
-    // what every terminal emulator sends, so the line editor's decoder
-    // is the same one it would need for a real serial terminal anyway.
-    if (alt_pressed) {
-        ring_push(0x1B);
+        if (lower >= 'a' && lower <= 'z') {
+            ring_push((uint16_t)(lower - 'a' + 1));
+            return;
+        }
     }
     ring_push((uint8_t)c);
 }

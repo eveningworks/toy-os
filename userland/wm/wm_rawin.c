@@ -195,6 +195,11 @@ void wm_rawin_pump(void) {
         case WIN_EV_RAW_KEY_UP:
             key_push(ev.a, (uint8_t)ev.mods, 0);
             break;
+        case WIN_EV_RAW_KEY_PHYS:
+            // Straight through: no shortcut, overlay or focus-ring step
+            // applies to a key by position (wm_client.c).
+            wm_client_route_phys_key(ev.a, ev.b, ev.mods);
+            break;
         case WIN_EV_RAW_WHEEL:
             // Accumulated, not replaced: two notches in one frame are
             // two notches of scrolling, and keeping only the last would

@@ -267,7 +267,7 @@ everything libc-shaped is waiting on it. Full plan and staging:
 - [x] ~~A thumbnail cache that survives a reboot~~ DONE 2026-09-17 -- `/var/cache/thumbnails`, one QOI named after its source
 - [x] ~~Global keyboard shortcuts, and a way to rebind them~~ DONE 2026-09-17 -- registry settings; Super became a modifier
 - [ ] Bind a shortcut to an ARBITRARY command, not just a named action -- a second mechanism beside the registry
-- [ ] Make Ctrl with a non-letter deliverable, so `Ctrl+Shift+Esc` can be bound
+- [x] ~~Make Ctrl with a non-letter deliverable~~ DONE 2026-09-29 -- the key plus `KEY_MOD_CTRL`
 - [x] ~~The GUI Terminal reads its pty on a thread, not a 30 ms poll~~ DONE 2026-08-26 -- one reader per tab, no cadence left
 - [ ] More than eight Terminal tabs, which needs a scrolling strip rather than a wider one
 - [x] ~~A tab can be renamed by hand~~ DONE 2026-08-27 -- Terminal > Rename Tab; the name outranks the shell's OSC
@@ -1191,7 +1191,7 @@ this to be better?".
 
 - [x] ~~About shows a processor COUNT, not a model~~ DONE (540dd6e5) -- `SYS_CPU_INFO` hands ring 3 the brand string and topology
 - [x] ~~Run the full gate over the About rewrite and the logo~~ DONE 2026-09-02 -- preflight and `gui_regress.py` green
-- [ ] A key event carries the translated code only, not the physical keycode
+- [x] ~~A key event carries the translated code only, not the physical keycode~~ DONE 2026-09-29 -- `on_phys_key`
 
 - [ ] The desktop decodes a new wallpaper on the COMPOSITOR's thread -- a 640 ms frame on the laptop; a mode change no longer decodes
 - [ ] Four overlays still opt out of damage tracking -- see `docs/roadmap-details.md`

@@ -148,56 +148,11 @@ void input_report_wheel(int notches);
 
 // --- evdev keycodes ---------------------------------------------------
 //
-// Only the ones a driver here actually reports. The numbering is
-// Linux's, so a table lifted from a HID or virtio specification lines
-// up without adjustment -- which is the point of using it.
-//
-// THE `INPUT_` PREFIX IS NOT DECORATION. `keyboard.h` already has a
-// `KEY_*` family, and it means something completely different: those
-// are the codes this kernel's key RING carries (KEY_HOME is 0x9B, a
-// value chosen to sit outside ASCII), while these are what the wire
-// carries before any translation (INPUT_KEY_HOME is 102, Linux's
-// number). Four of them collided outright when this header was first
-// written, and a silent collision between two key vocabularies is a
-// class of bug that would have surfaced as "Home does something odd on
-// one keyboard".
-#define INPUT_KEY_ESC 1
-#define INPUT_KEY_ENTER 28
-#define INPUT_KEY_LEFTCTRL 29
-#define INPUT_KEY_LEFTSHIFT 42
-#define INPUT_KEY_RIGHTSHIFT 54
-#define INPUT_KEY_LEFTALT 56
-#define INPUT_KEY_SPACE 57
-#define INPUT_KEY_CAPSLOCK 58
-// The numeric keypad, evdev's numbering, which is set-1's for this block
-// (see INPUT_KEY_EVDEV_DIRECT_MAX below).
-#define INPUT_KEY_KP7 71
-#define INPUT_KEY_KP8 72
-#define INPUT_KEY_KP9 73
-#define INPUT_KEY_KPMINUS 74
-#define INPUT_KEY_KP4 75
-#define INPUT_KEY_KP5 76
-#define INPUT_KEY_KP6 77
-#define INPUT_KEY_KPPLUS 78
-#define INPUT_KEY_KP1 79
-#define INPUT_KEY_KP2 80
-#define INPUT_KEY_KP3 81
-#define INPUT_KEY_KP0 82
-#define INPUT_KEY_KPDOT 83
-#define INPUT_KEY_KPASTERISK 55
-#define INPUT_KEY_NUMLOCK 69
-#define INPUT_KEY_SCROLLLOCK 70
-#define INPUT_KEY_SYSRQ 99      // Print Screen
-#define INPUT_KEY_F1 59
-#define INPUT_KEY_F2 60
-#define INPUT_KEY_F3 61
-#define INPUT_KEY_F4 62
-#define INPUT_KEY_F5 63
-#define INPUT_KEY_F6 64
-#define INPUT_KEY_F7 65
-#define INPUT_KEY_F8 66
-#define INPUT_KEY_F9 67
-#define INPUT_KEY_F10 68
+// The numbers themselves are the kernel<->userland contract's
+// (abi/input_keys.h), so a window asking for physical keys and this
+// input core speak one list.
+#include "input_keys.h"
+
 // 1..83 are the AT set-1 make codes unchanged (see gen_kbs.py's note:
 // XKB keycodes are evdev + 8, and evdev matches set 1 for this block).
 #define INPUT_KEY_EVDEV_DIRECT_MAX 83
@@ -210,34 +165,10 @@ void input_report_wheel(int notches);
 // are NOT behind an 0xE0 prefix, which is what makes them a different
 // case from the EXTENDED table in input.c.
 //
-// **KEY_102ND IS THE ONE THAT MATTERS.** It is the extra key an ISO
-// keyboard has between Left Shift and Z, and on every Nordic layout it
-// carries `<`, `>` and -- with AltGr -- **`|`**. Missing it meant a
-// pipeline could not be typed AT ALL on a `INPUT=virtio` boot, while
-// working perfectly on PS/2, because only the virtio path comes through
-// here. See docs/decisions.md.
-#define INPUT_KEY_102ND 86
-#define INPUT_KEY_F11 87
-#define INPUT_KEY_F12 88
-
-#define INPUT_KEY_KPENTER 96
-#define INPUT_KEY_RIGHTCTRL 97
-#define INPUT_KEY_KPSLASH 98
-#define INPUT_KEY_RIGHTALT 100
-#define INPUT_KEY_HOME 102
-#define INPUT_KEY_UP 103
-#define INPUT_KEY_PAGEUP 104
-#define INPUT_KEY_LEFT 105
-#define INPUT_KEY_RIGHT 106
-#define INPUT_KEY_END 107
-#define INPUT_KEY_DOWN 108
-#define INPUT_KEY_PAGEDOWN 109
-#define INPUT_KEY_INSERT 110
-#define INPUT_KEY_DELETE 111
-#define INPUT_KEY_LEFTMETA 125
-#define INPUT_KEY_RIGHTMETA 126
-#define INPUT_KEY_COMPOSE 127
-#define INPUT_KEY_PAUSE 119
+// **KEY_102ND IS THE ONE THAT MATTERS**: missing it meant a pipeline
+// could not be typed AT ALL on an `INPUT=virtio` boot, while working
+// perfectly on PS/2, because only the virtio path comes through here.
+// See docs/decisions.md.
 
 // Pointer buttons, evdev numbering.
 //

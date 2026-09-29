@@ -335,8 +335,9 @@ whenever a headline here tells you something you did not already know.
 - **AN APP HANDED A FILE MUST SELECT IT, NOT JUST ITS FOLDER** -- and
   its regression test has to LAUNCH WITH AN ARGUMENT
 - **A GLOBAL SHORTCUT IS THE COMPOSITOR'S, AND SUPER IS NOW A MODIFIER**
-  -- `KEY_SUPER` left the byte stream; Ctrl with a non-letter is
-  undeliverable; a capture control must inhibit shortcuts while listening
+  -- `KEY_SUPER` left the byte stream; Ctrl with a non-letter arrives as
+  the key plus `KEY_MOD_CTRL`; a capture control must inhibit shortcuts
+  while listening
 - **A MENU BAR IN AN APP WITH ROUTED WIDGETS MUST BE `uui_menubar_ops`,
   NOT HAND-ROUTED**
 - **ONE MENU WIDGET SERVES A BAR AND A CONTEXT MENU:
@@ -595,6 +596,8 @@ whenever a headline here tells you something you did not already know.
   KEYS THE WAY THE PHYSICAL ONE DOES**
 - **A KEY RELEASE IS `WIN_EV_KEY_UP`, AND THE FOUR MODIFIER KEYS ARE
   KEYS**
+- **A CHARACTER WITH Ctrl OR Alt HELD IS A SHORTCUT, NEVER TEXT; A GAME
+  READS KEYS BY POSITION**
 - **A SECONDARY CLICK IS THE CLIENT'S INSIDE ITS CONTENT AREA, AND THE
   WM'S EVERYWHERE ELSE**
 - **DOOM IS A VENDORED PORT IN `userland/ports/doom/`, LINKED INTO ONE

@@ -37,6 +37,7 @@ void win_input_reset(void) {
 static int is_input(uint32_t type) {
     switch (type) {
     case WIN_EV_RAW_MOUSE: case WIN_EV_RAW_KEY: case WIN_EV_RAW_KEY_UP: case WIN_EV_RAW_WHEEL:
+    case WIN_EV_RAW_KEY_PHYS:
         return 1;
     default:
         return 0;
@@ -204,6 +205,14 @@ void win_input_poll(void) {
     for (int budget = 64; budget > 0; budget--) {
         if (!keyboard_try_get_transition(&tcode, &tdown, &tmods)) break;
         push(tdown ? WIN_EV_RAW_KEY : WIN_EV_RAW_KEY_UP, (int)tcode, 0, tmods);
+    }
+
+    // THE SAME KEYS BY POSITION (api/keyboard.h), drained for the same
+    // reason. Always pushed: whether any window wants them is the
+    // compositor's to know, not this queue's.
+    for (int budget = 64; budget > 0; budget--) {
+        if (!keyboard_try_get_physical(&tcode, &tdown, &tmods)) break;
+        push(WIN_EV_RAW_KEY_PHYS, (int)tcode, tdown, tmods);
     }
 
     int wheel = mouse_get_wheel_delta();

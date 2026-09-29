@@ -4083,7 +4083,9 @@ window without going through it will find its layout polls timing out.
   EXACTLY -- "it changed" alone is satisfied by almost anything.
 - **`doom_test.py`** -- DOOM runs, draws, animates and takes input,
   including an arrow that still turns with Ctrl (fire) or Shift (run)
-  held -- the keyboard folds both into the arrow's code. **ON DEMAND,
+  held and Alt+Space (strafe + use) NOT opening the menu -- Doom reads
+  keys by position (`on_phys_key`), so it is driven through QMP, never
+  `gui key`, which injects translated keys only. **ON DEMAND,
   not in `gui_regress.py`**: it needs an IWAD, and the IWAD is
   deliberately not in this repository, so a checkout without one gets a
   clean SKIP rather than a failure. The IWAD reaches the image only with
@@ -4117,9 +4119,12 @@ window without going through it will find its layout polls timing out.
 - **`keyup_test.py`** -- key RELEASES reaching a ring-3 client, across
   all five layers that carry one: the driver's transition queue, the
   kernel's raw-event push, the compositor's raw-input queue, the WM's
-  routing and Toykit's `on_key_up`. 10 checks, also via `winclient`,
-  which keeps a model of what is currently HELD -- nothing else in the
-  tree does, because every real app acts on the press.
+  routing and Toykit's `on_key_up`, via `winclient`, which keeps a
+  model of what is currently HELD -- nothing else in the tree does,
+  because every real app acts on the press. It also checks that Ctrl
+  and Alt reach a window as BITS (Alt+a is one 'a', Ctrl+1 is '1') and
+  the physical-key stream (`on_phys_key`: positions, both edges, no
+  repeat while held).
 
   **Its load-bearing check is the one that holds a key down.**
   `QMPSession.send_key()` wraps QMP's `send-key`, which presses and

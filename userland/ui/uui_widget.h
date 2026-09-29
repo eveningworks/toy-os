@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "ui/ugfx.h"
 #include "ui/uui_describe.h"
+#include "keyboard.h"   // KEY_MOD_*, IS_NORDIC_CHAR
 
 // uui_widget_ops -- the ONE table a widget exports to be handled
 // generically: laid out, drawn, hit-tested, focused.
@@ -249,5 +250,15 @@ struct uui_custom {
 };
 
 extern const struct uui_widget_ops uui_custom_ops;
+
+// A CHARACTER WITH Ctrl OR Alt HELD IS A SHORTCUT, NOT TEXT: the keyboard
+// delivers Ctrl+1 as '1' with KEY_MOD_CTRL (api/keyboard.h), and a field
+// that typed it would type on every shortcut the app has. uapp routes one
+// past the widgets to on_key; a widget handed keys directly declines it.
+// Qt and GTK draw the same line. AltGr is not Alt -- it picks characters.
+static inline int uui_key_is_shortcut(int key, unsigned mods) {
+    return (mods & (KEY_MOD_CTRL | KEY_MOD_ALT)) &&
+           ((key >= 32 && key < 127) || IS_NORDIC_CHAR(key));
+}
 
 #endif

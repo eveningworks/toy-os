@@ -85,13 +85,13 @@ static int held_index(int key) {
 // pixels. Only the SET's changes are logged, not every repeat, which is
 // what makes the log a record of what the client believes rather than of
 // what arrived.
-static void log_held(const char *what, int key) {
-    char line[64];
+static void log_held(const char *what, int key, unsigned mods) {
+    char line[80];
     // The code, not the character: a release carries whatever the press
     // produced, and printing it as a glyph would hide the difference
     // between 'w' and 'W' that this is here to demonstrate.
-    snprintf(line, sizeof line, "winclient: %s %d held=%d\n",
-             what, key, g_held_count);
+    snprintf(line, sizeof line, "winclient: %s %d held=%d mods=%u\n",
+             what, key, g_held_count, mods);
     sys_eprint(line);
 }
 
@@ -130,7 +130,6 @@ static int on_user(struct uapp *a, int a0, int a1) {
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
-    (void)mods;
     // **THE HELD-SET BOOKKEEPING RUNS FOR EVERY KEY, BEFORE ANY SPECIAL
     // CASE.** keyup_test.py reads this log to decide whether a press and
     // its release were both reported, so a key that takes an early exit
@@ -139,7 +138,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // above this line did that to 'w' for one build.
     if (held_index(key) < 0 && g_held_count < HELD_MAX) {
         g_held[g_held_count++] = key;
-        log_held("keydown", key);
+        log_held("keydown", key, mods);
     }
     if (key == 'p') {
         // A DETACHED thread: nothing joins it, and the process outlives
@@ -159,15 +158,25 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 }
 
 static void on_key_up(struct uapp *a, int key, unsigned mods) {
-    (void)a; (void)mods;
+    (void)a;
     int i = held_index(key);
     // An unmatched release is legal and must be tolerated -- the WM
     // claims Super and Alt+F4 on the press and delivers the release
     // anyway (ui/uapp.h). Logged so a test can see it happened rather
     // than silently ignored.
-    if (i < 0) { log_held("keyup-unmatched", key); return; }
+    if (i < 0) { log_held("keyup-unmatched", key, mods); return; }
     g_held[i] = g_held[--g_held_count];
-    log_held("keyup", key);
+    log_held("keyup", key, mods);
+}
+
+// KEYS BY POSITION (uapp.h's on_phys_key), logged as they arrive:
+// keyup_test.py checks the edges, that a modifier changes nothing about
+// the key, and that a held key does not repeat here.
+static void on_phys_key(struct uapp *a, int keycode, int down, unsigned mods) {
+    (void)a;
+    char line[64];
+    snprintf(line, sizeof line, "winclient: phys %d %d mods=%u\n", keycode, down, mods);
+    sys_eprint(line);
 }
 
 // REFUSES the first two close requests and accepts the third.
@@ -219,6 +228,7 @@ int main(void) {
         .on_draw = on_draw,
         .on_key  = on_key,
         .on_key_up = on_key_up,
+        .on_phys_key = on_phys_key,
         .on_user = on_user,
         .on_press = on_press,
         .on_close = on_close,

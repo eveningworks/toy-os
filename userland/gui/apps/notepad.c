@@ -1051,7 +1051,6 @@ static void on_widget(struct uapp *a, int id, int reason) {
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
-    (void)mods;
     // An open dialog never reaches here: the router hands it every key
     // first (ui/uui_route.h). An open menu does -- its ops table has
     // no key slot -- and when closed it takes only F10.
@@ -1085,6 +1084,9 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // with no caret to say where -- so typing does nothing until
     // Ctrl-E comes back to the source.
     if (g_preview) { uapp_redraw(a); return; }
+    // Ctrl or Alt with a character is a shortcut, never typed
+    // (ui/uui_widget.h); the ones Notepad binds were taken above.
+    if (uui_key_is_shortcut(key, mods)) return;
 
     editor_key(key);
     // THE CARET STAYS ON SCREEN. Typing, arrowing or pasting somewhere

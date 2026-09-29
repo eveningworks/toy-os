@@ -1088,6 +1088,12 @@ direction is a build error rather than a key that quietly stops working.
 Without it the failure mode is a wrong constant mapping to a key Doom
 does nothing with, which looks exactly like an unbound control.
 
+**Since 2026-09-29 the copies are gone**: Doom reads keys by position
+(`on_phys_key`), and an evdev keycode (`abi/input_keys.h`, `INPUT_KEY_*`)
+is a third vocabulary neither header defines, so nothing crosses the
+seam that needs copying -- see `docs/decisions/gui.md`, "Ctrl and Alt
+reach a window as bits, and a game reads keys by position".
+
 ### Enter is 0x0A here and 0x0D in Doom, and the first test could not see it
 
 The port shipped able to open its menu and unable to START A GAME.

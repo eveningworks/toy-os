@@ -2,6 +2,7 @@
 // here rather than in each widget.
 #include "ui/uui_edit.h"
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
+#include "ui/uui_widget.h" // uui_key_is_shortcut
 
 void uui_edit_init(struct uui_edit *e) {
     e->cursor = 0;
@@ -84,14 +85,16 @@ static int clamp(int v, int lo, int hi) {
 
 int uui_edit_key(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
                   int key, unsigned mods) {
-    (void)mods; // Shift arrives as its own key code, not as a bit -- see below
+    // Shift arrives as its own key code, not as a bit -- see below. Ctrl
+    // or Alt with a character is a shortcut, declined (uui_widget.h).
+    if (uui_key_is_shortcut(key, mods)) return 0;
     int len = ops->len(text);
     e->cursor = clamp(e->cursor, 0, len);
 
     switch (key) {
     // ---- selection ------------------------------------------------
-    case 0x01: // Ctrl-A. Ctrl reaches an app as a CONTROL CODE, never as
-               // a modifier bit -- see api/keyboard.h's "Ctrl and Alt".
+    case 0x01: // Ctrl-A. Ctrl+letter reaches an app as a CONTROL CODE --
+               // see api/keyboard.h's "Ctrl and Alt".
         uui_edit_select_all(e, ops, text);
         return 1;
 

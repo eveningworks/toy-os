@@ -21,6 +21,7 @@
 #include "keyboard_layout.h" // the parity check asks the LAYOUT what it maps
 #include "kfmt.h"            // klog_printf -- name the unreachable key
 #include "mouse.h"
+#include "tty.h"              // the bypass: which side of the split a key lands on
 #include "scheduler.h"
 #include "ktest.h"
 #include "driver.h"
@@ -488,4 +489,103 @@ KTEST("input", "unregistering a source takes its `lsdrv` row with it") {
 
     KTEST_ASSERT(named_while_registered);
     KTEST_ASSERT(!named_after);
+}
+
+// ONE KEY PRESS WITH A MODIFIER HELD, read back as (code, mods) pairs.
+// Returns how many codes arrived, up to `cap`.
+static int modified_key(uint16_t mod, uint16_t key, int *codes, uint8_t *mods, int cap) {
+    uint8_t m = 0;
+    while (keyboard_try_getchar_mods(&m) != -1) { }
+    input_report_key(mod, 1);
+    input_report_key(key, 1);
+    input_report_key(key, 0);
+    input_report_key(mod, 0);
+    int n = 0;
+    for (int c; n < cap && (c = keyboard_try_getchar_mods(&m)) != -1; n++) {
+        codes[n] = c;
+        mods[n] = m;
+    }
+    return n;
+}
+
+// The two halves of api/keyboard.h's "Ctrl and Alt": a WINDOW (the tty
+// bypassed, as while a compositor holds it) gets the key and its
+// modifier bit; a TERMINAL gets what a terminal sends.
+KTEST("input", "Alt+key is the key with KEY_MOD_ALT for a window, ESC then the key for a terminal") {
+    struct tty *t = tty_console();
+    int was = tty_bypassed(t);
+    int codes[4];
+    uint8_t mods[4];
+
+    scheduler_preempt_disable();
+    tty_set_bypass(t, 1);
+    int n_win = modified_key(INPUT_KEY_LEFTALT, EVDEV_A, codes, mods, 4);
+    int win0 = codes[0], winmods = mods[0];
+    tty_set_bypass(t, 0);
+    int n_term = modified_key(INPUT_KEY_LEFTALT, EVDEV_A, codes, mods, 4);
+    tty_set_bypass(t, was);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT_EQ(n_win, 1);             // ONE key, not an ESC before it
+    KTEST_ASSERT_EQ(win0, 'a');
+    KTEST_ASSERT(winmods & KEY_MOD_ALT);
+    KTEST_ASSERT_EQ(n_term, 2);            // readline's meta prefix
+    KTEST_ASSERT_EQ(codes[0], 0x1B);
+    KTEST_ASSERT_EQ(codes[1], 'a');
+}
+
+KTEST("input", "Ctrl+digit reaches a window with KEY_MOD_CTRL and a terminal not at all") {
+    struct tty *t = tty_console();
+    int was = tty_bypassed(t);
+    int codes[4];
+    uint8_t mods[4];
+
+    scheduler_preempt_disable();
+    tty_set_bypass(t, 1);
+    int n_win = modified_key(INPUT_KEY_LEFTCTRL, EVDEV_1, codes, mods, 4);
+    int win0 = codes[0], winmods = mods[0];
+    tty_set_bypass(t, 0);
+    int n_term = modified_key(INPUT_KEY_LEFTCTRL, EVDEV_1, codes, mods, 4);
+    // Ctrl+letter is unchanged on both sides: the control code.
+    int n_letter = modified_key(INPUT_KEY_LEFTCTRL, EVDEV_A, codes, mods, 4);
+    tty_set_bypass(t, was);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT_EQ(n_win, 1);             // it used to be dropped here too
+    KTEST_ASSERT_EQ(win0, '1');
+    KTEST_ASSERT(winmods & KEY_MOD_CTRL);
+    KTEST_ASSERT_EQ(n_term, 0);            // a terminal has no code for it
+    KTEST_ASSERT_EQ(n_letter, 1);
+    KTEST_ASSERT_EQ(codes[0], 0x01);
+}
+
+// THE PHYSICAL STREAM: a key by position, both edges, no repeats, and a
+// modifier that changes nothing about what is reported -- Ctrl+1 is the
+// key INPUT_KEY_1 going down with KEY_MOD_CTRL set, not a dropped key.
+KTEST("input", "the physical stream reports positions, both edges, and no repeats") {
+    scheduler_preempt_disable();
+    uint16_t kc; int down; uint8_t m;
+    while (keyboard_try_get_physical(&kc, &down, &m)) { }
+    uint8_t cm;
+    input_report_key(INPUT_KEY_LEFTCTRL, 1);
+    input_report_key(INPUT_KEY_1, 1);
+    input_report_key(INPUT_KEY_1, 1);    // a typematic repeat: NOT an edge
+    input_report_key(INPUT_KEY_1, 0);
+    input_report_key(INPUT_KEY_LEFTCTRL, 0);
+    uint16_t kcs[6]; int downs[6]; uint8_t mods[6];
+    int n = 0;
+    while (n < 6 && keyboard_try_get_physical(&kcs[n], &downs[n], &mods[n])) n++;
+    while (keyboard_try_getchar_mods(&cm) != -1) { }
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT_EQ(n, 4);
+    KTEST_ASSERT_EQ(kcs[0], INPUT_KEY_LEFTCTRL);
+    KTEST_ASSERT_EQ(downs[0], 1);
+    KTEST_ASSERT_EQ(kcs[1], INPUT_KEY_1);
+    KTEST_ASSERT_EQ(downs[1], 1);
+    KTEST_ASSERT(mods[1] & KEY_MOD_CTRL);
+    KTEST_ASSERT_EQ(kcs[2], INPUT_KEY_1);
+    KTEST_ASSERT_EQ(downs[2], 0);
+    KTEST_ASSERT_EQ(kcs[3], INPUT_KEY_LEFTCTRL);
+    KTEST_ASSERT_EQ(downs[3], 0);
 }

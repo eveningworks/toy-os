@@ -967,6 +967,45 @@ def check_chrome(dbg, qmp, res):
               f"menu {layout_field(dbg, 'menu')}")
 
 
+def check_meta(dbg, qmp, res):
+    """Alt+B is still readline's backward-word IN THE TERMINAL.
+
+    The keyboard delivers Alt as a bit beside the key now (api/keyboard.h),
+    so the Terminal adds the meta prefix -- ESC then the key -- itself.
+    Pressed through QMP, so it takes the real driver -> WM -> Terminal path,
+    and asserted through the filesystem: the `x` lands before the last
+    word only if the shell saw ESC b.
+    """
+    win = dbg.window(TITLE)
+    if not win:
+        res.check("m1. a Terminal is up for the Alt+B check", False)
+        return
+    dbg.click(win["x"] + win["w"] // 2, win["y"] + win["h"] // 2)
+    dbg.settle()
+    key(dbg, "0x0d")
+    dbg.settle()
+    for d in ("mwaa", "mwbb", "xmwbb", "mwbbbx"):
+        dbg.send(f"sh rm /{d}")
+    dbg.settle()
+    type_text(dbg, "mkdir /mwaa /mwbb")
+    time.sleep(0.3)
+    qmp.key_down("alt")
+    time.sleep(0.15)
+    qmp.send_key("b")
+    time.sleep(0.15)
+    qmp.key_up("alt")
+    time.sleep(0.4)
+    dbg.settle()
+    type_line(dbg, "x", settle=1.5)
+    listing = dbg.send("sh ls /") or ""
+    names = {tok.rstrip("/") for line in listing.splitlines() for tok in line.split()}
+    res.check("m1. Alt+B in the Terminal moves back a word (ESC b reaches the shell)",
+              "xmwbb" in names and "mwbb" not in names,
+              f"expected /xmwbb; / has {sorted(n for n in names if n.startswith(('mw', 'xmw')))}")
+    for d in ("mwaa", "mwbb", "xmwbb", "mwbbbx"):
+        dbg.send(f"sh rm /{d}")
+
+
 def check_completion(dbg, qmp, res):
     """Tab completion inside the Terminal window.
 
@@ -1722,6 +1761,7 @@ def main():
         check_tab_legibility(dbg, qmp, res)
         check_tab_order(dbg, qmp, res)
         check_completion(dbg, qmp, res)
+        check_meta(dbg, qmp, res)
         check_scrollbar(dbg, qmp, args.tmp, res)
         check_selection(dbg, qmp, args.tmp, res)
         check_resize(dbg, qmp, args.tmp, res)

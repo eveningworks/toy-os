@@ -157,9 +157,9 @@ static void send_one(struct window *win, int code, unsigned mods) {
 }
 
 // Emits one keycap, encoded the way keyboard.c encodes the physical
-// key. The three branches ARE api/keyboard.h's contract, and getting
-// any of them wrong is silent: Ctrl-C as 'c' + KEY_MOD_CTRL reaches an
-// app that (correctly) never tests that bit for a letter.
+// key -- api/keyboard.h's contract, and getting it wrong is silent:
+// Ctrl-C as 'c' + KEY_MOD_CTRL reaches an app that (correctly) never
+// tests that bit for a letter.
 static void type_key(const struct osk_key *k) {
     struct window *win = focused_client();
     if (!win) return;
@@ -169,20 +169,16 @@ static void type_key(const struct osk_key *k) {
     if (!code) return;
 
     if (g_mods & KEY_MOD_CTRL) {
-        // Ctrl folds a LETTER to its control code and drops anything
-        // else, rather than inventing an encoding for it.
+        // Ctrl folds a LETTER to its control code; anything else is the
+        // key itself, with the bit.
         int lower = (code >= 'A' && code <= 'Z') ? code - 'A' + 'a' : code;
-        if (lower < 'a' || lower > 'z') return;
-        send_one(win, lower - 'a' + 1, g_mods);
-        return;
+        if (lower >= 'a' && lower <= 'z') {
+            send_one(win, lower - 'a' + 1, g_mods);
+            return;
+        }
     }
-    if (g_mods & KEY_MOD_ALT) {
-        // Meta prefix: two keystrokes, ESC then the key, which is what
-        // readline and this kernel's line editor both expect.
-        send_one(win, 27, g_mods);
-        send_one(win, code, g_mods);
-        return;
-    }
+    // Alt is the key with KEY_MOD_ALT; the ESC prefix a terminal wants
+    // is the terminal's to add.
     send_one(win, code, g_mods);
 }
 

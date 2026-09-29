@@ -1054,7 +1054,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // THE NAME BEING EDITED IN PLACE takes every key -- F2, Delete and
     // Ctrl+C mean text editing inside it, not file operations.
     if (uui_fileview_renaming(active())) {
-        uui_fileview_key(active(), key);
+        if (!uui_key_is_shortcut(key, mods)) uui_fileview_key(active(), key);
         rename_poll();
         refresh_status();
         uapp_redraw(a);
@@ -1203,7 +1203,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // on its own, including any it grows later.
     char before[PATH_MAX_LEN];
     snprintf(before, sizeof before, "%s", uui_fileview_dir(active()));
-    if (uui_fileview_key(active(), key)) {
+    if (!uui_key_is_shortcut(key, mods) && uui_fileview_key(active(), key)) {
         const char *now = uui_fileview_dir(active());
         if (strcmp(before, now) != 0) fm_history_record(g_active, now);
         refresh_status();

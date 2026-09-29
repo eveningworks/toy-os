@@ -58,6 +58,7 @@ different failure -- but it means 2b is only worth anything paired with
 
 import argparse
 import os
+import re
 import sys
 import time
 
@@ -74,6 +75,7 @@ SPAWN_TIMEOUT_S = 15.0
 # api/keyboard.h. The modifier codes exist ONLY on the transition path.
 KEY_CTRL = 0xA8
 KEY_SHIFT = 0xA7
+KEY_MOD_CTRL, KEY_MOD_ALT = 0x02, 0x04   # api/keyboard.h
 
 
 class Result:
@@ -241,6 +243,74 @@ def run(dbg, qmp, res):
     res.check("5. every key that went down has come back up",
               last_held == 0,
               f"winclient still holds {last_held} key(s) -- see the log above")
+
+    # --- 6. Ctrl and Alt ride as BITS beside the key -------------------
+    #
+    # api/keyboard.h's "Ctrl and Alt": a window gets the key and its
+    # modifier bit. Alt+key used to arrive as ESC then the key (a
+    # terminal's meta prefix, which opened Doom's menu mid-strafe), and
+    # Ctrl with a non-letter used to arrive as nothing at all.
+    def presses(lines):
+        out = []
+        for line in lines:
+            m = re.search(r"winclient: keydown (\d+) held=\d+ mods=(\d+)", line)
+            if m:
+                out.append((int(m.group(1)), int(m.group(2))))
+        return out
+
+    def phys(lines):
+        out = []
+        for line in lines:
+            m = re.search(r"winclient: phys (\d+) (\d+) mods=(\d+)", line)
+            if m:
+                out.append((int(m.group(1)), int(m.group(2)), int(m.group(3))))
+        return out
+
+    dbg.logs("winclient:", clear=True)
+    qmp.key_down("alt")
+    settle_input(dbg)
+    qmp.send_key("a")
+    settle_input(dbg)
+    qmp.key_up("alt")
+    settle_input(dbg)
+    got = presses(dbg.logs("winclient:", clear=True))
+    res.check("6a. Alt+a is ONE press of 'a' with KEY_MOD_ALT, no ESC before it",
+              any(k == ord("a") and m & KEY_MOD_ALT for k, m in got)
+              and not any(k == 0x1B for k, _ in got), str(got))
+
+    qmp.key_down("ctrl")
+    settle_input(dbg)
+    qmp.send_key("1")
+    settle_input(dbg)
+    qmp.key_up("ctrl")
+    settle_input(dbg)
+    lines = dbg.logs("winclient:", clear=True)
+    got = presses(lines)
+    res.check("6b. Ctrl+1 arrives as '1' with KEY_MOD_CTRL (it used to be dropped)",
+              any(k == ord("1") and m & KEY_MOD_CTRL for k, m in got), str(got))
+
+    # --- 7. keys BY POSITION, for a window that asked -------------------
+    #
+    # The same Ctrl+1, on the physical stream: evdev LEFTCTRL (29) and
+    # 1 (2), both edges, in order, the '1' carrying the Ctrl bit.
+    edges = [(k, d) for k, d, _ in phys(lines)]
+    want = [(29, 1), (2, 1), (2, 0), (29, 0)]
+    it = iter(edges)
+    res.check("7a. Ctrl+1 reaches on_phys_key as four edges by position",
+              all(w in it for w in want), str(edges))
+    res.check("7b. ...and the '1' press carries KEY_MOD_CTRL",
+              any(k == 2 and d == 1 and m & KEY_MOD_CTRL for k, d, m in phys(lines)),
+              str(phys(lines)))
+
+    # Held past the typematic delay: one press, however long, and no
+    # repeat -- a game counts presses.
+    qmp.key_down("a")
+    settle_input(dbg, 1.5)
+    qmp.key_up("a")
+    settle_input(dbg)
+    edges = [(k, d) for k, d, _ in phys(dbg.logs("winclient:", clear=True))]
+    res.check("7c. a held key is ONE press and ONE release on the physical stream",
+              edges.count((30, 1)) == 1 and edges.count((30, 0)) == 1, str(edges))
 
 
 def main():

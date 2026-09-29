@@ -981,6 +981,10 @@ static void dlg_dispatch(struct uapp_window *w, const struct win_event *ev) {
         else uapp_window_close(w);
         return;
     case WIN_EV_KEY: {
+        if (uui_key_is_shortcut(ev->a, ev->mods)) {   // as dispatch() does
+            if (d->on_key) d->on_key(w, ev->a, ev->mods);
+            return;
+        }
         if (w->router.count) {
             int changed = 0;
             int id = uui_router_overlay_key(&w->router, ev->a, ev->mods, &changed);
@@ -1547,6 +1551,12 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             a->dirty = 1;
             break;
         }
+        // A SHORTCUT SKIPS THE WIDGETS (uui_widget.h): Ctrl+1 goes to the
+        // app, and a focused field does not type a 1.
+        if (uui_key_is_shortcut(ev->a, ev->mods)) {
+            if (d->on_key) d->on_key(a, ev->a, ev->mods);
+            break;
+        }
         if (a->router.count) {
             int changed = 0;
             int id = uui_router_overlay_key(&a->router, ev->a, ev->mods, &changed);
@@ -1570,6 +1580,10 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             }
         }
         if (d->on_key) d->on_key(a, ev->a, ev->mods);
+        break;
+
+    case WIN_EV_KEY_PHYS:
+        if (d->on_phys_key) d->on_phys_key(a, ev->a, ev->b, ev->mods);
         break;
 
     case WIN_EV_KEY_UP:
@@ -1780,7 +1794,8 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     // asked for nothing: "fixed size, no minimum" is a statement, and
     // leaving TWS to assume it would be the inference this protocol
     // deliberately avoids.
-    wmchan_send(WIN_REQ_HINTS, a->window, (int)desc->flags,
+    wmchan_send(WIN_REQ_HINTS, a->window,
+                (int)(desc->flags | (desc->on_phys_key ? WIN_HINT_PHYS_KEYS : 0)),
                 desc->min_w, desc->min_h, 0);
 
     // Arm the repeating timer, if the app asked for one. Only useful

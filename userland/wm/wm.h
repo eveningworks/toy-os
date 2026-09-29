@@ -63,6 +63,8 @@ struct window {
     // The client said it draws write-only (WIN_HINT_SCANOUT), so while
     // fullscreen it may be lent the display's buffers -- wm_scanout.c.
     int scanout_ok;
+    // The client asked for keys by position too (WIN_HINT_PHYS_KEYS).
+    int phys_keys;
 
     // Can the user resize this window? A property of the WINDOW, not of
     // whatever created it -- which is the whole point of it living here.

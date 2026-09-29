@@ -8961,3 +8961,57 @@ the one that is safe without one. A home page of category tiles (Windows
 11, GNOME) was offered and not chosen; search in the sidebar answers the
 same question without a second navigation level.
 
+## Ctrl and Alt reach a window as bits, and a game reads keys by position
+
+The keyboard driver encoded Ctrl and Alt for a terminal -- Alt+key as
+ESC then the key, Ctrl with a non-letter dropped -- and a window got the
+same bytes. Doom plays with Ctrl (fire), Shift (run) and Alt (strafe)
+held, so firing while pressing 1 switched no weapon, and strafing while
+pressing Space (use) was an Esc press that opened the menu and never
+came up. Every GUI app also saw Alt+x as an Esc that cancelled whatever
+dialog was open.
+
+**Two changes, one per kind of reader.** Real systems separate them:
+SDL has scancodes beside its text-input event, Windows WM_KEYDOWN
+beside WM_CHAR, Wayland `wl_keyboard.key`'s evdev keycode that the
+client translates with xkbcommon, and X11 a keycode plus a state mask.
+None of them lets a modifier change which key is reported.
+
+1. **A window gets the key with its modifier bit.** Ctrl+1 is '1' with
+   `KEY_MOD_CTRL`, Alt+B is 'b' with `KEY_MOD_ALT`. The terminal
+   encoding moved to where the ANSI encoding of an arrow already lived
+   -- `tty_input()` below the bypass, and the GUI Terminal for its pty
+   -- the split this repo's conventions already stated ("what crosses a
+   tty is ANSI; what reaches a window is a keysym") and the driver had
+   not followed for Ctrl and Alt. **Ctrl+letter stays a control code**
+   for windows too: every app's shortcuts are written against 0x13 and
+   friends, and changing that would have been a rewrite of all of them
+   for no user-visible gain. A character with Ctrl or Alt held is a
+   SHORTCUT and is never typed: uapp routes it past the widgets to
+   `on_key`, and a text widget declines it (`uui_key_is_shortcut()`),
+   the line Qt and GTK draw.
+
+2. **A game reads keys by POSITION**, on a second, opt-in stream:
+   `WIN_EV_KEY_PHYS` carries the evdev keycode (`abi/input_keys.h`),
+   both edges, no autorepeat, delivered only to a focused window that
+   set `WIN_HINT_PHYS_KEYS` (uapp sets it when `on_phys_key` is
+   present). **Opt-in** because every key would otherwise cost every
+   client a second event it never reads; **in addition to** the
+   translated keys, never instead, so text and shortcuts keep one path.
+   The kernel dedups typematic repeats with a held bitmap -- a game
+   counts presses. A press is withheld while a WM overlay is open (the
+   Start menu is being typed into) but a release never is, and a
+   window losing focus gets no releases for keys still held, which the
+   client treats as all of them coming up -- `wl_keyboard.leave`'s rule.
+
+**Doom maps positions to what a US keyboard prints**, the layout its
+defaults and a WASD binding assume; a save-game name typed on a Nordic
+layout gets US characters, which Doom's ASCII-only font could not show
+otherwise anyway.
+
+Not taken: **only B** (bits, no position stream) would have fixed
+Ctrl+1 and Alt+Space but left a game's controls moving with the
+layout; **only A** would have fixed Doom and left every other app
+seeing Alt as Esc. **Moving Ctrl+letter to a bit as well** is the
+Wayland shape but a rewrite of every shortcut table for nothing a user
+sees.

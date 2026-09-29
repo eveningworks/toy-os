@@ -199,6 +199,13 @@ def run(dbg, qmp, tmp, shot_dir, res):
            ox + tr[0] + tr[2] - 2, oy + tr[1] + tr[3] - 2)
 
     body = "Round trip through the real filesystem."
+    # A SHORTCUT IS NEVER TYPED. Ctrl+1 and Alt+x reach a window as the
+    # key with its modifier bit (api/keyboard.h), and an editor that
+    # inserted every character would type on every shortcut. Checked on
+    # the saved file below.
+    dbg.send("gui key 0x31 ctrl")
+    dbg.send("gui key 0x78 alt")
+    dbg.settle()
     type_text(dbg, body)
     # Park the caret at the start before capturing the reference.
     # load_file() resets the cursor to 0, so a reference captured with
@@ -244,6 +251,10 @@ def run(dbg, qmp, tmp, shot_dir, res):
     catted = dbg.send(f"sh cat /{SAVE_NAME}")
     res.check("the file's CONTENT on disk is what was typed",
               body in catted.replace("\r", ""),
+              f"`cat` returned: {catted[:200]!r}")
+    res.check("...and Ctrl+1 / Alt+x typed nothing into it",
+              ("1" + body) not in catted and ("x" + body) not in catted
+              and ("1x" + body) not in catted,
               f"`cat` returned: {catted[:200]!r}")
 
     # --- clear, then reopen -------------------------------------------

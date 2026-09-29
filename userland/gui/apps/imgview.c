@@ -564,7 +564,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     if (key == 0x9B) { do_command(a, CMD_RELOAD); return; }  // F3 -- there is no F5 code
     if (key == KEY_ARROW_RIGHT) key = KEY_ARROW_DOWN;        // a filmstrip reads both ways
     else if (key == KEY_ARROW_LEFT) key = KEY_ARROW_UP;
-    if (uui_fileview_key(&g_list, key)) {
+    if (!uui_key_is_shortcut(key, mods) && uui_fileview_key(&g_list, key)) {
         show_selected(a);
         uapp_redraw(a);
     }

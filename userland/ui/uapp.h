@@ -276,6 +276,14 @@ struct uapp_desc {
     // an up you have no down for is the correct handling.
     void (*on_key_up)(struct uapp *a, int key, unsigned mods);
 
+    // KEYS BY POSITION, for a game: the evdev keycode (abi/input_keys.h),
+    // 1 down / 0 up, KEY_MOD_* after the change. Setting it is what asks
+    // the compositor for them (WIN_HINT_PHYS_KEYS). They come IN ADDITION
+    // to on_key/on_key_up, so an app reading both acts on one. No
+    // autorepeat; and on focus loss no releases come for keys still held
+    // -- the app treats on_focus(0) as all of them up.
+    void (*on_phys_key)(struct uapp *a, int keycode, int down, unsigned mods);
+
     // Content-relative, in pixels. `buttons` is offered these first;
     // these still fire, so an app can mix routed controls with its own
     // hit-testing (Shapes' checkbox, Notepad's text area).

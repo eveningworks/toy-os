@@ -99,6 +99,12 @@ layout modifier so Nordic third-level characters keep working.
 See `kernel/include/api/keyboard.h`'s "Ctrl and Alt" comment,
 `kernel/lib/klineedit.c`, and the git history.
 
+**Since 2026-09-29 this is a TERMINAL's encoding only.** A window gets
+Ctrl+letter as the same control code, but Alt and Ctrl-with-a-non-letter
+as the key plus a modifier bit, and the ESC prefix is added by
+`tty_input()` and the GUI Terminal -- see `docs/decisions/gui.md`, "Ctrl
+and Alt reach a window as bits, and a game reads keys by position".
+
 ## PATH lives in the shell, not the kernel -- and builtins win over it
 
 Typing a bare `nx_test` runs `/bin/nx_test`; the `run` prefix is

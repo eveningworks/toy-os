@@ -430,7 +430,10 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // The list owns the arrows: moving the selection does NOT start
     // playing, so the keyboard can browse a directory without every
     // keypress interrupting the track.
-    if (uui_fileview_key(&g_list, key)) { uapp_redraw(a); return; }
+    if (!uui_key_is_shortcut(key, mods) && uui_fileview_key(&g_list, key)) {
+        uapp_redraw(a);
+        return;
+    }
     if (key == '\n' || key == '\r') { play_selected(); uapp_redraw(a); }
 }
 

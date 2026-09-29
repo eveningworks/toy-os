@@ -2046,6 +2046,16 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // An ordinary character encodes to itself, so typing costs one byte
     // as it always did. A key with no terminal sequence (Super, a bare
     // modifier) encodes to nothing and is correctly not sent.
+    //
+    // Ctrl and Alt arrive as bits beside the key, so they are encoded
+    // here, by the rule tty_input() applies to the console: Ctrl with a
+    // character that is not a letter has no terminal code and is not
+    // sent, and Alt is readline's meta prefix, ESC then the key. A KEY_*
+    // special is never prefixed.
+    if (IS_PRINTABLE_KEY(key) && (mods & KEY_MOD_CTRL)) return;
+    if ((mods & KEY_MOD_ALT) && !(key >= KEY_ARROW_UP && key <= KEY_PRINT_SCREEN) &&
+        s->master >= 0)
+        sys_write(s->master, "\x1b", 1);
     char seq[TERMKEY_MAX];
     int n = termkey_encode(key, seq, sizeof seq);
     if (n > 0 && s->master >= 0) sys_write(s->master, seq, (size_t)n);

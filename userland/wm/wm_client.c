@@ -661,6 +661,7 @@ static void on_window_hints(int pid, uint32_t id, unsigned flags, int min_w, int
 
     windows[idx].resizable = (flags & WIN_HINT_RESIZABLE) ? 1 : 0;
     windows[idx].scanout_ok = (flags & WIN_HINT_SCANOUT) ? 1 : 0;
+    windows[idx].phys_keys = (flags & WIN_HINT_PHYS_KEYS) ? 1 : 0;
     windows[idx].min_w = min_w;
     windows[idx].min_h = min_h;
 
@@ -1426,6 +1427,24 @@ void wm_client_send_key_up(struct window *win, int key, unsigned mods) {
     ev.a = key;
     ev.mods = mods;
     if (!win_events_push(win->client_pid, &ev)) note_dropped(win);
+}
+
+// A key BY POSITION (abi/win_proto.h's WIN_EV_KEY_PHYS), to the focused
+// window if it asked for them. **A PRESS WHILE AN OVERLAY IS OPEN IS NOT
+// ITS**: the Start menu is being typed into, and a game behind it must
+// not walk. A release always goes, or a key held as the menu opened
+// would stay down in the game.
+void wm_client_route_phys_key(int keycode, int down, unsigned mods) {
+    int f = wm_focus_index();
+    if (f < 0 || !wm_client_is_client_window(&windows[f]) || !windows[f].phys_keys) return;
+    if (down && wm_overlay_any_open()) return;
+    struct win_event ev = {0};
+    ev.type = WIN_EV_KEY_PHYS;
+    ev.window = windows[f].client_win;
+    ev.a = keycode;
+    ev.b = down;
+    ev.mods = mods;
+    if (!win_events_push(windows[f].client_pid, &ev)) note_dropped(&windows[f]);
 }
 
 void wm_client_send_mouse(struct window *win, int type, int x, int y, unsigned buttons) {
