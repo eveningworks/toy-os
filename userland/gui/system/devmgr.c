@@ -129,6 +129,18 @@ static struct uui_focus g_focus;
 
 // --- the tree ------------------------------------------------------------
 
+// A heading's label with its member count after it -- "Sound (2)", as
+// the mockup and Windows' collapsed categories show. Storage for the
+// tree, which borrows every label; reset on each rebuild.
+static char g_head[UDEV_T_COUNT + 4][72];
+static int g_head_n;
+
+static const char *head(const char *name, int count) {
+    if (g_head_n >= (int)(sizeof g_head / sizeof g_head[0])) return name;
+    snprintf(g_head[g_head_n], sizeof g_head[0], "%s (%d)", name, count);
+    return g_head[g_head_n++];
+}
+
 static void label_device(int i) {
     strlcpy(g_label[i], g_dev[i].name, sizeof g_label[i]);
 }
@@ -164,9 +176,9 @@ static void open_problems(void) {
 static void build_by_type(void) {
     for (int t = 0; t < UDEV_T_COUNT; t++) {
         int any = 0;
-        for (int i = 0; i < g_n; i++) any |= (int)g_dev[i].type == t;
+        for (int i = 0; i < g_n; i++) any += (int)g_dev[i].type == t;
         if (!any) continue;
-        add_node(udevice_type_name(t), 0, NODE_CAT(t), udevice_type_icon(t));
+        add_node(head(udevice_type_name(t), any), 0, NODE_CAT(t), udevice_type_icon(t));
         for (int i = 0; i < g_n; i++)
             if ((int)g_dev[i].type == t) add_device(i, 1);
     }
@@ -175,7 +187,9 @@ static void build_by_type(void) {
 // As the hardware is wired: the PCI bus, with each USB device under the
 // controller it hangs off; then the platform devices; then the CPUs.
 static void build_by_connection(void) {
-    add_node("PCI bus", 0, NODE_BUS_PCI, "cat-system");
+    int npci = 0, ncpu = 0;
+    for (int i = 0; i < g_n; i++) { npci += g_dev[i].bus == UDEV_PCI; ncpu += g_dev[i].bus == UDEV_CPU; }
+    add_node(head("PCI bus", npci), 0, NODE_BUS_PCI, "cat-system");
     for (int i = 0; i < g_n; i++) {
         if (g_dev[i].bus != UDEV_PCI) continue;
         add_device(i, 1);
@@ -183,13 +197,14 @@ static void build_by_connection(void) {
             if (g_dev[j].bus == UDEV_USB && g_dev[j].parent == i) add_device(j, 2);
     }
     int plat = 0;
-    for (int i = 0; i < g_n; i++) plat |= g_dev[i].bus == UDEV_PLATFORM;
+    for (int i = 0; i < g_n; i++) plat += g_dev[i].bus == UDEV_PLATFORM;
     if (plat) {
-        add_node("Platform devices", 0, NODE_BUS_PLAT, "cat-system");
+        add_node(head("Platform devices", plat), 0, NODE_BUS_PLAT, "cat-system");
         for (int i = 0; i < g_n; i++)
             if (g_dev[i].bus == UDEV_PLATFORM) add_device(i, 1);
     }
-    add_node(udevice_type_name(UDEV_T_CPU), 0, NODE_CAT(UDEV_T_CPU), udevice_type_icon(UDEV_T_CPU));
+    add_node(head(udevice_type_name(UDEV_T_CPU), ncpu), 0, NODE_CAT(UDEV_T_CPU),
+             udevice_type_icon(UDEV_T_CPU));
     for (int i = 0; i < g_n; i++)
         if (g_dev[i].bus == UDEV_CPU) add_device(i, 1);
 }
@@ -209,6 +224,7 @@ static const struct udevice *find_id(const char *id) {
 // stable id), since the index of a device can change with a relist.
 static void rebuild_tree(const char *keep_id) {
     g_node_count = 0;
+    g_head_n = 0;
     for (int i = 0; i < g_n; i++) label_device(i);
     if (g_by_conn) build_by_connection(); else build_by_type();
     uui_tree_set_nodes_keep(&g_tree, g_nodes, g_node_count);
@@ -441,14 +457,27 @@ static void draw_pane(struct ugfx_surface *s) {
         y = row(s, y, "IDs", buf);
     }
     if (y && d->vendor_name[0]) y = row(s, y, "Vendor", d->vendor_name);
-    // The class BY NAME, the code after it: the name is what a person
-    // reads, the code what they search for.
+    // The class LEVEL BY LEVEL, each by name with its code after it; a
+    // level the database has no name for is left out, and a device with
+    // no names at all shows the bare code.
     if (y && (d->bus == UDEV_PCI || d->bus == UDEV_USB)) {
-        char code[16];
-        snprintf(code, sizeof code, "%02x/%02x/%02x", d->cls, d->subclass, d->prog_if);
-        if (d->class_desc[0]) snprintf(buf, sizeof buf, "%s (%s)", d->class_desc, code);
-        else strlcpy(buf, code, sizeof buf);
-        y = row(s, y, "Class", buf);
+        const char *third = d->bus == UDEV_USB ? "Protocol" : "Interface";
+        if (!d->class_name[0] && !d->subclass_name[0] && !d->progif_name[0]) {
+            snprintf(buf, sizeof buf, "%02x/%02x/%02x", d->cls, d->subclass, d->prog_if);
+            y = row(s, y, "Class", buf);
+        }
+        if (y && d->class_name[0]) {
+            snprintf(buf, sizeof buf, "%s (%02x)", d->class_name, d->cls);
+            y = row(s, y, "Class", buf);
+        }
+        if (y && d->subclass_name[0]) {
+            snprintf(buf, sizeof buf, "%s (%02x)", d->subclass_name, d->subclass);
+            y = row(s, y, "Subclass", buf);
+        }
+        if (y && d->progif_name[0]) {
+            snprintf(buf, sizeof buf, "%s (%02x)", d->progif_name, d->prog_if);
+            y = row(s, y, third, buf);
+        }
     }
     if (y && d->bus != UDEV_CPU) {
         section(s, &y, "Driver");
@@ -589,9 +618,13 @@ int main(void) {
     uui_menubar_init(&g_menu, menu_items, (int)(sizeof menu_items / sizeof menu_items[0]));
     uui_segmented_init(&g_view, VIEWS, 2, 0);
     uui_tree_init(&g_tree, 0, 0, 0, 0, g_nodes, 0);
+    g_tree.sel_style = UUI_SEL_STRONG;
     uui_splitter_init(&g_split, 1, 430);
     uui_button_init(&g_toggle, 0, 0, 0, 0, "Disable device", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_TOGGLE);
     uui_button_init(&g_refresh, 0, 0, 0, 0, "Refresh", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_REFRESH);
+    // The mockup's look: outlined buttons, and the selected device in
+    // the accent -- both opt-in styles of the toolkit.
+    g_toggle.outlined = g_refresh.outlined = 1;
     uui_checkbox_init(&g_keep, 0, 0, 0, "Keep disabled after restart", UUI_COLOR_UNSET, UUI_COLOR_UNSET);
     uui_dialog_init(&g_ask);
 

@@ -11,7 +11,8 @@ WHAT IT CHECKS, and what a broken version would still pass:
     (CLAUDE.md) -- a tree that reports rows and paints none passes every
     log check;
   - the ICONS are drawn: saturated pixels in the tree, which only the
-    icons have (labels are grey on white; the selection wash is pale);
+    icons have -- outside the selected row, which the Device Manager
+    fills in the accent (uui_tree's strong selection);
   - "By connection" switches the view and KEEPS the selected device;
   - Disable on the network card: the confirm dialog opens, its Disable
     button unbinds the card -- checked through `devctl list`, an
@@ -175,7 +176,14 @@ def main():
     colour = lambda p: max(p) - min(p) > 60
     tree_ink, _ = ink(im, tree_r, dark)
     pane_ink, _ = ink(im, pane_r, dark)
-    icons, span = ink(im, tree_r, colour)
+    # Every row but the selected one, which is accent-filled on purpose.
+    sel_y = c["y"] + ty + lay.get("tree.selected", 0) * lay["tree.row_h"]
+    above = (tree_r[0], tree_r[1], tree_r[2], max(0, sel_y - tree_r[1]))
+    below_y = sel_y + lay["tree.row_h"]
+    below = (tree_r[0], below_y, tree_r[2], max(0, tree_r[1] + tree_r[3] - below_y))
+    i1, s1 = ink(im, above, colour)
+    i2, s2 = ink(im, below, colour)
+    icons, span = i1 + i2, max(s1, s2)
     check("the tree draws its rows", tree_ink > 500, f"{tree_ink} dark px")
     check("the properties pane draws the selected device", pane_ink > 300, f"{pane_ink} dark px")
     # In a band no wider than two indents of icons: colour anywhere else

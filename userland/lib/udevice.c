@@ -152,16 +152,10 @@ static void add_pci(struct udevice *out, int *n, int cap, struct uhwids_entry *i
     }
 }
 
-// The class names joined, most general first, skipping the ones the
-// database lacks and a subclass that only repeats its class ("Hub / Hub").
 static void describe_class(struct udevice *d, const struct uhwids_entry *e) {
-    const char *part[3] = { e->class_name, e->subclass_name, e->progif_name };
-    d->class_desc[0] = '\0';
-    for (int k = 0; k < 3; k++) {
-        if (!part[k][0] || (k && !strcmp(part[k], part[k - 1]))) continue;
-        if (d->class_desc[0]) strlcat(d->class_desc, " / ", sizeof d->class_desc);
-        strlcat(d->class_desc, part[k], sizeof d->class_desc);
-    }
+    strlcpy(d->class_name, e->class_name, sizeof d->class_name);
+    strlcpy(d->subclass_name, e->subclass_name, sizeof d->subclass_name);
+    strlcpy(d->progif_name, e->progif_name, sizeof d->progif_name);
 }
 
 static int all_unreadable(const char *s) {
@@ -294,8 +288,8 @@ int udevice_list(struct udevice *out, int cap) {
         describe_class(d, &ids[i]);
         // pci.ids names every standard class; the kernel's own table is the
         // fallback for a file that is missing or older than the device.
-        if (!d->class_desc[0])
-            strlcpy(d->class_desc, pci_class_name(d->cls, d->subclass), sizeof d->class_desc);
+        if (!d->class_name[0] && !d->subclass_name[0])
+            strlcpy(d->subclass_name, pci_class_name(d->cls, d->subclass), sizeof d->subclass_name);
     }
 
     adopt_class_drivers(out, npci);

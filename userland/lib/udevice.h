@@ -53,9 +53,11 @@ struct udevice {
     int disabled;         // recorded as disabled (runtime or persisted)
     int persisted;        // ...and in /etc/devices.conf
     int problem;          // wants a driver and has none, and is not disabled
-    // What kind of device, by name from the hwdata class section --
-    // "Wireless / Radio Frequency / Bluetooth"; "" where none is known.
-    char class_desc[128];
+    // What kind of device, by name from the hwdata class section, level
+    // by level -- "Wireless", "Radio Frequency", "Bluetooth" -- each ""
+    // where the database has no name for it. The third is PCI's
+    // programming interface or USB's protocol.
+    char class_name[48], subclass_name[48], progif_name[48];
 };
 
 // The devices, into `out` (capacity `cap`). Returns the count.
