@@ -46,29 +46,29 @@ static const struct wm_overlay g_overlays[] = {
     // about to make, which is the one thing every toolkit gets wrong
     // about them. No hover op either; it is not a control.
     { "tooltip",  open_tooltip,  wm_tooltip_draw,  tooltip_click,
-      0, wm_tooltip_damage, wm_tooltip_rect, 0, 0, 0, wm_tooltip_cancel, 0 },
+      0, wm_tooltip_damage, wm_tooltip_rect, 0, 0, 0, wm_tooltip_cancel, 0, 0 },
     { "confirm",  open_confirm,  draw_confirm,     confirm_dialog_handle_click,
-      confirm_dialog_hover_at,   confirm_dialog_damage,   0 /* a full repaint, on purpose */, confirm_dialog_update_press, 0, 0, 0, 0 },
+      confirm_dialog_hover_at,   confirm_dialog_damage,   0 /* a full repaint, on purpose */, confirm_dialog_update_press, 0, 0, 0, 0, 0 },
     { "context",  open_context,  context_menu_draw, context_menu_handle_click,
       context_menu_hover_at,     context_menu_damage,     0 /* a rect per submenu level */, 0, 0, 0, context_menu_close, 0,
       context_menu_contains },
     { "start",    open_start,    start_menu_draw,  start_menu_handle_click,
-      start_menu_hover_at,       start_menu_damage,       start_menu_rect, 0, start_menu_wheel, start_menu_key, start_menu_close, 0 },
+      start_menu_hover_at,       start_menu_damage,       start_menu_rect, 0, start_menu_wheel, start_menu_key, start_menu_close, 0, 0 },
     { "calendar", open_calendar, calendar_draw,    calendar_handle_click,
-      calendar_hover_at,         calendar_damage,         calendar_rect, 0, 0, 0, calendar_close, 0 },
+      calendar_hover_at,         calendar_damage,         calendar_rect, 0, 0, 0, calendar_close, 0, 0 },
     { "volume",   open_volume,   volume_draw,      volume_handle_click,
-      volume_hover_at,           volume_damage,           volume_rect, volume_update_press, 0, 0, volume_close, volume_opened },
+      volume_hover_at,           volume_damage,           volume_rect, volume_update_press, 0, 0, volume_close, volume_opened, 0 },
     { "brightness", open_brightness, brightness_draw, brightness_handle_click,
-      brightness_hover_at,       brightness_damage,       brightness_rect, brightness_update_press, 0, 0, brightness_close, 0 },
+      brightness_hover_at,       brightness_damage,       brightness_rect, brightness_update_press, 0, 0, brightness_close, 0, 0 },
     { "network",  open_network,  network_draw,     network_handle_click,
-      network_hover_at,          network_damage,          network_rect, 0, 0, 0, network_close, 0 },
+      network_hover_at,          network_damage,          network_rect, 0, 0, 0, network_close, 0, 0 },
     { "remote",   open_remote,   remote_draw,      remote_handle_click,
-      remote_hover_at,           remote_damage,           remote_rect, 0, 0, 0, remote_close, 0 },
+      remote_hover_at,           remote_damage,           remote_rect, 0, 0, 0, remote_close, 0, 0 },
     // LAST, so it is the least modal: a menu overlapping the keyboard
     // takes the click and paints on top. No `close` op -- a keyboard
     // must survive the click that puts the caret where it is typing.
     { "osk",      open_osk,      osk_draw,         osk_handle_click,
-      osk_hover_at,              osk_damage,              osk_rect, osk_update_press, 0, 0, 0, 0 },
+      osk_hover_at,              osk_damage,              osk_rect, osk_update_press, 0, 0, 0, 0, 0 },
 };
 #define OVERLAY_COUNT ((int)(sizeof g_overlays / sizeof g_overlays[0]))
 
