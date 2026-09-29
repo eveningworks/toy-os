@@ -38,6 +38,11 @@ cross-compiler -- host and target are both x86-64, so plain system
   Not for a one-line obvious fix.
 - **Keep chat compact and terse.** Don't restate what a diff or a build
   log already shows.
+- **MOCK UP ANYTHING VISIBLE BEFORE CODING IT** (standing instruction,
+  2026-09-29): a Design canvas, one artboard per option, in toy-os's own
+  palette and with real data, published BEFORE the choice is asked and
+  before any code -- for a new app, a redesign, even a marker in a tree.
+  How: `.claude/skills/toy-os-feature-workflow/references/questions-that-worked.md`.
 - **Before adding a feature to a GUI app, consider whether it should be
   a reusable `userland/ui/` widget** -- and ask the user either way.
 - **Act like an experienced OS/UI designer**: where a real OS has a

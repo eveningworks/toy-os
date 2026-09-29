@@ -84,7 +84,10 @@ to this file too).
    what exists today and what a change would actually touch, not just an
    instinct.
 
-2. **Present a few real choices before writing code.** This user's
+2. **Present a few real choices before writing code** -- and for
+   anything with a visible layout, **MOCKUPS FIRST**: a Design canvas of
+   the options, published before the question is asked (CLAUDE.md;
+   `references/questions-that-worked.md` has how). This user's
    standing instruction is "always give me a few choices to choose from
    if not specified otherwise" -- use `AskUserQuestion`. The choices
    should come from what research actually found, not be generic
