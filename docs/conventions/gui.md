@@ -4897,3 +4897,13 @@ the fs generation. The watch is on a directory's DIRECT children, so a
 file two levels down needs its own topic (that is why `/etc/effects` is
 separate from `/etc`). Hand edits are covered by the directory watch;
 the registry's own writes arrive both ways, which is harmless.
+
+## "SHOW ADVANCED SETTINGS" APPEARS ONLY ON A PAGE THAT HAS ONE
+
+System Settings' disclosure is shown when the open page declares an
+`Advanced=1` setting, not whenever `g_show_advanced` is set: that flag
+is global, and testing it put the checkbox on every page once it had
+been ticked on one. No stock setting is `Advanced=1` now --
+`system.cursor_style`, the only one, is a plain setting on the Console
+page -- so the checkbox appears only for a setting a user adds.
+

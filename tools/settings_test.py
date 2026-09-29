@@ -1040,8 +1040,7 @@ def main():
     #
     # The check that would catch a staged model that quietly still
     # applied: /etc must be UNCHANGED after the click and CHANGED after
-    # Apply. Cursor style is not used -- it is marked Advanced and so is
-    # not on a page by default, which is itself asserted below.
+    # Apply.
     # ESTABLISH the baseline rather than inherit it. The key may never
     # have been written, in which case stored_value() is None -- and
     # "None -> None" passes the unchanged check vacuously, which is
@@ -1187,32 +1186,27 @@ def main():
         press("reset")
         time.sleep(0.4)
 
-    # --- Advanced= keeps a setting off the page until asked ----------
+    # --- THE CONSOLE PAGE SHOWS CURSOR STYLE, WITH NO DISCLOSURE ---------
     #
-    # system.cursor_style is marked Advanced=1 in /etc/settings.d, so it
-    # must NOT be on its page by default and MUST appear once the toggle
-    # is checked. Both halves matter: the first alone would pass if the
-    # setting had simply vanished from the registry.
-    # The Console page carries it (cursor_config.c's group). This looked
-    # for "Console cursor" or "Appearance" until the sidebar grew
-    # headings -- neither was a page, so the check was silently skipped.
+    # system.cursor_style was the only Advanced=1 setting, so Console was
+    # the only page with a "Show advanced settings" toggle -- and once
+    # checked it appeared on EVERY page, because the toggle was shown
+    # whenever the global flag was set. The setting is plain now and the
+    # toggle is shown only where a page has an advanced setting, so no
+    # stock page has one. Both halves: the setting is there, and there is
+    # nothing to click.
     appearance = row_named("Console")
     check("the sidebar offers the Console page", appearance is not None)
     if appearance:
         mark = len(drain(dbg))
         open_row(appearance)
         page = slots(dbg, mark)
-        check("an Advanced setting is NOT on the page by default",
-              not any("cursor_style" in s["name"] for s in page),
+        check("cursor style is on the Console page without a toggle",
+              any("cursor_style" in s["name"] for s in page),
               f"{[s['name'] for s in page]}")
         adv = advanced_toggle(dbg, mark)
-        if adv and adv["shown"]:
-            mark2 = len(drain(dbg))
-            click(adv["x"] + 6, adv["y"] + adv["h"] // 2)
-            page = slots(dbg, mark2)
-            check("...and the toggle reveals it",
-                  any("cursor_style" in s["name"] for s in page),
-                  f"{[s['name'] for s in page]}")
+        check("...and no page shows a 'Show advanced settings' toggle",
+              not adv or not adv["shown"], f"{adv}")
 
     # --- A LONG DESCRIPTION WRAPS; A SHORT ONE DOES NOT ---------------
     #

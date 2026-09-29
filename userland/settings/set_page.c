@@ -280,7 +280,7 @@ void open_group(int g) {
     g_saver_slot = -1;
     g_saver_base = -1;
 
-    int hidden_advanced = 0;
+    int hidden_advanced = 0, page_advanced = 0;
     // A selection sort over the group's settings: the registry's own
     // order has to survive as the tie-break.
     int taken[MAX_SETTINGS];
@@ -291,10 +291,13 @@ void open_group(int g) {
             if (taken[i]) continue;
             if (strcmp(g_cat_of[i], g_group_cat[g]) != 0) continue;
             if (strcmp(group_key_of(i), g_group_key[g]) != 0) continue;
-            if ((g_sflags[i] & SETTING_ABI_SF_ADVANCED) && !g_show_advanced) {
-                hidden_advanced++;
-                taken[i] = 1;
-                continue;
+            if (g_sflags[i] & SETTING_ABI_SF_ADVANCED) {
+                page_advanced++;
+                if (!g_show_advanced) {
+                    hidden_advanced++;
+                    taken[i] = 1;
+                    continue;
+                }
             }
             if (best < 0 || g_order[i] < g_order[best]) best = i;
         }
@@ -346,8 +349,9 @@ void open_group(int g) {
 
     g_advanced_cb.checked = g_show_advanced;
     g_advanced_cb.label = "Show advanced settings";
-    // Only where there is something to reveal.
-    g_advanced_has = hidden_advanced > 0 || g_show_advanced;
+    // Only on a page that HAS an advanced setting. Not `|| g_show_advanced`:
+    // the flag is global, so that put the toggle on every page once checked.
+    g_advanced_has = page_advanced > 0;
 
     snprintf(g_status, sizeof g_status, "%s", g_page_title_text);
     relayout_page();
