@@ -2533,6 +2533,23 @@ real scanout hardware does. Do not write a pixel assertion for one.
   session bold face, so a machine with no fonts on disk still renders a
   readable document.
 
+- **A LINK IN A MARKDOWN PAGE IS A CODE SPAN THE APP NAMES.** The pages
+  write `ping`, never a Markdown link to the page's file -- the same text reads right in a
+  terminal through `/bin/doc` -- so `uui_markdown_set_links()` takes a
+  predicate and the widget makes every inline-code word it accepts a
+  link: accent ink, underlined, no code tint. Where each was drawn is
+  recorded AS IT IS DRAWN, so a link scrolled out of view cannot be
+  clicked and nothing re-derives the wrap. A press arms, a release on
+  the same link commits, and the app reads it with
+  `uui_markdown_take_link()` from `on_widget`. Help's predicate is "names
+  another page": the page's own name is not a link.
+
+- **ALT+ARROW BELONGS TO THE WINDOW, NOT THE FOCUSED WIDGET.** It is
+  Back/Forward in every browser, file manager and help viewer, so a
+  focused widget that uses bare arrows (`uui_tree`) returns 0 for them
+  with Alt held and the key reaches the app's `on_key`. The focus ring
+  delivers keys BEFORE `on_key`, which is why the widget has to decline.
+
 - **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME.**
   `desktop.wallpaper` (a filename stem under `/usr/share/wallpapers`, or
   `none`) and `desktop.wallpaper_mode` (`fill`/`fit`), DECLARED by

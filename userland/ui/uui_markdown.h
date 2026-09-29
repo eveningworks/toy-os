@@ -30,6 +30,8 @@
 // an error -- the widget falls back to the session bold face, so a
 // machine with no fonts on disk still renders a readable document.
 #define UUI_MD_FACES 3
+#define UUI_MD_LINKS 96       // links recorded per frame; more draw, unclickable
+#define UUI_MD_LINK_MAX 48    // a target's longest name
 
 struct uui_markdown_face {
     struct ugfx_font font;
@@ -60,6 +62,20 @@ struct uui_markdown {
 
     struct uui_markdown_face face[UUI_MD_FACES];
     int faces_tried;
+
+    // --- links (uui_markdown_set_links) -------------------------------
+    //
+    // A LINK IS AN INLINE-CODE WORD THE APP SAYS NAMES SOMETHING: the
+    // pages write `ping` for a command, never [ping](ping.md), so the app
+    // supplies the predicate and the widget draws the word in the accent,
+    // underlined. Where each was drawn is recorded as it is drawn, in
+    // widget coordinates, and a press-and-release on one is reported.
+    int (*is_link)(void *ctx, const char *word);
+    void *link_ctx;
+    struct uui_md_link { int x, y, w, h; char target[UUI_MD_LINK_MAX]; } link[UUI_MD_LINKS];
+    int link_n;
+    int armed_link, hover_link;   // indices into `link`, or -1
+    char taken[UUI_MD_LINK_MAX];  // the last clicked target, until taken
 };
 
 void uui_markdown_init(struct uui_markdown *m);
@@ -89,6 +105,14 @@ int  uui_markdown_hit(const struct uui_markdown *m, int cx, int cy);
 // that owns memory** -- this one owns three font arenas, and an app that
 // drops a markdown view without calling this leaks them.
 void uui_markdown_free(struct uui_markdown *m);
+
+// Makes inline-code words for which `is_link(ctx, word)` returns 1 into
+// links. NULL turns links off (the default).
+void uui_markdown_set_links(struct uui_markdown *m,
+                            int (*is_link)(void *ctx, const char *word), void *ctx);
+// The link clicked since the last call, copied to `out`: 1, or 0 when
+// none was. A click is a press and a release on the same link.
+int uui_markdown_take_link(struct uui_markdown *m, char *out, int cap);
 
 struct uui_widget_ops;
 extern const struct uui_widget_ops uui_markdown_ops;

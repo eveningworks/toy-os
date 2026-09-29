@@ -6,6 +6,7 @@
 #include "ui/utheme.h"
 #include "lib/umd.h"
 #include <stdlib.h>
+#include <string.h>
 
 // The faces this loads for itself. The session fonts cover body text and
 // bold; what they cannot give is a bigger heading or a real monospace.
@@ -107,22 +108,65 @@ static int char_px(const struct ugfx_font *f, char c) {
 // so it follows a theme change (docs/gui-guidelines.md).
 static uint32_t code_bg(void) { return UTHEME_PANEL_BG; }
 
+// The word's one run of inline code, as [*a, *b), if the APP calls it a
+// link: `ping`, and `ping`, with the comma outside the code. 0 if not.
+static int link_span(struct md_ctx *c, const char *txt, const unsigned *st, int n,
+                     int *a, int *b, char *out, int cap) {
+    if (!c->m->is_link) return 0;
+    int i = 0;
+    while (i < n && !(st[i] & UMD_STYLE_CODE)) i++;
+    int j = i;
+    while (j < n && (st[j] & UMD_STYLE_CODE)) j++;
+    if (i == j || j - i >= cap) return 0;
+    for (int k = j; k < n; k++) if (st[k] & UMD_STYLE_CODE) return 0;  // two runs: not one name
+    for (int k = i; k < j; k++) out[k - i] = txt[k];
+    out[j - i] = '\0';
+    if (!c->m->is_link(c->m->link_ctx, out)) return 0;
+    *a = i;
+    *b = j;
+    return 1;
+}
+
 static void put_run(struct md_ctx *c, int x, int y, const char *txt,
                      const unsigned *st, int n, int level) {
     if (!c->s) return;
     x += c->ox;
     y += c->oy;
+    char target[UUI_MD_LINK_MAX];
+    int la = -1, lb = -1, lx = 0, lh = 0, li = -1;
+    if (!level && link_span(c, txt, st, n, &la, &lb, target, sizeof target) &&
+        c->m->link_n < UUI_MD_LINKS) {
+        li = c->m->link_n++;
+        strlcpy(c->m->link[li].target, target, sizeof c->m->link[li].target);
+    }
     for (int i = 0; i < n; i++) {
         const struct ugfx_font *f = style_font(c->m, st[i], level);
         int adv = char_px(f, txt[i]);
         int line_h = font_h(f);
-        if (st[i] & UMD_STYLE_CODE)
+        int in_link = li >= 0 && i >= la && i < lb;
+        uint32_t fg = UTHEME_TEXT;
+        if (in_link) {
+            // A link is the accent on the page's own ground -- no code tint,
+            // which would read as "a name to type" rather than "go there".
+            fg = li == c->m->hover_link ? uui_state_bg(UTHEME_ACCENT, UUI_STATE_PRESSED)
+                                        : UTHEME_ACCENT;
+            if (i == la) lx = x;
+            lh = line_h;
+        } else if (st[i] & UMD_STYLE_CODE) {
             ugfx_fill_rect(c->s, x, y, adv, line_h, code_bg());
+        }
         const struct ugfx_font *was = ugfx_set_font(f);
-        ugfx_draw_char(c->s, x, y, txt[i], UTHEME_TEXT,
-                        (st[i] & UMD_STYLE_CODE) ? code_bg() : UTHEME_WHITE);
+        ugfx_draw_char(c->s, x, y, txt[i], fg,
+                        (st[i] & UMD_STYLE_CODE) && !in_link ? code_bg() : UTHEME_WHITE);
         ugfx_set_font(was);
         x += adv;
+        if (in_link && i == lb - 1) {
+            ugfx_fill_rect(c->s, lx, y + line_h - 1, x - lx, 1, fg);   // the underline
+            c->m->link[li].x = lx;
+            c->m->link[li].y = y;
+            c->m->link[li].w = x - lx;
+            c->m->link[li].h = lh;
+        }
     }
 }
 
@@ -365,6 +409,30 @@ static int bar_width(struct uui_markdown *m) {
 void uui_markdown_init(struct uui_markdown *m) {
     for (unsigned i = 0; i < sizeof *m; i++) ((char *)m)[i] = 0;
     m->thumb_grab = -1;
+    m->armed_link = m->hover_link = -1;
+}
+
+void uui_markdown_set_links(struct uui_markdown *m,
+                            int (*is_link)(void *ctx, const char *word), void *ctx) {
+    m->is_link = is_link;
+    m->link_ctx = ctx;
+}
+
+int uui_markdown_take_link(struct uui_markdown *m, char *out, int cap) {
+    if (!m->taken[0]) return 0;
+    strlcpy(out, m->taken, (size_t)cap);
+    m->taken[0] = '\0';
+    return 1;
+}
+
+// The link drawn under (cx, cy) in the LAST frame, or -1. Only what was
+// drawn is recorded, so a link scrolled out of view cannot be clicked.
+static int link_at(const struct uui_markdown *m, int cx, int cy) {
+    for (int i = 0; i < m->link_n; i++)
+        if (m->link[i].w > 0 && uui_hit(m->link[i].x, m->link[i].y, m->link[i].w,
+                                         m->link[i].h, cx, cy))
+            return i;
+    return -1;
 }
 
 void uui_markdown_set_text(struct uui_markdown *m, const char *src, int len) {
@@ -372,6 +440,8 @@ void uui_markdown_set_text(struct uui_markdown *m, const char *src, int len) {
     m->src = src;
     m->len = len;
     m->scroll = 0;
+    m->link_n = 0;                  // the old page's links are gone
+    m->armed_link = m->hover_link = -1;
 }
 
 void uui_markdown_set_geometry(struct uui_markdown *m, int x, int y, int w, int h) {
@@ -422,7 +492,13 @@ void uui_markdown_draw(struct ugfx_surface *s, struct uui_markdown *m) {
     // straddles the edge is cut rather than spilling over the chrome --
     // the widget draws whole blocks and lets the clip do the rest.
     ugfx_set_clip_rect(s, m->x, m->y, m->w - bar_width(m), m->h);
+    m->link_n = 0;   // re-recorded as they are drawn
     walk(m, s, tw, m->x + pad, m->y - m->scroll);
+    // A link whose word is under the clip still recorded its full rect;
+    // the part outside the band is not clickable.
+    for (int i = 0; i < m->link_n; i++)
+        if (m->link[i].y + m->link[i].h <= m->y || m->link[i].y >= m->y + m->h)
+            m->link[i].w = 0;
     ugfx_clear_clip_rect(s);
 
     int bw = bar_width(m);
@@ -447,7 +523,12 @@ int uui_markdown_hit(const struct uui_markdown *m, int cx, int cy) {
 int uui_markdown_press(struct uui_markdown *m, int cx, int cy) {
     int bw = bar_width(m);
     int bx = m->x + m->w - bw;
-    if (cx < bx) return 0;
+    if (cx < bx) {
+        // Armed on press, followed on release over the same link -- the
+        // commit-on-release rule, so a press dragged off follows nothing.
+        m->armed_link = link_at(m, cx, cy);
+        return m->armed_link >= 0;
+    }
 
     int off = m->doc_h - m->h - m->scroll;
     enum uui_scrollbar_zone z =
@@ -478,6 +559,14 @@ void uui_markdown_motion(struct uui_markdown *m, int cx, int cy) {
 }
 
 void uui_markdown_release(struct uui_markdown *m) { m->thumb_grab = -1; }
+
+// A release over the link that was pressed records it for the app.
+static void release_at(struct uui_markdown *m, int cx, int cy) {
+    if (m->armed_link >= 0 && link_at(m, cx, cy) == m->armed_link)
+        strlcpy(m->taken, m->link[m->armed_link].target, sizeof m->taken);
+    m->armed_link = -1;
+    m->thumb_grab = -1;
+}
 
 void uui_markdown_free(struct uui_markdown *m) {
     for (int i = 0; i < UUI_MD_FACES; i++) {
@@ -514,13 +603,18 @@ static int op_press(void *w, int x, int y, unsigned mods) {
     return uui_markdown_press((struct uui_markdown *)w, x, y);
 }
 static int op_motion(void *w, int x, int y, unsigned buttons) {
-    if (!buttons) return 0;
-    uui_markdown_motion((struct uui_markdown *)w, x, y);
+    struct uui_markdown *m = (struct uui_markdown *)w;
+    if (!buttons) {
+        int h = link_at(m, x, y);          // a hovered link darkens
+        if (h == m->hover_link) return 0;
+        m->hover_link = h;
+        return 1;
+    }
+    uui_markdown_motion(m, x, y);
     return 1;
 }
 static int op_release(void *w, int x, int y) {
-    (void)x; (void)y;
-    uui_markdown_release((struct uui_markdown *)w);
+    release_at((struct uui_markdown *)w, x, y);
     return 1;
 }
 static int op_wheel(void *w, int notches) {

@@ -591,8 +591,11 @@ static int tree_release_op(void *w, int cx, int cy) {
     return 1;
 }
 static int tree_wheel_op(void *w, int notches) { return uui_tree_wheel(w, notches); }
+// Alt+arrow is the WINDOW's -- Back and Forward in every browser, file
+// manager and help viewer -- so a tree with focus must not eat it as a
+// collapse.
 static int tree_key_op(void *w, int key, unsigned mods) {
-    (void)mods;
+    if (mods & KEY_MOD_ALT) return 0;
     return uui_tree_key(w, key);
 }
 static void tree_natural_op(const void *w, int *out_w, int *out_h) {
