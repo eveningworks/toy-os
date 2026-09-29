@@ -1743,8 +1743,15 @@ def run(dbg, qmp, tmp, res):
             rh = int(line.split("pages.row_h", 1)[1].split()[0])
             break
         rh = rh or 20
+        first = opt_rect("start")   # the General page's first row, as it opened
         dbg.send(f"gui click {oc['x'] + pg[0] + 30} {oc['y'] + pg[1] + 2 * rh + rh // 2}")
         dbg.settle(0.6)
+        # The pages share one column and HIDE the other pages' rows; a
+        # hidden row that still kept its gap pushed later pages down.
+        ren = opt_rect("rename")
+        res.check("every Options page starts its rows at the same height",
+                  bool(first and ren) and first[1] == ren[1],
+                  f"General's first row at {first}, Rename's at {ren}")
         sl = opt_rect("rename.slot 1")
         ok = opt_rect("ok")
         if sl and ok:

@@ -36,6 +36,14 @@ static void item_natural(const struct uui_item *it, int dir, int *w, int *h) {
     }
 }
 
+// The gaps sit BETWEEN visible children: a hidden one takes its gap with
+// it, or every hidden row before the visible ones still pushed them down.
+static int gap_total(const struct uui_layout *l, int g) {
+    int n = 0;
+    for (int i = 0; i < l->count; i++) n += !l->items[i].hidden;
+    return n > 1 ? (n - 1) * g : 0;
+}
+
 static int grid_cols(const struct uui_layout *l) {
     return l->cols > 0 ? l->cols : 1;
 }
@@ -81,10 +89,8 @@ void uui_layout_natural_size(const struct uui_layout *l, int *out_w, int *out_h)
                 if (ih > h) h = ih;
             }
         }
-        if (l->count > 1) {
-            if (l->dir == UUI_COLUMN) h += (l->count - 1) * g;
-            else                      w += (l->count - 1) * g;
-        }
+        if (l->dir == UUI_COLUMN) h += gap_total(l, g);
+        else                      w += gap_total(l, g);
     }
 
     if (out_w) *out_w = w + 2 * m;
@@ -141,7 +147,7 @@ void uui_layout_run(struct uui_layout *l, int x, int y, int w, int h) {
         // should.
         if (!l->items[i].hidden && (l->items[i].flags & grow_flag)) grow_count++;
     }
-    if (l->count > 1) natural_total += (l->count - 1) * g;
+    natural_total += gap_total(l, g);
 
     int inner_main = (l->dir == UUI_COLUMN) ? inner_h : inner_w;
     int spare = inner_main - natural_total;
@@ -199,11 +205,11 @@ void uui_layout_run(struct uui_layout *l, int x, int y, int w, int h) {
         if (l->dir == UUI_COLUMN) {
             int cw = (iw <= 0 || (it->flags & UUI_FILL_W)) ? inner_w : iw;
             place(it, ix, cursor, cw, ih);
-            cursor += ih + g;
+            if (!it->hidden) cursor += ih + g;
         } else {
             int chh = (ih <= 0 || (it->flags & UUI_FILL_H)) ? inner_h : ih;
             place(it, cursor, iy, iw, chh);
-            cursor += iw + g;
+            if (!it->hidden) cursor += iw + g;
         }
     }
 }
