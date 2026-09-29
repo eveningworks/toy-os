@@ -1,5 +1,6 @@
 // field. Split out of uwidgets.c -- see ui/uui_textbox.h.
 #include "ui/uui_textbox.h"
+#include "ui/uui_caret.h"
 #include "ui/uui_widget.h"  // the ops tables at the bottom of this file
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
@@ -249,8 +250,9 @@ void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f) {
                                  uui_state_bg(fg, UUI_STATE_DISABLED), bg);
 
     if (f->active) {
-        ugfx_fill_rect(s, x + pad + ugfx_text_width_n(shown, f->ed.cursor - start),
-                        ty, CARET_W, ugfx_char_h(), fg);
+        if (uui_caret_visible())
+            ugfx_fill_rect(s, x + pad + ugfx_text_width_n(shown, f->ed.cursor - start),
+                            ty, CARET_W, ugfx_char_h(), fg);
         // The border too, not the caret alone: the caret says WHERE the
         // next character lands, the ring says WHICH control is listening,
         // and a caret 200px away is easy to miss. Over the border rather

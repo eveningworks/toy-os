@@ -2536,6 +2536,19 @@ window without going through it will find its layout polls timing out.
   against each other -- neither half means much alone. Its positive
   control reddens exactly one check and leaves the winclient ones green,
   which is worth reading before trusting them.
+- **`caret_blink_test.py`** -- the text caret (`ui/uui_caret.h`) in
+  Notepad: captures across two seconds differ ONLY in a caret-sized band;
+  ten seconds after the last key they are identical and show the caret;
+  `desktop.caret_blink off` holds it solid while typing; and a window
+  that lost focus mid-blink does not spin (its CPU time from `ps` over
+  four seconds). The last one is the bug the first build shipped with --
+  the flip's repaint drew no caret and the loop asked again forever.
+  **`gui_debug.enter_gui()` turns blinking OFF for every other tool**,
+  because a blink defeats a settled-frame comparison (clipboard_test's
+  "a paste with nothing on the clipboard leaves the document alone"
+  failed on the phase); this tool does not call it and sets the setting
+  itself. In `gui_regress.py`.
+
 - **`idle_desktop_test.py`** -- with nobody touching it, does the screen
   SIT STILL? Two regions (the icon column, an empty patch) must be
   pixel-identical across eight captures. Written after a blinking console

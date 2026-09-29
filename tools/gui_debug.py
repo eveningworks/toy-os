@@ -1154,6 +1154,29 @@ def _enable_layout_log(sock):
     atexit.register(_restore)
 
 
+def _steady_caret(sock):
+    """`desktop.caret_blink` OFF for this run, restored at exit.
+
+    A blinking caret changes a focused field's pixels twice a second, so
+    two captures of an unchanged document differ by whichever phase each
+    landed in -- clipboard_test's "a paste with nothing on the clipboard
+    leaves the document alone" failed exactly that way. Every tool that
+    compares frames wants it still; tools/caret_blink_test.py turns it
+    back on to test the blink itself."""
+    with DebugConsole(sock) as c:
+        was_off = "off" in (c.send("sh config get desktop.caret_blink") or "")
+        c.send("sh config set desktop.caret_blink off")
+    if was_off:
+        return
+    def _restore():
+        try:
+            with DebugConsole(sock) as c:
+                c.send("sh config set desktop.caret_blink on")
+        except Exception:
+            pass
+    atexit.register(_restore)
+
+
 def wait_for_desktop(sock, timeout=8.0):
     """Block until the ring-3 desktop is answering on the serial console,
     or `timeout` elapses. Returns True if it came up.
@@ -1233,6 +1256,7 @@ def enter_gui(qmp, sock=".vm.serial", timeout=8.0):
             ready = wait_for_desktop(sock, timeout)
     try:
         _enable_layout_log(sock)
+        _steady_caret(sock)
     except Exception:
         # A tool that cannot reach the console has bigger problems than
         # the layout log, and its own first assertion will say so more

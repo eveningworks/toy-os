@@ -10,6 +10,7 @@
 // interface face this spreads text at cell pitch with ragged gaps and
 // puts the caret nowhere near the click.
 #include "ui/utext.h"
+#include "ui/uui_caret.h"
 
 #define CURSOR_BAR_W 2
 
@@ -377,7 +378,7 @@ void utext_draw(struct utext *t, struct ugfx_surface *s,
     }
     ugfx_clip_restore(s, &saved);
 
-    if (show_cursor) {
+    if (show_cursor && uui_caret_visible()) {
         int cl, cc;
         pos_of_index(t, max_cols, t->ed.cursor, &cl, &cc);
         cc -= t->hscroll;

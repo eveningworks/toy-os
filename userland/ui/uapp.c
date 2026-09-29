@@ -16,6 +16,7 @@
 #include <stdio.h>      // snprintf/vsnprintf, one layout line at a time
 #include <stdarg.h>
 #include "ui/utheme.h"
+#include "ui/uui_caret.h"
 #include "lib/uclip.h"   // clip_poll() -- the clipboard is shared memory now
 
 // THE CLIENT'S OWN WINDOW MEMORY. A buffer is a named shm object this
@@ -1264,6 +1265,10 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
     clip_poll(a);
     reap_children();
 
+    // Typing or clicking shows the caret solid and restarts its blink,
+    // whichever window or widget the event is for (ui/uui_caret.h).
+    if (in->type == WIN_EV_KEY || in->type == WIN_EV_MOUSE_DOWN) uui_caret_reset();
+
     // AN EVENT ON A POPUP IS THE TOPLEVEL'S, TRANSLATED. The widgets
     // hit-test one coordinate space -- the toplevel's content -- and a
     // popup's place in it is known from the compositor's reply, so a
@@ -1863,9 +1868,23 @@ static int uapp_pump(struct uapp *a, int block) {
             // wait with nobody there", so the liveness check below stays
             // on the long one.
             int animating = uui_anim_pending();
-            uchan_client_wait(&g_wmchan, animating ? UUI_ANIM_FRAME_MS : UAPP_WAIT_MS);
+            int wait = animating ? UUI_ANIM_FRAME_MS : UAPP_WAIT_MS;
+            // A drawn caret's next flip (ui/uui_caret.h) shortens the
+            // park like a frame does; it asks for nothing once solid.
+            int caret = uui_caret_wait_ms();
+            if (caret == 0) {
+                // Which surface drew the caret is not recorded, so all
+                // of them repaint -- two frames a second, for ten seconds.
+                a->dirty = 1;
+                for (int i = 0; i < WIN_CLIENT_MAX; i++)
+                    if (g_dlg[i].slot) g_dlg[i].dirty = 1;
+                break;
+            }
+            if (caret > 0 && caret < wait) wait = caret;
+            uchan_client_wait(&g_wmchan, wait);
             if (uchan_client_pending(&g_wmchan) || g_post_head != g_post_tail) break;
             if (animating) break;
+            if (wait == caret) continue;   // the flip, not a silent server
             // Nothing arrived in a whole wait: is anyone still there to
             // send? A dead compositor's beacon is unlinked with it, so
             // this is the close the desktop can no longer ask for.

@@ -705,6 +705,8 @@ whenever a headline here tells you something you did not already know.
   NEVER STOPS MOVING**
 - **THE COMPOSITOR'S CONFIG IS PUSHED; NOTHING ON THE FRAME PATH POLLS
   `sys_fs_generation()`**
+- **THE TEXT CARET BLINKS FROM ONE PHASE PER PROCESS
+  (`ui/uui_caret.h`), AND STOPS SOLID TEN SECONDS AFTER THE LAST INPUT**
 - **"SHOW ADVANCED SETTINGS" APPEARS ONLY ON A PAGE THAT HAS ONE**
 
 ### Storage, the filesystem, and /etc

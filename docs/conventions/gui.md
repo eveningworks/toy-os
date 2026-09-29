@@ -4898,6 +4898,27 @@ file two levels down needs its own topic (that is why `/etc/effects` is
 separate from `/etc`). Hand edits are covered by the directory watch;
 the registry's own writes arrive both ways, which is harmless.
 
+## THE TEXT CARET BLINKS FROM ONE PHASE PER PROCESS (`ui/uui_caret.h`), AND STOPS SOLID TEN SECONDS AFTER THE LAST INPUT
+
+A widget that draws a caret asks `uui_caret_visible()` at the moment it
+draws it -- `uui_textbox` and `utext` (so `uui_textview`, Notepad) do --
+and never keeps a blink timer of its own. The call also RECORDS that a
+caret was drawn in this phase, and `uapp`'s wait loop wakes for the next
+flip only then; a key or a press anywhere in the process restarts the
+cycle on. Windows, Qt and GTK all blink one caret per app, and GTK's
+`gtk-cursor-blink-timeout` is copied: after ten seconds of no input the
+caret stays SOLID, so an idle window sits still
+(`docs/gui-guidelines.md`, "An idle screen must SIT STILL").
+`desktop.caret_blink` turns it off. The Terminal's grid cursor keeps its
+own `cursor_blink`, since a terminal's cursor is the program's, not a
+field's.
+
+**THE TRAP: a flip is due, the repaint draws NO caret (its field lost
+focus), and the loop asks for the repaint again forever** -- 100% CPU
+in every window that had once had a caret. `uui_caret_wait_ms()` returns
+0 ONCE per phase for that reason; a caller must act on the 0 it gets
+rather than asking twice.
+
 ## "SHOW ADVANCED SETTINGS" APPEARS ONLY ON A PAGE THAT HAS ONE
 
 System Settings' disclosure is shown when the open page declares an

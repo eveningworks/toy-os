@@ -1,0 +1,11 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Blinking text cursor
+Category=Appearance
+Group=Effects
+Default=on
+Choices=on,off
+Description=Whether the text cursor in a field or editor blinks; it stops, solid, ten seconds after the last key
+Order=11
+Choice.on=On
+Choice.off=Off
