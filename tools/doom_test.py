@@ -301,6 +301,33 @@ def run(dbg, qmp, tmp, res):
                   f"only {turned:.4f} of the view changed -- the "
                   f"{mod}-folded arrow code is not reaching Doom as an arrow")
 
+    # --- Alt (strafe) with a key is that key, not Esc -----------------
+    #
+    # The keyboard used to send Alt+key as ESC then the key -- a
+    # terminal's meta prefix -- so strafing while pressing Space (use)
+    # was an Esc press, never released, and the menu opened over the
+    # game. Keys by position (WIN_EV_KEY_PHYS) carry no such encoding.
+    # The oracle is two settled frames either side: the menu covers the
+    # middle of the view, and using nothing changes nothing.
+    time.sleep(1.5)
+    before = view(shot("pre_altspace"))
+    qmp.key_down("alt")
+    time.sleep(0.2)
+    qmp.send_key("spc")
+    time.sleep(0.2)
+    qmp.key_up("alt")
+    time.sleep(1.5)
+    after = view(shot("post_altspace"))
+    opened = changed_fraction(before, after)
+    print(f"        (view change after alt+space: {opened:.4f})")
+    res.check("Alt+Space (strafe + use) does not open the menu",
+              opened < 0.05,
+              f"{opened:.4f} of the view changed -- Alt still arrives as an "
+              f"Esc prefix")
+    if opened >= 0.05:
+        qmp.send_key("esc")      # close the menu for the checks below
+        time.sleep(1.0)
+
     # --- maximized, and still 4:3 ------------------------------------
     #
     # Doom's pixels are 20% taller than they are wide, so a window that

@@ -17,49 +17,11 @@
 //     userland/backends/doom/dg_toyos.c   doom side: doomkeys.h, doomgeneric.h.
 //                                 NEVER includes api/keyboard.h.
 //
-// This header includes NEITHER, so both can include it. The `TOYKEY_*`
-// values below are toy-os's codes written out as literals, which is a
-// COPY and would normally be exactly the kind of thing this project
-// refuses -- so doom.c static-asserts every one of them against the
-// real `KEY_*` macro. That check compiles in the file that can see both
-// this header and `api/keyboard.h`, which is the file that has no
-// doomkeys.h to collide with. A drift in either direction is a build
-// error rather than a key that quietly stops working.
+// This header includes NEITHER, so both can include it. Keys cross it
+// as evdev KEYCODES (abi/input_keys.h, `INPUT_KEY_*`), a third
+// vocabulary neither side defines, so nothing needs copying.
 
 #include <stdint.h>
-
-// --- toy-os key codes, copied (and checked in doom.c) -----------------
-//
-// Only the ones this app translates. An ordinary printable character
-// needs no entry: it arrives as itself and Doom's own key codes ARE
-// ASCII for that range.
-#define TOYKEY_ARROW_UP     0x91
-#define TOYKEY_ARROW_DOWN   0x92
-#define TOYKEY_PAGE_UP      0x93
-#define TOYKEY_PAGE_DOWN    0x94
-#define TOYKEY_ARROW_LEFT   0x95
-#define TOYKEY_ARROW_RIGHT  0x96
-#define TOYKEY_HOME         0x97
-#define TOYKEY_END          0x98
-#define TOYKEY_DELETE       0x99
-#define TOYKEY_F2           0x9A
-#define TOYKEY_F3           0x9B
-#define TOYKEY_F10          0xA4
-#define TOYKEY_F4           0xA5
-#define TOYKEY_F1           0xAB
-#define TOYKEY_F5           0xAC
-#define TOYKEY_F6           0xAD
-#define TOYKEY_F7           0xAE
-#define TOYKEY_F8           0xAF
-#define TOYKEY_F9           0xB0
-#define TOYKEY_F11          0xB1
-#define TOYKEY_F12          0xB2
-#define TOYKEY_INSERT       0xB3
-#define TOYKEY_PAUSE        0xB8
-#define TOYKEY_SHIFT        0xA7
-#define TOYKEY_CTRL         0xA8
-#define TOYKEY_ALT          0xA9
-#define TOYKEY_ALTGR        0xAA
 
 // --- the window ------------------------------------------------------
 //
@@ -78,14 +40,18 @@
 // and why WIN_EV_KEY_UP had to exist first: DG_GetKey()'s signature
 // takes a `pressed` flag, so a press-only OS could not answer it.
 struct dg_key_event {
-    int code;   // a TOYKEY_* above, or a printable character
+    int code;   // an evdev keycode (abi/input_keys.h) -- a key POSITION
     int down;
 };
 
-// Queue one, from the app's on_key/on_key_up. Safe to call before
+// Queue one, from the app's on_phys_key. Safe to call before
 // doomgeneric has started. Drops the oldest if the queue is full, which
 // cannot happen at human typing rates against a per-frame drain.
-void dg_push_key(int code, int down);
+void dg_push_key(int keycode, int down);
+
+// Queue a release for every key still down -- the window lost focus, and
+// no releases will come for them (abi/win_proto.h's WIN_EV_KEY_PHYS).
+void dg_release_all(void);
 
 // --- what the backend gives the app ----------------------------------
 

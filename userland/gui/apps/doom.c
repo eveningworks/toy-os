@@ -36,39 +36,7 @@
 #include "ui/ulog.h"
 #include "win_proto.h"  // WIN_CLIENT_MAX_W -- the scratch row's bound
 #include "backends/doom/dg_toyos.h"
-
-// THE COPIES IN dg_toyos.h, CHECKED AGAINST THE REAL THING. A drift in
-// either direction is a build error rather than a key that quietly stops
-// working -- which is the failure this would otherwise have, since a
-// wrong constant maps to a key Doom does nothing with and simply looks
-// like an unbound control.
-_Static_assert(TOYKEY_ARROW_UP    == KEY_ARROW_UP,    "TOYKEY_ARROW_UP drifted");
-_Static_assert(TOYKEY_ARROW_DOWN  == KEY_ARROW_DOWN,  "TOYKEY_ARROW_DOWN drifted");
-_Static_assert(TOYKEY_ARROW_LEFT  == KEY_ARROW_LEFT,  "TOYKEY_ARROW_LEFT drifted");
-_Static_assert(TOYKEY_ARROW_RIGHT == KEY_ARROW_RIGHT, "TOYKEY_ARROW_RIGHT drifted");
-_Static_assert(TOYKEY_PAGE_UP     == KEY_PAGE_UP,     "TOYKEY_PAGE_UP drifted");
-_Static_assert(TOYKEY_PAGE_DOWN   == KEY_PAGE_DOWN,   "TOYKEY_PAGE_DOWN drifted");
-_Static_assert(TOYKEY_HOME        == KEY_HOME,        "TOYKEY_HOME drifted");
-_Static_assert(TOYKEY_END         == KEY_END,         "TOYKEY_END drifted");
-_Static_assert(TOYKEY_DELETE      == KEY_DELETE,      "TOYKEY_DELETE drifted");
-_Static_assert(TOYKEY_F2          == KEY_F2,          "TOYKEY_F2 drifted");
-_Static_assert(TOYKEY_F3          == KEY_F3,          "TOYKEY_F3 drifted");
-_Static_assert(TOYKEY_F4          == KEY_F4,          "TOYKEY_F4 drifted");
-_Static_assert(TOYKEY_F10         == KEY_F10,         "TOYKEY_F10 drifted");
-_Static_assert(TOYKEY_F1          == KEY_F1,          "TOYKEY_F1 drifted");
-_Static_assert(TOYKEY_F5          == KEY_F5,          "TOYKEY_F5 drifted");
-_Static_assert(TOYKEY_F6          == KEY_F6,          "TOYKEY_F6 drifted");
-_Static_assert(TOYKEY_F7          == KEY_F7,          "TOYKEY_F7 drifted");
-_Static_assert(TOYKEY_F8          == KEY_F8,          "TOYKEY_F8 drifted");
-_Static_assert(TOYKEY_F9          == KEY_F9,          "TOYKEY_F9 drifted");
-_Static_assert(TOYKEY_F11         == KEY_F11,         "TOYKEY_F11 drifted");
-_Static_assert(TOYKEY_F12         == KEY_F12,         "TOYKEY_F12 drifted");
-_Static_assert(TOYKEY_INSERT      == KEY_INSERT,      "TOYKEY_INSERT drifted");
-_Static_assert(TOYKEY_PAUSE       == KEY_PAUSE,       "TOYKEY_PAUSE drifted");
-_Static_assert(TOYKEY_SHIFT       == KEY_SHIFT,       "TOYKEY_SHIFT drifted");
-_Static_assert(TOYKEY_CTRL        == KEY_CTRL,        "TOYKEY_CTRL drifted");
-_Static_assert(TOYKEY_ALT         == KEY_ALT,         "TOYKEY_ALT drifted");
-_Static_assert(TOYKEY_ALTGR       == KEY_ALTGR,       "TOYKEY_ALTGR drifted");
+#include "input_keys.h"   // INPUT_KEY_ENTER -- a key by position
 
 // WHERE THE IWAD LIVES. A name, not a search path: `d_iwad.c` can hunt
 // through a list of directories and several filenames, and on an OS with
@@ -281,56 +249,37 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 
 // --- input --------------------------------------------------------------
 //
-// Both edges, straight into the backend's queue. No filtering: Doom
-// keeps its own `gamekeydown[]` and wants every transition, and deciding
-// here which ones matter would be re-implementing its key bindings from
-// the outside.
-// Alt+Enter toggles fullscreen -- the one key the port does not see,
+// KEYS BY POSITION (uapp.h's on_phys_key), both edges, straight into the
+// backend's queue. The translated keys fold a held modifier into the code
+// -- Ctrl+1 is no key at all, Shift+arrow a code of its own -- and Doom
+// plays with Ctrl, Shift and Alt HELD. No filtering: Doom keeps its own
+// `gamekeydown[]` and wants every transition.
+//
+// Alt+Enter toggles fullscreen -- the one key the game does not see,
 // because it is the desktop's convention (every DOOM port since the
-// DOS days), not the game's binding.
+// DOS days), not the game's binding. The toggle is taken from the
+// translated key; its Enter is kept from the game on both paths.
 static int is_fullscreen_toggle(int key, unsigned mods) {
     return (key == 0x0A || key == 0x0D) && (mods & KEY_MOD_ALT);
 }
 
-// THE KEY THAT WAS PRESSED, NOT WHAT IT MEANS TO A TEXT FIELD. The
-// keyboard folds modifiers into the code (api/keyboard.h): Shift+arrow
-// and Ctrl+arrow are codes of their own, Shift makes a capital, Ctrl a
-// control code. Doom plays with those modifiers HELD -- Ctrl fires,
-// Shift runs -- so unfolded, turning while firing sent
-// KEY_CTRL_ARROW_LEFT, which Doom has no binding for. A key-up carries
-// its press's code, so both edges fold alike and nothing sticks; that is
-// also why this reads no `mods` (Ctrl may be up before the letter is).
-static int physical_key(int key) {
-    switch (key) {
-    case KEY_SHIFT_ARROW_LEFT:  case KEY_CTRL_ARROW_LEFT:  return KEY_ARROW_LEFT;
-    case KEY_SHIFT_ARROW_RIGHT: case KEY_CTRL_ARROW_RIGHT: return KEY_ARROW_RIGHT;
-    case KEY_SHIFT_ARROW_UP:    return KEY_ARROW_UP;
-    case KEY_SHIFT_ARROW_DOWN:  return KEY_ARROW_DOWN;
-    case KEY_SHIFT_HOME:        return KEY_HOME;
-    case KEY_SHIFT_END:         return KEY_END;
-    default: break;
-    }
-    if (key >= 'A' && key <= 'Z') return key - 'A' + 'a';
-    // Ctrl+letter, except the codes that are also Backspace, Tab and
-    // Enter -- indistinguishable, and the key is the likelier one.
-    if (key >= 0x01 && key <= 0x1A && key != 0x08 && key != 0x09 &&
-        key != 0x0A && key != 0x0D)
-        return key - 0x01 + 'a';
-    return key;
-}
-
 static void on_key(struct uapp *a, int key, unsigned mods) {
-    if (is_fullscreen_toggle(key, mods)) {
-        uapp_set_fullscreen(a, !uapp_fullscreen(a));
-        return;
-    }
-    dg_push_key(physical_key(key), 1);
+    if (is_fullscreen_toggle(key, mods)) uapp_set_fullscreen(a, !uapp_fullscreen(a));
 }
 
-static void on_key_up(struct uapp *a, int key, unsigned mods) {
+static void on_phys_key(struct uapp *a, int keycode, int down, unsigned mods) {
     (void)a;
-    if (is_fullscreen_toggle(key, mods)) return;
-    dg_push_key(physical_key(key), 0);
+    if ((keycode == INPUT_KEY_ENTER || keycode == INPUT_KEY_KPENTER) &&
+        (mods & KEY_MOD_ALT))
+        return;
+    dg_push_key(keycode, down);
+}
+
+// No releases come for keys held as focus leaves (abi/win_proto.h), so
+// they are released here -- or the player walks on in a window behind.
+static void on_focus(struct uapp *a, int focused) {
+    (void)a;
+    if (!focused) dg_release_all();
 }
 
 // --- the game loop ------------------------------------------------------
@@ -436,8 +385,9 @@ int main(int argc, char **argv) {
         .state  = &g_st,
         .on_open    = on_open,
         .on_draw    = on_draw,
-        .on_key     = on_key,
-        .on_key_up  = on_key_up,
+        .on_key      = on_key,
+        .on_phys_key = on_phys_key,
+        .on_focus    = on_focus,
         .on_tick    = on_tick,
     };
     return uapp_run(&desc);

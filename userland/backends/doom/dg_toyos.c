@@ -17,7 +17,7 @@
 //                    would be drawing outside on_draw.
 //   DG_SleepMs       sys_sleep_ms.
 //   DG_GetTicksMs    sys_monotonic_ns / 1e6.
-//   DG_GetKey        a queue the app fills from on_key/on_key_up.
+//   DG_GetKey        a queue the app fills from on_phys_key.
 //
 // The fifth is the one this whole port waited on. Its signature is
 // `int DG_GetKey(int *pressed, unsigned char *key)` -- it asks for an
@@ -27,6 +27,7 @@
 
 #include "doomgeneric.h"
 #include "doomkeys.h"
+#include "input_keys.h"   // key POSITIONS -- no KEY_* of its own to collide
 
 #include "rt/sys.h"
 
@@ -44,7 +45,7 @@ const uint32_t *dg_frame_pixels(void) { return (const uint32_t *)DG_ScreenBuffer
 
 // --- the key queue ------------------------------------------------------
 //
-// Filled by the app's on_key/on_key_up, drained by DG_GetKey. A QUEUE and
+// Filled by the app's on_phys_key, drained by DG_GetKey. A QUEUE and
 // not a "currently held" bitmap, because Doom wants the transitions: it
 // keeps its own held state (`gamekeydown[]`) and a missed edge desyncs
 // it -- a missed release being the one that leaves the player walking.
@@ -57,105 +58,89 @@ const uint32_t *dg_frame_pixels(void) { return (const uint32_t *)DG_ScreenBuffer
 static struct dg_key_event keyq[KEYQ_MAX];
 static unsigned keyq_head, keyq_tail;
 
-void dg_push_key(int code, int down) {
+// Which positions are down, so a focus loss can release exactly those.
+static uint8_t g_held[128 / 8];
+
+void dg_push_key(int keycode, int down) {
+    if (keycode >= 0 && keycode < 128) {
+        if (down) g_held[keycode >> 3] |= (uint8_t)(1u << (keycode & 7));
+        else      g_held[keycode >> 3] &= (uint8_t)~(1u << (keycode & 7));
+    }
     unsigned next = (keyq_head + 1) % KEYQ_MAX;
     if (next == keyq_tail) keyq_tail = (keyq_tail + 1) % KEYQ_MAX;
-    keyq[keyq_head].code = code;
+    keyq[keyq_head].code = keycode;
     keyq[keyq_head].down = down ? 1 : 0;
     keyq_head = next;
 }
 
-// toy-os's code -> Doom's. Doom's key space is mostly ASCII, which is
-// why the default case is a pass-through and why only the specials need
-// a table at all.
+void dg_release_all(void) {
+    for (int k = 0; k < 128; k++)
+        if (g_held[k >> 3] & (1u << (k & 7))) dg_push_key(k, 0);
+}
+
+// A key POSITION (abi/input_keys.h) -> Doom's key. Doom's key space is
+// ASCII for the printable range, so a letter's position maps to what it
+// prints on a US keyboard -- the layout a WASD-style binding and Doom's
+// own defaults assume, whatever the user's layout prints there.
 //
 // **THE THREE MODIFIERS ARE THE POINT.** Doom's stock bindings are fire
-// on Ctrl, run on Shift and strafe on Alt (m_controls.c's key_fire =
-// KEY_RCTRL, key_speed = KEY_RSHIFT, key_strafe = KEY_RALT). None of
-// them produces a character, so before toy-os delivered modifier keys as
-// keys they reached a client by no path at all -- three of the five
-// controls a player actually uses.
-static unsigned char to_doom_key(int code) {
-    switch (code) { // dispatch-ok: bounded by the key codes api/keyboard.h defines
-    case TOYKEY_ARROW_UP:    return KEY_UPARROW;
-    case TOYKEY_ARROW_DOWN:  return KEY_DOWNARROW;
-    case TOYKEY_ARROW_LEFT:  return KEY_LEFTARROW;
-    case TOYKEY_ARROW_RIGHT: return KEY_RIGHTARROW;
-    // **FIRE AND USE ARE ABSTRACT CODES, NOT THE KEYS THEY LOOK LIKE.**
-    // m_controls.c binds `key_fire = KEY_FIRE` and `key_use = KEY_USE`
-    // -- 0xa3 and 0xa2, which no physical key produces. Doom expects the
-    // PLATFORM layer to map onto them, and every upstream backend does
-    // (doomgeneric_sdl.c maps SDLK_LCTRL/RCTRL to KEY_FIRE and
-    // SDLK_SPACE to KEY_USE).
-    //
-    // This was wrong in the first version of this port: Ctrl was mapped
-    // to KEY_RCTRL and Space was allowed through as plain 0x20. Both are
-    // real Doom key codes, and NEITHER IS BOUND TO ANYTHING -- so the
-    // two most-used controls in the game did nothing at all, silently,
-    // while every menu key worked. Shift and Alt below are different:
-    // `key_speed` and `key_strafe` really are KEY_RSHIFT and KEY_RALT,
-    // so those map to the physical codes.
-    case TOYKEY_CTRL:        return KEY_FIRE;    // fire
-    case ' ':                return KEY_USE;     // open doors, press switches
-    case TOYKEY_SHIFT:       return KEY_RSHIFT;  // run
-    case TOYKEY_ALT:         return KEY_RALT;    // strafe
-    // AltGr is deliberately Alt here too. On a Nordic layout it is the
-    // key under the right thumb, and a player who reaches for "the other
-    // Alt" to strafe should get strafe rather than nothing. toy-os keeps
-    // them distinct because a LAYOUT needs to (it picks a third
-    // character); a game does not.
-    case TOYKEY_ALTGR:       return KEY_RALT;
-    // The function row, all of it: Doom binds F1..F11 for help, save,
-    // load, volume, detail, quicksave, end game, messages, quickload,
-    // quit and gamma. F12 is unbound in Doom and mapped anyway, so this
-    // table has no hole to explain.
-    case TOYKEY_F1:          return KEY_F1;
-    case TOYKEY_F2:          return KEY_F2;
-    case TOYKEY_F3:          return KEY_F3;
-    case TOYKEY_F4:          return KEY_F4;
-    case TOYKEY_F5:          return KEY_F5;
-    case TOYKEY_F6:          return KEY_F6;
-    case TOYKEY_F7:          return KEY_F7;
-    case TOYKEY_F8:          return KEY_F8;
-    case TOYKEY_F9:          return KEY_F9;
-    case TOYKEY_F10:         return KEY_F10;
-    case TOYKEY_F11:         return KEY_F11;
-    case TOYKEY_F12:         return KEY_F12;
-    // Pause is `key_pause`, and it is the one key that reports a press
-    // with NO release -- a PS/2 keyboard sends no break code for it
-    // (keyboard.c). Doom only tests the press, so nothing here has to
-    // care, but a client that tracked it as held would hold it forever.
-    case TOYKEY_PAUSE:       return KEY_PAUSE;
-    case TOYKEY_INSERT:      return KEY_INS;
-    case TOYKEY_HOME:        return KEY_HOME;
-    case TOYKEY_END:         return KEY_END;
-    case TOYKEY_PAGE_UP:     return KEY_PGUP;
-    case TOYKEY_PAGE_DOWN:   return KEY_PGDN;
-    case TOYKEY_DELETE:      return KEY_DEL;
-    // --- THE TWO CONTROL CODES THAT DO NOT LINE UP --------------------
-    //
-    // Both are cases of toy-os being right for a Unix and Doom being
-    // right for Doom, meeting here because this is the seam.
-    //
-    // **ENTER IS 0x0A HERE AND 0x0D IN DOOM.** `/etc/kbs` maps the
-    // Enter key to `\n`, which is what a terminal and a line editor
-    // want and is not going to change; `doomkeys.h` defines KEY_ENTER
-    // as 13. Without this line the menu HIGHLIGHT moves with the arrow
-    // keys and nothing can be selected -- New Game included, which is
-    // how this was found.
-    case 0x0A:               return KEY_ENTER;
-    // 0x08 is what this keyboard sends for Backspace (Ctrl-H's control
-    // code, terminal-style); Doom wants 0x7f. Without this the menu's
-    // "erase a character" key does nothing.
-    case 0x08:               return KEY_BACKSPACE;
-    default: break;
-    }
-    // An ordinary character. Doom compares menu input against LOWERCASE
-    // (m_menu.c tolowers before matching), and its cheat-code parser
-    // does its own folding, so passing the character through as typed is
-    // right for both.
-    if (code >= 0 && code < 128) return (unsigned char)code;
-    return 0; // nothing Doom could do with it
+// on Ctrl, run on Shift and strafe on Alt, and a modifier held for one of
+// them changes nothing about the other keys reported here -- the reason
+// this path exists (abi/win_proto.h's WIN_EV_KEY_PHYS). The translated
+// codes turned Ctrl+1 into nothing and Alt+Space into an Esc press.
+//
+// **FIRE AND USE ARE ABSTRACT CODES, NOT THE KEYS THEY LOOK LIKE.**
+// m_controls.c binds `key_fire = KEY_FIRE` and `key_use = KEY_USE`,
+// which no physical key produces; the platform maps onto them, as
+// doomgeneric_sdl.c does. `key_speed` and `key_strafe` really are
+// KEY_RSHIFT and KEY_RALT. AltGr strafes too: a game has no use for a
+// third-level character.
+//
+// Pause reports a press with NO release on PS/2 (keyboard.c); Doom only
+// tests the press. A key with no entry is 0 and is skipped by the caller.
+static const unsigned char PHYS_TO_DOOM[128] = {
+    [INPUT_KEY_ESC] = KEY_ESCAPE,
+    [INPUT_KEY_1] = '1', [INPUT_KEY_2] = '2', [INPUT_KEY_3] = '3', [INPUT_KEY_4] = '4',
+    [INPUT_KEY_5] = '5', [INPUT_KEY_6] = '6', [INPUT_KEY_7] = '7', [INPUT_KEY_8] = '8',
+    [INPUT_KEY_9] = '9', [INPUT_KEY_0] = '0',
+    [INPUT_KEY_MINUS] = KEY_MINUS, [INPUT_KEY_EQUAL] = KEY_EQUALS,
+    [INPUT_KEY_BACKSPACE] = KEY_BACKSPACE, [INPUT_KEY_TAB] = KEY_TAB,
+    [INPUT_KEY_Q] = 'q', [INPUT_KEY_W] = 'w', [INPUT_KEY_E] = 'e', [INPUT_KEY_R] = 'r',
+    [INPUT_KEY_T] = 't', [INPUT_KEY_Y] = 'y', [INPUT_KEY_U] = 'u', [INPUT_KEY_I] = 'i',
+    [INPUT_KEY_O] = 'o', [INPUT_KEY_P] = 'p',
+    [INPUT_KEY_LEFTBRACE] = '[', [INPUT_KEY_RIGHTBRACE] = ']',
+    [INPUT_KEY_ENTER] = KEY_ENTER, [INPUT_KEY_KPENTER] = KEY_ENTER,
+    [INPUT_KEY_A] = 'a', [INPUT_KEY_S] = 's', [INPUT_KEY_D] = 'd', [INPUT_KEY_F] = 'f',
+    [INPUT_KEY_G] = 'g', [INPUT_KEY_H] = 'h', [INPUT_KEY_J] = 'j', [INPUT_KEY_K] = 'k',
+    [INPUT_KEY_L] = 'l',
+    [INPUT_KEY_SEMICOLON] = ';', [INPUT_KEY_APOSTROPHE] = '\'', [INPUT_KEY_GRAVE] = '`',
+    [INPUT_KEY_BACKSLASH] = '\\',
+    [INPUT_KEY_Z] = 'z', [INPUT_KEY_X] = 'x', [INPUT_KEY_C] = 'c', [INPUT_KEY_V] = 'v',
+    [INPUT_KEY_B] = 'b', [INPUT_KEY_N] = 'n', [INPUT_KEY_M] = 'm',
+    [INPUT_KEY_COMMA] = ',', [INPUT_KEY_DOT] = '.', [INPUT_KEY_SLASH] = '/',
+    [INPUT_KEY_SPACE] = KEY_USE,
+    [INPUT_KEY_LEFTCTRL] = KEY_FIRE, [INPUT_KEY_RIGHTCTRL] = KEY_FIRE,
+    [INPUT_KEY_LEFTSHIFT] = KEY_RSHIFT, [INPUT_KEY_RIGHTSHIFT] = KEY_RSHIFT,
+    [INPUT_KEY_LEFTALT] = KEY_RALT, [INPUT_KEY_RIGHTALT] = KEY_RALT,
+    [INPUT_KEY_CAPSLOCK] = KEY_CAPSLOCK,
+    [INPUT_KEY_F1] = KEY_F1, [INPUT_KEY_F2] = KEY_F2, [INPUT_KEY_F3] = KEY_F3,
+    [INPUT_KEY_F4] = KEY_F4, [INPUT_KEY_F5] = KEY_F5, [INPUT_KEY_F6] = KEY_F6,
+    [INPUT_KEY_F7] = KEY_F7, [INPUT_KEY_F8] = KEY_F8, [INPUT_KEY_F9] = KEY_F9,
+    [INPUT_KEY_F10] = KEY_F10, [INPUT_KEY_F11] = KEY_F11, [INPUT_KEY_F12] = KEY_F12,
+    [INPUT_KEY_KP0] = '0', [INPUT_KEY_KP1] = '1', [INPUT_KEY_KP2] = '2', [INPUT_KEY_KP3] = '3',
+    [INPUT_KEY_KP4] = '4', [INPUT_KEY_KP5] = '5', [INPUT_KEY_KP6] = '6', [INPUT_KEY_KP7] = '7',
+    [INPUT_KEY_KP8] = '8', [INPUT_KEY_KP9] = '9',
+    [INPUT_KEY_KPMINUS] = KEY_MINUS, [INPUT_KEY_KPPLUS] = KEY_EQUALS,
+    [INPUT_KEY_UP] = KEY_UPARROW, [INPUT_KEY_DOWN] = KEY_DOWNARROW,
+    [INPUT_KEY_LEFT] = KEY_LEFTARROW, [INPUT_KEY_RIGHT] = KEY_RIGHTARROW,
+    [INPUT_KEY_HOME] = KEY_HOME, [INPUT_KEY_END] = KEY_END,
+    [INPUT_KEY_PAGEUP] = KEY_PGUP, [INPUT_KEY_PAGEDOWN] = KEY_PGDN,
+    [INPUT_KEY_INSERT] = KEY_INS, [INPUT_KEY_DELETE] = KEY_DEL,
+    [INPUT_KEY_PAUSE] = KEY_PAUSE,
+};
+
+static unsigned char to_doom_key(int keycode) {
+    return keycode >= 0 && keycode < 128 ? PHYS_TO_DOOM[keycode] : 0;
 }
 
 int DG_GetKey(int *pressed, unsigned char *key) {
