@@ -1466,6 +1466,11 @@ static void on_clipboard(struct uapp *a, int op, unsigned serial) {
     uapp_redraw(a);   // Paste greys and ungreys with it
 }
 
+// The file this launch was handed, selected in main() and scrolled to
+// here: main() runs before the first layout, when the view has no size
+// to scroll within.
+static const char *g_start_select;
+
 static void on_open(struct uapp *a) {
     g_app = a;
     // Large icons are two text lines tall doubled: measured now, with the
@@ -1476,6 +1481,7 @@ static void on_open(struct uapp *a) {
             !strcmp(opt, "large"))
             g_pane[i].icon_px = ugfx_char_h() * 6;
     layout_all(uapp_width(a), uapp_height(a));
+    if (g_start_select) uui_fileview_select_name(&g_pane[0], g_start_select);
     refresh_status();
 }
 
@@ -1583,7 +1589,23 @@ int main(int argc, char **argv) {
 
     tree_init();
 
+    // HANDED A FILE, open its FOLDER with the file selected -- Explorer's
+    // `/select,` and Dolphin's --select, which is what Task Manager's
+    // "Open file location" means. Opened as a folder, a file listed as
+    // an error. The selection goes after the goto (docs/conventions/gui.md,
+    // "AN APP HANDED A FILE MUST SELECT IT").
+    static char start_dir[PATH_MAX_LEN];
+    const char *select_name = 0;
+    struct sys_stat st;
+    if (argc > 1 && sys_stat(left, &st) == 0 && !st.is_dir &&
+        k_path_dirname(left, start_dir, sizeof start_dir)) {
+        select_name = k_path_basename(left);
+        left = start_dir;
+    }
+
     fm_goto(0, left);
+    if (select_name) uui_fileview_select_name(&g_pane[0], select_name);
+    g_start_select = select_name;
     fm_goto(1, right);
     // Hooked up AFTER the opening directories are set, so starting the
     // app with an explicit argument does not silently rewrite the
