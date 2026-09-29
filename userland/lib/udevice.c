@@ -148,6 +148,12 @@ static void add_pci(struct udevice *out, int *n, int cap, struct uhwids_entry *i
     }
 }
 
+static int all_unreadable(const char *s) {
+    if (!s[0]) return 1;
+    for (; *s; s++) if (*s != '?') return 0;
+    return 1;
+}
+
 static void add_usb(struct udevice *out, int *n, int cap, struct uhwids_entry *ids, int xhci) {
     struct query_usb q;
     QUERY_FOREACH(QUERY_USB, q, i) {
@@ -169,8 +175,11 @@ static void add_usb(struct udevice *out, int *n, int cap, struct uhwids_entry *i
         // A hub cannot be claimed (SYS_USB_CLAIM refuses it).
         d->can_disable = q.bound && strcmp(q.driver, "hub") != 0;
         // The device's own words, until the database has better ones.
-        strlcpy(d->name, q.product, sizeof d->name);
-        strlcpy(d->vendor_name, q.manufacturer, sizeof d->vendor_name);
+        // A string the kernel could not read comes back as "?" (one per
+        // non-ASCII character): no name at all, not a name to show.
+        if (!all_unreadable(q.product)) strlcpy(d->name, q.product, sizeof d->name);
+        if (!all_unreadable(q.manufacturer))
+            strlcpy(d->vendor_name, q.manufacturer, sizeof d->vendor_name);
         ids[*n].vendor = d->vendor;
         ids[*n].device = d->device;
         ids[*n].cls = ids[*n].subclass = -1;
@@ -208,6 +217,7 @@ static void add_cpus(struct udevice *out, int *n, int cap) {
     struct query_cpu q;
     QUERY_FOREACH(QUERY_CPUS, q, i) {
         if (*n >= cap) return;
+        if (!(q.flags & QUERY_CPU_ENABLED)) continue;   // a firmware spare
         struct udevice *d = &out[*n];
         memset(d, 0, sizeof *d);
         d->bus = UDEV_CPU;
@@ -274,7 +284,13 @@ int udevice_list(struct udevice *out, int cap) {
         struct udevice *d = &out[npci + i];
         if (ids[npci + i].device_name[0]) strlcpy(d->name, ids[npci + i].device_name, sizeof d->name);
         if (ids[npci + i].vendor_name[0]) strlcpy(d->vendor_name, ids[npci + i].vendor_name, sizeof d->vendor_name);
-        if (!d->name[0]) strlcpy(d->name, "USB device", sizeof d->name);
+        // Windows' shape for a device with no name: what it is, by class.
+        if (!d->name[0])
+            snprintf(d->name, sizeof d->name, "USB %s",
+                     d->type == UDEV_T_INPUT ? "input device" :
+                     d->type == UDEV_T_NETWORK ? "network adapter" :
+                     d->type == UDEV_T_SOUND ? "audio device" :
+                     d->type == UDEV_T_STORAGE ? "storage device" : "device");
     }
 
     add_ps2(out, &n, cap);

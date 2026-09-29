@@ -128,7 +128,7 @@ int main_lscpu(void) {
         struct query_cpu c;
         QUERY_FOREACH(QUERY_CPUS, c, i) {
             cores++;
-            if (c.flags & 1u) enabled++; // ACPI_CPU_ENABLED
+            if (c.flags & QUERY_CPU_ENABLED) enabled++;
         }
         put_label("Logical CPUs");
         if (cores == 0) {

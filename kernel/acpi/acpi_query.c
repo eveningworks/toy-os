@@ -169,6 +169,11 @@ static const struct query_provider table_provider = {
     .field_count = 0,
 };
 
+_Static_assert(ACPI_CPU_ENABLED == QUERY_CPU_ENABLED &&
+               ACPI_CPU_ONLINE_CAPABLE == QUERY_CPU_ONLINE_CAPABLE &&
+               ACPI_CPU_X2APIC == QUERY_CPU_X2APIC,
+               "QUERY_CPUS hands the kernel's flags through unchanged");
+
 static int cpu_count_fn(void) { return acpi_cpu_count(); }
 
 static int cpu_fill(int index, void *out) {

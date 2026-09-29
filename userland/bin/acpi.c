@@ -28,9 +28,6 @@
 #define ACPI_F_ENABLED    (1u << 5)
 #define ACPI_F_XSDT       (1u << 6)
 
-#define ACPI_CPU_ENABLED        (1u << 0)
-#define ACPI_CPU_ONLINE_CAPABLE (1u << 1)
-#define ACPI_CPU_X2APIC         (1u << 2)
 
 static void put(const char *s) { sys_print(s); }
 
@@ -214,10 +211,10 @@ int main(int argc, char **argv) {
     QUERY_FOREACH(QUERY_CPUS, c, i) {
         n++;
         snprintf(line, sizeof line, "  cpu%-3u  %s id %-4llu  acpi id %-4llu  %s  online: no\n",
-                 i, (c.flags & ACPI_CPU_X2APIC) ? "x2apic" : "apic  ",
+                 i, (c.flags & QUERY_CPU_X2APIC) ? "x2apic" : "apic  ",
                  (unsigned long long)c.apic_id, (unsigned long long)c.acpi_id,
-                 (c.flags & ACPI_CPU_ENABLED) ? "enabled "
-                   : (c.flags & ACPI_CPU_ONLINE_CAPABLE) ? "offline " : "disabled");
+                 (c.flags & QUERY_CPU_ENABLED) ? "enabled "
+                   : (c.flags & QUERY_CPU_ONLINE_CAPABLE) ? "offline " : "disabled");
         put(line);
     }
     if (n == 0) {

@@ -1394,7 +1394,14 @@ struct query_display {
 struct query_cpu {
     uint64_t acpi_id;
     uint64_t apic_id;
-    uint64_t flags;   // ACPI_CPU_* (kernel/acpi.h)
+    uint64_t flags;   // QUERY_CPU_*
 };
+
+// A MADT entry's state. Firmware lists more processors than exist -- the
+// Lenovo's lists eight for four threads -- and marks the spares neither
+// enabled nor online-capable; a reader counting CPUs skips those.
+#define QUERY_CPU_ENABLED        (1u << 0) // usable now
+#define QUERY_CPU_ONLINE_CAPABLE (1u << 1) // ...or could be brought up later
+#define QUERY_CPU_X2APIC         (1u << 2) // from a type-9 entry, not type 0
 
 #endif // ABI_QUERY_ABI_H
