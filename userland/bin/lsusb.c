@@ -89,7 +89,7 @@ static void load_names(void) {
     for (int i = 0; i < g_count; i++) {
         e[i].vendor = (uint16_t)g_dev[i].vendor_id;
         e[i].device = (uint16_t)g_dev[i].product_id;
-        e[i].cls = e[i].subclass = -1;      // usb.ids' class section is not read
+        e[i].cls = e[i].subclass = e[i].prog_if = -1;   // names from the ids only
     }
     if (uhwids_resolve(UHWIDS_USB, e, g_count) < 0) {
         fprintf(stderr, "lsusb: %s not found -- showing numeric ids only\n", UHWIDS_USB);

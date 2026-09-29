@@ -803,6 +803,31 @@ def icon_dev_usb():
     return im
 
 
+def icon_badge_warning():
+    # A STATUS BADGE, not an app icon: drawn over another icon's corner at
+    # two-thirds of the text height (uui_tree's `badge`), so it fills the
+    # whole box and the "!" is thick enough to survive ~9 pixels. Windows
+    # Device Manager's yellow triangle; the dark rim keeps it readable on
+    # any icon under it.
+    im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.polygon([(32, 2), (62, 60), (2, 60)], fill=(110, 80, 0, 255))
+    d.polygon([(32, 11), (55, 55), (9, 55)], fill=(242, 180, 0, 255))
+    d.rectangle([28, 24, 36, 42], fill=(30, 30, 34, 255))
+    d.rectangle([28, 46, 36, 52], fill=(30, 30, 34, 255))
+    return im
+
+
+def icon_badge_disabled():
+    # Windows' "disabled" badge: a light disc with a dark down-arrow.
+    im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.ellipse([2, 2, 61, 61], fill=(70, 70, 80, 255))
+    d.ellipse([8, 8, 55, 55], fill=(250, 250, 250, 255))
+    d.polygon([(16, 24), (48, 24), (32, 46)], fill=(30, 30, 34, 255))
+    return im
+
+
 def icon_cat_favourites():
     # A STAR, which is what a pinned thing is called everywhere. Drawn
     # as a polygon rather than a glyph so it stays sharp at the folder
@@ -961,6 +986,8 @@ ICONS = {
     "cat-sound": icon_cat_sound,
     "devmgr": icon_devmgr,
     "dev-usb": icon_dev_usb,
+    "badge-warning": icon_badge_warning,
+    "badge-disabled": icon_badge_disabled,
     "start": icon_start,
     "toyos": icon_toyos,
     "notepad": icon_notepad,

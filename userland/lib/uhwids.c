@@ -14,14 +14,15 @@
 //
 //     C 04  Multimedia controller
 //     <TAB>03  Audio device
-//     <TAB><TAB>00  prog-if name                  <- ignored here
+//     <TAB><TAB>00  prog-if name (USB: the protocol)
 //
 // **THE CLASS SECTION IS THE LAST THING IN THE FILE**, so naming classes
 // means reading all of it -- the early exit below only stops once every
 // class is named too, which is at the end.
 //
-// usb.ids has the same two levels and its own class section, which is
-// not read (a USB caller asks for no class). Its later sections -- "AT",
+// usb.ids has the same two levels and a class section of the same shape
+// ("C e0  Wireless", "\t01  Radio Frequency", "\t\t01  Bluetooth"). Its
+// later sections -- "AT",
 // "HID", "L" and the rest -- start with a word that is not four hex
 // digits, so they end the vendor section rather than joining it.
 
@@ -53,15 +54,17 @@ struct scan {
     struct uhwids_entry *e;
     int n;
     int32_t vendor, cls;   // the section being read, -1 outside one
+    int32_t sub;           // the class section's current subclass, or -1
 };
 
 static void on_line(struct scan *sc, const char *line) {
     if (line[0] == '#' || line[0] == '\0') return;
 
     // The class section: "C 04  Multimedia controller", then "\t03  Audio
-    // device" under it, then "\t\t00  ..." prog-ifs, which are not read.
+    // device" under it, then "\t\t00  ..." prog-ifs under that.
     if (line[0] == 'C' && line[1] == ' ') {
         sc->vendor = -1;
+        sc->sub = -1;
         sc->cls = parse_hex(line + 2, 2);
         if (sc->cls < 0) return;
         for (int i = 0; i < sc->n; i++)
@@ -70,8 +73,17 @@ static void on_line(struct scan *sc, const char *line) {
         return;
     }
     if (line[0] == '\t' && sc->cls >= 0) {
-        if (line[1] == '\t') return;
+        if (line[1] == '\t') {
+            int32_t pi = parse_hex(line + 2, 2);
+            if (pi < 0 || sc->sub < 0) return;
+            for (int i = 0; i < sc->n; i++)
+                if (sc->e[i].cls == sc->cls && sc->e[i].subclass == sc->sub &&
+                    sc->e[i].prog_if == pi && !sc->e[i].progif_name[0])
+                    strlcpy(sc->e[i].progif_name, after_id(line + 4), sizeof sc->e[i].progif_name);
+            return;
+        }
         int32_t sub = parse_hex(line + 1, 2);
+        sc->sub = sub;
         if (sub < 0) return;
         for (int i = 0; i < sc->n; i++)
             if (sc->e[i].cls == sc->cls && sc->e[i].subclass == sub && !sc->e[i].subclass_name[0])
@@ -109,7 +121,8 @@ static int all_resolved(const struct scan *sc) {
 
 int uhwids_resolve(const char *path, struct uhwids_entry *e, int n) {
     for (int i = 0; i < n; i++)
-        e[i].vendor_name[0] = e[i].device_name[0] = e[i].class_name[0] = e[i].subclass_name[0] = '\0';
+        e[i].vendor_name[0] = e[i].device_name[0] = e[i].class_name[0] =
+            e[i].subclass_name[0] = e[i].progif_name[0] = '\0';
     int fd = open(path, O_RDONLY);
     if (fd < 0) return -1;
 
@@ -117,7 +130,7 @@ int uhwids_resolve(const char *path, struct uhwids_entry *e, int n) {
     char line[LINE_MAX_];
     unsigned len = 0;
     int overlong = 0;           // dropping a too-long line's tail, not restarting mid-way
-    struct scan sc = { e, n, -1, -1 };
+    struct scan sc = { e, n, -1, -1, -1 };
 
     for (;;) {
         long got = read(fd, chunk, CHUNK);

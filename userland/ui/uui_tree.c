@@ -254,7 +254,7 @@ static void tree_clamp(struct uui_tree *t) {
 // node has an icon -- so an existing tree draws exactly as it did.
 static int icon_gutter(const struct uui_tree *t) {
     for (int i = 0; i < t->count; i++)
-        if (t->nodes[i].icon) return ugfx_char_h() + 4;
+        if (t->nodes[i].icon || t->nodes[i].badge) return ugfx_char_h() + 4;
     return 0;
 }
 
@@ -347,12 +347,20 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
         // ugfx_blit_alpha(), never ugfx_blit(): an icon's corners are
         // transparent (docs/conventions/gui.md).
         int tx = row_text_x(t, node);
+        int isz = ugfx_char_h(), ix = tx - icon_gutter(t), iy = ry + (rh - isz) / 2;
         if (t->nodes[node].icon) {
-            int isz = ugfx_char_h();
             const struct uimg *ic = icon_get(t->nodes[node].icon, isz);
-            int ix = tx - icon_gutter(t);
             if (ic && ix + ic->w <= t->x + t->w - bar)
                 ugfx_blit_alpha(s, ix, ry + (rh - ic->h) / 2, ic->w, ic->h, ic->px, ic->w);
+        }
+        // The badge over the icon's lower-right corner, overhanging by a
+        // few pixels into the gutter's gap as Windows' does.
+        if (t->nodes[node].badge) {
+            int bsz = isz * 2 / 3 > 8 ? isz * 2 / 3 : 8;
+            const struct uimg *b = icon_get(t->nodes[node].badge, bsz);
+            int bx = ix + isz - bsz + 3, by = iy + isz - bsz + 2;
+            if (b && bx + b->w <= t->x + t->w - bar)
+                ugfx_blit_alpha(s, bx, by, b->w, b->h, b->px, b->w);
         }
 
         // CLIPPED, always: a label longer than the pane must not run

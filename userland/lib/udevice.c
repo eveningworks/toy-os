@@ -53,10 +53,13 @@ static enum udev_type usb_type(const struct query_usb *q) {
     return UDEV_T_OTHER;
 }
 
-// A type a person expects a driver for -- a bridge with no driver is
-// normal, a network card with none is a problem.
-static int wants_driver(enum udev_type t) {
-    return t <= UDEV_T_INPUT;
+// Does a device with no driver have a PROBLEM? A PCI bridge or chipset
+// function with none is normal; a network card with none is not. A USB
+// device ALWAYS wants one -- USB has no config-space-only functions --
+// so a webcam or a Bluetooth adapter is "Other devices" by type and
+// still a problem (it read "No driver needed" until 2026-09-29).
+static int wants_driver(const struct udevice *d) {
+    return d->type <= UDEV_T_INPUT || d->bus == UDEV_USB;
 }
 
 // --- what has been disabled ---------------------------------------------
@@ -144,7 +147,20 @@ static void add_pci(struct udevice *out, int *n, int cap, struct uhwids_entry *i
         ids[*n].device = d->device;
         ids[*n].cls = d->cls;
         ids[*n].subclass = d->subclass;
+        ids[*n].prog_if = d->prog_if;
         (*n)++;
+    }
+}
+
+// The class names joined, most general first, skipping the ones the
+// database lacks and a subclass that only repeats its class ("Hub / Hub").
+static void describe_class(struct udevice *d, const struct uhwids_entry *e) {
+    const char *part[3] = { e->class_name, e->subclass_name, e->progif_name };
+    d->class_desc[0] = '\0';
+    for (int k = 0; k < 3; k++) {
+        if (!part[k][0] || (k && !strcmp(part[k], part[k - 1]))) continue;
+        if (d->class_desc[0]) strlcat(d->class_desc, " / ", sizeof d->class_desc);
+        strlcat(d->class_desc, part[k], sizeof d->class_desc);
     }
 }
 
@@ -182,7 +198,9 @@ static void add_usb(struct udevice *out, int *n, int cap, struct uhwids_entry *i
             strlcpy(d->vendor_name, q.manufacturer, sizeof d->vendor_name);
         ids[*n].vendor = d->vendor;
         ids[*n].device = d->device;
-        ids[*n].cls = ids[*n].subclass = -1;
+        ids[*n].cls = d->cls;              // the bound (or first) interface's
+        ids[*n].subclass = d->subclass;
+        ids[*n].prog_if = d->prog_if;
         (*n)++;
     }
 }
@@ -273,6 +291,11 @@ int udevice_list(struct udevice *out, int cap) {
         if (ids[i].device_name[0]) strlcpy(d->name, ids[i].device_name, sizeof d->name);
         else if (ids[i].subclass_name[0]) strlcpy(d->name, ids[i].subclass_name, sizeof d->name);
         else strlcpy(d->name, pci_class_name(d->cls, d->subclass), sizeof d->name);
+        describe_class(d, &ids[i]);
+        // pci.ids names every standard class; the kernel's own table is the
+        // fallback for a file that is missing or older than the device.
+        if (!d->class_desc[0])
+            strlcpy(d->class_desc, pci_class_name(d->cls, d->subclass), sizeof d->class_desc);
     }
 
     adopt_class_drivers(out, npci);
@@ -284,6 +307,7 @@ int udevice_list(struct udevice *out, int cap) {
         struct udevice *d = &out[npci + i];
         if (ids[npci + i].device_name[0]) strlcpy(d->name, ids[npci + i].device_name, sizeof d->name);
         if (ids[npci + i].vendor_name[0]) strlcpy(d->vendor_name, ids[npci + i].vendor_name, sizeof d->vendor_name);
+        describe_class(d, &ids[npci + i]);
         // Windows' shape for a device with no name: what it is, by class.
         if (!d->name[0])
             snprintf(d->name, sizeof d->name, "USB %s",
@@ -307,7 +331,7 @@ int udevice_list(struct udevice *out, int cap) {
         d->disabled = !d->driver[0] && !d->holder_pid &&
                       ((have_run && recorded(run, d)) || d->persisted);
         if (d->disabled) d->can_disable = 1;           // it can be enabled again
-        d->problem = !d->driver[0] && !d->holder_pid && !d->disabled && wants_driver(d->type) &&
+        d->problem = !d->driver[0] && !d->holder_pid && !d->disabled && wants_driver(d) &&
                      d->bus != UDEV_CPU;
     }
     free(run);

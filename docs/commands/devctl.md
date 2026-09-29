@@ -47,9 +47,10 @@ in the same slot is left alone** -- a re-plugged or reordered machine
 cannot disable the wrong thing.
 
 STATE is `ok`, `disabled`, `held` (a process holds it -- a ring-3
-driver such as `hdad`), or `no-driver` (a kind of device that wants a
-driver and has none in this build; a bridge with no driver is simply
-`ok`).
+driver such as `hdad`), or `no-driver` (a device that wants a driver
+and has none in this build -- every USB device but a hub, and a PCI
+display, network, sound, storage, USB or input controller; a PCI bridge
+or chipset function with no driver is simply `ok`).
 
 ## What it deliberately does not do
 

@@ -129,21 +129,35 @@ static struct uui_focus g_focus;
 
 // --- the tree ------------------------------------------------------------
 
-// The state goes FIRST: a device name is long, and a mark after it is
-// what the pane's edge clips.
 static void label_device(int i) {
-    const struct udevice *d = &g_dev[i];
-    const char *mark = d->disabled ? "[disabled] " : d->problem ? "[no driver] " : "";
-    snprintf(g_label[i], sizeof g_label[i], "%s%s", mark, d->name);
+    strlcpy(g_label[i], g_dev[i].name, sizeof g_label[i]);
 }
 
 static void add_node(const char *label, int depth, int id, const char *icon) {
     if (g_node_count >= (int)(sizeof g_nodes / sizeof g_nodes[0])) return;
-    g_nodes[g_node_count++] = (struct uui_tree_node){ label, depth, id, UUI_TREE_AUTO, icon };
+    g_nodes[g_node_count++] = (struct uui_tree_node){ label, depth, id, UUI_TREE_AUTO, icon, 0 };
 }
 
+// The state is a BADGE on the icon, Windows' shape: a yellow "!" for a
+// device with no driver, a down-arrow for one switched off.
 static void add_device(int i, int depth) {
     add_node(g_label[i], depth, i, udevice_type_icon(g_dev[i].type));
+    const struct udevice *d = &g_dev[i];
+    g_nodes[g_node_count - 1].badge = d->disabled ? "badge-disabled"
+                                    : d->problem ? "badge-warning" : 0;
+}
+
+// Every node above a device with a problem is OPENED on each rebuild, as
+// Windows' Device Manager does, so the "!" is on screen without a click.
+static void open_problems(void) {
+    for (int k = 0; k < g_node_count; k++) {
+        if (!g_nodes[k].badge || strcmp(g_nodes[k].badge, "badge-warning")) continue;
+        for (int j = k - 1, depth = g_nodes[k].depth; j >= 0 && depth > 0; j--)
+            if (g_nodes[j].depth < depth) {
+                uui_tree_set_collapsed(&g_tree, j, 0);
+                depth = g_nodes[j].depth;
+            }
+    }
 }
 
 // Windows' default: a heading per type that has any devices.
@@ -198,6 +212,7 @@ static void rebuild_tree(const char *keep_id) {
     for (int i = 0; i < g_n; i++) label_device(i);
     if (g_by_conn) build_by_connection(); else build_by_type();
     uui_tree_set_nodes_keep(&g_tree, g_nodes, g_node_count);
+    open_problems();
     if (keep_id && keep_id[0])
         for (int i = 0; i < g_n; i++)
             if (!strcmp(g_dev[i].id, keep_id)) { uui_tree_select_id(&g_tree, i); return; }
@@ -418,7 +433,7 @@ static void draw_pane(struct ugfx_surface *s) {
                              t->text, t->field_bg);
     y += bh + pad;
 
-    char buf[96], file[64];
+    char buf[176], file[64];
     section(s, &y, "Device");
     if (y) y = row(s, y, "Location", d->location);
     if (y && d->bus != UDEV_CPU && d->bus != UDEV_PLATFORM) {
@@ -426,12 +441,13 @@ static void draw_pane(struct ugfx_surface *s) {
         y = row(s, y, "IDs", buf);
     }
     if (y && d->vendor_name[0]) y = row(s, y, "Vendor", d->vendor_name);
-    if (y && d->bus == UDEV_PCI) {
-        snprintf(buf, sizeof buf, "%02x/%02x/%02x", d->cls, d->subclass, d->prog_if);
-        y = row(s, y, "Class", buf);
-    }
-    if (y && d->bus == UDEV_USB) {
-        snprintf(buf, sizeof buf, "interface %02x/%02x/%02x", d->cls, d->subclass, d->prog_if);
+    // The class BY NAME, the code after it: the name is what a person
+    // reads, the code what they search for.
+    if (y && (d->bus == UDEV_PCI || d->bus == UDEV_USB)) {
+        char code[16];
+        snprintf(code, sizeof code, "%02x/%02x/%02x", d->cls, d->subclass, d->prog_if);
+        if (d->class_desc[0]) snprintf(buf, sizeof buf, "%s (%s)", d->class_desc, code);
+        else strlcpy(buf, code, sizeof buf);
         y = row(s, y, "Class", buf);
     }
     if (y && d->bus != UDEV_CPU) {

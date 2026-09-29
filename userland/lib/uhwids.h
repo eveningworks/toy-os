@@ -22,15 +22,20 @@
 struct uhwids_entry {
     // In.
     uint16_t vendor, device;
-    // The class and subclass to name from pci.ids' class section ("C 04"
-    // and the "\t03" under it), or -1 for none -- usb.ids' class section
-    // is not read, so a USB caller passes -1.
+    // The class, subclass and programming interface to name from the
+    // file's class section ("C 04", the "\t03" under it, the "\t\t00"
+    // under that) -- pci.ids and usb.ids share the shape, and USB's third
+    // level is the interface protocol. -1 for none.
     int cls, subclass;
     // Out: "" where the database has nothing.
     char vendor_name[64];
     char device_name[96];
     char class_name[48];     // the class's name
     char subclass_name[48];  // the subclass's, the more specific
+    // After the rest, so a caller that sets nothing here still means 0
+    // -- set it to -1 for no third level.
+    int prog_if;
+    char progif_name[48];    // the prog-if's (PCI) or protocol's (USB)
 };
 
 // Fills every entry's names from `path`. 0, or -1 when the file cannot

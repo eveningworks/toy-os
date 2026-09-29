@@ -65,6 +65,11 @@ struct uui_tree_node {
     // has one, every row gets the gutter, so labels at one depth still
     // line up -- the rule uui_sidebar learned for its headings.
     const char *icon;
+    // A small STATUS icon over the corner of `icon` -- Windows Device
+    // Manager's yellow "!" and down-arrow -- or NULL. Shape as well as
+    // colour, so it reads without the colour. After `icon`, so a
+    // positional initialiser that stops there still means "none".
+    const char *badge;
 };
 
 struct uui_tree {

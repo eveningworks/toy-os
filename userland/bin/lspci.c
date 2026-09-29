@@ -102,6 +102,7 @@ static void load_names(void) {
         e[i].device = g_dev[i].device_id;
         e[i].cls = g_dev[i].class_code;
         e[i].subclass = g_dev[i].subclass;
+        e[i].prog_if = -1;
     }
     if (uhwids_resolve(UHWIDS_PCI, e, g_count) < 0) {
         put_err("lspci: " UHWIDS_PCI " not found -- showing numeric ids only\n");
