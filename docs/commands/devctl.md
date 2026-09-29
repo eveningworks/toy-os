@@ -53,7 +53,7 @@ driver and has none in this build; a bridge with no driver is simply
 
 ## What it deliberately does not do
 
-- **It cannot disable a device whose driver cannot let go.** Disabling
+- **It cannot disable a device whose driver does not support it.** Disabling
   is an unbind, and the kernel's only gate on it is the driver's
   `remove()`. No storage controller has one, so the disk the root
   filesystem is on cannot be switched off -- the refusal names that.

@@ -21,7 +21,7 @@ static struct udevice g_dev[UDEV_MAX];
 static const char *why(int err) {
     switch (err) {
     case EBUSY:   return "a process holds it -- close that first";
-    case ENOTSUP: return "its driver cannot let go of it";
+    case ENOTSUP: return "its driver does not support disabling";
     case EPERM:   return "needs a scheduler slot -- spawn devctl, do not `run` it";
     case EINVAL:  return "the kernel does not know that device";
     default:      return strerror(err);

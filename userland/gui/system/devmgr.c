@@ -256,8 +256,8 @@ static void set_note(const char *msg) { strlcpy(g_st_note, msg, sizeof g_st_note
 static void report(const struct udevice *d, int r, const char *verb) {
     char msg[96];
     if (r == 0) snprintf(msg, sizeof msg, "%s %s", verb, d->name);
-    else if (r == -EBUSY) snprintf(msg, sizeof msg, "a process holds %s", d->name);
-    else if (r == -ENOTSUP) snprintf(msg, sizeof msg, "the driver cannot let go of %s", d->name);
+    else if (r == -EBUSY) snprintf(msg, sizeof msg, "%s is in use by a program", d->name);
+    else if (r == -ENOTSUP) snprintf(msg, sizeof msg, "%s's driver does not support disabling", d->name);
     else snprintf(msg, sizeof msg, "could not change %s (error %d)", d->name, -r);
     set_note(msg);
     ulogf("devmgr: %s %s -> %d\n", verb, d->id, r);
@@ -270,7 +270,7 @@ static void ask_disable(struct uapp *a) {
     snprintf(g_ask_line[0], sizeof g_ask_line[0], "Disable %s?", d->name);
     snprintf(g_ask_line[1], sizeof g_ask_line[1], "%s",
              g_keep.checked ? "It stays disabled after a restart, until you enable it."
-                            : "Its driver lets go of it until you enable it or restart.");
+                            : "It stays disabled until you enable it or restart.");
     g_ask_rows[0] = g_ask_line[0];
     g_ask_rows[1] = g_ask_line[1];
     static const struct uui_dialog_button btns[] = {
@@ -445,8 +445,9 @@ static void draw_pane(struct ugfx_surface *s) {
             snprintf(buf, sizeof buf, "pid %d", d->holder_pid);
             y = row(s, y, "Held by", buf);
         }
-        if (y) y = row(s, y, "Can disable", d->can_disable ? "yes"
-                        : d->driver[0] ? "no -- its driver cannot let go" : "no");
+        if (y) y = row(s, y, "Can disable", d->can_disable ? "Yes"
+                        : d->holder_pid ? "No (in use by a program)"
+                        : d->driver[0] ? "No (not supported by its driver)" : "No");
     }
 }
 
