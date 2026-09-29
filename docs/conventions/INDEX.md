@@ -277,6 +277,12 @@ whenever a headline here tells you something you did not already know.
 - **A DRIVER WHOSE WAIT SLEEPS SERIALISES ITS OWN HARDWARE WITH ITS OWN
   LOCK**
 - **A CONTEXT PARKED MID-CALL DIES ON ITS WAY OUT, NOT WHERE IT SLEEPS**
+- **A QUERY RECORD OVER `QUERY_RECORD_MAX` IS REFUSED AT EVERY READ,
+  SILENTLY**
+- **A CONTROL TRANSFER ENDS AT ITS STATUS STAGE, NOT AT A SHORT DATA
+  STAGE**
+- **THE MACHINE'S NAME IS `QUERY_SMBIOS`, AND SERIAL NUMBERS ARE NEVER
+  READ**
 
 ### GUI, Toykit and the desktop
 
@@ -412,6 +418,7 @@ whenever a headline here tells you something you did not already know.
   BEFORE IT NAVIGATES.**
 - **A FOCUSED `uui_button` PRESSES ON SPACE OR ENTER, AND A DISABLED ONE
   REFUSES FOCUS.**
+- **AN OUTLINED BUTTON AND A STRONG SELECTION ARE OPT-IN STYLES**
 - **`uui_table` is the multi-column widget**
 - **Editable text has ONE implementation of what editing means**
 - **A ring-3 app does NOT route mouse input to its widgets -- the

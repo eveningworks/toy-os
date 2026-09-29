@@ -525,6 +525,11 @@ struct query_fsstat {
 // none. logd appends it to the dead boot's log file and then clears it
 // with `kernel.panic_record=clear`, which is systemd-pstore's job.
 #define QUERY_PANIC 45
+// The machine's own name for itself, from the SMBIOS/DMI tables: who made
+// it and what model it is, and the firmware's vendor and version. One
+// record. No SERIAL NUMBERS -- they identify a machine, and nothing here
+// needs that.
+#define QUERY_SMBIOS 46
 
 #define QUERY_REMOTE_SESSION  0 // a session opened or closed
 #define QUERY_REMOTE_COMMAND  1 // a command line the remote shell ran
@@ -1403,5 +1408,24 @@ struct query_cpu {
 #define QUERY_CPU_ENABLED        (1u << 0) // usable now
 #define QUERY_CPU_ONLINE_CAPABLE (1u << 1) // ...or could be brought up later
 #define QUERY_CPU_X2APIC         (1u << 2) // from a type-9 entry, not type 0
+
+// --- QUERY_SMBIOS record ------------------------------------------------
+
+// Every string "" where the firmware gave none or gave a placeholder
+// ("To be filled by O.E.M.", "System Product Name", ...), so a caller can
+// test for empty rather than learn every vendor's filler.
+// Exactly QUERY_RECORD_MAX (256) bytes, which is why the fields are the
+// sizes they are and the board (type 2) is not carried.
+struct query_smbios {
+    uint64_t found;          // 1 if an entry point was found and parsed
+    uint64_t major, minor;   // the SMBIOS version, 2.x or 3.x
+    char sys_vendor[48];     // type 1: "ASUSTeK COMPUTER INC."
+    char product[48];        // type 1: "UX305FA"
+    char sys_version[24];    // type 1: the model's revision
+    char family[32];         // type 1 (2.4+): "ZenBook"
+    char bios_vendor[32];    // type 0
+    char bios_version[32];   // type 0
+    char bios_date[16];      // type 0: "MM/DD/YYYY", as the firmware writes it
+};
 
 #endif // ABI_QUERY_ABI_H

@@ -11,8 +11,9 @@
 ## Description
 
 `/bin/about` — the RUNNING KERNEL's version and build time, this program's
-own version beside it, the boot method, and the filesystem line (which it can
-print because `QUERY_FSINFO` exists).
+own version beside it, the machine the firmware says it is (`QUERY_SMBIOS`,
+left out when the firmware names none), the boot method, and the filesystem
+line (which it can print because `QUERY_FSINFO` exists).
 
 **It reports two versions on purpose, and warns when they differ.** The kernel's
 comes from `QUERY_VERSION` — the kernel's own copy of what it is. This program's
@@ -25,6 +26,7 @@ happens when a kernel or a binary is pushed over the network.
       kernel:   0.3.0-dev (426601f)  built 2026-09-01 10:39:12
       userland: 0.3.0-dev (214d29e)  built 2026-08-31
       ** kernel and userland are from different builds **
+    Machine: QEMU Standard PC (i440FX + PIIX, 1996)
     Boot: GRUB/Multiboot2 | C + ASM | Tested on QEMU
     Storage: tfs3, disk-backed (files persist across reboots)
 

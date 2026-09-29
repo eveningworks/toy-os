@@ -59,6 +59,16 @@ int main(int argc, char **argv) {
     if (have_kernel && k_strcmp(kv.build_id, TOYOS_BUILD_ID) != 0)
         sys_print("  ** kernel and userland are from different builds **\n");
 
+    // WHAT IT IS RUNNING ON, from SMBIOS -- a line only when the firmware
+    // named the machine; a nameless one is simply not mentioned.
+    struct query_smbios sm;
+    if (sys_query_record(QUERY_SMBIOS, 0, &sm, sizeof sm) >= (int)sizeof sm &&
+        sm.found && (sm.sys_vendor[0] || sm.product[0])) {
+        snprintf(line, sizeof line, "Machine: %s%s%s\n", sm.sys_vendor,
+                 sm.sys_vendor[0] && sm.product[0] ? " " : "", sm.product);
+        sys_print(line);
+    }
+
     sys_print("Boot: GRUB/Multiboot2 | C + ASM | Tested on QEMU\n");
 
     struct query_fsinfo fs;

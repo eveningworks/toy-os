@@ -4557,3 +4557,36 @@ signal is delivered on the return to ring 3 once the call completes, so
 the process finishes its I/O and then dies. **A thread GROUP is not
 covered**: a sibling parked mid-call when the group exits is released
 where it stands (`docs/bugs.md`).
+
+## A QUERY RECORD OVER `QUERY_RECORD_MAX` IS REFUSED AT EVERY READ, SILENTLY
+
+`QUERY_RECORD_MAX` is 256 bytes (`api/query.h`), and `sys_query_record()`
+returns `-EINVAL` for a provider whose `record_size` is larger -- at the
+READ, not at `query_register()`, so the class registers, lists and then
+never answers. `QUERY_SMBIOS` shipped that way for one build: every
+reader saw nothing and fell back as if the firmware had named no
+machine. Put `_Static_assert(sizeof(struct query_x) <= QUERY_RECORD_MAX,
+...)` beside the provider; a record that needs more is two classes or a
+LIST (`QUERY_ACPIDUMP` slices a table).
+
+## A CONTROL TRANSFER ENDS AT ITS STATUS STAGE, NOT AT A SHORT DATA STAGE
+
+The Data Stage TRB carries ISP, so a device that sends less than was
+asked for -- every string read -- posts a SHORT_PACKET event for the Data
+TRB before the Status Stage has run. `xhci.c` records that residual in
+`data_short` and keeps waiting; the Status Stage's event completes the
+transfer (xHCI 4.10.1.1, Linux's `process_ctrl_td`). Taking the data
+event as the end let the Status event land on the NEXT control transfer,
+which then completed before its data came: every second USB string read
+on real hardware, and never in QEMU, which posts both events at once.
+
+## THE MACHINE'S NAME IS `QUERY_SMBIOS`, AND SERIAL NUMBERS ARE NEVER READ
+
+`kernel/core/smbios.c` finds the SMBIOS entry point in the BIOS area
+(`_SM3_` preferred, then `_SM_`), parses types 0 and 1 into one record,
+and drops firmware filler ("To be filled by O.E.M.", "System Product
+Name", ...) so an empty string means "not named". It skips type 1's serial
+number on purpose: it identifies one machine and nothing here needs it.
+An EFI boot would need Multiboot2's EFI system-table tag, which nothing
+reads yet, and reports `found` 0.
+
