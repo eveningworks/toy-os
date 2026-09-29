@@ -9,10 +9,27 @@
 #include <string.h>
 
 // Font-derived, per docs/gui-guidelines.md.
-static int icon_px(void)  { return ugfx_char_h() + 4; }
-static int btn_w(void)    { return icon_px() + 10; }
-static int btn_h(void)    { return icon_px() + 8; }
+// A COMPACT strip (a status bar's view switch) draws its icons at the
+// text's own height; the ordinary one a little larger.
+static int icon_px(const struct uui_toolbar *t) { return ugfx_char_h() + (t->compact ? -2 : 4); }
+static int btn_w(const struct uui_toolbar *t)   { return icon_px(t) + (t->compact ? 8 : 10); }
+static int btn_h(const struct uui_toolbar *t)   { return icon_px(t) + (t->compact ? 2 : 8); }
 static int sep_w(void)    { return 7; }
+static int chev_w(void)   { return 10; }
+
+static int is_sep_item(const struct uui_toolbar_item *it) { return it->icon == 0 && !it->label; }
+
+// A button's width: icon-only is square-ish; a label and a chevron add
+// their own widths, so the strip reflows with the font.
+static int item_w(const struct uui_toolbar *t, const struct uui_toolbar_item *it) {
+    if (is_sep_item(it)) return sep_w();
+    if (!it->label && !(it->flags & UUI_TB_MENU)) return btn_w(t);
+    int w = 12;
+    if (it->icon) w += icon_px(t);
+    if (it->label) w += (it->icon ? 6 : 0) + ugfx_text_width(it->label);
+    if (it->flags & UUI_TB_MENU) w += chev_w();
+    return w < btn_w(t) ? btn_w(t) : w;
+}
 
 void uui_toolbar_init(struct uui_toolbar *t,
                        const struct uui_toolbar_item *items, int count) {
@@ -29,7 +46,7 @@ void uui_toolbar_init(struct uui_toolbar *t,
     t->tip_fg = ugfx_rgb(20, 20, 20);
 }
 
-static int is_sep(const struct uui_toolbar_item *it) { return it->icon == 0; }
+static int is_sep(const struct uui_toolbar_item *it) { return is_sep_item(it); }
 
 static unsigned flags_of(const struct uui_toolbar *t, int i) {
     if (i < 0 || i >= t->count || is_sep(&t->items[i])) return 0;
@@ -38,22 +55,37 @@ static unsigned flags_of(const struct uui_toolbar *t, int i) {
 
 void uui_toolbar_natural_size(const struct uui_toolbar *t, int *out_w, int *out_h) {
     int w = 4;
-    for (int i = 0; i < t->count; i++)
-        w += is_sep(&t->items[i]) ? sep_w() : btn_w();
+    for (int i = 0; i < t->count; i++) w += item_w(t, &t->items[i]);
     if (out_w) *out_w = w + 4;
-    if (out_h) *out_h = btn_h() + 4;
+    if (out_h) *out_h = btn_h(t) + (t->compact ? 0 : 4);
+}
+
+// The first item of the right-hand group, or `count` when there is none.
+static int end_group(const struct uui_toolbar *t) {
+    for (int i = 0; i < t->count; i++)
+        if (t->items[i].flags & UUI_TB_END) return i;
+    return t->count;
 }
 
 int uui_toolbar_item_rect(const struct uui_toolbar *t, int i,
                            int *x, int *y, int *w, int *h) {
     if (i < 0 || i >= t->count) return 0;
-    int ix = t->x + 4;
-    for (int j = 0; j < i; j++)
-        ix += is_sep(&t->items[j]) ? sep_w() : btn_w();
+    int e = end_group(t);
+    int ix = t->x + 4, from = 0;
+    if (i >= e) {
+        // Packed against the right edge, never over the left group.
+        int ew = 0, lw = 4;
+        for (int j = e; j < t->count; j++) ew += item_w(t, &t->items[j]);
+        for (int j = 0; j < e; j++) lw += item_w(t, &t->items[j]);
+        ix = t->x + t->w - 4 - ew;
+        if (ix < t->x + lw) ix = t->x + lw;
+        from = e;
+    }
+    for (int j = from; j < i; j++) ix += item_w(t, &t->items[j]);
     if (x) *x = ix;
-    if (y) *y = t->y + 2;
-    if (w) *w = is_sep(&t->items[i]) ? sep_w() : btn_w();
-    if (h) *h = btn_h();
+    if (y) *y = t->y + (t->compact ? 0 : 2);
+    if (w) *w = item_w(t, &t->items[i]);
+    if (h) *h = btn_h(t);
     return 1;
 }
 
@@ -126,7 +158,7 @@ int uui_toolbar_tick(struct uui_toolbar *t) {
 
 static void tb_draw(struct ugfx_surface *s, const struct uui_toolbar *t) {
     ugfx_fill_rect(s, t->x, t->y, t->w, t->h, t->bg);
-    ugfx_fill_rect(s, t->x, t->y + t->h - 1, t->w, 1, t->border);
+    if (!t->compact) ugfx_fill_rect(s, t->x, t->y + t->h - 1, t->w, 1, t->border);
 
     for (int i = 0; i < t->count; i++) {
         int x, y, w, h;
@@ -149,7 +181,30 @@ static void tb_draw(struct ugfx_surface *s, const struct uui_toolbar *t) {
         if (f & UUI_MI_CHECKED)
             ugfx_draw_rect(s, x, y, w, h, t->border);
 
-        const struct uimg *ico = icon_get(t->items[i].icon, icon_px());
+        const struct uui_toolbar_item *it = &t->items[i];
+        if (it->label || (it->flags & UUI_TB_MENU)) {
+            // Icon, word, chevron, left to right.
+            uint32_t bg = st != UUI_STATE_REST ? uui_state_bg(t->bg, st) : t->bg;
+            uint32_t fg = (f & UUI_MI_DISABLED) ? uui_state_bg(t->fg, UUI_STATE_DISABLED) : t->fg;
+            int cx = x + 6;
+            const struct uimg *li = it->icon ? icon_get(it->icon, icon_px(t)) : 0;
+            if (li) {
+                ugfx_blit_alpha(s, cx, y + (h - li->h) / 2, li->w, li->h, li->px, li->w);
+                cx += icon_px(t) + 6;
+            }
+            if (it->label) {
+                ugfx_draw_string_clipped(s, cx, y + (h - ugfx_char_h()) / 2,
+                                          x + w - cx, it->label, fg, bg);
+                cx += ugfx_text_width(it->label);
+            }
+            if (it->flags & UUI_TB_MENU) {
+                int ax = cx + 3, ay = y + h / 2 - 1;
+                for (int r = 0; r < 3; r++)
+                    ugfx_fill_rect(s, ax + r, ay + r, 7 - 2 * r, 1, fg);
+            }
+            continue;
+        }
+        const struct uimg *ico = icon_get(t->items[i].icon, icon_px(t));
         if (ico) {
             // No greying pass for a disabled icon -- the wash under it
             // is the state signal, one rule for every control here.

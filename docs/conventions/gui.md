@@ -2550,6 +2550,41 @@ real scanout hardware does. Do not write a pixel assertion for one.
   with Alt held and the key reaches the app's `on_key`. The focus ring
   delivers keys BEFORE `on_key`, which is why the widget has to decline.
 
+- **A PATH BAR AND A PLACES LIST NAVIGATE NOTHING: THEY PARK A PATH.**
+  `uui_pathbar` (a breadcrumb that turns into a text field) and
+  `uui_places` (named folders, then every mount with its free space) are
+  shared by the File Manager and `uui_filedialog`. A click or an Enter
+  parks the path for `uui_pathbar_take()`/`uui_places_take()`; the APP
+  decides whether it exists, goes there, and calls
+  `uui_pathbar_set_path()`/`uui_places_select_path()` with where it
+  actually is. A typed path the app refuses leaves the field up with the
+  text in it. Read the taken path from `on_widget` whatever the reason --
+  a hover reaches there too, and only a click parks anything.
+
+- **A TOOLBAR BUTTON MAY CARRY A WORD AND A CHEVRON, AND THE APP OPENS
+  THE MENU.** `uui_toolbar_item` has `label` and `flags` after `code`, so
+  a three-field initialiser still means what it did: `UUI_TB_MENU` draws
+  a chevron (the app opens a popup under `uui_toolbar_item_rect()` when
+  the code commits), `UUI_TB_END` packs that item and the rest against
+  the right edge, and `compact` (on the toolbar) sizes a strip that
+  lives inside a status bar.
+
+- **A DETAILS VIEW DROPS COLUMNS FROM THE END, AND A COLUMN'S INDEX IS
+  ITS SORT KEY.** `uui_fileview`'s columns are Name, Size, Modified,
+  Type; a pane too narrow for all four shows fewer by lowering
+  `col_count`, never by removing one from the middle, so every index --
+  which is what `uui_fileview_set_sort()` and the header click store --
+  keeps its meaning. `uui_table` sorts by a hidden column all the same.
+  A row's icon comes from `uui_table_set_icon()`, a cache lookup at text
+  height (`lib/ufiletype.h` names the type and the icon).
+
+- **A POPUP ASKED TO CLOSE IS DESTROYED, NOT JUST FORGOTTEN.** A
+  `WIN_EV_CLOSE` on a popup's slot is answered with `WIN_REQ_DESTROY`
+  before the owner hears `done`; releasing the buffers alone left the
+  compositor holding a window nobody drew, and it raised "not
+  responding" over the app -- a box that then took the next click.
+  `WIN_EV_POPUP_DONE` needs no destroy: the compositor already swept it.
+
 - **THE WALLPAPER IS A REGISTERED SETTING, AND ITS VALUE IS A NAME.**
   `desktop.wallpaper` (a filename stem under `/usr/share/wallpapers`, or
   `none`) and `desktop.wallpaper_mode` (`fill`/`fit`), DECLARED by

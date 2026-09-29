@@ -356,6 +356,211 @@ def icon_tb_home():
     return im
 
 
+# --- file types, places and drives (the File Manager) ------------------
+#
+# The file-type glyphs are the generic page with an emblem, so a listing
+# reads as "a page of some kind" first and "which kind" second -- the
+# Breeze and Windows 11 convention. Places and drives are flat ink, no
+# plate: they sit in a sidebar, not on a wallpaper.
+
+PAGE_EDGE = (140, 145, 155, 255)
+PLACE_INK = (91, 127, 191, 255)
+
+
+def _page():
+    im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle([14, 8, 50, 56], radius=3, fill=WHITE, outline=PAGE_EDGE, width=2)
+    d.polygon([(38, 8), (50, 20), (38, 20)], fill=(210, 214, 222, 255), outline=PAGE_EDGE)
+    return im, d
+
+
+def icon_file_text():
+    im, d = _page()
+    for yy in (28, 35, 42, 49):
+        d.line([20, yy, 44 if yy != 49 else 36, yy], fill=(150, 156, 168, 255), width=2)
+    return im
+
+
+def icon_file_doc():
+    # Markdown: a document with a heading bar.
+    im, d = _page()
+    d.rectangle([20, 26, 40, 31], fill=(50, 90, 160, 255))
+    for yy in (37, 43, 49):
+        d.line([20, yy, 44, yy], fill=(150, 156, 168, 255), width=2)
+    return im
+
+
+def icon_file_image():
+    im, d = _page()
+    d.rectangle([19, 26, 45, 48], fill=(120, 170, 220, 255))
+    d.polygon([(19, 48), (28, 36), (34, 43), (38, 39), (45, 48)], fill=(60, 140, 90, 255))
+    d.ellipse([36, 29, 41, 34], fill=(250, 220, 90, 255))
+    return im
+
+
+def icon_file_audio():
+    im, d = _page()
+    ink = (192, 102, 28, 255)
+    d.line([36, 26, 36, 45], fill=ink, width=4)
+    d.line([36, 26, 44, 30], fill=ink, width=4)
+    d.ellipse([25, 40, 37, 50], fill=ink)
+    return im
+
+
+def icon_file_config():
+    # Settings: two slider tracks with their knobs.
+    im, d = _page()
+    ink = (63, 143, 138, 255)
+    d.line([20, 32, 44, 32], fill=ink, width=3)
+    d.line([20, 44, 44, 44], fill=ink, width=3)
+    d.ellipse([24, 27, 34, 37], fill=WHITE, outline=ink, width=3)
+    d.ellipse([32, 39, 42, 49], fill=WHITE, outline=ink, width=3)
+    return im
+
+
+def icon_file_font():
+    im, d = _page()
+    ink = (70, 70, 80, 255)
+    d.line([22, 50, 32, 26], fill=ink, width=4)
+    d.line([32, 26, 42, 50], fill=ink, width=4)
+    d.line([26, 42, 38, 42], fill=ink, width=3)
+    return im
+
+
+def icon_file_app():
+    # A launcher (.desktop): an app tile on the page.
+    im, d = _page()
+    d.rounded_rectangle([21, 28, 43, 50], radius=5, fill=(50, 90, 160, 255))
+    d.rectangle([26, 37, 38, 41], fill=WHITE)
+    return im
+
+
+def _place():
+    im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    return im, ImageDraw.Draw(im)
+
+
+def icon_place_home():
+    im, d = _place()
+    d.polygon([(32, 8), (58, 32), (6, 32)], fill=PLACE_INK)
+    d.rectangle([14, 30, 50, 56], fill=PLACE_INK)
+    d.rectangle([27, 40, 37, 56], fill=(0, 0, 0, 0))
+    return im
+
+
+def icon_place_desktop():
+    im, d = _place()
+    d.rounded_rectangle([6, 10, 58, 44], radius=3, fill=PLACE_INK)
+    d.rectangle([12, 16, 52, 38], fill=(200, 215, 240, 255))
+    d.rectangle([28, 44, 36, 52], fill=PLACE_INK)
+    d.rectangle([18, 52, 46, 56], fill=PLACE_INK)
+    return im
+
+
+def icon_place_documents():
+    im, d = _place()
+    d.rounded_rectangle([14, 6, 50, 58], radius=3, fill=WHITE, outline=PLACE_INK, width=4)
+    for yy in (22, 31, 40, 49):
+        d.line([22, yy, 42, yy], fill=PLACE_INK, width=3)
+    return im
+
+
+def icon_place_music():
+    im, d = _place()
+    d.line([24, 46, 24, 12], fill=PLACE_INK, width=5)
+    d.line([50, 40, 50, 8], fill=PLACE_INK, width=5)
+    d.polygon([(22, 10), (52, 4), (52, 14), (22, 20)], fill=PLACE_INK)
+    d.ellipse([10, 40, 26, 54], fill=PLACE_INK)
+    d.ellipse([36, 34, 52, 48], fill=PLACE_INK)
+    return im
+
+
+def icon_place_pictures():
+    im, d = _place()
+    d.rounded_rectangle([6, 10, 58, 54], radius=3, fill=WHITE, outline=PLACE_INK, width=4)
+    d.polygon([(10, 50), (26, 30), (36, 42), (44, 34), (54, 50)], fill=PLACE_INK)
+    d.ellipse([40, 16, 48, 24], fill=PLACE_INK)
+    return im
+
+
+def icon_drive():
+    # A drive seen from the front: a slab with its activity light.
+    im, d = _place()
+    d.rounded_rectangle([6, 20, 58, 46], radius=6, fill=(223, 227, 234, 255),
+                        outline=(106, 116, 134, 255), width=3)
+    d.ellipse([44, 30, 52, 38], fill=(58, 138, 74, 255))
+    d.line([14, 34, 34, 34], fill=(106, 116, 134, 255), width=3)
+    return im
+
+
+def icon_drive_ram():
+    # Memory: a chip with its legs, for a filesystem that lives in RAM.
+    im, d = _place()
+    ink = (106, 90, 150, 255)
+    d.rounded_rectangle([14, 14, 50, 50], radius=4, fill=(231, 226, 243, 255), outline=ink, width=3)
+    for x in (22, 32, 42):
+        d.line([x, 6, x, 14], fill=ink, width=3)
+        d.line([x, 50, x, 58], fill=ink, width=3)
+    return im
+
+
+def icon_tb_cut():
+    im, d = _tb()
+    d.ellipse([8, 38, 26, 56], outline=TB_INK, width=5)
+    d.ellipse([38, 38, 56, 56], outline=TB_INK, width=5)
+    d.line([22, 40, 46, 6], fill=TB_INK, width=5)
+    d.line([42, 40, 18, 6], fill=TB_INK, width=5)
+    return im
+
+
+def icon_tb_paste():
+    im, d = _tb()
+    d.rounded_rectangle([12, 10, 52, 58], radius=4, outline=TB_INK, width=5)
+    d.rounded_rectangle([22, 4, 42, 16], radius=3, fill=TB_INK)
+    d.line([22, 32, 42, 32], fill=TB_INK, width=4)
+    d.line([22, 42, 36, 42], fill=TB_INK, width=4)
+    return im
+
+
+def icon_tb_new():
+    im, d = _tb()
+    d.line([32, 8, 32, 56], fill=TB_INK, width=8)
+    d.line([8, 32, 56, 32], fill=TB_INK, width=8)
+    return im
+
+
+def icon_tb_sort():
+    im, d = _tb()
+    d.line([16, 8, 16, 52], fill=TB_INK, width=5)
+    d.polygon([(6, 42), (26, 42), (16, 56)], fill=TB_INK)
+    for y, x1 in ((14, 58), (30, 52), (46, 44)):
+        d.line([32, y, x1, y], fill=TB_INK, width=5)
+    return im
+
+
+def icon_tb_view():
+    im, d = _tb()
+    for x, y in ((8, 8), (36, 8), (8, 36), (36, 36)):
+        d.rectangle([x, y, x + 20, y + 20], fill=TB_INK)
+    return im
+
+
+def icon_tb_pane():
+    # The details pane: a window with its right-hand column.
+    im, d = _tb()
+    d.rectangle([6, 10, 58, 54], outline=TB_INK, width=5)
+    d.rectangle([38, 10, 58, 54], fill=TB_INK)
+    return im
+
+
+def icon_tb_more():
+    im, d = _tb()
+    for x in (12, 32, 52):
+        d.ellipse([x - 6, 26, x + 6, 38], fill=TB_INK)
+    return im
+
+
 def icon_tb_refresh():
     im, d = _tb()
     d.arc([10, 10, 54, 54], start=30, end=300, fill=TB_INK, width=8)
@@ -1023,6 +1228,27 @@ ICONS = {
     "tb-forward": icon_tb_forward,
     "tb-refresh": icon_tb_refresh,
     "tb-home": icon_tb_home,
+    "tb-cut": icon_tb_cut,
+    "tb-paste": icon_tb_paste,
+    "tb-new": icon_tb_new,
+    "tb-sort": icon_tb_sort,
+    "tb-view": icon_tb_view,
+    "tb-pane": icon_tb_pane,
+    "tb-more": icon_tb_more,
+    "file-text": icon_file_text,
+    "file-doc": icon_file_doc,
+    "file-image": icon_file_image,
+    "file-audio": icon_file_audio,
+    "file-config": icon_file_config,
+    "file-font": icon_file_font,
+    "file-app": icon_file_app,
+    "place-home": icon_place_home,
+    "place-desktop": icon_place_desktop,
+    "place-documents": icon_place_documents,
+    "place-music": icon_place_music,
+    "place-pictures": icon_place_pictures,
+    "drive": icon_drive,
+    "drive-ram": icon_drive_ram,
     "tb-details": icon_tb_details,
     "tb-icons": icon_tb_icons,
     "tb-panes": icon_tb_panes,

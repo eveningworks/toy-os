@@ -40,9 +40,21 @@ struct uui_toolbar_item {
     const char *icon; // icon_get() name; NULL makes this a SEPARATOR
     const char *tip;  // tooltip text; NULL = no tooltip
     int code;         // reported on commit, and the item_flags key
+    // A COMMAND BAR's button carries its word beside the icon -- Windows
+    // 11's "New", "Sort", "View" -- and NULL keeps it icon-only. After
+    // `code`, so a three-field initialiser still means what it did.
+    const char *label;
+    unsigned flags;   // UUI_TB_*
 };
 
-#define UUI_TOOLBAR_SEP { 0, 0, 0 }
+// A chevron after the label: the button opens a menu. The toolbar only
+// DRAWS it -- the app opens the popup under uui_toolbar_item_rect() when
+// the code commits, as Explorer's "Sort" and "View" do.
+#define UUI_TB_MENU 0x01
+// This item and every one after it sit at the strip's RIGHT end.
+#define UUI_TB_END  0x02
+
+#define UUI_TOOLBAR_SEP { 0, 0, 0, 0, 0 }
 
 // ~500ms at the PIT's 100 Hz -- every desktop delays about this long.
 #define UUI_TOOLTIP_DELAY_TICKS 50
@@ -80,6 +92,9 @@ struct uui_toolbar {
     int tip_popup;
 
     uint32_t bg, fg, border, tip_bg, tip_fg;
+    // Icons at the text's height and no strip border -- for a toolbar
+    // living inside a status bar. Set after init.
+    int compact;
 };
 
 void uui_toolbar_init(struct uui_toolbar *t,

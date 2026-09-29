@@ -166,6 +166,9 @@ struct uui_fileview {
 
     // --- icons mode only (see enum uui_fileview_mode) ---------------
     int icon_scroll;         // PIXELS scrolled off the grid's top; OWNED
+    // The icon (and thumbnail) box in pixels, or 0 for two text lines.
+    // The cell grows with it; set it, then relayout.
+    int icon_px;
     struct uui_scrollanim ic_anim; // the glide (ui/uui_scrollanim.h); OWNED
     // A drag from EMPTY SPACE sweeps a rubber band that MARKS what it
     // covers, in every view (rubberband.h's second caller); a plain
@@ -216,6 +219,16 @@ void uui_fileview_set_thumb(struct uui_fileview *fv,
 int  uui_fileview_cell_rect(const struct uui_fileview *fv, int view,
                              int *x, int *y, int *w, int *h);
 
+// What the listing is ordered by -- a Sort menu's choices. Folders lead
+// under every order, as the header's own sort already does.
+enum uui_fileview_sort {
+    UUI_FILEVIEW_SORT_NAME, UUI_FILEVIEW_SORT_SIZE,
+    UUI_FILEVIEW_SORT_MODIFIED, UUI_FILEVIEW_SORT_TYPE,
+};
+// `dir` 1 ascending, -1 descending. The same state a header click sets.
+void uui_fileview_set_sort(struct uui_fileview *fv, enum uui_fileview_sort key, int dir);
+enum uui_fileview_sort uui_fileview_sort(const struct uui_fileview *fv, int *dir);
+
 // Lists `dir` and shows it. Returns 1 on success; on failure the view
 // shows the directory as EMPTY and `failed` is set -- a caller that
 // treats the two the same reports a missing directory as an empty one.
@@ -240,6 +253,9 @@ const char *uui_fileview_dir(const struct uui_fileview *fv);
 int  uui_fileview_selected_path(const struct uui_fileview *fv, char *out, int cap);
 int  uui_fileview_selected_is_dir(const struct uui_fileview *fv);
 const char *uui_fileview_selected_name(const struct uui_fileview *fv);
+// The selected row's listing entry (size, time, is_dir), or NULL for
+// none or "..". Valid until the next reload.
+const struct sys_dirent *uui_fileview_selected_entry(const struct uui_fileview *fv);
 
 // Selects the row with this name, if it is there. Returns 1 if found.
 int  uui_fileview_select_name(struct uui_fileview *fv, const char *name);

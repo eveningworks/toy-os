@@ -14,21 +14,21 @@
 // Widget ids, which are also the toolbar/button codes. One space: the
 // window has one on_widget and one switch.
 enum {
-    ID_BAR = 1, ID_PLACES, ID_VIEW, ID_NAME, ID_TYPE, ID_OK, ID_CANCEL,
+    ID_BAR = 1, ID_PLACES, ID_VIEW, ID_NAME, ID_TYPE, ID_OK, ID_CANCEL, ID_PATH,
     CMD_UP = 10, CMD_REFRESH, CMD_DETAILS, CMD_ICONS,
 };
 
 // Where each widget sits in the focus ring. NAMED, because a focus ring
 // is addressed by index and a bare 2 in a press handler is the "named by
 // its position in the array" bug this tree keeps finding.
-enum { FOCUS_BAR, FOCUS_PLACES, FOCUS_VIEW, FOCUS_NAME, FOCUS_TYPE, FOCUS_COUNT };
+enum { FOCUS_BAR, FOCUS_PATH, FOCUS_PLACES, FOCUS_VIEW, FOCUS_NAME, FOCUS_TYPE, FOCUS_COUNT };
 
 static const struct uui_toolbar_item g_tools[] = {
-    { "tb-up",      "Up",      CMD_UP },
-    { "tb-refresh", "Refresh", CMD_REFRESH },
+    { "tb-up",      "Up",      CMD_UP, 0, 0 },
+    { "tb-refresh", "Refresh", CMD_REFRESH, 0, 0 },
     UUI_TOOLBAR_SEP,
-    { "tb-details", "Details", CMD_DETAILS },
-    { "tb-icons",   "Icons",   CMD_ICONS },
+    { "tb-details", "Details", CMD_DETAILS, 0, 0 },
+    { "tb-icons",   "Icons",   CMD_ICONS, 0, 0 },
 };
 
 // THE ONE INSTANCE THE TOOLBAR'S FLAGS CALLBACK CAN SEE. `item_flags`
@@ -49,43 +49,34 @@ static unsigned tool_flags(int code) {
 // Only what is REALLY THERE. A destination that does not resolve is left
 // out rather than listed and refused: a chooser whose sidebar offers a
 // folder that cannot be opened teaches the user to distrust the rest.
-static void add_place(struct uui_filedialog *fd, const char *label, const char *path) {
-    if (fd->place_count >= UUI_FILEDIALOG_PLACES) return;
+static void add_place(struct uui_filedialog *fd, const char *label, const char *icon,
+                      const char *path) {
     struct sys_stat st;
     if (sys_stat(path, &st) != 0 || !st.is_dir) return;
-    int i = fd->place_count++;
-    fd->place_paths[i] = path;
-    fd->place_rows[i].label = label;
-    fd->place_rows[i].kind = UUI_SIDEBAR_TOP;
-    fd->place_rows[i].icon = 0;
-    fd->place_rows[i].id = i;
+    uui_places_add(&fd->places, label, icon, path);
 }
 
 static void build_places(struct uui_filedialog *fd) {
-    fd->place_count = 0;
-    // Windows' Quick access and KDE's Places, in the order a person
-    // reaches for them: where you are likely to keep things first, the
-    // filesystem root last.
-    add_place(fd, "Home",      "/home");
-    add_place(fd, "Desktop",   "/home/desktop");
-    add_place(fd, "Documents", "/usr/share/doc");
-    add_place(fd, "Pictures",  "/usr/share/wallpapers");
-    add_place(fd, "Music",     "/usr/share/music");
-    add_place(fd, "Scratch",   "/var/tmp");
-    add_place(fd, "Root",      "/");
+    uui_places_init(&fd->places);
+    // The File Manager's list, in its order -- one idea of where
+    // Documents is -- then Scratch, which a chooser saves into and a
+    // file manager does not need, then every mounted device.
+    add_place(fd, "Home",      "place-home",      "/home");
+    add_place(fd, "Desktop",   "place-desktop",   "/home/desktop");
+    add_place(fd, "Documents", "place-documents", "/usr/share/doc");
+    add_place(fd, "Music",     "place-music",     "/usr/share/music");
+    add_place(fd, "Pictures",  "place-pictures",  "/usr/share/wallpapers");
+    add_place(fd, "Scratch",   "folder",          "/var/tmp");
+    uui_places_refresh(&fd->places);
 }
 
-// The sidebar's selection follows the LISTING, so browsing away from a
-// place clears its highlight rather than leaving it claiming to be
-// where you are.
+// The sidebar and the breadcrumb follow the LISTING, so browsing away
+// from a place clears its highlight rather than leaving it claiming to
+// be where you are.
 static void sync_places(struct uui_filedialog *fd) {
     const char *dir = uui_fileview_dir(&fd->view);
-    for (int i = 0; i < fd->place_count; i++)
-        if (strcmp(fd->place_paths[i], dir) == 0) {
-            uui_sidebar_select_id(&fd->places, i);
-            return;
-        }
-    fd->places.selected = -1;
+    uui_places_select_path(&fd->places, dir);
+    if (!uui_pathbar_is_editing(&fd->path)) uui_pathbar_set_path(&fd->path, dir);
 }
 
 // **A DIRECTORY ALWAYS PASSES, WHATEVER THE ROW SAYS.** The contract is
@@ -198,17 +189,36 @@ static void on_widget(struct uapp_window *w, int id, int reason) {
         break;
     }
     case ID_PLACES: {
-        // A HOVER IS NOT A CHOICE. Motion reaches every widget at every
-        // depth, so without this a pointer merely RESTING over the strip
-        // re-listed the directory and wiped the typed name on every
-        // frame -- Save As was unusable with the mouse anywhere over
-        // Places. The three cases below have always guarded this way.
-        if (reason != UUI_REASON_PRESS && reason != UUI_REASON_KEY) break;
-        int i = uui_sidebar_selected_id(&fd->places);
-        if (i >= 0 && i < fd->place_count) {
-            uui_fileview_set_dir(&fd->view, fd->place_paths[i]);
+        // TAKEN, never read off the selection: a hover reaches here too
+        // (motion goes to every widget), and only a click or Enter parks
+        // a path -- so a pointer resting over the list cannot re-list
+        // the directory and wipe the typed name.
+        char to[UUI_FILEDIALOG_PATH_MAX];
+        if (uui_places_take(&fd->places, to, sizeof to)) {
+            uui_fileview_set_dir(&fd->view, to);
             uui_textbox_set_text(&fd->name, "");
+            sync_places(fd);
             uui_focus_set(&fd->focus, FOCUS_PLACES);
+        }
+        break;
+    }
+    case ID_PATH: {
+        // A segment, or a typed path (relative to the listing). One that
+        // is not a folder leaves the field up, holding what was typed.
+        char to[UUI_FILEDIALOG_PATH_MAX], full[UUI_FILEDIALOG_PATH_MAX];
+        if (reason == UUI_REASON_KEY) fd->swallow_key = 1;
+        if (reason == UUI_REASON_PRESS && uui_pathbar_is_editing(&fd->path))
+            uui_focus_set(&fd->focus, FOCUS_PATH);
+        if (!uui_pathbar_take(&fd->path, to, sizeof to)) break;
+        static char scratch[KPATH_SCRATCH_FOR(UUI_FILEDIALOG_PATH_MAX)];
+        struct kpath_scratch sc = { scratch, sizeof scratch };
+        struct sys_stat st;
+        if (k_path_resolve(uui_fileview_dir(&fd->view), to, full, sizeof full, &sc) &&
+            sys_stat(full, &st) == 0 && st.is_dir) {
+            uui_fileview_set_dir(&fd->view, full);
+            uui_pathbar_set_path(&fd->path, uui_fileview_dir(&fd->view));
+            sync_places(fd);
+            uui_focus_set(&fd->focus, FOCUS_VIEW);
         }
         break;
     }
@@ -253,6 +263,9 @@ static void on_key(struct uapp_window *w, int key, unsigned mods) {
     // ESCAPE CANCELS AND RETURN COMMITS, in a dialog, on every system
     // there is. Both are read here rather than by a widget because
     // neither belongs to one: they are the dialog's own two answers.
+    // ...unless the breadcrumb was being typed in: its Enter went there
+    // and its Esc closed the field, and neither is the dialog's answer.
+    if (fd->swallow_key) { fd->swallow_key = 0; uapp_window_redraw(w); return; }
     if (key == 0x1B) { finish(fd, 0); return; }
     if (key == '\n' || key == '\r') { if (commit(fd)) return; }
     uapp_window_redraw(w);
@@ -344,8 +357,7 @@ struct uapp_window *uui_filedialog_open(struct uapp *a, struct uui_filedialog *f
     fd->bar.item_flags = tool_flags;
 
     build_places(fd);
-    uui_sidebar_init(&fd->places, 0, 0, 10, 10, fd->place_rows, fd->place_count);
-    fd->places.selected = -1;
+    uui_pathbar_init(&fd->path, "System", "drive");
 
     uui_fileview_init(&fd->view, 0, 0, 10, 10, fd->entries, UUI_FILEDIALOG_ENTRIES);
     uui_fileview_set_mode(&fd->view, UUI_FILEVIEW_DETAILS);
@@ -383,9 +395,9 @@ struct uapp_window *uui_filedialog_open(struct uapp *a, struct uui_filedialog *f
     // it carries both FILL flags and everything else keeps its natural
     // height -- which is what stops the button row being pushed off the
     // bottom of a short window (docs/conventions/gui.md).
-    fd->body_items[0] = (struct uui_item){ .ops = &uui_sidebar_ops, .widget = &fd->places,
+    fd->body_items[0] = (struct uui_item){ .ops = &uui_places_ops, .widget = &fd->places,
                                            .flags = UUI_FILL_H, .id = ID_PLACES,
-                                           .main_size = ugfx_char_w() * 13, .name = "places" };
+                                           .main_size = ugfx_char_w() * 15, .name = "places" };
     fd->body_items[1] = (struct uui_item){ .ops = &uui_fileview_ops, .widget = &fd->view,
                                            .flags = UUI_FILL_W | UUI_FILL_H, .id = ID_VIEW,
                                            .name = "view" };
@@ -434,8 +446,17 @@ struct uapp_window *uui_filedialog_open(struct uapp *a, struct uui_filedialog *f
     fd->button_row = (struct uui_layout){ .dir = UUI_ROW, .items = fd->button_items, .count = 3,
                                           .margin = 1 };
 
-    fd->root_items[0] = (struct uui_item){ .ops = &uui_toolbar_ops, .widget = &fd->bar,
-                                           .flags = UUI_FILL_W, .id = ID_BAR, .name = "bar" };
+    // The toolbar and the breadcrumb share the top row, the breadcrumb
+    // taking what the buttons leave.
+    fd->top_items[0] = (struct uui_item){ .ops = &uui_toolbar_ops, .widget = &fd->bar,
+                                          .flags = UUI_FILL_H, .id = ID_BAR, .name = "bar" };
+    fd->top_items[1] = (struct uui_item){ .ops = &uui_pathbar_ops, .widget = &fd->path,
+                                          .flags = UUI_FILL_W | UUI_FILL_H, .id = ID_PATH,
+                                          .name = "path" };
+    fd->top_row = (struct uui_layout){ .dir = UUI_ROW, .items = fd->top_items, .count = 2,
+                                       .margin = 1 };
+    fd->root_items[0] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &fd->top_row,
+                                           .flags = UUI_FILL_W, .name = "top" };
     fd->root_items[1] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &fd->body,
                                            .flags = UUI_FILL_W | UUI_FILL_H, .name = "body" };
     fd->root_items[2] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &fd->name_row,
@@ -457,7 +478,8 @@ struct uapp_window *uui_filedialog_open(struct uapp *a, struct uui_filedialog *f
     // Tab order: the chrome first, then the list, then the field. The
     // list is what opens focused -- it is what the user came to use.
     fd->focusables[FOCUS_BAR]    = (struct uui_focusable){ &fd->bar, &uui_toolbar_ops };
-    fd->focusables[FOCUS_PLACES] = (struct uui_focusable){ &fd->places, &uui_sidebar_ops };
+    fd->focusables[FOCUS_PATH]   = (struct uui_focusable){ &fd->path, &uui_pathbar_ops };
+    fd->focusables[FOCUS_PLACES] = (struct uui_focusable){ &fd->places, &uui_places_ops };
     fd->focusables[FOCUS_VIEW]   = (struct uui_focusable){ &fd->view, &uui_fileview_ops };
     fd->focusables[FOCUS_NAME]   = (struct uui_focusable){ &fd->name, &uui_textbox_focus_ops };
     fd->focusables[FOCUS_TYPE]   = (struct uui_focusable){ &fd->type, &uui_dropdown_ops };

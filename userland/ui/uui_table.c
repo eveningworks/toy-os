@@ -1,5 +1,6 @@
 // table -- rows in columns, with a header. See ui/uui_table.h.
 #include "ui/uui_table.h"
+#include "lib/uimg.h"
 #include "ui/uui_widget.h"
 #include "ui/uui_scrollbar.h" // uui_scrollbar_natural_size()
 #include <string.h>
@@ -59,6 +60,7 @@ void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
     t->compare = 0;
     t->tint = 0;
     t->fade = 0;
+    t->icon = 0;
     t->sort_col = UUI_TABLE_UNSORTED;
     t->sort_dir = 1;
     t->order_rows = 0;
@@ -153,7 +155,9 @@ static void order_identity(struct uui_table *t) {
 
 static void order_rebuild(struct uui_table *t) {
     order_identity(t);
-    if (!t->compare || t->sort_col < 0 || t->sort_col >= t->col_count) return;
+    // Not bounded by col_count: a column a narrow view HIDES can still be
+    // what it is sorted by (uui_fileview drops trailing columns).
+    if (!t->compare || t->sort_col < 0) return;
 
     int n = t->row_count;
     if (n > UUI_TABLE_MAX_ROWS) n = UUI_TABLE_MAX_ROWS;
@@ -199,6 +203,10 @@ int uui_table_view_row(const struct uui_table *t, int source_row) {
 void uui_table_set_compare(struct uui_table *t, uui_table_cmp_fn compare) {
     t->compare = compare;
     order_rebuild(t);
+}
+
+void uui_table_set_icon(struct uui_table *t, uui_table_icon_fn icon) {
+    t->icon = icon;
 }
 
 void uui_table_set_fade(struct uui_table *t, uui_table_fade_fn fade) {
@@ -287,6 +295,20 @@ static void draw_cell(struct ugfx_surface *s, const struct uui_table *t,
     if (avail <= 0) return;
 
     int tx = cx + UUI_TABLE_PAD_X;
+    if (col == 0 && t->icon) {
+        // The icon at the text's height, then the text after it; a row
+        // with no icon keeps the gap, so the names still line up.
+        int px = ugfx_char_h();
+        const struct uimg *ico = t->icon(t->ctx, row, px);
+        if (ico && avail > px) {
+            int iy = ry + (uui_table_row_h(t) - ico->h) / 2;
+            if (ico->has_alpha) ugfx_blit_alpha(s, tx, iy, ico->w, ico->h, ico->px, ico->w);
+            else                ugfx_blit(s, tx, iy, ico->w, ico->h, ico->px, ico->w);
+        }
+        tx += px + UUI_TABLE_PAD_X;
+        avail -= px + UUI_TABLE_PAD_X;
+        if (avail <= 0) return;
+    }
     if (t->cols[col].align == UUI_TALIGN_RIGHT) {
         int tw = ugfx_text_width(buf);
         if (tw < avail) tx = cx + cw - UUI_TABLE_PAD_X - tw;

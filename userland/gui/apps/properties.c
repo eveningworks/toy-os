@@ -24,6 +24,7 @@
 #include "rt/sys.h"
 #include "kpath.h"
 #include "lib/human.h"
+#include "lib/ufiletype.h"
 #include "lib/udate.h"
 #include "lib/uopen.h"
 #include "ui/ugfx.h"
@@ -122,19 +123,9 @@ static int is_section(int i) { return g_label[i][0] == '\0'; }
 // extension because that is what this system actually keys on -- there
 // is no magic-number sniffing and no mime database, and inventing a
 // prettier name per extension would be a table with one caller.
+// The type in words, from the one table Files' Type column also uses.
 static void type_of(char *out, int cap) {
-    if (g_stat.is_dir) { strlcpy(out, "Folder", cap); return; }
-    const char *base = k_path_basename(g_path);
-    const char *dot = 0;
-    for (const char *p = base; *p; p++) if (*p == '.') dot = p;
-    if (!dot || !dot[1]) { strlcpy(out, "File", cap); return; }
-
-    char ext[16];
-    int n = 0;
-    for (const char *p = dot + 1; *p && n < (int)sizeof ext - 1; p++)
-        ext[n++] = (char)((*p >= 'a' && *p <= 'z') ? *p - 32 : *p);
-    ext[n] = '\0';
-    snprintf(out, (unsigned long)cap, "%s file", ext);
+    strlcpy(out, ufiletype_name(k_path_basename(g_path), g_stat.is_dir), (size_t)cap);
 }
 
 static char g_type[24];

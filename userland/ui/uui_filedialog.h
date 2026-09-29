@@ -9,7 +9,8 @@
 #include "ui/uui_focus.h"
 #include "ui/uui_label.h"
 #include "ui/uui_layout.h"
-#include "ui/uui_sidebar.h"
+#include "ui/uui_places.h"
+#include "ui/uui_pathbar.h"
 #include "ui/uui_dropdown.h"
 #include "ui/uui_textbox.h"
 #include "ui/uui_toolbar.h"
@@ -92,10 +93,9 @@ struct uui_filedialog {
     struct sys_dirent entries[UUI_FILEDIALOG_ENTRIES];
     struct uui_fileview view;
     struct uui_toolbar bar;
-    struct uui_sidebar places;
-    struct uui_sidebar_row place_rows[UUI_FILEDIALOG_PLACES];
-    int place_count;
-    const char *place_paths[UUI_FILEDIALOG_PLACES];
+    struct uui_pathbar path;       // the File Manager's breadcrumb, beside the toolbar
+    struct uui_places places;      // ...and its Places and Devices
+    int swallow_key;               // the breadcrumb took this Enter/Esc, not the dialog
     struct uui_label name_label;
     struct uui_textbox name;
     struct uui_label type_label;
@@ -109,14 +109,15 @@ struct uui_filedialog {
     struct uui_label spacer;   // absorbs the button row's leftover width
     struct uui_button ok, cancel;
 
+    struct uui_item top_items[2];
     struct uui_item body_items[2];
     struct uui_item name_items[2];
     struct uui_item type_items[2];
     struct uui_item button_items[3];
     struct uui_item root_items[5];
-    struct uui_layout body, name_row, type_row, button_row, root;
+    struct uui_layout top_row, body, name_row, type_row, button_row, root;
 
-    struct uui_focusable focusables[5];   // see uui_filedialog.c's FOCUS_*
+    struct uui_focusable focusables[6];   // see uui_filedialog.c's FOCUS_*
     struct uui_focus focus;
 
     char title[64];

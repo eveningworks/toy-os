@@ -7,6 +7,7 @@
 #include "kpath.h"      // k_path_join/_dirname -- the KERNEL's, linked into ring 3
 #include "lib/human.h"  // human_size()
 #include "lib/icon_cache.h" // icon_get() -- the icons view's artwork
+#include "lib/ufiletype.h"  // a row's type, in words and as an icon
 #include "icon_grid.h"      // cell math, shared with the desktop
 #include <string.h>
 #include <stdio.h>
@@ -16,17 +17,37 @@
 #include "ui/uui_route.h" // UUI_NOWHERE -- a drag_over's leave
 
 // Column indices in DETAILS mode. LIST mode declares only the first.
+// Dolphin's order, and chosen for how it NARROWS: a pane too narrow for
+// every column drops them from the end -- Type, then Modified -- so the
+// name keeps its room and no column's index ever moves (the sort key IS
+// the index; see uui_fileview_set_sort).
 #define FV_COL_NAME 0
 #define FV_COL_SIZE 1
 #define FV_COL_TIME 2
+#define FV_COL_TYPE 3
 
 // Widths in CHARACTERS, per docs/gui-guidelines.md -- font-derived, so
 // the whole view reflows when the font size changes. Name stretches.
 static const struct uui_table_column fv_cols_details[] = {
     { "Name",     0,  UUI_TALIGN_LEFT  },
     { "Size",     9,  UUI_TALIGN_RIGHT },
-    { "Modified", 13, UUI_TALIGN_RIGHT },
+    { "Modified", 17, UUI_TALIGN_LEFT  },
+    { "Type",     13, UUI_TALIGN_LEFT  },
 };
+#define FV_NAME_MIN_CHARS 16   // the name column is never squeezed below this
+
+// How many details columns fit `w`: all four, or fewer from the end.
+static int fv_fit_columns(int w) {
+    int per = ugfx_char_advance('0');
+    if (per <= 0) per = ugfx_char_w();
+    int n = 4, fixed = 0;
+    for (int i = 1; i < 4; i++) fixed += fv_cols_details[i].width_chars;
+    while (n > 2 && w < (fixed + FV_NAME_MIN_CHARS) * per) {
+        n--;
+        fixed -= fv_cols_details[n].width_chars;
+    }
+    return n;
+}
 static const struct uui_table_column fv_cols_list[] = {
     { "Name", 0, UUI_TALIGN_LEFT },
 };
@@ -122,6 +143,10 @@ static int fv_compare(void *ctx, int row_a, int row_b, int col) {
     // name order is the only one a reader can predict.
     if (key == DIRSORT_SIZE && a->is_dir && b->is_dir) key = DIRSORT_NAME;
 
+    if (col == FV_COL_TYPE) {
+        int r = strcmp(ufiletype_name(a->name, a->is_dir), ufiletype_name(b->name, b->is_dir));
+        if (r) return r;
+    }
     int r = dirsort_cmp(a, b, key);
     if (negate && key != DIRSORT_NAME) r = -r;
     return r;
@@ -145,15 +170,16 @@ static void fv_cell(void *ctx, int row, int col, char *out, int cap) {
 
     switch (col) {
     case FV_COL_NAME:
-        // A trailing '/' marks a directory: `ls -F`'s answer, kept in
-        // the table modes even though the icons view draws artwork --
-        // a text row with no glyph column still has to say which rows
-        // descend.
-        if (e->is_dir) snprintf(out, (size_t)cap, "%s/", e->name);
-        else           snprintf(out, (size_t)cap, "%s", e->name);
+        // Bare: the row's icon says which rows are folders.
+        snprintf(out, (size_t)cap, "%s", e->name);
+        break;
+    case FV_COL_TYPE:
+        snprintf(out, (size_t)cap, "%s", ufiletype_name(e->name, e->is_dir));
         break;
     case FV_COL_SIZE:
-        if (e->is_dir) snprintf(out, (size_t)cap, "<DIR>");
+        // A folder has no size of its own (SYS_LISTDIR reports 0), and
+        // a blank says so better than a zero.
+        if (e->is_dir) out[0] = '\0';
         else           human_size(out, (unsigned long)cap, e->size);
         break;
     case FV_COL_TIME: {
@@ -169,8 +195,8 @@ static void fv_cell(void *ctx, int row, int col, char *out, int cap) {
         // going through lib/udate.h.
         struct rtc_time t = e->modified;
         tz_localize(&t);
-        snprintf(out, (size_t)cap, "%02u-%02u %02u:%02u",
-                  (unsigned)t.month, (unsigned)t.day,
+        snprintf(out, (size_t)cap, "%04u-%02u-%02u %02u:%02u",
+                  (unsigned)t.year, (unsigned)t.month, (unsigned)t.day,
                   (unsigned)t.hour, (unsigned)t.minute);
         break;
     }
@@ -178,6 +204,15 @@ static void fv_cell(void *ctx, int row, int col, char *out, int cap) {
         out[0] = '\0';
         break;
     }
+}
+
+// The row's type icon, before its name: the table asks, the icon cache
+// answers (a lookup, never a decode).
+static const struct uimg *fv_icon(void *ctx, int row, int px) {
+    const struct uui_fileview *fv = (const struct uui_fileview *)ctx;
+    if (fv_is_up_row(fv, row)) return icon_get("folder", px);
+    const struct sys_dirent *e = fv_entry(fv, row);
+    return e ? icon_get(ufiletype_icon(e->name, e->is_dir), px) : 0;
 }
 
 // --- marks ------------------------------------------------------------
@@ -292,7 +327,8 @@ void uui_fileview_init(struct uui_fileview *fv, int x, int y, int w, int h,
     fv->mode = UUI_FILEVIEW_DETAILS;
 
     uui_table_init(&fv->table, x, y, w, h,
-                    fv_cols_details, 3, fv_cell, fv);
+                    fv_cols_details, 4, fv_cell, fv);
+    uui_table_set_icon(&fv->table, fv_icon);
     uui_table_set_compare(&fv->table, fv_compare);
     uui_table_set_tint(&fv->table, fv_tint);
     uui_table_set_fade(&fv->table, fv_fade);
@@ -308,6 +344,27 @@ void uui_fileview_init(struct uui_fileview *fv, int x, int y, int w, int h,
     // Typing a letter seeks by NAME, in both modes. Stated rather than
     // left to the default, so a reordered column list moves it too.
     uui_table_set_seek_col(&fv->table, FV_COL_NAME);
+}
+
+// The enum IS the column order in details mode; stated so a reordered
+// column list cannot silently re-map the menu.
+_Static_assert(UUI_FILEVIEW_SORT_NAME == FV_COL_NAME && UUI_FILEVIEW_SORT_MODIFIED == FV_COL_TIME &&
+               UUI_FILEVIEW_SORT_TYPE == FV_COL_TYPE && UUI_FILEVIEW_SORT_SIZE == FV_COL_SIZE,
+               "the sort keys are the details columns");
+
+// Sorting by a column a narrow pane is not showing is still sorting:
+// the comparator reads the entries, not the drawn cells.
+void uui_fileview_set_sort(struct uui_fileview *fv, enum uui_fileview_sort key, int dir) {
+    int shown = fv->table.col_count;
+    if (fv->table.cols == fv_cols_details) fv->table.col_count = 4;
+    uui_table_set_sort(&fv->table, (int)key, dir);
+    fv->table.col_count = shown;
+}
+
+enum uui_fileview_sort uui_fileview_sort(const struct uui_fileview *fv, int *dir) {
+    if (dir) *dir = fv->table.sort_dir < 0 ? -1 : 1;
+    return fv->table.sort_col >= 0 ? (enum uui_fileview_sort)fv->table.sort_col
+                                   : UUI_FILEVIEW_SORT_NAME;
 }
 
 void uui_fileview_set_mode(struct uui_fileview *fv, enum uui_fileview_mode mode) {
@@ -330,7 +387,7 @@ void uui_fileview_set_mode(struct uui_fileview *fv, enum uui_fileview_mode mode)
         uui_table_set_sort(&fv->table, FV_COL_NAME, 1);
     } else {
         fv->table.cols = fv_cols_details;
-        fv->table.col_count = 3;
+        fv->table.col_count = fv_fit_columns(fv->table.w);
         uui_table_set_header(&fv->table, 1);
     }
 }
@@ -487,6 +544,11 @@ int uui_fileview_up(struct uui_fileview *fv) {
 
 // --- the selection ----------------------------------------------------
 
+const struct sys_dirent *uui_fileview_selected_entry(const struct uui_fileview *fv) {
+    if (fv_is_up_row(fv, fv->table.selected)) return 0;
+    return fv_entry(fv, fv->table.selected);
+}
+
 const char *uui_fileview_selected_name(const struct uui_fileview *fv) {
     const struct sys_dirent *e = fv_entry(fv, fv->table.selected);
     return e ? e->name : 0;
@@ -578,10 +640,13 @@ int uui_fileview_activate(struct uui_fileview *fv) {
 // and converts through uui_table_source_row()/_view_row() at the edges,
 // so selection, marks and sorting are ONE state across all three modes.
 
-static int ic_px(void)   { return ugfx_char_h() * 2; }  // the icon box
+// The icon box: the app's `icon_px`, or two text lines.
+static int ic_px(const struct uui_fileview *fv) {
+    return fv->icon_px > 0 ? fv->icon_px : ugfx_char_h() * 2;
+}
 static int ic_pad(void)  { return 4; }
 
-static int ic_cell_w(void) {
+static int ic_cell_w(const struct uui_fileview *fv) {
     // A label's worth of pitch, never narrower than the icon -- the
     // desktop's icon_col_w() tradeoff (fixed pitch, clipped labels),
     // including its reservation in a REPRESENTATIVE glyph. `char_w` is
@@ -591,17 +656,17 @@ static int ic_cell_w(void) {
     int per = ugfx_char_advance('n');
     if (per <= 0) per = ugfx_char_w();
     int w = 14 * per;
-    int m = ic_px() + 8;
+    int m = ic_px(fv) + 8;
     return w < m ? m : w;
 }
 
 // Two label lines under the icon, the desktop's DESKTOP_LABEL_LINES and
 // KDE's/Windows' default; the second is cut with ".." when a name runs on.
 #define IC_LABEL_LINES 2
-static int ic_cell_h(void) { return ic_px() + IC_LABEL_LINES * (ugfx_char_h() + 1) + 10; }
+static int ic_cell_h(const struct uui_fileview *fv) { return ic_px(fv) + IC_LABEL_LINES * (ugfx_char_h() + 1) + 10; }
 
 static int ic_cols(const struct uui_fileview *fv) {
-    int n = (fv->table.w - fv->table.bar_w - 2 * ic_pad()) / ic_cell_w();
+    int n = (fv->table.w - fv->table.bar_w - 2 * ic_pad()) / ic_cell_w(fv);
     return n > 0 ? n : 1;
 }
 
@@ -611,7 +676,7 @@ static int ic_total_rows(const struct uui_fileview *fv) {
 }
 
 static int ic_vis_rows(const struct uui_fileview *fv) {
-    int n = (fv->table.h - 2 * ic_pad()) / ic_cell_h();
+    int n = (fv->table.h - 2 * ic_pad()) / ic_cell_h(fv);
     return n > 0 ? n : 1;
 }
 
@@ -626,7 +691,7 @@ static int ic_view_h(const struct uui_fileview *fv) {
 }
 
 static int ic_content_h(const struct uui_fileview *fv) {
-    return ic_total_rows(fv) * ic_cell_h();
+    return ic_total_rows(fv) * ic_cell_h(fv);
 }
 
 static int ic_max_scroll(const struct uui_fileview *fv) {
@@ -667,8 +732,8 @@ static struct icon_grid ic_grid(const struct uui_fileview *fv) {
     struct icon_grid g;
     g.origin_x = fv->table.x + ic_pad();
     g.origin_y = fv->table.y + ic_pad() - ic_eff_scroll(fv);
-    g.cell_w = ic_cell_w();
-    g.cell_h = ic_cell_h();
+    g.cell_w = ic_cell_w(fv);
+    g.cell_h = ic_cell_h(fv);
     g.cols = ic_cols(fv);
     return g;
 }
@@ -685,8 +750,8 @@ int uui_fileview_cell_rect(const struct uui_fileview *fv, int view,
     if (fv->mode != UUI_FILEVIEW_ICONS) return 0;
     if (view < 0 || view >= uui_fileview_row_count(fv)) return 0;
     ic_cell_rect(fv, view, x, y);
-    if (w) *w = ic_cell_w();
-    if (h) *h = ic_cell_h();
+    if (w) *w = ic_cell_w(fv);
+    if (h) *h = ic_cell_h(fv);
     return 1;
 }
 
@@ -700,16 +765,16 @@ static int ic_hit_view(const struct uui_fileview *fv, int cx, int cy) {
     int lx = cx - (t->x + ic_pad());
     int ly = cy - (t->y + ic_pad()) + ic_eff_scroll(fv);
     if (lx < 0 || ly < 0) return -1;
-    int col = lx / ic_cell_w();
+    int col = lx / ic_cell_w(fv);
     if (col >= ic_cols(fv)) return -1;
-    int view = (ly / ic_cell_h()) * ic_cols(fv) + col;
+    int view = (ly / ic_cell_h(fv)) * ic_cols(fv) + col;
     return view < uui_fileview_row_count(fv) ? view : -1;
 }
 
 static void ic_reveal(struct uui_fileview *fv) {
     int view = uui_table_view_row(&fv->table, fv->table.selected);
     if (view < 0) { ic_clamp(fv); return; }
-    int top = (view / ic_cols(fv)) * ic_cell_h(), bottom = top + ic_cell_h();
+    int top = (view / ic_cols(fv)) * ic_cell_h(fv), bottom = top + ic_cell_h(fv);
     int view_h = ic_view_h(fv);
     if (top < fv->icon_scroll) fv->icon_scroll = top;
     else if (bottom > fv->icon_scroll + view_h) fv->icon_scroll = bottom - view_h;
@@ -739,8 +804,8 @@ static int ic_rb_count(void *ctx) {
 static void ic_rb_rect(void *ctx, int index, int *x, int *y, int *w, int *h) {
     const struct uui_fileview *fv = (const struct uui_fileview *)ctx;
     ic_cell_rect(fv, index, x, y);
-    *w = ic_cell_w();
-    *h = ic_cell_h();
+    *w = ic_cell_w(fv);
+    *h = ic_cell_h(fv);
 }
 
 // Make the MARKS agree with the band's selection. Toggle-by-difference,
@@ -823,7 +888,7 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
 
     int rows = uui_fileview_row_count(fv);
     int cols = ic_cols(fv), vis = ic_vis_rows(fv);
-    int px = ic_px(), cw = ic_cell_w(), chh = ic_cell_h();
+    int px = ic_px(fv), cw = ic_cell_w(fv), chh = ic_cell_h(fv);
     // The glide: the state is the draw's own; the view is const to its
     // caller. Everything below reads ic_eff_scroll(), which is what the
     // displacement moved.
@@ -874,7 +939,7 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
             ugfx_draw_rect(s, tx2 - 1, ty2 - 1, thumb->w + 2, thumb->h + 2,
                             uui_table_c_grid(t));
         } else {
-            const struct uimg *ico = icon_get(is_dir ? "folder" : "file", px);
+            const struct uimg *ico = icon_get(is_up ? "folder" : ufiletype_icon(name, is_dir), px);
             int ix = x + (cw - px) / 2;
             ax = ix; ay = y + 2; aw = px; ah = px;
             if (ico) {
@@ -971,7 +1036,7 @@ static int ic_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
         }
         // A page is the view less one cell, so the last row seen stays
         // in sight as the first -- Explorer's paging.
-        int page = vis > ic_cell_h() ? vis - ic_cell_h() : ic_cell_h();
+        int page = vis > ic_cell_h(fv) ? vis - ic_cell_h(fv) : ic_cell_h(fv);
         if (zone == UUI_SB_ABOVE || zone == UUI_SB_BELOW) uui_scrollanim_arm(&fv->ic_anim);
         if (zone == UUI_SB_ABOVE) ic_set_offset(fv, off + page);
         else if (zone == UUI_SB_BELOW) ic_set_offset(fv, off - page);
@@ -1078,6 +1143,7 @@ static int ic_key(struct uui_fileview *fv, int key) {
 
 void uui_fileview_set_geometry(struct uui_fileview *fv, int x, int y, int w, int h) {
     fv->table.x = x; fv->table.y = y; fv->table.w = w; fv->table.h = h;
+    if (fv->table.cols == fv_cols_details) fv->table.col_count = fv_fit_columns(w);
     uui_table_set_rows(&fv->table, uui_fileview_row_count(fv));
 }
 
@@ -1490,7 +1556,8 @@ static void fv_ops_drag_draw(struct ugfx_surface *s, const void *w, const struct
         if (fv->mark_count) is_dir = uui_fileview_marked_is_dir(fv, 0);
         else if (fv_entry(fv, t->selected)) is_dir = fv_entry(fv, t->selected)->is_dir;
     }
-    const struct uimg *ico = icon_get(is_dir ? "folder" : "file", px);
+    const struct uimg *ico = icon_get(d->count == 1 ? ufiletype_icon(d->label, is_dir)
+                                                    : "file", px);
     int tw = ugfx_text_width(d->label);
     int gx = d->x + 12, gy = d->y + 12;
     int gw = px + 6 + tw + 8, gh = px + 6;

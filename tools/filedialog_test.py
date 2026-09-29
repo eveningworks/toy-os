@@ -310,6 +310,21 @@ def fd_int(dbg, part):
     return None
 
 
+def place_rows(dbg):
+    """Each Places row's rect, as the widget reports it (`places.row i x y
+    w h`), in order. The rows are NOT one pitch -- a device is taller and
+    a caption sits between the groups -- so a test clicks these rather
+    than stepping by a row height."""
+    rows = {}
+    for line in dbg.logs("filedialog: layout places.row ", clear=False):
+        parts = line.split("places.row", 1)[1].split()
+        try:
+            rows[int(parts[0])] = tuple(int(v) for v in parts[1:5])
+        except (IndexError, ValueError):
+            continue
+    return [rows[i] for i in sorted(rows)]
+
+
 def fd_dir(dbg):
     """Which directory the chooser is listing, as the widget reports it."""
     for line in reversed(dbg.logs("filedialog: layout view.dir ", clear=False)):
@@ -334,13 +349,12 @@ def check_places(dbg, res, dlg):
     # The strip SKIPS destinations that do not resolve (uui_filedialog.c),
     # so a fixed row index would name a different place on a different
     # image -- the one thing a test must not assume.
-    row_h = fd_int(dbg, "places.row_h") or 20
     moved = None
-    for i in range(8):
-        y = py + row_h // 2 + i * row_h
+    for rx, ry, rw, rh in place_rows(dbg):
+        y = ry + rh // 2
         if y > py + ph - 4:
             break
-        click_in(dbg, dlg, px + 20, y)
+        click_in(dbg, dlg, rx + 20, y)
         now = fd_dir(dbg)
         if now and now != start:
             moved = now
@@ -350,6 +364,36 @@ def check_places(dbg, res, dlg):
     if moved:
         res.check("...to a directory that really exists",
                   moved.startswith("/"), f"listed {moved!r}")
+
+
+def check_pathbar(dbg, res, dlg):
+    """The breadcrumb: its ROOT segment goes to "/", and a click past the
+    segments gives a text field whose Enter navigates -- and does NOT
+    commit the dialog, which Enter anywhere else would."""
+    seg = None
+    for line in reversed(dbg.logs("filedialog: layout path.seg 0 ", clear=False)):
+        try:
+            seg = tuple(int(v) for v in line.split("path.seg 0", 1)[1].split()[:4])
+        except ValueError:
+            seg = None
+        break
+    if seg:
+        click_in(dbg, dlg, seg[0] + seg[2] // 2, seg[1] + seg[3] // 2)
+    res.check("the breadcrumb's root segment lists the root",
+              seg is not None and fd_dir(dbg) == "/", f"seg={seg} dir={fd_dir(dbg)!r}")
+    path = fd_geom(dbg, "path")
+    if not path:
+        res.check("a path typed into the breadcrumb navigates, and the dialog stays",
+                  False, "no path rect")
+        return
+    click_in(dbg, dlg, path[0] + path[2] - 8, path[1] + path[3] // 2)
+    for ch in "/usr/share":
+        dbg.key("0x2f" if ch == "/" else ch)
+    dbg.key("0x0a")
+    dbg.settle()
+    res.check("a path typed into the breadcrumb navigates, and the dialog stays",
+              fd_dir(dbg) == "/usr/share" and dialog(dbg) is not None,
+              f"dir={fd_dir(dbg)!r} dialog={dialog(dbg) is not None}")
 
 
 def check_owner_inert(dbg, res, owner, dlg):
@@ -393,15 +437,13 @@ def check_navigable(dbg, res, dlg):
     if not view:
         res.check("a filtered chooser still lists folders", False, "no view rect")
         return
-    # The root, via the last Places row, then count what is listed.
+    # The root, via the System device row, then count what is listed.
     places = fd_geom(dbg, "places")
-    row_h = fd_int(dbg, "places.row_h") or 20
     if places:
-        for i in range(8):
-            y = places[1] + row_h // 2 + i * row_h
-            if y > places[1] + places[3] - 4:
+        for rx, ry, rw, rh in place_rows(dbg):
+            if ry + rh // 2 > places[1] + places[3] - 4:
                 break
-            click_in(dbg, dlg, places[0] + 20, y)
+            click_in(dbg, dlg, rx + 20, ry + rh // 2)
             if fd_dir(dbg) == "/":
                 break
     res.check("a filtered chooser still lists folders",
@@ -623,6 +665,8 @@ def run(dbg, res, qmp):
         check_modal(dbg, res, owner, dlg)
         print("places")
         check_places(dbg, res, dialog(dbg))
+        print("the breadcrumb")
+        check_pathbar(dbg, res, dialog(dbg))
         print("the owner is inert")
         check_owner_inert(dbg, res, owner_of(dbg, dialog(dbg)) or owner, dialog(dbg) or dlg)
         print("walking a filtered chooser")

@@ -89,6 +89,13 @@ typedef uint32_t (*uui_table_tint_fn)(void *ctx, int row);
 // "marked" here. Returns 1 to fade. NULL = no row ever faded.
 typedef int (*uui_table_fade_fn)(void *ctx, int row);
 
+// A small picture before a row's FIRST cell -- a file's type in a
+// listing, Explorer's and Dolphin's details view. `px` is the height to
+// draw at; return NULL for none. Called during DRAW for visible rows, so
+// it must be a CACHE LOOKUP (lib/icon_cache.h's icon_get() is one).
+struct uimg;
+typedef const struct uimg *(*uui_table_icon_fn)(void *ctx, int row, int px);
+
 // The permutation is a fixed array because Toykit has no allocator.
 // Past this many rows the table shows the first UUI_TABLE_MAX_ROWS in
 // sorted order and the rest unsorted after them, rather than silently
@@ -126,6 +133,7 @@ struct uui_table {
     uui_table_cmp_fn compare;
     uui_table_tint_fn tint;  // NULL = no row ever tinted
     uui_table_fade_fn fade;  // NULL = no row ever faded
+    uui_table_icon_fn icon;  // NULL = no icon column
     int sort_col;   // UUI_TABLE_UNSORTED, or a column index
     int sort_dir;   // 1 ascending, -1 descending
 
@@ -193,6 +201,8 @@ void uui_table_set_compare(struct uui_table *t, uui_table_cmp_fn compare);
 void uui_table_set_tint(struct uui_table *t, uui_table_tint_fn tint);
 // See uui_table_fade_fn. NULL turns it off again.
 void uui_table_set_fade(struct uui_table *t, uui_table_fade_fn fade);
+// See uui_table_icon_fn. NULL turns it off again.
+void uui_table_set_icon(struct uui_table *t, uui_table_icon_fn icon);
 
 // Shows or hides the header row. On by default; a table with it off
 // still sorts if it has a comparator, it just has nothing to click.

@@ -1311,8 +1311,17 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         case WIN_EV_PING:
             wmchan_send(WIN_REQ_PONG, in->window, (int)in->a, 0, 0, 0);
             return;
-        case WIN_EV_POPUP_DONE:
         case WIN_EV_CLOSE:
+            // ASKED to close, which a dismissal is not: the compositor
+            // still holds the window and waits for it to go, so it is
+            // destroyed here -- or it stays up with nobody drawing it and
+            // the compositor calls it hung.
+            if ((int)in->window > 0 && (int)in->window < WIN_CLIENT_MAX &&
+                g_surf[in->window].used)
+                wmchan_send(WIN_REQ_DESTROY, in->window, 0, 0, 0, 0);
+            popup_dismissed((int)in->window);
+            return;
+        case WIN_EV_POPUP_DONE:
             popup_dismissed((int)in->window);
             return;
         case WIN_EV_FOCUS:
