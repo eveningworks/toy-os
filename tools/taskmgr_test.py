@@ -433,10 +433,45 @@ def main():
             deadline = time.time() + 5.0
             while service_state(dbg, SERVICE) != "running" and time.time() < deadline:
                 time.sleep(0.2)
-            check("Start brings it back", service_state(dbg, SERVICE) == "running",
-                  service_state(dbg, SERVICE))
+            ok = service_state(dbg, SERVICE) == "running"
+            why = "" if ok else " | " + " ; ".join(
+                l.strip() for l in (dbg.send("sh dmesg") or "").splitlines()
+                if "taskmgr: service" in l or "taskmgr: layout svc_start" in l)[-600:]
+            check("Start brings it back", ok, f"{service_state(dbg, SERVICE)}{why} | "
+                  f"clicked svc_start at {_layout.get('svc_start')}")
         else:
             check(f"{SERVICE} is listed and running, to stop and start", False, f"{names}")
+
+    # --- NARROW: the Name column keeps its room ----------------------------
+    #
+    # The details pane steps aside when the table would squeeze Name. A
+    # DRAG cannot test it: the window will not shrink below its natural
+    # width. A REMEMBERED size can go below it -- the laptop reopened
+    # Task Manager at a size saved before this layout, under a larger
+    # face, and Name came out zero pixels wide -- so the size is seeded
+    # the same way (/etc/windows.conf, keyed by app_id) and the app is
+    # opened again into it.
+    tm = window(dbg)
+    if tm:
+        dbg.send(f"sh kill {tm['client_pid']}")
+        deadline = time.time() + 5.0
+        while window(dbg) and time.time() < deadline:
+            time.sleep(0.1)
+    # WRITTEN, not appended, and after a pause: the desktop records the
+    # closing window's own geometry, and a line appended before that
+    # write loses to it.
+    time.sleep(1.0)
+    dbg.send("sh write /etc/windows.conf taskmgr=40,60,600,420")
+    time.sleep(0.5)
+    _layout.clear()
+    dbg.spawn(TASKMGR, "Task Manager")
+    narrow = wait_layout(dbg, lambda l: "table.col0" in l and "table.row_h" in l
+                         and l["table.col0"][2] >= 4 * l["table.row_h"], timeout=5.0)
+    w = window(dbg)
+    name_w = narrow.get("table.col0", (0, 0, 0, 0))[2]
+    check("opened narrow (a remembered 600 px), Name still has its room",
+          w is not None and w["w"] <= 620 and name_w >= 4 * narrow.get("table.row_h", 99),
+          f"window {w and w['w']} px, Name {name_w} px")
 
     # --- it survived its own operation -----------------------------------
     check("Task Manager is still running", window(dbg) is not None)

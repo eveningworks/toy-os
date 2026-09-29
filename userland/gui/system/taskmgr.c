@@ -338,8 +338,12 @@ static int on_tick(struct uapp *a) {
     return 1;
 }
 
+// Before the widgets draw and after every layout, so a resize that
+// leaves the table too narrow drops the details pane in the same frame.
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     (void)d;
+    if (g_page == PAGE_PROCS && tm_procs_fit())
+        uui_layout_run(&LAYOUT, 0, 0, uapp_width(a), uapp_height(a));
     uapp_log_layout(a, "taskmgr");
 }
 
@@ -356,11 +360,17 @@ static void on_open(struct uapp *a) {
 }
 
 static void on_size(int *w, int *h) {
-    // Rail, table, details pane: KDE System Monitor's proportions at the
-    // default face. Font-derived, so a larger face grows the window.
-    *w = ugfx_char_w() * 72;
-    *h = ugfx_char_h() * 34;
+    // FROM WHAT THE WIDGETS ASK FOR, plus room for names: the table's Name
+    // column stretches, so its natural width is only its title, and a
+    // width fixed in widest-glyph units starved it to nothing under the
+    // laptop's larger face while fitting in QEMU.
     tm_procs_size();
+    int nw = 0, nh = 0;
+    uui_layout_natural_size(&LAYOUT, &nw, &nh);
+    // Names, and the filter box, which asks for no width of its own.
+    *w = nw + ugfx_char_advance('0') * (18 + 16);
+    *h = ugfx_char_h() * 34;
+    if (*h < nh) *h = nh;
 }
 
 int main(void) {

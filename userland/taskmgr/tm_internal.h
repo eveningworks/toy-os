@@ -102,6 +102,7 @@ extern struct uui_menubar g_ctx;   // the one context menu, the shell's
 
 void tm_procs_init(struct tm_page *p);
 void tm_procs_size(void);   // pins the details pane; from the shell's size hook
+int  tm_procs_fit(void);    // hides/shows the pane by width; 1 = lay out again
 void tm_perf_init(struct tm_page *p);
 void tm_services_init(struct tm_page *p);
 

@@ -80,7 +80,7 @@ static struct dev *net_dev(const char *card) {
     d->kind = DEV_NET;
     strlcpy(d->name, "Ethernet", sizeof d->name);
     strlcpy(d->card, card, sizeof d->card);
-    uui_chart_init(&d->chart, "Throughput (send shaded)");
+    uui_chart_init(&d->chart, "Receive + send (darker: send)");
     uui_chart_set_interval(&d->chart, TM_REFRESH_MS);
     uui_chart_set_scale(&d->chart, 0);
     return d;
@@ -529,7 +529,7 @@ void tm_perf_init(struct tm_page *page) {
         d->kind = (enum dev_kind)i;
         strlcpy(d->name, NAMES[i], sizeof d->name);
         uui_chart_init(&d->chart, i == DEV_CPU ? "Utilization" : i == DEV_MEM ? "In use"
-                                                                          : "Transfer (write shaded)");
+                                                                          : "Read + write (darker: write)");
         uui_chart_set_interval(&d->chart, TM_REFRESH_MS);
     }
     uui_chart_set_scale(&g_dev[DEV_CPU].chart, 100);

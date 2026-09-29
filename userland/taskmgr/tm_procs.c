@@ -223,15 +223,29 @@ static const char *const DETAIL_KEYS[DETAIL_ROWS] = {
 };
 static struct uui_chart g_pcpu, g_pmem;
 static int g_tracked;   // the pid the two charts are for
+// Each chart's reading, top-right: now, and the peak its trace is
+// scaled to -- the top of an autoscaled chart is otherwise unlabelled.
+static char g_pcpu_val[40], g_pmem_val[48];
 
 static void track(int pid) {
     g_tracked = pid;
-    uui_chart_init(&g_pcpu, "CPU, this process");
-    uui_chart_init(&g_pmem, "Memory, this process");
+    uui_chart_init(&g_pcpu, "CPU");
+    uui_chart_init(&g_pmem, "Memory");
     uui_chart_set_interval(&g_pcpu, TM_REFRESH_MS);
     uui_chart_set_interval(&g_pmem, TM_REFRESH_MS);
-    uui_chart_set_scale(&g_pcpu, 100);
-    uui_chart_set_scale(&g_pmem, 0);   // auto: a process's own peak
+    // Both AUTOSCALED to the process's own peak: against a 100% scale a
+    // process at 1% is a flat line on the floor.
+    uui_chart_set_scale(&g_pcpu, 0);
+    uui_chart_set_scale(&g_pmem, 0);
+    g_pcpu_val[0] = g_pmem_val[0] = '\0';
+    uui_chart_set_value(&g_pcpu, g_pcpu_val);
+    uui_chart_set_value(&g_pmem, g_pmem_val);
+}
+
+static uint32_t peak_of(const struct uui_chart *c) {
+    uint32_t m = 0;
+    for (int i = 0; i < c->count; i++) if (uui_chart_recent(c, i) > m) m = uui_chart_recent(c, i);
+    return m;
 }
 
 void tm_track_pid(int pid) {
@@ -333,7 +347,11 @@ static void report_order(int force) {
     ulogf("taskmgr: order %s\n", order);
 }
 
+static int g_hover_pid;
+
 static void rebuild_rows(void) {
+    const struct tm_proc *hp = row_proc(g_table.hovered);
+    g_hover_pid = hp ? hp->pid : 0;
     const char *needle = uui_textbox_text(&g_search);
     g_nrows = 0;
     for (int g = 0; g < TM_GROUPS; g++) g_group_count[g] = 0;
@@ -346,7 +364,9 @@ static void rebuild_rows(void) {
     int r = row_of_pid(g_sel_pid);
     if (r < 0) { g_sel_pid = 0; g_armed = 0; }
     g_table.selected = r;
-    g_table.hovered = -1;
+    // The HOVER follows its pid too. Clearing it here blinked the
+    // highlight off on every tick and every pointer move.
+    g_table.hovered = row_of_pid(g_hover_pid);
     uui_table_set_rows(&g_table, g_nrows);
     // The table may have moved the selection -- onto a folded row's
     // visible ancestor. Believe it.
@@ -481,14 +501,17 @@ static int on_widget(struct uapp *a, int id, int reason) {
         return 1;
     }
     case ID_TABLE: {
+        // The table reports hover motion too; only a FOLD changes the
+        // rows, so only a fold rebuilds them (a rebuild per pointer move
+        // was the flicker).
         int t = uui_table_take_toggled(&g_table);
+        const struct tm_proc *p = row_proc(g_table.selected);
+        if (p && p->pid != g_sel_pid) select_pid(p->pid);
         if (t >= 0) {
             toggle_fold(row_proc(t)->pid);
             ulogf("taskmgr: toggled pid %d\n", row_proc(t)->pid);
+            rebuild_rows();
         }
-        const struct tm_proc *p = row_proc(g_table.selected);
-        if (p && p->pid != g_sel_pid) select_pid(p->pid);
-        rebuild_rows();
         return 1;
     }
     case ID_SEARCH:
@@ -535,8 +558,16 @@ static void tick(struct uapp *a, int shown) {
     // The tracked process's history runs whether the page shows or not.
     const struct tm_proc *p = row_proc(row_of_pid(g_tracked));
     if (p) {
-        uui_chart_push(&g_pcpu, p->cpu_pm / 10);
+        // Per mille, so a process under 1% still draws a trace.
+        uui_chart_push(&g_pcpu, p->cpu_pm);
         uui_chart_push(&g_pmem, (uint32_t)(p->mem_bytes >> 10));
+        uint32_t pk = peak_of(&g_pcpu);
+        snprintf(g_pcpu_val, sizeof g_pcpu_val, "%u.%u%%, peak %u.%u%%",
+                 p->cpu_pm / 10, p->cpu_pm % 10, pk / 10, pk % 10);
+        char now[16], top[16];
+        human_size_iec(now, sizeof now, p->mem_bytes);
+        human_size_iec(top, sizeof top, (unsigned long long)peak_of(&g_pmem) << 10);
+        snprintf(g_pmem_val, sizeof g_pmem_val, "%s, peak %s", now, top);
     }
     if (shown) rebuild_rows();
 }
@@ -573,12 +604,13 @@ void tm_procs_init(struct tm_page *page) {
     uui_button_init(&g_btn_kill, 0, 0, 0, 0, "Force Quit", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_KILL);
     g_btn_stop.outlined = g_btn_close.outlined = g_btn_kill.outlined = 1;
 
+    // The filter takes the bar's spare width, as Windows' search box
+    // does: a fixed box clipped its own hint on a larger face.
     BAR_ITEMS[0] = (struct uui_item){ .ops = &uui_textbox_ops, .widget = &g_search,
-                                       .id = ID_SEARCH, .name = "search" };
+                                       .id = ID_SEARCH, .name = "search", .flags = UUI_FILL_W };
     BAR_ITEMS[1] = (struct uui_item){ .ops = &uui_segmented_ops, .widget = &g_viewsel,
                                        .id = ID_VIEW, .name = "view" };
-    BAR_ITEMS[2] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_spacer,
-                                       .flags = UUI_FILL_W };
+    BAR_ITEMS[2] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_spacer };
     BAR_ITEMS[3] = (struct uui_item){ .ops = &uui_button_ops, .widget = &g_btn_stop,
                                        .id = ID_STOP, .name = "btn_stop" };
     BAR_ITEMS[4] = (struct uui_item){ .ops = &uui_button_ops, .widget = &g_btn_close,
@@ -644,6 +676,22 @@ void tm_procs_init(struct tm_page *page) {
     };
 }
 
+// RESPONSIVE, as Windows' details pane is: below the width where the
+// Name column keeps ~12 digits the pane goes, and it comes back once
+// there is room for both. A narrow window -- and a window reopens at the
+// size it was left, which may predate this layout -- otherwise squeezed
+// the Name column to nothing (seen on the laptop's larger face).
+// Returns 1 when the caller must lay the page out again.
+int tm_procs_fit(void) {
+    int nx, nw;
+    uui_table_column_rect(&g_table, COL_NAME, &nx, &nw);
+    int want = ugfx_char_advance('0') * 12;
+    struct uui_item *pane = &BODY_ITEMS[1];
+    if (!pane->hidden && nw < want) { pane->hidden = 1; return 1; }
+    if (pane->hidden && nw >= want + pane->main_size + ugfx_char_w()) { pane->hidden = 0; return 1; }
+    return 0;
+}
+
 // The details pane's width, pinned: a pane that sized itself to the
 // selected process's path would jump on every click. Called by the shell
 // from its size hook, since only then is the font known.
@@ -652,5 +700,4 @@ void tm_procs_size(void) {
     // Four rows each: a trend, not a reading -- the numbers are above.
     DETAIL_ITEMS[3].main_size = ugfx_char_h() * 4;
     DETAIL_ITEMS[4].main_size = ugfx_char_h() * 4;
-    BAR_ITEMS[0].main_size = ugfx_char_w() * 14;
 }
