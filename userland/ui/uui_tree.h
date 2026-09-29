@@ -108,6 +108,7 @@ struct uui_tree {
     // default) is the pale wash in sel_bg/sel_fg; UUI_SEL_STRONG fills the
     // row in the theme's accent with its text colour on it -- Windows'
     // and Breeze's selected row, for a tree that is the window's subject.
+    // It draws no focus ring on that row: the fill is the indicator.
     int sel_style;
 };
 

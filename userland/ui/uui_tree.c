@@ -396,10 +396,9 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
     // or scrolled off -- see uui_listbox.c for why an indicator that can
     // vanish is not one.
     if (t->focused) {
-        // On an accent-filled row an accent ring would vanish, so the
-        // strong style rings it in the text colour, one pixel in.
-        if (sel_ry >= 0 && strong)
-            ugfx_draw_rect(s, t->x + 1, sel_ry + 1, t->w - bar - 2, rh - 2, sel_fg);
+        // The strong style draws NO ring on its row: the accent fill is
+        // already the mark of where focus is (Windows' and Breeze's rows).
+        if (sel_ry >= 0 && strong) { /* the fill is the indicator */ }
         else if (sel_ry >= 0) uui_focus_ring(s, t->x, sel_ry, t->w - bar, rh);
         else             uui_focus_ring(s, t->x, t->y, t->w, t->h);
     }
