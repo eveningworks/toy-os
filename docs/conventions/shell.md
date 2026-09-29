@@ -158,8 +158,10 @@ this the obvious way), not from how much history it accumulated.
 
   **A CATEGORY IS A SUBDIRECTORY OF `/usr/share/doc`**, so a new one is
   a directory and no code -- man's sections with the number spelled as a
-  word. `cmd` is the only one today. A LOOSE file under `/usr/share/doc`
-  is not a page and is not listed; `toy-os.txt` is read with `less`.
+  word: `cmd` and `guide` today. A LOOSE file under `/usr/share/doc` is
+  not a page and is not listed. Help groups by each page's
+  `**Category:**` line instead, so a directory is where a page LIVES and
+  its category is what a reader browses by.
 
   **RENDERING HAPPENS AT DISPLAY TIME, and that is the whole argument
   against a build step.** `userland/lib/umd.c` wraps to whatever

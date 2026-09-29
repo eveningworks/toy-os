@@ -1754,9 +1754,9 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	mkdir -p $(SEED_DIR)/sync/usr/share/hwdata
 	cp $(PCI_IDS) $(SEED_DIR)/sync/usr/share/hwdata/pci.ids
 	cp $(USB_IDS) $(SEED_DIR)/sync/usr/share/hwdata/usb.ids
-	# TWO TEXT FILES THAT SHIP, and they are deliberately not one.
+	# PROSE AND A FIXTURE SHIP, and they are deliberately not one.
 	#
-	# /usr/share/doc/toy-os.txt is a DOCUMENT -- prose about this system,
+	# /usr/share/doc/guide/ is a DOCUMENT -- prose about this system,
 	# meant to be read. /tests/sample.txt is a FIXTURE: every line names
 	# its own number, and the content is hostile on purpose (a
 	# 400-column line, an exactly-80 one, trailing spaces, a tab, and a
@@ -1786,8 +1786,10 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(GRUB_KCMDLINE)|' grub.cfg > $(BUILD)/grub-disk.cfg
 	python3 tools/install_grub.py --stage-payload $(SEED_DIR)/sync/install \
 	    --kernel $(KERNEL_MEDIA) --grub-cfg $(BUILD)/grub-disk.cfg
-	mkdir -p $(SEED_DIR)/sync/usr/share/doc
-	cp data/usr/share/doc/toy-os.txt $(SEED_DIR)/sync/usr/share/doc/toy-os.txt
+	# Getting started: Markdown pages like the command pages, so Help
+	# and `doc` read them the same way.
+	mkdir -p $(SEED_DIR)/sync/usr/share/doc/guide
+	cp data/usr/share/doc/guide/*.md $(SEED_DIR)/sync/usr/share/doc/guide/
 	# The command pages, staged UNCONVERTED from docs/commands/ -- the
 	# same Markdown the repository is written in, rendered at display
 	# time by /bin/doc (userland/lib/umd.h says why not at build time).

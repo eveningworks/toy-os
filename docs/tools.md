@@ -3902,6 +3902,17 @@ window without going through it will find its layout polls timing out.
   ignored while every cheaper check passed. It leaves
   `/etc/shortcuts.conf` removed, so the machine is as it was found. In
   `gui_regress.py`.
+- **`help_test.py`** -- the Help app (`userland/gui/apps/help.c` over
+  `uui_markdown`'s links): opens on the Getting started overview; a code
+  span naming a page is REPORTED as a link and DRAWN in the accent (the
+  page's title is the control that must have none); a click follows it,
+  Alt+Left/Alt+Right walk history, the toolbar's Home returns. Search is
+  checked as FULL TEXT: the query is a word in ping's body but not its
+  name or title, verified against the host's copy of the page, and the
+  page Enter opens must contain it. A category heading opens a generated
+  page of links, and Right/Left expand and collapse it -- the tree is
+  lazy, so a dead toggle leaves the row count unchanged. With links
+  turned off it goes red on seven checks. In `gui_regress.py`.
 - **`devmgr_test.py`** -- the Device Manager (`userland/gui/system/devmgr.c`
   over `lib/udevice.c`): the tree is DRAWN with its icons, "By connection"
   keeps the selection, and Disable/Enable on the network card round-trip

@@ -117,5 +117,5 @@ pages points at a sibling file on the host. No `-w` to print a path
 either -- `-l` names the pages and the layout is one directory.
 
 A loose file directly under `/usr/share/doc` is not a page and is not
-listed: `toy-os.txt` is prose meant to be read straight through, and
-`less /usr/share/doc/toy-os.txt` is how.
+listed. The categories today are `cmd`, one page per command, and
+`guide`, the Getting started pages (`doc overview` is the first).

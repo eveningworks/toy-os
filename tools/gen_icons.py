@@ -347,6 +347,15 @@ def icon_tb_forward():
                       (8, 40), (32, 40), (32, 54)])
 
 
+def icon_tb_home():
+    # A house: roof, walls and a door cut out of them.
+    im, d = _tb()
+    d.polygon([(32, 6), (58, 30), (6, 30)], fill=TB_INK)
+    d.rectangle([14, 28, 50, 56], fill=TB_INK)
+    d.rectangle([27, 38, 37, 56], fill=(0, 0, 0, 0))
+    return im
+
+
 def icon_tb_refresh():
     im, d = _tb()
     d.arc([10, 10, 54, 54], start=30, end=300, fill=TB_INK, width=8)
@@ -1013,6 +1022,7 @@ ICONS = {
     "tb-back": icon_tb_back,
     "tb-forward": icon_tb_forward,
     "tb-refresh": icon_tb_refresh,
+    "tb-home": icon_tb_home,
     "tb-details": icon_tb_details,
     "tb-icons": icon_tb_icons,
     "tb-panes": icon_tb_panes,

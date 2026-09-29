@@ -712,7 +712,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Find/replace in Notepad
 - [ ] Undo/redo for editable text, in `uui_edit` where every edit already passes -- Notepad, text fields and `/bin/edit` all lack it
 - [x] ~~An image viewer~~ DONE 2026-08-23 -- Image Viewer browses a directory rather than opening a file dialog
-- [x] ~~A Help browser over `docs/`~~ DONE 2026-09-14 -- `/bin/wm/apps/help`, a sidebar of categories over `uui_markdown`
+- [x] ~~A Help browser over `docs/`~~ DONE 2026-09-14 -- `/bin/wm/apps/help`; contents, links, history and search since 2026-09-29
 - [x] ~~A Log Viewer~~ DONE 2026-09-15 -- both rings merged on their shared stamp, a level filter and a search field
 - [x] ~~CPU/memory over time as a TAB in Task Manager~~ DONE 2026-09-15 -- history is collected whether or not the tab is showing
 - [ ] Scientific mode for Calculator

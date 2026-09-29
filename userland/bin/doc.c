@@ -100,10 +100,8 @@ static int ci_find(const char *hay, int hn, const char *needle) {
 
 // ---------------------------------------------------------- the pages
 
-// The categories: every subdirectory of /usr/share/doc. Loose files
-// there (toy-os.txt) are not pages and are deliberately not listed --
-// `less /usr/share/doc/toy-os.txt` is how that one is read, and it is
-// prose rather than a reference.
+// The categories: every subdirectory of /usr/share/doc. A loose file
+// there is not a page and is deliberately not listed.
 static int categories(char names[MAX_CATS][CAT_NAME]) {
     DIR *d = opendir(DOC_ROOT);
     if (!d) return 0;
