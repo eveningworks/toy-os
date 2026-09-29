@@ -236,6 +236,14 @@ struct xhci_completion {
     // halted endpoint after it. Zeroed when the wait completes, so a
     // late event cannot be mistaken for the NEXT transfer's.
     uint64_t ring_lo, ring_hi;
+    // A SHORT DATA STAGE IS NOT THE END OF A CONTROL TRANSFER: its event
+    // records how much less arrived, and the Status Stage's event, which
+    // follows, is what completes it (xHCI 4.10.1.1; Linux's
+    // process_ctrl_td waits the same way). Taking the data stage's event
+    // as the end let the Status event land on the NEXT transfer, which
+    // then "completed" before its data came -- every second USB string
+    // read on real hardware, while QEMU posts both events at once.
+    uint8_t data_short;
 };
 static volatile struct xhci_completion g_cmd_done;
 static volatile struct xhci_completion g_xfer_done;
@@ -1237,6 +1245,8 @@ int xhci_control(uint8_t slot, const uint8_t setup[8],
     // IN when there was no data at all. It carries IOC, so it is the
     // TRB whose Transfer Event the waiter matches on.
     g_xfer_done.done = 0;
+    g_xfer_done.data_short = 0;
+    g_xfer_done.residual = 0;
     g_xfer_done.ring_lo = sl->ep0.phys;
     g_xfer_done.ring_hi = sl->ep0.phys +
                           (uint64_t)sl->ep0.count * sizeof(struct xhci_trb);
@@ -1843,11 +1853,20 @@ void xhci_service(void) {
             // A Transfer Event names the TRB that finished. Control
             // transfers wait on their Status Stage TRB; interrupt
             // endpoints are matched by the HID layer, which lands next.
-            if (src == g_xfer_done.trb ||
+            if (!g_xfer_done.done && src != g_xfer_done.trb &&
+                code == XHCI_CC_SHORT_PACKET && g_xfer_done.ring_hi &&
+                src >= g_xfer_done.ring_lo && src < g_xfer_done.ring_hi) {
+                // The data stage came up short: note by how much, and
+                // keep waiting for the Status Stage (see data_short).
+                g_xfer_done.residual   = ev.status & 0xFFFFFFu;
+                g_xfer_done.data_short = 1;
+            } else if (src == g_xfer_done.trb ||
                 (!g_xfer_done.done && g_xfer_done.ring_hi &&
                  src >= g_xfer_done.ring_lo && src < g_xfer_done.ring_hi)) {
-                g_xfer_done.code     = code;
-                g_xfer_done.residual = ev.status & 0xFFFFFFu;
+                g_xfer_done.code = (code == XHCI_CC_SUCCESS && g_xfer_done.data_short)
+                                   ? XHCI_CC_SHORT_PACKET : code;
+                if (!g_xfer_done.data_short)
+                    g_xfer_done.residual = ev.status & 0xFFFFFFu;
                 g_xfer_done.slot     = (uint8_t)((ev.control >> 24) & 0xFFu);
                 g_xfer_done.ring_lo  = 0;
                 g_xfer_done.ring_hi  = 0;

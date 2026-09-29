@@ -105,12 +105,19 @@ void usb_read_string(uint8_t slot, uint8_t index, char *out, uint32_t cap) {
     static uint8_t str_buf[256] __attribute__((aligned(64)));
 
     // String descriptor 0 is the list of language ids, not a string.
+    k_memset(str_buf, 0, sizeof str_buf);
     if (get_descriptor(slot, DESC_STRING, 0, 0, str_buf, 4) < 4) return;
+    if (str_buf[1] != DESC_STRING) return;
     uint16_t langid = (uint16_t)(str_buf[2] | ((uint16_t)str_buf[3] << 8));
 
-    int got = get_descriptor(slot, DESC_STRING, index, langid,
-                             str_buf, sizeof str_buf);
-    if (got < 2) return;
+    // **255, NEVER 256** -- Linux's usb_string() asks for 255 too: 256 is
+    // 0x0100, and a device that keeps only wLength's low byte hears a
+    // request for nothing. The buffer is CLEARED first and the reply's
+    // type byte checked, so a read that delivered nothing cannot parse
+    // the language-id descriptor left by the read above as the string "?".
+    k_memset(str_buf, 0, sizeof str_buf);
+    int got = get_descriptor(slot, DESC_STRING, index, langid, str_buf, 255);
+    if (got < 2 || str_buf[1] != DESC_STRING) return;
 
     uint32_t blen = str_buf[0];
     if (blen < 2 || blen > (uint32_t)got) return;   // the device's own length, checked
