@@ -19,7 +19,11 @@ WHAT IT CHECKS, and what a broken version would still pass:
     INDEPENDENT reader, not the app's own report -- and Enable binds it
     back without asking;
   - Cancel leaves the card bound, and the storage controller's toggle
-    opens no dialog at all (its driver cannot let go).
+    opens no dialog at all (its driver cannot let go);
+  - a desktop context menu opened OVER the tree takes the pointer: no
+    tree row lights up under it. Measured beside the menu, on the rows'
+    part the menu does not cover, with the pointer on the tree next to
+    the menu as the control that the measurement sees a highlight.
 
 Geometry is the app's own report (`devmgr: layout ...`, `devmgr:
 selected <id> view <v>`), never re-derived here. Rows are clicked at
@@ -32,7 +36,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gui_debug import DebugConsole, enter_gui          # noqa: E402
+from gui_debug import DebugConsole, enter_gui, changed_rows   # noqa: E402
 from qmp_test import QMPSession                        # noqa: E402
 import port_guard  # noqa: E402
 
@@ -253,10 +257,50 @@ def main():
     check("...and it keeps its driver", devices(dbg).get(store, ("", "", ""))[1] == devs[store][1],
           f"{store}: {devices(dbg).get(store)}")
 
+    overlay_hover(dbg, qmp, win, lay, args.tmp)
+
     w = window(dbg)
     if w:
         dbg.send(f"gui close {w['z']}")
     return finish()
+
+
+def overlay_hover(dbg, qmp, win, lay, tmp):
+    """A desktop menu over the tree: the rows under it must not hover."""
+    c = win["content"]
+    if win["x"] < 40:
+        check("a desktop menu over the tree takes the pointer", False,
+              f"no desktop left of the window to right-click (x={win['x']})")
+        return
+    tx, ty, tw, th = lay["tree"]
+    dbg.send(f"gui rclick {win['x'] - 30} {c['y'] + ty + 20}")
+    dbg.settle(1.0)
+    m = re.search(r"x=(-?\d+) y=(-?\d+) w=(\d+) item_h=(\d+) rows=(\d+)",
+                  dbg.send("gui ctxmenu"))
+    if not check("the desktop menu opened over the tree", m is not None, "no menu"):
+        return
+    mx, my, mw, ih, rows = (int(v) for v in m.groups())
+    hover_y = my + ih * min(rows - 1, 5) + ih // 2
+    right = c["x"] + tx + tw - 6
+    band = (mx + mw + 12, c["y"] + ty, right, c["y"] + ty + th)
+    if band[2] - band[0] < 20:
+        check("a desktop menu over the tree takes the pointer", False,
+              f"the menu covers the tree's width: menu {mx}..{mx + mw}, tree to {right}")
+        return
+    rest = (mx + 4, my - 8)
+    _, on_tree = dbg.hover_frames(qmp, tmp, rest_at=rest,
+                                  hover_at=(mx + mw + 12, hover_y), prefix="dm_ctl")
+    base, _ = dbg.hover_frames(qmp, tmp, rest_at=rest, hover_at=rest, prefix="dm_base")
+    ctl = changed_rows(base, on_tree, band)
+    check("control: beside the menu, the tree row under the pointer lights up",
+          bool(ctl["rows"]), f"band {ctl.get('band')}")
+    _, on_menu = dbg.hover_frames(qmp, tmp, rest_at=rest,
+                                  hover_at=(mx + mw - 10, hover_y), prefix="dm_menu")
+    seen = changed_rows(base, on_menu, band)
+    check("a desktop menu over the tree takes the pointer: no row lights under it",
+          not seen["rows"], f"rows {seen['rows'][:4]} changed beside the menu")
+    dbg.send("gui key 0x1b")
+    dbg.settle(0.5)
 
 
 def finish():

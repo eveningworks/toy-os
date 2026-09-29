@@ -418,6 +418,7 @@ whenever a headline here tells you something you did not already know.
   BEFORE IT NAVIGATES.**
 - **A FOCUSED `uui_button` PRESSES ON SPACE OR ENTER, AND A DISABLED ONE
   REFUSES FOCUS.**
+- **UNDER A WM OVERLAY, NO WINDOW IS HOVERED.**
 - **AN OUTLINED BUTTON AND A STRONG SELECTION ARE OPT-IN STYLES**
 - **`uui_table` is the multi-column widget**
 - **Editable text has ONE implementation of what editing means**

@@ -15,6 +15,7 @@
 #include "confirm_dialog.h"
 #include "osk.h"
 #include "wm_tooltip.h"
+#include "ui/uui_primitives.h" // uui_hit
 
 // The two that take no cursor, adapted rather than changed: their
 // drawing genuinely does not depend on where the pointer is.
@@ -49,7 +50,8 @@ static const struct wm_overlay g_overlays[] = {
     { "confirm",  open_confirm,  draw_confirm,     confirm_dialog_handle_click,
       confirm_dialog_hover_at,   confirm_dialog_damage,   0 /* a full repaint, on purpose */, confirm_dialog_update_press, 0, 0, 0, 0 },
     { "context",  open_context,  context_menu_draw, context_menu_handle_click,
-      context_menu_hover_at,     context_menu_damage,     0 /* a rect per submenu level */, 0, 0, 0, context_menu_close, 0 },
+      context_menu_hover_at,     context_menu_damage,     0 /* a rect per submenu level */, 0, 0, 0, context_menu_close, 0,
+      context_menu_contains },
     { "start",    open_start,    start_menu_draw,  start_menu_handle_click,
       start_menu_hover_at,       start_menu_damage,       start_menu_rect, 0, start_menu_wheel, start_menu_key, start_menu_close, 0 },
     { "calendar", open_calendar, calendar_draw,    calendar_handle_click,
@@ -173,6 +175,24 @@ void wm_overlay_damage(const char *name) {
         redraw_pending = 1;
         return;
     }
+}
+
+int wm_overlay_under(int mx, int my) {
+    for (int i = 0; i < OVERLAY_COUNT; i++) {
+        const struct wm_overlay *o = &g_overlays[i];
+        if (!o->is_open() || o->is_open == open_tooltip) continue;
+        if (o->contains) {
+            if (o->contains(mx, my)) return 1;
+            continue;
+        }
+        int x, y, w, h;
+        if (o->rect) {
+            if (o->rect(&x, &y, &w, &h) && uui_hit(x, y, w, h, mx, my)) return 1;
+            continue;
+        }
+        return 1;
+    }
+    return 0;
 }
 
 int wm_overlay_click(int mx, int my) {

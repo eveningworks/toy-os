@@ -134,6 +134,17 @@ int context_menu_geometry(int *x, int *y, int *w, int *item_h_out) {
     return g_menu.level[0].count;
 }
 
+int context_menu_contains(int mx, int my) {
+    if (!context_menu_open) return 0;
+    for (int lvl = 0; lvl < uui_menubar_depth(&g_menu); lvl++) {
+        int lx, ly, lw, lh;
+        if (uui_menubar_popup_rect(&g_menu, lvl, &lx, &ly, &lw, &lh) &&
+            uui_hit(lx, ly, lw, lh, mx, my))
+            return 1;
+    }
+    return 0;
+}
+
 int context_menu_sub_geometry(int *x, int *y, int *w, int *item_h_out) {
     if (!context_menu_open || uui_menubar_depth(&g_menu) < 2) return 0;
     int lx, ly, lw, lh;

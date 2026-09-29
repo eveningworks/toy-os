@@ -3909,7 +3909,11 @@ window without going through it will find its layout polls timing out.
   `devctl list`, never from the app's own report** -- the app says what it
   believes. The icon check counts saturated pixels AND the columns they
   span, since a saturated selection wash would pass a bare count. It
-  closes a Device Manager already open first: the app is single-instance,
+  checks that a desktop context menu opened over the tree takes the
+  pointer (no row lights beside it; red on the WM before 2026-09-29), with
+  a hover beside the menu as the control that the measurement can see a
+  highlight at all. It closes a Device Manager already open first: the
+  app is single-instance,
   so a leftover window takes the spawn with the layout log still off. It
   never ticks "Keep disabled", so it leaves `/etc/devices.conf` as found.
   In `gui_regress.py`.

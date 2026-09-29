@@ -85,6 +85,8 @@ void context_menu_draw(int mx, int my);
 // Before these existed the hovered row was derived inside the draw and
 // no move repainted it.
 int context_menu_hover_at(int mx, int my);
+// Is the point on the menu or its open submenu?
+int context_menu_contains(int mx, int my);
 void context_menu_damage(void);
 
 int context_menu_handle_click(int mx, int my);

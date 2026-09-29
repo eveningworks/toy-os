@@ -169,6 +169,10 @@ struct wm_overlay {
     // of them: an overlay polled every frame regardless is never more
     // than a frame behind.
     void (*on_open)(void);
+
+    // Is (mx, my) on the overlay? For one whose area is not `rect` -- a
+    // menu with a submenu open is two panels. NULL: `rect` answers.
+    int (*contains)(int mx, int my);
 };
 
 // Draws every open overlay, least modal first. Called once per frame
@@ -241,6 +245,11 @@ void wm_overlay_set_parent(const char *name);
 // Is ANY overlay up? What the lease policy asks: an overlay is drawn by
 // this compositor, and a compositor that is not presenting cannot show it.
 int wm_overlay_any_open(void);
+// Is the point covered by an open overlay? Then no window under it may
+// see the pointer -- a row lit up UNDER a menu is the window hovering
+// what it cannot even show. A tooltip covers nothing; an overlay with
+// no geometry at all (the modal confirm dialog) covers everything.
+int wm_overlay_under(int mx, int my);
 const char *wm_overlay_parent(void);
 
 // Places a popup of (w, h) whose preferred top-left is (want_x,

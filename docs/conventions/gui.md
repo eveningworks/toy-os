@@ -1398,10 +1398,19 @@ this the obvious way), not from how much history it accumulated.
   REFUSES FOCUS.** A NULL `accepts_focus` means "yes", so a button with no
   focus slots sat in rings it could neither show nor act on. Its ring is
   drawn OUTSIDE the face, or an accent (primary) button hides it.
+- **UNDER A WM OVERLAY, NO WINDOW IS HOVERED.** `wm_update_content_hover()`
+  asks `wm_overlay_under()` first: a point on an open context menu, Start
+  menu, tray panel or on-screen keyboard (their `contains` op, else their
+  `rect`; the modal confirm dialog covers everything) sends the window
+  beneath the "pointer left" move instead of the position -- a row lit up
+  UNDER a menu was the window hovering what it could not show. A new
+  overlay needs a `rect` or a `contains`, or it hides nothing.
 - **AN OUTLINED BUTTON AND A STRONG SELECTION ARE OPT-IN STYLES**:
   `uui_button.outlined = 1` draws a 1px border darker than the face with
   soft corners, and `uui_tree.sel_style = UUI_SEL_STRONG` fills the
-  selected row in the accent with its text colour -- both the look of the
+  selected row in the accent with its text colour and draws no focus ring
+  on it (the fill is the indicator, so a strong tree looks the same
+  focused or not) -- both the look of the
   2026-09-28 Device Manager mockup, which uses them. The defaults (flat,
   pale wash) are unchanged, so no existing app moved.
 - **`uui_table` is the multi-column widget** (`userland/ui/uui_table.h`)

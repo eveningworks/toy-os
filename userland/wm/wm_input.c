@@ -1235,7 +1235,9 @@ void wm_update_content_hover(int mx, int my, uint8_t buttons) {
                       title_btn_armed_win >= 0;
 
     int now = -1;
-    if (!suppressed) {
+    // UNDER AN OVERLAY, NO WINDOW IS HOVERED: the menu or panel is on top
+    // and takes the pointer, as a client's own popup already does (below).
+    if (!suppressed && !wm_overlay_under(mx, my)) {
         // While a client has a popup up, motion reaches only ITS
         // surfaces (the grab, abi/win_proto.h): sliding along its menu
         // bar still switches menus, but nothing else lights up.
