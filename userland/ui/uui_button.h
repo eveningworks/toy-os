@@ -20,6 +20,10 @@ struct uui_button {
     int hovered;         // OWNED -- driven by uui_button_group_hover
     int disabled;
     int focused;         // OWNED -- the focus ring's set_focused
+    // STYLE, the app's choice: 1 draws a 1px border darker than the face
+    // and softly rounded corners (the look of a Windows or Breeze push
+    // button); 0 is the flat face every button had before.
+    int outlined;
 };
 
 void uui_button_init(struct uui_button *b, int x, int y, int w, int h,

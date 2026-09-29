@@ -115,5 +115,10 @@ void uui_focus_ring(struct ugfx_surface *s, int x, int y, int w, int h);
 void uui_button_draw(struct ugfx_surface *s, int x, int y, int w, int h,
                       const char *label, uint32_t bg, uint32_t fg,
                       enum uui_state state);
+// Just the label, centred on a face the caller already painted in `fill`
+// -- for a button drawn in another shape (uui_button's outlined style).
+void uui_button_draw_label(struct ugfx_surface *s, int x, int y, int w, int h,
+                           const char *label, uint32_t fg, uint32_t fill,
+                           enum uui_state state);
 
 #endif

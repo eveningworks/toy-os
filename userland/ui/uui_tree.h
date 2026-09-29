@@ -103,7 +103,15 @@ struct uui_tree {
     void *toggle_ctx;
 
     uint32_t bg, fg, sel_bg, sel_fg, track_bg, thumb_bg, guide;
+
+    // THE SELECTION'S STYLE, the app's choice: UUI_SEL_SOFT (0, the
+    // default) is the pale wash in sel_bg/sel_fg; UUI_SEL_STRONG fills the
+    // row in the theme's accent with its text colour on it -- Windows'
+    // and Breeze's selected row, for a tree that is the window's subject.
+    int sel_style;
 };
+
+enum { UUI_SEL_SOFT = 0, UUI_SEL_STRONG = 1 };
 
 // THE EASY PATH IS THREE LINES, and it is the one most apps want:
 //

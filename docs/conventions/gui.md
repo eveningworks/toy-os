@@ -1398,6 +1398,12 @@ this the obvious way), not from how much history it accumulated.
   REFUSES FOCUS.** A NULL `accepts_focus` means "yes", so a button with no
   focus slots sat in rings it could neither show nor act on. Its ring is
   drawn OUTSIDE the face, or an accent (primary) button hides it.
+- **AN OUTLINED BUTTON AND A STRONG SELECTION ARE OPT-IN STYLES**:
+  `uui_button.outlined = 1` draws a 1px border darker than the face with
+  soft corners, and `uui_tree.sel_style = UUI_SEL_STRONG` fills the
+  selected row in the accent with its text colour -- both the look of the
+  2026-09-28 Device Manager mockup, which uses them. The defaults (flat,
+  pale wash) are unchanged, so no existing app moved.
 - **`uui_table` is the multi-column widget** (`userland/ui/uui_table.h`)
   -- columns with per-column width (in CHARACTERS, or 0 to stretch) and
   alignment, a header, selection, scrolling. **It PULLS its rows through

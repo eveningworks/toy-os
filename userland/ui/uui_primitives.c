@@ -45,6 +45,12 @@ void uui_button_draw(struct ugfx_surface *s, int x, int y, int w, int h,
                       enum uui_state state) {
     uint32_t fill = uui_state_bg(bg, state);
     ugfx_fill_rect(s, x, y, w, h, fill);
+    uui_button_draw_label(s, x, y, w, h, label, fg, fill, state);
+}
+
+void uui_button_draw_label(struct ugfx_surface *s, int x, int y, int w, int h,
+                           const char *label, uint32_t fg, uint32_t fill,
+                           enum uui_state state) {
     if (!label) return;
 
     int lx = x + (w - ugfx_text_width(label)) / 2;

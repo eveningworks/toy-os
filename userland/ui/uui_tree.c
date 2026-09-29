@@ -38,6 +38,7 @@ void uui_tree_init(struct uui_tree *t, int x, int y, int w, int h,
     t->fg = ugfx_rgb(20, 20, 20);
     t->sel_bg = ugfx_rgb(205, 220, 240);
     t->sel_fg = ugfx_rgb(20, 20, 20);
+    t->sel_style = UUI_SEL_SOFT;
     t->track_bg = UTHEME_BUTTON_BG;
     t->thumb_bg = ugfx_rgb(150, 155, 165);
     t->guide = ugfx_rgb(200, 200, 208);
@@ -304,6 +305,9 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
     // there is no node-index-to-row conversion to call, and the loop
     // already has the answer.
     int sel_ry = -1;
+    int strong = t->sel_style == UUI_SEL_STRONG;
+    uint32_t sel_bg = strong ? UTHEME_ACCENT : t->sel_bg;
+    uint32_t sel_fg = strong ? UTHEME_ACCENT_TEXT : t->sel_fg;
 
     // The glide (ui/uui_scrollanim.h): `top` has moved; the rows are
     // drawn `disp` px from where it puts them for a few frames, plus the
@@ -324,7 +328,7 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
         int selected = (node == t->selected);
         if (selected) sel_ry = ry;
         if (selected)
-            ugfx_fill_rect(s, t->x, ry, t->w - bar, rh, t->sel_bg);
+            ugfx_fill_rect(s, t->x, ry, t->w - bar, rh, sel_bg);
         else if (node == t->hovered)
             ugfx_fill_rect(s, t->x, ry, t->w - bar, rh,
                             uui_state_bg(t->bg, UUI_STATE_HOVER));
@@ -335,7 +339,8 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
         if (uui_tree_is_parent(t, node)) {
             draw_expander(s, t->x + UUI_TREE_PAD_X +
                               t->nodes[node].depth * UUI_TREE_INDENT + 4,
-                          ry + rh / 2, !uui_tree_is_collapsed(t, node), t->fg);
+                          ry + rh / 2, !uui_tree_is_collapsed(t, node),
+                          selected ? sel_fg : t->fg);
         } else if (t->nodes[node].depth > 0) {
             // A guide tick for a child row, so depth reads at a glance
             // without an expander to anchor it.
@@ -370,8 +375,8 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
         if (avail > 0)
             ugfx_draw_string_clipped(s, tx, ry + (rh - ugfx_char_h()) / 2, avail,
                                       t->nodes[node].label,
-                                      selected ? t->sel_fg : t->fg,
-                                      selected ? t->sel_bg : t->bg);
+                                      selected ? sel_fg : t->fg,
+                                      selected ? sel_bg : t->bg);
     }
     ugfx_clip_restore(s, &saved);
 
@@ -391,7 +396,11 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
     // or scrolled off -- see uui_listbox.c for why an indicator that can
     // vanish is not one.
     if (t->focused) {
-        if (sel_ry >= 0) uui_focus_ring(s, t->x, sel_ry, t->w - bar, rh);
+        // On an accent-filled row an accent ring would vanish, so the
+        // strong style rings it in the text colour, one pixel in.
+        if (sel_ry >= 0 && strong)
+            ugfx_draw_rect(s, t->x + 1, sel_ry + 1, t->w - bar - 2, rh - 2, sel_fg);
+        else if (sel_ry >= 0) uui_focus_ring(s, t->x, sel_ry, t->w - bar, rh);
         else             uui_focus_ring(s, t->x, t->y, t->w, t->h);
     }
 }
