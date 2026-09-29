@@ -2494,12 +2494,10 @@ window without going through it will find its layout polls timing out.
   else; a pane that ignores the selected folder reddens the contents
   check while the selection check stays green; a pin that never reaches
   the disk reddens the four persistence checks and leaves the same-boot
-  one green; and a tooltip with no delay reddens exactly the check that
-  separates a hint from a box that strobes across a list. One check is
-  SKIPPED rather than failed against the bare-metal machine -- "no
-  tooltip yet" cannot be asked in under half a second over telnet, which
-  is the whole delay, so measuring it there would measure the transport;
-  it prints as "not measurable here". Run it after
+  one green. **The tooltip's DELAY is not checked** (removed 2026-09-29
+  at the maintainer's request): asking "no tooltip yet" inside half a
+  second raced the console under load and failed while the tooltip was
+  fine; that it appears, with the full text, and is drawn, still is. Run it after
   touching `start_menu.c`, `start_store.c`, `wm_tooltip.c`, the overlay
   table or a `.desktop` `Category=`.
 - **`filedialog_test.py`** -- the shared file chooser as an OWNED window

@@ -74,9 +74,6 @@ Positive controls, each run once when this was written (2026-09-17):
     checks (the store on disk, and the three after the reboot) and
     NOTHING else -- "pinning makes a Favourites folder" stays green,
     which is exactly the failure a same-boot check cannot see.
-  * wm_tooltip_update() without its delay reddens exactly one check,
-    "no tooltip has appeared yet" -- the one that separates a hint from
-    a box that strobes as the pointer crosses a list.
 
 Usage (the VM must already be up):
     python3 tools/gui_regress.py --only start_menu_test
@@ -101,10 +98,6 @@ KEY_ENTER = "0x0a"
 KEY_F4 = "0xA5"
 KEY_HOME = "0x97"
 KEY_END = "0x98"
-# UUI_TOOLTIP_DELAY_TICKS (ui/uui_toolbar.h) at the PIT's 100 Hz. Named
-# here so the one check that races it says what it is racing.
-TOOLTIP_DELAY_S = 0.5
-
 
 class Result:
     def __init__(self):
@@ -352,27 +345,6 @@ def run(dbg, qmp, tmp, res):
         full = dbg.menu().get("description") or ""
         res.check("the strip reports the whole description",
                   len(full) > 40, f"{full!r}")
-        # NOT YET: the delay is the thing being tested, and a tooltip
-        # that appeared on arrival would pass every other check here.
-        #
-        # ...but only when the PROBE ITSELF got there in time. Every
-        # console command is a round trip, and against the bare-metal
-        # machine that is a telnet exchange of about half a second --
-        # the whole delay. Asking late and then asserting "not up"
-        # measures the transport, not the feature: on hardware this
-        # failed while the tooltip was behaving perfectly.
-        t0 = time.time()
-        dbg.warp_cursor(qmp, row["cx"], row["cy"])
-        asked = dbg.json("gui tooltip --json")
-        elapsed = time.time() - t0
-        if elapsed < TOOLTIP_DELAY_S * 0.8:
-            res.check("...and no tooltip has appeared yet", not asked.get("open"),
-                      f"asked {elapsed * 1000:.0f}ms in")
-        else:
-            res.skip("...and no tooltip has appeared yet",
-                     f"the probe took {elapsed * 1000:.0f}ms of a "
-                     f"{TOOLTIP_DELAY_S * 1000:.0f}ms delay -- this check needs a "
-                     f"faster transport than this machine has")
         time.sleep(1.2)
         tip = dbg.json("gui tooltip --json")
         res.check("after a pause the tooltip carries the full text",
