@@ -243,10 +243,13 @@ static void *thumb_main(void *arg) {
 
 // --- the table, all of it on the main thread ----------------------------
 
-static struct thumb *thumb_slot(const char *path) {
+// One slot per (path, SIZE): the grid and the details pane's preview
+// ask for the same file at two sizes, and a slot per path had each
+// request evict the other's picture every frame.
+static struct thumb *thumb_slot(const char *path, int px) {
     struct thumb *lru = &g_thumbs[0];
     for (int i = 0; i < THUMB_MAX; i++) {
-        if (g_thumbs[i].state != THUMB_EMPTY &&
+        if (g_thumbs[i].state != THUMB_EMPTY && g_thumbs[i].px == px &&
             strcmp(g_thumbs[i].path, path) == 0)
             return &g_thumbs[i];
         if (g_thumbs[i].used < lru->used) lru = &g_thumbs[i];
@@ -315,7 +318,7 @@ const struct uimg *pane_thumb(void *ctx, const char *dir,
     char path[PATH_MAX_LEN];
     if (!k_path_join(dir, e->name, path, sizeof path)) return 0;
 
-    struct thumb *t = thumb_slot(path);
+    struct thumb *t = thumb_slot(path, px);
     t->used = ++g_thumb_clock;
 
     int stale = t->state == THUMB_EMPTY || t->px != px ||

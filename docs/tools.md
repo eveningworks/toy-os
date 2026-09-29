@@ -2509,7 +2509,10 @@ window without going through it will find its layout polls timing out.
   and real chrome, the strip gives it no taskbar button of its own, a
   press on the owner leaves the dialog on top AND cannot drag the owner,
   a Places row changes the directory the view reports, a typed path
-  commits and the app loads that file, Escape cancels and the owner gets
+  commits and the app loads that file, a breadcrumb segment and a typed
+  breadcrumb path both navigate, Places rows are clicked at the rects the
+  widget reports (`place_rows()`, since a device row is taller than a
+  place), Escape cancels and the owner gets
   the focus back, killing the owner takes the dialog with it, and both
   other apps open the same chooser.
 
@@ -2736,20 +2739,26 @@ window without going through it will find its layout polls timing out.
   timing out changes nothing about the app; and a respawned window
   inherits none of the old one's geometry. Seconds, no guest.
 - **`filemanager_test.py`** -- the File Manager: two panes, marking, and
-  real file operations. **Run by `ondemand_sweep.py --only files`, not
+  real file operations, plus the Explorer chrome -- the breadcrumb's
+  segments and Ctrl+L field, Places and Devices, the search filter, the
+  details pane and the status bar. **Buttons are addressed by NAME**
+  (`BTN`, one table mapping a name to its strip -- the nav buttons, the
+  command bar or the status bar's view switch -- and its index there),
+  and drop-down rows by the row rects the menu itself logs
+  (`view_pick()`), never by pitch. **Run by `ondemand_sweep.py --only files`, not
   `gui_regress.py`** (moved 2026-09-29): it is the slowest GUI tool by far
   and carried two standing reds, so run it after touching the File
   Manager or `userland/fm/`. **A check runs only after its prerequisite**:
-  the view toggles are driven through `toolbar_click()`, which requires
-  the item's reported rect, and a step whose prerequisite failed is
+  the view toggles are driven through the View drop-down (`view_pick()`),
+  which requires the button's and the row's reported rects, and a step whose prerequisite failed is
   printed as `SKIP` with the reason rather than attempted -- the
   two-pane, tree-hidden view is restored (and verified) before anything
   later runs, and the run stops with a failing summary if it cannot be
   -- including when the context menu was never confirmed closed, since
   an open menu takes the press wherever it lands and a restoring
   toolbar click would dismiss it rather than toggle anything.
-  **It puts both panes in Details first** (from the
-  toolbar, which is itself a check): the app opens in icons view, and
+  **It puts both panes in Details first** (from the status bar's view
+  switch, which is itself a check): the app opens in icons view, and
   every row this tool aims at is row-height arithmetic. **The result of every operation is checked
   through `ls`, not through the app** -- the manager is the thing under
   test, so it cannot also be the witness; a version that updated its own
@@ -2769,7 +2778,10 @@ window without going through it will find its layout polls timing out.
   across the batch mixed one frame's `active` with another's
   `selected`), and characters typed with `settle=False` outrun the
   client so a name field commits empty -- which reads exactly like a
-  broken `mkdir`. In `gui_regress.py`.
+  broken `mkdir`. **It closes other windows between phases but never a
+  POPUP**: a tooltip is the app's own, and closing it from outside once
+  left the compositor's "not responding" box over the window, eating the
+  next click (uapp now destroys a popup it is asked to close).
 
   **Its type-ahead phase is 4b, deliberately not renumbered in**:
   inserting a numbered phase would have renumbered eight, which is this

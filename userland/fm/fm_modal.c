@@ -46,6 +46,7 @@ int modal_key(struct uapp *a, int key) {
         g_modal = MODAL_NONE;
         if (cmd == CMD_MKDIR) commit_mkdir(text);
         else if (cmd == CMD_RENAME) commit_rename(text);
+        else if (cmd == CMD_NEW_FILE) commit_newfile(text);
         uapp_redraw(a);
         return 1;
     }

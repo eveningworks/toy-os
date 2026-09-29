@@ -1,18 +1,11 @@
-// File Manager -- two directory panes, side by side.
+// File Manager -- Windows 11 Explorer's shape, with a commander inside.
 //
-// IT IS A COMMANDER, NOT AN EXPLORER, AND THAT IS THE DESIGN DECISION
-// WORTH STATING (docs/filemanager-design.md has the long form). This
-// system has no clipboard and no drag-and-drop; both are their own
-// roadmap milestone. Explorer's two primary verbs are copy/paste and
-// drag-onto-a-window, so building that shape first would mean shipping
-// a file manager whose main actions are greyed out.
-//
-// Norton Commander answered this in 1986 and Midnight Commander, Total
-// Commander and Krusader have kept the answer: put TWO directories on
-// screen and copying needs no transfer mechanism at all -- the source
-// is the active pane, the destination is the other one, and F5 is copy.
-// Nothing is carried, so nothing needs a carrier. The keymap is theirs
-// too (F5/F6/F7/F8, Tab, Enter, Backspace), which is free familiarity.
+// The window is a command bar, a breadcrumb and a search box, Places
+// and Devices down the left, the listing, and a details pane; a second
+// pane (Norton Commander's, with its F5/F6/F7/F8, Tab and Enter) is one
+// View row away and keeps its whole keymap. docs/decisions/gui.md ("The
+// file manager is a commander, and it opens as an Explorer") has why
+// each part is the shape it is.
 //
 // THE FILE OPERATIONS RUN HERE, over lib/ufileop.h -- which /bin/cp,
 // /bin/mv and /bin/rm are front ends over too, so there is still one
@@ -35,6 +28,7 @@
 #include "fm/fm_internal.h"
 #include <string.h>
 #include <stdio.h>
+#include <strings.h>  // strncasecmp -- the search filter
 #include <stdlib.h>   // atoi -- the saved divider positions
 #include "kpath.h"
 #include "lib/uconf.h"
@@ -49,8 +43,8 @@
 #include "ui/ulog.h"
 #include "keyboard.h"
 
-#define WIN_W 720
-#define WIN_H 440
+#define WIN_W 960
+#define WIN_H 560
 
 // Each pane's directory is remembered across runs in FILES_CONF -- the
 // per-app `/etc/<app>.conf` convention, whose second user this was.
@@ -92,10 +86,21 @@ struct uui_splitter g_pane_split;   // left | right
 // Both are PERSISTED, so this only decides a machine's first run --
 // after that the file wins, which is why changing it is safe.
 int g_single = 1;
-int g_tree_on = 1;
+// OFF by default now: the places column is how most people move around,
+// and the tree is one View-menu row away -- Explorer's navigation pane
+// with its folder tree collapsed.
+int g_tree_on = 0;
 
-struct uui_menubar g_menu;
-struct uui_menubar g_ctx;   // the context menu -- no bar of its own
+struct uui_menubar g_ctx;   // the context menu and the drop-downs -- no bar of its own
+struct uui_toolbar g_nav;
+struct uui_pathbar g_path;
+struct uui_textbox g_search;
+int g_search_on;
+static char g_search_hint[48];
+struct uui_places g_places;
+struct uui_toolbar g_viewbar;
+int g_dpane = 1;
+struct uui_button g_dp_open, g_dp_props;
 struct uapp *g_app;         // for the widget callbacks, which carry none
 struct uui_toolbar g_toolbar;
 struct uui_statusbar g_status;
@@ -158,70 +163,80 @@ int g_addr_edit = -1;
 struct uui_fileview *active(void)  { return &g_pane[g_active]; }
 struct uui_fileview *other(void)   { return &g_pane[!g_active]; }
 
-static const struct uui_menu_item file_items[] = {
-    UUI_MENU("Open",           CMD_OPEN,    "Enter"),
-    UUI_MENU("Properties",     CMD_PROPERTIES, 0),
+// THE COMMAND BAR'S DROP-DOWNS. There is no menu bar: Windows 11's
+// Explorer took it away, and what it held is here, in the context menu,
+// or on a key -- and every drop-down row names its key, so the F-keys
+// are still discoverable.
+static const struct uui_menu_item new_items[] = {
+    UUI_MENU("Folder",         CMD_MKDIR,    "F7"),
+    UUI_MENU("Text file",      CMD_NEW_FILE, 0),
+};
+
+static const struct uui_menu_item sort_items[] = {
+    UUI_MENU("Name",           CMD_SORT_NAME,     0),
+    UUI_MENU("Date modified",  CMD_SORT_MODIFIED, 0),
+    UUI_MENU("Type",           CMD_SORT_TYPE,     0),
+    UUI_MENU("Size",           CMD_SORT_SIZE,     0),
     UUI_MENU_SEP,
-    UUI_MENU("Cut",            CMD_CLIP_CUT,   "Ctrl+X"),
-    UUI_MENU("Copy to clipboard", CMD_CLIP_COPY, "Ctrl+C"),
-    UUI_MENU("Paste",          CMD_CLIP_PASTE, "Ctrl+V"),
-    UUI_MENU_SEP,
-    UUI_MENU("Copy",           CMD_COPY,    "F5"),
-    UUI_MENU("Move",           CMD_MOVE,    "F6"),
-    UUI_MENU("New folder",     CMD_MKDIR,   "F7"),
-    UUI_MENU("Rename",         CMD_RENAME,  "F2"),
-    UUI_MENU("Delete",         CMD_DELETE,  "F8"),
-    UUI_MENU_SEP,
-    UUI_MENU("Exit",           CMD_EXIT,    "Alt+F4"),
+    UUI_MENU("Ascending",      CMD_SORT_ASC,      0),
+    UUI_MENU("Descending",     CMD_SORT_DESC,     0),
 };
 
 static const struct uui_menu_item view_items[] = {
-    UUI_MENU("Details",     CMD_VIEW_DETAILS, 0),
-    UUI_MENU("Icons",       CMD_VIEW_ICONS,   0),
+    UUI_MENU("Large icons",    CMD_VIEW_LARGE,   0),
+    UUI_MENU("Icons",          CMD_VIEW_ICONS,   0),
+    UUI_MENU("Details",        CMD_VIEW_DETAILS, 0),
     UUI_MENU_SEP,
-    UUI_MENU("Second pane", CMD_VIEW_PANES,   0),
-    UUI_MENU("Folder tree", CMD_VIEW_TREE,    0),
+    UUI_MENU("Details pane",   CMD_VIEW_DPANE,   0),
+    UUI_MENU("Second pane",    CMD_VIEW_PANES,   0),
+    UUI_MENU("Folder tree",    CMD_VIEW_TREE,    0),
 };
 
-static const struct uui_menu_item go_items[] = {
-    // ALT+LEFT / ALT+RIGHT, which is what Explorer, Dolphin and every
-    // browser bind -- and deliberately NOT Backspace, which is Up here
-    // and which browsers themselves stopped using for Back.
-    UUI_MENU("Back",           CMD_BACK,    "Alt+Left"),
-    UUI_MENU("Forward",        CMD_FORWARD, "Alt+Right"),
-    UUI_MENU("Up",             CMD_UP,      "Backspace"),
-    UUI_MENU("Other pane",     CMD_SWAP,    "Tab"),
-    UUI_MENU("Refresh",        CMD_REFRESH, "Ctrl+R"),
+// "See more": what Explorer puts behind its "..." -- the rarer verbs.
+static const struct uui_menu_item more_items[] = {
+    UUI_MENU("Select all",         CMD_SELECT_ALL, "Ctrl+A"),
+    UUI_MENU("Refresh",            CMD_REFRESH,    "Ctrl+R"),
+    UUI_MENU_SEP,
+    UUI_MENU("Copy to other pane", CMD_COPY,       "F5"),
+    UUI_MENU("Move to other pane", CMD_MOVE,       "F6"),
+    UUI_MENU("Other pane",         CMD_SWAP,       "Tab"),
+    UUI_MENU_SEP,
+    UUI_MENU("Properties",         CMD_PROPERTIES, 0),
+    UUI_MENU_SEP,
+    UUI_MENU("Close",              CMD_EXIT,       "Alt+F4"),
 };
 
-// THE TOOLBAR CARRIES THE VERBS NOW. They were a row of five buttons
-// across the bottom -- Norton Commander's function-key bar, which every
-// commander since has kept -- and they moved up here because the same
-// five commands were already in the File menu and on F5-F8, so the row
-// was a third copy costing a whole row of pane height. The KEYS are
-// untouched, and the status bar still names them.
-//
-// Same codes and the same item_flags as the menus, so a latched button
-// and a ticked menu item cannot disagree.
+// Back, Forward, Up and Refresh, beside the breadcrumb -- every browser's
+// and every file manager's place for them.
+static const struct uui_toolbar_item nav_items[] = {
+    { "tb-back",    "Back (Alt+Left)",     CMD_BACK, 0, 0 },
+    { "tb-forward", "Forward (Alt+Right)", CMD_FORWARD, 0, 0 },
+    { "tb-up",      "Up (Backspace)",      CMD_UP, 0, 0 },
+    { "tb-refresh", "Refresh (Ctrl+R)",    CMD_REFRESH, 0, 0 },
+};
+
+// THE COMMAND BAR: the verbs with words where an icon alone would be a
+// guess. Same codes and the same item_flags as the menus, so a latched
+// button and a ticked menu row cannot disagree.
 static const struct uui_toolbar_item toolbar_items[] = {
-    // BACK, FORWARD, UP -- in that order and first, which is where
-    // every file manager and browser puts them.
-    { "tb-back",    "Back",        CMD_BACK },
-    { "tb-forward", "Forward",     CMD_FORWARD },
-    { "tb-up",      "Up",          CMD_UP },
-    { "tb-refresh", "Refresh",     CMD_REFRESH },
+    { "tb-new",     "Create a folder or a file", CMD_MENU_NEW, "New", UUI_TB_MENU },
     UUI_TOOLBAR_SEP,
-    { "tb-copy",    "Copy",        CMD_COPY },
-    { "tb-move",    "Move",        CMD_MOVE },
-    { "tb-mkdir",   "New folder",  CMD_MKDIR },
-    { "tb-rename",  "Rename",      CMD_RENAME },
-    { "tb-delete",  "Delete",      CMD_DELETE },
+    { "tb-cut",     "Cut (Ctrl+X)",     CMD_CLIP_CUT,   0, 0 },
+    { "tb-copy",    "Copy (Ctrl+C)",    CMD_CLIP_COPY,  0, 0 },
+    { "tb-paste",   "Paste (Ctrl+V)",   CMD_CLIP_PASTE, 0, 0 },
+    { "tb-rename",  "Rename (F2)",      CMD_RENAME,     0, 0 },
+    { "tb-delete",  "Delete (Del)",     CMD_DELETE,     0, 0 },
     UUI_TOOLBAR_SEP,
-    { "tb-details", "Details",     CMD_VIEW_DETAILS },
-    { "tb-icons",   "Icons",       CMD_VIEW_ICONS },
-    UUI_TOOLBAR_SEP,
-    { "tb-panes",   "Second pane", CMD_VIEW_PANES },
-    { "tb-tree",    "Folder tree", CMD_VIEW_TREE },
+    { "tb-sort",    0,                  CMD_MENU_SORT,  "Sort", UUI_TB_MENU },
+    { "tb-view",    0,                  CMD_MENU_VIEW,  "View", UUI_TB_MENU },
+    { "tb-more",    "See more",         CMD_MENU_MORE,  0, UUI_TB_MENU },
+    { "tb-pane",    "Show the details pane", CMD_VIEW_DPANE, "Details", UUI_TB_END },
+};
+
+// The status bar's view switch, at its right end, as in Explorer.
+static const struct uui_toolbar_item viewbar_items[] = {
+    { "tb-details", "Details", CMD_VIEW_DETAILS, 0, 0 },
+    { "tb-icons",   "Icons",   CMD_VIEW_ICONS, 0, 0 },
 };
 
 // THE CONTEXT MENU, on a secondary click inside a pane. A separate
@@ -283,12 +298,18 @@ static int build_ctx_items(void) {
     return n;
 }
 
-static const struct uui_menu_item menu_items[] = {
-    UUI_SUBMENU("File", file_items),
-    UUI_SUBMENU("View", view_items),
-    UUI_SUBMENU("Go",   go_items),
-};
+static enum uui_fileview_sort sort_key_of(int code) {
+    switch (code) {
+    case CMD_SORT_MODIFIED: return UUI_FILEVIEW_SORT_MODIFIED;
+    case CMD_SORT_TYPE:     return UUI_FILEVIEW_SORT_TYPE;
+    case CMD_SORT_SIZE:     return UUI_FILEVIEW_SORT_SIZE;
+    default:                return UUI_FILEVIEW_SORT_NAME;
+    }
+}
 
+// dispatch-ok: ONE CASE PER COMMAND WHOSE ROW OR BUTTON HAS A STATE, all
+// from this app's own CMD_* enum -- bounded by the menus it draws, and
+// each answer reads different state, which a table would only hide.
 // Details/Icons tick as a pair (the ACTIVE pane's current mode) and the
 // two toggles tick when their thing is SHOWN -- so "Second pane" is
 // checked in the default two-pane state, not when the option was used.
@@ -322,7 +343,20 @@ static unsigned menu_item_flags(int code) {
     case CMD_VIEW_DETAILS:
         return g_pane[g_active].mode == UUI_FILEVIEW_DETAILS ? UUI_MI_CHECKED : 0;
     case CMD_VIEW_ICONS:
-        return g_pane[g_active].mode == UUI_FILEVIEW_ICONS ? UUI_MI_CHECKED : 0;
+        return g_pane[g_active].mode == UUI_FILEVIEW_ICONS && !g_pane[g_active].icon_px
+               ? UUI_MI_CHECKED : 0;
+    case CMD_VIEW_LARGE:
+        return g_pane[g_active].mode == UUI_FILEVIEW_ICONS && g_pane[g_active].icon_px
+               ? UUI_MI_CHECKED : 0;
+    case CMD_VIEW_DPANE:
+        return g_dpane ? UUI_MI_CHECKED : 0;
+    case CMD_SORT_NAME: case CMD_SORT_MODIFIED: case CMD_SORT_TYPE: case CMD_SORT_SIZE:
+        return uui_fileview_sort(active(), 0) == sort_key_of(code) ? UUI_MI_CHECKED : 0;
+    case CMD_SORT_ASC: case CMD_SORT_DESC: {
+        int dir;
+        uui_fileview_sort(active(), &dir);
+        return (dir > 0) == (code == CMD_SORT_ASC) ? UUI_MI_CHECKED : 0;
+    }
     case CMD_VIEW_PANES:
         return g_single ? 0 : UUI_MI_CHECKED;
     case CMD_VIEW_TREE:
@@ -337,8 +371,14 @@ static unsigned menu_item_flags(int code) {
 // popup made a click on a View item ALSO select the folder-tree row
 // under it (CLAUDE.md's exact rule; the tree made it visible).
 struct uui_item g_widgets[] = {
-    { .ops = &uui_menubar_ops, .widget = &g_menu, .id = ID_MENU, .name = "menu" },
+    { .ops = &uui_toolbar_ops, .widget = &g_nav, .id = ID_NAV, .name = "nav" },
+    { .ops = &uui_pathbar_ops, .widget = &g_path, .id = ID_PATH, .name = "path" },
+    { .ops = &uui_textbox_ops, .widget = &g_search, .id = ID_SEARCH, .name = "search" },
     { .ops = &uui_toolbar_ops, .widget = &g_toolbar, .id = ID_TOOLBAR, .name = "toolbar" },
+    { .ops = &uui_places_ops, .widget = &g_places, .id = ID_PLACES, .name = "places" },
+    { .ops = &uui_toolbar_ops, .widget = &g_viewbar, .id = ID_VIEWBAR, .name = "viewbar" },
+    { .ops = &uui_button_ops, .widget = &g_dp_open, .id = ID_DP_OPEN, .name = "dpopen", .hidden = 1 },
+    { .ops = &uui_button_ops, .widget = &g_dp_props, .id = ID_DP_PROPS, .name = "dpprops", .hidden = 1 },
     { .ops = &uui_fileview_ops, .widget = &g_pane[0], .id = ID_LEFT, .name = "left" },
     { .ops = &uui_fileview_ops, .widget = &g_pane[1], .id = ID_RIGHT, .name = "right" },
     { .ops = &uui_tree_ops, .widget = &g_tree, .id = ID_TREE, .name = "tree" },
@@ -440,21 +480,134 @@ void refresh_status(void) {
     if (fm_job_running()) {
         fm_job_status(g_stat_note, sizeof g_stat_note);
     }
+    path_sync();
 
+    // Explorer's two facts: how many things are here, and what is
+    // chosen -- with its size, since that is what a copy will cost.
     struct uui_fileview *fv = active();
-    snprintf(g_stat_dir, sizeof g_stat_dir, "%s%s",
-              uui_fileview_dir(fv), g_active ? "  [right]" : "  [left]");
-
-    char total[24];
-    human_size(total, sizeof total, uui_fileview_total_bytes(fv));
+    int n = uui_fileview_count(fv);
+    snprintf(g_stat_dir, sizeof g_stat_dir, "%d item%s%s", n, n == 1 ? "" : "s",
+             uui_fileview_truncated(fv) ? " (more)" : "");
+    char size[24];
     int marks = uui_fileview_mark_count(fv);
-    if (marks > 0)
-        snprintf(g_stat_items, sizeof g_stat_items, "%d marked of %d, %s",
-                  marks, uui_fileview_count(fv), total);
-    else
-        snprintf(g_stat_items, sizeof g_stat_items, "%d item%s, %s%s",
-                  uui_fileview_count(fv), uui_fileview_count(fv) == 1 ? "" : "s",
-                  total, uui_fileview_truncated(fv) ? " (more)" : "");
+    const struct sys_dirent *e = uui_fileview_selected_entry(fv);
+    if (marks > 1) {
+        unsigned long long bytes = 0;
+        char path[PATH_MAX_LEN];
+        for (int i = 0; i < marks; i++) {
+            struct sys_stat st;
+            if (uui_fileview_marked_path(fv, i, path, sizeof path) &&
+                !uui_fileview_marked_is_dir(fv, i) && sys_stat(path, &st) == 0)
+                bytes += st.size;
+        }
+        human_size(size, sizeof size, bytes);
+        snprintf(g_stat_items, sizeof g_stat_items, "%d items selected, %s", marks, size);
+    } else if (e && !e->is_dir) {
+        human_size(size, sizeof size, e->size);
+        snprintf(g_stat_items, sizeof g_stat_items, "1 item selected, %s", size);
+    } else if (e) {
+        snprintf(g_stat_items, sizeof g_stat_items, "1 item selected");
+    } else {
+        g_stat_items[0] = '\0';
+    }
+}
+
+// --- the breadcrumb, the search box and the places ------------------------
+
+// ONE SEARCH QUERY PER PANE, snapshotted as it is typed: the filter is
+// re-run on every reload, and reading the shared box from it let a search
+// typed for one pane re-filter the other the next time the disk changed.
+static char g_query[2][UUI_TEXTBOX_MAX];
+
+// The breadcrumb and the places follow the ACTIVE pane; the search box's
+// hint names the folder it would search, as Explorer's does.
+void path_sync(void) {
+    const char *dir = uui_fileview_dir(active());
+    if (!uui_pathbar_is_editing(&g_path) && strcmp(g_path.path, dir) != 0)
+        uui_pathbar_set_path(&g_path, dir);
+    uui_places_select_path(&g_places, dir);
+    if (!g_search_on && strcmp(uui_textbox_text(&g_search), g_query[g_active]) != 0)
+        uui_textbox_set_text(&g_search, g_query[g_active]);
+    const char *base = (dir[0] == '/' && !dir[1]) ? "System" : k_path_basename(dir);
+    snprintf(g_search_hint, sizeof g_search_hint, "Search %s", base);
+}
+
+// SEARCH IS A FILTER ON THE FOLDER YOU ARE IN, by name -- Dolphin's
+// filter bar rather than Explorer's recursive search, which would walk
+// the disk on every keystroke. Case-insensitive, anywhere in the name.
+static int search_filter(void *ctx, const char *dir, const struct sys_dirent *e) {
+    (void)dir;
+    const char *q = g_query[(int)(intptr_t)ctx];
+    int qn = (int)strlen(q), n = (int)strlen(e->name);
+    for (int i = 0; i + qn <= n; i++)
+        if (!strncasecmp(e->name + i, q, (size_t)qn)) return 1;
+    return 0;
+}
+
+void search_apply(void) {
+    strlcpy(g_query[g_active], uui_textbox_text(&g_search), sizeof g_query[g_active]);
+    int on = g_query[g_active][0] != '\0';
+    uui_fileview_set_filter(active(), on ? search_filter : 0, (void *)(intptr_t)g_active);
+    reload_pane(active());
+    ulogf("files: search \"%s\" rows %d\n", uui_textbox_text(&g_search),
+          uui_fileview_count(active()));
+}
+
+void search_clear(void) {
+    uui_textbox_set_text(&g_search, "");
+    g_search_on = 0;
+    uui_textbox_set_active(&g_search, 0);
+    for (int i = 0; i < 2; i++)
+        if (g_pane[i].filter) {
+            g_query[i][0] = '\0';
+            uui_fileview_set_filter(&g_pane[i], 0, 0);
+            reload_pane(&g_pane[i]);
+        }
+}
+
+// A path from the breadcrumb: a segment's (absolute) or one typed there
+// (resolved against the pane, so "sub" and "../etc" mean what a shell
+// takes them to mean). A place that does not exist is said so, and the
+// field stays up holding what was typed.
+static void path_navigate(const char *typed) {
+    char path[PATH_MAX_LEN], was[PATH_MAX_LEN];
+    strlcpy(was, uui_fileview_dir(active()), sizeof was);
+    static char scratch[KPATH_SCRATCH_FOR(PATH_MAX_LEN)];
+    struct kpath_scratch sc = { scratch, sizeof scratch };
+    if (!k_path_resolve(was, typed, path, sizeof path, &sc)) { set_note("path too long"); return; }
+    if (!fm_goto(g_active, path)) {
+        uui_fileview_set_dir(active(), was);   // see addr_end_edit on why not fm_goto
+        snprintf(g_stat_note, sizeof g_stat_note, "no such folder: %s", k_path_basename(path));
+        return;
+    }
+    uui_pathbar_set_path(&g_path, uui_fileview_dir(active()));
+}
+
+// A drop-down, under the command-bar button that asked for it.
+static void open_dropdown(int code) {
+    const struct uui_menu_item *items = 0;
+    int n = 0;
+    switch (code) {
+    case CMD_MENU_NEW:  items = new_items;  n = (int)(sizeof new_items / sizeof new_items[0]); break;
+    case CMD_MENU_SORT: items = sort_items; n = (int)(sizeof sort_items / sizeof sort_items[0]); break;
+    case CMD_MENU_VIEW: items = view_items; n = (int)(sizeof view_items / sizeof view_items[0]); break;
+    default:            items = more_items; n = (int)(sizeof more_items / sizeof more_items[0]); break;
+    }
+    int x = 0, y = 0, w = 0, h = 0;
+    for (int i = 0; i < g_toolbar.count; i++)
+        if (g_toolbar.items[i].code == code) uui_toolbar_item_rect(&g_toolbar, i, &x, &y, &w, &h);
+    g_ctx_rows = n;
+    uui_menubar_open_at(&g_ctx, items, n, x, y + h);
+}
+
+static void set_view(int code) {
+    struct uui_fileview *fv = active();
+    fv->icon_px = code == CMD_VIEW_LARGE ? ugfx_char_h() * 6 : 0;
+    uui_fileview_set_mode(fv, code == CMD_VIEW_DETAILS ? UUI_FILEVIEW_DETAILS
+                                                        : UUI_FILEVIEW_ICONS);
+    uconf_set(FILES_CONF, g_active ? "right_view" : "left_view",
+              code == CMD_VIEW_DETAILS ? "details" : code == CMD_VIEW_LARGE ? "large" : "icons");
+    g_seen_generation = sys_fs_generation(); // adopt our own write
 }
 
 void do_command(struct uapp *a, int code) {
@@ -538,15 +691,37 @@ void do_command(struct uapp *a, int code) {
         g_active = !g_active;
         break;
     case CMD_VIEW_DETAILS:
-    case CMD_VIEW_ICONS: {
+    case CMD_VIEW_ICONS:
+    case CMD_VIEW_LARGE:
         // The ACTIVE pane's, not the window's: two panes with two modes
         // is normal in every commander that grew a thumbnail view.
-        enum uui_fileview_mode m = code == CMD_VIEW_ICONS ? UUI_FILEVIEW_ICONS
-                                                           : UUI_FILEVIEW_DETAILS;
-        uui_fileview_set_mode(active(), m);
-        uconf_set(FILES_CONF, g_active ? "right_view" : "left_view",
-                   m == UUI_FILEVIEW_ICONS ? "icons" : "details");
-        g_seen_generation = sys_fs_generation(); // adopt our own write
+        set_view(code);
+        break;
+    case CMD_VIEW_DPANE:
+        g_dpane = !g_dpane;
+        uconf_set(FILES_CONF, "details_pane", g_dpane ? "1" : "0");
+        g_seen_generation = sys_fs_generation();
+        break;
+    case CMD_MENU_NEW: case CMD_MENU_SORT: case CMD_MENU_VIEW: case CMD_MENU_MORE:
+        open_dropdown(code);
+        break;
+    case CMD_NEW_FILE:
+        open_prompt(CMD_NEW_FILE, "New text file", "new.txt");
+        break;
+    case CMD_SORT_NAME: case CMD_SORT_MODIFIED: case CMD_SORT_TYPE: case CMD_SORT_SIZE: {
+        int dir;
+        uui_fileview_sort(active(), &dir);
+        uui_fileview_set_sort(active(), sort_key_of(code), dir);
+        break;
+    }
+    case CMD_SORT_ASC: case CMD_SORT_DESC:
+        uui_fileview_set_sort(active(), uui_fileview_sort(active(), 0),
+                              code == CMD_SORT_ASC ? 1 : -1);
+        break;
+    case CMD_SELECT_ALL: {
+        struct uui_fileview *fv = active();
+        for (int r = 0; r < uui_fileview_row_count(fv); r++)
+            if (!uui_fileview_is_marked(fv, r)) uui_fileview_toggle_mark(fv, r);
         break;
     }
     case CMD_VIEW_PANES:
@@ -594,22 +769,49 @@ static void on_widget(struct uapp *a, int id, int reason) {
     // The modal owns the window: a routed widget can still be clicked
     // under it, and acting on that could open a second modal over the
     // first. The menu's parked code is TAKEN so it cannot replay later.
+    char taken[PATH_MAX_LEN];
     if (g_modal != MODAL_NONE) {
-        if (id == ID_MENU) (void)uui_menubar_take_code(&g_menu);
         if (id == ID_CTX) (void)uui_menubar_take_code(&g_ctx);
         if (id == ID_TOOLBAR) (void)uui_toolbar_take_code(&g_toolbar);
+        if (id == ID_NAV) (void)uui_toolbar_take_code(&g_nav);
+        if (id == ID_VIEWBAR) (void)uui_toolbar_take_code(&g_viewbar);
+        if (id == ID_PATH) (void)uui_pathbar_take(&g_path, taken, sizeof taken);
+        if (id == ID_PLACES) (void)uui_places_take(&g_places, taken, sizeof taken);
         return;
     }
-    if (id == ID_MENU) {
-        // The commit is PARKED in the widget (ui/uui_menubar.h): the
+    if (id == ID_TOOLBAR || id == ID_NAV || id == ID_VIEWBAR) {
+        // The commit is PARKED in the widget (ui/uui_toolbar.h): the
         // ops release slot can only say "changed", not which item.
-        int code = uui_menubar_take_code(&g_menu);
+        struct uui_toolbar *tb = id == ID_NAV ? &g_nav : id == ID_VIEWBAR ? &g_viewbar : &g_toolbar;
+        int code = uui_toolbar_take_code(tb);
         if (code >= 0) do_command(a, code);
         return;
     }
-    if (id == ID_TOOLBAR) {
-        int code = uui_toolbar_take_code(&g_toolbar);
-        if (code >= 0) do_command(a, code);
+    if (id == ID_PATH) {
+        if (uui_pathbar_take(&g_path, taken, sizeof taken)) path_navigate(taken);
+        refresh_status();
+        uapp_redraw(a);
+        return;
+    }
+    if (id == ID_PLACES) {
+        if (uui_places_take(&g_places, taken, sizeof taken) &&
+            strcmp(taken, uui_fileview_dir(active())) != 0 && !fm_goto(g_active, taken))
+            snprintf(g_stat_note, sizeof g_stat_note, "cannot open %s", taken);
+        refresh_status();
+        uapp_redraw(a);
+        return;
+    }
+    if (id == ID_SEARCH) {
+        if (reason == UUI_REASON_PRESS) {
+            g_search_on = 1;
+            uui_textbox_set_active(&g_search, 1);
+        }
+        uapp_redraw(a);
+        return;
+    }
+    if (id == ID_DP_OPEN || id == ID_DP_PROPS) {
+        if (reason == UUI_REASON_RELEASE)
+            do_command(a, id == ID_DP_OPEN ? CMD_OPEN : CMD_PROPERTIES);
         return;
     }
     if (id == ID_DIALOG) {
@@ -730,6 +932,16 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
         addr_end_edit(0);
         uapp_redraw(a);
     }
+    if (uui_pathbar_is_editing(&g_path) && !uui_pathbar_ops.hit(&g_path, x, y)) {
+        uui_pathbar_end_edit(&g_path);
+        uapp_redraw(a);
+    }
+    // The search box lets go of the keyboard, and keeps what it holds.
+    if (g_search_on && !uui_textbox_hit(&g_search, x, y)) {
+        g_search_on = 0;
+        uui_textbox_set_active(&g_search, 0);
+        uapp_redraw(a);
+    }
     // THE THUMB BUTTONS ARE NAVIGATION, which is the app's decision and
     // not the compositor's -- it delivers SIDE and EXTRA and says
     // nothing about what they mean (abi/win_proto.h). Explorer, Dolphin
@@ -789,6 +1001,30 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     }
     if (modal_key(a, key)) return;
 
+    // THE SEARCH BOX, while it has the keyboard: every key edits the
+    // query and the listing follows it; Esc empties it, Enter hands the
+    // keyboard back to the listing with the results still up.
+    if (g_search_on) {
+        if (key == 0x1B) search_clear();
+        else if (key == '\n' || key == '\r') {
+            g_search_on = 0;
+            uui_textbox_set_active(&g_search, 0);
+        } else if (uui_textbox_key_mods(&g_search, key, mods)) {
+            search_apply();
+        }
+        refresh_status();
+        uapp_redraw(a);
+        return;
+    }
+    // THE BREADCRUMB AS TEXT: Enter goes there, Esc puts it back.
+    if (uui_pathbar_is_editing(&g_path)) {
+        char typed[PATH_MAX_LEN];
+        uui_pathbar_ops.key(&g_path, key, mods);
+        if (uui_pathbar_take(&g_path, typed, sizeof typed)) path_navigate(typed);
+        refresh_status();
+        uapp_redraw(a);
+        return;
+    }
     // THE ADDRESS BAR BEING EDITED takes every key: Enter navigates,
     // Esc puts the path back, the rest is typing.
     if (g_addr_edit >= 0) {
@@ -807,11 +1043,18 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         uapp_redraw(a);
         return;
     }
-    if (key == 0x0C) {   // Ctrl-L: edit the active pane's path, as in every file manager
-        addr_begin_edit(g_active);
+    if (key == 0x0C) {   // Ctrl-L: the path as text, as in every file manager
+        uui_pathbar_begin_edit(&g_path);
         uapp_redraw(a);
         return;
     }
+    if (key == 0x06) {   // Ctrl-F: to the search box
+        g_search_on = 1;
+        uui_textbox_set_active(&g_search, 1);
+        uapp_redraw(a);
+        return;
+    }
+    if (key == 0x01) { do_command(a, CMD_SELECT_ALL); return; }   // Ctrl-A
 
     // ESC STOPS A RUNNING OPERATION, and only then -- asked AFTER the
     // dialog and the prompts above, so an Esc meant for one of those
@@ -831,11 +1074,6 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // (CLAUDE.md). Asked before the bar, which is closed whenever this
     // one is open.
     if (uui_menubar_key(&g_ctx, key, &code)) {
-        if (code >= 0) do_command(a, code);
-        else uapp_redraw(a);
-        return;
-    }
-    if (uui_menubar_key(&g_menu, key, &code)) {
         if (code >= 0) do_command(a, code);
         else uapp_redraw(a);
         return;
@@ -918,6 +1156,8 @@ static int on_tick(struct uapp *a) {
     fm_history_sync();
     int changed = poll_job();
     if (uui_toolbar_tick(&g_toolbar)) changed = 1;
+    if (uui_toolbar_tick(&g_nav)) changed = 1;
+    if (uui_toolbar_tick(&g_viewbar)) changed = 1;
     if (thumb_tick()) changed = 1;
 
     // Not under a rubber band: a reload clears the marks the band is
@@ -931,6 +1171,7 @@ static int on_tick(struct uapp *a) {
         g_seen_generation = gen;
         reload_panes();
         if (g_tree_on) tree_rebuild(); // a dir can have appeared or gone
+        uui_places_refresh(&g_places);  // free space moved, or a disk came
         refresh_status();
         changed = 1;
     }
@@ -971,6 +1212,14 @@ static void on_pane_open(void *ctx, const char *path) {
 // which the WIDGET does not know about.
 static void on_pane_dir(void *ctx, const char *dir) {
     int i = (int)(intptr_t)ctx;
+    // A NEW FOLDER ENDS A SEARCH, Explorer's rule: the query was about
+    // the folder you left. Re-listed without the filter.
+    if (g_pane[i].filter) {
+        g_query[i][0] = '\0';
+        if (i == g_active) uui_textbox_set_text(&g_search, "");
+        uui_fileview_set_filter(&g_pane[i], 0, 0);
+        uui_fileview_reload(&g_pane[i]);
+    }
     refresh_dim();   // the reload cleared the bits; see refresh_dim()
     // Written on every change rather than at exit, because a window
     // manager can Force Quit this process and an exit-time save is a
@@ -1148,6 +1397,13 @@ static void on_clipboard(struct uapp *a, int op, unsigned serial) {
 
 static void on_open(struct uapp *a) {
     g_app = a;
+    // Large icons are two text lines tall doubled: measured now, with the
+    // font up -- in main() every size is 0.
+    char opt[16];
+    for (int i = 0; i < 2; i++)
+        if (uconf_get(FILES_CONF, i ? "right_view" : "left_view", opt, sizeof opt) &&
+            !strcmp(opt, "large"))
+            g_pane[i].icon_px = ugfx_char_h() * 6;
     layout_all(uapp_width(a), uapp_height(a));
     refresh_status();
 }
@@ -1170,9 +1426,27 @@ int main(int argc, char **argv) {
     const char *right = (argc > 2 && argv[2][0]) ? argv[2]
                          : (saved_right[0] ? saved_right : "/");
 
-    uui_menubar_init(&g_menu, menu_items,
-                      (int)(sizeof menu_items / sizeof menu_items[0]));
-    g_menu.item_flags = menu_item_flags;
+    uui_toolbar_init(&g_nav, nav_items, (int)(sizeof nav_items / sizeof nav_items[0]));
+    g_nav.item_flags = menu_item_flags;
+    uui_toolbar_init(&g_viewbar, viewbar_items,
+                      (int)(sizeof viewbar_items / sizeof viewbar_items[0]));
+    g_viewbar.item_flags = menu_item_flags;
+    g_viewbar.compact = 1;
+    g_nav.compact = 0;
+    uui_pathbar_init(&g_path, "System", "drive");
+    uui_textbox_init(&g_search, "");
+    g_search.placeholder = g_search_hint;
+    // The places are the file chooser's (ui/uui_filedialog.c) -- one
+    // idea of where Documents is.
+    uui_places_init(&g_places);
+    uui_places_add(&g_places, "Home",      "place-home",      "/home");
+    uui_places_add(&g_places, "Desktop",   "place-desktop",   "/home/desktop");
+    uui_places_add(&g_places, "Documents", "place-documents", "/usr/share/doc");
+    uui_places_add(&g_places, "Music",     "place-music",     "/usr/share/music");
+    uui_places_add(&g_places, "Pictures",  "place-pictures",  "/usr/share/wallpapers");
+    uui_places_refresh(&g_places);
+    uui_button_init(&g_dp_open, 0, 0, 0, 0, "Open", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_DP_OPEN);
+    uui_button_init(&g_dp_props, 0, 0, 0, 0, "Properties", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_DP_PROPS);
     // NO ITEMS: a context menu has no bar strip, so Left/Right have no
     // titles to walk out into (ui/uui_menubar.h).
     uui_menubar_init(&g_ctx, 0, 0);
@@ -1183,12 +1457,12 @@ int main(int argc, char **argv) {
     uui_button_init(&g_cancel_btn, 0, 0, 0, 0, "Cancel",
                      UTHEME_BUTTON_BG, UTHEME_TEXT, ID_CANCEL);
     uui_statusbar_init(&g_status);
-    g_status.panes[0].text = g_stat_dir;
-    g_status.panes[0].chars = 0;
-    g_status.panes[1].text = g_stat_items;
-    g_status.panes[1].chars = 20;
-    g_status.panes[2].text = g_stat_note;
-    g_status.panes[2].chars = 18;
+    g_status.panes[0].text = g_stat_dir;      // "118 items"
+    g_status.panes[0].chars = 14;
+    g_status.panes[1].text = g_stat_items;    // "1 item selected, 258 KB"
+    g_status.panes[1].chars = 28;
+    g_status.panes[2].text = g_stat_note;     // what just happened
+    g_status.panes[2].chars = 0;
     g_status.count = 3;
 
     for (int i = 0; i < 2; i++) {
@@ -1209,10 +1483,15 @@ int main(int argc, char **argv) {
         g_tree_on = (opt[0] == '1');
     // ICONS unless the file says details: the default every desktop
     // file manager opens in, and what the thumbnails were built for.
-    if (!uconf_get(FILES_CONF, "left_view", opt, sizeof opt) || strcmp(opt, "details") != 0)
-        uui_fileview_set_mode(&g_pane[0], UUI_FILEVIEW_ICONS);
-    if (!uconf_get(FILES_CONF, "right_view", opt, sizeof opt) || strcmp(opt, "details") != 0)
-        uui_fileview_set_mode(&g_pane[1], UUI_FILEVIEW_ICONS);
+    for (int i = 0; i < 2; i++) {
+        if (!uconf_get(FILES_CONF, i ? "right_view" : "left_view", opt, sizeof opt))
+            opt[0] = '\0';
+        if (!strcmp(opt, "details")) continue;
+        if (!strcmp(opt, "large")) g_pane[i].icon_px = 0;   // sized in on_open, once the font is up
+        uui_fileview_set_mode(&g_pane[i], UUI_FILEVIEW_ICONS);
+    }
+    if (uconf_get(FILES_CONF, "details_pane", opt, sizeof opt))
+        g_dpane = (opt[0] == '1');
     for (int i = 0; i < 2; i++) uui_textbox_init(&g_addr[i], "/");
 
     uui_splitter_init(&g_tree_split, 1, TREE_SPLIT_DEFAULT);
@@ -1242,7 +1521,7 @@ int main(int argc, char **argv) {
         uclip_load(&c);
         g_clip_op = uclip_op(&c);
     }
-    set_note("F5 copy  F6 move  F7 new  F8 delete");
+    set_note("");
 
     // One line, once: which directories this instance opened with and
     // where they came from. It is what turned "the pane is in the wrong

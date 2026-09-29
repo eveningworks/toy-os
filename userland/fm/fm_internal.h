@@ -13,6 +13,9 @@
 #include "ui/uui_splitter.h"
 #include "ui/uui_textbox.h"
 #include "ui/uui_widget.h"
+#include "ui/uui_pathbar.h"
+#include "ui/uui_places.h"
+#include "ui/uui_button.h"
 #include "lib/uimg.h"
 
 // The File Manager's own header, shared by the files it is split across
@@ -32,6 +35,7 @@
 //   fm_tree.c    the lazy folder tree
 //   fm_thumbs.c  the lazy thumbnail cache
 //   fm_modal.c   Rename / New folder (the two prompts with a text field)
+//   fm_details.c the details pane: a preview and the selection's facts
 
 #define PATH_MAX_LEN 64          // NOT FS_PATH_MAX (4096 since
                                  // 2026-09-15) -- this app's own
@@ -61,6 +65,13 @@
 #define ID_CANCEL 10
 #define ID_ADDR_L 11
 #define ID_ADDR_R 12
+#define ID_NAV     13   // Back / Forward / Up / Refresh
+#define ID_PATH    14   // the breadcrumb
+#define ID_SEARCH  15
+#define ID_PLACES  16
+#define ID_VIEWBAR 17   // the status bar's view switch
+#define ID_DP_OPEN  18  // the details pane's buttons
+#define ID_DP_PROPS 19
 
 // The commands, shared by the menu bar, the toolbar, the context menu
 // and the function keys -- one code per act, so those four cannot
@@ -73,6 +84,14 @@ enum {
     CMD_CLIP_COPY, CMD_CLIP_CUT, CMD_CLIP_PASTE,
     CMD_EDIT,
     CMD_BACK, CMD_FORWARD,
+    // The command bar's drop-downs (they open a menu, they do nothing
+    // themselves) and what is in them.
+    CMD_MENU_NEW, CMD_MENU_SORT, CMD_MENU_VIEW, CMD_MENU_MORE,
+    CMD_NEW_FILE,
+    CMD_SORT_NAME, CMD_SORT_MODIFIED, CMD_SORT_TYPE, CMD_SORT_SIZE,
+    CMD_SORT_ASC, CMD_SORT_DESC,
+    CMD_VIEW_LARGE, CMD_VIEW_DPANE,
+    CMD_SELECT_ALL,
 };
 
 // The dialog's answers. ONE widget serves both questions the app asks
@@ -117,7 +136,6 @@ extern struct uui_splitter g_tree_split;   // tree | panes
 extern struct uui_splitter g_pane_split;   // left | right
 extern int g_single;             // one pane shown, not two
 extern int g_tree_on;
-extern struct uui_menubar g_menu;
 extern struct uui_menubar g_ctx; // the context menu -- no bar of its own
 
 // THIS APP, for the code that has no `struct uapp *` of its own: the
@@ -140,6 +158,27 @@ extern struct uui_textbox g_addr[2];
 extern int g_addr_edit;
 void addr_begin_edit(int pane);
 void addr_end_edit(int commit);
+// THE WINDOW'S CHROME, top to bottom: Back/Forward/Up beside the
+// breadcrumb and the search box; the command bar; the places column,
+// the panes and the details pane; the status bar with the view switch.
+// Windows 11 Explorer's arrangement (docs/decisions.md has why).
+extern struct uui_toolbar g_nav;
+extern struct uui_pathbar g_path;
+extern struct uui_textbox g_search;
+extern int g_search_on;          // the search box has the keyboard
+extern struct uui_places g_places;
+extern struct uui_toolbar g_viewbar;
+extern int g_dpane;              // the details pane is shown
+extern struct uui_button g_dp_open, g_dp_props;
+void search_apply(void);         // re-filter the active pane by g_search
+void search_clear(void);
+void path_sync(void);            // breadcrumb, places and placeholder follow the active pane
+
+// --- the details pane (fm_details.c) --------------------------------------
+int  details_width(int cw);
+void details_layout(int x, int y, int w, int h);
+void details_draw(struct ugfx_surface *s);
+
 extern char g_stat_dir[PATH_MAX_LEN + 8];
 extern char g_stat_items[48];
 extern char g_stat_note[64];
@@ -229,6 +268,7 @@ void do_drop_extern(const char *dest, int copy);
 void do_delete(void);     // opens the dialog; commit_delete() acts
 void commit_delete(void);
 void commit_mkdir(const char *name);
+void commit_newfile(const char *name);
 void commit_rename(const char *name);
 int  poll_job(void);
 

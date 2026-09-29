@@ -4528,6 +4528,38 @@ flags persist per user -- so this decides a FIRST run, not a preference.
 The 1986 reasoning is why the mode exists; it was never a reason to open
 in it.
 
+**The chrome became Windows 11 Explorer's on 2026-09-29**, chosen from
+three mockups (Dolphin's places-and-details, Explorer's command bar,
+Total Commander's F-key bar). What changed and why each piece is shaped
+the way it is:
+
+- **No menu bar.** A command bar carries the verbs -- New, Cut, Copy,
+  Paste, Rename, Delete, then Sort and View drop-downs and a "See more"
+  -- with a word beside the icons where the icon alone would be a
+  guess. Every drop-down row names its key, which is where the F-keys
+  are discoverable now that no menu lists them.
+- **Places and Devices replace the tree** as the default left column.
+  A device is a MOUNT read from the kernel (`QUERY_FSINFO`, what `df`
+  prints) with how full it is, so a new disk appears with nothing
+  registered. The tree is still there, under the places, from View.
+- **A breadcrumb** (`uui_pathbar`) instead of a path field: every
+  ancestor is one click away, and a click past the segments, or Ctrl+L,
+  gives the text back. Split view keeps each pane's own strip, because
+  one breadcrumb cannot say where two panes are.
+- **Search is a filter on the folder you are in**, by name -- Dolphin's
+  filter bar, not Explorer's recursive search, which would walk the disk
+  on every keystroke. A new folder ends it, as in Explorer.
+- **A details pane** (preview, facts, Open and Properties), on by
+  default, toggled from the command bar.
+- **The details view's columns are Dolphin's order** -- Name, Size,
+  Modified, Type -- not Explorer's, because a narrow pane drops columns
+  from the END and the name must be the last to lose room. Dropping
+  from the end also keeps every column's index, which is the sort key.
+
+The places list and the breadcrumb are widgets rather than parts of the
+app because the file chooser (`uui_filedialog`) has both, and two
+implementations of "where Documents is" had already begun to differ.
+
 ## File operations are child processes, not loops inside the window
 
 F5 spawns `/bin/cp`, F8 spawns `/bin/rm`, and `on_tick()` reaps them

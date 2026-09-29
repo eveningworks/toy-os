@@ -12,15 +12,26 @@
 
 // --- layout and drawing ------------------------------------------------
 
-static int menubar_h(void) { return uui_menubar_height(&g_menu); }
 static int toolbar_h(void) { return uui_toolbar_height(&g_toolbar); }
 static int statusbar_h(void) { return uui_statusbar_height(&g_status); }
 
-// Each pane carries its OWN path above it -- an address bar (a
-// uui_textbox, see fm_internal.h). One shared status line cannot say
-// where two panes are, and "which directory does F5 copy into" is a
-// question the window has to answer without being asked.
-static int panehdr_h(void) { int h; uui_textbox_natural_size(&g_addr[0], 0, &h); return h; }
+// The top row: Back/Forward/Up beside the breadcrumb and the search box,
+// as tall as the tallest of them.
+static int navrow_h(void) {
+    int ph, nh = uui_toolbar_height(&g_nav);
+    uui_pathbar_ops.natural_size(&g_path, 0, &ph);
+    return (nh > ph + 8 ? nh : ph + 8);
+}
+
+// Each pane carries its OWN path above it in SPLIT view -- an address
+// bar (a uui_textbox, see fm_internal.h) -- since one breadcrumb cannot
+// say where two panes are. One pane needs none: the breadcrumb is it.
+static int panehdr_h(void) {
+    if (g_single) return 0;
+    int h;
+    uui_textbox_natural_size(&g_addr[0], 0, &h);
+    return h;
+}
 
 // The strip's colours. The ACTIVE pane's is the accent, which is the
 // same thing the outline says and deliberately so: "which pane" should
@@ -44,90 +55,117 @@ static void addr_style(int i) {
         uui_textbox_init(f, uui_fileview_dir(&g_pane[i]));
 }
 
-// What a pane or the tree must keep however hard the divider is
+// What a pane or the side column must keep however hard the divider is
 // dragged. Font-derived: eight columns is about the least in which a
 // filename is still a filename, not a pixel count that stops meaning
 // anything at another font size.
 static int min_col_w(void) { return ugfx_char_w() * 8; }
 
 void layout_all(int cw, int ch) {
-    int mb = menubar_h(), tb = toolbar_h(), sb = statusbar_h();
+    int nh = navrow_h(), tb = toolbar_h(), sb = statusbar_h();
 
-    uui_menubar_set_geometry(&g_menu, 0, 0, cw, mb);
-    uui_menubar_set_bounds(&g_menu, 0, 0, cw, ch);
-    // The context menu has no strip of its own; only its popup bounds
-    // matter, and they are the whole content area.
+    // The context menu and the drop-downs have no strip of their own;
+    // only their popup bounds matter, and they are the whole window.
     uui_menubar_set_geometry(&g_ctx, 0, 0, 0, 0);
     uui_menubar_set_bounds(&g_ctx, 0, 0, cw, ch);
     uui_dialog_set_bounds(&g_dialog, 0, 0, cw, ch);
-    uui_toolbar_ops.set_geometry(&g_toolbar, 0, mb, cw, tb);
-    // CANCEL SITS ON THE STATUS BAR, at its right end, and exists only
-    // while an operation runs -- see g_cancel_btn's own note.
+
+    // --- the top row: nav buttons, breadcrumb, search ------------------
+    int nw, nth;
+    uui_toolbar_natural_size(&g_nav, &nw, &nth);
+    uui_toolbar_ops.set_geometry(&g_nav, 0, (nh - nth) / 2, nw, nth);
+    g_nav.bg = g_nav.border = UTHEME_PANEL_BG;   // part of the row, not a strip of its own
+    int fh, sw = ugfx_char_advance('n') * 26;
+    uui_pathbar_ops.natural_size(&g_path, 0, &fh);
+    if (sw > cw / 3) sw = cw / 3;
+    uui_textbox_set_geometry(&g_search, cw - sw - 6, (nh - fh) / 2, sw, fh);
+    int px = nw + 4, pw = cw - sw - 12 - px;
+    uui_pathbar_ops.set_geometry(&g_path, px, (nh - fh) / 2, pw > 40 ? pw : 40, fh);
+    if (g_search_on) { g_search.border = UTHEME_ACCENT; } else { g_search.border = UTHEME_BORDER; }
+
+    // --- the command bar ------------------------------------------------
+    uui_toolbar_ops.set_geometry(&g_toolbar, 0, nh, cw, tb);
+
+    // --- the status bar, with the view switch and Cancel at its end ----
+    int vw, vh;
+    uui_toolbar_natural_size(&g_viewbar, &vw, &vh);
+    if (vh > sb) vh = sb;
+    // Clear of the window's resize grip, which owns the corner.
+    int grip = ugfx_char_h();
+    uui_toolbar_ops.set_geometry(&g_viewbar, cw - vw - grip, ch - sb + (sb - vh) / 2, vw, vh);
+    g_viewbar.bg = UUI_COLOR(g_status.bg, UTHEME_BAR_BG);   // on the bar, in its colour
+    int status_w = cw - vw - grip;
+    // CANCEL SITS ON THE STATUS BAR, left of the view switch, and exists
+    // only while an operation runs -- see g_cancel_btn's own note.
     int running = fm_job_running();
     widget_by_id(ID_CANCEL)->hidden = !running;
     if (running) {
         int bw, bh;
         uui_button_natural_size(&g_cancel_btn, &bw, &bh);
         if (bh > sb) bh = sb;
-        uui_button_set_geometry(&g_cancel_btn, cw - bw - 2, ch - sb + (sb - bh) / 2,
+        uui_button_set_geometry(&g_cancel_btn, status_w - bw - 2, ch - sb + (sb - bh) / 2,
                                  bw, bh);
-        // The status bar stops short of it, or the last pane's text
-        // draws straight under the button.
-        uui_statusbar_set_geometry(&g_status, 0, ch - sb, cw - bw - 4, sb);
-    } else {
-        uui_statusbar_set_geometry(&g_status, 0, ch - sb, cw, sb);
+        status_w -= bw + 4;
     }
+    // The bar runs the full width under the switch; its text stops short.
+    uui_statusbar_set_geometry(&g_status, 0, ch - sb, cw, sb);
+    (void)status_w;
 
-    int top = mb + tb;
-    int hdr = panehdr_h();
-    int panes_y = top + hdr;
-    int panes_h = ch - top - sb - hdr;
-    if (panes_h < 1) panes_h = 1;
-
-    // Both dividers span the body: from under the toolbar to above the
-    // key row, so each one separates the pane HEADERS as well as the
-    // listings and there is no stub of undivided strip at the top.
+    // --- the body: side column | panes | details pane -------------------
+    int top = nh + tb;
     int body_h = ch - top - sb;
     int split_w = uui_splitter_thickness();
     int minw = min_col_w();
 
-    // The tree column sits left of the panes and spans their headers
-    // too -- it has no path strip of its own.
-    int tx = 0;
-    if (g_tree_on) {
-        // Its divider must leave room for BOTH panes, not one: the
-        // shown-panes count is what the tree is competing with.
-        uui_splitter_set_track(&g_tree_split, 0, cw, minw,
-                                (g_single ? 1 : 2) * minw + split_w);
-        int tw = uui_splitter_before(&g_tree_split);
-        uui_tree_ops.set_geometry(&g_tree, 0, top, tw, body_h);
-        uui_splitter_set_geometry(&g_tree_split, uui_splitter_pos(&g_tree_split),
-                                   top, split_w, body_h);
-        tx = tw + split_w;
-    }
-    int pw = cw - tx;
+    int dw = g_dpane ? details_width(cw) : 0;
+    int right_edge = cw - dw;
+    widget_by_id(ID_DP_OPEN)->hidden = !g_dpane;
+    widget_by_id(ID_DP_PROPS)->hidden = !g_dpane;
+    if (g_dpane) details_layout(right_edge, top, dw, body_h);
+
+    // THE SIDE COLUMN is always there -- the places, with the folder tree
+    // under them when it is on -- and its divider is the old tree one.
+    uui_splitter_set_track(&g_tree_split, 0, right_edge, minw,
+                            (g_single ? 1 : 2) * minw + split_w);
+    int side_w = uui_splitter_before(&g_tree_split);
+    int places_h;
+    uui_places_ops.natural_size(&g_places, 0, &places_h);
+    if (!g_tree_on || places_h > body_h) places_h = body_h;
+    uui_places_ops.set_geometry(&g_places, 0, top, side_w, places_h);
+    if (g_tree_on)
+        uui_tree_ops.set_geometry(&g_tree, 0, top + places_h, side_w, body_h - places_h);
+    uui_splitter_set_geometry(&g_tree_split, uui_splitter_pos(&g_tree_split),
+                               top, split_w, body_h);
+    int tx = side_w + split_w;
+    int pw2 = right_edge - tx;
+
+    int hdr = panehdr_h();
+    int panes_y = top + hdr;
+    int panes_h = body_h - hdr;
+    if (panes_h < 1) panes_h = 1;
 
     if (g_single) {
         // Both panes get the full rect; only the active one is SHOWN.
         // The hidden one keeps sane geometry so nothing draws from junk
         // the frame it comes back.
-        uui_fileview_set_geometry(&g_pane[0], tx, panes_y, pw, panes_h);
-        uui_fileview_set_geometry(&g_pane[1], tx, panes_y, pw, panes_h);
+        uui_fileview_set_geometry(&g_pane[0], tx, panes_y, pw2, panes_h);
+        uui_fileview_set_geometry(&g_pane[1], tx, panes_y, pw2, panes_h);
     } else {
-        uui_splitter_set_track(&g_pane_split, tx, cw, minw, minw);
-        int px = uui_splitter_pos(&g_pane_split);
+        uui_splitter_set_track(&g_pane_split, tx, right_edge, minw, minw);
+        int sx = uui_splitter_pos(&g_pane_split);
         uui_fileview_set_geometry(&g_pane[0], tx, panes_y,
                                    uui_splitter_before(&g_pane_split), panes_h);
-        uui_splitter_set_geometry(&g_pane_split, px, top, split_w, body_h);
-        uui_fileview_set_geometry(&g_pane[1], px + split_w, panes_y,
-                                   cw - px - split_w, panes_h);
+        uui_splitter_set_geometry(&g_pane_split, sx, top, split_w, body_h);
+        uui_fileview_set_geometry(&g_pane[1], sx + split_w, panes_y,
+                                   right_edge - sx - split_w, panes_h);
     }
 
-    // The address bars sit in the strip above each pane, same width.
+    // The address bars sit in the strip above each pane, same width --
+    // split view only.
     for (int i = 0; i < 2; i++) {
-        int px, py, pw2, ph;
-        uui_fileview_ops.bounds(&g_pane[i], &px, &py, &pw2, &ph);
-        uui_textbox_set_geometry(&g_addr[i], px, py - hdr, pw2, hdr);
+        int bx, by, bw2, bh2;
+        uui_fileview_ops.bounds(&g_pane[i], &bx, &by, &bw2, &bh2);
+        uui_textbox_set_geometry(&g_addr[i], bx, by - hdr, bw2, hdr);
         addr_style(i);
     }
 
@@ -135,25 +173,25 @@ void layout_all(int cw, int ch) {
     // hidden item, so a hidden pane cannot be clicked either.
     widget_by_id(ID_LEFT)->hidden  = g_single && g_active != 0;
     widget_by_id(ID_RIGHT)->hidden = g_single && g_active != 1;
-    widget_by_id(ID_ADDR_L)->hidden = widget_by_id(ID_LEFT)->hidden;
-    widget_by_id(ID_ADDR_R)->hidden = widget_by_id(ID_RIGHT)->hidden;
+    widget_by_id(ID_ADDR_L)->hidden = g_single || widget_by_id(ID_LEFT)->hidden;
+    widget_by_id(ID_ADDR_R)->hidden = g_single || widget_by_id(ID_RIGHT)->hidden;
     widget_by_id(ID_TREE)->hidden = !g_tree_on;
-    widget_by_id(ID_TREE_SPLIT)->hidden = !g_tree_on;
     widget_by_id(ID_PANE_SPLIT)->hidden = g_single;
 
     // The ACTIVE pane's outline, drawn by the widget itself so it stays
-    // under a menu popup -- see uui_fileview.h's active_mark. With two
-    // identical panes and no other mark, "which one does F5 copy FROM"
-    // is unanswerable, and a wrong guess deletes the wrong file.
+    // under a menu popup -- see uui_fileview.h's active_mark. Split view
+    // only: one pane is the active one without being told.
     for (int i = 0; i < 2; i++) {
-        uui_fileview_set_active_mark(&g_pane[i], i == g_active, UTHEME_ACCENT);
+        uui_fileview_set_active_mark(&g_pane[i], !g_single && i == g_active, UTHEME_ACCENT);
         // The cursor row wears a focus ring in the active pane. Marks
         // and the cursor share one background now (ui/uui_fileview.h's
         // mark_bg), so the ring is what says which row the keys are on
         // -- and this app has no focus ring of its own to set it.
         g_pane[i].table.focused = (i == g_active);
+        // Rows with room to breathe, Explorer's details view: the icon
+        // plus a few pixels either side.
+        g_pane[i].table.row_h = ugfx_char_h() + 8;
     }
-
 }
 
 // docs/gui-guidelines.md: a GUI test asks the app where things are
@@ -204,13 +242,25 @@ void log_layout(void) {
     uapp_logf_layout("files: layout toolbar %d %d %d %d\n", x, y, w, h);
     for (int i = 0; uui_toolbar_item_rect(&g_toolbar, i, &x, &y, &w, &h); i++)
         uapp_logf_layout("files: layout tbitem %d %d %d %d %d\n", i, x, y, w, h);
+    for (int i = 0; uui_toolbar_item_rect(&g_nav, i, &x, &y, &w, &h); i++)
+        uapp_logf_layout("files: layout navitem %d %d %d %d %d\n", i, x, y, w, h);
+    for (int i = 0; uui_toolbar_item_rect(&g_viewbar, i, &x, &y, &w, &h); i++)
+        uapp_logf_layout("files: layout vbitem %d %d %d %d %d\n", i, x, y, w, h);
     // The popup's rect is the menu's own `menu.popup 0` line now.
     // Depth and the top popup's hot row: the one logged fact that CHANGES
     // as the pointer crosses an open menu. Without it a hover test's
     // frames are identical, the dedup drops them, and "nothing arrived"
     // reads as a wedge.
-    uapp_logf_layout("files: layout menuhot %d %d\n", g_menu.depth,
-          g_menu.depth > 0 ? g_menu.level[0].hot : -1);
+    uapp_logf_layout("files: layout menuhot %d %d\n", g_ctx.depth,
+          g_ctx.depth > 0 ? g_ctx.level[0].hot : -1);
+    // The details pane, and the facts it shows: its own report, since
+    // nothing else on screen says which file it is describing.
+    uapp_logf_layout("files: layout dpane %d %s\n", g_dpane,
+                      uui_fileview_selected_name(active()) ? uui_fileview_selected_name(active()) : "-");
+    uapp_logf_layout("files: layout status %s | %s\n", g_stat_dir, g_stat_items);
+    // Whether the search box has the keyboard: a test types only once it
+    // does, since a key can overtake the click that gave it focus.
+    uapp_logf_layout("files: layout searching %d\n", g_search_on);
     uapp_logf_layout("files: layout split %d %d\n",
           uui_splitter_frac(&g_tree_split), uui_splitter_frac(&g_pane_split));
     for (int i = 0; i < 2; i++) {
@@ -311,6 +361,7 @@ void on_draw(struct uapp *a, struct uapp_draw *d) {
     layout_all(d->surface->w, d->surface->h);
     ugfx_fill_rect(d->surface, 0, 0, d->surface->w, d->surface->h, UTHEME_PANEL_BG);
     uui_statusbar_draw(d->surface, &g_status);
+    if (g_dpane) details_draw(d->surface);
     if (!widget_by_id(ID_CANCEL)->hidden) uui_button_draw_one(d->surface, &g_cancel_btn);
     log_layout();
     // AFTER the app's own report: tools/filemanager_test.py takes `pane 0`

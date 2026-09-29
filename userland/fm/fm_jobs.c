@@ -502,6 +502,32 @@ void commit_mkdir(const char *name) {
     refresh_status();
 }
 
+// An empty file, named by the prompt. Refused, not overwritten, when
+// the name is taken: "New" never destroys anything.
+void commit_newfile(const char *name) {
+    char path[PATH_MAX_LEN];
+    if (!name[0]) return;
+    if (!k_path_join(uui_fileview_dir(active()), name, path, sizeof path)) {
+        set_note("path too long");
+        return;
+    }
+    struct sys_stat st;
+    if (sys_stat(path, &st) == 0) {
+        snprintf(g_stat_note, sizeof g_stat_note, "%s already exists", name);
+        return;
+    }
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        snprintf(g_stat_note, sizeof g_stat_note, "could not create %s", name);
+        return;
+    }
+    fclose(f);
+    set_note("created");
+    reload_pane(active());
+    uui_fileview_select_name(active(), name);
+    refresh_status();
+}
+
 void commit_rename(const char *name) {
     char from[PATH_MAX_LEN], to[PATH_MAX_LEN];
     ulogf("files: rename to %s in %s\n", name, uui_fileview_dir(active()));

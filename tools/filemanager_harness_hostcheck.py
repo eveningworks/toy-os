@@ -82,29 +82,30 @@ def reset():
 # --- 1. a missing item: a failed check, no click, no traceback ---------
 print("  (the one FAIL line below is the harness under test recording the missing item -- expected)")
 reset()
-dbg = FakeDbg([FRAME_HEAD + tbitems(13) + FRAME_TAIL])
+# The command bar's items 0..10: "dpane" (item 11) is the one missing.
+dbg = FakeDbg([FRAME_HEAD + tbitems(11) + FRAME_TAIL])
 qmp = FakeQmp()
 res = fm.Result()
 lay = fm.layout_now(dbg, WIN, tries=2)
-check("the fixture frame parses", lay is not None and 12 in lay.tbitems and 13 not in lay.tbitems)
+check("the fixture frame parses", lay is not None and 10 in lay.tbitems and 11 not in lay.tbitems)
 t0 = time.time()
-got = fm.toolbar_click(dbg, qmp, WIN, lay, 13, res, "folder tree on")
+got = fm.toolbar_click(dbg, qmp, WIN, lay, "dpane", res, "details pane")
 check("a missing toolbar item returns None instead of raising", got is None)
 check("...and records exactly one FAILED check", len(res.fails) == 1 and not res.passes,
       f"fails={res.fails} passes={res.passes}")
 check("...and clicks nothing", qmp.clicks == [] and qmp.warps == [], f"clicks={qmp.clicks}")
 check("...within its own bounded wait", time.time() - t0 < 12, f"{time.time() - t0:.1f}s")
-ev = fm._toolbar_evidence(13, fm.last_layout())
-check("the evidence names the id asked for and the ids reported",
-      "requested tbitem 13" in ev and "reported [0, 1," in ev and "12]" in ev, ev)
+ev = fm._toolbar_evidence("dpane", fm.last_layout())
+check("the evidence names the button asked for and the items reported",
+      "requested button dpane" in ev and "'tb': [0, 1," in ev and "10]" in ev, ev)
 check("...and the view state", "view=[1, 1, 0, 0, 0]" in ev, ev)
 
 # --- 2. a present item clicks at its reported centre --------------------
 qmp = FakeQmp()
 res = fm.Result()
-got = fm.toolbar_click(dbg, qmp, WIN, lay, 12, res, "second pane off")
+got = fm.toolbar_click(dbg, qmp, WIN, lay, "more", res, "see more")   # item 10
 check("a reported item is clicked once, at its centre",
-      got is lay and qmp.clicks == ["left"] and qmp.warps == [(100 + 12 * 24 + 11, 50 + 4 + 11)],
+      got is lay and qmp.clicks == ["left"] and qmp.warps == [(100 + 10 * 24 + 11, 50 + 4 + 11)],
       f"clicks={qmp.clicks} warps={qmp.warps}")
 check("...with no check recorded", not res.fails and not res.passes)
 

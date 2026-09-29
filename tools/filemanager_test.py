@@ -76,21 +76,25 @@ K_TAB, K_ENTER, K_ESC, K_BACKSPACE = "0x09", "0x0a", "0x1b", "0x08"
 K_DOWN, K_UP = "0x92", "0x91"
 K_LEFT, K_RIGHT = "0x95", "0x96"   # KEY_ARROW_LEFT/RIGHT (api/keyboard.h)
 
-# THE TOOLBAR IS ADDRESSED BY INDEX, AND THE INDEX IS ITS ORDER. Adding
-# a button to `toolbar_items[]` in userland/gui/apps/files.c shifts every
-# item after it and separators count -- which is exactly what happened
-# when Back and Forward were added at the front on 2026-09-19: Details
-# moved from 9 to 11, the test clicked the wrong button, and SIXTEEN
-# later checks failed on state the wrong click left behind.
-#
-# Kept here as named constants rather than spelled at each call site so
-# the next such change is one edit, and so a mismatch reads as "the
-# toolbar grew" instead of as the File Manager being broken.
-TB_COUNT = 16          # every item INCLUDING separators
-TB_BACK, TB_FORWARD, TB_UP, TB_REFRESH = 0, 1, 2, 3
-TB_MKDIR, TB_DELETE = 7, 9
-TB_DETAILS = 11
-TB_PANES, TB_TREE = 14, 15
+# BUTTONS ARE ADDRESSED BY NAME, and the name maps to (strip, index) in
+# ONE place. The window has three strips -- Back/Forward/Up/Refresh
+# beside the breadcrumb ("nav"), the command bar ("tb") and the view
+# switch on the status bar ("vb") -- and an index is its order in the
+# strip's array in userland/gui/apps/files.c, separators counted. A
+# button added there is one edit here; the day indices were spelled at
+# each call site, one insertion failed sixteen checks on state the wrong
+# click left behind.
+BTN = {
+    "back": ("nav", 0), "forward": ("nav", 1), "up": ("nav", 2), "refresh": ("nav", 3),
+    "new": ("tb", 0), "cut": ("tb", 2), "copy": ("tb", 3), "paste": ("tb", 4),
+    "rename": ("tb", 5), "delete": ("tb", 6), "sort": ("tb", 8), "view": ("tb", 9),
+    "more": ("tb", 10), "dpane": ("tb", 11),
+    "details": ("vb", 0), "icons": ("vb", 1),
+}
+STRIP_COUNT = {"nav": 4, "tb": 12, "vb": 2}
+# The View drop-down's rows, separators counted (files.c's view_items).
+VIEW_ROW = {"large": 0, "icons": 1, "details": 2, "dpane": 4, "panes": 5, "tree": 6}
+NEW_ROW = {"folder": 0, "file": 1}
 K_INSERT = "0xb3"
 K_HOME = "0x97"
 K_F2, K_F5, K_F6, K_F7, K_F8 = "0x9a", "0xac", "0xad", "0xae", "0xaf"
@@ -141,7 +145,19 @@ class Layout:
         self.menuhot = None   # (open depth, level-0 hot row)
         self.cellgrid = {}    # pane -> [x0, y0, cell_w, cell_h, cols]
         self.toolbar = None   # the strip [x, y, w, h]
-        self.tbitems = {}     # item index -> [x, y, w, h]
+        self.tbitems = {}     # command-bar item index -> [x, y, w, h]
+        self.navitems = {}    # Back/Forward/Up/Refresh
+        self.vbitems = {}     # the status bar's view switch
+        self.popitems = {}    # the open drop-down's (or context menu's) rows
+        self.dpane = None     # is the details pane shown
+        self.pathedit = None  # is the breadcrumb being typed in
+        self.pathseg = {}     # breadcrumb segment (0 = the root) -> [x, y, w, h]
+        self.placerows = {}   # Places row -> [x, y, w, h]; places, then devices
+        self.placesel = None  # the Places row that IS the active pane's directory
+        self.searchbox = None # [x, y, w, h]
+        self.dpsel = None     # the name the details pane describes, "-" for the folder
+        self.status = None    # (items text, selection text)
+        self.searching = None # does the search box have the keyboard
         self.treesel = None   # (selected node's path, visible tree rows)
         self.treerow = {}     # visible tree row -> the node's path
         self.drag = None      # (in flight, count, copy) -- a drag session
@@ -233,6 +249,32 @@ class Layout:
             self.toolbar = [int(v) for v in p[1:5]]
         elif p[0] == "tbitem" and len(p) >= 6:
             self.tbitems[int(p[1])] = [int(v) for v in p[2:6]]
+        elif p[0] == "navitem" and len(p) >= 6:
+            self.navitems[int(p[1])] = [int(v) for v in p[2:6]]
+        elif p[0] == "vbitem" and len(p) >= 6:
+            self.vbitems[int(p[1])] = [int(v) for v in p[2:6]]
+        elif p[0] == "ctxmenu.item" and len(p) >= 7 and p[1] == "0":
+            self.popitems[int(p[2])] = [int(v) for v in p[3:7]]
+        elif p[0] == "ctxmenu.popup" and len(p) >= 6 and p[1] == "0":
+            self.menu = [int(v) for v in p[2:6]]
+        elif p[0] == "dpane" and len(p) >= 3:
+            self.dpane, self.dpsel = int(p[1]), p[2]
+        elif p[0] == "path.seg" and len(p) >= 6:
+            self.pathseg[int(p[1])] = [int(v) for v in p[2:6]]
+        elif p[0] == "places.row" and len(p) >= 6:
+            self.placerows[int(p[1])] = [int(v) for v in p[2:6]]
+        elif p[0] == "places.selected" and len(p) >= 2:
+            self.placesel = int(p[1])
+        elif p[0] == "search" and len(p) >= 5:
+            self.searchbox = [int(v) for v in p[1:5]]
+        elif p[0] == "searching" and len(p) >= 2:
+            self.searching = int(p[1])
+        elif p[0] == "status":
+            text = " ".join(p[1:])
+            items, _, sel = text.partition("|")
+            self.status = (items.strip(), sel.strip())
+        elif p[0] == "path.editing" and len(p) >= 2:
+            self.pathedit = int(p[1])
         elif p[0] == "treesel" and len(p) >= 3:
             self.treesel = (p[1], int(p[2]))
         elif p[0] == "treerow" and len(p) >= 3:
@@ -492,43 +534,81 @@ def wait_layout(dbg, win, pred, timeout=12.0, grace=1.0):
     return None
 
 
-def _toolbar_evidence(i, seen):
-    """What a failed toolbar lookup should say: the id asked for, the ids
-    the app reported, the view state, and the last report lines -- which
-    tells missing GEOMETRY from a transition that did not happen."""
-    have = sorted(seen.tbitems) if seen else None
+def btn_rect(lay, name):
+    """Button `name`'s rect as the app reported it, or None."""
+    strip, i = BTN[name]
+    items = {"nav": lay.navitems, "tb": lay.tbitems, "vb": lay.vbitems}[strip]
+    return items.get(i)
+
+
+def strips_complete(lay):
+    """Every strip reported every item -- a layout mid-transition can
+    carry fewer."""
+    return (len(lay.navitems) == STRIP_COUNT["nav"] and len(lay.tbitems) == STRIP_COUNT["tb"]
+            and len(lay.vbitems) == STRIP_COUNT["vb"])
+
+
+def _toolbar_evidence(name, seen):
+    """What a failed button lookup should say: the button asked for, what
+    each strip reported, the view state, and the last report lines --
+    which tells missing GEOMETRY from a transition that did not happen."""
+    have = ({"nav": sorted(seen.navitems), "tb": sorted(seen.tbitems),
+             "vb": sorted(seen.vbitems)} if seen else None)
     state = (f"view={seen.view} treebox={seen.treebox} ctx={seen.ctx} "
              f"panes={sorted(seen.pane)}") if seen else "no layout observed"
     recent = [l.strip() for l in _ALL_BUF[-8:] if "layout" in l]
-    return (f"requested tbitem {i}; reported {have}; {state}; "
+    return (f"requested button {name} {BTN.get(name)}; reported {have}; {state}; "
             f"recent: {' | '.join(recent) or '(none)'}")
 
 
-def toolbar_layout(dbg, win, lay, i, res, what):
-    """A layout reporting toolbar item `i` with a usable rect, or None
-    with a FAILED check recorded and NO click made. `lay` is reused when
-    it already has the item; otherwise the report is waited for and the
+def toolbar_layout(dbg, win, lay, name, res, what):
+    """A layout reporting button `name` with a usable rect, or None with a
+    FAILED check recorded and NO click made. `lay` is reused when it
+    already has the button; otherwise the report is waited for and the
     condition rechecked on what arrives."""
     def usable(l):
-        r = l.tbitems.get(i)
+        r = btn_rect(l, name)
         return bool(r) and r[2] > 0 and r[3] > 0
     got = lay if (lay is not None and usable(lay)) else wait_layout(dbg, win, usable, timeout=6.0)
     if got is None:
-        res.check(f"{what}: toolbar item {i} is reported with a usable rect", False,
-                  _toolbar_evidence(i, last_layout() or lay))
+        res.check(f"{what}: button {name} is reported with a usable rect", False,
+                  _toolbar_evidence(name, last_layout() or lay))
         return None
     return got
 
 
-def toolbar_click(dbg, qmp, win, lay, i, res, what):
-    """Click toolbar item `i` at the centre the app reported. Returns the
+def toolbar_click(dbg, qmp, win, lay, name, res, what):
+    """Click button `name` at the centre the app reported. Returns the
     layout the click was aimed from, or None (check recorded, no click)."""
-    got = toolbar_layout(dbg, win, lay, i, res, what)
+    got = toolbar_layout(dbg, win, lay, name, res, what)
     if got is None:
         return None
-    x, y, w, h = got.tbitems[i]
+    x, y, w, h = btn_rect(got, name)
     sure_click(dbg, qmp, got.ox + x + w // 2, got.oy + y + h // 2)
     return got
+
+
+def dropdown_pick(dbg, qmp, win, lay, button, row, res, what):
+    """Open a command-bar drop-down and click row `row` of it, at the rect
+    the menu itself reports. Returns the layout the row was aimed from,
+    or None (a check recorded)."""
+    got = toolbar_click(dbg, qmp, win, lay, button, res, what)
+    if got is None:
+        return None
+    pop = wait_layout(dbg, win, lambda l: l.ctx == 1 and row in l.popitems, timeout=6.0)
+    if pop is None:
+        res.check(f"{what}: the {button} drop-down opened with row {row}", False,
+                  _toolbar_evidence(button, last_layout() or got))
+        dbg.key(K_ESC)
+        return None
+    x, y, w, h = pop.popitems[row]
+    sure_click(dbg, qmp, pop.ox + x + w // 2, pop.oy + y + h // 2)
+    return pop
+
+
+def view_pick(dbg, qmp, win, lay, name, res, what=None):
+    return dropdown_pick(dbg, qmp, win, lay, "view", VIEW_ROW[name], res,
+                         what or f"View > {name}")
 
 
 def wait_listing(dbg, path, pred, timeout=25.0):
@@ -553,19 +633,6 @@ def size_of(dbg, directory, name):
         if len(parts) >= 5 and parts[0] == "-" and parts[-1] == name:
             return int(parts[1])
     return -1
-
-
-def menu_pick(dbg, *steps):
-    """Drive the app's menu bar by keyboard: F10 opens the first menu
-    with its first item hot, then each step. Ends with K_ENTER in the
-    caller's list. Keyboard, not pixels: the menu's geometry is the
-    toolkit's business."""
-    dbg.key(K_F10)
-    time.sleep(0.15)
-    for k in steps:
-        dbg.key(k)
-        time.sleep(0.12)
-    time.sleep(0.3)
 
 
 def sure_click(dbg, qmp, x, y):
@@ -702,17 +769,17 @@ def run(dbg, qmp, tmp, res):
     # desktop file manager does. Everything below aims at rows by
     # height, so both panes are put in Details (1) from the toolbar --
     # which is a check of the toolbar's Details button too.
-    lay = wait_layout(dbg, win, lambda l: l.view is not None and len(l.tbitems) == TB_COUNT) or lay
+    lay = wait_layout(dbg, win, lambda l: l.view is not None and strips_complete(l)) or lay
     res.check("both panes open in icons view by default",
               lay.view is not None and lay.view[0] == 2 and lay.view[1] == 2,
               f"view={lay.view}")
     for i in (1, 0):
         dbg.click(*lay.pane_centre(i))
         lay = wait_layout(dbg, win, lambda l, i=i: l.active == i) or lay
-        # Details is item 9 (8 is a separator)
-        lay = toolbar_click(dbg, qmp, win, lay, TB_DETAILS, res, "Details") or lay
+        # The status bar's view switch, as in Explorer.
+        lay = toolbar_click(dbg, qmp, win, lay, "details", res, "Details") or lay
         lay = wait_layout(dbg, win, lambda l, i=i: l.view and l.view[i] == 1) or lay
-    res.check("the toolbar's Details button switches each pane in turn",
+    res.check("the status bar's Details switch changes each pane in turn",
               lay.view is not None and lay.view[0] == 1 and lay.view[1] == 1,
               f"view={lay.view}")
 
@@ -982,7 +1049,9 @@ def run(dbg, qmp, tmp, res):
     # tops the stack and takes the focus back.
     ox, oy = win["content"]["x"], win["content"]["y"]
     for w2 in sorted(dbg.windows(), key=lambda w2: -w2["z"]):
-        if w2["title"] != TITLE:
+        # Not a POPUP: a tooltip is the File Manager's own, and closing it
+        # from outside is not what a person can do.
+        if w2["title"] != TITLE and not w2.get("popup"):
             dbg.send(f"gui close {w2['z']}")
             time.sleep(0.3)
     # **AND WAIT FOR THE FOCUS, not just for the windows to go.** The
@@ -994,13 +1063,13 @@ def run(dbg, qmp, tmp, res):
     deadline = time.time() + 8.0
     while time.time() < deadline:
         ws = dbg.windows()
-        if ws and all(w2["title"] == TITLE for w2 in ws) \
+        if ws and all(w2["title"] == TITLE or w2.get("popup") for w2 in ws) \
                 and any(w2.get("focused") for w2 in ws):
             break
         time.sleep(0.3)
 
     # View -> Icons switches the ACTIVE pane only.
-    menu_pick(dbg, K_RIGHT, K_DOWN, K_ENTER)
+    view_pick(dbg, qmp, win, last_layout() or lay, "icons", res)
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[0] == 2)
     res.check("View->Icons puts the active pane in icons mode, the other stays",
               lay is not None and lay.view and lay.view[0] == 2 and lay.view[1] == 1,
@@ -1019,8 +1088,10 @@ def run(dbg, qmp, tmp, res):
     folder = (240, 190, 70)
     left_ink = ink_count(png, (ox + px, oy + py, pw, ph), folder)
     right_ink = ink_count(png, (ox + qx, oy + qy, qw, qh), folder)
-    res.check("folder-icon ink is in the icons pane and not in the details pane",
-              left_ink > 20 and right_ink == 0,
+    # The details view has folder icons too now, at text height: the grid's
+    # are twice that, so the icons pane carries several times the ink.
+    res.check("folder-icon ink: the icons pane's big glyphs outweigh the details rows'",
+              left_ink > 20 and left_ink > 2 * right_ink,
               f"left={left_ink} right={right_ink}")
 
     # The grid takes the keyboard: type-ahead, Enter, Backspace.
@@ -1051,26 +1122,30 @@ def run(dbg, qmp, tmp, res):
               lay is not None and lay.marked[0] == 0, f"marked={lay and lay.marked}")
 
     # One pane: the active pane fills the width; toggling back restores.
-    cw = win["content"]["w"]
-    menu_pick(dbg, K_RIGHT, K_DOWN, K_DOWN, K_ENTER)
+    # Measured against the two-pane width, not the window's: the places
+    # column and the details pane take their share either way.
+    w_two = (last_layout() or lay).pane[0][2]
+    view_pick(dbg, qmp, win, last_layout() or lay, "panes", res)
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[2] == 1)
-    res.check("View->Second pane collapses to one pane, full width",
+    res.check("View->Second pane collapses to one pane, taking both panes' width",
               lay is not None and lay.view and lay.view[2] == 1 and
-              lay.pane[0][2] > cw * 3 // 4,
-              f"view={lay and lay.view} pane0={lay and lay.pane.get(0)}")
-    menu_pick(dbg, K_RIGHT, K_DOWN, K_DOWN, K_ENTER)
+              lay.pane[0][2] > w_two * 3 // 2,
+              f"view={lay and lay.view} pane0 {w_two} -> {lay and lay.pane.get(0)}")
+    view_pick(dbg, qmp, win, last_layout() or lay, "panes", res)
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[2] == 0)
     res.check("toggling again restores the second pane",
               lay is not None and lay.view and lay.view[2] == 0 and
-              lay.pane[0][2] < cw * 3 // 4, f"view={lay and lay.view}")
+              lay.pane[0][2] < w_two * 5 // 4, f"view={lay and lay.view} pane0={lay and lay.pane.get(0)}")
 
-    # The folder tree: a lazy uui_tree over the open set.
-    menu_pick(dbg, K_RIGHT, K_DOWN, K_DOWN, K_DOWN, K_ENTER)
+    # The folder tree: a lazy uui_tree over the open set, under the
+    # places in the side column.
+    view_pick(dbg, qmp, win, last_layout() or lay, "tree", res)
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 1 and l.treebox)
-    res.check("View->Folder tree adds the tree column and the panes move right",
+    res.check("View->Folder tree shows the tree under the places, left of the panes",
               lay is not None and lay.view and lay.view[3] == 1 and
-              lay.view[4] > 1 and lay.pane[0][0] > 0 and lay.treebox is not None,
-              f"view={lay and lay.view} pane0={lay and lay.pane.get(0)}")
+              lay.view[4] > 1 and lay.treebox is not None and lay.treebox[1] > 0 and
+              lay.treebox[0] + lay.treebox[2] <= lay.pane[0][0],
+              f"view={lay and lay.view} tree={lay and lay.treebox} pane0={lay and lay.pane.get(0)}")
     if lay and lay.treebox:
         tx, ty, tw, th, trh, tsel = lay.treebox
         res.check("the tree pre-selects the active pane's directory",
@@ -1207,36 +1282,47 @@ def run(dbg, qmp, tmp, res):
               "left_view=icons" in conf and "tree=1" in conf and "panes=2" in conf,
               f"conf: {conf!r}")
 
-    # --- 12. the View menu ticks its active options ---------------------
-    # State right now: left pane icons, two panes, tree on -- three of
-    # the four View items are checked. The FILE menu is the control (no
-    # checkable item in it), and toggling the tree off must take exactly
-    # its tick away.
+    # --- 12. the View drop-down ticks its active options -----------------
+    # State right now: left pane icons, two panes, tree on, the details
+    # pane on -- four of the View rows are checked. The "See more"
+    # drop-down is the control (nothing checkable in it), and toggling
+    # the tree off must take exactly its tick away.
     # Park the cursor far from where the popups drop: its sprite's dark
     # outline reads as tick ink if it is left over the gutter (it was,
     # from the expander click -- 18 phantom pixels).
     qx2, qy2, qw2, qh2 = lay.pane[1] if 1 in lay.pane else lay.pane[0]
-    dbg.warp_cursor(qmp, ox + qx2 + qw2 - 20, oy + qy2 + qh2 - 20)
+    park = (ox + qx2 + qw2 - 20, oy + qy2 + qh2 - 20)
 
-    dbg.key(K_F10)  # File menu opens
-    lay = wait_layout(dbg, win, lambda l: l.menu is not None)
+    def open_dropdown(name):
+        # ONE RETRY: a press landing while the previous popup is still
+        # being torn down is taken by that popup's dismissal.
+        for _ in range(2):
+            toolbar_click(dbg, qmp, win, last_layout() or lay, name, res, name)
+            dbg.warp_cursor(qmp, *park)
+            got = wait_layout(dbg, win, lambda l: l.ctx == 1 and l.menu is not None,
+                              timeout=5.0)
+            if got:
+                return got
+        return None
+
+    lay = open_dropdown("more") or lay
     n_file = -1
-    if lay and lay.menu:
-        png = os.path.join(tmp, "fm_menu_file.png")
+    if lay and lay.menu and lay.ctx == 1:
+        png = os.path.join(tmp, "fm_menu_more.png")
         qmp.stable_pixels(png)
         n_file = gutter_ink(png, lay.menu, ox, oy)
-    res.check("control: the File menu's tick gutter is empty",
+    res.check("control: the See-more drop-down's tick gutter is empty",
               n_file == 0, f"gutter ink={n_file}")
+    dbg.key(K_ESC)
+    lay = wait_layout(dbg, win, lambda l: l.ctx == 0) or lay
 
-    dbg.key(K_RIGHT)  # View menu
-    time.sleep(0.4)
-    lay = wait_layout(dbg, win, lambda l: l.menu is not None)
+    lay = open_dropdown("view") or lay
     n_on = -1
-    if lay and lay.menu:
+    if lay and lay.menu and lay.ctx == 1:
         png = os.path.join(tmp, "fm_menu_view_on.png")
         qmp.stable_pixels(png)
         n_on = gutter_ink(png, lay.menu, ox, oy)
-    res.check("the View menu draws ticks on its active options",
+    res.check("the View drop-down draws ticks on its active options",
               n_on > 0, f"gutter ink={n_on}")
 
     # An open popup owns the POINTER, not just the click: hovering a
@@ -1246,8 +1332,7 @@ def run(dbg, qmp, tmp, res):
     # drawn from on_draw_over, which runs after the overlay pass, so
     # two accent lines crossed the menu. Both found by the maintainer
     # in one screenshot.
-    menu_rect = lay.menu if lay else None
-    tree_rect = lay.treebox if lay else None
+    menu_rect = lay.menu if lay and lay.ctx == 1 else None
     if menu_rect:
         mx, my, mw, mh = menu_rect
         # Warping over a row moves the menu's hot row, which is logged
@@ -1271,77 +1356,68 @@ def run(dbg, qmp, tmp, res):
                   inside == 0 and outside > 0,
                   f"accent inside popup={inside}, in window={outside}")
 
-    # A menu click must NOT fall through to the folder tree under the
-    # popup (the hand-routed-menubar bug, found by the maintainer: a
-    # click on a View item also selected the tree row beneath it). The
-    # View popup overlaps the tree column, so click its first row --
-    # "Details", a harmless commit -- and require the tree's selection
-    # and the pane's directory to stay put while the commit LANDS.
-    if menu_rect and tree_rect:
-        lay2 = wait_layout(dbg, win, lambda l: True) or lay
-        dir_before = lay2.dir.get(0) if lay2 else None
-        sel_before = tree_rect[5]
-        mx, my = menu_rect[0], menu_rect[1]
-        sure_click(dbg, qmp, ox + mx + 20, oy + my + 10)
+    # A menu click must NOT fall through to what is under the popup (the
+    # hand-routed-menubar bug, found by the maintainer: a click on a View
+    # item also selected the tree row beneath it). Click the "Details"
+    # row -- a harmless commit -- and require the pane's directory and
+    # the tree's selection to stay put while the commit LANDS.
+    if menu_rect and lay and 2 in lay.popitems:
+        dir_before = lay.dir.get(0)
+        sel_before = lay.treebox[5] if lay.treebox else None
+        x, y, w, h = lay.popitems[VIEW_ROW["details"]]
+        sure_click(dbg, qmp, ox + x + w // 2, oy + y + h // 2)
         lay = wait_layout(dbg, win, lambda l: l.view and l.view[0] == 1)
-        res.check("a click on a menu item commits it and does NOT reach the tree",
+        res.check("a click on a menu item commits it and reaches nothing under it",
                   lay is not None and lay.view and lay.view[0] == 1 and
                   lay.dir.get(0) == dir_before and
                   (lay.treebox is None or lay.treebox[5] == sel_before),
                   f"view={lay and lay.view} dir={lay and lay.dir.get(0)} "
                   f"tree sel {sel_before} -> {lay and lay.treebox and lay.treebox[5]}")
     else:
-        res.check("a click on a menu item commits it and does NOT reach the tree",
-                  False, "no menu/tree geometry to aim with")
-        dbg.key(K_ESC)
+        res.check("a click on a menu item commits it and reaches nothing under it",
+                  False, "no menu geometry to aim with")
         dbg.key(K_ESC)
 
     # The commit above CLOSED the menu, so the toggle is a full pick.
-    menu_pick(dbg, K_RIGHT, K_DOWN, K_DOWN, K_DOWN, K_ENTER)  # tree off
+    view_pick(dbg, qmp, win, last_layout() or lay, "tree", res)
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0)
     res.check("(the tree toggle landed)", lay is not None and lay.view and
               lay.view[3] == 0, f"view={lay and lay.view}")
-    dbg.warp_cursor(qmp, ox + qx2 + qw2 - 20, oy + qy2 + qh2 - 20)
-    dbg.key(K_F10)
-    time.sleep(0.2)
-    dbg.key(K_RIGHT)
-    time.sleep(0.4)
-    lay = wait_layout(dbg, win, lambda l: l.menu is not None)
+    lay = open_dropdown("view") or lay
     n_off = -1
-    if lay and lay.menu:
+    if lay and lay.menu and lay.ctx == 1:
         png = os.path.join(tmp, "fm_menu_view_off.png")
         qmp.stable_pixels(png)
         n_off = gutter_ink(png, lay.menu, ox, oy)
     res.check("turning the folder tree off takes its tick away, keeping the others",
               0 < n_off < n_on, f"gutter ink {n_on} -> {n_off}")
     dbg.key(K_ESC)
-    dbg.key(K_ESC)
+    lay = wait_layout(dbg, win, lambda l: l.ctx == 0) or lay
 
-
-    # --- 13. the toolbar ------------------------------------------------
-    # Same commands, same item_flags as the menus: Up/Refresh, then the
-    # four View toggles drawn LATCHED when their thing is on.
-    # Fourteen: Up, Refresh, sep, the five VERBS that used to be a
-    # button row across the bottom, sep, Details, Icons, sep, Second
-    # pane, Folder tree. Separators are indexed too.
-    res.check("the toolbar reports its strip and all fourteen items",
-              lay is not None and lay.toolbar is not None and len(lay.tbitems) == TB_COUNT,
-              f"toolbar={lay and lay.toolbar} items={lay and sorted(lay.tbitems)}")
-    if not (lay and lay.toolbar and len(lay.tbitems) == TB_COUNT):
+    # --- 13. the buttons -------------------------------------------------
+    # Same commands, same item_flags as the menus. Three strips: the
+    # navigation buttons beside the breadcrumb, the command bar, and the
+    # view switch on the status bar.
+    lay = wait_layout(dbg, win, strips_complete) or lay
+    res.check("every strip reports all its buttons",
+              lay is not None and lay.toolbar is not None and strips_complete(lay),
+              f"toolbar={lay and lay.toolbar} nav={lay and sorted(lay.navitems)} "
+              f"tb={lay and sorted(lay.tbitems)} vb={lay and sorted(lay.vbitems)}")
+    if not (lay and lay.toolbar and strips_complete(lay)):
         dbg.send(f"sh rm {FILES_CONF}")
         teardown_fixture(dbg)
         return
 
-    def tb_click(i, what):
-        """Click toolbar item `i`, adopting the layout it was aimed
-        from. A layout arriving mid-transition can report fewer items
-        than the strip has, and SUBSCRIPTING one that does not carry
-        `i` raised KeyError here -- which loses every check after it,
-        the worst shape a harness can fail in. toolbar_click() waits
-        for a layout that reports the item and records a failed check
-        when none arrives."""
+    def tb_click(name, what):
+        """Click button `name`, adopting the layout it was aimed from. A
+        layout arriving mid-transition can report fewer items than the
+        strip has, and SUBSCRIPTING one that does not carry the button
+        raised KeyError here -- which loses every check after it, the
+        worst shape a harness can fail in. toolbar_click() waits for a
+        layout that reports it and records a failed check when none
+        arrives."""
         nonlocal lay
-        got = toolbar_click(dbg, qmp, win, lay, i, res, what)
+        got = toolbar_click(dbg, qmp, win, lay, name, res, what)
         if got is None:
             return False
         lay = got
@@ -1351,52 +1427,55 @@ def run(dbg, qmp, tmp, res):
     # lands on nothing.
     dir_now = lay.dir.get(0)
     parent = "/" if dir_now.count("/") <= 1 else dir_now.rsplit("/", 1)[0]
-    tb_click(TB_UP, "up")
+    tb_click("up", "up")
     lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == parent)
     res.check("the Up button climbs to the parent directory",
               lay is not None and lay.dir.get(0) == parent,
               f"dir {dir_now} -> {lay and lay.dir.get(0)} (wanted {parent})")
     while lay and lay.dir.get(0) not in (None, "/"):
-        tb_click(TB_UP, "up")
+        tb_click("up", "up")
         nxt = wait_layout(dbg, win, lambda l: l.dir.get(0) != lay.dir.get(0), timeout=5)
         if nxt is None or nxt.dir.get(0) == lay.dir.get(0):
             break
         lay = nxt
-    tb_click(TB_UP, "up at the root")  # disabled, must do nothing
+    tb_click("up", "up at the root")  # disabled, must do nothing
     time.sleep(0.8)
     lay = wait_layout(dbg, win, lambda l: True) or lay
     res.check("at the root the Up button is disabled and does nothing",
               lay is not None and lay.dir.get(0) == "/", f"dir={lay and lay.dir.get(0)}")
 
-    # The Folder-tree button toggles the same state the menu ticks, and
-    # LATCHES: its background moves to the pressed wash while a sibling
-    # stays put (half the assertion is the neighbour, CLAUDE.md).
-    tb_click(TB_TREE, "folder tree")
-    lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 1)
-    res.check("the Folder-tree button toggles the tree on",
-              lay is not None and lay.view and lay.view[3] == 1, f"view={lay and lay.view}")
-
+    # The Details button LATCHES while the details pane is up: its
+    # background is the pressed wash and a resting sibling's is not
+    # (half the assertion is the neighbour, CLAUDE.md). Then it hides
+    # the pane, and shows it again.
     park = (ox + lay.pane[1][0] + lay.pane[1][2] - 20,
             oy + lay.pane[1][1] + lay.pane[1][3] - 20)
     dbg.warp_cursor(qmp, *park)
+    lay = wait_layout(dbg, win, lambda l: l.dpane is not None) or lay
     png_on = os.path.join(tmp, "fm_tb_latched.png")
     qmp.stable_pixels(png_on)
     from PIL import Image
     im = Image.open(png_on).convert("RGB")
-    r7, r1 = lay.tbitems.get(TB_TREE), lay.tbitems.get(TB_REFRESH)
-    if r7 and r1:
+    r7, r1 = btn_rect(lay, "dpane"), btn_rect(lay, "cut")
+    if r7 and r1 and lay.dpane == 1:
         p7 = im.getpixel((ox + r7[0] + 2, oy + r7[1] + 2))
         p1 = im.getpixel((ox + r1[0] + 2, oy + r1[1] + 2))
         res.check("the latched button's background differs from its resting sibling's",
-                  p7 != p1, f"tree btn {p7} vs refresh btn {p1}")
+                  p7 != p1, f"details btn {p7} vs cut btn {p1}")
     else:
         res.skip("the latched button's background differs from its resting sibling's",
-                 _toolbar_evidence(TB_TREE if not r7 else TB_REFRESH, lay))
+                 f"dpane={lay.dpane}; " + _toolbar_evidence("dpane" if not r7 else "cut", lay))
 
-    tb_click(TB_TREE, "folder tree")
-    lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0)
-    res.check("clicking it again toggles the tree off",
-              lay is not None and lay.view and lay.view[3] == 0, f"view={lay and lay.view}")
+    tb_click("dpane", "details pane")
+    lay = wait_layout(dbg, win, lambda l: l.dpane == 0)
+    res.check("the Details button hides the details pane",
+              lay is not None and lay.dpane == 0, f"dpane={lay and lay.dpane}")
+    lay = lay or last_layout()
+    tb_click("dpane", "details pane")
+    lay = wait_layout(dbg, win, lambda l: l.dpane == 1)
+    res.check("clicking it again shows it",
+              lay is not None and lay.dpane == 1, f"dpane={lay and lay.dpane}")
+    lay = lay or last_layout()
 
     # The tooltip: park elsewhere (no cream in the strip's shadow), then
     # hover Refresh past the delay -- it rides the app's tick, so give it
@@ -1407,10 +1486,10 @@ def run(dbg, qmp, tmp, res):
     # SKIP, never return: bailing out of the function here would take
     # every check below it with it, which is the same "a fault loses
     # the rest of the run" shape the guards above exist to stop.
-    r1 = lay.tbitems.get(TB_REFRESH)
+    r1 = btn_rect(lay, "refresh")
     if not r1:
         res.skip("hovering a button shows its tooltip, and only then",
-                 _toolbar_evidence(TB_REFRESH, lay))
+                 _toolbar_evidence("refresh", lay))
     else:
         bx, by, bw, bh = r1
         tip_rect = (ox + bx, oy + by + bh, 120, 30)
@@ -1428,15 +1507,14 @@ def run(dbg, qmp, tmp, res):
     dbg.warp_cursor(qmp, *park)
 
 
-    # --- 13b. the verbs moved to the toolbar ----------------------------
-    # They were five buttons across the bottom. The proof they really
-    # moved is not that the strip has more items -- it is that the
-    # commands WORK from up here: New folder must open the same prompt
-    # F7 opens, and Delete the same confirm F8 opens.
-    lay = wait_layout(dbg, win, lambda l: len(l.tbitems) == TB_COUNT) or lay
-    tb_click(TB_MKDIR, "new folder")
+    # --- 13b. the verbs on the command bar --------------------------------
+    # The proof the command bar works is that the commands do what their
+    # keys do: New > Folder must open the same prompt F7 opens, and
+    # Delete the same confirm F8 opens.
+    lay = wait_layout(dbg, win, strips_complete) or lay
+    dropdown_pick(dbg, qmp, win, lay, "new", NEW_ROW["folder"], res, "New > Folder")
     lay = wait_layout(dbg, win, lambda l: l.modal not in (None, 0)) or lay
-    res.check("the toolbar's New folder opens the same prompt F7 does",
+    res.check("the command bar's New > Folder opens the same prompt F7 does",
               lay.modal not in (None, 0), f"modal={lay and lay.modal}")
     dbg.key(K_ESC)
     lay = wait_layout(dbg, win, lambda l: l.modal == 0) or lay
@@ -1447,9 +1525,9 @@ def run(dbg, qmp, tmp, res):
     # broken toolbar button.
     dbg.key("0x62")                          # 'b' seeks bin/
     lay = wait_layout(dbg, win, lambda l: l.selected not in (None, "-")) or lay
-    tb_click(TB_DELETE, "delete")
+    tb_click("delete", "delete")
     lay = wait_layout(dbg, win, lambda l: l.dialog == 1) or lay
-    res.check("the toolbar's Delete opens the same confirm F8 does",
+    res.check("the command bar's Delete opens the same confirm F8 does",
               lay.dialog == 1, f"dialog={lay and lay.dialog}")
     dbg.key(K_ESC)
     lay = wait_layout(dbg, win, lambda l: l.dialog == 0) or lay
@@ -1514,11 +1592,94 @@ def run(dbg, qmp, tmp, res):
     # Ctrl+L is the keyboard's way in. Back to where this pane was.
     dbg.key(K_CTRL_L)
     lay = wait_layout(dbg, win, lambda l: l.addr and l.addr[0] == 0) or lay
-    res.check("Ctrl+L edits the active pane's path", lay.addr is not None and lay.addr[0] == 0,
-              f"addr={lay and lay.addr}")
+    lay = wait_layout(dbg, win, lambda l: l.pathedit == 1) or lay
+    res.check("Ctrl+L turns the breadcrumb into a field",
+              lay.pathedit == 1, f"path.editing={lay and lay.pathedit}")
     type_path(dir0 or SRC)
     dbg.key(K_ENTER)
     lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == (dir0 or SRC)) or lay
+    res.check("...and Enter there navigates the active pane",
+              lay.dir.get(0) == (dir0 or SRC) and lay.pathedit == 0,
+              f"dir0={lay.dir.get(0)} path.editing={lay.pathedit}")
+
+    # --- 13e. the breadcrumb, Places, search and the details pane --------
+    # Each asserted on the DIRECTORY or the ROWS the app reports after, and
+    # each with the geometry the widget itself logged -- never a pitch.
+    # The fixture is section 11's: alpha..echo.txt and sub/.
+    if lay.active != 0:
+        dbg.click(*lay.pane_centre(0))
+        lay = wait_layout(dbg, win, lambda l: l.active == 0) or lay
+    dbg.key(K_CTRL_L)
+    type_path(SRC)
+    dbg.key(K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == SRC) or lay
+    dbg.key(K_HOME)
+    dbg.key("0x73")                     # 's' seeks sub
+    lay = wait_layout(dbg, win, lambda l: l.selected == "sub") or lay
+    dbg.key(K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == f"{SRC}/sub" and 2 in l.pathseg) or lay
+    seg = lay.pathseg.get(1)
+    if seg:
+        sure_click(dbg, qmp, ox + seg[0] + seg[2] // 2, oy + seg[1] + seg[3] // 2)
+        lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == SRC) or lay
+    res.check("clicking a breadcrumb segment goes to that folder",
+              seg is not None and lay.dir.get(0) == SRC,
+              f"segments={sorted(lay.pathseg)} dir0={lay.dir.get(0)}")
+
+    # Places: the first DEVICE row is the root filesystem ("System"),
+    # after the five places; Home is the first place.
+    dev = lay.placerows.get(5)
+    if dev:
+        sure_click(dbg, qmp, ox + dev[0] + 30, oy + dev[1] + 8)
+        lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == "/") or lay
+    res.check("the System device in Places goes to the root, and is highlighted there",
+              dev is not None and lay.dir.get(0) == "/" and lay.placesel == 5,
+              f"rows={sorted(lay.placerows)} dir0={lay.dir.get(0)} sel={lay.placesel}")
+    home = lay.placerows.get(0)
+    if home:
+        sure_click(dbg, qmp, ox + home[0] + 30, oy + home[1] + home[3] // 2)
+        lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == "/home") or lay
+    res.check("Home in Places goes to /home",
+              home is not None and lay.dir.get(0) == "/home", f"dir0={lay.dir.get(0)}")
+
+    # Search filters the folder by name, anywhere in it: in /fmtest, "rli"
+    # leaves ".." and charlie.txt ("ch" would keep echo.txt too); Esc gives
+    # every row back. The control is the count
+    # before.
+    dbg.key(K_CTRL_L)
+    type_path(SRC)
+    dbg.key(K_ENTER)
+    lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == SRC and l.searchbox) or lay
+    rows_all = lay.rows.get(0)
+    sb = lay.searchbox
+    if sb:
+        sure_click(dbg, qmp, ox + sb[0] + sb[2] // 2, oy + sb[1] + sb[3] // 2)
+        # The keys travel the debug console and the click QMP: wait for the
+        # box to HAVE the keyboard, or the letters seek in the listing.
+        lay = wait_layout(dbg, win, lambda l: l.searching == 1) or lay
+        for ch in "rli":
+            dbg.key(ch)
+        lay = wait_layout(dbg, win, lambda l: l.rows.get(0) == 2) or lay
+    said = [l.strip() for l in _ALL_BUF if "files: search" in l or "searching" in l][-4:]
+    res.check("typing in the search box filters the folder by name",
+              sb is not None and rows_all == 7 and lay.rows.get(0) == 2,
+              f"rows {rows_all} -> {lay.rows.get(0)} active={lay.active} "
+              f"searching={lay.searching} box={sb}; app said {said}")
+    dbg.key(K_ESC)
+    lay = wait_layout(dbg, win, lambda l: l.rows.get(0) == rows_all) or lay
+    res.check("...and Esc clears it, every row back",
+              lay.rows.get(0) == rows_all, f"rows={lay.rows.get(0)}")
+
+    # The details pane and the status bar describe the selection.
+    dbg.key(K_HOME)
+    dbg.key("0x61")                     # 'a' seeks alpha.txt
+    lay = wait_layout(dbg, win, lambda l: l.dpsel == "alpha.txt" and l.status) or lay
+    res.check("the details pane describes the selected file",
+              lay.dpane == 1 and lay.dpsel == "alpha.txt", f"dpane={lay.dpane} {lay.dpsel}")
+    res.check("the status bar counts the folder and the selection",
+              lay.status is not None and lay.status[0] == "6 items" and
+              lay.status[1].startswith("1 item selected"),
+              f"status={lay.status}")
 
     # --- 14. the context menu, and Properties ---------------------------
     # A SECONDARY click inside a pane. Two things a broken version would
@@ -2022,7 +2183,7 @@ def run(dbg, qmp, tmp, res):
         time.sleep(0.15)
     dbg.key(K_ENTER)
     lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == SRC)
-    menu_pick(dbg, K_RIGHT, K_DOWN, K_ENTER)
+    view_pick(dbg, qmp, win, last_layout() or lay, "icons", res)
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[0] == 2 and
                        0 in l.cellgrid)
     res.check("the pane is in icons mode over the image fixture",
@@ -2210,13 +2371,14 @@ def run(dbg, qmp, tmp, res):
     # all three -- hiding the pane splitter hid the CONTEXT MENU, and
     # right-click died in single-pane view while every check here passed
     # because none of them had ever turned the second pane off.
-    lay = wait_layout(dbg, win, lambda l: len(l.tbitems) == TB_COUNT) or lay
+    lay = wait_layout(dbg, win, strips_complete) or lay
 
-    def tb(i, what):
-        """Click item `i`, adopting the layout it was aimed from; False
-        when the item was not reported (a failed check is recorded)."""
+    def tb(row, what):
+        """Pick View row `row`, adopting the layout it was aimed from;
+        False when the drop-down could not be driven (a failed check is
+        recorded)."""
         nonlocal lay
-        got = toolbar_click(dbg, qmp, win, lay, i, res, what)
+        got = view_pick(dbg, qmp, win, lay, row, res, what)
         if got is None:
             return False
         lay = got
@@ -2229,7 +2391,7 @@ def run(dbg, qmp, tmp, res):
     N_BOTH = "(both toggles restored)"
 
     single = False
-    if tb(TB_PANES, "second pane off"):
+    if tb("panes", "second pane off"):
         got = wait_layout(dbg, win, lambda l: bool(l.view) and l.view[2] == 1)
         single = got is not None
         res.check(N_ONE, single, f"view={(last_layout() or lay).view}")
@@ -2263,7 +2425,7 @@ def run(dbg, qmp, tmp, res):
         res.skip(N_CTX, "single-pane view was not reached")
         res.skip(N_ESC, "single-pane view was not reached")
 
-    if single and menu_closed and tb(TB_TREE, "folder tree on"):
+    if single and menu_closed and tb("tree", "folder tree on"):
         got = wait_layout(dbg, win, lambda l: bool(l.view) and l.view[3] == 1 and bool(l.treebox))
         seen = got or last_layout() or lay
         res.check(N_TREE, got is not None and seen.treebox is not None and seen.treebox[2] > 0,
@@ -2285,9 +2447,9 @@ def run(dbg, qmp, tmp, res):
     # RESTORE the two-pane, tree-hidden view before anything else runs:
     # the view state PERSISTS (files.conf), so a respawn inherits it.
     # Each toggle is applied only if the app reports it as needed.
-    if lay.view and lay.view[3] == 1 and tb(TB_TREE, "folder tree off"):
+    if lay.view and lay.view[3] == 1 and tb("tree", "folder tree off"):
         lay = wait_layout(dbg, win, lambda l: bool(l.view) and l.view[3] == 0) or lay
-    if lay.view and lay.view[2] == 1 and tb(TB_PANES, "second pane on"):
+    if lay.view and lay.view[2] == 1 and tb("panes", "second pane on"):
         lay = wait_layout(dbg, win, lambda l: bool(l.view) and l.view[2] == 0) or lay
     seen = last_layout() or lay
     restored = bool(seen.view) and seen.view[2] == 0 and seen.view[3] == 0
@@ -2457,7 +2619,7 @@ def run(dbg, qmp, tmp, res):
         dbg.click(*lay.pane_centre(i))
         lay = wait_layout(dbg, win, lambda l, i=i: l.active == i) or lay
         if lay.view and lay.view[i] != 1:
-            got = toolbar_click(dbg, qmp, win, lay, TB_DETAILS, res,
+            got = toolbar_click(dbg, qmp, win, lay, "details", res,
                                 f"pane {i} to Details")
             lay = got or lay
             lay = wait_layout(dbg, win, lambda l, i=i: l.view and l.view[i] == 1) or lay
@@ -2582,7 +2744,7 @@ def run(dbg, qmp, tmp, res):
 
     # Onto the TREE: View > Folder tree, then a live drag hovered down
     # its rows until the app names DDST as the node under the pointer.
-    menu_pick(dbg, K_RIGHT, K_DOWN, K_DOWN, K_DOWN, K_ENTER)
+    view_pick(dbg, qmp, win, last_layout() or lay, "tree", res)
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 1 and l.treebox) or lay
     px, py, pw, ph = lay.pane[0]          # the panes moved right for the tree
     rowy = lay.rowy[0]
@@ -2654,7 +2816,7 @@ def run(dbg, qmp, tmp, res):
         res.check("...and coming back up follows too",
                   lay is not None and lay.treesel and lay.treesel[0] == DD,
                   f"treesel={lay and lay.treesel}")
-        menu_pick(dbg, K_RIGHT, K_DOWN, K_DOWN, K_DOWN, K_ENTER)   # tree off again
+        view_pick(dbg, qmp, win, last_layout() or lay, "tree", res)   # tree off again
         lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 0) or lay
 
     # --- 18e. drag OUT of the window, and IN from the desktop ----------
@@ -2820,12 +2982,12 @@ def run(dbg, qmp, tmp, res):
     # compositor consume a press outside it and answer with
     # WIN_EV_POPUP_DONE. A tooltip must not, or the button it describes
     # goes dead for exactly as long as its own tip is showing.
-    lay = wait_layout(dbg, win, lambda l: len(l.tbitems) >= 14) or lay
+    lay = wait_layout(dbg, win, strips_complete) or lay
     ox, oy = win["content"]["x"], win["content"]["y"]
-    r1 = lay.tbitems.get(TB_REFRESH) if lay else None
+    r1 = btn_rect(lay, "refresh") if lay else None
     if not r1:
         res.skip("a press while the tooltip is up is NOT swallowed",
-                 _toolbar_evidence(TB_REFRESH, lay))
+                 _toolbar_evidence("refresh", lay))
     else:
         bx, by, bw, bh = r1
         # BEFORE AND AFTER, never an absolute count: "exactly one popup
@@ -2843,12 +3005,13 @@ def run(dbg, qmp, tmp, res):
                   n0 == 0 and len(tips) == 1 and len(near) == 1,
                   f"popups {n0} -> {len(tips)}, under the button: {len(near)}")
 
-        before = lay.view and lay.view[3]
-        tb_click(TB_TREE, "folder tree, with the tip up")
-        lay2 = wait_layout(dbg, win, lambda l: l.view and l.view[3] != before)
+        before = lay.dpane
+        rd = btn_rect(lay, "dpane")
+        sure_click(dbg, qmp, ox + rd[0] + rd[2] // 2, oy + rd[1] + rd[3] // 2)
+        lay2 = wait_layout(dbg, win, lambda l: l.dpane is not None and l.dpane != before)
         res.check("a press while the tooltip is up is NOT swallowed",
-                  lay2 is not None and lay2.view and lay2.view[3] != before,
-                  f"view[3] {before} -> {lay2 and lay2.view and lay2.view[3]}")
+                  lay2 is not None and lay2.dpane != before,
+                  f"dpane {before} -> {lay2 and lay2.dpane}")
 
     teardown_fixture(dbg)
 
