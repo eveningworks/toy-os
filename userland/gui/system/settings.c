@@ -517,6 +517,9 @@ int main(void) {
     uui_sidebar_init(&g_tree, 0, 0, 0, 0, g_nodes, 0);
     g_tree.bg = UTHEME_PANEL_BG;
     g_tree.fg = UTHEME_TEXT;
+    // The page you are on, in the accent -- as Device Manager's tree.
+    g_tree.sel_bg = UTHEME_ACCENT;
+    g_tree.sel_fg = UTHEME_ACCENT_TEXT;
 
     uui_textbox_init(&g_search, "");
     g_search.placeholder = "Find a setting";
