@@ -816,7 +816,7 @@ static void confirm_discard(struct uapp *a, int pending) {
     if (!g_dirty) { run_pending(a); return; }
 
     static const struct uui_dialog_button btns[] = {
-        { "Save", ASK_SAVE }, { "Don't Save", ASK_DISCARD }, { "Cancel", ASK_CANCEL },
+        { "Save", ASK_SAVE, 0 }, { "Don't Save", ASK_DISCARD, 0 }, { "Cancel", ASK_CANCEL, 0 },
     };
     snprintf(g_ask_line, sizeof g_ask_line, "Save changes to %s?",
              g_path[0] ? k_path_basename(g_path) : "this document");

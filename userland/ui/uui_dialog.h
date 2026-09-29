@@ -45,7 +45,14 @@
 struct uui_dialog_button {
     const char *label;
     int code;          // handed back by uui_dialog_take_code()
+    // UUI_DLG_* -- how it looks. With none styled in the whole row, the
+    // DEFAULT button is drawn primary (Return's answer, in the accent);
+    // styling any one turns that off, so a destructive dialog can make
+    // Delete red and leave the safe default plain.
+    int style;
 };
+
+enum { UUI_DLG_PLAIN = 0, UUI_DLG_PRIMARY = 1, UUI_DLG_DANGER = 2 };
 
 struct uui_dialog {
     int x, y, w, h;    // the box, content-relative; derived when opened
@@ -65,6 +72,14 @@ struct uui_dialog {
     const char *title;
     const char *rows[UUI_DIALOG_ROWS];   // caller-owned, NULL ends it
     int row_count;
+    // Beside the title, left: what the question is ABOUT -- a file's
+    // thumbnail or type icon. NULL for none. Cleared by every open; set
+    // it after with uui_dialog_set_picture().
+    const struct uimg *picture;
+    // A tinted line under the rows -- the consequence worth reading
+    // before answering ("there is no Recycle Bin"). NULL for none;
+    // cleared by every open, set with uui_dialog_set_note().
+    const char *note;
 
     struct uui_dialog_button buttons[UUI_DIALOG_BUTTONS];
     int button_count;
@@ -97,6 +112,9 @@ void uui_dialog_open(struct uui_dialog *d, const char *title,
                       const struct uui_dialog_button *buttons, int count,
                       int default_button, int cancel_code);
 void uui_dialog_close(struct uui_dialog *d);
+struct uimg;
+void uui_dialog_set_picture(struct uui_dialog *d, const struct uimg *picture);
+void uui_dialog_set_note(struct uui_dialog *d, const char *note);
 int  uui_dialog_is_open(const struct uui_dialog *d);
 
 // Set before open(); it stays until set again. NULL clears it.

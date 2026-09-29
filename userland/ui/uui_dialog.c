@@ -2,13 +2,21 @@
 #include "ui/uui_dialog.h"
 #include "ui/utheme.h"
 #include "keyboard.h"
+#include "ui/uui_label.h"   // uui_label_wrap_next -- the note
+#include "lib/uimg.h"
 #include <stddef.h>
 
 // Everything here is FONT-DERIVED (docs/gui-guidelines.md), so the box
 // grows with the session font instead of clipping its own text at a
 // larger one.
+//
+// THE LOOK IS A CARD over a dimmed window -- Windows 11's ContentDialog
+// and KDE's: rounded, shadowed, generous padding, the question in bold,
+// the buttons right-aligned with the answer that matters coloured.
 static int line_h(void) { return ugfx_char_h() + utheme_gap(); }
-static int btn_h(void) { return utheme_control_h(); }
+static int btn_h(void) { return utheme_control_h() + 4; }
+static int pad(void)   { return utheme_pad() * 2; }
+static int pic_px(void) { return ugfx_char_h() * 4; }   // the picture's box
 
 static int btn_w(const struct uui_dialog *d) {
     // ONE WIDTH FOR ALL OF THEM, sized to the widest label: buttons of
@@ -19,7 +27,7 @@ static int btn_w(const struct uui_dialog *d) {
         int w = ugfx_text_width(d->buttons[i].label);
         if (w > widest) widest = w;
     }
-    int want = widest + utheme_pad() * 2;
+    int want = widest + utheme_pad() * 3;
 
     // ...BUT THE ROW MUST FIT THE BOX, and the box must fit the window.
     // Six buttons at their natural width overflowed a 720px window, and
@@ -27,35 +35,55 @@ static int btn_w(const struct uui_dialog *d) {
     // edge and drew as "write". A dialog that clips its own first button
     // is worse than one with narrow buttons.
     if (d->button_count > 0 && d->bw > 0) {
-        int gap = utheme_gap(), pad = utheme_pad();
-        int room = d->bw - gap * 2 - pad * 2 - gap * (d->button_count - 1);
+        int gap = utheme_gap();
+        int room = d->bw - gap * 2 - pad() * 2 - gap * (d->button_count - 1);
         int fits = room / d->button_count;
         if (fits > 0 && want > fits) want = fits;
     }
     return want;
 }
 
-static void layout(struct uui_dialog *d) {
-    int pad = utheme_pad(), gap = utheme_gap();
-    int bw = btn_w(d);
+// Where the title and rows start: right of the picture when there is one.
+static int text_x(const struct uui_dialog *d) {
+    return d->x + pad() + (d->picture ? pic_px() + pad() * 3 / 4 : 0);
+}
+static int note_lines(const struct uui_dialog *d) { return d->note ? 2 : 0; }
+// The text block: the title and the rows, or the picture if taller.
+static int head_h(const struct uui_dialog *d) {
+    int h = line_h() * (d->row_count + 1);
+    if (d->picture && pic_px() > h) h = pic_px();
+    return h;
+}
+static int note_h(const struct uui_dialog *d) {
+    return d->note ? utheme_gap() * 2 + note_lines(d) * line_h() : 0;
+}
 
-    int widest = ugfx_text_width(d->title ? d->title : "");
+static void layout(struct uui_dialog *d) {
+    int gap = utheme_gap();
+    int bw = btn_w(d);
+    int pic = d->picture ? pic_px() + pad() * 3 / 4 : 0;
+
+    const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
+    int widest = ugfx_text_width(d->title ? d->title : "") + pic;
+    ugfx_set_font(was);
     for (int i = 0; i < d->row_count; i++) {
-        int w = ugfx_text_width(d->rows[i] ? d->rows[i] : "");
+        int w = ugfx_text_width(d->rows[i] ? d->rows[i] : "") + pic;
         if (w > widest) widest = w;
     }
     int row_w = d->button_count * bw + (d->button_count - 1) * gap;
     if (row_w > widest) widest = row_w;
+    // Never a sliver: a card narrower than this reads as a tooltip.
+    if (widest < ugfx_char_w() * 30) widest = ugfx_char_w() * 30;
 
     int body_h = 0;
     if (d->body) {
         if (d->body_w > widest) widest = d->body_w;
-        body_h = d->body_h + gap;
+        body_h = d->body_h + gap * 2;
     }
 
-    d->w = widest + pad * 2;
+    d->w = widest + pad() * 2;
     if (d->w > d->bw - gap * 2) d->w = d->bw - gap * 2;
-    int text_h = pad * 2 + line_h() * (d->row_count + 1) + gap + btn_h();
+    int text_h = pad() + head_h(d) + note_h(d) + gap * 2 + btn_h() + pad();
     // The body gives way before the box leaves the window: a listing
     // with fewer rows beats a Cancel button below the bottom edge.
     if (body_h > 0 && text_h + body_h > d->bh - gap * 2) {
@@ -75,9 +103,10 @@ static void layout(struct uui_dialog *d) {
     if (d->y < d->by) d->y = d->by;
 
     if (d->body && d->body->ops && d->body->ops->set_geometry) {
-        d->body->ops->set_geometry(d->body->widget, d->x + pad,
-                                   d->y + pad + line_h() * (d->row_count + 1),
-                                   d->w - pad * 2, body_h - gap);
+        int tx = text_x(d);
+        d->body->ops->set_geometry(d->body->widget, tx,
+                                   d->y + pad() + head_h(d) + note_h(d) + gap,
+                                   d->x + d->w - pad() - tx, body_h - gap * 2);
     }
 }
 
@@ -92,12 +121,12 @@ int uui_dialog_body_rect(const struct uui_dialog *d, int *x, int *y, int *w, int
 // click landing on the button beside the one under the cursor.
 static void button_rect(const struct uui_dialog *d, int i,
                          int *x, int *y, int *w, int *h) {
-    int pad = utheme_pad(), gap = utheme_gap();
+    int gap = utheme_gap();
     int bw = btn_w(d), bh = btn_h();
     int total = d->button_count * bw + (d->button_count - 1) * gap;
-    int x0 = d->x + d->w - pad - total;   // right-aligned, as everywhere
+    int x0 = d->x + d->w - pad() - total;   // right-aligned, as everywhere
     *x = x0 + i * (bw + gap);
-    *y = d->y + d->h - pad - bh;
+    *y = d->y + d->h - pad() - bh;
     *w = bw;
     *h = bh;
 }
@@ -127,6 +156,8 @@ void uui_dialog_open(struct uui_dialog *d, const char *title,
     for (int i = 0; i < d->button_count; i++) d->buttons[i] = buttons[i];
     d->default_button = default_button;
     d->cancel_code = cancel_code;
+    d->picture = NULL;
+    d->note = NULL;
     d->committed = -1;
     d->pressed = -1;
     // The default starts hot, so Return works before the pointer has
@@ -142,6 +173,16 @@ void uui_dialog_close(struct uui_dialog *d) {
 }
 
 int uui_dialog_is_open(const struct uui_dialog *d) { return d->open; }
+
+void uui_dialog_set_picture(struct uui_dialog *d, const struct uimg *picture) {
+    d->picture = picture;
+    if (d->open) layout(d);
+}
+
+void uui_dialog_set_note(struct uui_dialog *d, const char *note) {
+    d->note = note;
+    if (d->open) layout(d);
+}
 
 void uui_dialog_set_body(struct uui_dialog *d, struct uui_item *body, int w, int h) {
     d->body = body;
@@ -165,32 +206,77 @@ int uui_dialog_take_code(struct uui_dialog *d) {
     return c;
 }
 
-// The box, its title and its rows. Split from the buttons because a
-// dialog WITH A BODY draws these around its children (children_begin /
-// children_end); one without draws both at once.
+// The scrim, the card, its picture, title, rows and note. Split from the
+// buttons because a dialog WITH A BODY draws these around its children
+// (children_begin / children_end); one without draws both at once.
 static void draw_frame(struct ugfx_surface *s, const struct uui_dialog *d) {
-    int pad = utheme_pad();
+    // THE WINDOW DIMS: what is behind is not answerable until this is.
+    for (int y = d->by; y < d->by + d->bh; y++)
+        ugfx_blend_hspan(s, d->bx, y, d->bw, ugfx_rgb(16, 20, 28), NULL, 80);
+    // A soft shadow, down and to the right, then the card.
+    for (int i = 3; i >= 1; i--)
+        for (int y = d->y + i * 2; y < d->y + d->h + i * 2; y++)
+            ugfx_blend_hspan(s, d->x + i, y, d->w, ugfx_rgb(0, 0, 0), NULL, 26);
+    uint32_t bg = UTHEME_WHITE;
+    uui_fill_round_rect(s, d->x, d->y, d->w, d->h, 8, UTHEME_BORDER);
+    uui_fill_round_rect(s, d->x + 1, d->y + 1, d->w - 2, d->h - 2, 7, bg);
 
-    ugfx_fill_rect(s, d->x, d->y, d->w, d->h, UTHEME_WINDOW_BG);
-    ugfx_draw_rect(s, d->x, d->y, d->w, d->h, UTHEME_BORDER);
+    if (d->picture) {
+        const struct uimg *p = d->picture;
+        int px = d->x + pad() + (pic_px() - p->w) / 2;
+        int py = d->y + pad() + (pic_px() - p->h) / 2;
+        if (p->has_alpha) ugfx_blit_alpha(s, px, py, p->w, p->h, p->px, p->w);
+        else {
+            ugfx_blit(s, px, py, p->w, p->h, p->px, p->w);
+            ugfx_draw_rect(s, px - 1, py - 1, p->w + 2, p->h + 2, UTHEME_BORDER);
+        }
+    }
 
-    int y = d->y + pad;
+    int tx = text_x(d), tw = d->x + d->w - pad() - tx;
+    int y = d->y + pad();
     if (d->title) {
         const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
-        ugfx_draw_string_clipped(s, d->x + pad, y, d->w - pad * 2, d->title,
-                                  UTHEME_TEXT, UTHEME_WINDOW_BG);
+        ugfx_draw_string_clipped(s, tx, y, tw, d->title, UTHEME_TEXT, bg);
         ugfx_set_font(was);
     }
     y += line_h();
+    uint32_t dim = uui_state_bg(UTHEME_TEXT, UUI_STATE_DISABLED);
     for (int i = 0; i < d->row_count; i++) {
         if (d->rows[i])
             // Clipped, always: these rows carry PATHS, which are longer
             // than any box routinely (docs/gui-guidelines.md's oldest
             // trap).
-            ugfx_draw_string_clipped(s, d->x + pad, y, d->w - pad * 2,
-                                      d->rows[i], UTHEME_TEXT, UTHEME_WINDOW_BG);
+            ugfx_draw_string_clipped(s, tx, y, tw, d->rows[i], i ? dim : UTHEME_TEXT, bg);
         y += line_h();
     }
+
+    if (d->note) {
+        // Tinted by what the dialog does: red when an answer destroys
+        // something, the accent otherwise.
+        int danger = 0;
+        for (int i = 0; i < d->button_count; i++)
+            if (d->buttons[i].style == UUI_DLG_DANGER) danger = 1;
+        uint32_t tint = ugfx_blend(bg, danger ? ugfx_rgb(178, 58, 36) : UTHEME_ACCENT, 28);
+        uint32_t ink = danger ? ugfx_rgb(122, 42, 24) : UTHEME_TEXT;
+        int ny = d->y + pad() + head_h(d) + utheme_gap();
+        int nx = d->x + pad(), nw = d->w - pad() * 2;
+        uui_fill_round_rect(s, nx, ny, nw, note_lines(d) * line_h() + utheme_gap(), 4, tint);
+        const char *rest = d->note;
+        char line[160];
+        for (int n = 0; n < note_lines(d) && *rest; n++) {
+            rest = uui_label_wrap_next(rest, nw - 16, line, sizeof line);
+            ugfx_draw_string_clipped(s, nx + 8, ny + utheme_gap() / 2 + 2 + n * line_h(),
+                                      nw - 16, line, ink, tint);
+        }
+    }
+}
+
+// The button's look: an explicit style wins; with none in the row, the
+// default answer is the primary one.
+static int button_style(const struct uui_dialog *d, int i) {
+    for (int j = 0; j < d->button_count; j++)
+        if (d->buttons[j].style) return d->buttons[i].style;
+    return i == d->default_button ? UUI_DLG_PRIMARY : UUI_DLG_PLAIN;
 }
 
 static void draw_buttons(struct ugfx_surface *s, const struct uui_dialog *d) {
@@ -200,12 +286,16 @@ static void draw_buttons(struct ugfx_surface *s, const struct uui_dialog *d) {
         enum uui_state st = (d->pressed == i) ? UUI_STATE_PRESSED
                            : (d->hot == i)     ? UUI_STATE_HOVER
                                                : UUI_STATE_REST;
-        ugfx_fill_rect(s, bx, by, bw, bh, uui_state_bg(UTHEME_BUTTON_BG, st));
-        int tw = ugfx_text_width(d->buttons[i].label);
-        ugfx_draw_string_clipped(s, bx + (bw - tw) / 2,
-                                  by + (bh - ugfx_char_h()) / 2, bw,
-                                  d->buttons[i].label, UTHEME_TEXT,
-                                  uui_state_bg(UTHEME_BUTTON_BG, st));
+        int style = button_style(d, i);
+        uint32_t face = style == UUI_DLG_PRIMARY ? UTHEME_ACCENT
+                      : style == UUI_DLG_DANGER  ? ugfx_rgb(178, 58, 36)
+                                                 : UTHEME_BUTTON_BG;
+        uint32_t fg = style ? ugfx_rgb(255, 255, 255) : UTHEME_TEXT;
+        uint32_t fill = uui_state_bg(face, st);
+        uint32_t edge = uui_state_bg(uui_state_bg(face, UUI_STATE_PRESSED), UUI_STATE_PRESSED);
+        uui_fill_round_rect(s, bx, by, bw, bh, 4, edge);
+        uui_fill_round_rect(s, bx + 1, by + 1, bw - 2, bh - 2, 3, fill);
+        uui_button_draw_label(s, bx, by, bw, bh, d->buttons[i].label, fg, fill, st);
         if (d->hot == i) uui_focus_ring(s, bx, by, bw, bh);
     }
 }
@@ -332,7 +422,7 @@ static int dlg_hit(const void *w, int cx, int cy) {
 // anywhere else would fight whatever control is under the pointer.
 static int on_title(const struct uui_dialog *d, int cx, int cy) {
     if (!d->title) return 0;
-    return uui_hit(d->x, d->y, d->w, utheme_pad() + line_h(), cx, cy);
+    return uui_hit(d->x, d->y, d->w, pad() + line_h(), cx, cy);
 }
 
 static int dlg_press(void *w, int cx, int cy, unsigned mods) {

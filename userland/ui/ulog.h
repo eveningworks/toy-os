@@ -13,6 +13,10 @@
 // app does not use, so a lean app that only calls ulog() never links the
 // formatter -- which is why the split matters here rather than being one
 // varargs call.
+//
+// THE CALLER ENDS THE LINE WITH '\n'. Neither call adds one, and a line
+// without it is glued to whatever the log prints next -- so a test
+// waiting for it never sees it.
 void ulog(const char *s);
 void ulogf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 

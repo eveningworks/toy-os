@@ -167,7 +167,7 @@ static void ask_leave(struct uapp *a, int node) {
     g_ask_rows[0] = g_ask_line[0];
     g_ask_rows[1] = g_ask_line[1];
     static const struct uui_dialog_button btns[] = {
-        { "Apply", ASK_APPLY }, { "Discard", ASK_DISCARD }, { "Cancel", ASK_STAY },
+        { "Apply", ASK_APPLY, 0 }, { "Discard", ASK_DISCARD, 0 }, { "Cancel", ASK_STAY, 0 },
     };
     uui_dialog_set_bounds(&g_ask, 0, 0, uapp_width(a), uapp_height(a));
     uui_dialog_open(&g_ask, "Unapplied changes", g_ask_rows, 2, btns, 3, 0, ASK_STAY);

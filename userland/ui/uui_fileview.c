@@ -154,6 +154,17 @@ static int fv_compare(void *ctx, int row_a, int row_b, int col) {
 
 // --- cells ------------------------------------------------------------
 
+// The name as SHOWN: without its extension when the view hides them and
+// the type is one the table knows -- an unknown extension is part of
+// what the name says.
+static void fv_display_name(const struct uui_fileview *fv, const struct sys_dirent *e,
+                            char *out, int cap) {
+    snprintf(out, (size_t)cap, "%s", e->name);
+    if (!fv->hide_ext || e->is_dir || !strcmp(ufiletype_name(e->name, 0), "File")) return;
+    char *dot = strrchr(out, '.');
+    if (dot && dot != out) *dot = '\0';
+}
+
 static void fv_cell(void *ctx, int row, int col, char *out, int cap) {
     const struct uui_fileview *fv = (const struct uui_fileview *)ctx;
 
@@ -171,7 +182,7 @@ static void fv_cell(void *ctx, int row, int col, char *out, int cap) {
     switch (col) {
     case FV_COL_NAME:
         // Bare: the row's icon says which rows are folders.
-        snprintf(out, (size_t)cap, "%s", e->name);
+        fv_display_name(fv, e, out, cap);
         break;
     case FV_COL_TYPE:
         snprintf(out, (size_t)cap, "%s", ufiletype_name(e->name, e->is_dir));
@@ -509,6 +520,7 @@ int uui_fileview_reload(struct uui_fileview *fv) {
 
 int uui_fileview_set_dir(struct uui_fileview *fv, const char *dir) {
     if (!dir || !dir[0]) return 0;
+    fv->renaming = 0;
     snprintf(fv->dir, sizeof fv->dir, "%s", dir);
     // Nothing to keep across a directory CHANGE -- reload()'s
     // preserve-by-name is for a refresh of the same directory.
@@ -917,7 +929,9 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
 
         int is_up = fv_is_up_row(fv, src);
         const struct sys_dirent *e = fv_entry(fv, src);
-        const char *name = is_up ? ".." : (e ? e->name : "");
+        char shown[UUI_FILEVIEW_PATH_MAX];
+        if (e && !is_up) fv_display_name(fv, e, shown, sizeof shown);
+        const char *name = is_up ? ".." : (e ? shown : "");
         int is_dir = is_up || (e && e->is_dir);
 
         // A thumbnail if the app has one READY (see uui_fileview_thumb_fn
@@ -939,7 +953,7 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
             ugfx_draw_rect(s, tx2 - 1, ty2 - 1, thumb->w + 2, thumb->h + 2,
                             uui_table_c_grid(t));
         } else {
-            const struct uimg *ico = icon_get(is_up ? "folder" : ufiletype_icon(name, is_dir), px);
+            const struct uimg *ico = icon_get(is_up || !e ? "folder" : ufiletype_icon(e->name, is_dir), px);
             int ix = x + (cw - px) / 2;
             ax = ix; ay = y + 2; aw = px; ah = px;
             if (ico) {
@@ -1175,6 +1189,104 @@ static void fv_draw_drop(struct ugfx_surface *s, const struct uui_fileview *fv) 
     uui_focus_ring(s, x, y, w, h);
 }
 
+// --- rename in place --------------------------------------------------
+
+// Where the name being edited is drawn now: the label under an icon, or
+// the name cell of a details row. 0 when that row is gone or scrolled
+// out of sight -- the field is drawn nowhere then, and still edits.
+static int fv_rename_rect(const struct uui_fileview *fv, int *x, int *y, int *w, int *h) {
+    const struct uui_table *t = &fv->table;
+    int row = uui_fileview_row_of(fv, fv->rename_from);
+    if (row < 0) return 0;
+    int view = uui_table_view_row(t, row);
+    if (view < 0) return 0;
+    int fh = ugfx_char_h() + 6;
+    if (fv->mode == UUI_FILEVIEW_ICONS) {
+        int cx, cy;
+        ic_cell_rect(fv, view, &cx, &cy);
+        *x = cx + 2;
+        *y = cy + 2 + ic_px(fv) + 1;
+        *w = ic_cell_w(fv) - 6;
+        *h = fh;
+        return 1;
+    }
+    int rh = uui_table_row_h(t), hh = uui_table_header_h(t);
+    if (view < t->top || (view - t->top + 1) * rh > t->h - hh) return 0;
+    int cx, cw;
+    uui_table_column_rect(t, 0, &cx, &cw);
+    int icon = t->icon ? ugfx_char_h() + UUI_TABLE_PAD_X : 0;
+    *x = cx + UUI_TABLE_PAD_X + icon - 3;
+    *y = t->y + hh + (view - t->top) * rh + (rh - fh) / 2;
+    *w = cw - UUI_TABLE_PAD_X - icon;
+    *h = fh;
+    return 1;
+}
+
+int uui_fileview_begin_rename(struct uui_fileview *fv) {
+    const struct sys_dirent *e = uui_fileview_selected_entry(fv);
+    if (!e) return 0;
+    snprintf(fv->rename_from, sizeof fv->rename_from, "%s", e->name);
+    uui_textbox_init(&fv->rename_box, e->name);
+    uui_textbox_set_active(&fv->rename_box, 1);
+    // The NAME selected, not the extension: typing replaces "dusk" and
+    // keeps ".jpg" -- what every desktop does, and what keeps the file
+    // opening with the same app.
+    int n = (int)strlen(e->name), stem = n;
+    const char *dot = strrchr(e->name, '.');
+    if (!e->is_dir && dot && dot != e->name) stem = (int)(dot - e->name);
+    uui_textbox_select(&fv->rename_box, 0, stem);
+    fv->renaming = 1;
+    fv->rename_parked = 0;
+    if (fv->mode == UUI_FILEVIEW_ICONS) ic_reveal(fv);
+    return 1;
+}
+
+int uui_fileview_renaming(struct uui_fileview *fv) {
+    // The file went (another program, a reload): nothing left to name.
+    if (fv->renaming && uui_fileview_row_of(fv, fv->rename_from) < 0) fv->renaming = 0;
+    return fv->renaming;
+}
+
+void uui_fileview_cancel_rename(struct uui_fileview *fv) {
+    fv->renaming = 0;
+    uui_textbox_set_active(&fv->rename_box, 0);
+}
+
+// Parks the typed name when it is a change; an unchanged or empty one is
+// simply the edit ending.
+static void fv_rename_commit(struct uui_fileview *fv) {
+    const char *to = uui_textbox_text(&fv->rename_box);
+    if (to[0] && strcmp(to, fv->rename_from) != 0) {
+        snprintf(fv->rename_to, sizeof fv->rename_to, "%s", to);
+        fv->rename_parked = 1;
+    }
+    uui_fileview_cancel_rename(fv);
+}
+
+void uui_fileview_finish_rename(struct uui_fileview *fv) {
+    if (fv->renaming) fv_rename_commit(fv);
+}
+
+int uui_fileview_take_rename(struct uui_fileview *fv, char *from, char *to, int cap) {
+    if (!fv->rename_parked) return 0;
+    fv->rename_parked = 0;
+    snprintf(from, (size_t)cap, "%s", fv->rename_from);
+    snprintf(to, (size_t)cap, "%s", fv->rename_to);
+    return 1;
+}
+
+static void fv_draw_rename(struct ugfx_surface *s, const struct uui_fileview *fv) {
+    if (!fv->renaming) return;
+    int x, y, w, h;
+    if (!fv_rename_rect(fv, &x, &y, &w, &h)) return;
+    struct uui_fileview *mut = (struct uui_fileview *)fv;   // the field's geometry is the draw's
+    uui_textbox_set_geometry(&mut->rename_box, x, y, w, h);
+    mut->rename_box.border = UTHEME_ACCENT;
+    ugfx_set_clip_rect(s, fv->table.x, fv->table.y, fv->table.w, fv->table.h);
+    uui_textbox_draw(s, &fv->rename_box);
+    ugfx_clear_clip_rect(s);
+}
+
 void uui_fileview_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
     if (fv->mode == UUI_FILEVIEW_ICONS) {
         ic_draw(s, fv);
@@ -1192,6 +1304,7 @@ void uui_fileview_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
         }
     }
     fv_draw_drop(s, fv);
+    fv_draw_rename(s, fv);
     if (fv->active_mark) {
         const struct uui_table *t = &fv->table;
         ugfx_draw_rect(s, t->x, t->y, t->w, t->h, fv->active_mark_color);
@@ -1261,6 +1374,16 @@ static int fv_apply_mods(struct uui_fileview *fv, int row, unsigned mods) {
 }
 
 int uui_fileview_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
+    // A press in the field being edited places the caret there; anywhere
+    // else it ENDS the edit, keeping what was typed -- Explorer's rule --
+    // and then does what it would have done.
+    if (fv->renaming) {
+        if (uui_textbox_hit(&fv->rename_box, cx, cy))
+            return uui_textbox_ops.press(&fv->rename_box, cx, cy, mods) || 1;
+        fv_rename_commit(fv);
+    }
+    fv->press_plain = !(mods & (KEY_MOD_CTRL | KEY_MOD_SHIFT));
+    fv->dragged = 0;
     // A PRESS ANYWHERE INSIDE IS CONSUMED, even on the empty space below
     // the last row. Returning 0 there does two things a caller cannot
     // work around: the router does not take the pointer grab, so no
@@ -1360,6 +1483,13 @@ int uui_fileview_wheel(struct uui_fileview *fv, int notches) {
 }
 
 int uui_fileview_key(struct uui_fileview *fv, int key) {
+    // The name being edited takes every key: Enter keeps it, Esc drops it.
+    if (fv->renaming) {
+        if (key == '\n' || key == '\r') fv_rename_commit(fv);
+        else if (key == 0x1B) uui_fileview_cancel_rename(fv);
+        else uui_textbox_key(&fv->rename_box, key);
+        return 1;
+    }
     if (key == '\n' || key == '\r') return uui_fileview_activate(fv);
     if (key == '\b') return uui_fileview_up(fv);
     if (key == KEY_INSERT || key == ' ') {
@@ -1435,9 +1565,22 @@ static int fv_ops_motion(void *w, int cx, int cy, unsigned buttons) {
 }
 
 static int fv_ops_release(void *w, int cx, int cy) {
-    (void)cx; (void)cy;
     struct uui_fileview *fv = (struct uui_fileview *)w;
     uui_fileview_drag_end(fv);
+    // SINGLE-CLICK MODE opens on the release of a plain click that stayed
+    // on its row -- not on the press, which would open every file a drag
+    // started from.
+    if (fv->single_click && fv->press_plain && !fv->dragged && fv->press_row >= 0 &&
+        !fv->renaming) {
+        int row = fv->mode == UUI_FILEVIEW_ICONS
+                      ? uui_table_source_row(&fv->table, ic_hit_view(fv, cx, cy))
+                      : uui_table_hit(&fv->table, cx, cy);
+        if (row == fv->press_row) {
+            fv->deferred_clear = 0;
+            fv->press_row = -1;
+            return uui_fileview_activate(fv) || 1;
+        }
+    }
     // The press was a click after all: the deferred plain-click clear.
     if (fv->deferred_clear && fv->press_row >= 0) {
         fv->deferred_clear = 0;
@@ -1460,6 +1603,7 @@ static int fv_ops_drag_start(void *w, int cx, int cy, struct uui_drag *d) {
     rb_clear(&fv->band);
     fv->deferred_clear = 0;
     fv->last_click_row = -1;
+    fv->dragged = 1;
 
     // The set, or the row alone (made the whole selection, so the
     // app's operand rule names exactly what is carried).

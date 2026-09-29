@@ -9,7 +9,7 @@
 // Left/right inset inside a column. Hoisted so natural_size() reserves
 // exactly what the draw uses -- the "one geometry, shared" rule the
 // scrollbar already follows.
-#define UUI_TABLE_PAD_X 4
+
 
 // Longest cell text this widget will render. A cell is one column wide
 // and gets clipped anyway, so this bounds the app's formatting rather

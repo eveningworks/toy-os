@@ -2578,6 +2578,28 @@ real scanout hardware does. Do not write a pixel assertion for one.
   A row's icon comes from `uui_table_set_icon()`, a cache lookup at text
   height (`lib/ufiletype.h` names the type and the icon).
 
+- **A DIALOG IS A CARD, AND ITS DANGEROUS ANSWER IS RED.** `uui_dialog`
+  dims the window, draws a rounded, shadowed card, and styles its
+  buttons: `UUI_DLG_PRIMARY` in the accent, `UUI_DLG_DANGER` in red,
+  plain otherwise -- and with no button styled, the DEFAULT one is drawn
+  primary. `uui_dialog_set_picture()` puts what the question is about
+  beside it (a thumbnail, a type icon) and `uui_dialog_set_note()` a
+  tinted consequence line under the rows; both are cleared by every
+  open, so set them after it. A text field is the dialog's BODY (focus
+  it with `uui_dialog_focus()`): Return still commits the default.
+
+- **A NAME IS EDITED WHERE IT IS, AND THE APP DOES THE RENAME.**
+  `uui_fileview_begin_rename()` turns the selected item's name into a
+  field over its label or name cell, the part before the extension
+  selected; Enter or a click elsewhere parks the new name for
+  `uui_fileview_take_rename()`, Esc drops it. The row is found by NAME
+  each frame, so a reload under the edit keeps it on the right file,
+  and a navigation ends it. An app routes EVERY key to the pane while
+  `uui_fileview_renaming()` -- F2, Delete and Ctrl+C are text editing
+  in there -- and finishes the edit on a press anywhere outside it
+  (`uui_fileview_finish_rename()`), since a press on another widget
+  never reaches the pane.
+
 - **A POPUP ASKED TO CLOSE IS DESTROYED, NOT JUST FORGOTTEN.** A
   `WIN_EV_CLOSE` on a popup's slot is answered with `WIN_REQ_DESTROY`
   before the owner hears `done`; releasing the buffers alone left the

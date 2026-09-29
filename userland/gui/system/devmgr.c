@@ -305,7 +305,7 @@ static void ask_disable(struct uapp *a) {
     g_ask_rows[0] = g_ask_line[0];
     g_ask_rows[1] = g_ask_line[1];
     static const struct uui_dialog_button btns[] = {
-        { "Disable", ASK_DISABLE }, { "Cancel", ASK_CANCEL },
+        { "Disable", ASK_DISABLE, UUI_DLG_DANGER }, { "Cancel", ASK_CANCEL, 0 },
     };
     uui_dialog_set_bounds(&g_ask, 0, 0, uapp_width(a), uapp_height(a));
     uui_dialog_open(&g_ask, "Disable device", g_ask_rows, 2, btns, 2, 1, ASK_CANCEL);

@@ -2316,7 +2316,7 @@ static void on_open_cb(struct uapp *a) {
 
 static int on_close_cb(struct uapp *a) {
     static const struct uui_dialog_button btns[] = {
-        { "Close", QUIT_YES }, { "Cancel", QUIT_NO },
+        { "Close", QUIT_YES, 0 }, { "Cancel", QUIT_NO, 0 },
     };
     static const char *rows[1];
     static char line[64];

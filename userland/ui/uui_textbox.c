@@ -87,6 +87,15 @@ void uui_textbox_init(struct uui_textbox *f, const char *initial) {
 // chooser's Places strip. Geometry, colours and `disabled` are the
 // caller's and are left alone; the caret goes to the end, as after a
 // programmatic fill.
+void uui_textbox_select(struct uui_textbox *f, int start, int end) {
+    if (start < 0) start = 0;
+    if (end > f->len) end = f->len;
+    if (start > end) start = end;
+    f->ed.sel_anchor = start;
+    f->ed.cursor = end;
+    f->ed.sel_active = start != end;
+}
+
 void uui_textbox_set_text(struct uui_textbox *f, const char *text) {
     int i = 0;
     if (text) {

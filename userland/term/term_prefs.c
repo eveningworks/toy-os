@@ -209,7 +209,7 @@ static int scheme_index(const char *name) {
 
 void term_prefs_open(const struct term_conf *c) {
     static const struct uui_dialog_button btns[] = {
-        { "OK", CMD_OK }, { "Cancel", CMD_CANCEL },
+        { "OK", CMD_OK, 0 }, { "Cancel", CMD_CANCEL, 0 },
     };
 
     // The directory is read EVERY open rather than once at startup: a

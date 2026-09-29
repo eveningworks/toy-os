@@ -8,6 +8,7 @@
 #include "lib/dirsort.h"  // enum dirsort_key, dirsort_cmp()
 #include "rubberband.h"   // the icons view's drag selection
 #include "ui/uui_scrollanim.h"
+#include "ui/uui_textbox.h"
 
 // --- fileview: a directory, as a widget -------------------------------
 //
@@ -184,6 +185,28 @@ struct uui_fileview {
     int active_mark;
     uint32_t active_mark_color;
 
+    // --- options ------------------------------------------------------
+    // A click OPENS rather than selects (KDE's single-click mode): on the
+    // release, when the press did not become a drag or carry Ctrl/Shift.
+    int single_click;
+    // Known types show their name without the extension ("dusk"); an
+    // unknown one keeps it, since it is part of what the name says.
+    int hide_ext;
+    int press_plain, dragged;   // OWNED -- this press, for single_click
+
+    // --- rename in place (uui_fileview_begin_rename) -------------------
+    //
+    // The name becomes the field, where it is -- Explorer's and Dolphin's
+    // F2. The widget only EDITS: Enter, or a click elsewhere, parks the
+    // new name for uui_fileview_take_rename() and the app renames the
+    // file; Esc drops it. The row is found by NAME on every frame, so a
+    // reload under the edit keeps it on the right file.
+    int renaming;
+    char rename_from[UUI_FILEVIEW_PATH_MAX];
+    struct uui_textbox rename_box;
+    int rename_parked;
+    char rename_to[UUI_FILEVIEW_PATH_MAX];
+
     // --- what the app hears about. All optional. --------------------
     //
     // A DIRECTORY IS THE WIDGET'S BUSINESS AND A FILE IS THE APP'S:
@@ -298,6 +321,17 @@ int  uui_fileview_band_active(const struct uui_fileview *fv);
 // on_dir_changed), or reports on_open for a file. Returns 1 if anything
 // happened.
 int  uui_fileview_activate(struct uui_fileview *fv);
+
+// --- rename in place; see the struct --------------------------------
+// Starts editing the selected entry's name, the part before the
+// extension selected. Returns 0 on "..", nothing selected.
+int  uui_fileview_begin_rename(struct uui_fileview *fv);
+int  uui_fileview_renaming(struct uui_fileview *fv);
+void uui_fileview_cancel_rename(struct uui_fileview *fv);
+// Ends the edit KEEPING what was typed (a click elsewhere in the window).
+void uui_fileview_finish_rename(struct uui_fileview *fv);
+// A committed rename, once: 1 with the old and new NAMES (not paths).
+int  uui_fileview_take_rename(struct uui_fileview *fv, char *from, char *to, int cap);
 
 // Rows currently shown, INCLUDING ".." -- the table's row count.
 int  uui_fileview_row_count(const struct uui_fileview *fv);

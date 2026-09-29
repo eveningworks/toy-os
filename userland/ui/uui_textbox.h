@@ -72,6 +72,9 @@ void uui_textbox_set_active(struct uui_textbox *f, int active);
 // `active`, which init() clears. Re-initing a field the focus ring
 // points at leaves the two disagreeing and the field unclickable.
 void uui_textbox_set_text(struct uui_textbox *f, const char *text);
+// Selects [start, end) with the caret at `end` -- a rename selecting the
+// name and leaving the extension, which typing then replaces.
+void uui_textbox_select(struct uui_textbox *f, int start, int end);
 
 // Returns 1 if the key was consumed. Deliberately does NOT consume
 // Enter: "commit this field" is the caller's decision, not the widget's.

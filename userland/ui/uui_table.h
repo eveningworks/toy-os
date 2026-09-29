@@ -105,6 +105,11 @@ typedef const struct uimg *(*uui_table_icon_fn)(void *ctx, int row, int px);
 
 #define UUI_TABLE_UNSORTED (-1)
 
+// A cell's inset from its column's edges -- public because a widget
+// laid over a cell (uui_fileview's rename field) has to line up with
+// the text the table drew there.
+#define UUI_TABLE_PAD_X 4
+
 #define UUI_TALIGN_LEFT  0
 #define UUI_TALIGN_RIGHT 1 // numbers -- a right-aligned column of sizes
                             // is readable in a way a ragged one is not
