@@ -91,7 +91,7 @@ enum { CTRL_RADIO = 0, CTRL_COMBO, CTRL_SLIDER, CTRL_SPIN, CTRL_TEXT,
 
 enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST,
        ID_OPTS, ID_OPTS_OK, ID_OPTS_CANCEL, ID_SEARCH, ID_RESET, ID_APPLY,
-       ID_ASK, ID_FOOTER,
+       ID_ASK, ID_FOOTER, ID_SI_COPY, ID_SI_DEVMGR,
        ID_CONTROL_BASE = 100 }; // + slot, so a control names its own row
 
 // The focus ring: FOCUS_LEAD entries before the page's controls (search,
@@ -296,8 +296,12 @@ const char *slot_kind_name(const struct slot *sl);
 int slot_disabled(const struct slot *sl);
 
 // set_sysinfo.c
-extern struct cpu_info g_cpu;
-extern int g_cpu_loaded;
-void draw_sysinfo(struct ugfx_surface *s, int x, int y, int w, int h);
+extern struct uui_custom g_si_view;
+extern struct uui_button g_si_copy, g_si_devmgr;
+void sysinfo_init(void);
+void sysinfo_load(void);
+int  sysinfo_tick(void);
+int  sysinfo_height(void);
+int  sysinfo_copy(void);
 
 #endif

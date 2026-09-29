@@ -35,6 +35,7 @@ static struct uui_dialog g_ask;
 
 static int on_tick(struct uapp *a) {
     (void)a;
+    if (g_show_sysinfo && sysinfo_tick()) return 1;
     if (registry_generation() == g_generation && !g_stale) return 0;
     if (page_dirty() || uui_dialog_is_open(&g_ask) ||
         (g_opts_win && uapp_window_is_open(g_opts_win))) {
@@ -135,6 +136,7 @@ static void navigate(int node_id) {
         strlcpy(g_page_title_text, "System Information", sizeof g_page_title_text);
         g_page_desc_text[0] = '\0';
         strlcpy(g_status, "About this machine", sizeof g_status);
+        sysinfo_load();
         relayout_page();
         // Reported like any other page, or a test that opened it has
         // nothing to confirm it by.
@@ -273,6 +275,14 @@ static void on_widget(struct uapp *a, int id, int reason) {
     case ID_APPLY:
         apply_page();
         break;
+    case ID_SI_COPY:
+        strlcpy(g_status, sysinfo_copy() ? "Copied to the clipboard"
+                                         : "Could not copy -- the clipboard refused it",
+                sizeof g_status);
+        break;
+    case ID_SI_DEVMGR:
+        sys_spawn("/bin/wm/system/devmgr", 0, -1);
+        break;
     case ID_ADVANCED:
         g_show_advanced = g_advanced_cb.checked;
         if (g_page_group >= 0) open_group(g_page_group);
@@ -332,11 +342,8 @@ static void on_draw_over(struct uapp *a, struct uapp_draw *d) {
     if (top < PAGE_SCROLL.y + pad) top = PAGE_SCROLL.y + pad; // before the first layout
     int avail = PAGE_SCROLL.y + PAGE_SCROLL.h - top - pad;
 
-    if (g_show_sysinfo) {
-        draw_sysinfo(s, PAGE_SCROLL.x + pad, top, PAGE_SCROLL.w - 2 * pad, avail);
-        return;
-    }
-    if (g_setting_count == 0)
+    (void)avail;
+    if (g_setting_count == 0 && !g_show_sysinfo)
         ugfx_draw_string_clipped(s, PAGE_SCROLL.x + pad, top, PAGE_SCROLL.w - 2 * pad,
                                   "No settings are registered.", UTHEME_TEXT, UTHEME_PANEL_BG);
 }
@@ -536,6 +543,7 @@ int main(void) {
     uui_checkbox_init(&g_advanced_cb, 0, 0, 0, "Show advanced settings",
                        UTHEME_PANEL_BG, UTHEME_TEXT);
     uui_dialog_init(&g_ask);
+    sysinfo_init();
 
     // Apply is the PRIMARY action, so it wears the accent.
     uui_button_init(&g_reset, 0, 0, 0, 0, "Reset", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);

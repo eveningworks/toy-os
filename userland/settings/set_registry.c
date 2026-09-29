@@ -265,13 +265,14 @@ void rebuild_sidebar(void) {
             shown++;
         }
     }
-    if (!g_filter[0] && g_node_count + 2 <= rows_max) {
+    if ((!g_filter[0] || has_word("System Information", g_filter) || has_word("About", g_filter))
+        && g_node_count + 2 <= rows_max) {
         g_nodes[g_node_count++] = (struct uui_sidebar_row){
             .label = "About", .kind = UUI_SIDEBAR_HEADING };
         g_nodes[g_node_count++] = (struct uui_sidebar_row){
             .label = "System Information", .kind = UUI_SIDEBAR_ITEM, .id = NODE_SYSINFO };
     }
-    if (g_filter[0] && !shown)
+    if (g_filter[0] && !shown && g_node_count == 0)
         g_nodes[g_node_count++] = (struct uui_sidebar_row){
             .label = "No settings match", .kind = UUI_SIDEBAR_HEADING };
 

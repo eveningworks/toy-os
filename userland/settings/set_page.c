@@ -488,6 +488,23 @@ void relayout_page(void) {
                                        .flags = UUI_FILL_W };
 
     g_page_captions = 0;
+    // SYSTEM INFORMATION is one drawn item and two buttons (set_sysinfo.c).
+    if (g_show_sysinfo) {
+        static struct uui_item si_btns[2];
+        static struct uui_layout si_row;
+        g_si_view.h = sysinfo_height();
+        g_si_view.w = 0;
+        PAGE[n++] = (struct uui_item){ .ops = &uui_custom_ops, .widget = &g_si_view,
+                                       .flags = UUI_FILL_W };
+        si_btns[0] = (struct uui_item){ .ops = &uui_button_ops, .widget = &g_si_devmgr,
+                                        .id = ID_SI_DEVMGR, .name = "si_devmgr" };
+        si_btns[1] = (struct uui_item){ .ops = &uui_button_ops, .widget = &g_si_copy,
+                                        .id = ID_SI_COPY, .name = "si_copy" };
+        si_row = (struct uui_layout){ .dir = UUI_ROW, .items = si_btns, .count = 2 };
+        PAGE[n++] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &si_row };
+        FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &g_si_devmgr, &uui_button_ops };
+        FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &g_si_copy, &uui_button_ops };
+    }
     // An effect's options live in its Settings... dialog, not on the page.
     int page_slots = (g_saver_slot >= 0 && owner_uses_dialog(g_page_owner_kind))
                      ? g_saver_slot : g_slot_count;
