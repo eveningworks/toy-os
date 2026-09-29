@@ -292,6 +292,24 @@ def main():
               wait_log(dbg, f"toggled pid {desktop_pid}", 1.0)
               and victim_pid not in folded.get("order", []),
               f"order={folded.get('order')}")
+        # AN ARM MUST NOT FOLLOW A MOVED SELECTION. With the desktop
+        # folded, arm Force Quit on its child in List view, then go back
+        # to Tree: the table moves the selection to the desktop, and the
+        # arm must be dropped -- or the next "Confirm?" kills the desktop.
+        # Asserted on the app's disarm line, never by clicking Confirm.
+        set_view(2, "List")
+        lo = wait_layout(dbg, lambda l: victim_pid in l.get("order", []))
+        mark()
+        click((_layout["table"][0] + 60, row_y(lo["order"].index(victim_pid))))
+        wait_log(dbg, f"selected pid {victim_pid}", 2.0)
+        click(centre(_layout["btn_kill"]))
+        armed = wait_log(dbg, f"armed kill pid {victim_pid}", 2.0)
+        set_view(1, "Tree")
+        check("an armed Force Quit is DROPPED when folding moves the selection",
+              armed and wait_log(dbg, f"disarmed, selection moved to pid {desktop_pid}", 2.0),
+              f"armed={armed}")
+        order = wait_layout(dbg, lambda l: l.get("viewmode") == "Tree").get("order", order)
+        d = order.index(desktop_pid)
         click((_layout["table.col0"][0] + 4 + indent + indent // 2, row_y(d)))
         opened = wait_layout(dbg, lambda l: victim_pid in l.get("order", []))
         check("...and clicking it again brings them back", victim_pid in opened.get("order", []),
@@ -381,6 +399,42 @@ def main():
               dbg.json("gui windows --json")["count"] == before_count - 1)
         check("...and says so in the log", wait_log(dbg, f"killed pid {victim_pid}", 1.0))
 
+    # --- the context menu's "Go to service" -----------------------------
+    #
+    # It once only switched pages, leaving the user to find the service.
+    # netd is a service; its row is found by pid in the reported order,
+    # and the menu's LAST row is chosen by keyboard (Up from none wraps
+    # to it), so no menu geometry is derived here.
+    netd = next((int(l.split()[0]) for l in (dbg.send("sh ps") or "").splitlines()
+                 if l.split()[-1:] == ["netd"]), None)
+    # An order WITHOUT the process just force-quit: the one before it
+    # lists the victim, and every row after it is one off.
+    lay = wait_layout(dbg, lambda l: netd in l.get("order", [])
+                      and victim_pid not in l.get("order", []))
+    if netd in lay.get("order", []) and lay.get("viewmode") == "List":
+        mark()
+        y = row_y(lay["order"].index(netd))
+        dbg.send("gui rclick %d %d" % (cx + _layout["table"][0] + 60, cy + y))
+        dbg.settle()
+        # The menu is the APP's popup, opened on the release: a client
+        # round trip after the WM goes quiet, so settle() alone is early
+        # and the key lands on the table instead.
+        time.sleep(0.8)
+        dbg.key(K_UP)
+        dbg.key("0x0a")
+        lay = wait_layout(dbg, lambda l: l.get("page") == 2, timeout=3.0)
+        check("'Go to service' opens Services WITH that service selected",
+              lay.get("page") == 2 and wait_log(dbg, "service selected netd", 2.0),
+              f"page={lay.get('page')} netd={netd} row={lay['order'].index(netd)} "
+              f"log: {[l.split('] ')[-1] for l in _lines if 'taskmgr:' in l and 'layout' not in l][-6:]}")
+        rail = _layout.get("rail")
+        rh = _layout.get("rail.row_h")
+        if rail and rh:   # back to Processes, where the next section starts
+            click((rail[0] + rail[2] // 2, rail[1] + rh // 2))
+            wait_layout(dbg, lambda l: l.get("page") == 0)
+    else:
+        check("netd is listed, to go to its service", False, f"netd={netd}")
+
     # --- Performance -------------------------------------------------------
     rail = _layout.get("rail")
     rh = _layout.get("rail.row_h")
@@ -466,12 +520,19 @@ def main():
     _layout.clear()
     dbg.spawn(TASKMGR, "Task Manager")
     narrow = wait_layout(dbg, lambda l: "table.col0" in l and "table.row_h" in l
+                         and "btn_kill" in l
                          and l["table.col0"][2] >= 4 * l["table.row_h"], timeout=5.0)
     w = window(dbg)
     name_w = narrow.get("table.col0", (0, 0, 0, 0))[2]
-    check("opened narrow (a remembered 600 px), Name still has its room",
-          w is not None and w["w"] <= 620 and name_w >= 4 * narrow.get("table.row_h", 99),
+    bk = narrow.get("btn_kill", (0, 0, 0, 0))
+    check("a remembered 600 px size: Name keeps its room",
+          w is not None and name_w >= 4 * narrow.get("table.row_h", 99),
           f"window {w and w['w']} px, Name {name_w} px")
+    # ...and the toolbar is all there: the window's minimum clamps a size
+    # that would push Force Quit past the edge.
+    check("...and Force Quit is inside the window",
+          w is not None and bk[0] + bk[2] <= w["content"]["w"],
+          f"Force Quit ends at {bk[0] + bk[2]} of {w and w['content']['w']}")
 
     # --- it survived its own operation -----------------------------------
     check("Task Manager is still running", window(dbg) is not None)

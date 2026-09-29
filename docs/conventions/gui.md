@@ -4959,3 +4959,15 @@ SIGSTOP four times per click and four init requests per service click,
 the extra three timing out behind the first. Test
 `reason == UUI_REASON_RELEASE || reason == UUI_REASON_KEY` before a verb.
 
+## A CLIENT HOLDS ITS OWN MINIMUM: `uapp` CLAMPS A PROPOSED SIZE TO `min_w`/`min_h`
+
+TWS clamps a resize proposal to the minimum a client declared in its
+hints -- but a size remembered in `/etc/windows.conf` is proposed at
+CREATE, before those hints arrive, so it can be anything. `uapp`'s
+`WIN_EV_RESIZE` handler therefore raises a proposal to `desc.min_w` and
+`min_h` before resizing; the client commits its own size (Wayland's
+configure rule), and the frame follows the buffer it presents. Task
+Manager sets its minimum from the font in `on_size()` (so the minimum is
+font-derived), which is why its `uapp_desc` is a static rather than
+main()'s local.
+

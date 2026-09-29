@@ -347,11 +347,12 @@ static void report_order(int force) {
     ulogf("taskmgr: order %s\n", order);
 }
 
+// The hovered process, recorded when the table reports a hover CHANGE.
+// Not re-derived from the row at a rebuild: by then refresh_model() has
+// rewritten g_proc under the old g_rows, and the row names a neighbour.
 static int g_hover_pid;
 
 static void rebuild_rows(void) {
-    const struct tm_proc *hp = row_proc(g_table.hovered);
-    g_hover_pid = hp ? hp->pid : 0;
     const char *needle = uui_textbox_text(&g_search);
     g_nrows = 0;
     for (int g = 0; g < TM_GROUPS; g++) g_group_count[g] = 0;
@@ -370,8 +371,16 @@ static void rebuild_rows(void) {
     uui_table_set_rows(&g_table, g_nrows);
     // The table may have moved the selection -- onto a folded row's
     // visible ancestor. Believe it.
+    // A move is a NEW selection: an arm aimed at the folded child must
+    // not commit against its parent, and the traces follow the new pid.
     const struct tm_proc *sp = row_proc(g_table.selected);
-    g_sel_pid = sp ? sp->pid : 0;
+    int now = sp ? sp->pid : 0;
+    if (now != g_sel_pid) {
+        if (g_armed) ulogf("taskmgr: disarmed, selection moved to pid %d\n", now);
+        g_armed = 0;
+        g_sel_pid = now;
+        tm_track_pid(now);
+    }
 
     set_labels();
     fill_details();
@@ -413,9 +422,12 @@ static void act(struct uapp *a, int cmd) {
         // The File Manager selects a file it is handed (docs/conventions).
         if (p->path[0]) uapp_spawn(a, "/bin/wm/apps/files", p->path);
         break;
-    case CMD_SERVICE:
+    case CMD_SERVICE: {
+        int si = tm_service_of_pid(pid);
+        if (si >= 0) tm_services_select(g_svc[si].name);
         tm_show_page(a, 2);
         break;
+    }
     default: break;
     }
     g_armed = 0;
@@ -460,6 +472,15 @@ static unsigned ctx_flags(int code) {
 }
 
 static int g_ctx_armed, g_ctx_x, g_ctx_y;
+static int g_parked = -2;   // the focus stop parked while the menu is open; -2 = none
+
+// The menu closed (a choice, Esc, a click outside): give the focus back.
+static void menu_closed_check(void) {
+    if (g_parked != -2 && !uui_menubar_is_open(&g_ctx)) {
+        tm_focus_restore(g_parked);
+        g_parked = -2;
+    }
+}
 
 static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
     if (!(buttons & 0x2)) return;
@@ -481,6 +502,7 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
     g_ctx.item_flags = ctx_flags;
     uui_menubar_open_at(&g_ctx, CTX_ITEMS, (int)(sizeof CTX_ITEMS / sizeof CTX_ITEMS[0]),
                         g_ctx_x, g_ctx_y);
+    if (g_parked == -2) g_parked = tm_focus_park();
     uapp_redraw(a);
 }
 
@@ -494,6 +516,7 @@ static int committed(int reason) {
 }
 
 static int on_widget(struct uapp *a, int id, int reason) {
+    menu_closed_check();
     switch (id) {
     case TM_ID_CTX: {
         int code = uui_menubar_take_code(&g_ctx);
@@ -505,6 +528,8 @@ static int on_widget(struct uapp *a, int id, int reason) {
         // rows, so only a fold rebuilds them (a rebuild per pointer move
         // was the flicker).
         int t = uui_table_take_toggled(&g_table);
+        const struct tm_proc *hp = row_proc(g_table.hovered);
+        g_hover_pid = hp ? hp->pid : 0;
         const struct tm_proc *p = row_proc(g_table.selected);
         if (p && p->pid != g_sel_pid) select_pid(p->pid);
         if (t >= 0) {
@@ -545,9 +570,11 @@ static int on_key(struct uapp *a, int key, unsigned mods) {
         int code = -1;
         if (uui_menubar_key(&g_ctx, key, &code)) {
             if (code > 0) { act(a, code); rebuild_rows(); }
+            menu_closed_check();
             return 1;
         }
     }
+    menu_closed_check();
     // Ctrl+F: the filter, as in every list that has one.
     if ((mods & KEY_MOD_CTRL) && (key == 'f' || key == 'F')) { tm_focus(&g_search); return 1; }
     return 0;
@@ -555,8 +582,12 @@ static int on_key(struct uapp *a, int key, unsigned mods) {
 
 static void tick(struct uapp *a, int shown) {
     (void)a;
+    menu_closed_check();
     // The tracked process's history runs whether the page shows or not.
-    const struct tm_proc *p = row_proc(row_of_pid(g_tracked));
+    // Through g_proc, NOT g_rows: the rows are rebuilt only while the
+    // page shows and exclude what the filter hides.
+    int ti = g_tracked ? tm_proc_row(g_tracked) : -1;
+    const struct tm_proc *p = ti >= 0 ? &g_proc[ti] : 0;
     if (p) {
         // Per mille, so a process under 1% still draws a trace.
         uui_chart_push(&g_pcpu, p->cpu_pm);
@@ -690,6 +721,14 @@ int tm_procs_fit(void) {
     if (!pane->hidden && nw < want) { pane->hidden = 1; return 1; }
     if (pane->hidden && nw >= want + pane->main_size + ugfx_char_w()) { pane->hidden = 0; return 1; }
     return 0;
+}
+
+// The narrowest the page can be with its whole toolbar showing: the
+// bar's natural width (the filter asks for none) plus a usable filter.
+int tm_procs_min_width(void) {
+    int w = 0, h = 0;
+    uui_layout_natural_size(&BAR, &w, &h);
+    return w + ugfx_char_advance('0') * 10;
 }
 
 // The details pane's width, pinned: a pane that sized itself to the

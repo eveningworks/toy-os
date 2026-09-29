@@ -32,6 +32,7 @@
 #include "ui/uui_describe.h"
 #include "lib/human.h"
 #include "lib/uconf.h"
+#include "lib/udevice.h"
 #include "keyboard.h"
 #include "query_abi.h"
 #include "taskmgr/tm_internal.h"
@@ -86,8 +87,23 @@ static struct dev *net_dev(const char *card) {
     return d;
 }
 
+// Bytes over the MEASURED interval since the last sample, not the
+// nominal tick: a late tick (a blocked service request, a loaded
+// machine) would otherwise chart several ticks' traffic as one's.
+static unsigned long long g_sample_ns, g_interval_ms = TM_REFRESH_MS;
+
+static unsigned long long per_second(unsigned long long now, unsigned long long was) {
+    return (now > was ? now - was : 0) * 1000ULL / g_interval_ms;
+}
+
 void tm_perf_sample(void) {
     char a[16], b[16];
+    unsigned long long t = sys_monotonic_ns();
+    if (g_sample_ns && t > g_sample_ns) {
+        g_interval_ms = (t - g_sample_ns) / 1000000ULL;
+        if (!g_interval_ms) g_interval_ms = 1;
+    }
+    g_sample_ns = t;
 
     struct dev *cpu = &g_dev[DEV_CPU];
     uui_chart_push(&cpu->chart, g_cpu_pm / 10);
@@ -114,8 +130,8 @@ void tm_perf_sample(void) {
         if (!strcmp(bs.name, "write")) w += bs.sectors * 512ULL;
     }
     if (g_disk_seen) {
-        g_disk_rrate = (r > g_disk_r ? r - g_disk_r : 0) * 1000ULL / TM_REFRESH_MS;
-        g_disk_wrate = (w > g_disk_w ? w - g_disk_w : 0) * 1000ULL / TM_REFRESH_MS;
+        g_disk_rrate = per_second(r, g_disk_r);
+        g_disk_wrate = per_second(w, g_disk_w);
     }
     g_disk_r = r; g_disk_w = w; g_disk_seen = 1;
     struct dev *disk = &g_dev[DEV_DISK];
@@ -132,8 +148,8 @@ void tm_perf_sample(void) {
         struct dev *d = net_dev(nd.name);
         if (!d) break;
         if (d->seen) {
-            d->rx_rate = (nd.rx_bytes > d->rx ? nd.rx_bytes - d->rx : 0) * 1000ULL / TM_REFRESH_MS;
-            d->tx_rate = (nd.tx_bytes > d->tx ? nd.tx_bytes - d->tx : 0) * 1000ULL / TM_REFRESH_MS;
+            d->rx_rate = per_second(nd.rx_bytes, d->rx);
+            d->tx_rate = per_second(nd.tx_bytes, d->tx);
         }
         d->rx = nd.rx_bytes; d->tx = nd.tx_bytes; d->seen = 1;
         uui_chart_push_split(&d->chart, (uint32_t)(d->rx_rate + d->tx_rate), (uint32_t)d->tx_rate);
@@ -151,7 +167,10 @@ void tm_perf_sample(void) {
 struct devlist { int x, y, w, h; int hovered, focused; };
 static struct devlist g_list = { .hovered = -1 };
 
-static int item_h(void) { return ugfx_char_h() * 3 + 10; }
+// Every inset from the font (userland/CLAUDE.md, "Layout is
+// FONT-DERIVED"): a quarter line of padding, three text lines.
+static int pad(void) { int p = ugfx_char_h() / 4; return p > 2 ? p : 2; }
+static int item_h(void) { return ugfx_char_h() * 3 + 3 * pad(); }
 
 static void dl_natural_size(const void *w, int *ow, int *oh) {
     (void)w;
@@ -200,18 +219,20 @@ static void dl_draw(struct ugfx_surface *s, const void *w) {
         uint32_t bg = i == g_sel ? UTHEME_SELECTION
                     : i == l->hovered ? uui_state_bg(UTHEME_PANEL_BG, UUI_STATE_HOVER)
                     : UTHEME_PANEL_BG;
-        ugfx_fill_rect(s, l->x, y, l->w, ih - 2, bg);
-        int sw = ch * 4, sx = l->x + 6;
-        spark(s, sx, y + 5, sw, ih - 12, &g_dev[i].chart);
-        int tx = sx + sw + 8, avail = l->x + l->w - tx - 4;
+        int p = pad();
+        ugfx_fill_rect(s, l->x, y, l->w, ih - p / 2, bg);
+        int sw = ch * 4, sx = l->x + p;
+        spark(s, sx, y + p, sw, ih - 2 * p, &g_dev[i].chart);
+        int tx = sx + sw + 2 * p, avail = l->x + l->w - tx - p;
+        int ty = y + p;
         const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
-        ugfx_draw_string_clipped(s, tx, y + 4, avail, g_dev[i].name, UTHEME_TEXT, bg);
+        ugfx_draw_string_clipped(s, tx, ty, avail, g_dev[i].name, UTHEME_TEXT, bg);
         ugfx_set_font(was);
         uint32_t dim = uui_state_bg(UTHEME_TEXT, UUI_STATE_DISABLED);
-        ugfx_draw_string_clipped(s, tx, y + 4 + ch, avail, g_dev[i].line1, dim, bg);
-        ugfx_draw_string_clipped(s, tx, y + 4 + 2 * ch, avail, g_dev[i].line2, dim, bg);
+        ugfx_draw_string_clipped(s, tx, ty + ch, avail, g_dev[i].line1, dim, bg);
+        ugfx_draw_string_clipped(s, tx, ty + 2 * ch, avail, g_dev[i].line2, dim, bg);
     }
-    if (l->focused && g_sel >= 0) uui_focus_ring(s, l->x, l->y + g_sel * ih, l->w, ih - 2);
+    if (l->focused && g_sel >= 0) uui_focus_ring(s, l->x, l->y + g_sel * ih, l->w, ih - pad() / 2);
 }
 
 static int dl_hit(const void *w, int cx, int cy) {
@@ -345,23 +366,6 @@ static int mask_bits(unsigned long long m) {
     return n;
 }
 
-// The CPU's brand string, from CPUID -- unprivileged, so ring 3 asks it
-// directly, as /bin/lscpu does.
-static void cpu_brand(char *out, int cap) {
-    uint32_t r[12];
-    for (uint32_t leaf = 0; leaf < 3; leaf++) {
-        uint32_t a, b, c, d;
-        __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0x80000002u + leaf), "c"(0));
-        r[leaf * 4] = a; r[leaf * 4 + 1] = b; r[leaf * 4 + 2] = c; r[leaf * 4 + 3] = d;
-    }
-    char tmp[49];
-    memcpy(tmp, r, 48);
-    tmp[48] = '\0';
-    const char *p = tmp;
-    while (*p == ' ') p++;
-    strlcpy(out, p, (size_t)cap);
-}
-
 static void fill_stats(void) {
     char a[16], b[16];
     g_nstats = 0;
@@ -369,10 +373,16 @@ static void fill_stats(void) {
     switch (d->kind) {
     case DEV_CPU: {
         strlcpy(g_title_text, "CPU", sizeof g_title_text);
-        cpu_brand(g_subtitle_text, sizeof g_subtitle_text);
-        int ncpu = 0;
-        struct query_cpu qc;
-        QUERY_FOREACH(QUERY_CPUS, qc, i) ncpu++;
+        // Both asked ONCE: neither changes, and CPUID is a VM exit.
+        static char brand[64];
+        static int ncpu = -1;
+        if (!brand[0]) udevice_cpu_brand(brand, sizeof brand);
+        if (ncpu < 0) {
+            ncpu = 0;
+            struct query_cpu qc;
+            QUERY_FOREACH(QUERY_CPUS, qc, i) ncpu++;
+        }
+        strlcpy(g_subtitle_text, brand, sizeof g_subtitle_text);
         unsigned long long s = sys_monotonic_ns() / 1000000000ULL;
         add_stat("Utilization", "%u%%", g_cpu_pm / 10);
         add_stat("Processes", "%d", g_nproc);
@@ -489,6 +499,9 @@ static void select_dev(int i) {
     SIDE_ITEMS[3].hidden = g_dev[i].kind != DEV_NET;
     if (!SIDE_ITEMS[3].hidden) read_conns();
     fill_stats();
+    // A different chart and a shown/hidden log: lay out NOW, or both
+    // draw at the old (or no) geometry until the next tick.
+    tm_relayout();
     ulogf("taskmgr: device %d %s\n", i, g_dev[i].name);
 }
 

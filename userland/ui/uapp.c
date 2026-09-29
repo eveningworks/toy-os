@@ -1507,9 +1507,18 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             a->dirty = 1;
             break;
         }
-        if (uapp_resize(a, ev->a, ev->b)) {
-            if (d->on_resize) d->on_resize(a, a->w, a->h);
-            a->dirty = 1;
+        {
+            // NOT BELOW THE APP'S OWN MINIMUM: TWS clamps a proposal to
+            // the declared minimum, but a remembered geometry is proposed
+            // at create, BEFORE the hints that declare it arrive. The
+            // client commits its size, so it holds the line itself.
+            int rw = ev->a, rh = ev->b;
+            if (d->min_w > 0 && rw < d->min_w) rw = d->min_w;
+            if (d->min_h > 0 && rh < d->min_h) rh = d->min_h;
+            if (uapp_resize(a, rw, rh)) {
+                if (d->on_resize) d->on_resize(a, a->w, a->h);
+                a->dirty = 1;
+            }
         }
         break;
 

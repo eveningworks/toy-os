@@ -75,4 +75,8 @@ const char *udevice_type_icon(enum udev_type t);
 // "Working", "Disabled", "No driver", "Held by pid 14", ...
 const char *udevice_status(const struct udevice *d, char *buf, int cap);
 
+// The CPU's brand string from CPUID, or "Processor" on a part without the
+// brand leaves. Unprivileged, so ring 3 asks it directly (as lscpu does).
+void udevice_cpu_brand(char *out, int cap);
+
 #endif

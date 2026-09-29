@@ -22,7 +22,8 @@
 // uapp wake for the next flip -- so ask it only where a caret is drawn.
 int uui_caret_visible(void);
 
-// uapp: input arrived. Solid now, blink restarts; re-reads the setting.
+// uapp: input arrived. Solid now, blink restarts; re-reads the setting
+// at most every two seconds (this runs on every key, caret or not).
 void uui_caret_reset(void);
 
 // uapp: milliseconds until a drawn caret next changes, or -1 when none

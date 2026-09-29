@@ -149,7 +149,9 @@ def run(dbg, qmp, res):
     #    at 800 on a 720-high screen, came back at y=120, and read as a
     #    failure of something else entirely.
     set_conf(dbg, f"{APP_ID}=300,100,900,600")  # fits 1280x720; see below
-    dbg.send("sh append /etc/windows.conf taskmgr=40,60,520,420")
+    # Above Task Manager's own MINIMUM: an app clamps a proposal below it
+    # (uapp.c's WIN_EV_RESIZE), and at 520 wide this measured the clamp.
+    dbg.send("sh append /etc/windows.conf taskmgr=40,60,960,480")
     time.sleep(0.5)
     a = open_and_read(dbg)
     a_geom = (a["x"], a["y"], a["w"], a["h"]) if a else None
@@ -157,7 +159,7 @@ def run(dbg, qmp, res):
     b = open_and_read(dbg, "Task Manager")
     b_geom = (b["x"], b["y"], b["w"], b["h"]) if b else None
     res.check("each app restores its OWN geometry",
-              a_geom == (300, 100, 900, 600) and b_geom == (40, 60, 520, 420),
+              a_geom == (300, 100, 900, 600) and b_geom == (40, 60, 960, 480),
               f"System Settings {a_geom}, Task Manager {b_geom}")
     close_all(dbg)
 

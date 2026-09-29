@@ -98,11 +98,15 @@ struct tm_page {
 // The shell's, for a page: show another page, move the keyboard focus.
 void tm_show_page(struct uapp *a, int index);
 void tm_focus(void *widget);
+void tm_relayout(void);            // lay the window out again, now
+int  tm_focus_park(void);          // no focus stop while a menu is open; returns the old one
+void tm_focus_restore(int index);
 extern struct uui_menubar g_ctx;   // the one context menu, the shell's
 
 void tm_procs_init(struct tm_page *p);
 void tm_procs_size(void);   // pins the details pane; from the shell's size hook
 int  tm_procs_fit(void);    // hides/shows the pane by width; 1 = lay out again
+int  tm_procs_min_width(void);   // the page with its whole toolbar showing
 void tm_perf_init(struct tm_page *p);
 void tm_services_init(struct tm_page *p);
 
@@ -125,5 +129,6 @@ extern struct tm_service g_svc[TM_SERVICES_MAX];
 extern int g_nsvc;
 void tm_services_read(void);       // /run/init.status, cheap: a file read
 int  tm_service_of_pid(int pid);   // index into g_svc, or -1
+void tm_services_select(const char *name);   // "Go to service" lands on it
 
 #endif

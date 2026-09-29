@@ -32,11 +32,21 @@ int uui_caret_visible(void) {
     return (p & 1) == 0;
 }
 
+static unsigned long long g_read_ns;   // when the setting was last asked
+
 void uui_caret_reset(void) {
     g_t0_ns = sys_monotonic_ns();
-    // One registry read per input, as smooth scrolling does per notch
-    // (uui_anim.h): a change in System Settings applies at the next key.
-    g_blink = read_setting();
+    // A new cycle: forget the old one's bookkeeping, or a stale g_asked
+    // equal to the new cycle's first "off" phase swallows that flip.
+    g_drawn = g_asked = -1;
+    // The registry, at most every two seconds: this runs on EVERY key and
+    // press in every app, caret or not, and a settings round trip per
+    // key-repeat is input latency for nothing. A change in System
+    // Settings still applies within one typed word.
+    if (g_blink < 0 || g_t0_ns - g_read_ns > 2000000000ULL) {
+        g_blink = read_setting();
+        g_read_ns = g_t0_ns;
+    }
 }
 
 int uui_caret_wait_ms(void) {

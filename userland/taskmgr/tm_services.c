@@ -139,16 +139,27 @@ void tm_services_read(void) {
 // One verb over the channel. Returns INITCTL_* or -1 when init did not
 // answer; the file-and-doorbell fallback `/bin/service` keeps is not
 // repeated here -- that path is for an init too old to have a channel.
+// ONE CLIENT FOR THE LIFE OF THE APP, never one per request: the server
+// knows a client by PID and keeps the ring it first mapped, so a client
+// that closed and reopened -- a new ring under the same name -- is not
+// heard until the server happens to notice the old one gone
+// (docs/bugs.md). A failed call drops the client, and the next verb
+// opens a fresh one.
+static struct uchan_client g_chan;
+static int g_chan_open;
+
 static int send_verb(uint32_t verb, const char *name) {
-    struct uchan_client c;
-    if (uchan_client_open(&c, INITCTL_SERVICE) < 0) return -1;
+    if (!g_chan_open) {
+        if (uchan_client_open(&g_chan, INITCTL_SERVICE) < 0) return -1;
+        g_chan_open = 1;
+    }
     struct initctl_msg m, reply;
     memset(&m, 0, sizeof m);
     m.verb = verb;
     snprintf(m.name, sizeof m.name, "%s", name);
     unsigned long long t0 = sys_monotonic_ns();
-    int ok = uchan_call(&c, &m, sizeof m, &reply, sizeof reply, CHAN_REPLY_MS) == 0;
-    uchan_client_close(&c);
+    int ok = uchan_call(&g_chan, &m, sizeof m, &reply, sizeof reply, CHAN_REPLY_MS) == 0;
+    if (!ok) { uchan_client_close(&g_chan); g_chan_open = 0; }
     ulogf("taskmgr: service %s %s -> %d in %llu ms\n", verb == INITCTL_START ? "start" : "stop",
           name, ok ? (int)reply.result : -1, (sys_monotonic_ns() - t0) / 1000000ULL);
     return ok ? (int)reply.result : -1;
@@ -207,6 +218,11 @@ static uint32_t tint(void *ctx, int row) {
     if (!strcmp(st, "crash-loop") || !strcmp(st, "failed") || !strcmp(st, "no-exec"))
         return ugfx_blend(UTHEME_WHITE, ugfx_rgb(200, 90, 40), 40);
     return 0;
+}
+
+void tm_services_select(const char *name) {
+    strlcpy(g_sel_name, name, sizeof g_sel_name);
+    ulogf("taskmgr: service selected %s\n", g_sel_name);
 }
 
 static const struct tm_service *selected(void) {

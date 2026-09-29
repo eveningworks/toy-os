@@ -4006,6 +4006,11 @@ window without going through it will find its layout polls timing out.
   request -- because a button names itself on press, motion and release
   and the first build acted on all of them (four signals, four requests,
   three of which timed out); removing the commit-only test reddens both.
+  An ARMED Force Quit must be dropped when folding moves the selection
+  to the parent (checked on the app's `disarmed` line, never by clicking
+  Confirm, so a broken build cannot kill the desktop); "Go to service"
+  must land on the service; and a remembered 600 px size must leave
+  Name its room and Force Quit inside the window.
   Its resize check asserts the
   table grew by ROUGHLY WHAT THE WINDOW GREW BY, not merely that it
   changed -- the bug it was written after grew the width correctly and

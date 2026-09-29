@@ -712,6 +712,8 @@ whenever a headline here tells you something you did not already know.
   IS THE APP'S**
 - **A BUTTON'S `on_widget` FIRES ON PRESS, MOTION AND RELEASE; ACT ON
   RELEASE OR KEY**
+- **A CLIENT HOLDS ITS OWN MINIMUM: `uapp` CLAMPS A PROPOSED SIZE TO
+  `min_w`/`min_h`**
 
 ### Storage, the filesystem, and /etc
 

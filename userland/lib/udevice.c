@@ -104,7 +104,7 @@ static void record(const char *path, const struct udevice *d, int on) {
 
 // --- the list ---------------------------------------------------------
 
-static void cpu_brand(char *out, int cap) {
+void udevice_cpu_brand(char *out, int cap) {
     uint32_t r[12];
     uint32_t max;
     __asm__ volatile ("cpuid" : "=a"(max) : "a"(0x80000000u) : "ebx", "ecx", "edx");
@@ -225,7 +225,7 @@ static void add_ps2(struct udevice *out, int *n, int cap) {
 
 static void add_cpus(struct udevice *out, int *n, int cap) {
     char brand[64];
-    cpu_brand(brand, sizeof brand);
+    udevice_cpu_brand(brand, sizeof brand);
     struct query_cpu q;
     QUERY_FOREACH(QUERY_CPUS, q, i) {
         if (*n >= cap) return;

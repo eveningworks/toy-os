@@ -274,6 +274,22 @@ void tm_focus(void *widget) {
         if (g_focus.items[i].widget == widget) { uui_focus_set(&g_focus, i); return; }
 }
 
+// A context menu has no key slot of its own (uui_menubar_ops), and the
+// focus ring is offered every key before on_key -- so while a page's menu
+// is open the ring is PARKED, and the arrows and Enter reach the menu
+// through on_key instead of moving the table underneath it.
+int tm_focus_park(void) {
+    int was = g_focus.current;
+    uui_focus_set(&g_focus, -1);
+    return was;
+}
+
+void tm_focus_restore(int index) { uui_focus_set(&g_focus, index); }
+
+void tm_relayout(void) {
+    if (g_app) uui_layout_run(&LAYOUT, 0, 0, uapp_width(g_app), uapp_height(g_app));
+}
+
 static void select_page(struct uapp *a, int index) {
     if (index < 0 || index >= PAGE_COUNT) return;
     g_page = index;
@@ -359,6 +375,10 @@ static void on_open(struct uapp *a) {
     ulogf("taskmgr: rows %d\n", g_nproc);
 }
 
+// Static, not main()'s local: on_size() sets the minimum from the font,
+// which is known only once uapp_run() has started.
+static struct uapp_desc g_desc;
+
 static void on_size(int *w, int *h) {
     // FROM WHAT THE WIDGETS ASK FOR, plus room for names: the table's Name
     // column stretches, so its natural width is only its title, and a
@@ -371,6 +391,14 @@ static void on_size(int *w, int *h) {
     *w = nw + ugfx_char_advance('0') * (18 + 16);
     *h = ugfx_char_h() * 34;
     if (*h < nh) *h = nh;
+
+    // A MINIMUM, so a resize -- or a remembered size -- cannot squeeze the
+    // toolbar off the window: the rail, the page's toolbar, the margins.
+    int rw = 0, rh = 0;
+    uui_sidebar_ops.natural_size(&g_rail, &rw, &rh);
+    g_desc.min_w = rw + tm_procs_min_width() + 3 * uui_layout_margin(&LAYOUT)
+                   + uui_layout_gap(&LAYOUT);
+    g_desc.min_h = ugfx_char_h() * 16;
 }
 
 int main(void) {
@@ -396,7 +424,7 @@ int main(void) {
                                    .id = TM_ID_CTX, .name = "ctxmenu" };
     LAYOUT = (struct uui_layout){ .dir = UUI_ROW, .items = ITEMS, .count = 2 };
 
-    struct uapp_desc desc = {
+    g_desc = (struct uapp_desc){
         .title = "Task Manager",
         .app_id = "taskmgr",
         .layout = &LAYOUT,
@@ -414,5 +442,5 @@ int main(void) {
         .on_open = on_open,
         .on_tick = on_tick,
     };
-    return uapp_run(&desc);
+    return uapp_run(&g_desc);
 }
