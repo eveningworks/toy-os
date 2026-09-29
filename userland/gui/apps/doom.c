@@ -138,7 +138,7 @@ static void on_frame_ready(void *ctx) {
             // and printf_float is a whole page of code to pull in for
             // one decimal place.
             unsigned long fps10 = ms ? (unsigned long)(FPS_REPORT_FRAMES * 10000ULL / ms) : 0;
-            ulogf("doom: %d frames, %lu.%lu fps over the last %llu ms",
+            ulogf("doom: %d frames, %lu.%lu fps over the last %llu ms\n",
                   st->frames, fps10 / 10, fps10 % 10, ms);
         }
         st->last_report_ms = now;
@@ -292,18 +292,45 @@ static int is_fullscreen_toggle(int key, unsigned mods) {
     return (key == 0x0A || key == 0x0D) && (mods & KEY_MOD_ALT);
 }
 
+// THE KEY THAT WAS PRESSED, NOT WHAT IT MEANS TO A TEXT FIELD. The
+// keyboard folds modifiers into the code (api/keyboard.h): Shift+arrow
+// and Ctrl+arrow are codes of their own, Shift makes a capital, Ctrl a
+// control code. Doom plays with those modifiers HELD -- Ctrl fires,
+// Shift runs -- so unfolded, turning while firing sent
+// KEY_CTRL_ARROW_LEFT, which Doom has no binding for. A key-up carries
+// its press's code, so both edges fold alike and nothing sticks; that is
+// also why this reads no `mods` (Ctrl may be up before the letter is).
+static int physical_key(int key) {
+    switch (key) {
+    case KEY_SHIFT_ARROW_LEFT:  case KEY_CTRL_ARROW_LEFT:  return KEY_ARROW_LEFT;
+    case KEY_SHIFT_ARROW_RIGHT: case KEY_CTRL_ARROW_RIGHT: return KEY_ARROW_RIGHT;
+    case KEY_SHIFT_ARROW_UP:    return KEY_ARROW_UP;
+    case KEY_SHIFT_ARROW_DOWN:  return KEY_ARROW_DOWN;
+    case KEY_SHIFT_HOME:        return KEY_HOME;
+    case KEY_SHIFT_END:         return KEY_END;
+    default: break;
+    }
+    if (key >= 'A' && key <= 'Z') return key - 'A' + 'a';
+    // Ctrl+letter, except the codes that are also Backspace, Tab and
+    // Enter -- indistinguishable, and the key is the likelier one.
+    if (key >= 0x01 && key <= 0x1A && key != 0x08 && key != 0x09 &&
+        key != 0x0A && key != 0x0D)
+        return key - 0x01 + 'a';
+    return key;
+}
+
 static void on_key(struct uapp *a, int key, unsigned mods) {
     if (is_fullscreen_toggle(key, mods)) {
         uapp_set_fullscreen(a, !uapp_fullscreen(a));
         return;
     }
-    dg_push_key(key, 1);
+    dg_push_key(physical_key(key), 1);
 }
 
 static void on_key_up(struct uapp *a, int key, unsigned mods) {
     (void)a;
     if (is_fullscreen_toggle(key, mods)) return;
-    dg_push_key(key, 0);
+    dg_push_key(physical_key(key), 0);
 }
 
 // --- the game loop ------------------------------------------------------
@@ -334,7 +361,7 @@ static void on_open(struct uapp *a) {
     // rather than doomgeneric's own I_Error taking the process down. The
     // app is the only layer that can say it politely -- I_Error exits.
     if (access(WAD_PATH, F_OK) != 0) {
-        ulogf("doom: no IWAD at %s", WAD_PATH);
+        ulogf("doom: no IWAD at %s\n", WAD_PATH);
         st->failed = 1;
         uapp_redraw(a);
         return;
@@ -353,7 +380,7 @@ static void on_open(struct uapp *a) {
         // cwd is instead, which is untidy rather than broken -- and
         // refusing to start a game because a savegame directory could
         // not be made would be the wrong trade.
-        ulogf("doom: could not enter %s -- saves will land in the cwd", SAVE_DIR);
+        ulogf("doom: could not enter %s -- saves will land in the cwd\n", SAVE_DIR);
     }
 
     // argv, as Doom expects it. `-iwad <path>` rather than letting
@@ -375,10 +402,10 @@ static void on_open(struct uapp *a) {
     for (int i = 1; i < g_argc && n < DOOM_MAXARGS - 1; i++) argv[n++] = g_argv[i];
     argv[n] = 0;
 
-    ulogf("doom: starting with %s (%d arg(s))", WAD_PATH, n - 3);
+    ulogf("doom: starting with %s (%d arg(s))\n", WAD_PATH, n - 3);
     dg_start(n, argv);
     st->started = 1;
-    ulog("doom: ready");
+    ulog("doom: ready\n");
 }
 
 int main(int argc, char **argv) {

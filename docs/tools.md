@@ -4078,10 +4078,14 @@ window without going through it will find its layout polls timing out.
   capture a Terminal's content focused, take focus away and require it
   to CHANGE, give focus back and require it to match the first capture
   EXACTLY -- "it changed" alone is satisfied by almost anything.
-- **`doom_test.py`** -- DOOM runs, draws, animates and takes input. 6
-  checks. **ON DEMAND, not in `gui_regress.py`**: it needs an IWAD, and
-  the IWAD is deliberately not in this repository, so a checkout without
-  one gets a clean SKIP rather than a failure.
+- **`doom_test.py`** -- DOOM runs, draws, animates and takes input,
+  including an arrow that still turns with Ctrl (fire) or Shift (run)
+  held -- the keyboard folds both into the arrow's code. **ON DEMAND,
+  not in `gui_regress.py`**: it needs an IWAD, and the IWAD is
+  deliberately not in this repository, so a checkout without one gets a
+  clean SKIP rather than a failure. The IWAD reaches the image only with
+  `EXTRAS=1`; without it, `vm.py put data/doom/doom1.wad
+  /usr/share/doom/doom1.wad` into a scratch guest does.
 
   Two of its checks are shaped by mistakes made writing it. **"It
   animates" samples seven frames, not two** -- Doom's attract mode cycles

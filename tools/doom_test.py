@@ -268,6 +268,39 @@ def run(dbg, qmp, tmp, res):
               f"reaching Doom as KEY_FIRE (0xa3); KEY_RCTRL is bound to "
               f"nothing")
 
+    # --- an arrow still turns with Ctrl or Shift held -----------------
+    #
+    # The keyboard folds a held modifier into the arrow's code
+    # (KEY_CTRL_ARROW_LEFT, KEY_SHIFT_ARROW_RIGHT), and Doom plays with
+    # both held -- Ctrl fires, Shift runs -- so unfolded, the player
+    # stopped turning the moment they fired. The oracle is two SETTLED
+    # frames either side of the turn, the 3D view only (the status bar's
+    # ammo count moves when firing): firing alone leaves the view where it
+    # was, a turn replaces most of it.
+    def view(img):
+        w, h = img.size
+        return img.crop((0, 0, w, h * 5 // 6))
+
+    for mod, arrow, what in (("ctrl", "left", "firing"),
+                             ("shift", "right", "running")):
+        time.sleep(1.5)
+        before = view(shot(f"pre_{mod}"))
+        qmp.key_down(mod)
+        time.sleep(0.2)
+        qmp.key_down(arrow)
+        time.sleep(0.8)
+        qmp.key_up(arrow)
+        time.sleep(0.2)
+        qmp.key_up(mod)
+        time.sleep(1.5)
+        turned = changed_fraction(before, view(shot(f"post_{mod}")))
+        print(f"        (view change after {mod}+{arrow}: {turned:.4f})")
+        res.check(f"{arrow.capitalize()} turns the player while {what} "
+                  f"({mod.capitalize()} held)",
+                  turned > 0.2,
+                  f"only {turned:.4f} of the view changed -- the "
+                  f"{mod}-folded arrow code is not reaching Doom as an arrow")
+
     # --- maximized, and still 4:3 ------------------------------------
     #
     # Doom's pixels are 20% taller than they are wide, so a window that
