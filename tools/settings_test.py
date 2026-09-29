@@ -1727,6 +1727,34 @@ def main():
           bool(filt) and filt[-1].group(1) == "" and int(filt[-1].group(2)) == len(rows),
           f"{[m.group(0) for m in filt][-1:]} against {len(rows)} rows")
 
+    # A DISABLED SEGMENTED CONTROL STILL SHOWS ITS CHOICE. Button position
+    # is unavailable while Start is centred (its declaration Requires= a
+    # left Start, and reads `center` meanwhile); uui_segmented drew the
+    # chosen segment's label in its own fill colour, a blank grey box --
+    # found on the laptop, the first time any segmented control was
+    # disabled while showing a choice.
+    import tempfile
+    dbg.send("sh config set desktop.start_position center")
+    time.sleep(1.0)
+    tb_page = select_page("Taskbar")
+    if tb_page:
+        ctl = controls(dbg, 0).get("desktop.taskbar_align")
+        if ctl:
+            ctl = reveal("desktop.taskbar_align", ctl)
+        if ctl and ctl["kind"] == "segmented":
+            half = ctl["w"] // 2            # Left | Centre: Centre is the second
+            rect = (cx + ctl["x"] + half + 4, cy + ctl["y"] + 3, half - 8, ctl["h"] - 6)
+            shot = os.path.join(tempfile.mkdtemp(prefix="settings_seg_"), "seg.png")
+            ink, _ = crop_ink(qmp, shot, rect)
+            check("a disabled segmented control still shows its chosen label",
+                  tb_page["disabled"] >= 1 and ink > 20,
+                  f"ink {ink} in {rect}, page {tb_page}")
+        else:
+            check("the Taskbar page has Button position as a segmented control", False,
+                  f"{ctl}")
+    dbg.send("sh config unset desktop.start_position")
+    time.sleep(0.6)
+
     # A PAGE WITH A CHANGE STAYS LISTED under a filter that excludes it:
     # the filter may not navigate away from staged work, so hiding its row
     # left the sidebar highlighting some other page beside it.

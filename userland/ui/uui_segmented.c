@@ -46,6 +46,11 @@ void uui_segmented_draw(struct ugfx_surface *s, const struct uui_segmented *sg) 
     uint32_t fg = UUI_COLOR(sg->fg, UTHEME_TEXT);
     uint32_t face = UTHEME_WHITE;
     uint32_t edge = uui_state_bg(fg, UUI_STATE_DISABLED);
+    // DISABLED, THE CHOICE STILL SHOWS: the chosen segment keeps a grey
+    // fill a step off the face and a label between that and the text --
+    // it was filled AND lettered in `edge`, a blank box (settings_test).
+    uint32_t off_bg = uui_state_bg(face, UUI_STATE_PRESSED);
+    uint32_t off_fg = ugfx_blend(face, fg, 150);
     if (sg->disabled) fg = edge;
     int sw = seg_w(sg), n = count_of(sg);
 
@@ -56,7 +61,7 @@ void uui_segmented_draw(struct ugfx_surface *s, const struct uui_segmented *sg) 
     for (int i = 0; i < n; i++) {
         int x = sg->x + i * sw;
         int chosen = i == sg->selected;
-        uint32_t bg = chosen ? (sg->disabled ? edge : UTHEME_ACCENT) : face;
+        uint32_t bg = chosen ? (sg->disabled ? off_bg : UTHEME_ACCENT) : face;
         if (!sg->disabled && !chosen) {
             if (i == sg->armed) bg = uui_state_bg(face, UUI_STATE_PRESSED);
             else if (i == sg->hovered) bg = uui_state_bg(face, UUI_STATE_HOVER);
@@ -80,7 +85,7 @@ void uui_segmented_draw(struct ugfx_surface *s, const struct uui_segmented *sg) 
         int tx = x + (sw - tw) / 2;
         if (tx < x + 2) tx = x + 2;
         ugfx_draw_string_clipped(s, tx, sg->y + (sg->h - ugfx_char_h()) / 2, sw - 4, t,
-                                 chosen && !sg->disabled ? UTHEME_ACCENT_TEXT : fg, bg);
+                                 !chosen ? fg : sg->disabled ? off_fg : UTHEME_ACCENT_TEXT, bg);
     }
     // Round the WHOLE control, outside it: the chosen segment is
     // accent-filled, so a ring on it would not show (focusring_test).
